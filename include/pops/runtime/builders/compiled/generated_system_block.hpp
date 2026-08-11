@@ -6,6 +6,7 @@
 #include <pops/core/model/physical_model.hpp>
 #include <pops/mesh/boundary/fill_boundary.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/numerics/fv/numerical_flux.hpp>
 #include <pops/numerics/fv/reconstruction.hpp>
 #include <pops/numerics/spatial/embedded_boundary/operator.hpp>
@@ -13,6 +14,7 @@
 #include <pops/numerics/spatial/operators/masked_operator.hpp>
 #include <pops/runtime/config/route_ids.hpp>
 #include <pops/runtime/recovery/uniform_recovery_consumer.hpp>
+#include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
 #include <pops/runtime/system/provider_storage_binding.hpp>
 #include <pops/runtime/system/system_block_closures.hpp>
 
@@ -485,8 +487,13 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
   const Geometry<Dim> geometry = request.geometry;
   const BoundaryTopology<Dim> topology = request.topology;
 
-  auto prepare_state = [provider_storage, provider_plan, geometry, topology, ghosts](
+  auto prepare_state = [model, provider_storage, provider_plan, geometry, topology, ghosts](
                            MultiFab<Dim>& state, const PreparedHyperbolicBoundary<Dim>* boundary) {
+    if (boundary != nullptr) {
+      boundary->template require_model_qualified_characteristic_provider<Model>();
+      if (boundary->has_characteristic_no_inflow())
+        throw std::logic_error("characteristic no-inflow requires the prepared boundary transport");
+    }
     const auto state_schedule = HaloSchedule<Dim>(
         state.layout(), state.distribution(), state.local_rank(), geometry.domain(), ghosts,
         topology, state.ncomp(), halo_budget(state, geometry.domain(), topology, ghosts));
@@ -496,8 +503,27 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
           state, provider_storage, provider_plan, "generated flux providers");
     }
     if (boundary != nullptr)
-      boundary->fill_physical(state, geometry);
+      boundary->fill_physical_model_qualified(state, geometry, model);
   };
+
+  auto prepare_state_with_transport =
+      [model, provider_storage, provider_plan, geometry](
+          MultiFab<Dim>& state, const PreparedHyperbolicBoundary<Dim>* boundary,
+          const ExecutionLane& lane,
+          const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+        if (boundary != nullptr)
+          boundary->template require_model_qualified_characteristic_provider<Model>();
+        if (boundary != nullptr)
+          transport.fill_halo(state);
+        else
+          transport.fill(state);
+        if (provider_storage != nullptr) {
+          runtime::system::require_pointwise_provider_groups<Dim, provider_count>(
+              state, provider_storage, provider_plan, "generated flux providers");
+        }
+        if (boundary != nullptr)
+          boundary->fill_physical_model_qualified(state, geometry, model, lane);
+      };
 
   auto flux = [spatial, prepare_state, provider_storage, provider_plan, geometry](
                   MultiFab<Dim>& state, MultiFab<Dim>& residual,
@@ -531,6 +557,42 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
     saxpy(candidate, Real(1), source);
     copy_valid(candidate, residual);
   };
+  auto flux_with_transport =
+      [spatial, prepare_state_with_transport, provider_storage, provider_plan, geometry](
+          MultiFab<Dim>& state, MultiFab<Dim>& residual,
+          const PreparedHyperbolicBoundary<Dim>* boundary, const ExecutionLane& lane,
+          const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+        require_same_layout(state, residual, Model::n_vars, "generated flux residual");
+        prepare_state_with_transport(state, boundary, lane, transport);
+
+        auto faces = nd::make_face_flux_workspace(state);
+        for (std::size_t local = 0; local < state.local_size(); ++local) {
+          if constexpr (flux_provider_count<Model> == 0)
+            spatial.materialize_face_fluxes(state.fab(local), faces[local]);
+          else
+            spatial.materialize_face_fluxes(
+                state.fab(local),
+                runtime::system::bind_provider_storage_view<Dim, flux_provider_count<Model>>(
+                    provider_plan, provider_storage, local),
+                faces[local]);
+          if (boundary != nullptr)
+            boundary->apply_physical_flux_conditions(faces[local], geometry.domain());
+        }
+        spatial.assemble_residual_from_face_fluxes(faces, residual);
+      };
+  auto full_with_transport =
+      [flux_with_transport, model, provider_storage, provider_plan](
+          MultiFab<Dim>& state, MultiFab<Dim>& residual,
+          const PreparedHyperbolicBoundary<Dim>* boundary, const ExecutionLane& lane,
+          const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+        MultiFab<Dim> candidate(residual.layout(), residual.distribution(), residual.local_rank(),
+                                residual.ncomp(), residual.ghosts());
+        flux_with_transport(state, candidate, boundary, lane, transport);
+        MultiFab<Dim> source =
+            materialize_source<Dim>(model, state, provider_storage, provider_plan);
+        saxpy(candidate, Real(1), source);
+        copy_valid(candidate, residual);
+      };
   auto source = [model, provider_storage, provider_plan](MultiFab<Dim>& state,
                                                          MultiFab<Dim>& residual) {
     MultiFab<Dim> candidate =
@@ -605,6 +667,37 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
   result.closures.rhs_flux_only_core_at_point_prepared =
       [flux](const auto&, MultiFab<Dim>& state, MultiFab<Dim>& residual,
              const PreparedHyperbolicBoundary<Dim>& boundary) { flux(state, residual, &boundary); };
+  result.closures.boundary_full_at_point_prepared =
+      [full_with_transport](const auto&, MultiFab<Dim>& state, MultiFab<Dim>& residual,
+                            const PreparedHyperbolicBoundary<Dim>& boundary,
+                            const ExecutionLane& lane,
+                            const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+        full_with_transport(state, residual, &boundary, lane, transport);
+      };
+  result.closures.boundary_core_at_point_prepared =
+      [full_with_transport](const auto&, MultiFab<Dim>& state, MultiFab<Dim>& residual,
+                            const PreparedHyperbolicBoundary<Dim>&, const ExecutionLane& lane,
+                            const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+        full_with_transport(state, residual, nullptr, lane, transport);
+      };
+  result.closures.boundary_flux_full_at_point_prepared =
+      [flux_with_transport](const auto&, MultiFab<Dim>& state, MultiFab<Dim>& residual,
+                            const PreparedHyperbolicBoundary<Dim>& boundary,
+                            const ExecutionLane& lane,
+                            const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+        flux_with_transport(state, residual, &boundary, lane, transport);
+      };
+  result.closures.boundary_flux_core_at_point_prepared =
+      [flux_with_transport](const auto&, MultiFab<Dim>& state, MultiFab<Dim>& residual,
+                            const PreparedHyperbolicBoundary<Dim>&, const ExecutionLane& lane,
+                            const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+        flux_with_transport(state, residual, nullptr, lane, transport);
+      };
+  result.closures.boundary_residual_at_point_prepared =
+      make_prepared_boundary_residual<Dim>(result.closures.boundary_full_at_point_prepared,
+                                           result.closures.boundary_core_at_point_prepared);
+  result.closures.boundary_jvp_at_point_prepared =
+      make_prepared_boundary_jvp<Dim>(result.closures.boundary_residual_at_point_prepared);
   result.closures.prepare_generated_state_at_point =
       [prepare_state](const auto&, MultiFab<Dim>& state) { prepare_state(state, nullptr); };
   result.closures.prepare_generated_state_at_point_prepared =

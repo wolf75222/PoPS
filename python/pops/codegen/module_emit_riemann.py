@@ -472,6 +472,10 @@ def _emit_roe_jacobian(model: Any, nc: Any, cse: Any) -> list:
         return out
     out.append("  // Prepared characteristic no-inflow: the same complete model Jacobian, oriented")
     out.append("  // by the physical-face normal. Sonic modes are neutral; no model-specific fallback.")
+    out.append("  static constexpr int characteristic_no_inflow_contract_version = 1;")
+    out.append("  static constexpr int characteristic_no_inflow_dimension = dimension;")
+    out.append("  static constexpr int characteristic_no_inflow_components = n_vars;")
+    out.append("  static constexpr bool characteristic_no_inflow_conservative = true;")
     out.append("  POPS_HD bool characteristic_no_inflow(const State& interior, ")
     out.append("      const State& reference, int dir, int outward_sign, State& ghost) const {")
     out += ["    const pops::Real %s = interior[%d];" % (c, i)

@@ -6,17 +6,29 @@
 #include <pops/core/foundation/types.hpp>
 #include <pops/core/state/variables.hpp>
 #include <pops/mesh/boundary/prepared_hyperbolic_boundary.hpp>
+#include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/nonlinear/prepared_variable_recovery.hpp>
 #include <pops/runtime/multiblock/evaluation_point.hpp>
 #include <pops/runtime/recovery/uniform_recovery_consumer.hpp>
 #include <pops/runtime/system/prepared_embedded_boundary.hpp>
 
+#include <algorithm>
+#include <cmath>
 #include <functional>
+#include <limits>
+#include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace pops {
+
+class ExecutionLane;
+namespace runtime::program {
+template <int Dim>
+class PreparedScalarBoundarySession;
+}
 
 /// Prepared block capabilities accepted by the exact-ranked Uniform core.
 ///
@@ -35,10 +47,12 @@ struct SystemBlockClosures {
   using PointResidual = std::function<void(const point_type&, field_type&, field_type&)>;
   using PreparedPointResidual =
       std::function<void(const point_type&, field_type&, field_type&, const boundary_type&)>;
-  using PointJvp =
-      std::function<void(const point_type&, field_type&, const field_type&, field_type&)>;
-  using PreparedPointJvp = std::function<void(const point_type&, field_type&, const field_type&,
-                                              field_type&, const boundary_type&)>;
+  using PreparedPointBoundaryResidual = std::function<void(
+      const point_type&, field_type&, field_type&, const boundary_type&, const ExecutionLane&,
+      const runtime::program::PreparedScalarBoundarySession<Dim>&)>;
+  using PreparedPointJvp = std::function<void(
+      const point_type&, field_type&, const field_type&, field_type&, const boundary_type&,
+      const ExecutionLane&, const runtime::program::PreparedScalarBoundarySession<Dim>&)>;
   using PointStatePreparation = std::function<void(const point_type&, field_type&)>;
   using PreparedPointStatePreparation =
       std::function<void(const point_type&, field_type&, const boundary_type&)>;
@@ -65,12 +79,13 @@ struct SystemBlockClosures {
   PointResidual rhs_flux_only_without_prepared_interfaces;
   PointResidual rhs_core_at_point;
   PointResidual rhs_flux_only_core_at_point;
-  PointResidual boundary_residual_at_point;
-  PointJvp boundary_jvp_at_point;
-
   PreparedPointResidual rhs_core_at_point_prepared;
   PreparedPointResidual rhs_flux_only_core_at_point_prepared;
-  PreparedPointResidual boundary_residual_at_point_prepared;
+  PreparedPointBoundaryResidual boundary_full_at_point_prepared;
+  PreparedPointBoundaryResidual boundary_core_at_point_prepared;
+  PreparedPointBoundaryResidual boundary_flux_full_at_point_prepared;
+  PreparedPointBoundaryResidual boundary_flux_core_at_point_prepared;
+  PreparedPointBoundaryResidual boundary_residual_at_point_prepared;
   PreparedPointJvp boundary_jvp_at_point_prepared;
 
   /// Fill the exact same-level and physical halos consumed by generated pointwise stencils.
@@ -84,6 +99,112 @@ struct SystemBlockClosures {
   EmbeddedResidualFamily staircase;
   EmbeddedResidualFamily cut_cell;
 };
+
+/// Build the one prepared boundary residual as a true detached difference between a
+/// boundary-filled evaluation and a core evaluation whose physical ghosts start from zero.  Neither
+/// branch can observe ghosts published by the other branch or by an earlier RHS invocation.
+template <int Dim>
+typename SystemBlockClosures<Dim>::PreparedPointBoundaryResidual make_prepared_boundary_residual(
+    typename SystemBlockClosures<Dim>::PreparedPointBoundaryResidual boundary_full,
+    typename SystemBlockClosures<Dim>::PreparedPointBoundaryResidual boundary_core) {
+  if (!boundary_full || !boundary_core)
+    throw std::invalid_argument(
+        "prepared boundary residual requires complete full and core authorities");
+  return [boundary_full = std::move(boundary_full), boundary_core = std::move(boundary_core)](
+             const auto& point, MultiFab<Dim>& state, MultiFab<Dim>& result,
+             const PreparedHyperbolicBoundary<Dim>& boundary, const ExecutionLane& lane,
+             const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+    if (state.layout() != result.layout() || state.distribution() != result.distribution() ||
+        state.local_rank() != result.local_rank() || state.ncomp() != result.ncomp() ||
+        state.ghosts() != result.ghosts())
+      throw std::invalid_argument(
+          "prepared boundary residual fields differ from the authenticated block contract");
+
+    MultiFab<Dim> boundary_state(state.layout(), state.distribution(), state.local_rank(),
+                                 state.ncomp(), state.ghosts());
+    MultiFab<Dim> core_state(state.layout(), state.distribution(), state.local_rank(),
+                             state.ncomp(), state.ghosts());
+    boundary_state.set_val(Real(0));
+    core_state.set_val(Real(0));
+    lincomb(boundary_state, Real(1), state, Real(0), state);
+    lincomb(core_state, Real(1), state, Real(0), state);
+    MultiFab<Dim> boundary_total(result.layout(), result.distribution(), result.local_rank(),
+                                 result.ncomp(), result.ghosts());
+    MultiFab<Dim> core_total(result.layout(), result.distribution(), result.local_rank(),
+                             result.ncomp(), result.ghosts());
+    boundary_full(point, boundary_state, boundary_total, boundary, lane, transport);
+    boundary_core(point, core_state, core_total, boundary, lane, transport);
+    lincomb(result, Real(1), boundary_total, Real(-1), core_total);
+  };
+}
+
+/// Materialize the one generic finite-difference linearization of a prepared boundary residual.
+/// Rebuilding this closure after an external GhostBoundary is installed makes both the base and
+/// displaced evaluations traverse the same authenticated component and lane.
+template <int Dim>
+typename SystemBlockClosures<Dim>::PreparedPointJvp make_prepared_boundary_jvp(
+    typename SystemBlockClosures<Dim>::PreparedPointBoundaryResidual boundary_residual) {
+  if (!boundary_residual)
+    throw std::invalid_argument("prepared boundary JVP requires one complete residual authority");
+  return [boundary_residual = std::move(boundary_residual)](
+             const auto& point, MultiFab<Dim>& state, const MultiFab<Dim>& direction,
+             MultiFab<Dim>& result, const PreparedHyperbolicBoundary<Dim>& boundary,
+             const ExecutionLane& lane,
+             const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+    if (state.layout() != direction.layout() || state.distribution() != direction.distribution() ||
+        state.local_rank() != direction.local_rank() || state.ncomp() != direction.ncomp() ||
+        state.ghosts() != direction.ghosts() || state.layout() != result.layout() ||
+        state.distribution() != result.distribution() ||
+        state.local_rank() != result.local_rank() || state.ncomp() != result.ncomp() ||
+        state.ghosts() != result.ghosts())
+      throw std::invalid_argument(
+          "prepared boundary JVP fields differ from the authenticated block contract");
+
+    Real local_state_scale = Real(0);
+    Real local_direction_scale = Real(0);
+    for (int component = 0; component < state.ncomp(); ++component) {
+      const Real state_component_scale = norm_inf(state, component);
+      const Real direction_component_scale = norm_inf(direction, component);
+      if (!std::isfinite(state_component_scale))
+        local_state_scale = std::numeric_limits<Real>::infinity();
+      else if (std::isfinite(local_state_scale))
+        local_state_scale = std::max(local_state_scale, state_component_scale);
+      if (!std::isfinite(direction_component_scale))
+        local_direction_scale = std::numeric_limits<Real>::infinity();
+      else if (std::isfinite(local_direction_scale))
+        local_direction_scale = std::max(local_direction_scale, direction_component_scale);
+    }
+    const Real state_scale =
+        static_cast<Real>(all_reduce_max(static_cast<double>(local_state_scale), lane));
+    const Real direction_scale =
+        static_cast<Real>(all_reduce_max(static_cast<double>(local_direction_scale), lane));
+    if (!std::isfinite(state_scale))
+      throw std::runtime_error("prepared boundary JVP rejected a non-finite state norm");
+    if (!std::isfinite(direction_scale))
+      throw std::runtime_error("prepared boundary JVP rejected a non-finite direction norm");
+    if (direction_scale == Real(0)) {
+      result.set_val(Real(0));
+      return;
+    }
+
+    const Real increment =
+        std::sqrt(std::numeric_limits<Real>::epsilon()) * (Real(1) + state_scale) / direction_scale;
+    if (!std::isfinite(increment) || !(increment > Real(0)))
+      throw std::runtime_error("prepared boundary JVP produced an invalid finite-difference step");
+    MultiFab<Dim> perturbed(state.layout(), state.distribution(), state.local_rank(), state.ncomp(),
+                            state.ghosts());
+    perturbed.set_val(Real(0));
+    lincomb(perturbed, Real(1), state, increment, direction);
+    MultiFab<Dim> base(result.layout(), result.distribution(), result.local_rank(), result.ncomp(),
+                       result.ghosts());
+    MultiFab<Dim> displaced(result.layout(), result.distribution(), result.local_rank(),
+                            result.ncomp(), result.ghosts());
+    boundary_residual(point, state, base, boundary, lane, transport);
+    boundary_residual(point, perturbed, displaced, boundary, lane, transport);
+    lincomb(displaced, Real(1) / increment, displaced, Real(-1) / increment, base);
+    lincomb(result, Real(1), displaced, Real(0), displaced);
+  };
+}
 
 /// Complete immutable block image prepared by one dimension-qualified native package.
 ///

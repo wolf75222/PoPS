@@ -24,6 +24,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <functional>
 #include <initializer_list>
 #include <limits>
@@ -57,6 +58,49 @@ class ProgramContext {
   using provider_values_view_type = ProviderStorageView<Dim, Count>;
   using runtime_state_type = ProgramRuntimeState<Dim>;
   using scalar_boundary_session_type = PreparedScalarBoundarySession<Dim>;
+
+  /// Immutable authentication token for one generated block-boundary invocation.  It retains no
+  /// closure, state field, or mutable boundary image: System remains the sole owner of the exact
+  /// prepared authority installed with the block.
+  class PreparedBlockBoundarySession {
+   public:
+    PreparedBlockBoundarySession(const PreparedBlockBoundarySession&) = default;
+    PreparedBlockBoundarySession& operator=(const PreparedBlockBoundarySession&) = default;
+
+   private:
+    friend class ProgramContext;
+
+    PreparedBlockBoundarySession(const runtime_type* system, int runtime_block,
+                                 runtime::multiblock::BoundaryEvaluationPoint point,
+                                 const ExecutionLane& lane,
+                                 std::shared_ptr<scalar_boundary_session_type> transport)
+        : system_(system),
+          runtime_block_(runtime_block),
+          point_(std::move(point)),
+          lane_(&lane),
+          transport_(std::move(transport)) {
+      if (!transport_)
+        throw std::invalid_argument("prepared block boundary session requires halo transport");
+    }
+
+    [[nodiscard]] int runtime_block() const noexcept { return runtime_block_; }
+    [[nodiscard]] const runtime::multiblock::BoundaryEvaluationPoint& point() const noexcept {
+      return point_;
+    }
+    [[nodiscard]] const ExecutionLane& lane() const noexcept { return *lane_; }
+    [[nodiscard]] const runtime_type* system() const noexcept { return system_; }
+    [[nodiscard]] const scalar_boundary_session_type& transport() const noexcept {
+      return *transport_;
+    }
+
+    const runtime_type* system_ = nullptr;
+    int runtime_block_ = -1;
+    runtime::multiblock::BoundaryEvaluationPoint point_{};
+    const ExecutionLane* lane_ = nullptr;
+    std::shared_ptr<scalar_boundary_session_type> transport_;
+  };
+
+  using block_boundary_session_type = PreparedBlockBoundarySession;
 
   struct FieldStageOverride {
     int program_block = -1;
@@ -282,8 +326,17 @@ class ProgramContext {
   void rhs_into(int program_block, field_type& state_value, field_type& rhs, int rate_id) const {
     require_rate_identity_(rate_id);
     count_kernel_();
-    system_->block_rhs_into_at(boundary_evaluation_point(rate_id), sys_block(program_block),
-                               state_value, rhs);
+    const auto point = boundary_evaluation_point(rate_id);
+    const int runtime_block = sys_block(program_block);
+    if (system_->requires_block_boundary_session(runtime_block)) {
+      const ExecutionLane& lane = system_->prepared_boundary_execution_lane();
+      auto boundary = prepare_block_boundary_session(program_block, state_value, point, lane);
+      system_->block_rhs_into_at_prepared(
+          point, runtime_block, state_value, rhs, boundary->system(), boundary->runtime_block(),
+          boundary->point(), boundary->lane(), boundary->transport());
+      return;
+    }
+    system_->block_rhs_into_at(point, runtime_block, state_value, rhs);
   }
 
   void neg_div_flux_default_into(int program_block, field_type& state_value, field_type& rhs,
@@ -496,30 +549,111 @@ class ProgramContext {
 
   std::shared_ptr<scalar_boundary_session_type> prepare_mesh_boundary_session(
       field_type& prototype, const ExecutionLane& lane) const {
-    return std::make_shared<scalar_boundary_session_type>(geometry(), scalar_boundary_topology_(),
-                                                          prototype, lane,
-                                                          next_scalar_boundary_generation_());
+    return scalar_boundary_session_type::prepare(geometry(), scalar_boundary_topology_(), prototype,
+                                                 lane, next_scalar_boundary_generation_());
   }
 
-  std::shared_ptr<scalar_boundary_session_type> prepare_block_boundary_session(
+  std::shared_ptr<block_boundary_session_type> prepare_block_boundary_session(
       int program_block, field_type& prototype,
       const runtime::multiblock::BoundaryEvaluationPoint& point, const ExecutionLane& lane) const {
-    (void)sys_block(program_block);
-    require_boundary_point_(point, "Program block scalar boundary");
-    return prepare_mesh_boundary_session(prototype, lane);
+    int runtime_block = -1;
+    std::exception_ptr local_error;
+    try {
+      runtime_block = sys_block(program_block);
+      require_boundary_point_(point, "Program prepared block boundary");
+      require_same_field_contract_(prototype, system_->block_state(runtime_block),
+                                   "Program block boundary prototype");
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error("Program prepared block boundary session failed collectively");
+    }
+    ExactContractBuilder contract;
+    contract.text("pops.program.prepared-block-boundary-session")
+        .scalar(std::int32_t{Dim})
+        .scalar(std::int32_t{runtime_block})
+        .text(lane.identity())
+        .text(point.clock)
+        .scalar(point.tick)
+        .scalar(point.level)
+        .scalar(point.substep)
+        .scalar(point.stage)
+        .scalar(point.stage_fraction.numerator)
+        .scalar(point.stage_fraction.denominator)
+        .scalar(point.dt)
+        .scalar(point.physical_time);
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{std::string_view("program-prepared-block-boundary-session"), contract.view()}},
+            lane.communicator()))
+      throw std::runtime_error("Program prepared block boundary session differs across MPI ranks");
+    auto transport =
+        scalar_boundary_session_type::prepare(geometry(), scalar_boundary_topology_(), prototype,
+                                              lane, next_scalar_boundary_generation_());
+    std::shared_ptr<block_boundary_session_type> session;
+    local_error = nullptr;
+    try {
+      session = std::shared_ptr<block_boundary_session_type>(new block_boundary_session_type(
+          system_, runtime_block, point, lane, std::move(transport)));
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error(
+          "Program prepared block boundary session allocation failed collectively");
+    }
+    return session;
+  }
+
+  bool has_boundary_linearization(int program_block) const {
+    return system_->has_block_boundary_linearization(sys_block(program_block));
+  }
+
+  void rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                        int program_block, field_type& state, field_type& residual, bool flux_only,
+                        const block_boundary_session_type& boundary) const {
+    const int runtime_block =
+        resolve_prepared_program_block_(program_block, boundary.lane(), "Program core RHS block");
+    system_->block_rhs_core_into_at(point, runtime_block, state, residual, flux_only,
+                                    boundary.system(), boundary.runtime_block(), boundary.point(),
+                                    boundary.lane(), boundary.transport());
+  }
+
+  void boundary_residual_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                 int program_block, field_type& state, field_type& residual,
+                                 const block_boundary_session_type& boundary) const {
+    const int runtime_block = resolve_prepared_program_block_(program_block, boundary.lane(),
+                                                              "Program boundary residual block");
+    system_->block_boundary_residual_into_at(
+        point, runtime_block, state, residual, boundary.system(), boundary.runtime_block(),
+        boundary.point(), boundary.lane(), boundary.transport());
+  }
+
+  void boundary_jvp_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                            int program_block, field_type& state, const field_type& direction,
+                            field_type& result, const block_boundary_session_type& boundary) const {
+    const int runtime_block = resolve_prepared_program_block_(program_block, boundary.lane(),
+                                                              "Program boundary JVP block");
+    system_->block_boundary_jvp_into_at(point, runtime_block, state, direction, result,
+                                        boundary.system(), boundary.runtime_block(),
+                                        boundary.point(), boundary.lane(), boundary.transport());
   }
 
   void fill_boundary(field_type& field) const {
-    scalar_boundary_session_type session(geometry(), scalar_boundary_topology_(), field,
-                                         *scalar_boundary_lane_,
-                                         next_scalar_boundary_generation_());
-    session.fill(field);
+    auto session = scalar_boundary_session_type::prepare(geometry(), scalar_boundary_topology_(),
+                                                         field, *scalar_boundary_lane_,
+                                                         next_scalar_boundary_generation_());
+    session->fill(field);
   }
 
   void fill_boundary(field_type& field, const ExecutionLane& lane) const {
-    scalar_boundary_session_type session(geometry(), scalar_boundary_topology_(), field, lane,
-                                         next_scalar_boundary_generation_());
-    session.fill(field);
+    auto session = scalar_boundary_session_type::prepare(
+        geometry(), scalar_boundary_topology_(), field, lane, next_scalar_boundary_generation_());
+    session->fill(field);
   }
 
   void laplacian(field_type& output, field_type& input) const {
@@ -1100,6 +1234,33 @@ class ProgramContext {
         left.ghosts() != right.ghosts())
       throw std::invalid_argument(std::string(operation) +
                                   " requires the same exact ranked field contract");
+  }
+
+  int resolve_prepared_program_block_(int program_block, const ExecutionLane& lane,
+                                      const char* operation) const {
+    int runtime_block = -1;
+    std::exception_ptr local_error;
+    try {
+      runtime_block = sys_block(program_block);
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error(std::string(operation) + " failed collectively");
+    }
+    ExactContractBuilder contract;
+    contract.text(operation)
+        .scalar(std::int32_t{Dim})
+        .scalar(std::int32_t{program_block})
+        .scalar(std::int32_t{runtime_block})
+        .text(lane.identity());
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{std::string_view("program-prepared-boundary-route"), contract.view()}},
+            lane.communicator()))
+      throw std::runtime_error(std::string(operation) + " differs across MPI ranks");
+    return runtime_block;
   }
 
   const std::vector<int>& require_program_block_map_() const {

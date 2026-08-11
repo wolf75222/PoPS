@@ -11,8 +11,10 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -35,8 +37,7 @@ HaloScheduleBudget halo_budget(const MultiFab<Dim>& field, const Geometry<Dim>& 
   std::size_t images = 1;
   for (int axis = 0; axis < Dim; ++axis) {
     std::size_t count = 1;
-    if (topology.is_periodic(Face<Dim>{axis, BoundarySide::lower}) &&
-        field.ghosts()[axis] > 0) {
+    if (topology.is_periodic(Face<Dim>{axis, BoundarySide::lower}) && field.ghosts()[axis] > 0) {
       const std::int64_t length = geometry.domain().length(axis);
       if (length <= 0)
         throw std::invalid_argument("Program scalar halo has an empty periodic axis");
@@ -46,10 +47,9 @@ HaloScheduleBudget halo_budget(const MultiFab<Dim>& field, const Geometry<Dim>& 
     }
     images = checked_product(images, count, "Program scalar halo image product overflow");
   }
-  const std::size_t work =
-      checked_product(pairs, images, "Program scalar halo work overflow");
-  const std::size_t jobs = checked_product(
-      work, static_cast<std::size_t>(2 * Dim), "Program scalar halo job overflow");
+  const std::size_t work = checked_product(pairs, images, "Program scalar halo work overflow");
+  const std::size_t jobs =
+      checked_product(work, static_cast<std::size_t>(2 * Dim), "Program scalar halo job overflow");
   const std::int64_t signed_cells = geometry.domain().numPts();
   if (signed_cells <= 0)
     throw std::invalid_argument("Program scalar halo requires a non-empty domain");
@@ -120,31 +120,39 @@ PreparedPhysicalBoundary<Dim> physical_boundary(const Geometry<Dim>& geometry,
 /// provider instead of being approximated here.
 template <int Dim>
 class PreparedScalarBoundarySession {
+ private:
+  struct UninitializedTag {};
+
  public:
   using field_type = MultiFab<Dim>;
 
+  /// Existing AMR construction seam. Uniform callers use ``prepare`` so shared allocation
+  /// failures are authenticated collectively before session initialization begins.
   PreparedScalarBoundarySession(const Geometry<Dim>& geometry,
-                                const BoundaryTopology<Dim>& topology,
-                                const field_type& prototype, const ExecutionLane& lane,
-                                std::uint64_t generation)
-      : geometry_(geometry),
-        topology_(topology),
-        schedule_(prepare_halo_schedule(
-            prototype, geometry.domain(), topology,
-            scalar_boundary_detail::halo_budget(prototype, geometry, topology))),
-        physical_(scalar_boundary_detail::physical_boundary(geometry, prototype.ghosts(), topology)),
-        lane_(&lane),
-        generation_(generation) {
-    if (generation_ == 0)
-      throw std::invalid_argument("Program scalar boundary generation must be non-zero");
-    const bool distributed =
-        all_reduce_max(schedule_.has_remote_jobs() ? 1L : 0L, lane.communicator()) != 0;
-    if (distributed) {
-      HaloExchangeContext context{};
-      context.context_generation = generation_;
-      context.schedule_generation = generation_;
-      exchange_ = std::make_unique<HaloExchange<Dim>>(schedule_, *lane_, context);
+                                const BoundaryTopology<Dim>& topology, const field_type& prototype,
+                                const ExecutionLane& lane, std::uint64_t generation)
+      : PreparedScalarBoundarySession(UninitializedTag{}, geometry, topology, lane, generation) {
+    initialize_(prototype);
+  }
+
+  static std::shared_ptr<PreparedScalarBoundarySession> prepare(
+      const Geometry<Dim>& geometry, const BoundaryTopology<Dim>& topology,
+      const field_type& prototype, const ExecutionLane& lane, std::uint64_t generation) {
+    std::shared_ptr<PreparedScalarBoundarySession> session;
+    std::exception_ptr local_error;
+    try {
+      session = std::shared_ptr<PreparedScalarBoundarySession>(new PreparedScalarBoundarySession(
+          UninitializedTag{}, geometry, topology, lane, generation));
+    } catch (...) {
+      local_error = std::current_exception();
     }
+    if (all_reduce_max(local_error ? 1L : 0L, lane.communicator()) != 0) {
+      if (lane.size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error("Program scalar boundary allocation failed collectively");
+    }
+    session->initialize_(prototype);
+    return session;
   }
 
   PreparedScalarBoundarySession(const PreparedScalarBoundarySession&) = delete;
@@ -156,20 +164,78 @@ class PreparedScalarBoundarySession {
   const BoundaryTopology<Dim>& topology() const noexcept { return topology_; }
   std::uint64_t generation() const noexcept { return generation_; }
 
-  void fill(field_type& field) const {
+  void fill_halo(field_type& field) const {
     if (exchange_)
       exchange_->execute(field, *lane_);
     else
-      pops::fill_boundary(field, schedule_);
-    fill_physical_boundary(field, physical_);
+      pops::fill_boundary(field, *schedule_);
   }
 
+  void fill(field_type& field) const {
+    fill_halo(field);
+    fill_physical_boundary(field, *physical_);
+  }
+
+  [[nodiscard]] const ExecutionLane& lane() const noexcept { return *lane_; }
+
  private:
+  PreparedScalarBoundarySession(UninitializedTag, const Geometry<Dim>& geometry,
+                                const BoundaryTopology<Dim>& topology, const ExecutionLane& lane,
+                                std::uint64_t generation)
+      : geometry_(geometry),
+        topology_(topology),
+        lane_(&lane),
+        lane_borrow_(lane.borrow_immutably()),
+        generation_(generation) {}
+
+  void initialize_(const field_type& prototype) {
+    std::exception_ptr local_error;
+    try {
+      if (generation_ == 0)
+        throw std::invalid_argument("Program scalar boundary generation must be non-zero");
+      if (lane_->size() != static_cast<int>(prototype.rank_space().size()) ||
+          lane_->rank() !=
+              static_cast<int>(prototype.rank_space().linear_rank(prototype.local_rank())))
+        throw std::invalid_argument(
+            "Program scalar boundary lane differs from the prototype rank space");
+      schedule_.emplace(prepare_halo_schedule(
+          prototype, geometry_.domain(), topology_,
+          scalar_boundary_detail::halo_budget(prototype, geometry_, topology_)));
+      physical_.emplace(
+          scalar_boundary_detail::physical_boundary(geometry_, prototype.ghosts(), topology_));
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_error ? 1L : 0L, lane_->communicator()) != 0) {
+      if (lane_->size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error("Program scalar boundary preparation failed collectively");
+    }
+    const bool distributed =
+        all_reduce_max(schedule_->has_remote_jobs() ? 1L : 0L, lane_->communicator()) != 0;
+    if (distributed) {
+      local_error = nullptr;
+      try {
+        HaloExchangeContext context{};
+        context.context_generation = generation_;
+        context.schedule_generation = generation_;
+        exchange_ = std::make_unique<HaloExchange<Dim>>(*schedule_, *lane_, context);
+      } catch (...) {
+        local_error = std::current_exception();
+      }
+      if (all_reduce_max(local_error ? 1L : 0L, lane_->communicator()) != 0) {
+        if (lane_->size() == 1 && local_error)
+          std::rethrow_exception(local_error);
+        throw std::runtime_error("Program scalar boundary exchange allocation failed collectively");
+      }
+    }
+  }
   Geometry<Dim> geometry_;
   BoundaryTopology<Dim> topology_;
-  HaloSchedule<Dim> schedule_;
-  PreparedPhysicalBoundary<Dim> physical_;
+  std::optional<HaloSchedule<Dim>> schedule_;
+  std::optional<PreparedPhysicalBoundary<Dim>> physical_;
   const ExecutionLane* lane_ = nullptr;
+  ExecutionLane::ImmutableBorrow lane_borrow_;
   std::uint64_t generation_ = 0;
   mutable std::unique_ptr<HaloExchange<Dim>> exchange_;
 };

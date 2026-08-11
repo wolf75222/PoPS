@@ -111,6 +111,27 @@ SystemConfig<Dim> unit_domain_config(int cells_per_axis) {
   return config;
 }
 
+template <int Dim>
+SystemConfig<Dim> distributed_boundary_domain_config(int cells_per_axis) {
+  SystemConfig<Dim> config = unit_domain_config<Dim>(cells_per_axis);
+  const int ranks = n_ranks();
+  if (ranks == 1)
+    return config;
+  if (cells_per_axis % ranks != 0)
+    throw std::invalid_argument("prepared boundary test cells must partition the MPI rank count");
+  config.boxes.clear();
+  for (int rank = 0; rank < ranks; ++rank) {
+    Index<Dim> lower{};
+    Index<Dim> upper{};
+    lower[0] = rank * cells_per_axis / ranks;
+    upper[0] = (rank + 1) * cells_per_axis / ranks - 1;
+    for (int axis = 1; axis < Dim; ++axis)
+      upper[axis] = cells_per_axis - 1;
+    config.boxes.emplace_back(lower, upper);
+  }
+  return config;
+}
+
 // Exact-rank implicit ball used by every EB runtime proof below.  It consumes each coordinate of
 // the native dimension, so the test geometry is a LevelSet authority rather than a legacy 2-D disc.
 static void install_centered_ball(System<kNativeDimension>& system, double radius,
@@ -150,6 +171,16 @@ struct SetProjectedDensity {
 };
 
 template <int Dim>
+struct SetBoundaryJvpDirection {
+  FieldView<Real, Dim> field{};
+
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    field(index, 0) = Real(0.125);
+    field(index, Dim + 1) = Real(0.25);
+  }
+};
+
+template <int Dim>
 struct SetProjectedActiveDensity {
   FieldView<Real, Dim> state{};
   FieldView<const Real, Dim> active{};
@@ -168,6 +199,22 @@ void project_density_exact(MultiFab<Dim>& state) {
   for (std::size_t local = 0; local < state.local_size(); ++local)
     for_each_cell(state.box(local), SetProjectedDensity<Dim>{state.fab(local).view()});
   device_fence();
+}
+
+template <int Dim>
+void set_boundary_jvp_direction(MultiFab<Dim>& direction) {
+  direction.set_val(Real(0));
+  for (std::size_t local = 0; local < direction.local_size(); ++local)
+    for_each_cell(direction.box(local), SetBoundaryJvpDirection<Dim>{direction.fab(local).view()});
+  device_fence();
+}
+
+template <int Dim>
+Real norm_inf_all_components(const MultiFab<Dim>& field) {
+  Real maximum = Real(0);
+  for (int component = 0; component < field.ncomp(); ++component)
+    maximum = std::max(maximum, pops::reduce_norm_inf(field, component));
+  return maximum;
 }
 
 template <int Dim>
@@ -208,6 +255,24 @@ static void fill_ic(std::vector<double>& U, int n, double gamma) {
     }
 }
 
+template <int Dim>
+static void fill_boundary_euler_ic(std::vector<double>& state, int cells_per_axis, double gamma) {
+  std::size_t cells = 1;
+  for (int axis = 0; axis < Dim; ++axis)
+    cells *= static_cast<std::size_t>(cells_per_axis);
+  state.assign(static_cast<std::size_t>(Dim + 2) * cells, 0.0);
+  for (std::size_t cell = 0; cell < cells; ++cell) {
+    const double rho =
+        1.0 + 0.01 * static_cast<double>(cell % static_cast<std::size_t>(cells_per_axis));
+    state[cell] = rho;
+    for (int axis = 0; axis < Dim; ++axis) {
+      state[static_cast<std::size_t>(axis + 1) * cells + cell] = 0.0;
+    }
+    const double pressure = 3.0 + 0.1 * static_cast<double>(cell % 7u);
+    state[static_cast<std::size_t>(Dim + 1) * cells + cell] = pressure / (gamma - 1.0);
+  }
+}
+
 static void add_gas(System<kNativeDimension>& s, double gamma,
                     const std::string& limiter = "minmod") {
   s.install_block_state_route("gas", "test.program-runtime.gas.state@1");
@@ -216,6 +281,27 @@ static void add_gas(System<kNativeDimension>& s, double gamma,
   model.hyp = EulerND<kNativeDimension>{gamma};
   add_compiled_model(s, "gas", model, limiter, "rusanov", "conservative", "explicit", gamma);
   s.set_poisson("charge_density", "cartesian_cg");
+}
+
+static void add_boundary_gas(System<kNativeDimension>& system, double gamma) {
+  system.install_block_state_route("gas", "test.program-runtime.boundary-gas.state@1");
+  std::vector<std::string> face_types(static_cast<std::size_t>(2 * kNativeDimension), "no_flux");
+  std::vector<std::string> face_identities;
+  face_identities.reserve(static_cast<std::size_t>(2 * kNativeDimension));
+  for (int face = 0; face < 2 * kNativeDimension; ++face)
+    face_identities.push_back("test:program-runtime/no-flux-face-" + std::to_string(face));
+  std::vector<std::string> roles{"density"};
+  for (int axis = 0; axis < kNativeDimension; ++axis)
+    roles.push_back("momentum:" + std::to_string(axis));
+  roles.push_back("energy");
+  system.install_hyperbolic_boundary(
+      "gas", "test:program-runtime/prepared-boundary@1", 1, face_types,
+      std::vector<double>(roles.size() * static_cast<std::size_t>(2 * kNativeDimension), 0.0),
+      face_identities, roles, "test.program-runtime.boundary-gas.state@1");
+  system.seal_auxiliary_providers();
+  GasModel model;
+  model.hyp = EulerND<kNativeDimension>{gamma};
+  add_compiled_model(system, "gas", model, "none", "rusanov", "conservative", "explicit", gamma);
 }
 
 static void add_sourced_gas(System<kNativeDimension>& system, double gamma) {
@@ -1670,6 +1756,136 @@ TEST(ProgramRuntime, EmbeddedBoundaryRejectsUnqualifiedBoundaryLinearizationEntr
   using Context = runtime::program::ProgramContext<kNativeDimension>;
   using Field = MultiFab<kNativeDimension>;
   EXPECT_FALSE((HasUnqualifiedBoundaryLinearization<Context, Field>));
+}
+
+TEST(ProgramRuntime, PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally) {
+  comm_init();
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  constexpr int n = 8;
+  constexpr double gamma = 1.4;
+  auto config = distributed_boundary_domain_config<kNativeDimension>(n);
+  for (int axis = 0; axis < kNativeDimension; ++axis)
+    config.periodicity[static_cast<std::size_t>(axis)] = false;
+  System<kNativeDimension> system(config);
+  add_boundary_gas(system, gamma);
+  std::vector<double> initial;
+  fill_boundary_euler_ic<kNativeDimension>(initial, n, gamma);
+  system.set_state("gas", initial);
+  system.set_program_block_map({0});
+
+  runtime::program::ProgramContext<kNativeDimension> context(&system);
+  context.configure_primary_clock("test.prepared-boundary");
+  context.begin_step(1.0e-3);
+  const auto point = context.boundary_evaluation_point(17);
+  auto lane = ExecutionLane::duplicate_world_collectively("test.program-runtime.prepared-boundary");
+  MultiFab<kNativeDimension>& state = context.state(0);
+  const auto session = context.prepare_block_boundary_session(0, state, point, lane);
+  ASSERT_TRUE(context.has_boundary_linearization(0));
+
+  MultiFab<kNativeDimension> residual = context.rhs_scratch_like(state);
+  residual.set_val(Real(0));
+  ASSERT_NO_THROW(context.boundary_residual_into_at(point, 0, state, residual, *session));
+  EXPECT_GT(norm_inf_all_components(residual), Real(0));
+
+  MultiFab<kNativeDimension> direction = context.rhs_scratch_like(state);
+  set_boundary_jvp_direction(direction);
+  MultiFab<kNativeDimension> jvp = context.rhs_scratch_like(state);
+  jvp.set_val(Real(0));
+  ASSERT_NO_THROW(context.boundary_jvp_into_at(point, 0, state, direction, jvp, *session));
+  EXPECT_GT(norm_inf_all_components(jvp), Real(0));
+
+  MultiFab<kNativeDimension> scaled_direction = context.rhs_scratch_like(state);
+  lincomb(scaled_direction, Real(3), direction, Real(0), direction);
+  MultiFab<kNativeDimension> scaled_jvp = context.rhs_scratch_like(state);
+  scaled_jvp.set_val(Real(0));
+  ASSERT_NO_THROW(
+      context.boundary_jvp_into_at(point, 0, state, scaled_direction, scaled_jvp, *session));
+  MultiFab<kNativeDimension> scaling_error = context.rhs_scratch_like(state);
+  lincomb(scaling_error, Real(1), scaled_jvp, Real(-3), jvp);
+  EXPECT_LT(norm_inf_all_components(scaling_error),
+            Real(5.0e-5) * (Real(1) + norm_inf_all_components(scaled_jvp)));
+
+  const std::vector<double> accepted = system.get_state("gas");
+  MultiFab<kNativeDimension> non_finite_state = context.rhs_scratch_like(state);
+  non_finite_state.set_val(std::numeric_limits<Real>::quiet_NaN());
+  residual.set_val(Real(-7));
+  EXPECT_THROW(context.boundary_residual_into_at(point, 0, non_finite_state, residual, *session),
+               std::runtime_error);
+  EXPECT_EQ(system.get_state("gas"), accepted);
+  EXPECT_EQ(context.norm_inf(0, residual), Real(7));
+
+  MultiFab<kNativeDimension> non_finite_direction = context.rhs_scratch_like(state);
+  non_finite_direction.set_val(std::numeric_limits<Real>::quiet_NaN());
+  jvp.set_val(Real(-8));
+  EXPECT_THROW(context.boundary_jvp_into_at(point, 0, state, non_finite_direction, jvp, *session),
+               std::runtime_error);
+  EXPECT_EQ(system.get_state("gas"), accepted);
+  EXPECT_EQ(context.norm_inf(0, jvp), Real(8));
+
+  residual.set_val(Real(-3));
+  auto mismatched_point = point;
+  if (lane.rank() != 0)
+    ++mismatched_point.stage;
+  if (lane.size() == 1)
+    ++mismatched_point.stage;
+  if (lane.size() == 1) {
+    EXPECT_THROW(context.boundary_residual_into_at(mismatched_point, 0, state, residual, *session),
+                 std::invalid_argument);
+  } else {
+    EXPECT_THROW(context.boundary_residual_into_at(mismatched_point, 0, state, residual, *session),
+                 std::runtime_error);
+  }
+  EXPECT_EQ(system.get_state("gas"), accepted);
+  EXPECT_EQ(context.norm_inf(0, residual), Real(3));
+
+  residual.set_val(Real(-4));
+  if (lane.size() == 1) {
+    EXPECT_THROW(context.rhs_core_into_at(mismatched_point, 0, state, residual, false, *session),
+                 std::invalid_argument);
+  } else {
+    EXPECT_THROW(context.rhs_core_into_at(mismatched_point, 0, state, residual, false, *session),
+                 std::runtime_error);
+  }
+  EXPECT_EQ(system.get_state("gas"), accepted);
+  EXPECT_EQ(context.norm_inf(0, residual), Real(4));
+  EXPECT_NO_THROW(context.rhs_core_into_at(point, 0, state, residual, false, *session));
+  EXPECT_GT(norm_inf_all_components(residual), Real(0));
+
+  residual.set_val(Real(-3));
+
+  System<kNativeDimension> foreign_system(config);
+  add_boundary_gas(foreign_system, gamma);
+  foreign_system.set_state("gas", initial);
+  foreign_system.set_program_block_map({0});
+  runtime::program::ProgramContext<kNativeDimension> foreign_context(&foreign_system);
+  foreign_context.configure_primary_clock("test.prepared-boundary");
+  foreign_context.begin_step(1.0e-3);
+  MultiFab<kNativeDimension>& foreign_state = foreign_context.state(0);
+  const auto foreign_session =
+      foreign_context.prepare_block_boundary_session(0, foreign_state, point, lane);
+  if (lane.size() == 1) {
+    EXPECT_THROW(context.boundary_residual_into_at(point, 0, state, residual, *foreign_session),
+                 std::invalid_argument);
+  } else {
+    EXPECT_THROW(context.boundary_residual_into_at(point, 0, state, residual, *foreign_session),
+                 std::runtime_error);
+  }
+  EXPECT_EQ(system.get_state("gas"), accepted);
+  EXPECT_EQ(context.norm_inf(0, residual), Real(3));
+
+  if (lane.size() > 1) {
+    const int divergent_block = lane.rank() == 0 ? 0 : 1;
+    EXPECT_THROW(
+        context.boundary_residual_into_at(point, divergent_block, state, residual, *session),
+        std::runtime_error);
+    EXPECT_EQ(system.get_state("gas"), accepted);
+    EXPECT_EQ(context.norm_inf(0, residual), Real(3));
+  }
+
+  EXPECT_NO_THROW(context.boundary_residual_into_at(point, 0, state, residual, *session));
+  EXPECT_GT(norm_inf_all_components(residual), Real(0));
 }
 
 TEST(ProgramRuntime, AnalyticMappedInitialFailureDoesNotPublishTheCandidate) {

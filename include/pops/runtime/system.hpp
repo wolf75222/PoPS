@@ -11,6 +11,7 @@
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/numerics/nonlinear/prepared_variable_recovery.hpp>
 #include <pops/mesh/boundary/prepared_hyperbolic_boundary.hpp>
+#include <pops/mesh/boundary/prepared_boundary_component.hpp>
 #include <pops/runtime/export.hpp>  // POPS_EXPORT (methods resolved by the native loader through dlopen)
 #include <pops/runtime/facade_options.hpp>  // CoupledSourceProgram (facade POD, ADC-214)
 #include <pops/runtime/config/model_spec.hpp>
@@ -180,6 +181,8 @@ class CacheManager;  // scheduler value cache (ADC-458); full type in program/ca
 template <int Dim>
 class ProgramContext;
 template <int Dim>
+class PreparedScalarBoundarySession;
+template <int Dim>
 struct ProgramRuntimeState;
 }  // namespace runtime::program
 
@@ -191,6 +194,8 @@ struct FieldTopologyReportRow;
 namespace runtime::multiblock {
 struct BoundaryEvaluationPoint;
 }  // namespace runtime::multiblock
+
+class ExecutionLane;
 
 /// Exact compile-time-ranked mesh authority shared by every block of one uniform runtime.
 /// Shape, physical bounds, topology and decomposition are lowered once from the resolved layout;
@@ -368,6 +373,16 @@ class System {
   /// Bind one exact solved-field Handle identity to its authenticated provider storage slot.
   POPS_EXPORT void install_field_storage_route(const std::string& field_identity,
                                                const std::string& provider_slot);
+  /// Retain the exact RuntimeInstance communicator lane used by every prepared Uniform boundary
+  /// operation. The lane is materialized from the caller's authenticated ExecutionContext before
+  /// any state route or boundary plan is published.
+  POPS_EXPORT void install_prepared_boundary_execution_lane(std::shared_ptr<ExecutionLane> lane);
+  [[nodiscard]] POPS_EXPORT const ExecutionLane& prepared_boundary_execution_lane() const;
+  /// Stage one authenticated host GhostBoundary component before its block package is built. The
+  /// late package installer wraps the exact prepared block after materialization, inside the same
+  /// collective native-package snapshot/rollback transaction.
+  POPS_EXPORT void stage_prepared_ghost_boundary_component(
+      const std::string& block, std::shared_ptr<PreparedGhostBoundaryComponent> component);
   /// Roll back a failed all-block pre-build boundary transaction.  Internal bind seam only.
   POPS_EXPORT void discard_hyperbolic_boundaries();
   /// Install one already-authenticated exact-ranked shared-interface provider after every endpoint
@@ -907,9 +922,39 @@ class System {
                                    const std::vector<MultiFab<Dim>*>& states,
                                    const std::vector<MultiFab<Dim>*>& rhs,
                                    const std::vector<int>& flux_only);
-  POPS_EXPORT void block_rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
-                                          int b, MultiFab<Dim>& U, MultiFab<Dim>& R,
-                                          bool flux_only);
+  POPS_EXPORT void block_rhs_core_into_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab<Dim>& U,
+      MultiFab<Dim>& R, bool flux_only, const System* prepared_system, int prepared_block,
+      const runtime::multiblock::BoundaryEvaluationPoint& prepared_point, const ExecutionLane& lane,
+      const runtime::program::PreparedScalarBoundarySession<Dim>& transport);
+  /// Evaluate one full generated boundary RHS under the exact Program-owned lane and publish it
+  /// only after collective finite validation.
+  POPS_EXPORT void block_rhs_into_at_prepared(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab<Dim>& U,
+      MultiFab<Dim>& R, const System* prepared_system, int prepared_block,
+      const runtime::multiblock::BoundaryEvaluationPoint& prepared_point, const ExecutionLane& lane,
+      const runtime::program::PreparedScalarBoundarySession<Dim>& transport);
+  /// Whether ordinary Program RHS evaluation must use a standalone prepared boundary session.
+  /// This reports retained boundary state rather than closure completeness so an incomplete
+  /// boundary authority fails loudly instead of falling back to the legacy no-lane route.
+  POPS_EXPORT bool requires_block_boundary_session(int b) const;
+  /// Whether one block retains the complete generated boundary residual/JVP pair.  This is a
+  /// capability query only; execution still requires one authenticated evaluation point.
+  POPS_EXPORT bool has_block_boundary_linearization(int b) const;
+  /// Evaluate the generated prepared boundary contribution into a transactionally published
+  /// scratch result.  The retained boundary authority is immutable and remains owned by System.
+  POPS_EXPORT void block_boundary_residual_into_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab<Dim>& U,
+      MultiFab<Dim>& R, const System* prepared_system, int prepared_block,
+      const runtime::multiblock::BoundaryEvaluationPoint& prepared_point, const ExecutionLane& lane,
+      const runtime::program::PreparedScalarBoundarySession<Dim>& transport);
+  /// Apply the generated prepared boundary Jacobian-vector product under the same exact point.
+  POPS_EXPORT void block_boundary_jvp_into_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab<Dim>& U,
+      const MultiFab<Dim>& direction, MultiFab<Dim>& R, const System* prepared_system,
+      int prepared_block, const runtime::multiblock::BoundaryEvaluationPoint& prepared_point,
+      const ExecutionLane& lane,
+      const runtime::program::PreparedScalarBoundarySession<Dim>& transport);
   /// Fill same-level and physical halos for one generated pointwise stencil through the block's
   /// retained exact-ranked package.  This is a preparation seam, not a second boundary engine.
   POPS_EXPORT void block_prepare_generated_state_at(
@@ -1360,6 +1405,9 @@ class System {
   void add_coupled_source_prepared_(const CoupledSourceProgram& program, double frequency,
                                     const std::string& label, CouplingOperatorView inspect);
   struct Impl;
+  // Declared before Impl so installed Program closures and their immutable lane borrows are
+  // destroyed before the owning communicator is released.
+  std::shared_ptr<ExecutionLane> prepared_boundary_execution_lane_;
   std::unique_ptr<Impl> p_;
 };
 

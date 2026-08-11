@@ -215,6 +215,26 @@ struct CompositeModel : composite_detail::ConservationLawAliases<Hyperbolic> {
   using State = typename Hyperbolic::State;
   using Prim = typename composite_detail::PrimitiveType<Hyperbolic>::type;
   static constexpr int n_vars = Hyperbolic::n_vars;
+  static constexpr int characteristic_no_inflow_contract_version = [] {
+    if constexpr (requires { Hyperbolic::characteristic_no_inflow_contract_version; })
+      return static_cast<int>(Hyperbolic::characteristic_no_inflow_contract_version);
+    return 0;
+  }();
+  static constexpr int characteristic_no_inflow_dimension = [] {
+    if constexpr (requires { Hyperbolic::characteristic_no_inflow_dimension; })
+      return static_cast<int>(Hyperbolic::characteristic_no_inflow_dimension);
+    return 0;
+  }();
+  static constexpr int characteristic_no_inflow_components = [] {
+    if constexpr (requires { Hyperbolic::characteristic_no_inflow_components; })
+      return static_cast<int>(Hyperbolic::characteristic_no_inflow_components);
+    return 0;
+  }();
+  static constexpr bool characteristic_no_inflow_conservative = [] {
+    if constexpr (requires { Hyperbolic::characteristic_no_inflow_conservative; })
+      return static_cast<bool>(Hyperbolic::characteristic_no_inflow_conservative);
+    return false;
+  }();
   static constexpr int n_providers = [] {
     int width = provider_count_for<Hyperbolic, dimension>();
     if (provider_count_for<Source, dimension>() > width)

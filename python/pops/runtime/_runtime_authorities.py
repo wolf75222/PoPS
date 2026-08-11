@@ -123,11 +123,15 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
     from pops.runtime._component_execution_context import component_execution_data
 
     execution_data = component_execution_data(install_plan.execution_context)
+    prepare_execution_lane = getattr(native, "_prepare_boundary_execution_lane", None)
     component_installers = {
         "apply_region_batch": getattr(native, "_install_ghost_boundary_component", None),
         "transform_faces": getattr(native, "_install_boundary_flux_component", None),
         "residual": getattr(native, "_install_field_boundary_residual_component", None),
         "jvp": getattr(native, "_install_field_boundary_jvp_component", None),
+    }
+    component_preflights = {
+        "apply_region_batch": getattr(native, "_preflight_ghost_boundary_component", None),
     }
     prepared = []
     state_routes: dict[str, str] = {}
@@ -347,6 +351,12 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
                     "the selected native provider cannot install typed boundary operation %r"
                     % operation
                 )
+            preflight_component = component_preflights.get(operation)
+            if operation == "apply_region_batch" and not callable(preflight_component):
+                raise NotImplementedError(
+                    "the selected native provider cannot preflight typed boundary operation %r"
+                    % operation
+                )
             for table_name in ("states", "directions", "fields", "outputs"):
                 table = row.get(table_name)
                 if not isinstance(table, list) or any(
@@ -371,7 +381,15 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
                 raise NotImplementedError(
                     "native post-Riemann boundary flux requires one exact state output and no "
                     "JVP direction table")
+            if operation == "apply_region_batch" and (
+                    row["states"] or row["directions"] or row["fields"] or
+                    len(row["outputs"]) != 1 or
+                    row["outputs"][0] != row["state_identity"]):
+                raise NotImplementedError(
+                    "Uniform native GhostBoundary requires one exact primary-state output and "
+                    "no routed state/field dependencies")
             component_jobs.append((
+                preflight_component,
                 install_component,
                 block.name,
                 installed.native_handle,
@@ -421,7 +439,21 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
     if state_routes and not callable(discard):
         raise NotImplementedError(
             "the selected native provider cannot roll back boundary authority installation")
+    if prepared and not callable(prepare_execution_lane):
+        raise NotImplementedError(
+            "the selected native provider cannot prepare the RuntimeInstance boundary lane")
     try:
+        # Authenticate every external GhostBoundary descriptor and ABI table before the first
+        # state route or prepared boundary plan is published. Native package preparation remains
+        # inside the all-ranks transaction and restores the accepted pre-bind image on failure.
+        for _base_arguments, component_jobs in prepared:
+            for (preflight, _installer, _block, component, row, parameters_json, target_json,
+                 context) in component_jobs:
+                if preflight is not None:
+                    cast(Callable[..., Any], preflight)(
+                        component, row, parameters_json, target_json, context)
+        if prepared:
+            cast(Callable[..., Any], prepare_execution_lane)(execution_data)
         for state_identity, block_name in sorted(state_routes.items()):
             cast(Callable[..., Any], install_state_route)(block_name, state_identity)
         install_field_route = getattr(native, "_install_field_storage_route", None)
@@ -433,7 +465,7 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
         for base_arguments, component_jobs in prepared:
             cast(Callable[..., Any], install)(*base_arguments)
             for job in component_jobs:
-                installer, *arguments = job
+                _preflight, installer, *arguments = job
                 cast(Callable[..., Any], installer)(*arguments)
     except BaseException:
         cast(Callable[..., Any], discard)()
