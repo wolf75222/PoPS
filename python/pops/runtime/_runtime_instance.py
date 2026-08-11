@@ -93,20 +93,37 @@ def _same_physical_time(left: float, right: float) -> bool:
     return abs(left - right) <= tolerance
 
 
+def _snapshot_step_controller(controller: Any) -> Any:
+    """Clone mutable retry state without replacing the installed strategy authority."""
+    if controller is None:
+        return None
+    snapshot = copy.deepcopy(controller)
+    strategy = getattr(controller, "strategy", None)
+    if strategy is None:
+        return snapshot
+    try:
+        snapshot.strategy = strategy
+    except (AttributeError, TypeError) as error:
+        raise TypeError("step controller snapshot cannot preserve its strategy identity") from error
+    if snapshot.strategy is not strategy:
+        raise RuntimeError("step controller snapshot changed its installed strategy identity")
+    return snapshot
+
+
 def _validate_external_grid_deadline(
-    strategy: Any,
-    controls: Mapping[str, Any],
+    prepared_run: Any,
     deadline: float | None,
     run_end: float,
 ) -> None:
     """Require an exact external grid to contain every active consumer hard boundary."""
     from pops.time import ExternalTimeGrid
 
+    strategy = prepared_run.strategy
     if type(strategy) is not ExternalTimeGrid or deadline is None:
         return
     if deadline > run_end:
         return
-    grid = tuple(float(value) for value in controls[strategy.grid_id])
+    grid = tuple(float(value) for value in prepared_run.controls[strategy.grid_id])
     if not any(value >= deadline and _same_physical_time(value, deadline) for value in grid):
         raise ValueError(
             "every_dt deadline %s is absent from ExternalTimeGrid %r; add every physical-output "
@@ -1131,7 +1148,8 @@ class RuntimeInstance:
             "temporal_restart_state": copy.deepcopy(
                 getattr(native, "_temporal_restart_state", None)
             ),
-            "step_controller": copy.deepcopy(getattr(native, "_step_controller", None)),
+            "step_controller": _snapshot_step_controller(
+                getattr(native, "_step_controller", None)),
             "last_step_transaction_report": getattr(native, "_last_step_transaction_report", None),
         }
 
@@ -1234,6 +1252,7 @@ class RuntimeInstance:
         advance: Any,
         *,
         at_end: Any = False,
+        before_begin: Any = None,
     ) -> Any:
         """Run one attempt controller inside the sole collective publication envelope."""
         native = self._executor
@@ -1243,7 +1262,8 @@ class RuntimeInstance:
             raise RuntimeError("nested collective step envelope")
         native._collective_step_envelope_active = True
         try:
-            return self._accepted_step_transaction_body(advance, at_end=at_end)
+            return self._accepted_step_transaction_body(
+                advance, at_end=at_end, before_begin=before_begin)
         finally:
             if previous is missing:
                 delattr(native, "_collective_step_envelope_active")
@@ -1255,6 +1275,7 @@ class RuntimeInstance:
         advance: Any,
         *,
         at_end: Any = False,
+        before_begin: Any = None,
     ) -> Any:
         """Advance once and publish its due effects as one rollback boundary."""
         from pops.time import StepTransactionReport
@@ -1277,6 +1298,10 @@ class RuntimeInstance:
             # have captured or mutated provisional stores before reporting a
             # failure.  Once entered, rollback must therefore be attempted even
             # when ``begin`` itself does not return.
+            if before_begin is not None:
+                if not callable(before_begin):
+                    raise TypeError("step transaction before_begin hook must be callable")
+                before_begin()
             begin_entered = True
             begin()
             native_active = True
@@ -1394,31 +1419,20 @@ class RuntimeInstance:
         self,
         native: Any,
         step_target: Any,
-        strategy: Any,
+        prepared_run: Any,
         *,
         t_end: float,
-        controls: Mapping[str, Any],
         deadline: float | None = None,
         at_end: Any = False,
     ) -> Any:
         """Execute one accepted controller step with one transaction per native attempt."""
         from pops._bootstrap import StepAttemptRejected
-        from pops.runtime._step_strategy import (
-            prepare_step_attempts,
-            run_prepared_step_attempt,
-        )
 
-        sequence = prepare_step_attempts(
-            native,
-            step_target,
-            strategy,
-            t_end=float(t_end),
-            controls=controls,
-        )
+        sequence = prepared_run.prepare_attempts(step_target, t_end=float(t_end))
         while True:
 
             def advance() -> tuple[Any, int]:
-                report = run_prepared_step_attempt(sequence)
+                report = prepared_run.run_prepared_attempt(sequence)
                 reached = float(native.time())
                 if (
                     deadline is not None
@@ -1432,7 +1446,11 @@ class RuntimeInstance:
                 return report, report.attempts
 
             try:
-                return self._accepted_step_transaction(advance, at_end=at_end)
+                return self._accepted_step_transaction(
+                    advance,
+                    at_end=at_end,
+                    before_begin=prepared_run.require_live_transaction_plan,
+                )
             except StepAttemptRejected as error:
                 # _accepted_step_transaction has already restored every native/Python store here.
                 # It also carries the one rejected-attempt statistic into the accepted temporal
@@ -1465,21 +1483,16 @@ class RuntimeInstance:
         require_observer_world = getattr(self._publisher, "require_observer_world_available", None)
         if callable(require_observer_world):
             require_observer_world()
-        from pops.runtime._step_strategy import (
-            prepare_step_controller,
-            resolve_run_strategy,
-            run_control_payload,
-        )
+        from pops.runtime._step_strategy import prepare_program_run
         from pops.runtime._native_step_target import native_step_target
         from pops.runtime.run_report import RunStopReason
 
         native = self._executor
         step_target = native_step_target(native)
-        selected = resolve_run_strategy(native)
-        control = run_control_payload(selected, controller_controls)
+        prepared_run = prepare_program_run(native, controller_controls)
         self._step_transaction_methods()
         entry_temporal = copy.deepcopy(getattr(native, "_temporal_restart_state", None))
-        entry_controller = copy.deepcopy(getattr(native, "_step_controller", None))
+        entry_controller = _snapshot_step_controller(getattr(native, "_step_controller", None))
         entry_consumer_fence = self._failed_run_effect_fence()
         publisher_fence = getattr(self._publisher, "failed_run_effect_fence", None)
         entry_publisher_fence = None
@@ -1496,23 +1509,21 @@ class RuntimeInstance:
         console_session = None
         manifest = None
         try:
-            prepare_step_controller(native, selected, controller_controls)
             temporal = getattr(native, "_temporal_restart_state", None)
-            if temporal is not None:
-                temporal.begin_run(control, time=native.time(), macro_step=native.macro_step())
+            prepared_run.begin(temporal, time=native.time(), macro_step=native.macro_step())
             from pops.runtime._run_manifest import begin_run
 
             manifest = begin_run(
                 native,
                 t_end=t_end,
-                step_transaction=control,
+                step_transaction=prepared_run.control_payload,
                 max_steps=max_steps,
                 output_dir=output_dir,
             )
             if console:
                 from pops.runtime._console_run import safe_begin_console_run
 
-                console_session = safe_begin_console_run(self, manifest, selected)
+                console_session = safe_begin_console_run(self, manifest, prepared_run.strategy)
             begin_post_commit = getattr(self._publisher, "begin_post_commit_consumers", None)
             if callable(begin_post_commit):
                 begin_post_commit(manifest.run_identity)
@@ -1520,7 +1531,7 @@ class RuntimeInstance:
             while native.time() < t_end and steps < max_steps:
                 deadline = next_consumer_deadline(self._consumer_graph, self._moments())
                 run_end = float(t_end)
-                _validate_external_grid_deadline(selected, controller_controls, deadline, run_end)
+                _validate_external_grid_deadline(prepared_run, deadline, run_end)
                 # A tolerance can validate a controller landing, but it must never extend the
                 # requested run.  In particular, a threshold one ULP above t_end is a future
                 # occurrence, not an end-of-run sample.
@@ -1534,9 +1545,8 @@ class RuntimeInstance:
                 step_report = self._accepted_controller_step(
                     native,
                     step_target,
-                    selected,
+                    prepared_run,
                     t_end=step_end,
-                    controls=controller_controls,
                     deadline=deadline if deadline_is_active else None,
                     at_end=lambda: not (native.time() < t_end),
                 )
