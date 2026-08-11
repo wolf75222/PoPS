@@ -548,18 +548,32 @@ enum class VariableRecoveryInversionFailure : std::uint8_t {
   kSourceRejected = 1,
 };
 
-template <class Model>
-using ModelRecoveryCandidateType = typename Model::Prim;
+/// Candidate space for the generic prepared authority.
+///
+/// A model with the explicit PhysicalModel primitive contract owns a distinct primitive candidate
+/// and conversion.  Every other model has one state space, so its mathematically declared
+/// conservative-to-recovery map is the typed identity on State.  A specialized trait is required
+/// here: conditional_t would still form Model::Prim for identity models during substitution.
+template <class Model, bool = HasPrimitiveVars<Model>>
+struct ModelRecoveryCandidate {
+  using type = typename Model::State;
+};
 
-/// Concrete inversion source for a model's declared conservative-to-primitive conversion.
+template <class Model>
+struct ModelRecoveryCandidate<Model, true> {
+  using type = typename Model::Prim;
+};
+
+template <class Model>
+using ModelRecoveryCandidateType = typename ModelRecoveryCandidate<Model>::type;
+
+/// Concrete inversion source for a model's declared conversion or typed state identity.
 ///
 /// This is an inversion source, not an admissibility adapter.  It deliberately reports only
 /// whether the model produced a detached candidate; finite, physical and projected acceptance are
 /// all decided later by the prepared generic authorities.
 template <class Model>
 struct ModelVariableInversionSource {
-  static_assert(HasPrimitiveVars<Model>,
-                "model variable inversion requires an explicit primitive conversion contract");
   static constexpr int dimension = Model::dimension;
 
   Model model;
@@ -569,7 +583,9 @@ struct ModelVariableInversionSource {
   }
 
   void serialize_exact_parameters(ExactContractBuilder& contract) const {
-    contract.scalar(std::uint32_t{1}).scalar(std::int32_t{Model::n_vars});
+    contract.scalar(std::uint32_t{2})
+        .scalar(std::int32_t{Model::n_vars})
+        .scalar(static_cast<std::uint8_t>(HasPrimitiveVars<Model> ? 1 : 0));
     if constexpr (requires(const Model& value, ExactContractBuilder& builder) {
                     value.serialize_exact_parameters(builder);
                   })
@@ -579,17 +595,22 @@ struct ModelVariableInversionSource {
   POPS_HD InversionResult<ModelRecoveryCandidateType<Model>, VariableRecoveryInversionFailure>
   operator()(const typename Model::State& state, const ProviderValues<0>&,
              InversionWorkspaceView) const {
-    // The conversion formula produces only a detached candidate. Finite and model predicates are
-    // deliberately evaluated later by the one ordered AdmissibleSet authority.
-    return InversionResult<ModelRecoveryCandidateType<Model>,
-                           VariableRecoveryInversionFailure>::success(model.to_primitive(state));
+    // Either mathematical map produces only a detached candidate. Finite and model predicates
+    // are deliberately evaluated later by the one ordered AdmissibleSet authority.
+    if constexpr (HasPrimitiveVars<Model>) {
+      return InversionResult<ModelRecoveryCandidateType<Model>,
+                             VariableRecoveryInversionFailure>::success(model.to_primitive(state));
+    } else {
+      return InversionResult<ModelRecoveryCandidateType<Model>,
+                             VariableRecoveryInversionFailure>::success(state);
+    }
   }
 };
 
 /// Device-clean model-declared admissibility predicate.  This provider is only materialized as a
 /// ModelInequality member of the ordered AdmissibleSet; recovery never invokes the model predicate
 /// as a second validation authority.
-template <class Model>
+template <HasRecoveryAdmissibility Model>
 struct ModelRecoveryAdmissibilityProvider {
   Model model;
 
@@ -648,8 +669,6 @@ struct PreparedVariableRecoveryAttempt {
 template <class Model>
 class PreparedModelVariableInversionRecovery final {
  public:
-  static_assert(HasPrimitiveVars<Model>,
-                "prepared model recovery requires an explicit primitive conversion contract");
   static_assert(Model::dimension >= 1 && Model::dimension <= 3,
                 "prepared variable recovery requires an exact native dimension");
 
