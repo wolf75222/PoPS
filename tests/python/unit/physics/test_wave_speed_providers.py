@@ -234,11 +234,17 @@ def test_external_flux_uses_its_declared_wave_speed_capability_not_its_name():
     authority = {
         "library_path": "/tmp/external-riemann.so",
         "library_sha256": "0" * 64,
-        "abi_version": 2,
-        "abi_key": "pops.external-riemann/v2;scalar=f64;index=i32;periodicity=xy",
+        "abi_version": 4,
+        "abi_key": (
+            "pops.external-riemann/v4;scalar=f64;index=i32;periodicity=nd;"
+            "providers=qualified;dim=2"
+        ),
         "native_abi_key": "host-native-abi",
         "supported_layouts": ("uniform", "amr"),
         "model_identity": "compiled-model-hash",
+        "dimension": 2,
+        "n_vars": 1,
+        "provider_count": 0,
     }
 
     required = BrickDescriptor(
@@ -276,11 +282,17 @@ def test_external_flux_reuses_standard_model_predicates_without_a_route_name():
         options={
             "library_path": "/tmp/external-riemann.so",
             "library_sha256": "0" * 64,
-            "abi_version": 2,
-            "abi_key": "pops.external-riemann/v2;scalar=f64;index=i32;periodicity=xy",
+            "abi_version": 4,
+            "abi_key": (
+                "pops.external-riemann/v4;scalar=f64;index=i32;periodicity=nd;"
+                "providers=qualified;dim=2"
+            ),
             "native_abi_key": "host-native-abi",
             "supported_layouts": ("uniform", "amr"),
             "model_identity": "compiled-model-hash",
+            "dimension": 2,
+            "n_vars": 1,
+            "provider_count": 0,
         },
     )
     spatial = engine.Spatial(flux=external)

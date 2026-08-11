@@ -107,11 +107,17 @@ def test_external_riemann_identity_includes_the_registered_brick_id():
             options={
                 "library_path": "/tmp/external-riemann.so",
                 "library_sha256": "0" * 64,
-                "abi_version": 2,
-                "abi_key": "pops.external-riemann/v2;scalar=f64;index=i32;periodicity=xy",
+                "abi_version": 4,
+                "abi_key": (
+                    "pops.external-riemann/v4;scalar=f64;index=i32;periodicity=nd;"
+                    "providers=qualified;dim=2"
+                ),
                 "native_abi_key": "host-native-abi",
                 "supported_layouts": ("uniform", "amr"),
                 "model_identity": "compiled-model-hash",
+                "dimension": 2,
+                "n_vars": 4,
+                "provider_count": 0,
             },
         )
 
@@ -121,9 +127,15 @@ def test_external_riemann_identity_includes_the_registered_brick_id():
     assert left.to_data()["riemann"] == {
         "route": "user", "external_id": "acme.hll.v1",
         "external_library_sha256": "0" * 64,
-        "external_abi_key": "pops.external-riemann/v2;scalar=f64;index=i32;periodicity=xy",
+        "external_abi_key": (
+            "pops.external-riemann/v4;scalar=f64;index=i32;periodicity=nd;"
+            "providers=qualified;dim=2"
+        ),
         "external_native_abi_key": "host-native-abi",
         "external_model_identity": "compiled-model-hash",
+        "external_dimension": 2,
+        "external_n_vars": 4,
+        "external_provider_count": 0,
         "capability_contract": {
             "required_capabilities": [], "wave_speed_provider": None,
         },

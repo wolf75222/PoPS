@@ -7,6 +7,7 @@
 #include <pops/coupling/source/coupled_source_program.hpp>
 #include <pops/runtime/builders/compiled/native_loader.hpp>
 #include <pops/runtime/named_field_output.hpp>
+#include <pops/runtime/program/external_riemann_brick.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -729,6 +730,77 @@ void System<Dim>::register_native_package(const std::string& name, const std::st
 }
 
 template <int Dim>
+void System<Dim>::register_external_riemann_package(
+    const std::string& name, const std::string& so_path, const std::string& brick_id,
+    const std::string& expected_sha256, int expected_nvars, int expected_provider_count,
+    const std::string& expected_model_identity, const std::string& provider_consumer_qid,
+    const std::string& limiter, const std::string& recon, const std::string& time, double gamma,
+    int substeps, bool evolve, int stride, double positivity_floor, double weno_epsilon) {
+  require_assembling(p_->lifecycle_, "register_external_riemann_package");
+  runtime::program::detail::validate_external_install(name, limiter, recon, time,
+                                                      provider_consumer_qid, gamma, substeps,
+                                                      stride, positivity_floor, weno_epsilon);
+  if (expected_sha256.size() != 64 ||
+      !std::all_of(expected_sha256.begin(), expected_sha256.end(), [](char value) {
+        return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f');
+      }))
+    throw std::invalid_argument(
+        "System external Riemann package requires one lowercase SHA-256 digest");
+
+  auto authority = std::make_shared<runtime::program::ExternalBrickHandle>(
+      so_path, brick_id, expected_nvars, expected_provider_count, expected_model_identity,
+      expected_sha256);
+
+  ExactContractBuilder exact;
+  exact.text("pops.external-riemann.system-package")
+      .scalar(std::uint32_t{4})
+      .scalar(std::int32_t{Dim})
+      .text(name)
+      .text(brick_id)
+      .text(expected_sha256)
+      .scalar(std::int32_t{expected_nvars})
+      .scalar(std::int32_t{expected_provider_count})
+      .text(expected_model_identity)
+      .text(provider_consumer_qid)
+      .text(limiter)
+      .text(recon)
+      .text(time)
+      .scalar(gamma)
+      .scalar(std::int32_t{substeps})
+      .scalar(evolve)
+      .scalar(std::int32_t{stride})
+      .scalar(positivity_floor)
+      .scalar(weno_epsilon);
+  std::string identity = std::move(exact).release();
+
+  for (const auto& package : p_->pending_native_packages_)
+    if (package.identity == identity)
+      throw std::invalid_argument(
+          "System external Riemann package identity is registered more than once");
+  for (const auto& package : p_->installed_native_packages_)
+    if (package.identity == identity)
+      throw std::invalid_argument("System external Riemann package identity was already finalized");
+
+  std::function<void()> installer = [this, authority, name, provider_consumer_qid, limiter, recon,
+                                     time, gamma, substeps, evolve, stride, positivity_floor,
+                                     weno_epsilon] {
+    authority->install_system(this, name, provider_consumer_qid, limiter, recon, time, gamma,
+                              substeps, evolve, stride, positivity_floor, weno_epsilon);
+  };
+  p_->pending_native_packages_.reserve(p_->pending_native_packages_.size() + 1);
+  const auto registry_before = p_->auxiliary_registry_;
+  const bool consensus_before = p_->auxiliary_registry_consensus_verified_;
+  try {
+    authority->register_system_routes(*this);
+    stage_prepared_native_package(std::move(identity), std::move(installer), authority);
+  } catch (...) {
+    p_->auxiliary_registry_ = registry_before;
+    p_->auxiliary_registry_consensus_verified_ = consensus_before;
+    throw;
+  }
+}
+
+template <int Dim>
 void System<Dim>::stage_prepared_native_package(std::string identity,
                                                 std::function<void()> installer,
                                                 std::shared_ptr<void> package_lifetime) {
@@ -1212,6 +1284,10 @@ template void System<kNativeDimension>::register_native_package(
     const std::string&, const std::string&, const std::string&, const std::string&,
     const std::string&, const std::string&, double, int, bool, int, const std::vector<double>&,
     double);
+template void System<kNativeDimension>::register_external_riemann_package(
+    const std::string&, const std::string&, const std::string&, const std::string&, int, int,
+    const std::string&, const std::string&, const std::string&, const std::string&,
+    const std::string&, double, int, bool, int, double, double);
 template void System<kNativeDimension>::stage_prepared_native_package(std::string,
                                                                       std::function<void()>,
                                                                       std::shared_ptr<void>);

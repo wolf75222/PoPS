@@ -329,6 +329,20 @@ class System {
                                const std::vector<double>& params = {},
                                double positivity_floor = 0.0);
 
+  /// Authenticate and stage one exact-ranked external Riemann package. The external DSO owns the
+  /// prepared model and numerical flux type; its handle is retained by the ordinary native-package
+  /// transaction so every installed closure remains resident for the lifetime of this System.
+  /// Provider routes, when present, are registered before the one global provider graph is sealed.
+  void register_external_riemann_package(
+      const std::string& name, const std::string& so_path, const std::string& brick_id,
+      const std::string& expected_sha256, int expected_nvars, int expected_provider_count,
+      const std::string& expected_model_identity, const std::string& provider_consumer_qid,
+      const std::string& limiter = "minmod", const std::string& recon = "conservative",
+      const std::string& time = "explicit",
+      double gamma = static_cast<double>(kPhysicalDefaultGamma), int substeps = 1,
+      bool evolve = true, int stride = 1, double positivity_floor = 0.0,
+      double weno_epsilon = static_cast<double>(kWenoEpsilon));
+
   /// Seal the aggregate auxiliary graph, allocate its exact compact carrier, then install every
   /// staged native block in canonical package order.  Any installer failure restores the complete
   /// pre-finalization System image and unloads the staged packages.

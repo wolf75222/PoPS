@@ -607,6 +607,15 @@ void bind_system_assembly(py::class_<System>& cls) {
            py::arg("gamma") = static_cast<double>(kPhysicalDefaultGamma), py::arg("substeps") = 1,
            py::arg("evolve") = true, py::arg("stride") = 1,
            py::arg("params") = std::vector<double>{}, py::arg("positivity_floor") = 0.0)
+      .def("_register_external_riemann_package", &System::register_external_riemann_package,
+           py::arg("name"), py::arg("so_path"), py::arg("brick_id"), py::arg("expected_sha256"),
+           py::arg("expected_nvars"), py::arg("expected_provider_count"),
+           py::arg("expected_model_identity"), py::arg("provider_consumer_qid"),
+           py::arg("limiter") = "minmod", py::arg("recon") = "conservative",
+           py::arg("time") = "explicit",
+           py::arg("gamma") = static_cast<double>(kPhysicalDefaultGamma), py::arg("substeps") = 1,
+           py::arg("evolve") = true, py::arg("stride") = 1, py::arg("positivity_floor") = 0.0,
+           py::arg("weno_epsilon") = static_cast<double>(kWenoEpsilon))
       .def("_finalize_native_packages", &System::finalize_native_packages)
       // Compiled time Program (epic ADC-399 / ADC-401): dlopen a generated problem.so, verify its
       // ABI key against this module (fail-loud -> RuntimeError), and install its macro-step body. The

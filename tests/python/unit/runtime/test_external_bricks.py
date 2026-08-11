@@ -3,7 +3,7 @@
 A Spec 3 brick is native / generated / macro / external-C++. These tests cover
 the last category: ``pops.descriptors.load_cpp_library(path)`` dlopens a user ``.so``,
 reads its JSON manifest (over the C++ ``BrickRegistry``), and registers the ids
-in an in-process catalog. Riemann rows additionally need the authenticated v2 numerical ABI;
+in an in-process catalog. Riemann rows additionally need the authenticated v4 numerical ABI;
 manifest-only Riemann identities are rejected rather than published as executable descriptors.
 An id that was never loaded raises a CLEAR error.
 
