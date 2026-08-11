@@ -167,6 +167,10 @@ sdk-support pops/parallel/world_communicator.hpp
 api pops/parallel/load_balance.hpp
 api pops/parallel/ownership_plan.hpp
 api pops/parallel/prepared_load_balance.hpp
+api pops/physics/admissibility/admissibility.hpp
+api pops/physics/admissibility/admissible_set.hpp
+api pops/physics/admissibility/enforcement_schedule.hpp
+api pops/physics/admissibility/projection.hpp
 api pops/physics/bricks/bricks.hpp
 api pops/physics/bricks/elliptic.hpp
 api pops/physics/bricks/hyperbolic.hpp
@@ -174,6 +178,8 @@ api pops/physics/bricks/source.hpp
 api pops/physics/composition/composite.hpp
 api pops/physics/composition/exact_brick_contract.hpp
 api pops/physics/fluids/euler.hpp
+api pops/physics/inversion/inversion.hpp
+api pops/physics/inversion/variable_inversion.hpp
 sdk-support pops/runtime/accelerator/prepared_stream_executor.hpp
 sdk-support pops/runtime/amr/amr_runtime.hpp
 sdk-support pops/runtime/amr/amr_tensor_elliptic.hpp
