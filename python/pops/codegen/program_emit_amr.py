@@ -7,8 +7,249 @@ it from ``emit_cpp_program`` when ``target='amr_system'``.
 
 from __future__ import annotations
 
+from fractions import Fraction
 import json
 from typing import Any
+
+def _flux_fraction(value: Any) -> Fraction:
+    """Canonical exact coefficient used by the native reflux ledger."""
+    value = value.to_python() if hasattr(value, "to_python") else value
+    try:
+        return Fraction.from_float(value) if isinstance(value, float) else Fraction(value)
+    except (TypeError, ValueError, ZeroDivisionError) as error:
+        raise TypeError(
+            "AMR FluxExpression coefficient is not an exact rational literal"
+        ) from error
+
+
+def _flux_polynomial(value: Any) -> dict[int, Fraction]:
+    polynomial = {}
+    for power, coefficient in value.items():
+        if isinstance(power, bool) or not isinstance(power, int) or power < 0:
+            raise TypeError("AMR FluxExpression coefficient has an invalid dt power")
+        ratio = _flux_fraction(coefficient)
+        if ratio:
+            polynomial[power] = polynomial.get(power, Fraction(0)) + ratio
+    return {power: coefficient for power, coefficient in polynomial.items() if coefficient}
+
+
+def _flux_polynomial_product(
+    left: dict[int, Fraction], right: dict[int, Fraction]
+) -> dict[int, Fraction]:
+    result = {}
+    for left_power, left_coefficient in left.items():
+        for right_power, right_coefficient in right.items():
+            power = left_power + right_power
+            result[power] = (
+                result.get(power, Fraction(0)) + left_coefficient * right_coefficient
+            )
+    return {power: coefficient for power, coefficient in result.items() if coefficient}
+
+
+def _flux_expression_linear_combine(
+    terms: Any,
+) -> tuple[dict[Any, dict[int, Fraction]], int]:
+    result: dict[Any, dict[int, Fraction]] = {}
+    maximum_terms = 0
+    for expression, coefficient in terms:
+        for basis, polynomial in expression.items():
+            scaled = _flux_polynomial_product(polynomial, coefficient)
+            destination = result.setdefault(basis, {})
+            for power, factor in scaled.items():
+                destination[power] = destination.get(power, Fraction(0)) + factor
+            result[basis] = {
+                power: factor for power, factor in destination.items() if factor
+            }
+            if not result[basis]:
+                del result[basis]
+        maximum_terms = max(
+            maximum_terms, *(len(polynomial) for polynomial in result.values()), 0
+        )
+    return result, maximum_terms
+
+
+def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
+    """Derive exact finite per-block FluxExpression bounds from the frozen Program IR.
+
+    Every flux-producing RHS evaluation creates one distinct native basis. Fixed ``range`` and
+    ``subcycle`` regions are interpreted the authored number of times, and lazy branches are
+    explored independently. Coefficients use the same rational polynomial multiplication,
+    addition, and exact cancellation as ``AmrProgramContext``. An unbounded ``while`` may remain in
+    a source/local-solve region, but is refused when it can create or carry a flux expression.
+    """
+    blocks = program._block_indices()
+    ordered_blocks = sorted(blocks, key=blocks.get)
+
+    def contains_flux(values: Any, block: Any) -> bool:
+        for value in values:
+            if value.op == "rhs" and value.block == block and value.attrs.get("flux", True):
+                return True
+            for key in (
+                "cond_block", "body_block", "apply_block", "residual_block",
+                "true_block", "false_block",
+            ):
+                nested = value.attrs.get(key)
+                if isinstance(nested, (list, tuple)) and contains_flux(nested, block):
+                    return True
+        return False
+
+    alias_input = {
+        "acceptance_guard": 0,
+        "fill_boundary": 0,
+        "project": 0,
+        "solve_fields": 0,
+        "store_history": 0,
+        "synchronize": 0,
+    }
+
+    def analyze(block: Any) -> tuple[int, int]:
+        # (value expressions, total flux RHS evaluations, largest coefficient term count,
+        #  next path-local basis identity). Expressions are immutable-by-convention, so a shallow
+        # environment clone is sufficient when a branch forks.
+        paths: list[tuple[dict[int, Any], int, int, int]] = [({}, 0, 0, 0)]
+
+        def note(expression: Any, maximum: int) -> int:
+            return max(maximum, *(len(polynomial) for polynomial in expression.values()), 0)
+
+        def execute(values: Any, active: Any) -> Any:
+            for value in values:
+                next_paths = []
+                for environment, basis_count, maximum_terms, next_basis in active:
+                    if value.op == "branch":
+                        for arm_key, result_key in (
+                            ("true_block", "true_result"),
+                            ("false_block", "false_result"),
+                        ):
+                            fork = execute(
+                                value.attrs[arm_key],
+                                [(dict(environment), basis_count, maximum_terms, next_basis)],
+                            )
+                            for arm_env, arm_count, arm_maximum, arm_next in fork:
+                                arm_result = arm_env.get(value.attrs[result_key].id, {})
+                                arm_env[value.id] = arm_result if value.block == block else {}
+                                next_paths.append(
+                                    (arm_env, arm_count, note(arm_result, arm_maximum), arm_next)
+                                )
+                        continue
+
+                    if value.op in ("range", "subcycle"):
+                        loop_paths = [(dict(environment), basis_count, maximum_terms, next_basis)]
+                        loop_input = value.inputs[0]
+                        for _ in range(int(value.attrs["count"])):
+                            seeded = []
+                            for loop_env, loop_count, loop_maximum, loop_next in loop_paths:
+                                loop_env = dict(loop_env)
+                                if value.block == block:
+                                    loop_env[loop_input.id] = loop_env.get(loop_input.id, {})
+                                seeded.append(
+                                    (loop_env, loop_count, loop_maximum, loop_next)
+                                )
+                            loop_paths = execute(value.attrs["body_block"], seeded)
+                            for loop_env, _, _, _ in loop_paths:
+                                if value.block == block:
+                                    loop_env[loop_input.id] = loop_env.get(
+                                        value.attrs["body"].id, {}
+                                    )
+                        for loop_env, loop_count, loop_maximum, loop_next in loop_paths:
+                            expression = (
+                                loop_env.get(loop_input.id, {}) if value.block == block else {}
+                            )
+                            loop_env[value.id] = expression
+                            next_paths.append(
+                                (loop_env, loop_count, note(expression, loop_maximum), loop_next)
+                            )
+                        continue
+
+                    if value.op == "while":
+                        expression = environment.get(value.inputs[0].id, {})
+                        if contains_flux(value.attrs["cond_block"], block) or contains_flux(
+                            value.attrs["body_block"], block
+                        ) or (value.block == block and expression):
+                            raise ValueError(
+                                "AMR FluxExpression budget is unbounded: while node %r can create "
+                                "or carry a conservative flux basis; use a finite range"
+                                % value.name
+                            )
+                        # With no new basis and no target-block loop-carried expression, every
+                        # iteration sees the same captured flux expressions. Interpret each region
+                        # once to retain its exact finite coefficient maximum; its local results do
+                        # not escape the while region or feed the other block's loop carrier.
+                        probes = execute(
+                            value.attrs["cond_block"],
+                            [(dict(environment), basis_count, maximum_terms, next_basis)],
+                        )
+                        probes = execute(value.attrs["body_block"], probes)
+                        for probe_env, probe_count, probe_maximum, probe_next in probes:
+                            probe_env[value.id] = {}
+                            next_paths.append(
+                                (probe_env, probe_count, probe_maximum, probe_next)
+                            )
+                        continue
+
+                    expression = {}
+                    if value.block == block:
+                        if value.op == "rhs" and value.attrs.get("flux", True):
+                            expression = {(value.id, next_basis): {0: Fraction(1)}}
+                            next_basis += 1
+                            basis_count += 1
+                        elif value.op == "linear_combine":
+                            expression, combine_maximum = _flux_expression_linear_combine(
+                                (
+                                    environment.get(source.id, {}),
+                                    _flux_polynomial(coefficient),
+                                )
+                                for source, coefficient in zip(
+                                    value.inputs, value.attrs["coeffs"], strict=True
+                                )
+                            )
+                            maximum_terms = max(maximum_terms, combine_maximum)
+                        elif value.op in alias_input and len(value.inputs) > alias_input[value.op]:
+                            expression = environment.get(
+                                value.inputs[alias_input[value.op]].id, {}
+                            )
+                    environment[value.id] = expression
+                    next_paths.append(
+                        (environment, basis_count, note(expression, maximum_terms), next_basis)
+                    )
+                active = next_paths
+            return active
+
+        paths = execute(program._values, paths)
+        return (
+            max((basis_count for _, basis_count, _, _ in paths), default=0),
+            max((maximum_terms for _, _, maximum_terms, _ in paths), default=0),
+        )
+
+    return tuple(analyze(block) for block in ordered_blocks)
+
+
+def _emit_flux_expression_budget(program: Any) -> str:
+    budgets = _flux_expression_budgets(program)
+    rhs_bounds = ", ".join("UINT64_C(%d)" % rhs for rhs, _ in budgets)
+    coefficient_bounds = ", ".join(
+        "UINT64_C(%d)" % coefficient for _, coefficient in budgets
+    )
+    count = len(budgets)
+
+    def lookup(name: str, values: str) -> str:
+        return (
+            f'extern "C" std::uint64_t {name}(int program_block) {{\n'
+            f"  static constexpr std::array<std::uint64_t, {count}> values{{{{{values}}}}};\n"
+            f"  if (program_block < 0 || program_block >= {count}) return UINT64_C(0);\n"
+            "  return values[static_cast<std::size_t>(program_block)];\n"
+            "}\n"
+        )
+
+    has_flux = any(rhs > 0 for rhs, _ in budgets)
+    return (
+        "// Frozen-IR FluxExpression budgets in exact pops_program_block_name order.\n"
+        f'extern "C" bool pops_program_has_flux_expression() {{ return '
+        f'{str(has_flux).lower()}; }}\n'
+        f'extern "C" int pops_program_flux_expression_budget_count() {{ return {count}; }}\n'
+        + lookup("pops_program_flux_rhs_basis_bound", rhs_bounds)
+        + lookup("pops_program_flux_coefficient_term_bound", coefficient_bounds)
+    )
+
 
 
 def _require_bounded_cell_local_program(program: Any, target: Any,
@@ -95,10 +336,12 @@ def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any,
         program, target, hierarchy_bodies)
     if target != "amr_system":
         return ""
+    flux_expression_budget = _emit_flux_expression_budget(program)
     if cell_local_time is not None:
         clock_identity = json.dumps(program.clock.qualified_id)
         return (
-            '\n#include <pops/runtime/program/amr_program_context.hpp>\n'
+            flux_expression_budget
+            + '\n#include <pops/runtime/program/amr_program_context.hpp>\n'
             'extern "C" void pops_install_program_amr('
             'pops::AmrSystem<pops::kNativeDimension>* sys) {\n'
             + provider_plan_install + ("\n" if provider_plan_install else "") +
@@ -249,7 +492,8 @@ def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any,
         '  };\n'
         '  _refresh_level_programs();\n')
     return (
-        '\n#include <pops/runtime/program/amr_program_context.hpp>  // registers the AmrSystem provider\n'
+        flux_expression_budget
+        + '\n#include <pops/runtime/program/amr_program_context.hpp>  // registers the AmrSystem provider\n'
         '// AMR install entry (epic ADC-511 / ADC-508, Spec 6): the target=\'amr_system\' counterpart\n'
         '// of pops_install_program. AmrSystem::install_program resolves + calls it after binding the\n'
         '// blocks by name and seeding the runtime params. The shared factory selects the provider and\n'
