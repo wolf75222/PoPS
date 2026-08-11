@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -216,6 +217,81 @@ void System<Dim>::install_field_storage_route(const std::string& field_identity,
 }
 
 template <int Dim>
+void System<Dim>::install_prepared_boundary_execution_lane(std::shared_ptr<ExecutionLane> lane) {
+  require_assembling(p_->lifecycle_, "install_prepared_boundary_execution_lane");
+  if (!lane || lane->identity().empty() ||
+      lane->size() != static_cast<int>(p_->dm.rank_space().size()) ||
+      lane->rank() != static_cast<int>(p_->dm.rank_space().linear_rank(p_->local_rank)))
+    throw std::invalid_argument(
+        "prepared System boundary lane differs from its exact runtime rank space");
+  if (prepared_boundary_execution_lane_)
+    throw std::logic_error("prepared System boundary lane is already installed");
+  prepared_boundary_execution_lane_ = std::move(lane);
+}
+
+template <int Dim>
+void System<Dim>::stage_prepared_ghost_boundary_component(
+    const std::string& block, std::shared_ptr<PreparedGhostBoundaryComponent> component) {
+  require_assembling(p_->lifecycle_, "stage_prepared_ghost_boundary_component");
+  if (block.empty() || !component)
+    throw std::invalid_argument(
+        "prepared System GhostBoundary staging requires a block and typed component");
+  const auto& spec = component->spec();
+  if (spec.region.dimension != Dim ||
+      spec.state_identity != p_->boundary_registry_.state_route(block))
+    throw std::invalid_argument(
+        "prepared System GhostBoundary differs from its exact block/rank route");
+  const std::string package_identity =
+      "~pops.system.boundary-component.v1\n" + block + "\n" + spec.target_identity;
+  stage_prepared_native_package(
+      package_identity,
+      [this, block, component] {
+        typename Impl::Species& selected = p_->blocks_.find(block);
+        if (!selected.boundary || selected.state_identity != component->spec().state_identity)
+          throw std::invalid_argument(
+              "prepared System GhostBoundary block was not materialized with its exact boundary");
+        // The RuntimeInstance lane was materialized from its authenticated communicator before
+        // plan publication. Each invocation borrows that exact lane through ProgramContext.
+        const Geometry<Dim> geometry = p_->geom;
+        if (!selected.boundary_full_at_point_prepared ||
+            !selected.boundary_core_at_point_prepared ||
+            !selected.boundary_flux_full_at_point_prepared ||
+            !selected.boundary_flux_core_at_point_prepared)
+          throw std::invalid_argument(
+              "prepared System GhostBoundary requires complete compiled full and core closures");
+        auto wrap_component = [component, geometry](auto compiled) {
+          return [component, geometry, compiled = std::move(compiled)](
+                     const auto& point, MultiFab<Dim>& state, MultiFab<Dim>& result,
+                     const PreparedHyperbolicBoundary<Dim>& boundary, const ExecutionLane& lane,
+                     const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+            std::exception_ptr component_error;
+            try {
+              component->template apply_ghost_region<Dim>(point, state, geometry, lane);
+            } catch (...) {
+              component_error = std::current_exception();
+            }
+            if (all_reduce_max(component_error ? 1L : 0L, lane) != 0) {
+              if (lane.size() == 1 && component_error)
+                std::rethrow_exception(component_error);
+              throw std::runtime_error(
+                  "prepared System GhostBoundary execution failed collectively");
+            }
+            compiled(point, state, result, boundary, lane, transport);
+          };
+        };
+        selected.boundary_full_at_point_prepared =
+            wrap_component(std::move(selected.boundary_full_at_point_prepared));
+        selected.boundary_flux_full_at_point_prepared =
+            wrap_component(std::move(selected.boundary_flux_full_at_point_prepared));
+        selected.boundary_residual_at_point_prepared = make_prepared_boundary_residual<Dim>(
+            selected.boundary_full_at_point_prepared, selected.boundary_core_at_point_prepared);
+        selected.boundary_jvp_at_point_prepared =
+            make_prepared_boundary_jvp<Dim>(selected.boundary_residual_at_point_prepared);
+      },
+      component);
+}
+
+template <int Dim>
 void System<Dim>::install_hyperbolic_boundary(
     const std::string& name, const std::string& identity, int required_depth,
     const std::vector<std::string>& face_types, const std::vector<double>& face_values,
@@ -258,6 +334,10 @@ void System<Dim>::discard_hyperbolic_boundaries() {
     block.state_identity.clear();
   }
   p_->boundary_registry_.discard_transaction();
+  std::erase_if(p_->pending_native_packages_, [](const auto& package) {
+    return package.identity.starts_with("~pops.system.boundary-component.v1\n");
+  });
+  prepared_boundary_execution_lane_.reset();
 }
 
 template <int Dim>
@@ -363,11 +443,17 @@ void System<Dim>::install_prepared_block(PreparedSystemBlock<Dim> prepared) {
       std::move(prepared.closures.rhs_flux_only_without_prepared_interfaces);
   candidate.rhs_core_at_point = std::move(prepared.closures.rhs_core_at_point);
   candidate.rhs_flux_only_core_at_point = std::move(prepared.closures.rhs_flux_only_core_at_point);
-  candidate.boundary_residual_at_point = std::move(prepared.closures.boundary_residual_at_point);
-  candidate.boundary_jvp_at_point = std::move(prepared.closures.boundary_jvp_at_point);
   candidate.rhs_core_at_point_prepared = std::move(prepared.closures.rhs_core_at_point_prepared);
   candidate.rhs_flux_only_core_at_point_prepared =
       std::move(prepared.closures.rhs_flux_only_core_at_point_prepared);
+  candidate.boundary_full_at_point_prepared =
+      std::move(prepared.closures.boundary_full_at_point_prepared);
+  candidate.boundary_core_at_point_prepared =
+      std::move(prepared.closures.boundary_core_at_point_prepared);
+  candidate.boundary_flux_full_at_point_prepared =
+      std::move(prepared.closures.boundary_flux_full_at_point_prepared);
+  candidate.boundary_flux_core_at_point_prepared =
+      std::move(prepared.closures.boundary_flux_core_at_point_prepared);
   candidate.boundary_residual_at_point_prepared =
       std::move(prepared.closures.boundary_residual_at_point_prepared);
   candidate.boundary_jvp_at_point_prepared =
@@ -378,6 +464,13 @@ void System<Dim>::install_prepared_block(PreparedSystemBlock<Dim> prepared) {
       std::move(prepared.closures.prepare_generated_state_at_point_prepared);
   candidate.boundary = boundary;
   candidate.state_identity = state_identity;
+  if (candidate.boundary &&
+      (!candidate.boundary_full_at_point_prepared || !candidate.boundary_core_at_point_prepared ||
+       !candidate.boundary_flux_full_at_point_prepared ||
+       !candidate.boundary_flux_core_at_point_prepared ||
+       !candidate.boundary_residual_at_point_prepared || !candidate.boundary_jvp_at_point_prepared))
+    throw std::invalid_argument(
+        "prepared System boundary lacks its complete full/core/residual/JVP authority");
 
   // Every operation above is preparatory. These moves are noexcept after the one vector growth.
   p_->sp.push_back(std::move(candidate));
@@ -1083,6 +1176,10 @@ template void System<kNativeDimension>::install_block_state_route(const std::str
                                                                   const std::string&);
 template void System<kNativeDimension>::install_field_storage_route(const std::string&,
                                                                     const std::string&);
+template void System<kNativeDimension>::install_prepared_boundary_execution_lane(
+    std::shared_ptr<ExecutionLane>);
+template void System<kNativeDimension>::stage_prepared_ghost_boundary_component(
+    const std::string&, std::shared_ptr<PreparedGhostBoundaryComponent>);
 template void System<kNativeDimension>::install_hyperbolic_boundary(
     const std::string&, const std::string&, int, const std::vector<std::string>&,
     const std::vector<double>&, const std::vector<std::string>&, const std::vector<std::string>&,

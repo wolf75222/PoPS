@@ -8,6 +8,7 @@
 #include <pops/runtime/dynamic/component_loader.hpp>
 #include <pops/runtime/multiblock/interface_flux_scheduler.hpp>
 #include <pops/runtime/multiblock/prepared_interface_flux_component.hpp>
+#include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
 
 #include <array>
 #include <cmath>
@@ -222,16 +223,22 @@ template <int Dim>
 void evaluate_system_interface_provider(
     pops::System<Dim>& system,
     const std::shared_ptr<pops::runtime::multiblock::InterfaceFluxScheduler<Dim>>& scheduler,
+    const pops::ExecutionLane* lane,
+    const std::vector<std::shared_ptr<pops::runtime::program::PreparedScalarBoundarySession<Dim>>>&
+        boundary_sessions,
     const pops::runtime::multiblock::BoundaryEvaluationPoint& point,
     const std::vector<pops::MultiFab<Dim>*>& states,
     const std::vector<pops::MultiFab<Dim>*>& residuals, const std::vector<int>& flux_only) {
+  if (lane == nullptr)
+    throw std::logic_error("System shared-interface evaluation lost its prepared execution lane");
   std::exception_ptr request_error;
   std::string request_contract;
   try {
     const auto blocks = static_cast<std::size_t>(system.n_blocks());
-    if (!scheduler || point.clock.empty() || point.tick < 0 || point.level != 0 ||
-        point.substep < 0 || point.stage < 0 || !(point.dt > 0.0) || !std::isfinite(point.dt) ||
-        !std::isfinite(point.physical_time) || point.stage_fraction < ::pops::amr::Rational(0, 1) ||
+    if (!scheduler || boundary_sessions.size() != blocks || point.clock.empty() || point.tick < 0 ||
+        point.level != 0 || point.substep < 0 || point.stage < 0 || !(point.dt > 0.0) ||
+        !std::isfinite(point.dt) || !std::isfinite(point.physical_time) ||
+        point.stage_fraction < ::pops::amr::Rational(0, 1) ||
         ::pops::amr::Rational(1, 1) < point.stage_fraction || states.size() != blocks ||
         residuals.size() != blocks || (!flux_only.empty() && flux_only.size() != blocks))
       throw std::invalid_argument(
@@ -251,6 +258,9 @@ void evaluate_system_interface_provider(
         .scalar(point.physical_time)
         .scalar(static_cast<std::uint64_t>(blocks));
     for (std::size_t block = 0; block < blocks; ++block) {
+      if (!boundary_sessions[block])
+        throw std::invalid_argument(
+            "System shared-interface evaluation lacks a prepared block boundary session");
       const bool has_state = states[block] != nullptr;
       const bool has_residual = residuals[block] != nullptr;
       const int mode = flux_only.empty() ? 0 : flux_only[block];
@@ -263,14 +273,15 @@ void evaluate_system_interface_provider(
   } catch (...) {
     request_error = std::current_exception();
   }
-  if (pops::all_reduce_max(request_error ? 1L : 0L) != 0) {
-    if (request_error)
+  if (pops::all_reduce_max(request_error ? 1L : 0L, *lane) != 0) {
+    if (lane->size() == 1 && request_error)
       std::rethrow_exception(request_error);
     throw std::runtime_error(
         "System shared-interface evaluation request failed on another MPI rank");
   }
   if (!pops::all_ranks_agree_exact_ordered_byte_pairs(
-          {{std::string_view("system-interface-evaluation"), std::string_view(request_contract)}}))
+          {{std::string_view("system-interface-evaluation"), std::string_view(request_contract)}},
+          lane->communicator()))
     throw std::invalid_argument(
         "System shared-interface evaluation request differs between MPI ranks");
 
@@ -278,14 +289,15 @@ void evaluate_system_interface_provider(
   try {
     for (std::size_t block = 0; block < states.size(); ++block)
       if (states[block] != nullptr)
-        system.block_rhs_core_into_at(point, static_cast<int>(block), *states[block],
-                                      *residuals[block],
-                                      !flux_only.empty() && flux_only[block] != 0);
+        system.block_rhs_core_into_at(
+            point, static_cast<int>(block), *states[block], *residuals[block],
+            !flux_only.empty() && flux_only[block] != 0, &system, static_cast<int>(block), point,
+            *lane, *boundary_sessions[block]);
   } catch (...) {
     core_error = std::current_exception();
   }
-  if (pops::all_reduce_max(core_error ? 1L : 0L) != 0) {
-    if (pops::n_ranks() == 1 && core_error)
+  if (pops::all_reduce_max(core_error ? 1L : 0L, *lane) != 0) {
+    if (lane->size() == 1 && core_error)
       std::rethrow_exception(core_error);
     throw std::runtime_error("System shared-interface core residual failed collectively");
   }
@@ -296,6 +308,7 @@ template <int Dim>
 void install_system_interface_provider(pops::System<Dim>& system, const py::list& rows) {
   using Scheduler = pops::runtime::multiblock::InterfaceFluxScheduler<Dim>;
   using PreparedComponent = pops::runtime::multiblock::PreparedInterfaceFluxComponent<Dim>;
+  const pops::ExecutionLane& prepared_lane = system.prepared_boundary_execution_lane();
   std::vector<PreparedSystemInterfaceJob<Dim>> jobs;
   std::string provider_contract;
   std::exception_ptr parse_error;
@@ -304,25 +317,33 @@ void install_system_interface_provider(pops::System<Dim>& system, const py::list
   } catch (...) {
     parse_error = std::current_exception();
   }
-  if (pops::all_reduce_max(parse_error ? 1L : 0L) != 0) {
-    if (parse_error)
+  if (pops::all_reduce_max(parse_error ? 1L : 0L, prepared_lane) != 0) {
+    if (prepared_lane.size() == 1 && parse_error)
       std::rethrow_exception(parse_error);
     throw std::runtime_error(
         "System shared-interface provider preparation failed on another MPI rank");
   }
   if (!pops::all_ranks_agree_exact_ordered_byte_pairs(
-          {{std::string_view("system-interface-provider"), std::string_view(provider_contract)}}))
+          {{std::string_view("system-interface-provider"), std::string_view(provider_contract)}},
+          prepared_lane.communicator()))
     throw std::invalid_argument(
         "System shared-interface provider contract differs between MPI ranks");
 
   std::shared_ptr<Scheduler> scheduler;
+  const pops::ExecutionLane* lane = &prepared_lane;
+  std::vector<std::shared_ptr<pops::runtime::program::PreparedScalarBoundarySession<Dim>>>
+      boundary_sessions;
   std::optional<pops::Geometry<Dim>> geometry;
+  std::optional<pops::BoundaryTopology<Dim>> topology;
   std::vector<pops::MultiFab<Dim>*> left_states;
   std::vector<pops::MultiFab<Dim>*> right_states;
   std::exception_ptr storage_error;
   try {
     scheduler = std::make_shared<Scheduler>();
     geometry.emplace(system.prepared_block_geometry());
+    topology.emplace(
+        pops::BoundaryTopology<Dim>::axis_periodic(system.prepared_block_periodicity()));
+    boundary_sessions.reserve(static_cast<std::size_t>(system.n_blocks()));
     left_states.reserve(jobs.size());
     right_states.reserve(jobs.size());
     for (const auto& job : jobs) {
@@ -336,12 +357,17 @@ void install_system_interface_provider(pops::System<Dim>& system, const py::list
   } catch (...) {
     storage_error = std::current_exception();
   }
-  if (pops::all_reduce_max(storage_error ? 1L : 0L) != 0) {
-    if (storage_error)
+  if (pops::all_reduce_max(storage_error ? 1L : 0L, prepared_lane) != 0) {
+    if (prepared_lane.size() == 1 && storage_error)
       std::rethrow_exception(storage_error);
     throw std::runtime_error(
         "System shared-interface storage preparation failed on another MPI rank");
   }
+
+  for (int block = 0; block < system.n_blocks(); ++block)
+    boundary_sessions.push_back(pops::runtime::program::PreparedScalarBoundarySession<Dim>::prepare(
+        *geometry, *topology, system.block_state(block), *lane,
+        static_cast<std::uint64_t>(block) + 1));
 
   for (std::size_t index = 0; index < jobs.size(); ++index) {
     auto& job = jobs[index];
@@ -365,12 +391,13 @@ void install_system_interface_provider(pops::System<Dim>& system, const py::list
   provider.provider_identity =
       "pops.system.interface-provider.nd.v1:sha256:" + pops::identity::sha256_hex(identity_bytes);
   provider.collective_contract = std::move(provider_contract);
-  auto evaluate = [&system, scheduler](
+  auto evaluate = [&system, scheduler, lane, boundary_sessions](
                       const pops::runtime::multiblock::BoundaryEvaluationPoint& point,
                       const std::vector<pops::MultiFab<Dim>*>& states,
                       const std::vector<pops::MultiFab<Dim>*>& residuals,
                       const std::vector<int>& flux_only) {
-    evaluate_system_interface_provider(system, scheduler, point, states, residuals, flux_only);
+    evaluate_system_interface_provider(system, scheduler, lane, boundary_sessions, point, states,
+                                       residuals, flux_only);
   };
   provider.evaluate_rhs = evaluate;
   provider.evaluate_core = std::move(evaluate);
@@ -486,6 +513,73 @@ void bind_system_assembly(py::class_<System>& cls) {
       .def("_install_field_storage_route", &System::install_field_storage_route,
            py::arg("field_identity"), py::arg("provider_slot"),
            "Bind one exact solved-field Handle to native provider storage.")
+      .def(
+          "_prepare_boundary_execution_lane",
+          [](System& system, const py::dict& execution_data) {
+            std::shared_ptr<const pops::component::PreparedExecutionContextV1> execution;
+            std::string lane_identity;
+            std::exception_ptr preparation_error;
+            try {
+              execution = pops::python::detail::make_component_execution_context(execution_data);
+              lane_identity = "pops.system.boundary-runtime/" + execution->identity();
+            } catch (...) {
+              preparation_error = std::current_exception();
+            }
+            if (pops::all_reduce_max(preparation_error ? 1L : 0L) != 0) {
+              if (preparation_error)
+                std::rethrow_exception(preparation_error);
+              throw std::runtime_error(
+                  "prepared System boundary execution context failed on another MPI rank");
+            }
+            const PopsExecutionContextV1 view = execution->view();
+#ifdef POPS_HAS_MPI
+            const auto parent = pops::ExecutionCommunicator::borrowed(
+                view.communicator_identity,
+                MPI_Comm_f2c(static_cast<MPI_Fint>(view.communicator_f_handle)));
+#else
+            if (view.communicator_f_handle != 0 || view.communicator_datatype_f_handle != 0 ||
+                std::string_view(view.communicator_identity) != "serial")
+              throw std::invalid_argument(
+                  "serial prepared boundary execution requires the exact serial authority");
+            const auto parent = pops::ExecutionCommunicator::world();
+#endif
+            auto lane = std::make_shared<pops::ExecutionLane>(
+                pops::ExecutionLane::duplicate_collectively(parent, lane_identity));
+            system.install_prepared_boundary_execution_lane(std::move(lane));
+          },
+          py::arg("execution_context"),
+          "Prepare the exact RuntimeInstance communicator lane for Uniform boundaries.")
+      .def(
+          "_preflight_ghost_boundary_component",
+          [](const std::shared_ptr<pops::component::LoadedComponent>& component,
+             const py::dict& row, const std::string& parameters_json,
+             const std::string& target_json, const py::dict& execution_data) {
+            auto spec = pops::python::detail::boundary_component_spec_from_python(
+                row, parameters_json, target_json, execution_data);
+            // Constructing the typed component authenticates the exact GhostBoundary ABI, region,
+            // identities and execution descriptor without staging a native package or preparing
+            // component state.  Python calls this for every job before it publishes any plan.
+            (void)std::make_shared<pops::PreparedGhostBoundaryComponent>(std::move(spec),
+                                                                         component);
+          },
+          py::arg("component"), py::arg("row"), py::arg("parameters_json"), py::arg("target_json"),
+          py::arg("execution_context"),
+          "Validate one exact-ranked GhostBoundary component without native publication.")
+      .def(
+          "_install_ghost_boundary_component",
+          [](System& system, const std::string& block,
+             std::shared_ptr<pops::component::LoadedComponent> component, const py::dict& row,
+             const std::string& parameters_json, const std::string& target_json,
+             const py::dict& execution_data) {
+            auto spec = pops::python::detail::boundary_component_spec_from_python(
+                row, parameters_json, target_json, execution_data);
+            auto prepared = std::make_shared<pops::PreparedGhostBoundaryComponent>(
+                std::move(spec), std::move(component));
+            system.stage_prepared_ghost_boundary_component(block, std::move(prepared));
+          },
+          py::arg("block"), py::arg("component"), py::arg("row"), py::arg("parameters_json"),
+          py::arg("target_json"), py::arg("execution_context"),
+          "Stage one exact-ranked GhostBoundary component in the native package transaction.")
       .def("_discard_boundary_plans", &System::discard_hyperbolic_boundaries,
            "Roll back one failed pre-block boundary authority transaction.")
       .def(
