@@ -7,6 +7,7 @@
 #include <pops/mesh/layout/rank_space.hpp>
 #include <pops/mesh/storage/fab.hpp>
 #include <pops/mesh/storage/multifab.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/runtime/analytic/expression.hpp>
 #include <pops/runtime/analytic/initial_materialization.hpp>
 
@@ -176,6 +177,8 @@ void check_program_view_kernel() {
 
 template <int Dim>
 void check_initial_materializers() {
+  const pops::ExecutionLane lane =
+      pops::ExecutionLane::world("pops.test.analytic-initial-materialization");
   pops::Extent<Dim> extents{};
   for (int axis = 0; axis < Dim; ++axis)
     extents[axis] = 5 + axis;
@@ -186,7 +189,10 @@ void check_initial_materializers() {
   {
     std::vector<pops::analytic::AnalyticProgram> programs;
     programs.push_back(compile_analytic_expression(AnalyticNode::constant(Real(3.25))));
-    EXPECT_EQ(pops::analytic::materialize_cell_average(values, geometry, programs), box.numPts());
+    const auto prepared =
+        pops::analytic::prepare_cell_average_materialization(values, geometry, programs);
+    EXPECT_EQ(pops::analytic::materialize_cell_average(prepared, lane.communicator()),
+              box.numPts());
   }
 
   const auto& field = values.fab(0);
@@ -392,7 +398,11 @@ TEST(AnalyticExpression, ZOnATwoDimensionalTargetFailsClosedBeforePublication) {
   values.set_val(Real(7));
   std::vector<pops::analytic::AnalyticProgram> programs;
   programs.push_back(compile_analytic_expression(AnalyticNode::z()));
-  EXPECT_THROW(pops::analytic::materialize_cell_average(values, geometry, programs),
+  const pops::ExecutionLane lane =
+      pops::ExecutionLane::world("pops.test.analytic-invalid-materialization");
+  const auto prepared =
+      pops::analytic::prepare_cell_average_materialization(values, geometry, programs);
+  EXPECT_THROW(pops::analytic::materialize_cell_average(prepared, lane.communicator()),
                std::invalid_argument);
 
   const auto& field = values.fab(0);

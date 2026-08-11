@@ -1072,10 +1072,12 @@ std::int64_t System<Dim>::set_analytic_expression_state(
     const std::string& name, const std::string& space, const std::string& centering,
     const std::string& projection, const std::vector<std::vector<std::string>>& opcodes,
     const std::vector<std::vector<double>>& literals) {
+  const ExecutionLane& lane = prepared_boundary_execution_lane();
   auto prepared = analytic::collectively_prepare_analytic_request(
       "System::set_analytic_expression_state",
       {{"centering", centering}, {"name", name}, {"projection", projection}, {"space", space}}, {},
-      opcodes, literals, [&] {
+      opcodes, literals,
+      [&] {
         require_assembling(p_->lifecycle_, "set_analytic_expression_state");
         if (space != "cell" || centering != "cell" || projection != "conservative_cell_average")
           throw std::invalid_argument(
@@ -1086,15 +1088,33 @@ std::int64_t System<Dim>::set_analytic_expression_state(
           throw std::invalid_argument("System analytic expression component count differs");
         return std::pair<typename Impl::Species*, std::vector<analytic::AnalyticProgram>>{
             &block, std::move(programs)};
-      });
-  MultiFab<Dim> candidate(prepared.first->U.layout(), prepared.first->U.distribution(),
-                          prepared.first->U.local_rank(), prepared.first->U.ncomp(),
-                          prepared.first->U.ghosts());
+      },
+      lane.communicator());
+  std::optional<MultiFab<Dim>> candidate;
+  std::optional<
+      analytic::PreparedAnalyticMaterialization<Dim, typename MultiFab<Dim>::memory_space>>
+      materialization;
+  std::exception_ptr local_error;
+  try {
+    candidate.emplace(prepared.first->U.layout(), prepared.first->U.distribution(),
+                      prepared.first->U.local_rank(), prepared.first->U.ncomp(),
+                      prepared.first->U.ghosts());
+    materialization.emplace(
+        analytic::prepare_cell_average_materialization(*candidate, p_->geom, prepared.second));
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  const long preparation_failures = all_reduce_sum(local_error ? 1L : 0L, lane.communicator());
+  if (preparation_failures != 0) {
+    if (lane.size() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("System analytic materialization preparation failed collectively on " +
+                             std::to_string(preparation_failures) + " rank(s)");
+  }
   const std::int64_t count =
-      analytic::materialize_cell_average(candidate, p_->geom, prepared.second);
-  publish_recovered_candidate<Dim>(*prepared.first, candidate,
-                                   "System::set_analytic_expression_state",
-                                   prepared_boundary_execution_lane());
+      analytic::materialize_cell_average(*materialization, lane.communicator());
+  publish_recovered_candidate<Dim>(*prepared.first, *candidate,
+                                   "System::set_analytic_expression_state", lane);
   return count;
 }
 

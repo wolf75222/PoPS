@@ -573,6 +573,30 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
             s.set_conservative_state(name, flat(arr));
           },
           py::arg("name"), py::arg("U"))
+      // Generic InitialConditionPlan staging.  The resolved subject must be bound to its
+      // authenticated state route before either canonical analytic programs or exact-rank arrays
+      // are accepted; there are intentionally no source-specific bootstrap entry points.
+      .def("_bind_bootstrap_subject", &AmrSystem::bind_bootstrap_subject, py::arg("subject_id"),
+           py::arg("runtime_block"), py::arg("source_route"))
+      .def("_stage_bootstrap_analytic_state", &AmrSystem::stage_bootstrap_analytic_state,
+           py::arg("subject_id"), py::arg("runtime_block"), py::arg("space"), py::arg("centering"),
+           py::arg("projection"), py::arg("opcodes"), py::arg("literals"))
+      .def(
+          "_stage_bootstrap_array",
+          [](AmrSystem& s, const std::string& subject_id, const std::string& runtime_block,
+             const std::string& space, const std::string& centering,
+             py::array_t<double, py::array::c_style | py::array::forcecast> values) {
+            require_amr_state_array_shape(s, values, "AmrSystem.stage_bootstrap_array");
+            Extent<pops::kNativeDimension> spatial_shape{};
+            for (int axis = 0; axis < pops::kNativeDimension; ++axis)
+              spatial_shape[axis] = values.shape(pops::kNativeDimension - axis);
+            s.stage_bootstrap_array(subject_id, runtime_block, space, centering,
+                                    static_cast<int>(values.shape(0)), spatial_shape, flat(values));
+          },
+          py::arg("subject_id"), py::arg("runtime_block"), py::arg("space"), py::arg("centering"),
+          py::arg("values"))
+      .def("_materialize_bootstrap_action", &AmrSystem::materialize_bootstrap_action,
+           py::arg("subject_id"), py::arg("action"), py::arg("action_route"), py::arg("level"))
       .def("_begin_bootstrap_plan", &AmrSystem::begin_bootstrap_plan)
       .def("_bootstrap_next_level", &AmrSystem::bootstrap_next_level)
       .def("_commit_bootstrap_level", &AmrSystem::commit_bootstrap_level)

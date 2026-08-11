@@ -255,17 +255,33 @@ void build_refined_system(pops::AmrSystem<Dim>& system, const std::string& share
   system.add_native_block(kBlock, shared_object, "minmod", "rusanov", "conservative", "imex", 1.4,
                           1);
   system.set_temporal_relations({2}, {1}, {"integral_only"});
-  system.set_conservative_state(kBlock, state);
+  system.bind_bootstrap_subject(kStateRoute, kBlock, "bound_level_zero");
+  system.stage_bootstrap_array(kStateRoute, kBlock, "cell", "cell", 1, system.spatial_shape(),
+                               state);
+  pops::Extent<Dim> transfer_ghosts{};
+  pops::Extent<Dim> refinement_ratio{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    transfer_ghosts[axis] = 1;
+    refinement_ratio[axis] = 2;
+  }
+  system.register_bootstrap_transfer_route(
+      "tests.amr-imex/bootstrap/prolongation", {kStateRoute}, "tests.amr-imex/bootstrap/provider",
+      "cell", "cell", "conservative", "dense", "prolongation", "conservative_linear", 2,
+      transfer_ghosts, refinement_ratio);
   pops::test::install_prepared_threshold_union(system, {{kBlock, "u", 1.03}},
                                                "tests.amr-imex.tagging@1");
   // The real loader authenticates the Program block table, hash and four flux-expression budget
   // symbols before it calls the artifact installer and materializes the hierarchy.
   system.install_program(shared_object);
   system.begin_bootstrap_plan();
+  (void)system.materialize_bootstrap_action(kStateRoute, "initialize_level_zero",
+                                            "bound_level_zero", 0);
   if (!system.bootstrap_next_level()) {
     system.rollback_bootstrap_level();
     throw std::runtime_error("native IMEX fixture did not create its refined level");
   }
+  (void)system.materialize_bootstrap_action(kStateRoute, "prolong_from_parent",
+                                            "conservative_linear", 1);
   system.commit_bootstrap_level();
 }
 

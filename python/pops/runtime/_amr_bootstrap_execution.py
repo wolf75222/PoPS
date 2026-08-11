@@ -1,4 +1,5 @@
 """Strict BootstrapPlan execution with one receipt required per authored action."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
@@ -15,8 +16,10 @@ class BootstrapReceipt:
     evidence: Mapping[str, Any]
 
     def __post_init__(self) -> None:
-        if type(self.action_identity) is not Identity \
-                or self.action_identity.domain != "amr-bootstrap-action":
+        if (
+            type(self.action_identity) is not Identity
+            or self.action_identity.domain != "amr-bootstrap-action"
+        ):
             raise TypeError("BootstrapReceipt.action_identity must authenticate an action")
         if type(self.consumer_identity) is not Identity:
             raise TypeError("BootstrapReceipt.consumer_identity must be an Identity")
@@ -103,8 +106,7 @@ class NativeAMRBootstrapConsumer:
             raise TypeError("native bootstrap level-materialized hook must be callable")
         self._on_level_materialized = on_level_materialized
         if any(
-            not isinstance(name, str) or not name
-            or not isinstance(route, str) or not route
+            not isinstance(name, str) or not name or not isinstance(route, str) or not route
             for name, route in self._field_routes.items()
         ):
             raise TypeError("native bootstrap field routes must map names to provider slots")
@@ -151,39 +153,30 @@ class NativeAMRBootstrapConsumer:
         if operation == "initialize_level_zero":
             if action.subject_id not in self._initial:
                 raise ValueError("native bootstrap is missing an authenticated level-zero value")
-            _, value, _, _, method, source = self._initial[action.subject_id]
-            expected_source = source.get("native_route") \
-                if method == "analytic" else "bound_level_zero"
+            _, _, _, _, method, source = self._initial[action.subject_id]
+            expected_source = (
+                source.get("native_route") if method == "analytic" else "bound_level_zero"
+            )
             if not isinstance(expected_source, str) or not expected_source:
-                raise ValueError(
-                    "native analytic level-zero materialization has no provider route"
-                )
+                raise ValueError("native analytic level-zero materialization has no provider route")
             if self._route(action) != expected_source:
-                raise ValueError(
-                    "native level-zero initialization requires %s" % expected_source
-                )
-            if method == "analytic":
-                materialized = self._engine._s._bootstrap_analytic_reproject(
-                    action.subject_id, 0
-                )
-                return self._receipt(
-                    action,
-                    operation=operation,
-                    level=0,
-                    materialized_values=materialized,
-                )
+                raise ValueError("native level-zero initialization requires %s" % expected_source)
+            materialized = self._engine._s._materialize_bootstrap_action(
+                action.subject_id, operation, expected_source, 0
+            )
             return self._receipt(
                 action,
                 operation=operation,
                 level=0,
-                materialized_values=int(value.size),
+                materialized_values=materialized,
             )
         elif operation == "tag_parent":
             tagging = action.evidence.get("tagging", {})
             lowerings = tagging.get("lowerings", ()) if isinstance(tagging, Mapping) else ()
             provider_ids = tuple(
                 row.get("lowering", {}).get("qualified_id")
-                for row in lowerings if isinstance(row, Mapping)
+                for row in lowerings
+                if isinstance(row, Mapping)
             )
             if not provider_ids or any(not value for value in provider_ids):
                 raise ValueError(
@@ -228,23 +221,22 @@ class NativeAMRBootstrapConsumer:
                 # face. Install its exact prepared interface route immediately, while the outer
                 # bootstrap transaction can still roll the complete engine back on failure.
                 self._on_level_materialized()
-            return self._receipt(
-                action, operation=operation, level=action.level, patch_boxes=boxes
-            )
+            return self._receipt(action, operation=operation, level=action.level, patch_boxes=boxes)
         elif operation == "prolong_from_parent":
             if action.subject_id not in self._initial or self._engine.n_levels() <= action.level:
-                raise ValueError("native prolongation did not materialize the requested state level")
+                raise ValueError(
+                    "native prolongation did not materialize the requested state level"
+                )
             action_route = self._route(action)
             space = self._initial[action.subject_id][2]
             if space != "cell":
                 raise NotImplementedError(
                     "native AMR bootstrap has no prepared %s prolongation provider" % space
                 )
-            expected_route = "conservative_linear"
-            if action_route != expected_route:
-                raise ValueError("native prolongation receipt does not authenticate its provider")
-            materialized = self._engine._s._bootstrap_prolong_array(
-                action.subject_id, action.level
+            if not isinstance(action_route, str) or not action_route:
+                raise ValueError("native prolongation action has no authenticated provider route")
+            materialized = self._engine._s._materialize_bootstrap_action(
+                action.subject_id, operation, action_route, action.level
             )
             return self._receipt(
                 action,
@@ -254,11 +246,16 @@ class NativeAMRBootstrapConsumer:
                 provider=action.evidence.get("provider", {}).get("qualified_id"),
             )
         elif operation == "analytic_reprojection":
-            materialized = self._engine._s._bootstrap_analytic_reproject(
-                action.subject_id, action.level
+            action_route = self._route(action)
+            if not isinstance(action_route, str) or not action_route:
+                raise ValueError("native analytic action has no authenticated source route")
+            materialized = self._engine._s._materialize_bootstrap_action(
+                action.subject_id, operation, action_route, action.level
             )
             return self._receipt(
-                action, operation=operation, level=action.level,
+                action,
+                operation=operation,
+                level=action.level,
                 materialized_values=materialized,
             )
         elif operation == "recompute":
@@ -268,8 +265,7 @@ class NativeAMRBootstrapConsumer:
             provider_slot = self._field_routes.get(field_name)
             if provider_slot is None:
                 raise ValueError(
-                    "native field recompute has no authenticated provider slot for %r"
-                    % field_name
+                    "native field recompute has no authenticated provider slot for %r" % field_name
                 )
             materialized = self._engine._s._recompute_bootstrap_field(
                 action.subject_id, provider_slot
@@ -291,9 +287,7 @@ class NativeAMRBootstrapConsumer:
             if operation == "invalidate_then_rebuild":
                 self._engine._invalidate_bootstrap_cache(action.subject_id, action.level)
             topology = tuple(
-                self._engine._rebuild_bootstrap_topology_cache(
-                    action.subject_id, action.level
-                )
+                self._engine._rebuild_bootstrap_topology_cache(action.subject_id, action.level)
             )
             return self._receipt(
                 action,

@@ -24,6 +24,7 @@
 #include <pops/runtime/amr/composite_reduction.hpp>
 #include <pops/runtime/amr/persistent_tagging_state.hpp>
 #include <pops/runtime/amr/prepared_component_providers.hpp>
+#include <pops/runtime/analytic/collective_preflight.hpp>
 #include <pops/runtime/analytic/initial_materialization.hpp>
 #include <pops/runtime/builders/compiled/generated_amr_system_block.hpp>
 #include <pops/runtime/config/route_ids.hpp>
@@ -503,9 +504,54 @@ SparseFieldImage<Dim> gather_sparse_field(const MultiFab<Dim>& field, const Box<
 }
 
 template <int Dim>
-Fab<Dim> gather_transfer_source(const MultiFab<Dim>& field,
-                                const amr::hierarchy::LevelLayout<Dim>& layout,
-                                const CommunicatorView& communicator, int source_radius) {
+struct PreparedRegriddedStateTransfer {
+  using host_mirror_type = typename Fab<Dim>::host_mirror_type;
+
+  MultiFab<Dim> child;
+  Fab<Dim> dense_parent;
+  host_mirror_type dense_host;
+  std::vector<double> values;
+  std::vector<char> populated;
+  std::vector<amr::transfer::PreparedTransfer<Dim>> kernels;
+  std::vector<host_mirror_type> child_hosts;
+  const SparseFieldImage<Dim>* previous_child = nullptr;
+  std::size_t old_cells = 0;
+
+  PreparedRegriddedStateTransfer(const MultiFab<Dim>& parent,
+                                 const amr::hierarchy::LevelLayout<Dim>& parent_layout,
+                                 const amr::hierarchy::LevelLayout<Dim>& child_layout,
+                                 int source_radius,
+                                 const std::optional<SparseFieldImage<Dim>>& previous)
+      : child(child_layout.patches(), child_layout.distribution(), parent.local_rank(),
+              parent.ncomp(), parent.ghosts()),
+        dense_parent(parent_layout.domain(), parent.ncomp(),
+                     [&] {
+                       Extent<Dim> ghosts{};
+                       for (int axis = 0; axis < Dim; ++axis)
+                         ghosts[axis] = source_radius;
+                       return ghosts;
+                     }()),
+        dense_host(dense_parent.create_host_mirror()),
+        values(checked_size_product(static_cast<std::size_t>(parent.ncomp()),
+                                    checked_cells(dense_parent.grown_box()),
+                                    "AMR linear transfer source exceeds size_t"),
+               0.0),
+        populated(checked_cells(dense_parent.grown_box()), char{0}),
+        previous_child(previous && previous->domain == child_layout.domain() ? &*previous
+                                                                             : nullptr),
+        old_cells(previous_child != nullptr ? checked_cells(previous_child->domain)
+                                            : std::size_t{0}) {
+    child.set_val(Real(0));
+  }
+};
+
+template <int Dim>
+std::unique_ptr<PreparedRegriddedStateTransfer<Dim>> prepare_regridded_state_transfer(
+    const MultiFab<Dim>& field, const amr::hierarchy::LevelLayout<Dim>& parent_layout,
+    const amr::hierarchy::LevelLayout<Dim>& child_layout,
+    const std::optional<SparseFieldImage<Dim>>& previous_child,
+    amr::transfer::TransferKind transfer_kind, int collective_rank) {
+  const int source_radius = transfer_kind == amr::transfer::TransferKind::ConstantInjection ? 0 : 1;
   if (source_radius < 0 || source_radius > 1)
     throw std::invalid_argument("AMR prepared transfer requested an unsupported source radius");
   Extent<Dim> required_ghosts{};
@@ -514,19 +560,15 @@ Fab<Dim> gather_transfer_source(const MultiFab<Dim>& field,
     if (field.ghosts()[axis] < required_ghosts[axis])
       throw std::invalid_argument("AMR prepared transfer lacks its exact parent ghost stencil");
   }
-  Fab<Dim> dense(layout.domain(), field.ncomp(), required_ghosts);
-  const Box<Dim>& dense_box = dense.grown_box();
-  const std::size_t dense_cells = checked_cells(dense_box);
-  std::vector<double> values(
-      checked_size_product(static_cast<std::size_t>(field.ncomp()), dense_cells,
-                           "AMR linear transfer source exceeds size_t"),
-      0.0);
-  std::vector<char> populated(dense_cells, char{0});
+  auto prepared = std::make_unique<PreparedRegriddedStateTransfer<Dim>>(
+      field, parent_layout, child_layout, source_radius, previous_child);
+  const Box<Dim>& dense_box = prepared->dense_parent.grown_box();
+  const std::size_t dense_cells = prepared->populated.size();
 
   const bool replicated = field.distribution().replicated();
   for (std::size_t local = 0; local < field.local_size(); ++local) {
     const std::size_t global = field.global_index(local);
-    if (replicated && communicator.rank() != 0)
+    if (replicated && collective_rank != 0)
       continue;
     const Fab<Dim>& fab = field.fab(local);
     auto host = fab.create_host_mirror();
@@ -535,15 +577,15 @@ Fab<Dim> gather_transfer_source(const MultiFab<Dim>& field,
     const std::size_t component_stride = checked_cells(grown);
     for (std::size_t ordinal = 0; ordinal < dense_cells; ++ordinal) {
       const Index<Dim> index = unflatten(dense_box, ordinal);
-      std::size_t selected = layout.patches().size();
-      for (std::size_t patch = 0; patch < layout.patches().size(); ++patch)
-        if (layout.patches()[patch].contains(index)) {
+      std::size_t selected = parent_layout.patches().size();
+      for (std::size_t patch = 0; patch < parent_layout.patches().size(); ++patch)
+        if (parent_layout.patches()[patch].contains(index)) {
           selected = patch;
           break;
         }
-      if (selected == layout.patches().size())
-        for (std::size_t patch = 0; patch < layout.patches().size(); ++patch) {
-          Box<Dim> patch_grown = layout.patches()[patch];
+      if (selected == parent_layout.patches().size())
+        for (std::size_t patch = 0; patch < parent_layout.patches().size(); ++patch) {
+          Box<Dim> patch_grown = parent_layout.patches()[patch];
           for (int axis = 0; axis < Dim; ++axis)
             patch_grown = patch_grown.grow(axis, static_cast<int>(field.ghosts()[axis]));
           if (patch_grown.contains(index)) {
@@ -553,24 +595,75 @@ Fab<Dim> gather_transfer_source(const MultiFab<Dim>& field,
         }
       if (selected != global || !grown.contains(index))
         continue;
-      populated[ordinal] = char{1};
+      prepared->populated[ordinal] = char{1};
       for (int component = 0; component < field.ncomp(); ++component)
-        values[static_cast<std::size_t>(component) * dense_cells + ordinal] = static_cast<double>(
-            host(static_cast<std::size_t>(component) * component_stride + offset(index, grown)));
+        prepared->values[static_cast<std::size_t>(component) * dense_cells + ordinal] =
+            static_cast<double>(host(static_cast<std::size_t>(component) * component_stride +
+                                     offset(index, grown)));
     }
   }
-  all_reduce_sum_inplace(values.data(), values.size(), communicator);
-  all_reduce_max_inplace(populated.data(), populated.size(), communicator);
-  if (std::any_of(populated.begin(), populated.end(), [](char value) { return value == 0; }))
+  const amr::RefinementRatio<Dim>& ratio = child_layout.ratio_from_parent();
+  amr::transfer::IndexMapping<Dim> mapping;
+  mapping.coarse_origin = parent_layout.domain().lo;
+  mapping.fine_origin = child_layout.domain().lo;
+  const amr::transfer::ComponentRange components{0, 0, field.ncomp()};
+  const amr::transfer::TransferProvider<Dim, amr::transfer::Centering::Cell> provider(
+      transfer_kind);
+  prepared->kernels.reserve(prepared->child.local_size());
+  prepared->child_hosts.reserve(prepared->previous_child != nullptr ? prepared->child.local_size()
+                                                                    : 0);
+  for (std::size_t local = 0; local < prepared->child.local_size(); ++local) {
+    Fab<Dim>& fab = prepared->child.fab(local);
+    prepared->kernels.push_back(provider.prepare(std::as_const(prepared->dense_parent).view(),
+                                                 fab.view(), fab.box(), ratio, mapping,
+                                                 components));
+    if (prepared->previous_child != nullptr)
+      prepared->child_hosts.push_back(fab.create_host_mirror());
+  }
+  return prepared;
+}
+
+template <int Dim>
+void execute_regridded_state_transfer(PreparedRegriddedStateTransfer<Dim>& prepared,
+                                      const CommunicatorView& communicator) {
+  all_reduce_sum_inplace(prepared.values.data(), prepared.values.size(), communicator);
+  all_reduce_max_inplace(prepared.populated.data(), prepared.populated.size(), communicator);
+  if (std::any_of(prepared.populated.begin(), prepared.populated.end(),
+                  [](char value) { return value == 0; }))
     throw std::runtime_error(
         "AMR prepared transfer source ghosts were not materialized collectively");
+  for (std::size_t index = 0; index < prepared.values.size(); ++index)
+    prepared.dense_host(index) = static_cast<Real>(prepared.values[index]);
+  prepared.dense_parent.copy_from_host(prepared.dense_host);
+  for (std::size_t local = 0; local < prepared.child.local_size(); ++local)
+    for_each_cell(prepared.child.fab(local).box(), prepared.kernels[local]);
+  device_fence();
 
-  auto dense_host = dense.create_host_mirror();
-  dense.copy_to_host(dense_host);
-  for (std::size_t index = 0; index < values.size(); ++index)
-    dense_host(index) = static_cast<Real>(values[index]);
-  dense.copy_from_host(dense_host);
-  return dense;
+  if (prepared.previous_child == nullptr)
+    return;
+  for (std::size_t local = 0; local < prepared.child.local_size(); ++local) {
+    Fab<Dim>& fab = prepared.child.fab(local);
+    auto& host = prepared.child_hosts[local];
+    fab.copy_to_host(host);
+    const Box<Dim>& valid = fab.box();
+    const Box<Dim>& grown = fab.grown_box();
+    const std::size_t component_stride = checked_cells(grown);
+    for (std::size_t ordinal = 0; ordinal < checked_cells(valid); ++ordinal) {
+      const Index<Dim> fine = unflatten(valid, ordinal);
+      const std::size_t fine_global = offset(fine, prepared.previous_child->domain);
+      const bool reuse = prepared.previous_child->populated[fine_global] != 0;
+      if (!reuse)
+        continue;
+      for (int component = 0; component < prepared.child.ncomp(); ++component) {
+        const double value =
+            prepared.previous_child
+                ->values[static_cast<std::size_t>(component) * prepared.old_cells + fine_global];
+        host(static_cast<std::size_t>(component) * component_stride + offset(fine, grown)) =
+            static_cast<Real>(value);
+      }
+    }
+    fab.copy_from_host(host);
+  }
 }
 
 template <int Dim>
@@ -580,55 +673,36 @@ MultiFab<Dim> transfer_regridded_state(const MultiFab<Dim>& parent,
                                        const std::optional<SparseFieldImage<Dim>>& previous_child,
                                        const CommunicatorView& communicator,
                                        amr::transfer::TransferKind transfer_kind) {
-  MultiFab<Dim> child(child_layout.patches(), child_layout.distribution(), parent.local_rank(),
-                      parent.ncomp(), parent.ghosts());
-  child.set_val(Real(0));
-  const int source_radius = transfer_kind == amr::transfer::TransferKind::ConstantInjection ? 0 : 1;
-  Fab<Dim> dense_parent =
-      gather_transfer_source(parent, parent_layout, communicator, source_radius);
-  const amr::RefinementRatio<Dim>& ratio = child_layout.ratio_from_parent();
-  amr::transfer::IndexMapping<Dim> mapping;
-  mapping.coarse_origin = parent_layout.domain().lo;
-  mapping.fine_origin = child_layout.domain().lo;
-  const amr::transfer::ComponentRange components{0, 0, parent.ncomp()};
-  const amr::transfer::TransferProvider<Dim, amr::transfer::Centering::Cell> provider(
-      transfer_kind);
-  for (std::size_t local = 0; local < child.local_size(); ++local) {
-    Fab<Dim>& fab = child.fab(local);
-    const auto prepared = provider.prepare(std::as_const(dense_parent).view(), fab.view(),
-                                           fab.box(), ratio, mapping, components);
-    for_each_cell(fab.box(), prepared);
+  std::unique_ptr<PreparedRegriddedStateTransfer<Dim>> prepared;
+  std::exception_ptr local_error;
+  try {
+    prepared = prepare_regridded_state_transfer(parent, parent_layout, child_layout, previous_child,
+                                                transfer_kind, communicator.rank());
+  } catch (...) {
+    local_error = std::current_exception();
   }
-  device_fence();
-
-  const std::size_t old_cells =
-      previous_child ? checked_cells(previous_child->domain) : std::size_t{0};
-  if (!previous_child)
-    return child;
-  for (std::size_t local = 0; local < child.local_size(); ++local) {
-    Fab<Dim>& fab = child.fab(local);
-    auto host = fab.create_host_mirror();
-    fab.copy_to_host(host);
-    const Box<Dim>& valid = fab.box();
-    const Box<Dim>& grown = fab.grown_box();
-    const std::size_t component_stride = checked_cells(grown);
-    for (std::size_t ordinal = 0; ordinal < checked_cells(valid); ++ordinal) {
-      const Index<Dim> fine = unflatten(valid, ordinal);
-      const std::size_t fine_global = offset(fine, child_layout.domain());
-      const bool reuse = previous_child->domain == child_layout.domain() &&
-                         previous_child->populated[fine_global] != 0;
-      if (!reuse)
-        continue;
-      for (int component = 0; component < parent.ncomp(); ++component) {
-        const double value =
-            previous_child->values[static_cast<std::size_t>(component) * old_cells + fine_global];
-        host(static_cast<std::size_t>(component) * component_stride + offset(fine, grown)) =
-            static_cast<Real>(value);
-      }
-    }
-    fab.copy_from_host(host);
+  const long preparation_failures = all_reduce_sum(local_error ? 1L : 0L, communicator);
+  if (preparation_failures != 0) {
+    if (communicator.size() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("AMR transfer preparation failed collectively on " +
+                             std::to_string(preparation_failures) + " rank(s)");
   }
-  return child;
+  local_error = {};
+  try {
+    execute_regridded_state_transfer(*prepared, communicator);
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  const long execution_failures = all_reduce_sum(local_error ? 1L : 0L, communicator);
+  if (execution_failures != 0) {
+    if (communicator.size() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("AMR transfer execution failed collectively on " +
+                             std::to_string(execution_failures) + " rank(s)");
+  }
+  static_assert(std::is_nothrow_move_constructible_v<MultiFab<Dim>>);
+  return std::move(prepared->child);
 }
 
 inline std::string direct_amr_state_identity(std::string_view block) {
@@ -1253,8 +1327,6 @@ void authenticate_generated_block_point(std::string_view route, int runtime_bloc
         "generated AMR block/provider point identities differ between MPI ranks");
 }
 
-
-
 template <int Dim>
 void copy_valid_field(const MultiFab<Dim>& source, MultiFab<Dim>& destination) {
   if (!same_field_shape(source, destination))
@@ -1360,14 +1432,14 @@ struct GeneratedRootGhostSource {
     return {"pops.generated.amr.root-ghost-fill", 1};
   }
 
-  void serialize_exact_parameters(ExactContractBuilder & contract) const {
+  void serialize_exact_parameters(ExactContractBuilder& contract) const {
     if (!state)
       throw std::logic_error("generated AMR root ghost source is empty");
     contract.bytes(state->contract);
   }
 
-  void operator()(field_type& field, const runtime::multiblock::BoundaryEvaluationPoint& point)
-      const {
+  void operator()(field_type& field,
+                  const runtime::multiblock::BoundaryEvaluationPoint& point) const {
     if (!state)
       throw std::logic_error("generated AMR root ghost source is empty");
     state->execute(field, point);
@@ -1594,13 +1666,13 @@ struct GeneratedProviderGroupsGhostSource {
   [[nodiscard]] static PreparedProviderIdentity provider_identity() noexcept {
     return {"pops.generated.amr.provider-groups-ghost-fill", 1};
   }
-  void serialize_exact_parameters(ExactContractBuilder & contract) const {
+  void serialize_exact_parameters(ExactContractBuilder& contract) const {
     if (!state)
       throw std::logic_error("generated AMR provider-group ghost source is empty");
     contract.bytes(state->contract);
   }
-  void operator()(groups_type& groups, const runtime::multiblock::BoundaryEvaluationPoint& point)
-      const {
+  void operator()(groups_type& groups,
+                  const runtime::multiblock::BoundaryEvaluationPoint& point) const {
     if (!state)
       throw std::logic_error("generated AMR provider-group ghost source is empty");
     state->execute(groups, point);
@@ -1889,6 +1961,17 @@ struct AmrSystem<Dim>::Impl {
     bool has_analytic_state = false;
     std::vector<analytic::AnalyticProgram> analytic_state;
   };
+
+  enum class BootstrapSourceKind : std::uint8_t { unstaged, analytic, array };
+  struct BootstrapSourceAuthority {
+    std::string runtime_block;
+    std::string source_route;
+    BootstrapSourceKind kind = BootstrapSourceKind::unstaged;
+  };
+  /// Resolved initial Handle -> exact runtime block/source association.  This is deliberately
+  /// distinct from the block label: only the pre-installed owner-qualified state route and the
+  /// resolved InitialCondition source can establish it.
+  std::map<std::string, BootstrapSourceAuthority> bootstrap_sources;
 
   struct GlobalDtBound {
     std::string label;
@@ -2236,6 +2319,7 @@ struct AmrSystem<Dim>::Impl {
   mutable std::unique_ptr<runtime::amr::PreparedTaggerComponent<Dim>> component_tagging_plan;
   mutable runtime::amr::PersistentTaggingState<Dim> tagging_state;
   mutable std::unique_ptr<AcceptedSnapshot> bootstrap_transaction;
+  mutable std::set<std::pair<std::string, int>> bootstrap_materialized_actions;
   mutable bool automatic_bootstrap_complete = false;
 
   struct AcceptedSnapshot {
@@ -2254,7 +2338,9 @@ struct AmrSystem<Dim>::Impl {
     std::uint64_t program_accepted_revision = 0;
     bool program_accepted_bytes_runtime_owned = false;
     std::map<std::string, std::vector<field_type>> field_potentials;
+    std::set<std::string> field_plan_slots;
     runtime::amr::PersistentTaggingState<Dim> tagging_state;
+    std::set<std::pair<std::string, int>> bootstrap_materialized_actions;
     bool automatic_bootstrap_complete = false;
 
     explicit AcceptedSnapshot(const Impl& owner)
@@ -2277,11 +2363,13 @@ struct AmrSystem<Dim>::Impl {
           program_accepted_revision(owner.program_accepted_revision),
           program_accepted_bytes_runtime_owned(owner.program_accepted_bytes_runtime_owned),
           tagging_state(owner.tagging_state),
+          bootstrap_materialized_actions(owner.bootstrap_materialized_actions),
           automatic_bootstrap_complete(owner.automatic_bootstrap_complete) {
       if (!owner.active_field_slot.empty())
         throw std::logic_error(
             "AmrSystem cannot snapshot an unconsumed exact field solve candidate");
       for (const auto& [slot, plan] : owner.field_plans) {
+        field_plan_slots.insert(slot);
         if (plan.accepted_potential.empty())
           continue;
         auto& levels = field_potentials[slot];
@@ -2295,49 +2383,222 @@ struct AmrSystem<Dim>::Impl {
       }
     }
 
-    void restore(Impl& owner) {
-      if (engine.has_value() != static_cast<bool>(owner.engine))
-        throw std::logic_error("AmrSystem transaction changed engine materialization");
-      if (multiblock.has_value() != static_cast<bool>(owner.multiblock_hierarchy))
-        throw std::logic_error("AmrSystem transaction changed multi-block materialization");
-      owner.prepared_hierarchy.reset();
-      if (multiblock) {
-        owner.multiblock_hierarchy->restore(*multiblock);
-        owner.pending_provider_restore = provider_storage;
-        owner.pending_provider_registry_restore = provider_registries;
-      } else if (engine) {
-        owner.engine->restore(*engine);
+    struct PreparedFieldRestore {
+      FieldPlan* plan = nullptr;
+      bool retain_materialization = false;
+      std::vector<std::unique_ptr<field_type>> accepted_potential;
+    };
+
+    struct PreparedAcceptedRestore {
+      std::optional<typename multiblock_type::ProgramBlockMap> program_block_map;
+      std::optional<flux_expression_budget_type> program_flux_expression_budget;
+      std::vector<::pops::amr::ParentChildClockRelation> temporal_relations;
+      double accepted_time = 0.0;
+      int macro_step = 0;
+      int checkpoint_regrid_count_value = 0;
+      std::vector<int> last_replay_regrid_steps;
+      std::vector<std::uint8_t> program_accepted_bytes;
+      std::uint64_t program_accepted_revision = 0;
+      bool program_accepted_bytes_runtime_owned = false;
+      std::shared_ptr<const provider_snapshot_type> pending_provider_restore;
+      std::shared_ptr<const provider_registry_snapshot_type> pending_provider_registry_restore;
+      std::vector<PreparedFieldRestore> fields;
+      runtime::amr::PersistentTaggingState<Dim> tagging_state;
+      std::set<std::pair<std::string, int>> bootstrap_materialized_actions;
+      bool automatic_bootstrap_complete = false;
+      std::string active_field_slot;
+      std::optional<typename multiblock_type::PreparedRestore> carrier_restore;
+      std::optional<
+          typename runtime::program::ProgramRuntimeState<Dim>::PreparedProgramAcceptedRestore>
+          program_restore;
+
+      PreparedAcceptedRestore(const AcceptedSnapshot& snapshot, Impl& owner)
+          : program_flux_expression_budget(snapshot.program_flux_expression_budget),
+            temporal_relations(snapshot.temporal_relations),
+            accepted_time(snapshot.accepted_time),
+            macro_step(snapshot.macro_step),
+            checkpoint_regrid_count_value(snapshot.checkpoint_regrid_count_value),
+            last_replay_regrid_steps(snapshot.last_replay_regrid_steps),
+            program_accepted_bytes(snapshot.program_accepted_bytes),
+            program_accepted_revision(snapshot.program_accepted_revision),
+            program_accepted_bytes_runtime_owned(snapshot.program_accepted_bytes_runtime_owned),
+            pending_provider_restore(snapshot.provider_storage),
+            pending_provider_registry_restore(snapshot.provider_registries),
+            tagging_state(snapshot.tagging_state),
+            bootstrap_materialized_actions(snapshot.bootstrap_materialized_actions),
+            automatic_bootstrap_complete(snapshot.automatic_bootstrap_complete) {
+        const bool snapshot_materialized = snapshot.engine && snapshot.multiblock;
+        const bool owner_materialized = owner.engine && owner.multiblock_hierarchy;
+        if (snapshot_materialized != owner_materialized ||
+            snapshot.engine.has_value() != snapshot.multiblock.has_value() ||
+            static_cast<bool>(owner.engine) != static_cast<bool>(owner.multiblock_hierarchy))
+          throw std::logic_error(
+              "AmrSystem accepted restore changed engine/carrier materialization");
+        if (owner.field_plans.size() != snapshot.field_plan_slots.size())
+          throw std::logic_error("AmrSystem transaction changed its field-plan registry");
+        for (const std::string& slot : snapshot.field_plan_slots)
+          if (!owner.field_plans.contains(slot))
+            throw std::logic_error("AmrSystem transaction changed its field-plan registry");
+
+        if (snapshot_materialized && !snapshot.program.block_map_.empty()) {
+          if (snapshot.program.block_map_.size() != owner.blocks.size() ||
+              snapshot.multiblock->additional.size() + 1 != owner.blocks.size())
+            throw std::invalid_argument(
+                "AMR Program block map must cover every restored carrier exactly once");
+          typename multiblock_type::ProgramBlockMap candidate;
+          candidate.canonical_indices.reserve(snapshot.program.block_map_.size());
+          std::vector<bool> seen(owner.blocks.size(), false);
+          for (const int runtime_block : snapshot.program.block_map_) {
+            if (runtime_block < 0 || static_cast<std::size_t>(runtime_block) >= owner.blocks.size())
+              throw std::out_of_range(
+                  "AMR restored Program block map contains an invalid runtime block");
+            const std::size_t canonical = static_cast<std::size_t>(runtime_block);
+            if (seen[canonical])
+              throw std::invalid_argument(
+                  "AMR restored Program block map contains a duplicate block");
+            seen[canonical] = true;
+            if (canonical != 0 && snapshot.multiblock->additional[canonical - 1].identity !=
+                                      owner.blocks[canonical].name)
+              throw std::invalid_argument(
+                  "AMR restored Program block map differs from its carrier identity");
+            candidate.canonical_indices.push_back(canonical);
+          }
+          candidate.hierarchy_contract = snapshot.multiblock->exact_collective_contract;
+          ExactContractBuilder exact;
+          exact.text("pops.prepared-multiblock-amr.program-map")
+              .scalar(std::uint32_t{1})
+              .scalar(std::int32_t{Dim})
+              .bytes(candidate.hierarchy_contract)
+              .scalar(static_cast<std::uint64_t>(candidate.canonical_indices.size()));
+          for (const std::size_t canonical : candidate.canonical_indices)
+            exact.text(owner.blocks[canonical].name).scalar(static_cast<std::uint64_t>(canonical));
+          candidate.exact_contract = std::move(exact).release();
+          program_block_map.emplace(std::move(candidate));
+        }
+        if (program_flux_expression_budget) {
+          if (!snapshot_materialized || !program_block_map ||
+              program_flux_expression_budget->program_block_map.exact_contract !=
+                  program_block_map->exact_contract)
+            throw std::invalid_argument(
+                "AMR restored flux-expression budget lost its exact Program block map");
+        }
+
+        fields.reserve(snapshot.field_plan_slots.size());
+        for (const std::string& slot : snapshot.field_plan_slots) {
+          FieldPlan& plan = owner.field_plans.at(slot);
+          PreparedFieldRestore candidate{.plan = &plan};
+          const auto saved = snapshot.field_potentials.find(slot);
+          if (snapshot_materialized && saved != snapshot.field_potentials.end() &&
+              plan.prepared_solver && plan.topology_epoch == snapshot.engine->topology_epoch &&
+              plan.materialization_generation == snapshot.engine->materialization_generation) {
+            if (plan.accepted_potential.size() != saved->second.size())
+              throw std::logic_error("AmrSystem transaction changed a materialized field plan");
+            candidate.accepted_potential.reserve(saved->second.size());
+            for (const field_type& level : saved->second)
+              candidate.accepted_potential.push_back(std::make_unique<field_type>(level));
+            candidate.retain_materialization = true;
+          }
+          fields.push_back(std::move(candidate));
+        }
+        if (!snapshot_materialized && !snapshot.field_potentials.empty())
+          throw std::logic_error(
+              "AmrSystem unmaterialized restore contains accepted field storage");
+        if (snapshot_materialized)
+          carrier_restore.emplace(
+              owner.multiblock_hierarchy->prepare_restore(*snapshot.multiblock));
+        program_restore.emplace(owner.program.prepare_accepted_restore(snapshot.program));
       }
-      owner.program = program;
-      owner.prepare_program_block_map();
-      owner.program_flux_expression_budget = program_flux_expression_budget;
-      owner.temporal_relations = temporal_relations;
-      owner.accepted_time = accepted_time;
-      owner.macro_step = macro_step;
-      owner.checkpoint_regrid_count_value = checkpoint_regrid_count_value;
-      owner.last_replay_regrid_steps = last_replay_regrid_steps;
-      owner.program_accepted_bytes = program_accepted_bytes;
-      owner.program_accepted_revision = program_accepted_revision;
-      owner.program_accepted_bytes_runtime_owned = program_accepted_bytes_runtime_owned;
-      owner.tagging_state = tagging_state;
-      owner.automatic_bootstrap_complete = automatic_bootstrap_complete;
+    };
+
+    static void publish_prepared_restore(Impl& owner, PreparedAcceptedRestore&& prepared) noexcept {
+      static_assert(std::is_nothrow_move_assignable_v<decltype(owner.prepared_program_block_map)>);
+      static_assert(std::is_nothrow_swappable_v<decltype(owner.program_flux_expression_budget)>);
+      static_assert(std::is_nothrow_swappable_v<decltype(owner.temporal_relations)>);
+      static_assert(std::is_nothrow_swappable_v<decltype(owner.last_replay_regrid_steps)>);
+      static_assert(std::is_nothrow_swappable_v<decltype(owner.program_accepted_bytes)>);
+      static_assert(std::is_nothrow_swappable_v<decltype(owner.tagging_state)>);
+      static_assert(std::is_nothrow_swappable_v<decltype(owner.bootstrap_materialized_actions)>);
+      static_assert(std::is_nothrow_swappable_v<decltype(owner.pending_provider_restore)>);
+      static_assert(std::is_nothrow_swappable_v<decltype(owner.pending_provider_registry_restore)>);
+      static_assert(std::is_nothrow_swappable_v<std::vector<std::unique_ptr<field_type>>>);
+      static_assert(std::is_nothrow_swappable_v<decltype(owner.active_field_slot)>);
+      if (!prepared.program_restore)
+        std::terminate();
+      if (prepared.carrier_restore) {
+        if (!owner.multiblock_hierarchy)
+          std::terminate();
+        owner.multiblock_hierarchy->publish_prepared_restore(std::move(*prepared.carrier_restore));
+      }
+      owner.prepared_hierarchy.reset();
+      owner.program.publish_prepared_accepted_restore(std::move(*prepared.program_restore));
+      owner.prepared_program_block_map = std::move(prepared.program_block_map);
+      owner.program_flux_expression_budget.swap(prepared.program_flux_expression_budget);
+      owner.temporal_relations.swap(prepared.temporal_relations);
+      owner.accepted_time = prepared.accepted_time;
+      owner.macro_step = prepared.macro_step;
+      owner.checkpoint_regrid_count_value = prepared.checkpoint_regrid_count_value;
+      owner.last_replay_regrid_steps.swap(prepared.last_replay_regrid_steps);
+      owner.program_accepted_bytes.swap(prepared.program_accepted_bytes);
+      owner.program_accepted_revision = prepared.program_accepted_revision;
+      owner.program_accepted_bytes_runtime_owned = prepared.program_accepted_bytes_runtime_owned;
+      owner.pending_provider_restore.swap(prepared.pending_provider_restore);
+      owner.pending_provider_registry_restore.swap(prepared.pending_provider_registry_restore);
+      std::swap(owner.tagging_state, prepared.tagging_state);
+      owner.bootstrap_materialized_actions.swap(prepared.bootstrap_materialized_actions);
+      owner.automatic_bootstrap_complete = prepared.automatic_bootstrap_complete;
       owner.tagging_plan.reset();
       owner.component_tagging_plan.reset();
-      for (const auto& [slot, levels] : field_potentials) {
-        auto found = owner.field_plans.find(slot);
-        if (found == owner.field_plans.end())
-          throw std::logic_error("AmrSystem transaction changed a materialized field plan");
-        if (owner.engine && !found->second.materialized_for(*owner.engine)) {
-          found->second.discard_materialization();
-          continue;
+      for (PreparedFieldRestore& field : prepared.fields) {
+        if (!field.retain_materialization)
+          field.plan->discard_materialization();
+        else {
+          field.plan->accepted_potential.swap(field.accepted_potential);
+          field.plan->candidate_ready = false;
         }
-        if (found->second.accepted_potential.size() != levels.size())
-          throw std::logic_error("AmrSystem transaction changed a materialized field plan");
-        for (std::size_t level = 0; level < levels.size(); ++level)
-          copy_full_field_in_place(levels[level], *found->second.accepted_potential[level]);
-        found->second.candidate_ready = false;
       }
-      owner.active_field_slot.clear();
+      owner.active_field_slot.swap(prepared.active_field_slot);
+    }
+
+    void restore(Impl& owner) {
+      if (!owner.multiblock_hierarchy) {
+        // Assembly-time artifact rollback has no materialized carrier or execution lane. Its outer
+        // installer already owns rank consensus; this branch restores only locally prepared
+        // metadata and Program accepted state through the same noexcept publication boundary.
+        PreparedAcceptedRestore prepared(*this, owner);
+        publish_prepared_restore(owner, std::move(prepared));
+        return;
+      }
+      const CommunicatorView communicator = owner.multiblock_hierarchy->lane().communicator();
+      const auto collectively_rethrow = [&](const std::exception_ptr& local_error,
+                                            std::string_view phase) {
+        const long failures = all_reduce_sum(local_error ? 1L : 0L, communicator);
+        if (failures == 0)
+          return;
+        if (communicator.size() == 1 && local_error)
+          std::rethrow_exception(local_error);
+        throw std::runtime_error("AmrSystem accepted restore " + std::string(phase) +
+                                 " failed collectively on " + std::to_string(failures) +
+                                 " rank(s)");
+      };
+
+      std::unique_ptr<PreparedAcceptedRestore> prepared;
+      std::exception_ptr local_error;
+      try {
+        prepared = std::make_unique<PreparedAcceptedRestore>(*this, owner);
+      } catch (...) {
+        local_error = std::current_exception();
+      }
+      collectively_rethrow(local_error, "preparation");
+
+      local_error = {};
+      try {
+        owner.multiblock_hierarchy->execute_prepared_restore(*prepared->carrier_restore);
+      } catch (...) {
+        local_error = std::current_exception();
+      }
+      collectively_rethrow(local_error, "carrier execution");
+
+      publish_prepared_restore(owner, std::move(*prepared));
     }
   };
 
@@ -4489,14 +4750,22 @@ struct AmrSystem<Dim>::Impl {
     std::vector<std::optional<field_type>> child_states(multiblock_hierarchy->block_count());
     if (!prepared.removes_fine_level()) {
       for (std::size_t block = 0; block < multiblock_hierarchy->block_count(); ++block) {
+        const field_type& parent_state =
+            multiblock_hierarchy->state(block, static_cast<std::size_t>(parent_level));
+        if (bootstrap_transaction) {
+          child_states[block].emplace(
+              prepared.fine_layout()->patches(), prepared.fine_layout()->distribution(),
+              parent_state.local_rank(), parent_state.ncomp(), parent_state.ghosts());
+          child_states[block]->set_val(Real(0));
+          continue;
+        }
         std::optional<SparseFieldImage<Dim>> retained = block == 0 ? retained_child : std::nullopt;
         if (!retained && live_child < multiblock_hierarchy->level_count())
           retained = gather_sparse_field(multiblock_hierarchy->state(block, live_child),
                                          engine->hierarchy().layout(live_child).domain(),
                                          prepared_hierarchy->lane->communicator());
         child_states[block].emplace(transfer_regridded_state(
-            multiblock_hierarchy->state(block, static_cast<std::size_t>(parent_level)),
-            parent_layout, *prepared.fine_layout(), retained,
+            parent_state, parent_layout, *prepared.fine_layout(), retained,
             prepared_hierarchy->lane->communicator(), regrid_transfer_kind(parent_level)));
       }
     }
@@ -4587,16 +4856,42 @@ struct AmrSystem<Dim>::Impl {
       const amr::hierarchy::LevelLayout<Dim> coarse(0, domain, patches, distribution,
                                                     amr::RefinementRatio<Dim>{}, layout_budget);
       const auto materialize_state = [&](const BlockSpec& block) {
-        field_type state(patches, distribution, local_rank, block.ncomp, block.ghosts);
-        if (block.has_analytic_state) {
-          const Geometry<Dim> geometry = Geometry<Dim>::from_bounds(domain, cfg.lower, cfg.upper);
-          (void)analytic::materialize_cell_average(state, geometry, block.analytic_state);
-        } else if (block.has_state) {
-          write_field(state, domain, block.state, block.ncomp);
-        } else if (block.has_density) {
-          write_component(state, domain, block.density, 0);
+        std::optional<field_type> state;
+        std::optional<
+            analytic::PreparedAnalyticMaterialization<Dim, typename field_type::memory_space>>
+            analytic_materialization;
+        std::exception_ptr local_error;
+        try {
+          state.emplace(patches, distribution, local_rank, block.ncomp, block.ghosts);
+          state->set_val(Real(0));
+          if (cfg.explicit_bootstrap) {
+            if (!block.has_analytic_state && !block.has_state)
+              throw std::logic_error(
+                  "explicit AMR bootstrap requires one staged initial source per block");
+          } else if (block.has_analytic_state) {
+            const Geometry<Dim> geometry = Geometry<Dim>::from_bounds(domain, cfg.lower, cfg.upper);
+            analytic_materialization.emplace(analytic::prepare_cell_average_materialization(
+                *state, geometry, block.analytic_state));
+          } else if (block.has_state) {
+            write_field(*state, domain, block.state, block.ncomp);
+          } else if (block.has_density) {
+            write_component(*state, domain, block.density, 0);
+          }
+        } catch (...) {
+          local_error = std::current_exception();
         }
-        return state;
+        const long failures = all_reduce_sum(local_error ? 1L : 0L, world_lane.communicator());
+        if (failures != 0) {
+          if (world_lane.size() == 1 && local_error)
+            std::rethrow_exception(local_error);
+          throw std::runtime_error(
+              "AMR initial materialization preparation failed collectively on " +
+              std::to_string(failures) + " rank(s)");
+        }
+        if (analytic_materialization)
+          (void)analytic::materialize_cell_average(*analytic_materialization,
+                                                   world_lane.communicator());
+        return std::move(*state);
       };
       field_type state = materialize_state(blocks.front());
 
@@ -7880,6 +8175,341 @@ void AmrSystem<Dim>::set_conservative_state(const std::string& name,
 }
 
 template <int Dim>
+void AmrSystem<Dim>::bind_bootstrap_subject(const std::string& subject_id,
+                                            const std::string& runtime_block,
+                                            const std::string& source_route) {
+  const auto prepare = [&] {
+    require_amr_assembling(p_->lifecycle, "bind_bootstrap_subject");
+    if (p_->engine || subject_id.empty() || runtime_block.empty() || source_route.empty())
+      throw std::invalid_argument(
+          "AMR bootstrap subject binding requires one pre-materialization subject, block and "
+          "source route");
+    (void)p_->block(runtime_block);
+    if (p_->boundary_registry.state_route(runtime_block) != subject_id)
+      throw std::invalid_argument(
+          "AMR bootstrap subject does not match the block's authenticated state route");
+    if (p_->bootstrap_sources.contains(subject_id))
+      throw std::invalid_argument("AMR bootstrap subject is already bound to a runtime block");
+    auto candidate = p_->bootstrap_sources;
+    candidate.emplace(subject_id,
+                      typename Impl::BootstrapSourceAuthority{runtime_block, source_route});
+    return candidate;
+  };
+  const auto canonicalize = [&] {
+    ExactContractBuilder contract;
+    contract.text("pops.amr.bootstrap-subject-binding")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .text(subject_id)
+        .text(runtime_block)
+        .text(source_route);
+    return std::move(contract).release();
+  };
+  std::map<std::string, typename Impl::BootstrapSourceAuthority> candidate;
+  if (p_->prepared_hierarchy && p_->prepared_hierarchy->lane) {
+    candidate = analytic::collectively_prepare_exact_analytic_request(
+        "AmrSystem::bind_bootstrap_subject", prepare, canonicalize,
+        p_->prepared_hierarchy->lane->communicator());
+  } else {
+    candidate = prepare();
+  }
+  p_->bootstrap_sources = std::move(candidate);
+}
+
+template <int Dim>
+void AmrSystem<Dim>::stage_bootstrap_analytic_state(
+    const std::string& subject_id, const std::string& runtime_block, const std::string& space,
+    const std::string& centering, const std::string& projection,
+    const analytic::AnalyticOpcodeRows& opcodes, const analytic::AnalyticLiteralRows& literals) {
+  const auto prepare = [&] {
+    require_amr_assembling(p_->lifecycle, "stage_bootstrap_analytic_state");
+    if (p_->engine || space != "cell" || centering != "cell" ||
+        projection != "conservative_cell_average")
+      throw std::invalid_argument(
+          "AMR analytic bootstrap requires a pre-materialization cell conservative-cell-average "
+          "state");
+    const auto binding = p_->bootstrap_sources.find(subject_id);
+    if (binding == p_->bootstrap_sources.end() || binding->second.runtime_block != runtime_block)
+      throw std::invalid_argument(
+          "AMR analytic bootstrap subject is not authenticated for its runtime block");
+    if (binding->second.kind != Impl::BootstrapSourceKind::unstaged)
+      throw std::invalid_argument("AMR bootstrap subject already owns a staged source");
+    const typename Impl::BlockSpec& block = p_->block(runtime_block);
+    std::vector<analytic::AnalyticProgram> programs =
+        analytic::compile_component_programs(opcodes, literals);
+    if (programs.size() != static_cast<std::size_t>(block.ncomp))
+      throw std::invalid_argument(
+          "AMR analytic bootstrap component count differs from its runtime block");
+    return programs;
+  };
+  std::vector<analytic::AnalyticProgram> programs;
+  if (p_->prepared_hierarchy && p_->prepared_hierarchy->lane) {
+    programs = analytic::collectively_prepare_analytic_request(
+        "AmrSystem::stage_bootstrap_analytic_state",
+        {{"centering", centering},
+         {"projection", projection},
+         {"runtime_block", runtime_block},
+         {"space", space},
+         {"subject_id", subject_id}},
+        {}, opcodes, literals, prepare, p_->prepared_hierarchy->lane->communicator());
+  } else {
+    programs = prepare();
+  }
+  typename Impl::BlockSpec& block = p_->block(runtime_block);
+  block.density.clear();
+  block.state.clear();
+  block.has_density = false;
+  block.has_state = false;
+  block.has_analytic_state = true;
+  block.analytic_state = std::move(programs);
+  p_->bootstrap_sources.at(subject_id).kind = Impl::BootstrapSourceKind::analytic;
+}
+
+template <int Dim>
+void AmrSystem<Dim>::stage_bootstrap_array(const std::string& subject_id,
+                                           const std::string& runtime_block,
+                                           const std::string& space, const std::string& centering,
+                                           int components, const Extent<Dim>& spatial_shape,
+                                           const std::vector<double>& values) {
+  const auto prepare = [&] {
+    require_amr_assembling(p_->lifecycle, "stage_bootstrap_array");
+    if (p_->engine || space != "cell" || centering != "cell")
+      throw std::invalid_argument(
+          "AMR array bootstrap requires one pre-materialization cell-centred state");
+    const auto binding = p_->bootstrap_sources.find(subject_id);
+    if (binding == p_->bootstrap_sources.end() || binding->second.runtime_block != runtime_block)
+      throw std::invalid_argument(
+          "AMR array bootstrap subject is not authenticated for its runtime block");
+    if (binding->second.kind != Impl::BootstrapSourceKind::unstaged)
+      throw std::invalid_argument("AMR bootstrap subject already owns a staged source");
+    const typename Impl::BlockSpec& block = p_->block(runtime_block);
+    const std::size_t cells = checked_cells(p_->cfg.index_domain());
+    if (spatial_shape != p_->cfg.shape || components != block.ncomp ||
+        values.size() != static_cast<std::size_t>(components) * cells)
+      throw std::invalid_argument(
+          "AMR bootstrap array differs from the exact-rank runtime block shape");
+    return values;
+  };
+  std::vector<double> state;
+  if (p_->prepared_hierarchy && p_->prepared_hierarchy->lane) {
+    const auto canonicalize = [&] {
+      ExactContractBuilder contract;
+      contract.text("pops.amr.bootstrap-array")
+          .scalar(std::uint32_t{1})
+          .scalar(std::int32_t{Dim})
+          .text(subject_id)
+          .text(runtime_block)
+          .text(space)
+          .text(centering)
+          .scalar(components);
+      for (int axis = 0; axis < Dim; ++axis)
+        contract.scalar(spatial_shape[axis]);
+      contract.scalar(static_cast<std::uint64_t>(values.size()));
+      for (const double value : values)
+        contract.scalar(value);
+      return std::move(contract).release();
+    };
+    state = analytic::collectively_prepare_exact_analytic_request(
+        "AmrSystem::stage_bootstrap_array", prepare, canonicalize,
+        p_->prepared_hierarchy->lane->communicator());
+  } else {
+    state = prepare();
+  }
+  typename Impl::BlockSpec& block = p_->block(runtime_block);
+  block.density.clear();
+  block.analytic_state.clear();
+  block.has_density = false;
+  block.has_analytic_state = false;
+  block.has_state = true;
+  block.state = std::move(state);
+  p_->bootstrap_sources.at(subject_id).kind = Impl::BootstrapSourceKind::array;
+}
+
+template <int Dim>
+std::size_t AmrSystem<Dim>::materialize_bootstrap_action(const std::string& subject_id,
+                                                         const std::string& action,
+                                                         const std::string& action_route,
+                                                         int level) {
+  if (!p_->bootstrap_transaction)
+    throw std::logic_error("AMR bootstrap materialization requires an active transaction");
+  if (!p_->prepared_hierarchy || !p_->prepared_hierarchy->lane)
+    throw std::logic_error("AMR bootstrap materialization lacks its prepared execution lane");
+  const CommunicatorView communicator = p_->prepared_hierarchy->lane->communicator();
+  const auto validate = [&] {
+    if (subject_id.empty() || action.empty() || action_route.empty())
+      throw std::invalid_argument(
+          "AMR bootstrap materialization requires one subject, action and native route");
+    const auto source = p_->bootstrap_sources.find(subject_id);
+    if (source == p_->bootstrap_sources.end() ||
+        source->second.kind == Impl::BootstrapSourceKind::unstaged)
+      throw std::invalid_argument(
+          "AMR bootstrap materialization has no authenticated staged source");
+    if (level < 0 || static_cast<std::size_t>(level) >= p_->engine->hierarchy().num_levels())
+      throw std::out_of_range("AMR bootstrap materialization level is not live");
+    if (p_->bootstrap_materialized_actions.contains(std::make_pair(subject_id, level)))
+      throw std::logic_error("AMR bootstrap source is already materialized at this level");
+    if (level == 0) {
+      if (action != "initialize_level_zero" || action_route != source->second.source_route)
+        throw std::invalid_argument(
+            "AMR level-zero bootstrap action does not authenticate its staged source");
+      return;
+    }
+    if (static_cast<std::size_t>(level + 1) != p_->engine->hierarchy().num_levels())
+      throw std::invalid_argument(
+          "AMR fine bootstrap action must target the newest live hierarchy level");
+    if (source->second.kind == Impl::BootstrapSourceKind::analytic) {
+      if (action != "analytic_reprojection" || action_route != source->second.source_route)
+        throw std::invalid_argument(
+            "AMR analytic bootstrap action does not authenticate its staged source");
+      return;
+    }
+    if (action != "prolong_from_parent")
+      throw std::invalid_argument(
+          "AMR array bootstrap requires the resolved parent prolongation action");
+    const auto subject_route =
+        p_->bootstrap_subject_routes.find(std::make_pair(subject_id, std::string("prolongation")));
+    if (subject_route == p_->bootstrap_subject_routes.end())
+      throw std::invalid_argument("AMR array bootstrap has no authenticated prolongation provider");
+    const auto route = p_->bootstrap_transfer_routes.find(subject_route->second);
+    if (route == p_->bootstrap_transfer_routes.end() || route->second.kernel != action_route)
+      throw std::invalid_argument(
+          "AMR array bootstrap action differs from its registered native provider");
+    const std::size_t transition = static_cast<std::size_t>(level - 1);
+    if (transition >= p_->cfg.transition_ratios.size() ||
+        route->second.refinement_ratio != p_->cfg.transition_ratios[transition])
+      throw std::invalid_argument(
+          "AMR array bootstrap provider does not authenticate this ranked transition");
+  };
+  (void)analytic::collectively_prepare_exact_analytic_request(
+      "AmrSystem::materialize_bootstrap_action",
+      [&] {
+        validate();
+        return true;
+      },
+      [&] {
+        ExactContractBuilder contract;
+        contract.text("pops.amr.bootstrap-materialization")
+            .scalar(std::uint32_t{1})
+            .scalar(std::int32_t{Dim})
+            .text(subject_id)
+            .text(action)
+            .text(action_route)
+            .scalar(level);
+        return std::move(contract).release();
+      },
+      communicator);
+
+  const auto source = p_->bootstrap_sources.find(subject_id);
+  const auto block = std::find_if(p_->blocks.begin(), p_->blocks.end(),
+                                  [&](const typename Impl::BlockSpec& candidate) {
+                                    return candidate.name == source->second.runtime_block;
+                                  });
+  if (block == p_->blocks.end())
+    throw std::logic_error("AMR bootstrap source lost its authenticated runtime block");
+  const std::size_t block_index =
+      static_cast<std::size_t>(std::distance(p_->blocks.begin(), block));
+  typename Impl::field_type& target =
+      p_->multiblock_hierarchy->state(block_index, static_cast<std::size_t>(level));
+  const auto require_collective_success = [&](const std::exception_ptr& local_error,
+                                              std::string_view phase) {
+    const long failures = all_reduce_sum(local_error ? 1L : 0L, communicator);
+    if (failures == 0)
+      return;
+    if (communicator.size() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("AMR bootstrap " + std::string(phase) + " failed collectively on " +
+                             std::to_string(failures) + " rank(s)");
+  };
+
+  using field_type = typename Impl::field_type;
+  using analytic_materialization_type =
+      analytic::PreparedAnalyticMaterialization<Dim, typename field_type::memory_space>;
+
+  std::optional<field_type> candidate_storage;
+  field_type* candidate = nullptr;
+  std::optional<analytic_materialization_type> analytic_materialization;
+  std::unique_ptr<PreparedRegriddedStateTransfer<Dim>> transfer_materialization;
+  std::set<std::pair<std::string, int>> candidate_materialized_actions;
+  std::size_t materialized = 0;
+  std::exception_ptr preparation_error;
+  try {
+    candidate_materialized_actions = p_->bootstrap_materialized_actions;
+    const auto [marker, inserted] = candidate_materialized_actions.emplace(subject_id, level);
+    (void)marker;
+    if (!inserted)
+      throw std::logic_error("AMR bootstrap materialization marker already exists");
+    if (source->second.kind == Impl::BootstrapSourceKind::analytic) {
+      candidate_storage.emplace(target.layout(), target.distribution(), target.local_rank(),
+                                target.ncomp(), target.ghosts());
+      candidate = &*candidate_storage;
+      candidate->set_val(Real(0));
+      const Box<Dim>& domain =
+          p_->engine->hierarchy().layout(static_cast<std::size_t>(level)).domain();
+      const Geometry<Dim> geometry =
+          Geometry<Dim>::from_bounds(domain, p_->cfg.lower, p_->cfg.upper);
+      analytic_materialization.emplace(analytic::prepare_cell_average_materialization(
+          *candidate, geometry, block->analytic_state));
+      materialized = static_cast<std::size_t>(analytic_materialization->materialized_values);
+    } else if (level == 0) {
+      candidate_storage.emplace(target.layout(), target.distribution(), target.local_rank(),
+                                target.ncomp(), target.ghosts());
+      candidate = &*candidate_storage;
+      candidate->set_val(Real(0));
+      write_field(*candidate, p_->cfg.index_domain(), block->state, block->ncomp);
+      materialized = checked_size_product(
+          static_cast<std::size_t>(block->ncomp), checked_cells(p_->cfg.index_domain()),
+          "AMR level-zero bootstrap materialization exceeds size_t");
+    } else {
+      const std::size_t parent_level = static_cast<std::size_t>(level - 1);
+      const auto subject_route = p_->bootstrap_subject_routes.find(
+          std::make_pair(subject_id, std::string("prolongation")));
+      const auto route = p_->bootstrap_transfer_routes.find(subject_route->second);
+      const amr::transfer::TransferKind kind = route->second.kernel == "conservative_linear"
+                                                   ? amr::transfer::TransferKind::LinearProlongation
+                                                   : amr::transfer::TransferKind::ConstantInjection;
+      transfer_materialization = prepare_regridded_state_transfer(
+          p_->multiblock_hierarchy->state(block_index, parent_level),
+          p_->engine->hierarchy().layout(parent_level),
+          p_->engine->hierarchy().layout(static_cast<std::size_t>(level)),
+          std::optional<SparseFieldImage<Dim>>{}, kind, communicator.rank());
+      candidate = &transfer_materialization->child;
+      materialized =
+          checked_size_product(static_cast<std::size_t>(block->ncomp),
+                               static_cast<std::size_t>(checked_layout_cells(target.layout())),
+                               "AMR fine bootstrap materialization exceeds size_t");
+    }
+  } catch (...) {
+    preparation_error = std::current_exception();
+  }
+  require_collective_success(preparation_error, "materialization preparation");
+
+  std::exception_ptr execution_error;
+  try {
+    if (analytic_materialization)
+      (void)analytic::materialize_cell_average(*analytic_materialization, communicator);
+    else if (transfer_materialization)
+      execute_regridded_state_transfer(*transfer_materialization, communicator);
+  } catch (...) {
+    execution_error = std::current_exception();
+  }
+  require_collective_success(execution_error, "materialization execution");
+  if (candidate == nullptr)
+    throw std::logic_error("AMR bootstrap materialization produced no collective candidate");
+
+  std::exception_ptr publication_error;
+  try {
+    copy_full_field_in_place(*candidate, target);
+  } catch (...) {
+    publication_error = std::current_exception();
+  }
+  require_collective_success(publication_error, "materialization publication");
+  static_assert(noexcept(p_->bootstrap_materialized_actions.swap(candidate_materialized_actions)));
+  p_->bootstrap_materialized_actions.swap(candidate_materialized_actions);
+  p_->discard_level_evaluations();
+  return materialized;
+}
+
+template <int Dim>
 runtime::amr::PreparedTaggerCandidates<Dim> AmrSystem<Dim>::execute_prepared_tagging(
     int parent_level) {
   p_->ensure_engine();
@@ -7901,6 +8531,19 @@ void AmrSystem<Dim>::begin_bootstrap_plan() {
     throw std::logic_error("AmrSystem bootstrap requires a prepared tagging authority");
   if (p_->bootstrap_transaction)
     throw std::logic_error("AmrSystem bootstrap transaction is already active");
+  if (!p_->bootstrap_materialized_actions.empty())
+    throw std::logic_error("AmrSystem bootstrap retained stale materialization actions");
+  if (p_->bootstrap_sources.size() != p_->blocks.size())
+    throw std::logic_error(
+        "AmrSystem explicit bootstrap requires one authenticated initial source per block");
+  std::set<std::string> source_blocks;
+  for (const auto& [subject, source] : p_->bootstrap_sources) {
+    (void)subject;
+    if (source.kind == Impl::BootstrapSourceKind::unstaged ||
+        !source_blocks.insert(source.runtime_block).second)
+      throw std::logic_error(
+          "AmrSystem explicit bootstrap sources do not uniquely cover the runtime blocks");
+  }
   p_->ensure_engine();
   auto transaction = std::make_unique<typename Impl::AcceptedSnapshot>(*p_);
   runtime::amr::PersistentTaggingState<Dim> staged_state = p_->tagging_state;
@@ -7918,6 +8561,11 @@ bool AmrSystem<Dim>::bootstrap_next_level() {
   const int parent_level = static_cast<int>(p_->engine->hierarchy().num_levels()) - 1;
   if (parent_level >= p_->cfg.level_count - 1)
     throw std::out_of_range("AmrSystem bootstrap would exceed the resolved hierarchy depth");
+  for (const auto& [subject, source] : p_->bootstrap_sources) {
+    (void)source;
+    if (!p_->bootstrap_materialized_actions.contains(std::make_pair(subject, parent_level)))
+      throw std::logic_error("AmrSystem bootstrap cannot tag an unmaterialized parent source");
+  }
   return p_->regrid_parent(parent_level, std::nullopt, &p_->tagging_state);
 }
 
@@ -7927,18 +8575,50 @@ void AmrSystem<Dim>::commit_bootstrap_level() {
     throw std::logic_error("AmrSystem bootstrap commit has no active transaction");
   if (p_->accepted_time != 0.0 || p_->macro_step != 0)
     throw std::logic_error("AmrSystem bootstrap commit requires the accepted t=0/step=0 state");
+  for (const auto& [subject, source] : p_->bootstrap_sources) {
+    (void)source;
+    for (std::size_t level = 0; level < p_->engine->hierarchy().num_levels(); ++level)
+      if (!p_->bootstrap_materialized_actions.contains(
+              std::make_pair(subject, static_cast<int>(level))))
+        throw std::logic_error(
+            "AmrSystem bootstrap commit requires every live source level to be materialized");
+  }
   p_->program.refresh_hierarchy_state("AmrSystem::commit_bootstrap_level");
   p_->publish_tagging_checkpoint();
   p_->bootstrap_transaction.reset();
+  p_->bootstrap_materialized_actions.clear();
   p_->automatic_bootstrap_complete = true;
 }
 
 template <int Dim>
 void AmrSystem<Dim>::rollback_bootstrap_level() {
-  if (!p_->bootstrap_transaction)
-    throw std::logic_error("AmrSystem bootstrap rollback has no active transaction");
-  p_->bootstrap_transaction->restore(*p_);
-  p_->bootstrap_transaction.reset();
+  if (!p_->multiblock_hierarchy)
+    throw std::logic_error("AmrSystem bootstrap rollback has no prepared execution lane");
+  const CommunicatorView communicator = p_->multiblock_hierarchy->lane().communicator();
+  const long missing = all_reduce_sum(p_->bootstrap_transaction ? 0L : 1L, communicator);
+  if (missing != 0) {
+    p_->bootstrap_transaction.reset();
+    p_->bootstrap_materialized_actions.clear();
+    (void)all_reduce_sum(0L, communicator);
+    throw std::logic_error("AmrSystem bootstrap rollback transaction differs between ranks");
+  }
+  std::unique_ptr<typename Impl::AcceptedSnapshot> transaction =
+      std::move(p_->bootstrap_transaction);
+  std::exception_ptr local_error;
+  try {
+    transaction->restore(*p_);
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  transaction.reset();
+  p_->bootstrap_materialized_actions.clear();
+  const long failures = all_reduce_sum(local_error ? 1L : 0L, communicator);
+  if (failures == 0)
+    return;
+  if (communicator.size() == 1 && local_error)
+    std::rethrow_exception(local_error);
+  throw std::runtime_error("AmrSystem bootstrap rollback failed collectively on " +
+                           std::to_string(failures) + " rank(s)");
 }
 
 template <int Dim>
@@ -10786,6 +11466,19 @@ template void AmrSystem<kNativeDimension>::set_density(const std::string&,
                                                        const std::vector<double>&);
 template void AmrSystem<kNativeDimension>::set_conservative_state(const std::string&,
                                                                   const std::vector<double>&);
+template void AmrSystem<kNativeDimension>::bind_bootstrap_subject(const std::string&,
+                                                                  const std::string&,
+                                                                  const std::string&);
+template void AmrSystem<kNativeDimension>::stage_bootstrap_analytic_state(
+    const std::string&, const std::string&, const std::string&, const std::string&,
+    const std::string&, const analytic::AnalyticOpcodeRows&, const analytic::AnalyticLiteralRows&);
+template void AmrSystem<kNativeDimension>::stage_bootstrap_array(
+    const std::string&, const std::string&, const std::string&, const std::string&, int,
+    const Extent<kNativeDimension>&, const std::vector<double>&);
+template std::size_t AmrSystem<kNativeDimension>::materialize_bootstrap_action(const std::string&,
+                                                                               const std::string&,
+                                                                               const std::string&,
+                                                                               int);
 template void AmrSystem<kNativeDimension>::add_dt_bound(const std::string&,
                                                         std::function<double()>);
 template std::string AmrSystem<kNativeDimension>::last_dt_bound() const;

@@ -64,6 +64,31 @@ class PreparedMultiBlockAmrHierarchy {
     std::string exact_collective_contract;
   };
 
+  class PreparedRestore {
+   public:
+    PreparedRestore(const PreparedRestore&) = delete;
+    PreparedRestore& operator=(const PreparedRestore&) = delete;
+    PreparedRestore(PreparedRestore&&) noexcept = default;
+    PreparedRestore& operator=(PreparedRestore&&) noexcept = default;
+
+   private:
+    friend class PreparedMultiBlockAmrHierarchy;
+
+    PreparedRestore() = default;
+
+    PreparedMultiBlockAmrHierarchy* owner = nullptr;
+    std::vector<AdditionalBlock> additional;
+    std::optional<typename engine_type::PreparedRestorePublication> primary_publication;
+    std::uint64_t accepted_revision = 0;
+    std::uint64_t source_accepted_revision = 0;
+    std::string source_collective_contract;
+    std::string collective_contract;
+    std::string canonical_program_contract;
+    std::string coupling_registry_contract;
+    std::string restore_contract;
+    bool collectively_authenticated = false;
+  };
+
   PreparedMultiBlockAmrHierarchy(const PreparedMultiBlockAmrHierarchy&) = delete;
   PreparedMultiBlockAmrHierarchy& operator=(const PreparedMultiBlockAmrHierarchy&) = delete;
   PreparedMultiBlockAmrHierarchy(PreparedMultiBlockAmrHierarchy&&) noexcept = default;
@@ -500,63 +525,93 @@ class PreparedMultiBlockAmrHierarchy {
     return {primary_->snapshot(), additional_, accepted_revision_, collective_contract_};
   }
 
-  /// Restore both the canonical topology and every secondary carrier.  A candidate copy is prepared
-  /// and authenticated collectively before topology publication, so every post-consensus state
-  /// transition is a no-allocation move/swap.
-  void restore(const Snapshot& snapshot) {
+  /// Build the entire topology/carrier rollback image without entering the owning lane.
+  PreparedRestore prepare_restore(const Snapshot& snapshot) {
+    PreparedRestore prepared;
+    prepared.owner = this;
+    prepared.additional = snapshot.additional;
+    validate_snapshot_carriers_(snapshot.primary.hierarchy, prepared.additional, additional_);
+    prepared.primary_publication.emplace(primary_->prepare_restore_publication(snapshot.primary));
+    prepared.collective_contract = exact_hierarchy_contract_(
+        prepared.primary_publication->hierarchy(), prepared.primary_publication->spatial_contract(),
+        primary_identity_, prepared.additional, lane_contract_identity_);
+    if (snapshot.exact_collective_contract != prepared.collective_contract) {
+      const auto mismatch = std::mismatch(
+          snapshot.exact_collective_contract.begin(), snapshot.exact_collective_contract.end(),
+          prepared.collective_contract.begin(), prepared.collective_contract.end());
+      throw std::invalid_argument(
+          "prepared multi-block AMR snapshot collective contract is not authentic at byte " +
+          std::to_string(static_cast<std::size_t>(mismatch.first -
+                                                  snapshot.exact_collective_contract.begin())) +
+          " (snapshot bytes=" + std::to_string(snapshot.exact_collective_contract.size()) +
+          ", restored bytes=" + std::to_string(prepared.collective_contract.size()) + ")");
+    }
+    prepared.canonical_program_contract = exact_canonical_program_contract_(
+        prepared.collective_contract, primary_identity_, prepared.additional);
+    if (couplings_sealed_)
+      prepared.coupling_registry_contract =
+          exact_coupling_registry_contract_(prepared.collective_contract);
+    ExactContractBuilder contract;
+    contract.text("pops.prepared-multiblock-amr.restore")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .bytes(collective_contract_)
+        .bytes(prepared.collective_contract)
+        .scalar(snapshot.accepted_revision);
+    prepared.restore_contract = std::move(contract).release();
+    prepared.accepted_revision = snapshot.accepted_revision;
+    prepared.source_accepted_revision = accepted_revision_;
+    prepared.source_collective_contract = collective_contract_;
+    return prepared;
+  }
+
+  /// Authenticate one fully prepared restore on the owning lane without publishing it.
+  void execute_prepared_restore(PreparedRestore& prepared) const {
     std::exception_ptr local_error;
-    std::vector<AdditionalBlock> candidate;
-    std::optional<typename engine_type::PreparedRestorePublication> primary_publication;
-    std::string next_collective_contract;
-    std::string next_program_contract;
-    std::string next_coupling_registry_contract;
-    std::string restore_contract;
     try {
-      candidate = snapshot.additional;
-      validate_snapshot_carriers_(snapshot.primary.hierarchy, candidate, additional_);
-      primary_publication.emplace(primary_->prepare_restore_publication(snapshot.primary));
-      next_collective_contract = exact_hierarchy_contract_(
-          primary_publication->hierarchy(), primary_publication->spatial_contract(),
-          primary_identity_, candidate, lane_contract_identity_);
-      if (snapshot.exact_collective_contract != next_collective_contract) {
-        const auto mismatch = std::mismatch(
-            snapshot.exact_collective_contract.begin(), snapshot.exact_collective_contract.end(),
-            next_collective_contract.begin(), next_collective_contract.end());
-        throw std::invalid_argument(
-            "prepared multi-block AMR snapshot collective contract is not authentic at byte " +
-            std::to_string(static_cast<std::size_t>(mismatch.first -
-                                                    snapshot.exact_collective_contract.begin())) +
-            " (snapshot bytes=" + std::to_string(snapshot.exact_collective_contract.size()) +
-            ", restored bytes=" + std::to_string(next_collective_contract.size()) + ")");
-      }
-      next_program_contract =
-          exact_canonical_program_contract_(next_collective_contract, primary_identity_, candidate);
-      if (couplings_sealed_)
-        next_coupling_registry_contract =
-            exact_coupling_registry_contract_(next_collective_contract);
-      ExactContractBuilder contract;
-      contract.text("pops.prepared-multiblock-amr.restore")
-          .scalar(std::uint32_t{1})
-          .scalar(std::int32_t{Dim})
-          .bytes(collective_contract_)
-          .bytes(next_collective_contract)
-          .scalar(snapshot.accepted_revision);
-      restore_contract = std::move(contract).release();
+      if (prepared.owner != this || !prepared.primary_publication ||
+          prepared.source_accepted_revision != accepted_revision_ ||
+          prepared.source_collective_contract != collective_contract_)
+        throw std::invalid_argument("prepared multi-block AMR restore publication is stale");
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    collectively_rethrow_(local_error,
+                          "prepared multi-block AMR restore execution failed collectively");
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{std::string_view("prepared-multiblock-amr-restore"), prepared.restore_contract}},
+            lane_))
+      throw std::invalid_argument("prepared multi-block AMR restore differs between MPI ranks");
+    prepared.collectively_authenticated = true;
+  }
+
+  /// Publish an authenticated restore using only no-allocation moves/swaps.
+  void publish_prepared_restore(PreparedRestore&& prepared) noexcept {
+    if (prepared.owner != this || !prepared.collectively_authenticated ||
+        !prepared.primary_publication || prepared.source_accepted_revision != accepted_revision_ ||
+        prepared.source_collective_contract != collective_contract_)
+      std::terminate();
+    primary_->publish_prepared_restore(std::move(*prepared.primary_publication));
+    additional_.swap(prepared.additional);
+    accepted_revision_ = prepared.accepted_revision;
+    collective_contract_.swap(prepared.collective_contract);
+    canonical_program_contract_.swap(prepared.canonical_program_contract);
+    if (couplings_sealed_)
+      coupling_registry_contract_.swap(prepared.coupling_registry_contract);
+  }
+
+  /// Restore both the canonical topology and every secondary carrier through explicit phases.
+  void restore(const Snapshot& snapshot) {
+    std::optional<PreparedRestore> prepared;
+    std::exception_ptr local_error;
+    try {
+      prepared.emplace(prepare_restore(snapshot));
     } catch (...) {
       local_error = std::current_exception();
     }
     collectively_rethrow_(local_error, "prepared multi-block AMR restore failed collectively");
-    if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{std::string_view("prepared-multiblock-amr-restore"), restore_contract}}, lane_))
-      throw std::invalid_argument("prepared multi-block AMR restore differs between MPI ranks");
-
-    primary_->publish_prepared_restore(std::move(*primary_publication));
-    additional_.swap(candidate);
-    accepted_revision_ = snapshot.accepted_revision;
-    collective_contract_.swap(next_collective_contract);
-    canonical_program_contract_.swap(next_program_contract);
-    if (couplings_sealed_)
-      coupling_registry_contract_.swap(next_coupling_registry_contract);
+    execute_prepared_restore(*prepared);
+    publish_prepared_restore(std::move(*prepared));
   }
 
  private:

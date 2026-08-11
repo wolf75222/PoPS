@@ -13,6 +13,7 @@
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams (compiled-Program runtime params on AMR, ADC-508)
 #include <pops/runtime/config/spatial_domain.hpp>
 #include <pops/runtime/amr_patch.hpp>
+#include <pops/runtime/analytic/initial_materialization.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/runtime/numerical_defaults.hpp>
 #include <pops/runtime/amr/prepared_tagging_execution.hpp>
@@ -666,6 +667,29 @@ class AmrSystem {
   /// @throws std::runtime_error if the system is already built, if U is empty, or if its size
   ///         is not a multiple of the exact-ranked coarse cell count.
   void set_conservative_state(const std::string& name, const std::vector<double>& U);
+  /// Authenticate one resolved initial-condition subject against its exact runtime block before
+  /// staging its payload.  The subject must be the already-installed state route for that block.
+  void bind_bootstrap_subject(const std::string& subject_id, const std::string& runtime_block,
+                              const std::string& source_route);
+  /// Stage one canonical analytic initial state.  Native code validates and compiles one postfix
+  /// program per conservative component; the accepted programs are materialized by the existing
+  /// hierarchy bootstrap path before Tagger execution.
+  void stage_bootstrap_analytic_state(const std::string& subject_id,
+                                      const std::string& runtime_block, const std::string& space,
+                                      const std::string& centering, const std::string& projection,
+                                      const analytic::AnalyticOpcodeRows& opcodes,
+                                      const analytic::AnalyticLiteralRows& literals);
+  /// Stage one exact-rank conservative array.  @p spatial_shape is the native spatial extent and
+  /// @p components is its leading conservative-component count, both checked before publication.
+  void stage_bootstrap_array(const std::string& subject_id, const std::string& runtime_block,
+                             const std::string& space, const std::string& centering, int components,
+                             const Extent<Dim>& spatial_shape, const std::vector<double>& values);
+  /// Materialize one authenticated InitialConditionPlan action into the live hierarchy.  This is
+  /// the only bootstrap source execution seam: level zero consumes the staged source, analytic
+  /// fine levels re-evaluate that same source, and array fine levels consume their registered
+  /// conservative transfer provider.  The active bootstrap snapshot owns rollback of every write.
+  std::size_t materialize_bootstrap_action(const std::string& subject_id, const std::string& action,
+                                           const std::string& action_route, int level);
   void begin_bootstrap_plan();
   bool bootstrap_next_level();  ///< execute the next exact ranked transition if tagged
   void commit_bootstrap_level();

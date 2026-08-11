@@ -5,6 +5,7 @@ The negative seed distinguishes magnitude tagging from ordinary ``Above``:
 fine level through the same prepared Kokkos tagging program used by bound AMR
 simulations.
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -75,7 +76,7 @@ def _install_state_transfer_routes(simulation, subject):
             ghost_depth * 2,
             [2, 2],
         )
-    simulation._s._bind_bootstrap_block_subject(subject, "tracer")
+    simulation._s._bind_bootstrap_subject(subject, "tracer", "bound_level_zero")
 
 
 def _native_hierarchy(node_type):
@@ -110,11 +111,18 @@ def _native_hierarchy(node_type):
         clock_identity="case::native-magnitude-tagging-clock",
     )
     values = np.zeros((N, N), dtype=np.float64)
-    values[N // 2 - 2:N // 2 + 2, N // 2 - 2:N // 2 + 2] = -1.0
-    simulation.set_density("tracer", values)
+    values[N // 2 - 2 : N // 2 + 2, N // 2 - 2 : N // 2 + 2] = -1.0
     _install_state_transfer_routes(simulation, subject)
+    simulation._s._stage_bootstrap_array(subject, "tracer", "cell", "cell", values[np.newaxis, ...])
     simulation._s._begin_bootstrap_plan()
+    simulation._s._materialize_bootstrap_action(
+        subject, "initialize_level_zero", "bound_level_zero", 0
+    )
     created = bool(simulation._s._bootstrap_next_level())
+    if created:
+        simulation._s._materialize_bootstrap_action(
+            subject, "prolong_from_parent", "conservative_linear", 1
+        )
     simulation._s._commit_bootstrap_level()
     return simulation, created
 

@@ -284,16 +284,31 @@ RunResult advance_with_floor(double positivity_floor) {
                                 static_cast<double>(pops::kWenoEpsilon), false, kProviderConsumer);
   pops::test::install_prepared_threshold_union(system, {{"density", "rho", 0.25}},
                                                "test.amr.positivity.tagging@1");
-  system.set_conservative_state("density", contrast_state(system_config.shape));
+  constexpr const char* state_route = "test.amr.positivity/state/density";
+  system.bind_bootstrap_subject(state_route, "density", "bound_level_zero");
+  system.stage_bootstrap_array(state_route, "density", "cell", "cell", 1, system_config.shape,
+                               contrast_state(system_config.shape));
+  pops::Extent<Dim> transfer_ghosts{};
+  for (int axis = 0; axis < Dim; ++axis)
+    transfer_ghosts[axis] = 1;
+  system.register_bootstrap_transfer_route("test.amr.positivity/bootstrap/prolongation",
+                                           {state_route}, "test.amr.positivity/bootstrap/provider",
+                                           "cell", "cell", "conservative", "dense", "prolongation",
+                                           "conservative_linear", 2, transfer_ghosts,
+                                           system_config.transition_ratios.front());
   const std::vector<double> speed(cell_count(system_config.shape), 1.0);
   system.stage_auxiliary_input(speed_key, speed);
   system.refresh_auxiliary({"test.amr.positivity.clock", 0, 0, 0, 0, 0, 0,
                             pops::runtime::system::AuxiliaryEvaluationEvent::initialization});
   system.begin_bootstrap_plan();
+  (void)system.materialize_bootstrap_action(state_route, "initialize_level_zero",
+                                            "bound_level_zero", 0);
   if (!system.bootstrap_next_level()) {
     system.rollback_bootstrap_level();
     throw std::runtime_error("positivity test tagging did not create its refined level");
   }
+  (void)system.materialize_bootstrap_action(state_route, "prolong_from_parent",
+                                            "conservative_linear", 1);
   system.commit_bootstrap_level();
   system.stage_auxiliary_input(speed_key, speed);
   system.refresh_auxiliary({"test.amr.positivity.clock", 0, 0, 0, 0, 0, 0,

@@ -39,6 +39,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <functional>
 #include <limits>
 #include <map>
@@ -47,6 +48,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -401,6 +403,122 @@ struct ProgramRuntimeState {
     HistoryManager<Dim> history;
     bool artifact_backed = false;
   };
+
+  /// Complete accepted-state rollback candidate. Static artifact closures and installation
+  /// authorities deliberately remain live; only state that an accepted attempt may mutate is
+  /// copied. The profiler candidate retains the live profiler lock from preparation to publication.
+  class PreparedProgramAcceptedRestore {
+   public:
+    PreparedProgramAcceptedRestore(const PreparedProgramAcceptedRestore&) = delete;
+    PreparedProgramAcceptedRestore& operator=(const PreparedProgramAcceptedRestore&) = delete;
+    PreparedProgramAcceptedRestore(PreparedProgramAcceptedRestore&&) noexcept = default;
+    PreparedProgramAcceptedRestore& operator=(PreparedProgramAcceptedRestore&&) noexcept = default;
+
+   private:
+    friend struct ProgramRuntimeState;
+
+    PreparedProgramAcceptedRestore(ProgramRuntimeState& owner, const ProgramRuntimeState& accepted)
+        : owner_(&owner),
+          cadence_window_dt_(accepted.cadence_window_dt_),
+          cadence_window_steps_(accepted.cadence_window_steps_),
+          cadence_window_start_time_(accepted.cadence_window_start_time_),
+          cadence_dispatch_active_(accepted.cadence_dispatch_active_),
+          cadence_clock_restore_pending_(accepted.cadence_clock_restore_pending_),
+          cadence_clock_restore_dt_(accepted.cadence_clock_restore_dt_),
+          cadence_clock_restore_steps_(accepted.cadence_clock_restore_steps_),
+          cadence_clock_restore_start_time_(accepted.cadence_clock_restore_start_time_),
+          cadence_clock_restore_last_dt_(accepted.cadence_clock_restore_last_dt_),
+          cadence_clock_restore_accepted_time_(accepted.cadence_clock_restore_accepted_time_),
+          cadence_clock_restore_macro_step_(accepted.cadence_clock_restore_macro_step_),
+          last_dt_(accepted.last_dt_),
+          diagnostics_(accepted.diagnostics_),
+          step_balance_terms_(accepted.step_balance_terms_),
+          automatic_balance_terms_(accepted.automatic_balance_terms_),
+          automatic_balance_due_(accepted.automatic_balance_due_),
+          balance_due_window_active_(accepted.balance_due_window_active_),
+          balance_due_target_step_(accepted.balance_due_target_step_),
+          balance_replay_active_(accepted.balance_replay_active_),
+          balance_step_completed_(accepted.balance_step_completed_),
+          balance_program_was_due_(accepted.balance_program_was_due_),
+          step_projections_(accepted.step_projections_),
+          block_params_(accepted.block_params_),
+          cache_(accepted.cache_),
+          hist_(accepted.hist_),
+          profiler_restore_(owner.profiler_.prepare_restore(accepted.profiler_)) {}
+
+    ProgramRuntimeState* owner_ = nullptr;
+    double cadence_window_dt_ = 0.0;
+    int cadence_window_steps_ = 0;
+    double cadence_window_start_time_ = 0.0;
+    bool cadence_dispatch_active_ = false;
+    bool cadence_clock_restore_pending_ = false;
+    double cadence_clock_restore_dt_ = 0.0;
+    int cadence_clock_restore_steps_ = 0;
+    double cadence_clock_restore_start_time_ = 0.0;
+    double cadence_clock_restore_last_dt_ = 0.0;
+    double cadence_clock_restore_accepted_time_ = 0.0;
+    int cadence_clock_restore_macro_step_ = 0;
+    Real last_dt_ = Real(0);
+    std::map<std::string, Real> diagnostics_;
+    std::map<std::string, Real> step_balance_terms_;
+    std::map<AutomaticBalanceKey, Real> automatic_balance_terms_;
+    bool automatic_balance_due_ = false;
+    bool balance_due_window_active_ = false;
+    int balance_due_target_step_ = 0;
+    bool balance_replay_active_ = false;
+    bool balance_step_completed_ = false;
+    bool balance_program_was_due_ = false;
+    std::vector<std::string> step_projections_;
+    std::map<int, RuntimeParams> block_params_;
+    CacheManager<Dim> cache_;
+    HistoryManager<Dim> hist_;
+    Profiler::PreparedRestore profiler_restore_;
+  };
+
+  PreparedProgramAcceptedRestore prepare_accepted_restore(const ProgramRuntimeState& accepted) {
+    if (this == &accepted)
+      throw std::invalid_argument(
+          "Program accepted restore requires an independent accepted image");
+    return PreparedProgramAcceptedRestore(*this, accepted);
+  }
+
+  void publish_prepared_accepted_restore(PreparedProgramAcceptedRestore&& prepared) noexcept {
+    if (prepared.owner_ != this)
+      std::terminate();
+    static_assert(noexcept(diagnostics_.swap(prepared.diagnostics_)));
+    static_assert(noexcept(step_balance_terms_.swap(prepared.step_balance_terms_)));
+    static_assert(noexcept(automatic_balance_terms_.swap(prepared.automatic_balance_terms_)));
+    static_assert(noexcept(step_projections_.swap(prepared.step_projections_)));
+    static_assert(noexcept(block_params_.swap(prepared.block_params_)));
+    static_assert(std::is_nothrow_swappable_v<CacheManager<Dim>>);
+    static_assert(std::is_nothrow_swappable_v<HistoryManager<Dim>>);
+    cadence_window_dt_ = prepared.cadence_window_dt_;
+    cadence_window_steps_ = prepared.cadence_window_steps_;
+    cadence_window_start_time_ = prepared.cadence_window_start_time_;
+    cadence_dispatch_active_ = prepared.cadence_dispatch_active_;
+    cadence_clock_restore_pending_ = prepared.cadence_clock_restore_pending_;
+    cadence_clock_restore_dt_ = prepared.cadence_clock_restore_dt_;
+    cadence_clock_restore_steps_ = prepared.cadence_clock_restore_steps_;
+    cadence_clock_restore_start_time_ = prepared.cadence_clock_restore_start_time_;
+    cadence_clock_restore_last_dt_ = prepared.cadence_clock_restore_last_dt_;
+    cadence_clock_restore_accepted_time_ = prepared.cadence_clock_restore_accepted_time_;
+    cadence_clock_restore_macro_step_ = prepared.cadence_clock_restore_macro_step_;
+    last_dt_ = prepared.last_dt_;
+    diagnostics_.swap(prepared.diagnostics_);
+    step_balance_terms_.swap(prepared.step_balance_terms_);
+    automatic_balance_terms_.swap(prepared.automatic_balance_terms_);
+    automatic_balance_due_ = prepared.automatic_balance_due_;
+    balance_due_window_active_ = prepared.balance_due_window_active_;
+    balance_due_target_step_ = prepared.balance_due_target_step_;
+    balance_replay_active_ = prepared.balance_replay_active_;
+    balance_step_completed_ = prepared.balance_step_completed_;
+    balance_program_was_due_ = prepared.balance_program_was_due_;
+    step_projections_.swap(prepared.step_projections_);
+    block_params_.swap(prepared.block_params_);
+    std::swap(cache_, prepared.cache_);
+    std::swap(hist_, prepared.hist_);
+    profiler_.publish_prepared_restore(std::move(prepared.profiler_restore_));
+  }
 
   const std::vector<int>& block_map() const noexcept { return block_map_; }
 
