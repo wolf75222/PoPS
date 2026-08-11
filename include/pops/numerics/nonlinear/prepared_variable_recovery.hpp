@@ -11,11 +11,18 @@
 
 #include <pops/core/foundation/types.hpp>
 #include <pops/core/model/physical_model.hpp>
+#include <pops/core/state/state.hpp>
 #include <pops/numerics/nonlinear/prepared_local_nonlinear.hpp>
+#include <pops/physics/admissibility/admissibility.hpp>
+#include <pops/physics/inversion/inversion.hpp>
 
+#include <array>
 #include <cstdint>
 #include <limits>
+#include <string>
+#include <string_view>
 #include <type_traits>
+#include <utility>
 
 namespace pops {
 
@@ -449,8 +456,8 @@ struct ClosedFormDeclaredRecoveryMethod {
   static constexpr RecoveryMethodKind kind = RecoveryMethodKind::kClosedForm;
   Model model;
 
-  POPS_HD RecoveryMethodResult<Model::n_vars> operator()(
-      const Real (&conserved)[Model::n_vars], const Real (&)[Model::n_vars]) const {
+  POPS_HD RecoveryMethodResult<Model::n_vars> operator()(const Real (&conserved)[Model::n_vars],
+                                                         const Real (&)[Model::n_vars]) const {
     typename Model::State state{};
     for (int component = 0; component < Model::n_vars; ++component)
       state[component] = conserved[component];
@@ -533,6 +540,216 @@ POPS_HD constexpr auto prepare_model_variable_recovery(const Model& model) {
                                         recovery_methods(IdentityModelRecoveryMethod<N>{}));
   }
 }
+
+/// Typed source failure at the boundary between a model conversion and the generic inversion
+/// authority.  Detailed candidate validity never crosses this boundary: it is owned exclusively
+/// by AdmissibleSet below.
+enum class VariableRecoveryInversionFailure : std::uint8_t {
+  kSourceRejected = 1,
+};
+
+template <class Model>
+using ModelRecoveryCandidateType = typename Model::Prim;
+
+/// Concrete inversion source for a model's declared conservative-to-primitive conversion.
+///
+/// This is an inversion source, not an admissibility adapter.  It deliberately reports only
+/// whether the model produced a detached candidate; finite, physical and projected acceptance are
+/// all decided later by the prepared generic authorities.
+template <class Model>
+struct ModelVariableInversionSource {
+  static_assert(HasPrimitiveVars<Model>,
+                "model variable inversion requires an explicit primitive conversion contract");
+  static constexpr int dimension = Model::dimension;
+
+  Model model;
+
+  static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"pops.runtime.model-variable-inversion", 1};
+  }
+
+  void serialize_exact_parameters(ExactContractBuilder& contract) const {
+    contract.scalar(std::uint32_t{1}).scalar(std::int32_t{Model::n_vars});
+    if constexpr (requires(const Model& value, ExactContractBuilder& builder) {
+                    value.serialize_exact_parameters(builder);
+                  })
+      model.serialize_exact_parameters(contract);
+  }
+
+  POPS_HD InversionResult<ModelRecoveryCandidateType<Model>, VariableRecoveryInversionFailure>
+  operator()(const typename Model::State& state, const ProviderValues<0>&,
+             InversionWorkspaceView) const {
+    // The conversion formula produces only a detached candidate. Finite and model predicates are
+    // deliberately evaluated later by the one ordered AdmissibleSet authority.
+    return InversionResult<ModelRecoveryCandidateType<Model>,
+                           VariableRecoveryInversionFailure>::success(model.to_primitive(state));
+  }
+};
+
+/// Device-clean model-declared admissibility predicate.  This provider is only materialized as a
+/// ModelInequality member of the ordered AdmissibleSet; recovery never invokes the model predicate
+/// as a second validation authority.
+template <class Model>
+struct ModelRecoveryAdmissibilityProvider {
+  Model model;
+
+  static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    if constexpr (requires {
+                    {
+                      Model::provider_identity()
+                    } noexcept -> std::same_as<PreparedProviderIdentity>;
+                  })
+      return Model::provider_identity();
+    return {"pops.runtime.model-recovery-admissibility", 1};
+  }
+
+  void serialize_exact_parameters(ExactContractBuilder& contract) const {
+    contract.scalar(std::uint32_t{1}).scalar(std::int32_t{Model::n_vars});
+    if constexpr (requires(const Model& value, ExactContractBuilder& builder) {
+                    value.serialize_exact_parameters(builder);
+                  })
+      model.serialize_exact_parameters(contract);
+  }
+
+  POPS_HD bool operator()(const typename Model::Prim& candidate) const {
+    int ignored_failing_component = -1;
+    return model.recovery_admissible(candidate, &ignored_failing_component);
+  }
+};
+
+/// The sole ordered admissibility authority for a prepared model recovery.  The generic finite
+/// declaration always runs first; a model declaration, when present, is a typed second constraint
+/// with exact provider/model identity rather than an out-of-band recovery predicate.
+template <class Model>
+auto prepare_model_recovery_admissibility(const Model& model) {
+  constexpr int N = Model::n_vars;
+  if constexpr (HasRecoveryAdmissibility<Model>) {
+    return AdmissibleSet(FiniteComponents<0, N>{1},
+                         CustomInequality<ModelRecoveryAdmissibilityProvider<Model>>{
+                             ModelRecoveryAdmissibilityProvider<Model>{model}, 2});
+  } else {
+    return AdmissibleSet(FiniteComponents<0, N>{1});
+  }
+}
+
+/// Detached recovery decision with observable projection activity.
+template <int N>
+struct PreparedVariableRecoveryAttempt {
+  RecoveryOutcome<N> outcome{};
+  bool projection_attempted = false;
+  bool projection_changed = false;
+};
+
+/// Uniform's prepared generic variable recovery authority.
+///
+/// The inversion owns its reusable backend allocation.  Candidates are detached until the ordered
+/// AdmissibleSet accepts them at the scheduled acceptance phase; RecoveryPublicationTransaction
+/// remains the only point that can publish either the accepted value or its warm-start image.
+template <class Model>
+class PreparedModelVariableInversionRecovery final {
+ public:
+  static_assert(HasPrimitiveVars<Model>,
+                "prepared model recovery requires an explicit primitive conversion contract");
+  static_assert(Model::dimension >= 1 && Model::dimension <= 3,
+                "prepared variable recovery requires an exact native dimension");
+
+  static constexpr int N = Model::n_vars;
+  using State = typename Model::State;
+  using Candidate = ModelRecoveryCandidateType<Model>;
+  using Inputs = ProviderValues<0>;
+  using Problem = VariableInversionProblem<Model::dimension, State, Inputs, Candidate,
+                                           VariableRecoveryInversionFailure>;
+  using Inversion = PreparedVariableInversion<Problem, ModelVariableInversionSource<Model>>;
+  using Admissibility =
+      decltype(prepare_model_recovery_admissibility(std::declval<const Model&>()));
+  using Enforcement = PreparedAdmissibilityEnforcement<Candidate, Inputs, Admissibility>;
+
+  explicit PreparedModelVariableInversionRecovery(const Model& model)
+      : inversion_(Problem{"conservative-state",
+                           "recovery-inputs",
+                           "primitive-candidate",
+                           "variable-inversion-failure",
+                           {sizeof(Real) * static_cast<std::size_t>(N), alignof(Real)}},
+                   ModelVariableInversionSource<Model>{model}),
+        enforcement_(prepare_model_recovery_admissibility(model), acceptance_schedule_()) {
+    ExactContractBuilder contract;
+    contract.text("pops.prepared-model-variable-recovery")
+        .scalar(std::uint32_t{1})
+        .bytes(inversion_.collective_contract())
+        .bytes(enforcement_.collective_contract());
+    collective_contract_ = std::move(contract).release();
+  }
+
+  PreparedModelVariableInversionRecovery(const PreparedModelVariableInversionRecovery&) = delete;
+  PreparedModelVariableInversionRecovery& operator=(const PreparedModelVariableInversionRecovery&) =
+      delete;
+  PreparedModelVariableInversionRecovery(PreparedModelVariableInversionRecovery&&) noexcept =
+      default;
+  PreparedModelVariableInversionRecovery& operator=(
+      PreparedModelVariableInversionRecovery&&) noexcept = default;
+
+  [[nodiscard]] PreparedVariableRecoveryAttempt<N> recover(const Real (&conserved)[N]) {
+    PreparedVariableRecoveryAttempt<N> recovered;
+    recovered.outcome.attempted_methods = 1;
+    recovered.outcome.last_method = 0;
+    recovered.outcome.last_method_kind = RecoveryMethodKind::kClosedForm;
+
+    State state{};
+    for (int component = 0; component < N; ++component)
+      state[component] = conserved[component];
+
+    auto inversion_outcome = inversion_.attempt(state, Inputs{});
+    if (!inversion_outcome.succeeded()) {
+      const auto consumed = std::move(inversion_outcome).consume();
+      recovered.outcome.status = RecoveryStatus::kRejected;
+      recovered.outcome.cause = RecoveryCause::kExplicitRejection;
+      recovered.outcome.reason_code = static_cast<std::uint32_t>(consumed.failure());
+      return recovered;
+    }
+
+    const Candidate candidate = std::move(inversion_outcome).consume().candidate();
+    auto enforced = enforcement_.enforce(candidate, Inputs{}, EnforcementPhase::kAcceptance);
+    recovered.projection_attempted = enforced.projection_attempted;
+    recovered.projection_changed = enforced.projection_changed;
+    if (!enforced.checked) {
+      recovered.outcome.status = RecoveryStatus::kInvalidContract;
+      recovered.outcome.cause = RecoveryCause::kInvalidMethodAction;
+      return recovered;
+    }
+    if (!enforced.admissibility.accepted) {
+      recovered.outcome.status = RecoveryStatus::kRejected;
+      recovered.outcome.cause = RecoveryCause::kInadmissibleCandidate;
+      recovered.outcome.reason_code = enforced.admissibility.diagnostic_code;
+      return recovered;
+    }
+
+    for (int component = 0; component < N; ++component)
+      recovered.outcome.value[component] = enforced.candidate[component];
+    recovered.outcome.status = RecoveryStatus::kRecovered;
+    recovered.outcome.cause = RecoveryCause::kNone;
+    recovered.outcome.selected_method = 0;
+    recovered.outcome.selected_method_kind = RecoveryMethodKind::kClosedForm;
+    return recovered;
+  }
+
+  [[nodiscard]] const void* workspace_allocation_identity() const noexcept {
+    return inversion_.workspace_allocation_identity();
+  }
+  [[nodiscard]] std::string_view collective_contract() const noexcept {
+    return collective_contract_;
+  }
+
+ private:
+  static EnforcementSchedule acceptance_schedule_() {
+    std::array<EnforcementRule, EnforcementSchedule::phase_count> rules{};
+    rules[static_cast<std::size_t>(EnforcementPhase::kAcceptance)] = {true, false};
+    return EnforcementSchedule(rules);
+  }
+
+  Inversion inversion_;
+  Enforcement enforcement_;
+  std::string collective_contract_;
+};
 
 /// Adapter from the common ADC-750 prepared nonlinear provider to one explicit recovery method.
 /// Recoverable numerical failures advance the declared chain; fatal evaluation failures reject the

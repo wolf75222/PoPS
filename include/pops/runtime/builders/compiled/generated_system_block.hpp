@@ -622,20 +622,19 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
   result.primitive_to_conservative = [model](const double* primitive, double* conservative) {
     generated_system_detail::publish_conservative_state(model, primitive, conservative);
   };
-  const auto recovery_plan = prepare_model_variable_recovery(model);
-  result.conservative_to_primitive = [recovery_plan](const double* conservative,
-                                                     double* primitive) {
+  auto recovery = std::make_shared<PreparedModelVariableInversionRecovery<Model>>(model);
+  result.conservative_to_primitive = [recovery](const double* conservative, double* primitive) {
     Real input[Model::n_vars]{};
-    Real initial[Model::n_vars]{};
     for (int component = 0; component < Model::n_vars; ++component)
       input[component] = static_cast<Real>(conservative[component]);
-    const auto outcome = recover_prepared_variable(recovery_plan, input, initial);
+    const auto prepared = recovery->recover(input);
+    const RecoveryOutcome<Model::n_vars>& outcome = prepared.outcome;
     if (outcome.publication_permitted())
       for (int component = 0; component < Model::n_vars; ++component)
         primitive[component] = static_cast<double>(outcome.value[component]);
     return recovery_report(outcome);
   };
-  result.batch_conservative_to_primitive = make_uniform_recovery_consumer(model);
+  result.batch_conservative_to_primitive = make_uniform_variable_inversion_consumer(recovery);
 
   if constexpr (requires(const Model& value, const typename Model::State& state,
                          const ProviderValues<provider_count>& providers) {
