@@ -153,6 +153,38 @@ def test_external_tagger_native_backend_accepts_an_exact_gpu_target(tmp_path):
         TaggerProvider(mismatched)
 
 
+def test_external_tagger_host_mode_publishes_staging_for_cpu_and_device_targets(tmp_path):
+    host_capability = {
+        **TAGGER_CAPABILITY,
+        "execution_mode": "host",
+        "memory_spaces": ["host"],
+    }
+    cpu_component = _component(
+        tmp_path,
+        name="tagger-cpu-host-execution",
+        alias="tagger_cpu_host_execution",
+        interface=interfaces.Tagger,
+        device="cpu",
+        tagger_capability=host_capability,
+    )
+    assert TaggerProvider(cpu_component).inspect()["tagging_capability"][
+        "execution_mode"
+    ] == "host"
+
+    component = _component(
+        tmp_path,
+        name="tagger-cuda-host-execution",
+        alias="tagger_cuda_host_execution",
+        interface=interfaces.Tagger,
+        device="cuda",
+        tagger_capability=host_capability,
+    )
+
+    provider = TaggerProvider(component)
+    assert provider.inspect()["tagging_capability"]["execution_mode"] == "host"
+    assert provider.inspect()["tagging_capability"]["memory_spaces"] == ["host"]
+
+
 def _layout(authored, *, tagger, clustering, tagging=None, reflux=None):
     return AMR(
         grid=authored.grid,
@@ -509,6 +541,19 @@ def test_external_amr_provider_bind_fails_closed_without_native_mutation():
         "reflux": "transactional AmrRuntime<Dim> reflux ledger",
     }
     for role, frozen in providers.items():
+        if role == "tagger":
+            prepared = prepare_amr_provider_installation(
+                role=role,
+                frozen_binding=frozen,
+                layout_identity=layout_identity,
+                resolved_tagging_identity=graph_identity,
+            )
+            assert prepared.role == "tagger"
+            assert prepared.binding["runtime_installation"] == {
+                "schema_version": 1,
+                "protocol": "external_component",
+            }
+            continue
         with pytest.raises(
                 NotImplementedError,
                 match=r"external AMR %s component installation.*%s"

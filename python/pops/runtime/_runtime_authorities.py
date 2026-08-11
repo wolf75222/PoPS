@@ -892,16 +892,14 @@ def _install_amr_provider_authorities(engine: Any, install_plan: Any) -> None:
     """Authenticate every intrinsic AMR provider before retaining its authority."""
 
     providers = install_plan.amr_providers
-    if not isinstance(providers, Mapping) \
-            or tuple(providers) != ("clustering", "tagger", "reflux"):
-        raise ValueError(
-            "adaptive runtime requires exact clustering, tagger and reflux providers")
+    if not isinstance(providers, Mapping) or tuple(providers) != ("clustering", "tagger", "reflux"):
+        raise ValueError("adaptive runtime requires exact clustering, tagger and reflux providers")
     from pops.amr.providers import prepare_amr_provider_installation
 
     layout_identity = install_plan.artifact.layout_plan.qualified_id
     reports = {}
-    resolved_tagging = getattr(
-        getattr(install_plan, "bootstrap_plan", None), "tagging", None)
+    prepared_rows = {}
+    resolved_tagging = getattr(getattr(install_plan, "bootstrap_plan", None), "tagging", None)
     resolved_tagging_identity = getattr(resolved_tagging, "qualified_id", None)
     for role, frozen in providers.items():
         prepared = prepare_amr_provider_installation(
@@ -910,7 +908,52 @@ def _install_amr_provider_authorities(engine: Any, install_plan: Any) -> None:
             layout_identity=layout_identity,
             resolved_tagging_identity=resolved_tagging_identity,
         )
+        prepared_rows[prepared.role] = prepared
         reports[prepared.role] = MappingProxyType(prepared.binding)
+    tagger = prepared_rows["tagger"]
+    installation = tagger.binding.get("runtime_installation")
+    if isinstance(installation, Mapping) and installation.get("protocol") == "external_component":
+        component_id = tagger.binding.get("component_id")
+        installed = install_plan.components.get(component_id)
+        if installed is None:
+            raise ValueError(
+                "AMR Tagger requires exact component %r; it is not installed" % component_id
+            )
+        if installed.component_manifest.token != tagger.binding.get("component_manifest_identity"):
+            raise ValueError("AMR Tagger changed installed component manifest identity")
+        from pops._frozen_data import thaw_data
+        from pops.identity import canonical_bytes
+
+        interface = tagger.binding.get("native_interface")
+        if (
+            not isinstance(interface, Mapping)
+            or canonical_bytes(thaw_data(interface))
+            != canonical_bytes(thaw_data(installed.interface.to_data()))
+            or tagger.binding.get("interface_version") != installed.interface.version
+        ):
+            raise ValueError("AMR Tagger changed installed native interface identity/version")
+        if installed.native_handle is None:
+            raise ValueError("AMR Tagger component must be loaded before native installation")
+        native = getattr(engine, "_s", None)
+        install = getattr(native, "_install_amr_tagger_component", None)
+        if not callable(install):
+            raise NotImplementedError(
+                "the selected native AMR provider cannot install a Tagger component"
+            )
+        from pops.runtime._component_execution_context import component_execution_data
+        from pops.external.artifacts import _canonical_runtime_json
+
+        manifest_data = installed.runtime_contract.manifest_data
+        parameters_json = _canonical_runtime_json(manifest_data["parameters"])
+        target_json = _canonical_runtime_json(manifest_data["target"])
+
+        install(
+            installed.native_handle,
+            thaw_data(tagger.binding),
+            parameters_json,
+            target_json,
+            component_execution_data(install_plan.execution_context),
+        )
     engine._amr_provider_authorities = MappingProxyType(reports)
 
 

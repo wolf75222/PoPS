@@ -72,7 +72,8 @@ class SolveOutcome;
 
 namespace component {
 class LoadedComponent;
-}
+class PreparedExecutionContextV1;
+}  // namespace component
 
 class ObserverMpiLane;
 class ExecutionLane;
@@ -509,6 +510,16 @@ class AmrSystem {
       const std::vector<std::int32_t>& coarsen_ops, const std::vector<std::int32_t>& coarsen_args,
       int min_cycles, const std::string& equality_policy, const std::string& conflict_policy,
       const std::string& clock_identity, const std::string& provider_identity);
+  /// Install one authenticated native Tagger component. This private runtime seam selects the
+  /// candidate evaluator only; all policy and hierarchy publication remain in AmrSystem.
+  void install_tagger_component(
+      std::shared_ptr<component::LoadedComponent> component, const std::string& component_id,
+      const std::string& manifest_identity, std::uint32_t interface_version,
+      const std::string& provider_identity, const std::string& tagging_graph_identity,
+      const std::string& layout_identity, const std::string& clock_identity,
+      const std::string& execution_mode, const std::string& parameters_json,
+      const std::string& target_json,
+      std::shared_ptr<const component::PreparedExecutionContextV1> execution);
   /// Execute the immutable exact-ranked tagging program against one live parent level. The
   /// returned masks are owner-local candidates; no clustering, hysteresis, or topology mutation is
   /// performed by this inspection route.

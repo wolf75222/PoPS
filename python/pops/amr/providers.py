@@ -240,6 +240,10 @@ def _require_tagger_target_execution(component: Any, capability: Mapping[str, An
     from pops import interfaces
 
     targets = interfaces.Tagger.native_target_variants(component)
+    if capability["execution_mode"] == "host":
+        # The prepared adapter owns bounded Kokkos HostSpace mirrors for every selected target.
+        # Host callbacks therefore never borrow a device carrier or claim its pointer is host data.
+        return
     if capability["execution_mode"] != "native_backend":
         return
     required_spaces = {
@@ -756,6 +760,8 @@ def _validate_external_binding(
         raise ValueError(
             "AMR %s provider_identity does not authenticate its resolved authority"
             % protocol.role)
+    if protocol.role == "tagger":
+        return
     executable_authority = {
         "clustering": "BergerRigoutsosProvider<Dim>",
         "tagger": "PreparedTaggingExecutionPlan<Dim>",
@@ -836,8 +842,21 @@ def _prepare_builtin_provider(
     return PreparedAMRProviderInstallation(protocol.role, binding)
 
 
+def _prepare_external_tagger_provider(
+    protocol: _AMRRuntimeInterfaceProtocol,
+    binding: dict[str, Any],
+    **_: Any,
+) -> PreparedAMRProviderInstallation:
+    if protocol.role != "tagger":
+        raise NotImplementedError(
+            "external AMR %s provider runtime protocol is not implemented" % protocol.role
+        )
+    return PreparedAMRProviderInstallation(protocol.role, binding)
+
+
 _INSTALLATION_PROTOCOLS: dict[str, Callable[..., PreparedAMRProviderInstallation]] = {
     "builtin": _prepare_builtin_provider,
+    "external_component": _prepare_external_tagger_provider,
 }
 
 
