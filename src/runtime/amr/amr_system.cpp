@@ -23,6 +23,7 @@
 #include <pops/runtime/amr/amr_tensor_elliptic.hpp>
 #include <pops/runtime/amr/composite_reduction.hpp>
 #include <pops/runtime/amr/persistent_tagging_state.hpp>
+#include <pops/runtime/amr/prepared_component_providers.hpp>
 #include <pops/runtime/analytic/initial_materialization.hpp>
 #include <pops/runtime/builders/compiled/generated_amr_system_block.hpp>
 #include <pops/runtime/config/route_ids.hpp>
@@ -2225,8 +2226,14 @@ struct AmrSystem<Dim>::Impl {
   mutable std::uint64_t program_accepted_revision = 0;
   mutable bool program_accepted_bytes_runtime_owned = false;
   std::optional<TaggingSpec> tagging_spec;
+  struct TaggerComponentAuthority {
+    std::shared_ptr<component::LoadedComponent> component{};
+    runtime::amr::PreparedTaggerComponentSpec spec{};
+  };
+  std::optional<TaggerComponentAuthority> tagger_component;
   mutable std::optional<ResolvedTaggingProgram> resolved_tagging;
   mutable std::unique_ptr<runtime::amr::PreparedTaggingExecutionPlan<Dim>> tagging_plan;
+  mutable std::unique_ptr<runtime::amr::PreparedTaggerComponent<Dim>> component_tagging_plan;
   mutable runtime::amr::PersistentTaggingState<Dim> tagging_state;
   mutable std::unique_ptr<AcceptedSnapshot> bootstrap_transaction;
   mutable bool automatic_bootstrap_complete = false;
@@ -2315,6 +2322,7 @@ struct AmrSystem<Dim>::Impl {
       owner.tagging_state = tagging_state;
       owner.automatic_bootstrap_complete = automatic_bootstrap_complete;
       owner.tagging_plan.reset();
+      owner.component_tagging_plan.reset();
       for (const auto& [slot, levels] : field_potentials) {
         auto found = owner.field_plans.find(slot);
         if (found == owner.field_plans.end())
@@ -4208,7 +4216,10 @@ struct AmrSystem<Dim>::Impl {
   }
 
   void prepare_tagging_execution() const {
-    if (tagging_plan && tagging_plan->topology_generation() == tagging_generation())
+    if ((tagger_component && component_tagging_plan &&
+         component_tagging_plan->topology_generation() == tagging_generation()) ||
+        (!tagger_component && tagging_plan &&
+         tagging_plan->topology_generation() == tagging_generation()))
       return;
     const ResolvedTaggingProgram& resolved = resolve_tagging_program();
     if (!prepared_hierarchy || !prepared_hierarchy->lane ||
@@ -4235,16 +4246,44 @@ struct AmrSystem<Dim>::Impl {
         }
         fields.push_back({field.qualified_identity, values});
       }
+      auto budget = exact_tagging_budget(engine->hierarchy().layout(level),
+                                         engine->hierarchy().state(level).local_rank());
+      if (tagger_component) {
+        budget.scratch_bytes =
+            checked_size_product(budget.candidate_mask.owned_cells, std::size_t{8},
+                                 "AMR component Tagger candidate staging exceeds size_t");
+        if (tagger_component->spec.execution_mode == POPS_TAGGER_EXECUTION_HOST_V2)
+          for (const TaggingField& field : fields)
+            for (std::size_t local = 0; local < field.values->local_size(); ++local)
+              budget.scratch_bytes = checked_size_sum(
+                  budget.scratch_bytes,
+                  checked_size_product(field.values->fab(local).size(), sizeof(Real),
+                                       "AMR component Tagger host staging exceeds size_t"),
+                  "AMR component Tagger host staging exceeds size_t");
+      }
       fields_by_level.push_back(std::move(fields));
       layouts.push_back(engine->hierarchy().layout(level));
-      budgets.push_back(exact_tagging_budget(engine->hierarchy().layout(level),
-                                             engine->hierarchy().state(level).local_rank()));
+      budgets.push_back(budget);
     }
-    auto candidate = runtime::amr::PreparedTaggingExecutionPlan<Dim>::prepare(
-        resolved.program, fields_by_level, layouts, budgets, tagging_generation(),
-        prepared_hierarchy->lane->communicator());
-    tagging_plan =
-        std::make_unique<runtime::amr::PreparedTaggingExecutionPlan<Dim>>(std::move(candidate));
+    if (tagger_component) {
+      std::uint32_t periodic_axes = 0;
+      for (int axis = 0; axis < Dim; ++axis)
+        if (cfg.periodicity[static_cast<std::size_t>(axis)])
+          periodic_axes |= std::uint32_t{1} << static_cast<unsigned>(axis);
+      auto candidate = runtime::amr::PreparedTaggerComponent<Dim>::prepare(
+          tagger_component->component, tagger_component->spec, resolved.program, fields_by_level,
+          layouts, budgets, tagging_generation(), periodic_axes, *prepared_hierarchy->lane);
+      component_tagging_plan =
+          std::make_unique<runtime::amr::PreparedTaggerComponent<Dim>>(std::move(candidate));
+      tagging_plan.reset();
+    } else {
+      auto candidate = runtime::amr::PreparedTaggingExecutionPlan<Dim>::prepare(
+          resolved.program, fields_by_level, layouts, budgets, tagging_generation(),
+          prepared_hierarchy->lane->communicator());
+      tagging_plan =
+          std::make_unique<runtime::amr::PreparedTaggingExecutionPlan<Dim>>(std::move(candidate));
+      component_tagging_plan.reset();
+    }
   }
 
   runtime::amr::PreparedTaggerCandidates<Dim> execute_tagging(int parent_level) const {
@@ -4282,6 +4321,11 @@ struct AmrSystem<Dim>::Impl {
         cfg.upper);
     for (int axis = 0; axis < Dim; ++axis)
       spacing[static_cast<std::size_t>(axis)] = geometry.spacing(axis);
+    if (tagger_component)
+      return component_tagging_plan->execute(
+          static_cast<std::size_t>(parent_level),
+          engine->hierarchy().layout(static_cast<std::size_t>(parent_level)), spacing,
+          tagging_generation(), static_cast<std::int64_t>(macro_step), accepted_time);
     return tagging_plan->execute(static_cast<std::size_t>(parent_level),
                                  engine->hierarchy().layout(static_cast<std::size_t>(parent_level)),
                                  spacing, tagging_generation());
@@ -4459,6 +4503,7 @@ struct AmrSystem<Dim>::Impl {
     else
       tagging_state = std::move(staged_state);
     tagging_plan.reset();
+    component_tagging_plan.reset();
     refresh_prepared_hierarchy();
     program.refresh_hierarchy_state("AmrSystem::regrid_from_prepared_tagging");
     if (hierarchy_cycle_state == nullptr)
@@ -5584,6 +5629,44 @@ void AmrSystem<Dim>::install_prepared_amr_block(PreparedBlock prepared) {
 }
 
 template <int Dim>
+void AmrSystem<Dim>::install_tagger_component(
+    std::shared_ptr<component::LoadedComponent> component, const std::string& component_id,
+    const std::string& manifest_identity, std::uint32_t interface_version,
+    const std::string& provider_identity, const std::string& tagging_graph_identity,
+    const std::string& layout_identity, const std::string& clock_identity,
+    const std::string& execution_mode, const std::string& parameters_json,
+    const std::string& target_json,
+    std::shared_ptr<const component::PreparedExecutionContextV1> execution) {
+  typename Impl::TaggerComponentAuthority candidate;
+  require_amr_assembling(p_->lifecycle, "install_tagger_component");
+  if (p_->engine || p_->tagger_component || !component || !execution || component_id.empty() ||
+      manifest_identity.empty() || provider_identity.empty() || tagging_graph_identity.empty() ||
+      layout_identity.empty() || clock_identity.empty() || parameters_json.empty() ||
+      target_json.empty() || interface_version != 2)
+    throw std::invalid_argument(
+        "AMR native Tagger requires one complete unique pre-materialization authority");
+  const PopsTaggerExecutionModeV2 mode =
+      execution_mode == "native_backend" ? POPS_TAGGER_EXECUTION_NATIVE_BACKEND_V2
+      : execution_mode == "host"         ? POPS_TAGGER_EXECUTION_HOST_V2
+                                         : static_cast<PopsTaggerExecutionModeV2>(0);
+  if (mode == static_cast<PopsTaggerExecutionModeV2>(0))
+    throw std::invalid_argument("AMR native Tagger execution mode is unknown");
+  const PopsComponentApiV1& api = component->api();
+  if (api.component_id == nullptr || api.manifest_identity == nullptr ||
+      component_id != api.component_id || manifest_identity != api.manifest_identity)
+    throw std::invalid_argument("AMR native Tagger loaded component identity differs");
+  (void)component->table<PopsTaggerApiV2>(POPS_NATIVE_INTERFACE_TAGGER_V2, interface_version);
+  candidate.component = std::move(component);
+  candidate.spec = {
+      component_id,         manifest_identity, provider_identity, tagging_graph_identity,
+      layout_identity,      clock_identity,    interface_version, mode,
+      std::move(execution), parameters_json,   target_json};
+  // Installation is deliberately rank-local staging. The complete authority is authenticated and
+  // the component state is prepared only after PreparedHierarchy publishes its explicit lane.
+  p_->tagger_component.emplace(std::move(candidate));
+}
+
+template <int Dim>
 void AmrSystem<Dim>::set_bootstrap_tagging(
     const std::vector<std::string>& leaf_subject_kinds,
     const std::vector<std::string>& leaf_subject_identities,
@@ -5608,7 +5691,8 @@ void AmrSystem<Dim>::set_bootstrap_tagging(
         leaf_thresholds.size() != leaves || leaf_stencil_indices.size() != leaves ||
         refine_ops.empty() || refine_ops.size() != refine_args.size() ||
         coarsen_ops.size() != coarsen_args.size() || min_cycles < 0 || clock_identity.empty() ||
-        provider_identity.empty())
+        provider_identity.empty() ||
+        (p_->tagger_component && p_->tagger_component->spec.clock_identity != clock_identity))
       throw std::invalid_argument(
           "AMR prepared tagging requires one complete unique pre-materialization graph");
     const int equality = equality_policy == "hold"      ? 0
@@ -5753,6 +5837,7 @@ void AmrSystem<Dim>::set_bootstrap_tagging(
   p_->tagging_spec.emplace(std::move(candidate));
   p_->resolved_tagging.reset();
   p_->tagging_plan.reset();
+  p_->component_tagging_plan.reset();
   p_->tagging_state.clear();
   p_->automatic_bootstrap_complete = false;
 }
@@ -8761,6 +8846,7 @@ POPS_EXPORT void AmrSystem<Dim>::install_program(const std::string& so_path) {
     p_->pending_provider_registry_restore.reset();
     p_->resolved_tagging.reset();
     p_->tagging_plan.reset();
+    p_->component_tagging_plan.reset();
     p_->bootstrap_transaction.reset();
     previous_runtime->restore(*p_);
     pops::dynlib::close(handle);
@@ -9538,6 +9624,7 @@ void AmrSystem<Dim>::rebuild_hierarchy(const std::vector<AmrPatch<Dim>>& boxes,
     }
     p_->active_field_slot.clear();
     p_->tagging_plan.reset();
+    p_->component_tagging_plan.reset();
     p_->automatic_bootstrap_complete = true;
     p_->program.refresh_hierarchy_state("AmrSystem::rebuild_hierarchy");
   });
@@ -10311,6 +10398,11 @@ template void AmrSystem<kNativeDimension>::set_bootstrap_tagging(
     const std::vector<std::int32_t>&, const std::vector<std::int32_t>&,
     const std::vector<std::int32_t>&, const std::vector<std::int32_t>&, int, const std::string&,
     const std::string&, const std::string&, const std::string&);
+template void AmrSystem<kNativeDimension>::install_tagger_component(
+    std::shared_ptr<component::LoadedComponent>, const std::string&, const std::string&,
+    std::uint32_t, const std::string&, const std::string&, const std::string&, const std::string&,
+    const std::string&, const std::string&, const std::string&,
+    std::shared_ptr<const component::PreparedExecutionContextV1>);
 template void AmrSystem<kNativeDimension>::set_temporal_relations(const std::vector<std::int64_t>&,
                                                                   const std::vector<std::int64_t>&,
                                                                   const std::vector<std::string>&);

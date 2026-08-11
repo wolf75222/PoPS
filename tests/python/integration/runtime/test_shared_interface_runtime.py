@@ -154,6 +154,148 @@ def _flux_component(tmp_path: Path):
     )
 
 
+def _tagger_source_component(tmp_path: Path):
+    """Build the source Tagger used by the existing AMR retry scenario."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    interface = interfaces.Tagger
+    from pops._generated_component_interfaces import NATIVE_TAGGING_PROGRAM_ABI
+
+    capability = {
+        "schema_version": 1,
+        "capability_type": "amr_tagging_program",
+        "leaf_opcodes": list(NATIVE_TAGGING_PROGRAM_ABI["leaf_opcodes"]),
+        "logical_opcodes": list(NATIVE_TAGGING_PROGRAM_ABI["logical_opcodes"]),
+        "candidate_outputs": list(NATIVE_TAGGING_PROGRAM_ABI["candidate_outputs"]),
+        "indicator_stencil_routes": list(NATIVE_TAGGING_PROGRAM_ABI["indicator_stencil_routes"]),
+        "maximum_stencil_terms": NATIVE_TAGGING_PROGRAM_ABI["maximum_stencil_terms"],
+        "maximum_instruction_count": NATIVE_TAGGING_PROGRAM_ABI["maximum_instruction_count"],
+        "non_finite_policy": "reject",
+        "persistent_hysteresis": False,
+        "execution_mode": "host",
+        "collective_scope": "none",
+        "memory_spaces": ["host"],
+    }
+    manifest = ComponentManifest(
+        uri="pops://external.test/shared-interface/tagger",
+        component_type="tagger",
+        version="1.0.0",
+        facets=interface.facets,
+        signature={"generic": True, "native_interface": interface.signature_declaration()},
+        interfaces=interface.manifest_declarations(),
+        capabilities=(capability,),
+        target={"variants": [{
+            "dimension": 2, "scalar": "float64", "device": "cpu", "features": [],
+        }]},
+        entry_points={"interface_table": "pops_component_interface_v1"},
+    )
+    expected_parameters_json = json.dumps(
+        manifest.to_data()["parameters"], sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    )
+    expected_target_json = json.dumps(
+        manifest.to_data()["target"], sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    )
+    source = f'''#include <pops/runtime/config/generated_component_abi.hpp>
+#include <atomic>
+#include <cmath>
+#include <cstddef>
+#include <cstring>
+
+namespace {{
+std::atomic<int> fail_once{{0}};
+
+int prepare(const PopsComponentPrepareRequestV1* request, void** state,
+            PopsComponentStatusV1* status) {{
+  if (!request || !state || !status || !request->parameters_json || !request->target_json ||
+      std::strcmp(request->parameters_json, {json.dumps(expected_parameters_json)}) != 0 ||
+      std::strcmp(request->target_json, {json.dumps(expected_target_json)}) != 0) {{
+    if (status) *status = {{sizeof(PopsComponentStatusV1), 71,
+                            POPS_COMPONENT_ABORT_RUN_V1, "unauthenticated Tagger prepare JSON"}};
+    return 71;
+  }}
+  *state = new int(771);
+  *status = {{sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr}};
+  return 0;
+}}
+
+void destroy(void* state) {{ delete static_cast<int*>(state); }}
+
+int tag_batch(void* state, const PopsTaggerRequestV2* request, PopsComponentStatusV1* status) {{
+  if (!state || *static_cast<int*>(state) != 771 || !request || !status ||
+      request->execution_mode != POPS_TAGGER_EXECUTION_HOST_V2 ||
+      request->collective_scope != POPS_TAGGER_COLLECTIVE_NONE_V2 ||
+      request->execution.memory_space != POPS_MEMORY_SPACE_HOST_V1 ||
+      request->state_count != 2 || request->refine_candidates.size == 0 ||
+      request->refine_candidates.memory_space != POPS_MEMORY_SPACE_HOST_V1 ||
+      request->coarsen_candidates.memory_space != POPS_MEMORY_SPACE_HOST_V1 ||
+      request->refine_equalities.memory_space != POPS_MEMORY_SPACE_HOST_V1 ||
+      request->coarsen_equalities.memory_space != POPS_MEMORY_SPACE_HOST_V1 ||
+      request->coarsen_candidates.size != request->refine_candidates.size ||
+      request->refine_equalities.size != request->refine_candidates.size ||
+      request->coarsen_equalities.size != request->refine_candidates.size ||
+      request->logical_time.tick < 0) return 72;
+  if (request->logical_time.tick > 0 && fail_once.fetch_add(1) == 0) {{
+    *status = {{sizeof(PopsComponentStatusV1), 73, POPS_COMPONENT_RETRY_STEP_V1,
+                "injected rank-local Tagger failure"}};
+    return 0;
+  }}
+  for (size_t point = 0; point < request->refine_candidates.size; ++point) {{
+    bool refine = false;
+    for (size_t state_index = 0; state_index < request->state_count; ++state_index) {{
+      const PopsConstFieldViewV1& field = request->states[state_index].values;
+      if (!field.data || field.dimension != 2 || field.component_count != 1 ||
+          field.memory_space != POPS_MEMORY_SPACE_HOST_V1) return 74;
+      size_t quotient = point;
+      size_t offset = 0;
+      for (int axis = 0; axis < 2; ++axis) {{
+        const size_t interior = field.extents[axis] - field.ghost_lower[axis] - field.ghost_upper[axis];
+        if (interior == 0) return 75;
+        offset += (quotient % interior + field.ghost_lower[axis]) * field.axis_strides[axis];
+        quotient /= interior;
+      }}
+      const double value = static_cast<const double*>(field.data)[offset];
+      if (!std::isfinite(value)) return 76;
+      refine = refine || value > 0.10;
+    }}
+    request->refine_candidates.data[point] = refine ? 1u : 0u;
+    request->coarsen_candidates.data[point] = 0u;
+    request->refine_equalities.data[point] = 0u;
+    request->coarsen_equalities.data[point] = 0u;
+  }}
+  *status = {{sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr}};
+  return 0;
+}}
+
+const PopsTaggerApiV2 tagger_table = {{
+  {{sizeof(PopsTaggerApiV2), POPS_COMPONENT_PROTOCOL_ABI_V1,
+    POPS_NATIVE_INTERFACE_TAGGER_V2, 2, &prepare, &destroy}},
+  &tag_batch
+}};
+const PopsComponentInterfaceEntryV1 entry = {{
+  POPS_NATIVE_INTERFACE_TAGGER_V2, 2, sizeof(PopsTaggerApiV2), &tagger_table
+}};
+const PopsComponentApiV1 api = {{
+  sizeof(PopsComponentApiV1), POPS_COMPONENT_PROTOCOL_ABI_V1,
+  POPS_ABI_KEY_LITERAL, POPS_COMPONENT_CATALOG_SHA256_V1,
+  {json.dumps(manifest.component_id)}, {json.dumps(manifest.semantic_digest.token)},
+  {json.dumps(manifest.manifest_digest.token)}, 1, &entry
+}};
+}}
+extern "C" const PopsComponentApiV1* pops_component_interface_v1() {{ return &api; }}
+'''.encode()
+    source_name = "shared_tagger.cpp"
+    (tmp_path / source_name).write_bytes(source)
+    package = build_source_package_manifest(
+        components={"tagger": manifest}, payloads={source_name: ("source", source)}
+    )
+    package_path = tmp_path / "shared-tagger.pops.json"
+    package_path.write_text(json.dumps(package), encoding="utf-8")
+    return load(package_path).require("tagger", interface=interface)()
+
+
+def _tagger_component(tmp_path: Path):
+    return compile_component(_tagger_source_component(tmp_path), include=str(ROOT / "include"))
+
+
 def _ghost_source_component(tmp_path: Path):
     """Build one real GhostBoundary library that fails once after dirtying ABI scratch."""
     tmp_path.mkdir(parents=True, exist_ok=True)
@@ -733,6 +875,7 @@ def _shared_interface_amr_authoring(
     *,
     component_root=None,
     component=None,
+    tagger_component=None,
     program_factory=_ssprk2_program,
     with_checkpoint=True,
     with_implicit_solve=False,
@@ -924,6 +1067,7 @@ def _shared_interface_amr_authoring(
         right=right,
         right_state=right_state,
         component=component,
+        tagger_component=tagger_component,
         program=program,
         transfer=transfer,
         tagging=tagging,
@@ -936,13 +1080,14 @@ def _shared_interface_amr_authoring(
 
 
 def _resolve_shared_interface_amr(
-    authoring, *, max_levels, patch_layout=None, frozen=False
+    authoring, *, max_levels, patch_layout=None, frozen=False, regrid_interval=100
 ):
     from pops.amr import (
         AMRClockRelation,
         AMRExecution,
         AMRHierarchy,
         AMRRegrid,
+        TaggerProvider,
     )
     from pops.layouts import AMR
 
@@ -957,9 +1102,14 @@ def _resolve_shared_interface_amr(
                 ratios=tuple(2 for _ in range(max_levels - 1)),
             ),
             tagging=authoring.tagging,
+            tagger=(
+                TaggerProvider(authoring.tagger_component)
+                if authoring.tagger_component is not None
+                else None
+            ),
             regrid=(
                 AMRRegrid.frozen() if frozen else
-                AMRRegrid(schedule=every(100, clock=authoring.program.clock))
+                AMRRegrid(schedule=every(regrid_interval, clock=authoring.program.clock))
             ),
             transfer=authoring.transfer,
             execution=AMRExecution.subcycled(
@@ -970,7 +1120,11 @@ def _resolve_shared_interface_amr(
             ),
             patch_layout=patch_layout,
         ),
-        components=(authoring.component,),
+        components=tuple(
+            component
+            for component in (authoring.component, authoring.tagger_component)
+            if component is not None
+        ),
         compile_options={"include": str(ROOT / "include")},
     )
 
@@ -1055,14 +1209,16 @@ def test_frozen_two_level_generated_program_executes_shared_interface_implicit_p
 
 
 def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path, monkeypatch):
-    authoring = _shared_interface_amr_authoring(tmp_path)
+    authoring = _shared_interface_amr_authoring(
+        tmp_path, tagger_component=_tagger_component(tmp_path / "tagger")
+    )
     example = authoring.example
     core = authoring.core
     right_state = authoring.right_state
     left_initial = authoring.left_initial
     right_initial = authoring.right_initial
     params = authoring.params
-    resolved = _resolve_shared_interface_amr(authoring, max_levels=3)
+    resolved = _resolve_shared_interface_amr(authoring, max_levels=3, regrid_interval=1)
     artifact = pops.compile(resolved)
     interface = resolved.blocks[0].numerics.boundaries[0].interfaces[0]
 
@@ -1118,7 +1274,20 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path, mon
     initial_right = runtime.integral("right")
     initial_integral = initial_left + initial_right
 
-    pops.run(runtime, t_end=1.0e-3, max_steps=1)
+    rollback_before_tagger_retry = _shared_interface_accepted_image(runtime)
+    from pops._bootstrap import StepAttemptRejected
+
+    with pytest.raises(StepAttemptRejected) as rejected:
+        pops.run(runtime, t_end=1.0e-3, max_steps=1, console=False)
+    assert rejected.value.status == "invalid_evaluation"
+    assert rejected.value.disposition == "retry"
+    assert rejected.value.reason_code == 73
+    assert rejected.value.phase == "amr_tagger"
+    assert rejected.value.detail == "injected rank-local Tagger failure"
+    _assert_same_shared_interface_image(runtime, rollback_before_tagger_retry)
+
+    retry_report = pops.run(runtime, t_end=1.0e-3, max_steps=1, console=False)
+    assert retry_report.accepted_steps == 1
 
     refined_authority = runtime._executor._interface_authorities[interface.qualified_id]
     assert refined_authority["levels"] == (0, 1, 2)
@@ -1182,7 +1351,7 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path, mon
 
     # RegridOnRestart enters the native tag/cluster/regrid boundary. A deliberately rejected
     # post-transform validation must restore the fresh runtime exactly before the same restart is
-    # retried and committed.
+    # retried and committed. This remains independent of the typed Tagger retry proved above.
     restarted = example._bind_artifact(
         restart_artifact,
         initial_values={
