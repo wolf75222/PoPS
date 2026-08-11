@@ -295,7 +295,23 @@ class _SystemInstall(_System):
                 )
             if runtime_names:
                 raise ValueError(
-                    "add_equation: external Riemann ABI v2 does not transport model RuntimeParams"
+                    "add_equation: external Riemann ABI does not transport model RuntimeParams"
+                )
+            expected_provider_count = len(tuple(compiled.provider_components))
+            external_shape = (
+                spatial.external_flux_dimension,
+                spatial.external_flux_n_vars,
+                spatial.external_flux_provider_count,
+            )
+            compiled_shape = (
+                compiled.native_dimension,
+                compiled.n_vars,
+                expected_provider_count,
+            )
+            if external_shape != compiled_shape:
+                raise ValueError(
+                    "add_equation: external Riemann brick %r carries model shape %r, not %r"
+                    % (spatial.external_flux_id, external_shape, compiled_shape)
                 )
             if spatial.external_flux_model_identity != compiled.model_hash:
                 raise ValueError(
@@ -311,11 +327,26 @@ class _SystemInstall(_System):
                     "add_equation: external Riemann brick %r was built for a different native ABI"
                     % spatial.external_flux_id
                 )
-            raise NotImplementedError(
-                "external block NumericalFlux installation requires a complete generated "
-                "PreparedSystemBlock<Dim> provider package; the legacy external-Riemann "
-                "System seam had no native implementation"
+            self._s._register_external_riemann_package(
+                name,
+                spatial.external_flux_library_path,
+                spatial.external_flux_id,
+                spatial.external_flux_library_sha256,
+                spatial.external_flux_n_vars,
+                spatial.external_flux_provider_count,
+                spatial.external_flux_model_identity,
+                name,
+                spatial.limiter,
+                spatial.recon,
+                time.kind,
+                gamma,
+                nsub,
+                evolve,
+                nstride,
+                positivity_floor,
+                weno_epsilon,
             )
+            self._pending_native_packages += 1
         else:
             self._s._register_native_package(
                 name,
