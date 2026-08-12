@@ -456,7 +456,7 @@ void bind_system_assembly(py::class_<System>& cls) {
           "Prepare the exact RuntimeInstance communicator lane for Uniform boundaries.")
       .def(
           "_preflight_ghost_boundary_component",
-          [](const std::shared_ptr<pops::component::LoadedComponent>& component,
+          [](System&, const std::shared_ptr<pops::component::LoadedComponent>& component,
              const py::dict& row, const std::string& parameters_json,
              const std::string& target_json, const py::dict& execution_data) {
             auto spec = pops::python::detail::boundary_component_spec_from_python(
