@@ -1,167 +1,157 @@
 #!/usr/bin/env python3
-"""SSPRK3 parity for a component produced by the final compilation lifecycle.
+"""Production SSPRK3 executes from the typed Case/Program authority.
 
-The typed time descriptor rejects unknown methods before native installation.  A detached
-production component installed through ``System.add_equation`` then matches the equivalent native
-ModelSpec under SSPRK3 and demonstrably differs from SSPRK2.
+Two independently authored public Programs -- the SSPRK3 convenience factory and the generic
+``RungeKuttaRoute`` plus ``SSPRK3_TABLEAU`` form -- lower to the same executable graph and produce
+bit-identical native trajectories.  SSPRK2 remains a numerical discriminator.
 """
-from pops.numerics.variables import Conservative
-from pops.numerics.riemann import Rusanov
-import sys
+
+from __future__ import annotations
+
+from pathlib import Path
 
 import numpy as np
-
-import pops.runtime._engine_descriptors as engine
-from test_dsl_coupled import build_euler, compile_euler_component, GAMMA, INCLUDE
+import pops
+import pops.lib.time as libtime
+import pytest
+from pops.codegen import Production
+from pops.domain import Rectangle
+from pops.frames import Cartesian2D
+from pops.initial import InitialCondition
+from pops.layouts import Uniform
+from pops.lib.initial import BindArray
+from pops.math import ddt, div
+from pops.mesh import CartesianGrid, PeriodicAxes
+from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
+from pops.numerics.spatial import FiniteVolume
+from pops.projection import ConservativeCellAverage
+from pops.time import FixedDt
 from tests.python.support.requirements import (
-    missing_compiler_requirement,
+    default_cxx,
+    missing_native_compile_requirement,
+    repo_include,
     require_native_or_skip,
 )
-from pops.runtime._system import System  # ADC-545 advanced runtime seam
-from tests.python.support.explicit_program import (
-    install_ssprk2_program,
-    install_ssprk3_program,
-)
 
-# Multiple DSL native compiles by design: on a slow CI runner the file can exceed the
-# global 300 s process-isolation budget (ADC-627, same class as test_dsl_compile_cache).
+
+ROOT = Path(__file__).resolve().parents[4]
+N = 32
+DT = 1.0e-3
+NSTEPS = 12
 POPS_PROCESS_TIMEOUT = 900
 
-fails = 0
 
-
-def chk(cond, label):
-    global fails
-    print(f"  [{'OK ' if cond else 'XX '}] {label}")
-    if not cond:
-        fails += 1
-
-
-def err_msg(fn):
-    try:
-        fn()
-        return ""
-    except Exception as ex:  # noqa: BLE001
-        return str(ex)
-
-
-def _native_spec(rho0):
-    """Equivalent native Euler bricks used as the numerical parity oracle."""
-    return engine.Model(state=engine.FluidState("compressible", gamma=GAMMA),
-                     transport=engine.CompressibleFlux(),
-                     source=engine.NoSource(),
-                     elliptic=engine.BackgroundDensity(alpha=1.0, n0=rho0))
-
-
-def _initial_state(n):
-    xs = (np.arange(n) + 0.5) / n
-    X, Y = np.meshgrid(xs, xs)
-    U = np.zeros((4, n, n))
-    U[0] = 1.0 + 0.3 * np.exp(-((X - 0.5) ** 2 + (Y - 0.5) ** 2) / 0.02)
-    velocity_x = 0.2 * np.sin(2.0 * np.pi * X) * np.cos(2.0 * np.pi * Y)
-    velocity_y = -0.15 * np.cos(2.0 * np.pi * X) * np.sin(2.0 * np.pi * Y)
-    pressure = 1.0 + 0.1 * np.sin(2.0 * np.pi * X)
-    U[1] = U[0] * velocity_x
-    U[2] = U[0] * velocity_y
-    U[3] = pressure / (GAMMA - 1.0) + 0.5 * U[0] * (
-        velocity_x * velocity_x + velocity_y * velocity_y
+def _resolved(method: str, cxx: str):
+    frame = Rectangle("ssprk3-production-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(
+        Cartesian2D()
     )
-    return U
-
-
-# --- (1) Typed authoring guard: SSPRK3 is accepted, an unknown method is rejected. ----------------
-print("== (1) Explicit(method='ssprk3') accepte ; une methode inconnue est rejetee ==")
-ssprk3 = engine.Explicit(method="ssprk3")
-chk(str(ssprk3.kind) == "ssprk3", "SSPRK3 lower to the exact typed native route")
-msg_bad = err_msg(lambda: engine.Explicit(method="rk4"))
-chk(msg_bad != "" and "ssprk2" in msg_bad and "ssprk3" in msg_bad,
-    "une methode inconnue est rejetee avant toute installation native")
-
-# --- (2)/(3) PARITE + NON-TRIVIALITE (necessite un compilateur + en-tetes pops) ---------------------
-missing = missing_compiler_requirement(INCLUDE)
-if missing:
-    if fails:
-        print(f"test_ssprk3_production : {fails} ECHEC(S)")
-        sys.exit(1)
-    require_native_or_skip(f"(2)/(3) test_ssprk3_production : {missing}")
-
-n, L = 48, 1.0
-U = _initial_state(n)
-Uflat = U.reshape(-1).tolist()
-spec = _native_spec(float(U[0].mean()))
-model = build_euler("ssprk3-production")
-
-
-def run_compiled_checks():
-    compiled = compile_euler_component(model, cells=16)
-
-    def build_prod(method):
-        s = System(n=n, L=L, periodicity=(True, True))
-        s.add_equation(
-            "gas",
-            compiled,
-            spatial=engine.Spatial(
-                minmod=True, flux=Rusanov(), recon=Conservative()
-            ),
-            time=engine.Explicit(method=method),
+    x_axis, y_axis = frame.axes
+    model = pops.Model("ssprk3-production-model", frame=frame)
+    state = model.state("U", components=("rho", "tracer"))
+    rho, tracer = state
+    flux = model.flux(
+        "transport",
+        frame=frame,
+        state=state,
+        components={
+            x_axis: (0.5 * rho * rho, 0.45 * tracer),
+            y_axis: (-0.2 * rho, 0.15 * tracer),
+        },
+        waves={
+            x_axis: (rho, 0.45 + 0.0 * tracer),
+            y_axis: (0.2 + 0.0 * rho, 0.15 + 0.0 * tracer),
+        },
+    )
+    rate = model.rate("explicit_rhs", equation=ddt(state) == -div(flux))
+    case = pops.Case("ssprk3-production-case")
+    block = case.block("gas", model, states=(state,))
+    instance = block[state]
+    numerics = DiscretizationPlan()
+    numerics.rates.add(
+        rate,
+        FiniteVolume(
+            flux=flux,
+            variables=variables.Conservative(state),
+            reconstruction=reconstruction.FirstOrder(),
+            riemann=riemann.Rusanov(),
+        ),
+    )
+    case.numerics(numerics, block=block)
+    if method == "ssprk3":
+        program = libtime.SSPRK3(instance, rate=rate)
+    elif method == "ssprk3-route":
+        program = libtime.RungeKutta(
+            routes=(libtime.RungeKuttaRoute(instance, rate),),
+            tableau=libtime.SSPRK3_TABLEAU,
         )
-        s.set_state("gas", Uflat)
-        return s
-
-    def build_ref_ssprk3():
-        s = System(n=n, L=L, periodicity=(True, True))
-        s.add_equation(
-            "gas",
-            spec,
-            spatial=engine.Spatial(
-                minmod=True, flux=Rusanov(), recon=Conservative()
-            ),
-            time=engine.Explicit(method="ssprk3"),
+    elif method == "ssprk2":
+        program = libtime.SSPRK2(instance, rate=rate)
+    else:
+        raise ValueError("unsupported typed method %r" % method)
+    program.step_strategy(FixedDt(DT))
+    case.program(program)
+    case.initials.add(
+        InitialCondition(
+            state=instance,
+            value=BindArray(),
+            projection=ConservativeCellAverage(),
         )
-        s.set_state("gas", Uflat)
-        return s
-
-    # (2a) eval_rhs : production+SSPRK3 == native ModelSpec+SSPRK3 (the spatial residual does not
-    # RK -- mais on verifie que les DEUX chemins instancient le meme bloc avant toute avance).
-    prod = build_prod("ssprk3")
-    ref = build_ref_ssprk3()
-    R_prod = np.array(prod.eval_rhs("gas")).reshape(4, n, n)
-    R_ref = np.array(ref.eval_rhs("gas")).reshape(4, n, n)
-    chk(float(np.max(np.abs(R_prod))) > 1e-3, "(2a) residu non trivial")
-    chk(float(np.max(np.abs(R_prod - R_ref))) == 0.0,
-        "(2a) eval_rhs production+SSPRK3 BIT-IDENTIQUE au ModelSpec+SSPRK3")
-
-    # (2b) avance SSPRK3 : etat final bit-identique au bloc natif sur 12 pas a dt fixe.
-    prod = build_prod("ssprk3")
-    ref = build_ref_ssprk3()
-    install_ssprk3_program(prod)
-    install_ssprk3_program(ref)
-    dt = 1e-3
-    for _ in range(12):
-        prod.step(dt)
-        ref.step(dt)
-    Up = np.array(prod.get_state("gas")).reshape(4, n, n)
-    Ur = np.array(ref.get_state("gas")).reshape(4, n, n)
-    chk(np.isfinite(Up).all() and Up[0].min() > 0, "(2b) etat production+SSPRK3 physique (fini, rho>0)")
-    chk(float(np.max(np.abs(Up - Ur))) == 0.0,
-        "(2b) 12 pas production+SSPRK3 BIT-IDENTIQUE au ModelSpec+SSPRK3")
-
-    # (3) NON-TRIVIALITE : production+SSPRK3 DIFFERE de production+SSPRK2 (ssprk3 bien selectionne).
-    p2 = build_prod("ssprk2")
-    p3 = build_prod("ssprk3")
-    install_ssprk2_program(p2)
-    install_ssprk3_program(p3)
-    for _ in range(12):
-        p2.step(dt)
-        p3.step(dt)
-    U2 = np.array(p2.get_state("gas")).reshape(4, n, n)
-    U3 = np.array(p3.get_state("gas")).reshape(4, n, n)
-    diff = float(np.max(np.abs(U2 - U3)))
-    chk(diff > 0.0,
-        "(3) production+SSPRK3 != production+SSPRK2 (ecart %.2e -> ssprk3 effectivement actif)" % diff)
+    )
+    resolved = pops.resolve(
+        pops.validate(case),
+        layout=Uniform(
+            CartesianGrid(
+                frame=frame,
+                cells=(N, N),
+                periodic=PeriodicAxes(frame.axes),
+            )
+        ),
+        backend=Production(),
+        compile_options={"include": str(ROOT / "include"), "cxx": cxx},
+    )
+    return resolved, instance
 
 
-run_compiled_checks()
+def _initial_state() -> np.ndarray:
+    axis = (np.arange(N, dtype=np.float64) + 0.5) / N
+    x, y = np.meshgrid(axis, axis, indexing="xy")
+    rho = 1.0 + 0.3 * np.exp(-70.0 * ((x - 0.42) ** 2 + (y - 0.54) ** 2))
+    tracer = 0.8 + 0.2 * np.sin(2.0 * np.pi * x) * np.cos(2.0 * np.pi * y)
+    return np.ascontiguousarray(np.stack((rho, tracer)))
 
-print("test_ssprk3_production : tout est vert" if fails == 0 else f"{fails} ECHEC(S)")
-sys.exit(0 if fails == 0 else 1)
+
+def _compile_and_run(method: str, cxx: str):
+    resolved, instance = _resolved(method, cxx)
+    artifact = pops.compile(resolved)
+    artifact.verify()
+    simulation = pops.bind(artifact, initial_values={instance: _initial_state()})
+    report = pops.run(simulation, t_end=NSTEPS * DT, max_steps=NSTEPS)
+    assert report.accepted_steps == simulation.macro_step() == NSTEPS
+    assert simulation.program_report().program_hash == artifact.program_hash
+    state = np.asarray(simulation.block_level_state_global("gas", 0), dtype=np.float64).reshape(
+        (2, N, N)
+    )
+    assert np.isfinite(state).all() and float(state[0].min()) > 0.0
+    return resolved, artifact, state
+
+
+def main() -> None:
+    cxx = default_cxx()
+    missing = missing_native_compile_requirement(repo_include(), cxx)
+    if missing:
+        require_native_or_skip(missing, optional_skip=pytest.skip)
+
+    preset, preset_artifact, preset_state = _compile_and_run("ssprk3", cxx)
+    routed, routed_artifact, routed_state = _compile_and_run("ssprk3-route", cxx)
+    _ssprk2, ssprk2_artifact, ssprk2_state = _compile_and_run("ssprk2", cxx)
+
+    assert preset.time.ir_nodes() == routed.time.ir_nodes()
+    assert preset_artifact.program_hash != ssprk2_artifact.program_hash
+    assert routed_artifact.program_hash != ssprk2_artifact.program_hash
+    np.testing.assert_array_equal(preset_state, routed_state)
+    difference = float(np.max(np.abs(preset_state - ssprk2_state)))
+    assert difference > 0.0, "compiled SSPRK3 trajectory unexpectedly equals SSPRK2"
+
+
+if __name__ == "__main__":
+    main()

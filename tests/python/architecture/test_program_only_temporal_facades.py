@@ -1,10 +1,8 @@
 """ADC-700: temporal semantics are authored by typed Python Programs.
 
-The small programs in ``tests.python.support.explicit_program`` are low-level
-runtime/spatial fixtures.  Their raw SSPRK bodies keep legacy native-block
-parity coverage alive, but cannot qualify Program-authored SSPRK or IMEX
-semantics.  Semantic tests use ``pops.time.Program`` and ``pops.lib.time``
-tableaus through the normal Case compilation lifecycle.  In particular,
+The Forward-Euler program in ``tests.python.support.explicit_program`` is a low-level
+runtime/spatial fixture.  SSPRK semantics use ``pops.lib.time`` factories and tableaus through the
+normal Case compilation lifecycle; no raw native SSPRK body or installer remains.  In particular,
 forward Euler cannot stand in for backward Euler, partial IMEX, ARS(2,2,2),
 or nonlinear local solves.
 
@@ -61,23 +59,47 @@ V3_FEATURES_TEST = ROOT / "tests/python/unit/runtime/test_v3_features.py"
 RAW_TEMPORAL_FIXTURE = ROOT / "tests/python/support/explicit_program.py"
 RAW_TEMPORAL_FIXTURE_MODULE = "tests.python.support.explicit_program"
 RAW_SSPRK_INSTALLERS = frozenset({"install_ssprk2_program", "install_ssprk3_program"})
-RAW_SSPRK_FIXTURE_CALLERS = {
-    "tests/python/integration/amr/test_amr_explicit_family.py",
-    "tests/python/integration/amr/test_amr_ssprk3.py",
-    "tests/python/integration/mpi/test_amr_compiled_positivity_floor.py",
-    "tests/python/integration/mpi/test_weno5_compiledmodel.py",
-    "tests/python/integration/native_loader/test_dsl_production.py",
-    "tests/python/integration/native_loader/test_ssprk3_production.py",
-    "tests/python/unit/codegen/test_dsl_coupled_source.py",
-    "tests/python/unit/codegen/test_dsl_coupled_source_conservation.py",
-    "tests/python/unit/runtime/test_projection_eig.py",
-    "tests/python/unit/runtime/test_v3_features.py",
-    "tests/python/unit/time/test_time_euler.py",
+SEMANTIC_SSPRK_CALLERS = {
+    "tests/python/integration/amr/test_amr_explicit_family.py": {
+        "libtime.RungeKuttaRoute",
+        "libtime.RungeKutta",
+        "libtime.SSPRK2",
+        "libtime.SSPRK3",
+        "pops.compile",
+        "pops.bind",
+    },
+    "tests/python/integration/amr/test_amr_ssprk3.py": {
+        "libtime.RungeKuttaRoute",
+        "libtime.RungeKutta",
+        "libtime.SSPRK3",
+        "pops.compile",
+        "pops.bind",
+    },
+    "tests/python/integration/native_loader/test_ssprk3_production.py": {
+        "libtime.RungeKuttaRoute",
+        "libtime.RungeKutta",
+        "libtime.SSPRK2",
+        "libtime.SSPRK3",
+        "pops.compile",
+        "pops.bind",
+    },
+    "tests/python/unit/time/test_time_euler.py": {
+        "libtime.RungeKuttaRoute",
+        "libtime.RungeKutta",
+        "libtime.SSPRK2",
+        "pops.compile",
+        "pops.bind",
+    },
 }
-PROGRAM_AUTHORED_TEMPORAL_PROOFS = (
-    ROOT / "tests/python/integration/native_loader/test_normalized_program_execution.py",
-    ROOT / "tests/python/integration/amr/test_amr_newton_full.py",
-)
+SEMANTIC_SSPRK_TABLEAUS = {
+    "tests/python/integration/amr/test_amr_explicit_family.py": {
+        "libtime.SSPRK2_TABLEAU",
+        "libtime.SSPRK3_TABLEAU",
+    },
+    "tests/python/integration/amr/test_amr_ssprk3.py": {"libtime.SSPRK3_TABLEAU"},
+    "tests/python/integration/native_loader/test_ssprk3_production.py": {"libtime.SSPRK3_TABLEAU"},
+    "tests/python/unit/time/test_time_euler.py": {"libtime.SSPRK2_TABLEAU"},
+}
 
 
 def _ast_tree(path: Path) -> ast.Module:
@@ -216,6 +238,11 @@ def _executable_call_dotted_names(tree: ast.Module) -> set[str]:
         and (enclosing[call] is None or enclosing[call] in reachable)
         and _dotted_name(call.func)
     }
+
+
+def _all_dotted_names(tree: ast.Module) -> set[str]:
+    """Return every structurally referenced dotted name, including tableau constants."""
+    return {_dotted_name(node) for node in ast.walk(tree) if _dotted_name(node)}
 
 
 def _function_body(source: str, signature: str) -> str:
@@ -637,13 +664,8 @@ def test_ranked_program_context_owns_candidate_state_coupling_not_a_live_state_s
     assert "void step(Real dt)" not in runtime
 
 
-def test_raw_runtime_temporal_fixtures_are_not_program_authorship_evidence():
-    """Keep raw native-block parity fixtures separate from authored temporal proof.
-
-    The retained SSPRK installers are a bounded migration debt: their callers construct legacy
-    ``System``/``AmrSystem`` blocks that have no symbolic Case/Program adapter.  They remain visible
-    here precisely so they cannot silently grow into the semantic evidence set.
-    """
+def test_ssprk_semantics_have_only_typed_python_program_authority():
+    """Raw SSPRK bodies/installers cannot return; every semantic caller executes typed factories."""
     fixture_tree = _ast_tree(RAW_TEMPORAL_FIXTURE)
     fixture_functions = {
         node.name
@@ -651,36 +673,33 @@ def test_raw_runtime_temporal_fixtures_are_not_program_authorship_evidence():
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
     assert {name for name in fixture_functions if name.startswith("install_")} == {
-        "install_forward_euler_program",
-        *RAW_SSPRK_INSTALLERS,
+        "install_forward_euler_program"
     }
+    assert fixture_functions.isdisjoint(RAW_SSPRK_INSTALLERS)
+    fixture_source = RAW_TEMPORAL_FIXTURE.read_text(encoding="utf-8")
+    assert all(name not in fixture_source for name in RAW_SSPRK_INSTALLERS)
 
-    discovered: set[str] = set()
+    forbidden_users: set[str] = set()
     for path in (ROOT / "tests/python").rglob("*.py"):
         tree = _ast_tree(path)
         direct, modules = _raw_fixture_imports(tree)
+        if RAW_SSPRK_INSTALLERS.intersection(direct.values()):
+            forbidden_users.add(path.relative_to(ROOT).as_posix())
         calls = [
             call
             for call in ast.walk(tree)
             if isinstance(call, ast.Call)
             and _raw_fixture_call_name(call, direct, modules) in RAW_SSPRK_INSTALLERS
         ]
-        if not calls:
-            continue
-        discovered.add(path.relative_to(ROOT).as_posix())
-        reachable = _reachable_functions(tree)
-        enclosing = _enclosing_function_names(tree)
-        assert all(enclosing[call] is None or enclosing[call] in reachable for call in calls), (
-            path.relative_to(ROOT).as_posix()
-        )
-    assert discovered == RAW_SSPRK_FIXTURE_CALLERS
+        if calls:
+            forbidden_users.add(path.relative_to(ROOT).as_posix())
+    assert forbidden_users == set()
 
-    normalized, nonlinear_amr = (_ast_tree(path) for path in PROGRAM_AUTHORED_TEMPORAL_PROOFS)
-    normalized_calls = _executable_call_dotted_names(normalized)
-    assert {"libtime.SSPRK2", "libtime.IMEX", "compile_problem"} <= normalized_calls
-    nonlinear_calls = _executable_call_dotted_names(nonlinear_amr)
-    assert {"IMEX", "case.program", "pops.resolve"} <= nonlinear_calls
-    assert "_resolved" in _reachable_functions(nonlinear_amr)
+    for relative, required_calls in SEMANTIC_SSPRK_CALLERS.items():
+        tree = _ast_tree(ROOT / relative)
+        executable = _executable_call_dotted_names(tree)
+        assert required_calls <= executable, relative
+        assert SEMANTIC_SSPRK_TABLEAUS[relative] <= _all_dotted_names(tree), relative
 
 
 def test_direct_amr_runtime_step_callers_remain_absent():
