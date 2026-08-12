@@ -23,9 +23,10 @@
 
 #include "explicit_amr_program.hpp"
 #include "gtest_compat.hpp"
-#include "test_harness.hpp"                // pops::test::Checker, checksum
+#include "test_harness.hpp"  // pops::test::Checker, checksum
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel, GravityForce, GravityCoupling
-#include <pops/physics/fluids/euler.hpp>   // Euler
+#include <pops/physics/fluids/euler.hpp>   // EulerND
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // add_compiled_model(AmrSystem, ...)
 #include <pops/runtime/amr_system.hpp>
 
@@ -41,24 +42,39 @@
 #endif
 
 using namespace pops;
-using Model = CompositeModel<Euler, GravityForce, GravityCoupling>;
 
 namespace {
 
-std::vector<double> four_bubbles(int n) {
-  std::vector<double> rho(static_cast<std::size_t>(n) * n);
-  const double cx[4] = {0.25, 0.75, 0.25, 0.75};
-  const double cy[4] = {0.25, 0.25, 0.75, 0.75};
-  for (int j = 0; j < n; ++j)
-    for (int i = 0; i < n; ++i) {
-      const double x = (i + 0.5) / n, y = (j + 0.5) / n;
-      double r = 1.0;
-      for (int b = 0; b < 4; ++b) {
-        const double dx = x - cx[b], dy = y - cy[b];
-        r += 0.5 * std::exp(-(dx * dx + dy * dy) / 0.004);
+template <int Dim>
+std::size_t cell_count(const Extent<Dim>& shape) {
+  std::size_t result = 1;
+  for (int axis = 0; axis < Dim; ++axis)
+    result *= static_cast<std::size_t>(shape[axis]);
+  return result;
+}
+
+template <int Dim>
+std::vector<double> four_bubbles(const Extent<Dim>& shape) {
+  std::vector<double> rho(cell_count(shape));
+  for (std::size_t ordinal = 0; ordinal < rho.size(); ++ordinal) {
+    std::size_t remainder = ordinal;
+    double radius_squared[4]{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      const auto extent = static_cast<std::size_t>(shape[axis]);
+      const double coordinate =
+          (static_cast<double>(remainder % extent) + 0.5) / static_cast<double>(extent);
+      remainder /= extent;
+      for (int bubble = 0; bubble < 4; ++bubble) {
+        const double center = ((bubble >> (axis % 2)) & 1) == 0 ? 0.25 : 0.75;
+        const double delta = coordinate - center;
+        radius_squared[bubble] += delta * delta;
       }
-      rho[static_cast<std::size_t>(j) * n + i] = r;
     }
+    double value = 1.0;
+    for (double radius : radius_squared)
+      value += 0.5 * std::exp(-radius / 0.004);
+    rho[ordinal] = value;
+  }
   // A periodic Poisson operator has a constant nullspace. Keep the four non-trivial peaks while
   // authoring an exactly neutralizing background instead of relying on the solver's former silent
   // RHS projection.
@@ -71,6 +87,30 @@ std::vector<double> four_bubbles(int n) {
   return rho;
 }
 
+template <int Dim>
+using Model = CompositeModel<EulerND<Dim>, GravityForceND<Dim>, GravityCoupling>;
+
+template <int Dim>
+Model<Dim> gravity_model() {
+  Model<Dim> model{};
+  model.hyp = EulerND<Dim>::prepare(Real(1.4));
+  model.src = GravityForceND<Dim>{};
+  model.ell = GravityCoupling{Real(-1.0), Real(1.0), Real(1.0)};
+  return model;
+}
+
+template <int Dim>
+AmrSystemConfig<Dim> make_config(int n, bool distribute) {
+  AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = n;
+    config.periodicity[axis] = true;
+  }
+  config.regrid_every = 4;
+  config.distribute_coarse = distribute;
+  return config;
+}
+
 struct Result {
   std::vector<double> dens;
   double mass, m0;
@@ -78,25 +118,21 @@ struct Result {
 };
 
 // Builds an AmrSystem (4 bubbles, euler_poisson compiled), advances nsteps, returns the coarse density
-// (n*n, single-rank so already global), the final mass and m0. distribute=true exercises the ADC-620
-// path (coupler_make_coarse_layout splits the coarse, the fine seed used to borrow that dmap).
+// (one flattened exact-rank coarse image, single-rank so already global), the final mass and m0.
+// distribute=true exercises the ADC-620 path (coupler_make_coarse_layout splits the coarse, the fine
+// seed used to borrow that dmap).
+template <int Dim>
 Result run(int n, int nsteps, double dt, bool distribute) {
-  const std::vector<double> rho = four_bubbles(n);
-  AmrSystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
-  cfg.regrid_every = 4;
-  cfg.distribute_coarse =
-      distribute;  // ADC-620: coarse split into tiles, fine seed needs its OWN dmap
+  const AmrSystemConfig<Dim> cfg = make_config<Dim>(n, distribute);
+  const std::vector<double> rho = four_bubbles(cfg.shape);
 
-  AmrSystem sys(cfg);
+  AmrSystem<Dim> sys(cfg);
   // Temporal subcycling is an independent execution authority: spell it out even though this
   // regression happens to use the same ratio as the spatial hierarchy.  The runtime must never
   // infer a clock relation from mesh refinement.
   sys.set_temporal_relations({2}, {1}, {"integral_only"});
-  add_compiled_model(sys, "gas", Model{Euler{1.4}, GravityForce{}, GravityCoupling{-1.0, 1.0, 1.0}},
-                     "minmod", "rusanov", "conservative", "explicit", /*gamma=*/1.4);
+  add_compiled_model<Dim>(sys, "gas", gravity_model<Dim>(), "minmod", "rusanov", "conservative",
+                          "explicit", /*gamma=*/1.4);
   sys.set_poisson("charge_density", "geometric_mg");
   test::install_prepared_threshold_union(sys, {{"gas", "rho", 1.2}});
   sys.set_density("gas", rho);
@@ -127,6 +163,7 @@ static int pops_run_test_amr_distribute_coarse_serial(int argc, char** argv) {
   pops::test::Checker chk;  // style terse: n'imprime que les echecs (FAIL <libelle>)
 
   const int n = 64;
+  constexpr int Dim = kNativeDimension;
   const int nsteps = 16;
   const double dt = 1e-3;
 
@@ -135,29 +172,23 @@ static int pops_run_test_amr_distribute_coarse_serial(int argc, char** argv) {
   // a metadata mismatch, not a rank-count issue). If it still aborts, the process terminates here rather
   // than reaching the assertions below -- the regression lock is the process surviving construction and
   // stepping at all, on top of the checks that follow.
-  const Result dis = run(n, nsteps, dt, /*distribute=*/true);
+  const Result dis = run<Dim>(n, nsteps, dt, /*distribute=*/true);
   const Result rep =
-      run(n, nsteps, dt, /*distribute=*/false);  // oracle: replicated coarse (unaffected)
+      run<Dim>(n, nsteps, dt, /*distribute=*/false);  // oracle: replicated coarse (unaffected)
 
-  chk(dis.dens.size() == static_cast<std::size_t>(n) * n,
-      "distributed coarse density has size n*n");
+  const AmrSystemConfig<Dim> probe_cfg = make_config<Dim>(n, true);
+  chk(dis.dens.size() == cell_count(probe_cfg.shape),
+      "distributed coarse density has the exact-rank cell count");
   chk(rep.dens.size() == dis.dens.size(), "replicated coarse density same size as distributed");
 
   // (2) a CFL step advances by a finite, positive dt (no NaN/Inf from a corrupted layout).
-  AmrSystemConfig probe_cfg;
-  probe_cfg.n = n;
-  probe_cfg.L = 1.0;
-  probe_cfg.periodicity = {true, true};
-  probe_cfg.regrid_every = 4;
-  probe_cfg.distribute_coarse = true;
-  AmrSystem probe(probe_cfg);
+  AmrSystem<Dim> probe(probe_cfg);
   probe.set_temporal_relations({2}, {1}, {"integral_only"});
-  add_compiled_model(probe, "gas",
-                     Model{Euler{1.4}, GravityForce{}, GravityCoupling{-1.0, 1.0, 1.0}}, "minmod",
-                     "rusanov", "conservative", "explicit", /*gamma=*/1.4);
+  add_compiled_model<Dim>(probe, "gas", gravity_model<Dim>(), "minmod", "rusanov", "conservative",
+                          "explicit", /*gamma=*/1.4);
   probe.set_poisson("charge_density", "geometric_mg");
   test::install_prepared_threshold_union(probe, {{"gas", "rho", 1.2}});
-  probe.set_density("gas", four_bubbles(n));
+  probe.set_density("gas", four_bubbles(probe_cfg.shape));
   test::install_forward_euler_program(probe);
   const double dt_cfl = probe.step_cfl(0.4);
   chk(std::isfinite(dt_cfl), "distribute_coarse step_cfl returns a finite dt");

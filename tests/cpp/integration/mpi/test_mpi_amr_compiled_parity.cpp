@@ -29,8 +29,9 @@
 
 #include "explicit_amr_program.hpp"
 #include "gtest_compat.hpp"
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel, GravityForce, GravityCoupling
-#include <pops/physics/fluids/euler.hpp>   // Euler (transport compressible)
+#include <pops/physics/fluids/euler.hpp>   // EulerND (transport compressible)
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // add_compiled_model(AmrSystem, ...)
 #include <pops/runtime/amr_system.hpp>
 
@@ -47,26 +48,41 @@
 #endif
 
 using namespace pops;
-using Model = CompositeModel<Euler, GravityForce, GravityCoupling>;
 
 // QUATRE bulles de densite lisses, periodiques, bien separees : chacune depasse le seuil de
 // raffinement -> Berger-Rigoutsos produit PLUSIEURS patchs fins disjoints, que le regrid REPARTIT
 // sur les rangs (round-robin DistributionMapping(nfine, n_ranks())). C'est ce qui distribue
 // reellement le niveau fin sur plusieurs GPU (et non un seul patch central sur un seul rang).
-static std::vector<double> four_bubbles(int n) {
-  std::vector<double> rho(static_cast<std::size_t>(n) * n);
-  const double cx[4] = {0.25, 0.75, 0.25, 0.75};
-  const double cy[4] = {0.25, 0.25, 0.75, 0.75};
-  for (int j = 0; j < n; ++j)
-    for (int i = 0; i < n; ++i) {
-      const double x = (i + 0.5) / n, y = (j + 0.5) / n;
-      double r = 1.0;
-      for (int b = 0; b < 4; ++b) {
-        const double dx = x - cx[b], dy = y - cy[b];
-        r += 0.5 * std::exp(-(dx * dx + dy * dy) / 0.004);
+template <int Dim>
+std::size_t cell_count(const Extent<Dim>& shape) {
+  std::size_t result = 1;
+  for (int axis = 0; axis < Dim; ++axis)
+    result *= static_cast<std::size_t>(shape[axis]);
+  return result;
+}
+
+template <int Dim>
+static std::vector<double> four_bubbles(const Extent<Dim>& shape) {
+  std::vector<double> rho(cell_count(shape));
+  for (std::size_t ordinal = 0; ordinal < rho.size(); ++ordinal) {
+    std::size_t remainder = ordinal;
+    double radius_squared[4]{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      const auto extent = static_cast<std::size_t>(shape[axis]);
+      const double coordinate =
+          (static_cast<double>(remainder % extent) + 0.5) / static_cast<double>(extent);
+      remainder /= extent;
+      for (int bubble = 0; bubble < 4; ++bubble) {
+        const double center = ((bubble >> (axis % 2)) & 1) == 0 ? 0.25 : 0.75;
+        const double delta = coordinate - center;
+        radius_squared[bubble] += delta * delta;
       }
-      rho[static_cast<std::size_t>(j) * n + i] = r;
     }
+    double value = 1.0;
+    for (double radius : radius_squared)
+      value += 0.5 * std::exp(-radius / 0.004);
+    rho[ordinal] = value;
+  }
   // Periodic self-gravity requires an RHS orthogonal to the constant nullspace. Preserve the four
   // non-trivial peaks but encode their neutralizing background in the fixture; no solver-side
   // projection is permitted.
@@ -77,6 +93,18 @@ static std::vector<double> four_bubbles(int n) {
   for (double& value : rho)
     value += 1.0 - mean;
   return rho;
+}
+
+template <int Dim>
+using Model = CompositeModel<EulerND<Dim>, GravityForceND<Dim>, GravityCoupling>;
+
+template <int Dim>
+Model<Dim> gravity_model() {
+  Model<Dim> model{};
+  model.hyp = EulerND<Dim>::prepare(Real(1.4));
+  model.src = GravityForceND<Dim>{};
+  model.ell = GravityCoupling{Real(-1.0), Real(1.0), Real(1.0)};
+  return model;
 }
 
 static double max_abs_difference(const std::vector<double>& a, const std::vector<double>& b) {
@@ -98,19 +126,21 @@ static int pops_run_test_mpi_amr_compiled_parity(int argc, char** argv) {
 #endif
   const int me = my_rank(), np = n_ranks();
   const int n = 64;
-  const std::vector<double> rho = four_bubbles(n);
+  constexpr int Dim = kNativeDimension;
 
-  AmrSystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
+  AmrSystemConfig<Dim> cfg;
+  for (int axis = 0; axis < Dim; ++axis) {
+    cfg.shape[axis] = n;
+    cfg.periodicity[axis] = true;
+  }
+  const std::vector<double> rho = four_bubbles(cfg.shape);
   cfg.regrid_every = 4;  // re-raffinement periodique : exerce le regrid distribue plusieurs fois
 
   // Modele euler_poisson COMPILE branche sur la hierarchie AMR (chemin de production add_compiled_model).
-  AmrSystem sys(cfg);
+  AmrSystem<Dim> sys(cfg);
   sys.set_temporal_relations({2}, {1}, {"integral_only"});
-  add_compiled_model(sys, "gas", Model{Euler{1.4}, GravityForce{}, GravityCoupling{-1.0, 1.0, 1.0}},
-                     "minmod", "rusanov", "conservative", "explicit", /*gamma=*/1.4);
+  add_compiled_model<Dim>(sys, "gas", gravity_model<Dim>(), "minmod", "rusanov", "conservative",
+                          "explicit", /*gamma=*/1.4);
   sys.set_poisson("charge_density", "geometric_mg");
   test::install_prepared_threshold_union(sys, {{"gas", "rho", 1.2}});
   sys.set_density("gas", rho);
@@ -139,7 +169,7 @@ static int pops_run_test_mpi_amr_compiled_parity(int argc, char** argv) {
   const std::vector<double> state_global = sys.level_state_global(0);
   const std::vector<double> phi = sys.potential();
   const std::vector<double> phi_global = sys.level_potential_global(0);
-  const std::size_t nn = static_cast<std::size_t>(n) * n;
+  const std::size_t nn = cell_count(cfg.shape);
   const double state_density_dmax =
       state_global.size() >= nn
           ? max_abs_difference(std::vector<double>(state_global.begin(), state_global.begin() + nn),
@@ -189,7 +219,7 @@ static int pops_run_test_mpi_amr_compiled_parity(int argc, char** argv) {
     std::printf("AMRMPI exec=%s m0=%.17e (conservation: dm=%.3e)\n", space, m0,
                 std::fabs(mass - m0));
 
-    if (!(dens.size() == static_cast<std::size_t>(n) * n)) {
+    if (!(dens.size() == nn)) {
       std::printf("FAIL densite grossiere de mauvaise taille\n");
       ++fails;
     }

@@ -3,6 +3,7 @@
 #include "gtest_compat.hpp"
 #include "test_harness.hpp"
 
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/parallel/comm.hpp>
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/config/model_spec.hpp>
@@ -20,19 +21,21 @@ using namespace pops;
 namespace {
 
 int run_collective_refusal() {
-  AmrSystemConfig config;
-  config.n = 4;
-  config.L = 1.0;
+  constexpr int Dim = kNativeDimension;
+  AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = 4;
+    config.periodicity[axis] = true;
+  }
   config.level_count = 1;
   config.regrid_every = 0;
-  config.periodicity = {true, true};
 
   ModelSpec model;
   model.transport = "exb";
   model.source = "none";
   model.elliptic = "charge";
 
-  AmrSystem system(config);
+  AmrSystem<Dim> system(config);
   system.add_block("tracer", model, "none", "rusanov", "conservative", "euler");
   system.install_program_step([](double) {});
   if (!system.uses_runtime_engine() || system.engine() == nullptr)

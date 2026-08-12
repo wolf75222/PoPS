@@ -34,6 +34,7 @@
 
 #include "explicit_amr_program.hpp"
 #include "gtest_compat.hpp"
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/parallel/comm.hpp>  // comm_init, my_rank, n_ranks, all_reduce_*
@@ -61,17 +62,34 @@ static ModelSpec exb_charge(double q, double B0) {
   return s;
 }
 
-// Disque gaussien centre en (cx, cy) du domaine [0,1]^2, amplitude amp sur une base, n*n row-major.
+// Bulle gaussienne centree sur l'axe 0 (et au milieu des autres axes), aplatie dans l'ordre natif.
 // Le maximum (base + amp) depasse le seuil de raffinement -> la region taguee suit le blob (regrid).
-static std::vector<double> blob(int n, double cx, double cy, double amp, double base,
+template <int Dim>
+std::size_t cell_count(const Extent<Dim>& shape) {
+  std::size_t result = 1;
+  for (int axis = 0; axis < Dim; ++axis)
+    result *= static_cast<std::size_t>(shape[axis]);
+  return result;
+}
+
+template <int Dim>
+static std::vector<double> blob(const Extent<Dim>& shape, double x_center, double amp, double base,
                                 double width) {
-  std::vector<double> rho(static_cast<std::size_t>(n) * n, base);
-  for (int j = 0; j < n; ++j)
-    for (int i = 0; i < n; ++i) {
-      const double x = (i + 0.5) / n, y = (j + 0.5) / n;
-      const double r2 = (x - cx) * (x - cx) + (y - cy) * (y - cy);
-      rho[static_cast<std::size_t>(j) * n + i] = base + amp * std::exp(-r2 / (width * width));
+  std::vector<double> rho(cell_count(shape), base);
+  for (std::size_t ordinal = 0; ordinal < rho.size(); ++ordinal) {
+    std::size_t remainder = ordinal;
+    double radius_squared = 0.0;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const auto extent = static_cast<std::size_t>(shape[axis]);
+      const double coordinate =
+          (static_cast<double>(remainder % extent) + 0.5) / static_cast<double>(extent);
+      remainder /= extent;
+      const double center = axis == 0 ? x_center : 0.5;
+      const double delta = coordinate - center;
+      radius_squared += delta * delta;
     }
+    rho[ordinal] = base + amp * std::exp(-radius_squared / (width * width));
+  }
   return rho;
 }
 
@@ -85,19 +103,21 @@ static int pops_run_test_amr_regrid_mpi_parity(int argc, char** argv) {
 #endif
   const int me = my_rank(), np = n_ranks();
   const int n = 32;
+  constexpr int Dim = kNativeDimension;
   const double B0 = 1.0, q0 = +1.0, q1 = -1.0;
-  const std::vector<double> rho0 = blob(n, 0.30, 0.5, 1.0, 1.0, 0.07);  // bloc a gauche
-  const std::vector<double> rho1 = blob(n, 0.70, 0.5, 1.0, 1.0, 0.07);  // bloc a droite
 
-  AmrSystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
+  AmrSystemConfig<Dim> cfg;
+  for (int axis = 0; axis < Dim; ++axis) {
+    cfg.shape[axis] = n;
+    cfg.periodicity[axis] = true;
+  }
+  const std::vector<double> rho0 = blob(cfg.shape, 0.30, 1.0, 1.0, 0.07);  // bloc a gauche
+  const std::vector<double> rho1 = blob(cfg.shape, 0.70, 1.0, 1.0, 0.07);  // bloc a droite
   cfg.regrid_every = 2;          // REGRID ACTIF : la hierarchie se re-grille pendant la sequence
   cfg.distribute_coarse = true;  // GROSSIER REPARTI : active la reduction collective des tags (R4)
   // coarse_max_grid = 0 -> n/2 (decoupage 2x2 multi-box, le moins agressif pour le MG geometrique).
 
-  AmrSystem sys(cfg);
+  AmrSystem<Dim> sys(cfg);
   sys.set_temporal_relations({2}, {1}, {"integral_only"});
   sys.add_block("a", exb_charge(q0, B0), "minmod", "rusanov", "conservative", "explicit", 1);
   sys.add_block("b", exb_charge(q1, B0), "minmod", "rusanov", "conservative", "explicit", 1);
@@ -146,8 +166,8 @@ static int pops_run_test_amr_regrid_mpi_parity(int argc, char** argv) {
     std::printf("AMRREGRID conservation: dm_a=%.3e dm_b=%.3e | mass_a=%.17e mass_b=%.17e\n",
                 std::fabs(ma - m0a), std::fabs(mb - m0b), ma, mb);
 
-    if (!(da.size() == static_cast<std::size_t>(n) * n)) {
-      std::printf("FAIL taille densite (%zu != %d)\n", da.size(), n * n);
+    if (!(da.size() == cell_count(cfg.shape))) {
+      std::printf("FAIL taille densite (%zu != %zu)\n", da.size(), cell_count(cfg.shape));
       ++fails;
     }
     if (!(cp > 1e-12)) {
