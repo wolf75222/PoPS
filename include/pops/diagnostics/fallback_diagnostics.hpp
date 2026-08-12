@@ -94,10 +94,11 @@ inline FallbackDiagnosticEntry fallback_entry(std::string key, std::string route
 
 inline FallbackDiagnosticsReport fallback_diagnostics_report() {
   FallbackDiagnosticsReport report;
-  report.entries.push_back(fallback_entry(
-      "elliptic.fft.direct_dft", "PoissonFFT::fft1d", "FFT extent is not a power of two",
-      "allowed_with_counter", "allow", "correct O(n^2) transform replaces the radix-2 FFT",
-      "per 1D transform", fallback_count(FallbackCounter::kFftDirectDft), false, true, false));
+  report.entries.push_back(
+      fallback_entry("elliptic.fft.direct_dft", "generic host/device elliptic FFT route",
+                     "FFT extent is not a power of two", "allowed_with_counter", "allow",
+                     "correct O(n^2) transform replaces the radix-2 FFT", "per 1D transform",
+                     fallback_count(FallbackCounter::kFftDirectDft), false, true, false));
   report.entries.push_back(fallback_entry(
       "linalg.dense_eig.gershgorin", "real_eig_minmax",
       "QR iteration cap reached before convergence", "allowed_with_counter",

@@ -114,6 +114,7 @@ sdk-support pops/numerics/elliptic/mg/composite_fac_nlevel.hpp
 sdk-support pops/numerics/elliptic/mg/composite_fac_poisson.hpp
 sdk-support pops/numerics/elliptic/mg/geometric_mg.hpp
 api pops/numerics/elliptic/poisson/poisson_fft.hpp
+sdk-support pops/numerics/elliptic/poisson/poisson_fft_1d_internal.hpp
 api pops/numerics/elliptic/poisson/poisson_fft_solver.hpp
 api pops/numerics/elliptic/poisson/poisson_operator.hpp
 api pops/numerics/elliptic/polar/polar_geometry.hpp
