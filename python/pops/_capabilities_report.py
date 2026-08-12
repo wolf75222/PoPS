@@ -17,6 +17,10 @@ import importlib
 from collections.abc import Mapping
 from typing import Any
 
+from pops._generated_release_contract import (
+    AMR_CHECKPOINT_PAYLOAD_VERSION,
+    UNIFORM_CHECKPOINT_PAYLOAD_VERSION,
+)
 from pops._capabilities_common import (
     CapabilityRouteMatrix,
     CapabilityRouteRow,
@@ -1318,7 +1322,10 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             status="unavailable",
             limitation="parallel HDF5 checkpoint is not a native checkpoint route",
             requested="restartable checkpoint encoded as parallel HDF5",
-            available_route="strict accepted-state NPZ checkpoint (uniform v6, AMR v9)",
+            available_route=(
+                "strict accepted-state NPZ checkpoint (uniform v%d, AMR v%d)"
+                % (UNIFORM_CHECKPOINT_PAYLOAD_VERSION, AMR_CHECKPOINT_PAYLOAD_VERSION)
+            ),
             alternative="use RuntimeInstance.checkpoint() or the typed Checkpoint consumer",
             source=source,
         ),
@@ -1331,8 +1338,9 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             flag="supports_amr",
             mpi=mpi,
             limitation=(
-                "strict v7 accepted-state restart; exact rank-local AMR ownership and "
+                "strict v%d accepted-state restart; exact rank-local AMR ownership and "
                 "compiled-Program publications keep the native rank count"
+                % AMR_CHECKPOINT_PAYLOAD_VERSION
             ),
             source=source,
         ),

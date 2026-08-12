@@ -183,6 +183,13 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
   const bool gpu = caps.supports_gpu;
   const std::string amr_note =
       "hierarchy depth and transition ratios are selected by the authenticated AMR hierarchy";
+  const std::string accepted_state_npz_route =
+      "strict accepted-state NPZ checkpoint (uniform v" +
+      std::to_string(release_contract::kUniformCheckpointPayloadVersion) + ", AMR v" +
+      std::to_string(release_contract::kAmrCheckpointPayloadVersion) + ")";
+  const std::string amr_dynamic_regrid_reason =
+      "strict v" + std::to_string(release_contract::kAmrCheckpointPayloadVersion) +
+      " accepted-state restart; non-Dense history replay keeps rank count";
   return {
       capability_route("supports_uniform", status_from_bool(caps.supports_uniform),
                        "single-level Uniform layout", "uniform", "module", "host", mpi, gpu,
@@ -348,13 +355,10 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
       capability_route("checkpoint:parallel_hdf5", "unavailable",
                        "parallel HDF5 checkpoint is not a native checkpoint route",
                        kLayoutRouteTokensCsv, "none", "mpi", mpi, gpu,
-                       "restartable checkpoint encoded as parallel HDF5",
-                       "strict accepted-state NPZ checkpoint (uniform v5, AMR v7)",
+                       "restartable checkpoint encoded as parallel HDF5", accepted_state_npz_route,
                        "use RuntimeInstance.checkpoint() or the typed Checkpoint consumer"),
       capability_route("checkpoint:amr_dynamic_regrid", status_from_bool(caps.supports_amr),
-                       "strict v7 accepted-state restart; non-Dense history replay keeps rank "
-                       "count",
-                       "amr", "runtime", "host", mpi, gpu),
+                       amr_dynamic_regrid_reason, "amr", "runtime", "host", mpi, gpu),
   };
 }
 

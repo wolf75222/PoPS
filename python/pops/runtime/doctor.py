@@ -10,6 +10,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops._generated_release_contract import (
+    AMR_CHECKPOINT_PAYLOAD_VERSION,
+    UNIFORM_CHECKPOINT_PAYLOAD_VERSION,
+)
 from pops.runtime import _threading
 from pops.runtime._threading import has_kokkos
 
@@ -384,9 +388,10 @@ def capabilities() -> Any:
                 "PER_RANK topology; collective HDF5 requires the native C++ parallel-HDF5 route"
             ),
             "checkpoint_restart": (
-                "strict accepted-state Uniform v6 / AMR v9, including multi-block, active "
+                "strict accepted-state Uniform v%d / AMR v%d, including multi-block, active "
                 "regridding, fields, histories, clocks, tagging hysteresis and consumer cursors; "
                 "exact MPI_COMM_WORLD captures collectively and publishes one rank-0 NPZ artifact"
+                % (UNIFORM_CHECKPOINT_PAYLOAD_VERSION, AMR_CHECKPOINT_PAYLOAD_VERSION)
             ),
         },
         "amr_layout": {
