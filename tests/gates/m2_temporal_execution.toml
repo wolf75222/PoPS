@@ -214,6 +214,14 @@ target = "architecture"
 nodeid = "tests/python/architecture/test_program_only_temporal_facades.py::test_nonlinear_amr_semantics_use_the_compiled_program_not_a_blocker"
 
 [[check]]
+issue = "ADC-668"
+requirement = "program_only_temporal_routes"
+polarity = "positive"
+kind = "pytest"
+target = "architecture"
+nodeid = "tests/python/architecture/test_program_only_temporal_facades.py::test_raw_runtime_temporal_fixtures_are_not_program_authorship_evidence"
+
+[[check]]
 issue = "ADC-666"
 requirement = "step_transaction"
 polarity = "positive"
