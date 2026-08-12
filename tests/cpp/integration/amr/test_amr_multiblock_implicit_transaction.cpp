@@ -20,6 +20,8 @@
 
 namespace {
 
+constexpr std::uint32_t kImplicitTransactionRetryReason = 0x49545259u;
+
 template <int Dim>
 pops::Extent<Dim> uniform_extent(int value) {
   pops::Extent<Dim> result{};
@@ -64,7 +66,7 @@ struct RelaxingAdvectionModel {
   pops::Real equilibrium = pops::Real(0);
 
   static pops::PreparedProviderIdentity provider_identity() noexcept {
-    return {"test.amr-imex.relaxing-advection", 1};
+    return {"test.implicit-transaction.relaxing-advection", 1};
   }
   void serialize_exact_parameters(pops::ExactContractBuilder& contract) const {
     for (int axis = 0; axis < Dim; ++axis)
@@ -145,7 +147,8 @@ bool byte_exact_equal(const pops::MultiFab<Dim>& left, const pops::MultiFab<Dim>
 
 }  // namespace
 
-TEST(test_amr_multiblock_imex, RankedImplicitSolveRequiresAnExplicitLaneAndDefersPublication) {
+TEST(test_amr_multiblock_implicit_transaction,
+     RankedImplicitSolveRequiresAnExplicitLaneAndDefersPublication) {
   constexpr int Dim = pops::kNativeDimension;
   auto state = one_patch_field<Dim>(2, 1);
   state.set_val(pops::Real(2));
@@ -164,7 +167,8 @@ TEST(test_amr_multiblock_imex, RankedImplicitSolveRequiresAnExplicitLaneAndDefer
               64.0 * std::numeric_limits<double>::epsilon());
 }
 
-TEST(test_amr_multiblock_imex, TwoBlockStiffProgramPermutationRollsBackAndRetriesExactly) {
+TEST(test_amr_multiblock_implicit_transaction,
+     TwoBlockImplicitSourceTransactionRollsBackAndRetriesExactly) {
   constexpr int Dim = pops::kNativeDimension;
   pops::AmrSystemConfig<Dim> config;
   config.level_count = 1;
@@ -177,14 +181,16 @@ TEST(test_amr_multiblock_imex, TwoBlockStiffProgramPermutationRollsBackAndRetrie
   pops::AmrSystem<Dim> system(config);
   system.install_block_state_route("slow", "state/slow");
   system.install_block_state_route("fast", "state/fast");
-  pops::add_compiled_model<Dim>(
-      system, "slow", relaxing_model<Dim>(pops::Real(8), pops::Real(2)), "minmod", "rusanov",
-      "conservative", "imex", static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
-      static_cast<double>(pops::kWenoEpsilon), false, "tests.amr-imex/slow/physical-flux");
-  pops::add_compiled_model<Dim>(
-      system, "fast", relaxing_model<Dim>(pops::Real(24), pops::Real(-1)), "minmod", "rusanov",
-      "conservative", "imex", static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
-      static_cast<double>(pops::kWenoEpsilon), false, "tests.amr-imex/fast/physical-flux");
+  pops::add_compiled_model<Dim>(system, "slow", relaxing_model<Dim>(pops::Real(8), pops::Real(2)),
+                                "minmod", "rusanov", "conservative", "explicit",
+                                static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
+                                static_cast<double>(pops::kWenoEpsilon), false,
+                                "tests.implicit-transaction/slow/physical-flux");
+  pops::add_compiled_model<Dim>(system, "fast", relaxing_model<Dim>(pops::Real(24), pops::Real(-1)),
+                                "minmod", "rusanov", "conservative", "explicit",
+                                static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
+                                static_cast<double>(pops::kWenoEpsilon), false,
+                                "tests.implicit-transaction/fast/physical-flux");
   system.set_conservative_state("slow", std::vector<double>(cell_count(config.shape), 0.25));
   system.set_conservative_state("fast", std::vector<double>(cell_count(config.shape), 3.0));
   // Program block zero owns runtime block one, and vice versa.
@@ -192,24 +198,22 @@ TEST(test_amr_multiblock_imex, TwoBlockStiffProgramPermutationRollsBackAndRetrie
 
   auto context = pops::runtime::program::make_program_execution_provider(&system);
   auto inject_retry = std::make_shared<bool>(true);
-  context->configure_primary_clock("tests.amr-imex.multiblock-clock");
+  context->configure_primary_clock("tests.implicit-transaction.multiblock-clock");
   context->install(
       [context, inject_retry](double macro_dt) {
         context->advance_hierarchy(macro_dt, [context, inject_retry](double level_dt) {
           std::array<pops::MultiFab<Dim>*, 2> accepted{};
           std::array<pops::MultiFab<Dim>*, 2> candidates{};
+          context->set_stage_time(0, 1);
           for (int program_block = 0; program_block < 2; ++program_block) {
             accepted[program_block] = &context->state(program_block);
             auto& candidate =
                 context->scratch_state(1000 + program_block, 0, *accepted[program_block]);
-            auto& transport =
-                context->rhs_scratch(2000 + program_block, 0, *accepted[program_block]);
-            context->set_stage_time(0, 1);
-            context->neg_div_flux_default_into(program_block, *accepted[program_block], transport,
-                                               3000 + program_block);
+            // This is intentionally a source-only, atomic two-block transaction.  Do not add a
+            // numerically-zero transport stage: temporal composition belongs to authored Program
+            // evidence, while this fixture proves the implicit solve/retry/commit contract.
             context->lincomb(candidate, pops::Real(1), *accepted[program_block], pops::Real(0),
                              *accepted[program_block]);
-            context->axpy(candidate, pops::Real(level_dt), transport);
             pops::SolveOutcome implicit = context->solve_source_default(
                 program_block, candidate, pops::Real(level_dt), pops::NewtonOptions{});
             const pops::SolveReport report = implicit.consume(pops::SolveConsumption::kAccept);
@@ -221,8 +225,9 @@ TEST(test_amr_multiblock_imex, TwoBlockStiffProgramPermutationRollsBackAndRetrie
             *inject_retry = false;
             throw pops::runtime::program::StepAttemptRejected(
                 pops::SolveStatus::kIterationLimit,
-                pops::runtime::program::StepAttemptDisposition::kRetry, 0x494d4558u,
-                "implicit-source", "injected-full-pack-retry");
+                pops::runtime::program::StepAttemptDisposition::kRetry,
+                kImplicitTransactionRetryReason, "implicit-source",
+                "injected-implicit-transaction-retry");
           }
           context->commit_many({{accepted[0], candidates[0]}, {accepted[1], candidates[1]}});
         });
@@ -230,7 +235,8 @@ TEST(test_amr_multiblock_imex, TwoBlockStiffProgramPermutationRollsBackAndRetrie
       context);
   using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
   system.install_prepared_amr_program_flux_expression_budget(
-      "tests.amr-imex.multiblock-program-v1", std::vector<FluxBudget>{{1, 1}, {1, 1}}, 0, 0);
+      "tests.implicit-transaction.multiblock-program-v1", std::vector<FluxBudget>{{1, 1}, {1, 1}},
+      0, 0);
 
   const pops::MultiFab<Dim> slow_before = system.prepared_amr_block_state(0, 0);
   const pops::MultiFab<Dim> fast_before = system.prepared_amr_block_state(1, 0);
@@ -240,7 +246,7 @@ TEST(test_amr_multiblock_imex, TwoBlockStiffProgramPermutationRollsBackAndRetrie
     FAIL() << "the full-pack retry was not surfaced";
   } catch (const pops::runtime::program::StepAttemptRejected& rejected) {
     EXPECT_EQ(rejected.disposition(), pops::runtime::program::StepAttemptDisposition::kRetry);
-    EXPECT_EQ(rejected.reason_code(), 0x494d4558u);
+    EXPECT_EQ(rejected.reason_code(), kImplicitTransactionRetryReason);
     EXPECT_EQ(rejected.phase(), "implicit-source");
   }
   EXPECT_EQ(system.macro_step(), 0);
@@ -260,7 +266,7 @@ TEST(test_amr_multiblock_imex, TwoBlockStiffProgramPermutationRollsBackAndRetrie
   EXPECT_NE(slow_after.front(), fast_after.front());
 }
 
-TEST(test_amr_multiblock_imex, ImexMetadataNeverCreatesAnImplicitTemporalFallback) {
+TEST(test_amr_multiblock_implicit_transaction, MetadataNeverCreatesAnImplicitTemporalFallback) {
   constexpr int Dim = pops::kNativeDimension;
   pops::AmrSystemConfig<Dim> config;
   config.level_count = 1;
@@ -275,7 +281,7 @@ TEST(test_amr_multiblock_imex, ImexMetadataNeverCreatesAnImplicitTemporalFallbac
                                 "minmod", "rusanov", "conservative", "imex",
                                 static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
                                 static_cast<double>(pops::kWenoEpsilon), false,
-                                "tests.amr-imex.no-native-dispatch/physical-flux");
+                                "tests.implicit-transaction.no-native-dispatch/physical-flux");
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
   const std::vector<double> accepted = system.block_level_state_global("tracer", 0);
 
