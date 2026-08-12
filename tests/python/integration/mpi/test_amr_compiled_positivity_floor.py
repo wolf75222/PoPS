@@ -50,7 +50,7 @@ from pops.codegen.loader import CompiledModel
 from pops.math import sqrt
 from pops.physics._facade import Model
 from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
-from tests.python.support.explicit_program import install_ssprk2_program
+from tests.python.support.explicit_program import install_forward_euler_program
 
 from tests.python.support.requirements import repo_include
 
@@ -123,7 +123,7 @@ def compiled_single(cm, pf, state):
         time=engine.Explicit(),
     )
     s.set_conservative_state("gas", state)
-    install_ssprk2_program(s)
+    install_forward_euler_program(s)
     for _ in range(38):
         s.step(DT)
     return np.asarray(s.density("gas"))
@@ -207,7 +207,7 @@ def main():
             and all(row["positivity_floor"] == 1e-8 for row in effective_blocks),
             "multi-block compiled floor: exact native options retained",
         )
-        install_ssprk2_program(sm)
+        install_forward_euler_program(sm)
         for _ in range(5):
             sm.step(DT)
         chk(

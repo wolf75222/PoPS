@@ -15,7 +15,7 @@ import pops.runtime._engine_descriptors as engine
 from pops.codegen.loader import CompiledModel
 from test_dsl_coupled import build_euler, compile_euler_component, GAMMA, INCLUDE
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
-from tests.python.support.explicit_program import install_ssprk2_program
+from tests.python.support.explicit_program import install_forward_euler_program
 from tests.python.support.requirements import (
     default_cxx,
     missing_native_compile_requirement,
@@ -113,12 +113,12 @@ def main():
         compare("minmod", "rusanov", "conservative")
         compare("minmod", "hllc", "primitive")  # flux de production (pressure()/wave_speeds() generes)
 
-        # (2) avance SSPRK2 : etat final bit-identique au bloc natif sur 12 pas a dt fixe (meme dt des
+        # (2) avance Forward-Euler : etat final bit-identique au bloc natif sur 12 pas a dt fixe (meme dt des
         # deux cotes -> pas de derive numerique possible si la numerique est la meme).
         prod = build_native("minmod", "hllc", "primitive")
         ref = build_ref("minmod", "hllc", "primitive")
-        install_ssprk2_program(prod)
-        install_ssprk2_program(ref)
+        install_forward_euler_program(prod)
+        install_forward_euler_program(ref)
         dt = 1e-3
         for _ in range(12):
             prod.step(dt)
@@ -129,7 +129,7 @@ def main():
         assert np.isfinite(Up).all() and Up[0].min() > 0, "etat de production non physique"
         assert float(np.abs(Up[1]).max()) > 1e-4, "le transport Euler est reste trivial"
         assert dstep == 0.0, "etat apres 12 pas natif != add_block (ecart %.2e, attendu 0)" % dstep
-        print("OK  12 pas SSPRK2 : etat de production BIT-IDENTIQUE au bloc natif add_block")
+        print("OK  12 pas Forward-Euler : etat de production BIT-IDENTIQUE au bloc natif add_block")
 
         # (3) GARDE-FOU ABI : on compile un loader dont la SIGNATURE D'EN-TETES bakee est volontairement
         # FAUSSE (-DPOPS_HEADER_SIG different). Sa cle pops_native_abi_key differe alors de celle du module
