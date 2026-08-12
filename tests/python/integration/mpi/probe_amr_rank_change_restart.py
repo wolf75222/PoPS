@@ -350,9 +350,18 @@ def _accepted_tagging_hysteresis_span(payload: Any) -> tuple[bytes, int]:
         cursor += 8
         return value
 
-    if encoded[:8] != b"POPSAST5":
-        raise AssertionError("checkpoint does not contain accepted-state v5")
+    def skip_string() -> None:
+        nonlocal cursor
+        cursor += read_size()
+        if cursor > len(encoded):
+            raise AssertionError("accepted-state string is truncated")
+
+    if encoded[:8] != b"POPSAND2":
+        raise AssertionError("checkpoint does not contain exact-ranked accepted-state v2")
     cursor = 8
+    cursor += 8  # native dimension
+    skip_string()  # exact spatial contract
+    cursor += 2 * 8  # topology epoch, materialization generation
     level_count = read_size()
     clock_bytes = level_count * 40
     if cursor + clock_bytes > len(encoded):
@@ -364,6 +373,17 @@ def _accepted_tagging_hysteresis_span(payload: Any) -> tuple[bytes, int]:
         if cursor + name_size + 8 > len(encoded):
             raise AssertionError("accepted-state logical-clock map is truncated")
         cursor += name_size + 8
+    history_count = read_size()
+    for _ in range(history_count):
+        skip_string()
+        cursor += 8  # Program owner
+        for _identity in range(4):
+            skip_string()
+        cursor += 2 * 8  # depth, component count
+    history_slot_count = read_size()
+    for _ in range(history_slot_count):
+        skip_string()
+        cursor += 5 * 8  # level, slot, outgoing dt, initialized, fill count
     cursor += 8  # CellTemporalPartitionKind
     provider_size = read_size()
     cursor += provider_size
@@ -379,19 +399,21 @@ def _accepted_tagging_hysteresis_span(payload: Any) -> tuple[bytes, int]:
 
 
 def _accepted_tagging_hysteresis(payload: Any) -> bytes:
-    """Extract the opaque persistent-tagging bytes from accepted-state v5."""
+    """Extract the opaque persistent-tagging bytes from exact-ranked accepted-state v2."""
     tagging, _ = _accepted_tagging_hysteresis_span(payload)
     return tagging
 
 
 def _assert_active_tagging_hysteresis(encoded: bytes) -> None:
     """Require a real accepted transition window, not only an empty schema envelope."""
-    if encoded[:8] != b"POPSHYS1" or len(encoded) < 36:
+    if encoded[:8] != b"POPSHYS2" or len(encoded) < 40:
         raise AssertionError("checkpoint persistent-tagging payload is malformed")
-    minimum_cycles = int.from_bytes(encoded[8:12], "little")
-    cycle = int.from_bytes(encoded[12:20], "little")
-    identity_size = int.from_bytes(encoded[20:28], "little")
-    count_offset = 28 + identity_size
+    if int.from_bytes(encoded[8:12], "little") != 2:
+        raise AssertionError("checkpoint persistent-tagging dimension differs")
+    minimum_cycles = int.from_bytes(encoded[12:16], "little")
+    cycle = int.from_bytes(encoded[16:24], "little")
+    identity_size = int.from_bytes(encoded[24:32], "little")
+    count_offset = 32 + identity_size
     if count_offset + 8 > len(encoded):
         raise AssertionError("checkpoint persistent-tagging identity is truncated")
     active_entries = int.from_bytes(encoded[count_offset : count_offset + 8], "little")

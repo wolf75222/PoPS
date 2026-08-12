@@ -2,12 +2,14 @@
 
 #include <pops/mesh/boundary/prepared_boundary_component.hpp>
 #include <pops/runtime/dynamic/prepared_execution_context.hpp>
+#include <pops/runtime/dynamic/component_loader.hpp>
 #include <pops/runtime/multiblock/prepared_interface_flux_component.hpp>
 #include <pops/runtime/system/prepared_field_solver_component.hpp>
 
 #include <pybind11/pybind11.h>
 
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -254,6 +256,104 @@ inline runtime::multiblock::PreparedInterfaceFluxSpec<Dim> interface_flux_spec_f
   spec.target_json = target_json;
   spec.execution = make_component_execution_context(execution_data);
   return spec;
+}
+
+template <int Dim>
+struct PreparedInterfaceFluxJob {
+  runtime::multiblock::AxisAlignedInterface<Dim> route;
+  runtime::multiblock::PreparedInterfaceFluxSpec<Dim> spec;
+  std::shared_ptr<component::LoadedComponent> component;
+};
+
+template <int Dim>
+inline std::string prepare_interface_flux_jobs(const py::list& rows,
+                                               std::vector<PreparedInterfaceFluxJob<Dim>>& jobs,
+                                               bool require_level_zero) {
+  if (!PyList_CheckExact(rows.ptr()) || rows.empty())
+    throw py::type_error("shared-interface provider requires one exact non-empty job list");
+  jobs.reserve(static_cast<std::size_t>(rows.size()));
+  ExactContractBuilder contract;
+  contract.text("pops.prepared-multiblock.interface-provider")
+      .scalar(std::uint32_t{1})
+      .scalar(std::int32_t{Dim})
+      .scalar(static_cast<std::uint64_t>(rows.size()));
+  std::optional<std::pair<std::string, int>> previous_identity;
+  for (const py::handle value : rows) {
+    if (!PyDict_CheckExact(value.ptr()))
+      throw py::type_error("shared-interface provider jobs must be exact dictionaries");
+    const py::dict row = py::reinterpret_borrow<py::dict>(value);
+    const std::vector<std::string> keys{"left_block",      "right_block", "level",
+                                        "component",       "interface",   "binding",
+                                        "parameters_json", "target_json", "execution_context"};
+    if (static_cast<std::size_t>(row.size()) != keys.size())
+      throw py::type_error("shared-interface provider job has non-canonical keys");
+    for (const std::string& key : keys)
+      if (!row.contains(py::str(key)))
+        throw py::type_error("shared-interface provider job lacks key '" + key + "'");
+    const std::size_t left_block = py::cast<std::size_t>(row["left_block"]);
+    const std::size_t right_block = py::cast<std::size_t>(row["right_block"]);
+    const int level = py::cast<int>(row["level"]);
+    if (level < 0 || (require_level_zero && level != 0))
+      throw py::value_error("shared-interface provider level is outside its runtime hierarchy");
+    const py::dict interface = py::cast<py::dict>(row["interface"]);
+    const py::dict binding = py::cast<py::dict>(row["binding"]);
+    const py::dict execution = py::cast<py::dict>(row["execution_context"]);
+    auto route = interface_route_from_python<Dim>(interface, left_block, right_block, level);
+    auto spec = interface_flux_spec_from_python<Dim>(
+        interface, binding, py::cast<std::string>(row["parameters_json"]),
+        py::cast<std::string>(row["target_json"]), execution);
+    auto loaded = py::cast<std::shared_ptr<component::LoadedComponent>>(row["component"]);
+    if (!loaded || route.identity.empty() || spec.interface_identity != route.identity)
+      throw py::value_error("shared-interface provider job has no exact component key");
+    const std::pair<std::string, int> ordered_identity{route.identity, route.level};
+    if (previous_identity && ordered_identity <= *previous_identity)
+      throw py::value_error("shared-interface provider jobs must have unique sorted identities");
+    previous_identity = ordered_identity;
+    const PopsExecutionContextV1 context = spec.execution->view();
+    contract.text(route.identity)
+        .scalar(static_cast<std::uint64_t>(route.left_block))
+        .scalar(static_cast<std::uint64_t>(route.right_block))
+        .scalar(static_cast<std::int32_t>(route.level))
+        .scalar(static_cast<std::int32_t>(route.left_axis))
+        .scalar(static_cast<std::int32_t>(route.right_axis))
+        .scalar(static_cast<std::uint8_t>(route.left_side))
+        .scalar(static_cast<std::uint8_t>(route.right_side))
+        .sequence(route.tangential_transform.right_tangent_for_left)
+        .sequence(route.tangential_transform.sign)
+        .sequence(route.tangential_transform.offset)
+        .sequence(route.right_component_for_left)
+        .text(route.left_trace_projection_identity)
+        .text(route.right_trace_projection_identity)
+        .text(route.left_trace_provider_identity)
+        .text(route.right_trace_provider_identity)
+        .scalar(static_cast<std::uint8_t>(route.left_trace_operation))
+        .scalar(static_cast<std::uint8_t>(route.right_trace_operation))
+        .scalar(static_cast<std::int32_t>(route.left_trace_required_depth))
+        .scalar(static_cast<std::int32_t>(route.right_trace_required_depth))
+        .text(route.affine_mapping_identity)
+        .scalar(route.right_normal_translation)
+        .text(spec.component_id)
+        .text(spec.manifest_identity)
+        .scalar(spec.interface_version)
+        .text(spec.canonical_layout_identity)
+        .text(spec.parameters_json)
+        .text(spec.target_json)
+        .text(context.execution_identity)
+        .scalar(context.context_version)
+        .scalar(static_cast<std::int32_t>(context.memory_space))
+        .text(context.backend_identity)
+        .text(context.device_identity)
+        .scalar(static_cast<std::int32_t>(context.scalar_type))
+        .scalar(static_cast<std::int32_t>(context.storage_precision))
+        .scalar(static_cast<std::int32_t>(context.compute_precision))
+        .scalar(static_cast<std::int32_t>(context.accumulation_precision))
+        .scalar(static_cast<std::int32_t>(context.reduction_precision))
+        .text(context.stream_identity)
+        .text(context.communicator_identity)
+        .text(context.communicator_datatype_identity);
+    jobs.push_back({std::move(route), std::move(spec), std::move(loaded)});
+  }
+  return std::move(contract).release();
 }
 
 }  // namespace pops::python::detail

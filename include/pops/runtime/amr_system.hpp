@@ -361,13 +361,18 @@ class AmrSystem {
   POPS_EXPORT void install_prepared_amr_coupling_operator(std::string provider_contract,
                                                           CouplingOperatorView view,
                                                           PreparedCouplingOperator operation);
+  POPS_EXPORT void install_prepared_amr_interface_flux_provider(
+      std::string provider_contract,
+      std::function<void(runtime::multiblock::InterfaceFluxScheduler<Dim>&)> installer);
   POPS_EXPORT const ProgramBlockMap& prepared_amr_program_block_map() const;
   POPS_EXPORT void install_prepared_amr_program_flux_expression_budget(
       std::string program_hash, std::vector<PreparedAmrProgramFluxExpressionBlockBudget> blocks);
   POPS_EXPORT const PreparedAmrProgramFluxExpressionBudget&
   prepared_amr_program_flux_expression_budget() const;
   POPS_EXPORT std::size_t apply_prepared_amr_program_candidates(
-      int level, Real dt, std::span<MultiFab<Dim>* const> program_candidates);
+      int level, Real dt, std::span<MultiFab<Dim>* const> program_candidates,
+      const runtime::multiblock::BoundaryEvaluationPoint& point,
+      runtime::multiblock::InterfaceFluxFragmentPublication* interface_publication);
   POPS_EXPORT void publish_prepared_amr_program_candidates(
       int level, std::span<MultiFab<Dim>* const> program_candidates);
 
@@ -1150,6 +1155,7 @@ class AmrSystem {
   int history_fill_count(const std::string& name) const;
   void set_history_initialized(const std::string& name, bool initialized);
   void restore_history_fill_count(const std::string& name, int fill_count);
+  void restore_history_metadata(const std::string& name, bool initialized, int fill_count);
   std::vector<double> history_global(const std::string& name, int slot) const;
   void restore_history(const std::string& name, int slot, const std::vector<double>& values);
   double history_slot_dt(const std::string& name, int slot) const;

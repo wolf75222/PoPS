@@ -325,11 +325,12 @@ def restore_histories(system, d, fired_out=None):
     names = tuple(str(h) for h in d["history_names"])
     if len(names) != len(set(names)):
         raise ValueError("restart : checkpoint history names must be unique")
-    required_restore_seams = (
-        "restore_history",
-        "set_history_initialized",
-        "restore_history_fill_count",
-    )
+    atomic_metadata_restore = callable(getattr(system, "restore_history_metadata", None))
+    required_restore_seams = ["restore_history"]
+    if not atomic_metadata_restore:
+        required_restore_seams.extend(
+            ("set_history_initialized", "restore_history_fill_count")
+        )
     missing_restore_seams = tuple(
         seam for seam in required_restore_seams if not hasattr(system, seam)
     )
@@ -415,6 +416,14 @@ def restore_histories(system, d, fired_out=None):
             )
         )
 
+    if not atomic_metadata_restore and any(
+        initialized != (fill_count > 0)
+        for _, _, fill_count, _, _, _, _, _, _, initialized in prepared
+    ):
+        raise RuntimeError(
+            "restart : runtime cannot atomically restore independent history initialized/fill_count metadata"
+        )
+
     # Phase 1b -- publish every exact anchor and its metadata before executing the first Program
     # replay.  This is deliberately a separate pass from both validation and replay.
     for (
@@ -434,8 +443,11 @@ def restore_histories(system, d, fired_out=None):
         if slot_dt is not None:
             for k, dt in enumerate(slot_dt):
                 system.restore_history_slot_dt(hname, k, dt)
-        system.set_history_initialized(hname, initialized)
-        system.restore_history_fill_count(hname, fill_count)
+        if atomic_metadata_restore:
+            system.restore_history_metadata(hname, initialized, fill_count)
+        else:
+            system.set_history_initialized(hname, initialized)
+            system.restore_history_fill_count(hname, fill_count)
 
     # Phase 2 -- all ring dependencies now expose the checkpoint image.  Native replay restores its
     # own save bracket after each ring and returns one count per Program step, which is also the
