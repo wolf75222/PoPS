@@ -418,8 +418,7 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             ),
             requested="characteristic no-inflow/outflow transport boundary",
             available_route=(
-                "Inflow(state=U, value=U_ref, "
-                "characteristic=model_characteristic_no_inflow(U))"
+                "Inflow(state=U, value=U_ref, characteristic=model_characteristic_no_inflow(U))"
             ),
             alternative=(
                 "use fixed-state inflow/extrapolated outflow outside the qualified envelope"
@@ -512,12 +511,9 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
                 "advances, while polar geometry is refused and block/team counters, MPI fallback "
                 "reduction, GPU qualification, restart metadata, and a benchmark gate remain"
             ),
-            requested=(
-                "prepared Riemann recovery chain with requested/used solver diagnostics"
-            ),
+            requested=("prepared Riemann recovery chain with requested/used solver diagnostics"),
             available_route=(
-                "pops.numerics.riemann.Recovery(primary=Roe(), "
-                "fallbacks=(HLL(), Rusanov()))"
+                "pops.numerics.riemann.Recovery(primary=Roe(), fallbacks=(HLL(), Rusanov()))"
             ),
             alternative=(
                 "select one supported Riemann route explicitly and consume rejection through "
@@ -741,8 +737,10 @@ def _support_rows(flags: Any, source: Any) -> list:
             platform="host",
             flags=flags,
             flag="supports_amr",
-            limitation=("hierarchy depth and transition ratios are selected by the "
-                        "authenticated AMR hierarchy"),
+            limitation=(
+                "hierarchy depth and transition ratios are selected by the "
+                "authenticated AMR hierarchy"
+            ),
             requested="layout=AMR",
             available_route="backend='production' target='amr_system'",
             alternative="use Uniform or an AMR hierarchy with explicit transition ratios",
@@ -843,11 +841,13 @@ def _inventory_rows(flags: Any, source: Any) -> list:
         ORIENTED_FACE_CENTERINGS,
     )
 
-    physical_transfer_centerings = "/".join((
-        CELL_CENTERED.name,
-        *(centering.name for centering in ORIENTED_FACE_CENTERINGS),
-        NODE_CENTERED.name,
-    ))
+    physical_transfer_centerings = "/".join(
+        (
+            CELL_CENTERED.name,
+            *(centering.name for centering in ORIENTED_FACE_CENTERINGS),
+            NODE_CENTERED.name,
+        )
+    )
     return [
         _row(
             "layout:Uniform",
@@ -870,8 +870,9 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             flag="supports_amr",
             mpi=mpi,
             gpu=gpu,
-            limitation=("resource-policy-controlled depth and hierarchy-selected "
-                        "transition ratios"),
+            limitation=(
+                "resource-policy-controlled depth and hierarchy-selected transition ratios"
+            ),
             requested="AMR hierarchy with an unauthenticated transition ratio",
             available_route="AMR hierarchy with explicit transition ratios",
             alternative="use Uniform or the native AMR envelope",
@@ -1149,7 +1150,8 @@ def _inventory_rows(flags: Any, source: Any) -> list:
                 "provide divergence-preserving prolongation and primitive node fields provide "
                 "multilinear prolongation; derived fields recompute through elliptic_solve and "
                 "caches rebuild through patch_topology"
-            ) % physical_transfer_centerings,
+            )
+            % physical_transfer_centerings,
             source=source,
         ),
         _row(
@@ -1316,7 +1318,7 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             status="unavailable",
             limitation="parallel HDF5 checkpoint is not a native checkpoint route",
             requested="restartable checkpoint encoded as parallel HDF5",
-            available_route="strict accepted-state NPZ checkpoint (uniform v6, AMR v8)",
+            available_route="strict accepted-state NPZ checkpoint (uniform v6, AMR v9)",
             alternative="use RuntimeInstance.checkpoint() or the typed Checkpoint consumer",
             source=source,
         ),

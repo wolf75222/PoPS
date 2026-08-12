@@ -379,6 +379,34 @@ class _MultiLayoutUniformExecutor:
             plan, tuple(engine.bound_snapshot for engine in self._engines.values())
         )
         self._bound_snapshot = snapshot
+        from pops.identity import make_identity
+        from pops.runtime._checkpoint_resource_budget import (
+            aggregate_checkpoint_resource_budgets,
+            require_checkpoint_resource_budget,
+        )
+
+        child_budgets = tuple(
+            require_checkpoint_resource_budget(engine) for engine in self._engines.values()
+        )
+        budget_authority = make_identity(
+            "multi-layout-checkpoint-resource-budget",
+            {
+                "artifact": plan.artifact.artifact_identity.token,
+                "bind": plan.bind_identity.token,
+                "layouts": [
+                    {"layout": layout_id, "budget": budget.authority}
+                    for layout_id, budget in zip(self._engines, child_budgets, strict=True)
+                ],
+                "mappings": tuple(self._mapping_evaluations),
+            },
+        ).token
+        self._checkpoint_resource_budget = aggregate_checkpoint_resource_budgets(
+            child_budgets,
+            authority=budget_authority,
+            install_plan=plan,
+            layout_ids=tuple(self._engines),
+            mapping_ids=tuple(self._mapping_evaluations),
+        )
         for engine in self._engines.values():
             engine._bound_snapshot = snapshot
 
@@ -873,7 +901,6 @@ class _MultiLayoutUniformExecutor:
             root_effect,
         )
         from pops.runtime._checkpoint_manifest import authenticate_checkpoint_payload
-        import numpy as np
 
         sync_error = None
         try:
@@ -913,9 +940,21 @@ class _MultiLayoutUniformExecutor:
                 child_engine: Any = engine,
                 child_path: Path = expected,
             ) -> bytes | None:
-                with np.load(child_path, allow_pickle=False) as stored:
-                    authenticate_checkpoint_payload(child_engine, stored, runtime_kind="uniform")
-                return child_path.read_bytes() if retain_payloads else None
+                from pops.output._checkpoint_collective import (
+                    _bounded_checkpoint_path_bytes,
+                    decode_checkpoint_bytes,
+                )
+                from pops.runtime._checkpoint_resource_budget import (
+                    require_checkpoint_resource_budget,
+                )
+
+                child_budget = require_checkpoint_resource_budget(child_engine)
+                child_bytes = _bounded_checkpoint_path_bytes(
+                    child_path, child_budget.max_archive_bytes
+                )
+                stored = decode_checkpoint_bytes(child_bytes, child_budget)
+                authenticate_checkpoint_payload(child_engine, stored, runtime_kind="uniform")
+                return child_bytes if retain_payloads else None
 
             payload = root_effect(
                 topology,
@@ -1006,10 +1045,20 @@ class _MultiLayoutUniformExecutor:
                     os.replace(temporary, target)
                 finally:
                     Path(temporary).unlink(missing_ok=True)
-                with np.load(target, allow_pickle=False) as stored:
-                    authenticate_checkpoint_payload(
-                        self, stored, runtime_kind="multi_layout_uniform"
-                    )
+                from pops.output._checkpoint_collective import (
+                    _bounded_checkpoint_path_bytes,
+                    decode_checkpoint_bytes,
+                )
+                from pops.runtime._checkpoint_resource_budget import (
+                    require_checkpoint_resource_budget,
+                )
+
+                container_budget = require_checkpoint_resource_budget(self)
+                stored = decode_checkpoint_bytes(
+                    _bounded_checkpoint_path_bytes(target, container_budget.max_archive_bytes),
+                    container_budget,
+                )
+                authenticate_checkpoint_payload(self, stored, runtime_kind="multi_layout_uniform")
 
             root_effect(topology, "multi-layout container sealing", write_root)
         finally:
@@ -1036,9 +1085,10 @@ class _MultiLayoutUniformExecutor:
             require_restart_bit_identical,
         )
         from pops.runtime._checkpoint_manifest import authenticate_checkpoint_payload
+        from pops.runtime._checkpoint_resource_budget import require_checkpoint_resource_budget
 
         policy = require_restart_bit_identical(bit_identical, where="multi-layout restart")
-        stored = decode_checkpoint_bytes(payload)
+        stored = decode_checkpoint_bytes(payload, require_checkpoint_resource_budget(self))
         identity = authenticate_checkpoint_payload(
             self, stored, runtime_kind="multi_layout_uniform"
         )
@@ -1143,6 +1193,7 @@ class _MultiLayoutUniformExecutor:
 
     def restart(self, path: Any, *, bit_identical: bool = False) -> str:
         from pops.output._checkpoint_collective import (
+            _bounded_checkpoint_path_bytes,
             canonical_checkpoint_path,
             checkpoint_topology,
             consensus,
@@ -1155,7 +1206,15 @@ class _MultiLayoutUniformExecutor:
         rows = consensus(topology, "multi-layout restart target", value=str(target))
         if any(row["value"] != str(target) for row in rows):
             raise ValueError("multi-layout restart target differs across ranks")
-        payload = root_bytes(topology, "multi-layout restart read", target.read_bytes)
+        from pops.runtime._checkpoint_resource_budget import require_checkpoint_resource_budget
+
+        archive_budget = require_checkpoint_resource_budget(self).max_archive_bytes
+        payload = root_bytes(
+            topology,
+            "multi-layout restart read",
+            lambda: _bounded_checkpoint_path_bytes(target, archive_budget),
+            max_bytes=archive_budget,
+        )
         restore_checkpoint_payload(
             self,
             self,
@@ -1267,6 +1326,13 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
             aux={},
             field_plans={},
             initial_sources=selected_initials,
+            _layout_checkpoint_install=(
+                programs[layout_id].program.program,
+                tuple(programs[layout_id].block_names),
+                plan.artifact.artifact_identity,
+                plan.bind_identity,
+                plan,
+            ),
         )
         engines[layout_id] = engine
 

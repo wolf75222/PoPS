@@ -129,10 +129,11 @@ def _capture(runtime: Any) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
         for level in range(int(runtime.n_levels()))
     }
     for name in runtime.history_names():
-        for lag in range(int(runtime.history_depth(name))):
-            arrays["history:%s:%d" % (name, lag)] = np.ascontiguousarray(
-                runtime.history_global(name, lag), dtype=np.float64
-            )
+        for level in runtime.history_levels(name):
+            for lag in range(int(runtime.history_depth(name))):
+                arrays["history:%s:%d:%d" % (name, level, lag)] = np.ascontiguousarray(
+                    runtime.history_global(name, level, lag), dtype=np.float64
+                )
     assert any(name.startswith("history:") for name in arrays)
     return metadata, arrays
 
@@ -154,15 +155,9 @@ def _assert_bit_identical(
 
 def _program_accepted_state(path: str | Path) -> tuple[tuple[str, bytes], ...]:
     with np.load(path, allow_pickle=False) as checkpoint:
-        keys = tuple(
-            sorted(
-                name for name in checkpoint.files if name.startswith("program_accepted_state_rank_")
-            )
-        )
-        assert keys
-        return tuple(
-            (name, np.asarray(checkpoint[name], dtype=np.uint8).tobytes()) for name in keys
-        )
+        key = "program_accepted_state"
+        assert key in checkpoint.files
+        return ((key, np.asarray(checkpoint[key], dtype=np.uint8).tobytes()),)
 
 
 def _require_reflux_report(runtime: Any) -> None:

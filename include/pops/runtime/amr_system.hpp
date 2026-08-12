@@ -81,6 +81,7 @@ class ExecutionLane;
 namespace runtime::program {
 template <int Dim, class MemorySpace>
 class AmrProgramContext;
+class AcceptedProgramContextSnapshot;
 }  // namespace runtime::program
 
 namespace runtime::field {
@@ -258,6 +259,8 @@ class AmrSystem {
   struct PreparedAmrProgramFluxExpressionBudget {
     std::string program_hash;
     std::uint64_t generation = 0;
+    std::size_t interface_coupling_application_bound = 0;
+    std::size_t interface_coupling_identity_character_bound = 0;
     ProgramBlockMap program_block_map;
     std::vector<PreparedAmrProgramFluxExpressionBlockBudget> blocks;
     std::string exact_contract;
@@ -361,13 +364,22 @@ class AmrSystem {
   POPS_EXPORT void install_prepared_amr_coupling_operator(std::string provider_contract,
                                                           CouplingOperatorView view,
                                                           PreparedCouplingOperator operation);
+  POPS_EXPORT void install_prepared_amr_interface_flux_provider(
+      std::string provider_contract,
+      std::function<void(runtime::multiblock::InterfaceFluxScheduler<Dim>&)> installer);
   POPS_EXPORT const ProgramBlockMap& prepared_amr_program_block_map() const;
   POPS_EXPORT void install_prepared_amr_program_flux_expression_budget(
-      std::string program_hash, std::vector<PreparedAmrProgramFluxExpressionBlockBudget> blocks);
+      std::string program_hash, std::vector<PreparedAmrProgramFluxExpressionBlockBudget> blocks,
+      std::size_t interface_coupling_application_bound,
+      std::size_t interface_coupling_identity_character_bound);
   POPS_EXPORT const PreparedAmrProgramFluxExpressionBudget&
   prepared_amr_program_flux_expression_budget() const;
+  POPS_EXPORT ::pops::amr::InterfaceFluxLedgerBudget prepared_amr_interface_flux_ledger_budget()
+      const;
   POPS_EXPORT std::size_t apply_prepared_amr_program_candidates(
-      int level, Real dt, std::span<MultiFab<Dim>* const> program_candidates);
+      int level, Real dt, std::span<MultiFab<Dim>* const> program_candidates,
+      const runtime::multiblock::BoundaryEvaluationPoint& point,
+      runtime::multiblock::InterfaceFluxFragmentPublication* interface_publication);
   POPS_EXPORT void publish_prepared_amr_program_candidates(
       int level, std::span<MultiFab<Dim>* const> program_candidates);
 
@@ -541,6 +553,11 @@ class AmrSystem {
   /// accepted state into the candidate child, and publish the regrid atomically. Returns whether a
   /// child remains active after publication.
   bool regrid_from_prepared_tagging(int parent_level);
+  /// Freeze every accepted history ring/level/slot before a multi-parent restart regrid.  Every
+  /// transition then uses this immutable same-level overlap image while prolongating new coverage
+  /// from the successively remapped parent.
+  void begin_restart_regrid_history_sequence();
+  void end_restart_regrid_history_sequence() noexcept;
   /// Install one exact parent/child temporal relation per AMR transition.  These ratios are an
   /// independent execution authority and are never inferred from spatial refinement.
   void set_temporal_relations(const std::vector<std::int64_t>& numerators,
@@ -734,11 +751,23 @@ class AmrSystem {
   /// owner-qualified ComponentKeys, shapes and accepted provider generations before publication.
   [[nodiscard]] POPS_EXPORT std::vector<runtime::system::AuxiliaryCheckpointAcceptedState<Dim>>
   capture_auxiliary_checkpoint_accepted_state() const;
+  /// Rank-local capacity derived from the qualified provider registries. The pair is the largest
+  /// payload-free POPSAUX2 image and scalar width of one full-domain level.
+  [[nodiscard]] POPS_EXPORT std::pair<std::size_t, std::size_t>
+  checkpoint_auxiliary_level_capacity() const;
   /// Restore only after the caller has staged compatible rank-local group payloads privately.  A
   /// communicator preflight and a full registry rollback image prevent a rejected level from
   /// exposing a partial accepted generation.
   POPS_EXPORT void restore_auxiliary_checkpoint_accepted_state(
       const std::vector<runtime::system::AuxiliaryCheckpointAcceptedState<Dim>>& state);
+  /// Decode every sealed level POPSAUX2 image inside the prepared hierarchy lane.  The complete
+  /// decoded vector is consensus-closed before the typed restore enters finite/registry phases.
+  using AuxiliaryCheckpointByteViewProvider =
+      std::function<std::span<const std::uint8_t>(std::size_t)>;
+  using AuxiliaryCheckpointByteCountProvider = std::function<std::size_t()>;
+  POPS_EXPORT void restore_auxiliary_checkpoint_accepted_state_bytes(
+      const AuxiliaryCheckpointByteCountProvider& payload_count,
+      const AuxiliaryCheckpointByteViewProvider& payload_at);
 
   /// @name Named multi-elliptic fields (ADC-428)
   /// Exact-ranked API for a SECOND elliptic solve on the AMR hierarchy. Installation is accepted
@@ -835,11 +864,12 @@ class AmrSystem {
   /// explicit bootstrap commits a hierarchy level. Generated artifacts own this seam; direct
   /// low-level steps may omit it because they have no authenticated checkpoint context.
   POPS_EXPORT void install_program_hierarchy_refresh(std::function<void()> refresh);
-  /// Install the artifact-owned restart preflight, transform and forced rollback-resynchronization
-  /// hooks.
-  POPS_EXPORT void install_program_restart_hooks(std::function<void()> preflight,
-                                                 std::function<void()> regrid,
-                                                 std::function<void()> resync);
+  /// Install the artifact-owned restart preflight, transform, forced resynchronization and
+  /// phase-safe accepted-context snapshot hooks.
+  POPS_EXPORT void install_program_restart_hooks(
+      std::function<void()> preflight, std::function<void()> regrid, std::function<void()> resync,
+      std::function<std::unique_ptr<runtime::program::AcceptedProgramContextSnapshot>()>
+          accepted_context_snapshot);
   /// Set the compiled-Program macro-step cadence (parity with System::set_program_cadence, ADC-411):
   /// GLOBAL @p substeps and @p stride around the installed program closure. @p substeps subdivides each
   /// effective step into @p substeps program closure calls; @p stride runs the program once per @p
@@ -891,6 +921,10 @@ class AmrSystem {
   /// from the dense field/history arrays: it preserves exact level clocks, qualified history-slot
   /// identities and lagged effective-flux publications required for conservative multistep restart.
   POPS_EXPORT std::vector<std::uint8_t> program_accepted_state() const;
+  /// Artifact-authenticated upper bounds for the complete POPSAND3 image and its fixed-size
+  /// source-rematerialization digest. The bound covers every configured hierarchy level, temporal
+  /// execution, history slot, tagging cell and accepted flux publication.
+  POPS_EXPORT std::pair<std::size_t, std::size_t> checkpoint_program_state_capacity() const;
   /// Copy the same authenticated image into caller-owned storage.  The Program attempt transaction
   /// keeps this storage resident so a stable retry snapshots bytes without allocating a temporary
   /// vector on every macro-step; the returned-by-value accessor remains the public convenience API.
@@ -1101,11 +1135,16 @@ class AmrSystem {
   std::vector<int> rematerialize_hierarchy_ownership(const std::vector<AmrPatch<Dim>>& boxes);
 
   /// Merge exact source-rank Program images and return this rank's image under the current
-  /// communicator ownership. Both ownership tables are indexed [level][global patch].
+  /// communicator ownership. Both ownership tables are indexed [level][global patch].  The
+  /// source authority is an opaque contract emitted only while the source image is the live
+  /// accepted state; it binds that image to its artifact, spatial epoch/generation and owner map.
+  std::vector<std::uint8_t> program_accepted_state_source_authority(
+      const std::vector<std::vector<int>>& source_level_owners, int source_rank_count) const;
   std::vector<std::uint8_t> rematerialize_program_accepted_state(
-      const std::vector<std::vector<std::uint8_t>>& source_states,
+      const std::vector<std::uint8_t>& source_state, int source_rank_count,
       const std::vector<std::vector<int>>& source_level_owners,
-      const std::vector<std::vector<int>>& target_level_owners);
+      const std::vector<std::vector<int>>& target_level_owners,
+      const std::vector<std::uint8_t>& source_authority);
 
   /// Per-block per-level checkpoint accessors (ADC-509). The AmrRuntime engine shares the
   /// layout AND the aux across blocks, so the per-level STATE is read/restored PER BLOCK (by NAME)
@@ -1137,23 +1176,27 @@ class AmrSystem {
   std::vector<int> level_owner_ranks(int k);
   /// @name Multistep history-ring checkpoint / replay (ADC-631, Uniform System seam names)
   /// The compiled-Program AMR route carries per-level `keep_history` / `T.prev` ring slots on the
-  /// AmrRuntime engine (remapped through regrid). These wrappers expose the SAME seam names as System
-  /// so the shared _system_io_history.py serialize/restore is reused verbatim: history_global returns
-  /// the per-level slices concatenated into one exact rank-local replay image,
-  /// restore_history scatters it back per level, rebuild_history_slots replays the policy-recomputed
-  /// slots by re-stepping the installed Program.
+  /// AmrRuntime engine (remapped through regrid).  Every value and provenance accessor is qualified
+  /// by the exact hierarchy level so subcycled levels retain distinct dt/fill metadata.
   /// @{
   std::vector<std::string> history_names() const;
+  std::vector<int> history_levels(const std::string& name) const;
   int history_depth(const std::string& name) const;
   int history_ncomp(const std::string& name) const;
-  bool history_initialized(const std::string& name) const;
-  int history_fill_count(const std::string& name) const;
-  void set_history_initialized(const std::string& name, bool initialized);
-  void restore_history_fill_count(const std::string& name, int fill_count);
-  std::vector<double> history_global(const std::string& name, int slot) const;
-  void restore_history(const std::string& name, int slot, const std::vector<double>& values);
-  double history_slot_dt(const std::string& name, int slot) const;
-  void restore_history_slot_dt(const std::string& name, int slot, double dt);
+  bool history_initialized(const std::string& name, int level) const;
+  int history_fill_count(const std::string& name, int level) const;
+  void set_history_initialized(const std::string& name, int level, bool initialized);
+  void restore_history_fill_count(const std::string& name, int level, int fill_count);
+  void restore_history_metadata(const std::string& name, int level, bool initialized,
+                                int fill_count);
+  void restore_history_provenance(const std::string& name, int level,
+                                  const std::vector<double>& slot_dt, bool initialized,
+                                  int fill_count);
+  std::vector<double> history_global(const std::string& name, int level, int slot) const;
+  void restore_history(const std::string& name, int level, int slot,
+                       const std::vector<double>& values);
+  double history_slot_dt(const std::string& name, int level, int slot) const;
+  void restore_history_slot_dt(const std::string& name, int level, int slot, double dt);
   int rebuild_history_slots(const std::string& name, const std::vector<int>& stored_slots);
   /// The sorted macro-step cursors at which the LAST rebuild_history_slots fired an in-window regrid
   /// (ADC-635). The accepted-state reader asserts it against the checkpoint's recorded schedule

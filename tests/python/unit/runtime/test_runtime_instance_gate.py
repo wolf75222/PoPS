@@ -125,6 +125,24 @@ class _Executor:
             artifact_identity=plan.artifact.artifact_identity,
             bind_identity=plan.bind_identity,
         )
+        from pops.runtime._checkpoint_resource_budget import (
+            _producer_checkpoint_resource_budget,
+        )
+
+        self._checkpoint_resource_budget = _producer_checkpoint_resource_budget(
+            {
+                "t": np.asarray(0.0),
+                "macro_step": np.asarray(0, dtype=np.int64),
+                "abi_key": np.asarray("x" * 512),
+                "runtime_consumer_graph": np.asarray("x" * 512),
+                "runtime_consumer_cursors": np.asarray("x" * 4096),
+                "runtime_consumer_diagnostics": np.asarray("x" * 4096),
+                "pops_checkpoint_manifest": np.asarray("x" * 32768),
+                "pops_restart_identity": np.asarray("x" * 128),
+            },
+            runtime_kind="uniform",
+            authority=plan.bind_identity.token,
+        )
         graph = plan.artifact.plan.consumer_graph
         clocks = (
             sorted(
@@ -307,7 +325,13 @@ class _Executor:
         return target
 
     def restart(self, path):
-        prepared = self._prepare_checkpoint_restart(Path(path).read_bytes(), bit_identical=False)
+        from pops.output._checkpoint_collective import _bounded_checkpoint_path_bytes
+        from pops.runtime._checkpoint_resource_budget import require_checkpoint_resource_budget
+
+        budget = require_checkpoint_resource_budget(self).max_archive_bytes
+        prepared = self._prepare_checkpoint_restart(
+            _bounded_checkpoint_path_bytes(Path(path), budget), bit_identical=False
+        )
         self._begin_checkpoint_restart()
         result = self._apply_checkpoint_restart(prepared)
         self._commit_checkpoint_restart()
@@ -316,12 +340,13 @@ class _Executor:
 
     def _prepare_checkpoint_restart(self, payload, *, bit_identical):
         from pops.output._checkpoint_collective import decode_checkpoint_bytes
+        from pops.runtime._checkpoint_resource_budget import require_checkpoint_resource_budget
         from pops.runtime._checkpoint_manifest import authenticate_checkpoint_payload
 
         if type(bit_identical) is not bool:
             raise TypeError("test restart bit_identical must be an exact bool")
         self._prepared_restart_bit_identical = bit_identical
-        stored = decode_checkpoint_bytes(payload)
+        stored = decode_checkpoint_bytes(payload, require_checkpoint_resource_budget(self))
         identity = authenticate_checkpoint_payload(self, stored, runtime_kind="uniform")
         return identity, float(stored["t"]), int(stored["macro_step"])
 
@@ -447,7 +472,7 @@ def _with_graph(
 
 def test_runtime_instance_retains_complete_multilayout_plan_without_target_dispatch():
     plan = _install(("fluid", "solid"), heterogeneous=True)
-    runtime = RuntimeInstance(plan, executor=object())
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
 
     assert runtime._layout_plan is plan.artifact.layout_plan
     assert runtime._runtime_plan.layout_plan_id == runtime._layout_plan.qualified_id
@@ -456,6 +481,30 @@ def test_runtime_instance_retains_complete_multilayout_plan_without_target_dispa
     assert (
         runtime._runtime_plan.communication.transfers[0].provider_id
         == runtime._layout_plan.mappings[0].provider_id
+    )
+
+
+def test_runtime_instance_refuses_executor_without_checkpoint_resource_authority():
+    plan = _install(("fluid", "solid"), heterogeneous=True)
+
+    with pytest.raises(TypeError, match="lacks its authenticated checkpoint resource authority"):
+        RuntimeInstance(plan, executor=object())
+
+
+def test_checkpoint_zip64_capacity_uses_reviewed_checked_formula():
+    from pops.runtime._checkpoint_resource_budget import _archive_byte_capacity
+
+    uncompressed = 4_321_987
+    names = ("state_fluid", "pops_checkpoint_manifest", "pops_restart_identity")
+
+    assert _archive_byte_capacity(uncompressed, names, where="test") == (
+        uncompressed
+        + (uncompressed >> 12)
+        + (uncompressed >> 14)
+        + (uncompressed >> 25)
+        + 145 * len(names)
+        + 2 * sum(map(len, names))
+        + 98
     )
 
 
@@ -528,8 +577,7 @@ def test_runtime_instance_inspection_exposes_install_and_consumer_evidence():
     assert payload["runtime_environment"]["dimension"] == 2
     assert payload["runtime_environment"]["supported_dimensions"] == [2]
     assert payload["instance"]["native_spatial_layouts"] == {
-        layout_id: row.to_data()
-        for layout_id, row in plan.artifact.native_layouts.items()
+        layout_id: row.to_data() for layout_id, row in plan.artifact.native_layouts.items()
     }
     assert payload["instance"]["runtime_plan"] == runtime._runtime_plan.to_data()
     assert (
@@ -2112,10 +2160,17 @@ def test_checkpoint_restore_invalidates_geometry_after_native_topology_restore(m
             events.append("run")
 
     native = _Native()
+    from pops.runtime._checkpoint_resource_budget import _producer_checkpoint_resource_budget
+
+    resource_budget = _producer_checkpoint_resource_budget(
+        {"checkpoint": np.frombuffer(b"checkpoint", dtype=np.uint8)},
+        runtime_kind="uniform",
+        authority="test-runtime-restore",
+    )
     monkeypatch.setattr(
         _checkpoint_collective,
         "decode_checkpoint_bytes",
-        lambda payload: {
+        lambda _payload, _budget: {
             "runtime_consumer_diagnostics": np.array(json.dumps({"schema_version": 1}))
         },
     )
@@ -2132,6 +2187,7 @@ def test_checkpoint_restore_invalidates_geometry_after_native_topology_restore(m
         _snapshot_builder=_SnapshotBuilder(),
         _publisher=_Publisher(),
         _consumer_cursors=None,
+        _checkpoint_resource_budget=resource_budget,
     )
 
     assert (
@@ -2454,16 +2510,24 @@ def test_regrid_restart_derives_distinct_run_identity_from_global_receipt(monkey
         return _AMRRegridRestartEvidence(restart_identity, receipt)
 
     native = _Native()
+    from pops.runtime._checkpoint_resource_budget import _producer_checkpoint_resource_budget
+
+    resource_budget = _producer_checkpoint_resource_budget(
+        {"checkpoint": np.frombuffer(b"checkpoint", dtype=np.uint8)},
+        runtime_kind="amr",
+        authority="test-amr-regrid-restore",
+    )
     runtime = SimpleNamespace(
         _executor=native,
         _snapshot_builder=_SnapshotBuilder(),
         _publisher=_Publisher(),
         _consumer_cursors=None,
+        _checkpoint_resource_budget=resource_budget,
     )
     monkeypatch.setattr(
         _checkpoint_collective,
         "decode_checkpoint_bytes",
-        lambda _payload: {
+        lambda _payload, _budget: {
             "runtime_consumer_diagnostics": np.array(json.dumps({"schema_version": 1}))
         },
     )

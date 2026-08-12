@@ -84,12 +84,25 @@ def _rho0():
 
 
 def _ring_slots(sim):
-    """Every ring's every stored slot as flat float64 buffers (concatenated, order-stable)."""
+    """Every ring's exact level/slot buffers in canonical order."""
     out = {}
     for hname in sim.history_names():
         d = int(sim.history_depth(hname))
-        out[hname] = [np.asarray(sim.history_global(hname, k), dtype=np.float64).ravel()
-                      for k in range(d)]
+        try:
+            levels = tuple(int(level) for level in sim.history_levels(hname))
+        except (AttributeError, NotImplementedError):
+            levels = (None,)
+        for level in levels:
+            key = hname if level is None else (hname, level)
+            out[key] = [
+                np.asarray(
+                    sim.history_global(hname, k)
+                    if level is None
+                    else sim.history_global(hname, level, k),
+                    dtype=np.float64,
+                ).ravel()
+                for k in range(d)
+            ]
     return out
 
 

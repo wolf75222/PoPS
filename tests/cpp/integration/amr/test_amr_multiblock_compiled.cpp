@@ -7,6 +7,7 @@
 #include <pops/parallel/comm.hpp>
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
+#include <pops/runtime/multiblock/evaluation_point.hpp>
 
 #include <stdexcept>
 #include <string>
@@ -150,7 +151,11 @@ TEST(test_amr_multiblock_compiled, TwoCompiledBlocksUseOneTransactionalCarrier) 
   pops::MultiFab<Dim> ion(system.prepared_amr_block_state(0, 0));
   const pops::Real total_before = pops::reduce_sum_local(ion) + pops::reduce_sum_local(neutral);
   std::vector<pops::MultiFab<Dim>*> candidates{&neutral, &ion};
-  EXPECT_EQ(system.apply_prepared_amr_program_candidates(0, pops::Real(0.4), candidates), 1U);
+  const pops::runtime::multiblock::BoundaryEvaluationPoint accepted_point{
+      "test.amr.multiblock.compiled", 0, 0, 0, 0, {0, 1}, 0.4, 0.0};
+  EXPECT_EQ(system.apply_prepared_amr_program_candidates(0, pops::Real(0.4), candidates,
+                                                         accepted_point, nullptr),
+            1U);
   EXPECT_NEAR(pops::reduce_sum_local(ion) + pops::reduce_sum_local(neutral), total_before, 1e-12);
   system.publish_prepared_amr_program_candidates(0, candidates);
   EXPECT_NEAR(pops::reduce_min_local(system.prepared_amr_block_state(0, 0)), 0.9, 1e-14);
@@ -165,7 +170,10 @@ TEST(test_amr_multiblock_compiled, TwoCompiledBlocksUseOneTransactionalCarrier) 
   EXPECT_NEAR(pops::reduce_min_local(system.prepared_amr_block_state(0, 0)), 0.9, 1e-14);
   EXPECT_NEAR(pops::reduce_min_local(system.prepared_amr_block_state(1, 0)), 3.1, 1e-14);
 
-  EXPECT_THROW(system.apply_prepared_amr_program_candidates(0, pops::Real(0.8), candidates),
+  const pops::runtime::multiblock::BoundaryEvaluationPoint rejected_point{
+      "test.amr.multiblock.compiled", 0, 0, 0, 0, {0, 1}, 0.8, 0.0};
+  EXPECT_THROW(system.apply_prepared_amr_program_candidates(0, pops::Real(0.8), candidates,
+                                                            rejected_point, nullptr),
                std::runtime_error);
   EXPECT_NEAR(pops::reduce_min_local(ion), 0.9, 1e-14);
   EXPECT_NEAR(pops::reduce_min_local(neutral), 3.1, 1e-14);

@@ -127,14 +127,8 @@ def _resolved(*, bit_identical: bool) -> Any:
     case.program(program)
 
     x_coord, y_coord = coordinates(frame)
-    left_radius_squared = (
-        (x_coord - 0.25) * (x_coord - 0.25)
-        + (y_coord - 0.25) * (y_coord - 0.25)
-    )
-    right_radius_squared = (
-        (x_coord - 0.75) * (x_coord - 0.75)
-        + (y_coord - 0.75) * (y_coord - 0.75)
-    )
+    left_radius_squared = (x_coord - 0.25) * (x_coord - 0.25) + (y_coord - 0.25) * (y_coord - 0.25)
+    right_radius_squared = (x_coord - 0.75) * (x_coord - 0.75) + (y_coord - 0.75) * (y_coord - 0.75)
     two_islands = 1.0 + 0.5 * maximum(
         exp(-220.0 * left_radius_squared),
         exp(-220.0 * right_radius_squared),
@@ -148,9 +142,7 @@ def _resolved(*, bit_identical: bool) -> Any:
     )
 
     threshold = case.param(RuntimeParam("rank_change_refine_threshold", default=1.12))
-    coarsen_threshold = case.param(
-        RuntimeParam("rank_change_coarsen_threshold", default=1.10)
-    )
+    coarsen_threshold = case.param(RuntimeParam("rank_change_coarsen_threshold", default=1.10))
     transfer = AMRTransfer()
     transfer.state(block_state, StateTransfer())
     layout = AMR(
@@ -214,8 +206,7 @@ def _advance(runtime: Any, steps: int) -> None:
     )
     if report.accepted_steps != steps:
         raise AssertionError(
-            "rank-change probe accepted %d/%d requested steps"
-            % (report.accepted_steps, steps)
+            "rank-change probe accepted %d/%d requested steps" % (report.accepted_steps, steps)
         )
 
 
@@ -232,12 +223,16 @@ def _capture_arrays(runtime: Any, *, prefix: str) -> tuple[dict[str, Any], dict[
     for history_index, name in enumerate(names):
         depth = int(runtime.history_depth(name))
         ncomp = int(runtime.history_ncomp(name))
-        histories.append({"name": name, "depth": depth, "ncomp": ncomp})
-        for slot in range(depth):
-            arrays["%s_history_%d_slot_%d" % (prefix, history_index, slot)] = np.asarray(
-                runtime.history_global(name, slot),
-                dtype=np.float64,
-            ).copy()
+        history_levels = [int(level) for level in runtime.history_levels(name)]
+        histories.append({"name": name, "depth": depth, "ncomp": ncomp, "levels": history_levels})
+        for history_level in history_levels:
+            for slot in range(depth):
+                arrays[
+                    "%s_history_%d_level_%d_slot_%d" % (prefix, history_index, history_level, slot)
+                ] = np.asarray(
+                    runtime.history_global(name, history_level, slot),
+                    dtype=np.float64,
+                ).copy()
     report = runtime.amr.explain_regrid()
     program = runtime.program_report()
     if not program.flux_ledger or not any(
@@ -249,9 +244,7 @@ def _capture_arrays(runtime: Any, *, prefix: str) -> tuple[dict[str, Any], dict[
         )
     synchronization = {str(event["phase"]) for event in program.synchronization}
     if not {"reflux", "average_down"} <= synchronization:
-        raise AssertionError(
-            "rank-change proof requires accepted reflux and average-down events"
-        )
+        raise AssertionError("rank-change proof requires accepted reflux and average-down events")
     metadata = {
         "time_hex": float(runtime.time()).hex(),
         "macro_step": int(runtime.macro_step()),
@@ -290,9 +283,7 @@ def _write_evidence(
     payload["checkpoint_tagging_hysteresis"] = np.frombuffer(
         tagging_hysteresis, dtype=np.uint8
     ).copy()
-    payload["metadata"] = np.asarray(
-        json.dumps(metadata, sort_keys=True, separators=(",", ":"))
-    )
+    payload["metadata"] = np.asarray(json.dumps(metadata, sort_keys=True, separators=(",", ":")))
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "wb") as stream:
         np.savez_compressed(stream, **payload)
@@ -302,9 +293,7 @@ def _load_evidence(path: Path) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
     with np.load(path, allow_pickle=False) as stored:
         metadata = json.loads(str(stored["metadata"]))
         arrays = {
-            name: np.asarray(stored[name]).copy()
-            for name in stored.files
-            if name != "metadata"
+            name: np.asarray(stored[name]).copy() for name in stored.files if name != "metadata"
         }
     if metadata.get("schema_version") != 1:
         raise ValueError("rank-change evidence has an unsupported schema")
@@ -350,9 +339,18 @@ def _accepted_tagging_hysteresis_span(payload: Any) -> tuple[bytes, int]:
         cursor += 8
         return value
 
-    if encoded[:8] != b"POPSAST5":
-        raise AssertionError("checkpoint does not contain accepted-state v5")
+    def skip_string() -> None:
+        nonlocal cursor
+        cursor += read_size()
+        if cursor > len(encoded):
+            raise AssertionError("accepted-state string is truncated")
+
+    if encoded[:8] != b"POPSAND3":
+        raise AssertionError("checkpoint does not contain exact-ranked accepted-state v3")
     cursor = 8
+    cursor += 8  # native dimension
+    skip_string()  # exact spatial contract
+    cursor += 2 * 8  # topology epoch, materialization generation
     level_count = read_size()
     clock_bytes = level_count * 40
     if cursor + clock_bytes > len(encoded):
@@ -364,6 +362,17 @@ def _accepted_tagging_hysteresis_span(payload: Any) -> tuple[bytes, int]:
         if cursor + name_size + 8 > len(encoded):
             raise AssertionError("accepted-state logical-clock map is truncated")
         cursor += name_size + 8
+    history_count = read_size()
+    for _ in range(history_count):
+        skip_string()
+        cursor += 8  # Program owner
+        for _identity in range(4):
+            skip_string()
+        cursor += 2 * 8  # depth, component count
+    history_slot_count = read_size()
+    for _ in range(history_slot_count):
+        skip_string()
+        cursor += 5 * 8  # level, slot, outgoing dt, initialized, fill count
     cursor += 8  # CellTemporalPartitionKind
     provider_size = read_size()
     cursor += provider_size
@@ -379,31 +388,28 @@ def _accepted_tagging_hysteresis_span(payload: Any) -> tuple[bytes, int]:
 
 
 def _accepted_tagging_hysteresis(payload: Any) -> bytes:
-    """Extract the opaque persistent-tagging bytes from accepted-state v5."""
+    """Extract the opaque persistent-tagging bytes from exact-ranked accepted-state v3."""
     tagging, _ = _accepted_tagging_hysteresis_span(payload)
     return tagging
 
 
 def _assert_active_tagging_hysteresis(encoded: bytes) -> None:
     """Require a real accepted transition window, not only an empty schema envelope."""
-    if encoded[:8] != b"POPSHYS1" or len(encoded) < 36:
+    if encoded[:8] != b"POPSHYS2" or len(encoded) < 40:
         raise AssertionError("checkpoint persistent-tagging payload is malformed")
-    minimum_cycles = int.from_bytes(encoded[8:12], "little")
-    cycle = int.from_bytes(encoded[12:20], "little")
-    identity_size = int.from_bytes(encoded[20:28], "little")
-    count_offset = 28 + identity_size
+    if int.from_bytes(encoded[8:12], "little") != 2:
+        raise AssertionError("checkpoint persistent-tagging dimension differs")
+    minimum_cycles = int.from_bytes(encoded[12:16], "little")
+    cycle = int.from_bytes(encoded[16:24], "little")
+    identity_size = int.from_bytes(encoded[24:32], "little")
+    count_offset = 32 + identity_size
     if count_offset + 8 > len(encoded):
         raise AssertionError("checkpoint persistent-tagging identity is truncated")
     active_entries = int.from_bytes(encoded[count_offset : count_offset + 8], "little")
-    if (
-        minimum_cycles != HYSTERESIS_CYCLES
-        or cycle == 0
-        or active_entries == 0
-    ):
+    if minimum_cycles != HYSTERESIS_CYCLES or cycle == 0 or active_entries == 0:
         raise AssertionError(
             "rank-change proof requires an active persistent-tagging window "
-            "(min_cycles=%d, cycle=%d, entries=%d)"
-            % (minimum_cycles, cycle, active_entries)
+            "(min_cycles=%d, cycle=%d, entries=%d)" % (minimum_cycles, cycle, active_entries)
         )
 
 
@@ -412,10 +418,7 @@ def _checkpoint_source_authorities(checkpoint: Path) -> tuple[tuple[int, ...], b
         if int(payload["n_ranks"]) != 2 or int(payload["n_levels"]) != 2:
             raise AssertionError("capture checkpoint must record exactly two ranks and two levels")
         boxes = np.asarray(payload["patch_boxes"], dtype=np.int64)
-        owners = tuple(
-            int(value)
-            for value in np.asarray(payload["dmap_rank_0_level_1"], dtype=np.int64)
-        )
+        owners = tuple(int(value) for value in np.asarray(payload["dmap_1"], dtype=np.int64))
         if boxes.ndim != 2 or boxes.shape[1] != 5:
             raise AssertionError("capture checkpoint has malformed AMR patch geometry")
         fine_boxes = sum(int(row[0]) == 1 for row in boxes)
@@ -428,48 +431,14 @@ def _checkpoint_source_authorities(checkpoint: Path) -> tuple[tuple[int, ...], b
             raise AssertionError(
                 "fine patches were not distributed across both source ranks: %r" % (owners,)
             )
-        for rank in range(2):
-            for level in range(2):
-                peer = tuple(
-                    int(value)
-                    for value in np.asarray(
-                        payload["dmap_rank_%d_level_%d" % (rank, level)],
-                        dtype=np.int64,
-                    )
-                )
-                root = tuple(
-                    int(value)
-                    for value in np.asarray(
-                        payload["dmap_rank_0_level_%d" % level],
-                        dtype=np.int64,
-                    )
-                )
-                if peer != root:
-                    raise AssertionError(
-                        "source rank %d records a divergent level-%d ownership map"
-                        % (rank, level)
-                    )
-        tagging = tuple(
-            _accepted_tagging_hysteresis(
-                payload["program_accepted_state_rank_%d" % rank]
-            )
-            for rank in range(2)
-        )
-        if not tagging[0]:
-            raise AssertionError(
-                "rank-change proof requires non-empty persistent tagging state"
-            )
-        _assert_active_tagging_hysteresis(tagging[0])
-        if tagging[1] != tagging[0]:
-            raise AssertionError(
-                "source MPI ranks published divergent persistent tagging state"
-            )
-    return owners, tagging[0]
+        tagging = _accepted_tagging_hysteresis(payload["program_accepted_state"])
+        if not tagging:
+            raise AssertionError("rank-change proof requires non-empty persistent tagging state")
+        _assert_active_tagging_hysteresis(tagging)
+    return owners, tagging
 
 
-def _assert_single_rank_checkpoint(
-    checkpoint: Path, *, expected_tagging_hysteresis: bytes
-) -> None:
+def _assert_single_rank_checkpoint(checkpoint: Path, *, expected_tagging_hysteresis: bytes) -> None:
     with np.load(checkpoint, allow_pickle=False) as payload:
         if int(payload["n_ranks"]) != 1 or int(payload["n_levels"]) != 2:
             raise AssertionError(
@@ -479,7 +448,7 @@ def _assert_single_rank_checkpoint(
             owners = tuple(
                 int(value)
                 for value in np.asarray(
-                    payload["dmap_rank_0_level_%d" % level],
+                    payload["dmap_%d" % level],
                     dtype=np.int64,
                 )
             )
@@ -488,9 +457,7 @@ def _assert_single_rank_checkpoint(
                     "level-%d ownership was not rematerialized entirely onto rank 0: %r"
                     % (level, owners)
                 )
-        actual_tagging = _accepted_tagging_hysteresis(
-            payload["program_accepted_state_rank_0"]
-        )
+        actual_tagging = _accepted_tagging_hysteresis(payload["program_accepted_state"])
         if actual_tagging != expected_tagging_hysteresis:
             raise AssertionError(
                 "persistent tagging state changed during two-to-one rematerialization"
@@ -500,8 +467,7 @@ def _assert_single_rank_checkpoint(
 def _capture(checkpoint: Path, evidence: Path | None, *, bit_identical: bool) -> None:
     if int(_COMM.size) != 2:
         require_mpi_or_skip(
-            "AMR rank-change capture requires exactly two MPI ranks (observed %d)"
-            % int(_COMM.size)
+            "AMR rank-change capture requires exactly two MPI ranks (observed %d)" % int(_COMM.size)
         )
     runtime = _runtime(bit_identical=bit_identical)
     initial_state = np.asarray(
@@ -509,9 +475,7 @@ def _capture(checkpoint: Path, evidence: Path | None, *, bit_identical: bool) ->
     ).copy()
     initial_mass = float(runtime.integral("tracer", levels=(0,)))
     _advance(runtime, CHECKPOINT_STEPS)
-    checkpoint_metadata, checkpoint_arrays = _capture_arrays(
-        runtime, prefix="checkpoint"
-    )
+    checkpoint_metadata, checkpoint_arrays = _capture_arrays(runtime, prefix="checkpoint")
     if checkpoint_metadata["n_levels"] != 2:
         raise AssertionError("rank-change capture did not build its second AMR level")
     checkpoint_state = checkpoint_arrays["checkpoint_state_level_0"]
@@ -587,8 +551,7 @@ def _capture(checkpoint: Path, evidence: Path | None, *, bit_identical: bool) ->
         root_evidence_error = str(evidence_errors[0])
         if root_evidence_error:
             raise RuntimeError(
-                "rank-change evidence publication failed collectively: %s"
-                % root_evidence_error
+                "rank-change evidence publication failed collectively: %s" % root_evidence_error
             )
     barrier(_COMM)
     if int(_COMM.rank) == 0:
@@ -602,13 +565,12 @@ def _capture(checkpoint: Path, evidence: Path | None, *, bit_identical: bool) ->
 def _restart_relaxed(checkpoint: Path, evidence: Path, rematerialized: Path) -> None:
     if int(_COMM.size) != 1:
         require_mpi_or_skip(
-            "AMR rank-change restart requires exactly one MPI rank (observed %d)"
-            % int(_COMM.size)
+            "AMR rank-change restart requires exactly one MPI rank (observed %d)" % int(_COMM.size)
         )
     metadata, arrays = _load_evidence(evidence)
-    expected_tagging_hysteresis = np.asarray(
-        arrays["checkpoint_tagging_hysteresis"], dtype=np.uint8
-    ).reshape(-1).tobytes()
+    expected_tagging_hysteresis = (
+        np.asarray(arrays["checkpoint_tagging_hysteresis"], dtype=np.uint8).reshape(-1).tobytes()
+    )
     if (
         hashlib.sha256(expected_tagging_hysteresis).hexdigest()
         != metadata["tagging_hysteresis_sha256"]
@@ -688,9 +650,7 @@ def _restart_strict(checkpoint: Path) -> None:
             ) from exc
     else:
         raise AssertionError("bit_identical=True accepted a two-to-one MPI rank change")
-    state_after = np.asarray(
-        runtime.block_level_state_global("tracer", 0), dtype=np.float64
-    )
+    state_after = np.asarray(runtime.block_level_state_global("tracer", 0), dtype=np.float64)
     boxes_after = tuple(tuple(int(value) for value in row) for row in runtime.patch_boxes())
     if (
         runtime.macro_step() != 0
@@ -706,8 +666,7 @@ def _capture_divergent(checkpoint: Path) -> None:
     """Prove source-rank tagging disagreement aborts collectively before publication."""
     if int(_COMM.size) != 2:
         require_mpi_or_skip(
-            "AMR divergent capture requires exactly two MPI ranks (observed %d)"
-            % int(_COMM.size)
+            "AMR divergent capture requires exactly two MPI ranks (observed %d)" % int(_COMM.size)
         )
     runtime = _runtime(bit_identical=False)
     _advance(runtime, CHECKPOINT_STEPS)
@@ -730,13 +689,10 @@ def _capture_divergent(checkpoint: Path) -> None:
         _COMM,
         {"rank": int(_COMM.rank), "error": prepare_error},
     )
-    prepare_failures = tuple(
-        row for row in prepare_rows if str(row.get("error", ""))
-    )
+    prepare_failures = tuple(row for row in prepare_rows if str(row.get("error", "")))
     if prepare_failures:
         raise RuntimeError(
-            "divergent accepted-state preparation failed collectively: %r"
-            % (prepare_failures,)
+            "divergent accepted-state preparation failed collectively: %r" % (prepare_failures,)
         )
 
     caught = False
@@ -800,9 +756,7 @@ def main() -> None:
         _capture_divergent(args.checkpoint)
     elif args.mode == "restart-relaxed":
         if args.evidence is None or args.rematerialized_checkpoint is None:
-            raise ValueError(
-                "restart-relaxed requires --evidence and --rematerialized-checkpoint"
-            )
+            raise ValueError("restart-relaxed requires --evidence and --rematerialized-checkpoint")
         _restart_relaxed(
             args.checkpoint,
             args.evidence,

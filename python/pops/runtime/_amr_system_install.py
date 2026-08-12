@@ -534,6 +534,12 @@ class _AmrSystemInstall(_AmrSystem):
 
             finalize_runtime_authorities(self, install_plan, complete=True)
 
+            from pops.runtime._checkpoint_resource_budget import (
+                install_amr_checkpoint_resource_budget,
+            )
+
+            install_amr_checkpoint_resource_budget(self, install_plan)
+
         # (7) FREEZE (ADC-592): the AMR composition is fully lowered -- build the BoundSnapshot manifest
         # of WHAT was bound (build_amr_snapshot, in _bound_snapshot), then _finalize_bind marks the
         # runtime 'bound' as the LAST act. If this route installed a whole-system Program, its

@@ -75,6 +75,7 @@ class _AmrSystemIO(_AmrSystem):
             require_restart_hierarchy_mode,
         )
         from pops._generated_release_contract import AMR_CHECKPOINT_PAYLOAD_VERSION
+        from pops.runtime._checkpoint_resource_budget import require_checkpoint_resource_budget
         from pops.runtime._checkpoint_manifest import (
             authenticate_checkpoint_payload,
             require_exact_payload_version,
@@ -85,7 +86,7 @@ class _AmrSystemIO(_AmrSystem):
         selected_hierarchy_mode = require_restart_hierarchy_mode(
             hierarchy_mode, where="AMR restart"
         )
-        data = decode_checkpoint_bytes(payload)
+        data = decode_checkpoint_bytes(payload, require_checkpoint_resource_budget(self))
         identity = authenticate_checkpoint_payload(self, data, runtime_kind="amr")
         require_exact_payload_version(
             data,

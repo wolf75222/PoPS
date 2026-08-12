@@ -3,17 +3,19 @@
 /// @file
 /// @brief Durable, exact accepted-state image for auxiliary provider groups.
 ///
-/// The image is intentionally metadata-only.  Checkpoint backends own rank-local field payload
-/// staging, while this contract authenticates the group identities and keyed components before a
-/// backend is allowed to publish restored values.  Keeping values out of this image prevents a
-/// semantic ComponentKey from being reduced to a raw component array during restart.
+/// Version two keeps metadata and the exact accepted values in one sealed image.  Values remain
+/// grouped by the storage identity resolved from ComponentKey; they are never flattened into an
+/// owner-erased auxiliary array.  The enclosing AMR checkpoint contributes the block/level axis and
+/// the live spatial contract contributes the valid-cell extent.
 
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/runtime/system/exact_aux_registry.hpp>
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <map>
 #include <optional>
@@ -32,6 +34,9 @@ struct AuxiliaryCheckpointStorageGroup final {
   AuxiliaryComponentContract contract;
   AuxiliaryStorageShape<Dim> shape;
   std::size_t component_count = 0;
+  /// Component-major valid-cell payload.  The AMR facade gathers it over the prepared hierarchy
+  /// lane and validates its exact size against the live level domain before publication.
+  std::vector<double> payload;
 
   friend bool operator==(const AuxiliaryCheckpointStorageGroup&,
                          const AuxiliaryCheckpointStorageGroup&) = default;
@@ -83,7 +88,7 @@ struct AuxiliaryCheckpointAcceptedState final {
 
 namespace auxiliary_checkpoint_detail {
 
-inline constexpr std::array<std::uint8_t, 8> kMagic{'P', 'O', 'P', 'S', 'A', 'U', 'X', '1'};
+inline constexpr std::array<std::uint8_t, 8> kMagic{'P', 'O', 'P', 'S', 'A', 'U', 'X', '2'};
 
 class Writer final {
  public:
@@ -95,6 +100,12 @@ class Writer final {
       bytes_.push_back(static_cast<std::uint8_t>((value >> shift) & 0xffU));
   }
   void i32(int value) { u64(static_cast<std::uint64_t>(static_cast<std::int64_t>(value))); }
+  void real(double value) {
+    static_assert(sizeof(double) == sizeof(std::uint64_t));
+    std::uint64_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    u64(bits);
+  }
   void size(std::size_t value) { u64(static_cast<std::uint64_t>(value)); }
   void string(std::string_view value) {
     size(value.size());
@@ -130,11 +141,24 @@ class Reader final {
       fail_("integer is outside native int range");
     return static_cast<int>(value);
   }
-  [[nodiscard]] std::size_t size() {
+  [[nodiscard]] double real() {
+    const std::uint64_t bits = u64();
+    double value = 0.0;
+    std::memcpy(&value, &bits, sizeof(value));
+    return value;
+  }
+  [[nodiscard]] std::size_t size(std::size_t element_bytes = 1) {
     const std::uint64_t value = u64();
     constexpr std::uint64_t kMaxElements = std::uint64_t{1} << 30;
-    if (value > kMaxElements || value > bytes_.size())
+    if (element_bytes == 0 || value > kMaxElements ||
+        value > static_cast<std::uint64_t>((bytes_.size() - cursor_) / element_bytes))
       fail_("container length is not credible");
+    return static_cast<std::size_t>(value);
+  }
+  [[nodiscard]] std::size_t index() {
+    const std::uint64_t value = u64();
+    if (value > std::numeric_limits<std::size_t>::max())
+      fail_("index is outside native size_t range");
     return static_cast<std::size_t>(value);
   }
   [[nodiscard]] std::string string() {
@@ -161,6 +185,18 @@ class Reader final {
   std::span<const std::uint8_t> bytes_;
   std::size_t cursor_ = 0;
 };
+
+inline constexpr std::size_t kEncodedScalarBytes = 8;
+
+template <int Dim>
+inline constexpr std::size_t kMinStorageGroupBytes =
+    (10 + static_cast<std::size_t>(Dim)) * kEncodedScalarBytes;
+
+template <int Dim>
+inline constexpr std::size_t kMinComponentBytes =
+    (15 + static_cast<std::size_t>(Dim)) * kEncodedScalarBytes;
+
+inline constexpr std::size_t kMinProviderBytes = 3 * kEncodedScalarBytes;
 
 inline void write_optional_string(Writer& out, const std::optional<std::string>& value) {
   out.u64(value ? 1U : 0U);
@@ -291,6 +327,9 @@ void validate_state(const AuxiliaryCheckpointAcceptedState<Dim>& state) {
       throw std::invalid_argument("auxiliary checkpoint group identity differs from its shape");
     if (!groups.emplace(group.identity, &group).second)
       throw std::invalid_argument("auxiliary checkpoint has duplicate group identity");
+    for (const double value : group.payload)
+      if (!std::isfinite(value))
+        throw std::invalid_argument("auxiliary checkpoint group payload must be finite");
   }
 
   std::map<std::string, const AuxiliaryCheckpointProviderPublication*> providers;
@@ -344,7 +383,8 @@ template <int Dim>
   state.registry_contract = std::string(registry.collective_contract());
   state.accepted_generation = registry.accepted_generation();
   for (const auto& group : registry.storage_groups())
-    state.groups.push_back({group.identity, group.contract, group.shape, group.component_count});
+    state.groups.push_back(
+        {group.identity, group.contract, group.shape, group.component_count, {}});
   const auto& accepted_points = registry.accepted_points();
   for (std::size_t index = 0; index < registry.provider_count(); ++index) {
     const auto& provider = registry.provider(index);
@@ -373,6 +413,9 @@ template <int Dim>
     detail::write_contract(out, group.contract);
     detail::write_shape(out, group.shape);
     out.size(group.component_count);
+    out.size(group.payload.size());
+    for (const double value : group.payload)
+      out.real(value);
   }
   out.size(state.components.size());
   for (const auto& component : state.components) {
@@ -406,14 +449,17 @@ template <int Dim>
   AuxiliaryCheckpointAcceptedState<Dim> state;
   state.registry_contract = in.string();
   state.accepted_generation = in.u64();
-  state.groups.resize(in.size());
+  state.groups.resize(in.size(detail::kMinStorageGroupBytes<Dim>));
   for (auto& group : state.groups) {
     group.identity = in.string();
     group.contract = detail::read_contract(in);
     group.shape = detail::read_shape<Dim>(in);
-    group.component_count = in.size();
+    group.component_count = in.index();
+    group.payload.resize(in.size(sizeof(double)));
+    for (double& value : group.payload)
+      value = in.real();
   }
-  state.components.resize(in.size());
+  state.components.resize(in.size(detail::kMinComponentBytes<Dim>));
   for (auto& component : state.components) {
     component.provider_identity = in.string();
     component.provider_kind = detail::read_kind(in);
@@ -421,9 +467,9 @@ template <int Dim>
     component.contract = detail::read_contract(in);
     component.shape = detail::read_shape<Dim>(in);
     component.address.group = in.string();
-    component.address.component = in.size();
+    component.address.component = in.index();
   }
-  state.providers.resize(in.size());
+  state.providers.resize(in.size(detail::kMinProviderBytes));
   for (auto& provider : state.providers) {
     provider.identity = in.string();
     provider.kind = detail::read_kind(in);
@@ -483,10 +529,16 @@ void restore_auxiliary_checkpoint_state(const AuxiliaryCheckpointAcceptedState<D
           {{std::string_view("pops.exact-auxiliary-checkpoint"), payload}}, lane))
     throw std::runtime_error("exact auxiliary checkpoint differs between communicator ranks");
 
-  const bool compatible = state.registry_contract == expected.registry_contract &&
-                          state.groups == expected.groups &&
-                          state.components == expected.components &&
-                          state.providers.size() == expected.providers.size();
+  bool compatible = state.registry_contract == expected.registry_contract &&
+                    state.groups.size() == expected.groups.size() &&
+                    state.components == expected.components &&
+                    state.providers.size() == expected.providers.size();
+  for (std::size_t index = 0; index < state.groups.size() && compatible; ++index) {
+    const auto& restored = state.groups[index];
+    const auto& live = expected.groups[index];
+    compatible = restored.identity == live.identity && restored.contract == live.contract &&
+                 restored.shape == live.shape && restored.component_count == live.component_count;
+  }
   std::vector<std::optional<AuxiliaryEvaluationPoint>> accepted_points;
   try {
     accepted_points.reserve(state.providers.size());

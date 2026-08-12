@@ -189,11 +189,36 @@ extern "C" const char* pops_program_block_name(int block) {
 }
 extern "C" bool pops_program_has_flux_expression() { return true; }
 extern "C" int pops_program_flux_expression_budget_count() { return 1; }
+extern "C" std::uint64_t pops_program_interface_coupling_application_bound() {
+  return UINT64_C(0);
+}
+extern "C" std::uint64_t pops_program_interface_coupling_identity_character_bound() {
+  return UINT64_C(0);
+}
 extern "C" std::uint64_t pops_program_flux_rhs_basis_bound(int block) {
   return block == 0 ? UINT64_C(1) : UINT64_C(0);
 }
 extern "C" std::uint64_t pops_program_flux_coefficient_term_bound(int block) {
   return block == 0 ? UINT64_C(1) : UINT64_C(0);
+}
+extern "C" int pops_program_checkpoint_history_count() { return 0; }
+extern "C" const char* pops_program_checkpoint_history_name(int) { return ""; }
+extern "C" int pops_program_checkpoint_history_owner(int) { return 0; }
+extern "C" const char* pops_program_checkpoint_history_state_identity(int) { return ""; }
+extern "C" const char* pops_program_checkpoint_history_space_identity(int) { return ""; }
+extern "C" const char* pops_program_checkpoint_history_clock_identity(int) { return ""; }
+extern "C" const char* pops_program_checkpoint_history_interpolation_identity(int) { return ""; }
+extern "C" int pops_program_checkpoint_history_depth(int) { return 0; }
+extern "C" int pops_program_checkpoint_history_components(int) { return 0; }
+extern "C" int pops_program_checkpoint_logical_clock_count() { return 1; }
+extern "C" const char* pops_program_checkpoint_logical_clock_identity(int clock) {
+  return clock == 0 ? "tests.amr-imex.clock" : "";
+}
+extern "C" const char* pops_program_checkpoint_temporal_provider_identity() {
+  return "pops.temporal-partition.global@1";
+}
+extern "C" std::uint64_t pops_program_checkpoint_temporal_cell_capacity() {
+  return UINT64_C(0);
 }
 extern "C" int pops_module_operator_count() { return 0; }
 extern "C" const char* pops_module_operator_owner(int) { return ""; }
@@ -243,7 +268,9 @@ extern "C" void pops_install_program_amr(
         });
       },
       context, [] {});
-  system->install_program_restart_hooks([] {}, [] {}, [] {});
+  system->install_program_restart_hooks(
+      [] {}, [] {}, [] {},
+      [context] { return context->accepted_context_snapshot(); });
 }
 )CPP";
   // clang-format on

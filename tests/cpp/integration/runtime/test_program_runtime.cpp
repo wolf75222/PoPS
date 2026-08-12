@@ -502,6 +502,13 @@ TEST(ProgramRuntime, ReplayAuthorityRequiresAnArtifactAndAnExactRingDepthPair) {
 }
 
 TEST(ProgramRuntime, ArtifactStepInstallRequiresOneNewStepAndRollsBackExactly) {
+  struct AcceptedContextSnapshot final : runtime::program::AcceptedProgramContextSnapshot {
+    std::unique_ptr<runtime::program::AcceptedProgramContextSnapshot> prepare_restore()
+        const override {
+      return std::make_unique<AcceptedContextSnapshot>();
+    }
+    void publish_restore() noexcept override {}
+  };
   runtime::program::ProgramRuntimeState<kNativeDimension> state;
   int old_steps = 0;
   int new_steps = 0;
@@ -510,7 +517,8 @@ TEST(ProgramRuntime, ArtifactStepInstallRequiresOneNewStepAndRollsBackExactly) {
   int restart_resyncs = 0;
   state.install_unverified_step([&](double) { ++old_steps; });
   state.install_restart_hooks([&] { ++restart_preflights; }, [&] { ++restart_regrids; },
-                              [&] { ++restart_resyncs; }, "test");
+                              [&] { ++restart_resyncs; },
+                              [] { return std::make_unique<AcceptedContextSnapshot>(); }, "test");
   state.operator_authorities_ = {{{1, 2, 3, 4}}};
   state.history_replay_authorities_ = {{"gas.previous", 3}};
   state.installed_hash_ = "accepted-artifact";

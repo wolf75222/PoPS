@@ -79,11 +79,71 @@ def _empty_module_metadata_exports() -> str:
     )
 
 
-def _coupling_application(block_count: int, enabled: bool) -> str:
+def _coupling_application(block_count: int, enabled: bool, *, target: str, method: str) -> str:
     if not enabled:
         return ""
     candidates = ["        {%d, &next_%d}" % (block, block) for block in range(block_count)]
-    return "      ctx.apply_coupling_operators(dt, {\n%s\n      });" % ",\n".join(candidates)
+    arguments = "dt"
+    if target == "amr_system":
+        arguments = "pops_program_hash(), %s, %s, dt" % (
+            json.dumps("pops.test.%s.coupled-source.rate/final" % method),
+            json.dumps("pops.test.%s.coupled-source.application/final" % method),
+        )
+    return "      ctx.apply_coupling_operators(%s, {\n%s\n      });" % (
+        arguments,
+        ",\n".join(candidates),
+    )
+
+
+def _amr_budget_exports(block_count: int, method: str, coupled_sources: bool, identity: str) -> str:
+    rhs = {"euler": 1, "imex_source_free": 1, "ssprk2": 2, "ssprk3": 3}[method]
+    rate_identity = "pops.test.%s.coupled-source.rate/final" % method
+    application_identity = "pops.test.%s.coupled-source.application/final" % method
+    coupling_identity_characters = (
+        len(identity) + len(rate_identity) + len(application_identity) if coupled_sources else 0
+    )
+    return """\
+extern "C" bool pops_program_has_flux_expression() { return true; }
+extern "C" int pops_program_flux_expression_budget_count() { return %d; }
+extern "C" std::uint64_t pops_program_flux_rhs_basis_bound(int block) {
+  return block >= 0 && block < %d ? UINT64_C(%d) : UINT64_C(0);
+}
+extern "C" std::uint64_t pops_program_flux_coefficient_term_bound(int block) {
+  return block >= 0 && block < %d ? UINT64_C(1) : UINT64_C(0);
+}
+extern "C" std::uint64_t pops_program_interface_coupling_application_bound() {
+  return UINT64_C(%d);
+}
+extern "C" std::uint64_t pops_program_interface_coupling_identity_character_bound() {
+  return UINT64_C(%d);
+}
+extern "C" int pops_program_checkpoint_history_count() { return 0; }
+extern "C" const char* pops_program_checkpoint_history_name(int) { return ""; }
+extern "C" int pops_program_checkpoint_history_owner(int) { return 0; }
+extern "C" const char* pops_program_checkpoint_history_state_identity(int) { return ""; }
+extern "C" const char* pops_program_checkpoint_history_space_identity(int) { return ""; }
+extern "C" const char* pops_program_checkpoint_history_clock_identity(int) { return ""; }
+extern "C" const char* pops_program_checkpoint_history_interpolation_identity(int) { return ""; }
+extern "C" int pops_program_checkpoint_history_depth(int) { return 0; }
+extern "C" int pops_program_checkpoint_history_components(int) { return 0; }
+extern "C" int pops_program_checkpoint_logical_clock_count() { return 1; }
+extern "C" const char* pops_program_checkpoint_logical_clock_identity(int clock) {
+  return clock == 0 ? "pops.test.clock.macro" : "";
+}
+extern "C" const char* pops_program_checkpoint_temporal_provider_identity() {
+  return "pops.temporal-partition.global@1";
+}
+extern "C" std::uint64_t pops_program_checkpoint_temporal_cell_capacity() {
+  return UINT64_C(0);
+}
+""" % (
+        block_count,
+        block_count,
+        rhs,
+        block_count,
+        1 if coupled_sources else 0,
+        coupling_identity_characters,
+    )
 
 
 def _forward_euler_body(
@@ -91,6 +151,8 @@ def _forward_euler_body(
     projection_indices: tuple[int, ...],
     *,
     apply_couplings: bool,
+    target: str,
+    method: str,
 ) -> str:
     declarations = []
     requests = []
@@ -126,7 +188,7 @@ def _forward_euler_body(
             *declarations,
             "      ctx.rhs_group(4000, {\n%s\n      });" % ",\n".join(requests),
             *combinations,
-            _coupling_application(block_count, apply_couplings),
+            _coupling_application(block_count, apply_couplings, target=target, method=method),
             *projections,
             "      ctx.commit_many({\n%s\n      });" % ",\n".join(commits),
         )
@@ -177,13 +239,15 @@ def _projection_and_commit(
     projection_indices: tuple[int, ...],
     *,
     apply_couplings: bool,
+    target: str,
+    method: str,
 ) -> list[str]:
     projections = [
         "      ctx.apply_projection(%d, next_%d);" % (block, block) for block in projection_indices
     ]
     commits = ["        {&state_%d, &next_%d}" % (block, block) for block in range(block_count)]
     return [
-        _coupling_application(block_count, apply_couplings),
+        _coupling_application(block_count, apply_couplings, target=target, method=method),
         *projections,
         "      ctx.commit_many({\n%s\n      });" % ",\n".join(commits),
     ]
@@ -194,6 +258,8 @@ def _ssprk2_body(
     projection_indices: tuple[int, ...],
     *,
     apply_couplings: bool,
+    target: str,
+    method: str,
 ) -> str:
     stage_one = []
     result = []
@@ -243,6 +309,8 @@ def _ssprk2_body(
                 block_count,
                 projection_indices,
                 apply_couplings=apply_couplings,
+                target=target,
+                method=method,
             ),
         )
     )
@@ -253,6 +321,8 @@ def _ssprk3_body(
     projection_indices: tuple[int, ...],
     *,
     apply_couplings: bool,
+    target: str,
+    method: str,
 ) -> str:
     first_stage = []
     second_stage = []
@@ -324,6 +394,8 @@ def _ssprk3_body(
                 block_count,
                 projection_indices,
                 apply_couplings=apply_couplings,
+                target=target,
+                method=method,
             ),
         )
     )
@@ -356,18 +428,24 @@ def _source(
             len(block_names),
             projection_indices,
             apply_couplings=coupled_sources,
+            target=target,
+            method=method,
         )
     elif method == "ssprk2":
         body = _ssprk2_body(
             len(block_names),
             projection_indices,
             apply_couplings=coupled_sources,
+            target=target,
+            method=method,
         )
     elif method == "ssprk3":
         body = _ssprk3_body(
             len(block_names),
             projection_indices,
             apply_couplings=coupled_sources,
+            target=target,
+            method=method,
         )
     else:  # pragma: no cover - private callers validate the method
         raise ValueError("unsupported explicit test Program %r" % method)
@@ -396,6 +474,7 @@ extern "C" std::uint64_t pops_program_operator_authority_word(int, int) {
 }
 %s
 %s
+%s
 extern "C" bool pops_program_has_dt_bound() { return false; }
 extern "C" pops::Real %s(%s*, pops::Real) {
   return std::numeric_limits<pops::Real>::infinity();
@@ -406,6 +485,9 @@ extern "C" pops::Real %s(%s*, pops::Real) {
         identity,
         _block_identity_exports(block_names),
         _empty_module_metadata_exports(),
+        _amr_budget_exports(len(block_names), method, coupled_sources, identity)
+        if target == "amr_system"
+        else "",
         "pops_program_dt_bound_amr" if target == "amr_system" else "pops_program_dt_bound",
         "pops::AmrSystem" if target == "amr_system" else "pops::System",
     )

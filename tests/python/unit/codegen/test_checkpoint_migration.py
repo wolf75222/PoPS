@@ -35,6 +35,9 @@ from pops.runtime._checkpoint_manifest import (
     inspect_checkpoint_payload_integrity,
     seal_checkpoint_payload,
 )
+from pops.runtime._checkpoint_resource_budget import (
+    _reviewed_archive_checkpoint_resource_budget,
+)
 from pops.runtime._checkpoint_spatial import (
     add_checkpoint_spatial_contract,
     install_checkpoint_spatial_contract,
@@ -49,6 +52,23 @@ FROZEN_UNIFORM_V2_B64 = ROOT / "tests/data/adc667/uniform_v2_ab2_98b7ffe6.npz.b6
 FROZEN_UNIFORM_V2_SHA256 = "82490ddc97dbf37e6431c3c0ddb61c30439bdf4df9166f659146634d27766226"
 TARGET_PROGRAM_HASH = hashlib.sha256(b"adc667-current-program").hexdigest()
 TARGET_ABI_KEY = "adc667-current-test-abi"
+_REVIEWED_RESOURCE_LIMITS = {
+    "max_members": 256,
+    "max_manifest_characters": 1 << 20,
+    "max_array_bytes": 1 << 24,
+    "max_uncompressed_bytes": 1 << 26,
+    "max_archive_bytes": 1 << 26,
+}
+
+
+def _decode_reviewed(raw, *, unsealed=False):
+    digest = hashlib.sha256(raw).hexdigest()
+    budget = _reviewed_archive_checkpoint_resource_budget(
+        content_sha256=digest,
+        runtime_kind="uniform",
+        **_REVIEWED_RESOURCE_LIMITS,
+    )
+    return decode_checkpoint_bytes(raw, budget, allow_reviewed_unsealed=unsealed)
 
 
 def _native_layout():
@@ -145,7 +165,12 @@ def _write_source(tmp_path):
     )
     assert hashlib.sha256(raw).hexdigest() == FROZEN_UNIFORM_V2_SHA256
     path.write_bytes(raw)
-    return path, decode_checkpoint_bytes(raw)
+    budget = _reviewed_archive_checkpoint_resource_budget(
+        content_sha256=FROZEN_UNIFORM_V2_SHA256,
+        runtime_kind="uniform",
+        **_REVIEWED_RESOURCE_LIMITS,
+    )
+    return path, decode_checkpoint_bytes(raw, budget, allow_reviewed_unsealed=True)
 
 
 def _write_authority(tmp_path, *, history_slot_dt=(0.01, 0.01)):
@@ -212,12 +237,23 @@ def _write_authority(tmp_path, *, history_slot_dt=(0.01, 0.01)):
     return path, owner, restart, schedule
 
 
-def _mapping(source_payload, owner, restart):
+def _mapping(source_payload, owner, restart, authority):
     return UniformV2MigrationMapping(
         reviewed_mapping_id="ADC-667-frozen-uniform-v2-to-current-v7",
         source_content_sha256=FROZEN_UNIFORM_V2_SHA256,
+        source_max_members=_REVIEWED_RESOURCE_LIMITS["max_members"],
+        source_max_manifest_characters=_REVIEWED_RESOURCE_LIMITS["max_manifest_characters"],
+        source_max_array_bytes=_REVIEWED_RESOURCE_LIMITS["max_array_bytes"],
+        source_max_uncompressed_bytes=_REVIEWED_RESOURCE_LIMITS["max_uncompressed_bytes"],
+        source_max_archive_bytes=_REVIEWED_RESOURCE_LIMITS["max_archive_bytes"],
         source_abi_key=str(source_payload["abi_key"]),
         source_program_hash=str(source_payload["program_hash"]),
+        authority_content_sha256=hashlib.sha256(authority.read_bytes()).hexdigest(),
+        authority_max_members=_REVIEWED_RESOURCE_LIMITS["max_members"],
+        authority_max_manifest_characters=_REVIEWED_RESOURCE_LIMITS["max_manifest_characters"],
+        authority_max_array_bytes=_REVIEWED_RESOURCE_LIMITS["max_array_bytes"],
+        authority_max_uncompressed_bytes=_REVIEWED_RESOURCE_LIMITS["max_uncompressed_bytes"],
+        authority_max_archive_bytes=_REVIEWED_RESOURCE_LIMITS["max_archive_bytes"],
         authority_restart_identity=restart.token,
         target_semantic_identity=owner.identities[0].token,
         target_artifact_identity=owner.identities[1].token,
@@ -376,14 +412,14 @@ def test_true_frozen_v2_migrates_and_strict_uniform_restart_accepts(tmp_path, mo
         source,
         destination,
         current_authority=authority,
-        mapping=_mapping(source_payload, owner, authority_restart),
+        mapping=_mapping(source_payload, owner, authority_restart, authority),
     )
 
     assert source.read_bytes() == base64.b64decode(
         b"".join(FROZEN_UNIFORM_V2_B64.read_bytes().split()),
         validate=True,
     )
-    migrated = decode_checkpoint_bytes(destination.read_bytes())
+    migrated = _decode_reviewed(destination.read_bytes())
     _, restart = inspect_checkpoint_payload_integrity(migrated, runtime_kind="uniform")
     assert report.destination_restart_identity == restart.token
     assert int(migrated["pops_checkpoint_version"]) == 7
@@ -416,6 +452,10 @@ def test_true_frozen_v2_migrates_and_strict_uniform_restart_accepts(tmp_path, mo
             "Program hash",
         ),
         (
+            lambda mapping: replace(mapping, source_max_archive_bytes=1),
+            "live resource budget",
+        ),
+        (
             lambda mapping: replace(
                 mapping, authority_restart_identity="restart:v1:sha256:" + "0" * 64
             ),
@@ -444,7 +484,7 @@ def test_refused_mapping_publishes_no_destination(tmp_path, change, match):
             source,
             destination,
             current_authority=authority,
-            mapping=change(_mapping(source_payload, owner, restart)),
+            mapping=change(_mapping(source_payload, owner, restart, authority)),
         )
     assert not destination.exists()
 
@@ -457,7 +497,7 @@ def test_ambiguous_legacy_schema_is_refused_without_publication(tmp_path):
     with open(source, "wb") as stream:
         np.savez_compressed(stream, **arrays)
     mapping = replace(
-        _mapping(source_payload, owner, restart),
+        _mapping(source_payload, owner, restart, authority),
         source_content_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
     )
     destination = tmp_path / "must-not-exist.npz"
@@ -475,7 +515,8 @@ def test_ambiguous_legacy_schema_is_refused_without_publication(tmp_path):
 def test_tampered_current_authority_is_refused_without_publication(tmp_path):
     source, source_payload = _write_source(tmp_path)
     authority, owner, restart, _ = _write_authority(tmp_path)
-    authority_payload = decode_checkpoint_bytes(authority.read_bytes())
+    mapping = _mapping(source_payload, owner, restart, authority)
+    authority_payload = _decode_reviewed(authority.read_bytes())
     damaged = {name: np.array(value, copy=True) for name, value in authority_payload.items()}
     damaged["state_blk"][0, 0, 0] = 1.0
     with open(authority, "wb") as stream:
@@ -487,7 +528,7 @@ def test_tampered_current_authority_is_refused_without_publication(tmp_path):
             source,
             destination,
             current_authority=authority,
-            mapping=_mapping(source_payload, owner, restart),
+            mapping=mapping,
         )
     assert not destination.exists()
 
@@ -505,7 +546,7 @@ def test_authority_history_ledger_must_match_the_legacy_trajectory(tmp_path):
             source,
             destination,
             current_authority=authority,
-            mapping=_mapping(source_payload, owner, restart),
+            mapping=_mapping(source_payload, owner, restart, authority),
         )
     assert not destination.exists()
 
@@ -521,7 +562,7 @@ def test_existing_destination_is_never_replaced(tmp_path):
             source,
             destination,
             current_authority=authority,
-            mapping=_mapping(source_payload, owner, restart),
+            mapping=_mapping(source_payload, owner, restart, authority),
         )
     assert destination.read_bytes() == b"sentinel"
 
@@ -542,7 +583,7 @@ def test_destination_race_at_atomic_link_is_no_clobber(tmp_path, monkeypatch):
             source,
             destination,
             current_authority=authority,
-            mapping=_mapping(source_payload, owner, restart),
+            mapping=_mapping(source_payload, owner, restart, authority),
         )
     assert destination.read_bytes() == b"concurrent-writer"
     assert not tuple(tmp_path.glob(".raced.npz.*.tmp"))

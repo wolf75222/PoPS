@@ -373,6 +373,7 @@ class RuntimeInstance:
         "_runtime_plan",
         "_consumer_graph",
         "_executor",
+        "_checkpoint_resource_budget",
         "_consumer_cursors",
         "_consumer_reports",
         "_consumer_finalize_pending",
@@ -416,6 +417,16 @@ class RuntimeInstance:
         self._runtime_plan = runtime_plan
         self._consumer_graph = graph
         self._executor = native
+        from ._checkpoint_resource_budget import CheckpointResourceBudget
+
+        resource_budget = getattr(native, "_checkpoint_resource_budget", None)
+        if type(resource_budget) is not CheckpointResourceBudget:
+            raise TypeError(
+                "RuntimeInstance executor lacks its authenticated checkpoint resource authority"
+            )
+        # Copy the immutable executor authority into the wrapper during the bind transaction. No
+        # restart or checkpoint seam may install, infer or replace it later.
+        self._checkpoint_resource_budget = resource_budget
         self._consumer_cursors = ConsumerCursorSet()
         self._consumer_reports = ()
         self._consumer_finalize_pending: tuple[_PendingConsumerFinalization, ...] = ()
@@ -669,9 +680,7 @@ class RuntimeInstance:
             )
         return provider(block)
 
-    def local_boxes(
-        self, block: str
-    ) -> tuple[tuple[tuple[int, ...], tuple[int, ...]], ...]:
+    def local_boxes(self, block: str) -> tuple[tuple[tuple[int, ...], tuple[int, ...]], ...]:
         """Return rank-owned boxes as exact-rank half-open ``(lower, upper)`` bounds."""
         provider = getattr(self._executor, "local_boxes", None)
         if not callable(provider):
@@ -770,8 +779,24 @@ class RuntimeInstance:
     def history_ncomp(self, name: str) -> int:
         return int(self._executor.history_ncomp(name))
 
-    def history_global(self, name: str, slot: int) -> Any:
-        return self._executor.history_global(name, slot)
+    def history_levels(self, name: str) -> tuple[int, ...]:
+        provider = getattr(self._executor, "history_levels", None)
+        if not callable(provider):
+            raise NotImplementedError("the Uniform history API has one implicit level")
+        return tuple(int(level) for level in provider(name))
+
+    def history_global(self, name: str, level_or_slot: int, slot: int | None = None) -> Any:
+        """Gather one history slot without changing the Uniform two-argument public seam."""
+        level_provider = getattr(self._executor, "history_levels", None)
+        if callable(level_provider):
+            if slot is None:
+                raise TypeError("AMR history_global requires (name, level, slot)")
+            return self._executor.history_global(name, level_or_slot, slot)
+        if slot is not None:
+            if level_or_slot != 0:
+                raise IndexError("Uniform history has only implicit level zero")
+            return self._executor.history_global(name, slot)
+        return self._executor.history_global(name, level_or_slot)
 
     def installed_program_hash(self) -> str:
         return str(self._executor.installed_program_hash())
@@ -1148,8 +1173,7 @@ class RuntimeInstance:
             "temporal_restart_state": copy.deepcopy(
                 getattr(native, "_temporal_restart_state", None)
             ),
-            "step_controller": _snapshot_step_controller(
-                getattr(native, "_step_controller", None)),
+            "step_controller": _snapshot_step_controller(getattr(native, "_step_controller", None)),
             "last_step_transaction_report": getattr(native, "_last_step_transaction_report", None),
         }
 
@@ -1263,7 +1287,8 @@ class RuntimeInstance:
         native._collective_step_envelope_active = True
         try:
             return self._accepted_step_transaction_body(
-                advance, at_end=at_end, before_begin=before_begin)
+                advance, at_end=at_end, before_begin=before_begin
+            )
         finally:
             if previous is missing:
                 delattr(native, "_collective_step_envelope_active")
@@ -1760,13 +1785,19 @@ class RuntimeInstance:
             "candidate": None,
             "proof": None,
         }
+        from pops.output._checkpoint_collective import _bounded_checkpoint_stream_bytes
+        from ._checkpoint_resource_budget import require_checkpoint_resource_budget
+
+        archive_budget = require_checkpoint_resource_budget(self._executor).max_archive_bytes
 
         def inspect_entry(entry: Any) -> None:
             with os.fdopen(entry.duplicate(), "rb") as stream:
                 # ``dup`` retains the same open-file description and therefore the writer's
                 # current offset.  Rewind the retained authority before every authenticated read.
                 stream.seek(0)
-                self._inspect_checkpoint_payload(stream.read())
+                self._inspect_checkpoint_payload(
+                    _bounded_checkpoint_stream_bytes(stream, archive_budget)
+                )
 
         def seal_root() -> dict[str, Any]:
             initial = transaction_receipt.take_native_entry()
@@ -1775,19 +1806,25 @@ class RuntimeInstance:
             entries["candidate"] = candidate
             try:
                 with os.fdopen(candidate.duplicate(), "rb") as stream:
-                    with np.load(stream, allow_pickle=False) as stored:
-                        old_manifest = json.loads(str(stored[MANIFEST_KEY]))
-                        runtime_kind = old_manifest.get("runtime_kind")
-                        if not isinstance(runtime_kind, str) or not runtime_kind:
-                            raise ValueError("native checkpoint manifest lacks its runtime kind")
-                        # Creator ownership is granted only after the native bytes authenticate.
-                        # The retained fd prevents a path swap from changing the inspected payload.
-                        authenticate_checkpoint_payload(self, stored, runtime_kind=runtime_kind)
-                        payload = {
-                            name: np.asarray(stored[name]).copy()
-                            for name in stored.files
-                            if name not in {MANIFEST_KEY, IDENTITY_KEY}
-                        }
+                    stream.seek(0)
+                    raw_candidate = _bounded_checkpoint_stream_bytes(stream, archive_budget)
+                from pops.output._checkpoint_collective import decode_checkpoint_bytes
+
+                stored = decode_checkpoint_bytes(
+                    raw_candidate, require_checkpoint_resource_budget(self._executor)
+                )
+                old_manifest = json.loads(str(stored[MANIFEST_KEY]))
+                runtime_kind = old_manifest.get("runtime_kind")
+                if not isinstance(runtime_kind, str) or not runtime_kind:
+                    raise ValueError("native checkpoint manifest lacks its runtime kind")
+                # Creator ownership is granted only after the native bytes authenticate.
+                # The retained fd prevents a path swap from changing the inspected payload.
+                authenticate_checkpoint_payload(self, stored, runtime_kind=runtime_kind)
+                payload = {
+                    name: np.asarray(stored[name]).copy()
+                    for name in stored.files
+                    if name not in {MANIFEST_KEY, IDENTITY_KEY}
+                }
                 # Keep the candidate fd open across the path comparison.  Only a valid payload
                 # written into the inode created by ``created_at`` can retain that authority.
                 # A provider that swaps the directory entry is rejected instead of granting
@@ -2022,8 +2059,9 @@ class RuntimeInstance:
         """Authenticate exact in-memory bytes on rank zero without native mutation."""
         from pops.output._checkpoint_collective import decode_checkpoint_bytes
         from ._checkpoint_manifest import MANIFEST_KEY, authenticate_checkpoint_payload
+        from ._checkpoint_resource_budget import require_checkpoint_resource_budget
 
-        stored = decode_checkpoint_bytes(payload)
+        stored = decode_checkpoint_bytes(payload, require_checkpoint_resource_budget(self))
         if MANIFEST_KEY not in stored.files:
             raise ValueError("checkpoint has no canonical manifest")
         manifest = json.loads(str(stored[MANIFEST_KEY]))
@@ -2060,6 +2098,7 @@ class RuntimeInstance:
             require_restart_hierarchy_mode,
             restore_checkpoint_payload,
         )
+        from ._checkpoint_resource_budget import require_checkpoint_resource_budget
 
         policy = require_restart_bit_identical(bit_identical, where="RuntimeInstance restart")
         selected_hierarchy_mode = require_restart_hierarchy_mode(
@@ -2069,7 +2108,7 @@ class RuntimeInstance:
             raise ValueError(
                 "RuntimeInstance restart hierarchy identity is only valid with RegridOnRestart"
             )
-        stored = decode_checkpoint_bytes(payload)
+        stored = decode_checkpoint_bytes(payload, require_checkpoint_resource_budget(self))
         from ._checkpoint_manifest import checkpoint_run_identity
 
         source_run_identity = checkpoint_run_identity(stored)

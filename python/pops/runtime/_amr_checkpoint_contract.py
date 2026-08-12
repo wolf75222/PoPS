@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import json
+import math
+import struct
 
 from pops.identity import make_identity
 
 
-_SCHEMA = 5
+_SCHEMA = 6
 _GUARANTEE = "bit_identical_accepted_state"
 _CONTRACT_KEYS = {
     "schema_version",
@@ -177,10 +179,11 @@ def _validate_interface_ledger_against_live_hierarchy(sim, contract):
     levels = int(sim.n_levels())
     blocks = int(sim.n_blocks())
     for row in contract["interface_ledger"]["entries"]:
-        if len(row) != 28:
+        if len(row) != 31:
             raise ValueError("restart: restored AMR interface-flux audit has an invalid native row")
         coarse_level, fine_level = int(row[2]), int(row[3])
         left_block, right_block = int(row[21]), int(row[22])
+        graph_identity, rate_identity, application_identity = row[28:31]
         if (
             int(row[1]) != epoch
             or coarse_level < 0
@@ -191,6 +194,9 @@ def _validate_interface_ledger_against_live_hierarchy(sim, contract):
             or left_block >= blocks
             or right_block >= blocks
             or row[27] != "resolved"
+            or graph_identity != sim.installed_program_hash()
+            or not rate_identity
+            or not application_identity
         ):
             raise ValueError(
                 "restart: restored AMR interface-flux audit is outside the live hierarchy"
@@ -315,10 +321,62 @@ def validate_regridded_contract(sim, payload, receipt):
             raise ValueError(
                 "restart: RegridOnRestart produced a non-accepted or misqualified level clock"
             )
+    history_slots = {}
+    history_publication = {}
     for row in transformed["history_qualifications"]:
-        if len(row) != 8 or int(row[7]) != levels:
+        if len(row) != 13 or int(row[7]) != levels:
             raise ValueError(
                 "restart: RegridOnRestart did not requalify a history over all active levels"
+            )
+        depth = int(row[6])
+        level = int(row[8])
+        slot = int(row[9])
+        dt_bits = int(row[10])
+        initialized = int(row[11])
+        fill_count = int(row[12])
+        if (
+            depth < 2
+            or level < 0
+            or level >= levels
+            or slot < 0
+            or slot >= depth
+            or dt_bits < 0
+            or dt_bits >= 1 << 64
+            or initialized not in (0, 1)
+            or fill_count < 0
+            or fill_count > depth
+            or bool(initialized) != (fill_count > 0)
+        ):
+            raise ValueError(
+                "restart: RegridOnRestart produced invalid history-slot provenance"
+            )
+        outgoing_dt = struct.unpack("!d", dt_bits.to_bytes(8, "big"))[0]
+        if not math.isfinite(outgoing_dt) or (
+            fill_count == 0 and outgoing_dt != 0.0
+        ) or (fill_count > 0 and outgoing_dt <= 0.0):
+            raise ValueError(
+                "restart: RegridOnRestart produced invalid history-slot outgoing dt"
+            )
+        descriptor = tuple(row[:8])
+        publication_key = (descriptor, level)
+        publication = (initialized, fill_count)
+        if publication_key in history_publication and history_publication[publication_key] != publication:
+            raise ValueError(
+                "restart: RegridOnRestart produced inconsistent history publication metadata"
+            )
+        history_publication[publication_key] = publication
+        coordinates = history_slots.setdefault(descriptor, set())
+        if (level, slot) in coordinates:
+            raise ValueError(
+                "restart: RegridOnRestart duplicated history-slot provenance"
+            )
+        coordinates.add((level, slot))
+    for descriptor, coordinates in history_slots.items():
+        depth = int(descriptor[6])
+        expected = {(level, slot) for level in range(levels) for slot in range(depth)}
+        if coordinates != expected:
+            raise ValueError(
+                "restart: RegridOnRestart omitted history-slot provenance"
             )
     if (
         transformed["ledger"]["accepted_entries"]

@@ -125,101 +125,6 @@ PreparedProviderOptions prepared_provider_options_from_python(const std::string&
 }
 
 template <int Dim>
-struct PreparedSystemInterfaceJob {
-  pops::runtime::multiblock::AxisAlignedInterface<Dim> route;
-  pops::runtime::multiblock::PreparedInterfaceFluxSpec<Dim> spec;
-  std::shared_ptr<pops::component::LoadedComponent> component;
-};
-
-template <int Dim>
-std::string prepare_system_interface_jobs(const py::list& rows,
-                                          std::vector<PreparedSystemInterfaceJob<Dim>>& jobs) {
-  if (!PyList_CheckExact(rows.ptr()) || rows.empty())
-    throw py::type_error("System shared-interface provider requires one exact non-empty job list");
-  jobs.reserve(static_cast<std::size_t>(rows.size()));
-  pops::ExactContractBuilder contract;
-  contract.text("pops.system.interface-provider")
-      .scalar(std::uint32_t{1})
-      .scalar(std::int32_t{Dim})
-      .scalar(static_cast<std::uint64_t>(rows.size()));
-  std::string previous_identity;
-  for (const py::handle value : rows) {
-    if (!PyDict_CheckExact(value.ptr()))
-      throw py::type_error("System shared-interface provider jobs must be exact dictionaries");
-    const py::dict row = py::reinterpret_borrow<py::dict>(value);
-    require_exact_keys(row,
-                       {"left_block", "right_block", "level", "component", "interface", "binding",
-                        "parameters_json", "target_json", "execution_context"},
-                       "System shared-interface provider job");
-    const std::size_t left_block = py::cast<std::size_t>(row["left_block"]);
-    const std::size_t right_block = py::cast<std::size_t>(row["right_block"]);
-    const int level = py::cast<int>(row["level"]);
-    if (level != 0)
-      throw py::value_error("System shared-interface provider accepts only its uniform level zero");
-    const py::dict interface = py::cast<py::dict>(row["interface"]);
-    const py::dict binding = py::cast<py::dict>(row["binding"]);
-    const py::dict execution = py::cast<py::dict>(row["execution_context"]);
-    auto route = pops::python::detail::interface_route_from_python<Dim>(interface, left_block,
-                                                                        right_block, level);
-    auto spec = pops::python::detail::interface_flux_spec_from_python<Dim>(
-        interface, binding, py::cast<std::string>(row["parameters_json"]),
-        py::cast<std::string>(row["target_json"]), execution);
-    auto component = py::cast<std::shared_ptr<pops::component::LoadedComponent>>(row["component"]);
-    if (!component || route.identity.empty() || spec.interface_identity != route.identity)
-      throw py::value_error("System shared-interface provider job has no exact component key");
-    if (!previous_identity.empty() && route.identity <= previous_identity)
-      throw py::value_error(
-          "System shared-interface provider jobs must have unique sorted identities");
-    previous_identity = route.identity;
-
-    const PopsExecutionContextV1 context = spec.execution->view();
-    contract.text(route.identity)
-        .scalar(static_cast<std::uint64_t>(route.left_block))
-        .scalar(static_cast<std::uint64_t>(route.right_block))
-        .scalar(static_cast<std::int32_t>(route.level))
-        .scalar(static_cast<std::int32_t>(route.left_axis))
-        .scalar(static_cast<std::int32_t>(route.right_axis))
-        .scalar(static_cast<std::uint8_t>(route.left_side))
-        .scalar(static_cast<std::uint8_t>(route.right_side))
-        .sequence(route.tangential_transform.right_tangent_for_left)
-        .sequence(route.tangential_transform.sign)
-        .sequence(route.tangential_transform.offset)
-        .sequence(route.right_component_for_left)
-        .text(route.left_trace_projection_identity)
-        .text(route.right_trace_projection_identity)
-        .text(route.left_trace_provider_identity)
-        .text(route.right_trace_provider_identity)
-        .scalar(static_cast<std::uint8_t>(route.left_trace_operation))
-        .scalar(static_cast<std::uint8_t>(route.right_trace_operation))
-        .scalar(static_cast<std::int32_t>(route.left_trace_required_depth))
-        .scalar(static_cast<std::int32_t>(route.right_trace_required_depth))
-        .text(route.affine_mapping_identity)
-        .scalar(route.right_normal_translation)
-        .text(spec.component_id)
-        .text(spec.manifest_identity)
-        .scalar(spec.interface_version)
-        .text(spec.canonical_layout_identity)
-        .text(spec.parameters_json)
-        .text(spec.target_json)
-        .text(context.execution_identity)
-        .scalar(context.context_version)
-        .scalar(static_cast<std::int32_t>(context.memory_space))
-        .text(context.backend_identity)
-        .text(context.device_identity)
-        .scalar(static_cast<std::int32_t>(context.scalar_type))
-        .scalar(static_cast<std::int32_t>(context.storage_precision))
-        .scalar(static_cast<std::int32_t>(context.compute_precision))
-        .scalar(static_cast<std::int32_t>(context.accumulation_precision))
-        .scalar(static_cast<std::int32_t>(context.reduction_precision))
-        .text(context.stream_identity)
-        .text(context.communicator_identity)
-        .text(context.communicator_datatype_identity);
-    jobs.push_back({std::move(route), std::move(spec), std::move(component)});
-  }
-  return std::move(contract).release();
-}
-
-template <int Dim>
 void evaluate_system_interface_provider(
     pops::System<Dim>& system,
     const std::shared_ptr<pops::runtime::multiblock::InterfaceFluxScheduler<Dim>>& scheduler,
@@ -309,11 +214,11 @@ void install_system_interface_provider(pops::System<Dim>& system, const py::list
   using Scheduler = pops::runtime::multiblock::InterfaceFluxScheduler<Dim>;
   using PreparedComponent = pops::runtime::multiblock::PreparedInterfaceFluxComponent<Dim>;
   const pops::ExecutionLane& prepared_lane = system.prepared_boundary_execution_lane();
-  std::vector<PreparedSystemInterfaceJob<Dim>> jobs;
+  std::vector<pops::python::detail::PreparedInterfaceFluxJob<Dim>> jobs;
   std::string provider_contract;
   std::exception_ptr parse_error;
   try {
-    provider_contract = prepare_system_interface_jobs<Dim>(rows, jobs);
+    provider_contract = pops::python::detail::prepare_interface_flux_jobs<Dim>(rows, jobs, true);
   } catch (...) {
     parse_error = std::current_exception();
   }
@@ -707,15 +612,24 @@ void bind_system_checkpoint(py::class_<System>& cls) {
                 s.capture_auxiliary_checkpoint_accepted_state());
             return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
           },
-          "Capture only exact auxiliary accepted metadata; field payloads remain backend-owned.")
+          "Capture exact auxiliary accepted metadata and field payloads in one sealed image.")
+      .def("_checkpoint_auxiliary_capacity", &System::checkpoint_auxiliary_capacity,
+           "Return the sealed Uniform auxiliary metadata/scalar checkpoint capacity.")
       .def(
           "restore_auxiliary_checkpoint_accepted_state",
-          [](System& s, py::bytes payload) {
-            std::string bytes = payload;
-            const std::vector<std::uint8_t> image(bytes.begin(), bytes.end());
-            s.restore_auxiliary_checkpoint_accepted_state(
-                pops::runtime::system::deserialize_auxiliary_checkpoint_state<kNativeDimension>(
-                    image));
+          [](System& s, py::object payload) {
+            s.restore_auxiliary_checkpoint_accepted_state_bytes(
+                [&]() -> std::span<const std::uint8_t> {
+                  if (!PyBytes_CheckExact(payload.ptr()))
+                    throw py::type_error(
+                        "Uniform exact auxiliary checkpoint payload must be a bytes object");
+                  char* data = nullptr;
+                  Py_ssize_t size = 0;
+                  if (PyBytes_AsStringAndSize(payload.ptr(), &data, &size) != 0)
+                    throw py::error_already_set();
+                  return {reinterpret_cast<const std::uint8_t*>(data),
+                          static_cast<std::size_t>(size)};
+                });
           },
           py::arg("payload"),
           "Preflight and restore exact auxiliary provenance after private payload staging.")

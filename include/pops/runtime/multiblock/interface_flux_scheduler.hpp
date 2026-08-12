@@ -24,6 +24,7 @@
 #include <exception>
 #include <functional>
 #include <limits>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -131,6 +132,17 @@ struct InterfaceFluxFragmentPublication {
   ::pops::amr::ClockWindow interval;
   ::pops::amr::Rational stage_weight{1, 1};
   bool stage_weight_resolved = true;
+};
+
+struct InterfaceFluxProductionBudget {
+  struct Level {
+    std::size_t fragment_count_per_application = 0;
+    std::size_t payload_terms_per_application = 0;
+  };
+
+  std::vector<Level> levels;
+  std::size_t maximum_interface_identity_characters = 0;
+  std::string exact_contract;
 };
 
 /// Prepared conservative interface executor for one immutable compile-time spatial rank.
@@ -437,6 +449,187 @@ class InterfaceFluxScheduler {
   }
 
   std::size_t size() const noexcept { return interfaces_.size(); }
+
+  InterfaceFluxProductionBudget production_budget(int active_level_count) const {
+    if (active_level_count < 1)
+      throw std::invalid_argument(
+          "multi-block interface production budget requires a positive hierarchy depth");
+    InterfaceFluxProductionBudget budget;
+    budget.levels.resize(static_cast<std::size_t>(active_level_count));
+    ExactContractBuilder exact;
+    exact.text("pops.multiblock.interface-flux-production-budget")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .scalar(active_level_count)
+        .scalar(static_cast<std::uint64_t>(interfaces_.size()));
+    for (const PreparedInterface& prepared : interfaces_) {
+      if (prepared.route.level < 0 || prepared.route.level >= active_level_count ||
+          prepared.component_count < 1)
+        throw std::logic_error(
+            "multi-block interface production budget contains an invalid prepared route");
+      const std::size_t level = static_cast<std::size_t>(prepared.route.level);
+      const std::size_t orientations =
+          (prepared.route.level > 0 ? std::size_t{1} : std::size_t{0}) +
+          (prepared.route.level + 1 < active_level_count ? std::size_t{1} : std::size_t{0});
+      if (prepared.face_count > std::numeric_limits<std::size_t>::max() /
+                                    static_cast<std::size_t>(prepared.component_count))
+        throw std::length_error("multi-block interface payload-term budget exceeds size_t");
+      const std::size_t payload =
+          prepared.face_count * static_cast<std::size_t>(prepared.component_count);
+      if (orientations != 0 && payload > std::numeric_limits<std::size_t>::max() / orientations)
+        throw std::length_error("multi-block interface oriented payload budget exceeds size_t");
+      auto& row = budget.levels[level];
+      if (row.fragment_count_per_application >
+              std::numeric_limits<std::size_t>::max() - orientations ||
+          row.payload_terms_per_application >
+              std::numeric_limits<std::size_t>::max() - orientations * payload)
+        throw std::length_error("multi-block interface production budget exceeds size_t");
+      row.fragment_count_per_application += orientations;
+      row.payload_terms_per_application += orientations * payload;
+      budget.maximum_interface_identity_characters =
+          std::max(budget.maximum_interface_identity_characters, prepared.route.identity.size());
+      exact.text(prepared.route.identity)
+          .scalar(prepared.route.level)
+          .scalar(static_cast<std::uint64_t>(prepared.route.left_block))
+          .scalar(static_cast<std::uint64_t>(prepared.route.right_block))
+          .scalar(static_cast<std::uint64_t>(prepared.face_count))
+          .scalar(prepared.component_count)
+          .scalar(static_cast<std::uint64_t>(orientations));
+    }
+    for (const auto& level : budget.levels)
+      exact.scalar(static_cast<std::uint64_t>(level.fragment_count_per_application))
+          .scalar(static_cast<std::uint64_t>(level.payload_terms_per_application));
+    exact.scalar(static_cast<std::uint64_t>(budget.maximum_interface_identity_characters));
+    budget.exact_contract = std::move(exact).release();
+    return budget;
+  }
+
+  /// Configured-depth ceiling authenticated by the installed logical interface registry and one
+  /// hierarchy-owned full-face capacity per possible level.  Runtime routes are installed only for
+  /// materialized levels; treating their current face counts as future-level authority would
+  /// underbound a restart/regrid.  The level-zero rows are the immutable authored interface set,
+  /// while the caller's capacities are derived from the sealed configured domains.
+  InterfaceFluxProductionBudget production_budget(
+      int configured_level_count, std::span<const std::size_t> configured_face_capacities) const {
+    if (configured_level_count < 1 ||
+        configured_face_capacities.size() != static_cast<std::size_t>(configured_level_count) ||
+        std::any_of(
+            configured_face_capacities.begin(), configured_face_capacities.end(),
+            [](std::size_t value) { return value == 0; }))
+      throw std::invalid_argument(
+          "multi-block interface configured production budget has an invalid hierarchy shape");
+    if (interfaces_.empty()) {
+      InterfaceFluxProductionBudget budget;
+      budget.levels.resize(static_cast<std::size_t>(configured_level_count));
+      ExactContractBuilder exact;
+      exact.text("pops.multiblock.interface-flux-configured-production-budget")
+          .scalar(std::uint32_t{1})
+          .scalar(std::int32_t{Dim})
+          .scalar(configured_level_count)
+          .scalar(std::uint64_t{0});
+      for (const std::size_t capacity : configured_face_capacities)
+        exact.scalar(static_cast<std::uint64_t>(capacity));
+      budget.exact_contract = std::move(exact).release();
+      return budget;
+    }
+
+    struct LogicalInterface {
+      std::string identity;
+      std::size_t components = 0;
+    };
+    std::vector<LogicalInterface> logical;
+    logical.reserve(interfaces_.size());
+    for (const PreparedInterface& prepared : interfaces_) {
+      if (prepared.route.level != 0)
+        continue;
+      if (prepared.route.identity.empty() || prepared.component_count < 1 ||
+          std::find_if(
+              logical.begin(), logical.end(),
+              [&](const LogicalInterface& row) {
+                return row.identity == prepared.route.identity;
+              }) != logical.end())
+        throw std::logic_error(
+            "multi-block interface configured budget has a malformed level-zero authority");
+      logical.push_back(
+          {prepared.route.identity, static_cast<std::size_t>(prepared.component_count)});
+    }
+    if (logical.empty())
+      throw std::logic_error(
+          "multi-block interface configured budget lacks its level-zero authored registry");
+    std::sort(logical.begin(), logical.end(),
+              [](const auto& left, const auto& right) { return left.identity < right.identity; });
+
+    // Every already materialized route must be one exact image of a level-zero authored identity.
+    // Missing configured levels are then bounded, not silently represented as zero production.
+    std::vector<std::vector<std::string>> seen(static_cast<std::size_t>(configured_level_count));
+    for (const PreparedInterface& prepared : interfaces_) {
+      if (prepared.route.level < 0 || prepared.route.level >= configured_level_count ||
+          prepared.component_count < 1)
+        throw std::logic_error(
+            "multi-block interface configured budget contains an out-of-range route");
+      const auto authority =
+          std::lower_bound(logical.begin(), logical.end(), prepared.route.identity,
+                           [](const LogicalInterface& row, std::string_view identity) {
+                             return row.identity < identity;
+                           });
+      if (authority == logical.end() || authority->identity != prepared.route.identity ||
+          authority->components != static_cast<std::size_t>(prepared.component_count))
+        throw std::logic_error(
+            "multi-block interface configured budget route differs from level-zero authority");
+      auto& identities = seen[static_cast<std::size_t>(prepared.route.level)];
+      if (std::find(identities.begin(), identities.end(), prepared.route.identity) !=
+          identities.end())
+        throw std::logic_error(
+            "multi-block interface configured budget contains a duplicate level route");
+      identities.push_back(prepared.route.identity);
+    }
+
+    InterfaceFluxProductionBudget budget;
+    budget.levels.resize(static_cast<std::size_t>(configured_level_count));
+    ExactContractBuilder exact;
+    exact.text("pops.multiblock.interface-flux-configured-production-budget")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .scalar(configured_level_count)
+        .scalar(static_cast<std::uint64_t>(logical.size()));
+    for (const LogicalInterface& interface : logical) {
+      budget.maximum_interface_identity_characters =
+          std::max(budget.maximum_interface_identity_characters, interface.identity.size());
+      exact.text(interface.identity).scalar(static_cast<std::uint64_t>(interface.components));
+    }
+    for (int level = 0; level < configured_level_count; ++level) {
+      const std::size_t orientations =
+          (level > 0 ? std::size_t{1} : std::size_t{0}) +
+          (level + 1 < configured_level_count ? std::size_t{1} : std::size_t{0});
+      auto& row = budget.levels[static_cast<std::size_t>(level)];
+      if (orientations != 0 &&
+          logical.size() > std::numeric_limits<std::size_t>::max() / orientations)
+        throw std::length_error("multi-block interface configured fragment budget exceeds size_t");
+      row.fragment_count_per_application = orientations * logical.size();
+      std::size_t terms = 0;
+      for (const LogicalInterface& interface : logical) {
+        if (configured_face_capacities[static_cast<std::size_t>(level)] >
+            std::numeric_limits<std::size_t>::max() / interface.components)
+          throw std::length_error("multi-block interface configured payload budget exceeds size_t");
+        const std::size_t interface_terms =
+            configured_face_capacities[static_cast<std::size_t>(level)] * interface.components;
+        if (interface_terms > std::numeric_limits<std::size_t>::max() - terms)
+          throw std::length_error("multi-block interface configured payload budget exceeds size_t");
+        terms += interface_terms;
+      }
+      if (orientations != 0 && terms > std::numeric_limits<std::size_t>::max() / orientations)
+        throw std::length_error(
+            "multi-block interface configured oriented payload budget exceeds size_t");
+      row.payload_terms_per_application = orientations * terms;
+      exact.scalar(static_cast<std::uint64_t>(level))
+          .scalar(static_cast<std::uint64_t>(
+              configured_face_capacities[static_cast<std::size_t>(level)]))
+          .scalar(static_cast<std::uint64_t>(row.fragment_count_per_application))
+          .scalar(static_cast<std::uint64_t>(row.payload_terms_per_application));
+    }
+    budget.exact_contract = std::move(exact).release();
+    return budget;
+  }
   void rollback_installations(std::size_t accepted_size) {
     if (accepted_size > interfaces_.size())
       throw std::runtime_error(
@@ -1234,14 +1427,23 @@ class InterfaceFluxScheduler {
       throw std::runtime_error("multi-block interface evaluator returned a non-finite flux");
     }
     if (publication != nullptr) {
+      std::optional<typename InterfaceFluxFragmentLedger::PreparedAccumulation>
+          prepared_publication;
       std::exception_ptr publication_failure;
       try {
-        publish_fragment_(prepared, point, *publication);
+        prepared_publication.emplace(prepare_fragment_publication_(prepared, point, *publication));
       } catch (...) {
         publication_failure = std::current_exception();
       }
       finish_collective_preflight_(prepared.communicator, publication_failure,
                                    "interface-fragment accumulation");
+      if (!all_ranks_agree_exact_ordered_byte_pairs(
+              {{std::string_view("interface-fragment-accumulation"),
+                prepared_publication->exact_contract()}},
+              prepared.communicator))
+        throw std::runtime_error(
+            "multi-block interface fragment candidates differ across MPI ranks");
+      publication->ledger->publish_prepared_accumulation(*prepared_publication);
     }
     try {
       scatter_(prepared, left_rhs, right_rhs);
@@ -1272,27 +1474,40 @@ class InterfaceFluxScheduler {
 #endif
   }
 
-  static void publish_fragment_(const PreparedInterface& prepared,
-                                const BoundaryEvaluationPoint& point,
-                                const InterfaceFluxFragmentPublication& publication) {
+  static typename InterfaceFluxFragmentLedger::PreparedAccumulation prepare_fragment_publication_(
+      const PreparedInterface& prepared, const BoundaryEvaluationPoint& point,
+      const InterfaceFluxFragmentPublication& publication) {
+    using entry_type = typename InterfaceFluxFragmentLedger::Entry;
     const ::pops::amr::InterfaceFluxFragmentMeasure measure{publication.stage_weight,
                                                             prepared.face_measure, point.dt,
                                                             publication.stage_weight_resolved};
+    std::vector<entry_type> entries;
+    entries.reserve(2);
     const auto accumulate = [&](int coarse_level, int fine_level,
                                 ::pops::amr::InterfaceFluxOrientation orientation) {
-      ::pops::amr::InterfaceFluxFragmentKey key{
-          prepared.route.identity,   publication.topology_epoch, coarse_level,         fine_level,
-          publication.clock,         publication.stage_identity, publication.interval, orientation,
-          prepared.route.left_block, prepared.route.right_block};
+      ::pops::amr::InterfaceFluxFragmentKey key{prepared.route.identity,
+                                                publication.topology_epoch,
+                                                coarse_level,
+                                                fine_level,
+                                                publication.clock,
+                                                publication.stage_identity,
+                                                point.graph_identity,
+                                                point.rate_identity,
+                                                point.application_identity,
+                                                publication.interval,
+                                                orientation,
+                                                prepared.route.left_block,
+                                                prepared.route.right_block};
       InterfaceFluxFragmentPayload payload(
           prepared.host_flux.data(), prepared.host_flux.data() + prepared.host_flux.extent(0));
-      publication.ledger->accumulate(std::move(key), measure, std::move(payload));
+      entries.push_back({std::move(key), measure, std::move(payload)});
     };
     if (point.level > 0)
       accumulate(point.level - 1, point.level, ::pops::amr::InterfaceFluxOrientation::FineOutward);
     if (point.level + 1 < publication.active_level_count)
       accumulate(point.level, point.level + 1,
                  ::pops::amr::InterfaceFluxOrientation::CoarseOutward);
+    return publication.ledger->prepare_accumulation(std::move(entries));
   }
 
   void require_complete_active_level_registry_(int active_level_count) const {
@@ -1443,7 +1658,7 @@ class InterfaceFluxScheduler {
 
   static std::string collective_point_identity_(const BoundaryEvaluationPoint& point) {
     std::string bytes;
-    append_text_(bytes, "pops.multiblock.evaluation-point.v1");
+    append_text_(bytes, "pops.multiblock.evaluation-point.v2");
     append_text_(bytes, point.clock);
     append_scalar_(bytes, point.tick);
     append_scalar_(bytes, point.level);
@@ -1453,6 +1668,9 @@ class InterfaceFluxScheduler {
     append_scalar_(bytes, point.stage_fraction.denominator);
     append_scalar_(bytes, point.dt);
     append_scalar_(bytes, point.physical_time);
+    append_text_(bytes, point.graph_identity);
+    append_text_(bytes, point.rate_identity);
+    append_text_(bytes, point.application_identity);
     return bytes;
   }
 
@@ -1519,7 +1737,9 @@ class InterfaceFluxScheduler {
         publication.interval.begin.physical_time +
         point.stage_fraction.value() *
             (publication.interval.end.physical_time - publication.interval.begin.physical_time);
-    if (publication.ledger->topology_epoch() != publication.topology_epoch ||
+    if (point.graph_identity.empty() || point.rate_identity.empty() ||
+        point.application_identity.empty() ||
+        publication.ledger->topology_epoch() != publication.topology_epoch ||
         publication.active_level_count < 2 || point.level >= publication.active_level_count ||
         publication.clock.level != point.level || publication.interval.begin.level != point.level ||
         publication.interval.end.level != point.level ||

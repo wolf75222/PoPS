@@ -1,0 +1,849 @@
+"""Private live resource authority for bounded accepted-state NPZ decoding."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass
+import json
+import sys
+from typing import Any
+
+
+def _capacity(value: Any, *, where: str, positive: bool = False) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError("%s must be an exact integer" % where)
+    minimum = 1 if positive else 0
+    if value < minimum:
+        raise ValueError("%s must be >= %d" % (where, minimum))
+    if value > sys.maxsize:
+        raise OverflowError("%s exceeds the native addressable range" % where)
+    return value
+
+
+def _add(left: int, right: int, *, where: str) -> int:
+    if left < 0 or right < 0 or right > sys.maxsize - left:
+        raise OverflowError("%s exceeds the native addressable range" % where)
+    return left + right
+
+
+def _mul(left: int, right: int, *, where: str) -> int:
+    if left < 0 or right < 0 or (left and right > sys.maxsize // left):
+        raise OverflowError("%s exceeds the native addressable range" % where)
+    return left * right
+
+
+def _sum(values: Any, *, where: str) -> int:
+    result = 0
+    for value in values:
+        result = _add(result, _capacity(value, where=where), where=where)
+    return result
+
+
+def _product(values: Any, *, where: str) -> int:
+    result = 1
+    for value in values:
+        result = _mul(result, _capacity(value, where=where, positive=True), where=where)
+    return result
+
+
+@dataclass(frozen=True, slots=True)
+class CheckpointResourceBudget:
+    """Trusted allocation envelope installed from one authenticated live runtime."""
+
+    runtime_kind: str
+    max_members: int
+    max_manifest_characters: int
+    max_array_bytes: int
+    max_uncompressed_bytes: int
+    max_archive_bytes: int
+    authority: str
+
+    def __post_init__(self) -> None:
+        if self.runtime_kind not in {"uniform", "amr", "multi_layout_uniform"}:
+            raise ValueError("checkpoint resource budget has an unsupported runtime kind")
+        for name in (
+            "max_members",
+            "max_manifest_characters",
+            "max_array_bytes",
+            "max_uncompressed_bytes",
+            "max_archive_bytes",
+        ):
+            _capacity(getattr(self, name), where="checkpoint budget %s" % name, positive=True)
+        if self.max_array_bytes > self.max_uncompressed_bytes:
+            raise ValueError(
+                "checkpoint per-array resource capacity exceeds its aggregate capacity"
+            )
+        if not isinstance(self.authority, str) or not self.authority:
+            raise TypeError("checkpoint resource budget authority must be non-empty text")
+
+
+def _archive_byte_capacity(
+    uncompressed_bytes: int, member_names: tuple[str, ...], *, where: str
+) -> int:
+    """Bound the ZIP64/DEFLATE carrier without consulting archive-authored sizes."""
+    if (
+        type(member_names) is not tuple
+        or len(member_names) != len(set(member_names))
+        or any(not isinstance(name, str) or not name for name in member_names)
+    ):
+        raise TypeError("%s requires exact unique member names" % where)
+    members = _capacity(len(member_names), where=where + " member count", positive=True)
+    payload = _capacity(uncompressed_bytes, where=where + " uncompressed bytes", positive=True)
+    # The reviewed bound is U + (U >> 12) + (U >> 14) + (U >> 25)
+    # + 145*M + 2*N + 98. Every term crosses the native addressable range through the checked
+    # helpers; neither an archive header nor a central-directory size participates in this budget.
+    result = payload
+    for shift in (12, 14, 25):
+        result = _add(result, payload >> shift, where=where + " DEFLATE bound")
+    result = _add(
+        result,
+        _mul(members, 145, where=where + " ZIP64 member overhead"),
+        where=where,
+    )
+    name_characters = _sum(
+        (len(name.encode("utf-8")) for name in member_names),
+        where=where + " member names",
+    )
+    result = _add(
+        result,
+        _mul(name_characters, 2, where=where + " ZIP member names"),
+        where=where,
+    )
+    return _add(result, 98, where=where + " ZIP64 directory")
+
+
+def _program_for_install(install_plan: Any) -> tuple[Any, dict[str, int]]:
+    artifact = install_plan.artifact
+    program_handle = artifact.program
+    if program_handle is None or getattr(program_handle, "program", None) is None:
+        raise RuntimeError("checkpoint budget requires the artifact's exact compiled Program")
+    program = program_handle.program
+    instances = dict(artifact.program.arguments().instances)
+    block_nvars = {}
+    for block in artifact.blocks:
+        row = instances.get(block.name)
+        if not isinstance(row, dict):
+            raise ValueError("checkpoint budget lacks exact block instance metadata")
+        block_nvars[block.name] = _capacity(
+            int(row.get("components", 0)),
+            where="block %r component count" % block.name,
+            positive=True,
+        )
+    return program, block_nvars
+
+
+def _history_capacity(
+    program: Any,
+    *,
+    cells: tuple[int, ...],
+    amr: bool,
+    block_nvars: dict[str, int],
+) -> tuple[tuple[str, ...], int]:
+    histories = dict(getattr(program, "_histories", None) or {})
+    ncomps = dict(getattr(program, "_histories_ncomp", None) or {})
+    owners = dict(getattr(program, "_history_blocks", None) or {})
+    member_names = ["history_names"]
+    data_bytes = 0
+    for name, depth_value in sorted(histories.items()):
+        depth = _capacity(int(depth_value), where="history %r depth" % name, positive=True)
+        ncomp = ncomps.get(name)
+        if ncomp is None:
+            owner = owners.get(name)
+            if owner is not None:
+                from pops.time.references import block_name
+
+                owner = block_name(owner)
+            ncomp = block_nvars.get(owner)
+        ncomp = _capacity(int(ncomp), where="history %r components" % name, positive=True)
+        member_names.extend(
+            (
+                "history_depth_" + name,
+                "history_ncomp_" + name,
+                "history_policy_" + name,
+                "history_requested_stored_slots_" + name,
+                "history_stored_slots_" + name,
+                "history_storage_mode_" + name,
+                "history_regrid_steps_" + name,
+            )
+        )
+        levels: tuple[int | None, ...] = tuple(range(len(cells))) if amr else (None,)
+        if amr:
+            member_names.append("history_levels_" + name)
+        for level, level_cells in zip(levels, cells, strict=True):
+            suffix = name if level is None else "%s_level_%d" % (name, level)
+            member_names.extend(
+                (
+                    "history_init_" + suffix,
+                    "history_fill_count_" + suffix,
+                    "history_slot_dt_" + suffix,
+                )
+            )
+            for slot in range(depth):
+                member_names.append(
+                    "history_%s_%d" % (name, slot)
+                    if level is None
+                    else "history_%s_level_%d_%d" % (name, level, slot)
+                )
+            values = _mul(level_cells, ncomp, where="history scalar budget")
+            values = _mul(values, depth, where="history scalar budget")
+            data_bytes = _add(
+                data_bytes,
+                _mul(values, 8, where="history byte budget"),
+                where="history byte budget",
+            )
+    return tuple(member_names), data_bytes
+
+
+def _cache_capacity(owner: Any, shape: tuple[int, ...]) -> tuple[tuple[str, ...], int, Any]:
+    native = owner._s
+    provider = getattr(native, "program_cache_nodes", None)
+    nodes = tuple(int(node) for node in provider()) if callable(provider) else ()
+    if nodes != tuple(sorted(set(nodes))) or any(node < 0 for node in nodes):
+        raise ValueError("checkpoint cache authority has invalid exact node ids")
+    names = ["cache_nodes", "cache_names"]
+    data_bytes = 0
+    evidence = []
+    for node in nodes:
+        name = str(native.program_cache_name(node))
+        ncomp = _capacity(
+            int(native.program_cache_ncomp(node)),
+            where="checkpoint cache component count",
+            positive=True,
+        )
+        ngrow = _capacity(
+            int(native.program_cache_ngrow(node)), where="checkpoint cache ghost width"
+        )
+        if not name:
+            raise ValueError("checkpoint cache authority has an empty exact node name")
+        names.extend(
+            (
+                "cache_ncomp_%d" % node,
+                "cache_ngrow_%d" % node,
+                "cache_last_update_%d" % node,
+                "cache_accum_dt_%d" % node,
+                "cache_value_%d" % node,
+            )
+        )
+        grown = _product(
+            (_add(extent, 2 * ngrow, where="checkpoint cache grown shape") for extent in shape),
+            where="checkpoint cache grown cells",
+        )
+        data_bytes = _add(
+            data_bytes,
+            _mul(
+                _mul(grown, ncomp, where="checkpoint cache scalar budget"),
+                8,
+                where="checkpoint cache byte budget",
+            ),
+            where="checkpoint cache byte budget",
+        )
+        evidence.append((node, name, ncomp, ngrow, grown))
+    return tuple(names), data_bytes, evidence
+
+
+def _consumer_evidence(install_plan: Any) -> tuple[str, int, Any]:
+    graph = install_plan.artifact.plan.consumer_graph
+    if graph is None:
+        return "none", 0, {"nodes": []}
+    identity = getattr(getattr(graph, "identity", None), "token", None)
+    to_data = getattr(graph, "to_data", None)
+    nodes = getattr(graph, "nodes", None)
+    if (
+        not isinstance(identity, str)
+        or not identity
+        or not callable(to_data)
+        or not isinstance(nodes, tuple)
+    ):
+        raise TypeError("checkpoint budget requires the exact sealed ConsumerGraph")
+    data = to_data()
+    json.dumps(data, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return identity, len(nodes), data
+
+
+def _checkpoint_member_names(
+    *,
+    runtime_kind: str,
+    block_names: tuple[str, ...],
+    field_names: tuple[str, ...],
+    history_names: tuple[str, ...],
+    cache_names: tuple[str, ...],
+    levels: int,
+    rank_capacity: int,
+) -> tuple[str, ...]:
+    from pops.runtime._checkpoint_embedded_boundary import EMBEDDED_BOUNDARY_CONTRACT_KEY
+    from pops.runtime._checkpoint_manifest import IDENTITY_KEY, MANIFEST_KEY
+    from pops.runtime._checkpoint_spatial import SPATIAL_CONTRACT_KEY
+
+    cadence = (
+        "program_cadence_substeps",
+        "program_cadence_stride",
+        "program_cadence_window_steps",
+        "program_cadence_window_dt",
+        "program_cadence_window_start_time",
+        "program_last_dt",
+    )
+    runtime = (
+        "runtime_consumer_graph",
+        "runtime_consumer_cursors",
+        "runtime_consumer_diagnostics",
+    )
+    if runtime_kind == "uniform":
+        names = [
+            "pops_checkpoint_version",
+            "t",
+            "macro_step",
+            "abi_key",
+            "blocks",
+            "temporal_restart_state",
+            SPATIAL_CONTRACT_KEY,
+            EMBEDDED_BOUNDARY_CONTRACT_KEY,
+            *cadence,
+            "field_provider_slots",
+            "program_hash",
+            "phi",
+            "auxiliary_checkpoint",
+            *cache_names,
+            *history_names,
+        ]
+        for block in block_names:
+            names.extend(("ncomp_" + block, "names_" + block, "state_" + block))
+        for index in range(len(field_names)):
+            names.append("field_potential_%d" % index)
+    else:
+        names = [
+            "pops_amr_checkpoint_version",
+            "t",
+            "macro_step",
+            "regrid_every",
+            "abi_key",
+            "blocks",
+            "n_levels",
+            "configured_n_levels",
+            "n_ranks",
+            "patch_boxes",
+            "temporal_restart_state",
+            "regrid_count",
+            "topology_epoch",
+            "amr_accepted_contract",
+            "program_hash",
+            "field_provider_slots",
+            SPATIAL_CONTRACT_KEY,
+            *cadence,
+            "program_accepted_state_source_authority",
+            *history_names,
+        ]
+        for block in block_names:
+            names.append("n_vars_" + block)
+            for level in range(levels):
+                names.append("state_%s_%d" % (block, level))
+        for level in range(levels):
+            names.extend(("phi_%d" % level, "auxiliary_checkpoint_%d" % level))
+        for index in range(len(field_names)):
+            names.append("field_provider_levels_%d" % index)
+            for level in range(levels):
+                names.append("field_provider_phi_%d_%d" % (index, level))
+        names.append("program_accepted_state")
+        for level in range(levels):
+            names.append("dmap_%d" % level)
+    names.extend((*runtime, MANIFEST_KEY, IDENTITY_KEY))
+    if not names or len(names) != len(set(names)):
+        raise RuntimeError("checkpoint resource authority produced duplicate member names")
+    return tuple(names)
+
+
+def _common_budget(
+    owner: Any,
+    install_plan: Any,
+    *,
+    runtime_kind: str,
+    cells: tuple[int, ...],
+    shape: tuple[int, ...],
+    rank_capacity: int,
+    auxiliary_metadata_bytes: int,
+    auxiliary_components: int,
+    accepted_program_bytes: int,
+    source_authority_bytes: int,
+    structural_bytes: int,
+    program: Any,
+    block_nvars_by_name: dict[str, int],
+    field_names: tuple[str, ...],
+) -> CheckpointResourceBudget:
+    from pops.identity import make_identity
+    from pops.output._checkpoint_collective import _NPY_HEADER_BUDGET, _manifest_character_budget
+
+    if runtime_kind not in {"uniform", "amr"}:
+        raise ValueError("checkpoint common budget requires Uniform or AMR")
+    rank_capacity = _capacity(rank_capacity, where="checkpoint rank capacity", positive=True)
+    block_names = tuple(block_nvars_by_name)
+    block_nvars = tuple(block_nvars_by_name[name] for name in block_names)
+    total_cells = _sum(cells, where="checkpoint configured cell capacity")
+    state_scalars = _mul(
+        total_cells,
+        _sum(block_nvars, where="block scalar width"),
+        where="checkpoint state scalar budget",
+    )
+    field_scalars = _mul(total_cells, len(field_names), where="checkpoint field scalar budget")
+    scientific_bytes = _mul(
+        _add(
+            _add(state_scalars, total_cells, where="checkpoint scalar budget"),
+            field_scalars,
+            where="checkpoint scalar budget",
+        ),
+        8,
+        where="checkpoint scientific byte budget",
+    )
+    history_names, history_bytes = _history_capacity(
+        program,
+        cells=cells,
+        amr=runtime_kind == "amr",
+        block_nvars=block_nvars_by_name,
+    )
+    cache_names, cache_bytes, cache_evidence = (
+        _cache_capacity(owner, shape) if runtime_kind == "uniform" else ((), 0, ())
+    )
+    auxiliary_bytes = _mul(auxiliary_components, 8, where="auxiliary scalar width")
+    auxiliary_bytes = _mul(
+        total_cells, auxiliary_bytes, where="auxiliary checkpoint payload budget"
+    )
+    auxiliary_bytes = _add(
+        auxiliary_bytes,
+        _mul(len(cells), auxiliary_metadata_bytes, where="auxiliary metadata budget"),
+        where="auxiliary checkpoint payload budget",
+    )
+    program_bytes = _mul(
+        accepted_program_bytes,
+        1,
+        where="accepted Program checkpoint byte budget",
+    )
+    payload_bytes = 0
+    for addition in (
+        scientific_bytes,
+        history_bytes,
+        cache_bytes,
+        auxiliary_bytes,
+        program_bytes,
+        source_authority_bytes,
+        structural_bytes,
+    ):
+        payload_bytes = _add(payload_bytes, addition, where="checkpoint payload byte budget")
+
+    names = _checkpoint_member_names(
+        runtime_kind=runtime_kind,
+        block_names=block_names,
+        field_names=field_names,
+        history_names=history_names,
+        cache_names=cache_names,
+        levels=len(cells),
+        rank_capacity=rank_capacity,
+    )
+    consumer_identity, consumer_count, consumer_data = _consumer_evidence(install_plan)
+    temporal_manifest = program.temporal_manifest()
+    control_data = {
+        "artifact": install_plan.artifact.artifact_identity.token,
+        "bind": install_plan.bind_identity.token,
+        "runtime_kind": runtime_kind,
+        "blocks": list(zip(block_names, block_nvars, strict=True)),
+        "block_variables": {
+            name: list(owner._s.variable_names(name, "conservative")) for name in block_names
+        },
+        "fields": list(field_names),
+        "histories": sorted(getattr(program, "_histories", {})),
+        "cache": cache_evidence,
+        "temporal": temporal_manifest,
+        "consumer_graph": consumer_data,
+        "consumer_identity": consumer_identity,
+        "consumer_count": consumer_count,
+        "cells": list(cells),
+        "rank_capacity": rank_capacity,
+    }
+    control_characters = len(
+        json.dumps(control_data, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    )
+    max_manifest_characters = _manifest_character_budget(names)
+    # Every variable-sized text value is authored by one of the immutable controls above. Reserve
+    # its complete canonical spelling for the temporal image, consumer cursors/diagnostics and
+    # native metadata, in addition to the independently derived exact manifest schema budget.
+    text_characters = _add(
+        max_manifest_characters,
+        _mul(control_characters, 8, where="checkpoint control text budget"),
+        where="checkpoint text budget",
+    )
+    text_characters = _add(
+        text_characters,
+        _mul(
+            _sum((len(name) for name in names), where="checkpoint member-name budget"),
+            4,
+            where="checkpoint member-name budget",
+        ),
+        where="checkpoint text budget",
+    )
+    text_bytes = _mul(text_characters, 4, where="checkpoint text byte budget")
+    uncompressed = _add(payload_bytes, text_bytes, where="checkpoint aggregate byte budget")
+    uncompressed = _add(
+        uncompressed,
+        _mul(len(names), _NPY_HEADER_BUDGET, where="checkpoint header budget"),
+        where="checkpoint aggregate byte budget",
+    )
+    authority = make_identity(
+        "checkpoint-resource-budget",
+        {
+            **control_data,
+            "auxiliary": [auxiliary_metadata_bytes, auxiliary_components],
+            "accepted_program_bytes": accepted_program_bytes,
+            "source_authority_bytes": source_authority_bytes,
+            "structural_bytes": structural_bytes,
+            "members": list(names),
+            "manifest_characters": max_manifest_characters,
+            "uncompressed_bytes": uncompressed,
+            "archive_bytes": _archive_byte_capacity(
+                uncompressed, names, where="checkpoint archive byte budget"
+            ),
+        },
+    ).token
+    archive_bytes = _archive_byte_capacity(
+        uncompressed, names, where="checkpoint archive byte budget"
+    )
+    return CheckpointResourceBudget(
+        runtime_kind,
+        len(names),
+        max_manifest_characters,
+        max(payload_bytes, text_bytes, accepted_program_bytes, source_authority_bytes, 1),
+        uncompressed,
+        archive_bytes,
+        authority,
+    )
+
+
+def install_uniform_checkpoint_resource_budget(owner: Any, install_plan: Any) -> None:
+    from pops.runtime._checkpoint_spatial import require_checkpoint_spatial_contract
+
+    spatial = require_checkpoint_spatial_contract(owner)
+    capacity = owner._s._checkpoint_auxiliary_capacity()
+    if not isinstance(capacity, tuple) or len(capacity) != 2:
+        raise TypeError("Uniform native auxiliary checkpoint capacity has an invalid schema")
+    program, block_nvars = _program_for_install(install_plan)
+    artifact = install_plan.artifact
+    candidate = _common_budget(
+        owner,
+        install_plan,
+        runtime_kind="uniform",
+        cells=(spatial.cells_at_level(0),),
+        shape=spatial.shape,
+        rank_capacity=1,
+        auxiliary_metadata_bytes=_capacity(capacity[0], where="auxiliary metadata capacity"),
+        auxiliary_components=_capacity(capacity[1], where="auxiliary component capacity"),
+        accepted_program_bytes=0,
+        source_authority_bytes=0,
+        structural_bytes=0,
+        program=program,
+        block_nvars_by_name=block_nvars,
+        field_names=tuple(sorted(artifact.plan.field_plans)),
+    )
+    existing = getattr(owner, "_checkpoint_resource_budget", None)
+    if existing is not None and existing != candidate:
+        raise RuntimeError("Uniform checkpoint resource authority changed during bind")
+    owner._checkpoint_resource_budget = candidate
+
+
+def install_amr_checkpoint_resource_budget(owner: Any, install_plan: Any) -> None:
+    from pops.output._checkpoint_collective import checkpoint_topology
+    from pops.runtime._checkpoint_spatial import require_checkpoint_spatial_contract
+
+    spatial = require_checkpoint_spatial_contract(owner)
+    configured_levels = _capacity(
+        int(owner._s.configured_n_levels()), where="configured AMR checkpoint levels", positive=True
+    )
+    if configured_levels > 1 + len(spatial.refinement_ratios):
+        raise ValueError("AMR checkpoint resource authority lacks configured refinement shapes")
+    cells = tuple(spatial.cells_at_level(level) for level in range(configured_levels))
+    capacity = owner._s._checkpoint_auxiliary_level_capacity()
+    program_state = tuple(owner._s._checkpoint_program_state_capacity())
+    if not isinstance(capacity, tuple) or len(capacity) != 2:
+        raise TypeError("AMR native auxiliary checkpoint capacity has an invalid schema")
+    if len(program_state) != 2:
+        raise TypeError("AMR native Program checkpoint capacity has an invalid schema")
+    topology = checkpoint_topology(owner)
+    patch_capacity = _sum(cells, where="AMR patch capacity")
+    rank_capacity = topology.size
+    program, block_nvars = _program_for_install(install_plan)
+    accepted_capacity = _capacity(
+        program_state[0], where="native accepted Program image capacity", positive=True
+    )
+    source_authority_bytes = _capacity(
+        program_state[1], where="native source Program authority capacity", positive=True
+    )
+    structural_bytes = _add(
+        _mul(
+            _mul(patch_capacity, 1 + 2 * spatial.dimension, where="AMR patch-box scalar capacity"),
+            8,
+            where="AMR patch-box byte capacity",
+        ),
+        _mul(patch_capacity, 8, where="AMR owner-map byte capacity"),
+        where="AMR structural checkpoint capacity",
+    )
+    artifact = install_plan.artifact
+    candidate = _common_budget(
+        owner,
+        install_plan,
+        runtime_kind="amr",
+        cells=cells,
+        shape=spatial.shape,
+        rank_capacity=rank_capacity,
+        auxiliary_metadata_bytes=_capacity(capacity[0], where="auxiliary metadata capacity"),
+        auxiliary_components=_capacity(capacity[1], where="auxiliary component capacity"),
+        accepted_program_bytes=accepted_capacity,
+        source_authority_bytes=source_authority_bytes,
+        structural_bytes=structural_bytes,
+        program=program,
+        block_nvars_by_name=block_nvars,
+        field_names=tuple(sorted(artifact.plan.field_plans)),
+    )
+    existing = getattr(owner, "_checkpoint_resource_budget", None)
+    if existing is not None and existing != candidate:
+        raise RuntimeError("AMR checkpoint resource authority changed during bind")
+    owner._checkpoint_resource_budget = candidate
+
+
+def install_layout_checkpoint_resource_budget(
+    owner: Any,
+    *,
+    program: Any,
+    block_names: tuple[str, ...],
+    artifact_identity: Any,
+    bind_identity: Any,
+    install_plan: Any,
+) -> None:
+    """Install one child Uniform budget under the aggregate artifact/bind authorities."""
+    from pops.runtime._checkpoint_spatial import require_checkpoint_spatial_contract
+
+    if not block_names or len(block_names) != len(set(block_names)):
+        raise ValueError("layout checkpoint budget requires unique child block names")
+    spatial = require_checkpoint_spatial_contract(owner)
+    capacity = owner._s._checkpoint_auxiliary_capacity()
+    block_nvars = {
+        name: _capacity(
+            int(owner._s.n_vars(name)), where="layout block component count", positive=True
+        )
+        for name in block_names
+    }
+    candidate = _common_budget(
+        owner,
+        install_plan,
+        runtime_kind="uniform",
+        cells=(spatial.cells_at_level(0),),
+        shape=spatial.shape,
+        rank_capacity=1,
+        auxiliary_metadata_bytes=_capacity(capacity[0], where="auxiliary metadata capacity"),
+        auxiliary_components=_capacity(capacity[1], where="auxiliary component capacity"),
+        accepted_program_bytes=0,
+        source_authority_bytes=0,
+        structural_bytes=0,
+        program=program,
+        block_nvars_by_name=block_nvars,
+        field_names=(),
+    )
+    if artifact_identity.token != install_plan.artifact.artifact_identity.token or (
+        bind_identity.token != install_plan.bind_identity.token
+    ):
+        raise ValueError("layout checkpoint resource identity differs from its install plan")
+    existing = getattr(owner, "_checkpoint_resource_budget", None)
+    if existing is not None and existing != candidate:
+        raise RuntimeError("layout checkpoint resource authority changed during bind")
+    owner._checkpoint_resource_budget = candidate
+
+
+def require_checkpoint_resource_budget(owner: Any) -> CheckpointResourceBudget:
+    budget = getattr(owner, "_checkpoint_resource_budget", None)
+    if type(budget) is not CheckpointResourceBudget:
+        raise RuntimeError("checkpoint decode requires the authenticated live resource budget")
+    return budget
+
+
+def aggregate_checkpoint_resource_budgets(
+    budgets: Any,
+    *,
+    authority: str,
+    install_plan: Any,
+    layout_ids: tuple[str, ...],
+    mapping_ids: tuple[str, ...],
+) -> CheckpointResourceBudget:
+    from pops.output._checkpoint_collective import _NPY_HEADER_BUDGET, _manifest_character_budget
+
+    rows = tuple(budgets)
+    if not rows or any(type(row) is not CheckpointResourceBudget for row in rows):
+        raise TypeError("multi-layout checkpoint budget requires exact child budgets")
+    if (
+        type(layout_ids) is not tuple
+        or len(layout_ids) != len(rows)
+        or len(layout_ids) != len(set(layout_ids))
+        or any(not isinstance(value, str) or not value for value in layout_ids)
+        or type(mapping_ids) is not tuple
+        or len(mapping_ids) != len(set(mapping_ids))
+        or any(not isinstance(value, str) or not value for value in mapping_ids)
+    ):
+        raise TypeError("multi-layout checkpoint budget requires exact live layout/mapping ids")
+    member_names = [
+        "t",
+        "macro_step",
+        "abi_key",
+        "layout_ids",
+        "mapping_evaluations",
+        "runtime_consumer_graph",
+        "runtime_consumer_cursors",
+        "runtime_consumer_diagnostics",
+        "pops_checkpoint_manifest",
+        "pops_restart_identity",
+    ]
+    maximum_array = 1
+    # Scalar time/macro-step controls are two fixed eight-byte arrays. The remaining controls are
+    # bounded by the live child manifest authorities below.
+    total = 16
+    for index, row in enumerate(rows):
+        member_names.append("layout_checkpoint_%d" % index)
+        archive_bytes = row.max_archive_bytes
+        maximum_array = max(maximum_array, archive_bytes)
+        total = _add(total, archive_bytes, where="multi-layout checkpoint byte budget")
+    manifest = _manifest_character_budget(tuple(member_names))
+    consumer_identity, consumer_count, consumer_data = _consumer_evidence(install_plan)
+    control_characters = len(
+        json.dumps(
+            {
+                "layouts": layout_ids,
+                "mappings": mapping_ids,
+                "consumer_graph": consumer_data,
+                "consumer_identity": consumer_identity,
+                "consumer_count": consumer_count,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    )
+    text_bytes = _mul(
+        _add(
+            _add(
+                manifest,
+                _sum(
+                    (row.max_manifest_characters for row in rows),
+                    where="multi-layout child manifest budget",
+                ),
+                where="multi-layout text budget",
+            ),
+            _mul(control_characters, 8, where="multi-layout control text budget"),
+            where="multi-layout text budget",
+        ),
+        4,
+        where="multi-layout text byte budget",
+    )
+    total = _add(total, text_bytes, where="multi-layout checkpoint byte budget")
+    total = _add(
+        total,
+        _mul(len(member_names), _NPY_HEADER_BUDGET, where="multi-layout header budget"),
+        where="multi-layout checkpoint byte budget",
+    )
+    archive_bytes = _archive_byte_capacity(
+        total, tuple(member_names), where="multi-layout container archive budget"
+    )
+    return CheckpointResourceBudget(
+        "multi_layout_uniform",
+        len(member_names),
+        manifest,
+        max(maximum_array, text_bytes),
+        total,
+        archive_bytes,
+        authority,
+    )
+
+
+def _producer_checkpoint_resource_budget(
+    payload: Mapping[str, Any], *, runtime_kind: str, authority: str
+) -> CheckpointResourceBudget:
+    """Build a private exact budget from already-authenticated producer arrays."""
+    import numpy as np
+    from pops.output._checkpoint_collective import _NPY_HEADER_BUDGET, _manifest_character_budget
+
+    if not isinstance(payload, Mapping) or not payload:
+        raise TypeError("producer checkpoint budget requires a non-empty exact array mapping")
+    names = tuple(payload)
+    if len(names) != len(set(names)) or any(
+        not isinstance(name, str) or not name for name in names
+    ):
+        raise ValueError("producer checkpoint budget requires unique non-empty member names")
+    total = 0
+    maximum = 1
+    for name in names:
+        value = np.asarray(payload[name])
+        if value.dtype.hasobject or value.dtype.itemsize <= 0 or value.ndim > 4:
+            raise TypeError("producer checkpoint member %r has no bounded primitive array" % name)
+        size = _capacity(int(value.nbytes), where="producer checkpoint array bytes")
+        total = _add(total, size, where="producer checkpoint aggregate bytes")
+        maximum = max(maximum, size)
+    total = _add(
+        total,
+        _mul(len(names), _NPY_HEADER_BUDGET, where="producer checkpoint header budget"),
+        where="producer checkpoint aggregate bytes",
+    )
+    archive_bytes = _archive_byte_capacity(
+        max(total, 1), names, where="producer checkpoint archive budget"
+    )
+    return CheckpointResourceBudget(
+        runtime_kind,
+        len(names),
+        _manifest_character_budget(names),
+        maximum,
+        max(total, 1),
+        archive_bytes,
+        authority,
+    )
+
+
+def _reviewed_archive_checkpoint_resource_budget(
+    *,
+    content_sha256: str,
+    runtime_kind: str,
+    max_members: int,
+    max_manifest_characters: int,
+    max_array_bytes: int,
+    max_uncompressed_bytes: int,
+    max_archive_bytes: int,
+) -> CheckpointResourceBudget:
+    """Materialize one mapping-reviewed envelope before reading its pinned archive.
+
+    The explicit limits are review input. In particular, this helper never opens the archive and
+    never promotes central-directory claims into allocation authority.
+    """
+    if not isinstance(content_sha256, str) or len(content_sha256) != 64:
+        raise TypeError("reviewed checkpoint SHA-256 must be canonical lowercase hexadecimal")
+    try:
+        raw_digest = bytes.fromhex(content_sha256)
+    except ValueError:
+        raise ValueError("reviewed checkpoint SHA-256 is not hexadecimal") from None
+    if raw_digest.hex() != content_sha256:
+        raise ValueError("reviewed checkpoint SHA-256 must be canonical lowercase hexadecimal")
+    return CheckpointResourceBudget(
+        runtime_kind,
+        _capacity(max_members, where="reviewed checkpoint member capacity", positive=True),
+        _capacity(
+            max_manifest_characters,
+            where="reviewed checkpoint manifest capacity",
+            positive=True,
+        ),
+        _capacity(max_array_bytes, where="reviewed checkpoint array capacity", positive=True),
+        _capacity(
+            max_uncompressed_bytes,
+            where="reviewed checkpoint uncompressed capacity",
+            positive=True,
+        ),
+        _capacity(max_archive_bytes, where="reviewed checkpoint archive capacity", positive=True),
+        "reviewed-checkpoint-archive-sha256:" + content_sha256,
+    )
+
+
+__all__ = [
+    "CheckpointResourceBudget",
+    "aggregate_checkpoint_resource_budgets",
+    "install_amr_checkpoint_resource_budget",
+    "install_layout_checkpoint_resource_budget",
+    "install_uniform_checkpoint_resource_budget",
+    "require_checkpoint_resource_budget",
+]

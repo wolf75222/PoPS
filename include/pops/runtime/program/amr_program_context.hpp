@@ -4,6 +4,7 @@
 #pragma once
 
 #include <pops/core/foundation/types.hpp>
+#include <pops/core/identity/sha256.hpp>
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/layout/refinement.hpp>
 #include <pops/mesh/parallel/region_transfer.hpp>
@@ -16,6 +17,7 @@
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/builders/compiled/generated_amr_system_block.hpp>
 #include <pops/runtime/multiblock/evaluation_point.hpp>
+#include <pops/runtime/program/amr_program_checkpoint.hpp>
 #include <pops/runtime/program/clock_schedule.hpp>
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
@@ -86,6 +88,8 @@ class AmrProgramContext {
   using multiblock_level_group_type = typename multiblock_subcycling_type::LevelAdvanceGroup;
   using multiblock_reflux_context_type = typename multiblock_subcycling_type::RefluxContext;
   using multiblock_flux_ledger_type = typename multiblock_subcycling_type::ledger_type;
+  using interface_flux_ledger_type =
+      ::pops::amr::TransactionalInterfaceFluxLedger<AmrProgramFacePayload>;
   using flux_expression_budget_type = typename facade_type::PreparedAmrProgramFluxExpressionBudget;
   using hierarchy_tensor_provider_type = HierarchyTensorSolverProvider<Dim, MemorySpace>;
   using hierarchy_tensor_registry_type = HierarchyTensorSolverProviderRegistry<Dim, MemorySpace>;
@@ -247,6 +251,15 @@ class AmrProgramContext {
     return facade_->regrid_from_prepared_tagging(parent_level);
   }
 
+  void begin_restart_regrid_history_sequence() const {
+    require_facade_execution_();
+    facade_->begin_restart_regrid_history_sequence();
+  }
+
+  void end_restart_regrid_history_sequence() const noexcept {
+    facade_->end_restart_regrid_history_sequence();
+  }
+
   ProgramSpatialSnapshot<Dim> spatial_snapshot() const {
     return {std::string(runtime_->spatial_contract()), runtime_->topology_epoch(),
             runtime_->materialization_generation()};
@@ -329,10 +342,25 @@ class AmrProgramContext {
     require_facade_execution_();
     if (!step || !keep_alive || keep_alive.get() != this)
       throw std::invalid_argument("AMR Program install requires its exact owning context");
-    facade_->install_program_step(
-        [step = std::move(step), keep_alive = std::move(keep_alive)](double dt) { step(dt); });
+    facade_->install_program_step([step = std::move(step), keep_alive](double dt) { step(dt); });
     if (hierarchy_refresh)
-      facade_->install_program_hierarchy_refresh(std::move(hierarchy_refresh));
+      facade_->install_program_hierarchy_refresh(
+          [owner = keep_alive, refresh = std::move(hierarchy_refresh)]() mutable {
+            refresh();
+            owner->refresh_accepted_hierarchy_state_();
+          });
+    else
+      facade_->install_program_hierarchy_refresh(
+          [owner = keep_alive]() { owner->refresh_accepted_hierarchy_state_(); });
+    facade_->install_program_restart_hooks(
+        [owner = keep_alive]() { owner->preflight_restart_regrid_(); },
+        [owner = keep_alive]() { owner->restart_regrid_(); },
+        [owner = keep_alive]() { owner->resync_after_restart_(); },
+        [owner = keep_alive]() { return owner->accepted_context_snapshot(); });
+  }
+
+  std::unique_ptr<AcceptedProgramContextSnapshot> accepted_context_snapshot() const {
+    return capture_accepted_context_snapshot_();
   }
 
   void begin_step(double dt) const {
@@ -887,12 +915,32 @@ class AmrProgramContext {
       *targets[candidate] = std::move(snapshots[candidate]);
   }
 
-  void apply_coupling_operators(Real dt,
+  void apply_coupling_operators(std::string_view graph_identity, std::string_view rate_identity,
+                                std::string_view application_identity, Real dt,
                                 std::initializer_list<CouplingStateOverride> candidates) const {
     require_facade_execution_();
-    std::vector<field_type*> program_states(static_cast<std::size_t>(n_blocks()), nullptr);
+    std::vector<field_type*> program_states;
+    std::optional<runtime::multiblock::BoundaryEvaluationPoint> prepared_point;
+    std::optional<runtime::multiblock::InterfaceFluxFragmentPublication> prepared_publication;
     std::exception_ptr local_error;
     try {
+      program_states.assign(static_cast<std::size_t>(n_blocks()), nullptr);
+      if (graph_identity.empty() || graph_identity != facade_->installed_program_hash() ||
+          rate_identity.empty() || application_identity.empty())
+        throw std::invalid_argument(
+            "AMR Program coupling requires exact graph, rate, and application identities");
+      const auto& coupling_budget = facade_->prepared_amr_program_flux_expression_budget();
+      std::size_t identity_characters = graph_identity.size();
+      if (rate_identity.size() > std::numeric_limits<std::size_t>::max() - identity_characters)
+        throw std::length_error("AMR Program coupling identity characters exceed size_t");
+      identity_characters += rate_identity.size();
+      if (application_identity.size() >
+          std::numeric_limits<std::size_t>::max() - identity_characters)
+        throw std::length_error("AMR Program coupling identity characters exceed size_t");
+      identity_characters += application_identity.size();
+      if (identity_characters > coupling_budget.interface_coupling_identity_character_bound)
+        throw std::length_error(
+            "AMR Program coupling identities exceed the frozen artifact character bound");
       for (const CouplingStateOverride& candidate : candidates) {
         const int runtime_block = sys_block(candidate.program_block);
         if (candidate.state == nullptr ||
@@ -924,6 +972,33 @@ class AmrProgramContext {
       if (std::find(program_states.begin(), program_states.end(), nullptr) != program_states.end())
         throw std::invalid_argument(
             "AMR Program coupling requires every authenticated Program block candidate");
+      const ::pops::amr::Rational interval_phase =
+          active_subcycling_window_.begin.phase +
+          (active_subcycling_window_.end.phase - active_subcycling_window_.begin.phase) *
+              stage_time_;
+      const double interval_duration = active_subcycling_window_.end.physical_time -
+                                       active_subcycling_window_.begin.physical_time;
+      const double evaluation_time =
+          active_subcycling_window_.begin.physical_time + stage_time_.value() * interval_duration;
+      if (!std::isfinite(interval_duration) || !(interval_duration > 0.0) ||
+          !std::isfinite(static_cast<double>(dt)) || !(dt > Real(0)))
+        throw std::logic_error("AMR Program interface publication has an invalid exact interval");
+      prepared_point.emplace(runtime::multiblock::BoundaryEvaluationPoint{
+          primary_clock_, static_cast<std::int64_t>(facade_->macro_step()), active_level_,
+          logical_substep_, 0, stage_time_, interval_duration, evaluation_time,
+          std::string(graph_identity), std::string(rate_identity),
+          std::string(application_identity)});
+      prepared_publication.emplace(runtime::multiblock::InterfaceFluxFragmentPublication{
+          interface_flux_ledger_.get(),
+          runtime_->topology_epoch(),
+          nlev(),
+          {active_level_, static_cast<std::int64_t>(facade_->macro_step()), interval_phase,
+           evaluation_time},
+          "program-stage:" + std::to_string(stage_time_.numerator) + "/" +
+              std::to_string(stage_time_.denominator),
+          active_subcycling_window_,
+          exact_binary_rational_(dt / interval_duration),
+          true});
     } catch (...) {
       local_error = std::current_exception();
     }
@@ -934,7 +1009,8 @@ class AmrProgramContext {
       throw std::runtime_error("AMR Program coupling candidate pack failed collectively");
     }
     count_kernel_(static_cast<std::int64_t>(facade_->apply_prepared_amr_program_candidates(
-        active_level_, dt, std::span<field_type* const>(program_states))));
+        active_level_, dt, std::span<field_type* const>(program_states), *prepared_point,
+        interface_flux_ledger_->in_transaction() ? &*prepared_publication : nullptr)));
   }
 
   Real sum_component(const field_type& field, int component) const {
@@ -1204,8 +1280,7 @@ class AmrProgramContext {
         space_identity.empty() || clock_identity.empty() || interpolation_identity.empty())
       throw std::invalid_argument(
           "AMR Program history requires complete owner/state/space/clock identities");
-    if (sys_block(program_owner) != 0)
-      unavailable_("exact-ranked multi-block AMR history provider");
+    const int runtime_owner = sys_block(program_owner);
     refresh_resources_();
     const field_type& prototype = state(program_owner);
     const int components = ncomp < 0 ? prototype.ncomp() : ncomp;
@@ -1217,7 +1292,7 @@ class AmrProgramContext {
     const auto found = manager.histories.find(key);
     if (found != manager.histories.end()) {
       const field_type& retained = found->second.front();
-      if (manager.depth.at(key) != depth || manager.owner.at(key) != 0 ||
+      if (manager.depth.at(key) != depth || manager.owner.at(key) != runtime_owner ||
           retained.layout() != prototype.layout() ||
           retained.distribution() != prototype.distribution() ||
           retained.local_rank() != prototype.local_rank() || retained.ncomp() != components ||
@@ -1241,7 +1316,7 @@ class AmrProgramContext {
     manager.initialized[key] = false;
     manager.fill_count[key] = 0;
     manager.store_pending[key] = false;
-    manager.owner[key] = 0;
+    manager.owner[key] = runtime_owner;
     manager.state_identity[key] = state_identity;
     manager.space_identity[key] = space_identity;
     manager.clock_identity[key] = clock_identity;
@@ -1751,6 +1826,109 @@ class AmrProgramContext {
   using ScratchKey = std::tuple<ScratchKind, int, std::int64_t, int>;
   using ExactPolynomial = std::map<int, ::pops::amr::Rational>;
 
+  class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
+   public:
+    explicit AcceptedContextSnapshot(AmrProgramContext& owner)
+        : owner_(&owner),
+          clock_schedule_(owner.clock_schedule_),
+          resource_epoch_(owner.resource_epoch_),
+          resource_generation_(owner.resource_generation_),
+          history_epoch_(owner.history_epoch_),
+          history_generation_(owner.history_generation_),
+          history_levels_(owner.history_levels_),
+          accepted_temporal_partition_(owner.accepted_temporal_partition_),
+          accepted_flux_budget_contract_(owner.accepted_flux_budget_contract_),
+          accepted_coupling_contract_(owner.accepted_coupling_contract_),
+          accepted_face_flux_(owner.accepted_face_flux_),
+          interface_flux_ledger_(
+              std::make_unique<interface_flux_ledger_type>(*owner.interface_flux_ledger_)),
+          accepted_synchronization_events_(owner.accepted_synchronization_events_),
+          accepted_state_revision_(owner.accepted_state_revision_) {}
+
+    AcceptedContextSnapshot(const AcceptedContextSnapshot& accepted)
+        : owner_(accepted.owner_),
+          clock_schedule_(accepted.clock_schedule_),
+          resource_epoch_(accepted.resource_epoch_),
+          resource_generation_(accepted.resource_generation_),
+          history_epoch_(accepted.history_epoch_),
+          history_generation_(accepted.history_generation_),
+          history_levels_(accepted.history_levels_),
+          accepted_temporal_partition_(accepted.accepted_temporal_partition_),
+          accepted_flux_budget_contract_(accepted.accepted_flux_budget_contract_),
+          accepted_coupling_contract_(accepted.accepted_coupling_contract_),
+          accepted_face_flux_(accepted.accepted_face_flux_),
+          interface_flux_ledger_(
+              std::make_unique<interface_flux_ledger_type>(*accepted.interface_flux_ledger_)),
+          accepted_synchronization_events_(accepted.accepted_synchronization_events_),
+          accepted_state_revision_(accepted.accepted_state_revision_) {}
+
+    std::unique_ptr<AcceptedProgramContextSnapshot> prepare_restore() const override {
+      return std::make_unique<AcceptedContextSnapshot>(*this);
+    }
+
+    void publish_restore() noexcept override {
+      static_assert(std::is_nothrow_swappable_v<ClockScheduleState>);
+      static_assert(std::is_nothrow_swappable_v<decltype(history_levels_)>);
+      static_assert(std::is_nothrow_swappable_v<decltype(accepted_temporal_partition_)>);
+      static_assert(std::is_nothrow_swappable_v<decltype(accepted_flux_budget_contract_)>);
+      static_assert(std::is_nothrow_swappable_v<decltype(accepted_coupling_contract_)>);
+      static_assert(std::is_nothrow_swappable_v<decltype(accepted_face_flux_)>);
+      static_assert(std::is_nothrow_swappable_v<decltype(interface_flux_ledger_)>);
+      static_assert(std::is_nothrow_swappable_v<decltype(accepted_synchronization_events_)>);
+      static_assert(std::is_nothrow_swappable_v<decltype(discarded_scratches_)>);
+      static_assert(std::is_nothrow_swappable_v<decltype(discarded_subcycling_contract_)>);
+      std::swap(owner_->clock_schedule_, clock_schedule_);
+      owner_->resource_epoch_ = resource_epoch_;
+      owner_->resource_generation_ = resource_generation_;
+      owner_->history_epoch_ = history_epoch_;
+      owner_->history_generation_ = history_generation_;
+      owner_->history_levels_.swap(history_levels_);
+      owner_->scratches_.swap(discarded_scratches_);
+      owner_->hierarchy_tensor_solver_.reset();
+      owner_->hierarchy_tensor_topology_epoch_ = std::numeric_limits<std::uint64_t>::max();
+      owner_->hierarchy_tensor_materialization_generation_ =
+          std::numeric_limits<std::uint64_t>::max();
+      owner_->multiblock_subcycling_.reset();
+      owner_->multiblock_subcycling_epoch_ = std::numeric_limits<std::uint64_t>::max();
+      owner_->multiblock_subcycling_generation_ = std::numeric_limits<std::uint64_t>::max();
+      owner_->multiblock_subcycling_program_budget_contract_.swap(discarded_subcycling_contract_);
+      std::swap(owner_->accepted_temporal_partition_, accepted_temporal_partition_);
+      owner_->accepted_flux_budget_contract_.swap(accepted_flux_budget_contract_);
+      owner_->accepted_coupling_contract_.swap(accepted_coupling_contract_);
+      std::swap(owner_->accepted_face_flux_, accepted_face_flux_);
+      owner_->interface_flux_commit_guard_.reset();
+      owner_->interface_flux_ledger_.swap(interface_flux_ledger_);
+      owner_->accepted_synchronization_events_.swap(accepted_synchronization_events_);
+      owner_->accepted_state_revision_ = accepted_state_revision_;
+    }
+
+   private:
+    AmrProgramContext* owner_ = nullptr;
+    ClockScheduleState clock_schedule_;
+    std::uint64_t resource_epoch_ = std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t resource_generation_ = std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t history_epoch_ = std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t history_generation_ = std::numeric_limits<std::uint64_t>::max();
+    std::map<std::string, int> history_levels_;
+    CellTemporalPartitionAcceptedState accepted_temporal_partition_;
+    std::string accepted_flux_budget_contract_;
+    std::string accepted_coupling_contract_;
+    std::array<std::vector<::pops::amr::reflux::FaceFluxFragment<Dim, AmrProgramFacePayload>>, Dim>
+        accepted_face_flux_;
+    std::unique_ptr<interface_flux_ledger_type> interface_flux_ledger_;
+    std::vector<AmrProgramSynchronizationEvent> accepted_synchronization_events_;
+    std::uint64_t accepted_state_revision_ = std::numeric_limits<std::uint64_t>::max();
+    std::map<ScratchKey, field_type> discarded_scratches_;
+    std::string discarded_subcycling_contract_;
+  };
+
+  std::unique_ptr<AcceptedProgramContextSnapshot> capture_accepted_context_snapshot_() const {
+    if (!active_attempt_states_.empty() || !interface_flux_ledger_ ||
+        interface_flux_ledger_->in_transaction())
+      throw std::logic_error("AMR Program accepted context snapshot crossed an active attempt");
+    return std::make_unique<AcceptedContextSnapshot>(*const_cast<AmrProgramContext*>(this));
+  }
+
   struct FluxBasisFace {
     ::pops::amr::reflux::FaceLedgerRole role = ::pops::amr::reflux::FaceLedgerRole::Coarse;
     int axis = 0;
@@ -2094,12 +2272,37 @@ class AmrProgramContext {
     require_facade_execution_();
     if (!active_attempt_states_.empty())
       throw std::logic_error("AMR Program hierarchy advance cannot nest another attempt");
+    // The prior candidate is only discarded when a later accepted transaction has already
+    // captured its own rollback image.  During the transaction that published it, this guard kept
+    // the pre-commit ledger alive even after the live ledger crossed its noexcept swap boundary.
+    interface_flux_commit_guard_.reset();
     try {
       begin_step(dt);
       prepare_multiblock_subcycling_engine_();
       const ::pops::amr::ClockWindow root{
           {0, static_cast<std::int64_t>(facade_->macro_step()), {0, 1}, facade_->time()},
           {0, static_cast<std::int64_t>(facade_->macro_step()), {1, 1}, facade_->time() + dt}};
+      const auto& lane = facade_->prepared_amr_multiblock_hierarchy_().lane();
+      std::optional<typename interface_flux_ledger_type::PreparedBegin> prepared_begin;
+      std::exception_ptr ledger_error;
+      try {
+        prepared_begin.emplace(interface_flux_ledger_->prepare_begin());
+      } catch (...) {
+        ledger_error = std::current_exception();
+      }
+      if (all_reduce_max(ledger_error ? 1L : 0L, lane) != 0) {
+        if (lane.size() == 1 && ledger_error)
+          std::rethrow_exception(ledger_error);
+        throw std::runtime_error(
+            "AMR Program interface-ledger begin preparation failed collectively");
+      }
+      if (!all_ranks_agree_exact_ordered_byte_pairs(
+              {{std::string_view("amr-program-interface-ledger-begin"),
+                prepared_begin->exact_contract()}},
+              lane))
+        throw std::runtime_error(
+            "AMR Program interface-ledger begin contract differs between MPI ranks");
+      interface_flux_ledger_->publish_prepared_begin(*prepared_begin);
       multiblock_subcycling_->advance(
           root,
           [&](multiblock_level_group_type group) { advance_multiblock_level_group_(group, body); },
@@ -2108,7 +2311,33 @@ class AmrProgramContext {
             facade_->validate_prepared_amr_state_publication_candidate(
                 static_cast<int>(runtime_block), static_cast<int>(level), candidate);
           });
+      std::optional<typename interface_flux_ledger_type::PreparedCommit> prepared_commit;
+      ledger_error = nullptr;
+      try {
+        prepared_commit.emplace(interface_flux_ledger_->prepare_commit());
+      } catch (...) {
+        ledger_error = std::current_exception();
+      }
+      if (all_reduce_max(ledger_error ? 1L : 0L, lane) != 0) {
+        if (lane.size() == 1 && ledger_error)
+          std::rethrow_exception(ledger_error);
+        throw std::runtime_error(
+            "AMR Program interface-ledger commit preparation failed collectively");
+      }
+      if (!all_ranks_agree_exact_ordered_byte_pairs(
+              {{std::string_view("amr-program-interface-ledger-commit"),
+                prepared_commit->exact_contract()}},
+              lane))
+        throw std::runtime_error(
+            "AMR Program interface-ledger commit contract differs between MPI ranks");
+      static_assert(std::is_nothrow_move_constructible_v<
+                    typename interface_flux_ledger_type::PreparedCommit>);
+      static_assert(noexcept(interface_flux_commit_guard_.swap(prepared_commit)));
+      interface_flux_commit_guard_.swap(prepared_commit);
+      interface_flux_ledger_->publish_prepared_commit(*interface_flux_commit_guard_);
     } catch (...) {
+      if (interface_flux_ledger_ && interface_flux_ledger_->in_transaction())
+        interface_flux_ledger_->rollback();
       active_level_ = prior_level;
       current_dt_ = prior_dt;
       current_interval_start_time_ = prior_interval_start;
@@ -2134,6 +2363,10 @@ class AmrProgramContext {
     if (right != 0 && left > std::numeric_limits<std::size_t>::max() / right)
       throw std::length_error(std::string(operation) + " exceeds size_t");
     return left * right;
+  }
+
+  static ::pops::amr::InterfaceFluxLedgerBudget inactive_interface_flux_budget_() {
+    return {0, 0, 1, "pops.amr-program.interface-flux-budget/inactive"};
   }
 
   void prepare_multiblock_subcycling_engine_() const {
@@ -2199,6 +2432,39 @@ class AmrProgramContext {
       throw std::invalid_argument(
           "AMR Program flux-expression budget differs between prepared-lane ranks");
 
+    std::vector<::pops::amr::ParentChildClockRelation> relations;
+    ::pops::amr::InterfaceFluxLedgerBudget interface_budget;
+    std::optional<typename interface_flux_ledger_type::PreparedBudget> prepared_interface_budget;
+    local_error = nullptr;
+    try {
+      relations = facade_->prepared_program_temporal_relations();
+      if (relations.size() + 1 != hierarchy.level_count())
+        throw std::logic_error(
+            "AMR Program subcycling lacks one temporal relation per live transition");
+      interface_budget = facade_->prepared_amr_interface_flux_ledger_budget();
+      prepared_interface_budget.emplace(interface_flux_ledger_->prepare_budget(interface_budget));
+      ExactContractBuilder complete;
+      complete.text("pops.amr-program.complete-flux-budget")
+          .scalar(std::uint32_t{1})
+          .bytes(program_budget_contract)
+          .bytes(interface_budget.exact_contract);
+      program_budget_contract = std::move(complete).release();
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error("AMR Program interface budget preparation failed collectively");
+    }
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{std::string_view("amr-program-interface-ledger-budget"),
+              std::string_view(interface_budget.exact_contract)}},
+            lane))
+      throw std::invalid_argument(
+          "AMR Program interface ledger budgets differ between prepared-lane ranks");
+    interface_flux_ledger_->publish_prepared_budget(*prepared_interface_budget);
+
     if (multiblock_subcycling_ != nullptr &&
         multiblock_subcycling_epoch_ == runtime_->topology_epoch() &&
         multiblock_subcycling_generation_ == runtime_->materialization_generation() &&
@@ -2208,11 +2474,6 @@ class AmrProgramContext {
     std::unique_ptr<multiblock_subcycling_type> prepared;
     local_error = nullptr;
     try {
-      const auto relations = facade_->prepared_program_temporal_relations();
-      if (relations.size() + 1 != hierarchy.level_count())
-        throw std::logic_error(
-            "AMR Program subcycling lacks one temporal relation per live transition");
-
       std::size_t maximum_patches = 1;
       for (std::size_t level = 0; level < hierarchy.level_count(); ++level)
         maximum_patches =
@@ -2801,6 +3062,280 @@ class AmrProgramContext {
     }
   }
 
+  static std::optional<std::pair<int, std::string>> decode_history_key_(std::string_view key) {
+    constexpr std::string_view prefix = "pops.amr.level-history.v1/";
+    if (!key.starts_with(prefix))
+      return std::nullopt;
+    key.remove_prefix(prefix.size());
+    const std::size_t slash = key.find('/');
+    const std::size_t colon = key.find(':', slash == std::string_view::npos ? 0 : slash);
+    if (slash == std::string_view::npos || colon == std::string_view::npos)
+      throw std::invalid_argument("AMR Program history storage key is malformed");
+    std::size_t consumed = 0;
+    const int level = std::stoi(std::string(key.substr(0, slash)), &consumed);
+    if (level < 0 || consumed != slash)
+      throw std::invalid_argument("AMR Program history storage key has an invalid level");
+    const std::string length_text(key.substr(slash + 1, colon - slash - 1));
+    consumed = 0;
+    const std::size_t length = std::stoull(length_text, &consumed);
+    const std::string name(key.substr(colon + 1));
+    if (consumed != length_text.size() || name.empty() || name.size() != length)
+      throw std::invalid_argument("AMR Program history storage key has an invalid name");
+    return std::pair<int, std::string>{level, name};
+  }
+
+  AmrProgramAcceptedState<Dim> accepted_state_() const {
+    require_facade_execution_();
+    AmrProgramAcceptedState<Dim> state;
+    state.spatial_contract = runtime_->spatial_contract();
+    state.topology_epoch = runtime_->topology_epoch();
+    state.materialization_generation = runtime_->materialization_generation();
+    state.level_clocks.reserve(runtime_->hierarchy().num_levels());
+    for (std::size_t level = 0; level < runtime_->hierarchy().num_levels(); ++level)
+      state.level_clocks.push_back(
+          {static_cast<int>(level), facade_->macro_step(), {0, 1}, facade_->time()});
+    state.logical_clock_ticks =
+        clock_schedule_.accepted_ticks(static_cast<std::int64_t>(facade_->macro_step()));
+    state.temporal_partition = accepted_temporal_partition_;
+
+    const auto& manager = runtime_state().hist_;
+    struct AccumulatedHistory {
+      AmrProgramHistoryDescriptor descriptor;
+      std::set<int> levels;
+    };
+    std::map<std::string, AccumulatedHistory> histories;
+    for (const auto& [key, ring] : manager.histories) {
+      const auto decoded = decode_history_key_(key);
+      if (!decoded || ring.empty())
+        throw std::runtime_error("AMR Program accepted history registry is malformed");
+      const auto& [level, name] = *decoded;
+      const int runtime_owner = manager.owner.at(key);
+      int program_owner = -1;
+      const auto& block_map = facade_->program_block_map();
+      for (std::size_t program = 0; program < block_map.size(); ++program)
+        if (block_map[program] == runtime_owner) {
+          program_owner = static_cast<int>(program);
+          break;
+        }
+      if (program_owner < 0)
+        throw std::runtime_error("AMR Program history lost its authenticated block owner");
+      AmrProgramHistoryDescriptor descriptor{name,
+                                             program_owner,
+                                             manager.state_identity.at(key),
+                                             manager.space_identity.at(key),
+                                             manager.clock_identity.at(key),
+                                             manager.interpolation_identity.at(key),
+                                             manager.depth.at(key),
+                                             ring.front().ncomp()};
+      auto [entry, inserted] =
+          histories.try_emplace(name, AccumulatedHistory{descriptor, std::set<int>{level}});
+      if (!inserted) {
+        const auto& retained = entry->second.descriptor;
+        if (retained.program_owner != descriptor.program_owner ||
+            retained.state_identity != descriptor.state_identity ||
+            retained.space_identity != descriptor.space_identity ||
+            retained.clock_identity != descriptor.clock_identity ||
+            retained.interpolation_identity != descriptor.interpolation_identity ||
+            retained.depth != descriptor.depth || retained.components != descriptor.components ||
+            !entry->second.levels.insert(level).second)
+          throw std::runtime_error("AMR Program history differs between active levels");
+      }
+      const auto& dts = manager.slot_dt.at(key);
+      if (dts.size() != ring.size())
+        throw std::runtime_error("AMR Program history dt provenance has the wrong depth");
+      for (std::size_t slot = 0; slot < ring.size(); ++slot)
+        state.history_slots.push_back({name, level, static_cast<int>(slot),
+                                       static_cast<double>(dts[slot]), manager.initialized.at(key),
+                                       manager.fill_count.at(key)});
+    }
+    for (auto& [name, accumulated] : histories) {
+      (void)name;
+      if (accumulated.levels.size() != runtime_->hierarchy().num_levels())
+        throw std::runtime_error("AMR Program history omits an active hierarchy level");
+      state.histories.push_back(std::move(accumulated.descriptor));
+    }
+    std::sort(state.history_slots.begin(), state.history_slots.end(),
+              [](const auto& left, const auto& right) {
+                return std::tie(left.name, left.level, left.slot) <
+                       std::tie(right.name, right.level, right.slot);
+              });
+
+    if (multiblock_subcycling_) {
+      state.flux_budget_contract = multiblock_subcycling_program_budget_contract_;
+      state.coupling_contract =
+          std::string(facade_->prepared_amr_multiblock_hierarchy_().collective_contract());
+      const std::string_view interface_contract =
+          facade_->prepared_amr_multiblock_hierarchy_().interface_flux_provider_contract();
+      if (!interface_contract.empty()) {
+        ExactContractBuilder accepted_coupling;
+        accepted_coupling.text("pops.amr-program.accepted-coupling")
+            .scalar(std::uint32_t{1})
+            .bytes(state.coupling_contract)
+            .bytes(interface_contract);
+        state.coupling_contract = std::move(accepted_coupling).release();
+      }
+      if (interface_flux_ledger_) {
+        ExactContractBuilder budgeted_coupling;
+        budgeted_coupling.text("pops.amr-program.accepted-budgeted-coupling")
+            .scalar(std::uint32_t{1})
+            .bytes(state.coupling_contract)
+            .bytes(interface_flux_ledger_->budget().exact_contract)
+            .scalar(static_cast<std::uint64_t>(
+                interface_flux_ledger_->budget().max_fragments_per_window))
+            .scalar(static_cast<std::uint64_t>(
+                interface_flux_ledger_->budget().max_payload_terms_per_window))
+            .scalar(
+                static_cast<std::uint64_t>(interface_flux_ledger_->budget().max_transaction_depth));
+        state.coupling_contract = std::move(budgeted_coupling).release();
+      }
+      const auto seal_contract = [](std::string_view prefix, std::string_view contract) {
+        const auto* begin = reinterpret_cast<const std::uint8_t*>(contract.data());
+        std::vector<std::uint8_t> bytes(begin, begin + contract.size());
+        return std::string(prefix) + identity::sha256_hex(bytes);
+      };
+      state.flux_budget_contract = seal_contract("pops.amr-program.complete-flux-budget.v1:sha256:",
+                                                 state.flux_budget_contract);
+      state.coupling_contract =
+          seal_contract("pops.amr-program.accepted-coupling.v1:sha256:", state.coupling_contract);
+      for (std::size_t block = 0;
+           block < facade_->prepared_amr_multiblock_hierarchy_().block_count(); ++block) {
+        for (std::size_t parent = 0; parent + 1 < runtime_->hierarchy().num_levels(); ++parent) {
+          for (const auto& ledger : multiblock_subcycling_->ledgers(block, parent))
+            for (int axis = 0; axis < Dim; ++axis) {
+              const auto& entries = ledger.published_entries(axis);
+              auto& flux = state.accepted_face_flux[static_cast<std::size_t>(axis)];
+              flux.insert(flux.end(), entries.begin(), entries.end());
+            }
+          const ::pops::amr::ClockStamp clock{
+              static_cast<int>(parent), facade_->macro_step(), {0, 1}, facade_->time()};
+          state.synchronization_events.push_back({static_cast<int>(parent),
+                                                  static_cast<int>(parent + 1),
+                                                  static_cast<int>(block), "reflux", clock});
+          state.synchronization_events.push_back({static_cast<int>(parent),
+                                                  static_cast<int>(parent + 1),
+                                                  static_cast<int>(block), "average_down", clock});
+        }
+      }
+      for (int axis = 0; axis < Dim; ++axis) {
+        auto by_key = [](const auto& left, const auto& right) { return left.key < right.key; };
+        std::sort(state.accepted_face_flux[static_cast<std::size_t>(axis)].begin(),
+                  state.accepted_face_flux[static_cast<std::size_t>(axis)].end(), by_key);
+      }
+    } else {
+      state.flux_budget_contract = accepted_flux_budget_contract_;
+      state.coupling_contract = accepted_coupling_contract_;
+      state.accepted_face_flux = accepted_face_flux_;
+      state.synchronization_events = accepted_synchronization_events_;
+    }
+    if (interface_flux_ledger_) {
+      if (interface_flux_ledger_->in_transaction())
+        throw std::logic_error(
+            "AMR Program checkpoint cannot observe an active interface-flux transaction");
+      state.accepted_interface_flux = interface_flux_ledger_->published_entries();
+      std::sort(state.accepted_interface_flux.begin(), state.accepted_interface_flux.end(),
+                [](const auto& left, const auto& right) { return left.key < right.key; });
+    }
+    return state;
+  }
+
+  void import_accepted_state_(bool force) const {
+    require_facade_execution_();
+    const std::uint64_t revision = facade_->program_accepted_state_revision();
+    if (!force && revision == accepted_state_revision_)
+      return;
+    prepare_multiblock_subcycling_engine_();
+    const std::vector<std::uint8_t> bytes = facade_->program_accepted_state();
+    if (bytes.empty())
+      throw std::runtime_error("AMR Program accepted-state import received an empty image");
+    AmrProgramAcceptedState<Dim> state =
+        deserialize_amr_program_accepted_state<Dim>(bytes, &interface_flux_ledger_->budget());
+    require_live_amr_program_checkpoint(state, *runtime_);
+    const auto expected = accepted_state_();
+    if (state.histories != expected.histories || state.history_slots != expected.history_slots)
+      throw std::runtime_error(
+          "AMR Program accepted-state history provenance differs from live restored rings");
+    if (!expected.flux_budget_contract.empty() &&
+        state.flux_budget_contract != expected.flux_budget_contract)
+      throw std::runtime_error("AMR Program accepted-state flux budget is no longer authentic");
+    if (!expected.coupling_contract.empty() &&
+        state.coupling_contract != expected.coupling_contract)
+      throw std::runtime_error(
+          "AMR Program accepted-state coupling contract is no longer authentic");
+    if (state.level_clocks.empty())
+      throw std::runtime_error("AMR Program accepted-state import lacks its level clocks");
+    const std::int64_t accepted_macro_step = state.level_clocks.front().macro_step;
+    for (const auto& clock : state.level_clocks)
+      if (clock.macro_step != accepted_macro_step)
+        throw std::runtime_error(
+            "AMR Program accepted-state levels disagree on their accepted macro step");
+    clock_schedule_.restore_accepted_ticks(state.logical_clock_ticks, accepted_macro_step);
+    accepted_temporal_partition_ = std::move(state.temporal_partition);
+    accepted_flux_budget_contract_ = std::move(state.flux_budget_contract);
+    accepted_coupling_contract_ = std::move(state.coupling_contract);
+    accepted_face_flux_ = std::move(state.accepted_face_flux);
+    interface_flux_commit_guard_.reset();
+    auto interface_budget = interface_flux_ledger_->budget();
+    interface_flux_ledger_ = std::make_unique<interface_flux_ledger_type>(
+        restore_amr_program_interface_flux_ledger(state, std::move(interface_budget)));
+    accepted_synchronization_events_ = std::move(state.synchronization_events);
+    accepted_state_revision_ = revision;
+  }
+
+  void refresh_accepted_hierarchy_state_() const {
+    require_facade_execution_();
+    if (!active_attempt_states_.empty())
+      throw std::logic_error("AMR Program accepted-state refresh crossed an active attempt");
+    synchronize_resource_generation_();
+    const auto state = accepted_state_();
+    facade_->restore_program_accepted_state(serialize_amr_program_accepted_state(state));
+    accepted_state_revision_ = facade_->program_accepted_state_revision();
+    accepted_temporal_partition_ = state.temporal_partition;
+    accepted_flux_budget_contract_ = state.flux_budget_contract;
+    accepted_coupling_contract_ = state.coupling_contract;
+    accepted_face_flux_ = state.accepted_face_flux;
+    accepted_synchronization_events_ = state.synchronization_events;
+  }
+
+  void preflight_restart_regrid_() const {
+    if (!active_attempt_states_.empty())
+      throw std::logic_error("AMR RegridOnRestart requires an accepted Program boundary");
+    import_accepted_state_(true);
+    require_regrid_rematerializable_temporal_partition(accepted_temporal_partition_);
+  }
+
+  void restart_regrid_() const {
+    preflight_restart_regrid_();
+    begin_restart_regrid_history_sequence();
+    try {
+      for (int parent = 0; parent + 1 < facade_->configured_n_levels(); ++parent) {
+        (void)facade_->execute_prepared_tagging(parent);
+        if (!facade_->regrid_from_prepared_tagging(parent))
+          break;
+      }
+      end_restart_regrid_history_sequence();
+    } catch (...) {
+      end_restart_regrid_history_sequence();
+      throw;
+    }
+    multiblock_subcycling_.reset();
+    accepted_face_flux_ = {};
+    interface_flux_commit_guard_.reset();
+    interface_flux_ledger_ = std::make_unique<interface_flux_ledger_type>(
+        runtime_->topology_epoch(), inactive_interface_flux_budget_());
+    accepted_synchronization_events_.clear();
+    if (accepted_temporal_partition_.kind == TemporalPartitionKind::CellLocal)
+      accepted_temporal_partition_.topology_epoch = runtime_->topology_epoch();
+    refresh_accepted_hierarchy_state_();
+  }
+
+  void resync_after_restart_() const {
+    if (!active_attempt_states_.empty())
+      throw std::logic_error("AMR restart resynchronization crossed an active Program attempt");
+    multiblock_subcycling_.reset();
+    synchronize_resource_generation_();
+    import_accepted_state_(true);
+  }
+
   void require_history_free_for_topology_change_(std::string_view operation) const {
     if (!history_levels_.empty())
       throw std::runtime_error(
@@ -2901,8 +3436,37 @@ class AmrProgramContext {
   }
 
   void synchronize_resource_generation_() const {
+    if (interface_flux_ledger_ &&
+        interface_flux_ledger_->topology_epoch() != runtime_->topology_epoch())
+      interface_flux_commit_guard_.reset();
+    if (!interface_flux_ledger_) {
+      interface_flux_ledger_ = std::make_unique<interface_flux_ledger_type>(
+          runtime_->topology_epoch(), inactive_interface_flux_budget_());
+    } else {
+      interface_flux_ledger_->advance_topology_epoch(runtime_->topology_epoch());
+    }
     resource_epoch_ = runtime_->topology_epoch();
     resource_generation_ = runtime_->materialization_generation();
+    std::map<std::string, int> indexed_histories;
+    if (facade_ != nullptr) {
+      for (const auto& [key, ring] : runtime_state().hist_.histories) {
+        (void)ring;
+        const auto decoded = decode_history_key_(key);
+        if (!decoded ||
+            static_cast<std::size_t>(decoded->first) >= runtime_->hierarchy().num_levels())
+          throw std::runtime_error(
+              "AMR Program history registry is not qualified by the live hierarchy");
+        indexed_histories.emplace(key, decoded->first);
+      }
+    }
+    history_levels_.swap(indexed_histories);
+    if (history_levels_.empty()) {
+      history_epoch_ = std::numeric_limits<std::uint64_t>::max();
+      history_generation_ = std::numeric_limits<std::uint64_t>::max();
+    } else {
+      history_epoch_ = resource_epoch_;
+      history_generation_ = resource_generation_;
+    }
   }
   void refresh_resources_() const {
     if (facade_ != nullptr)
@@ -2967,7 +3531,7 @@ class AmrProgramContext {
   }
 
   void require_history_owner_(int program_owner) const {
-    if (program_owner < 0 || sys_block(program_owner) != 0)
+    if (program_owner < 0 || sys_block(program_owner) < 0)
       throw std::invalid_argument("AMR Program history has a foreign block owner");
   }
 
@@ -2984,7 +3548,6 @@ class AmrProgramContext {
     if (!manager.initialized.at(key)) {
       if (!zero_start)
         throw std::runtime_error("AMR Program history has not been initialized");
-      manager.initialized[key] = true;
     }
     return result;
   }
@@ -2999,13 +3562,18 @@ class AmrProgramContext {
     if (!std::isfinite(current_dt_) || !(current_dt_ > 0.0))
       throw std::logic_error("AMR Program history store has no positive exact interval");
     found->second.front() = value;
+    auto& dts = manager.slot_dt.at(key);
+    if (dts.size() != found->second.size())
+      throw std::logic_error("AMR Program history dt ledger differs from its ring depth");
     if (!manager.initialized.at(key)) {
-      for (std::size_t slot = 1; slot < found->second.size(); ++slot)
+      for (std::size_t slot = 1; slot < found->second.size(); ++slot) {
         found->second[slot] = value;
+        dts[slot] = static_cast<Real>(current_dt_);
+      }
     }
     manager.initialized[key] = true;
     manager.store_pending[key] = true;
-    manager.slot_dt.at(key).front() = static_cast<Real>(current_dt_);
+    dts.front() = static_cast<Real>(current_dt_);
   }
 
   void rotate_histories_(std::optional<std::string> clock_identity) const {
@@ -3252,6 +3820,17 @@ class AmrProgramContext {
   mutable std::uint64_t multiblock_subcycling_generation_ =
       std::numeric_limits<std::uint64_t>::max();
   mutable std::string multiblock_subcycling_program_budget_contract_;
+  mutable CellTemporalPartitionAcceptedState accepted_temporal_partition_;
+  mutable std::string accepted_flux_budget_contract_;
+  mutable std::string accepted_coupling_contract_;
+  mutable std::array<std::vector<::pops::amr::reflux::FaceFluxFragment<Dim, AmrProgramFacePayload>>,
+                     Dim>
+      accepted_face_flux_;
+  mutable std::unique_ptr<interface_flux_ledger_type> interface_flux_ledger_;
+  mutable std::optional<typename interface_flux_ledger_type::PreparedCommit>
+      interface_flux_commit_guard_;
+  mutable std::vector<AmrProgramSynchronizationEvent> accepted_synchronization_events_;
+  mutable std::uint64_t accepted_state_revision_ = std::numeric_limits<std::uint64_t>::max();
 };
 
 template <int Dim>

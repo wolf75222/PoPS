@@ -87,17 +87,20 @@ class _Sim:
         ]
 
     def program_accepted_state_manifest(self):
+        descriptor = [
+            "rhs",
+            "program.block.0",
+            "fluid.U",
+            "cell.conservative",
+            "clock.macro",
+            "dense.linear",
+            "2",
+            str(self.active_levels),
+        ]
         return [
-            [
-                "rhs",
-                "program.block.0",
-                "fluid.U",
-                "cell.conservative",
-                "clock.macro",
-                "dense.linear",
-                "2",
-                "3",
-            ]
+            descriptor + [str(level), str(slot), "0", "0", "0"]
+            for level in range(self.active_levels)
+            for slot in range(2)
         ]
 
     def program_clock_manifest(self):
@@ -166,6 +169,9 @@ class _Sim:
                 "0.125",
                 "0.2",
                 "resolved",
+                self.program_hash,
+                "test.program.rate@1",
+                "test.program.application@1",
             ]
         ]
 
@@ -190,7 +196,7 @@ def _payload(sim=None):
 
 def test_contract_names_guarantee_relations_qualified_histories_and_transfer_plans():
     contract = contract_for(_Sim())
-    assert contract["schema_version"] == 5
+    assert contract["schema_version"] == 6
     assert contract["guarantee"] == "bit_identical_accepted_state"
     assert contract["ledger"]["accepted_entries"] == 1
     assert contract["ledger"]["transaction_depth"] == 0
@@ -597,40 +603,37 @@ def test_topology_owner_alignment_is_level_local_and_strict():
 
 def _rank_topology_payload():
     return {
-        "program_accepted_state_rank_0": np.array([1, 2], dtype=np.uint8),
-        "program_accepted_state_rank_1": np.array([3, 4], dtype=np.uint8),
-        "dmap_rank_0_level_0": np.array([0], dtype=np.int64),
-        "dmap_rank_0_level_1": np.array([0, 1], dtype=np.int64),
-        "dmap_rank_1_level_0": np.array([0], dtype=np.int64),
-        "dmap_rank_1_level_1": np.array([0, 1], dtype=np.int64),
+        "program_accepted_state": np.array([1, 2], dtype=np.uint8),
+        "dmap_0": np.array([0], dtype=np.int64),
+        "dmap_1": np.array([0, 1], dtype=np.int64),
     }
 
 
-def test_recorded_rank_topology_keeps_all_program_shards_and_one_exact_owner_map():
+def test_recorded_rank_topology_keeps_one_canonical_program_image_and_owner_map():
     topology = recorded_rank_topology(_rank_topology_payload(), 2, 2)
-    assert topology.program_states == (b"\x01\x02", b"\x03\x04")
+    assert topology.program_state == b"\x01\x02"
+    assert topology.source_rank_count == 2
     assert topology.level_owner_ranks == ((0,), (0, 1))
 
 
-def test_recorded_rank_topology_refuses_rank_local_owner_map_disagreement():
+def test_recorded_rank_topology_refuses_missing_canonical_owner_map():
     payload = _rank_topology_payload()
-    payload["dmap_rank_1_level_1"] = np.array([1, 0], dtype=np.int64)
-    with pytest.raises(ValueError, match="owner maps disagree"):
+    del payload["dmap_1"]
+    with pytest.raises(ValueError, match="lacks owner map"):
         recorded_rank_topology(payload, 2, 2)
 
 
 def test_recorded_rank_topology_refuses_out_of_range_recorded_ownership():
     payload = _rank_topology_payload()
-    payload["dmap_rank_0_level_1"] = np.array([0, 2], dtype=np.int64)
-    payload["dmap_rank_1_level_1"] = np.array([0, 2], dtype=np.int64)
+    payload["dmap_1"] = np.array([0, 2], dtype=np.int64)
     with pytest.raises(ValueError, match=r"outside \[0, 2\)"):
         recorded_rank_topology(payload, 2, 2)
 
 
-def test_recorded_rank_topology_refuses_mixed_program_presence():
+def test_recorded_rank_topology_refuses_non_uint8_program_image():
     payload = _rank_topology_payload()
-    payload["program_accepted_state_rank_1"] = np.array([], dtype=np.uint8)
-    with pytest.raises(ValueError, match="disagree on whether a compiled Program image is present"):
+    payload["program_accepted_state"] = np.array([1, 2], dtype=np.int64)
+    with pytest.raises(TypeError, match="must be a uint8 vector"):
         recorded_rank_topology(payload, 2, 2)
 
 

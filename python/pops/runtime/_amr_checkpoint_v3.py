@@ -4,7 +4,7 @@ The sealed payload preserves owner-rank mappings, all block/level state, aux and
 regrid counters, qualified history rings, rational clocks, lagged flux publications, level relations
 and transfer-plan provenance. Restore is transactional: ``bit_identical=True`` requires the recorded
 rank topology, while the default exact-geometry policy may rematerialize hierarchy ownership and
-rank-owned Program state for a new MPI cardinality. Rank-count changes require every persisted
+the canonical Program state for a new MPI cardinality. Rank-count changes require every persisted
 history ring to be Dense because selective replay is a same-rank operation. Historical or weaker
 fallback formats are refused.
 """
@@ -25,8 +25,9 @@ class _PreparedAMRRestart:
     temporal_state: Any
     cadence_state: Any
     program_state: Any
-    source_program_states: tuple[bytes, ...]
+    source_program_state: bytes
     source_level_owner_ranks: tuple[tuple[int, ...], ...]
+    source_program_authority: bytes
     checkpoint_ranks: int
     regrid_count: int
     topology_epoch: int
@@ -320,6 +321,9 @@ def _capture_v3(owner, sim, prepared):
         if prepared.topology.distributed
         else (prepared.local_program_state,)
     )
+    if any(state != program_states[0] for state in program_states[1:]):
+        raise ValueError("checkpoint AMR accepted Program image differs across source ranks")
+    canonical_program_state = program_states[0]
     rank_rows = consensus(
         prepared.topology,
         "AMR rank-local owner maps",
@@ -345,18 +349,30 @@ def _capture_v3(owner, sim, prepared):
         raise ValueError("checkpoint AMR owner maps disagree across source ranks")
     if prepared.local_program_state:
         rematerialize = getattr(sim, "rematerialize_program_accepted_state", None)
+        source_authority_provider = getattr(sim, "program_accepted_state_source_authority", None)
         if not callable(rematerialize):
             raise TypeError("checkpoint AMR engine lacks accepted-state consensus validation")
+        if not callable(source_authority_provider):
+            raise TypeError("checkpoint AMR engine lacks accepted-state source authority")
+        source_authority = bytes(source_authority_provider(rank_dmaps[0], prepared.topology.size))
+        if not source_authority:
+            raise RuntimeError("checkpoint AMR engine returned an empty source authority")
         # Re-materializing onto the unchanged ownership is a non-mutating validation pass. It
         # authenticates every rank-independent accepted field, including persistent tagging,
         # before any rank may seal or publish a checkpoint.
-        rematerialize(program_states, rank_dmaps[0], rank_dmaps[0])
-    for rank, dmaps in enumerate(rank_dmaps):
-        out["program_accepted_state_rank_%d" % rank] = np.frombuffer(
-            program_states[rank], dtype=np.uint8
+        rematerialize(
+            canonical_program_state,
+            prepared.topology.size,
+            rank_dmaps[0],
+            rank_dmaps[0],
+            source_authority,
+        )
+        out["program_accepted_state_source_authority"] = np.frombuffer(
+            source_authority, dtype=np.uint8
         ).copy()
-        for level, ranks in enumerate(dmaps):
-            out["dmap_rank_%d_level_%d" % (rank, level)] = np.asarray(ranks, dtype=np.int64)
+    out["program_accepted_state"] = np.frombuffer(canonical_program_state, dtype=np.uint8).copy()
+    for level, ranks in enumerate(rank_dmaps[0]):
+        out["dmap_%d" % level] = np.asarray(ranks, dtype=np.int64)
     if prepared.multi:
         for name in prepared.names:
             for level in range(prepared.levels):
@@ -443,7 +459,7 @@ def prepare_v3(
     hierarchy_mode="restore_recorded_hierarchy",
     hierarchy_identity=None,
 ):
-    """Validate an accepted-state v8 AMR payload without mutating the native engine.
+    """Validate an accepted-state v9 AMR payload without mutating the native engine.
 
     This is the all-rank preflight boundary used before ``begin_restart_transaction``.
     """
@@ -510,16 +526,21 @@ def prepare_v3(
     from pops.runtime._amr_checkpoint_topology import recorded_rank_topology
 
     recorded_topology = recorded_rank_topology(d, checkpoint_levels, checkpoint_ranks)
+    source_program_authority = b""
+    if recorded_topology.program_state:
+        authority_key = "program_accepted_state_source_authority"
+        if authority_key not in d:
+            raise ValueError(
+                "restart: compiled Program checkpoint lacks its sealed source authority"
+            )
+        authority = np.asarray(d[authority_key])
+        if authority.dtype != np.dtype(np.uint8) or authority.ndim != 1 or not authority.size:
+            raise ValueError(
+                "restart: compiled Program source authority must be non-empty one-dimensional uint8"
+            )
+        source_program_authority = authority.tobytes()
     selected = dict(d)
     selected["configured_n_levels"] = checkpoint_configured_levels
-    selected_source_rank = topology.rank if checkpoint_ranks == current_ranks else 0
-    selected["program_accepted_state"] = np.asarray(
-        d["program_accepted_state_rank_%d" % selected_source_rank], dtype=np.uint8
-    )
-    for level in range(checkpoint_levels):
-        selected["dmap_%d" % level] = np.asarray(
-            recorded_topology.level_owner_ranks[level], dtype=np.int64
-        )
     d = selected
     preflight_program_state, regrid_count, topology_epoch = preflight_contract(sim, d)
     program_state = preflight_program_state if checkpoint_ranks == current_ranks else b""
@@ -551,7 +572,7 @@ def prepare_v3(
             "(replay the SAME composition before restart)" % (chk_blocks, cur_blocks)
         )
     nlev = checkpoint_levels
-    # Program-hash guard: an accepted-state v8 checkpoint refuses a different compiled Program.
+    # Program-hash guard: an accepted-state v9 checkpoint refuses a different compiled Program.
     chk_hash = str(d["program_hash"])
     cur_hash = sim.installed_program_hash() if hasattr(sim, "installed_program_hash") else ""
     if chk_hash != cur_hash:
@@ -617,9 +638,7 @@ def prepare_v3(
     raw_boxes = np.asarray(d["patch_boxes"], dtype=np.int64)
     box_width = 1 + 2 * spatial.dimension
     if raw_boxes.ndim != 2 or raw_boxes.shape[1] != box_width:
-        raise ValueError(
-            "restart: patch_boxes must contain level plus two bounds per spatial axis"
-        )
+        raise ValueError("restart: patch_boxes must contain level plus two bounds per spatial axis")
     boxes = [tuple(int(x) for x in row) for row in raw_boxes]
     per_level_boxes = {k: [] for k in range(nlev)}
     for box in boxes:
@@ -726,9 +745,15 @@ def prepare_v3(
         phi_key = "phi_%d" % level
         if aux_key not in d or phi_key not in d:
             raise ValueError(
-                "restart: checkpoint lacks exact auxiliary or potential payload for level %d" % level
+                "restart: checkpoint lacks exact auxiliary or potential payload for level %d"
+                % level
             )
-        aux = np.asarray(d[aux_key], dtype=np.uint8).ravel()
+        aux = np.asarray(d[aux_key])
+        if aux.dtype != np.dtype(np.uint8) or aux.ndim != 1:
+            raise ValueError(
+                "restart: exact auxiliary checkpoint level %d must be a one-dimensional "
+                "uint8 array" % level
+            )
         if not aux.size:
             raise ValueError("restart: exact auxiliary checkpoint level %d is empty" % level)
         auxiliary_checkpoint_payload.append(aux.tobytes())
@@ -748,8 +773,9 @@ def prepare_v3(
         temporal_state=restored_temporal,
         cadence_state=cadence,
         program_state=program_state,
-        source_program_states=recorded_topology.program_states,
+        source_program_state=recorded_topology.program_state,
         source_level_owner_ranks=recorded_topology.level_owner_ranks,
+        source_program_authority=source_program_authority,
         checkpoint_ranks=checkpoint_ranks,
         regrid_count=int(regrid_count),
         topology_epoch=int(topology_epoch),
@@ -827,21 +853,28 @@ def _restart_history_identity(owner, sim, *, phase):
                 "name": str(name),
                 "depth": int(sim.history_depth(name)),
                 "ncomp": int(sim.history_ncomp(name)),
-                "initialized": bool(sim.history_initialized(name)),
-                "fill_count": int(sim.history_fill_count(name)),
+                "levels": [
+                    {
+                        "level": int(level),
+                        "initialized": bool(sim.history_initialized(name, level)),
+                        "fill_count": int(sim.history_fill_count(name, level)),
+                    }
+                    for level in sim.history_levels(name)
+                ],
             }
             for name in sim.history_names()
         ],
     )
 
-    def slot_image(name, slot):
+    def slot_image(name, level, slot):
         import numpy as np
 
-        values = np.asarray(sim.history_global(name, slot), dtype=np.dtype("<f8")).ravel()
+        values = np.asarray(sim.history_global(name, level, slot), dtype=np.dtype("<f8")).ravel()
         return {
+            "level": level,
             "slot": slot,
             "size": int(values.size),
-            "dt": float(sim.history_slot_dt(name, slot)).hex(),
+            "dt": float(sim.history_slot_dt(name, level, slot)).hex(),
             "sha256": hashlib.sha256(values.tobytes(order="C")).hexdigest(),
         }
 
@@ -851,9 +884,12 @@ def _restart_history_identity(owner, sim, *, phase):
         row["slots"] = [
             _restart_collective_phase(
                 owner,
-                "%s history %s slot %d" % (phase, history["name"], slot),
-                lambda name=history["name"], slot=slot: slot_image(name, slot),
+                "%s history %s level %d slot %d" % (phase, history["name"], level["level"], slot),
+                lambda name=history["name"], level=level["level"], slot=slot: slot_image(
+                    name, level, slot
+                ),
             )
+            for level in history["levels"]
             for slot in range(history["depth"])
         ]
         rows.append(row)
@@ -942,16 +978,18 @@ def apply_v3(owner, sim, prepared):
 
     program_state = prepared.program_state
     if rank_topology_changed:
-        if prepared.source_program_states and prepared.source_program_states[0]:
+        if prepared.source_program_state:
             target_level_owners = tuple(
                 tuple(int(rank) for rank in sim.level_owner_ranks(level))
                 for level in range(prepared.levels)
             )
             program_state = bytes(
                 sim.rematerialize_program_accepted_state(
-                    prepared.source_program_states,
+                    prepared.source_program_state,
+                    prepared.checkpoint_ranks,
                     prepared.source_level_owner_ranks,
                     target_level_owners,
+                    prepared.source_program_authority,
                 )
             )
             if not program_state:
@@ -1129,13 +1167,11 @@ def _preflight_histories_v3(sim, d, current_ranks, spatial):
         required = [
             "history_depth_" + name,
             "history_ncomp_" + name,
-            "history_init_" + name,
-            "history_fill_count_" + name,
+            "history_levels_" + name,
             "history_policy_" + name,
             "history_requested_stored_slots_" + name,
             "history_stored_slots_" + name,
             "history_storage_mode_" + name,
-            "history_slot_dt_" + name,
         ]
         missing = [key for key in required if key not in d]
         if missing:
@@ -1149,26 +1185,42 @@ def _preflight_histories_v3(sim, d, current_ranks, spatial):
         policy = HistoryPersistence.from_json(str(d["history_policy_" + name]))
         from pops.runtime._system_io_history import (
             history_fill_count_from_payload,
+            resolve_hierarchy_history_storage,
             resolve_history_storage,
             validate_history_slot_dt_payload,
         )
 
-        fill_count = history_fill_count_from_payload(
-            d,
-            name,
-            depth,
-            bool(d["history_init_" + name]),
-        )
-        expected_requested, expected_stored, expected_mode, expected_steps = (
-            resolve_history_storage(
-                policy,
-                depth,
-                fill_count=fill_count,
-                macro_step=int(d["macro_step"]),
-                regrid_every=int(d["regrid_every"]),
-                program_substeps=int(d["program_cadence_substeps"]),
-                program_stride=int(d["program_cadence_stride"]),
+        levels = tuple(int(level) for level in d["history_levels_" + name])
+        if levels != tuple(range(int(d["n_levels"]))):
+            raise ValueError(
+                "restart: history '%s' level identities %r differ from hierarchy %r"
+                % (name, levels, tuple(range(int(d["n_levels"]))))
             )
+        storage_rows = []
+        fill_counts = []
+        for level in levels:
+            init_key = "history_init_%s_level_%d" % (name, level)
+            if init_key not in d:
+                raise ValueError(
+                    "restart: history '%s' level %d lacks initialized metadata" % (name, level)
+                )
+            fill_count = history_fill_count_from_payload(
+                d, name, depth, bool(d[init_key]), level=level
+            )
+            fill_counts.append(fill_count)
+            storage_rows.append(
+                resolve_history_storage(
+                    policy,
+                    depth,
+                    fill_count=fill_count,
+                    macro_step=int(d["macro_step"]),
+                    regrid_every=int(d["regrid_every"]),
+                    program_substeps=int(d["program_cadence_substeps"]),
+                    program_stride=int(d["program_cadence_stride"]),
+                )
+            )
+        expected_requested, expected_stored, expected_mode, expected_steps = (
+            resolve_hierarchy_history_storage(storage_rows, depth)
         )
         requested = sorted(int(slot) for slot in d["history_requested_stored_slots_" + name])
         stored = sorted(int(slot) for slot in d["history_stored_slots_" + name])
@@ -1215,24 +1267,25 @@ def _preflight_histories_v3(sim, d, current_ranks, spatial):
                     "restart: history '%s' dense safety regrid fingerprint %r is inconsistent "
                     "with manifest cadence %r" % (name, recorded, list(expected_steps))
                 )
-        expected_values = ncomp * sum(
-            spatial.cells_at_level(level) for level in range(int(d["n_levels"]))
-        )
-        for slot in stored:
-            key = "history_%s_%d" % (name, slot)
-            if key not in d:
-                raise ValueError("restart: history '%s' lacks stored slot %d" % (name, slot))
-            values = np.asarray(d[key], dtype=np.float64).ravel()
-            if values.size != expected_values:
-                raise ValueError(
-                    "restart: history '%s' slot %d has size %d, expected %d"
-                    % (name, slot, values.size, expected_values)
-                )
-        validate_history_slot_dt_payload(d, name, depth, fill_count)
+        for level, fill_count in zip(levels, fill_counts, strict=True):
+            expected_values = ncomp * spatial.cells_at_level(level)
+            for slot in stored:
+                key = "history_%s_level_%d_%d" % (name, level, slot)
+                if key not in d:
+                    raise ValueError(
+                        "restart: history '%s' level %d lacks stored slot %d" % (name, level, slot)
+                    )
+                values = np.asarray(d[key], dtype=np.float64).ravel()
+                if values.size != expected_values:
+                    raise ValueError(
+                        "restart: history '%s' level %d slot %d has size %d, expected %d"
+                        % (name, level, slot, values.size, expected_values)
+                    )
+            validate_history_slot_dt_payload(d, name, depth, fill_count, level=level)
 
 
 def _restore_histories_v3(sim, d, cur_ranks):
-    """Restore accepted-state v8 rings and replay only policy-omitted slots on a stable hierarchy.
+    """Restore accepted-state v9 rings and replay only policy-omitted slots on a stable hierarchy.
 
     Capture resolves any selective ring whose replay window contains a scheduled regrid, cold slot,
     or non-default whole-Program cadence to explicit dense safety storage. Therefore this function

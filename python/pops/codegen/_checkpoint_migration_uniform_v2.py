@@ -17,7 +17,7 @@ from pops._generated_release_contract import UNIFORM_CHECKPOINT_PAYLOAD_VERSION
 from pops._manifest_protocol import strict_json_loads
 
 
-UNIFORM_V2_MIGRATION_SCHEMA_VERSION = 1
+UNIFORM_V2_MIGRATION_SCHEMA_VERSION = 3
 UNIFORM_V2_SOURCE_VERSION = 2
 UNIFORM_V2_MIGRATION_PROTOCOL = "pops.uniform-checkpoint-v2-offline-migration.v1"
 UNIFORM_V2_AUTHORITY_TRANSFERS = (
@@ -57,8 +57,19 @@ class UniformV2MigrationMapping:
 
     reviewed_mapping_id: str
     source_content_sha256: str
+    source_max_members: int
+    source_max_manifest_characters: int
+    source_max_array_bytes: int
+    source_max_uncompressed_bytes: int
+    source_max_archive_bytes: int
     source_abi_key: str
     source_program_hash: str
+    authority_content_sha256: str
+    authority_max_members: int
+    authority_max_manifest_characters: int
+    authority_max_array_bytes: int
+    authority_max_uncompressed_bytes: int
+    authority_max_archive_bytes: int
     authority_restart_identity: str
     target_semantic_identity: str
     target_artifact_identity: str
@@ -220,11 +231,35 @@ def _require_sha256(value: Any, *, where: str) -> str:
     return value
 
 
-def _decode_file(path: Path) -> tuple[bytes, Mapping[str, Any]]:
-    from pops.output._checkpoint_collective import decode_checkpoint_bytes
+def _mapping_resource_budget(mapping: UniformV2MigrationMapping, *, source: bool) -> Any:
+    from pops.runtime._checkpoint_resource_budget import (
+        _reviewed_archive_checkpoint_resource_budget,
+    )
 
-    raw = path.read_bytes()
-    return raw, decode_checkpoint_bytes(raw)
+    prefix = "source" if source else "authority"
+    return _reviewed_archive_checkpoint_resource_budget(
+        content_sha256=getattr(mapping, prefix + "_content_sha256"),
+        runtime_kind="uniform",
+        max_members=getattr(mapping, prefix + "_max_members"),
+        max_manifest_characters=getattr(mapping, prefix + "_max_manifest_characters"),
+        max_array_bytes=getattr(mapping, prefix + "_max_array_bytes"),
+        max_uncompressed_bytes=getattr(mapping, prefix + "_max_uncompressed_bytes"),
+        max_archive_bytes=getattr(mapping, prefix + "_max_archive_bytes"),
+    )
+
+
+def _decode_file(
+    path: Path, *, content_sha256: str, resource_budget: Any
+) -> tuple[bytes, Mapping[str, Any]]:
+    from pops.output._checkpoint_collective import (
+        _bounded_checkpoint_path_bytes,
+        decode_checkpoint_bytes,
+    )
+
+    raw = _bounded_checkpoint_path_bytes(path, resource_budget.max_archive_bytes)
+    if hashlib.sha256(raw).hexdigest() != content_sha256:
+        raise ValueError("reviewed checkpoint archive digest mismatch")
+    return raw, decode_checkpoint_bytes(raw, resource_budget)
 
 
 def _validate_legacy_v2(payload: Mapping[str, Any]) -> _LegacyUniformV2:
@@ -521,8 +556,23 @@ def _mapping_data(mapping: UniformV2MigrationMapping) -> dict[str, Any]:
         "target_version": mapping.target_version,
         "reviewed_mapping_id": mapping.reviewed_mapping_id,
         "source_content_sha256": mapping.source_content_sha256,
+        "source_resource_limits": {
+            "max_members": mapping.source_max_members,
+            "max_manifest_characters": mapping.source_max_manifest_characters,
+            "max_array_bytes": mapping.source_max_array_bytes,
+            "max_uncompressed_bytes": mapping.source_max_uncompressed_bytes,
+            "max_archive_bytes": mapping.source_max_archive_bytes,
+        },
         "source_abi_key": mapping.source_abi_key,
         "source_program_hash": mapping.source_program_hash,
+        "authority_content_sha256": mapping.authority_content_sha256,
+        "authority_resource_limits": {
+            "max_members": mapping.authority_max_members,
+            "max_manifest_characters": mapping.authority_max_manifest_characters,
+            "max_array_bytes": mapping.authority_max_array_bytes,
+            "max_uncompressed_bytes": mapping.authority_max_uncompressed_bytes,
+            "max_archive_bytes": mapping.authority_max_archive_bytes,
+        },
         "authority_restart_identity": mapping.authority_restart_identity,
         "target_semantic_identity": mapping.target_semantic_identity,
         "target_artifact_identity": mapping.target_artifact_identity,
@@ -563,7 +613,14 @@ def _validate_mapping(mapping: UniformV2MigrationMapping) -> dict[str, Any]:
         raise ValueError("Uniform v2 migration mapping needs a reviewed_mapping_id")
     _require_sha256(mapping.source_content_sha256, where="mapping source_content_sha256")
     _require_sha256(mapping.source_program_hash, where="mapping source_program_hash")
+    _require_sha256(mapping.authority_content_sha256, where="mapping authority_content_sha256")
     _require_sha256(mapping.target_program_hash, where="mapping target_program_hash")
+    source_budget = _mapping_resource_budget(mapping, source=True)
+    authority_budget = _mapping_resource_budget(mapping, source=False)
+    if source_budget.max_array_bytes > source_budget.max_uncompressed_bytes or (
+        authority_budget.max_array_bytes > authority_budget.max_uncompressed_bytes
+    ):
+        raise ValueError("Uniform v2 migration resource caps have an invalid aggregate bound")
     text_fields = (
         mapping.source_abi_key,
         mapping.authority_restart_identity,
@@ -792,6 +849,7 @@ def _encode(payload: Mapping[str, Any]) -> bytes:
 def _validate_migrated_bytes(
     raw: bytes,
     *,
+    resource_budget: Any,
     authority: _CurrentUniformAuthority,
     expected_restart: Any,
     expected_mapping_identity: Any,
@@ -812,7 +870,7 @@ def _validate_migrated_bytes(
     from pops.runtime._temporal_restart import TemporalRestartState
     from pops.runtime._uniform_restart_preflight import preflight_uniform_restart
 
-    payload = decode_checkpoint_bytes(raw)
+    payload = decode_checkpoint_bytes(raw, resource_budget)
     _, restart = inspect_checkpoint_payload_integrity(payload, runtime_kind="uniform")
     if restart.token != expected_restart.token:
         raise RuntimeError("migrated checkpoint restart identity changed during encoding")
@@ -897,15 +955,30 @@ def migrate_uniform_v2_checkpoint(
         raise FileExistsError("offline checkpoint migration refuses to replace its destination")
 
     mapping_data = _validate_mapping(mapping)
-    source_raw = source_path.read_bytes()
+    from pops.output._checkpoint_collective import (
+        _bounded_checkpoint_path_bytes,
+        decode_checkpoint_bytes,
+    )
+
+    source_budget = _mapping_resource_budget(mapping, source=True)
+    source_raw = _bounded_checkpoint_path_bytes(source_path, source_budget.max_archive_bytes)
     source_sha256 = hashlib.sha256(source_raw).hexdigest()
     if source_sha256 != mapping.source_content_sha256:
         raise ValueError("legacy source content SHA-256 differs from the reviewed mapping")
-    from pops.output._checkpoint_collective import decode_checkpoint_bytes
+    from pops.runtime._checkpoint_resource_budget import (
+        _producer_checkpoint_resource_budget,
+    )
 
-    source_payload = decode_checkpoint_bytes(source_raw)
+    source_payload = decode_checkpoint_bytes(
+        source_raw, source_budget, allow_reviewed_unsealed=True
+    )
     legacy = _validate_legacy_v2(source_payload)
-    _, authority_payload = _decode_file(authority_path)
+    authority_budget = _mapping_resource_budget(mapping, source=False)
+    _, authority_payload = _decode_file(
+        authority_path,
+        content_sha256=mapping.authority_content_sha256,
+        resource_budget=authority_budget,
+    )
     authority = _current_authority(authority_payload)
     _pin_authorities(legacy, authority, source_sha256, mapping)
     migrated, (restart, mapping_identity) = _migrate_payload(
@@ -914,9 +987,15 @@ def migrate_uniform_v2_checkpoint(
         mapping,
         mapping_data,
     )
+    output_budget = _producer_checkpoint_resource_budget(
+        migrated,
+        runtime_kind="uniform",
+        authority=mapping_identity.token,
+    )
     output = _encode(migrated)
     _validate_migrated_bytes(
         output,
+        resource_budget=output_budget,
         authority=authority,
         expected_restart=restart,
         expected_mapping_identity=mapping_identity,
@@ -935,7 +1014,8 @@ def migrate_uniform_v2_checkpoint(
             stream.flush()
             os.fsync(stream.fileno())
         _validate_migrated_bytes(
-            temporary.read_bytes(),
+            _bounded_checkpoint_path_bytes(temporary, output_budget.max_archive_bytes),
+            resource_budget=output_budget,
             authority=authority,
             expected_restart=restart,
             expected_mapping_identity=mapping_identity,

@@ -860,13 +860,11 @@ def _periodic_condensed_fourier_oracle(initial, *, dt, rotation_rate):
 
 
 def _amr_history_level(values, *, level, base_cells=8):
-    """Decode one scalar level from the public concatenated AMR history convention."""
+    """Decode one exact level-qualified scalar history buffer."""
     flat = np.asarray(values, dtype=np.float64)
     cells = base_cells * 2**level
-    offset = sum((base_cells * 2**coarse) ** 2 for coarse in range(level))
-    end = offset + cells * cells
-    assert flat.size >= end
-    return flat[offset:end].reshape(cells, cells)
+    assert flat.size == cells * cells
+    return flat.reshape(cells, cells)
 
 
 def _patch_interior(mask, *, guard_cells=1):
@@ -1402,7 +1400,7 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
         assert float(np.linalg.norm(manufactured_rhs.ravel())) > 1.0
         actual_potential = _amr_history_level(
             # The accepted macro-step rotates the just-stored phi into lag-1.
-            simulation.history_global("plasma.tensor-potential", 1),
+            simulation.history_global("plasma.tensor-potential", max_levels - 1, 1),
             level=max_levels - 1,
             base_cells=base_cells,
         )

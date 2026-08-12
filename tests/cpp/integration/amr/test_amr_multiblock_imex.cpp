@@ -230,7 +230,7 @@ TEST(test_amr_multiblock_imex, TwoBlockStiffProgramPermutationRollsBackAndRetrie
       context);
   using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
   system.install_prepared_amr_program_flux_expression_budget(
-      "tests.amr-imex.multiblock-program-v1", std::vector<FluxBudget>{{1, 1}, {1, 1}});
+      "tests.amr-imex.multiblock-program-v1", std::vector<FluxBudget>{{1, 1}, {1, 1}}, 0, 0);
 
   const pops::MultiFab<Dim> slow_before = system.prepared_amr_block_state(0, 0);
   const pops::MultiFab<Dim> fast_before = system.prepared_amr_block_state(1, 0);

@@ -24,6 +24,7 @@ class _PreparedUniformRestart:
     restart_identity: Any
     temporal_state: Any
     cadence_state: Any
+    auxiliary_checkpoint: bytes
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +86,8 @@ class _SystemIO(_System):
         if not blocks or len(blocks) != len(set(blocks)):
             raise ValueError("checkpoint requires a non-empty unique Uniform block order")
         required_collectives = ["state_global", "potential_global"]
+        if not callable(getattr(self._s, "capture_auxiliary_checkpoint_accepted_state", None)):
+            raise TypeError("checkpoint Uniform engine lacks exact auxiliary checkpoint capture")
         out = {
             "pops_checkpoint_version": UNIFORM_CHECKPOINT_PAYLOAD_VERSION,
             "t": time,
@@ -224,6 +227,14 @@ class _SystemIO(_System):
             out["field_potential_%d" % index] = np.asarray(
                 self._s.field_potential_global(slot), dtype=np.float64
             )
+        auxiliary_checkpoint = self._s.capture_auxiliary_checkpoint_accepted_state()
+        if type(auxiliary_checkpoint) is not bytes or not auxiliary_checkpoint.startswith(
+            b"POPSAUX2"
+        ):
+            raise RuntimeError(
+                "native Uniform exact auxiliary checkpoint is not a POPSAUX2 bytes image"
+            )
+        out["auxiliary_checkpoint"] = np.frombuffer(auxiliary_checkpoint, dtype=np.uint8).copy()
         capture_histories(self._s, prepared.history_plan, out)
         for node in prepared.cache_nodes:
             out["cache_value_%d" % node] = np.asarray(
@@ -294,6 +305,7 @@ class _SystemIO(_System):
         from pops.runtime._program_cadence_checkpoint import prepare_program_cadence
         from pops.runtime._temporal_restart import TemporalRestartState
         from pops.runtime._uniform_restart_preflight import preflight_uniform_restart
+        from pops.runtime._checkpoint_resource_budget import require_checkpoint_resource_budget
         from pops.time._history.persistence import HistoryPersistence
         from pops.runtime._system_io_history import (
             history_fill_count_from_payload,
@@ -301,7 +313,7 @@ class _SystemIO(_System):
         )
 
         require_restart_bit_identical(bit_identical, where="Uniform restart")
-        d = decode_checkpoint_bytes(payload)
+        d = decode_checkpoint_bytes(payload, require_checkpoint_resource_budget(self))
         identity = authenticate_checkpoint_payload(self, d, runtime_kind="uniform")
         require_exact_payload_version(
             d,
@@ -312,6 +324,18 @@ class _SystemIO(_System):
         spatial = authenticate_checkpoint_spatial_contract(self, d)
         authenticate_checkpoint_embedded_boundary_contract(self, d)
         preflight_uniform_restart(d)
+        if not callable(getattr(self._s, "restore_auxiliary_checkpoint_accepted_state", None)):
+            raise TypeError("restart: Uniform engine lacks exact auxiliary checkpoint restore")
+        if "auxiliary_checkpoint" not in d:
+            raise ValueError("restart: checkpoint lacks its exact auxiliary payload")
+        auxiliary_checkpoint = np.asarray(d["auxiliary_checkpoint"])
+        if auxiliary_checkpoint.dtype != np.dtype(np.uint8) or auxiliary_checkpoint.ndim != 1:
+            raise ValueError(
+                "restart: exact auxiliary checkpoint must be a one-dimensional uint8 array"
+            )
+        if auxiliary_checkpoint.size < 8 or auxiliary_checkpoint[:8].tobytes() != b"POPSAUX2":
+            raise ValueError("restart: exact auxiliary checkpoint is not POPSAUX2")
+        auxiliary_checkpoint_bytes = auxiliary_checkpoint.tobytes()
         cadence = prepare_program_cadence(
             self._s,
             d,
@@ -495,7 +519,7 @@ class _SystemIO(_System):
                 raise ValueError(
                     "restart : scheduled cache node %d has the wrong value size" % node
                 )
-        return _PreparedUniformRestart(d, identity, temporal, cadence)
+        return _PreparedUniformRestart(d, identity, temporal, cadence, auxiliary_checkpoint_bytes)
 
     def _begin_checkpoint_restart(self) -> None:
         if "_checkpoint_restart_python_snapshot" in self.__dict__:
@@ -527,6 +551,7 @@ class _SystemIO(_System):
             self._s.set_field_potential(
                 slot, np.asarray(d["field_potential_%d" % index], dtype=np.float64).ravel()
             )
+        self._s.restore_auxiliary_checkpoint_accepted_state(prepared.auxiliary_checkpoint)
         macro_step = int(d["macro_step"])
         restore_program_cadence(
             self._s,

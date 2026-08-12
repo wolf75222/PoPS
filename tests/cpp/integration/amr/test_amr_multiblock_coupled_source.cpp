@@ -269,8 +269,11 @@ struct CoupledFixture {
 
               candidates[static_cast<std::size_t>(program_block)] = &candidate;
             }
-            context->apply_coupling_operators(pops::Real(level_dt),
-                                              {{0, candidates[0]}, {1, candidates[1]}});
+            context->apply_coupling_operators(
+                "test.amr.multiblock-coupled-source/program-ssprk2-imex-v1",
+                "test.amr.multiblock-coupled-source/rate-final",
+                "test.amr.multiblock-coupled-source/application-final", pops::Real(level_dt),
+                {{0, candidates[0]}, {1, candidates[1]}});
             context->commit_many({{accepted[0], candidates[0]}, {accepted[1], candidates[1]}});
           });
         },
@@ -279,9 +282,14 @@ struct CoupledFixture {
     // ProgramBlockMap must route candidates by block identity; the provider never sees this order.
     system.set_program_block_map({1, 0});
     using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
+    constexpr std::string_view graph_identity =
+        "test.amr.multiblock-coupled-source/program-ssprk2-imex-v1";
+    constexpr std::string_view rate_identity = "test.amr.multiblock-coupled-source/rate-final";
+    constexpr std::string_view application_identity =
+        "test.amr.multiblock-coupled-source/application-final";
     system.install_prepared_amr_program_flux_expression_budget(
-        "test.amr.multiblock-coupled-source/program-ssprk2-imex-v1",
-        std::vector<FluxBudget>{{2, 1}, {2, 1}});
+        std::string(graph_identity), std::vector<FluxBudget>{{2, 1}, {2, 1}}, 1,
+        graph_identity.size() + rate_identity.size() + application_identity.size());
   }
 
   static pops::AmrSystemConfig<Dim> config() {

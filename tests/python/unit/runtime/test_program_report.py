@@ -60,6 +60,14 @@ class _AcceptedProgramAuthority:
         assert name == "u_prev"
         return True
 
+    def history_fill_count(self, name):
+        assert name == "u_prev"
+        return 2
+
+    def history_slot_dt(self, name, slot):
+        assert name == "u_prev"
+        return (0.125, 0.0625)[slot]
+
     def program_cache_nodes(self):
         return [7]
 
@@ -139,6 +147,8 @@ def test_accepted_program_report_preserves_owned_metadata():
             "depth": 2,
             "ncomp": 3,
             "initialized": True,
+            "fill_count": 2,
+            "slot_dt": [0.125, 0.0625],
         }
     ]
     assert report.cache == [
@@ -178,7 +188,7 @@ def test_report_serialization_is_array_free_and_detached():
     report = build_program_report(_AcceptedProgramAuthority())
     data = report.to_dict()
 
-    assert data["schema_version"] == 4
+    assert data["schema_version"] == 5
     assert data["report_type"] == "program_runtime"
     assert json.loads(report.to_json()) == data
     assert "accepted-program" in str(report)

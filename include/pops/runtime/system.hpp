@@ -30,6 +30,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -476,11 +477,20 @@ class System {
   /// owner-qualified ComponentKeys, shapes, and accepted provider generations before publication.
   [[nodiscard]] POPS_EXPORT runtime::system::AuxiliaryCheckpointAcceptedState<Dim>
   capture_auxiliary_checkpoint_accepted_state() const;
+  /// Rank-local checkpoint capacity derived from the sealed auxiliary registry. The pair is
+  /// ``(payload-free POPSAUX2 bytes, scalar values per full-domain level)``.
+  [[nodiscard]] POPS_EXPORT std::pair<std::size_t, std::size_t> checkpoint_auxiliary_capacity()
+      const;
   /// Restore the accepted provider provenance only after the checkpoint backend has staged a
   /// compatible rank-local group payload privately.  The collective preflight and rollback image
   /// ensure a rejected checkpoint cannot expose a partial auxiliary generation.
   POPS_EXPORT void restore_auxiliary_checkpoint_accepted_state(
       const runtime::system::AuxiliaryCheckpointAcceptedState<Dim>& state);
+  /// Decode one sealed POPSAUX2 image inside the authenticated System execution lane.  Local
+  /// decode/allocation failure is agreed before the typed restore enters its first collective.
+  using AuxiliaryCheckpointByteViewProvider = std::function<std::span<const std::uint8_t>()>;
+  POPS_EXPORT void restore_auxiliary_checkpoint_accepted_state_bytes(
+      const AuxiliaryCheckpointByteViewProvider& payload);
   /// @}
 
   /// Configures the shared Poisson.

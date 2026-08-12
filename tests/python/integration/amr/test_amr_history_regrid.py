@@ -152,8 +152,14 @@ def test_null_regrid_matches_no_regrid_to_roundoff(
     assert tuple(a.patch_boxes()) == initial_boxes == tuple(b.patch_boxes())
     da = float(np.abs(_coarse_density(a) - _coarse_density(b)).max())
     assert da < 1e-9, "null-regrid trajectory mismatch: max|d| = %.3e" % da
-    ra = {h: [np.asarray(a.history_global(h, k)).ravel()
-              for k in range(int(a.history_depth(h)))] for h in a.history_names()}
+    ra = {
+        (h, int(level)): [
+            np.asarray(a.history_global(h, level, k)).ravel()
+            for k in range(int(a.history_depth(h)))
+        ]
+        for h in a.history_names()
+        for level in a.history_levels(h)
+    }
     assert ra
     assert all(np.all(np.isfinite(x)) for slots in ra.values() for x in slots)
 
@@ -195,13 +201,14 @@ def test_real_regrid_stable_and_layout_consistent(
     ok = True
     for h in names:
         ncomp = int(a.history_ncomp(h))
-        expected = sum(ncomp * (N << k) * (N << k) for k in range(nlev))
-        for k in range(int(a.history_depth(h))):
-            buf = np.asarray(a.history_global(h, k), dtype=np.float64).ravel()
-            if buf.size != expected or not np.all(np.isfinite(buf)):
-                ok = False
-                pytest.fail(
-                    "ring %s slot %d size %d != expected %d (or non-finite)"
-                    % (h, k, buf.size, expected)
-                )
+        for level in a.history_levels(h):
+            expected = ncomp * (N << int(level)) * (N << int(level))
+            for k in range(int(a.history_depth(h))):
+                buf = np.asarray(a.history_global(h, level, k), dtype=np.float64).ravel()
+                if buf.size != expected or not np.all(np.isfinite(buf)):
+                    ok = False
+                    pytest.fail(
+                        "ring %s level %d slot %d size %d != expected %d (or non-finite)"
+                        % (h, level, k, buf.size, expected)
+                    )
     assert nlev >= 2 and ok

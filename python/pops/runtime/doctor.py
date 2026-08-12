@@ -18,6 +18,8 @@ from pops.runtime._threading import has_kokkos
 # table reads the same every run (and the test_capabilities contract keeps its ordered lists).
 _RIEMANN_ORDER = ("rusanov", "hll", "hllc", "roe")
 _LIMITER_ORDER = ("none", "minmod", "vanleer", "weno5", "mc", "superbee")
+
+
 def _ordered(tokens: Any, order: Any) -> Any:
     """Tokens kept in canonical ``order`` first, then any extras sorted (deterministic display)."""
     present = set(tokens)
@@ -252,6 +254,7 @@ def capabilities() -> Any:
     brick cannot silently desync this matrix from the introspectable one.
     """
     from pops._native_selector import selected_native_module
+
     selected_native_module(required=True)
     # Sec 12: derive the riemann / limiter / reconstruction / Poisson token lists from the descriptor
     # catalogs (the same source as the internal descriptor report) instead of hardcoding them, so a
@@ -381,7 +384,7 @@ def capabilities() -> Any:
                 "PER_RANK topology; collective HDF5 requires the native C++ parallel-HDF5 route"
             ),
             "checkpoint_restart": (
-                "strict accepted-state Uniform v6 / AMR v8, including multi-block, active "
+                "strict accepted-state Uniform v6 / AMR v9, including multi-block, active "
                 "regridding, fields, histories, clocks, tagging hysteresis and consumer cursors; "
                 "exact MPI_COMM_WORLD captures collectively and publishes one rank-0 NPZ artifact"
             ),

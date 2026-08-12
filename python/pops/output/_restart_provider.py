@@ -1025,7 +1025,7 @@ class _RestartSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class RestartV3:
-    """Compatibility-named adapter over strict Uniform v6 / AMR v8 accepted-state payloads."""
+    """Compatibility-named adapter over strict Uniform v6 / AMR v9 accepted-state payloads."""
 
     __pops_ir_immutable__ = True
     bit_identical: bool = False
@@ -1082,7 +1082,8 @@ class RestartV3:
 
     def reopen(self, runtime: Any, path: Any) -> ReopenedRestart:
         self.validate_configuration()
-        from ._checkpoint_collective import root_bytes
+        from ._checkpoint_collective import _bounded_checkpoint_path_bytes, root_bytes
+        from pops.runtime._checkpoint_resource_budget import require_checkpoint_resource_budget
 
         topology = checkpoint_topology(runtime)
         local_target = canonical_checkpoint_path(path)
@@ -1096,17 +1097,23 @@ class RestartV3:
         )
         consensus(topology, "restart target agreement", error=target_error)
         root_payload = b""
+        archive_budget = require_checkpoint_resource_budget(runtime).max_archive_bytes
 
         def read_and_authenticate_root() -> dict[str, Any]:
             nonlocal root_payload
-            root_payload = target.read_bytes()
+            root_payload = _bounded_checkpoint_path_bytes(target, archive_budget)
             cursors = runtime._inspect_checkpoint_payload(root_payload)
             return cursors.to_data()
 
         cursor_data = root_value(
             topology, "restart read and authentication", read_and_authenticate_root
         )
-        payload = root_bytes(topology, "restart payload broadcast", lambda: root_payload)
+        payload = root_bytes(
+            topology,
+            "restart payload broadcast",
+            lambda: root_payload,
+            max_bytes=archive_budget,
+        )
         cursors = None
         cursor_error = None
         try:

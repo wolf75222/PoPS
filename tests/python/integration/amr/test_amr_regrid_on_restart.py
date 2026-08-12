@@ -186,7 +186,8 @@ def _accepted_image(runtime):
         (
             str(name),
             tuple(
-                np.asarray(runtime.history_global(name, slot), dtype=np.float64).copy()
+                np.asarray(runtime.history_global(name, level, slot), dtype=np.float64).copy()
+                for level in runtime.history_levels(name)
                 for slot in range(int(runtime.history_depth(name)))
             ),
         )
@@ -244,8 +245,16 @@ def _accepted_tagging_hysteresis(payload):
         cursor += 8
         return value
 
-    assert encoded[:8] == b"POPSAST5"
+    def skip_string():
+        nonlocal cursor
+        cursor += read_size()
+        assert cursor <= len(encoded), "accepted-state string is truncated"
+
+    assert encoded[:8] == b"POPSAND3"
     cursor = 8
+    cursor += 8  # native dimension
+    skip_string()  # exact spatial contract
+    cursor += 2 * 8  # topology epoch, materialization generation
     level_count = read_size()
     cursor += level_count * 40
     assert cursor <= len(encoded), "accepted-state level clocks are truncated"
@@ -254,6 +263,17 @@ def _accepted_tagging_hysteresis(payload):
         name_size = read_size()
         cursor += name_size + 8
         assert cursor <= len(encoded), "accepted-state logical clocks are truncated"
+    history_count = read_size()
+    for _ in range(history_count):
+        skip_string()
+        cursor += 8  # Program owner
+        for _identity in range(4):
+            skip_string()
+        cursor += 2 * 8  # depth, component count
+    history_slot_count = read_size()
+    for _ in range(history_slot_count):
+        skip_string()
+        cursor += 5 * 8  # level, slot, outgoing dt, initialized, fill count
     cursor += 8  # CellTemporalPartitionKind
     provider_size = read_size()
     cursor += provider_size
@@ -268,12 +288,13 @@ def _accepted_tagging_hysteresis(payload):
 
 def _tagging_hysteresis_summary(encoded):
     """Return and authenticate (min_cycles, cycle, active_entries)."""
-    assert encoded[:8] == b"POPSHYS1"
-    assert len(encoded) >= 36
-    minimum_cycles = int.from_bytes(encoded[8:12], "little")
-    cycle = int.from_bytes(encoded[12:20], "little")
-    identity_size = int.from_bytes(encoded[20:28], "little")
-    count_offset = 28 + identity_size
+    assert encoded[:8] == b"POPSHYS2"
+    assert len(encoded) >= 40
+    assert int.from_bytes(encoded[8:12], "little") == 2
+    minimum_cycles = int.from_bytes(encoded[12:16], "little")
+    cycle = int.from_bytes(encoded[16:24], "little")
+    identity_size = int.from_bytes(encoded[24:32], "little")
+    count_offset = 32 + identity_size
     assert count_offset + 8 <= len(encoded), "tagging provider identity is truncated"
     active_entries = int.from_bytes(encoded[count_offset : count_offset + 8], "little")
     record_size = 3 * 4 + 8 + 1
@@ -438,8 +459,9 @@ def test_regrid_on_restart_changes_real_boxes_and_rolls_back_post_regrid_fault(
     assert _runtime_tagging_hysteresis(restarted) == transformed_hysteresis[0]
     assert tuple(restarted.history_names()) == tuple(source.history_names())
     assert all(
-        np.all(np.isfinite(np.asarray(restarted.history_global(name, slot))))
+        np.all(np.isfinite(np.asarray(restarted.history_global(name, level, slot))))
         for name in restarted.history_names()
+        for level in restarted.history_levels(name)
         for slot in range(int(restarted.history_depth(name)))
     )
 
@@ -468,7 +490,8 @@ def test_regrid_on_restart_changes_real_boxes_and_rolls_back_post_regrid_fault(
     assert continued.run_identity != source_run_identity
     assert _runtime_tagging_hysteresis(restarted) == transformed_hysteresis[0]
     assert all(
-        np.all(np.isfinite(np.asarray(restarted.history_global(name, slot))))
+        np.all(np.isfinite(np.asarray(restarted.history_global(name, level, slot))))
         for name in restarted.history_names()
+        for level in restarted.history_levels(name)
         for slot in range(int(restarted.history_depth(name)))
     )

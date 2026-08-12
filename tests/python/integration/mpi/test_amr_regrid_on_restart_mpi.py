@@ -189,7 +189,8 @@ def _accepted_image(runtime, *, blocks=("tracer",)):
         (
             str(name),
             tuple(
-                np.asarray(runtime.history_global(name, slot), dtype=np.float64).copy()
+                np.asarray(runtime.history_global(name, level, slot), dtype=np.float64).copy()
+                for level in runtime.history_levels(name)
                 for slot in range(int(runtime.history_depth(name)))
             ),
         )
@@ -626,8 +627,9 @@ def test_regrid_on_restart_mpi_collective_rollback_and_lineage() -> None:
             continued.accepted_steps == 1
             and continued.run_identity != source.last_run_identity
             and all(
-                np.all(np.isfinite(np.asarray(restarted.history_global(name, slot))))
+                np.all(np.isfinite(np.asarray(restarted.history_global(name, level, slot))))
                 for name in restarted.history_names()
+                for level in restarted.history_levels(name)
                 for slot in range(int(restarted.history_depth(name)))
             ),
             "the transformed multistep continuation advances without colliding with its source",

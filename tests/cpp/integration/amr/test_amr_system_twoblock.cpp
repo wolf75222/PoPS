@@ -107,7 +107,7 @@ TEST(test_amr_system_twoblock, AcceptedStatesRollbackTogether) {
   system.set_program_block_map({0, 1});
   using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
   system.install_prepared_amr_program_flux_expression_budget(
-      "tests.amr.system-twoblock/manual-program", std::vector<FluxBudget>{{8, 16}, {0, 0}});
+      "tests.amr.system-twoblock/manual-program", std::vector<FluxBudget>{{8, 16}, {0, 0}}, 0, 0);
   const auto& prepared_budget = system.prepared_amr_program_flux_expression_budget();
   ASSERT_EQ(prepared_budget.blocks.size(), 2U);
   EXPECT_EQ(prepared_budget.blocks[1].rhs_basis_bound, 0U);

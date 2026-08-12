@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -420,6 +421,16 @@ class ExactAuxiliaryRegistry final {
     // retain an exact rollback image if any rank rejects a checkpoint preflight.
     accepted_points_ = std::move(accepted_points);
     accepted_generation_ = generation;
+  }
+
+  /// Allocation-free publication seam for a fully validated private registry candidate.  The
+  /// caller must already have authenticated both sealed graphs and closed candidate state through
+  /// its collective preflight; this operation deliberately swaps only accepted provenance.
+  void swap_accepted_publication(ExactAuxiliaryRegistry& candidate) noexcept {
+    static_assert(
+        std::is_nothrow_swappable_v<std::vector<std::optional<AuxiliaryEvaluationPoint>>>);
+    accepted_points_.swap(candidate.accepted_points_);
+    std::swap(accepted_generation_, candidate.accepted_generation_);
   }
   [[nodiscard]] const ResolvedAuxiliaryConsumerPlan<Dim>& consumer_plan(
       std::string_view consumer_qid) const {

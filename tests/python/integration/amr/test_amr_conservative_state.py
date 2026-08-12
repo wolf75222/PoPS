@@ -222,12 +222,23 @@ def test_public_amr_bind_preserves_every_conservative_component(
         engine = runtime._executor
         (history_name,) = list(engine.history_names())
         assert engine.history_depth(history_name) == 2
-        assert engine.history_initialized(history_name) is False
-        assert engine.history_fill_count(history_name) == 0
-        (history_row,) = engine.program_accepted_state_manifest()
-        assert history_row[0] == history_name
-        assert int(history_row[6]) == 2
-        assert int(history_row[7]) == 2
+        assert list(engine.history_levels(history_name)) == [0, 1]
+        assert all(
+            engine.history_initialized(history_name, level) is False for level in (0, 1)
+        )
+        assert all(engine.history_fill_count(history_name, level) == 0 for level in (0, 1))
+        history_rows = engine.program_accepted_state_manifest()
+        assert len(history_rows) == 4
+        assert all(history_row[0] == history_name for history_row in history_rows)
+        assert all(int(history_row[6]) == 2 for history_row in history_rows)
+        assert all(int(history_row[7]) == 2 for history_row in history_rows)
+        assert {(int(row[8]), int(row[9])) for row in history_rows} == {
+            (0, 0),
+            (0, 1),
+            (1, 0),
+            (1, 1),
+        }
+        assert all(int(row[10]) == 0 and row[11:] == ["0", "0"] for row in history_rows)
         return history_name
 
     history_name = assert_cold_two_level_history(simulation)

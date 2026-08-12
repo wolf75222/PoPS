@@ -152,6 +152,43 @@ amr_tagging_stencil_from_python(const py::dict& row) {
   return result;
 }
 
+void install_amr_interface_flux_provider(AmrSystem& system, const py::list& rows) {
+  using Scheduler = pops::runtime::multiblock::InterfaceFluxScheduler<pops::kNativeDimension>;
+  using PreparedComponent =
+      pops::runtime::multiblock::PreparedInterfaceFluxComponent<pops::kNativeDimension>;
+  using Job = pops::python::detail::PreparedInterfaceFluxJob<pops::kNativeDimension>;
+  std::vector<Job> jobs;
+  const std::string provider_contract =
+      pops::python::detail::prepare_interface_flux_jobs<pops::kNativeDimension>(rows, jobs, false);
+  system.install_prepared_amr_interface_flux_provider(
+      provider_contract, [&system, jobs = std::move(jobs)](Scheduler& scheduler) mutable {
+        for (Job& job : jobs) {
+          if (job.route.left_block >= static_cast<std::size_t>(system.n_blocks()) ||
+              job.route.right_block >= static_cast<std::size_t>(system.n_blocks()) ||
+              job.route.level < 0 || job.route.level >= system.n_levels())
+            throw std::out_of_range(
+                "AMR shared-interface route lies outside the prepared block/level registry");
+          auto& left = system.prepared_amr_block_state(static_cast<int>(job.route.left_block),
+                                                       job.route.level);
+          auto& right = system.prepared_amr_block_state(static_cast<int>(job.route.right_block),
+                                                        job.route.level);
+          const auto geometry = system.prepared_amr_level_geometry(job.route.level);
+          const PopsExecutionContextV1 execution = job.spec.execution->view();
+          scheduler.install(
+              std::move(job.route), left, geometry, right, geometry, execution,
+              [spec = std::move(job.spec), component = std::move(job.component)]() mutable {
+                auto prepared =
+                    std::make_shared<PreparedComponent>(std::move(spec), std::move(component));
+                return pops::runtime::multiblock::InterfaceFluxEvaluator(
+                    [prepared](const pops::runtime::multiblock::BoundaryEvaluationPoint& point,
+                               const pops::runtime::multiblock::InterfaceFluxBatch& batch) {
+                      prepared->evaluate(point, batch);
+                    });
+              });
+        }
+      });
+}
+
 // Assembly seams: per-block composition, native block, and refinement tagging.
 void bind_amr_assembly(py::class_<AmrSystem>& cls) {
   cls.def(py::init<const AmrSystemConfig&>())
@@ -247,6 +284,9 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
       .def("_install_field_storage_route", &AmrSystem::install_field_storage_route,
            py::arg("field_identity"), py::arg("provider_slot"),
            "Bind one exact solved-field Handle to native provider storage.")
+      .def("_install_interface_flux_provider", &install_amr_interface_flux_provider,
+           py::arg("jobs"),
+           "Atomically extend the prepared multi-level shared-interface provider registry.")
       .def("_discard_boundary_plans", &AmrSystem::discard_hyperbolic_boundaries,
            "Roll back one failed pre-block boundary authority transaction.")
       .def(
@@ -533,23 +573,56 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
              }
              return result;
            })
+      .def("_checkpoint_auxiliary_level_capacity", &AmrSystem::checkpoint_auxiliary_level_capacity,
+           "Return the sealed AMR per-level auxiliary metadata/scalar checkpoint capacity.")
+      .def(
+          "_checkpoint_interface_flux_capacity",
+          [](const AmrSystem& s) {
+            const auto budget = s.prepared_amr_interface_flux_ledger_budget();
+            return py::make_tuple(budget.max_fragments_per_window,
+                                  budget.max_payload_terms_per_window,
+                                  budget.exact_contract.size());
+          },
+          "Return the artifact-authenticated accepted interface-ledger capacity.")
+      .def(
+          "_checkpoint_program_flux_capacity",
+          [](const AmrSystem& s) {
+            const auto& budget = s.prepared_amr_program_flux_expression_budget();
+            std::size_t rhs = 0;
+            std::size_t coefficients = 0;
+            for (const auto& block : budget.blocks) {
+              if (block.rhs_basis_bound > std::numeric_limits<std::size_t>::max() - rhs ||
+                  block.coefficient_term_bound >
+                      std::numeric_limits<std::size_t>::max() - coefficients)
+                throw std::overflow_error("AMR Program flux checkpoint capacity overflows size_t");
+              rhs += block.rhs_basis_bound;
+              coefficients += block.coefficient_term_bound;
+            }
+            return py::make_tuple(rhs, coefficients, budget.interface_coupling_application_bound,
+                                  budget.interface_coupling_identity_character_bound,
+                                  budget.exact_contract.size());
+          },
+          "Return the artifact-authenticated Program face/interface flux capacity.")
+      .def("_checkpoint_program_state_capacity", &AmrSystem::checkpoint_program_state_capacity,
+           "Return the artifact-authenticated POPSAND3/source-authority byte capacities.")
       .def(
           "restore_auxiliary_checkpoint_accepted_state",
-          [](AmrSystem& s, const py::sequence& payloads) {
-            std::vector<
-                pops::runtime::system::AuxiliaryCheckpointAcceptedState<pops::kNativeDimension>>
-                states;
-            states.reserve(static_cast<std::size_t>(payloads.size()));
-            for (const py::handle payload : payloads) {
-              if (!PyBytes_CheckExact(payload.ptr()))
-                throw py::type_error(
-                    "AMR exact auxiliary checkpoint payloads must be bytes objects");
-              const std::string bytes = py::cast<std::string>(payload);
-              states.push_back(pops::runtime::system::deserialize_auxiliary_checkpoint_state<
-                               pops::kNativeDimension>(std::span<const std::uint8_t>(
-                  reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size())));
-            }
-            s.restore_auxiliary_checkpoint_accepted_state(states);
+          [](AmrSystem& s, py::object payloads) {
+            py::object retained_payload;
+            s.restore_auxiliary_checkpoint_accepted_state_bytes(
+                [&]() { return static_cast<std::size_t>(py::len(payloads)); },
+                [&](std::size_t level) -> std::span<const std::uint8_t> {
+                  retained_payload = payloads.attr("__getitem__")(py::int_(level));
+                  if (!PyBytes_CheckExact(retained_payload.ptr()))
+                    throw py::type_error(
+                        "AMR exact auxiliary checkpoint payloads must be bytes objects");
+                  char* data = nullptr;
+                  Py_ssize_t size = 0;
+                  if (PyBytes_AsStringAndSize(retained_payload.ptr(), &data, &size) != 0)
+                    throw py::error_already_set();
+                  return {reinterpret_cast<const std::uint8_t*>(data),
+                          static_cast<std::size_t>(size)};
+                });
           },
           py::arg("payloads"))
       .def(
@@ -1018,25 +1091,35 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
           py::arg("boxes"),
           "Collectively rematerialize exact recorded patch ownership for this communicator.")
       .def(
+          "program_accepted_state_source_authority",
+          [](const AmrSystem& s, const std::vector<std::vector<int>>& source_level_owners,
+             int source_rank_count) {
+            const auto authority =
+                s.program_accepted_state_source_authority(source_level_owners, source_rank_count);
+            return py::bytes(reinterpret_cast<const char*>(authority.data()), authority.size());
+          },
+          py::arg("source_level_owners"), py::arg("source_rank_count"),
+          "Seal the live accepted Program image under its artifact and source ownership.")
+      .def(
           "rematerialize_program_accepted_state",
-          [](AmrSystem& s, const std::vector<py::bytes>& source_states,
+          [](AmrSystem& s, const py::bytes& source_state, int source_rank_count,
              const std::vector<std::vector<int>>& source_level_owners,
-             const std::vector<std::vector<int>>& target_level_owners) {
-            std::vector<std::vector<std::uint8_t>> bytes;
-            bytes.reserve(source_states.size());
-            for (const py::bytes& source : source_states) {
-              const std::string value = source;
-              bytes.emplace_back(value.begin(), value.end());
-            }
+             const std::vector<std::vector<int>>& target_level_owners,
+             const py::bytes& source_authority) {
+            const std::string state = source_state;
+            const std::string authority = source_authority;
             const auto rematerialized = s.rematerialize_program_accepted_state(
-                bytes, source_level_owners, target_level_owners);
+                std::vector<std::uint8_t>(state.begin(), state.end()), source_rank_count,
+                source_level_owners, target_level_owners,
+                std::vector<std::uint8_t>(authority.begin(), authority.end()));
             if (rematerialized.empty())
               return py::bytes();
             return py::bytes(reinterpret_cast<const char*>(rematerialized.data()),
                              rematerialized.size());
           },
-          py::arg("source_states"), py::arg("source_level_owners"), py::arg("target_level_owners"),
-          "Merge exact source-rank Program images and return this rank's current-ownership image.")
+          py::arg("source_state"), py::arg("source_rank_count"), py::arg("source_level_owners"),
+          py::arg("target_level_owners"), py::arg("source_authority"),
+          "Rematerialize one canonical Program image under current ownership.")
       .def(
           "_prepare_checkpoint_spatial_contract",
           [](const AmrSystem&, const py::dict& data) {
@@ -1058,36 +1141,48 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
       .def("set_temporal_relations", &AmrSystem::set_temporal_relations, py::arg("numerators"),
            py::arg("denominators"), py::arg("remainder_policies"))
       .def("checkpoint_transfer_routes", &AmrSystem::checkpoint_transfer_routes)
-      // ADC-631 multistep history rings on the compiled-Program AMR route: the SAME seam names as
-      // System (init_system.cpp) so _system_io_history.py serialize/restore is reused verbatim.
-      // history_global returns the per-level slices concatenated into one exact replay image;
-      // restore_history flattens any C-contiguous
-      // array and scatters it back per level; rebuild_history_slots replays the recomputed slots.
+      // ADC-631 multistep history rings on the compiled-Program AMR route.  Values and accepted
+      // provenance are qualified by level; _system_io_history.py retains the Uniform signatures
+      // only for the non-AMR facade.
       .def("history_names", &AmrSystem::history_names)
+      .def("history_levels", &AmrSystem::history_levels, py::arg("name"))
       .def("history_depth", &AmrSystem::history_depth, py::arg("name"))
       .def("history_ncomp", &AmrSystem::history_ncomp, py::arg("name"))
       .def(
           "history_global",
-          [](const AmrSystem& s, const std::string& name, int slot) {
-            return s.history_global(name, slot);
+          [](const AmrSystem& s, const std::string& name, int level, int slot) {
+            return s.history_global(name, level, slot);
           },
-          py::arg("name"), py::arg("slot"))
-      .def("history_initialized", &AmrSystem::history_initialized, py::arg("name"))
-      .def("history_fill_count", &AmrSystem::history_fill_count, py::arg("name"))
+          py::arg("name"), py::arg("level"), py::arg("slot"))
+      .def("history_initialized", &AmrSystem::history_initialized, py::arg("name"),
+           py::arg("level"))
+      .def("history_fill_count", &AmrSystem::history_fill_count, py::arg("name"), py::arg("level"))
       .def(
           "restore_history",
-          [](AmrSystem& s, const std::string& name, int slot,
+          [](AmrSystem& s, const std::string& name, int level, int slot,
              py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
-            s.restore_history(name, slot, flat(arr));
+            s.restore_history(name, level, slot, flat(arr));
           },
-          py::arg("name"), py::arg("slot"), py::arg("values"))
+          py::arg("name"), py::arg("level"), py::arg("slot"), py::arg("values"))
       .def("set_history_initialized", &AmrSystem::set_history_initialized, py::arg("name"),
-           py::arg("initialized"))
+           py::arg("level"), py::arg("initialized"))
       .def("restore_history_fill_count", &AmrSystem::restore_history_fill_count, py::arg("name"),
-           py::arg("fill_count"))
-      .def("history_slot_dt", &AmrSystem::history_slot_dt, py::arg("name"), py::arg("slot"))
+           py::arg("level"), py::arg("fill_count"))
+      .def("restore_history_metadata", &AmrSystem::restore_history_metadata, py::arg("name"),
+           py::arg("level"), py::arg("initialized"), py::arg("fill_count"))
+      .def(
+          "restore_history_provenance",
+          [](AmrSystem& s, const std::string& name, int level,
+             py::array_t<double, py::array::c_style | py::array::forcecast> slot_dt,
+             bool initialized, int fill_count) {
+            s.restore_history_provenance(name, level, flat(slot_dt), initialized, fill_count);
+          },
+          py::arg("name"), py::arg("level"), py::arg("slot_dt"), py::arg("initialized"),
+          py::arg("fill_count"))
+      .def("history_slot_dt", &AmrSystem::history_slot_dt, py::arg("name"), py::arg("level"),
+           py::arg("slot"))
       .def("restore_history_slot_dt", &AmrSystem::restore_history_slot_dt, py::arg("name"),
-           py::arg("slot"), py::arg("dt"))
+           py::arg("level"), py::arg("slot"), py::arg("dt"))
       .def("rebuild_history_slots", &AmrSystem::rebuild_history_slots, py::arg("name"),
            py::arg("stored_slots"))
       .def("last_replay_regrid_steps", &AmrSystem::last_replay_regrid_steps);

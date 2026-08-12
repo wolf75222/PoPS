@@ -23,9 +23,7 @@ SYSTEM_HEADER = ROOT / "include/pops/runtime/system.hpp"
 SYSTEM_BINDING = ROOT / "python/bindings/core/init/init_system.cpp"
 RETIRED_REFERENCE_SYSTEM_DRIVER = ROOT / "tests/cpp/support/reference_system_driver.hpp"
 REFERENCE_TIME_SCHEDULER = ROOT / "tests/cpp/support/reference_time_scheduler.hpp"
-LEGACY_PUBLIC_TIME_SCHEDULER = (
-    ROOT / "include/pops/numerics/time/schemes/scheduler.hpp"
-)
+LEGACY_PUBLIC_TIME_SCHEDULER = ROOT / "include/pops/numerics/time/schemes/scheduler.hpp"
 AMR_SYSTEM_CPP = ROOT / "src/runtime/amr/amr_system.cpp"
 AMR_SYSTEM_HEADER = ROOT / "include/pops/runtime/amr_system.hpp"
 AMR_RUNTIME = ROOT / "include/pops/runtime/amr/amr_runtime.hpp"
@@ -35,9 +33,7 @@ AMR_PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/amr_program_context.h
 AMR_DSL_BLOCK = ROOT / "include/pops/runtime/builders/compiled/amr_dsl_block.hpp"
 BLOCK_BUILDER = ROOT / "include/pops/runtime/builders/block/block_builder.hpp"
 POLAR_BLOCK_BUILDER = ROOT / "include/pops/runtime/builders/block/block_builder_polar.hpp"
-RETIRED_SYSTEM_BLOCK_SEAM = (
-    ROOT / "include/pops/runtime/builders/block/block_seam.hpp"
-)
+RETIRED_SYSTEM_BLOCK_SEAM = ROOT / "include/pops/runtime/builders/block/block_seam.hpp"
 SYSTEM_BLOCK_STORE = ROOT / "include/pops/runtime/system/system_block_store.hpp"
 GRID_CONTEXT = ROOT / "include/pops/runtime/context/grid_context.hpp"
 NUMERICAL_DEFAULTS = ROOT / "include/pops/runtime/numerical_defaults.hpp"
@@ -141,12 +137,9 @@ def test_static_system_assembler_is_retired_from_the_final_runtime_surface():
         if retired_identity.search(path.read_text(encoding="utf-8"))
     }
     assert violations == set()
-    assert not (
-        ROOT / "include/pops/coupling/system/system_coupler.hpp"
-    ).exists()
-    assert (
-        "pops/coupling/system/system_coupler.hpp"
-        not in HEADERS_MANIFEST.read_text(encoding="utf-8")
+    assert not (ROOT / "include/pops/coupling/system/system_coupler.hpp").exists()
+    assert "pops/coupling/system/system_coupler.hpp" not in HEADERS_MANIFEST.read_text(
+        encoding="utf-8"
     )
 
     assert not RETIRED_REFERENCE_SYSTEM_DRIVER.exists()
@@ -155,9 +148,8 @@ def test_static_system_assembler_is_retired_from_the_final_runtime_surface():
 def test_historical_block_scheduler_is_not_an_installed_temporal_authority():
     """The old TimePolicy scheduler remains only as a test oracle."""
     assert not LEGACY_PUBLIC_TIME_SCHEDULER.exists()
-    assert (
-        "pops/numerics/time/schemes/scheduler.hpp"
-        not in HEADERS_MANIFEST.read_text(encoding="utf-8")
+    assert "pops/numerics/time/schemes/scheduler.hpp" not in HEADERS_MANIFEST.read_text(
+        encoding="utf-8"
     )
 
     public_sources = tuple((ROOT / "include/pops").rglob("*.hpp"))
@@ -171,9 +163,7 @@ def test_historical_block_scheduler_is_not_an_installed_temporal_authority():
     reference_scheduler = REFERENCE_TIME_SCHEDULER.read_text(encoding="utf-8")
     assert "namespace pops::test_support" in reference_scheduler
     assert "void advance_subcycled(" in reference_scheduler
-    assert REFERENCE_TIME_SCHEDULER.relative_to(ROOT).as_posix().startswith(
-        "tests/cpp/support/"
-    )
+    assert REFERENCE_TIME_SCHEDULER.relative_to(ROOT).as_posix().startswith("tests/cpp/support/")
 
 
 def test_public_coupling_headers_are_spatial_only():
@@ -213,10 +203,7 @@ def test_public_coupling_headers_are_spatial_only():
 
     retired_single = PUBLIC_COUPLING_ROOT / "single/coupler.hpp"
     assert not retired_single.exists()
-    assert (
-        "pops/coupling/single/coupler.hpp"
-        not in HEADERS_MANIFEST.read_text(encoding="utf-8")
-    )
+    assert "pops/coupling/single/coupler.hpp" not in HEADERS_MANIFEST.read_text(encoding="utf-8")
 
 
 def test_local_implicit_solve_has_one_typed_options_route():
@@ -263,7 +250,9 @@ def test_amr_regrid_is_an_explicit_prepared_program_operation():
     assert "void regrid_if_due(" not in runtime
     assert "regrid_interval" not in runtime
     assert "regrid_if_due" not in context
-    prepare = _function_body(context, "  ::pops::amr::regridding::PreparedRegrid<Dim> prepare_regrid(")
+    prepare = _function_body(
+        context, "  ::pops::amr::regridding::PreparedRegrid<Dim> prepare_regrid("
+    )
     publish = _function_body(context, "  void publish_regrid(")
     assert "runtime_->prepare_regrid(" in prepare
     assert 'require_history_free_for_topology_change_("regrid")' in publish
@@ -452,8 +441,8 @@ def test_nonlinear_amr_semantics_use_the_compiled_program_not_a_blocker():
     assert "installed whole-system Program" in d2_guard
 
 
-def test_program_contexts_do_not_claim_missing_coupling_or_implicit_primitives():
-    """Keep the missing native seams visible instead of silently reaching old engines."""
+def test_program_contexts_do_not_claim_implicit_temporal_primitives():
+    """Keep retired temporal primitives absent from both exact Program contexts."""
     for path in (PROGRAM_CONTEXT, AMR_PROGRAM_CONTEXT):
         source = path.read_text(encoding="utf-8")
         for legacy_engine_primitive in (
@@ -467,17 +456,22 @@ def test_program_contexts_do_not_claim_missing_coupling_or_implicit_primitives()
 def test_ranked_program_context_owns_candidate_state_coupling_not_a_live_state_step():
     uniform = PROGRAM_CONTEXT.read_text(encoding="utf-8")
     amr = AMR_PROGRAM_CONTEXT.read_text(encoding="utf-8")
-    retired = (
-        ROOT / "include" / "pops" / "runtime" / "program" / "program_execution_services.hpp"
-    )
+    retired = ROOT / "include" / "pops" / "runtime" / "program" / "program_execution_services.hpp"
     runtime = AMR_RUNTIME.read_text(encoding="utf-8")
     assert not retired.exists()
     assert uniform.count("struct CouplingStateOverride") == 1
     assert uniform.count("void apply_coupling_operators(") == 1
     assert "ProgramContext coupling requires every runtime block candidate" in uniform
     assert "system_->apply_coupling_operators(dt, runtime_states)" in uniform
-    assert "[[noreturn]] void apply_coupling_operators(" in amr
-    assert 'unavailable_("exact-ranked multi-block AMR coupling provider")' in amr
+    assert (
+        "void apply_coupling_operators(std::string_view graph_identity, "
+        "std::string_view rate_identity," in amr
+    )
+    assert "std::string_view application_identity, Real dt," in amr
+    assert "graph_identity != facade_->installed_program_hash()" in amr
+    assert "rate_identity.empty() || application_identity.empty()" in amr
+    assert '"AMR Program coupling requires exact graph, rate, and application identities"' in amr
+    assert 'unavailable_("exact-ranked multi-block AMR coupling provider")' not in amr
     assert "void coupled_source_step(" not in runtime
     assert "void step(Real dt)" not in runtime
 

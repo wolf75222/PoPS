@@ -216,8 +216,14 @@ def _build(program_factory, regrid_every):
 
 
 def _rings(amr):
-    return {h: [np.asarray(amr.history_global(h, k), dtype=np.float64).ravel()
-                for k in range(int(amr.history_depth(h)))] for h in amr.history_names()}
+    return {
+        (h, int(level)): [
+            np.asarray(amr.history_global(h, level, k), dtype=np.float64).ravel()
+            for k in range(int(amr.history_depth(h)))
+        ]
+        for h in amr.history_names()
+        for level in amr.history_levels(h)
+    }
 
 
 def _rings_equal(first, second):
@@ -250,15 +256,18 @@ def _run_case(program_factory, nsteps, half, label, regrid_every):
         stored_info = {}
         for h in run.history_names():
             depth = int(d["history_depth_" + h])
-            slot_dts = np.asarray(
-                d["history_slot_dt_" + h], dtype=np.float64).reshape(-1)
-            expected_dts = np.full(depth, DT, dtype=np.float64)
-            if depth > 1:
-                expected_dts[1] = accepted_dt
-            assert np.array_equal(slot_dts, expected_dts), (
-                "AMR history slot_dt must remain the primary-clock macro dt "
-                "across every fine-level substep (got %r)" % slot_dts.tolist()
-            )
+            levels = [int(level) for level in d["history_levels_" + h]]
+            for level in levels:
+                slot_dts = np.asarray(
+                    d["history_slot_dt_%s_level_%d" % (h, level)], dtype=np.float64
+                ).reshape(-1)
+                expected_dts = np.full(depth, DT, dtype=np.float64)
+                if depth > 1:
+                    expected_dts[1] = accepted_dt
+                assert np.array_equal(slot_dts, expected_dts), (
+                    "AMR history slot_dt must remain the level-qualified macro dt "
+                    "(level=%d, got %r)" % (level, slot_dts.tolist())
+                )
             key = "history_stored_slots_" + h
             stored = [int(s) for s in d[key]] if key in d else list(range(depth))
             fp = "history_regrid_steps_" + h
