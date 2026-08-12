@@ -20,6 +20,7 @@
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/runtime/program/amr_program_checkpoint.hpp>
 #include <pops/runtime/system/derived_aux_provider.hpp>
+#include <pops/runtime/system/exact_field_marshaling.hpp>
 
 #include <algorithm>
 #include <array>
@@ -573,6 +574,29 @@ pops::runtime::amr::CompositeReductionResult exact_block_composite_sum(
 }
 
 template <int Dim>
+std::vector<double> explicit_block_state_oracle(pops::AmrSystem<Dim>& system, int runtime_block,
+                                                int level, int components) {
+  const pops::MultiFab<Dim>& carrier = system.prepared_amr_block_state(runtime_block, level);
+  return pops::runtime::system::marshaling::gather_global(
+      carrier, system.prepared_amr_level_geometry(level).domain(), components);
+}
+
+template <int Dim>
+void expect_output_pieces_equal(const std::vector<pops::OutputPiece<Dim>>& actual,
+                                const std::vector<pops::OutputPiece<Dim>>& expected) {
+  ASSERT_EQ(actual.size(), expected.size());
+  for (std::size_t piece = 0; piece < expected.size(); ++piece) {
+    EXPECT_EQ(actual[piece].level, expected[piece].level);
+    EXPECT_EQ(actual[piece].box, expected[piece].box);
+    EXPECT_EQ(actual[piece].global_box_index, expected[piece].global_box_index);
+    EXPECT_EQ(actual[piece].owner_rank, expected[piece].owner_rank);
+    EXPECT_EQ(actual[piece].replicated, expected[piece].replicated);
+    EXPECT_EQ(actual[piece].ncomp, expected[piece].ncomp);
+    EXPECT_EQ(actual[piece].values, expected[piece].values);
+  }
+}
+
+template <int Dim>
 MultiblockRegridObservation run_two_block_regrid_with_bz(pops::Real bz) {
   static_assert(Dim == 2);
   constexpr std::array<const char*, 2> names{"ions", "electrons"};
@@ -645,10 +669,43 @@ MultiblockRegridObservation run_two_block_regrid_with_bz(pops::Real bz) {
   EXPECT_GT(pops::difference_sum_sq_all(system.prepared_amr_block_state(0, 0),
                                         system.prepared_amr_block_state(1, 0)),
             pops::Real(0));
+  std::array<std::vector<std::vector<double>>, 2> block_oracles;
+  for (std::size_t block = 0; block < names.size(); ++block) {
+    block_oracles[block].reserve(static_cast<std::size_t>(system.n_levels()));
+    for (int level = 0; level < system.n_levels(); ++level) {
+      const pops::MultiFab<Dim>& carrier =
+          system.prepared_amr_block_state(static_cast<int>(block), level);
+      block_oracles[block].push_back(
+          explicit_block_state_oracle(system, static_cast<int>(block), level, carrier.ncomp()));
+      EXPECT_EQ(system.block_level_state(names[block], level), block_oracles[block].back());
+      EXPECT_EQ(system.block_level_state_global(names[block], level), block_oracles[block].back());
+      expect_output_pieces_equal(
+          system.output_state_local_pieces(names[block], level),
+          pops::output_local_pieces(carrier, level, carrier.distribution().replicated()));
+    }
+    EXPECT_EQ(system.density(names[block]),
+              explicit_block_state_oracle(system, static_cast<int>(block), 0, 1));
+  }
+  EXPECT_NE(block_oracles[0][0], block_oracles[1][0]);
+
   const auto masks_before = prepare_exact_composite_masks(system, config.transition_ratios);
-  for (std::size_t block = 0; block < names.size(); ++block)
-    result.mass_before[block] = static_cast<double>(
+  for (std::size_t block = 0; block < names.size(); ++block) {
+    const double exact = static_cast<double>(
         exact_block_composite_sum(system, static_cast<int>(block), 0, masks_before).value);
+    EXPECT_NEAR(system.composite_reduce(names[block], "sum", 0), exact, 2.0e-12);
+    result.mass_before[block] = exact;
+  }
+
+  std::vector<double> second_trial = block_oracles[1][0];
+  for (double& value : second_trial)
+    value += 0.125;
+  system.begin_step_transaction();
+  system.set_block_level_state(names[1], 0, second_trial);
+  EXPECT_EQ(system.block_level_state_global(names[0], 0), block_oracles[0][0]);
+  EXPECT_EQ(system.block_level_state_global(names[1], 0), second_trial);
+  system.rollback_step_transaction();
+  EXPECT_EQ(system.block_level_state_global(names[0], 0), block_oracles[0][0]);
+  EXPECT_EQ(system.block_level_state_global(names[1], 0), block_oracles[1][0]);
 
   pops::test::install_forward_euler_program(system);
   system.step(1.0e-4);

@@ -10768,11 +10768,12 @@ void AmrSystem<Dim>::discard_hyperbolic_boundaries() {
 
 template <int Dim>
 void AmrSystem<Dim>::set_density(const std::string& name, const std::vector<double>& density) {
-  typename Impl::BlockSpec& block = p_->block(name);
+  const std::size_t block_index = p_->block_index(name);
+  typename Impl::BlockSpec& block = p_->blocks[block_index];
   if (density.size() != checked_cells(p_->cfg.index_domain()))
     throw std::invalid_argument("AmrSystem density differs from the exact coarse shape");
   if (p_->engine)
-    write_component(p_->engine->hierarchy().state(0), p_->cfg.index_domain(), density, 0);
+    write_component(p_->block_state(block_index, 0), p_->cfg.index_domain(), density, 0);
   p_->discard_level_evaluations();
   block.density = density;
   block.has_density = true;
@@ -10781,12 +10782,13 @@ void AmrSystem<Dim>::set_density(const std::string& name, const std::vector<doub
 template <int Dim>
 void AmrSystem<Dim>::set_conservative_state(const std::string& name,
                                             const std::vector<double>& state) {
-  typename Impl::BlockSpec& block = p_->block(name);
+  const std::size_t block_index = p_->block_index(name);
+  typename Impl::BlockSpec& block = p_->blocks[block_index];
   const std::size_t cells = checked_cells(p_->cfg.index_domain());
   if (state.size() != static_cast<std::size_t>(block.ncomp) * cells)
     throw std::invalid_argument("AmrSystem state differs from the exact coarse shape");
   if (p_->engine)
-    write_field(p_->engine->hierarchy().state(0), p_->cfg.index_domain(), state, block.ncomp);
+    write_field(p_->block_state(block_index, 0), p_->cfg.index_domain(), state, block.ncomp);
   p_->discard_level_evaluations();
   block.state = state;
   block.has_state = true;
@@ -12833,31 +12835,41 @@ void AmrSystem<Dim>::set_level_state(int level, const std::vector<double>& state
 
 template <int Dim>
 std::vector<double> AmrSystem<Dim>::block_level_state(const std::string& name, int level) {
-  (void)p_->block(name);
-  return level_state(level);
+  return block_level_state_global(name, level);
 }
 
 template <int Dim>
 std::vector<double> AmrSystem<Dim>::block_level_state_global(const std::string& name, int level) {
-  (void)p_->block(name);
-  return level_state_global(level);
+  const std::size_t block_index = p_->block_index(name);
+  p_->ensure_engine();
+  if (level < 0 || static_cast<std::size_t>(level) >= p_->engine->hierarchy().num_levels())
+    throw std::out_of_range("AmrSystem block level is out of range");
+  const std::size_t index = static_cast<std::size_t>(level);
+  const MultiFab<Dim>& state = p_->block_state(block_index, index);
+  return gather_field(state, p_->engine->hierarchy().layout(index).domain(), state.ncomp());
 }
 
 template <int Dim>
 void AmrSystem<Dim>::set_block_level_state(const std::string& name, int level,
                                            const std::vector<double>& state) {
-  (void)p_->block(name);
-  set_level_state(level, state);
+  const std::size_t block_index = p_->block_index(name);
+  p_->ensure_engine();
+  if (level < 0 || static_cast<std::size_t>(level) >= p_->engine->hierarchy().num_levels())
+    throw std::out_of_range("AmrSystem block level is out of range");
+  const std::size_t index = static_cast<std::size_t>(level);
+  MultiFab<Dim>& target = p_->block_state(block_index, index);
+  write_field(target, p_->engine->hierarchy().layout(index).domain(), state, target.ncomp());
+  p_->discard_level_evaluations();
 }
 
 template <int Dim>
 std::vector<OutputPiece<Dim>> AmrSystem<Dim>::output_state_local_pieces(const std::string& name,
                                                                         int level) {
-  (void)p_->block(name);
+  const std::size_t block_index = p_->block_index(name);
   p_->ensure_engine();
   if (level < 0 || static_cast<std::size_t>(level) >= p_->engine->hierarchy().num_levels())
     throw std::out_of_range("AmrSystem output level is out of range");
-  const MultiFab<Dim>& state = p_->engine->hierarchy().state(static_cast<std::size_t>(level));
+  const MultiFab<Dim>& state = p_->block_state(block_index, static_cast<std::size_t>(level));
   return output_local_pieces(state, level, state.distribution().replicated());
 }
 
@@ -12906,7 +12918,8 @@ template <int Dim>
 double AmrSystem<Dim>::composite_reduce(const std::string& name, const std::string& kind,
                                         int component,
                                         const std::vector<int>& requested_levels) const {
-  const typename Impl::BlockSpec& block = p_->block(name);
+  const std::size_t block_index = p_->block_index(name);
+  const typename Impl::BlockSpec& block = p_->blocks[block_index];
   p_->ensure_engine();
   if (kind == "sum_all" || kind == "abs_sum_all" || kind == "sum_sq_all" || kind == "abs_max_all") {
     const std::string base = kind == "sum_all"       ? "sum"
@@ -12949,7 +12962,7 @@ double AmrSystem<Dim>::composite_reduce(const std::string& name, const std::stri
              embedded->mode() == runtime::system::PreparedEmbeddedBoundaryMode::cut_cell)
       relative = &embedded->volume_fraction();
     const std::size_t coverage_index = requested_levels.empty() ? index : position;
-    views.push_back({&p_->engine->hierarchy().state(index), (*coverage)[coverage_index].get(),
+    views.push_back({&p_->block_state(block_index, index), (*coverage)[coverage_index].get(),
                      extent, relative});
   }
   return static_cast<double>(
@@ -13671,6 +13684,13 @@ int AmrSystem<Dim>::rebuild_history_slots(const std::string& name,
     }
 
   const auto keys = p_->history_level_keys(name);
+  const int runtime_owner = p_->program.hist_.owner.at(keys.front());
+  if (runtime_owner < 0 || static_cast<std::size_t>(runtime_owner) >= p_->blocks.size())
+    throw std::logic_error("AMR history replay has an invalid runtime block owner");
+  for (const std::string& key : keys)
+    if (p_->program.hist_.owner.at(key) != runtime_owner)
+      throw std::logic_error("AMR history replay changes runtime block owner across levels");
+  const std::size_t block_index = static_cast<std::size_t>(runtime_owner);
   std::vector<Real> dts = p_->program.hist_.slot_dt.at(keys.front());
   for (std::size_t anchor = 0; anchor + 1 < anchors.size(); ++anchor)
     for (int slot = anchors[anchor + 1] - 1; slot > anchors[anchor]; --slot)
@@ -13692,7 +13712,7 @@ int AmrSystem<Dim>::rebuild_history_slots(const std::string& name,
       for (std::size_t level = 0; level < keys.size(); ++level)
         copy_full_field_in_place(
             p_->program.hist_.histories.at(keys[level])[static_cast<std::size_t>(older)],
-            p_->engine->hierarchy().state(level));
+            p_->block_state(block_index, level));
       for (int slot = older - 1; slot > newer; --slot) {
         const int cursor = p_->macro_step - 1 - slot;
         p_->macro_step = cursor;
@@ -13706,7 +13726,7 @@ int AmrSystem<Dim>::rebuild_history_slots(const std::string& name,
         auto& image = reconstructed[static_cast<std::size_t>(slot)];
         image.reserve(keys.size());
         for (std::size_t level = 0; level < keys.size(); ++level)
-          image.push_back(p_->engine->hierarchy().state(level));
+          image.push_back(p_->block_state(block_index, level));
       }
     }
   } catch (...) {
@@ -13760,9 +13780,9 @@ std::vector<double> AmrSystem<Dim>::density() {
 
 template <int Dim>
 std::vector<double> AmrSystem<Dim>::density(const std::string& name) {
-  (void)p_->block(name);
+  const std::size_t block_index = p_->block_index(name);
   p_->ensure_engine();
-  return gather_field(p_->engine->hierarchy().state(0), p_->cfg.index_domain(), 1);
+  return gather_field(p_->block_state(block_index, 0), p_->cfg.index_domain(), 1);
 }
 
 template <int Dim>
