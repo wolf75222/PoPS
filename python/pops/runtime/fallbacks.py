@@ -11,7 +11,7 @@ def _static_report() -> dict:
         "entries": [
             {
                 "key": "elliptic.fft.direct_dft",
-                "route": "PoissonFFT::fft1d",
+                "route": "generic host/device elliptic FFT route",
                 "cause": "FFT extent is not a power of two",
                 "policy": "allowed_with_counter",
                 "default_action": "allow",

@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <pops/diagnostics/fallback_diagnostics.hpp>
 #include <pops/numerics/elliptic/polar/polar_poisson_solver.hpp>
 
 #include <array>
@@ -139,6 +140,19 @@ TEST(test_polar_poisson_mms, direct_residual_is_authenticated_and_radial_error_i
   const pops::Real fine = solve_error(96);
   EXPECT_GT(std::log2(coarse / medium), pops::Real(1.8));
   EXPECT_GT(std::log2(medium / fine), pops::Real(1.8));
+}
+
+TEST(test_polar_poisson_mms, non_power_of_two_azimuthal_transform_records_direct_dft_fallback) {
+  constexpr int radial_cells = 16;
+  const std::size_t before = pops::fallback_count(pops::FallbackCounter::kFftDirectDft);
+  auto solver = pops::PolarPoissonProvider<kDim>::build(
+      request(radial_cells, 9, radial_profile(kRmin), radial_profile(kRmax)));
+  fill_rhs(solver);
+
+  EXPECT_TRUE(solver.solve().solved());
+  EXPECT_EQ(pops::fallback_count(pops::FallbackCounter::kFftDirectDft),
+            before + static_cast<std::size_t>(4 * radial_cells))
+      << "inversion and authenticated residual each record forward and inverse direct DFTs per row";
 }
 
 TEST(test_polar_poisson_mms, rejects_a_nonperiodic_azimuthal_contract) {
