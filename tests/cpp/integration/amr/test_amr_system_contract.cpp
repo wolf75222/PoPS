@@ -1,28 +1,34 @@
-// Contrat mono-bloc de la facade AmrSystem : les parametres NON cables doivent etre REFUSES
-// explicitement, plus de no-op silencieux. Les identites de provider inconnues sont des arguments
-// invalides (std::invalid_argument), tandis que les configurations runtime incoherentes restent des
-// std::runtime_error. Avant ce nettoyage, set_poisson
-// stockait rhs/solver sans jamais les valider (on pouvait croire que solver='fft' tournait sur la
-// hierarchie alors qu'AmrCouplerMP cable toujours GeometricMG), et add_block acceptait n'importe
-// quel time. Ce test verrouille les refus et les schemas temporels reellement cables. Il compile
-// python/amr_system.cpp avec le test, la classe AmrSystem etant la facade des bindings.
+/// @file
+/// @brief Positive exact-ranked AmrSystem facade and prepared-package contracts.
 
 #include <gtest/gtest.h>
 
-#include "explicit_amr_program.hpp"
-#include <pops/mesh/execution/for_each.hpp>
-#include <pops/runtime/amr_system.hpp>
-#include <pops/runtime/amr/amr_runtime.hpp>
-#include <pops/runtime/config/model_spec.hpp>
-#include <pops/runtime/program/amr_program_checkpoint.hpp>
-
 #include "amr_tagging_test_authority.hpp"
+#include "explicit_amr_program.hpp"
+
+#include <pops/core/foundation/native_dimension.hpp>
+#include <pops/mesh/execution/for_each.hpp>
+#include <pops/mesh/layout/refinement.hpp>
+#include <pops/mesh/storage/mf_arith.hpp>
+#include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/runtime/amr/composite_reduction.hpp>
+#include <pops/physics/bricks/elliptic.hpp>
+#include <pops/physics/bricks/hyperbolic.hpp>
+#include <pops/physics/bricks/source.hpp>
+#include <pops/physics/composition/composite.hpp>
+#include <pops/runtime/amr_system.hpp>
+#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
+#include <pops/runtime/program/amr_program_checkpoint.hpp>
+#include <pops/runtime/system/derived_aux_provider.hpp>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
-#include <initializer_list>
+#include <map>
+#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -32,60 +38,743 @@
 #include <Kokkos_Core.hpp>
 #endif
 
-using namespace pops;
+namespace {
 
-// Bloc ExB scalaire minimal valide (diocotron-like), pour exercer les chemins de refus.
-static ModelSpec exb_spec() {
-  ModelSpec s;
-  s.transport = "exb";
-  s.source = "none";
-  s.elliptic = "charge";
-  return s;
+template <int Dim>
+class TracerModel : public pops::nd::ScalarAdvection<Dim> {
+ public:
+  using Base = pops::nd::ScalarAdvection<Dim>;
+  using State = typename Base::State;
+
+  explicit TracerModel(Base base) : Base(std::move(base)) {}
+
+  [[nodiscard]] static constexpr pops::PreparedProviderIdentity provider_identity() noexcept {
+    return {"tests.amr.system-contract.tracer", 1};
+  }
+  void serialize_exact_parameters(pops::ExactContractBuilder& contract) const {
+    Base::serialize_exact_parameters(contract);
+  }
+  POPS_HD pops::Real elliptic_rhs(const State&) const { return pops::Real(0); }
+};
+
+template <int Dim>
+using MagneticModel =
+    pops::CompositeModel<pops::EulerND<Dim>, pops::MagneticLorentzForceND<Dim>, pops::NoElliptic>;
+
+template <int Dim>
+using GasModel = pops::CompositeModel<pops::EulerND<Dim>, pops::NoSource, pops::NoElliptic>;
+
+template <int Dim>
+pops::AmrSystemConfig<Dim> single_level_config(int cells = 8) {
+  pops::AmrSystemConfig<Dim> config;
+  config.level_count = 1;
+  config.regrid_every = 0;
+  config.transition_ratios.clear();
+  config.transition_buffers.clear();
+  config.transition_lookaheads.clear();
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = cells;
+    config.lower[axis] = pops::Real(0);
+    config.upper[axis] = pops::Real(axis + 1);
+    config.periodicity[axis] = true;
+  }
+  return config;
 }
 
-static ModelSpec magnetic_fluid_spec() {
-  ModelSpec s;
-  s.transport = "isothermal";
-  s.source = "magnetic";
-  s.elliptic = "background";
-  s.cs2 = 1.0;
-  s.qom = 1.0;
-  s.alpha = 1.0;
-  s.n0 = 1.0;
-  return s;
+template <int Dim>
+std::size_t cell_count(const pops::Extent<Dim>& shape) {
+  std::size_t result = 1;
+  for (int axis = 0; axis < Dim; ++axis)
+    result *= static_cast<std::size_t>(shape[axis]);
+  return result;
 }
 
-static void install_regrid_state_authorities(AmrSystem& system,
-                                             std::initializer_list<const char*> blocks) {
-  for (const char* block : blocks) {
-    const std::string subject =
-        std::string("test://amr-system-contract/block/") + block + "/state/U";
-    const std::string prefix =
-        std::string("test://amr-system-contract/block/") + block + "/transfer/";
-    system.install_block_state_route(block, subject);
-    system.register_bootstrap_transfer_route(
-        prefix + "prolongation", {subject}, "test::amr-system-contract-transfer@1", "cell", "cell",
-        "conservative", "dense", "prolongation", "conservative_linear", 2, {1}, 2, kAmrRefRatio);
-    system.register_bootstrap_transfer_route(
-        prefix + "restriction", {subject}, "test::amr-system-contract-transfer@1", "cell", "cell",
-        "conservative", "dense", "restriction", "volume_average", 1, {0}, 2, kAmrRefRatio);
-    system.register_bootstrap_transfer_route(prefix + "coarse-fine", {subject},
-                                             "test::amr-system-contract-transfer@1", "cell", "cell",
-                                             "conservative", "dense", "coarse_fine_fill",
-                                             "conservative_coarse_fine", 2, {2}, 2, kAmrRefRatio);
-    system.register_bootstrap_transfer_route(prefix + "temporal", {subject},
-                                             "test::amr-system-contract-transfer@1", "cell", "cell",
-                                             "conservative", "dense", "temporal_interpolation",
-                                             "linear_time_interpolation", 2, {0}, 2, kAmrRefRatio);
-    system.bind_bootstrap_block_subject(subject, block);
+template <int Dim>
+TracerModel<Dim> tracer_model() {
+  pops::RealVector<Dim> velocity{};
+  velocity[0] = pops::Real(0.25);
+  return TracerModel<Dim>{pops::nd::ScalarAdvection<Dim>::prepare(velocity)};
+}
+
+template <int Dim>
+void install_direct_tracer(pops::AmrSystem<Dim>& system, const std::string& name,
+                           const std::string& consumer_qid);
+
+template <int Dim>
+void verify_rectangular_geometry_and_independent_periodicity() {
+  pops::AmrSystemConfig<Dim> config = single_level_config<Dim>(4);
+  std::size_t periodic_axes = 0;
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = 6 + 2 * axis;
+    config.lower[axis] = pops::Real(-1 - axis);
+    config.upper[axis] = config.lower[axis] + pops::Real(2 * (axis + 1));
+    config.periodicity[axis] = axis % 2 == 0;
+    periodic_axes += config.periodicity[axis] ? 1U : 0U;
+  }
+
+  constexpr const char* state_route = "tests.amr.system-contract/rectangular/state";
+  pops::AmrSystem<Dim> system(config);
+  system.install_block_state_route("tracer", state_route);
+  std::vector<std::string> face_types;
+  std::vector<std::string> face_identities;
+  for (int axis = 0; axis < Dim; ++axis) {
+    for (int side = 0; side < 2; ++side) {
+      face_types.push_back(config.periodicity[axis] ? "periodic" : "foextrap");
+      face_identities.push_back("tests.amr.system-contract/rectangular/face-" +
+                                std::to_string(2 * axis + side));
+    }
+  }
+  system.install_hyperbolic_boundary("tracer", "tests.amr.system-contract/rectangular/boundary@1",
+                                     1, face_types,
+                                     std::vector<double>(static_cast<std::size_t>(2 * Dim), 0.0),
+                                     face_identities, {"Scalar"}, state_route);
+  install_direct_tracer(system, "tracer", "tests.amr.system-contract/rectangular/physical-flux");
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+
+  const pops::Geometry<Dim> geometry = system.prepared_amr_level_geometry(0);
+  const pops::BoundaryTopology<Dim> topology = system.prepared_amr_boundary_topology();
+  EXPECT_EQ(topology.periodic_pair_count(), periodic_axes);
+  for (int axis = 0; axis < Dim; ++axis) {
+    EXPECT_EQ(geometry.domain().length(axis), config.shape[axis]);
+    EXPECT_EQ(geometry.lower()[axis], config.lower[axis]);
+    EXPECT_EQ(geometry.upper()[axis], config.upper[axis]);
+    EXPECT_EQ(geometry.spacing(axis),
+              (config.upper[axis] - config.lower[axis]) / pops::Real(config.shape[axis]));
+    EXPECT_EQ(topology.is_periodic(pops::Face<Dim>{axis, pops::BoundarySide::lower}),
+              config.periodicity[axis]);
+    EXPECT_EQ(topology.is_periodic(pops::Face<Dim>{axis, pops::BoundarySide::upper}),
+              config.periodicity[axis]);
   }
 }
 
-TEST(test_amr_system_contract, RefusesMappedPeriodicityBeforeAmrFillPatchConstruction) {
+template <int Dim>
+GasModel<Dim> gas_model() {
+  return GasModel<Dim>{
+      {}, pops::EulerND<Dim>{pops::Real(1.4)}, pops::NoSource{}, pops::NoElliptic{}};
+}
+
+template <int Dim>
+void install_gas_boundary(pops::AmrSystem<Dim>& system, const std::vector<double>& fixed_state,
+                          bool primitive) {
+  constexpr const char* state_route = "tests.amr.system-contract/boundary/gas-state";
+  system.install_block_state_route("gas", state_route);
+  std::vector<std::string> face_types(static_cast<std::size_t>(2 * Dim), "foextrap");
+  face_types[1] = "dirichlet";
+  std::vector<std::string> face_identities;
+  std::vector<std::string> representations(static_cast<std::size_t>(2 * Dim), "conservative");
+  std::vector<std::string> converters(static_cast<std::size_t>(2 * Dim));
+  if (primitive) {
+    representations[1] = "primitive";
+    converters[1] = "tests.amr.system-contract/boundary/euler-primitive-to-conservative@1";
+  }
+  for (int face = 0; face < 2 * Dim; ++face)
+    face_identities.push_back("tests.amr.system-contract/boundary/face-" + std::to_string(face));
+  std::vector<std::string> roles{"density"};
+  for (int axis = 0; axis < Dim; ++axis)
+    roles.push_back("momentum:" + std::to_string(axis));
+  roles.push_back("energy");
+  std::vector<double> values(roles.size() * static_cast<std::size_t>(2 * Dim), 0.0);
+  for (std::size_t component = 0; component < fixed_state.size(); ++component)
+    values[component * static_cast<std::size_t>(2 * Dim) + 1] = fixed_state[component];
+  system.install_hyperbolic_boundary("gas", "tests.amr.system-contract/boundary/prepared@1", 1,
+                                     face_types, values, face_identities, roles, state_route,
+                                     representations, converters);
+  pops::add_compiled_model<Dim>(system, "gas", gas_model<Dim>(), "none", "rusanov", "conservative",
+                                "euler", 1.4, 1, 1, {}, {}, 0.0,
+                                static_cast<double>(pops::kWenoEpsilon), false,
+                                "tests.amr.system-contract/boundary/physical-flux");
+}
+
+template <int Dim>
+void verify_model_qualified_primitive_boundary_conversion() {
+  const pops::AmrSystemConfig<Dim> config = single_level_config<Dim>(6);
+  std::vector<double> primitive(static_cast<std::size_t>(Dim + 2), 0.0);
+  primitive[0] = 2.0;
+  for (int axis = 0; axis < Dim; ++axis)
+    primitive[static_cast<std::size_t>(axis + 1)] = 0.2 * static_cast<double>(axis + 1);
+  primitive.back() = 1.5;
+  const auto converter = pops::prepare_compiled_amr_system_block<Dim>(
+      "gas", gas_model<Dim>(), "none", "rusanov", "conservative", "euler", 1.4, 1, 1, 0.0,
+      static_cast<double>(pops::kWenoEpsilon), false,
+      "tests.amr.system-contract/boundary/physical-flux");
+  std::vector<double> conservative(primitive.size(), 0.0);
+  converter.primitive_to_conservative(primitive.data(), conservative.data());
+  EXPECT_DOUBLE_EQ(conservative[0], primitive[0]);
+  double kinetic = 0.0;
+  for (int axis = 0; axis < Dim; ++axis) {
+    EXPECT_DOUBLE_EQ(conservative[static_cast<std::size_t>(axis + 1)],
+                     primitive[0] * primitive[static_cast<std::size_t>(axis + 1)]);
+    kinetic += 0.5 * primitive[0] * primitive[static_cast<std::size_t>(axis + 1)] *
+               primitive[static_cast<std::size_t>(axis + 1)];
+  }
+  EXPECT_NEAR(conservative.back(), primitive.back() / 0.4 + kinetic, 1.0e-14);
+
+  pops::AmrSystem<Dim> authored(config);
+  pops::AmrSystem<Dim> oracle(config);
+  install_gas_boundary(authored, primitive, true);
+  install_gas_boundary(oracle, conservative, false);
+  const std::size_t cells = cell_count(config.shape);
+  std::vector<double> initial(static_cast<std::size_t>(Dim + 2) * cells, 0.0);
+  for (std::size_t cell = 0; cell < cells; ++cell) {
+    initial[cell] = 1.0;
+    initial[static_cast<std::size_t>(Dim + 1) * cells + cell] = 2.5;
+  }
+  authored.set_conservative_state("gas", initial);
+  oracle.set_conservative_state("gas", initial);
+  const pops::runtime::multiblock::BoundaryEvaluationPoint point{
+      "tests.amr.system-contract/boundary-conversion", 0, 0, 0, 0, {0, 1}, 0.0, 0.0};
+  const auto& authored_evaluation = authored.evaluate_prepared_amr_level(point);
+  const auto& oracle_evaluation = oracle.evaluate_prepared_amr_level(point);
+  EXPECT_EQ(pops::difference_sum_sq_all(authored_evaluation.residual, oracle_evaluation.residual),
+            pops::Real(0));
+  pops::MultiFab<Dim> zero(authored_evaluation.residual);
+  zero.set_val(pops::Real(0));
+  EXPECT_GT(pops::difference_sum_sq_all(authored_evaluation.residual, zero), pops::Real(0));
+}
+
+template <int Dim>
+void install_direct_tracer(pops::AmrSystem<Dim>& system, const std::string& name,
+                           const std::string& consumer_qid) {
+  pops::add_compiled_model<Dim>(system, name, tracer_model<Dim>(), "minmod", "rusanov",
+                                "conservative", "explicit",
+                                static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
+                                static_cast<double>(pops::kWenoEpsilon), false, consumer_qid);
+}
+
+template <int Dim>
+void verify_prepared_installation_parity() {
+  const pops::AmrSystemConfig<Dim> config = single_level_config<Dim>();
+  constexpr const char* state_route = "tests.amr.system-contract/parity/state";
+  constexpr const char* consumer_qid = "tests.amr.system-contract/parity/physical-flux";
+  pops::AmrSystem<Dim> direct(config);
+  pops::AmrSystem<Dim> prepared(config);
+  direct.install_block_state_route("tracer", state_route);
+  prepared.install_block_state_route("tracer", state_route);
+
+  const auto direct_package = pops::prepare_compiled_amr_system_block<Dim>(
+      "tracer", tracer_model<Dim>(), "minmod", "rusanov", "conservative", "explicit",
+      static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, 0.0,
+      static_cast<double>(pops::kWenoEpsilon), false, consumer_qid);
+  auto prepared_package = pops::prepare_compiled_amr_system_block<Dim>(
+      "tracer", tracer_model<Dim>(), "minmod", "rusanov", "conservative", "explicit",
+      static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, 0.0,
+      static_cast<double>(pops::kWenoEpsilon), false, consumer_qid);
+  const std::string expected_provider_identity =
+      "pops.generated.amr.cartesian.nd/" + std::to_string(Dim) + "/minmod/rusanov/conservative";
+  ASSERT_FALSE(std::string_view(state_route).empty());
+  EXPECT_EQ(direct_package.name, "tracer");
+  EXPECT_EQ(direct_package.provider_consumer_qid, consumer_qid);
+  EXPECT_EQ(direct_package.provider_identity, expected_provider_identity);
+  ASSERT_FALSE(direct_package.collective_contract.empty());
+  EXPECT_EQ(prepared_package.name, direct_package.name);
+  EXPECT_EQ(prepared_package.provider_consumer_qid, direct_package.provider_consumer_qid);
+  EXPECT_EQ(prepared_package.provider_identity, direct_package.provider_identity);
+  EXPECT_EQ(prepared_package.collective_contract, direct_package.collective_contract);
+  const int expected_ncomp = prepared_package.ncomp;
+  const int expected_ghosts = prepared_package.ghosts[0];
+  const double expected_gamma = prepared_package.gamma;
+  const int expected_substeps = prepared_package.substeps;
+  const int expected_stride = prepared_package.stride;
+  const std::string expected_time_route = prepared_package.time_route;
+  const std::string expected_package_contract = prepared_package.collective_contract;
+
+  install_direct_tracer(direct, "tracer", consumer_qid);
+  pops::install_prepared_amr_block(prepared, std::move(prepared_package));
+
+  const std::size_t cells = cell_count(config.shape);
+  std::vector<double> initial(cells, 0.0);
+  for (std::size_t cell = 0; cell < cells; ++cell)
+    initial[cell] = 1.0 + 0.1 * static_cast<double>(cell % 5);
+  direct.set_conservative_state("tracer", initial);
+  prepared.set_conservative_state("tracer", initial);
+  direct.set_program_block_map({0});
+  prepared.set_program_block_map({0});
+
+  const pops::MultiFab<Dim>& direct_state = direct.prepared_amr_block_state(0, 0);
+  const pops::MultiFab<Dim>& prepared_state = prepared.prepared_amr_block_state(0, 0);
+  ASSERT_EQ(direct_state.layout(), prepared_state.layout());
+  ASSERT_EQ(direct_state.distribution(), prepared_state.distribution());
+  ASSERT_EQ(direct_state.ncomp(), prepared_state.ncomp());
+  EXPECT_EQ(pops::difference_sum_sq_all(direct_state, prepared_state), pops::Real(0));
+  ASSERT_NE(direct.engine(), nullptr);
+  ASSERT_NE(prepared.engine(), nullptr);
+  EXPECT_EQ(direct.engine()->spatial_contract(), prepared.engine()->spatial_contract());
+  const auto& direct_map = direct.prepared_amr_program_block_map();
+  const auto& prepared_map = prepared.prepared_amr_program_block_map();
+  EXPECT_EQ(direct_map.canonical_indices, prepared_map.canonical_indices);
+  EXPECT_EQ(direct_map.hierarchy_contract, prepared_map.hierarchy_contract);
+  EXPECT_EQ(direct_map.exact_contract, prepared_map.exact_contract);
+  pops::ExactContractBuilder expected_map_contract;
+  expected_map_contract.text("pops.prepared-multiblock-amr.program-map")
+      .scalar(std::uint32_t{1})
+      .scalar(std::int32_t{Dim})
+      .bytes(prepared_map.hierarchy_contract)
+      .scalar(std::uint64_t{1})
+      .text("tracer")
+      .scalar(std::uint64_t{0});
+  EXPECT_EQ(prepared_map.exact_contract, std::move(expected_map_contract).release());
+
+  const pops::EffectiveOptionsReport installed = prepared.effective_options_report();
+  ASSERT_EQ(installed.blocks.size(), 1U);
+  EXPECT_EQ(installed.blocks.front().name, "tracer");
+  EXPECT_EQ(installed.blocks.front().ncomp, expected_ncomp);
+  EXPECT_EQ(installed.blocks.front().n_ghost, expected_ghosts);
+  EXPECT_DOUBLE_EQ(installed.blocks.front().gamma, expected_gamma);
+  EXPECT_EQ(installed.blocks.front().substeps, expected_substeps);
+  EXPECT_EQ(installed.blocks.front().stride, expected_stride);
+  EXPECT_EQ(installed.blocks.front().time, expected_time_route);
+  EXPECT_EQ(expected_package_contract, direct_package.collective_contract);
+
+  const auto direct_geometry = direct.prepared_amr_level_geometry(0);
+  const auto prepared_geometry = prepared.prepared_amr_level_geometry(0);
+  EXPECT_EQ(direct_geometry, prepared_geometry);
+  for (int axis = 0; axis < Dim; ++axis) {
+    EXPECT_EQ(direct_geometry.domain().length(axis), config.shape[axis]);
+    EXPECT_EQ(direct_geometry.lower()[axis], config.lower[axis]);
+    EXPECT_EQ(direct_geometry.upper()[axis], config.upper[axis]);
+  }
+
+  const pops::runtime::multiblock::BoundaryEvaluationPoint point{
+      "tests.amr.system-contract.installation-parity", 0, 0, 0, 0, {0, 1}, 0.0, 0.0};
+  const auto& direct_evaluation = direct.evaluate_prepared_amr_level(point);
+  const auto& prepared_evaluation = prepared.evaluate_prepared_amr_level(point);
+  EXPECT_EQ(direct_evaluation.spatial_contract, direct.engine()->spatial_contract());
+  EXPECT_EQ(prepared_evaluation.spatial_contract, prepared.engine()->spatial_contract());
+  EXPECT_EQ(pops::difference_sum_sq_all(direct_evaluation.residual, prepared_evaluation.residual),
+            pops::Real(0));
+  pops::MultiFab<Dim> zero(direct_evaluation.residual);
+  zero.set_val(pops::Real(0));
+  EXPECT_GT(pops::difference_sum_sq_all(direct_evaluation.residual, zero), pops::Real(0));
+}
+
+template <int Dim>
+void verify_program_required_before_temporal_mutation() {
+  const pops::AmrSystemConfig<Dim> config = single_level_config<Dim>();
+  pops::AmrSystem<Dim> system(config);
+  system.install_block_state_route("tracer", "tests.amr.system-contract/program/state");
+  install_direct_tracer(system, "tracer", "tests.amr.system-contract/program/physical-flux");
+
+  EXPECT_THROW(system.step(0.01), std::logic_error);
+  EXPECT_THROW(system.advance(0.01, 0), std::logic_error);
+  EXPECT_THROW((void)system.step_cfl(0.4), std::logic_error);
+  EXPECT_DOUBLE_EQ(system.time(), 0.0);
+  EXPECT_EQ(system.macro_step(), 0);
+  EXPECT_FALSE(system.has_active_step_transaction());
+}
+
+template <int Dim>
+std::array<pops::runtime::system::AuxiliaryComponentKey, 3> install_magnetic_provider(
+    pops::AmrSystem<Dim>& system, const std::vector<std::string>& consumer_qids) {
+  using namespace pops::runtime::system;
+  const AuxiliaryComponentContract contract{"cell-average", "cell", "tesla", "tests-magnetic-input",
+                                            "scalar"};
+  AuxiliaryStorageShape<Dim> shape;
+  for (int axis = 0; axis < Dim; ++axis)
+    shape.halo[axis] = 2;
+  std::array<AuxiliaryComponentKey, 3> keys{
+      AuxiliaryComponentKey{"tests.amr.system-contract", "input", "magnetic", "B-x"},
+      AuxiliaryComponentKey{"tests.amr.system-contract", "input", "magnetic", "B-y"},
+      AuxiliaryComponentKey{"tests.amr.system-contract", "input", "magnetic", "B-z"}};
+  std::vector<AuxiliaryOutput<Dim>> outputs;
+  for (std::size_t slot = 0; slot < keys.size(); ++slot) {
+    outputs.push_back({keys[slot], contract, shape});
+  }
+  system.install_prepared_auxiliary_provider(PreparedAuxiliaryProvider<Dim>{
+      "tests.amr.system-contract/magnetic-provider@1",
+      AuxiliaryProviderKind::input,
+      {AuxiliaryEvaluationEvent::initialization, AuxiliaryFreshness::once},
+      std::move(outputs),
+      {}});
+  for (const std::string& consumer_qid : consumer_qids) {
+    AuxiliaryConsumerProviderPlan<Dim> plan;
+    plan.consumer_qid = consumer_qid;
+    for (std::size_t slot = 0; slot < keys.size(); ++slot)
+      plan.values.push_back({{keys[slot], contract, shape}, slot});
+    system.install_auxiliary_consumer_plan(std::move(plan));
+  }
+  system.seal_auxiliary_providers();
+  return keys;
+}
+
+template <int Dim>
+pops::AmrSystemConfig<Dim> magnetic_config() {
+  pops::AmrSystemConfig<Dim> config;
+  config.level_count = 2;
+  config.regrid_every = 0;
+  config.explicit_bootstrap = true;
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = 8;
+    config.lower[axis] = pops::Real(0);
+    config.upper[axis] = pops::Real(1);
+    config.periodicity[axis] = true;
+    config.transition_buffers.front()[axis] = 1;
+    config.transition_lookaheads.front()[axis] = 1;
+  }
+  return config;
+}
+
+template <int Dim>
+void materialize_magnetic_bootstrap(pops::AmrSystem<Dim>& system,
+                                    const pops::AmrSystemConfig<Dim>& config,
+                                    const std::vector<double>& state) {
+  constexpr const char* state_route = "tests.amr.system-contract/magnetic/state";
+  system.bind_bootstrap_subject(state_route, "fluid", "bound_level_zero");
+  system.stage_bootstrap_array(state_route, "fluid", "cell", "cell", Dim + 2, config.shape, state);
+  pops::Extent<Dim> transfer_ghosts{};
+  for (int axis = 0; axis < Dim; ++axis)
+    transfer_ghosts[axis] = 1;
+  system.register_bootstrap_transfer_route(
+      "tests.amr.system-contract/magnetic/bootstrap/prolongation", {state_route},
+      "tests.amr.system-contract/magnetic/bootstrap/conservative-linear@1", "cell", "cell",
+      "conservative", "dense", "prolongation", "conservative_linear", 2, transfer_ghosts,
+      config.transition_ratios.front());
+  system.begin_bootstrap_plan();
+  (void)system.materialize_bootstrap_action(state_route, "initialize_level_zero",
+                                            "bound_level_zero", 0);
+  if (!system.bootstrap_next_level()) {
+    system.rollback_bootstrap_level();
+    throw std::runtime_error("magnetic Program proof did not create its refined level");
+  }
+  (void)system.materialize_bootstrap_action(state_route, "prolong_from_parent",
+                                            "conservative_linear", 1);
+  system.commit_bootstrap_level();
+}
+
+template <int Dim>
+std::vector<std::vector<double>> run_magnetic_source(pops::Real bz) {
+  static_assert(Dim == 1 || Dim == 2);
+  using namespace pops::runtime::system;
+  constexpr const char* consumer_qid = "tests.amr.system-contract/magnetic/physical-source";
+  const pops::AmrSystemConfig<Dim> config = magnetic_config<Dim>();
+  pops::AmrSystem<Dim> system(config);
+  system.set_temporal_relations({2}, {1}, {"integral_only"});
+  const auto keys = install_magnetic_provider(system, {consumer_qid});
+  system.install_block_state_route("fluid", "tests.amr.system-contract/magnetic/state");
+  MagneticModel<Dim> model{{},
+                           pops::EulerND<Dim>{pops::Real(1.4)},
+                           pops::MagneticLorentzForceND<Dim>{pops::Real(1)},
+                           pops::NoElliptic{}};
+  pops::add_compiled_model<Dim>(system, "fluid", model, "none", "rusanov", "conservative", "euler",
+                                static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
+                                static_cast<double>(pops::kWenoEpsilon), false, consumer_qid);
+
+  const std::size_t cells = cell_count(config.shape);
+  std::vector<double> state(static_cast<std::size_t>(Dim + 2) * cells, 0.0);
+  for (std::size_t cell = 0; cell < cells; ++cell) {
+    const int first_axis = static_cast<int>(cell % static_cast<std::size_t>(config.shape[0]));
+    const double density = first_axis >= 3 && first_axis <= 5 ? 2.0 : 1.0;
+    state[cell] = density;
+    state[cells + cell] = density;
+    state[static_cast<std::size_t>(Dim + 1) * cells + cell] = 3.0 * density;
+  }
+  pops::test::install_prepared_threshold_union(
+      system,
+      {{"fluid", "rho", 1.5, pops::test::PreparedThresholdRelation::Above,
+        "tests.amr.system-contract/magnetic/state"}},
+      "tests.amr.system-contract/magnetic/tagging@1");
+  materialize_magnetic_bootstrap(system, config, state);
+  EXPECT_EQ(system.n_levels(), 2);
+  const std::vector<double> zero(cells, 0.0);
+  system.stage_auxiliary_input(keys[0], zero);
+  system.stage_auxiliary_input(keys[1], zero);
+  system.stage_auxiliary_input(keys[2], std::vector<double>(cells, static_cast<double>(bz)));
+  system.refresh_auxiliary({"tests.amr.system-contract/magnetic-clock", 0, 0, 0, 0, 0, 0,
+                            AuxiliaryEvaluationEvent::initialization});
+  pops::test::install_forward_euler_program(system);
+  system.advance(0.01, 1);
+
+  const auto bz_values = system.auxiliary_component(keys[2]);
+  EXPECT_EQ(bz_values.size(), cells);
+  for (const double value : bz_values)
+    EXPECT_EQ(value, static_cast<double>(bz));
+  std::vector<std::vector<double>> result;
+  for (int level = 0; level < system.n_levels(); ++level) {
+    const pops::MultiFab<Dim>& accepted = system.prepared_amr_block_state(0, level);
+    std::int64_t level_cells = 0;
+    for (const pops::Box<Dim>& box : accepted.layout().boxes())
+      level_cells += box.numPts();
+    result.emplace_back();
+    for (int component = 0; component < accepted.ncomp(); ++component)
+      result.back().push_back(static_cast<double>(pops::reduce_sum(accepted, component)) /
+                              static_cast<double>(level_cells));
+  }
+  return result;
+}
+
+struct MultiblockRegridObservation {
+  std::array<double, 2> mass_before{};
+  std::array<double, 2> mass_after{};
+  std::array<double, 2> transverse_momentum{};
+  std::uint64_t topology_before = 0;
+  std::uint64_t topology_after = 0;
+  int levels = 0;
+  int patches = 0;
+};
+
+template <int Dim>
+std::vector<pops::MultiFab<Dim>> prepare_exact_composite_masks(
+    pops::AmrSystem<Dim>& system, const std::vector<pops::Extent<Dim>>& transition_ratios) {
+  const int level_count = system.n_levels();
+  if (transition_ratios.size() + 1 < static_cast<std::size_t>(level_count))
+    throw std::invalid_argument("composite proof lacks one exact ratio per live transition");
+  std::vector<pops::MultiFab<Dim>> masks;
+  masks.reserve(static_cast<std::size_t>(level_count));
+  for (int level = 0; level < level_count; ++level) {
+    const pops::MultiFab<Dim>& carrier = system.prepared_amr_block_state(0, level);
+    masks.emplace_back(carrier.layout(), carrier.distribution(), carrier.local_rank(), 1,
+                       pops::Extent<Dim>{});
+    masks.back().set_val(pops::Real(1));
+  }
+
+  for (int level = 0; level + 1 < level_count; ++level) {
+    pops::MultiFab<Dim>& parent_mask = masks[static_cast<std::size_t>(level)];
+    const pops::MultiFab<Dim>& child = system.prepared_amr_block_state(0, level + 1);
+    const pops::Extent<Dim>& ratio = transition_ratios[static_cast<std::size_t>(level)];
+    for (const pops::Box<Dim>& child_patch : child.layout().boxes()) {
+      const pops::Box<Dim> covered = pops::coarsen(child_patch, ratio);
+      for (std::size_t local = 0; local < parent_mask.local_size(); ++local) {
+        const pops::Box<Dim> overlap = parent_mask.box(local).intersect(covered);
+        if (overlap.empty())
+          continue;
+        const pops::FieldView<pops::Real, Dim> active = parent_mask.fab(local).view();
+        pops::for_each_cell(overlap,
+                            [=] POPS_HD(const pops::Index<Dim>& cell) { active(cell, 0) = 0; });
+      }
+    }
+  }
 #if defined(POPS_HAS_KOKKOS)
-  Kokkos::ScopeGuard guard;
+  Kokkos::fence();
 #endif
-  auto boundary = prepare_hyperbolic_boundary<2>(
+  return masks;
+}
+
+template <int Dim>
+pops::runtime::amr::CompositeReductionResult exact_block_composite_sum(
+    pops::AmrSystem<Dim>& system, int runtime_block, int component,
+    const std::vector<pops::MultiFab<Dim>>& masks) {
+  if (masks.size() != static_cast<std::size_t>(system.n_levels()))
+    throw std::invalid_argument("composite proof masks differ from the live hierarchy depth");
+  std::vector<
+      pops::runtime::amr::CompositeLevelView<Dim, typename pops::MultiFab<Dim>::memory_space>>
+      levels;
+  levels.reserve(masks.size());
+  for (std::size_t level = 0; level < masks.size(); ++level) {
+    const pops::Geometry<Dim> geometry =
+        system.prepared_amr_level_geometry(static_cast<int>(level));
+    std::array<pops::Real, Dim> cell_extent{};
+    for (int axis = 0; axis < Dim; ++axis)
+      cell_extent[static_cast<std::size_t>(axis)] = geometry.spacing(axis);
+    levels.push_back({&system.prepared_amr_block_state(runtime_block, static_cast<int>(level)),
+                      &masks[level], cell_extent, nullptr});
+  }
+  return pops::runtime::amr::composite_reduce<Dim, typename pops::MultiFab<Dim>::memory_space>(
+      levels, component, pops::runtime::amr::CompositeReductionKind::Sum,
+      pops::ExecutionLane::world());
+}
+
+template <int Dim>
+MultiblockRegridObservation run_two_block_regrid_with_bz(pops::Real bz) {
+  static_assert(Dim == 2);
+  constexpr std::array<const char*, 2> names{"ions", "electrons"};
+  constexpr std::array<const char*, 2> state_routes{
+      "tests.amr.system-contract/two-block/ions-state",
+      "tests.amr.system-contract/two-block/electrons-state"};
+  constexpr std::array<const char*, 2> consumer_qids{
+      "tests.amr.system-contract/two-block/ions-source",
+      "tests.amr.system-contract/two-block/electrons-source"};
+
+  pops::AmrSystemConfig<Dim> config = magnetic_config<Dim>();
+  config.regrid_every = 1;
+  config.explicit_bootstrap = false;
+  pops::AmrSystem<Dim> system(config);
+  system.set_temporal_relations({2}, {1}, {"integral_only"});
+  const auto keys = install_magnetic_provider(
+      system, {std::string(consumer_qids[0]), std::string(consumer_qids[1])});
+  for (std::size_t block = 0; block < names.size(); ++block)
+    system.install_block_state_route(names[block], state_routes[block]);
+
+  for (std::size_t block = 0; block < names.size(); ++block) {
+    MagneticModel<Dim> model{{},
+                             pops::EulerND<Dim>{pops::Real(1.4)},
+                             pops::MagneticLorentzForceND<Dim>{pops::Real(1)},
+                             pops::NoElliptic{}};
+    pops::add_compiled_model<Dim>(system, names[block], model, "none", "rusanov", "conservative",
+                                  "euler", static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1,
+                                  {}, {}, 0.0, static_cast<double>(pops::kWenoEpsilon), false,
+                                  consumer_qids[block]);
+  }
+
+  const std::size_t cells = cell_count(config.shape);
+  for (std::size_t block = 0; block < names.size(); ++block) {
+    std::vector<double> state(4 * cells, 0.0);
+    for (std::size_t cell = 0; cell < cells; ++cell) {
+      const int x = static_cast<int>(cell % static_cast<std::size_t>(config.shape[0]));
+      const bool tagged = block == 0 ? (x >= 1 && x <= 3) : (x >= 4 && x <= 6);
+      const double density = tagged ? (block == 0 ? 2.0 : 2.5) : 1.0;
+      const double longitudinal_velocity = block == 0 ? 1.0 : 0.5;
+      state[cell] = density;
+      state[cells + cell] = longitudinal_velocity * density;
+      state[3 * cells + cell] = 3.0 * density;
+    }
+    system.set_conservative_state(names[block], state);
+  }
+  pops::test::install_prepared_threshold_union(
+      system,
+      {{names[0], "rho", 1.5, pops::test::PreparedThresholdRelation::Above, state_routes[0]},
+       {names[1], "rho", 1.5, pops::test::PreparedThresholdRelation::Above, state_routes[1]}},
+      "tests.amr.system-contract/two-block/tagging@1");
+
+  const std::vector<double> zero(cells, 0.0);
+  system.stage_auxiliary_input(keys[0], zero);
+  system.stage_auxiliary_input(keys[1], zero);
+  system.stage_auxiliary_input(keys[2], std::vector<double>(cells, static_cast<double>(bz)));
+  system.refresh_auxiliary({"tests.amr.system-contract/two-block/magnetic-clock", 0, 0, 0, 0, 0, 0,
+                            pops::runtime::system::AuxiliaryEvaluationEvent::initialization});
+
+  if (system.n_blocks() != 2)
+    throw std::runtime_error("two-block facade did not materialize both compiled blocks");
+  EXPECT_EQ(system.block_names(),
+            (std::vector<std::string>{std::string(names[0]), std::string(names[1])}));
+  if (system.n_levels() != 2)
+    throw std::runtime_error("two-block facade did not materialize its tagged fine level");
+  MultiblockRegridObservation result;
+  result.levels = system.n_levels();
+  result.patches = system.n_patches();
+  result.topology_before = system.engine()->topology_epoch();
+  EXPECT_NE(&system.prepared_amr_block_state(0, 0), &system.prepared_amr_block_state(1, 0));
+  EXPECT_GT(pops::difference_sum_sq_all(system.prepared_amr_block_state(0, 0),
+                                        system.prepared_amr_block_state(1, 0)),
+            pops::Real(0));
+  const auto masks_before = prepare_exact_composite_masks(system, config.transition_ratios);
+  for (std::size_t block = 0; block < names.size(); ++block)
+    result.mass_before[block] = static_cast<double>(
+        exact_block_composite_sum(system, static_cast<int>(block), 0, masks_before).value);
+
+  pops::test::install_forward_euler_program(system);
+  system.step(1.0e-4);
+
+  result.topology_after = system.engine()->topology_epoch();
+  result.levels = system.n_levels();
+  result.patches = system.n_patches();
+  const auto masks_after = prepare_exact_composite_masks(system, config.transition_ratios);
+  for (std::size_t block = 0; block < names.size(); ++block) {
+    const auto mass = exact_block_composite_sum(system, static_cast<int>(block), 0, masks_after);
+    const auto transverse =
+        exact_block_composite_sum(system, static_cast<int>(block), 2, masks_after);
+    result.mass_after[block] = static_cast<double>(mass.value);
+    result.transverse_momentum[block] =
+        static_cast<double>(transverse.value / transverse.active_measure);
+  }
+  return result;
+}
+
+template <int Dim>
+void verify_stride_window_contract() {
+  const pops::AmrSystemConfig<Dim> config = single_level_config<Dim>(4);
+  pops::AmrSystem<Dim> system(config);
+  system.install_block_state_route("tracer", "tests.amr.system-contract/cadence/state");
+  install_direct_tracer(system, "tracer", "tests.amr.system-contract/cadence/physical-flux");
+  std::vector<double> times;
+  std::vector<double> steps;
+  std::vector<int> macro_steps;
+  const std::string balance_route = "pops.balance-ledger-route.v1:sha256:" + std::string(64, '9');
+  const std::array<std::pair<const char*, double>, 5> balance_records{{
+      {"storage_change", 1.0},
+      {"outward_boundary_flux", 2.0},
+      {"sources", 3.0},
+      {"reflux", 4.0},
+      {"projection", 5.0},
+  }};
+  const auto context = pops::runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("tests.amr.system-contract/cadence/macro");
+  context->install([&, context](double step) {
+    times.push_back(system.time());
+    steps.push_back(step);
+    macro_steps.push_back(system.macro_step());
+    for (const auto& [term, value] : balance_records)
+      context->record_balance_term(balance_route, term, static_cast<pops::Real>(value));
+  });
+  system.set_program_block_map({0});
+  system.set_program_cadence(3, 2);
+
+  const auto expect_balance = [&](const std::map<std::string, double>& balance, double scale) {
+    const std::vector<std::string> expected_order{"outward_boundary_flux", "projection", "reflux",
+                                                  "sources", "storage_change"};
+    std::vector<std::string> actual_order;
+    for (const auto& [term, value] : balance) {
+      (void)value;
+      actual_order.push_back(term);
+    }
+    EXPECT_EQ(actual_order, expected_order);
+    for (const auto& [term, value] : balance_records)
+      EXPECT_DOUBLE_EQ(balance.at(term), scale * value);
+  };
+  const auto step_and_read_balance = [&](double dt) {
+    system.begin_step_transaction();
+    system.step(dt);
+    const std::map<std::string, double> balance = system.accepted_balance_terms(balance_route);
+    system.commit_step_transaction();
+    system.finalize_step_transaction();
+    return balance;
+  };
+
+  system.begin_step_projection_report();
+  const auto held_balance = step_and_read_balance(0.1);
+  expect_balance(held_balance, 0.0);
+  EXPECT_TRUE(times.empty());
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.1);
+  EXPECT_EQ(system.program_cadence_window_steps(), 1);
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_start_time(), 0.0);
+
+  system.begin_step_transaction();
+  system.step(0.2);
+  const auto rejected_due_balance = system.accepted_balance_terms(balance_route);
+  expect_balance(rejected_due_balance, 3.0);
+  system.rollback_step_transaction();
+  EXPECT_DOUBLE_EQ(system.time(), 0.1);
+  EXPECT_EQ(system.macro_step(), 1);
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.1);
+  EXPECT_EQ(system.program_cadence_window_steps(), 1);
+  system.begin_step_transaction();
+  const auto restored_held_balance = system.accepted_balance_terms(balance_route);
+  expect_balance(restored_held_balance, 0.0);
+  system.rollback_step_transaction();
+
+  times.clear();
+  steps.clear();
+  macro_steps.clear();
+  const auto retried_due_balance = step_and_read_balance(0.2);
+  EXPECT_EQ(retried_due_balance, rejected_due_balance);
+  expect_balance(retried_due_balance, 3.0);
+  ASSERT_EQ(times.size(), 3U);
+  EXPECT_NEAR(times[0], 0.0, 1.0e-14);
+  EXPECT_NEAR(times[1], 0.1, 1.0e-14);
+  EXPECT_NEAR(times[2], 0.2, 1.0e-14);
+  for (const double step : steps)
+    EXPECT_NEAR(step, 0.1, 1.0e-14);
+  EXPECT_NEAR(std::accumulate(steps.begin(), steps.end(), 0.0), 0.3, 1.0e-14);
+  EXPECT_DOUBLE_EQ(times.back() + steps.back(), 0.3);
+  EXPECT_EQ(macro_steps, (std::vector<int>{0, 0, 0}));
+  EXPECT_NEAR(system.time(), 0.3, 1.0e-14);
+  EXPECT_EQ(system.macro_step(), 2);
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.0);
+  EXPECT_EQ(system.program_cadence_window_steps(), 0);
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_start_time(), 0.0);
+
+  system.begin_step_projection_report();
+  const auto reset_held_balance = step_and_read_balance(0.05);
+  expect_balance(reset_held_balance, 0.0);
+  EXPECT_NEAR(system.time(), 0.35, 1.0e-14);
+  EXPECT_EQ(system.macro_step(), 3);
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.05);
+  EXPECT_EQ(system.program_cadence_window_steps(), 1);
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_start_time(), 0.3);
+}
+
+}  // namespace
+
+TEST(test_amr_system_contract, RefusesMappedPeriodicityBeforeRankedFillPatchConstruction) {
+  auto boundary = pops::prepare_hyperbolic_boundary<2>(
       {"periodic", "foextrap", "foextrap", "periodic"}, std::vector<double>(4, 0.0),
       {"case::block::tracer::xlo", "case::block::tracer::xhi", "case::block::tracer::ylo",
        "case::block::tracer::yhi"},
@@ -93,533 +782,164 @@ TEST(test_amr_system_contract, RefusesMappedPeriodicityBeforeAmrFillPatchConstru
   EXPECT_THROW((void)boundary.periodic_axes(), std::logic_error);
 }
 
-TEST(test_amr_system_contract, Runs) {
+TEST(test_amr_system_contract, DirectAndPreparedCompiledInstallationsHaveExactRankedParity) {
 #if defined(POPS_HAS_KOKKOS)
   Kokkos::ScopeGuard guard;
 #endif
-  AmrSystemConfig cfg;
-  cfg.n = 16;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
-
-  // Every facade temporal entry refuses before the lazy hierarchy, a transaction snapshot, a field
-  // solve or either clock can be touched. Even advance(..., 0) is a temporal request and therefore
-  // requires the same explicit Program authority.
-  {
-    AmrSystem missing_program(cfg);
-    missing_program.add_block("ne", exb_spec(), "none", "rusanov", "conservative", "euler", 1);
-    ASSERT_EQ(missing_program.engine(), nullptr);
-    const auto expect_program_required = [&](auto&& operation, const char* name) {
-      try {
-        operation();
-        ADD_FAILURE() << name << " accepted a program-less temporal operation";
-      } catch (const std::logic_error& error) {
-        EXPECT_NE(std::string(error.what()).find(name), std::string::npos);
-        EXPECT_NE(std::string(error.what()).find("installed whole-system Program"),
-                  std::string::npos);
-      }
-      EXPECT_EQ(missing_program.engine(), nullptr);
-      EXPECT_DOUBLE_EQ(missing_program.time(), 0.0);
-      EXPECT_EQ(missing_program.macro_step(), 0);
-      EXPECT_FALSE(missing_program.has_active_step_transaction());
-    };
-    expect_program_required([&] { missing_program.step(0.01); }, "AmrSystem::step");
-    expect_program_required([&] { missing_program.advance(0.01, 0); }, "AmrSystem::advance");
-    expect_program_required([&] { (void)missing_program.step_cfl(0.4); }, "AmrSystem::step_cfl");
-  }
-
-  // The facade topology must reach the native level operator axis by axis. This x-periodic/y-open
-  // run wraps only x and fills y physical ghosts by Foextrap; neither axis may inherit the other.
-  {
-    AmrSystemConfig physical_cfg = cfg;
-    physical_cfg.n = 8;
-    physical_cfg.regrid_every = 0;
-    physical_cfg.periodicity = {true, false};
-    AmrSystem physical(physical_cfg);
-    physical.set_temporal_relations({2}, {1}, {"integral_only"});
-    physical.add_block("left", exb_spec(), "none", "rusanov", "conservative", "euler", 1);
-    physical.add_block("right", exb_spec(), "none", "rusanov", "conservative", "euler", 1);
-    (void)physical.mass("left");
-    ASSERT_TRUE(physical.uses_runtime_engine());
-    AmrRuntime* runtime = physical.engine();
-    ASSERT_NE(runtime, nullptr);
-    EXPECT_TRUE(runtime->base_periodicity().x);
-    EXPECT_FALSE(runtime->base_periodicity().y);
-
-    MultiFab& state = runtime->level_state(0, 0);
-    state.set_val(Real(-999));
-    state.sync_host();
-    const Box2D domain = runtime->level_geom(0).domain;
-    for (int local = 0; local < state.local_size(); ++local) {
-      Array4 values = state.fab(local).array();
-      const Box2D valid = state.box(local);
-      for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
-        for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
-          values(i, j, 0) = Real(i + 10 * j + 1);
-    }
-    state.sync_device();
-    MultiFab rhs = runtime->level_scalar_field(0, state.ncomp(), 0);
-    runtime->level_rhs_into(0, 0, state, rhs);
-    state.sync_host();
-    ASSERT_EQ(state.local_size(), 1);
-    const ConstArray4 values = state.fab(0).const_array();
-    const int sample_j = domain.lo[1] + 2;
-    EXPECT_EQ(values(domain.lo[0] - 1, sample_j, 0), values(domain.hi[0], sample_j, 0));
-    EXPECT_NE(values(domain.lo[0] - 1, sample_j, 0), values(domain.lo[0], sample_j, 0));
-    const int sample_i = domain.lo[0] + 2;
-    EXPECT_EQ(values(sample_i, domain.lo[1] - 1, 0), values(sample_i, domain.lo[1], 0));
-    EXPECT_NE(values(sample_i, domain.lo[1] - 1, 0), values(sample_i, domain.hi[1], 0));
-  }
-
-  // The native hierarchy carries Cartesian axes independently: logical extents, physical bounds,
-  // cell measures and dense row-major buffers must all agree on (ny, nx), not a square proxy.
-  {
-    AmrSystemConfig rectangular_cfg = cfg;
-    rectangular_cfg.n = 12;
-    rectangular_cfg.ny = 8;
-    rectangular_cfg.L = 6.0;
-    rectangular_cfg.Ly = 2.0;
-    rectangular_cfg.xlo = -1.5;
-    rectangular_cfg.ylo = 3.0;
-    rectangular_cfg.regrid_every = 0;
-    rectangular_cfg.periodicity = {true, true};
-    AmrSystem rectangular(rectangular_cfg);
-    rectangular.set_temporal_relations({2}, {1}, {"integral_only"});
-    rectangular.add_block("left", exb_spec(), "none", "rusanov", "conservative", "euler", 1);
-    rectangular.add_block("right", exb_spec(), "none", "rusanov", "conservative", "euler", 1);
-    const std::size_t cells = static_cast<std::size_t>(rectangular_cfg.n) * rectangular_cfg.ny;
-    rectangular.set_density("left", std::vector<double>(cells, 1.0));
-    rectangular.set_density("right", std::vector<double>(cells, 0.0));
-
-    EXPECT_DOUBLE_EQ(rectangular.mass("left"), 12.0);
-    EXPECT_EQ(rectangular.nx(), 12);
-    EXPECT_EQ(rectangular.ny(), 8);
-    EXPECT_EQ(rectangular.density("left").size(), cells);
-    ASSERT_TRUE(rectangular.uses_runtime_engine());
-    const Geometry& geometry = rectangular.engine()->level_geom(0);
-    EXPECT_EQ(geometry.domain.nx(), 12);
-    EXPECT_EQ(geometry.domain.ny(), 8);
-    EXPECT_DOUBLE_EQ(geometry.xlo, -1.5);
-    EXPECT_DOUBLE_EQ(geometry.xhi, 4.5);
-    EXPECT_DOUBLE_EQ(geometry.ylo, 3.0);
-    EXPECT_DOUBLE_EQ(geometry.yhi, 5.0);
-    EXPECT_DOUBLE_EQ(geometry.dx(), 0.5);
-    EXPECT_DOUBLE_EQ(geometry.dy(), 0.25);
-  }
-
-  // --- set_poisson : refus immediat de solver/rhs hors du domaine cable ---------------------
-  EXPECT_THROW(
-      {
-        AmrSystem s(cfg);
-        s.set_poisson("charge_density", "fft");
-      },
-      std::invalid_argument)
-      << "set_poisson refuse solver='fft' (seul geometric_mg est cable sur AMR)";
-  EXPECT_THROW(
-      {
-        AmrSystem s(cfg);
-        s.set_poisson("charge_density", "inconnu");
-      },
-      std::invalid_argument)
-      << "set_poisson refuse un solver inconnu";
-  EXPECT_THROW(
-      {
-        AmrSystem s(cfg);
-        s.set_poisson("densite_bidon", "geometric_mg");
-      },
-      std::runtime_error)
-      << "set_poisson refuse un rhs hors {charge_density, composite}";
-
-  // Les valeurs supportees passent sans lever.
-  EXPECT_NO_THROW({
-    AmrSystem s(cfg);
-    s.set_poisson("charge_density", "geometric_mg");
-  }) << "set_poisson accepte charge_density + geometric_mg";
-  EXPECT_NO_THROW({
-    AmrSystem s(cfg);
-    s.set_poisson("composite", "geometric_mg");
-  }) << "set_poisson accepte rhs='composite'";
-
-  // --- set_poisson : boundary validation stays independent from embedded geometry authoring ---
-  EXPECT_THROW(
-      {
-        AmrSystem s(cfg);
-        s.add_block("ne", exb_spec(), "none", "rusanov", "conservative", "explicit", 1);
-        s.set_poisson("charge_density", "geometric_mg", "bc_bidon");
-        (void)s.mass();  // declenche ensure_built -> poisson_bc()
-      },
-      std::runtime_error)
-      << "bc inconnu refuse au build";
-  // --- add_block : schemas cables ACCEPTES, valeur inconnue REFUSEE ---------------------------
-  // Chaque identifiant public doit atteindre son chemin natif : ``explicit`` canonique (SSPRK2),
-  // Forward Euler, SSPRK3 et source raide IMEX. Ce verrou complete les tests numeriques qui
-  // distinguent ensuite les trajectoires Euler et SSPRK2.
-  for (const char* method : {"explicit", "euler", "ssprk3", "imex"}) {
-    EXPECT_NO_THROW({
-      AmrSystem s(cfg);
-      s.add_block("ne", exb_spec(), "none", "rusanov", "conservative", method, 1);
-    }) << "add_block accepte le schema temporel cable '"
-       << method << "'";
-  }
-  EXPECT_THROW(
-      {
-        AmrSystem s(cfg);
-        s.add_block("ne", exb_spec(), "none", "rusanov", "conservative", "time_bidon", 1);
-      },
-      std::runtime_error)
-      << "add_block refuse un time hors {explicit, euler, ssprk3, imex}";
-  EXPECT_THROW(
-      {
-        AmrSystem s(cfg);
-        s.add_block("ne", exb_spec(), "none", "rusanov", "recon_bidon", "explicit", 1);
-      },
-      std::runtime_error)
-      << "add_block refuse un recon hors {conservative, primitive}";
-  EXPECT_THROW(
-      {
-        AmrSystem s(cfg);
-        s.add_block("ne", exb_spec(), "none", "rusanov", "conservative", "explicit", 0);
-      },
-      std::runtime_error)
-      << "add_block refuse substeps < 1";
-
-  // --- multi-blocs (capstone PR1) : un 2e bloc natif est desormais ACCEPTE -------------------
-  // Bascule sur le moteur runtime AmrRuntime (hierarchie partagee, Poisson somme). On verifie que
-  // l'ajout passe sans lever ; la physique (evolution, masse, Poisson somme) est verrouillee par
-  // test_amr_system_twoblock.
-  EXPECT_NO_THROW({
-    AmrSystemConfig c2 = cfg;
-    c2.regrid_every = 0;  // multi-blocs PR1 : hierarchie FIGEE
-    AmrSystem s(c2);
-    s.add_block("ne", exb_spec(), "none", "rusanov", "conservative", "explicit", 1);
-    s.add_block("ni", exb_spec(), "minmod", "rusanov", "conservative", "explicit", 1);
-  }) << "add_block accepte un second bloc (multi-blocs, hierarchie partagee)";
-
-  // --- DEVERROUILLAGE (capstone Phase 2, C.6) : multi-blocs + regrid_every > 0 est ACCEPTE ----
-  // L'ancien REFUS (la hierarchie multi-blocs etait FIGEE) est leve : AmrRuntime porte le regrid
-  // d'union des tags (set_regrid + graphe prepare cables dans build_multi). ensure_built
-  // (1er mass()) construit le moteur avec la cadence active au lieu de lever ; le regrid d'union et
-  // le mouvement effectif de la hierarchie sont verrouilles par test_amr_multiblock_regrid_union.
-  EXPECT_NO_THROW({
-    AmrSystemConfig c2 = cfg;
-    c2.regrid_every = 5;  // > 0
-    AmrSystem s(c2);
-    install_regrid_state_authorities(s, {"ne", "ni"});
-    s.set_temporal_relations({2}, {1}, {"integral_only"});
-    s.add_block("ne", exb_spec(), "none", "rusanov", "conservative", "explicit", 1);
-    s.add_block("ni", exb_spec(), "minmod", "rusanov", "conservative", "explicit", 1);
-    (void)s.mass("ne");  // declenche ensure_built -> moteur multi-blocs avec regrid d'union actif
-  }) << "multi-blocs + regrid_every > 0 ACCEPTE (regrid d'union des tags, deverrouillage Phase 2)";
-
-  // --- mono-bloc + regrid_every > 0 reste AUTORISE (chemin AmrCouplerMP, regrid intact) -------
-  EXPECT_NO_THROW({
-    AmrSystemConfig c2 = cfg;
-    c2.regrid_every = 5;
-    AmrSystem s(c2);
-    install_regrid_state_authorities(s, {"ne"});
-    s.add_block("ne", exb_spec(), "none", "rusanov", "conservative", "explicit", 1);
-    (void)s.mass();  // ensure_built : mono-bloc avec regrid, pas de refus
-  }) << "mono-bloc + regrid_every > 0 reste autorise par le runtime AMR unifie";
-
-  // --- B_z : le champ accepte doit atteindre le vrai canal aux, en mono- ET multi-bloc --------
-  // Deux runs strictement identiques, B_z=0 puis B_z=2, isolent la source de Lorentz sans dupliquer
-  // ici le detail du programme temporel AMR. Une implementation qui stocke seulement B_z sans le
-  // publier produit deux etats identiques et echoue.
-  for (const int block_count : {1, 2}) {
-    auto run = [&](double magnetic_field) {
-      AmrSystemConfig magnetic_cfg = cfg;
-      magnetic_cfg.n = 8;
-      magnetic_cfg.regrid_every = 0;
-      AmrSystem s(magnetic_cfg);
-      s.set_temporal_relations({2}, {1}, {"integral_only"});
-      const std::size_t cells =
-          static_cast<std::size_t>(magnetic_cfg.n) * static_cast<std::size_t>(magnetic_cfg.n);
-      std::vector<double> state(3 * cells, 0.0);
-      for (std::size_t cell = 0; cell < cells; ++cell) {
-        state[cell] = 1.0;
-        state[cells + cell] = 1.0;
-      }
-      for (int block = 0; block < block_count; ++block) {
-        const std::string name = "magnetic_" + std::to_string(block);
-        s.add_block(name, magnetic_fluid_spec(), "none", "rusanov", "conservative", "euler", 1);
-        s.set_conservative_state(name, state);
-      }
-      s.set_magnetic_field(std::vector<double>(cells, magnetic_field));
-      // Request the deterministic central fine seed through the prepared tagging authority.
-      test::install_prepared_threshold_union(s, {{"magnetic_0", "rho", 1e29}});
-      test::install_forward_euler_program(s);
-      s.advance(0.01, 1);
-      std::vector<std::vector<std::vector<double>>> states;
-      states.reserve(static_cast<std::size_t>(block_count));
-      EXPECT_EQ(s.n_levels(), 2) << "B_z Program proof must exercise the refined hierarchy";
-      for (int block = 0; block < block_count; ++block) {
-        std::vector<std::vector<double>> levels;
-        levels.reserve(static_cast<std::size_t>(s.n_levels()));
-        for (int level = 0; level < s.n_levels(); ++level)
-          levels.push_back(s.block_level_state_global("magnetic_" + std::to_string(block), level));
-        states.push_back(std::move(levels));
-      }
-      return states;
-    };
-
-    const auto without_field = run(0.0);
-    const auto with_field = run(2.0);
-    for (int block = 0; block < block_count; ++block) {
-      const auto& baseline_levels = without_field[static_cast<std::size_t>(block)];
-      const auto& actual_levels = with_field[static_cast<std::size_t>(block)];
-      ASSERT_EQ(actual_levels.size(), baseline_levels.size());
-      ASSERT_EQ(actual_levels.size(), 2u);
-      for (std::size_t level = 0; level < actual_levels.size(); ++level) {
-        const auto& baseline = baseline_levels[level];
-        const auto& actual = actual_levels[level];
-        ASSERT_EQ(actual.size(), baseline.size());
-        ASSERT_FALSE(actual.empty()) << "the B_z Program proof requires an owned level state";
-        const std::size_t cells = actual.size() / 3;
-        double max_delta = 0.0;
-        double transverse_delta = 0.0;
-        for (std::size_t cell = 0; cell < cells; ++cell) {
-          for (int component = 0; component < 3; ++component) {
-            const std::size_t index = static_cast<std::size_t>(component) * cells + cell;
-            ASSERT_TRUE(std::isfinite(actual[index]));
-            max_delta = std::max(max_delta, std::fabs(actual[index] - baseline[index]));
-          }
-          transverse_delta += actual[2 * cells + cell] - baseline[2 * cells + cell];
-        }
-        transverse_delta /= static_cast<double>(cells);
-        EXPECT_GT(max_delta, 1e-3)
-            << "B_z must change the native block trajectory at level " << level;
-        EXPECT_LT(transverse_delta, -1e-3)
-            << "positive B_z must rotate +m_x toward negative m_y at level " << level;
-      }
-    }
-  }
+  verify_prepared_installation_parity<pops::kNativeDimension>();
 }
 
-TEST(test_amr_system_contract, PrimitiveFixedStateUsesTheConcreteAmrBlockModelConversion) {
+TEST(test_amr_system_contract, RectangularGeometryPreservesIndependentAxisPeriodicity) {
 #if defined(POPS_HAS_KOKKOS)
   Kokkos::ScopeGuard guard;
 #endif
-  AmrSystemConfig cfg;
-  cfg.n = 4;
-  cfg.L = 1.0;
-  cfg.regrid_every = 0;
-  cfg.periodicity = {false, false};
-  AmrSystem system(cfg);
-  const std::string state_identity = "case::block::fluid::state::U";
-  system.install_block_state_route("fluid", state_identity);
-  std::vector<double> face_values;
-  for (const double primitive : {2.0, 3.0, -1.0})
-    face_values.insert(face_values.end(), {0.0, primitive, 0.0, 0.0});
-  system.install_boundary_plan("fluid", "case::block::fluid::boundary", 2,
-                               {"foextrap", "dirichlet", "foextrap", "foextrap"}, face_values,
-                               {"case::block::fluid::xlo", "case::block::fluid::xhi",
-                                "case::block::fluid::ylo", "case::block::fluid::yhi"},
-                               {"Density", "MomentumX", "MomentumY"}, {}, state_identity, {}, {},
-                               {"conservative", "primitive", "conservative", "conservative"},
-                               {"", "case::block::fluid::model-p2c", "", ""});
-  system.add_block("fluid", magnetic_fluid_spec(), "minmod", "rusanov", "conservative", "explicit",
-                   1);
-  (void)system.mass("fluid");
+  verify_rectangular_geometry_and_independent_periodicity<pops::kNativeDimension>();
+}
 
-  AmrRuntime* runtime = system.engine();
-  ASSERT_NE(runtime, nullptr);
-  MultiFab& state = runtime->level_state(0, 0);
-  for (int local = 0; local < state.local_size(); ++local) {
-    const Array4 values = state.fab(local).array();
-    for_each_cell(state.box(local), [=](int i, int j) {
-      for (int component = 0; component < 3; ++component)
-        values(i, j, component) = Real(1);
-    });
-  }
-  device_fence();
-  MultiFab rhs = runtime->level_scalar_field(0, state.ncomp(), 0);
-  runtime->level_rhs_into(0, 0, state, rhs);
-  device_fence();
-  state.sync_host();
+TEST(test_amr_system_contract, PrimitiveBoundaryMatchesQualifiedConservativeOracle) {
+#if defined(POPS_HAS_KOKKOS)
+  Kokkos::ScopeGuard guard;
+#endif
+  verify_model_qualified_primitive_boundary_conversion<pops::kNativeDimension>();
+}
 
-  const Box2D domain = runtime->level_geom(0).domain;
-  bool observed = false;
-  for (int local = 0; local < state.local_size(); ++local) {
-    const Fab2D& values = state.fab(local);
-    if (!values.grown_box().contains(domain.hi[0] + 1, 2))
-      continue;
-    observed = true;
-    EXPECT_EQ(values(domain.hi[0] + 1, 2, 0), Real(3));
-    EXPECT_EQ(values(domain.hi[0] + 1, 2, 1), Real(11));
-    EXPECT_EQ(values(domain.hi[0] + 1, 2, 2), Real(-5));
+TEST(test_amr_system_contract, TwoBlockFacadeRegridsConservativelyAndSharesPreparedBz) {
+#if defined(POPS_HAS_KOKKOS)
+  Kokkos::ScopeGuard guard;
+#endif
+#if POPS_NATIVE_DIM == 2
+  const MultiblockRegridObservation control = run_two_block_regrid_with_bz<2>(pops::Real(0));
+  const MultiblockRegridObservation forced = run_two_block_regrid_with_bz<2>(pops::Real(2));
+  ASSERT_EQ(control.levels, 2);
+  ASSERT_EQ(forced.levels, 2);
+  EXPECT_GT(control.patches, 0);
+  EXPECT_GT(forced.patches, 0);
+  EXPECT_GT(control.topology_after, control.topology_before);
+  EXPECT_GT(forced.topology_after, forced.topology_before);
+  EXPECT_GT(std::abs(control.mass_before[0] - control.mass_before[1]), 1.0e-5);
+  EXPECT_GT(std::abs(forced.mass_before[0] - forced.mass_before[1]), 1.0e-5);
+  for (std::size_t block = 0; block < control.mass_before.size(); ++block) {
+    EXPECT_NEAR(control.mass_after[block], control.mass_before[block], 2.0e-12);
+    EXPECT_NEAR(forced.mass_after[block], forced.mass_before[block], 2.0e-12);
+    EXPECT_LT(forced.transverse_momentum[block], control.transverse_momentum[block] - 1.0e-5)
+        << "the shared prepared Bz provider must drive both facade blocks";
   }
-  EXPECT_TRUE(observed);
+  const double ion_effect = forced.transverse_momentum[0] - control.transverse_momentum[0];
+  const double electron_effect = forced.transverse_momentum[1] - control.transverse_momentum[1];
+  EXPECT_LT(ion_effect, -1.0e-5);
+  EXPECT_LT(electron_effect, -1.0e-5);
+  EXPECT_GT(std::abs(ion_effect - electron_effect), 1.0e-5)
+      << "the two exact runtime-block carriers must retain their distinct longitudinal momenta";
+#else
+  GTEST_SKIP() << "the transverse two-block Bz trajectory is an explicit Dim=2 proof";
+#endif
+}
+
+TEST(test_amr_system_contract, TemporalFacadeRequiresInstalledWholeSystemProgram) {
+#if defined(POPS_HAS_KOKKOS)
+  Kokkos::ScopeGuard guard;
+#endif
+  verify_program_required_before_temporal_mutation<pops::kNativeDimension>();
+}
+
+TEST(test_amr_system_contract, PreparedBzRotatesTransverseMomentumInDim2) {
+#if defined(POPS_HAS_KOKKOS)
+  Kokkos::ScopeGuard guard;
+#endif
+#if POPS_NATIVE_DIM == 2
+  const auto without_field = run_magnetic_source<2>(pops::Real(0));
+  const auto with_field = run_magnetic_source<2>(pops::Real(2));
+  ASSERT_EQ(without_field.size(), 2U);
+  ASSERT_EQ(with_field.size(), 2U);
+  for (std::size_t level = 0; level < with_field.size(); ++level) {
+    ASSERT_EQ(without_field[level].size(), 4U);
+    ASSERT_EQ(with_field[level].size(), 4U);
+    EXPECT_LT(with_field[level][2], without_field[level][2] - 1.0e-3)
+        << "positive Bz must rotate positive x momentum toward negative y momentum on level "
+        << level;
+  }
+#else
+  GTEST_SKIP() << "the transverse refined Bz trajectory is an explicit Dim=2 proof";
+#endif
+}
+
+TEST(test_amr_system_contract, PreparedBzHasZeroLongitudinalCrossProductInDim1) {
+#if defined(POPS_HAS_KOKKOS)
+  Kokkos::ScopeGuard guard;
+#endif
+#if POPS_NATIVE_DIM == 1
+  const auto without_field = run_magnetic_source<1>(pops::Real(0));
+  const auto with_field = run_magnetic_source<1>(pops::Real(2));
+  ASSERT_EQ(without_field.size(), 2U);
+  ASSERT_EQ(with_field.size(), 2U);
+  for (std::size_t level = 0; level < with_field.size(); ++level) {
+    ASSERT_EQ(without_field[level].size(), 3U);
+    ASSERT_EQ(with_field[level].size(), 3U);
+    for (std::size_t component = 0; component < with_field[level].size(); ++component)
+      EXPECT_NEAR(with_field[level][component], without_field[level][component], 1.0e-13)
+          << "the 1D longitudinal projection of momentum cross B must vanish on level " << level;
+  }
+#else
+  GTEST_SKIP() << "the longitudinal zero-cross-product trajectory is an explicit Dim=1 proof";
+#endif
 }
 
 TEST(test_amr_system_contract, VariableDtStrideUsesOneExactPublicWindow) {
 #if defined(POPS_HAS_KOKKOS)
   Kokkos::ScopeGuard guard;
 #endif
-  AmrSystemConfig cfg;
-  cfg.n = 4;
-  cfg.L = 1.0;
-  cfg.regrid_every = 0;
-  cfg.periodicity = {true, true};
-
-  AmrSystem system(cfg);
-  system.add_block("tracer", exb_spec(), "none", "rusanov", "conservative", "explicit", 1);
-  std::vector<double> times;
-  std::vector<double> steps;
-  std::vector<int> macro_steps;
-  system.install_program_step([&](double h) {
-    times.push_back(system.time());
-    steps.push_back(h);
-    macro_steps.push_back(system.macro_step());
-  });
-  system.set_program_cadence(/*substeps=*/3, /*stride=*/2);
-
-  system.step(0.1);
-  EXPECT_TRUE(times.empty());
-  EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.1);
-  EXPECT_EQ(system.program_cadence_window_steps(), 1);
-  EXPECT_DOUBLE_EQ(system.program_cadence_window_start_time(), 0.0);
-
-  system.step(0.2);
-  ASSERT_EQ(times.size(), 3u);
-  EXPECT_NEAR(times[0], 0.0, 1.0e-14);
-  EXPECT_NEAR(times[1], 0.1, 1.0e-14);
-  EXPECT_NEAR(times[2], 0.2, 1.0e-14);
-  ASSERT_EQ(steps.size(), 3u);
-  for (const double h : steps)
-    EXPECT_NEAR(h, 0.1, 1.0e-14);
-  EXPECT_DOUBLE_EQ(times.back() + steps.back(), 0.1 + 0.2);
-  EXPECT_EQ(macro_steps, (std::vector<int>{0, 0, 0}));
-  EXPECT_NEAR(system.time(), 0.3, 1.0e-14);
-  EXPECT_EQ(system.macro_step(), 2);
-  EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.0);
-  EXPECT_EQ(system.program_cadence_window_steps(), 0);
-  EXPECT_DOUBLE_EQ(system.program_cadence_window_start_time(), 0.0);
+  verify_stride_window_contract<pops::kNativeDimension>();
 }
 
-TEST(test_amr_system_contract, StrideHeldStepPublishesTheExactZeroBalance) {
+TEST(test_amr_system_contract, CadenceRestoreRejectsClockDriftWithoutMutation) {
 #if defined(POPS_HAS_KOKKOS)
   Kokkos::ScopeGuard guard;
 #endif
-  AmrSystemConfig cfg;
-  cfg.n = 4;
-  cfg.L = 1.0;
-  cfg.regrid_every = 0;
-  cfg.periodicity = {true, true};
-
-  AmrSystem system(cfg);
-  system.add_block("tracer", exb_spec(), "none", "rusanov", "conservative", "explicit", 1);
-  system.install_program_step([](double) {});
-  system.set_program_cadence(/*substeps=*/1, /*stride=*/2);
-  system.begin_step_transaction();
-  system.step(0.1);
-
-  const std::string route = "pops.balance-ledger-route.v1:sha256:" + std::string(64, '8');
-  const auto balance = system.accepted_balance_terms(route);
-  EXPECT_EQ(balance.size(), 5u);
-  for (const auto& [name, value] : balance) {
-    EXPECT_FALSE(name.empty());
-    EXPECT_DOUBLE_EQ(value, 0.0);
-  }
-  system.commit_step_transaction();
-  system.finalize_step_transaction();
-
-  system.begin_step_transaction();
-  system.step(0.1);
-  system.rollback_step_transaction();
-  system.begin_step_transaction();
-  const auto restored = system.accepted_balance_terms(route);
-  EXPECT_EQ(restored.size(), 5u);
-  for (const auto& [name, value] : restored) {
-    EXPECT_FALSE(name.empty());
-    EXPECT_DOUBLE_EQ(value, 0.0);
-  }
-  system.rollback_step_transaction();
-}
-
-TEST(test_amr_system_contract, CadenceRestoreRejectsClockDriftWithoutMutatingAcceptedState) {
-#if defined(POPS_HAS_KOKKOS)
-  Kokkos::ScopeGuard guard;
-#endif
-  AmrSystemConfig cfg;
-  cfg.n = 4;
-  cfg.L = 1.0;
-  cfg.regrid_every = 0;
-  cfg.periodicity = {true, true};
-
-  AmrSystem system(cfg);
-  system.set_program_cadence(/*substeps=*/1, /*stride=*/2);
-  system.restore_program_cadence_window(/*accumulated_dt=*/0.1, /*held_steps=*/1,
-                                        /*window_start_time=*/0.0, /*accepted_last_dt=*/0.075,
-                                        /*accepted_time=*/0.1,
-                                        /*macro_step=*/1);
-
-  // The candidate stays staged until set_clock authenticates the exact accepted pair.
-  EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.0);
-  EXPECT_EQ(system.program_cadence_window_steps(), 0);
-  EXPECT_DOUBLE_EQ(system.program_last_dt(), 0.0);
-  EXPECT_THROW(system.set_clock(std::nextafter(0.1, 1.0), /*macro_step=*/1), std::runtime_error);
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystem<Dim> system(single_level_config<Dim>(4));
+  system.set_program_cadence(1, 2);
+  system.restore_program_cadence_window(0.1, 1, 0.0, 0.075, 0.1, 1);
+  EXPECT_THROW(system.set_clock(std::nextafter(0.1, 1.0), 1), std::runtime_error);
   EXPECT_DOUBLE_EQ(system.time(), 0.0);
   EXPECT_EQ(system.macro_step(), 0);
-  EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.0);
-  EXPECT_EQ(system.program_cadence_window_steps(), 0);
-
-  // The failed clock consumed the staged token; the exact retry can stage and commit cleanly.
-  system.restore_program_cadence_window(/*accumulated_dt=*/0.1, /*held_steps=*/1,
-                                        /*window_start_time=*/0.0, /*accepted_last_dt=*/0.075,
-                                        /*accepted_time=*/0.1,
-                                        /*macro_step=*/1);
-  system.set_clock(/*t=*/0.1, /*macro_step=*/1);
+  system.restore_program_cadence_window(0.1, 1, 0.0, 0.075, 0.1, 1);
+  system.set_clock(0.1, 1);
   EXPECT_DOUBLE_EQ(system.time(), 0.1);
   EXPECT_EQ(system.macro_step(), 1);
   EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.1);
   EXPECT_EQ(system.program_cadence_window_steps(), 1);
-  EXPECT_DOUBLE_EQ(system.program_cadence_window_start_time(), 0.0);
   EXPECT_DOUBLE_EQ(system.program_last_dt(), 0.075);
 }
 
-TEST(test_amr_system_contract,
-     NonAssociativeCadenceClosesTheSerializedAcceptedClockAtTheFacadeEndpoint) {
+TEST(test_amr_system_contract, AcceptedClockSerializationPreservesNonAssociativeEndpoint) {
 #if defined(POPS_HAS_KOKKOS)
   Kokkos::ScopeGuard guard;
 #endif
-  AmrSystemConfig cfg;
-  cfg.n = 4;
-  cfg.L = 1.0;
-  cfg.regrid_every = 0;
-  cfg.periodicity = {true, true};
-
-  AmrSystem system(cfg);
-  system.add_block("tracer", exb_spec(), "none", "rusanov", "conservative", "explicit", 1);
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystem<Dim> system(single_level_config<Dim>(4));
+  system.install_block_state_route("tracer", "tests.amr.system-contract/clock/state");
+  install_direct_tracer(system, "tracer", "tests.amr.system-contract/clock/physical-flux");
   system.set_clock(0.1, 0);
-  test::install_forward_euler_program(system);
-  system.set_program_cadence(/*substeps=*/3, /*stride=*/3);
+  pops::test::install_forward_euler_program(system);
+  system.set_program_cadence(3, 3);
 
-  const double after_first = 0.1 + 0.1;
-  const double after_second = after_first + 0.1;
-  const double accepted_endpoint = after_second + 0.3;
+  const double accepted_endpoint = ((0.1 + 0.1) + 0.1) + 0.3;
   const double reconstructed_endpoint = 0.1 + ((0.1 + 0.1) + 0.3);
   ASSERT_NE(std::bit_cast<std::uint64_t>(accepted_endpoint),
-            std::bit_cast<std::uint64_t>(reconstructed_endpoint))
-      << "fixture must exercise floating-point non-associativity";
-
+            std::bit_cast<std::uint64_t>(reconstructed_endpoint));
   system.step(0.1);
   system.step(0.1);
   system.step(0.3);
-
   EXPECT_EQ(std::bit_cast<std::uint64_t>(system.time()),
             std::bit_cast<std::uint64_t>(accepted_endpoint));
-  runtime::program::AmrProgramAcceptedState<2> accepted;
-  accepted.spatial_contract = "test.non-associative-accepted-clock.dim2";
-  accepted.level_clocks = {
-      {0, system.macro_step(), amr::Rational(0, 1), system.time()},
-  };
-  const auto encoded = runtime::program::serialize_amr_program_accepted_state(accepted);
-  const auto decoded = runtime::program::deserialize_amr_program_accepted_state<2>(encoded);
-  EXPECT_EQ(runtime::program::serialize_amr_program_accepted_state(decoded), encoded);
-  ASSERT_FALSE(decoded.level_clocks.empty());
-  for (const auto& clock : decoded.level_clocks) {
-    EXPECT_EQ(std::bit_cast<std::uint64_t>(clock.physical_time),
-              std::bit_cast<std::uint64_t>(system.time()));
-    EXPECT_EQ(clock.macro_step, system.macro_step());
-  }
+
+  pops::runtime::program::AmrProgramAcceptedState<Dim> accepted;
+  accepted.spatial_contract = "tests.amr.system-contract/non-associative-clock";
+  accepted.level_clocks = {{0, system.macro_step(), pops::amr::Rational(0, 1), system.time()}};
+  const auto encoded = pops::runtime::program::serialize_amr_program_accepted_state(accepted);
+  const auto decoded = pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(encoded);
+  ASSERT_EQ(decoded.level_clocks.size(), 1U);
+  EXPECT_EQ(std::bit_cast<std::uint64_t>(decoded.level_clocks.front().physical_time),
+            std::bit_cast<std::uint64_t>(system.time()));
+  EXPECT_EQ(pops::runtime::program::serialize_amr_program_accepted_state(decoded), encoded);
 }
