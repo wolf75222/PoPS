@@ -77,10 +77,11 @@ previous image untouched.
 The public Program report consumes the same native image and exposes provider identity, accepted
 tick, denominator, cell count and per-rung counts.
 
-For this bounded slice, a cell-local checkpoint restarts only with the recorded MPI cardinality and
-`RestoreRecordedHierarchy`. Rank-change and `RegridOnRestart` are rejected during Python preflight,
-before the native restart transaction, because rematerializing canonical cell ids onto a new owner
-or topology is not implemented yet.
+For this bounded slice, a cell-local checkpoint restarts with the recorded MPI cardinality.
+`RestoreRecordedHierarchy` restores the exact partition directly; `RegridOnRestart` rebuilds its
+topology-derived records at the same exact synchronization tick through the retained route table.
+Rank-change remains refused because redistributing those records to a different rank cardinality is
+not implemented.
 
 `PreparedBatchedCellTemporalExecutor` is the first executable ADC-756 rung slice. Preparation
 authenticates the exact provider identity recorded by the accepted image, groups canonical records
@@ -92,50 +93,53 @@ time of each cell. The prepared hot loop does not allocate PoPS storage.
 The executor accepts only a typed provider exposing one combined device operation:
 `evaluate_local_stage_and_record_space_time_flux`. There are no independent Boolean declarations
 for a local stage or ledger. A provider that needs a coherent neighbouring-cell image additionally
-owns the optional `begin_rung_batch`/`complete_rung_batch` lifecycle; these hooks can materialize and
-rotate attempt-local storage but cannot publish it. An accepted result therefore means that the
-provider evaluated the stage and wrote its attempt-local integrated-flux record before that cell
-clock advanced. All provider records and cell clocks commit together only at the synchronization
-barrier. A malformed outcome, rejection, provider-preparation refusal or kernel failure rolls back
-the complete attempt and leaves the accepted checkpoint unchanged.
+owns the optional `prepare_rung_batch_local`/`materialize_rung_batch_snapshot`/
+`finalize_rung_batch_candidate`/`complete_rung_batch` lifecycle. Local preparation reaches exact-lane
+consensus before halo materialization; finalization prepares attempt-local metadata after the kernel
+outcome consensus, and completion only rotates the prepared candidate. None publishes accepted
+state. An accepted result therefore means that the provider evaluated the stage and wrote its
+attempt-local integrated-flux record before that cell clock advanced. All provider records and cell
+clocks commit together only at the synchronization barrier. A malformed outcome, rejection,
+provider-preparation refusal or kernel failure rolls back the complete attempt and leaves the
+accepted checkpoint unchanged.
 
-`PreparedSameLevelTransportEulerStageFluxProvider` is the first scientific consumer of this
-executor. It reuses the selected AMR block's real compiled transport closure to materialize
-`-div(F)` and the exact x/y face-flux fields, advances the conservative candidate with forward
-Euler, and accumulates four time-integrated face records per valid cell. Both state and ledger stay
-in fixed attempt-local storage; the barrier commit is their sole accepted publication. The exact
-provider contract includes the block state identity, model-owned transport identity and parameters,
-limiter/Riemann route, spatial options, hierarchy/materialization identity, clock, tick scale,
-layout and distribution. A type-erased spatial closure without that builder-owned contract is
-refused rather than authenticated from a caller label.
+`PreparedSameLevelTransportEulerPackStageFluxProvider` is the first scientific consumer of this
+executor. It reuses every independent AMR block's real compiled transport closure to materialize
+`-div(F)` and the exact ranked face-flux fields, advances the complete block pack with forward Euler,
+and aggregates one bounded time-integrated flux basis per route and hierarchy window. State and
+diagnostic view stay in fixed attempt-local storage; the existing AMR transition ledgers remain the
+sole conservation authority and the barrier commit is the sole accepted publication. The exact
+provider contract includes route/block identities, model-owned transport identities and parameters,
+limiter/Riemann routes, spatial options, hierarchy/materialization identity, clock, tick scale,
+layout, distribution and exact execution lane. A type-erased spatial closure without that
+builder-owned contract is refused rather than authenticated from a caller label.
 
-This first scientific route is deliberately bounded to a host/serial 2D hierarchy with exactly one
-block, one level, one rank-owned box, one common cell rung, frozen attempt auxiliary fields,
-built-in periodic/Foextrap transport boundaries and transport-only forward Euler. A prepared
-physical-boundary plan is refused until its exact executable contract can join the provider
-identity. The route also has no MPI, GPU, heterogeneous-rung interpolation, coarse/fine ledger,
-source-stage integration, regrid/rank-change rematerialization, diagnostic-ledger checkpoint
-persistence or performance proof.
+This scientific route is deliberately bounded to exact-rank host execution over independent
+multi-block, multi-level and MPI-owned multi-box AMR with transport-only forward Euler. The authored
+rung is the finest-level base; integral power-of-two temporal relations derive one homogeneous rung
+per level-group and exactly one FE batch per hierarchy window. Global/interface block coupling,
+non-dyadic clocks, heterogeneous per-cell rungs, source/field stages, physical or non-periodic
+boundaries, GPU default execution or memory spaces, performance qualification, rank-change
+rematerialization and diagnostic-ledger checkpoint persistence remain unavailable. Boundary and
+device exclusions fail collectively on the exact lane before a prepared state or boundary stage.
 
 `Program.cell_local_time(tick_denominator=..., rung=...)` now selects this bounded route explicitly.
-Generated AMR code accepts only the exact single-state Forward-Euler transport graph, prepares the
-provider at an accepted boundary and installs `AmrProgramContext::advance_same_level_cell_temporal`.
+Generated AMR code accepts one exact Forward-Euler transport route per Program block, prepares the
+complete provider at an accepted boundary and installs
+`AmrProgramContext::advance_same_level_cell_temporal`.
 The context routes checkpoint, attempt, commit and rollback through that sole executor; the ordinary
 hierarchy-global driver still refuses a cell-local image and never substitutes a global `dt`.
-Same-topology restart restores the numerical image and integer clocks. Because the accepted-state
-schema does not persist the last interval's diagnostic face ledger, restart invalidates that
-publication until the next accepted interval instead of exposing stale fluxes.
+Same-rank restart/regrid restores the numerical image and exact partition clocks. Because the
+accepted-state schema does not persist the last interval's diagnostic face view, restart invalidates
+that publication until the next accepted interval instead of exposing stale fluxes.
 
 The remaining production extensions are explicit dependencies, not capabilities inferred from this
-slice: canonical rank/box ownership and halo-stage snapshots for MPI; distributed face-ledger
-reconciliation and collective failure draining; device-resident provider storage and publication for
-GPU; temporal neighbour interpolation and subface synchronization for heterogeneous rungs;
-coarse/fine space-time ledgers, reflux and local refinement ratios for multilevel AMR; exact provider
-rematerialization after regrid or rank migration; prepared source, field and physical-boundary stage
-contracts; an accepted-state schema extension if the last diagnostic ledger must survive restart;
-and backend/allocation/performance qualification. ADC-707/ADC-708 continue to own the prepared
-patch/task graph. No end-to-end heterogeneous or multilevel locally subcycled AMR conservation claim
-is made by this bounded route.
+slice: device-resident provider storage and publication for GPU; temporal neighbour interpolation
+and subface synchronization for heterogeneous rungs; global and interface block coupling; prepared
+source, field and physical-boundary stage contracts; rank-change rematerialization; an accepted-state
+schema extension if the last diagnostic ledger must survive restart; and backend allocation and
+performance qualification. ADC-707/ADC-708 continue to own the prepared patch/task graph. This
+bounded route makes no end-to-end heterogeneous-rung or coupled-block local-time claim.
 
 Offline envelope inspection authenticates only the integrity of a canonical checkpoint; it is not
 a migration. The frozen release-v2 Uniform checkpoint predates the envelope and omits lifecycle

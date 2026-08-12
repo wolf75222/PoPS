@@ -9,6 +9,7 @@
 // never touches it, so operators stay inlined and there is NO string lookup in any hot kernel.
 //
 #include <pops/runtime/dynamic/dynlib.hpp>
+#include <pops/runtime/program/cell_temporal_partition.hpp>
 
 #include <algorithm>
 #include <array>
@@ -230,6 +231,7 @@ struct ProgramCheckpointMetadata {
   std::vector<std::string> logical_clock_identities;
   std::string temporal_provider_identity;
   std::size_t temporal_cell_capacity = 0;
+  std::size_t temporal_cells_per_topology_cell = 0;
 
   friend bool operator==(const ProgramCheckpointMetadata&,
                          const ProgramCheckpointMetadata&) = default;
@@ -317,6 +319,9 @@ inline ProgramCheckpointMetadata read_program_checkpoint_metadata(pops::dynlib::
   const TemporalCellCapacityFn temporal_cells =
       detail::require_module_symbol<TemporalCellCapacityFn>(
           dl_handle, "pops_program_checkpoint_temporal_cell_capacity");
+  const TemporalCellCapacityFn temporal_cells_per_topology_cell =
+      detail::require_module_symbol<TemporalCellCapacityFn>(
+          dl_handle, "pops_program_checkpoint_temporal_cells_per_topology_cell");
   const char* provider = temporal_provider();
   if (provider == nullptr || provider[0] == '\0')
     throw std::runtime_error("compiled Program checkpoint temporal provider identity is empty");
@@ -327,6 +332,18 @@ inline ProgramCheckpointMetadata read_program_checkpoint_metadata(pops::dynlib::
       throw std::overflow_error(
           "compiled Program checkpoint temporal cell capacity exceeds size_t");
   metadata.temporal_cell_capacity = static_cast<std::size_t>(cells);
+  const std::uint64_t cells_per_topology_cell = temporal_cells_per_topology_cell();
+  if constexpr (sizeof(std::size_t) < sizeof(std::uint64_t))
+    if (cells_per_topology_cell >
+        static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()))
+      throw std::overflow_error("compiled Program temporal topology multiplier exceeds size_t");
+  metadata.temporal_cells_per_topology_cell = static_cast<std::size_t>(cells_per_topology_cell);
+  const bool global = metadata.temporal_provider_identity == kGlobalTemporalPartitionProvider;
+  if ((global &&
+       (metadata.temporal_cell_capacity != 0 || metadata.temporal_cells_per_topology_cell != 0)) ||
+      (!global && metadata.temporal_cells_per_topology_cell == 0))
+    throw std::runtime_error(
+        "compiled Program temporal checkpoint metadata has an inconsistent shape family");
   return metadata;
 }
 

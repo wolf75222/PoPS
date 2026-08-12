@@ -34,6 +34,7 @@
 #include <pops/runtime/named_field_publication.hpp>
 #include <pops/runtime/output_piece_collective.hpp>
 #include <pops/runtime/program/amr_program_checkpoint.hpp>
+#include <pops/runtime/program/same_level_cell_temporal_provider.hpp>
 #include <pops/runtime/program/external_riemann_brick.hpp>
 #include <pops/runtime/program/module_metadata.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
@@ -13631,6 +13632,19 @@ POPS_EXPORT void AmrSystem<Dim>::install_program(const std::string& so_path) {
       program_block_map[static_cast<std::size_t>(program)] =
           static_cast<int>(std::distance(runtime_blocks.begin(), found));
     }
+    if (checkpoint_metadata.temporal_provider_identity ==
+        runtime::program::kSameLevelTransportEulerStageFluxProvider) {
+      if (checkpoint_metadata.temporal_cell_capacity != 0 ||
+          checkpoint_metadata.temporal_cells_per_topology_cell != static_cast<std::size_t>(count) ||
+          static_cast<std::size_t>(count) != p_->blocks.size())
+        throw std::runtime_error(
+            "AmrSystem::install_program: cell-local checkpoint routes differ from the exact "
+            "Program/runtime block pack");
+    } else if (checkpoint_metadata.temporal_provider_identity !=
+               runtime::program::kGlobalTemporalPartitionProvider) {
+      throw std::runtime_error(
+          "AmrSystem::install_program: temporal checkpoint provider has no native authority");
+    }
     for (auto& history : checkpoint_metadata.histories) {
       if (history.program_owner < 0 || history.program_owner >= count)
         throw std::runtime_error(
@@ -15254,6 +15268,29 @@ std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_cap
     const auto& metadata = p_->program.checkpoint_metadata_;
     if (metadata.logical_clock_identities.empty() || metadata.temporal_provider_identity.empty())
       throw std::logic_error("AMR Program checkpoint capacity lacks frozen Program metadata");
+    if (metadata.temporal_provider_identity ==
+        runtime::program::kSameLevelTransportEulerStageFluxProvider) {
+      if (metadata.temporal_cell_capacity != 0 ||
+          metadata.temporal_cells_per_topology_cell != p_->blocks.size() ||
+          p_->program.block_map_.size() != p_->blocks.size() || !p_->prepared_program_block_map ||
+          p_->prepared_program_block_map->canonical_indices.size() != p_->blocks.size())
+        throw std::logic_error(
+            "AMR Program cell-local checkpoint capacity lacks its exact route/block authority");
+      std::vector<bool> seen(p_->blocks.size(), false);
+      for (std::size_t program = 0; program < p_->program.block_map_.size(); ++program) {
+        const int runtime_block = p_->program.block_map_[program];
+        const std::size_t canonical = p_->prepared_program_block_map->canonical_indices[program];
+        if (runtime_block < 0 || static_cast<std::size_t>(runtime_block) != canonical ||
+            canonical >= seen.size() || seen[canonical])
+          throw std::logic_error(
+              "AMR Program cell-local checkpoint routes differ from the prepared block map");
+        seen[canonical] = true;
+      }
+    } else if (metadata.temporal_provider_identity !=
+               runtime::program::kGlobalTemporalPartitionProvider) {
+      throw std::logic_error(
+          "AMR Program temporal checkpoint capacity has no native provider authority");
+    }
 
     std::vector<std::size_t> level_cells;
     level_cells.reserve(configured_levels);
@@ -15268,7 +15305,18 @@ std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_cap
     for (const std::size_t cells : level_cells)
       configured_cells = checked_size_sum(configured_cells, cells,
                                           "AMR configured checkpoint cells exceed size_t");
-    if (metadata.temporal_cell_capacity > configured_cells)
+    std::size_t effective_temporal_cells = metadata.temporal_cell_capacity;
+    if (metadata.temporal_cells_per_topology_cell != 0) {
+      effective_temporal_cells =
+          checked_size_product(configured_cells, metadata.temporal_cells_per_topology_cell,
+                               "AMR Program temporal checkpoint capacity exceeds size_t");
+    }
+    if (metadata.temporal_cell_capacity != 0 && metadata.temporal_cells_per_topology_cell != 0)
+      throw std::logic_error(
+          "AMR Program temporal checkpoint metadata mixes absolute and topology-relative shapes");
+    if (effective_temporal_cells >
+        checked_size_product(configured_cells, std::max<std::size_t>(p_->blocks.size(), 1),
+                             "AMR configured checkpoint route cells exceed size_t"))
       throw std::logic_error(
           "AMR Program temporal checkpoint capacity exceeds its configured domains");
     if (metadata.temporal_provider_identity == runtime::program::kGlobalTemporalPartitionProvider &&
@@ -15329,7 +15377,7 @@ std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_cap
                                  row.space_identity, row.clock_identity, row.interpolation_identity,
                                  row.depth, row.components});
     shape.temporal_provider_identity = metadata.temporal_provider_identity;
-    shape.temporal_cell_count = metadata.temporal_cell_capacity;
+    shape.temporal_cell_count = effective_temporal_cells;
 
     if (p_->tagging_spec && p_->tagging_spec->min_cycles > 0) {
       std::size_t parent_cells = 0;

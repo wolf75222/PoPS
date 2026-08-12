@@ -506,13 +506,13 @@ test_regex = "^test_program_reflux_ledger\\.InvalidCheckpointAndDuplicateFacesRe
 requirement = "standalone_exact_ranked_cell_temporal_provider"
 polarity = "positive"
 target = "test_cell_temporal_program_route"
-test_regex = "^test_cell_temporal_program_route\\.executes_one_exact_algorithm_in_one_two_and_three_dimensions$"
+test_regex = "^test_cell_temporal_program_route\\.direct_prepared_subengine_executes_one_exact_algorithm_in_every_dimension$"
 
 [[check]]
 requirement = "standalone_exact_ranked_cell_temporal_provider"
 polarity = "refusal"
 target = "test_cell_temporal_program_route"
-test_regex = "^test_cell_temporal_program_route\\.rollback_and_materialization_generation_remain_atomic_in_every_dimension$"
+test_regex = "^test_cell_temporal_program_route\\.direct_prepared_subengine_rollback_and_generation_remain_atomic_in_every_dimension$"
 
 [[check]]
 requirement = "bounded_cell_local_program_runtime"
@@ -524,9 +524,8 @@ test = "test_amr_codegen_selects_only_the_prepared_cell_local_driver"
 [[check]]
 requirement = "bounded_cell_local_program_runtime"
 polarity = "positive"
-kind = "mpi_ctest"
-target = "test_mpi_cell_temporal_program"
-test_regex = "^test_mpi_cell_temporal_program_np2$"
+kind = "mpi_python"
+nodeid = "tests/python/integration/mpi/test_amr_clean_route_program_mpi.py::test_public_mpi_generated_cell_local_multiblock_regrids_and_matches_forward_euler"
 nproc = 2
 
 [[check]]

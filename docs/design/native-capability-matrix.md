@@ -243,17 +243,20 @@ Supported native routes include:
 - ProgramContext install on System, and AMR program install when compiled for `target="amr_system"`.
 - A native C++ `amr:cell_local_temporal_transport` route partially proves scientific consumption of
   the prepared cell-local executor. `Program.cell_local_time(...)` and generated
-  `AmrProgramContext` code wire the exact bounded route. On host/serial, one 2D block, one level, one
-  rank-owned box and one common rung, it calls the exact compiled AMR transport closure, advances the
-  real conservative state with forward Euler, and publishes the four time-integrated face fluxes per
-  cell only at the synchronization barrier. Its contract authenticates the model-owned spatial
-  parameters and selected limiter/Riemann route. Same-topology restart restores state and integer
-  clocks while invalidating the non-persisted last-interval diagnostic ledger until the next accepted
-  step. It currently accepts only built-in periodic/Foextrap transport boundaries; missing
-  identities, prepared physical-boundary plans, MPI/GPU execution, topology drift, multiple boxes or
-  levels and mixed rungs fail closed. It does not claim heterogeneous local times, coarse/fine
-  conservation, source integration, regrid/rank-change rematerialization, diagnostic-ledger
-  persistence or performance qualification.
+  `AmrProgramContext` code wire the exact bounded route. On an exact-rank host hierarchy it advances
+  independent multi-block, multi-level and MPI-owned multi-box state packs with forward Euler and
+  publishes one aggregated basis per route into the existing authoritative coarse/fine ledgers only
+  at the synchronization barrier. The authored finest-level rung is lifted through integral
+  power-of-two temporal relations to one homogeneous rung per level-group and one FE batch per
+  hierarchy window. Its contract authenticates the block map, model-owned spatial parameters,
+  selected limiter/Riemann routes, topology/materialization and exact execution lane. Same-rank
+  restart/regrid rematerializes topology-derived records and clocks while invalidating the
+  non-persisted last-interval diagnostic view until the next accepted step. It does not claim
+  heterogeneous per-cell rungs, global/interface block coupling, non-dyadic clocks, source/field
+  integration, physical or non-periodic boundaries, GPU default execution or memory spaces,
+  performance qualification, rank-change rematerialization or diagnostic-view persistence. The
+  physical-boundary and device envelopes are refused collectively on the exact lane during
+  preparation, before any prepared state or boundary stage is entered.
 - Generated local implicit-source Programs on synchronous two-level 2D AMR. `pops.lib.time.IMEX`
   lowers its local residual to the sole prepared `LocalNewton` service on every active level and
   consumes the returned `SolveOutcome`; it does not invoke a spatial-runtime time integrator. The
@@ -405,8 +408,8 @@ future validators:
   checkpoint rematerializer, invalidates audit reports qualified by the replaced topology epoch and
   republishes accepted Program state atomically. Stale, divergent, malformed and non-beneficial
   decisions do not mutate state; failures restore the complete accepted runtime/Program image.
-  Level-zero migration, custom communicators, materialized staggered bootstrap fields and cell-local
-  stage/flux-ledger rematerialization remain unavailable.
+  Level-zero migration, custom communicators, materialized staggered bootstrap fields and
+  rank-change cell-local record rematerialization remain unavailable.
 - `amr:transfer_contracts`: centering, representation, storage, operation, order and ghost depth
   must match an exact native transfer/materialization provider contract.
 - `parallel:mpi_world_communicator`: the native `RuntimeInstance` providers consume the exact

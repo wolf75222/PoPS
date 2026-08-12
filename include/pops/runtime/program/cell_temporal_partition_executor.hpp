@@ -187,14 +187,17 @@ concept DistributedCellTemporalStageFluxProvider =
 /// All hooks are required together. ``prepare_rung_batch_local`` performs only rank-local candidate
 /// preparation. The executor reaches lane consensus before
 /// ``materialize_rung_batch_snapshot`` enters any halo collective and seals the immutable stage
-/// image consumed by the kernel. ``complete_rung_batch`` only rotates already-prepared attempt-local
-/// storage and must not publish accepted state. Publication remains solely in ``commit_attempt``
-/// after the synchronization barrier.
+/// image consumed by the kernel. ``finalize_rung_batch_candidate`` runs after the device fence and
+/// lane-wide outcome consensus, but before any logical clock advances; it may prepare the existing
+/// AMR conservation-ledger metadata for the completed candidate. ``complete_rung_batch`` only
+/// rotates that already-prepared attempt-local storage and must not publish accepted state.
+/// Publication remains solely in ``commit_attempt`` after the synchronization barrier.
 template <class Provider>
 concept CellTemporalRungBatchLifecycle =
     requires(Provider& provider, CellTemporalRungBatchDescriptor batch) {
       { provider.prepare_rung_batch_local(batch) } -> std::same_as<void>;
       { provider.materialize_rung_batch_snapshot(batch) } -> std::same_as<void>;
+      { provider.finalize_rung_batch_candidate(batch) } -> std::same_as<void>;
       { provider.complete_rung_batch(batch) } noexcept -> std::same_as<void>;
     };
 
@@ -209,6 +212,15 @@ concept CellTemporalAcceptedBoundaryLifecycle =
     requires(Provider& provider, const CellTemporalPartitionAcceptedState& accepted) {
       { provider.restore_accepted_boundary(accepted) } noexcept -> std::same_as<void>;
     };
+
+/// Optional fallible attempt finalization. Local candidate work reaches lane consensus before the
+/// provider may enter conservation collectives. The materialization phase is then closed by a
+/// second executor consensus before the provider's noexcept publication.
+template <class Provider>
+concept CellTemporalAttemptFinalizeLifecycle = requires(Provider& provider) {
+  { provider.prepare_attempt_finalize_local() } -> std::same_as<void>;
+  { provider.materialize_attempt_finalize() } -> std::same_as<void>;
+};
 
 struct CellTemporalExecutionStats {
   /// Number of combined stage/ledger kernels (or host batches without Kokkos), never per-cell.
@@ -596,6 +608,31 @@ class PreparedBatchedCellTemporalExecutor {
       if (!attempt_active_)
         throw std::logic_error("cell-local temporal commit requires an active attempt");
       partition_.require_barrier("cell-local temporal provider commit");
+      if constexpr (CellTemporalAttemptFinalizeLifecycle<Provider>)
+        provider_.prepare_attempt_finalize_local();
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_error ? 1L : 0L, *lane_) != 0) {
+      abort_attempt_();
+      rethrow_collective_failure_(
+          local_error, "cell-local temporal local attempt finalization failed on another rank");
+    }
+    local_error = nullptr;
+    try {
+      if constexpr (CellTemporalAttemptFinalizeLifecycle<Provider>)
+        provider_.materialize_attempt_finalize();
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_error ? 1L : 0L, *lane_) != 0) {
+      abort_attempt_();
+      rethrow_collective_failure_(
+          local_error,
+          "cell-local temporal collective attempt finalization failed on another rank");
+    }
+    local_error = nullptr;
+    try {
       next = partition_.accepted_state();
       next.synchronization_tick = target_tick_;
       for (CellTemporalPartitionRecord& cell : next.cells)
@@ -857,6 +894,18 @@ class PreparedBatchedCellTemporalExecutor {
           static_cast<CellTemporalStageDisposition>(static_cast<std::uint32_t>(aggregate >> 32u));
       const std::uint32_t reason = static_cast<std::uint32_t>(aggregate);
       throw CellTemporalStageFailure(disposition, reason);
+    }
+    local_error = nullptr;
+    try {
+      if constexpr (CellTemporalRungBatchLifecycle<Provider>)
+        provider_.finalize_rung_batch_candidate(descriptor);
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_error ? 1L : 0L, *lane_) != 0) {
+      abort_attempt_();
+      rethrow_collective_failure_(
+          local_error, "cell-local temporal rung-batch finalization failed on another rank");
     }
     try {
       partition_.advance_batch(batch.rung, batch.global_indices, end_tick);
