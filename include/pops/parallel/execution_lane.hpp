@@ -17,6 +17,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <limits>
 #include <new>
 #include <optional>
@@ -49,20 +50,25 @@ class ExecutionCommunicator {
   [[nodiscard]] static ExecutionCommunicator borrowed(std::string_view identity,
                                                       MPI_Comm communicator) {
     detail::ensure_mpi_world_initialized();
-    const CommunicatorView world{MPI_COMM_WORLD};
-    if (all_reduce_max(identity.empty() || communicator == MPI_COMM_NULL ? 1L : 0L, world) != 0)
+    if (communicator == MPI_COMM_NULL)
       throw std::invalid_argument(
-          "borrowed execution communicator requires an identity and live MPI_Comm");
-    int relation = MPI_UNEQUAL;
-    const int compare_code = MPI_Comm_compare(MPI_COMM_WORLD, communicator, &relation);
-    if (all_reduce_max(compare_code == MPI_SUCCESS ? 0L : 1L, world) != 0)
+          "borrowed execution communicator requires a live supplied MPI_Comm");
+    const CommunicatorView supplied{communicator};
+    int world_relation = MPI_UNEQUAL;
+    const int compare_code = MPI_Comm_compare(MPI_COMM_WORLD, communicator, &world_relation);
+    if (all_reduce_max(compare_code == MPI_SUCCESS ? 0L : 1L, supplied) != 0)
       throw std::runtime_error(
-          "MPI_Comm_compare(execution communicator rank space) failed on at least one rank");
-    if (all_reduce_max(relation == MPI_IDENT || relation == MPI_CONGRUENT ? 0L : 1L, world) != 0)
+          "MPI_Comm_compare(borrowed execution communicator) failed on a supplied rank");
+    const long invalid_world_rank_space =
+        world_relation == MPI_IDENT || world_relation == MPI_CONGRUENT ? 0L : 1L;
+    if (all_reduce_max(invalid_world_rank_space, supplied) != 0)
       throw std::invalid_argument(
-          "borrowed execution communicator must preserve the MPI_COMM_WORLD rank space");
+          "borrowed execution communicator must preserve the MPI_COMM_WORLD rank space and order "
+          "used by field storage");
+    if (all_reduce_max(identity.empty() ? 1L : 0L, supplied) != 0)
+      throw std::invalid_argument("borrowed execution communicator requires an identity");
     if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{std::string_view("execution-communicator"), identity}}, world))
+            {{std::string_view("execution-communicator"), identity}}, supplied))
       throw std::invalid_argument(
           "borrowed execution communicator identity differs between MPI ranks");
     std::string owned_identity;
@@ -72,7 +78,7 @@ class ExecutionCommunicator {
     } catch (...) {
       identity_allocation_failure_local = 1;
     }
-    if (all_reduce_max(identity_allocation_failure_local, world) != 0)
+    if (all_reduce_max(identity_allocation_failure_local, supplied) != 0)
       throw std::bad_alloc();
     return ExecutionCommunicator(std::move(owned_identity), communicator);
   }
@@ -228,10 +234,9 @@ class ExecutionLane {
     return duplicate_collectively(ExecutionCommunicator::world(), identity);
   }
 
-  /// Collectively duplicate an authenticated communicator over the process-world rank space. This
-  /// supports embedding-owned duplicates without coupling hot execution to MPI_COMM_WORLD. An
-  /// arbitrary subgroup is deliberately rejected by ExecutionCommunicator::borrowed until field
-  /// storage carries an explicit communicator-relative rank space.
+  /// Collectively duplicate an authenticated embedding-owned communicator. Every validation and
+  /// allocation consensus remains on that exact supplied communicator; subgroup lanes never touch
+  /// MPI_COMM_WORLD. The borrowed parent is not freed and must outlive this preparation call.
   [[nodiscard]] static ExecutionLane duplicate_collectively(const ExecutionCommunicator& parent,
                                                             std::string_view identity) {
     const long invalid_identity = all_reduce_max(
@@ -268,13 +273,39 @@ class ExecutionLane {
     const int duplicate_code = MPI_Comm_dup(parent.native_handle(), &communicator);
     const long duplicate_failure =
         all_reduce_max(duplicate_code == MPI_SUCCESS ? 0L : 1L, parent.communicator());
-    if (duplicate_failure != 0)
+    if (duplicate_failure != 0) {
+      const long has_handle = communicator == MPI_COMM_NULL ? 0L : 1L;
+      const long minimum_handles = all_reduce_min(has_handle, parent.communicator());
+      const long maximum_handles = all_reduce_max(has_handle, parent.communicator());
+      // MPI_Comm_free is collective on the duplicated communicator. A conforming collective
+      // duplication therefore permits either every rank to free its result or no rank to free one.
+      // A partial result cannot be recovered portably: ranks without the opaque context cannot join
+      // its free. Abort the exact supplied rank space instead of deadlocking or leaking that broken
+      // MPI state.
+      if (minimum_handles != maximum_handles) {
+        (void)MPI_Abort(parent.native_handle(), duplicate_code == MPI_SUCCESS ? 1 : duplicate_code);
+        std::terminate();
+      }
+      const int cleanup_code = minimum_handles == 0 ? MPI_SUCCESS : MPI_Comm_free(&communicator);
+      const long cleanup_failure =
+          all_reduce_max(cleanup_code == MPI_SUCCESS ? 0L : 1L, parent.communicator());
+      if (cleanup_failure != 0)
+        throw std::runtime_error(
+            "MPI_Comm_dup(execution lane) failed and a duplicated local handle could not be "
+            "released collectively");
       throw std::runtime_error("MPI_Comm_dup(execution lane) failed on at least one parent rank");
+    }
     const int errhandler_code = MPI_Comm_set_errhandler(communicator, MPI_ERRORS_RETURN);
     const long errhandler_failure =
         all_reduce_max(errhandler_code == MPI_SUCCESS ? 0L : 1L, parent.communicator());
     if (errhandler_failure != 0) {
-      (void)MPI_Comm_free(&communicator);
+      const int cleanup_code = MPI_Comm_free(&communicator);
+      const long cleanup_failure =
+          all_reduce_max(cleanup_code == MPI_SUCCESS ? 0L : 1L, parent.communicator());
+      if (cleanup_failure != 0)
+        throw std::runtime_error(
+            "MPI_Comm_set_errhandler(execution lane) failed and the duplicated communicator "
+            "could not be released collectively");
       throw std::runtime_error(
           "MPI_Comm_set_errhandler(execution lane) failed on at least one parent rank");
     }

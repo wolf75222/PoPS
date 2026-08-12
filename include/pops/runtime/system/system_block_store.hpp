@@ -53,9 +53,13 @@ class SystemBlockStore {
   using PreparedPointJvp = std::function<void(
       const evaluation_point&, field_type&, const field_type&, field_type&, const boundary_type&,
       const ExecutionLane&, const runtime::program::PreparedScalarBoundarySession<Dim>&)>;
+  using BoundaryFluxTransform = typename SystemBlockClosures<Dim>::BoundaryFluxTransform;
   using PointStatePreparation = std::function<void(const evaluation_point&, field_type&)>;
   using PreparedPointStatePreparation =
       std::function<void(const evaluation_point&, field_type&, const boundary_type&)>;
+  using PreparedPointStateTransport =
+      typename SystemBlockClosures<Dim>::PreparedPointStateTransport;
+  using ExternalGhostBoundary = typename SystemBlockClosures<Dim>::ExternalGhostBoundary;
 
   using EmbeddedResidualFamily = typename SystemBlockClosures<Dim>::EmbeddedResidualFamily;
 
@@ -100,8 +104,13 @@ class SystemBlockStore {
     PreparedPointBoundaryResidual boundary_flux_core_at_point_prepared;
     PreparedPointBoundaryResidual boundary_residual_at_point_prepared;
     PreparedPointJvp boundary_jvp_at_point_prepared;
+    std::shared_ptr<BoundaryFluxTransform> external_boundary_flux;
+    std::shared_ptr<PreparedPointBoundaryResidual> external_field_boundary_residual;
+    std::shared_ptr<PreparedPointJvp> external_field_boundary_jvp;
     PointStatePreparation prepare_generated_state_at_point;
     PreparedPointStatePreparation prepare_generated_state_at_point_prepared;
+    PreparedPointStateTransport prepare_generated_state_with_transport_prepared;
+    std::shared_ptr<ExternalGhostBoundary> external_ghost_boundary;
     EmbeddedResidualFamily staircase_residuals;
     EmbeddedResidualFamily cutcell_residuals;
 

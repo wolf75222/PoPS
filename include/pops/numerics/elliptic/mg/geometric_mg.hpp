@@ -395,7 +395,7 @@ class GeometricMG {
     Level& fine = *levels_.front();
     ensure_boundary_view_();
     boundary_kernel_ = std::move(kernel);
-    boundary_context_.reset();
+    boundary_contexts_.reset();
     if (!newton_workspace_ && !boundary_kernel_->observes_iteration) {
       const FieldNewtonOptions options = linear_boundary_newton_options_();
       const std::array<const field_type*, 1> layouts{&fine.phi};
@@ -406,13 +406,15 @@ class GeometricMG {
     prepare_dynamic_view_();
   }
 
-  void set_boundary_context(const FieldBoundaryExecutionContext<Dim>& context) {
+  void set_boundary_contexts(std::shared_ptr<const PreparedFieldBoundaryContextSet<Dim>> contexts,
+                             std::size_t level = 0) {
     if (!boundary_kernel_)
       throw std::logic_error("geometric MG has no compiled dynamic boundary kernel");
-    if (context.failure == nullptr)
+    if (!contexts || level >= contexts->size() || contexts->contexts()[level].failure == nullptr)
       throw std::invalid_argument(
           "geometric MG dynamic boundary requires a fallible execution channel");
-    boundary_context_ = context;
+    boundary_contexts_ = std::move(contexts);
+    boundary_context_level_ = level;
   }
 
   SolveReport solve() {
@@ -602,7 +604,7 @@ class GeometricMG {
     fill_physical_boundary(*boundary_view_, fine.physical_boundary);
     if (!boundary_kernel_)
       return;
-    FieldBoundaryExecutionContext<Dim>& context = boundary_context_at_(iteration);
+    FieldBoundaryExecutionContext<Dim> context = boundary_context_at_(iteration);
     context.failure->reset();
     for (int face = 0; face < 2 * Dim; ++face)
       boundary_kernel_->prepare_residual_view(face, source, *boundary_view_, fine.geometry,
@@ -624,7 +626,7 @@ class GeometricMG {
     fill_physical_boundary(*boundary_view_, fine.homogeneous_physical_boundary);
     if (!boundary_kernel_)
       return;
-    FieldBoundaryExecutionContext<Dim>& context = boundary_context_at_(iteration);
+    FieldBoundaryExecutionContext<Dim> context = boundary_context_at_(iteration);
     context.failure->reset();
     for (int face = 0; face < 2 * Dim; ++face)
       boundary_kernel_->prepare_jvp_view(face, iterate, direction, *boundary_view_, fine.geometry,
@@ -638,7 +640,7 @@ class GeometricMG {
     apply_poisson_operator_valid(*boundary_view_, fine.geometry, fine.scratch, options_.reaction);
     lincomb(output, Real(1), fine.rhs, Real(-1), fine.scratch);
     if (boundary_kernel_) {
-      FieldBoundaryExecutionContext<Dim>& context = boundary_context_at_(iteration);
+      FieldBoundaryExecutionContext<Dim> context = boundary_context_at_(iteration);
       context.failure->reset();
       for (int face = 0; face < 2 * Dim; ++face)
         boundary_kernel_->add_residual(face, iterate, output, fine.geometry, context);
@@ -654,7 +656,7 @@ class GeometricMG {
     fill_jvp_boundary_view_(iterate, direction, iteration);
     apply_poisson_operator_valid(*boundary_view_, fine.geometry, output, options_.reaction);
     if (boundary_kernel_) {
-      FieldBoundaryExecutionContext<Dim>& context = boundary_context_at_(iteration);
+      FieldBoundaryExecutionContext<Dim> context = boundary_context_at_(iteration);
       context.failure->reset();
       for (int face = 0; face < 2 * Dim; ++face)
         boundary_kernel_->apply_jvp(face, iterate, direction, output, fine.geometry, context);
@@ -664,7 +666,7 @@ class GeometricMG {
   }
 
   SolveReport solve_dynamic_(Level& fine) {
-    if (boundary_kernel_ && !boundary_context_)
+    if (boundary_kernel_ && !boundary_contexts_)
       throw std::logic_error("geometric MG dynamic boundary has no execution context");
     if (boundary_kernel_ && boundary_kernel_->observes_iteration && !newton_workspace_)
       throw std::logic_error(
@@ -708,11 +710,10 @@ class GeometricMG {
     return last_report_;
   }
 
-  FieldBoundaryExecutionContext<Dim>& boundary_context_at_(int iteration) {
-    if (!boundary_context_)
+  FieldBoundaryExecutionContext<Dim> boundary_context_at_(int iteration) const {
+    if (!boundary_contexts_)
       throw std::logic_error("geometric MG dynamic boundary context is absent");
-    boundary_context_->point.iteration = iteration;
-    return *boundary_context_;
+    return boundary_contexts_->view(boundary_context_level_, iteration);
   }
 
   void synchronize_boundary_failure_(FieldBoundaryExecutionContext<Dim>& context,
@@ -806,7 +807,8 @@ class GeometricMG {
   std::vector<std::unique_ptr<Level>> levels_{};
   std::unique_ptr<FieldNullspaceWorkspace<Dim>> nullspace_workspace_{};
   std::optional<CompiledFieldBoundaryKernel<Dim>> boundary_kernel_{};
-  std::optional<FieldBoundaryExecutionContext<Dim>> boundary_context_{};
+  std::shared_ptr<const PreparedFieldBoundaryContextSet<Dim>> boundary_contexts_{};
+  std::size_t boundary_context_level_ = 0;
   std::optional<field_type> boundary_view_{};
   std::optional<nonlinear_workspace_type> newton_workspace_{};
   std::optional<nonlinear_workspace_type> linear_boundary_workspace_{};

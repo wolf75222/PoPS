@@ -913,18 +913,23 @@ class GhostProducerPlan:
             binding = bindings.get(target)
             if binding is None:
                 continue
+            states = tuple(sorted(
+                {contribution.region.subject, *contribution.states},
+                key=lambda row: row.qualified_id))
             rows.append({
                 **binding.canonical_identity(),
                 "producer_identity": contribution.producer.qualified_id,
                 "state_identity": contribution.region.subject.qualified_id,
                 "ghost_identity": contribution.region.selector.qualified_id,
                 "region": region_data(contribution.region),
-                "states": [contribution.region.subject.qualified_id],
+                "states": [row.qualified_id for row in states],
                 "directions": ([contribution.region.subject.qualified_id]
                                if target_name == "linearization" else []),
-                "fields": [], "parameters": [],
+                "fields": [row.qualified_id for row in contribution.fields],
+                "parameters": scalar_rows(contribution.runtime_params),
                 "outputs": [contribution.handle.qualified_id],
-                "rate": None,
+                "rate": (None if contribution.rate is None
+                         else contribution.rate.qualified_id),
                 "nonlinear_iterate": contribution.region.subject.qualified_id,
             })
         rows.sort(key=lambda row: (row["target"]["qualified_id"],

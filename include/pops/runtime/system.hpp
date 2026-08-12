@@ -398,6 +398,11 @@ class System {
   /// collective native-package snapshot/rollback transaction.
   POPS_EXPORT void stage_prepared_ghost_boundary_component(
       const std::string& block, std::shared_ptr<PreparedGhostBoundaryComponent> component);
+  POPS_EXPORT void stage_prepared_boundary_flux_component(
+      const std::string& block, std::shared_ptr<PreparedBoundaryFluxComponent> component);
+  POPS_EXPORT void stage_prepared_field_boundary_component_pair(
+      const std::string& block, std::shared_ptr<PreparedFieldBoundaryResidualComponent> residual,
+      std::shared_ptr<PreparedFieldBoundaryJvpComponent> jvp);
   /// Roll back a failed all-block pre-build boundary transaction.  Internal bind seam only.
   POPS_EXPORT void discard_hyperbolic_boundaries();
   /// Install one already-authenticated exact-ranked shared-interface provider after every endpoint
@@ -1433,6 +1438,9 @@ class System {
   POPS_EXPORT void begin_field_publication_outcome_();
   POPS_EXPORT SolveOutcome stage_field_publication_outcome_(SolveReport report);
   SolveOutcome run_field_publication_outcome_(const std::function<SolveReport()>& solve);
+  enum class NativePackageKind { generic, prepared_boundary };
+  void stage_native_package_(std::string identity, std::function<void()> installer,
+                             std::shared_ptr<void> package_lifetime, NativePackageKind kind);
   /// Read-only compiled-artifact capability check.  Kept private so only ProgramContext can issue
   /// an authenticated apply token; installation writes Impl directly and no public setter exists.
   POPS_EXPORT bool program_owns_operator_authority(

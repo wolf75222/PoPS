@@ -621,8 +621,9 @@ class PreparedHyperbolicBoundary {
 
   template <class Model, class MemorySpace>
   void fill_physical_model_qualified(MultiFab<Dim, MemorySpace>& state, const Box<Dim>& domain,
-                                     const Model& model, const ExecutionLane& lane) const {
-    fill_physical_model_qualified_(state, domain, model, lane);
+                                     const Model& model, const ExecutionLane& lane,
+                                     MultiFab<Dim, MemorySpace>& candidate) const {
+    fill_physical_model_qualified_(state, domain, model, lane, candidate);
   }
 
   template <class Model, class MemorySpace>
@@ -634,14 +635,16 @@ class PreparedHyperbolicBoundary {
   template <class Model, class MemorySpace>
   void fill_physical_model_qualified(MultiFab<Dim, MemorySpace>& state,
                                      const Geometry<Dim>& geometry, const Model& model,
-                                     const ExecutionLane& lane) const {
-    fill_physical_model_qualified(state, geometry.domain(), model, lane);
+                                     const ExecutionLane& lane,
+                                     MultiFab<Dim, MemorySpace>& candidate) const {
+    fill_physical_model_qualified(state, geometry.domain(), model, lane, candidate);
   }
 
  private:
   template <class Model, class MemorySpace>
   void fill_physical_model_qualified_(MultiFab<Dim, MemorySpace>& state, const Box<Dim>& domain,
-                                      const Model& model, const ExecutionLane& lane) const {
+                                      const Model& model, const ExecutionLane& lane,
+                                      MultiFab<Dim, MemorySpace>& candidate) const {
     long invalid_lane = 0;
     try {
       invalid_lane = lane.size() != static_cast<int>(state.rank_space().size()) ||
@@ -694,38 +697,63 @@ class PreparedHyperbolicBoundary {
         throw std::invalid_argument(
             "characteristic no-inflow physical contract is invalid on at least one rank");
 
-      std::unique_ptr<MultiFab<Dim, MemorySpace>> candidate;
-      long allocation_failure = 0;
+      std::exception_ptr staging_error;
       try {
-        candidate = std::make_unique<MultiFab<Dim, MemorySpace>>(state);
+        if (&candidate == &state || candidate.layout() != state.layout() ||
+            candidate.distribution() != state.distribution() ||
+            candidate.local_rank() != state.local_rank() ||
+            candidate.local_size() != state.local_size() || candidate.ncomp() != state.ncomp() ||
+            candidate.ghosts() != state.ghosts())
+          throw std::invalid_argument(
+              "characteristic no-inflow candidate differs from its prepared state contract");
+        for (std::size_t local = 0; local < state.local_size(); ++local) {
+          if (candidate.global_index(local) != state.global_index(local) ||
+              candidate.fab(local).box() != state.fab(local).box() ||
+              candidate.fab(local).grown_box() != state.fab(local).grown_box())
+            throw std::invalid_argument(
+                "characteristic no-inflow candidate differs from local patch storage");
+          Kokkos::deep_copy(candidate.fab(local).storage(), state.fab(local).storage());
+        }
+        device_fence();
       } catch (...) {
-        allocation_failure = 1;
+        staging_error = std::current_exception();
       }
-      const long collective_allocation_failure =
-          all_reduce_max(allocation_failure, lane.communicator());
-      if (collective_allocation_failure != 0)
+      if (all_reduce_max(staging_error ? 1L : 0L, lane.communicator()) != 0) {
+        if (lane.size() == 1 && staging_error)
+          std::rethrow_exception(staging_error);
         throw std::runtime_error(
-            "characteristic no-inflow candidate allocation failed on at least one rank");
+            "characteristic no-inflow candidate staging failed on at least one rank");
+      }
 
-      fill_axes_<0>(*candidate, domain);
-      const Real failure = fill_characteristic_axes_<0>(*candidate, domain, model);
+      Real failure = Real(0);
       Real candidate_failure = Real(0);
-      for (std::size_t local = 0; local < candidate->local_size(); ++local)
-        candidate_failure =
-            std::max(candidate_failure,
-                     for_each_cell_reduce_max(
-                         candidate->fab(local).grown_box(),
-                         hyperbolic_boundary_detail::ValidateBoundaryCandidate<Dim>{
-                             std::as_const(candidate->fab(local)).view(), candidate->ncomp()}));
-      device_fence();
-      const long rejected = failure == Real(0) && candidate_failure == Real(0) ? 0L : 1L;
+      std::exception_ptr materialization_error;
+      try {
+        fill_axes_<0>(candidate, domain);
+        failure = fill_characteristic_axes_<0>(candidate, domain, model);
+        for (std::size_t local = 0; local < candidate.local_size(); ++local)
+          candidate_failure =
+              std::max(candidate_failure,
+                       for_each_cell_reduce_max(
+                           candidate.fab(local).grown_box(),
+                           hyperbolic_boundary_detail::ValidateBoundaryCandidate<Dim>{
+                               std::as_const(candidate.fab(local)).view(), candidate.ncomp()}));
+        device_fence();
+      } catch (...) {
+        materialization_error = std::current_exception();
+      }
+      const long rejected =
+          materialization_error || failure != Real(0) || candidate_failure != Real(0) ? 1L : 0L;
       const long collective_rejected = all_reduce_max(rejected, lane.communicator());
-      if (collective_rejected != 0)
+      if (collective_rejected != 0) {
+        if (lane.size() == 1 && materialization_error)
+          std::rethrow_exception(materialization_error);
         throw std::runtime_error(
             "generated characteristic no-inflow provider rejected a non-finite or invalid state");
+      }
 
       for (std::size_t local = 0; local < state.local_size(); ++local) {
-        const Fab<Dim, MemorySpace>& candidate_fab = candidate->fab(local);
+        const Fab<Dim, MemorySpace>& candidate_fab = candidate.fab(local);
         for_each_cell(state.fab(local).grown_box(),
                       hyperbolic_boundary_detail::PublishBoundaryCandidate<Dim>{
                           candidate_fab.view(), state.fab(local).view(), state.ncomp()});

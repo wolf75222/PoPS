@@ -69,12 +69,10 @@ void copy_field_storage(const MultiFab<Dim>& source, MultiFab<Dim>& destination)
 }
 
 template <int Dim>
-MultiFab<Dim> detached_valid_field(const MultiFab<Dim>& source) {
-  MultiFab<Dim> result(source.layout(), source.distribution(), source.local_rank(), source.ncomp(),
-                       source.ghosts());
+void materialize_detached_valid_field(const MultiFab<Dim>& source, MultiFab<Dim>& result) {
+  require_same_block_field(source, result, "prepared detached boundary state");
   result.set_val(Real(0));
   lincomb(result, Real(1), source, Real(0), source);
-  return result;
 }
 
 template <int Dim>
@@ -148,82 +146,77 @@ void collective_boundary_preflight(
 }
 
 template <int Dim, class Invoke>
-void invoke_prepared_boundary_transaction(MultiFab<Dim>& state, MultiFab<Dim>& result,
-                                          const ExecutionLane& lane, const char* operation,
-                                          Invoke&& invoke) {
-  std::exception_ptr local_error;
-  std::unique_ptr<MultiFab<Dim>> state_snapshot;
-  std::unique_ptr<MultiFab<Dim>> result_snapshot;
-  std::unique_ptr<MultiFab<Dim>> candidate;
-  try {
-    state_snapshot = std::make_unique<MultiFab<Dim>>(state);
-    result_snapshot = std::make_unique<MultiFab<Dim>>(result);
-    candidate = std::make_unique<MultiFab<Dim>>(result);
-    Kokkos::fence();
-  } catch (...) {
-    local_error = std::current_exception();
-  }
-  if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
-    if (lane.size() == 1 && local_error)
-      std::rethrow_exception(local_error);
-    throw std::runtime_error(std::string(operation) +
-                             " rollback allocation failed collectively before publication");
-  }
-
-  const auto rollback_and_throw = [&](std::exception_ptr failure, const char* reason) -> void {
-    std::exception_ptr restore_error;
+void invoke_prepared_boundary_transaction(
+    MultiFab<Dim>& state, MultiFab<Dim>& result, const ExecutionLane& lane, const char* operation,
+    const runtime::program::PreparedScalarBoundarySession<Dim>& transport, Invoke&& invoke) {
+  transport.with_boundary_scratch(state, [&](auto& scratch) {
+    MultiFab<Dim>& state_snapshot = scratch.transaction_state_snapshot;
+    MultiFab<Dim>& result_snapshot = scratch.transaction_result_snapshot;
+    MultiFab<Dim>& candidate = scratch.transaction_candidate;
+    std::exception_ptr local_error;
     try {
-      copy_field_storage(*state_snapshot, state);
-      copy_field_storage(*result_snapshot, result);
+      copy_field_storage(state, state_snapshot);
+      copy_field_storage(result, result_snapshot);
+      copy_field_storage(result, candidate);
     } catch (...) {
-      restore_error = std::current_exception();
+      local_error = std::current_exception();
     }
-    if (all_reduce_max(restore_error ? 1L : 0L, lane) != 0)
-      throw std::runtime_error(std::string(operation) + " rollback failed collectively");
-    if (lane.size() == 1 && failure) {
+    if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error(std::string(operation) +
+                               " journal initialization failed collectively");
+    }
+
+    const auto rollback_and_throw = [&](std::exception_ptr failure, const char* reason) -> void {
+      std::exception_ptr restore_error;
       try {
-        std::rethrow_exception(failure);
-      } catch (const std::exception& error) {
-        throw std::runtime_error(std::string(operation) + " " + reason +
-                                 " and rolled back collectively: " + error.what());
+        copy_field_storage(state_snapshot, state);
+        copy_field_storage(result_snapshot, result);
       } catch (...) {
-        std::rethrow_exception(failure);
+        restore_error = std::current_exception();
       }
+      if (all_reduce_max(restore_error ? 1L : 0L, lane) != 0)
+        throw std::runtime_error(std::string(operation) + " rollback failed collectively");
+      if (failure)
+        std::rethrow_exception(failure);
+      throw std::runtime_error(std::string(operation) + " " + reason +
+                               " and rolled back collectively");
+    };
+
+    local_error = nullptr;
+    try {
+      runtime::program::collective_boundary_provider_phase(lane, operation,
+                                                           [&] { invoke(candidate, scratch); });
+    } catch (...) {
+      local_error = std::current_exception();
     }
-    throw std::runtime_error(std::string(operation) + " " + reason +
-                             " and rolled back collectively");
-  };
+    if (local_error)
+      rollback_and_throw(local_error, "evaluation failed");
 
-  local_error = nullptr;
-  try {
-    invoke(*candidate);
-  } catch (...) {
-    local_error = std::current_exception();
-  }
-  if (all_reduce_max(local_error ? 1L : 0L, lane) != 0)
-    rollback_and_throw(local_error, "evaluation failed");
+    Real local_norm = Real(0);
+    local_error = nullptr;
+    try {
+      local_norm = prepared_boundary_local_norm_inf(candidate);
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_error ? 1L : 0L, lane) != 0)
+      rollback_and_throw(local_error, "finite-result validation failed");
+    const Real global_norm =
+        static_cast<Real>(all_reduce_max(static_cast<double>(local_norm), lane));
+    if (!std::isfinite(global_norm))
+      rollback_and_throw({}, "produced a non-finite all-component result");
 
-  Real local_norm = Real(0);
-  local_error = nullptr;
-  try {
-    local_norm = prepared_boundary_local_norm_inf(*candidate);
-  } catch (...) {
-    local_error = std::current_exception();
-  }
-  if (all_reduce_max(local_error ? 1L : 0L, lane) != 0)
-    rollback_and_throw(local_error, "finite-result validation failed");
-  const Real global_norm = static_cast<Real>(all_reduce_max(static_cast<double>(local_norm), lane));
-  if (!std::isfinite(global_norm))
-    rollback_and_throw({}, "produced a non-finite all-component result");
-
-  local_error = nullptr;
-  try {
-    copy_field_storage(*candidate, result);
-  } catch (...) {
-    local_error = std::current_exception();
-  }
-  if (all_reduce_max(local_error ? 1L : 0L, lane) != 0)
-    rollback_and_throw(local_error, "publication failed");
+    local_error = nullptr;
+    try {
+      copy_field_storage(candidate, result);
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_error ? 1L : 0L, lane) != 0)
+      rollback_and_throw(local_error, "publication failed");
+  });
 }
 
 }  // namespace
@@ -526,11 +519,12 @@ void System<Dim>::block_rhs_core_into_at(
   }
   if (selected.boundary) {
     invoke_prepared_boundary_transaction<Dim>(
-        state, residual, lane, "System::block_rhs_core_into_at", [&](MultiFab<Dim>& candidate) {
-          MultiFab<Dim> evaluation_state = detached_valid_field(state);
+        state, residual, lane, "System::block_rhs_core_into_at", transport,
+        [&](MultiFab<Dim>& candidate, auto& scratch) {
+          materialize_detached_valid_field(state, scratch.detached_state);
           auto& core = flux_only ? selected.boundary_flux_core_at_point_prepared
                                  : selected.boundary_core_at_point_prepared;
-          core(point, evaluation_state, candidate, *selected.boundary, lane, transport);
+          core(point, scratch.detached_state, candidate, *selected.boundary, lane, transport);
         });
     return;
   }
@@ -578,9 +572,10 @@ void System<Dim>::block_rhs_into_at_prepared(
               "System prepared boundary RHS is unavailable with an active embedded boundary");
       });
   invoke_prepared_boundary_transaction<Dim>(
-      state, residual, lane, "System::block_rhs_into_at_prepared", [&](MultiFab<Dim>& candidate) {
-        MultiFab<Dim> evaluation_state = detached_valid_field(state);
-        selected.boundary_full_at_point_prepared(point, evaluation_state, candidate,
+      state, residual, lane, "System::block_rhs_into_at_prepared", transport,
+      [&](MultiFab<Dim>& candidate, auto& scratch) {
+        materialize_detached_valid_field(state, scratch.detached_state);
+        selected.boundary_full_at_point_prepared(point, scratch.detached_state, candidate,
                                                  *selected.boundary, lane, transport);
       });
 }
@@ -659,8 +654,8 @@ void System<Dim>::block_boundary_residual_into_at(
               "System boundary residual is unavailable with an active embedded boundary");
       });
   invoke_prepared_boundary_transaction<Dim>(
-      state, residual, lane, "System::block_boundary_residual_into_at",
-      [&](MultiFab<Dim>& candidate) {
+      state, residual, lane, "System::block_boundary_residual_into_at", transport,
+      [&](MultiFab<Dim>& candidate, auto&) {
         selected.boundary_residual_at_point_prepared(point, state, candidate, *selected.boundary,
                                                      lane, transport);
       });
@@ -709,7 +704,8 @@ void System<Dim>::block_boundary_jvp_into_at(
               "System boundary JVP is unavailable with an active embedded boundary");
       });
   invoke_prepared_boundary_transaction<Dim>(
-      state, result, lane, "System::block_boundary_jvp_into_at", [&](MultiFab<Dim>& candidate) {
+      state, result, lane, "System::block_boundary_jvp_into_at", transport,
+      [&](MultiFab<Dim>& candidate, auto&) {
         selected.boundary_jvp_at_point_prepared(point, state, direction, candidate,
                                                 *selected.boundary, lane, transport);
       });

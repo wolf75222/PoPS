@@ -604,9 +604,9 @@ class ProgramContext {
     if (!all_ranks_agree_exact_ordered_byte_pairs(
             {{std::string_view("program-prepared-block-boundary-session"), contract.view()}}, lane))
       throw std::runtime_error("Program prepared block boundary session differs across MPI ranks");
-    auto transport =
-        scalar_boundary_session_type::prepare(geometry(), scalar_boundary_topology_(), prototype,
-                                              lane, next_scalar_boundary_generation_());
+    auto transport = scalar_boundary_session_type::prepare_block(
+        geometry(), scalar_boundary_topology_(), prototype, lane,
+        next_scalar_boundary_generation_());
     std::shared_ptr<block_boundary_session_type> session;
     local_error = nullptr;
     try {

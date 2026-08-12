@@ -811,6 +811,8 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_geometric_mg 2)
   set(POPS_MPI_RANKS_test_coupled_fieldsolve 2)
   set(POPS_MPI_RANKS_test_amr_program_positivity_floor 2)
+  set(POPS_MPI_RANKS_test_program_runtime 2)
+  set(POPS_MPI_RANKS_test_generated_amr_system_block 2)
   set(POPS_MPI_RANKS_test_fill_boundary_cache 1 2 4)
   set(POPS_MPI_RANKS_test_copy_schedule_cache 1 2 4)
   set(POPS_MPI_RANKS_test_world_communicator 1 2)
@@ -957,6 +959,8 @@ if(POPS_HAS_MPI)
     test_pure_field_algebra_extreme_dot
     test_geometric_mg
     test_coupled_fieldsolve
+    test_program_runtime
+    test_generated_amr_system_block
     test_fill_boundary_cache
     test_copy_schedule_cache
     test_world_communicator
@@ -1020,6 +1024,16 @@ if(POPS_HAS_MPI)
           ${_test} ${_np}
           GTEST_FILTER
             "test_coupled_fieldsolve.named_solve_honors_every_qualified_stage_without_live_mutation")
+      elseif(_test STREQUAL "test_program_runtime")
+        pops_add_mpi_rank_test(
+          ${_test} ${_np}
+          GTEST_FILTER
+            "ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally")
+      elseif(_test STREQUAL "test_generated_amr_system_block")
+        pops_add_mpi_rank_test(
+          ${_test} ${_np}
+          GTEST_FILTER
+            "GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance")
       else()
         pops_add_mpi_rank_test(${_test} ${_np})
       endif()
@@ -1029,6 +1043,9 @@ if(POPS_HAS_MPI)
     ENVIRONMENT "OMP_NUM_THREADS=1"
     TIMEOUT 30)
   set_tests_properties(test_amr_program_positivity_floor_np2 PROPERTIES
+    ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1"
+    TIMEOUT 30)
+  set_tests_properties(test_program_runtime_np2 test_generated_amr_system_block_np2 PROPERTIES
     ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1"
     TIMEOUT 30)
 endif()

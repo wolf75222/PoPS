@@ -123,15 +123,27 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
     from pops.runtime._component_execution_context import component_execution_data
 
     execution_data = component_execution_data(install_plan.execution_context)
+    adaptive = {row.adaptive for row in artifact.layout_plan.layouts}
+    if adaptive == {True}:
+        prepare_execution_lane_arguments = (execution_data,)
+    elif adaptive == {False}:
+        prepare_execution_lane_arguments = (
+            install_plan.execution_context.communicator.handle,
+            install_plan.execution_context.identity.token,
+        )
+    else:
+        raise ValueError("runtime boundary installation requires one coherent layout capability")
     prepare_execution_lane = getattr(native, "_prepare_boundary_execution_lane", None)
     component_installers = {
         "apply_region_batch": getattr(native, "_install_ghost_boundary_component", None),
         "transform_faces": getattr(native, "_install_boundary_flux_component", None),
-        "residual": getattr(native, "_install_field_boundary_residual_component", None),
-        "jvp": getattr(native, "_install_field_boundary_jvp_component", None),
     }
+    field_pair_installer = getattr(native, "_install_field_boundary_component_pair", None)
     component_preflights = {
         "apply_region_batch": getattr(native, "_preflight_ghost_boundary_component", None),
+        "transform_faces": getattr(native, "_preflight_boundary_flux_component", None),
+        "residual": getattr(native, "_preflight_field_boundary_residual_component", None),
+        "jvp": getattr(native, "_preflight_field_boundary_jvp_component", None),
     }
     prepared = []
     state_routes: dict[str, str] = {}
@@ -307,7 +319,38 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
         component_rows = first.get("component_regions", [])
         if not isinstance(component_rows, list):
             raise TypeError("prepared boundary component_regions must be a list")
+        field_pairs: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
+        for row in component_rows:
+            if isinstance(row, dict) and row.get("operation") in {"residual", "jvp"}:
+                key = (str(row.get("producer_identity")),
+                       str(row.get("region", {}).get("region_identity")))
+                operation = row["operation"]
+                if operation in field_pairs.setdefault(key, {}):
+                    raise ValueError(
+                        "one FieldBoundaryClosure pair has a duplicate %s operation" % operation)
+                field_pairs[key][operation] = row
+        for key, pair in field_pairs.items():
+            if set(pair) != {"residual", "jvp"}:
+                raise ValueError(
+                    "FieldBoundaryClosure %r requires one exact residual/JVP pair" % (key,))
+            residual, jvp = pair["residual"], pair["jvp"]
+            exact = (
+                "component_id", "component_manifest_identity", "native_interface",
+                "interface_version", "producer_identity", "state_identity", "ghost_identity",
+                "region", "states", "fields", "parameters", "rate", "nonlinear_iterate",
+            )
+            changed = [name for name in exact if residual.get(name) != jvp.get(name)]
+            residual_outputs = residual.get("outputs")
+            jvp_outputs = jvp.get("outputs")
+            if changed or residual.get("directions") or jvp.get("directions") != [
+                    jvp.get("state_identity")] or not isinstance(residual_outputs, list) \
+                    or len(residual_outputs) != 1 or not isinstance(jvp_outputs, list) \
+                    or len(jvp_outputs) != 1 or residual_outputs[0] == jvp_outputs[0]:
+                raise ValueError(
+                    "FieldBoundaryClosure residual/JVP pair changed its exact contract: %s"
+                    % sorted(changed))
         component_jobs = []
+        prepared_components: dict[int, Any] = {}
         for row in component_rows:
             if not isinstance(row, dict):
                 raise TypeError("prepared boundary component region must be a dict")
@@ -346,13 +389,15 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
             if not isinstance(operation, str):
                 raise TypeError("prepared boundary component operation must be text")
             install_component = component_installers.get(operation)
-            if not callable(install_component):
+            if operation in {"residual", "jvp"}:
+                install_component = None
+            elif not callable(install_component):
                 raise NotImplementedError(
                     "the selected native provider cannot install typed boundary operation %r"
                     % operation
                 )
             preflight_component = component_preflights.get(operation)
-            if operation == "apply_region_batch" and not callable(preflight_component):
+            if not callable(preflight_component):
                 raise NotImplementedError(
                     "the selected native provider cannot preflight typed boundary operation %r"
                     % operation
@@ -382,12 +427,12 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
                     "native post-Riemann boundary flux requires one exact state output and no "
                     "JVP direction table")
             if operation == "apply_region_batch" and (
-                    row["states"] or row["directions"] or row["fields"] or
+                    row["directions"] or
                     len(row["outputs"]) != 1 or
                     row["outputs"][0] != row["state_identity"]):
                 raise NotImplementedError(
-                    "Uniform native GhostBoundary requires one exact primary-state output and "
-                    "no routed state/field dependencies")
+                    "native GhostBoundary requires one exact primary-state output and "
+                    "no JVP direction dependencies")
             component_jobs.append((
                 preflight_component,
                 install_component,
@@ -397,6 +442,17 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
                 "",
                 "",
                 execution_data,
+            ))
+            prepared_components[id(row)] = installed.native_handle
+        if field_pairs and not callable(field_pair_installer):
+            raise NotImplementedError(
+                "the selected native provider cannot install atomic FieldBoundary pairs")
+        for pair in field_pairs.values():
+            residual, jvp = pair["residual"], pair["jvp"]
+            component_jobs.append((
+                None, field_pair_installer, block.name,
+                prepared_components[id(residual)], residual,
+                prepared_components[id(jvp)], jvp, "", "", execution_data,
             ))
         reports[block.name] = MappingProxyType(dict(first))
         prepared.append((base_arguments, tuple(component_jobs)))
@@ -439,7 +495,7 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
     if state_routes and not callable(discard):
         raise NotImplementedError(
             "the selected native provider cannot roll back boundary authority installation")
-    if prepared and not callable(prepare_execution_lane):
+    if state_routes and not callable(prepare_execution_lane):
         raise NotImplementedError(
             "the selected native provider cannot prepare the RuntimeInstance boundary lane")
     try:
@@ -447,13 +503,15 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
         # state route or prepared boundary plan is published. Native package preparation remains
         # inside the all-ranks transaction and restores the accepted pre-bind image on failure.
         for _base_arguments, component_jobs in prepared:
-            for (preflight, _installer, _block, component, row, parameters_json, target_json,
-                 context) in component_jobs:
+            for job in component_jobs:
+                preflight = job[0]
                 if preflight is not None:
+                    (_preflight, _installer, _block, component, row, parameters_json,
+                     target_json, context) = job
                     cast(Callable[..., Any], preflight)(
                         component, row, parameters_json, target_json, context)
-        if prepared:
-            cast(Callable[..., Any], prepare_execution_lane)(execution_data)
+        if state_routes:
+            cast(Callable[..., Any], prepare_execution_lane)(*prepare_execution_lane_arguments)
         for state_identity, block_name in sorted(state_routes.items()):
             cast(Callable[..., Any], install_state_route)(block_name, state_identity)
         install_field_route = getattr(native, "_install_field_storage_route", None)
@@ -466,7 +524,8 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
             cast(Callable[..., Any], install)(*base_arguments)
             for job in component_jobs:
                 _preflight, installer, *arguments = job
-                cast(Callable[..., Any], installer)(*arguments)
+                if installer is not None:
+                    cast(Callable[..., Any], installer)(*arguments)
     except BaseException:
         cast(Callable[..., Any], discard)()
         raise

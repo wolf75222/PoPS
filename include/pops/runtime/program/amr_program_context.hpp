@@ -36,6 +36,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <span>
@@ -80,6 +81,32 @@ class AmrProgramContext {
   using level_evaluation_type = typename facade_type::PreparedLevelEvaluation;
   using runtime_state_type = ProgramRuntimeState<Dim>;
   using scalar_boundary_session_type = PreparedScalarBoundarySession<Dim>;
+  class PreparedBlockBoundarySession {
+   public:
+    PreparedBlockBoundarySession(const PreparedBlockBoundarySession&) = default;
+    PreparedBlockBoundarySession& operator=(const PreparedBlockBoundarySession&) = default;
+
+   private:
+    friend class AmrProgramContext;
+    PreparedBlockBoundarySession(const facade_type* facade, int runtime_block,
+                                 runtime::multiblock::BoundaryEvaluationPoint point,
+                                 const ExecutionLane& lane,
+                                 std::shared_ptr<scalar_boundary_session_type> transport)
+        : facade_(facade),
+          runtime_block_(runtime_block),
+          point_(std::move(point)),
+          lane_(&lane),
+          transport_(std::move(transport)) {
+      if (facade_ == nullptr || runtime_block_ < 0 || !transport_)
+        throw std::invalid_argument("prepared AMR block boundary session is incomplete");
+    }
+    const facade_type* facade_ = nullptr;
+    int runtime_block_ = -1;
+    runtime::multiblock::BoundaryEvaluationPoint point_{};
+    const ExecutionLane* lane_ = nullptr;
+    std::shared_ptr<scalar_boundary_session_type> transport_;
+  };
+  using block_boundary_session_type = PreparedBlockBoundarySession;
   using subcycle_plan_type = ::pops::numerics::time::amr::PreparedAmrSubcyclePlan<Dim, MemorySpace>;
   using reflux_payload_type = std::vector<Real>;
   using multiblock_subcycling_type =
@@ -1078,13 +1105,18 @@ class AmrProgramContext {
         next_boundary_generation_());
   }
 
-  std::shared_ptr<scalar_boundary_session_type> prepare_block_boundary_session(
+  std::shared_ptr<block_boundary_session_type> prepare_block_boundary_session(
       int program_block, field_type& prototype,
       const runtime::multiblock::BoundaryEvaluationPoint& point, const ExecutionLane& lane) const {
     require_prepared_lane_(lane, "AMR block boundary preparation");
-    (void)sys_block(program_block);
+    const int runtime_block = sys_block(program_block);
     require_boundary_point_(point, "AMR block scalar boundary");
-    return prepare_mesh_boundary_session(prototype, lane);
+    require_same_field_contract_(prototype, state(program_block), "AMR block boundary prototype");
+    auto transport = scalar_boundary_session_type::prepare_block(
+        geometry(), facade_->prepared_amr_boundary_topology(), prototype, lane,
+        next_boundary_generation_());
+    return std::shared_ptr<block_boundary_session_type>(
+        new block_boundary_session_type(facade_, runtime_block, point, lane, std::move(transport)));
   }
 
   void fill_boundary(field_type& field) const { fill_boundary(field, prepared_execution_lane()); }
@@ -1726,28 +1758,122 @@ class AmrProgramContext {
     facade_->set_field_logical_timepoint(provider_slot, point);
   }
 
-  bool has_boundary_linearization(int) const noexcept { return false; }
-  template <class... Arguments>
-  [[noreturn]] void boundary_residual_into_at(Arguments&&...) const {
-    unavailable_("AMR iterate-dependent field boundary provider");
+  bool has_boundary_linearization(int program_block) const noexcept {
+    try {
+      return facade_ != nullptr &&
+             facade_->has_prepared_amr_block_boundary_linearization(sys_block(program_block));
+    } catch (...) {
+      return false;
+    }
   }
-  template <class... Arguments>
-  [[noreturn]] void boundary_jvp_into_at(Arguments&&...) const {
-    unavailable_("AMR iterate-dependent field boundary provider");
+  void boundary_residual_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                 int program_block, field_type& state, field_type& residual,
+                                 const block_boundary_session_type& boundary) const {
+    require_block_boundary_session_(point, program_block, boundary, "AMR boundary residual");
+    facade_->prepared_amr_block_level_boundary_residual_into_at(boundary.runtime_block_, point,
+                                                                state, residual);
   }
-  template <class... Arguments>
-  [[noreturn]] void rhs_core_into_at(Arguments&&...) const {
-    unavailable_("AMR matrix-free split residual provider");
+  void boundary_jvp_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                            int program_block, field_type& state, const field_type& direction,
+                            field_type& result, const block_boundary_session_type& boundary) const {
+    require_block_boundary_session_(point, program_block, boundary, "AMR boundary JVP");
+    facade_->prepared_amr_block_level_boundary_jvp_into_at(boundary.runtime_block_, point, state,
+                                                           direction, result);
   }
-  template <class... Arguments>
-  [[noreturn]] void rhs_jacvec_pair_into_at(Arguments&&...) const {
-    unavailable_("AMR matrix-free coupled Jacobian provider");
+  void rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                        int program_block, field_type& state, field_type& residual, bool flux_only,
+                        const block_boundary_session_type& boundary) const {
+    require_block_boundary_session_(point, program_block, boundary, "AMR core RHS");
+    facade_->prepared_amr_block_level_rhs_core_into_at(boundary.runtime_block_, point, state,
+                                                       residual, flux_only);
+  }
+  void rhs_jacvec_pair_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                               int first_block, field_type& first_state, field_type& first_result,
+                               bool first_flux_only, int second_block, field_type& second_state,
+                               field_type& second_result, bool second_flux_only) const {
+    require_boundary_point_(point, "AMR coupled Jacobian residual");
+    if (first_block == second_block || n_blocks() != 2 || !(point.dt > 0.0))
+      throw std::invalid_argument(
+          "AMR coupled Jacobian residual requires two distinct complete Program blocks");
+    std::unique_lock scratch_lock(coupled_jacvec_mutex_, std::try_to_lock);
+    if (!scratch_lock.owns_lock())
+      throw std::logic_error("AMR coupled Jacobian scratch is already in use");
+    CoupledJacvecLevelScratch& scratch = require_coupled_jacvec_scratch_(
+        first_block, first_state, first_result, second_block, second_state, second_result);
+    // The generated block operators and the prepared multi-block coupling/interface scheduler
+    // remain the only numerical engines. Evaluate the detached block candidates first, then run
+    // the exact scheduler on copies and recover its rate from the transactional candidate delta.
+    const int first_runtime = sys_block(first_block);
+    const int second_runtime = sys_block(second_block);
+    field_type& first_candidate = *scratch.residual[static_cast<std::size_t>(first_runtime)];
+    field_type& second_candidate = *scratch.residual[static_cast<std::size_t>(second_runtime)];
+    field_type& first_coupled = *scratch.coupled[static_cast<std::size_t>(first_runtime)];
+    field_type& second_coupled = *scratch.coupled[static_cast<std::size_t>(second_runtime)];
+    first_candidate.set_val(Real(0));
+    second_candidate.set_val(Real(0));
+    copy_full_(first_state, first_coupled);
+    copy_full_(second_state, second_coupled);
+    const auto& first_evaluation =
+        first_flux_only
+            ? facade_->evaluate_prepared_amr_block_level_flux_at(first_runtime, point, first_state)
+            : facade_->evaluate_prepared_amr_block_level_at(first_runtime, point, first_state);
+    copy_valid_(first_evaluation.residual, first_candidate);
+    const auto& second_evaluation =
+        second_flux_only
+            ? facade_->evaluate_prepared_amr_block_level_flux_at(second_runtime, point,
+                                                                 second_state)
+            : facade_->evaluate_prepared_amr_block_level_at(second_runtime, point, second_state);
+    copy_valid_(second_evaluation.residual, second_candidate);
+
+    std::array<field_type*, 2> candidates{};
+    candidates[static_cast<std::size_t>(first_block)] = &first_coupled;
+    candidates[static_cast<std::size_t>(second_block)] = &second_coupled;
+    if (!interface_flux_ledger_ || !interface_flux_ledger_->in_transaction())
+      throw std::logic_error(
+          "AMR coupled Jacobian residual requires its active interface-ledger transaction");
+    runtime::multiblock::InterfaceFluxFragmentPublication publication{
+        interface_flux_ledger_.get(),
+        runtime_->topology_epoch(),
+        nlev(),
+        {active_level_, static_cast<std::int64_t>(facade_->macro_step()), point.stage_fraction,
+         point.physical_time},
+        "program-jacvec-pair",
+        active_subcycling_window_,
+        exact_binary_rational_(static_cast<Real>(point.dt) /
+                               (active_subcycling_window_.end.physical_time -
+                                active_subcycling_window_.begin.physical_time)),
+        true};
+    interface_flux_ledger_->begin();
+    try {
+      (void)facade_->apply_prepared_amr_program_candidates(
+          active_level_, static_cast<Real>(point.dt),
+          std::span<field_type* const>(candidates.data(), candidates.size()), point, &publication);
+      interface_flux_ledger_->rollback();
+    } catch (...) {
+      if (interface_flux_ledger_->transaction_depth() > 1)
+        interface_flux_ledger_->rollback();
+      throw;
+    }
+    saxpy(first_coupled, Real(-1), first_state);
+    saxpy(second_coupled, Real(-1), second_state);
+    saxpy(first_candidate, Real(1) / static_cast<Real>(point.dt), first_coupled);
+    saxpy(second_candidate, Real(1) / static_cast<Real>(point.dt), second_coupled);
+    copy_valid_(first_candidate, first_result);
+    copy_valid_(second_candidate, second_result);
   }
   template <class Function>
-  void evaluate_with_field_state_at(const runtime::multiblock::BoundaryEvaluationPoint&,
-                                    const std::string&, int, field_type&, const field_type&,
-                                    Function&&) const {
-    unavailable_("AMR perturbed field-state provider");
+  void evaluate_with_field_state_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                    const std::string& provider_slot, int program_block,
+                                    field_type& perturbed, const field_type& accepted,
+                                    Function&& evaluate) const {
+    require_boundary_point_(point, "AMR perturbed field-state provider");
+    if (provider_slot.empty() || sys_block(program_block) != 0)
+      throw std::invalid_argument(
+          "AMR perturbed field-state provider requires one exact mono-block field route");
+    require_same_field_contract_(perturbed, accepted, "AMR perturbed field state");
+    facade_->with_program_field_candidate_at(
+        point, provider_slot, active_level_, perturbed,
+        std::function<void()>(std::forward<Function>(evaluate)));
   }
 
   [[nodiscard]] SolveOutcome solve_fields() const {
@@ -1985,6 +2111,17 @@ class AmrProgramContext {
     if (all_reduce_max(&lane == &prepared ? 0L : 1L, prepared) != 0)
       throw std::invalid_argument(std::string(operation) +
                                   " requires the context's authenticated execution lane");
+  }
+  void require_block_boundary_session_(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                       int program_block,
+                                       const block_boundary_session_type& boundary,
+                                       std::string_view operation) const {
+    require_boundary_point_(point, operation);
+    const ExecutionLane& lane = prepared_execution_lane();
+    if (boundary.facade_ != facade_ || boundary.runtime_block_ != sys_block(program_block) ||
+        boundary.point_ != point || boundary.lane_ != &lane || !boundary.transport_)
+      throw std::invalid_argument(std::string(operation) +
+                                  " received a foreign or stale prepared boundary session");
   }
   static void require_rate_identity_(int rate_id) {
     if (rate_id < 0)
@@ -3439,6 +3576,7 @@ class AmrProgramContext {
     if (interface_flux_ledger_ &&
         interface_flux_ledger_->topology_epoch() != runtime_->topology_epoch())
       interface_flux_commit_guard_.reset();
+    prepare_coupled_jacvec_scratch_();
     if (!interface_flux_ledger_) {
       interface_flux_ledger_ = std::make_unique<interface_flux_ledger_type>(
           runtime_->topology_epoch(), inactive_interface_flux_budget_());
@@ -3500,6 +3638,100 @@ class AmrProgramContext {
                       ghosts);
     result.set_val(Real(0));
     return result;
+  }
+
+  struct CoupledJacvecLevelScratch {
+    std::array<std::unique_ptr<field_type>, 2> residual;
+    std::array<std::unique_ptr<field_type>, 2> coupled;
+  };
+
+  struct CoupledJacvecScratch {
+    std::uint64_t topology_epoch = std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t materialization_generation = std::numeric_limits<std::uint64_t>::max();
+    std::vector<CoupledJacvecLevelScratch> levels;
+  };
+
+  void prepare_coupled_jacvec_scratch_() const {
+    if (facade_ == nullptr)
+      return;
+    const std::uint64_t topology_epoch = runtime_->topology_epoch();
+    const std::uint64_t materialization_generation = runtime_->materialization_generation();
+    if (coupled_jacvec_scratch_ && coupled_jacvec_scratch_->topology_epoch == topology_epoch &&
+        coupled_jacvec_scratch_->materialization_generation == materialization_generation)
+      return;
+
+    const ExecutionLane& lane = prepared_execution_lane();
+    std::unique_ptr<CoupledJacvecScratch> candidate;
+    std::exception_ptr preparation_error;
+    try {
+      if (facade_->n_blocks() == 2) {
+        candidate = std::make_unique<CoupledJacvecScratch>();
+        candidate->topology_epoch = topology_epoch;
+        candidate->materialization_generation = materialization_generation;
+        candidate->levels.resize(runtime_->hierarchy().num_levels());
+        for (std::size_t level = 0; level < candidate->levels.size(); ++level)
+          for (int runtime_block = 0; runtime_block < 2; ++runtime_block) {
+            const field_type& prototype =
+                facade_->prepared_amr_block_state(runtime_block, static_cast<int>(level));
+            auto residual = std::make_unique<field_type>(
+                prototype.layout(), prototype.distribution(), prototype.local_rank(),
+                prototype.ncomp(), prototype.ghosts());
+            auto coupled = std::make_unique<field_type>(
+                prototype.layout(), prototype.distribution(), prototype.local_rank(),
+                prototype.ncomp(), prototype.ghosts());
+            residual->set_val(Real(0));
+            coupled->set_val(Real(0));
+            candidate->levels[level].residual[static_cast<std::size_t>(runtime_block)] =
+                std::move(residual);
+            candidate->levels[level].coupled[static_cast<std::size_t>(runtime_block)] =
+                std::move(coupled);
+          }
+      }
+    } catch (...) {
+      preparation_error = std::current_exception();
+    }
+    if (all_reduce_max(preparation_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && preparation_error)
+        std::rethrow_exception(preparation_error);
+      throw std::runtime_error("AMR coupled Jacobian scratch preparation failed collectively");
+    }
+    coupled_jacvec_scratch_ = std::move(candidate);
+  }
+
+  CoupledJacvecLevelScratch& require_coupled_jacvec_scratch_(
+      int first_block, const field_type& first_state, const field_type& first_result,
+      int second_block, const field_type& second_state, const field_type& second_result) const {
+    if (!coupled_jacvec_scratch_ ||
+        coupled_jacvec_scratch_->topology_epoch != runtime_->topology_epoch() ||
+        coupled_jacvec_scratch_->materialization_generation !=
+            runtime_->materialization_generation() ||
+        active_level_ < 0 ||
+        static_cast<std::size_t>(active_level_) >= coupled_jacvec_scratch_->levels.size())
+      throw std::logic_error("AMR coupled Jacobian scratch is stale or unprepared");
+    const int first_runtime = sys_block(first_block);
+    const int second_runtime = sys_block(second_block);
+    auto& level = coupled_jacvec_scratch_->levels[static_cast<std::size_t>(active_level_)];
+    const auto require_block = [&](int runtime_block, const field_type& state,
+                                   const field_type& result) {
+      const std::size_t index = static_cast<std::size_t>(runtime_block);
+      if (runtime_block < 0 || runtime_block >= 2 || !level.residual[index] ||
+          !level.coupled[index])
+        throw std::logic_error("AMR coupled Jacobian block scratch is incomplete");
+      const field_type& prepared_state = *level.coupled[index];
+      const field_type& prepared_result = *level.residual[index];
+      require_same_field_contract_(state, prepared_state, "AMR coupled Jacobian state scratch");
+      require_same_field_contract_(result, prepared_result,
+                                   "AMR coupled Jacobian residual scratch");
+      if (state.ghosts() != prepared_state.ghosts() ||
+          result.ghosts() != prepared_result.ghosts() ||
+          state.shares_storage_with(prepared_state) || state.shares_storage_with(prepared_result) ||
+          result.shares_storage_with(prepared_state) || result.shares_storage_with(prepared_result))
+        throw std::invalid_argument(
+            "AMR coupled Jacobian scratch changed or aliases an invocation field");
+    };
+    require_block(first_runtime, first_state, first_result);
+    require_block(second_runtime, second_state, second_result);
+    return level;
   }
 
   field_type& persistent_scratch_(ScratchKind kind, std::int64_t value_id, int subslot,
@@ -3708,6 +3940,22 @@ class AmrProgramContext {
     return match;
   }
 
+  static void copy_full_(const field_type& source, field_type& destination) {
+    require_same_field_contract_(source, destination, "AMR Program full-field copy");
+    if (source.ghosts() != destination.ghosts() || source.shares_storage_with(destination))
+      throw std::invalid_argument(
+          "AMR Program full-field copy requires detached exact ghost storage");
+    for (std::size_t local = 0; local < destination.local_size(); ++local) {
+      if (source.global_index(local) != destination.global_index(local) ||
+          source.fab(local).box() != destination.fab(local).box() ||
+          source.fab(local).grown_box() != destination.fab(local).grown_box() ||
+          source.fab(local).size() != destination.fab(local).size())
+        throw std::invalid_argument("AMR Program full-field copy patch storage changed");
+    }
+    for (std::size_t local = 0; local < destination.local_size(); ++local)
+      Kokkos::deep_copy(destination.fab(local).storage(), source.fab(local).storage());
+  }
+
   static void copy_valid_(const field_type& source, field_type& destination) {
     require_same_field_contract_(source, destination, "AMR Program valid-field copy");
     for (std::size_t local = 0; local < destination.local_size(); ++local) {
@@ -3793,6 +4041,8 @@ class AmrProgramContext {
   mutable std::optional<OperatorEvaluationSnapshot> active_operator_snapshot_;
   mutable std::map<std::string, int> history_levels_;
   mutable std::map<ScratchKey, field_type> scratches_;
+  mutable std::mutex coupled_jacvec_mutex_;
+  mutable std::unique_ptr<CoupledJacvecScratch> coupled_jacvec_scratch_;
   mutable std::map<std::int64_t, GeneratedFieldRoute> generated_field_routes_;
   std::shared_ptr<const hierarchy_tensor_registry_type> hierarchy_tensor_solver_registry_;
   mutable std::optional<HierarchyTensorSelection> hierarchy_tensor_selection_;

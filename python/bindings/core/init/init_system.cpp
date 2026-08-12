@@ -1,5 +1,6 @@
 #include "../bindings_detail.hpp"
 #include <pops/parallel/execution_lane.hpp>
+#include <pops/parallel/world_communicator.hpp>
 #include "boundary_component_install.hpp"
 #include "checkpoint_spatial_binding.hpp"
 #include "output_geometry_binding.hpp"
@@ -420,39 +421,50 @@ void bind_system_assembly(py::class_<System>& cls) {
            "Bind one exact solved-field Handle to native provider storage.")
       .def(
           "_prepare_boundary_execution_lane",
-          [](System& system, const py::dict& execution_data) {
-            std::shared_ptr<const pops::component::PreparedExecutionContextV1> execution;
-            std::string lane_identity;
+          [](System& system, const py::object& communicator_authority,
+             const std::string& execution_identity) {
             std::exception_ptr preparation_error;
+            std::string lane_identity;
+            std::shared_ptr<std::optional<pops::ExecutionLane>> lane_holder;
             try {
-              execution = pops::python::detail::make_component_execution_context(execution_data);
-              lane_identity = "pops.system.boundary-runtime/" + execution->identity();
+              if (execution_identity.empty())
+                throw std::invalid_argument(
+                    "Uniform boundary execution identity must be non-empty");
+#ifdef POPS_HAS_MPI
+              const auto& world = communicator_authority.cast<const pops::WorldCommunicator&>();
+              if (&world != &pops::WorldCommunicator::world())
+                throw std::invalid_argument(
+                    "Uniform boundary execution requires the exact native process world");
+#else
+              if (!communicator_authority.is_none())
+                throw std::invalid_argument(
+                    "serial Uniform boundary execution requires the exact null authority");
+#endif
+              lane_identity = "pops.system.boundary-runtime/" + execution_identity;
+              // Allocate both the shared control block and stable lane storage before the
+              // communicator-owning duplication.  The aliasing shared_ptr below is allocation
+              // free, and the optional emplacement only moves ExecutionLane (noexcept).
+              lane_holder = std::make_shared<std::optional<pops::ExecutionLane>>();
             } catch (...) {
               preparation_error = std::current_exception();
             }
-            if (pops::all_reduce_max(preparation_error ? 1L : 0L) != 0) {
-              if (preparation_error)
+#ifdef POPS_HAS_MPI
+            const pops::WorldCommunicator& world = pops::WorldCommunicator::world();
+            if (pops::all_reduce_max(preparation_error ? 1L : 0L, world.communicator()) != 0) {
+              if (world.size() == 1 && preparation_error)
                 std::rethrow_exception(preparation_error);
               throw std::runtime_error(
-                  "prepared System boundary execution context failed on another MPI rank");
+                  "Uniform boundary native execution authority failed collectively");
             }
-            const PopsExecutionContextV1 view = execution->view();
-#ifdef POPS_HAS_MPI
-            const auto parent = pops::ExecutionCommunicator::borrowed(
-                view.communicator_identity,
-                MPI_Comm_f2c(static_cast<MPI_Fint>(view.communicator_f_handle)));
 #else
-            if (view.communicator_f_handle != 0 || view.communicator_datatype_f_handle != 0 ||
-                std::string_view(view.communicator_identity) != "serial")
-              throw std::invalid_argument(
-                  "serial prepared boundary execution requires the exact serial authority");
-            const auto parent = pops::ExecutionCommunicator::world();
+            if (preparation_error)
+              std::rethrow_exception(preparation_error);
 #endif
-            auto lane = std::make_shared<pops::ExecutionLane>(
-                pops::ExecutionLane::duplicate_collectively(parent, lane_identity));
+            lane_holder->emplace(pops::ExecutionLane::duplicate_world_collectively(lane_identity));
+            std::shared_ptr<pops::ExecutionLane> lane(lane_holder, &lane_holder->value());
             system.install_prepared_boundary_execution_lane(std::move(lane));
           },
-          py::arg("execution_context"),
+          py::arg("communicator_authority"), py::arg("execution_identity"),
           "Prepare the exact RuntimeInstance communicator lane for Uniform boundaries.")
       .def(
           "_preflight_ghost_boundary_component",
@@ -485,6 +497,77 @@ void bind_system_assembly(py::class_<System>& cls) {
           py::arg("block"), py::arg("component"), py::arg("row"), py::arg("parameters_json"),
           py::arg("target_json"), py::arg("execution_context"),
           "Stage one exact-ranked GhostBoundary component in the native package transaction.")
+      .def(
+          "_preflight_boundary_flux_component",
+          [](System&, const std::shared_ptr<pops::component::LoadedComponent>& component,
+             const py::dict& row, const std::string& parameters_json,
+             const std::string& target_json, const py::dict& execution_data) {
+            auto spec = pops::python::detail::boundary_component_spec_from_python(
+                row, parameters_json, target_json, execution_data);
+            (void)std::make_shared<pops::PreparedBoundaryFluxComponent>(std::move(spec), component);
+          },
+          py::arg("component"), py::arg("row"), py::arg("parameters_json"), py::arg("target_json"),
+          py::arg("execution_context"))
+      .def(
+          "_preflight_field_boundary_residual_component",
+          [](System&, const std::shared_ptr<pops::component::LoadedComponent>& component,
+             const py::dict& row, const std::string& parameters_json,
+             const std::string& target_json, const py::dict& execution_data) {
+            auto spec = pops::python::detail::boundary_component_spec_from_python(
+                row, parameters_json, target_json, execution_data);
+            (void)std::make_shared<pops::PreparedFieldBoundaryResidualComponent>(std::move(spec),
+                                                                                 component);
+          },
+          py::arg("component"), py::arg("row"), py::arg("parameters_json"), py::arg("target_json"),
+          py::arg("execution_context"))
+      .def(
+          "_preflight_field_boundary_jvp_component",
+          [](System&, const std::shared_ptr<pops::component::LoadedComponent>& component,
+             const py::dict& row, const std::string& parameters_json,
+             const std::string& target_json, const py::dict& execution_data) {
+            auto spec = pops::python::detail::boundary_component_spec_from_python(
+                row, parameters_json, target_json, execution_data);
+            (void)std::make_shared<pops::PreparedFieldBoundaryJvpComponent>(std::move(spec),
+                                                                            component);
+          },
+          py::arg("component"), py::arg("row"), py::arg("parameters_json"), py::arg("target_json"),
+          py::arg("execution_context"))
+      .def(
+          "_install_boundary_flux_component",
+          [](System& system, const std::string& block,
+             std::shared_ptr<pops::component::LoadedComponent> component, const py::dict& row,
+             const std::string& parameters_json, const std::string& target_json,
+             const py::dict& execution_data) {
+            auto spec = pops::python::detail::boundary_component_spec_from_python(
+                row, parameters_json, target_json, execution_data);
+            system.stage_prepared_boundary_flux_component(
+                block, std::make_shared<pops::PreparedBoundaryFluxComponent>(std::move(spec),
+                                                                             std::move(component)));
+          },
+          py::arg("block"), py::arg("component"), py::arg("row"), py::arg("parameters_json"),
+          py::arg("target_json"), py::arg("execution_context"))
+      .def(
+          "_install_field_boundary_component_pair",
+          [](System& system, const std::string& block,
+             std::shared_ptr<pops::component::LoadedComponent> residual_component,
+             const py::dict& residual_row,
+             std::shared_ptr<pops::component::LoadedComponent> jvp_component,
+             const py::dict& jvp_row, const std::string& parameters_json,
+             const std::string& target_json, const py::dict& execution_data) {
+            auto residual_spec = pops::python::detail::boundary_component_spec_from_python(
+                residual_row, parameters_json, target_json, execution_data);
+            auto jvp_spec = pops::python::detail::boundary_component_spec_from_python(
+                jvp_row, parameters_json, target_json, execution_data);
+            system.stage_prepared_field_boundary_component_pair(
+                block,
+                std::make_shared<pops::PreparedFieldBoundaryResidualComponent>(
+                    std::move(residual_spec), std::move(residual_component)),
+                std::make_shared<pops::PreparedFieldBoundaryJvpComponent>(
+                    std::move(jvp_spec), std::move(jvp_component)));
+          },
+          py::arg("block"), py::arg("residual_component"), py::arg("residual_row"),
+          py::arg("jvp_component"), py::arg("jvp_row"), py::arg("parameters_json"),
+          py::arg("target_json"), py::arg("execution_context"))
       .def("_discard_boundary_plans", &System::discard_hyperbolic_boundaries,
            "Roll back one failed pre-block boundary authority transaction.")
       .def(

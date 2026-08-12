@@ -284,6 +284,111 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
       .def("_install_field_storage_route", &AmrSystem::install_field_storage_route,
            py::arg("field_identity"), py::arg("provider_slot"),
            "Bind one exact solved-field Handle to native provider storage.")
+      .def(
+          "_prepare_boundary_execution_lane",
+          [](AmrSystem& system, const py::dict& execution_data) {
+            system.install_prepared_boundary_execution_context(
+                pops::python::detail::make_component_execution_context(execution_data));
+          },
+          py::arg("execution_context"),
+          "Retain the RuntimeInstance execution authority for the prepared AMR hierarchy lane.")
+      .def(
+          "_preflight_ghost_boundary_component",
+          [](AmrSystem&, const std::shared_ptr<pops::component::LoadedComponent>& component,
+             const py::dict& row, const std::string& parameters_json,
+             const std::string& target_json, const py::dict& execution_data) {
+            auto spec = pops::python::detail::boundary_component_spec_from_python(
+                row, parameters_json, target_json, execution_data);
+            (void)std::make_shared<pops::PreparedGhostBoundaryComponent>(std::move(spec),
+                                                                         component);
+          },
+          py::arg("component"), py::arg("row"), py::arg("parameters_json"), py::arg("target_json"),
+          py::arg("execution_context"))
+      .def(
+          "_install_ghost_boundary_component",
+          [](AmrSystem& system, const std::string& block,
+             std::shared_ptr<pops::component::LoadedComponent> component, const py::dict& row,
+             const std::string& parameters_json, const std::string& target_json,
+             const py::dict& execution_data) {
+            auto spec = pops::python::detail::boundary_component_spec_from_python(
+                row, parameters_json, target_json, execution_data);
+            system.stage_prepared_ghost_boundary_component(
+                block, std::make_shared<pops::PreparedGhostBoundaryComponent>(
+                           std::move(spec), std::move(component)));
+          },
+          py::arg("block"), py::arg("component"), py::arg("row"), py::arg("parameters_json"),
+          py::arg("target_json"), py::arg("execution_context"))
+      .def(
+          "_install_boundary_flux_component",
+          [](AmrSystem& system, const std::string& block,
+             std::shared_ptr<pops::component::LoadedComponent> component, const py::dict& row,
+             const std::string& parameters_json, const std::string& target_json,
+             const py::dict& execution_data) {
+            auto spec = pops::python::detail::boundary_component_spec_from_python(
+                row, parameters_json, target_json, execution_data);
+            system.stage_prepared_boundary_flux_component(
+                block, std::make_shared<pops::PreparedBoundaryFluxComponent>(std::move(spec),
+                                                                             std::move(component)));
+          },
+          py::arg("block"), py::arg("component"), py::arg("row"), py::arg("parameters_json"),
+          py::arg("target_json"), py::arg("execution_context"))
+      .def(
+          "_preflight_boundary_flux_component",
+          [](AmrSystem&, const std::shared_ptr<pops::component::LoadedComponent>& component,
+             const py::dict& row, const std::string& parameters_json,
+             const std::string& target_json, const py::dict& execution_data) {
+            auto spec = pops::python::detail::boundary_component_spec_from_python(
+                row, parameters_json, target_json, execution_data);
+            (void)std::make_shared<pops::PreparedBoundaryFluxComponent>(std::move(spec), component);
+          },
+          py::arg("component"), py::arg("row"), py::arg("parameters_json"), py::arg("target_json"),
+          py::arg("execution_context"))
+      .def(
+          "_preflight_field_boundary_residual_component",
+          [](AmrSystem&, const std::shared_ptr<pops::component::LoadedComponent>& component,
+             const py::dict& row, const std::string& parameters_json,
+             const std::string& target_json, const py::dict& execution_data) {
+            auto spec = pops::python::detail::boundary_component_spec_from_python(
+                row, parameters_json, target_json, execution_data);
+            (void)std::make_shared<pops::PreparedFieldBoundaryResidualComponent>(std::move(spec),
+                                                                                 component);
+          },
+          py::arg("component"), py::arg("row"), py::arg("parameters_json"), py::arg("target_json"),
+          py::arg("execution_context"))
+      .def(
+          "_preflight_field_boundary_jvp_component",
+          [](AmrSystem&, const std::shared_ptr<pops::component::LoadedComponent>& component,
+             const py::dict& row, const std::string& parameters_json,
+             const std::string& target_json, const py::dict& execution_data) {
+            auto spec = pops::python::detail::boundary_component_spec_from_python(
+                row, parameters_json, target_json, execution_data);
+            (void)std::make_shared<pops::PreparedFieldBoundaryJvpComponent>(std::move(spec),
+                                                                            component);
+          },
+          py::arg("component"), py::arg("row"), py::arg("parameters_json"), py::arg("target_json"),
+          py::arg("execution_context"))
+      .def(
+          "_install_field_boundary_component_pair",
+          [](AmrSystem& system, const std::string& block,
+             std::shared_ptr<pops::component::LoadedComponent> residual_component,
+             const py::dict& residual_row,
+             std::shared_ptr<pops::component::LoadedComponent> jvp_component,
+             const py::dict& jvp_row, const std::string& parameters_json,
+             const std::string& target_json, const py::dict& execution_data) {
+            auto residual_spec = pops::python::detail::boundary_component_spec_from_python(
+                residual_row, parameters_json, target_json, execution_data);
+            auto jvp_spec = pops::python::detail::boundary_component_spec_from_python(
+                jvp_row, parameters_json, target_json, execution_data);
+            system.stage_prepared_field_boundary_component_pair(
+                block,
+                std::make_shared<pops::PreparedFieldBoundaryResidualComponent>(
+                    std::move(residual_spec), std::move(residual_component)),
+                std::make_shared<pops::PreparedFieldBoundaryJvpComponent>(
+                    std::move(jvp_spec), std::move(jvp_component)));
+          },
+          py::arg("block"), py::arg("residual_component"), py::arg("residual_row"),
+          py::arg("jvp_component"), py::arg("jvp_row"), py::arg("parameters_json"),
+          py::arg("target_json"), py::arg("execution_context"))
       .def("_install_interface_flux_provider", &install_amr_interface_flux_provider,
            py::arg("jobs"),
            "Atomically extend the prepared multi-level shared-interface provider registry.")

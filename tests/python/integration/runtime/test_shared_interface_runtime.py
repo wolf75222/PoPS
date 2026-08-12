@@ -382,8 +382,8 @@ int apply(void* state, const PopsGhostBoundaryRequestV1* request,
     ghosts[point] = fail ? -1234.0 : 9.0;
   if (fail) {{
     *status = {{sizeof(PopsComponentStatusV1), 53,
-                POPS_COMPONENT_ABORT_RUN_V1, "injected ghost failure"}};
-    return 53;
+                POPS_COMPONENT_RETRY_STEP_V1, "injected ghost failure"}};
+    return 0;
   }}
   *status = {{sizeof(PopsComponentStatusV1), 0,
               POPS_COMPONENT_CONTINUE_V1, nullptr}};
@@ -730,8 +730,15 @@ def test_runtime_instance_executes_external_ghost_with_rollback_and_retry(tmp_pa
         np.asarray(runtime.get_state("tracer"), dtype=np.float64).copy(),
     )
 
-    with pytest.raises(RuntimeError, match="ghost|GhostBoundary|component"):
+    from pops._bootstrap import StepAttemptRejected
+
+    with pytest.raises(StepAttemptRejected) as rejected:
         pops.run(runtime, t_end=1.0e-3, max_steps=1)
+    assert rejected.value.status == "invalid_evaluation"
+    assert rejected.value.disposition == "retry"
+    assert rejected.value.reason_code == 53
+    assert rejected.value.phase == "apply_region_batch"
+    assert rejected.value.detail == "injected ghost failure"
 
     assert (float(runtime.time()), int(runtime.macro_step())) == before[:2]
     assert bytes(native.program_accepted_state()) == before[2]

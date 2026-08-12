@@ -88,6 +88,34 @@ class LoadedComponent final {
     PopsComponentDestroyFnV1 destroy_ = nullptr;
   };
 
+  /// Fully local preparation image for one fresh component state.  Construction performs every
+  /// fallible host-side lookup, validation, and string materialization.  The owning runtime can
+  /// therefore converge failures before allowing execute_prepared_state() to enter provider code,
+  /// whose prepare callback is permitted to use its supplied collective execution authority.
+  class PreparedStateRequest final {
+   public:
+    PreparedStateRequest(const PreparedStateRequest&) = delete;
+    PreparedStateRequest& operator=(const PreparedStateRequest&) = delete;
+    PreparedStateRequest(PreparedStateRequest&&) noexcept = default;
+    PreparedStateRequest& operator=(PreparedStateRequest&&) noexcept = default;
+    ~PreparedStateRequest() = default;
+
+   private:
+    friend class LoadedComponent;
+
+    PreparedStateRequest(const PopsComponentTableHeaderV1* header, PopsExecutionContextV1 execution,
+                         std::string parameters_json, std::string target_json) noexcept
+        : header_(header),
+          execution_(execution),
+          parameters_json_(std::move(parameters_json)),
+          target_json_(std::move(target_json)) {}
+
+    const PopsComponentTableHeaderV1* header_ = nullptr;
+    PopsExecutionContextV1 execution_{};
+    std::string parameters_json_;
+    std::string target_json_;
+  };
+
   LoadedComponent() = default;
   LoadedComponent(const LoadedComponent&) = delete;
   LoadedComponent& operator=(const LoadedComponent&) = delete;
@@ -252,6 +280,51 @@ class LoadedComponent final {
                                                 parameters_json.c_str(), target_json.c_str(),
                                                 execution};
     const int code = header->prepare(&request, &state, &status);
+    if (!component_status_is_well_formed(status) || code != 0 || status.code != 0 ||
+        status.action != POPS_COMPONENT_CONTINUE_V1) {
+      if (state != nullptr && header->destroy != nullptr)
+        header->destroy(state);
+      throw std::runtime_error(status.reason == nullptr ? "native component preparation failed"
+                                                        : status.reason);
+    }
+    return PreparedState(state, header->destroy);
+  }
+
+  /// Prepare the host-owned request for a fresh state without entering provider code.
+  [[nodiscard]] PreparedStateRequest prepare_state_request(PopsNativeInterfaceIdV1 id,
+                                                           std::uint32_t version,
+                                                           const PopsExecutionContextV1& execution,
+                                                           std::string parameters_json = {},
+                                                           std::string target_json = {}) const {
+    validate_execution_context(execution);
+    if (parameters_json.empty())
+      parameters_json = prepare_parameters_json_;
+    if (target_json.empty())
+      target_json = prepare_target_json_;
+    const auto& row = interface(id, version);
+    if (row.table == nullptr || row.table_size < sizeof(PopsComponentTableHeaderV1))
+      throw std::runtime_error("native component interface table is truncated");
+    const auto* header = static_cast<const PopsComponentTableHeaderV1*>(row.table);
+    if (header->struct_size < sizeof(PopsComponentTableHeaderV1) ||
+        header->struct_size > row.table_size)
+      throw std::runtime_error("native component interface table is truncated");
+    return PreparedStateRequest(header, execution, std::move(parameters_json),
+                                std::move(target_json));
+  }
+
+  /// Invoke exactly one already-authenticated provider prepare callback.  No host lookup, string
+  /// allocation, or request allocation occurs before the callback; callers must run this method
+  /// only after exact-lane convergence of prepare_state_request().
+  [[nodiscard]] PreparedState execute_prepared_state(PreparedStateRequest&& request) const {
+    const PopsComponentTableHeaderV1* const header = request.header_;
+    if (header->prepare == nullptr)
+      return {};
+    void* state = nullptr;
+    PopsComponentStatusV1 status = unwritten_component_status();
+    const PopsComponentPrepareRequestV1 abi_request{
+        sizeof(PopsComponentPrepareRequestV1), request.parameters_json_.c_str(),
+        request.target_json_.c_str(), request.execution_};
+    const int code = header->prepare(&abi_request, &state, &status);
     if (!component_status_is_well_formed(status) || code != 0 || status.code != 0 ||
         status.action != POPS_COMPONENT_CONTINUE_V1) {
       if (state != nullptr && header->destroy != nullptr)

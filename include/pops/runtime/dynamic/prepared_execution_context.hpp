@@ -52,6 +52,25 @@ class PreparedExecutionContextV1 final {
 
   [[nodiscard]] const std::string& identity() const noexcept { return execution_identity_; }
 
+  /// Exact value equality for two independently marshalled views of one RuntimeInstance
+  /// authority.  Textual identity alone is insufficient: device, stream, precision and native
+  /// communicator handles are all part of the prepared provider contract.
+  [[nodiscard]] bool equivalent_to(const PreparedExecutionContextV1& other) const noexcept {
+    return execution_identity_ == other.execution_identity_ &&
+           context_version_ == other.context_version_ && memory_space_ == other.memory_space_ &&
+           backend_identity_ == other.backend_identity_ &&
+           device_identity_ == other.device_identity_ && scalar_type_ == other.scalar_type_ &&
+           storage_precision_ == other.storage_precision_ &&
+           compute_precision_ == other.compute_precision_ &&
+           accumulation_precision_ == other.accumulation_precision_ &&
+           reduction_precision_ == other.reduction_precision_ &&
+           stream_handle_ == other.stream_handle_ && stream_identity_ == other.stream_identity_ &&
+           communicator_f_handle_ == other.communicator_f_handle_ &&
+           communicator_datatype_f_handle_ == other.communicator_datatype_f_handle_ &&
+           communicator_identity_ == other.communicator_identity_ &&
+           communicator_datatype_identity_ == other.communicator_datatype_identity_;
+  }
+
   /// Remove every communicator and datatype handle while retaining the exact device/stream.
   ///
   /// This is not a serial communicator.  It is an explicitly noncollective execution authority

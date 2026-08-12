@@ -9,6 +9,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -18,6 +19,7 @@ using pops::BoundaryTopology;
 using pops::Box;
 using pops::CompiledFieldBoundaryKernel;
 using pops::Extent;
+using pops::ExecutionLane;
 using pops::FieldBoundaryExecutionContext;
 using pops::FieldBoundaryFailure;
 using pops::Geometry;
@@ -27,6 +29,7 @@ using pops::Index;
 using pops::PhysicalBoundaryConditions;
 using pops::PhysicalBoundaryFace;
 using pops::PhysicalBoundaryKind;
+using pops::PreparedFieldBoundaryContextSet;
 using pops::PreparedVectorDistribution;
 using pops::Real;
 using pops::RealVector;
@@ -38,6 +41,14 @@ using pops::elliptic::mg::GeometricMultigridOptions;
 using pops::mesh::BoxArray;
 using pops::mesh::Distribution;
 using pops::mesh::RankSpace;
+
+template <int Dim>
+struct DynamicBoundaryContextLifetime {
+  explicit DynamicBoundaryContextLifetime(std::size_t levels) : failures(levels) {}
+
+  std::vector<Real> parameters{Real(0.25)};
+  std::vector<FieldBoundaryFailure<Dim>> failures;
+};
 
 template <int Dim, class Value>
 auto filled(Value value) {
@@ -372,14 +383,17 @@ void expect_dynamic_geometric_newton() {
                            PreparedVectorDistribution<Dim>::replicated());
   solver.install_newton(dynamic_newton_options());
   solver.install_boundary_kernel(DynamicBoundaryProbe<Dim>::kernel());
-  std::vector<Real> parameters{Real(0.25)};
-  FieldBoundaryFailure<Dim> failure;
+  auto lifetime = std::make_shared<DynamicBoundaryContextLifetime<Dim>>(1);
   FieldBoundaryExecutionContext<Dim> context;
   context.point.level = 0;
-  context.parameters = &parameters;
+  context.parameters = &lifetime->parameters;
   context.parameter_count = 1;
-  context.failure = &failure;
-  solver.set_boundary_context(context);
+  context.failure = &lifetime->failures[0];
+  auto mutable_contexts = std::make_shared<PreparedFieldBoundaryContextSet<Dim>>(lifetime, 1);
+  mutable_contexts->bind(0, context);
+  std::shared_ptr<const PreparedFieldBoundaryContextSet<Dim>> contexts =
+      std::move(mutable_contexts);
+  solver.set_boundary_contexts(std::move(contexts));
   solver.phi().set_val(Real(0));
   solver.rhs().set_val(Real(1));
 
@@ -411,15 +425,18 @@ void expect_dynamic_composite_newton() {
                             PreparedVectorDistribution<Dim>::replicated()});
   solver.install_newton(dynamic_newton_options());
   solver.install_boundary_kernel(DynamicBoundaryProbe<Dim>::kernel());
-  std::vector<Real> parameters{Real(0.25)};
-  std::array<FieldBoundaryFailure<Dim>, 2> failures{};
-  std::vector<FieldBoundaryExecutionContext<Dim>> contexts(2);
-  for (std::size_t level = 0; level < contexts.size(); ++level) {
-    contexts[level].point.level = static_cast<int>(level);
-    contexts[level].parameters = &parameters;
-    contexts[level].parameter_count = 1;
-    contexts[level].failure = &failures[level];
+  auto lifetime = std::make_shared<DynamicBoundaryContextLifetime<Dim>>(2);
+  auto mutable_contexts = std::make_shared<PreparedFieldBoundaryContextSet<Dim>>(lifetime, 2);
+  for (std::size_t level = 0; level < mutable_contexts->size(); ++level) {
+    FieldBoundaryExecutionContext<Dim> context;
+    context.point.level = static_cast<int>(level);
+    context.parameters = &lifetime->parameters;
+    context.parameter_count = 1;
+    context.failure = &lifetime->failures[level];
+    mutable_contexts->bind(level, context);
   }
+  std::shared_ptr<const PreparedFieldBoundaryContextSet<Dim>> contexts =
+      std::move(mutable_contexts);
   solver.set_boundary_contexts(std::move(contexts));
   for (int level = 0; level < 2; ++level) {
     solver.phi_level(level).set_val(Real(0));

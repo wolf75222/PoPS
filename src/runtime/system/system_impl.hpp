@@ -80,6 +80,7 @@ struct System<Dim>::Impl {
     std::string identity;
     std::function<void()> install;
     std::shared_ptr<void> lifetime;
+    NativePackageKind kind = NativePackageKind::generic;
   };
   std::vector<PendingNativePackage> pending_native_packages_;
   std::vector<PendingNativePackage> installed_native_packages_;
@@ -145,6 +146,8 @@ struct System<Dim>::Impl {
     std::optional<CompiledFieldBoundaryKernel<Dim>> boundary_kernel;
     std::optional<FieldLogicalTimePoint> boundary_point;
     std::optional<FieldNewtonOptions> newton;
+    std::shared_ptr<void> boundary_context_storage;
+    std::shared_ptr<PreparedFieldBoundaryContextSet<Dim>> boundary_contexts;
   };
 
   struct ConfiguredFieldSolverProvider {
@@ -176,12 +179,24 @@ struct System<Dim>::Impl {
   /// registry before seal.  Block installers can otherwise mutate every structural registry, so a
   /// partial install must never leak into a retry on any MPI rank.
   struct NativePackageFinalizeSnapshot {
+    struct BoundaryHookImage {
+      std::shared_ptr<typename block_store_type::BoundaryFluxTransform> flux_target;
+      typename block_store_type::BoundaryFluxTransform flux;
+      std::shared_ptr<typename block_store_type::PreparedPointBoundaryResidual> residual_target;
+      typename block_store_type::PreparedPointBoundaryResidual residual;
+      std::shared_ptr<typename block_store_type::PreparedPointJvp> jvp_target;
+      typename block_store_type::PreparedPointJvp jvp;
+      std::shared_ptr<typename block_store_type::ExternalGhostBoundary> ghost_target;
+      typename block_store_type::ExternalGhostBoundary ghost;
+    };
+
     auxiliary_registry_type auxiliary_registry;
     std::optional<runtime::system::AuxiliaryStorageGroups<Dim>> provider_carrier;
     std::map<std::string, std::vector<double>> staged_auxiliary_inputs;
     std::vector<std::string> dirty_auxiliary_providers;
     bool auxiliary_registry_consensus_verified = false;
     block_store_type blocks;
+    std::vector<BoundaryHookImage> boundary_hooks;
     boundary_registry_type boundary_registry;
     runtime::system::SystemCouplingRegistry<Dim> coupling;
     runtime::program::ProgramRuntimeState<Dim> program;
@@ -201,8 +216,6 @@ struct System<Dim>::Impl {
     bool field_plan_consensus_verified = false;
     std::string default_nullspace_provider_identity;
     PreparedProviderOptions default_nullspace_options;
-    std::optional<typename exact_field_type::AcceptedState> default_field_state;
-    std::map<std::string, typename exact_field_type::AcceptedState> named_field_states;
 
     explicit NativePackageFinalizeSnapshot(const Impl& owner)
         : auxiliary_registry(owner.auxiliary_registry_),
@@ -234,18 +247,45 @@ struct System<Dim>::Impl {
           !owner.active_field_stale_auxiliary_providers_.empty())
         throw std::logic_error(
             "System native package finalization cannot snapshot an active field candidate");
-      if (owner.default_field_)
-        default_field_state = owner.default_field_->accepted_state();
+      // Prepared solve-context owners contain mutable invocation pointers into the live block and
+      // field images. They are session cache, not rollback authority; never retain them in the
+      // immutable pre-finalization journal.
+      for (auto& [slot, plan] : field_plans) {
+        (void)slot;
+        plan.boundary_contexts.reset();
+        plan.boundary_context_storage.reset();
+      }
+      boundary_hooks.reserve(owner.blocks_.blocks.size());
+      for (const auto& block : owner.blocks_.blocks) {
+        BoundaryHookImage image;
+        image.flux_target = block.external_boundary_flux;
+        if (image.flux_target)
+          image.flux = *image.flux_target;
+        image.residual_target = block.external_field_boundary_residual;
+        if (image.residual_target)
+          image.residual = *image.residual_target;
+        image.jvp_target = block.external_field_boundary_jvp;
+        if (image.jvp_target)
+          image.jvp = *image.jvp_target;
+        image.ghost_target = block.external_ghost_boundary;
+        if (image.ghost_target)
+          image.ghost = *image.ghost_target;
+        boundary_hooks.push_back(std::move(image));
+      }
       for (const auto& [slot, field] : owner.named_fields_) {
+        (void)slot;
         if (!field)
           throw std::logic_error("System native package finalization found a null named field");
-        named_field_states.emplace(slot, field->accepted_state());
       }
     }
 
-    void restore(Impl& owner) const {
-      owner.auxiliary_registry_ = auxiliary_registry;
-      owner.provider_carrier_ = provider_carrier;
+    /// Publish the preallocated rollback image by swaps only.  This path runs after a collective
+    /// installer failure, when allocating while packages still hold DSO lifetimes would permit a
+    /// rank-asymmetric rollback escape.
+    void restore_noexcept(Impl& owner) noexcept {
+      using std::swap;
+      swap(owner.auxiliary_registry_, auxiliary_registry);
+      swap(owner.provider_carrier_, provider_carrier);
       // The carrier/registry image above can have a different allocation or resolved component
       // contract after a failed finalizer.  A prepared transport is therefore never rollback
       // state: rebuild it from the restored authoritative carrier on the next refresh.
@@ -253,40 +293,69 @@ struct System<Dim>::Impl {
       owner.active_field_provider_candidate_.reset();
       owner.active_field_auxiliary_publication_.reset();
       owner.active_field_stale_auxiliary_providers_.clear();
-      owner.staged_auxiliary_inputs_ = staged_auxiliary_inputs;
-      owner.dirty_auxiliary_providers_ = dirty_auxiliary_providers;
-      owner.auxiliary_registry_consensus_verified_ = auxiliary_registry_consensus_verified;
-      owner.blocks_ = blocks;
-      owner.boundary_registry_ = boundary_registry;
-      owner.coupling_ = coupling;
-      owner.program_ = program;
-      owner.embedded_boundary_ = embedded_boundary;
-      owner.embedded_boundary_opcodes_ = embedded_boundary_opcodes;
-      owner.embedded_boundary_literals_ = embedded_boundary_literals;
-      owner.embedded_boundary_thresholds_ = embedded_boundary_thresholds;
-      owner.embedded_boundary_generation_ = embedded_boundary_generation;
-      owner.default_field_ = default_field;
-      owner.named_fields_ = named_fields;
-      owner.active_field_ = active_field;
-      owner.field_plans_ = field_plans;
-      owner.configured_field_solver_providers_ = configured_field_solver_providers;
-      owner.component_field_solver_providers_ = component_field_solver_providers;
-      owner.field_nullspace_providers_ = field_nullspace_providers;
-      owner.field_plan_consensus_verified_ = field_plan_consensus_verified;
-      owner.default_nullspace_provider_identity_ = default_nullspace_provider_identity;
-      owner.default_nullspace_options_ = default_nullspace_options;
-      if (default_field_state.has_value() != static_cast<bool>(owner.default_field_))
-        throw std::logic_error("System native package rollback changed default field ownership");
-      if (default_field_state)
-        owner.default_field_->restore_accepted_state(*default_field_state);
-      for (const auto& [slot, state] : named_field_states) {
-        const auto field = owner.named_fields_.find(slot);
-        if (field == owner.named_fields_.end() || !field->second)
-          throw std::logic_error("System native package rollback lost a pre-existing named field");
-        field->second->restore_accepted_state(state);
+      swap(owner.staged_auxiliary_inputs_, staged_auxiliary_inputs);
+      swap(owner.dirty_auxiliary_providers_, dirty_auxiliary_providers);
+      swap(owner.auxiliary_registry_consensus_verified_, auxiliary_registry_consensus_verified);
+      // BoundaryFlux and FieldBoundary deliberately use shared generated hot-call slots so packages
+      // installed after block materialization can extend their chains without installation-order
+      // coupling. Restore those slots with noexcept swaps before copying the block-store image. Thus
+      // even a later rollback allocation failure cannot leave failed package code reachable through
+      // a pre-existing generated block.
+      for (std::size_t index = 0; index < boundary_hooks.size(); ++index) {
+        BoundaryHookImage& image = boundary_hooks[index];
+        if (image.flux_target)
+          image.flux_target->swap(image.flux);
+        if (image.residual_target)
+          image.residual_target->swap(image.residual);
+        if (image.jvp_target)
+          image.jvp_target->swap(image.jvp);
+        if (image.ghost_target)
+          image.ghost_target->swap(image.ghost);
       }
+      swap(owner.blocks_, blocks);
+      swap(owner.boundary_registry_, boundary_registry);
+      swap(owner.coupling_, coupling);
+      swap(owner.program_, program);
+      swap(owner.embedded_boundary_, embedded_boundary);
+      swap(owner.embedded_boundary_opcodes_, embedded_boundary_opcodes);
+      swap(owner.embedded_boundary_literals_, embedded_boundary_literals);
+      swap(owner.embedded_boundary_thresholds_, embedded_boundary_thresholds);
+      swap(owner.embedded_boundary_generation_, embedded_boundary_generation);
+      swap(owner.default_field_, default_field);
+      swap(owner.named_fields_, named_fields);
+      swap(owner.active_field_, active_field);
+      swap(owner.field_plans_, field_plans);
+      swap(owner.configured_field_solver_providers_, configured_field_solver_providers);
+      swap(owner.component_field_solver_providers_, component_field_solver_providers);
+      swap(owner.field_nullspace_providers_, field_nullspace_providers);
+      swap(owner.field_plan_consensus_verified_, field_plan_consensus_verified);
+      swap(owner.default_nullspace_provider_identity_, default_nullspace_provider_identity);
+      swap(owner.default_nullspace_options_, default_nullspace_options);
+      // Native package installers are assembly-only graph constructors. They cannot enter a
+      // field publication transaction, and the restored shared owners therefore preserve the
+      // accepted field images without a post-consensus MultiFab assignment. Mutating an accepted
+      // field during package installation is outside that installer contract and must fail before
+      // finalization reaches this rollback path.
     }
   };
+
+  void reserve_native_package_publication(std::size_t count) {
+    if (count > installed_native_packages_.max_size() - installed_native_packages_.size())
+      throw std::length_error("System native package publication exceeds vector capacity");
+    installed_native_packages_.reserve(installed_native_packages_.size() + count);
+  }
+
+  /// The corresponding reserve is collectively completed before live installers run.  Moving a
+  /// PendingNativePackage is non-allocating, so publication cannot strand a DSO lifetime after a
+  /// successful installation phase.
+  void publish_reserved_native_packages_noexcept(
+      std::vector<PendingNativePackage>& packages) noexcept {
+    if (packages.size() > installed_native_packages_.capacity() - installed_native_packages_.size())
+      std::terminate();
+    for (auto& package : packages)
+      installed_native_packages_.push_back(std::move(package));
+    packages.clear();
+  }
 
   static std::string exact_field_plan_contract(const FieldPlan& plan) {
     ExactContractBuilder contract;

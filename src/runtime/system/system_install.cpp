@@ -5,9 +5,12 @@
 
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/coupling/source/coupled_source_program.hpp>
+#include <pops/mesh/boundary/fill_boundary.hpp>
+#include <pops/mesh/execution/for_each.hpp>
 #include <pops/runtime/builders/compiled/native_loader.hpp>
 #include <pops/runtime/named_field_output.hpp>
 #include <pops/runtime/program/external_riemann_brick.hpp>
+#include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -16,6 +19,7 @@
 #include <exception>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <stdexcept>
@@ -26,6 +30,18 @@
 
 namespace pops {
 namespace {
+
+std::string prepared_system_boundary_package_identity(std::string_view operation,
+                                                      std::string_view block,
+                                                      const PreparedBoundaryComponentSpec& spec) {
+  ExactContractBuilder contract;
+  contract.text("pops.system.prepared-boundary-component")
+      .scalar(std::uint32_t{1})
+      .text(operation)
+      .text(block);
+  append_prepared_boundary_component_contract(contract, spec);
+  return std::move(contract).release();
+}
 
 template <int Dim>
 std::size_t checked_cells(const Box<Dim>& box, const char* operation) {
@@ -102,6 +118,18 @@ EllipticBuildRequest<Dim> fft_build_request(const Geometry<Dim>& geometry,
 /// Copy only valid cells. Ghost values are owned by prepared communication/boundary producers and
 /// must be regenerated after storage width changes.
 template <int Dim>
+struct CopyValidComponentsKernel {
+  FieldView<const Real, Dim> source{};
+  FieldView<Real, Dim> destination{};
+  int components = 0;
+
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    for (int component = 0; component < components; ++component)
+      destination(index, component) = source(index, component);
+  }
+};
+
+template <int Dim>
 void copy_valid_components(const MultiFab<Dim>& source, MultiFab<Dim>& destination, int components,
                            const char* operation) {
   if (source.layout() != destination.layout() ||
@@ -114,30 +142,72 @@ void copy_valid_components(const MultiFab<Dim>& source, MultiFab<Dim>& destinati
                                 ": fields do not share one exact ranked layout");
 
   for (std::size_t local = 0; local < source.local_size(); ++local) {
-    const Fab<Dim>& source_fab = source.fab(local);
+    const std::size_t global = destination.global_index(local);
+    if (!source.contains_local(global))
+      throw std::invalid_argument(std::string(operation) + ": source lacks destination patch");
+    const Fab<Dim>& source_fab = source.fab(source.local_index_of(global));
     Fab<Dim>& destination_fab = destination.fab(local);
     if (source_fab.box() != destination_fab.box())
       throw std::invalid_argument(std::string(operation) + ": local valid boxes differ");
-    auto source_host = source_fab.create_host_mirror();
-    auto destination_host = destination_fab.create_host_mirror();
-    source_fab.copy_to_host(source_host);
-    destination_fab.copy_to_host(destination_host);
     const Box<Dim>& valid = source_fab.box();
-    const Box<Dim>& source_storage = source_fab.grown_box();
-    const Box<Dim>& destination_storage = destination_fab.grown_box();
-    const std::size_t source_stride = checked_cells(source_storage, operation);
-    const std::size_t destination_stride = checked_cells(destination_storage, operation);
-    const std::size_t cells = checked_cells(valid, operation);
-    for (int component = 0; component < components; ++component)
-      for (std::size_t linear = 0; linear < cells; ++linear) {
-        const Index<Dim> index = unflatten(valid, linear);
-        destination_host(static_cast<std::size_t>(component) * destination_stride +
-                         storage_offset(index, destination_storage)) =
-            source_host(static_cast<std::size_t>(component) * source_stride +
-                        storage_offset(index, source_storage));
-      }
-    destination_fab.copy_from_host(destination_host);
+    for_each_cell(valid, CopyValidComponentsKernel<Dim>{source_fab.view(), destination_fab.view(),
+                                                        components});
   }
+  Kokkos::fence();
+}
+
+enum class ExternalBoundaryDependencyOperation { ghost_region, flux_transform, field_closure };
+
+template <int Dim>
+HaloScheduleBudget external_boundary_halo_budget(const MultiFab<Dim>& field, const Box<Dim>& domain,
+                                                 const BoundaryTopology<Dim>& topology) {
+  const std::size_t patches = field.layout().size();
+  if (patches != 0 && patches > std::numeric_limits<std::size_t>::max() / patches)
+    throw std::overflow_error("prepared boundary halo patch budget overflows size_t");
+  const std::size_t pairs = patches * patches;
+  std::size_t images = 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    std::size_t axis_images = 1;
+    if (topology.is_periodic(Face<Dim>{axis, BoundarySide::lower}) && field.ghosts()[axis] > 0) {
+      const std::int64_t extent = domain.length(axis);
+      if (extent <= 0)
+        throw std::invalid_argument("prepared boundary halo periodic domain is empty");
+      const std::int64_t wraps = 1 + (field.ghosts()[axis] - 1) / extent;
+      if (wraps < 0 ||
+          static_cast<std::uint64_t>(wraps) > (std::numeric_limits<std::size_t>::max() - 1u) / 2u)
+        throw std::overflow_error("prepared boundary halo periodic-image budget overflows size_t");
+      axis_images += 2u * static_cast<std::size_t>(wraps);
+    }
+    if (axis_images != 0 && images > std::numeric_limits<std::size_t>::max() / axis_images)
+      throw std::overflow_error("prepared boundary halo image budget overflows size_t");
+    images *= axis_images;
+  }
+  if (images != 0 && pairs > std::numeric_limits<std::size_t>::max() / images)
+    throw std::overflow_error("prepared boundary halo work budget overflows size_t");
+  const std::size_t work = pairs * images;
+  if (work > std::numeric_limits<std::size_t>::max() / static_cast<std::size_t>(2 * Dim))
+    throw std::overflow_error("prepared boundary halo job budget overflows size_t");
+  const std::size_t jobs = work * static_cast<std::size_t>(2 * Dim);
+  const std::int64_t signed_cells = domain.numPts();
+  if (signed_cells <= 0 || field.ncomp() < 1)
+    throw std::invalid_argument("prepared boundary halo field contract is empty");
+  const std::size_t cells = static_cast<std::size_t>(signed_cells);
+  if (jobs != 0 && cells > std::numeric_limits<std::size_t>::max() / jobs)
+    throw std::overflow_error("prepared boundary halo element budget overflows size_t");
+  const std::size_t cells_per_job = jobs * cells;
+  if (static_cast<std::size_t>(field.ncomp()) > 0 &&
+      cells_per_job >
+          std::numeric_limits<std::size_t>::max() / static_cast<std::size_t>(field.ncomp()))
+    throw std::overflow_error("prepared boundary halo component budget overflows size_t");
+  const std::size_t elements = cells_per_job * static_cast<std::size_t>(field.ncomp());
+  return {mesh::BoxArrayValidationBudget{patches, pairs},
+          work,
+          jobs,
+          images,
+          patches * 2,
+          elements,
+          elements,
+          elements};
 }
 
 void validate_variable_set(const VariableSet& variables, VariableKind expected, int ncomp,
@@ -154,6 +224,370 @@ void validate_variable_set(const VariableSet& variables, VariableKind expected, 
     if (name.empty() || !names.insert(name).second)
       throw std::invalid_argument(std::string("prepared System block ") + label +
                                   " variable names must be unique and non-empty");
+}
+
+template <int Dim>
+struct ExternalBoundaryDependencyStorage {
+  struct GhostTransport {
+    HaloSchedule<Dim> schedule;
+    std::optional<ExecutionLane::ImmutableBorrow> lane_borrow;
+    std::optional<HaloExchange<Dim>> exchange;
+    std::shared_ptr<const PreparedHyperbolicBoundary<Dim>> physical_boundary;
+
+    GhostTransport(const MultiFab<Dim>& image, const Geometry<Dim>& geometry,
+                   const BoundaryTopology<Dim>& topology,
+                   std::shared_ptr<const PreparedHyperbolicBoundary<Dim>> physical)
+        : schedule(prepare_halo_schedule(
+              image, geometry.domain(), topology, HaloLayoutCoverage::full_domain,
+              external_boundary_halo_budget(image, geometry.domain(), topology))),
+          physical_boundary(std::move(physical)) {}
+
+    void prepare_collectively(const ExecutionLane& lane) {
+      runtime::program::collective_boundary_provider_phase(
+          lane, "prepared System boundary halo preflight failed collectively", [&] {
+            if (exchange || lane_borrow)
+              throw std::logic_error("prepared System boundary halo transport was prepared twice");
+          });
+      const bool distributed = all_reduce_max(schedule.has_remote_jobs() ? 1L : 0L, lane) != 0;
+      if (distributed) {
+        HaloExchangeContext context{};
+        context.context_generation = 1;
+        context.schedule_generation = 1;
+        // Storage is embedded in the local candidate so every rank reaches HaloExchange's
+        // collective constructor before any wrapper allocation can fail.
+        exchange.emplace(schedule, lane, context);
+      } else {
+        runtime::program::collective_boundary_provider_phase(
+            lane, "prepared System local halo lane borrow failed collectively",
+            [&] { lane_borrow.emplace(lane.borrow_immutably()); });
+      }
+    }
+
+    void materialize(MultiFab<Dim>& image, const ExecutionLane& lane) {
+      if (exchange)
+        fill_boundary(image, *exchange, lane);
+      else
+        fill_boundary(image, schedule);
+      if (physical_boundary)
+        physical_boundary->fill_physical(image, schedule.domain());
+    }
+  };
+
+  struct DetachedDependency {
+    const MultiFab<Dim>* source = nullptr;
+    std::shared_ptr<runtime::system::ExactNamedField<Dim>> field_owner;
+    MultiFab<Dim> image;
+    std::shared_ptr<GhostTransport> ghost_transport;
+    typename SystemBlockClosures<Dim>::PreparedPointStateTransport source_prepare;
+    std::shared_ptr<runtime::program::PreparedScalarBoundarySession<Dim>> source_transport;
+    bool preserve_full_storage = false;
+  };
+
+  std::vector<const MultiFab<Dim>*> states;
+  std::vector<FieldDistribution> state_distributions;
+  std::vector<std::string> state_identities;
+  std::vector<const MultiFab<Dim>*> fields;
+  std::vector<FieldDistribution> field_distributions;
+  std::vector<std::string> field_identities;
+  std::vector<DetachedDependency> detached;
+
+  void prepare_collectively(const Geometry<Dim>& geometry, const BoundaryTopology<Dim>& topology,
+                            const ExecutionLane& lane) {
+    for (auto& dependency : detached) {
+      if (!dependency.ghost_transport)
+        continue;
+      dependency.ghost_transport->prepare_collectively(lane);
+      if (dependency.source_prepare)
+        dependency.source_transport =
+            runtime::program::PreparedScalarBoundarySession<Dim>::prepare_block(
+                geometry, topology, dependency.image, lane, 1);
+    }
+  }
+
+  void refresh(const runtime::multiblock::BoundaryEvaluationPoint& point,
+               const ExecutionLane& lane) {
+    const auto source_for = [](DetachedDependency& dependency) -> const MultiFab<Dim>* {
+      return dependency.field_owner ? &dependency.field_owner->dependency_potential()
+                                    : dependency.source;
+    };
+    std::exception_ptr preflight_error;
+    try {
+      for (auto& dependency : detached) {
+        const MultiFab<Dim>* source = source_for(dependency);
+        if (dependency.source_prepare &&
+            (!dependency.source_transport || !dependency.ghost_transport ||
+             !dependency.ghost_transport->physical_boundary))
+          throw std::logic_error("prepared System ghost dependency lost its source transport");
+        if (source == nullptr || source->layout() != dependency.image.layout() ||
+            source->distribution() != dependency.image.distribution() ||
+            source->local_rank() != dependency.image.local_rank() ||
+            source->ncomp() != dependency.image.ncomp() ||
+            source->ghosts() != dependency.image.ghosts() ||
+            source->local_size() != dependency.image.local_size())
+          throw std::logic_error("prepared System boundary dependency source is absent");
+        for (std::size_t local = 0; local < dependency.image.local_size(); ++local) {
+          const std::size_t global = dependency.image.global_index(local);
+          if (!source->contains_local(global) ||
+              source->fab(source->local_index_of(global)).box() !=
+                  dependency.image.fab(local).box() ||
+              source->fab(source->local_index_of(global)).grown_box() !=
+                  dependency.image.fab(local).grown_box())
+            throw std::logic_error("prepared System boundary dependency patch route changed");
+        }
+      }
+    } catch (...) {
+      preflight_error = std::current_exception();
+    }
+    if (all_reduce_max(preflight_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && preflight_error)
+        std::rethrow_exception(preflight_error);
+      throw std::runtime_error("prepared System boundary dependency preflight failed collectively");
+    }
+    std::exception_ptr copy_error;
+    try {
+      for (auto& dependency : detached) {
+        const MultiFab<Dim>* source = source_for(dependency);
+        if (dependency.preserve_full_storage) {
+          for (std::size_t local = 0; local < dependency.image.local_size(); ++local) {
+            const std::size_t global = dependency.image.global_index(local);
+            Kokkos::deep_copy(dependency.image.fab(local).storage(),
+                              source->fab(source->local_index_of(global)).storage());
+          }
+        } else {
+          dependency.image.set_val(Real(0));
+          copy_valid_components(*source, dependency.image, dependency.image.ncomp(),
+                                "prepared System boundary dependency refresh");
+        }
+      }
+      Kokkos::fence();
+    } catch (...) {
+      copy_error = std::current_exception();
+    }
+    if (all_reduce_max(copy_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && copy_error)
+        std::rethrow_exception(copy_error);
+      throw std::runtime_error("prepared System boundary dependency copy failed collectively");
+    }
+    for (auto& dependency : detached)
+      runtime::program::collective_boundary_provider_phase(
+          lane, "prepared System boundary dependency transport failed collectively", [&] {
+            if (dependency.source_prepare) {
+              // The source generated closure performs same-level transport, model-qualified
+              // physical fill, and the source's generic external hook on this detached image.
+              dependency.source_prepare(point, dependency.image,
+                                        *dependency.ghost_transport->physical_boundary, lane,
+                                        *dependency.source_transport);
+            } else if (dependency.ghost_transport) {
+              dependency.ghost_transport->materialize(dependency.image, lane);
+            }
+          });
+  }
+
+  FieldBoundaryExecutionContext<Dim> view(
+      const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    FieldBoundaryExecutionContext<Dim> context;
+    context.point.time = static_cast<Real>(point.physical_time);
+    context.point.dt = static_cast<Real>(point.dt);
+    context.point.stage_slot = point.stage;
+    context.point.level = point.level;
+    context.point.step = point.tick;
+    context.point.substep = point.substep;
+    context.point.stage_fraction_numerator = point.stage_fraction.numerator;
+    context.point.stage_fraction_denominator = point.stage_fraction.denominator;
+    context.states = states.empty() ? nullptr : states.data();
+    context.state_distributions =
+        state_distributions.empty() ? nullptr : state_distributions.data();
+    context.state_identities = state_identities.empty() ? nullptr : state_identities.data();
+    context.state_count = static_cast<int>(states.size());
+    context.fields = fields.empty() ? nullptr : fields.data();
+    context.field_distributions =
+        field_distributions.empty() ? nullptr : field_distributions.data();
+    context.field_identities = field_identities.empty() ? nullptr : field_identities.data();
+    context.field_count = static_cast<int>(fields.size());
+    context.clock_identity = &point.clock;
+    return context;
+  }
+};
+
+template <int Dim, class Implementation>
+ExternalBoundaryDependencyStorage<Dim> prepare_external_boundary_dependencies(
+    Implementation& implementation, const PreparedBoundaryComponentSpec& spec,
+    const MultiFab<Dim>& owning, const ExecutionLane& lane,
+    ExternalBoundaryDependencyOperation operation) {
+  ExternalBoundaryDependencyStorage<Dim> storage;
+  storage.detached.reserve(spec.states.size() + spec.fields.size());
+  auto authenticate = [&](const MultiFab<Dim>& dependency, std::string_view identity) {
+    if (dependency.layout() != owning.layout() || dependency.local_rank() != owning.local_rank() ||
+        dependency.rank_space() != owning.rank_space() ||
+        lane.size() != static_cast<int>(dependency.rank_space().size()) ||
+        lane.rank() !=
+            static_cast<int>(dependency.rank_space().linear_rank(dependency.local_rank())))
+      throw std::invalid_argument("prepared boundary dependency " + std::string(identity) +
+                                  " differs from its exact block layout/lane");
+    for (std::size_t local = 0; local < owning.local_size(); ++local) {
+      const std::size_t global = owning.global_index(local);
+      Box<Dim> required = owning.fab(local).box();
+      if (operation == ExternalBoundaryDependencyOperation::ghost_region)
+        for (std::size_t ordinal = 0; ordinal < spec.region.axes.size(); ++ordinal) {
+          const int axis = spec.region.axes[ordinal];
+          if (spec.region.sides[ordinal] < 0)
+            required.lo[axis] -= owning.ghosts()[axis];
+          else
+            required.hi[axis] += owning.ghosts()[axis];
+        }
+      if (!dependency.contains_local(global) ||
+          !dependency.fab(dependency.local_index_of(global)).grown_box().contains(required))
+        throw std::invalid_argument("prepared boundary dependency " + std::string(identity) +
+                                    " lacks exact patch colocation/halo");
+    }
+  };
+  const BoundaryTopology<Dim> topology =
+      BoundaryTopology<Dim>::axis_periodic(implementation.periodicity);
+  const bool needs_physical =
+      operation == ExternalBoundaryDependencyOperation::ghost_region &&
+      std::any_of(spec.region.axes.begin(), spec.region.axes.end(), [&](int axis) {
+        return !topology.is_periodic(Face<Dim>{axis, BoundarySide::lower});
+      });
+  auto make_image =
+      [&](const MultiFab<Dim>& dependency,
+          std::shared_ptr<const PreparedHyperbolicBoundary<Dim>> physical,
+          typename SystemBlockClosures<Dim>::PreparedPointStateTransport source_prepare,
+          bool preserve_full_storage = false) {
+        typename ExternalBoundaryDependencyStorage<Dim>::DetachedDependency detached{
+            nullptr,
+            {},
+            MultiFab<Dim>(dependency.layout(), dependency.distribution(), dependency.local_rank(),
+                          dependency.ncomp(), dependency.ghosts()),
+            {},
+            {},
+            {},
+            preserve_full_storage};
+        if (operation == ExternalBoundaryDependencyOperation::ghost_region) {
+          if (needs_physical && !physical && !source_prepare && !preserve_full_storage)
+            throw std::runtime_error(
+                "prepared System cross-route GhostBoundary lacks sealed source physical authority");
+          if (physical && !source_prepare)
+            for (int axis = 0; axis < Dim; ++axis)
+              for (int side : {-1, 1}) {
+                const HyperbolicBoundaryLaw law = physical->face(axis, side).law;
+                if (law == HyperbolicBoundaryLaw::External ||
+                    law == HyperbolicBoundaryLaw::CharacteristicNoInflow ||
+                    physical->has_analytic_state())
+                  throw std::runtime_error(
+                      "prepared System cross-route GhostBoundary requires a source model transport "
+                      "hook for external, characteristic, or analytic physical faces");
+              }
+          detached.ghost_transport =
+              std::make_shared<typename ExternalBoundaryDependencyStorage<Dim>::GhostTransport>(
+                  detached.image, implementation.geom, topology, std::move(physical));
+          if (source_prepare)
+            detached.source_prepare = std::move(source_prepare);
+        }
+        return detached;
+      };
+  storage.states.reserve(spec.states.size());
+  storage.state_distributions.reserve(spec.states.size());
+  storage.state_identities.reserve(spec.states.size());
+  for (const std::string& identity : spec.states) {
+    const MultiFab<Dim>* dependency = nullptr;
+    std::shared_ptr<const PreparedHyperbolicBoundary<Dim>> physical;
+    typename SystemBlockClosures<Dim>::PreparedPointStateTransport source_prepare;
+    if (identity == spec.state_identity)
+      dependency = &owning;
+    else
+      for (const auto& block : implementation.blocks_.blocks)
+        if (block.state_identity == identity) {
+          dependency = &block.U;
+          physical = block.boundary;
+          source_prepare = block.prepare_generated_state_with_transport_prepared;
+          break;
+        }
+    if (dependency == nullptr)
+      throw std::runtime_error("prepared boundary state dependency has no sealed block route");
+    if (!physical)
+      source_prepare = {};
+    authenticate(*dependency, identity);
+    if (identity == spec.state_identity)
+      storage.states.push_back(nullptr);
+    else {
+      storage.detached.push_back(
+          make_image(*dependency, std::move(physical), std::move(source_prepare)));
+      storage.detached.back().source = dependency;
+      storage.states.push_back(&storage.detached.back().image);
+    }
+    storage.state_distributions.push_back(dependency->distribution().replicated()
+                                              ? FieldDistribution::Replicated
+                                              : FieldDistribution::Distributed);
+    storage.state_identities.push_back(identity);
+  }
+  storage.fields.reserve(spec.fields.size());
+  storage.field_distributions.reserve(spec.fields.size());
+  storage.field_identities.reserve(spec.fields.size());
+  for (const std::string& identity : spec.fields) {
+    const std::string& slot = implementation.boundary_registry_.field_storage_route(identity);
+    const auto found = implementation.named_fields_.find(slot);
+    if (found == implementation.named_fields_.end() || !found->second)
+      throw std::runtime_error("prepared boundary field dependency is not materialized");
+    const MultiFab<Dim>& dependency = found->second->accepted_potential();
+    authenticate(dependency, identity);
+    storage.detached.push_back(make_image(
+        dependency, {}, {}, operation == ExternalBoundaryDependencyOperation::ghost_region));
+    storage.detached.back().field_owner = found->second;
+    storage.fields.push_back(&storage.detached.back().image);
+    storage.field_distributions.push_back(dependency.distribution().replicated()
+                                              ? FieldDistribution::Replicated
+                                              : FieldDistribution::Distributed);
+    storage.field_identities.push_back(identity);
+  }
+  return storage;
+}
+
+template <int Dim, class Component>
+struct PreparedSystemBoundaryComponentCandidate {
+  using local_session_type = typename Component::template LocalSessionCandidate<Dim>;
+  using session_holder_type = std::optional<typename Component::Session>;
+
+  std::shared_ptr<ExternalBoundaryDependencyStorage<Dim>> dependencies;
+  std::optional<local_session_type> local_session;
+  /// The shared control block and Session storage are allocated in the local prepass.  Provider
+  /// callbacks only emplace into this stable holder, so a rank cannot lose a post-callback
+  /// allocation race before the exact-lane result is converged.
+  std::shared_ptr<session_holder_type> session;
+};
+
+/// Prepare one external boundary provider in three non-mixing phases: purely local dependency and
+/// scratch allocation, dependency transport collective construction, then the component-owned
+/// prepare callback.  Every phase converges before the canonical package installer may advance.
+template <int Dim, class Implementation, class Component>
+PreparedSystemBoundaryComponentCandidate<Dim, Component>
+prepare_system_boundary_component_candidate(Implementation& implementation,
+                                            const std::shared_ptr<Component>& component,
+                                            const MultiFab<Dim>& owning,
+                                            const Geometry<Dim>& geometry,
+                                            const BoundaryTopology<Dim>& topology,
+                                            const ExecutionLane& lane,
+                                            ExternalBoundaryDependencyOperation operation) {
+  PreparedSystemBoundaryComponentCandidate<Dim, Component> candidate;
+  runtime::program::collective_boundary_provider_phase(
+      lane, "prepared System boundary local candidate preparation failed collectively", [&] {
+        candidate.dependencies = std::make_shared<ExternalBoundaryDependencyStorage<Dim>>(
+            prepare_external_boundary_dependencies<Dim>(implementation, component->spec(), owning,
+                                                        lane, operation));
+        candidate.local_session.emplace(component->template make_local_session_candidate<Dim>(
+            lane, owning, geometry, candidate.dependencies->view({})));
+        candidate.session = std::make_shared<typename PreparedSystemBoundaryComponentCandidate<
+            Dim, Component>::session_holder_type>();
+      });
+  candidate.dependencies->prepare_collectively(geometry, topology, lane);
+  runtime::program::collective_boundary_provider_phase(
+      lane, "prepared System boundary provider preparation failed collectively", [&] {
+        if (!candidate.session || candidate.session->has_value() || !candidate.local_session)
+          throw std::logic_error("prepared System boundary session holder is invalid");
+        candidate.session->emplace(
+            component->template finish_session<Dim>(std::move(*candidate.local_session)));
+        candidate.local_session.reset();
+      });
+  return candidate;
 }
 
 template <int Dim>
@@ -181,8 +615,10 @@ void validate_prepared_block(const PreparedSystemBlock<Dim>& block) {
       !closures.rhs_flux_only_core_at_point || !closures.rhs_core_at_point_prepared ||
       !closures.rhs_flux_only_core_at_point_prepared ||
       !closures.prepare_generated_state_at_point ||
-      !closures.prepare_generated_state_at_point_prepared || !block.maximum_speed ||
-      !block.poisson_rhs || !block.primitive_to_conservative || !block.conservative_to_primitive ||
+      !closures.prepare_generated_state_at_point_prepared ||
+      !closures.prepare_generated_state_with_transport_prepared ||
+      !closures.external_ghost_boundary || !block.maximum_speed || !block.poisson_rhs ||
+      !block.primitive_to_conservative || !block.conservative_to_primitive ||
       !block.batch_conservative_to_primitive)
     throw std::invalid_argument(
         "prepared System block does not implement the complete exact-ranked execution contract");
@@ -219,14 +655,27 @@ void System<Dim>::install_field_storage_route(const std::string& field_identity,
 
 template <int Dim>
 void System<Dim>::install_prepared_boundary_execution_lane(std::shared_ptr<ExecutionLane> lane) {
-  require_assembling(p_->lifecycle_, "install_prepared_boundary_execution_lane");
-  if (!lane || lane->identity().empty() ||
-      lane->size() != static_cast<int>(p_->dm.rank_space().size()) ||
-      lane->rank() != static_cast<int>(p_->dm.rank_space().linear_rank(p_->local_rank)))
-    throw std::invalid_argument(
-        "prepared System boundary lane differs from its exact runtime rank space");
-  if (prepared_boundary_execution_lane_)
-    throw std::logic_error("prepared System boundary lane is already installed");
+  if (!lane)
+    throw std::invalid_argument("prepared System boundary lane is null");
+  std::exception_ptr local_error;
+  try {
+    require_assembling(p_->lifecycle_, "install_prepared_boundary_execution_lane");
+    if (lane->identity().empty() || lane->size() != static_cast<int>(p_->dm.rank_space().size()) ||
+        lane->rank() != static_cast<int>(p_->dm.rank_space().linear_rank(p_->local_rank)))
+      throw std::invalid_argument(
+          "prepared System boundary lane differs from its exact runtime rank space");
+    if (prepared_boundary_execution_lane_)
+      throw std::logic_error("prepared System boundary lane is already installed");
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  // ``lane`` owns a duplicated communicator.  Converge every local installation check before
+  // moving it into System so all temporary holders either survive or release collectively.
+  if (all_reduce_max(local_error ? 1L : 0L, *lane) != 0) {
+    if (lane->size() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("prepared System boundary lane installation failed collectively");
+  }
   prepared_boundary_execution_lane_ = std::move(lane);
 }
 
@@ -243,53 +692,283 @@ void System<Dim>::stage_prepared_ghost_boundary_component(
     throw std::invalid_argument(
         "prepared System GhostBoundary differs from its exact block/rank route");
   const std::string package_identity =
-      "~pops.system.boundary-component.v1\n" + block + "\n" + spec.target_identity;
-  stage_prepared_native_package(
+      prepared_system_boundary_package_identity("ghost", block, spec);
+  stage_native_package_(
       package_identity,
       [this, block, component] {
-        typename Impl::Species& selected = p_->blocks_.find(block);
-        if (!selected.boundary || selected.state_identity != component->spec().state_identity)
-          throw std::invalid_argument(
-              "prepared System GhostBoundary block was not materialized with its exact boundary");
+        const ExecutionLane& lane = prepared_boundary_execution_lane();
+        typename Impl::Species* selected = nullptr;
+        std::optional<Geometry<Dim>> geometry;
+        std::optional<BoundaryTopology<Dim>> topology;
+        runtime::program::collective_boundary_provider_phase(
+            lane, "prepared System GhostBoundary local installer preflight failed collectively",
+            [&] {
+              selected = &p_->blocks_.find(block);
+              if (!selected->boundary ||
+                  selected->state_identity != component->spec().state_identity)
+                throw std::invalid_argument(
+                    "prepared System GhostBoundary block was not materialized with its exact "
+                    "boundary");
+              if (!selected->boundary_full_at_point_prepared ||
+                  !selected->boundary_core_at_point_prepared ||
+                  !selected->boundary_flux_full_at_point_prepared ||
+                  !selected->boundary_flux_core_at_point_prepared)
+                throw std::invalid_argument(
+                    "prepared System GhostBoundary requires complete compiled full and core "
+                    "closures");
+              geometry.emplace(p_->geom);
+              topology.emplace(BoundaryTopology<Dim>::axis_periodic(p_->periodicity));
+            });
         // The RuntimeInstance lane was materialized from its authenticated communicator before
         // plan publication. Each invocation borrows that exact lane through ProgramContext.
-        const Geometry<Dim> geometry = p_->geom;
-        if (!selected.boundary_full_at_point_prepared ||
-            !selected.boundary_core_at_point_prepared ||
-            !selected.boundary_flux_full_at_point_prepared ||
-            !selected.boundary_flux_core_at_point_prepared)
-          throw std::invalid_argument(
-              "prepared System GhostBoundary requires complete compiled full and core closures");
-        auto wrap_component = [component, geometry](auto compiled) {
-          return [component, geometry, compiled = std::move(compiled)](
-                     const auto& point, MultiFab<Dim>& state, MultiFab<Dim>& result,
-                     const PreparedHyperbolicBoundary<Dim>& boundary, const ExecutionLane& lane,
-                     const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
-            std::exception_ptr component_error;
-            try {
-              component->template apply_ghost_region<Dim>(point, state, geometry, lane);
-            } catch (...) {
-              component_error = std::current_exception();
-            }
-            if (all_reduce_max(component_error ? 1L : 0L, lane) != 0) {
-              if (lane.size() == 1 && component_error)
-                std::rethrow_exception(component_error);
-              throw std::runtime_error(
-                  "prepared System GhostBoundary execution failed collectively");
-            }
-            compiled(point, state, result, boundary, lane, transport);
-          };
-        };
-        selected.boundary_full_at_point_prepared =
-            wrap_component(std::move(selected.boundary_full_at_point_prepared));
-        selected.boundary_flux_full_at_point_prepared =
-            wrap_component(std::move(selected.boundary_flux_full_at_point_prepared));
-        selected.boundary_residual_at_point_prepared = make_prepared_boundary_residual<Dim>(
-            selected.boundary_full_at_point_prepared, selected.boundary_core_at_point_prepared);
-        selected.boundary_jvp_at_point_prepared =
-            make_prepared_boundary_jvp<Dim>(selected.boundary_residual_at_point_prepared);
+        auto prepared = prepare_system_boundary_component_candidate<Dim>(
+            *p_, component, selected->U, *geometry, *topology, lane,
+            ExternalBoundaryDependencyOperation::ghost_region);
+        auto dependencies = std::move(prepared.dependencies);
+        auto session = std::move(prepared.session);
+        const auto previous = *selected->external_ghost_boundary;
+        const Geometry<Dim> prepared_geometry = *geometry;
+        typename SystemBlockClosures<Dim>::ExternalGhostBoundary candidate =
+            [previous, component, session, dependencies, geometry = prepared_geometry](
+                const auto& point, MultiFab<Dim>& state, const auto& source_geometry,
+                const ExecutionLane& lane) {
+              if (previous)
+                runtime::program::collective_boundary_provider_phase(
+                    lane, "prepared System GhostBoundary predecessor failed collectively",
+                    [&] { previous(point, state, source_geometry, lane); });
+              std::unique_lock invocation_lock(session->value().invocation_mutex(),
+                                               std::defer_lock);
+              runtime::program::collective_boundary_provider_phase(
+                  lane, "prepared System GhostBoundary session admission failed collectively", [&] {
+                    if (!invocation_lock.try_lock())
+                      throw std::logic_error(
+                          "prepared System GhostBoundary dependency cycle/reentrancy detected");
+                  });
+              runtime::program::collective_boundary_provider_phase(
+                  lane, "prepared System GhostBoundary dependency refresh failed collectively",
+                  [&] { dependencies->refresh(point, lane); });
+              FieldBoundaryExecutionContext<Dim> context;
+              runtime::program::collective_boundary_provider_phase(
+                  lane, "prepared System GhostBoundary context validation failed collectively",
+                  [&] { context = dependencies->view(point); });
+              runtime::program::collective_boundary_provider_phase(
+                  lane, "prepared System GhostBoundary callback failed collectively", [&] {
+                    component->template apply_ghost_region<Dim>(session->value(), point, state,
+                                                                geometry, lane, context);
+                  });
+            };
+        selected->external_ghost_boundary->swap(candidate);
       },
-      component);
+      component, NativePackageKind::prepared_boundary);
+}
+
+template <int Dim>
+void System<Dim>::stage_prepared_boundary_flux_component(
+    const std::string& block, std::shared_ptr<PreparedBoundaryFluxComponent> component) {
+  require_assembling(p_->lifecycle_, "stage_prepared_boundary_flux_component");
+  if (block.empty() || !component || component->spec().region.dimension != Dim ||
+      component->spec().state_identity != p_->boundary_registry_.state_route(block))
+    throw std::invalid_argument("prepared System BoundaryFlux differs from its exact block route");
+  const std::string package_identity =
+      prepared_system_boundary_package_identity("flux", block, component->spec());
+  stage_native_package_(
+      package_identity,
+      [this, block, component] {
+        const ExecutionLane& lane = prepared_boundary_execution_lane();
+        typename Impl::Species* selected = nullptr;
+        std::optional<Geometry<Dim>> geometry;
+        std::optional<BoundaryTopology<Dim>> topology;
+        runtime::program::collective_boundary_provider_phase(
+            lane, "prepared System BoundaryFlux local installer preflight failed collectively",
+            [&] {
+              selected = &p_->blocks_.find(block);
+              if (!selected->boundary || !selected->external_boundary_flux)
+                throw std::invalid_argument(
+                    "prepared System BoundaryFlux requires its generated post-Riemann hook");
+              geometry.emplace(p_->geom);
+              topology.emplace(BoundaryTopology<Dim>::axis_periodic(p_->periodicity));
+            });
+        auto prepared = prepare_system_boundary_component_candidate<Dim>(
+            *p_, component, selected->U, *geometry, *topology, lane,
+            ExternalBoundaryDependencyOperation::flux_transform);
+        auto dependencies = std::move(prepared.dependencies);
+        auto session = std::move(prepared.session);
+        const auto previous = *selected->external_boundary_flux;
+        typename SystemBlockClosures<Dim>::BoundaryFluxTransform candidate =
+            [previous, component, session, dependencies](const auto& point, const auto& state,
+                                                         auto& faces, const auto& geometry,
+                                                         const auto& lane) {
+              if (previous)
+                runtime::program::collective_boundary_provider_phase(
+                    lane, "prepared System BoundaryFlux predecessor failed collectively",
+                    [&] { previous(point, state, faces, geometry, lane); });
+              std::unique_lock invocation_lock(session->value().invocation_mutex(),
+                                               std::defer_lock);
+              runtime::program::collective_boundary_provider_phase(
+                  lane, "prepared System BoundaryFlux session admission failed collectively", [&] {
+                    if (!invocation_lock.try_lock())
+                      throw std::logic_error(
+                          "prepared BoundaryFlux dependency cycle/reentrancy detected");
+                  });
+              runtime::program::collective_boundary_provider_phase(
+                  lane, "prepared System BoundaryFlux dependency refresh failed collectively",
+                  [&] { dependencies->refresh(point, lane); });
+              FieldBoundaryExecutionContext<Dim> context;
+              runtime::program::collective_boundary_provider_phase(
+                  lane, "prepared System BoundaryFlux context validation failed collectively",
+                  [&] { context = dependencies->view(point); });
+              runtime::program::collective_boundary_provider_phase(
+                  lane, "prepared System BoundaryFlux callback failed collectively", [&] {
+                    component->template transform_boundary_flux<Dim>(
+                        session->value(), point, state, faces, geometry, lane, context);
+                  });
+            };
+        selected->external_boundary_flux->swap(candidate);
+      },
+      component, NativePackageKind::prepared_boundary);
+}
+
+template <int Dim>
+void System<Dim>::stage_prepared_field_boundary_component_pair(
+    const std::string& block, std::shared_ptr<PreparedFieldBoundaryResidualComponent> residual,
+    std::shared_ptr<PreparedFieldBoundaryJvpComponent> jvp) {
+  require_assembling(p_->lifecycle_, "stage_prepared_field_boundary_component_pair");
+  if (block.empty() || !residual || !jvp || residual->spec().region.dimension != Dim ||
+      jvp->spec().region.dimension != Dim ||
+      residual->spec().state_identity != p_->boundary_registry_.state_route(block))
+    throw std::invalid_argument(
+        "prepared System FieldBoundary pair differs from its exact block route");
+  const auto& left = residual->spec();
+  const auto& right = jvp->spec();
+  if (left.target_identity != right.target_identity || left.target_json != right.target_json ||
+      left.component_id != right.component_id ||
+      left.manifest_identity != right.manifest_identity ||
+      left.producer_identity != right.producer_identity ||
+      left.state_identity != right.state_identity || left.ghost_identity != right.ghost_identity ||
+      left.layout_identity != right.layout_identity ||
+      left.region.identity != right.region.identity || left.region.kind != right.region.kind ||
+      left.region.codimension != right.region.codimension ||
+      left.region.axes != right.region.axes || left.region.sides != right.region.sides ||
+      left.interface_version != right.interface_version || left.states != right.states ||
+      left.fields != right.fields || left.parameter_ids != right.parameter_ids ||
+      left.parameter_values != right.parameter_values ||
+      left.parameters_json != right.parameters_json || left.outputs.size() != 1 ||
+      right.outputs.size() != 1 || left.outputs.front() == right.outputs.front() ||
+      left.rate != right.rate || left.nonlinear_iterate != right.nonlinear_iterate ||
+      !left.directions.empty() || right.directions.size() != 1 ||
+      right.directions.front() != right.state_identity)
+    throw std::invalid_argument("prepared System FieldBoundary residual/JVP contract differs");
+  if (residual->package_owner_identity() != jvp->package_owner_identity() ||
+      !left.execution->equivalent_to(*right.execution))
+    throw std::invalid_argument(
+        "prepared System FieldBoundary residual/JVP package/execution authority differs");
+  ExactContractBuilder package_contract;
+  package_contract.text("pops.system.prepared-boundary-component-pair")
+      .scalar(std::uint32_t{1})
+      .text(block);
+  append_prepared_boundary_component_contract(package_contract, left);
+  append_prepared_boundary_component_contract(package_contract, right);
+  const std::string package_identity = std::move(package_contract).release();
+  stage_native_package_(
+      package_identity,
+      [this, block, residual, jvp] {
+        const ExecutionLane& lane = prepared_boundary_execution_lane();
+        typename Impl::Species* selected = nullptr;
+        std::optional<Geometry<Dim>> geometry;
+        std::optional<BoundaryTopology<Dim>> topology;
+        runtime::program::collective_boundary_provider_phase(
+            lane, "prepared System FieldBoundary local installer preflight failed collectively",
+            [&] {
+              selected = &p_->blocks_.find(block);
+              if (!selected->boundary || !selected->external_field_boundary_residual ||
+                  !selected->external_field_boundary_jvp)
+                throw std::invalid_argument(
+                    "prepared System FieldBoundary pair requires generated boundary closures");
+              geometry.emplace(p_->geom);
+              topology.emplace(BoundaryTopology<Dim>::axis_periodic(p_->periodicity));
+            });
+        const auto& spec = residual->spec();
+        const int face = spec.region.axes.front() * 2 + (spec.region.sides.front() > 0 ? 1 : 0);
+        auto prepared_residual = prepare_system_boundary_component_candidate<Dim>(
+            *p_, residual, selected->U, *geometry, *topology, lane,
+            ExternalBoundaryDependencyOperation::field_closure);
+        auto residual_dependencies = std::move(prepared_residual.dependencies);
+        auto residual_session = std::move(prepared_residual.session);
+        auto prepared_jvp = prepare_system_boundary_component_candidate<Dim>(
+            *p_, jvp, selected->U, *geometry, *topology, lane,
+            ExternalBoundaryDependencyOperation::field_closure);
+        auto jvp_dependencies = std::move(prepared_jvp.dependencies);
+        auto jvp_session = std::move(prepared_jvp.session);
+        const auto previous_residual = *selected->external_field_boundary_residual;
+        const auto previous_jvp = *selected->external_field_boundary_jvp;
+        const Geometry<Dim> prepared_geometry = *geometry;
+        typename SystemBlockClosures<Dim>::PreparedPointBoundaryResidual residual_candidate =
+            [previous_residual, residual, residual_session, residual_dependencies,
+             geometry = prepared_geometry, face](const auto& point, auto& state, auto& result,
+                                                 const auto& boundary, const auto& lane,
+                                                 const auto& transport) {
+              if (previous_residual)
+                runtime::program::collective_boundary_provider_phase(
+                    lane, "prepared System FieldBoundary residual predecessor failed",
+                    [&] { previous_residual(point, state, result, boundary, lane, transport); });
+              std::unique_lock invocation_lock(residual_session->value().invocation_mutex(),
+                                               std::defer_lock);
+              runtime::program::collective_boundary_provider_phase(
+                  lane, "prepared System FieldBoundary residual session admission failed", [&] {
+                    if (!invocation_lock.try_lock())
+                      throw std::logic_error(
+                          "prepared FieldBoundary residual dependency cycle/reentrancy detected");
+                  });
+              runtime::program::collective_boundary_provider_phase(
+                  lane, "prepared System FieldBoundary residual dependency refresh failed",
+                  [&] { residual_dependencies->refresh(point, lane); });
+              FieldBoundaryExecutionContext<Dim> context;
+              runtime::program::collective_boundary_provider_phase(
+                  lane, "prepared System FieldBoundary residual context validation failed",
+                  [&] { context = residual_dependencies->view(point); });
+              runtime::program::collective_boundary_provider_phase(
+                  lane, "prepared System FieldBoundary residual callback failed", [&] {
+                    residual->template evaluate_field_boundary_face<Dim>(
+                        residual_session->value(), face, state, nullptr, result, geometry, context);
+                  });
+            };
+        typename SystemBlockClosures<Dim>::PreparedPointJvp jvp_candidate =
+            [previous_jvp, jvp, jvp_session, jvp_dependencies, geometry = prepared_geometry, face](
+                const auto& point, auto& state, const auto& direction, auto& result,
+                const auto& boundary, const auto& lane, const auto& transport) {
+              if (previous_jvp)
+                runtime::program::collective_boundary_provider_phase(
+                    lane, "prepared System FieldBoundary JVP predecessor failed", [&] {
+                      previous_jvp(point, state, direction, result, boundary, lane, transport);
+                    });
+              std::unique_lock invocation_lock(jvp_session->value().invocation_mutex(),
+                                               std::defer_lock);
+              runtime::program::collective_boundary_provider_phase(
+                  lane, "prepared System FieldBoundary JVP session admission failed", [&] {
+                    if (!invocation_lock.try_lock())
+                      throw std::logic_error(
+                          "prepared FieldBoundary JVP dependency cycle/reentrancy detected");
+                  });
+              runtime::program::collective_boundary_provider_phase(
+                  lane, "prepared System FieldBoundary JVP dependency refresh failed",
+                  [&] { jvp_dependencies->refresh(point, lane); });
+              FieldBoundaryExecutionContext<Dim> context;
+              runtime::program::collective_boundary_provider_phase(
+                  lane, "prepared System FieldBoundary JVP context validation failed",
+                  [&] { context = jvp_dependencies->view(point); });
+              runtime::program::collective_boundary_provider_phase(
+                  lane, "prepared System FieldBoundary JVP callback failed", [&] {
+                    jvp->template evaluate_field_boundary_face<Dim>(
+                        jvp_session->value(), face, state, &direction, result, geometry, context);
+                  });
+            };
+        selected->external_field_boundary_residual->swap(residual_candidate);
+        selected->external_field_boundary_jvp->swap(jvp_candidate);
+      },
+      std::make_shared<std::pair<std::shared_ptr<PreparedFieldBoundaryResidualComponent>,
+                                 std::shared_ptr<PreparedFieldBoundaryJvpComponent>>>(residual,
+                                                                                      jvp),
+      NativePackageKind::prepared_boundary);
 }
 
 template <int Dim>
@@ -336,7 +1015,7 @@ void System<Dim>::discard_hyperbolic_boundaries() {
   }
   p_->boundary_registry_.discard_transaction();
   std::erase_if(p_->pending_native_packages_, [](const auto& package) {
-    return package.identity.starts_with("~pops.system.boundary-component.v1\n");
+    return package.kind == NativePackageKind::prepared_boundary;
   });
   prepared_boundary_execution_lane_.reset();
 }
@@ -459,17 +1138,28 @@ void System<Dim>::install_prepared_block(PreparedSystemBlock<Dim> prepared) {
       std::move(prepared.closures.boundary_residual_at_point_prepared);
   candidate.boundary_jvp_at_point_prepared =
       std::move(prepared.closures.boundary_jvp_at_point_prepared);
+  candidate.external_boundary_flux = std::move(prepared.closures.external_boundary_flux);
+  candidate.external_field_boundary_residual =
+      std::move(prepared.closures.external_field_boundary_residual);
+  candidate.external_field_boundary_jvp = std::move(prepared.closures.external_field_boundary_jvp);
   candidate.prepare_generated_state_at_point =
       std::move(prepared.closures.prepare_generated_state_at_point);
   candidate.prepare_generated_state_at_point_prepared =
       std::move(prepared.closures.prepare_generated_state_at_point_prepared);
+  candidate.prepare_generated_state_with_transport_prepared =
+      std::move(prepared.closures.prepare_generated_state_with_transport_prepared);
+  candidate.external_ghost_boundary = std::move(prepared.closures.external_ghost_boundary);
   candidate.boundary = boundary;
   candidate.state_identity = state_identity;
   if (candidate.boundary &&
       (!candidate.boundary_full_at_point_prepared || !candidate.boundary_core_at_point_prepared ||
        !candidate.boundary_flux_full_at_point_prepared ||
        !candidate.boundary_flux_core_at_point_prepared ||
-       !candidate.boundary_residual_at_point_prepared || !candidate.boundary_jvp_at_point_prepared))
+       !candidate.boundary_residual_at_point_prepared ||
+       !candidate.boundary_jvp_at_point_prepared || !candidate.external_boundary_flux ||
+       !candidate.external_field_boundary_residual || !candidate.external_field_boundary_jvp ||
+       !candidate.prepare_generated_state_with_transport_prepared ||
+       !candidate.external_ghost_boundary))
     throw std::invalid_argument(
         "prepared System boundary lacks its complete full/core/residual/JVP authority");
 
@@ -804,6 +1494,14 @@ template <int Dim>
 void System<Dim>::stage_prepared_native_package(std::string identity,
                                                 std::function<void()> installer,
                                                 std::shared_ptr<void> package_lifetime) {
+  stage_native_package_(std::move(identity), std::move(installer), std::move(package_lifetime),
+                        NativePackageKind::generic);
+}
+
+template <int Dim>
+void System<Dim>::stage_native_package_(std::string identity, std::function<void()> installer,
+                                        std::shared_ptr<void> package_lifetime,
+                                        NativePackageKind kind) {
   require_assembling(p_->lifecycle_, "stage_prepared_native_package");
   if (identity.empty() || !installer || !package_lifetime)
     throw std::invalid_argument(
@@ -815,7 +1513,7 @@ void System<Dim>::stage_prepared_native_package(std::string identity,
     if (package.identity == identity)
       throw std::invalid_argument("System native package identity was already finalized");
   p_->pending_native_packages_.push_back(
-      {std::move(identity), std::move(installer), std::move(package_lifetime)});
+      {std::move(identity), std::move(installer), std::move(package_lifetime), kind});
 }
 
 template <int Dim>
@@ -838,6 +1536,21 @@ void System<Dim>::finalize_native_packages() {
     exact_packages.emplace_back("system-native-package", package.identity);
   if (!all_ranks_agree_exact_ordered_byte_pairs(exact_packages, lane))
     throw std::runtime_error("System staged native packages differ across MPI ranks");
+
+  // Reserve publication storage before an installer can publish a live hook. The later move-only
+  // publication is therefore allocation-free and retains every DSO owner until rollback has
+  // completed on the exact lane.
+  std::exception_ptr publication_prepare_error;
+  try {
+    p_->reserve_native_package_publication(packages.size());
+  } catch (...) {
+    publication_prepare_error = std::current_exception();
+  }
+  if (all_reduce_max(publication_prepare_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && publication_prepare_error)
+      std::rethrow_exception(publication_prepare_error);
+    throw std::runtime_error("System native package publication storage failed collectively");
+  }
 
   std::optional<typename Impl::NativePackageFinalizeSnapshot> snapshot;
   std::exception_ptr snapshot_error;
@@ -879,15 +1592,13 @@ void System<Dim>::finalize_native_packages() {
   if (all_reduce_max(failed, lane) != 0) {
     // Every rank restores the same pre-finalization image.  ``packages`` then drops its DSO owners,
     // so no failed package code can remain reachable from the restored System.
-    snapshot->restore(*p_);
+    snapshot->restore_noexcept(*p_);
     if (lane.size() == 1 && failure)
       std::rethrow_exception(failure);
     throw std::runtime_error("System native package finalization rolled back collectively");
   }
 
-  p_->installed_native_packages_.insert(p_->installed_native_packages_.end(),
-                                        std::make_move_iterator(packages.begin()),
-                                        std::make_move_iterator(packages.end()));
+  p_->publish_reserved_native_packages_noexcept(packages);
 }
 
 template <int Dim>
@@ -1255,6 +1966,11 @@ template void System<kNativeDimension>::install_prepared_boundary_execution_lane
     std::shared_ptr<ExecutionLane>);
 template void System<kNativeDimension>::stage_prepared_ghost_boundary_component(
     const std::string&, std::shared_ptr<PreparedGhostBoundaryComponent>);
+template void System<kNativeDimension>::stage_prepared_boundary_flux_component(
+    const std::string&, std::shared_ptr<PreparedBoundaryFluxComponent>);
+template void System<kNativeDimension>::stage_prepared_field_boundary_component_pair(
+    const std::string&, std::shared_ptr<PreparedFieldBoundaryResidualComponent>,
+    std::shared_ptr<PreparedFieldBoundaryJvpComponent>);
 template void System<kNativeDimension>::install_hyperbolic_boundary(
     const std::string&, const std::string&, int, const std::vector<std::string>&,
     const std::vector<double>&, const std::vector<std::string>&, const std::vector<std::string>&,

@@ -306,24 +306,43 @@ struct PreparedBoundaryContext {
 };
 
 template <int Dim, class Implementation>
-std::optional<PreparedBoundaryContext<Dim>> prepare_boundary_context(
+std::shared_ptr<const PreparedFieldBoundaryContextSet<Dim>> prepare_boundary_context(
     Implementation& implementation, const std::string& provider_slot,
     const std::vector<const MultiFab<Dim>*>& selected_states) {
   const auto plan_entry = implementation.field_plans_.find(provider_slot);
   if (plan_entry == implementation.field_plans_.end() || !plan_entry->second.boundary_kernel)
-    return std::nullopt;
-  const auto& plan = plan_entry->second;
+    return {};
+  auto& plan = plan_entry->second;
   if (selected_states.size() != implementation.sp.size())
     throw std::invalid_argument(
         "System dynamic field boundary state selection does not cover every block");
 
-  PreparedBoundaryContext<Dim> prepared;
-  prepared.parameters = &plan.boundary_parameters;
-  if (plan.boundary_point)
-    prepared.point = *plan.boundary_point;
-  prepared.states.reserve(plan.boundary_state_blocks.size());
-  prepared.state_distributions.reserve(plan.boundary_state_blocks.size());
-  prepared.state_identities.reserve(plan.boundary_state_blocks.size());
+  const bool prepare_detached = !plan.boundary_context_storage;
+  if (prepare_detached != !plan.boundary_contexts)
+    throw std::logic_error("System prepared field boundary context cache is incomplete");
+
+  std::shared_ptr<PreparedBoundaryContext<Dim>> prepared =
+      prepare_detached
+          ? std::make_shared<PreparedBoundaryContext<Dim>>()
+          : std::static_pointer_cast<PreparedBoundaryContext<Dim>>(plan.boundary_context_storage);
+  if (prepare_detached) {
+    prepared->parameters = &plan.boundary_parameters;
+    prepared->states.reserve(plan.boundary_state_blocks.size());
+    prepared->state_distributions.reserve(plan.boundary_state_blocks.size());
+    prepared->state_identities.reserve(plan.boundary_state_blocks.size());
+    prepared->fields.reserve(plan.boundary_field_blocks.size());
+    prepared->field_distributions.reserve(plan.boundary_field_blocks.size());
+    prepared->field_identities.reserve(plan.boundary_field_blocks.size());
+  } else if (prepared->states.size() != plan.boundary_state_blocks.size() ||
+             prepared->state_distributions.size() != plan.boundary_state_blocks.size() ||
+             prepared->state_identities.size() != plan.boundary_state_blocks.size() ||
+             prepared->fields.size() != plan.boundary_field_blocks.size() ||
+             prepared->field_distributions.size() != plan.boundary_field_blocks.size() ||
+             prepared->field_identities.size() != plan.boundary_field_blocks.size()) {
+    throw std::logic_error("System prepared field boundary context cache is stale");
+  }
+  prepared->point = plan.boundary_point.value_or(FieldLogicalTimePoint{});
+
   for (std::size_t dependency = 0; dependency < plan.boundary_state_blocks.size(); ++dependency) {
     const int block = implementation.index(plan.boundary_state_blocks[dependency]);
     const auto* state = selected_states[static_cast<std::size_t>(block)];
@@ -331,15 +350,16 @@ std::optional<PreparedBoundaryContext<Dim>> prepare_boundary_context(
     if (state == nullptr || component < 0 || component >= state->ncomp())
       throw std::invalid_argument(
           "System dynamic field boundary state dependency is not materialized exactly");
-    prepared.states.push_back(state);
-    prepared.state_distributions.push_back(FieldDistribution::Distributed);
-    prepared.state_identities.push_back(
-        implementation.sp[static_cast<std::size_t>(block)].state_identity);
+    if (prepare_detached) {
+      prepared->states.push_back(state);
+      prepared->state_distributions.push_back(FieldDistribution::Distributed);
+      prepared->state_identities.push_back(
+          implementation.sp[static_cast<std::size_t>(block)].state_identity);
+    } else {
+      prepared->states[dependency] = state;
+    }
   }
 
-  prepared.fields.reserve(plan.boundary_field_blocks.size());
-  prepared.field_distributions.reserve(plan.boundary_field_blocks.size());
-  prepared.field_identities.reserve(plan.boundary_field_blocks.size());
   for (std::size_t dependency = 0; dependency < plan.boundary_field_blocks.size(); ++dependency) {
     if (plan.boundary_field_components[dependency] != 0)
       throw std::invalid_argument(
@@ -357,11 +377,25 @@ std::optional<PreparedBoundaryContext<Dim>> prepare_boundary_context(
     if (field == implementation.named_fields_.end())
       throw std::logic_error(
           "System dynamic boundary field dependency has not been materialized before its use");
-    prepared.fields.push_back(&field->second->dependency_potential());
-    prepared.field_distributions.push_back(FieldDistribution::Distributed);
-    prepared.field_identities.push_back(field->second->identity());
+    if (prepare_detached) {
+      prepared->fields.push_back(&field->second->dependency_potential());
+      prepared->field_distributions.push_back(FieldDistribution::Distributed);
+      prepared->field_identities.push_back(field->second->identity());
+    } else {
+      prepared->fields[dependency] = &field->second->dependency_potential();
+    }
   }
-  return prepared;
+
+  if (prepare_detached) {
+    auto retained_lifetime = std::static_pointer_cast<void>(prepared);
+    auto contexts = std::make_shared<PreparedFieldBoundaryContextSet<Dim>>(retained_lifetime, 1);
+    contexts->bind(0, prepared->view());
+    plan.boundary_context_storage = std::move(retained_lifetime);
+    plan.boundary_contexts = std::move(contexts);
+  } else {
+    plan.boundary_contexts->bind(0, prepared->view());
+  }
+  return plan.boundary_contexts;
 }
 
 template <int Dim, class Implementation>
@@ -369,11 +403,8 @@ SolveReport solve_field_candidate(
     Implementation& implementation, const std::string& provider_slot,
     const std::shared_ptr<runtime::system::ExactNamedField<Dim>>& field,
     std::vector<const MultiFab<Dim>*> states, const ExecutionLane& lane) {
-  auto storage = prepare_boundary_context<Dim>(implementation, provider_slot, states);
-  std::optional<FieldBoundaryExecutionContext<Dim>> context;
-  if (storage)
-    context = storage->view();
-  return field->solve_candidate(states, context ? &*context : nullptr, lane);
+  auto contexts = prepare_boundary_context<Dim>(implementation, provider_slot, states);
+  return field->solve_candidate(states, std::move(contexts), lane);
 }
 
 }  // namespace

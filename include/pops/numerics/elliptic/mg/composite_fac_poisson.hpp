@@ -235,7 +235,7 @@ class CompositeFacPoisson {
       throw std::logic_error("composite FAC boundary kernel is already installed");
     kernel.validate();
     boundary_kernel_ = std::move(kernel);
-    boundary_contexts_.clear();
+    boundary_contexts_.reset();
     if (!newton_workspace_ && !boundary_kernel_->observes_iteration) {
       const FieldNewtonOptions options = linear_boundary_newton_options_();
       const auto layouts = newton_layouts_();
@@ -246,13 +246,13 @@ class CompositeFacPoisson {
     prepare_dynamic_views_();
   }
 
-  void set_boundary_contexts(std::vector<FieldBoundaryExecutionContext<Dim>> contexts) {
+  void set_boundary_contexts(std::shared_ptr<const PreparedFieldBoundaryContextSet<Dim>> contexts) {
     if (!boundary_kernel_)
       throw std::logic_error("composite FAC has no compiled dynamic boundary kernel");
-    if (contexts.size() != levels_.size())
+    if (!contexts || contexts->size() != levels_.size())
       throw std::invalid_argument(
           "composite FAC requires one dynamic boundary context per live AMR level");
-    for (const FieldBoundaryExecutionContext<Dim>& context : contexts)
+    for (const FieldBoundaryExecutionContext<Dim>& context : contexts->contexts())
       if (context.failure == nullptr)
         throw std::invalid_argument(
             "composite FAC dynamic boundary requires fallible execution channels");
@@ -838,11 +838,10 @@ class CompositeFacPoisson {
       fac_detail::execute_transfers(connections_.at(child - 1).direction_restriction);
   }
 
-  FieldBoundaryExecutionContext<Dim>& boundary_context_at_(std::size_t level, int iteration) {
-    if (boundary_contexts_.size() != levels_.size())
+  FieldBoundaryExecutionContext<Dim> boundary_context_at_(std::size_t level, int iteration) const {
+    if (!boundary_contexts_ || boundary_contexts_->size() != levels_.size())
       throw std::logic_error("composite FAC dynamic boundary contexts are absent");
-    boundary_contexts_[level].point.iteration = iteration;
-    return boundary_contexts_[level];
+    return boundary_contexts_->view(level, iteration);
   }
 
   void synchronize_boundary_failure_(FieldBoundaryExecutionContext<Dim>& context,
@@ -860,7 +859,7 @@ class CompositeFacPoisson {
       fac_detail::execute_injections(connections_.at(level_index - 1).coarse_fine_residual_view);
     fill_physical_boundary(level.residual_operator_view, level.physical_boundary);
     if (boundary_kernel_) {
-      auto& context = boundary_context_at_(level_index, iteration);
+      auto context = boundary_context_at_(level_index, iteration);
       context.failure->reset();
       for (int face = 0; face < 2 * Dim; ++face)
         boundary_kernel_->prepare_residual_view(face, level.phi, level.residual_operator_view,
@@ -878,7 +877,7 @@ class CompositeFacPoisson {
       fac_detail::execute_injections(connections_.at(level_index - 1).coarse_fine_direction_view);
     fill_physical_boundary(level.direction_operator_view, level.homogeneous_physical_boundary);
     if (boundary_kernel_) {
-      auto& context = boundary_context_at_(level_index, iteration);
+      auto context = boundary_context_at_(level_index, iteration);
       context.failure->reset();
       for (int face = 0; face < 2 * Dim; ++face)
         boundary_kernel_->prepare_jvp_view(face, level.phi, level.correction,
@@ -908,7 +907,7 @@ class CompositeFacPoisson {
       poisson_residual_valid(level.residual_operator_view, level.rhs, level.geometry,
                              level.residual, reaction_);
       if (boundary_kernel_) {
-        auto& context = boundary_context_at_(level_index, iteration);
+        auto context = boundary_context_at_(level_index, iteration);
         context.failure->reset();
         for (int face = 0; face < 2 * Dim; ++face)
           boundary_kernel_->add_residual(face, level.phi, level.residual, level.geometry, context);
@@ -935,7 +934,7 @@ class CompositeFacPoisson {
       apply_poisson_operator_valid(level.direction_operator_view, level.geometry, level.scratch,
                                    reaction_);
       if (boundary_kernel_) {
-        auto& context = boundary_context_at_(level_index, iteration);
+        auto context = boundary_context_at_(level_index, iteration);
         context.failure->reset();
         for (int face = 0; face < 2 * Dim; ++face)
           boundary_kernel_->apply_jvp(face, level.phi, level.correction, level.scratch,
@@ -957,7 +956,7 @@ class CompositeFacPoisson {
   }
 
   SolveReport solve_dynamic_() {
-    if (boundary_kernel_ && boundary_contexts_.size() != levels_.size())
+    if (boundary_kernel_ && (!boundary_contexts_ || boundary_contexts_->size() != levels_.size()))
       throw std::logic_error("composite FAC dynamic boundary has no level-qualified contexts");
     if (boundary_kernel_ && boundary_kernel_->observes_iteration && !newton_workspace_)
       throw std::logic_error(
@@ -1029,7 +1028,7 @@ class CompositeFacPoisson {
   std::vector<MultiFab<Dim>*> nullspace_candidates_{};
   std::unique_ptr<FieldNullspaceWorkspace<Dim>> nullspace_workspace_{};
   std::optional<CompiledFieldBoundaryKernel<Dim>> boundary_kernel_{};
-  std::vector<FieldBoundaryExecutionContext<Dim>> boundary_contexts_{};
+  std::shared_ptr<const PreparedFieldBoundaryContextSet<Dim>> boundary_contexts_{};
   std::optional<nonlinear_workspace_type> newton_workspace_{};
   std::optional<nonlinear_workspace_type> linear_boundary_workspace_{};
   std::vector<field_type*> candidate_view_{};
