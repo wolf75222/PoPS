@@ -38,6 +38,12 @@ set_target_properties(pops_runtime_core_objects PROPERTIES POSITION_INDEPENDENT_
 add_library(pops_runtime_core STATIC $<TARGET_OBJECTS:pops_runtime_core_objects>)
 set_target_properties(pops_runtime_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 add_library(pops_runtime_system OBJECT ${POPS_RUNTIME_SYSTEM_SOURCES})
+# `pops::abi_key()` is defined in runtime/system/system.cpp.  Keep the System implementation as an
+# object target for _pops and direct System consumers, and expose those same objects in an archive
+# for AMR-only consumers.  Archive extraction selects system.cpp.o when it supplies the unresolved
+# ABI key; consumers that already link pops_runtime_system do not extract a duplicate definition.
+add_library(pops_runtime_system_abi STATIC $<TARGET_OBJECTS:pops_runtime_system>)
+set_target_properties(pops_runtime_system_abi PROPERTIES POSITION_INDEPENDENT_CODE ON)
 add_library(pops_runtime_amr OBJECT ${POPS_RUNTIME_AMR_SOURCES})
 add_library(pops_runtime_output OBJECT ${POPS_RUNTIME_OUTPUT_SOURCES})
 set(POPS_RUNTIME_OBJECT_TARGETS pops_runtime_system pops_runtime_amr pops_runtime_output)
@@ -56,13 +62,14 @@ foreach(_runtime_target IN LISTS POPS_RUNTIME_TARGETS)
 endforeach()
 
 # The transaction control-flow types and their internal flux-failure carrier are shared runtime ABI,
-# not System implementation detail.
-# PUBLIC linkage makes the single key-function/typeinfo authority follow either facade into every
-# final executable, including AMR-only consumers, without compiling a duplicate definition.  The
-# Python module additionally embeds pops_runtime_core_objects directly so its host ABI cannot depend
-# on archive extraction.
+# not System implementation detail.  `pops::abi_key()` remains the one canonical, out-of-line ABI
+# provider in runtime/system/system.cpp.  AMR installs native packages through that ABI loader, so
+# its consumers carry the archive that resolves the provider without recompiling or duplicating it.
+# The Python module additionally embeds pops_runtime_core_objects directly so its host ABI cannot
+# depend on archive extraction.
 target_link_libraries(pops_runtime_system PUBLIC pops_runtime_core)
-target_link_libraries(pops_runtime_amr PUBLIC pops_runtime_core)
+target_link_libraries(pops_runtime_system_abi INTERFACE pops_runtime_core)
+target_link_libraries(pops_runtime_amr PUBLIC pops_runtime_core pops_runtime_system_abi)
 target_link_libraries(pops_runtime_output PUBLIC pops_runtime_core)
 
 if(POPS_BUILD_TESTS)
