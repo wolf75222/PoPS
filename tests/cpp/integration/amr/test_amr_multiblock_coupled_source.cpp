@@ -64,6 +64,7 @@ struct ScalarModel {
     law.template wave_speeds<Axis>(state, lower, upper);
   }
   POPS_HD State source(const State&, const pops::ProviderValues<0>&) const { return {}; }
+  POPS_HD State project(const State& state, const pops::ProviderValues<0>&) const { return state; }
   POPS_HD pops::Real elliptic_rhs(const State&) const { return pops::Real(0); }
 };
 
@@ -169,6 +170,7 @@ struct CoupledFixture {
   std::shared_ptr<pops::runtime::program::AmrProgramContext<Dim>> context;
   std::shared_ptr<bool> fail_on_rank_zero = std::make_shared<bool>(false);
   std::shared_ptr<bool> violate_conservation_on_rank_zero = std::make_shared<bool>(false);
+  std::shared_ptr<bool> cross_owner_projection_scratch = std::make_shared<bool>(false);
 
   CoupledFixture() : system(config()) {
     system.install_block_state_route("donor", "state/donor");
@@ -234,8 +236,10 @@ struct CoupledFixture {
     context = pops::runtime::program::make_program_execution_provider(&system);
     context->configure_primary_clock("test.clock.macro");
     context->install(
-        [context = context](double macro_dt) {
-          context->advance_hierarchy(macro_dt, [context](double level_dt) {
+        [context = context,
+         cross_owner_projection_scratch = cross_owner_projection_scratch](double macro_dt) {
+          context->advance_hierarchy(macro_dt, [context,
+                                                cross_owner_projection_scratch](double level_dt) {
             std::array<pops::MultiFab<Dim>*, 2> accepted{};
             std::array<pops::MultiFab<Dim>*, 2> candidates{};
             for (int program_block = 0; program_block < 2; ++program_block) {
@@ -269,6 +273,11 @@ struct CoupledFixture {
 
               candidates[static_cast<std::size_t>(program_block)] = &candidate;
             }
+            if (*cross_owner_projection_scratch)
+              context->apply_projection(1, *candidates[0]);
+            for (int program_block = 0; program_block < 2; ++program_block)
+              context->apply_projection(program_block,
+                                        *candidates[static_cast<std::size_t>(program_block)]);
             context->apply_coupling_operators(
                 "test.amr.multiblock-coupled-source/program-ssprk2-imex-v1",
                 "test.amr.multiblock-coupled-source/rate-final",
@@ -321,6 +330,29 @@ void prove_conservative_execution_rollback_and_retry() {
   const BlockLevelSnapshot<Dim> initial = snapshot_block_levels(fixture.system);
   const double total_before = fixture.system.mass("donor") + fixture.system.mass("receiver");
 
+  // The rank-zero request intentionally offers the other block's accepted carrier.  The facade
+  // must converge that rank-local preflight failure before any rank enters the projection closure;
+  // both accepted blocks remain byte-exact and a clean detached retry is still executable.
+  const pops::MultiFab<Dim>& selected_live = fixture.system.prepared_amr_block_state(0, 0);
+  pops::MultiFab<Dim> detached(selected_live.layout(), selected_live.distribution(),
+                               selected_live.local_rank(), selected_live.ncomp(),
+                               selected_live.ghosts());
+  detached.set_val(pops::Real(0));
+  const auto cross_owner_live_projection = [&] {
+    if (pops::my_rank() == 0)
+      fixture.system.project_prepared_amr_block_level_state(
+          0, 0, 0, fixture.system.prepared_amr_block_state(1, 0));
+    else
+      fixture.system.project_prepared_amr_block_level_state(0, 0, 0, detached);
+  };
+  if (pops::n_ranks() == 1)
+    EXPECT_THROW(cross_owner_live_projection(), std::invalid_argument);
+  else
+    EXPECT_THROW(cross_owner_live_projection(), std::runtime_error);
+  EXPECT_TRUE(byte_exact_block_levels(initial, fixture.system));
+  EXPECT_NO_THROW(fixture.system.project_prepared_amr_block_level_state(0, 0, 0, detached));
+  EXPECT_TRUE(byte_exact_block_levels(initial, fixture.system));
+
   fixture.system.step(0.4);
   for (int level = 0; level < fixture.system.n_levels(); ++level) {
     EXPECT_LT(pops::reduce_max(fixture.system.prepared_amr_block_state(0, level)),
@@ -332,6 +364,14 @@ void prove_conservative_execution_rollback_and_retry() {
               2.0e-11);
 
   const BlockLevelSnapshot<Dim> rollback = snapshot_block_levels(fixture.system);
+  *fixture.cross_owner_projection_scratch = true;
+  if (pops::n_ranks() == 1)
+    EXPECT_THROW(fixture.system.step(0.2), std::invalid_argument);
+  else
+    EXPECT_THROW(fixture.system.step(0.2), std::runtime_error);
+  EXPECT_TRUE(byte_exact_block_levels(rollback, fixture.system));
+
+  *fixture.cross_owner_projection_scratch = false;
   *fixture.violate_conservation_on_rank_zero = true;
   EXPECT_THROW(fixture.system.step(0.2), std::runtime_error);
   EXPECT_TRUE(byte_exact_block_levels(rollback, fixture.system));

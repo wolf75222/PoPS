@@ -34,6 +34,7 @@ labels = ["integration", "amr", "medium"]
 name = "test_amr_multiblock_coupled_source"
 sources = ["tests/cpp/integration/amr/test_amr_multiblock_coupled_source.cpp"]
 labels = ["integration", "amr", "medium"]
+mpi_variants = [2]
 
 [[cpp.suite]]
 name = "test_amr_multiblock_imex"

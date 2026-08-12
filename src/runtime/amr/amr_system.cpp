@@ -9148,6 +9148,32 @@ MultiFab<Dim>& AmrSystem<Dim>::prepared_amr_block_state(int runtime_block, int l
 }
 
 template <int Dim>
+const MultiFab<Dim>* AmrSystem<Dim>::prepared_amr_block_level_active_mask(int runtime_block,
+                                                                          int level) const {
+  p_->ensure_engine();
+  if (!p_->prepared_hierarchy || !p_->prepared_hierarchy->lane)
+    throw std::logic_error("prepared AMR active mask requires a collectively prepared hierarchy");
+  if (runtime_block < 0 ||
+      static_cast<std::size_t>(runtime_block) >= p_->prepared_hierarchy->block_levels.size())
+    throw std::out_of_range("prepared AMR active mask block is out of range");
+  if (level < 0 ||
+      static_cast<std::size_t>(level) >= p_->prepared_hierarchy->embedded_boundary.size() ||
+      static_cast<std::size_t>(level) >=
+          p_->prepared_hierarchy->block_levels[static_cast<std::size_t>(runtime_block)].size())
+    throw std::out_of_range("prepared AMR active mask level is out of range");
+  const auto& embedded = p_->prepared_hierarchy->embedded_boundary[static_cast<std::size_t>(level)];
+  if (!embedded || embedded->mode() == runtime::system::PreparedEmbeddedBoundaryMode::inactive)
+    return nullptr;
+  const MultiFab<Dim>& accepted = prepared_amr_block_state(runtime_block, level);
+  const MultiFab<Dim>& active = embedded->active_mask();
+  if (active.ncomp() != 1 || active.layout() != accepted.layout() ||
+      active.distribution() != accepted.distribution() ||
+      active.local_rank() != accepted.local_rank() || active.local_size() != accepted.local_size())
+    throw std::logic_error("prepared AMR active mask differs from its exact block-level carrier");
+  return &active;
+}
+
+template <int Dim>
 void AmrSystem<Dim>::install_prepared_amr_interface_flux_provider(
     std::string provider_contract,
     std::function<void(runtime::multiblock::InterfaceFluxScheduler<Dim>&)> installer) {
@@ -10323,6 +10349,89 @@ void AmrSystem<Dim>::validate_prepared_amr_state_publication_candidate(
     throw std::runtime_error(
         "AMR Program state publication candidate failed prepared recovery collectively");
   }
+}
+
+template <int Dim>
+void AmrSystem<Dim>::project_prepared_amr_block_level_state(int runtime_block, int level,
+                                                            int candidate_runtime_block,
+                                                            MultiFab<Dim>& detached_candidate) {
+  p_->ensure_engine();
+  if (!p_->prepared_hierarchy || !p_->prepared_hierarchy->lane)
+    throw std::logic_error("prepared AMR projection requires a collectively prepared hierarchy");
+  const ExecutionLane& lane = *p_->prepared_hierarchy->lane;
+  const auto communicator = lane.communicator();
+  std::lock_guard execution_lock(p_->prepared_hierarchy->execution_mutex);
+  std::exception_ptr local_error;
+  long local_failure = 0;
+  const PreparedGeneratedAmrLevelBlock<Dim>* prepared_level = nullptr;
+  try {
+    if (candidate_runtime_block != runtime_block)
+      throw std::invalid_argument(
+          "prepared AMR projection candidate owner differs from its selected runtime block");
+    if (runtime_block < 0 ||
+        static_cast<std::size_t>(runtime_block) >= p_->prepared_hierarchy->block_levels.size())
+      throw std::out_of_range("prepared AMR projection block is out of range");
+    if (level < 0 ||
+        static_cast<std::size_t>(level) >=
+            p_->prepared_hierarchy->block_levels[static_cast<std::size_t>(runtime_block)].size())
+      throw std::out_of_range("prepared AMR projection level is out of range");
+    const MultiFab<Dim>& accepted = prepared_amr_block_state(runtime_block, level);
+    bool aliases_live_state = false;
+    for (std::size_t live_block = 0; live_block < p_->blocks.size() && !aliases_live_state;
+         ++live_block) {
+      const MultiFab<Dim>& live = p_->block_state(live_block, static_cast<std::size_t>(level));
+      if (&detached_candidate == &live) {
+        aliases_live_state = true;
+        break;
+      }
+      for (std::size_t candidate_local = 0;
+           candidate_local < detached_candidate.local_size() && !aliases_live_state;
+           ++candidate_local)
+        for (std::size_t live_local = 0; live_local < live.local_size(); ++live_local)
+          if (detached_candidate.fab(candidate_local).view().data ==
+              live.fab(live_local).view().data) {
+            aliases_live_state = true;
+            break;
+          }
+    }
+    if (aliases_live_state)
+      throw std::invalid_argument(
+          "prepared AMR projection refuses a candidate aliasing any live block-level carrier");
+    if (!same_field_contract(detached_candidate, accepted))
+      throw std::invalid_argument(
+          "prepared AMR projection candidate differs from its exact block-level carrier");
+    const MultiFab<Dim>* const active = prepared_amr_block_level_active_mask(runtime_block, level);
+    if (active != nullptr &&
+        (active->layout() != accepted.layout() ||
+         active->distribution() != accepted.distribution() ||
+         active->local_rank() != accepted.local_rank() ||
+         active->local_size() != accepted.local_size() || active->ncomp() != 1))
+      throw std::logic_error("prepared AMR projection active mask lost its exact level contract");
+    const auto& prepared_block = p_->prepared_blocks[static_cast<std::size_t>(runtime_block)];
+    const auto& selected_level =
+        p_->prepared_hierarchy->block_levels[static_cast<std::size_t>(runtime_block)]
+                                            [static_cast<std::size_t>(level)];
+    if (!prepared_block.has_pointwise_projection || !selected_level.has_pointwise_projection())
+      throw std::runtime_error("prepared AMR block has no pointwise projection provider");
+    prepared_level = &selected_level;
+  } catch (...) {
+    local_failure = 1;
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_failure, communicator) != 0) {
+    if (lane.size() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("prepared AMR pointwise projection preflight failed collectively");
+  }
+  if (all_reduce_min(static_cast<long>(runtime_block), communicator) !=
+          all_reduce_max(static_cast<long>(runtime_block), communicator) ||
+      all_reduce_min(static_cast<long>(level), communicator) !=
+          all_reduce_max(static_cast<long>(level), communicator))
+    throw std::invalid_argument(
+        "prepared AMR projection block/level identities differ between ranks");
+  if (prepared_level == nullptr)
+    throw std::logic_error("prepared AMR projection lost its validated block-level capability");
+  prepared_level->project(detached_candidate);
 }
 
 template <int Dim>
@@ -15174,6 +15283,8 @@ template const MultiFab<kNativeDimension>& AmrSystem<kNativeDimension>::prepared
     int, int) const;
 template MultiFab<kNativeDimension>& AmrSystem<kNativeDimension>::prepared_amr_block_state(int,
                                                                                            int);
+template const MultiFab<kNativeDimension>*
+AmrSystem<kNativeDimension>::prepared_amr_block_level_active_mask(int, int) const;
 template void AmrSystem<kNativeDimension>::install_prepared_amr_coupling_operator(
     std::string, CouplingOperatorView, AmrSystem<kNativeDimension>::PreparedCouplingOperator);
 template void AmrSystem<kNativeDimension>::install_prepared_amr_interface_flux_provider(
@@ -15318,6 +15429,8 @@ template Real AmrSystem<kNativeDimension>::prepared_amr_block_level_maximum_spee
     int, int, const MultiFab<kNativeDimension>&) const;
 template void AmrSystem<kNativeDimension>::validate_prepared_amr_state_publication_candidate(
     int, int, const MultiFab<kNativeDimension>&) const;
+template void AmrSystem<kNativeDimension>::project_prepared_amr_block_level_state(
+    int, int, int, MultiFab<kNativeDimension>&);
 template void AmrSystem<kNativeDimension>::add_prepared_amr_block_poisson_rhs(
     int, int, const MultiFab<kNativeDimension>&, MultiFab<kNativeDimension>&);
 template void AmrSystem<kNativeDimension>::install_prepared_auxiliary_provider(

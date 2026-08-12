@@ -52,4 +52,16 @@ def test_projection_dispatch_lives_on_the_ranked_context_not_a_parallel_service(
 
     amr = AMR_CONTEXT.read_text(encoding="utf-8")
     assert "ProgramExecutionServices" not in amr
-    assert "apply_projection(" not in amr
+    projection = _between(
+        amr,
+        "void apply_projection(int program_block, field_type& detached_candidate) const",
+        "Real max_wave_speed(",
+    )
+    assert "const int runtime_block = sys_block(program_block);" in projection
+    assert (
+        "const int candidate_owner = projection_candidate_owner_(detached_candidate);" in projection
+    )
+    assert (
+        "project_prepared_amr_block_level_state(runtime_block, active_level_, candidate_owner,"
+        in projection
+    )

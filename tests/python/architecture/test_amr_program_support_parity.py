@@ -17,9 +17,7 @@ import pytest
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 SUPPORT_PY = REPO_ROOT / "python" / "pops" / "runtime" / "amr_program_support.py"
 CONTEXT_HPP = REPO_ROOT / "include" / "pops" / "runtime" / "program" / "amr_program_context.hpp"
-UNIFORM_CONTEXT_HPP = (
-    REPO_ROOT / "include" / "pops" / "runtime" / "program" / "program_context.hpp"
-)
+UNIFORM_CONTEXT_HPP = REPO_ROOT / "include" / "pops" / "runtime" / "program" / "program_context.hpp"
 PRODUCTION_CODEGEN = (
     REPO_ROOT / "python" / "pops" / "codegen" / "program_codegen.py",
     REPO_ROOT / "python" / "pops" / "codegen" / "program_emit_ops.py",
@@ -168,9 +166,7 @@ def test_parser_finds_only_explicit_known_deferrals():
         < single_state_route.index("facade_->solve_program_field_from_blocks_at(")
     )
     assert "solve_fields_from_blocks_at" in UNIFORM_CONTEXT_HPP.read_text(encoding="utf-8")
-    assert "program_execution_solve_generated_field_from_blocks_outcome_" in (
-        context_header
-    )
+    assert "program_execution_solve_generated_field_from_blocks_outcome_" in (context_header)
     assert "named_solve_reports_" not in context_header
     assert "fine_level_field_perturbation" not in module.DEFERRED_GROUPS
     assert "refined_shared_block_interfaces" not in module.DEFERRED_GROUPS
@@ -243,15 +239,24 @@ def test_context_sensitive_routes_report_green_or_pending_from_resolved_hierarch
     assert (
         module.amr_program_op_support(field_jacobian, context=_context(module, refined=True)) == {}
     )
-    assert module.amr_program_op_support(
-        _Program([]), context=_context(
-            module, refined=True, interfaces=True, frozen=False)) == {}
-    assert module.amr_program_op_support(
-        _Program([]), context=_context(
-            module, refined=False, interfaces=True, frozen=False)) == {}
-    assert module.amr_program_op_support(
-        _Program([]), context=_context(
-            module, refined=True, interfaces=True, frozen=True)) == {}
+    assert (
+        module.amr_program_op_support(
+            _Program([]), context=_context(module, refined=True, interfaces=True, frozen=False)
+        )
+        == {}
+    )
+    assert (
+        module.amr_program_op_support(
+            _Program([]), context=_context(module, refined=False, interfaces=True, frozen=False)
+        )
+        == {}
+    )
+    assert (
+        module.amr_program_op_support(
+            _Program([]), context=_context(module, refined=True, interfaces=True, frozen=True)
+        )
+        == {}
+    )
 
     frozen_three = module.AMRProgramSupportContext(
         hierarchy_level_count=3,
