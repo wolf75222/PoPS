@@ -5,10 +5,13 @@
 
 #include <pops/parallel/comm.hpp>
 #include <pops/runtime/builders/compiled/dsl_block.hpp>
+#include <pops/runtime/builders/compiled/generated_system_block.hpp>
 #include <pops/runtime/config/generated_component_abi.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
 #include <pops/runtime/system.hpp>
+#include <pops/numerics/spatial/nd/conservation_laws.hpp>
 
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
@@ -16,6 +19,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -28,6 +32,16 @@
 #error "test_mpi_system_layout_transfer requires an MPI-enabled PoPS build"
 #endif
 #include <mpi.h>
+
+namespace pops {
+
+template <int Dim, class Model>
+PreparedSystemBlock<Dim> prepare_exact_system_block(
+    CompiledSystemBlockPreparation<Dim, Model> request) {
+  return prepare_generated_system_block(std::move(request));
+}
+
+}  // namespace pops
 
 namespace {
 
@@ -44,10 +58,11 @@ constexpr char kBeforeStep[] = "pops://synchronization/before-step@1";
 // This fixture is deliberately only a Transfer provider.  The Systems and their transactions stay
 // in the linked PoPS runtime; the DSO proves that the prepared consumer loads, authenticates and
 // invokes the public native component ABI instead of substituting a host callback in the test.
-std::string transfer_component_source() {
-  return R"CPP(
+std::string transfer_component_source(int dimension) {
+  std::string source = R"CPP(
 #include <pops/runtime/config/generated_component_abi.hpp>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 
@@ -55,6 +70,7 @@ std::string transfer_component_source() {
     constexpr char kComponentId[] = "pops://test/system-layout-transfer-mpi@1.0.0";
     constexpr char kSemanticIdentity[] = "system-layout-transfer-mpi-semantic-v1";
     constexpr char kManifestIdentity[] = "system-layout-transfer-mpi-manifest-v1";
+    constexpr std::size_t kDimension = __POPS_DIM__;
 
     int fail(PopsComponentStatusV1* status, int code, const char* reason) {
       if (status != nullptr)
@@ -66,8 +82,8 @@ std::string transfer_component_source() {
       if (request == nullptr || status == nullptr ||
           request->struct_size < sizeof(PopsTransferRequestV1))
         return fail(status, 11, "transfer request is incomplete");
-      if (request->dimension != 2 || request->source.dimension != 2 ||
-          request->destination.dimension != 2 || request->source.data == nullptr ||
+      if (request->dimension != kDimension || request->source.dimension != kDimension ||
+          request->destination.dimension != kDimension || request->source.data == nullptr ||
           request->destination.data == nullptr || request->refinement_ratio == nullptr)
         return fail(status, 12, "transfer field views are incomplete");
       if (request->source.scalar_type != POPS_SCALAR_FLOAT64_V1 ||
@@ -76,36 +92,49 @@ std::string transfer_component_source() {
           request->operation != POPS_TRANSFER_OPERATION_CONSERVATIVE_CELL_AVERAGE_V1)
         return fail(status, 13, "transfer type or operation is unsupported");
 
-      const std::int32_t ratio_y = request->refinement_ratio[0];
-      const std::int32_t ratio_x = request->refinement_ratio[1];
-      if (ratio_y <= 0 || ratio_x <= 0 ||
-          request->source.extents[0] != request->destination.extents[0] * ratio_y ||
-          request->source.extents[1] != request->destination.extents[1] * ratio_x)
-        return fail(status, 14, "transfer refinement ratio does not match the field extents");
+      std::size_t destination_elements = 1;
+      std::size_t samples_per_destination = 1;
+      for (std::size_t axis = 0; axis < kDimension; ++axis) {
+        const std::int32_t ratio = request->refinement_ratio[axis];
+        if (ratio <= 0 || request->source.extents[axis] !=
+                              request->destination.extents[axis] * static_cast<std::size_t>(ratio))
+          return fail(status, 14, "transfer refinement ratio does not match the field extents");
+        destination_elements *= request->destination.extents[axis];
+        samples_per_destination *= static_cast<std::size_t>(ratio);
+      }
 
       const auto* source = static_cast<const double*>(request->source.data);
       auto* destination = static_cast<double*>(request->destination.data);
-      const double scale = 1.0 / static_cast<double>(ratio_y * ratio_x);
+      const double scale = 1.0 / static_cast<double>(samples_per_destination);
       for (std::size_t component = 0; component < request->source.component_count; ++component) {
-        for (std::size_t y = 0; y < request->destination.extents[0]; ++y) {
-          for (std::size_t x = 0; x < request->destination.extents[1]; ++x) {
-            double sum = 0.0;
-            for (std::int32_t dy = 0; dy < ratio_y; ++dy) {
-              for (std::int32_t dx = 0; dx < ratio_x; ++dx) {
-                const auto source_offset =
-                    static_cast<std::ptrdiff_t>(component) * request->source.component_stride +
-                    static_cast<std::ptrdiff_t>(y * ratio_y + dy) *
-                        request->source.axis_strides[0] +
-                    static_cast<std::ptrdiff_t>(x * ratio_x + dx) * request->source.axis_strides[1];
-                sum += source[source_offset];
-              }
-            }
-            const auto destination_offset =
-                static_cast<std::ptrdiff_t>(component) * request->destination.component_stride +
-                static_cast<std::ptrdiff_t>(y) * request->destination.axis_strides[0] +
-                static_cast<std::ptrdiff_t>(x) * request->destination.axis_strides[1];
-            destination[destination_offset] = sum * scale;
+        for (std::size_t linear_destination = 0; linear_destination < destination_elements;
+             ++linear_destination) {
+          std::array<std::size_t, kDimension> destination_index{};
+          std::size_t remaining_destination = linear_destination;
+          std::ptrdiff_t destination_offset =
+              static_cast<std::ptrdiff_t>(component) * request->destination.component_stride;
+          for (std::size_t axis = 0; axis < kDimension; ++axis) {
+            destination_index[axis] = remaining_destination % request->destination.extents[axis];
+            remaining_destination /= request->destination.extents[axis];
+            destination_offset += static_cast<std::ptrdiff_t>(destination_index[axis]) *
+                                  request->destination.axis_strides[axis];
           }
+          double sum = 0.0;
+          for (std::size_t sample = 0; sample < samples_per_destination; ++sample) {
+            std::size_t remaining_sample = sample;
+            std::ptrdiff_t source_offset =
+                static_cast<std::ptrdiff_t>(component) * request->source.component_stride;
+            for (std::size_t axis = 0; axis < kDimension; ++axis) {
+              const std::size_t ratio = static_cast<std::size_t>(request->refinement_ratio[axis]);
+              const std::size_t offset = remaining_sample % ratio;
+              remaining_sample /= ratio;
+              source_offset +=
+                  static_cast<std::ptrdiff_t>(destination_index[axis] * ratio + offset) *
+                  request->source.axis_strides[axis];
+            }
+            sum += source[source_offset];
+          }
+          destination[destination_offset] = sum * scale;
         }
       }
       *status = {sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr};
@@ -133,25 +162,58 @@ std::string transfer_component_source() {
       return &component_api;
     }
   )CPP";
+  constexpr std::string_view marker = "__POPS_DIM__";
+  source.replace(source.find(marker), marker.size(), std::to_string(dimension));
+  return source;
 }
 
+template <int Dim>
 struct PassiveScalar {
-  using State = pops::StateVec<1>;
-  using Prim = pops::StateVec<1>;
-  static constexpr int n_vars = 1;
+  using Law = pops::nd::ScalarAdvection<Dim>;
+  using Schema = typename Law::Schema;
+  using State = typename Law::State;
+  using Primitive = typename Law::Primitive;
+  static constexpr int dimension = Dim;
+  static constexpr int n_vars = Law::n_vars;
+  static constexpr int n_providers = 0;
+  Law law{};
 
-  POPS_HD State flux(const State&, const auto&, int) const { return State{}; }
-  POPS_HD pops::Real max_wave_speed(const State&, const auto&, int) const { return pops::Real(1); }
+  [[nodiscard]] static constexpr pops::PreparedProviderIdentity provider_identity() noexcept {
+    return {"test.mpi-system-layout-transfer.scalar", 1};
+  }
+  void serialize_exact_parameters(pops::ExactContractBuilder& contract) const {
+    for (int axis = 0; axis < Dim; ++axis)
+      contract.scalar(law.velocity()[axis]);
+  }
+  POPS_HD pops::nd::StateConversion<Primitive> recover(const State& state) const {
+    return law.recover(state);
+  }
+  POPS_HD pops::nd::StateConversion<State> make_conservative(const Primitive& primitive) const {
+    return law.make_conservative(primitive);
+  }
+  POPS_HD pops::nd::StateConversionStatus admissibility(const State& state) const {
+    return law.admissibility(state);
+  }
+  template <int Axis>
+  POPS_HD State flux(const State& state) const {
+    return law.template flux<Axis>(state);
+  }
+  template <int Axis>
+  POPS_HD pops::Real max_wave_speed(const State& state) const {
+    return law.template max_wave_speed<Axis>(state);
+  }
+  template <int Axis>
+  POPS_HD void wave_speeds(const State& state, pops::Real& lower, pops::Real& upper) const {
+    law.template wave_speeds<Axis>(state, lower, upper);
+  }
   POPS_HD State source(const State&, const pops::ProviderValues<0>&) const { return State{}; }
   POPS_HD pops::Real elliptic_rhs(const State&) const { return pops::Real(0); }
-  POPS_HD Prim to_primitive(const State& state) const { return state; }
-  POPS_HD State to_conservative(const Prim& primitive) const { return primitive; }
 
   static pops::VariableSet conservative_vars() {
-    return {pops::VariableKind::Conservative, {"u"}, 1, {pops::VariableRole::Custom}};
+    return {pops::VariableKind::Conservative, {"u"}, 1, {pops::VariableRole::Scalar}};
   }
   static pops::VariableSet primitive_vars() {
-    return {pops::VariableKind::Primitive, {"u"}, 1, {pops::VariableRole::Custom}};
+    return {pops::VariableKind::Primitive, {"u"}, 1, {pops::VariableRole::Scalar}};
   }
 };
 
@@ -162,7 +224,29 @@ pops::component::ExpectedNativeComponent expected_component() {
       POPS_ABI_KEY_LITERAL, {{POPS_NATIVE_INTERFACE_TRANSFER_V1, 1, sizeof(PopsTransferApiV1)}}};
 }
 
-pops::SystemLayoutTransferSpec transfer_spec() {
+pops::SystemLayoutTransferExecution transfer_execution(MPI_Comm communicator) {
+  return {1,
+          "test::execution::mpi-lane-host",
+          POPS_MEMORY_SPACE_HOST_V1,
+          "test::backend::mpi-cpu",
+          "test::device::cpu:0",
+          POPS_SCALAR_FLOAT64_V1,
+          POPS_PRECISION_FLOAT64_V1,
+          POPS_PRECISION_FLOAT64_V1,
+          POPS_PRECISION_FLOAT64_V1,
+          POPS_PRECISION_FLOAT64_V1,
+          0,
+          "test::stream::host-synchronous",
+          static_cast<std::int64_t>(MPI_Comm_c2f(communicator)),
+          static_cast<std::int64_t>(MPI_Type_c2f(MPI_DOUBLE)),
+          "test::mpi-system-layout-transfer-lane",
+          "MPI_DOUBLE"};
+}
+
+template <int Dim>
+pops::SystemLayoutTransferSpec<Dim> transfer_spec() {
+  std::array<std::int32_t, Dim> ratio{};
+  ratio.fill(2);
   return {kMappingIdentity,
           kProviderIdentity,
           kComponentId,
@@ -174,7 +258,7 @@ pops::SystemLayoutTransferSpec transfer_spec() {
           kCellAverage,
           kCellAverage,
           kBeforeStep,
-          {2, 2},
+          ratio,
           POPS_TRANSFER_OPERATION_CONSERVATIVE_CELL_AVERAGE_V1};
 }
 
@@ -203,31 +287,72 @@ class ScopedMpiCommunicator {
   MPI_Comm communicator_ = MPI_COMM_NULL;
 };
 
-pops::SystemLayoutTransferExecution transfer_execution(MPI_Comm communicator) {
-  return {1,
-          "test::execution::mpi-lane-host",
-          POPS_MEMORY_SPACE_HOST_V1,
-          "test::backend::mpi-cpu",
-          "test::device::cpu:0",
-          POPS_SCALAR_FLOAT64_V1,
-          POPS_PRECISION_FLOAT64_V1,
-          POPS_PRECISION_FLOAT64_V1,
-          POPS_PRECISION_FLOAT64_V1,
-          POPS_PRECISION_FLOAT64_V1,
-          0,
-          "test::stream::host-synchronous",
-          static_cast<std::int64_t>(MPI_Comm_c2f(communicator)),
-          static_cast<std::int64_t>(MPI_Type_c2f(MPI_DOUBLE)),
-          "test::mpi-system-layout-transfer-lane",
-          "MPI_DOUBLE"};
-}
-
-void install_scalar(pops::System& system, const char* name) {
-  pops::add_compiled_model(system, name, PassiveScalar{}, "none", "rusanov", "conservative",
+template <int Dim>
+void install_scalar(pops::System<Dim>& system, const char* name) {
+  pops::add_compiled_model(system, name, PassiveScalar<Dim>{}, "none", "rusanov", "conservative",
                            "explicit");
 }
 
+template <int Dim>
+pops::SystemConfig<Dim> uniform_config(int cells_per_axis) {
+  pops::SystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = cells_per_axis;
+    config.lower[axis] = pops::Real(0);
+    config.upper[axis] = pops::Real(1);
+    config.periodicity[static_cast<std::size_t>(axis)] = true;
+  }
+  config.boxes = {pops::Box<Dim>::from_extents(config.shape)};
+  return config;
+}
+
+template <int Dim>
+std::size_t cell_count(int cells_per_axis) {
+  std::size_t result = 1;
+  for (int axis = 0; axis < Dim; ++axis)
+    result *= static_cast<std::size_t>(cells_per_axis);
+  return result;
+}
+
+template <int Dim>
+std::vector<double> conservative_cell_averages(const std::vector<double>& fine,
+                                               int fine_cells_per_axis, int coarse_cells_per_axis) {
+  if (fine_cells_per_axis != 2 * coarse_cells_per_axis ||
+      fine.size() != cell_count<Dim>(fine_cells_per_axis))
+    throw std::invalid_argument("layout-transfer fixture requires a factor-two exact-rank remap");
+  std::vector<double> coarse(cell_count<Dim>(coarse_cells_per_axis));
+  const std::size_t samples_per_coarse = cell_count<Dim>(2);
+  for (std::size_t linear_coarse = 0; linear_coarse < coarse.size(); ++linear_coarse) {
+    std::array<std::size_t, Dim> coarse_index{};
+    std::size_t remaining_coarse = linear_coarse;
+    for (int axis = 0; axis < Dim; ++axis) {
+      coarse_index[static_cast<std::size_t>(axis)] =
+          remaining_coarse % static_cast<std::size_t>(coarse_cells_per_axis);
+      remaining_coarse /= static_cast<std::size_t>(coarse_cells_per_axis);
+    }
+    double sum = 0.0;
+    for (std::size_t sample = 0; sample < samples_per_coarse; ++sample) {
+      std::size_t remaining_sample = sample;
+      std::size_t linear_fine = 0;
+      std::size_t stride = 1;
+      for (int axis = 0; axis < Dim; ++axis) {
+        const std::size_t fine_coordinate =
+            2 * coarse_index[static_cast<std::size_t>(axis)] + remaining_sample % 2;
+        remaining_sample /= 2;
+        linear_fine += fine_coordinate * stride;
+        stride *= static_cast<std::size_t>(fine_cells_per_axis);
+      }
+      sum += fine[linear_fine];
+    }
+    coarse[linear_coarse] = sum / static_cast<double>(samples_per_coarse);
+  }
+  return coarse;
+}
+
 int run_mpi_system_layout_transfer(int argc, char** argv) {
+  constexpr int Dim = pops::kNativeDimension;
+  using NativeSystem = pops::System<Dim>;
+  using NativeSystemConfig = pops::SystemConfig<Dim>;
   // Uniform System owns one global box on rank zero.  This is therefore a direct proof of the
   // collective contract, exact world authorities, global receipts, zero-owner participation and
   // transaction retry/rollback.  It deliberately does not claim distributed multi-box payload
@@ -296,7 +421,7 @@ int run_mpi_system_layout_transfer(int argc, char** argv) {
   int package_ok = 0;
   if (rank == 0) {
     std::ofstream output(source);
-    output << transfer_component_source();
+    output << transfer_component_source(Dim);
     output.close();
     const auto package = pops::test::native_dso::compile_shared(source, library);
     package_ok = package.ok ? 1 : 0;
@@ -326,13 +451,14 @@ int run_mpi_system_layout_transfer(int argc, char** argv) {
           pops::component::LoadedComponent::load(library, expected_component()));
     });
 
-    std::unique_ptr<pops::System> fine;
-    std::unique_ptr<pops::System> coarse;
-    std::shared_ptr<pops::PreparedSystemLayoutTransfer> transfer;
-    const std::vector<double> fine_initial{1.0,  3.0,  5.0,  7.0,  9.0,  11.0, 13.0, 15.0,
-                                           17.0, 19.0, 21.0, 23.0, 25.0, 27.0, 29.0, 31.0};
-    const std::vector<double> coarse_initial(4, -4.0);
-    const std::vector<double> coarse_average{6.0, 10.0, 22.0, 26.0};
+    std::unique_ptr<NativeSystem> fine;
+    std::unique_ptr<NativeSystem> coarse;
+    std::shared_ptr<pops::PreparedSystemLayoutTransfer<Dim>> transfer;
+    std::vector<double> fine_initial(cell_count<Dim>(4));
+    for (std::size_t index = 0; index < fine_initial.size(); ++index)
+      fine_initial[index] = static_cast<double>(2 * index + 1);
+    const std::vector<double> coarse_initial(cell_count<Dim>(2), -4.0);
+    const std::vector<double> coarse_average = conservative_cell_averages<Dim>(fine_initial, 4, 2);
     std::vector<double> fine_retry(fine_initial.size());
     std::vector<double> coarse_retry(coarse_average.size());
     for (std::size_t index = 0; index < fine_initial.size(); ++index)
@@ -342,14 +468,10 @@ int run_mpi_system_layout_transfer(int argc, char** argv) {
 
     if (healthy) {
       healthy = phase("two bound native Systems", [&] {
-        pops::SystemConfig fine_config;
-        fine_config.n = 4;
-        fine_config.L = 1.0;
-        fine_config.periodicity = {true, true};
-        pops::SystemConfig coarse_config = fine_config;
-        coarse_config.n = 2;
-        fine = std::make_unique<pops::System>(fine_config);
-        coarse = std::make_unique<pops::System>(coarse_config);
+        NativeSystemConfig fine_config = uniform_config<Dim>(4);
+        NativeSystemConfig coarse_config = uniform_config<Dim>(2);
+        fine = std::make_unique<NativeSystem>(fine_config);
+        coarse = std::make_unique<NativeSystem>(coarse_config);
         install_scalar(*fine, "fine");
         install_scalar(*coarse, "coarse");
         fine->set_state("fine", fine_initial);
@@ -365,8 +487,9 @@ int run_mpi_system_layout_transfer(int argc, char** argv) {
       check(coarse->local_boxes("coarse").size() == (rank == 0 ? 1u : 0u),
             "coarse System has one owner and one empty peer");
       healthy = phase("collective prepared Transfer construction", [&] {
-        transfer = pops::PreparedSystemLayoutTransfer::prepare(
-            *fine, *coarse, component, transfer_spec(), transfer_execution(transfer_lane.get()));
+        transfer = pops::PreparedSystemLayoutTransfer<Dim>::prepare(
+            *fine, *coarse, component, transfer_spec<Dim>(),
+            transfer_execution(transfer_lane.get()));
       });
     }
 
@@ -382,7 +505,8 @@ int run_mpi_system_layout_transfer(int argc, char** argv) {
                 receipt.execution_identity == "test::execution::mpi-lane-host" &&
                 receipt.operation == POPS_TRANSFER_OPERATION_CONSERVATIVE_CELL_AVERAGE_V1 &&
                 receipt.generation == generation && receipt.attempt == attempt &&
-                receipt.source_element_count == 16 && receipt.destination_element_count == 4,
+                receipt.source_element_count == fine_initial.size() &&
+                receipt.destination_element_count == coarse_initial.size(),
             "global Transfer receipt authenticates the collective operation");
     };
 
