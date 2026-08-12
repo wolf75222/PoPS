@@ -66,7 +66,7 @@ std::string package_source() {
                                         const char* riemann, const char* recon, const char* time,
                                         double gamma, int substeps, int evolve, int stride,
                                         const double*, int, double pos_floor) {
-      auto* system = reinterpret_cast<pops::System*>(raw);
+      auto* system = reinterpret_cast<pops::System<pops::kNativeDimension>*>(raw);
       pops::add_compiled_model(*system, name, NamedAuxModel{}, limiter, riemann, recon, time, gamma,
                                substeps, evolve != 0, stride, pos_floor);
     }
@@ -94,13 +94,17 @@ static int pops_run_test_native_aux_named(int argc, char** argv) {
 
   constexpr int n = 8;
   constexpr double kappa = 0.7;
-  const std::size_t cells = static_cast<std::size_t>(n) * n;
-  SystemConfig config;
-  config.n = n;
-  config.L = 1.0;
-  config.periodicity = {true, true};
+  std::size_t cells = 1;
+  SystemConfig<kNativeDimension> config;
+  for (int axis = 0; axis < kNativeDimension; ++axis) {
+    cells *= static_cast<std::size_t>(n);
+    config.shape[axis] = n;
+    config.lower[axis] = Real(0);
+    config.upper[axis] = Real(1);
+    config.periodicity[axis] = true;
+  }
 
-  System system(config);
+  System<kNativeDimension> system(config);
   using namespace runtime::system;
   AuxiliaryStorageShape<kNativeDimension> shape;
   AuxiliaryComponentKey input_key{"test.native-aux", "input", "coefficient", "kappa"};
@@ -126,7 +130,7 @@ static int pops_run_test_native_aux_named(int argc, char** argv) {
 
   bool missing_provider_rejected = false;
   try {
-    System empty(config);
+    System<kNativeDimension> empty(config);
     empty.stage_auxiliary_input(input_key, std::vector<double>(cells, kappa));
   } catch (const std::logic_error&) {
     missing_provider_rejected = true;
