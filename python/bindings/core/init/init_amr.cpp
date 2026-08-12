@@ -678,6 +678,11 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
              }
              return result;
            })
+      .def("checkpoint_rank_local_carrier_manifest",
+           &AmrSystem::checkpoint_rank_local_carrier_manifest,
+           "Collective-free exact rank-local carrier and auxiliary-registry rollback witness.")
+      .def("dirty_auxiliary_provider_identities", &AmrSystem::dirty_auxiliary_provider_identities,
+           "Exact pending auxiliary-provider identities retained by rollback.")
       .def("_checkpoint_auxiliary_level_capacity", &AmrSystem::checkpoint_auxiliary_level_capacity,
            "Return the sealed AMR per-level auxiliary metadata/scalar checkpoint capacity.")
       .def(
@@ -711,10 +716,10 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
       .def("_checkpoint_program_state_capacity", &AmrSystem::checkpoint_program_state_capacity,
            "Return the artifact-authenticated POPSAND3/source-authority byte capacities.")
       .def(
-          "restore_auxiliary_checkpoint_accepted_state",
+          "restore_restart_auxiliary_checkpoint_accepted_state",
           [](AmrSystem& s, py::object payloads) {
             py::object retained_payload;
-            s.restore_auxiliary_checkpoint_accepted_state_bytes(
+            s.restore_restart_auxiliary_checkpoint_accepted_state_bytes(
                 [&]() { return static_cast<std::size_t>(py::len(payloads)); },
                 [&](std::size_t level) -> std::span<const std::uint8_t> {
                   retained_payload = payloads.attr("__getitem__")(py::int_(level));
@@ -847,7 +852,16 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
       .def("macro_step", &AmrSystem::macro_step)
       .def("set_clock", &AmrSystem::set_clock, py::arg("t"), py::arg("macro_step"))
       .def("field_provider_slots", &AmrSystem::field_provider_slots)
+      .def("checkpoint_phi_provider_slot", &AmrSystem::checkpoint_phi_provider_slot)
+      .def("field_provider_checkpoint_manifest", &AmrSystem::field_provider_checkpoint_manifest,
+           "Collective-free immutable manifest for every exact AMR field provider.")
       .def("field_provider_levels", &AmrSystem::field_provider_levels, py::arg("provider_slot"))
+      .def("restore_field_potentials", &AmrSystem::restore_field_potentials,
+           py::arg("provider_slots"), py::arg("potentials"),
+           "Atomically restore one complete all-provider field warm-start image.")
+      .def("recompute_fields_after_restart_regrid",
+           &AmrSystem::recompute_fields_after_restart_regrid,
+           "Recompute typed derived fields after a restart regrid and return its witness.")
       .def("set_field_potential", &AmrSystem::set_field_potential, py::arg("provider_slot"),
            py::arg("phi"))
       .def("set_field_potential_level", &AmrSystem::set_field_potential_level,

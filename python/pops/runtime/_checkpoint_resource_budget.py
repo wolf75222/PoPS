@@ -260,6 +260,77 @@ def _consumer_evidence(install_plan: Any) -> tuple[str, int, Any]:
     return identity, len(nodes), data
 
 
+def _amr_field_provider_manifest_capacity(
+    owner: Any, *, configured_levels: int
+) -> tuple[tuple[str, ...], int, int]:
+    """Bound the v10 field-provider manifest from its live immutable native rows."""
+    provider = getattr(owner._s, "field_provider_checkpoint_manifest", None)
+    if not callable(provider):
+        raise TypeError("AMR checkpoint budget requires the native field-provider manifest")
+    raw_rows = provider()
+    try:
+        rows = tuple(tuple(row) for row in raw_rows)
+    except TypeError:
+        raise TypeError("AMR checkpoint field-provider manifest must contain exact rows") from None
+
+    maximum_uint64_text = str((1 << 64) - 1)
+    bounded_rows = []
+    slots = []
+    for row in rows:
+        if len(row) < 14 or any(not isinstance(value, str) or not value for value in row):
+            raise TypeError("AMR checkpoint field-provider manifest has an invalid row")
+        if row[0] != "pops.amr.field-provider-checkpoint-manifest@1":
+            raise ValueError("AMR checkpoint field-provider manifest has an unknown schema")
+        if row[1] in slots:
+            raise ValueError("AMR checkpoint field-provider manifest has a duplicate slot")
+
+        def decimal(value: str, *, where: str) -> int:
+            if not value.isascii() or not value.isdecimal() or str(int(value)) != value:
+                raise ValueError("%s must be canonical unsigned decimal text" % where)
+            return int(value)
+
+        depth = decimal(row[2], where="AMR field-provider depth")
+        topology_epoch = decimal(row[6], where="AMR field-provider topology epoch")
+        materialization_generation = decimal(
+            row[7], where="AMR field-provider materialization generation"
+        )
+        if depth < 1 or depth > configured_levels:
+            raise ValueError("AMR field-provider depth exceeds its configured hierarchy")
+        if topology_epoch > (1 << 64) - 1 or materialization_generation > (1 << 64) - 1:
+            raise ValueError("AMR field-provider generation exceeds its native uint64 domain")
+        if row[8] not in {"materialized", "unmaterialized"}:
+            raise ValueError("AMR field-provider manifest has an invalid materialization state")
+
+        dependency_count = decimal(row[12], where="AMR field-provider dependency count")
+        boundary_count_index = 13 + 3 * dependency_count
+        if boundary_count_index >= len(row):
+            raise ValueError("AMR field-provider manifest truncates its dependency rows")
+        boundary_count = decimal(
+            row[boundary_count_index], where="AMR field-provider boundary dependency count"
+        )
+        if len(row) != boundary_count_index + 1 + 2 * boundary_count:
+            raise ValueError("AMR field-provider manifest has an invalid structural width")
+
+        bounded = list(row)
+        bounded[2] = str(configured_levels)
+        bounded[6] = maximum_uint64_text
+        bounded[7] = maximum_uint64_text
+        bounded[8] = "unmaterialized"
+        bounded_rows.append(tuple(bounded))
+        slots.append(row[1])
+
+    text = json.dumps(tuple(bounded_rows), separators=(",", ":"), ensure_ascii=True)
+    characters = len(text)
+    import numpy as np
+
+    structural_bytes = _mul(
+        characters,
+        int(np.dtype("U1").itemsize),
+        where="AMR field-provider manifest byte capacity",
+    )
+    return tuple(slots), characters, structural_bytes
+
+
 def _checkpoint_member_names(
     *,
     runtime_kind: str,
@@ -327,6 +398,7 @@ def _checkpoint_member_names(
             "amr_accepted_contract",
             "program_hash",
             "field_provider_slots",
+            "field_provider_manifest",
             SPATIAL_CONTRACT_KEY,
             *cadence,
             "program_accepted_state_source_authority",
@@ -364,6 +436,7 @@ def _common_budget(
     accepted_program_bytes: int,
     source_authority_bytes: int,
     structural_bytes: int,
+    field_provider_manifest_characters: int,
     program: Any,
     block_nvars_by_name: dict[str, int],
     field_names: tuple[str, ...],
@@ -492,6 +565,7 @@ def _common_budget(
             "accepted_program_bytes": accepted_program_bytes,
             "source_authority_bytes": source_authority_bytes,
             "structural_bytes": structural_bytes,
+            "field_provider_manifest_characters": field_provider_manifest_characters,
             "members": list(names),
             "manifest_characters": max_manifest_characters,
             "uncompressed_bytes": uncompressed,
@@ -535,6 +609,7 @@ def install_uniform_checkpoint_resource_budget(owner: Any, install_plan: Any) ->
         accepted_program_bytes=0,
         source_authority_bytes=0,
         structural_bytes=0,
+        field_provider_manifest_characters=0,
         program=program,
         block_nvars_by_name=block_nvars,
         field_names=tuple(sorted(artifact.plan.field_plans)),
@@ -572,16 +647,29 @@ def install_amr_checkpoint_resource_budget(owner: Any, install_plan: Any) -> Non
     source_authority_bytes = _capacity(
         program_state[1], where="native source Program authority capacity", positive=True
     )
+    artifact = install_plan.artifact
+    field_slots, field_manifest_characters, field_manifest_bytes = (
+        _amr_field_provider_manifest_capacity(owner, configured_levels=configured_levels)
+    )
+    if len(field_slots) != len(artifact.plan.field_plans):
+        raise ValueError("AMR checkpoint field-provider authority differs from its artifact plans")
     structural_bytes = _add(
-        _mul(
-            _mul(patch_capacity, 1 + 2 * spatial.dimension, where="AMR patch-box scalar capacity"),
-            8,
-            where="AMR patch-box byte capacity",
+        _add(
+            _mul(
+                _mul(
+                    patch_capacity,
+                    1 + 2 * spatial.dimension,
+                    where="AMR patch-box scalar capacity",
+                ),
+                8,
+                where="AMR patch-box byte capacity",
+            ),
+            _mul(patch_capacity, 8, where="AMR owner-map byte capacity"),
+            where="AMR structural checkpoint capacity",
         ),
-        _mul(patch_capacity, 8, where="AMR owner-map byte capacity"),
+        field_manifest_bytes,
         where="AMR structural checkpoint capacity",
     )
-    artifact = install_plan.artifact
     candidate = _common_budget(
         owner,
         install_plan,
@@ -594,9 +682,10 @@ def install_amr_checkpoint_resource_budget(owner: Any, install_plan: Any) -> Non
         accepted_program_bytes=accepted_capacity,
         source_authority_bytes=source_authority_bytes,
         structural_bytes=structural_bytes,
+        field_provider_manifest_characters=field_manifest_characters,
         program=program,
         block_nvars_by_name=block_nvars,
-        field_names=tuple(sorted(artifact.plan.field_plans)),
+        field_names=field_slots,
     )
     existing = getattr(owner, "_checkpoint_resource_budget", None)
     if existing is not None and existing != candidate:
@@ -638,6 +727,7 @@ def install_layout_checkpoint_resource_budget(
         accepted_program_bytes=0,
         source_authority_bytes=0,
         structural_bytes=0,
+        field_provider_manifest_characters=0,
         program=program,
         block_nvars_by_name=block_nvars,
         field_names=(),

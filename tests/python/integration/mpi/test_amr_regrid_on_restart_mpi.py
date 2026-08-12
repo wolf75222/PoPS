@@ -196,6 +196,16 @@ def _accepted_image(runtime, *, blocks=("tracer",)):
         )
         for name in runtime.history_names()
     )
+    fields = tuple(
+        (
+            str(slot),
+            tuple(
+                np.asarray(runtime.field_potential_level_global(slot, level), dtype=np.float64).copy()
+                for level in range(int(runtime.field_provider_levels(slot)))
+            ),
+        )
+        for slot in runtime.field_provider_slots()
+    )
     return {
         "time": float(runtime.time()),
         "step": int(runtime.macro_step()),
@@ -212,6 +222,18 @@ def _accepted_image(runtime, *, blocks=("tracer",)):
             for level in range(levels)
         ),
         "histories": histories,
+        "fields": fields,
+        "field_manifest": tuple(
+            tuple(map(str, row)) for row in native.field_provider_checkpoint_manifest()
+        ),
+        "rank_local_carriers": tuple(
+            tuple(map(str, row)) for row in native.checkpoint_rank_local_carrier_manifest()
+        ),
+        "auxiliary_checkpoint": tuple(
+            bytes(payload) for payload in native.capture_auxiliary_checkpoint_accepted_state()
+        ),
+        "auxiliary_registry": str(native.auxiliary_registry_contract()),
+        "dirty_auxiliary_providers": tuple(native.dirty_auxiliary_provider_identities()),
         "program_state": bytes(native.program_accepted_state()),
         "flux_ledger": tuple(tuple(map(str, row)) for row in native.program_flux_ledger_manifest()),
         "interface_flux_ledger": tuple(
@@ -229,7 +251,7 @@ def _accepted_image(runtime, *, blocks=("tracer",)):
 
 
 def _same_image(left, right) -> bool:
-    arrays = {"states", "histories"}
+    arrays = {"states", "histories", "fields"}
     histories_equal = [name for name, _slots in left["histories"]] == [
         name for name, _slots in right["histories"]
     ] and all(
@@ -242,6 +264,18 @@ def _same_image(left, right) -> bool:
             left["histories"], right["histories"], strict=True
         )
     )
+    fields_equal = [slot for slot, _levels in left["fields"]] == [
+        slot for slot, _levels in right["fields"]
+    ] and all(
+        len(current_levels) == len(recorded_levels)
+        and all(
+            np.array_equal(current, recorded)
+            for current, recorded in zip(current_levels, recorded_levels, strict=True)
+        )
+        for (_slot, current_levels), (_expected_slot, recorded_levels) in zip(
+            left["fields"], right["fields"], strict=True
+        )
+    )
     return (
         {key: value for key, value in left.items() if key not in arrays}
         == {key: value for key, value in right.items() if key not in arrays}
@@ -251,6 +285,7 @@ def _same_image(left, right) -> bool:
             for current, recorded in zip(left["states"], right["states"], strict=True)
         )
         and histories_equal
+        and fields_equal
     )
 
 
@@ -552,7 +587,8 @@ def test_regrid_on_restart_mpi_collective_rollback_and_lineage() -> None:
         )
         chk(
             _same_image(_accepted_image(restarted), rollback_image),
-            "post-transform identity divergence rolls back owners, histories and Program audit",
+            "post-recompute identity divergence rolls back rank-local carriers, registries, dirty "
+            "providers, owners, histories and Program audit",
         )
 
         restart_identity = restarted.restart(checkpoint)
@@ -570,7 +606,7 @@ def test_regrid_on_restart_mpi_collective_rollback_and_lineage() -> None:
         from pops.identity import Identity
 
         chk(
-            receipt["schema_version"] == 2
+            receipt["schema_version"] == 3
             and Identity.from_token(receipt["accepted_contract_identity_before"]).domain
             == "restart-accepted-contract"
             and Identity.from_token(receipt["accepted_contract_identity_after"]).domain
@@ -580,6 +616,17 @@ def test_regrid_on_restart_mpi_collective_rollback_and_lineage() -> None:
             and Identity.from_token(receipt["history_consensus_identity_after"]).domain
             == "restart-history-image",
             "receipt authenticates accepted contracts and each phase-local history consensus",
+        )
+        chk(
+            tuple(row[0] for row in receipt["field_recompute_witness"])
+            == tuple(sorted(restarted.field_provider_slots()))
+            and len(receipt["field_recompute_witness"]) == 2
+            and Identity.from_token(receipt["field_manifest_identity_before"]).domain
+            == "restart-field-provider-manifest"
+            and Identity.from_token(receipt["field_manifest_identity_after"]).domain
+            == "restart-field-provider-manifest",
+            "receipt authenticates the field manifest and lexical tie order of two native "
+            "recomputes",
         )
         chk(
             np.allclose(
@@ -745,7 +792,8 @@ def test_regrid_on_restart_mpi_shared_interface_transaction() -> None:
                 _accepted_image(restarted, blocks=("tracer", "right")),
                 rollback_image,
             ),
-            "shared-interface fault rolls back owners, histories, ledgers and Program bytes",
+            "shared-interface post-recompute fault rolls back rank-local carriers, registries, "
+            "dirty providers, owners, histories, ledgers and Program bytes",
         )
 
         restarted.restart(checkpoint)

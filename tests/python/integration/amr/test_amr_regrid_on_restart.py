@@ -38,12 +38,19 @@ from pops.amr import (
 from pops.codegen import Production
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
+from pops.fields import (
+    CellCenteredSecondOrder,
+    CompositeHierarchySolve,
+    FieldDiscretization,
+    FieldOutput,
+)
+from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Periodic
 from pops.initial import InitialCondition
 from pops.layouts import AMR
-from pops.lib.amr import BergerRigoutsos, StateTransfer
+from pops.lib.amr import BergerRigoutsos, EllipticRecompute, StateTransfer
 from pops.lib.initial import Gaussian
 from pops.lib.time import AdamsBashforth
-from pops.math import ValueExpr, ddt, div
+from pops.math import ValueExpr, ddt, div, laplacian, unknown
 from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
@@ -51,6 +58,7 @@ from pops.output import Checkpoint, ConsumerGraph, RegridOnRestart
 from pops.params import RuntimeParam
 from pops.physics import Model
 from pops.projection import ConservativeCellAverage
+from pops.solvers.elliptic import GeometricMG
 from pops.time import FixedDt, every
 from tests.python.support.native_execution_context import artifact_execution_context
 
@@ -93,6 +101,22 @@ def _resolved(native_cxx=None):
         },
     )
     rate = model.rate("transport_rate", equation=ddt(state) == -div(flux))
+    potential = model.field("restart_potential")
+    phi = unknown(potential)
+    field_operator = model.field_operator(
+        "restart_screened_field",
+        unknown=potential,
+        equation=(-laplacian(phi) + phi == rho),
+        outputs=(FieldOutput("restart_phi", potential),),
+    )
+    secondary_potential = model.field("restart_secondary_potential")
+    secondary_phi = unknown(secondary_potential)
+    secondary_field_operator = model.field_operator(
+        "restart_secondary_screened_field",
+        unknown=secondary_potential,
+        equation=(-laplacian(secondary_phi) + secondary_phi == 2.0 * rho),
+        outputs=(FieldOutput("restart_secondary_phi", secondary_potential),),
+    )
 
     case = pops.Case("regrid-on-restart-case")
     block = case.block("tracer", model)
@@ -108,7 +132,25 @@ def _resolved(native_cxx=None):
         ),
     )
     case.numerics(numerics, block=block)
-    program = AdamsBashforth(block_state, rate=rate, order=2)
+    field = case.field(
+        field_operator,
+        FieldDiscretization(
+            method=CellCenteredSecondOrder(),
+            boundaries=(BoundaryCondition(AllPhysicalBoundaries(), Periodic()),),
+            solver=GeometricMG(),
+            hierarchy_policy=CompositeHierarchySolve(),
+        ),
+    )
+    secondary_field = case.field(
+        secondary_field_operator,
+        FieldDiscretization(
+            method=CellCenteredSecondOrder(),
+            boundaries=(BoundaryCondition(AllPhysicalBoundaries(), Periodic()),),
+            solver=GeometricMG(),
+            hierarchy_policy=CompositeHierarchySolve(),
+        ),
+    )
+    program = AdamsBashforth(block_state, rate=rate, order=2, fields=field)
     program.step_strategy(FixedDt(DT))
     case.program(program)
     case.initials.add(
@@ -128,6 +170,8 @@ def _resolved(native_cxx=None):
     threshold = case.param(RuntimeParam("regrid_on_restart_threshold", default=1.08))
     transfer = AMRTransfer()
     transfer.state(block_state, StateTransfer())
+    transfer.field(field, EllipticRecompute())
+    transfer.field(secondary_field, EllipticRecompute())
     layout = AMR(
         grid=CartesianGrid(
             frame=frame,
@@ -193,6 +237,16 @@ def _accepted_image(runtime):
         )
         for name in runtime.history_names()
     )
+    fields = tuple(
+        (
+            str(slot),
+            tuple(
+                np.asarray(runtime.field_potential_level_global(slot, level), dtype=np.float64).copy()
+                for level in range(int(runtime.field_provider_levels(slot)))
+            ),
+        )
+        for slot in runtime.field_provider_slots()
+    )
     return {
         "time": float(runtime.time()),
         "step": int(runtime.macro_step()),
@@ -208,6 +262,19 @@ def _accepted_image(runtime):
         ),
         "program_state": bytes(native.program_accepted_state()),
         "histories": histories,
+        "fields": fields,
+        "phi_provider_slot": str(native.checkpoint_phi_provider_slot()),
+        "field_manifest": tuple(
+            tuple(map(str, row)) for row in native.field_provider_checkpoint_manifest()
+        ),
+        "rank_local_carriers": tuple(
+            tuple(map(str, row)) for row in native.checkpoint_rank_local_carrier_manifest()
+        ),
+        "auxiliary_checkpoint": tuple(
+            bytes(payload) for payload in native.capture_auxiliary_checkpoint_accepted_state()
+        ),
+        "auxiliary_registry": str(native.auxiliary_registry_contract()),
+        "dirty_auxiliary_providers": tuple(native.dirty_auxiliary_provider_identities()),
         "run_identity": runtime.last_run_identity,
         "consumer_cursors": runtime.consumer_cursors.to_data(),
     }
@@ -215,7 +282,7 @@ def _accepted_image(runtime):
 
 def _assert_same_accepted_image(runtime, expected):
     actual = _accepted_image(runtime)
-    arrays = {"states", "histories"}
+    arrays = {"states", "histories", "fields"}
     assert {key: value for key, value in actual.items() if key not in arrays} == {
         key: value for key, value in expected.items() if key not in arrays
     }
@@ -230,6 +297,15 @@ def _assert_same_accepted_image(runtime, expected):
     ):
         assert len(current_slots) == len(recorded_slots)
         for current, recorded in zip(current_slots, recorded_slots, strict=True):
+            np.testing.assert_array_equal(current, recorded)
+    assert [slot for slot, _levels in actual["fields"]] == [
+        slot for slot, _levels in expected["fields"]
+    ]
+    for (_slot, current_levels), (_expected_slot, recorded_levels) in zip(
+        actual["fields"], expected["fields"], strict=True
+    ):
+        assert len(current_levels) == len(recorded_levels)
+        for current, recorded in zip(current_levels, recorded_levels, strict=True):
             np.testing.assert_array_equal(current, recorded)
 
 
@@ -323,6 +399,9 @@ def test_authenticated_amr_contract_refusal_rolls_back_native_restart_transactio
     )
     assert report.accepted_steps == NSTEPS
     checkpoint = Path(source.checkpoint(tmp_path / "provider-contract-source"))
+    assert source._executor._s.checkpoint_phi_provider_slot() == sorted(
+        source.field_provider_slots()
+    )[0]
 
     # Preserve a fully valid, content-addressed checkpoint envelope while making only its dynamic
     # accepted-ledger claim inconsistent with the opaque Program image. Static preflight therefore
@@ -368,6 +447,11 @@ def test_authenticated_amr_contract_refusal_rolls_back_native_restart_transactio
     # succeeds and publishes one transformed-hierarchy restart receipt.
     restart_identity = restarted.restart(checkpoint)
     receipt = restarted._executor.last_restart_regrid_receipt()
+    assert receipt["schema_version"] == 3
+    assert tuple(row[0] for row in receipt["field_recompute_witness"]) == tuple(
+        sorted(restarted.field_provider_slots())
+    )
+    assert len(receipt["field_recompute_witness"]) == 2
     assert restart_identity == restarted.last_restart_identity
     assert receipt["changed"] is True
     assert receipt["before"]["topology_identity"] != receipt["after"]["topology_identity"]
@@ -404,6 +488,9 @@ def test_regrid_on_restart_changes_real_boxes_and_rolls_back_post_regrid_fault(
     assert source_cycle > 0
     assert source_entries > 0
     checkpoint = source.checkpoint(tmp_path / "moving-profile")
+    assert source._executor._s.checkpoint_phi_provider_slot() == sorted(
+        source.field_provider_slots()
+    )[0]
 
     restarted = _bind(artifact)
     rollback_image = _accepted_image(restarted)
@@ -447,6 +534,11 @@ def test_regrid_on_restart_changes_real_boxes_and_rolls_back_post_regrid_fault(
     )
     restart_identity = restarted.restart(checkpoint)
     receipt = restarted._executor.last_restart_regrid_receipt()
+    assert receipt["schema_version"] == 3
+    assert tuple(row[0] for row in receipt["field_recompute_witness"]) == tuple(
+        sorted(restarted.field_provider_slots())
+    )
+    assert len(receipt["field_recompute_witness"]) == 2
     assert receipt["changed"] is True
     assert receipt["before"]["topology_identity"] != receipt["after"]["topology_identity"]
     assert tuple(restarted.patch_boxes()) == transformed_boxes[0]
@@ -458,6 +550,11 @@ def test_regrid_on_restart_changes_real_boxes_and_rolls_back_post_regrid_fault(
     assert restarted.last_run_identity != source_run_identity
     assert _runtime_tagging_hysteresis(restarted) == transformed_hysteresis[0]
     assert tuple(restarted.history_names()) == tuple(source.history_names())
+    assert all(
+        np.all(np.isfinite(np.asarray(restarted.field_potential_level_global(slot, level))))
+        for slot in restarted.field_provider_slots()
+        for level in range(int(restarted.field_provider_levels(slot)))
+    )
     assert all(
         np.all(np.isfinite(np.asarray(restarted.history_global(name, level, slot))))
         for name in restarted.history_names()

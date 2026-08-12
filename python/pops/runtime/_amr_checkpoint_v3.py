@@ -12,6 +12,7 @@ fallback formats are refused.
 from collections.abc import Callable
 from dataclasses import dataclass
 import hashlib
+import json
 from typing import Any, TypeVar, cast
 
 from pops._generated_release_contract import AMR_CHECKPOINT_PAYLOAD_VERSION as _VERSION
@@ -53,6 +54,8 @@ class _PreparedAMRCapture:
     configured_levels: int
     field_slots: tuple[str, ...]
     field_levels: tuple[int, ...]
+    phi_provider_slot: str
+    field_manifest: tuple[tuple[str, ...], ...]
     history_plan: Any
     topology: Any
     local_dmaps: tuple[tuple[int, ...], ...]
@@ -123,6 +126,28 @@ def _require_exact_field_provider_depth(slot, provider_levels, active_levels, *,
         )
 
 
+def _field_provider_manifest(sim):
+    provider = getattr(sim, "field_provider_checkpoint_manifest", None)
+    if not callable(provider):
+        raise TypeError("AMR checkpoint requires the native field-provider manifest")
+    rows = tuple(tuple(str(value) for value in row) for row in provider())
+    seen = set()
+    for row in rows:
+        if len(row) < 14 or row[0] != "pops.amr.field-provider-checkpoint-manifest@1":
+            raise ValueError("native AMR field-provider manifest has an invalid row")
+        if row[1] in seen:
+            raise ValueError("native AMR field-provider manifest contains a duplicate slot")
+        seen.add(row[1])
+        if int(row[2]) < 1 or row[8] not in {"materialized", "unmaterialized"}:
+            raise ValueError("native AMR field-provider manifest has invalid live evidence")
+    return rows
+
+
+def _field_manifest_semantics(rows):
+    """Drop only topology/materialization evidence; retain every immutable provider fact."""
+    return tuple(row[:6] + row[9:] for row in rows)
+
+
 def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
     """Freeze the complete AMR gather plan without invoking a native collective."""
     import numpy as np
@@ -182,18 +207,18 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
     nvars = tuple(int(sim.block_n_vars(name)) if multi else int(sim.n_vars()) for name in names)
     if any(value <= 0 for value in nvars):
         raise ValueError("checkpoint AMR blocks must have a positive conservative size")
-    field_slots = (
-        tuple(str(slot) for slot in sim.field_provider_slots())
-        if hasattr(sim, "field_provider_slots")
-        else ()
-    )
+    field_manifest = _field_provider_manifest(sim)
+    field_slots = tuple(row[1] for row in field_manifest)
     if len(field_slots) != len(set(field_slots)):
         raise ValueError("checkpoint AMR field-provider slots must be unique")
-    field_levels = tuple(int(sim.field_provider_levels(slot)) for slot in field_slots)
+    field_levels = tuple(int(row[2]) for row in field_manifest)
     for slot, provider_levels in zip(field_slots, field_levels, strict=True):
         _require_exact_field_provider_depth(
             slot, provider_levels, levels, phase="checkpoint capture"
         )
+    phi_provider_slot = str(sim.checkpoint_phi_provider_slot())
+    if not phi_provider_slot or phi_provider_slot not in field_slots:
+        raise ValueError("checkpoint AMR legacy phi member lacks an exact field-provider alias")
     history_plan = prepare_history_capture(
         sim,
         persistence or {},
@@ -202,18 +227,12 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
     )
     required_collectives = []
     if topology.distributed:
-        required_collectives.extend(
-            [
-                "block_level_state_global" if multi else "level_state_global",
-                "level_potential_global",
-            ]
+        required_collectives.append(
+            "block_level_state_global" if multi else "level_state_global"
         )
     else:
-        required_collectives.extend(
-            ["block_level_state" if multi else "level_state", "level_potential"]
-        )
-    if field_slots:
-        required_collectives.append("field_potential_level_global")
+        required_collectives.append("block_level_state" if multi else "level_state")
+    required_collectives.append("field_potential_level_global")
     if any(ring.stored_slots for ring in history_plan.rings):
         required_collectives.append("history_global")
     missing_collectives = sorted(
@@ -246,6 +265,9 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
         if hasattr(sim, "installed_program_hash")
         else "",
         "field_provider_slots": np.asarray(field_slots),
+        "field_provider_manifest": np.asarray(
+            json.dumps(field_manifest, separators=(",", ":"), ensure_ascii=True)
+        ),
     }
     add_checkpoint_spatial_contract(out, spatial)
     out.update(cadence.to_payload())
@@ -278,6 +300,8 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
                 {"name": slot, "levels": count}
                 for slot, count in zip(field_slots, field_levels, strict=True)
             ],
+            "phi_provider_slot": phi_provider_slot,
+            "field_provider_manifest": [list(row) for row in field_manifest],
             "program_hash": str(out["program_hash"]),
             "program_cadence": cadence.to_data(),
             "program_state_present": bool(program_state),
@@ -296,6 +320,8 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
         configured_levels,
         field_slots,
         field_levels,
+        phi_provider_slot,
+        field_manifest,
         history_plan,
         topology,
         dmaps,
@@ -391,7 +417,7 @@ def _capture_v3(owner, sim, prepared):
             )
     for level in range(prepared.levels):
         out["phi_%d" % level] = np.asarray(
-            sim.level_potential_global(level) if gather else sim.level_potential(level),
+            sim.field_potential_level_global(prepared.phi_provider_slot, level),
             dtype=np.float64,
         )
     for index, (slot, count) in enumerate(
@@ -401,6 +427,18 @@ def _capture_v3(owner, sim, prepared):
             out["field_provider_phi_%d_%d" % (index, level)] = np.asarray(
                 sim.field_potential_level_global(slot, level), dtype=np.float64
             )
+    final_field_manifest = _field_provider_manifest(sim)
+    if _field_manifest_semantics(final_field_manifest) != _field_manifest_semantics(
+        prepared.field_manifest
+    ):
+        raise RuntimeError("AMR field-provider semantics changed during checkpoint capture")
+    out["field_provider_manifest"] = np.asarray(
+        json.dumps(final_field_manifest, separators=(",", ":"), ensure_ascii=True)
+    )
+    from pops.runtime._amr_checkpoint_contract import encode_contract
+
+    final_accepted_contract = encode_contract(sim)
+    out["amr_accepted_contract"] = final_accepted_contract
     auxiliary_checkpoint = sim.capture_auxiliary_checkpoint_accepted_state()
     if type(auxiliary_checkpoint) is not list or len(auxiliary_checkpoint) != prepared.levels:
         raise RuntimeError(
@@ -459,7 +497,7 @@ def prepare_v3(
     hierarchy_mode="restore_recorded_hierarchy",
     hierarchy_identity=None,
 ):
-    """Validate an accepted-state v9 AMR payload without mutating the native engine.
+    """Validate an accepted-state v10 AMR payload without mutating the native engine.
 
     This is the all-rank preflight boundary used before ``begin_restart_transaction``.
     """
@@ -572,7 +610,7 @@ def prepare_v3(
             "(replay the SAME composition before restart)" % (chk_blocks, cur_blocks)
         )
     nlev = checkpoint_levels
-    # Program-hash guard: an accepted-state v9 checkpoint refuses a different compiled Program.
+    # Program-hash guard: an accepted-state v10 checkpoint refuses a different compiled Program.
     chk_hash = str(d["program_hash"])
     cur_hash = sim.installed_program_hash() if hasattr(sim, "installed_program_hash") else ""
     if chk_hash != cur_hash:
@@ -603,10 +641,31 @@ def prepare_v3(
             "restart : checkpoint qualified field providers %r != installed providers %r"
             % (checkpoint_slots, current_slots)
         )
-    if hierarchy_mode == "regrid_on_restart" and checkpoint_slots:
-        raise NotImplementedError(
-            "restart: bounded RegridOnRestart does not yet support elliptic field providers"
+    if "field_provider_manifest" not in d:
+        raise ValueError("restart: checkpoint lacks its exact field-provider manifest")
+    from pops._manifest_protocol import strict_json_loads
+
+    raw_field_manifest = strict_json_loads(
+        str(d["field_provider_manifest"]), where="AMR field-provider manifest"
+    )
+    if not isinstance(raw_field_manifest, list):
+        raise TypeError("restart: AMR field-provider manifest must be a list of rows")
+    checkpoint_field_manifest = tuple(
+        tuple(str(value) for value in row)
+        for row in raw_field_manifest
+        if isinstance(row, list)
+    )
+    if len(checkpoint_field_manifest) != len(raw_field_manifest):
+        raise TypeError("restart: AMR field-provider manifest contains a non-row value")
+    current_field_manifest = _field_provider_manifest(sim)
+    if _field_manifest_semantics(checkpoint_field_manifest) != _field_manifest_semantics(
+        current_field_manifest
+    ):
+        raise ValueError(
+            "restart: checkpoint field-provider semantics differ from the installed native plans"
         )
+    if tuple(row[1] for row in checkpoint_field_manifest) != tuple(checkpoint_slots):
+        raise ValueError("restart: field-provider manifest differs from its ordered slot registry")
     field_payload = []
     for index, slot in enumerate(checkpoint_slots):
         levels_key = "field_provider_levels_%d" % index
@@ -738,8 +797,10 @@ def prepare_v3(
 
     phi_payload = []
     auxiliary_checkpoint_payload = []
-    if not callable(getattr(sim, "restore_auxiliary_checkpoint_accepted_state", None)):
-        raise TypeError("restart: AMR engine lacks exact auxiliary checkpoint restore")
+    if not callable(
+        getattr(sim, "restore_restart_auxiliary_checkpoint_accepted_state", None)
+    ):
+        raise TypeError("restart: AMR engine lacks prepared-lane auxiliary checkpoint restore")
     for level in range(nlev):
         aux_key = "auxiliary_checkpoint_%d" % level
         phi_key = "phi_%d" % level
@@ -765,6 +826,28 @@ def prepare_v3(
                 % (level, phi.size, expected_cells)
             )
         phi_payload.append(phi)
+
+    phi_provider_slot = str(sim.checkpoint_phi_provider_slot())
+    if not phi_provider_slot or phi_provider_slot not in checkpoint_slots:
+        raise ValueError(
+            "restart: legacy phi payload lacks its exact field-provider alias"
+        )
+    phi_provider_levels = dict(field_payload)[phi_provider_slot]
+    if len(phi_provider_levels) != len(phi_payload):
+        raise ValueError(
+            "restart: legacy phi payload depth differs from its field-provider image"
+        )
+    exact_f64 = np.dtype("<f8")
+    for level, (phi, provider_phi) in enumerate(
+        zip(phi_payload, phi_provider_levels, strict=True)
+    ):
+        phi_bytes = np.asarray(phi, dtype=exact_f64).ravel().tobytes(order="C")
+        provider_bytes = np.asarray(provider_phi, dtype=exact_f64).ravel().tobytes(order="C")
+        if phi_bytes != provider_bytes:
+            raise ValueError(
+                "restart: legacy phi level %d differs bitwise from field provider %s"
+                % (level, phi_provider_slot)
+            )
 
     _preflight_histories_v3(sim, d, current_ranks, spatial)
 
@@ -803,6 +886,20 @@ def _restart_accepted_contract_identity(sim):
     from pops.runtime._amr_checkpoint_contract import contract_for
 
     return make_identity("restart-accepted-contract", contract_for(sim)).token
+
+
+def _restart_field_manifest_witness(owner, sim, *, phase):
+    rows = _restart_collective_phase(
+        owner,
+        "%s field-provider manifest" % phase,
+        lambda: [list(row) for row in _field_provider_manifest(sim)],
+    )
+    from pops.identity import make_identity
+
+    identity = make_identity(
+        "restart-field-provider-manifest", {"schema_version": 1, "providers": rows}
+    ).token
+    return rows, identity
 
 
 def _restart_collective_phase(
@@ -1035,12 +1132,9 @@ def apply_v3(owner, sim, prepared):
 
     # (5) Restore the native owner-qualified accepted auxiliary image.  It carries exact groups,
     # ComponentKeys and provider generations; Python never reconstructs a flat carrier.
-    sim.restore_auxiliary_checkpoint_accepted_state(list(prepared.auxiliary_checkpoint_payload))
-    for level, phi in enumerate(prepared.potential_payload):
-        sim.set_level_potential(level, phi)
-    for slot, levels in prepared.field_payload:
-        for level, value in enumerate(levels):
-            sim.set_field_potential_level(slot, level, value)
+    sim.restore_restart_auxiliary_checkpoint_accepted_state(
+        list(prepared.auxiliary_checkpoint_payload)
+    )
 
     # (6) Selectively stored clean-window histories may replay the Program. A window containing a
     # scheduled regrid was explicitly promoted to dense storage during capture.
@@ -1072,6 +1166,18 @@ def apply_v3(owner, sim, prepared):
         accepted_time=float(d["t"]),
     )
     sim.set_clock(float(d["t"]), macro_step)
+    # Topology epoch restoration refreshes the PreparedHierarchy and intentionally invalidates all
+    # solver layouts. Publish the detached all-provider warm-start image only after that final
+    # topology mutation, so exact restore and the RegridOnRestart source witness see the same
+    # materialized field contract captured in the checkpoint.
+    if prepared.field_payload:
+        restore_fields = getattr(sim, "restore_field_potentials", None)
+        if not callable(restore_fields):
+            raise TypeError("restart: AMR engine lacks atomic all-provider field restore")
+        restore_fields(
+            [slot for slot, _levels in prepared.field_payload],
+            [[value.tolist() for value in levels] for _slot, levels in prepared.field_payload],
+        )
     if prepared.hierarchy_mode == "regrid_on_restart":
         _restart_collective_phase(
             owner,
@@ -1094,6 +1200,9 @@ def apply_v3(owner, sim, prepared):
             lambda: _restart_accepted_contract_identity(sim),
         )
         before_history_identity = _restart_history_identity(owner, sim, phase="recorded hierarchy")
+        before_field_manifest, before_field_manifest_identity = _restart_field_manifest_witness(
+            owner, sim, phase="recorded hierarchy"
+        )
         before_integrals = _restart_composite_integrals(owner, sim, phase="recorded hierarchy")
         _restart_collective_phase(
             owner,
@@ -1104,6 +1213,11 @@ def apply_v3(owner, sim, prepared):
             owner,
             "native transform",
             sim.regrid_on_restart,
+        )
+        recompute_witness = _restart_collective_phase(
+            owner,
+            "native derived-field recompute",
+            sim.recompute_fields_after_restart_regrid,
         )
         after_topology = _restart_collective_phase(
             owner,
@@ -1118,9 +1232,12 @@ def apply_v3(owner, sim, prepared):
         after_history_identity = _restart_history_identity(
             owner, sim, phase="transformed hierarchy"
         )
+        after_field_manifest, after_field_manifest_identity = _restart_field_manifest_witness(
+            owner, sim, phase="transformed hierarchy"
+        )
         after_integrals = _restart_composite_integrals(owner, sim, phase="transformed hierarchy")
         receipt = {
-            "schema_version": 2,
+            "schema_version": 3,
             "policy_identity": prepared.hierarchy_identity,
             "changed": (
                 before_topology["topology_identity"] != after_topology["topology_identity"]
@@ -1133,6 +1250,11 @@ def apply_v3(owner, sim, prepared):
             "accepted_contract_identity_after": after_contract_identity,
             "history_consensus_identity_before": before_history_identity,
             "history_consensus_identity_after": after_history_identity,
+            "field_manifest_identity_before": before_field_manifest_identity,
+            "field_manifest_identity_after": after_field_manifest_identity,
+            "field_manifest_before": before_field_manifest,
+            "field_manifest_after": after_field_manifest,
+            "field_recompute_witness": recompute_witness,
             "composite_integrals_before": before_integrals,
             "composite_integrals_after": after_integrals,
         }
@@ -1285,7 +1407,7 @@ def _preflight_histories_v3(sim, d, current_ranks, spatial):
 
 
 def _restore_histories_v3(sim, d, cur_ranks):
-    """Restore accepted-state v9 rings and replay only policy-omitted slots on a stable hierarchy.
+    """Restore accepted-state v10 rings and replay only policy-omitted slots on a stable hierarchy.
 
     Capture resolves any selective ring whose replay window contains a scheduled regrid, cold slot,
     or non-default whole-Program cadence to explicit dense safety storage. Therefore this function
