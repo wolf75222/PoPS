@@ -85,6 +85,8 @@ class _SystemIO(_System):
         if not blocks or len(blocks) != len(set(blocks)):
             raise ValueError("checkpoint requires a non-empty unique Uniform block order")
         required_collectives = ["state_global", "potential_global"]
+        if not callable(getattr(self._s, "capture_auxiliary_checkpoint_accepted_state", None)):
+            raise TypeError("checkpoint Uniform engine lacks exact auxiliary checkpoint capture")
         out = {
             "pops_checkpoint_version": UNIFORM_CHECKPOINT_PAYLOAD_VERSION,
             "t": time,
@@ -224,6 +226,14 @@ class _SystemIO(_System):
             out["field_potential_%d" % index] = np.asarray(
                 self._s.field_potential_global(slot), dtype=np.float64
             )
+        auxiliary_checkpoint = self._s.capture_auxiliary_checkpoint_accepted_state()
+        if type(auxiliary_checkpoint) is not bytes or not auxiliary_checkpoint.startswith(b"POPSAUX2"):
+            raise RuntimeError(
+                "native Uniform exact auxiliary checkpoint is not a POPSAUX2 bytes image"
+            )
+        out["auxiliary_checkpoint"] = np.frombuffer(
+            auxiliary_checkpoint, dtype=np.uint8
+        ).copy()
         capture_histories(self._s, prepared.history_plan, out)
         for node in prepared.cache_nodes:
             out["cache_value_%d" % node] = np.asarray(
@@ -312,6 +322,13 @@ class _SystemIO(_System):
         spatial = authenticate_checkpoint_spatial_contract(self, d)
         authenticate_checkpoint_embedded_boundary_contract(self, d)
         preflight_uniform_restart(d)
+        if not callable(getattr(self._s, "restore_auxiliary_checkpoint_accepted_state", None)):
+            raise TypeError("restart: Uniform engine lacks exact auxiliary checkpoint restore")
+        if "auxiliary_checkpoint" not in d:
+            raise ValueError("restart: checkpoint lacks its exact auxiliary payload")
+        auxiliary_checkpoint = np.asarray(d["auxiliary_checkpoint"], dtype=np.uint8).ravel()
+        if auxiliary_checkpoint.size < 8 or auxiliary_checkpoint[:8].tobytes() != b"POPSAUX2":
+            raise ValueError("restart: exact auxiliary checkpoint is not POPSAUX2")
         cadence = prepare_program_cadence(
             self._s,
             d,
@@ -527,6 +544,9 @@ class _SystemIO(_System):
             self._s.set_field_potential(
                 slot, np.asarray(d["field_potential_%d" % index], dtype=np.float64).ravel()
             )
+        self._s.restore_auxiliary_checkpoint_accepted_state(
+            np.asarray(d["auxiliary_checkpoint"], dtype=np.uint8).ravel().tobytes()
+        )
         macro_step = int(d["macro_step"])
         restore_program_cadence(
             self._s,

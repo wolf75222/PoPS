@@ -81,6 +81,7 @@ class ExecutionLane;
 namespace runtime::program {
 template <int Dim, class MemorySpace>
 class AmrProgramContext;
+class AcceptedProgramContextSnapshot;
 }  // namespace runtime::program
 
 namespace runtime::field {
@@ -361,13 +362,18 @@ class AmrSystem {
   POPS_EXPORT void install_prepared_amr_coupling_operator(std::string provider_contract,
                                                           CouplingOperatorView view,
                                                           PreparedCouplingOperator operation);
+  POPS_EXPORT void install_prepared_amr_interface_flux_provider(
+      std::string provider_contract,
+      std::function<void(runtime::multiblock::InterfaceFluxScheduler<Dim>&)> installer);
   POPS_EXPORT const ProgramBlockMap& prepared_amr_program_block_map() const;
   POPS_EXPORT void install_prepared_amr_program_flux_expression_budget(
       std::string program_hash, std::vector<PreparedAmrProgramFluxExpressionBlockBudget> blocks);
   POPS_EXPORT const PreparedAmrProgramFluxExpressionBudget&
   prepared_amr_program_flux_expression_budget() const;
   POPS_EXPORT std::size_t apply_prepared_amr_program_candidates(
-      int level, Real dt, std::span<MultiFab<Dim>* const> program_candidates);
+      int level, Real dt, std::span<MultiFab<Dim>* const> program_candidates,
+      const runtime::multiblock::BoundaryEvaluationPoint& point,
+      runtime::multiblock::InterfaceFluxFragmentPublication* interface_publication);
   POPS_EXPORT void publish_prepared_amr_program_candidates(
       int level, std::span<MultiFab<Dim>* const> program_candidates);
 
@@ -835,11 +841,12 @@ class AmrSystem {
   /// explicit bootstrap commits a hierarchy level. Generated artifacts own this seam; direct
   /// low-level steps may omit it because they have no authenticated checkpoint context.
   POPS_EXPORT void install_program_hierarchy_refresh(std::function<void()> refresh);
-  /// Install the artifact-owned restart preflight, transform and forced rollback-resynchronization
-  /// hooks.
-  POPS_EXPORT void install_program_restart_hooks(std::function<void()> preflight,
-                                                 std::function<void()> regrid,
-                                                 std::function<void()> resync);
+  /// Install the artifact-owned restart preflight, transform, forced resynchronization and
+  /// phase-safe accepted-context snapshot hooks.
+  POPS_EXPORT void install_program_restart_hooks(
+      std::function<void()> preflight, std::function<void()> regrid, std::function<void()> resync,
+      std::function<std::unique_ptr<runtime::program::AcceptedProgramContextSnapshot>()>
+          accepted_context_snapshot);
   /// Set the compiled-Program macro-step cadence (parity with System::set_program_cadence, ADC-411):
   /// GLOBAL @p substeps and @p stride around the installed program closure. @p substeps subdivides each
   /// effective step into @p substeps program closure calls; @p stride runs the program once per @p
@@ -1150,6 +1157,7 @@ class AmrSystem {
   int history_fill_count(const std::string& name) const;
   void set_history_initialized(const std::string& name, bool initialized);
   void restore_history_fill_count(const std::string& name, int fill_count);
+  void restore_history_metadata(const std::string& name, bool initialized, int fill_count);
   std::vector<double> history_global(const std::string& name, int slot) const;
   void restore_history(const std::string& name, int slot, const std::vector<double>& values);
   double history_slot_dt(const std::string& name, int slot) const;

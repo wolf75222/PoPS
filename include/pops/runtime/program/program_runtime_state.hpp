@@ -43,6 +43,7 @@
 #include <functional>
 #include <limits>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <stdexcept>
@@ -60,6 +61,23 @@
 #include <pops/runtime/program/profiler.hpp>       // Profiler (per-node / per-brick timing)
 
 namespace pops::runtime::program {
+
+/// Type-erased, already allocated image of one artifact context's accepted state.  Runtime
+/// transactions capture it before entering scientific code and invoke only the noexcept publication
+/// after the carrier and Program storage have been restored.
+class AcceptedProgramContextSnapshot {
+ public:
+  AcceptedProgramContextSnapshot() = default;
+  AcceptedProgramContextSnapshot(const AcceptedProgramContextSnapshot&) = delete;
+  AcceptedProgramContextSnapshot& operator=(const AcceptedProgramContextSnapshot&) = delete;
+  virtual ~AcceptedProgramContextSnapshot() = default;
+
+  virtual std::unique_ptr<AcceptedProgramContextSnapshot> prepare_restore() const = 0;
+  virtual void publish_restore() noexcept = 0;
+};
+
+using AcceptedProgramContextSnapshotFactory =
+    std::function<std::unique_ptr<AcceptedProgramContextSnapshot>()>;
 
 /// Multistep history ring buffers (ADC-406a), owned by the Program runtime state.
 ///
@@ -224,10 +242,13 @@ struct ProgramRuntimeState {
   /// `restart_regrid_preflight_` validates every rank-local prerequisite before peers enter the
   /// scientific regrid; `restart_regrid_` then performs that tag/regrid pass;
   /// `restart_resync_` force-imports the facade bytes after rollback, even when their restored
-  /// revision equals the context's last observed revision. Uniform leaves all three empty.
+  /// revision equals the context's last observed revision. `accepted_context_snapshot_` contributes
+  /// context-owned ledgers and clocks to every outer accepted transaction. Uniform leaves all four
+  /// empty.
   std::function<void()> restart_regrid_preflight_;
   std::function<void()> restart_regrid_;
   std::function<void()> restart_resync_;
+  AcceptedProgramContextSnapshotFactory accepted_context_snapshot_;
   /// Monotone witness incremented only by install_unverified_step. Dynamic artifact loaders use it to
   /// prove that one installer invocation actually replaced the whole-system Program step.
   std::uint64_t step_install_generation_ = 0;
@@ -391,6 +412,7 @@ struct ProgramRuntimeState {
     std::function<void()> restart_regrid_preflight;
     std::function<void()> restart_regrid;
     std::function<void()> restart_resync;
+    AcceptedProgramContextSnapshotFactory accepted_context_snapshot;
     std::function<Real(Real)> dt_bound;
     std::uint64_t generation = 0;
     std::string installed_hash;
@@ -552,6 +574,7 @@ struct ProgramRuntimeState {
     restart_regrid_preflight_ = nullptr;
     restart_regrid_ = nullptr;
     restart_resync_ = nullptr;
+    accepted_context_snapshot_ = nullptr;
     dt_bound_ = nullptr;
     installed_hash_.clear();
     operator_authorities_.clear();
@@ -568,6 +591,7 @@ struct ProgramRuntimeState {
                                        restart_regrid_preflight_,
                                        restart_regrid_,
                                        restart_resync_,
+                                       accepted_context_snapshot_,
                                        dt_bound_,
                                        step_install_generation_,
                                        installed_hash_,
@@ -598,6 +622,7 @@ struct ProgramRuntimeState {
     restart_regrid_preflight_ = std::move(snapshot.restart_regrid_preflight);
     restart_regrid_ = std::move(snapshot.restart_regrid);
     restart_resync_ = std::move(snapshot.restart_resync);
+    accepted_context_snapshot_ = std::move(snapshot.accepted_context_snapshot);
     dt_bound_ = std::move(snapshot.dt_bound);
     step_install_generation_ = snapshot.generation;
     installed_hash_ = std::move(snapshot.installed_hash);
@@ -636,29 +661,48 @@ struct ProgramRuntimeState {
   /// They participate in artifact-install rollback, so a failed DSO candidate cannot leave a
   /// callable stale context behind.
   void install_restart_hooks(std::function<void()> preflight, std::function<void()> regrid,
-                             std::function<void()> resync, const std::string& runtime) {
+                             std::function<void()> resync,
+                             AcceptedProgramContextSnapshotFactory accepted_context_snapshot,
+                             const std::string& runtime) {
     if (!step_)
       throw std::logic_error(runtime +
                              "::install_program_restart_hooks requires an installed Program");
-    if (!preflight || !regrid || !resync)
-      throw std::invalid_argument(runtime +
-                                  "::install_program_restart_hooks requires three non-empty hooks");
+    if (!preflight || !regrid || !resync || !accepted_context_snapshot)
+      throw std::invalid_argument(
+          runtime +
+          "::install_program_restart_hooks requires complete accepted-state "
+          "hooks");
     restart_regrid_preflight_ = std::move(preflight);
     restart_regrid_ = std::move(regrid);
     restart_resync_ = std::move(resync);
+    accepted_context_snapshot_ = std::move(accepted_context_snapshot);
+  }
+
+  std::unique_ptr<AcceptedProgramContextSnapshot> capture_accepted_context_snapshot(
+      const std::string& runtime) const {
+    if (!artifact_backed_)
+      return {};
+    if (!accepted_context_snapshot_)
+      throw std::logic_error(runtime + " artifact lacks its accepted context snapshot hook");
+    std::unique_ptr<AcceptedProgramContextSnapshot> snapshot = accepted_context_snapshot_();
+    if (!snapshot)
+      throw std::logic_error(runtime + " artifact returned an empty accepted context snapshot");
+    return snapshot;
   }
 
   void preflight_regrid_on_restart(const std::string& runtime) const {
     if (!artifact_backed_)
       throw std::logic_error(runtime +
                              " RegridOnRestart requires an authenticated artifact-backed Program");
-    if (!restart_regrid_preflight_ || !restart_regrid_ || !restart_resync_)
+    if (!restart_regrid_preflight_ || !restart_regrid_ || !restart_resync_ ||
+        !accepted_context_snapshot_)
       throw std::logic_error(runtime + " artifact lacks its restart preflight/regrid/resync hooks");
     restart_regrid_preflight_();
   }
 
   void regrid_on_restart(const std::string& runtime) const {
-    if (!artifact_backed_ || !restart_regrid_preflight_ || !restart_regrid_ || !restart_resync_)
+    if (!artifact_backed_ || !restart_regrid_preflight_ || !restart_regrid_ || !restart_resync_ ||
+        !accepted_context_snapshot_)
       throw std::logic_error(runtime + " artifact lacks its prepared restart regrid authority");
     restart_regrid_();
   }

@@ -381,6 +381,9 @@ System<Dim>::capture_auxiliary_checkpoint_accepted_state() const {
   long local_failure = 0;
   std::string collective_contract;
   try {
+    if (!p_->dirty_auxiliary_providers_.empty())
+      throw std::logic_error(
+          "System auxiliary checkpoint refuses dirty provider state before accepted publication");
     result = runtime::system::capture_auxiliary_checkpoint_state(p_->auxiliary_registry_);
     if (result.groups.empty()) {
       if (p_->provider_carrier_)
@@ -389,6 +392,19 @@ System<Dim>::capture_auxiliary_checkpoint_accepted_state() const {
       if (!p_->provider_carrier_)
         throw std::logic_error("System auxiliary checkpoint has no storage groups");
       runtime::system::require_auxiliary_checkpoint_storage(result, *p_->provider_carrier_);
+      const std::size_t cells = domain_cells(p_->dom);
+      for (auto& descriptor : result.groups) {
+        const MultiFab<Dim>* const group = p_->provider_carrier_->find(descriptor.identity);
+        if (group == nullptr)
+          throw std::logic_error("System auxiliary checkpoint lost a sealed storage group");
+        if (descriptor.component_count > std::numeric_limits<std::size_t>::max() / cells)
+          throw std::length_error("System auxiliary checkpoint payload exceeds size_t");
+        descriptor.payload.reserve(descriptor.component_count * cells);
+        for (std::size_t component = 0; component < descriptor.component_count; ++component) {
+          auto values = read_auxiliary_component(*group, p_->dom, component);
+          descriptor.payload.insert(descriptor.payload.end(), values.begin(), values.end());
+        }
+      }
     }
     const auto bytes = runtime::system::serialize_auxiliary_checkpoint_state(result);
     ExactContractBuilder exact;
@@ -414,6 +430,8 @@ void System<Dim>::restore_auxiliary_checkpoint_accepted_state(
   long local_failure = 0;
   std::string collective_contract;
   try {
+    if (!p_->dirty_auxiliary_providers_.empty())
+      throw std::logic_error("System auxiliary checkpoint restore refuses dirty live providers");
     if (state.groups.empty()) {
       if (p_->provider_carrier_)
         throw std::invalid_argument(
@@ -422,6 +440,12 @@ void System<Dim>::restore_auxiliary_checkpoint_accepted_state(
       if (!p_->provider_carrier_)
         throw std::invalid_argument("System auxiliary checkpoint requires live storage groups");
       runtime::system::require_auxiliary_checkpoint_storage(state, *p_->provider_carrier_);
+      const std::size_t cells = domain_cells(p_->dom);
+      for (const auto& descriptor : state.groups)
+        if (descriptor.component_count > std::numeric_limits<std::size_t>::max() / cells ||
+            descriptor.payload.size() != descriptor.component_count * cells)
+          throw std::invalid_argument(
+              "System auxiliary checkpoint payload differs from its exact domain shape");
     }
     const auto bytes = runtime::system::serialize_auxiliary_checkpoint_state(state);
     ExactContractBuilder exact;
@@ -463,7 +487,31 @@ void System<Dim>::restore_auxiliary_checkpoint_accepted_state(
 
   std::exception_ptr restore_error;
   try {
-    runtime::system::restore_auxiliary_checkpoint_state(state, p_->auxiliary_registry_);
+    registry_type candidate_registry = *registry_snapshot;
+    std::optional<carrier_type> candidate_carrier;
+    if (had_storage) {
+      candidate_carrier.emplace(*storage_snapshot);
+      const std::size_t cells = domain_cells(p_->dom);
+      for (const auto& descriptor : state.groups) {
+        MultiFab<Dim>* const group = candidate_carrier->find(descriptor.identity);
+        if (group == nullptr)
+          throw std::logic_error("System auxiliary checkpoint candidate lost a storage group");
+        for (std::size_t component = 0; component < descriptor.component_count; ++component) {
+          const auto begin =
+              descriptor.payload.begin() + static_cast<std::ptrdiff_t>(component * cells);
+          write_auxiliary_component(
+              *group, p_->dom, component,
+              std::vector<double>(begin, begin + static_cast<std::ptrdiff_t>(cells)));
+        }
+      }
+      runtime::system::require_finite_auxiliary_groups(*candidate_carrier, nullptr,
+                                                       "System auxiliary checkpoint candidate");
+    }
+    runtime::system::restore_auxiliary_checkpoint_state(state, candidate_registry);
+    // Publish values before accepted generation/provenance so no observer can pair restored
+    // metadata with the previous numerical image.
+    p_->provider_carrier_ = std::move(candidate_carrier);
+    p_->auxiliary_registry_ = std::move(candidate_registry);
     p_->dirty_auxiliary_providers_.clear();
   } catch (...) {
     restore_error = std::current_exception();

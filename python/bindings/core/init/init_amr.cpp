@@ -152,6 +152,43 @@ amr_tagging_stencil_from_python(const py::dict& row) {
   return result;
 }
 
+void install_amr_interface_flux_provider(AmrSystem& system, const py::list& rows) {
+  using Scheduler = pops::runtime::multiblock::InterfaceFluxScheduler<pops::kNativeDimension>;
+  using PreparedComponent =
+      pops::runtime::multiblock::PreparedInterfaceFluxComponent<pops::kNativeDimension>;
+  using Job = pops::python::detail::PreparedInterfaceFluxJob<pops::kNativeDimension>;
+  std::vector<Job> jobs;
+  const std::string provider_contract =
+      pops::python::detail::prepare_interface_flux_jobs<pops::kNativeDimension>(rows, jobs, false);
+  system.install_prepared_amr_interface_flux_provider(
+      provider_contract, [&system, jobs = std::move(jobs)](Scheduler& scheduler) mutable {
+        for (Job& job : jobs) {
+          if (job.route.left_block >= static_cast<std::size_t>(system.n_blocks()) ||
+              job.route.right_block >= static_cast<std::size_t>(system.n_blocks()) ||
+              job.route.level < 0 || job.route.level >= system.n_levels())
+            throw std::out_of_range(
+                "AMR shared-interface route lies outside the prepared block/level registry");
+          auto& left = system.prepared_amr_block_state(static_cast<int>(job.route.left_block),
+                                                       job.route.level);
+          auto& right = system.prepared_amr_block_state(static_cast<int>(job.route.right_block),
+                                                        job.route.level);
+          const auto geometry = system.prepared_amr_level_geometry(job.route.level);
+          const PopsExecutionContextV1 execution = job.spec.execution->view();
+          scheduler.install(
+              std::move(job.route), left, geometry, right, geometry, execution,
+              [spec = std::move(job.spec), component = std::move(job.component)]() mutable {
+                auto prepared =
+                    std::make_shared<PreparedComponent>(std::move(spec), std::move(component));
+                return pops::runtime::multiblock::InterfaceFluxEvaluator(
+                    [prepared](const pops::runtime::multiblock::BoundaryEvaluationPoint& point,
+                               const pops::runtime::multiblock::InterfaceFluxBatch& batch) {
+                      prepared->evaluate(point, batch);
+                    });
+              });
+        }
+      });
+}
+
 // Assembly seams: per-block composition, native block, and refinement tagging.
 void bind_amr_assembly(py::class_<AmrSystem>& cls) {
   cls.def(py::init<const AmrSystemConfig&>())
@@ -247,6 +284,9 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
       .def("_install_field_storage_route", &AmrSystem::install_field_storage_route,
            py::arg("field_identity"), py::arg("provider_slot"),
            "Bind one exact solved-field Handle to native provider storage.")
+      .def("_install_interface_flux_provider", &install_amr_interface_flux_provider,
+           py::arg("jobs"),
+           "Atomically extend the prepared multi-level shared-interface provider registry.")
       .def("_discard_boundary_plans", &AmrSystem::discard_hyperbolic_boundaries,
            "Roll back one failed pre-block boundary authority transaction.")
       .def(
@@ -1085,6 +1125,8 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
            py::arg("initialized"))
       .def("restore_history_fill_count", &AmrSystem::restore_history_fill_count, py::arg("name"),
            py::arg("fill_count"))
+      .def("restore_history_metadata", &AmrSystem::restore_history_metadata, py::arg("name"),
+           py::arg("initialized"), py::arg("fill_count"))
       .def("history_slot_dt", &AmrSystem::history_slot_dt, py::arg("name"), py::arg("slot"))
       .def("restore_history_slot_dt", &AmrSystem::restore_history_slot_dt, py::arg("name"),
            py::arg("slot"), py::arg("dt"))

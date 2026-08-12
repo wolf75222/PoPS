@@ -243,7 +243,9 @@ extern "C" void pops_install_program_amr(
         });
       },
       context, [] {});
-  system->install_program_restart_hooks([] {}, [] {}, [] {});
+  system->install_program_restart_hooks(
+      [] {}, [] {}, [] {},
+      [context] { return context->accepted_context_snapshot(); });
 }
 )CPP";
   // clang-format on
