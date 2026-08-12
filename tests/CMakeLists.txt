@@ -885,7 +885,8 @@ if(POPS_HAS_MPI)
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_system pops_runtime_amr)
     elseif(_test STREQUAL "test_mpi_cell_temporal_program" OR
            _test STREQUAL "test_mpi_cell_temporal_program_multibox" OR
-           _test STREQUAL "test_mpi_cell_temporal_program_collective_rollback")
+           _test STREQUAL "test_mpi_cell_temporal_program_collective_rollback" OR
+           _test STREQUAL "test_mpi_cell_temporal_program_refusal")
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_amr)
     elseif(_test STREQUAL "test_mpi_multiblock_interface_scheduler")
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_amr)
