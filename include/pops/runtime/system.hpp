@@ -794,6 +794,12 @@ class System {
   void finalize_step_transaction();
   /// Restore the accepted snapshot, including after commit but before finalize.
   void rollback_step_transaction();
+  /// Checkpoint-specific aliases over the same accepted native snapshot.  Commit authenticates the
+  /// fallible precondition while retaining rollback authority; finalize only releases ownership.
+  void begin_restart_transaction();
+  void commit_restart_transaction();
+  void finalize_restart_transaction() noexcept;
+  void rollback_restart_transaction();
   /// Volume-weighted L2 norm of each block's accepted macro-step change. RuntimeInstance calls
   /// this collective only while an outer transaction still retains U^n.
   POPS_EXPORT std::map<std::string, double> step_change_l2() const;

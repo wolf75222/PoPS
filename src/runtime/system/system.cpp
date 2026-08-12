@@ -114,6 +114,27 @@ void System<Dim>::rollback_step_transaction() {
 }
 
 template <int Dim>
+void System<Dim>::begin_restart_transaction() {
+  begin_step_transaction();
+}
+
+template <int Dim>
+void System<Dim>::commit_restart_transaction() {
+  commit_step_transaction();
+}
+
+template <int Dim>
+void System<Dim>::finalize_restart_transaction() noexcept {
+  p_->external_step_transaction_.reset();
+  p_->external_step_transaction_committed_ = false;
+}
+
+template <int Dim>
+void System<Dim>::rollback_restart_transaction() {
+  rollback_step_transaction();
+}
+
+template <int Dim>
 double System<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, double min_dt) {
   p_->program_.require_step_installed("System::step_cfl");
   if (!std::isfinite(cfl) || !(cfl > 0.0))
@@ -395,6 +416,10 @@ template void System<kNativeDimension>::commit_step_transaction();
 template std::map<std::string, double> System<kNativeDimension>::step_change_l2() const;
 template void System<kNativeDimension>::finalize_step_transaction();
 template void System<kNativeDimension>::rollback_step_transaction();
+template void System<kNativeDimension>::begin_restart_transaction();
+template void System<kNativeDimension>::commit_restart_transaction();
+template void System<kNativeDimension>::finalize_restart_transaction() noexcept;
+template void System<kNativeDimension>::rollback_restart_transaction();
 template double System<kNativeDimension>::step_cfl(double, double, double, double);
 template int System<kNativeDimension>::macro_step() const;
 template void System<kNativeDimension>::mark_bound();

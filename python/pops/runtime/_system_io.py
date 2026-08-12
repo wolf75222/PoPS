@@ -531,7 +531,7 @@ class _SystemIO(_System):
             getattr(self, "_step_controller", None),
         )
         try:
-            self._s._begin_step_transaction()
+            self._s._begin_restart_transaction()
         except BaseException:
             del self._checkpoint_restart_python_snapshot
             raise
@@ -582,16 +582,18 @@ class _SystemIO(_System):
         return prepared.restart_identity
 
     def _commit_checkpoint_restart(self) -> None:
-        self._s._commit_step_transaction()
+        # The fallible seal keeps the accepted native snapshot live until collective agreement.
+        self._s._commit_restart_transaction()
 
     def _finalize_checkpoint_restart(self) -> None:
-        self._s._finalize_step_transaction()
+        # Native finalization is noexcept and only releases the already-committed snapshot.
+        self._s._finalize_restart_transaction()
         del self._checkpoint_restart_python_snapshot
 
     def _rollback_checkpoint_restart(self) -> None:
         snapshot = self._checkpoint_restart_python_snapshot
         try:
-            self._s._rollback_step_transaction()
+            self._s._rollback_restart_transaction()
         finally:
             (
                 self._last_restart_identity,

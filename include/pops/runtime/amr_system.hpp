@@ -811,7 +811,12 @@ class AmrSystem {
   /// hierarchy,
   /// state, aux, field warm-start, history and clock mutation is rolled back if any restore step fails.
   void begin_restart_transaction();
+  /// Collectively authenticate that every rank retains one rollback-capable accepted snapshot.
+  /// This seals the transaction for commit without releasing rollback authority.
   void commit_restart_transaction();
+  /// Release a collectively committed restart snapshot.  The commit precondition is established by
+  /// commit_restart_transaction(), so this phase performs only no-throw ownership release.
+  void finalize_restart_transaction() noexcept;
   void rollback_restart_transaction();
   /// Force exactly one artifact-owned scientific regrid inside an active restart transaction.
   /// The exact recorded accepted state must already have been restored and authenticated.
