@@ -2,14 +2,13 @@ schema_version = 3
 gate = "adc757-prepared-numerics-slice"
 issue = "ADC-757"
 evidence_from = ["ADC-682", "ADC-711", "ADC-733", "ADC-737", "ADC-749", "ADC-750", "ADC-751", "ADC-752", "ADC-753", "ADC-754", "ADC-755", "ADC-756"]
+# Each family needs one recovery-specific accepted-publication proof and one induced
+# recovery rejection proving that no bootstrap/history/regrid/restriction image published.
 deferred = [
   "amr_bootstrap_recovery_publication",
   "amr_history_recovery_publication",
   "amr_regrid_recovery_publication",
   "amr_restriction_recovery_publication",
-  "prepared_riemann_recovery_policy",
-  "remaining_runtime_nd_metric_eb_characteristic_execution",
-  "typed_flux_recovery_consumption",
 ]
 
 [hardware_evidence]
@@ -24,10 +23,63 @@ requirements = [
 ]
 
 # This is an executable partial gate, not ADC-757 closure. Every claimed
-# available software requirement has success and refusal/detector proofs;
-# unavailable requirements stay deferred and carry refusal evidence only. The three
+# available software requirement has success and refusal/detector proofs. The three
 # hardware positives must be supplied by the single authenticated report route above;
 # ordinary CPU CTests may provide only their fail-closed detector proofs.
+[[check]]
+requirement = "prepared_riemann_recovery_policy"
+polarity = "positive"
+kind = "pytest"
+path = "tests/python/architecture/test_flux_interface_fences.py"
+test = "test_fixed_riemann_recovery_route_is_wired_for_cartesian_uniform_and_amr_only"
+
+[[check]]
+requirement = "prepared_riemann_recovery_policy"
+polarity = "refusal"
+kind = "pytest"
+path = "tests/python/unit/descriptors/test_lib_descriptors.py"
+test = "test_riemann_recovery_public_validation_refuses_polar_without_substitution"
+
+[[check]]
+requirement = "remaining_runtime_nd_metric_eb_characteristic_execution"
+polarity = "positive"
+target = "test_generated_amr_system_block"
+test_regex = "^GeneratedAmrSystemBlock\\.CutCellCapabilityExecutesAtExactRank$"
+
+[[check]]
+requirement = "remaining_runtime_nd_metric_eb_characteristic_execution"
+polarity = "positive"
+target = "test_prepared_hyperbolic_boundary"
+test_regex = "^test_prepared_hyperbolic_boundary\\.generated_characteristic_provider_executes_on_permuted_axes_in_all_ranks$"
+
+[[check]]
+requirement = "remaining_runtime_nd_metric_eb_characteristic_execution"
+polarity = "refusal"
+kind = "mpi_ctest"
+target = "test_mpi_system_analytic_level_set"
+test_regex = "^test_mpi_system_analytic_level_set_np2$"
+nproc = 2
+
+[[check]]
+requirement = "remaining_runtime_nd_metric_eb_characteristic_execution"
+polarity = "refusal"
+target = "test_prepared_hyperbolic_boundary"
+test_regex = "^test_prepared_hyperbolic_boundary\\.characteristic_provider_absence_rejection_and_nonfinite_output_fail_before_publication$"
+
+[[check]]
+requirement = "typed_flux_recovery_consumption"
+polarity = "positive"
+kind = "pytest"
+path = "tests/python/architecture/test_variable_recovery_consumer_cutover.py"
+test = "test_nd_face_reconstruction_consumes_typed_conversion_before_flux_evaluation"
+
+[[check]]
+requirement = "typed_flux_recovery_consumption"
+polarity = "refusal"
+kind = "pytest"
+path = "tests/python/architecture/test_variable_recovery_consumer_cutover.py"
+test = "test_every_production_spatial_path_consumes_recovery_before_flux_evaluation"
+
 [[check]]
 requirement = "prepared_local_nonlinear"
 polarity = "positive"
@@ -117,9 +169,9 @@ test = "test_post_riemann_flux_refuses_wrong_component_route_or_output"
 requirement = "mpi_collective_execution"
 polarity = "positive"
 kind = "mpi_ctest"
-target = "test_mpi_system_analytic_level_set"
-test_regex = "^test_mpi_system_analytic_level_set_np2$"
-nproc = 2
+target = "test_mpi_smoke"
+test_regex = "^test_mpi_smoke_np4$"
+nproc = 4
 
 [[check]]
 requirement = "mpi_collective_execution"
