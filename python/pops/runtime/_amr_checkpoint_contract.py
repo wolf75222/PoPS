@@ -10,7 +10,7 @@ import struct
 from pops.identity import make_identity
 
 
-_SCHEMA = 6
+_SCHEMA = 7
 _GUARANTEE = "bit_identical_accepted_state"
 _CONTRACT_KEYS = {
     "schema_version",
@@ -24,6 +24,7 @@ _CONTRACT_KEYS = {
     "history_qualifications",
     "level_relations",
     "transfer_routes",
+    "field_providers",
 }
 _PREFLIGHT_KEYS = {
     "schema_version",
@@ -31,11 +32,20 @@ _PREFLIGHT_KEYS = {
     "program_state",
     "level_relations",
     "transfer_routes",
+    "field_providers",
 }
 
 
 def _rows(values):
     return [list(map(str, row)) for row in values]
+
+
+def _field_provider_contract_rows(values):
+    """Retain immutable provider semantics, excluding live topology/materialization evidence."""
+    rows = _rows(values)
+    if any(len(row) < 14 or row[0] != "pops.amr.field-provider-checkpoint-manifest@1" for row in rows):
+        raise ValueError("native AMR field-provider manifest has an invalid row")
+    return [row[:6] + row[9:] for row in rows]
 
 
 def restart_topology_image(sim):
@@ -100,6 +110,9 @@ def contract_for(sim):
         "history_qualifications": _rows(sim.program_accepted_state_manifest()),
         "level_relations": relations,
         "transfer_routes": _rows(sim.checkpoint_transfer_routes()),
+        "field_providers": _field_provider_contract_rows(
+            sim.field_provider_checkpoint_manifest()
+        ),
     }
 
 
@@ -232,10 +245,15 @@ def validate_regridded_contract(sim, payload, receipt):
         "history_consensus_identity_after",
         "composite_integrals_before",
         "composite_integrals_after",
+        "field_manifest_identity_before",
+        "field_manifest_identity_after",
+        "field_manifest_before",
+        "field_manifest_after",
+        "field_recompute_witness",
     }
     if not isinstance(receipt, dict) or set(receipt) != required:
         raise TypeError("restart: RegridOnRestart receipt has an invalid exact schema")
-    if receipt["schema_version"] != 2 or type(receipt["changed"]) is not bool:
+    if receipt["schema_version"] != 3 or type(receipt["changed"]) is not bool:
         raise ValueError("restart: RegridOnRestart receipt version or changed flag is invalid")
     accepted_time = float(payload["t"])
     accepted_step = int(payload["macro_step"])
@@ -296,6 +314,92 @@ def validate_regridded_contract(sim, payload, receipt):
             raise ValueError(
                 "restart: RegridOnRestart phase-local history consensus identity has the "
                 "wrong domain or schema version"
+            )
+    for key in ("field_manifest_identity_before", "field_manifest_identity_after"):
+        identity = Identity.from_token(receipt[key])
+        if identity.domain != "restart-field-provider-manifest" or identity.schema_version != 1:
+            raise ValueError(
+                "restart: RegridOnRestart field-provider manifest witness has the wrong domain "
+                "or schema version"
+            )
+    before_field_manifest = receipt["field_manifest_before"]
+    after_field_manifest = receipt["field_manifest_after"]
+    if (
+        not isinstance(before_field_manifest, list)
+        or not isinstance(after_field_manifest, list)
+        or any(not isinstance(row, list) for row in before_field_manifest + after_field_manifest)
+    ):
+        raise TypeError("restart: RegridOnRestart field-provider manifest witness is invalid")
+    if _field_provider_contract_rows(before_field_manifest) != recorded["field_providers"]:
+        raise ValueError(
+            "restart: RegridOnRestart recorded field-provider semantics changed before regrid"
+        )
+    live_field_manifest = _rows(sim.field_provider_checkpoint_manifest())
+    if after_field_manifest != live_field_manifest:
+        raise ValueError(
+            "restart: RegridOnRestart transformed field-provider manifest differs from the live image"
+        )
+    for rows, topology in ((before_field_manifest, before), (after_field_manifest, after)):
+        if any(row[6] != str(topology["topology_epoch"]) or row[8] != "materialized" for row in rows):
+            raise ValueError(
+                "restart: RegridOnRestart field-provider witness has invalid topology or materialization"
+            )
+    expected_field_before = make_identity(
+        "restart-field-provider-manifest",
+        {"schema_version": 1, "providers": before_field_manifest},
+    ).token
+    expected_field_after = make_identity(
+        "restart-field-provider-manifest",
+        {"schema_version": 1, "providers": after_field_manifest},
+    ).token
+    if (
+        receipt["field_manifest_identity_before"] != expected_field_before
+        or receipt["field_manifest_identity_after"] != expected_field_after
+    ):
+        raise ValueError(
+            "restart: RegridOnRestart field-provider manifest witness differs from the recorded "
+            "or transformed image"
+        )
+    witness = receipt["field_recompute_witness"]
+    if not isinstance(witness, list) or any(
+        not isinstance(row, list) or len(row) != 16 for row in witness
+    ):
+        raise TypeError("restart: RegridOnRestart field recompute witness has an invalid schema")
+    slots = [str(row[1]) for row in transformed["field_providers"]]
+    if len({row[0] for row in witness}) != len(witness) or sorted(
+        row[0] for row in witness
+    ) != sorted(slots):
+        raise ValueError(
+            "restart: RegridOnRestart field recompute witness differs from the live provider order"
+        )
+    if any(row[5] != "solved" for row in witness):
+        raise ValueError("restart: RegridOnRestart field recompute did not publish a solved value")
+    manifest_by_slot = {row[1]: row for row in after_field_manifest}
+    accepted_time_bits = int.from_bytes(struct.pack("!d", accepted_time), "big")
+    for row in witness:
+        manifest = manifest_by_slot[row[0]]
+        try:
+            dt_bits = int(row[14])
+            time_bits = int(row[15])
+            dt = struct.unpack("!d", dt_bits.to_bytes(8, "big"))[0]
+        except (OverflowError, ValueError, struct.error):
+            raise ValueError(
+                "restart: RegridOnRestart field recompute point has invalid binary64 evidence"
+            ) from None
+        if (
+            row[1] != manifest[4]
+            or row[2] != manifest[3]
+            or row[3] != str(after["topology_epoch"])
+            or row[4] != manifest[7]
+            or row[6] != "pops.amr.restart-regrid.accepted"
+            or row[7] != str(accepted_step)
+            or row[8:14] != ["0", "0", "0", "0", "0", "1"]
+            or not math.isfinite(dt)
+            or dt <= 0.0
+            or time_bits != accepted_time_bits
+        ):
+            raise ValueError(
+                "restart: RegridOnRestart field recompute point differs from its accepted authority"
             )
     expected_program_state = recorded["program_state"]
     if transformed["program_state"] != expected_program_state:

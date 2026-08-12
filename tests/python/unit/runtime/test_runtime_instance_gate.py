@@ -492,7 +492,11 @@ def test_runtime_instance_refuses_executor_without_checkpoint_resource_authority
 
 
 def test_checkpoint_zip64_capacity_uses_reviewed_checked_formula():
-    from pops.runtime._checkpoint_resource_budget import _archive_byte_capacity
+    from pops.runtime._checkpoint_resource_budget import (
+        _amr_field_provider_manifest_capacity,
+        _archive_byte_capacity,
+        _checkpoint_member_names,
+    )
 
     uncompressed = 4_321_987
     names = ("state_fluid", "pops_checkpoint_manifest", "pops_restart_identity")
@@ -506,6 +510,54 @@ def test_checkpoint_zip64_capacity_uses_reviewed_checked_formula():
         + 2 * sum(map(len, names))
         + 98
     )
+
+    field_row = [
+        "pops.amr.field-provider-checkpoint-manifest@1",
+        "field-slot-\N{GREEK SMALL LETTER PHI}",
+        "2",
+        "provider-identity",
+        "plan-identity",
+        "configuration-identity",
+        "17",
+        "23",
+        "materialized",
+        "output-owner",
+        "fluid",
+        "phi",
+        "1",
+        "dependency-identity",
+        "fluid",
+        "rho",
+        "1",
+        "fluid",
+        "boundary-phi",
+    ]
+    owner = SimpleNamespace(
+        _s=SimpleNamespace(field_provider_checkpoint_manifest=lambda: [field_row])
+    )
+    field_slots, manifest_characters, structural_bytes = (
+        _amr_field_provider_manifest_capacity(owner, configured_levels=12)
+    )
+    maximal_row = list(field_row)
+    maximal_row[2] = "12"
+    maximal_row[6] = str((1 << 64) - 1)
+    maximal_row[7] = str((1 << 64) - 1)
+    maximal_row[8] = "unmaterialized"
+    maximal_text = json.dumps((tuple(maximal_row),), separators=(",", ":"), ensure_ascii=True)
+
+    assert field_slots == (field_row[1],)
+    assert manifest_characters == len(maximal_text)
+    assert structural_bytes == len(maximal_text) * np.dtype("U1").itemsize
+    member_names = _checkpoint_member_names(
+        runtime_kind="amr",
+        block_names=("fluid",),
+        field_names=field_slots,
+        history_names=(),
+        cache_names=(),
+        levels=12,
+        rank_capacity=2,
+    )
+    assert member_names.count("field_provider_manifest") == 1
 
 
 @pytest.mark.parametrize(
@@ -2445,7 +2497,7 @@ def test_regrid_restart_derives_distinct_run_identity_from_global_receipt(monkey
     restart_identity = make_identity("restart", {"test": "checkpoint"})
     hierarchy = RegridOnRestart()
     receipt = {
-        "schema_version": 2,
+        "schema_version": 3,
         "policy_identity": hierarchy.identity.token,
         "changed": True,
         "accepted_time": 0.5,
@@ -2464,6 +2516,15 @@ def test_regrid_restart_derives_distinct_run_identity_from_global_receipt(monkey
         "history_consensus_identity_after": make_identity(
             "restart-history-image", {"phase": "after"}
         ).token,
+        "field_manifest_identity_before": make_identity(
+            "restart-field-provider-manifest", {"phase": "before"}
+        ).token,
+        "field_manifest_identity_after": make_identity(
+            "restart-field-provider-manifest", {"phase": "after"}
+        ).token,
+        "field_manifest_before": [],
+        "field_manifest_after": [],
+        "field_recompute_witness": [],
         "composite_integrals_before": [{"block": "tracer", "component": 0, "value": 1.25}],
         "composite_integrals_after": [{"block": "tracer", "component": 0, "value": 1.25}],
     }

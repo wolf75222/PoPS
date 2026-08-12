@@ -298,7 +298,7 @@ class CheckpointReport:
 
     def __str__(self) -> Any:
         head = "restartable" if self.restartable else "NOT restartable"
-        lines = ["AMR checkpoint policy: %s (authenticated accepted-state v9 envelope)" % head]
+        lines = ["AMR checkpoint policy: %s (authenticated accepted-state v10 envelope)" % head]
         lines.append("  envelope: authenticated accepted state under the same bound composition")
         if self.violations:
             lines.append("  this system violates:")

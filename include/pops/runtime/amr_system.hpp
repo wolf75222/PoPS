@@ -786,6 +786,12 @@ class AmrSystem {
   /// owner-qualified ComponentKeys, shapes and accepted provider generations before publication.
   [[nodiscard]] POPS_EXPORT std::vector<runtime::system::AuxiliaryCheckpointAcceptedState<Dim>>
   capture_auxiliary_checkpoint_accepted_state() const;
+  /// Rank-local, collective-free rollback witness for accepted state, auxiliary and elliptic
+  /// carriers plus each level-qualified auxiliary registry. Values include full ghost storage.
+  [[nodiscard]] POPS_EXPORT std::vector<std::vector<std::string>>
+  checkpoint_rank_local_carrier_manifest() const;
+  /// Exact pending provider identities retained by accepted rollback snapshots.
+  [[nodiscard]] POPS_EXPORT std::vector<std::string> dirty_auxiliary_provider_identities() const;
   /// Rank-local capacity derived from the qualified provider registries. The pair is the largest
   /// payload-free POPSAUX2 image and scalar width of one full-domain level.
   [[nodiscard]] POPS_EXPORT std::pair<std::size_t, std::size_t>
@@ -795,12 +801,14 @@ class AmrSystem {
   /// exposing a partial accepted generation.
   POPS_EXPORT void restore_auxiliary_checkpoint_accepted_state(
       const std::vector<runtime::system::AuxiliaryCheckpointAcceptedState<Dim>>& state);
-  /// Decode every sealed level POPSAUX2 image inside the prepared hierarchy lane.  The complete
-  /// decoded vector is consensus-closed before the typed restore enters finite/registry phases.
+  /// Decode every sealed level POPSAUX2 image inside the prepared hierarchy lane while one native
+  /// restart transaction owns rollback authority. The complete decoded vector is consensus-closed
+  /// before the typed restore enters finite/registry phases; this route never lazily builds an
+  /// engine or selects a process-global communicator.
   using AuxiliaryCheckpointByteViewProvider =
       std::function<std::span<const std::uint8_t>(std::size_t)>;
   using AuxiliaryCheckpointByteCountProvider = std::function<std::size_t()>;
-  POPS_EXPORT void restore_auxiliary_checkpoint_accepted_state_bytes(
+  POPS_EXPORT void restore_restart_auxiliary_checkpoint_accepted_state_bytes(
       const AuxiliaryCheckpointByteCountProvider& payload_count,
       const AuxiliaryCheckpointByteViewProvider& payload_at);
 
@@ -829,7 +837,23 @@ class AmrSystem {
   /// field is unregistered.
   std::vector<double> named_field_values(const std::string& field);
   std::vector<std::string> field_provider_slots() const;
-  int field_provider_levels(const std::string& provider_slot);
+  /// Collective-free identity of the exact provider aliased by the historical ``phi`` checkpoint
+  /// member. The configured default wins; a generic-only registry uses its deterministic first
+  /// slot. Every provider remains independently present in the all-provider image.
+  std::string checkpoint_phi_provider_slot() const;
+  /// Immutable, collective-free field-provider checkpoint manifest. Each canonical row records
+  /// the slot, active depth, resolved provider/plan/configuration identities, field and auxiliary
+  /// dependencies, output ownership, live topology/materialization generations and whether the
+  /// solver is currently materialized. This accessor never builds a solver or enters a collective.
+  std::vector<std::vector<std::string>> field_provider_checkpoint_manifest() const;
+  int field_provider_levels(const std::string& provider_slot) const;
+  /// Restore the complete all-provider warm-start image as one detached candidate. Every slot and
+  /// level is shape/finite/consensus validated before any accepted solver storage is replaced.
+  void restore_field_potentials(const std::vector<std::string>& provider_slots,
+                                const std::vector<std::vector<std::vector<double>>>& potentials);
+  /// Recompute every typed derived field after a restart regrid in the authenticated combined
+  /// auxiliary/field dependency order. Returns a canonical witness row per published field.
+  std::vector<std::vector<std::string>> recompute_fields_after_restart_regrid();
   void set_field_potential(const std::string& provider_slot, const std::vector<double>& phi);
   void set_field_potential_level(const std::string& provider_slot, int level,
                                  const std::vector<double>& phi);
@@ -1300,6 +1324,14 @@ class AmrSystem {
   POPS_EXPORT SolveOutcome solve_program_field_from_blocks_at(
       const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
       int active_level, const std::vector<const MultiFab<Dim>*>& stage_overrides);
+  POPS_EXPORT SolveOutcome solve_program_field_from_blocks_on_prepared_lane(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
+      int active_level, const std::vector<const MultiFab<Dim>*>& stage_overrides);
+  POPS_EXPORT void refresh_auxiliary_on_prepared_lane(
+      const runtime::system::AuxiliaryEvaluationPoint& point);
+  POPS_EXPORT void restore_auxiliary_checkpoint_accepted_state_on_prepared_lane(
+      const std::vector<runtime::system::AuxiliaryCheckpointAcceptedState<Dim>>& state,
+      const ExecutionLane& lane);
   POPS_EXPORT SolveOutcome solve_program_default_field(int active_level);
   struct Impl;
   std::unique_ptr<Impl> p_;

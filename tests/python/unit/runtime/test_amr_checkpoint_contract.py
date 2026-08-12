@@ -86,6 +86,9 @@ class _Sim:
             ]
         ]
 
+    def field_provider_checkpoint_manifest(self):
+        return []
+
     def program_accepted_state_manifest(self):
         descriptor = [
             "rhs",
@@ -187,6 +190,7 @@ def _payload(sim=None):
     return _Payload(
         {
             "amr_accepted_contract": np.array(encode_contract(sim)),
+            "field_provider_manifest": np.array("[]"),
             "program_accepted_state": np.array([1, 2, 3], dtype=np.uint8),
             "regrid_count": np.array(4),
             "topology_epoch": np.array(7, dtype=np.uint64),
@@ -196,7 +200,7 @@ def _payload(sim=None):
 
 def test_contract_names_guarantee_relations_qualified_histories_and_transfer_plans():
     contract = contract_for(_Sim())
-    assert contract["schema_version"] == 6
+    assert contract["schema_version"] == 7
     assert contract["guarantee"] == "bit_identical_accepted_state"
     assert contract["ledger"]["accepted_entries"] == 1
     assert contract["ledger"]["transaction_depth"] == 0
@@ -362,7 +366,7 @@ def test_regridded_contract_authenticates_transformed_topology_and_level_axes():
     recorded_contract = json.loads(str(payload["amr_accepted_contract"]))
     transformed_contract = contract_for(sim)
     receipt = {
-        "schema_version": 2,
+        "schema_version": 3,
         "policy_identity": "pops.restart-hierarchy.v1:sha256:" + "0" * 64,
         # The policy executed and advanced its audit counters, but the structural hierarchy
         # identity did not change.
@@ -385,6 +389,17 @@ def test_regridded_contract_authenticates_transformed_topology_and_level_axes():
         "history_consensus_identity_after": make_identity(
             "restart-history-image", {"phase": "after"}
         ).token,
+        "field_manifest_identity_before": make_identity(
+            "restart-field-provider-manifest",
+            {"schema_version": 1, "providers": []},
+        ).token,
+        "field_manifest_identity_after": make_identity(
+            "restart-field-provider-manifest",
+            {"schema_version": 1, "providers": []},
+        ).token,
+        "field_manifest_before": [],
+        "field_manifest_after": [],
+        "field_recompute_witness": [],
         "composite_integrals_before": [],
         "composite_integrals_after": [],
     }

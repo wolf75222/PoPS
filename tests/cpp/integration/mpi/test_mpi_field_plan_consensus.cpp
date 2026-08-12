@@ -88,6 +88,33 @@ struct BoundaryBindingAudit {
   }
 };
 
+struct PreparedHierarchyLaneAudit {
+  inline static bool observed = false;
+  inline static bool owns_communicator = false;
+  inline static bool has_qualified_identity = false;
+  inline static bool is_distinct_world_duplicate = false;
+
+  static void reset() {
+    observed = false;
+    owns_communicator = false;
+    has_qualified_identity = false;
+    is_distinct_world_duplicate = false;
+  }
+
+  static void observe(const pops::ExecutionLane& lane) {
+    observed = true;
+    owns_communicator = lane.owns_communicator();
+    constexpr std::string_view hierarchy_lane_marker = "/pops.generated-amr-levels/";
+    const std::size_t marker = lane.identity().find(hierarchy_lane_marker);
+    has_qualified_identity = marker != std::string_view::npos && marker != 0 &&
+                             marker + hierarchy_lane_marker.size() < lane.identity().size();
+    int world_relation = MPI_UNEQUAL;
+    is_distinct_world_duplicate =
+        MPI_Comm_compare(lane.native_handle(), MPI_COMM_WORLD, &world_relation) == MPI_SUCCESS &&
+        world_relation == MPI_CONGRUENT;
+  }
+};
+
 class ConsensusAmrFieldSolver final : public pops::runtime::amr::ExactAmrFieldSolver<Dim> {
  public:
   using request_type = pops::runtime::amr::ExactAmrFieldSolverBuildRequest<Dim>;
@@ -130,7 +157,8 @@ class ConsensusAmrFieldSolver final : public pops::runtime::amr::ExactAmrFieldSo
   void install_nullspace(pops::PreparedFieldNullspace<Dim>,
                          std::vector<pops::PreparedVectorDistribution<Dim>>) override {}
   int maximum_iterations() const noexcept override { return 8; }
-  pops::SolveReport solve(const pops::ExecutionLane&) override {
+  pops::SolveReport solve(const pops::ExecutionLane& lane) override {
+    PreparedHierarchyLaneAudit::observe(lane);
     if (fault_ == AmrProviderFault::throw_on_rank_one && pops::my_rank() == 1)
       throw std::runtime_error("intentional rank-local AMR provider solve failure");
     ++solve_generation_;
@@ -905,6 +933,7 @@ int run_multiblock_field_solve(int argc, char** argv) {
         system.field_potential_level_global("field/provider-validation-fault", 0);
     const std::vector<double> validation_provider_before = system.auxiliary_component(output, 0);
     BoundaryBindingAudit::reset();
+    PreparedHierarchyLaneAudit::reset();
     bool candidate_validation_rejected = false;
     try {
       (void)context->solve_fields_from_blocks_at(point, 155, "field/provider-validation-fault",
@@ -986,6 +1015,12 @@ int run_multiblock_field_solve(int argc, char** argv) {
         point, 152, "field/provider-positive", {{0, &stage_a}, {1, &stage_b}});
     require(provider_positive.report().solved_value_available(),
             "custom AMR provider returns one collective publishable report");
+    require(PreparedHierarchyLaneAudit::observed && PreparedHierarchyLaneAudit::owns_communicator,
+            "custom AMR provider executes on the owned PreparedHierarchy lane");
+    require(PreparedHierarchyLaneAudit::has_qualified_identity,
+            "PreparedHierarchy lane exposes its exact parent-qualified identity");
+    require(PreparedHierarchyLaneAudit::is_distinct_world_duplicate,
+            "PreparedHierarchy lane is congruent with but distinct from MPI_COMM_WORLD");
     (void)provider_positive.consume(pops::SolveConsumption::kAccept);
     const std::vector<double> provider_fault_visible = system.auxiliary_component(output, 0);
     bool provider_report_rejected = false;
