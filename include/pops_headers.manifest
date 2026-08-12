@@ -75,6 +75,7 @@ api pops/mesh/layout/distribution.hpp
 api pops/mesh/layout/field_distribution.hpp
 api pops/mesh/layout/rank_space.hpp
 api pops/mesh/layout/refinement.hpp
+sdk-support pops/mesh/parallel/region_transfer.hpp
 api pops/mesh/storage/fab.hpp
 sdk-support pops/mesh/storage/field_replica_consensus.hpp
 api pops/mesh/storage/field_view.hpp

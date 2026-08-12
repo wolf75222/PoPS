@@ -15,7 +15,6 @@
 #include <cstddef>
 #include <exception>
 #include <limits>
-#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -236,17 +235,17 @@ void execute_average_down_collectively(
     throw std::runtime_error("AMR average-down preparation failed collectively");
   }
 
-  std::unique_ptr<transport_type> transport;
+  std::optional<transport_type> transport;
   std::exception_ptr transport_error;
   try {
     const std::size_t job_budget = jobs.size();
-    transport = std::make_unique<transport_type>(transfer_plan{
+    transport.emplace(transfer_plan{
         fine.rank_space(),
         fine.local_rank(),
         fine.ncomp(),
         std::move(jobs),
         {job_budget, fine.rank_space().size(), element_budget, element_budget, element_budget}});
-    transport->attach_lane(lane);
+    transport->prepare_collectively(lane);
   } catch (...) {
     transport_error = std::current_exception();
   }
