@@ -9,6 +9,7 @@
 #include <pops/numerics/elliptic/interface/field_nullspace.hpp>
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
+#include <pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp>
 #include <pops/runtime/config/runtime_params.hpp>
 #include <pops/runtime/multiblock/evaluation_point.hpp>
 #include <pops/runtime/program/clock_schedule.hpp>
@@ -826,64 +827,11 @@ class ProgramContext {
       const FieldView<Real, Dim> result = output.fab(local).view();
       const FieldView<const Real, Dim> value = std::as_const(input).fab(local).view();
       const FieldView<const Real, Dim> coefficient = std::as_const(tensor).fab(local).view();
+      const auto tensor_operator = elliptic::nd::make_cartesian_tensor_operator<
+          elliptic::nd::CartesianTensorDivergenceSign::positive_divergence>(
+          value, elliptic::nd::packed_cartesian_tensor_coefficients<Dim>(coefficient), geom);
       for_each_cell(output.box(local), [=] POPS_HD(const Index<Dim>& cell) {
-        Real image = Real(0);
-        for (int row = 0; row < Dim; ++row) {
-          Index<Dim> lower_row = cell;
-          Index<Dim> upper_row = cell;
-          --lower_row[row];
-          ++upper_row[row];
-          Real lower_flux = Real(0);
-          Real upper_flux = Real(0);
-          for (int column = 0; column < Dim; ++column) {
-            const int component = row * Dim + column;
-            if (column == row) {
-              const Real center_coefficient = coefficient(cell, component);
-              const Real lower_coefficient = coefficient(lower_row, component);
-              const Real upper_coefficient = coefficient(upper_row, component);
-              const Real lower_sum = center_coefficient + lower_coefficient;
-              const Real upper_sum = center_coefficient + upper_coefficient;
-              const Real lower_face = lower_sum != Real(0) ? Real(2) * center_coefficient *
-                                                                 lower_coefficient / lower_sum
-                                                           : Real(0);
-              const Real upper_face = upper_sum != Real(0) ? Real(2) * center_coefficient *
-                                                                 upper_coefficient / upper_sum
-                                                           : Real(0);
-              lower_flux += lower_face * (value(cell, 0) - value(lower_row, 0)) / geom.spacing(row);
-              upper_flux += upper_face * (value(upper_row, 0) - value(cell, 0)) / geom.spacing(row);
-            } else {
-              Index<Dim> lower_column = cell;
-              Index<Dim> upper_column = cell;
-              Index<Dim> lower_row_lower_column = lower_row;
-              Index<Dim> lower_row_upper_column = lower_row;
-              Index<Dim> upper_row_lower_column = upper_row;
-              Index<Dim> upper_row_upper_column = upper_row;
-              --lower_column[column];
-              ++upper_column[column];
-              --lower_row_lower_column[column];
-              ++lower_row_upper_column[column];
-              --upper_row_lower_column[column];
-              ++upper_row_upper_column[column];
-              const Real lower_face =
-                  Real(0.5) * (coefficient(cell, component) + coefficient(lower_row, component));
-              const Real upper_face =
-                  Real(0.5) * (coefficient(cell, component) + coefficient(upper_row, component));
-              const Real tangent_scale = Real(4) * geom.spacing(column);
-              const Real lower_tangent =
-                  (value(upper_column, 0) - value(lower_column, 0) +
-                   value(lower_row_upper_column, 0) - value(lower_row_lower_column, 0)) /
-                  tangent_scale;
-              const Real upper_tangent =
-                  (value(upper_column, 0) - value(lower_column, 0) +
-                   value(upper_row_upper_column, 0) - value(upper_row_lower_column, 0)) /
-                  tangent_scale;
-              lower_flux += lower_face * lower_tangent;
-              upper_flux += upper_face * upper_tangent;
-            }
-          }
-          image += (upper_flux - lower_flux) / geom.spacing(row);
-        }
-        result(cell, 0) = image;
+        result(cell, 0) = tensor_operator.image(cell);
       });
     }
     count_kernel_();

@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <pops/runtime/amr/amr_tensor_elliptic.hpp>
+#include <pops/runtime/program/prepared_tensor_boundary_session.hpp>
 
 #include <algorithm>
 #include <array>
@@ -30,8 +31,7 @@ pops::PhysicalBoundaryConditions<Dim> dirichlet(const pops::Geometry<Dim>& geome
   return {pops::BoundaryTopology<Dim>::physical(), faces, spacing};
 }
 
-pops::runtime::program::HierarchyTensorSolverBuildRequest<2> request(int coarse_cells,
-                                                                     bool with_refinement) {
+pops::runtime::program::HierarchyTensorSolverBuildRequest<2> request(int coarse_cells) {
   using namespace pops;
   using namespace pops::runtime::program;
   const Box<2> coarse_domain{Index<2>{0, 0}, Index<2>{coarse_cells - 1, coarse_cells - 1}};
@@ -53,11 +53,9 @@ pops::runtime::program::HierarchyTensorSolverBuildRequest<2> request(int coarse_
   result.components = 1;
   result.levels = {{coarse_geometry, dirichlet(coarse_geometry), coarse_layout, coarse_distribution,
                     Index<2>{0, 0}}};
-  if (with_refinement) {
-    result.levels.push_back(
-        {fine_geometry, dirichlet(fine_geometry), fine_layout, fine_distribution, Index<2>{0, 0}});
-    result.ratios = {amr::RefinementRatio<2>{std::array<int, 2>{2, 2}}};
-  }
+  result.levels.push_back(
+      {fine_geometry, dirichlet(fine_geometry), fine_layout, fine_distribution, Index<2>{0, 0}});
+  result.ratios = {amr::RefinementRatio<2>{std::array<int, 2>{2, 2}}};
   result.plan_identity = "tests.full-tensor-composite-mms";
   result.operator_contract_identity =
       std::string(tensor_elliptic_detail::kScalarTensorEllipticContract);
@@ -79,10 +77,10 @@ pops::Real exact(pops::Real x, pops::Real y) {
   return x * (pops::Real(1) - x) * y * (pops::Real(1) - y);
 }
 
-double solve_error(int cells, bool with_refinement) {
+double solve_error(int cells) {
   using namespace pops;
   using namespace pops::runtime::program;
-  auto build = request(cells, with_refinement);
+  auto build = request(cells);
   std::vector<Geometry<2>> geometries;
   for (const auto& level : build.levels)
     geometries.push_back(level.geometry);
@@ -121,19 +119,12 @@ double solve_error(int cells, bool with_refinement) {
   if (!report.solved())
     throw std::runtime_error(report.reason);
 
-  const int measured_level = with_refinement ? 1 : 0;
+  constexpr int measured_level = 1;
   const auto& solution = solver->solution(measured_level);
   const auto& fab = solution.fab(0);
   auto host = fab.create_host_mirror();
   fab.copy_to_host(host);
-  Box<2> region = fab.box();
-  if (with_refinement) {
-    region = region.grow(-std::max(2, cells / 4));
-  } else {
-    region =
-        Box<2>{Index<2>{cells / 4, cells / 4}, Index<2>{3 * cells / 4 - 1, 3 * cells / 4 - 1}}.grow(
-            -std::max(1, cells / 8));
-  }
+  const Box<2> region = fab.box().grow(-std::max(2, cells / 4));
   double error = 0;
   for (int j = region.lo[1]; j <= region.hi[1]; ++j)
     for (int i = region.lo[0]; i <= region.hi[0]; ++i) {
@@ -149,9 +140,64 @@ double solve_error(int cells, bool with_refinement) {
 
 TEST(test_composite_fac_tensor, full_tensor_composite_retains_refinement_accuracy) {
   constexpr int coarse_cells = 24;
-  const double coarse = solve_error(coarse_cells, false);
-  const double refined = solve_error(coarse_cells, true);
-  EXPECT_GT(coarse, 0.0);
-  EXPECT_LT(refined, 0.7 * coarse)
-      << "a fine level must improve the full-tensor solution at fixed coarse resolution";
+  const double coarse_refined = solve_error(coarse_cells);
+  const double fine_refined = solve_error(2 * coarse_cells);
+  EXPECT_GT(coarse_refined, 0.0);
+  EXPECT_LT(fine_refined, 0.4 * coarse_refined)
+      << "genuinely refined full-tensor FAC must converge under hierarchy refinement";
+}
+
+TEST(test_composite_fac_tensor, tensor_boundary_point_refresh_is_collective_and_transactional) {
+  using namespace pops;
+  using namespace pops::runtime::program;
+  constexpr int patch_cells = 4;
+  const ExecutionLane lane = ExecutionLane::world("tests.tensor-boundary-point-refresh");
+  const int rank_count = lane.size();
+  const int local_rank = lane.rank();
+  const Box<2> domain{Index<2>{0, 0}, Index<2>{patch_cells * rank_count - 1, patch_cells - 1}};
+  const Geometry<2> geometry =
+      Geometry<2>::from_bounds(domain, RealVector<2>{0, 0}, RealVector<2>{1, 1});
+  std::vector<Box<2>> patches;
+  std::vector<Index<2>> owners;
+  patches.reserve(static_cast<std::size_t>(rank_count));
+  owners.reserve(static_cast<std::size_t>(rank_count));
+  for (int rank = 0; rank < rank_count; ++rank) {
+    patches.push_back(
+        {Index<2>{rank * patch_cells, 0}, Index<2>{(rank + 1) * patch_cells - 1, patch_cells - 1}});
+    owners.push_back(Index<2>{rank, 0});
+  }
+  const mesh::BoxArray<2> layout(std::move(patches));
+  const mesh::RankSpace<2> rank_space{Index<2>{0, 0}, Extent<2>{rank_count, 1}};
+  const auto distribution =
+      mesh::Distribution<2>::partitioned(layout, rank_space, std::move(owners));
+  MultiFab<2> prototype(layout, distribution, Index<2>{local_rank, 0}, 1, Extent<2>{1, 1});
+  int program_owner = 0;
+  int runtime_owner = 0;
+  const runtime::multiblock::BoundaryEvaluationPoint initial{"main", 0,    0,  0,  1, {1, 2},
+                                                             0.1,    0.05, "", "", ""};
+  auto session = PreparedTensorBoundarySession<2>::prepare(
+      geometry, dirichlet(geometry), prototype, lane, 1,
+      PreparedTensorBoundaryAuthority{&program_owner, &runtime_owner,
+                                      reinterpret_cast<std::uintptr_t>(&prototype),
+                                      std::string(lane.identity()), 0, 0, 0, 11, 17},
+      initial);
+
+  const auto previous = session->point();
+  auto rejected = previous;
+  if (rank_count > 1) {
+    // Every rank supplies a locally valid point, but the full exact contract diverges by tick.
+    rejected.tick = static_cast<std::int64_t>(local_rank + 1);
+    rejected.physical_time = 0.1 * static_cast<double>(local_rank + 1);
+  } else {
+    // The serial fixture still proves that local failure does not partially publish the candidate.
+    rejected.clock = "foreign";
+  }
+  EXPECT_THROW(session->refresh_point(rejected), std::exception);
+  EXPECT_EQ(session->point(), previous);
+
+  auto retry = previous;
+  retry.tick = 1;
+  retry.physical_time = 0.15;
+  EXPECT_NO_THROW(session->refresh_point(retry));
+  EXPECT_EQ(session->point(), retry);
 }
