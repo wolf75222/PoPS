@@ -42,7 +42,7 @@ void expect_transfer_round_trip() {
   const Extent<Dim> ratio = uniform_extent<Dim>(2);
   const Box<Dim> fine_domain = refine(coarse_domain, ratio);
   const BoxArray<Dim> coarse_layout(std::vector<Box<Dim>>{coarse_domain});
-  const BoxArray<Dim> fine_layout = BoxArray<Dim>::from_domain(fine_domain, axis_sizes<Dim>(2, 2));
+  const BoxArray<Dim> fine_layout = BoxArray<Dim>::from_domain(fine_domain, uniform_extent<Dim>(2));
   const auto ranks = one_rank_space<Dim>();
   const auto coarse_distribution = Distribution<Dim>::replicated(coarse_layout, ranks);
   const auto fine_distribution = Distribution<Dim>::replicated(fine_layout, ranks);
@@ -93,7 +93,7 @@ TEST(test_refinement, anisotropic_geometry_uses_every_axis) {
 
 TEST(test_refinement, remote_restriction_refuses_before_coarse_mutation) {
   const Box<1> fine_domain{Index<1>{0}, Index<1>{7}};
-  const BoxArray<1> fine_layout = BoxArray<1>::from_domain(fine_domain, std::array<int, 1>{4});
+  const BoxArray<1> fine_layout = BoxArray<1>::from_domain(fine_domain, Extent<1>{4});
   const BoxArray<1> coarse_layout(std::vector<Box<1>>{Box<1>{Index<1>{0}, Index<1>{3}}});
   const RankSpace<1> ranks{Index<1>{0}, Extent<1>{2}};
   const auto fine_distribution = Distribution<1>::partitioned(

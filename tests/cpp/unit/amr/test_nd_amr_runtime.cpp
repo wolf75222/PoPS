@@ -171,7 +171,10 @@ void prove_prepared_multiblock_hierarchy() {
   MultiFab<Dim> neutral_candidate(prepared.state(1, 0));
   MultiFab<Dim> ion_candidate(prepared.state(0, 0));
   std::vector<MultiFab<Dim>*> reverse_candidates{&neutral_candidate, &ion_candidate};
-  EXPECT_EQ(prepared.apply_program_candidates(reverse_map, 0, pops::Real(0.1), reverse_candidates),
+  const pops::runtime::multiblock::BoundaryEvaluationPoint point{
+      "test.prepared-multiblock-amr.direct", 0, 0, 0, 0, {0, 1}, 0.1, 0.0, {}, {}, {}};
+  EXPECT_EQ(prepared.apply_program_candidates(reverse_map, 0, pops::Real(0.1), reverse_candidates,
+                                              point, nullptr),
             1U);
   EXPECT_NEAR(pops::reduce_min_local(ion_candidate), pops::Real(0.8775), 1e-14);
   EXPECT_NEAR(pops::reduce_min_local(neutral_candidate), pops::Real(3.1225), 1e-14);
@@ -179,9 +182,9 @@ void prove_prepared_multiblock_hierarchy() {
       << "Program candidates stay private until group publication";
   auto forged_map = reverse_map;
   forged_map.exact_contract += "forged";
-  EXPECT_THROW(
-      prepared.apply_program_candidates(forged_map, 0, pops::Real(0.1), reverse_candidates),
-      std::exception);
+  EXPECT_THROW(prepared.apply_program_candidates(forged_map, 0, pops::Real(0.1), reverse_candidates,
+                                                 point, nullptr),
+               std::exception);
 
   EXPECT_THROW(prepared.apply_and_publish_level(0, pops::Real(0.8)), std::runtime_error);
   EXPECT_EQ(pops::reduce_min_local(prepared.state(0, 0)), pops::Real(0.9));
