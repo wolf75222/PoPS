@@ -129,9 +129,9 @@ struct SetLinearCellState {
 template <int Dim>
 class DirectPreparedCellTemporalRuntime {
  public:
-  // This lot proves the prepared same-level subengine directly. Wiring these contracts through
-  // AmrProgramContext remains the separate facade lot; no registered positive calls its
-  // deliberately unavailable temporal entry points here.
+  // This fixture remains the focused prepared-subengine proof for rank-local failure injection and
+  // remote-neighbour halo flux. The generated AmrProgramContext/DSO route is proved separately by
+  // test_public_mpi_generated_cell_local_multiblock_regrids_and_matches_forward_euler.
   static constexpr int dimension = Dim;
   using context_type = runtime::program::AmrProgramContext<Dim>;
   using runtime_type = typename context_type::runtime_type;
@@ -309,6 +309,7 @@ class CollectiveRungFailureProvider {
     }
   }
   void materialize_rung_batch_snapshot(runtime::program::CellTemporalRungBatchDescriptor) {}
+  void finalize_rung_batch_candidate(runtime::program::CellTemporalRungBatchDescriptor) {}
   void complete_rung_batch(runtime::program::CellTemporalRungBatchDescriptor) noexcept {}
   [[nodiscard]] PreparedProviderSupport prepare_commit_attempt() noexcept {
     return PreparedProviderSupport::accept();

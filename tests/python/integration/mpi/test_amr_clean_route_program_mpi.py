@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MPI parity of the final public AMR lifecycle and the generic SSPRK2 spelling.
+"""MPI parity of the final public AMR lifecycle, including generated cell-local FE.
 
 Both legs execute the exact public route
 
@@ -10,6 +10,7 @@ One leg authors SSPRK2 with generic :class:`pops.Program` operations; the other 
 states must be bit-identical and each route must conserve global mass across real AMR regrids.
 No native carrier, codegen driver, deleted test helper, or private runtime state is used.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -32,6 +33,7 @@ try:
     from pops._native_collectives import allgather_value
     from pops.runtime._component_execution_context import component_execution_data
     from pops.amr import (
+        AMRClockRelation,
         AMRExecution,
         AMRHierarchy,
         AMRRegrid,
@@ -49,6 +51,7 @@ try:
     from pops.frames import Cartesian2D
     from pops.initial import InitialCondition
     from pops.layouts import AMR
+    from pops.lib import time as libtime
     from pops.lib.amr import StateTransfer
     from pops.lib.initial import Gaussian
     from pops.math import ValueExpr, ddt, div
@@ -108,9 +111,7 @@ def _explicit_ssprk2(state: Any, rate: Any) -> pops.Program:
     stage_0 = StagePoint("ssprk2_stage_0", {"main": TimePoint(program.clock, 0)})
     k0 = program.value("ssprk2_k_0", rate(q.n), at=stage_0)
     stage_1 = StagePoint("ssprk2_stage_1", {"main": TimePoint(program.clock, 1)})
-    q_stage = program.value(
-        "ssprk2_U1", q.n + program.dt * k0, at=stage_1
-    )
+    q_stage = program.value("ssprk2_U1", q.n + program.dt * k0, at=stage_1)
     k1 = program.value("ssprk2_k_1", rate(q_stage), at=stage_1)
     half = Fraction(1, 2)
     q_next = program.value(
@@ -128,14 +129,31 @@ def _preset_ssprk2(state: Any, rate: Any) -> pops.Program:
     return SSPRK2(state, rate=rate)
 
 
+def _forward_euler_pack(states: Any, rate: Any) -> pops.Program:
+    routes = tuple(
+        libtime.RungeKuttaRoute(state, rate)
+        for state in (states if isinstance(states, tuple) else (states,))
+    )
+    return libtime.RungeKutta(routes=routes, tableau=libtime.FORWARD_EULER_TABLEAU)
+
+
+def _cell_local_forward_euler_pack(states: Any, rate: Any) -> pops.Program:
+    program = _forward_euler_pack(states, rate)
+    # Rung zero is the finest-level authored rung. The native route derives rung one on L0 from the
+    # exact 2:1 clock relation, so both levels execute one identical Forward-Euler batch per window.
+    program.cell_local_time(tick_denominator=2000, rung=0)
+    return program
+
+
 def _resolved(
     program_builder: Callable[[Any, Any], pops.Program],
     *,
     distribute_coarse: bool,
+    multi_block: bool = False,
 ) -> Any:
-    frame = Rectangle(
-        "mpi-public-amr-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)
-    ).frame(Cartesian2D())
+    frame = Rectangle("mpi-public-amr-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(
+        Cartesian2D()
+    )
     x_axis, y_axis = frame.axes
     model = Model("mpi-public-amr-model", frame=frame)
     state = model.state("U", components=("rho",))
@@ -150,8 +168,10 @@ def _resolved(
     rate = model.rate("explicit_rhs", equation=ddt(state) == -div(flux))
 
     case = pops.Case("mpi-public-amr-case")
-    block = case.block("tracer", model)
-    state_instance = block[state]
+    blocks = [case.block("tracer", model)]
+    if multi_block:
+        blocks.append(case.block("tracer_peer", model))
+    state_instances = tuple(block[state] for block in blocks)
     numerics = DiscretizationPlan()
     numerics.rates.add(
         rate,
@@ -162,27 +182,30 @@ def _resolved(
             riemann=riemann.Rusanov(),
         ),
     )
-    case.numerics(numerics, block=block)
-    program = program_builder(state_instance, rate)
+    for block in blocks:
+        case.numerics(numerics, block=block)
+    program = program_builder(state_instances if multi_block else state_instances[0], rate)
     program.step_strategy(FixedDt(DT))
     case.program(program)
 
-    case.initials.add(
-        InitialCondition(
-            state=state_instance,
-            value=Gaussian(
-                frame=frame,
-                center={x_axis: 0.35, y_axis: 0.55},
-                background=1.0,
-                amplitude=0.3,
-                inverse_width=90.0,
-            ),
-            projection=ConservativeCellAverage(),
+    for state_instance in state_instances:
+        case.initials.add(
+            InitialCondition(
+                state=state_instance,
+                value=Gaussian(
+                    frame=frame,
+                    center={x_axis: 0.35, y_axis: 0.55},
+                    background=1.0,
+                    amplitude=0.3,
+                    inverse_width=90.0,
+                ),
+                projection=ConservativeCellAverage(),
+            )
         )
-    )
     threshold = case.param(RuntimeParam("refine_threshold", default=1.05))
     transfer = AMRTransfer()
-    transfer.state(state_instance, StateTransfer())
+    for state_instance in state_instances:
+        transfer.state(state_instance, StateTransfer())
     layout = AMR(
         grid=CartesianGrid(
             frame=frame,
@@ -192,7 +215,7 @@ def _resolved(
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
         tagging=AMRTagging(
             rules=(
-                Tag(ValueExpr(state_instance) > case.value(threshold)),
+                Tag(ValueExpr(state_instances[0]) > case.value(threshold)),
                 Buffer(cells=1),
             ),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
@@ -200,7 +223,7 @@ def _resolved(
         ),
         regrid=AMRRegrid(schedule=every(2, clock=program.clock)),
         transfer=transfer,
-        execution=AMRExecution.synchronous(),
+        execution=AMRExecution.subcycled((AMRClockRelation(0, 1, 2),)),
         patch_layout=PatchLayout(
             distribute_coarse=distribute_coarse,
             coarse_max_grid=max(4, N // 2),
@@ -218,11 +241,20 @@ def _execute(
     program_builder: Callable[[Any, Any], pops.Program],
     *,
     distribute_coarse: bool,
+    multi_block: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, Any, Any, Any]:
     builder_name = getattr(program_builder, "__name__", type(program_builder).__name__)
-    route = "%s/coarse=%s" % (builder_name, distribute_coarse)
+    route = "%s/coarse=%s/blocks=%d" % (
+        builder_name,
+        distribute_coarse,
+        2 if multi_block else 1,
+    )
     _phase(route + ": resolve start")
-    resolved = _resolved(program_builder, distribute_coarse=distribute_coarse)
+    resolved = _resolved(
+        program_builder,
+        distribute_coarse=distribute_coarse,
+        multi_block=multi_block,
+    )
     _phase(route + ": resolve done")
     artifact = compile_resolved_plan_once(
         _COMM,
@@ -251,22 +283,32 @@ def _execute(
         "component execution data exposes native C++ MPI Fortran handles",
     )
     chk(
-        tuple(inspect.signature(pops.ExecutionContext.mpi_world).parameters)
-        == ("artifact",),
+        tuple(inspect.signature(pops.ExecutionContext.mpi_world).parameters) == ("artifact",),
         "MPI context construction accepts only the compiled artifact",
     )
     runtime = pops.bind(artifact, resources={"execution_context": context})
     _phase(route + ": execution-context bind done")
     # AMR global state is level-qualified in the final contract; the old unqualified accessor is
     # deliberately rejected because it cannot identify a level on a refined hierarchy.
-    initial = np.asarray(
-        runtime.block_level_state_global("tracer", 0), dtype=np.float64
+    block_names = ("tracer", "tracer_peer") if multi_block else ("tracer",)
+    initial = np.ascontiguousarray(
+        np.concatenate(
+            [
+                np.asarray(runtime.block_level_state_global(block, 0), dtype=np.float64)
+                for block in block_names
+            ]
+        )
     ).copy()
     _phase(route + ": run start")
     report = pops.run(runtime, t_end=NSTEPS * DT, max_steps=NSTEPS)
     _phase(route + ": run done")
-    result = np.asarray(
-        runtime.block_level_state_global("tracer", 0), dtype=np.float64
+    result = np.ascontiguousarray(
+        np.concatenate(
+            [
+                np.asarray(runtime.block_level_state_global(block, 0), dtype=np.float64)
+                for block in block_names
+            ]
+        )
     ).copy()
     return (
         initial,
@@ -317,8 +359,7 @@ def test_public_mpi_explicit_and_preset_ssprk2_are_bit_identical() -> None:
     manual_mass = float(np.mean(manual))
     preset_mass = float(np.mean(preset))
     chk(
-        abs(manual_mass - initial_mass) < 1.0e-12
-        and abs(preset_mass - initial_mass) < 1.0e-12,
+        abs(manual_mass - initial_mass) < 1.0e-12 and abs(preset_mass - initial_mass) < 1.0e-12,
         "both distributed public routes conserve global mass to round-off",
     )
 
@@ -350,13 +391,45 @@ def test_public_mpi_distributed_equals_replicated_coarse() -> None:
         "both coarse-layout policies complete the same nonzero number of regrids",
     )
     chk(
-        not any(allgather_value(
-            _COMM, bool(replicated_patches.coarse_is_distributed)
-        ))
-        and all(allgather_value(
-            _COMM, bool(distributed_patches.coarse_is_distributed)
-        )),
+        not any(allgather_value(_COMM, bool(replicated_patches.coarse_is_distributed)))
+        and all(allgather_value(_COMM, bool(distributed_patches.coarse_is_distributed))),
         "public PatchLayout selects replicated versus genuinely distributed coarse ownership",
+    )
+
+
+def test_public_mpi_generated_cell_local_multiblock_regrids_and_matches_forward_euler() -> None:
+    """The gate proof crosses the compiled DSO facade, never the direct prepared test runtime."""
+    _require_world()
+    ordinary_initial, ordinary, ordinary_report, ordinary_regrid, ordinary_patches = _execute(
+        _forward_euler_pack, distribute_coarse=True, multi_block=True
+    )
+    local_initial, local, local_report, local_regrid, local_patches = _execute(
+        _cell_local_forward_euler_pack, distribute_coarse=True, multi_block=True
+    )
+    chk(
+        np.array_equal(ordinary_initial, local_initial),
+        "ordinary and cell-local generated DSOs bootstrap the complete two-block pack identically",
+    )
+    chk(
+        np.array_equal(ordinary, local),
+        "generated cell-local FE matches ordinary FE bit-for-bit across the full two-block pack",
+    )
+    chk(
+        _world_identical(local),
+        "the distributed cell-local two-block result is byte-identical on every rank",
+    )
+    chk(
+        ordinary_report.accepted_steps == local_report.accepted_steps == NSTEPS,
+        "both generated DSO routes publish every accepted macro barrier",
+    )
+    chk(
+        ordinary_regrid.regrid_count == local_regrid.regrid_count > 0
+        and ordinary_patches.n_levels == local_patches.n_levels == 2,
+        "cell-local configuration requalifies after a real distributed two-level regrid",
+    )
+    chk(
+        abs(float(np.mean(local)) - float(np.mean(local_initial))) < 1.0e-12,
+        "the generated cell-local multi-block route conserves mass to round-off",
     )
 
 

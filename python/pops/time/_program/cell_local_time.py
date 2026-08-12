@@ -1,4 +1,5 @@
 """Typed authoring contract for the bounded cell-local AMR execution route."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -9,9 +10,12 @@ from typing import Any
 class CellLocalTimeContract:
     """Exact integer clock selected for prepared cell-local AMR execution.
 
-    This first production envelope intentionally exposes one common rung.  The contract is still
-    explicit rather than inferred from ``dt`` so cache identity, checkpoint qualification and
-    unsupported-route diagnostics all observe the same authority.
+    ``rung`` is the authored finest-level base. The native provider derives one homogeneous rung
+    per level-group from integral power-of-two temporal ratios, so every level executes one
+    Forward-Euler batch per hierarchy window. The contract remains explicit rather than inferred
+    from ``dt`` so cache identity, checkpoint qualification and unsupported-route diagnostics all
+    observe the same authority. Heterogeneous per-cell rungs and non-dyadic relations remain
+    outside this bounded envelope.
     """
 
     tick_denominator: int

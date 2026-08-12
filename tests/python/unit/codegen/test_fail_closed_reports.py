@@ -55,11 +55,13 @@ def test_amr_transfer_report_iterates_every_canonical_oriented_face_centering():
         source="test-manifest",
     )
     transfer = {row.feature: row for row in report.routes}["amr:transfer_contracts"]
-    expected = "/".join((
-        CELL_CENTERED.name,
-        *(centering.name for centering in ORIENTED_FACE_CENTERINGS),
-        NODE_CENTERED.name,
-    ))
+    expected = "/".join(
+        (
+            CELL_CENTERED.name,
+            *(centering.name for centering in ORIENTED_FACE_CENTERINGS),
+            NODE_CENTERED.name,
+        )
+    )
     assert "exact dense %s contracts" % expected in transfer.limitation
     assert "face_z" in transfer.limitation
 
@@ -118,12 +120,19 @@ def test_mpi_world_route_reports_only_proved_native_availability(supports_mpi, e
     assert cell_local.status == "partial"
     assert cell_local.layout == "amr"
     assert cell_local.backend == "production"
-    assert cell_local.mpi is False
+    assert cell_local.mpi is supports_mpi
     assert cell_local.gpu is False
-    assert "four time-integrated face records" in cell_local.limitation
+    assert "multi-block, multi-level and distributed multi-box" in cell_local.limitation
+    assert "authoritative reflux" in cell_local.limitation
     assert "Program.cell_local_time" in cell_local.limitation
-    assert "same-topology restart" in cell_local.limitation
-    assert "prepared physical-boundary plans" in cell_local.limitation
+    assert "integral power-of-two temporal ratios" in cell_local.limitation
+    assert "one homogeneous rung per level-group" in cell_local.limitation
+    assert "Heterogeneous rungs" in cell_local.limitation
+    assert "Same-rank restart and regrid" in cell_local.limitation
+    assert "global/interface-coupled blocks" in cell_local.limitation
+    assert "physical/non-periodic boundaries" in cell_local.limitation
+    assert "every GPU default execution or memory space" in cell_local.limitation
+    assert "fail collectively during exact-lane preparation" in cell_local.limitation
     external_amr = routes["amr:external_field_solver_v2"]
     assert external_amr.status == "available"
     assert external_amr.layout == "amr"
@@ -209,9 +218,7 @@ def test_transport_boundary_routes_report_exact_supported_envelope_and_missing_k
         flags={"supports_mpi": True, "supports_gpu": True, "supports_amr": True},
         source="test-gpu-manifest",
     )
-    gpu_post_riemann = {
-        row.feature: row for row in gpu_report.routes
-    }["boundary:post_riemann_flux"]
+    gpu_post_riemann = {row.feature: row for row in gpu_report.routes}["boundary:post_riemann_flux"]
     assert gpu_post_riemann.gpu is False
 
 
@@ -286,7 +293,10 @@ def test_variable_recovery_routes_separate_delivered_consumers_from_complete_cut
     assert "fallible primitive-to-conservative conversion" not in cutover.limitation
     assert "AMR bootstrap/history transfer" not in cutover.limitation
     assert "primitive boundary traces" not in cutover.limitation
-    assert "persistent warm starts outside the host Uniform diagnostic materializer" in cutover.limitation
+    assert (
+        "persistent warm starts outside the host Uniform diagnostic materializer"
+        in cutover.limitation
+    )
     assert "transactional analytic initial-state materialization" in cutover.available_route
     assert "spatial face reconstruction" in cutover.available_route
     assert "fallible primitive-to-conservative setup conversion" in cutover.available_route
@@ -482,13 +492,15 @@ def test_absolute_memory_estimate_uses_spatial_rank_for_amr_refinement(monkeypat
     class ThreeDimensionalAMR:
         @staticmethod
         def capabilities():
-            return CapabilitySet({
-                "layout": "amr",
-                "dim": 3,
-                "max_levels": 3,
-                "transition_ratios": [[2, 1, 3], [1, 4, 1]],
-                "supports_amr": True,
-            })
+            return CapabilitySet(
+                {
+                    "layout": "amr",
+                    "dim": 3,
+                    "max_levels": 3,
+                    "transition_ratios": [[2, 1, 3], [1, 4, 1]],
+                    "supports_amr": True,
+                }
+            )
 
     domain = CartesianDomain("volume", (0.0, 0.0, 0.0), (1.0, 1.0, 1.0))
     mesh = CartesianGrid(frame=domain.frame(), cells=(2, 3, 4))

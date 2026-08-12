@@ -328,9 +328,17 @@ def _emit_checkpoint_shape_metadata(program: Any) -> str:
         + f'extern "C" int pops_program_checkpoint_logical_clock_count() {{ return {len(clocks)}; }}\n'
         + string_accessor("pops_program_checkpoint_logical_clock_identity", 0, clocks)
         + 'extern "C" const char* pops_program_checkpoint_temporal_provider_identity() {\n'
-        + '  return "pops.temporal-partition.global@1";\n}\n'
+        + (
+            '  return "pops.amr.same-level-transport-euler-stage-flux@2";\n}\n'
+            if program.cell_local_time_contract() is not None
+            else '  return "pops.temporal-partition.global@1";\n}\n'
+        )
         + 'extern "C" std::uint64_t pops_program_checkpoint_temporal_cell_capacity() {\n'
         + "  return UINT64_C(0);\n}\n"
+        + 'extern "C" std::uint64_t '
+        + "pops_program_checkpoint_temporal_cells_per_topology_cell() {\n"
+        + "  return UINT64_C(%d);\n}\n"
+        % (len(block_idx) if program.cell_local_time_contract() is not None else 0)
     )
 
 
@@ -356,41 +364,63 @@ def _require_bounded_cell_local_program(program: Any, target: Any, hierarchy_bod
         raise ValueError("Program.cell_local_time does not support history operators")
 
     values = tuple(program._values)
-    if len(values) != 3 or tuple(value.op for value in values) != (
-        "state",
-        "rhs",
-        "linear_combine",
-    ):
-        raise ValueError(
-            "Program.cell_local_time currently requires exactly one transport-only "
-            "ForwardEuler state/rhs/commit chain"
-        )
-    state, rhs, result = values
+    states = tuple(value for value in values if value.op == "state")
+    rhs_values = tuple(value for value in values if value.op == "rhs")
+    results = tuple(value for value in values if value.op == "linear_combine")
+    blocks = program._block_indices()
     if (
-        tuple(rhs.inputs) != (state,)
-        or rhs.attrs.get("flux") is not True
-        or rhs.attrs.get("fluxes") is not None
-        or tuple(rhs.attrs.get("sources", ())) != ()
+        not states
+        or len(states) != len(blocks)
+        or len(rhs_values) != len(states)
+        or len(results) != len(states)
+        or len(values) != 3 * len(states)
     ):
         raise ValueError(
-            "Program.cell_local_time currently requires one default-flux RHS without sources "
-            "or fields"
+            "Program.cell_local_time requires one transport-only ForwardEuler route per "
+            "Program block"
         )
-    if tuple(result.inputs) != (state, rhs):
+    commits = dict(program._commits)
+    routes = []
+    for state in states:
+        matching_rhs = tuple(rhs for rhs in rhs_values if tuple(rhs.inputs) == (state,))
+        if len(matching_rhs) != 1:
+            raise ValueError(
+                "Program.cell_local_time requires one typed default-flux RHS per accepted state"
+            )
+        rhs = matching_rhs[0]
+        if (
+            rhs.block != state.block
+            or rhs.attrs.get("flux") is not True
+            or rhs.attrs.get("fluxes") is not None
+            or tuple(rhs.attrs.get("sources", ())) != ()
+        ):
+            raise ValueError(
+                "Program.cell_local_time requires default-flux RHS routes without sources or fields"
+            )
+        result = commits.get(state.state_ref)
+        if not any(result is candidate for candidate in results) or tuple(result.inputs) != (
+            state,
+            rhs,
+        ):
+            raise ValueError(
+                "Program.cell_local_time ForwardEuler commit must consume its accepted state and RHS"
+            )
+        coefficients = tuple(result.attrs.get("coeffs", ()))
+        if (
+            len(coefficients) != 2
+            or dict(coefficients[0]) != {0: 1}
+            or dict(coefficients[1]) != {1: 1}
+        ):
+            raise ValueError(
+                "Program.cell_local_time requires the exact update U_next = U + dt * rhs(U)"
+            )
+        routes.append((int(blocks[state.block]), int(rhs.id)))
+    if len(commits) != len(routes) or len({block for block, _ in routes}) != len(routes):
         raise ValueError(
-            "Program.cell_local_time ForwardEuler result must consume its accepted state and RHS"
+            "Program.cell_local_time routes must commit every Program block exactly once"
         )
-    coefficients = tuple(result.attrs.get("coeffs", ()))
-    if len(coefficients) != 2 or dict(coefficients[0]) != {0: 1} or dict(coefficients[1]) != {1: 1}:
-        raise ValueError(
-            "Program.cell_local_time requires the exact update U_next = U + dt * rhs(U)"
-        )
-    commits = tuple(program._commits.items())
-    if len(commits) != 1 or commits[0][1] is not result or commits[0][0] != state.state_ref:
-        raise ValueError("Program.cell_local_time requires one exact commit to the advanced state")
-    if len(program._block_indices()) != 1:
-        raise ValueError("Program.cell_local_time currently requires exactly one Program block")
-    return contract
+    routes.sort()
+    return contract, tuple(routes)
 
 
 def _emit_amr_install(
@@ -431,7 +461,12 @@ def _emit_amr_install(
         return ""
     flux_expression_budget = _emit_flux_expression_budget(program)
     if cell_local_time is not None:
+        cell_local_contract, cell_local_routes = cell_local_time
         clock_identity = json.dumps(program.clock.qualified_id)
+        route_rows = ", ".join(
+            "{%d, -1, %d}" % (program_block, rhs_id) for program_block, rhs_id in cell_local_routes
+        )
+        route_count = len(cell_local_routes)
         return (
             flux_expression_budget + "\n#include <pops/runtime/program/amr_program_context.hpp>\n"
             'extern "C" void pops_install_program_amr('
@@ -441,9 +476,12 @@ def _emit_amr_install(
             + "  auto ctx_owner = pops::runtime::program::make_program_execution_provider(sys);\n"
             "  auto& ctx = *ctx_owner;\n"
             f"  ctx.configure_primary_clock({clock_identity});\n"
+            "  static constexpr std::array<"
+            "pops::runtime::program::SameLevelCellTemporalForwardEulerRoute, "
+            f"{route_count}> cell_temporal_routes{{{{{route_rows}}}}};\n"
             "  ctx.prepare_same_level_cell_temporal_execution("
-            f"{clock_identity}, {cell_local_time.tick_denominator}, "
-            f"{cell_local_time.rung});\n"
+            f"{clock_identity}, {cell_local_contract.tick_denominator}, "
+            f"{cell_local_contract.rung}, cell_temporal_routes);\n"
             "  ctx.install([ctx_owner](double dt) {\n"
             "    ctx_owner->advance_same_level_cell_temporal(dt);\n"
             "  }, ctx_owner);\n"

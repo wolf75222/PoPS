@@ -7,6 +7,7 @@ focused authoring mixins and this package never imports either consumer layer.
 
 cf. docs/sphinx/reference/time-program.md (Phase 8) and the ADC-399 epic.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -37,9 +38,18 @@ from pops.time.values import _Coeff, ProgramValue  # noqa: F401  (ProgramValue u
 
 
 @register_program_type
-class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondensed,
-              _ProgramHistory, _ProgramSolve,
-              _ProgramAuthoring, _ProgramDtBound, _ProgramPasses, _ProgramInspect):
+class Program(
+    _ProgramTimeHandles,
+    _ProgramCore,
+    _ProgramLocal,
+    _ProgramCondensed,
+    _ProgramHistory,
+    _ProgramSolve,
+    _ProgramAuthoring,
+    _ProgramDtBound,
+    _ProgramPasses,
+    _ProgramInspect,
+):
     """A compiled time program (builder mode). Holds the SSA value list and the committed
     blocks. The Python object only BUILDS the IR; it is never executed numerically during
     ``sim.step``. Authoring and pure IR inspection methods come from the mixins.
@@ -48,7 +58,8 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
     def __setattr__(self, name: str, value: Any) -> None:
         if name == "name" and hasattr(self, "name"):
             raise AttributeError(
-                "pops.time.Program name is an immutable identity anchor; construct a new Program")
+                "pops.time.Program name is an immutable identity anchor; construct a new Program"
+            )
         if getattr(self, "_frozen", False):
             if name == "_frozen" and value is not True:
                 raise RuntimeError("pops.time.Program freeze is irreversible")
@@ -59,7 +70,8 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
     def __delattr__(self, name: str) -> None:
         if name == "name":
             raise AttributeError(
-                "pops.time.Program name is an immutable identity anchor; construct a new Program")
+                "pops.time.Program name is an immutable identity anchor; construct a new Program"
+            )
         if getattr(self, "_frozen", False):
             raise RuntimeError("pops.time.Program is frozen: cannot delete %s" % name)
         object.__delattr__(self, name)
@@ -80,15 +92,15 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
         self._values = []
         self._issued_values = {}  # id -> strong identity, including stale immutable replacement records
         self._next_id = 0
-        self._commits = {}      # qualified state Handle -> State value
-        self._recording = []    # stack of sub-block lists (a control-flow body); see _new / while_
+        self._commits = {}  # qualified state Handle -> State value
+        self._recording = []  # stack of sub-block lists (a control-flow body); see _new / while_
         self._next_region = 1
         self._recording_regions = {}  # id(list) -> (strong list ref, exact authoring-region token)
         self._region_imports = {}  # destination region -> explicitly sanctioned source regions
         # Qualified state Handle -> StateSpace or None. A block may instantiate several declared
         # state families; their semantic state_ref, never the block/name alone, owns the type contract.
         self._state_spaces = {}
-        self._histories = {}    # name -> max declared lag (multistep histories; ADC-406a)
+        self._histories = {}  # name -> max declared lag (multistep histories; ADC-406a)
         self._history_spaces = {}  # full-state history name -> StateSpace or None
         self._history_blocks = {}  # full-state history name -> qualified block or None
         self._history_state_refs = {}  # full-state history name -> qualified state Handle
@@ -103,8 +115,8 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
         self._history_persistence = {}
         # OPTIONAL dt bound (spec s18 / ADC-417): a recorded scalar sub-program (cfl -> Scalar) the
         # generated .so exports as pops_program_dt_bound; None = no bound (the native CFL is used).
-        self._dt_bound = None        # (block, scalar_value) once set; the block is the scalar sub-block
-        self.dt = _Coeff({1: 1})     # symbolic time step; participates in coefficient arithmetic
+        self._dt_bound = None  # (block, scalar_value) once set; the block is the scalar sub-block
+        self.dt = _Coeff({1: 1})  # symbolic time step; participates in coefficient arithmetic
         # Operator registries are indexed by their exact authoring OwnerPath. A coupled Program may
         # bind several models with homonymous operators; there is deliberately no "current" registry.
         self._operator_registries = {}
@@ -147,6 +159,7 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
         if self._frozen:
             return self
         from pops.time._program.freeze import freeze_program_tables
+
         freeze_program_tables(self)
         return self
 
@@ -159,8 +172,7 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
     def _guard_mutable(self, operation: Any) -> None:
         """Reject every authoring mutation after ``freeze()``, including non-node metadata writes."""
         if self._frozen:
-            raise RuntimeError(
-                "pops.time.Program %r is frozen: cannot %s" % (self.name, operation))
+            raise RuntimeError("pops.time.Program %r is frozen: cannot %s" % (self.name, operation))
 
     def _region_for_block(self, block: Any) -> int:
         """Return the deterministic region token for one recorded sub-block list."""
@@ -182,8 +194,9 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
         """Declare one explicit loop-carried edge between two sibling sub-block regions."""
         self._region_imports.setdefault(destination, set()).add(source)
 
-    def _new(self, vtype: Any, op: Any, inputs: Any, attrs: Any, name: Any, block: Any,
-             **metadata: Any) -> Any:
+    def _new(
+        self, vtype: Any, op: Any, inputs: Any, attrs: Any, name: Any, block: Any, **metadata: Any
+    ) -> Any:
         """Guard the single IR-append choke point against a post-freeze mutation (ADC-563)."""
         self._guard_mutable("add IR node %r" % op)
         if block is not None:
@@ -250,17 +263,19 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
     def cell_local_time(self, *, tick_denominator: Any, rung: Any = 0) -> Any:
         """Select the prepared cell-local AMR execution route.
 
-        The current production provider is deliberately bounded to one host rank, one 2D block,
-        one level, one owned box and one common rung.  Unsupported layouts fail during AMR install;
-        this method records only the exact integer time authority and never changes the Program IR.
+        The host production provider supports exact-rank independent multi-block AMR and MPI-owned
+        multi-box layouts. ``rung`` authors the finest-level base rung; each coarser level-group
+        derives one homogeneous rung from integral power-of-two temporal ratios, yielding one
+        Forward-Euler batch per hierarchy window. Heterogeneous per-cell rungs, global/interface
+        block coupling and non-dyadic clocks fail during AMR preparation. This method records only
+        the exact integer time authority and never changes the Program IR.
         """
         self._guard_mutable("set cell-local time contract")
         if self._cell_local_time is not None:
             raise ValueError("Program.cell_local_time may be declared only once")
         from pops.time._program.cell_local_time import CellLocalTimeContract
 
-        self._cell_local_time = CellLocalTimeContract(
-            tick_denominator=tick_denominator, rung=rung)
+        self._cell_local_time = CellLocalTimeContract(tick_denominator=tick_denominator, rung=rung)
         return self
 
     def cell_local_time_contract(self) -> Any:
@@ -283,12 +298,16 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
         if self._step_strategy is None:
             return None
         from pops.time._step.strategy import ErrorControlledDt
+
         if type(self._step_strategy) is ErrorControlledDt and not any(
-                guard.role is GuardRole.ERROR_ESTIMATE for guard in self._acceptance_guards):
+            guard.role is GuardRole.ERROR_ESTIMATE for guard in self._acceptance_guards
+        ):
             raise ValueError(
-                "ErrorControlledDt requires a lowered AcceptanceGuard with role=GuardRole.ERROR_ESTIMATE")
+                "ErrorControlledDt requires a lowered AcceptanceGuard with role=GuardRole.ERROR_ESTIMATE"
+            )
         return StepTransactionPlan(
-            self._step_strategy, self._transaction_stores, self._acceptance_guards)
+            self._step_strategy, self._transaction_stores, self._acceptance_guards
+        )
 
     def validate_runtime_controls(self, controls: Any = None) -> bool:
         """Validate run controls against the explicit StepStrategy selected by this Program."""
@@ -297,7 +316,8 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
             if controls:
                 raise ValueError(
                     "runtime controls require Program.step_strategy(...); got %s"
-                    % ", ".join(sorted(controls)))
+                    % ", ".join(sorted(controls))
+                )
             return True
         self._step_strategy.validate_runtime_controls(controls)
         return True
@@ -309,8 +329,10 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
         a one-line header, not a node-by-node dump.
         """
         return "Program(name=%r, ops=%d, blocks=%s)" % (
-            self.name, len(self._values),
-            sorted(block_name(state.block_ref) for state in self._commits))
+            self.name,
+            len(self._values),
+            sorted(block_name(state.block_ref) for state in self._commits),
+        )
 
 
 __all__ = ["Program"]

@@ -586,30 +586,31 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             layout="amr",
             backend="production",
             platform="host",
-            mpi=False,
+            mpi=mpi,
             gpu=False,
             status="partial",
             limitation=(
-                "Program.cell_local_time and its generated AmrProgramContext route cover one "
-                "serial host rank, one 2D block, one level, one owned box, one common cell rung, "
-                "transport-only forward Euler and frozen attempt auxiliary fields with built-in "
-                "periodic/Foextrap boundaries; the provider reuses the exact compiled AMR "
-                "residual/face-flux closure "
-                "and commits real conservative state plus four time-integrated face records per "
-                "cell as one accepted transaction at the synchronization barrier; its exact "
-                "contract includes model-owned transport parameters and the limiter/Riemann route; "
-                "same-topology restart restores numerical state and exact clocks but intentionally "
-                "invalidates the last-interval diagnostic flux ledger until another accepted step; "
-                "prepared physical-boundary plans, heterogeneous rungs, multi-box/multilevel and "
-                "coarse/fine ledgers, sources, MPI, GPU, regrid/rank-change rematerialization, "
-                "checkpoint persistence of the diagnostic ledger and performance proof remain "
-                "unavailable"
+                "Program.cell_local_time and its generated AmrProgramContext route cover exact-rank "
+                "host execution over independent multi-block, multi-level and distributed multi-box "
+                "AMR packs with transport-only forward Euler. One authored finest-level rung is "
+                "lifted through integral power-of-two temporal ratios to one homogeneous rung per "
+                "level-group, yielding exactly one FE batch per hierarchy window. The provider "
+                "reuses each compiled AMR residual and its exact face-flux carrier, aggregates one "
+                "bounded basis per route and publishes the complete state/authoritative reflux "
+                "transaction only at the synchronization barrier. Same-rank restart and regrid "
+                "rematerialize topology-derived records and exact clocks; the last-interval "
+                "diagnostic flux view is intentionally invalidated on restore. Heterogeneous rungs, "
+                "global/interface-coupled blocks, sources or fields, physical/non-periodic "
+                "boundaries, every GPU default execution or memory space, performance "
+                "qualification, rank-change cell-record rematerialization and checkpoint "
+                "persistence of the diagnostic view remain unavailable. Those boundary and device "
+                "envelopes fail collectively during exact-lane preparation"
             ),
             requested="prepared cell-local scientific stage and space-time flux transaction",
             available_route=(
                 "Program.cell_local_time plus the generated AmrProgramContext and native "
-                "PreparedSameLevelTransportEulerStageFluxProvider in their exact bounded "
-                "host/serial same-rung envelope"
+                "PreparedSameLevelTransportEulerPackStageFluxProvider in their exact bounded "
+                "host per-level homogeneous-rung envelope"
             ),
             alternative=(
                 "use the synchronous AMR Program route outside that envelope, or implement the "

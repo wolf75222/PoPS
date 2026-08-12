@@ -200,14 +200,6 @@ def test_adc757_slice_separates_mpi_executables_from_authenticated_hardware_proo
             "nproc": 4,
         },
         {
-            "requirement": "bounded_cell_local_program_runtime",
-            "polarity": "positive",
-            "kind": "mpi_ctest",
-            "target": "test_mpi_cell_temporal_program",
-            "test_regex": "^test_mpi_cell_temporal_program_np2$",
-            "nproc": 2,
-        },
-        {
             "requirement": "remaining_multirank_multibox_amr_local_time_execution",
             "polarity": "positive",
             "kind": "mpi_ctest",
@@ -305,9 +297,8 @@ def test_adc757_slice_authenticates_standalone_and_installed_cell_temporal_route
         {
             "requirement": "bounded_cell_local_program_runtime",
             "polarity": "positive",
-            "kind": "mpi_ctest",
-            "target": "test_mpi_cell_temporal_program",
-            "test_regex": "^test_mpi_cell_temporal_program_np2$",
+            "kind": "mpi_python",
+            "nodeid": "tests/python/integration/mpi/test_amr_clean_route_program_mpi.py::test_public_mpi_generated_cell_local_multiblock_regrids_and_matches_forward_euler",
             "nproc": 2,
         },
         {
@@ -323,9 +314,9 @@ def test_adc757_slice_authenticates_standalone_and_installed_cell_temporal_route
         for row in data["check"]
         if row["requirement"] == "remaining_multirank_multibox_amr_local_time_execution"
     ]
-    assert [(row["polarity"], row["target"], row["nproc"]) for row in multirank] == [
-        ("positive", "test_mpi_cell_temporal_program_multibox", 2),
-        ("refusal", "test_mpi_cell_temporal_program_collective_rollback", 2),
+    assert [(row["polarity"], row["kind"], row["target"], row["nproc"]) for row in multirank] == [
+        ("positive", "mpi_ctest", "test_mpi_cell_temporal_program_multibox", 2),
+        ("refusal", "mpi_ctest", "test_mpi_cell_temporal_program_collective_rollback", 2),
     ]
     assert "bounded_cell_local_program_runtime" not in data["deferred"]
     assert "remaining_multirank_multibox_amr_local_time_execution" not in data["deferred"]

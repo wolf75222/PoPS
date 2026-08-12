@@ -227,6 +227,9 @@ extern "C" const char* pops_program_checkpoint_temporal_provider_identity() {
 extern "C" std::uint64_t pops_program_checkpoint_temporal_cell_capacity() {
   return UINT64_C(0);
 }
+extern "C" std::uint64_t pops_program_checkpoint_temporal_cells_per_topology_cell() {
+  return UINT64_C(0);
+}
 extern "C" int pops_module_operator_count() { return 0; }
 extern "C" const char* pops_module_operator_owner(int) { return ""; }
 extern "C" const char* pops_module_operator_name(int) { return ""; }
