@@ -12,25 +12,7 @@ issues = [
   "ADC-687",
 ]
 
-[[deferred]]
-issue = "ADC-681"
-requirement = "external_boundary"
-polarity = "positive"
-reason = "RuntimeInstance still has no installed boundary-component executor; the direct ABI unit test does not prove install, execution, or rollback."
-evidence_paths = [
-  "python/pops/runtime/_runtime_authorities.py",
-  "include/pops/mesh/boundary/prepared_boundary_component.hpp",
-]
-
-[[deferred]]
-issue = "ADC-681"
-requirement = "external_tagger"
-polarity = "positive"
-reason = "External AMR Tagger, Clustering, and Reflux component installers remain fail-closed and are not executed through AmrSystem."
-evidence_paths = [
-  "python/pops/amr/providers.py",
-  "python/pops/runtime/_runtime_authorities.py",
-]
+deferred = []
 
 # This is an exact evidence ledger, not a list of nearby suites. Every row names
 # one source-registered proof. The runner rejects mock fixtures/imports,
@@ -124,6 +106,22 @@ polarity = "refusal"
 kind = "pytest"
 target = "native_interfaces"
 nodeid = "tests/python/unit/codegen/test_component_adapters.py::test_registration_rejects_malformed_interface_and_target_before_mutation"
+
+[[check]]
+issue = "ADC-681"
+requirement = "external_boundary"
+polarity = "positive"
+kind = "pytest"
+target = "external_boundary"
+nodeid = "tests/python/integration/runtime/test_shared_interface_runtime.py::test_runtime_instance_executes_external_ghost_with_rollback_and_retry"
+
+[[check]]
+issue = "ADC-681"
+requirement = "external_tagger"
+polarity = "positive"
+kind = "pytest"
+target = "external_tagger"
+nodeid = "tests/python/integration/runtime/test_shared_interface_runtime.py::test_runtime_instance_executes_dynamic_three_level_shared_flux"
 
 [[check]]
 issue = "ADC-682"

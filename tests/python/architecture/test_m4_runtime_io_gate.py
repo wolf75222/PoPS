@@ -38,7 +38,7 @@ def test_m4_manifest_audits_the_exact_open_matrix():
     data, errors = runner.audit_manifest(MANIFEST)
 
     assert not errors, "M4 gate audit is structurally invalid:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 53
+    assert len(data["check"]) == 55
     assert data["issues"] == [
         "ADC-679",
         "ADC-680",
@@ -55,14 +55,10 @@ def test_m4_manifest_audits_the_exact_open_matrix():
         (row["issue"], row["requirement"], row["polarity"])
         for row in data["deferred"]
     }
-    assert deferred == {
-        ("ADC-681", "external_boundary", "positive"),
-        ("ADC-681", "external_tagger", "positive"),
-    }
+    assert deferred == set()
 
     _, closure_errors = runner.validate_manifest(MANIFEST)
-    assert len(closure_errors) == 2
-    assert all("remains deferred" in error for error in closure_errors)
+    assert not closure_errors
 
 
 def test_m4_cli_reports_open_and_check_only_fails_closed():
@@ -75,7 +71,7 @@ def test_m4_cli_reports_open_and_check_only_fails_closed():
         check=False,
     )
     assert audit.returncode == 0
-    assert "M4 gate source matrix: AUDITED OPEN (53 executable, 2 deferred)" in audit.stdout
+    assert "M4 gate source matrix: AUDITED CLOSED (55 executable, 0 deferred)" in audit.stdout
 
     closure = subprocess.run(
         [sys.executable, str(RUNNER), "--check-only"],
@@ -85,9 +81,8 @@ def test_m4_cli_reports_open_and_check_only_fails_closed():
         stderr=subprocess.STDOUT,
         check=False,
     )
-    assert closure.returncode == 2
-    assert "external_boundary/positive remains deferred" in closure.stdout
-    assert "external_tagger/positive remains deferred" in closure.stdout
+    assert closure.returncode == 0
+    assert "M4 gate source matrix: CLOSED (55 executable, 0 deferred)" in closure.stdout
 
 
 def test_m4_required_ci_lane_executes_the_complete_installed_gate():
@@ -174,8 +169,8 @@ def test_m4_open_gate_refuses_to_list_targets_as_closed():
         stderr=subprocess.STDOUT,
         check=False,
     )
-    assert listed.returncode == 2
-    assert "remains deferred" in listed.stdout
+    assert listed.returncode == 0
+    assert listed.stdout.splitlines() == list(expected)
 
 
 def test_m4_gate_pins_every_external_component_family():
@@ -218,15 +213,21 @@ def test_m4_gate_pins_every_external_component_family():
             "test_external_component_package.py::"
             "test_qualified_writer_runs_through_uniform_and_amr_runtime_transactions",
         ),
+        (
+            "external_boundary",
+            "positive",
+            "tests/python/integration/runtime/test_shared_interface_runtime.py::"
+            "test_runtime_instance_executes_external_ghost_with_rollback_and_retry",
+        ),
+        (
+            "external_tagger",
+            "positive",
+            "tests/python/integration/runtime/test_shared_interface_runtime.py::"
+            "test_runtime_instance_executes_dynamic_three_level_shared_flux",
+        ),
     } <= executable
 
-    assert {
-        (row["issue"], row["requirement"], row["polarity"])
-        for row in data["deferred"]
-    } == {
-        ("ADC-681", "external_boundary", "positive"),
-        ("ADC-681", "external_tagger", "positive"),
-    }
+    assert data["deferred"] == []
 
     assert (
         "external_solver",
@@ -800,11 +801,10 @@ def test_m4_gate_keeps_external_component_gaps_explicit():
     runner = _load_runner()
     data, audit_errors = runner.audit_manifest(MANIFEST)
     assert not audit_errors
-    assert len(data["deferred"]) == 2
+    assert data["deferred"] == []
 
     _, errors = runner.validate_manifest(MANIFEST)
-    assert len(errors) == 2
-    assert all("remains deferred" in error for error in errors)
+    assert not errors
 
 
 def test_m4_required_pytest_execution_rejects_junit_skips(monkeypatch):
@@ -884,4 +884,4 @@ def test_m4_check_only_refuses_open_ledger_without_launcher_or_build(monkeypatch
     monkeypatch.setattr(runner.shutil, "which", forbidden_call)
     monkeypatch.setattr(runner.subprocess, "run", forbidden_call)
 
-    assert runner.main(["--check-only"]) == 2
+    assert runner.main(["--check-only"]) == 0

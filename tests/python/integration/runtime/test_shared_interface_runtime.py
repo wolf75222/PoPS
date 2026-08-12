@@ -1215,7 +1215,7 @@ def test_frozen_two_level_generated_program_executes_shared_interface_implicit_p
     np.testing.assert_array_equal(solved_packed, initial_packed)
 
 
-def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path, monkeypatch):
+def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
     authoring = _shared_interface_amr_authoring(
         tmp_path, tagger_component=_tagger_component(tmp_path / "tagger")
     )
@@ -1386,59 +1386,56 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path, mon
         transformed_images.append(_shared_interface_accepted_image(restarted))
         raise RuntimeError("injected shared-interface restart validation failure")
 
-    monkeypatch.setattr(
-        checkpoint_codec,
-        "_require_restart_conservation",
-        fail_after_native_regrid,
-    )
-    with pytest.raises(RuntimeError, match="injected shared-interface restart validation failure"):
+    checkpoint_codec._require_restart_conservation = fail_after_native_regrid
+    try:
+        with pytest.raises(RuntimeError, match="injected shared-interface restart validation failure"):
+            restarted.restart(checkpoint)
+        assert transformed_images
+        assert transformed_images[0]["boxes"] != rollback_image["boxes"]
+        _assert_same_shared_interface_image(restarted, rollback_image)
+
+        checkpoint_codec._require_restart_conservation = original_conservation_check
         restarted.restart(checkpoint)
-    assert transformed_images
-    assert transformed_images[0]["boxes"] != rollback_image["boxes"]
-    _assert_same_shared_interface_image(restarted, rollback_image)
+        receipt = restarted._executor.last_restart_regrid_receipt()
+        assert receipt is not None
+        assert receipt["changed"] is True
+        assert float(restarted.time()) == checkpoint_time
+        assert int(restarted.macro_step()) == checkpoint_step
+        assert tuple(restarted.patch_boxes()) == tuple(transformed_images[0]["boxes"])
+        np.testing.assert_allclose(
+            [row["value"] for row in receipt["composite_integrals_after"]],
+            [row["value"] for row in receipt["composite_integrals_before"]],
+            rtol=2.0e-12,
+            atol=2.0e-13,
+        )
+        restarted_integral = restarted.integral("tracer") + restarted.integral("right")
+        np.testing.assert_allclose(
+            restarted_integral,
+            checkpoint_integral,
+            rtol=2.0e-12,
+            atol=2.0e-13,
+        )
 
-    monkeypatch.setattr(
-        checkpoint_codec,
-        "_require_restart_conservation",
-        original_conservation_check,
-    )
-    restarted.restart(checkpoint)
-    receipt = restarted._executor.last_restart_regrid_receipt()
-    assert receipt is not None
-    assert receipt["changed"] is True
-    assert float(restarted.time()) == checkpoint_time
-    assert int(restarted.macro_step()) == checkpoint_step
-    assert tuple(restarted.patch_boxes()) == tuple(transformed_images[0]["boxes"])
-    np.testing.assert_allclose(
-        [row["value"] for row in receipt["composite_integrals_after"]],
-        [row["value"] for row in receipt["composite_integrals_before"]],
-        rtol=2.0e-12,
-        atol=2.0e-13,
-    )
-    restarted_integral = restarted.integral("tracer") + restarted.integral("right")
-    np.testing.assert_allclose(
-        restarted_integral,
-        checkpoint_integral,
-        rtol=2.0e-12,
-        atol=2.0e-13,
-    )
-
-    counts_before_continuation = tuple(
-        restarted._executor._s._interface_evaluation_count(restart_interface.qualified_id, level)
-        for level in range(2)
-    )
-    pops.run(restarted, t_end=2.0e-3, max_steps=1, console=False)
-    counts_after_continuation = tuple(
-        restarted._executor._s._interface_evaluation_count(restart_interface.qualified_id, level)
-        for level in range(2)
-    )
-    assert tuple(
-        after - before
-        for before, after in zip(counts_before_continuation, counts_after_continuation, strict=True)
-    ) == (2, 4)
-    np.testing.assert_allclose(
-        restarted.integral("tracer") + restarted.integral("right"),
-        checkpoint_integral,
-        rtol=0.0,
-        atol=2.0e-13,
-    )
+        counts_before_continuation = tuple(
+            restarted._executor._s._interface_evaluation_count(restart_interface.qualified_id, level)
+            for level in range(2)
+        )
+        pops.run(restarted, t_end=2.0e-3, max_steps=1, console=False)
+        counts_after_continuation = tuple(
+            restarted._executor._s._interface_evaluation_count(restart_interface.qualified_id, level)
+            for level in range(2)
+        )
+        assert tuple(
+            after - before
+            for before, after in zip(
+                counts_before_continuation, counts_after_continuation, strict=True
+            )
+        ) == (2, 4)
+        np.testing.assert_allclose(
+            restarted.integral("tracer") + restarted.integral("right"),
+            checkpoint_integral,
+            rtol=0.0,
+            atol=2.0e-13,
+        )
+    finally:
+        checkpoint_codec._require_restart_conservation = original_conservation_check
