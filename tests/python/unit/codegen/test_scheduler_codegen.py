@@ -25,6 +25,7 @@ unit-tested by tests/cpp/integration/runtime/test_cache_manager.cpp. Pure Python
 """
 from pops.codegen.program_codegen import _check_schedules_lowerable
 from pops.codegen.program_codegen import emit_cpp_program
+from pops.codegen._resolution import CapabilityResolutionError, _resolve_amr_program
 import pytest
 import sys
 from types import SimpleNamespace
@@ -40,6 +41,10 @@ try:
     from pops import time as adctime
     from pops.codegen.program_emit_schedule import _emit_schedule_wrap
     from pops.numerics.terms import DefaultSource, Flux
+    from pops.runtime.amr_program_support import (
+        AMRProgramSupportContext,
+        amr_program_op_support,
+    )
     from typed_program_support import typed_state
 except Exception as exc:  # noqa: BLE001  -- _pops unavailable in this interpreter
     _skip("pops unavailable: %s" % exc)
@@ -107,6 +112,17 @@ def test_always_body_identical_to_unscheduled():
     assert plain == always
     assert "cache_should_update" not in _emit_field(
         lambda clock: adctime.Schedule(adctime.Always(adctime.AcceptedStep(clock))))
+    program = _scratch_program(lambda clock: adctime.Schedule(
+        adctime.Always(adctime.AcceptedStep(clock))))
+    assert amr_program_op_support(
+        program,
+        context=AMRProgramSupportContext(
+            hierarchy_level_count=1,
+            frozen_hierarchy=True,
+            shared_block_interfaces=False,
+            field_routes_validated=True,
+        ),
+    ) == {}
 
 
 def test_unscheduled_has_no_guard():
@@ -193,6 +209,15 @@ def test_when_over_python_callable_refuses():
 def test_clock_tick_domain_lowers_to_qualified_logical_tick():
     program = _scratch_program(lambda clock: adctime.Schedule(
         adctime.Always(adctime.ClockTick(clock))))
+    assert amr_program_op_support(
+        program,
+        context=AMRProgramSupportContext(
+            hierarchy_level_count=1,
+            frozen_hierarchy=True,
+            shared_block_interfaces=False,
+            field_routes_validated=True,
+        ),
+    ) == {"schedule_control": "green"}
     _check_schedules_lowerable(program)
     cpp = emit_cpp_program(program, model=None)
     assert "ctx.schedule_domain_occurs(" in cpp
@@ -203,6 +228,15 @@ def test_clock_tick_domain_lowers_to_qualified_logical_tick():
 def test_amr_level_domain_requires_amr_target_and_lowers_there():
     program = _scratch_program(lambda clock: adctime.Schedule(
         adctime.Always(adctime.AMRLevel(clock, level=1))))
+    assert amr_program_op_support(
+        program,
+        context=AMRProgramSupportContext(
+            hierarchy_level_count=2,
+            frozen_hierarchy=True,
+            shared_block_interfaces=False,
+            field_routes_validated=True,
+        ),
+    ) == {"schedule_control": "green"}
     _check_schedules_lowerable(program)
     try:
         emit_cpp_program(program, model=None, target="system")
@@ -213,6 +247,22 @@ def test_amr_level_domain_requires_amr_target_and_lowers_there():
     cpp = emit_cpp_program(program, model=None, target="amr_system")
     assert "ScheduleDomainKind::kAmrLevel" in cpp
     assert ", 1), false))" in cpp
+
+
+def test_amr_level_outside_resolved_hierarchy_refuses_before_artifact_creation():
+    program = _scratch_program(lambda clock: adctime.Schedule(
+        adctime.Always(adctime.AMRLevel(clock, level=1))))
+    with pytest.raises(CapabilityResolutionError, match=r"level 1 outside.*\[0, 1\)"):
+        _resolve_amr_program(
+            "amr",
+            program,
+            context=AMRProgramSupportContext(
+                hierarchy_level_count=1,
+                frozen_hierarchy=True,
+                shared_block_interfaces=False,
+                field_routes_validated=True,
+            ),
+        )
 
 
 def test_clock_tick_on_scratch_node_emits_guard_without_cache_cadence():
