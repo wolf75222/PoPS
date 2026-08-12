@@ -18,7 +18,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, cast
 
 from pops._native_collectives import (
     allgather_value,
@@ -1097,15 +1097,27 @@ def restore_checkpoint_payload(
     hierarchy_mode: str = "restore_recorded_hierarchy",
     hierarchy_identity: str | None = None,
     phase_prefix: str = "native restart",
+    after_native_apply: Callable[[Any], Any] | None = None,
+    rollback_after_native_apply: Callable[[], Any] | None = None,
 ) -> Any:
     """Preflight and atomically apply one in-memory payload on the installed communicator.
 
     Every fallible preparation finishes with an all-rank consensus before the first native write.
     The accepted native snapshot remains rollback-capable through the apply and commit consensuses;
-    only the final, non-fallible release discards it.
+    only the final, non-fallible release discards it.  A RuntimeInstance may use the optional
+    callback pair to publish its coupled Python envelope inside that same boundary.  Direct-engine
+    callers do not provide either callback and retain their existing protocol exactly.
     """
     if not isinstance(phase_prefix, str) or not phase_prefix:
         raise TypeError("restart phase prefix must be non-empty text")
+    if (after_native_apply is None) != (rollback_after_native_apply is None):
+        raise TypeError(
+            "restart outer-state publication requires both apply and rollback callbacks"
+        )
+    if after_native_apply is not None and not callable(after_native_apply):
+        raise TypeError("restart outer-state apply callback must be callable")
+    if rollback_after_native_apply is not None and not callable(rollback_after_native_apply):
+        raise TypeError("restart outer-state rollback callback must be callable")
     topology = checkpoint_topology(owner)
     policy = None
     selected_hierarchy_mode = None
@@ -1255,6 +1267,43 @@ def restore_checkpoint_payload(
         rollback_after(original, "apply")
         raise
 
+    outer_active = after_native_apply is not None
+
+    def rollback_outer_after(original: BaseException, phase: str) -> None:
+        outer_error = None
+        if outer_active:
+            try:
+                cast(Callable[[], Any], rollback_after_native_apply)()
+            except BaseException as error:
+                outer_error = error
+        try:
+            consensus(
+                topology,
+                "%s %s outer rollback" % (phase_prefix, phase),
+                error=outer_error,
+            )
+        except BaseException as cleanup:
+            add_note = getattr(original, "add_note", None)
+            if callable(add_note):
+                add_note("restart outer-state rollback also failed: %s" % cleanup)
+
+    if outer_active:
+        outer_error = None
+        try:
+            cast(Callable[[Any], Any], after_native_apply)(result)
+        except BaseException as error:
+            outer_error = error
+        try:
+            consensus(
+                topology,
+                "%s outer-state publication" % phase_prefix,
+                error=outer_error,
+            )
+        except BaseException as original:
+            rollback_outer_after(original, "outer-state publication")
+            rollback_after(original, "outer-state publication")
+            raise
+
     commit_error = None
     try:
         methods["_commit_checkpoint_restart"]()
@@ -1263,6 +1312,7 @@ def restore_checkpoint_payload(
     try:
         consensus(topology, "%s commit" % phase_prefix, error=commit_error)
     except BaseException as original:
+        rollback_outer_after(original, "commit")
         rollback_after(original, "commit")
         raise
 
