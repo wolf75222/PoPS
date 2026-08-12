@@ -126,13 +126,52 @@ def test_parser_finds_only_explicit_known_deferrals():
     assert "SolveOutcome solve_fields_from_blocks(const std::string&" not in (
         CONTEXT_HPP.read_text(encoding="utf-8")
     )
-    assert "solve_fields_from_blocks_at" not in CONTEXT_HPP.read_text(encoding="utf-8")
-    assert "solve_fields_from_blocks_at" in UNIFORM_CONTEXT_HPP.read_text(encoding="utf-8")
-    assert "solve_fields_from_blocks_at" not in CONTEXT_HPP.read_text(encoding="utf-8")
-    assert "program_execution_solve_generated_field_from_blocks_outcome_" in (
-        CONTEXT_HPP.read_text(encoding="utf-8")
+    context_header = CONTEXT_HPP.read_text(encoding="utf-8")
+    assert context_header.count("SolveOutcome solve_fields_from_blocks_at(") == 1
+    multi_block_route = context_header.split("SolveOutcome solve_fields_from_blocks_at(", 1)[
+        1
+    ].split("SolveOutcome solve_default_field_on_coarse_level() const", 1)[0]
+    assert "all_reduce_max(local_error ? 1L : 0L, lane)" in multi_block_route
+    assert "all_ranks_agree_exact_ordered_byte_pairs" in multi_block_route
+    assert 'request.text("pops.amr-program.simultaneous-field-route")' in multi_block_route
+    assert ".scalar(value_id)" in multi_block_route
+    assert ".presence(override_value.state != nullptr)" in multi_block_route
+    assert "field_layout_contract(*override_value.state)" in multi_block_route
+    multi_local_consensus = multi_block_route.index("all_reduce_max(local_error ? 1L : 0L, lane)")
+    multi_byte_consensus = multi_block_route.index("all_ranks_agree_exact_ordered_byte_pairs")
+    multi_facade = multi_block_route.index("facade_->solve_program_field_from_blocks_at(")
+    multi_cache = multi_block_route.index("generated_field_routes_.insert(")
+    assert multi_local_consensus < multi_byte_consensus < multi_facade < multi_cache
+    scalar_candidate_route = context_header.split("void evaluate_with_field_state_at(", 1)[1].split(
+        "[[nodiscard]] SolveOutcome solve_fields() const", 1
+    )[0]
+    assert 'request.text("pops.amr-program.scalar-field-candidate-route")' in (
+        scalar_candidate_route
     )
-    assert "named_solve_reports_" not in CONTEXT_HPP.read_text(encoding="utf-8")
+    assert "field_layout_contract(perturbed)" in scalar_candidate_route
+    assert "field_layout_contract(accepted)" in scalar_candidate_route
+    assert (
+        scalar_candidate_route.index("all_reduce_max(local_error ? 1L : 0L, lane)")
+        < scalar_candidate_route.index("all_ranks_agree_exact_ordered_byte_pairs")
+        < scalar_candidate_route.index("facade_->with_program_field_candidate_at(")
+    )
+
+    single_state_route = context_header.split("SolveOutcome solve_fields_from_state_at(", 1)[
+        1
+    ].split("SolveOutcome solve_fields_from_blocks_at(", 1)[0]
+    assert 'request.text("pops.amr-program.single-field-route")' in single_state_route
+    assert ".scalar(std::int32_t{runtime_block})" in single_state_route
+    assert "field_layout_contract(stage)" in single_state_route
+    assert (
+        single_state_route.index("all_reduce_max(local_error ? 1L : 0L, lane)")
+        < single_state_route.index("all_ranks_agree_exact_ordered_byte_pairs")
+        < single_state_route.index("facade_->solve_program_field_from_blocks_at(")
+    )
+    assert "solve_fields_from_blocks_at" in UNIFORM_CONTEXT_HPP.read_text(encoding="utf-8")
+    assert "program_execution_solve_generated_field_from_blocks_outcome_" in (
+        context_header
+    )
+    assert "named_solve_reports_" not in context_header
     assert "fine_level_field_perturbation" not in module.DEFERRED_GROUPS
     assert "refined_shared_block_interfaces" not in module.DEFERRED_GROUPS
     assert "apply_projection" not in header
