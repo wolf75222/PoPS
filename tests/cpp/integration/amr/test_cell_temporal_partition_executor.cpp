@@ -91,8 +91,13 @@ static_assert(CellTemporalStageFluxDeviceView<ProbeStageFluxDeviceView>);
 
 class ProbeStageFluxProvider {
  public:
-  explicit ProbeStageFluxProvider(std::shared_ptr<StageFluxProbe> probe)
-      : probe_(std::move(probe)) {}
+  ProbeStageFluxProvider(std::shared_ptr<StageFluxProbe> probe, const ExecutionLane& lane)
+      : lane_(&lane),
+        lane_borrow_(lane.borrow_immutably()),
+        probe_(std::move(probe)),
+        local_indices_(probe_->last_begin.size()) {
+    std::iota(local_indices_.begin(), local_indices_.end(), std::size_t{0});
+  }
 
   [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
     return {"pops.test.temporal-stage-flux", 1};
@@ -142,9 +147,16 @@ class ProbeStageFluxProvider {
             probe_->scratch_flux.data(), probe_->last_begin.size(), probe_->fail_record,
             probe_->fail_end_tick,       probe_->fail_reason};
   }
+  [[nodiscard]] const ExecutionLane& execution_lane() const noexcept { return *lane_; }
+  [[nodiscard]] std::span<const std::size_t> local_record_indices() const noexcept {
+    return local_indices_;
+  }
 
  private:
+  const ExecutionLane* lane_ = nullptr;
+  ExecutionLane::ImmutableBorrow lane_borrow_;
   std::shared_ptr<StageFluxProbe> probe_;
+  std::vector<std::size_t> local_indices_;
 };
 
 static_assert(CellTemporalStageFluxProvider<ProbeStageFluxProvider>);
@@ -154,9 +166,15 @@ static_assert(CellTemporalStageFluxProvider<ProbeStageFluxProvider>);
 TEST(test_cell_temporal_partition_executor,
      executes_bounded_rung_batches_and_commits_exact_local_clocks) {
   const CellTemporalPartitionAcceptedState accepted = prepared_state();
+  const ExecutionLane provider_lane =
+      ExecutionLane::duplicate_world_collectively("test.cell-temporal.executor.success");
+  const ExecutionLane executor_lane =
+      ExecutionLane::duplicate_world_collectively("test.cell-temporal.executor.success");
   const auto probe = std::make_shared<StageFluxProbe>(accepted.cells.size());
-  PreparedBatchedCellTemporalExecutor executor{accepted, ProbeStageFluxProvider(probe)};
+  PreparedBatchedCellTemporalExecutor executor{
+      accepted, ProbeStageFluxProvider(probe, provider_lane), executor_lane};
 
+  EXPECT_NE(&provider_lane, &executor_lane);
   ASSERT_EQ(executor.prepared_rung_count(), 3u);
   EXPECT_EQ(executor.provider_identity(), accepted.provider_identity);
   EXPECT_FALSE(executor.exact_contract().empty());
@@ -193,11 +211,13 @@ TEST(test_cell_temporal_partition_executor,
 TEST(test_cell_temporal_partition_executor,
      stage_rejection_rolls_back_clocks_and_attempt_local_flux_ledger) {
   const CellTemporalPartitionAcceptedState accepted = prepared_state();
+  const ExecutionLane lane =
+      ExecutionLane::duplicate_world_collectively("test.cell-temporal.executor.rejection");
   const auto probe = std::make_shared<StageFluxProbe>(accepted.cells.size());
   probe->fail_record = 2;
   probe->fail_end_tick = 10;
   probe->fail_reason = 73;
-  PreparedBatchedCellTemporalExecutor executor{accepted, ProbeStageFluxProvider(probe)};
+  PreparedBatchedCellTemporalExecutor executor{accepted, ProbeStageFluxProvider(probe, lane), lane};
 
   executor.begin_attempt(16);
   try {
@@ -225,9 +245,12 @@ TEST(test_cell_temporal_partition_executor,
 TEST(test_cell_temporal_partition_executor,
      provider_preparation_and_identity_fail_closed_before_any_accepted_mutation) {
   const CellTemporalPartitionAcceptedState accepted = prepared_state();
+  const ExecutionLane lane =
+      ExecutionLane::duplicate_world_collectively("test.cell-temporal.executor.preparation");
   const auto rejected_probe = std::make_shared<StageFluxProbe>(accepted.cells.size());
   rejected_probe->reject_begin = true;
-  PreparedBatchedCellTemporalExecutor rejected{accepted, ProbeStageFluxProvider(rejected_probe)};
+  PreparedBatchedCellTemporalExecutor rejected{accepted,
+                                               ProbeStageFluxProvider(rejected_probe, lane), lane};
   EXPECT_THROW(rejected.begin_attempt(16), std::runtime_error);
   EXPECT_EQ(rejected.checkpoint(), accepted);
   EXPECT_EQ(rejected_probe->begins, 1);
@@ -237,9 +260,9 @@ TEST(test_cell_temporal_partition_executor,
   CellTemporalPartitionAcceptedState wrong_identity = accepted;
   wrong_identity.provider_identity = "pops.test.different-temporal-stage-flux@1";
   const auto wrong_probe = std::make_shared<StageFluxProbe>(accepted.cells.size());
-  EXPECT_THROW(
-      (PreparedBatchedCellTemporalExecutor(wrong_identity, ProbeStageFluxProvider(wrong_probe))),
-      std::logic_error);
+  EXPECT_THROW((PreparedBatchedCellTemporalExecutor(
+                   wrong_identity, ProbeStageFluxProvider(wrong_probe, lane), lane)),
+               std::logic_error);
   EXPECT_EQ(wrong_probe->begins, 0);
   EXPECT_EQ(wrong_probe->commits, 0);
   EXPECT_EQ(wrong_probe->rollbacks, 0);
@@ -248,8 +271,10 @@ TEST(test_cell_temporal_partition_executor,
 TEST(test_cell_temporal_partition_executor,
      provider_commit_preflight_rolls_back_clocks_and_attempt_local_ledger) {
   const CellTemporalPartitionAcceptedState accepted = prepared_state();
+  const ExecutionLane lane =
+      ExecutionLane::duplicate_world_collectively("test.cell-temporal.executor.commit");
   const auto probe = std::make_shared<StageFluxProbe>(accepted.cells.size());
-  PreparedBatchedCellTemporalExecutor executor{accepted, ProbeStageFluxProvider(probe)};
+  PreparedBatchedCellTemporalExecutor executor{accepted, ProbeStageFluxProvider(probe, lane), lane};
 
   executor.begin_attempt(16);
   executor.advance_to_barrier();
