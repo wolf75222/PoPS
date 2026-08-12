@@ -40,16 +40,26 @@ GRID_CELLS = 8
 REFINEMENT_RATIO = 2
 PROJECTION_DT = 0.03125
 FLOOR_VALUE = 0.25
+PEER_FLOOR_VALUE = 0.75
 INCLUDE = repo_include()
 
 
-def _projected_model():
-    frame = Rectangle("projection_domain", lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(Cartesian2D())
+def _projected_model(
+    *,
+    name: str = "projected_scalar",
+    aux_name: str = "floor",
+    lower_bound: bool = True,
+    frame=None,
+):
+    if frame is None:
+        frame = Rectangle("projection_domain", lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(
+            Cartesian2D()
+        )
     x_axis, y_axis = frame.axes
-    model = pops.Model("projected_scalar", frame=frame)
+    model = pops.Model(name, frame=frame)
     state = model.state("U", components=("q",))
     (q,) = state
-    floor = model.aux("floor")
+    floor = model.aux(aux_name)
     flux = model.flux(
         "zero_transport",
         frame=frame,
@@ -58,7 +68,8 @@ def _projected_model():
         waves={x_axis: (0.0 * q,), y_axis: (0.0 * q,)},
     )
     rate = model.rate("zero_rate", equation=ddt(state) == -div(flux))
-    model.projection(((q + floor + sqrt((q - floor) * (q - floor))) / 2.0,))
+    sign = 1.0 if lower_bound else -1.0
+    model.projection(((q + floor + sign * sqrt((q - floor) * (q - floor))) / 2.0,))
     return frame, model, state, flux, rate
 
 
@@ -74,9 +85,17 @@ def test_public_projection_oracle_reads_the_declared_aux_field():
 
 def _projection_case() -> tuple[pops.Case, AMR]:
     frame, model, state, flux, rate = _projected_model()
+    _unused, peer_model, peer_state, peer_flux, peer_rate = _projected_model(
+        name="projected_scalar_peer",
+        aux_name="peer_ceiling",
+        lower_bound=False,
+        frame=frame,
+    )
     case = pops.Case("projection_case")
     block = case.block("scalar", model)
+    peer_block = case.block("scalar_peer", peer_model)
     state_instance = block[state]
+    peer_state_instance = peer_block[peer_state]
     # The bound state starts below the floor.  Tagging against -2 forces a real fine level before
     # the projection, so the proof covers aux publication and projection on both AMR levels.
     threshold = case.param(RuntimeParam("refine_threshold", default=-2.0))
@@ -92,6 +111,17 @@ def _projection_case() -> tuple[pops.Case, AMR]:
         ),
     )
     case.numerics(numerics, block=block)
+    peer_numerics = DiscretizationPlan()
+    peer_numerics.rates.add(
+        peer_rate,
+        FiniteVolume(
+            flux=peer_flux,
+            variables=variables.Conservative(peer_state),
+            reconstruction=reconstruction.FirstOrder(),
+            riemann=riemann.Rusanov(),
+        ),
+    )
+    case.numerics(peer_numerics, block=peer_block)
 
     program = pops.Program("project_after_step")
     temporal = program.state(state_instance)
@@ -101,6 +131,13 @@ def _projection_case() -> tuple[pops.Case, AMR]:
         at=temporal.next.point,
     )
     program.commit(temporal.next, program.project(candidate))
+    peer_temporal = program.state(peer_state_instance)
+    peer_candidate = program.value(
+        "peer_candidate",
+        peer_temporal.n + program.dt * peer_rate(peer_temporal.n),
+        at=peer_temporal.next.point,
+    )
+    program.commit(peer_temporal.next, program.project(peer_candidate))
     program.step_strategy(FixedDt(PROJECTION_DT))
     case.program(program)
     case.initials.add(
@@ -110,9 +147,17 @@ def _projection_case() -> tuple[pops.Case, AMR]:
             projection=ConservativeCellAverage(),
         )
     )
+    case.initials.add(
+        InitialCondition(
+            state=peer_state_instance,
+            value=Constant((1.0,)),
+            projection=ConservativeCellAverage(),
+        )
+    )
 
     transfer = AMRTransfer()
     transfer.state(state_instance, StateTransfer())
+    transfer.state(peer_state_instance, StateTransfer())
     layout = AMR(
         grid=CartesianGrid(
             frame=frame,
@@ -166,7 +211,8 @@ def test_bound_aux_drives_public_projection_in_a_native_amr_step(
     del isolated_native_cache, kokkos_root
     artifact = pops.compile(_resolve_projection_case(cxx=native_cxx))
     floor = np.full((GRID_CELLS, GRID_CELLS), FLOOR_VALUE, dtype=np.float64)
-    simulation = pops.bind(artifact, aux={"floor": floor})
+    peer_floor = np.full((GRID_CELLS, GRID_CELLS), PEER_FLOOR_VALUE, dtype=np.float64)
+    simulation = pops.bind(artifact, aux={"floor": floor, "peer_ceiling": peer_floor})
     assert (simulation.nx(), simulation.ny()) == (GRID_CELLS, GRID_CELLS)
     level_count = simulation.n_levels()
     assert level_count == 2
@@ -178,27 +224,32 @@ def test_bound_aux_drives_public_projection_in_a_native_amr_step(
             "remainder_policy": "integral_only",
         }
     ]
-    before = tuple(
-        composite_active_block_state(
-            simulation,
-            "scalar",
-            level,
-            refinement_ratio=REFINEMENT_RATIO,
-        ).copy()
-        for level in range(level_count)
-    )
-    assert all(np.all(level == -1.0) for level in before)
+    before = {
+        block: tuple(
+            composite_active_block_state(
+                simulation,
+                block,
+                level,
+                refinement_ratio=REFINEMENT_RATIO,
+            ).copy()
+            for level in range(level_count)
+        )
+        for block in ("scalar", "scalar_peer")
+    }
+    assert all(np.all(level == -1.0) for level in before["scalar"])
+    assert all(np.all(level == 1.0) for level in before["scalar_peer"])
 
     report = pops.run(simulation, t_end=PROJECTION_DT, max_steps=1)
 
     assert report.accepted_steps == 1
     assert report.final_time == PROJECTION_DT
     assert simulation.n_levels() == level_count
-    for level in range(level_count):
-        published = composite_active_block_state(
-            simulation,
-            "scalar",
-            level,
-            refinement_ratio=REFINEMENT_RATIO,
-        )
-        np.testing.assert_array_equal(published, np.full_like(published, FLOOR_VALUE))
+    for block, expected_floor in (("scalar", FLOOR_VALUE), ("scalar_peer", PEER_FLOOR_VALUE)):
+        for level in range(level_count):
+            published = composite_active_block_state(
+                simulation,
+                block,
+                level,
+                refinement_ratio=REFINEMENT_RATIO,
+            )
+            np.testing.assert_array_equal(published, np.full_like(published, expected_floor))

@@ -939,7 +939,10 @@ TEST(GeneratedAmrSystemBlock, ProgramContextRetainsAndInterpolatesExactLevelHist
   context->begin_step(0.4);
   sample.set_val(pops::Real(20));
   context->store_history("tracer.rate", sample, 0);
-  pops::MultiFab<Dim> interpolated = context->scratch_state_like(sample);
+  // Match the generated LinearInterpolation lowering: an authenticated retained history slot
+  // determines the owner of the persistent output scratch before interpolation mutates it.
+  pops::MultiFab<Dim>& retained = context->history("tracer.rate", 1, 0);
+  pops::MultiFab<Dim>& interpolated = context->scratch_state(940001, 0, retained);
   interpolated.set_val(pops::Real(-1));
   context->interpolate_history_linear(interpolated, "tracer.rate", 2, 0, "clock.macro",
                                       "clock.fast", -1, pops::Real(0));

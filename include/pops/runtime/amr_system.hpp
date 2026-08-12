@@ -362,6 +362,10 @@ class AmrSystem {
   /// Borrow one accepted block/level carrier through its authenticated runtime identity.
   POPS_EXPORT const MultiFab<Dim>& prepared_amr_block_state(int runtime_block, int level) const;
   POPS_EXPORT MultiFab<Dim>& prepared_amr_block_state(int runtime_block, int level);
+  /// Borrow the exact prepared embedded-boundary active mask for one block/level, or null when
+  /// that level has no active embedded-boundary authority.
+  [[nodiscard]] POPS_EXPORT const MultiFab<Dim>* prepared_amr_block_level_active_mask(
+      int runtime_block, int level) const;
   POPS_EXPORT void install_prepared_amr_coupling_operator(std::string provider_contract,
                                                           CouplingOperatorView view,
                                                           PreparedCouplingOperator operation);
@@ -448,6 +452,11 @@ class AmrSystem {
                                                           const MultiFab<Dim>& state) const;
   POPS_EXPORT void validate_prepared_amr_state_publication_candidate(
       int runtime_block, int level, const MultiFab<Dim>& candidate) const;
+  /// Apply one generated block's prepared pointwise projection to an owner-qualified detached
+  /// Program candidate.
+  POPS_EXPORT void project_prepared_amr_block_level_state(int runtime_block, int level,
+                                                          int candidate_runtime_block,
+                                                          MultiFab<Dim>& detached_candidate);
 
   /// Accumulate the generated block's exact elliptic right-hand side on one live level.
   POPS_EXPORT void add_prepared_amr_poisson_rhs(int level, MultiFab<Dim>& rhs);

@@ -197,6 +197,7 @@ pops::runtime::system::AuxiliaryComponentKey install_transport_speed(pops::AmrSy
 
 struct ProgramEvidence {
   int accepted_source_solves = 0;
+  int nonzero_block_provider_binds = 0;
 };
 
 template <int Dim>
@@ -220,6 +221,8 @@ std::shared_ptr<ProgramEvidence> install_program(pops::AmrSystem<Dim>& system) {
           const auto provider_at = [context, block](std::size_t local_patch) {
             return context->template provider_values_view<1>(kProviderConsumer, block, local_patch);
           };
+          if (block != 0)
+            ++evidence->nonzero_block_provider_binds;
           pops::SolveOutcome source =
               pops::backward_euler_source(DensityAdvection<Dim>{}, provider_at, state,
                                           pops::Real(macro_dt), pops::NewtonOptions{}, *lane);
@@ -238,7 +241,7 @@ std::shared_ptr<ProgramEvidence> install_program(pops::AmrSystem<Dim>& system) {
         context->axpy(*states[block], pops::Real(macro_dt), *residuals[block]);
     });
   });
-  system.set_program_block_map({0});
+  system.set_program_block_map({0, 1});
   return evidence;
 }
 
@@ -260,6 +263,7 @@ struct RunResult {
   int levels = 0;
   int fine_patches = 0;
   int accepted_source_solves = 0;
+  int nonzero_block_provider_binds = 0;
   bool provider_values_exact = false;
   double mass_before = 0.0;
   double mass_trial = 0.0;
@@ -279,15 +283,23 @@ RunResult advance_with_floor(double positivity_floor) {
   pops::AmrSystem<Dim> system(system_config);
   const auto speed_key = install_transport_speed(system);
   system.install_block_state_route("density", "test.amr.positivity/state/density");
+  system.install_block_state_route("density_peer", "test.amr.positivity/state/density-peer");
   pops::add_compiled_model<Dim>(system, "density", DensityAdvection<Dim>{}, "weno5", "rusanov",
+                                "conservative", "explicit", 1.4, 1, 1, {}, {}, positivity_floor,
+                                static_cast<double>(pops::kWenoEpsilon), false, kProviderConsumer);
+  pops::add_compiled_model<Dim>(system, "density_peer", DensityAdvection<Dim>{}, "weno5", "rusanov",
                                 "conservative", "explicit", 1.4, 1, 1, {}, {}, positivity_floor,
                                 static_cast<double>(pops::kWenoEpsilon), false, kProviderConsumer);
   pops::test::install_prepared_threshold_union(system, {{"density", "rho", 0.25}},
                                                "test.amr.positivity.tagging@1");
   constexpr const char* state_route = "test.amr.positivity/state/density";
+  constexpr const char* peer_state_route = "test.amr.positivity/state/density-peer";
   system.bind_bootstrap_subject(state_route, "density", "bound_level_zero");
+  system.bind_bootstrap_subject(peer_state_route, "density_peer", "bound_level_zero");
   system.stage_bootstrap_array(state_route, "density", "cell", "cell", 1, system_config.shape,
                                contrast_state(system_config.shape));
+  system.stage_bootstrap_array(peer_state_route, "density_peer", "cell", "cell", 1,
+                               system_config.shape, contrast_state(system_config.shape));
   pops::Extent<Dim> transfer_ghosts{};
   for (int axis = 0; axis < Dim; ++axis)
     transfer_ghosts[axis] = 1;
@@ -296,6 +308,11 @@ RunResult advance_with_floor(double positivity_floor) {
                                            "cell", "cell", "conservative", "dense", "prolongation",
                                            "conservative_linear", 2, transfer_ghosts,
                                            system_config.transition_ratios.front());
+  system.register_bootstrap_transfer_route(
+      "test.amr.positivity/bootstrap/peer-prolongation", {peer_state_route},
+      "test.amr.positivity/bootstrap/provider", "cell", "cell", "conservative", "dense",
+      "prolongation", "conservative_linear", 2, transfer_ghosts,
+      system_config.transition_ratios.front());
   const std::vector<double> speed(cell_count(system_config.shape), 1.0);
   system.stage_auxiliary_input(speed_key, speed);
   system.refresh_auxiliary({"test.amr.positivity.clock", 0, 0, 0, 0, 0, 0,
@@ -303,11 +320,15 @@ RunResult advance_with_floor(double positivity_floor) {
   system.begin_bootstrap_plan();
   (void)system.materialize_bootstrap_action(state_route, "initialize_level_zero",
                                             "bound_level_zero", 0);
+  (void)system.materialize_bootstrap_action(peer_state_route, "initialize_level_zero",
+                                            "bound_level_zero", 0);
   if (!system.bootstrap_next_level()) {
     system.rollback_bootstrap_level();
     throw std::runtime_error("positivity test tagging did not create its refined level");
   }
   (void)system.materialize_bootstrap_action(state_route, "prolong_from_parent",
+                                            "conservative_linear", 1);
+  (void)system.materialize_bootstrap_action(peer_state_route, "prolong_from_parent",
                                             "conservative_linear", 1);
   system.commit_bootstrap_level();
   system.stage_auxiliary_input(speed_key, speed);
@@ -374,6 +395,7 @@ RunResult advance_with_floor(double positivity_floor) {
   result.fine_after = system.block_level_state_global("density", 1);
   result.fine_interior_after = select_fine_interior(result.fine_after);
   result.accepted_source_solves = evidence->accepted_source_solves;
+  result.nonzero_block_provider_binds = evidence->nonzero_block_provider_binds;
   return result;
 }
 
@@ -397,8 +419,10 @@ void verify_exact_ranked_trajectory() {
   EXPECT_EQ(floored.fine_rolled_back, floored.fine_before);
   EXPECT_EQ(unfloored.fine_after, unfloored.fine_trial);
   EXPECT_EQ(floored.fine_after, floored.fine_trial);
-  EXPECT_EQ(unfloored.accepted_source_solves, 2);
-  EXPECT_EQ(floored.accepted_source_solves, 2);
+  EXPECT_EQ(unfloored.accepted_source_solves, 4);
+  EXPECT_EQ(floored.accepted_source_solves, 4);
+  EXPECT_EQ(unfloored.nonzero_block_provider_binds, 2);
+  EXPECT_EQ(floored.nonzero_block_provider_binds, 2);
 
   EXPECT_TRUE(all_finite(unfloored.fine_after));
   EXPECT_TRUE(all_finite(floored.fine_after));

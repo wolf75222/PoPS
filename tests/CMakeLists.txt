@@ -811,6 +811,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_geometric_mg 2)
   set(POPS_MPI_RANKS_test_coupled_fieldsolve 2)
   set(POPS_MPI_RANKS_test_amr_program_positivity_floor 2)
+  set(POPS_MPI_RANKS_test_amr_multiblock_coupled_source 2)
   set(POPS_MPI_RANKS_test_program_runtime 2)
   set(POPS_MPI_RANKS_test_generated_amr_system_block 2)
   set(POPS_MPI_RANKS_test_fill_boundary_cache 1 2 4)
@@ -955,6 +956,7 @@ if(POPS_HAS_MPI)
   # architecture gate compares this projection and these CMake registrations exactly.
   set(POPS_CPP_MPI_VARIANT_TESTS
     test_amr_program_positivity_floor
+    test_amr_multiblock_coupled_source
     test_krylov_workspace_reentrancy
     test_pure_field_algebra_extreme_dot
     test_geometric_mg
@@ -1043,6 +1045,9 @@ if(POPS_HAS_MPI)
     ENVIRONMENT "OMP_NUM_THREADS=1"
     TIMEOUT 30)
   set_tests_properties(test_amr_program_positivity_floor_np2 PROPERTIES
+    ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1"
+    TIMEOUT 30)
+  set_tests_properties(test_amr_multiblock_coupled_source_np2 PROPERTIES
     ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1"
     TIMEOUT 30)
   set_tests_properties(test_program_runtime_np2 test_generated_amr_system_block_np2 PROPERTIES

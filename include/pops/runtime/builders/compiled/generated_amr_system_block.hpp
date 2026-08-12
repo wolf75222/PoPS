@@ -492,6 +492,7 @@ class PreparedGeneratedAmrLevelBlock {
   using SourceEvaluator = std::function<void(const point_type&, field_type&, field_type&)>;
   using ImplicitSourceSolver =
       std::function<SolveOutcome(const point_type&, field_type&, Real, const NewtonOptions&)>;
+  using PointwiseProjection = std::function<void(field_type&)>;
   using Speed = std::function<Real(const field_type&)>;
   using PoissonRhs = std::function<void(const field_type&, field_type&)>;
 
@@ -503,7 +504,8 @@ class PreparedGeneratedAmrLevelBlock {
                                  Evaluator flux_core_evaluator, Evaluator boundary_evaluator,
                                  BoundaryJvp boundary_jvp, SourceEvaluator source_evaluator,
                                  ImplicitSourceSolver implicit_source_solver, Speed maximum_speed,
-                                 PoissonRhs poisson_rhs, Speed source_frequency, Speed stability_dt)
+                                 PoissonRhs poisson_rhs, PointwiseProjection pointwise_projection,
+                                 Speed source_frequency, Speed stability_dt)
       : runtime_(&runtime),
         level_(level),
         state_(&state),
@@ -522,6 +524,7 @@ class PreparedGeneratedAmrLevelBlock {
         implicit_source_solver_(std::move(implicit_source_solver)),
         maximum_speed_(std::move(maximum_speed)),
         poisson_rhs_(std::move(poisson_rhs)),
+        pointwise_projection_(std::move(pointwise_projection)),
         source_frequency_(std::move(source_frequency)),
         stability_dt_(std::move(stability_dt)),
         topology_epoch_(runtime.topology_epoch()),
@@ -643,6 +646,23 @@ class PreparedGeneratedAmrLevelBlock {
     return solve_implicit_source(point, *state_, dt, options);
   }
 
+  /// Mutate only an exact detached Program candidate.  The closure is omitted when the generated
+  /// physical model has no pointwise projection capability.
+  void project(field_type& detached_candidate) const {
+    require_live_();
+    require_state_contract_(detached_candidate);
+    if (&detached_candidate == state_)
+      throw std::invalid_argument(
+          "generated AMR pointwise projection refuses the accepted live state carrier");
+    if (!pointwise_projection_)
+      throw std::runtime_error("generated AMR block has no pointwise projection provider");
+    pointwise_projection_(detached_candidate);
+  }
+
+  [[nodiscard]] bool has_pointwise_projection() const noexcept {
+    return static_cast<bool>(pointwise_projection_);
+  }
+
   Real maximum_speed(const field_type& state) const {
     require_live_();
     require_state_contract_(state);
@@ -757,6 +777,7 @@ class PreparedGeneratedAmrLevelBlock {
   ImplicitSourceSolver implicit_source_solver_;
   Speed maximum_speed_;
   PoissonRhs poisson_rhs_;
+  PointwiseProjection pointwise_projection_;
   Speed source_frequency_;
   Speed stability_dt_;
   std::uint64_t topology_epoch_ = 0;
@@ -783,6 +804,7 @@ struct PreparedAmrSystemBlock {
   std::string collective_contract;
   int ncomp = 0;
   int provider_components = 0;
+  bool has_pointwise_projection = false;
   VariableSet conservative_variables{};
   VariableSet primitive_variables{};
   double gamma = 1.0;
@@ -804,6 +826,34 @@ struct PreparedAmrSystemBlock {
 };
 
 namespace generated_amr_detail {
+
+template <int Dim, class Model>
+struct MaterializePointwiseProjection {
+  static constexpr int provider_count = provider_count_for<Model, Dim>();
+  Model model;
+  FieldView<const Real, Dim> source{};
+  FieldView<Real, Dim> destination{};
+  ProviderStorageView<Dim, provider_count> providers{};
+  FieldView<const Real, Dim> active{};
+  FieldView<Real, Dim> status{};
+  bool has_active_mask = false;
+
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    if (has_active_mask && active(index) < Real(0.5)) {
+      status(index) = Real(0);
+      return;
+    }
+    const auto projected = model.project(load_state<Model>(source, index),
+                                         load_provider_values<provider_count>(providers, index));
+    Real failure = Real(0);
+    for (int component = 0; component < Model::n_vars; ++component) {
+      destination(index, component) = projected[component];
+      if (!Kokkos::isfinite(projected[component]))
+        failure = Real(1);
+    }
+    status(index) = failure;
+  }
+};
 
 template <int Dim, nd::ReconstructionVariables Variables, class Model, class Metric,
           class Reconstruction, class Numerical, class MemorySpace, int ProviderCount>
@@ -898,6 +948,7 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
   result.cut_cell_provider_identity = cut_cell_provider_identity;
   result.ncomp = Model::n_vars;
   result.provider_components = provider_count;
+  result.has_pointwise_projection = HasPointwiseProjection<Model>;
   result.conservative_variables = Model::conservative_vars();
   result.primitive_variables = Model::primitive_vars();
   result.gamma = request.gamma;
@@ -918,6 +969,7 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
       .text(cut_cell_provider_identity)
       .scalar(std::int32_t{Model::n_vars})
       .scalar(std::int32_t{provider_count})
+      .presence(result.has_pointwise_projection)
       .scalar(std::int32_t{Reconstruction::formal_order})
       .scalar(request.gamma)
       .scalar(std::int32_t{request.substeps})
@@ -1353,6 +1405,41 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
     auto poisson_rhs = [model, lane](const MultiFab<Dim>& state, MultiFab<Dim>& rhs) {
       add_poisson_rhs<Dim>(model, state, rhs, *lane);
     };
+    typename PreparedGeneratedAmrLevelBlock<Dim>::PointwiseProjection pointwise_projection;
+    if constexpr (HasPointwiseProjection<Model>) {
+      pointwise_projection = [model, provider_storage, provider_plan, embedded_boundary, lane,
+                              evaluation_scratch](MultiFab<Dim>& detached_candidate) {
+        std::lock_guard lock(evaluation_scratch->mutex);
+        MultiFab<Dim>& status = evaluation_scratch->source_status;
+        Real local_status = Real(0);
+        collective_phase(
+            *lane,
+            [&] {
+              status.set_val(Real(0));
+              const bool has_active_mask =
+                  embedded_boundary && embedded_boundary->mode() !=
+                                           runtime::system::PreparedEmbeddedBoundaryMode::inactive;
+              for (std::size_t local = 0; local < detached_candidate.local_size(); ++local) {
+                const FieldView<const Real, Dim> source =
+                    std::as_const(detached_candidate).fab(local).view();
+                const FieldView<const Real, Dim> active =
+                    has_active_mask ? embedded_boundary->active_mask().fab(local).view()
+                                    : FieldView<const Real, Dim>{};
+                for_each_cell(detached_candidate.box(local),
+                              MaterializePointwiseProjection<Dim, Model>{
+                                  model, source, detached_candidate.fab(local).view(),
+                                  runtime::system::bind_provider_storage_view<Dim, provider_count>(
+                                      provider_plan, provider_storage, local),
+                                  active, status.fab(local).view(), has_active_mask});
+              }
+              local_status = reduce_max_local(status);
+            },
+            "generated AMR pointwise projection failed collectively");
+        if (all_reduce_max(local_status, *lane) != Real(0))
+          throw std::runtime_error(
+              "generated AMR pointwise projection produced a non-finite value");
+      };
+    }
     typename PreparedGeneratedAmrLevelBlock<Dim>::Speed source_frequency_bound;
     if constexpr (requires(const Model& value, const typename Model::State& state,
                            const ProviderValues<provider_count>& providers) {
@@ -1380,7 +1467,8 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
         std::move(evaluator), std::move(flux_evaluator), std::move(core_evaluator),
         std::move(flux_core_evaluator), std::move(boundary_evaluator), std::move(boundary_jvp),
         std::move(source_evaluator), std::move(implicit_source_solver), std::move(speed),
-        std::move(poisson_rhs), std::move(source_frequency_bound), std::move(stability_dt_bound));
+        std::move(poisson_rhs), std::move(pointwise_projection), std::move(source_frequency_bound),
+        std::move(stability_dt_bound));
   };
 
   result.primitive_to_conservative = [model](const double* primitive, double* conservative) {

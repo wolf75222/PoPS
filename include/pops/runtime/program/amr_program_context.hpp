@@ -540,8 +540,7 @@ class AmrProgramContext {
       (void)local_fab;
       return {};
     } else {
-      if (sys_block(program_block) != 0)
-        deferred_op("multi_block_state", "exact-ranked multi-block AMR state provider");
+      const int runtime_block = sys_block(program_block);
       if (resource_epoch_ != runtime_->topology_epoch() ||
           resource_generation_ != runtime_->materialization_generation())
         throw std::logic_error(
@@ -549,7 +548,7 @@ class AmrProgramContext {
       if (active_level_ < 0 || active_level_ >= nlev())
         throw std::out_of_range("AMR Program provider level lies outside the live hierarchy");
       const field_type& state_field =
-          runtime_->hierarchy().state(static_cast<std::size_t>(active_level_));
+          facade_->prepared_amr_block_state(runtime_block, active_level_);
       const auto* const groups = facade_->prepared_amr_provider_storage_groups(active_level_);
       const auto& plan =
           facade_->prepared_amr_auxiliary_consumer_plan(std::string(consumer_qid), active_level_);
@@ -729,8 +728,11 @@ class AmrProgramContext {
     count_kernel_();
   }
 
-  [[noreturn]] void apply_projection(int, field_type&) const {
-    deferred_op("projection", "generated AMR projection provider");
+  void apply_projection(int program_block, field_type& detached_candidate) const {
+    const int runtime_block = sys_block(program_block);
+    const int candidate_owner = projection_candidate_owner_(detached_candidate);
+    facade_->project_prepared_amr_block_level_state(runtime_block, active_level_, candidate_owner,
+                                                    detached_candidate);
   }
 
   Real max_wave_speed(int program_block, const field_type& stage_state) const {
@@ -1506,13 +1508,17 @@ class AmrProgramContext {
   }
 
   const field_type* pointwise_active_mask(int program_block, const field_type& field) const {
-    if (sys_block(program_block) != 0)
-      unavailable_("exact-ranked multi-block AMR pointwise mask provider");
     refresh_resources_();
-    require_same_layout_(field, state(program_block), "AMR Program pointwise mask");
+    const int runtime_block = sys_block(program_block);
+    const field_type& accepted = facade_->prepared_amr_block_state(runtime_block, active_level_);
+    require_same_layout_(field, accepted, "AMR Program pointwise mask");
     if (nlev() != 1)
       unavailable_("composite active-cell AMR pointwise mask provider");
-    return nullptr;
+    const field_type* const active =
+        facade_->prepared_amr_block_level_active_mask(runtime_block, active_level_);
+    if (active != nullptr)
+      require_same_layout_(*active, accepted, "AMR Program pointwise active mask");
+    return active;
   }
   Real pointwise_status_max(int program_block, const field_type& status,
                             const field_type* active_cells, const ExecutionLane& lane) const {
@@ -2085,7 +2091,9 @@ class AmrProgramContext {
 
  private:
   enum class ScratchKind : std::uint8_t { Rhs = 0, State = 1, Scalar = 2 };
-  using ScratchKey = std::tuple<ScratchKind, int, std::int64_t, int>;
+  /// Scratch identity carries the exact runtime owner inherited from the prototype.  This prevents
+  /// equal-layout multi-block candidates from crossing a generated Program route.
+  using ScratchKey = std::tuple<ScratchKind, int, int, std::int64_t, int>;
   using ExactPolynomial = std::map<int, ::pops::amr::Rational>;
 
   class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
@@ -3877,7 +3885,8 @@ class AmrProgramContext {
     if (value_id < 0 || subslot < 0)
       throw std::invalid_argument("AMR Program scratch identity must be non-negative");
     refresh_resources_();
-    const ScratchKey key{kind, active_level_, value_id, subslot};
+    const int runtime_owner = scratch_prototype_owner_(prototype);
+    const ScratchKey key{kind, active_level_, runtime_owner, value_id, subslot};
     auto found = scratches_.find(key);
     if (found == scratches_.end())
       found = scratches_.emplace(key, make_scratch_(prototype, ncomp, ghosts)).first;
@@ -3890,6 +3899,69 @@ class AmrProgramContext {
     result.set_val(Real(0));
     clear_active_flux_expression_(result);
     return result;
+  }
+
+  int scratch_prototype_owner_(const field_type& prototype) const {
+    std::optional<int> owner;
+    const auto record = [&](int candidate) {
+      if (candidate < 0 || candidate >= n_blocks())
+        throw std::logic_error("AMR Program scratch prototype has an invalid runtime owner");
+      if (owner && *owner != candidate)
+        throw std::logic_error("AMR Program scratch prototype aliases multiple runtime owners");
+      owner = candidate;
+    };
+    for (int runtime_block = 0; runtime_block < n_blocks(); ++runtime_block) {
+      const field_type* active = nullptr;
+      if (!active_attempt_states_.empty())
+        active = active_attempt_states_.at(static_cast<std::size_t>(runtime_block));
+      const field_type* const accepted =
+          &facade_->prepared_amr_block_state(runtime_block, active_level_);
+      if (&prototype == active || &prototype == accepted)
+        record(runtime_block);
+    }
+    for (const auto& [key, scratch] : scratches_)
+      if (&prototype == &scratch)
+        record(std::get<2>(key));
+    const auto& manager = runtime_state().hist_;
+    for (const auto& [key, ring] : manager.histories) {
+      const bool is_history_slot = std::any_of(
+          ring.begin(), ring.end(), [&](const field_type& slot) { return &prototype == &slot; });
+      if (!is_history_slot)
+        continue;
+      const auto level = history_levels_.find(key);
+      const auto decoded = decode_history_key_(key);
+      const auto history_owner = manager.owner.find(key);
+      if (level == history_levels_.end() || !decoded || decoded->first != active_level_ ||
+          level->second != active_level_ || history_owner == manager.owner.end() ||
+          history_epoch_ != runtime_->topology_epoch() ||
+          history_generation_ != runtime_->materialization_generation())
+        throw std::invalid_argument(
+            "AMR Program scratch prototype names a stale or foreign-level history ring");
+      record(history_owner->second);
+    }
+    if (!owner)
+      throw std::invalid_argument(
+          "AMR Program scratch prototype has no authenticated runtime block owner");
+    return *owner;
+  }
+
+  int projection_candidate_owner_(const field_type& detached_candidate) const {
+    std::optional<int> owner;
+    for (const auto& [key, scratch] : scratches_) {
+      if (&detached_candidate != &scratch)
+        continue;
+      if (std::get<0>(key) != ScratchKind::State || std::get<1>(key) != active_level_)
+        throw std::invalid_argument(
+            "AMR Program projection candidate is not an active-level state scratch");
+      const int candidate_owner = std::get<2>(key);
+      if (owner && *owner != candidate_owner)
+        throw std::logic_error("AMR Program projection candidate aliases multiple scratch owners");
+      owner = candidate_owner;
+    }
+    if (!owner)
+      throw std::invalid_argument(
+          "AMR Program projection requires an owner-qualified detached state scratch");
+    return *owner;
   }
 
   static std::string history_key_(const std::string& name, int level) {

@@ -1,12 +1,15 @@
 """Generic explicit local-transform authoring and Program code generation."""
+
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
+from pops.codegen._resolution import CapabilityResolutionError, _resolve_amr_program
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.frames import Cartesian2D
 from pops.physics import Model
+from pops.runtime.amr_program_support import AMRProgramSupportContext
 from pops.time import Program
 
 from typed_program_support import state_refs
@@ -27,8 +30,7 @@ def _transform_program():
     block, _ = state_refs(program, "fluid", model=model, state=state)
     temporal = program.state(block[state])
     candidate = program.value("candidate", temporal.n, at=temporal.next.point)
-    transformed = program.transform(
-        candidate, transform=transform, name="transformed_candidate")
+    transformed = program.transform(candidate, transform=transform, name="transformed_candidate")
     program.commit(temporal.next, transformed)
     return model, state, transform, program
 
@@ -67,7 +69,7 @@ def test_local_transform_program_emits_one_collective_fail_closed_kernel() -> No
     assert "transform_status_resource_" in install_prelude
     assert "ctx.scratch_state_like(" not in step_body
     assert "ctx.alloc_scalar_field(1, 0)" not in step_body
-    assert "require_cartesian_generated_operator(0, \"local_transform\")" not in source
+    assert 'require_cartesian_generated_operator(0, "local_transform")' not in source
     assert "ctx.pointwise_active_mask(0," in source
     assert "transform_has_active_mask_" in source
     assert "outA(i, j, 0) = u" in source
@@ -76,14 +78,23 @@ def test_local_transform_program_emits_one_collective_fail_closed_kernel() -> No
     assert "Kokkos::isfinite" in source
     assert "ctx.apply_projection" not in source
 
+    flat_context = AMRProgramSupportContext(
+        hierarchy_level_count=1,
+        frozen_hierarchy=True,
+        shared_block_interfaces=False,
+        field_routes_validated=True,
+    )
+    assert _resolve_amr_program("amr", program, context=flat_context)["status"] == "proven"
+    refined_context = AMRProgramSupportContext(
+        hierarchy_level_count=2,
+        frozen_hierarchy=True,
+        shared_block_interfaces=False,
+        field_routes_validated=True,
+    )
+    with pytest.raises(CapabilityResolutionError, match="post-synchronization Program phase"):
+        _resolve_amr_program("amr", program, context=refined_context)
+
     amr_source = emit_cpp_program(program, model=model, target="amr_system")
-    assert "if (ctx.program_resource_topology().levels > 1)" in amr_source
-    assert "post-synchronization Program phase" in amr_source
-    refresh = amr_source.index("auto _refresh_level_programs")
-    refreshed_guard = amr_source.index(
-        "_require_local_transform_level_contract();", refresh)
-    resource_mutation = amr_source.index("_level_programs->clear();", refresh)
-    assert refresh < refreshed_guard < resource_mutation
     assert "ctx.pointwise_active_mask(0," in amr_source
     assert "ctx.pointwise_status_max(0," in amr_source
     assert "inherit_state_metadata" not in amr_source
@@ -105,12 +116,14 @@ def test_local_transform_formula_and_domain_are_part_of_module_identity() -> Non
     changed_formula = Model("transform_identity", frame=Cartesian2D())
     formula_state = changed_formula.state("U", components=("q",))
     changed_formula.local_transform(
-        "repair", (formula_state[0] + 2.0,), valid_if=formula_state[0] > 0.0)
+        "repair", (formula_state[0] + 2.0,), valid_if=formula_state[0] > 0.0
+    )
 
     changed_domain = Model("transform_identity", frame=Cartesian2D())
     domain_state = changed_domain.state("U", components=("q",))
     changed_domain.local_transform(
-        "repair", (domain_state[0] + 1.0,), valid_if=domain_state[0] > 1.0)
+        "repair", (domain_state[0] + 1.0,), valid_if=domain_state[0] > 1.0
+    )
 
     identities = {
         first.module.module_hash(),
