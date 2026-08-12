@@ -202,7 +202,7 @@ def _resolve_amr_program(
 ) -> dict[str, Any]:
     if layout_name != "amr" or time is None:
         return {"groups": [], "status": "not_applicable"}
-    from pops.runtime.amr_program_support import amr_program_op_support
+    from pops.runtime.amr_program_support import AMRProgramSupportError, amr_program_op_support
 
     if context is None:
         raise CapabilityResolutionError(
@@ -214,7 +214,10 @@ def _resolve_amr_program(
             "AMR Program local_transform is unavailable on a refined hierarchy: it requires a "
             "semantically correct post-synchronization Program phase after reflux"
         )
-    support = amr_program_op_support(time, context=context)
+    try:
+        support = amr_program_op_support(time, context=context)
+    except AMRProgramSupportError as exc:
+        raise CapabilityResolutionError(str(exc)) from exc
     pending = {name: status for name, status in support.items() if status != "green"}
     if pending:
         details = ", ".join("%s=%s" % item for item in sorted(pending.items()))
