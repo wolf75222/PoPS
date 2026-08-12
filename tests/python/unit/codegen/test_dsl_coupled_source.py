@@ -26,7 +26,7 @@ import numpy as np
 import pops.runtime._engine_descriptors as engine
 from pops.physics.multispecies import CoupledSource
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
-from tests.python.support.explicit_program import install_ssprk2_program
+from tests.python.support.explicit_program import install_forward_euler_program
 
 
 def chk(cond, msg, fails):
@@ -102,7 +102,7 @@ def main():
 
     # --- (D) defaut : System SANS couplage reste a l'identique (densites uniformes inchangees) ---
     base = make_system(n, ne0, ni0, ng0)
-    install_ssprk2_program(base)
+    install_forward_euler_program(base)
     for _ in range(nsteps):
         base.step(dt)
     chk(np.allclose(base.density("electrons"), ne0, atol=1e-12), "defaut: n_e inchange (pas de couplage)", fails)
@@ -112,7 +112,7 @@ def main():
     # --- couplage GENERIQUE branche via sim.add_coupling(compiled) ---
     sim = make_system(n, ne0, ni0, ng0)
     sim.add_coupling(compiled)
-    install_ssprk2_program(sim, coupled_sources=True)
+    install_forward_euler_program(sim, coupled_sources=True)
 
     # --- REFERENCE NumPy : MEME recurrence forward-Euler que l'etage C++ (sources evaluees par les
     #     memes Expr ; transport nul car etat uniforme). Etat scalaire (densites uniformes). ---

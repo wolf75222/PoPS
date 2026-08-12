@@ -16,7 +16,7 @@ import numpy as np
 import pops.runtime._engine_descriptors as engine
 from test_dsl_coupled import build_euler, compile_euler_component, GAMMA, INCLUDE
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
-from tests.python.support.explicit_program import install_ssprk2_program
+from tests.python.support.explicit_program import install_forward_euler_program
 # Multiple DSL native compiles by design: on a slow CI runner the file can exceed the
 # global 300 s process-isolation budget (ADC-627, same class as test_dsl_compile_cache).
 POPS_PROCESS_TIMEOUT = 900
@@ -126,8 +126,8 @@ def main():
             return sys
 
         p_sys, r_sys = build_prod_step(), build_ref_step()
-        install_ssprk2_program(p_sys)
-        install_ssprk2_program(r_sys)
+        install_forward_euler_program(p_sys)
+        install_forward_euler_program(r_sys)
         dt = 1e-3
         for _ in range(12):
             p_sys.step(dt)
@@ -137,7 +137,7 @@ def main():
         dstep = float(np.max(np.abs(Up - Ur)))
         assert np.isfinite(Up).all() and Up[0].min() > 0, "production weno5 : etat non physique"
         assert dstep == 0.0, "production weno5 : etat apres 12 pas != add_block (%.2e)" % dstep
-        print("OK  production weno5 : 12 pas SSPRK2 BIT-IDENTIQUES au bloc natif add_block")
+        print("OK  production weno5 : 12 pas Forward-Euler BIT-IDENTIQUES au bloc natif add_block")
 
         print("test_weno5_compiledmodel : tout est vert")
 

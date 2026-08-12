@@ -33,7 +33,6 @@ from pops.physics.multispecies import CoupledSource
 from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
 from tests.python.support.explicit_program import (
     install_forward_euler_program,
-    install_ssprk2_program,
 )
 from tests.python.support.physics_roles import X_AXIS, Y_AXIS
 from tests.python.support.requirements import (
@@ -95,7 +94,7 @@ na = src.block("a").role("density")
 k = src.param("k", 1e-3)
 src.add_pair("a", "b", role="density", expr=k * na)
 sim.add_coupling(src.compile())
-install_ssprk2_program(sim, coupled_sources=True)
+install_forward_euler_program(sim, coupled_sources=True)
 dt = sim.step_cfl(0.4)
 chk(abs(dt - 0.4 / 500.0) < 1e-15, f"dt = cfl/mu = 8e-4 ({dt:.3e})")
 chk(

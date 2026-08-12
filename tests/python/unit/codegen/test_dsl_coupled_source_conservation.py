@@ -22,7 +22,7 @@ import numpy as np
 import pops.runtime._engine_descriptors as engine
 from pops.physics.multispecies import CoupledSource
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
-from tests.python.support.explicit_program import install_ssprk2_program
+from tests.python.support.explicit_program import install_forward_euler_program
 
 
 def chk(cond, msg, fails):
@@ -112,7 +112,7 @@ def main():
     # --- (B) bout en bout : masse n_a + n_b conservee, trajectoire == reference forward-Euler ---
     sim = make_system(n, na0, nb0)
     sim.add_coupling(compiled)
-    install_ssprk2_program(sim, coupled_sources=True)
+    install_forward_euler_program(sim, coupled_sources=True)
 
     na, nb = na0, nb0
     traj = []
