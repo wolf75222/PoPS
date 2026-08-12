@@ -1,141 +1,264 @@
-// ProgramGraph replacement for the retired low-level AMR diffusion driver test.
-//
-// A scalar heat model exposes its Fickian flux through diffusivity().  The hierarchy contains a
-// strict fine subset of the periodic domain, so diffusion crosses a genuine coarse/fine interface.
-// The explicit test Program is the only time authority: its captured face-flux ledger refluxes at
-// every child catch-up before average-down.  We require both observable smoothing and round-off
-// conservation of the level-composite integral.
+/// @file
+/// @brief Exact-ranked refined diffusion through the installed AMR Program.
 
 #include <gtest/gtest.h>
 
+#include "amr_tagging_test_authority.hpp"
 #include "explicit_amr_program.hpp"
-#include <pops/core/identity/prepared_provider.hpp>
-#include <pops/core/model/physical_model.hpp>
-#include <pops/core/state/state.hpp>
-#include <pops/runtime/amr/amr_runtime.hpp>
+
+#include <pops/core/foundation/native_dimension.hpp>
+#include <pops/mesh/layout/refinement.hpp>
+#include <pops/mesh/storage/mf_arith.hpp>
+#include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 
-#include "amr_tagging_test_authority.hpp"
-
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <stdexcept>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
 #include <Kokkos_Core.hpp>
 #endif
 
-using namespace pops;
-
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
+template <int Dim>
+class DiffusiveScalar : public pops::nd::ScalarAdvection<Dim> {
+ public:
+  using State = typename pops::nd::ScalarAdvection<Dim>::State;
 
-struct DiffusiveScalar {
-  using State = StateVec<1>;
-  using Aux = pops::Aux;
-  static constexpr int n_vars = 1;
-  static constexpr int dimension = kNativeDimension;
+  explicit DiffusiveScalar(pops::Real diffusivity) : diffusivity_(diffusivity) {}
 
-  Real nu = Real(0);
-
-  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
-    return {"test.amr.diffusive-scalar", 1};
+  [[nodiscard]] static constexpr pops::PreparedProviderIdentity provider_identity() noexcept {
+    return {"tests.amr.program-diffusion.scalar", 2};
   }
-  void serialize_exact_parameters(ExactContractBuilder& contract) const { contract.scalar(nu); }
 
-  POPS_HD State flux(const State&, const auto&, int) const { return State{Real(0)}; }
-  POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return Real(0); }
-  POPS_HD State source(const State&, const ProviderValues<0>&) const { return State{Real(0)}; }
-  POPS_HD Real elliptic_rhs(const State&) const { return Real(0); }
-  POPS_HD Real diffusivity() const { return nu; }
+  void serialize_exact_parameters(pops::ExactContractBuilder& contract) const {
+    contract.scalar(diffusivity_);
+  }
 
-  static VariableSet conservative_vars() {
-    return {VariableKind::Conservative, {"temperature"}, 1, {VariableRole::Scalar}};
-  }
-  static VariableSet primitive_vars() {
-    return {VariableKind::Primitive, {"temperature"}, 1, {VariableRole::Scalar}};
-  }
+  POPS_HD pops::Real diffusivity() const { return diffusivity_; }
+  POPS_HD pops::Real elliptic_rhs(const State&) const { return pops::Real(0); }
+
+ private:
+  pops::Real diffusivity_ = pops::Real(0);
 };
 
-static_assert(PhysicalModel<DiffusiveScalar>);
-static_assert(DiffusiveModel<DiffusiveScalar>);
+static_assert(pops::DiffusiveModel<DiffusiveScalar<1>>);
+static_assert(pops::DiffusiveModel<DiffusiveScalar<2>>);
+static_assert(pops::DiffusiveModel<DiffusiveScalar<3>>);
+static_assert(pops::nd::ConservationLaw<1, DiffusiveScalar<1>>);
+static_assert(pops::nd::ConservationLaw<2, DiffusiveScalar<2>>);
+static_assert(pops::nd::ConservationLaw<3, DiffusiveScalar<3>>);
 
-std::vector<double> periodic_mode(int n) {
-  std::vector<double> state(static_cast<std::size_t>(n) * static_cast<std::size_t>(n));
-  for (int j = 0; j < n; ++j)
-    for (int i = 0; i < n; ++i) {
-      const double x = (static_cast<double>(i) + 0.5) / static_cast<double>(n);
-      const double y = (static_cast<double>(j) + 0.5) / static_cast<double>(n);
-      state[static_cast<std::size_t>(j) * static_cast<std::size_t>(n) +
-            static_cast<std::size_t>(i)] =
-          1.0 + 0.35 * std::cos(2.0 * kPi * (x - 0.17)) * std::cos(2.0 * kPi * (y + 0.11));
+template <int Dim>
+std::size_t cell_count(const pops::Extent<Dim>& shape) {
+  std::size_t result = 1;
+  for (int axis = 0; axis < Dim; ++axis)
+    result *= static_cast<std::size_t>(shape[axis]);
+  return result;
+}
+
+template <int Dim>
+pops::Index<Dim> index_from_ordinal(const pops::Box<Dim>& box, std::size_t ordinal) {
+  pops::Index<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    const std::size_t length = static_cast<std::size_t>(box.length(axis));
+    result[axis] = box.lo[axis] + static_cast<std::int64_t>(ordinal % length);
+    ordinal /= length;
+  }
+  return result;
+}
+
+template <int Dim>
+std::size_t flatten(const pops::Index<Dim>& index, const pops::Box<Dim>& domain) {
+  std::size_t result = 0;
+  std::size_t stride = 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    result += static_cast<std::size_t>(index[axis] - domain.lo[axis]) * stride;
+    stride *= static_cast<std::size_t>(domain.length(axis));
+  }
+  return result;
+}
+
+template <int Dim>
+void expect_covered_coarse_equals_fine_restriction(pops::AmrSystem<Dim>& system,
+                                                   const pops::Extent<Dim>& ratio) {
+  const pops::Box<Dim> coarse_domain = system.prepared_amr_level_geometry(0).domain();
+  const pops::Box<Dim> fine_domain = system.prepared_amr_level_geometry(1).domain();
+  const std::vector<double> coarse = system.block_level_state_global("heat", 0);
+  const std::vector<double> fine = system.block_level_state_global("heat", 1);
+  std::size_t covered_cells = 0;
+  for (const pops::Box<Dim>& fine_patch : system.prepared_amr_block_state(0, 1).layout().boxes()) {
+    const pops::Box<Dim> covered = pops::coarsen(fine_patch, ratio);
+    for (std::size_t ordinal = 0; ordinal < static_cast<std::size_t>(covered.numPts()); ++ordinal) {
+      const pops::Index<Dim> parent = index_from_ordinal(covered, ordinal);
+      double restricted = 0.0;
+      std::size_t child_count = 1;
+      for (int axis = 0; axis < Dim; ++axis)
+        child_count *= static_cast<std::size_t>(ratio[axis]);
+      for (std::size_t child_ordinal = 0; child_ordinal < child_count; ++child_ordinal) {
+        pops::Index<Dim> child{};
+        std::size_t remaining = child_ordinal;
+        for (int axis = 0; axis < Dim; ++axis) {
+          const auto axis_ratio = static_cast<std::size_t>(ratio[axis]);
+          child[axis] =
+              parent[axis] * ratio[axis] + static_cast<std::int64_t>(remaining % axis_ratio);
+          remaining /= axis_ratio;
+        }
+        restricted += fine.at(flatten(child, fine_domain));
+      }
+      restricted /= static_cast<double>(child_count);
+      EXPECT_NEAR(coarse.at(flatten(parent, coarse_domain)), restricted, 2.0e-13)
+          << "published covered coarse cell must equal its conservative fine restriction";
+      ++covered_cells;
     }
-  return state;
+  }
+  EXPECT_GT(covered_cells, 0U);
+}
+
+template <int Dim>
+pops::AmrSystemConfig<Dim> refined_config() {
+  constexpr int cells = 12;
+  pops::AmrSystemConfig<Dim> result;
+  result.level_count = 2;
+  result.regrid_every = 0;
+  result.explicit_bootstrap = true;
+  for (int axis = 0; axis < Dim; ++axis) {
+    result.shape[axis] = cells;
+    result.lower[axis] = pops::Real(0);
+    result.upper[axis] = pops::Real(1);
+    result.periodicity[axis] = true;
+    result.coarse_max_grid[axis] = cells;
+    result.transition_ratios.front()[axis] = 2;
+    result.transition_buffers.front()[axis] = 1;
+    result.transition_lookaheads.front()[axis] = 1;
+  }
+  return result;
+}
+
+template <int Dim>
+std::vector<double> periodic_mode(const pops::Extent<Dim>& shape) {
+  constexpr double two_pi = 6.283185307179586476925286766559;
+  std::vector<double> result(cell_count(shape), 0.0);
+  for (std::size_t linear = 0; linear < result.size(); ++linear) {
+    std::size_t remaining = linear;
+    double mode = 1.0;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const auto width = static_cast<std::size_t>(shape[axis]);
+      const int coordinate = static_cast<int>(remaining % width);
+      remaining /= width;
+      const double x = (static_cast<double>(coordinate) + 0.5) / static_cast<double>(shape[axis]);
+      mode *= std::cos(two_pi * (x - 0.17 * static_cast<double>(axis + 1)));
+    }
+    result[linear] = 1.0 + 0.2 * mode;
+  }
+  return result;
+}
+
+template <int Dim>
+void materialize_conservative_bootstrap(pops::AmrSystem<Dim>& system,
+                                        const pops::AmrSystemConfig<Dim>& config,
+                                        const std::vector<double>& initial) {
+  constexpr const char* state_route = "tests.amr.program-diffusion/state/heat";
+  system.bind_bootstrap_subject(state_route, "heat", "bound_level_zero");
+  system.stage_bootstrap_array(state_route, "heat", "cell", "cell", 1, config.shape, initial);
+  pops::Extent<Dim> transfer_ghosts{};
+  for (int axis = 0; axis < Dim; ++axis)
+    transfer_ghosts[axis] = 1;
+  system.register_bootstrap_transfer_route(
+      "tests.amr.program-diffusion/bootstrap/prolongation", {state_route},
+      "tests.amr.program-diffusion/bootstrap/conservative-linear@1", "cell", "cell", "conservative",
+      "dense", "prolongation", "conservative_linear", 2, transfer_ghosts,
+      config.transition_ratios.front());
+  system.begin_bootstrap_plan();
+  (void)system.materialize_bootstrap_action(state_route, "initialize_level_zero",
+                                            "bound_level_zero", 0);
+  if (!system.bootstrap_next_level()) {
+    system.rollback_bootstrap_level();
+    throw std::runtime_error("diffusion bootstrap did not create the requested refined level");
+  }
+  (void)system.materialize_bootstrap_action(state_route, "prolong_from_parent",
+                                            "conservative_linear", 1);
+  system.commit_bootstrap_level();
+}
+
+template <int Dim>
+void verify_refined_program_diffusion() {
+  const pops::AmrSystemConfig<Dim> config = refined_config<Dim>();
+  const std::vector<double> initial = periodic_mode(config.shape);
+  pops::AmrSystem<Dim> system(config);
+  system.set_temporal_relations({2}, {1}, {"integral_only"});
+  system.install_block_state_route("heat", "tests.amr.program-diffusion/state/heat");
+  pops::add_compiled_model<Dim>(
+      system, "heat", DiffusiveScalar<Dim>{pops::Real(0.05)}, "none", "rusanov", "conservative",
+      "explicit", static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
+      static_cast<double>(pops::kWenoEpsilon), false, "tests.amr.program-diffusion/physical-flux");
+  pops::test::install_prepared_threshold_union(
+      system,
+      {{"heat", "scalar", 1.15, pops::test::PreparedThresholdRelation::Above,
+        "tests.amr.program-diffusion/state/heat"}},
+      "tests.amr.program-diffusion/tagging@2");
+  materialize_conservative_bootstrap(system, config, initial);
+
+  ASSERT_EQ(system.n_levels(), 2);
+  const pops::MultiFab<Dim>& coarse = system.prepared_amr_block_state(0, 0);
+  const pops::MultiFab<Dim>& fine = system.prepared_amr_block_state(0, 1);
+  const pops::mesh::BoxArray<Dim>& fine_boxes = fine.layout();
+  const pops::mesh::Distribution<Dim>& fine_distribution = fine.distribution();
+  ASSERT_TRUE(fine_distribution.matches_layout(fine_boxes));
+  ASSERT_FALSE(fine_boxes.boxes().empty());
+  std::int64_t refined_cells = 0;
+  for (const pops::Box<Dim>& patch : fine_boxes.boxes())
+    refined_cells += patch.numPts();
+  ASSERT_GT(refined_cells, 0);
+  ASSERT_LT(refined_cells, system.prepared_amr_level_geometry(1).domain().numPts());
+  ASSERT_EQ(coarse.ncomp(), 1);
+  ASSERT_EQ(fine.ncomp(), 1);
+
+  pops::test::install_forward_euler_program(system);
+  ASSERT_EQ(system.program_interface_flux_ledger_manifest().size(), 1U);
+
+  pops::MultiFab<Dim> coarse_before(coarse);
+  pops::MultiFab<Dim> fine_before(fine);
+  const double mass_before = system.composite_reduce("heat", "sum", 0);
+  const pops::Real peak_before = pops::reduce_max(fine_before);
+  constexpr double dt = 2.0e-4;
+
+  system.begin_step_transaction();
+  system.step(dt);
+  pops::MultiFab<Dim> coarse_trial(system.prepared_amr_block_state(0, 0));
+  pops::MultiFab<Dim> fine_trial(system.prepared_amr_block_state(0, 1));
+  const double mass_trial = system.composite_reduce("heat", "sum", 0);
+  system.rollback_step_transaction();
+
+  EXPECT_EQ(pops::difference_sum_sq_all(system.prepared_amr_block_state(0, 0), coarse_before),
+            pops::Real(0));
+  EXPECT_EQ(pops::difference_sum_sq_all(system.prepared_amr_block_state(0, 1), fine_before),
+            pops::Real(0));
+  EXPECT_DOUBLE_EQ(system.composite_reduce("heat", "sum", 0), mass_before);
+
+  system.step(dt);
+  EXPECT_EQ(pops::difference_sum_sq_all(system.prepared_amr_block_state(0, 0), coarse_trial),
+            pops::Real(0));
+  EXPECT_EQ(pops::difference_sum_sq_all(system.prepared_amr_block_state(0, 1), fine_trial),
+            pops::Real(0));
+  EXPECT_NEAR(system.composite_reduce("heat", "sum", 0), mass_before, 2.0e-12);
+  EXPECT_DOUBLE_EQ(system.composite_reduce("heat", "sum", 0), mass_trial);
+  expect_covered_coarse_equals_fine_restriction(system, config.transition_ratios.front());
+  EXPECT_LT(pops::reduce_max(system.prepared_amr_block_state(0, 1)),
+            peak_before - pops::Real(1e-7));
+}
+
+TEST(test_amr_program_diffusion,
+     RefinedFickianFacesAreRefluxedAveragedDownAndTransactionallyPublished) {
+#if defined(POPS_HAS_KOKKOS)
+  Kokkos::ScopeGuard guard;
+#endif
+  verify_refined_program_diffusion<pops::kNativeDimension>();
 }
 
 }  // namespace
-
-TEST(test_amr_program_diffusion, RefinedFickianFluxSmoothsAndConservesThroughProgramReflux) {
-#if defined(POPS_HAS_KOKKOS)
-  int argc = 0;
-  char** argv = nullptr;
-  Kokkos::ScopeGuard guard(argc, argv);
-#endif
-
-  constexpr int n = 16;
-  constexpr double dt = 1.0e-3;
-  constexpr int steps = 5;
-
-  AmrSystemConfig config;
-  config.n = n;
-  config.L = 1.0;
-  config.level_count = 2;
-  config.regrid_every = 0;
-  config.periodicity = {true, true};
-
-  AmrSystem simulation(config);
-  add_compiled_model(simulation, "heat", DiffusiveScalar{Real(0.1)}, "none", "rusanov",
-                     "conservative", "explicit");
-  simulation.set_density("heat", periodic_mode(n));
-  simulation.set_poisson("charge_density", "geometric_mg", "periodic");
-  test::install_prepared_threshold_union(simulation, {{"heat", "temperature", 1.0e29}});
-  simulation.set_temporal_relations({2}, {1}, {"integral_only"});
-  test::install_forward_euler_program(simulation);
-
-  ASSERT_TRUE(simulation.uses_runtime_engine());
-  ASSERT_NE(simulation.engine(), nullptr);
-  AmrRuntime& runtime = *simulation.engine();
-  ASSERT_EQ(runtime.nlev(), 2);
-  ASSERT_EQ(runtime.levels(0).size(), 2u);
-
-  const BoxArray& fine_boxes = runtime.levels(0)[1].U.box_array();
-  std::int64_t fine_cells = 0;
-  for (const Box2D& box : fine_boxes.boxes())
-    fine_cells += box.num_cells();
-  ASSERT_GT(fine_cells, 0);
-  ASSERT_LT(fine_cells, runtime.level_geom(1).domain.num_cells())
-      << "the fixture must contain a genuine coarse/fine interface, not a uniformly fine domain";
-
-  // Make the coarse representation exactly consistent with the bootstrapped fine patch before the
-  // first diagnostic.  This is a spatial transfer only; every subsequent state update is Program-owned.
-  runtime.average_down_level(0, 1);
-
-  const double mass_before = runtime.composite_reduce("heat", "sum", 0);
-  const double peak_before = runtime.composite_reduce("heat", "max", 0);
-  ASSERT_TRUE(std::isfinite(mass_before));
-  ASSERT_TRUE(std::isfinite(peak_before));
-
-  simulation.advance(dt, steps);
-
-  const double mass_after = runtime.composite_reduce("heat", "sum", 0);
-  const double peak_after = runtime.composite_reduce("heat", "max", 0);
-  ASSERT_TRUE(std::isfinite(mass_after));
-  ASSERT_TRUE(std::isfinite(peak_after));
-
-  EXPECT_LT(peak_after, peak_before - 1.0e-6)
-      << "the Fickian face flux must smooth the non-uniform scalar field";
-  EXPECT_NEAR(mass_after, mass_before, 5.0e-12)
-      << "ProgramGraph reflux plus average-down must conserve the AMR composite integral";
-}
