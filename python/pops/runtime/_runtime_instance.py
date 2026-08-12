@@ -2081,6 +2081,112 @@ class RuntimeInstance:
         diagnostic_data = json.loads(str(stored["runtime_consumer_diagnostics"]))
         canonical_diagnostics = self._publisher.validate_diagnostic_restart_state(diagnostic_data)
 
+        def snapshot_run_authorities(executor: Any) -> tuple[tuple[Any, tuple[Any, ...]], ...]:
+            names = (
+                "_last_run_manifest",
+                "_last_run_identity",
+                "_restart_lineage_identity",
+            )
+            snapshots = []
+
+            def capture(current: Any) -> None:
+                if any(not hasattr(current, name) for name in names):
+                    raise TypeError(
+                        "restart executor lacks a restorable authenticated run-identity envelope"
+                    )
+                snapshots.append((current, tuple(getattr(current, name) for name in names)))
+                children = getattr(current, "_engines", None)
+                if children is not None:
+                    if not isinstance(children, Mapping):
+                        raise TypeError("restart executor child engines must be a mapping")
+                    for child in children.values():
+                        capture(child)
+
+            capture(executor)
+            return tuple(snapshots)
+
+        def restore_run_authorities(snapshot: tuple[tuple[Any, tuple[Any, ...]], ...]) -> None:
+            names = (
+                "_last_run_manifest",
+                "_last_run_identity",
+                "_restart_lineage_identity",
+            )
+            for current, values in snapshot:
+                if len(values) != len(names):
+                    raise RuntimeError("restart run-identity envelope snapshot is malformed")
+                for name, value in zip(names, values, strict=True):
+                    setattr(current, name, value)
+
+        geometry_cache = getattr(self._snapshot_builder, "_geometry_cache", None)
+        if not isinstance(geometry_cache, dict):
+            raise TypeError("RuntimeInstance restart requires an exact mutable geometry cache")
+        outer_snapshot = {
+            "consumer_cursors": self._consumer_cursors,
+            "diagnostics": self._publisher.diagnostic_restart_state(),
+            "geometry_cache": dict(geometry_cache),
+            "run_authorities": snapshot_run_authorities(self._executor),
+        }
+
+        def restore_outer_state(native_result: Any) -> None:
+            restored_run_identity = source_run_identity
+            if selected_hierarchy_mode == "regrid_on_restart":
+                from pops.identity import Identity, make_identity
+                from pops.runtime._amr_system_io import _AMRRegridRestartEvidence
+
+                if type(native_result) is not _AMRRegridRestartEvidence:
+                    raise TypeError(
+                        "RegridOnRestart requires exact all-rank transformed-topology evidence"
+                    )
+                restart_identity = native_result.restart_identity
+                if type(restart_identity) is not Identity or restart_identity.domain != "restart":
+                    raise TypeError(
+                        "RegridOnRestart requires an authenticated domain-'restart' identity"
+                    )
+                policy_identity = Identity.from_token(hierarchy_identity)
+                if policy_identity.domain != "restart-hierarchy":
+                    raise TypeError("RegridOnRestart policy identity has the wrong domain")
+                receipt = native_result.regrid_receipt
+                if not isinstance(receipt, Mapping) or not receipt:
+                    raise RuntimeError(
+                        "RegridOnRestart executor returned no transformed-topology receipt"
+                    )
+                restored_run_identity = make_identity(
+                    "run",
+                    {
+                        "continuation": "regrid_on_restart",
+                        "source_run_identity": source_run_identity.to_data(),
+                        "restart_identity": restart_identity.to_data(),
+                        "hierarchy_policy_identity": policy_identity.to_data(),
+                        "regrid_receipt": _regrid_receipt_identity_data(receipt),
+                    },
+                )
+            self._snapshot_builder.invalidate_geometry_cache()
+            self._consumer_cursors = cursors
+            self._publisher.restore_diagnostic_restart_state(canonical_diagnostics)
+            restore_run_identity(restored_run_identity)
+
+        def rollback_outer_state() -> None:
+            failures = []
+            try:
+                self._consumer_cursors = outer_snapshot["consumer_cursors"]
+                geometry_cache.clear()
+                geometry_cache.update(outer_snapshot["geometry_cache"])
+            except BaseException as error:
+                failures.append(error)
+            try:
+                self._publisher.restore_diagnostic_restart_state(outer_snapshot["diagnostics"])
+            except BaseException as error:
+                failures.append(error)
+            try:
+                restore_run_authorities(outer_snapshot["run_authorities"])
+            except BaseException as error:
+                failures.append(error)
+            if failures:
+                raise RuntimeError(
+                    "RuntimeInstance restart outer-state rollback failed: "
+                    + "; ".join("%s: %s" % (type(error).__name__, error) for error in failures)
+                )
+
         if selected_hierarchy_mode == "regrid_on_restart":
             result = restore_checkpoint_payload(
                 self,
@@ -2090,6 +2196,8 @@ class RuntimeInstance:
                 hierarchy_mode=selected_hierarchy_mode,
                 hierarchy_identity=hierarchy_identity,
                 phase_prefix="native restart",
+                after_native_apply=restore_outer_state,
+                rollback_after_native_apply=rollback_outer_state,
             )
         else:
             result = restore_checkpoint_payload(
@@ -2098,45 +2206,9 @@ class RuntimeInstance:
                 payload,
                 bit_identical=policy,
                 phase_prefix="native restart",
+                after_native_apply=restore_outer_state,
+                rollback_after_native_apply=rollback_outer_state,
             )
-        restored_run_identity = source_run_identity
-        if selected_hierarchy_mode == "regrid_on_restart":
-            from pops.identity import Identity, make_identity
-            from pops.runtime._amr_system_io import _AMRRegridRestartEvidence
-
-            if type(result) is not _AMRRegridRestartEvidence:
-                raise TypeError(
-                    "RegridOnRestart requires exact all-rank transformed-topology evidence"
-                )
-            restart_identity = result.restart_identity
-            if type(restart_identity) is not Identity or restart_identity.domain != "restart":
-                raise TypeError(
-                    "RegridOnRestart requires an authenticated domain-'restart' identity"
-                )
-            policy_identity = Identity.from_token(hierarchy_identity)
-            if policy_identity.domain != "restart-hierarchy":
-                raise TypeError("RegridOnRestart policy identity has the wrong domain")
-            receipt = result.regrid_receipt
-            if not isinstance(receipt, Mapping) or not receipt:
-                raise RuntimeError(
-                    "RegridOnRestart executor returned no transformed-topology receipt"
-                )
-            restored_run_identity = make_identity(
-                "run",
-                {
-                    "continuation": "regrid_on_restart",
-                    "source_run_identity": source_run_identity.to_data(),
-                    "restart_identity": restart_identity.to_data(),
-                    "hierarchy_policy_identity": policy_identity.to_data(),
-                    "regrid_receipt": _regrid_receipt_identity_data(receipt),
-                },
-            )
-        # A checkpoint can restore an older topology epoch whose integer value was already cached
-        # by this RuntimeInstance for a different hierarchy.  Never expose that stale geometry.
-        self._snapshot_builder.invalidate_geometry_cache()
-        self._consumer_cursors = cursors
-        self._publisher.restore_diagnostic_restart_state(canonical_diagnostics)
-        restore_run_identity(restored_run_identity)
         return result.restart_identity if selected_hierarchy_mode == "regrid_on_restart" else result
 
     def restart(self, path: Any) -> Any:
