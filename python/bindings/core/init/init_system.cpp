@@ -1003,6 +1003,10 @@ void bind_system_stepping(py::class_<System>& cls) {
       .def("_step_change_l2", &System::step_change_l2)
       .def("_finalize_step_transaction", &System::finalize_step_transaction)
       .def("_rollback_step_transaction", &System::rollback_step_transaction)
+      .def("_begin_restart_transaction", &System::begin_restart_transaction)
+      .def("_commit_restart_transaction", &System::commit_restart_transaction)
+      .def("_finalize_restart_transaction", &System::finalize_restart_transaction)
+      .def("_rollback_restart_transaction", &System::rollback_restart_transaction)
       .def(
           "_prepare_layout_transfer",
           [](System& source, System& target,

@@ -2609,6 +2609,7 @@ struct AmrSystem<Dim>::Impl {
   std::unique_ptr<AcceptedSnapshot> external_step_transaction;
   bool external_step_committed = false;
   std::unique_ptr<AcceptedSnapshot> restart_transaction;
+  bool restart_transaction_committed = false;
 
   explicit Impl(const AmrSystemConfig<Dim>& config)
       : cfg(config),
@@ -9334,6 +9335,7 @@ void AmrSystem<Dim>::begin_restart_transaction() {
     throw std::runtime_error("AMR restart snapshot failed on at least one MPI rank");
   }
   p_->restart_transaction = std::move(candidate);
+  p_->restart_transaction_committed = false;
 }
 
 template <int Dim>
@@ -9341,10 +9343,16 @@ void AmrSystem<Dim>::commit_restart_transaction() {
   if (!p_->prepared_hierarchy || !p_->prepared_hierarchy->lane)
     throw std::logic_error("AmrSystem restart commit requires its prepared hierarchy lane");
   const ExecutionLane& lane = *p_->prepared_hierarchy->lane;
-  const long inactive = p_->restart_transaction ? 0L : 1L;
-  if (all_reduce_max(inactive, lane) != 0)
-    throw std::logic_error("AmrSystem has no collective restart transaction to commit");
+  const long invalid = !p_->restart_transaction || p_->restart_transaction_committed ? 1L : 0L;
+  if (all_reduce_max(invalid, lane) != 0)
+    throw std::logic_error("AmrSystem has no collective uncommitted restart transaction");
+  p_->restart_transaction_committed = true;
+}
+
+template <int Dim>
+void AmrSystem<Dim>::finalize_restart_transaction() noexcept {
   p_->restart_transaction.reset();
+  p_->restart_transaction_committed = false;
 }
 
 template <int Dim>
@@ -9357,6 +9365,7 @@ void AmrSystem<Dim>::rollback_restart_transaction() {
     throw std::logic_error("AmrSystem has no collective restart transaction to roll back");
 
   std::unique_ptr<typename Impl::AcceptedSnapshot> snapshot = std::move(p_->restart_transaction);
+  p_->restart_transaction_committed = false;
   std::exception_ptr restore_error;
   try {
     snapshot->restore(*p_);
@@ -11804,6 +11813,7 @@ template void AmrSystem<kNativeDimension>::restore_active_step_transaction_for_p
 template std::map<std::string, double> AmrSystem<kNativeDimension>::step_change_l2() const;
 template void AmrSystem<kNativeDimension>::begin_restart_transaction();
 template void AmrSystem<kNativeDimension>::commit_restart_transaction();
+template void AmrSystem<kNativeDimension>::finalize_restart_transaction() noexcept;
 template void AmrSystem<kNativeDimension>::rollback_restart_transaction();
 template void AmrSystem<kNativeDimension>::preflight_regrid_on_restart();
 template void AmrSystem<kNativeDimension>::regrid_on_restart();

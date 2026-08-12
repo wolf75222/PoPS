@@ -1115,10 +1115,14 @@ class _MultiLayoutUniformExecutor:
         return prepared.restart_identity
 
     def _commit_checkpoint_restart(self) -> None:
+        # Prepare every child release while all accepted snapshots remain rollback-capable.  A
+        # failure in a later child can therefore roll every earlier committed child back.
         for engine in self._engines.values():
             engine._commit_checkpoint_restart()
 
     def _finalize_checkpoint_restart(self) -> None:
+        # No child releases until every child preparation above has succeeded and the enclosing
+        # collective commit consensus has completed.
         for engine in self._engines.values():
             engine._finalize_checkpoint_restart()
         del self._checkpoint_restart_snapshot

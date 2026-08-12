@@ -669,9 +669,7 @@ class RuntimeInstance:
             )
         return provider(block)
 
-    def local_boxes(
-        self, block: str
-    ) -> tuple[tuple[tuple[int, ...], tuple[int, ...]], ...]:
+    def local_boxes(self, block: str) -> tuple[tuple[tuple[int, ...], tuple[int, ...]], ...]:
         """Return rank-owned boxes as exact-rank half-open ``(lower, upper)`` bounds."""
         provider = getattr(self._executor, "local_boxes", None)
         if not callable(provider):
@@ -1148,8 +1146,7 @@ class RuntimeInstance:
             "temporal_restart_state": copy.deepcopy(
                 getattr(native, "_temporal_restart_state", None)
             ),
-            "step_controller": _snapshot_step_controller(
-                getattr(native, "_step_controller", None)),
+            "step_controller": _snapshot_step_controller(getattr(native, "_step_controller", None)),
             "last_step_transaction_report": getattr(native, "_last_step_transaction_report", None),
         }
 
@@ -1263,7 +1260,8 @@ class RuntimeInstance:
         native._collective_step_envelope_active = True
         try:
             return self._accepted_step_transaction_body(
-                advance, at_end=at_end, before_begin=before_begin)
+                advance, at_end=at_end, before_begin=before_begin
+            )
         finally:
             if previous is missing:
                 delattr(native, "_collective_step_envelope_active")
@@ -2056,30 +2054,9 @@ class RuntimeInstance:
     ) -> Any:
         from pops.output._checkpoint_collective import (
             decode_checkpoint_bytes,
-            require_restart_bit_identical,
-            require_restart_hierarchy_mode,
             restore_checkpoint_payload,
         )
-
-        policy = require_restart_bit_identical(bit_identical, where="RuntimeInstance restart")
-        selected_hierarchy_mode = require_restart_hierarchy_mode(
-            hierarchy_mode, where="RuntimeInstance restart"
-        )
-        if selected_hierarchy_mode != "regrid_on_restart" and hierarchy_identity is not None:
-            raise ValueError(
-                "RuntimeInstance restart hierarchy identity is only valid with RegridOnRestart"
-            )
-        stored = decode_checkpoint_bytes(payload)
         from ._checkpoint_manifest import checkpoint_run_identity
-
-        source_run_identity = checkpoint_run_identity(stored)
-        restore_run_identity = getattr(self._executor, "_restore_checkpoint_run_identity", None)
-        if not callable(restore_run_identity):
-            raise TypeError(
-                "restart executor lacks the authenticated source-run publication protocol"
-            )
-        diagnostic_data = json.loads(str(stored["runtime_consumer_diagnostics"]))
-        canonical_diagnostics = self._publisher.validate_diagnostic_restart_state(diagnostic_data)
 
         def snapshot_run_authorities(executor: Any) -> tuple[tuple[Any, tuple[Any, ...]], ...]:
             names = (
@@ -2117,17 +2094,41 @@ class RuntimeInstance:
                 for name, value in zip(names, values, strict=True):
                     setattr(current, name, value)
 
-        geometry_cache = getattr(self._snapshot_builder, "_geometry_cache", None)
-        if not isinstance(geometry_cache, dict):
-            raise TypeError("RuntimeInstance restart requires an exact mutable geometry cache")
-        outer_snapshot = {
-            "consumer_cursors": self._consumer_cursors,
-            "diagnostics": self._publisher.diagnostic_restart_state(),
-            "geometry_cache": dict(geometry_cache),
-            "run_authorities": snapshot_run_authorities(self._executor),
-        }
+        outer_snapshot: dict[str, Any] = {}
+
+        def prepare_outer_state() -> None:
+            stored = decode_checkpoint_bytes(payload)
+            source_run_identity = checkpoint_run_identity(stored)
+            restore_run_identity = getattr(self._executor, "_restore_checkpoint_run_identity", None)
+            if not callable(restore_run_identity):
+                raise TypeError(
+                    "restart executor lacks the authenticated source-run publication protocol"
+                )
+            diagnostic_data = json.loads(str(stored["runtime_consumer_diagnostics"]))
+            canonical_diagnostics = self._publisher.validate_diagnostic_restart_state(
+                diagnostic_data
+            )
+            geometry_cache = getattr(self._snapshot_builder, "_geometry_cache", None)
+            if not isinstance(geometry_cache, dict):
+                raise TypeError("RuntimeInstance restart requires an exact mutable geometry cache")
+            prepared_snapshot = {
+                "hierarchy_mode": hierarchy_mode,
+                "source_run_identity": source_run_identity,
+                "restore_run_identity": restore_run_identity,
+                "canonical_diagnostics": canonical_diagnostics,
+                "consumer_cursors": self._consumer_cursors,
+                "diagnostics": self._publisher.diagnostic_restart_state(),
+                "geometry_cache_owner": geometry_cache,
+                "geometry_cache": dict(geometry_cache),
+                "run_authorities": snapshot_run_authorities(self._executor),
+            }
+            outer_snapshot.clear()
+            outer_snapshot.update(prepared_snapshot)
 
         def restore_outer_state(native_result: Any) -> None:
+            selected_hierarchy_mode = outer_snapshot["hierarchy_mode"]
+            source_run_identity = outer_snapshot["source_run_identity"]
+            restore_run_identity = outer_snapshot["restore_run_identity"]
             restored_run_identity = source_run_identity
             if selected_hierarchy_mode == "regrid_on_restart":
                 from pops.identity import Identity, make_identity
@@ -2162,13 +2163,16 @@ class RuntimeInstance:
                 )
             self._snapshot_builder.invalidate_geometry_cache()
             self._consumer_cursors = cursors
-            self._publisher.restore_diagnostic_restart_state(canonical_diagnostics)
+            self._publisher.restore_diagnostic_restart_state(
+                outer_snapshot["canonical_diagnostics"]
+            )
             restore_run_identity(restored_run_identity)
 
         def rollback_outer_state() -> None:
             failures = []
             try:
                 self._consumer_cursors = outer_snapshot["consumer_cursors"]
+                geometry_cache = outer_snapshot["geometry_cache_owner"]
                 geometry_cache.clear()
                 geometry_cache.update(outer_snapshot["geometry_cache"])
             except BaseException as error:
@@ -2187,29 +2191,19 @@ class RuntimeInstance:
                     + "; ".join("%s: %s" % (type(error).__name__, error) for error in failures)
                 )
 
-        if selected_hierarchy_mode == "regrid_on_restart":
-            result = restore_checkpoint_payload(
-                self,
-                self._executor,
-                payload,
-                bit_identical=policy,
-                hierarchy_mode=selected_hierarchy_mode,
-                hierarchy_identity=hierarchy_identity,
-                phase_prefix="native restart",
-                after_native_apply=restore_outer_state,
-                rollback_after_native_apply=rollback_outer_state,
-            )
-        else:
-            result = restore_checkpoint_payload(
-                self,
-                self._executor,
-                payload,
-                bit_identical=policy,
-                phase_prefix="native restart",
-                after_native_apply=restore_outer_state,
-                rollback_after_native_apply=rollback_outer_state,
-            )
-        return result.restart_identity if selected_hierarchy_mode == "regrid_on_restart" else result
+        result = restore_checkpoint_payload(
+            self,
+            self._executor,
+            payload,
+            bit_identical=bit_identical,
+            hierarchy_mode=hierarchy_mode,
+            hierarchy_identity=hierarchy_identity,
+            phase_prefix="native restart",
+            prepare_outer_state=prepare_outer_state,
+            after_native_apply=restore_outer_state,
+            rollback_after_native_apply=rollback_outer_state,
+        )
+        return result.restart_identity if hierarchy_mode == "regrid_on_restart" else result
 
     def restart(self, path: Any) -> Any:
         operation = self._restart_operation()

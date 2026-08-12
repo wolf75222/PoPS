@@ -136,14 +136,12 @@ class _AmrSystemIO(_AmrSystem):
         return prepared.restart_identity
 
     def _commit_checkpoint_restart(self) -> None:
-        # Keep the native AcceptedSnapshot live through the all-rank commit consensus.
-        self._checkpoint_restart_committed = True
+        # Native commit is a collective readiness/authentication phase.  It marks the transaction
+        # committed while retaining the AcceptedSnapshot for rollback through Python consensus.
+        self._s.commit_restart_transaction()
 
     def _finalize_checkpoint_restart(self) -> None:
-        if not self.__dict__.get("_checkpoint_restart_committed", False):
-            raise RuntimeError("AMR checkpoint restart transaction was not committed")
-        self._s.commit_restart_transaction()
-        del self._checkpoint_restart_committed
+        self._s.finalize_restart_transaction()
         del self._checkpoint_restart_python_snapshot
 
     def _rollback_checkpoint_restart(self) -> None:
@@ -158,7 +156,6 @@ class _AmrSystemIO(_AmrSystem):
                 self._temporal_restart_state,
                 self._step_controller,
             ) = snapshot
-            self.__dict__.pop("_checkpoint_restart_committed", None)
             del self._checkpoint_restart_python_snapshot
 
     def restart(self, path: Any, *, bit_identical: bool = False) -> Any:

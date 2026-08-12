@@ -524,6 +524,7 @@ def restore_checkpoint_payload(
     hierarchy_mode: str = "restore_recorded_hierarchy",
     hierarchy_identity: str | None = None,
     phase_prefix: str = "native restart",
+    prepare_outer_state: Callable[[], Any] | None = None,
     after_native_apply: Callable[[Any], Any] | None = None,
     rollback_after_native_apply: Callable[[], Any] | None = None,
 ) -> Any:
@@ -532,42 +533,55 @@ def restore_checkpoint_payload(
     Every fallible preparation finishes with an all-rank consensus before the first native write.
     The accepted native snapshot remains rollback-capable through the apply and commit consensuses;
     only the final, non-fallible release discards it.  A RuntimeInstance may use the optional
-    callback pair to publish its coupled Python envelope inside that same boundary.  Direct-engine
-    callers do not provide either callback and retain their existing protocol exactly.
+    callback triplet to capture and publish its coupled Python envelope inside that same boundary.
+    Direct-engine callers do not provide callbacks and retain their existing protocol exactly.
     """
     if not isinstance(phase_prefix, str) or not phase_prefix:
         raise TypeError("restart phase prefix must be non-empty text")
-    if (after_native_apply is None) != (rollback_after_native_apply is None):
-        raise TypeError(
-            "restart outer-state publication requires both apply and rollback callbacks"
-        )
-    if after_native_apply is not None and not callable(after_native_apply):
-        raise TypeError("restart outer-state apply callback must be callable")
-    if rollback_after_native_apply is not None and not callable(rollback_after_native_apply):
-        raise TypeError("restart outer-state rollback callback must be callable")
     topology = checkpoint_topology(owner)
+    outer_active = False
+    outer_protocol_error = None
+    try:
+        callbacks = (
+            prepare_outer_state,
+            after_native_apply,
+            rollback_after_native_apply,
+        )
+        present = tuple(callback is not None for callback in callbacks)
+        if any(present) and not all(present):
+            raise TypeError(
+                "restart outer-state publication requires prepare, apply, and rollback callbacks"
+            )
+        if all(present) and any(not callable(callback) for callback in callbacks):
+            raise TypeError("restart outer-state callbacks must be callable")
+        outer_active = all(present)
+    except BaseException as error:
+        outer_protocol_error = error
     policy = None
     selected_hierarchy_mode = None
     selected_hierarchy_identity = None
-    policy_error = None
-    try:
-        policy = require_restart_bit_identical(bit_identical, where="restart preparation policy")
-        selected_hierarchy_mode = require_restart_hierarchy_mode(
-            hierarchy_mode, where="restart preparation policy"
-        )
-        if selected_hierarchy_mode == "regrid_on_restart":
-            from pops.identity import Identity
-
-            selected = Identity.from_token(hierarchy_identity)
-            if selected.domain != "restart-hierarchy":
-                raise ValueError("restart preparation hierarchy identity has the wrong domain")
-            selected_hierarchy_identity = selected.token
-        elif hierarchy_identity is not None:
-            raise ValueError(
-                "restart preparation hierarchy identity is only valid with RegridOnRestart"
+    policy_error = outer_protocol_error
+    if policy_error is None:
+        try:
+            policy = require_restart_bit_identical(
+                bit_identical, where="restart preparation policy"
             )
-    except BaseException as error:
-        policy_error = error
+            selected_hierarchy_mode = require_restart_hierarchy_mode(
+                hierarchy_mode, where="restart preparation policy"
+            )
+            if selected_hierarchy_mode == "regrid_on_restart":
+                from pops.identity import Identity
+
+                selected = Identity.from_token(hierarchy_identity)
+                if selected.domain != "restart-hierarchy":
+                    raise ValueError("restart preparation hierarchy identity has the wrong domain")
+                selected_hierarchy_identity = selected.token
+            elif hierarchy_identity is not None:
+                raise ValueError(
+                    "restart preparation hierarchy identity is only valid with RegridOnRestart"
+                )
+        except BaseException as error:
+            policy_error = error
     policy_rows = consensus(
         topology,
         "%s policy" % phase_prefix,
@@ -576,6 +590,7 @@ def restore_checkpoint_payload(
             "bit_identical": policy,
             "hierarchy_mode": selected_hierarchy_mode,
             "hierarchy_identity": selected_hierarchy_identity,
+            "outer_state": outer_active,
         },
     )
     if any(row["value"] != policy_rows[0]["value"] for row in policy_rows[1:]):
@@ -629,6 +644,18 @@ def restore_checkpoint_payload(
     except BaseException as error:
         prepare_error = error
     consensus(topology, "%s preflight" % phase_prefix, error=prepare_error)
+
+    if outer_active:
+        outer_prepare_error = None
+        try:
+            cast(Callable[[], Any], prepare_outer_state)()
+        except BaseException as error:
+            outer_prepare_error = error
+        consensus(
+            topology,
+            "%s outer-state preparation" % phase_prefix,
+            error=outer_prepare_error,
+        )
 
     active = False
     begin_error = None
@@ -694,15 +721,14 @@ def restore_checkpoint_payload(
         rollback_after(original, "apply")
         raise
 
-    outer_active = after_native_apply is not None
-
     def rollback_outer_after(original: BaseException, phase: str) -> None:
+        if not outer_active:
+            return
         outer_error = None
-        if outer_active:
-            try:
-                cast(Callable[[], Any], rollback_after_native_apply)()
-            except BaseException as error:
-                outer_error = error
+        try:
+            cast(Callable[[], Any], rollback_after_native_apply)()
+        except BaseException as error:
+            outer_error = error
         try:
             consensus(
                 topology,
@@ -743,15 +769,10 @@ def restore_checkpoint_payload(
         rollback_after(original, "commit")
         raise
 
-    # Finalization only releases snapshots that every rank has already agreed to commit.  Providers
-    # must implement it as a no-throw release; the consensus turns a contract violation into one
-    # coherent failure instead of allowing a peer to enter the next operation silently.
-    finalize_error = None
-    try:
-        methods["_finalize_checkpoint_restart"]()
-    except BaseException as error:
-        finalize_error = error
-    consensus(topology, "%s finalize" % phase_prefix, error=finalize_error)
+    # Every fallible commit operation has reached collective agreement.  Providers implement this
+    # terminal phase only with no-throw native releases and plain ownership cleanup; there is no
+    # rollback-capable collective after snapshots are discarded.
+    methods["_finalize_checkpoint_restart"]()
     return result
 
 

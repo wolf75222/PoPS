@@ -1087,6 +1087,7 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
           "Validate the exact rank-generic checkpoint schema before restart state work.")
       .def("begin_restart_transaction", &AmrSystem::begin_restart_transaction)
       .def("commit_restart_transaction", &AmrSystem::commit_restart_transaction)
+      .def("finalize_restart_transaction", &AmrSystem::finalize_restart_transaction)
       .def("rollback_restart_transaction", &AmrSystem::rollback_restart_transaction)
       .def("preflight_regrid_on_restart", &AmrSystem::preflight_regrid_on_restart)
       .def("regrid_on_restart", &AmrSystem::regrid_on_restart)
