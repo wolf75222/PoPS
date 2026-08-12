@@ -12,6 +12,7 @@
 #include <pops/numerics/elliptic/interface/field_nullspace.hpp>
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
+#include <pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp>
 #include <pops/numerics/time/amr/levels/amr_subcycling.hpp>
 #include <pops/runtime/amr/amr_runtime.hpp>
 #include <pops/runtime/amr_system.hpp>
@@ -20,6 +21,7 @@
 #include <pops/runtime/program/amr_program_checkpoint.hpp>
 #include <pops/runtime/program/clock_schedule.hpp>
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
+#include <pops/runtime/program/prepared_tensor_boundary_session.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
 #include <pops/runtime/system/provider_storage_binding.hpp>
 
@@ -81,6 +83,7 @@ class AmrProgramContext {
   using level_evaluation_type = typename facade_type::PreparedLevelEvaluation;
   using runtime_state_type = ProgramRuntimeState<Dim>;
   using scalar_boundary_session_type = PreparedScalarBoundarySession<Dim>;
+  using tensor_boundary_session_type = PreparedTensorBoundarySession<Dim>;
   class PreparedBlockBoundarySession {
    public:
     PreparedBlockBoundarySession(const PreparedBlockBoundarySession&) = default;
@@ -167,6 +170,16 @@ class AmrProgramContext {
     std::string exact_contract;
   };
 
+  struct HierarchyTensorLevelBoundary {
+    Geometry<Dim> geometry;
+    PhysicalBoundaryConditions<Dim> conditions;
+  };
+
+  struct PreparedHierarchyTensorState {
+    std::unique_ptr<hierarchy_tensor_solver_type> solver;
+    std::vector<HierarchyTensorLevelBoundary> boundaries;
+  };
+
   class LogicalEvaluationScope {
    public:
     LogicalEvaluationScope(const AmrProgramContext& owner, int iteration, int count)
@@ -248,6 +261,21 @@ class AmrProgramContext {
   [[nodiscard]] const ExecutionLane& prepared_execution_lane() const {
     require_facade_execution_();
     return facade_->prepared_amr_multiblock_hierarchy_().lane();
+  }
+  /// Borrow the exact runtime lane as the parent authority for generated private Krylov lanes.
+  /// In MPI builds the returned communicator never owns or substitutes WORLD; it only survives the
+  /// immediate collective duplication performed by PreparedAffineLinearProblem/KrylovWorkspace.
+  /// (Serial builds have no native communicator to substitute.) Each
+  /// installed solve pays for exactly those two persistent duplicates: the problem lane owns
+  /// operator/control traffic (including this tensor session), while the workspace lane owns
+  /// Krylov reductions. Their generated shared owners retire both lanes with the installed solve.
+  [[nodiscard]] ExecutionCommunicator prepared_execution_communicator() const {
+    const ExecutionLane& lane = prepared_execution_lane();
+#ifdef POPS_HAS_MPI
+    return ExecutionCommunicator::borrowed(lane.identity(), lane.native_handle());
+#else
+    return ExecutionCommunicator::world();
+#endif
   }
   const ::pops::amr::hierarchy::LevelLayout<Dim>& layout(std::size_t selected) const {
     return runtime_->hierarchy().layout(selected);
@@ -1121,6 +1149,69 @@ class AmrProgramContext {
         new block_boundary_session_type(facade_, runtime_block, point, lane, std::move(transport)));
   }
 
+  std::shared_ptr<tensor_boundary_session_type> prepare_tensor_boundary_session(
+      int program_block, field_type& prototype,
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const ExecutionLane& lane) const {
+    const ExecutionLane& runtime_lane = prepared_execution_lane();
+    std::exception_ptr local_error;
+    int runtime_block = -1;
+    const field_type* runtime_block_owner = nullptr;
+    const HierarchyTensorLevelBoundary* provider_boundary = nullptr;
+    std::string runtime_lane_identity;
+    try {
+      if (!lane.active() || lane.identity().empty() || !runtime_lane.active() ||
+          runtime_lane.identity().empty() || !lane.congruent_with(runtime_lane))
+        throw std::invalid_argument(
+            "AMR tensor boundary preparation requires a live lane in the exact runtime rank "
+            "space");
+      runtime_lane_identity.assign(runtime_lane.identity());
+      if (!hierarchy_tensor_selection_ ||
+          hierarchy_tensor_selection_->program_block != program_block ||
+          hierarchy_tensor_selection_->components != 1 || !hierarchy_tensor_solver_ ||
+          hierarchy_tensor_solver_->execution_path() !=
+              HierarchyTensorSolverExecutionPath::PreparedKrylovFallback ||
+          hierarchy_tensor_solver_->level_count() != 1 || nlev() != 1 || active_level_ != 0 ||
+          hierarchy_tensor_topology_epoch_ != runtime_->topology_epoch() ||
+          hierarchy_tensor_materialization_generation_ != runtime_->materialization_generation() ||
+          hierarchy_tensor_boundaries_.size() != 1)
+        throw std::logic_error(
+            "AMR tensor boundary preparation requires its live one-level Krylov provider");
+      runtime_block = sys_block(program_block);
+      require_current_boundary_point_exact_(point, "AMR tensor boundary preparation");
+      if (prototype.ncomp() != 1)
+        throw std::invalid_argument("AMR tensor boundary prototype must be scalar");
+      for (int axis = 0; axis < Dim; ++axis)
+        if (prototype.ghosts()[axis] != 1)
+          throw std::invalid_argument(
+              "AMR tensor boundary prototype requires its exact one-cell ghost layout");
+      runtime_block_owner = &facade_->prepared_amr_block_state(runtime_block, active_level_);
+      require_same_layout_(prototype, *runtime_block_owner,
+                           "AMR tensor boundary prototype authority");
+      if (facade_->prepared_amr_block_level_active_mask(runtime_block, active_level_) != nullptr)
+        throw std::logic_error(
+            "AMR Cartesian tensor boundary has no embedded-boundary cut-face authority");
+      provider_boundary = &hierarchy_tensor_boundaries_.front();
+      if (provider_boundary->geometry != geometry())
+        throw std::logic_error("AMR tensor boundary provider geometry is stale");
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error("AMR tensor boundary preparation failed collectively");
+    }
+
+    return tensor_boundary_session_type::prepare(
+        provider_boundary->geometry, provider_boundary->conditions, prototype, lane,
+        next_boundary_generation_(),
+        PreparedTensorBoundaryAuthority{
+            this, runtime_, reinterpret_cast<std::uintptr_t>(runtime_block_owner),
+            std::move(runtime_lane_identity), program_block, runtime_block, active_level_,
+            runtime_->topology_epoch(), runtime_->materialization_generation()},
+        point);
+  }
+
   void fill_boundary(field_type& field) const { fill_boundary(field, prepared_execution_lane()); }
 
   void fill_boundary(field_type& field, const ExecutionLane& lane) const {
@@ -1258,12 +1349,96 @@ class AmrProgramContext {
     count_kernel_();
   }
 
-  [[noreturn]] void tensor_laplacian(field_type&, field_type&, const field_type&) const {
-    unavailable_("AMR tensor-elliptic provider");
+  void tensor_laplacian(field_type& output, field_type& input, const field_type& tensor,
+                        const tensor_boundary_session_type& boundary) const {
+    tensor_laplacian(output, input, tensor, boundary, boundary.point());
   }
-  template <class... Arguments>
-  [[noreturn]] void tensor_laplacian(Arguments&&...) const {
-    unavailable_("AMR tensor-elliptic provider");
+
+  void tensor_laplacian(field_type& output, field_type& input, const field_type& tensor,
+                        const tensor_boundary_session_type& boundary,
+                        const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    const ExecutionLane& lane = boundary.lane();
+    const ExecutionLane& runtime_lane = prepared_execution_lane();
+    std::exception_ptr local_error;
+    try {
+      if (!hierarchy_tensor_selection_ || !hierarchy_tensor_solver_ ||
+          hierarchy_tensor_selection_->components != 1 ||
+          hierarchy_tensor_topology_epoch_ != runtime_->topology_epoch() ||
+          hierarchy_tensor_materialization_generation_ != runtime_->materialization_generation() ||
+          hierarchy_tensor_solver_->execution_path() !=
+              HierarchyTensorSolverExecutionPath::PreparedKrylovFallback ||
+          hierarchy_tensor_solver_->level_count() != 1 ||
+          hierarchy_tensor_boundaries_.size() != 1 || nlev() != 1 || active_level_ != 0)
+        throw std::logic_error(
+            "AMR Program tensor Laplacian requires its prepared one-level Krylov fallback");
+
+      const int program_block = hierarchy_tensor_selection_->program_block;
+      const int runtime_block = sys_block(program_block);
+      const field_type& accepted = facade_->prepared_amr_block_state(runtime_block, active_level_);
+      const PreparedTensorBoundaryAuthority& authority = boundary.authority();
+      if (authority.program_owner != this || authority.runtime_owner != runtime_ ||
+          authority.block_owner_identity != reinterpret_cast<std::uintptr_t>(&accepted) ||
+          authority.runtime_lane_identity != runtime_lane.identity() ||
+          authority.program_block != program_block || authority.runtime_block != runtime_block ||
+          authority.level != active_level_ ||
+          authority.topology_epoch != runtime_->topology_epoch() ||
+          authority.materialization_generation != runtime_->materialization_generation() ||
+          !lane.active() || lane.identity().empty() || !runtime_lane.active() ||
+          runtime_lane.identity().empty() || !lane.congruent_with(runtime_lane) ||
+          boundary.generation() == 0)
+        throw std::invalid_argument(
+            "AMR Program tensor Laplacian received a foreign or stale prepared session");
+      const HierarchyTensorLevelBoundary& provider_boundary = hierarchy_tensor_boundaries_.front();
+      if (boundary.geometry() != provider_boundary.geometry ||
+          boundary.conditions() != provider_boundary.conditions || boundary.point() != point)
+        throw std::invalid_argument(
+            "AMR Program tensor Laplacian changed its provider boundary authority");
+      require_current_boundary_point_exact_(point, "AMR Program tensor Laplacian");
+
+      require_scalar_stencil_(output, input, 1, "AMR Program tensor Laplacian");
+      require_same_layout_(input, tensor, "AMR Program tensor Laplacian tensor");
+      if (tensor.ncomp() != Dim * Dim || output.ghosts() != input.ghosts() ||
+          tensor.ghosts() != input.ghosts())
+        throw std::invalid_argument(
+            "AMR Program tensor Laplacian requires one exact row-major Dim*Dim stencil layout");
+      for (int axis = 0; axis < Dim; ++axis)
+        if (input.ghosts()[axis] != 1)
+          throw std::invalid_argument(
+              "AMR Program tensor Laplacian requires its exact one-cell ghost layout");
+      boundary.authenticate_field(input);
+
+      require_same_layout_(output, accepted, "AMR Program tensor Laplacian output authority");
+      require_same_layout_(input, accepted, "AMR Program tensor Laplacian input authority");
+      require_same_layout_(tensor, accepted, "AMR Program tensor Laplacian tensor authority");
+      if (facade_->prepared_amr_block_level_active_mask(runtime_block, active_level_) != nullptr)
+        throw std::logic_error(
+            "AMR Cartesian tensor Laplacian has no active embedded-boundary cut-face authority");
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error("AMR Program tensor Laplacian validation failed collectively");
+    }
+
+    // Generated condensed coefficients are frozen with their allocated ghosts before Krylov. Only
+    // the iterate belongs to this prepared boundary transaction; do not refill or repack A here.
+    boundary.fill(input);
+    const Geometry<Dim>& geom = boundary.geometry();
+    for (std::size_t local = 0; local < output.local_size(); ++local) {
+      const FieldView<Real, Dim> result = output.fab(local).view();
+      const auto tensor_operator = elliptic::nd::make_cartesian_tensor_operator<
+          elliptic::nd::CartesianTensorDivergenceSign::positive_divergence>(
+          std::as_const(input.fab(local)).view(),
+          elliptic::nd::packed_cartesian_tensor_coefficients<Dim>(
+              std::as_const(tensor.fab(local)).view()),
+          geom);
+      for_each_cell(output.box(local), [=] POPS_HD(const Index<Dim>& cell) {
+        result(cell, 0) = tensor_operator.image(cell);
+      });
+    }
+    count_kernel_();
   }
 
   /// Copy one exact valid-cell component span without exposing distributed storage to generated
@@ -1608,10 +1783,10 @@ class AmrProgramContext {
       return;
     }
 
-    std::unique_ptr<hierarchy_tensor_solver_type> prepared =
-        prepare_hierarchy_tensor_solver_(*staged);
+    PreparedHierarchyTensorState prepared = prepare_hierarchy_tensor_solver_(*staged);
     hierarchy_tensor_selection_ = std::move(staged);
-    hierarchy_tensor_solver_ = std::move(prepared);
+    hierarchy_tensor_solver_ = std::move(prepared.solver);
+    hierarchy_tensor_boundaries_ = std::move(prepared.boundaries);
     hierarchy_tensor_topology_epoch_ = runtime_->topology_epoch();
     hierarchy_tensor_materialization_generation_ = runtime_->materialization_generation();
   }
@@ -1722,7 +1897,22 @@ class AmrProgramContext {
                                      KrylovWorkspace<Dim>& workspace, field_type& solution,
                                      const field_type& rhs,
                                      const KrylovControls<Dim>& controls) const {
-    require_prepared_lane_(workspace.execution_lane(), "AMR prepared linear solve");
+    const ExecutionLane& lane = workspace.execution_lane();
+    const ExecutionLane& runtime_lane = prepared_execution_lane();
+    std::exception_ptr local_error;
+    try {
+      if (!lane.active() || lane.identity().empty() || !runtime_lane.active() ||
+          runtime_lane.identity().empty() || !lane.congruent_with(runtime_lane))
+        throw std::invalid_argument(
+            "AMR prepared linear solve requires its runtime-authenticated private lane");
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error("AMR prepared linear solve lane validation failed collectively");
+    }
     return pops::solve_prepared_affine_outcome(problem, workspace, solution, rhs, controls);
   }
 
@@ -3632,6 +3822,9 @@ class AmrProgramContext {
                              "': " + std::string(detail));
   }
 
+  /// Provider-owned physical law used by both the authenticated build request and the generated
+  /// flat Krylov boundary session. Keep one retained instance per prepared level; consumers never
+  /// reconstruct this law from topology alone.
   PhysicalBoundaryConditions<Dim> hierarchy_tensor_boundary_(const Geometry<Dim>& geometry) const {
     const BoundaryTopology<Dim> topology = facade_->prepared_amr_boundary_topology();
     std::array<PhysicalBoundaryFace, static_cast<std::size_t>(2 * Dim)> faces{};
@@ -3648,9 +3841,10 @@ class AmrProgramContext {
     return PhysicalBoundaryConditions<Dim>{topology, faces, spacing};
   }
 
-  std::unique_ptr<hierarchy_tensor_solver_type> prepare_hierarchy_tensor_solver_(
+  PreparedHierarchyTensorState prepare_hierarchy_tensor_solver_(
       const HierarchyTensorSelection& selection) const {
     hierarchy_tensor_request_type request;
+    std::vector<HierarchyTensorLevelBoundary> boundaries;
     std::exception_ptr local_error;
     long local_failure = 0;
     try {
@@ -3665,15 +3859,17 @@ class AmrProgramContext {
       request.solution_field_slot = selection.solution_field_slot;
       request.options = selection.options;
       request.levels.reserve(runtime_->hierarchy().num_levels());
+      boundaries.reserve(runtime_->hierarchy().num_levels());
       if (runtime_->hierarchy().num_levels() > 1)
         request.ratios.reserve(runtime_->hierarchy().num_levels() - 1);
       for (std::size_t level = 0; level < runtime_->hierarchy().num_levels(); ++level) {
         const field_type& level_state = runtime_->hierarchy().state(level);
         const Geometry<Dim> level_geometry =
             facade_->prepared_amr_level_geometry(static_cast<int>(level));
-        request.levels.push_back({level_geometry, hierarchy_tensor_boundary_(level_geometry),
-                                  level_state.layout(), level_state.distribution(),
-                                  level_state.local_rank()});
+        const PhysicalBoundaryConditions<Dim> boundary = hierarchy_tensor_boundary_(level_geometry);
+        request.levels.push_back({level_geometry, boundary, level_state.layout(),
+                                  level_state.distribution(), level_state.local_rank()});
+        boundaries.push_back({level_geometry, boundary});
         if (level != 0)
           request.ratios.push_back(runtime_->hierarchy().layout(level).ratio_from_parent());
       }
@@ -3688,8 +3884,10 @@ class AmrProgramContext {
       throw std::runtime_error(
           "AMR hierarchy tensor request construction failed on another MPI rank");
     }
-    return prepare_hierarchy_tensor_solver_collectively(
-        *hierarchy_tensor_solver_registry_, selection.provider_identity, std::move(request), lane);
+    return {prepare_hierarchy_tensor_solver_collectively(*hierarchy_tensor_solver_registry_,
+                                                         selection.provider_identity,
+                                                         std::move(request), lane),
+            std::move(boundaries)};
   }
 
   hierarchy_tensor_solver_type& configured_hierarchy_tensor_solver_() const {
@@ -3700,9 +3898,10 @@ class AmrProgramContext {
     if (!hierarchy_tensor_solver_ ||
         hierarchy_tensor_topology_epoch_ != runtime_->topology_epoch() ||
         hierarchy_tensor_materialization_generation_ != runtime_->materialization_generation()) {
-      std::unique_ptr<hierarchy_tensor_solver_type> prepared =
+      PreparedHierarchyTensorState prepared =
           prepare_hierarchy_tensor_solver_(*hierarchy_tensor_selection_);
-      hierarchy_tensor_solver_ = std::move(prepared);
+      hierarchy_tensor_solver_ = std::move(prepared.solver);
+      hierarchy_tensor_boundaries_ = std::move(prepared.boundaries);
       hierarchy_tensor_topology_epoch_ = runtime_->topology_epoch();
       hierarchy_tensor_materialization_generation_ = runtime_->materialization_generation();
     }
@@ -4119,6 +4318,21 @@ class AmrProgramContext {
       throw std::invalid_argument(std::string(operation) + " has a foreign evaluation point");
   }
 
+  void require_current_boundary_point_exact_(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, std::string_view operation) const {
+    require_rate_identity_(point.stage);
+    const double physical_time = current_interval_start_time_ + stage_time_.value() * current_dt_;
+    if (primary_clock_.empty() || !std::isfinite(current_dt_) || !(current_dt_ > 0.0) ||
+        point.clock != primary_clock_ ||
+        point.tick != static_cast<std::int64_t>(facade_->macro_step()) ||
+        point.level != active_level_ || point.substep != logical_substep_ ||
+        point.stage_fraction != stage_time_ || point.dt != current_dt_ ||
+        point.physical_time != physical_time || !point.graph_identity.empty() ||
+        !point.rate_identity.empty() || !point.application_identity.empty())
+      throw std::invalid_argument(std::string(operation) +
+                                  " has a stale or foreign exact evaluation point");
+  }
+
   const field_type* staged_parent_for_block_(int runtime_block) const {
     if (runtime_block < 0)
       throw std::out_of_range("AMR Program staged-parent block is out of range");
@@ -4256,6 +4470,7 @@ class AmrProgramContext {
   std::shared_ptr<const hierarchy_tensor_registry_type> hierarchy_tensor_solver_registry_;
   mutable std::optional<HierarchyTensorSelection> hierarchy_tensor_selection_;
   mutable std::unique_ptr<hierarchy_tensor_solver_type> hierarchy_tensor_solver_;
+  mutable std::vector<HierarchyTensorLevelBoundary> hierarchy_tensor_boundaries_;
   mutable std::uint64_t hierarchy_tensor_topology_epoch_ =
       std::numeric_limits<std::uint64_t>::max();
   mutable std::uint64_t hierarchy_tensor_materialization_generation_ =

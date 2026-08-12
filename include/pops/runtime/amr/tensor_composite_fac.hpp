@@ -14,6 +14,7 @@
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/numerics/elliptic/amr/partitioned_region_transfer.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
+#include <pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp>
 #include <pops/parallel/execution_lane.hpp>
 
 #include <Kokkos_Core.hpp>
@@ -228,79 +229,10 @@ struct MaskKernel {
   }
 };
 
-POPS_HD inline Real harmonic(Real left, Real right) {
-  const Real denominator = left + right;
-  return denominator != Real(0) ? Real(2) * left * right / denominator : Real(0);
-}
-
 template <int Dim>
-struct TensorStencil {
-  FieldView<const Real, Dim> phi{};
-  std::array<FieldView<const Real, Dim>, static_cast<std::size_t>(Dim* Dim)> coefficient{};
-  RealVector<Dim> inverse_dx{};
-
-  POPS_HD Real image(const Index<Dim>& cell) const {
-    Real value = Real(0);
-    for (int row = 0; row < Dim; ++row) {
-      Index<Dim> minus = cell;
-      Index<Dim> plus = cell;
-      --minus[row];
-      ++plus[row];
-      Real flux_plus = Real(0);
-      Real flux_minus = Real(0);
-      for (int column = 0; column < Dim; ++column) {
-        const auto& a = coefficient[static_cast<std::size_t>(row * Dim + column)];
-        const Real a_plus = row == column ? harmonic(a(cell, 0), a(plus, 0))
-                                          : Real(0.5) * (a(cell, 0) + a(plus, 0));
-        const Real a_minus = row == column ? harmonic(a(minus, 0), a(cell, 0))
-                                           : Real(0.5) * (a(minus, 0) + a(cell, 0));
-        Real gradient_plus = Real(0);
-        Real gradient_minus = Real(0);
-        if (row == column) {
-          gradient_plus = (phi(plus, 0) - phi(cell, 0)) * inverse_dx[column];
-          gradient_minus = (phi(cell, 0) - phi(minus, 0)) * inverse_dx[column];
-        } else {
-          Index<Dim> cell_minus = cell;
-          Index<Dim> cell_plus = cell;
-          Index<Dim> plus_minus = plus;
-          Index<Dim> plus_plus = plus;
-          Index<Dim> minus_minus = minus;
-          Index<Dim> minus_plus = minus;
-          --cell_minus[column];
-          ++cell_plus[column];
-          --plus_minus[column];
-          ++plus_plus[column];
-          --minus_minus[column];
-          ++minus_plus[column];
-          gradient_plus =
-              (phi(cell_plus, 0) - phi(cell_minus, 0) + phi(plus_plus, 0) - phi(plus_minus, 0)) *
-              (Real(0.25) * inverse_dx[column]);
-          gradient_minus =
-              (phi(minus_plus, 0) - phi(minus_minus, 0) + phi(cell_plus, 0) - phi(cell_minus, 0)) *
-              (Real(0.25) * inverse_dx[column]);
-        }
-        flux_plus += a_plus * gradient_plus;
-        flux_minus += a_minus * gradient_minus;
-      }
-      value -= (flux_plus - flux_minus) * inverse_dx[row];
-    }
-    return value;
-  }
-
-  POPS_HD Real diagonal(const Index<Dim>& cell) const {
-    Real value = Real(0);
-    for (int axis = 0; axis < Dim; ++axis) {
-      Index<Dim> minus = cell;
-      Index<Dim> plus = cell;
-      --minus[axis];
-      ++plus[axis];
-      const auto& a = coefficient[static_cast<std::size_t>(axis * Dim + axis)];
-      value += (harmonic(a(minus, 0), a(cell, 0)) + harmonic(a(cell, 0), a(plus, 0))) *
-               inverse_dx[axis] * inverse_dx[axis];
-    }
-    return value;
-  }
-};
+using TensorStencil = elliptic::nd::CartesianTensorOperator<
+    Dim, elliptic::nd::CartesianTensorDivergenceSign::negative_divergence,
+    elliptic::nd::SplitCartesianTensorCoefficients<Dim>>;
 
 template <int Dim>
 struct ResidualKernel {
@@ -1209,15 +1141,16 @@ class FullTensorCompositeFac {
 
   detail::TensorStencil<Dim> stencil_(const Level& level, std::size_t local,
                                       const field_type& field) const {
-    detail::TensorStencil<Dim> stencil;
-    stencil.phi = std::as_const(field.fab(local)).view();
+    std::array<FieldView<const Real, Dim>, static_cast<std::size_t>(Dim * Dim)> coefficients{};
     for (std::size_t coefficient = 0; coefficient < static_cast<std::size_t>(Dim * Dim);
          ++coefficient)
-      stencil.coefficient[coefficient] =
+      coefficients[coefficient] =
           std::as_const(level.binding.coefficients[coefficient]->fab(local)).view();
-    for (int axis = 0; axis < Dim; ++axis)
-      stencil.inverse_dx[axis] = Real(1) / level.binding.geometry->spacing(axis);
-    return stencil;
+    return elliptic::nd::make_cartesian_tensor_operator<
+        elliptic::nd::CartesianTensorDivergenceSign::negative_divergence>(
+        std::as_const(field.fab(local)).view(),
+        elliptic::nd::split_cartesian_tensor_coefficients<Dim>(coefficients),
+        *level.binding.geometry);
   }
 
   void smooth_(std::size_t level_index, field_type& iterate, const field_type& rhs, int sweeps,

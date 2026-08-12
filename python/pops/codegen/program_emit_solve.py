@@ -659,6 +659,39 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             "pops::PureFieldAlgebra::copy(*%s, %s);" % (r0, var[r0_in.id]))
         if coupled_jacvec is None or w is coupled_pair[0]:
             prepare_refresh.append("*%s = %s;" % (cdt, _coeff_cpp(w.attrs["c_dt"])))
+    tensor_ops = [w for w in block if w.op == "apply_laplacian_coeff"]
+    tensor_boundary = None
+    tensor_point = None
+    if tensor_ops and target == "amr_system":
+        indices = program._block_indices()
+        tensor_blocks = {
+            indices[w.inputs[2].block]
+            for w in tensor_ops
+            if w.inputs[2].block in indices
+        }
+        if len(tensor_blocks) != 1 or any(
+            w.inputs[2].block not in indices for w in tensor_ops
+        ):
+            raise ValueError(
+                "AMR tensor apply requires one exact owner-qualified Program block"
+            )
+        tensor_block_idx = next(iter(tensor_blocks))
+        tensor_point = "tensor_point%d" % apply_id
+        prelude.append(
+            "auto %s = std::make_shared<"
+            "pops::runtime::multiblock::BoundaryEvaluationPoint>();" % tensor_point
+        )
+        captures.append(tensor_point)
+        session_points.append(tensor_point)
+        tensor_boundary = "operator_tensor_boundary_session%d" % apply_id
+        session_dynamic.append(
+            (
+                tensor_boundary,
+                "ctx_owner->prepare_tensor_boundary_session(%d, *session_%s, "
+                "*session_%s, lane)" % (tensor_block_idx, acc_sp, tensor_point),
+            )
+        )
+        var[("operator_tensor_point", apply_id)] = tensor_point
     boundary_sessions = {}
     for block_idx in (() if coupled_jacvec is not None else
                       sorted({entry[-2] for entry in jac_scratch.values()})):
@@ -672,9 +705,9 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
              "ctx_owner->prepare_block_boundary_session(%d, *session_%s, "
              "*session_%s, lane)" % (block_idx, prototype, preparation_point)))
         boundary_sessions[block_idx] = name
-    stencil_ops = {
-        "laplacian", "gradient", "divergence", "apply_laplacian_coeff",
-    }
+    stencil_ops = {"laplacian", "gradient", "divergence"}
+    if target != "amr_system":
+        stencil_ops.add("apply_laplacian_coeff")
     has_stencil = any(w.op in stencil_ops for w in block)
     stencil_boundary = None
     stencil_point = None
@@ -725,10 +758,12 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             o, i, coeffs = w.inputs
             tensor = frozen_coefficients[var[coeffs.id]]
             sub[w.id] = sub[o.id]
-            point_arg = ", *%s" % stencil_point if stencil_point else ""
+            boundary = tensor_boundary or stencil_boundary
+            point = tensor_point if tensor_boundary else stencil_point
+            point_arg = ", *%s" % point if point else ""
             body.append("ctx.tensor_laplacian(*%s, %s, *%s, *%s%s);"
                         % (sub[o.id], _apply_in_arg(sub, i), tensor,
-                           stencil_boundary, point_arg))
+                           boundary, point_arg))
         elif w.op == "rhs_jacvec":
             if coupled_jacvec is not None:
                 sub[w.id] = sub[w.inputs[0].id]
@@ -948,6 +983,10 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         local = "session_%s" % name
         prelude.append("  auto %s = %s;" % (local, expression))
         session_capture_initializers.append("%s = %s" % (name, local))
+    if tensor_boundary is not None:
+        session_refresh.append(
+            "%s->refresh_point(*%s);" % (tensor_boundary, tensor_point)
+        )
     allocation_terms = ["std::size_t{%d}" % len(session_fields)]
     allocation_terms.extend(
         "(%s ? std::size_t{1} : std::size_t{0})" % name
@@ -1236,22 +1275,39 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     if not isinstance(freeze_expr, str):
         raise ValueError("matrix-free operator has no prepared resource contract")
     vector_distribution_arg = ", " + vector_distribution_expr
+    problem_authority_args = ""
+    workspace_authority_args = ""
+    if target == "amr_system":
+        communicator_name = "prepared_krylov_communicator%d" % v.id
+        prelude.append(
+            "const auto %s = ctx.prepared_execution_communicator();"
+            % communicator_name
+        )
+        problem_authority_args = (
+            "%s, \"pops.program.amr.prepared-problem.%d\", "
+            % (communicator_name, int(v.id))
+        )
+        workspace_authority_args = (
+            "%s, \"pops.program.amr.krylov-workspace.%d\", "
+            % (communicator_name, int(v.id))
+        )
     prelude.append(
         "auto %s = "
         "std::make_shared<pops::PreparedAffineLinearProblem<pops::kNativeDimension>>("
-        "*%s, %s, %s, %s, %s, %s, "
+        "%s*%s, %s, %s, %s, %s, %s, "
         "[ctx_owner, %s]() { "
         "return ctx_owner->probe_operator_evaluation({%s}, %s->topology, {%s}, %s->revision); }, "
         "%s%s);"
-        % (problem_name, sol_sp, lam, preconditioner_expr, properties_expr, footprint_name,
+        % (problem_name, problem_authority_args, sol_sp, lam, preconditioner_expr,
+           properties_expr, footprint_name,
            nullspace_policy_expr,
            snapshot_name, authority_cpp, snapshot_name, resources_cpp, snapshot_name,
            freeze_expr, vector_distribution_arg))
     workspace_name = "krylov_workspace%d" % v.id
     prelude.append(
         "auto %s = std::make_shared<pops::KrylovWorkspace<pops::kNativeDimension>>("
-        "*%s, %s, %s%s);"
-        % (workspace_name, sol_sp, method_expr, footprint_name,
+        "%s*%s, %s, %s%s);"
+        % (workspace_name, workspace_authority_args, sol_sp, method_expr, footprint_name,
            vector_distribution_arg))
     controls_name = "krylov_controls%d" % v.id
     prelude.append(
@@ -1267,6 +1323,13 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     solve_stage = _solve_stage_fraction(v)
     lines.append("ctx.set_stage_time(%d, %d);" %
                  (solve_stage.numerator, solve_stage.denominator))
+    tensor_point = var.get(("operator_tensor_point", op_value.id))
+    if tensor_point is not None:
+        if not isinstance(tensor_point, str) or target != "amr_system":
+            raise ValueError("matrix-free tensor boundary point is not AMR-authenticated")
+        lines.append(
+            "*%s = ctx.boundary_evaluation_point(%d);" % (tensor_point, int(v.id))
+        )
     for capture in dt_captures:
         lines.append("*%s = static_cast<pops::Real>(dt);" % capture)
     lines.append(
