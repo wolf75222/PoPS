@@ -27,7 +27,7 @@ def _load_runner():
 def test_m2_manifest_references_only_real_mandatory_proofs():
     data, errors = _load_runner().validate_manifest(MANIFEST)
     assert not errors, "M2 gate matrix is incomplete:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 40
+    assert len(data["check"]) == 42
 
 
 def test_m2_final_gate_has_no_deferred_requirement():
@@ -235,7 +235,7 @@ def test_m2_restart_hierarchy_and_program_only_routes_use_real_exact_proofs():
         "tests/python/architecture/test_program_only_temporal_facades.py"
         "::test_amr_temporal_facades_use_amr_runtime_only_as_the_spatial_engine",
         "tests/python/architecture/test_program_only_temporal_facades.py"
-        "::test_static_system_temporal_driver_is_test_only",
+        "::test_static_system_assembler_is_retired_from_the_final_runtime_surface",
         "tests/python/architecture/test_program_only_temporal_facades.py"
         "::test_nonlinear_amr_semantics_use_the_compiled_program_not_a_blocker",
         "tests/python/architecture/test_program_only_temporal_facades.py"

@@ -1,5 +1,9 @@
 /// @file
-/// @brief Source-built exact-ranked AMR IMEX trajectory through PreparedAmrSystemBlock.
+/// @brief Synthetic source-built Program loader and AMR transaction artifact.
+///
+/// Its DSO body is deliberately authored in this C++ fixture to exercise loader ABI/hash/budget
+/// authentication and hierarchy retry/rollback/publication.  It is not evidence for a user-authored
+/// Python Program, its tableau, or temporal composition semantics.
 
 #include <gtest/gtest.h>
 
@@ -33,11 +37,12 @@
 namespace {
 
 constexpr int Dim = pops::kNativeDimension;
-constexpr std::uint32_t kInjectedRetryReason = 0x494d4558u;
+constexpr std::uint32_t kSyntheticLoaderRetryReason = 0x534C5452u;
 constexpr const char* kBlock = "tracer";
-constexpr const char* kStateRoute = "tests.amr-imex/state/tracer";
-constexpr const char* kProviderConsumer = "tests.amr-imex/providers/tracer";
-constexpr const char* kImexProgramHash = "tests.amr-imex/program/imex-v1";
+constexpr const char* kStateRoute = "tests.synthetic-loader/state/tracer";
+constexpr const char* kProviderConsumer = "tests.synthetic-loader/providers/tracer";
+constexpr const char* kSyntheticLoaderProgramHash =
+    "tests.synthetic-loader/program/loader-transaction-v1";
 
 std::size_t cell_count(const pops::Extent<Dim>& shape) {
   std::size_t count = 1;
@@ -113,7 +118,7 @@ struct RelaxingAdvection {
   Law law{};
   pops::Real decay = pops::Real(0);
   static pops::PreparedProviderIdentity provider_identity() noexcept {
-    return {"test.amr-imex.relaxing-advection", 1};
+    return {"test.synthetic-loader.relaxing-advection", 1};
   }
   void serialize_exact_parameters(pops::ExactContractBuilder& contract) const {
     for (int axis = 0; axis < Dim; ++axis) contract.scalar(law.velocity()[axis]);
@@ -174,13 +179,15 @@ extern "C" void pops_install_native_amr(void* sys, const char* name, const char*
   auto* system = static_cast<pops::AmrSystem<pops::kNativeDimension>*>(sys);
   pops::add_compiled_model<pops::kNativeDimension>(
       *system, name, model, limiter, riemann, recon, time, gamma, substeps, 1, {}, {}, pos_floor,
-      weno_epsilon, wave_speed_cache, "tests.amr-imex/providers/tracer");
+      weno_epsilon, wave_speed_cache, "tests.synthetic-loader/providers/tracer");
 }
 
 extern "C" const char* pops_program_abi_key() { return POPS_ABI_KEY_LITERAL; }
 extern "C" const char* pops_program_route_manifest() { return pops::kRouteRegistrySignature; }
-extern "C" const char* pops_program_name() { return "source-built-amr-imex"; }
-extern "C" const char* pops_program_hash() { return "tests.amr-imex/program/imex-v1"; }
+extern "C" const char* pops_program_name() { return "source-built-synthetic-loader-transaction"; }
+extern "C" const char* pops_program_hash() {
+  return "tests.synthetic-loader/program/loader-transaction-v1";
+}
 extern "C" int pops_program_operator_authority_count() { return 0; }
 extern "C" std::uint64_t pops_program_operator_authority_word(int, int) { return 0; }
 extern "C" int pops_program_block_count() { return 1; }
@@ -212,7 +219,7 @@ extern "C" int pops_program_checkpoint_history_depth(int) { return 0; }
 extern "C" int pops_program_checkpoint_history_components(int) { return 0; }
 extern "C" int pops_program_checkpoint_logical_clock_count() { return 1; }
 extern "C" const char* pops_program_checkpoint_logical_clock_identity(int clock) {
-  return clock == 0 ? "tests.amr-imex.clock" : "";
+  return clock == 0 ? "tests.synthetic-loader.clock" : "";
 }
 extern "C" const char* pops_program_checkpoint_temporal_provider_identity() {
   return "pops.temporal-partition.global@1";
@@ -241,7 +248,7 @@ extern "C" void pops_install_program_amr(
     pops::AmrSystem<pops::kNativeDimension>* system) {
   auto context = pops::runtime::program::make_program_execution_provider(system);
   auto inject_retry = std::make_shared<bool>(true);
-  context->configure_primary_clock("tests.amr-imex.clock");
+  context->configure_primary_clock("tests.synthetic-loader.clock");
   context->install(
       [context, inject_retry](double macro_dt) {
         context->advance_hierarchy(macro_dt, [context, inject_retry](double level_dt) {
@@ -261,8 +268,8 @@ extern "C" void pops_install_program_amr(
             *inject_retry = false;
             throw pops::runtime::program::StepAttemptRejected(
                 pops::SolveStatus::kIterationLimit,
-                pops::runtime::program::StepAttemptDisposition::kRetry, UINT32_C(0x494d4558),
-                "implicit-source", "injected-source-built-artifact-retry");
+                pops::runtime::program::StepAttemptDisposition::kRetry, UINT32_C(0x534C5452),
+                "implicit-source", "injected-synthetic-loader-transaction-retry");
           }
           context->commit_many({{&accepted, &candidate}});
         });
@@ -279,8 +286,8 @@ extern "C" void pops_install_program_amr(
 void build_refined_system(pops::AmrSystem<Dim>& system, const std::string& shared_object,
                           const std::vector<double>& state) {
   system.install_block_state_route(kBlock, kStateRoute);
-  system.add_native_block(kBlock, shared_object, "minmod", "rusanov", "conservative", "imex", 1.4,
-                          1);
+  system.add_native_block(kBlock, shared_object, "minmod", "rusanov", "conservative", "explicit",
+                          1.4, 1);
   system.set_temporal_relations({2}, {1}, {"integral_only"});
   system.bind_bootstrap_subject(kStateRoute, kBlock, "bound_level_zero");
   system.stage_bootstrap_array(kStateRoute, kBlock, "cell", "cell", 1, system.spatial_shape(),
@@ -292,11 +299,11 @@ void build_refined_system(pops::AmrSystem<Dim>& system, const std::string& share
     refinement_ratio[axis] = 2;
   }
   system.register_bootstrap_transfer_route(
-      "tests.amr-imex/bootstrap/prolongation", {kStateRoute}, "tests.amr-imex/bootstrap/provider",
-      "cell", "cell", "conservative", "dense", "prolongation", "conservative_linear", 2,
-      transfer_ghosts, refinement_ratio);
+      "tests.synthetic-loader/bootstrap/prolongation", {kStateRoute},
+      "tests.synthetic-loader/bootstrap/provider", "cell", "cell", "conservative", "dense",
+      "prolongation", "conservative_linear", 2, transfer_ghosts, refinement_ratio);
   pops::test::install_prepared_threshold_union(system, {{kBlock, "u", 1.03}},
-                                               "tests.amr-imex.tagging@1");
+                                               "tests.synthetic-loader.tagging@1");
   // The real loader authenticates the Program block table, hash and four flux-expression budget
   // symbols before it calls the artifact installer and materializes the hierarchy.
   system.install_program(shared_object);
@@ -305,7 +312,7 @@ void build_refined_system(pops::AmrSystem<Dim>& system, const std::string& share
                                             "bound_level_zero", 0);
   if (!system.bootstrap_next_level()) {
     system.rollback_bootstrap_level();
-    throw std::runtime_error("native IMEX fixture did not create its refined level");
+    throw std::runtime_error("synthetic loader fixture did not create its refined level");
   }
   (void)system.materialize_bootstrap_action(kStateRoute, "prolong_from_parent",
                                             "conservative_linear", 1);
@@ -341,13 +348,14 @@ double max_departure_from_equilibrium(const std::vector<double>& values) {
 
 }  // namespace
 
-TEST(test_amr_imex_native, SourceBuiltArtifactLoadsBudgetRollsBackAndRetries) {
+TEST(test_amr_synthetic_program_loader_transaction,
+     SourceBuiltArtifactLoadsBudgetRollsBackAndRetries) {
 #if defined(POPS_HAS_KOKKOS)
   int argc = 0;
   char** argv = nullptr;
   Kokkos::ScopeGuard guard(argc, argv);
 #endif
-  const std::string stem = std::string(POPS_TEST_TMPDIR) + "/amr_imex_native_" +
+  const std::string stem = std::string(POPS_TEST_TMPDIR) + "/amr_synthetic_loader_" +
                            std::to_string(pops::my_rank()) + "_" +
                            std::to_string(static_cast<long>(std::clock()));
   const std::string source_path = stem + ".cpp";
@@ -358,8 +366,9 @@ TEST(test_amr_imex_native, SourceBuiltArtifactLoadsBudgetRollsBackAndRetries) {
   }
   const auto package = pops::test::native_dso::compile_shared(source_path, shared_object);
   if (!package.ok) {
-    pops::test::native_dso::report_compile_failure("test_amr_imex_native", package);
-    FAIL() << "source-built AMR IMEX artifact did not compile";
+    pops::test::native_dso::report_compile_failure("test_amr_synthetic_program_loader_transaction",
+                                                   package);
+    FAIL() << "synthetic source-built AMR loader transaction artifact did not compile";
   }
 
   const auto system_config = config();
@@ -370,9 +379,9 @@ TEST(test_amr_imex_native, SourceBuiltArtifactLoadsBudgetRollsBackAndRetries) {
   build_refined_system(continuous, shared_object, initial);
   ASSERT_EQ(continuous.n_levels(), 2);
   ASSERT_GT(continuous.n_patches(), 0);
-  EXPECT_EQ(continuous.installed_program_hash(), kImexProgramHash);
+  EXPECT_EQ(continuous.installed_program_hash(), kSyntheticLoaderProgramHash);
   const auto& budget = continuous.prepared_amr_program_flux_expression_budget();
-  EXPECT_EQ(budget.program_hash, kImexProgramHash);
+  EXPECT_EQ(budget.program_hash, kSyntheticLoaderProgramHash);
   ASSERT_EQ(budget.blocks.size(), 1u);
   ASSERT_EQ(budget.program_block_map.canonical_indices.size(), 1u);
   EXPECT_EQ(budget.program_block_map.canonical_indices[0], 0u);
@@ -387,7 +396,7 @@ TEST(test_amr_imex_native, SourceBuiltArtifactLoadsBudgetRollsBackAndRetries) {
     FAIL() << "the injected implicit-source retry was not surfaced";
   } catch (const pops::runtime::program::StepAttemptRejected& rejected) {
     EXPECT_EQ(rejected.disposition(), pops::runtime::program::StepAttemptDisposition::kRetry);
-    EXPECT_EQ(rejected.reason_code(), kInjectedRetryReason);
+    EXPECT_EQ(rejected.reason_code(), kSyntheticLoaderRetryReason);
     EXPECT_EQ(rejected.phase(), "implicit-source");
   }
   EXPECT_EQ(continuous.macro_step(), 0);

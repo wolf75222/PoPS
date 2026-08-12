@@ -618,9 +618,9 @@ pops_test_source(_src test_amr_riemann_native)
 pops_native_loader_definitions(_native_defs)
 pops_add_gtest_suite(NAME test_amr_riemann_native SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
 
-pops_test_source(_src test_amr_imex_native)
+pops_test_source(_src test_amr_synthetic_program_loader_transaction)
 pops_native_loader_definitions(_native_defs)
-pops_add_gtest_suite(NAME test_amr_imex_native SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
+pops_add_gtest_suite(NAME test_amr_synthetic_program_loader_transaction SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
 
 pops_test_source(_src test_amr_system_contract)
 pops_add_gtest_suite(NAME test_amr_system_contract SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
@@ -643,8 +643,8 @@ pops_add_gtest_suite(NAME test_amr_multiblock_coupled_source SOURCES "${_src}" E
 pops_test_source(_src test_amr_coupled_source_role_strict)
 pops_add_gtest_suite(NAME test_amr_coupled_source_role_strict SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
-pops_test_source(_src test_amr_multiblock_imex)
-pops_add_gtest_suite(NAME test_amr_multiblock_imex SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+pops_test_source(_src test_amr_multiblock_implicit_transaction)
+pops_add_gtest_suite(NAME test_amr_multiblock_implicit_transaction SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
 pops_test_source(_src test_amr_multiblock_regrid_union)
 pops_add_gtest_suite(NAME test_amr_multiblock_regrid_union SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)

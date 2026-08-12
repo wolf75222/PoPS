@@ -667,8 +667,16 @@ must place both the transport and the typed implicit primitive explicitly; the s
 runtime does not infer that split. Validation:
 `test_imex_ap` (AP property on a stiff linear relaxation source),
 `test_ap_limit` (quantified AP limit, stiffness sweep over 8 decades at fixed `dt`),
-`test_implicit_source_nd` plus `test_amr_imex_native` (typed partial/transport composition), and
-`test_newton_robustness` plus `test_mpi_field_plan_consensus` (exact first-failure selection across
+`test_implicit_source_nd` (native implicit kernel),
+`test_amr_synthetic_program_loader_transaction` (synthetic source-built loader ABI/hash/budget and
+transaction artifact), and `test_amr_multiblock_implicit_transaction` (atomic two-block implicit
+solve/retry/commit and no hidden integrator) are C++ kernel/loader/transaction proofs. They do not
+qualify Program tableau or temporal composition. The Python-authored, compiled refined-AMR route is
+proved by
+`test_amr_newton_full.py::test_nonlinear_local_imex_executes_on_the_refined_amr_program` and
+`test_amr_newton_full.py::test_nonlinear_local_imex_failrun_rolls_back_refined_amr_attempt`
+(temporal composition and rollback). `test_newton_robustness` plus
+`test_mpi_field_plan_consensus` prove exact first-failure selection across
 large signed indices, including fatal-over-recoverable precedence between ranks).
 
 
