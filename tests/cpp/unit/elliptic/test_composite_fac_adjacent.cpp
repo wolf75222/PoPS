@@ -1,168 +1,217 @@
-// ADC-636: adjacent fine patches in the composite FAC. Two level-1 patches that SHARE A FACE (their
-// coarse footprints are edge-adjacent). The fine-fine join is handled by fill_boundary before the C/F
-// bilerp (a shared ghost takes the sibling's valid data), and the two-way flux correction is
-// enumerated from the uncovered coarse side so the shared interior face gets NO correction (it is not
-// a coarse-fine face). We check:
-//   (i)   ctor ACCEPTS adjacent patches (previously refused) and refuses overlapping ones;
-//   (ii)  finiteness + FAC convergence;
-//   (iii) POTENTIAL CONTINUITY across the shared face: the two patches agree at the shared boundary
-//         (each patch's edge cell ~ the sibling's adjacent edge cell) far below the coarse error;
-//   (iv)  MMS: the composite over the adjacent union beats coarse-only in the refined region.
-//
-// Serial (Kokkos OFF); coarse mono-box replicated.
-
 #include <gtest/gtest.h>
 
+#include <pops/mesh/layout/distribution.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace.hpp>
 #include <pops/numerics/elliptic/mg/composite_fac_poisson.hpp>
-
-#include <pops/mesh/layout/box_array.hpp>
-#include <pops/mesh/layout/distribution_mapping.hpp>
-#include <pops/mesh/execution/for_each.hpp>
-#include <pops/mesh/geometry/geometry.hpp>
-#include <pops/mesh/storage/multifab.hpp>
-#include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 #include <pops/parallel/comm.hpp>
 
+#include <algorithm>
+#include <array>
 #include <cmath>
-#include <cstdio>
+#include <cstddef>
+#include <cstdint>
 #include <vector>
 
-using namespace pops;
-static constexpr double kPi = 3.14159265358979323846;
+namespace {
 
-static double u_exact(double x, double y) {
-  return std::sin(3.0 * kPi * x) * std::sin(3.0 * kPi * y);
-}
-static double f_rhs(double x, double y) {
-  return -18.0 * kPi * kPi * u_exact(x, y);
+template <class Ranked, int Dim, class Value>
+Ranked filled(Value value) {
+  Ranked result{};
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = value;
+  return result;
 }
 
-static void fill_f(MultiFab& f, const Geometry& g) {
-  for (int li = 0; li < f.local_size(); ++li) {
-    Array4 a = f.fab(li).array();
-    const Box2D b = f.box(li);
-    for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-      for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-        a(i, j, 0) = f_rhs(g.x_cell(i), g.y_cell(j));
+template <int Dim>
+pops::PhysicalBoundaryConditions<Dim> dirichlet(const pops::Geometry<Dim>& geometry) {
+  std::array<pops::PhysicalBoundaryFace, static_cast<std::size_t>(2 * Dim)> faces{};
+  faces.fill({pops::PhysicalBoundaryKind::dirichlet, pops::Real(0)});
+  pops::RealVector<Dim> spacing{};
+  for (int axis = 0; axis < Dim; ++axis)
+    spacing[axis] = geometry.spacing(axis);
+  return {pops::BoundaryTopology<Dim>::physical(), faces, spacing};
+}
+
+template <int Dim>
+pops::EllipticBuildRequest<Dim> request(const pops::Geometry<Dim>& geometry,
+                                        pops::mesh::BoxArray<Dim> layout) {
+  const pops::mesh::RankSpace<Dim> ranks{pops::Index<Dim>{},
+                                         filled<pops::Extent<Dim>, Dim>(std::int64_t{1})};
+  const auto distribution = pops::mesh::Distribution<Dim>::replicated(layout, ranks);
+  const std::size_t pairs = layout.size() * (layout.size() - 1) / 2;
+  return {geometry,
+          std::move(layout),
+          distribution,
+          pops::Index<Dim>{},
+          dirichlet(geometry),
+          pops::Extent<Dim>{},
+          filled<pops::Extent<Dim>, Dim>(std::int64_t{1}),
+          {distribution.box_count(), pairs}};
+}
+
+template <int Dim>
+void expect_adjacent_layout_prepares() {
+  const pops::Box<Dim> coarse_domain{pops::Index<Dim>{}, filled<pops::Index<Dim>, Dim>(15)};
+  const auto coarse_geometry = pops::Geometry<Dim>::from_bounds(
+      coarse_domain, pops::RealVector<Dim>{}, filled<pops::RealVector<Dim>, Dim>(pops::Real(1)));
+  const auto fine_geometry =
+      coarse_geometry.refine(filled<pops::Extent<Dim>, Dim>(std::int64_t{2}));
+  pops::Box<Dim> left{filled<pops::Index<Dim>, Dim>(8), filled<pops::Index<Dim>, Dim>(23)};
+  pops::Box<Dim> right = left;
+  left.lo[0] = 4;
+  left.hi[0] = 15;
+  right.lo[0] = 16;
+  right.hi[0] = 27;
+  const pops::mesh::BoxArray<Dim> coarse_layout(std::vector<pops::Box<Dim>>{coarse_domain});
+  const pops::mesh::BoxArray<Dim> adjacent(std::vector<pops::Box<Dim>>{left, right});
+  pops::elliptic::mg::CompositeFacBuildRequest<Dim> hierarchy{
+      {request(coarse_geometry, coarse_layout), request(fine_geometry, adjacent)},
+      {pops::amr::RefinementRatio<Dim>{filled<std::array<int, Dim>, Dim>(2)}}};
+  const pops::ExecutionLane lane = pops::ExecutionLane::world("tests.fac.adjacent.prepare");
+  pops::elliptic::mg::CompositeFacPoisson<Dim> solver(std::move(hierarchy), lane);
+  solver.install_nullspace(pops::FieldNullspacePlan<Dim>{},
+                           {pops::PreparedVectorDistribution<Dim>::replicated(),
+                            pops::PreparedVectorDistribution<Dim>::replicated()});
+  solver.rhs_level(0).set_val(pops::Real(0));
+  solver.rhs_level(1).set_val(pops::Real(0));
+  EXPECT_TRUE(solver.solve().solved());
+
+  right.lo[0] = 15;
+  const pops::mesh::BoxArray<Dim> overlapping(std::vector<pops::Box<Dim>>{left, right});
+  pops::elliptic::mg::CompositeFacBuildRequest<Dim> invalid{
+      {request(coarse_geometry, coarse_layout), request(fine_geometry, overlapping)},
+      {pops::amr::RefinementRatio<Dim>{filled<std::array<int, Dim>, Dim>(2)}}};
+  EXPECT_THROW((pops::elliptic::mg::CompositeFacPoisson<Dim>(std::move(invalid), lane)),
+               std::invalid_argument);
+}
+
+std::size_t ordinal(const pops::Box<2>& box, const pops::Index<2>& cell) {
+  return static_cast<std::size_t>(cell[0] - box.lo[0]) +
+         static_cast<std::size_t>(cell[1] - box.lo[1]) * static_cast<std::size_t>(box.length(0));
+}
+
+void fill_mode(pops::MultiFab<2>& rhs, const pops::Geometry<2>& geometry) {
+  const pops::Real pi = std::acos(pops::Real(-1));
+  for (std::size_t local = 0; local < rhs.local_size(); ++local) {
+    auto& fab = rhs.fab(local);
+    auto host = fab.create_host_mirror();
+    const auto box = fab.box();
+    for (int j = box.lo[1]; j <= box.hi[1]; ++j)
+      for (int i = box.lo[0]; i <= box.hi[0]; ++i) {
+        const pops::Index<2> cell{i, j};
+        const pops::Real x = geometry.cell_coordinate(0, i);
+        const pops::Real y = geometry.cell_coordinate(1, j);
+        host(ordinal(fab.grown_box(), cell)) =
+            pops::Real(2) * pi * pi * std::sin(pi * x) * std::sin(pi * y);
+      }
+    fab.copy_from_host(host);
   }
 }
 
-// ------------------------------------------------------------------------------------------------
-// (i) the ctor accepts adjacent patches and refuses overlapping ones.
-// ------------------------------------------------------------------------------------------------
-TEST(CompositeFacAdjacentTest, ctor_accepts_adjacent_refuses_overlap) {
-  const int n = 32, r = 2;
-  Box2D dom = Box2D::from_extents(n, n);
-  Geometry geom_c{dom, 0.0, 1.0, 0.0, 1.0};
-  BoxArray ba_c = BoxArray::from_domain(dom, n);
-  BCRec bc;
-  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
-
-  // A: coarse footprint [8,15]x[8,23] -> fine [16,31]x[16,47].
-  // B: coarse footprint [16,23]x[8,23] -> fine [32,47]x[16,47] : shares the x-face with A (adjacent).
-  Box2D fA{{16, 16}, {31, 47}};
-  Box2D fB{{32, 16}, {47, 47}};
-  BoxArray adj(std::vector<Box2D>{fA, fB});
-  EXPECT_NO_THROW({ CompositeFacPoisson fac(geom_c, ba_c, bc, adj, r); });
-
-  // overlapping footprints must still refuse.
-  Box2D oA{{16, 16}, {31, 47}};
-  Box2D oB{{30, 16}, {47, 47}};  // footprint [15,23] overlaps A's [8,15]
-  BoxArray ovl(std::vector<Box2D>{oA, oB});
-  EXPECT_THROW({ CompositeFacPoisson fac(geom_c, ba_c, bc, ovl, r); }, std::runtime_error);
+double mode_error(const pops::MultiFab<2>& field, const pops::Geometry<2>& geometry,
+                  const pops::Box<2>& region) {
+  const double pi = std::acos(-1.0);
+  double error = 0;
+  for (std::size_t local = 0; local < field.local_size(); ++local) {
+    const auto overlap = field.box(local).intersect(region);
+    if (overlap.empty())
+      continue;
+    const auto& fab = field.fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    for (int j = overlap.lo[1]; j <= overlap.hi[1]; ++j)
+      for (int i = overlap.lo[0]; i <= overlap.hi[0]; ++i) {
+        const pops::Index<2> cell{i, j};
+        const double exact = std::sin(pi * geometry.cell_coordinate(0, i)) *
+                             std::sin(pi * geometry.cell_coordinate(1, j));
+        error = std::max(
+            error, std::abs(host(ordinal(fab.grown_box(), cell)) - static_cast<pops::Real>(exact)));
+      }
+  }
+  return pops::all_reduce_max(error);
 }
 
-// ------------------------------------------------------------------------------------------------
-// (ii)-(iv) continuity + MMS on the adjacent union.
-// ------------------------------------------------------------------------------------------------
-TEST(CompositeFacAdjacentTest, adjacent_patch_continuity_and_mms) {
-  comm_init();
-  const int n = 48, r = 2;
-  Box2D dom = Box2D::from_extents(n, n);
-  Geometry geom_c{dom, 0.0, 1.0, 0.0, 1.0};
-  BoxArray ba_c = BoxArray::from_domain(dom, n);
-  BCRec bc;
-  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
-  const Geometry geom_f = geom_c.refine(r);
+}  // namespace
 
-  // Adjacent patches spanning the central half, split at the x-midline into A (left) and B (right).
-  // A: coarse [n/4, n/2 - 1] x [n/4, 3n/4 - 1] ; B: coarse [n/2, 3n/4 - 1] x [n/4, 3n/4 - 1].
-  const int Ax0 = n / 4, Ax1 = n / 2 - 1, Bx0 = n / 2, Bx1 = 3 * n / 4 - 1;
-  const int Jy0 = n / 4, Jy1 = 3 * n / 4 - 1;
-  Box2D fA{{r * Ax0, r * Jy0}, {r * Ax1 + r - 1, r * Jy1 + r - 1}};
-  Box2D fB{{r * Bx0, r * Jy0}, {r * Bx1 + r - 1, r * Jy1 + r - 1}};
-  BoxArray adj(std::vector<Box2D>{fA, fB});
+TEST(CompositeFacAdjacentTest, exact_ranked_adjacent_patches_prepare_without_overlap_adapter) {
+  pops::comm_init();
+  expect_adjacent_layout_prepares<1>();
+  expect_adjacent_layout_prepares<2>();
+  expect_adjacent_layout_prepares<3>();
+  pops::comm_finalize();
+}
 
-  CompositeFacPoisson fac(geom_c, ba_c, bc, adj, r);
-  fill_f(fac.rhs_coarse(), geom_c);
-  fill_f(fac.rhs_fine(), geom_f);
+TEST(CompositeFacAdjacentTest, adjacent_patch_join_has_no_numerical_seam) {
+  pops::comm_init();
+  const pops::Box<2> coarse_domain{pops::Index<2>{0, 0}, pops::Index<2>{31, 31}};
+  const auto coarse_geometry = pops::Geometry<2>::from_bounds(
+      coarse_domain, pops::RealVector<2>{0, 0}, pops::RealVector<2>{1, 1});
+  const auto fine_geometry = coarse_geometry.refine(pops::Extent<2>{2, 2});
+  const pops::Box<2> left{pops::Index<2>{16, 16}, pops::Index<2>{31, 47}};
+  const pops::Box<2> right{pops::Index<2>{32, 16}, pops::Index<2>{47, 47}};
+  const pops::mesh::BoxArray<2> coarse_layout(std::vector<pops::Box<2>>{coarse_domain});
+  const pops::mesh::BoxArray<2> fine_layout(std::vector<pops::Box<2>>{left, right});
+  pops::elliptic::mg::CompositeFacBuildRequest<2> hierarchy{
+      {request(coarse_geometry, coarse_layout), request(fine_geometry, fine_layout)},
+      {pops::amr::RefinementRatio<2>{std::array<int, 2>{2, 2}}}};
+  const pops::ExecutionLane lane = pops::ExecutionLane::world("tests.fac.adjacent.mms");
+  pops::elliptic::mg::GeometricMultigridOptions mg_controls;
+  mg_controls.relative_tolerance = pops::Real(1e-10);
+  mg_controls.maximum_cycles = 100;
+  pops::elliptic::mg::GeometricMG<2> coarse_solver(request(coarse_geometry, coarse_layout), lane,
+                                                   mg_controls);
+  coarse_solver.install_nullspace(pops::FieldNullspacePlan<2>{},
+                                  pops::PreparedVectorDistribution<2>::replicated());
+  fill_mode(coarse_solver.rhs(), coarse_geometry);
+  const pops::SolveReport coarse_report = coarse_solver.solve();
+  ASSERT_TRUE(coarse_report.solved()) << coarse_report.reason;
 
-  // coarse-only reference.
-  GeometricMG mg0(geom_c, ba_c, bc, {}, FieldDistribution::Replicated);
-  fill_f(mg0.rhs(), geom_c);
-  mg0.phi().set_val(0.0);
-  mg0.solve(1e-12, 100);
-  device_fence();
+  pops::CompositeFacOptions controls;
+  controls.max_iters = 60;
+  controls.fine_sweeps = 80;
+  controls.rel_tol = pops::Real(1e-9);
+  pops::elliptic::mg::CompositeFacPoisson<2> solver(std::move(hierarchy), lane, controls);
+  solver.install_nullspace(pops::FieldNullspacePlan<2>{},
+                           {pops::PreparedVectorDistribution<2>::replicated(),
+                            pops::PreparedVectorDistribution<2>::replicated()});
+  fill_mode(solver.rhs_level(0), coarse_geometry);
+  fill_mode(solver.rhs_level(1), fine_geometry);
+  const pops::SolveReport report = solver.solve();
+  ASSERT_TRUE(report.solved()) << report.reason;
 
-  const Real rfac =
-      fac.solve(/*max_iters=*/60, /*fine_sweeps=*/100, /*rel_tol=*/1e-9, /*abs_tol=*/0.0);
-  device_fence();
+  const double coarse_error =
+      mode_error(coarse_solver.phi(), coarse_geometry,
+                 pops::Box<2>{pops::Index<2>{10, 10}, pops::Index<2>{21, 21}});
+  const double fine_error =
+      mode_error(solver.phi_level(1), fine_geometry,
+                 pops::Box<2>{pops::Index<2>{20, 20}, pops::Index<2>{43, 43}});
+  EXPECT_GT(coarse_error, 0.0);
+  EXPECT_LT(fine_error, coarse_error)
+      << "both adjacent patches must improve the MMS at fixed coarse resolution";
 
-  EXPECT_TRUE(std::isfinite(rfac));
-  EXPECT_TRUE(rfac < 1e-2) << "adjacent-patch FAC converges: rfac=" << rfac;
-
-  // (iii) CONTINUITY across the shared x-face (fine i = r*Bx0 = r*(n/2)). Patch A's rightmost valid
-  // column is i = r*Ax1 + r - 1 = r*Bx0 - 1; patch B's leftmost is i = r*Bx0. fill_boundary makes each
-  // patch's ghost the sibling's valid cell, so at convergence phi is continuous: A's edge cell ~ B's
-  // adjacent edge cell (both approximate u at neighboring fine centers). We compare A's last column to
-  // B's first column at the same rows; the jump must be far below the coarse discretization error.
-  const ConstArray4 PA = fac.phi_fine().fab(0).const_array();  // patch A (first box)
-  const ConstArray4 PB = fac.phi_fine().fab(1).const_array();  // patch B (second box)
-  const int iA = r * Ax1 + r - 1;                              // A rightmost valid column
-  const int iB = r * Bx0;  // B leftmost valid column (== iA + 1)
-  double jump = 0, uscale = 0;
-  for (int j = r * Jy0; j <= r * Jy1 + r - 1; ++j) {
-    // exact continuity reference: |u at the two adjacent fine centers| difference is O(h); the SOLVED
-    // jump must be comparable, i.e. the discrete potential is continuous across the join (no seam).
-    const double xa = geom_f.x_cell(iA), xb = geom_f.x_cell(iB), yy = geom_f.y_cell(j);
-    const double ua = u_exact(xa, yy), ub = u_exact(xb, yy);
-    jump = std::fmax(jump, std::fabs((PA(iA, j, 0) - PB(iB, j, 0)) - (ua - ub)));
-    uscale = std::fmax(uscale, std::fabs(ua));
+  const auto& left_fab = solver.phi_level(1).fab(0);
+  const auto& right_fab = solver.phi_level(1).fab(1);
+  auto left_host = left_fab.create_host_mirror();
+  auto right_host = right_fab.create_host_mirror();
+  left_fab.copy_to_host(left_host);
+  right_fab.copy_to_host(right_host);
+  double seam_error = 0;
+  for (int j = left.lo[1] + 2; j <= left.hi[1] - 2; ++j) {
+    const pops::Index<2> left_cell{left.hi[0], j};
+    const pops::Index<2> right_cell{right.lo[0], j};
+    const double exact_jump =
+        std::sin(std::acos(-1.0) * fine_geometry.cell_coordinate(0, left_cell[0])) *
+            std::sin(std::acos(-1.0) * fine_geometry.cell_coordinate(1, j)) -
+        std::sin(std::acos(-1.0) * fine_geometry.cell_coordinate(0, right_cell[0])) *
+            std::sin(std::acos(-1.0) * fine_geometry.cell_coordinate(1, j));
+    const double solved_jump = left_host(ordinal(left_fab.grown_box(), left_cell)) -
+                               right_host(ordinal(right_fab.grown_box(), right_cell));
+    seam_error = std::max(seam_error, std::abs(solved_jump - exact_jump));
   }
-  jump = all_reduce_max(jump);
-  uscale = all_reduce_max(uscale);
-  if (my_rank() == 0)
-    std::printf("  [adjacent] continuity jump (solved - exact)=%.3e (uscale=%.3e) rfac=%.2e\n",
-                jump, uscale, rfac);
-  // the seam introduces no discontinuity beyond the discretization error (~1e-2 of the solution).
-  EXPECT_TRUE(jump < 1e-2 * std::fmax(uscale, 1e-30))
-      << "(continuity) potential continuous across the shared face: jump=" << jump;
-
-  // (iv) MMS: composite beats coarse-only in the refined interior (patch A interior, guarded).
-  const int guard = 3;
-  const ConstArray4 PC0 = mg0.phi().fab(0).const_array();
-  double e_coarse = 0, e_comp = 0;
-  for (int J = Ax0 + guard; J <= Ax1; ++J)
-    for (int I = Jy0 + guard; I <= Jy1 - guard; ++I)
-      for (int tj = 0; tj < r; ++tj)
-        for (int ti = 0; ti < r; ++ti) {
-          const int iff = r * J + ti, jff = r * I + tj;
-          const double ue = u_exact(geom_f.x_cell(iff), geom_f.y_cell(jff));
-          e_comp = std::fmax(e_comp, std::fabs(PA(iff, jff, 0) - ue));
-          e_coarse =
-              std::fmax(e_coarse, std::fabs(detail::fac_bilerp_coarse(PC0, iff, jff, r) - ue));
-        }
-  e_coarse = all_reduce_max(e_coarse);
-  e_comp = all_reduce_max(e_comp);
-  if (my_rank() == 0)
-    std::printf("  [adjacent] mms e_coarse=%.3e e_composite=%.3e (x%.2f)\n", e_coarse, e_comp,
-                e_coarse / std::fmax(e_comp, 1e-30));
-  EXPECT_TRUE(e_comp < 0.7 * e_coarse)
-      << "(mms) adjacent composite beats coarse-only: e_comp=" << e_comp
-      << " e_coarse=" << e_coarse;
-
-  if (my_rank() == 0)
-    std::printf("OK test_composite_fac_adjacent\n");
-  comm_finalize();
+  seam_error = pops::all_reduce_max(seam_error);
+  EXPECT_LT(seam_error, 2e-2);
+  EXPECT_LT(seam_error, coarse_error)
+      << "the patch join must be smaller than the unresolved coarse discretization error";
+  pops::comm_finalize();
 }

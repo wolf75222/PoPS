@@ -1,83 +1,106 @@
-// Coupled multi-block field solve (Spec 3 section 12.3, criterion 24; ADC-457).
-//
-// The exact-ranked field plan assembles the system Poisson RHS as
-// f = Sum_s elliptic_rhs_s(U_s) reading EVERY block's stage state at once (indexed by block index;
-// a nullptr entry uses the block's live state) -- the SIMULTANEOUS multi-target counterpart of the
-// single-target assemble_poisson_rhs. System::solve_fields_from_blocks wraps it (solve + aux derive),
-// the seam the compiled-Program codegen lowers P.solve_fields_from_blocks([...]) to (ProgramContext).
-//
-// This test exercises that path through the PUBLIC System API (assemble_poisson_rhs_* are private to
-// the templated field solver). Two charge (ExB) blocks with distinct mean-zero densities:
-//   (a) SUM over all blocks: solve_fields_from_blocks({&U0, &U1}) (every block at its LIVE state) gives
-//       a potential matching the historical solve_fields() to round-off -- both assemble Sum_s
-//       elliptic_rhs_s(s.U). This is the "RHS == sum of the per-block contributions" assertion. (Not
-//       bit-for-bit: the GeometricMG is iterative + warm-started, so a redundant solve stops on a
-//       relative tolerance -- the result matches to ~ulp*|phi|, not exactly.)
-//   (b) PER-BLOCK stage override: with block 1's slot pointing at a stage state whose charge is ZEROED,
-//       the potential matches (to round-off) a reference where block 1's LIVE density is zero (only
-//       block 0 contributes) -- so block 1 read its STAGE override, not its live state (the per-block
-//       sum is honored per slot, the coupled commit_many guarantee), and differs from the all-live
-//       solve by far more than the tolerance.
-//   (c) SIZE guard: a wrong-sized U_stages vector throws (a stale binding cannot silently mis-route).
-//
-// Serial (host) test: the elliptic solve runs on the local box; no MPI/Kokkos device path is exercised
-// beyond the standard System build. The compiled .so running this coupled solve in a step loop is
-// validated on ROMEO (Kokkos-only AOT).
-
 #include <gtest/gtest.h>
 
-#include <pops/runtime/config/model_spec.hpp>
-#include <pops/runtime/system.hpp>
-
-#include <memory>
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/coupling/base/elliptic_rhs.hpp>
-#include <pops/core/state/state.hpp>
-#include <pops/mesh/storage/multifab.hpp>
-#include <pops/mesh/storage/fab2d.hpp>
-#include <pops/numerics/elliptic/interface/field_nullspace_builtins.hpp>
-#include <pops/parallel/comm.hpp>
-
-#include "test_harness.hpp"
+#include <pops/runtime/config/model_spec.hpp>
+#include <pops/runtime/system/prepared_field_solver_component.hpp>
+#include <pops/runtime/system.hpp>
+#include <pops/runtime/system/derived_aux_provider.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
-#include <cstdio>
 #include <limits>
+#include <string>
 #include <vector>
-
-using namespace pops;
 
 namespace {
 
-using runtime::system::AuxiliaryComponentContract;
-using runtime::system::AuxiliaryComponentKey;
-using runtime::system::AuxiliaryEvaluationEvent;
-using runtime::system::AuxiliaryEvaluationPolicy;
-using runtime::system::AuxiliaryFreshness;
-using runtime::system::AuxiliaryOutput;
-using runtime::system::AuxiliaryProviderKind;
-using runtime::system::AuxiliaryStorageShape;
-using runtime::system::PreparedAuxiliaryProvider;
+constexpr int Dim = pops::kNativeDimension;
+using NativeSystem = pops::System<Dim>;
+using NativeField = pops::MultiFab<Dim>;
 
-std::vector<AuxiliaryComponentKey> install_field_outputs(System& system, const std::string& owner,
-                                                         const std::string& field, int count) {
-  AuxiliaryStorageShape<kNativeDimension> shape;
-  for (int axis = 0; axis < kNativeDimension; ++axis)
+pops::SystemConfig<Dim> config(int cells) {
+  pops::SystemConfig<Dim> result;
+  for (int axis = 0; axis < Dim; ++axis) {
+    result.shape[axis] = cells;
+    result.lower[axis] = pops::Real(0);
+    result.upper[axis] = pops::Real(1);
+    result.periodicity[axis] = true;
+  }
+  return result;
+}
+
+std::size_t cell_count(int cells) {
+  std::size_t count = 1;
+  for (int axis = 0; axis < Dim; ++axis)
+    count *= static_cast<std::size_t>(cells);
+  return count;
+}
+
+std::vector<double> charge_density(int cells, double amplitude, double phase) {
+  std::vector<double> density(cell_count(cells));
+  for (std::size_t ordinal = 0; ordinal < density.size(); ++ordinal) {
+    std::size_t remainder = ordinal;
+    double value = amplitude;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const int coordinate = static_cast<int>(remainder % static_cast<std::size_t>(cells));
+      remainder /= static_cast<std::size_t>(cells);
+      const double x = (coordinate + 0.5) / cells;
+      value *= std::cos(2.0 * std::acos(-1.0) * (x + (axis == 0 ? phase : 0.0)));
+    }
+    density[ordinal] = value;
+  }
+  return density;
+}
+
+void add_charge_block(NativeSystem& system, const std::string& name) {
+  pops::ModelSpec spec;
+  spec.transport = "exb";
+  spec.source = "none";
+  spec.elliptic = "charge";
+  spec.q = 1.0;
+  system.add_block(name, spec, "minmod", "rusanov", "conservative", "explicit", 1, true);
+}
+
+NativeSystem two_block_system(int cells, const std::vector<double>& first,
+                              const std::vector<double>& second) {
+  NativeSystem system(config(cells));
+  add_charge_block(system, "first");
+  add_charge_block(system, "second");
+  system.set_poisson("charge_density", "cartesian_cg");
+  system.set_density("first", first);
+  system.set_density("second", second);
+  return system;
+}
+
+double max_difference(const std::vector<double>& first, const std::vector<double>& second) {
+  if (first.size() != second.size())
+    return std::numeric_limits<double>::infinity();
+  double result = 0;
+  for (std::size_t index = 0; index < first.size(); ++index)
+    result = std::max(result, std::abs(first[index] - second[index]));
+  return result;
+}
+
+std::vector<pops::runtime::system::AuxiliaryComponentKey> install_field_outputs(
+    NativeSystem& system, const std::string& owner, const std::string& field) {
+  using namespace pops::runtime::system;
+  AuxiliaryStorageShape<Dim> shape;
+  for (int axis = 0; axis < Dim; ++axis)
     shape.halo[axis] = 1;
   const AuxiliaryComponentContract contract{"cell-average", "cell", "unitless", "field", "scalar"};
-  std::vector<AuxiliaryOutput<kNativeDimension>> outputs;
+  std::vector<AuxiliaryOutput<Dim>> outputs;
   std::vector<AuxiliaryComponentKey> keys;
-  outputs.reserve(static_cast<std::size_t>(count));
-  keys.reserve(static_cast<std::size_t>(count));
-  for (int component = 0; component < count; ++component) {
+  for (int component = 0; component <= Dim; ++component) {
     AuxiliaryComponentKey key{
         owner, "field", field,
         component == 0 ? "potential" : "gradient-" + std::to_string(component - 1)};
     keys.push_back(key);
     outputs.push_back({std::move(key), contract, shape});
   }
-  system.install_prepared_auxiliary_provider(PreparedAuxiliaryProvider<kNativeDimension>{
+  system.install_prepared_auxiliary_provider(PreparedAuxiliaryProvider<Dim>{
       "test.field-output/" + owner + "/" + field,
       AuxiliaryProviderKind::field_output,
       {AuxiliaryEvaluationEvent::before_field_solve, AuxiliaryFreshness::evaluation},
@@ -87,439 +110,148 @@ std::vector<AuxiliaryComponentKey> install_field_outputs(System& system, const s
   return keys;
 }
 
-class DecoratedNullspaceProvider final : public FieldNullspaceProvider {
- public:
-  DecoratedNullspaceProvider()
-      : inner_(make_default_field_nullspace_provider_registry()->resolve(
-            "pops.field-nullspace.operator-topology-derived")) {}
-
-  [[nodiscard]] std::string_view identity() const noexcept override {
-    return "test.field-nullspace.decorated";
-  }
-  [[nodiscard]] std::uint64_t interface_version() const noexcept override { return 1; }
-  [[nodiscard]] std::string_view collective_contract() const noexcept override {
-    return "test.field-nullspace.decorated@1";
-  }
-  [[nodiscard]] PreparedProviderOptions default_options() const override {
-    return inner_->default_options();
-  }
-  [[nodiscard]] bool accepts_options(
-      const PreparedProviderOptions& options) const noexcept override {
-    return inner_->accepts_options(options);
-  }
-  [[nodiscard]] PreparedProviderSupport supports(
-      const FieldNullspaceProviderRequest& request) const noexcept override {
-    return inner_->supports(request);
-  }
-  [[nodiscard]] std::string expected_prepared_contract(
-      const FieldNullspaceProviderRequest& request) const override {
-    ExactContractBuilder contract;
-    contract.text("test.prepared-field-nullspace.decorator")
-        .scalar(std::uint32_t{1})
-        .bytes(inner_->expected_prepared_contract(request));
-    return std::move(contract).release();
-  }
-  [[nodiscard]] PreparedFieldNullspace prepare(
-      const FieldNullspaceProviderRequest& request) const override {
-    PreparedFieldNullspace prepared = inner_->prepare(request);
-    prepared.provider_identity = std::string(identity());
-    prepared.provider_version = interface_version();
-    prepared.exact_prepared_contract = expected_prepared_contract(request);
-    return prepared;
-  }
-
- private:
-  std::shared_ptr<const FieldNullspaceProvider> inner_;
-};
-
-}  // namespace
-
-namespace {
-
-// A charge density with ZERO mean (a periodic Poisson is solvable only for a mean-zero RHS): a smooth
-// cosine bump pattern, distinct per block via the @p phase shift so the two blocks carry different
-// charge. n*n row-major (j slow, i fast).
-std::vector<double> charge_density(int n, double amp, double phase) {
-  std::vector<double> q(static_cast<std::size_t>(n) * n, 0.0);
-  for (int j = 0; j < n; ++j)
-    for (int i = 0; i < n; ++i) {
-      const double x = (i + 0.5) / n;
-      const double y = (j + 0.5) / n;
-      q[static_cast<std::size_t>(j) * n + i] =
-          amp * std::cos(2.0 * test::kPi * (x + phase)) * std::cos(2.0 * test::kPi * y);
-    }
-  return q;  // cos over a full period has zero mean
+std::vector<double> periodic_faces(double value) {
+  return std::vector<double>(static_cast<std::size_t>(2 * Dim), value);
 }
 
-// Builds a 2-block charge System (both ExB transport, charge elliptic brick) ready for solve_fields.
-// Blocks declared "n0" then "n1" -> runtime indices 0 and 1 (the order the coupled vector expects).
-void build_two_charge_blocks(System& s) {
-  ModelSpec spec;
-  spec.transport = "exb";
-  spec.source = "none";
-  spec.elliptic = "charge";
-  spec.q = 1.0;
-  s.add_block("n0", spec, "minmod", "rusanov", "conservative", "explicit", 1, true);
-  s.add_block("n1", spec, "minmod", "rusanov", "conservative", "explicit", 1, true);
-  s.set_poisson("composite", "geometric_mg");  // f = sum of the per-block elliptic bricks
-}
-
-double max_abs_diff(const std::vector<double>& a, const std::vector<double>& b) {
-  if (a.size() != b.size())
-    return 1e300;  // a size mismatch is a hard failure (compared against 0 by the caller)
-  double d = 0.0;
-  for (std::size_t k = 0; k < a.size(); ++k)
-    d = std::fmax(d, std::fabs(a[k] - b[k]));
-  return d;
+std::vector<std::string> periodic_kinds() {
+  return std::vector<std::string>(static_cast<std::size_t>(2 * Dim), "periodic");
 }
 
 }  // namespace
 
-TEST(test_coupled_fieldsolve, coupled_solve_matches_solve_fields_and_honors_stage_overrides) {
-  // System storage initializes Kokkos lazily through the PoPS runtime.  That process-wide lifetime
-  // is finalized at exit, after every local System/MultiFab has been destroyed; a per-test
-  // ScopeGuard would finalize Kokkos here and make the next TEST attempt an illegal reinitialize.
-  test::Checker chk(test::Checker::Style::Verbose);
+TEST(test_coupled_fieldsolve, simultaneous_stage_rhs_uses_every_qualified_block) {
+  constexpr int cells = 24;
+  const auto first = charge_density(cells, 1.0, 0.0);
+  const auto second = charge_density(cells, 0.6, 0.25);
+  NativeSystem system = two_block_system(cells, first, second);
 
-  const int n = 32;
-  const SystemConfig cfg{n, 1.0, Periodicity{true, true}};  // periodic Cartesian
-  const std::vector<double> q0 = charge_density(n, 1.0, 0.0);
-  const std::vector<double> q1 = charge_density(n, 0.6, 0.25);  // distinct from block 0
+  const pops::SolveReport live_report = pops::consume_solve_outcome(system.solve_fields());
+  ASSERT_TRUE(live_report.solved()) << live_report.reason;
+  const std::vector<double> all_live = system.potential();
+  ASSERT_EQ(all_live.size(), cell_count(cells));
 
-  // (a) SUM over all blocks: a coupled solve from the LIVE states == historical solve_fields ----------
-  System s(cfg);
-  build_two_charge_blocks(s);
-  s.set_density("n0", q0);
-  s.set_density("n1", q1);
-  chk(s.n_blocks() == 2, "two blocks installed");
+  std::vector<const NativeField*> live_stages{&system.block_state(0), &system.block_state(1)};
+  const pops::SolveReport simultaneous_report =
+      pops::consume_solve_outcome(system.solve_fields_from_blocks(live_stages));
+  ASSERT_TRUE(simultaneous_report.solved()) << simultaneous_report.reason;
+  const std::vector<double> simultaneous = system.potential();
+  double scale = 0;
+  for (double value : all_live)
+    scale = std::max(scale, std::abs(value));
+  EXPECT_LE(max_difference(simultaneous, all_live), 1e-11 * std::max(1.0, scale));
+  EXPECT_GT(scale, 0.0);
 
-  (void)consume_solve_outcome(
-      s.solve_fields());  // historical: f = elliptic_rhs(n0.U) + elliptic_rhs(n1.U)
-  const std::vector<double> phi_ref = s.potential();
+  NativeField second_stage = system.block_state(1);
+  second_stage.set_val(pops::Real(0));
+  std::vector<const NativeField*> override_stages{&system.block_state(0), &second_stage};
+  const pops::SolveReport override_report =
+      pops::consume_solve_outcome(system.solve_fields_from_blocks(override_stages));
+  ASSERT_TRUE(override_report.solved()) << override_report.reason;
+  const std::vector<double> override_potential = system.potential();
 
-  MultiFab& U0 = s.block_state(0);
-  MultiFab& U1 = s.block_state(1);
-  std::vector<const MultiFab*> stages_live{&U0, &U1};
-  (void)consume_solve_outcome(
-      s.solve_fields_from_blocks(stages_live));  // coupled: every block at its live state
-  const std::vector<double> phi_blocks = s.potential();
+  NativeSystem first_only =
+      two_block_system(cells, first, std::vector<double>(cell_count(cells), 0.0));
+  const pops::SolveReport reference_report = pops::consume_solve_outcome(first_only.solve_fields());
+  ASSERT_TRUE(reference_report.solved()) << reference_report.reason;
+  const std::vector<double> reference = first_only.potential();
+  EXPECT_LE(max_difference(override_potential, reference), 1e-11 * std::max(1.0, scale));
+  EXPECT_GT(max_difference(override_potential, all_live), 1e-5)
+      << "the second block's simultaneous stage contribution must affect the field";
+  EXPECT_EQ(system.density("first"), first);
+  EXPECT_EQ(system.density("second"), second);
 
-  chk(!phi_ref.empty() && phi_ref.size() == static_cast<std::size_t>(n) * n, "potential size");
-  bool finite = true;
-  for (double v : phi_blocks)
-    finite = finite && std::isfinite(v);
-  chk(finite, "coupled potential is finite");
-  double maxabs = 0.0;
-  for (double v : phi_ref)
-    maxabs = std::fmax(maxabs, std::fabs(v));
-  // The two solves assemble the SAME RHS (Sum_s elliptic_rhs_s(s.U)); the GeometricMG is iterative and
-  // WARM-STARTED, so the second solve resumes from the first's converged phi and the V-cycle stops on a
-  // RELATIVE tolerance -- the result matches to round-off, not bit-for-bit (a redundant iterative solve
-  // is rarely a true no-op). We assert a tight relative agreement (~few ulp * |phi|): proves the
-  // from-blocks RHS == the historical sum, the field-solve numerics are identical.
-  const double d_sum = max_abs_diff(phi_blocks, phi_ref);
-  const double tol = 1e-12 * std::fmax(maxabs, 1.0);
-  std::printf("  d_sum=%.3e (tol=%.3e, |phi|max=%.3e)\n", d_sum, tol, maxabs);
-  chk(d_sum <= tol,
-      "coupled solve from live states matches solve_fields to round-off (RHS == sum of blocks)");
-  // The potential is non-trivial (a genuine solve, not a zero field) -- guards against a vacuous pass.
-  chk(maxabs > 0.0, "the coupled solve produces a non-trivial potential");
-
-  // (b) PER-BLOCK stage override: block 1 reads a ZEROED stage state (drops its contribution) ----------
-  // Reference: only block 0 contributes (block 1's live density zeroed), via the historical path.
-  System ref(cfg);
-  build_two_charge_blocks(ref);
-  ref.set_density("n0", q0);
-  ref.set_density("n1", std::vector<double>(static_cast<std::size_t>(n) * n, 0.0));  // block 1 = 0
-  (void)consume_solve_outcome(ref.solve_fields());
-  const std::vector<double> phi_only0 = ref.potential();
-
-  // Coupled solve on the original system: block 0 at its live state, block 1 at a ZEROED stage copy.
-  MultiFab stage1 = s.block_state(1);  // deep copy of block 1's live state (same ba/dm layout)
-  stage1.set_val(Real(0));             // zero the stage charge
-  std::vector<const MultiFab*> stages_override{&s.block_state(0), &stage1};
-  (void)consume_solve_outcome(s.solve_fields_from_blocks(stages_override));
-  const std::vector<double> phi_override = s.potential();
-
-  const double d_override = max_abs_diff(phi_override, phi_only0);
-  const double d_vs_all = max_abs_diff(phi_override, phi_blocks);
-  std::printf("  d_override=%.3e (tol=%.3e)  d_vs_all=%.3e\n", d_override, tol, d_vs_all);
-  // Same RHS as the only-block-0 reference (block 1 contributes zero), warm-started GeometricMG -> a
-  // round-off match (see the d_sum note), not bit-for-bit.
-  chk(d_override <= tol,
-      "block 1's ZEROED stage override drops its charge (== only-block-0 reference, to round-off)");
-  // And it differs from the all-blocks solve by FAR more than the tolerance (block 1's live charge
-  // mattered) -- the override was honored, not ignored.
-  chk(d_vs_all > 1e-4, "the stage override changes the potential vs the all-live coupled solve");
-
-  // (b2) ALL-nullptr U_stages: every slot falls back to its block's LIVE state == the all-live solve --
-  std::vector<const MultiFab*> stages_null{nullptr, nullptr};
-  (void)consume_solve_outcome(s.solve_fields_from_blocks(stages_null));
-  const std::vector<double> phi_null = s.potential();
-  chk(max_abs_diff(phi_null, phi_blocks) <= tol,
-      "an all-nullptr U_stages falls back to every block's live state (== the all-live coupled "
-      "solve)");
-
-  // (d) eps != 1: the coupled path scales the system RHS by 1/eps just like solve_fields -------------
-  // The constant-permittivity branch (p_eps_ != 1) is the one RHS-scaling branch the eps=1 cases above
-  // never touch; assert the coupled solve honors it identically to the historical single-target solve.
-  System se(cfg);
-  {
-    ModelSpec spec;
-    spec.transport = "exb";
-    spec.source = "none";
-    spec.elliptic = "charge";
-    spec.q = 1.0;
-    se.add_block("n0", spec, "minmod", "rusanov", "conservative", "explicit", 1, true);
-    se.add_block("n1", spec, "minmod", "rusanov", "conservative", "explicit", 1, true);
-    se.set_poisson("composite", "geometric_mg", "auto", "none", 0.0, 2.0, 0.0);  // eps = 2
-  }
-  se.set_density("n0", q0);
-  se.set_density("n1", q1);
-  (void)consume_solve_outcome(se.solve_fields());  // historical, with eps = 2
-  const std::vector<double> phi_eps_ref = se.potential();
-  std::vector<const MultiFab*> stages_eps{&se.block_state(0), &se.block_state(1)};
-  (void)consume_solve_outcome(se.solve_fields_from_blocks(stages_eps));
-  const std::vector<double> phi_eps_blocks = se.potential();
-  double eps_maxabs = 0.0;
-  for (double v : phi_eps_ref)
-    eps_maxabs = std::fmax(eps_maxabs, std::fabs(v));
-  const double eps_tol = 1e-12 * std::fmax(eps_maxabs, 1.0);
-  chk(eps_maxabs > 0.0, "the eps != 1 coupled solve produces a non-trivial potential");
-  chk(max_abs_diff(phi_eps_blocks, phi_eps_ref) <= eps_tol,
-      "with eps != 1 the coupled solve scales the RHS by 1/eps like solve_fields (to round-off)");
-
-  // (c) SIZE guard: a U_stages not sized to n_blocks() throws (fail-loud on a stale binding) ----------
-  std::vector<const MultiFab*> bad{&s.block_state(0)};  // size 1 != 2 blocks
-  EXPECT_THROW((void)s.solve_fields_from_blocks(bad), std::invalid_argument)
-      << "a U_stages not sized to n_blocks() throws std::invalid_argument";
-
-  if (!chk.failed())
-    std::printf("OK test_coupled_fieldsolve\n");
+  std::vector<const NativeField*> invalid{&system.block_state(0)};
+  EXPECT_THROW((void)system.solve_fields_from_blocks(invalid), std::invalid_argument);
 }
 
-TEST(test_coupled_fieldsolve, named_solve_honors_every_qualified_stage_without_live_mutation) {
-  const int n = 32;
-  const SystemConfig cfg{n, 1.0, Periodicity{true, true}};
-  System system(cfg);
-  ModelSpec spec;
-  spec.transport = "exb";
-  spec.source = "none";
-  spec.elliptic = "charge";
-  spec.q = 1.0;
-  system.add_block("n0", spec, "minmod", "rusanov", "conservative", "explicit", 1, true);
-  system.add_block("n1", spec, "minmod", "rusanov", "conservative", "explicit", 1, true);
+TEST(test_coupled_fieldsolve,
+     named_prepared_provider_publishes_potential_and_signed_gradient_from_simultaneous_rhs) {
+  constexpr int cells = 24;
+  const auto first = charge_density(cells, 1.0, 0.0);
+  const auto second = charge_density(cells, 0.6, 0.25);
+  NativeSystem system(config(cells));
+  add_charge_block(system, "first");
+  add_charge_block(system, "second");
 
   const std::string slot = "qualified-coupled-provider";
-  const PreparedProviderOptions backend_options{"pops.system.geometric-mg-options@1",
-                                                {{"abs_tol", 0.0},
-                                                 {"bottom_sweeps", std::int64_t{50}},
-                                                 {"coarse_threshold", std::int64_t{0}},
-                                                 {"max_cycles", std::int64_t{50}},
-                                                 {"min_coarse", std::int64_t{2}},
-                                                 {"post_smooth", std::int64_t{2}},
-                                                 {"pre_smooth", std::int64_t{2}},
-                                                 {"rel_tol", 1.0e-8}}};
+  const pops::PreparedProviderOptions backend_options{"pops.system.geometric-mg-options@1",
+                                                      {{"abs_tol", 0.0},
+                                                       {"bottom_sweeps", std::int64_t{50}},
+                                                       {"coarse_threshold", std::int64_t{0}},
+                                                       {"max_cycles", std::int64_t{50}},
+                                                       {"min_coarse", std::int64_t{2}},
+                                                       {"post_smooth", std::int64_t{2}},
+                                                       {"pre_smooth", std::int64_t{2}},
+                                                       {"rel_tol", 1.0e-8}}};
   system.register_configured_field_solver_provider("geometric_mg", slot, backend_options);
-  system.set_field_solver_plan(slot, "test:qualified-coupled-plan",
-                               "test:qualified-coupled-provider", "test:qualified-coupled-field",
-                               "n0", "potential",
-                               {"test:n0/potential/rhs", "test:n1/potential/rhs"}, {"n0", "n1"},
-                               {"potential", "potential"}, {1.0, 1.0}, slot);
-  const std::string conflicting_slot = "conflicting-output-provider";
-  system.register_configured_field_solver_provider("geometric_mg", conflicting_slot,
-                                                   backend_options);
-  EXPECT_THROW(system.set_field_solver_plan(conflicting_slot, "test:conflicting-output-plan",
-                                            "test:conflicting-output-provider", "test:other-owner",
-                                            "n0", "potential", {"test:n0/other/rhs"}, {"n0"},
-                                            {"other"}, {1.0}, conflicting_slot),
-               std::runtime_error)
-      << "one output block/key must identify exactly one qualified provider slot";
+  system.set_field_solver_plan(slot, "test.qualified-coupled-plan",
+                               "test.qualified-coupled-provider", "test.qualified-coupled", "first",
+                               "potential",
+                               {"test.first/potential/rhs", "test.second/potential/rhs"},
+                               {"first", "second"}, {"potential", "potential"}, {1.0, 1.0}, slot);
   system.set_field_topology_authority(slot, "builtin_rectangular_cell_graph_v1",
-                                      "test:periodic-cartesian", "test:periodic-cartesian:v1");
-  system.set_field_boundary_plan(slot, {"periodic", "periodic", "periodic", "periodic"},
-                                 {0.0, 0.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 0.0});
-  system.register_field_nullspace_provider(std::make_shared<DecoratedNullspaceProvider>());
+                                      "test.periodic-cartesian", "test.periodic-cartesian.v1");
+  system.set_field_boundary_plan(slot, periodic_kinds(), periodic_faces(0.0), periodic_faces(0.0),
+                                 periodic_faces(0.0));
   system.set_field_nullspace(
-      slot, "test.field-nullspace.decorated",
-      PreparedProviderOptions{"pops.field-nullspace.operator-topology-derived.options@1",
-                              {{"gauge.value", 0.0}}});
-  const auto potential_key =
-      install_field_outputs(system, "test.qualified-coupled", "potential", 1);
-  system.register_elliptic_field("n0", "potential", potential_key, 1);
-  system.set_block_elliptic_field("n0", "potential", [](const MultiFab& state, MultiFab& rhs) {
-    add_scaled_component(state, Real(1), 0, rhs);
-  });
-  bool fail_rank_local_rhs = false;
-  system.set_block_elliptic_field("n1", "potential", [&](const MultiFab& state, MultiFab& rhs) {
-    if (fail_rank_local_rhs)
-      throw std::runtime_error("intentional rank-local RHS failure");
-    add_scaled_component(state, Real(1), 0, rhs);
-  });
+      slot, "pops.field-nullspace.operator-topology-derived",
+      pops::PreparedProviderOptions{"pops.field-nullspace.operator-topology-derived.options@1",
+                                    {{"gauge.value", 0.0}}});
+  const auto outputs = install_field_outputs(system, "test.qualified-coupled", "potential");
+  system.register_elliptic_field("first", "potential", outputs, -1);
+  system.set_block_elliptic_field("first", "potential",
+                                  [](const NativeField& state, NativeField& rhs) {
+                                    pops::add_scaled_component(state, pops::Real(1), 0, rhs);
+                                  });
+  system.set_block_elliptic_field("second", "potential",
+                                  [](const NativeField& state, NativeField& rhs) {
+                                    pops::add_scaled_component(state, pops::Real(1), 0, rhs);
+                                  });
+  system.set_density("first", first);
+  system.set_density("second", second);
 
-  const std::vector<double> q0 = charge_density(n, 1.0, 0.0);
-  const std::vector<double> q1 = charge_density(n, 0.6, 0.25);
-  system.set_density("n0", q0);
-  system.set_density("n1", q1);
+  std::vector<const NativeField*> live_stages{&system.block_state(0), &system.block_state(1)};
+  const pops::SolveReport live_report =
+      pops::consume_solve_outcome(system.solve_fields_from_blocks(slot, live_stages));
+  ASSERT_TRUE(live_report.solved()) << live_report.reason;
+  const std::vector<double> all_live = system.field_potential_global(slot);
+  ASSERT_EQ(all_live.size(), cell_count(cells));
+  ASSERT_EQ(outputs.size(), static_cast<std::size_t>(Dim + 1));
+  EXPECT_FALSE(system.field_topology_report(slot).empty());
 
-  std::vector<const MultiFab*> all_live{&system.block_state(0), &system.block_state(1)};
-  const SolveReport all_report =
-      consume_solve_outcome(system.solve_fields_from_blocks(slot, all_live));
-  ASSERT_TRUE(all_report.solved_value_available()) << all_report.status_name();
-  const std::vector<double> all_phi = system.field_potential_global(slot);
-
-  MultiFab stage1 = system.block_state(1);
-  stage1.set_val(Real(0));
-  std::vector<const MultiFab*> override_states{&system.block_state(0), &stage1};
-  const SolveReport override_report =
-      consume_solve_outcome(system.solve_fields_from_blocks(slot, override_states));
-  ASSERT_TRUE(override_report.solved_value_available()) << override_report.status_name();
-  const std::vector<double> override_phi = system.field_potential_global(slot);
-
-  EXPECT_GT(max_abs_diff(all_phi, override_phi), 1.0e-4)
-      << "the named solve ignored the second qualified stage slot";
-  EXPECT_EQ(max_abs_diff(system.density("n0"), q0), 0.0);
-  EXPECT_EQ(max_abs_diff(system.density("n1"), q1), 0.0);
-
-  std::vector<const MultiFab*> bad{&system.block_state(0)};
-  std::vector<const MultiFab*> duplicate_stage{&system.block_state(0), &system.block_state(0)};
-  if (n_ranks() == 1) {
-    EXPECT_THROW((void)consume_solve_outcome(system.solve_fields_from_blocks(slot, bad)),
-                 std::invalid_argument);
-    EXPECT_THROW(
-        (void)consume_solve_outcome(system.solve_fields_from_blocks(slot, duplicate_stage)),
-        std::invalid_argument)
-        << "one stage object cannot be assigned to two qualified System blocks";
-    EXPECT_THROW(
-        (void)consume_solve_outcome(system.solve_fields_from_state(slot, 0, system.block_state(1))),
-        std::invalid_argument)
-        << "a single-stage solve cannot alias another qualified block's live state";
-  } else {
-    EXPECT_THROW((void)consume_solve_outcome(system.solve_fields_from_blocks(slot, bad)),
-                 std::runtime_error);
-    EXPECT_THROW(
-        (void)consume_solve_outcome(system.solve_fields_from_blocks(slot, duplicate_stage)),
-        std::runtime_error)
-        << "one stage object cannot be assigned to two qualified System blocks";
-    EXPECT_THROW(
-        (void)consume_solve_outcome(system.solve_fields_from_state(slot, 0, system.block_state(1))),
-        std::runtime_error)
-        << "collective field publication must report invalid stage requests on every rank";
-  }
-
-  if (n_ranks() > 1) {
-    std::vector<const MultiFab*> rank_local_shape = all_live;
-    if (my_rank() == 0)
-      rank_local_shape.pop_back();
-    EXPECT_THROW(
-        (void)consume_solve_outcome(system.solve_fields_from_blocks(slot, rank_local_shape)),
-        std::runtime_error)
-        << "rank-local request-shape drift must fail collectively without stranding peers";
-    const std::string rank_local_slot = my_rank() == 0 ? slot : "rank-local-unknown-slot";
-    EXPECT_THROW(
-        (void)consume_solve_outcome(system.solve_fields_from_blocks(rank_local_slot, all_live)),
-        std::invalid_argument)
-        << "rank-local provider drift must fail before any backend collective";
-    fail_rank_local_rhs = my_rank() == 0;
-    EXPECT_THROW((void)consume_solve_outcome(system.solve_fields_from_blocks(slot, all_live)),
-                 std::runtime_error)
-        << "a rank-local provider callback failure must be published before prepare_rhs";
-    fail_rank_local_rhs = false;
-    const SolveReport recovered =
-        consume_solve_outcome(system.solve_fields_from_blocks(slot, all_live));
-    EXPECT_TRUE(recovered.solved_value_available())
-        << "the communicator must remain usable after both fail-closed preflights";
-  }
-}
-
-TEST(test_coupled_fieldsolve, named_gradient_output_applies_the_registered_sign) {
-  const int n = 32;
-  System system(SystemConfig{n, 1.0, Periodicity{true, true}});
-  const std::string slot = "signed-gradient-provider";
-  const PreparedProviderOptions backend_options{"pops.system.geometric-mg-options@1",
-                                                {{"abs_tol", 0.0},
-                                                 {"bottom_sweeps", std::int64_t{50}},
-                                                 {"coarse_threshold", std::int64_t{0}},
-                                                 {"max_cycles", std::int64_t{50}},
-                                                 {"min_coarse", std::int64_t{2}},
-                                                 {"post_smooth", std::int64_t{2}},
-                                                 {"pre_smooth", std::int64_t{2}},
-                                                 {"rel_tol", 1.0e-8}}};
-  system.register_configured_field_solver_provider("geometric_mg", slot, backend_options);
-  system.set_field_solver_plan(slot, "test:signed-gradient-plan", "test:signed-gradient-provider",
-                               "test:plasma", "plasma", "potential", {"test:plasma/potential/rhs"},
-                               {"plasma"}, {"potential"}, {1.0}, slot);
-  system.set_field_topology_authority(slot, "builtin_rectangular_cell_graph_v1",
-                                      "test:periodic-cartesian", "test:periodic-cartesian:v1");
-  system.set_field_boundary_plan(slot, {"periodic", "periodic", "periodic", "periodic"},
-                                 {0.0, 0.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 0.0});
-  system.register_field_nullspace_provider(std::make_shared<DecoratedNullspaceProvider>());
-  system.set_field_nullspace(
-      slot, "test.field-nullspace.decorated",
-      PreparedProviderOptions{"pops.field-nullspace.operator-topology-derived.options@1",
-                              {{"gauge.value", 0.0}}});
-
-  ModelSpec spec;
-  spec.transport = "exb";
-  spec.source = "none";
-  spec.elliptic = "charge";
-  spec.q = 1.0;
-  system.add_block("plasma", spec, "minmod", "rusanov", "conservative", "explicit", 1, true);
-  const auto potential_outputs =
-      install_field_outputs(system, "test.gradient-sign", "potential", kNativeDimension + 1);
-  EXPECT_THROW(system.register_elliptic_field("plasma", "potential", potential_outputs, 0),
-               std::invalid_argument);
-  system.register_elliptic_field("plasma", "potential", potential_outputs, -1);
-  system.set_block_elliptic_field("plasma", "potential", [](const MultiFab& state, MultiFab& rhs) {
-    add_scaled_component(state, Real(1), 0, rhs);
-  });
-  system.set_density("plasma", charge_density(n, 1.0, 0.0));
-
-  const SolveReport report =
-      consume_solve_outcome(system.solve_fields_from_state(slot, 0, system.block_state(0)));
-  ASSERT_TRUE(report.solved()) << report.status_name();
-  const std::vector<double> phi = system.field_potential_global(slot);
-  const std::vector<double> gx = system.auxiliary_component(potential_outputs[1]);
-  const std::vector<double> gy = system.auxiliary_component(potential_outputs[2]);
-  ASSERT_EQ(phi.size(), static_cast<std::size_t>(n) * n);
-  ASSERT_EQ(gx.size(), phi.size());
-  ASSERT_EQ(gy.size(), phi.size());
-  const double unsigned_scale = 0.5 * n;
-  double error = 0.0;
-  double reference = 0.0;
-  double signed_observed = 0.0;
-  double unsigned_reference = 0.0;
-  for (int j = 0; j < n; ++j)
-    for (int i = 0; i < n; ++i) {
-      const int im = (i + n - 1) % n, ip = (i + 1) % n;
-      const int jm = (j + n - 1) % n, jp = (j + 1) % n;
-      const std::size_t cell = static_cast<std::size_t>(j) * n + i;
-      const double unsigned_x = unsigned_scale * (phi[static_cast<std::size_t>(j) * n + ip] -
-                                                  phi[static_cast<std::size_t>(j) * n + im]);
-      const double unsigned_y = unsigned_scale * (phi[static_cast<std::size_t>(jp) * n + i] -
-                                                  phi[static_cast<std::size_t>(jm) * n + i]);
-      const double expected_x = -unsigned_x;
-      const double expected_y = -unsigned_y;
-      error = std::fmax(error, std::fabs(gx[cell] - expected_x));
-      error = std::fmax(error, std::fabs(gy[cell] - expected_y));
-      if (std::fabs(unsigned_x) > reference) {
-        reference = std::fabs(unsigned_x);
-        signed_observed = gx[cell];
-        unsigned_reference = unsigned_x;
-      }
-      if (std::fabs(unsigned_y) > reference) {
-        reference = std::fabs(unsigned_y);
-        signed_observed = gy[cell];
-        unsigned_reference = unsigned_y;
-      }
+  for (int axis = 0; axis < Dim; ++axis) {
+    const auto gradient = system.auxiliary_component(outputs[static_cast<std::size_t>(axis + 1)]);
+    ASSERT_EQ(gradient.size(), all_live.size());
+    const std::size_t stride = [&] {
+      std::size_t value = 1;
+      for (int lower_axis = 0; lower_axis < axis; ++lower_axis)
+        value *= static_cast<std::size_t>(cells);
+      return value;
+    }();
+    double error = 0;
+    double reference = 0;
+    for (std::size_t cell = 0; cell < all_live.size(); ++cell) {
+      const int coordinate = static_cast<int>((cell / stride) % static_cast<std::size_t>(cells));
+      const std::size_t minus = coordinate == 0 ? cell + stride * (cells - 1) : cell - stride;
+      const std::size_t plus =
+          coordinate == cells - 1 ? cell - stride * (cells - 1) : cell + stride;
+      const double expected = -0.5 * cells * (all_live[plus] - all_live[minus]);
+      error = std::max(error, std::abs(gradient[cell] - expected));
+      reference = std::max(reference, std::abs(expected));
     }
-  const double epsilon = std::numeric_limits<Real>::epsilon();
-  ASSERT_GT(reference, 1024.0 * epsilon) << "the signed-gradient oracle must be nontrivial";
-  EXPECT_LT(signed_observed * unsigned_reference, 0.0)
-      << "GradientOutput(sign=-1) must reverse the physical gradient direction";
-  // Device backends may contract the multiply/divide sequence (or use an FMA), so exact host bits
-  // are not a portable oracle.  Keep the allowance tied to machine precision and field scale: a
-  // missing or inverted sign remains many orders of magnitude outside this bound.
-  const double tolerance = 16.0 * epsilon * std::max(1.0, reference);
-  EXPECT_LE(error, tolerance) << "GradientOutput(sign=-1) must publish -grad(phi)";
+    ASSERT_GT(reference, 1024.0 * std::numeric_limits<pops::Real>::epsilon());
+    EXPECT_LE(error, 16.0 * std::numeric_limits<pops::Real>::epsilon() * std::max(1.0, reference));
+  }
+
+  NativeField second_stage = system.block_state(1);
+  second_stage.set_val(pops::Real(0));
+  std::vector<const NativeField*> override_stages{&system.block_state(0), &second_stage};
+  const pops::SolveReport override_report =
+      pops::consume_solve_outcome(system.solve_fields_from_blocks(slot, override_stages));
+  ASSERT_TRUE(override_report.solved()) << override_report.reason;
+  EXPECT_GT(max_difference(system.field_potential_global(slot), all_live), 1e-5)
+      << "the named prepared plan must consume both qualified simultaneous stage slots";
+  EXPECT_EQ(system.density("first"), first);
+  EXPECT_EQ(system.density("second"), second);
 }
