@@ -9,38 +9,57 @@
 
 #include <gtest/gtest.h>
 
-#include <pops/numerics/time/schemes/imex.hpp>
+#include <pops/core/foundation/native_dimension.hpp>
+#include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/layout/box_array.hpp>
-#include <pops/mesh/layout/distribution_mapping.hpp>
+#include <pops/mesh/layout/distribution.hpp>
 #include <pops/mesh/storage/multifab.hpp>
+#include <pops/numerics/time/schemes/imex.hpp>
 
 #include <cmath>
 #include <vector>
 
 using namespace pops;
 
-static void no_transport(MultiFab&, Real) {}
+namespace {
+
+constexpr int kDim = kNativeDimension;
+using Field = MultiFab<kDim>;
+
+Field relaxation_field(Real value) {
+  Extent<kDim> shape{};
+  Extent<kDim> one_rank{};
+  for (int axis = 0; axis < kDim; ++axis) {
+    shape[axis] = 4;
+    one_rank[axis] = 1;
+  }
+  const Box<kDim> domain = Box<kDim>::from_extents(shape);
+  const mesh::BoxArray<kDim> layout(std::vector<Box<kDim>>{domain});
+  const mesh::RankSpace<kDim> ranks(Index<kDim>{}, one_rank);
+  Field state(layout, mesh::Distribution<kDim>::replicated(layout, ranks), Index<kDim>{}, 1,
+              Extent<kDim>{});
+  state.set_val(value);
+  return state;
+}
+
+void no_transport(Field&, Real) {}
 
 // n pas d'IMEX implicite sur la relaxation, renvoie |u_n - u_eq|.
 static double imex_err(double eps, double u0, double u_eq, double dt, int n) {
-  Box2D dom = Box2D::from_extents(4, 4);
-  BoxArray ba(std::vector<Box2D>{dom});
-  DistributionMapping dm(1, 1);
-  MultiFab U(ba, dm, 1, 0);
-  U.set_val(u0);
-  auto simpl = [=](MultiFab& V, Real h) {
+  Field state = relaxation_field(Real(u0));
+  const auto simpl = [=](Field& candidate, Real h) {
     const Real c = h / eps;
-    for (int li = 0; li < V.local_size(); ++li) {
-      Array4 a = V.fab(li).array();
-      const Box2D b = V.box(li);
-      for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-        for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-          a(i, j, 0) = (a(i, j, 0) + c * u_eq) / (1 + c);
+    for (std::size_t local = 0; local < candidate.local_size(); ++local) {
+      const FieldView<Real, kDim> values = candidate.fab(local).view();
+      for_each_cell(candidate.box(local), [values, c, u_eq] POPS_HD(const Index<kDim>& index) {
+        values(index) = (values(index) + c * u_eq) / (1 + c);
+      });
     }
   };
   for (int s = 0; s < n; ++s)
-    imex_euler_step(U, dt, no_transport, simpl);
-  return std::fabs(U.fab(0).const_array()(0, 0, 0) - u_eq);
+    imex_euler_step(state, dt, no_transport, simpl);
+  pops::sync_host();
+  return std::fabs(state.fab(0).view()(state.box(0).lo) - u_eq);
 }
 
 // explicite naif : facteur d'amplification |1 - dt/eps| par pas.
@@ -81,3 +100,5 @@ TEST(ApLimit, UniformStabilityAcrossStiffness) {
   EXPECT_TRUE(!std::isfinite(e_expl) || std::fabs(e_expl) > 1e3)
       << "explicite_explose (e_expl=" << e_expl << ")";
 }
+
+}  // namespace

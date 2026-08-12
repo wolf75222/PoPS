@@ -33,14 +33,21 @@ namespace {
 // Smooth density bump, periodic: same shape as the python seam test's _seed_density (a sin*sin
 // perturbation around 1), so the CFL wave speed is finite and step_cfl advances.
 std::vector<double> seed_density(int n) {
-  std::vector<double> rho(static_cast<std::size_t>(n) * n);
+  std::size_t cells = 1;
+  for (int axis = 0; axis < kNativeDimension; ++axis)
+    cells *= static_cast<std::size_t>(n);
+  std::vector<double> rho(cells);
   const double pi = 3.14159265358979323846;
-  for (int j = 0; j < n; ++j)
-    for (int i = 0; i < n; ++i) {
-      const double x = (i + 0.5) / n, y = (j + 0.5) / n;
-      rho[static_cast<std::size_t>(j) * n + i] =
-          1.0 + 0.1 * std::sin(2 * pi * x) * std::sin(2 * pi * y);
+  for (std::size_t cell = 0; cell < cells; ++cell) {
+    std::size_t remainder = cell;
+    double perturbation = 1.0;
+    for (int axis = 0; axis < kNativeDimension; ++axis) {
+      const int index = static_cast<int>(remainder % static_cast<std::size_t>(n));
+      remainder /= static_cast<std::size_t>(n);
+      perturbation *= std::sin(2 * pi * (static_cast<double>(index) + 0.5) / n);
     }
+    rho[cell] = 1.0 + 0.1 * perturbation;
+  }
   return rho;
 }
 
@@ -72,15 +79,17 @@ static int pops_run_test_exb_seam(int argc, char** argv) {
   double n0 = 0;
   for (double v : rho)
     n0 += v;
-  n0 /= (static_cast<double>(n) *
-         n);  // background = mean density -> neutral source (periodic Poisson)
+  n0 /= static_cast<double>(rho.size());  // background = mean density -> neutral source
 
-  SystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
+  SystemConfig<kNativeDimension> cfg;
+  for (int axis = 0; axis < kNativeDimension; ++axis) {
+    cfg.shape[axis] = n;
+    cfg.lower[axis] = Real(0);
+    cfg.upper[axis] = Real(1);
+    cfg.periodicity[axis] = true;
+  }
 
-  System sys(cfg);
+  System<kNativeDimension> sys(cfg);
   sys.add_block("blk", exb_seam_model(n0));  // defaults: minmod / rusanov / conservative / explicit
   sys.set_density("blk", rho);
   test::install_forward_euler_program(sys);
