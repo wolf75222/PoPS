@@ -27,7 +27,10 @@ Real arithmetic_value(const Index<Dim>& index, int component) {
 template <int Dim>
 void expect_reductions() {
   const Box<Dim> domain = cube<Dim>(-1, 1);
-  const BoxArray<Dim> layout = BoxArray<Dim>::from_domain(domain, axis_sizes<Dim>(2, 3));
+  Extent<Dim> max_grid_size{};
+  for (int axis = 0; axis < Dim; ++axis)
+    max_grid_size[axis] = axis == 0 ? 2 : 3;
+  const BoxArray<Dim> layout = BoxArray<Dim>::from_domain(domain, max_grid_size);
   const auto distribution = Distribution<Dim>::replicated(layout, one_rank_space<Dim>());
   HostMultiFab<Dim> field(layout, distribution, Index<Dim>{}, 2, uniform_extent<Dim>(1));
   fill_valid(field, Real{9000}, arithmetic_value<Dim>);
