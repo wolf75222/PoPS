@@ -1,120 +1,238 @@
-// Parite spatiale AmrSystem <-> System : le coeur spatial du chemin AMR
-// (compute_face_fluxes<Limiter, Flux> + recon_prim, consomme par le reflux du
-// ProgramGraph AMR) reproduit EXACTEMENT le residu d'assemble_rhs<Limiter, Flux> du
-// chemin System, sous reconstruction PRIMITIVE et flux HLLC puis Roe. C'est la
-// preuve que la facade raffinee accepte les memes parametres de schema que System
-// et les applique a chaque niveau/patch.
-//
-// Le coeur spatial (bit-identique) prouve que div(compute_face_fluxes) == assemble_rhs pour HLLC et
-// Roe en reconstruction primitive (minmod, ordre 2), et que le primitif differe du conservatif.
-// L'integration temporelle et la conservation AMR sont couvertes par les tests ProgramGraph/reflux.
+/// @file
+/// @brief Exact-rank spatial parity between the generated System and AmrSystem facades.
 
 #include <gtest/gtest.h>
 
-#include <pops/physics/bricks/bricks.hpp>  // CompositeModel, CompressibleFlux, NoSource, ChargeDensity
-#include <pops/numerics/fv/numerical_flux.hpp>  // HLLCFlux, RoeFlux
-#include <pops/numerics/fv/reconstruction.hpp>  // Minmod
-#include <pops/numerics/spatial_operator.hpp>   // assemble_rhs, compute_face_fluxes, load_state
-
-#include <pops/mesh/index/box2d.hpp>
-#include <pops/mesh/layout/box_array.hpp>
-#include <pops/mesh/layout/distribution_mapping.hpp>
-#include <pops/mesh/boundary/fill_boundary.hpp>
-#include <pops/mesh/execution/for_each.hpp>
-#include <pops/mesh/geometry/geometry.hpp>
-#include <pops/mesh/storage/mf_arith.hpp>  // norm_inf
-#include <pops/mesh/storage/multifab.hpp>  // sum
-#include <pops/mesh/boundary/physical_bc.hpp>
+#include <pops/core/foundation/native_dimension.hpp>
+#include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
+#include <pops/runtime/builders/compiled/dsl_block.hpp>
+#include <pops/runtime/builders/compiled/generated_system_block.hpp>
 
 #include <cmath>
+#include <cstddef>
+#include <string>
+#include <utility>
+#include <vector>
 
-using namespace pops;
-static constexpr double kPi = 3.14159265358979323846;
+#if defined(POPS_HAS_KOKKOS)
+#include <Kokkos_Core.hpp>
+#endif
 
-TEST(test_amr_spatial_parity, Runs) {
-  const int n = 32;
-  const double L = 1.0;
-  const Box2D dom = Box2D::from_extents(n, n);
-  const Geometry geom{dom, 0.0, L, 0.0, L};
-  const double dx = geom.dx(), dy = geom.dy();
-  const BoxArray ba(std::vector<Box2D>{dom});
-  const DistributionMapping dm(1, n_ranks());
-  const BCRec bc;  // periodique
+namespace pops {
 
-  // Euler compressible pur (sans source) : le residu vient entierement du flux
-  // hyperbolique reconstruit -> isole la parite reconstruction x flux Riemann.
-  using Model = CompositeModel<CompressibleFlux, NoSource, ChargeDensity>;
-  const Model model{CompressibleFlux{1.4}, NoSource{}, ChargeDensity{1.0}};
+template <int Dim, class Model>
+PreparedSystemBlock<Dim> prepare_exact_system_block(
+    CompiledSystemBlockPreparation<Dim, Model> request) {
+  return prepare_generated_system_block(std::move(request));
+}
 
-  MultiFab U0(ba, dm, 4, 2), aux(ba, dm, 3, 1);
-  aux.set_val(0.0);
-  {  // bulle de densite + champ de vitesse doux (etat lisse, positif)
-    Array4 a = U0.fab(0).array();
-    for_each_cell(dom, [a, geom](int i, int j) {
-      const double x = geom.x_cell(i) - 0.5, y = geom.y_cell(j) - 0.5;
-      const double rho = 1.0 + 0.4 * std::exp(-(x * x + y * y) / 0.02);
-      a(i, j, 0) = rho;
-      a(i, j, 1) = 0.2 * rho * std::sin(2 * kPi * geom.x_cell(i));
-      a(i, j, 2) = 0.1 * rho * std::cos(2 * kPi * geom.y_cell(j));
-      const double ke = 0.5 * (a(i, j, 1) * a(i, j, 1) + a(i, j, 2) * a(i, j, 2)) / rho;
-      a(i, j, 3) = 1.0 / (1.4 - 1.0) + ke;
-    });
+}  // namespace pops
+
+namespace {
+
+constexpr int Dim = pops::kNativeDimension;
+constexpr pops::Real kGamma = pops::Real(1.4);
+constexpr int kCellsPerAxis = 16;
+
+template <int Rank>
+struct EulerModel : pops::nd::IdealGasEuler<Rank> {
+  using Law = pops::nd::IdealGasEuler<Rank>;
+  using State = typename Law::State;
+
+  EulerModel() : Law(Law::prepare(kGamma)) {}
+
+  [[nodiscard]] static constexpr pops::PreparedProviderIdentity provider_identity() noexcept {
+    return {"test.amr-spatial-parity.euler", 1};
   }
 
-  // residu d'assemble_rhs (chemin System) sur les cellules valides.
-  auto rhs_system = [&](auto flux_tag, bool prim, MultiFab& R) {
-    using Flux = decltype(flux_tag);
-    MultiFab U = U0;
-    fill_ghosts(U, dom, bc);
-    assemble_rhs<Minmod, Flux>(model, U, aux, geom, R, prim);
-  };
-  // residu reconstitue du chemin AMR : -div des flux de face de compute_face_fluxes
-  // (NoSource -> pas de terme S). Memes (Limiter, Flux, recon_prim) que System.
-  auto rhs_amr = [&](auto flux_tag, bool prim, MultiFab& R) {
-    using Flux = decltype(flux_tag);
-    MultiFab U = U0;
-    fill_ghosts(U, dom, bc);
-    MultiFab Fx(BoxArray(std::vector<Box2D>{xface_box(dom)}), dm, 4, 0);
-    MultiFab Fy(BoxArray(std::vector<Box2D>{yface_box(dom)}), dm, 4, 0);
-    compute_face_fluxes<Minmod, Flux>(model, U, aux, Fx, Fy, dx, dy, prim);
-    Array4 r = R.fab(0).array();
-    const ConstArray4 fx = Fx.fab(0).const_array(), fy = Fy.fab(0).const_array();
-    for_each_cell(dom, [=] POPS_HD(int i, int j) {
-      for (int c = 0; c < 4; ++c)
-        r(i, j, c) = -((fx(i + 1, j, c) - fx(i, j, c)) / dx + (fy(i, j + 1, c) - fy(i, j, c)) / dy);
-    });
-  };
-
-  auto maxdiff = [&](const MultiFab& A, const MultiFab& B) {
-    double d = 0;
-    const ConstArray4 a = A.fab(0).const_array(), b = B.fab(0).const_array();
-    for (int c = 0; c < 4; ++c)
-      for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
-        for (int i = dom.lo[0]; i <= dom.hi[0]; ++i)
-          d = std::fmax(d, std::fabs(a(i, j, c) - b(i, j, c)));
-    return d;
-  };
-
-  // Coeur spatial AMR == coeur spatial System (bit-identique).
-  {
-    MultiFab Rs(ba, dm, 4, 0), Ra(ba, dm, 4, 0), Rc(ba, dm, 4, 0);
-
-    // HLLC + primitif : div(face fluxes) == assemble_rhs, exactement.
-    rhs_system(HLLCFlux{}, true, Rs);
-    rhs_amr(HLLCFlux{}, true, Ra);
-    EXPECT_TRUE(maxdiff(Rs, Ra) < 1e-13)
-        << "HLLC+primitif : div(compute_face_fluxes) == assemble_rhs";
-    EXPECT_TRUE(norm_inf(Rs) > 1e-6) << "HLLC+primitif : residu non trivial";
-
-    // le primitif change le residu vs le conservatif (la reconstruction joue).
-    rhs_system(HLLCFlux{}, false, Rc);
-    EXPECT_TRUE(maxdiff(Rs, Rc) > 1e-9) << "HLLC : recon primitif != conservatif";
-
-    // Roe + primitif : meme parite bit-identique.
-    rhs_system(RoeFlux{}, true, Rs);
-    rhs_amr(RoeFlux{}, true, Ra);
-    EXPECT_TRUE(maxdiff(Rs, Ra) < 1e-13)
-        << "Roe+primitif : div(compute_face_fluxes) == assemble_rhs";
-    EXPECT_TRUE(norm_inf(Rs) > 1e-6) << "Roe+primitif : residu non trivial";
+  void serialize_exact_parameters(pops::ExactContractBuilder& contract) const {
+    Law::serialize_exact_parameters(contract);
   }
+
+  POPS_HD State source(const State&, const pops::ProviderValues<0>&) const { return {}; }
+  POPS_HD pops::Real elliptic_rhs(const State&) const { return pops::Real(0); }
+};
+
+template <class Ranked, class Value>
+Ranked filled(Value value) {
+  Ranked result{};
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = value;
+  return result;
+}
+
+std::size_t cell_count(const pops::Extent<Dim>& shape) {
+  std::size_t result = 1;
+  for (int axis = 0; axis < Dim; ++axis)
+    result *= static_cast<std::size_t>(shape[axis]);
+  return result;
+}
+
+pops::Index<Dim> index_from_ordinal(std::size_t ordinal, const pops::Box<Dim>& box) {
+  pops::Index<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    const auto length = static_cast<std::size_t>(box.length(axis));
+    result[axis] = box.lo[axis] + static_cast<int>(ordinal % length);
+    ordinal /= length;
+  }
+  return result;
+}
+
+std::size_t storage_ordinal(const pops::Box<Dim>& box, const pops::Index<Dim>& index) {
+  std::size_t result = 0;
+  std::size_t stride = 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    result += static_cast<std::size_t>(index[axis] - box.lo[axis]) * stride;
+    stride *= static_cast<std::size_t>(box.length(axis));
+  }
+  return result;
+}
+
+std::vector<double> smooth_positive_state(const pops::Extent<Dim>& shape) {
+  using Schema = typename EulerModel<Dim>::Schema;
+  const pops::Box<Dim> domain = pops::Box<Dim>::from_extents(shape);
+  const std::size_t cells = cell_count(shape);
+  std::vector<double> state(static_cast<std::size_t>(EulerModel<Dim>::n_vars) * cells, 0.0);
+  constexpr double two_pi = 6.283185307179586476925286766559;
+  for (std::size_t ordinal = 0; ordinal < cells; ++ordinal) {
+    const pops::Index<Dim> cell = index_from_ordinal(ordinal, domain);
+    double radius_squared = 0.0;
+    double phase = 0.0;
+    double velocity[Dim]{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      const double coordinate =
+          (static_cast<double>(cell[axis]) + 0.5) / static_cast<double>(shape[axis]);
+      const double centered = coordinate - 0.5;
+      radius_squared += centered * centered;
+      phase += static_cast<double>(axis + 1) * two_pi * coordinate;
+      velocity[axis] =
+          0.08 * static_cast<double>(axis + 1) * std::sin(two_pi * coordinate + 0.3 * axis);
+    }
+    const double density = 1.0 + 0.35 * std::exp(-radius_squared / 0.025);
+    const double pressure = 1.0 + 0.08 * std::sin(phase);
+    double kinetic = 0.0;
+    state[static_cast<std::size_t>(Schema::density) * cells + ordinal] = density;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const double momentum = density * velocity[axis];
+      state[static_cast<std::size_t>(axis + 1) * cells + ordinal] = momentum;
+      kinetic += 0.5 * density * velocity[axis] * velocity[axis];
+    }
+    state[static_cast<std::size_t>(Schema::energy) * cells + ordinal] =
+        pressure / (static_cast<double>(kGamma) - 1.0) + kinetic;
+  }
+  return state;
+}
+
+pops::SystemConfig<Dim> system_config() {
+  pops::SystemConfig<Dim> config;
+  config.shape = filled<pops::Extent<Dim>>(kCellsPerAxis);
+  config.lower = filled<pops::RealVector<Dim>>(pops::Real(0));
+  config.upper = filled<pops::RealVector<Dim>>(pops::Real(1));
+  config.periodicity.fill(true);
+  config.boxes = {config.index_domain()};
+  return config;
+}
+
+pops::AmrSystemConfig<Dim> amr_config() {
+  pops::AmrSystemConfig<Dim> config;
+  config.shape = filled<pops::Extent<Dim>>(kCellsPerAxis);
+  config.lower = filled<pops::RealVector<Dim>>(pops::Real(0));
+  config.upper = filled<pops::RealVector<Dim>>(pops::Real(1));
+  config.periodicity.fill(true);
+  config.level_count = 1;
+  config.transition_ratios.clear();
+  config.transition_buffers.clear();
+  config.transition_lookaheads.clear();
+  config.regrid_every = 0;
+  return config;
+}
+
+std::vector<double> flatten(const pops::MultiFab<Dim>& field) {
+  EXPECT_EQ(field.local_size(), 1U);
+  if (field.local_size() != 1U)
+    return {};
+  const auto& fab = field.fab(0);
+  auto host = fab.create_host_mirror();
+  fab.copy_to_host(host);
+  const std::size_t cells = static_cast<std::size_t>(fab.box().numPts());
+  std::vector<double> result(static_cast<std::size_t>(fab.ncomp()) * cells);
+  for (std::size_t ordinal = 0; ordinal < cells; ++ordinal) {
+    const pops::Index<Dim> cell = index_from_ordinal(ordinal, fab.box());
+    for (int component = 0; component < fab.ncomp(); ++component) {
+      const std::size_t source =
+          static_cast<std::size_t>(component) * static_cast<std::size_t>(fab.grown_box().numPts()) +
+          storage_ordinal(fab.grown_box(), cell);
+      result[static_cast<std::size_t>(component) * cells + ordinal] = host(source);
+    }
+  }
+  return result;
+}
+
+double max_difference(const std::vector<double>& left, const std::vector<double>& right) {
+  if (left.size() != right.size())
+    return HUGE_VAL;
+  double result = 0.0;
+  for (std::size_t index = 0; index < left.size(); ++index)
+    result = std::fmax(result, std::fabs(left[index] - right[index]));
+  return result;
+}
+
+double max_magnitude(const std::vector<double>& values) {
+  double result = 0.0;
+  for (const double value : values)
+    result = std::fmax(result, std::fabs(value));
+  return result;
+}
+
+struct SpatialPair {
+  std::vector<double> uniform;
+  std::vector<double> adaptive;
+};
+
+SpatialPair evaluate_pair(const std::string& riemann, const std::string& reconstruction,
+                          const std::vector<double>& state) {
+  pops::System<Dim> uniform(system_config());
+  uniform.install_block_state_route("gas", "test.amr-spatial-parity/system/gas/state");
+  uniform.seal_auxiliary_providers();
+  pops::add_compiled_model<Dim>(uniform, "gas", EulerModel<Dim>{}, "minmod", riemann,
+                                reconstruction, "explicit", static_cast<double>(kGamma));
+  uniform.set_state("gas", state);
+
+  pops::AmrSystem<Dim> adaptive(amr_config());
+  adaptive.install_block_state_route("gas", "test.amr-spatial-parity/amr/gas/state");
+  pops::add_compiled_model<Dim>(adaptive, "gas", EulerModel<Dim>{}, "minmod", riemann,
+                                reconstruction, "explicit", static_cast<double>(kGamma), 1, 1, {},
+                                {}, 0.0, static_cast<double>(pops::kWenoEpsilon), false,
+                                "tests.amr-spatial-parity/physical_flux");
+  adaptive.set_conservative_state("gas", state);
+  const auto& evaluation = adaptive.evaluate_prepared_amr_level(
+      {.clock = "test.amr-spatial-parity", .level = 0, .stage_fraction = {0, 1}});
+  return {uniform.eval_rhs("gas"), flatten(evaluation.residual)};
+}
+
+}  // namespace
+
+TEST(test_amr_spatial_parity, GeneratedFacadesShareExactRankedHllcAndRoeSpatialAuthority) {
+#if defined(POPS_HAS_KOKKOS)
+  Kokkos::ScopeGuard guard;
+#endif
+  const std::vector<double> state = smooth_positive_state(system_config().shape);
+
+  const SpatialPair hllc_primitive = evaluate_pair("hllc", "primitive", state);
+  const SpatialPair hllc_conservative = evaluate_pair("hllc", "conservative", state);
+  const SpatialPair roe_primitive = evaluate_pair("roe", "primitive", state);
+  const SpatialPair roe_conservative = evaluate_pair("roe", "conservative", state);
+
+  for (const auto* pair :
+       {&hllc_primitive, &hllc_conservative, &roe_primitive, &roe_conservative}) {
+    EXPECT_LT(max_difference(pair->uniform, pair->adaptive), 1e-13);
+    EXPECT_GT(max_magnitude(pair->uniform), 1e-6);
+  }
+  EXPECT_GT(max_difference(hllc_primitive.uniform, hllc_conservative.uniform), 1e-10);
+  EXPECT_GT(max_difference(roe_primitive.uniform, roe_conservative.uniform), 1e-10);
+  EXPECT_GT(max_difference(hllc_primitive.uniform, roe_primitive.uniform), 1e-10)
+      << "HLLC and Roe must remain distinct primitive-state Riemann authorities";
+  EXPECT_GT(max_difference(hllc_conservative.uniform, roe_conservative.uniform), 1e-10)
+      << "HLLC and Roe must remain distinct conservative-state Riemann authorities";
 }
