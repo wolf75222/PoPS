@@ -1,9 +1,9 @@
-// AmrSystem::potential() : le getter qui expose phi du NIVEAU GROSSIER (base) en (n*n) row-major,
-// pendant raffine de System::potential(). Sans raffinement (seuil enorme -> un seul niveau grossier
-// mono-box couvrant tout le domaine), AmrSystem resout EXACTEMENT le meme Poisson discret que System
+// AmrSystem::potential() : le getter qui expose phi du NIVEAU GROSSIER (base) dans l'ordre natif
+// aplati exact-rank, pendant raffine de System::potential(). Sans raffinement (seuil enorme -> un seul
+// niveau grossier mono-box couvrant tout le domaine), AmrSystem resout EXACTEMENT le meme Poisson discret que System
 // avec solver='geometric_mg' (meme operateur lap(phi)=f, meme rhs f = elliptic_rhs(U), meme BC, meme
 // box). On verifie donc :
-//   (1) forme (n*n), valeurs FINIES, champ NON TRIVIAL (variation spatiale reelle) ;
+//   (1) forme (produit des axes), valeurs FINIES, champ NON TRIVIAL (variation spatiale reelle) ;
 //   (2) Poisson periodique a source NEUTRE (alpha (n - n0), integrale nulle) -> phi de moyenne ~0 ;
 //   (3) PARITE avec System::potential() (geometric_mg) sur le MEME modele / densite : meme phi a la
 //       tolerance MG pres (les deux passent par GeometricMG sur le meme grossier mono-box) ;
@@ -13,6 +13,7 @@
 #include <gtest/gtest.h>
 
 #include "explicit_amr_program.hpp"
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/runtime/system.hpp>
@@ -28,17 +29,32 @@ using namespace pops;
 
 // Bulle de densite lisse autour du centre, periodique. Moyenne retiree pour neutraliser la source
 // (fond background n0 = moyenne) : Poisson periodique exige une integrale de second membre nulle.
-static std::vector<double> blob(int n, double& mean_out) {
-  std::vector<double> rho(static_cast<std::size_t>(n) * n);
+template <int Dim>
+std::size_t cell_count(const Extent<Dim>& shape) {
+  std::size_t result = 1;
+  for (int axis = 0; axis < Dim; ++axis)
+    result *= static_cast<std::size_t>(shape[axis]);
+  return result;
+}
+
+template <int Dim>
+static std::vector<double> blob(const Extent<Dim>& shape, double& mean_out) {
+  std::vector<double> rho(cell_count(shape));
   double s = 0;
-  for (int j = 0; j < n; ++j)
-    for (int i = 0; i < n; ++i) {
-      const double x = (i + 0.5) / n - 0.5, y = (j + 0.5) / n - 0.5;
-      const double v = std::exp(-(x * x + y * y) / 0.01);
-      rho[static_cast<std::size_t>(j) * n + i] = v;
-      s += v;
+  for (std::size_t ordinal = 0; ordinal < rho.size(); ++ordinal) {
+    std::size_t remainder = ordinal;
+    double radius_squared = 0.0;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const auto extent = static_cast<std::size_t>(shape[axis]);
+      const double coordinate =
+          (static_cast<double>(remainder % extent) + 0.5) / static_cast<double>(extent) - 0.5;
+      remainder /= extent;
+      radius_squared += coordinate * coordinate;
     }
-  mean_out = s / (static_cast<double>(n) * n);
+    rho[ordinal] = std::exp(-radius_squared / 0.01);
+    s += rho[ordinal];
+  }
+  mean_out = s / static_cast<double>(rho.size());
   return rho;
 }
 
@@ -57,17 +73,19 @@ TEST(test_amr_potential, Runs) {
   Kokkos::ScopeGuard guard;
 #endif
   const int n = 64;
+  constexpr int Dim = kNativeDimension;
   double n0 = 0;
-  const std::vector<double> rho = blob(n, n0);
+  AmrSystemConfig<Dim> cfg;
+  for (int axis = 0; axis < Dim; ++axis) {
+    cfg.shape[axis] = n;
+    cfg.periodicity[axis] = true;
+  }
+  const std::vector<double> rho = blob(cfg.shape, n0);
 
   // --- AmrSystem SANS raffinement : un seul niveau grossier mono-box couvrant tout le domaine ---
-  AmrSystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
   cfg.regrid_every = 0;  // pas de re-raffinement apres l'init (seuil enorme de toute facon)
 
-  AmrSystem amr(cfg);
+  AmrSystem<Dim> amr(cfg);
   amr.add_block("phi_test", exb_background(n0), "minmod", "rusanov", "conservative", "explicit", 1);
   amr.set_poisson("charge_density", "geometric_mg", "auto");
   amr.set_density("phi_test", rho);
@@ -76,7 +94,7 @@ TEST(test_amr_potential, Runs) {
   const std::vector<double> pa = amr.potential();
 
   // (1) forme + valeurs finies + non trivial
-  EXPECT_EQ(static_cast<int>(pa.size()), n * n) << "potential() rend n*n valeurs";
+  EXPECT_EQ(pa.size(), cell_count(cfg.shape)) << "potential() rend le nombre exact-rank de valeurs";
   bool all_finite = true;
   double pmin = pa.empty() ? 0 : pa[0], pmax = pa.empty() ? 0 : pa[0], psum = 0;
   for (double v : pa) {
@@ -90,16 +108,17 @@ TEST(test_amr_potential, Runs) {
   EXPECT_TRUE((pmax - pmin) > 1e-6) << "potential() : champ non trivial (variation spatiale)";
 
   // (2) Poisson periodique a source neutre -> phi defini a une constante pres, moyenne ~ 0
-  const double pmean = psum / (static_cast<double>(n) * n);
+  const double pmean = psum / static_cast<double>(pa.size());
   EXPECT_TRUE(std::fabs(pmean) < 1e-6 * (pmax - pmin) + 1e-9)
       << "potential() : moyenne ~0 (source neutre)";
 
   // --- System (solver geometric_mg) sur le MEME modele/densite : oracle de parite ---
-  SystemConfig scfg;
-  scfg.n = n;
-  scfg.L = 1.0;
-  scfg.periodicity = {true, true};
-  System sys(scfg);
+  SystemConfig<Dim> scfg;
+  for (int axis = 0; axis < Dim; ++axis) {
+    scfg.shape[axis] = n;
+    scfg.periodicity[axis] = true;
+  }
+  System<Dim> sys(scfg);
   sys.add_block("phi_test", exb_background(n0), "minmod", "rusanov", "conservative", "explicit", 1);
   sys.set_poisson("charge_density", "geometric_mg", "auto");
   sys.set_density("phi_test", rho);
@@ -113,7 +132,7 @@ TEST(test_amr_potential, Runs) {
   double smean = 0;
   for (double v : ps)
     smean += v;
-  smean /= (static_cast<double>(n) * n);
+  smean /= static_cast<double>(ps.size());
   double dmax = 0, ref = 0;
   for (std::size_t k = 0; k < pa.size() && k < ps.size(); ++k) {
     dmax = std::fmax(dmax, std::fabs((pa[k] - pmean) - (ps[k] - smean)));
@@ -127,7 +146,8 @@ TEST(test_amr_potential, Runs) {
   // (4) apres quelques pas (transport ExB + regrid), potential() reste fini et non trivial
   amr.advance(1e-3, 8);
   const std::vector<double> pa2 = amr.potential();
-  EXPECT_EQ(static_cast<int>(pa2.size()), n * n) << "potential() apres advance : n*n";
+  EXPECT_EQ(pa2.size(), cell_count(cfg.shape))
+      << "potential() apres advance rend le nombre exact-rank de valeurs";
   bool finite2 = true;
   double p2min = pa2[0], p2max = pa2[0];
   for (double v : pa2) {
