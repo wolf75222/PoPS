@@ -2278,6 +2278,7 @@ struct AmrSystem<Dim>::Impl {
     TaggingFieldKind kind = TaggingFieldKind::state;
     std::string qualified_identity;
     std::string provider_group;
+    std::size_t state_block = std::numeric_limits<std::size_t>::max();
   };
 
   struct ResolvedTaggingProgram {
@@ -2755,11 +2756,14 @@ struct AmrSystem<Dim>::Impl {
     std::vector<std::shared_ptr<const field_type>> active_coverage;
     std::shared_ptr<std::vector<PreparedBoundaryContext>> boundary_context_storage;
     std::shared_ptr<PreparedFieldBoundaryContextSet<Dim>> boundary_contexts;
+    std::shared_ptr<std::vector<PreparedBoundaryContext>> prior_boundary_context_storage;
+    std::shared_ptr<PreparedFieldBoundaryContextSet<Dim>> prior_boundary_contexts;
     std::string prepared_contract;
     std::string prepared_nullspace_contract;
     std::uint64_t topology_epoch = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t materialization_generation = std::numeric_limits<std::uint64_t>::max();
     bool candidate_ready = false;
+    bool boundary_context_attempt_active = false;
 
     bool materialized_for(const engine_type& engine) const noexcept {
       return prepared_solver && topology_epoch == engine.topology_epoch() &&
@@ -2780,12 +2784,20 @@ struct AmrSystem<Dim>::Impl {
       active_coverage.clear();
       boundary_context_storage.reset();
       boundary_contexts.reset();
+      prior_boundary_context_storage.reset();
+      prior_boundary_contexts.reset();
       prepared_contract.clear();
       prepared_nullspace_contract.clear();
       topology_epoch = std::numeric_limits<std::uint64_t>::max();
       materialization_generation = std::numeric_limits<std::uint64_t>::max();
       candidate_ready = false;
+      boundary_context_attempt_active = false;
     }
+  };
+
+  struct DetachedFieldBoundaryContexts {
+    std::shared_ptr<std::vector<PreparedBoundaryContext>> storage;
+    std::shared_ptr<PreparedFieldBoundaryContextSet<Dim>> views;
   };
 
   struct PreparedHierarchy {
@@ -4616,114 +4628,120 @@ struct AmrSystem<Dim>::Impl {
 
   runtime::system::AuxiliaryEvaluationPoint field_output_evaluation_point(
       std::size_t level, const runtime::multiblock::BoundaryEvaluationPoint* evaluation) const {
-    if (macro_step < 0 || level > static_cast<std::size_t>(std::numeric_limits<int>::max()))
-      throw std::logic_error("AMR field-output publication has an invalid accepted coordinate");
+    if (!prepared_hierarchy || !prepared_hierarchy->lane)
+      throw std::logic_error("AMR field-output publication has no prepared hierarchy lane");
+    const ExecutionLane& lane = *prepared_hierarchy->lane;
     runtime::system::AuxiliaryEvaluationPoint point;
-    point.clock = evaluation == nullptr ? "pops.amr.accepted" : evaluation->clock;
-    point.accepted_step = static_cast<std::uint64_t>(macro_step);
-    point.layout_generation = engine->materialization_generation();
-    point.level = static_cast<int>(level);
-    point.substep = evaluation == nullptr ? 0 : evaluation->substep;
-    point.stage = evaluation == nullptr ? 0 : evaluation->stage;
-    point.event = runtime::system::AuxiliaryEvaluationEvent::before_field_solve;
-    point.validate();
-    ExactContractBuilder exact;
-    point.serialize_exact(exact);
+    std::string point_contract;
+    std::exception_ptr local_error;
+    try {
+      if (macro_step < 0 || level > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+        throw std::logic_error("AMR field-output publication has an invalid accepted coordinate");
+      point.clock = evaluation == nullptr ? "pops.amr.accepted" : evaluation->clock;
+      point.accepted_step = static_cast<std::uint64_t>(macro_step);
+      point.layout_generation = engine->materialization_generation();
+      point.level = static_cast<int>(level);
+      point.substep = evaluation == nullptr ? 0 : evaluation->substep;
+      point.stage = evaluation == nullptr ? 0 : evaluation->stage;
+      point.event = runtime::system::AuxiliaryEvaluationEvent::before_field_solve;
+      point.validate();
+      ExactContractBuilder exact;
+      point.serialize_exact(exact);
+      point_contract = std::move(exact).release();
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        local_error, &lane, "AMR field-output evaluation-point preparation failed collectively");
     if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{"amr-field-output-evaluation-point", std::move(exact).release()}},
-            prepared_hierarchy->lane->communicator()))
+            {{"amr-field-output-evaluation-point", point_contract}}, lane))
       throw std::runtime_error("AMR field-output evaluation point differs across MPI ranks");
     return point;
   }
 
-  void prepare_field_boundary_contexts(
-      const std::string& slot, FieldPlan& plan, int active_level,
+  DetachedFieldBoundaryContexts prepare_field_boundary_contexts(
+      const std::string& slot, const FieldPlan& plan, int active_level,
       const std::vector<const field_type*>& stage_overrides,
       const runtime::multiblock::BoundaryEvaluationPoint* evaluation_point) {
     if (!plan.boundary_kernel)
-      return;
+      return {};
     if (evaluation_point == nullptr && !plan.boundary_point)
       throw std::logic_error("AMR dynamic field boundary has no exact logical evaluation point");
     if (evaluation_point != nullptr && evaluation_point->tick < 0)
       throw std::overflow_error("AMR dynamic field boundary tick is negative");
 
     const std::size_t level_count = engine->hierarchy().num_levels();
-    const bool prepare_detached = !plan.boundary_context_storage;
-    if (prepare_detached != !plan.boundary_contexts)
+    if (static_cast<bool>(plan.boundary_context_storage) !=
+        static_cast<bool>(plan.boundary_contexts))
       throw std::logic_error("AMR prepared field boundary context cache is incomplete");
 
-    auto context_storage = plan.boundary_context_storage;
-    auto contexts = plan.boundary_contexts;
-    if (prepare_detached) {
-      context_storage = std::make_shared<std::vector<PreparedBoundaryContext>>();
-      context_storage->reserve(level_count);
-      for (std::size_t level = 0; level < level_count; ++level) {
-        PreparedBoundaryContext context;
-        context.parameters = &plan.boundary_parameters;
-        context.point.level = static_cast<int>(level);
-        context.point.iteration = 0;
+    auto context_storage = std::make_shared<std::vector<PreparedBoundaryContext>>();
+    context_storage->reserve(level_count);
+    for (std::size_t level = 0; level < level_count; ++level) {
+      PreparedBoundaryContext context;
+      context.parameters = &plan.boundary_parameters;
+      context.point.level = static_cast<int>(level);
+      context.point.iteration = 0;
 
-        context.states.reserve(plan.boundary_state_blocks.size());
-        context.state_distributions.reserve(plan.boundary_state_blocks.size());
-        context.state_identities.reserve(plan.boundary_state_blocks.size());
-        for (std::size_t dependency = 0; dependency < plan.boundary_state_blocks.size();
-             ++dependency) {
-          const auto block =
-              std::find_if(blocks.begin(), blocks.end(), [&](const BlockSpec& candidate) {
-                return candidate.name == plan.boundary_state_blocks[dependency];
-              });
-          if (block == blocks.end())
-            throw std::runtime_error(
-                "AMR dynamic boundary names an unknown state dependency block");
-          const std::size_t block_index =
-              static_cast<std::size_t>(std::distance(blocks.begin(), block));
-          const field_type* state = &block_state(block_index, level);
-          const int component = plan.boundary_state_components[dependency];
-          if (!same_field_contract(*state, block_state(block_index, level)) || component < 0 ||
-              component >= state->ncomp())
-            throw std::invalid_argument(
-                "AMR dynamic boundary state dependency is not materialized exactly");
-          context.states.push_back(state);
-          context.state_distributions.push_back(field_distribution(*state));
-          context.state_identities.push_back(block->name + "/" +
-                                             prepared_hierarchy->state_field_identities[level]);
-        }
-
-        context.fields.reserve(plan.boundary_field_blocks.size());
-        context.field_distributions.reserve(plan.boundary_field_blocks.size());
-        context.field_identities.reserve(plan.boundary_field_blocks.size());
-        for (std::size_t dependency = 0; dependency < plan.boundary_field_blocks.size();
-             ++dependency) {
-          if (plan.boundary_field_components[dependency] != 0)
-            throw std::invalid_argument(
-                "AMR scalar field boundary dependency must select component zero");
-          const auto dependency_plan =
-              std::find_if(field_plans.begin(), field_plans.end(), [&](const auto& candidate) {
-                return candidate.second.output_block == plan.boundary_field_blocks[dependency] &&
-                       candidate.second.output_key == plan.boundary_field_keys[dependency];
-              });
-          if (dependency_plan == field_plans.end())
-            throw std::runtime_error(
-                "AMR dynamic boundary names an unknown owner-qualified field dependency");
-          if (dependency_plan->first == slot)
-            throw std::logic_error(
-                "AMR dynamic boundary cannot name its iterate as an external field dependency");
-          const FieldPlan& dependency_field = dependency_plan->second;
-          if (!dependency_field.materialized_for(*engine) ||
-              dependency_field.accepted_potential.size() != level_count)
-            throw std::logic_error(
-                "AMR dynamic boundary field dependency must be solved and materialized first");
-          const field_type& values = *dependency_field.accepted_potential[level];
-          context.fields.push_back(&values);
-          context.field_distributions.push_back(field_distribution(values));
-          context.field_identities.push_back(dependency_plan->first + "/" +
-                                             dependency_field.provider_identity);
-        }
-        context_storage->push_back(std::move(context));
+      context.states.reserve(plan.boundary_state_blocks.size());
+      context.state_distributions.reserve(plan.boundary_state_blocks.size());
+      context.state_identities.reserve(plan.boundary_state_blocks.size());
+      for (std::size_t dependency = 0; dependency < plan.boundary_state_blocks.size();
+           ++dependency) {
+        const auto block =
+            std::find_if(blocks.begin(), blocks.end(), [&](const BlockSpec& candidate) {
+              return candidate.name == plan.boundary_state_blocks[dependency];
+            });
+        if (block == blocks.end())
+          throw std::runtime_error("AMR dynamic boundary names an unknown state dependency block");
+        const std::size_t block_index =
+            static_cast<std::size_t>(std::distance(blocks.begin(), block));
+        const field_type* state = &block_state(block_index, level);
+        const int component = plan.boundary_state_components[dependency];
+        if (!same_field_contract(*state, block_state(block_index, level)) || component < 0 ||
+            component >= state->ncomp())
+          throw std::invalid_argument(
+              "AMR dynamic boundary state dependency is not materialized exactly");
+        context.states.push_back(state);
+        context.state_distributions.push_back(field_distribution(*state));
+        context.state_identities.push_back(block->name + "/" +
+                                           prepared_hierarchy->state_field_identities[level]);
       }
-      contexts = std::make_shared<PreparedFieldBoundaryContextSet<Dim>>(
-          std::static_pointer_cast<void>(context_storage), level_count);
+
+      context.fields.reserve(plan.boundary_field_blocks.size());
+      context.field_distributions.reserve(plan.boundary_field_blocks.size());
+      context.field_identities.reserve(plan.boundary_field_blocks.size());
+      for (std::size_t dependency = 0; dependency < plan.boundary_field_blocks.size();
+           ++dependency) {
+        if (plan.boundary_field_components[dependency] != 0)
+          throw std::invalid_argument(
+              "AMR scalar field boundary dependency must select component zero");
+        const auto dependency_plan =
+            std::find_if(field_plans.begin(), field_plans.end(), [&](const auto& candidate) {
+              return candidate.second.output_block == plan.boundary_field_blocks[dependency] &&
+                     candidate.second.output_key == plan.boundary_field_keys[dependency];
+            });
+        if (dependency_plan == field_plans.end())
+          throw std::runtime_error(
+              "AMR dynamic boundary names an unknown owner-qualified field dependency");
+        if (dependency_plan->first == slot)
+          throw std::logic_error(
+              "AMR dynamic boundary cannot name its iterate as an external field dependency");
+        const FieldPlan& dependency_field = dependency_plan->second;
+        if (!dependency_field.materialized_for(*engine) ||
+            dependency_field.accepted_potential.size() != level_count)
+          throw std::logic_error(
+              "AMR dynamic boundary field dependency must be solved and materialized first");
+        const field_type& values = *dependency_field.accepted_potential[level];
+        context.fields.push_back(&values);
+        context.field_distributions.push_back(field_distribution(values));
+        context.field_identities.push_back(dependency_plan->first + "/" +
+                                           dependency_field.provider_identity);
+      }
+      context_storage->push_back(std::move(context));
     }
+    auto contexts = std::make_shared<PreparedFieldBoundaryContextSet<Dim>>(
+        std::static_pointer_cast<void>(context_storage), level_count);
 
     if (context_storage->size() != level_count || !contexts || contexts->size() != level_count)
       throw std::logic_error("AMR prepared field boundary context set is stale");
@@ -4764,11 +4782,96 @@ struct AmrSystem<Dim>::Impl {
       }
       contexts->bind(level, context.view());
     }
-    if (prepare_detached) {
-      plan.boundary_context_storage = std::move(context_storage);
-      plan.boundary_contexts = std::move(contexts);
+    return {std::move(context_storage), std::move(contexts)};
+  }
+
+  void restore_field_boundary_binding_collectively(FieldPlan& plan, const ExecutionLane& lane,
+                                                   std::string_view phase) {
+    const bool retained_prior = plan.prior_boundary_context_storage || plan.prior_boundary_contexts;
+    const bool invalid =
+        plan.boundary_context_attempt_active
+            ? (!plan.boundary_kernel || !plan.prepared_solver || !plan.boundary_context_storage ||
+               !plan.boundary_contexts || !plan.prior_boundary_context_storage ||
+               !plan.prior_boundary_contexts)
+            : retained_prior;
+    if (all_reduce_max(invalid ? 1L : 0L, lane) != 0) {
+      plan.discard_materialization();
+      throw std::runtime_error("AMR exact field " + std::string(phase) +
+                               " has an invalid retained boundary binding");
     }
-    plan.prepared_solver->set_boundary_contexts(plan.boundary_contexts);
+    if (!plan.boundary_context_attempt_active)
+      return;
+
+    static_assert(std::is_nothrow_swappable_v<decltype(plan.boundary_context_storage)>);
+    static_assert(std::is_nothrow_swappable_v<decltype(plan.boundary_contexts)>);
+    plan.boundary_context_storage.swap(plan.prior_boundary_context_storage);
+    plan.boundary_contexts.swap(plan.prior_boundary_contexts);
+    plan.boundary_context_attempt_active = false;
+
+    std::exception_ptr local_error;
+    try {
+      plan.prepared_solver->set_boundary_contexts(plan.boundary_contexts);
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+      // A provider that cannot restore a previously accepted binding is no longer usable. Destroy
+      // the solver and every retained context uniformly; the next request may rematerialize it.
+      plan.discard_materialization();
+      if (lane.size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error("AMR exact field " + std::string(phase) +
+                               " failed to restore its prior boundary binding collectively");
+    }
+    plan.prior_boundary_context_storage.reset();
+    plan.prior_boundary_contexts.reset();
+  }
+
+  static void clear_field_candidate_state_noexcept(FieldPlan& plan) noexcept {
+    for (auto& publication : plan.candidate_provider_publications)
+      if (publication)
+        publication->reject();
+    plan.candidate_provider_publications.clear();
+    plan.candidate_provider_storage.clear();
+    plan.stale_auxiliary_providers.clear();
+    plan.candidate_ready = false;
+  }
+
+  void rollback_active_field_candidate_collectively(const ExecutionLane& lane,
+                                                    std::string_view phase) {
+    FieldPlan* plan = nullptr;
+    if (!active_field_slot.empty()) {
+      const auto found = field_plans.find(active_field_slot);
+      if (found != field_plans.end())
+        plan = &found->second;
+    }
+    const long has_plan = plan == nullptr ? 0L : 1L;
+    const long minimum = all_reduce_min(has_plan, lane);
+    const long maximum = all_reduce_max(has_plan, lane);
+    if (minimum != maximum) {
+      if (plan != nullptr) {
+        plan->discard_materialization();
+        clear_field_candidate_state_noexcept(*plan);
+      }
+      active_field_slot.clear();
+      throw std::runtime_error("AMR exact field " + std::string(phase) +
+                               " candidate presence differs between MPI ranks");
+    }
+    if (plan == nullptr) {
+      active_field_slot.clear();
+      return;
+    }
+
+    std::exception_ptr restoration_error;
+    try {
+      restore_field_boundary_binding_collectively(*plan, lane, phase);
+    } catch (...) {
+      restoration_error = std::current_exception();
+    }
+    clear_field_candidate_state_noexcept(*plan);
+    active_field_slot.clear();
+    if (restoration_error)
+      std::rethrow_exception(restoration_error);
   }
 
   SolveReport solve_field_candidate(
@@ -4779,68 +4882,262 @@ struct AmrSystem<Dim>::Impl {
     if (!multiblock_hierarchy)
       throw std::logic_error("AMR exact field solve requires its prepared multi-block hierarchy");
     const ExecutionLane& lane = multiblock_hierarchy->lane();
-    FieldPlan& plan = field_plans.at(slot);
-    if (!active_field_slot.empty())
-      throw std::logic_error(
-          "AMR exact field solves are sequential until the prior SolveOutcome is consumed");
-    if (active_level < 0 ||
-        static_cast<std::size_t>(active_level) >= engine->hierarchy().num_levels())
-      throw std::out_of_range("AMR exact field solve active level is outside the hierarchy");
-    if (!stage_overrides.empty() && stage_overrides.size() != blocks.size())
-      throw std::invalid_argument(
-          "AMR exact field stage vector must cover the runtime block registry");
+    FieldPlan* prepared_plan = nullptr;
+    std::size_t level_count = 0;
+    std::string prepared_active_field_slot;
+    std::exception_ptr precondition_error;
+    try {
+      const auto found = field_plans.find(slot);
+      if (found == field_plans.end())
+        throw std::out_of_range("AmrSystem has no exact field provider slot '" + slot + "'");
+      FieldPlan& candidate = found->second;
+      if (!active_field_slot.empty())
+        throw std::logic_error(
+            "AMR exact field solves are sequential until the prior SolveOutcome is consumed");
+      level_count = engine->hierarchy().num_levels();
+      if (active_level < 0 || static_cast<std::size_t>(active_level) >= level_count)
+        throw std::out_of_range("AMR exact field solve active level is outside the hierarchy");
+      if (!stage_overrides.empty() && stage_overrides.size() != blocks.size())
+        throw std::invalid_argument(
+            "AMR exact field stage vector must cover the runtime block registry");
+      if (!candidate.prepared_solver ||
+          candidate.prepared_solver->level_count() != static_cast<int>(level_count) ||
+          candidate.accepted_potential.size() != level_count || !prepared_hierarchy ||
+          prepared_hierarchy->block_levels.size() != blocks.size())
+        throw std::logic_error("AMR exact field solve has an incomplete prepared hierarchy");
+      if (candidate.candidate_ready)
+        throw std::logic_error("AMR exact field solve retained an unpublished candidate");
+      if (!candidate.rhs_by_block.empty() && candidate.rhs_by_block.size() != blocks.size())
+        throw std::logic_error("AMR exact field RHS registry changed after preparation");
+      if (candidate.boundary_state_blocks.size() != candidate.boundary_state_components.size() ||
+          candidate.boundary_field_blocks.size() != candidate.boundary_field_keys.size() ||
+          candidate.boundary_field_blocks.size() != candidate.boundary_field_components.size())
+        throw std::logic_error("AMR exact field boundary dependency registry is incomplete");
+      if (static_cast<bool>(candidate.boundary_context_storage) !=
+          static_cast<bool>(candidate.boundary_contexts))
+        throw std::logic_error("AMR exact field boundary context cache is incomplete");
+      if (candidate.boundary_context_attempt_active || candidate.prior_boundary_context_storage ||
+          candidate.prior_boundary_contexts)
+        throw std::logic_error("AMR exact field retained a prior attempt boundary binding");
+      if (prepared_hierarchy->state_field_identities.size() != level_count)
+        throw std::logic_error("AMR exact field state identity registry is incomplete");
+      for (std::size_t block = 0; block < blocks.size(); ++block) {
+        if (prepared_hierarchy->block_levels[block].size() != level_count)
+          throw std::logic_error("AMR exact field block-level preparation is incomplete");
+        if (!stage_overrides.empty() && stage_overrides[block] != nullptr &&
+            !same_field_contract(*stage_overrides[block],
+                                 block_state(block, static_cast<std::size_t>(active_level))))
+          throw std::invalid_argument(
+              "AMR exact field stage override differs from its live block-level contract");
+      }
+      for (std::size_t level = 0; level < level_count; ++level) {
+        if (!candidate.accepted_potential[level] ||
+            !same_field_contract(
+                *candidate.accepted_potential[level],
+                candidate.prepared_solver->candidate_level(static_cast<int>(level))) ||
+            candidate.prepared_solver->rhs_level(static_cast<int>(level)).ncomp() != 1)
+          throw std::logic_error("AMR exact field level carriers are incomplete");
+      }
+      prepared_active_field_slot = slot;
+      prepared_plan = &candidate;
+    } catch (...) {
+      precondition_error = std::current_exception();
+    }
+    if (all_reduce_max(precondition_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && precondition_error)
+        std::rethrow_exception(precondition_error);
+      throw std::runtime_error("AMR exact field solve preconditions failed collectively");
+    }
+    FieldPlan& plan = *prepared_plan;
 
     bool has_rhs = false;
-    prepare_field_boundary_contexts(slot, plan, active_level, stage_overrides, evaluation_point);
-    active_field_slot = slot;
-    plan.candidate_ready = false;
+    std::vector<std::unique_ptr<field_type>> detached_rhs;
+    std::vector<std::unique_ptr<field_type>> detached_candidates;
+    DetachedFieldBoundaryContexts detached_boundary_contexts;
+    DetachedFieldBoundaryContexts detached_initial_boundary_contexts;
+    std::exception_ptr preparation_error;
     try {
-      for (std::size_t level = 0; level < engine->hierarchy().num_levels(); ++level) {
-        field_type& rhs = plan.prepared_solver->rhs_level(static_cast<int>(level));
-        field_type& candidate = plan.prepared_solver->candidate_level(static_cast<int>(level));
+      detached_boundary_contexts = prepare_field_boundary_contexts(
+          slot, plan, active_level, stage_overrides, evaluation_point);
+      if (plan.boundary_kernel && !plan.boundary_contexts)
+        detached_initial_boundary_contexts =
+            prepare_field_boundary_contexts(slot, plan, active_level, {}, evaluation_point);
+      detached_rhs.reserve(level_count);
+      detached_candidates.reserve(level_count);
+      for (std::size_t level = 0; level < level_count; ++level) {
+        const field_type& prepared_rhs = plan.prepared_solver->rhs_level(static_cast<int>(level));
+        const field_type& prepared_candidate =
+            plan.prepared_solver->candidate_level(static_cast<int>(level));
+        auto rhs_storage = std::make_unique<field_type>(
+            prepared_rhs.layout(), prepared_rhs.distribution(), prepared_rhs.local_rank(),
+            prepared_rhs.ncomp(), prepared_rhs.ghosts());
+        auto candidate_storage = std::make_unique<field_type>(
+            prepared_candidate.layout(), prepared_candidate.distribution(),
+            prepared_candidate.local_rank(), prepared_candidate.ncomp(),
+            prepared_candidate.ghosts());
+        field_type& rhs = *rhs_storage;
+        field_type& candidate = *candidate_storage;
         rhs.set_val(Real(0));
         copy_full_field_in_place(*plan.accepted_potential[level], candidate);
-        const field_type* state = &engine->hierarchy().state(level);
-        if (static_cast<int>(level) == active_level && !stage_overrides.empty() &&
-            stage_overrides.front() != nullptr)
-          state = stage_overrides.front();
-        if (!same_field_contract(*state, engine->hierarchy().state(level)))
-          throw std::invalid_argument(
-              "AMR exact field stage override differs from its live level contract");
-
-        if (plan.use_prepared_level_rhs) {
-          prepared_hierarchy->block_levels.front()[level].add_poisson_rhs(*state, rhs);
-          has_rhs = true;
-        }
+        std::unique_ptr<field_type> contribution;
         if (!plan.rhs_by_block.empty()) {
-          if (plan.rhs_by_block.size() != blocks.size())
-            throw std::logic_error("AMR exact field RHS registry changed after preparation");
-          for (const PreparedFieldRhs& provider : plan.rhs_by_block.front()) {
-            field_type& scratch = *plan.contribution_scratch[level];
-            scratch.set_val(Real(0));
-            provider.evaluate(*state, scratch);
-            saxpy(rhs, provider.coefficient, scratch);
+          contribution = std::make_unique<field_type>(
+              prepared_rhs.layout(), prepared_rhs.distribution(), prepared_rhs.local_rank(),
+              prepared_rhs.ncomp(), prepared_rhs.ghosts());
+          contribution->set_val(Real(0));
+        }
+        for (std::size_t block = 0; block < blocks.size(); ++block) {
+          const field_type& live = block_state(block, level);
+          const field_type* state = &live;
+          if (static_cast<int>(level) == active_level && !stage_overrides.empty() &&
+              stage_overrides[block] != nullptr)
+            state = stage_overrides[block];
+
+          if (plan.use_prepared_level_rhs) {
+            prepared_hierarchy->block_levels[block][level].add_poisson_rhs(*state, rhs);
             has_rhs = true;
           }
+          if (!plan.rhs_by_block.empty()) {
+            for (const PreparedFieldRhs& provider : plan.rhs_by_block[block]) {
+              field_type& scratch = *contribution;
+              scratch.set_val(Real(0));
+              provider.evaluate(*state, scratch);
+              saxpy(rhs, provider.coefficient, scratch);
+              has_rhs = true;
+            }
+          }
         }
+        detached_rhs.push_back(std::move(rhs_storage));
+        detached_candidates.push_back(std::move(candidate_storage));
       }
       if (!has_rhs)
         throw std::runtime_error("AMR exact field has no prepared RHS provider");
       Kokkos::fence();
-      SolveReport report = plan.prepared_solver->solve(lane);
-      if (!report.solved_value_available()) {
-        active_field_slot.clear();
-        return report;
+    } catch (...) {
+      preparation_error = std::current_exception();
+    }
+    if (all_reduce_max(preparation_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && preparation_error)
+        std::rethrow_exception(preparation_error);
+      throw std::runtime_error(
+          "AMR exact field RHS and boundary preparation failed collectively before solve");
+    }
+
+    std::exception_ptr staging_error;
+    try {
+      if (detached_rhs.size() != level_count || detached_candidates.size() != level_count)
+        throw std::logic_error("AMR exact field detached solve carriers are incomplete");
+      if (plan.boundary_kernel &&
+          (!detached_boundary_contexts.storage || !detached_boundary_contexts.views))
+        throw std::logic_error("AMR exact field detached boundary contexts are incomplete");
+      if (plan.boundary_kernel && !plan.boundary_contexts &&
+          (!detached_initial_boundary_contexts.storage ||
+           !detached_initial_boundary_contexts.views))
+        throw std::logic_error("AMR exact field initial boundary binding is incomplete");
+      for (std::size_t level = 0; level < level_count; ++level) {
+        copy_full_field_in_place(*detached_rhs[level],
+                                 plan.prepared_solver->rhs_level(static_cast<int>(level)));
+        copy_full_field_in_place(*detached_candidates[level],
+                                 plan.prepared_solver->candidate_level(static_cast<int>(level)));
       }
+      Kokkos::fence();
+    } catch (...) {
+      staging_error = std::current_exception();
+    }
+    if (all_reduce_max(staging_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && staging_error)
+        std::rethrow_exception(staging_error);
+      throw std::runtime_error(
+          "AMR exact field detached carriers failed collectively before solve");
+    }
+
+    if (plan.boundary_kernel) {
+      static_assert(std::is_nothrow_swappable_v<decltype(plan.boundary_context_storage)>);
+      static_assert(std::is_nothrow_swappable_v<decltype(plan.boundary_contexts)>);
+
+      if (!plan.boundary_contexts) {
+        plan.boundary_context_storage.swap(detached_initial_boundary_contexts.storage);
+        plan.boundary_contexts.swap(detached_initial_boundary_contexts.views);
+        std::exception_ptr initial_context_error;
+        try {
+          plan.prepared_solver->set_boundary_contexts(plan.boundary_contexts);
+        } catch (...) {
+          initial_context_error = std::current_exception();
+        }
+        if (all_reduce_max(initial_context_error ? 1L : 0L, lane) != 0) {
+          plan.boundary_context_storage.swap(detached_initial_boundary_contexts.storage);
+          plan.boundary_contexts.swap(detached_initial_boundary_contexts.views);
+          plan.discard_materialization();
+          if (lane.size() == 1 && initial_context_error)
+            std::rethrow_exception(initial_context_error);
+          throw std::runtime_error(
+              "AMR exact field initial boundary binding failed collectively before solve");
+        }
+      }
+
+      plan.boundary_context_storage.swap(plan.prior_boundary_context_storage);
+      plan.boundary_contexts.swap(plan.prior_boundary_contexts);
+      plan.boundary_context_storage.swap(detached_boundary_contexts.storage);
+      plan.boundary_contexts.swap(detached_boundary_contexts.views);
+      plan.boundary_context_attempt_active = true;
+
+      std::exception_ptr boundary_context_error;
+      try {
+        plan.prepared_solver->set_boundary_contexts(plan.boundary_contexts);
+      } catch (...) {
+        boundary_context_error = std::current_exception();
+      }
+      if (all_reduce_max(boundary_context_error ? 1L : 0L, lane) != 0) {
+        restore_field_boundary_binding_collectively(plan, lane,
+                                                    "attempt boundary binding rollback");
+        if (lane.size() == 1 && boundary_context_error)
+          std::rethrow_exception(boundary_context_error);
+        throw std::runtime_error(
+            "AMR exact field boundary context publication failed collectively before solve");
+      }
+    }
+    static_assert(std::is_nothrow_swappable_v<decltype(active_field_slot)>);
+    active_field_slot.swap(prepared_active_field_slot);
+    plan.candidate_ready = false;
+    SolveReport report;
+    std::exception_ptr solver_error;
+    try {
+      report = plan.prepared_solver->solve(lane);
+      if (!solve_report_is_publishable(report, plan.prepared_solver->maximum_iterations()))
+        throw std::runtime_error("AMR exact field solver published a malformed SolveReport");
+    } catch (...) {
+      solver_error = std::current_exception();
+    }
+    if (all_reduce_max(solver_error ? 1L : 0L, lane) != 0) {
+      rollback_active_field_candidate_collectively(lane, "solver failure rollback");
+      if (lane.size() == 1 && solver_error)
+        std::rethrow_exception(solver_error);
+      throw std::runtime_error("AMR exact field solver failed collectively before publication");
+    }
+    ExactSolveReportConsensusScratch report_consensus;
+    if (!report_consensus.agrees(report, lane)) {
+      rollback_active_field_candidate_collectively(lane, "report divergence rollback");
+      throw std::runtime_error(
+          "AMR exact field SolveReport differs between MPI ranks before publication");
+    }
+    if (!report.solved_value_available()) {
+      rollback_active_field_candidate_collectively(lane, "numerical rejection rollback");
+      return report;
+    }
+    std::exception_ptr candidate_error;
+    try {
       if (plan.output) {
+        const std::size_t publication_level_count = engine->hierarchy().num_levels();
         std::vector<std::string> provider_identities;
+        std::vector<std::string> prepared_stale_auxiliary_providers;
+        std::string stale_provider_contract;
         std::exception_ptr setup_error;
         try {
           plan.candidate_provider_storage.clear();
           plan.candidate_provider_publications.clear();
           plan.stale_auxiliary_providers.clear();
-          plan.candidate_provider_storage.reserve(engine->hierarchy().num_levels());
-          plan.candidate_provider_publications.reserve(engine->hierarchy().num_levels());
+          plan.candidate_provider_storage.reserve(publication_level_count);
+          plan.candidate_provider_publications.reserve(publication_level_count);
           provider_identities.reserve(plan.output_keys.size());
           for (const auto& key : plan.output_keys) {
             const auto& provider = auxiliary_registry.provider_for_key(key);
@@ -4851,20 +5148,42 @@ struct AmrSystem<Dim>::Impl {
               provider_identities.push_back(provider.identity());
           }
           if (!prepared_hierarchy->lane ||
-              prepared_hierarchy->provider_candidate_storage.size() !=
-                  engine->hierarchy().num_levels() ||
+              plan.candidate_outputs.size() != publication_level_count ||
+              prepared_hierarchy->provider_storage.size() != publication_level_count ||
+              prepared_hierarchy->provider_candidate_storage.size() != publication_level_count ||
               prepared_hierarchy->provider_candidate_ghost_fills.size() !=
-                  engine->hierarchy().num_levels() ||
+                  publication_level_count ||
               prepared_hierarchy->provider_candidate_physical_boundaries.size() !=
-                  engine->hierarchy().num_levels())
+                  publication_level_count ||
+              prepared_hierarchy->auxiliary_registries.size() != publication_level_count)
             throw std::logic_error("AMR field-output candidate authority is not materialized");
+          for (std::size_t level = 0; level < publication_level_count; ++level)
+            for (const std::string& identity :
+                 prepared_hierarchy->auxiliary_registries[level].dependent_provider_identities(
+                     provider_identities))
+              if (std::find(prepared_stale_auxiliary_providers.begin(),
+                            prepared_stale_auxiliary_providers.end(),
+                            identity) == prepared_stale_auxiliary_providers.end())
+                prepared_stale_auxiliary_providers.push_back(identity);
+          ExactContractBuilder stale_contract;
+          stale_contract.text("pops.amr.field-output-stale-providers")
+              .scalar(std::uint32_t{1})
+              .sequence(prepared_stale_auxiliary_providers,
+                        [](ExactContractBuilder& item, const std::string& identity) {
+                          item.text(identity);
+                        });
+          stale_provider_contract = std::move(stale_contract).release();
         } catch (...) {
           setup_error = std::current_exception();
         }
         runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
-            setup_error, prepared_hierarchy->lane ? &*prepared_hierarchy->lane : nullptr,
+            setup_error, &lane,
             "AMR field-output setup failed collectively before candidate transport");
-        for (std::size_t level = 0; level < engine->hierarchy().num_levels(); ++level) {
+        if (!all_ranks_agree_exact_ordered_byte_pairs(
+                {{"amr-field-output-stale-providers", stale_provider_contract}}, lane))
+          throw std::runtime_error(
+              "AMR field-output dependent-provider metadata differs between MPI ranks");
+        for (std::size_t level = 0; level < publication_level_count; ++level) {
           auxiliary_groups_type* candidate_storage = nullptr;
           std::exception_ptr materialization_error;
           try {
@@ -4888,7 +5207,7 @@ struct AmrSystem<Dim>::Impl {
             materialization_error = std::current_exception();
           }
           runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
-              materialization_error, &*prepared_hierarchy->lane,
+              materialization_error, &lane,
               "AMR field-output materialization failed collectively before candidate transport");
 
           auto& registry = prepared_hierarchy->auxiliary_registries[level];
@@ -4906,7 +5225,7 @@ struct AmrSystem<Dim>::Impl {
             publication_error = std::current_exception();
           }
           runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
-              publication_error, &*prepared_hierarchy->lane,
+              publication_error, &lane,
               "AMR field-output publication staging failed collectively before candidate "
               "transport");
           auto& publication = *plan.candidate_provider_publications.back();
@@ -4926,7 +5245,7 @@ struct AmrSystem<Dim>::Impl {
               authority_error = std::current_exception();
             }
             runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
-                authority_error, &*prepared_hierarchy->lane,
+                authority_error, &lane,
                 "AMR field-output candidate ghost authority failed collectively");
             std::exception_ptr hierarchy_error;
             try {
@@ -4935,7 +5254,7 @@ struct AmrSystem<Dim>::Impl {
               hierarchy_error = std::current_exception();
             }
             runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
-                hierarchy_error, &*prepared_hierarchy->lane,
+                hierarchy_error, &lane,
                 "AMR field-output hierarchy ghost fill failed collectively");
             physical->execute(*candidate_storage);
           };
@@ -4944,34 +5263,38 @@ struct AmrSystem<Dim>::Impl {
               {prepared_hierarchy->provider_storage[level].get(), candidate_storage},
               [&](const auto&, std::exception_ptr local_error) {
                 runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
-                    local_error, &*prepared_hierarchy->lane,
+                    local_error, &lane,
                     "AMR field-output auxiliary launch failed collectively before ghost fill");
                 refresh_candidate_ghosts();
               });
-          runtime::system::require_finite_auxiliary_groups(
-              *candidate_storage, &*prepared_hierarchy->lane, "AMR field-output publication");
-          publication.validate_complete();
-          for (const std::string& identity :
-               registry.dependent_provider_identities(provider_identities))
-            if (std::find(plan.stale_auxiliary_providers.begin(),
-                          plan.stale_auxiliary_providers.end(),
-                          identity) == plan.stale_auxiliary_providers.end())
-              plan.stale_auxiliary_providers.push_back(identity);
+          runtime::system::require_finite_auxiliary_groups(*candidate_storage, &lane,
+                                                           "AMR field-output publication");
+          std::exception_ptr local_tail_error;
+          try {
+            publication.validate_complete();
+          } catch (...) {
+            local_tail_error = std::current_exception();
+          }
+          runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+              local_tail_error, &lane,
+              "AMR field-output publication tail failed collectively before the next level");
         }
+        static_assert(
+            noexcept(plan.stale_auxiliary_providers.swap(prepared_stale_auxiliary_providers)));
+        plan.stale_auxiliary_providers.swap(prepared_stale_auxiliary_providers);
       }
-      plan.candidate_ready = true;
-      return report;
     } catch (...) {
-      for (auto& publication : plan.candidate_provider_publications)
-        if (publication)
-          publication->reject();
-      plan.candidate_provider_publications.clear();
-      plan.candidate_provider_storage.clear();
-      plan.stale_auxiliary_providers.clear();
-      plan.candidate_ready = false;
-      active_field_slot.clear();
-      throw;
+      candidate_error = std::current_exception();
     }
+    if (all_reduce_max(candidate_error ? 1L : 0L, lane) != 0) {
+      rollback_active_field_candidate_collectively(lane, "candidate publication failure rollback");
+      if (lane.size() == 1 && candidate_error)
+        std::rethrow_exception(candidate_error);
+      throw std::runtime_error(
+          "AMR exact field candidate publication failed collectively before outcome creation");
+    }
+    plan.candidate_ready = true;
+    return report;
   }
 
   void validate_field_candidate() const {
@@ -4980,6 +5303,15 @@ struct AmrSystem<Dim>::Impl {
     const FieldPlan& plan = field_plans.at(active_field_slot);
     if (!engine || !prepared_hierarchy || !plan.materialized_for(*engine) || !plan.candidate_ready)
       throw std::logic_error("AMR exact field publication candidate is stale");
+    if (plan.accepted_potential.size() != engine->hierarchy().num_levels() ||
+        plan.prepared_solver->level_count() != static_cast<int>(engine->hierarchy().num_levels()))
+      throw std::logic_error("AMR exact field candidate hierarchy is incomplete");
+    for (std::size_t level = 0; level < plan.accepted_potential.size(); ++level) {
+      if (!plan.accepted_potential[level] ||
+          !same_field_contract(*plan.accepted_potential[level],
+                               plan.prepared_solver->candidate_level(static_cast<int>(level))))
+        throw std::logic_error("AMR exact field candidate level contract is stale");
+    }
     if (!plan.output)
       return;
     if (plan.candidate_provider_storage.size() != prepared_hierarchy->provider_storage.size() ||
@@ -4995,9 +5327,14 @@ struct AmrSystem<Dim>::Impl {
     }
   }
 
+  void validate_field_candidate_for_consumption() const {
+    // SolveOutcome::collective_lane catches this rank-local validation and performs the exact-lane
+    // consensus before it marks the outcome consumed or invokes the irreversible accept hook.
+    validate_field_candidate();
+  }
+
   void accept_field_candidate() noexcept {
     try {
-      validate_field_candidate();
       FieldPlan& plan = field_plans.at(active_field_slot);
       for (std::size_t level = 0; level < plan.accepted_potential.size(); ++level) {
         copy_full_field_in_place(plan.prepared_solver->candidate_level(static_cast<int>(level)),
@@ -5026,13 +5363,9 @@ struct AmrSystem<Dim>::Impl {
     try {
       if (!active_field_slot.empty()) {
         FieldPlan& plan = field_plans.at(active_field_slot);
-        for (auto& publication : plan.candidate_provider_publications)
-          if (publication)
-            publication->reject();
-        plan.candidate_provider_publications.clear();
-        plan.candidate_provider_storage.clear();
-        plan.stale_auxiliary_providers.clear();
-        plan.candidate_ready = false;
+        if (plan.boundary_context_attempt_active)
+          plan.discard_materialization();
+        clear_field_candidate_state_noexcept(plan);
       }
       active_field_slot.clear();
     } catch (...) {
@@ -5041,29 +5374,93 @@ struct AmrSystem<Dim>::Impl {
   }
 
   SolveOutcome make_field_outcome(SolveReport report) {
-    FieldPlan* plan = active_field_slot.empty() ? nullptr : &field_plans.at(active_field_slot);
-    if (!solve_report_is_publishable(report, plan ? plan->prepared_solver->maximum_iterations()
-                                                  : std::numeric_limits<int>::max())) {
-      reject_field_candidate();
-      throw std::runtime_error("AMR exact field solver published a malformed SolveReport");
+    if (!prepared_hierarchy || !prepared_hierarchy->lane)
+      throw std::logic_error("AMR exact field outcome has no prepared hierarchy lane");
+    const ExecutionLane& lane = *prepared_hierarchy->lane;
+    FieldPlan* plan = nullptr;
+    std::exception_ptr local_error;
+    try {
+      if (!active_field_slot.empty())
+        plan = &field_plans.at(active_field_slot);
+      const int maximum_iterations =
+          plan ? plan->prepared_solver->maximum_iterations() : std::numeric_limits<int>::max();
+      if (!solve_report_is_publishable(report, maximum_iterations))
+        throw std::runtime_error("AMR exact field solver published a malformed SolveReport");
+      if (report.solved_value_available() && plan == nullptr)
+        throw std::logic_error("AMR exact field solved outcome has no publication candidate");
+    } catch (...) {
+      local_error = std::current_exception();
     }
+
+    const long has_plan = plan == nullptr ? 0L : 1L;
+    if (all_reduce_min(has_plan, lane) != all_reduce_max(has_plan, lane)) {
+      rollback_active_field_candidate_collectively(lane, "outcome candidate divergence rollback");
+      throw std::runtime_error("AMR exact field outcome candidate differs between MPI ranks");
+    }
+    const auto rollback = [&](std::string_view phase) {
+      std::exception_ptr restoration_error;
+      if (plan != nullptr) {
+        try {
+          restore_field_boundary_binding_collectively(*plan, lane, phase);
+        } catch (...) {
+          restoration_error = std::current_exception();
+        }
+        clear_field_candidate_state_noexcept(*plan);
+      }
+      active_field_slot.clear();
+      if (restoration_error)
+        std::rethrow_exception(restoration_error);
+    };
+    if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+      rollback("outcome preparation rollback");
+      if (lane.size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error("AMR exact field outcome preparation failed collectively");
+    }
+
     ExactSolveReportConsensusScratch consensus;
-    if (!consensus.agrees(report)) {
-      reject_field_candidate();
+    if (!consensus.agrees(report, lane)) {
+      rollback("outcome report divergence rollback");
       throw std::runtime_error("AMR exact field SolveReport differs between MPI ranks");
     }
-    if (!report.solved_value_available())
-      return SolveOutcome::collective_lane(std::move(report), *prepared_hierarchy->lane);
-    validate_field_candidate();
+    if (!report.solved_value_available()) {
+      rollback("failed outcome rollback");
+      return SolveOutcome::collective_lane(std::move(report), lane);
+    }
+
+    local_error = {};
+    try {
+      validate_field_candidate();
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+      rollback("candidate validation rollback");
+      if (lane.size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error(
+          "AMR exact field candidate validation failed collectively before outcome publication");
+    }
+    try {
+      restore_field_boundary_binding_collectively(*plan, lane,
+                                                  "validated candidate boundary restoration");
+    } catch (...) {
+      const std::exception_ptr restoration_error = std::current_exception();
+      clear_field_candidate_state_noexcept(*plan);
+      active_field_slot.clear();
+      std::rethrow_exception(restoration_error);
+    }
     return SolveOutcome::collective_lane(
-        std::move(report), *prepared_hierarchy->lane,
+        std::move(report), lane,
         SolveOutcome::PublicationHooks{
             this,
             [](void* context) noexcept { static_cast<Impl*>(context)->accept_field_candidate(); },
             [](void* context) { static_cast<Impl*>(context)->reject_field_candidate(); },
             nullptr,
             {},
-            [](void* context) { static_cast<Impl*>(context)->validate_field_candidate(); }});
+            [](void* context) {
+              static_cast<Impl*>(context)->validate_field_candidate_for_consumption();
+            }});
   }
 
   std::unique_ptr<PreparedHierarchy> prepare_hierarchy_graph(
@@ -6007,9 +6404,9 @@ struct AmrSystem<Dim>::Impl {
   const ResolvedTaggingProgram& resolve_tagging_program() const {
     if (resolved_tagging)
       return *resolved_tagging;
-    if (!tagging_spec || prepared_blocks.empty() || blocks.size() != 1)
+    if (!tagging_spec || prepared_blocks.empty() || prepared_blocks.size() != blocks.size())
       throw std::logic_error(
-          "AMR prepared tagging requires one installed exact-ranked block and graph");
+          "AMR prepared tagging requires the complete installed exact-ranked block graph");
 
     ResolvedTaggingProgram candidate;
     candidate.program.stencils = tagging_spec->stencils;
@@ -6026,16 +6423,18 @@ struct AmrSystem<Dim>::Impl {
     candidate.program.prepared = true;
 
     const auto bind_field = [&](TaggingFieldKind kind, const std::string& identity,
-                                const std::string& provider_group = {}) -> std::size_t {
+                                const std::string& provider_group,
+                                std::size_t state_block) -> std::size_t {
       for (std::size_t index = 0; index < candidate.fields.size(); ++index)
         if (candidate.fields[index].qualified_identity == identity) {
           if (candidate.fields[index].kind != kind ||
-              candidate.fields[index].provider_group != provider_group)
+              candidate.fields[index].provider_group != provider_group ||
+              candidate.fields[index].state_block != state_block)
             throw std::invalid_argument(
                 "AMR tagging qualified identity resolves to more than one storage authority");
           return index;
         }
-      candidate.fields.push_back({kind, identity, provider_group});
+      candidate.fields.push_back({kind, identity, provider_group, state_block});
       return candidate.fields.size() - 1;
     };
 
@@ -6048,20 +6447,25 @@ struct AmrSystem<Dim>::Impl {
       std::size_t field_index = 0;
       int component = -1;
       if (kind == "state") {
-        if (block_name != blocks.front().name)
+        const auto block = std::find_if(blocks.begin(), blocks.end(), [&](const BlockSpec& value) {
+          return value.name == block_name;
+        });
+        if (block == blocks.end())
           throw std::invalid_argument("AMR tagging state leaf names another native block");
+        const std::size_t block_index =
+            static_cast<std::size_t>(std::distance(blocks.begin(), block));
         const std::string& installed = boundary_registry.state_route(block_name);
         if (identity != installed && identity != direct_amr_state_identity(block_name))
           throw std::invalid_argument(
               "AMR tagging state leaf differs from its exact qualified storage route");
         const auto found =
-            std::find(prepared_blocks.front().conservative_variables.names.begin(),
-                      prepared_blocks.front().conservative_variables.names.end(), variable);
-        if (found == prepared_blocks.front().conservative_variables.names.end())
+            std::find(prepared_blocks[block_index].conservative_variables.names.begin(),
+                      prepared_blocks[block_index].conservative_variables.names.end(), variable);
+        if (found == prepared_blocks[block_index].conservative_variables.names.end())
           throw std::invalid_argument("AMR tagging names an unknown conservative variable");
-        component = static_cast<int>(
-            std::distance(prepared_blocks.front().conservative_variables.names.begin(), found));
-        field_index = bind_field(TaggingFieldKind::state, identity);
+        component = static_cast<int>(std::distance(
+            prepared_blocks[block_index].conservative_variables.names.begin(), found));
+        field_index = bind_field(TaggingFieldKind::state, identity, {}, block_index);
       } else if (kind == "aux") {
         throw std::invalid_argument(
             "AMR tagging auxiliary leaves must use an owner-qualified provider key; the retired "
@@ -6080,7 +6484,8 @@ struct AmrSystem<Dim>::Impl {
         const auto address = auxiliary_registry.address_of(
             plan->second.output_keys[static_cast<std::size_t>(output_index)]);
         component = static_cast<int>(address.component);
-        field_index = bind_field(TaggingFieldKind::auxiliary, identity, address.group);
+        field_index = bind_field(TaggingFieldKind::auxiliary, identity, address.group,
+                                 std::numeric_limits<std::size_t>::max());
       } else {
         throw std::invalid_argument("AMR tagging leaf has an unknown subject kind");
       }
@@ -6657,7 +7062,12 @@ struct AmrSystem<Dim>::Impl {
       std::vector<TaggingField> fields;
       fields.reserve(resolved.fields.size());
       for (const ResolvedTaggingField& field : resolved.fields) {
-        const field_type* values = &engine->hierarchy().state(level);
+        const field_type* values = nullptr;
+        if (field.kind == TaggingFieldKind::state) {
+          if (field.state_block >= blocks.size())
+            throw std::logic_error("AMR tagging state field lost its exact block owner");
+          values = &block_state(field.state_block, level);
+        }
         if (field.kind == TaggingFieldKind::auxiliary) {
           values = prepared_hierarchy->provider_storage[level]->find(field.provider_group);
           if (values == nullptr)
@@ -6731,9 +7141,14 @@ struct AmrSystem<Dim>::Impl {
     point.stage_fraction = {0, 1};
     point.dt = 0.0;
     point.physical_time = accepted_time;
-    field_type& state = engine->hierarchy().state(static_cast<std::size_t>(parent_level));
-    prepared_hierarchy->block_levels.front()[static_cast<std::size_t>(parent_level)].prepare(point,
-                                                                                             state);
+    const std::size_t level = static_cast<std::size_t>(parent_level);
+    if (prepared_hierarchy->block_levels.size() != blocks.size())
+      throw std::logic_error("AMR tagging lost one prepared block-level execution authority");
+    for (std::size_t block = 0; block < blocks.size(); ++block) {
+      if (prepared_hierarchy->block_levels[block].size() <= level)
+        throw std::logic_error("AMR tagging lost one prepared block level");
+      prepared_hierarchy->block_levels[block][level].prepare(point, block_state(block, level));
+    }
     std::array<Real, Dim> spacing{};
     const Geometry<Dim> geometry = Geometry<Dim>::from_bounds(
         engine->hierarchy().layout(static_cast<std::size_t>(parent_level)).domain(), cfg.lower,
@@ -10490,53 +10905,13 @@ template <int Dim>
 SolveOutcome AmrSystem<Dim>::solve_program_field_at(
     const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
     int active_level, const MultiFab<Dim>* stage_override) {
-  if (point.clock.empty() || point.level != active_level || point.stage < 0 ||
-      point.stage_fraction.denominator <= 0 || !std::isfinite(point.dt) || point.dt <= 0.0 ||
-      !std::isfinite(point.physical_time))
-    throw std::invalid_argument("AMR exact field solve has an invalid evaluation point");
-  if (provider_slot.empty())
-    throw std::invalid_argument("AMR exact field solve requires a provider slot");
-  ExactContractBuilder request;
-  request.text("pops.amr.program-field-solve")
-      .scalar(std::uint32_t{1})
-      .scalar(std::int32_t{Dim})
-      .text(provider_slot)
-      .text(point.clock)
-      .scalar(point.tick)
-      .scalar(point.level)
-      .scalar(point.substep)
-      .scalar(point.stage)
-      .scalar(point.stage_fraction.numerator)
-      .scalar(point.stage_fraction.denominator)
-      .scalar(point.dt)
-      .scalar(point.physical_time)
-      .presence(stage_override != nullptr);
-  if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{"amr-program-field-solve", std::move(request).release()}}))
-    throw std::invalid_argument("AMR exact field solve request differs between MPI ranks");
-
-  const std::string slot = p_->resolve_field_slot(provider_slot);
   std::vector<const MultiFab<Dim>*> stages(p_->blocks.size(), nullptr);
   if (stage_override != nullptr) {
-    if (stages.size() != 1)
-      throw std::logic_error(
-          "AMR exact field stage override requires the prepared multi-block hierarchy provider");
+    if (stages.empty())
+      throw std::logic_error("AMR exact field solve has no prepared runtime block");
     stages.front() = stage_override;
   }
-  SolveReport report;
-  std::exception_ptr local_error;
-  try {
-    report = p_->solve_field_candidate(slot, active_level, stages, &point);
-  } catch (...) {
-    local_error = std::current_exception();
-  }
-  if (all_reduce_max(local_error ? 1L : 0L) != 0) {
-    p_->reject_field_candidate();
-    if (n_ranks() == 1 && local_error)
-      std::rethrow_exception(local_error);
-    throw std::runtime_error("AMR exact field solve failed on at least one MPI rank");
-  }
-  return p_->make_field_outcome(std::move(report));
+  return solve_program_field_from_blocks_at(point, provider_slot, active_level, stages);
 }
 
 template <int Dim>
@@ -10573,25 +10948,151 @@ template <int Dim>
 SolveOutcome AmrSystem<Dim>::solve_program_field_from_blocks_at(
     const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
     int active_level, const std::vector<const MultiFab<Dim>*>& stage_overrides) {
-  if (stage_overrides.size() != p_->blocks.size())
-    throw std::invalid_argument(
-        "AMR exact simultaneous field solve must cover the runtime block registry");
-  if (stage_overrides.size() != 1)
+  p_->ensure_engine();
+  if (!p_->multiblock_hierarchy)
     throw std::logic_error(
-        "AMR exact simultaneous field solve requires the prepared multi-block hierarchy provider");
-  return solve_program_field_at(point, provider_slot, active_level, stage_overrides.front());
+        "AMR exact simultaneous field solve requires its prepared multi-block hierarchy");
+  const ExecutionLane& lane = p_->multiblock_hierarchy->lane();
+
+  std::string slot;
+  std::string request_contract;
+  std::exception_ptr local_error;
+  try {
+    if (point.clock.empty() || point.level != active_level || point.stage < 0 ||
+        point.stage_fraction.denominator <= 0 || !std::isfinite(point.dt) || point.dt <= 0.0 ||
+        !std::isfinite(point.physical_time))
+      throw std::invalid_argument("AMR exact field solve has an invalid evaluation point");
+    if (provider_slot.empty())
+      throw std::invalid_argument("AMR exact field solve requires a provider slot");
+    if (active_level < 0 ||
+        static_cast<std::size_t>(active_level) >= p_->engine->hierarchy().num_levels())
+      throw std::out_of_range("AMR exact field solve active level is outside the hierarchy");
+    if (stage_overrides.size() != p_->blocks.size())
+      throw std::invalid_argument(
+          "AMR exact simultaneous field solve must cover the runtime block registry");
+
+    slot = p_->resolve_field_slot(provider_slot);
+    std::vector<const MultiFab<Dim>*> unique_stages;
+    unique_stages.reserve(stage_overrides.size());
+    ExactContractBuilder request;
+    request.text("pops.amr.program-field-solve")
+        .scalar(std::uint32_t{2})
+        .scalar(std::int32_t{Dim})
+        .text(provider_slot)
+        .text(slot)
+        .text(point.clock)
+        .scalar(point.tick)
+        .scalar(point.level)
+        .scalar(point.substep)
+        .scalar(point.stage)
+        .scalar(point.stage_fraction.numerator)
+        .scalar(point.stage_fraction.denominator)
+        .scalar(point.dt)
+        .scalar(point.physical_time)
+        .scalar(static_cast<std::uint64_t>(stage_overrides.size()));
+    for (std::size_t block = 0; block < stage_overrides.size(); ++block) {
+      const MultiFab<Dim>& live = p_->block_state(block, static_cast<std::size_t>(active_level));
+      const MultiFab<Dim>* stage = stage_overrides[block];
+      request.scalar(static_cast<std::uint64_t>(block))
+          .text(p_->blocks[block].name)
+          .presence(stage != nullptr);
+      if (stage == nullptr)
+        continue;
+      bool aliases_live = false;
+      for (std::size_t live_block = 0; live_block < p_->blocks.size(); ++live_block)
+        aliases_live =
+            aliases_live ||
+            stage == &p_->block_state(live_block, static_cast<std::size_t>(active_level));
+      if (aliases_live ||
+          std::find(unique_stages.begin(), unique_stages.end(), stage) != unique_stages.end())
+        throw std::invalid_argument(
+            "AMR exact field stages must be detached unique active-level candidates");
+      if (!same_field_contract(*stage, live) || stage->local_size() != live.local_size())
+        throw std::invalid_argument(
+            "AMR exact field stage differs from its live block-level contract");
+      for (std::size_t local = 0; local < live.local_size(); ++local)
+        if (stage->global_index(local) != live.global_index(local) ||
+            stage->fab(local).box() != live.fab(local).box() ||
+            stage->fab(local).grown_box() != live.fab(local).grown_box())
+          throw std::invalid_argument(
+              "AMR exact field stage local patch identities differ from the live hierarchy");
+      request.bytes(elliptic_contract_detail::field_layout_contract(*stage));
+      unique_stages.push_back(stage);
+    }
+    request_contract = std::move(request).release();
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::invalid_argument(
+        "AMR exact simultaneous field solve preflight failed on at least one MPI rank");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"amr-program-field-solve", request_contract}},
+                                                lane))
+    throw std::invalid_argument("AMR exact field solve request differs between MPI ranks");
+
+  SolveReport report;
+  try {
+    report = p_->solve_field_candidate(slot, active_level, stage_overrides, &point);
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+    std::exception_ptr rollback_error;
+    try {
+      p_->rollback_active_field_candidate_collectively(lane, "facade solve rollback");
+    } catch (...) {
+      rollback_error = std::current_exception();
+    }
+    if (rollback_error)
+      std::rethrow_exception(rollback_error);
+    if (lane.size() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("AMR exact field solve failed on at least one MPI rank");
+  }
+  return p_->make_field_outcome(std::move(report));
 }
 
 template <int Dim>
 SolveOutcome AmrSystem<Dim>::solve_program_default_field(int active_level) {
-  if (p_->default_field_slot.empty())
-    throw std::logic_error("AmrSystem has no configured default exact field");
   p_->ensure_engine();
-  if (active_level < 0 ||
-      static_cast<std::size_t>(active_level) >= p_->engine->hierarchy().num_levels())
-    throw std::out_of_range("AMR default field active level lies outside the hierarchy");
-  SolveReport report;
+  if (!p_->prepared_hierarchy || !p_->prepared_hierarchy->lane)
+    throw std::logic_error("AMR default exact field solve requires its prepared hierarchy lane");
+  const ExecutionLane& lane = *p_->prepared_hierarchy->lane;
   std::exception_ptr local_error;
+  std::string request_contract;
+  try {
+    if (p_->default_field_slot.empty())
+      throw std::logic_error("AmrSystem has no configured default exact field");
+    if (active_level < 0 ||
+        static_cast<std::size_t>(active_level) >= p_->engine->hierarchy().num_levels())
+      throw std::out_of_range("AMR default field active level lies outside the hierarchy");
+    ExactContractBuilder request;
+    request.text("pops.amr.program-default-field-solve")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .text(p_->default_field_slot)
+        .scalar(std::int32_t{active_level})
+        .scalar(static_cast<std::uint64_t>(p_->blocks.size()));
+    request_contract = std::move(request).release();
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::invalid_argument(
+        "AMR default exact field solve preflight failed on at least one MPI rank");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("amr-program-default-field-solve"),
+            std::string_view(request_contract)}},
+          lane))
+    throw std::invalid_argument("AMR default exact field solve request differs between MPI ranks");
+
+  SolveReport report;
   try {
     report =
         p_->solve_field_candidate(p_->default_field_slot, active_level,
@@ -10599,9 +11100,16 @@ SolveOutcome AmrSystem<Dim>::solve_program_default_field(int active_level) {
   } catch (...) {
     local_error = std::current_exception();
   }
-  if (all_reduce_max(local_error ? 1L : 0L) != 0) {
-    p_->reject_field_candidate();
-    if (n_ranks() == 1 && local_error)
+  if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+    std::exception_ptr rollback_error;
+    try {
+      p_->rollback_active_field_candidate_collectively(lane, "default facade solve rollback");
+    } catch (...) {
+      rollback_error = std::current_exception();
+    }
+    if (rollback_error)
+      std::rethrow_exception(rollback_error);
+    if (lane.size() == 1 && local_error)
       std::rethrow_exception(local_error);
     throw std::runtime_error("AMR default exact field solve failed on at least one MPI rank");
   }
@@ -11859,16 +12367,84 @@ void AmrSystem<Dim>::restore_active_step_transaction_for_program() {
 
 template <int Dim>
 std::map<std::string, double> AmrSystem<Dim>::step_change_l2() const {
-  if (!p_->external_step_transaction || !p_->engine || !p_->external_step_transaction->engine)
+  if (!p_->external_step_transaction || !p_->engine || !p_->prepared_hierarchy ||
+      !p_->prepared_hierarchy->lane || !p_->external_step_transaction->engine ||
+      !p_->external_step_transaction->multiblock)
     throw std::runtime_error("AmrSystem::step_change_l2 requires an active transaction");
-  if (p_->engine->hierarchy().num_levels() != 1)
+  const std::size_t level_count = p_->engine->hierarchy().num_levels();
+  const auto& snapshot = *p_->external_step_transaction->multiblock;
+  if (level_count == 0 || snapshot.primary.hierarchy.num_levels() != level_count ||
+      snapshot.additional.size() + 1 != p_->blocks.size() ||
+      p_->prepared_hierarchy->active_coverage.size() != level_count)
+    throw std::logic_error(
+        "AmrSystem::step_change_l2 requires the complete prepared composite transaction graph");
+
+  const ExecutionLane& lane = *p_->prepared_hierarchy->lane;
+  std::vector<std::vector<std::unique_ptr<MultiFab<Dim>>>> differences(p_->blocks.size());
+  std::exception_ptr preparation_error;
+  try {
+    for (std::size_t block = 0; block < p_->blocks.size(); ++block) {
+      if (block != 0 && snapshot.additional[block - 1].identity != p_->blocks[block].name)
+        throw std::logic_error(
+            "AmrSystem::step_change_l2 snapshot block identity differs from the live registry");
+      if (block != 0 && snapshot.additional[block - 1].levels.size() != level_count)
+        throw std::logic_error("AmrSystem::step_change_l2 snapshot block lost one hierarchy level");
+      differences[block].reserve(level_count);
+      for (std::size_t level = 0; level < level_count; ++level) {
+        const MultiFab<Dim>& current = p_->block_state(block, level);
+        const MultiFab<Dim>& previous = block == 0 ? snapshot.primary.hierarchy.state(level)
+                                                   : snapshot.additional[block - 1].levels[level];
+        auto difference = std::make_unique<MultiFab<Dim>>(current.layout(), current.distribution(),
+                                                          current.local_rank(), current.ncomp(),
+                                                          current.ghosts());
+        copy_full_field_in_place(current, *difference);
+        saxpy(*difference, Real(-1), previous);
+        differences[block].push_back(std::move(difference));
+      }
+    }
+    Kokkos::fence();
+  } catch (...) {
+    preparation_error = std::current_exception();
+  }
+  if (all_reduce_max(preparation_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && preparation_error)
+      std::rethrow_exception(preparation_error);
     throw std::runtime_error(
-        "AmrSystem::step_change_l2 requires a prepared composite coverage provider");
-  const MultiFab<Dim>& current = p_->engine->hierarchy().state(0);
-  const MultiFab<Dim>& previous = p_->external_step_transaction->engine->hierarchy.state(0);
-  const double value = std::sqrt(cell_measure(p_->cfg, p_->cfg.index_domain()) *
-                                 static_cast<double>(difference_sum_sq_all(current, previous)));
-  return {{p_->blocks.front().name, value}};
+        "AmrSystem::step_change_l2 difference preparation failed collectively");
+  }
+
+  std::map<std::string, double> result;
+  for (std::size_t block = 0; block < p_->blocks.size(); ++block) {
+    double sum_squares = 0.0;
+    for (int component = 0; component < p_->blocks[block].ncomp; ++component) {
+      std::vector<runtime::amr::CompositeLevelView<Dim, memory_space>> views;
+      views.reserve(level_count);
+      for (std::size_t level = 0; level < level_count; ++level) {
+        const Box<Dim>& domain = p_->engine->hierarchy().layout(level).domain();
+        const Geometry<Dim> geometry =
+            Geometry<Dim>::from_bounds(domain, p_->cfg.lower, p_->cfg.upper);
+        std::array<Real, Dim> extent{};
+        for (int axis = 0; axis < Dim; ++axis)
+          extent[static_cast<std::size_t>(axis)] = geometry.spacing(axis);
+        const MultiFab<Dim>* relative = nullptr;
+        const auto& embedded = p_->prepared_hierarchy->embedded_boundary[level];
+        if (embedded &&
+            embedded->mode() == runtime::system::PreparedEmbeddedBoundaryMode::staircase)
+          relative = &embedded->active_mask();
+        else if (embedded &&
+                 embedded->mode() == runtime::system::PreparedEmbeddedBoundaryMode::cut_cell)
+          relative = &embedded->volume_fraction();
+        views.push_back({differences[block][level].get(),
+                         p_->prepared_hierarchy->active_coverage[level].get(), extent, relative});
+      }
+      sum_squares += static_cast<double>(
+          runtime::amr::composite_reduce<Dim, memory_space>(
+              views, component, runtime::amr::CompositeReductionKind::SumSquares, lane)
+              .value);
+    }
+    result.emplace(p_->blocks[block].name, std::sqrt(sum_squares));
+  }
+  return result;
 }
 
 template <int Dim>
