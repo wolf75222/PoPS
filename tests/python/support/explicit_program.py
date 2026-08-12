@@ -1,14 +1,16 @@
 """Explicit native Programs for low-level Python runtime tests.
 
-These helpers are deliberately test infrastructure, not a runtime compatibility layer.  A helper
-builds an ordinary ABI-checked ``problem.so`` with an explicit block identity table, installs a real
-``ProgramContext`` or ``AmrProgramContext``, and only then lets a test call the temporal facade.
+These helpers are deliberately low-level runtime fixtures, not Program-authoring evidence or a
+runtime compatibility layer.  A helper builds an ABI-checked ``problem.so`` with an explicit block
+identity table, installs a real ``ProgramContext`` or ``AmrProgramContext``, and only then lets a
+test exercise a spatial/runtime seam.
 
-The forward-Euler bridge is useful for tests whose subject is a spatial/runtime capability rather
-than Program authoring.  Explicit-method tests use the separately named SSPRK2/SSPRK3 installers
-below, so their tableau remains authored and visible instead of being inferred from a block adapter.
-Projection and coupled-source splitting are opt-in by block identity/registration; implicit-solve
-tests still need purpose-built Program primitives.
+The forward-Euler bridge is the only such seam appropriate for a spatial/runtime test that does not
+need a temporal method.  The retained raw SSPRK fixtures serve legacy native-block parity coverage;
+they must not qualify SSPRK semantics.  Those semantics are proved through ``pops.time.Program`` and
+``pops.lib.time`` tableaus compiled from a symbolic Case.  Projection and coupled-source splitting
+are opt-in by block identity/registration; implicit-solve tests need purpose-built Program
+primitives.
 """
 
 from __future__ import annotations
@@ -96,7 +98,7 @@ def _coupling_application(block_count: int, enabled: bool, *, target: str, metho
 
 
 def _amr_budget_exports(block_count: int, method: str, coupled_sources: bool, identity: str) -> str:
-    rhs = {"euler": 1, "imex_source_free": 1, "ssprk2": 2, "ssprk3": 3}[method]
+    rhs = {"euler": 1, "ssprk2": 2, "ssprk3": 3}[method]
     rate_identity = "pops.test.%s.coupled-source.rate/final" % method
     application_identity = "pops.test.%s.coupled-source.application/final" % method
     coupling_identity_characters = (
@@ -423,7 +425,7 @@ def _source(
     identity: str,
     method: str,
 ) -> str:
-    if method in {"euler", "imex_source_free"}:
+    if method == "euler":
         body = _forward_euler_body(
             len(block_names),
             projection_indices,
@@ -590,8 +592,8 @@ def _install_explicit_program(
     project_blocks: tuple[str, ...] = (),
     coupled_sources: bool = False,
 ) -> str:
-    if method not in {"euler", "ssprk2", "ssprk3", "imex_source_free"}:
-        raise ValueError("method must be 'euler', 'ssprk2', 'ssprk3', or 'imex_source_free'")
+    if method not in {"euler", "ssprk2", "ssprk3"}:
+        raise ValueError("method must be 'euler', 'ssprk2', or 'ssprk3'")
     if not isinstance(runtime, (System, AmrSystem)):
         raise TypeError("runtime must be a pops.runtime System or AmrSystem")
     block_names = tuple(runtime.block_names())
@@ -680,14 +682,8 @@ def install_ssprk3_program(
     )
 
 
-def install_source_free_imex_program(runtime: Any) -> str:
-    """Install the explicit Program to which an IMEX split reduces when its source is identically zero."""
-    return _install_explicit_program(runtime, method="imex_source_free")
-
-
 __all__ = [
     "install_forward_euler_program",
-    "install_source_free_imex_program",
     "install_ssprk2_program",
     "install_ssprk3_program",
 ]

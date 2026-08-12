@@ -2,16 +2,18 @@
 """ADC-515 (Spec 6 sec.20): the explicit-family time schemes run end-to-end on a native AmrSystem.
 
 The AMR column of the sec.20 matrix for the explicit family: a REAL ``AmrSystem`` built from native
-``engine.Model(...)`` bricks (no Kokkos ``.so`` compile) steps under each of Explicit / SSPRK3 / IMEX,
-mono- AND multi-block, and the verdict is the one the dedicated AMR suites use -- finite state after
-stepping, a live fine patch (refinement is not inert) and per-block mass conserved to ~machine
-(reflux + average_down). This is the green half the refusal cells (``test_amr_refusals``) sit next
-to; SSPRK3 mirrors ``test_amr_ssprk3`` and Strang/CondensedSchur lives in
-``test_amr_strang_condensed_schur`` -- here we pin the explicit family as one focused file.
+``engine.Model(...)`` bricks (no Kokkos ``.so`` compile) steps under Explicit / SSPRK3 and an
+explicit source-free Forward-Euler spatial fixture, mono- AND multi-block.  The verdict is the one
+the dedicated AMR suites use -- finite state after stepping, a live fine patch (refinement is not
+inert) and per-block mass conserved to ~machine (reflux + average_down). This is the green half the
+refusal cells (``test_amr_refusals``) sit next to; SSPRK3 mirrors ``test_amr_ssprk3`` and
+Strang/CondensedSchur lives in ``test_amr_strang_condensed_schur`` -- here we pin the explicit family
+as one focused file.
 
 Runtime: ``importorskip('pops')`` skips the whole file on a bare box (this Mac has no ``_pops``);
 on the Kokkos-Serial CI runner the cells step a real engine. ``__main__`` runs pytest.
 """
+
 import sys
 
 import numpy as np
@@ -23,7 +25,7 @@ from pops.runtime._engine_descriptors import Periodic  # noqa: E402
 
 from pops.runtime._system import AmrSystem  # noqa: E402  (ADC-545 advanced runtime seam)
 from tests.python.support.explicit_program import (  # noqa: E402
-    install_source_free_imex_program,
+    install_forward_euler_program,
     install_ssprk2_program,
     install_ssprk3_program,
 )
@@ -64,16 +66,16 @@ def _run_amr_explicit_family(time_brick, *, multi, n=32):
         )
     sim.set_poisson(bc=Periodic())
     blocks = ("ions", "electrons") if multi else ("ions",)
-    install_prepared_threshold_union(
-        sim, ((block, "n", 1.05) for block in blocks))
+    install_prepared_threshold_union(sim, ((block, "n", 1.05) for block in blocks))
     sim.set_density("ions", _bump(n, 0.40))
     if multi:
         sim.set_density("electrons", _bump(n, 0.20))
     if time_brick.kind == "ssprk3":
         install_ssprk3_program(sim)
-    elif time_brick.kind == "imex":
-        # This fixture has NoSource: the authored split contains only its explicit transport stage.
-        install_source_free_imex_program(sim)
+    elif time_brick.kind == "euler":
+        # This source-free fixture exercises only the spatial AMR facade; temporal semantics are
+        # proved through a Program-authored Case elsewhere.
+        install_forward_euler_program(sim)
     else:
         install_ssprk2_program(sim)
     blocks = ("ions", "electrons") if multi else ("ions",)
@@ -103,22 +105,21 @@ def test_amr_explicit_runs_finite_and_conserved(multi):
 def test_amr_ssprk3_runs_finite_and_conserved(multi):
     """AMR x SSPRK3 x {mono, multi}: native ``Explicit(ssprk3=True)`` (kind='ssprk3') runs + conserves.
 
-    The dedicated ``test_amr_ssprk3`` proves the SSPRK3-vs-IMEX exclusivity; this cell pins it as
-    part of the sec.20 explicit-family column so the matrix has the SSPRK3 x block-count entries.
+    The dedicated ``test_amr_ssprk3`` proves SSPRK3 route exclusivity; this cell pins it as part of
+    the sec.20 explicit-family column so the matrix has the SSPRK3 x block-count entries.
     """
     sim, m0 = _run_amr_explicit_family(engine.Explicit(ssprk3=True), multi=multi)
     _assert_finite_and_conserved(sim, m0, "AMR/SSPRK3/%s" % ("multi" if multi else "mono"))
 
 
-def test_amr_imex_mono_runs_finite_and_conserved():
-    """AMR x source-free IMEX x mono: the authored split reduces to its explicit transport stage.
+def test_amr_source_free_forward_euler_fixture_runs_finite_and_conserved():
+    """AMR x source-free Forward Euler x mono: an explicit spatial fixture runs and conserves.
 
-    The fixture intentionally has ``NoSource``; no implicit solve is fabricated. The dedicated
-    implicit-operator suites cover non-trivial local solves. This cell pins the exact source-free
-    reduction and its finite conservative AMR trajectory.
+    The fixture intentionally has ``NoSource`` and does not qualify any higher-order or implicit
+    temporal semantics. Dedicated Program-authored suites cover those paths.
     """
-    sim, m0 = _run_amr_explicit_family(engine.IMEX(), multi=False)
-    _assert_finite_and_conserved(sim, m0, "AMR/IMEX/mono")
+    sim, m0 = _run_amr_explicit_family(engine.Explicit(method="euler"), multi=False)
+    _assert_finite_and_conserved(sim, m0, "AMR/source-free-FE/mono")
 
 
 if __name__ == "__main__":

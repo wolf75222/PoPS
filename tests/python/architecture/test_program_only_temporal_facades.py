@@ -1,9 +1,12 @@
-"""ADC-700: fail closed until every temporal route has an explicit Program primitive.
+"""ADC-700: temporal semantics are authored by typed Python Programs.
 
-The ordinary explicit runtime tests may install the small Programs from
-``tests.python.support.explicit_program``.  Semantic implicit tests must use
-typed Program primitives: forward Euler cannot stand in for backward Euler,
-partial IMEX, ARS(2,2,2), or nonlinear local solves.
+The small programs in ``tests.python.support.explicit_program`` are low-level
+runtime/spatial fixtures.  Their raw SSPRK bodies keep legacy native-block
+parity coverage alive, but cannot qualify Program-authored SSPRK or IMEX
+semantics.  Semantic tests use ``pops.time.Program`` and ``pops.lib.time``
+tableaus through the normal Case compilation lifecycle.  In particular,
+forward Euler cannot stand in for backward Euler, partial IMEX, ARS(2,2,2),
+or nonlinear local solves.
 
 The blocker ledger is intentionally empty. Coupled sources, linear IMEX and nonlinear local IMEX
 execute through ordinary Programs. The former dimension-erased polar runtime builder is retired;
@@ -55,6 +58,164 @@ ALGORITHMS_DOC = ROOT / "docs/ALGORITHMS.md"
 LEGACY_DIRECT_AMR_STEP_TESTS = set()
 NONLINEAR_AMR_TEST = ROOT / "tests/python/integration/amr/test_amr_newton_full.py"
 V3_FEATURES_TEST = ROOT / "tests/python/unit/runtime/test_v3_features.py"
+RAW_TEMPORAL_FIXTURE = ROOT / "tests/python/support/explicit_program.py"
+RAW_TEMPORAL_FIXTURE_MODULE = "tests.python.support.explicit_program"
+RAW_SSPRK_INSTALLERS = frozenset({"install_ssprk2_program", "install_ssprk3_program"})
+RAW_SSPRK_FIXTURE_CALLERS = {
+    "tests/python/integration/amr/test_amr_explicit_family.py",
+    "tests/python/integration/amr/test_amr_ssprk3.py",
+    "tests/python/integration/mpi/test_amr_compiled_positivity_floor.py",
+    "tests/python/integration/mpi/test_weno5_compiledmodel.py",
+    "tests/python/integration/native_loader/test_dsl_production.py",
+    "tests/python/integration/native_loader/test_ssprk3_production.py",
+    "tests/python/unit/codegen/test_dsl_coupled_source.py",
+    "tests/python/unit/codegen/test_dsl_coupled_source_conservation.py",
+    "tests/python/unit/runtime/test_projection_eig.py",
+    "tests/python/unit/runtime/test_v3_features.py",
+    "tests/python/unit/time/test_time_euler.py",
+}
+PROGRAM_AUTHORED_TEMPORAL_PROOFS = (
+    ROOT / "tests/python/integration/native_loader/test_normalized_program_execution.py",
+    ROOT / "tests/python/integration/amr/test_amr_newton_full.py",
+)
+
+
+def _ast_tree(path: Path) -> ast.Module:
+    return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+
+def _dotted_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        prefix = _dotted_name(node.value)
+        return "%s.%s" % (prefix, node.attr) if prefix else node.attr
+    if isinstance(node, ast.Call):
+        return _dotted_name(node.func)
+    return ""
+
+
+def _raw_fixture_imports(tree: ast.AST) -> tuple[dict[str, str], dict[str, str]]:
+    """Return local direct-installer names and module aliases without inspecting text."""
+    direct: dict[str, str] = {}
+    modules: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for imported in node.names:
+                if imported.name == RAW_TEMPORAL_FIXTURE_MODULE:
+                    modules[imported.asname or imported.name.split(".")[0]] = imported.name
+        elif isinstance(node, ast.ImportFrom):
+            if node.module == RAW_TEMPORAL_FIXTURE_MODULE:
+                for imported in node.names:
+                    direct[imported.asname or imported.name] = imported.name
+            elif node.module == "tests.python.support":
+                for imported in node.names:
+                    if imported.name == "explicit_program":
+                        modules[imported.asname or imported.name] = RAW_TEMPORAL_FIXTURE_MODULE
+    return direct, modules
+
+
+def _raw_fixture_call_name(
+    call: ast.Call, direct: dict[str, str], modules: dict[str, str]
+) -> str | None:
+    """Resolve direct, aliased, and module-qualified raw-fixture calls structurally."""
+    dotted = _dotted_name(call.func)
+    if dotted in direct:
+        return direct[dotted]
+    for local_name, module_name in modules.items():
+        prefix = local_name + "."
+        if dotted.startswith(prefix):
+            candidate = dotted.removeprefix(prefix)
+            if "." not in candidate:
+                return candidate
+        if dotted.startswith(module_name + "."):
+            candidate = dotted.removeprefix(module_name + ".")
+            if "." not in candidate:
+                return candidate
+    return None
+
+
+def _function_call_graph(tree: ast.Module) -> tuple[dict[str, set[str]], set[str]]:
+    """Find local functions executable from pytest tests or the module's ``__main__`` entry point."""
+    functions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    graph: dict[str, set[str]] = {}
+    for name, function in functions.items():
+        graph[name] = {
+            call.func.id
+            for call in ast.walk(function)
+            if isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id in functions
+        }
+    roots = {name for name in functions if name.startswith("test_")}
+    for node in tree.body:
+        if not isinstance(node, ast.If):
+            continue
+        is_main_guard = any(
+            isinstance(child, ast.Compare)
+            and isinstance(child.left, ast.Name)
+            and child.left.id == "__name__"
+            and any(
+                isinstance(value, ast.Constant) and value.value == "__main__"
+                for value in child.comparators
+            )
+            for child in ast.walk(node.test)
+        )
+        if is_main_guard:
+            roots.update(
+                call.func.id
+                for call in ast.walk(node)
+                if isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Name)
+                and call.func.id in functions
+            )
+    return graph, roots
+
+
+def _reachable_functions(tree: ast.Module) -> set[str]:
+    graph, pending = _function_call_graph(tree)
+    reachable: set[str] = set()
+    while pending:
+        name = pending.pop()
+        if name in reachable:
+            continue
+        reachable.add(name)
+        pending.update(graph.get(name, set()) - reachable)
+    return reachable
+
+
+def _enclosing_function_names(tree: ast.Module) -> dict[ast.AST, str | None]:
+    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+    enclosing: dict[ast.AST, str | None] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        current = node
+        name: str | None = None
+        while current in parents:
+            current = parents[current]
+            if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                name = current.name
+                break
+        enclosing[node] = name
+    return enclosing
+
+
+def _executable_call_dotted_names(tree: ast.Module) -> set[str]:
+    """Return calls reachable from a test function, ``__main__`` runner, or module execution."""
+    reachable = _reachable_functions(tree)
+    enclosing = _enclosing_function_names(tree)
+    return {
+        _dotted_name(call.func)
+        for call in ast.walk(tree)
+        if isinstance(call, ast.Call)
+        and (enclosing[call] is None or enclosing[call] in reachable)
+        and _dotted_name(call.func)
+    }
 
 
 def _function_body(source: str, signature: str) -> str:
@@ -474,6 +635,52 @@ def test_ranked_program_context_owns_candidate_state_coupling_not_a_live_state_s
     assert 'unavailable_("exact-ranked multi-block AMR coupling provider")' not in amr
     assert "void coupled_source_step(" not in runtime
     assert "void step(Real dt)" not in runtime
+
+
+def test_raw_runtime_temporal_fixtures_are_not_program_authorship_evidence():
+    """Keep raw native-block parity fixtures separate from authored temporal proof.
+
+    The retained SSPRK installers are a bounded migration debt: their callers construct legacy
+    ``System``/``AmrSystem`` blocks that have no symbolic Case/Program adapter.  They remain visible
+    here precisely so they cannot silently grow into the semantic evidence set.
+    """
+    fixture_tree = _ast_tree(RAW_TEMPORAL_FIXTURE)
+    fixture_functions = {
+        node.name
+        for node in fixture_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assert {name for name in fixture_functions if name.startswith("install_")} == {
+        "install_forward_euler_program",
+        *RAW_SSPRK_INSTALLERS,
+    }
+
+    discovered: set[str] = set()
+    for path in (ROOT / "tests/python").rglob("*.py"):
+        tree = _ast_tree(path)
+        direct, modules = _raw_fixture_imports(tree)
+        calls = [
+            call
+            for call in ast.walk(tree)
+            if isinstance(call, ast.Call)
+            and _raw_fixture_call_name(call, direct, modules) in RAW_SSPRK_INSTALLERS
+        ]
+        if not calls:
+            continue
+        discovered.add(path.relative_to(ROOT).as_posix())
+        reachable = _reachable_functions(tree)
+        enclosing = _enclosing_function_names(tree)
+        assert all(enclosing[call] is None or enclosing[call] in reachable for call in calls), (
+            path.relative_to(ROOT).as_posix()
+        )
+    assert discovered == RAW_SSPRK_FIXTURE_CALLERS
+
+    normalized, nonlinear_amr = (_ast_tree(path) for path in PROGRAM_AUTHORED_TEMPORAL_PROOFS)
+    normalized_calls = _executable_call_dotted_names(normalized)
+    assert {"libtime.SSPRK2", "libtime.IMEX", "compile_problem"} <= normalized_calls
+    nonlinear_calls = _executable_call_dotted_names(nonlinear_amr)
+    assert {"IMEX", "case.program", "pops.resolve"} <= nonlinear_calls
+    assert "_resolved" in _reachable_functions(nonlinear_amr)
 
 
 def test_direct_amr_runtime_step_callers_remain_absent():
