@@ -60,6 +60,9 @@ EXPECTED_REQUIREMENTS = {
     "prepared_hyperbolic_boundary_only_transport_authority",
     "polar_runtime_capability_honesty",
     "prepared_batch_recovery_only_runtime_authority",
+    "prepared_riemann_recovery_policy",
+    "remaining_runtime_nd_metric_eb_characteristic_execution",
+    "typed_flux_recovery_consumption",
     *EXPECTED_HARDWARE_REQUIREMENTS,
 }
 EXPECTED_UNAVAILABLE_REQUIREMENTS = set()
@@ -68,9 +71,6 @@ EXPECTED_DEFERRED = (
     "amr_history_recovery_publication",
     "amr_regrid_recovery_publication",
     "amr_restriction_recovery_publication",
-    "prepared_riemann_recovery_policy",
-    "remaining_runtime_nd_metric_eb_characteristic_execution",
-    "typed_flux_recovery_consumption",
 )
 GTEST_PATTERN = re.compile(r"\bTEST(?:_F)?\(\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*\)")
 FULL_GIT_REVISION = re.compile(r"[0-9a-f]{40}")

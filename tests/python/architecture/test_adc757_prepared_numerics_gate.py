@@ -151,14 +151,29 @@ def test_adc757_slice_separates_mpi_executables_from_authenticated_hardware_proo
     assert "bounded_cell_local_program_runtime" not in data["deferred"]
     assert "standalone_exact_ranked_cell_temporal_provider" not in data["deferred"]
     assert "remaining_multirank_multibox_amr_local_time_execution" not in data["deferred"]
+    assert "amr_bootstrap_recovery_publication" in data["deferred"]
+    assert "amr_history_recovery_publication" in data["deferred"]
+    assert "amr_regrid_recovery_publication" in data["deferred"]
+    assert "amr_restriction_recovery_publication" in data["deferred"]
+    assert "prepared_riemann_recovery_policy" not in data["deferred"]
+    assert "remaining_runtime_nd_metric_eb_characteristic_execution" not in data["deferred"]
+    assert "typed_flux_recovery_consumption" not in data["deferred"]
     assert [row for row in data["check"] if row.get("kind") == "mpi_ctest"] == [
         {
-            "requirement": "mpi_collective_execution",
-            "polarity": "positive",
+            "requirement": "remaining_runtime_nd_metric_eb_characteristic_execution",
+            "polarity": "refusal",
             "kind": "mpi_ctest",
             "target": "test_mpi_system_analytic_level_set",
             "test_regex": "^test_mpi_system_analytic_level_set_np2$",
             "nproc": 2,
+        },
+        {
+            "requirement": "mpi_collective_execution",
+            "polarity": "positive",
+            "kind": "mpi_ctest",
+            "target": "test_mpi_smoke",
+            "test_regex": "^test_mpi_smoke_np4$",
+            "nproc": 4,
         },
         {
             "requirement": "mpi_collective_execution",
@@ -217,6 +232,7 @@ def test_adc757_slice_separates_mpi_executables_from_authenticated_hardware_proo
         (requirement, "refusal") for requirement in runner.EXPECTED_HARDWARE_REQUIREMENTS
     }
     assert all(row["polarity"] != "positive" for row in hardware_rows)
+    # Deferred recovery-publication families refuse closure before hardware is considered.
     assert runner.main(["--check-only", "--closure"]) == 3
 
 
