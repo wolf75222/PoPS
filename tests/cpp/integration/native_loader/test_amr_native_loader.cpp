@@ -1,7 +1,9 @@
 #include <gtest/gtest.h>
 
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/runtime/dynamic/component_consumers.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
+#include <pops/runtime/dynamic/prepared_execution_context.hpp>
 
 #include "component_abi_test_helpers.hpp"
 #include "native_dso_compiler.hpp"
@@ -21,6 +23,64 @@
 namespace {
 
 namespace abi = pops::component::test_support;
+constexpr int kDim = pops::kNativeDimension;
+
+template <std::size_t Dim>
+std::size_t extent_product(const std::array<std::size_t, Dim>& extents) {
+  std::size_t result = 1;
+  for (const std::size_t extent : extents)
+    result *= extent;
+  return result;
+}
+
+template <int Dim>
+PopsConstFieldViewV1 const_field_view(const double* data,
+                                      const std::array<std::size_t, Dim>& extents,
+                                      std::size_t components) {
+  PopsConstFieldViewV1 result{};
+  result.struct_size = sizeof(PopsConstFieldViewV1);
+  result.data = data;
+  result.dimension = Dim;
+  std::ptrdiff_t stride = static_cast<std::ptrdiff_t>(components);
+  for (int axis = 0; axis < Dim; ++axis) {
+    result.extents[axis] = extents[axis];
+    result.axis_strides[axis] = stride;
+    stride *= static_cast<std::ptrdiff_t>(extents[axis]);
+  }
+  result.component_count = components;
+  result.component_stride = 1;
+  result.centering = POPS_FIELD_CENTERING_CELL_V1;
+  result.scalar_type = POPS_SCALAR_FLOAT64_V1;
+  result.memory_space = POPS_MEMORY_SPACE_HOST_V1;
+  result.layout_identity = "test::layout";
+  result.patch_identity = "test::patch";
+  result.ownership = POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1;
+  return result;
+}
+
+template <int Dim>
+PopsFieldViewV1 field_view(double* data, const std::array<std::size_t, Dim>& extents,
+                           std::size_t components) {
+  PopsFieldViewV1 result{};
+  result.struct_size = sizeof(PopsFieldViewV1);
+  result.data = data;
+  result.dimension = Dim;
+  std::ptrdiff_t stride = static_cast<std::ptrdiff_t>(components);
+  for (int axis = 0; axis < Dim; ++axis) {
+    result.extents[axis] = extents[axis];
+    result.axis_strides[axis] = stride;
+    stride *= static_cast<std::ptrdiff_t>(extents[axis]);
+  }
+  result.component_count = components;
+  result.component_stride = 1;
+  result.centering = POPS_FIELD_CENTERING_CELL_V1;
+  result.scalar_type = POPS_SCALAR_FLOAT64_V1;
+  result.memory_space = POPS_MEMORY_SPACE_HOST_V1;
+  result.layout_identity = "test::layout";
+  result.patch_identity = "test::patch";
+  result.ownership = POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1;
+  return result;
+}
 
 enum class FluxTableFixture { Exact, HeaderOnly, ForgedEntrySize, WrongAbi };
 
@@ -32,6 +92,7 @@ std::string component_source() {
   return R"CPP(
 #include <pops/runtime/config/generated_component_abi.hpp>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -45,16 +106,47 @@ std::string component_source() {
     std::int64_t last_tag_logical_tick = -1;
     double last_tag_physical_time = -1.0;
 
+    template <class View>
+    std::size_t point_count(const View& view) {
+      std::size_t result = 1;
+      for (std::int32_t axis = 0; axis < view.dimension; ++axis)
+        result *= view.extents[axis];
+      return result;
+    }
+
+    template <class View>
+    std::ptrdiff_t field_offset(const View& view, std::size_t point, std::size_t component) {
+      std::ptrdiff_t result = static_cast<std::ptrdiff_t>(component) * view.component_stride;
+      for (std::int32_t axis = 0; axis < view.dimension; ++axis) {
+        const std::size_t coordinate = point % view.extents[axis];
+        point /= view.extents[axis];
+        result += static_cast<std::ptrdiff_t>(coordinate) * view.axis_strides[axis];
+      }
+      return result;
+    }
+
     int evaluate(void*, const PopsNumericalFluxRequestV1* request, PopsNumericalFluxResultV1* result) {
       const auto* left = static_cast<const double*>(request->left.data);
       const auto* right = static_cast<const double*>(request->right.data);
+      const auto* normals = static_cast<const double*>(request->normals.data);
       auto* output = static_cast<double*>(result->normal_flux.data);
-      const auto points = request->left.extents[0] * request->left.extents[1];
+      const auto points = point_count(request->left);
       for (std::size_t point = 0; point < points; ++point) {
+        double squared_normal = 0.0;
+        for (std::int32_t axis = 0; axis < request->normals.dimension; ++axis) {
+          const double normal = normals[field_offset(request->normals, point, axis)];
+          squared_normal += normal * normal;
+        }
+        if (!std::isfinite(squared_normal) || squared_normal == 0.0) {
+          result->status = {sizeof(PopsComponentStatusV1), 40, POPS_COMPONENT_ABORT_RUN_V1,
+                            "numerical flux normal is invalid"};
+          return 40;
+        }
         for (std::size_t component = 0; component < request->left.component_count; ++component) {
-          const auto index = point * static_cast<std::size_t>(request->left.axis_strides[1]) +
-                             component * static_cast<std::size_t>(request->left.component_stride);
-          output[index] = 0.25 * left[index] + 0.75 * right[index];
+          const auto left_index = field_offset(request->left, point, component);
+          const auto right_index = field_offset(request->right, point, component);
+          const auto output_index = field_offset(result->normal_flux, point, component);
+          output[output_index] = 0.25 * left[left_index] + 0.75 * right[right_index];
         }
         result->stability_bounds[point] = 3.0;
         result->actions[point] = POPS_COMPONENT_CONTINUE_V1;
@@ -76,11 +168,10 @@ std::string component_source() {
         return 41;
       }
       auto* values = static_cast<double*>(request->ghosts.data);
-      const auto points = request->ghosts.extents[0] * request->ghosts.extents[1];
+      const auto points = point_count(request->ghosts);
       for (std::size_t point = 0; point < points; ++point)
         for (std::size_t component = 0; component < request->ghosts.component_count; ++component) {
-          const auto index = point * static_cast<std::size_t>(request->ghosts.axis_strides[0]) +
-                             component * static_cast<std::size_t>(request->ghosts.component_stride);
+          const auto index = field_offset(request->ghosts, point, component);
           values[index] = static_cast<double>(*static_cast<int*>(state));
         }
       *status = {sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr};
@@ -102,14 +193,11 @@ std::string component_source() {
       const auto* base = static_cast<const double*>(request->base_outward_normal_flux.data);
       const auto* normals = static_cast<const double*>(request->outward_normals.data);
       auto* output = static_cast<double*>(result->outward_normal_flux.data);
-      const auto points = request->base_outward_normal_flux.extents[0] *
-                          request->base_outward_normal_flux.extents[1];
+      const auto points = point_count(request->base_outward_normal_flux);
       const auto axis = static_cast<std::size_t>(request->region.axes[0]);
       const double side = static_cast<double>(request->region.sides[0]);
       for (std::size_t point = 0; point < points; ++point) {
-        const auto normal_offset =
-            point * static_cast<std::size_t>(request->outward_normals.axis_strides[0]) +
-            axis * static_cast<std::size_t>(request->outward_normals.component_stride);
+        const auto normal_offset = field_offset(request->outward_normals, point, axis);
         if (normals[normal_offset] != side || request->face_measures[point] <= 0.0) {
           result->status = {sizeof(PopsComponentStatusV1), 43, POPS_COMPONENT_ABORT_RUN_V1,
                             "boundary flux orientation is inconsistent"};
@@ -117,11 +205,9 @@ std::string component_source() {
         }
         for (std::size_t component = 0;
              component < request->base_outward_normal_flux.component_count; ++component) {
-          const auto index =
-              point * static_cast<std::size_t>(request->base_outward_normal_flux.axis_strides[0]) +
-              component *
-                  static_cast<std::size_t>(request->base_outward_normal_flux.component_stride);
-          output[index] = base[index] + 10.0;
+          const auto base_index = field_offset(request->base_outward_normal_flux, point, component);
+          const auto output_index = field_offset(result->outward_normal_flux, point, component);
+          output[output_index] = base[base_index] + 10.0;
         }
         result->actions[point] = POPS_COMPONENT_CONTINUE_V1;
       }
@@ -165,12 +251,27 @@ std::string component_source() {
                                 std::size_t instruction_count, PopsTaggerMaskViewV2 candidates,
                                 PopsTaggerMaskViewV2 equalities) -> bool {
         const auto& reference = request->states[0].values;
-        const std::size_t nx =
-            reference.extents[0] - reference.ghost_lower[0] - reference.ghost_upper[0];
+        std::array<std::size_t, 3> interior_extents{1, 1, 1};
+        std::size_t interior_points = 1;
+        for (std::int32_t axis = 0; axis < reference.dimension; ++axis) {
+          interior_extents[axis] =
+              reference.extents[axis] - reference.ghost_lower[axis] - reference.ghost_upper[axis];
+          interior_points *= interior_extents[axis];
+        }
+        if (interior_points != points) {
+          *status = {sizeof(PopsComponentStatusV1), 22, POPS_COMPONENT_ABORT_RUN_V1,
+                     "AMR tag mask shape differs from the exact-ranked state"};
+          return false;
+        }
         for (std::size_t point = 0; point < points; ++point) {
           bool matches[128]{}, equality[128]{};
           std::size_t depth = 0;
-          const std::size_t i = point % nx, j = point / nx;
+          std::array<std::size_t, 3> coordinates{};
+          std::size_t remaining = point;
+          for (std::int32_t axis = 0; axis < reference.dimension; ++axis) {
+            coordinates[axis] = remaining % interior_extents[axis];
+            remaining /= interior_extents[axis];
+          }
           for (std::size_t instruction = 0; instruction < instruction_count; ++instruction) {
             const int32_t opcode = opcodes[instruction];
             const int32_t argument = arguments[instruction];
@@ -178,14 +279,18 @@ std::string component_source() {
               const auto& leaf = request->program.leaves[argument];
               const auto& view = request->states[leaf.state_index].values;
               const auto* values = static_cast<const double*>(view.data);
-              const auto read = [&](std::ptrdiff_t x, std::ptrdiff_t y) {
-                const auto offset =
-                    (x + static_cast<std::ptrdiff_t>(view.ghost_lower[0])) * view.axis_strides[0] +
-                    (y + static_cast<std::ptrdiff_t>(view.ghost_lower[1])) * view.axis_strides[1] +
-                    static_cast<std::ptrdiff_t>(leaf.component) * view.component_stride;
+              const auto read = [&](const std::array<std::ptrdiff_t, 3>& sample_coordinates) {
+                auto offset = static_cast<std::ptrdiff_t>(leaf.component) * view.component_stride;
+                for (std::int32_t axis = 0; axis < view.dimension; ++axis)
+                  offset += (sample_coordinates[axis] +
+                             static_cast<std::ptrdiff_t>(view.ghost_lower[axis])) *
+                            view.axis_strides[axis];
                 return values[offset];
               };
-              double sample = read(static_cast<std::ptrdiff_t>(i), static_cast<std::ptrdiff_t>(j));
+              std::array<std::ptrdiff_t, 3> sample_coordinates{};
+              for (std::int32_t axis = 0; axis < view.dimension; ++axis)
+                sample_coordinates[axis] = static_cast<std::ptrdiff_t>(coordinates[axis]);
+              double sample = read(sample_coordinates);
               if (opcode == 3)
                 sample = sample < 0.0 ? -sample : sample;
               if (opcode == 4 || opcode == 5) {
@@ -195,11 +300,9 @@ std::string component_source() {
                   const auto& axis = stencil.axes[axis_index];
                   double derivative = 0.0;
                   for (std::size_t term = 0; term < axis.term_count; ++term) {
-                    const auto x =
-                        static_cast<std::ptrdiff_t>(i) + (axis.axis == 0 ? axis.offsets[term] : 0);
-                    const auto y =
-                        static_cast<std::ptrdiff_t>(j) + (axis.axis == 1 ? axis.offsets[term] : 0);
-                    derivative += axis.coefficients[term] * read(x, y);
+                    auto stencil_coordinates = sample_coordinates;
+                    stencil_coordinates[axis.axis] += axis.offsets[term];
+                    derivative += axis.coefficients[term] * read(stencil_coordinates);
                   }
                   derivative /= request->cell_size[axis.axis];
                   squared_norm += derivative * derivative;
@@ -253,28 +356,31 @@ std::string component_source() {
     }
 
     int cluster(void*, const PopsClusteringRequestV1* request, PopsComponentStatusV1* status) {
-      if (request->dimension != 2 || request->box_capacity < 1)
+      if (request->dimension < 1 || request->dimension > 3 || request->box_capacity < 1)
         return 2;
-      const std::size_t nx = static_cast<std::size_t>(request->extents[0]);
-      std::int64_t lo_x = request->extents[0], lo_y = request->extents[1];
-      std::int64_t hi_x = -1, hi_y = -1;
+      std::array<std::int64_t, 3> lo{0, 0, 0};
+      std::array<std::int64_t, 3> hi{-1, -1, -1};
+      for (std::int32_t axis = 0; axis < request->dimension; ++axis)
+        lo[axis] = request->extents[axis];
       for (std::size_t point = 0; point < request->tags.size; ++point) {
         if (request->tags.data[point] == 0)
           continue;
-        const auto i = static_cast<std::int64_t>(point % nx);
-        const auto j = static_cast<std::int64_t>(point / nx);
-        lo_x = std::min(lo_x, i);
-        lo_y = std::min(lo_y, j);
-        hi_x = std::max(hi_x, i);
-        hi_y = std::max(hi_y, j);
+        std::size_t remaining = point;
+        for (std::int32_t axis = 0; axis < request->dimension; ++axis) {
+          const auto coordinate = static_cast<std::int64_t>(
+              remaining % static_cast<std::size_t>(request->extents[axis]));
+          remaining /= static_cast<std::size_t>(request->extents[axis]);
+          lo[axis] = std::min(lo[axis], coordinate);
+          hi[axis] = std::max(hi[axis], coordinate);
+        }
       }
-      if (hi_x < 0) {
+      if (hi[0] < 0) {
         *request->box_count = 0;
       } else {
-        request->boxes[0] = lo_x;
-        request->boxes[1] = lo_y;
-        request->boxes[2] = hi_x;
-        request->boxes[3] = hi_y;
+        for (std::int32_t axis = 0; axis < request->dimension; ++axis) {
+          request->boxes[axis] = lo[axis];
+          request->boxes[request->dimension + axis] = hi[axis];
+        }
         *request->box_count = 1;
       }
       *status = {sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr};
@@ -439,30 +545,44 @@ TEST(test_amr_native_loader, LoadsAuthenticatesAndExecutesExactFinalTable) {
     auto loaded = pops::component::LoadedComponent::load(library.string(), expected());
     const auto& table =
         loaded.table<PopsNumericalFluxApiV1>(POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1);
-    const std::array<double, 4> left{1.0, 3.0, 5.0, 7.0};
-    const std::array<double, 4> right{2.0, 4.0, 6.0, 8.0};
-    const std::array<double, 4> normals{1.0, 0.0, 1.0, 0.0};
-    std::array<double, 4> flux{};
-    std::array<double, 2> stability{};
-    std::array<PopsComponentActionV1, 2> actions{};
+    std::array<std::size_t, kDim> extents{};
+    extents.fill(2);
+    const std::size_t points = extent_product(extents);
+    constexpr std::size_t components = 2;
+    std::vector<double> left(points * components);
+    std::vector<double> right(points * components);
+    std::vector<double> normals(points * static_cast<std::size_t>(kDim), 0.0);
+    for (std::size_t index = 0; index < left.size(); ++index) {
+      left[index] = static_cast<double>(2 * index + 1);
+      right[index] = static_cast<double>(2 * index + 2);
+    }
+    for (std::size_t point = 0; point < points; ++point)
+      normals[point * static_cast<std::size_t>(kDim)] = 1.0;
+    std::vector<double> flux(points * components, 0.0);
+    std::vector<double> stability(points, 0.0);
+    std::vector<PopsComponentActionV1> actions(points);
     const auto execution = abi::host_execution_context();
-    const PopsNumericalFluxRequestV1 request{sizeof(PopsNumericalFluxRequestV1),
-                                             abi::const_field_view(left.data(), 1, 2, 2),
-                                             abi::const_field_view(right.data(), 1, 2, 2),
-                                             abi::const_field_view(normals.data(), 1, 2, 2),
-                                             nullptr,
-                                             abi::logical_time(),
-                                             execution};
+    const PopsNumericalFluxRequestV1 request{
+        sizeof(PopsNumericalFluxRequestV1),
+        const_field_view<kDim>(left.data(), extents, components),
+        const_field_view<kDim>(right.data(), extents, components),
+        const_field_view<kDim>(normals.data(), extents, static_cast<std::size_t>(kDim)),
+        nullptr,
+        abi::logical_time(),
+        execution};
     PopsNumericalFluxResultV1 result{sizeof(PopsNumericalFluxResultV1),
-                                     abi::field_view(flux.data(), 1, 2, 2),
+                                     field_view<kDim>(flux.data(), extents, components),
                                      stability.data(),
                                      actions.data(),
                                      {}};
     void* state = loaded.prepared_state(POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, execution);
     ASSERT_NE(state, nullptr);
-    ASSERT_EQ(pops::component::evaluate_faces(table, state, request, result), 0);
-    EXPECT_EQ(flux, (std::array<double, 4>{1.75, 3.75, 5.75, 7.75}));
-    EXPECT_EQ(stability, (std::array<double, 2>{3.0, 3.0}));
+    ASSERT_EQ(pops::component::evaluate_faces<kDim>(table, state, request, result), 0);
+    std::vector<double> expected_flux(left.size());
+    for (std::size_t index = 0; index < expected_flux.size(); ++index)
+      expected_flux[index] = 0.25 * left[index] + 0.75 * right[index];
+    EXPECT_EQ(flux, expected_flux);
+    EXPECT_EQ(stability, std::vector<double>(points, 3.0));
     auto mismatched_context = execution;
     mismatched_context.execution_identity = "test::other-execution-context";
     EXPECT_THROW(

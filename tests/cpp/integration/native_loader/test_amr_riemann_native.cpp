@@ -3,16 +3,11 @@
 // tournent la MEME hierarchie AMR (AmrCouplerMP<Model> + reflux + regrid), BIT-IDENTIQUE, sur les
 // trois chemins, et que hllc/roe produisent un resultat DIFFERENT de rusanov (flux actif, non muet).
 //
-//   (A) add_compiled_model(AmrSystem&) == add_block(ModelSpec)   -- direct, sans .so : tourne sous
-//       TOUS les backends (hote, Kokkos Serial), c'est la parite decisive qui ne casse pas nvcc.
-//       4 combos : (hllc/roe) x (conservative/primitive), chacun dmax==0.
-//       + rusanov conservatif (oracle) -> hllc != rusanov et roe != rusanov (flux actif).
+//   prepared exact-rank block == add_native_block(loader.so) -- deux routes d'installation
+//   supportees et authentifiees, sur 4 combos (hllc/roe) x (conservative/primitive), dmax==0.
+//   + rusanov conservatif (oracle) -> hllc != rusanov et roe != rusanov (flux actif).
 //
-//   (B) add_native_block(loader.so) == add_compiled_model(AmrSystem&) -- chemin .so, autocompile a
-//       l'execution (source du loader AMR, cf. dsl.emit_cpp_native_loader(target="amr_system")).
-//       Le DSO rejoue le contrat exact du backend hote, Kokkos inclus ; aucun auto-skip.
-//
-// Le modele est un Euler PUR (CompositeModel<Euler, NoSource, BackgroundDensity{alpha=0}>) : la
+// Le modele est un Euler PUR (CompositeModel<EulerND<Dim>, NoSource, BackgroundDensity{alpha=0}>) : la
 // brique elliptique vaut 0, phi=0 (zero bruit FP), parite STRICTE. La pression est requise pour
 // hllc/roe (cf. Euler::pressure()), d'ou le choix d'Euler.
 //
@@ -24,15 +19,18 @@
 #include "native_dso_compiler.hpp"
 #include "explicit_amr_program.hpp"
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel, Euler, NoSource, BackgroundDensity
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/runtime/amr_system.hpp>
+#include <pops/runtime/dynamic/dynlib.hpp>
 
 #include "amr_tagging_test_authority.hpp"
-#include <pops/runtime/config/model_spec.hpp>
 
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <fstream>
 #include <string>
@@ -46,63 +44,170 @@ using namespace pops;
 
 namespace {
 
-using ProdModel = CompositeModel<Euler, NoSource, BackgroundDensity>;
+constexpr int kDim = kNativeDimension;
+using NativeEuler = EulerND<kDim>;
+using ProdModel = CompositeModel<NativeEuler, NoSource, BackgroundDensity>;
 constexpr double kGamma = 1.4;
+constexpr const char* kProviderConsumerQid = "tests.amr-riemann-native/physical-flux";
+constexpr const char* kStateIdentity = "tests.amr-riemann-native/gas/state@1";
+constexpr const char* kPrimaryClock = "test.clock.macro";
+constexpr const char* kFineClock = "tests.amr-riemann-native/clock/level-1";
+constexpr const char* kDsoRouteIdentity =
+    "tests.amr-riemann-native/route/source-built-add-native-block@1";
 
 ProdModel make_model() {
   // alpha=0 : elliptic_rhs nul -> phi=0, parite stricte.
-  return ProdModel{Euler{static_cast<Real>(kGamma)}, NoSource{},
-                   BackgroundDensity{Real(0), Real(0)}};
+  return ProdModel{
+      {}, NativeEuler{static_cast<Real>(kGamma)}, NoSource{}, BackgroundDensity{Real(0), Real(0)}};
 }
 
-// ModelSpec equivalente pour le chemin add_block (MEME type concret).
-ModelSpec make_spec() {
-  ModelSpec spec;
-  spec.transport = "compressible";
-  spec.source = "none";
-  spec.elliptic = "background";
-  spec.gamma = kGamma;
-  spec.alpha = 0.0;
-  spec.n0 = 0.0;
-  return spec;
+template <int Dim>
+std::size_t cell_count(int n) {
+  std::size_t cells = 1;
+  for (int axis = 0; axis < Dim; ++axis)
+    cells *= static_cast<std::size_t>(n);
+  return cells;
 }
 
-std::vector<double> bubble(int n) {
-  std::vector<double> rho(static_cast<std::size_t>(n) * n);
-  for (int j = 0; j < n; ++j)
-    for (int i = 0; i < n; ++i) {
-      const double x = (i + 0.5) / n - 0.5, y = (j + 0.5) / n - 0.5;
-      rho[static_cast<std::size_t>(j) * n + i] = 1.0 + 0.5 * std::exp(-(x * x + y * y) / 0.02);
+template <int Dim>
+std::vector<double> bubble_state(int n) {
+  const std::size_t cells = cell_count<Dim>(n);
+  std::vector<double> state(static_cast<std::size_t>(EulerND<Dim>::n_vars) * cells, 0.0);
+  for (std::size_t cell = 0; cell < cells; ++cell) {
+    std::size_t remaining = cell;
+    double radius_squared = 0.0;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const int coordinate = static_cast<int>(remaining % static_cast<std::size_t>(n));
+      remaining /= static_cast<std::size_t>(n);
+      const double position = (static_cast<double>(coordinate) + 0.5) / n - 0.5;
+      radius_squared += position * position;
     }
-  return rho;
+    state[cell] = 1.0 + 0.5 * std::exp(-radius_squared / 0.02);
+    state[static_cast<std::size_t>(EulerND<Dim>::energy_component) * cells + cell] = 2.5;
+  }
+  return state;
 }
 
-AmrSystemConfig make_cfg(int n) {
-  AmrSystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
+template <int Dim>
+AmrSystemConfig<Dim> make_cfg(int n) {
+  AmrSystemConfig<Dim> cfg;
+  for (int axis = 0; axis < Dim; ++axis) {
+    cfg.shape[axis] = n;
+    cfg.lower[axis] = Real(0);
+    cfg.upper[axis] = Real(1);
+    cfg.periodicity[axis] = true;
+  }
+  cfg.level_count = 2;
   cfg.regrid_every = 4;
   return cfg;
+}
+
+template <int Dim>
+void install_compiled_model(AmrSystem<Dim>& system, const char* riemann,
+                            const char* reconstruction) {
+  system.install_block_state_route("gas", kStateIdentity);
+  system.install_prepared_amr_block(prepare_compiled_amr_system_block<Dim>(
+      "gas", make_model(), "minmod", riemann, reconstruction, "explicit", kGamma, 1, 1, 0.0,
+      static_cast<double>(kWenoEpsilon), false, kProviderConsumerQid));
 }
 
 struct Snap {
   std::vector<double> density;
   double mass = 0;
+  double initial_mass = 0;
   int n_patches = 0;
+  int n_levels = 0;
+  int bootstrap_regrid_count = 0;
+  int regrid_count = 0;
+  int cadence_regrid_count = 0;
+  std::int64_t accepted_primary_ticks = -1;
+  std::int64_t accepted_fine_ticks = -1;
+  std::int64_t accepted_coarse_steps = -1;
+  std::int64_t accepted_fine_steps = -1;
+  int coarse_flux_fragments = 0;
+  int fine_flux_fragments = 0;
+  int fine_phase_mask = 0;
+  int reflux_syncs = 0;
+  int average_down_syncs = 0;
+  bool saw_coarse_dt = false;
+  bool saw_fine_dt = false;
+  bool temporal_ratio_is_two = false;
 };
 
-Snap run(AmrSystem& s, int nsteps) {
+template <int Dim>
+Snap run(AmrSystem<Dim>& s, int nsteps) {
   // Time subcycling is an independent execution contract. Keep it explicit even though this test
   // deliberately chooses the same value as the spatial refinement ratio.
   s.set_temporal_relations({2}, {1}, {"integral_only"});
   s.set_poisson("charge_density", "geometric_mg");
   test::install_prepared_threshold_union(s, {{"gas", "rho", 1.2}});
-  test::install_forward_euler_program(s);
+  auto context = test::install_forward_euler_program_context(s);
+  context->declare_clock_relation(kPrimaryClock, kFineClock, 2);
+  using FluxBudget = typename AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
+  s.install_prepared_amr_program_flux_expression_budget(
+      "tests.amr-riemann-native/program/forward-euler@1", std::vector<FluxBudget>{{1, 1}}, 0, 0);
+
+  // mass() materializes the engine and performs the automatic initial hierarchy bootstrap.  The
+  // cadence witness must therefore advance strictly after this baseline, not merely be non-zero.
+  const double initial_mass = s.mass();
+  const int bootstrap_regrid_count = s.checkpoint_regrid_count();
   const double dt = 2e-4;
   for (int k = 0; k < nsteps; ++k)
     s.step(dt);
-  return Snap{s.density(), s.mass(), s.n_patches()};
+
+  Snap snap;
+  snap.density = s.density();
+  snap.mass = s.mass();
+  snap.initial_mass = initial_mass;
+  snap.n_patches = s.n_patches();
+  snap.n_levels = s.n_levels();
+  snap.bootstrap_regrid_count = bootstrap_regrid_count;
+  snap.regrid_count = s.checkpoint_regrid_count();
+  snap.cadence_regrid_count = snap.regrid_count - bootstrap_regrid_count;
+
+  for (const auto& row : s.program_clock_manifest()) {
+    if (row.size() == 3 && row[0] == "logical") {
+      if (row[1] == kPrimaryClock)
+        snap.accepted_primary_ticks = std::stoll(row[2]);
+      else if (row[1] == kFineClock)
+        snap.accepted_fine_ticks = std::stoll(row[2]);
+    } else if (row.size() == 6 && row[0] == "level") {
+      if (row[1] == "0")
+        snap.accepted_coarse_steps = std::stoll(row[2]);
+      else if (row[1] == "1")
+        snap.accepted_fine_steps = std::stoll(row[2]);
+    }
+  }
+  for (const auto& row : s.program_flux_ledger_manifest()) {
+    if (row.size() != 13)
+      continue;
+    const bool coarse = row[10].ends_with("_coarse");
+    const double duration = std::stod(row[12]);
+    if (coarse) {
+      ++snap.coarse_flux_fragments;
+      snap.saw_coarse_dt = snap.saw_coarse_dt || std::fabs(duration - dt) < 1e-12;
+    } else if (row[10].ends_with("_fine")) {
+      ++snap.fine_flux_fragments;
+      snap.saw_fine_dt = snap.saw_fine_dt || std::fabs(duration - dt / 2.0) < 1e-12;
+      if (row[7] == "2" && row[6] == "0")
+        snap.fine_phase_mask |= 1;
+      if (row[7] == "2" && row[6] == "1")
+        snap.fine_phase_mask |= 2;
+    }
+  }
+  for (const auto& row : s.program_sync_manifest()) {
+    if (row.size() != 7)
+      continue;
+    if (row[3] == "reflux")
+      ++snap.reflux_syncs;
+    else if (row[3] == "average_down")
+      ++snap.average_down_syncs;
+  }
+  const auto temporal = s.checkpoint_temporal_relations();
+  snap.temporal_ratio_is_two =
+      temporal.size() == 1 &&
+      temporal[0] == std::vector<std::string>({"0", "1", "2", "1", "integral_only"});
+  return snap;
 }
 
 double maxdiff(const std::vector<double>& a, const std::vector<double>& b) {
@@ -131,7 +236,10 @@ std::string loader_source() {
 #include <pops/physics/bricks/bricks.hpp>
 #include <string>
 namespace pops_generated {
-using ProdModel = pops::CompositeModel<pops::Euler, pops::NoSource, pops::BackgroundDensity>;
+constexpr int Dim = pops::kNativeDimension;
+using ProdModel =
+    pops::CompositeModel<pops::EulerND<Dim>, pops::NoSource, pops::BackgroundDensity>;
+int install_count = 0;
 }
 // LITTERAL preprocesseur (PAS abi_key_string() : une inline serait interposee, ELF/RTLD_GLOBAL,
 // vers la copie du module deja charge -> cle du module renvoyee -> garde d'ABI tautologique).
@@ -139,18 +247,28 @@ extern "C" const char* pops_native_abi_key() { return POPS_ABI_KEY_LITERAL; }
 extern "C" const char* pops_compiled_route_manifest() { return pops::kRouteRegistrySignature; }
 extern "C" int pops_compiled_nparams() { return 0; }
 extern "C" const char* pops_compiled_param_names() { return ""; }
+extern "C" const char* pops_test_amr_riemann_route_identity() {
+  return "tests.amr-riemann-native/route/source-built-add-native-block@1";
+}
+extern "C" int pops_test_amr_riemann_install_count() {
+  return pops_generated::install_count;
+}
 extern "C" void pops_install_native_amr(void* sys, const char* name, const char* limiter,
                                        const char* riemann, const char* recon, const char* time,
                                        double gamma, int substeps, const double*, int,
                                        double pos_floor, double weno_epsilon,
                                        bool wave_speed_cache) {
-  pops::AmrSystem* s = reinterpret_cast<pops::AmrSystem*>(sys);
-  pops::add_compiled_model<pops_generated::ProdModel>(
-      *s, name,
-      pops_generated::ProdModel{pops::Euler{static_cast<pops::Real>(gamma)}, pops::NoSource{},
-                               pops::BackgroundDensity{pops::Real(0), pops::Real(0)}},
+  ++pops_generated::install_count;
+  auto* s = reinterpret_cast<pops::AmrSystem<pops_generated::Dim>*>(sys);
+  pops::add_compiled_model<pops_generated::Dim>(
+      *s,
+      name,
+      pops_generated::ProdModel{
+          {},
+          pops::EulerND<pops_generated::Dim>{static_cast<pops::Real>(gamma)}, pops::NoSource{},
+          pops::BackgroundDensity{pops::Real(0), pops::Real(0)}},
       limiter, riemann, recon, time, gamma, substeps, 1, {}, {}, pos_floor, weno_epsilon,
-      wave_speed_cache);
+      wave_speed_cache, "tests.amr-riemann-native/physical-flux");
 }
 )CPP";
   // clang-format on
@@ -167,7 +285,7 @@ static int pops_run_test_amr_riemann_native(int argc, char** argv) {
 #endif
   const int n = 64;
   const int nsteps = 12;
-  const std::vector<double> rho = bubble(n);
+  const std::vector<double> initial_state = bubble_state<kDim>(n);
 
   int fails = 0;
   auto chk = [&](bool c, const char* w) {
@@ -177,69 +295,18 @@ static int pops_run_test_amr_riemann_native(int argc, char** argv) {
     }
   };
 
-  // ============================================================================================
-  // (A) PARITE DECISIVE (sans .so) : add_compiled_model(AmrSystem&) == add_block(ModelSpec)
-  //     pour riemann=hllc/roe et recon=conservative/primitive (4 combos).
-  //     Tourne sous TOUS les backends (hote, Kokkos Serial) -> ne casse pas nvcc.
-  // ============================================================================================
-
   // Calcule l'oracle rusanov conservatif (pour le NO-SILENT-FALLBACK hllc/roe != rusanov).
   std::vector<double> d_rusanov;
   {
-    AmrSystem Ref(make_cfg(n));
-    add_compiled_model(Ref, "gas", make_model(), "minmod", "rusanov", "conservative", "explicit",
-                       kGamma);
-    Ref.set_density("gas", rho);
+    AmrSystem<kDim> Ref(make_cfg<kDim>(n));
+    install_compiled_model(Ref, "rusanov", "conservative");
+    Ref.set_conservative_state("gas", initial_state);
     d_rusanov = run(Ref, nsteps).density;
   }
 
-  // Parite add_compiled_model == add_block pour les 4 combos.
-  // Renvoie la densite add_compiled_model (pour le test rusanov != riemann).
-  auto parity_direct = [&](const char* riem, const char* recon) -> std::vector<double> {
-    AmrSystem A(make_cfg(n));  // bloc COMPILE
-    add_compiled_model(A, "gas", make_model(), "minmod", riem, recon, "explicit", kGamma);
-    A.set_density("gas", rho);
-    const Snap sa = run(A, nsteps);
-
-    AmrSystem B(make_cfg(n));  // bloc NATIF via add_block
-    B.add_block("gas", make_spec(), "minmod", riem, recon, "explicit", 1);
-    B.set_density("gas", rho);
-    const Snap sb = run(B, nsteps);
-
-    const double nrm = maxabs(sb.density), dmax = maxdiff(sa.density, sb.density);
-    char w[200];
-    std::snprintf(w, sizeof w, "[%s/%s] densite non triviale", riem, recon);
-    chk(nrm > 1e-6, w);
-    std::snprintf(w, sizeof w, "[%s/%s] add_compiled_model == add_block (dmax==0)", riem, recon);
-    chk(dmax == 0.0, w);
-    std::snprintf(w, sizeof w, "[%s/%s] masse add_compiled_model == add_block", riem, recon);
-    chk(std::fabs(sa.mass - sb.mass) < 1e-12 * (std::fabs(sb.mass) + 1.0), w);
-    std::snprintf(w, sizeof w, "[%s/%s] n_patches identique (regrid deterministe)", riem, recon);
-    chk(sa.n_patches == sb.n_patches, w);
-    std::printf("OK  [%s/%s] dmax=%.0f\n", riem, recon, dmax);
-    return sa.density;
-  };
-
-  const std::vector<double> d_hllc_cons = parity_direct("hllc", "conservative");
-  const std::vector<double> d_hllc_prim = parity_direct("hllc", "primitive");
-  const std::vector<double> d_roe_cons = parity_direct("roe", "conservative");
-  const std::vector<double> d_roe_prim = parity_direct("roe", "primitive");
-
-  // NO-SILENT-FALLBACK : hllc et roe doivent differer de rusanov sur ce meme etat (la bulle
-  // est un ecoulement compressible non-trivial : hllc/roe ne se reduisent PAS a rusanov).
-  chk(maxdiff(d_hllc_cons, d_rusanov) > 1e-12,
-      "hllc != rusanov (le flux hllc est actif, non silencieux)");
-  chk(maxdiff(d_roe_cons, d_rusanov) > 1e-12,
-      "roe != rusanov (le flux roe est actif, non silencieux)");
-
-  std::printf(
-      "OK  (A) 4 combos hllc/roe x conservative/primitive BIT-IDENTIQUES (dmax==0) ; "
-      "hllc != rusanov, roe != rusanov (flux actifs)\n");
-
-  // ============================================================================================
-  // (B) CHEMIN .so : add_native_block(loader) == add_compiled_model(AmrSystem&), hllc ET roe.
-  //     Le loader est compile avec le meme compilateur et le meme contrat Kokkos que l'hote.
-  // ============================================================================================
+  // Le second chemin est un vrai DSO source-built charge par add_native_block. Son symbole de test
+  // authentifie l'origine et son compteur prouve que la route preparee directe ne rejoue pas le
+  // meme point d'entree.
   const std::string tmp = std::string(POPS_TEST_TMPDIR) + "/amr_riemann_native_" +
                           std::to_string(static_cast<long>(std::clock()));
   const std::string src = tmp + ".cpp";
@@ -253,35 +320,120 @@ static int pops_run_test_amr_riemann_native(int argc, char** argv) {
     pops::test::native_dso::report_compile_failure("test_amr_riemann_native", package);
     return 1;
   }
-  auto parity_loader = [&](const char* riem, const char* recon) {
-    AmrSystem A(make_cfg(n));  // chemin "production" : loader .so -> add_native_block
-    A.add_native_block("gas", so, "minmod", riem, recon, "explicit", kGamma, 1);
-    A.set_density("gas", rho);
-    const Snap sa = run(A, nsteps);
+  using RouteIdentityFn = const char* (*)();
+  using InstallCountFn = int (*)();
+  pops::dynlib::handle inspection{};
+  RouteIdentityFn route_identity = nullptr;
+  InstallCountFn install_count = nullptr;
+  int expected_dso_installs = 0;
 
-    AmrSystem B(make_cfg(n));  // MEME modele installe EN DIRECT
-    add_compiled_model(B, "gas", make_model(), "minmod", riem, recon, "explicit", kGamma);
-    B.set_density("gas", rho);
-    const Snap sb = run(B, nsteps);
-
-    const double dmax = maxdiff(sa.density, sb.density);
+  auto check_execution_evidence = [&](const Snap& snap, const char* riem, const char* recon,
+                                      const char* route) {
     char w[200];
-    std::snprintf(w, sizeof w, "[%s/%s] add_native_block == add_compiled_model (dmax==0)", riem,
+    std::snprintf(w, sizeof w, "[%s/%s/%s] hierarchie AMR et patches fins reels", riem, recon,
+                  route);
+    chk(snap.n_levels >= 2 && snap.n_patches > 0, w);
+    std::snprintf(w, sizeof w, "[%s/%s/%s] regrid cadence apres bootstrap", riem, recon, route);
+    chk(snap.cadence_regrid_count > 0 && snap.regrid_count > snap.bootstrap_regrid_count, w);
+    std::snprintf(w, sizeof w, "[%s/%s/%s] horloges acceptees 1:2", riem, recon, route);
+    chk(snap.temporal_ratio_is_two && snap.accepted_primary_ticks == nsteps &&
+            snap.accepted_fine_ticks == 2 * nsteps && snap.accepted_coarse_steps == nsteps &&
+            snap.accepted_fine_steps == nsteps,
+        w);
+    std::snprintf(w, sizeof w, "[%s/%s/%s] deux sous-pas fins publies dans le ledger", riem, recon,
+                  route);
+    chk(snap.coarse_flux_fragments > 0 && snap.fine_flux_fragments > 0 &&
+            snap.fine_phase_mask == 3 && snap.saw_coarse_dt && snap.saw_fine_dt,
+        w);
+    std::snprintf(w, sizeof w, "[%s/%s/%s] ledger consomme par reflux puis average-down", riem,
+                  recon, route);
+    chk(snap.reflux_syncs > 0 && snap.average_down_syncs > 0, w);
+    std::snprintf(w, sizeof w, "[%s/%s/%s] conservation apres reflux/subcycling", riem, recon,
+                  route);
+    chk(std::fabs(snap.mass - snap.initial_mass) < 1e-11 * (std::fabs(snap.initial_mass) + 1.0), w);
+  };
+
+  auto parity_loader = [&](const char* riem, const char* recon) -> std::vector<double> {
+    AmrSystem<kDim> loaded(make_cfg<kDim>(n));
+    loaded.install_block_state_route("gas", kStateIdentity);
+    loaded.add_native_block("gas", so, "minmod", riem, recon, "explicit", kGamma, 1);
+    ++expected_dso_installs;
+    if (!pops::dynlib::valid(inspection)) {
+      inspection = pops::dynlib::open(so);
+      route_identity = reinterpret_cast<RouteIdentityFn>(
+          pops::dynlib::sym(inspection, "pops_test_amr_riemann_route_identity"));
+      install_count = reinterpret_cast<InstallCountFn>(
+          pops::dynlib::sym(inspection, "pops_test_amr_riemann_install_count"));
+    }
+    char w[200];
+    std::snprintf(w, sizeof w, "[%s/%s] DSO route identity authentifiee", riem, recon);
+    chk(pops::dynlib::valid(inspection) && route_identity != nullptr &&
+            std::strcmp(route_identity(), kDsoRouteIdentity) == 0,
+        w);
+    std::snprintf(w, sizeof w, "[%s/%s] DSO install execute une fois", riem, recon);
+    chk(install_count != nullptr && install_count() == expected_dso_installs, w);
+    const int count_after_native = install_count == nullptr ? -1 : install_count();
+    loaded.set_conservative_state("gas", initial_state);
+    const Snap from_dso = run(loaded, nsteps);
+
+    AmrSystem<kDim> direct(make_cfg<kDim>(n));
+    install_compiled_model(direct, riem, recon);
+    direct.set_conservative_state("gas", initial_state);
+    const Snap from_direct = run(direct, nsteps);
+    std::snprintf(w, sizeof w, "[%s/%s] route directe n'appelle pas l'installateur DSO", riem,
+                  recon);
+    chk(install_count != nullptr && install_count() == count_after_native, w);
+
+    const double dmax = maxdiff(from_dso.density, from_direct.density);
+    std::snprintf(w, sizeof w, "[%s/%s] add_native_block == prepare/install direct (dmax==0)", riem,
                   recon);
     chk(dmax == 0.0, w);
-    std::snprintf(w, sizeof w, "[%s/%s] n_patches loader == direct", riem, recon);
-    chk(sa.n_patches == sb.n_patches, w);
+    std::snprintf(w, sizeof w, "[%s/%s] densite non triviale", riem, recon);
+    chk(maxabs(from_direct.density) > 1e-6, w);
+    std::snprintf(w, sizeof w, "[%s/%s] masse et topologie identiques", riem, recon);
+    chk(std::fabs(from_dso.mass - from_direct.mass) < 1e-12 * (std::fabs(from_direct.mass) + 1.0) &&
+            from_dso.n_patches == from_direct.n_patches &&
+            from_dso.n_levels == from_direct.n_levels &&
+            from_dso.regrid_count == from_direct.regrid_count &&
+            from_dso.cadence_regrid_count == from_direct.cadence_regrid_count,
+        w);
+    std::snprintf(w, sizeof w, "[%s/%s] preuves acceptees de subcycling/reflux identiques", riem,
+                  recon);
+    chk(from_dso.accepted_primary_ticks == from_direct.accepted_primary_ticks &&
+            from_dso.accepted_fine_ticks == from_direct.accepted_fine_ticks &&
+            from_dso.coarse_flux_fragments == from_direct.coarse_flux_fragments &&
+            from_dso.fine_flux_fragments == from_direct.fine_flux_fragments &&
+            from_dso.fine_phase_mask == from_direct.fine_phase_mask &&
+            from_dso.reflux_syncs == from_direct.reflux_syncs &&
+            from_dso.average_down_syncs == from_direct.average_down_syncs,
+        w);
+    check_execution_evidence(from_dso, riem, recon, "dso");
+    check_execution_evidence(from_direct, riem, recon, "direct");
+    std::printf("OK  [%s/%s] dmax=%.0f\n", riem, recon, dmax);
+    return from_direct.density;
   };
-  parity_loader("hllc", "conservative");
-  parity_loader("hllc", "primitive");
-  parity_loader("roe", "conservative");
-  parity_loader("roe", "primitive");
-  std::printf("OK (B) add_native_block(hllc/roe, cons/prim) == add_compiled_model (dmax==0)\n");
+
+  const std::vector<double> d_hllc_cons = parity_loader("hllc", "conservative");
+  (void)parity_loader("hllc", "primitive");
+  const std::vector<double> d_roe_cons = parity_loader("roe", "conservative");
+  (void)parity_loader("roe", "primitive");
+
+  // NO-SILENT-FALLBACK : hllc et roe doivent differer de rusanov sur ce meme etat.
+  chk(maxdiff(d_hllc_cons, d_rusanov) > 1e-12,
+      "hllc != rusanov (le flux hllc est actif, non silencieux)");
+  chk(maxdiff(d_roe_cons, d_rusanov) > 1e-12,
+      "roe != rusanov (le flux roe est actif, non silencieux)");
+
+  pops::dynlib::close(inspection);
+  std::remove(src.c_str());
+  std::remove(so.c_str());
 
   if (fails == 0)
     std::printf(
         "OK test_amr_riemann_native (hllc/roe x conservative/primitive : "
-        "add_compiled_model == add_block, bit-identique ; hllc/roe actifs vs rusanov)\n");
+        "DSO add_native_block == prepare/install direct, routes authentifiees, bit-identique ; "
+        "AMR 2 niveaux, regrid post-bootstrap, subcycling/reflux acceptes ; hllc/roe actifs vs "
+        "rusanov)\n");
   return fails ? 1 : 0;
 }
 
