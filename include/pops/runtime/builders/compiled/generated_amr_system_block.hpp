@@ -4,6 +4,7 @@
 #pragma once
 
 #include <pops/mesh/boundary/prepared_hyperbolic_boundary.hpp>
+#include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>
 #include <pops/numerics/spatial/embedded_boundary/operator.hpp>
 #include <pops/numerics/spatial/operators/cartesian_operator.hpp>
@@ -22,6 +23,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -31,6 +33,11 @@
 #include <vector>
 
 namespace pops {
+
+/// Maximum qualified clock identity accepted by one prepared AMR evaluation workspace. Storage is
+/// reserved during hierarchy materialization so stamping an evaluation point cannot allocate in
+/// the residual/JVP hot path.
+inline constexpr std::size_t kPreparedAmrClockIdentityCapacity = 4096;
 
 /// Authenticated full-domain ghost population used only by the root level. Sparse fine levels use
 /// runtime::amr::PreparedAmrGhostFill, which combines parent interpolation and same-level exchange.
@@ -69,12 +76,24 @@ struct GeneratedAmrLevelContext {
   PreparedProviderGroupsGhostFill<Dim> provider_ghost_fill;
   PreparedRootAmrGhostFill<Dim, MemorySpace> root_state_ghost_fill;
   PreparedProviderGroupsGhostFill<Dim> root_provider_ghost_fill;
+  /// Runtime-installed generic component executors.  The hierarchy owns every captured component
+  /// and the execution lane for longer than this level block; generated code only invokes the
+  /// already-authenticated typed closures.
+  std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&,
+                     MultiFab<Dim, MemorySpace>&, const Geometry<Dim>&, const ExecutionLane&)>
+      external_ghost_boundary;
+  std::function<void(
+      const runtime::multiblock::BoundaryEvaluationPoint&, const MultiFab<Dim, MemorySpace>&,
+      std::vector<nd::FaceField<Dim, MemorySpace>>&, const Geometry<Dim>&, const ExecutionLane&)>
+      external_boundary_flux;
+  std::vector<CompiledFieldBoundaryKernel<Dim>> external_field_boundaries;
   std::shared_ptr<const PreparedHyperbolicBoundary<Dim>> physical_boundary;
   std::shared_ptr<const runtime::system::PreparedEmbeddedBoundaryGeometry<Dim>> embedded_boundary;
   std::string state_identity;
   std::string provider_storage_identity;
   std::string boundary_identity;
   std::string embedded_boundary_provider_identity;
+  std::size_t clock_identity_capacity = kPreparedAmrClockIdentityCapacity;
 };
 
 /// A transactionally materialized AMR residual and its integrated face fluxes.
@@ -318,7 +337,8 @@ std::string level_contract(const runtime::amr::AmrRuntime<Dim, MemorySpace>& run
 }
 
 template <class Operation>
-void collective_phase(Operation&& operation, const char* failure_message) {
+void collective_phase(const ExecutionLane& lane, Operation&& operation,
+                      const char* failure_message) {
   std::exception_ptr local_error;
   long local_failure = 0;
   try {
@@ -327,7 +347,7 @@ void collective_phase(Operation&& operation, const char* failure_message) {
     local_failure = 1;
     local_error = std::current_exception();
   }
-  if (all_reduce_max(local_failure) != 0) {
+  if (all_reduce_max(local_failure, lane) != 0) {
     if (local_error)
       std::rethrow_exception(local_error);
     throw std::runtime_error(failure_message);
@@ -361,8 +381,10 @@ Real maximum_speed(const Model& model, const MultiFab<Dim>& state,
 }
 
 template <int Dim, class Model>
-void add_poisson_rhs(const Model& model, const MultiFab<Dim>& state, MultiFab<Dim>& rhs) {
+void add_poisson_rhs(const Model& model, const MultiFab<Dim>& state, MultiFab<Dim>& rhs,
+                     const ExecutionLane& lane) {
   collective_phase(
+      lane,
       [&] {
         if (rhs.ncomp() != 1)
           throw std::invalid_argument(
@@ -374,6 +396,7 @@ void add_poisson_rhs(const Model& model, const MultiFab<Dim>& state, MultiFab<Di
   std::optional<MultiFab<Dim>> status;
   std::optional<MultiFab<Dim>> updated;
   collective_phase(
+      lane,
       [&] {
         candidate.emplace(rhs.layout(), rhs.distribution(), rhs.local_rank(), 1, rhs.ghosts());
         status.emplace(rhs.layout(), rhs.distribution(), rhs.local_rank(), 1, rhs.ghosts());
@@ -382,6 +405,7 @@ void add_poisson_rhs(const Model& model, const MultiFab<Dim>& state, MultiFab<Di
       "generated AMR Poisson RHS workspace allocation failed collectively");
   Real local_status = Real(0);
   collective_phase(
+      lane,
       [&] {
         for (std::size_t local = 0; local < state.local_size(); ++local)
           for_each_cell(state.box(local),
@@ -391,9 +415,10 @@ void add_poisson_rhs(const Model& model, const MultiFab<Dim>& state, MultiFab<Di
         local_status = reduce_max_local(*status);
       },
       "generated AMR Poisson RHS materialization failed collectively");
-  if (all_reduce_max(local_status) != Real(0))
+  if (all_reduce_max(local_status, lane) != Real(0))
     throw std::runtime_error("generated AMR Poisson RHS produced a non-finite value");
   collective_phase(
+      lane,
       [&] {
         generated_system_detail::copy_valid(rhs, *updated);
         saxpy(*updated, Real(1), *candidate);
@@ -441,6 +466,14 @@ Real stability_dt(const Model& model, const MultiFab<Dim>& state,
   return dt;
 }
 
+template <int Dim>
+Real all_component_norm_inf(const MultiFab<Dim>& field) {
+  Real result = Real(0);
+  for (int component = 0; component < field.ncomp(); ++component)
+    result = std::max(result, norm_inf(field, component));
+  return result;
+}
+
 }  // namespace generated_amr_detail
 
 /// One exact generated spatial specialization bound to a live AMR level generation.
@@ -452,7 +485,10 @@ class PreparedGeneratedAmrLevelBlock {
   using evaluation_type = PreparedAmrLevelEvaluation<Dim, MemorySpace>;
   using point_type = runtime::multiblock::BoundaryEvaluationPoint;
   using StatePreparation = std::function<void(const point_type&, field_type&)>;
-  using Evaluator = std::function<evaluation_type(const point_type&, field_type&)>;
+  using PhysicalBoundaryPreparation = std::function<void(const point_type&, field_type&)>;
+  using Evaluator = std::function<void(const point_type&, field_type&, evaluation_type&)>;
+  using BoundaryJvp =
+      std::function<void(const point_type&, field_type&, const field_type&, field_type&)>;
   using SourceEvaluator = std::function<void(const point_type&, field_type&, field_type&)>;
   using ImplicitSourceSolver =
       std::function<SolveOutcome(const point_type&, field_type&, Real, const NewtonOptions&)>;
@@ -462,8 +498,10 @@ class PreparedGeneratedAmrLevelBlock {
   PreparedGeneratedAmrLevelBlock(runtime_type& runtime, std::size_t level, field_type& state,
                                  std::string state_identity, std::string provider_identity,
                                  std::string collective_contract, StatePreparation prepare_state,
-                                 Evaluator evaluator, Evaluator flux_evaluator,
-                                 SourceEvaluator source_evaluator,
+                                 PhysicalBoundaryPreparation prepare_physical, Evaluator evaluator,
+                                 Evaluator flux_evaluator, Evaluator core_evaluator,
+                                 Evaluator flux_core_evaluator, Evaluator boundary_evaluator,
+                                 BoundaryJvp boundary_jvp, SourceEvaluator source_evaluator,
                                  ImplicitSourceSolver implicit_source_solver, Speed maximum_speed,
                                  PoissonRhs poisson_rhs, Speed source_frequency, Speed stability_dt)
       : runtime_(&runtime),
@@ -473,8 +511,13 @@ class PreparedGeneratedAmrLevelBlock {
         provider_identity_(std::move(provider_identity)),
         collective_contract_(std::move(collective_contract)),
         prepare_state_(std::move(prepare_state)),
+        prepare_physical_(std::move(prepare_physical)),
         evaluator_(std::move(evaluator)),
         flux_evaluator_(std::move(flux_evaluator)),
+        core_evaluator_(std::move(core_evaluator)),
+        flux_core_evaluator_(std::move(flux_core_evaluator)),
+        boundary_evaluator_(std::move(boundary_evaluator)),
+        boundary_jvp_(std::move(boundary_jvp)),
         source_evaluator_(std::move(source_evaluator)),
         implicit_source_solver_(std::move(implicit_source_solver)),
         maximum_speed_(std::move(maximum_speed)),
@@ -485,8 +528,9 @@ class PreparedGeneratedAmrLevelBlock {
         materialization_generation_(runtime.materialization_generation()) {
     if (level_ >= runtime.hierarchy().num_levels() || state_ == nullptr ||
         state_identity_.empty() || provider_identity_.empty() || collective_contract_.empty() ||
-        !prepare_state_ || !evaluator_ || !flux_evaluator_ || !source_evaluator_ ||
-        !implicit_source_solver_ || !maximum_speed_ || !poisson_rhs_)
+        !prepare_state_ || !prepare_physical_ || !evaluator_ || !flux_evaluator_ ||
+        !core_evaluator_ || !flux_core_evaluator_ || !boundary_evaluator_ || !boundary_jvp_ ||
+        !source_evaluator_ || !implicit_source_solver_ || !maximum_speed_ || !poisson_rhs_)
       throw std::invalid_argument("generated AMR level block preparation is incomplete");
   }
 
@@ -503,34 +547,73 @@ class PreparedGeneratedAmrLevelBlock {
     prepare_state_(point, state);
   }
 
-  evaluation_type evaluate(const point_type& point, field_type& state) const {
+  /// Apply the already-prepared source block's model-qualified physical and external Ghost
+  /// authorities to a caller-owned detached image.  Same-level/coarse-fine transport is owned by
+  /// the routed dependency graph and is deliberately not repeated here.
+  void prepare_physical(const point_type& point, field_type& state) const {
+    require_live_();
+    require_state_(point, state);
+    prepare_physical_(point, state);
+  }
+
+  void evaluate(const point_type& point, field_type& state, evaluation_type& evaluation) const {
     require_live_();
     require_state_(point, state);
     require_bound_state_(state);
-    evaluation_type evaluation = evaluator_(point, state);
-    evaluation.point = point;
-    evaluation.spatial_contract.assign(runtime_->spatial_contract());
-    evaluation.topology_epoch = topology_epoch_;
-    evaluation.materialization_generation = materialization_generation_;
-    return evaluation;
+    require_evaluation_contract_(evaluation);
+    require_prepared_point_(point, evaluation.point);
+    evaluator_(point, state, evaluation);
+    stamp_point_(point, evaluation.point);
   }
 
-  evaluation_type evaluate(const point_type& point) const { return evaluate(point, *state_); }
+  void evaluate(const point_type& point, evaluation_type& evaluation) const {
+    evaluate(point, *state_, evaluation);
+  }
 
-  evaluation_type evaluate_flux(const point_type& point, field_type& state) const {
+  void evaluate_flux(const point_type& point, field_type& state,
+                     evaluation_type& evaluation) const {
     require_live_();
     require_state_(point, state);
     require_bound_state_(state);
-    evaluation_type evaluation = flux_evaluator_(point, state);
-    evaluation.point = point;
-    evaluation.spatial_contract.assign(runtime_->spatial_contract());
-    evaluation.topology_epoch = topology_epoch_;
-    evaluation.materialization_generation = materialization_generation_;
-    return evaluation;
+    require_evaluation_contract_(evaluation);
+    require_prepared_point_(point, evaluation.point);
+    flux_evaluator_(point, state, evaluation);
+    stamp_point_(point, evaluation.point);
   }
 
-  evaluation_type evaluate_flux(const point_type& point) const {
-    return evaluate_flux(point, *state_);
+  void evaluate_flux(const point_type& point, evaluation_type& evaluation) const {
+    evaluate_flux(point, *state_, evaluation);
+  }
+
+  void evaluate_core(const point_type& point, field_type& state, bool flux_only,
+                     evaluation_type& evaluation) const {
+    require_live_();
+    require_state_(point, state);
+    require_bound_state_(state);
+    require_evaluation_contract_(evaluation);
+    require_prepared_point_(point, evaluation.point);
+    (flux_only ? flux_core_evaluator_ : core_evaluator_)(point, state, evaluation);
+    stamp_point_(point, evaluation.point);
+  }
+
+  void evaluate_boundary(const point_type& point, field_type& state,
+                         evaluation_type& evaluation) const {
+    require_live_();
+    require_state_(point, state);
+    require_bound_state_(state);
+    require_evaluation_contract_(evaluation);
+    require_prepared_point_(point, evaluation.point);
+    boundary_evaluator_(point, state, evaluation);
+    stamp_point_(point, evaluation.point);
+  }
+
+  void boundary_jvp(const point_type& point, field_type& state, const field_type& direction,
+                    field_type& result) const {
+    require_live_();
+    require_state_(point, state);
+    require_state_contract_(direction);
+    require_state_contract_(result);
+    boundary_jvp_(point, state, direction, result);
   }
 
   void source_into(const point_type& point, field_type& state, field_type& result) const {
@@ -594,6 +677,23 @@ class PreparedGeneratedAmrLevelBlock {
   }
 
  private:
+  static void require_prepared_point_(const point_type& point, const point_type& prepared) {
+    if (prepared.clock.capacity() < point.clock.size())
+      throw std::length_error(
+          "generated AMR evaluation point exceeds its prepared clock-identity capacity");
+  }
+
+  static void stamp_point_(const point_type& source, point_type& destination) noexcept {
+    destination.clock.assign(source.clock.data(), source.clock.size());
+    destination.tick = source.tick;
+    destination.level = source.level;
+    destination.substep = source.substep;
+    destination.stage = source.stage;
+    destination.stage_fraction = source.stage_fraction;
+    destination.dt = source.dt;
+    destination.physical_time = source.physical_time;
+  }
+
   void require_state_(const point_type& point, const field_type& state) const {
     if (point.level != static_cast<int>(level_))
       throw std::invalid_argument("generated AMR residual point targets another hierarchy level");
@@ -616,6 +716,21 @@ class PreparedGeneratedAmrLevelBlock {
           "must enter through AmrSystem's transactional evaluation route");
   }
 
+  void require_evaluation_contract_(const evaluation_type& evaluation) const {
+    require_state_contract_(evaluation.residual);
+    if (evaluation.spatial_contract != runtime_->spatial_contract() ||
+        evaluation.topology_epoch != topology_epoch_ ||
+        evaluation.materialization_generation != materialization_generation_ ||
+        evaluation.integrated_face_fluxes.size() != state_->local_size())
+      throw std::invalid_argument(
+          "generated AMR evaluation output differs from its prepared level generation");
+    for (std::size_t local = 0; local < state_->local_size(); ++local)
+      if (evaluation.integrated_face_fluxes[local].cell_box() != state_->box(local) ||
+          evaluation.integrated_face_fluxes[local].ncomp() != state_->ncomp())
+        throw std::invalid_argument(
+            "generated AMR evaluation face output differs from its prepared patch layout");
+  }
+
   void require_live_() const {
     if (runtime_ == nullptr || state_ == nullptr || level_ >= runtime_->hierarchy().num_levels() ||
         topology_epoch_ != runtime_->topology_epoch() ||
@@ -631,8 +746,13 @@ class PreparedGeneratedAmrLevelBlock {
   std::string provider_identity_;
   std::string collective_contract_;
   StatePreparation prepare_state_;
+  PhysicalBoundaryPreparation prepare_physical_;
   Evaluator evaluator_;
   Evaluator flux_evaluator_;
+  Evaluator core_evaluator_;
+  Evaluator flux_core_evaluator_;
+  Evaluator boundary_evaluator_;
+  BoundaryJvp boundary_jvp_;
   SourceEvaluator source_evaluator_;
   ImplicitSourceSolver implicit_source_solver_;
   Speed maximum_speed_;
@@ -687,37 +807,38 @@ namespace generated_amr_detail {
 
 template <int Dim, nd::ReconstructionVariables Variables, class Model, class Metric,
           class Reconstruction, class Numerical, class MemorySpace, int ProviderCount>
-void materialize_masked_patch(const Model& model, const Metric& metric,
-                              const Reconstruction& reconstruction, const Numerical& numerical,
-                              Real positivity_floor, const Fab<Dim, MemorySpace>& state,
-                              const ProviderStorageView<Dim, ProviderCount>& providers,
-                              const Fab<Dim, MemorySpace>& active,
-                              nd::FaceField<Dim, MemorySpace>& faces,
-                              Fab<Dim, MemorySpace>& residual) {
+void materialize_masked_patch(
+    const Model& model, const Metric& metric, const Reconstruction& reconstruction,
+    const Numerical& numerical, Real positivity_floor, const Fab<Dim, MemorySpace>& state,
+    const ProviderStorageView<Dim, ProviderCount>& providers, const Fab<Dim, MemorySpace>& active,
+    nd::FaceField<Dim, MemorySpace>& faces, Fab<Dim, MemorySpace>& residual,
+    nd::FaceField<Dim, MemorySpace>& face_candidate, nd::FaceField<Dim, MemorySpace>& face_statuses,
+    Fab<Dim, MemorySpace>& residual_candidate, Fab<Dim, MemorySpace>& cell_statuses) {
   const int positivity_component =
       nd::cartesian_operator_detail::resolve_positivity_component<Model>(positivity_floor);
-  nd::FaceField<Dim, MemorySpace> face_statuses(state.box(), 1);
   nd::masked_operator_detail::materialize_axes<0, Variables>(
       model, metric, reconstruction, numerical, positivity_floor, positivity_component, state,
-      active, providers, faces, face_statuses, {});
+      active, providers, face_candidate, face_statuses, {});
   const Real face_failure = nd::cartesian_operator_detail::maximum_face_status<0>(face_statuses);
   if (face_failure != static_cast<Real>(nd::FiniteVolumeStatus::Success))
     throw std::runtime_error("generated AMR embedded face evaluation refused publication");
 
-  Fab<Dim, MemorySpace> candidate(state.box(), Model::n_vars);
-  Fab<Dim, MemorySpace> cell_statuses(state.box(), 1);
-  for_each_cell(state.box(),
-                nd::masked_operator_detail::MaterializeMaskedResidual<Dim, Metric, Model::n_vars>{
-                    metric, static_cast<const nd::FaceField<Dim, MemorySpace>&>(faces).view(),
-                    active.view(), candidate.view(), cell_statuses.view()});
+  for_each_cell(
+      state.box(),
+      nd::masked_operator_detail::MaterializeMaskedResidual<Dim, Metric, Model::n_vars>{
+          metric, static_cast<const nd::FaceField<Dim, MemorySpace>&>(face_candidate).view(),
+          active.view(), residual_candidate.view(), cell_statuses.view()});
   const Real cell_failure = for_each_cell_reduce_max(
       state.box(), nd::cartesian_operator_detail::FieldStatusMaximum<Dim>{
                        static_cast<const Fab<Dim, MemorySpace>&>(cell_statuses).view()});
   if (cell_failure != static_cast<Real>(nd::FiniteVolumeStatus::Success))
     throw std::runtime_error("generated AMR embedded residual refused publication");
-  for_each_cell(state.box(), nd::cartesian_operator_detail::CopyCellField<Dim>{
-                                 static_cast<const Fab<Dim, MemorySpace>&>(candidate).view(),
-                                 residual.view(), Model::n_vars});
+  nd::cartesian_operator_detail::copy_face_axes<0>(face_candidate, faces, Model::n_vars);
+  for_each_cell(state.box(),
+                nd::cartesian_operator_detail::CopyCellField<Dim>{
+                    static_cast<const Fab<Dim, MemorySpace>&>(residual_candidate).view(),
+                    residual.view(), Model::n_vars});
+  device_fence();
 }
 
 template <int Dim, nd::ReconstructionVariables Variables, class Model, class Spatial,
@@ -727,13 +848,16 @@ void materialize_cut_cell_patch(
     const Numerical& numerical, Real positivity_floor, const Fab<Dim, MemorySpace>& state,
     const ProviderStorageView<Dim, ProviderCount>& providers,
     const runtime::system::PreparedEmbeddedBoundaryGeometry<Dim>& embedded, std::size_t local,
-    nd::FaceField<Dim, MemorySpace>& faces, Fab<Dim, MemorySpace>& residual) {
+    nd::FaceField<Dim, MemorySpace>& faces, Fab<Dim, MemorySpace>& residual,
+    nd::FaceField<Dim, MemorySpace>& face_candidate, nd::FaceField<Dim, MemorySpace>& face_statuses,
+    Fab<Dim, MemorySpace>& residual_candidate, Fab<Dim, MemorySpace>& cell_statuses) {
   const auto metric =
       nd::PreparedEmbeddedBoundaryMetric<Dim, std::remove_cvref_t<decltype(spatial.metric())>>::
           prepare(spatial.metric(), embedded.inverse_volume_fraction().fab(local), state.box());
-  materialize_masked_patch<Dim, Variables>(model, metric, reconstruction, numerical,
-                                           positivity_floor, state, providers,
-                                           embedded.active_mask().fab(local), faces, residual);
+  materialize_masked_patch<Dim, Variables>(
+      model, metric, reconstruction, numerical, positivity_floor, state, providers,
+      embedded.active_mask().fab(local), faces, residual, face_candidate, face_statuses,
+      residual_candidate, cell_statuses);
 }
 
 template <int Dim, class Model, class Reconstruction, class Numerical,
@@ -823,15 +947,88 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
     const auto root_state_ghost_fill = context.root_state_ghost_fill;
     const auto root_provider_ghost_fill = context.root_provider_ghost_fill;
     const auto physical_boundary = context.physical_boundary;
+    const auto external_ghost_boundary = context.external_ghost_boundary;
+    const auto external_boundary_flux = context.external_boundary_flux;
+    const auto external_field_boundaries = context.external_field_boundaries;
     const auto embedded_boundary = context.embedded_boundary;
     const Geometry<Dim> geometry = context.geometry;
     const std::size_t level = context.level;
+    const ExecutionLane* const lane = context.lane;
 
-    auto prepare_state =
+    struct EvaluationScratch {
+      static PreparedAmrLevelEvaluation<Dim> make_evaluation(
+          const MultiFab<Dim>& prototype, std::string_view spatial_contract,
+          std::uint64_t topology_epoch, std::uint64_t materialization_generation,
+          std::size_t clock_capacity) {
+        PreparedAmrLevelEvaluation<Dim> evaluation{
+            .spatial_contract = std::string(spatial_contract),
+            .topology_epoch = topology_epoch,
+            .materialization_generation = materialization_generation,
+            .residual =
+                MultiFab<Dim>(prototype.layout(), prototype.distribution(), prototype.local_rank(),
+                              prototype.ncomp(), prototype.ghosts()),
+            .integrated_face_fluxes = nd::make_face_flux_workspace(prototype)};
+        evaluation.point.clock.reserve(clock_capacity);
+        return evaluation;
+      }
+
+      EvaluationScratch(const MultiFab<Dim>& prototype, std::string_view spatial_contract,
+                        std::uint64_t topology_epoch, std::uint64_t materialization_generation,
+                        std::size_t clock_capacity)
+          : physical(prototype.layout(), prototype.distribution(), prototype.local_rank(),
+                     prototype.ncomp(), prototype.ghosts()),
+            core(prototype.layout(), prototype.distribution(), prototype.local_rank(),
+                 prototype.ncomp(), prototype.ghosts()),
+            physical_boundary_candidate(prototype.layout(), prototype.distribution(),
+                                        prototype.local_rank(), prototype.ncomp(),
+                                        prototype.ghosts()),
+            physical_source(prototype.layout(), prototype.distribution(), prototype.local_rank(),
+                            prototype.ncomp(), prototype.ghosts()),
+            core_source(prototype.layout(), prototype.distribution(), prototype.local_rank(),
+                        prototype.ncomp(), prototype.ghosts()),
+            source_values(prototype.layout(), prototype.distribution(), prototype.local_rank(),
+                          prototype.ncomp(), prototype.ghosts()),
+            source_status(prototype.layout(), prototype.distribution(), prototype.local_rank(), 1,
+                          prototype.ghosts()),
+            perturbed(prototype.layout(), prototype.distribution(), prototype.local_rank(),
+                      prototype.ncomp(), prototype.ghosts()),
+            spatial(prototype),
+            core_evaluation(make_evaluation(prototype, spatial_contract, topology_epoch,
+                                            materialization_generation, clock_capacity)),
+            base_evaluation(make_evaluation(prototype, spatial_contract, topology_epoch,
+                                            materialization_generation, clock_capacity)),
+            shifted_evaluation(make_evaluation(prototype, spatial_contract, topology_epoch,
+                                               materialization_generation, clock_capacity)) {}
+      std::recursive_mutex mutex;
+      MultiFab<Dim> physical;
+      MultiFab<Dim> core;
+      MultiFab<Dim> physical_boundary_candidate;
+      MultiFab<Dim> physical_source;
+      MultiFab<Dim> core_source;
+      MultiFab<Dim> source_values;
+      MultiFab<Dim> source_status;
+      MultiFab<Dim> perturbed;
+      nd::PreparedCartesianOperatorScratch<Dim> spatial;
+      PreparedAmrLevelEvaluation<Dim> core_evaluation;
+      PreparedAmrLevelEvaluation<Dim> base_evaluation;
+      PreparedAmrLevelEvaluation<Dim> shifted_evaluation;
+    };
+    auto evaluation_scratch = std::make_shared<EvaluationScratch>(
+        *context.state, runtime.spatial_contract(), runtime.topology_epoch(),
+        runtime.materialization_generation(), context.clock_identity_capacity);
+    evaluation_scratch->spatial.require_layout(*context.state);
+
+    if (physical_boundary)
+      physical_boundary->template require_model_qualified_characteristic_provider<Model>();
+
+    auto prepare_state_with_physical =
         [provider_storage, state_ghost_fill, provider_ghost_fill, root_state_ghost_fill,
-         root_provider_ghost_fill, physical_boundary, geometry,
-         level](const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab<Dim>& state) {
+         root_provider_ghost_fill, physical_boundary, external_ghost_boundary, geometry, level,
+         model, lane, evaluation_scratch](const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                          MultiFab<Dim>& state, bool physical) {
+          std::lock_guard lock(evaluation_scratch->mutex);
           collective_phase(
+              *lane,
               [&] {
                 if (level == 0) {
                   root_state_ghost_fill(state, point);
@@ -842,86 +1039,174 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
                   if constexpr (provider_count > 0)
                     provider_ghost_fill(*provider_storage, point);
                 }
-                if (physical_boundary)
-                  physical_boundary->fill_physical(state, geometry);
+                if (physical && physical_boundary)
+                  physical_boundary->fill_physical_model_qualified(
+                      state, geometry, model, *lane,
+                      evaluation_scratch->physical_boundary_candidate);
+                if (physical && external_ghost_boundary)
+                  external_ghost_boundary(point, state, geometry, *lane);
               },
               "generated AMR ghost/boundary phase failed collectively");
         };
-
-    auto flux_evaluator = [model, spatial, reconstruction, numerical, positivity_floor,
-                           provider_storage, provider_plan, prepare_state, physical_boundary,
-                           embedded_boundary,
-                           geometry](const runtime::multiblock::BoundaryEvaluationPoint& point,
-                                     MultiFab<Dim>& state) {
-      prepare_state(point, state);
-      std::optional<std::vector<nd::FaceField<Dim>>> faces;
-      std::optional<MultiFab<Dim>> residual;
-      collective_phase(
-          [&] {
-            faces.emplace(nd::make_face_flux_workspace(state));
-            residual.emplace(state.layout(), state.distribution(), state.local_rank(),
-                             Model::n_vars, state.ghosts());
-          },
-          "generated AMR residual workspace allocation failed collectively");
-      collective_phase(
-          [&] {
-            if (embedded_boundary && embedded_boundary->mode() !=
-                                         runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
-              for (std::size_t local = 0; local < state.local_size(); ++local) {
-                if (embedded_boundary->mode() ==
-                    runtime::system::PreparedEmbeddedBoundaryMode::staircase) {
-                  materialize_masked_patch<Dim, Variables>(
-                      model, spatial.metric(), reconstruction, numerical, positivity_floor,
-                      state.fab(local),
-                      runtime::system::bind_provider_storage_view<Dim, provider_count>(
-                          provider_plan, provider_storage, local),
-                      embedded_boundary->active_mask().fab(local), (*faces)[local],
-                      residual->fab(local));
-                } else {
-                  materialize_cut_cell_patch<Dim, Variables>(
-                      model, spatial, reconstruction, numerical, positivity_floor, state.fab(local),
-                      runtime::system::bind_provider_storage_view<Dim, provider_count>(
-                          provider_plan, provider_storage, local),
-                      *embedded_boundary, local, (*faces)[local], residual->fab(local));
-                }
-              }
-            } else {
-              for (std::size_t local = 0; local < state.local_size(); ++local) {
-                if constexpr (provider_count == 0)
-                  spatial.materialize_face_fluxes(state.fab(local), (*faces)[local]);
-                else
-                  spatial.materialize_face_fluxes(
-                      state.fab(local),
-                      runtime::system::bind_provider_storage_view<Dim, provider_count>(
-                          provider_plan, provider_storage, local),
-                      (*faces)[local]);
-                if (physical_boundary)
-                  physical_boundary->apply_physical_flux_conditions((*faces)[local],
-                                                                    geometry.domain());
-              }
-              spatial.assemble_residual_from_face_fluxes(*faces, *residual);
-            }
-          },
-          "generated AMR flux/residual materialization failed collectively");
-      return PreparedAmrLevelEvaluation<Dim>{.residual = std::move(*residual),
-                                             .integrated_face_fluxes = std::move(*faces)};
+    auto prepare_state = [prepare_state_with_physical](const auto& point, auto& state) {
+      prepare_state_with_physical(point, state, true);
     };
+    auto prepare_physical = [physical_boundary, external_ghost_boundary, geometry, model, lane,
+                             evaluation_scratch](
+                                const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                MultiFab<Dim>& state) {
+      std::lock_guard lock(evaluation_scratch->mutex);
+      collective_phase(
+          *lane,
+          [&] {
+            if (physical_boundary)
+              physical_boundary->fill_physical_model_qualified(
+                  state, geometry, model, *lane, evaluation_scratch->physical_boundary_candidate);
+            if (external_ghost_boundary)
+              external_ghost_boundary(point, state, geometry, *lane);
+          },
+          "generated AMR detached physical boundary phase failed collectively");
+    };
+
+    auto make_flux_evaluator = [model, spatial, reconstruction, numerical, positivity_floor,
+                                provider_storage, provider_plan, prepare_state_with_physical,
+                                physical_boundary, external_boundary_flux, embedded_boundary,
+                                geometry, lane, evaluation_scratch](bool physical) {
+      return [model, spatial, reconstruction, numerical, positivity_floor, provider_storage,
+              provider_plan, prepare_state_with_physical, physical_boundary, external_boundary_flux,
+              embedded_boundary, geometry, lane, evaluation_scratch,
+              physical](const runtime::multiblock::BoundaryEvaluationPoint& point,
+                        MultiFab<Dim>& state, PreparedAmrLevelEvaluation<Dim>& evaluation) {
+        std::lock_guard lock(evaluation_scratch->mutex);
+        MultiFab<Dim>& image = physical ? evaluation_scratch->physical : evaluation_scratch->core;
+        collective_phase(
+            *lane,
+            [&] {
+              image.set_val(Real(0));
+              generated_system_detail::copy_valid(state, image);
+              evaluation.residual.set_val(Real(0));
+              for (auto& faces : evaluation.integrated_face_fluxes)
+                faces.set_val(Real(0));
+            },
+            "generated AMR evaluation workspace reset failed collectively");
+        prepare_state_with_physical(point, image, physical);
+        auto& faces = evaluation.integrated_face_fluxes;
+        MultiFab<Dim>& residual = evaluation.residual;
+        collective_phase(
+            *lane,
+            [&] {
+              if (embedded_boundary &&
+                  embedded_boundary->mode() !=
+                      runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
+                for (std::size_t local = 0; local < image.local_size(); ++local) {
+                  auto& face_candidate = evaluation_scratch->spatial.face_candidate(local);
+                  auto& face_status = evaluation_scratch->spatial.face_status(local);
+                  auto& residual_candidate =
+                      evaluation_scratch->spatial.residual_candidate().fab(local);
+                  auto& residual_status = evaluation_scratch->spatial.residual_status().fab(local);
+                  if (embedded_boundary->mode() ==
+                      runtime::system::PreparedEmbeddedBoundaryMode::staircase) {
+                    materialize_masked_patch<Dim, Variables>(
+                        model, spatial.metric(), reconstruction, numerical, positivity_floor,
+                        image.fab(local),
+                        runtime::system::bind_provider_storage_view<Dim, provider_count>(
+                            provider_plan, provider_storage, local),
+                        embedded_boundary->active_mask().fab(local), faces[local],
+                        residual.fab(local), face_candidate, face_status, residual_candidate,
+                        residual_status);
+                  } else {
+                    materialize_cut_cell_patch<Dim, Variables>(
+                        model, spatial, reconstruction, numerical, positivity_floor,
+                        image.fab(local),
+                        runtime::system::bind_provider_storage_view<Dim, provider_count>(
+                            provider_plan, provider_storage, local),
+                        *embedded_boundary, local, faces[local], residual.fab(local),
+                        face_candidate, face_status, residual_candidate, residual_status);
+                  }
+                }
+              } else {
+                for (std::size_t local = 0; local < image.local_size(); ++local) {
+                  if constexpr (provider_count == 0)
+                    spatial.materialize_face_fluxes(
+                        image.fab(local), faces[local],
+                        evaluation_scratch->spatial.face_candidate(local),
+                        evaluation_scratch->spatial.face_status(local));
+                  else
+                    spatial.materialize_face_fluxes(
+                        image.fab(local),
+                        runtime::system::bind_provider_storage_view<Dim, provider_count>(
+                            provider_plan, provider_storage, local),
+                        faces[local], evaluation_scratch->spatial.face_candidate(local),
+                        evaluation_scratch->spatial.face_status(local));
+                  if (physical && physical_boundary)
+                    physical_boundary->apply_physical_flux_conditions(faces[local],
+                                                                      geometry.domain());
+                }
+                if (physical && external_boundary_flux)
+                  external_boundary_flux(point, image, faces, geometry, *lane);
+                spatial.assemble_residual_from_face_fluxes(
+                    faces, residual, evaluation_scratch->spatial.residual_candidate(),
+                    evaluation_scratch->spatial.residual_status());
+              }
+            },
+            "generated AMR flux/residual materialization failed collectively");
+      };
+    };
+    auto flux_evaluator = make_flux_evaluator(true);
+    auto flux_core_evaluator = make_flux_evaluator(false);
     auto source_evaluator = [model, provider_storage, provider_plan, prepare_state,
-                             embedded_boundary](
+                             embedded_boundary, lane, evaluation_scratch](
                                 const runtime::multiblock::BoundaryEvaluationPoint& point,
                                 MultiFab<Dim>& state, MultiFab<Dim>& result) {
-      prepare_state(point, state);
-      MultiFab<Dim> source =
-          embedded_boundary && embedded_boundary->mode() !=
-                                   runtime::system::PreparedEmbeddedBoundaryMode::inactive
-              ? materialize_masked_source<Dim>(model, state, provider_storage, provider_plan,
-                                               *embedded_boundary)
-              : materialize_source<Dim>(model, state, provider_storage, provider_plan);
-      generated_system_detail::copy_valid(source, result);
+      std::lock_guard lock(evaluation_scratch->mutex);
+      MultiFab<Dim>& image = evaluation_scratch->physical_source;
+      MultiFab<Dim>& source = evaluation_scratch->source_values;
+      MultiFab<Dim>& status = evaluation_scratch->source_status;
+      collective_phase(
+          *lane,
+          [&] {
+            image.set_val(Real(0));
+            generated_system_detail::copy_valid(state, image);
+            source.set_val(Real(0));
+            status.set_val(Real(0));
+          },
+          "generated AMR source workspace reset failed collectively");
+      prepare_state(point, image);
+      Real local_status = Real(0);
+      collective_phase(
+          *lane,
+          [&] {
+            if constexpr (generated_system_detail::GeneratedSourceModel<Dim, Model>) {
+              for (std::size_t local = 0; local < image.local_size(); ++local)
+                for_each_cell(image.box(local),
+                              generated_system_detail::MaterializeSource<Dim, Model>{
+                                  model, std::as_const(image).fab(local).view(),
+                                  runtime::system::bind_provider_storage_view<Dim, provider_count>(
+                                      provider_plan, provider_storage, local),
+                                  source.fab(local).view(), status.fab(local).view()});
+              local_status = reduce_max_local(status);
+            }
+          },
+          "generated AMR source materialization failed collectively");
+      if (all_reduce_max(local_status, *lane) != Real(0))
+        throw std::runtime_error("generated AMR source produced a non-finite component");
+      collective_phase(
+          *lane,
+          [&] {
+            if (embedded_boundary && embedded_boundary->mode() !=
+                                         runtime::system::PreparedEmbeddedBoundaryMode::inactive)
+              for (std::size_t local = 0; local < source.local_size(); ++local)
+                for_each_cell(
+                    source.box(local),
+                    generated_system_detail::ApplyActiveMask<Dim>{
+                        source.fab(local).view(),
+                        embedded_boundary->active_mask().fab(local).view(), Model::n_vars});
+            generated_system_detail::copy_valid(source, result);
+          },
+          "generated AMR source publication failed collectively");
     };
-    const ExecutionLane& lane = *context.lane;
     auto implicit_source_solver = [model, provider_storage, provider_plan, prepare_state,
-                                   embedded_boundary, &lane](
+                                   embedded_boundary, lane](
                                       const runtime::multiblock::BoundaryEvaluationPoint& point,
                                       MultiFab<Dim>& state, Real dt, const NewtonOptions& options) {
       prepare_state(point, state);
@@ -937,30 +1222,136 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
           embedded_boundary->mode() != runtime::system::PreparedEmbeddedBoundaryMode::inactive)
         active_cells = &embedded_boundary->active_mask();
       if constexpr (generated_system_detail::GeneratedSourceModel<Dim, Model>) {
-        return backward_euler_source(model, provider_at, state, dt, options, lane, {}, nullptr,
+        return backward_euler_source(model, provider_at, state, dt, options, *lane, {}, nullptr,
                                      active_cells);
       } else {
-        return SolveOutcome::collective_lane(SolveReport::capability_failure(), lane);
+        return SolveOutcome::collective_lane(SolveReport::capability_failure(), *lane);
       }
     };
-    auto evaluator = [flux_evaluator, model, provider_storage, provider_plan, embedded_boundary](
-                         const runtime::multiblock::BoundaryEvaluationPoint& point,
-                         MultiFab<Dim>& state) mutable {
-      PreparedAmrLevelEvaluation<Dim> evaluation = flux_evaluator(point, state);
-      MultiFab<Dim> source =
-          embedded_boundary && embedded_boundary->mode() !=
-                                   runtime::system::PreparedEmbeddedBoundaryMode::inactive
-              ? materialize_masked_source<Dim>(model, state, provider_storage, provider_plan,
-                                               *embedded_boundary)
-              : materialize_source<Dim>(model, state, provider_storage, provider_plan);
-      saxpy(evaluation.residual, Real(1), source);
-      return evaluation;
+    auto make_evaluator = [model, provider_storage, provider_plan, embedded_boundary, lane,
+                           evaluation_scratch](auto flux, bool physical) {
+      return [flux = std::move(flux), model, provider_storage, provider_plan, embedded_boundary,
+              lane, evaluation_scratch,
+              physical](const runtime::multiblock::BoundaryEvaluationPoint& point,
+                        MultiFab<Dim>& state, PreparedAmrLevelEvaluation<Dim>& evaluation) mutable {
+        std::lock_guard lock(evaluation_scratch->mutex);
+        flux(point, state, evaluation);
+        MultiFab<Dim>& source_image =
+            physical ? evaluation_scratch->physical_source : evaluation_scratch->core_source;
+        auto& source = evaluation_scratch->source_values;
+        Real local_status = Real(0);
+        collective_phase(
+            *lane,
+            [&] {
+              source_image.set_val(Real(0));
+              generated_system_detail::copy_valid(state, source_image);
+              source.set_val(Real(0));
+              if constexpr (generated_system_detail::GeneratedSourceModel<Dim, Model>) {
+                auto& status = evaluation_scratch->source_status;
+                status.set_val(Real(0));
+                for (std::size_t local = 0; local < source_image.local_size(); ++local)
+                  for_each_cell(
+                      source_image.box(local),
+                      generated_system_detail::MaterializeSource<Dim, Model>{
+                          model, std::as_const(source_image).fab(local).view(),
+                          runtime::system::bind_provider_storage_view<Dim, provider_count>(
+                              provider_plan, provider_storage, local),
+                          source.fab(local).view(), status.fab(local).view()});
+                local_status = reduce_max_local(status);
+              }
+            },
+            "generated AMR source workspace materialization failed collectively");
+        if (all_reduce_max(local_status, *lane) != Real(0))
+          throw std::runtime_error("generated AMR source produced a non-finite component");
+        collective_phase(
+            *lane,
+            [&] {
+              if (embedded_boundary && embedded_boundary->mode() !=
+                                           runtime::system::PreparedEmbeddedBoundaryMode::inactive)
+                for (std::size_t local = 0; local < source.local_size(); ++local)
+                  for_each_cell(
+                      source.box(local),
+                      generated_system_detail::ApplyActiveMask<Dim>{
+                          source.fab(local).view(),
+                          embedded_boundary->active_mask().fab(local).view(), Model::n_vars});
+              saxpy(evaluation.residual, Real(1), source);
+            },
+            "generated AMR source residual accumulation failed collectively");
+      };
+    };
+    auto evaluator = make_evaluator(flux_evaluator, true);
+    auto core_evaluator = make_evaluator(flux_core_evaluator, false);
+    auto field_boundary_context = [](const auto& point) {
+      FieldBoundaryExecutionContext<Dim> context;
+      context.point.time = static_cast<Real>(point.physical_time);
+      context.point.dt = static_cast<Real>(point.dt);
+      context.point.stage_slot = point.stage;
+      context.point.level = point.level;
+      context.point.step = point.tick;
+      context.point.substep = point.substep;
+      context.point.stage_fraction_numerator = point.stage_fraction.numerator;
+      context.point.stage_fraction_denominator = point.stage_fraction.denominator;
+      context.clock_identity = &point.clock;
+      return context;
+    };
+    auto boundary_evaluator = [evaluator, core_evaluator, external_field_boundaries, geometry,
+                               field_boundary_context,
+                               evaluation_scratch](const auto& point, MultiFab<Dim>& state,
+                                                   PreparedAmrLevelEvaluation<Dim>& full) mutable {
+      std::lock_guard lock(evaluation_scratch->mutex);
+      evaluator(point, state, full);
+      core_evaluator(point, state, evaluation_scratch->core_evaluation);
+      lincomb(full.residual, Real(1), full.residual, Real(-1),
+              evaluation_scratch->core_evaluation.residual);
+      const FieldBoundaryExecutionContext<Dim> context = field_boundary_context(point);
+      for (const auto& closure : external_field_boundaries)
+        for (int face = 0; face < 2 * Dim; ++face)
+          closure.add_residual(face, state, full.residual, geometry, context);
+    };
+    auto built_in_boundary_evaluator = [evaluator, core_evaluator, evaluation_scratch](
+                                           const auto& point, MultiFab<Dim>& state,
+                                           PreparedAmrLevelEvaluation<Dim>& full) mutable {
+      std::lock_guard lock(evaluation_scratch->mutex);
+      evaluator(point, state, full);
+      core_evaluator(point, state, evaluation_scratch->core_evaluation);
+      lincomb(full.residual, Real(1), full.residual, Real(-1),
+              evaluation_scratch->core_evaluation.residual);
+    };
+    auto boundary_jvp = [built_in_boundary_evaluator, external_field_boundaries,
+                         field_boundary_context, geometry, lane, evaluation_scratch](
+                            const auto& point, MultiFab<Dim>& state, const MultiFab<Dim>& direction,
+                            MultiFab<Dim>& result) mutable {
+      std::lock_guard lock(evaluation_scratch->mutex);
+      const Real state_norm = static_cast<Real>(
+          all_reduce_max(static_cast<double>(all_component_norm_inf(state)), *lane));
+      const Real direction_norm = static_cast<Real>(
+          all_reduce_max(static_cast<double>(all_component_norm_inf(direction)), *lane));
+      const Real step = direction_norm > Real(0) ? std::sqrt(std::numeric_limits<Real>::epsilon()) *
+                                                       (Real(1) + state_norm) / direction_norm
+                                                 : std::sqrt(std::numeric_limits<Real>::epsilon());
+      MultiFab<Dim>& perturbed = evaluation_scratch->perturbed;
+      collective_phase(
+          *lane,
+          [&] {
+            perturbed.set_val(Real(0));
+            generated_system_detail::copy_valid(state, perturbed);
+            lincomb(perturbed, Real(1), state, step, direction);
+          },
+          "generated AMR boundary JVP perturbation staging failed collectively");
+      built_in_boundary_evaluator(point, state, evaluation_scratch->base_evaluation);
+      built_in_boundary_evaluator(point, perturbed, evaluation_scratch->shifted_evaluation);
+      lincomb(result, Real(1) / step, evaluation_scratch->shifted_evaluation.residual,
+              Real(-1) / step, evaluation_scratch->base_evaluation.residual);
+      const FieldBoundaryExecutionContext<Dim> context = field_boundary_context(point);
+      for (const auto& closure : external_field_boundaries)
+        for (int face = 0; face < 2 * Dim; ++face)
+          closure.apply_jvp(face, state, direction, result, geometry, context);
     };
     auto speed = [model, provider_storage, provider_plan](const MultiFab<Dim>& state) {
       return maximum_speed<Dim>(model, state, provider_storage, provider_plan);
     };
-    auto poisson_rhs = [model](const MultiFab<Dim>& state, MultiFab<Dim>& rhs) {
-      add_poisson_rhs<Dim>(model, state, rhs);
+    auto poisson_rhs = [model, lane](const MultiFab<Dim>& state, MultiFab<Dim>& rhs) {
+      add_poisson_rhs<Dim>(model, state, rhs, *lane);
     };
     typename PreparedGeneratedAmrLevelBlock<Dim>::Speed source_frequency_bound;
     if constexpr (requires(const Model& value, const typename Model::State& state,
@@ -985,10 +1376,11 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
     MultiFab<Dim>* const bound_state = context.state;
     return PreparedGeneratedAmrLevelBlock<Dim>(
         runtime, level, *bound_state, std::move(context.state_identity), provider_identity,
-        std::move(contract), std::move(prepare_state), std::move(evaluator),
-        std::move(flux_evaluator), std::move(source_evaluator), std::move(implicit_source_solver),
-        std::move(speed), std::move(poisson_rhs), std::move(source_frequency_bound),
-        std::move(stability_dt_bound));
+        std::move(contract), std::move(prepare_state), std::move(prepare_physical),
+        std::move(evaluator), std::move(flux_evaluator), std::move(core_evaluator),
+        std::move(flux_core_evaluator), std::move(boundary_evaluator), std::move(boundary_jvp),
+        std::move(source_evaluator), std::move(implicit_source_solver), std::move(speed),
+        std::move(poisson_rhs), std::move(source_frequency_bound), std::move(stability_dt_bound));
   };
 
   result.primitive_to_conservative = [model](const double* primitive, double* conservative) {

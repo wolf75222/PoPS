@@ -87,7 +87,7 @@ inline void validate_execution_context(const PopsExecutionContextV1& context) {
       !valid_precision(context.reduction_precision))
     throw std::invalid_argument(
         "native component execution context has invalid size, identities or precision policy");
-  const std::string communicator_identity(context.communicator_identity);
+  const std::string_view communicator_identity(context.communicator_identity);
   const bool serial = communicator_identity == "serial";
   const bool noncollective = communicator_identity == POPS_EXECUTION_NONCOLLECTIVE_IDENTITY_V1;
   if (serial || noncollective) {
@@ -95,10 +95,10 @@ inline void validate_execution_context(const PopsExecutionContextV1& context) {
     // identities, not a guessed numeric sentinel, therefore distinguish serial from distributed
     // execution.  Serial retains the canonical all-zero representation.
     if (context.communicator_datatype_f_handle != 0 || context.communicator_f_handle != 0 ||
-        std::string(context.communicator_datatype_identity) != "none")
+        std::string_view(context.communicator_datatype_identity) != "none")
       throw std::invalid_argument(
           "non-distributed component execution context cannot hide MPI handles or identities");
-  } else if (std::string(context.communicator_datatype_identity) != "MPI_DOUBLE") {
+  } else if (std::string_view(context.communicator_datatype_identity) != "MPI_DOUBLE") {
     // An execution lane owns a communicator duplicated from the authenticated world-congruent rank
     // space. Its Fortran handle may legally be zero just like a predefined handle, so structural
     // ABI validation cannot use a numeric sentinel or require the MPI_COMM_WORLD handle itself.
@@ -111,11 +111,11 @@ inline void validate_execution_context(const PopsExecutionContextV1& context) {
 
 inline void validate_noncollective_execution_context(const PopsExecutionContextV1& context) {
   validate_execution_context(context);
-  if (std::string(context.communicator_identity) != POPS_EXECUTION_NONCOLLECTIVE_IDENTITY_V1 ||
+  if (std::string_view(context.communicator_identity) != POPS_EXECUTION_NONCOLLECTIVE_IDENTITY_V1 ||
       context.communicator_f_handle != 0 || context.communicator_datatype_f_handle != 0 ||
-      std::string(context.communicator_datatype_identity) != "none")
+      std::string_view(context.communicator_datatype_identity) != "none")
     throw std::invalid_argument(
-        "tagger callback execution context must carry no collective authority");
+        "component callback execution context must carry no collective authority");
 }
 
 inline void validate_logical_time(const PopsLogicalTimeV1& time) {
@@ -302,8 +302,8 @@ inline void validate_backend_field_view(const View& view, const char* where) {
 template <class Left, class Right>
 inline bool same_field_domain(const Left& left, const Right& right) {
   if (left.dimension != right.dimension || left.component_count != right.component_count ||
-      std::string(left.layout_identity) != right.layout_identity ||
-      std::string(left.patch_identity) != right.patch_identity ||
+      std::string_view(left.layout_identity) != right.layout_identity ||
+      std::string_view(left.patch_identity) != right.patch_identity ||
       left.centering != right.centering || left.centering_axes != right.centering_axes ||
       left.scalar_type != right.scalar_type || left.memory_space != right.memory_space)
     return false;
@@ -318,8 +318,8 @@ inline bool same_field_domain(const Left& left, const Right& right) {
 template <class Left, class Right>
 inline bool same_spatial_domain(const Left& left, const Right& right) {
   if (left.dimension != right.dimension ||
-      std::string(left.layout_identity) != right.layout_identity ||
-      std::string(left.patch_identity) != right.patch_identity ||
+      std::string_view(left.layout_identity) != right.layout_identity ||
+      std::string_view(left.patch_identity) != right.patch_identity ||
       left.memory_space != right.memory_space)
     return false;
   for (std::int32_t axis = 0; axis < 3; ++axis)
@@ -369,10 +369,11 @@ inline void validate_boundary_region(const PopsBoundaryRegionV1& region) {
       (region.kind == POPS_BOUNDARY_EDGE_V1 && region.codimension != 2) ||
       (region.kind == POPS_BOUNDARY_CORNER_V1 && region.codimension != region.dimension))
     throw std::invalid_argument("native boundary kind and codimension disagree");
-  std::unordered_set<std::int32_t> axes;
   for (std::size_t index = 0; index < region.axis_count; ++index) {
-    if (region.axes[index] < 0 || region.axes[index] >= region.dimension ||
-        !axes.insert(region.axes[index]).second ||
+    bool duplicate = false;
+    for (std::size_t previous = 0; previous < index; ++previous)
+      duplicate = duplicate || region.axes[previous] == region.axes[index];
+    if (region.axes[index] < 0 || region.axes[index] >= region.dimension || duplicate ||
         (region.sides[index] != -1 && region.sides[index] != 1))
       throw std::invalid_argument("native boundary axes/sides are invalid");
   }
@@ -382,11 +383,14 @@ inline void validate_const_fields(const PopsQualifiedConstFieldV1* rows, std::si
                                   const char* where) {
   if (count != 0 && rows == nullptr)
     throw std::invalid_argument(std::string(where) + " table is null");
-  std::unordered_set<std::string> identities;
   for (std::size_t index = 0; index < count; ++index) {
     const auto& row = rows[index];
+    bool duplicate = false;
+    if (component_text(row.qualified_id))
+      for (std::size_t previous = 0; previous < index; ++previous)
+        duplicate = duplicate || std::string_view(rows[previous].qualified_id) == row.qualified_id;
     if (row.struct_size < sizeof(PopsQualifiedConstFieldV1) || row.present != 1 ||
-        !component_text(row.qualified_id) || !identities.insert(row.qualified_id).second)
+        !component_text(row.qualified_id) || duplicate)
       throw std::invalid_argument(std::string(where) +
                                   " entries must be present, qualified and unique");
     validate_backend_field_view(row.values, where);
@@ -408,11 +412,14 @@ inline void validate_scalars(const PopsQualifiedScalarV1* rows, std::size_t coun
                              const char* where) {
   if (count != 0 && rows == nullptr)
     throw std::invalid_argument(std::string(where) + " table is null");
-  std::unordered_set<std::string> identities;
   for (std::size_t index = 0; index < count; ++index) {
+    bool duplicate = false;
+    if (component_text(rows[index].qualified_id))
+      for (std::size_t previous = 0; previous < index; ++previous)
+        duplicate =
+            duplicate || std::string_view(rows[previous].qualified_id) == rows[index].qualified_id;
     if (rows[index].struct_size < sizeof(PopsQualifiedScalarV1) ||
-        !component_text(rows[index].qualified_id) ||
-        !identities.insert(rows[index].qualified_id).second)
+        !component_text(rows[index].qualified_id) || duplicate)
       throw std::invalid_argument(std::string(where) + " entries must be qualified and unique");
   }
 }
@@ -459,7 +466,7 @@ inline int apply_ghost_boundary(const PopsGhostBoundaryApiV1& api, void* state,
                                 const PopsGhostBoundaryRequestV1& request,
                                 PopsComponentStatusV1& status) {
   require_operation(api.apply_region_batch != nullptr, "apply_region_batch");
-  validate_execution_context(request.execution);
+  validate_noncollective_execution_context(request.execution);
   validate_logical_time(request.logical_time);
   validate_boundary_region(request.region);
   if (!component_text(request.producer_identity) || !component_text(request.state_identity) ||
@@ -486,7 +493,7 @@ inline int transform_boundary_flux(const PopsBoundaryFluxApiV1& api, void* state
                                    const PopsBoundaryFluxRequestV1& request,
                                    PopsBoundaryFluxResultV1& result) {
   require_operation(api.transform_faces != nullptr, "transform_faces");
-  validate_execution_context(request.execution);
+  validate_noncollective_execution_context(request.execution);
   validate_logical_time(request.logical_time);
   validate_boundary_region(request.region);
   if (request.struct_size < sizeof(PopsBoundaryFluxRequestV1) ||
@@ -555,7 +562,7 @@ inline int evaluate_field_boundary(const PopsFieldBoundaryClosureApiV1& api, voi
                                    PopsComponentStatusV1& status, bool jvp) {
   const auto operation = jvp ? api.jvp : api.residual;
   require_operation(operation != nullptr, jvp ? "jvp" : "residual");
-  validate_execution_context(request.execution);
+  validate_noncollective_execution_context(request.execution);
   validate_logical_time(request.logical_time);
   validate_boundary_region(request.region);
   if (!component_text(request.closure_identity) || request.state_count == 0 ||
@@ -587,11 +594,14 @@ inline int evaluate_field_boundary(const PopsFieldBoundaryClosureApiV1& api, voi
   if (request.nonlinear_iterate.present)
     validate_execution_field(request.execution, request.nonlinear_iterate.values,
                              "field boundary nonlinear iterate");
-  std::unordered_set<std::string> output_ids;
   for (std::size_t index = 0; index < request.output_count; ++index) {
+    bool duplicate = false;
+    if (component_text(request.outputs[index].qualified_id))
+      for (std::size_t previous = 0; previous < index; ++previous)
+        duplicate = duplicate || std::string_view(request.outputs[previous].qualified_id) ==
+                                     request.outputs[index].qualified_id;
     if (request.outputs[index].struct_size < sizeof(PopsQualifiedFieldV1) ||
-        !component_text(request.outputs[index].qualified_id) ||
-        !output_ids.insert(request.outputs[index].qualified_id).second)
+        !component_text(request.outputs[index].qualified_id) || duplicate)
       throw std::invalid_argument("field boundary outputs must be qualified and writable");
     validate_execution_field(request.execution, request.outputs[index].values,
                              "field boundary output");

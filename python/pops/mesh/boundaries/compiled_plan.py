@@ -194,7 +194,7 @@ class CompiledBoundaryPlan:
         for face in data["faces"]:
             if not isinstance(face, dict) or face.get("type") not in {
                     "periodic", "foextrap", "dirichlet", "no_flux", "slip_wall",
-                    "external"}:
+                    "external", "characteristic_no_inflow"}:
                 raise ValueError("compiled boundary face has no executable producer type")
             representation = face.get("representation", "conservative")
             converter = face.get("converter")

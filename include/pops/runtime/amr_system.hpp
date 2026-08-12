@@ -3,6 +3,7 @@
 #include <limits>
 
 #include <pops/mesh/boundary/prepared_hyperbolic_boundary.hpp>
+#include <pops/mesh/boundary/prepared_boundary_component.hpp>
 #include <pops/mesh/topology/boundary_topology.hpp>
 #include <pops/numerics/nonlinear/newton_options.hpp>
 #include <pops/numerics/time/amr/levels/amr_clock.hpp>
@@ -400,6 +401,19 @@ class AmrSystem {
   POPS_EXPORT const PreparedLevelEvaluation& evaluate_prepared_amr_block_level_flux_at(
       int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
       MultiFab<Dim>& state);
+  [[nodiscard]] POPS_EXPORT bool requires_prepared_amr_block_boundary_session(
+      int runtime_block) const;
+  [[nodiscard]] POPS_EXPORT bool has_prepared_amr_block_boundary_linearization(
+      int runtime_block) const;
+  POPS_EXPORT void prepared_amr_block_level_rhs_core_into_at(
+      int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      MultiFab<Dim>& state, MultiFab<Dim>& result, bool flux_only);
+  POPS_EXPORT void prepared_amr_block_level_boundary_residual_into_at(
+      int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      MultiFab<Dim>& state, MultiFab<Dim>& result);
+  POPS_EXPORT void prepared_amr_block_level_boundary_jvp_into_at(
+      int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      MultiFab<Dim>& state, const MultiFab<Dim>& direction, MultiFab<Dim>& result);
   POPS_EXPORT void prepared_amr_block_level_source_into_at(
       int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
       MultiFab<Dim>& state, MultiFab<Dim>& rhs);
@@ -457,6 +471,18 @@ class AmrSystem {
   /// Boundary components and AMR tagging consume this common prepared route.
   POPS_EXPORT void install_field_storage_route(const std::string& field_identity,
                                                const std::string& provider_slot);
+  /// Retain the RuntimeInstance execution descriptor until hierarchy materialization can duplicate
+  /// its authenticated communicator.  AMR never substitutes MPI_COMM_WORLD for this authority.
+  POPS_EXPORT void install_prepared_boundary_execution_context(
+      std::shared_ptr<const component::PreparedExecutionContextV1> execution);
+  POPS_EXPORT void stage_prepared_ghost_boundary_component(
+      const std::string& block, std::shared_ptr<PreparedGhostBoundaryComponent> component);
+  POPS_EXPORT void stage_prepared_boundary_flux_component(
+      const std::string& block, std::shared_ptr<PreparedBoundaryFluxComponent> component);
+  /// Atomically retain one complete operation-qualified FieldBoundary residual/JVP pair.
+  POPS_EXPORT void stage_prepared_field_boundary_component_pair(
+      const std::string& block, std::shared_ptr<PreparedFieldBoundaryResidualComponent> residual,
+      std::shared_ptr<PreparedFieldBoundaryJvpComponent> jvp);
   /// Roll back a failed pre-build runtime-authority transaction.  Internal bind seam only.
   POPS_EXPORT void discard_hyperbolic_boundaries();
 
@@ -1217,6 +1243,9 @@ class AmrSystem {
   POPS_EXPORT SolveOutcome solve_program_field_at(
       const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
       int active_level, const MultiFab<Dim>* stage_override);
+  POPS_EXPORT void with_program_field_candidate_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
+      int active_level, const MultiFab<Dim>& stage_override, const std::function<void()>& evaluate);
   POPS_EXPORT SolveOutcome solve_program_field_from_blocks_at(
       const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
       int active_level, const std::vector<const MultiFab<Dim>*>& stage_overrides);

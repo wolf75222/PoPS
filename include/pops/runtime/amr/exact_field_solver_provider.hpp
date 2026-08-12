@@ -82,7 +82,8 @@ class ExactAmrFieldSolver {
   virtual const field_type& candidate_level(int level) const = 0;
   virtual void install_newton(FieldNewtonOptions options) = 0;
   virtual void install_boundary_kernel(CompiledFieldBoundaryKernel<Dim> kernel) = 0;
-  virtual void set_boundary_contexts(std::vector<FieldBoundaryExecutionContext<Dim>> contexts) = 0;
+  virtual void set_boundary_contexts(
+      std::shared_ptr<const PreparedFieldBoundaryContextSet<Dim>> contexts) = 0;
   virtual void install_nullspace(
       PreparedFieldNullspace<Dim> prepared,
       std::vector<PreparedVectorDistribution<Dim>> level_distributions) = 0;

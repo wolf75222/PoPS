@@ -40,7 +40,8 @@ class ExactFieldSolverBackend {
       const std::optional<CompiledFieldBoundaryKernel<Dim>>& kernel) const = 0;
   virtual void replace_boundary_kernel(
       std::optional<CompiledFieldBoundaryKernel<Dim>> kernel) noexcept = 0;
-  virtual void set_boundary_context(const FieldBoundaryExecutionContext<Dim>& context) = 0;
+  virtual void set_boundary_contexts(
+      std::shared_ptr<const PreparedFieldBoundaryContextSet<Dim>> contexts) = 0;
   virtual void install_newton(FieldNewtonOptions options) = 0;
   virtual void install_nullspace(FieldNullspacePlan<Dim> plan,
                                  PreparedVectorDistribution<Dim> distribution) = 0;
@@ -84,8 +85,9 @@ class CartesianCgFieldSolverBackend final : public ExactFieldSolverBackend<Dim> 
       std::optional<CompiledFieldBoundaryKernel<Dim>> kernel) noexcept override {
     solver_.replace_boundary_kernel(std::move(kernel));
   }
-  void set_boundary_context(const FieldBoundaryExecutionContext<Dim>& context) override {
-    solver_.set_boundary_context(context);
+  void set_boundary_contexts(
+      std::shared_ptr<const PreparedFieldBoundaryContextSet<Dim>> contexts) override {
+    solver_.set_boundary_contexts(std::move(contexts));
   }
   void install_newton(FieldNewtonOptions options) override { solver_.install_newton(options); }
   void install_nullspace(FieldNullspacePlan<Dim> plan,
@@ -177,7 +179,7 @@ class PoissonFftFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
     if (kernel)
       std::terminate();
   }
-  void set_boundary_context(const FieldBoundaryExecutionContext<Dim>&) override {
+  void set_boundary_contexts(std::shared_ptr<const PreparedFieldBoundaryContextSet<Dim>>) override {
     throw std::logic_error("FFT field solver does not consume a dynamic boundary context");
   }
   void install_newton(FieldNewtonOptions) override {
@@ -293,7 +295,7 @@ class ComponentFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
       std::terminate();
   }
 
-  void set_boundary_context(const FieldBoundaryExecutionContext<Dim>&) override {
+  void set_boundary_contexts(std::shared_ptr<const PreparedFieldBoundaryContextSet<Dim>>) override {
     throw std::logic_error(
         "external exact field components do not consume the generated Cartesian boundary ABI");
   }

@@ -171,6 +171,7 @@ void check_characteristic_axis_side_permutations() {
           prepare_hyperbolic_boundary<Dim>(laws, values, identities<Dim>(), {"scalar"});
       const Box<Dim> domain = Box<Dim>::from_extents(uniform_extent<Dim>(3));
       auto state = one_patch_field_for_lane(domain, 1, uniform_extent<Dim>(1), lane);
+      auto candidate = one_patch_field_for_lane(domain, 1, uniform_extent<Dim>(1), lane);
       fill_valid(state, Real(-31), [](const Index<Dim>& index, int) {
         Real value = Real(1);
         for (int axis = 0; axis < Dim; ++axis)
@@ -179,7 +180,7 @@ void check_characteristic_axis_side_permutations() {
       });
 
       QualifiedCharacteristicModel<Dim> model{normal_axis, side, false, false};
-      boundary.fill_physical_model_qualified(state, domain, model, lane);
+      boundary.fill_physical_model_qualified(state, domain, model, lane, candidate);
       Index<Dim> interior{};
       Index<Dim> ghost{};
       interior[normal_axis] = side < 0 ? domain.lo[normal_axis] : domain.hi[normal_axis];
@@ -313,31 +314,34 @@ TEST(test_prepared_hyperbolic_boundary,
   const Box<2> domain = Box<2>::from_extents(Extent<2>{3, 3});
   auto lane = ExecutionLane::duplicate_world_collectively("test/characteristic-boundary-rejection");
   auto state = one_patch_field_for_lane(domain, 1, Extent<2>{1, 1}, lane);
+  auto candidate = one_patch_field_for_lane(domain, 1, Extent<2>{1, 1}, lane);
   fill_valid(state, Real(-29), [](const Index<2>&, int) { return Real(2); });
 
-  EXPECT_THROW(boundary.fill_physical_model_qualified(state, domain,
-                                                      UnqualifiedCharacteristicModel<2>{}, lane),
+  EXPECT_THROW(boundary.fill_physical_model_qualified(
+                   state, domain, UnqualifiedCharacteristicModel<2>{}, lane, candidate),
                std::logic_error);
   EXPECT_EQ(value_at(state, Index<2>{0, -1}, 0), Real(-29));
   EXPECT_EQ(value_at(state, Index<2>{0, 0}, 0), Real(2));
 
-  EXPECT_THROW(boundary.fill_physical_model_qualified(state, domain,
-                                                      IncompatibleCharacteristicModel<2>{}, lane),
+  EXPECT_THROW(boundary.fill_physical_model_qualified(
+                   state, domain, IncompatibleCharacteristicModel<2>{}, lane, candidate),
                std::invalid_argument);
   EXPECT_EQ(value_at(state, Index<2>{0, -1}, 0), Real(-29));
   EXPECT_EQ(value_at(state, Index<2>{-1, 0}, 0), Real(-29));
   EXPECT_EQ(value_at(state, Index<2>{0, 0}, 0), Real(2));
 
-  EXPECT_THROW(boundary.fill_physical_model_qualified(
-                   state, domain, QualifiedCharacteristicModel<2>{1, -1, false, true}, lane),
-               std::runtime_error);
+  EXPECT_THROW(
+      boundary.fill_physical_model_qualified(
+          state, domain, QualifiedCharacteristicModel<2>{1, -1, false, true}, lane, candidate),
+      std::runtime_error);
   EXPECT_EQ(value_at(state, Index<2>{0, -1}, 0), Real(-29));
   EXPECT_EQ(value_at(state, Index<2>{-1, 0}, 0), Real(-29));
   EXPECT_EQ(value_at(state, Index<2>{0, 0}, 0), Real(2));
 
-  EXPECT_THROW(boundary.fill_physical_model_qualified(
-                   state, domain, QualifiedCharacteristicModel<2>{1, -1, true, false}, lane),
-               std::runtime_error);
+  EXPECT_THROW(
+      boundary.fill_physical_model_qualified(
+          state, domain, QualifiedCharacteristicModel<2>{1, -1, true, false}, lane, candidate),
+      std::runtime_error);
   EXPECT_EQ(value_at(state, Index<2>{0, -1}, 0), Real(-29));
   EXPECT_EQ(value_at(state, Index<2>{-1, 0}, 0), Real(-29));
   EXPECT_EQ(value_at(state, Index<2>{0, 0}, 0), Real(2));
@@ -355,6 +359,7 @@ TEST(test_prepared_hyperbolic_boundary,
   const mesh::RankSpace<Dim> ranks{Index<Dim>{}, Extent<Dim>{lane.size()}};
   const auto distribution = mesh::Distribution<Dim>::replicated(layout, ranks);
   MultiFab<Dim> state(layout, distribution, Index<Dim>{lane.rank()}, 1, Extent<Dim>{1});
+  MultiFab<Dim> candidate(layout, distribution, Index<Dim>{lane.rank()}, 1, Extent<Dim>{1});
   fill_valid(state, Real(-29), [](const Index<Dim>&, int) { return Real(3); });
   const auto boundary = prepare_hyperbolic_boundary<Dim>({"characteristic_no_inflow", "foextrap"},
                                                          {4.0, 0.0}, identities<Dim>(), {"scalar"});
@@ -364,15 +369,15 @@ TEST(test_prepared_hyperbolic_boundary,
                std::logic_error);
   EXPECT_EQ(value_at(state, Index<Dim>{-1}, 0), Real(-29));
 
-  EXPECT_THROW(
-      boundary.fill_physical_model_qualified(
-          state, domain, QualifiedCharacteristicModel<Dim>{0, -1, lane.rank() == 0, false}, lane),
-      std::runtime_error);
+  EXPECT_THROW(boundary.fill_physical_model_qualified(
+                   state, domain, QualifiedCharacteristicModel<Dim>{0, -1, lane.rank() == 0, false},
+                   lane, candidate),
+               std::runtime_error);
   EXPECT_EQ(value_at(state, Index<Dim>{-1}, 0), Real(-29));
   EXPECT_EQ(value_at(state, Index<Dim>{3}, 0), Real(-29));
 
   boundary.fill_physical_model_qualified(
-      state, domain, QualifiedCharacteristicModel<Dim>{0, -1, false, false}, lane);
+      state, domain, QualifiedCharacteristicModel<Dim>{0, -1, false, false}, lane, candidate);
   EXPECT_EQ(value_at(state, Index<Dim>{-1}, 0), Real(-3));
   EXPECT_EQ(value_at(state, Index<Dim>{3}, 0), Real(3));
 }

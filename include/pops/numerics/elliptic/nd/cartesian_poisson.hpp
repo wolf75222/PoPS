@@ -276,7 +276,7 @@ class CartesianPoissonSolver {
   void install_boundary_kernel(CompiledFieldBoundaryKernel<Dim> kernel) {
     kernel.validate();
     boundary_kernel_ = std::move(kernel);
-    boundary_context_storage_.reset();
+    boundary_contexts_.reset();
   }
 
   /// Publish one already-validated generated boundary overlay.  The System loader performs every
@@ -286,7 +286,7 @@ class CartesianPoissonSolver {
     static_assert(
         std::is_nothrow_move_assignable_v<std::optional<CompiledFieldBoundaryKernel<Dim>>>);
     boundary_kernel_ = std::move(kernel);
-    boundary_context_storage_.reset();
+    boundary_contexts_.reset();
   }
 
   void install_newton(FieldNewtonOptions options) {
@@ -296,13 +296,13 @@ class CartesianPoissonSolver {
     newton_workspace_.emplace(rhs_.layout(), rhs_.distribution(), rhs_.local_rank(), options);
   }
 
-  void set_boundary_context(const FieldBoundaryExecutionContext<Dim>& context) {
+  void set_boundary_contexts(std::shared_ptr<const PreparedFieldBoundaryContextSet<Dim>> contexts) {
     if (!boundary_kernel_)
       throw std::logic_error("Cartesian Poisson has no compiled dynamic boundary kernel");
-    if (context.failure == nullptr)
+    if (!contexts || contexts->size() != 1 || contexts->contexts().front().failure == nullptr)
       throw std::invalid_argument(
           "Cartesian Poisson dynamic boundary requires a fallible execution channel");
-    boundary_context_storage_ = context;
+    boundary_contexts_ = std::move(contexts);
   }
 
   void install_nullspace(FieldNullspacePlan<Dim> plan,
@@ -568,12 +568,11 @@ class CartesianPoissonSolver {
     Kokkos::fence();
   }
 
-  FieldBoundaryExecutionContext<Dim>& boundary_context_(int iteration) {
-    if (!boundary_context_storage_)
+  FieldBoundaryExecutionContext<Dim> boundary_context_(int iteration) const {
+    if (!boundary_contexts_)
       throw std::logic_error(
           "Cartesian Poisson dynamic boundary has no prepared execution context");
-    boundary_context_storage_->point.iteration = iteration;
-    return *boundary_context_storage_;
+    return boundary_contexts_->view(0, iteration);
   }
 
   void synchronize_boundary_failure_(FieldBoundaryExecutionContext<Dim>& context,
@@ -587,7 +586,7 @@ class CartesianPoissonSolver {
     detail::copy_component(iterate, 0, halo_, 0);
     fill_static_halo_(false);
     if (boundary_kernel_) {
-      auto& context = boundary_context_(iteration);
+      auto context = boundary_context_(iteration);
       context.failure->reset();
       for (int face = 0; face < 2 * Dim; ++face)
         boundary_kernel_->prepare_residual_view(face, iterate, halo_, geometry_, context);
@@ -600,7 +599,7 @@ class CartesianPoissonSolver {
     detail::copy_component(direction, 0, halo_, 0);
     fill_static_halo_(true);
     if (boundary_kernel_) {
-      auto& context = boundary_context_(iteration);
+      auto context = boundary_context_(iteration);
       context.failure->reset();
       for (int face = 0; face < 2 * Dim; ++face)
         boundary_kernel_->prepare_jvp_view(face, iterate, direction, halo_, geometry_, context);
@@ -633,7 +632,7 @@ class CartesianPoissonSolver {
     apply_negative_laplacian_(image_);
     lincomb(output, Real(1), rhs_, Real(-1), image_);
     if (boundary_kernel_) {
-      auto& context = boundary_context_(iteration);
+      auto context = boundary_context_(iteration);
       context.failure->reset();
       for (int face = 0; face < 2 * Dim; ++face)
         boundary_kernel_->add_residual(face, iterate, output, geometry_, context);
@@ -651,7 +650,7 @@ class CartesianPoissonSolver {
     fill_jvp_halo_(iterate, direction, iteration);
     apply_negative_laplacian_(output);
     if (boundary_kernel_) {
-      auto& context = boundary_context_(iteration);
+      auto context = boundary_context_(iteration);
       context.failure->reset();
       for (int face = 0; face < 2 * Dim; ++face)
         boundary_kernel_->apply_jvp(face, iterate, direction, output, geometry_, context);
@@ -684,7 +683,7 @@ class CartesianPoissonSolver {
   ExecutionLane::ImmutableBorrow lane_borrow_;
   std::unique_ptr<HaloExchange<Dim>> exchange_;
   std::optional<CompiledFieldBoundaryKernel<Dim>> boundary_kernel_;
-  std::optional<FieldBoundaryExecutionContext<Dim>> boundary_context_storage_;
+  std::shared_ptr<const PreparedFieldBoundaryContextSet<Dim>> boundary_contexts_;
   std::optional<FieldNewtonKrylovWorkspace<Dim>> newton_workspace_;
   FieldNullspacePlan<Dim> nullspace_plan_;
   PreparedVectorDistribution<Dim> nullspace_distribution_ =

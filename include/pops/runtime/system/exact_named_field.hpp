@@ -174,9 +174,10 @@ class ExactNamedField final {
     rhs_by_block_[block].push_back({std::move(rhs), coefficient});
   }
 
-  SolveReport solve_candidate(const std::vector<const field_type*>& states,
-                              const FieldBoundaryExecutionContext<Dim>* boundary_context,
-                              const ExecutionLane& lane) {
+  SolveReport solve_candidate(
+      const std::vector<const field_type*>& states,
+      std::shared_ptr<const PreparedFieldBoundaryContextSet<Dim>> boundary_contexts,
+      const ExecutionLane& lane) {
     if (all_reduce_max(&lane == lane_ ? 0L : 1L, *lane_) != 0)
       throw std::invalid_argument(
           "named elliptic field solve requires its prepared execution lane");
@@ -200,11 +201,11 @@ class ExactNamedField final {
       if (!has_rhs)
         throw std::runtime_error("named elliptic field has no prepared RHS provider");
       if (has_boundary_kernel_) {
-        if (boundary_context == nullptr)
+        if (!boundary_contexts || boundary_contexts->size() != 1)
           throw std::logic_error(
               "named elliptic field dynamic boundary has no prepared execution context");
-        solver_->set_boundary_context(*boundary_context);
-      } else if (boundary_context != nullptr) {
+        solver_->set_boundary_contexts(boundary_contexts);
+      } else if (boundary_contexts) {
         throw std::logic_error(
             "named elliptic field received a boundary context without a compiled kernel");
       }

@@ -8,8 +8,10 @@ from types import SimpleNamespace
 import pytest
 
 from pops._platform_contracts import ExecutionContext, ExecutionResource, proven_serial_manifest
+from pops.runtime._component_execution_context import component_execution_data
 from pops.runtime._runtime_authorities import (
     _boundary_face_ordinal,
+    _install_boundary_authorities,
     _periodic_identification_rows,
     install_runtime_authorities,
 )
@@ -30,6 +32,19 @@ def test_native_boundary_install_has_no_component_count_compatibility_abi():
         source = (ROOT / relative).read_text(encoding="utf-8")
         assert old_scalar_adapter not in source
         assert typed_roles in source
+
+
+def test_native_boundary_rollback_uses_typed_staged_package_kind():
+    source = (ROOT / "src/runtime/system/system_install.cpp").read_text(encoding="utf-8")
+    implementation = (ROOT / "src/runtime/system/system_impl.hpp").read_text(encoding="utf-8")
+
+    assert "enum class NativePackageKind { generic, prepared_boundary };" in (
+        ROOT / "include/pops/runtime/system.hpp").read_text(encoding="utf-8")
+    assert "NativePackageKind kind = NativePackageKind::generic;" in implementation
+    assert source.count("NativePackageKind::prepared_boundary") >= 4
+    assert "NativePackageKind::generic);" in source
+    assert "package.kind == NativePackageKind::prepared_boundary" in source
+    assert "package.identity.starts_with" not in source
 
 
 def _execution_context() -> ExecutionContext:
@@ -108,6 +123,7 @@ def test_mapped_periodicity_preserves_one_dynamic_rank_three_row_for_provider_ro
 
 @pytest.mark.parametrize("prepare_fails", (False, True))
 @pytest.mark.parametrize("dimension", (1, 2, 3))
+@pytest.mark.parametrize("adaptive", (False, True))
 @pytest.mark.parametrize(
     ("operation", "native_interface", "expected_installer"),
     (
@@ -118,7 +134,7 @@ def test_mapped_periodicity_preserves_one_dynamic_rank_three_row_for_provider_ro
     ),
 )
 def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
-        prepare_fails, dimension, operation, native_interface, expected_installer):
+        prepare_fails, dimension, adaptive, operation, native_interface, expected_installer):
     component_id = "pops://external.test/boundary@1.0.0"
     manifest_identity = "component-manifest:boundary-test"
     region = {
@@ -168,7 +184,9 @@ def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
         def __init__(self):
             self.prepare_overrides = None
             self.discarded = False
+            self.prepare_fails = prepare_fails
             self.state_routes = []
+            self.staged_packages = [("generic", "riemann")]
             self.installer = None
             self.events = []
 
@@ -181,10 +199,22 @@ def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
 
         def _discard_boundary_plans(self):
             self.discarded = True
+            self.events.append("discard")
+            self.state_routes.clear()
+            self.staged_packages[:] = [
+                package for package in self.staged_packages
+                if package[0] != "prepared_boundary"
+            ]
 
-        def _prepare_boundary_execution_lane(self, execution):
-            assert execution["communicator_identity"] == "serial"
-            self.events.append("boundary-lane")
+        if adaptive:
+            def _prepare_boundary_execution_lane(self, execution_data):
+                assert execution_data == component_execution_data(execution_context)
+                self.events.append("boundary-lane")
+        else:
+            def _prepare_boundary_execution_lane(self, communicator_authority, execution_identity):
+                assert communicator_authority is None
+                assert execution_identity == execution_context.identity.token
+                self.events.append("boundary-lane")
 
         def _install_ghost_boundary_component(
                 self, block, handle, row, parameters_json, target_json, execution):
@@ -198,6 +228,14 @@ def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
             assert parameters_json == target_json == ""
             assert execution["communicator_identity"] == "serial"
             self.events.append("ghost-preflight")
+
+        def _preflight_boundary_flux_component(
+                self, handle, row, parameters_json, target_json, execution):
+            assert handle is native_handle
+            assert row == component_row
+            assert parameters_json == target_json == ""
+            assert execution["communicator_identity"] == "serial"
+            self.events.append("flux-preflight")
 
         def _install_boundary_flux_component(
                 self, block, handle, row, parameters_json, target_json, execution):
@@ -213,7 +251,8 @@ def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
             self.events.append("%s-install" % installer)
             self.installer = installer
             self.prepare_overrides = (parameters_json, target_json)
-            if prepare_fails:
+            self.staged_packages.append(("prepared_boundary", installer))
+            if self.prepare_fails:
                 raise RuntimeError("component prepare rejected")
 
     class Interface:
@@ -231,6 +270,7 @@ def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
     native_handle = object()
     native = Native()
     engine = SimpleNamespace(_s=native)
+    execution_context = _execution_context()
     installed = SimpleNamespace(
         component_manifest=SimpleNamespace(token=manifest_identity),
         interface=Interface(), native_handle=native_handle,
@@ -240,11 +280,11 @@ def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
         blocks=(SimpleNamespace(
             name="block", model=SimpleNamespace(n_vars=1, cons_roles=("Scalar",))),),
         plan=SimpleNamespace(blocks=(BoundaryBlock(),), field_plans={}),
-        layout_plan=SimpleNamespace(layouts=(SimpleNamespace(adaptive=False),)),
+        layout_plan=SimpleNamespace(layouts=(SimpleNamespace(adaptive=adaptive),)),
     )
     install_plan = SimpleNamespace(
         artifact=artifact, params={}, components={component_id: installed},
-        execution_context=_execution_context(),
+        execution_context=execution_context,
     )
 
     if prepare_fails:
@@ -252,19 +292,37 @@ def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
             install_runtime_authorities(engine, install_plan)
         assert native.discarded is True
         assert not hasattr(engine, "_boundary_authorities")
-    else:
+        native.prepare_fails = False
         install_runtime_authorities(engine, install_plan)
+        assert native.state_routes == [("block", "case::block::state")]
+        assert native.staged_packages == [
+            ("generic", "riemann"), ("prepared_boundary", expected_installer),
+        ]
+        assert hasattr(engine, "_boundary_authorities")
+    else:
+        if adaptive:
+            _install_boundary_authorities(engine, install_plan)
+        else:
+            install_runtime_authorities(engine, install_plan)
         assert native.state_routes == [("block", "case::block::state")]
         assert native.discarded is False
     assert native.prepare_overrides == ("", "")
     assert native.installer == expected_installer
     if operation == "apply_region_batch":
-        assert (native.events.index("ghost-preflight") <
+        preflight = "ghost-preflight"
+        assert (native.events.index(preflight) <
                 native.events.index("boundary-lane") < native.events.index("state-route"))
-        assert native.events.count("ghost-preflight") == 1
     else:
         assert "ghost-preflight" not in native.events
-        assert native.events.index("boundary-lane") < native.events.index("state-route")
+        preflight = "flux-preflight"
+        assert (native.events.index(preflight) <
+                native.events.index("boundary-lane") < native.events.index("state-route"))
+    assert native.events.count(preflight) == 1 + prepare_fails
+    if prepare_fails:
+        preflight_indices = [
+            index for index, event in enumerate(native.events) if event == preflight
+        ]
+        assert preflight_indices[0] < native.events.index("discard") < preflight_indices[1]
 
 
 @pytest.mark.parametrize(
@@ -341,8 +399,9 @@ def test_signed_periodic_identification_reaches_native_install_without_callback(
         def _install_boundary_plan(self, *args):
             self.installed = args
 
-        def _prepare_boundary_execution_lane(self, execution):
-            assert execution["communicator_identity"] == "serial"
+        def _prepare_boundary_execution_lane(self, communicator_authority, execution_identity):
+            assert communicator_authority is None
+            assert execution_identity == execution_context.identity.token
 
         def _discard_boundary_plans(self):
             raise AssertionError("valid signed periodic installation must not roll back")
@@ -354,6 +413,7 @@ def test_signed_periodic_identification_reaches_native_install_without_callback(
 
     native = Native()
     engine = SimpleNamespace(_s=native)
+    execution_context = _execution_context()
     artifact = SimpleNamespace(
         resolved_dimension=2,
         blocks=(SimpleNamespace(
@@ -365,7 +425,7 @@ def test_signed_periodic_identification_reaches_native_install_without_callback(
         artifact=artifact,
         params={},
         components={},
-        execution_context=_execution_context(),
+        execution_context=execution_context,
     )
 
     install_runtime_authorities(engine, install_plan)

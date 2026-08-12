@@ -794,6 +794,7 @@ TEST(GeneratedAmrSystemBlock, NamedFieldConsumesExactStageWithoutPublishingState
 
 TEST(GeneratedAmrSystemBlock,
      DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance) {
+  pops::comm_init();
   constexpr int Dim = pops::kNativeDimension;
   RuntimeFieldBoundaryProbe<Dim>::reset();
   pops::AmrSystemConfig<Dim> config;

@@ -472,6 +472,7 @@ labels = ["integration", "runtime", "medium"]
 name = "test_program_runtime"
 sources = ["tests/cpp/integration/runtime/test_program_runtime.cpp"]
 labels = ["integration", "runtime", "medium"]
+mpi_variants = [2]
 
 [[cpp.suite]]
 name = "test_route_ids"
@@ -976,6 +977,7 @@ labels = ["unit", "runtime", "fast"]
 name = "test_generated_amr_system_block"
 sources = ["tests/cpp/unit/runtime/test_generated_amr_system_block.cpp"]
 labels = ["unit", "runtime", "fast"]
+mpi_variants = [2]
 
 [[cpp.suite]]
 name = "test_coupled_source"

@@ -5,6 +5,7 @@
 
 #include <pops/core/model/physical_model.hpp>
 #include <pops/mesh/boundary/fill_boundary.hpp>
+#include <pops/mesh/boundary/prepared_boundary_component.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/numerics/fv/numerical_flux.hpp>
@@ -24,6 +25,7 @@
 #include <cmath>
 #include <concepts>
 #include <cstddef>
+#include <exception>
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -304,6 +306,46 @@ MultiFab<Dim> materialize_source(
   return candidate;
 }
 
+/// Allocation-free source materialization into storage owned by the prepared block session.
+/// The caller performs exact-lane status consensus before any subsequent collective phase.
+template <int Dim, class Model>
+void materialize_source_into(const Model& model, const MultiFab<Dim>& state,
+                             const runtime::system::AuxiliaryStorageGroups<Dim>* provider_storage,
+                             const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>* plan,
+                             MultiFab<Dim>& candidate, MultiFab<Dim>& status) {
+  constexpr int provider_count = provider_count_for<Model, Dim>();
+  require_same_layout(state, candidate, Model::n_vars, "generated prepared source candidate");
+  require_same_layout(state, status, 1, "generated prepared source status");
+  if (state.shares_storage_with(candidate) || state.shares_storage_with(status) ||
+      candidate.shares_storage_with(status))
+    throw std::invalid_argument("generated prepared source output and scratch must not alias");
+  if constexpr (provider_count > 0) {
+    if (provider_storage == nullptr)
+      throw std::invalid_argument("generated source requires resolved provider storage");
+    runtime::system::require_pointwise_provider_groups<Dim, provider_count>(
+        state, provider_storage, plan, "generated source providers");
+  }
+  if constexpr (GeneratedSourceModel<Dim, Model>) {
+    for (std::size_t local = 0; local < state.local_size(); ++local)
+      for_each_cell(state.box(local),
+                    MaterializeSource<Dim, Model>{
+                        model, state.fab(local).view(),
+                        runtime::system::bind_provider_storage_view<Dim, provider_count>(
+                            plan, provider_storage, local),
+                        candidate.fab(local).view(), status.fab(local).view()});
+  } else {
+    candidate.set_val(Real(0));
+    status.set_val(Real(0));
+  }
+}
+
+template <class Operation>
+void prepared_boundary_collective_phase(const ExecutionLane& lane, Operation&& operation,
+                                        const char* failure_message) {
+  runtime::program::collective_boundary_provider_phase(lane, failure_message,
+                                                       std::forward<Operation>(operation));
+}
+
 template <int Dim, class Model>
 MultiFab<Dim> materialize_masked_source(
     const Model& model, const MultiFab<Dim>& state,
@@ -511,18 +553,36 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
           MultiFab<Dim>& state, const PreparedHyperbolicBoundary<Dim>* boundary,
           const ExecutionLane& lane,
           const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
-        if (boundary != nullptr)
-          boundary->template require_model_qualified_characteristic_provider<Model>();
-        if (boundary != nullptr)
-          transport.fill_halo(state);
-        else
-          transport.fill(state);
-        if (provider_storage != nullptr) {
-          runtime::system::require_pointwise_provider_groups<Dim, provider_count>(
-              state, provider_storage, provider_plan, "generated flux providers");
+        prepared_boundary_collective_phase(
+            lane,
+            [&] {
+              if (boundary != nullptr)
+                boundary->template require_model_qualified_characteristic_provider<Model>();
+            },
+            "generated prepared boundary model authentication failed collectively");
+        prepared_boundary_collective_phase(
+            lane,
+            [&] {
+              if (boundary != nullptr)
+                transport.fill_halo(state);
+              else
+                transport.fill(state);
+              if (provider_storage != nullptr) {
+                runtime::system::require_pointwise_provider_groups<Dim, provider_count>(
+                    state, provider_storage, provider_plan, "generated flux providers");
+              }
+            },
+            "generated prepared boundary state preparation failed collectively");
+        if (boundary != nullptr) {
+          prepared_boundary_collective_phase(
+              lane,
+              [&] {
+                transport.with_characteristic_candidate(state, [&](MultiFab<Dim>& candidate) {
+                  boundary->fill_physical_model_qualified(state, geometry, model, lane, candidate);
+                });
+              },
+              "generated prepared physical boundary fill failed collectively");
         }
-        if (boundary != nullptr)
-          boundary->fill_physical_model_qualified(state, geometry, model, lane);
       };
 
   auto flux = [spatial, prepare_state, provider_storage, provider_plan, geometry](
@@ -557,41 +617,101 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
     saxpy(candidate, Real(1), source);
     copy_valid(candidate, residual);
   };
-  auto flux_with_transport =
-      [spatial, prepare_state_with_transport, provider_storage, provider_plan, geometry](
-          MultiFab<Dim>& state, MultiFab<Dim>& residual,
+  auto external_boundary_flux =
+      std::make_shared<typename SystemBlockClosures<Dim>::BoundaryFluxTransform>();
+  auto external_ghost_boundary =
+      std::make_shared<typename SystemBlockClosures<Dim>::ExternalGhostBoundary>();
+  auto external_field_boundary_residual =
+      std::make_shared<typename SystemBlockClosures<Dim>::PreparedPointBoundaryResidual>();
+  auto external_field_boundary_jvp =
+      std::make_shared<typename SystemBlockClosures<Dim>::PreparedPointJvp>();
+  auto prepare_state_with_external =
+      [prepare_state_with_transport, external_ghost_boundary, geometry](
+          const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab<Dim>& state,
           const PreparedHyperbolicBoundary<Dim>* boundary, const ExecutionLane& lane,
           const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
-        require_same_layout(state, residual, Model::n_vars, "generated flux residual");
         prepare_state_with_transport(state, boundary, lane, transport);
-
-        auto faces = nd::make_face_flux_workspace(state);
-        for (std::size_t local = 0; local < state.local_size(); ++local) {
-          if constexpr (flux_provider_count<Model> == 0)
-            spatial.materialize_face_fluxes(state.fab(local), faces[local]);
-          else
-            spatial.materialize_face_fluxes(
-                state.fab(local),
-                runtime::system::bind_provider_storage_view<Dim, flux_provider_count<Model>>(
-                    provider_plan, provider_storage, local),
-                faces[local]);
-          if (boundary != nullptr)
-            boundary->apply_physical_flux_conditions(faces[local], geometry.domain());
-        }
-        spatial.assemble_residual_from_face_fluxes(faces, residual);
+        if (boundary != nullptr && *external_ghost_boundary)
+          (*external_ghost_boundary)(point, state, geometry, lane);
       };
+  auto flux_with_transport = [spatial, prepare_state_with_external, provider_storage, provider_plan,
+                              geometry, external_boundary_flux](
+                                 const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                 MultiFab<Dim>& state, MultiFab<Dim>& residual,
+                                 const PreparedHyperbolicBoundary<Dim>* boundary,
+                                 const ExecutionLane& lane,
+                                 const runtime::program::PreparedScalarBoundarySession<Dim>&
+                                     transport) {
+    prepared_boundary_collective_phase(
+        lane,
+        [&] { require_same_layout(state, residual, Model::n_vars, "generated flux residual"); },
+        "generated prepared flux preflight failed collectively");
+    prepare_state_with_external(point, state, boundary, lane, transport);
+    transport.with_boundary_scratch(state, [&](auto& scratch) {
+      auto& faces = scratch.generated_faces;
+      prepared_boundary_collective_phase(
+          lane,
+          [&] {
+            for (std::size_t local = 0; local < state.local_size(); ++local) {
+              if constexpr (flux_provider_count<Model> == 0)
+                spatial.materialize_face_fluxes(state.fab(local), faces[local],
+                                                scratch.cartesian_operator.face_candidate(local),
+                                                scratch.cartesian_operator.face_status(local));
+              else
+                spatial.materialize_face_fluxes(
+                    state.fab(local),
+                    runtime::system::bind_provider_storage_view<Dim, flux_provider_count<Model>>(
+                        provider_plan, provider_storage, local),
+                    faces[local], scratch.cartesian_operator.face_candidate(local),
+                    scratch.cartesian_operator.face_status(local));
+              if (boundary != nullptr)
+                boundary->apply_physical_flux_conditions(faces[local], geometry.domain());
+            }
+          },
+          "generated prepared face materialization failed collectively");
+      if (boundary != nullptr && *external_boundary_flux) {
+        prepared_boundary_collective_phase(
+            lane, [&] { (*external_boundary_flux)(point, state, faces, geometry, lane); },
+            "generated prepared boundary-flux component failed collectively");
+      }
+      prepared_boundary_collective_phase(
+          lane,
+          [&] {
+            spatial.assemble_residual_from_face_fluxes(
+                faces, residual, scratch.cartesian_operator.residual_candidate(),
+                scratch.cartesian_operator.residual_status());
+          },
+          "generated prepared divergence materialization failed collectively");
+    });
+  };
   auto full_with_transport =
       [flux_with_transport, model, provider_storage, provider_plan](
-          MultiFab<Dim>& state, MultiFab<Dim>& residual,
-          const PreparedHyperbolicBoundary<Dim>* boundary, const ExecutionLane& lane,
+          const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab<Dim>& state,
+          MultiFab<Dim>& residual, const PreparedHyperbolicBoundary<Dim>* boundary,
+          const ExecutionLane& lane,
           const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
-        MultiFab<Dim> candidate(residual.layout(), residual.distribution(), residual.local_rank(),
-                                residual.ncomp(), residual.ghosts());
-        flux_with_transport(state, candidate, boundary, lane, transport);
-        MultiFab<Dim> source =
-            materialize_source<Dim>(model, state, provider_storage, provider_plan);
-        saxpy(candidate, Real(1), source);
-        copy_valid(candidate, residual);
+        transport.with_boundary_scratch(state, [&](auto& scratch) {
+          flux_with_transport(point, state, scratch.generated_candidate, boundary, lane, transport);
+          Real local_status = Real(0);
+          prepared_boundary_collective_phase(
+              lane,
+              [&] {
+                materialize_source_into<Dim>(model, state, provider_storage, provider_plan,
+                                             scratch.generated_source,
+                                             scratch.generated_source_status);
+                local_status = reduce_max_local(scratch.generated_source_status);
+              },
+              "generated prepared source materialization failed collectively");
+          if (all_reduce_max(local_status, lane) != Real(0))
+            throw std::runtime_error("generated prepared source produced a non-finite component");
+          prepared_boundary_collective_phase(
+              lane,
+              [&] {
+                saxpy(scratch.generated_candidate, Real(1), scratch.generated_source);
+                copy_valid(scratch.generated_candidate, residual);
+              },
+              "generated prepared source accumulation failed collectively");
+        });
       };
   auto source = [model, provider_storage, provider_plan](MultiFab<Dim>& state,
                                                          MultiFab<Dim>& residual) {
@@ -668,36 +788,42 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
       [flux](const auto&, MultiFab<Dim>& state, MultiFab<Dim>& residual,
              const PreparedHyperbolicBoundary<Dim>& boundary) { flux(state, residual, &boundary); };
   result.closures.boundary_full_at_point_prepared =
-      [full_with_transport](const auto&, MultiFab<Dim>& state, MultiFab<Dim>& residual,
+      [full_with_transport](const auto& point, MultiFab<Dim>& state, MultiFab<Dim>& residual,
                             const PreparedHyperbolicBoundary<Dim>& boundary,
                             const ExecutionLane& lane,
                             const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
-        full_with_transport(state, residual, &boundary, lane, transport);
+        full_with_transport(point, state, residual, &boundary, lane, transport);
       };
   result.closures.boundary_core_at_point_prepared =
-      [full_with_transport](const auto&, MultiFab<Dim>& state, MultiFab<Dim>& residual,
+      [full_with_transport](const auto& point, MultiFab<Dim>& state, MultiFab<Dim>& residual,
                             const PreparedHyperbolicBoundary<Dim>&, const ExecutionLane& lane,
                             const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
-        full_with_transport(state, residual, nullptr, lane, transport);
+        full_with_transport(point, state, residual, nullptr, lane, transport);
       };
   result.closures.boundary_flux_full_at_point_prepared =
-      [flux_with_transport](const auto&, MultiFab<Dim>& state, MultiFab<Dim>& residual,
+      [flux_with_transport](const auto& point, MultiFab<Dim>& state, MultiFab<Dim>& residual,
                             const PreparedHyperbolicBoundary<Dim>& boundary,
                             const ExecutionLane& lane,
                             const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
-        flux_with_transport(state, residual, &boundary, lane, transport);
+        flux_with_transport(point, state, residual, &boundary, lane, transport);
       };
   result.closures.boundary_flux_core_at_point_prepared =
-      [flux_with_transport](const auto&, MultiFab<Dim>& state, MultiFab<Dim>& residual,
+      [flux_with_transport](const auto& point, MultiFab<Dim>& state, MultiFab<Dim>& residual,
                             const PreparedHyperbolicBoundary<Dim>&, const ExecutionLane& lane,
                             const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
-        flux_with_transport(state, residual, nullptr, lane, transport);
+        flux_with_transport(point, state, residual, nullptr, lane, transport);
       };
-  result.closures.boundary_residual_at_point_prepared =
+  auto compiled_boundary_residual =
       make_prepared_boundary_residual<Dim>(result.closures.boundary_full_at_point_prepared,
                                            result.closures.boundary_core_at_point_prepared);
-  result.closures.boundary_jvp_at_point_prepared =
-      make_prepared_boundary_jvp<Dim>(result.closures.boundary_residual_at_point_prepared);
+  auto compiled_boundary_jvp = make_prepared_boundary_jvp<Dim>(compiled_boundary_residual);
+  result.closures.boundary_residual_at_point_prepared = bind_external_field_boundary_residual<Dim>(
+      std::move(compiled_boundary_residual), external_field_boundary_residual);
+  result.closures.boundary_jvp_at_point_prepared = bind_external_field_boundary_jvp<Dim>(
+      std::move(compiled_boundary_jvp), external_field_boundary_jvp);
+  result.closures.external_boundary_flux = std::move(external_boundary_flux);
+  result.closures.external_field_boundary_residual = std::move(external_field_boundary_residual);
+  result.closures.external_field_boundary_jvp = std::move(external_field_boundary_jvp);
   result.closures.prepare_generated_state_at_point =
       [prepare_state](const auto&, MultiFab<Dim>& state) { prepare_state(state, nullptr); };
   result.closures.prepare_generated_state_at_point_prepared =
@@ -705,6 +831,14 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
                       const PreparedHyperbolicBoundary<Dim>& boundary) {
         prepare_state(state, &boundary);
       };
+  result.closures.prepare_generated_state_with_transport_prepared =
+      [prepare_state_with_external](
+          const auto& point, MultiFab<Dim>& state, const PreparedHyperbolicBoundary<Dim>& boundary,
+          const ExecutionLane& lane,
+          const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+        prepare_state_with_external(point, state, &boundary, lane, transport);
+      };
+  result.closures.external_ghost_boundary = std::move(external_ghost_boundary);
 
   result.maximum_speed = [model, provider_storage, provider_plan](const MultiFab<Dim>& state) {
     return maximum_speed<Dim>(model, state, provider_storage, provider_plan);

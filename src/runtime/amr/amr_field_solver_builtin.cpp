@@ -122,8 +122,9 @@ class BuiltinExactAmrFieldSolver final : public ExactAmrFieldSolver<Dim, MemoryS
     for (auto& solver : local_)
       solver->install_boundary_kernel(kernel);
   }
-  void set_boundary_contexts(std::vector<FieldBoundaryExecutionContext<Dim>> contexts) override {
-    if (contexts.size() != static_cast<std::size_t>(level_count()))
+  void set_boundary_contexts(
+      std::shared_ptr<const PreparedFieldBoundaryContextSet<Dim>> contexts) override {
+    if (!contexts || contexts->size() != static_cast<std::size_t>(level_count()))
       throw std::invalid_argument(
           "exact AMR field solver requires one boundary context per live level");
     if (composite_) {
@@ -131,7 +132,7 @@ class BuiltinExactAmrFieldSolver final : public ExactAmrFieldSolver<Dim, MemoryS
       return;
     }
     for (std::size_t level = 0; level < local_.size(); ++level)
-      local_[level]->set_boundary_context(contexts[level]);
+      local_[level]->set_boundary_contexts(contexts, level);
   }
   void install_nullspace(
       PreparedFieldNullspace<Dim> prepared,
