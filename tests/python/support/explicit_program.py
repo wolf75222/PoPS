@@ -6,11 +6,8 @@ identity table, installs a real ``ProgramContext`` or ``AmrProgramContext``, and
 test exercise a spatial/runtime seam.
 
 The forward-Euler bridge is the only such seam appropriate for a spatial/runtime test that does not
-need a temporal method.  The retained raw SSPRK fixtures serve legacy native-block parity coverage;
-they must not qualify SSPRK semantics.  Those semantics are proved through ``pops.time.Program`` and
-``pops.lib.time`` tableaus compiled from a symbolic Case.  Projection and coupled-source splitting
-are opt-in by block identity/registration; implicit-solve tests need purpose-built Program
-primitives.
+need a temporal method.  Projection and coupled-source splitting are opt-in by block
+identity/registration; semantic time-method tests use typed symbolic Programs.
 """
 
 from __future__ import annotations
@@ -81,15 +78,15 @@ def _empty_module_metadata_exports() -> str:
     )
 
 
-def _coupling_application(block_count: int, enabled: bool, *, target: str, method: str) -> str:
+def _coupling_application(block_count: int, enabled: bool, *, target: str) -> str:
     if not enabled:
         return ""
     candidates = ["        {%d, &next_%d}" % (block, block) for block in range(block_count)]
     arguments = "dt"
     if target == "amr_system":
         arguments = "pops_program_hash(), %s, %s, dt" % (
-            json.dumps("pops.test.%s.coupled-source.rate/final" % method),
-            json.dumps("pops.test.%s.coupled-source.application/final" % method),
+            json.dumps("pops.test.euler.coupled-source.rate/final"),
+            json.dumps("pops.test.euler.coupled-source.application/final"),
         )
     return "      ctx.apply_coupling_operators(%s, {\n%s\n      });" % (
         arguments,
@@ -97,10 +94,9 @@ def _coupling_application(block_count: int, enabled: bool, *, target: str, metho
     )
 
 
-def _amr_budget_exports(block_count: int, method: str, coupled_sources: bool, identity: str) -> str:
-    rhs = {"euler": 1, "ssprk2": 2, "ssprk3": 3}[method]
-    rate_identity = "pops.test.%s.coupled-source.rate/final" % method
-    application_identity = "pops.test.%s.coupled-source.application/final" % method
+def _amr_budget_exports(block_count: int, coupled_sources: bool, identity: str) -> str:
+    rate_identity = "pops.test.euler.coupled-source.rate/final"
+    application_identity = "pops.test.euler.coupled-source.application/final"
     coupling_identity_characters = (
         len(identity) + len(rate_identity) + len(application_identity) if coupled_sources else 0
     )
@@ -141,7 +137,7 @@ extern "C" std::uint64_t pops_program_checkpoint_temporal_cell_capacity() {
 """ % (
         block_count,
         block_count,
-        rhs,
+        1,
         block_count,
         1 if coupled_sources else 0,
         coupling_identity_characters,
@@ -154,7 +150,6 @@ def _forward_euler_body(
     *,
     apply_couplings: bool,
     target: str,
-    method: str,
 ) -> str:
     declarations = []
     requests = []
@@ -190,215 +185,9 @@ def _forward_euler_body(
             *declarations,
             "      ctx.rhs_group(4000, {\n%s\n      });" % ",\n".join(requests),
             *combinations,
-            _coupling_application(block_count, apply_couplings, target=target, method=method),
+            _coupling_application(block_count, apply_couplings, target=target),
             *projections,
             "      ctx.commit_many({\n%s\n      });" % ",\n".join(commits),
-        )
-    )
-
-
-def _state_declarations(block_count: int) -> list[str]:
-    return [
-        "      pops::MultiFab& state_%d = ctx.state(%d);" % (block, block)
-        for block in range(block_count)
-    ]
-
-
-def _rhs_stage(
-    block_count: int,
-    *,
-    stage: int,
-    numerator: int,
-    denominator: int,
-    state_prefix: str,
-) -> list[str]:
-    declarations = [
-        "      pops::MultiFab& rhs_%d_%d = ctx.rhs_scratch(%d, 0, %s_%d);"
-        % (stage, block, 10000 + stage * block_count + block, state_prefix, block)
-        for block in range(block_count)
-    ]
-    requests = [
-        "        {%d, &%s_%d, &rhs_%d_%d, %d, 0}"
-        % (
-            block,
-            state_prefix,
-            block,
-            stage,
-            block,
-            30000 + stage * block_count + block,
-        )
-        for block in range(block_count)
-    ]
-    return [
-        "      ctx.set_stage_time(%d, %d);" % (numerator, denominator),
-        *declarations,
-        "      ctx.rhs_group(%d, {\n%s\n      });" % (40000 + stage, ",\n".join(requests)),
-    ]
-
-
-def _projection_and_commit(
-    block_count: int,
-    projection_indices: tuple[int, ...],
-    *,
-    apply_couplings: bool,
-    target: str,
-    method: str,
-) -> list[str]:
-    projections = [
-        "      ctx.apply_projection(%d, next_%d);" % (block, block) for block in projection_indices
-    ]
-    commits = ["        {&state_%d, &next_%d}" % (block, block) for block in range(block_count)]
-    return [
-        _coupling_application(block_count, apply_couplings, target=target, method=method),
-        *projections,
-        "      ctx.commit_many({\n%s\n      });" % ",\n".join(commits),
-    ]
-
-
-def _ssprk2_body(
-    block_count: int,
-    projection_indices: tuple[int, ...],
-    *,
-    apply_couplings: bool,
-    target: str,
-    method: str,
-) -> str:
-    stage_one = []
-    result = []
-    for block in range(block_count):
-        stage_one.extend(
-            (
-                "      pops::MultiFab& stage1_%d = "
-                "ctx.scratch_state(%d, 0, state_%d);" % (block, 20000 + block, block),
-                "      ctx.lincomb(stage1_%d, pops::Real(1), state_%d, dt, rhs_0_%d, dt, "
-                "{{0, 1, 1}}, {{1, 1, 1}});" % (block, block, block),
-            )
-        )
-        result.extend(
-            (
-                "      pops::MultiFab& endpoint1_%d = "
-                "ctx.scratch_state(%d, 0, state_%d);" % (block, 21000 + block, block),
-                "      ctx.lincomb(endpoint1_%d, pops::Real(1), stage1_%d, dt, rhs_1_%d, "
-                "dt, {{0, 1, 1}}, {{1, 1, 1}});" % (block, block, block),
-                "      pops::MultiFab& next_%d = ctx.scratch_state(%d, 0, state_%d);"
-                % (block, 22000 + block, block),
-                "      ctx.lincomb(next_%d, pops::Real(1) / pops::Real(2), state_%d, "
-                "pops::Real(1) / pops::Real(2), endpoint1_%d, dt, "
-                "{{0, 1, 2}}, {{0, 1, 2}});" % (block, block, block),
-            )
-        )
-    return "\n".join(
-        (
-            *_state_declarations(block_count),
-            "      (void)pops::consume_solve_outcome(ctx.solve_fields());",
-            *_rhs_stage(
-                block_count,
-                stage=0,
-                numerator=0,
-                denominator=1,
-                state_prefix="state",
-            ),
-            *stage_one,
-            *_rhs_stage(
-                block_count,
-                stage=1,
-                numerator=1,
-                denominator=1,
-                state_prefix="stage1",
-            ),
-            *result,
-            *_projection_and_commit(
-                block_count,
-                projection_indices,
-                apply_couplings=apply_couplings,
-                target=target,
-                method=method,
-            ),
-        )
-    )
-
-
-def _ssprk3_body(
-    block_count: int,
-    projection_indices: tuple[int, ...],
-    *,
-    apply_couplings: bool,
-    target: str,
-    method: str,
-) -> str:
-    first_stage = []
-    second_stage = []
-    result = []
-    for block in range(block_count):
-        first_stage.extend(
-            (
-                "      pops::MultiFab& stage1_%d = "
-                "ctx.scratch_state(%d, 0, state_%d);" % (block, 20000 + block, block),
-                "      ctx.lincomb(stage1_%d, pops::Real(1), state_%d, dt, rhs_0_%d, dt, "
-                "{{0, 1, 1}}, {{1, 1, 1}});" % (block, block, block),
-            )
-        )
-        second_stage.extend(
-            (
-                "      pops::MultiFab& endpoint1_%d = "
-                "ctx.scratch_state(%d, 0, state_%d);" % (block, 21000 + block, block),
-                "      ctx.lincomb(endpoint1_%d, pops::Real(1), stage1_%d, dt, rhs_1_%d, "
-                "dt, {{0, 1, 1}}, {{1, 1, 1}});" % (block, block, block),
-                "      pops::MultiFab& stage2_%d = "
-                "ctx.scratch_state(%d, 0, state_%d);" % (block, 22000 + block, block),
-                "      ctx.lincomb(stage2_%d, pops::Real(3) / pops::Real(4), state_%d, "
-                "pops::Real(1) / pops::Real(4), endpoint1_%d, dt, "
-                "{{0, 3, 4}}, {{0, 1, 4}});" % (block, block, block),
-            )
-        )
-        result.extend(
-            (
-                "      pops::MultiFab& endpoint2_%d = "
-                "ctx.scratch_state(%d, 0, state_%d);" % (block, 23000 + block, block),
-                "      ctx.lincomb(endpoint2_%d, pops::Real(1), stage2_%d, dt, rhs_2_%d, "
-                "dt, {{0, 1, 1}}, {{1, 1, 1}});" % (block, block, block),
-                "      pops::MultiFab& next_%d = ctx.scratch_state(%d, 0, state_%d);"
-                % (block, 24000 + block, block),
-                "      ctx.lincomb(next_%d, pops::Real(1) / pops::Real(3), state_%d, "
-                "pops::Real(2) / pops::Real(3), endpoint2_%d, dt, "
-                "{{0, 1, 3}}, {{0, 2, 3}});" % (block, block, block),
-            )
-        )
-    return "\n".join(
-        (
-            *_state_declarations(block_count),
-            "      (void)pops::consume_solve_outcome(ctx.solve_fields());",
-            *_rhs_stage(
-                block_count,
-                stage=0,
-                numerator=0,
-                denominator=1,
-                state_prefix="state",
-            ),
-            *first_stage,
-            *_rhs_stage(
-                block_count,
-                stage=1,
-                numerator=1,
-                denominator=1,
-                state_prefix="stage1",
-            ),
-            *second_stage,
-            *_rhs_stage(
-                block_count,
-                stage=2,
-                numerator=1,
-                denominator=2,
-                state_prefix="stage2",
-            ),
-            *result,
-            *_projection_and_commit(
-                block_count,
-                projection_indices,
-                apply_couplings=apply_couplings,
-                target=target,
-                method=method,
-            ),
         )
     )
 
@@ -423,34 +212,13 @@ def _source(
     projection_indices: tuple[int, ...],
     coupled_sources: bool,
     identity: str,
-    method: str,
 ) -> str:
-    if method == "euler":
-        body = _forward_euler_body(
-            len(block_names),
-            projection_indices,
-            apply_couplings=coupled_sources,
-            target=target,
-            method=method,
-        )
-    elif method == "ssprk2":
-        body = _ssprk2_body(
-            len(block_names),
-            projection_indices,
-            apply_couplings=coupled_sources,
-            target=target,
-            method=method,
-        )
-    elif method == "ssprk3":
-        body = _ssprk3_body(
-            len(block_names),
-            projection_indices,
-            apply_couplings=coupled_sources,
-            target=target,
-            method=method,
-        )
-    else:  # pragma: no cover - private callers validate the method
-        raise ValueError("unsupported explicit test Program %r" % method)
+    body = _forward_euler_body(
+        len(block_names),
+        projection_indices,
+        apply_couplings=coupled_sources,
+        target=target,
+    )
     if target == "amr_system":
         body = _make_test_field_solve_explicitly_coarse(body)
     common = """\
@@ -483,11 +251,11 @@ extern "C" pops::Real %s(%s*, pops::Real) {
 }
 """ % (
         _emit_route_manifest("pops_program_route_manifest"),
-        method,
+        "euler",
         identity,
         _block_identity_exports(block_names),
         _empty_module_metadata_exports(),
-        _amr_budget_exports(len(block_names), method, coupled_sources, identity)
+        _amr_budget_exports(len(block_names), coupled_sources, identity)
         if target == "amr_system"
         else "",
         "pops_program_dt_bound_amr" if target == "amr_system" else "pops_program_dt_bound",
@@ -585,15 +353,12 @@ def _compile_program(source: str) -> str:
     return str(destination)
 
 
-def _install_explicit_program(
+def _install_forward_euler_bridge(
     runtime: Any,
     *,
-    method: str,
     project_blocks: tuple[str, ...] = (),
     coupled_sources: bool = False,
 ) -> str:
-    if method not in {"euler", "ssprk2", "ssprk3"}:
-        raise ValueError("method must be 'euler', 'ssprk2', or 'ssprk3'")
     if not isinstance(runtime, (System, AmrSystem)):
         raise TypeError("runtime must be a pops.runtime System or AmrSystem")
     block_names = tuple(runtime.block_names())
@@ -609,7 +374,7 @@ def _install_explicit_program(
     seed = json.dumps(
         {
             "schema": "pops-test-explicit-program-v2",
-            "method": method,
+            "method": "euler",
             "target": target,
             "blocks": block_names,
             "project": projection_indices,
@@ -626,7 +391,6 @@ def _install_explicit_program(
             projection_indices=projection_indices,
             coupled_sources=coupled_sources,
             identity=identity,
-            method=method,
         )
     )
     runtime.install_program(library)
@@ -644,39 +408,8 @@ def install_forward_euler_program(
     ``project_blocks`` and ``coupled_sources`` are explicit because projection and source splitting
     are Program nodes, not hidden block-time policies.
     """
-    return _install_explicit_program(
+    return _install_forward_euler_bridge(
         runtime,
-        method="euler",
-        project_blocks=project_blocks,
-        coupled_sources=coupled_sources,
-    )
-
-
-def install_ssprk2_program(
-    runtime: Any,
-    *,
-    project_blocks: tuple[str, ...] = (),
-    coupled_sources: bool = False,
-) -> str:
-    """Install an SSPRK2/Heun Program, optionally followed by coupled-source splitting."""
-    return _install_explicit_program(
-        runtime,
-        method="ssprk2",
-        project_blocks=project_blocks,
-        coupled_sources=coupled_sources,
-    )
-
-
-def install_ssprk3_program(
-    runtime: Any,
-    *,
-    project_blocks: tuple[str, ...] = (),
-    coupled_sources: bool = False,
-) -> str:
-    """Install an SSPRK3 Program, optionally followed by coupled-source splitting."""
-    return _install_explicit_program(
-        runtime,
-        method="ssprk3",
         project_blocks=project_blocks,
         coupled_sources=coupled_sources,
     )
@@ -684,6 +417,4 @@ def install_ssprk3_program(
 
 __all__ = [
     "install_forward_euler_program",
-    "install_ssprk2_program",
-    "install_ssprk3_program",
 ]

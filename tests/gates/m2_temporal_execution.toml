@@ -238,7 +238,7 @@ requirement = "program_only_temporal_routes"
 polarity = "positive"
 kind = "pytest"
 target = "architecture"
-nodeid = "tests/python/architecture/test_program_only_temporal_facades.py::test_raw_runtime_temporal_fixtures_are_not_program_authorship_evidence"
+nodeid = "tests/python/architecture/test_program_only_temporal_facades.py::test_ssprk_semantics_have_only_typed_python_program_authority"
 
 [[check]]
 issue = "ADC-666"

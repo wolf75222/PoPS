@@ -239,5 +239,5 @@ def test_m2_restart_hierarchy_and_program_only_routes_use_real_exact_proofs():
         "tests/python/architecture/test_program_only_temporal_facades.py"
         "::test_nonlinear_amr_semantics_use_the_compiled_program_not_a_blocker",
         "tests/python/architecture/test_program_only_temporal_facades.py"
-        "::test_raw_runtime_temporal_fixtures_are_not_program_authorship_evidence",
+        "::test_ssprk_semantics_have_only_typed_python_program_authority",
     }
