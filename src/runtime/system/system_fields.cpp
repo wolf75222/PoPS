@@ -891,7 +891,7 @@ void System<Dim>::accept_field_publication_candidate() noexcept {
       if (!p_->active_field_provider_candidate_ || !p_->provider_carrier_)
         std::terminate();
       p_->active_field_auxiliary_publication_->accept();
-      p_->provider_carrier_.swap(p_->active_field_provider_candidate_);
+      std::swap(*p_->provider_carrier_, *p_->active_field_provider_candidate_);
       for (const std::string& identity : p_->active_field_stale_auxiliary_providers_)
         if (std::find(p_->dirty_auxiliary_providers_.begin(), p_->dirty_auxiliary_providers_.end(),
                       identity) == p_->dirty_auxiliary_providers_.end())

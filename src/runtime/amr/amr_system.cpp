@@ -27,8 +27,10 @@
 #include <pops/runtime/analytic/collective_preflight.hpp>
 #include <pops/runtime/analytic/initial_materialization.hpp>
 #include <pops/runtime/builders/compiled/generated_amr_system_block.hpp>
+#include <pops/runtime/builders/compiled/native_loader.hpp>
 #include <pops/runtime/config/route_ids.hpp>
 #include <pops/runtime/dynamic/abi_key.hpp>
+#include <pops/runtime/dynamic/authenticated_native_file.hpp>
 #include <pops/runtime/dynamic/dynlib.hpp>
 #include <pops/runtime/named_field_output.hpp>
 #include <pops/runtime/named_field_publication.hpp>
@@ -112,6 +114,30 @@ inline void require_amr_assembling(const runtime::system::SystemLifecycle& lifec
                              ": composition is frozen after bind");
 }
 
+template <class Function>
+class NoexceptScopeExit {
+ public:
+  explicit NoexceptScopeExit(Function function) noexcept(
+      std::is_nothrow_move_constructible_v<Function>)
+      : function_(std::move(function)) {}
+  NoexceptScopeExit(const NoexceptScopeExit&) = delete;
+  NoexceptScopeExit& operator=(const NoexceptScopeExit&) = delete;
+  NoexceptScopeExit(NoexceptScopeExit&&) = delete;
+  NoexceptScopeExit& operator=(NoexceptScopeExit&&) = delete;
+  ~NoexceptScopeExit() noexcept {
+    if (active_)
+      function_();
+  }
+  void dismiss() noexcept { active_ = false; }
+
+ private:
+  Function function_;
+  bool active_ = true;
+};
+
+template <class Function>
+NoexceptScopeExit(Function) -> NoexceptScopeExit<Function>;
+
 struct NativeAmrPackageMetadata {
   std::string route_manifest;
   std::string parameter_names;
@@ -141,15 +167,22 @@ NativeAmrPackageMetadata inspect_native_amr_package(pops::dynlib::handle handle,
     throw std::runtime_error(std::string(context) +
                              ": strict package metadata is missing; rebuild the artifact");
 
-  const char* route_manifest = manifest();
-  const char* parameter_names = names();
-  if (route_manifest == nullptr || parameter_names == nullptr)
-    throw std::runtime_error(std::string(context) + ": package metadata returned null");
+  const char* raw_route_manifest = pops::dynlib::invoke_with_host_exception(
+      [manifest] { return manifest(); }, "pops_compiled_route_manifest");
+  if (raw_route_manifest == nullptr)
+    throw std::runtime_error(std::string(context) + ": package route manifest returned null");
+  const std::string route_manifest(raw_route_manifest);
+  const char* raw_parameter_names = pops::dynlib::invoke_with_host_exception(
+      [names] { return names(); }, "pops_compiled_param_names");
+  if (raw_parameter_names == nullptr)
+    throw std::runtime_error(std::string(context) + ": package parameter names returned null");
+  const std::string parameter_names(raw_parameter_names);
   pops::verify_route_manifest(route_manifest, context);
 
-  const int parameter_count = count();
+  const int parameter_count = pops::dynlib::invoke_with_host_exception([count] { return count(); },
+                                                                       "pops_compiled_nparams");
   if (parameter_count < 0 || parameter_count > kMaxRuntimeParams ||
-      native_amr_parameter_name_count(parameter_names) != parameter_count ||
+      native_amr_parameter_name_count(parameter_names.c_str()) != parameter_count ||
       parameters.size() != static_cast<std::size_t>(parameter_count))
     throw std::runtime_error(std::string(context) +
                              ": bound parameter vector disagrees with the exact package metadata");
@@ -547,9 +580,20 @@ runtime::amr::PreparedTaggingExecutionBudget exact_tagging_budget(
 }
 
 template <int Dim>
-std::vector<char> gather_tag_mask(const amr::tagging::TagMask<Dim>& mask, const Box<Dim>& domain,
-                                  const CommunicatorView& communicator) {
-  std::vector<char> global(checked_cells(domain), char{0});
+struct PreparedTagMaskGather {
+  std::vector<char> global;
+  std::string exact_contract;
+};
+
+template <int Dim>
+PreparedTagMaskGather<Dim> prepare_tag_mask_gather(const amr::tagging::TagMask<Dim>& mask,
+                                                   const Box<Dim>& domain,
+                                                   std::string_view semantic_identity,
+                                                   const CommunicatorView& communicator) {
+  if (semantic_identity.empty())
+    throw std::invalid_argument("AMR tag-mask gather requires one semantic identity");
+  PreparedTagMaskGather<Dim> prepared;
+  prepared.global.assign(checked_cells(domain), char{0});
   const bool contributes =
       mask.level_identity().distribution_mode != mesh::DistributionMode::replicated ||
       communicator.rank() == 0;
@@ -557,9 +601,62 @@ std::vector<char> gather_tag_mask(const amr::tagging::TagMask<Dim>& mask, const 
     for (const auto& patch : mask.patches())
       for (std::size_t ordinal = 0; ordinal < patch.tags.size(); ++ordinal)
         if (patch.tags[ordinal] != 0)
-          global[offset(unflatten(patch.box, ordinal), domain)] = char{1};
-  all_reduce_max_inplace(global.data(), global.size(), communicator);
-  return global;
+          prepared.global[offset(unflatten(patch.box, ordinal), domain)] = char{1};
+  const auto& level = mask.level_identity();
+  ExactContractBuilder exact;
+  exact.text("pops.amr-tag-mask-gather")
+      .scalar(std::uint32_t{1})
+      .scalar(std::int32_t{Dim})
+      .text(semantic_identity)
+      .scalar(level.level)
+      .scalar(static_cast<std::uint8_t>(level.distribution_mode))
+      .scalar(static_cast<std::uint64_t>(prepared.global.size()));
+  for (int axis = 0; axis < Dim; ++axis)
+    exact.scalar(domain.lo[axis])
+        .scalar(domain.hi[axis])
+        .scalar(level.domain.lo[axis])
+        .scalar(level.domain.hi[axis])
+        .scalar(level.ratio_from_parent[axis])
+        .scalar(level.rank_space.origin()[axis])
+        .scalar(level.rank_space.extent()[axis]);
+  exact
+      .sequence(level.patches,
+                [](ExactContractBuilder& item, const Box<Dim>& patch) {
+                  for (int axis = 0; axis < Dim; ++axis)
+                    item.scalar(patch.lo[axis]).scalar(patch.hi[axis]);
+                })
+      .sequence(level.owners,
+                [](ExactContractBuilder& item, const Index<Dim>& owner) {
+                  for (int axis = 0; axis < Dim; ++axis)
+                    item.scalar(owner[axis]);
+                })
+      .scalar(static_cast<std::uint64_t>(level.validation_budget.boxes))
+      .scalar(static_cast<std::uint64_t>(level.validation_budget.overlap_pairs));
+  prepared.exact_contract = std::move(exact).release();
+  return prepared;
+}
+
+template <int Dim>
+std::vector<char> gather_tag_mask(const amr::tagging::TagMask<Dim>& mask, const Box<Dim>& domain,
+                                  std::string_view semantic_identity,
+                                  const CommunicatorView& communicator) {
+  std::optional<PreparedTagMaskGather<Dim>> prepared;
+  std::exception_ptr local_error;
+  try {
+    prepared.emplace(prepare_tag_mask_gather(mask, domain, semantic_identity, communicator));
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_error ? 1L : 0L, communicator) != 0) {
+    if (communicator.size() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("AMR tag-mask gather preparation failed collectively");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("amr-tag-mask-gather"), prepared->exact_contract}}, communicator))
+    throw std::invalid_argument("AMR tag-mask gather contract differs between prepared-lane ranks");
+  all_reduce_max_inplace(prepared->global.data(), prepared->global.size(), communicator);
+  return std::move(prepared->global);
 }
 
 template <int Dim>
@@ -1037,7 +1134,10 @@ struct PreparedFieldGather {
 
 template <int Dim>
 PreparedFieldGather<Dim> prepare_field_gather(const MultiFab<Dim>& field, const Box<Dim>& domain,
-                                              int components, const ExecutionLane* lane) {
+                                              int components, std::string_view semantic_identity,
+                                              const ExecutionLane& lane) {
+  if (semantic_identity.empty())
+    throw std::invalid_argument("AmrSystem gather requires one exact semantic identity");
   if (components < 1 || components > field.ncomp())
     throw std::invalid_argument("AmrSystem gather component count is invalid");
   const std::size_t domain_cells = checked_cells(domain);
@@ -1045,7 +1145,7 @@ PreparedFieldGather<Dim> prepare_field_gather(const MultiFab<Dim>& field, const 
   prepared.values.assign(checked_size_product(static_cast<std::size_t>(components), domain_cells,
                                               "AmrSystem gather buffer exceeds size_t"),
                          0.0);
-  const int rank = lane == nullptr ? my_rank() : lane->rank();
+  const int rank = lane.rank();
   const bool contributes = !field.distribution().replicated() || rank == 0;
   for (std::size_t local = 0; contributes && local < field.local_size(); ++local) {
     const Fab<Dim>& fab = field.fab(local);
@@ -1068,6 +1168,7 @@ PreparedFieldGather<Dim> prepare_field_gather(const MultiFab<Dim>& field, const 
   exact.text("pops.amr-field-gather")
       .scalar(std::uint32_t{1})
       .scalar(std::int32_t{Dim})
+      .text(semantic_identity)
       .scalar(components)
       .scalar(field.ncomp())
       .scalar(field.distribution().replicated())
@@ -1091,36 +1192,31 @@ PreparedFieldGather<Dim> prepare_field_gather(const MultiFab<Dim>& field, const 
 }
 
 template <int Dim>
-void execute_field_gather(PreparedFieldGather<Dim>& prepared, const ExecutionLane* lane) {
-  if (lane == nullptr)
-    all_reduce_sum_inplace(prepared.values.data(), prepared.values.size());
-  else
-    all_reduce_sum_inplace(prepared.values.data(), prepared.values.size(), *lane);
+void execute_field_gather(PreparedFieldGather<Dim>& prepared, const ExecutionLane& lane) {
+  all_reduce_sum_inplace(prepared.values.data(), prepared.values.size(), lane);
 }
 
 template <int Dim>
 std::vector<double> gather_field(const MultiFab<Dim>& field, const Box<Dim>& domain, int components,
-                                 const ExecutionLane* lane = nullptr) {
+                                 std::string_view semantic_identity, const ExecutionLane& lane) {
   std::unique_ptr<PreparedFieldGather<Dim>> prepared;
   std::exception_ptr local_error;
   try {
     prepared = std::make_unique<PreparedFieldGather<Dim>>(
-        prepare_field_gather(field, domain, components, lane));
+        prepare_field_gather(field, domain, components, semantic_identity, lane));
   } catch (...) {
     local_error = std::current_exception();
   }
-  const long failures =
-      lane ? all_reduce_sum(local_error ? 1L : 0L, *lane) : all_reduce_sum(local_error ? 1L : 0L);
+  const long failures = all_reduce_sum(local_error ? 1L : 0L, lane);
   if (failures != 0) {
-    if ((lane ? lane->size() : n_ranks()) == 1 && local_error)
+    if (lane.size() == 1 && local_error)
       std::rethrow_exception(local_error);
     throw std::runtime_error("AMR field gather preparation failed collectively on " +
                              std::to_string(failures) + " rank(s)");
   }
   const std::vector<std::pair<std::string_view, std::string_view>> contract = {
       {std::string_view("amr-field-gather"), std::string_view(prepared->exact_contract)}};
-  const bool agrees = lane ? all_ranks_agree_exact_ordered_byte_pairs(contract, *lane)
-                           : all_ranks_agree_exact_ordered_byte_pairs(contract);
+  const bool agrees = all_ranks_agree_exact_ordered_byte_pairs(contract, lane);
   if (!agrees)
     throw std::runtime_error("AMR field gather contract differs between communicator ranks");
   execute_field_gather(*prepared, lane);
@@ -2212,6 +2308,24 @@ std::string exact_hyperbolic_boundary_contract(const PreparedHyperbolicBoundary<
   return std::move(contract).release();
 }
 
+void append_execution_context_contract(ExactContractBuilder& contract,
+                                       const component::PreparedExecutionContextV1& execution) {
+  const PopsExecutionContextV1 view = execution.view();
+  contract.text(execution.identity())
+      .scalar(view.context_version)
+      .scalar(view.memory_space)
+      .text(view.backend_identity)
+      .text(view.device_identity)
+      .scalar(view.scalar_type)
+      .scalar(view.storage_precision)
+      .scalar(view.compute_precision)
+      .scalar(view.accumulation_precision)
+      .scalar(view.reduction_precision)
+      .text(view.stream_identity)
+      .text(view.communicator_identity)
+      .text(view.communicator_datatype_identity);
+}
+
 }  // namespace
 
 template <int Dim>
@@ -2294,6 +2408,9 @@ struct AmrSystem<Dim>::Impl {
   };
 
   struct PreparedFieldRhs {
+    std::string provider_identity;
+    std::string block_identity;
+    std::string field_identity;
     std::function<void(const field_type&, field_type&)> evaluate;
     Real coefficient = Real(1);
   };
@@ -2764,6 +2881,8 @@ struct AmrSystem<Dim>::Impl {
     std::string output_owner_identity;
     std::string output_block;
     std::string output_key;
+    std::vector<runtime::system::AuxiliaryComponentKey> expected_output_keys;
+    int expected_gradient_sign = 1;
     std::vector<FieldProviderBinding> providers;
     std::string solver_route;
     AmrFieldHierarchyPolicyAuthority hierarchy_policy;
@@ -2841,6 +2960,40 @@ struct AmrSystem<Dim>::Impl {
       boundary_context_attempt_active = false;
     }
   };
+
+  struct NativeFieldPlanImage {
+    std::optional<runtime::field::NamedFieldOutput<Dim>> output;
+    std::vector<runtime::system::AuxiliaryComponentKey> output_keys;
+    std::vector<std::vector<PreparedFieldRhs>> rhs_by_block;
+    bool use_prepared_level_rhs = false;
+  };
+
+  using NativeFieldPlanRegistryImage = std::map<std::string, NativeFieldPlanImage>;
+
+  NativeFieldPlanRegistryImage snapshot_native_field_plan_image() const {
+    NativeFieldPlanRegistryImage image;
+    for (const auto& [slot, plan] : field_plans)
+      image.emplace(slot, NativeFieldPlanImage{plan.output, plan.output_keys, plan.rhs_by_block,
+                                               plan.use_prepared_level_rhs});
+    return image;
+  }
+
+  void swap_native_field_plan_image(NativeFieldPlanRegistryImage& image) noexcept {
+    static_assert(std::is_nothrow_swappable_v<decltype(FieldPlan::output)>);
+    static_assert(std::is_nothrow_swappable_v<decltype(FieldPlan::output_keys)>);
+    static_assert(std::is_nothrow_swappable_v<decltype(FieldPlan::rhs_by_block)>);
+    if (image.size() != field_plans.size())
+      std::terminate();
+    for (auto& [slot, plan] : field_plans) {
+      const auto found = image.find(slot);
+      if (found == image.end())
+        std::terminate();
+      plan.output.swap(found->second.output);
+      plan.output_keys.swap(found->second.output_keys);
+      plan.rhs_by_block.swap(found->second.rhs_by_block);
+      std::swap(plan.use_prepared_level_rhs, found->second.use_prepared_level_rhs);
+    }
+  }
 
   struct DetachedFieldBoundaryContexts {
     std::shared_ptr<std::vector<PreparedBoundaryContext>> storage;
@@ -2985,7 +3138,7 @@ struct AmrSystem<Dim>::Impl {
   // Declared before every package-owned closure carrier so it is destroyed last.  The generated
   // DSO remains loaded until all prepared block, auxiliary and elliptic closures are gone.
   std::vector<std::shared_ptr<void>> external_package_lifetimes;
-  std::vector<std::shared_ptr<pops::dynlib::handle>> native_package_lifetimes;
+  std::vector<std::shared_ptr<void>> native_package_lifetimes;
   AmrSystemConfig<Dim> cfg;
   std::shared_ptr<const PreparedLoadBalanceAuthority<Dim>> load_balance;
   std::vector<BlockSpec> blocks;
@@ -3007,6 +3160,7 @@ struct AmrSystem<Dim>::Impl {
   };
   std::map<std::string, PreparedBoundaryComponents> prepared_boundary_components;
   std::shared_ptr<const component::PreparedExecutionContextV1> boundary_execution_context;
+  std::shared_ptr<ExecutionLane> package_assembly_lane;
   std::shared_ptr<exact_field_registry_type> field_solver_providers;
   std::shared_ptr<FieldNullspaceProviderRegistry<Dim>> field_nullspace_providers;
   std::shared_ptr<hierarchy_tensor_registry_type> hierarchy_tensor_solver_providers;
@@ -3052,6 +3206,14 @@ struct AmrSystem<Dim>::Impl {
   std::vector<std::vector<std::string>> last_topology_rematerialization_witness;
   AmrSystem<Dim>* facade = nullptr;
   bool auxiliary_registry_consensus_verified = false;
+  enum class NativePackagePhase {
+    idle,
+    registrar_local,
+    installer_local,
+    external_installer_local,
+  };
+  NativePackagePhase native_package_phase = NativePackagePhase::idle;
+  std::string native_package_install_contract;
   std::vector<GlobalDtBound> dt_bounds;
   double accepted_time = 0.0;
   int macro_step = 0;
@@ -3353,8 +3515,9 @@ struct AmrSystem<Dim>::Impl {
         publish_prepared_restore(owner, std::move(prepared));
         return;
       }
-      const ExecutionLane& restore_lane =
-          owner.require_prepared_engine_lane("AMR accepted-state rollback");
+      // The graph lane may have been replaced by the failed regrid. The carrier lane survives the
+      // complete accepted-state restore and is therefore the only stable rollback authority.
+      const ExecutionLane& restore_lane = owner.multiblock_hierarchy->lane();
       const CommunicatorView communicator = restore_lane.communicator();
       const auto collectively_rethrow = [&](const std::exception_ptr& local_error,
                                             std::string_view phase) {
@@ -3387,6 +3550,10 @@ struct AmrSystem<Dim>::Impl {
 
       publish_prepared_restore(owner, std::move(*prepared));
 
+      // publish_prepared_restore deliberately releases the stale graph before restoring layout
+      // images. Recreate it on every rollback, including the zero-field case, so a failed bootstrap
+      // cannot leave a live engine/carrier with no prepared execution graph.
+      owner.refresh_prepared_hierarchy();
       if (!field_potentials.empty())
         owner.restore_field_potential_image_atomically(field_potentials);
     }
@@ -3395,8 +3562,10 @@ struct AmrSystem<Dim>::Impl {
   std::unique_ptr<AcceptedSnapshot> prepare_accepted_snapshot_collectively(
       std::string_view phase) const {
     const ExecutionLane* lane = nullptr;
-    if (multiblock_hierarchy)
-      lane = &require_prepared_engine_lane(phase);
+    if (multiblock_hierarchy) {
+      (void)require_prepared_engine_lane(phase);
+      lane = &multiblock_hierarchy->lane();
+    }
     std::unique_ptr<AcceptedSnapshot> candidate;
     std::exception_ptr local_error;
     try {
@@ -3463,32 +3632,30 @@ struct AmrSystem<Dim>::Impl {
     return multiblock_hierarchy->state(block, level);
   }
 
-  ExecutionCommunicator boundary_parent_communicator() const {
-    if (!boundary_execution_context)
-      throw std::logic_error("AMR boundary operation has no RuntimeInstance communicator");
-    const PopsExecutionContextV1 execution = boundary_execution_context->view();
-#ifdef POPS_HAS_MPI
-    return ExecutionCommunicator::borrowed(
-        execution.communicator_identity,
-        MPI_Comm_f2c(static_cast<MPI_Fint>(execution.communicator_f_handle)));
-#else
-    if (execution.communicator_f_handle != 0 || execution.communicator_datatype_f_handle != 0 ||
-        std::string_view(execution.communicator_identity) != "serial")
-      throw std::invalid_argument("serial AMR boundary operation requires serial authority");
-    return ExecutionCommunicator::world();
-#endif
+  const ExecutionLane& require_package_assembly_lane() const {
+    require_no_native_package_callback("RuntimeInstance package-lane access");
+    if (!package_assembly_lane || !package_assembly_lane->active())
+      throw std::logic_error("AMR native package requires a pre-staged RuntimeInstance lane");
+    return *package_assembly_lane;
+  }
+
+  void require_no_native_package_callback(std::string_view operation) const {
+    if (native_package_phase != NativePackagePhase::idle)
+      throw std::logic_error("AMR native package callback cannot invoke '" +
+                             std::string(operation) + "'");
   }
 
   const ExecutionLane& require_prepared_engine_lane(std::string_view operation) const {
-    // A restart/read path is not an engine materialization authority. Establish readiness on the
-    // RuntimeInstance communicator first, then authenticate every live topology property on the
-    // already duplicated PreparedHierarchy lane. This never falls back to an implicit WORLD lane.
-    const ExecutionCommunicator parent = boundary_parent_communicator();
-    const CommunicatorView parent_communicator = parent.communicator();
+    if (native_package_phase != NativePackagePhase::idle)
+      throw std::logic_error(
+          "AMR native package callbacks cannot enter a prepared runtime collective phase");
+    // The duplicated package lane is the durable RuntimeInstance authority. The embedding-owned
+    // parent was borrowed only while this lane was created and is never retained or reused.
+    const ExecutionLane& package_lane = require_package_assembly_lane();
     const long ready =
         engine && multiblock_hierarchy && prepared_hierarchy && prepared_hierarchy->lane ? 1L : 0L;
-    const long minimum_ready = all_reduce_min(ready, parent_communicator);
-    const long maximum_ready = all_reduce_max(ready, parent_communicator);
+    const long minimum_ready = all_reduce_min(ready, package_lane);
+    const long maximum_ready = all_reduce_max(ready, package_lane);
     if (minimum_ready != maximum_ready)
       throw std::runtime_error(
           "AMR prepared hierarchy readiness differs between RuntimeInstance "
@@ -3543,20 +3710,397 @@ struct AmrSystem<Dim>::Impl {
     return std::move(packages).release();
   }
 
+  std::string boundary_assembly_contract() const {
+    ExactContractBuilder contract;
+    contract.text("pops.amr-system.boundary-assembly")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .presence(package_assembly_lane != nullptr)
+        .presence(boundary_execution_context != nullptr);
+    if (package_assembly_lane)
+      contract.text(package_assembly_lane->identity())
+          .scalar(std::int32_t{package_assembly_lane->size()});
+    if (boundary_execution_context)
+      append_execution_context_contract(contract, *boundary_execution_context);
+
+    contract.scalar(static_cast<std::uint64_t>(boundary_registry.state_routes().size()));
+    for (const auto& [block, route] : boundary_registry.state_routes())
+      contract.text(block).text(route);
+    contract.scalar(static_cast<std::uint64_t>(boundary_registry.field_storage_routes().size()));
+    for (const auto& [field, slot] : boundary_registry.field_storage_routes())
+      contract.text(field).text(slot);
+    contract.scalar(static_cast<std::uint64_t>(boundary_registry.boundaries().size()));
+    for (const auto& [block, boundary] : boundary_registry.boundaries())
+      contract.text(block)
+          .text(boundary.identity)
+          .scalar(std::int32_t{boundary.required_depth})
+          .text(boundary.state_identity)
+          .presence(boundary.authority != nullptr)
+          .bytes(boundary.authority ? exact_hyperbolic_boundary_contract(*boundary.authority)
+                                    : std::string{});
+
+    contract.scalar(static_cast<std::uint64_t>(prepared_boundary_components.size()));
+    for (const auto& [block, components] : prepared_boundary_components) {
+      contract.text(block).scalar(static_cast<std::uint64_t>(components.ghosts.size()));
+      for (const auto& provider : components.ghosts) {
+        if (!provider)
+          throw std::logic_error("AMR GhostBoundary provider registry contains a null component");
+        append_prepared_boundary_component_contract(contract, provider->spec());
+      }
+      contract.scalar(static_cast<std::uint64_t>(components.fluxes.size()));
+      for (const auto& provider : components.fluxes) {
+        if (!provider)
+          throw std::logic_error("AMR BoundaryFlux provider registry contains a null component");
+        append_prepared_boundary_component_contract(contract, provider->spec());
+      }
+      contract.scalar(static_cast<std::uint64_t>(components.fields.size()));
+      for (const auto& [key, pair] : components.fields) {
+        if (!pair.residual || !pair.jvp)
+          throw std::logic_error("AMR FieldBoundary provider registry contains an incomplete pair");
+        contract.text(key);
+        append_prepared_boundary_component_contract(contract, pair.residual->spec());
+        append_prepared_boundary_component_contract(contract, pair.jvp->spec());
+      }
+    }
+    return std::move(contract).release();
+  }
+
+  void append_tagging_authority_contract(ExactContractBuilder& contract) const {
+    contract.presence(tagging_spec.has_value());
+    if (tagging_spec) {
+      const TaggingSpec& tagging = *tagging_spec;
+      contract
+          .sequence(tagging.leaf_subject_kinds,
+                    [](ExactContractBuilder& item, const std::string& value) { item.text(value); })
+          .sequence(tagging.leaf_subject_identities,
+                    [](ExactContractBuilder& item, const std::string& value) { item.text(value); })
+          .sequence(tagging.leaf_blocks,
+                    [](ExactContractBuilder& item, const std::string& value) { item.text(value); })
+          .sequence(tagging.leaf_variables,
+                    [](ExactContractBuilder& item, const std::string& value) { item.text(value); })
+          .sequence(tagging.leaf_field_component_indices)
+          .sequence(tagging.leaf_ops)
+          .sequence(tagging.leaf_thresholds)
+          .sequence(tagging.leaf_stencil_indices)
+          .scalar(static_cast<std::uint64_t>(tagging.stencils.size()));
+      for (const auto& stencil : tagging.stencils) {
+        contract.text(stencil.identity)
+            .text(stencil.route)
+            .text(stencil.norm)
+            .text(stencil.scale)
+            .text(stencil.boundary_mode);
+        for (int axis = 0; axis < Dim; ++axis) {
+          const auto& row = stencil.axes[static_cast<std::size_t>(axis)];
+          contract.scalar(row.axis)
+              .scalar(row.derivative_order)
+              .scalar(row.formal_order)
+              .scalar(static_cast<std::uint64_t>(row.ghost_lower))
+              .scalar(static_cast<std::uint64_t>(row.ghost_upper))
+              .sequence(row.offsets)
+              .sequence(row.coefficients);
+        }
+      }
+      contract.sequence(tagging.refine_ops)
+          .sequence(tagging.refine_args)
+          .sequence(tagging.coarsen_ops)
+          .sequence(tagging.coarsen_args)
+          .scalar(std::int32_t{tagging.min_cycles})
+          .scalar(std::int32_t{tagging.equality_policy})
+          .scalar(std::int32_t{tagging.conflict_policy})
+          .text(tagging.clock_identity)
+          .text(tagging.provider_identity);
+    }
+
+    contract.presence(tagger_component.has_value());
+    if (!tagger_component)
+      return;
+    if (!tagger_component->component || !tagger_component->spec.execution)
+      throw std::logic_error("AMR Tagger component authority is incomplete");
+    const auto& spec = tagger_component->spec;
+    const PopsComponentApiV1& api = tagger_component->component->api();
+    const auto require_api_text = [](const char* value, std::string_view field) {
+      if (value == nullptr || *value == '\0')
+        throw std::logic_error("AMR Tagger component has no " + std::string(field));
+      return std::string_view(value);
+    };
+    contract.text(spec.component_id)
+        .text(spec.manifest_identity)
+        .text(spec.provider_identity)
+        .text(spec.tagging_graph_identity)
+        .text(spec.layout_identity)
+        .text(spec.clock_identity)
+        .scalar(spec.interface_version)
+        .scalar(spec.execution_mode)
+        .text(spec.parameters_json)
+        .text(spec.target_json);
+    append_execution_context_contract(contract, *spec.execution);
+    contract.scalar(api.protocol_abi)
+        .text(require_api_text(api.abi_key, "ABI identity"))
+        .text(require_api_text(api.catalog_sha256, "catalog digest"))
+        .text(require_api_text(api.component_id, "component identity"))
+        .text(require_api_text(api.semantic_identity, "semantic identity"))
+        .text(require_api_text(api.manifest_identity, "manifest identity"))
+        .scalar(static_cast<std::uint64_t>(api.interface_count));
+    if (api.interface_count != 0 && api.interfaces == nullptr)
+      throw std::logic_error("AMR Tagger component interface registry is absent");
+    for (std::size_t index = 0; index < api.interface_count; ++index)
+      contract.scalar(api.interfaces[index].interface_id)
+          .scalar(api.interfaces[index].interface_version)
+          .scalar(api.interfaces[index].table_size);
+  }
+
+  void append_bootstrap_transfer_contract(ExactContractBuilder& contract) const {
+    contract.scalar(static_cast<std::uint64_t>(bootstrap_sources.size()));
+    for (const auto& [subject, source] : bootstrap_sources)
+      contract.text(subject)
+          .text(source.runtime_block)
+          .text(source.source_route)
+          .scalar(source.kind);
+    contract.scalar(static_cast<std::uint64_t>(bootstrap_transfer_routes.size()));
+    for (const auto& [identity, route] : bootstrap_transfer_routes) {
+      contract.text(identity)
+          .text(route.identity)
+          .sequence(route.subjects,
+                    [](ExactContractBuilder& item, const std::string& value) { item.text(value); })
+          .text(route.provider_identity)
+          .text(route.space)
+          .text(route.centering)
+          .text(route.representation)
+          .text(route.storage)
+          .text(route.operation)
+          .text(route.kernel)
+          .scalar(std::int32_t{route.order});
+      for (int axis = 0; axis < Dim; ++axis)
+        contract.scalar(route.ghost_depth[axis]).scalar(route.refinement_ratio[axis]);
+    }
+    contract.scalar(static_cast<std::uint64_t>(bootstrap_subject_routes.size()));
+    for (const auto& [subject_operation, route] : bootstrap_subject_routes)
+      contract.text(subject_operation.first).text(subject_operation.second).text(route);
+    contract.scalar(static_cast<std::uint64_t>(bootstrap_oriented_face_groups.size()));
+    for (const auto& [subject, groups] : bootstrap_oriented_face_groups) {
+      contract.text(subject);
+      for (const std::string& group : groups)
+        contract.text(group);
+    }
+  }
+
+  void append_initial_field_authority_contract(ExactContractBuilder& contract) const {
+    if (!field_solver_providers || !field_nullspace_providers)
+      throw std::logic_error("AMR initial field provider registries are absent");
+    const FieldNullspaceProviderSelection default_selection{default_nullspace_provider_identity,
+                                                            default_nullspace_options};
+    const auto default_nullspace =
+        field_nullspace_providers->resolve(default_selection.provider_identity);
+    contract.text("pops.amr-system.initial-field-authorities")
+        .scalar(std::uint32_t{1})
+        .text(default_field_slot)
+        .text(active_field_slot)
+        .bytes(default_selection.exact_contract())
+        .text(default_nullspace->identity())
+        .scalar(default_nullspace->interface_version())
+        .bytes(default_nullspace->collective_contract())
+        .scalar(static_cast<std::uint64_t>(field_plans.size()));
+    for (const auto& [slot, plan] : field_plans) {
+      const auto solver = field_solver_providers->find(plan.solver_route);
+      if (!solver)
+        throw std::invalid_argument("unknown exact AMR field solver provider '" +
+                                    plan.solver_route + "'");
+      const FieldNullspaceProviderSelection selection{
+          plan.nullspace_provider_identity.empty() ? default_nullspace_provider_identity
+                                                   : plan.nullspace_provider_identity,
+          plan.nullspace_provider_identity.empty() ? default_nullspace_options
+                                                   : plan.nullspace_options};
+      const auto nullspace = field_nullspace_providers->resolve(selection.provider_identity);
+      if (!plan.rhs_by_block.empty() && plan.rhs_by_block.size() != blocks.size())
+        throw std::logic_error("AMR initial exact field RHS registry has the wrong block count");
+      for (std::size_t block = 0; block < plan.rhs_by_block.size(); ++block) {
+        for (const PreparedFieldRhs& rhs : plan.rhs_by_block[block]) {
+          if (rhs.provider_identity.empty() || rhs.block_identity != blocks[block].name ||
+              rhs.field_identity != slot || !rhs.evaluate ||
+              !std::isfinite(static_cast<double>(rhs.coefficient)))
+            throw std::logic_error("AMR initial exact field RHS authority is incomplete");
+        }
+      }
+      contract.text(slot)
+          .bytes(exact_field_plan_contract(slot, plan))
+          .text(solver->identity())
+          .scalar(solver->interface_version())
+          .bytes(solver->collective_contract())
+          .bytes(selection.exact_contract())
+          .text(nullspace->identity())
+          .scalar(nullspace->interface_version())
+          .bytes(nullspace->collective_contract());
+    }
+  }
+
+  std::string initial_materialization_contract() const {
+    if (program.hierarchy_refresh_)
+      throw std::logic_error(
+          "AMR initial materialization rejects a pre-engine low-level hierarchy refresh callback; "
+          "materialize the hierarchy before installing that callback");
+    ExactContractBuilder contract;
+    contract.text("pops.amr-system.initial-materialization")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .text(package_assembly_lane ? package_assembly_lane->identity() : std::string_view{})
+        .scalar(std::int32_t{cfg.regrid_every})
+        .scalar(std::int32_t{cfg.level_count})
+        .scalar(cfg.explicit_bootstrap)
+        .scalar(cfg.distribute_coarse)
+        .scalar(cfg.cluster_min_efficiency)
+        .scalar(std::int32_t{cfg.cluster_min_box_size})
+        .scalar(std::int32_t{cfg.cluster_max_box_size})
+        .text(cfg.load_balance_route)
+        .text(cfg.load_balance_identity)
+        .bytes(cfg.load_balance_options.exact_contract())
+        .bytes(load_balance->collective_contract())
+        .bytes(prepared_package_contract())
+        .bytes(auxiliary_registry.collective_contract())
+        .bytes(boundary_assembly_contract())
+        .bytes(embedded_boundary_configuration_contract)
+        .scalar(accepted_time)
+        .scalar(std::int32_t{macro_step})
+        .scalar(program.last_dt_)
+        .scalar(static_cast<std::uint64_t>(blocks.size()));
+    for (int axis = 0; axis < Dim; ++axis)
+      contract.scalar(cfg.shape[axis])
+          .scalar(cfg.lower[axis])
+          .scalar(cfg.upper[axis])
+          .scalar(cfg.periodicity[axis])
+          .scalar(cfg.coarse_max_grid[axis]);
+    contract.scalar(static_cast<std::uint64_t>(cfg.transition_ratios.size()));
+    for (std::size_t transition = 0; transition < cfg.transition_ratios.size(); ++transition)
+      for (int axis = 0; axis < Dim; ++axis)
+        contract.scalar(cfg.transition_ratios[transition][axis])
+            .scalar(cfg.transition_buffers[transition][axis])
+            .scalar(cfg.transition_lookaheads[transition][axis]);
+    const std::vector<Box<Dim>> boxes = cfg.materialized_boxes();
+    contract.scalar(static_cast<std::uint64_t>(boxes.size()));
+    for (const Box<Dim>& box : boxes)
+      for (int axis = 0; axis < Dim; ++axis)
+        contract.scalar(box.lo[axis]).scalar(box.hi[axis]);
+    for (const BlockSpec& block : blocks) {
+      ExactContractBuilder source;
+      source.text("pops.amr-system.initial-block-source")
+          .scalar(std::uint32_t{1})
+          .scalar(std::int32_t{Dim})
+          .text(block.name)
+          .presence(block.has_density)
+          .presence(block.has_state)
+          .presence(block.has_analytic_state)
+          .sequence(block.density)
+          .sequence(block.state)
+          .scalar(static_cast<std::uint64_t>(block.analytic_state.size()));
+      for (const analytic::AnalyticProgram& program : block.analytic_state) {
+        const analytic::AnalyticProgramView view = program.view();
+        source.scalar(static_cast<std::uint64_t>(program.instruction_count()))
+            .scalar(static_cast<std::uint64_t>(program.literal_count()))
+            .scalar(static_cast<std::uint64_t>(program.required_stack()))
+            .scalar(std::uint8_t{static_cast<std::uint8_t>(program.required_dimension())})
+            .scalar(program.result_type());
+        for (std::size_t index = 0; index < program.instruction_count(); ++index)
+          source.scalar(view.instructions[index].op).scalar(view.instructions[index].operand);
+        for (std::size_t index = 0; index < program.literal_count(); ++index)
+          source.scalar(view.literals[index]);
+      }
+      contract.text(block.name)
+          .scalar(std::int32_t{block.ncomp})
+          .scalar(block.gamma)
+          .scalar(std::int32_t{block.substeps})
+          .scalar(std::int32_t{block.stride})
+          .text(block.time)
+          .scalar(std::int32_t{block.reconstruction_order})
+          .scalar(std::int32_t{block.required_ghost_depth})
+          .presence(block.has_density)
+          .presence(block.has_state)
+          .presence(block.has_analytic_state)
+          .text(prefixed_sha256("pops.amr-system.initial-block-source.v1:sha256:",
+                                std::move(source).release()));
+      for (int axis = 0; axis < Dim; ++axis)
+        contract.scalar(block.ghosts[axis]);
+    }
+    contract.scalar(static_cast<std::uint64_t>(prepared_couplings.size()));
+    for (const PreparedCouplingInstall& coupling : prepared_couplings) {
+      contract.text(coupling.provider_contract)
+          .text(coupling.view.label)
+          .scalar(coupling.view.frequency.constant_mu)
+          .scalar(coupling.view.frequency.per_cell)
+          .sequence(coupling.view.conservation.conserved_roles,
+                    [](ExactContractBuilder& item, const std::string& role) { item.text(role); })
+          .sequence(coupling.view.conservation.created_roles,
+                    [](ExactContractBuilder& item, const std::string& role) { item.text(role); });
+      contract.sequence(coupling.operation.conservation_groups(),
+                        [](ExactContractBuilder& group,
+                           const runtime::system::PreparedCouplingConservationGroup& conservation) {
+                          group.text(conservation.identity)
+                              .scalar(conservation.absolute_tolerance)
+                              .scalar(conservation.relative_tolerance)
+                              .sequence(
+                                  conservation.members,
+                                  [](ExactContractBuilder& member,
+                                     const runtime::system::PreparedCouplingStateRole& role) {
+                                    member.text(role.owner)
+                                        .scalar(static_cast<std::uint64_t>(role.canonical_block))
+                                        .scalar(std::int32_t{role.component})
+                                        .text(role.state_role);
+                                  });
+                        });
+    }
+    contract.scalar(static_cast<std::uint64_t>(temporal_relations.size()));
+    for (const auto& relation : temporal_relations) {
+      const auto ratio = relation.temporal_ratio();
+      contract.scalar(std::int32_t{relation.parent_level()})
+          .scalar(std::int32_t{relation.child_level()})
+          .scalar(ratio.numerator)
+          .scalar(ratio.denominator)
+          .scalar(relation.remainder_policy());
+    }
+    append_tagging_authority_contract(contract);
+    append_bootstrap_transfer_contract(contract);
+    append_initial_field_authority_contract(contract);
+    contract.sequence(program.block_map_,
+                      [](ExactContractBuilder& item, int block) { item.scalar(block); });
+    return std::move(contract).release();
+  }
+
   std::optional<typename multiblock_type::ProgramBlockMap> prepare_program_block_map_candidate(
       const multiblock_type& carrier) const {
-    if (program.block_map_.empty())
-      return std::nullopt;
-    if (program.block_map_.size() != blocks.size())
-      throw std::invalid_argument(
-          "AMR Program block map must cover every prepared carrier exactly once");
+    const ExecutionLane& lane = carrier.lane();
     std::vector<std::string> ordered;
-    ordered.reserve(program.block_map_.size());
-    for (const int runtime_block : program.block_map_) {
-      if (runtime_block < 0 || static_cast<std::size_t>(runtime_block) >= blocks.size())
-        throw std::out_of_range("AMR Program block map contains an invalid runtime block");
-      ordered.push_back(blocks[static_cast<std::size_t>(runtime_block)].name);
+    std::string request_contract;
+    std::exception_ptr local_error;
+    try {
+      if (!program.block_map_.empty() && program.block_map_.size() != blocks.size())
+        throw std::invalid_argument(
+            "AMR Program block map must cover every prepared carrier exactly once");
+      ordered.reserve(program.block_map_.size());
+      ExactContractBuilder exact;
+      exact.text("pops.amr-system.program-block-map-request")
+          .scalar(std::uint32_t{1})
+          .scalar(std::int32_t{Dim})
+          .bytes(carrier.collective_contract())
+          .scalar(static_cast<std::uint64_t>(program.block_map_.size()));
+      for (const int runtime_block : program.block_map_) {
+        if (runtime_block < 0 || static_cast<std::size_t>(runtime_block) >= blocks.size())
+          throw std::out_of_range("AMR Program block map contains an invalid runtime block");
+        const std::string& identity = blocks[static_cast<std::size_t>(runtime_block)].name;
+        ordered.push_back(identity);
+        exact.scalar(std::int32_t{runtime_block}).text(identity);
+      }
+      request_contract = std::move(exact).release();
+    } catch (...) {
+      local_error = std::current_exception();
     }
+    if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error("AMR Program block-map request failed collectively");
+    }
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{std::string_view("amr-program-block-map-request"), request_contract}}, lane))
+      throw std::invalid_argument("AMR Program block-map requests differ between MPI ranks");
+    if (ordered.empty())
+      return std::nullopt;
     return carrier.prepare_program_block_map(ordered);
   }
 
@@ -3575,7 +4119,7 @@ struct AmrSystem<Dim>::Impl {
   }
 
   flux_expression_budget_type prepare_program_flux_expression_budget(
-      std::string program_hash, std::vector<flux_expression_block_budget_type> blocks,
+      const std::string& program_hash, const std::vector<flux_expression_block_budget_type>& blocks,
       const typename multiblock_type::ProgramBlockMap& block_map, bool has_flux_expression,
       std::size_t interface_coupling_application_bound,
       std::size_t interface_coupling_identity_character_bound, const engine_type& prepared_engine,
@@ -3640,13 +4184,13 @@ struct AmrSystem<Dim>::Impl {
             entry.scalar(static_cast<std::uint64_t>(block.rhs_basis_bound))
                 .scalar(static_cast<std::uint64_t>(block.coefficient_term_bound));
           });
-      candidate.program_hash = std::move(program_hash);
+      candidate.program_hash = program_hash;
       candidate.generation = prepared_engine.materialization_generation();
       candidate.interface_coupling_application_bound = interface_coupling_application_bound;
       candidate.interface_coupling_identity_character_bound =
           interface_coupling_identity_character_bound;
       candidate.program_block_map = block_map;
-      candidate.blocks = std::move(blocks);
+      candidate.blocks = blocks;
       candidate.exact_contract = std::move(exact).release();
     } catch (...) {
       local_error = std::current_exception();
@@ -3961,7 +4505,7 @@ struct AmrSystem<Dim>::Impl {
   static std::string exact_field_plan_contract(std::string_view slot, const FieldPlan& plan) {
     ExactContractBuilder contract;
     contract.text("pops.amr.exact-ranked-field-plan")
-        .scalar(std::uint32_t{2})
+        .scalar(std::uint32_t{4})
         .scalar(std::int32_t{Dim})
         .text(slot)
         .text(plan.plan_identity)
@@ -3969,6 +4513,12 @@ struct AmrSystem<Dim>::Impl {
         .text(plan.output_owner_identity)
         .text(plan.output_block)
         .text(plan.output_key)
+        .scalar(std::int32_t{plan.expected_gradient_sign})
+        .sequence(
+            plan.expected_output_keys,
+            [](ExactContractBuilder& item, const runtime::system::AuxiliaryComponentKey& key) {
+              key.serialize_exact(item);
+            })
         .sequence(plan.providers,
                   [](ExactContractBuilder& item, const FieldProviderBinding& binding) {
                     item.text(binding.identity)
@@ -3979,7 +4529,17 @@ struct AmrSystem<Dim>::Impl {
         .text(plan.solver_route)
         .bytes(plan.hierarchy_policy.exact_contract())
         .bytes(plan.solver_options.exact_contract())
-        .presence(plan.has_reaction);
+        .scalar(static_cast<std::uint64_t>(plan.rhs_by_block.size()));
+    for (std::size_t block = 0; block < plan.rhs_by_block.size(); ++block) {
+      contract.scalar(static_cast<std::uint64_t>(block))
+          .scalar(static_cast<std::uint64_t>(plan.rhs_by_block[block].size()));
+      for (const PreparedFieldRhs& rhs : plan.rhs_by_block[block])
+        contract.text(rhs.provider_identity)
+            .text(rhs.block_identity)
+            .text(rhs.field_identity)
+            .scalar(rhs.coefficient);
+    }
+    contract.presence(plan.has_reaction);
     if (plan.has_reaction)
       contract.scalar(plan.reaction);
     contract.text(plan.nullspace_provider_identity)
@@ -4012,12 +4572,26 @@ struct AmrSystem<Dim>::Impl {
             key.serialize_exact(item);
           });
     }
-    contract.presence(plan.use_prepared_level_rhs).presence(plan.boundary_kernel.has_value());
+    contract.presence(plan.use_prepared_level_rhs)
+        .presence(plan.boundary_kernel.has_value())
+        .presence(plan.boundary_point.has_value());
     if (plan.boundary_kernel)
       contract.text(plan.boundary_kernel->identity)
           .text(plan.boundary_kernel->residual_identity)
           .text(plan.boundary_kernel->jvp_identity)
           .presence(plan.boundary_kernel->observes_iteration);
+    if (plan.boundary_point)
+      contract.scalar(plan.boundary_point->time)
+          .scalar(plan.boundary_point->dt)
+          .scalar(std::int32_t{plan.boundary_point->clock_slot})
+          .scalar(std::int32_t{plan.boundary_point->partition_slot})
+          .scalar(std::int32_t{plan.boundary_point->stage_slot})
+          .scalar(std::int32_t{plan.boundary_point->level})
+          .scalar(plan.boundary_point->step)
+          .scalar(std::int32_t{plan.boundary_point->substep})
+          .scalar(std::int32_t{plan.boundary_point->iteration})
+          .scalar(plan.boundary_point->stage_fraction_numerator)
+          .scalar(plan.boundary_point->stage_fraction_denominator);
     contract.presence(plan.newton.has_value());
     if (plan.newton)
       contract.scalar(plan.newton->tolerance)
@@ -4027,6 +4601,19 @@ struct AmrSystem<Dim>::Impl {
           .scalar(plan.newton->restart)
           .scalar(plan.newton->armijo)
           .scalar(plan.newton->minimum_step);
+    return std::move(contract).release();
+  }
+
+  std::string native_package_publication_contract() const {
+    ExactContractBuilder contract;
+    contract.text("pops.amr.native-package-publication")
+        .scalar(std::uint32_t{2})
+        .scalar(std::int32_t{Dim})
+        .bytes(prepared_package_contract())
+        .bytes(auxiliary_registry.collective_contract())
+        .scalar(static_cast<std::uint64_t>(field_plans.size()));
+    for (const auto& [slot, plan] : field_plans)
+      contract.text(slot).bytes(exact_field_plan_contract(slot, plan));
     return std::move(contract).release();
   }
 
@@ -5848,16 +6435,14 @@ struct AmrSystem<Dim>::Impl {
     if (!boundary_execution_context)
       throw std::logic_error(
           "AMR hierarchy materialization requires its authenticated RuntimeInstance lane");
-    const PopsExecutionContextV1 execution = boundary_execution_context->view();
-#ifdef POPS_HAS_MPI
-    const CommunicatorView authenticated_parent{
-        MPI_Comm_f2c(static_cast<MPI_Fint>(execution.communicator_f_handle))};
-#else
-    const CommunicatorView authenticated_parent{};
-#endif
-    // Prepare the hierarchy owner and lane identity before borrowing or duplicating the supplied
-    // communicator.  A rank-asymmetric allocation failure is therefore converged on exactly the
-    // authenticated parent, while no candidate owns a child communicator yet.
+    // The carrier lane is the stable materialization parent. A graph refresh may replace the
+    // previous graph lane, so no new graph may derive its lifetime from that soon-to-be-destroyed
+    // candidate.
+    const ExecutionLane& parent_lane = candidate_multiblock.lane();
+    const CommunicatorView authenticated_parent = parent_lane.communicator();
+    // Prepare the hierarchy owner and lane identity before duplicating the authenticated parent.
+    // A rank-asymmetric allocation failure is therefore converged on exactly that parent while no
+    // candidate owns a child communicator yet.
     try {
       candidate = std::make_unique<PreparedHierarchy>();
       candidate->topology_epoch = candidate_engine.topology_epoch();
@@ -5873,19 +6458,7 @@ struct AmrSystem<Dim>::Impl {
       throw std::runtime_error(
           "generated AMR hierarchy owner preparation failed collectively on its parent lane");
     }
-    {
-#ifdef POPS_HAS_MPI
-      const auto parent = ExecutionCommunicator::borrowed(execution.communicator_identity,
-                                                          authenticated_parent.native_handle());
-#else
-      if (execution.communicator_f_handle != 0 || execution.communicator_datatype_f_handle != 0 ||
-          std::string_view(execution.communicator_identity) != "serial")
-        throw std::invalid_argument(
-            "serial AMR boundary execution requires the exact serial authority");
-      const auto parent = ExecutionCommunicator::world();
-#endif
-      candidate->lane.emplace(ExecutionLane::duplicate_collectively(parent, lane_identity));
-    }
+    candidate->lane.emplace(ExecutionLane::duplicate_collectively(parent_lane, lane_identity));
     std::string boundary_component_contract;
     std::exception_ptr boundary_component_contract_error;
     try {
@@ -6065,28 +6638,61 @@ struct AmrSystem<Dim>::Impl {
           "generated AMR hierarchy allocation failed collectively before lane publication");
     }
 
-    const BoundaryTopology<Dim> exact_topology = topology();
+    std::optional<BoundaryTopology<Dim>> exact_topology_candidate;
+    std::vector<Geometry<Dim>> embedded_geometries;
+    std::exception_ptr topology_error;
+    try {
+      exact_topology_candidate.emplace(topology());
+      if (!embedded_boundary_configuration_contract.empty()) {
+        embedded_geometries.reserve(level_count);
+        for (std::size_t level = 0; level < level_count; ++level)
+          embedded_geometries.push_back(Geometry<Dim>::from_bounds(
+              candidate_engine.hierarchy().layout(level).domain(), cfg.lower, cfg.upper));
+      }
+    } catch (...) {
+      topology_error = std::current_exception();
+    }
+    if (all_reduce_max(topology_error ? 1L : 0L, *candidate->lane) != 0) {
+      if (candidate->lane->size() == 1 && topology_error)
+        std::rethrow_exception(topology_error);
+      throw std::runtime_error("generated AMR hierarchy topology preparation failed collectively");
+    }
+    const BoundaryTopology<Dim>& exact_topology = *exact_topology_candidate;
 
     if (!embedded_boundary_configuration_contract.empty()) {
-      ExactContractBuilder materializations;
-      materializations.text("pops.amr.embedded-boundary-levels")
-          .scalar(std::uint32_t{1})
-          .scalar(std::int32_t{Dim})
-          .bytes(embedded_boundary_configuration_contract)
-          .scalar(static_cast<std::uint64_t>(level_count));
-      for (std::size_t level = 0; level < level_count; ++level) {
-        const Box<Dim>& level_domain = candidate_engine.hierarchy().layout(level).domain();
-        const Geometry<Dim> geometry =
-            Geometry<Dim>::from_bounds(level_domain, cfg.lower, cfg.upper);
+      for (std::size_t level = 0; level < level_count; ++level)
         candidate->embedded_boundary[level] =
             runtime::system::prepare_embedded_boundary_geometry_collectively(
-                embedded_boundary_opcodes, embedded_boundary_literals, geometry, exact_topology,
-                candidate_engine.hierarchy().state(level), embedded_boundary_mode,
+                embedded_boundary_opcodes, embedded_boundary_literals, embedded_geometries[level],
+                exact_topology, candidate_engine.hierarchy().state(level), embedded_boundary_mode,
                 embedded_boundary_thresholds, embedded_boundary_generation, *candidate->lane);
-        materializations.text(candidate->embedded_boundary[level]->digest());
+
+      std::string embedded_contract;
+      std::exception_ptr embedded_contract_error;
+      try {
+        ExactContractBuilder materializations;
+        materializations.text("pops.amr.embedded-boundary-levels")
+            .scalar(std::uint32_t{1})
+            .scalar(std::int32_t{Dim})
+            .bytes(embedded_boundary_configuration_contract)
+            .scalar(static_cast<std::uint64_t>(level_count));
+        for (std::size_t level = 0; level < level_count; ++level)
+          materializations.text(candidate->embedded_boundary[level]->digest());
+        embedded_contract = prefixed_sha256("pops.prepared-eb-geometry.v1:sha256:",
+                                            std::move(materializations).release());
+      } catch (...) {
+        embedded_contract_error = std::current_exception();
       }
-      candidate->embedded_boundary_materialization_digest = prefixed_sha256(
-          "pops.prepared-eb-geometry.v1:sha256:", std::move(materializations).release());
+      if (all_reduce_max(embedded_contract_error ? 1L : 0L, *candidate->lane) != 0) {
+        if (candidate->lane->size() == 1 && embedded_contract_error)
+          std::rethrow_exception(embedded_contract_error);
+        throw std::runtime_error("generated AMR embedded-boundary contract failed collectively");
+      }
+      if (!all_ranks_agree_exact_ordered_byte_pairs(
+              {{std::string_view("generated-amr-embedded-boundary"), embedded_contract}},
+              *candidate->lane))
+        throw std::runtime_error("generated AMR embedded-boundary contract differs between ranks");
+      candidate->embedded_boundary_materialization_digest.swap(embedded_contract);
     }
 
     struct PreparedExternalFieldInvocation {
@@ -6719,52 +7325,75 @@ struct AmrSystem<Dim>::Impl {
   }
 
   void refresh_prepared_hierarchy() const {
-    if (!engine || prepared_blocks.empty())
+    if (!engine || !multiblock_hierarchy || prepared_blocks.empty())
       throw std::logic_error("AmrSystem cannot prepare levels before package materialization");
+    const ExecutionLane& carrier_lane = multiblock_hierarchy->lane();
     const long has_graph = prepared_hierarchy ? 1L : 0L;
-    std::optional<ExecutionCommunicator> parent;
-    if (!prepared_hierarchy)
-      parent.emplace(boundary_parent_communicator());
-    const long minimum_graph =
-        prepared_hierarchy ? all_reduce_min(has_graph, prepared_hierarchy->lane->communicator())
-                           : all_reduce_min(has_graph, parent->communicator());
-    const long maximum_graph =
-        prepared_hierarchy ? all_reduce_max(has_graph, prepared_hierarchy->lane->communicator())
-                           : all_reduce_max(has_graph, parent->communicator());
+    const long minimum_graph = all_reduce_min(has_graph, carrier_lane);
+    const long maximum_graph = all_reduce_max(has_graph, carrier_lane);
     if (minimum_graph != maximum_graph)
       throw std::runtime_error("prepared AMR graph publication differs between MPI ranks");
-    const long stale =
-        prepared_hierarchy && prepared_hierarchy->matches(*engine, *multiblock_hierarchy,
-                                                          prepared_package_contract(),
-                                                          embedded_boundary_configuration_contract)
-            ? 0L
-            : 1L;
-    const long maximum_stale = prepared_hierarchy
-                                   ? all_reduce_max(stale, prepared_hierarchy->lane->communicator())
-                                   : all_reduce_max(stale, parent->communicator());
+    std::string package_contract;
+    long stale = 1;
+    std::exception_ptr readiness_error;
+    try {
+      package_contract = prepared_package_contract();
+      stale = prepared_hierarchy &&
+                      prepared_hierarchy->matches(*engine, *multiblock_hierarchy, package_contract,
+                                                  embedded_boundary_configuration_contract)
+                  ? 0L
+                  : 1L;
+    } catch (...) {
+      readiness_error = std::current_exception();
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        readiness_error, &carrier_lane,
+        "prepared AMR hierarchy readiness preparation failed collectively");
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{std::string_view("prepared-amr-hierarchy-package"), package_contract}}, carrier_lane))
+      throw std::runtime_error(
+          "prepared AMR hierarchy package contract differs between carrier-lane ranks");
+    const long maximum_stale = all_reduce_max(stale, carrier_lane);
     if (maximum_stale == 0)
       return;
+    const long has_flux_budget = program_flux_expression_budget ? 1L : 0L;
+    if (all_reduce_min(has_flux_budget, carrier_lane) !=
+        all_reduce_max(has_flux_budget, carrier_lane))
+      throw std::runtime_error(
+          "AMR Program flux-expression budget presence differs between carrier-lane ranks");
+    static_assert(std::is_nothrow_move_constructible_v<typename multiblock_type::ProgramBlockMap>);
+    static_assert(std::is_nothrow_move_constructible_v<flux_expression_budget_type>);
+    std::optional<typename multiblock_type::ProgramBlockMap> block_map_candidate;
+    std::optional<flux_expression_budget_type> flux_budget_candidate;
+    std::exception_ptr metadata_error;
+    try {
+      block_map_candidate = prepare_program_block_map_candidate(*multiblock_hierarchy);
+      if (has_flux_budget != 0) {
+        if (!block_map_candidate)
+          throw std::logic_error(
+              "AMR Program flux-expression budget lost its exact Program block map");
+        const flux_expression_budget_type& retained_budget = *program_flux_expression_budget;
+        const bool has_flux_expression = flux_expression_budget_is_active(retained_budget.blocks);
+        flux_budget_candidate.emplace(prepare_program_flux_expression_budget(
+            retained_budget.program_hash, retained_budget.blocks, *block_map_candidate,
+            has_flux_expression, retained_budget.interface_coupling_application_bound,
+            retained_budget.interface_coupling_identity_character_bound, *engine,
+            *multiblock_hierarchy));
+      }
+    } catch (...) {
+      metadata_error = std::current_exception();
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        metadata_error, &carrier_lane,
+        "prepared AMR hierarchy metadata preparation failed collectively");
     std::unique_ptr<PreparedHierarchy> candidate =
         prepare_hierarchy_graph(*engine, *multiblock_hierarchy, prepared_hierarchy.get());
-    std::optional<typename multiblock_type::ProgramBlockMap> block_map_candidate =
-        prepare_program_block_map_candidate(*multiblock_hierarchy);
-    std::optional<flux_expression_budget_type> flux_budget_candidate;
-    if (program_flux_expression_budget) {
-      if (!block_map_candidate)
-        throw std::logic_error(
-            "AMR Program flux-expression budget lost its exact Program block map");
-      const bool has_flux_expression =
-          flux_expression_budget_is_active(program_flux_expression_budget->blocks);
-      flux_budget_candidate.emplace(prepare_program_flux_expression_budget(
-          program_flux_expression_budget->program_hash, program_flux_expression_budget->blocks,
-          *block_map_candidate, has_flux_expression,
-          program_flux_expression_budget->interface_coupling_application_bound,
-          program_flux_expression_budget->interface_coupling_identity_character_bound, *engine,
-          *multiblock_hierarchy));
-    }
+    static_assert(std::is_nothrow_swappable_v<decltype(prepared_hierarchy)>);
+    static_assert(std::is_nothrow_swappable_v<decltype(prepared_program_block_map)>);
+    static_assert(std::is_nothrow_swappable_v<decltype(program_flux_expression_budget)>);
     prepared_hierarchy.swap(candidate);
-    prepared_program_block_map = std::move(block_map_candidate);
-    program_flux_expression_budget = std::move(flux_budget_candidate);
+    prepared_program_block_map.swap(block_map_candidate);
+    program_flux_expression_budget.swap(flux_budget_candidate);
     // AcceptedSnapshot rollback images are layout-exact one-shot authorities.  Once the restored
     // graph has copied them into its new storage, retaining the detached image would let a later
     // unrelated topology publication inject stale values into a different layout.
@@ -7131,36 +7760,124 @@ struct AmrSystem<Dim>::Impl {
   }
 
   void publish_tagging_checkpoint() const {
-    if (!tagging_spec || (tagging_spec->min_cycles == 0 && program_accepted_bytes.empty()))
-      return;
-    runtime::program::AmrProgramAcceptedState<Dim> state;
-    const bool synthesize = program_accepted_bytes.empty();
-    if (synthesize) {
-      state = minimal_program_accepted_state();
-    } else {
-      const auto interface_budget = accepted_state_interface_flux_ledger_budget();
-      state = runtime::program::deserialize_amr_program_accepted_state<Dim>(program_accepted_bytes,
-                                                                            &interface_budget);
-      if (program_accepted_bytes_runtime_owned)
-        requalify_runtime_owned_program_state(state);
-      else
-        runtime::program::require_live_amr_program_checkpoint(state, *engine);
+    if (!prepared_hierarchy || !prepared_hierarchy->lane)
+      throw std::logic_error("AMR tagging checkpoint requires its prepared hierarchy lane");
+    const ExecutionLane& lane = *prepared_hierarchy->lane;
+    const bool enabled = tagging_spec.has_value() &&
+                         (tagging_spec->min_cycles != 0 || !program_accepted_bytes.empty());
+    const bool synthesize = enabled && program_accepted_bytes.empty();
+    std::string decision_contract;
+    std::exception_ptr decision_error;
+    try {
+      ExactContractBuilder decision;
+      decision.text("pops.amr.tagging-checkpoint-decision")
+          .scalar(std::uint32_t{1})
+          .scalar(std::int32_t{Dim})
+          .scalar(enabled)
+          .scalar(synthesize)
+          .scalar(program_accepted_revision)
+          .scalar(program_accepted_bytes_runtime_owned)
+          .scalar(static_cast<std::uint64_t>(program_accepted_bytes.size()));
+      if (tagging_spec)
+        decision.scalar(tagging_spec->min_cycles).text(tagging_spec->provider_identity);
+      decision_contract = std::move(decision).release();
+    } catch (...) {
+      decision_error = std::current_exception();
     }
-    require_accepted_state_authority_contracts(state);
-    state.tagging_hysteresis_state =
-        tagging_state.encode(tagging_spec->min_cycles, tagging_spec->provider_identity);
-    runtime::program::require_collective_amr_program_checkpoint_consensus(
-        state, *prepared_hierarchy->lane);
-    std::vector<std::uint8_t> candidate =
-        runtime::program::serialize_amr_program_accepted_state(state);
-    if (candidate == program_accepted_bytes)
+    if (all_reduce_max(decision_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && decision_error)
+        std::rethrow_exception(decision_error);
+      throw std::runtime_error("AMR tagging checkpoint decision preparation failed collectively");
+    }
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{std::string_view("amr-tagging-checkpoint-decision"), decision_contract}}, lane))
+      throw std::runtime_error(
+          "AMR tagging checkpoint entry state differs between prepared-lane ranks");
+    if (!enabled)
       return;
-    if (program_accepted_revision == std::numeric_limits<std::uint64_t>::max())
-      throw std::overflow_error("AmrSystem Program accepted-state revision overflow");
-    program_accepted_bytes = std::move(candidate);
-    ++program_accepted_revision;
-    if (synthesize)
-      program_accepted_bytes_runtime_owned = true;
+
+    runtime::program::AmrProgramAcceptedState<Dim> state;
+    std::vector<std::uint8_t> candidate;
+    std::exception_ptr preparation_error;
+    try {
+      if (synthesize) {
+        state = minimal_program_accepted_state();
+      } else {
+        const auto interface_budget = accepted_state_interface_flux_ledger_budget();
+        state = runtime::program::deserialize_amr_program_accepted_state<Dim>(
+            program_accepted_bytes, &interface_budget);
+        if (program_accepted_bytes_runtime_owned)
+          requalify_runtime_owned_program_state(state);
+        else
+          runtime::program::require_live_amr_program_checkpoint(state, *engine);
+      }
+      require_accepted_state_authority_contracts(state);
+      state.tagging_hysteresis_state =
+          tagging_state.encode(tagging_spec->min_cycles, tagging_spec->provider_identity);
+      candidate = runtime::program::serialize_amr_program_accepted_state(state);
+    } catch (...) {
+      preparation_error = std::current_exception();
+    }
+    if (all_reduce_max(preparation_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && preparation_error)
+        std::rethrow_exception(preparation_error);
+      throw std::runtime_error("AMR tagging checkpoint preparation failed collectively");
+    }
+    const std::string_view candidate_bytes(
+        candidate.empty() ? "" : reinterpret_cast<const char*>(candidate.data()), candidate.size());
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{std::string_view("pops.amr-program-checkpoint"), candidate_bytes}}, lane))
+      throw std::runtime_error("exact AMR Program checkpoint differs between communicator ranks");
+
+    const bool update = candidate != program_accepted_bytes;
+    std::uint64_t candidate_revision = program_accepted_revision;
+    bool candidate_runtime_owned = program_accepted_bytes_runtime_owned;
+    std::string publication_contract;
+    std::exception_ptr publication_error;
+    try {
+      if (update) {
+        if (candidate_revision == std::numeric_limits<std::uint64_t>::max())
+          throw std::overflow_error("AmrSystem Program accepted-state revision overflow");
+        ++candidate_revision;
+        if (synthesize)
+          candidate_runtime_owned = true;
+      }
+      const std::string_view current_bytes(
+          program_accepted_bytes.empty()
+              ? ""
+              : reinterpret_cast<const char*>(program_accepted_bytes.data()),
+          program_accepted_bytes.size());
+      ExactContractBuilder publication;
+      publication.text("pops.amr.tagging-checkpoint-publication")
+          .scalar(std::uint32_t{1})
+          .scalar(std::int32_t{Dim})
+          .bytes(current_bytes)
+          .scalar(program_accepted_revision)
+          .scalar(program_accepted_bytes_runtime_owned)
+          .bytes(candidate_bytes)
+          .scalar(update)
+          .scalar(candidate_revision)
+          .scalar(candidate_runtime_owned);
+      publication_contract = std::move(publication).release();
+    } catch (...) {
+      publication_error = std::current_exception();
+    }
+    if (all_reduce_max(publication_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && publication_error)
+        std::rethrow_exception(publication_error);
+      throw std::runtime_error(
+          "AMR tagging checkpoint publication preparation failed collectively");
+    }
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{std::string_view("amr-tagging-checkpoint-publication"), publication_contract}}, lane))
+      throw std::runtime_error(
+          "AMR tagging checkpoint publication differs between prepared-lane ranks");
+    if (!update)
+      return;
+    static_assert(std::is_nothrow_swappable_v<decltype(program_accepted_bytes)>);
+    program_accepted_bytes.swap(candidate);
+    program_accepted_revision = candidate_revision;
+    program_accepted_bytes_runtime_owned = candidate_runtime_owned;
   }
 
   amr::transfer::TransferKind regrid_transfer_kind(int parent_level,
@@ -7423,9 +8140,21 @@ struct AmrSystem<Dim>::Impl {
       for (std::size_t slot = 0; slot < transfer.parent->size(); ++slot) {
         const SparseFieldImage<Dim>* retained =
             transfer.previous != nullptr ? &transfer.previous->slots[slot].image : nullptr;
-        transfer.remapped->push_back(
-            transfer_regridded_state((*transfer.parent)[slot], parent_layout, *fine_layout,
-                                     retained, communicator, transfer.transfer_kind));
+        std::exception_ptr transfer_error;
+        try {
+          transfer.remapped->push_back(
+              transfer_regridded_state((*transfer.parent)[slot], parent_layout, *fine_layout,
+                                       retained, communicator, transfer.transfer_kind));
+        } catch (...) {
+          transfer_error = std::current_exception();
+        }
+        const long transfer_failures = all_reduce_sum(transfer_error ? 1L : 0L, communicator);
+        if (transfer_failures != 0) {
+          if (communicator.size() == 1 && transfer_error)
+            std::rethrow_exception(transfer_error);
+          throw std::runtime_error("AMR Program history transfer failed collectively on " +
+                                   std::to_string(transfer_failures) + " rank(s)");
+        }
       }
     }
     return candidate;
@@ -7489,129 +8218,221 @@ struct AmrSystem<Dim>::Impl {
   }
 
   void prepare_tagging_execution() const {
-    if ((tagger_component && component_tagging_plan &&
-         component_tagging_plan->topology_generation() == tagging_generation()) ||
-        (!tagger_component && tagging_plan &&
-         tagging_plan->topology_generation() == tagging_generation()))
-      return;
-    const ResolvedTaggingProgram& resolved = resolve_tagging_program();
     if (!prepared_hierarchy || !prepared_hierarchy->lane ||
         prepared_hierarchy->provider_storage.size() != engine->hierarchy().num_levels())
       throw std::logic_error("AMR tagging requires the exact prepared hierarchy graph");
+    const ExecutionLane& lane = *prepared_hierarchy->lane;
+    const CommunicatorView communicator = lane.communicator();
+    const std::uint64_t generation = tagging_generation();
+    const long locally_current = (tagger_component && component_tagging_plan &&
+                                  component_tagging_plan->topology_generation() == generation) ||
+                                         (!tagger_component && tagging_plan &&
+                                          tagging_plan->topology_generation() == generation)
+                                     ? 1L
+                                     : 0L;
+    if (all_reduce_min(locally_current, communicator) !=
+        all_reduce_max(locally_current, communicator))
+      throw std::runtime_error(
+          "AMR prepared tagging-plan readiness differs between hierarchy-lane ranks");
+    if (locally_current != 0)
+      return;
+
     using TaggingField =
         runtime::amr::PreparedTaggingField<Dim,
                                            typename Kokkos::DefaultExecutionSpace::memory_space>;
+    const ResolvedTaggingProgram* resolved = nullptr;
     std::vector<std::vector<TaggingField>> fields_by_level;
     std::vector<amr::hierarchy::LevelLayout<Dim>> layouts;
     std::vector<runtime::amr::PreparedTaggingExecutionBudget> budgets;
-    fields_by_level.reserve(engine->hierarchy().num_levels());
-    layouts.reserve(engine->hierarchy().num_levels());
-    budgets.reserve(engine->hierarchy().num_levels());
-    for (std::size_t level = 0; level < engine->hierarchy().num_levels(); ++level) {
-      std::vector<TaggingField> fields;
-      fields.reserve(resolved.fields.size());
-      for (const ResolvedTaggingField& field : resolved.fields) {
-        const field_type* values = nullptr;
-        if (field.kind == TaggingFieldKind::state) {
-          if (field.state_block >= blocks.size())
-            throw std::logic_error("AMR tagging state field lost its exact block owner");
-          values = &block_state(field.state_block, level);
+    std::uint32_t periodic_axes = 0;
+    std::string request_contract;
+    std::exception_ptr preparation_error;
+    try {
+      resolved = &resolve_tagging_program();
+      fields_by_level.reserve(engine->hierarchy().num_levels());
+      layouts.reserve(engine->hierarchy().num_levels());
+      budgets.reserve(engine->hierarchy().num_levels());
+      for (std::size_t level = 0; level < engine->hierarchy().num_levels(); ++level) {
+        std::vector<TaggingField> fields;
+        fields.reserve(resolved->fields.size());
+        for (const ResolvedTaggingField& field : resolved->fields) {
+          const field_type* values = nullptr;
+          if (field.kind == TaggingFieldKind::state) {
+            if (field.state_block >= blocks.size())
+              throw std::logic_error("AMR tagging state field lost its exact block owner");
+            values = &block_state(field.state_block, level);
+          }
+          if (field.kind == TaggingFieldKind::auxiliary) {
+            values = prepared_hierarchy->provider_storage[level]->find(field.provider_group);
+            if (values == nullptr)
+              throw std::logic_error(
+                  "AMR tagging provider group is absent from the live hierarchy");
+          }
+          fields.push_back({field.qualified_identity, values});
         }
-        if (field.kind == TaggingFieldKind::auxiliary) {
-          values = prepared_hierarchy->provider_storage[level]->find(field.provider_group);
-          if (values == nullptr)
-            throw std::logic_error("AMR tagging provider group is absent from the live hierarchy");
+        auto budget = exact_tagging_budget(engine->hierarchy().layout(level),
+                                           engine->hierarchy().state(level).local_rank());
+        if (tagger_component) {
+          budget.scratch_bytes =
+              checked_size_product(budget.candidate_mask.owned_cells, std::size_t{8},
+                                   "AMR component Tagger candidate staging exceeds size_t");
+          if (tagger_component->spec.execution_mode == POPS_TAGGER_EXECUTION_HOST_V2)
+            for (const TaggingField& field : fields)
+              for (std::size_t local = 0; local < field.values->local_size(); ++local)
+                budget.scratch_bytes = checked_size_sum(
+                    budget.scratch_bytes,
+                    checked_size_product(field.values->fab(local).size(), sizeof(Real),
+                                         "AMR component Tagger host staging exceeds size_t"),
+                    "AMR component Tagger host staging exceeds size_t");
         }
-        fields.push_back({field.qualified_identity, values});
+        fields_by_level.push_back(std::move(fields));
+        layouts.push_back(engine->hierarchy().layout(level));
+        budgets.push_back(budget);
       }
-      auto budget = exact_tagging_budget(engine->hierarchy().layout(level),
-                                         engine->hierarchy().state(level).local_rank());
-      if (tagger_component) {
-        budget.scratch_bytes =
-            checked_size_product(budget.candidate_mask.owned_cells, std::size_t{8},
-                                 "AMR component Tagger candidate staging exceeds size_t");
-        if (tagger_component->spec.execution_mode == POPS_TAGGER_EXECUTION_HOST_V2)
-          for (const TaggingField& field : fields)
-            for (std::size_t local = 0; local < field.values->local_size(); ++local)
-              budget.scratch_bytes = checked_size_sum(
-                  budget.scratch_bytes,
-                  checked_size_product(field.values->fab(local).size(), sizeof(Real),
-                                       "AMR component Tagger host staging exceeds size_t"),
-                  "AMR component Tagger host staging exceeds size_t");
-      }
-      fields_by_level.push_back(std::move(fields));
-      layouts.push_back(engine->hierarchy().layout(level));
-      budgets.push_back(budget);
-    }
-    if (tagger_component) {
-      std::uint32_t periodic_axes = 0;
       for (int axis = 0; axis < Dim; ++axis)
         if (cfg.periodicity[static_cast<std::size_t>(axis)])
           periodic_axes |= std::uint32_t{1} << static_cast<unsigned>(axis);
-      auto candidate = runtime::amr::PreparedTaggerComponent<Dim>::prepare(
-          tagger_component->component, tagger_component->spec, resolved.program, fields_by_level,
-          layouts, budgets, tagging_generation(), periodic_axes, *prepared_hierarchy->lane);
-      component_tagging_plan =
-          std::make_unique<runtime::amr::PreparedTaggerComponent<Dim>>(std::move(candidate));
+      ExactContractBuilder exact;
+      exact.text("pops.amr-tagging-plan-request")
+          .scalar(std::uint32_t{1})
+          .scalar(std::int32_t{Dim})
+          .scalar(generation)
+          .bytes(prepared_hierarchy->collective_contract)
+          .scalar(static_cast<std::uint64_t>(resolved->fields.size()));
+      append_tagging_authority_contract(exact);
+      for (const ResolvedTaggingField& field : resolved->fields)
+        exact.scalar(static_cast<std::uint8_t>(field.kind))
+            .text(field.qualified_identity)
+            .text(field.provider_group)
+            .scalar(static_cast<std::uint64_t>(field.state_block));
+      request_contract = std::move(exact).release();
+    } catch (...) {
+      preparation_error = std::current_exception();
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        preparation_error, &lane, "AMR tagging-plan local preparation failed collectively");
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{std::string_view("amr-tagging-plan-request"), request_contract}}, lane))
+      throw std::invalid_argument(
+          "AMR tagging-plan request differs between prepared hierarchy ranks");
+
+    std::unique_ptr<runtime::amr::PreparedTaggerComponent<Dim>> component_candidate;
+    std::unique_ptr<runtime::amr::PreparedTaggingExecutionPlan<Dim>> bytecode_candidate;
+    std::exception_ptr candidate_error;
+    try {
+      if (tagger_component) {
+        auto candidate = runtime::amr::PreparedTaggerComponent<Dim>::prepare(
+            tagger_component->component, tagger_component->spec, resolved->program, fields_by_level,
+            layouts, budgets, generation, periodic_axes, lane);
+        component_candidate =
+            std::make_unique<runtime::amr::PreparedTaggerComponent<Dim>>(std::move(candidate));
+      } else {
+        auto candidate = runtime::amr::PreparedTaggingExecutionPlan<Dim>::prepare(
+            resolved->program, fields_by_level, layouts, budgets, generation, communicator);
+        bytecode_candidate =
+            std::make_unique<runtime::amr::PreparedTaggingExecutionPlan<Dim>>(std::move(candidate));
+      }
+    } catch (...) {
+      candidate_error = std::current_exception();
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        candidate_error, &lane, "AMR tagging-plan candidate preparation failed collectively");
+    if (tagger_component) {
+      component_tagging_plan.swap(component_candidate);
       tagging_plan.reset();
     } else {
-      auto candidate = runtime::amr::PreparedTaggingExecutionPlan<Dim>::prepare(
-          resolved.program, fields_by_level, layouts, budgets, tagging_generation(),
-          prepared_hierarchy->lane->communicator());
-      tagging_plan =
-          std::make_unique<runtime::amr::PreparedTaggingExecutionPlan<Dim>>(std::move(candidate));
+      tagging_plan.swap(bytecode_candidate);
       component_tagging_plan.reset();
     }
   }
 
   runtime::amr::PreparedTaggerCandidates<Dim> execute_tagging(int parent_level) const {
-    if (!tagging_spec)
-      throw std::logic_error("AMR hierarchy has no prepared tagging authority");
     if (!prepared_hierarchy || !prepared_hierarchy->lane)
       throw std::logic_error("AMR tagging lacks its prepared collective execution lane");
+    const ExecutionLane& lane = *prepared_hierarchy->lane;
     const CommunicatorView communicator = prepared_hierarchy->lane->communicator();
-    const long invalid_parent =
-        parent_level < 0 ||
-                static_cast<std::size_t>(parent_level) >= engine->hierarchy().num_levels() ||
-                parent_level >= cfg.level_count - 1
-            ? 1L
-            : 0L;
-    const long minimum_parent = all_reduce_min(static_cast<long>(parent_level), communicator);
-    const long maximum_parent = all_reduce_max(static_cast<long>(parent_level), communicator);
-    if (all_reduce_max(invalid_parent, communicator) != 0)
-      throw std::out_of_range("AMR tagging parent lies outside the live configured hierarchy");
-    if (minimum_parent != maximum_parent)
-      throw std::invalid_argument("AMR tagging parent level differs between MPI ranks");
-    prepare_tagging_execution();
     runtime::multiblock::BoundaryEvaluationPoint point;
-    point.clock = tagging_spec->clock_identity;
-    point.tick = macro_step;
-    point.level = parent_level;
-    point.stage_fraction = {0, 1};
-    point.dt = 0.0;
-    point.physical_time = accepted_time;
-    const std::size_t level = static_cast<std::size_t>(parent_level);
-    if (prepared_hierarchy->block_levels.size() != blocks.size())
-      throw std::logic_error("AMR tagging lost one prepared block-level execution authority");
-    for (std::size_t block = 0; block < blocks.size(); ++block) {
-      if (prepared_hierarchy->block_levels[block].size() <= level)
-        throw std::logic_error("AMR tagging lost one prepared block level");
-      prepared_hierarchy->block_levels[block][level].prepare(point, block_state(block, level));
-    }
     std::array<Real, Dim> spacing{};
-    const Geometry<Dim> geometry = Geometry<Dim>::from_bounds(
-        engine->hierarchy().layout(static_cast<std::size_t>(parent_level)).domain(), cfg.lower,
-        cfg.upper);
-    for (int axis = 0; axis < Dim; ++axis)
-      spacing[static_cast<std::size_t>(axis)] = geometry.spacing(axis);
-    if (tagger_component)
-      return component_tagging_plan->execute(
-          static_cast<std::size_t>(parent_level),
-          engine->hierarchy().layout(static_cast<std::size_t>(parent_level)), spacing,
-          tagging_generation(), static_cast<std::int64_t>(macro_step), accepted_time);
-    return tagging_plan->execute(static_cast<std::size_t>(parent_level),
-                                 engine->hierarchy().layout(static_cast<std::size_t>(parent_level)),
-                                 spacing, tagging_generation());
+    std::string request_contract;
+    std::exception_ptr request_error;
+    try {
+      if (!tagging_spec)
+        throw std::logic_error("AMR hierarchy has no prepared tagging authority");
+      if (parent_level < 0 ||
+          static_cast<std::size_t>(parent_level) >= engine->hierarchy().num_levels() ||
+          parent_level >= cfg.level_count - 1)
+        throw std::out_of_range("AMR tagging parent lies outside the live configured hierarchy");
+      const std::size_t level = static_cast<std::size_t>(parent_level);
+      if (prepared_hierarchy->block_levels.size() != blocks.size())
+        throw std::logic_error("AMR tagging lost one prepared block-level execution authority");
+      for (std::size_t block = 0; block < blocks.size(); ++block)
+        if (prepared_hierarchy->block_levels[block].size() <= level)
+          throw std::logic_error("AMR tagging lost one prepared block level");
+      point.clock = tagging_spec->clock_identity;
+      point.tick = macro_step;
+      point.level = parent_level;
+      point.stage_fraction = {0, 1};
+      point.dt = 0.0;
+      point.physical_time = accepted_time;
+      const Geometry<Dim> geometry = Geometry<Dim>::from_bounds(
+          engine->hierarchy().layout(level).domain(), cfg.lower, cfg.upper);
+      for (int axis = 0; axis < Dim; ++axis)
+        spacing[static_cast<std::size_t>(axis)] = geometry.spacing(axis);
+      ExactContractBuilder exact;
+      exact.text("pops.amr-tagging-execution-request")
+          .scalar(std::uint32_t{1})
+          .scalar(std::int32_t{Dim})
+          .scalar(parent_level)
+          .scalar(macro_step)
+          .scalar(accepted_time)
+          .text(tagging_spec->clock_identity)
+          .text(tagging_spec->provider_identity)
+          .bytes(prepared_hierarchy->collective_contract);
+      for (const Real value : spacing)
+        exact.scalar(value);
+      request_contract = std::move(exact).release();
+    } catch (...) {
+      request_error = std::current_exception();
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        request_error, &lane, "AMR tagging execution request failed collectively");
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{std::string_view("amr-tagging-execution-request"), request_contract}}, lane))
+      throw std::invalid_argument(
+          "AMR tagging execution request differs between prepared hierarchy ranks");
+
+    prepare_tagging_execution();
+    const std::size_t level = static_cast<std::size_t>(parent_level);
+    for (std::size_t block = 0; block < blocks.size(); ++block)
+      prepared_hierarchy->block_levels[block][level].prepare(point, block_state(block, level));
+
+    std::exception_ptr execution_preflight_error;
+    try {
+      if (tagger_component ? !component_tagging_plan : !tagging_plan)
+        throw std::logic_error("AMR Tagger lost its prepared execution plan");
+    } catch (...) {
+      execution_preflight_error = std::current_exception();
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        execution_preflight_error, &lane, "AMR tagging-plan readiness failed collectively");
+
+    std::optional<runtime::amr::PreparedTaggerCandidates<Dim>> result;
+    std::exception_ptr execution_error;
+    try {
+      if (tagger_component) {
+        result.emplace(component_tagging_plan->execute(
+            level, engine->hierarchy().layout(level), spacing, tagging_generation(),
+            static_cast<std::int64_t>(macro_step), accepted_time));
+      } else {
+        result.emplace(tagging_plan->execute(level, engine->hierarchy().layout(level), spacing,
+                                             tagging_generation()));
+      }
+    } catch (...) {
+      execution_error = std::current_exception();
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        execution_error, &lane, "AMR tagging execution failed collectively");
+    return std::move(*result);
   }
 
   std::vector<amr::tagging::TagMask<Dim>> prepare_cluster_shards(
@@ -7619,12 +8440,14 @@ struct AmrSystem<Dim>::Impl {
       runtime::amr::PersistentTaggingState<Dim>& staged_state) const {
     const auto& layout = engine->hierarchy().layout(static_cast<std::size_t>(parent_level));
     const CommunicatorView communicator = prepared_hierarchy->lane->communicator();
-    std::vector<char> refine = gather_tag_mask(candidates.refine, layout.domain(), communicator);
-    std::vector<char> coarsen = gather_tag_mask(candidates.coarsen, layout.domain(), communicator);
-    const std::vector<char> refine_equalities =
-        gather_tag_mask(candidates.refine_equalities, layout.domain(), communicator);
-    const std::vector<char> coarsen_equalities =
-        gather_tag_mask(candidates.coarsen_equalities, layout.domain(), communicator);
+    std::vector<char> refine =
+        gather_tag_mask(candidates.refine, layout.domain(), "refine", communicator);
+    std::vector<char> coarsen =
+        gather_tag_mask(candidates.coarsen, layout.domain(), "coarsen", communicator);
+    const std::vector<char> refine_equalities = gather_tag_mask(
+        candidates.refine_equalities, layout.domain(), "refine-equalities", communicator);
+    const std::vector<char> coarsen_equalities = gather_tag_mask(
+        candidates.coarsen_equalities, layout.domain(), "coarsen-equalities", communicator);
     if (tagging_spec->equality_policy == 1)
       for (std::size_t index = 0; index < refine.size(); ++index)
         refine[index] = static_cast<char>(refine[index] != 0 || refine_equalities[index] != 0 ||
@@ -7737,6 +8560,44 @@ struct AmrSystem<Dim>::Impl {
                      const std::optional<SparseFieldImage<Dim>>& previous_child = std::nullopt,
                      runtime::amr::PersistentTaggingState<Dim>* hierarchy_cycle_state = nullptr,
                      const PreparedHistoryHierarchyImages<Dim>* history_sources = nullptr) {
+    if (!prepared_hierarchy || !prepared_hierarchy->lane)
+      throw std::logic_error("AMR regrid requires one prepared hierarchy lane");
+    const ExecutionLane& graph_lane = *prepared_hierarchy->lane;
+    const CommunicatorView graph_communicator = graph_lane.communicator();
+    std::string request_contract;
+    std::exception_ptr request_error;
+    try {
+      if (parent_level < 0 ||
+          static_cast<std::size_t>(parent_level) >= engine->hierarchy().num_levels() ||
+          parent_level >= cfg.level_count - 1)
+        throw std::out_of_range("AMR regrid parent lies outside the live configured hierarchy");
+      ExactContractBuilder exact;
+      exact.text("pops.amr-regrid-parent-request")
+          .scalar(std::uint32_t{1})
+          .scalar(std::int32_t{Dim})
+          .scalar(parent_level)
+          .presence(previous_child.has_value())
+          .scalar(hierarchy_cycle_state != nullptr)
+          .scalar(history_sources != nullptr)
+          .scalar(engine->topology_epoch())
+          .scalar(engine->materialization_generation())
+          .bytes(prepared_hierarchy->collective_contract);
+      if (previous_child)
+        exact.scalar(previous_child->components)
+            .scalar(static_cast<std::uint64_t>(previous_child->values.size()))
+            .scalar(static_cast<std::uint64_t>(previous_child->populated.size()));
+      if (history_sources != nullptr)
+        exact.bytes(history_sources->exact_contract);
+      request_contract = std::move(exact).release();
+    } catch (...) {
+      request_error = std::current_exception();
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        request_error, &graph_lane, "AMR regrid request preparation failed collectively");
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{std::string_view("amr-regrid-parent-request"), request_contract}}, graph_lane))
+      throw std::invalid_argument("AMR regrid request differs between prepared hierarchy ranks");
+
     std::shared_ptr<const PreparedHistoryHierarchyImages<Dim>> local_history_sources;
     if (history_sources == nullptr) {
       local_history_sources = history_regrid_sequence_sources ? history_regrid_sequence_sources
@@ -7744,80 +8605,178 @@ struct AmrSystem<Dim>::Impl {
       history_sources = local_history_sources.get();
     }
     runtime::amr::PreparedTaggerCandidates<Dim> candidates = execute_tagging(parent_level);
-    std::optional<SparseFieldImage<Dim>> retained_child = previous_child;
+    std::optional<SparseFieldImage<Dim>> retained_child;
+    std::optional<runtime::amr::PersistentTaggingState<Dim>> staged_state;
+    std::exception_ptr state_preparation_error;
+    try {
+      retained_child = previous_child;
+      staged_state.emplace(hierarchy_cycle_state ? *hierarchy_cycle_state : tagging_state);
+      if (hierarchy_cycle_state == nullptr)
+        staged_state->begin_cycle(tagging_spec->min_cycles);
+    } catch (...) {
+      state_preparation_error = std::current_exception();
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        state_preparation_error, &graph_lane,
+        "AMR regrid retained-state preparation failed collectively");
+
     const std::size_t live_child = static_cast<std::size_t>(parent_level + 1);
     if (!retained_child && live_child < engine->hierarchy().num_levels())
-      retained_child = gather_sparse_field(engine->hierarchy().state(live_child),
-                                           engine->hierarchy().layout(live_child).domain(),
-                                           prepared_hierarchy->lane->communicator());
-    runtime::amr::PersistentTaggingState<Dim> staged_state =
-        hierarchy_cycle_state ? *hierarchy_cycle_state : tagging_state;
-    if (hierarchy_cycle_state == nullptr)
-      staged_state.begin_cycle(tagging_spec->min_cycles);
-    std::vector<amr::tagging::TagMask<Dim>> shards =
-        prepare_cluster_shards(parent_level, candidates, staged_state);
+      retained_child =
+          gather_sparse_field(engine->hierarchy().state(live_child),
+                              engine->hierarchy().layout(live_child).domain(), graph_communicator);
+
+    std::vector<amr::tagging::TagMask<Dim>> shards;
+    std::exception_ptr shard_error;
+    try {
+      shards = prepare_cluster_shards(parent_level, candidates, *staged_state);
+    } catch (...) {
+      shard_error = std::current_exception();
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        shard_error, &graph_lane, "AMR tag-shard preparation failed collectively");
+
     const auto& parent_layout = engine->hierarchy().layout(static_cast<std::size_t>(parent_level));
-    const amr::tagging::ClusterOptions<Dim> cluster_options =
-        exact_cluster_options(cfg, parent_layout);
-    const amr::tagging::BergerRigoutsosProvider<Dim> clustering;
-    amr::tagging::ClusterResult<Dim> clustered = clustering.cluster(shards, cluster_options);
-    const amr::RefinementRatio<Dim> ratio =
-        refinement_ratio(cfg.transition_ratios[static_cast<std::size_t>(parent_level)]);
-    const amr::regridding::RegridPreparationBudget budget =
-        exact_regrid_budget(parent_layout, ratio, clustered);
-    auto prepared = engine->prepare_regrid(static_cast<std::size_t>(parent_level), ratio,
-                                           std::move(clustered), budget, *prepared_hierarchy->lane);
-    if (facade == nullptr)
-      throw std::logic_error("AMR topology regrid lost its owning facade");
-    const std::string rematerialization_reason = restart_transaction     ? "restart_regrid"
-                                                 : bootstrap_transaction ? "bootstrap_regrid"
-                                                                         : "ordinary_regrid";
+    std::optional<amr::tagging::ClusterResult<Dim>> clustered;
+    std::optional<amr::RefinementRatio<Dim>> ratio;
+    std::optional<amr::regridding::RegridPreparationBudget> budget;
+    std::exception_ptr cluster_error;
+    try {
+      const amr::tagging::ClusterOptions<Dim> cluster_options =
+          exact_cluster_options(cfg, parent_layout);
+      const amr::tagging::BergerRigoutsosProvider<Dim> clustering;
+      clustered.emplace(clustering.cluster(shards, cluster_options));
+      ratio.emplace(
+          refinement_ratio(cfg.transition_ratios[static_cast<std::size_t>(parent_level)]));
+      budget.emplace(exact_regrid_budget(parent_layout, *ratio, *clustered));
+    } catch (...) {
+      cluster_error = std::current_exception();
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        cluster_error, &graph_lane, "AMR clustering preparation failed collectively");
+
+    std::optional<amr::regridding::PreparedRegrid<Dim>> prepared;
+    std::exception_ptr regrid_preparation_error;
+    try {
+      prepared.emplace(engine->prepare_regrid(static_cast<std::size_t>(parent_level), *ratio,
+                                              std::move(*clustered), *budget, graph_lane));
+    } catch (...) {
+      regrid_preparation_error = std::current_exception();
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        regrid_preparation_error, &graph_lane,
+        "AMR topology candidate preparation failed collectively");
+
+    std::string rematerialization_reason;
     runtime::multiblock::BoundaryEvaluationPoint rematerialization_point;
-    rematerialization_point.clock = restart_transaction
-                                        ? "pops.amr.restart-regrid.accepted"
-                                        : "pops.amr.topology-rematerialization.accepted";
-    rematerialization_point.tick = macro_step;
-    rematerialization_point.level = 0;
-    rematerialization_point.substep = 0;
-    rematerialization_point.stage = 0;
-    rematerialization_point.stage_fraction = {0, 1};
-    rematerialization_point.dt = static_cast<double>(program.last_dt_);
-    rematerialization_point.physical_time = accepted_time;
+    std::exception_ptr rematerialization_preflight_error;
+    try {
+      if (facade == nullptr)
+        throw std::logic_error("AMR topology regrid lost its owning facade");
+      rematerialization_reason = restart_transaction     ? "restart_regrid"
+                                 : bootstrap_transaction ? "bootstrap_regrid"
+                                                         : "ordinary_regrid";
+      rematerialization_point.clock = restart_transaction
+                                          ? "pops.amr.restart-regrid.accepted"
+                                          : "pops.amr.topology-rematerialization.accepted";
+      rematerialization_point.tick = macro_step;
+      rematerialization_point.level = 0;
+      rematerialization_point.substep = 0;
+      rematerialization_point.stage = 0;
+      rematerialization_point.stage_fraction = {0, 1};
+      rematerialization_point.dt = static_cast<double>(program.last_dt_);
+      rematerialization_point.physical_time = accepted_time;
+    } catch (...) {
+      rematerialization_preflight_error = std::current_exception();
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        rematerialization_preflight_error, &graph_lane,
+        "AMR topology rematerialization preflight failed collectively");
     // Authenticate every field slot and dependency edge before the irreversible topology
     // publication.  Already-materialized solvers carry their old-layout allocation/InputAux budget;
     // layout-specific candidates are deliberately prepared again after publication.
     (void)facade->prepare_topology_field_order(rematerialization_reason, rematerialization_point);
-    std::optional<runtime::program::HistoryManager<Dim>> remapped_histories =
-        prepare_regridded_program_histories(
-            parent_level, parent_layout,
-            prepared.removes_fine_level() ? nullptr : &*prepared.fine_layout(), *history_sources);
-    std::vector<std::optional<field_type>> child_states(multiblock_hierarchy->block_count());
-    if (!prepared.removes_fine_level()) {
+    std::optional<runtime::program::HistoryManager<Dim>> remapped_histories;
+    std::exception_ptr history_remap_error;
+    try {
+      remapped_histories = prepare_regridded_program_histories(
+          parent_level, parent_layout,
+          prepared->removes_fine_level() ? nullptr : &*prepared->fine_layout(), *history_sources);
+    } catch (...) {
+      history_remap_error = std::current_exception();
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        history_remap_error, &graph_lane, "AMR Program history remap failed collectively");
+    std::vector<std::optional<field_type>> child_states;
+    std::exception_ptr child_vector_error;
+    try {
+      child_states.resize(multiblock_hierarchy->block_count());
+    } catch (...) {
+      child_vector_error = std::current_exception();
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        child_vector_error, &graph_lane, "AMR child-carrier vector failed collectively");
+    if (!prepared->removes_fine_level()) {
       for (std::size_t block = 0; block < multiblock_hierarchy->block_count(); ++block) {
         const field_type& parent_state =
             multiblock_hierarchy->state(block, static_cast<std::size_t>(parent_level));
         if (bootstrap_transaction) {
-          child_states[block].emplace(
-              prepared.fine_layout()->patches(), prepared.fine_layout()->distribution(),
-              parent_state.local_rank(), parent_state.ncomp(), parent_state.ghosts());
-          child_states[block]->set_val(Real(0));
+          std::exception_ptr child_error;
+          try {
+            child_states[block].emplace(
+                prepared->fine_layout()->patches(), prepared->fine_layout()->distribution(),
+                parent_state.local_rank(), parent_state.ncomp(), parent_state.ghosts());
+            child_states[block]->set_val(Real(0));
+          } catch (...) {
+            child_error = std::current_exception();
+          }
+          runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+              child_error, &graph_lane,
+              "AMR bootstrap child-carrier preparation failed collectively");
           continue;
         }
-        std::optional<SparseFieldImage<Dim>> retained = block == 0 ? retained_child : std::nullopt;
+        std::optional<SparseFieldImage<Dim>> retained;
+        std::optional<amr::transfer::TransferKind> transfer_kind;
+        std::exception_ptr transfer_preflight_error;
+        try {
+          if (block == 0)
+            retained = retained_child;
+          transfer_kind.emplace(regrid_transfer_kind(parent_level, block));
+        } catch (...) {
+          transfer_preflight_error = std::current_exception();
+        }
+        runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+            transfer_preflight_error, &graph_lane,
+            "AMR child-transfer preflight failed collectively");
         if (!retained && live_child < multiblock_hierarchy->level_count())
           retained = gather_sparse_field(multiblock_hierarchy->state(block, live_child),
                                          engine->hierarchy().layout(live_child).domain(),
-                                         prepared_hierarchy->lane->communicator());
-        child_states[block].emplace(transfer_regridded_state(
-            parent_state, parent_layout, *prepared.fine_layout(), retained ? &*retained : nullptr,
-            prepared_hierarchy->lane->communicator(), regrid_transfer_kind(parent_level, block)));
+                                         graph_communicator);
+        std::exception_ptr transfer_error;
+        try {
+          child_states[block].emplace(transfer_regridded_state(
+              parent_state, parent_layout, *prepared->fine_layout(),
+              retained ? &*retained : nullptr, graph_communicator, *transfer_kind));
+        } catch (...) {
+          transfer_error = std::current_exception();
+        }
+        runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+            transfer_error, &graph_lane, "AMR child-state transfer failed collectively");
       }
     }
-    if (checkpoint_regrid_count_value == std::numeric_limits<int>::max())
-      throw std::overflow_error("AMR checkpoint regrid count overflow");
+    std::exception_ptr publication_preflight_error;
+    try {
+      if (checkpoint_regrid_count_value == std::numeric_limits<int>::max())
+        throw std::overflow_error("AMR checkpoint regrid count overflow");
+    } catch (...) {
+      publication_preflight_error = std::current_exception();
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        publication_preflight_error, &graph_lane,
+        "AMR topology publication preflight failed collectively");
     const std::uint64_t prior_topology_epoch = engine->topology_epoch();
     multiblock_hierarchy->publish_regrid(static_cast<std::size_t>(parent_level),
-                                         std::move(prepared), std::move(child_states));
+                                         std::move(*prepared), std::move(child_states));
     if (remapped_histories) {
       static_assert(std::is_nothrow_swappable_v<runtime::program::HistoryManager<Dim>>);
       std::swap(program.hist_, *remapped_histories);
@@ -7844,46 +8803,159 @@ struct AmrSystem<Dim>::Impl {
     } else {
       refresh_prepared_hierarchy();
     }
+    static_assert(std::is_nothrow_move_assignable_v<runtime::amr::PersistentTaggingState<Dim>>);
     if (hierarchy_cycle_state != nullptr)
-      *hierarchy_cycle_state = std::move(staged_state);
+      *hierarchy_cycle_state = std::move(*staged_state);
     else
-      tagging_state = std::move(staged_state);
+      tagging_state = std::move(*staged_state);
     // Program resources and accepted tagging state become visible only after every derived
     // ProviderPack has been rematerialized.  The next parent tagger can therefore consume fields.
-    program.refresh_hierarchy_state("AmrSystem::regrid_from_prepared_tagging");
+    const ExecutionLane& published_lane =
+        require_prepared_engine_lane("AMR regrid Program hierarchy-state publication");
+    std::exception_ptr program_refresh_error;
+    try {
+      program.refresh_hierarchy_state("AmrSystem::regrid_from_prepared_tagging");
+    } catch (...) {
+      program_refresh_error = std::current_exception();
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        program_refresh_error, &published_lane,
+        "AMR Program hierarchy-state publication failed collectively");
     if (hierarchy_cycle_state == nullptr)
       publish_tagging_checkpoint();
     return static_cast<std::size_t>(parent_level + 1) < engine->hierarchy().num_levels();
   }
 
   void automatic_bootstrap() {
-    if (automatic_bootstrap_complete || cfg.explicit_bootstrap || !tagging_spec)
+    if (!multiblock_hierarchy || !prepared_hierarchy || !prepared_hierarchy->lane)
+      throw std::logic_error("automatic AMR bootstrap requires a prepared hierarchy");
+    const ExecutionLane& carrier_lane = multiblock_hierarchy->lane();
+    const CommunicatorView carrier_communicator = carrier_lane.communicator();
+    const bool enabled = !automatic_bootstrap_complete && !cfg.explicit_bootstrap && tagging_spec;
+    std::string entry_contract;
+    std::exception_ptr entry_error;
+    try {
+      ExactContractBuilder entry;
+      entry.text("pops.amr.automatic-bootstrap-entry")
+          .scalar(std::uint32_t{1})
+          .scalar(std::int32_t{Dim})
+          .scalar(enabled)
+          .scalar(automatic_bootstrap_complete)
+          .scalar(cfg.explicit_bootstrap)
+          .presence(tagging_spec.has_value());
+      if (tagging_spec)
+        entry.scalar(tagging_spec->min_cycles).text(tagging_spec->provider_identity);
+      entry_contract = std::move(entry).release();
+    } catch (...) {
+      entry_error = std::current_exception();
+    }
+    if (all_reduce_max(entry_error ? 1L : 0L, carrier_communicator) != 0) {
+      if (carrier_lane.size() == 1 && entry_error)
+        std::rethrow_exception(entry_error);
+      throw std::runtime_error("automatic AMR bootstrap entry preparation failed collectively");
+    }
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{std::string_view("amr-automatic-bootstrap-entry"), entry_contract}},
+            carrier_communicator))
+      throw std::runtime_error(
+          "automatic AMR bootstrap entry state differs between carrier-lane ranks");
+    if (!enabled)
       return;
-    if (std::any_of(tagging_spec->leaf_subject_kinds.begin(),
-                    tagging_spec->leaf_subject_kinds.end(),
-                    [](const std::string& kind) { return kind == "field"; }))
-      throw std::logic_error(
-          "automatic AMR bootstrap cannot evaluate a field tagging leaf before its exact field "
-          "plan is materialized; enable explicit bootstrap and publish the field first");
+    std::exception_ptr preflight_error;
+    try {
+      if (std::any_of(tagging_spec->leaf_subject_kinds.begin(),
+                      tagging_spec->leaf_subject_kinds.end(),
+                      [](const std::string& kind) { return kind == "field"; }))
+        throw std::logic_error(
+            "automatic AMR bootstrap cannot evaluate a field tagging leaf before its exact field "
+            "plan is materialized; enable explicit bootstrap and publish the field first");
+    } catch (...) {
+      preflight_error = std::current_exception();
+    }
+    if (all_reduce_max(preflight_error ? 1L : 0L, carrier_communicator) != 0) {
+      if (carrier_lane.size() == 1 && preflight_error)
+        std::rethrow_exception(preflight_error);
+      throw std::runtime_error("automatic AMR bootstrap preflight failed collectively");
+    }
     std::unique_ptr<AcceptedSnapshot> snapshot =
         prepare_accepted_snapshot_collectively("automatic bootstrap");
+    std::shared_ptr<const PreparedHistoryHierarchyImages<Dim>> history_sources;
+    std::optional<runtime::amr::PersistentTaggingState<Dim>> staged_state;
+    std::exception_ptr bootstrap_error;
     try {
-      const auto history_sources = prepare_history_hierarchy_images();
-      runtime::amr::PersistentTaggingState<Dim> staged_state = tagging_state;
-      staged_state.begin_cycle(tagging_spec->min_cycles);
-      for (int parent_level = 0; parent_level < cfg.level_count - 1; ++parent_level)
-        if (!regrid_parent(parent_level, std::nullopt, &staged_state, history_sources.get()))
-          break;
-      tagging_state = std::move(staged_state);
-      publish_tagging_checkpoint();
-      automatic_bootstrap_complete = true;
+      history_sources = prepare_history_hierarchy_images();
+      staged_state.emplace(tagging_state);
+      staged_state->begin_cycle(tagging_spec->min_cycles);
     } catch (...) {
-      snapshot->restore(*this);
-      throw;
+      bootstrap_error = std::current_exception();
     }
+    const long preparation_failed = all_reduce_max(bootstrap_error ? 1L : 0L, carrier_communicator);
+    if (preparation_failed != 0 && !bootstrap_error)
+      bootstrap_error = std::make_exception_ptr(
+          std::runtime_error("automatic AMR bootstrap preparation failed on another rank"));
+    if (preparation_failed == 0) {
+      for (int parent_level = 0; parent_level < cfg.level_count - 1; ++parent_level) {
+        bool continue_bootstrap = false;
+        std::exception_ptr regrid_error;
+        try {
+          continue_bootstrap =
+              regrid_parent(parent_level, std::nullopt, &*staged_state, history_sources.get());
+        } catch (...) {
+          regrid_error = std::current_exception();
+        }
+        if (all_reduce_max(regrid_error ? 1L : 0L, carrier_communicator) != 0) {
+          bootstrap_error = regrid_error
+                                ? regrid_error
+                                : std::make_exception_ptr(std::runtime_error(
+                                      "automatic AMR bootstrap regrid failed on another rank"));
+          break;
+        }
+        const long local_continue = continue_bootstrap ? 1L : 0L;
+        if (all_reduce_min(local_continue, carrier_communicator) !=
+            all_reduce_max(local_continue, carrier_communicator)) {
+          bootstrap_error = std::make_exception_ptr(std::runtime_error(
+              "automatic AMR bootstrap regrid result differs between carrier-lane ranks"));
+          break;
+        }
+        if (!continue_bootstrap)
+          break;
+      }
+    }
+    if (!bootstrap_error) {
+      try {
+        static_assert(std::is_nothrow_swappable_v<decltype(tagging_state)>);
+        std::swap(tagging_state, *staged_state);
+        publish_tagging_checkpoint();
+        automatic_bootstrap_complete = true;
+      } catch (...) {
+        bootstrap_error = std::current_exception();
+      }
+    }
+    const long bootstrap_failed = all_reduce_max(bootstrap_error ? 1L : 0L, carrier_communicator);
+    if (bootstrap_failed == 0)
+      return;
+
+    std::exception_ptr restore_error;
+    try {
+      snapshot->restore(*this);
+    } catch (...) {
+      restore_error = std::current_exception();
+    }
+    if (all_reduce_max(restore_error ? 1L : 0L, carrier_communicator) != 0) {
+      if (carrier_lane.size() == 1 && restore_error)
+        std::rethrow_exception(restore_error);
+      throw std::runtime_error(
+          "automatic AMR bootstrap accepted-state rollback failed collectively");
+    }
+    if (carrier_lane.size() == 1 && bootstrap_error)
+      std::rethrow_exception(bootstrap_error);
+    throw std::runtime_error("automatic AMR bootstrap failed collectively and was rolled back");
   }
 
   void ensure_engine() {
+    if (native_package_phase != NativePackagePhase::idle)
+      throw std::logic_error(
+          "AMR native package callbacks cannot materialize or enter a collective runtime path");
     // Checkpoint apply runs only after begin_restart_transaction collectively sealed one live
     // engine and its rollback image. Every legacy state/history helper reached from that apply path
     // must therefore reuse the authenticated PreparedHierarchy lane; it has no authority to probe
@@ -7893,129 +8965,283 @@ struct AmrSystem<Dim>::Impl {
       (void)require_prepared_engine_lane("AMR restart live engine access");
       return;
     }
-    const ExecutionLane world_lane = ExecutionLane::world();
+    const ExecutionLane& package_lane = require_package_assembly_lane();
+    const CommunicatorView package_communicator = package_lane.communicator();
     const long materialized = engine ? 1L : 0L;
-    if (all_reduce_min(materialized) != all_reduce_max(materialized))
+    if (all_reduce_min(materialized, package_communicator) !=
+        all_reduce_max(materialized, package_communicator))
       throw std::runtime_error("AmrSystem hierarchy materialization differs between MPI ranks");
     if (materialized != 0) {
       refresh_prepared_hierarchy();
       automatic_bootstrap();
       return;
     }
-    if (blocks.empty())
-      throw std::logic_error(
-          "AmrSystem requires a dimension-qualified block before materialization");
-    if (prepared_blocks.size() != blocks.size())
-      throw std::logic_error("AmrSystem block registry differs from its prepared package registry");
+    std::string materialization_contract;
+    std::exception_ptr materialization_preflight_error;
+    try {
+      if (blocks.empty())
+        throw std::logic_error(
+            "AmrSystem requires a dimension-qualified block before materialization");
+      if (prepared_blocks.size() != blocks.size())
+        throw std::logic_error(
+            "AmrSystem block registry differs from its prepared package registry");
+      materialization_contract = initial_materialization_contract();
+    } catch (...) {
+      materialization_preflight_error = std::current_exception();
+    }
+    if (all_reduce_max(materialization_preflight_error ? 1L : 0L, package_communicator) != 0) {
+      if (package_lane.size() == 1 && materialization_preflight_error)
+        std::rethrow_exception(materialization_preflight_error);
+      throw std::runtime_error("AmrSystem initial materialization preflight failed collectively");
+    }
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{std::string_view("amr-initial-materialization"), materialization_contract}},
+            package_communicator))
+      throw std::invalid_argument(
+          "AmrSystem initial materialization contract differs between RuntimeInstance ranks");
+
+    std::optional<Box<Dim>> domain_candidate;
+    std::optional<mesh::BoxArray<Dim>> patches_candidate;
+    std::optional<mesh::RankSpace<Dim>> ranks_candidate;
+    std::optional<Index<Dim>> local_rank_candidate;
+    std::optional<mesh::Distribution<Dim>> distribution_candidate;
+    std::vector<field_type> initial_states;
+    std::exception_ptr layout_error;
+    try {
+      domain_candidate.emplace(cfg.index_domain());
+      patches_candidate.emplace(cfg.materialized_boxes());
+      ranks_candidate.emplace(process_rank_space<Dim>(package_lane));
+      local_rank_candidate.emplace(
+          ranks_candidate->coordinate(static_cast<std::size_t>(package_lane.rank())));
+      if (!cfg.distribute_coarse)
+        distribution_candidate.emplace(
+            mesh::Distribution<Dim>::replicated(*patches_candidate, *ranks_candidate));
+      initial_states.reserve(blocks.size());
+    } catch (...) {
+      layout_error = std::current_exception();
+    }
+    if (all_reduce_max(layout_error ? 1L : 0L, package_communicator) != 0) {
+      if (package_lane.size() == 1 && layout_error)
+        std::rethrow_exception(layout_error);
+      throw std::runtime_error("AmrSystem initial layout preparation failed collectively");
+    }
+    if (cfg.distribute_coarse) {
+      std::exception_ptr load_balance_error;
+      try {
+        const parallel::LoadBalancePreparationBudget budget{
+            patches_candidate->size(), ranks_candidate->size(),
+            checked_layout_cells(*patches_candidate)};
+        const auto prepared =
+            load_balance->prepare(*patches_candidate, *ranks_candidate, budget, {}, package_lane);
+        distribution_candidate.emplace(prepared.plan().distribution());
+      } catch (...) {
+        load_balance_error = std::current_exception();
+      }
+      if (all_reduce_max(load_balance_error ? 1L : 0L, package_communicator) != 0) {
+        if (package_lane.size() == 1 && load_balance_error)
+          std::rethrow_exception(load_balance_error);
+        throw std::runtime_error("AmrSystem initial load balance failed collectively");
+      }
+    }
+
+    std::optional<amr::hierarchy::LevelLayout<Dim>> coarse_candidate;
+    std::exception_ptr coarse_error;
+    try {
+      const mesh::BoxArrayValidationBudget layout_budget{
+          patches_candidate->size(), checked_pair_count(patches_candidate->size())};
+      coarse_candidate.emplace(0, *domain_candidate, *patches_candidate, *distribution_candidate,
+                               amr::RefinementRatio<Dim>{}, layout_budget);
+    } catch (...) {
+      coarse_error = std::current_exception();
+    }
+    if (all_reduce_max(coarse_error ? 1L : 0L, package_communicator) != 0) {
+      if (package_lane.size() == 1 && coarse_error)
+        std::rethrow_exception(coarse_error);
+      throw std::runtime_error("AmrSystem initial coarse layout failed collectively");
+    }
+
+    const auto materialize_state = [&](const BlockSpec& block) {
+      std::optional<field_type> state;
+      std::optional<
+          analytic::PreparedAnalyticMaterialization<Dim, typename field_type::memory_space>>
+          analytic_materialization;
+      std::exception_ptr local_error;
+      try {
+        state.emplace(*patches_candidate, *distribution_candidate, *local_rank_candidate,
+                      block.ncomp, block.ghosts);
+        state->set_val(Real(0));
+        if (cfg.explicit_bootstrap) {
+          if (!block.has_analytic_state && !block.has_state)
+            throw std::logic_error(
+                "explicit AMR bootstrap requires one staged initial source per block");
+        } else if (block.has_analytic_state) {
+          const Geometry<Dim> geometry =
+              Geometry<Dim>::from_bounds(*domain_candidate, cfg.lower, cfg.upper);
+          analytic_materialization.emplace(analytic::prepare_cell_average_materialization(
+              *state, geometry, block.analytic_state));
+        } else if (block.has_state) {
+          write_field(*state, *domain_candidate, block.state, block.ncomp);
+        } else if (block.has_density) {
+          write_component(*state, *domain_candidate, block.density, 0);
+        }
+      } catch (...) {
+        local_error = std::current_exception();
+      }
+      const long failures = all_reduce_sum(local_error ? 1L : 0L, package_communicator);
+      if (failures != 0) {
+        if (package_lane.size() == 1 && local_error)
+          std::rethrow_exception(local_error);
+        throw std::runtime_error("AMR initial materialization preparation failed collectively on " +
+                                 std::to_string(failures) + " rank(s)");
+      }
+      if (analytic_materialization)
+        (void)analytic::materialize_cell_average(*analytic_materialization, package_communicator);
+      return std::move(*state);
+    };
+    static_assert(std::is_nothrow_move_constructible_v<field_type>);
+    for (const BlockSpec& block : blocks) {
+      std::optional<field_type> state_candidate;
+      std::exception_ptr state_error;
+      try {
+        state_candidate.emplace(materialize_state(block));
+      } catch (...) {
+        state_error = std::current_exception();
+      }
+      if (all_reduce_max(state_error ? 1L : 0L, package_communicator) != 0) {
+        if (package_lane.size() == 1 && state_error)
+          std::rethrow_exception(state_error);
+        throw std::runtime_error("AmrSystem initial block state failed collectively");
+      }
+      initial_states.push_back(std::move(*state_candidate));
+    }
 
     std::shared_ptr<engine_type> engine_candidate;
-    std::unique_ptr<multiblock_type> multiblock_candidate;
-    std::unique_ptr<PreparedHierarchy> hierarchy_candidate;
-    std::optional<typename multiblock_type::ProgramBlockMap> block_map_candidate;
+    std::vector<typename multiblock_type::AdditionalBlock> additional_candidate;
     std::exception_ptr engine_error;
-    long engine_failure = 0;
     try {
-      const Box<Dim> domain = cfg.index_domain();
-      const mesh::BoxArray<Dim> patches(cfg.materialized_boxes());
-      const mesh::RankSpace<Dim> ranks = process_rank_space<Dim>(world_lane);
-      const Index<Dim> local_rank = ranks.coordinate(static_cast<std::size_t>(world_lane.rank()));
-      mesh::Distribution<Dim> distribution;
-      if (cfg.distribute_coarse) {
-        const parallel::LoadBalancePreparationBudget budget{patches.size(), ranks.size(),
-                                                            checked_layout_cells(patches)};
-        distribution =
-            load_balance->prepare(patches, ranks, budget, {}, world_lane).plan().distribution();
-      } else {
-        distribution = mesh::Distribution<Dim>::replicated(patches, ranks);
-      }
-
-      const mesh::BoxArrayValidationBudget layout_budget{patches.size(),
-                                                         checked_pair_count(patches.size())};
-      const amr::hierarchy::LevelLayout<Dim> coarse(0, domain, patches, distribution,
-                                                    amr::RefinementRatio<Dim>{}, layout_budget);
-      const auto materialize_state = [&](const BlockSpec& block) {
-        std::optional<field_type> state;
-        std::optional<
-            analytic::PreparedAnalyticMaterialization<Dim, typename field_type::memory_space>>
-            analytic_materialization;
-        std::exception_ptr local_error;
-        try {
-          state.emplace(patches, distribution, local_rank, block.ncomp, block.ghosts);
-          state->set_val(Real(0));
-          if (cfg.explicit_bootstrap) {
-            if (!block.has_analytic_state && !block.has_state)
-              throw std::logic_error(
-                  "explicit AMR bootstrap requires one staged initial source per block");
-          } else if (block.has_analytic_state) {
-            const Geometry<Dim> geometry = Geometry<Dim>::from_bounds(domain, cfg.lower, cfg.upper);
-            analytic_materialization.emplace(analytic::prepare_cell_average_materialization(
-                *state, geometry, block.analytic_state));
-          } else if (block.has_state) {
-            write_field(*state, domain, block.state, block.ncomp);
-          } else if (block.has_density) {
-            write_component(*state, domain, block.density, 0);
-          }
-        } catch (...) {
-          local_error = std::current_exception();
-        }
-        const long failures = all_reduce_sum(local_error ? 1L : 0L, world_lane.communicator());
-        if (failures != 0) {
-          if (world_lane.size() == 1 && local_error)
-            std::rethrow_exception(local_error);
-          throw std::runtime_error(
-              "AMR initial materialization preparation failed collectively on " +
-              std::to_string(failures) + " rank(s)");
-        }
-        if (analytic_materialization)
-          (void)analytic::materialize_cell_average(*analytic_materialization,
-                                                   world_lane.communicator());
-        return std::move(*state);
-      };
-      field_type state = materialize_state(blocks.front());
-
-      const std::size_t hierarchy_pairs = exact_hierarchy_pair_budget(cfg, patches.size());
+      const std::size_t hierarchy_pairs =
+          exact_hierarchy_pair_budget(cfg, patches_candidate->size());
       auto hierarchy = amr::hierarchy::AmrHierarchy<Dim>::from_coarse(
-          coarse, std::move(state),
+          *coarse_candidate, std::move(initial_states.front()),
           amr::hierarchy::HierarchyValidationBudget{static_cast<std::size_t>(cfg.level_count),
                                                     hierarchy_pairs});
       engine_candidate = std::make_shared<engine_type>(std::move(hierarchy), load_balance,
                                                        "pops.amr-system.exact-ranked");
-      std::vector<typename multiblock_type::AdditionalBlock> additional;
-      additional.reserve(blocks.size() - 1);
+      additional_candidate.reserve(blocks.size() - 1);
       for (std::size_t block = 1; block < blocks.size(); ++block) {
         std::vector<field_type> levels;
-        levels.push_back(materialize_state(blocks[block]));
-        additional.push_back({blocks[block].name, std::move(levels)});
+        levels.reserve(1);
+        levels.push_back(std::move(initial_states[block]));
+        additional_candidate.push_back({blocks[block].name, std::move(levels)});
       }
-      multiblock_type prepared_multiblock = multiblock_type::prepare_collectively(
-          engine_candidate, blocks.front().name, std::move(additional),
-          "pops.amr-system.multiblock");
-      multiblock_candidate = std::make_unique<multiblock_type>(std::move(prepared_multiblock));
     } catch (...) {
-      engine_failure = 1;
       engine_error = std::current_exception();
     }
-    if (all_reduce_max(engine_failure) != 0) {
-      if (engine_error)
+    if (all_reduce_max(engine_error ? 1L : 0L, package_communicator) != 0) {
+      if (package_lane.size() == 1 && engine_error)
         std::rethrow_exception(engine_error);
       throw std::runtime_error("AmrSystem hierarchy preparation failed collectively");
     }
 
+    std::optional<multiblock_type> multiblock_staged;
+    std::exception_ptr multiblock_error;
+    try {
+      multiblock_staged.emplace(multiblock_type::prepare_collectively(
+          package_lane, engine_candidate, blocks.front().name, std::move(additional_candidate),
+          "pops.amr-system.multiblock"));
+    } catch (...) {
+      multiblock_error = std::current_exception();
+    }
+    if (all_reduce_max(multiblock_error ? 1L : 0L, package_communicator) != 0) {
+      if (package_lane.size() == 1 && multiblock_error)
+        std::rethrow_exception(multiblock_error);
+      throw std::runtime_error("AmrSystem multi-block preparation failed collectively");
+    }
+
+    std::optional<typename multiblock_type::ProgramBlockMap> block_map_candidate;
     std::exception_ptr coupling_error;
     try {
       for (const auto& coupling : prepared_couplings)
-        multiblock_candidate->install_prepared_coupling_operator(coupling.provider_contract,
-                                                                 coupling.view, coupling.operation);
-      multiblock_candidate->seal_couplings();
+        multiblock_staged->install_prepared_coupling_operator(coupling.provider_contract,
+                                                              coupling.view, coupling.operation);
+      multiblock_staged->seal_couplings();
     } catch (...) {
       coupling_error = std::current_exception();
     }
-    if (all_reduce_max(coupling_error ? 1L : 0L) != 0) {
+    if (all_reduce_max(coupling_error ? 1L : 0L, package_communicator) != 0) {
       if (coupling_error)
         std::rethrow_exception(coupling_error);
       throw std::runtime_error("AmrSystem coupling materialization failed collectively");
     }
 
+    std::exception_ptr map_error;
+    try {
+      block_map_candidate = prepare_program_block_map_candidate(*multiblock_staged);
+    } catch (...) {
+      map_error = std::current_exception();
+    }
+    if (all_reduce_max(map_error ? 1L : 0L, package_communicator) != 0) {
+      if (map_error)
+        std::rethrow_exception(map_error);
+      throw std::runtime_error("AmrSystem Program block-map materialization failed collectively");
+    }
+
+    std::shared_ptr<hierarchy_tensor_registry_type> hierarchy_registry_candidate;
+    std::shared_ptr<runtime::program::CompositeTensorHierarchyProvider<Dim>>
+        composite_provider_candidate;
+    std::exception_ptr publication_prepare_error;
+    try {
+      hierarchy_registry_candidate =
+          std::make_shared<hierarchy_tensor_registry_type>(*hierarchy_tensor_solver_providers);
+      composite_provider_candidate =
+          std::make_shared<runtime::program::CompositeTensorHierarchyProvider<Dim>>();
+    } catch (...) {
+      publication_prepare_error = std::current_exception();
+    }
+    if (all_reduce_max(publication_prepare_error ? 1L : 0L, package_communicator) != 0) {
+      if (package_lane.size() == 1 && publication_prepare_error)
+        std::rethrow_exception(publication_prepare_error);
+      throw std::runtime_error("AmrSystem hierarchy publication preparation failed collectively");
+    }
+    std::exception_ptr hierarchy_registry_error;
+    try {
+      hierarchy_registry_candidate->add(std::move(composite_provider_candidate),
+                                        multiblock_staged->lane());
+    } catch (...) {
+      hierarchy_registry_error = std::current_exception();
+    }
+    if (all_reduce_max(hierarchy_registry_error ? 1L : 0L, package_communicator) != 0) {
+      if (package_lane.size() == 1 && hierarchy_registry_error)
+        std::rethrow_exception(hierarchy_registry_error);
+      throw std::runtime_error(
+          "AmrSystem hierarchy tensor provider publication failed collectively");
+    }
+
+    std::unique_ptr<multiblock_type> multiblock_candidate;
+    std::exception_ptr carrier_allocation_error;
+    try {
+      multiblock_candidate = std::make_unique<multiblock_type>(std::move(*multiblock_staged));
+    } catch (...) {
+      carrier_allocation_error = std::current_exception();
+    }
+    const long carrier_allocation_failed =
+        all_reduce_max(carrier_allocation_error ? 1L : 0L, package_communicator);
+    if (carrier_allocation_failed != 0) {
+      // A successful rank moved the child communicator into its heap candidate while a rank with
+      // an allocation failure left it in the staged optional. Restore one uniform owner before
+      // unwinding so every child communicator is freed in the same collective order.
+      static_assert(std::is_nothrow_move_assignable_v<multiblock_type>);
+      if (multiblock_candidate)
+        *multiblock_staged = std::move(*multiblock_candidate);
+      if (package_lane.size() == 1 && carrier_allocation_error)
+        std::rethrow_exception(carrier_allocation_error);
+      throw std::runtime_error("AmrSystem hierarchy carrier allocation failed collectively");
+    }
+
+    // The graph owns a second duplicated communicator. Every fallible map, registry and carrier
+    // allocation above is therefore complete before this child exists; after successful graph
+    // preparation the transaction performs publication-only noexcept ownership transfers.
+    std::unique_ptr<PreparedHierarchy> hierarchy_candidate;
     std::exception_ptr graph_error;
     try {
       hierarchy_candidate =
@@ -8023,39 +9249,11 @@ struct AmrSystem<Dim>::Impl {
     } catch (...) {
       graph_error = std::current_exception();
     }
-    if (all_reduce_max(graph_error ? 1L : 0L) != 0) {
+    if (all_reduce_max(graph_error ? 1L : 0L, package_communicator) != 0) {
       if (graph_error)
         std::rethrow_exception(graph_error);
       throw std::runtime_error("AmrSystem prepared hierarchy graph failed collectively");
     }
-
-    std::exception_ptr map_error;
-    try {
-      if (!program.block_map_.empty()) {
-        if (program.block_map_.size() != blocks.size())
-          throw std::invalid_argument(
-              "AMR Program block map must cover every prepared carrier exactly once");
-        std::vector<std::string> ordered;
-        ordered.reserve(program.block_map_.size());
-        for (const int runtime_block : program.block_map_) {
-          if (runtime_block < 0 || static_cast<std::size_t>(runtime_block) >= blocks.size())
-            throw std::out_of_range("AMR Program block map contains an invalid runtime block");
-          ordered.push_back(blocks[static_cast<std::size_t>(runtime_block)].name);
-        }
-        block_map_candidate.emplace(multiblock_candidate->prepare_program_block_map(ordered));
-      }
-    } catch (...) {
-      map_error = std::current_exception();
-    }
-    if (all_reduce_max(map_error ? 1L : 0L) != 0) {
-      if (map_error)
-        std::rethrow_exception(map_error);
-      throw std::runtime_error("AmrSystem Program block-map materialization failed collectively");
-    }
-
-    hierarchy_tensor_solver_providers->add(
-        std::make_shared<runtime::program::CompositeTensorHierarchyProvider<Dim>>(),
-        multiblock_candidate->lane());
 
     // Every allocation, provider installation, seal and exact-map preparation has completed on
     // local candidates.  These ownership moves are the sole publication boundary and cannot throw.
@@ -8063,12 +9261,60 @@ struct AmrSystem<Dim>::Impl {
     static_assert(std::is_nothrow_move_assignable_v<decltype(multiblock_hierarchy)>);
     static_assert(std::is_nothrow_move_assignable_v<decltype(prepared_hierarchy)>);
     static_assert(std::is_nothrow_move_assignable_v<decltype(prepared_program_block_map)>);
+    static_assert(std::is_nothrow_swappable_v<decltype(hierarchy_tensor_solver_providers)>);
+    static_assert(std::is_nothrow_swappable_v<decltype(pending_provider_restore)>);
+    static_assert(std::is_nothrow_swappable_v<decltype(pending_provider_registry_restore)>);
+    auto prior_pending_provider_restore = pending_provider_restore;
+    auto prior_pending_provider_registry_restore = pending_provider_registry_restore;
     engine = std::move(engine_candidate);
     multiblock_hierarchy = std::move(multiblock_candidate);
     prepared_hierarchy = std::move(hierarchy_candidate);
     prepared_program_block_map = std::move(block_map_candidate);
+    hierarchy_tensor_solver_providers.swap(hierarchy_registry_candidate);
+    pending_provider_restore.reset();
     pending_provider_registry_restore.reset();
-    automatic_bootstrap();
+
+    std::exception_ptr bootstrap_error;
+    try {
+      automatic_bootstrap();
+    } catch (...) {
+      bootstrap_error = std::current_exception();
+    }
+    if (all_reduce_max(bootstrap_error ? 1L : 0L, package_communicator) == 0)
+      return;
+
+    // automatic_bootstrap first restores the coarse accepted image on the stable carrier lane.
+    // Once every package rank has observed the failure, release every graph/carrier borrower and
+    // destroy child communicators in their canonical nesting order. No operation after the carrier
+    // reset may use anything except package_communicator.
+    tagging_plan.reset();
+    component_tagging_plan.reset();
+    for (auto& [slot, plan] : field_plans) {
+      (void)slot;
+      plan.discard_materialization();
+    }
+    active_field_slot.clear();
+    program_hierarchy_candidates.clear();
+    active_topology_rematerialization_point.reset();
+    topology_regrid_auxiliary_invalidation_pending = false;
+    resolved_tagging.reset();
+    prepared_program_block_map.reset();
+    pending_provider_restore.reset();
+    pending_provider_registry_restore.reset();
+    hierarchy_tensor_solver_providers.swap(hierarchy_registry_candidate);
+    // The failed-attempt composite provider borrows the carrier lane; release it before either
+    // child communicator is freed.
+    hierarchy_registry_candidate.reset();
+    prepared_hierarchy.reset();
+    multiblock_hierarchy.reset();
+    engine.reset();
+    pending_provider_restore.swap(prior_pending_provider_restore);
+    pending_provider_registry_restore.swap(prior_pending_provider_registry_restore);
+
+    if (package_lane.size() == 1 && bootstrap_error)
+      std::rethrow_exception(bootstrap_error);
+    throw std::runtime_error(
+        "AmrSystem initial automatic bootstrap failed collectively and was unmaterialized");
   }
 
   template <class Function>
@@ -8096,14 +9342,21 @@ template <int Dim>
 AmrSystem<Dim>::~AmrSystem() = default;
 
 template <int Dim>
-AmrSystem<Dim>::AmrSystem(AmrSystem&& other) noexcept : p_(std::move(other.p_)) {
+AmrSystem<Dim>::AmrSystem(AmrSystem&& other) {
+  if (other.p_)
+    other.p_->require_no_native_package_callback("move construction");
+  p_ = std::move(other.p_);
   if (p_)
     p_->facade = this;
 }
 
 template <int Dim>
-AmrSystem<Dim>& AmrSystem<Dim>::operator=(AmrSystem&& other) noexcept {
+AmrSystem<Dim>& AmrSystem<Dim>::operator=(AmrSystem&& other) {
   if (this != &other) {
+    if (p_)
+      p_->require_no_native_package_callback("move assignment destination");
+    if (other.p_)
+      other.p_->require_no_native_package_callback("move assignment source");
     p_ = std::move(other.p_);
     if (p_)
       p_->facade = this;
@@ -8114,7 +9367,8 @@ AmrSystem<Dim>& AmrSystem<Dim>::operator=(AmrSystem&& other) noexcept {
 template <int Dim>
 void AmrSystem<Dim>::install_prepared_auxiliary_provider(
     runtime::system::PreparedAuxiliaryProvider<Dim> provider) {
-  require_amr_assembling(p_->lifecycle, "install_prepared_auxiliary_provider");
+  if (p_->native_package_phase != Impl::NativePackagePhase::registrar_local)
+    require_amr_assembling(p_->lifecycle, "install_prepared_auxiliary_provider");
   p_->auxiliary_registry.add(std::move(provider));
   p_->auxiliary_registry_consensus_verified = false;
 }
@@ -8122,7 +9376,8 @@ void AmrSystem<Dim>::install_prepared_auxiliary_provider(
 template <int Dim>
 void AmrSystem<Dim>::install_auxiliary_consumer_plan(
     runtime::system::AuxiliaryConsumerProviderPlan<Dim> plan) {
-  require_amr_assembling(p_->lifecycle, "install_auxiliary_consumer_plan");
+  if (p_->native_package_phase != Impl::NativePackagePhase::registrar_local)
+    require_amr_assembling(p_->lifecycle, "install_auxiliary_consumer_plan");
   if (p_->auxiliary_registry.sealed())
     throw std::logic_error("AMR auxiliary consumer plans must be installed before registry seal");
   p_->auxiliary_registry.add_consumer_plan(std::move(plan));
@@ -8131,30 +9386,44 @@ void AmrSystem<Dim>::install_auxiliary_consumer_plan(
 
 template <int Dim>
 void AmrSystem<Dim>::seal_auxiliary_providers() {
-  if (p_->auxiliary_registry.sealed()) {
-    if (!p_->auxiliary_registry_consensus_verified &&
+  if (p_->native_package_phase != Impl::NativePackagePhase::idle)
+    throw std::logic_error(
+        "AMR native package callbacks cannot seal or enter an auxiliary collective phase");
+  const ExecutionLane& lane = p_->require_package_assembly_lane();
+  const CommunicatorView communicator = lane.communicator();
+  const long sealed = p_->auxiliary_registry.sealed() ? 1L : 0L;
+  if (all_reduce_min(sealed, communicator) != all_reduce_max(sealed, communicator))
+    throw std::runtime_error("AMR auxiliary registry seal state differs across MPI ranks");
+  if (sealed != 0) {
+    const long verified = p_->auxiliary_registry_consensus_verified ? 1L : 0L;
+    if (all_reduce_min(verified, communicator) != all_reduce_max(verified, communicator))
+      throw std::runtime_error("AMR auxiliary registry consensus state differs across MPI ranks");
+    if (verified == 0 &&
         !all_ranks_agree_exact_ordered_byte_pairs(
-            {{"amr-auxiliary-registry", p_->auxiliary_registry.collective_contract()}}))
+            {{"amr-auxiliary-registry", p_->auxiliary_registry.collective_contract()}},
+            communicator))
       throw std::runtime_error("AMR auxiliary registry differs across MPI ranks");
     p_->auxiliary_registry_consensus_verified = true;
     return;
   }
-  auto candidate = p_->auxiliary_registry;
+  std::optional<typename Impl::auxiliary_registry_type> candidate;
   std::exception_ptr error;
   try {
-    candidate.seal();
+    candidate.emplace(p_->auxiliary_registry);
+    pops::dynlib::invoke_with_host_exception([&] { candidate->seal(); },
+                                             "AMR auxiliary provider seal");
   } catch (...) {
     error = std::current_exception();
   }
-  if (all_reduce_max(error ? 1L : 0L) != 0) {
-    if (n_ranks() == 1 && error)
+  if (all_reduce_max(error ? 1L : 0L, communicator) != 0) {
+    if (communicator.size() == 1 && error)
       std::rethrow_exception(error);
     throw std::runtime_error("AMR auxiliary registry preparation failed collectively");
   }
   if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{"amr-auxiliary-registry", candidate.collective_contract()}}))
+          {{"amr-auxiliary-registry", candidate->collective_contract()}}, communicator))
     throw std::runtime_error("AMR auxiliary registry differs across MPI ranks");
-  p_->auxiliary_registry = std::move(candidate);
+  p_->auxiliary_registry.swap_complete(*candidate);
   p_->auxiliary_registry_consensus_verified = true;
 }
 
@@ -8162,31 +9431,57 @@ template <int Dim>
 void AmrSystem<Dim>::stage_auxiliary_input(const runtime::system::AuxiliaryComponentKey& key,
                                            const std::vector<double>& values) {
   seal_auxiliary_providers();
-  const auto address = p_->auxiliary_registry.address_of(key);
+  const ExecutionLane& lane = p_->require_package_assembly_lane();
+  std::optional<runtime::system::AuxiliaryStorageAddress<Dim>> address;
   bool input = false;
   std::string provider_identity;
-  for (std::size_t provider = 0; provider < p_->auxiliary_registry.provider_count(); ++provider) {
-    const auto& candidate = p_->auxiliary_registry.provider(provider);
-    for (const auto& output : candidate.outputs())
-      if (output.key.exact_key() == key.exact_key()) {
-        input = candidate.kind() == runtime::system::AuxiliaryProviderKind::input;
-        provider_identity = candidate.identity();
-      }
+  std::string payload_key;
+  std::string payload;
+  std::exception_ptr local_error;
+  try {
+    address.emplace(p_->auxiliary_registry.address_of(key));
+    for (std::size_t provider = 0; provider < p_->auxiliary_registry.provider_count(); ++provider) {
+      const auto& candidate = p_->auxiliary_registry.provider(provider);
+      for (const auto& output : candidate.outputs())
+        if (output.key.exact_key() == key.exact_key()) {
+          input = candidate.kind() == runtime::system::AuxiliaryProviderKind::input;
+          provider_identity = candidate.identity();
+        }
+    }
+    if (!input)
+      throw std::invalid_argument("AMR auxiliary input key is not owned by an InputAux provider");
+    if (values.size() != checked_cells(p_->cfg.index_domain()))
+      throw std::invalid_argument("AMR auxiliary input differs from the exact level-zero domain");
+    payload_key = key.exact_key();
+    payload.assign(reinterpret_cast<const char*>(values.data()), values.size() * sizeof(double));
+  } catch (...) {
+    local_error = std::current_exception();
   }
-  if (!input)
-    throw std::invalid_argument("AMR auxiliary input key is not owned by an InputAux provider");
-  if (values.size() != checked_cells(p_->cfg.index_domain()))
-    throw std::invalid_argument("AMR auxiliary input differs from the exact level-zero domain");
-  const std::string payload_key = key.exact_key();
-  const std::string_view payload(reinterpret_cast<const char*>(values.data()),
-                                 values.size() * sizeof(double));
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      local_error, &lane, "AMR auxiliary input preparation failed collectively");
   if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{"amr-auxiliary-input-key", payload_key}, {"amr-auxiliary-input-values", payload}}))
+          {{"amr-auxiliary-input-key", payload_key}, {"amr-auxiliary-input-values", payload}},
+          lane))
     throw std::invalid_argument("AMR auxiliary input differs across MPI ranks");
-  p_->staged_auxiliary_inputs[payload_key] = values;
-  if (std::find(p_->dirty_auxiliary_providers.begin(), p_->dirty_auxiliary_providers.end(),
-                provider_identity) == p_->dirty_auxiliary_providers.end())
-    p_->dirty_auxiliary_providers.push_back(std::move(provider_identity));
+  std::map<std::string, std::vector<double>> staged_inputs;
+  std::vector<std::string> dirty_providers;
+  local_error = {};
+  try {
+    staged_inputs = p_->staged_auxiliary_inputs;
+    staged_inputs[payload_key] = values;
+    dirty_providers = p_->dirty_auxiliary_providers;
+    if (std::find(dirty_providers.begin(), dirty_providers.end(), provider_identity) ==
+        dirty_providers.end())
+      dirty_providers.push_back(provider_identity);
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      local_error, &lane, "AMR auxiliary input publication preparation failed collectively");
+  static_assert(std::is_nothrow_swappable_v<decltype(p_->staged_auxiliary_inputs)>);
+  static_assert(std::is_nothrow_swappable_v<decltype(p_->dirty_auxiliary_providers)>);
+  p_->staged_auxiliary_inputs.swap(staged_inputs);
+  p_->dirty_auxiliary_providers.swap(dirty_providers);
   (void)address;
 }
 
@@ -8279,7 +9574,13 @@ AmrSystem<Dim>::capture_auxiliary_checkpoint_accepted_state() const {
         const MultiFab<Dim>* const group = groups[level]->find(descriptor.identity);
         if (group == nullptr)
           throw std::logic_error("AMR auxiliary checkpoint lost a sealed storage group");
-        payloads[level].push_back(prepare_field_gather(*group, domain, group->ncomp(), &lane));
+        ExactContractBuilder semantic;
+        semantic.text("pops.amr.auxiliary-checkpoint-gather")
+            .scalar(std::uint32_t{1})
+            .scalar(static_cast<std::uint64_t>(level))
+            .text(descriptor.identity);
+        payloads[level].push_back(prepare_field_gather(*group, domain, group->ncomp(),
+                                                       std::move(semantic).release(), lane));
       }
       const auto bytes = runtime::system::serialize_auxiliary_checkpoint_state(accepted);
       exact.scalar(static_cast<std::uint64_t>(level))
@@ -8299,7 +9600,7 @@ AmrSystem<Dim>::capture_auxiliary_checkpoint_accepted_state() const {
     throw std::runtime_error("AMR auxiliary checkpoint layout differs between communicator ranks");
   for (std::size_t level = 0; level < result.size(); ++level)
     for (std::size_t group = 0; group < result[level].groups.size(); ++group) {
-      execute_field_gather(payloads[level][group], &lane);
+      execute_field_gather(payloads[level][group], lane);
       result[level].groups[group].payload.swap(payloads[level][group].values);
     }
 
@@ -8547,20 +9848,52 @@ template <int Dim>
 std::vector<double> AmrSystem<Dim>::auxiliary_component(
     const runtime::system::AuxiliaryComponentKey& key, int level) const {
   p_->ensure_engine();
-  if (level < 0 ||
-      static_cast<std::size_t>(level) >= p_->prepared_hierarchy->provider_storage.size())
-    throw std::out_of_range("AMR auxiliary component level lies outside the live hierarchy");
-  const auto address = p_->auxiliary_registry.address_of(key);
-  const auto* group =
-      p_->prepared_hierarchy->provider_storage[static_cast<std::size_t>(level)]->find(
-          address.group);
-  if (group == nullptr || address.component >= static_cast<std::size_t>(group->ncomp()))
-    throw std::logic_error("AMR auxiliary carrier lost its resolved storage address");
-  const Box<Dim>& domain = p_->engine->hierarchy().layout(static_cast<std::size_t>(level)).domain();
-  const std::vector<double> packed = gather_field(*group, domain, group->ncomp());
-  const std::size_t cells = checked_cells(domain);
-  return {packed.begin() + static_cast<std::ptrdiff_t>(address.component * cells),
-          packed.begin() + static_cast<std::ptrdiff_t>((address.component + 1) * cells)};
+  const ExecutionLane& lane = p_->require_prepared_engine_lane("AMR auxiliary component gather");
+  const MultiFab<Dim>* group = nullptr;
+  std::size_t component = 0;
+  const Box<Dim>* domain = nullptr;
+  std::string semantic_identity;
+  std::exception_ptr local_error;
+  try {
+    if (level < 0 ||
+        static_cast<std::size_t>(level) >= p_->prepared_hierarchy->provider_storage.size())
+      throw std::out_of_range("AMR auxiliary component level lies outside the live hierarchy");
+    const auto address = p_->auxiliary_registry.address_of(key);
+    group = p_->prepared_hierarchy->provider_storage[static_cast<std::size_t>(level)]->find(
+        address.group);
+    component = address.component;
+    if (group == nullptr || component >= static_cast<std::size_t>(group->ncomp()))
+      throw std::logic_error("AMR auxiliary carrier lost its resolved storage address");
+    domain = &p_->engine->hierarchy().layout(static_cast<std::size_t>(level)).domain();
+    ExactContractBuilder exact;
+    exact.text("pops.amr.auxiliary-component-gather")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{level})
+        .text(key.exact_key())
+        .scalar(static_cast<std::uint64_t>(component));
+    semantic_identity = std::move(exact).release();
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      local_error, &lane, "AMR auxiliary component gather preflight failed collectively");
+  std::vector<double> packed;
+  std::size_t cells = 0;
+  std::exception_ptr extraction_error;
+  try {
+    packed = gather_field(*group, *domain, group->ncomp(), semantic_identity, lane);
+    cells = checked_cells(*domain);
+    const std::size_t end =
+        checked_size_product(component + 1, cells, "AMR auxiliary extraction exceeds size_t");
+    if (end > packed.size())
+      throw std::logic_error("AMR auxiliary gathered carrier is shorter than its exact address");
+  } catch (...) {
+    extraction_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      extraction_error, &lane, "AMR auxiliary gathered-component extraction failed collectively");
+  return {packed.begin() + static_cast<std::ptrdiff_t>(component * cells),
+          packed.begin() + static_cast<std::ptrdiff_t>((component + 1) * cells)};
 }
 
 template <int Dim>
@@ -8878,44 +10211,50 @@ void AmrSystem<Dim>::set_compiled_block(int ncomp, double gamma, int substeps,
 
 template <int Dim>
 void AmrSystem<Dim>::add_native_block(const std::string& name, const std::string& so_path,
+                                      const std::string& expected_model_identity,
+                                      const std::string& expected_binary_identity,
                                       const std::string& limiter, const std::string& riemann,
                                       const std::string& recon, const std::string& time,
                                       double gamma, int substeps, const std::vector<double>& params,
                                       double positivity_floor, double weno_epsilon,
                                       bool wave_speed_cache) {
+  p_->require_no_native_package_callback("add_native_block");
   using register_auxiliary_type = void (*)(AmrSystem<Dim>*);
   using install_type = void (*)(void*, const char*, const char*, const char*, const char*,
                                 const char*, double, int, const double*, int, double, double, bool);
 
-  struct FieldPlanSnapshot {
-    std::optional<runtime::field::NamedFieldOutput<Dim>> output;
-    std::vector<runtime::system::AuxiliaryComponentKey> output_keys;
-    std::vector<std::vector<typename Impl::PreparedFieldRhs>> rhs_by_block;
-    bool use_prepared_level_rhs = false;
-  };
-
-  std::shared_ptr<pops::dynlib::handle> package_lifetime;
+  // Declared before every package-owned closure snapshot so it is destroyed after them on both
+  // rollback and success paths.
+  std::shared_ptr<void> package_lifetime;
   register_auxiliary_type register_auxiliary = nullptr;
   install_type install = nullptr;
   std::optional<typename Impl::auxiliary_registry_type> auxiliary_snapshot;
+  std::optional<typename Impl::auxiliary_registry_type> auxiliary_candidate;
   std::optional<typename Impl::boundary_registry_type> boundary_snapshot;
+  std::optional<typename Impl::NativeFieldPlanRegistryImage> field_plan_snapshot;
   std::vector<typename Impl::BlockSpec> blocks_snapshot;
   std::vector<typename Impl::prepared_block_type> prepared_blocks_snapshot;
-  std::map<std::string, FieldPlanSnapshot> field_plan_snapshots;
   bool auxiliary_consensus_snapshot = false;
+  std::string observed_binary_identity;
+  std::string observed_content_sha256;
+  std::int64_t observed_content_size = 0;
+  std::string observed_model_identity;
   std::string preparation_contract;
   std::exception_ptr preparation_error;
 
   try {
     require_amr_assembling(p_->lifecycle, "add_native_block");
+    if (p_->native_package_phase != Impl::NativePackagePhase::idle)
+      throw std::logic_error("AMR native package transactions cannot be nested");
     if (p_->engine || p_->prepared_hierarchy)
       throw std::logic_error("AmrSystem native packages must be installed before materialization");
     if (std::any_of(p_->blocks.begin(), p_->blocks.end(),
                     [&](const auto& block) { return block.name == name; }))
       throw std::logic_error("AmrSystem native package block identities must be unique");
-    if (name.empty() || so_path.empty())
+    if (name.empty() || so_path.empty() || expected_model_identity.empty() ||
+        expected_binary_identity.empty())
       throw std::invalid_argument(
-          "AmrSystem native package requires non-empty block and artifact identities");
+          "AmrSystem native package requires complete block, model, and binary identities");
     if (!std::isfinite(gamma) || !(gamma > 0.0) || substeps < 1)
       throw std::invalid_argument(
           "AmrSystem native package requires finite positive gamma and substeps");
@@ -8935,50 +10274,93 @@ void AmrSystem<Dim>::add_native_block(const std::string& name, const std::string
     (void)parse_recon_route(recon, "AmrSystem native package");
     (void)parse_time_route(time, "AmrSystem native package");
 
+    // Authenticate one pinned image before loading it. The descriptor/handle-backed shadow path
+    // remains owned through dlopen/LoadLibrary, so the verified bytes and executable bytes cannot
+    // diverge through a path replacement between hashing and loading.
+    auto authenticated_file = std::make_shared<pops::dynlib::AuthenticatedNativeFile>(so_path);
+    observed_binary_identity = authenticated_file->binary_identity();
+    observed_content_sha256 = authenticated_file->content_sha256();
+    observed_content_size = authenticated_file->size();
+    if (observed_binary_identity != expected_binary_identity)
+      throw std::runtime_error(
+          "AmrSystem::add_native_block: compiled package binary identity differs from the "
+          "authenticated artifact");
 #if !defined(_WIN32)
-    Dl_info info;
-    if (dladdr(reinterpret_cast<void*>(&detail::abi_key_string), &info) && info.dli_fname)
-      dlopen(info.dli_fname, RTLD_NOW | RTLD_GLOBAL | RTLD_NOLOAD);
+    std::optional<pops::dynlib::UniqueHandle> host_promotion;
+    {
+      Dl_info info;
+      if (dladdr(reinterpret_cast<void*>(&detail::abi_key_string), &info) && info.dli_fname)
+        host_promotion.emplace(dlopen(info.dli_fname, RTLD_NOW | RTLD_GLOBAL | RTLD_NOLOAD));
+    }
 #endif
-    const pops::dynlib::handle handle = pops::dynlib::open(so_path);
+    const pops::dynlib::handle handle =
+        pops::dynlib::open_private_image(authenticated_file->load_path());
     if (!pops::dynlib::valid(handle))
       throw std::runtime_error("AmrSystem::add_native_block: cannot load '" + so_path +
                                "': " + pops::dynlib::last_error());
-    package_lifetime = std::shared_ptr<pops::dynlib::handle>(new pops::dynlib::handle(handle),
-                                                             [](pops::dynlib::handle* owned) {
-                                                               pops::dynlib::close(*owned);
-                                                               delete owned;
-                                                             });
+#if !defined(_WIN32)
+    host_promotion.reset();
+#endif
+    pops::dynlib::UniqueHandle opened(handle);
 
     const auto key =
         reinterpret_cast<const char* (*)()>(pops::dynlib::sym(handle, "pops_native_abi_key"));
-    if (key == nullptr || key() == nullptr)
+    if (key == nullptr)
       throw std::runtime_error(
           "AmrSystem::add_native_block: pops_native_abi_key is missing; rebuild the artifact");
-    const std::string artifact_key = key();
+    const char* raw_artifact_key =
+        pops::dynlib::invoke_with_host_exception([key] { return key(); }, "pops_native_abi_key");
+    if (raw_artifact_key == nullptr)
+      throw std::runtime_error("AmrSystem::add_native_block: pops_native_abi_key returned null");
+    const std::string artifact_key(raw_artifact_key);
     const std::string module_key = detail::abi_key_string();
     if (artifact_key != module_key)
       throw std::runtime_error(
           "AmrSystem::add_native_block: compiled package ABI differs from the native module");
 
+    const auto model_identity = reinterpret_cast<const char* (*)()>(
+        pops::dynlib::sym(handle, "pops_compiled_model_identity"));
+    if (model_identity == nullptr)
+      throw std::runtime_error(
+          "AmrSystem::add_native_block: pops_compiled_model_identity is missing; rebuild the "
+          "artifact");
+    const char* raw_model_identity = pops::dynlib::invoke_with_host_exception(
+        [model_identity] { return model_identity(); }, "pops_compiled_model_identity");
+    if (raw_model_identity == nullptr)
+      throw std::runtime_error(
+          "AmrSystem::add_native_block: pops_compiled_model_identity returned null");
+    observed_model_identity = raw_model_identity;
+    if (observed_model_identity != expected_model_identity)
+      throw std::runtime_error(
+          "AmrSystem::add_native_block: compiled package model identity differs from the expected "
+          "model");
+
     const NativeAmrPackageMetadata metadata = inspect_native_amr_package(handle, params);
     register_auxiliary = reinterpret_cast<register_auxiliary_type>(
         pops::dynlib::sym(handle, "pops_register_provider_routes_amr"));
+    if (register_auxiliary == nullptr)
+      throw std::runtime_error(
+          "AmrSystem::add_native_block: pops_register_provider_routes_amr is missing; rebuild "
+          "the artifact");
     install = reinterpret_cast<install_type>(pops::dynlib::sym(handle, "pops_install_native_amr"));
     if (install == nullptr)
       throw std::runtime_error(
           "AmrSystem::add_native_block: pops_install_native_amr is missing; compile the package "
           "with target='amr_system'");
 
+    // Retain the authenticated private image with the DSO. The shared owner declares the image
+    // before its handle, so reverse member destruction unloads the module before Windows retries
+    // deletion of its backing file. Allocation failure leaves both stack owners intact.
+    package_lifetime = std::make_shared<pops::native_loader::AuthenticatedPackageLifetime>(
+        std::move(authenticated_file), std::move(opened));
+
     auxiliary_snapshot.emplace(p_->auxiliary_registry);
+    auxiliary_candidate.emplace(p_->auxiliary_registry.structural_extension_candidate());
     boundary_snapshot.emplace(p_->boundary_registry);
+    field_plan_snapshot.emplace(p_->snapshot_native_field_plan_image());
     blocks_snapshot = p_->blocks;
     prepared_blocks_snapshot = p_->prepared_blocks;
     auxiliary_consensus_snapshot = p_->auxiliary_registry_consensus_verified;
-    for (const auto& [slot, plan] : p_->field_plans)
-      field_plan_snapshots.emplace(
-          slot, FieldPlanSnapshot{plan.output, plan.output_keys, plan.rhs_by_block,
-                                  plan.use_prepared_level_rhs});
     p_->native_package_lifetimes.reserve(p_->native_package_lifetimes.size() + 1);
 
     ExactContractBuilder exact;
@@ -8996,95 +10378,120 @@ void AmrSystem<Dim>::add_native_block(const std::string& name, const std::string
         .scalar(positivity_floor)
         .scalar(weno_epsilon)
         .scalar(wave_speed_cache)
+        .text(expected_model_identity)
+        .text(observed_model_identity)
+        .text(expected_binary_identity)
+        .text(observed_binary_identity)
+        .text(observed_content_sha256)
+        .scalar(observed_content_size)
         .text(artifact_key)
         .text(metadata.route_manifest)
         .text(metadata.parameter_names)
         .scalar(std::int32_t{metadata.parameter_count})
-        .presence(register_auxiliary != nullptr);
+        .text("pops_register_provider_routes_amr");
     preparation_contract = std::move(exact).release();
   } catch (...) {
     preparation_error = std::current_exception();
   }
 
-  if (all_reduce_max(preparation_error ? 1L : 0L) != 0) {
-    if (n_ranks() == 1 && preparation_error)
+  // Only after every rank has completed its allocation/callback preparation do ranks enter the
+  // RuntimeInstance communicator's fixed collective schedule. Native package loading never falls
+  // back to a process-global communicator.
+  const ExecutionLane& package_lane = p_->require_package_assembly_lane();
+  const CommunicatorView package_communicator = package_lane.communicator();
+  if (all_reduce_max(preparation_error ? 1L : 0L, package_communicator) != 0) {
+    if (package_communicator.size() == 1 && preparation_error)
       std::rethrow_exception(preparation_error);
     throw std::runtime_error("AmrSystem native package preflight failed on at least one MPI rank");
   }
   if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{std::string_view("amr-native-package"), std::string_view(preparation_contract)}}))
+          {{std::string_view("amr-native-package"), std::string_view(preparation_contract)}},
+          package_communicator))
     throw std::invalid_argument("AmrSystem native package contracts differ between MPI ranks");
 
-  auto rollback = [&] {
-    p_->auxiliary_registry = *auxiliary_snapshot;
-    p_->auxiliary_registry_consensus_verified = auxiliary_consensus_snapshot;
-    p_->boundary_registry = *boundary_snapshot;
-    p_->blocks = blocks_snapshot;
-    p_->prepared_blocks = prepared_blocks_snapshot;
-    for (const auto& [slot, snapshot] : field_plan_snapshots) {
-      auto found = p_->field_plans.find(slot);
-      if (found == p_->field_plans.end())
-        throw std::logic_error("AMR native package changed the exact field-plan registry");
-      found->second.output = snapshot.output;
-      found->second.output_keys = snapshot.output_keys;
-      found->second.rhs_by_block = snapshot.rhs_by_block;
-      found->second.use_prepared_level_rhs = snapshot.use_prepared_level_rhs;
-    }
+  static_assert(std::is_nothrow_swappable_v<typename Impl::boundary_registry_type>);
+  static_assert(noexcept(blocks_snapshot.swap(p_->blocks)));
+  static_assert(noexcept(prepared_blocks_snapshot.swap(p_->prepared_blocks)));
+  auto rollback = [&]() noexcept {
+    p_->native_package_phase = Impl::NativePackagePhase::idle;
+    p_->native_package_install_contract.clear();
+    p_->lifecycle.phase = runtime::system::LifecyclePhase::Assembling;
+    p_->auxiliary_registry.swap_complete(*auxiliary_snapshot);
+    std::swap(p_->auxiliary_registry_consensus_verified, auxiliary_consensus_snapshot);
+    std::swap(p_->boundary_registry, *boundary_snapshot);
+    p_->swap_native_field_plan_image(*field_plan_snapshot);
+    p_->blocks.swap(blocks_snapshot);
+    p_->prepared_blocks.swap(prepared_blocks_snapshot);
   };
+  NoexceptScopeExit rollback_guard(rollback);
+
+  p_->auxiliary_registry.swap_complete(*auxiliary_candidate);
 
   std::exception_ptr registration_error;
+  p_->native_package_phase = Impl::NativePackagePhase::registrar_local;
+  p_->lifecycle.phase = runtime::system::LifecyclePhase::Bound;
   try {
-    if (register_auxiliary != nullptr)
-      register_auxiliary(this);
+    pops::dynlib::invoke_with_host_exception([&] { register_auxiliary(this); },
+                                             "pops_register_provider_routes_amr");
   } catch (...) {
     registration_error = std::current_exception();
   }
-  if (all_reduce_max(registration_error ? 1L : 0L) != 0) {
-    std::exception_ptr rollback_error;
-    try {
-      rollback();
-    } catch (...) {
-      rollback_error = std::current_exception();
-    }
-    if (all_reduce_max(rollback_error ? 1L : 0L) != 0) {
-      p_->native_package_lifetimes.push_back(std::move(package_lifetime));
-      throw std::runtime_error(
-          "AmrSystem native auxiliary registration rollback failed collectively");
-    }
-    if (n_ranks() == 1 && registration_error)
+  p_->native_package_phase = Impl::NativePackagePhase::idle;
+  p_->lifecycle.phase = runtime::system::LifecyclePhase::Assembling;
+  if (all_reduce_max(registration_error ? 1L : 0L, package_communicator) != 0) {
+    if (package_communicator.size() == 1 && registration_error)
       std::rethrow_exception(registration_error);
     throw std::runtime_error(
         "AmrSystem native auxiliary registration failed on at least one MPI rank");
   }
+  try {
+    seal_auxiliary_providers();
+  } catch (...) {
+    throw;
+  }
 
   std::exception_ptr installation_error;
+  std::string installation_contract;
+  p_->native_package_phase = Impl::NativePackagePhase::installer_local;
+  p_->lifecycle.phase = runtime::system::LifecyclePhase::Bound;
   try {
-    install(static_cast<void*>(this), name.c_str(), limiter.c_str(), riemann.c_str(), recon.c_str(),
-            time.c_str(), gamma, substeps, params.empty() ? nullptr : params.data(),
-            static_cast<int>(params.size()), positivity_floor, weno_epsilon, wave_speed_cache);
-    if (p_->prepared_blocks.empty() || p_->blocks.empty() || p_->blocks.back().name != name ||
-        p_->prepared_blocks.back().name != name)
+    p_->native_package_install_contract.clear();
+    pops::dynlib::invoke_with_host_exception(
+        [&] {
+          install(static_cast<void*>(this), name.c_str(), limiter.c_str(), riemann.c_str(),
+                  recon.c_str(), time.c_str(), gamma, substeps,
+                  params.empty() ? nullptr : params.data(), static_cast<int>(params.size()),
+                  positivity_floor, weno_epsilon, wave_speed_cache);
+        },
+        "pops_install_native_amr");
+    if (p_->blocks.size() != blocks_snapshot.size() + 1 ||
+        p_->prepared_blocks.size() != prepared_blocks_snapshot.size() + 1 ||
+        p_->blocks.back().name != name || p_->prepared_blocks.back().name != name ||
+        p_->native_package_install_contract.empty())
       throw std::logic_error(
           "AmrSystem native package did not publish one complete prepared block");
+    ExactContractBuilder published;
+    published.text(p_->native_package_install_contract)
+        .bytes(p_->native_package_publication_contract());
+    installation_contract = std::move(published).release();
   } catch (...) {
     installation_error = std::current_exception();
   }
-  if (all_reduce_max(installation_error ? 1L : 0L) != 0) {
-    std::exception_ptr rollback_error;
-    try {
-      rollback();
-    } catch (...) {
-      rollback_error = std::current_exception();
-    }
-    if (all_reduce_max(rollback_error ? 1L : 0L) != 0) {
-      p_->native_package_lifetimes.push_back(std::move(package_lifetime));
-      throw std::runtime_error("AmrSystem native package rollback failed collectively");
-    }
-    if (n_ranks() == 1 && installation_error)
+  p_->native_package_phase = Impl::NativePackagePhase::idle;
+  p_->lifecycle.phase = runtime::system::LifecyclePhase::Assembling;
+  if (all_reduce_max(installation_error ? 1L : 0L, package_communicator) != 0) {
+    if (package_communicator.size() == 1 && installation_error)
       std::rethrow_exception(installation_error);
     throw std::runtime_error("AmrSystem native package installation failed collectively");
   }
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{std::string_view("amr-native-prepared-install"),
+                                                  std::string_view(installation_contract)}},
+                                                package_communicator)) {
+    throw std::invalid_argument("AMR native prepared block differs between RuntimeInstance ranks");
+  }
+  p_->native_package_install_contract.clear();
   p_->native_package_lifetimes.push_back(std::move(package_lifetime));
+  rollback_guard.dismiss();
 }
 
 template <int Dim>
@@ -9094,9 +10501,12 @@ void AmrSystem<Dim>::register_external_riemann_package(
     const std::string& expected_model_identity, const std::string& provider_consumer_qid,
     const std::string& limiter, const std::string& recon, const std::string& time, double gamma,
     int substeps, int stride, double positivity_floor, double weno_epsilon) {
+  p_->require_no_native_package_callback("register_external_riemann_package");
   std::shared_ptr<runtime::program::ExternalBrickHandle> authority;
   std::optional<typename Impl::auxiliary_registry_type> provider_registry_snapshot;
+  std::optional<typename Impl::auxiliary_registry_type> provider_registry_candidate;
   std::optional<typename Impl::boundary_registry_type> boundary_snapshot;
+  std::optional<typename Impl::NativeFieldPlanRegistryImage> field_plan_snapshot;
   std::vector<typename Impl::BlockSpec> blocks_snapshot;
   std::vector<typename Impl::prepared_block_type> prepared_blocks_snapshot;
   bool provider_consensus_snapshot = false;
@@ -9105,6 +10515,8 @@ void AmrSystem<Dim>::register_external_riemann_package(
 
   try {
     require_amr_assembling(p_->lifecycle, "register_external_riemann_package");
+    if (p_->native_package_phase != Impl::NativePackagePhase::idle)
+      throw std::logic_error("AMR external package transactions cannot be nested");
     runtime::program::detail::validate_external_install(name, limiter, recon, time,
                                                         provider_consumer_qid, gamma, substeps,
                                                         stride, positivity_floor, weno_epsilon);
@@ -9130,7 +10542,9 @@ void AmrSystem<Dim>::register_external_riemann_package(
         expected_sha256);
 
     provider_registry_snapshot.emplace(p_->auxiliary_registry);
+    provider_registry_candidate.emplace(p_->auxiliary_registry.structural_extension_candidate());
     boundary_snapshot.emplace(p_->boundary_registry);
+    field_plan_snapshot.emplace(p_->snapshot_native_field_plan_image());
     blocks_snapshot = p_->blocks;
     prepared_blocks_snapshot = p_->prepared_blocks;
     provider_consensus_snapshot = p_->auxiliary_registry_consensus_verified;
@@ -9160,88 +10574,126 @@ void AmrSystem<Dim>::register_external_riemann_package(
     preflight_error = std::current_exception();
   }
 
-  if (all_reduce_max(preflight_error ? 1L : 0L) != 0) {
-    if (n_ranks() == 1 && preflight_error)
+  const ExecutionLane& package_lane = p_->require_package_assembly_lane();
+  const CommunicatorView package_communicator = package_lane.communicator();
+  if (all_reduce_max(preflight_error ? 1L : 0L, package_communicator) != 0) {
+    if (package_communicator.size() == 1 && preflight_error)
       std::rethrow_exception(preflight_error);
     throw std::runtime_error(
         "AMR external Riemann package preflight failed on at least one MPI rank");
   }
   if (!all_ranks_agree_exact_ordered_byte_pairs({{std::string_view("amr-external-riemann-package"),
-                                                  std::string_view(preflight_contract)}}))
+                                                  std::string_view(preflight_contract)}},
+                                                package_communicator))
     throw std::invalid_argument("AMR external Riemann package contracts differ between MPI ranks");
 
-  const auto rollback = [&] {
-    p_->auxiliary_registry = *provider_registry_snapshot;
-    p_->auxiliary_registry_consensus_verified = provider_consensus_snapshot;
-    p_->boundary_registry = *boundary_snapshot;
-    p_->blocks = blocks_snapshot;
-    p_->prepared_blocks = prepared_blocks_snapshot;
+  const auto rollback = [&]() noexcept {
+    p_->native_package_phase = Impl::NativePackagePhase::idle;
+    p_->native_package_install_contract.clear();
+    p_->lifecycle.phase = runtime::system::LifecyclePhase::Assembling;
+    p_->auxiliary_registry.swap_complete(*provider_registry_snapshot);
+    std::swap(p_->auxiliary_registry_consensus_verified, provider_consensus_snapshot);
+    std::swap(p_->boundary_registry, *boundary_snapshot);
+    p_->swap_native_field_plan_image(*field_plan_snapshot);
+    p_->blocks.swap(blocks_snapshot);
+    p_->prepared_blocks.swap(prepared_blocks_snapshot);
   };
+  NoexceptScopeExit rollback_guard(rollback);
+
+  p_->auxiliary_registry.swap_complete(*provider_registry_candidate);
 
   std::exception_ptr registration_error;
+  p_->native_package_phase = Impl::NativePackagePhase::registrar_local;
+  p_->lifecycle.phase = runtime::system::LifecyclePhase::Bound;
   try {
     authority->register_amr_routes(*this);
   } catch (...) {
     registration_error = std::current_exception();
   }
-  if (all_reduce_max(registration_error ? 1L : 0L) != 0) {
-    std::exception_ptr rollback_error;
-    try {
-      rollback();
-    } catch (...) {
-      rollback_error = std::current_exception();
-    }
-    if (all_reduce_max(rollback_error ? 1L : 0L) != 0) {
-      p_->external_package_lifetimes.push_back(authority);
-      throw std::runtime_error("AMR external Riemann provider-route rollback failed collectively");
-    }
-    if (n_ranks() == 1 && registration_error)
+  p_->native_package_phase = Impl::NativePackagePhase::idle;
+  p_->lifecycle.phase = runtime::system::LifecyclePhase::Assembling;
+  if (all_reduce_max(registration_error ? 1L : 0L, package_communicator) != 0) {
+    if (package_communicator.size() == 1 && registration_error)
       std::rethrow_exception(registration_error);
     throw std::runtime_error(
         "AMR external Riemann provider-route registration failed collectively");
   }
+  try {
+    seal_auxiliary_providers();
+  } catch (...) {
+    throw;
+  }
 
   std::exception_ptr installation_error;
+  std::string installation_contract;
+  p_->native_package_phase = Impl::NativePackagePhase::external_installer_local;
+  p_->lifecycle.phase = runtime::system::LifecyclePhase::Bound;
   try {
+    p_->native_package_install_contract.clear();
     authority->install_amr(this, name, provider_consumer_qid, limiter, recon, time, gamma, substeps,
                            stride, positivity_floor, weno_epsilon);
     if (p_->blocks.size() != blocks_snapshot.size() + 1 ||
         p_->prepared_blocks.size() != prepared_blocks_snapshot.size() + 1 ||
-        p_->blocks.back().name != name || p_->prepared_blocks.back().name != name)
+        p_->blocks.back().name != name || p_->prepared_blocks.back().name != name ||
+        p_->native_package_install_contract.empty())
       throw std::logic_error(
           "AMR external Riemann package did not publish one complete prepared block");
+    ExactContractBuilder published;
+    published.text(p_->native_package_install_contract)
+        .bytes(p_->native_package_publication_contract());
+    installation_contract = std::move(published).release();
   } catch (...) {
     installation_error = std::current_exception();
   }
-  if (all_reduce_max(installation_error ? 1L : 0L) != 0) {
-    std::exception_ptr rollback_error;
-    try {
-      rollback();
-    } catch (...) {
-      rollback_error = std::current_exception();
-    }
-    if (all_reduce_max(rollback_error ? 1L : 0L) != 0) {
-      p_->external_package_lifetimes.push_back(authority);
-      throw std::runtime_error("AMR external Riemann package rollback failed collectively");
-    }
-    if (n_ranks() == 1 && installation_error)
+  p_->native_package_phase = Impl::NativePackagePhase::idle;
+  p_->lifecycle.phase = runtime::system::LifecyclePhase::Assembling;
+  if (all_reduce_max(installation_error ? 1L : 0L, package_communicator) != 0) {
+    if (package_communicator.size() == 1 && installation_error)
       std::rethrow_exception(installation_error);
     throw std::runtime_error("AMR external Riemann package installation failed collectively");
   }
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{std::string_view("amr-external-prepared-install"),
+                                                  std::string_view(installation_contract)}},
+                                                package_communicator)) {
+    throw std::invalid_argument(
+        "AMR external prepared block differs between RuntimeInstance ranks");
+  }
+  p_->native_package_install_contract.clear();
   p_->external_package_lifetimes.push_back(std::move(authority));
+  rollback_guard.dismiss();
 }
 
 template <int Dim>
 void AmrSystem<Dim>::install_prepared_amr_block(PreparedBlock prepared) {
+  if (p_->native_package_phase == Impl::NativePackagePhase::installer_local)
+    throw std::logic_error(
+        "native AMR installers must commit one complete block-and-elliptic package");
+  const bool external_package_candidate =
+      p_->native_package_phase == Impl::NativePackagePhase::external_installer_local;
+  if (!external_package_candidate)
+    p_->require_no_native_package_callback("install_prepared_amr_block");
+  install_prepared_amr_block_candidate_(std::move(prepared), external_package_candidate);
+}
+
+template <int Dim>
+void AmrSystem<Dim>::install_prepared_amr_block_candidate_(PreparedBlock prepared,
+                                                           bool native_package_candidate) {
+  if (native_package_candidate) {
+    if (p_->native_package_phase != Impl::NativePackagePhase::installer_local &&
+        p_->native_package_phase != Impl::NativePackagePhase::external_installer_local)
+      throw std::logic_error("prepared AMR package candidate has no active native installer");
+  } else if (p_->native_package_phase != Impl::NativePackagePhase::idle) {
+    throw std::logic_error("prepared AMR block publication cannot run inside a native callback");
+  }
   std::exception_ptr preparation_error;
-  long preparation_failure = 0;
   std::vector<typename Impl::BlockSpec> block_candidate;
   std::vector<PreparedBlock> prepared_candidates;
   std::shared_ptr<const HyperbolicBoundary> converted_boundary;
   std::string install_contract;
   bool has_boundary = false;
   try {
-    require_amr_assembling(p_->lifecycle, "install_prepared_amr_block");
+    if (!native_package_candidate)
+      require_amr_assembling(p_->lifecycle, "install_prepared_amr_block");
     validate_prepared_amr_block(prepared);
     if (p_->engine || p_->prepared_hierarchy)
       throw std::logic_error("prepared AMR blocks must be installed before materialization");
@@ -9309,23 +10761,212 @@ void AmrSystem<Dim>::install_prepared_amr_block(PreparedBlock prepared) {
     prepared_candidates.reserve(prepared_candidates.size() + 1);
     prepared_candidates.push_back(std::move(prepared));
   } catch (...) {
-    preparation_failure = 1;
     preparation_error = std::current_exception();
   }
-  if (all_reduce_max(preparation_failure) != 0) {
+  if (native_package_candidate) {
     if (preparation_error)
       std::rethrow_exception(preparation_error);
-    throw std::runtime_error("prepared AMR block validation failed collectively");
+    if (!p_->native_package_install_contract.empty())
+      throw std::logic_error("AMR native package staged more than one prepared block");
+    p_->native_package_install_contract = std::move(install_contract);
+    p_->blocks.swap(block_candidate);
+    p_->prepared_blocks.swap(prepared_candidates);
+    if (has_boundary)
+      p_->boundary_registry.boundary(p_->blocks.back().name).authority =
+          std::move(converted_boundary);
+    return;
   }
-  if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{std::string_view("prepared-amr-install"), std::string_view(install_contract)}}))
-    throw std::invalid_argument("prepared AMR block install contracts differ between MPI ranks");
+
+  if (preparation_error)
+    std::rethrow_exception(preparation_error);
 
   p_->blocks.swap(block_candidate);
   p_->prepared_blocks.swap(prepared_candidates);
   if (has_boundary)
     p_->boundary_registry.boundary(p_->blocks.back().name).authority =
         std::move(converted_boundary);
+}
+
+template <int Dim>
+void AmrSystem<Dim>::install_prepared_native_amr_package(PreparedNativePackage package) {
+  if (p_->native_package_phase != Impl::NativePackagePhase::installer_local)
+    throw std::logic_error(
+        "complete native AMR packages can be committed only by the active installer");
+  const std::string block_name = package.block.name;
+  install_prepared_amr_block_candidate_(std::move(package.block), true);
+  std::string block_contract = std::move(p_->native_package_install_contract);
+  p_->native_package_install_contract.clear();
+
+  ExactContractBuilder package_contract;
+  package_contract.text("pops.amr-system.prepared-native-package")
+      .scalar(std::uint32_t{2})
+      .scalar(std::int32_t{Dim})
+      .text(block_name)
+      .bytes(block_contract)
+      .scalar(static_cast<std::uint64_t>(package.elliptic_attachments.size()));
+  struct PreparedAttachment {
+    std::string slot;
+    Real coefficient = Real(0);
+    std::optional<runtime::field::NamedFieldOutput<Dim>> output;
+    bool has_rhs = false;
+  };
+  std::vector<PreparedAttachment> prepared_attachments;
+  prepared_attachments.reserve(package.elliptic_attachments.size());
+  std::set<std::string> output_slots;
+  std::set<std::pair<std::string, std::size_t>> rhs_roles;
+  std::set<std::string> default_rhs_slots;
+  std::set<std::string> attachment_output_keys;
+  for (const auto& attachment : package.elliptic_attachments) {
+    if (attachment.field.empty())
+      throw std::invalid_argument("native AMR elliptic attachment requires a field identity");
+    const std::string slot =
+        attachment.field == "fields_from_state" && !p_->default_field_slot.empty()
+            ? p_->default_field_slot
+            : p_->resolve_field_slot(attachment.field);
+    const typename Impl::FieldPlan& plan = p_->field_plans.at(slot);
+    if (plan.prepared_solver)
+      throw std::logic_error(
+          "native AMR elliptic attachment cannot replace a materialized field plan");
+
+    PreparedAttachment prepared;
+    prepared.slot = slot;
+    const bool default_slot = slot == p_->default_field_slot;
+    const bool has_output = !attachment.output_keys.empty();
+    const bool has_rhs = static_cast<bool>(attachment.rhs);
+    if (default_slot) {
+      if (!attachment.block_identity.empty() || !attachment.binding_identity.empty() ||
+          !attachment.rhs_provider_key.empty() ||
+          attachment.binding_ordinal != std::numeric_limits<std::size_t>::max() || has_output ||
+          !has_rhs || attachment.rhs_provider_identity.empty() || attachment.coefficient != 1.0)
+        throw std::invalid_argument(
+            "native AMR default field attachment requires one unqualified unit RHS closure");
+      if (!default_rhs_slots.insert(slot).second)
+        throw std::invalid_argument(
+            "native AMR package contains more than one default-field RHS attachment");
+      prepared.coefficient = Real(1);
+      prepared.has_rhs = true;
+      prepared_attachments.push_back(std::move(prepared));
+      continue;
+    }
+
+    if (attachment.field != slot || attachment.block_identity != block_name)
+      throw std::invalid_argument(
+          "native AMR named attachment differs from its exact field-slot/block role");
+    if (!has_output && !has_rhs)
+      throw std::invalid_argument("native AMR named attachment contains no output or RHS role");
+
+    if (has_output) {
+      if (plan.output_block != block_name || !output_slots.insert(slot).second)
+        throw std::invalid_argument(
+            "native AMR named output differs from its unique resolved owner block");
+      if (plan.output)
+        throw std::logic_error("native AMR named field output is already installed");
+      if (attachment.gradient_sign != plan.expected_gradient_sign ||
+          attachment.output_keys.size() != plan.expected_output_keys.size())
+        throw std::invalid_argument(
+            "native AMR named output differs from its resolved component/sign contract");
+      prepared.output.emplace(attachment.output_keys.size(), attachment.gradient_sign);
+      std::set<std::string> exact_output_keys;
+      for (std::size_t key_index = 0; key_index < attachment.output_keys.size(); ++key_index) {
+        const auto& key = attachment.output_keys[key_index];
+        key.validate();
+        const std::string exact_key = key.exact_key();
+        if (exact_key != plan.expected_output_keys[key_index].exact_key())
+          throw std::invalid_argument(
+              "native AMR named output key order differs from its resolved field plan");
+        if (!exact_output_keys.insert(exact_key).second ||
+            !attachment_output_keys.insert(exact_key).second)
+          throw std::invalid_argument("native AMR elliptic output keys must be unique");
+        if (p_->auxiliary_registry.provider_for_key(key).kind() !=
+            runtime::system::AuxiliaryProviderKind::field_output)
+          throw std::invalid_argument(
+              "native AMR elliptic output key lacks a field-output provider");
+      }
+    } else if (attachment.gradient_sign != 1) {
+      throw std::invalid_argument(
+          "native AMR RHS-only attachment cannot carry a field-output gradient sign");
+    }
+
+    if (has_rhs) {
+      if (attachment.binding_identity.empty() || attachment.rhs_provider_identity.empty() ||
+          attachment.rhs_provider_key.empty() ||
+          attachment.binding_ordinal >= plan.providers.size() ||
+          !std::isfinite(attachment.coefficient))
+        throw std::invalid_argument(
+            "native AMR named RHS attachment requires one exact finite provider binding");
+      const typename Impl::FieldProviderBinding& binding =
+          plan.providers[attachment.binding_ordinal];
+      if (binding.identity != attachment.binding_identity || binding.block != block_name ||
+          binding.key != attachment.rhs_provider_key ||
+          binding.coefficient != attachment.coefficient)
+        throw std::invalid_argument(
+            "native AMR named RHS attachment differs from its resolved provider binding");
+      if (!rhs_roles.insert({slot, attachment.binding_ordinal}).second)
+        throw std::invalid_argument(
+            "native AMR package contains a duplicate named RHS provider binding");
+      prepared.coefficient = static_cast<Real>(binding.coefficient);
+      prepared.has_rhs = true;
+    } else {
+      if (!attachment.binding_identity.empty() || !attachment.rhs_provider_identity.empty() ||
+          !attachment.rhs_provider_key.empty() ||
+          attachment.binding_ordinal != std::numeric_limits<std::size_t>::max() ||
+          attachment.coefficient != 0.0)
+        throw std::invalid_argument(
+            "native AMR output-only attachment cannot carry an RHS provider role");
+    }
+    prepared_attachments.push_back(std::move(prepared));
+  }
+  for (const auto& [slot, plan] : p_->field_plans) {
+    if (slot == p_->default_field_slot)
+      continue;
+    if ((plan.output_block == block_name) != output_slots.contains(slot))
+      throw std::invalid_argument(
+          "native AMR package must attach the exact named-field output role for its block");
+    for (std::size_t ordinal = 0; ordinal < plan.providers.size(); ++ordinal)
+      if ((plan.providers[ordinal].block == block_name) != rhs_roles.contains({slot, ordinal}))
+        throw std::invalid_argument(
+            "native AMR package must attach every and only exact named-field RHS binding for its "
+            "block");
+  }
+
+  std::set<std::string> touched_slots;
+  const std::size_t block_index = p_->block_index(block_name);
+  for (std::size_t index = 0; index < package.elliptic_attachments.size(); ++index) {
+    auto& attachment = package.elliptic_attachments[index];
+    PreparedAttachment& prepared = prepared_attachments[index];
+    const std::string& slot = prepared.slot;
+    typename Impl::FieldPlan& plan = p_->field_plans.at(slot);
+    if (prepared.output) {
+      plan.output.swap(prepared.output);
+      plan.output_keys = attachment.output_keys;
+    }
+    if (slot == p_->default_field_slot && prepared.has_rhs)
+      plan.use_prepared_level_rhs = false;
+    if (prepared.has_rhs) {
+      plan.rhs_by_block.resize(p_->blocks.size());
+      plan.rhs_by_block.at(block_index)
+          .push_back({attachment.rhs_provider_identity, block_name, slot, std::move(attachment.rhs),
+                      prepared.coefficient});
+    }
+    touched_slots.insert(slot);
+    package_contract.text(slot)
+        .text(attachment.block_identity)
+        .text(attachment.binding_identity)
+        .text(attachment.rhs_provider_identity)
+        .text(attachment.rhs_provider_key)
+        .scalar(static_cast<std::uint64_t>(attachment.binding_ordinal))
+        .scalar(attachment.coefficient)
+        .scalar(std::int32_t{attachment.gradient_sign})
+        .presence(prepared.has_rhs)
+        .scalar(static_cast<std::uint64_t>(attachment.output_keys.size()));
+    for (const auto& key : attachment.output_keys)
+      key.serialize_exact(package_contract);
+  }
+  package_contract.scalar(static_cast<std::uint64_t>(touched_slots.size()));
+  for (const std::string& slot : touched_slots)
+    package_contract.text(slot).bytes(
+        Impl::exact_field_plan_contract(slot, p_->field_plans.at(slot)));
+  p_->native_package_install_contract = std::move(package_contract).release();
 }
 
 template <int Dim>
@@ -9378,6 +11019,8 @@ void AmrSystem<Dim>::set_bootstrap_tagging(
     const std::vector<std::int32_t>& coarsen_ops, const std::vector<std::int32_t>& coarsen_args,
     int min_cycles, const std::string& equality_policy, const std::string& conflict_policy,
     const std::string& clock_identity, const std::string& provider_identity) {
+  p_->require_no_native_package_callback("set_bootstrap_tagging");
+  const ExecutionLane& lane = p_->require_package_assembly_lane();
   typename Impl::TaggingSpec candidate;
   std::string contract;
   std::exception_ptr local_error;
@@ -9526,13 +11169,13 @@ void AmrSystem<Dim>::set_bootstrap_tagging(
     local_failure = 1;
     local_error = std::current_exception();
   }
-  if (all_reduce_max(local_failure) != 0) {
+  if (all_reduce_max(local_failure, lane) != 0) {
     if (local_error)
       std::rethrow_exception(local_error);
     throw std::runtime_error("AMR prepared tagging authoring failed collectively");
   }
   if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{std::string_view("prepared-amr-tagging"), std::string_view(contract)}}))
+          {{std::string_view("prepared-amr-tagging"), std::string_view(contract)}}, lane))
     throw std::invalid_argument("AMR prepared tagging contracts differ between MPI ranks");
   p_->tagging_spec.emplace(std::move(candidate));
   p_->resolved_tagging.reset();
@@ -9546,6 +11189,8 @@ template <int Dim>
 void AmrSystem<Dim>::set_temporal_relations(const std::vector<std::int64_t>& numerators,
                                             const std::vector<std::int64_t>& denominators,
                                             const std::vector<std::string>& remainder_policies) {
+  p_->require_no_native_package_callback("set_temporal_relations");
+  const ExecutionLane& lane = p_->require_package_assembly_lane();
   std::vector<::pops::amr::ParentChildClockRelation> candidate;
   std::string contract;
   std::exception_ptr preparation_error;
@@ -9582,13 +11227,13 @@ void AmrSystem<Dim>::set_temporal_relations(const std::vector<std::int64_t>& num
   } catch (...) {
     preparation_error = std::current_exception();
   }
-  if (all_reduce_max(preparation_error ? 1L : 0L) != 0) {
-    if (n_ranks() == 1 && preparation_error)
+  if (all_reduce_max(preparation_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && preparation_error)
       std::rethrow_exception(preparation_error);
     throw std::runtime_error("AMR temporal relation preparation failed collectively");
   }
   if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{std::string_view("amr-temporal-relations"), std::string_view(contract)}}))
+          {{std::string_view("amr-temporal-relations"), std::string_view(contract)}}, lane))
     throw std::invalid_argument("AMR temporal relations differ between MPI ranks");
   p_->temporal_relations = std::move(candidate);
 }
@@ -9598,6 +11243,8 @@ void AmrSystem<Dim>::set_analytic_level_set(const std::vector<std::string>& opco
                                             const std::vector<double>& literals,
                                             const std::string& mode, double kappa_min,
                                             double face_open_eps, double cut_theta_min) {
+  p_->require_no_native_package_callback("set_analytic_level_set");
+  const ExecutionLane& lane = p_->require_package_assembly_lane();
   runtime::system::PreparedEmbeddedBoundaryMode prepared_mode =
       runtime::system::PreparedEmbeddedBoundaryMode::inactive;
   EbThresholds thresholds{};
@@ -9626,14 +11273,15 @@ void AmrSystem<Dim>::set_analytic_level_set(const std::vector<std::string>& opco
     local_failure = 1;
     local_error = std::current_exception();
   }
-  if (all_reduce_max(local_failure) != 0) {
+  if (all_reduce_max(local_failure, lane) != 0) {
     if (local_error)
       std::rethrow_exception(local_error);
     throw std::runtime_error("AMR embedded-boundary authoring failed collectively");
   }
   if (!all_ranks_agree_exact_ordered_byte_pairs(
           {{"amr-eb-configuration", authored.configuration_contract},
-           {"amr-eb-semantic", authored.semantic_digest}}))
+           {"amr-eb-semantic", authored.semantic_digest}},
+          lane))
     throw std::invalid_argument(
         "AMR embedded-boundary authoring contracts differ between MPI ranks");
 
@@ -9648,6 +11296,8 @@ void AmrSystem<Dim>::set_analytic_level_set(const std::vector<std::string>& opco
 
 template <int Dim>
 void AmrSystem<Dim>::set_geometry_mode(const std::string& mode) {
+  p_->require_no_native_package_callback("set_geometry_mode");
+  const ExecutionLane& lane = p_->require_package_assembly_lane();
   runtime::system::PreparedEmbeddedBoundaryMode prepared_mode =
       runtime::system::PreparedEmbeddedBoundaryMode::inactive;
   std::uint64_t generation = 0;
@@ -9678,18 +11328,20 @@ void AmrSystem<Dim>::set_geometry_mode(const std::string& mode) {
     local_failure = 1;
     local_error = std::current_exception();
   }
-  if (all_reduce_max(local_failure) != 0) {
+  if (all_reduce_max(local_failure, lane) != 0) {
     if (local_error)
       std::rethrow_exception(local_error);
     throw std::runtime_error("AMR embedded-boundary mode selection failed collectively");
   }
-  if (all_reduce_min(unchanged_inactive ? 1L : 0L) != all_reduce_max(unchanged_inactive ? 1L : 0L))
+  if (all_reduce_min(unchanged_inactive ? 1L : 0L, lane) !=
+      all_reduce_max(unchanged_inactive ? 1L : 0L, lane))
     throw std::invalid_argument("AMR embedded-boundary mode state differs between MPI ranks");
   if (unchanged_inactive)
     return;
   if (!all_ranks_agree_exact_ordered_byte_pairs(
           {{"amr-eb-configuration", authored.configuration_contract},
-           {"amr-eb-semantic", authored.semantic_digest}}))
+           {"amr-eb-semantic", authored.semantic_digest}},
+          lane))
     throw std::invalid_argument("AMR embedded-boundary mode contracts differ between MPI ranks");
   p_->embedded_boundary_mode = prepared_mode;
   p_->embedded_boundary_generation = generation;
@@ -9758,6 +11410,7 @@ template <int Dim>
 void AmrSystem<Dim>::install_prepared_amr_coupling_operator(std::string provider_contract,
                                                             CouplingOperatorView view,
                                                             PreparedCouplingOperator operation) {
+  const ExecutionLane& lane = p_->require_package_assembly_lane();
   require_amr_assembling(p_->lifecycle, "install_prepared_amr_coupling_operator");
   std::vector<typename Impl::PreparedCouplingInstall> candidate;
   std::string exact;
@@ -9803,13 +11456,13 @@ void AmrSystem<Dim>::install_prepared_amr_coupling_operator(std::string provider
   } catch (...) {
     local_error = std::current_exception();
   }
-  if (all_reduce_max(local_error ? 1L : 0L) != 0) {
-    if (n_ranks() == 1 && local_error)
+  if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && local_error)
       std::rethrow_exception(local_error);
     throw std::runtime_error("AMR coupling provider staging failed collectively");
   }
   if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{std::string_view("amr-system-prepared-coupling"), std::string_view(exact)}}))
+          {{std::string_view("amr-system-prepared-coupling"), std::string_view(exact)}}, lane))
     throw std::invalid_argument("AMR coupling provider contracts differ between MPI ranks");
   p_->prepared_couplings.swap(candidate);
 }
@@ -10710,6 +12363,8 @@ AmrSystem<Dim>::prepared_amr_level_evaluation_if_present(int level) const noexce
 
 template <int Dim>
 void AmrSystem<Dim>::clear_prepared_amr_level_evaluations() const noexcept {
+  if (p_->native_package_phase != Impl::NativePackagePhase::idle)
+    return;
   p_->discard_level_evaluations();
 }
 
@@ -10722,6 +12377,8 @@ void AmrSystem<Dim>::bind_program_hierarchy_candidates(
 template <int Dim>
 void AmrSystem<Dim>::unbind_program_hierarchy_candidates(
     const std::vector<MultiFab<Dim>>* candidates) const noexcept {
+  if (p_->native_package_phase != Impl::NativePackagePhase::idle)
+    return;
   unbind_program_block_hierarchy_candidates(0, candidates);
 }
 
@@ -10791,6 +12448,8 @@ void AmrSystem<Dim>::bind_program_block_hierarchy_candidates(
 template <int Dim>
 void AmrSystem<Dim>::unbind_program_block_hierarchy_candidates(
     int runtime_block, const std::vector<MultiFab<Dim>>* candidates) const noexcept {
+  if (p_->native_package_phase != Impl::NativePackagePhase::idle)
+    return;
   if (runtime_block < 0 ||
       static_cast<std::size_t>(runtime_block) >= p_->program_hierarchy_candidates.size())
     return;
@@ -11008,10 +12667,64 @@ void AmrSystem<Dim>::project_prepared_amr_block_level_state(int runtime_block, i
 template <int Dim>
 void AmrSystem<Dim>::add_prepared_amr_poisson_rhs(int level, MultiFab<Dim>& rhs) {
   p_->ensure_engine();
-  for (std::size_t block = 0; block < p_->blocks.size(); ++block)
-    add_prepared_amr_block_poisson_rhs(static_cast<int>(block), level,
-                                       p_->block_state(block, static_cast<std::size_t>(level)),
-                                       rhs);
+  const ExecutionLane& lane =
+      p_->require_prepared_engine_lane("prepared AMR all-block Poisson RHS");
+  std::vector<const PreparedGeneratedAmrLevelBlock<Dim>*> prepared_contributions;
+  std::vector<const MultiFab<Dim>*> states;
+  std::string request_contract;
+  std::exception_ptr local_error;
+  try {
+    if (level < 0 || !p_->prepared_hierarchy ||
+        p_->prepared_hierarchy->block_levels.size() != p_->blocks.size())
+      throw std::out_of_range("prepared AMR Poisson RHS level lies outside the live hierarchy");
+    prepared_contributions.reserve(p_->blocks.size());
+    states.reserve(p_->blocks.size());
+    ExactContractBuilder exact;
+    exact.text("pops.amr.prepared-all-block-poisson-rhs")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .scalar(std::int32_t{level})
+        .bytes(elliptic_contract_detail::field_layout_contract(rhs))
+        .scalar(static_cast<std::uint64_t>(p_->blocks.size()));
+    for (std::size_t block = 0; block < p_->blocks.size(); ++block) {
+      if (static_cast<std::size_t>(level) >= p_->prepared_hierarchy->block_levels[block].size())
+        throw std::out_of_range(
+            "prepared AMR Poisson RHS level differs across its prepared blocks");
+      const MultiFab<Dim>& state = p_->block_state(block, static_cast<std::size_t>(level));
+      prepared_contributions.push_back(
+          &p_->prepared_hierarchy->block_levels[block][static_cast<std::size_t>(level)]);
+      states.push_back(&state);
+      exact.scalar(static_cast<std::uint64_t>(block))
+          .text(p_->blocks[block].name)
+          .bytes(elliptic_contract_detail::field_layout_contract(state));
+    }
+    request_contract = std::move(exact).release();
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      local_error, &lane, "prepared AMR all-block Poisson RHS preflight failed collectively");
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("amr-prepared-all-block-poisson-rhs"), request_contract}}, lane))
+    throw std::invalid_argument(
+        "prepared AMR all-block Poisson RHS request differs between RuntimeInstance ranks");
+  std::optional<MultiFab<Dim>> candidate;
+  std::exception_ptr contribution_error;
+  try {
+    candidate.emplace(rhs.layout(), rhs.distribution(), rhs.local_rank(), rhs.ncomp(),
+                      rhs.ghosts());
+    copy_full_field_in_place(rhs, *candidate);
+    for (std::size_t block = 0; block < prepared_contributions.size(); ++block)
+      prepared_contributions[block]->add_poisson_rhs_locally(*states[block], *candidate);
+    Kokkos::fence();
+  } catch (...) {
+    contribution_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      contribution_error, &lane,
+      "prepared AMR all-block Poisson RHS contribution schedule failed collectively");
+  static_assert(std::is_nothrow_move_assignable_v<MultiFab<Dim>>);
+  rhs = std::move(*candidate);
 }
 
 template <int Dim>
@@ -11019,14 +12732,34 @@ void AmrSystem<Dim>::add_prepared_amr_block_poisson_rhs(int runtime_block, int l
                                                         const MultiFab<Dim>& state,
                                                         MultiFab<Dim>& rhs) {
   p_->ensure_engine();
-  if (all_reduce_min(static_cast<long>(level)) != all_reduce_max(static_cast<long>(level)))
-    throw std::invalid_argument("prepared AMR Poisson RHS levels differ between MPI ranks");
-  if (runtime_block < 0 || static_cast<std::size_t>(runtime_block) >= p_->blocks.size())
-    throw std::out_of_range("prepared AMR Poisson RHS block is out of range");
-  if (level < 0 ||
-      static_cast<std::size_t>(level) >=
-          p_->prepared_hierarchy->block_levels[static_cast<std::size_t>(runtime_block)].size())
-    throw std::out_of_range("prepared AMR Poisson RHS level lies outside the live hierarchy");
+  const ExecutionLane& lane = p_->require_prepared_engine_lane("prepared AMR block Poisson RHS");
+  std::string request_contract;
+  std::exception_ptr local_error;
+  try {
+    if (runtime_block < 0 || static_cast<std::size_t>(runtime_block) >= p_->blocks.size())
+      throw std::out_of_range("prepared AMR Poisson RHS block is out of range");
+    if (level < 0 ||
+        static_cast<std::size_t>(level) >=
+            p_->prepared_hierarchy->block_levels[static_cast<std::size_t>(runtime_block)].size())
+      throw std::out_of_range("prepared AMR Poisson RHS level lies outside the live hierarchy");
+    ExactContractBuilder exact;
+    exact.text("pops.amr.prepared-block-poisson-rhs")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{runtime_block})
+        .scalar(std::int32_t{level})
+        .text(p_->blocks[static_cast<std::size_t>(runtime_block)].name)
+        .bytes(elliptic_contract_detail::field_layout_contract(state))
+        .bytes(elliptic_contract_detail::field_layout_contract(rhs));
+    request_contract = std::move(exact).release();
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      local_error, &lane, "prepared AMR Poisson RHS preflight failed collectively");
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("amr-prepared-block-poisson-rhs"), request_contract}}, lane))
+    throw std::invalid_argument(
+        "prepared AMR Poisson RHS request differs between RuntimeInstance ranks");
   p_->prepared_hierarchy
       ->block_levels[static_cast<std::size_t>(runtime_block)][static_cast<std::size_t>(level)]
       .add_poisson_rhs(state, rhs);
@@ -11050,14 +12783,57 @@ void AmrSystem<Dim>::install_field_storage_route(const std::string& field_identi
 
 template <int Dim>
 void AmrSystem<Dim>::install_prepared_boundary_execution_context(
+    std::shared_ptr<ExecutionLane> package_assembly_lane,
     std::shared_ptr<const component::PreparedExecutionContextV1> execution) {
-  require_amr_assembling(p_->lifecycle, "install_prepared_boundary_execution_context");
-  if (!execution || p_->engine || p_->prepared_hierarchy)
+  p_->require_no_native_package_callback("install_prepared_boundary_execution_context");
+  if (!package_assembly_lane || !package_assembly_lane->active())
     throw std::invalid_argument(
-        "AMR boundary execution context must precede hierarchy materialization");
-  if (p_->boundary_execution_context)
-    throw std::logic_error("AMR boundary execution context is already installed");
-  p_->boundary_execution_context = std::move(execution);
+        "AMR boundary execution context requires one active RuntimeInstance package lane");
+  const CommunicatorView communicator = package_assembly_lane->communicator();
+  std::string exact_contract;
+  std::exception_ptr local_error;
+  try {
+    require_amr_assembling(p_->lifecycle, "install_prepared_boundary_execution_context");
+    if (p_->engine || p_->prepared_hierarchy)
+      throw std::invalid_argument(
+          "AMR boundary execution context must precede hierarchy materialization");
+    if (p_->boundary_execution_context || p_->package_assembly_lane)
+      throw std::logic_error("AMR boundary execution context is already installed");
+    if (!execution)
+      throw std::invalid_argument(
+          "AMR boundary execution context requires one owned RuntimeInstance package lane");
+#ifdef POPS_HAS_MPI
+    if (!package_assembly_lane->owns_communicator())
+      throw std::invalid_argument("AMR package assembly lane must own its MPI communicator");
+#endif
+    if (!execution->matches_lane(*package_assembly_lane))
+      throw std::invalid_argument(
+          "AMR execution context differs from its owned RuntimeInstance package lane");
+    ExactContractBuilder contract;
+    contract.text("pops.amr-system.runtime-instance-authority")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .text(package_assembly_lane->identity())
+        .scalar(std::int32_t{package_assembly_lane->size()});
+    append_execution_context_contract(contract, *execution);
+    exact_contract = std::move(contract).release();
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_error ? 1L : 0L, communicator) != 0) {
+    if (package_assembly_lane->size() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("AMR RuntimeInstance authority installation failed collectively");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("amr-runtime-instance-authority"), exact_contract}}, communicator))
+    throw std::invalid_argument(
+        "AMR RuntimeInstance authority contract differs between communicator ranks");
+
+  static_assert(std::is_nothrow_swappable_v<decltype(p_->package_assembly_lane)>);
+  static_assert(std::is_nothrow_swappable_v<decltype(p_->boundary_execution_context)>);
+  p_->package_assembly_lane.swap(package_assembly_lane);
+  p_->boundary_execution_context.swap(execution);
 }
 
 template <int Dim>
@@ -11267,7 +13043,8 @@ void AmrSystem<Dim>::set_field_solver_plan(
     const std::string& provider_slot, const std::string& plan_identity,
     const std::string& provider_identity, const std::string& output_owner_identity,
     const std::string& output_block, const std::string& output_key,
-    const std::vector<std::string>& provider_identities,
+    const std::vector<runtime::system::AuxiliaryComponentKey>& output_keys,
+    int output_gradient_sign, const std::vector<std::string>& provider_identities,
     const std::vector<std::string>& provider_blocks, const std::vector<std::string>& provider_keys,
     const std::vector<double>& provider_coefficients, const std::string& solver,
     const AmrFieldHierarchyPolicyAuthority& hierarchy_policy,
@@ -11276,8 +13053,10 @@ void AmrSystem<Dim>::set_field_solver_plan(
   const std::size_t count = provider_identities.size();
   if (provider_slot.empty() || plan_identity.empty() || provider_identity.empty() ||
       output_owner_identity.empty() || output_block.empty() || output_key.empty() ||
-      solver.empty() || count == 0 || provider_blocks.size() != count ||
-      provider_keys.size() != count || provider_coefficients.size() != count)
+      output_keys.empty() || (output_gradient_sign != -1 && output_gradient_sign != 1) ||
+      (output_keys.size() == 1 && output_gradient_sign != 1) || solver.empty() || count == 0 ||
+      provider_blocks.size() != count || provider_keys.size() != count ||
+      provider_coefficients.size() != count)
     throw std::invalid_argument("AMR exact field solver plan is incomplete");
   if (p_->field_plans.contains(provider_slot))
     throw std::runtime_error("AMR exact field provider slot is already installed: " +
@@ -11289,12 +13068,20 @@ void AmrSystem<Dim>::set_field_solver_plan(
   }
   hierarchy_policy.validate();
   (void)solver_options.exact_contract();
+  std::set<std::string> exact_output_keys;
+  for (const auto& key : output_keys) {
+    key.validate();
+    if (!exact_output_keys.insert(key.exact_key()).second)
+      throw std::invalid_argument("AMR exact field solver output keys must be unique");
+  }
   typename Impl::FieldPlan plan;
   plan.plan_identity = plan_identity;
   plan.provider_identity = provider_identity;
   plan.output_owner_identity = output_owner_identity;
   plan.output_block = output_block;
   plan.output_key = output_key;
+  plan.expected_output_keys = output_keys;
+  plan.expected_gradient_sign = output_gradient_sign;
   plan.solver_route = solver;
   plan.hierarchy_policy = hierarchy_policy;
   plan.solver_options = solver_options;
@@ -11431,17 +13218,59 @@ void AmrSystem<Dim>::set_field_boundary_kernel(const std::string& provider_slot,
 template <int Dim>
 void AmrSystem<Dim>::set_field_logical_timepoint(const std::string& provider_slot,
                                                  const FieldLogicalTimePoint& point) {
-  auto found = p_->field_plans.find(provider_slot);
-  if (found == p_->field_plans.end())
-    throw std::out_of_range("AMR field logical timepoint names an unknown provider slot");
-  const bool invalid = !std::isfinite(static_cast<double>(point.time)) ||
-                       !std::isfinite(static_cast<double>(point.dt)) || point.dt <= Real(0) ||
-                       point.clock_slot < 0 || point.partition_slot < 0 || point.stage_slot < 0 ||
-                       point.level < 0 || point.step < 0 || point.substep < 0 ||
-                       point.iteration < 0;
-  if (all_reduce_max(invalid ? 1L : 0L) != 0)
-    throw std::invalid_argument("AMR field logical timepoint is incomplete");
-  found->second.boundary_point = point;
+  p_->require_no_native_package_callback("set_field_logical_timepoint");
+  const ExecutionLane& package_lane = p_->require_package_assembly_lane();
+  const long materialized = p_->engine ? 1L : 0L;
+  if (all_reduce_min(materialized, package_lane) != all_reduce_max(materialized, package_lane))
+    throw std::runtime_error(
+        "AMR field logical timepoint materialization state differs between MPI ranks");
+  const ExecutionLane& lane =
+      materialized != 0
+          ? p_->require_prepared_engine_lane("AMR field logical timepoint publication")
+          : package_lane;
+  typename Impl::FieldPlan* plan = nullptr;
+  std::string contract;
+  std::exception_ptr local_error;
+  try {
+    auto found = p_->field_plans.find(provider_slot);
+    if (found == p_->field_plans.end())
+      throw std::out_of_range("AMR field logical timepoint names an unknown provider slot");
+    if (!std::isfinite(static_cast<double>(point.time)) ||
+        !std::isfinite(static_cast<double>(point.dt)) || point.dt <= Real(0) ||
+        point.clock_slot < 0 || point.partition_slot < 0 || point.stage_slot < 0 ||
+        point.level < 0 || point.step < 0 || point.substep < 0 || point.iteration < 0 ||
+        point.stage_fraction_denominator <= 0)
+      throw std::invalid_argument("AMR field logical timepoint is incomplete");
+    ExactContractBuilder exact;
+    exact.text("pops.amr-system.field-logical-timepoint")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .text(provider_slot)
+        .scalar(point.time)
+        .scalar(point.dt)
+        .scalar(point.clock_slot)
+        .scalar(point.partition_slot)
+        .scalar(point.stage_slot)
+        .scalar(point.level)
+        .scalar(point.step)
+        .scalar(point.substep)
+        .scalar(point.iteration)
+        .scalar(point.stage_fraction_numerator)
+        .scalar(point.stage_fraction_denominator);
+    contract = std::move(exact).release();
+    plan = &found->second;
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("AMR field logical timepoint preparation failed collectively");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("amr-field-logical-timepoint"), std::string_view(contract)}}, lane))
+    throw std::invalid_argument("AMR field logical timepoint differs between MPI ranks");
+  plan->boundary_point = point;
 }
 
 template <int Dim>
@@ -11527,11 +13356,27 @@ void AmrSystem<Dim>::register_elliptic_field(
   }
   const std::string slot = p_->resolve_field_slot(provider_key);
   typename Impl::FieldPlan& plan = p_->field_plans.at(slot);
-  if (plan.output)
-    throw std::logic_error("AMR exact field output is already registered");
   if (plan.output_block != block_name || plan.output_key != provider_key)
     throw std::invalid_argument(
         "AMR exact field output registration differs from its resolved plan");
+  if (gradient_sign != plan.expected_gradient_sign ||
+      output_keys.size() != plan.expected_output_keys.size())
+    throw std::invalid_argument(
+        "AMR exact field output differs from its resolved component/sign contract");
+  for (std::size_t index = 0; index < output_keys.size(); ++index)
+    if (output_keys[index].exact_key() != plan.expected_output_keys[index].exact_key())
+      throw std::invalid_argument(
+          "AMR exact field output key order differs from its resolved plan");
+  if (plan.output) {
+    if (plan.output->component_count() != output.component_count() ||
+        plan.output->gradient_sign() != output.gradient_sign() ||
+        plan.output_keys.size() != output_keys.size())
+      throw std::logic_error("AMR exact field output is already registered differently");
+    for (std::size_t index = 0; index < output_keys.size(); ++index)
+      if (plan.output_keys[index].exact_key() != output_keys[index].exact_key())
+        throw std::logic_error("AMR exact field output keys are already registered differently");
+    return;
+  }
   plan.output = output;
   plan.output_keys = output_keys;
   plan.rhs_by_block.resize(p_->blocks.size());
@@ -11540,15 +13385,16 @@ void AmrSystem<Dim>::register_elliptic_field(
 template <int Dim>
 void AmrSystem<Dim>::set_block_elliptic_field(
     const std::string& block_name, const std::string& field,
+    const std::string& rhs_provider_identity,
     std::function<void(const MultiFab<Dim>&, MultiFab<Dim>&)> rhs) {
   require_amr_assembling(p_->lifecycle, "set_block_elliptic_field");
   if (p_->engine)
     throw std::runtime_error(
         "AmrSystem cannot install a named elliptic RHS after hierarchy materialization");
-  if (field.empty() || !rhs)
+  if (field.empty() || rhs_provider_identity.empty() || !rhs)
     throw std::invalid_argument(
-        "AmrSystem named elliptic RHS requires a field identity and prepared closure");
-  (void)p_->block(block_name);
+        "AmrSystem named elliptic RHS requires field/provider identities and a prepared closure");
+  const typename Impl::BlockSpec& resolved_block = p_->block(block_name);
   const std::string slot = field == "fields_from_state" && !p_->default_field_slot.empty()
                                ? p_->default_field_slot
                                : p_->resolve_field_slot(field);
@@ -11578,7 +13424,8 @@ void AmrSystem<Dim>::set_block_elliptic_field(
                                        })));
   if (block_index >= plan.rhs_by_block.size())
     throw std::logic_error("AMR exact field RHS lost its runtime block identity");
-  plan.rhs_by_block[block_index].push_back({std::move(rhs), coefficient});
+  plan.rhs_by_block[block_index].push_back(
+      {rhs_provider_identity, resolved_block.name, slot, std::move(rhs), coefficient});
 }
 
 template <int Dim>
@@ -11918,17 +13765,58 @@ void AmrSystem<Dim>::set_field_potential(const std::string& provider_slot,
 template <int Dim>
 std::vector<double> AmrSystem<Dim>::field_potential_level_global(const std::string& provider_slot,
                                                                  int level) {
-  const std::string slot = p_->resolve_field_slot(provider_slot);
-  p_->materialize_field_on_prepared_lane(slot);
-  const typename Impl::FieldPlan& plan = p_->field_plans.at(slot);
-  if (level < 0 || level >= plan.prepared_solver->level_count())
-    throw std::out_of_range("AMR field potential level lies outside the hierarchy");
-  return gather_field(
-      *plan.accepted_potential[static_cast<std::size_t>(level)],
-      p_->engine->hierarchy().layout(static_cast<std::size_t>(level)).domain(), 1,
-      p_->prepared_hierarchy && p_->prepared_hierarchy->lane
-          ? &*p_->prepared_hierarchy->lane
-          : throw std::logic_error("AMR field gather lacks its prepared hierarchy lane"));
+  p_->require_no_native_package_callback("field_potential_level_global");
+  const ExecutionLane& package_lane = p_->require_package_assembly_lane();
+  std::string slot;
+  std::string request_contract;
+  std::exception_ptr local_error;
+  try {
+    slot = p_->resolve_field_slot(provider_slot);
+    ExactContractBuilder request;
+    request.text("pops.amr.field-potential-gather-request")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .text(provider_slot)
+        .text(slot)
+        .scalar(std::int32_t{level});
+    request_contract = std::move(request).release();
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      local_error, &package_lane, "AMR field-potential gather request failed collectively");
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("amr-field-potential-gather-request"), request_contract}},
+          package_lane))
+    throw std::invalid_argument(
+        "AMR field-potential gather request differs between RuntimeInstance ranks");
+
+  p_->materialize_field(slot);
+  const ExecutionLane& lane = p_->require_prepared_engine_lane("AMR field-potential gather");
+  const MultiFab<Dim>* potential = nullptr;
+  const Box<Dim>* domain = nullptr;
+  std::string semantic_identity;
+  local_error = {};
+  try {
+    const typename Impl::FieldPlan& plan = p_->field_plans.at(slot);
+    if (level < 0 || level >= plan.prepared_solver->level_count() ||
+        static_cast<std::size_t>(level) >= plan.accepted_potential.size() ||
+        !plan.accepted_potential[static_cast<std::size_t>(level)])
+      throw std::out_of_range("AMR field potential level lies outside the hierarchy");
+    potential = plan.accepted_potential[static_cast<std::size_t>(level)].get();
+    domain = &p_->engine->hierarchy().layout(static_cast<std::size_t>(level)).domain();
+    ExactContractBuilder exact;
+    exact.text("pops.amr.field-potential-gather")
+        .scalar(std::uint32_t{1})
+        .text(slot)
+        .scalar(std::int32_t{level});
+    semantic_identity = std::move(exact).release();
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      local_error, &lane, "AMR field-potential gather preflight failed collectively");
+  return gather_field(*potential, *domain, 1, semantic_identity, lane);
 }
 
 template <int Dim>
@@ -12213,6 +14101,7 @@ std::vector<OutputPiece<Dim>> AmrSystem<Dim>::output_field_local_pieces(
 template <int Dim>
 std::vector<OutputPiece<Dim>> AmrSystem<Dim>::output_field_root_pieces(
     const ObserverMpiLane& lane, const std::string& provider_slot, int level) {
+  p_->require_no_native_package_callback("output_field_root_pieces");
   return output_pieces_to_root(
       lane, detail::output_collective_identity("amr_system", "field", provider_slot, level),
       [&] { return output_field_local_pieces(provider_slot, level); });
@@ -12278,16 +14167,66 @@ void AmrSystem<Dim>::install_prepared_hyperbolic_boundary(
 
 template <int Dim>
 void AmrSystem<Dim>::discard_hyperbolic_boundaries() {
-  require_amr_assembling(p_->lifecycle, "discard_hyperbolic_boundaries");
-  if (!p_->blocks.empty())
-    throw std::logic_error("AmrSystem cannot discard state routes after block publication");
-  p_->boundary_registry.discard_transaction();
-  p_->prepared_boundary_components.clear();
-  p_->boundary_execution_context.reset();
+  p_->require_no_native_package_callback("discard_hyperbolic_boundaries");
+  static_assert(
+      std::is_nothrow_default_constructible_v<decltype(p_->prepared_boundary_components)>);
+  static_assert(std::is_nothrow_default_constructible_v<typename Impl::boundary_registry_type>);
+  std::shared_ptr<ExecutionLane> lane_to_release;
+  std::shared_ptr<const component::PreparedExecutionContextV1> execution_to_release;
+  decltype(p_->prepared_boundary_components) components_to_release;
+  typename Impl::boundary_registry_type registry_to_release;
+
+  if (p_->package_assembly_lane) {
+    const ExecutionLane& lane = *p_->package_assembly_lane;
+    if (!lane.active())
+      throw std::logic_error("AMR RuntimeInstance package lane is inactive");
+    std::string discard_contract;
+    std::exception_ptr local_error;
+    try {
+      require_amr_assembling(p_->lifecycle, "discard_hyperbolic_boundaries");
+      if (!p_->blocks.empty() || p_->engine || p_->multiblock_hierarchy || p_->prepared_hierarchy)
+        throw std::logic_error(
+            "AmrSystem cannot discard RuntimeInstance authorities after block materialization");
+      ExactContractBuilder contract;
+      contract.text("pops.amr-system.discard-runtime-instance-authority")
+          .scalar(std::uint32_t{1})
+          .scalar(std::int32_t{Dim})
+          .bytes(p_->boundary_assembly_contract());
+      discard_contract = std::move(contract).release();
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error(
+          "AMR RuntimeInstance authority discard eligibility failed collectively");
+    }
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{std::string_view("amr-runtime-instance-authority-discard"), discard_contract}}, lane))
+      throw std::invalid_argument(
+          "AMR RuntimeInstance authority discard contract differs between communicator ranks");
+  } else {
+    require_amr_assembling(p_->lifecycle, "discard_hyperbolic_boundaries");
+    if (!p_->blocks.empty() || p_->engine || p_->multiblock_hierarchy || p_->prepared_hierarchy)
+      throw std::logic_error(
+          "AmrSystem cannot discard RuntimeInstance authorities after block materialization");
+  }
+
+  static_assert(std::is_nothrow_swappable_v<typename Impl::boundary_registry_type>);
+  static_assert(std::is_nothrow_swappable_v<decltype(p_->prepared_boundary_components)>);
+  static_assert(std::is_nothrow_swappable_v<decltype(p_->boundary_execution_context)>);
+  static_assert(std::is_nothrow_swappable_v<decltype(p_->package_assembly_lane)>);
+  using std::swap;
+  swap(p_->boundary_registry, registry_to_release);
+  p_->prepared_boundary_components.swap(components_to_release);
+  p_->boundary_execution_context.swap(execution_to_release);
+  p_->package_assembly_lane.swap(lane_to_release);
 }
 
 template <int Dim>
 void AmrSystem<Dim>::set_density(const std::string& name, const std::vector<double>& density) {
+  p_->require_no_native_package_callback("set_density");
   const std::size_t block_index = p_->block_index(name);
   typename Impl::BlockSpec& block = p_->blocks[block_index];
   if (density.size() != checked_cells(p_->cfg.index_domain()))
@@ -12302,6 +14241,7 @@ void AmrSystem<Dim>::set_density(const std::string& name, const std::vector<doub
 template <int Dim>
 void AmrSystem<Dim>::set_conservative_state(const std::string& name,
                                             const std::vector<double>& state) {
+  p_->require_no_native_package_callback("set_conservative_state");
   const std::size_t block_index = p_->block_index(name);
   typename Impl::BlockSpec& block = p_->blocks[block_index];
   const std::size_t cells = checked_cells(p_->cfg.index_domain());
@@ -12671,6 +14611,8 @@ void AmrSystem<Dim>::begin_restart_regrid_history_sequence() {
 
 template <int Dim>
 void AmrSystem<Dim>::end_restart_regrid_history_sequence() noexcept {
+  if (p_->native_package_phase != Impl::NativePackagePhase::idle)
+    return;
   p_->history_regrid_sequence_sources.reset();
 }
 
@@ -12784,6 +14726,8 @@ void AmrSystem<Dim>::register_bootstrap_transfer_route(
     const std::string& representation, const std::string& storage, const std::string& operation,
     const std::string& kernel, int order, const Extent<Dim>& ghost_depth,
     const Extent<Dim>& refinement_ratio) {
+  p_->require_no_native_package_callback("register_bootstrap_transfer_route");
+  const ExecutionLane& lane = p_->require_package_assembly_lane();
   std::map<std::string, typename Impl::BootstrapTransferRoute> staged_routes;
   std::map<std::pair<std::string, std::string>, std::string> staged_subjects;
   std::string exact;
@@ -12935,13 +14879,13 @@ void AmrSystem<Dim>::register_bootstrap_transfer_route(
     local_failure = 1;
     local_error = std::current_exception();
   }
-  if (all_reduce_max(local_failure) != 0) {
+  if (all_reduce_max(local_failure, lane) != 0) {
     if (local_error)
       std::rethrow_exception(local_error);
     throw std::runtime_error("AMR bootstrap transfer route failed validation on another MPI rank");
   }
   if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{std::string_view("bootstrap-transfer-route"), std::string_view(exact)}}))
+          {{std::string_view("bootstrap-transfer-route"), std::string_view(exact)}}, lane))
     throw std::invalid_argument("AMR bootstrap transfer route differs between MPI ranks");
   p_->bootstrap_transfer_routes = std::move(staged_routes);
   p_->bootstrap_subject_routes = std::move(staged_subjects);
@@ -12950,6 +14894,8 @@ void AmrSystem<Dim>::register_bootstrap_transfer_route(
 template <int Dim>
 void AmrSystem<Dim>::register_bootstrap_oriented_face_subjects(
     const std::vector<std::string>& oriented_subjects) {
+  p_->require_no_native_package_callback("register_bootstrap_oriented_face_subjects");
+  const ExecutionLane& lane = p_->require_package_assembly_lane();
   std::map<std::string, std::array<std::string, Dim>> staged_groups;
   std::string exact;
   std::exception_ptr local_error;
@@ -13027,13 +14973,13 @@ void AmrSystem<Dim>::register_bootstrap_oriented_face_subjects(
     local_failure = 1;
     local_error = std::current_exception();
   }
-  if (all_reduce_max(local_failure) != 0) {
+  if (all_reduce_max(local_failure, lane) != 0) {
     if (local_error)
       std::rethrow_exception(local_error);
     throw std::runtime_error("AMR oriented face provider failed validation on another MPI rank");
   }
   if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{std::string_view("bootstrap-oriented-face-subjects"), std::string_view(exact)}}))
+          {{std::string_view("bootstrap-oriented-face-subjects"), std::string_view(exact)}}, lane))
     throw std::invalid_argument("AMR oriented face subjects differ between MPI ranks");
   p_->bootstrap_oriented_face_groups = std::move(staged_groups);
 }
@@ -13053,6 +14999,7 @@ std::string AmrSystem<Dim>::last_dt_bound() const {
 
 template <int Dim>
 void AmrSystem<Dim>::step(double dt) {
+  p_->require_no_native_package_callback("step");
   p_->program.require_step_installed("AmrSystem::step");
   runtime::program::ProfileScope scope(p_->program.profiler_, "step");
   p_->program.profiler_.count("steps");
@@ -13088,6 +15035,7 @@ void AmrSystem<Dim>::step(double dt) {
 
 template <int Dim>
 void AmrSystem<Dim>::advance(double dt, int nsteps) {
+  p_->require_no_native_package_callback("advance");
   p_->program.require_step_installed("AmrSystem::advance");
   if (nsteps < 0)
     throw std::invalid_argument("AmrSystem::advance requires a non-negative step count");
@@ -13097,6 +15045,8 @@ void AmrSystem<Dim>::advance(double dt, int nsteps) {
 
 template <int Dim>
 double AmrSystem<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, double min_dt) {
+  p_->require_no_native_package_callback("step_cfl");
+  const ExecutionLane& package_lane = p_->require_package_assembly_lane();
   std::string request_contract;
   std::exception_ptr request_error;
   long request_failure = 0;
@@ -13127,23 +15077,75 @@ double AmrSystem<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, d
     request_failure = 1;
     request_error = std::current_exception();
   }
-  if (all_reduce_max(request_failure) != 0) {
-    if (request_error)
+  if (all_reduce_max(request_failure, package_lane) != 0) {
+    if (package_lane.size() == 1 && request_error)
       std::rethrow_exception(request_error);
     throw std::runtime_error("AmrSystem::step_cfl request validation failed collectively");
   }
   if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{std::string_view("amr-step-cfl-request"), std::string_view(request_contract)}}))
+          {{std::string_view("amr-step-cfl-request"), std::string_view(request_contract)}},
+          package_lane))
     throw std::invalid_argument(
         "AmrSystem::step_cfl inputs or prepared bound authorities differ between MPI ranks");
 
   p_->ensure_engine();
+  const ExecutionLane& lane = p_->require_prepared_engine_lane("AMR CFL step");
   const long invalid_hierarchy =
       !p_->prepared_hierarchy || p_->prepared_hierarchy->block_levels.size() != p_->blocks.size()
           ? 1L
           : 0L;
-  if (all_reduce_max(invalid_hierarchy) != 0)
+  if (all_reduce_max(invalid_hierarchy, lane) != 0)
     throw std::logic_error("AmrSystem::step_cfl requires one live prepared hierarchy graph");
+
+  struct PreparedCflLevel {
+    const typename Impl::level_block_type* prepared = nullptr;
+    std::size_t block_index = 0;
+    Real spacing = Real(0);
+    int substeps = 1;
+    int stride = 1;
+  };
+  std::vector<PreparedCflLevel> level_schedule;
+  std::string level_schedule_contract;
+  std::exception_ptr level_schedule_error;
+  try {
+    ExactContractBuilder exact;
+    exact.text("pops.amr-system.step-cfl-level-schedule")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .bytes(p_->prepared_hierarchy->collective_contract)
+        .scalar(static_cast<std::uint64_t>(p_->blocks.size()));
+    for (std::size_t block_index = 0; block_index < p_->blocks.size(); ++block_index) {
+      const typename Impl::BlockSpec& block = p_->blocks[block_index];
+      const auto& prepared_levels = p_->prepared_hierarchy->block_levels[block_index];
+      if (prepared_levels.size() != p_->engine->hierarchy().num_levels())
+        throw std::logic_error("AmrSystem::step_cfl lost one prepared block level");
+      exact.text(block.name)
+          .scalar(block.substeps)
+          .scalar(block.stride)
+          .scalar(static_cast<std::uint64_t>(prepared_levels.size()));
+      for (std::size_t level = 0; level < prepared_levels.size(); ++level) {
+        const Box<Dim>& domain = p_->engine->hierarchy().layout(level).domain();
+        const Geometry<Dim> geometry =
+            Geometry<Dim>::from_bounds(domain, p_->cfg.lower, p_->cfg.upper);
+        Real spacing = geometry.spacing(0);
+        for (int axis = 1; axis < Dim; ++axis)
+          spacing = std::min(spacing, geometry.spacing(axis));
+        level_schedule.push_back(
+            {&prepared_levels[level], block_index, spacing, block.substeps, block.stride});
+        exact.scalar(static_cast<std::uint64_t>(level))
+            .scalar(spacing)
+            .bytes(prepared_levels[level].collective_contract());
+      }
+    }
+    level_schedule_contract = std::move(exact).release();
+  } catch (...) {
+    level_schedule_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      level_schedule_error, &lane, "AMR CFL level-schedule preparation failed collectively");
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("amr-step-cfl-level-schedule"), level_schedule_contract}}, lane))
+    throw std::invalid_argument("AMR CFL level schedule differs between prepared-lane ranks");
 
   enum class BoundKind : std::int32_t {
     degenerate,
@@ -13158,55 +15160,43 @@ double AmrSystem<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, d
   BoundKind reason_kind = BoundKind::degenerate;
   std::size_t reason_block_index = 0;
   std::size_t global_reason_index = std::numeric_limits<std::size_t>::max();
-  for (std::size_t block_index = 0; block_index < p_->blocks.size(); ++block_index) {
-    const typename Impl::BlockSpec& block = p_->blocks[block_index];
-    for (std::size_t level = 0; level < p_->prepared_hierarchy->block_levels[block_index].size();
-         ++level) {
-      const Box<Dim>& domain = p_->engine->hierarchy().layout(level).domain();
-      const Geometry<Dim> geometry =
-          Geometry<Dim>::from_bounds(domain, p_->cfg.lower, p_->cfg.upper);
-      Real spacing = geometry.spacing(0);
-      for (int axis = 1; axis < Dim; ++axis)
-        spacing = std::min(spacing, geometry.spacing(axis));
-
-      const typename Impl::level_block_type& prepared_level =
-          p_->prepared_hierarchy->block_levels[block_index][level];
-      const Real speed = std::max(prepared_level.maximum_speed(), static_cast<Real>(speed_floor));
-      double level_dt = cfl * static_cast<double>(spacing) * block.substeps /
-                        (static_cast<double>(block.stride) * static_cast<double>(speed));
-      const char* level_reason = "transport";
-      if (const std::optional<Real> frequency = prepared_level.source_frequency();
-          frequency && *frequency > Real(0)) {
-        const double source_dt =
-            cfl * block.substeps /
-            (static_cast<double>(block.stride) * static_cast<double>(*frequency));
-        if (source_dt < level_dt) {
-          level_dt = source_dt;
-          level_reason = "source_frequency";
-        }
-      }
-      if (const std::optional<Real> admissible = prepared_level.stability_dt();
-          admissible && *admissible > Real(0)) {
-        const double stability_dt =
-            static_cast<double>(*admissible) * block.substeps / static_cast<double>(block.stride);
-        if (stability_dt < level_dt) {
-          level_dt = stability_dt;
-          level_reason = "stability_dt";
-        }
-      }
-      if (level_dt < selected) {
-        selected = level_dt;
-        if (std::string_view(level_reason) == "source_frequency")
-          reason_kind = BoundKind::source_frequency;
-        else if (std::string_view(level_reason) == "stability_dt")
-          reason_kind = BoundKind::stability_dt;
-        else
-          reason_kind = BoundKind::transport;
-        reason_block_index = block_index;
+  for (const PreparedCflLevel& prepared_level : level_schedule) {
+    const Real speed =
+        std::max(prepared_level.prepared->maximum_speed(), static_cast<Real>(speed_floor));
+    double level_dt = cfl * static_cast<double>(prepared_level.spacing) * prepared_level.substeps /
+                      (static_cast<double>(prepared_level.stride) * static_cast<double>(speed));
+    const char* level_reason = "transport";
+    if (const std::optional<Real> frequency = prepared_level.prepared->source_frequency();
+        frequency && *frequency > Real(0)) {
+      const double source_dt =
+          cfl * prepared_level.substeps /
+          (static_cast<double>(prepared_level.stride) * static_cast<double>(*frequency));
+      if (source_dt < level_dt) {
+        level_dt = source_dt;
+        level_reason = "source_frequency";
       }
     }
+    if (const std::optional<Real> admissible = prepared_level.prepared->stability_dt();
+        admissible && *admissible > Real(0)) {
+      const double stability_dt = static_cast<double>(*admissible) * prepared_level.substeps /
+                                  static_cast<double>(prepared_level.stride);
+      if (stability_dt < level_dt) {
+        level_dt = stability_dt;
+        level_reason = "stability_dt";
+      }
+    }
+    if (level_dt < selected) {
+      selected = level_dt;
+      if (std::string_view(level_reason) == "source_frequency")
+        reason_kind = BoundKind::source_frequency;
+      else if (std::string_view(level_reason) == "stability_dt")
+        reason_kind = BoundKind::stability_dt;
+      else
+        reason_kind = BoundKind::transport;
+      reason_block_index = prepared_level.block_index;
+    }
   }
-  if (!std::isfinite(selected))
+  if (all_reduce_max(std::isfinite(selected) ? 0L : 1L, lane) != 0)
     throw std::runtime_error("AmrSystem::step_cfl found no finite generated stability bound");
 
   for (std::size_t bound_index = 0; bound_index < p_->dt_bounds.size(); ++bound_index) {
@@ -13220,17 +15210,17 @@ double AmrSystem<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, d
       bound_failure = 1;
       bound_error = std::current_exception();
     }
-    if (all_reduce_max(bound_failure) != 0) {
-      if (bound_error)
+    if (all_reduce_max(bound_failure, lane) != 0) {
+      if (lane.size() == 1 && bound_error)
         std::rethrow_exception(bound_error);
       throw std::runtime_error("AmrSystem global dt-bound evaluation failed collectively");
     }
     const long active = std::isfinite(candidate) && candidate > 0.0 ? 1L : 0L;
-    if (all_reduce_min(active) != all_reduce_max(active))
+    if (all_reduce_min(active, lane) != all_reduce_max(active, lane))
       throw std::invalid_argument("AmrSystem global dt-bound activity differs between MPI ranks");
     if (active == 0)
       candidate = std::numeric_limits<double>::infinity();
-    candidate = all_reduce_min(candidate);
+    candidate = all_reduce_min(candidate, lane);
     if (candidate < selected) {
       selected = candidate;
       reason_kind = BoundKind::global;
@@ -13248,17 +15238,17 @@ double AmrSystem<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, d
       bound_failure = 1;
       bound_error = std::current_exception();
     }
-    if (all_reduce_max(bound_failure) != 0) {
-      if (bound_error)
+    if (all_reduce_max(bound_failure, lane) != 0) {
+      if (lane.size() == 1 && bound_error)
         std::rethrow_exception(bound_error);
       throw std::runtime_error("AmrSystem Program dt-bound evaluation failed collectively");
     }
     const long active = std::isfinite(candidate) && candidate > 0.0 ? 1L : 0L;
-    if (all_reduce_min(active) != all_reduce_max(active))
+    if (all_reduce_min(active, lane) != all_reduce_max(active, lane))
       throw std::invalid_argument("AmrSystem Program dt-bound activity differs between MPI ranks");
     if (active == 0)
       candidate = std::numeric_limits<double>::infinity();
-    candidate = all_reduce_min(candidate);
+    candidate = all_reduce_min(candidate, lane);
     if (std::isfinite(candidate) && candidate > 0.0 && candidate < selected) {
       selected = candidate;
       reason_kind = BoundKind::program;
@@ -13268,7 +15258,7 @@ double AmrSystem<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, d
     selected = max_dt;
     reason_kind = BoundKind::maximum_dt;
   }
-  if (selected < min_dt)
+  if (all_reduce_max(selected < min_dt ? 1L : 0L, lane) != 0)
     throw std::runtime_error("AmrSystem::step_cfl stability bound is below declared min_dt");
 
   std::string reason;
@@ -13313,13 +15303,13 @@ double AmrSystem<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, d
     decision_failure = 1;
     decision_error = std::current_exception();
   }
-  if (all_reduce_max(decision_failure) != 0) {
-    if (decision_error)
+  if (all_reduce_max(decision_failure, lane) != 0) {
+    if (lane.size() == 1 && decision_error)
       std::rethrow_exception(decision_error);
     throw std::runtime_error("AmrSystem::step_cfl decision preparation failed collectively");
   }
   if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{std::string_view("amr-step-cfl-decision"), std::string_view(decision_contract)}}))
+          {{std::string_view("amr-step-cfl-decision"), std::string_view(decision_contract)}}, lane))
     throw std::runtime_error("AmrSystem::step_cfl selected different bounds across MPI ranks");
   p_->last_dt_reason = std::move(reason);
   step(selected);
@@ -13488,6 +15478,8 @@ void AmrSystem<Dim>::commit_restart_transaction() {
 
 template <int Dim>
 void AmrSystem<Dim>::finalize_restart_transaction() noexcept {
+  if (p_->native_package_phase != Impl::NativePackagePhase::idle)
+    return;
   p_->restart_transaction.reset();
   p_->restart_transaction_committed = false;
 }
@@ -13625,12 +15617,14 @@ void AmrSystem<Dim>::restore_checkpoint_counters(int regrid_count, std::uint64_t
 
 template <int Dim>
 void AmrSystem<Dim>::install_program_step(std::function<void(double)> step) {
+  p_->require_no_native_package_callback("install_program_step");
   p_->program.install_unverified_step(std::move(step));
   p_->program_flux_expression_budget.reset();
 }
 
 template <int Dim>
 void AmrSystem<Dim>::install_program_hierarchy_refresh(std::function<void()> refresh) {
+  p_->require_no_native_package_callback("install_program_hierarchy_refresh");
   p_->program.install_hierarchy_refresh(std::move(refresh), "AmrSystem");
 }
 
@@ -13638,6 +15632,7 @@ template <int Dim>
 void AmrSystem<Dim>::install_program_restart_hooks(
     std::function<void()> preflight, std::function<void()> regrid, std::function<void()> resync,
     runtime::program::AcceptedProgramContextSnapshotFactory accepted_context_snapshot) {
+  p_->require_no_native_package_callback("install_program_restart_hooks");
   p_->program.install_restart_hooks(std::move(preflight), std::move(regrid), std::move(resync),
                                     std::move(accepted_context_snapshot), "AmrSystem");
 }
@@ -14050,12 +16045,14 @@ void AmrSystem<Dim>::restore_program_cadence_window(double accumulated_dt, int h
                                                     double window_start_time,
                                                     double accepted_last_dt, double accepted_time,
                                                     int macro_step) {
+  p_->require_no_native_package_callback("restore_program_cadence_window");
   p_->program.restore_cadence_window(accumulated_dt, held_steps, window_start_time,
                                      accepted_last_dt, accepted_time, macro_step, "AmrSystem");
 }
 
 template <int Dim>
 void AmrSystem<Dim>::set_program_block_map(const std::vector<int>& program_to_runtime) {
+  p_->require_no_native_package_callback("set_program_block_map");
   if (program_to_runtime.size() != p_->blocks.size())
     throw std::invalid_argument(
         "AmrSystem Program block map must cover every prepared block exactly once");
@@ -14085,11 +16082,13 @@ std::string AmrSystem<Dim>::installed_program_hash() const {
 
 template <int Dim>
 void AmrSystem<Dim>::seed_program_params(int block, const std::vector<double>& defaults) {
+  p_->require_no_native_package_callback("seed_program_params");
   p_->program.seed_params(block, defaults);
 }
 
 template <int Dim>
 void AmrSystem<Dim>::set_program_params(int block, const std::vector<double>& values) {
+  p_->require_no_native_package_callback("set_program_params");
   p_->program.set_params(block, values, "AmrSystem");
 }
 
@@ -14111,6 +16110,7 @@ bool AmrSystem<Dim>::uses_runtime_engine() const {
 
 template <int Dim>
 runtime::program::Profiler& AmrSystem<Dim>::profiler_handle() {
+  p_->require_no_native_package_callback("profiler_handle");
   return p_->program.profiler_;
 }
 
@@ -14121,6 +16121,7 @@ runtime::program::ProgramRuntimeState<Dim>& AmrSystem<Dim>::program_runtime_stat
 
 template <int Dim>
 void AmrSystem<Dim>::record_program_diagnostic(const std::string& name, double value) {
+  p_->require_no_native_package_callback("record_program_diagnostic");
   p_->program.record_diagnostic(name, static_cast<Real>(value));
 }
 
@@ -14191,16 +16192,19 @@ std::map<std::string, double> AmrSystem<Dim>::selected_accepted_balance_terms(
 
 template <int Dim>
 void AmrSystem<Dim>::begin_step_projection_report() {
+  p_->require_no_native_package_callback("begin_step_projection_report");
   p_->program.begin_step_projection_report();
 }
 
 template <int Dim>
 void AmrSystem<Dim>::note_step_projection(const std::string& name) {
+  p_->require_no_native_package_callback("note_step_projection");
   p_->program.note_step_projection(name);
 }
 
 template <int Dim>
 std::vector<std::string> AmrSystem<Dim>::consume_step_projections() {
+  p_->require_no_native_package_callback("consume_step_projections");
   return p_->program.consume_step_projections();
 }
 
@@ -14254,6 +16258,7 @@ int AmrSystem<Dim>::macro_step() const {
 
 template <int Dim>
 void AmrSystem<Dim>::set_clock(double accepted_time, int macro_step) {
+  p_->require_no_native_package_callback("set_clock");
   if (!std::isfinite(accepted_time) || macro_step < 0)
     throw std::invalid_argument("AmrSystem clock requires finite time and non-negative step");
   p_->program.consume_cadence_clock_restore(accepted_time, macro_step, "AmrSystem");
@@ -14263,11 +16268,13 @@ void AmrSystem<Dim>::set_clock(double accepted_time, int macro_step) {
 
 template <int Dim>
 void AmrSystem<Dim>::enable_profiling() {
+  p_->require_no_native_package_callback("enable_profiling");
   p_->program.profiler_.enable();
 }
 
 template <int Dim>
 void AmrSystem<Dim>::disable_profiling() {
+  p_->require_no_native_package_callback("disable_profiling");
   p_->program.profiler_.disable();
 }
 
@@ -14278,6 +16285,7 @@ bool AmrSystem<Dim>::is_profiling() const {
 
 template <int Dim>
 void AmrSystem<Dim>::reset_profiling() {
+  p_->require_no_native_package_callback("reset_profiling");
   p_->program.profiler_.reset();
 }
 
@@ -14415,12 +16423,25 @@ std::vector<double> AmrSystem<Dim>::level_state(int level) {
 template <int Dim>
 std::vector<double> AmrSystem<Dim>::level_state_global(int level) {
   p_->ensure_engine();
-  if (level < 0 || static_cast<std::size_t>(level) >= p_->engine->hierarchy().num_levels())
-    throw std::out_of_range("AmrSystem level is out of range");
+  const ExecutionLane& lane = p_->require_prepared_engine_lane("AMR level-state gather");
   const auto& hierarchy = p_->engine->hierarchy();
+  std::string semantic_identity;
+  std::exception_ptr local_error;
+  try {
+    if (level < 0 || static_cast<std::size_t>(level) >= hierarchy.num_levels())
+      throw std::out_of_range("AmrSystem level is out of range");
+    ExactContractBuilder exact;
+    exact.text("pops.amr.level-state-gather").scalar(std::uint32_t{1}).scalar(std::int32_t{level});
+    semantic_identity = std::move(exact).release();
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      local_error, &lane, "AMR level-state gather preflight failed collectively");
   return gather_field(hierarchy.state(static_cast<std::size_t>(level)),
                       hierarchy.layout(static_cast<std::size_t>(level)).domain(),
-                      hierarchy.state(static_cast<std::size_t>(level)).ncomp());
+                      hierarchy.state(static_cast<std::size_t>(level)).ncomp(), semantic_identity,
+                      lane);
 }
 
 template <int Dim>
@@ -14442,13 +16463,31 @@ std::vector<double> AmrSystem<Dim>::block_level_state(const std::string& name, i
 
 template <int Dim>
 std::vector<double> AmrSystem<Dim>::block_level_state_global(const std::string& name, int level) {
-  const std::size_t block_index = p_->block_index(name);
   p_->ensure_engine();
-  if (level < 0 || static_cast<std::size_t>(level) >= p_->engine->hierarchy().num_levels())
-    throw std::out_of_range("AmrSystem block level is out of range");
+  const ExecutionLane& lane = p_->require_prepared_engine_lane("AMR block-level-state gather");
+  std::size_t block_index = 0;
+  std::string semantic_identity;
+  std::exception_ptr local_error;
+  try {
+    block_index = p_->block_index(name);
+    if (level < 0 || static_cast<std::size_t>(level) >= p_->engine->hierarchy().num_levels())
+      throw std::out_of_range("AmrSystem block level is out of range");
+    ExactContractBuilder exact;
+    exact.text("pops.amr.block-level-state-gather")
+        .scalar(std::uint32_t{1})
+        .text(name)
+        .scalar(static_cast<std::uint64_t>(block_index))
+        .scalar(std::int32_t{level});
+    semantic_identity = std::move(exact).release();
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      local_error, &lane, "AMR block-level-state gather preflight failed collectively");
   const std::size_t index = static_cast<std::size_t>(level);
   const MultiFab<Dim>& state = p_->block_state(block_index, index);
-  return gather_field(state, p_->engine->hierarchy().layout(index).domain(), state.ncomp());
+  return gather_field(state, p_->engine->hierarchy().layout(index).domain(), state.ncomp(),
+                      semantic_identity, lane);
 }
 
 template <int Dim>
@@ -14501,6 +16540,7 @@ template <int Dim>
 std::vector<OutputPiece<Dim>> AmrSystem<Dim>::output_state_root_pieces(const ObserverMpiLane& lane,
                                                                        const std::string& name,
                                                                        int level) {
+  p_->require_no_native_package_callback("output_state_root_pieces");
   return output_pieces_to_root(
       lane, detail::output_collective_identity("amr_system", "state", name, level),
       [&] { return output_state_local_pieces(name, level); });
@@ -14509,6 +16549,7 @@ std::vector<OutputPiece<Dim>> AmrSystem<Dim>::output_state_root_pieces(const Obs
 template <int Dim>
 std::vector<OutputPiece<Dim>> AmrSystem<Dim>::output_embedded_boundary_root_pieces(
     const ObserverMpiLane& lane, const std::string& name, int level) {
+  p_->require_no_native_package_callback("output_embedded_boundary_root_pieces");
   if (lane.size() == 1)
     return output_embedded_boundary_local_pieces(name, level);
   return output_pieces_to_root(
@@ -14751,18 +16792,26 @@ void AmrSystem<Dim>::rebuild_hierarchy(const std::vector<AmrPatch<Dim>>& boxes,
       }
       additional.push_back({p_->blocks[block].name, std::move(levels)});
     }
-    auto candidate_multiblock = std::make_unique<typename Impl::multiblock_type>(
-        Impl::multiblock_type::prepare_collectively(candidate_engine, p_->blocks.front().name,
-                                                    std::move(additional),
-                                                    "pops.amr-system.multiblock/rebuild"));
+    std::optional<typename Impl::multiblock_type> multiblock_staged;
+    std::exception_ptr carrier_preparation_error;
+    try {
+      multiblock_staged.emplace(Impl::multiblock_type::prepare_collectively(
+          lane, candidate_engine, p_->blocks.front().name, std::move(additional),
+          "pops.amr-system.multiblock/rebuild"));
+    } catch (...) {
+      carrier_preparation_error = std::current_exception();
+    }
+    if (all_reduce_max(carrier_preparation_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && carrier_preparation_error)
+        std::rethrow_exception(carrier_preparation_error);
+      throw std::runtime_error("AMR hierarchy rebuild carrier preparation failed collectively");
+    }
     for (const auto& coupling : p_->prepared_couplings)
-      candidate_multiblock->install_prepared_coupling_operator(coupling.provider_contract,
-                                                               coupling.view, coupling.operation);
-    candidate_multiblock->seal_couplings();
-    std::unique_ptr<typename Impl::PreparedHierarchy> candidate_graph =
-        p_->prepare_hierarchy_graph(*candidate_engine, *candidate_multiblock, nullptr);
+      multiblock_staged->install_prepared_coupling_operator(coupling.provider_contract,
+                                                            coupling.view, coupling.operation);
+    multiblock_staged->seal_couplings();
     std::optional<typename Impl::multiblock_type::ProgramBlockMap> block_map_candidate =
-        p_->prepare_program_block_map_candidate(*candidate_multiblock);
+        p_->prepare_program_block_map_candidate(*multiblock_staged);
     std::optional<typename Impl::flux_expression_budget_type> flux_budget_candidate;
     if (p_->program_flux_expression_budget) {
       if (!block_map_candidate)
@@ -14775,19 +16824,37 @@ void AmrSystem<Dim>::rebuild_hierarchy(const std::vector<AmrPatch<Dim>>& boxes,
           p_->program_flux_expression_budget->blocks, *block_map_candidate, has_flux_expression,
           p_->program_flux_expression_budget->interface_coupling_application_bound,
           p_->program_flux_expression_budget->interface_coupling_identity_character_bound,
-          *candidate_engine, *candidate_multiblock));
+          *candidate_engine, *multiblock_staged));
     }
+    std::unique_ptr<typename Impl::multiblock_type> candidate_multiblock;
+    std::exception_ptr carrier_allocation_error;
+    try {
+      candidate_multiblock =
+          std::make_unique<typename Impl::multiblock_type>(std::move(*multiblock_staged));
+    } catch (...) {
+      carrier_allocation_error = std::current_exception();
+    }
+    if (all_reduce_max(carrier_allocation_error ? 1L : 0L, lane) != 0) {
+      static_assert(std::is_nothrow_move_assignable_v<typename Impl::multiblock_type>);
+      if (candidate_multiblock)
+        *multiblock_staged = std::move(*candidate_multiblock);
+      if (lane.size() == 1 && carrier_allocation_error)
+        std::rethrow_exception(carrier_allocation_error);
+      throw std::runtime_error("AMR hierarchy rebuild carrier allocation failed collectively");
+    }
+    std::unique_ptr<typename Impl::PreparedHierarchy> candidate_graph = p_->prepare_hierarchy_graph(
+        *candidate_engine, *candidate_multiblock, p_->prepared_hierarchy.get());
 
     // Engine, carrier, graph, exact map and flux budget are fully qualified candidates.  The
     // following ownership moves are the publication boundary, so a hierarchy refresh cannot
     // observe the prior budget generation on the rebuilt carrier.
-    static_assert(std::is_nothrow_move_assignable_v<decltype(p_->prepared_program_block_map)>);
-    static_assert(std::is_nothrow_move_assignable_v<decltype(p_->program_flux_expression_budget)>);
+    static_assert(std::is_nothrow_swappable_v<decltype(p_->prepared_program_block_map)>);
+    static_assert(std::is_nothrow_swappable_v<decltype(p_->program_flux_expression_budget)>);
     p_->engine.swap(candidate_engine);
     p_->multiblock_hierarchy.swap(candidate_multiblock);
     p_->prepared_hierarchy.swap(candidate_graph);
-    p_->prepared_program_block_map = std::move(block_map_candidate);
-    p_->program_flux_expression_budget = std::move(flux_budget_candidate);
+    p_->prepared_program_block_map.swap(block_map_candidate);
+    p_->program_flux_expression_budget.swap(flux_budget_candidate);
     p_->pending_provider_restore.reset();
     p_->pending_provider_registry_restore.reset();
     for (auto& [slot, plan] : p_->field_plans) {
@@ -15187,16 +17254,33 @@ template <int Dim>
 std::vector<double> AmrSystem<Dim>::history_global(const std::string& name, int level,
                                                    int slot) const {
   p_->ensure_engine();
-  const auto descriptor = p_->history_descriptor(name);
-  if (slot < 0 || slot >= descriptor.depth)
-    throw std::out_of_range("AMR history slot lies outside its exact ring depth");
-  if (!p_->prepared_hierarchy || !p_->prepared_hierarchy->lane)
-    throw std::logic_error("AMR history gather requires its prepared hierarchy lane");
-  const std::string key = p_->history_level_key(name, level);
-  const auto& ring = p_->program.hist_.histories.at(key);
-  const Box<Dim>& domain = p_->engine->hierarchy().layout(static_cast<std::size_t>(level)).domain();
-  return gather_field(ring[static_cast<std::size_t>(slot)], domain, descriptor.components,
-                      &*p_->prepared_hierarchy->lane);
+  const ExecutionLane& lane = p_->require_prepared_engine_lane("AMR history gather");
+  const MultiFab<Dim>* history = nullptr;
+  const Box<Dim>* domain = nullptr;
+  int components = 0;
+  std::string semantic_identity;
+  std::exception_ptr local_error;
+  try {
+    const auto descriptor = p_->history_descriptor(name);
+    if (slot < 0 || slot >= descriptor.depth)
+      throw std::out_of_range("AMR history slot lies outside its exact ring depth");
+    const std::string key = p_->history_level_key(name, level);
+    const auto& ring = p_->program.hist_.histories.at(key);
+    history = &ring.at(static_cast<std::size_t>(slot));
+    domain = &p_->engine->hierarchy().layout(static_cast<std::size_t>(level)).domain();
+    components = descriptor.components;
+    ExactContractBuilder exact;
+    exact.text("pops.amr.history-gather")
+        .scalar(std::uint32_t{1})
+        .text(key)
+        .scalar(std::int32_t{slot});
+    semantic_identity = std::move(exact).release();
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      local_error, &lane, "AMR history gather preflight failed collectively");
+  return gather_field(*history, *domain, components, semantic_identity, lane);
 }
 
 template <int Dim>
@@ -15375,16 +17459,47 @@ double AmrSystem<Dim>::mass(const std::string& name) {
 
 template <int Dim>
 std::vector<double> AmrSystem<Dim>::density() {
-  if (p_->blocks.empty())
-    throw std::logic_error("AmrSystem has no block");
-  return density(p_->blocks.front().name);
+  p_->require_no_native_package_callback("density");
+  const ExecutionLane& package_lane = p_->require_package_assembly_lane();
+  std::string block_name;
+  std::exception_ptr local_error;
+  try {
+    if (p_->blocks.empty())
+      throw std::logic_error("AmrSystem has no block");
+    block_name = p_->blocks.front().name;
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      local_error, &package_lane, "AMR default density route failed collectively");
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("amr-default-density-block"), block_name}}, package_lane))
+    throw std::invalid_argument("AMR default density block differs between RuntimeInstance ranks");
+  return density(block_name);
 }
 
 template <int Dim>
 std::vector<double> AmrSystem<Dim>::density(const std::string& name) {
-  const std::size_t block_index = p_->block_index(name);
   p_->ensure_engine();
-  return gather_field(p_->block_state(block_index, 0), p_->cfg.index_domain(), 1);
+  const ExecutionLane& lane = p_->require_prepared_engine_lane("AMR density gather");
+  std::size_t block_index = 0;
+  std::string semantic_identity;
+  std::exception_ptr local_error;
+  try {
+    block_index = p_->block_index(name);
+    ExactContractBuilder exact;
+    exact.text("pops.amr.density-gather")
+        .scalar(std::uint32_t{1})
+        .text(name)
+        .scalar(static_cast<std::uint64_t>(block_index));
+    semantic_identity = std::move(exact).release();
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      local_error, &lane, "AMR density gather preflight failed collectively");
+  return gather_field(p_->block_state(block_index, 0), p_->cfg.index_domain(), 1, semantic_identity,
+                      lane);
 }
 
 template <int Dim>
@@ -16209,8 +18324,8 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::checkpoint_transfer_routes
 
 template AmrSystem<kNativeDimension>::AmrSystem(const AmrSystemConfig<kNativeDimension>&);
 template AmrSystem<kNativeDimension>::~AmrSystem();
-template AmrSystem<kNativeDimension>::AmrSystem(AmrSystem&&) noexcept;
-template AmrSystem<kNativeDimension>& AmrSystem<kNativeDimension>::operator=(AmrSystem&&) noexcept;
+template AmrSystem<kNativeDimension>::AmrSystem(AmrSystem&&);
+template AmrSystem<kNativeDimension>& AmrSystem<kNativeDimension>::operator=(AmrSystem&&);
 template void AmrSystem<kNativeDimension>::add_block(
     const std::string&, const ModelSpec&, const std::string&, const std::string&,
     const std::string&, const std::string&, int, int, const std::vector<std::string>&,
@@ -16222,6 +18337,7 @@ template void AmrSystem<kNativeDimension>::set_compiled_block(
 template void AmrSystem<kNativeDimension>::add_native_block(const std::string&, const std::string&,
                                                             const std::string&, const std::string&,
                                                             const std::string&, const std::string&,
+                                                            const std::string&, const std::string&,
                                                             double, int, const std::vector<double>&,
                                                             double, double, bool);
 template void AmrSystem<kNativeDimension>::register_external_riemann_package(
@@ -16230,6 +18346,8 @@ template void AmrSystem<kNativeDimension>::register_external_riemann_package(
     const std::string&, double, int, int, double, double);
 template void AmrSystem<kNativeDimension>::install_prepared_amr_block(
     PreparedAmrSystemBlock<kNativeDimension>);
+template void AmrSystem<kNativeDimension>::install_prepared_native_amr_package(
+    PreparedNativeAmrPackage<kNativeDimension>);
 template const MultiFab<kNativeDimension>& AmrSystem<kNativeDimension>::prepared_amr_block_state(
     int, int) const;
 template MultiFab<kNativeDimension>& AmrSystem<kNativeDimension>::prepared_amr_block_state(int,
@@ -16258,7 +18376,7 @@ template std::size_t AmrSystem<kNativeDimension>::apply_prepared_amr_program_can
 template void AmrSystem<kNativeDimension>::publish_prepared_amr_program_candidates(
     int, std::span<MultiFab<kNativeDimension>* const>);
 template void AmrSystem<kNativeDimension>::install_prepared_boundary_execution_context(
-    std::shared_ptr<const component::PreparedExecutionContextV1>);
+    std::shared_ptr<ExecutionLane>, std::shared_ptr<const component::PreparedExecutionContextV1>);
 template void AmrSystem<kNativeDimension>::stage_prepared_ghost_boundary_component(
     const std::string&, std::shared_ptr<PreparedGhostBoundaryComponent>);
 template void AmrSystem<kNativeDimension>::stage_prepared_boundary_flux_component(
@@ -16445,9 +18563,11 @@ template void AmrSystem<kNativeDimension>::set_poisson(const std::string&, const
                                                        const AmrFieldSolverOptions&);
 template void AmrSystem<kNativeDimension>::set_field_solver_plan(
     const std::string&, const std::string&, const std::string&, const std::string&,
-    const std::string&, const std::string&, const std::vector<std::string>&,
-    const std::vector<std::string>&, const std::vector<std::string>&, const std::vector<double>&,
-    const std::string&, const AmrFieldHierarchyPolicyAuthority&, const AmrFieldSolverOptions&);
+    const std::string&, const std::string&,
+    const std::vector<runtime::system::AuxiliaryComponentKey>&, int,
+    const std::vector<std::string>&, const std::vector<std::string>&,
+    const std::vector<std::string>&, const std::vector<double>&, const std::string&,
+    const AmrFieldHierarchyPolicyAuthority&, const AmrFieldSolverOptions&);
 template AmrFieldSolverConfiguration AmrSystem<kNativeDimension>::field_solver_configuration(
     const std::string&) const;
 template void AmrSystem<kNativeDimension>::set_field_reaction(const std::string&, double);
@@ -16480,7 +18600,7 @@ template void AmrSystem<kNativeDimension>::register_elliptic_field(
     const std::string&, const std::string&,
     const std::vector<runtime::system::AuxiliaryComponentKey>&, int);
 template void AmrSystem<kNativeDimension>::set_block_elliptic_field(
-    const std::string&, const std::string&,
+    const std::string&, const std::string&, const std::string&,
     std::function<void(const MultiFab<kNativeDimension>&, MultiFab<kNativeDimension>&)>);
 template SolveOutcome AmrSystem<kNativeDimension>::solve_program_field_at(
     const runtime::multiblock::BoundaryEvaluationPoint&, const std::string&, int,

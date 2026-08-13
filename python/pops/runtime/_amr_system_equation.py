@@ -99,9 +99,9 @@ class _AmrSystemEquation(_AmrSystem):
 
         - a private ``ModelSpec`` -> the native ``AmrSystem::add_block`` ABI (bricks composed on
           the hierarchy);
-        - a CompiledModel(backend='production', target='amr_system') installs a package whose loader
-          inlines add_compiled_model(AmrSystem&), so the block runs
-          the same AMR hierarchy as the native-brick ABI (conservative reflux, regrid), ZERO-COPY.
+        - a CompiledModel(backend='production', target='amr_system') installs one complete inert
+          package containing its prepared block and elliptic attachments, so the block runs the
+          same AMR hierarchy as the native-brick ABI (conservative reflux, regrid), ZERO-COPY.
 
         The ``time`` value carried by a block is immutable Program-authoring metadata, not an
         executable method in the AMR spatial runtime. The compiled ``pops.Program`` installed after
@@ -222,7 +222,7 @@ class _AmrSystemEquation(_AmrSystem):
             raise ValueError(
                 "AmrSystem.add_equation: the CompiledModel was compiled for target='system'; "
                 "re-resolve and compile the Case for its AMR layout so that the loader inlines "
-                "add_compiled_model(AmrSystem&) (symbol pops_install_native_amr)"
+                "the complete prepared AMR package (symbol pops_install_native_amr)"
             )
 
         # Descriptor-owned model predicates are shared verbatim with System and availability.
@@ -258,10 +258,10 @@ class _AmrSystemEquation(_AmrSystem):
         # through the .so loader. Explicit rejection prevents silent substitution of the prepared
         # provider defaults, in parity with the stride/mask rejection above and System.add_equation.
         _reject_newton_amr_compiled("AmrSystem.add_equation", time)
-        # positivity_floor (ADC-322): the regenerated .so loader carries the Zhang-Shu floor now
-        # (pops_install_native_amr -> add_compiled_model -> set_compiled_block), so it is threaded
-        # through instead of rejected. 0 (default) = inactive, bit-identical. The C++
-        # The native package seam validates floor >= 0 and finite (parity with add_block).
+        # positivity_floor (ADC-322): the regenerated .so loader carries the Zhang-Shu floor in
+        # the complete prepared package, so it is threaded through instead of rejected. 0
+        # (default) = inactive, bit-identical. The native package seam validates floor >= 0 and
+        # finite (parity with add_block).
 
         # PRE-DLOPEN guard at attach (covers the cache HIT, cf. System.add_equation): module
         # _pops stale vs .so compiled against the up-to-date headers -> actionable error, not a dlopen
@@ -382,6 +382,8 @@ class _AmrSystemEquation(_AmrSystem):
             self._s._install_native_block(
                 name,
                 compiled.so_path,
+                compiled.model_hash,
+                str(compiled.binary_identity),
                 spatial.limiter,
                 spatial.flux,
                 spatial.recon,

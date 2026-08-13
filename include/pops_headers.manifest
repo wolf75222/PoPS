@@ -230,6 +230,7 @@ sdk-root pops/runtime/config/runtime_params.hpp
 api pops/runtime/config/spatial_domain.hpp
 api pops/runtime/multiblock/evaluation_point.hpp
 abi pops/runtime/dynamic/abi_key.hpp
+sdk-support pops/runtime/dynamic/authenticated_native_file.hpp
 sdk-support pops/runtime/dynamic/component_consumers.hpp
 sdk-support pops/runtime/dynamic/component_loader.hpp
 sdk-support pops/runtime/dynamic/dynlib.hpp
@@ -271,6 +272,7 @@ api pops/runtime/system.hpp
 sdk-support pops/runtime/system/exact_named_field.hpp
 sdk-support pops/runtime/system/auxiliary_checkpoint.hpp
 sdk-support pops/runtime/system/derived_aux_provider.hpp
+sdk-root pops/runtime/system/native_package_capability.hpp
 sdk-support pops/runtime/system/auxiliary_ghost_fill.hpp
 sdk-support pops/runtime/system/exact_aux_registry.hpp
 sdk-support pops/runtime/system/exact_field_marshaling.hpp

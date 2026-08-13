@@ -280,7 +280,7 @@ struct PreparedSystemBlock {
   int stride = 1;
 
   SystemBlockClosures<Dim> closures;
-  std::function<Real(const field_type&)> maximum_speed;
+  std::function<Real(const field_type&, const ExecutionLane&)> maximum_speed;
   std::function<void(const field_type&, field_type&)> poisson_rhs;
   std::function<void(const double*, double*)> primitive_to_conservative;
   std::function<RecoveryReport(const double*, double*)> conservative_to_primitive;

@@ -14,6 +14,7 @@
 #include <pops/runtime/system/exact_named_field.hpp>
 #include <pops/runtime/system/prepared_embedded_boundary.hpp>
 #include <pops/runtime/system/system_lifecycle.hpp>
+#include <pops/runtime/system/native_package_capability.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace_builtins.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace_prepare.hpp>
@@ -26,6 +27,8 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -48,6 +51,77 @@ struct System<Dim>::Impl {
   using field_type = MultiFab<Dim>;
   using Species = typename block_store_type::BlockState;
 
+  struct PreparedBoundaryHookContract {
+    std::string package_identity;
+    std::string block;
+    std::string hook;
+    std::string component_contract;
+    std::string component_authority_contract;
+
+    bool operator==(const PreparedBoundaryHookContract&) const = default;
+  };
+
+  /// One validated native package.  Package owners are the first Impl members so they are the last
+  /// members destroyed: every registry, carrier, block, Program closure, and provider launcher is
+  /// gone before a DSO can be unloaded.
+  struct PendingNativePackage {
+    // Declared first so it is destroyed last within each package too: registrar/installer function
+    // managers may themselves be emitted by the DSO.
+    std::shared_ptr<void> lifetime;
+    std::shared_ptr<runtime::system::NativePackageCapabilityState<Dim>> capability;
+    std::string identity;
+    std::function<void()> register_routes;
+    std::function<void()> install;
+    NativePackageKind kind = NativePackageKind::generic;
+    std::vector<PreparedBoundaryHookContract> expected_boundary_hooks;
+
+    PendingNativePackage(std::shared_ptr<void> owner,
+                         std::shared_ptr<runtime::system::NativePackageCapabilityState<Dim>> state,
+                         std::string package_identity, std::function<void()> registrar,
+                         std::function<void()> installer, NativePackageKind package_kind)
+        : lifetime(std::move(owner)),
+          capability(std::move(state)),
+          identity(std::move(package_identity)),
+          register_routes(std::move(registrar)),
+          install(std::move(installer)),
+          kind(package_kind) {}
+    PendingNativePackage(const PendingNativePackage&) = delete;
+    PendingNativePackage& operator=(const PendingNativePackage&) = delete;
+    PendingNativePackage(PendingNativePackage&& other) noexcept
+        : lifetime(std::move(other.lifetime)),
+          capability(std::move(other.capability)),
+          identity(std::move(other.identity)),
+          register_routes(std::move(other.register_routes)),
+          install(std::move(other.install)),
+          kind(other.kind),
+          expected_boundary_hooks(std::move(other.expected_boundary_hooks)) {}
+    PendingNativePackage& operator=(PendingNativePackage&& other) noexcept {
+      static_assert(std::is_nothrow_move_assignable_v<std::shared_ptr<void>>);
+      static_assert(std::is_nothrow_move_assignable_v<std::string>);
+      static_assert(std::is_nothrow_move_assignable_v<std::function<void()>>);
+      static_assert(std::is_nothrow_move_assignable_v<std::vector<PreparedBoundaryHookContract>>);
+      if (this != &other) {
+        // ``previous`` first acquires this package's lifetime, then takes its callable targets. It
+        // remains alive until the replacement is complete and destroys those targets before its
+        // lifetime. The destination likewise acquires the incoming lifetime before its callables.
+        PendingNativePackage previous(std::move(*this));
+        lifetime = std::move(other.lifetime);
+        capability = std::move(other.capability);
+        identity = std::move(other.identity);
+        register_routes = std::move(other.register_routes);
+        install = std::move(other.install);
+        kind = other.kind;
+        expected_boundary_hooks = std::move(other.expected_boundary_hooks);
+      }
+      return *this;
+    }
+  };
+  static_assert(std::is_nothrow_move_constructible_v<PendingNativePackage>);
+  static_assert(std::is_nothrow_move_assignable_v<PendingNativePackage>);
+  static_assert(std::is_nothrow_destructible_v<PendingNativePackage>);
+  std::vector<PendingNativePackage> pending_native_packages_;
+  std::vector<PendingNativePackage> installed_native_packages_;
+
   domain_type domain_;
   SystemConfig<Dim>& cfg = domain_.cfg;
   Box<Dim>& dom = domain_.dom;
@@ -63,7 +137,9 @@ struct System<Dim>::Impl {
   auxiliary_registry_type auxiliary_registry_;
   // No allocation exists for an empty provider graph. Every non-empty value belongs to one exact
   // storage group resolved from owner-qualified ComponentKeys.
-  std::optional<runtime::system::AuxiliaryStorageGroups<Dim>> provider_carrier_;
+  // Once allocated, the carrier object itself is never replaced. Generated native closures retain
+  // its address; exact refresh/publication transactions swap only its value image.
+  std::shared_ptr<runtime::system::AuxiliaryStorageGroups<Dim>> provider_carrier_;
   // The raw uploaded values are not carrier storage.  They remain host-side staging evidence until
   // one exact evaluation transaction publishes them into the runtime-owned compact provider carrier.
   std::map<std::string, std::vector<double>> staged_auxiliary_inputs_;
@@ -74,19 +150,9 @@ struct System<Dim>::Impl {
   std::optional<ExecutionLane> auxiliary_ghost_lane_;
   std::optional<runtime::system::PreparedAuxiliaryGhostTransport<Dim>> auxiliary_ghost_transport_;
 
-  /// One validated but not yet materialized native package.  It owns the local DSO handle through
-  /// ``lifetime`` and therefore must outlive blocks (this member intentionally precedes blocks_).
-  struct PendingNativePackage {
-    std::string identity;
-    std::function<void()> install;
-    std::shared_ptr<void> lifetime;
-    NativePackageKind kind = NativePackageKind::generic;
-  };
-  std::vector<PendingNativePackage> pending_native_packages_;
-  std::vector<PendingNativePackage> installed_native_packages_;
-
   block_store_type blocks_;
   std::vector<Species>& sp = blocks_.blocks;
+  std::vector<PreparedBoundaryHookContract> prepared_boundary_hook_contracts_;
   boundary_registry_type boundary_registry_;
   runtime::system::SystemCouplingRegistry<Dim> coupling_;
   runtime::system::SystemLifecycle lifecycle_;
@@ -159,6 +225,13 @@ struct System<Dim>::Impl {
     int maximum_iterations = 0;
   };
 
+  struct StagedNativeFieldOutput {
+    std::string block;
+    std::string field;
+    std::vector<auxiliary_key_type> output_keys;
+    int gradient_sign = 1;
+  };
+
   std::shared_ptr<exact_field_type> default_field_;
   std::map<std::string, std::shared_ptr<exact_field_type>> named_fields_;
   std::shared_ptr<exact_field_type> active_field_;
@@ -169,15 +242,20 @@ struct System<Dim>::Impl {
   std::map<std::string, ConfiguredFieldSolverProvider> configured_field_solver_providers_;
   std::map<std::string, std::shared_ptr<component_field_solver_type>>
       component_field_solver_providers_;
+  // A prepared field provider resolves this exact output route before native package finalization.
+  // The finalizer authenticates it on the package lane and materializes it only after every generic
+  // block exists in the detached candidate.
+  std::map<std::string, StagedNativeFieldOutput> staged_native_field_outputs_;
   std::shared_ptr<FieldNullspaceProviderRegistry<Dim>> field_nullspace_providers_;
   bool field_plan_consensus_verified_ = false;
   std::string default_nullspace_provider_identity_;
   PreparedProviderOptions default_nullspace_options_;
 
-  /// Full assembly rollback image for the two-phase native package finalizer.  DSO route
-  /// registration is intentionally outside this transaction; it only populates the auxiliary
-  /// registry before seal.  Block installers can otherwise mutate every structural registry, so a
-  /// partial install must never leak into a retry on any MPI rank.
+  /// Full detached assembly image for native package finalization. While this pointer is non-null,
+  /// the existing installation helpers resolve every mutable registry through the candidate.
+  struct NativePackageFinalizeSnapshot;
+  NativePackageFinalizeSnapshot* native_package_finalize_candidate_ = nullptr;
+
   struct NativePackageFinalizeSnapshot {
     struct BoundaryHookImage {
       std::shared_ptr<typename block_store_type::BoundaryFluxTransform> flux_target;
@@ -191,12 +269,14 @@ struct System<Dim>::Impl {
     };
 
     auxiliary_registry_type auxiliary_registry;
+    std::shared_ptr<runtime::system::AuxiliaryStorageGroups<Dim>> provider_carrier_owner;
     std::optional<runtime::system::AuxiliaryStorageGroups<Dim>> provider_carrier;
     std::map<std::string, std::vector<double>> staged_auxiliary_inputs;
     std::vector<std::string> dirty_auxiliary_providers;
     bool auxiliary_registry_consensus_verified = false;
     block_store_type blocks;
     std::vector<BoundaryHookImage> boundary_hooks;
+    std::vector<PreparedBoundaryHookContract> prepared_boundary_hook_contracts;
     boundary_registry_type boundary_registry;
     runtime::system::SystemCouplingRegistry<Dim> coupling;
     runtime::program::ProgramRuntimeState<Dim> program;
@@ -207,11 +287,13 @@ struct System<Dim>::Impl {
     std::uint64_t embedded_boundary_generation = 0;
     std::shared_ptr<exact_field_type> default_field;
     std::map<std::string, std::shared_ptr<exact_field_type>> named_fields;
+    std::map<std::string, typename exact_field_type::rhs_image_type> named_field_rhs_images;
     std::shared_ptr<exact_field_type> active_field;
     std::map<std::string, FieldPlan> field_plans;
     std::map<std::string, ConfiguredFieldSolverProvider> configured_field_solver_providers;
     std::map<std::string, std::shared_ptr<component_field_solver_type>>
         component_field_solver_providers;
+    std::map<std::string, StagedNativeFieldOutput> staged_native_field_outputs;
     std::shared_ptr<FieldNullspaceProviderRegistry<Dim>> field_nullspace_providers;
     bool field_plan_consensus_verified = false;
     std::string default_nullspace_provider_identity;
@@ -219,11 +301,16 @@ struct System<Dim>::Impl {
 
     explicit NativePackageFinalizeSnapshot(const Impl& owner)
         : auxiliary_registry(owner.auxiliary_registry_),
-          provider_carrier(owner.provider_carrier_),
+          provider_carrier_owner(owner.provider_carrier_),
+          provider_carrier(owner.provider_carrier_
+                               ? std::optional<runtime::system::AuxiliaryStorageGroups<Dim>>(
+                                     *owner.provider_carrier_)
+                               : std::nullopt),
           staged_auxiliary_inputs(owner.staged_auxiliary_inputs_),
           dirty_auxiliary_providers(owner.dirty_auxiliary_providers_),
           auxiliary_registry_consensus_verified(owner.auxiliary_registry_consensus_verified_),
           blocks(owner.blocks_),
+          prepared_boundary_hook_contracts(owner.prepared_boundary_hook_contracts_),
           boundary_registry(owner.boundary_registry_),
           coupling(owner.coupling_),
           program(owner.program_),
@@ -238,13 +325,15 @@ struct System<Dim>::Impl {
           field_plans(owner.field_plans_),
           configured_field_solver_providers(owner.configured_field_solver_providers_),
           component_field_solver_providers(owner.component_field_solver_providers_),
+          staged_native_field_outputs(owner.staged_native_field_outputs_),
           field_nullspace_providers(owner.field_nullspace_providers_),
           field_plan_consensus_verified(owner.field_plan_consensus_verified_),
           default_nullspace_provider_identity(owner.default_nullspace_provider_identity_),
           default_nullspace_options(owner.default_nullspace_options_) {
       if (owner.active_field_ || owner.active_field_provider_candidate_ ||
           owner.active_field_auxiliary_publication_ ||
-          !owner.active_field_stale_auxiliary_providers_.empty())
+          !owner.active_field_stale_auxiliary_providers_.empty() ||
+          owner.native_package_finalize_candidate_ != nullptr)
         throw std::logic_error(
             "System native package finalization cannot snapshot an active field candidate");
       // Prepared solve-context owners contain mutable invocation pointers into the live block and
@@ -256,26 +345,72 @@ struct System<Dim>::Impl {
         plan.boundary_context_storage.reset();
       }
       boundary_hooks.reserve(owner.blocks_.blocks.size());
-      for (const auto& block : owner.blocks_.blocks) {
-        BoundaryHookImage image;
-        image.flux_target = block.external_boundary_flux;
-        if (image.flux_target)
-          image.flux = *image.flux_target;
-        image.residual_target = block.external_field_boundary_residual;
-        if (image.residual_target)
-          image.residual = *image.residual_target;
-        image.jvp_target = block.external_field_boundary_jvp;
-        if (image.jvp_target)
-          image.jvp = *image.jvp_target;
-        image.ghost_target = block.external_ghost_boundary;
-        if (image.ghost_target)
-          image.ghost = *image.ghost_target;
-        boundary_hooks.push_back(std::move(image));
-      }
+      for (const auto& block : owner.blocks_.blocks)
+        append_boundary_hook_image(block);
       for (const auto& [slot, field] : owner.named_fields_) {
-        (void)slot;
         if (!field)
           throw std::logic_error("System native package finalization found a null named field");
+        named_field_rhs_images.emplace(slot, field->rhs_image());
+      }
+    }
+
+    void append_boundary_hook_image(const Species& block) {
+      BoundaryHookImage image;
+      image.flux_target = block.external_boundary_flux;
+      if (image.flux_target)
+        image.flux = *image.flux_target;
+      image.residual_target = block.external_field_boundary_residual;
+      if (image.residual_target)
+        image.residual = *image.residual_target;
+      image.jvp_target = block.external_field_boundary_jvp;
+      if (image.jvp_target)
+        image.jvp = *image.jvp_target;
+      image.ghost_target = block.external_ghost_boundary;
+      if (image.ghost_target)
+        image.ghost = *image.ghost_target;
+      boundary_hooks.push_back(std::move(image));
+    }
+
+    BoundaryHookImage& boundary_hook(std::string_view block) {
+      const auto found =
+          std::find_if(blocks.blocks.begin(), blocks.blocks.end(),
+                       [&](const Species& candidate) { return candidate.name == block; });
+      if (found == blocks.blocks.end())
+        throw std::out_of_range("System detached boundary hook block is not materialized");
+      const std::size_t index = static_cast<std::size_t>(found - blocks.blocks.begin());
+      if (index >= boundary_hooks.size())
+        throw std::logic_error("System detached boundary hook image is incomplete");
+      return boundary_hooks[index];
+    }
+
+    void publish_boundary_hook_noexcept(std::string_view block, std::string_view hook) noexcept {
+      const auto found =
+          std::find_if(blocks.blocks.begin(), blocks.blocks.end(),
+                       [&](const Species& candidate) { return candidate.name == block; });
+      if (found == blocks.blocks.end())
+        std::terminate();
+      const std::size_t index = static_cast<std::size_t>(found - blocks.blocks.begin());
+      if (index >= boundary_hooks.size())
+        std::terminate();
+      BoundaryHookImage& image = boundary_hooks[index];
+      if (hook == "ghost" && image.ghost_target)
+        image.ghost_target->swap(image.ghost);
+      else if (hook == "flux" && image.flux_target)
+        image.flux_target->swap(image.flux);
+      else if (hook == "field-residual" && image.residual_target)
+        image.residual_target->swap(image.residual);
+      else if (hook == "field-jvp" && image.jvp_target)
+        image.jvp_target->swap(image.jvp);
+      else
+        std::terminate();
+    }
+
+    void publish_named_field_rhs_noexcept() noexcept {
+      for (auto& [slot, image] : named_field_rhs_images) {
+        const auto field = named_fields.find(slot);
+        if (field == named_fields.end() || !field->second)
+          std::terminate();
+        field->second->publish_rhs_image(image);
       }
     }
 
@@ -284,8 +419,16 @@ struct System<Dim>::Impl {
     /// rank-asymmetric rollback escape.
     void restore_noexcept(Impl& owner) noexcept {
       using std::swap;
-      swap(owner.auxiliary_registry_, auxiliary_registry);
-      swap(owner.provider_carrier_, provider_carrier);
+      owner.auxiliary_registry_.swap_complete(auxiliary_registry);
+      if (provider_carrier) {
+        if (!provider_carrier_owner)
+          std::terminate();
+        swap(*provider_carrier_owner, *provider_carrier);
+        owner.provider_carrier_ = std::move(provider_carrier_owner);
+      } else {
+        if (owner.provider_carrier_)
+          std::terminate();
+      }
       // The carrier/registry image above can have a different allocation or resolved component
       // contract after a failed finalizer.  A prepared transport is therefore never rollback
       // state: rebuild it from the restored authoritative carrier on the next refresh.
@@ -296,6 +439,7 @@ struct System<Dim>::Impl {
       swap(owner.staged_auxiliary_inputs_, staged_auxiliary_inputs);
       swap(owner.dirty_auxiliary_providers_, dirty_auxiliary_providers);
       swap(owner.auxiliary_registry_consensus_verified_, auxiliary_registry_consensus_verified);
+      swap(owner.prepared_boundary_hook_contracts_, prepared_boundary_hook_contracts);
       // BoundaryFlux and FieldBoundary deliberately use shared generated hot-call slots so packages
       // installed after block materialization can extend their chains without installation-order
       // coupling. Restore those slots with noexcept swaps before copying the block-store image. Thus
@@ -327,6 +471,7 @@ struct System<Dim>::Impl {
       swap(owner.field_plans_, field_plans);
       swap(owner.configured_field_solver_providers_, configured_field_solver_providers);
       swap(owner.component_field_solver_providers_, component_field_solver_providers);
+      swap(owner.staged_native_field_outputs_, staged_native_field_outputs);
       swap(owner.field_nullspace_providers_, field_nullspace_providers);
       swap(owner.field_plan_consensus_verified_, field_plan_consensus_verified);
       swap(owner.default_nullspace_provider_identity_, default_nullspace_provider_identity);
@@ -350,8 +495,7 @@ struct System<Dim>::Impl {
   /// successful installation phase.
   void publish_reserved_native_packages_noexcept(
       std::vector<PendingNativePackage>& packages) noexcept {
-    if (packages.size() > installed_native_packages_.capacity() - installed_native_packages_.size())
-      std::terminate();
+    static_assert(std::is_nothrow_move_constructible_v<PendingNativePackage>);
     for (auto& package : packages)
       installed_native_packages_.push_back(std::move(package));
     packages.clear();
@@ -413,50 +557,87 @@ struct System<Dim>::Impl {
     return std::move(contract).release();
   }
 
+  [[nodiscard]] std::string field_plan_registry_contract() const {
+    ExactContractBuilder registry;
+    registry.text("pops.system.exact-ranked-field-plan-registry").scalar(std::uint32_t{3});
+    registry.scalar(static_cast<std::uint64_t>(configured_field_solver_providers_.size()));
+    for (const auto& [route, provider] : configured_field_solver_providers_)
+      registry.text(route)
+          .text(provider.family_route)
+          .text(provider.exact_identity)
+          .bytes(provider.options.exact_contract());
+    registry.scalar(static_cast<std::uint64_t>(component_field_solver_providers_.size()));
+    for (const auto& [route, provider] : component_field_solver_providers_) {
+      if (!provider)
+        throw std::runtime_error("System field component provider registry contains null");
+      registry.text(route)
+          .text(provider->provider_identity())
+          .bytes(provider->collective_contract());
+    }
+    registry.text(default_nullspace_provider_identity_)
+        .presence(!default_nullspace_provider_identity_.empty());
+    if (!default_nullspace_provider_identity_.empty())
+      registry.bytes(default_nullspace_options_.exact_contract());
+    registry.scalar(static_cast<std::uint64_t>(field_plans_.size()));
+    for (const auto& [slot, plan] : field_plans_) {
+      registry.text(slot).bytes(exact_field_plan_contract(plan));
+      const auto configured = configured_field_solver_providers_.find(plan.backend_provider_route);
+      const auto component = component_field_solver_providers_.find(plan.backend_provider_route);
+      if ((configured == configured_field_solver_providers_.end()) ==
+          (component == component_field_solver_providers_.end()))
+        throw std::runtime_error(
+            "System field plan must select exactly one installed exact-ranked backend route");
+      if (configured != configured_field_solver_providers_.end())
+        registry.text(configured->second.exact_identity)
+            .bytes(configured->second.options.exact_contract());
+      else
+        registry.text(component->second->provider_identity())
+            .bytes(component->second->collective_contract());
+    }
+    return std::move(registry).release();
+  }
+
+  [[nodiscard]] std::string staged_native_field_output_contract() const {
+    if (staged_native_field_outputs_.size() != field_plans_.size())
+      throw std::logic_error(
+          "System native finalization requires exactly one staged output per field plan");
+    ExactContractBuilder contract;
+    contract.text("pops.system.staged-native-field-outputs")
+        .scalar(std::uint32_t{1})
+        .scalar(static_cast<std::uint64_t>(staged_native_field_outputs_.size()));
+    for (const auto& [slot, output] : staged_native_field_outputs_) {
+      const auto plan = field_plans_.find(slot);
+      if (plan == field_plans_.end() || output.block.empty() || output.field.empty() ||
+          output.output_keys.empty() || output.block != plan->second.output_block ||
+          output.field != plan->second.output_key)
+        throw std::logic_error(
+            "System staged native field output differs from its exact resolved plan");
+      runtime::field::NamedFieldOutput<Dim> shape(output.output_keys.size(), output.gradient_sign);
+      (void)shape;
+      contract.text(slot)
+          .text(output.block)
+          .text(output.field)
+          .scalar(std::int32_t{output.gradient_sign})
+          .scalar(static_cast<std::uint64_t>(output.output_keys.size()));
+      std::set<std::string> exact_keys;
+      for (const auto& key : output.output_keys) {
+        key.validate();
+        const std::string exact = key.exact_key();
+        if (!exact_keys.insert(exact).second)
+          throw std::logic_error("System staged native field output keys are duplicate");
+        contract.text(exact);
+      }
+    }
+    return std::move(contract).release();
+  }
+
   void require_field_plan_consensus() {
     if (field_plan_consensus_verified_)
       return;
     std::string bytes;
     std::exception_ptr local_error;
     try {
-      ExactContractBuilder registry;
-      registry.text("pops.system.exact-ranked-field-plan-registry").scalar(std::uint32_t{3});
-      registry.scalar(static_cast<std::uint64_t>(configured_field_solver_providers_.size()));
-      for (const auto& [route, provider] : configured_field_solver_providers_)
-        registry.text(route)
-            .text(provider.family_route)
-            .text(provider.exact_identity)
-            .bytes(provider.options.exact_contract());
-      registry.scalar(static_cast<std::uint64_t>(component_field_solver_providers_.size()));
-      for (const auto& [route, provider] : component_field_solver_providers_) {
-        if (!provider)
-          throw std::runtime_error("System field component provider registry contains null");
-        registry.text(route)
-            .text(provider->provider_identity())
-            .bytes(provider->collective_contract());
-      }
-      registry.text(default_nullspace_provider_identity_)
-          .presence(!default_nullspace_provider_identity_.empty());
-      if (!default_nullspace_provider_identity_.empty())
-        registry.bytes(default_nullspace_options_.exact_contract());
-      registry.scalar(static_cast<std::uint64_t>(field_plans_.size()));
-      for (const auto& [slot, plan] : field_plans_) {
-        registry.text(slot).bytes(exact_field_plan_contract(plan));
-        const auto configured =
-            configured_field_solver_providers_.find(plan.backend_provider_route);
-        const auto component = component_field_solver_providers_.find(plan.backend_provider_route);
-        if ((configured == configured_field_solver_providers_.end()) ==
-            (component == component_field_solver_providers_.end()))
-          throw std::runtime_error(
-              "System field plan must select exactly one installed exact-ranked backend route");
-        if (configured != configured_field_solver_providers_.end())
-          registry.text(configured->second.exact_identity)
-              .bytes(configured->second.options.exact_contract());
-        else
-          registry.text(component->second->provider_identity())
-              .bytes(component->second->collective_contract());
-      }
-      bytes = std::move(registry).release();
+      bytes = field_plan_registry_contract();
     } catch (...) {
       local_error = std::current_exception();
     }
@@ -493,7 +674,10 @@ struct System<Dim>::Impl {
 
     explicit AcceptedSnapshot(const Impl& owner)
         : auxiliary_registry(owner.auxiliary_registry_),
-          provider_carrier(owner.provider_carrier_),
+          provider_carrier(owner.provider_carrier_
+                               ? std::optional<runtime::system::AuxiliaryStorageGroups<Dim>>(
+                                     *owner.provider_carrier_)
+                               : std::nullopt),
           staged_auxiliary_inputs(owner.staged_auxiliary_inputs_),
           dirty_auxiliary_providers(owner.dirty_auxiliary_providers_),
           program(owner.program_),
@@ -516,13 +700,22 @@ struct System<Dim>::Impl {
       }
     }
 
-    void restore(Impl& owner) const {
+    void restore(Impl& owner) {
       if (states.size() != owner.sp.size())
         throw std::logic_error("System transaction snapshot composition changed");
       for (std::size_t block = 0; block < states.size(); ++block)
         owner.sp[block].U = states[block];
       owner.auxiliary_registry_ = auxiliary_registry;
-      owner.provider_carrier_ = provider_carrier;
+      if (provider_carrier) {
+        if (!owner.provider_carrier_)
+          throw std::logic_error("System carrier owner vanished during accepted rollback");
+        else
+          std::swap(*owner.provider_carrier_, *provider_carrier);
+      } else {
+        if (owner.provider_carrier_)
+          throw std::logic_error(
+              "System accepted rollback cannot revoke a published carrier owner");
+      }
       owner.active_field_provider_candidate_.reset();
       owner.active_field_auxiliary_publication_.reset();
       owner.active_field_stale_auxiliary_providers_.clear();
@@ -557,14 +750,12 @@ struct System<Dim>::Impl {
     default_nullspace_options_ = selection.options;
   }
 
-  PreparedFieldNullspace<Dim> prepare_uniform_field_nullspace(
+  FieldNullspaceProviderRequest<Dim> prepare_uniform_field_nullspace_request(
       std::string plan_identity, std::string topology_identity,
-      const FieldNullspaceProviderSelection& selection,
       const elliptic::nd::CartesianPoissonOptions<Dim>& options, const field_type& layout,
-      bool has_reaction, const ExecutionLane& lane) const {
+      bool has_reaction) const {
     if (!field_nullspace_providers_)
       throw std::logic_error("System field-nullspace registry is absent");
-
     std::vector<FieldBoundaryNullspaceFact> boundaries;
     boundaries.reserve(static_cast<std::size_t>(2 * Dim));
     ExactContractBuilder boundary_contract;
@@ -611,8 +802,26 @@ struct System<Dim>::Impl {
       cell_measure *= geom.spacing(axis);
     request.topology.cell_measure = {cell_measure};
     request.topology.level_distributions = {distribution};
+    return request;
+  }
+
+  PreparedFieldNullspace<Dim> finish_uniform_field_nullspace(
+      const FieldNullspaceProviderSelection& selection, FieldNullspaceProviderRequest<Dim> request,
+      const ExecutionLane& lane) const {
     return prepare_field_nullspace_collectively<Dim>(*field_nullspace_providers_, selection,
                                                      std::move(request), lane);
+  }
+
+  PreparedFieldNullspace<Dim> prepare_uniform_field_nullspace(
+      std::string plan_identity, std::string topology_identity,
+      const FieldNullspaceProviderSelection& selection,
+      const elliptic::nd::CartesianPoissonOptions<Dim>& options, const field_type& layout,
+      bool has_reaction, const ExecutionLane& lane) const {
+    return finish_uniform_field_nullspace(
+        selection,
+        prepare_uniform_field_nullspace_request(
+            std::move(plan_identity), std::move(topology_identity), options, layout, has_reaction),
+        lane);
   }
 
   Species& find(const std::string& name) { return blocks_.find(name); }

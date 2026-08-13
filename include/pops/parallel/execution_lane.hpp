@@ -100,6 +100,8 @@ class ExecutionCommunicator {
   [[nodiscard]] int size() const { return communicator().size(); }
 
  private:
+  friend class ExecutionLane;
+
   struct StaticIdentity {};
 
 #ifdef POPS_HAS_MPI
@@ -313,6 +315,33 @@ class ExecutionLane {
 #else
     return ExecutionLane(std::move(qualified_identity));
 #endif
+  }
+
+  /// Collectively duplicate an already-authenticated owning lane. This is the child-lane seam for
+  /// runtime materialization: it reuses the exact parent communicator and identity without
+  /// borrowed-authority reauthentication or comparison with MPI_COMM_WORLD.
+  [[nodiscard]] static ExecutionLane duplicate_collectively(const ExecutionLane& parent,
+                                                            std::string_view identity) {
+    if (!parent.active())
+      throw std::invalid_argument("execution child lane requires an active parent lane");
+    const long invalid_parent = all_reduce_max(parent.identity().empty()
+#ifdef POPS_HAS_MPI
+                                                       || !parent.owns_communicator()
+#endif
+                                                   ? 1L
+                                                   : 0L,
+                                               parent.communicator());
+    if (invalid_parent != 0)
+      throw std::invalid_argument(
+          "execution child lane requires an authenticated owning parent lane");
+#ifdef POPS_HAS_MPI
+    const ExecutionCommunicator authenticated_parent(ExecutionCommunicator::StaticIdentity{},
+                                                     parent.identity(), parent.native_handle());
+#else
+    const ExecutionCommunicator authenticated_parent(ExecutionCommunicator::StaticIdentity{},
+                                                     parent.identity());
+#endif
+    return duplicate_collectively(authenticated_parent, identity);
   }
 
   ExecutionLane(const ExecutionLane&) = delete;

@@ -6,6 +6,7 @@
 #include "test_harness.hpp"
 
 #include <pops/runtime/config/route_ids.hpp>
+#include <pops/runtime/dynamic/authenticated_native_file.hpp>
 #include <pops/runtime/config/runtime_params.hpp>
 #include <pops/runtime/system.hpp>
 
@@ -35,6 +36,9 @@ std::string stub_source() {
   return "extern \"C\" const char* pops_native_abi_key() { return \"" +
          System<kNativeDimension>::abi_key() +
          "\"; }\n"
+         "extern \"C\" const char* pops_compiled_model_identity() { return "
+         "\"0000000000000000000000000000000000000000000000000000000000000000\"; }\n"
+         "extern \"C\" int pops_native_system_package_abi_version() { return 2; }\n"
          "extern \"C\" const char* pops_compiled_route_manifest() { return \"" +
          route_registry_signature() +
          "\"; }\n"
@@ -73,6 +77,7 @@ static int pops_run_test_native_loader_param_overflow(int argc, char** argv) {
   }
   System<kNativeDimension> system(config);
   std::vector<double> params(static_cast<std::size_t>(kMaxRuntimeParams + 1), 0.0);
+  const std::string binary_identity = dynlib::AuthenticatedNativeFile(library).binary_identity();
 
   bool threw = false;
   std::string message;
@@ -80,8 +85,10 @@ static int pops_run_test_native_loader_param_overflow(int argc, char** argv) {
     // Package metadata is authenticated while staging, before the package can enter the
     // finalize_native_packages transaction.  This artifact intentionally has no installer: an
     // overflow must be rejected at that earlier public boundary.
-    system.register_native_package("gas", library, "none", "rusanov", "conservative", "explicit",
-                                   1.4, 1, true, 1, params, 0.0);
+    system.register_native_package(
+        "gas", library, "0000000000000000000000000000000000000000000000000000000000000000",
+        binary_identity, "none", "rusanov", "conservative", "explicit", 1.4, 1, true, 1, params,
+        0.0);
   } catch (const std::exception& error) {
     threw = true;
     message = error.what();

@@ -2,10 +2,12 @@
 
 #include <pops/runtime/config/generated_component_abi.hpp>
 #include <pops/runtime/dynamic/component_consumers.hpp>
+#include <pops/runtime/dynamic/authenticated_native_file.hpp>
 #include <pops/runtime/dynamic/dynlib.hpp>
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -28,6 +30,7 @@ struct ExpectedNativeComponent {
   std::string manifest_identity;
   std::string catalog_sha256;
   std::string abi_key;
+  std::string binary_identity;
   std::vector<RequiredNativeInterface> interfaces;
   std::string prepare_parameters_json = "{}";
   std::string prepare_target_json = "{}";
@@ -121,12 +124,14 @@ class LoadedComponent final {
   LoadedComponent& operator=(const LoadedComponent&) = delete;
 
   LoadedComponent(LoadedComponent&& other) noexcept
-      : handle_(std::exchange(other.handle_, {})),
+      : authenticated_file_(std::move(other.authenticated_file_)),
+        handle_(std::exchange(other.handle_, {})),
         api_(std::exchange(other.api_, nullptr)),
         prepared_(std::move(other.prepared_)),
         execution_(std::move(other.execution_)),
         prepare_parameters_json_(std::move(other.prepare_parameters_json_)),
-        prepare_target_json_(std::move(other.prepare_target_json_)) {
+        prepare_target_json_(std::move(other.prepare_target_json_)),
+        binary_identity_(std::move(other.binary_identity_)) {
     other.prepared_.clear();
     other.execution_.reset();
   }
@@ -134,12 +139,14 @@ class LoadedComponent final {
   LoadedComponent& operator=(LoadedComponent&& other) noexcept {
     if (this != &other) {
       reset();
+      authenticated_file_ = std::move(other.authenticated_file_);
       handle_ = std::exchange(other.handle_, {});
       api_ = std::exchange(other.api_, nullptr);
       prepared_ = std::move(other.prepared_);
       execution_ = std::move(other.execution_);
       prepare_parameters_json_ = std::move(other.prepare_parameters_json_);
       prepare_target_json_ = std::move(other.prepare_target_json_);
+      binary_identity_ = std::move(other.binary_identity_);
       other.prepared_.clear();
       other.execution_.reset();
     }
@@ -151,10 +158,14 @@ class LoadedComponent final {
   static LoadedComponent load(const std::string& path, const ExpectedNativeComponent& expected) {
     if (expected.component_id.empty() || expected.semantic_identity.empty() ||
         expected.manifest_identity.empty() || expected.catalog_sha256.empty() ||
-        expected.abi_key.empty() || expected.interfaces.empty() ||
-        expected.prepare_parameters_json.empty() || expected.prepare_target_json.empty())
+        expected.abi_key.empty() || expected.binary_identity.empty() ||
+        expected.interfaces.empty() || expected.prepare_parameters_json.empty() ||
+        expected.prepare_target_json.empty())
       throw std::invalid_argument("native component expectation is incomplete");
-    dynlib::handle handle = dynlib::open(path);
+    auto authenticated_file = std::make_shared<dynlib::AuthenticatedNativeFile>(path);
+    if (authenticated_file->binary_identity() != expected.binary_identity)
+      throw std::runtime_error("native component binary identity mismatch");
+    dynlib::handle handle = dynlib::open_private_image(authenticated_file->load_path());
     if (!dynlib::valid(handle))
       throw std::runtime_error("cannot load native component '" + path +
                                "': " + dynlib::last_error());
@@ -165,8 +176,9 @@ class LoadedComponent final {
       const auto getter = reinterpret_cast<PopsComponentApiGetterV1>(raw);
       const PopsComponentApiV1* api = getter();
       validate(api, expected);
-      return LoadedComponent(handle, api, expected.prepare_parameters_json,
-                             expected.prepare_target_json);
+      return LoadedComponent(std::move(authenticated_file), handle, api,
+                             expected.prepare_parameters_json, expected.prepare_target_json,
+                             expected.binary_identity);
     } catch (...) {
       dynlib::close(handle);
       throw;
@@ -178,6 +190,8 @@ class LoadedComponent final {
       throw std::logic_error("native component handle is empty");
     return *api_;
   }
+
+  [[nodiscard]] const std::string& binary_identity() const noexcept { return binary_identity_; }
 
   [[nodiscard]] const PopsComponentInterfaceEntryV1& interface(PopsNativeInterfaceIdV1 id,
                                                                std::uint32_t version = 1) const {
@@ -404,12 +418,16 @@ class LoadedComponent final {
     std::string target_json;
   };
 
-  LoadedComponent(dynlib::handle handle, const PopsComponentApiV1* api,
-                  std::string prepare_parameters_json, std::string prepare_target_json)
-      : handle_(handle),
+  LoadedComponent(std::shared_ptr<dynlib::AuthenticatedNativeFile> authenticated_file,
+                  dynlib::handle handle, const PopsComponentApiV1* api,
+                  std::string prepare_parameters_json, std::string prepare_target_json,
+                  std::string binary_identity)
+      : authenticated_file_(std::move(authenticated_file)),
+        handle_(handle),
         api_(api),
         prepare_parameters_json_(std::move(prepare_parameters_json)),
-        prepare_target_json_(std::move(prepare_target_json)) {}
+        prepare_target_json_(std::move(prepare_target_json)),
+        binary_identity_(std::move(binary_identity)) {}
 
   static std::string require_text(const char* value, std::string_view field) {
     if (value == nullptr || *value == '\0')
@@ -497,14 +515,18 @@ class LoadedComponent final {
       dynlib::close(handle_);
     handle_ = {};
     api_ = nullptr;
+    authenticated_file_.reset();
+    binary_identity_.clear();
   }
 
+  std::shared_ptr<dynlib::AuthenticatedNativeFile> authenticated_file_;
   dynlib::handle handle_{};
   const PopsComponentApiV1* api_ = nullptr;
   std::vector<PreparedInterfaceState> prepared_;
   std::optional<ExecutionIdentity> execution_;
   std::string prepare_parameters_json_ = "{}";
   std::string prepare_target_json_ = "{}";
+  std::string binary_identity_;
 };
 
 }  // namespace pops::component

@@ -30,6 +30,7 @@ Section B (gated, self-skip) compares complete public runtime lifecycles.
 
 Skips cleanly (exit 0) without numpy / _pops / a compiler / a visible Kokkos -- never fakes the engine.
 """
+
 from pops.codegen.program_codegen import emit_cpp_program
 import pops
 from pops.codegen import Production
@@ -38,8 +39,14 @@ from pops.frames import Cartesian2D
 from pops.layouts import Uniform
 from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.math import ddt, div, laplacian
-from pops.fields import (CellCenteredSecondOrder, ConstantNullspace, FieldDiscretization,
-                         FieldOutput, GradientOutput, MeanValueGauge)
+from pops.fields import (
+    CellCenteredSecondOrder,
+    ConstantNullspace,
+    FieldDiscretization,
+    FieldOutput,
+    GradientOutput,
+    MeanValueGauge,
+)
 from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Periodic
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
@@ -99,7 +106,11 @@ Q = -1.0  # charge sign (f = q * rho), like pops::ChargeDensity
 
 
 def _public_program_artifact(
-    name, *, selected_field="phi2", scale=1.0, src_scale=1.0,
+    name,
+    *,
+    selected_field="phi2",
+    scale=1.0,
+    src_scale=1.0,
 ):
     """Compile a default-only or default-plus-named field Case through the public lifecycle."""
     if selected_field not in {"potential", "phi2"}:
@@ -113,16 +124,23 @@ def _public_program_artifact(
     velocity_y = my / rho
     pressure = 0.5 * rho
     flux = model.flux(
-        "transport", frame=frame, state=state,
-        components={x_axis: (mx, mx * velocity_x + pressure, my * velocity_x),
-                     y_axis: (my, mx * velocity_y, my * velocity_y + pressure)},
-        waves={x_axis: (velocity_x, velocity_x, velocity_x),
-               y_axis: (velocity_y, velocity_y, velocity_y)},
+        "transport",
+        frame=frame,
+        state=state,
+        components={
+            x_axis: (mx, mx * velocity_x + pressure, my * velocity_x),
+            y_axis: (my, mx * velocity_y, my * velocity_y + pressure),
+        },
+        waves={
+            x_axis: (velocity_x, velocity_x, velocity_x),
+            y_axis: (velocity_y, velocity_y, velocity_y),
+        },
     )
     potential = model.field("potential")
     default_gx, default_gy = model.aux("grad_x"), model.aux("grad_y")
     default_operator = model.field_operator(
-        "default_electrostatic", unknown=potential,
+        "default_electrostatic",
+        unknown=potential,
         equation=-laplacian(potential) == Q * (rho - 1.0),
         outputs=(FieldOutput("phi", potential), GradientOutput("grad", potential)),
     )
@@ -132,12 +150,14 @@ def _public_program_artifact(
         phi2 = model.field("phi2")
         gx, gy = model.aux("g2_x"), model.aux("g2_y")
         named_operator = model.field_operator(
-            "named_electrostatic", unknown=phi2,
+            "named_electrostatic",
+            unknown=phi2,
             equation=-laplacian(phi2) == scale * Q * (rho - 1.0),
             outputs=(FieldOutput("phi2", phi2), GradientOutput("g2", phi2)),
         )
     source = model.source(
-        "electric", on=state,
+        "electric",
+        on=state,
         value=(0.0 * rho, -src_scale * rho * gx, -src_scale * rho * gy),
     )
     source_operator = model.module.operator_handle("electric")
@@ -145,12 +165,14 @@ def _public_program_artifact(
 
     case = pops.Case("%s-case" % name)
     block = case.block("plasma", model)
+
     def discretization():
         return FieldDiscretization(
             method=CellCenteredSecondOrder(),
             boundaries=(BoundaryCondition(AllPhysicalBoundaries(), Periodic()),),
             solver=GeometricMG(),
-            nullspace=ConstantNullspace(), gauge=MeanValueGauge(0.0),
+            nullspace=ConstantNullspace(),
+            gauge=MeanValueGauge(0.0),
         )
 
     field = case.field(default_operator, discretization())
@@ -160,8 +182,10 @@ def _public_program_artifact(
     numerics.rates.add(
         rate,
         FiniteVolume(
-            flux=flux, variables=variables.Conservative(state),
-            reconstruction=reconstruction.FirstOrder(), riemann=riemann.Rusanov(),
+            flux=flux,
+            variables=variables.Conservative(state),
+            reconstruction=reconstruction.FirstOrder(),
+            riemann=riemann.Rusanov(),
         ),
     )
     case.numerics(numerics, block=block)
@@ -173,14 +197,16 @@ def _public_program_artifact(
         fields=fields,
         terms=[FinalFlux(), SourceTerm(source_operator)],
     )
-    program.commit(temporal.next, program.value(
-        "U1", temporal.n + program.dt * rhs, at=temporal.next.point))
+    program.commit(
+        temporal.next, program.value("U1", temporal.n + program.dt * rhs, at=temporal.next.point)
+    )
     program.step_strategy(FixedDt(DT))
     case.program(program)
-    layout = Uniform(CartesianGrid(
-        frame=frame, cells=(N, N), periodic=PeriodicAxes(frame.axes)))
+    layout = Uniform(CartesianGrid(frame=frame, cells=(N, N), periodic=PeriodicAxes(frame.axes)))
     resolved = pops.resolve(
-        pops.validate(case), layout=layout, backend=Production(),
+        pops.validate(case),
+        layout=layout,
+        backend=Production(),
         compile_options={"include": INCLUDE, "cxx": CXX},
     )
     return pops.compile(resolved)
@@ -222,7 +248,9 @@ def named_model(name="me_named", scale=1.0, src_scale=1.0):
     # them and the runtime has a channel to write into.
     g2x = m.aux_field("g2x")
     g2y = m.aux_field("g2y")
-    m.aux_field("phi2")  # declare the named field's potential aux slot (written C++-side, not read in this IR)
+    m.aux_field(
+        "phi2"
+    )  # declare the named field's potential aux slot (written C++-side, not read in this IR)
     m.elliptic_field("phi2", rhs=(scale * Q) * rho, aux=["phi2", "g2x", "g2y"])
     m.source([0.0 * rho, -src_scale * rho * g2x, -src_scale * rho * g2y])
     return m
@@ -246,33 +274,39 @@ def _prog(name, field=None, model=None):
 
 
 def _emit(program, *, model=None):
-    return emit_cpp_program(
-        program, model=model, field_plans=codegen_field_plans(program))
+    return emit_cpp_program(program, model=model, field_plans=codegen_field_plans(program))
 
 
 # Every single-state solve lowers through the same point/provider-qualified route.
 default_codegen_model = default_model()
-src_default = _emit(_prog("me_def_prog", model=default_codegen_model),
-    model=default_codegen_model)
-chk('ctx.solve_fields_from_state_at(field_boundary_point_' in src_default
+src_default = _emit(_prog("me_def_prog", model=default_codegen_model), model=default_codegen_model)
+chk(
+    "ctx.solve_fields_from_state_at(field_boundary_point_" in src_default
     and '"potential", 0, ' in src_default,
-    "default solve_fields lowers to its exact point-qualified potential provider")
-chk('"phi2", 0, ' not in src_default,
-    "default solve_fields does NOT use the named phi2 overload")
+    "default solve_fields lowers to its exact point-qualified potential provider",
+)
+chk('"phi2", 0, ' not in src_default, "default solve_fields does NOT use the named phi2 overload")
 
 named_codegen_model = named_model()
-src_named = _emit(_prog("me_nam_prog", field="phi2", model=named_codegen_model),
-    model=named_codegen_model)
-chk('ctx.solve_fields_from_state_at(field_boundary_point_' in src_named
+src_named = _emit(
+    _prog("me_nam_prog", field="phi2", model=named_codegen_model), model=named_codegen_model
+)
+chk(
+    "ctx.solve_fields_from_state_at(field_boundary_point_" in src_named
     and '"phi2", 0, ' in src_named,
-    "named solve_fields lowers to the exact point-qualified phi2 provider")
+    "named solve_fields lowers to the exact point-qualified phi2 provider",
+)
 
 # The named brick + registration land in the native loader (production backend).
 loader = named_model("me_nam_loader")._m.emit_cpp_native_loader(target="system")
 chk("Ell_phi2" in loader, "the named elliptic RHS brick is emitted in the native loader")
-chk('register_elliptic_field(name, "phi2"' in loader, "the named field registers its aux components")
-chk("set_block_elliptic_field" in loader and "make_poisson_rhs" in loader,
-    "the named field attaches its RHS closure (make_poisson_rhs of the brick)")
+chk(
+    'register_elliptic_field(name, "phi2"' in loader, "the named field registers its aux components"
+)
+chk(
+    "set_block_elliptic_field" in loader and "make_poisson_rhs" in loader,
+    "the named field attaches its RHS closure (make_poisson_rhs of the brick)",
+)
 
 # Validation: a field handle is now a Case-owned solve authority.  The historical string-based
 # "unknown field"/"missing model" cases are not meaningful final authoring errors anymore; any name
@@ -280,9 +314,10 @@ chk("set_block_elliptic_field" in loader and "make_poisson_rhs" in loader,
 foreign_program = adctime.Program("me_foreign_field")
 foreign_state = typed_state(foreign_program, "plasma")
 foreign_field = typed_field(adctime.Program("me_foreign_owner"), "phi2")
-chk(raises(ValueError, lambda: solve_field(
-    foreign_program, foreign_state, field=foreign_field)),
-    "a FieldHandle owned by another Case is rejected before lowering")
+chk(
+    raises(ValueError, lambda: solve_field(foreign_program, foreign_state, field=foreign_field)),
+    "a FieldHandle owned by another Case is rejected before lowering",
+)
 
 
 def _bad_rhs_aux():
@@ -301,29 +336,77 @@ def _bad_aux_out():
     m._m._elliptic_field_registrations("Me_badauxGen")
 
 
-chk(raises(ValueError, _bad_aux_out),
-    "an elliptic_field whose aux output is not a declared aux_field is rejected")
+chk(
+    raises(ValueError, _bad_aux_out),
+    "an elliptic_field whose aux output is not a declared aux_field is rejected",
+)
 
 
-# A named elliptic field on target='amr_system' now LOWERS (ADC-428): the AMR native loader emits the
-# same register_elliptic_field + set_block_elliptic_field calls as the uniform loader, on the AmrSystem
-# facade. (Previously this raised NotImplementedError -- the AMR path was the one deferral.)
-amr_loader = named_model("me_amr")._m.emit_cpp_native_loader(target="amr_system")
-chk('register_elliptic_field(name, "phi2"' in amr_loader,
-    "a named elliptic field on target='amr_system' registers its aux components (ADC-428)")
-chk("set_block_elliptic_field" in amr_loader and "make_poisson_rhs" in amr_loader,
-    "the AMR named field attaches its RHS closure (make_poisson_rhs of the brick)")
-chk("pops::AmrSystem*" in amr_loader,
-    "the AMR named-field registration targets the AmrSystem facade")
+# A named elliptic field on target='amr_system' lowers as one complete inert package: the callback
+# stages the block and every elliptic attachment, then the outer host transaction witnesses them
+# atomically before retaining the package lifetime.
+amr_loader = named_model("me_amr")._m.emit_cpp_native_loader(
+    target="amr_system",
+    native_field_roles=(
+        {
+            "kind": "output",
+            "field": "tests.me-amr.phi2",
+            "block": "me_amr",
+            "output_keys": (
+                {
+                    "owner_qid": "tests/me_amr",
+                    "space_kind": "field",
+                    "space_name": "phi2",
+                    "component": "phi2",
+                },
+            ),
+            "gradient_sign": 1,
+        },
+        {
+            "kind": "rhs",
+            "field": "tests.me-amr.phi2",
+            "block": "me_amr",
+            "binding_ordinal": 0,
+            "binding_identity": "tests.me-amr.phi2.binding.0",
+            "provider_key": "phi2",
+            "coefficient": 1.0,
+        },
+    ),
+)
+chk(
+    "pops::PreparedNativeAmrPackage<pops::kNativeDimension>" in amr_loader,
+    "the AMR named field stages one complete native package",
+)
+chk(
+    'attachment.field = "tests.me-amr.phi2";' in amr_loader
+    and 'attachment.binding_identity = "tests.me-amr.phi2.binding.0";' in amr_loader
+    and 'attachment.block_identity = "me_amr";' in amr_loader
+    and "make_poisson_rhs" in amr_loader,
+    "the AMR named field retains separate output and RHS roles in the atomic package",
+)
+chk(
+    "s->install_prepared_native_amr_package(std::move(package));" in amr_loader
+    and "set_block_elliptic_field" not in amr_loader
+    and "register_elliptic_field" not in amr_loader,
+    "the AMR callback commits through only the complete-package seam",
+)
+chk(
+    "void* sys" in amr_loader and "pops::AmrSystem*" not in amr_loader,
+    "the AMR native package keeps the erased stable ABI boundary",
+)
 
 
 # NO REGRESSION: a default-only model lowers IDENTICALLY whether or not the named feature exists. We
 # assert the default program never emits the named (3-arg) ctx call (above) AND that adding a named
 # field to a SECOND model leaves the default model's lowering untouched.
 default_codegen_model2 = default_model()
-src_default2 = _emit(_prog("me_def_prog", model=default_codegen_model2),
-    model=default_codegen_model2)
-chk(src_default == src_default2, "the default program lowers deterministically (no named-field leak)")
+src_default2 = _emit(
+    _prog("me_def_prog", model=default_codegen_model2), model=default_codegen_model2
+)
+chk(
+    src_default == src_default2,
+    "the default program lowers deterministically (no named-field leak)",
+)
 
 
 # =================== Section B: gated end-to-end parity ===================
@@ -360,13 +443,20 @@ def _ic():
 
 
 def step_program(
-    model, prog, *, artifact_name, selected_field, scale=1.0, src_scale=1.0,
+    model,
+    prog,
+    *,
+    artifact_name,
+    selected_field,
+    scale=1.0,
+    src_scale=1.0,
 ):
     # ``model``/``prog`` retain the independent pure-lowering fixture above; the numerical path
     # is exclusively Case -> validate -> resolve -> compile -> bind -> run.
     del model, prog
     compiled = _public_program_artifact(
-        artifact_name, selected_field=selected_field, scale=scale, src_scale=src_scale)
+        artifact_name, selected_field=selected_field, scale=scale, src_scale=src_scale
+    )
     if selected_field == "phi2":
         provider_outputs = {"phi2", "g2_x", "g2_y"}
         chk(
@@ -382,33 +472,54 @@ def step_program(
 # REFERENCE: the default Poisson coupling, source reads the default grad.
 U0 = _ic()
 reference_model = default_model("me_ref")
-ref = step_program(reference_model, _prog("me_ref_fe", model=reference_model),
-                   artifact_name="me_ref_public", selected_field="potential")
-chk(float(np.abs(ref - U0).max()) > 1e-9, "the default electrostatic source actually moved the state")
+ref = step_program(
+    reference_model,
+    _prog("me_ref_fe", model=reference_model),
+    artifact_name="me_ref_public",
+    selected_field="potential",
+)
+chk(
+    float(np.abs(ref - U0).max()) > 1e-9,
+    "the default electrostatic source actually moved the state",
+)
 
 # PARITY: a named field with rhs == the default RHS solves the same problem with the same native
 # solver, so g2x/g2y == grad_x/grad_y -> the named-field-driven step matches the default step.
 parity_model = named_model("me_par", scale=1.0, src_scale=1.0)
 got = step_program(
-    parity_model, _prog("me_par_fe", field="phi2", model=parity_model),
-    artifact_name="me_par_public", selected_field="phi2", scale=1.0, src_scale=1.0)
+    parity_model,
+    _prog("me_par_fe", field="phi2", model=parity_model),
+    artifact_name="me_par_public",
+    selected_field="phi2",
+    scale=1.0,
+    src_scale=1.0,
+)
 e_par = float(np.abs(got - ref).max())
 print("  named(rhs=default) vs default Poisson: max|d| = %.2e" % e_par)
-chk(e_par < 1e-12,
-    "named second elliptic solve (same RHS) == default Poisson solve (max|d| = %.2e)" % e_par)
+chk(
+    e_par < 1e-12,
+    "named second elliptic solve (same RHS) == default Poisson solve (max|d| = %.2e)" % e_par,
+)
 
 # DISTINCT RHS (linearity): named rhs = 2*default -> phi2 = 2*phi -> g2x = 2*grad_x; the source reads
 # 0.5*g2x, recovering the default-grad step. Confirms the named field carries a genuinely different,
 # correctly scaled field (not an alias of the shared aux).
 linear_model = named_model("me_lin", scale=2.0, src_scale=0.5)
 got2 = step_program(
-    linear_model, _prog("me_lin_fe", field="phi2", model=linear_model),
-    artifact_name="me_lin_public", selected_field="phi2", scale=2.0, src_scale=0.5)
+    linear_model,
+    _prog("me_lin_fe", field="phi2", model=linear_model),
+    artifact_name="me_lin_public",
+    selected_field="phi2",
+    scale=2.0,
+    src_scale=0.5,
+)
 e_lin = float(np.abs(got2 - ref).max())
 print("  named(rhs=2*default, src=0.5*g2) vs default: max|d| = %.2e" % e_lin)
-chk(e_lin < 1e-12,
+chk(
+    e_lin < 1e-12,
     "named field with rhs=2*default and src=0.5*g2 reproduces the default step (max|d| = %.2e)"
-    % e_lin)
+    % e_lin,
+)
 
 print("%s test_time_multielliptic" % ("FAIL (%d)" % fails if fails else "PASS"))
 sys.exit(1 if fails else 0)

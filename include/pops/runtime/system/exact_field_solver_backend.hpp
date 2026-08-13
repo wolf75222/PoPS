@@ -53,6 +53,8 @@ class ExactFieldSolverBackend {
 
 template <int Dim>
 class CartesianCgFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
+  struct DeferCollectivePreparation {};
+
  public:
   static constexpr int dimension = Dim;
   using field_type = typename ExactFieldSolverBackend<Dim>::field_type;
@@ -63,13 +65,62 @@ class CartesianCgFieldSolverBackend final : public ExactFieldSolverBackend<Dim> 
                                 elliptic::nd::CartesianPoissonOptions<Dim> options,
                                 const ExecutionLane& lane,
                                 std::string identity = "pops.field-solver.cartesian-cg@1")
+      : CartesianCgFieldSolverBackend(geometry, layout, distribution, local_rank,
+                                      std::move(topology), std::move(options), lane,
+                                      std::move(identity), DeferCollectivePreparation{}) {
+    solver_.finish_preparation_collectively(lane);
+  }
+
+  static std::unique_ptr<ExactFieldSolverBackend<Dim>> prepare_collectively(
+      const Geometry<Dim>& geometry, const mesh::BoxArray<Dim>& layout,
+      const mesh::Distribution<Dim>& distribution, Index<Dim> local_rank,
+      BoundaryTopology<Dim> topology, elliptic::nd::CartesianPoissonOptions<Dim> options,
+      const ExecutionLane& lane, std::string_view identity = "pops.field-solver.cartesian-cg@1") {
+    std::unique_ptr<CartesianCgFieldSolverBackend> prepared;
+    std::exception_ptr local_error;
+    try {
+      prepared.reset(new CartesianCgFieldSolverBackend(
+          geometry, layout, distribution, local_rank, std::move(topology), std::move(options), lane,
+          std::string(identity), DeferCollectivePreparation{}));
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error("Cartesian field solver local preparation failed collectively");
+    }
+    std::exception_ptr collective_error;
+    try {
+      prepared->solver_.finish_preparation_collectively(lane);
+    } catch (...) {
+      collective_error = std::current_exception();
+    }
+    if (all_reduce_max(collective_error ? 1L : 0L, lane) != 0) {
+      prepared.reset();
+      if (lane.size() == 1 && collective_error)
+        std::rethrow_exception(collective_error);
+      throw std::runtime_error("Cartesian field solver preparation failed collectively");
+    }
+    return prepared;
+  }
+
+ private:
+  CartesianCgFieldSolverBackend(const Geometry<Dim>& geometry, const mesh::BoxArray<Dim>& layout,
+                                const mesh::Distribution<Dim>& distribution, Index<Dim> local_rank,
+                                BoundaryTopology<Dim> topology,
+                                elliptic::nd::CartesianPoissonOptions<Dim> options,
+                                const ExecutionLane& lane, std::string identity,
+                                DeferCollectivePreparation)
       : identity_(std::move(identity)),
-        solver_(geometry, layout, distribution, local_rank, std::move(topology), std::move(options),
-                lane) {
+        solver_(elliptic::nd::CartesianPoissonSolver<Dim>::prepare_local(
+            geometry, layout, distribution, local_rank, std::move(topology), std::move(options),
+            lane)) {
     if (identity_.empty())
       throw std::invalid_argument("Cartesian field solver backend identity must be non-empty");
   }
 
+ public:
   field_type& rhs() noexcept override { return solver_.rhs(); }
   field_type& candidate() noexcept override { return solver_.candidate(); }
   const field_type& candidate() const noexcept override { return solver_.candidate(); }
@@ -131,6 +182,7 @@ class PoissonFftFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
   /// allocator failure is published on the already prepared execution lane before construction.
   static std::unique_ptr<ExactFieldSolverBackend<Dim>> prepare_collectively(
       request_type request, std::string_view identity, const ExecutionLane& lane) {
+    static_assert(std::is_nothrow_move_constructible_v<request_type>);
     void* storage = nullptr;
     std::optional<std::string> prepared_identity;
     std::exception_ptr allocation_error;
@@ -150,12 +202,19 @@ class PoissonFftFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
     }
 
     PoissonFftFieldSolverBackend* result = nullptr;
+    std::exception_ptr construction_error;
     try {
       result = ::new (storage)
           PoissonFftFieldSolverBackend(std::move(request), lane, std::move(*prepared_identity));
     } catch (...) {
       ::operator delete(storage);
-      throw;
+      construction_error = std::current_exception();
+    }
+    if (all_reduce_max(construction_error ? 1L : 0L, lane) != 0) {
+      delete result;
+      if (lane.size() == 1 && construction_error)
+        std::rethrow_exception(construction_error);
+      throw std::runtime_error("FFT field solver construction failed collectively");
     }
     return std::unique_ptr<ExactFieldSolverBackend<Dim>>(result);
   }
@@ -221,6 +280,8 @@ class PoissonFftFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
 
 template <int Dim>
 class ComponentFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
+  struct DeferCollectivePreparation {};
+
  public:
   static constexpr int dimension = Dim;
   using field_type = typename ExactFieldSolverBackend<Dim>::field_type;
@@ -231,6 +292,53 @@ class ComponentFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
                               const mesh::Distribution<Dim>& distribution, Index<Dim> local_rank,
                               BoundaryTopology<Dim> topology, std::array<bool, Dim> periodicity,
                               std::shared_ptr<component_type> component, const ExecutionLane& lane)
+      : ComponentFieldSolverBackend(std::move(identity), geometry, layout, distribution, local_rank,
+                                    std::move(topology), periodicity, std::move(component), lane,
+                                    DeferCollectivePreparation{}) {
+    finish_preparation_collectively(lane);
+  }
+
+  static std::unique_ptr<ExactFieldSolverBackend<Dim>> prepare_collectively(
+      std::string_view identity, const Geometry<Dim>& geometry, const mesh::BoxArray<Dim>& layout,
+      const mesh::Distribution<Dim>& distribution, Index<Dim> local_rank,
+      BoundaryTopology<Dim> topology, std::array<bool, Dim> periodicity,
+      std::shared_ptr<component_type> component, const ExecutionLane& lane) {
+    std::unique_ptr<ComponentFieldSolverBackend> prepared;
+    std::exception_ptr local_error;
+    try {
+      prepared.reset(new ComponentFieldSolverBackend(
+          std::string(identity), geometry, layout, distribution, local_rank, std::move(topology),
+          periodicity, std::move(component), lane, DeferCollectivePreparation{}));
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error("component field backend local preparation failed collectively");
+    }
+    std::exception_ptr collective_error;
+    try {
+      prepared->finish_preparation_collectively(lane);
+    } catch (...) {
+      collective_error = std::current_exception();
+    }
+    if (all_reduce_max(collective_error ? 1L : 0L, lane) != 0) {
+      prepared.reset();
+      if (lane.size() == 1 && collective_error)
+        std::rethrow_exception(collective_error);
+      throw std::runtime_error("component field backend preparation failed collectively");
+    }
+    return prepared;
+  }
+
+ private:
+  ComponentFieldSolverBackend(std::string identity, const Geometry<Dim>& geometry,
+                              const mesh::BoxArray<Dim>& layout,
+                              const mesh::Distribution<Dim>& distribution, Index<Dim> local_rank,
+                              BoundaryTopology<Dim> topology, std::array<bool, Dim> periodicity,
+                              std::shared_ptr<component_type> component, const ExecutionLane& lane,
+                              DeferCollectivePreparation)
       : identity_(std::move(identity)),
         geometry_(geometry),
         topology_(std::move(topology)),
@@ -243,36 +351,59 @@ class ComponentFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
         component_(std::move(component)),
         lane_(&lane),
         lane_borrow_(lane.borrow_immutably()) {
-    std::exception_ptr validation_error;
-    try {
-      if (identity_.empty() || !component_)
-        throw std::invalid_argument("component field backend requires exact provider authorities");
-      for (int axis = 0; axis < Dim; ++axis) {
-        const Face<Dim> lower{axis, BoundarySide::lower};
-        const Face<Dim> upper{axis, BoundarySide::upper};
-        if (!periodicity_[static_cast<std::size_t>(axis)] || !topology_.is_periodic(lower) ||
-            !topology_.is_periodic(upper))
-          throw std::invalid_argument(
-              "component field backend currently requires an exact fully-periodic topology");
-      }
-    } catch (...) {
-      validation_error = std::current_exception();
-    }
-    if (all_reduce_max(validation_error ? 1L : 0L, lane) != 0) {
-      if (lane.size() == 1 && validation_error)
-        std::rethrow_exception(validation_error);
-      throw std::runtime_error("component field backend preparation failed collectively");
-    }
-    const bool distributed_halo =
-        all_reduce_max(halo_schedule_.has_remote_jobs() ? 1L : 0L, lane) != 0;
-    if (distributed_halo) {
-      HaloExchangeContext context{};
-      context.context_generation = 1;
-      context.schedule_generation = 1;
-      exchange_ = std::make_unique<HaloExchange<Dim>>(halo_schedule_, lane, context);
+    if (identity_.empty() || !component_)
+      throw std::invalid_argument("component field backend requires exact provider authorities");
+    for (int axis = 0; axis < Dim; ++axis) {
+      const Face<Dim> lower{axis, BoundarySide::lower};
+      const Face<Dim> upper{axis, BoundarySide::upper};
+      if (!periodicity_[static_cast<std::size_t>(axis)] || !topology_.is_periodic(lower) ||
+          !topology_.is_periodic(upper))
+        throw std::invalid_argument(
+            "component field backend currently requires an exact fully-periodic topology");
     }
   }
 
+  void finish_preparation_collectively(const ExecutionLane& lane) {
+    if (&lane != lane_)
+      throw std::invalid_argument("component field backend preparation lane changed");
+    const bool distributed_halo =
+        all_reduce_max(halo_schedule_.has_remote_jobs() ? 1L : 0L, lane) != 0;
+    if (!distributed_halo)
+      return;
+    void* storage = nullptr;
+    std::exception_ptr allocation_error;
+    try {
+      storage = ::operator new(sizeof(HaloExchange<Dim>));
+    } catch (...) {
+      allocation_error = std::current_exception();
+    }
+    if (all_reduce_max(allocation_error ? 1L : 0L, lane) != 0) {
+      ::operator delete(storage);
+      if (lane.size() == 1 && allocation_error)
+        std::rethrow_exception(allocation_error);
+      throw std::runtime_error("component field halo allocation failed collectively");
+    }
+    HaloExchangeContext context{};
+    context.context_generation = 1;
+    context.schedule_generation = 1;
+    HaloExchange<Dim>* prepared_exchange = nullptr;
+    std::exception_ptr construction_error;
+    try {
+      prepared_exchange = ::new (storage) HaloExchange<Dim>(halo_schedule_, lane, context);
+    } catch (...) {
+      ::operator delete(storage);
+      construction_error = std::current_exception();
+    }
+    if (all_reduce_max(construction_error ? 1L : 0L, lane) != 0) {
+      delete prepared_exchange;
+      if (lane.size() == 1 && construction_error)
+        std::rethrow_exception(construction_error);
+      throw std::runtime_error("component field halo preparation failed collectively");
+    }
+    exchange_.reset(prepared_exchange);
+  }
+
+ public:
   field_type& rhs() noexcept override { return rhs_; }
   field_type& candidate() noexcept override { return candidate_; }
   const field_type& candidate() const noexcept override { return candidate_; }

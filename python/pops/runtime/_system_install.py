@@ -77,9 +77,7 @@ def _model_state_schema(model: Any, *, dimension: int) -> Any:
     return StateSchema.resolve(roles, dimension=dimension, where="installed native model")
 
 
-def _model_coupling_contract(
-    model: Any, *, dimension: int, adiabatic_index: Any = None
-) -> Any:
+def _model_coupling_contract(model: Any, *, dimension: int, adiabatic_index: Any = None) -> Any:
     """Prepare coupling-visible model metadata before any native registry mutation."""
     from pops.physics.roles import CouplingBlockContract
 
@@ -327,6 +325,18 @@ class _SystemInstall(_System):
                     "add_equation: external Riemann brick %r was built for a different native ABI"
                     % spatial.external_flux_id
                 )
+            expected_system_abi_key = (
+                "pops.external-riemann.system/v6;receiver=prepared-native-package;"
+                "providers=qualified;dim=%s" % compiled.native_dimension
+            )
+            if (
+                spatial.external_flux_system_abi_version != 6
+                or spatial.external_flux_system_abi_key != expected_system_abi_key
+            ):
+                raise ValueError(
+                    "add_equation: external Riemann brick %r lacks the System v6 "
+                    "prepared-package ABI" % spatial.external_flux_id
+                )
             self._s._register_external_riemann_package(
                 name,
                 spatial.external_flux_library_path,
@@ -351,6 +361,8 @@ class _SystemInstall(_System):
             self._s._register_native_package(
                 name,
                 compiled.so_path,
+                compiled.model_hash,
+                str(compiled.binary_identity),
                 spatial.limiter,
                 spatial.flux,
                 spatial.recon,
@@ -492,6 +504,7 @@ class _SystemInstall(_System):
             )
             self._s.add_coupling_operator(*args)
             return
+
         def contract_of(block: Any) -> Any:
             try:
                 return self._coupling_block_contracts[block]

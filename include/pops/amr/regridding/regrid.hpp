@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -170,41 +171,79 @@ PreparedRegrid<Dim> prepare_regrid(const hierarchy::LevelLayout<Dim>& parent,
                                    const PreparedLoadBalanceAuthority<Dim>& load_balance,
                                    RegridPreparationBudget budget,
                                    const ExecutionLane& lane = ExecutionLane::world()) {
-  if (!ratio.refines_any_axis())
-    throw std::invalid_argument("prepared regrid requires a non-identity inter-level ratio");
-  if (clustered.identity.provider.empty() ||
-      clustered.identity.source_level != parent.exact_identity() ||
-      clustered.identity.boxes != clustered.boxes.boxes())
-    throw std::invalid_argument(
-        "prepared regrid clustering result does not authenticate its parent level and boxes");
-  if (!clustered.boxes.is_disjoint_within(parent.domain(), budget.clustered_parent_layout))
-    throw std::invalid_argument(
-        "prepared regrid cluster boxes must be disjoint and inside the parent");
+  const CommunicatorView communicator = lane.communicator();
+  std::optional<hierarchy::LevelLayoutIdentity<Dim>> source;
+  std::optional<mesh::BoxArray<Dim>> fine_patches;
+  std::optional<Box<Dim>> fine_domain;
+  std::string preparation_contract;
+  std::exception_ptr local_error;
+  try {
+    if (!ratio.refines_any_axis())
+      throw std::invalid_argument("prepared regrid requires a non-identity inter-level ratio");
+    source.emplace(parent.exact_identity());
+    if (clustered.identity.provider.empty() || clustered.identity.source_level != *source ||
+        clustered.identity.boxes != clustered.boxes.boxes())
+      throw std::invalid_argument(
+          "prepared regrid clustering result does not authenticate its parent level and boxes");
+    if (!clustered.boxes.is_disjoint_within(parent.domain(), budget.clustered_parent_layout))
+      throw std::invalid_argument(
+          "prepared regrid cluster boxes must be disjoint and inside the parent");
+    if (!clustered.boxes.empty()) {
+      std::vector<Box<Dim>> refined;
+      refined.reserve(clustered.boxes.size());
+      for (const Box<Dim>& parent_patch : clustered.boxes.boxes())
+        refined.push_back(hierarchy::refine_box(parent_patch, ratio));
+      fine_patches.emplace(std::move(refined));
+      fine_domain.emplace(hierarchy::refine_box(parent.domain(), ratio));
+      if (!fine_patches->is_disjoint_within(*fine_domain, budget.fine_layout))
+        throw std::invalid_argument("prepared regrid refined patches are not a valid child layout");
+    }
+    // Source + ratio + clustering determine the refined boxes exactly. This witness precedes the
+    // load-balancer collective so no rank can enter it with a different locally prepared source.
+    preparation_contract = detail::exact_regrid_contract(
+        *source, ratio, clustered.identity, std::optional<PreparedLoadBalanceResult<Dim>>{},
+        std::optional<hierarchy::LevelLayout<Dim>>{}, budget);
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_error ? 1L : 0L, communicator) != 0) {
+    if (communicator.size() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("prepared regrid local source preparation failed collectively");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("prepared-regrid-source"), preparation_contract}}, communicator))
+    throw std::invalid_argument("prepared regrid source differs between execution-lane ranks");
 
   std::optional<PreparedLoadBalanceResult<Dim>> ownership;
   std::optional<hierarchy::LevelLayout<Dim>> fine_layout;
-  if (!clustered.boxes.empty()) {
-    std::vector<Box<Dim>> refined;
-    refined.reserve(clustered.boxes.size());
-    for (const Box<Dim>& parent_patch : clustered.boxes.boxes())
-      refined.push_back(hierarchy::refine_box(parent_patch, ratio));
-    mesh::BoxArray<Dim> fine_patches(std::move(refined));
-    const Box<Dim> fine_domain = hierarchy::refine_box(parent.domain(), ratio);
-    if (!fine_patches.is_disjoint_within(fine_domain, budget.fine_layout))
-      throw std::invalid_argument("prepared regrid refined patches are not a valid child layout");
-
-    ownership.emplace(load_balance.prepare(fine_patches, parent.distribution().rank_space(),
+  if (fine_patches) {
+    ownership.emplace(load_balance.prepare(*fine_patches, parent.distribution().rank_space(),
                                            budget.load_balance, {}, lane));
-    fine_layout.emplace(parent.level() + 1, fine_domain, std::move(fine_patches),
-                        ownership->plan().distribution(), ratio, budget.fine_layout);
   }
 
-  hierarchy::LevelLayoutIdentity<Dim> source = parent.exact_identity();
-  tagging::ClusterResultIdentity<Dim> clustering = std::move(clustered.identity);
-  const std::string exact_contract =
-      detail::exact_regrid_contract(source, ratio, clustering, ownership, fine_layout, budget);
-  return PreparedRegrid<Dim>(std::move(source), ratio, std::move(clustering), std::move(ownership),
-                             std::move(fine_layout), exact_contract);
+  std::string exact_contract;
+  local_error = {};
+  try {
+    if (fine_patches)
+      fine_layout.emplace(parent.level() + 1, *fine_domain, std::move(*fine_patches),
+                          ownership->plan().distribution(), ratio, budget.fine_layout);
+    exact_contract = detail::exact_regrid_contract(*source, ratio, clustered.identity, ownership,
+                                                   fine_layout, budget);
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_error ? 1L : 0L, communicator) != 0) {
+    if (communicator.size() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("prepared regrid result preparation failed collectively");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("prepared-regrid-result"), exact_contract}}, communicator))
+    throw std::invalid_argument("prepared regrid result differs between execution-lane ranks");
+  return PreparedRegrid<Dim>(std::move(*source), ratio, std::move(clustered.identity),
+                             std::move(ownership), std::move(fine_layout),
+                             std::move(exact_contract));
 }
 
 }  // namespace pops::amr::regridding

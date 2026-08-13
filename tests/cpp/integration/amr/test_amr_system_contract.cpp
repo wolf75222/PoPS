@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include "amr_tagging_test_authority.hpp"
+#include "component_abi_test_helpers.hpp"
 #include "explicit_amr_program.hpp"
 
 #include <pops/core/foundation/native_dimension.hpp>
@@ -18,6 +19,7 @@
 #include <pops/physics/composition/composite.hpp>
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
+#include <pops/runtime/dynamic/prepared_execution_context.hpp>
 #include <pops/runtime/program/amr_program_checkpoint.hpp>
 #include <pops/runtime/system/derived_aux_provider.hpp>
 #include <pops/runtime/system/exact_field_marshaling.hpp>
@@ -29,9 +31,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <numeric>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -115,6 +119,7 @@ void verify_rectangular_geometry_and_independent_periodicity() {
 
   constexpr const char* state_route = "tests.amr.system-contract/rectangular/state";
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "test.amr-system-contract.rectangular-runtime");
   system.install_block_state_route("tracer", state_route);
   std::vector<std::string> face_types;
   std::vector<std::string> face_identities;
@@ -212,6 +217,8 @@ void verify_model_qualified_primitive_boundary_conversion() {
 
   pops::AmrSystem<Dim> authored(config);
   pops::AmrSystem<Dim> oracle(config);
+  pops::test::install_amr_runtime_authority(authored, "test.amr-system-contract.authored-runtime");
+  pops::test::install_amr_runtime_authority(oracle, "test.amr-system-contract.oracle-runtime");
   install_gas_boundary(authored, primitive, true);
   install_gas_boundary(oracle, conservative, false);
   const std::size_t cells = cell_count(config.shape);
@@ -249,6 +256,8 @@ void verify_prepared_installation_parity() {
   constexpr const char* consumer_qid = "tests.amr.system-contract/parity/physical-flux";
   pops::AmrSystem<Dim> direct(config);
   pops::AmrSystem<Dim> prepared(config);
+  pops::test::install_amr_runtime_authority(direct, "test.amr-system-contract.direct-package");
+  pops::test::install_amr_runtime_authority(prepared, "test.amr-system-contract.prepared-package");
   direct.install_block_state_route("tracer", state_route);
   prepared.install_block_state_route("tracer", state_route);
 
@@ -352,6 +361,8 @@ template <int Dim>
 void verify_program_required_before_temporal_mutation() {
   const pops::AmrSystemConfig<Dim> config = single_level_config<Dim>();
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system,
+                                            "test.amr-system-contract.program-required-runtime");
   system.install_block_state_route("tracer", "tests.amr.system-contract/program/state");
   install_direct_tracer(system, "tracer", "tests.amr.system-contract/program/physical-flux");
 
@@ -448,6 +459,7 @@ std::vector<std::vector<double>> run_magnetic_source(pops::Real bz) {
   constexpr const char* consumer_qid = "tests.amr.system-contract/magnetic/physical-source";
   const pops::AmrSystemConfig<Dim> config = magnetic_config<Dim>();
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "test.amr-system-contract.magnetic-runtime");
   system.set_temporal_relations({2}, {1}, {"integral_only"});
   const auto keys = install_magnetic_provider(system, {consumer_qid});
   system.install_block_state_route("fluid", "tests.amr.system-contract/magnetic/state");
@@ -611,6 +623,7 @@ MultiblockRegridObservation run_two_block_regrid_with_bz(pops::Real bz) {
   config.regrid_every = 1;
   config.explicit_bootstrap = false;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "test.amr-system-contract.two-block-runtime");
   system.set_temporal_relations({2}, {1}, {"integral_only"});
   const auto keys = install_magnetic_provider(
       system, {std::string(consumer_qids[0]), std::string(consumer_qids[1])});
@@ -729,6 +742,7 @@ template <int Dim>
 void verify_stride_window_contract() {
   const pops::AmrSystemConfig<Dim> config = single_level_config<Dim>(4);
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "test.amr-system-contract.stride-runtime");
   system.install_block_state_route("tracer", "tests.amr.system-contract/cadence/state");
   install_direct_tracer(system, "tracer", "tests.amr.system-contract/cadence/physical-flux");
   std::vector<double> times;
@@ -974,6 +988,8 @@ TEST(test_amr_system_contract, AcceptedClockSerializationPreservesNonAssociative
 #endif
   constexpr int Dim = pops::kNativeDimension;
   pops::AmrSystem<Dim> system(single_level_config<Dim>(4));
+  pops::test::install_amr_runtime_authority(system,
+                                            "test.amr-system-contract.accepted-clock-runtime");
   system.install_block_state_route("tracer", "tests.amr.system-contract/clock/state");
   install_direct_tracer(system, "tracer", "tests.amr.system-contract/clock/physical-flux");
   system.set_clock(0.1, 0);

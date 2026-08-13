@@ -778,13 +778,34 @@ void System<Dim>::require_cartesian_generated_operator(int block,
 
 template <int Dim>
 Real System<Dim>::block_max_speed(int block, const MultiFab<Dim>& state) const {
-  if (block < 0 || block >= p_->blocks_.size())
-    throw std::out_of_range("System maximum-speed block index is out of range");
-  const typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
-  if (!selected.max_speed)
-    throw std::runtime_error("System block '" + selected.name +
-                             "' lacks a dimension-qualified stability-speed provider");
-  return selected.max_speed(state);
+  return block_max_speed_prepared_(block, state, prepared_boundary_execution_lane());
+}
+
+template <int Dim>
+Real System<Dim>::block_max_speed_prepared_(int block, const MultiFab<Dim>& state,
+                                            const ExecutionLane& lane) const {
+  const ExecutionLane& prepared = prepared_boundary_execution_lane();
+  if (all_reduce_max(&lane == &prepared ? 0L : 1L, prepared) != 0)
+    throw std::invalid_argument("System maximum speed requires its authenticated execution lane");
+
+  const typename Impl::Species* selected = nullptr;
+  std::exception_ptr local_error;
+  try {
+    if (block < 0 || block >= p_->blocks_.size())
+      throw std::out_of_range("System maximum-speed block index is out of range");
+    selected = &p_->sp[static_cast<std::size_t>(block)];
+    if (!selected->max_speed)
+      throw std::runtime_error("System block '" + selected->name +
+                               "' lacks a dimension-qualified stability-speed provider");
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("System maximum-speed provider preparation failed collectively");
+  }
+  return selected->max_speed(state, lane);
 }
 
 template <int Dim>
@@ -993,6 +1014,9 @@ template void System<kNativeDimension>::require_cartesian_generated_operator(
     int, const std::string&) const;
 template Real System<kNativeDimension>::block_max_speed(int,
                                                         const MultiFab<kNativeDimension>&) const;
+template Real System<kNativeDimension>::block_max_speed_prepared_(int,
+                                                                  const MultiFab<kNativeDimension>&,
+                                                                  const ExecutionLane&) const;
 template Real System<kNativeDimension>::cfl_min_dx() const;
 template std::string System<kNativeDimension>::installed_program_hash() const;
 template std::string System<kNativeDimension>::poisson_solver() const;
