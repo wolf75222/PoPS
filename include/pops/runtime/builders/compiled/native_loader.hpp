@@ -153,7 +153,7 @@ void register_native_package(System<Dim>* system, const std::string& name,
     register_auxiliary_routes(system);
   }
 
-  using install_fn = void (*)(System<Dim>*, const char*, const char*, const char*, const char*,
+  using install_fn = void (*)(void*, const char*, const char*, const char*, const char*,
                               const char*, double, int, int, int, const double*, int, double);
   auto install = reinterpret_cast<install_fn>(pops::dynlib::sym(handle, "pops_install_native"));
   if (install == nullptr) {
@@ -163,14 +163,13 @@ void register_native_package(System<Dim>* system, const std::string& name,
   // Do not call the block installer here.  It captures the final provider carrier/consumer plan,
   // which does not exist until every package has registered its routes and the global graph seals.
   // Capturing values (not caller pointers) also makes this thunk independent from Python storage.
-  std::function<void()> thunk =
-      [system, install, name, limiter, riemann, recon, time, gamma, substeps, evolve, stride,
-       params, positivity_floor] {
-        const double* data = params.empty() ? nullptr : params.data();
-        install(system, name.c_str(), limiter.c_str(), riemann.c_str(), recon.c_str(), time.c_str(),
-                gamma, substeps, evolve ? 1 : 0, stride, data, static_cast<int>(params.size()),
-                positivity_floor);
-      };
+  std::function<void()> thunk = [system, install, name, limiter, riemann, recon, time, gamma,
+                                 substeps, evolve, stride, params, positivity_floor] {
+    const double* data = params.empty() ? nullptr : params.data();
+    install(static_cast<void*>(system), name.c_str(), limiter.c_str(), riemann.c_str(),
+            recon.c_str(), time.c_str(), gamma, substeps, evolve ? 1 : 0, stride, data,
+            static_cast<int>(params.size()), positivity_floor);
+  };
   system->stage_prepared_native_package(name + "\n" + manifest, std::move(thunk),
                                         std::move(package_lifetime));
 }
