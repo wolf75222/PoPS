@@ -43,10 +43,11 @@ def _load_dsl():
 # omega / tol of the generated Richardson solver. They MUST match the constants the C++ validation
 # test (tests/cpp/unit/elliptic/test_solver_codegen_generated.cpp) feeds the native prepared
 # Richardson controls so the two trace the same iterates and stop at the same residual level
-# (parity). omega = 1e-3 under-relaxes the SPD
-# Helmholtz operator A = I - 0.1*Lap on the 32x32 grid (lambda_max ~ 820, stable for omega < ~2.4e-3);
+# (parity). On the exact-rank N^Dim grid (N = 32, Dim in {1, 2, 3}), the SPD Helmholtz operator
+# A = I - 0.1*Lap has lambda_max = 1 + 0.1*4*Dim*N^2, at most 1229.8 in Dim3. Richardson is stable
+# for omega < 2/lambda_max ~= 1.626e-3 there, so omega = 1e-3 is stable for every validated rank;
 # tol is the ABSOLUTE residual L2 norm the loop breaks on.
-GEN_OMEGA = 2.0e-3
+GEN_OMEGA = 1.0e-3
 GEN_ABS_TOL = 1.0e-8
 
 
