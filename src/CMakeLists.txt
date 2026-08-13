@@ -101,8 +101,6 @@ if(POPS_BUILD_PYTHON)
       VISIBILITY_INLINES_HIDDEN ON)
   endforeach()
 
-  pops_compute_header_signature(POPS_NATIVE_HEADER_SIGNATURE)
-
   foreach(_runtime_target IN LISTS POPS_RUNTIME_TARGETS)
     target_compile_definitions(${_runtime_target} PRIVATE
       # Mirrors the DEFINE_SYMBOL CMake adds when these files are direct _pops MODULE sources.
@@ -114,7 +112,6 @@ if(POPS_BUILD_PYTHON)
   endforeach()
 
   # Make the exact native facts available to the pybind-only adapter TUs in python/CMakeLists.txt.
-  set(POPS_NATIVE_HEADER_SIGNATURE "${POPS_NATIVE_HEADER_SIGNATURE}" PARENT_SCOPE)
   set(POPS_NATIVE_MPI_INCLUDE "${POPS_NATIVE_MPI_INCLUDE}" PARENT_SCOPE)
   set(POPS_NATIVE_MPI_ABI "${POPS_NATIVE_MPI_ABI}" PARENT_SCOPE)
   set(POPS_NATIVE_MPI_COMPILER "${POPS_NATIVE_MPI_COMPILER}" PARENT_SCOPE)
