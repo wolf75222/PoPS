@@ -148,6 +148,8 @@ static int pops_run_test_native_aux_named(int argc, char** argv) {
   System<kNativeDimension> system(config);
   using namespace runtime::system;
   AuxiliaryStorageShape<kNativeDimension> shape;
+  for (int axis = 0; axis < kNativeDimension; ++axis)
+    shape.halo[axis] = 1;
   AuxiliaryComponentKey input_key{"test.native-aux", "input", "coefficient", "kappa"};
   AuxiliaryComponentContract contract{"cell-average", "cell", "unitless", "test-input", "scalar"};
   system.install_prepared_auxiliary_provider(PreparedAuxiliaryProvider<kNativeDimension>{
