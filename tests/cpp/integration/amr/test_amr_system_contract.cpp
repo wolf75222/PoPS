@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include "amr_tagging_test_authority.hpp"
+#include "component_abi_test_helpers.hpp"
 #include "explicit_amr_program.hpp"
 
 #include <pops/core/foundation/native_dimension.hpp>
@@ -18,6 +19,7 @@
 #include <pops/physics/composition/composite.hpp>
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
+#include <pops/runtime/dynamic/prepared_execution_context.hpp>
 #include <pops/runtime/program/amr_program_checkpoint.hpp>
 #include <pops/runtime/system/derived_aux_provider.hpp>
 #include <pops/runtime/system/exact_field_marshaling.hpp>
@@ -29,9 +31,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <numeric>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -40,6 +44,22 @@
 #endif
 
 namespace {
+
+template <int Dim>
+void install_package_lane(pops::AmrSystem<Dim>& system, std::string_view identity) {
+  auto lane = std::make_shared<pops::ExecutionLane>(
+      pops::ExecutionLane::duplicate_world_collectively(identity));
+  const PopsExecutionContextV1 raw = pops::component::test_support::host_execution_context();
+  auto parent = std::make_shared<const pops::component::PreparedExecutionContextV1>(
+      raw.execution_identity, raw.context_version, raw.memory_space, raw.backend_identity,
+      raw.device_identity, raw.scalar_type, raw.storage_precision, raw.compute_precision,
+      raw.accumulation_precision, raw.reduction_precision, raw.stream_handle, raw.stream_identity,
+      raw.communicator_f_handle, raw.communicator_datatype_f_handle, raw.communicator_identity,
+      raw.communicator_datatype_identity);
+  auto execution =
+      std::make_shared<const pops::component::PreparedExecutionContextV1>(parent->for_lane(*lane));
+  system.install_prepared_boundary_execution_context(std::move(lane), std::move(execution));
+}
 
 template <int Dim>
 class TracerModel : public pops::nd::ScalarAdvection<Dim> {
@@ -249,6 +269,8 @@ void verify_prepared_installation_parity() {
   constexpr const char* consumer_qid = "tests.amr.system-contract/parity/physical-flux";
   pops::AmrSystem<Dim> direct(config);
   pops::AmrSystem<Dim> prepared(config);
+  install_package_lane(direct, "test.amr-system-contract.direct-package");
+  install_package_lane(prepared, "test.amr-system-contract.prepared-package");
   direct.install_block_state_route("tracer", state_route);
   prepared.install_block_state_route("tracer", state_route);
 

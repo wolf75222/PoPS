@@ -29,6 +29,8 @@ _EXTERNAL_RIEMANN_ABI_SYMBOLS = frozenset({
     "pops_brick_model_identity",
     "pops_brick_kokkos_backend",
     "pops_brick_kokkos_version",
+    "pops_register_provider_routes",
+    "pops_register_provider_routes_amr",
 })
 _BRICK_MANIFEST_TOP_KEYS = frozenset({"schema_version", "abi_key", "annotations", "bricks"})
 _BRICK_MANIFEST_TOP_REQUIRED = ("schema_version", "abi_key", "annotations", "bricks")
@@ -545,17 +547,16 @@ def load_cpp_library(path: Any) -> int:
                 "external Riemann brick library %r exports an invalid dimension/model/provider "
                 "contract" % (path,)
             )
-        if provider_count > 0:
-            try:
-                _ = (
-                    handle.pops_register_provider_routes,
-                    handle.pops_register_provider_routes_amr,
-                )
-            except AttributeError as err:
-                raise ValueError(
-                    "external Riemann brick library %r consumes providers but does not export "
-                    "pops_register_provider_routes and pops_register_provider_routes_amr" % (path,)
-                ) from err
+        try:
+            _ = (
+                handle.pops_register_provider_routes,
+                handle.pops_register_provider_routes_amr,
+            )
+        except AttributeError as err:
+            raise ValueError(
+                "external Riemann brick library %r does not export canonical "
+                "pops_register_provider_routes and pops_register_provider_routes_amr" % (path,)
+            ) from err
         if not model_identity_raw:
             raise ValueError(
                 "external Riemann brick library %r exports an empty model identity" % (path,))

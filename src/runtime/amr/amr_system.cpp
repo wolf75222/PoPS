@@ -112,6 +112,30 @@ inline void require_amr_assembling(const runtime::system::SystemLifecycle& lifec
                              ": composition is frozen after bind");
 }
 
+template <class Function>
+class NoexceptScopeExit {
+ public:
+  explicit NoexceptScopeExit(Function function) noexcept(
+      std::is_nothrow_move_constructible_v<Function>)
+      : function_(std::move(function)) {}
+  NoexceptScopeExit(const NoexceptScopeExit&) = delete;
+  NoexceptScopeExit& operator=(const NoexceptScopeExit&) = delete;
+  NoexceptScopeExit(NoexceptScopeExit&&) = delete;
+  NoexceptScopeExit& operator=(NoexceptScopeExit&&) = delete;
+  ~NoexceptScopeExit() noexcept {
+    if (active_)
+      function_();
+  }
+  void dismiss() noexcept { active_ = false; }
+
+ private:
+  Function function_;
+  bool active_ = true;
+};
+
+template <class Function>
+NoexceptScopeExit(Function) -> NoexceptScopeExit<Function>;
+
 struct NativeAmrPackageMetadata {
   std::string route_manifest;
   std::string parameter_names;
@@ -141,15 +165,22 @@ NativeAmrPackageMetadata inspect_native_amr_package(pops::dynlib::handle handle,
     throw std::runtime_error(std::string(context) +
                              ": strict package metadata is missing; rebuild the artifact");
 
-  const char* route_manifest = manifest();
-  const char* parameter_names = names();
-  if (route_manifest == nullptr || parameter_names == nullptr)
-    throw std::runtime_error(std::string(context) + ": package metadata returned null");
+  const char* raw_route_manifest = pops::dynlib::invoke_with_host_exception(
+      [manifest] { return manifest(); }, "pops_compiled_route_manifest");
+  if (raw_route_manifest == nullptr)
+    throw std::runtime_error(std::string(context) + ": package route manifest returned null");
+  const std::string route_manifest(raw_route_manifest);
+  const char* raw_parameter_names = pops::dynlib::invoke_with_host_exception(
+      [names] { return names(); }, "pops_compiled_param_names");
+  if (raw_parameter_names == nullptr)
+    throw std::runtime_error(std::string(context) + ": package parameter names returned null");
+  const std::string parameter_names(raw_parameter_names);
   pops::verify_route_manifest(route_manifest, context);
 
-  const int parameter_count = count();
+  const int parameter_count = pops::dynlib::invoke_with_host_exception([count] { return count(); },
+                                                                       "pops_compiled_nparams");
   if (parameter_count < 0 || parameter_count > kMaxRuntimeParams ||
-      native_amr_parameter_name_count(parameter_names) != parameter_count ||
+      native_amr_parameter_name_count(parameter_names.c_str()) != parameter_count ||
       parameters.size() != static_cast<std::size_t>(parameter_count))
     throw std::runtime_error(std::string(context) +
                              ": bound parameter vector disagrees with the exact package metadata");
@@ -2985,7 +3016,7 @@ struct AmrSystem<Dim>::Impl {
   // Declared before every package-owned closure carrier so it is destroyed last.  The generated
   // DSO remains loaded until all prepared block, auxiliary and elliptic closures are gone.
   std::vector<std::shared_ptr<void>> external_package_lifetimes;
-  std::vector<std::shared_ptr<pops::dynlib::handle>> native_package_lifetimes;
+  std::vector<std::shared_ptr<void>> native_package_lifetimes;
   AmrSystemConfig<Dim> cfg;
   std::shared_ptr<const PreparedLoadBalanceAuthority<Dim>> load_balance;
   std::vector<BlockSpec> blocks;
@@ -3007,6 +3038,7 @@ struct AmrSystem<Dim>::Impl {
   };
   std::map<std::string, PreparedBoundaryComponents> prepared_boundary_components;
   std::shared_ptr<const component::PreparedExecutionContextV1> boundary_execution_context;
+  std::shared_ptr<ExecutionLane> package_assembly_lane;
   std::shared_ptr<exact_field_registry_type> field_solver_providers;
   std::shared_ptr<FieldNullspaceProviderRegistry<Dim>> field_nullspace_providers;
   std::shared_ptr<hierarchy_tensor_registry_type> hierarchy_tensor_solver_providers;
@@ -3052,6 +3084,9 @@ struct AmrSystem<Dim>::Impl {
   std::vector<std::vector<std::string>> last_topology_rematerialization_witness;
   AmrSystem<Dim>* facade = nullptr;
   bool auxiliary_registry_consensus_verified = false;
+  enum class NativePackagePhase { idle, registrar_local, installer_local };
+  NativePackagePhase native_package_phase = NativePackagePhase::idle;
+  std::string native_package_install_contract;
   std::vector<GlobalDtBound> dt_bounds;
   double accepted_time = 0.0;
   int macro_step = 0;
@@ -3463,32 +3498,29 @@ struct AmrSystem<Dim>::Impl {
     return multiblock_hierarchy->state(block, level);
   }
 
-  ExecutionCommunicator boundary_parent_communicator() const {
-    if (!boundary_execution_context)
-      throw std::logic_error("AMR boundary operation has no RuntimeInstance communicator");
-    const PopsExecutionContextV1 execution = boundary_execution_context->view();
-#ifdef POPS_HAS_MPI
-    return ExecutionCommunicator::borrowed(
-        execution.communicator_identity,
-        MPI_Comm_f2c(static_cast<MPI_Fint>(execution.communicator_f_handle)));
-#else
-    if (execution.communicator_f_handle != 0 || execution.communicator_datatype_f_handle != 0 ||
-        std::string_view(execution.communicator_identity) != "serial")
-      throw std::invalid_argument("serial AMR boundary operation requires serial authority");
-    return ExecutionCommunicator::world();
-#endif
+  const ExecutionLane& require_package_assembly_lane() const {
+    if (!package_assembly_lane || !package_assembly_lane->active())
+      throw std::logic_error("AMR native package requires a pre-staged RuntimeInstance lane");
+    return *package_assembly_lane;
+  }
+
+  void require_no_native_package_callback(std::string_view operation) const {
+    if (native_package_phase != NativePackagePhase::idle)
+      throw std::logic_error("AMR native package callback cannot invoke '" +
+                             std::string(operation) + "'");
   }
 
   const ExecutionLane& require_prepared_engine_lane(std::string_view operation) const {
-    // A restart/read path is not an engine materialization authority. Establish readiness on the
-    // RuntimeInstance communicator first, then authenticate every live topology property on the
-    // already duplicated PreparedHierarchy lane. This never falls back to an implicit WORLD lane.
-    const ExecutionCommunicator parent = boundary_parent_communicator();
-    const CommunicatorView parent_communicator = parent.communicator();
+    if (native_package_phase != NativePackagePhase::idle)
+      throw std::logic_error(
+          "AMR native package callbacks cannot enter a prepared runtime collective phase");
+    // The duplicated package lane is the durable RuntimeInstance authority. The embedding-owned
+    // parent was borrowed only while this lane was created and is never retained or reused.
+    const ExecutionLane& package_lane = require_package_assembly_lane();
     const long ready =
         engine && multiblock_hierarchy && prepared_hierarchy && prepared_hierarchy->lane ? 1L : 0L;
-    const long minimum_ready = all_reduce_min(ready, parent_communicator);
-    const long maximum_ready = all_reduce_max(ready, parent_communicator);
+    const long minimum_ready = all_reduce_min(ready, package_lane);
+    const long maximum_ready = all_reduce_max(ready, package_lane);
     if (minimum_ready != maximum_ready)
       throw std::runtime_error(
           "AMR prepared hierarchy readiness differs between RuntimeInstance "
@@ -4027,6 +4059,16 @@ struct AmrSystem<Dim>::Impl {
           .scalar(plan.newton->restart)
           .scalar(plan.newton->armijo)
           .scalar(plan.newton->minimum_step);
+    return std::move(contract).release();
+  }
+
+  std::string native_package_publication_contract() const {
+    ExactContractBuilder contract;
+    contract.text("pops.amr.native-package-publication")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .bytes(prepared_package_contract())
+        .bytes(auxiliary_registry.collective_contract());
     return std::move(contract).release();
   }
 
@@ -5848,13 +5890,8 @@ struct AmrSystem<Dim>::Impl {
     if (!boundary_execution_context)
       throw std::logic_error(
           "AMR hierarchy materialization requires its authenticated RuntimeInstance lane");
-    const PopsExecutionContextV1 execution = boundary_execution_context->view();
-#ifdef POPS_HAS_MPI
-    const CommunicatorView authenticated_parent{
-        MPI_Comm_f2c(static_cast<MPI_Fint>(execution.communicator_f_handle))};
-#else
-    const CommunicatorView authenticated_parent{};
-#endif
+    const ExecutionLane& package_lane = require_package_assembly_lane();
+    const CommunicatorView authenticated_parent = package_lane.communicator();
     // Prepare the hierarchy owner and lane identity before borrowing or duplicating the supplied
     // communicator.  A rank-asymmetric allocation failure is therefore converged on exactly the
     // authenticated parent, while no candidate owns a child communicator yet.
@@ -5875,13 +5912,9 @@ struct AmrSystem<Dim>::Impl {
     }
     {
 #ifdef POPS_HAS_MPI
-      const auto parent = ExecutionCommunicator::borrowed(execution.communicator_identity,
-                                                          authenticated_parent.native_handle());
+      const auto parent =
+          ExecutionCommunicator::borrowed(package_lane.identity(), package_lane.native_handle());
 #else
-      if (execution.communicator_f_handle != 0 || execution.communicator_datatype_f_handle != 0 ||
-          std::string_view(execution.communicator_identity) != "serial")
-        throw std::invalid_argument(
-            "serial AMR boundary execution requires the exact serial authority");
       const auto parent = ExecutionCommunicator::world();
 #endif
       candidate->lane.emplace(ExecutionLane::duplicate_collectively(parent, lane_identity));
@@ -6722,9 +6755,7 @@ struct AmrSystem<Dim>::Impl {
     if (!engine || prepared_blocks.empty())
       throw std::logic_error("AmrSystem cannot prepare levels before package materialization");
     const long has_graph = prepared_hierarchy ? 1L : 0L;
-    std::optional<ExecutionCommunicator> parent;
-    if (!prepared_hierarchy)
-      parent.emplace(boundary_parent_communicator());
+    const ExecutionLane* parent = prepared_hierarchy ? nullptr : &require_package_assembly_lane();
     const long minimum_graph =
         prepared_hierarchy ? all_reduce_min(has_graph, prepared_hierarchy->lane->communicator())
                            : all_reduce_min(has_graph, parent->communicator());
@@ -7884,6 +7915,9 @@ struct AmrSystem<Dim>::Impl {
   }
 
   void ensure_engine() {
+    if (native_package_phase != NativePackagePhase::idle)
+      throw std::logic_error(
+          "AMR native package callbacks cannot materialize or enter a collective runtime path");
     // Checkpoint apply runs only after begin_restart_transaction collectively sealed one live
     // engine and its rollback image. Every legacy state/history helper reached from that apply path
     // must therefore reuse the authenticated PreparedHierarchy lane; it has no authority to probe
@@ -8114,7 +8148,8 @@ AmrSystem<Dim>& AmrSystem<Dim>::operator=(AmrSystem&& other) noexcept {
 template <int Dim>
 void AmrSystem<Dim>::install_prepared_auxiliary_provider(
     runtime::system::PreparedAuxiliaryProvider<Dim> provider) {
-  require_amr_assembling(p_->lifecycle, "install_prepared_auxiliary_provider");
+  if (p_->native_package_phase != Impl::NativePackagePhase::registrar_local)
+    require_amr_assembling(p_->lifecycle, "install_prepared_auxiliary_provider");
   p_->auxiliary_registry.add(std::move(provider));
   p_->auxiliary_registry_consensus_verified = false;
 }
@@ -8122,7 +8157,8 @@ void AmrSystem<Dim>::install_prepared_auxiliary_provider(
 template <int Dim>
 void AmrSystem<Dim>::install_auxiliary_consumer_plan(
     runtime::system::AuxiliaryConsumerProviderPlan<Dim> plan) {
-  require_amr_assembling(p_->lifecycle, "install_auxiliary_consumer_plan");
+  if (p_->native_package_phase != Impl::NativePackagePhase::registrar_local)
+    require_amr_assembling(p_->lifecycle, "install_auxiliary_consumer_plan");
   if (p_->auxiliary_registry.sealed())
     throw std::logic_error("AMR auxiliary consumer plans must be installed before registry seal");
   p_->auxiliary_registry.add_consumer_plan(std::move(plan));
@@ -8131,10 +8167,16 @@ void AmrSystem<Dim>::install_auxiliary_consumer_plan(
 
 template <int Dim>
 void AmrSystem<Dim>::seal_auxiliary_providers() {
+  if (p_->native_package_phase != Impl::NativePackagePhase::idle)
+    throw std::logic_error(
+        "AMR native package callbacks cannot seal or enter an auxiliary collective phase");
+  const ExecutionLane& lane = p_->require_package_assembly_lane();
+  const CommunicatorView communicator = lane.communicator();
   if (p_->auxiliary_registry.sealed()) {
     if (!p_->auxiliary_registry_consensus_verified &&
         !all_ranks_agree_exact_ordered_byte_pairs(
-            {{"amr-auxiliary-registry", p_->auxiliary_registry.collective_contract()}}))
+            {{"amr-auxiliary-registry", p_->auxiliary_registry.collective_contract()}},
+            communicator))
       throw std::runtime_error("AMR auxiliary registry differs across MPI ranks");
     p_->auxiliary_registry_consensus_verified = true;
     return;
@@ -8142,19 +8184,20 @@ void AmrSystem<Dim>::seal_auxiliary_providers() {
   auto candidate = p_->auxiliary_registry;
   std::exception_ptr error;
   try {
-    candidate.seal();
+    pops::dynlib::invoke_with_host_exception([&] { candidate.seal(); },
+                                             "AMR auxiliary provider seal");
   } catch (...) {
     error = std::current_exception();
   }
-  if (all_reduce_max(error ? 1L : 0L) != 0) {
-    if (n_ranks() == 1 && error)
+  if (all_reduce_max(error ? 1L : 0L, communicator) != 0) {
+    if (communicator.size() == 1 && error)
       std::rethrow_exception(error);
     throw std::runtime_error("AMR auxiliary registry preparation failed collectively");
   }
   if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{"amr-auxiliary-registry", candidate.collective_contract()}}))
+          {{"amr-auxiliary-registry", candidate.collective_contract()}}, communicator))
     throw std::runtime_error("AMR auxiliary registry differs across MPI ranks");
-  p_->auxiliary_registry = std::move(candidate);
+  p_->auxiliary_registry.swap_complete(candidate);
   p_->auxiliary_registry_consensus_verified = true;
 }
 
@@ -8887,27 +8930,23 @@ void AmrSystem<Dim>::add_native_block(const std::string& name, const std::string
   using install_type = void (*)(void*, const char*, const char*, const char*, const char*,
                                 const char*, double, int, const double*, int, double, double, bool);
 
-  struct FieldPlanSnapshot {
-    std::optional<runtime::field::NamedFieldOutput<Dim>> output;
-    std::vector<runtime::system::AuxiliaryComponentKey> output_keys;
-    std::vector<std::vector<typename Impl::PreparedFieldRhs>> rhs_by_block;
-    bool use_prepared_level_rhs = false;
-  };
-
-  std::shared_ptr<pops::dynlib::handle> package_lifetime;
+  // Declared before every package-owned closure snapshot so it is destroyed after them on both
+  // rollback and success paths.
+  std::shared_ptr<void> package_lifetime;
   register_auxiliary_type register_auxiliary = nullptr;
   install_type install = nullptr;
   std::optional<typename Impl::auxiliary_registry_type> auxiliary_snapshot;
   std::optional<typename Impl::boundary_registry_type> boundary_snapshot;
   std::vector<typename Impl::BlockSpec> blocks_snapshot;
   std::vector<typename Impl::prepared_block_type> prepared_blocks_snapshot;
-  std::map<std::string, FieldPlanSnapshot> field_plan_snapshots;
   bool auxiliary_consensus_snapshot = false;
   std::string preparation_contract;
   std::exception_ptr preparation_error;
 
   try {
     require_amr_assembling(p_->lifecycle, "add_native_block");
+    if (p_->native_package_phase != Impl::NativePackagePhase::idle)
+      throw std::logic_error("AMR native package transactions cannot be nested");
     if (p_->engine || p_->prepared_hierarchy)
       throw std::logic_error("AmrSystem native packages must be installed before materialization");
     if (std::any_of(p_->blocks.begin(), p_->blocks.end(),
@@ -8944,18 +8983,18 @@ void AmrSystem<Dim>::add_native_block(const std::string& name, const std::string
     if (!pops::dynlib::valid(handle))
       throw std::runtime_error("AmrSystem::add_native_block: cannot load '" + so_path +
                                "': " + pops::dynlib::last_error());
-    package_lifetime = std::shared_ptr<pops::dynlib::handle>(new pops::dynlib::handle(handle),
-                                                             [](pops::dynlib::handle* owned) {
-                                                               pops::dynlib::close(*owned);
-                                                               delete owned;
-                                                             });
+    pops::dynlib::UniqueHandle opened(handle);
 
     const auto key =
         reinterpret_cast<const char* (*)()>(pops::dynlib::sym(handle, "pops_native_abi_key"));
-    if (key == nullptr || key() == nullptr)
+    if (key == nullptr)
       throw std::runtime_error(
           "AmrSystem::add_native_block: pops_native_abi_key is missing; rebuild the artifact");
-    const std::string artifact_key = key();
+    const char* raw_artifact_key =
+        pops::dynlib::invoke_with_host_exception([key] { return key(); }, "pops_native_abi_key");
+    if (raw_artifact_key == nullptr)
+      throw std::runtime_error("AmrSystem::add_native_block: pops_native_abi_key returned null");
+    const std::string artifact_key(raw_artifact_key);
     const std::string module_key = detail::abi_key_string();
     if (artifact_key != module_key)
       throw std::runtime_error(
@@ -8964,21 +9003,26 @@ void AmrSystem<Dim>::add_native_block(const std::string& name, const std::string
     const NativeAmrPackageMetadata metadata = inspect_native_amr_package(handle, params);
     register_auxiliary = reinterpret_cast<register_auxiliary_type>(
         pops::dynlib::sym(handle, "pops_register_provider_routes_amr"));
+    if (register_auxiliary == nullptr)
+      throw std::runtime_error(
+          "AmrSystem::add_native_block: pops_register_provider_routes_amr is missing; rebuild "
+          "the artifact");
     install = reinterpret_cast<install_type>(pops::dynlib::sym(handle, "pops_install_native_amr"));
     if (install == nullptr)
       throw std::runtime_error(
           "AmrSystem::add_native_block: pops_install_native_amr is missing; compile the package "
           "with target='amr_system'");
 
+    // Allocate the shared control block while the stack guard remains the only owner. If this
+    // allocation fails, ``opened`` closes exactly once; on success ownership transfers exactly
+    // once and remains live beyond every installed callback.
+    package_lifetime = std::make_shared<pops::dynlib::UniqueHandle>(std::move(opened));
+
     auxiliary_snapshot.emplace(p_->auxiliary_registry);
     boundary_snapshot.emplace(p_->boundary_registry);
     blocks_snapshot = p_->blocks;
     prepared_blocks_snapshot = p_->prepared_blocks;
     auxiliary_consensus_snapshot = p_->auxiliary_registry_consensus_verified;
-    for (const auto& [slot, plan] : p_->field_plans)
-      field_plan_snapshots.emplace(
-          slot, FieldPlanSnapshot{plan.output, plan.output_keys, plan.rhs_by_block,
-                                  plan.use_prepared_level_rhs});
     p_->native_package_lifetimes.reserve(p_->native_package_lifetimes.size() + 1);
 
     ExactContractBuilder exact;
@@ -9000,91 +9044,105 @@ void AmrSystem<Dim>::add_native_block(const std::string& name, const std::string
         .text(metadata.route_manifest)
         .text(metadata.parameter_names)
         .scalar(std::int32_t{metadata.parameter_count})
-        .presence(register_auxiliary != nullptr);
+        .text("pops_register_provider_routes_amr");
     preparation_contract = std::move(exact).release();
   } catch (...) {
     preparation_error = std::current_exception();
   }
 
-  if (all_reduce_max(preparation_error ? 1L : 0L) != 0) {
-    if (n_ranks() == 1 && preparation_error)
+  // Only after every rank has completed its allocation/callback preparation do ranks enter the
+  // RuntimeInstance communicator's fixed collective schedule. Native package loading never falls
+  // back to a process-global communicator.
+  const ExecutionLane& package_lane = p_->require_package_assembly_lane();
+  const CommunicatorView package_communicator = package_lane.communicator();
+  if (all_reduce_max(preparation_error ? 1L : 0L, package_communicator) != 0) {
+    if (package_communicator.size() == 1 && preparation_error)
       std::rethrow_exception(preparation_error);
     throw std::runtime_error("AmrSystem native package preflight failed on at least one MPI rank");
   }
   if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{std::string_view("amr-native-package"), std::string_view(preparation_contract)}}))
+          {{std::string_view("amr-native-package"), std::string_view(preparation_contract)}},
+          package_communicator))
     throw std::invalid_argument("AmrSystem native package contracts differ between MPI ranks");
 
-  auto rollback = [&] {
-    p_->auxiliary_registry = *auxiliary_snapshot;
-    p_->auxiliary_registry_consensus_verified = auxiliary_consensus_snapshot;
-    p_->boundary_registry = *boundary_snapshot;
-    p_->blocks = blocks_snapshot;
-    p_->prepared_blocks = prepared_blocks_snapshot;
-    for (const auto& [slot, snapshot] : field_plan_snapshots) {
-      auto found = p_->field_plans.find(slot);
-      if (found == p_->field_plans.end())
-        throw std::logic_error("AMR native package changed the exact field-plan registry");
-      found->second.output = snapshot.output;
-      found->second.output_keys = snapshot.output_keys;
-      found->second.rhs_by_block = snapshot.rhs_by_block;
-      found->second.use_prepared_level_rhs = snapshot.use_prepared_level_rhs;
-    }
+  static_assert(std::is_nothrow_swappable_v<typename Impl::boundary_registry_type>);
+  static_assert(noexcept(blocks_snapshot.swap(p_->blocks)));
+  static_assert(noexcept(prepared_blocks_snapshot.swap(p_->prepared_blocks)));
+  auto rollback = [&]() noexcept {
+    p_->native_package_phase = Impl::NativePackagePhase::idle;
+    p_->native_package_install_contract.clear();
+    p_->lifecycle.phase = runtime::system::LifecyclePhase::Assembling;
+    p_->auxiliary_registry.swap_complete(*auxiliary_snapshot);
+    std::swap(p_->auxiliary_registry_consensus_verified, auxiliary_consensus_snapshot);
+    std::swap(p_->boundary_registry, *boundary_snapshot);
+    p_->blocks.swap(blocks_snapshot);
+    p_->prepared_blocks.swap(prepared_blocks_snapshot);
   };
+  NoexceptScopeExit rollback_guard(rollback);
 
   std::exception_ptr registration_error;
+  p_->native_package_phase = Impl::NativePackagePhase::registrar_local;
+  p_->lifecycle.phase = runtime::system::LifecyclePhase::Bound;
   try {
-    if (register_auxiliary != nullptr)
-      register_auxiliary(this);
+    pops::dynlib::invoke_with_host_exception([&] { register_auxiliary(this); },
+                                             "pops_register_provider_routes_amr");
   } catch (...) {
     registration_error = std::current_exception();
   }
-  if (all_reduce_max(registration_error ? 1L : 0L) != 0) {
-    std::exception_ptr rollback_error;
-    try {
-      rollback();
-    } catch (...) {
-      rollback_error = std::current_exception();
-    }
-    if (all_reduce_max(rollback_error ? 1L : 0L) != 0) {
-      p_->native_package_lifetimes.push_back(std::move(package_lifetime));
-      throw std::runtime_error(
-          "AmrSystem native auxiliary registration rollback failed collectively");
-    }
-    if (n_ranks() == 1 && registration_error)
+  p_->native_package_phase = Impl::NativePackagePhase::idle;
+  p_->lifecycle.phase = runtime::system::LifecyclePhase::Assembling;
+  if (all_reduce_max(registration_error ? 1L : 0L, package_communicator) != 0) {
+    if (package_communicator.size() == 1 && registration_error)
       std::rethrow_exception(registration_error);
     throw std::runtime_error(
         "AmrSystem native auxiliary registration failed on at least one MPI rank");
   }
+  try {
+    seal_auxiliary_providers();
+  } catch (...) {
+    throw;
+  }
 
   std::exception_ptr installation_error;
+  std::string installation_contract;
+  p_->native_package_phase = Impl::NativePackagePhase::installer_local;
+  p_->lifecycle.phase = runtime::system::LifecyclePhase::Bound;
   try {
-    install(static_cast<void*>(this), name.c_str(), limiter.c_str(), riemann.c_str(), recon.c_str(),
-            time.c_str(), gamma, substeps, params.empty() ? nullptr : params.data(),
-            static_cast<int>(params.size()), positivity_floor, weno_epsilon, wave_speed_cache);
+    p_->native_package_install_contract.clear();
+    pops::dynlib::invoke_with_host_exception(
+        [&] {
+          install(static_cast<void*>(this), name.c_str(), limiter.c_str(), riemann.c_str(),
+                  recon.c_str(), time.c_str(), gamma, substeps,
+                  params.empty() ? nullptr : params.data(), static_cast<int>(params.size()),
+                  positivity_floor, weno_epsilon, wave_speed_cache);
+        },
+        "pops_install_native_amr");
     if (p_->prepared_blocks.empty() || p_->blocks.empty() || p_->blocks.back().name != name ||
-        p_->prepared_blocks.back().name != name)
+        p_->prepared_blocks.back().name != name || p_->native_package_install_contract.empty())
       throw std::logic_error(
           "AmrSystem native package did not publish one complete prepared block");
+    ExactContractBuilder published;
+    published.text(p_->native_package_install_contract)
+        .bytes(p_->native_package_publication_contract());
+    installation_contract = std::move(published).release();
   } catch (...) {
     installation_error = std::current_exception();
   }
-  if (all_reduce_max(installation_error ? 1L : 0L) != 0) {
-    std::exception_ptr rollback_error;
-    try {
-      rollback();
-    } catch (...) {
-      rollback_error = std::current_exception();
-    }
-    if (all_reduce_max(rollback_error ? 1L : 0L) != 0) {
-      p_->native_package_lifetimes.push_back(std::move(package_lifetime));
-      throw std::runtime_error("AmrSystem native package rollback failed collectively");
-    }
-    if (n_ranks() == 1 && installation_error)
+  p_->native_package_phase = Impl::NativePackagePhase::idle;
+  p_->lifecycle.phase = runtime::system::LifecyclePhase::Assembling;
+  if (all_reduce_max(installation_error ? 1L : 0L, package_communicator) != 0) {
+    if (package_communicator.size() == 1 && installation_error)
       std::rethrow_exception(installation_error);
     throw std::runtime_error("AmrSystem native package installation failed collectively");
   }
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{std::string_view("amr-native-prepared-install"),
+                                                  std::string_view(installation_contract)}},
+                                                package_communicator)) {
+    throw std::invalid_argument("AMR native prepared block differs between RuntimeInstance ranks");
+  }
+  p_->native_package_install_contract.clear();
   p_->native_package_lifetimes.push_back(std::move(package_lifetime));
+  rollback_guard.dismiss();
 }
 
 template <int Dim>
@@ -9105,6 +9163,8 @@ void AmrSystem<Dim>::register_external_riemann_package(
 
   try {
     require_amr_assembling(p_->lifecycle, "register_external_riemann_package");
+    if (p_->native_package_phase != Impl::NativePackagePhase::idle)
+      throw std::logic_error("AMR external package transactions cannot be nested");
     runtime::program::detail::validate_external_install(name, limiter, recon, time,
                                                         provider_consumer_qid, gamma, substeps,
                                                         stride, positivity_floor, weno_epsilon);
@@ -9160,75 +9220,90 @@ void AmrSystem<Dim>::register_external_riemann_package(
     preflight_error = std::current_exception();
   }
 
-  if (all_reduce_max(preflight_error ? 1L : 0L) != 0) {
-    if (n_ranks() == 1 && preflight_error)
+  const ExecutionLane& package_lane = p_->require_package_assembly_lane();
+  const CommunicatorView package_communicator = package_lane.communicator();
+  if (all_reduce_max(preflight_error ? 1L : 0L, package_communicator) != 0) {
+    if (package_communicator.size() == 1 && preflight_error)
       std::rethrow_exception(preflight_error);
     throw std::runtime_error(
         "AMR external Riemann package preflight failed on at least one MPI rank");
   }
   if (!all_ranks_agree_exact_ordered_byte_pairs({{std::string_view("amr-external-riemann-package"),
-                                                  std::string_view(preflight_contract)}}))
+                                                  std::string_view(preflight_contract)}},
+                                                package_communicator))
     throw std::invalid_argument("AMR external Riemann package contracts differ between MPI ranks");
 
-  const auto rollback = [&] {
-    p_->auxiliary_registry = *provider_registry_snapshot;
-    p_->auxiliary_registry_consensus_verified = provider_consensus_snapshot;
-    p_->boundary_registry = *boundary_snapshot;
-    p_->blocks = blocks_snapshot;
-    p_->prepared_blocks = prepared_blocks_snapshot;
+  const auto rollback = [&]() noexcept {
+    p_->native_package_phase = Impl::NativePackagePhase::idle;
+    p_->native_package_install_contract.clear();
+    p_->lifecycle.phase = runtime::system::LifecyclePhase::Assembling;
+    p_->auxiliary_registry.swap_complete(*provider_registry_snapshot);
+    std::swap(p_->auxiliary_registry_consensus_verified, provider_consensus_snapshot);
+    std::swap(p_->boundary_registry, *boundary_snapshot);
+    p_->blocks.swap(blocks_snapshot);
+    p_->prepared_blocks.swap(prepared_blocks_snapshot);
   };
+  NoexceptScopeExit rollback_guard(rollback);
 
   std::exception_ptr registration_error;
+  p_->native_package_phase = Impl::NativePackagePhase::registrar_local;
+  p_->lifecycle.phase = runtime::system::LifecyclePhase::Bound;
   try {
     authority->register_amr_routes(*this);
   } catch (...) {
     registration_error = std::current_exception();
   }
-  if (all_reduce_max(registration_error ? 1L : 0L) != 0) {
-    std::exception_ptr rollback_error;
-    try {
-      rollback();
-    } catch (...) {
-      rollback_error = std::current_exception();
-    }
-    if (all_reduce_max(rollback_error ? 1L : 0L) != 0) {
-      p_->external_package_lifetimes.push_back(authority);
-      throw std::runtime_error("AMR external Riemann provider-route rollback failed collectively");
-    }
-    if (n_ranks() == 1 && registration_error)
+  p_->native_package_phase = Impl::NativePackagePhase::idle;
+  p_->lifecycle.phase = runtime::system::LifecyclePhase::Assembling;
+  if (all_reduce_max(registration_error ? 1L : 0L, package_communicator) != 0) {
+    if (package_communicator.size() == 1 && registration_error)
       std::rethrow_exception(registration_error);
     throw std::runtime_error(
         "AMR external Riemann provider-route registration failed collectively");
   }
+  try {
+    seal_auxiliary_providers();
+  } catch (...) {
+    throw;
+  }
 
   std::exception_ptr installation_error;
+  std::string installation_contract;
+  p_->native_package_phase = Impl::NativePackagePhase::installer_local;
+  p_->lifecycle.phase = runtime::system::LifecyclePhase::Bound;
   try {
+    p_->native_package_install_contract.clear();
     authority->install_amr(this, name, provider_consumer_qid, limiter, recon, time, gamma, substeps,
                            stride, positivity_floor, weno_epsilon);
     if (p_->blocks.size() != blocks_snapshot.size() + 1 ||
         p_->prepared_blocks.size() != prepared_blocks_snapshot.size() + 1 ||
-        p_->blocks.back().name != name || p_->prepared_blocks.back().name != name)
+        p_->blocks.back().name != name || p_->prepared_blocks.back().name != name ||
+        p_->native_package_install_contract.empty())
       throw std::logic_error(
           "AMR external Riemann package did not publish one complete prepared block");
+    ExactContractBuilder published;
+    published.text(p_->native_package_install_contract)
+        .bytes(p_->native_package_publication_contract());
+    installation_contract = std::move(published).release();
   } catch (...) {
     installation_error = std::current_exception();
   }
-  if (all_reduce_max(installation_error ? 1L : 0L) != 0) {
-    std::exception_ptr rollback_error;
-    try {
-      rollback();
-    } catch (...) {
-      rollback_error = std::current_exception();
-    }
-    if (all_reduce_max(rollback_error ? 1L : 0L) != 0) {
-      p_->external_package_lifetimes.push_back(authority);
-      throw std::runtime_error("AMR external Riemann package rollback failed collectively");
-    }
-    if (n_ranks() == 1 && installation_error)
+  p_->native_package_phase = Impl::NativePackagePhase::idle;
+  p_->lifecycle.phase = runtime::system::LifecyclePhase::Assembling;
+  if (all_reduce_max(installation_error ? 1L : 0L, package_communicator) != 0) {
+    if (package_communicator.size() == 1 && installation_error)
       std::rethrow_exception(installation_error);
     throw std::runtime_error("AMR external Riemann package installation failed collectively");
   }
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{std::string_view("amr-external-prepared-install"),
+                                                  std::string_view(installation_contract)}},
+                                                package_communicator)) {
+    throw std::invalid_argument(
+        "AMR external prepared block differs between RuntimeInstance ranks");
+  }
+  p_->native_package_install_contract.clear();
   p_->external_package_lifetimes.push_back(std::move(authority));
+  rollback_guard.dismiss();
 }
 
 template <int Dim>
@@ -9241,7 +9316,8 @@ void AmrSystem<Dim>::install_prepared_amr_block(PreparedBlock prepared) {
   std::string install_contract;
   bool has_boundary = false;
   try {
-    require_amr_assembling(p_->lifecycle, "install_prepared_amr_block");
+    if (p_->native_package_phase != Impl::NativePackagePhase::installer_local)
+      require_amr_assembling(p_->lifecycle, "install_prepared_amr_block");
     validate_prepared_amr_block(prepared);
     if (p_->engine || p_->prepared_hierarchy)
       throw std::logic_error("prepared AMR blocks must be installed before materialization");
@@ -9312,13 +9388,29 @@ void AmrSystem<Dim>::install_prepared_amr_block(PreparedBlock prepared) {
     preparation_failure = 1;
     preparation_error = std::current_exception();
   }
-  if (all_reduce_max(preparation_failure) != 0) {
+  if (p_->native_package_phase == Impl::NativePackagePhase::installer_local) {
+    if (preparation_error)
+      std::rethrow_exception(preparation_error);
+    if (!p_->native_package_install_contract.empty())
+      throw std::logic_error("AMR native package staged more than one prepared block");
+    p_->native_package_install_contract = std::move(install_contract);
+    p_->blocks.swap(block_candidate);
+    p_->prepared_blocks.swap(prepared_candidates);
+    if (has_boundary)
+      p_->boundary_registry.boundary(p_->blocks.back().name).authority =
+          std::move(converted_boundary);
+    return;
+  }
+
+  const ExecutionLane& lane = p_->require_package_assembly_lane();
+  if (all_reduce_max(preparation_failure, lane.communicator()) != 0) {
     if (preparation_error)
       std::rethrow_exception(preparation_error);
     throw std::runtime_error("prepared AMR block validation failed collectively");
   }
   if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{std::string_view("prepared-amr-install"), std::string_view(install_contract)}}))
+          {{std::string_view("prepared-amr-install"), std::string_view(install_contract)}},
+          lane.communicator()))
     throw std::invalid_argument("prepared AMR block install contracts differ between MPI ranks");
 
   p_->blocks.swap(block_candidate);
@@ -11050,13 +11142,25 @@ void AmrSystem<Dim>::install_field_storage_route(const std::string& field_identi
 
 template <int Dim>
 void AmrSystem<Dim>::install_prepared_boundary_execution_context(
+    std::shared_ptr<ExecutionLane> package_assembly_lane,
     std::shared_ptr<const component::PreparedExecutionContextV1> execution) {
   require_amr_assembling(p_->lifecycle, "install_prepared_boundary_execution_context");
-  if (!execution || p_->engine || p_->prepared_hierarchy)
+  if (p_->engine || p_->prepared_hierarchy)
     throw std::invalid_argument(
         "AMR boundary execution context must precede hierarchy materialization");
-  if (p_->boundary_execution_context)
+  if (p_->boundary_execution_context || p_->package_assembly_lane)
     throw std::logic_error("AMR boundary execution context is already installed");
+  if (!package_assembly_lane || !package_assembly_lane->active() || !execution)
+    throw std::invalid_argument(
+        "AMR boundary execution context requires one owned RuntimeInstance package lane");
+#ifdef POPS_HAS_MPI
+  if (!package_assembly_lane->owns_communicator())
+    throw std::invalid_argument("AMR package assembly lane must own its MPI communicator");
+#endif
+  if (!execution->matches_lane(*package_assembly_lane))
+    throw std::invalid_argument(
+        "AMR execution context differs from its owned RuntimeInstance package lane");
+  p_->package_assembly_lane = std::move(package_assembly_lane);
   p_->boundary_execution_context = std::move(execution);
 }
 
@@ -11431,6 +11535,7 @@ void AmrSystem<Dim>::set_field_boundary_kernel(const std::string& provider_slot,
 template <int Dim>
 void AmrSystem<Dim>::set_field_logical_timepoint(const std::string& provider_slot,
                                                  const FieldLogicalTimePoint& point) {
+  p_->require_no_native_package_callback("set_field_logical_timepoint");
   auto found = p_->field_plans.find(provider_slot);
   if (found == p_->field_plans.end())
     throw std::out_of_range("AMR field logical timepoint names an unknown provider slot");
@@ -12284,10 +12389,12 @@ void AmrSystem<Dim>::discard_hyperbolic_boundaries() {
   p_->boundary_registry.discard_transaction();
   p_->prepared_boundary_components.clear();
   p_->boundary_execution_context.reset();
+  p_->package_assembly_lane.reset();
 }
 
 template <int Dim>
 void AmrSystem<Dim>::set_density(const std::string& name, const std::vector<double>& density) {
+  p_->require_no_native_package_callback("set_density");
   const std::size_t block_index = p_->block_index(name);
   typename Impl::BlockSpec& block = p_->blocks[block_index];
   if (density.size() != checked_cells(p_->cfg.index_domain()))
@@ -12302,6 +12409,7 @@ void AmrSystem<Dim>::set_density(const std::string& name, const std::vector<doub
 template <int Dim>
 void AmrSystem<Dim>::set_conservative_state(const std::string& name,
                                             const std::vector<double>& state) {
+  p_->require_no_native_package_callback("set_conservative_state");
   const std::size_t block_index = p_->block_index(name);
   typename Impl::BlockSpec& block = p_->blocks[block_index];
   const std::size_t cells = checked_cells(p_->cfg.index_domain());
@@ -13625,12 +13733,14 @@ void AmrSystem<Dim>::restore_checkpoint_counters(int regrid_count, std::uint64_t
 
 template <int Dim>
 void AmrSystem<Dim>::install_program_step(std::function<void(double)> step) {
+  p_->require_no_native_package_callback("install_program_step");
   p_->program.install_unverified_step(std::move(step));
   p_->program_flux_expression_budget.reset();
 }
 
 template <int Dim>
 void AmrSystem<Dim>::install_program_hierarchy_refresh(std::function<void()> refresh) {
+  p_->require_no_native_package_callback("install_program_hierarchy_refresh");
   p_->program.install_hierarchy_refresh(std::move(refresh), "AmrSystem");
 }
 
@@ -13638,6 +13748,7 @@ template <int Dim>
 void AmrSystem<Dim>::install_program_restart_hooks(
     std::function<void()> preflight, std::function<void()> regrid, std::function<void()> resync,
     runtime::program::AcceptedProgramContextSnapshotFactory accepted_context_snapshot) {
+  p_->require_no_native_package_callback("install_program_restart_hooks");
   p_->program.install_restart_hooks(std::move(preflight), std::move(regrid), std::move(resync),
                                     std::move(accepted_context_snapshot), "AmrSystem");
 }
@@ -16258,7 +16369,7 @@ template std::size_t AmrSystem<kNativeDimension>::apply_prepared_amr_program_can
 template void AmrSystem<kNativeDimension>::publish_prepared_amr_program_candidates(
     int, std::span<MultiFab<kNativeDimension>* const>);
 template void AmrSystem<kNativeDimension>::install_prepared_boundary_execution_context(
-    std::shared_ptr<const component::PreparedExecutionContextV1>);
+    std::shared_ptr<ExecutionLane>, std::shared_ptr<const component::PreparedExecutionContextV1>);
 template void AmrSystem<kNativeDimension>::stage_prepared_ghost_boundary_component(
     const std::string&, std::shared_ptr<PreparedGhostBoundaryComponent>);
 template void AmrSystem<kNativeDimension>::stage_prepared_boundary_flux_component(

@@ -1,5 +1,6 @@
 #include "../bindings_detail.hpp"
 #include <pops/parallel/execution_lane.hpp>
+#include <pops/parallel/world_communicator.hpp>
 #include "boundary_component_install.hpp"
 #include "checkpoint_spatial_binding.hpp"
 #include "output_geometry_binding.hpp"
@@ -286,11 +287,67 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
            "Bind one exact solved-field Handle to native provider storage.")
       .def(
           "_prepare_boundary_execution_lane",
-          [](AmrSystem& system, const py::dict& execution_data) {
-            system.install_prepared_boundary_execution_context(
-                pops::python::detail::make_component_execution_context(execution_data));
+          [](AmrSystem& system, const py::object& communicator_authority,
+             const py::dict& execution_data) {
+            std::shared_ptr<const pops::component::PreparedExecutionContextV1> execution;
+            std::shared_ptr<std::optional<pops::ExecutionLane>> lane_holder;
+            std::string lane_identity;
+            std::exception_ptr preparation_error;
+            try {
+              execution = pops::python::detail::make_component_execution_context(execution_data);
+              const PopsExecutionContextV1 view = execution->view();
+#ifdef POPS_HAS_MPI
+              const auto& world = communicator_authority.cast<const pops::WorldCommunicator&>();
+              if (&world != &pops::WorldCommunicator::world() ||
+                  std::string_view(view.communicator_identity) != world.identity() ||
+                  view.communicator_f_handle != world.fortran_handle() ||
+                  view.communicator_datatype_f_handle != world.datatype_float64().fortran_handle())
+                throw std::invalid_argument(
+                    "AMR boundary execution requires the exact native process world");
+#else
+              if (!communicator_authority.is_none() || view.communicator_f_handle != 0 ||
+                  view.communicator_datatype_f_handle != 0 ||
+                  std::string_view(view.communicator_identity) != "serial")
+                throw std::invalid_argument(
+                    "serial AMR boundary execution requires the exact null authority");
+#endif
+              lane_identity = "pops.amr.package-assembly/" + execution->identity();
+              lane_holder = std::make_shared<std::optional<pops::ExecutionLane>>();
+            } catch (...) {
+              preparation_error = std::current_exception();
+            }
+#ifdef POPS_HAS_MPI
+            const pops::WorldCommunicator& world = pops::WorldCommunicator::world();
+            if (pops::all_reduce_max(preparation_error ? 1L : 0L, world.communicator()) != 0) {
+              if (world.size() == 1 && preparation_error)
+                std::rethrow_exception(preparation_error);
+              throw std::runtime_error(
+                  "AMR boundary native execution authority failed collectively");
+            }
+#else
+            if (preparation_error)
+              std::rethrow_exception(preparation_error);
+#endif
+            lane_holder->emplace(pops::ExecutionLane::duplicate_world_collectively(lane_identity));
+            std::shared_ptr<pops::ExecutionLane> lane(lane_holder, &lane_holder->value());
+            std::shared_ptr<const pops::component::PreparedExecutionContextV1> lane_execution;
+            std::exception_ptr lane_context_error;
+            try {
+              lane_execution = std::make_shared<const pops::component::PreparedExecutionContextV1>(
+                  execution->for_lane(*lane));
+            } catch (...) {
+              lane_context_error = std::current_exception();
+            }
+            if (pops::all_reduce_max(lane_context_error ? 1L : 0L, lane->communicator()) != 0) {
+              if (lane->size() == 1 && lane_context_error)
+                std::rethrow_exception(lane_context_error);
+              throw std::runtime_error(
+                  "AMR package-lane execution context preparation failed collectively");
+            }
+            system.install_prepared_boundary_execution_context(std::move(lane),
+                                                               std::move(lane_execution));
           },
-          py::arg("execution_context"),
+          py::arg("communicator_authority"), py::arg("execution_context"),
           "Retain the RuntimeInstance execution authority for the prepared AMR hierarchy lane.")
       .def(
           "_preflight_ghost_boundary_component",

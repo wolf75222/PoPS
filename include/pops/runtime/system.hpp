@@ -333,7 +333,8 @@ class System {
   /// Authenticate and stage one exact-ranked external Riemann package. The external DSO owns the
   /// prepared model and numerical flux type; its handle is retained by the ordinary native-package
   /// transaction so every installed closure remains resident for the lifetime of this System.
-  /// Provider routes, when present, are registered before the one global provider graph is sealed.
+  /// Both canonical DSO provider hooks are mandatory. A zero-provider brick exports explicit empty
+  /// System/AMR hooks; the System hook is staged before the one global provider graph is sealed.
   void register_external_riemann_package(
       const std::string& name, const std::string& so_path, const std::string& brick_id,
       const std::string& expected_sha256, int expected_nvars, int expected_provider_count,
@@ -345,14 +346,16 @@ class System {
       double weno_epsilon = static_cast<double>(kWenoEpsilon));
 
   /// Seal the aggregate auxiliary graph, allocate its exact compact carrier, then install every
-  /// staged native block in canonical package order.  Any installer failure restores the complete
-  /// pre-finalization System image and unloads the staged packages.
+  /// staged native block in canonical package order. Any registrar, seal, or installer failure
+  /// restores the complete pre-finalization System image and unloads the staged packages.
   void finalize_native_packages();
 
-  /// Native-loader-only hand-off after ABI/manifest validation.  The package lifetime keeps its
-  /// local DSO resident until all closures it installed have been destroyed.  This is intentionally
-  /// a typed C++ seam, not a metadata/JSON parser.
+  /// Native-loader-only hand-off after ABI/manifest validation. The canonical registrar is required
+  /// even for an empty provider graph; only private boundary-component staging may omit it. The
+  /// package lifetime keeps its local DSO resident until all closures it installed are destroyed.
+  /// This is intentionally a typed C++ seam, not a metadata/JSON parser.
   POPS_EXPORT void stage_prepared_native_package(std::string identity,
+                                                 std::function<void()> route_registrar,
                                                  std::function<void()> installer,
                                                  std::shared_ptr<void> package_lifetime);
 
@@ -1439,8 +1442,11 @@ class System {
   POPS_EXPORT SolveOutcome stage_field_publication_outcome_(SolveReport report);
   SolveOutcome run_field_publication_outcome_(const std::function<SolveReport()>& solve);
   enum class NativePackageKind { generic, prepared_boundary };
-  void stage_native_package_(std::string identity, std::function<void()> installer,
+  void stage_native_package_(std::string identity, std::function<void()> route_registrar,
+                             std::function<void()> installer,
                              std::shared_ptr<void> package_lifetime, NativePackageKind kind);
+  void seal_auxiliary_providers_(const CommunicatorView& communicator);
+  bool native_route_registrar_active_ = false;
   /// Read-only compiled-artifact capability check.  Kept private so only ProgramContext can issue
   /// an authenticated apply token; installation writes Impl directly and no public setter exists.
   POPS_EXPORT bool program_owns_operator_authority(

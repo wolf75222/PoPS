@@ -487,9 +487,10 @@ class AmrSystem {
   /// Boundary components and AMR tagging consume this common prepared route.
   POPS_EXPORT void install_field_storage_route(const std::string& field_identity,
                                                const std::string& provider_slot);
-  /// Retain the RuntimeInstance execution descriptor until hierarchy materialization can duplicate
-  /// its authenticated communicator.  AMR never substitutes MPI_COMM_WORLD for this authority.
+  /// Retain the already duplicated RuntimeInstance package lane and its lane-qualified execution
+  /// descriptor. AMR never reconstructs or retains the embedding-owned parent communicator.
   POPS_EXPORT void install_prepared_boundary_execution_context(
+      std::shared_ptr<ExecutionLane> package_assembly_lane,
       std::shared_ptr<const component::PreparedExecutionContextV1> execution);
   POPS_EXPORT void stage_prepared_ghost_boundary_component(
       const std::string& block, std::shared_ptr<PreparedGhostBoundaryComponent> component);
@@ -544,8 +545,9 @@ class AmrSystem {
                         bool wave_speed_cache = false);
 
   /// Authenticate and install one exact-ranked external Riemann package through the ordinary
-  /// prepared AMR block path. Provider routes are registered before hierarchy materialization;
-  /// the authenticated DSO authority remains alive until every package-owned closure is destroyed.
+  /// prepared AMR block path. Both canonical System/AMR provider hooks are mandatory, including
+  /// explicit empty hooks for a zero-provider brick. AMR routes are registered before hierarchy
+  /// materialization; the authenticated DSO remains alive until every package closure is destroyed.
   void register_external_riemann_package(
       const std::string& name, const std::string& so_path, const std::string& brick_id,
       const std::string& expected_sha256, int expected_nvars, int expected_provider_count,

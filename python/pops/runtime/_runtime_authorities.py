@@ -125,7 +125,10 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
     execution_data = component_execution_data(install_plan.execution_context)
     adaptive = {row.adaptive for row in artifact.layout_plan.layouts}
     if adaptive == {True}:
-        prepare_execution_lane_arguments = (execution_data,)
+        prepare_execution_lane_arguments = (
+            install_plan.execution_context.communicator.handle,
+            execution_data,
+        )
     elif adaptive == {False}:
         prepare_execution_lane_arguments = (
             install_plan.execution_context.communicator.handle,

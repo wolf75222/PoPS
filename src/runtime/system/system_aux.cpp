@@ -174,14 +174,33 @@ template <int Dim>
 void System<Dim>::install_auxiliary_consumer_plan(
     runtime::system::AuxiliaryConsumerProviderPlan<Dim> plan) {
   require_assembling(p_->lifecycle_, "install_auxiliary_consumer_plan");
+  if (native_route_registrar_active_) {
+    // A native registrar is a rank-local callback inside finalize_native_packages.  Even when an
+    // earlier package already sealed the registry, extend a private value image locally and leave
+    // the sole exact-lane consensus to seal_auxiliary_providers_ after every registrar converges.
+    auto candidate = p_->auxiliary_registry_;
+    candidate.add_consumer_plan(std::move(plan));
+    p_->auxiliary_registry_.swap_complete(candidate);
+    p_->auxiliary_registry_consensus_verified_ = false;
+    return;
+  }
+  if (!p_->auxiliary_registry_.sealed()) {
+    // Native package registrars execute rank-locally inside the enclosing finalization candidate.
+    // Their outer phase converges failures before the one collective seal; entering a collective
+    // here could mismatch another rank that failed earlier in the same registrar.
+    p_->auxiliary_registry_.add_consumer_plan(std::move(plan));
+    p_->auxiliary_registry_consensus_verified_ = false;
+    return;
+  }
   // A Program or bind-time analytic consumer can arrive after providers sealed. It contributes
   // only a resolved local gather plan, never a new global output or carrier component. Prepare the
   // complete value image on every rank and turn rank-local validation failures into one collective
   // rejection before any rank enters the exact-byte witness.
-  auto candidate = p_->auxiliary_registry_;
+  std::optional<runtime::system::ExactAuxiliaryRegistry<Dim>> candidate;
   std::exception_ptr local_error;
   try {
-    candidate.add_consumer_plan(std::move(plan));
+    candidate.emplace(p_->auxiliary_registry_);
+    candidate->add_consumer_plan(std::move(plan));
   } catch (...) {
     local_error = std::current_exception();
   }
@@ -190,24 +209,25 @@ void System<Dim>::install_auxiliary_consumer_plan(
       std::rethrow_exception(local_error);
     throw std::runtime_error("System auxiliary consumer plan preparation failed collectively");
   }
-  if (candidate.sealed()) {
-    if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{"system-auxiliary-consumer-plan", candidate.collective_contract()}}))
-      throw std::runtime_error("System auxiliary consumer plan differs across MPI ranks");
-    p_->auxiliary_registry_ = std::move(candidate);
-    p_->auxiliary_registry_consensus_verified_ = true;
-    return;
-  }
-  p_->auxiliary_registry_ = std::move(candidate);
-  p_->auxiliary_registry_consensus_verified_ = false;
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{"system-auxiliary-consumer-plan", candidate->collective_contract()}}))
+    throw std::runtime_error("System auxiliary consumer plan differs across MPI ranks");
+  p_->auxiliary_registry_.swap_complete(*candidate);
+  p_->auxiliary_registry_consensus_verified_ = true;
 }
 
 template <int Dim>
 void System<Dim>::seal_auxiliary_providers() {
+  seal_auxiliary_providers_(prepared_boundary_execution_lane().communicator());
+}
+
+template <int Dim>
+void System<Dim>::seal_auxiliary_providers_(const CommunicatorView& communicator) {
   if (p_->auxiliary_registry_.sealed()) {
     if (!p_->auxiliary_registry_consensus_verified_ &&
         !all_ranks_agree_exact_ordered_byte_pairs(
-            {{"system-auxiliary-registry", p_->auxiliary_registry_.collective_contract()}}))
+            {{"system-auxiliary-registry", p_->auxiliary_registry_.collective_contract()}},
+            communicator))
       throw std::runtime_error("System auxiliary registry differs across MPI ranks");
     p_->auxiliary_registry_consensus_verified_ = true;
     return;
@@ -220,7 +240,8 @@ void System<Dim>::seal_auxiliary_providers() {
   std::exception_ptr local_error;
   try {
     candidate_registry.emplace(p_->auxiliary_registry_);
-    candidate_registry->seal();
+    pops::dynlib::invoke_with_host_exception([&] { candidate_registry->seal(); },
+                                             "System auxiliary provider seal");
     if (candidate_registry->slot_count() != 0) {
       candidate_carrier.emplace();
       for (const auto& group : candidate_registry->storage_groups()) {
@@ -237,17 +258,18 @@ void System<Dim>::seal_auxiliary_providers() {
   } catch (...) {
     local_error = std::current_exception();
   }
-  if (all_reduce_max(local_error ? 1L : 0L) != 0) {
-    if (n_ranks() == 1 && local_error)
+  if (all_reduce_max(local_error ? 1L : 0L, communicator) != 0) {
+    if (communicator.size() == 1 && local_error)
       std::rethrow_exception(local_error);
     throw std::runtime_error("System auxiliary registry preparation failed collectively");
   }
   if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{"system-auxiliary-registry", candidate_registry->collective_contract()}}))
+          {{"system-auxiliary-registry", candidate_registry->collective_contract()}}, communicator))
     throw std::runtime_error("System auxiliary registry differs across MPI ranks");
 
-  p_->auxiliary_registry_ = std::move(*candidate_registry);
-  p_->provider_carrier_ = std::move(candidate_carrier);
+  static_assert(std::is_nothrow_swappable_v<std::optional<carrier_type>>);
+  p_->auxiliary_registry_.swap_complete(*candidate_registry);
+  p_->provider_carrier_.swap(candidate_carrier);
   p_->auxiliary_ghost_transport_.reset();
   p_->auxiliary_registry_consensus_verified_ = true;
 }
@@ -694,6 +716,7 @@ template void System<kNativeDimension>::install_prepared_auxiliary_provider(
 template void System<kNativeDimension>::install_auxiliary_consumer_plan(
     runtime::system::AuxiliaryConsumerProviderPlan<kNativeDimension>);
 template void System<kNativeDimension>::seal_auxiliary_providers();
+template void System<kNativeDimension>::seal_auxiliary_providers_(const CommunicatorView&);
 template void System<kNativeDimension>::stage_auxiliary_input(const AuxiliaryComponentKey&,
                                                               const std::vector<double>&);
 template void System<kNativeDimension>::refresh_auxiliary(const AuxiliaryEvaluationPoint&);

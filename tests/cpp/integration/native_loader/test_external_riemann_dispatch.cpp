@@ -63,9 +63,12 @@ struct UserRusanov {
 };
 
 namespace user_brick {
-using Model = pops::nd::IdealGasEuler<pops::kNativeDimension>;
+struct Model : pops::nd::IdealGasEuler<pops::kNativeDimension> {
+  POPS_HD pops::Real elliptic_rhs(const State&) const { return pops::Real(0); }
+};
 }
 
+POPS_DEFINE_EMPTY_EXTERNAL_RIEMANN_PROVIDER_ROUTES(user_brick::Model);
 POPS_DEFINE_EXTERNAL_RIEMANN_BRICK(
     "my_riemann", UserRusanov, user_brick::Model,
     "test.euler-rusanov.v1",

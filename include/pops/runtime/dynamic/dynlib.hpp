@@ -11,7 +11,14 @@
 /// can resolve its `POPS_EXPORT` seams without exporting their own symbols process-wide. On Windows,
 /// the equivalent host resolution uses `__declspec(dllexport)` plus the import library (ADC-100).
 
+#include <exception>
+#include <functional>
+#include <optional>
+#include <stdexcept>
 #include <string>
+#include <string_view>
+#include <type_traits>
+#include <utility>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -82,6 +89,89 @@ inline void close(handle h) {
 /// true if @p h is a valid handle.
 inline bool valid(handle h) {
   return h != handle{};
+}
+
+/// Unique owner for one successful dynamic-library open.
+///
+/// Construct this immediately after ``open`` succeeds. Moving it into a shared owner transfers the
+/// handle only after that owner's allocation has succeeded, so no allocation path can leave two
+/// deleters responsible for the same DSO.
+class UniqueHandle final {
+ public:
+  explicit UniqueHandle(handle value) noexcept : handle_(value) {}
+  UniqueHandle(const UniqueHandle&) = delete;
+  UniqueHandle& operator=(const UniqueHandle&) = delete;
+  UniqueHandle(UniqueHandle&& other) noexcept : handle_(other.release()) {}
+  UniqueHandle& operator=(UniqueHandle&&) = delete;
+  ~UniqueHandle() { close(handle_); }
+
+  [[nodiscard]] handle get() const noexcept { return handle_; }
+  [[nodiscard]] handle release() noexcept {
+    const handle result = handle_;
+    handle_ = {};
+    return result;
+  }
+
+ private:
+  handle handle_{};
+};
+
+enum class ForeignExceptionCategory { invalid_argument, runtime_error };
+
+struct ForeignExceptionDiagnostic {
+  ForeignExceptionCategory category = ForeignExceptionCategory::runtime_error;
+  std::string message;
+};
+
+/// Copy the active foreign exception into host-owned bytes while its DSO is still resident.
+/// Standard invalid_argument retains its public category and exact message; every other standard,
+/// custom, or non-standard exception is normalized to runtime_error.
+inline ForeignExceptionDiagnostic capture_foreign_exception(std::string_view operation) {
+  try {
+    throw;
+  } catch (const std::invalid_argument& error) {
+    return {ForeignExceptionCategory::invalid_argument, error.what()};
+  } catch (const std::exception& error) {
+    return {ForeignExceptionCategory::runtime_error, error.what()};
+  } catch (...) {
+    return {ForeignExceptionCategory::runtime_error,
+            std::string(operation) + " threw a non-standard exception"};
+  }
+}
+
+[[noreturn]] inline void throw_host_exception(ForeignExceptionDiagnostic diagnostic) {
+  if (diagnostic.category == ForeignExceptionCategory::invalid_argument)
+    throw std::invalid_argument(std::move(diagnostic.message));
+  throw std::runtime_error(std::move(diagnostic.message));
+}
+
+/// Invoke code owned by a loaded DSO without allowing its exception object to escape. The original
+/// exception is destroyed when the handler exits; only then is a fresh host exception thrown.
+template <class Callback>
+auto invoke_with_host_exception(Callback&& callback, std::string_view operation)
+    -> std::invoke_result_t<Callback> {
+  using result_type = std::invoke_result_t<Callback>;
+  static_assert(!std::is_reference_v<result_type>);
+  std::optional<ForeignExceptionDiagnostic> failure;
+  if constexpr (std::is_void_v<result_type>) {
+    try {
+      std::invoke(std::forward<Callback>(callback));
+    } catch (...) {
+      failure.emplace(capture_foreign_exception(operation));
+    }
+    if (failure)
+      throw_host_exception(std::move(*failure));
+  } else {
+    std::optional<result_type> result;
+    try {
+      result.emplace(std::invoke(std::forward<Callback>(callback)));
+    } catch (...) {
+      failure.emplace(capture_foreign_exception(operation));
+    }
+    if (failure)
+      throw_host_exception(std::move(*failure));
+    return std::move(*result);
+  }
 }
 
 /// Last error message (best-effort, for diagnostics).

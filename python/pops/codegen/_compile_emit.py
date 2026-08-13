@@ -254,9 +254,10 @@ def _emit_route_manifest(symbol_name: Any) -> str:
 def _emit_auxiliary_route_registration(model: Any, *, target: str = "system") -> str:
     """Emit one DSO hook that registers, but never seals, auxiliary routes.
 
-    The host calls this hook for *every* package, then seals the one global
-    registry and only afterwards installs prepared blocks.  That ordering is
-    essential for dependencies and consumer plans spanning multiple blocks.
+    The host stages this canonical hook with *every* package, invokes all
+    registrars inside the native finalization transaction, then seals the one
+    global registry and only afterwards installs prepared blocks.  That ordering
+    is essential for dependencies spanning blocks and exact DSO-launcher rollback.
     """
     if target not in ("system", "amr_system"):
         raise ValueError("auxiliary route emission target must be 'system' or 'amr_system'")

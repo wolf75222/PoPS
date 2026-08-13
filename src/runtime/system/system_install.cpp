@@ -20,6 +20,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <numeric>
 #include <optional>
 #include <set>
 #include <stdexcept>
@@ -694,7 +695,7 @@ void System<Dim>::stage_prepared_ghost_boundary_component(
   const std::string package_identity =
       prepared_system_boundary_package_identity("ghost", block, spec);
   stage_native_package_(
-      package_identity,
+      package_identity, {},
       [this, block, component] {
         const ExecutionLane& lane = prepared_boundary_execution_lane();
         typename Impl::Species* selected = nullptr;
@@ -772,7 +773,7 @@ void System<Dim>::stage_prepared_boundary_flux_component(
   const std::string package_identity =
       prepared_system_boundary_package_identity("flux", block, component->spec());
   stage_native_package_(
-      package_identity,
+      package_identity, {},
       [this, block, component] {
         const ExecutionLane& lane = prepared_boundary_execution_lane();
         typename Impl::Species* selected = nullptr;
@@ -870,7 +871,7 @@ void System<Dim>::stage_prepared_field_boundary_component_pair(
   append_prepared_boundary_component_contract(package_contract, right);
   const std::string package_identity = std::move(package_contract).release();
   stage_native_package_(
-      package_identity,
+      package_identity, {},
       [this, block, residual, jvp] {
         const ExecutionLane& lane = prepared_boundary_execution_lane();
         typename Impl::Species* selected = nullptr;
@@ -1477,63 +1478,75 @@ void System<Dim>::register_external_riemann_package(
     authority->install_system(this, name, provider_consumer_qid, limiter, recon, time, gamma,
                               substeps, evolve, stride, positivity_floor, weno_epsilon);
   };
-  p_->pending_native_packages_.reserve(p_->pending_native_packages_.size() + 1);
-  const auto registry_before = p_->auxiliary_registry_;
-  const bool consensus_before = p_->auxiliary_registry_consensus_verified_;
-  try {
+  std::function<void()> route_registrar = [this, authority] {
     authority->register_system_routes(*this);
-    stage_prepared_native_package(std::move(identity), std::move(installer), authority);
-  } catch (...) {
-    p_->auxiliary_registry_ = registry_before;
-    p_->auxiliary_registry_consensus_verified_ = consensus_before;
-    throw;
-  }
+  };
+  stage_prepared_native_package(std::move(identity), std::move(route_registrar),
+                                std::move(installer), authority);
 }
 
 template <int Dim>
 void System<Dim>::stage_prepared_native_package(std::string identity,
+                                                std::function<void()> route_registrar,
                                                 std::function<void()> installer,
                                                 std::shared_ptr<void> package_lifetime) {
-  stage_native_package_(std::move(identity), std::move(installer), std::move(package_lifetime),
-                        NativePackageKind::generic);
+  stage_native_package_(std::move(identity), std::move(route_registrar), std::move(installer),
+                        std::move(package_lifetime), NativePackageKind::generic);
 }
 
 template <int Dim>
-void System<Dim>::stage_native_package_(std::string identity, std::function<void()> installer,
+void System<Dim>::stage_native_package_(std::string identity, std::function<void()> route_registrar,
+                                        std::function<void()> installer,
                                         std::shared_ptr<void> package_lifetime,
                                         NativePackageKind kind) {
   require_assembling(p_->lifecycle_, "stage_prepared_native_package");
-  if (identity.empty() || !installer || !package_lifetime)
+  if (identity.empty() || !installer || !package_lifetime ||
+      (kind == NativePackageKind::generic && !route_registrar))
     throw std::invalid_argument(
-        "System native package staging requires an identity, installer, and DSO lifetime");
+        "System native package staging requires an identity, canonical provider registrar, "
+        "installer, and DSO lifetime");
   for (const auto& package : p_->pending_native_packages_)
     if (package.identity == identity)
       throw std::invalid_argument("System native package identity is registered more than once");
   for (const auto& package : p_->installed_native_packages_)
     if (package.identity == identity)
       throw std::invalid_argument("System native package identity was already finalized");
-  p_->pending_native_packages_.push_back(
-      {std::move(identity), std::move(installer), std::move(package_lifetime), kind});
+  p_->pending_native_packages_.push_back({std::move(package_lifetime), std::move(identity),
+                                          std::move(route_registrar), std::move(installer), kind});
 }
 
 template <int Dim>
 void System<Dim>::finalize_native_packages() {
   require_assembling(p_->lifecycle_, "finalize_native_packages");
+  if (native_route_registrar_active_)
+    throw std::logic_error("System native package finalization cannot be nested in a registrar");
   const ExecutionLane& lane = prepared_boundary_execution_lane();
-  if (p_->pending_native_packages_.empty())
-    throw std::logic_error(
-        "System native package finalization requires at least one staged package");
-
   std::vector<typename Impl::PendingNativePackage> packages =
       std::move(p_->pending_native_packages_);
   p_->pending_native_packages_.clear();
-  std::sort(packages.begin(), packages.end(),
-            [](const auto& left, const auto& right) { return left.identity < right.identity; });
-
+  std::vector<std::size_t> package_order;
   std::vector<ExactOrderedBytePair> exact_packages;
-  exact_packages.reserve(packages.size());
-  for (const auto& package : packages)
-    exact_packages.emplace_back("system-native-package", package.identity);
+  std::exception_ptr package_preparation_error;
+  try {
+    if (packages.empty())
+      throw std::logic_error(
+          "System native package finalization requires at least one staged package");
+    package_order.resize(packages.size());
+    std::iota(package_order.begin(), package_order.end(), std::size_t{0});
+    std::sort(package_order.begin(), package_order.end(), [&](std::size_t left, std::size_t right) {
+      return packages[left].identity < packages[right].identity;
+    });
+    exact_packages.reserve(packages.size());
+    for (const std::size_t index : package_order)
+      exact_packages.emplace_back("system-native-package", packages[index].identity);
+  } catch (...) {
+    package_preparation_error = std::current_exception();
+  }
+  if (all_reduce_max(package_preparation_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && package_preparation_error)
+      std::rethrow_exception(package_preparation_error);
+    throw std::runtime_error("System native package identity preparation failed collectively");
+  }
   if (!all_ranks_agree_exact_ordered_byte_pairs(exact_packages, lane))
     throw std::runtime_error("System staged native packages differ across MPI ranks");
 
@@ -1567,13 +1580,34 @@ void System<Dim>::finalize_native_packages() {
 
   std::exception_ptr failure;
   try {
-    // The sole global seal happens after every typed route registration and before any block
-    // constructor captures a provider pointer or local consumer-plan image.
-    seal_auxiliary_providers();
-    for (const auto& package : packages) {
+    // Registrars mutate only the snapshotted candidate image.  Complete each rank-local registrar
+    // phase collectively before the sole global seal validates and publishes the aggregate graph.
+    for (const std::size_t index : package_order) {
+      const auto& package = packages[index];
       std::exception_ptr local_error;
       try {
-        package.install();
+        native_route_registrar_active_ = true;
+        if (package.register_routes)
+          pops::dynlib::invoke_with_host_exception(package.register_routes,
+                                                   "pops_register_provider_routes");
+        native_route_registrar_active_ = false;
+      } catch (...) {
+        native_route_registrar_active_ = false;
+        local_error = std::current_exception();
+      }
+      if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+        if (lane.size() == 1 && local_error)
+          std::rethrow_exception(local_error);
+        throw std::runtime_error("System native package route registrar failed collectively: " +
+                                 package.identity);
+      }
+    }
+    seal_auxiliary_providers_(lane.communicator());
+    for (const std::size_t index : package_order) {
+      const auto& package = packages[index];
+      std::exception_ptr local_error;
+      try {
+        pops::dynlib::invoke_with_host_exception(package.install, "pops_install_native");
       } catch (...) {
         local_error = std::current_exception();
       }
@@ -1585,7 +1619,14 @@ void System<Dim>::finalize_native_packages() {
       }
     }
   } catch (...) {
-    failure = std::current_exception();
+    // Sealing can copy DSO-owned launcher managers. Normalize even indirect package exceptions
+    // while every package lifetime is still retained by ``packages``.
+    try {
+      const auto diagnostic = pops::dynlib::capture_foreign_exception("native finalization");
+      pops::dynlib::throw_host_exception(diagnostic);
+    } catch (...) {
+      failure = std::current_exception();
+    }
   }
 
   const long failed = failure ? 1L : 0L;
@@ -2008,6 +2049,7 @@ template void System<kNativeDimension>::register_external_riemann_package(
     const std::string&, const std::string&, const std::string&, const std::string&,
     const std::string&, double, int, bool, int, double, double);
 template void System<kNativeDimension>::stage_prepared_native_package(std::string,
+                                                                      std::function<void()>,
                                                                       std::function<void()>,
                                                                       std::shared_ptr<void>);
 template void System<kNativeDimension>::finalize_native_packages();

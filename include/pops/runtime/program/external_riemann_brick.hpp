@@ -76,6 +76,10 @@ inline constexpr const char* kExternalRiemannBrickModelIdentitySymbol = "pops_br
 inline constexpr const char* kExternalRiemannBrickProviderCountSymbol = "pops_brick_nproviders";
 inline constexpr const char* kExternalRiemannBrickKokkosBackendSymbol = "pops_brick_kokkos_backend";
 inline constexpr const char* kExternalRiemannBrickKokkosVersionSymbol = "pops_brick_kokkos_version";
+inline constexpr const char* kExternalRiemannBrickSystemRoutesSymbol =
+    "pops_register_provider_routes";
+inline constexpr const char* kExternalRiemannBrickAmrRoutesSymbol =
+    "pops_register_provider_routes_amr";
 
 namespace detail {
 
@@ -491,6 +495,7 @@ class ExternalBrickHandle {
     if (!dynlib::valid(handle_))
       throw std::runtime_error("external riemann brick: cannot dlopen '" + so_path +
                                "': " + dynlib::last_error());
+    std::exception_ptr preflight_error;
     try {
       auto manifest_fn =
           reinterpret_cast<const char* (*)()>(dynlib::sym(handle_, "pops_brick_manifest"));
@@ -498,7 +503,9 @@ class ExternalBrickHandle {
         throw std::runtime_error(
             "external riemann brick '" + so_path +
             "' does not export pops_brick_manifest(); it is not a PoPS brick .so");
-      const std::vector<BrickManifestEntry> entries = parse_manifest_json(manifest_fn());
+      const char* raw_manifest = dynlib::invoke_with_host_exception(
+          [manifest_fn] { return manifest_fn(); }, "pops_brick_manifest");
+      const std::vector<BrickManifestEntry> entries = parse_manifest_json(raw_manifest);
       const auto selected = std::find_if(entries.begin(), entries.end(),
                                          [&](const auto& entry) { return entry.id == id_; });
       if (selected == entries.end())
@@ -518,6 +525,8 @@ class ExternalBrickHandle {
       require_abi_symbol(*selected, kExternalRiemannBrickProviderCountSymbol);
       require_abi_symbol(*selected, kExternalRiemannBrickKokkosBackendSymbol);
       require_abi_symbol(*selected, kExternalRiemannBrickKokkosVersionSymbol);
+      require_abi_symbol(*selected, kExternalRiemannBrickSystemRoutesSymbol);
+      require_abi_symbol(*selected, kExternalRiemannBrickAmrRoutesSymbol);
       auto version_fn =
           reinterpret_cast<int (*)()>(dynlib::sym(handle_, kExternalRiemannBrickAbiVersionSymbol));
       auto abi_key_fn = reinterpret_cast<const char* (*)()>(
@@ -529,26 +538,29 @@ class ExternalBrickHandle {
             "external riemann brick '" + id_ +
             "' uses the legacy unversioned residual ABI; rebuild it with the current "
             "POPS_DEFINE_EXTERNAL_RIEMANN_BRICK macro");
-      const int version = version_fn();
-      const char* abi_key = abi_key_fn();
+      const int version = dynlib::invoke_with_host_exception([version_fn] { return version_fn(); },
+                                                             kExternalRiemannBrickAbiVersionSymbol);
+      const char* abi_key = dynlib::invoke_with_host_exception(
+          [abi_key_fn] { return abi_key_fn(); }, kExternalRiemannBrickAbiKeySymbol);
       if (version != kExternalRiemannBrickAbiVersion || abi_key == nullptr ||
           std::string(abi_key) != kExternalRiemannBrickAbiKey)
         throw std::runtime_error("external riemann brick '" + id_ +
                                  "' has incompatible residual ABI version/key; "
                                  "rebuild it with the current PoPS headers");
-      dimension_ = dimension_fn();
-      if (dimension_ != kNativeDimension)
+      const int candidate_dimension = dynlib::invoke_with_host_exception(
+          [dimension_fn] { return dimension_fn(); }, kExternalRiemannBrickDimensionSymbol);
+      if (candidate_dimension != kNativeDimension)
         throw std::runtime_error("external riemann brick '" + id_ +
                                  "' targets a different compile-time spatial dimension");
-      residual_ =
+      const auto candidate_residual =
           reinterpret_cast<ResidualFn>(dynlib::sym(handle_, kExternalRiemannBrickResidualSymbol));
-      if (residual_ == nullptr)
+      if (candidate_residual == nullptr)
         throw std::runtime_error("external riemann brick '" + id_ +
                                  "' declares but does not export " +
                                  std::string(kExternalRiemannBrickResidualSymbol));
-      install_system_ = reinterpret_cast<InstallSystemFn>(
+      const auto candidate_install_system = reinterpret_cast<InstallSystemFn>(
           dynlib::sym(handle_, kExternalRiemannBrickInstallSystemSymbol));
-      install_amr_ = reinterpret_cast<InstallAmrFn>(
+      const auto candidate_install_amr = reinterpret_cast<InstallAmrFn>(
           dynlib::sym(handle_, kExternalRiemannBrickInstallAmrSymbol));
       auto nvars_fn = reinterpret_cast<int (*)()>(dynlib::sym(handle_, "pops_brick_nvars"));
       auto provider_count_fn = reinterpret_cast<int (*)()>(
@@ -559,47 +571,70 @@ class ExternalBrickHandle {
           dynlib::sym(handle_, kExternalRiemannBrickKokkosBackendSymbol));
       auto kokkos_version_fn = reinterpret_cast<int (*)()>(
           dynlib::sym(handle_, kExternalRiemannBrickKokkosVersionSymbol));
-      if (install_system_ == nullptr || install_amr_ == nullptr || nvars_fn == nullptr ||
-          provider_count_fn == nullptr || model_identity_fn == nullptr ||
+      if (candidate_install_system == nullptr || candidate_install_amr == nullptr ||
+          nvars_fn == nullptr || provider_count_fn == nullptr || model_identity_fn == nullptr ||
           kokkos_backend_fn == nullptr || kokkos_version_fn == nullptr)
         throw std::runtime_error("external riemann brick '" + id_ +
                                  "' is missing a declared native installer/count symbol");
-      nvars_ = nvars_fn();
-      provider_count_ = provider_count_fn();
-      register_system_routes_symbol_ = dynlib::sym(handle_, "pops_register_provider_routes");
-      register_amr_routes_symbol_ = dynlib::sym(handle_, "pops_register_provider_routes_amr");
-      if (provider_count_ > 0 &&
-          (register_system_routes_symbol_ == nullptr || register_amr_routes_symbol_ == nullptr))
-        throw std::runtime_error(
-            "external riemann brick '" + id_ +
-            "' consumes providers but does not export pops_register_provider_routes and "
-            "pops_register_provider_routes_amr");
-      const char* model_identity = model_identity_fn();
+      const int candidate_nvars =
+          dynlib::invoke_with_host_exception([nvars_fn] { return nvars_fn(); }, "pops_brick_nvars");
+      const int candidate_provider_count =
+          dynlib::invoke_with_host_exception([provider_count_fn] { return provider_count_fn(); },
+                                             kExternalRiemannBrickProviderCountSymbol);
+      void* const candidate_register_system_routes =
+          dynlib::sym(handle_, kExternalRiemannBrickSystemRoutesSymbol);
+      void* const candidate_register_amr_routes =
+          dynlib::sym(handle_, kExternalRiemannBrickAmrRoutesSymbol);
+      if (candidate_register_system_routes == nullptr || candidate_register_amr_routes == nullptr)
+        throw std::runtime_error("external riemann brick '" + id_ +
+                                 "' does not export canonical pops_register_provider_routes and "
+                                 "pops_register_provider_routes_amr");
+      const char* model_identity =
+          dynlib::invoke_with_host_exception([model_identity_fn] { return model_identity_fn(); },
+                                             kExternalRiemannBrickModelIdentitySymbol);
       if (model_identity == nullptr || *model_identity == '\0')
         throw std::runtime_error("external riemann brick '" + id_ +
                                  "' exports an empty model identity");
-      if (nvars_ != expected_nvars || provider_count_ != expected_provider_count)
+      if (candidate_nvars != expected_nvars || candidate_provider_count != expected_provider_count)
         throw std::runtime_error("external riemann brick '" + id_ +
                                  "' model shape disagrees with the compiled model descriptor");
       if (model_identity != expected_model_identity)
         throw std::runtime_error("external riemann brick '" + id_ +
                                  "' targets a different compiled model identity");
-      const char* brick_backend = kokkos_backend_fn();
+      const char* brick_backend =
+          dynlib::invoke_with_host_exception([kokkos_backend_fn] { return kokkos_backend_fn(); },
+                                             kExternalRiemannBrickKokkosBackendSymbol);
       const char* host_backend = detail::external_kokkos_backend_identity();
       const int host_kokkos_version = detail::external_kokkos_version_identity();
+      const int brick_kokkos_version =
+          dynlib::invoke_with_host_exception([kokkos_version_fn] { return kokkos_version_fn(); },
+                                             kExternalRiemannBrickKokkosVersionSymbol);
       if (brick_backend == nullptr || std::string(brick_backend) != host_backend ||
-          kokkos_version_fn() != host_kokkos_version)
+          brick_kokkos_version != host_kokkos_version)
         throw std::runtime_error("external riemann brick '" + id_ +
                                  "' was built for a different Kokkos backend/version");
 
-      // Registration happens only after the category-specific ABI is authenticated.  A rejected
-      // library can therefore never publish an unusable external_cpp descriptor in this image.
-      BrickRegistry::instance().register_brick(*selected);
+      // Prepare all handle state, including the only allocating member, before publishing the
+      // descriptor. BrickRegistry itself publishes one complete candidate by noexcept swaps.
       requirements_ = selected->requirements;
+      residual_ = candidate_residual;
+      install_system_ = candidate_install_system;
+      install_amr_ = candidate_install_amr;
+      dimension_ = candidate_dimension;
+      nvars_ = candidate_nvars;
+      provider_count_ = candidate_provider_count;
+      register_system_routes_symbol_ = candidate_register_system_routes;
+      register_amr_routes_symbol_ = candidate_register_amr_routes;
+      BrickRegistry::instance().register_brick(*selected);
     } catch (...) {
+      preflight_error = std::current_exception();
+    }
+    if (preflight_error) {
+      // Every DSO callback above is translated before this point. Close only after its original
+      // exception object has been destroyed at handler exit, then propagate the host-owned copy.
       dynlib::close(handle_);
       handle_ = nullptr;
-      throw;
+      std::rethrow_exception(preflight_error);
     }
   }
 
@@ -617,18 +652,26 @@ class ExternalBrickHandle {
                       const std::string& provider_consumer_qid, const std::string& limiter,
                       const std::string& recon, const std::string& time, double gamma, int substeps,
                       bool evolve, int stride, double positivity_floor, double weno_epsilon) const {
-    install_system_(system, name.c_str(), provider_consumer_qid.c_str(), limiter.c_str(),
-                    recon.c_str(), time.c_str(), gamma, substeps, evolve ? 1 : 0, stride,
-                    positivity_floor, weno_epsilon);
+    dynlib::invoke_with_host_exception(
+        [&] {
+          install_system_(system, name.c_str(), provider_consumer_qid.c_str(), limiter.c_str(),
+                          recon.c_str(), time.c_str(), gamma, substeps, evolve ? 1 : 0, stride,
+                          positivity_floor, weno_epsilon);
+        },
+        kExternalRiemannBrickInstallSystemSymbol);
   }
 
   void install_amr(void* system, const std::string& name, const std::string& provider_consumer_qid,
                    const std::string& limiter, const std::string& recon, const std::string& time,
                    double gamma, int substeps, int stride, double positivity_floor,
                    double weno_epsilon) const {
-    install_amr_(system, name.c_str(), provider_consumer_qid.c_str(), limiter.c_str(),
-                 recon.c_str(), time.c_str(), gamma, substeps, stride, positivity_floor,
-                 weno_epsilon);
+    dynlib::invoke_with_host_exception(
+        [&] {
+          install_amr_(system, name.c_str(), provider_consumer_qid.c_str(), limiter.c_str(),
+                       recon.c_str(), time.c_str(), gamma, substeps, stride, positivity_floor,
+                       weno_epsilon);
+        },
+        kExternalRiemannBrickInstallAmrSymbol);
   }
 
   // The CSV of model capabilities the brick requires (from its manifest); "" when none.
@@ -642,19 +685,19 @@ class ExternalBrickHandle {
   template <int Dim>
   void register_system_routes(System<Dim>& system) const {
     static_assert(Dim == kNativeDimension);
-    if (register_system_routes_symbol_ == nullptr)
-      return;
     using RegisterSystemRoutesFn = void (*)(System<Dim>*);
-    reinterpret_cast<RegisterSystemRoutesFn>(register_system_routes_symbol_)(&system);
+    const auto registrar = reinterpret_cast<RegisterSystemRoutesFn>(register_system_routes_symbol_);
+    dynlib::invoke_with_host_exception([&] { registrar(&system); },
+                                       kExternalRiemannBrickSystemRoutesSymbol);
   }
 
   template <int Dim>
   void register_amr_routes(AmrSystem<Dim>& system) const {
     static_assert(Dim == kNativeDimension);
-    if (register_amr_routes_symbol_ == nullptr)
-      return;
     using RegisterAmrRoutesFn = void (*)(AmrSystem<Dim>*);
-    reinterpret_cast<RegisterAmrRoutesFn>(register_amr_routes_symbol_)(&system);
+    const auto registrar = reinterpret_cast<RegisterAmrRoutesFn>(register_amr_routes_symbol_);
+    dynlib::invoke_with_host_exception([&] { registrar(&system); },
+                                       kExternalRiemannBrickAmrRoutesSymbol);
   }
 
  private:
@@ -802,6 +845,7 @@ class ExternalBrickHandle {
 //                const pops::FaceContext&) const;
 //   };
 //   using Model = pops::nd::IdealGasEuler<pops::kNativeDimension>;
+//   POPS_DEFINE_EMPTY_EXTERNAL_RIEMANN_PROVIDER_ROUTES(Model);  // only when provider_count == 0
 //   POPS_DEFINE_EXTERNAL_RIEMANN_BRICK("my_riemann", MyRiemann, Model,
 //                                     "<compiled-model-hash>", "pressure,wave_speeds");
 //   POPS_DEFINE_BRICK_MANIFEST();  // exports the manifest reader (once per .so)
@@ -818,11 +862,28 @@ class ExternalBrickHandle {
 // compile time: the flux and native rank are STATIC template arguments, never per-cell or runtime
 // dimension lookups. pops_brick_nvars / pops_brick_nproviders let the host validate its exact
 // state and qualified-provider carrier before an installer can publish a block.
+// Both canonical System/AMR provider registrar symbols are mandatory. Zero-provider models emit
+// exact empty hooks with POPS_DEFINE_EMPTY_EXTERNAL_RIEMANN_PROVIDER_ROUTES; provider-consuming
+// artifacts emit their real typed routes and must not use the empty-hook macro.
 //
 // ABI WARNING: the brick `.so` MUST be compiled against the SAME Kokkos backend and version (and the
 // same pops headers) as the host binary that dlopens it -- the residual runs the host's Kokkos
 // runtime. Installation must therefore pass through the authenticated component loader, which
 // validates the exact component manifest and platform/ABI evidence before publishing the handle.
+#define POPS_DEFINE_EMPTY_EXTERNAL_RIEMANN_PROVIDER_ROUTES(Model)                            \
+  static_assert(::pops::provider_count_for<Model, ::pops::kNativeDimension>() == 0,          \
+                "empty external Riemann provider hooks require a zero-provider model");      \
+  extern "C" void pops_register_provider_routes(                                             \
+      ::pops::System<::pops::kNativeDimension>* system) {                                    \
+    if (system == nullptr)                                                                   \
+      throw std::invalid_argument("external riemann brick: null System provider registrar"); \
+  }                                                                                          \
+  extern "C" void pops_register_provider_routes_amr(                                         \
+      ::pops::AmrSystem<::pops::kNativeDimension>* system) {                                 \
+    if (system == nullptr)                                                                   \
+      throw std::invalid_argument("external riemann brick: null AMR provider registrar");    \
+  }
+
 #define POPS_DEFINE_EXTERNAL_RIEMANN_BRICK(id, Flux, Model, model_identity, reqs_csv)              \
   static_assert(Model::dimension == ::pops::kNativeDimension,                                      \
                 "external Riemann model must match the artifact native dimension");                \
@@ -835,7 +896,8 @@ class ExternalBrickHandle {
          "pops_external_riemann_abi_key,pops_external_riemann_dimension,"                          \
          "pops_brick_residual_v4,pops_brick_install_system_v4,pops_brick_install_amr_v4,"          \
          "pops_brick_model_identity,pops_brick_kokkos_backend,"                                    \
-         "pops_brick_kokkos_version"});                                                            \
+         "pops_brick_kokkos_version,pops_register_provider_routes,"                                \
+         "pops_register_provider_routes_amr"});                                                    \
     return true;                                                                                   \
   }();                                                                                             \
   extern "C" int pops_brick_nvars() {                                                              \

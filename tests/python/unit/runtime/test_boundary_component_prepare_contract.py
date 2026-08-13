@@ -207,7 +207,8 @@ def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
             ]
 
         if adaptive:
-            def _prepare_boundary_execution_lane(self, execution_data):
+            def _prepare_boundary_execution_lane(self, communicator_authority, execution_data):
+                assert communicator_authority is None
                 assert execution_data == component_execution_data(execution_context)
                 self.events.append("boundary-lane")
         else:
