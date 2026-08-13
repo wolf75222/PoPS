@@ -20,6 +20,13 @@ project(PoPS
 # Shared, exhaustive API/ABI/SDK/test-only header contract. Both the source package install and the
 # SKBUILD wheel consume it; every installed category enters the native header signature.
 include(cmake/PopsPublicHeaders.cmake)
+pops_compute_header_signature(POPS_NATIVE_HEADER_SIGNATURE)
+string(LENGTH "${POPS_NATIVE_HEADER_SIGNATURE}" _pops_native_header_signature_length)
+if(NOT POPS_NATIVE_HEADER_SIGNATURE MATCHES "^[0-9a-f]+$"
+   OR NOT _pops_native_header_signature_length EQUAL 64)
+  message(FATAL_ERROR
+    "PoPS native header signature must match ^[0-9a-f]{64}$")
+endif()
 
 # One exact spatial rank is compiled into every PoPS native module and every generated artifact.
 # There is no runtime dimension switch and no fixed-rank padded representation.  The caller must
