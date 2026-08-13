@@ -42,6 +42,7 @@ class AMRProgramSupportContext:
     frozen_hierarchy: bool
     shared_block_interfaces: bool
     field_routes_validated: bool
+    topology_rematerializer_validated: bool = False
 
     def __post_init__(self) -> None:
         if type(self.hierarchy_level_count) is not int:
@@ -50,6 +51,7 @@ class AMRProgramSupportContext:
             raise ValueError("AMRProgramSupportContext.hierarchy_level_count must be positive")
         for name in (
             "frozen_hierarchy", "shared_block_interfaces", "field_routes_validated",
+            "topology_rematerializer_validated",
         ):
             if type(getattr(self, name)) is not bool:
                 raise TypeError("AMRProgramSupportContext.%s must be bool" % name)
@@ -153,6 +155,12 @@ DEFERRED_GROUPS: dict = {
         "ir_ops": frozenset(),
         "header_methods": frozenset(),
     },
+    "schedule_field_hold": {
+        "issue": None,
+        "op_source": "program_emit_schedule field Hold with retained ProviderPack",
+        "ir_ops": frozenset(),
+        "header_methods": frozenset(),
+    },
     "schedule_field_skip_unprepared": {
         "issue": None,
         "status": "pending:initial_provider_pack",
@@ -170,7 +178,7 @@ DEFERRED_GROUPS: dict = {
     "schedule_cache": {
         "issue": None,
         "status": "pending:checkpointed_hierarchy_cache",
-        "op_source": "program_emit_schedule cache_* actions and checkpointed field Hold",
+        "op_source": "program_emit_schedule scratch cache_* actions",
         "ir_ops": frozenset(),  # scheduling is an attr on an op node, not a distinct IR op
         "header_methods": frozenset(),
     },
@@ -262,7 +270,9 @@ def _contextual_group_status(
     status = _group_status(group)
     if status == "green" and name == "named_flux" and context.shared_block_interfaces:
         return "pending:shared_block_interfaces"
-    if status == "green" and name == "schedule_field_skip" and not context.frozen_hierarchy:
+    if status == "green" and name in {"schedule_field_hold", "schedule_field_skip"} \
+            and not context.frozen_hierarchy \
+            and not context.topology_rematerializer_validated:
         return "pending:dynamic_hierarchy_provider_pack"
     return status
 
@@ -344,9 +354,9 @@ def _schedule_groups(
     """Classify one validated scheduled value into exact due/domain/policy facets.
 
     Cache-free cadence, qualified domains, and off-cadence actions are deliberately separate so a
-    green due primitive cannot overclaim a pending persistence policy. Every emitted cache action
+    green due primitive cannot overclaim a pending persistence policy. Every scratch cache action
     remains unavailable until the cache participates in hierarchy checkpoint/regrid state. Field
-    ``Hold`` belongs to that contract even though raw aux storage is intentionally omitted. Scratch
+    ``Hold`` retains its accepted ProviderPack and is a distinct capability. Scratch
     ``Skip`` is not a cache hit: it requires prepared accepted scratch state and rollback. Field
     ``Skip`` is honest only on a resolved frozen hierarchy where the ProviderPack remains retained,
     and only a root-region AcceptedStep Every/AtStart proves that the first invocation prepares that
@@ -393,10 +403,13 @@ def _schedule_groups(
         ScheduleAction.ACCUMULATE_DT,
         ScheduleAction.RESTORE,
     }
-    if any(action in cache_actions for action in actions):
+    field_hold = is_aux and {ScheduleAction.STORE, ScheduleAction.RESTORE}.issubset(set(actions))
+    if any(action in cache_actions for action in actions) and not field_hold:
         return {"schedule_cache"}
 
     groups: set[str] = set()
+    if field_hold:
+        groups.add("schedule_field_hold")
     if lowering.due.kind is not ScheduleDueKind.ALWAYS:
         groups.add("schedule_due")
     if lowering.domain.timeline is not ScheduleTimeline.ACCEPTED_STEP:

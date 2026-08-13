@@ -48,6 +48,11 @@ def _field_provider_contract_rows(values):
     return [row[:6] + row[9:] for row in rows]
 
 
+def _valid_field_recompute_dt(dt, accepted_step):
+    """Accept the recorded dt, including only the honest initial accepted-point zero."""
+    return math.isfinite(dt) and dt >= 0.0 and (dt > 0.0 or accepted_step == 0)
+
+
 def restart_topology_image(sim):
     """Return the compact identity of one accepted AMR hierarchy."""
     levels = int(sim.n_levels())
@@ -394,8 +399,7 @@ def validate_regridded_contract(sim, payload, receipt):
             or row[6] != "pops.amr.restart-regrid.accepted"
             or row[7] != str(accepted_step)
             or row[8:14] != ["0", "0", "0", "0", "0", "1"]
-            or not math.isfinite(dt)
-            or dt <= 0.0
+            or not _valid_field_recompute_dt(dt, accepted_step)
             or time_bits != accepted_time_bits
         ):
             raise ValueError(

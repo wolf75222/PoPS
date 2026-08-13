@@ -3043,7 +3043,14 @@ struct AmrSystem<Dim>::Impl {
   auxiliary_registry_type auxiliary_registry;
   std::map<std::string, std::vector<double>> staged_auxiliary_inputs;
   std::vector<std::string> dirty_auxiliary_providers;
-  bool restart_regrid_auxiliary_invalidation_pending = false;
+  bool topology_regrid_auxiliary_invalidation_pending = false;
+  std::optional<runtime::multiblock::BoundaryEvaluationPoint>
+      active_topology_rematerialization_point;
+  std::uint64_t last_topology_rematerialization_epoch = std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t last_topology_rematerialization_generation =
+      std::numeric_limits<std::uint64_t>::max();
+  std::vector<std::vector<std::string>> last_topology_rematerialization_witness;
+  AmrSystem<Dim>* facade = nullptr;
   bool auxiliary_registry_consensus_verified = false;
   std::vector<GlobalDtBound> dt_bounds;
   double accepted_time = 0.0;
@@ -3093,6 +3100,10 @@ struct AmrSystem<Dim>::Impl {
     std::map<std::string, std::vector<field_type>> field_potentials;
     std::set<std::string> field_plan_slots;
     std::vector<std::string> dirty_auxiliary_providers;
+    std::uint64_t last_topology_rematerialization_epoch = std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t last_topology_rematerialization_generation =
+        std::numeric_limits<std::uint64_t>::max();
+    std::vector<std::vector<std::string>> last_topology_rematerialization_witness;
     runtime::amr::PersistentTaggingState<Dim> tagging_state;
     std::set<std::pair<std::string, int>> bootstrap_materialized_actions;
     bool automatic_bootstrap_complete = false;
@@ -3119,12 +3130,19 @@ struct AmrSystem<Dim>::Impl {
           program_accepted_revision(owner.program_accepted_revision),
           program_accepted_bytes_runtime_owned(owner.program_accepted_bytes_runtime_owned),
           dirty_auxiliary_providers(owner.dirty_auxiliary_providers),
+          last_topology_rematerialization_epoch(owner.last_topology_rematerialization_epoch),
+          last_topology_rematerialization_generation(
+              owner.last_topology_rematerialization_generation),
+          last_topology_rematerialization_witness(owner.last_topology_rematerialization_witness),
           tagging_state(owner.tagging_state),
           bootstrap_materialized_actions(owner.bootstrap_materialized_actions),
           automatic_bootstrap_complete(owner.automatic_bootstrap_complete) {
       if (!owner.active_field_slot.empty())
         throw std::logic_error(
             "AmrSystem cannot snapshot an unconsumed exact field solve candidate");
+      if (owner.active_topology_rematerialization_point)
+        throw std::logic_error(
+            "AmrSystem cannot snapshot an active topology field rematerialization");
       for (const auto& [slot, plan] : owner.field_plans) {
         field_plan_slots.insert(slot);
         if (plan.accepted_potential.empty())
@@ -3159,6 +3177,11 @@ struct AmrSystem<Dim>::Impl {
       std::shared_ptr<const provider_registry_snapshot_type> pending_provider_registry_restore;
       std::vector<PreparedFieldRestore> fields;
       std::vector<std::string> dirty_auxiliary_providers;
+      std::uint64_t last_topology_rematerialization_epoch =
+          std::numeric_limits<std::uint64_t>::max();
+      std::uint64_t last_topology_rematerialization_generation =
+          std::numeric_limits<std::uint64_t>::max();
+      std::vector<std::vector<std::string>> last_topology_rematerialization_witness;
       runtime::amr::PersistentTaggingState<Dim> tagging_state;
       std::set<std::pair<std::string, int>> bootstrap_materialized_actions;
       bool automatic_bootstrap_complete = false;
@@ -3182,6 +3205,11 @@ struct AmrSystem<Dim>::Impl {
             pending_provider_restore(snapshot.provider_storage),
             pending_provider_registry_restore(snapshot.provider_registries),
             dirty_auxiliary_providers(snapshot.dirty_auxiliary_providers),
+            last_topology_rematerialization_epoch(snapshot.last_topology_rematerialization_epoch),
+            last_topology_rematerialization_generation(
+                snapshot.last_topology_rematerialization_generation),
+            last_topology_rematerialization_witness(
+                snapshot.last_topology_rematerialization_witness),
             tagging_state(snapshot.tagging_state),
             bootstrap_materialized_actions(snapshot.bootstrap_materialized_actions),
             automatic_bootstrap_complete(snapshot.automatic_bootstrap_complete),
@@ -3269,6 +3297,8 @@ struct AmrSystem<Dim>::Impl {
       static_assert(std::is_nothrow_swappable_v<decltype(owner.pending_provider_restore)>);
       static_assert(std::is_nothrow_swappable_v<decltype(owner.pending_provider_registry_restore)>);
       static_assert(std::is_nothrow_swappable_v<decltype(owner.dirty_auxiliary_providers)>);
+      static_assert(
+          std::is_nothrow_swappable_v<decltype(owner.last_topology_rematerialization_witness)>);
       static_assert(std::is_nothrow_swappable_v<std::vector<std::unique_ptr<field_type>>>);
       static_assert(std::is_nothrow_swappable_v<decltype(owner.active_field_slot)>);
       if (!prepared.program_restore)
@@ -3293,6 +3323,11 @@ struct AmrSystem<Dim>::Impl {
       owner.pending_provider_restore.swap(prepared.pending_provider_restore);
       owner.pending_provider_registry_restore.swap(prepared.pending_provider_registry_restore);
       owner.dirty_auxiliary_providers.swap(prepared.dirty_auxiliary_providers);
+      owner.last_topology_rematerialization_epoch = prepared.last_topology_rematerialization_epoch;
+      owner.last_topology_rematerialization_generation =
+          prepared.last_topology_rematerialization_generation;
+      owner.last_topology_rematerialization_witness.swap(
+          prepared.last_topology_rematerialization_witness);
       std::swap(owner.tagging_state, prepared.tagging_state);
       owner.bootstrap_materialized_actions.swap(prepared.bootstrap_materialized_actions);
       owner.automatic_bootstrap_complete = prepared.automatic_bootstrap_complete;
@@ -5981,7 +6016,7 @@ struct AmrSystem<Dim>::Impl {
               copy_valid_field(*source, group);
               continue;
             }
-            if (!restart_regrid_auxiliary_invalidation_pending)
+            if (!topology_regrid_auxiliary_invalidation_pending)
               throw std::invalid_argument(
                   "AMR live auxiliary image differs from the refreshed exact level layout");
           }
@@ -6730,6 +6765,10 @@ struct AmrSystem<Dim>::Impl {
     prepared_hierarchy.swap(candidate);
     prepared_program_block_map = std::move(block_map_candidate);
     program_flux_expression_budget = std::move(flux_budget_candidate);
+    // AcceptedSnapshot rollback images are layout-exact one-shot authorities.  Once the restored
+    // graph has copied them into its new storage, retaining the detached image would let a later
+    // unrelated topology publication inject stale values into a different layout.
+    pending_provider_restore.reset();
     pending_provider_registry_restore.reset();
     for (auto& [slot, plan] : field_plans) {
       (void)slot;
@@ -6738,14 +6777,14 @@ struct AmrSystem<Dim>::Impl {
     active_field_slot.clear();
   }
 
-  void invalidate_auxiliary_after_restart_regrid() {
+  void invalidate_auxiliary_after_topology_regrid(std::string_view reason) {
     if (!prepared_hierarchy || !prepared_hierarchy->lane ||
         prepared_hierarchy->auxiliary_registries.size() !=
             prepared_hierarchy->provider_storage.size() ||
         prepared_hierarchy->provider_candidate_storage.size() !=
             prepared_hierarchy->provider_storage.size())
       throw std::logic_error(
-          "AMR restart regrid auxiliary invalidation lacks its prepared hierarchy authority");
+          "AMR topology regrid auxiliary invalidation lacks its prepared hierarchy authority");
     const ExecutionLane& lane = *prepared_hierarchy->lane;
     std::vector<std::string> dirty;
     std::string contract;
@@ -6754,9 +6793,10 @@ struct AmrSystem<Dim>::Impl {
       const auxiliary_registry_type& registry = prepared_hierarchy->auxiliary_registries.front();
       dirty.reserve(registry.provider_count());
       ExactContractBuilder exact;
-      exact.text("pops.amr.restart-regrid-auxiliary-invalidation")
+      exact.text("pops.amr.topology-regrid-auxiliary-invalidation")
           .scalar(std::uint32_t{1})
           .scalar(std::int32_t{Dim})
+          .text(reason)
           .scalar(engine->topology_epoch())
           .scalar(engine->materialization_generation());
       for (const std::size_t provider_index : registry.topological_order()) {
@@ -6771,10 +6811,11 @@ struct AmrSystem<Dim>::Impl {
     }
     runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
         preparation_error, &lane,
-        "AMR restart regrid auxiliary invalidation preparation failed collectively");
+        "AMR topology regrid auxiliary invalidation preparation failed collectively");
     if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{std::string_view("amr-restart-regrid-auxiliary-invalidation"), contract}}, lane))
-      throw std::logic_error("AMR restart regrid auxiliary invalidation differs between MPI ranks");
+            {{std::string_view("amr-topology-regrid-auxiliary-invalidation"), contract}}, lane))
+      throw std::logic_error(
+          "AMR topology regrid auxiliary invalidation differs between MPI ranks");
 
     preparation_error = {};
     try {
@@ -6798,7 +6839,7 @@ struct AmrSystem<Dim>::Impl {
       preparation_error = std::current_exception();
     }
     runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
-        preparation_error, &lane, "AMR restart regrid auxiliary invalidation failed collectively");
+        preparation_error, &lane, "AMR topology regrid auxiliary invalidation failed collectively");
     dirty_auxiliary_providers.swap(dirty);
   }
 
@@ -7726,6 +7767,26 @@ struct AmrSystem<Dim>::Impl {
         exact_regrid_budget(parent_layout, ratio, clustered);
     auto prepared = engine->prepare_regrid(static_cast<std::size_t>(parent_level), ratio,
                                            std::move(clustered), budget, *prepared_hierarchy->lane);
+    if (facade == nullptr)
+      throw std::logic_error("AMR topology regrid lost its owning facade");
+    const std::string rematerialization_reason = restart_transaction     ? "restart_regrid"
+                                                 : bootstrap_transaction ? "bootstrap_regrid"
+                                                                         : "ordinary_regrid";
+    runtime::multiblock::BoundaryEvaluationPoint rematerialization_point;
+    rematerialization_point.clock = restart_transaction
+                                        ? "pops.amr.restart-regrid.accepted"
+                                        : "pops.amr.topology-rematerialization.accepted";
+    rematerialization_point.tick = macro_step;
+    rematerialization_point.level = 0;
+    rematerialization_point.substep = 0;
+    rematerialization_point.stage = 0;
+    rematerialization_point.stage_fraction = {0, 1};
+    rematerialization_point.dt = static_cast<double>(program.last_dt_);
+    rematerialization_point.physical_time = accepted_time;
+    // Authenticate every field slot and dependency edge before the irreversible topology
+    // publication.  Already-materialized solvers carry their old-layout allocation/InputAux budget;
+    // layout-specific candidates are deliberately prepared again after publication.
+    (void)facade->prepare_topology_field_order(rematerialization_reason, rematerialization_point);
     std::optional<runtime::program::HistoryManager<Dim>> remapped_histories =
         prepare_regridded_program_histories(
             parent_level, parent_layout,
@@ -7761,15 +7822,34 @@ struct AmrSystem<Dim>::Impl {
       static_assert(std::is_nothrow_swappable_v<runtime::program::HistoryManager<Dim>>);
       std::swap(program.hist_, *remapped_histories);
     }
-    if (engine->topology_epoch() != prior_topology_epoch)
+    const bool topology_changed = engine->topology_epoch() != prior_topology_epoch;
+    if (topology_changed)
       ++checkpoint_regrid_count_value;
+    tagging_plan.reset();
+    component_tagging_plan.reset();
+    if (topology_changed) {
+      topology_regrid_auxiliary_invalidation_pending = true;
+      try {
+        refresh_prepared_hierarchy();
+      } catch (...) {
+        topology_regrid_auxiliary_invalidation_pending = false;
+        throw;
+      }
+      topology_regrid_auxiliary_invalidation_pending = false;
+      // State/history have their typed transfer.  Potential, FieldOutput and downstream auxiliary
+      // values are derived ProviderPack state: invalidate, then republish on the new exact layout.
+      invalidate_auxiliary_after_topology_regrid(rematerialization_reason);
+      (void)facade->rematerialize_fields_after_topology_change(rematerialization_reason,
+                                                               rematerialization_point);
+    } else {
+      refresh_prepared_hierarchy();
+    }
     if (hierarchy_cycle_state != nullptr)
       *hierarchy_cycle_state = std::move(staged_state);
     else
       tagging_state = std::move(staged_state);
-    tagging_plan.reset();
-    component_tagging_plan.reset();
-    refresh_prepared_hierarchy();
+    // Program resources and accepted tagging state become visible only after every derived
+    // ProviderPack has been rematerialized.  The next parent tagger can therefore consume fields.
     program.refresh_hierarchy_state("AmrSystem::regrid_from_prepared_tagging");
     if (hierarchy_cycle_state == nullptr)
       publish_tagging_checkpoint();
@@ -8009,16 +8089,27 @@ template <int Dim>
 AmrSystem<Dim>::AmrSystem(const AmrSystemConfig<Dim>& config) {
   validate_amr_config(config);
   p_ = std::make_unique<Impl>(config);
+  p_->facade = this;
 }
 
 template <int Dim>
 AmrSystem<Dim>::~AmrSystem() = default;
 
 template <int Dim>
-AmrSystem<Dim>::AmrSystem(AmrSystem&&) noexcept = default;
+AmrSystem<Dim>::AmrSystem(AmrSystem&& other) noexcept : p_(std::move(other.p_)) {
+  if (p_)
+    p_->facade = this;
+}
 
 template <int Dim>
-AmrSystem<Dim>& AmrSystem<Dim>::operator=(AmrSystem&&) noexcept = default;
+AmrSystem<Dim>& AmrSystem<Dim>::operator=(AmrSystem&& other) noexcept {
+  if (this != &other) {
+    p_ = std::move(other.p_);
+    if (p_)
+      p_->facade = this;
+  }
+  return *this;
+}
 
 template <int Dim>
 void AmrSystem<Dim>::install_prepared_auxiliary_provider(
@@ -11553,9 +11644,16 @@ SolveOutcome AmrSystem<Dim>::solve_program_field_from_blocks_on_prepared_lane(
   std::string request_contract;
   std::exception_ptr local_error;
   try {
+    const auto& topology_point = p_->active_topology_rematerialization_point;
+    const bool authenticated_zero_dt =
+        topology_point && point.dt == 0.0 && point.clock == topology_point->clock &&
+        point.tick == topology_point->tick && point.level == topology_point->level &&
+        point.substep == topology_point->substep && point.stage == topology_point->stage &&
+        point.stage_fraction == topology_point->stage_fraction &&
+        point.physical_time == topology_point->physical_time;
     if (point.clock.empty() || point.level != active_level || point.stage < 0 ||
-        point.stage_fraction.denominator <= 0 || !std::isfinite(point.dt) || point.dt <= 0.0 ||
-        !std::isfinite(point.physical_time))
+        point.stage_fraction.denominator <= 0 || !std::isfinite(point.dt) ||
+        (point.dt <= 0.0 && !authenticated_zero_dt) || !std::isfinite(point.physical_time))
       throw std::invalid_argument("AMR exact field solve has an invalid evaluation point");
     if (provider_slot.empty())
       throw std::invalid_argument("AMR exact field solve requires a provider slot");
@@ -11852,11 +11950,32 @@ std::vector<double> AmrSystem<Dim>::named_field_values(const std::string& field)
 }
 
 template <int Dim>
-std::vector<std::vector<std::string>> AmrSystem<Dim>::recompute_fields_after_restart_regrid() {
-  const ExecutionLane& lane = p_->require_prepared_engine_lane("AMR restart field recompute");
-  if (all_reduce_max(p_->restart_transaction ? 0L : 1L, lane) != 0)
-    throw std::logic_error(
-        "AMR restart field recompute requires one collective restart transaction");
+std::vector<std::string> AmrSystem<Dim>::prepare_topology_field_order(
+    std::string_view reason, const runtime::multiblock::BoundaryEvaluationPoint& accepted_point) {
+  const ExecutionLane& lane =
+      p_->require_prepared_engine_lane("AMR topology field rematerialization preflight");
+  std::exception_ptr point_error;
+  try {
+    const bool honest_initial_point = accepted_point.tick == 0 && accepted_point.dt == 0.0;
+    const std::string_view expected_clock = reason == "restart_regrid"
+                                                ? "pops.amr.restart-regrid.accepted"
+                                                : "pops.amr.topology-rematerialization.accepted";
+    if (reason.empty() || accepted_point.clock != expected_clock || accepted_point.tick < 0 ||
+        accepted_point.level != 0 || accepted_point.substep != 0 || accepted_point.stage != 0 ||
+        accepted_point.stage_fraction.numerator != 0 ||
+        accepted_point.stage_fraction.denominator != 1 || !std::isfinite(accepted_point.dt) ||
+        accepted_point.dt < 0.0 || (accepted_point.dt == 0.0 && !honest_initial_point) ||
+        !std::isfinite(accepted_point.physical_time))
+      throw std::logic_error(
+          "AMR topology field rematerialization lacks one honest accepted evaluation point");
+  } catch (...) {
+    point_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      point_error, &lane, "AMR topology field rematerialization point failed collectively");
+  // On the pre-publication call this authenticates the current-layout solver/InputAux budgets.  On
+  // the post-publication call it prepares the exact new-layout candidates before invalidated state
+  // can be consumed.  The second call is a no-op if every candidate is already current.
   p_->materialize_all_fields_atomically();
 
   std::map<std::string, std::set<std::string>> dependencies;
@@ -11878,7 +11997,7 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::recompute_fields_after_res
         const auto source = output_slots.find(
             std::make_pair(plan.boundary_field_blocks[index], plan.boundary_field_keys[index]));
         if (source == output_slots.end())
-          throw std::invalid_argument("AMR restart field DAG has an unresolved field dependency");
+          throw std::invalid_argument("AMR topology field DAG has an unresolved field dependency");
         dependencies.at(slot).insert(source->second);
       }
       for (const auto& provider : plan.providers) {
@@ -11899,11 +12018,21 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::recompute_fields_after_res
     ordering_error = std::current_exception();
   }
   runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
-      ordering_error, &lane, "AMR restart field DAG preparation failed collectively");
+      ordering_error, &lane, "AMR topology field DAG preparation failed collectively");
   ExactContractBuilder dependency_exact;
-  dependency_exact.text("pops.amr.restart-regrid-field-dag")
+  dependency_exact.text("pops.amr.topology-rematerialization-field-dag")
       .scalar(std::uint32_t{1})
       .scalar(std::int32_t{Dim})
+      .text(reason)
+      .text(accepted_point.clock)
+      .scalar(accepted_point.tick)
+      .scalar(accepted_point.level)
+      .scalar(accepted_point.substep)
+      .scalar(accepted_point.stage)
+      .scalar(accepted_point.stage_fraction.numerator)
+      .scalar(accepted_point.stage_fraction.denominator)
+      .scalar(accepted_point.dt)
+      .scalar(accepted_point.physical_time)
       .scalar(static_cast<std::uint64_t>(dependencies.size()));
   for (const auto& [slot, required] : dependencies) {
     dependency_exact.text(slot).scalar(static_cast<std::uint64_t>(required.size()));
@@ -11912,9 +12041,10 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::recompute_fields_after_res
   }
   const std::string dependency_contract = std::move(dependency_exact).release();
   if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{std::string_view("amr-restart-regrid-field-dag"), dependency_contract}}, lane))
+          {{std::string_view("amr-topology-rematerialization-field-dag"), dependency_contract}},
+          lane))
     throw std::logic_error(
-        "AMR restart field/auxiliary dependency graph differs between prepared-lane ranks");
+        "AMR topology field/auxiliary dependency graph differs between prepared-lane ranks");
 
   std::vector<std::string> order;
   std::set<std::string> published;
@@ -11947,7 +12077,7 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::recompute_fields_after_res
           cycle += "]";
         }
         throw std::runtime_error(
-            "AMR restart field/auxiliary dependency graph contains exact cycle '" + cycle +
+            "AMR topology field/auxiliary dependency graph contains exact cycle '" + cycle +
             "' without a typed coupled solver");
       }
       for (const std::string& slot : ready) {
@@ -11959,28 +12089,17 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::recompute_fields_after_res
     ordering_error = std::current_exception();
   }
   runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
-      ordering_error, &lane, "AMR restart field DAG ordering failed collectively");
+      ordering_error, &lane, "AMR topology field DAG ordering failed collectively");
+  return order;
+}
 
-  runtime::multiblock::BoundaryEvaluationPoint point;
-  point.clock = "pops.amr.restart-regrid.accepted";
-  point.tick = p_->macro_step;
-  point.level = 0;
-  point.substep = 0;
-  point.stage = 0;
-  point.stage_fraction = {0, 1};
-  point.dt = static_cast<double>(p_->program.last_dt_);
-  point.physical_time = p_->accepted_time;
-  std::exception_ptr point_error;
-  try {
-    if (point.tick < 0 || !std::isfinite(point.dt) || point.dt <= 0.0 ||
-        !std::isfinite(point.physical_time))
-      throw std::logic_error(
-          "AMR restart field recompute lacks one finite accepted boundary evaluation point");
-  } catch (...) {
-    point_error = std::current_exception();
-  }
-  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
-      point_error, &lane, "AMR restart field evaluation point failed collectively");
+template <int Dim>
+std::vector<std::vector<std::string>> AmrSystem<Dim>::rematerialize_fields_after_topology_change(
+    std::string_view reason, const runtime::multiblock::BoundaryEvaluationPoint& accepted_point) {
+  const ExecutionLane& lane =
+      p_->require_prepared_engine_lane("AMR topology field rematerialization");
+  const std::vector<std::string> order = prepare_topology_field_order(reason, accepted_point);
+  const runtime::multiblock::BoundaryEvaluationPoint& point = accepted_point;
   runtime::system::AuxiliaryEvaluationPoint auxiliary_point;
   auxiliary_point.clock = point.clock;
   auxiliary_point.accepted_step = static_cast<std::uint64_t>(p_->macro_step);
@@ -12008,8 +12127,9 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::recompute_fields_after_res
         if (std::find(requested.begin(), requested.end(), identity) == requested.end())
           remaining.push_back(identity);
       ExactContractBuilder exact;
-      exact.text("pops.amr.restart-regrid-field-auxiliary-request")
+      exact.text("pops.amr.topology-rematerialization-field-auxiliary-request")
           .scalar(std::uint32_t{1})
+          .text(reason)
           .text(slot)
           .sequence(requested, [](ExactContractBuilder& item, const std::string& identity) {
             item.text(identity);
@@ -12019,12 +12139,12 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::recompute_fields_after_res
       request_error = std::current_exception();
     }
     runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
-        request_error, &lane, "AMR restart regrid field auxiliary request failed collectively");
+        request_error, &lane, "AMR topology field auxiliary request failed collectively");
     if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{std::string_view("amr-restart-regrid-field-auxiliary-request"), request_contract}},
+            {{std::string_view("amr-topology-rematerialization-field-auxiliary-request"),
+              request_contract}},
             lane))
-      throw std::logic_error(
-          "AMR restart regrid field auxiliary request differs between MPI ranks");
+      throw std::logic_error("AMR topology field auxiliary request differs between MPI ranks");
     if (requested.empty())
       return;
     p_->dirty_auxiliary_providers.swap(requested);
@@ -12034,6 +12154,13 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::recompute_fields_after_res
   };
   std::vector<std::vector<std::string>> witness;
   witness.reserve(order.size());
+  if (p_->active_topology_rematerialization_point)
+    throw std::logic_error("AMR topology field rematerialization is already active");
+  p_->active_topology_rematerialization_point = point;
+  struct ActivePointReset {
+    Impl& owner;
+    ~ActivePointReset() { owner.active_topology_rematerialization_point.reset(); }
+  } active_point_reset{*p_};
   for (const std::string& slot : order) {
     refresh_required_auxiliary(slot);
     std::vector<const MultiFab<Dim>*> states(p_->blocks.size(), nullptr);
@@ -12052,7 +12179,23 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::recompute_fields_after_res
   }
   if (!p_->dirty_auxiliary_providers.empty())
     refresh_auxiliary_on_prepared_lane(auxiliary_point);
+  p_->last_topology_rematerialization_epoch = p_->engine->topology_epoch();
+  p_->last_topology_rematerialization_generation = p_->engine->materialization_generation();
+  p_->last_topology_rematerialization_witness = witness;
   return witness;
+}
+
+template <int Dim>
+std::vector<std::vector<std::string>> AmrSystem<Dim>::recompute_fields_after_restart_regrid() {
+  const ExecutionLane& lane = p_->require_prepared_engine_lane("AMR restart field recompute");
+  if (all_reduce_max(p_->restart_transaction ? 0L : 1L, lane) != 0)
+    throw std::logic_error(
+        "AMR restart field recompute requires one collective restart transaction");
+  if (p_->last_topology_rematerialization_epoch != p_->engine->topology_epoch() ||
+      p_->last_topology_rematerialization_generation != p_->engine->materialization_generation())
+    throw std::logic_error(
+        "AMR restart field recompute has no exact post-topology rematerialization witness");
+  return p_->last_topology_rematerialization_witness;
 }
 
 template <int Dim>
@@ -13404,20 +13547,18 @@ void AmrSystem<Dim>::regrid_on_restart() {
     throw std::logic_error("AmrSystem restart regrid requires one active restart transaction");
   const std::uint64_t prior_topology_epoch = p_->engine->topology_epoch();
   std::exception_ptr regrid_error;
-  p_->restart_regrid_auxiliary_invalidation_pending = true;
   try {
     p_->program.regrid_on_restart("AmrSystem::regrid_on_restart:");
     p_->refresh_prepared_hierarchy();
     if (p_->engine->topology_epoch() == prior_topology_epoch)
       throw std::runtime_error("AmrSystem restart regrid authority did not publish a new topology");
-    // State/history transfer is complete. Auxiliary values, FieldOutput carriers and elliptic
-    // potentials are derived authorities: invalidate them instead of interpolating them. The
-    // restart recompute DAG republishes each value on this prepared topology before commit.
-    p_->invalidate_auxiliary_after_restart_regrid();
+    if (p_->last_topology_rematerialization_epoch != p_->engine->topology_epoch() ||
+        p_->last_topology_rematerialization_generation != p_->engine->materialization_generation())
+      throw std::runtime_error(
+          "AmrSystem restart regrid did not rematerialize derived providers on its final topology");
   } catch (...) {
     regrid_error = std::current_exception();
   }
-  p_->restart_regrid_auxiliary_invalidation_pending = false;
   if (!p_->prepared_hierarchy || !p_->prepared_hierarchy->lane)
     throw std::runtime_error("AMR restart regrid lost its prepared hierarchy lane");
   const ExecutionLane& published_lane = *p_->prepared_hierarchy->lane;
