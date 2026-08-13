@@ -70,7 +70,7 @@ bool exact_uniform_recovery_state(const std::array<double, N>& accepted,
 /// Explicit legacy-plan overload retained for the separately owned generated AMR consumer.
 template <int N, class Admissible, class Methods>
 PreparedVariableRecoveryAttempt<N> execute_uniform_recovery(
-    PreparedVariableRecoveryPlan<N, Admissible, Methods>& plan, const Real (&conserved)[N],
+    const PreparedVariableRecoveryPlan<N, Admissible, Methods>& plan, const Real (&conserved)[N],
     const Real (&initial_guess)[N]) {
   return {recover_prepared_variable(plan, conserved, initial_guess), false, false};
 }
