@@ -26,23 +26,63 @@ std::string package_source() {
   return R"CPP(
 #include <pops/core/state/state.hpp>
 #include <pops/core/state/variables.hpp>
+#include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/runtime/builders/compiled/dsl_block.hpp>
 #include <pops/runtime/config/route_ids.hpp>
 #include <pops/runtime/dynamic/abi_key.hpp>
 
+#include <utility>
+
+    namespace pops {
+
+    template <int Dim, class Model>
+    PreparedSystemBlock<Dim> prepare_exact_system_block(
+        CompiledSystemBlockPreparation<Dim, Model> request) {
+      return prepare_generated_system_block(std::move(request));
+    }
+
+    }  // namespace pops
+
     struct NamedAuxModel {
-      using State = pops::StateVec<1>;
-      using Prim = pops::StateVec<1>;
-      static constexpr int n_vars = 1;
+      using Law = pops::nd::ScalarAdvection<pops::kNativeDimension>;
+      using Schema = typename Law::Schema;
+      using State = typename Law::State;
+      using Primitive = typename Law::Primitive;
+      static constexpr int dimension = pops::kNativeDimension;
+      static constexpr int n_vars = Law::n_vars;
       static constexpr int n_providers = 1;
-      POPS_HD State flux(const State&, const auto&, int) const { return State{}; }
-      POPS_HD pops::Real max_wave_speed(const State&, const auto&, int) const { return pops::Real(0); }
+      Law law{};
+      static pops::PreparedProviderIdentity provider_identity() noexcept {
+        return {"test.native-aux.named-scalar", 1};
+      }
+      void serialize_exact_parameters(pops::ExactContractBuilder& contract) const {
+        law.serialize_exact_parameters(contract);
+      }
+      POPS_HD pops::nd::StateConversion<Primitive> recover(const State& state) const {
+        return law.recover(state);
+      }
+      POPS_HD pops::nd::StateConversion<State> make_conservative(const Primitive& primitive) const {
+        return law.make_conservative(primitive);
+      }
+      POPS_HD pops::nd::StateConversionStatus admissibility(const State& state) const {
+        return law.admissibility(state);
+      }
+      template <int Axis>
+      POPS_HD State flux(const State& state) const {
+        return law.template flux<Axis>(state);
+      }
+      template <int Axis>
+      POPS_HD pops::Real max_wave_speed(const State& state) const {
+        return law.template max_wave_speed<Axis>(state);
+      }
+      template <int Axis>
+      POPS_HD void wave_speeds(const State& state, pops::Real& lower, pops::Real& upper) const {
+        law.template wave_speeds<Axis>(state, lower, upper);
+      }
       POPS_HD State source(const State& u, const pops::ProviderValues<1>& providers) const {
         return State{providers[0] * u[0]};
       }
       POPS_HD pops::Real elliptic_rhs(const State&) const { return pops::Real(0); }
-      POPS_HD Prim to_primitive(const State& u) const { return u; }
-      POPS_HD State to_conservative(const Prim& p) const { return p; }
       static pops::VariableSet conservative_vars() {
         return {pops::VariableKind::Conservative, {"u"}, 1, {pops::VariableRole::Custom}};
       }
@@ -132,8 +172,9 @@ static int pops_run_test_native_aux_named(int argc, char** argv) {
   bool missing_provider_rejected = false;
   try {
     System<kNativeDimension> empty(config);
+    empty.seal_auxiliary_providers();
     empty.stage_auxiliary_input(input_key, std::vector<double>(cells, kappa));
-  } catch (const std::logic_error&) {
+  } catch (const std::out_of_range&) {
     missing_provider_rejected = true;
   }
 
