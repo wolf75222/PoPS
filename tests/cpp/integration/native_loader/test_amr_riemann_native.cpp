@@ -18,11 +18,14 @@
 #include "gtest_compat.hpp"
 #include "native_dso_compiler.hpp"
 #include "explicit_amr_program.hpp"
+#include "component_abi_test_helpers.hpp"
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel, Euler, NoSource, BackgroundDensity
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/runtime/amr_system.hpp>
+#include <pops/runtime/dynamic/authenticated_native_file.hpp>
 #include <pops/runtime/dynamic/dynlib.hpp>
+#include <pops/runtime/dynamic/prepared_execution_context.hpp>
 
 #include "amr_tagging_test_authority.hpp"
 
@@ -33,6 +36,7 @@
 #include <cstring>
 #include <ctime>
 #include <fstream>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -54,6 +58,19 @@ constexpr const char* kPrimaryClock = "test.clock.macro";
 constexpr const char* kFineClock = "tests.amr-riemann-native/clock/level-1";
 constexpr const char* kDsoRouteIdentity =
     "tests.amr-riemann-native/route/source-built-add-native-block@1";
+constexpr const char* kModelIdentity =
+    "1111111111111111111111111111111111111111111111111111111111111111";
+
+std::shared_ptr<const component::PreparedExecutionContextV1> prepared_execution() {
+  const PopsExecutionContextV1 execution = component::test_support::host_execution_context();
+  return std::make_shared<const component::PreparedExecutionContextV1>(
+      execution.execution_identity, execution.context_version, execution.memory_space,
+      execution.backend_identity, execution.device_identity, execution.scalar_type,
+      execution.storage_precision, execution.compute_precision, execution.accumulation_precision,
+      execution.reduction_precision, execution.stream_handle, execution.stream_identity,
+      execution.communicator_f_handle, execution.communicator_datatype_f_handle,
+      execution.communicator_identity, execution.communicator_datatype_identity);
+}
 
 ProdModel make_model() {
   // alpha=0 : elliptic_rhs nul -> phi=0, parite stricte.
@@ -105,6 +122,11 @@ AmrSystemConfig<Dim> make_cfg(int n) {
 template <int Dim>
 void install_compiled_model(AmrSystem<Dim>& system, const char* riemann,
                             const char* reconstruction) {
+  auto lane = std::make_shared<pops::ExecutionLane>(
+      pops::ExecutionLane::duplicate_world_collectively("test.amr-riemann.direct-package"));
+  auto execution = std::make_shared<const pops::component::PreparedExecutionContextV1>(
+      prepared_execution()->for_lane(*lane));
+  system.install_prepared_boundary_execution_context(std::move(lane), std::move(execution));
   system.install_block_state_route("gas", kStateIdentity);
   system.install_prepared_amr_block(prepare_compiled_amr_system_block<Dim>(
       "gas", make_model(), "minmod", riemann, reconstruction, "explicit", kGamma, 1, 1, 0.0,
@@ -234,41 +256,47 @@ std::string loader_source() {
 #include <pops/runtime/config/route_ids.hpp>
 #include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/physics/bricks/bricks.hpp>
+#include <stdexcept>
 #include <string>
+#include <utility>
 namespace pops_generated {
 constexpr int Dim = pops::kNativeDimension;
 using ProdModel =
     pops::CompositeModel<pops::EulerND<Dim>, pops::NoSource, pops::BackgroundDensity>;
-int install_count = 0;
 }
 // LITTERAL preprocesseur (PAS abi_key_string() : une inline serait interposee, ELF/RTLD_GLOBAL,
 // vers la copie du module deja charge -> cle du module renvoyee -> garde d'ABI tautologique).
 extern "C" const char* pops_native_abi_key() { return POPS_ABI_KEY_LITERAL; }
+extern "C" const char* pops_compiled_model_identity() {
+  return "1111111111111111111111111111111111111111111111111111111111111111";
+}
 extern "C" const char* pops_compiled_route_manifest() { return pops::kRouteRegistrySignature; }
 extern "C" int pops_compiled_nparams() { return 0; }
 extern "C" const char* pops_compiled_param_names() { return ""; }
 extern "C" const char* pops_test_amr_riemann_route_identity() {
   return "tests.amr-riemann-native/route/source-built-add-native-block@1";
 }
-extern "C" int pops_test_amr_riemann_install_count() {
-  return pops_generated::install_count;
+extern "C" void pops_register_provider_routes_amr(
+    pops::AmrSystem<pops::kNativeDimension>* system) {
+  if (system == nullptr)
+    throw std::invalid_argument("AMR provider route installer received null exact runtime");
 }
 extern "C" void pops_install_native_amr(void* sys, const char* name, const char* limiter,
                                        const char* riemann, const char* recon, const char* time,
                                        double gamma, int substeps, const double*, int,
                                        double pos_floor, double weno_epsilon,
                                        bool wave_speed_cache) {
-  ++pops_generated::install_count;
   auto* s = reinterpret_cast<pops::AmrSystem<pops_generated::Dim>*>(sys);
-  pops::add_compiled_model<pops_generated::Dim>(
-      *s,
+  pops::PreparedNativeAmrPackage<pops_generated::Dim> package;
+  package.block = pops::prepare_compiled_amr_system_block<pops_generated::Dim>(
       name,
       pops_generated::ProdModel{
           {},
           pops::EulerND<pops_generated::Dim>{static_cast<pops::Real>(gamma)}, pops::NoSource{},
           pops::BackgroundDensity{pops::Real(0), pops::Real(0)}},
-      limiter, riemann, recon, time, gamma, substeps, 1, {}, {}, pos_floor, weno_epsilon,
+      limiter, riemann, recon, time, gamma, substeps, 1, pos_floor, weno_epsilon,
       wave_speed_cache, "tests.amr-riemann-native/physical-flux");
+  s->install_prepared_native_amr_package(std::move(package));
 }
 )CPP";
   // clang-format on
@@ -305,8 +333,8 @@ static int pops_run_test_amr_riemann_native(int argc, char** argv) {
   }
 
   // Le second chemin est un vrai DSO source-built charge par add_native_block. Son symbole de test
-  // authentifie l'origine et son compteur prouve que la route preparee directe ne rejoue pas le
-  // meme point d'entree.
+  // authentifie l'origine; l'identite binaire lie ensuite cette image exacte a l'unique bloc publie
+  // par la transaction native privee.
   const std::string tmp = std::string(POPS_TEST_TMPDIR) + "/amr_riemann_native_" +
                           std::to_string(static_cast<long>(std::clock()));
   const std::string src = tmp + ".cpp";
@@ -321,11 +349,8 @@ static int pops_run_test_amr_riemann_native(int argc, char** argv) {
     return 1;
   }
   using RouteIdentityFn = const char* (*)();
-  using InstallCountFn = int (*)();
   pops::dynlib::handle inspection{};
   RouteIdentityFn route_identity = nullptr;
-  InstallCountFn install_count = nullptr;
-  int expected_dso_installs = 0;
 
   auto check_execution_evidence = [&](const Snap& snap, const char* riem, const char* recon,
                                       const char* route) {
@@ -355,24 +380,27 @@ static int pops_run_test_amr_riemann_native(int argc, char** argv) {
 
   auto parity_loader = [&](const char* riem, const char* recon) -> std::vector<double> {
     AmrSystem<kDim> loaded(make_cfg<kDim>(n));
+    auto lane = std::make_shared<pops::ExecutionLane>(
+        pops::ExecutionLane::duplicate_world_collectively("test.amr-riemann.package"));
+    auto execution = std::make_shared<const pops::component::PreparedExecutionContextV1>(
+        prepared_execution()->for_lane(*lane));
+    loaded.install_prepared_boundary_execution_context(std::move(lane), std::move(execution));
     loaded.install_block_state_route("gas", kStateIdentity);
-    loaded.add_native_block("gas", so, "minmod", riem, recon, "explicit", kGamma, 1);
-    ++expected_dso_installs;
+    const pops::dynlib::AuthenticatedNativeFile authenticated(so);
+    loaded.add_native_block("gas", so, kModelIdentity, authenticated.binary_identity(), "minmod",
+                            riem, recon, "explicit", kGamma, 1);
     if (!pops::dynlib::valid(inspection)) {
       inspection = pops::dynlib::open(so);
       route_identity = reinterpret_cast<RouteIdentityFn>(
           pops::dynlib::sym(inspection, "pops_test_amr_riemann_route_identity"));
-      install_count = reinterpret_cast<InstallCountFn>(
-          pops::dynlib::sym(inspection, "pops_test_amr_riemann_install_count"));
     }
     char w[200];
     std::snprintf(w, sizeof w, "[%s/%s] DSO route identity authentifiee", riem, recon);
     chk(pops::dynlib::valid(inspection) && route_identity != nullptr &&
             std::strcmp(route_identity(), kDsoRouteIdentity) == 0,
         w);
-    std::snprintf(w, sizeof w, "[%s/%s] DSO install execute une fois", riem, recon);
-    chk(install_count != nullptr && install_count() == expected_dso_installs, w);
-    const int count_after_native = install_count == nullptr ? -1 : install_count();
+    std::snprintf(w, sizeof w, "[%s/%s] DSO publie exactement un bloc prepare", riem, recon);
+    chk(loaded.n_blocks() == 1, w);
     loaded.set_conservative_state("gas", initial_state);
     const Snap from_dso = run(loaded, nsteps);
 
@@ -380,10 +408,6 @@ static int pops_run_test_amr_riemann_native(int argc, char** argv) {
     install_compiled_model(direct, riem, recon);
     direct.set_conservative_state("gas", initial_state);
     const Snap from_direct = run(direct, nsteps);
-    std::snprintf(w, sizeof w, "[%s/%s] route directe n'appelle pas l'installateur DSO", riem,
-                  recon);
-    chk(install_count != nullptr && install_count() == count_after_native, w);
-
     const double dmax = maxdiff(from_dso.density, from_direct.density);
     std::snprintf(w, sizeof w, "[%s/%s] add_native_block == prepare/install direct (dmax==0)", riem,
                   recon);

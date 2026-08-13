@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "amr_tagging_test_authority.hpp"
+#include "explicit_amr_program.hpp"
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
@@ -180,6 +181,8 @@ void verifies_auxiliary_publication_rolls_back_every_sparse_level() {
   }
 
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system,
+                                            "tests.amr.named-field/auxiliary-publication-rollback");
   system.set_poisson();
   AuxiliaryStorageShape<Dim> shape;
   for (int axis = 0; axis < Dim; ++axis)
@@ -258,6 +261,8 @@ TEST(test_amr_named_field, DefaultFieldPublishesOnlyWhenSolveOutcomeIsAccepted) 
   constexpr int Dim = pops::kNativeDimension;
   const pops::AmrSystemConfig<Dim> config = single_level_config<Dim>();
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system,
+                                            "tests.amr.named-field/default-field-publication");
   system.set_poisson();
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
@@ -280,11 +285,14 @@ TEST(test_amr_named_field, NamedPlanConsumesExactStageWithoutPublishingConservat
   constexpr int Dim = pops::kNativeDimension;
   const pops::AmrSystemConfig<Dim> config = single_level_config<Dim>();
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system,
+                                            "tests.amr.named-field/exact-stage-publication");
   const pops::AmrFieldHierarchyPolicyAuthority hierarchy{
       "pops.field-hierarchy.level-local", 1, {"pops.field-hierarchy.options.empty@1", {}}};
   system.set_field_solver_plan("field/tracer", "test.named-field-plan", "test.named-field",
-                               "test.aux-owner", "tracer", "phi", {"test.rhs"}, {"tracer"},
-                               {"charge"}, {1.0}, "geometric_mg", hierarchy,
+                               "test.aux-owner", "tracer", "phi",
+                               {{"test.aux-owner", "field", "phi", "potential"}}, 1, {"test.rhs"},
+                               {"tracer"}, {"charge"}, {1.0}, "geometric_mg", hierarchy,
                                pops::geometric_mg_amr_field_solver_options(
                                    pops::GeometricMgOptions{}, pops::CompositeFacOptions{}));
   system.install_block_state_route("tracer", "state/tracer");
@@ -293,7 +301,7 @@ TEST(test_amr_named_field, NamedPlanConsumesExactStageWithoutPublishingConservat
   system.register_elliptic_field("tracer", "phi", {output_key}, 1);
   pops::Real observed_stage = pops::Real(-1);
   system.set_block_elliptic_field(
-      "tracer", "phi",
+      "tracer", "phi", "test.amr-named-field.rhs.stage-probe@1",
       [&observed_stage](const pops::MultiFab<Dim>& state, pops::MultiFab<Dim>& rhs) {
         observed_stage = pops::reduce_min_local(state);
         rhs.set_val(pops::Real(0));

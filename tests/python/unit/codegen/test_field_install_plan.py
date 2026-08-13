@@ -283,6 +283,8 @@ def test_gradient_output_sign_is_part_of_the_exact_native_output_route(
         "potential"
     ]
 
+    expected_owner_qid = str(model.owner_path.canonical())
+    assert plan.native_options["output_route"]["owner_identity"] == expected_owner_qid
     assert plan.native_options["output_route"]["components"] == (
         "potential",
         "electric_field_x",
@@ -290,19 +292,19 @@ def test_gradient_output_sign_is_part_of_the_exact_native_output_route(
     )
     assert plan.native_options["output_route"]["component_keys"] == (
         {
-            "owner_qid": plan.native_options["output_route"]["owner_identity"],
+            "owner_qid": expected_owner_qid,
             "space_kind": "field",
             "space_name": "potential",
             "component": "potential",
         },
         {
-            "owner_qid": plan.native_options["output_route"]["owner_identity"],
+            "owner_qid": expected_owner_qid,
             "space_kind": "field",
             "space_name": "potential",
             "component": "electric_field_x",
         },
         {
-            "owner_qid": plan.native_options["output_route"]["owner_identity"],
+            "owner_qid": expected_owner_qid,
             "space_kind": "field",
             "space_name": "potential",
             "component": "electric_field_y",

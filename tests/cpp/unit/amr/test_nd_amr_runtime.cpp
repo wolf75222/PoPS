@@ -44,13 +44,12 @@ mesh::RankSpace<Dim> serial_rank_space() {
 }
 
 template <int Dim>
-mesh::RankSpace<Dim> execution_rank_space() {
-  const pops::ExecutionLane world = pops::ExecutionLane::world();
+mesh::RankSpace<Dim> execution_rank_space(const pops::ExecutionLane& lane) {
   Index<Dim> origin{};
   Extent<Dim> extent{};
   for (int axis = 0; axis < Dim; ++axis)
     extent[axis] = 1;
-  extent[0] = world.size();
+  extent[0] = lane.size();
   return {origin, extent};
 }
 
@@ -71,6 +70,20 @@ hierarchy::LevelLayout<Dim> coarse_layout(
     tile[axis] = 4;
   const mesh::BoxArray<Dim> patches = mesh::BoxArray<Dim>::from_domain(domain, tile);
   const auto ownership = authority.prepare(patches, rank_space, kLoadBalanceBudget);
+  return hierarchy::LevelLayout<Dim>(0, domain, patches, ownership.plan().distribution(),
+                                     pops::amr::RefinementRatio<Dim>{}, kLayoutBudget);
+}
+
+template <int Dim>
+hierarchy::LevelLayout<Dim> coarse_layout(const Box<Dim>& domain,
+                                          const pops::PreparedLoadBalanceAuthority<Dim>& authority,
+                                          const mesh::RankSpace<Dim>& rank_space,
+                                          const pops::ExecutionLane& lane) {
+  Extent<Dim> tile{};
+  for (int axis = 0; axis < Dim; ++axis)
+    tile[axis] = 4;
+  const mesh::BoxArray<Dim> patches = mesh::BoxArray<Dim>::from_domain(domain, tile);
+  const auto ownership = authority.prepare(patches, rank_space, kLoadBalanceBudget, {}, lane);
   return hierarchy::LevelLayout<Dim>(0, domain, patches, ownership.plan().distribution(),
                                      pops::amr::RefinementRatio<Dim>{}, kLayoutBudget);
 }
@@ -107,17 +120,18 @@ struct ConservativeExchange {
 template <int Dim>
 void prove_prepared_multiblock_hierarchy() {
   using MultiBlock = pops::runtime::amr::PreparedMultiBlockAmrHierarchy<Dim>;
+  pops::ExecutionLane parent = pops::ExecutionLane::duplicate_world_collectively(
+      "test.prepared-multiblock-amr.parent." + std::to_string(Dim));
   const auto authority = load_balance<Dim>();
   Index<Dim> lower{};
   Index<Dim> upper{};
   for (int axis = 0; axis < Dim; ++axis)
     upper[axis] = 3;
-  const auto ranks = execution_rank_space<Dim>();
+  const auto ranks = execution_rank_space<Dim>(parent);
   upper[0] = 4 * static_cast<int>(ranks.size()) - 1;
   const Box<Dim> domain{lower, upper};
-  auto coarse = coarse_layout(domain, *authority, ranks);
-  const Index<Dim> local_rank =
-      ranks.coordinate(static_cast<std::size_t>(pops::ExecutionLane::world().rank()));
+  auto coarse = coarse_layout(domain, *authority, ranks, parent);
+  const Index<Dim> local_rank = ranks.coordinate(static_cast<std::size_t>(parent.rank()));
   MultiFab<Dim> primary_state(coarse.patches(), coarse.distribution(), local_rank, 1,
                               Extent<Dim>{});
   primary_state.set_val(pops::Real(1));
@@ -132,7 +146,7 @@ void prove_prepared_multiblock_hierarchy() {
   std::vector<typename MultiBlock::AdditionalBlock> additional;
   additional.push_back({"neutral", {std::move(secondary_state)}});
   MultiBlock prepared =
-      MultiBlock::prepare_collectively(std::move(engine), "ion", std::move(additional),
+      MultiBlock::prepare_collectively(parent, std::move(engine), "ion", std::move(additional),
                                        "test.prepared-multiblock-amr.lane." + std::to_string(Dim));
 
   pops::CouplingOperatorView view;

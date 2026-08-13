@@ -104,6 +104,8 @@ class _PreparedAmrFieldSolverInstall:
             canonical_bytes(output["owner_identity"]).hex(),
             output["owner_block"],
             output["key"],
+            output["component_keys"],
+            output["gradient_sign"],
             [canonical_bytes(route["provider_identity"]).hex() for route in routes],
             [route["owner_block"] for route in routes],
             [route["key"] for route in routes],

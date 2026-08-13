@@ -451,7 +451,10 @@ class ProgramContext {
   }
 
   Real max_wave_speed(int program_block, const field_type& state_value) const {
-    return system_->block_max_speed(sys_block(program_block), state_value);
+    const ExecutionLane& lane = prepared_execution_lane();
+    const int runtime_block =
+        resolve_prepared_program_block_(program_block, lane, "Program maximum-speed block");
+    return system_->block_max_speed_prepared_(runtime_block, state_value, lane);
   }
 
   Real hmin() const { return system_->cfl_min_dx(); }

@@ -201,7 +201,7 @@ void add_gas_block(NativeSystem& s, const std::string& name) {
   prepared.closures.prepare_generated_state_at_point = [](const auto&, NativeField&) {};
   prepared.closures.prepare_generated_state_at_point_prepared = [](const auto&, NativeField&,
                                                                    const auto&) {};
-  prepared.maximum_speed = [](const NativeField&) { return Real(1); };
+  prepared.maximum_speed = [](const NativeField&, const ExecutionLane&) { return Real(1); };
   prepared.poisson_rhs = [](const NativeField& state, NativeField& rhs) {
     materialize_mean_free_density(state, rhs);
   };

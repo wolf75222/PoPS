@@ -1,4 +1,5 @@
 """Exact value identity of Spatial / FiniteVolume authoring selections."""
+
 from decimal import Decimal
 from fractions import Fraction
 
@@ -31,14 +32,19 @@ def test_spatial_identity_covers_every_route_and_control_exactly():
             "external_id": None,
             "capability_contract": {
                 "required_capabilities": [
-                    "physical_flux", "provider_pack", "stability_bound", "wave_speeds",
+                    "physical_flux",
+                    "provider_pack",
+                    "stability_bound",
+                    "wave_speeds",
                 ],
                 "wave_speed_provider": "explicit_pair",
             },
         },
         "variables": "primitive",
         "positivity_floor": {
-            "kind": "rational", "numerator": "1", "denominator": str(10**30),
+            "kind": "rational",
+            "numerator": "1",
+            "denominator": str(10**30),
         },
         "wave_speed_cache": True,
         "waves_provider": "explicit_pair",
@@ -63,8 +69,9 @@ def test_spatial_identity_distinguishes_routes_and_exact_numeric_domains():
     binary64 = engine.Spatial(limiter=Minmod(), positivity_floor=0.1)
 
     assert len({rational.identity(), decimal.identity(), binary64.identity()}) == 3
-    assert rational != engine.Spatial(limiter=Minmod(), flux=HLL(),
-                                    positivity_floor=Fraction(1, 10))
+    assert rational != engine.Spatial(
+        limiter=Minmod(), flux=HLL(), positivity_floor=Fraction(1, 10)
+    )
 
 
 def test_spatial_identity_lowers_the_fixed_riemann_recovery_route():
@@ -83,7 +90,10 @@ def test_spatial_identity_lowers_the_fixed_riemann_recovery_route():
         "external_id": None,
         "capability_contract": {
             "required_capabilities": [
-                "physical_flux", "provider_pack", "roe_dissipation", "stability_bound",
+                "physical_flux",
+                "provider_pack",
+                "roe_dissipation",
+                "stability_bound",
                 "wave_speeds",
             ],
             "wave_speed_provider": None,
@@ -102,14 +112,22 @@ def test_external_riemann_identity_includes_the_registered_brick_id():
 
     def external(brick_id):
         return BrickDescriptor(
-            brick_id, "external_cpp", category="riemann",
-            native_id="pops_external_flux", scheme="user",
+            brick_id,
+            "external_cpp",
+            category="riemann",
+            native_id="pops_external_flux",
+            scheme="user",
             options={
                 "library_path": "/tmp/external-riemann.so",
                 "library_sha256": "0" * 64,
                 "abi_version": 4,
                 "abi_key": (
                     "pops.external-riemann/v4;scalar=f64;index=i32;periodicity=nd;"
+                    "providers=qualified;dim=2"
+                ),
+                "system_abi_version": 6,
+                "system_abi_key": (
+                    "pops.external-riemann.system/v6;receiver=prepared-native-package;"
                     "providers=qualified;dim=2"
                 ),
                 "native_abi_key": "host-native-abi",
@@ -125,10 +143,15 @@ def test_external_riemann_identity_includes_the_registered_brick_id():
     right = engine.Spatial(flux=external("acme.hll.v2"))
 
     assert left.to_data()["riemann"] == {
-        "route": "user", "external_id": "acme.hll.v1",
+        "route": "user",
+        "external_id": "acme.hll.v1",
         "external_library_sha256": "0" * 64,
         "external_abi_key": (
-            "pops.external-riemann/v4;scalar=f64;index=i32;periodicity=nd;"
+            "pops.external-riemann/v4;scalar=f64;index=i32;periodicity=nd;providers=qualified;dim=2"
+        ),
+        "external_system_abi_version": 6,
+        "external_system_abi_key": (
+            "pops.external-riemann.system/v6;receiver=prepared-native-package;"
             "providers=qualified;dim=2"
         ),
         "external_native_abi_key": "host-native-abi",
@@ -137,7 +160,8 @@ def test_external_riemann_identity_includes_the_registered_brick_id():
         "external_n_vars": 4,
         "external_provider_count": 0,
         "capability_contract": {
-            "required_capabilities": [], "wave_speed_provider": None,
+            "required_capabilities": [],
+            "wave_speed_provider": None,
         },
     }
     assert left.identity() != right.identity()

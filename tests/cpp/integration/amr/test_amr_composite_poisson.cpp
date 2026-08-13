@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "explicit_amr_program.hpp"
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace.hpp>
@@ -288,6 +289,8 @@ TEST(test_amr_composite_poisson,
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = kCells;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system,
+                                            "tests.amr.composite-poisson/exact-provider-runtime");
   const pops::AmrFieldHierarchyPolicyAuthority hierarchy{
       "pops.field-hierarchy.composite", 1, {"pops.field-hierarchy.options.empty@1", {}}};
   pops::CompositeFacOptions fac_controls;
@@ -297,15 +300,17 @@ TEST(test_amr_composite_poisson,
   const std::string slot = "field/manufactured";
   system.set_field_solver_plan(
       slot, "test.amr-composite-poisson.plan", "test.amr-composite-poisson.provider",
-      "test.amr-composite-poisson", "tracer", "phi", {"test.manufactured-rhs"}, {"tracer"},
-      {"manufactured"}, {1.0}, "geometric_mg", hierarchy,
+      "test.amr-composite-poisson", "tracer", "phi",
+      {{"test.amr-composite-poisson", "field", "phi", "potential"}}, 1, {"test.manufactured-rhs"},
+      {"tracer"}, {"manufactured"}, {1.0}, "geometric_mg", hierarchy,
       pops::geometric_mg_amr_field_solver_options(pops::GeometricMgOptions{}, fac_controls));
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_test_compiled_model(system, "tracer", advection_model());
   const auto output_key = install_field_output(system);
   system.register_elliptic_field("tracer", "phi", {output_key}, 1);
   system.set_block_elliptic_field(
-      "tracer", "phi", [coarse_geometry](const pops::MultiFab<Dim>&, pops::MultiFab<Dim>& rhs) {
+      "tracer", "phi", "test.amr-composite-poisson.rhs.manufactured@1",
+      [coarse_geometry](const pops::MultiFab<Dim>&, pops::MultiFab<Dim>& rhs) {
         const bool fine_level = rhs.box(0).hi[0] >= kCells;
         const auto geometry =
             fine_level ? coarse_geometry.refine(filled<pops::Extent<Dim>>(std::int64_t{2}))

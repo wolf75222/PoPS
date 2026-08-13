@@ -31,6 +31,7 @@ py::dict report(const pops::component::LoadedComponent& loaded) {
   result["abi_key"] = api.abi_key;
   result["catalog_sha256"] = api.catalog_sha256;
   result["protocol_abi"] = api.protocol_abi;
+  result["binary_identity"] = loaded.binary_identity();
   result["interfaces"] = std::move(interfaces);
   return result;
 }
@@ -52,11 +53,18 @@ void init_component_loader(py::module_& m) {
       [](const std::string& path, const std::string& component_id,
          const std::string& semantic_identity, const std::string& manifest_identity,
          const std::string& catalog_sha256, const std::string& abi_key,
+         const std::string& binary_identity,
          const std::vector<std::tuple<int, std::uint32_t, std::string>>& interfaces,
          const std::string& prepare_parameters_json, const std::string& prepare_target_json) {
-        ExpectedNativeComponent expected{
-            component_id, semantic_identity,       manifest_identity,  catalog_sha256, abi_key,
-            {},           prepare_parameters_json, prepare_target_json};
+        ExpectedNativeComponent expected{component_id,
+                                         semantic_identity,
+                                         manifest_identity,
+                                         catalog_sha256,
+                                         abi_key,
+                                         binary_identity,
+                                         {},
+                                         prepare_parameters_json,
+                                         prepare_target_json};
         for (const auto& [raw_id, version, declared_table] : interfaces) {
           if (raw_id < 0)
             throw py::value_error("native component interface id must be non-negative");
@@ -71,6 +79,7 @@ void init_component_loader(py::module_& m) {
       },
       py::arg("path"), py::arg("component_id"), py::arg("semantic_identity"),
       py::arg("manifest_identity"), py::arg("catalog_sha256"), py::arg("abi_key"),
-      py::arg("interfaces"), py::arg("prepare_parameters_json"), py::arg("prepare_target_json"),
+      py::arg("binary_identity"), py::arg("interfaces"), py::arg("prepare_parameters_json"),
+      py::arg("prepare_target_json"),
       "Load and authenticate one generated native component table exactly once.");
 }

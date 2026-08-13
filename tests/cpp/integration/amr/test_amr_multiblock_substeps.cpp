@@ -43,12 +43,12 @@ std::shared_ptr<const pops::PreparedLoadBalanceAuthority<Dim>> load_balance() {
 }
 
 template <int Dim>
-mesh::RankSpace<Dim> execution_rank_space() {
+mesh::RankSpace<Dim> execution_rank_space(const pops::ExecutionLane& lane) {
   pops::Index<Dim> origin{};
   pops::Extent<Dim> extent{};
   for (int axis = 0; axis < Dim; ++axis)
     extent[axis] = 1;
-  extent[0] = pops::ExecutionLane::world().size();
+  extent[0] = lane.size();
   return {origin, extent};
 }
 
@@ -64,12 +64,12 @@ pops::amr::RefinementRatio<Dim> spatial_ratio(int transition) {
 template <int Dim>
 hierarchy::LevelLayout<Dim> make_coarse_layout(
     const pops::Box<Dim>& domain, const pops::PreparedLoadBalanceAuthority<Dim>& authority,
-    const mesh::RankSpace<Dim>& ranks) {
+    const mesh::RankSpace<Dim>& ranks, const pops::ExecutionLane& lane) {
   pops::Extent<Dim> tile{};
   for (int axis = 0; axis < Dim; ++axis)
     tile[axis] = 4;
   const mesh::BoxArray<Dim> patches = mesh::BoxArray<Dim>::from_domain(domain, tile);
-  const auto ownership = authority.prepare(patches, ranks, kLoadBalanceBudget);
+  const auto ownership = authority.prepare(patches, ranks, kLoadBalanceBudget, {}, lane);
   return {0,
           domain,
           patches,
@@ -82,21 +82,23 @@ template <int Dim>
 hierarchy::LevelLayout<Dim> make_partial_child_layout(
     const hierarchy::LevelLayout<Dim>& parent, int level,
     const pops::amr::RefinementRatio<Dim>& ratio,
-    const pops::PreparedLoadBalanceAuthority<Dim>& authority) {
+    const pops::PreparedLoadBalanceAuthority<Dim>& authority, const pops::ExecutionLane& lane) {
   pops::Box<Dim> covered = parent.patches().boxes().front();
   covered.hi[0] = covered.lo[0] + (covered.length(0) / 2) - 1;
   const pops::Box<Dim> child_patch = hierarchy::refine_box(covered, ratio);
   const pops::Box<Dim> child_domain = hierarchy::refine_box(parent.domain(), ratio);
   const mesh::BoxArray<Dim> patches(std::vector<pops::Box<Dim>>{child_patch});
   const auto ownership =
-      authority.prepare(patches, parent.distribution().rank_space(), kLoadBalanceBudget);
+      authority.prepare(patches, parent.distribution().rank_space(), kLoadBalanceBudget, {}, lane);
   return {level, child_domain, patches, ownership.plan().distribution(), ratio, kLayoutBudget};
 }
 
 template <int Dim>
 MultiBlock<Dim> make_hierarchy() {
+  pops::ExecutionLane parent = pops::ExecutionLane::duplicate_world_collectively(
+      "test.multiblock-subcycling.parent." + std::to_string(Dim));
   const auto authority = load_balance<Dim>();
-  const auto ranks = execution_rank_space<Dim>();
+  const auto ranks = execution_rank_space<Dim>(parent);
   pops::Index<Dim> lo{};
   pops::Index<Dim> hi{};
   for (int axis = 0; axis < Dim; ++axis)
@@ -104,14 +106,13 @@ MultiBlock<Dim> make_hierarchy() {
   hi[0] = 4 * static_cast<int>(std::max<std::size_t>(2, ranks.size())) - 1;
   const pops::Box<Dim> domain{lo, hi};
   std::vector<hierarchy::LevelLayout<Dim>> layouts;
-  layouts.push_back(make_coarse_layout(domain, *authority, ranks));
+  layouts.push_back(make_coarse_layout(domain, *authority, ranks, parent));
   layouts.push_back(
-      make_partial_child_layout(layouts.back(), 1, spatial_ratio<Dim>(0), *authority));
+      make_partial_child_layout(layouts.back(), 1, spatial_ratio<Dim>(0), *authority, parent));
   layouts.push_back(
-      make_partial_child_layout(layouts.back(), 2, spatial_ratio<Dim>(1), *authority));
+      make_partial_child_layout(layouts.back(), 2, spatial_ratio<Dim>(1), *authority, parent));
 
-  const pops::Index<Dim> local_rank =
-      ranks.coordinate(static_cast<std::size_t>(pops::ExecutionLane::world().rank()));
+  const pops::Index<Dim> local_rank = ranks.coordinate(static_cast<std::size_t>(parent.rank()));
   std::vector<hierarchy::AmrLevelState<Dim>> primary_levels;
   std::vector<pops::MultiFab<Dim>> secondary_levels;
   for (const auto& layout : layouts) {
@@ -130,7 +131,7 @@ MultiBlock<Dim> make_hierarchy() {
   std::vector<typename MultiBlock<Dim>::AdditionalBlock> additional;
   additional.push_back({"electrons", std::move(secondary_levels)});
   return MultiBlock<Dim>::prepare_collectively(
-      std::move(topology), "ions", std::move(additional),
+      parent, std::move(topology), "ions", std::move(additional),
       "test.multiblock-subcycling.lane." + std::to_string(Dim));
 }
 

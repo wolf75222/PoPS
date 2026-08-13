@@ -127,6 +127,9 @@ Result run(int n, int nsteps, double dt, bool distribute) {
   const std::vector<double> rho = four_bubbles(cfg.shape);
 
   AmrSystem<Dim> sys(cfg);
+  test::install_amr_runtime_authority(sys, distribute
+                                               ? "test.amr-distribute-coarse.distributed-runtime"
+                                               : "test.amr-distribute-coarse.replicated-runtime");
   // Temporal subcycling is an independent execution authority: spell it out even though this
   // regression happens to use the same ratio as the spatial hierarchy.  The runtime must never
   // infer a clock relation from mesh refinement.
@@ -183,6 +186,7 @@ static int pops_run_test_amr_distribute_coarse_serial(int argc, char** argv) {
 
   // (2) a CFL step advances by a finite, positive dt (no NaN/Inf from a corrupted layout).
   AmrSystem<Dim> probe(probe_cfg);
+  test::install_amr_runtime_authority(probe, "test.amr-distribute-coarse.probe-runtime");
   probe.set_temporal_relations({2}, {1}, {"integral_only"});
   add_compiled_model<Dim>(probe, "gas", gravity_model<Dim>(), "minmod", "rusanov", "conservative",
                           "explicit", /*gamma=*/1.4);

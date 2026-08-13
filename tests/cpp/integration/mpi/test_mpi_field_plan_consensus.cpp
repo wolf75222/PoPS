@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include "amr_tagging_test_authority.hpp"
+#include "explicit_amr_program.hpp"
 #include "gtest_compat.hpp"
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/coupling/base/elliptic_rhs.hpp>
@@ -570,7 +571,7 @@ void install_field_plan(pops::AmrSystem<Dim>& system,
       "pops.field-hierarchy.level-local", 1, {"pops.field-hierarchy.options.empty@1", {}}};
   system.set_field_solver_plan(
       "field/coupled", "tests.mpi.multiblock-field/plan@1", "tests.mpi.multiblock-field/provider@1",
-      "tests.mpi.multiblock-field", "a", "potential",
+      "tests.mpi.multiblock-field", "a", "potential", {output}, 1,
       {"tests.mpi.multiblock-field/a/rhs", "tests.mpi.multiblock-field/b/rhs"}, {"a", "b"},
       {"potential", "potential"}, {2.0, -0.5}, "geometric_mg", hierarchy,
       pops::geometric_mg_amr_field_solver_options(pops::GeometricMgOptions{},
@@ -592,8 +593,9 @@ void install_rejecting_field_plan(pops::AmrSystem<Dim>& system) {
   system.set_field_solver_plan(
       "field/reject", "tests.mpi.multiblock-field/reject-plan@1",
       "tests.mpi.multiblock-field/reject-provider@1", "tests.mpi.multiblock-field", "a",
-      "reject-potential", {"tests.mpi.multiblock-field/a/rhs", "tests.mpi.multiblock-field/b/rhs"},
-      {"a", "b"}, {"potential", "potential"}, {2.0, -0.5}, "geometric_mg", hierarchy,
+      "reject-potential", {{"tests.mpi.multiblock-field", "field", "reject-potential", "value"}}, 1,
+      {"tests.mpi.multiblock-field/a/rhs", "tests.mpi.multiblock-field/b/rhs"}, {"a", "b"},
+      {"potential", "potential"}, {2.0, -0.5}, "geometric_mg", hierarchy,
       pops::geometric_mg_amr_field_solver_options(options, pops::CompositeFacOptions{}));
   system.set_field_reaction("field/reject", 2.0);
 }
@@ -608,6 +610,7 @@ void install_consensus_provider_plan(pops::AmrSystem<Dim>& system, const std::st
   system.set_field_solver_plan(
       slot, "tests.mpi.multiblock-field/plan/" + slot + "@1", identity,
       "tests.mpi.multiblock-field", "a", "provider-potential",
+      {{"tests.mpi.multiblock-field", "field", "provider-potential", slot}}, 1,
       {"tests.mpi.multiblock-field/a/rhs", "tests.mpi.multiblock-field/b/rhs"}, {"a", "b"},
       {"potential", "potential"}, {2.0, -0.5}, identity, hierarchy, {});
   system.set_field_reaction(slot, 2.0);
@@ -655,14 +658,16 @@ bool amr_registry_bind_rejected(std::string token) {
   config.transition_lookaheads.clear();
   config.distribute_coarse = true;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.mpi.amr-registry/runtime");
   install_block(system, "a");
   const pops::AmrFieldHierarchyPolicyAuthority hierarchy{
       "pops.field-hierarchy.level-local", 1, {"pops.field-hierarchy.options.empty@1", {}}};
-  system.set_field_solver_plan("field/registry", std::move(token), "provider/registry",
-                               "output/registry", "a", "potential", {"rhs/registry"}, {"a"},
-                               {"potential"}, {1.0}, "geometric_mg", hierarchy,
-                               pops::geometric_mg_amr_field_solver_options(
-                                   pops::GeometricMgOptions{}, pops::CompositeFacOptions{}));
+  system.set_field_solver_plan(
+      "field/registry", std::move(token), "provider/registry", "output/registry", "a", "potential",
+      {{"output/registry", "field", "potential", "value"}}, 1, {"rhs/registry"}, {"a"},
+      {"potential"}, {1.0}, "geometric_mg", hierarchy,
+      pops::geometric_mg_amr_field_solver_options(pops::GeometricMgOptions{},
+                                                  pops::CompositeFacOptions{}));
   try {
     system.mark_bound();
   } catch (const std::exception&) {
@@ -761,6 +766,7 @@ int run_multiblock_field_solve(int argc, char** argv) {
 
     const pops::AmrSystemConfig<Dim> config = exact_config();
     pops::AmrSystem<Dim> system(config);
+    pops::test::install_amr_runtime_authority(system, "tests.mpi.multiblock-field/runtime");
     install_block(system, "a");
     install_block(system, "b");
     system.set_poisson("charge_density", "geometric_mg", "dirichlet");
@@ -779,16 +785,19 @@ int run_multiblock_field_solve(int argc, char** argv) {
                                                  "tests.mpi.multiblock-field/tagger-b@1");
     int rhs_calls = 0;
     bool fail_rhs_on_rank_one = false;
-    system.set_block_elliptic_field("a", "potential", [&](const Field& state, Field& rhs) {
-      ++rhs_calls;
-      if (fail_rhs_on_rank_one && pops::my_rank() == 1)
-        throw std::runtime_error("intentional rank-local RHS preparation failure");
-      pops::add_scaled_component(state, pops::Real(1), 0, rhs);
-    });
-    system.set_block_elliptic_field("b", "potential", [&rhs_calls](const Field& state, Field& rhs) {
-      ++rhs_calls;
-      pops::add_scaled_component(state, pops::Real(1), 0, rhs);
-    });
+    system.set_block_elliptic_field(
+        "a", "potential", "tests.mpi.multiblock-field.rhs-a@1",
+        [&](const Field& state, Field& rhs) {
+          ++rhs_calls;
+          if (fail_rhs_on_rank_one && pops::my_rank() == 1)
+            throw std::runtime_error("intentional rank-local RHS preparation failure");
+          pops::add_scaled_component(state, pops::Real(1), 0, rhs);
+        });
+    system.set_block_elliptic_field("b", "potential", "tests.mpi.multiblock-field.rhs-b@1",
+                                    [&rhs_calls](const Field& state, Field& rhs) {
+                                      ++rhs_calls;
+                                      pops::add_scaled_component(state, pops::Real(1), 0, rhs);
+                                    });
     const std::vector<double> accepted_a(cell_count(config.shape), -2.0);
     const std::vector<double> accepted_b = discriminating_tag_state(config.shape);
     system.set_conservative_state("a", accepted_a);

@@ -6,11 +6,13 @@ private :class:`HyperbolicModel`) and ``self.params``; the build engine is pulle
 in LAZILY inside ``compile`` (toolchain/cache/abi/loader names), so importing
 ``pops.physics`` never loads it (Spec-4 import-graph rule).
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
 from .aux import roles_for
+
 if TYPE_CHECKING:
     from ._model_contract import _FacadeModel
 else:
@@ -45,24 +47,27 @@ class _FacadeCompileMixin(_FacadeModel):
         from pops.codegen.component_provider_packs import ComponentProviderPacks
 
         if type(packs) is not ComponentProviderPacks:
-            raise TypeError(
-                "compiler provider-pack binding requires exact ComponentProviderPacks"
-            )
+            raise TypeError("compiler provider-pack binding requires exact ComponentProviderPacks")
         packs.attach(self)
         packs.attach(self._m)
 
     def __pops_native_loader_source__(
-        self, *, name: Any = None, target: str = "system",
+        self,
+        *,
+        name: Any = None,
+        target: str = "system",
         hoist_reciprocals: bool = False,
     ) -> str:
         """Emit a native package without exposing the private formula carrier."""
         from pops.codegen.component_provider_packs import resolve_component_provider_packs
 
-        self.__pops_bind_component_provider_packs__(
-            resolve_component_provider_packs(self.module)
-        )
+        self.__pops_bind_component_provider_packs__(resolve_component_provider_packs(self.module))
         return self._m.emit_cpp_native_loader(
-            name=name, target=target, hoist_reciprocals=hoist_reciprocals)
+            name=name,
+            target=target,
+            hoist_reciprocals=hoist_reciprocals,
+            model_identity=self._model_hash(),
+        )
 
     def _model_hash(self) -> Any:
         """Stable hash of the model: formulas (flux/eig/source/elliptic/primitives/cons_from) + roles +
@@ -71,14 +76,22 @@ class _FacadeCompileMixin(_FacadeModel):
         the Param of the facade (otherwise two models differing only by a param would have the same hash)."""
         from pops.codegen.component_provider_packs import resolve_component_provider_packs
 
-        self.__pops_bind_component_provider_packs__(
-            resolve_component_provider_packs(self.module)
-        )
+        self.__pops_bind_component_provider_packs__(resolve_component_provider_packs(self.module))
         return self._m._model_hash(params=self.params)
 
-    def compile(self, so_path: Any = None, include: Any = None, backend: Any = "production",
-                target: str = "system", name: Any = None, cxx: Any = None, std: Any = None,
-                require_metadata: bool = False, hoist_reciprocals: bool = False) -> Any:
+    def compile(
+        self,
+        so_path: Any = None,
+        include: Any = None,
+        backend: Any = "production",
+        target: str = "system",
+        name: Any = None,
+        cxx: Any = None,
+        std: Any = None,
+        require_metadata: bool = False,
+        hoist_reciprocals: bool = False,
+        _native_field_roles: Any = None,
+    ) -> Any:
         """Compiles the model into a CompiledModel (Phase A). Delegates the GENERATION + compilation to
         the native package compiler, then
         packages the .so with the already-known metadata (no re-reading of the .so).
@@ -108,17 +121,25 @@ class _FacadeCompileMixin(_FacadeModel):
         Returns a CompiledModel carrying so_path, backend, target, names/roles/gamma/n_aux/params,
         caps, abi_key, model_hash, cxx, std."""
         import os
+
         # Lazy codegen import (keeps pops.physics codegen-free at module load; Spec-4 rule):
-        from pops.codegen.toolchain import (loader_cxx_std,
-                                            loader_native_dimension,
-                                            _native_kokkos_compiler,
-                                            _native_feature_key, pops_include)
+        from pops.codegen.toolchain import (
+            loader_cxx_std,
+            loader_native_dimension,
+            _native_kokkos_compiler,
+            _native_feature_key,
+            pops_include,
+        )
         from pops.codegen.cache import (
-            _dsl_optflags, _identity_cache_so_path, _platform_cache_key,
-            _precision_cache_key, _registry_cache_key,
+            _dsl_optflags,
+            _identity_cache_so_path,
+            _platform_cache_key,
+            _precision_cache_key,
+            _registry_cache_key,
         )
         from pops.codegen.compile_provenance import (
-            verify_cached_artifact, write_artifact_sidecar,
+            verify_cached_artifact,
+            write_artifact_sidecar,
         )
         from pops.codegen.abi import _abi_key_python
         from pops.codegen._compile_emit import compiled_capability_flags
@@ -128,16 +149,26 @@ class _FacadeCompileMixin(_FacadeModel):
         from pops.codegen._backends import lower_backend
         from pops.numerics.riemann.providers import authoring_provider_evidence
         from pops.numerics.riemann.waves import provider_of
+
         backend = lower_backend(backend)
         if target not in ("system", "amr_system"):
             raise ValueError("compile: target 'system' | 'amr_system' (got %r)" % (target,))
+        if target == "system" and _native_field_roles is not None:
+            raise ValueError("resolved AMR field roles cannot be compiled for System")
+        from pops.codegen._compile_emit import _normalize_native_amr_field_roles
+
+        normalized_field_roles = (
+            _normalize_native_amr_field_roles(_native_field_roles) if target == "amr_system" else ()
+        )
 
         m = self._m
+        if target == "amr_system" and _native_field_roles is None and bool(m._elliptic_fields):
+            raise ValueError(
+                "named AMR elliptic providers require exact resolved per-block field roles"
+            )
         from pops.codegen.component_provider_packs import resolve_component_provider_packs
 
-        self.__pops_bind_component_provider_packs__(
-            resolve_component_provider_packs(self.module)
-        )
+        self.__pops_bind_component_provider_packs__(resolve_component_provider_packs(self.module))
         model_dimension = len(m._flux)
         if model_dimension not in (1, 2, 3):
             raise ValueError("compile: model has no exact 1D/2D/3D physical flux rank")
@@ -167,6 +198,21 @@ class _FacadeCompileMixin(_FacadeModel):
 
         semantic_identity = semantic_identity_of(model=self)
         feature_key = _native_feature_key()
+        spec_components = {
+            "model_hash": str(model_hash),
+            "emitted_name": str(name or ""),
+            "wave_speed_provider": (
+                "none" if wave_speed_provider is None else wave_speed_provider.kind
+            ),
+            "hllc_provider": riemann_evidence.hllc_provider or "none",
+            "roe_provider": riemann_evidence.roe_provider or "none",
+            "roe_entropy_policy": riemann_evidence.roe_entropy_policy or "none",
+            "roe_entropy_delta": riemann_evidence.roe_entropy_delta or "none",
+        }
+        if target == "amr_system":
+            from pops.identity import canonical_bytes
+
+            spec_components["amr_field_roles"] = canonical_bytes(normalized_field_roles).hex()
         spec_identity = artifact_spec_identity(
             semantic_identity,
             target=target,
@@ -175,19 +221,12 @@ class _FacadeCompileMixin(_FacadeModel):
             abi=abi_key,
             toolchain="%s|%s" % (eff_cxx, eff_std),
             routes={"registry": _registry_cache_key(), "features": feature_key},
-            components={
-                "model_hash": str(model_hash),
-                "emitted_name": str(name or ""),
-                "wave_speed_provider": (
-                    "none" if wave_speed_provider is None else wave_speed_provider.kind
-                ),
-                "hllc_provider": riemann_evidence.hllc_provider or "none",
-                "roe_provider": riemann_evidence.roe_provider or "none",
-                "roe_entropy_policy": riemann_evidence.roe_entropy_policy or "none",
-                "roe_entropy_delta": riemann_evidence.roe_entropy_delta or "none",
-            },
-            flags=[_platform_cache_key(), *_dsl_optflags(),
-                   "hoist_reciprocals=%d" % bool(hoist_reciprocals)],
+            components=spec_components,
+            flags=[
+                _platform_cache_key(),
+                *_dsl_optflags(),
+                "hoist_reciprocals=%d" % bool(hoist_reciprocals),
+            ],
             libraries=(),
         )
 
@@ -201,24 +240,46 @@ class _FacadeCompileMixin(_FacadeModel):
 
         if cache_requested and os.path.isfile(so_path):
             binary_identity, final_artifact_identity = verify_cached_artifact(
-                so_path, semantic_identity=semantic_identity, spec_identity=spec_identity)
+                so_path, semantic_identity=semantic_identity, spec_identity=spec_identity
+            )
             out_path = so_path
         else:
             # The loader emits the target-specific fixed ABI entry point.
-            out_path = m.compile(so_path, include, backend=backend, name=name, cxx=cxx, std=std,
-                                 require_metadata=require_metadata, target=target,
-                                 hoist_reciprocals=hoist_reciprocals)
+            out_path = m.compile(
+                so_path,
+                include,
+                backend=backend,
+                name=name,
+                cxx=cxx,
+                std=std,
+                require_metadata=require_metadata,
+                target=target,
+                hoist_reciprocals=hoist_reciprocals,
+                model_identity=model_hash,
+                _native_field_roles=(normalized_field_roles if target == "amr_system" else None),
+            )
             binary_identity, final_artifact_identity = write_artifact_sidecar(
-                out_path, semantic_identity=semantic_identity, spec_identity=spec_identity)
+                out_path, semantic_identity=semantic_identity, spec_identity=spec_identity
+            )
         cons_roles = roles_for(m.cons_names, m.cons_roles)
         cm: Any = CompiledModel(
-            so_path=out_path, backend=backend, target=target,
-            cons_names=m.cons_names, cons_roles=cons_roles, prim_names=m.prim_state,
-            n_vars=m.n_vars, gamma=m.gamma, n_aux=m._total_n_aux(),
-            params=self.params, caps=compiled_capability_flags(backend),
-            abi_key=abi_key, model_hash=model_hash,
+            so_path=out_path,
+            backend=backend,
+            target=target,
+            cons_names=m.cons_names,
+            cons_roles=cons_roles,
+            prim_names=m.prim_state,
+            n_vars=m.n_vars,
+            gamma=m.gamma,
+            n_aux=m._total_n_aux(),
+            params=self.params,
+            caps=compiled_capability_flags(backend),
+            abi_key=abi_key,
+            model_hash=model_hash,
             definition_identity=model_compile_identity(self),
-            cxx=eff_cxx, std=eff_std, native_dimension=native_dimension,
+            cxx=eff_cxx,
+            std=eff_std,
+            native_dimension=native_dimension,
             hllc=riemann_evidence.hllc_provider is not None,
             roe=riemann_evidence.roe_provider is not None,
             hllc_provider=riemann_evidence.hllc_provider,
@@ -228,17 +289,18 @@ class _FacadeCompileMixin(_FacadeModel):
             characteristic_no_inflow=has_characteristic_no_inflow_provider(m),
             provider_components=m._provider_components,
             wave_speeds=wave_speed_provider is not None,
-            wave_speed_provider=(
-                None if wave_speed_provider is None else wave_speed_provider.kind
-            ),
+            wave_speed_provider=(None if wave_speed_provider is None else wave_speed_provider.kind),
             # NAMED elliptic fields the model declares (m.elliptic_field, ADC-419 / ADC-428): the
             # detached model preserves the declaration inventory while the resolved simulation plan
             # owns the field discretization and provider. Empty for the default-Poisson-only model.
-            elliptic_field_names=list(m._elliptic_fields))
+            elliptic_field_names=list(m._elliptic_fields),
+        )
         cm.semantic_identity = semantic_identity
         cm.artifact_spec_identity = spec_identity
         cm.binary_identity = binary_identity
         cm.artifact_identity = final_artifact_identity
+        if target == "amr_system":
+            cm._native_field_roles = normalized_field_roles
         # Exact ABI order of only the RuntimeParamRef nodes actually read by emitted formulas.
         # BindSchema routes qualified values into this local vector; declarations that are never
         # read do not create native slots.

@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "explicit_amr_program.hpp"
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace_provider.hpp>
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
@@ -467,6 +468,7 @@ TEST(GeneratedAmrSystemBlock, FacadeRetainsAndExecutesPreparedRootLevel) {
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/facade-root-level");
   ASSERT_EQ(system.n_blocks(), 0);
 
   system.install_block_state_route("tracer", "state/tracer");
@@ -500,6 +502,7 @@ TEST(GeneratedAmrSystemBlock, RegridRebuildsExactFineGhostProvidersAndInvalidate
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/regrid-ghost-providers");
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
@@ -526,6 +529,7 @@ TEST(GeneratedAmrSystemBlock,
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/embedded-boundary-levels");
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
   EXPECT_THROW(
@@ -592,6 +596,7 @@ TEST(GeneratedAmrSystemBlock, CutCellCapabilityExecutesAtExactRank) {
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/cut-cell-exact-rank");
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
   EXPECT_NO_THROW(
@@ -609,6 +614,8 @@ TEST(GeneratedAmrSystemBlock, EmbeddedBoundaryAuthoringRejectsDivergentMpiInputB
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system,
+                                            "tests.generated-amr/embedded-boundary-authoring");
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
 
@@ -627,6 +634,8 @@ TEST(GeneratedAmrSystemBlock, ProgramContextOwnsOneExactHierarchyTensorAuthority
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system,
+                                            "tests.generated-amr/hierarchy-tensor-authority");
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
@@ -680,6 +689,7 @@ TEST(GeneratedAmrSystemBlock, ProgramContextEvaluatesExactStageStateWithoutPubli
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/exact-stage-state");
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
@@ -713,6 +723,7 @@ TEST(GeneratedAmrSystemBlock, RegistersOnlyExactRankedNullspaceProviders) {
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/nullspace-registry");
   system.register_field_nullspace_provider(std::make_shared<TestFieldNullspaceProvider<Dim>>());
   EXPECT_THROW(
       system.register_field_nullspace_provider(std::make_shared<TestFieldNullspaceProvider<Dim>>()),
@@ -729,6 +740,8 @@ TEST(GeneratedAmrSystemBlock, DefaultFieldPublishesOnlyAfterSolveOutcomeAcceptan
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system,
+                                            "tests.generated-amr/default-field-publication");
   system.set_poisson();
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
@@ -760,11 +773,13 @@ TEST(GeneratedAmrSystemBlock, NamedFieldConsumesExactStageWithoutPublishingState
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/named-field-stage");
   const pops::AmrFieldHierarchyPolicyAuthority hierarchy{
       "pops.field-hierarchy.level-local", 1, {"pops.field-hierarchy.options.empty@1", {}}};
   system.set_field_solver_plan("field/tracer", "test.named-field-plan", "test.named-field",
-                               "test.aux-owner", "tracer", "phi", {"test.rhs"}, {"tracer"},
-                               {"charge"}, {1.0}, "geometric_mg", hierarchy,
+                               "test.aux-owner", "tracer", "phi",
+                               {{"test.aux-owner", "field", "phi", "potential"}}, 1, {"test.rhs"},
+                               {"tracer"}, {"charge"}, {1.0}, "geometric_mg", hierarchy,
                                pops::geometric_mg_amr_field_solver_options(
                                    pops::GeometricMgOptions{}, pops::CompositeFacOptions{}));
   system.install_block_state_route("tracer", "state/tracer");
@@ -772,7 +787,7 @@ TEST(GeneratedAmrSystemBlock, NamedFieldConsumesExactStageWithoutPublishingState
   const auto output_key = install_field_output(system, "test.aux-owner", "phi");
   system.register_elliptic_field("tracer", "phi", {output_key}, 1);
   system.set_block_elliptic_field(
-      "tracer", "phi",
+      "tracer", "phi", "test.generated-amr.named-field.rhs.zero@1",
       [](const pops::MultiFab<Dim>&, pops::MultiFab<Dim>& rhs) { rhs.set_val(pops::Real(0)); });
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
   system.set_program_block_map({0});
@@ -801,11 +816,13 @@ TEST(GeneratedAmrSystemBlock,
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/dynamic-field-boundary");
   const pops::AmrFieldHierarchyPolicyAuthority hierarchy{
       "pops.field-hierarchy.composite", 1, {"pops.field-hierarchy.options.empty@1", {}}};
   system.set_field_solver_plan("field/tracer", "test.dynamic-field-plan", "test.dynamic-field",
-                               "test.aux-owner", "tracer", "phi", {"test.rhs"}, {"tracer"},
-                               {"charge"}, {1.0}, "geometric_mg", hierarchy,
+                               "test.aux-owner", "tracer", "phi",
+                               {{"test.aux-owner", "field", "phi", "potential"}}, 1, {"test.rhs"},
+                               {"tracer"}, {"charge"}, {1.0}, "geometric_mg", hierarchy,
                                pops::geometric_mg_amr_field_solver_options(
                                    pops::GeometricMgOptions{}, pops::CompositeFacOptions{}));
   system.set_field_reaction("field/tracer", 50.0);
@@ -818,7 +835,7 @@ TEST(GeneratedAmrSystemBlock,
   const auto output_key = install_field_output(system, "test.aux-owner", "phi");
   system.register_elliptic_field("tracer", "phi", {output_key}, 1);
   system.set_block_elliptic_field(
-      "tracer", "phi",
+      "tracer", "phi", "test.generated-amr.dynamic-field.rhs.one@1",
       [](const pops::MultiFab<Dim>&, pops::MultiFab<Dim>& rhs) { rhs.set_val(pops::Real(1)); });
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
   publish_centered_fine_level(system);
@@ -865,6 +882,8 @@ TEST(GeneratedAmrSystemBlock, CompositeFieldInstallsCoverageAwareNullspaceOnEver
     config.periodicity[axis] = true;
   }
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system,
+                                            "tests.generated-amr/composite-field-nullspace");
   system.set_poisson();
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
@@ -896,6 +915,7 @@ TEST(GeneratedAmrSystemBlock, ProgramContextRefusesUnsynchronizedHierarchyBefore
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/unsynchronized-hierarchy");
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
@@ -918,6 +938,7 @@ TEST(GeneratedAmrSystemBlock, ProgramContextRetainsAndInterpolatesExactLevelHist
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/level-history");
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
@@ -958,6 +979,7 @@ TEST(GeneratedAmrSystemBlock, ProgramContextRefusesHistoryRegridBeforeTopologyMu
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/history-regrid-refusal");
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
@@ -996,6 +1018,7 @@ TEST(GeneratedAmrSystemBlock, CflUsesFinestExactGeometryAndPreparedModelSpeed) {
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/cfl-finest-geometry");
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>(), "minmod", "rusanov",
                                 "conservative", "explicit", 1.4, 2, 1);
@@ -1016,6 +1039,7 @@ TEST(GeneratedAmrSystemBlock, CflAuthenticatesRequestsAndBoundOrderBeforeCallbac
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/cfl-request-consensus");
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));

@@ -8,12 +8,15 @@
 #include <gtest/gtest.h>
 
 #include "amr_tagging_test_authority.hpp"
+#include "component_abi_test_helpers.hpp"
 #include "gtest_compat.hpp"
 #include "native_dso_compiler.hpp"
 
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/parallel/comm.hpp>
 #include <pops/runtime/amr_system.hpp>
+#include <pops/runtime/dynamic/authenticated_native_file.hpp>
+#include <pops/runtime/dynamic/prepared_execution_context.hpp>
 #include <pops/runtime/program/amr_program_context.hpp>
 #include <pops/runtime/program/step_transaction.hpp>
 
@@ -43,6 +46,17 @@ constexpr const char* kStateRoute = "tests.synthetic-loader/state/tracer";
 constexpr const char* kProviderConsumer = "tests.synthetic-loader/providers/tracer";
 constexpr const char* kSyntheticLoaderProgramHash =
     "tests.synthetic-loader/program/loader-transaction-v1";
+
+std::shared_ptr<const pops::component::PreparedExecutionContextV1> prepared_execution() {
+  const PopsExecutionContextV1 execution = pops::component::test_support::host_execution_context();
+  return std::make_shared<const pops::component::PreparedExecutionContextV1>(
+      execution.execution_identity, execution.context_version, execution.memory_space,
+      execution.backend_identity, execution.device_identity, execution.scalar_type,
+      execution.storage_precision, execution.compute_precision, execution.accumulation_precision,
+      execution.reduction_precision, execution.stream_handle, execution.stream_identity,
+      execution.communicator_f_handle, execution.communicator_datatype_f_handle,
+      execution.communicator_identity, execution.communicator_datatype_identity);
+}
 
 std::size_t cell_count(const pops::Extent<Dim>& shape) {
   std::size_t count = 1;
@@ -106,6 +120,7 @@ std::string loader_source() {
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
+#include <utility>
 namespace pops_generated {
 template <int Dim>
 struct RelaxingAdvection {
@@ -163,9 +178,17 @@ struct RelaxingAdvection {
 using Model = RelaxingAdvection<pops::kNativeDimension>;
 }
 extern "C" const char* pops_native_abi_key() { return POPS_ABI_KEY_LITERAL; }
+extern "C" const char* pops_compiled_model_identity() {
+  return "2222222222222222222222222222222222222222222222222222222222222222";
+}
 extern "C" const char* pops_compiled_route_manifest() { return pops::kRouteRegistrySignature; }
 extern "C" int pops_compiled_nparams() { return 0; }
 extern "C" const char* pops_compiled_param_names() { return ""; }
+extern "C" void pops_register_provider_routes_amr(
+    pops::AmrSystem<pops::kNativeDimension>* system) {
+  if (system == nullptr)
+    throw std::invalid_argument("AMR provider route installer received null exact runtime");
+}
 extern "C" void pops_install_native_amr(void* sys, const char* name, const char* limiter,
                                         const char* riemann, const char* recon, const char* time,
                                         double gamma, int substeps, const double*, int,
@@ -177,9 +200,11 @@ extern "C" void pops_install_native_amr(void* sys, const char* name, const char*
   pops_generated::Model model{
       pops::nd::ScalarAdvection<pops::kNativeDimension>::prepare(velocity), pops::Real(80)};
   auto* system = static_cast<pops::AmrSystem<pops::kNativeDimension>*>(sys);
-  pops::add_compiled_model<pops::kNativeDimension>(
-      *system, name, model, limiter, riemann, recon, time, gamma, substeps, 1, {}, {}, pos_floor,
+  pops::PreparedNativeAmrPackage<pops::kNativeDimension> package;
+  package.block = pops::prepare_compiled_amr_system_block<pops::kNativeDimension>(
+      name, std::move(model), limiter, riemann, recon, time, gamma, substeps, 1, pos_floor,
       weno_epsilon, wave_speed_cache, "tests.synthetic-loader/providers/tracer");
+  system->install_prepared_native_amr_package(std::move(package));
 }
 
 extern "C" const char* pops_program_abi_key() { return POPS_ABI_KEY_LITERAL; }
@@ -288,9 +313,16 @@ extern "C" void pops_install_program_amr(
 
 void build_refined_system(pops::AmrSystem<Dim>& system, const std::string& shared_object,
                           const std::vector<double>& state) {
+  auto lane = std::make_shared<pops::ExecutionLane>(
+      pops::ExecutionLane::duplicate_world_collectively("test.synthetic-loader.package"));
+  auto execution = std::make_shared<const pops::component::PreparedExecutionContextV1>(
+      prepared_execution()->for_lane(*lane));
+  system.install_prepared_boundary_execution_context(std::move(lane), std::move(execution));
   system.install_block_state_route(kBlock, kStateRoute);
-  system.add_native_block(kBlock, shared_object, "minmod", "rusanov", "conservative", "explicit",
-                          1.4, 1);
+  const pops::dynlib::AuthenticatedNativeFile authenticated(shared_object);
+  system.add_native_block(
+      kBlock, shared_object, "2222222222222222222222222222222222222222222222222222222222222222",
+      authenticated.binary_identity(), "minmod", "rusanov", "conservative", "explicit", 1.4, 1);
   system.set_temporal_relations({2}, {1}, {"integral_only"});
   system.bind_bootstrap_subject(kStateRoute, kBlock, "bound_level_zero");
   system.stage_bootstrap_array(kStateRoute, kBlock, "cell", "cell", 1, system.spatial_shape(),

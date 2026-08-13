@@ -36,18 +36,28 @@ from pops.codegen.compile_provenance import (
     write_artifact_sidecar,
 )
 from pops.codegen.abi import _abi_key_python
-from pops.codegen._compile_emit import emit_cpp_native_loader
+from pops.codegen._compile_emit import emit_cpp_native_loader, model_hash
 from pops.codegen._backends import lower_backend
 from pops.codegen._compile_command_redact import _redact_compile_command  # noqa: F401
 from pops.codegen.compile_link_flags import deterministic_program_link_flags
+
 # _module_to_model moved to module_lowering.py (500-line budget); re-exported here so
 # ``from pops.codegen._compile_drivers import _module_to_model`` (and pops.codegen._compile) is unchanged.
 from pops.codegen.module_lowering import _module_to_model  # noqa: F401
 
 
-def compile_native(model: Any, so_path: Any, include: Any = None, name: Any = None, cxx: Any = None,
-                   std: Any = "c++23", target: Any = "system",
-                   hoist_reciprocals: Any = False) -> Any:
+def compile_native(
+    model: Any,
+    so_path: Any,
+    include: Any = None,
+    name: Any = None,
+    cxx: Any = None,
+    std: Any = "c++23",
+    target: Any = "system",
+    hoist_reciprocals: Any = False,
+    model_identity: Any = None,
+    native_field_roles: Any = None,
+) -> Any:
     """Backend "production": generate the NATIVE LOADER (emit_cpp_native_loader)
     and compile it into a .so loadable by System.add_native_block
     (target="system") or AmrSystem.add_native_block (target="amr_system").
@@ -55,18 +65,26 @@ def compile_native(model: Any, so_path: Any, include: Any = None, name: Any = No
     """
     import tempfile
     from pops.codegen._compile_platform import require_shared_library_compile_platform
+
     require_shared_library_compile_platform("compile_native", windows_supported=True)
     if include is None:
         include = pops_include()
     sig = _check_headers_match_module(include)
     _warn_kokkos_parity()
-    src = emit_cpp_native_loader(model, name=name, target=target,
-                                 hoist_reciprocals=hoist_reciprocals)
+    src = emit_cpp_native_loader(
+        model,
+        name=name,
+        target=target,
+        hoist_reciprocals=hoist_reciprocals,
+        model_identity=(model_hash(model) if model_identity is None else model_identity),
+        native_field_roles=native_field_roles,
+    )
     cc, native_compile_flags, native_link_flags = pops_loader_build_flags(cxx)
     if not cc:
         raise RuntimeError(
             "compile_native: no C++ compiler found. The PRODUCTION native route is REQUIRED for "
-            "the compile/bind target surface; the prototype/host routes are NOT a fallback (ADC-600).")
+            "the compile/bind target surface; the prototype/host routes are NOT a fallback (ADC-600)."
+        )
     std = _probe_cxx_std(cc, std)
     with tempfile.TemporaryDirectory() as tmp:
         cpp = os.path.join(tmp, "model_native.cpp")
@@ -81,17 +99,37 @@ def compile_native(model: Any, so_path: Any, include: Any = None, name: Any = No
                     "link the DSL .dll; rebuild _pops with its shared-exception ABI producer "
                     "definitions). The "
                     "PRODUCTION native route is REQUIRED for the compile/bind target surface; the "
-                    "prototype/host routes are NOT a fallback (ADC-600).")
-            cl_flags = (["/nologo", "/LD", "/std:" + std, "/O2", "/DNDEBUG", "/EHsc",
-                         "/permissive-", "/Zc:preprocessor", "/DNOMINMAX", "/bigobj"]
-                        + native_compile_flags)
-            cmd = ([cc] + cl_flags + ["-I", include, cpp,
-                    "/Fe:" + so_path, "/Fo" + tmp + os.sep,
-                    "/link"] + native_link_flags + [pops_lib])
+                    "prototype/host routes are NOT a fallback (ADC-600)."
+                )
+            cl_flags = [
+                "/nologo",
+                "/LD",
+                "/std:" + std,
+                "/O2",
+                "/DNDEBUG",
+                "/EHsc",
+                "/permissive-",
+                "/Zc:preprocessor",
+                "/DNOMINMAX",
+                "/bigobj",
+            ] + native_compile_flags
+            cmd = (
+                [cc]
+                + cl_flags
+                + ["-I", include, cpp, "/Fe:" + so_path, "/Fo" + tmp + os.sep, "/link"]
+                + native_link_flags
+                + [pops_lib]
+            )
         else:
             optflags = _dsl_optflags()
-            flags = ["-shared", "-fPIC", "-std=" + std, *optflags,
-                     "-DPOPS_HEADER_SIG=\"%s\"" % sig, *native_compile_flags]
+            flags = [
+                "-shared",
+                "-fPIC",
+                "-std=" + std,
+                *optflags,
+                '-DPOPS_HEADER_SIG="%s"' % sig,
+                *native_compile_flags,
+            ]
             cmd = [cc, *flags, "-I", include, cpp, "-o", so_path, *native_link_flags]
         _run_compile(cmd, "backend production, compile_native")
     return so_path
@@ -101,10 +139,21 @@ def compile_native(model: Any, so_path: Any, include: Any = None, name: Any = No
 # compile_model -- full facade (mirrors HyperbolicModel.compile logic)
 # ---------------------------------------------------------------------------
 
-def compile_model(model: Any, so_path: Any = None, include: Any = None, backend: Any = "production",
-                  name: Any = None, cxx: Any = None, std: Any = None,
-                  require_metadata: Any = False, target: Any = "system",
-                  hoist_reciprocals: Any = False) -> Any:
+
+def compile_model(
+    model: Any,
+    so_path: Any = None,
+    include: Any = None,
+    backend: Any = "production",
+    name: Any = None,
+    cxx: Any = None,
+    std: Any = None,
+    require_metadata: Any = False,
+    target: Any = "system",
+    hoist_reciprocals: Any = False,
+    model_identity: Any = None,
+    _native_field_roles: Any = None,
+) -> Any:
     """Compilation facade by INTENTION: compiles *model* (a ``HyperbolicModel``)
     into a native fixed-ABI package and returns its path.
 
@@ -120,6 +169,21 @@ def compile_model(model: Any, so_path: Any = None, include: Any = None, backend:
     backend = lower_backend(backend)
     if target not in ("system", "amr_system"):
         raise ValueError("compile: target 'system' | 'amr_system' (received %r)" % (target,))
+    if target == "system" and _native_field_roles is not None:
+        raise ValueError("resolved AMR field roles cannot be compiled for System")
+    from pops.codegen._compile_emit import _normalize_native_amr_field_roles
+
+    normalized_field_roles = (
+        _normalize_native_amr_field_roles(_native_field_roles) if target == "amr_system" else ()
+    )
+    if (
+        target == "amr_system"
+        and _native_field_roles is None
+        and bool(getattr(m, "_elliptic_fields", {}))
+    ):
+        raise ValueError(
+            "named AMR elliptic providers require exact resolved per-block field roles"
+        )
     if std is None:
         std = loader_cxx_std()
     if include is None:
@@ -133,17 +197,42 @@ def compile_model(model: Any, so_path: Any = None, include: Any = None, backend:
     abi_key = _abi_key_python(include, eff_cxx, std)
     from pops.codegen._artifact_identity import model_artifact_spec
 
+    identity_name = name
+    if target == "amr_system":
+        from pops.identity import canonical_bytes
+
+        identity_name = "%s#amr-field-roles:%s" % (
+            "" if name is None else name,
+            canonical_bytes(normalized_field_roles).hex(),
+        )
     semantic_identity, spec_identity = model_artifact_spec(
-        m, backend=str(backend), target=str(target), name=name, compiler=eff_cxx,
-        standard=std, abi_key=str(abi_key),
-        hoist_reciprocals=hoist_reciprocals)
+        m,
+        backend=str(backend),
+        target=str(target),
+        name=identity_name,
+        compiler=eff_cxx,
+        standard=std,
+        abi_key=str(abi_key),
+        hoist_reciprocals=hoist_reciprocals,
+    )
 
     def _compile_and_authenticate(path: Any, destination: Any = None) -> Any:
-        out_path = compile_native(m, path, include, name=name, cxx=cxx, std=std,
-                                  target=target, hoist_reciprocals=hoist_reciprocals)
+        out_path = compile_native(
+            m,
+            path,
+            include,
+            name=name,
+            cxx=cxx,
+            std=std,
+            target=target,
+            hoist_reciprocals=hoist_reciprocals,
+            model_identity=model_identity,
+            native_field_roles=(normalized_field_roles if target == "amr_system" else None),
+        )
         if destination is None:
             write_artifact_sidecar(
-                out_path, semantic_identity=semantic_identity, spec_identity=spec_identity)
+                out_path, semantic_identity=semantic_identity, spec_identity=spec_identity
+            )
             published = out_path
         else:
             publish_staged_artifact(
@@ -164,7 +253,8 @@ def compile_model(model: Any, so_path: Any = None, include: Any = None, backend:
         with _artifact_cache_lock(so_path):
             if os.path.exists(so_path):
                 verify_cached_artifact(
-                    so_path, semantic_identity=semantic_identity, spec_identity=spec_identity)
+                    so_path, semantic_identity=semantic_identity, spec_identity=spec_identity
+                )
                 return so_path
             staging = _artifact_cache_staging_path(so_path)
             try:
@@ -181,13 +271,25 @@ def compile_model(model: Any, so_path: Any = None, include: Any = None, backend:
 
 
 # compile_problem -- compile a pops.time.Program into a problem.so
-def compile_problem(so_path: Any = None, *, model: Any = None, model_graph: Any = None,
-                    time: Any = None,
-                    backend: Any = "production", target: Any = "system", force: Any = False,
-                    cxx: Any = None, include: Any = None, std: Any = None, debug: Any = False,
-                    libraries: Any = None, problem_snapshot: Any = None,
-                    field_plans: Any = None, balance_due_contract: Any = None,
-                    native_dimension: Any = None) -> Any:
+def compile_problem(
+    so_path: Any = None,
+    *,
+    model: Any = None,
+    model_graph: Any = None,
+    time: Any = None,
+    backend: Any = "production",
+    target: Any = "system",
+    force: Any = False,
+    cxx: Any = None,
+    include: Any = None,
+    std: Any = None,
+    debug: Any = False,
+    libraries: Any = None,
+    problem_snapshot: Any = None,
+    field_plans: Any = None,
+    balance_due_contract: Any = None,
+    native_dimension: Any = None,
+) -> Any:
     """Compile the public low-level Program route without privileged resolve evidence."""
     from pops._native_selector import (
         select_native_dimension,
@@ -199,7 +301,8 @@ def compile_problem(so_path: Any = None, *, model: Any = None, model_graph: Any 
         if native_dimension is None:
             raise TypeError(
                 "low-level compile_problem requires native_dimension=1, 2, or 3; "
-                "the public pops.compile(resolved_plan) route derives it from the domain")
+                "the public pops.compile(resolved_plan) route derives it from the domain"
+            )
     select_native_dimension(native_dimension)
     return _compile_problem_impl(
         so_path,
@@ -256,11 +359,22 @@ def _compile_resolved_problem(plan: Any) -> Any:
 
 
 def _compile_problem_impl(
-    so_path: Any = None, *, model: Any = None, model_graph: Any = None,
-    time: Any = None, backend: Any = "production", target: Any = "system",
-    force: Any = False, cxx: Any = None, include: Any = None, std: Any = None,
-    debug: Any = False, libraries: Any = None, problem_snapshot: Any = None,
-    field_plans: Any = None, balance_due_contract: Any = None,
+    so_path: Any = None,
+    *,
+    model: Any = None,
+    model_graph: Any = None,
+    time: Any = None,
+    backend: Any = "production",
+    target: Any = "system",
+    force: Any = False,
+    cxx: Any = None,
+    include: Any = None,
+    std: Any = None,
+    debug: Any = False,
+    libraries: Any = None,
+    problem_snapshot: Any = None,
+    field_plans: Any = None,
+    balance_due_contract: Any = None,
     native_dimension: Any = None,
     shared_interface_codegen_evidence: Any,
 ) -> Any:
@@ -272,9 +386,11 @@ def _compile_problem_impl(
     """
     import tempfile
     from pops.codegen._compile_platform import require_shared_library_compile_platform
+
     require_shared_library_compile_platform("compile_problem", windows_supported=False)
     from pops.codegen.loader import CompiledProblem
     from pops.codegen.env import CodegenEnv
+
     if type(native_dimension) is not int:
         raise TypeError("compile_problem requires one exact integer native_dimension")
     if native_dimension not in (1, 2, 3):
@@ -283,14 +399,17 @@ def _compile_problem_impl(
 
     select_native_dimension(native_dimension)
     from pops.codegen.toolchain import loader_native_dimension
+
     module_dimension = loader_native_dimension()
     if native_dimension != module_dimension:
         raise RuntimeError(
             "resolved native dimension %d does not match loaded module specialization %d; "
             "run this domain in a fresh process so PoPS can select Dim=%d"
-            % (native_dimension, module_dimension, native_dimension))
+            % (native_dimension, module_dimension, native_dimension)
+        )
     if problem_snapshot is not None:
         from pops.problem._snapshot import validate_problem_snapshot
+
         validate_problem_snapshot(problem_snapshot)
     # Resolve the codegen POPS_* environment once. An explicit argument wins over the environment;
     # debug=True forces keep-generated regardless of POPS_KEEP_GENERATED. The immutable snapshot is
@@ -301,16 +420,20 @@ def _compile_problem_impl(
     # Authenticate the sole final compiler route before inspecting the program graph.
     backend = lower_backend(backend)
     if target not in ("system", "amr_system"):
-        raise ValueError("compiled time programs support target='system' | 'amr_system' "
-                         "(received %r)" % (target,))
+        raise ValueError(
+            "compiled time programs support target='system' | 'amr_system' "
+            "(received %r)" % (target,)
+        )
     if libraries:
         raise TypeError(
             "compile_problem(libraries=) was removed; compile authenticated source components "
-            "with pops.external.compile_component and reference their canonical descriptors")
+            "with pops.external.compile_component and reference their canonical descriptors"
+        )
     library_manifests = []
     external_brick_records = []
 
     from pops.time._program.contract import require_program
+
     try:
         require_program(time, exact=True, where="compile_problem: time")
     except (TypeError, RuntimeError):
@@ -318,35 +441,45 @@ def _compile_problem_impl(
             "compile_problem: time must be an pops.time.Program (got %r)" % (time,)
         ) from None
     from pops.codegen.program_models import prepare_program_authority
-    model, source_module, lowering_coverage, compile_authority = (
-        prepare_program_authority(model, model_graph)
+
+    model, source_module, lowering_coverage, compile_authority = prepare_program_authority(
+        model, model_graph
     )
     from pops.time._program.detach import detach_compiled_program
+
     time = detach_compiled_program(time)
     program_graph = time.to_graph()
     from pops._balance_due_contract import BalanceDueContract
+
     if balance_due_contract is None:
         balance_due_contract = BalanceDueContract.from_consumer_graph(None)
     if type(balance_due_contract) is not BalanceDueContract:
-        raise TypeError(
-            "compile_problem balance_due_contract must be an exact BalanceDueContract"
-        )
+        raise TypeError("compile_problem balance_due_contract must be an exact BalanceDueContract")
     from pops.codegen.program_emit_kernels import _prepared_native_components
+
     native_components = _prepared_native_components(time)
     if shared_interface_codegen_evidence is None:
         from pops.codegen.program_graph_lowering import emit_program_graph
 
         src = emit_program_graph(
-            program_graph, lowering_program=time, model=model,
-            model_graph=model_graph, target=target, field_plans=field_plans,
+            program_graph,
+            lowering_program=time,
+            model=model,
+            model_graph=model_graph,
+            target=target,
+            field_plans=field_plans,
             balance_due_contract=balance_due_contract,
         )
     else:
         from pops.codegen.program_graph_lowering import _emit_resolved_program_graph
 
         src = _emit_resolved_program_graph(
-            program_graph, lowering_program=time, model=model,
-            model_graph=model_graph, target=target, field_plans=field_plans,
+            program_graph,
+            lowering_program=time,
+            model=model,
+            model_graph=model_graph,
+            target=target,
+            field_plans=field_plans,
             balance_due_contract=balance_due_contract,
             shared_interface_codegen_evidence=shared_interface_codegen_evidence,
         )
@@ -368,7 +501,9 @@ def _compile_problem_impl(
         model_authority=(
             model_graph
             if model_graph is not None
-            else source_module if source_module is not None else model
+            else source_module
+            if source_module is not None
+            else model
         ),
         program=time,
         program_graph=program_graph,
@@ -381,10 +516,13 @@ def _compile_problem_impl(
         lflags=lflags,
         optflags=optflags,
         libraries=library_manifests,
-        native_components=[{
-            "manifest": component.manifest(),
-            "manifest_sha256": component.manifest_sha256,
-        } for component in native_components],
+        native_components=[
+            {
+                "manifest": component.manifest(),
+                "manifest_sha256": component.manifest_sha256,
+            }
+            for component in native_components
+        ],
         native_dimension=native_dimension,
     )
     program_hash = semantic.hexdigest
@@ -395,6 +533,7 @@ def _compile_problem_impl(
     # source_module is now the operator-first Module for a facade / dsl Model too (ADC-557), so the
     # manifest is ALWAYS the operator-first trace on the standard flow.
     from pops.model.manifest import module_manifest_of
+
     module_manifest = (
         None
         if model_graph is not None
@@ -403,12 +542,16 @@ def _compile_problem_impl(
     # module_hash (ADC-557 I5): the stable hash of the operator-first Module, carried on the handle so
     # a post-compile in-place model mutation can be DETECTED loudly by bind (parity with the block
     # drift check). None for a model with no backing Module.
-    module_hash = source_module.module_hash() if (source_module is not None
-                                                   and hasattr(source_module, "module_hash")) else None
+    module_hash = (
+        source_module.module_hash()
+        if (source_module is not None and hasattr(source_module, "module_hash"))
+        else None
+    )
     # Capture the program-parameter ABI table while the compiler still owns the full model IR.
     # Public orchestration replaces the live model builder by a CompiledModel metadata/loader value;
     # bind consumes this immutable table and never re-enters authoring analysis.
     from pops.codegen.program_emit_params import program_param_entries
+
     program_param_routes = tuple(program_param_entries(time, compile_authority))
 
     def _compiled_handle(binary, artifact, *, compile_command=None, generated_source=None):
@@ -470,9 +613,7 @@ def _compile_problem_impl(
                             )
                         component_header_owners[header_file.path] = header_file.sha256
                     staged_root = component.stage_verified(
-                        os.path.join(
-                            tmp, "prepared-native-components", component.manifest_sha256
-                        )
+                        os.path.join(tmp, "prepared-native-components", component.manifest_sha256)
                     )
                     if staged_root is not None:
                         component_include_flags.extend(("-I", staged_root))
@@ -483,19 +624,37 @@ def _compile_problem_impl(
                 with open(cpp, "w") as f:
                     f.write(src)
                 flags = [
-                    "-shared", "-fPIC", "-std=" + eff_std, *optflags,
-                    "-DPOPS_HEADER_SIG=\"%s\"" % sig, *cflags,
-                    "-MMD", "-MF", dependency_file, "-MT", compile_path,
+                    "-shared",
+                    "-fPIC",
+                    "-std=" + eff_std,
+                    *optflags,
+                    '-DPOPS_HEADER_SIG="%s"' % sig,
+                    *cflags,
+                    "-MMD",
+                    "-MF",
+                    dependency_file,
+                    "-MT",
+                    compile_path,
                 ]
                 cmd = [
-                    cc, *flags, "-I", include, *component_include_flags,
-                    cpp, "-o", compile_path, *lflags,
+                    cc,
+                    *flags,
+                    "-I",
+                    include,
+                    *component_include_flags,
+                    cpp,
+                    "-o",
+                    compile_path,
+                    *lflags,
                 ]
                 reported_cmd = [
-                    so_path if item == compile_path else
-                    "<compiler-dependencies>" if item == dependency_file else
-                    "<verified-native-component:%s>" % staged_component_roots[item]
-                    if item in staged_component_roots else item
+                    so_path
+                    if item == compile_path
+                    else "<compiler-dependencies>"
+                    if item == dependency_file
+                    else "<verified-native-component:%s>" % staged_component_roots[item]
+                    if item in staged_component_roots
+                    else item
                     for item in cmd
                 ]
                 compile_command = _redact_compile_command(
@@ -529,6 +688,7 @@ def _compile_problem_impl(
                         compiler_include_roots,
                         verify_prepared_native_dependencies,
                     )
+
                     verify_prepared_native_dependencies(
                         dependency_file,
                         generated_source=cpp,

@@ -138,6 +138,7 @@ static int pops_run_test_mpi_amr_compiled_parity(int argc, char** argv) {
 
   // Modele euler_poisson COMPILE branche sur la hierarchie AMR (chemin de production add_compiled_model).
   AmrSystem<Dim> sys(cfg);
+  test::install_amr_runtime_authority(sys, "test.mpi-amr-compiled-parity.runtime");
   sys.set_temporal_relations({2}, {1}, {"integral_only"});
   add_compiled_model<Dim>(sys, "gas", gravity_model<Dim>(), "minmod", "rusanov", "conservative",
                           "explicit", /*gamma=*/1.4);

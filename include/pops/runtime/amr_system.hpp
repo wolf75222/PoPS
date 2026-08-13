@@ -107,6 +107,8 @@ struct AmrRuntimeBlock;
 template <int Dim, class MemorySpace>
 struct PreparedAmrSystemBlock;
 template <int Dim, class MemorySpace>
+struct PreparedNativeAmrPackage;
+template <int Dim, class MemorySpace>
 struct PreparedAmrLevelEvaluation;
 namespace runtime::amr {
 template <int Dim, class MemorySpace>
@@ -248,6 +250,7 @@ class AmrSystem {
   using HyperbolicBoundary = PreparedHyperbolicBoundary<Dim>;
   using memory_space = typename MultiFab<Dim>::memory_space;
   using PreparedBlock = PreparedAmrSystemBlock<Dim, memory_space>;
+  using PreparedNativePackage = PreparedNativeAmrPackage<Dim, memory_space>;
   using PreparedLevelEvaluation = PreparedAmrLevelEvaluation<Dim, memory_space>;
   using PreparedMultiBlockHierarchy =
       runtime::amr::PreparedMultiBlockAmrHierarchy<Dim, memory_space>;
@@ -275,8 +278,8 @@ class AmrSystem {
   // already unusable).
   AmrSystem(const AmrSystem&) = delete;
   AmrSystem& operator=(const AmrSystem&) = delete;
-  AmrSystem(AmrSystem&&) noexcept;
-  AmrSystem& operator=(AmrSystem&&) noexcept;
+  AmrSystem(AmrSystem&&);
+  AmrSystem& operator=(AmrSystem&&);
 
   /// GLOBAL time-step bound (AMR counterpart of System::add_dt_bound): fn() evaluated ONCE
   /// per step_cfl (host), all_reduce_min (identical dt on all ranks), <= 0 / non-finite =
@@ -358,6 +361,10 @@ class AmrSystem {
   /// Atomically retain one complete generated spatial package. No deferred builder, legacy
   /// runtime block, or dimension-erased fallback is published by this route.
   POPS_EXPORT void install_prepared_amr_block(PreparedBlock block);
+  /// Commit the one block plus every generated elliptic attachment as a single rank-local native
+  /// package candidate. This seam is accepted only while the host owns installer_local; the outer
+  /// RuntimeInstance transaction performs exact agreement before retaining the package lifetime.
+  POPS_EXPORT void install_prepared_native_amr_package(PreparedNativePackage package);
 
   /// Borrow one accepted block/level carrier through its authenticated runtime identity.
   POPS_EXPORT const MultiFab<Dim>& prepared_amr_block_state(int runtime_block, int level) const;
@@ -487,9 +494,10 @@ class AmrSystem {
   /// Boundary components and AMR tagging consume this common prepared route.
   POPS_EXPORT void install_field_storage_route(const std::string& field_identity,
                                                const std::string& provider_slot);
-  /// Retain the RuntimeInstance execution descriptor until hierarchy materialization can duplicate
-  /// its authenticated communicator.  AMR never substitutes MPI_COMM_WORLD for this authority.
+  /// Retain the already duplicated RuntimeInstance package lane and its lane-qualified execution
+  /// descriptor. AMR never reconstructs or retains the embedding-owned parent communicator.
   POPS_EXPORT void install_prepared_boundary_execution_context(
+      std::shared_ptr<ExecutionLane> package_assembly_lane,
       std::shared_ptr<const component::PreparedExecutionContextV1> execution);
   POPS_EXPORT void stage_prepared_ghost_boundary_component(
       const std::string& block, std::shared_ptr<PreparedGhostBoundaryComponent> component);
@@ -502,15 +510,17 @@ class AmrSystem {
   /// Roll back a failed pre-build runtime-authority transaction.  Internal bind seam only.
   POPS_EXPORT void discard_hyperbolic_boundaries();
 
-  /// Internal installation seam for a compiled AMR production package. The .so inlines the header
-  /// template add_compiled_model(AmrSystem&, ...), prepares one complete
-  /// PreparedAmrSystemBlock<Dim>, and publishes it atomically through install_prepared_amr_block.
-  /// No deferred runtime builder, flat-array numerical fallback, or alternate temporal engine is
+  /// Internal installation seam for a compiled AMR production package. The .so prepares one
+  /// complete PreparedNativeAmrPackage<Dim> containing its PreparedAmrSystemBlock<Dim> and every
+  /// elliptic attachment, then submits that inert candidate through the installer-local package
+  /// seam. The host witnesses and publishes the complete package transaction atomically. No
+  /// deferred runtime builder, flat-array numerical fallback, or alternate temporal engine is
   /// involved.
   ///
-  /// The _pops host module is PROMOTED to global scope (RTLD_NOLOAD), then the generated package is
-  /// opened RTLD_LOCAL: it can resolve the exact package installation symbol without exporting its
-  /// generated templates to later semantic artifacts. The ABI key baked in the package
+  /// The _pops host module is PROMOTED to global scope (RTLD_NOLOAD), then an authenticated private
+  /// image of the generated package is opened RTLD_LOCAL: it can resolve the exact package
+  /// installation symbol without exporting its generated templates to later semantic artifacts.
+  /// The ABI key baked in the package
   /// (pops_native_abi_key) is compared to the module's (abi_key()) -- mismatch => clear error (no
   /// silent UB at the C++ boundary). Same scheme guard-rails as System (upstream validation).
   ///
@@ -533,19 +543,19 @@ class AmrSystem {
   ///             carries it (pops_install_native_amr -> add_compiled_model -> prepared package), so
   ///             a loader regenerated against this header floors the Density-role face states like
   ///             a native add_block. 0 (default) = inactive, bit-identical.
-  void add_native_block(const std::string& name, const std::string& so_path,
-                        const std::string& limiter = "minmod",
-                        const std::string& riemann = "rusanov",
-                        const std::string& recon = "conservative",
-                        const std::string& time = "explicit",
-                        double gamma = static_cast<double>(kPhysicalDefaultGamma), int substeps = 1,
-                        const std::vector<double>& params = {}, double positivity_floor = 0.0,
-                        double weno_epsilon = static_cast<double>(kWenoEpsilon),
-                        bool wave_speed_cache = false);
+  void add_native_block(
+      const std::string& name, const std::string& so_path,
+      const std::string& expected_model_identity, const std::string& expected_binary_identity,
+      const std::string& limiter = "minmod", const std::string& riemann = "rusanov",
+      const std::string& recon = "conservative", const std::string& time = "explicit",
+      double gamma = static_cast<double>(kPhysicalDefaultGamma), int substeps = 1,
+      const std::vector<double>& params = {}, double positivity_floor = 0.0,
+      double weno_epsilon = static_cast<double>(kWenoEpsilon), bool wave_speed_cache = false);
 
   /// Authenticate and install one exact-ranked external Riemann package through the ordinary
-  /// prepared AMR block path. Provider routes are registered before hierarchy materialization;
-  /// the authenticated DSO authority remains alive until every package-owned closure is destroyed.
+  /// prepared AMR block path. Both canonical System/AMR provider hooks are mandatory, including
+  /// explicit empty hooks for a zero-provider brick. AMR routes are registered before hierarchy
+  /// materialization; the authenticated DSO remains alive until every package closure is destroyed.
   void register_external_riemann_package(
       const std::string& name, const std::string& so_path, const std::string& brick_id,
       const std::string& expected_sha256, int expected_nvars, int expected_provider_count,
@@ -621,6 +631,8 @@ class AmrSystem {
                              const std::string& provider_identity,
                              const std::string& output_owner_identity,
                              const std::string& output_block, const std::string& output_key,
+                             const std::vector<runtime::system::AuxiliaryComponentKey>& output_keys,
+                             int output_gradient_sign,
                              const std::vector<std::string>& provider_identities,
                              const std::vector<std::string>& provider_blocks,
                              const std::vector<std::string>& provider_keys,
@@ -825,11 +837,15 @@ class AmrSystem {
   POPS_EXPORT void register_elliptic_field(
       const std::string& block_name, const std::string& provider_key,
       const std::vector<runtime::system::AuxiliaryComponentKey>& output_keys, int gradient_sign);
-  /// Attaches named @p field's RHS closure (rhs += elliptic_field_rhs(U)) to block @p block_name. Called
-  /// by the native AMR loader (make_poisson_rhs of the per-field brick). @throws before mutation if
-  /// the system is already built, the block is unknown, or no exact-ranked hierarchy provider exists.
+  /// Attaches named @p field's RHS closure (rhs += elliptic_field_rhs(U)) to block @p block_name.
+  /// ``rhs_provider_identity`` is the stable executable identity authenticated before initial
+  /// hierarchy materialization; callable bytes are never serialized. Called by the native AMR
+  /// loader (make_poisson_rhs of the per-field brick). @throws before mutation if the identity is
+  /// empty, the system is already built, the block is unknown, or no exact-ranked hierarchy
+  /// provider exists.
   POPS_EXPORT void set_block_elliptic_field(
       const std::string& block_name, const std::string& field,
+      const std::string& rhs_provider_identity,
       std::function<void(const MultiFab<Dim>&, MultiFab<Dim>&)> rhs);
   /// Solved potential of named @p field on the coarse level, flattened in native index order. Solves the
   /// hierarchy fields if needed (so it is current even before any step), then reads the field's phi
@@ -1333,6 +1349,7 @@ class AmrSystem {
       int active_level, const std::vector<const MultiFab<Dim>*>& stage_overrides);
   POPS_EXPORT void refresh_auxiliary_on_prepared_lane(
       const runtime::system::AuxiliaryEvaluationPoint& point);
+  void install_prepared_amr_block_candidate_(PreparedBlock block, bool native_package_candidate);
   POPS_EXPORT void restore_auxiliary_checkpoint_accepted_state_on_prepared_lane(
       const std::vector<runtime::system::AuxiliaryCheckpointAcceptedState<Dim>>& state,
       const ExecutionLane& lane);

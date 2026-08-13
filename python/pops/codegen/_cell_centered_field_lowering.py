@@ -126,19 +126,23 @@ def _validate_outputs(request: PreparedFieldLoweringRequest) -> tuple[dict[str, 
     declaration = operator.unknown.declaration_ref
     if declaration is None:
         raise RuntimeError("resolved field output lost its FieldSpace declaration")
+    output_owner_qid = str(output_block.model_owner_path.canonical())
     # ``components`` remains the small human-facing report used by the field
     # authoring API.  Installation deliberately carries the complete key for
     # each value instead: an output may be homonymous with another block's
     # field and storage locations are allocated only by the global native
     # provider registry.
-    output_keys = tuple({
-        "owner_qid": output_block.canonical_identity(),
-        "space_kind": "field",
-        "space_name": declaration.local_id,
-        "component": component,
-    } for component in components)
+    output_keys = tuple(
+        {
+            "owner_qid": output_owner_qid,
+            "space_kind": "field",
+            "space_name": declaration.local_id,
+            "component": component,
+        }
+        for component in components
+    )
     return {
-        "owner_identity": output_block.canonical_identity(),
+        "owner_identity": output_owner_qid,
         "owner_block": output_block.local_id,
         "key": operator.name,
         "components": components,
@@ -671,8 +675,7 @@ def _prepare_output(
     keys = tuple(route.get("component_keys", ()))
     if len(keys) != len(components):
         raise ValueError(
-            "field output route %r has no exact ComponentKey for each output"
-            % operator.name
+            "field output route %r has no exact ComponentKey for each output" % operator.name
         )
     for component, key in zip(components, keys, strict=True):
         if (

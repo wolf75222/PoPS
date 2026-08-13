@@ -343,6 +343,27 @@ class ExactAuxiliaryRegistry final {
     require_sealed_();
     return collective_contract_;
   }
+
+  /// Prepare a private structural image that may accept additional providers and consumer plans.
+  /// Only authoritative declarations are copied: every resolved slot, schedule, contract, and
+  /// publication generation is rebuilt by a later @ref seal.  Native package assembly uses this
+  /// before exposing the candidate to an untrusted rank-local registrar, so a previously sealed
+  /// registry never has to weaken its immutable runtime contract in place.
+  [[nodiscard]] ExactAuxiliaryRegistry structural_extension_candidate() const {
+    if (candidate_open_)
+      throw std::logic_error(
+          "cannot extend an auxiliary registry during an active publication candidate");
+    if (accepted_generation_ != 0 ||
+        std::any_of(accepted_points_.begin(), accepted_points_.end(),
+                    [](const auto& point) { return point.has_value(); }))
+      throw std::logic_error(
+          "cannot structurally extend an auxiliary registry after accepted runtime publication");
+    ExactAuxiliaryRegistry candidate;
+    candidate.providers_ = providers_;
+    candidate.consumer_plans_ = consumer_plans_;
+    return candidate;
+  }
+
   [[nodiscard]] const std::vector<std::size_t>& topological_order() const {
     require_sealed_();
     return topological_order_;
@@ -431,6 +452,38 @@ class ExactAuxiliaryRegistry final {
         std::is_nothrow_swappable_v<std::vector<std::optional<AuxiliaryEvaluationPoint>>>);
     accepted_points_.swap(candidate.accepted_points_);
     std::swap(accepted_generation_, candidate.accepted_generation_);
+  }
+
+  /// Allocation-free exchange of one complete, already materialized registry image.  Native
+  /// package finalization builds its candidate directly in the live System only after retaining a
+  /// full snapshot; rollback uses this seam before releasing any DSO that may own provider
+  /// launchers.  Every member exchange is statically required to be non-throwing.
+  void swap_complete(ExactAuxiliaryRegistry& other) noexcept {
+    static_assert(noexcept(providers_.swap(other.providers_)));
+    static_assert(noexcept(consumer_plans_.swap(other.consumer_plans_)));
+    static_assert(noexcept(dependency_providers_.swap(other.dependency_providers_)));
+    static_assert(noexcept(resolved_outputs_.swap(other.resolved_outputs_)));
+    static_assert(noexcept(resolved_dependencies_.swap(other.resolved_dependencies_)));
+    static_assert(noexcept(resolved_storage_groups_.swap(other.resolved_storage_groups_)));
+    static_assert(noexcept(resolved_consumer_plans_.swap(other.resolved_consumer_plans_)));
+    static_assert(noexcept(topological_order_.swap(other.topological_order_)));
+    static_assert(noexcept(accepted_points_.swap(other.accepted_points_)));
+    static_assert(noexcept(collective_contract_.swap(other.collective_contract_)));
+    static_assert(std::is_nothrow_swappable_v<std::uint64_t>);
+    static_assert(std::is_nothrow_swappable_v<bool>);
+    providers_.swap(other.providers_);
+    consumer_plans_.swap(other.consumer_plans_);
+    dependency_providers_.swap(other.dependency_providers_);
+    resolved_outputs_.swap(other.resolved_outputs_);
+    resolved_dependencies_.swap(other.resolved_dependencies_);
+    resolved_storage_groups_.swap(other.resolved_storage_groups_);
+    resolved_consumer_plans_.swap(other.resolved_consumer_plans_);
+    topological_order_.swap(other.topological_order_);
+    accepted_points_.swap(other.accepted_points_);
+    collective_contract_.swap(other.collective_contract_);
+    std::swap(accepted_generation_, other.accepted_generation_);
+    std::swap(sealed_, other.sealed_);
+    std::swap(candidate_open_, other.candidate_open_);
   }
   [[nodiscard]] const ResolvedAuxiliaryConsumerPlan<Dim>& consumer_plan(
       std::string_view consumer_qid) const {

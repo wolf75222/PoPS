@@ -105,19 +105,37 @@ class PreparedMultiBlockAmrHierarchy {
   /// The caller may build the canonical engine through the normal AmrRuntime collective preflight;
   /// this cutover never creates a second communicator or topology while local validation can throw.
   static PreparedMultiBlockAmrHierarchy prepare_collectively(
-      engine_type primary, std::string primary_identity, std::vector<AdditionalBlock> additional,
-      std::string lane_identity) {
-    return prepare_collectively(std::make_shared<engine_type>(std::move(primary)),
-                                std::move(primary_identity), std::move(additional),
-                                std::move(lane_identity));
+      const ExecutionLane& parent, engine_type primary, std::string primary_identity,
+      std::vector<AdditionalBlock> additional, std::string lane_identity) {
+    if (!parent.active())
+      throw std::invalid_argument(
+          "prepared multi-block AMR requires an active authenticated parent lane");
+    std::shared_ptr<engine_type> primary_candidate;
+    std::exception_ptr local_error;
+    try {
+      primary_candidate = std::make_shared<engine_type>(std::move(primary));
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_error ? 1L : 0L, parent) != 0) {
+      if (parent.size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error("prepared multi-block AMR topology allocation failed collectively");
+    }
+    return prepare_collectively(parent, std::move(primary_candidate), std::move(primary_identity),
+                                std::move(additional), std::move(lane_identity));
   }
 
   static PreparedMultiBlockAmrHierarchy prepare_collectively(
-      std::shared_ptr<engine_type> primary, std::string primary_identity,
-      std::vector<AdditionalBlock> additional, std::string lane_identity) {
-    const ExecutionCommunicator parent = ExecutionCommunicator::world();
+      const ExecutionLane& parent, std::shared_ptr<engine_type> primary,
+      std::string primary_identity, std::vector<AdditionalBlock> additional,
+      std::string lane_identity) {
+    if (!parent.active())
+      throw std::invalid_argument(
+          "prepared multi-block AMR requires an active authenticated parent lane");
     std::exception_ptr local_error;
     std::string contract;
+    std::string canonical_program_contract;
     std::string qualified_lane_identity;
     try {
       if (!primary)
@@ -134,23 +152,26 @@ class PreparedMultiBlockAmrHierarchy {
       qualified_lane_identity.append(lane_identity);
       contract = exact_hierarchy_contract_(*primary, primary_identity, additional,
                                            qualified_lane_identity);
+      canonical_program_contract =
+          exact_canonical_program_contract_(contract, primary_identity, additional);
     } catch (...) {
       local_error = std::current_exception();
     }
-    if (all_reduce_max(local_error ? 1L : 0L) != 0) {
-      if (n_ranks() == 1 && local_error)
+    if (all_reduce_max(local_error ? 1L : 0L, parent) != 0) {
+      if (parent.size() == 1 && local_error)
         std::rethrow_exception(local_error);
       throw std::runtime_error("prepared multi-block AMR carrier preflight failed collectively");
     }
     if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{std::string_view("prepared-multiblock-amr"), contract}}))
+            {{std::string_view("prepared-multiblock-amr"), contract}}, parent))
       throw std::invalid_argument(
           "prepared multi-block AMR carrier contract differs between MPI ranks");
 
     ExecutionLane lane = ExecutionLane::duplicate_collectively(parent, lane_identity);
     return PreparedMultiBlockAmrHierarchy(std::move(primary), std::move(primary_identity),
                                           std::move(additional), std::move(lane),
-                                          std::move(qualified_lane_identity), std::move(contract));
+                                          std::move(qualified_lane_identity), std::move(contract),
+                                          std::move(canonical_program_contract));
   }
 
   static constexpr int dimension = Dim;
@@ -812,15 +833,15 @@ class PreparedMultiBlockAmrHierarchy {
   PreparedMultiBlockAmrHierarchy(std::shared_ptr<engine_type> primary, std::string primary_identity,
                                  std::vector<AdditionalBlock> additional, ExecutionLane lane,
                                  std::string lane_contract_identity,
-                                 std::string collective_contract)
+                                 std::string collective_contract,
+                                 std::string canonical_program_contract) noexcept
       : primary_(std::move(primary)),
         primary_identity_(std::move(primary_identity)),
         additional_(std::move(additional)),
         lane_(std::move(lane)),
         lane_contract_identity_(std::move(lane_contract_identity)),
-        collective_contract_(std::move(collective_contract)) {
-    canonical_program_contract_ = exact_canonical_program_contract_();
-  }
+        collective_contract_(std::move(collective_contract)),
+        canonical_program_contract_(std::move(canonical_program_contract)) {}
 
   static void validate_carriers_(const engine_type& primary, std::string_view primary_identity,
                                  const std::vector<AdditionalBlock>& additional) {

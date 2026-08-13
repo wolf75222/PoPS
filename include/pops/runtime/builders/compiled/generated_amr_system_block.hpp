@@ -376,72 +376,68 @@ MultiFab<Dim> materialize_masked_source(
 template <int Dim, class Model>
 Real maximum_speed(const Model& model, const MultiFab<Dim>& state,
                    const runtime::system::AuxiliaryStorageGroups<Dim>* provider_storage,
-                   const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>* provider_plan) {
-  return generated_system_detail::maximum_speed<Dim>(model, state, provider_storage, provider_plan);
+                   const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>* provider_plan,
+                   const ExecutionLane& lane) {
+  return generated_system_detail::maximum_speed<Dim>(model, state, provider_storage, provider_plan,
+                                                     lane);
 }
 
 template <int Dim, class Model>
-void add_poisson_rhs(const Model& model, const MultiFab<Dim>& state, MultiFab<Dim>& rhs,
-                     const ExecutionLane& lane) {
-  collective_phase(
-      lane,
-      [&] {
-        if (rhs.ncomp() != 1)
-          throw std::invalid_argument(
-              "generated AMR Poisson RHS destination must have one component");
-        generated_system_detail::require_same_layout(state, rhs, 1, "generated AMR Poisson RHS");
-      },
-      "generated AMR Poisson RHS preflight failed collectively");
-  std::optional<MultiFab<Dim>> candidate;
-  std::optional<MultiFab<Dim>> status;
-  std::optional<MultiFab<Dim>> updated;
-  collective_phase(
-      lane,
-      [&] {
-        candidate.emplace(rhs.layout(), rhs.distribution(), rhs.local_rank(), 1, rhs.ghosts());
-        status.emplace(rhs.layout(), rhs.distribution(), rhs.local_rank(), 1, rhs.ghosts());
-        updated.emplace(rhs.layout(), rhs.distribution(), rhs.local_rank(), 1, rhs.ghosts());
-      },
-      "generated AMR Poisson RHS workspace allocation failed collectively");
-  Real local_status = Real(0);
-  collective_phase(
-      lane,
-      [&] {
-        for (std::size_t local = 0; local < state.local_size(); ++local)
-          for_each_cell(state.box(local),
-                        generated_system_detail::MaterializePoissonRhs<Dim, Model>{
-                            model, state.fab(local).view(), candidate->fab(local).view(),
-                            status->fab(local).view()});
-        local_status = reduce_max_local(*status);
-      },
-      "generated AMR Poisson RHS materialization failed collectively");
-  if (all_reduce_max(local_status, lane) != Real(0))
+void add_poisson_rhs_locally(const Model& model, const MultiFab<Dim>& state, MultiFab<Dim>& rhs) {
+  if (rhs.ncomp() != 1)
+    throw std::invalid_argument("generated AMR Poisson RHS destination must have one component");
+  generated_system_detail::require_same_layout(state, rhs, 1, "generated AMR Poisson RHS");
+  MultiFab<Dim> candidate(rhs.layout(), rhs.distribution(), rhs.local_rank(), 1, rhs.ghosts());
+  MultiFab<Dim> status(rhs.layout(), rhs.distribution(), rhs.local_rank(), 1, rhs.ghosts());
+  MultiFab<Dim> updated(rhs.layout(), rhs.distribution(), rhs.local_rank(), 1, rhs.ghosts());
+  candidate.set_val(Real(0));
+  status.set_val(Real(0));
+  for (std::size_t local = 0; local < state.local_size(); ++local)
+    for_each_cell(state.box(local), generated_system_detail::MaterializePoissonRhs<Dim, Model>{
+                                        model, state.fab(local).view(), candidate.fab(local).view(),
+                                        status.fab(local).view()});
+  device_fence();
+  if (state.local_size() != 0 && reduce_max_local(status) != Real(0))
     throw std::runtime_error("generated AMR Poisson RHS produced a non-finite value");
-  collective_phase(
-      lane,
-      [&] {
-        generated_system_detail::copy_valid(rhs, *updated);
-        saxpy(*updated, Real(1), *candidate);
-      },
-      "generated AMR Poisson RHS candidate accumulation failed collectively");
+  generated_system_detail::copy_valid(rhs, updated);
+  saxpy(updated, Real(1), candidate);
+  device_fence();
   static_assert(std::is_nothrow_move_assignable_v<MultiFab<Dim>>);
-  rhs = std::move(*updated);
+  rhs = std::move(updated);
 }
 
 template <int Dim, class Model>
 Real source_frequency(const Model& model, const MultiFab<Dim>& state,
                       const runtime::system::AuxiliaryStorageGroups<Dim>* provider_storage,
-                      const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>* provider_plan) {
+                      const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>* provider_plan,
+                      const ExecutionLane& lane) {
   constexpr int provider_count = provider_count_for<Model, Dim>();
-  MultiFab<Dim> values(state.layout(), state.distribution(), state.local_rank(), 1, state.ghosts());
-  for (std::size_t local = 0; local < state.local_size(); ++local)
-    for_each_cell(state.box(local),
-                  generated_system_detail::MaterializeSourceFrequency<Dim, Model>{
-                      model, state.fab(local).view(),
-                      runtime::system::bind_provider_storage_view<Dim, provider_count>(
-                          provider_plan, provider_storage, local),
-                      values.fab(local).view()});
-  const Real frequency = reduce_max(values);
+  std::unique_ptr<MultiFab<Dim>> values;
+  collective_phase(
+      lane,
+      [&] {
+        values = std::make_unique<MultiFab<Dim>>(state.layout(), state.distribution(),
+                                                 state.local_rank(), 1, state.ghosts());
+        for (std::size_t local = 0; local < state.local_size(); ++local)
+          for_each_cell(state.box(local),
+                        generated_system_detail::MaterializeSourceFrequency<Dim, Model>{
+                            model, state.fab(local).view(),
+                            runtime::system::bind_provider_storage_view<Dim, provider_count>(
+                                provider_plan, provider_storage, local),
+                            values->fab(local).view()});
+        device_fence();
+      },
+      "generated AMR source-frequency preparation failed collectively");
+  Real local_frequency = Real(0);
+  collective_phase(
+      lane,
+      [&] {
+        device_fence();
+        if (state.local_size() != 0)
+          local_frequency = reduce_max_local(*values);
+      },
+      "generated AMR source-frequency local reduction failed collectively");
+  const Real frequency = static_cast<Real>(all_reduce_max(local_frequency, lane));
   if (!std::isfinite(frequency) || frequency < Real(0))
     throw std::runtime_error("generated AMR source frequency is invalid");
   return frequency;
@@ -450,17 +446,35 @@ Real source_frequency(const Model& model, const MultiFab<Dim>& state,
 template <int Dim, class Model>
 Real stability_dt(const Model& model, const MultiFab<Dim>& state,
                   const runtime::system::AuxiliaryStorageGroups<Dim>* provider_storage,
-                  const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>* provider_plan) {
+                  const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>* provider_plan,
+                  const ExecutionLane& lane) {
   constexpr int provider_count = provider_count_for<Model, Dim>();
-  MultiFab<Dim> values(state.layout(), state.distribution(), state.local_rank(), 1, state.ghosts());
-  for (std::size_t local = 0; local < state.local_size(); ++local)
-    for_each_cell(state.box(local),
-                  generated_system_detail::MaterializeStabilityDt<Dim, Model>{
-                      model, state.fab(local).view(),
-                      runtime::system::bind_provider_storage_view<Dim, provider_count>(
-                          provider_plan, provider_storage, local),
-                      values.fab(local).view()});
-  const Real dt = reduce_min(values);
+  std::unique_ptr<MultiFab<Dim>> values;
+  collective_phase(
+      lane,
+      [&] {
+        values = std::make_unique<MultiFab<Dim>>(state.layout(), state.distribution(),
+                                                 state.local_rank(), 1, state.ghosts());
+        for (std::size_t local = 0; local < state.local_size(); ++local)
+          for_each_cell(state.box(local),
+                        generated_system_detail::MaterializeStabilityDt<Dim, Model>{
+                            model, state.fab(local).view(),
+                            runtime::system::bind_provider_storage_view<Dim, provider_count>(
+                                provider_plan, provider_storage, local),
+                            values->fab(local).view()});
+        device_fence();
+      },
+      "generated AMR stability-dt preparation failed collectively");
+  Real local_dt = std::numeric_limits<Real>::infinity();
+  collective_phase(
+      lane,
+      [&] {
+        device_fence();
+        if (state.local_size() != 0)
+          local_dt = reduce_min_local(*values);
+      },
+      "generated AMR stability-dt local reduction failed collectively");
+  const Real dt = static_cast<Real>(all_reduce_min(local_dt, lane));
   if (!std::isfinite(dt) || !(dt > Real(0)))
     throw std::runtime_error("generated AMR stability dt is invalid");
   return dt;
@@ -498,7 +512,8 @@ class PreparedGeneratedAmrLevelBlock {
 
   PreparedGeneratedAmrLevelBlock(runtime_type& runtime, std::size_t level, field_type& state,
                                  std::string state_identity, std::string provider_identity,
-                                 std::string collective_contract, StatePreparation prepare_state,
+                                 std::string collective_contract, const ExecutionLane& lane,
+                                 StatePreparation prepare_state,
                                  PhysicalBoundaryPreparation prepare_physical, Evaluator evaluator,
                                  Evaluator flux_evaluator, Evaluator core_evaluator,
                                  Evaluator flux_core_evaluator, Evaluator boundary_evaluator,
@@ -512,6 +527,7 @@ class PreparedGeneratedAmrLevelBlock {
         state_identity_(std::move(state_identity)),
         provider_identity_(std::move(provider_identity)),
         collective_contract_(std::move(collective_contract)),
+        lane_(&lane),
         prepare_state_(std::move(prepare_state)),
         prepare_physical_(std::move(prepare_physical)),
         evaluator_(std::move(evaluator)),
@@ -529,7 +545,7 @@ class PreparedGeneratedAmrLevelBlock {
         stability_dt_(std::move(stability_dt)),
         topology_epoch_(runtime.topology_epoch()),
         materialization_generation_(runtime.materialization_generation()) {
-    if (level_ >= runtime.hierarchy().num_levels() || state_ == nullptr ||
+    if (level_ >= runtime.hierarchy().num_levels() || state_ == nullptr || lane_ == nullptr ||
         state_identity_.empty() || provider_identity_.empty() || collective_contract_.empty() ||
         !prepare_state_ || !prepare_physical_ || !evaluator_ || !flux_evaluator_ ||
         !core_evaluator_ || !flux_core_evaluator_ || !boundary_evaluator_ || !boundary_jvp_ ||
@@ -544,9 +560,14 @@ class PreparedGeneratedAmrLevelBlock {
   std::string_view collective_contract() const noexcept { return collective_contract_; }
 
   void prepare(const point_type& point, field_type& state) const {
-    require_live_();
-    require_state_(point, state);
-    require_bound_state_(state);
+    generated_amr_detail::collective_phase(
+        *lane_,
+        [&] {
+          require_live_();
+          require_state_(point, state);
+          require_bound_state_(state);
+        },
+        "generated AMR state-preparation preflight failed collectively");
     prepare_state_(point, state);
   }
 
@@ -664,33 +685,64 @@ class PreparedGeneratedAmrLevelBlock {
   }
 
   Real maximum_speed(const field_type& state) const {
-    require_live_();
-    require_state_contract_(state);
+    generated_amr_detail::collective_phase(
+        *lane_,
+        [&] {
+          require_live_();
+          require_state_contract_(state);
+        },
+        "generated AMR maximum-speed preflight failed collectively");
     return maximum_speed_(state);
   }
 
   Real maximum_speed() const { return maximum_speed(*state_); }
 
-  void add_poisson_rhs(field_type& rhs) const {
-    require_live_();
-    poisson_rhs_(*state_, rhs);
-  }
+  void add_poisson_rhs(field_type& rhs) const { add_poisson_rhs(*state_, rhs); }
 
   void add_poisson_rhs(const field_type& state, field_type& rhs) const {
+    std::optional<field_type> candidate;
+    generated_amr_detail::collective_phase(
+        *lane_,
+        [&] {
+          require_live_();
+          require_state_contract_(state);
+          candidate.emplace(rhs.layout(), rhs.distribution(), rhs.local_rank(), rhs.ncomp(),
+                            rhs.ghosts());
+          generated_system_detail::copy_valid(rhs, *candidate);
+          poisson_rhs_(state, *candidate);
+        },
+        "generated AMR Poisson-RHS preparation failed collectively");
+    static_assert(std::is_nothrow_move_assignable_v<field_type>);
+    rhs = std::move(*candidate);
+  }
+
+  /// Rank-local contribution seam used only by the host's grouped all-block transaction. The host
+  /// authenticates the complete schedule and wraps every call in one lane failure convergence.
+  void add_poisson_rhs_locally(const field_type& state, field_type& rhs) const {
     require_live_();
     require_state_contract_(state);
     poisson_rhs_(state, rhs);
   }
 
   std::optional<Real> source_frequency() const {
-    require_live_();
+    generated_amr_detail::collective_phase(
+        *lane_, [&] { require_live_(); },
+        "generated AMR source-frequency preflight failed collectively");
+    const long available = source_frequency_ ? 1L : 0L;
+    if (all_reduce_min(available, *lane_) != all_reduce_max(available, *lane_))
+      throw std::runtime_error("generated AMR source-frequency availability differs between ranks");
     if (!source_frequency_)
       return std::nullopt;
     return source_frequency_(*state_);
   }
 
   std::optional<Real> stability_dt() const {
-    require_live_();
+    generated_amr_detail::collective_phase(
+        *lane_, [&] { require_live_(); },
+        "generated AMR stability-dt preflight failed collectively");
+    const long available = stability_dt_ ? 1L : 0L;
+    if (all_reduce_min(available, *lane_) != all_reduce_max(available, *lane_))
+      throw std::runtime_error("generated AMR stability-dt availability differs between ranks");
     if (!stability_dt_)
       return std::nullopt;
     return stability_dt_(*state_);
@@ -765,6 +817,7 @@ class PreparedGeneratedAmrLevelBlock {
   std::string state_identity_;
   std::string provider_identity_;
   std::string collective_contract_;
+  const ExecutionLane* lane_ = nullptr;
   StatePreparation prepare_state_;
   PhysicalBoundaryPreparation prepare_physical_;
   Evaluator evaluator_;
@@ -823,6 +876,28 @@ struct PreparedAmrSystemBlock {
       throw std::logic_error("prepared AMR system block has no level materializer");
     return materialize_level(runtime, std::move(context));
   }
+};
+
+/// One generated elliptic attachment retained by the same DSO as its prepared spatial block.
+template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
+struct PreparedNativeAmrEllipticAttachment {
+  std::string field;
+  std::string block_identity;
+  std::string binding_identity;
+  std::string rhs_provider_identity;
+  std::string rhs_provider_key;
+  std::size_t binding_ordinal = std::numeric_limits<std::size_t>::max();
+  double coefficient = 0.0;
+  std::vector<runtime::system::AuxiliaryComponentKey> output_keys;
+  int gradient_sign = 1;
+  std::function<void(const MultiFab<Dim, MemorySpace>&, MultiFab<Dim, MemorySpace>&)> rhs;
+};
+
+/// Complete inert candidate produced by one native AMR installer callback.
+template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
+struct PreparedNativeAmrPackage {
+  PreparedAmrSystemBlock<Dim, MemorySpace> block;
+  std::vector<PreparedNativeAmrEllipticAttachment<Dim, MemorySpace>> elliptic_attachments;
 };
 
 namespace generated_amr_detail {
@@ -1374,10 +1449,20 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
                             const auto& point, MultiFab<Dim>& state, const MultiFab<Dim>& direction,
                             MultiFab<Dim>& result) mutable {
       std::lock_guard lock(evaluation_scratch->mutex);
-      const Real state_norm = static_cast<Real>(
-          all_reduce_max(static_cast<double>(all_component_norm_inf(state)), *lane));
-      const Real direction_norm = static_cast<Real>(
-          all_reduce_max(static_cast<double>(all_component_norm_inf(direction)), *lane));
+      Real local_state_norm = Real(0);
+      Real local_direction_norm = Real(0);
+      collective_phase(
+          *lane,
+          [&] {
+            device_fence();
+            local_state_norm = all_component_norm_inf(state);
+            local_direction_norm = all_component_norm_inf(direction);
+          },
+          "generated AMR boundary JVP norm preparation failed collectively");
+      const Real state_norm =
+          static_cast<Real>(all_reduce_max(static_cast<double>(local_state_norm), *lane));
+      const Real direction_norm =
+          static_cast<Real>(all_reduce_max(static_cast<double>(local_direction_norm), *lane));
       const Real step = direction_norm > Real(0) ? std::sqrt(std::numeric_limits<Real>::epsilon()) *
                                                        (Real(1) + state_norm) / direction_norm
                                                  : std::sqrt(std::numeric_limits<Real>::epsilon());
@@ -1399,11 +1484,11 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
         for (int face = 0; face < 2 * Dim; ++face)
           closure.apply_jvp(face, state, direction, result, geometry, context);
     };
-    auto speed = [model, provider_storage, provider_plan](const MultiFab<Dim>& state) {
-      return maximum_speed<Dim>(model, state, provider_storage, provider_plan);
+    auto speed = [model, provider_storage, provider_plan, lane](const MultiFab<Dim>& state) {
+      return maximum_speed<Dim>(model, state, provider_storage, provider_plan, *lane);
     };
-    auto poisson_rhs = [model, lane](const MultiFab<Dim>& state, MultiFab<Dim>& rhs) {
-      add_poisson_rhs<Dim>(model, state, rhs, *lane);
+    auto poisson_rhs = [model](const MultiFab<Dim>& state, MultiFab<Dim>& rhs) {
+      add_poisson_rhs_locally<Dim>(model, state, rhs);
     };
     typename PreparedGeneratedAmrLevelBlock<Dim>::PointwiseProjection pointwise_projection;
     if constexpr (HasPointwiseProjection<Model>) {
@@ -1432,6 +1517,7 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
                                       provider_plan, provider_storage, local),
                                   active, status.fab(local).view(), has_active_mask});
               }
+              device_fence();
               local_status = reduce_max_local(status);
             },
             "generated AMR pointwise projection failed collectively");
@@ -1445,9 +1531,9 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
                            const ProviderValues<provider_count>& providers) {
                     value.source_frequency(state, providers);
                   }) {
-      source_frequency_bound = [model, provider_storage,
-                                provider_plan](const MultiFab<Dim>& state) {
-        return source_frequency<Dim>(model, state, provider_storage, provider_plan);
+      source_frequency_bound = [model, provider_storage, provider_plan,
+                                lane](const MultiFab<Dim>& state) {
+        return source_frequency<Dim>(model, state, provider_storage, provider_plan, *lane);
       };
     }
     typename PreparedGeneratedAmrLevelBlock<Dim>::Speed stability_dt_bound;
@@ -1455,15 +1541,16 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
                            const ProviderValues<provider_count>& providers) {
                     value.stability_dt(state, providers);
                   }) {
-      stability_dt_bound = [model, provider_storage, provider_plan](const MultiFab<Dim>& state) {
-        return stability_dt<Dim>(model, state, provider_storage, provider_plan);
+      stability_dt_bound = [model, provider_storage, provider_plan,
+                            lane](const MultiFab<Dim>& state) {
+        return stability_dt<Dim>(model, state, provider_storage, provider_plan, *lane);
       };
     }
     std::string contract = level_contract(runtime, context, provider_identity);
     MultiFab<Dim>* const bound_state = context.state;
     return PreparedGeneratedAmrLevelBlock<Dim>(
         runtime, level, *bound_state, std::move(context.state_identity), provider_identity,
-        std::move(contract), std::move(prepare_state), std::move(prepare_physical),
+        std::move(contract), *lane, std::move(prepare_state), std::move(prepare_physical),
         std::move(evaluator), std::move(flux_evaluator), std::move(core_evaluator),
         std::move(flux_core_evaluator), std::move(boundary_evaluator), std::move(boundary_jvp),
         std::move(source_evaluator), std::move(implicit_source_solver), std::move(speed),

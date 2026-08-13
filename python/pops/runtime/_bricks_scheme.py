@@ -6,16 +6,23 @@ live here. Public spatial and temporal authoring lives in :mod:`pops.numerics` a
 Private native-engine adapters use :mod:`pops.runtime._engine_descriptors` as their cycle-safe
 aggregate.
 """
+
 from __future__ import annotations
 
 from typing import Any
 
 from pops.runtime._numeric import exact_real, positive_int, strict_bool
 from pops.runtime.routes import (
-    RECON_CONSERVATIVE, RECON_PRIMITIVE,
-    RIEMANN_HLL, RIEMANN_HLLC, RIEMANN_ROE, RIEMANN_ROE_HLL_RUSANOV_RECOVERY,
+    RECON_CONSERVATIVE,
+    RECON_PRIMITIVE,
+    RIEMANN_HLL,
+    RIEMANN_HLLC,
+    RIEMANN_ROE,
+    RIEMANN_ROE_HLL_RUSANOV_RECOVERY,
     RIEMANN_RUSANOV,
-    TIME_EULER, TIME_EXPLICIT, TIME_SSPRK3,
+    TIME_EULER,
+    TIME_EXPLICIT,
+    TIME_SSPRK3,
 )
 
 
@@ -60,16 +67,22 @@ class ThermalExchange:
 _FLUX_SCHEMES = {  # riemann descriptor scheme -> Spatial.flux route
     # "user" stays a plain token: an EXTERNAL C++ flux brick resolves through the external-brick
     # catalog manifest (pops.descriptors), not the native route registry.
-    "rusanov": RIEMANN_RUSANOV, "hll": RIEMANN_HLL, "hllc": RIEMANN_HLLC, "roe": RIEMANN_ROE,
+    "rusanov": RIEMANN_RUSANOV,
+    "hll": RIEMANN_HLL,
+    "hllc": RIEMANN_HLLC,
+    "roe": RIEMANN_ROE,
     "roe_hll_rusanov_recovery": RIEMANN_ROE_HLL_RUSANOV_RECOVERY,
     "user": "user",
 }
 _RECON_SCHEMES = {  # variables descriptor scheme -> Spatial.recon route
-    "conservative": RECON_CONSERVATIVE, "primitive": RECON_PRIMITIVE,
+    "conservative": RECON_CONSERVATIVE,
+    "primitive": RECON_PRIMITIVE,
 }
-_LIMITER_SUGGEST = ("pops.numerics.reconstruction.limiters.Minmod() / .VanLeer() / .MC() / "
-                    ".Superbee(), "
-                    "pops.numerics.reconstruction.FirstOrder() / WENO5() / MUSCL(...)")
+_LIMITER_SUGGEST = (
+    "pops.numerics.reconstruction.limiters.Minmod() / .VanLeer() / .MC() / "
+    ".Superbee(), "
+    "pops.numerics.reconstruction.FirstOrder() / WENO5() / MUSCL(...)"
+)
 _FLUX_SUGGEST = (
     "pops.numerics.riemann.Rusanov() / HLL() / HLLC() / Roe() / "
     "Recovery(primary=Roe(), fallbacks=(HLL(), Rusanov()))"
@@ -77,7 +90,9 @@ _FLUX_SUGGEST = (
 _RECON_SUGGEST = "pops.numerics.variables.Conservative() / Primitive()"
 
 
-def _lower_selector(value: Any, *, param: Any, schemes: Any, suggestion: Any, categories: Any) -> Any:
+def _lower_selector(
+    value: Any, *, param: Any, schemes: Any, suggestion: Any, categories: Any
+) -> Any:
     """Lower a typed spatial-scheme descriptor to its canonical C++ token (Spec 5 sec.7).
 
     @p value is a typed descriptor (``BrickDescriptor`` / ``Descriptor``) carrying ``.scheme`` and
@@ -87,6 +102,7 @@ def _lower_selector(value: Any, *, param: Any, schemes: Any, suggestion: Any, ca
     unknown scheme is rejected rather than silently passed to the C++ boundary.
     """
     from pops.descriptors import reject_string_selector
+
     if value is None:
         return None
     if isinstance(value, str):
@@ -96,16 +112,19 @@ def _lower_selector(value: Any, *, param: Any, schemes: Any, suggestion: Any, ca
     if category is None or scheme is None:
         raise TypeError(
             "Spatial: %s must be a typed pops.numerics descriptor (got %r). Use %s."
-            % (param, type(value).__name__, suggestion))
+            % (param, type(value).__name__, suggestion)
+        )
     if category not in categories:
         raise TypeError(
             "Spatial: %s expects a %s descriptor, got a %r descriptor (%s). Use %s."
-            % (param, " / ".join(categories), category, scheme, suggestion))
+            % (param, " / ".join(categories), category, scheme, suggestion)
+        )
     token = schemes.get(scheme)
     if token is None:
         raise ValueError(
             "Spatial: %s descriptor scheme %r is not a known %s scheme (%s). Use %s."
-            % (param, scheme, param, ", ".join(sorted(schemes)), suggestion))
+            % (param, scheme, param, ", ".join(sorted(schemes)), suggestion)
+        )
     return token
 
 
@@ -126,8 +145,7 @@ def _lower_reconstruction_selector(value: Any) -> Any:
         if category not in ("reconstruction", "limiter"):
             raise TypeError(
                 "Spatial: limiter expects a reconstruction / limiter descriptor, got a %r "
-                "descriptor (%s). Use %s."
-                % (category, scheme, _LIMITER_SUGGEST)
+                "descriptor (%s). Use %s." % (category, scheme, _LIMITER_SUGGEST)
             ) from error
         raise
 
@@ -187,9 +205,7 @@ class Spatial:
 
     def __delattr__(self, name: str) -> None:
         if getattr(self, "_frozen", False):
-            raise RuntimeError(
-                "Spatial is frozen by AuthoringSnapshot: cannot delete %r" % name
-            )
+            raise RuntimeError("Spatial is frozen by AuthoringSnapshot: cannot delete %r" % name)
         object.__delattr__(self, name)
 
     def freeze(self) -> Any:
@@ -215,23 +231,28 @@ class Spatial:
                 "route": str(self.flux),
                 "external_id": self.external_flux_id,
                 "capability_contract": self.riemann_capability_contract.to_data(),
-                **({
-                    "external_library_sha256": self.external_flux_library_sha256,
-                    "external_abi_key": self.external_flux_abi_key,
-                    "external_native_abi_key": self.external_flux_native_abi_key,
-                    "external_model_identity": self.external_flux_model_identity,
-                    "external_dimension": self.external_flux_dimension,
-                    "external_n_vars": self.external_flux_n_vars,
-                    "external_provider_count": self.external_flux_provider_count,
-                } if self.external_flux_id is not None else {}),
+                **(
+                    {
+                        "external_library_sha256": self.external_flux_library_sha256,
+                        "external_abi_key": self.external_flux_abi_key,
+                        "external_system_abi_version": self.external_flux_system_abi_version,
+                        "external_system_abi_key": self.external_flux_system_abi_key,
+                        "external_native_abi_key": self.external_flux_native_abi_key,
+                        "external_model_identity": self.external_flux_model_identity,
+                        "external_dimension": self.external_flux_dimension,
+                        "external_n_vars": self.external_flux_n_vars,
+                        "external_provider_count": self.external_flux_provider_count,
+                    }
+                    if self.external_flux_id is not None
+                    else {}
+                ),
             },
             "variables": str(self.recon),
             "positivity_floor": scalar_literal(self.positivity_floor).to_data(),
             "wave_speed_cache": self.wave_speed_cache,
             "waves_provider": self.waves_provider,
             "weno_epsilon": (
-                None if self.weno_epsilon is None
-                else scalar_literal(self.weno_epsilon).to_data()
+                None if self.weno_epsilon is None else scalar_literal(self.weno_epsilon).to_data()
             ),
         }
 
@@ -244,12 +265,28 @@ class Spatial:
     def __eq__(self, other: Any) -> bool:
         return type(other) is type(self) and self.to_data() == other.to_data()
 
-    def __init__(self, limiter: Any = None, flux: Any = None, recon: Any = None, *, none: bool = False,
-                 minmod: bool = False, vanleer: bool = False, weno5: bool = False, primitive: bool = False,
-                 positivity_floor: Any = None, wave_speed_cache: bool = False,
-                 reconstruction: Any = None) -> None:
-        for label, flag in (("none", none), ("minmod", minmod), ("vanleer", vanleer),
-                            ("weno5", weno5), ("primitive", primitive)):
+    def __init__(
+        self,
+        limiter: Any = None,
+        flux: Any = None,
+        recon: Any = None,
+        *,
+        none: bool = False,
+        minmod: bool = False,
+        vanleer: bool = False,
+        weno5: bool = False,
+        primitive: bool = False,
+        positivity_floor: Any = None,
+        wave_speed_cache: bool = False,
+        reconstruction: Any = None,
+    ) -> None:
+        for label, flag in (
+            ("none", none),
+            ("minmod", minmod),
+            ("vanleer", vanleer),
+            ("weno5", weno5),
+            ("primitive", primitive),
+        ):
             strict_bool(flag, where="Spatial.%s" % label)
         # Spec 5 sec.14.1 names the reconstruction/limiter slot ``reconstruction=``; keep ``limiter=``
         # working and accept ``reconstruction=`` as an alias (only one of the two at a time).
@@ -283,11 +320,19 @@ class Spatial:
             limiter = enabled_limiter_shortcuts[0][1]()
         lim_tok = _lower_reconstruction_selector(limiter)
         flux_tok = _lower_selector(
-            flux, param="flux", schemes=_FLUX_SCHEMES,
-            suggestion=_FLUX_SUGGEST, categories=("riemann",))
+            flux,
+            param="flux",
+            schemes=_FLUX_SCHEMES,
+            suggestion=_FLUX_SUGGEST,
+            categories=("riemann",),
+        )
         recon_tok = _lower_selector(
-            recon, param="recon", schemes=_RECON_SCHEMES,
-            suggestion=_RECON_SUGGEST, categories=("variables",))
+            recon,
+            param="recon",
+            schemes=_RECON_SCHEMES,
+            suggestion=_RECON_SUGGEST,
+            categories=("variables",),
+        )
         # Preserve the descriptor-owned capability contract across the private runtime lowering.
         # Runtime installation consumes this value; it never recognises a flux class, factory name,
         # or wire token. External C++ descriptors use the same requirements mapping.
@@ -306,6 +351,8 @@ class Spatial:
         self.external_flux_library_path = None
         self.external_flux_library_sha256 = None
         self.external_flux_abi_key = None
+        self.external_flux_system_abi_version = None
+        self.external_flux_system_abi_key = None
         self.external_flux_native_abi_key = None
         self.external_flux_model_identity = None
         self.external_flux_dimension = None
@@ -317,10 +364,18 @@ class Spatial:
                 self.external_flux_id = getattr(flux, "name", None)
                 options = getattr(flux, "options", None)
                 required = {
-                    "library_path", "library_sha256", "abi_version", "abi_key", "native_abi_key",
+                    "library_path",
+                    "library_sha256",
+                    "abi_version",
+                    "abi_key",
+                    "system_abi_version",
+                    "system_abi_key",
+                    "native_abi_key",
                     "supported_layouts",
                     "model_identity",
-                    "dimension", "n_vars", "provider_count",
+                    "dimension",
+                    "n_vars",
+                    "provider_count",
                 }
                 if not isinstance(options, dict) or set(options) != required:
                     raise ValueError(
@@ -336,10 +391,27 @@ class Spatial:
                 )
                 if options["abi_version"] != 4 or options["abi_key"] != expected_abi_key:
                     raise ValueError("external Riemann descriptor carries an incompatible ABI")
+                expected_system_abi_key = (
+                    "pops.external-riemann.system/v6;receiver=prepared-native-package;"
+                    "providers=qualified;dim=%s" % dimension
+                )
+                system_version = options["system_abi_version"]
+                system_key = options["system_abi_key"]
+                if (system_version is None) != (system_key is None):
+                    raise ValueError("external Riemann descriptor carries an incomplete System ABI")
+                if system_version is not None and (
+                    system_version != 6 or system_key != expected_system_abi_key
+                ):
+                    raise ValueError(
+                        "external Riemann descriptor carries an incompatible System v6 ABI"
+                    )
                 if (
-                    type(dimension) is not int or dimension not in (1, 2, 3)
-                    or type(n_vars) is not int or n_vars < 1
-                    or type(provider_count) is not int or provider_count < 0
+                    type(dimension) is not int
+                    or dimension not in (1, 2, 3)
+                    or type(n_vars) is not int
+                    or n_vars < 1
+                    or type(provider_count) is not int
+                    or provider_count < 0
                 ):
                     raise ValueError(
                         "external Riemann descriptor carries an invalid dimension/model/provider "
@@ -348,6 +420,8 @@ class Spatial:
                 self.external_flux_library_path = options["library_path"]
                 self.external_flux_library_sha256 = options["library_sha256"]
                 self.external_flux_abi_key = options["abi_key"]
+                self.external_flux_system_abi_version = system_version
+                self.external_flux_system_abi_key = options["system_abi_key"]
                 self.external_flux_native_abi_key = options["native_abi_key"]
                 self.external_flux_supported_layouts = tuple(options["supported_layouts"])
                 self.external_flux_model_identity = options["model_identity"]
@@ -371,10 +445,12 @@ class Spatial:
         self.limiter = lim_tok
         self.flux = flux_tok if flux_tok is not None else RIEMANN_RUSANOV
         self.recon = recon_tok if recon_tok is not None else RECON_CONSERVATIVE
-        self.positivity_floor = (0.0 if positivity_floor is None else exact_real(
-            positivity_floor, where="Spatial.positivity_floor", minimum=0))
-        self.wave_speed_cache = strict_bool(
-            wave_speed_cache, where="Spatial.wave_speed_cache")
+        self.positivity_floor = (
+            0.0
+            if positivity_floor is None
+            else exact_real(positivity_floor, where="Spatial.positivity_floor", minimum=0)
+        )
+        self.wave_speed_cache = strict_bool(wave_speed_cache, where="Spatial.wave_speed_cache")
         if self.wave_speed_cache and self.flux != RIEMANN_HLL:
             raise ValueError(
                 "Spatial.wave_speed_cache requires flux=riemann.HLL(); got flux=%r; "
@@ -400,16 +476,24 @@ class Spatial:
         requirements, limitations). The ``user`` external-flux token has no native route (it
         resolves through the external-brick catalog manifest) and reports a minimal entry.
         """
+
         def _manifest(slot_route: Any) -> Any:
             if hasattr(slot_route, "manifest"):
                 return slot_route.manifest()
-            return {"family": "riemann", "id": "riemann.user", "token": str(slot_route),
-                    "native_entry": "external brick (pops.descriptors catalog)",
-                    "requirements": list(
-                        self.riemann_capability_contract.required_capabilities),
-                    "limitations": []}
-        return {"limiter": _manifest(self.limiter), "riemann": _manifest(self.flux),
-                "recon": _manifest(self.recon)}
+            return {
+                "family": "riemann",
+                "id": "riemann.user",
+                "token": str(slot_route),
+                "native_entry": "external brick (pops.descriptors catalog)",
+                "requirements": list(self.riemann_capability_contract.required_capabilities),
+                "limitations": [],
+            }
+
+        return {
+            "limiter": _manifest(self.limiter),
+            "riemann": _manifest(self.flux),
+            "recon": _manifest(self.recon),
+        }
 
     def validate(self, ghost_depth: Any = None, block: Any = None) -> Any:
         """Reject a reconstruction whose ghost depth exceeds an EXPLICIT block halo (Spec 5 sec.7).
@@ -464,20 +548,29 @@ class Explicit:
                  to first-order references, validation only). Shortcut ssprk3=True.
     """
 
-    def __init__(self, substeps: int = 1, method: str = "ssprk2", stride: int = 1, *, ssprk3: bool = False) -> None:
+    def __init__(
+        self, substeps: int = 1, method: str = "ssprk2", stride: int = 1, *, ssprk3: bool = False
+    ) -> None:
         strict_bool(ssprk3, where="Explicit.ssprk3")
         if ssprk3:
             method = "ssprk3"
         if not isinstance(method, str) or method not in ("ssprk2", "ssprk3", "euler"):
-            raise ValueError("Explicit: method 'ssprk2' | 'ssprk3' | 'euler' (received %r)" % (method,))
+            raise ValueError(
+                "Explicit: method 'ssprk2' | 'ssprk3' | 'euler' (received %r)" % (method,)
+            )
         self.substeps = positive_int(substeps, where="Explicit.substeps")
         self.stride = positive_int(stride, where="Explicit.stride")
         self.method = method
         # kind passed to the compiled facade: the TYPED time route (ADC-584) whose str value is
         # the historical token -- "explicit" (SSPRK2, bit-identical default), "ssprk3" or "euler"
         # (order 1, fidelity to first-order references -- validation, never default).
-        self.kind = (TIME_SSPRK3 if method == "ssprk3"
-                     else TIME_EULER if method == "euler" else TIME_EXPLICIT)
+        self.kind = (
+            TIME_SSPRK3
+            if method == "ssprk3"
+            else TIME_EULER
+            if method == "euler"
+            else TIME_EXPLICIT
+        )
 
     def routes(self) -> Any:
         """The typed native routes chosen by this time treatment (ADC-584 inspection)."""

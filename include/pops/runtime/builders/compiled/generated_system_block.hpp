@@ -28,6 +28,7 @@
 #include <exception>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -438,6 +439,8 @@ template <int Dim, nd::ReconstructionVariables Variables, class Model, class Met
 EmbeddedResidualFamily<Dim> make_cut_cell_residual_family(
     const Model& model, const Metric& metric, const Reconstruction& reconstruction,
     const Numerical& numerical, Real positivity_floor, PrepareState prepare_state,
+    std::shared_ptr<const runtime::system::AuxiliaryStorageGroups<Dim>> provider_storage_owner,
+    std::shared_ptr<const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>> provider_plan_owner,
     const runtime::system::AuxiliaryStorageGroups<Dim>* provider_storage,
     const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>* provider_plan,
     nd::BoundaryFaceOmission<Dim> omission,
@@ -445,8 +448,9 @@ EmbeddedResidualFamily<Dim> make_cut_cell_residual_family(
   auto embedded_operator =
       nd::prepare_embedded_boundary_operator<Model, Metric, Reconstruction, Numerical, Variables>(
           model, metric, reconstruction, numerical, positivity_floor);
-  auto flux = [embedded_operator, prepare_state, provider_storage, provider_plan, omission](
-                  MultiFab<Dim>& state, MultiFab<Dim>& residual, const auto& embedded) {
+  auto flux = [embedded_operator, prepare_state, provider_storage_owner, provider_plan_owner,
+               provider_storage, provider_plan,
+               omission](MultiFab<Dim>& state, MultiFab<Dim>& residual, const auto& embedded) {
     prepare_state(state, nullptr);
     assemble_embedded_residual_with_plan<Dim, Model>(
         embedded_operator, state, provider_storage, provider_plan, embedded.active_mask(),
@@ -455,6 +459,9 @@ EmbeddedResidualFamily<Dim> make_cut_cell_residual_family(
   return make_embedded_residual_family<Dim>(std::move(flux), std::move(source));
 }
 
+// The AMR v4 block image still owns its established hierarchy-wide reduction contract and calls
+// this shared pointwise evaluator directly. Uniform System packages never bind this overload: their
+// installed closure below requires the authenticated System ExecutionLane explicitly.
 template <int Dim, class Model>
 Real maximum_speed(const Model& model, const MultiFab<Dim>& state,
                    const runtime::system::AuxiliaryStorageGroups<Dim>* provider_storage,
@@ -481,7 +488,46 @@ Real maximum_speed(const Model& model, const MultiFab<Dim>& state,
 }
 
 template <int Dim, class Model>
+Real maximum_speed(const Model& model, const MultiFab<Dim>& state,
+                   const runtime::system::AuxiliaryStorageGroups<Dim>* provider_storage,
+                   const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>* plan,
+                   const ExecutionLane& lane) {
+  constexpr int provider_count = flux_provider_count<Model>;
+  std::optional<MultiFab<Dim>> values;
+  Real local_result = -std::numeric_limits<Real>::infinity();
+  prepared_boundary_collective_phase(
+      lane,
+      [&] {
+        if constexpr (provider_count > 0) {
+          if (provider_storage == nullptr)
+            throw std::invalid_argument("generated speed requires resolved provider storage");
+          runtime::system::require_pointwise_provider_groups<Dim, provider_count>(
+              state, provider_storage, plan, "generated speed providers");
+        }
+        values.emplace(state.layout(), state.distribution(), state.local_rank(), 1, state.ghosts());
+        for (std::size_t local = 0; local < state.local_size(); ++local)
+          for_each_cell(state.box(local),
+                        MaterializeMaximumSpeed<Dim, Model>{
+                            model, state.fab(local).view(),
+                            runtime::system::bind_provider_storage_view<Dim, provider_count>(
+                                plan, provider_storage, local),
+                            values->fab(local).view()});
+        device_fence();
+        local_result = reduce_max_local(*values);
+        if (state.local_size() != 0 && (!std::isfinite(local_result) || local_result < Real(0)))
+          throw std::runtime_error("generated model produced an invalid local maximum speed");
+      },
+      "generated model maximum-speed preparation failed collectively");
+  const Real result = static_cast<Real>(all_reduce_max(static_cast<double>(local_result), lane));
+  if (!std::isfinite(result) || result < Real(0))
+    throw std::runtime_error("generated model produced an invalid maximum speed");
+  return result;
+}
+
+template <int Dim, class Model>
 void add_poisson_rhs(const Model& model, const MultiFab<Dim>& state, MultiFab<Dim>& rhs) {
+  // This provider is deliberately rank-local. ExactNamedField owns the surrounding exact-lane
+  // failure consensus after every rank returns (or throws) from this callback.
   if (rhs.ncomp() != 1)
     throw std::invalid_argument("generated Poisson RHS destination must have one component");
   require_same_layout(state, rhs, 1, "generated Poisson RHS");
@@ -492,7 +538,9 @@ void add_poisson_rhs(const Model& model, const MultiFab<Dim>& state, MultiFab<Di
       for_each_cell(state.box(local), MaterializePoissonRhs<Dim, Model>{
                                           model, state.fab(local).view(),
                                           candidate.fab(local).view(), status.fab(local).view()});
-    if (reduce_max(status) != Real(0))
+    device_fence();
+    const Real local_status = reduce_max_local(status);
+    if (state.local_size() != 0 && local_status != Real(0))
       throw std::runtime_error("generated Poisson RHS produced a non-finite value");
     saxpy(rhs, Real(1), candidate);
   }
@@ -505,12 +553,12 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
   static_assert(Model::dimension == Dim);
   constexpr int provider_count = provider_count_for<Model, Dim>();
   if constexpr (provider_count > 0) {
-    if (request.provider_plan == nullptr ||
+    if (!request.provider_plan ||
         request.provider_plan->value_count() != static_cast<std::size_t>(provider_count))
       throw std::invalid_argument("generated System block provider plan differs from its model");
-    if (request.provider_storage == nullptr)
+    if (!request.provider_storage)
       throw std::invalid_argument("generated System block requires accepted provider storage");
-  } else if (request.provider_plan != nullptr || request.provider_storage != nullptr) {
+  } else if (request.provider_plan || request.provider_storage) {
     throw std::invalid_argument(
         "provider-free generated System block cannot retain provider state");
   }
@@ -523,13 +571,16 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
           request.geometry, request.model, reconstruction, numerical,
           request.routes.positivity_floor);
   const Model model = request.model;
+  const auto provider_storage_owner = request.provider_storage;
+  const auto provider_plan_owner = request.provider_plan;
   const runtime::system::AuxiliaryStorageGroups<Dim>* const provider_storage =
-      request.provider_storage;
-  const auto provider_plan = request.provider_plan;
+      provider_storage_owner.get();
+  const auto* const provider_plan = provider_plan_owner.get();
   const Geometry<Dim> geometry = request.geometry;
   const BoundaryTopology<Dim> topology = request.topology;
 
-  auto prepare_state = [model, provider_storage, provider_plan, geometry, topology, ghosts](
+  auto prepare_state = [model, provider_storage_owner, provider_plan_owner, provider_storage,
+                        provider_plan, geometry, topology, ghosts](
                            MultiFab<Dim>& state, const PreparedHyperbolicBoundary<Dim>* boundary) {
     if (boundary != nullptr) {
       boundary->template require_model_qualified_characteristic_provider<Model>();
@@ -549,10 +600,10 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
   };
 
   auto prepare_state_with_transport =
-      [model, provider_storage, provider_plan, geometry](
-          MultiFab<Dim>& state, const PreparedHyperbolicBoundary<Dim>* boundary,
-          const ExecutionLane& lane,
-          const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+      [model, provider_storage_owner, provider_plan_owner, provider_storage, provider_plan,
+       geometry](MultiFab<Dim>& state, const PreparedHyperbolicBoundary<Dim>* boundary,
+                 const ExecutionLane& lane,
+                 const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
         prepared_boundary_collective_phase(
             lane,
             [&] {
@@ -585,9 +636,10 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
         }
       };
 
-  auto flux = [spatial, prepare_state, provider_storage, provider_plan, geometry](
-                  MultiFab<Dim>& state, MultiFab<Dim>& residual,
-                  const PreparedHyperbolicBoundary<Dim>* boundary) {
+  auto flux = [spatial, prepare_state, provider_storage_owner, provider_plan_owner,
+               provider_storage, provider_plan,
+               geometry](MultiFab<Dim>& state, MultiFab<Dim>& residual,
+                         const PreparedHyperbolicBoundary<Dim>* boundary) {
     require_same_layout(state, residual, Model::n_vars, "generated flux residual");
     prepare_state(state, boundary);
 
@@ -607,9 +659,9 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
     spatial.assemble_residual_from_face_fluxes(faces, residual);
   };
 
-  auto full = [flux, model, provider_storage, provider_plan](
-                  MultiFab<Dim>& state, MultiFab<Dim>& residual,
-                  const PreparedHyperbolicBoundary<Dim>* boundary) {
+  auto full = [flux, model, provider_storage_owner, provider_plan_owner, provider_storage,
+               provider_plan](MultiFab<Dim>& state, MultiFab<Dim>& residual,
+                              const PreparedHyperbolicBoundary<Dim>* boundary) {
     MultiFab<Dim> candidate(residual.layout(), residual.distribution(), residual.local_rank(),
                             residual.ncomp(), residual.ghosts());
     flux(state, candidate, boundary);
@@ -634,8 +686,9 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
         if (boundary != nullptr && *external_ghost_boundary)
           (*external_ghost_boundary)(point, state, geometry, lane);
       };
-  auto flux_with_transport = [spatial, prepare_state_with_external, provider_storage, provider_plan,
-                              geometry, external_boundary_flux](
+  auto flux_with_transport = [spatial, prepare_state_with_external, provider_storage_owner,
+                              provider_plan_owner, provider_storage, provider_plan, geometry,
+                              external_boundary_flux](
                                  const runtime::multiblock::BoundaryEvaluationPoint& point,
                                  MultiFab<Dim>& state, MultiFab<Dim>& residual,
                                  const PreparedHyperbolicBoundary<Dim>* boundary,
@@ -685,11 +738,11 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
     });
   };
   auto full_with_transport =
-      [flux_with_transport, model, provider_storage, provider_plan](
-          const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab<Dim>& state,
-          MultiFab<Dim>& residual, const PreparedHyperbolicBoundary<Dim>* boundary,
-          const ExecutionLane& lane,
-          const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+      [flux_with_transport, model, provider_storage_owner, provider_plan_owner, provider_storage,
+       provider_plan](const runtime::multiblock::BoundaryEvaluationPoint& point,
+                      MultiFab<Dim>& state, MultiFab<Dim>& residual,
+                      const PreparedHyperbolicBoundary<Dim>* boundary, const ExecutionLane& lane,
+                      const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
         transport.with_boundary_scratch(state, [&](auto& scratch) {
           flux_with_transport(point, state, scratch.generated_candidate, boundary, lane, transport);
           Real local_status = Real(0);
@@ -713,15 +766,15 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
               "generated prepared source accumulation failed collectively");
         });
       };
-  auto source = [model, provider_storage, provider_plan](MultiFab<Dim>& state,
-                                                         MultiFab<Dim>& residual) {
+  auto source = [model, provider_storage_owner, provider_plan_owner, provider_storage,
+                 provider_plan](MultiFab<Dim>& state, MultiFab<Dim>& residual) {
     MultiFab<Dim> candidate =
         materialize_source<Dim>(model, state, provider_storage, provider_plan);
     copy_valid(candidate, residual);
   };
   typename SystemBlockClosures<Dim>::EmbeddedResidual embedded_source =
-      [model, provider_storage, provider_plan](MultiFab<Dim>& state, MultiFab<Dim>& residual,
-                                               const auto& embedded) {
+      [model, provider_storage_owner, provider_plan_owner, provider_storage, provider_plan](
+          MultiFab<Dim>& state, MultiFab<Dim>& residual, const auto& embedded) {
         MultiFab<Dim> candidate =
             materialize_masked_source<Dim>(model, state, provider_storage, provider_plan, embedded);
         copy_valid(candidate, residual);
@@ -739,9 +792,9 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
                                             std::remove_cvref_t<decltype(spatial.metric())>,
                                             Reconstruction, Numerical, Variables>(
           model, spatial.metric(), reconstruction, numerical, request.routes.positivity_floor);
-  auto staircase_flux = [masked_operator, prepare_state, provider_storage, provider_plan,
-                         physical_omission](MultiFab<Dim>& state, MultiFab<Dim>& residual,
-                                            const auto& embedded) {
+  auto staircase_flux = [masked_operator, prepare_state, provider_storage_owner,
+                         provider_plan_owner, provider_storage, provider_plan, physical_omission](
+                            MultiFab<Dim>& state, MultiFab<Dim>& residual, const auto& embedded) {
     prepare_state(state, nullptr);
     assemble_masked_residual_with_plan<Dim, Model>(masked_operator, state, provider_storage,
                                                    provider_plan, embedded.active_mask(), residual,
@@ -767,7 +820,8 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
       make_embedded_residual_family<Dim>(std::move(staircase_flux), embedded_source);
   result.closures.cut_cell = make_cut_cell_residual_family<Dim, Variables>(
       model, spatial.metric(), reconstruction, numerical, request.routes.positivity_floor,
-      prepare_state, provider_storage, provider_plan, physical_omission, embedded_source);
+      prepare_state, provider_storage_owner, provider_plan_owner, provider_storage, provider_plan,
+      physical_omission, embedded_source);
   result.closures.rhs_at_point = [full](const auto&, MultiFab<Dim>& state,
                                         MultiFab<Dim>& residual) {
     full(state, residual, nullptr);
@@ -840,8 +894,9 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
       };
   result.closures.external_ghost_boundary = std::move(external_ghost_boundary);
 
-  result.maximum_speed = [model, provider_storage, provider_plan](const MultiFab<Dim>& state) {
-    return maximum_speed<Dim>(model, state, provider_storage, provider_plan);
+  result.maximum_speed = [model, provider_storage_owner, provider_plan_owner, provider_storage,
+                          provider_plan](const MultiFab<Dim>& state, const ExecutionLane& lane) {
+    return maximum_speed<Dim>(model, state, provider_storage, provider_plan, lane);
   };
   result.poisson_rhs = [model](const MultiFab<Dim>& state, MultiFab<Dim>& rhs) {
     add_poisson_rhs<Dim>(model, state, rhs);
@@ -867,7 +922,8 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
                          const ProviderValues<provider_count>& providers) {
                   value.source_frequency(state, providers);
                 }) {
-    result.source_frequency = [model, provider_storage, provider_plan](const MultiFab<Dim>& state) {
+    result.source_frequency = [model, provider_storage_owner, provider_plan_owner, provider_storage,
+                               provider_plan](const MultiFab<Dim>& state) {
       MultiFab<Dim> values(state.layout(), state.distribution(), state.local_rank(), 1,
                            state.ghosts());
       for (std::size_t local = 0; local < state.local_size(); ++local)
@@ -887,7 +943,8 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
                          const ProviderValues<provider_count>& providers) {
                   value.stability_dt(state, providers);
                 }) {
-    result.stability_dt = [model, provider_storage, provider_plan](const MultiFab<Dim>& state) {
+    result.stability_dt = [model, provider_storage_owner, provider_plan_owner, provider_storage,
+                           provider_plan](const MultiFab<Dim>& state) {
       MultiFab<Dim> values(state.layout(), state.distribution(), state.local_rank(), 1,
                            state.ghosts());
       for (std::size_t local = 0; local < state.local_size(); ++local)
@@ -958,6 +1015,16 @@ PreparedSystemBlock<Dim> select_reconstruction(Request request) {
 }
 
 }  // namespace generated_system_detail
+
+/// Materialize the exact-ranked elliptic RHS closure owned by one bound generated model. Native
+/// System and AMR packages use the same typed closure; only the host field layout differs.
+template <class Model>
+auto make_poisson_rhs(Model model) {
+  return [model = std::move(model)](const MultiFab<kNativeDimension>& state,
+                                    MultiFab<kNativeDimension>& rhs) {
+    generated_system_detail::add_poisson_rhs<kNativeDimension>(model, state, rhs);
+  };
+}
 
 /// Build the single exact numerical specialization requested by a generated package.
 template <class Request>
