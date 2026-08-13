@@ -112,10 +112,10 @@ def test_parser_finds_only_explicit_known_deferrals():
     for identifier in (
         "cache_should_update",
         "cache_effective_dt",
-        "neg_div_flux_into",
         "solve_fields_from_blocks_default",
     ):
         assert identifier in header
+    assert "neg_div_flux_into" not in header
     assert "solve_fields_from_state_at_fine_level" not in header
     assert "solve_fields_from_state_default" not in header
     assert "SolveOutcome solve_fields_from_state(const std::string&" not in (
@@ -178,6 +178,31 @@ def test_projection_is_green_after_the_real_amr_implementation_landed():
     module = _load_support_module()
     assert module.DEFERRED_GROUPS["projection"]["header_methods"] == frozenset()
     assert module.deferred_groups()["projection"] == "green"
+
+
+def test_named_flux_support_matches_the_resolved_interface_envelope():
+    module = _load_support_module()
+    context_header = CONTEXT_HPP.read_text(encoding="utf-8")
+    named_route = context_header.split("void neg_div_named_flux_into(", 1)[1].split(
+        "void apply_projection(", 1
+    )[0]
+    named_envelope = context_header.split("void require_named_flux_execution_envelope_(", 1)[
+        1
+    ].split("const field_type* staged_parent_for_block_", 1)[0]
+    assert module.DEFERRED_GROUPS["named_flux"]["header_methods"] == frozenset()
+    assert module.deferred_groups()["named_flux"] == "green"
+    assert module.amr_program_op_support(
+        _Program([{"op": "rhs", "attrs": {"fluxes": ["transport"]}}]),
+        context=_context(module, refined=True, interfaces=False),
+    ) == {"named_flux": "green"}
+    assert module.amr_program_op_support(
+        _Program([{"op": "rhs", "attrs": {"fluxes": ["transport"]}}]),
+        context=_context(module, refined=True, interfaces=True),
+    ) == {"named_flux": "pending:shared_block_interfaces"}
+    assert "active AMR named-flux divergence has no authenticated" not in named_route
+    assert "prepare_active_flux_basis_impl_(" in named_route
+    assert "has_interface_flux_provider()" in named_envelope
+    assert "shared topological interfaces are installed" in named_envelope
 
 
 def test_generated_programs_cannot_use_coarse_injection_as_a_fine_solve():
