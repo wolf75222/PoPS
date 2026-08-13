@@ -46,7 +46,9 @@ Real sum_field(const MultiFab<Dim>& field) {
 
 struct ElectronToy {
   using State = StateVec<1>;
-  using Aux = pops::AuxState<kDim>;
+  using Aux = ProviderValues<0>;
+  static constexpr int dimension = kDim;
+  static constexpr int n_providers = 0;
   static constexpr int n_vars = 1;
   POPS_HD State flux(const State&, const auto&, int) const { return State{Real(0)}; }
   POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return Real(0); }
@@ -56,7 +58,9 @@ struct ElectronToy {
 
 struct IonToy {
   using State = StateVec<1>;
-  using Aux = pops::AuxState<kDim>;
+  using Aux = ProviderValues<0>;
+  static constexpr int dimension = kDim;
+  static constexpr int n_providers = 0;
   static constexpr int n_vars = 1;
   POPS_HD State flux(const State&, const auto&, int) const { return State{Real(0)}; }
   POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return Real(0); }
