@@ -109,12 +109,22 @@ def test_header_deferred_set_matches_the_python_mirror():
 def test_parser_finds_only_explicit_known_deferrals():
     module = _load_support_module()
     header = _parse_header_deferred_set(CONTEXT_HPP.read_text(encoding="utf-8"))
-    for identifier in (
+    assert header == set()
+    assert module.header_deferred_methods() == frozenset()
+    assert "unqualified_coupled_solve" not in module.DEFERRED_GROUPS
+    assert module.deferred_groups()["schedule_cache"] == (
+        "pending:checkpointed_hierarchy_cache"
+    )
+    context_source = CONTEXT_HPP.read_text(encoding="utf-8")
+    for provider_method in (
         "cache_should_update",
+        "cache_store_scratch",
+        "cache_restore_scratch",
+        "cache_accumulate_dt",
         "cache_effective_dt",
-        "solve_fields_from_blocks_default",
     ):
-        assert identifier in header
+        assert provider_method in context_source
+    assert 'unavailable_("checkpointed AMR scheduler cache provider")' in context_source
     assert "neg_div_flux_into" not in header
     assert "solve_fields_from_state_at_fine_level" not in header
     assert "solve_fields_from_state_default" not in header
@@ -124,7 +134,7 @@ def test_parser_finds_only_explicit_known_deferrals():
     assert "SolveOutcome solve_fields_from_blocks(const std::string&" not in (
         CONTEXT_HPP.read_text(encoding="utf-8")
     )
-    context_header = CONTEXT_HPP.read_text(encoding="utf-8")
+    context_header = context_source
     assert context_header.count("SolveOutcome solve_fields_from_blocks_at(") == 1
     multi_block_route = context_header.split("SolveOutcome solve_fields_from_blocks_at(", 1)[
         1

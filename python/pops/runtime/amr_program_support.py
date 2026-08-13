@@ -12,14 +12,11 @@ Three single sources of truth, none duplicated here:
   1. Op enumeration is the Program's own IR plus an exact resolved support context;
   2. the op -> capability-group map reuses the codegen's OWN op-group vocabulary
      (``program_emit_kernels._CONDENSED_OPS`` et al.), imported lazily -- not a hand list;
-  3. the AMR support status derives from the ONE C++ source of truth,
-     ``include/pops/runtime/program/amr_program_context.hpp``: every capability deferral there is an
-     explicit ``deferred_op("<unambiguous-id>", ...)`` call mirrored in
-     :data:`DEFERRED_GROUPS` and LOCKED by
-     ``tests/python/architecture/test_amr_program_support_parity.py`` (the ``route_registry_parity``
-     pattern). When ADC-631 / ADC-633 remove their throws, the header-derived deferred set shrinks,
-     the parity test FORCES the mirror to shrink with it, and the affected group auto-greens -- with
-     no edit to any ADC-634 file.
+  3. explicit C++ capability deferrals, when a representable generated route reaches one, use
+     ``deferred_op("<unambiguous-id>", ...)`` and are mirrored in :data:`DEFERRED_GROUPS`.
+     Resolve-time refusals for routes that cannot be represented safely in an artifact are declared
+     directly in the same table instead of inventing phantom C++ methods. Ordinary provider/runtime
+     errors continue to use ``unavailable_`` and are not capability declarations.
 
 Deliberately IMPORT-FREE of the pops package at module scope (stdlib + typing only): the
 architecture gate loads it standalone, without the compiled ``_pops`` module. The codegen op-group
@@ -75,14 +72,13 @@ class AMRProgramSupportError(ValueError):
     """Resolved AMR execution facts are incompatible with a reachable Program operation."""
 
 # --- Capability groups: the ONE mirror of the AmrProgramContext deferral surface ----------------
-# Each group names (a) the AmrProgramContext C++ methods that FAIL LOUD for it -- the header-derived
-# deferred identifiers the parity test locks against amr_program_context.hpp -- and (b) the Python
-# IR op names that route into that group. ``issue`` is the follow-up that greens the group (None for
-# a group with no scheduled implementation). A group whose ``header_methods`` is EMPTY is served
-# today (green); a non-empty one is pending. The header_methods are exactly the unambiguous string
-# identifiers passed to ``deferred_op("<name>", ...)``. Ordinary validation/runtime exceptions are
-# deliberately outside this capability mirror. This is the SINGLE place the
-# AMR support status is declared; :func:`deferred_groups` / :func:`amr_program_op_support` read it.
+# Each group names (a) any representable AmrProgramContext C++ route that calls
+# ``deferred_op("<name>", ...)`` and (b) the Python IR operations/attributes that route into the
+# group. ``status`` records a pre-artifact refusal which has no representable C++ call site. An
+# empty ``header_methods`` set therefore says only that there is no runtime deferral; it does not
+# manufacture a green verdict for an upstream-refused route. Ordinary validation/runtime
+# exceptions are deliberately outside this capability mirror. This is the SINGLE place the AMR
+# support status is declared; :func:`deferred_groups` / :func:`amr_program_op_support` read it.
 #
 # op_source names the codegen op-group set this group's ir_ops mirror (documentary: the parity of the
 # ir_ops against those codegen sets is asserted by the support parity test, so the emit vocabulary
@@ -127,25 +123,56 @@ DEFERRED_GROUPS: dict = {
         "ir_ops": frozenset({"solve_fields"}),
         "header_methods": frozenset(),
     },
-    "unqualified_coupled_solve": {
+    "schedule_due": {
         "issue": None,
-        "op_source": "not representable in final Program IR (field identity is mandatory)",
-        "ir_ops": frozenset(),
-        "header_methods": frozenset({"solve_fields_from_blocks_default"}),
-    },
-    "schedule_control": {
-        "issue": None,
-        "op_source": "program_emit_schedule schedule_decision(..., cache_backed=false)",
+        "op_source": "program_emit_schedule Every/AtStart/Program When due primitives",
         "ir_ops": frozenset(),  # scheduling is an attr on an op node, not a distinct IR op
+        "header_methods": frozenset(),
+    },
+    "schedule_domain": {
+        "issue": None,
+        "op_source": "program_emit_schedule Stage/ClockTick/AMRLevel domains",
+        "ir_ops": frozenset(),
+        "header_methods": frozenset(),
+    },
+    "schedule_zero": {
+        "issue": None,
+        "op_source": "program_emit_schedule cache-free scratch Zero action",
+        "ir_ops": frozenset(),
+        "header_methods": frozenset(),
+    },
+    "schedule_error": {
+        "issue": None,
+        "op_source": "program_emit_schedule cache-free Error action",
+        "ir_ops": frozenset(),
+        "header_methods": frozenset(),
+    },
+    "schedule_field_skip": {
+        "issue": None,
+        "op_source": "program_emit_schedule initially-due field Skip with retained ProviderPack",
+        "ir_ops": frozenset(),
+        "header_methods": frozenset(),
+    },
+    "schedule_field_skip_unprepared": {
+        "issue": None,
+        "status": "pending:initial_provider_pack",
+        "op_source": "program_emit_schedule field Skip without a proven initial due occurrence",
+        "ir_ops": frozenset(),
+        "header_methods": frozenset(),
+    },
+    "schedule_scratch_skip": {
+        "issue": None,
+        "status": "pending:prepared_scratch_state",
+        "op_source": "program_emit_schedule scratch Skip requiring accepted transactional state",
+        "ir_ops": frozenset(),
         "header_methods": frozenset(),
     },
     "schedule_cache": {
         "issue": None,
+        "status": "pending:checkpointed_hierarchy_cache",
         "op_source": "program_emit_schedule cache_* actions and checkpointed field Hold",
         "ir_ops": frozenset(),  # scheduling is an attr on an op node, not a distinct IR op
-        "header_methods": frozenset({"cache_should_update", "cache_store_aux", "cache_restore_aux",
-                                    "cache_store_scratch", "cache_restore_scratch",
-                                    "cache_accumulate_dt", "cache_effective_dt"}),
+        "header_methods": frozenset(),
     },
 }
 
@@ -166,10 +193,9 @@ def header_deferred_methods() -> frozenset:
 def deferred_groups() -> dict:
     """The per-group AMR Program support status: ``{group: "green" | "pending:ADC-6xx"}``.
 
-    A group with no declared deferral method (``header_methods`` empty) is served on the AMR Program
-    path today (``"green"``); a group that still defers reports ``"pending:<issue>"`` (or a bare
-    ``"pending"`` when no follow-up issue is scheduled). Read-only: it derives entirely from
-    :data:`DEFERRED_GROUPS`, the single mirror of the header.
+    A group may be pending either because a representable generated route has an explicit C++
+    deferral or because resolve refuses an unsafe route before an artifact can represent it. Read-
+    only: the result derives entirely from :data:`DEFERRED_GROUPS`.
     """
     status = {}
     for name, group in DEFERRED_GROUPS.items():
@@ -208,7 +234,12 @@ def amr_program_op_support(
 
 
 def _group_status(group: dict) -> str:
-    """The status string of one group: ``"green"`` when it defers nothing, else ``"pending[:issue]"``."""
+    """Return one group's explicit upstream refusal or representable runtime deferral status."""
+    declared = group.get("status")
+    if declared is not None:
+        if not isinstance(declared, str) or not declared.startswith("pending"):
+            raise TypeError("AMR Program group status must be pending text")
+        return declared
     if not group["header_methods"]:
         return "green"
     issue = group.get("issue")
@@ -231,6 +262,8 @@ def _contextual_group_status(
     status = _group_status(group)
     if status == "green" and name == "named_flux" and context.shared_block_interfaces:
         return "pending:shared_block_interfaces"
+    if status == "green" and name == "schedule_field_skip" and not context.frozen_hierarchy:
+        return "pending:dynamic_hierarchy_provider_pack"
     return status
 
 
@@ -241,8 +274,8 @@ def _used_groups(program: Any, *, context: AMRProgramSupportContext) -> set:
     ``ir_ops`` membership in :data:`DEFERRED_GROUPS`. A ``rhs`` node carrying NAMED fluxes maps into
     the ``named_flux`` group (the named-flux -div path), a ``solve_fields`` node carrying a
     ``field`` attr into ``named_field_solve``, and a scheduled node into the exact
-    ``schedule_control`` / ``schedule_cache`` group. Schedule classification consumes the original
-    Program values because the inspection summary intentionally does not retain Schedule objects.
+    exact schedule due/domain/policy groups. Schedule classification consumes the original Program
+    values because the inspection summary intentionally does not retain Schedule objects.
     Every mapping reads the IR only; it binds / dlopens nothing.
     """
     op_to_group = {}
@@ -263,37 +296,38 @@ def _used_groups(program: Any, *, context: AMRProgramSupportContext) -> set:
         # exact C++ AmrProgramContext::solve_fields_from_state_at seam.
         if op == "solve_fields" and attrs.get("field"):
             used.add("named_field_solve")
-    for value in _scheduled_values(program, nodes):
-        group = _schedule_group(value, context=context)
-        if group is not None:
-            used.add(group)
+    for value, ancestry in _scheduled_values(program, nodes):
+        used.update(_schedule_groups(value, ancestry=ancestry, context=context))
     return used
 
 
-def _scheduled_values(program: Any, nodes: Any) -> list[Any]:
-    """Return the live scheduled Program values, or refuse insufficient inspection evidence.
+def _scheduled_values(program: Any, nodes: Any) -> list[tuple[Any, tuple[tuple[int, str], ...]]]:
+    """Return live scheduled values with authenticated structured-control ancestry.
 
     :meth:`Program.ir_nodes` makes its attrs JSON-friendly and consequently reduces a Schedule to
     ``"Schedule"``.  The AMR capability gate must inspect the original value attrs to distinguish a
     cache-free ``schedule_decision(..., false)`` from a checkpointed cache dependency; treating that
-    summary as either one would manufacture an unsupported verdict.
+    summary as either one would manufacture an unsupported verdict. Flattening recursive values is
+    also insufficient for field ``Skip``: a node in a lazy branch or loop is not proven to execute on
+    the first macro step, even when its AcceptedStep trigger itself is initially due.
     """
     if not any(node["attrs"].get("schedule") is not None for node in nodes):
         return []
     try:
-        from pops.codegen.program_lowerability import all_ops
-        values = list(all_ops(program))
-    except (AttributeError, TypeError) as exc:
+        from pops.codegen.program_lowerability import all_ops_with_ancestry
+        values = list(all_ops_with_ancestry(program))
+    except (AttributeError, TypeError, ValueError) as exc:
         raise TypeError(
-            "AMR Program schedule capability requires live Program value attrs"
+            "AMR Program schedule capability requires live Program values with authenticated "
+            "structured ancestry"
         ) from exc
     scheduled = []
-    for value in values:
+    for value, ancestry in values:
         attrs = getattr(value, "attrs", None)
         if not isinstance(attrs, dict):
             raise TypeError("AMR Program value attrs must be a mapping")
         if attrs.get("schedule") is not None:
-            scheduled.append(value)
+            scheduled.append((value, ancestry))
     if not scheduled:
         raise TypeError(
             "AMR Program inspection reports a schedule without a live Program schedule value"
@@ -301,18 +335,31 @@ def _scheduled_values(program: Any, nodes: Any) -> list[Any]:
     return scheduled
 
 
-def _schedule_group(value: Any, *, context: AMRProgramSupportContext) -> str | None:
-    """Classify one validated scheduled value by the exact lowering actions it reaches.
+def _schedule_groups(
+    value: Any,
+    *,
+    ancestry: tuple[tuple[int, str], ...],
+    context: AMRProgramSupportContext,
+) -> set[str]:
+    """Classify one validated scheduled value into exact due/domain/policy facets.
 
-    ``schedule_decision(..., false)`` is an implemented AMR control seam.  Every emitted cache
-    action remains unavailable until the cache participates in hierarchy checkpoint/regrid state.
-    A field ``Hold`` also belongs to that unavailable provider contract even though its raw aux store
-    is intentionally omitted by codegen.  Field ``Zero`` and ``AccumulateDt`` remain a distinct
-    ProviderPack-freshness refusal, matching the emitter rather than pretending they are cacheable.
+    Cache-free cadence, qualified domains, and off-cadence actions are deliberately separate so a
+    green due primitive cannot overclaim a pending persistence policy. Every emitted cache action
+    remains unavailable until the cache participates in hierarchy checkpoint/regrid state. Field
+    ``Hold`` belongs to that contract even though raw aux storage is intentionally omitted. Scratch
+    ``Skip`` is not a cache hit: it requires prepared accepted scratch state and rollback. Field
+    ``Skip`` is honest only on a resolved frozen hierarchy where the ProviderPack remains retained,
+    and only a root-region AcceptedStep Every/AtStart proves that the first invocation prepares that
+    value. A due trigger nested in lazy structured control does not prove its owner executes.
     """
     from pops.codegen.program_emit_kernels import _AUX_OUTPUT_OPS
     from pops.codegen.program_emit_schedule import _lower_schedule_ir
-    from pops.time._schedule.api import ScheduleAction, ScheduleDueKind, ScheduleTimeline
+    from pops.time._schedule.api import (
+        ScheduleAction,
+        ScheduleComment,
+        ScheduleDueKind,
+        ScheduleTimeline,
+    )
 
     schedule = value.attrs["schedule"]
     lowering = _lower_schedule_ir(value, schedule)
@@ -330,7 +377,7 @@ def _schedule_group(value: Any, *, context: AMRProgramSupportContext) -> str | N
         lowering.due.kind is ScheduleDueKind.ALWAYS
         and lowering.domain.timeline is ScheduleTimeline.ACCEPTED_STEP
     ):
-        return None
+        return set()
     actions = lowering.off.before_due + lowering.off.after_due + lowering.off_cadence
     is_aux = value.op in _AUX_OUTPUT_OPS
     if is_aux and any(
@@ -347,8 +394,30 @@ def _schedule_group(value: Any, *, context: AMRProgramSupportContext) -> str | N
         ScheduleAction.RESTORE,
     }
     if any(action in cache_actions for action in actions):
-        return "schedule_cache"
-    return "schedule_control"
+        return {"schedule_cache"}
+
+    groups: set[str] = set()
+    if lowering.due.kind is not ScheduleDueKind.ALWAYS:
+        groups.add("schedule_due")
+    if lowering.domain.timeline is not ScheduleTimeline.ACCEPTED_STEP:
+        groups.add("schedule_domain")
+    if ScheduleAction.ZERO in actions:
+        groups.add("schedule_zero")
+    if ScheduleAction.ERROR in actions:
+        groups.add("schedule_error")
+    if lowering.off.comment is ScheduleComment.SKIP:
+        if not is_aux:
+            groups.add("schedule_scratch_skip")
+        elif (
+            not ancestry
+            and lowering.domain.timeline is ScheduleTimeline.ACCEPTED_STEP
+            and lowering.due.kind
+            in {ScheduleDueKind.CACHE_PERIOD, ScheduleDueKind.MACRO_STEP_ZERO}
+        ):
+            groups.add("schedule_field_skip")
+        else:
+            groups.add("schedule_field_skip_unprepared")
+    return groups
 
 
 def _has_named_fluxes(attrs: dict) -> bool:
