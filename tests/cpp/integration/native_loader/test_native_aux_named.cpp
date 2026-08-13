@@ -160,6 +160,7 @@ static int pops_run_test_native_aux_named(int argc, char** argv) {
       {}});
   system.install_auxiliary_consumer_plan(AuxiliaryConsumerProviderPlan<kNativeDimension>{
       "scalar", {{{input_key, contract, shape}, 0}}});
+  system.install_block_state_route("scalar", "test.native-aux/scalar/state@1");
   system.register_native_package("scalar", library, "none", "rusanov", "conservative", "euler");
   system.finalize_native_packages();
   system.set_state("scalar", std::vector<double>(cells, 1.0));
@@ -167,9 +168,14 @@ static int pops_run_test_native_aux_named(int argc, char** argv) {
   system.refresh_auxiliary(AuxiliaryEvaluationPoint{"test.native-aux", 0, 0, 0, 0, 0, 0,
                                                     AuxiliaryEvaluationEvent::initialization});
   const std::vector<double> residual = system.eval_rhs("scalar");
-  double error = 0.0;
+  bool residual_finite = true;
   for (double value : residual)
-    error = std::fmax(error, std::fabs(value - kappa));
+    residual_finite = std::isfinite(value) && residual_finite;
+  const bool residual_valid = residual.size() == cells && residual_finite;
+  double error = 0.0;
+  if (residual_valid)
+    for (double value : residual)
+      error = std::fmax(error, std::fabs(value - kappa));
 
   bool missing_provider_rejected = false;
   try {
@@ -180,9 +186,11 @@ static int pops_run_test_native_aux_named(int argc, char** argv) {
     missing_provider_rejected = true;
   }
 
-  if (error > 1e-14 || !missing_provider_rejected) {
-    std::printf("FAIL native named aux: error=%.3e missing_provider_rejected=%d\n", error,
-                missing_provider_rejected ? 1 : 0);
+  if (!residual_valid || error > 1e-14 || !missing_provider_rejected) {
+    std::printf(
+        "FAIL native named aux: residual_valid=%d residual_size=%zu error=%.3e "
+        "missing_provider_rejected=%d\n",
+        residual_valid ? 1 : 0, residual.size(), error, missing_provider_rejected ? 1 : 0);
     return 1;
   }
   std::printf("OK test_native_aux_named (authenticated native package, error=%.1e)\n", error);
