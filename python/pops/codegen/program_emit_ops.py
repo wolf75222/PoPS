@@ -689,10 +689,6 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                     "ctx.rhs_scratch(%d, %d, %s);"
                     % (flux_vars[axis], int(v.id), axis_index + 1, var[state_in.id])
                 )
-            lines.append(
-                "ctx.neg_div_named_flux_into(%s, {%s});"
-                % (var[v.id], ", ".join("&%s" % flux_vars[axis] for axis in axes))
-            )
             named_source_subslot = 1 + len(axes)
         plan_exprs = []
         if named_fluxes is not None:
@@ -711,6 +707,16 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 node_model, named_fluxes, var[state_in.id], flux_vars, bidx,
                 provider_plans=provider_plans, consumer_qid=consumer_qid,
                 plan_exprs=plan_exprs,
+            )
+            lines.append(
+                "ctx.neg_div_named_flux_into(%d, %s, %s, {%s}, %d);"
+                % (
+                    bidx,
+                    var[state_in.id],
+                    var[v.id],
+                    ", ".join("&%s" % flux_vars[axis] for axis in axes),
+                    int(v.id),
+                )
             )
         for source_subslot, s in enumerate(named, start=named_source_subslot):
             # R += S_s(U, aux): assemble the named source into a scratch (same per-cell kernel as

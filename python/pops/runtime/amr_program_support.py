@@ -99,10 +99,13 @@ DEFERRED_GROUPS: dict = {
         "header_methods": frozenset(),
     },
     "named_flux": {
+        # The Cartesian implementation is live. A resolved shared-interface provider is a
+        # narrower unsupported envelope and is classified contextually by
+        # ``_contextual_group_status`` rather than masquerading as a global throw stub here.
         "issue": None,
         "op_source": "program_emit_kernels._named_fluxes (rhs with named fluxes)",
         "ir_ops": frozenset({"neg_div_flux_into"}),
-        "header_methods": frozenset({"neg_div_flux_into"}),
+        "header_methods": frozenset(),
     },
     "projection": {
         "issue": None,
@@ -182,12 +185,13 @@ def amr_program_op_support(
     Enumerates @p program's ops via its own ``ir_nodes()`` (the ``_pops``-free IR walk) plus the
     named-flux / scheduled derivations that are ATTRS on an op rather than a distinct op, maps each
     used op to its capability group via :data:`DEFERRED_GROUPS`, and returns the support status of
-    every group the Program touches (``"green"`` when the AMR path serves it, ``"pending:ADC-6xx"``
-    when a follow-up must land first). A group the Program does not use is OMITTED, so an all-explicit
-    SSPRK2 Program returns ``{}`` (nothing pending: every op it uses is served) -- an empty report is
-    the fully-green report. Scheduling is classified from the live Program values rather than the
-    inspection summary: the latter deliberately renders a Schedule as its type name and therefore
-    cannot prove whether lowering needs the checkpointed hierarchy cache. NO mutation occurs.
+    every group the Program touches (``"green"`` when the resolved AMR path serves it,
+    ``"pending:<reason>"`` when a follow-up or a narrower execution envelope must land first). A
+    group the Program does not use is OMITTED, so an all-explicit SSPRK2 Program returns ``{}``
+    (nothing pending: every op it uses is served) -- an empty report is the fully-green report.
+    Scheduling is classified from the live Program values rather than the inspection summary: the
+    latter deliberately renders a Schedule as its type name and therefore cannot prove whether
+    lowering needs the checkpointed hierarchy cache. NO mutation occurs.
     """
     if type(context) is not AMRProgramSupportContext:
         raise TypeError(
@@ -197,7 +201,10 @@ def amr_program_op_support(
         raise ValueError(
             "amr_program_op_support requires authenticated resolved field-provider routes")
     used_groups = _used_groups(program, context=context)
-    return {name: _group_status(DEFERRED_GROUPS[name]) for name in sorted(used_groups)}
+    return {
+        name: _contextual_group_status(name, DEFERRED_GROUPS[name], context=context)
+        for name in sorted(used_groups)
+    }
 
 
 def _group_status(group: dict) -> str:
@@ -206,6 +213,25 @@ def _group_status(group: dict) -> str:
         return "green"
     issue = group.get("issue")
     return "pending:%s" % issue if issue else "pending"
+
+
+def _contextual_group_status(
+    name: str,
+    group: dict,
+    *,
+    context: AMRProgramSupportContext,
+) -> str:
+    """Narrow a globally live group to the exact resolved execution envelope.
+
+    Named cell-centered fluxes are implemented on Cartesian AMR carriers, including ordinary
+    multi-block carriers. The native context deliberately refuses an installed shared topological
+    interface provider, however, so the resolve-time query must report that exact envelope as
+    non-green before code generation rather than publishing a capability the runtime will reject.
+    """
+    status = _group_status(group)
+    if status == "green" and name == "named_flux" and context.shared_block_interfaces:
+        return "pending:shared_block_interfaces"
+    return status
 
 
 def _used_groups(program: Any, *, context: AMRProgramSupportContext) -> set:
@@ -230,7 +256,7 @@ def _used_groups(program: Any, *, context: AMRProgramSupportContext) -> set:
         attrs = node.get("attrs") or {}
         if op in op_to_group:
             used.add(op_to_group[op])
-        # A rhs with named fluxes (not the default flux) lowers to the deferred named-flux -div seam.
+        # A rhs with named fluxes (not the default flux) lowers to the named-flux -div group.
         if op == "rhs" and _has_named_fluxes(attrs):
             used.add("named_flux")
         # The canonical IR op is solve_fields; code generation alone lowers that operation to the
@@ -326,11 +352,11 @@ def _schedule_group(value: Any, *, context: AMRProgramSupportContext) -> str | N
 
 
 def _has_named_fluxes(attrs: dict) -> bool:
-    """True when a ``rhs`` op's ``fluxes`` attr names non-default fluxes (the deferred named-flux path).
+    """True when a ``rhs`` op's ``fluxes`` attr names non-default fluxes.
 
     Mirrors ``program_emit_kernels._named_fluxes``: ``None`` / ``["default"]`` is the default -div F
-    path (``rhs_into``, served on AMR); any named flux routes into the deferred ``neg_div_flux_into``
-    seam. The ir_nodes attr summary renders a list as a list, so this reads it directly.
+    path (``rhs_into``); any named flux routes into the generic named-flux capability group. The
+    ir_nodes attr summary renders a list as a list, so this reads it directly.
     """
     fluxes = attrs.get("fluxes")
     if not fluxes or fluxes == ["default"]:

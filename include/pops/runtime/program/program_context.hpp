@@ -404,7 +404,11 @@ class ProgramContext {
   /// Assemble the centered negative divergence of one already-materialized named flux field per
   /// native axis.  Axis count and storage rank are the same compile-time constant, so 1D/2D/3D use
   /// one algorithm and no runtime dimension selector.
-  void neg_div_named_flux_into(field_type& rhs, const std::array<field_type*, Dim>& fluxes) const {
+  void neg_div_named_flux_into(int program_block, field_type& stage_state, field_type& rhs,
+                               const std::array<field_type*, Dim>& fluxes, int rate_id) const {
+    (void)sys_block(program_block);
+    require_rate_identity_(rate_id);
+    require_same_field_contract_(stage_state, rhs, "ProgramContext named-flux residual");
     const Geometry<Dim> geometry = system_->prepared_block_geometry();
     for (int axis = 0; axis < Dim; ++axis) {
       const field_type* flux = fluxes[static_cast<std::size_t>(axis)];
