@@ -285,7 +285,7 @@ requirement = "accepted_state"
 polarity = "positive"
 kind = "ctest"
 target = "test_mpi_amr_distributed_coarse"
-test_regex = "^test_mpi_amr_distributed_coarse_np2$"
+test_regex = "^test_mpi_amr_distributed_coarse_rank_parity$"
 
 [[check]]
 issue = "ADC-678"

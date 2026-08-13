@@ -64,7 +64,7 @@ def test_m3_gate_pins_exact_ranked_partitioned_transfer_proof():
         "polarity": "positive",
         "kind": "ctest",
         "target": "test_mpi_amr_distributed_coarse",
-        "test_regex": "^test_mpi_amr_distributed_coarse_np2$",
+        "test_regex": "^test_mpi_amr_distributed_coarse_rank_parity$",
     } in data["check"]
 
     source = (ROOT / "tests/cpp/integration/mpi/test_mpi_amr_distributed_coarse.cpp").read_text(
@@ -87,8 +87,7 @@ def test_m3_gate_pins_exact_ranked_temporal_accepted_image_proof():
         "kind": "ctest",
         "target": "test_temporal_partition_restart",
         "test_regex": (
-            "^test_temporal_partition_restart\\."
-            "AcceptedImageIsCanonicalInOneTwoAndThreeDimensions$"
+            "^test_temporal_partition_restart\\.AcceptedImageIsCanonicalInOneTwoAndThreeDimensions$"
         ),
     } in data["check"]
 
@@ -114,9 +113,9 @@ def test_m3_gate_pins_qualified_field_warm_start_restart_and_rollback():
         "nodeid": nodeid,
     } in data["check"]
 
-    source = (
-        ROOT / "tests/python/integration/amr/test_amr_composite_field_carrier.py"
-    ).read_text(encoding="utf-8")
+    source = (ROOT / "tests/python/integration/amr/test_amr_composite_field_carrier.py").read_text(
+        encoding="utf-8"
+    )
     assert "accepted_warm_starts = _field_warm_starts(simulation, slot)" in source
     assert "resolved = _resolve(solver, strict_restart=True)" in source
     assert "restarted.restart(checkpoint)" in source
@@ -173,9 +172,9 @@ def test_m3_gate_pins_transactional_persistent_hysteresis_proofs():
         ),
     } in checks
 
-    provider_source = (
-        ROOT / "tests/python/unit/amr/test_external_amr_providers.py"
-    ).read_text(encoding="utf-8")
+    provider_source = (ROOT / "tests/python/unit/amr/test_external_amr_providers.py").read_text(
+        encoding="utf-8"
+    )
     assert "external AMR Tagger persistent_hysteresis is not implemented" in provider_source
     restart_source = (
         ROOT / "tests/python/integration/amr/test_amr_regrid_on_restart.py"
@@ -184,13 +183,13 @@ def test_m3_gate_pins_transactional_persistent_hysteresis_proofs():
     assert "transformed_cycle == source_cycle + 1" in restart_source
     assert "_assert_same_accepted_image(restarted, rollback_image)" in restart_source
     assert "_runtime_tagging_hysteresis(restarted) == transformed_hysteresis[0]" in restart_source
-    native_source = (
-        ROOT / "tests/cpp/integration/amr/test_amr_seed_no_refine.cpp"
-    ).read_text(encoding="utf-8")
-    assert "OneHierarchySweepAgesHysteresisOnceAndCheckpointRestoreIsTransactional" \
-        in native_source
-    assert "all parent levels in one hierarchy sweep must share one hysteresis cycle" \
-        in native_source
+    native_source = (ROOT / "tests/cpp/integration/amr/test_amr_seed_no_refine.cpp").read_text(
+        encoding="utf-8"
+    )
+    assert "OneHierarchySweepAgesHysteresisOnceAndCheckpointRestoreIsTransactional" in native_source
+    assert (
+        "all parent levels in one hierarchy sweep must share one hysteresis cycle" in native_source
+    )
     assert "restored.restore_checkpoint_accepted_state(accepted)" in native_source
     assert "EXPECT_THROW(restored.restore_checkpoint_accepted_state(invalid)" in native_source
 
@@ -233,10 +232,7 @@ def test_m3_gate_requires_native_positive_and_refusal_proofs_for_every_issue(tmp
 def test_m3_gate_rejects_a_missing_or_non_exact_ctest_case_before_build(tmp_path):
     data = MANIFEST.read_text(encoding="utf-8")
     data = data.replace(
-        (
-            'test_regex = "^test_amr_history_ring\\\\.'
-            'RetainsAndInterpolatesExactRankedState$"'
-        ),
+        ('test_regex = "^test_amr_history_ring\\\\.RetainsAndInterpolatesExactRankedState$"'),
         'test_regex = "^test_amr_history_ring\\\\.DefinitelyMissingProof$"',
         1,
     )
@@ -341,9 +337,9 @@ def test_m3_mpi_python_proof_is_exact_and_manifest_owned(monkeypatch):
     assert "_restart_accepted_contract_identity" in restart_mpi_source
     assert 'receipt["history_consensus_identity_before"]' in restart_mpi_source
     assert "both AB2 histories are conservatively rematerialized" in restart_mpi_source
-    program_runtime = (
-        ROOT / "include/pops/runtime/program/program_runtime_state.hpp"
-    ).read_text(encoding="utf-8")
+    program_runtime = (ROOT / "include/pops/runtime/program/program_runtime_state.hpp").read_text(
+        encoding="utf-8"
+    )
     assert "RegridOnRestart requires an authenticated artifact-backed Program" in program_runtime
     assert "artifact lacks its restart preflight/regrid/resync hooks" in program_runtime
     assert "supports shared-interface flux groups only in serial" not in program_runtime
