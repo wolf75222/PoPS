@@ -5,6 +5,40 @@ from collections.abc import Mapping
 from typing import Any
 
 
+def _field_topology_rematerializer_validated(field_plans: Any, amr_transfer: Any) -> bool:
+    """Authenticate exact EllipticRecompute authority for every resolved field plan."""
+    if not field_plans:
+        return True
+    if amr_transfer is None:
+        return False
+    from pops.mesh._amr._transfer_contracts import (
+        COARSE_FINE_FILL,
+        DERIVED_FIELD,
+        NativeAMRActionKind,
+        NativeAMRMaterializationKind,
+    )
+
+    for plan in field_plans.values():
+        subject = plan.operator.unknown
+        try:
+            entry = amr_transfer.for_subject(subject, COARSE_FINE_FILL)
+        except KeyError:
+            return False
+        native = entry.native_materialization
+        if (
+            native.action is not NativeAMRActionKind.RECOMPUTE
+            or native.materialization is not NativeAMRMaterializationKind.DERIVED_FIELD
+            or native.native_route != "elliptic_solve"
+            or not any(
+                requirement.subject.qualified_id == subject.qualified_id
+                and requirement.materialization == DERIVED_FIELD
+                for requirement in entry.requirements
+            )
+        ):
+            return False
+    return True
+
+
 def validate(problem: Any) -> Any:
     """Validate and freeze one exact Case without compiling or loading native code."""
     from pops.problem import Case
@@ -279,6 +313,8 @@ def resolve(
             frozen_hierarchy=type(hierarchy.regrid) is FrozenHierarchy,
             shared_block_interfaces=has_shared_interfaces,
             field_routes_validated=True,
+            topology_rematerializer_validated=
+                _field_topology_rematerializer_validated(field_plans, amr_transfer),
         )
 
     evidence = resolve_capability_evidence(

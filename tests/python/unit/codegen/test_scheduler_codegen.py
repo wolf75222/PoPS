@@ -103,12 +103,13 @@ def _emit_scratch(schedule):
     return emit_cpp_program(_scratch_program(schedule), model=None)
 
 
-def _amr_context(*, frozen=True, levels=1):
+def _amr_context(*, frozen=True, levels=1, rematerializer=True):
     return AMRProgramSupportContext(
         hierarchy_level_count=levels,
         frozen_hierarchy=frozen,
         shared_block_interfaces=False,
         field_routes_validated=True,
+        topology_rematerializer_validated=rematerializer,
     )
 
 
@@ -397,6 +398,15 @@ def test_field_hold_refuses_raw_provider_storage_cache():
     assert "ctx.schedule_decision(17," in cpp and ", false))" in cpp
     assert "cache_store_aux" not in cpp
     assert "cache_restore_aux" not in cpp
+    program = _field_program(lambda clock: _every(clock, 10, adctime.Hold()))
+    assert amr_program_op_support(program, context=_amr_context(frozen=False)) == {
+        "named_field_solve": "green",
+        "schedule_due": "green",
+        "schedule_field_hold": "green",
+    }
+    assert amr_program_op_support(
+        program, context=_amr_context(frozen=False, rematerializer=False)
+    )["schedule_field_hold"] == "pending:dynamic_hierarchy_provider_pack"
 
 
 def test_field_zero_refuses_raw_provider_storage_mutation():
@@ -417,7 +427,7 @@ def test_field_skip_runs_only_when_due():
     assert "} else {" not in cpp.split("skip: stale aux off-cadence")[1].split("\n", 1)[0]
 
 
-def test_field_skip_requires_a_frozen_resolved_hierarchy():
+def test_field_skip_requires_an_exact_dynamic_topology_rematerializer():
     program = _field_program(lambda clock: _every(clock, 5, adctime.Skip()))
     assert amr_program_op_support(program, context=_amr_context(frozen=True)) == {
         "named_field_solve": "green",
@@ -430,10 +440,19 @@ def test_field_skip_requires_a_frozen_resolved_hierarchy():
     assert amr_program_op_support(program, context=_amr_context(frozen=False)) == {
         "named_field_solve": "green",
         "schedule_due": "green",
+        "schedule_field_skip": "green",
+    }
+    assert _resolve_amr_program(
+        "amr", program, context=_amr_context(frozen=False)
+    )["status"] == "proven"
+    unsupported = _amr_context(frozen=False, rematerializer=False)
+    assert amr_program_op_support(program, context=unsupported) == {
+        "named_field_solve": "green",
+        "schedule_due": "green",
         "schedule_field_skip": "pending:dynamic_hierarchy_provider_pack",
     }
     with pytest.raises(CapabilityResolutionError, match="dynamic_hierarchy_provider_pack"):
-        _resolve_amr_program("amr", program, context=_amr_context(frozen=False))
+        _resolve_amr_program("amr", program, context=unsupported)
 
 
 def test_field_skip_when_requires_an_initial_provider_pack():

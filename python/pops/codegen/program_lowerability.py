@@ -295,11 +295,15 @@ def check_schedules_lowerable(program: Any, *, target: str | None = None) -> Non
                 "the cadence guard and is not prepared accepted transactional state; Skip refuses "
                 "before artifact creation" % value.name
             )
-        if target == "amr_system" and schedule.needs_cache():
+        if (
+            target == "amr_system"
+            and schedule.needs_cache()
+            and value.op not in _AUX_OUTPUT_OPS
+        ):
             raise NotImplementedError(
-                "scheduled AMR node %r requires a persistent hierarchy value cache; Hold and "
-                "AccumulateDt remain refused before artifact creation, while cache-free Zero/Error "
-                "and domain-only schedules execute on the AMR clock provider" % value.name)
+                "scheduled AMR scratch node %r requires a persistent hierarchy value cache; "
+                "scratch Hold and AccumulateDt remain refused before artifact creation, while "
+                "field Hold retains its typed ProviderPack" % value.name)
 
 
 __all__ = [

@@ -16,6 +16,7 @@ from pops._generated_release_contract import (
 )
 from pops.output._checkpoint_collective import restore_checkpoint_payload
 from pops.runtime._amr_checkpoint_contract import (
+    _valid_field_recompute_dt,
     checkpoint_temporal_partition_kind,
     contract_for,
     encode_contract,
@@ -35,6 +36,13 @@ from pops.runtime._amr_checkpoint_topology import (
 )
 from pops.runtime._amr_system_io import _AmrSystemIO, _PreparedAMRSystemRestart
 from pops.runtime._checkpoint_manifest import require_exact_payload_version
+
+
+def test_restart_field_recompute_dt_accepts_only_honest_initial_zero():
+    assert _valid_field_recompute_dt(0.0, 0)
+    assert _valid_field_recompute_dt(0.125, 4)
+    assert not _valid_field_recompute_dt(0.0, 1)
+    assert not _valid_field_recompute_dt(-0.125, 0)
 
 
 class _Payload(dict):

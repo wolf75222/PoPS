@@ -1285,6 +1285,10 @@ class AmrSystem {
  private:
   template <int ContextDim, class MemorySpace>
   friend class runtime::program::AmrProgramContext;
+  std::vector<std::string> prepare_topology_field_order(
+      std::string_view reason, const runtime::multiblock::BoundaryEvaluationPoint& accepted_point);
+  std::vector<std::vector<std::string>> rematerialize_fields_after_topology_change(
+      std::string_view reason, const runtime::multiblock::BoundaryEvaluationPoint& accepted_point);
   POPS_EXPORT PreparedMultiBlockHierarchy& prepared_amr_multiblock_hierarchy_();
   POPS_EXPORT const PreparedMultiBlockHierarchy& prepared_amr_multiblock_hierarchy_() const;
   POPS_EXPORT void prepare_generated_amr_block_level_state(
