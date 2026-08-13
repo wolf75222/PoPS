@@ -77,8 +77,11 @@ static int pops_run_test_native_loader_param_overflow(int argc, char** argv) {
   bool threw = false;
   std::string message;
   try {
-    system.add_native_block("gas", library, "none", "rusanov", "conservative", "explicit", 1.4, 1,
-                            true, 1, params, 0.0);
+    // Package metadata is authenticated while staging, before the package can enter the
+    // finalize_native_packages transaction.  This artifact intentionally has no installer: an
+    // overflow must be rejected at that earlier public boundary.
+    system.register_native_package("gas", library, "none", "rusanov", "conservative", "explicit",
+                                   1.4, 1, true, 1, params, 0.0);
   } catch (const std::exception& error) {
     threw = true;
     message = error.what();
