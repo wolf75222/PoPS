@@ -52,18 +52,21 @@ def _assert_exact_native_loader(loader: str, *, target: str, dimension: int) -> 
     assert (
         "static_assert(ProdModel::dimension == pops::kNativeDimension" in loader
     ) == (target == "system")
-    assert "pops::add_compiled_model<pops::kNativeDimension>" in loader
     assert "void* sys" in loader  # the stable C ABI is erased only at its boundary
 
     if target == "system":
-        assert "using NativeSystem = pops::System<pops::kNativeDimension>;" in loader
-        assert "reinterpret_cast<NativeSystem*>(sys)" in loader
+        assert "using Installer = pops::runtime::system::PreparedNativeBlockInstaller<" in loader
+        assert "static_cast<Installer*>(sys)" in loader
+        assert "pops::runtime::system::PreparedNativeSystemPackage<" in loader
+        assert "s->commit(std::move(package));" in loader
+        assert "pops::add_compiled_model<pops::kNativeDimension>" not in loader
         assert "pops::PreparedSystemBlock<pops::kNativeDimension>" in loader
         assert "prepare_exact_system_block(" in loader
         assert "pops::CompiledSystemBlockPreparation<" in loader
         assert "pops::System*" not in loader
         assert "pops::AmrSystem*" not in loader
     else:
+        assert "pops::add_compiled_model<pops::kNativeDimension>" in loader
         assert (
             "using NativeAmrSystem = pops::AmrSystem<pops::kNativeDimension>;"
             in loader
@@ -89,15 +92,19 @@ def _assert_bound_elliptic_closures(loader: str) -> None:
     default_rhs = loader.index(
         "auto fields_from_state_rhs = pops::make_poisson_rhs(model);"
     )
-    install = loader.index("pops::add_compiled_model<")
-    attach = loader.index(
-        's->set_block_elliptic_field(name, "fields_from_state", '
-        "std::move(fields_from_state_rhs));"
-    )
-
+    if "PreparedNativeSystemPackage" in loader:
+        install = loader.index("package.block = pops::prepare_compiled_system_block<")
+        attach = loader.index('package.elliptic_attachments.push_back({"fields_from_state", ')
+    else:
+        install = loader.index("pops::add_compiled_model<")
+        attach = loader.index(
+            's->set_block_elliptic_field(name, "fields_from_state", '
+            "std::move(fields_from_state_rhs));"
+        )
     assert bind < named_model < named_params < named_rhs < default_rhs < install < attach
     assert "make_poisson_rhs(pops_generated::RuntimeEllipticGenEll{})" not in loader
-    assert 'set_block_elliptic_field(name, "psi", std::move(named_elliptic_rhs_0))' in loader
+    assert ('package.elliptic_attachments.push_back({"psi", ' in loader or
+            'set_block_elliptic_field(name, "psi", std::move(named_elliptic_rhs_0));' in loader)
 
     # The composable default elliptic brick keeps its rhs(State) contract.  The loader fixes the
     # call site by capturing ProdModel; it must not inflate GenEll into a second model interface.

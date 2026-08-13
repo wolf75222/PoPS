@@ -356,6 +356,7 @@ class InstalledComponent:
                 "manifest_identity": self.component_manifest.token,
                 "catalog_sha256": self.interface.to_data()["catalog_sha256"],
                 "abi_key": self.platform_manifest.abi.require("component.abi"),
+                "binary_identity": self.binary_identity.token,
             }
             for name, value in expected.items():
                 if report[name] != value:
@@ -390,6 +391,7 @@ class InstalledComponent:
             self.runtime_contract.manifest_data["digests"]["semantic"],
             self.component_manifest.token, self.interface.to_data()["catalog_sha256"],
             self.platform_manifest.abi.require("component.abi"),
+            self.binary_identity.token,
             [(self.interface.abi_id, self.interface.version, self.interface.cpp_table)],
             _canonical_runtime_json(self.runtime_contract.manifest_data["parameters"]),
             _canonical_runtime_json(self.runtime_contract.manifest_data["target"]),

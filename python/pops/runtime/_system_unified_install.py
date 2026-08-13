@@ -447,30 +447,30 @@ class _SystemUnifiedInstall(_System):
                 raise ValueError("uniform block has competing initial_state and InitialCondition")
             pending_initials.append((name, initial, source))
 
-        if self._pending_native_packages:
-            self._s._finalize_native_packages()
-            self._pending_native_packages = 0
-
-        # (2) Field plans and field method providers install only after global auxiliary routing is
-        # sealed.  They can now bind exact field/aux storage addresses without a per-block fallback.
+        # (2) Resolve the complete field-plan/provider image before native package finalization.
+        # Provider-owned output installers stage their exact routes while packages are pending;
+        # finalization materializes those outputs against the sealed detached auxiliary/block image,
+        # attaches package RHS closures, then runs prepared-boundary installers. No field backend is
+        # registered twice and no prepared boundary can observe a missing named field.
         for field, field_plan in field_plans.items():
             self._install_field_plan(field, field_plan, install_plan=install_plan)
 
-        # The final FieldOperator owns the solve name while its provider operators own only RHS
-        # closures. Attach the resolved solve to the exact FieldSpace storage route after block
-        # loaders have installed those closures; no legacy m.elliptic_field name is inferred.
+        # Boundary parameters and method-bound coefficients are part of the exact field plan consumed
+        # during backend construction, so install them while the plan remains unmaterialized.
+        for field_plan in field_plans.values():
+            self._install_field_boundary_parameters(field_plan, params, compiled=compiled)
+
         for field_plan in field_plans.values():
             self._install_field_method_runtime(field_plan, resolved_models, params)
+
+        if self._pending_native_packages:
+            self._s._finalize_native_packages()
+            self._pending_native_packages = 0
 
         # (3) External InputAux values are staged only after the global registry has authenticated
         # their exact ComponentKeys.  A derived or field-output key is rejected natively.
         for key, field in aux.items():
             self._install_aux(key, field)
-
-        # (4) Boundary-kernel parameters are independent from model package parameters, which crossed
-        # the package ABI during block installation above.
-        for field_plan in field_plans.values():
-            self._install_field_boundary_parameters(field_plan, params, compiled=compiled)
 
         # Initial conditions run after field/aux/boundary providers exist, because coupled analytic
         # profiles may materialize a seed state, solve a field, then map state+aux into the final

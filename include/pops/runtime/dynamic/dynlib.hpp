@@ -57,10 +57,29 @@ inline handle open(const std::string& path) {
 #if defined(_WIN32)
   // UTF-8 -> UTF-16 for LoadLibraryW (Unicode paths and paths with spaces).
   const int n = ::MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
-  std::wstring w(n > 0 ? n - 1 : 0, L'\0');
-  if (n > 0)
-    ::MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, w.data(), n);
+  if (n <= 0)
+    return {};
+  std::wstring w(static_cast<std::size_t>(n), L'\0');
+  if (::MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, w.data(), n) == 0)
+    return {};
   return ::LoadLibraryW(w.c_str());
+#else
+  return ::dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+#endif
+}
+
+/// Open one absolute private authenticated image with a closed Windows dependency search. POSIX
+/// already uses exact paths and RTLD_LOCAL; unresolved relative dependencies fail at RTLD_NOW.
+inline handle open_private_image(const std::string& path) {
+#if defined(_WIN32)
+  const int n = ::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path.c_str(), -1, nullptr, 0);
+  if (n <= 0)
+    return {};
+  std::wstring w(static_cast<std::size_t>(n), L'\0');
+  if (::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path.c_str(), -1, w.data(), n) == 0)
+    return {};
+  return ::LoadLibraryExW(w.c_str(), nullptr,
+                          LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
 #else
   return ::dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
 #endif

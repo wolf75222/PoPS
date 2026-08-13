@@ -26,6 +26,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -41,6 +42,97 @@ std::string prepared_system_boundary_package_identity(std::string_view operation
       .text(operation)
       .text(block);
   append_prepared_boundary_component_contract(contract, spec);
+  return std::move(contract).release();
+}
+
+std::string prepared_system_boundary_component_contract(const PreparedBoundaryComponentSpec& spec) {
+  ExactContractBuilder contract;
+  append_prepared_boundary_component_contract(contract, spec);
+  return std::move(contract).release();
+}
+
+std::string prepared_system_boundary_component_authority_contract(
+    const component::LoadedComponent* owner, PopsNativeInterfaceIdV1 selected_interface,
+    std::uint32_t selected_version) {
+  if (owner == nullptr)
+    throw std::invalid_argument("prepared System boundary component has no loaded authority");
+  const PopsComponentApiV1& api = owner->api();
+  const auto require_text = [](const char* value, const char* field) -> std::string_view {
+    if (value == nullptr || *value == '\0')
+      throw std::invalid_argument(std::string("prepared System boundary component has empty ") +
+                                  field);
+    return value;
+  };
+  if (api.struct_size < sizeof(PopsComponentApiV1) ||
+      api.protocol_abi != POPS_COMPONENT_PROTOCOL_ABI_V1 || api.interface_count == 0 ||
+      api.interfaces == nullptr)
+    throw std::invalid_argument("prepared System boundary component API authority is malformed");
+
+  struct InterfaceAuthority {
+    std::uint32_t id = 0;
+    std::uint32_t version = 0;
+    std::uint32_t table_size = 0;
+    std::uint32_t header_size = 0;
+    std::uint32_t header_abi = 0;
+    bool has_prepare = false;
+    bool has_destroy = false;
+  };
+  std::vector<InterfaceAuthority> interfaces;
+  interfaces.reserve(api.interface_count);
+  bool selected = false;
+  for (std::size_t index = 0; index < api.interface_count; ++index) {
+    const PopsComponentInterfaceEntryV1& row = api.interfaces[index];
+    if (row.table == nullptr || row.table_size < sizeof(PopsComponentTableHeaderV1))
+      throw std::invalid_argument(
+          "prepared System boundary component interface authority is truncated");
+    const auto& header = *static_cast<const PopsComponentTableHeaderV1*>(row.table);
+    if (header.struct_size < sizeof(PopsComponentTableHeaderV1) ||
+        header.struct_size > row.table_size || header.abi_version != api.protocol_abi ||
+        header.interface_id != row.interface_id ||
+        header.interface_version != row.interface_version ||
+        ((header.prepare == nullptr) != (header.destroy == nullptr)))
+      throw std::invalid_argument(
+          "prepared System boundary component interface authority is malformed");
+    interfaces.push_back({static_cast<std::uint32_t>(row.interface_id), row.interface_version,
+                          row.table_size, header.struct_size, header.abi_version,
+                          header.prepare != nullptr, header.destroy != nullptr});
+    selected = selected || (row.interface_id == selected_interface &&
+                            row.interface_version == selected_version);
+  }
+  std::sort(interfaces.begin(), interfaces.end(), [](const auto& left, const auto& right) {
+    return std::tie(left.id, left.version) < std::tie(right.id, right.version);
+  });
+  for (std::size_t index = 1; index < interfaces.size(); ++index)
+    if (interfaces[index - 1].id == interfaces[index].id &&
+        interfaces[index - 1].version == interfaces[index].version)
+      throw std::invalid_argument(
+          "prepared System boundary component interface authority is duplicated");
+  if (!selected)
+    throw std::invalid_argument(
+        "prepared System boundary component lacks its selected interface authority");
+
+  ExactContractBuilder contract;
+  contract.text("pops.system.prepared-boundary-component-authority")
+      .scalar(std::uint32_t{2})
+      .text(owner->binary_identity())
+      .scalar(api.struct_size)
+      .scalar(api.protocol_abi)
+      .text(require_text(api.abi_key, "abi_key"))
+      .text(require_text(api.catalog_sha256, "catalog_sha256"))
+      .text(require_text(api.component_id, "component_id"))
+      .text(require_text(api.semantic_identity, "semantic_identity"))
+      .text(require_text(api.manifest_identity, "manifest_identity"))
+      .scalar(static_cast<std::uint32_t>(selected_interface))
+      .scalar(selected_version)
+      .sequence(interfaces, [](ExactContractBuilder& item, const InterfaceAuthority& interface) {
+        item.scalar(interface.id)
+            .scalar(interface.version)
+            .scalar(interface.table_size)
+            .scalar(interface.header_size)
+            .scalar(interface.header_abi)
+            .presence(interface.has_prepare)
+            .presence(interface.has_destroy);
+      });
   return std::move(contract).release();
 }
 
@@ -410,9 +502,11 @@ struct ExternalBoundaryDependencyStorage {
   }
 };
 
-template <int Dim, class Implementation>
+template <int Dim, class BlockStore, class BoundaryRegistry, class NamedFields>
 ExternalBoundaryDependencyStorage<Dim> prepare_external_boundary_dependencies(
-    Implementation& implementation, const PreparedBoundaryComponentSpec& spec,
+    const std::array<bool, Dim>& periodicity, const Geometry<Dim>& geometry,
+    const BlockStore& blocks, const BoundaryRegistry& boundary_registry,
+    const NamedFields& named_fields, const PreparedBoundaryComponentSpec& spec,
     const MultiFab<Dim>& owning, const ExecutionLane& lane,
     ExternalBoundaryDependencyOperation operation) {
   ExternalBoundaryDependencyStorage<Dim> storage;
@@ -442,8 +536,7 @@ ExternalBoundaryDependencyStorage<Dim> prepare_external_boundary_dependencies(
                                     " lacks exact patch colocation/halo");
     }
   };
-  const BoundaryTopology<Dim> topology =
-      BoundaryTopology<Dim>::axis_periodic(implementation.periodicity);
+  const BoundaryTopology<Dim> topology = BoundaryTopology<Dim>::axis_periodic(periodicity);
   const bool needs_physical =
       operation == ExternalBoundaryDependencyOperation::ghost_region &&
       std::any_of(spec.region.axes.begin(), spec.region.axes.end(), [&](int axis) {
@@ -480,7 +573,7 @@ ExternalBoundaryDependencyStorage<Dim> prepare_external_boundary_dependencies(
               }
           detached.ghost_transport =
               std::make_shared<typename ExternalBoundaryDependencyStorage<Dim>::GhostTransport>(
-                  detached.image, implementation.geom, topology, std::move(physical));
+                  detached.image, geometry, topology, std::move(physical));
           if (source_prepare)
             detached.source_prepare = std::move(source_prepare);
         }
@@ -496,7 +589,7 @@ ExternalBoundaryDependencyStorage<Dim> prepare_external_boundary_dependencies(
     if (identity == spec.state_identity)
       dependency = &owning;
     else
-      for (const auto& block : implementation.blocks_.blocks)
+      for (const auto& block : blocks.blocks)
         if (block.state_identity == identity) {
           dependency = &block.U;
           physical = block.boundary;
@@ -525,9 +618,9 @@ ExternalBoundaryDependencyStorage<Dim> prepare_external_boundary_dependencies(
   storage.field_distributions.reserve(spec.fields.size());
   storage.field_identities.reserve(spec.fields.size());
   for (const std::string& identity : spec.fields) {
-    const std::string& slot = implementation.boundary_registry_.field_storage_route(identity);
-    const auto found = implementation.named_fields_.find(slot);
-    if (found == implementation.named_fields_.end() || !found->second)
+    const std::string& slot = boundary_registry.field_storage_route(identity);
+    const auto found = named_fields.find(slot);
+    if (found == named_fields.end() || !found->second)
       throw std::runtime_error("prepared boundary field dependency is not materialized");
     const MultiFab<Dim>& dependency = found->second->accepted_potential();
     authenticate(dependency, identity);
@@ -559,21 +652,21 @@ struct PreparedSystemBoundaryComponentCandidate {
 /// Prepare one external boundary provider in three non-mixing phases: purely local dependency and
 /// scratch allocation, dependency transport collective construction, then the component-owned
 /// prepare callback.  Every phase converges before the canonical package installer may advance.
-template <int Dim, class Implementation, class Component>
+template <int Dim, class BlockStore, class BoundaryRegistry, class NamedFields, class Component>
 PreparedSystemBoundaryComponentCandidate<Dim, Component>
-prepare_system_boundary_component_candidate(Implementation& implementation,
-                                            const std::shared_ptr<Component>& component,
-                                            const MultiFab<Dim>& owning,
-                                            const Geometry<Dim>& geometry,
-                                            const BoundaryTopology<Dim>& topology,
-                                            const ExecutionLane& lane,
-                                            ExternalBoundaryDependencyOperation operation) {
+prepare_system_boundary_component_candidate(
+    const std::array<bool, Dim>& periodicity, const BlockStore& blocks,
+    const BoundaryRegistry& boundary_registry, const NamedFields& named_fields,
+    const std::shared_ptr<Component>& component, const MultiFab<Dim>& owning,
+    const Geometry<Dim>& geometry, const BoundaryTopology<Dim>& topology, const ExecutionLane& lane,
+    ExternalBoundaryDependencyOperation operation) {
   PreparedSystemBoundaryComponentCandidate<Dim, Component> candidate;
   runtime::program::collective_boundary_provider_phase(
       lane, "prepared System boundary local candidate preparation failed collectively", [&] {
         candidate.dependencies = std::make_shared<ExternalBoundaryDependencyStorage<Dim>>(
-            prepare_external_boundary_dependencies<Dim>(implementation, component->spec(), owning,
-                                                        lane, operation));
+            prepare_external_boundary_dependencies<Dim>(
+                periodicity, geometry, blocks, boundary_registry, named_fields, component->spec(),
+                owning, lane, operation));
         candidate.local_session.emplace(component->template make_local_session_candidate<Dim>(
             lane, owning, geometry, candidate.dependencies->view({})));
         candidate.session = std::make_shared<typename PreparedSystemBoundaryComponentCandidate<
@@ -623,6 +716,136 @@ void validate_prepared_block(const PreparedSystemBlock<Dim>& block) {
       !block.batch_conservative_to_primitive)
     throw std::invalid_argument(
         "prepared System block does not implement the complete exact-ranked execution contract");
+}
+
+template <int Dim, class Implementation>
+struct PreparedBlockInstallation {
+  typename Implementation::Species block;
+  std::string name;
+  std::shared_ptr<const PreparedHyperbolicBoundary<Dim>> converted_boundary;
+};
+
+template <int Dim, class Implementation>
+PreparedBlockInstallation<Dim, Implementation> prepare_block_installation(
+    const Implementation& implementation,
+    const runtime::system::ExactAuxiliaryRegistry<Dim>& auxiliary_registry,
+    const typename Implementation::block_store_type& blocks,
+    const typename Implementation::boundary_registry_type& boundary_registry,
+    std::string_view provider_consumer_qid, PreparedSystemBlock<Dim> prepared) {
+  validate_prepared_block(prepared);
+  if (std::any_of(blocks.blocks.begin(), blocks.blocks.end(),
+                  [&](const typename Implementation::Species& block) {
+                    return block.name == prepared.name;
+                  }))
+    throw std::invalid_argument("System prepared block name is already installed");
+
+  const auto route = boundary_registry.state_routes().find(prepared.name);
+  if (route == boundary_registry.state_routes().end())
+    throw std::runtime_error("System prepared block lacks its exact pre-installed state identity");
+  const std::string state_identity = route->second;
+
+  const auto* installed_boundary = boundary_registry.find_boundary(prepared.name);
+  std::shared_ptr<const PreparedHyperbolicBoundary<Dim>> boundary;
+  if (installed_boundary != nullptr) {
+    if (installed_boundary->state_identity != state_identity ||
+        installed_boundary->authority->ncomp() != prepared.ncomp ||
+        installed_boundary->authority->periodic_axes() != implementation.periodicity)
+      throw std::invalid_argument(
+          "System prepared block boundary differs from its exact state/domain contract");
+    for (int axis = 0; axis < Dim; ++axis)
+      if (prepared.ghosts[axis] < installed_boundary->required_depth)
+        throw std::invalid_argument(
+            "System prepared block ghosts are narrower than its boundary requirement");
+    boundary = std::make_shared<PreparedHyperbolicBoundary<Dim>>(
+        installed_boundary->authority->with_converted_fixed_states(
+            prepared.primitive_to_conservative));
+  }
+
+  if (prepared.provider_components != 0 && auxiliary_registry.sealed()) {
+    const auto& plan = auxiliary_registry.consumer_plan(provider_consumer_qid);
+    if (plan.value_count() != static_cast<std::size_t>(prepared.provider_components))
+      throw std::invalid_argument(
+          "prepared System block provider count differs from its resolved consumer plan");
+  } else if (prepared.provider_components != 0) {
+    throw std::logic_error(
+        "prepared System block with provider values requires the sealed global provider registry");
+  }
+
+  typename Implementation::Species candidate;
+  candidate.name = prepared.name;
+  candidate.U = MultiFab<Dim>(implementation.ba, implementation.dm, implementation.local_rank,
+                              prepared.ncomp, prepared.ghosts);
+  candidate.ncomp = prepared.ncomp;
+  candidate.substeps = prepared.substeps;
+  candidate.evolve = prepared.evolve;
+  candidate.stride = prepared.stride;
+  candidate.gamma = prepared.gamma;
+  candidate.rhs_into = std::move(prepared.closures.rhs_into);
+  candidate.max_speed = std::move(prepared.maximum_speed);
+  candidate.add_poisson_rhs = std::move(prepared.poisson_rhs);
+  candidate.cons_vars = std::move(prepared.conservative_variables);
+  candidate.prim_vars = std::move(prepared.primitive_variables);
+  candidate.prim_to_cons = std::move(prepared.primitive_to_conservative);
+  candidate.cons_to_prim = std::move(prepared.conservative_to_primitive);
+  candidate.batch_cons_to_prim = std::move(prepared.batch_conservative_to_primitive);
+  candidate.source_frequency = std::move(prepared.source_frequency);
+  candidate.stability_dt = std::move(prepared.stability_dt);
+  candidate.project = std::move(prepared.closures.project);
+  candidate.project_masked = std::move(prepared.closures.project_masked);
+  candidate.rhs_flux_only = std::move(prepared.closures.rhs_flux_only);
+  candidate.source_only = std::move(prepared.closures.source_only);
+  candidate.source_only_masked = std::move(prepared.closures.source_only_masked);
+  candidate.staircase_residuals = std::move(prepared.closures.staircase);
+  candidate.cutcell_residuals = std::move(prepared.closures.cut_cell);
+  candidate.rhs_at_point = std::move(prepared.closures.rhs_at_point);
+  candidate.rhs_flux_only_at_point = std::move(prepared.closures.rhs_flux_only_at_point);
+  candidate.rhs_without_prepared_interfaces =
+      std::move(prepared.closures.rhs_without_prepared_interfaces);
+  candidate.rhs_flux_only_without_prepared_interfaces =
+      std::move(prepared.closures.rhs_flux_only_without_prepared_interfaces);
+  candidate.rhs_core_at_point = std::move(prepared.closures.rhs_core_at_point);
+  candidate.rhs_flux_only_core_at_point = std::move(prepared.closures.rhs_flux_only_core_at_point);
+  candidate.rhs_core_at_point_prepared = std::move(prepared.closures.rhs_core_at_point_prepared);
+  candidate.rhs_flux_only_core_at_point_prepared =
+      std::move(prepared.closures.rhs_flux_only_core_at_point_prepared);
+  candidate.boundary_full_at_point_prepared =
+      std::move(prepared.closures.boundary_full_at_point_prepared);
+  candidate.boundary_core_at_point_prepared =
+      std::move(prepared.closures.boundary_core_at_point_prepared);
+  candidate.boundary_flux_full_at_point_prepared =
+      std::move(prepared.closures.boundary_flux_full_at_point_prepared);
+  candidate.boundary_flux_core_at_point_prepared =
+      std::move(prepared.closures.boundary_flux_core_at_point_prepared);
+  candidate.boundary_residual_at_point_prepared =
+      std::move(prepared.closures.boundary_residual_at_point_prepared);
+  candidate.boundary_jvp_at_point_prepared =
+      std::move(prepared.closures.boundary_jvp_at_point_prepared);
+  candidate.external_boundary_flux = std::move(prepared.closures.external_boundary_flux);
+  candidate.external_field_boundary_residual =
+      std::move(prepared.closures.external_field_boundary_residual);
+  candidate.external_field_boundary_jvp = std::move(prepared.closures.external_field_boundary_jvp);
+  candidate.prepare_generated_state_at_point =
+      std::move(prepared.closures.prepare_generated_state_at_point);
+  candidate.prepare_generated_state_at_point_prepared =
+      std::move(prepared.closures.prepare_generated_state_at_point_prepared);
+  candidate.prepare_generated_state_with_transport_prepared =
+      std::move(prepared.closures.prepare_generated_state_with_transport_prepared);
+  candidate.external_ghost_boundary = std::move(prepared.closures.external_ghost_boundary);
+  candidate.boundary = boundary;
+  candidate.state_identity = state_identity;
+  if (candidate.boundary &&
+      (!candidate.boundary_full_at_point_prepared || !candidate.boundary_core_at_point_prepared ||
+       !candidate.boundary_flux_full_at_point_prepared ||
+       !candidate.boundary_flux_core_at_point_prepared ||
+       !candidate.boundary_residual_at_point_prepared ||
+       !candidate.boundary_jvp_at_point_prepared || !candidate.external_boundary_flux ||
+       !candidate.external_field_boundary_residual || !candidate.external_field_boundary_jvp ||
+       !candidate.prepare_generated_state_with_transport_prepared ||
+       !candidate.external_ghost_boundary))
+    throw std::invalid_argument(
+        "prepared System boundary lacks its complete full/core/residual/JVP authority");
+
+  return {std::move(candidate), prepared.name, std::move(boundary)};
 }
 
 }  // namespace
@@ -694,17 +917,31 @@ void System<Dim>::stage_prepared_ghost_boundary_component(
         "prepared System GhostBoundary differs from its exact block/rank route");
   const std::string package_identity =
       prepared_system_boundary_package_identity("ghost", block, spec);
+  const std::string component_contract = prepared_system_boundary_component_contract(spec);
+  const std::string component_authority_contract =
+      prepared_system_boundary_component_authority_contract(component->package_owner_identity(),
+                                                            POPS_NATIVE_INTERFACE_GHOST_BOUNDARY_V1,
+                                                            spec.interface_version);
+  std::vector<typename Impl::PreparedBoundaryHookContract> expected_hooks;
+  expected_hooks.push_back(
+      {package_identity, block, "ghost", component_contract, component_authority_contract});
   stage_native_package_(
       package_identity, {},
-      [this, block, component] {
+      [this, block, component, package_identity, component_contract, component_authority_contract] {
         const ExecutionLane& lane = prepared_boundary_execution_lane();
+        if (p_->native_package_finalize_candidate_ == nullptr)
+          throw std::logic_error(
+              "prepared System GhostBoundary installer requires a detached candidate");
+        auto& snapshot = *p_->native_package_finalize_candidate_;
         typename Impl::Species* selected = nullptr;
+        typename Impl::NativePackageFinalizeSnapshot::BoundaryHookImage* hook = nullptr;
         std::optional<Geometry<Dim>> geometry;
         std::optional<BoundaryTopology<Dim>> topology;
         runtime::program::collective_boundary_provider_phase(
             lane, "prepared System GhostBoundary local installer preflight failed collectively",
             [&] {
-              selected = &p_->blocks_.find(block);
+              selected = &snapshot.blocks.find(block);
+              hook = &snapshot.boundary_hook(block);
               if (!selected->boundary ||
                   selected->state_identity != component->spec().state_identity)
                 throw std::invalid_argument(
@@ -717,17 +954,21 @@ void System<Dim>::stage_prepared_ghost_boundary_component(
                 throw std::invalid_argument(
                     "prepared System GhostBoundary requires complete compiled full and core "
                     "closures");
+              if (!hook->ghost_target)
+                throw std::invalid_argument(
+                    "prepared System GhostBoundary requires its generated hook target");
               geometry.emplace(p_->geom);
               topology.emplace(BoundaryTopology<Dim>::axis_periodic(p_->periodicity));
             });
         // The RuntimeInstance lane was materialized from its authenticated communicator before
         // plan publication. Each invocation borrows that exact lane through ProgramContext.
         auto prepared = prepare_system_boundary_component_candidate<Dim>(
-            *p_, component, selected->U, *geometry, *topology, lane,
+            p_->periodicity, snapshot.blocks, snapshot.boundary_registry, snapshot.named_fields,
+            component, selected->U, *geometry, *topology, lane,
             ExternalBoundaryDependencyOperation::ghost_region);
         auto dependencies = std::move(prepared.dependencies);
         auto session = std::move(prepared.session);
-        const auto previous = *selected->external_ghost_boundary;
+        const auto previous = *hook->ghost_target;
         const Geometry<Dim> prepared_geometry = *geometry;
         typename SystemBlockClosures<Dim>::ExternalGhostBoundary candidate =
             [previous, component, session, dependencies, geometry = prepared_geometry](
@@ -758,9 +999,12 @@ void System<Dim>::stage_prepared_ghost_boundary_component(
                                                                 geometry, lane, context);
                   });
             };
-        selected->external_ghost_boundary->swap(candidate);
+        hook->ghost.swap(candidate);
+        snapshot.prepared_boundary_hook_contracts.push_back(
+            {package_identity, block, "ghost", component_contract, component_authority_contract});
       },
-      component, NativePackageKind::prepared_boundary);
+      component, nullptr, NativePackageKind::prepared_boundary);
+  p_->pending_native_packages_.back().expected_boundary_hooks = std::move(expected_hooks);
 }
 
 template <int Dim>
@@ -772,29 +1016,45 @@ void System<Dim>::stage_prepared_boundary_flux_component(
     throw std::invalid_argument("prepared System BoundaryFlux differs from its exact block route");
   const std::string package_identity =
       prepared_system_boundary_package_identity("flux", block, component->spec());
+  const std::string component_contract =
+      prepared_system_boundary_component_contract(component->spec());
+  const std::string component_authority_contract =
+      prepared_system_boundary_component_authority_contract(component->package_owner_identity(),
+                                                            POPS_NATIVE_INTERFACE_BOUNDARY_FLUX_V1,
+                                                            component->spec().interface_version);
+  std::vector<typename Impl::PreparedBoundaryHookContract> expected_hooks;
+  expected_hooks.push_back(
+      {package_identity, block, "flux", component_contract, component_authority_contract});
   stage_native_package_(
       package_identity, {},
-      [this, block, component] {
+      [this, block, component, package_identity, component_contract, component_authority_contract] {
         const ExecutionLane& lane = prepared_boundary_execution_lane();
+        if (p_->native_package_finalize_candidate_ == nullptr)
+          throw std::logic_error(
+              "prepared System BoundaryFlux installer requires a detached candidate");
+        auto& snapshot = *p_->native_package_finalize_candidate_;
         typename Impl::Species* selected = nullptr;
+        typename Impl::NativePackageFinalizeSnapshot::BoundaryHookImage* hook = nullptr;
         std::optional<Geometry<Dim>> geometry;
         std::optional<BoundaryTopology<Dim>> topology;
         runtime::program::collective_boundary_provider_phase(
             lane, "prepared System BoundaryFlux local installer preflight failed collectively",
             [&] {
-              selected = &p_->blocks_.find(block);
-              if (!selected->boundary || !selected->external_boundary_flux)
+              selected = &snapshot.blocks.find(block);
+              hook = &snapshot.boundary_hook(block);
+              if (!selected->boundary || !hook->flux_target)
                 throw std::invalid_argument(
                     "prepared System BoundaryFlux requires its generated post-Riemann hook");
               geometry.emplace(p_->geom);
               topology.emplace(BoundaryTopology<Dim>::axis_periodic(p_->periodicity));
             });
         auto prepared = prepare_system_boundary_component_candidate<Dim>(
-            *p_, component, selected->U, *geometry, *topology, lane,
+            p_->periodicity, snapshot.blocks, snapshot.boundary_registry, snapshot.named_fields,
+            component, selected->U, *geometry, *topology, lane,
             ExternalBoundaryDependencyOperation::flux_transform);
         auto dependencies = std::move(prepared.dependencies);
         auto session = std::move(prepared.session);
-        const auto previous = *selected->external_boundary_flux;
+        const auto previous = *hook->flux_target;
         typename SystemBlockClosures<Dim>::BoundaryFluxTransform candidate =
             [previous, component, session, dependencies](const auto& point, const auto& state,
                                                          auto& faces, const auto& geometry,
@@ -824,9 +1084,12 @@ void System<Dim>::stage_prepared_boundary_flux_component(
                         session->value(), point, state, faces, geometry, lane, context);
                   });
             };
-        selected->external_boundary_flux->swap(candidate);
+        hook->flux.swap(candidate);
+        snapshot.prepared_boundary_hook_contracts.push_back(
+            {package_identity, block, "flux", component_contract, component_authority_contract});
       },
-      component, NativePackageKind::prepared_boundary);
+      component, nullptr, NativePackageKind::prepared_boundary);
+  p_->pending_native_packages_.back().expected_boundary_hooks = std::move(expected_hooks);
 }
 
 template <int Dim>
@@ -870,19 +1133,39 @@ void System<Dim>::stage_prepared_field_boundary_component_pair(
   append_prepared_boundary_component_contract(package_contract, left);
   append_prepared_boundary_component_contract(package_contract, right);
   const std::string package_identity = std::move(package_contract).release();
+  const std::string residual_contract = prepared_system_boundary_component_contract(left);
+  const std::string jvp_contract = prepared_system_boundary_component_contract(right);
+  const std::string residual_authority_contract =
+      prepared_system_boundary_component_authority_contract(
+          residual->package_owner_identity(), POPS_NATIVE_INTERFACE_FIELD_BOUNDARY_CLOSURE_V1,
+          left.interface_version);
+  const std::string jvp_authority_contract = prepared_system_boundary_component_authority_contract(
+      jvp->package_owner_identity(), POPS_NATIVE_INTERFACE_FIELD_BOUNDARY_CLOSURE_V1,
+      right.interface_version);
+  std::vector<typename Impl::PreparedBoundaryHookContract> expected_hooks;
+  expected_hooks.push_back(
+      {package_identity, block, "field-residual", residual_contract, residual_authority_contract});
+  expected_hooks.push_back(
+      {package_identity, block, "field-jvp", jvp_contract, jvp_authority_contract});
   stage_native_package_(
       package_identity, {},
-      [this, block, residual, jvp] {
+      [this, block, residual, jvp, package_identity, residual_contract, jvp_contract,
+       residual_authority_contract, jvp_authority_contract] {
         const ExecutionLane& lane = prepared_boundary_execution_lane();
+        if (p_->native_package_finalize_candidate_ == nullptr)
+          throw std::logic_error(
+              "prepared System FieldBoundary installer requires a detached candidate");
+        auto& snapshot = *p_->native_package_finalize_candidate_;
         typename Impl::Species* selected = nullptr;
+        typename Impl::NativePackageFinalizeSnapshot::BoundaryHookImage* hook = nullptr;
         std::optional<Geometry<Dim>> geometry;
         std::optional<BoundaryTopology<Dim>> topology;
         runtime::program::collective_boundary_provider_phase(
             lane, "prepared System FieldBoundary local installer preflight failed collectively",
             [&] {
-              selected = &p_->blocks_.find(block);
-              if (!selected->boundary || !selected->external_field_boundary_residual ||
-                  !selected->external_field_boundary_jvp)
+              selected = &snapshot.blocks.find(block);
+              hook = &snapshot.boundary_hook(block);
+              if (!selected->boundary || !hook->residual_target || !hook->jvp_target)
                 throw std::invalid_argument(
                     "prepared System FieldBoundary pair requires generated boundary closures");
               geometry.emplace(p_->geom);
@@ -891,17 +1174,19 @@ void System<Dim>::stage_prepared_field_boundary_component_pair(
         const auto& spec = residual->spec();
         const int face = spec.region.axes.front() * 2 + (spec.region.sides.front() > 0 ? 1 : 0);
         auto prepared_residual = prepare_system_boundary_component_candidate<Dim>(
-            *p_, residual, selected->U, *geometry, *topology, lane,
+            p_->periodicity, snapshot.blocks, snapshot.boundary_registry, snapshot.named_fields,
+            residual, selected->U, *geometry, *topology, lane,
             ExternalBoundaryDependencyOperation::field_closure);
         auto residual_dependencies = std::move(prepared_residual.dependencies);
         auto residual_session = std::move(prepared_residual.session);
         auto prepared_jvp = prepare_system_boundary_component_candidate<Dim>(
-            *p_, jvp, selected->U, *geometry, *topology, lane,
+            p_->periodicity, snapshot.blocks, snapshot.boundary_registry, snapshot.named_fields,
+            jvp, selected->U, *geometry, *topology, lane,
             ExternalBoundaryDependencyOperation::field_closure);
         auto jvp_dependencies = std::move(prepared_jvp.dependencies);
         auto jvp_session = std::move(prepared_jvp.session);
-        const auto previous_residual = *selected->external_field_boundary_residual;
-        const auto previous_jvp = *selected->external_field_boundary_jvp;
+        const auto previous_residual = *hook->residual_target;
+        const auto previous_jvp = *hook->jvp_target;
         const Geometry<Dim> prepared_geometry = *geometry;
         typename SystemBlockClosures<Dim>::PreparedPointBoundaryResidual residual_candidate =
             [previous_residual, residual, residual_session, residual_dependencies,
@@ -963,13 +1248,19 @@ void System<Dim>::stage_prepared_field_boundary_component_pair(
                         jvp_session->value(), face, state, &direction, result, geometry, context);
                   });
             };
-        selected->external_field_boundary_residual->swap(residual_candidate);
-        selected->external_field_boundary_jvp->swap(jvp_candidate);
+        hook->residual.swap(residual_candidate);
+        hook->jvp.swap(jvp_candidate);
+        snapshot.prepared_boundary_hook_contracts.push_back({package_identity, block,
+                                                             "field-residual", residual_contract,
+                                                             residual_authority_contract});
+        snapshot.prepared_boundary_hook_contracts.push_back(
+            {package_identity, block, "field-jvp", jvp_contract, jvp_authority_contract});
       },
       std::make_shared<std::pair<std::shared_ptr<PreparedFieldBoundaryResidualComponent>,
                                  std::shared_ptr<PreparedFieldBoundaryJvpComponent>>>(residual,
                                                                                       jvp),
-      NativePackageKind::prepared_boundary);
+      nullptr, NativePackageKind::prepared_boundary);
+  p_->pending_native_packages_.back().expected_boundary_hooks = std::move(expected_hooks);
 }
 
 template <int Dim>
@@ -1054,120 +1345,17 @@ std::array<bool, Dim> System<Dim>::prepared_block_periodicity() const {
 template <int Dim>
 void System<Dim>::install_prepared_block(PreparedSystemBlock<Dim> prepared) {
   require_assembling(p_->lifecycle_, "install_prepared_block");
-  validate_prepared_block(prepared);
-  if (std::any_of(p_->sp.begin(), p_->sp.end(),
-                  [&](const typename Impl::Species& block) { return block.name == prepared.name; }))
-    throw std::invalid_argument("System prepared block name is already installed");
-
-  const auto route = p_->boundary_registry_.state_routes().find(prepared.name);
-  if (route == p_->boundary_registry_.state_routes().end())
-    throw std::runtime_error("System prepared block lacks its exact pre-installed state identity");
-  const std::string state_identity = route->second;
-
-  const auto* installed_boundary = p_->boundary_for(prepared.name);
-  std::shared_ptr<const HyperbolicBoundary> boundary;
-  if (installed_boundary != nullptr) {
-    if (installed_boundary->state_identity != state_identity ||
-        installed_boundary->authority->ncomp() != prepared.ncomp ||
-        installed_boundary->authority->periodic_axes() != p_->periodicity)
-      throw std::invalid_argument(
-          "System prepared block boundary differs from its exact state/domain contract");
-    for (int axis = 0; axis < Dim; ++axis)
-      if (prepared.ghosts[axis] < installed_boundary->required_depth)
-        throw std::invalid_argument(
-            "System prepared block ghosts are narrower than its boundary requirement");
-    boundary = std::make_shared<HyperbolicBoundary>(
-        installed_boundary->authority->with_converted_fixed_states(
-            prepared.primitive_to_conservative));
-  }
-
-  if (prepared.provider_components != 0 && p_->auxiliary_registry_.sealed()) {
-    const auto& plan = p_->auxiliary_registry_.consumer_plan(prepared.name);
-    if (plan.value_count() != static_cast<std::size_t>(prepared.provider_components))
-      throw std::invalid_argument(
-          "prepared System block provider count differs from its resolved consumer plan");
-  } else if (prepared.provider_components != 0) {
-    throw std::logic_error(
-        "prepared System block with provider values requires the sealed global provider registry");
-  }
-
-  typename Impl::Species candidate;
-  candidate.name = prepared.name;
-  candidate.U = MultiFab<Dim>(p_->ba, p_->dm, p_->local_rank, prepared.ncomp, prepared.ghosts);
-  candidate.ncomp = prepared.ncomp;
-  candidate.substeps = prepared.substeps;
-  candidate.evolve = prepared.evolve;
-  candidate.stride = prepared.stride;
-  candidate.gamma = prepared.gamma;
-  candidate.rhs_into = std::move(prepared.closures.rhs_into);
-  candidate.max_speed = std::move(prepared.maximum_speed);
-  candidate.add_poisson_rhs = std::move(prepared.poisson_rhs);
-  candidate.cons_vars = std::move(prepared.conservative_variables);
-  candidate.prim_vars = std::move(prepared.primitive_variables);
-  candidate.prim_to_cons = std::move(prepared.primitive_to_conservative);
-  candidate.cons_to_prim = std::move(prepared.conservative_to_primitive);
-  candidate.batch_cons_to_prim = std::move(prepared.batch_conservative_to_primitive);
-  candidate.source_frequency = std::move(prepared.source_frequency);
-  candidate.stability_dt = std::move(prepared.stability_dt);
-  candidate.project = std::move(prepared.closures.project);
-  candidate.project_masked = std::move(prepared.closures.project_masked);
-  candidate.rhs_flux_only = std::move(prepared.closures.rhs_flux_only);
-  candidate.source_only = std::move(prepared.closures.source_only);
-  candidate.source_only_masked = std::move(prepared.closures.source_only_masked);
-  candidate.staircase_residuals = std::move(prepared.closures.staircase);
-  candidate.cutcell_residuals = std::move(prepared.closures.cut_cell);
-  candidate.rhs_at_point = std::move(prepared.closures.rhs_at_point);
-  candidate.rhs_flux_only_at_point = std::move(prepared.closures.rhs_flux_only_at_point);
-  candidate.rhs_without_prepared_interfaces =
-      std::move(prepared.closures.rhs_without_prepared_interfaces);
-  candidate.rhs_flux_only_without_prepared_interfaces =
-      std::move(prepared.closures.rhs_flux_only_without_prepared_interfaces);
-  candidate.rhs_core_at_point = std::move(prepared.closures.rhs_core_at_point);
-  candidate.rhs_flux_only_core_at_point = std::move(prepared.closures.rhs_flux_only_core_at_point);
-  candidate.rhs_core_at_point_prepared = std::move(prepared.closures.rhs_core_at_point_prepared);
-  candidate.rhs_flux_only_core_at_point_prepared =
-      std::move(prepared.closures.rhs_flux_only_core_at_point_prepared);
-  candidate.boundary_full_at_point_prepared =
-      std::move(prepared.closures.boundary_full_at_point_prepared);
-  candidate.boundary_core_at_point_prepared =
-      std::move(prepared.closures.boundary_core_at_point_prepared);
-  candidate.boundary_flux_full_at_point_prepared =
-      std::move(prepared.closures.boundary_flux_full_at_point_prepared);
-  candidate.boundary_flux_core_at_point_prepared =
-      std::move(prepared.closures.boundary_flux_core_at_point_prepared);
-  candidate.boundary_residual_at_point_prepared =
-      std::move(prepared.closures.boundary_residual_at_point_prepared);
-  candidate.boundary_jvp_at_point_prepared =
-      std::move(prepared.closures.boundary_jvp_at_point_prepared);
-  candidate.external_boundary_flux = std::move(prepared.closures.external_boundary_flux);
-  candidate.external_field_boundary_residual =
-      std::move(prepared.closures.external_field_boundary_residual);
-  candidate.external_field_boundary_jvp = std::move(prepared.closures.external_field_boundary_jvp);
-  candidate.prepare_generated_state_at_point =
-      std::move(prepared.closures.prepare_generated_state_at_point);
-  candidate.prepare_generated_state_at_point_prepared =
-      std::move(prepared.closures.prepare_generated_state_at_point_prepared);
-  candidate.prepare_generated_state_with_transport_prepared =
-      std::move(prepared.closures.prepare_generated_state_with_transport_prepared);
-  candidate.external_ghost_boundary = std::move(prepared.closures.external_ghost_boundary);
-  candidate.boundary = boundary;
-  candidate.state_identity = state_identity;
-  if (candidate.boundary &&
-      (!candidate.boundary_full_at_point_prepared || !candidate.boundary_core_at_point_prepared ||
-       !candidate.boundary_flux_full_at_point_prepared ||
-       !candidate.boundary_flux_core_at_point_prepared ||
-       !candidate.boundary_residual_at_point_prepared ||
-       !candidate.boundary_jvp_at_point_prepared || !candidate.external_boundary_flux ||
-       !candidate.external_field_boundary_residual || !candidate.external_field_boundary_jvp ||
-       !candidate.prepare_generated_state_with_transport_prepared ||
-       !candidate.external_ghost_boundary))
-    throw std::invalid_argument(
-        "prepared System boundary lacks its complete full/core/residual/JVP authority");
-
-  // Every operation above is preparatory. These moves are noexcept after the one vector growth.
-  p_->sp.push_back(std::move(candidate));
-  if (installed_boundary != nullptr)
-    p_->boundary_registry_.boundary(prepared.name).authority = std::move(boundary);
+  auto* finalize = p_->native_package_finalize_candidate_;
+  auto& auxiliary_registry =
+      finalize == nullptr ? p_->auxiliary_registry_ : finalize->auxiliary_registry;
+  auto& blocks = finalize == nullptr ? p_->blocks_ : finalize->blocks;
+  auto& boundary_registry =
+      finalize == nullptr ? p_->boundary_registry_ : finalize->boundary_registry;
+  auto candidate = prepare_block_installation<Dim>(
+      *p_, auxiliary_registry, blocks, boundary_registry, prepared.name, std::move(prepared));
+  blocks.blocks.push_back(std::move(candidate.block));
+  if (candidate.converted_boundary)
+    boundary_registry.boundary(candidate.name).authority = std::move(candidate.converted_boundary);
 }
 
 template <int Dim>
@@ -1175,129 +1363,211 @@ void System<Dim>::register_elliptic_field(
     const std::string& block, const std::string& field,
     const std::vector<runtime::system::AuxiliaryComponentKey>& output_keys, int gradient_sign) {
   require_assembling(p_->lifecycle_, "register_elliptic_field");
-  const ExecutionLane& lane = prepared_boundary_execution_lane();
-  if (field.empty())
-    throw std::invalid_argument("System named elliptic field identity must be non-empty");
-  (void)p_->find(block);
-  runtime::field::NamedFieldOutput<Dim> output(output_keys.size(), gradient_sign);
-  if (!p_->auxiliary_registry_.sealed())
-    throw std::logic_error(
-        "System named elliptic outputs require a sealed auxiliary provider registry");
-  std::vector<std::string> exact_output_keys;
-  exact_output_keys.reserve(output_keys.size());
-  for (const auto& key : output_keys) {
-    key.validate();
-    const std::string exact_key = key.exact_key();
-    if (std::find(exact_output_keys.begin(), exact_output_keys.end(), exact_key) !=
-        exact_output_keys.end())
-      throw std::invalid_argument("System named elliptic output keys must be unique");
-    exact_output_keys.push_back(exact_key);
-    if (p_->auxiliary_registry_.provider_for_key(key).kind() !=
-        runtime::system::AuxiliaryProviderKind::field_output)
+  auto* finalize = p_->native_package_finalize_candidate_;
+  if (finalize == nullptr && !p_->pending_native_packages_.empty()) {
+    if (block.empty() || field.empty() || output_keys.empty())
       throw std::invalid_argument(
-          "System named elliptic output key is not owned by a field-output provider");
+          "System staged native field output requires non-empty block, field, and keys");
+    runtime::field::NamedFieldOutput<Dim> shape(output_keys.size(), gradient_sign);
+    (void)shape;
+    auto selected = p_->field_plans_.end();
+    for (auto plan = p_->field_plans_.begin(); plan != p_->field_plans_.end(); ++plan) {
+      if (plan->second.output_block != block || plan->second.output_key != field)
+        continue;
+      if (selected != p_->field_plans_.end())
+        throw std::runtime_error(
+            "System staged native field output resolves to multiple qualified provider slots");
+      selected = plan;
+    }
+    if (selected == p_->field_plans_.end())
+      throw std::invalid_argument(
+          "System staged native field output has no resolved exact-ranked field plan");
+    std::set<std::string> exact_keys;
+    for (const auto& key : output_keys) {
+      key.validate();
+      if (!exact_keys.insert(key.exact_key()).second)
+        throw std::invalid_argument("System staged native field output keys must be unique");
+    }
+    if (p_->named_fields_.contains(selected->first) ||
+        !p_->staged_native_field_outputs_
+             .emplace(
+                 selected->first,
+                 typename Impl::StagedNativeFieldOutput{block, field, output_keys, gradient_sign})
+             .second)
+      throw std::invalid_argument("System native field output is already registered: " +
+                                  selected->first);
+    return;
   }
-
-  auto selected = p_->field_plans_.end();
-  for (auto plan = p_->field_plans_.begin(); plan != p_->field_plans_.end(); ++plan) {
-    if (plan->second.output_block != block || plan->second.output_key != field)
-      continue;
-    if (selected != p_->field_plans_.end())
-      throw std::runtime_error(
-          "System named elliptic output resolves to multiple qualified provider slots");
-    selected = plan;
-  }
-  if (selected == p_->field_plans_.end())
-    throw std::invalid_argument(
-        "System named elliptic output has no resolved exact-ranked field plan");
+  const ExecutionLane& lane = prepared_boundary_execution_lane();
+  auto& auxiliary_registry =
+      finalize == nullptr ? p_->auxiliary_registry_ : finalize->auxiliary_registry;
+  auto& blocks = finalize == nullptr ? p_->blocks_ : finalize->blocks;
+  auto& field_plans = finalize == nullptr ? p_->field_plans_ : finalize->field_plans;
+  auto& configured_field_solver_providers = finalize == nullptr
+                                                ? p_->configured_field_solver_providers_
+                                                : finalize->configured_field_solver_providers;
+  auto& component_field_solver_providers = finalize == nullptr
+                                               ? p_->component_field_solver_providers_
+                                               : finalize->component_field_solver_providers;
+  auto& named_fields = finalize == nullptr ? p_->named_fields_ : finalize->named_fields;
+  const auto& default_nullspace_provider_identity =
+      finalize == nullptr ? p_->default_nullspace_provider_identity_
+                          : finalize->default_nullspace_provider_identity;
+  const auto& default_nullspace_options =
+      finalize == nullptr ? p_->default_nullspace_options_ : finalize->default_nullspace_options;
+  std::optional<runtime::field::NamedFieldOutput<Dim>> output;
+  auto selected = field_plans.end();
+  std::optional<BoundaryTopology<Dim>> topology;
+  std::optional<elliptic::nd::CartesianPoissonOptions<Dim>> operator_options;
+  runtime::program::collective_boundary_provider_phase(
+      lane, "System named elliptic local preflight failed collectively", [&] {
+        if (field.empty())
+          throw std::invalid_argument("System named elliptic field identity must be non-empty");
+        (void)blocks.find(block);
+        output.emplace(output_keys.size(), gradient_sign);
+        if (!auxiliary_registry.sealed())
+          throw std::logic_error(
+              "System named elliptic outputs require a sealed auxiliary provider registry");
+        std::vector<std::string> exact_output_keys;
+        exact_output_keys.reserve(output_keys.size());
+        for (const auto& key : output_keys) {
+          key.validate();
+          const std::string exact_key = key.exact_key();
+          if (std::find(exact_output_keys.begin(), exact_output_keys.end(), exact_key) !=
+              exact_output_keys.end())
+            throw std::invalid_argument("System named elliptic output keys must be unique");
+          exact_output_keys.push_back(exact_key);
+          if (auxiliary_registry.provider_for_key(key).kind() !=
+              runtime::system::AuxiliaryProviderKind::field_output)
+            throw std::invalid_argument(
+                "System named elliptic output key is not owned by a field-output provider");
+        }
+        for (auto plan = field_plans.begin(); plan != field_plans.end(); ++plan) {
+          if (plan->second.output_block != block || plan->second.output_key != field)
+            continue;
+          if (selected != field_plans.end())
+            throw std::runtime_error(
+                "System named elliptic output resolves to multiple qualified provider slots");
+          selected = plan;
+        }
+        if (selected == field_plans.end())
+          throw std::invalid_argument(
+              "System named elliptic output has no resolved exact-ranked field plan");
+        const auto& candidate_plan = selected->second;
+        if (named_fields.contains(selected->first))
+          throw std::invalid_argument("System named elliptic field is already registered: " +
+                                      selected->first);
+        if ((!candidate_plan.boundary_state_blocks.empty() ||
+             !candidate_plan.boundary_field_blocks.empty()) &&
+            !candidate_plan.boundary_kernel)
+          throw std::logic_error(
+              "System field boundary dependencies require one compiled exact-ranked kernel");
+        topology.emplace(BoundaryTopology<Dim>::axis_periodic(p_->periodicity));
+        elliptic::nd::CartesianBoundaryKind physical =
+            elliptic::nd::CartesianBoundaryKind::dirichlet;
+        if (p_->poisson_bc_ == "neumann")
+          physical = elliptic::nd::CartesianBoundaryKind::neumann;
+        else if (p_->poisson_bc_ != "auto" && p_->poisson_bc_ != "dirichlet" &&
+                 p_->poisson_bc_ != "periodic")
+          throw std::invalid_argument("System Poisson boundary mode is unknown");
+        operator_options.emplace(
+            elliptic::nd::CartesianPoissonOptions<Dim>::from_topology(*topology, physical));
+        if (!candidate_plan.boundary_kind.empty()) {
+          for (int axis = 0; axis < Dim; ++axis) {
+            for (int side = 0; side < 2; ++side) {
+              const std::size_t face = static_cast<std::size_t>(2 * axis + side);
+              const std::string& kind = candidate_plan.boundary_kind[face];
+              const bool periodic = kind == "periodic";
+              if (periodic != p_->periodicity[static_cast<std::size_t>(axis)])
+                throw std::invalid_argument(
+                    "System field boundary periodicity differs from its exact domain topology");
+              if (kind == "periodic")
+                operator_options->boundaries[face] = elliptic::nd::CartesianBoundaryKind::periodic;
+              else if (kind == "dirichlet")
+                operator_options->boundaries[face] = elliptic::nd::CartesianBoundaryKind::dirichlet;
+              else if (kind == "neumann")
+                operator_options->boundaries[face] = elliptic::nd::CartesianBoundaryKind::neumann;
+              else if (kind == "mixed")
+                operator_options->boundaries[face] = elliptic::nd::CartesianBoundaryKind::mixed;
+              else
+                throw std::logic_error("System exact-ranked field boundary kind is unsupported");
+              operator_options->boundary_alpha[face] =
+                  static_cast<Real>(candidate_plan.boundary_alpha[face]);
+              operator_options->boundary_beta[face] =
+                  static_cast<Real>(candidate_plan.boundary_beta[face]);
+              operator_options->boundary_values[face] =
+                  static_cast<Real>(candidate_plan.boundary_value[face]);
+            }
+          }
+        }
+        const auto component =
+            component_field_solver_providers.find(candidate_plan.backend_provider_route);
+        const auto configured =
+            configured_field_solver_providers.find(candidate_plan.backend_provider_route);
+        if ((component == component_field_solver_providers.end()) ==
+            (configured == configured_field_solver_providers.end()))
+          throw std::runtime_error(
+              "System field plan must select exactly one installed exact-ranked backend route");
+        if (component != component_field_solver_providers.end()) {
+          if (candidate_plan.boundary_kernel)
+            throw std::logic_error(
+                "external exact field components must own dynamic boundaries in their component "
+                "ABI");
+          if (candidate_plan.has_reaction)
+            throw std::logic_error(
+                "external field reaction must be carried by the component's exact operator "
+                "contract");
+          if (!candidate_plan.boundary_kind.empty() &&
+              std::any_of(candidate_plan.boundary_kind.begin(), candidate_plan.boundary_kind.end(),
+                          [](const std::string& kind) { return kind != "periodic"; }))
+            throw std::logic_error(
+                "external field components currently require a fully periodic exact topology");
+        } else if (configured->second.family_route == "fft") {
+          if (candidate_plan.has_reaction || candidate_plan.boundary_kernel ||
+              candidate_plan.newton)
+            throw std::logic_error(
+                "FFT field solver rejects reaction, dynamic boundary, and Newton contracts");
+          for (int axis = 0; axis < Dim; ++axis) {
+            if (!p_->periodicity[static_cast<std::size_t>(axis)])
+              throw std::logic_error(
+                  "FFT field solver requires periodic System topology on every axis");
+            for (int side = 0; side < 2; ++side)
+              if (operator_options->boundaries[static_cast<std::size_t>(2 * axis + side)] !=
+                  elliptic::nd::CartesianBoundaryKind::periodic)
+                throw std::logic_error(
+                    "FFT field solver requires periodic exact field boundaries on every face");
+          }
+        } else if (configured->second.family_route == "cartesian_cg") {
+          if (candidate_plan.has_reaction)
+            throw std::logic_error(
+                "configured exact Cartesian field solver does not implement a reaction operator");
+          operator_options->absolute_tolerance =
+              static_cast<Real>(configured->second.absolute_tolerance);
+          operator_options->relative_tolerance =
+              static_cast<Real>(configured->second.relative_tolerance);
+          operator_options->maximum_iterations = configured->second.maximum_iterations;
+        } else {
+          throw std::logic_error("configured exact field solver route was not decoded exactly");
+        }
+      });
   const std::string& provider_slot = selected->first;
   const typename Impl::FieldPlan& plan = selected->second;
-  if (p_->named_fields_.contains(provider_slot))
-    throw std::invalid_argument("System named elliptic field is already registered: " +
-                                provider_slot);
-  if ((!plan.boundary_state_blocks.empty() || !plan.boundary_field_blocks.empty()) &&
-      !plan.boundary_kernel)
-    throw std::logic_error(
-        "System field boundary dependencies require one compiled exact-ranked kernel");
-  const BoundaryTopology<Dim> topology = BoundaryTopology<Dim>::axis_periodic(p_->periodicity);
-  elliptic::nd::CartesianBoundaryKind physical = elliptic::nd::CartesianBoundaryKind::dirichlet;
-  if (p_->poisson_bc_ == "neumann")
-    physical = elliptic::nd::CartesianBoundaryKind::neumann;
-  else if (p_->poisson_bc_ != "auto" && p_->poisson_bc_ != "dirichlet" &&
-           p_->poisson_bc_ != "periodic")
-    throw std::invalid_argument("System Poisson boundary mode is unknown");
-  auto operator_options =
-      elliptic::nd::CartesianPoissonOptions<Dim>::from_topology(topology, physical);
-  if (!plan.boundary_kind.empty()) {
-    for (int axis = 0; axis < Dim; ++axis) {
-      for (int side = 0; side < 2; ++side) {
-        const std::size_t face = static_cast<std::size_t>(2 * axis + side);
-        const std::string& kind = plan.boundary_kind[face];
-        const bool periodic = kind == "periodic";
-        if (periodic != p_->periodicity[static_cast<std::size_t>(axis)])
-          throw std::invalid_argument(
-              "System field boundary periodicity differs from its exact domain topology");
-        if (kind == "periodic")
-          operator_options.boundaries[face] = elliptic::nd::CartesianBoundaryKind::periodic;
-        else if (kind == "dirichlet")
-          operator_options.boundaries[face] = elliptic::nd::CartesianBoundaryKind::dirichlet;
-        else if (kind == "neumann")
-          operator_options.boundaries[face] = elliptic::nd::CartesianBoundaryKind::neumann;
-        else if (kind == "mixed")
-          operator_options.boundaries[face] = elliptic::nd::CartesianBoundaryKind::mixed;
-        else
-          throw std::logic_error("System exact-ranked field boundary kind is unsupported");
-        operator_options.boundary_alpha[face] = static_cast<Real>(plan.boundary_alpha[face]);
-        operator_options.boundary_beta[face] = static_cast<Real>(plan.boundary_beta[face]);
-        operator_options.boundary_values[face] = static_cast<Real>(plan.boundary_value[face]);
-      }
-    }
-  }
+  auto& prepared_topology = *topology;
+  auto& prepared_options = *operator_options;
   std::unique_ptr<runtime::system::ExactFieldSolverBackend<Dim>> backend;
-  const auto component = p_->component_field_solver_providers_.find(plan.backend_provider_route);
-  const auto configured = p_->configured_field_solver_providers_.find(plan.backend_provider_route);
-  if ((component == p_->component_field_solver_providers_.end()) ==
-      (configured == p_->configured_field_solver_providers_.end()))
+  const auto component = component_field_solver_providers.find(plan.backend_provider_route);
+  const auto configured = configured_field_solver_providers.find(plan.backend_provider_route);
+  if ((component == component_field_solver_providers.end()) ==
+      (configured == configured_field_solver_providers.end()))
     throw std::runtime_error(
         "System field plan must select exactly one installed exact-ranked backend route");
 
-  if (component != p_->component_field_solver_providers_.end()) {
-    if (plan.boundary_kernel)
-      throw std::logic_error(
-          "external exact field components must own dynamic boundaries in their component ABI");
-    if (plan.has_reaction)
-      throw std::logic_error(
-          "external field reaction must be carried by the component's exact operator contract");
-    if (!plan.boundary_kind.empty() &&
-        std::any_of(plan.boundary_kind.begin(), plan.boundary_kind.end(),
-                    [](const std::string& kind) { return kind != "periodic"; }))
-      throw std::logic_error(
-          "external field components currently require a fully periodic exact topology");
-    backend = std::make_unique<runtime::system::ComponentFieldSolverBackend<Dim>>(
-        std::string(component->second->provider_identity()), p_->geom, p_->ba, p_->dm,
-        p_->local_rank, topology, p_->periodicity, component->second, lane);
+  if (component != component_field_solver_providers.end()) {
+    backend = runtime::system::ComponentFieldSolverBackend<Dim>::prepare_collectively(
+        component->second->provider_identity(), p_->geom, p_->ba, p_->dm, p_->local_rank,
+        prepared_topology, p_->periodicity, component->second, lane);
   } else {
     if (configured->second.family_route == "fft") {
-      if (plan.has_reaction)
-        throw std::logic_error(
-            "FFT field solver is a constant-coefficient Poisson operator and rejects reaction");
-      if (plan.boundary_kernel)
-        throw std::logic_error(
-            "FFT field solver has a fixed periodic boundary contract and rejects dynamic kernels");
-      if (plan.newton)
-        throw std::logic_error(
-            "FFT field solver is direct linear and rejects Newton configuration");
-      for (int axis = 0; axis < Dim; ++axis) {
-        if (!p_->periodicity[static_cast<std::size_t>(axis)])
-          throw std::logic_error(
-              "FFT field solver requires periodic System topology on every axis");
-        for (int side = 0; side < 2; ++side) {
-          const std::size_t face = static_cast<std::size_t>(2 * axis + side);
-          if (operator_options.boundaries[face] != elliptic::nd::CartesianBoundaryKind::periodic)
-            throw std::logic_error(
-                "FFT field solver requires periodic exact field boundaries on every face");
-        }
-      }
       std::optional<EllipticBuildRequest<Dim>> request;
       std::exception_ptr request_error;
       try {
@@ -1313,43 +1583,49 @@ void System<Dim>::register_elliptic_field(
       backend = runtime::system::PoissonFftFieldSolverBackend<Dim>::prepare_collectively(
           std::move(*request), configured->second.exact_identity, lane);
     } else if (configured->second.family_route == "cartesian_cg") {
-      if (plan.has_reaction)
-        throw std::logic_error(
-            "configured exact Cartesian field solver does not implement a reaction operator");
-      operator_options.absolute_tolerance =
-          static_cast<Real>(configured->second.absolute_tolerance);
-      operator_options.relative_tolerance =
-          static_cast<Real>(configured->second.relative_tolerance);
-      operator_options.maximum_iterations = configured->second.maximum_iterations;
-      backend = std::make_unique<runtime::system::CartesianCgFieldSolverBackend<Dim>>(
-          p_->geom, p_->ba, p_->dm, p_->local_rank, topology, operator_options, lane,
+      backend = runtime::system::CartesianCgFieldSolverBackend<Dim>::prepare_collectively(
+          p_->geom, p_->ba, p_->dm, p_->local_rank, prepared_topology, prepared_options, lane,
           configured->second.exact_identity);
-    } else {
-      throw std::logic_error("configured exact field solver route was not decoded exactly");
     }
   }
 
-  auto prepared = std::make_shared<typename System<Dim>::Impl::exact_field_type>(
-      provider_slot, block, output, p_->geom, p_->ba, p_->dm, p_->local_rank, std::move(backend),
-      p_->sp.size(), lane, output_keys);
-  if (plan.boundary_kernel)
-    prepared->install_boundary_kernel(*plan.boundary_kernel);
-  if (plan.newton)
-    prepared->install_newton(*plan.newton);
-  const FieldNullspaceProviderSelection nullspace_selection{
-      plan.nullspace_provider_identity.empty() ? p_->default_nullspace_provider_identity_
-                                               : plan.nullspace_provider_identity,
-      plan.nullspace_provider_identity.empty() ? p_->default_nullspace_options_
-                                               : plan.nullspace_options};
-  const std::string topology_identity = plan.topology_digest.empty()
-                                            ? plan.plan_identity + ":uniform-topology"
-                                            : plan.topology_digest;
-  prepared->install_nullspace(
-      p_->prepare_uniform_field_nullspace(plan.plan_identity, topology_identity,
-                                          nullspace_selection, operator_options,
-                                          prepared->accepted_potential(), plan.has_reaction, lane),
-      PreparedVectorDistribution<Dim>::distributed());
-  p_->named_fields_.emplace(provider_slot, std::move(prepared));
+  std::shared_ptr<typename System<Dim>::Impl::exact_field_type> prepared;
+  std::optional<FieldNullspaceProviderSelection> nullspace_selection;
+  std::string topology_identity;
+  runtime::program::collective_boundary_provider_phase(
+      lane, "System named elliptic image preparation failed collectively", [&] {
+        prepared = std::make_shared<typename System<Dim>::Impl::exact_field_type>(
+            provider_slot, block, *output, p_->geom, p_->ba, p_->dm, p_->local_rank,
+            std::move(backend), blocks.blocks.size(), lane, output_keys);
+        if (plan.boundary_kernel)
+          prepared->install_boundary_kernel(*plan.boundary_kernel);
+        if (plan.newton)
+          prepared->install_newton(*plan.newton);
+        nullspace_selection.emplace(FieldNullspaceProviderSelection{
+            plan.nullspace_provider_identity.empty() ? default_nullspace_provider_identity
+                                                     : plan.nullspace_provider_identity,
+            plan.nullspace_provider_identity.empty() ? default_nullspace_options
+                                                     : plan.nullspace_options});
+        topology_identity = plan.topology_digest.empty() ? plan.plan_identity + ":uniform-topology"
+                                                         : plan.topology_digest;
+      });
+  std::optional<FieldNullspaceProviderRequest<Dim>> nullspace_request;
+  runtime::program::collective_boundary_provider_phase(
+      lane, "System named elliptic nullspace request preparation failed collectively", [&] {
+        nullspace_request.emplace(p_->prepare_uniform_field_nullspace_request(
+            plan.plan_identity, topology_identity, prepared_options, prepared->accepted_potential(),
+            plan.has_reaction));
+      });
+  PreparedFieldNullspace<Dim> prepared_nullspace =
+      p_->finish_uniform_field_nullspace(*nullspace_selection, std::move(*nullspace_request), lane);
+  runtime::program::collective_boundary_provider_phase(
+      lane, "System named elliptic nullspace installation failed collectively", [&] {
+        prepared->install_nullspace(std::move(prepared_nullspace),
+                                    PreparedVectorDistribution<Dim>::distributed());
+      });
+  runtime::program::collective_boundary_provider_phase(
+      lane, "System named elliptic publication preparation failed collectively",
+      [&] { named_fields.emplace(provider_slot, std::move(prepared)); });
 }
 
 template <int Dim>
@@ -1360,10 +1636,14 @@ void System<Dim>::set_block_elliptic_field(
   if (field.empty() || !rhs)
     throw std::invalid_argument(
         "System named elliptic RHS requires a field identity and prepared closure");
-  const int block = p_->index(block_name);
-  auto selected = p_->field_plans_.end();
+  auto* finalize = p_->native_package_finalize_candidate_;
+  auto& blocks = finalize == nullptr ? p_->blocks_ : finalize->blocks;
+  auto& field_plans = finalize == nullptr ? p_->field_plans_ : finalize->field_plans;
+  auto& named_fields = finalize == nullptr ? p_->named_fields_ : finalize->named_fields;
+  const int block = blocks.index(block_name);
+  auto selected = field_plans.end();
   Real coefficient = Real(0);
-  for (auto plan = p_->field_plans_.begin(); plan != p_->field_plans_.end(); ++plan) {
+  for (auto plan = field_plans.begin(); plan != field_plans.end(); ++plan) {
     if (plan->second.output_key != field)
       continue;
     Real candidate = Real(0);
@@ -1380,18 +1660,31 @@ void System<Dim>::set_block_elliptic_field(
     }
     if (!contributes)
       continue;
-    if (selected != p_->field_plans_.end())
+    if (selected != field_plans.end())
       throw std::runtime_error("System elliptic RHS resolves to multiple qualified provider slots");
     selected = plan;
     coefficient = candidate;
   }
-  if (selected == p_->field_plans_.end())
+  if (selected == field_plans.end())
     throw std::invalid_argument("System elliptic RHS has no resolved provider binding");
-  const auto provider = p_->named_fields_.find(selected->first);
-  if (provider == p_->named_fields_.end())
+  const auto provider = named_fields.find(selected->first);
+  if (provider == named_fields.end())
     throw std::invalid_argument("System named elliptic field is not registered: " +
                                 selected->first);
-  provider->second->add_rhs(static_cast<std::size_t>(block), std::move(rhs), coefficient);
+  if (finalize == nullptr) {
+    provider->second->add_rhs(static_cast<std::size_t>(block), std::move(rhs), coefficient);
+  } else {
+    auto image = finalize->named_field_rhs_images.find(selected->first);
+    if (image == finalize->named_field_rhs_images.end()) {
+      provider->second->add_rhs(static_cast<std::size_t>(block), std::move(rhs), coefficient);
+    } else {
+      const std::size_t block_index = static_cast<std::size_t>(block);
+      if (block_index >= image->second.size())
+        throw std::out_of_range(
+            "System detached named-field RHS block is outside its prepared image");
+      provider->second->append_rhs(image->second, block_index, std::move(rhs), coefficient);
+    }
+  }
 }
 
 template <int Dim>
@@ -1409,15 +1702,17 @@ std::string System<Dim>::last_dt_bound() const {
 
 template <int Dim>
 void System<Dim>::register_native_package(const std::string& name, const std::string& so_path,
+                                          const std::string& expected_model_identity,
+                                          const std::string& expected_binary_identity,
                                           const std::string& limiter, const std::string& riemann,
                                           const std::string& recon, const std::string& time,
                                           double gamma, int substeps, bool evolve, int stride,
                                           const std::vector<double>& params,
                                           double positivity_floor) {
   require_assembling(p_->lifecycle_, "register_native_package");
-  native_loader::register_native_package<Dim>(this, name, so_path, limiter, riemann, recon, time,
-                                              gamma, substeps, evolve, stride, params,
-                                              positivity_floor);
+  native_loader::register_native_package<Dim>(
+      this, name, so_path, expected_model_identity, expected_binary_identity, limiter, riemann,
+      recon, time, gamma, substeps, evolve, stride, params, positivity_floor);
 }
 
 template <int Dim>
@@ -1440,11 +1735,14 @@ void System<Dim>::register_external_riemann_package(
 
   auto authority = std::make_shared<runtime::program::ExternalBrickHandle>(
       so_path, brick_id, expected_nvars, expected_provider_count, expected_model_identity,
-      expected_sha256);
+      expected_sha256, true);
+  // ExternalBrickHandle is also the AMR v4 authority. System opts into the distinct v6 prepared
+  // receiver contract explicitly and rejects an old v4 System installer before manifest or
+  // staging callbacks.
 
   ExactContractBuilder exact;
   exact.text("pops.external-riemann.system-package")
-      .scalar(std::uint32_t{4})
+      .scalar(std::uint32_t{6})
       .scalar(std::int32_t{Dim})
       .text(name)
       .text(brick_id)
@@ -1472,33 +1770,44 @@ void System<Dim>::register_external_riemann_package(
     if (package.identity == identity)
       throw std::invalid_argument("System external Riemann package identity was already finalized");
 
-  std::function<void()> installer = [this, authority, name, provider_consumer_qid, limiter, recon,
-                                     time, gamma, substeps, evolve, stride, positivity_floor,
-                                     weno_epsilon] {
-    authority->install_system(this, name, provider_consumer_qid, limiter, recon, time, gamma,
-                              substeps, evolve, stride, positivity_floor, weno_epsilon);
+  auto capability = std::make_shared<runtime::system::NativePackageCapabilityState<Dim>>();
+  capability->identity = name;
+  auto registrar_capability =
+      runtime::system::NativePackageCapabilityFactory<Dim>::route_registrar(capability);
+  auto installer_capability =
+      runtime::system::NativePackageCapabilityFactory<Dim>::block_installer(capability);
+  std::function<void()> installer = [authority, installer_capability, name, provider_consumer_qid,
+                                     limiter, recon, time, gamma, substeps, evolve, stride,
+                                     positivity_floor, weno_epsilon] {
+    authority->install_system(installer_capability.get(), name, provider_consumer_qid, limiter,
+                              recon, time, gamma, substeps, evolve, stride, positivity_floor,
+                              weno_epsilon);
   };
-  std::function<void()> route_registrar = [this, authority] {
-    authority->register_system_routes(*this);
+  std::function<void()> route_registrar = [authority, capability, registrar_capability] {
+    capability->phase = runtime::system::NativeCapabilityPhase::routes_open;
+    authority->register_system_routes(*registrar_capability);
+    capability->close_routes();
   };
   stage_prepared_native_package(std::move(identity), std::move(route_registrar),
-                                std::move(installer), authority);
+                                std::move(installer), authority, std::move(capability));
 }
 
 template <int Dim>
-void System<Dim>::stage_prepared_native_package(std::string identity,
-                                                std::function<void()> route_registrar,
-                                                std::function<void()> installer,
-                                                std::shared_ptr<void> package_lifetime) {
+void System<Dim>::stage_prepared_native_package(
+    std::string identity, std::function<void()> route_registrar, std::function<void()> installer,
+    std::shared_ptr<void> package_lifetime,
+    std::shared_ptr<runtime::system::NativePackageCapabilityState<Dim>> capability) {
   stage_native_package_(std::move(identity), std::move(route_registrar), std::move(installer),
-                        std::move(package_lifetime), NativePackageKind::generic);
+                        std::move(package_lifetime), std::move(capability),
+                        NativePackageKind::generic);
 }
 
 template <int Dim>
-void System<Dim>::stage_native_package_(std::string identity, std::function<void()> route_registrar,
-                                        std::function<void()> installer,
-                                        std::shared_ptr<void> package_lifetime,
-                                        NativePackageKind kind) {
+void System<Dim>::stage_native_package_(
+    std::string identity, std::function<void()> route_registrar, std::function<void()> installer,
+    std::shared_ptr<void> package_lifetime,
+    std::shared_ptr<runtime::system::NativePackageCapabilityState<Dim>> capability,
+    NativePackageKind kind) {
   require_assembling(p_->lifecycle_, "stage_prepared_native_package");
   if (identity.empty() || !installer || !package_lifetime ||
       (kind == NativePackageKind::generic && !route_registrar))
@@ -1511,19 +1820,19 @@ void System<Dim>::stage_native_package_(std::string identity, std::function<void
   for (const auto& package : p_->installed_native_packages_)
     if (package.identity == identity)
       throw std::invalid_argument("System native package identity was already finalized");
-  p_->pending_native_packages_.push_back({std::move(package_lifetime), std::move(identity),
-                                          std::move(route_registrar), std::move(installer), kind});
+  p_->pending_native_packages_.push_back({std::move(package_lifetime), std::move(capability),
+                                          std::move(identity), std::move(route_registrar),
+                                          std::move(installer), kind});
 }
 
 template <int Dim>
 void System<Dim>::finalize_native_packages() {
   require_assembling(p_->lifecycle_, "finalize_native_packages");
-  if (native_route_registrar_active_)
-    throw std::logic_error("System native package finalization cannot be nested in a registrar");
   const ExecutionLane& lane = prepared_boundary_execution_lane();
-  std::vector<typename Impl::PendingNativePackage> packages =
-      std::move(p_->pending_native_packages_);
-  p_->pending_native_packages_.clear();
+  // Keep the package journal in its live owner until the final no-throw publication. A collective
+  // rollback can then re-arm the revocable capabilities and retry the exact same authenticated
+  // registrar/installer thunks without reallocating or losing their DSO lifetimes.
+  auto& packages = p_->pending_native_packages_;
   std::vector<std::size_t> package_order;
   std::vector<ExactOrderedBytePair> exact_packages;
   std::exception_ptr package_preparation_error;
@@ -1537,8 +1846,37 @@ void System<Dim>::finalize_native_packages() {
       return packages[left].identity < packages[right].identity;
     });
     exact_packages.reserve(packages.size());
-    for (const std::size_t index : package_order)
-      exact_packages.emplace_back("system-native-package", packages[index].identity);
+    for (const std::size_t index : package_order) {
+      const auto& package = packages[index];
+      ExactContractBuilder exact_package;
+      exact_package.text("pops.system-native-staged-package")
+          .scalar(std::uint32_t{2})
+          .text(package.identity)
+          .scalar(static_cast<std::uint8_t>(package.kind))
+          .scalar(static_cast<std::uint64_t>(package.expected_boundary_hooks.size()));
+      for (const auto& expected : package.expected_boundary_hooks) {
+        if (expected.package_identity != package.identity || expected.block.empty() ||
+            expected.hook.empty() || expected.component_contract.empty() ||
+            expected.component_authority_contract.empty())
+          throw std::logic_error(
+              "prepared boundary package has an incomplete exact staged hook contract");
+        exact_package.text(expected.package_identity)
+            .text(expected.block)
+            .text(expected.hook)
+            .bytes(expected.component_contract)
+            .bytes(expected.component_authority_contract);
+      }
+      if (package.kind == NativePackageKind::generic) {
+        if (!package.capability || !package.expected_boundary_hooks.empty())
+          throw std::logic_error("generic native package has an invalid staged capability image");
+      } else if (package.kind == NativePackageKind::prepared_boundary) {
+        if (package.capability || package.expected_boundary_hooks.empty())
+          throw std::logic_error("prepared boundary package has an invalid staged hook image");
+      } else {
+        throw std::logic_error("System native package kind is invalid");
+      }
+      exact_packages.emplace_back("system-native-package", std::move(exact_package).release());
+    }
   } catch (...) {
     package_preparation_error = std::current_exception();
   }
@@ -1549,6 +1887,24 @@ void System<Dim>::finalize_native_packages() {
   }
   if (!all_ranks_agree_exact_ordered_byte_pairs(exact_packages, lane))
     throw std::runtime_error("System staged native packages differ across MPI ranks");
+
+  std::vector<ExactOrderedBytePair> exact_field_inputs;
+  std::exception_ptr field_input_error;
+  try {
+    exact_field_inputs.emplace_back("system-field-plan-registry",
+                                    p_->field_plan_registry_contract());
+    exact_field_inputs.emplace_back("system-staged-native-field-outputs",
+                                    p_->staged_native_field_output_contract());
+  } catch (...) {
+    field_input_error = std::current_exception();
+  }
+  if (all_reduce_max(field_input_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && field_input_error)
+      std::rethrow_exception(field_input_error);
+    throw std::runtime_error("System native field input witness preparation failed collectively");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(exact_field_inputs, lane))
+    throw std::runtime_error("System native field inputs differ across MPI ranks");
 
   // Reserve publication storage before an installer can publish a live hook. The later move-only
   // publication is therefore allocation-free and retains every DSO owner until rollback has
@@ -1565,10 +1921,11 @@ void System<Dim>::finalize_native_packages() {
     throw std::runtime_error("System native package publication storage failed collectively");
   }
 
+  std::optional<typename Impl::NativePackageFinalizeSnapshot> rollback_snapshot;
   std::optional<typename Impl::NativePackageFinalizeSnapshot> snapshot;
   std::exception_ptr snapshot_error;
   try {
-    snapshot.emplace(*p_);
+    rollback_snapshot.emplace(*p_);
   } catch (...) {
     snapshot_error = std::current_exception();
   }
@@ -1580,19 +1937,23 @@ void System<Dim>::finalize_native_packages() {
 
   std::exception_ptr failure;
   try {
-    // Registrars mutate only the snapshotted candidate image.  Complete each rank-local registrar
-    // phase collectively before the sole global seal validates and publishes the aggregate graph.
+    // Native callbacks write one detached aggregate; the live registry remains untouched until all
+    // package-local work and the exact witness have converged.
+    auto registry_candidate =
+        std::make_shared<runtime::system::ExactAuxiliaryRegistry<Dim>>(p_->auxiliary_registry_);
     for (const std::size_t index : package_order) {
       const auto& package = packages[index];
       std::exception_ptr local_error;
       try {
-        native_route_registrar_active_ = true;
+        if (package.kind == NativePackageKind::generic) {
+          if (!package.capability)
+            throw std::logic_error("generic native package has no capability state");
+          package.capability->detached_registry = registry_candidate;
+        }
         if (package.register_routes)
           pops::dynlib::invoke_with_host_exception(package.register_routes,
                                                    "pops_register_provider_routes");
-        native_route_registrar_active_ = false;
       } catch (...) {
-        native_route_registrar_active_ = false;
         local_error = std::current_exception();
       }
       if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
@@ -1602,15 +1963,86 @@ void System<Dim>::finalize_native_packages() {
                                  package.identity);
       }
     }
-    seal_auxiliary_providers_(lane.communicator());
+    // The carrier object has stable address/lifetime for every generated closure. Its complete
+    // candidate value is prepared before the transaction exposes that value to package callbacks.
+    auto published_carrier_owner = p_->provider_carrier_;
+    std::optional<runtime::system::AuxiliaryStorageGroups<Dim>> carrier_candidate;
+    std::exception_ptr registry_prepare_error;
+    try {
+      registry_candidate->seal();
+      if (registry_candidate->slot_count() != 0) {
+        if (!published_carrier_owner)
+          published_carrier_owner =
+              std::make_shared<runtime::system::AuxiliaryStorageGroups<Dim>>();
+        carrier_candidate.emplace();
+        for (const auto& group : registry_candidate->storage_groups()) {
+          Extent<Dim> ghosts{};
+          for (int axis = 0; axis < Dim; ++axis)
+            ghosts[axis] = group.shape.halo[axis];
+          carrier_candidate->groups.emplace(
+              group.identity, MultiFab<Dim>(p_->ba, p_->dm, p_->local_rank,
+                                            static_cast<int>(group.component_count), ghosts));
+        }
+      }
+    } catch (...) {
+      registry_prepare_error = std::current_exception();
+    }
+    if (all_reduce_max(registry_prepare_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && registry_prepare_error)
+        std::rethrow_exception(registry_prepare_error);
+      throw std::runtime_error(
+          "System detached auxiliary registry preparation failed collectively");
+    }
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{"system-auxiliary-registry", registry_candidate->collective_contract()}}, lane))
+      throw std::runtime_error("System detached auxiliary registry differs across MPI ranks");
+
+    // This assembling-only transaction makes the exact candidate executable for generated package
+    // and boundary dependency preflight. No user/runtime callback can enter concurrently. Failure
+    // restores the previous value image from rollback_snapshot before any DSO owner is released;
+    // success retains this exact image without a second carrier publication.
+    if (carrier_candidate) {
+      static_assert(std::is_nothrow_swappable_v<runtime::system::AuxiliaryStorageGroups<Dim>>);
+      std::swap(*published_carrier_owner, *carrier_candidate);
+    }
+
+    // Freeze the complete live image before any installer runs. Generic packages first commit
+    // their typed candidates; host materialization then extends this detached snapshot, and only
+    // afterwards may prepared-boundary installers read or mutate its hook values.
+    std::exception_ptr candidate_snapshot_error;
+    try {
+      snapshot.emplace(*p_);
+    } catch (...) {
+      candidate_snapshot_error = std::current_exception();
+    }
+    if (all_reduce_max(candidate_snapshot_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && candidate_snapshot_error)
+        std::rethrow_exception(candidate_snapshot_error);
+      throw std::runtime_error(
+          "System native package detached image preparation failed collectively");
+    }
+
     for (const std::size_t index : package_order) {
       const auto& package = packages[index];
+      if (package.kind != NativePackageKind::generic)
+        continue;
       std::exception_ptr local_error;
       try {
+        auto& state = *package.capability;
+        state.require(runtime::system::NativeCapabilityPhase::routes_closed,
+                      "begin native package install");
+        state.geometry.emplace(p_->geom);
+        state.periodicity = p_->periodicity;
+        state.provider_storage_owner = published_carrier_owner;
+        state.phase = runtime::system::NativeCapabilityPhase::install_open;
         pops::dynlib::invoke_with_host_exception(package.install, "pops_install_native");
+        if (!package.capability->commit_called || !package.capability->committed)
+          throw std::logic_error(
+              "System native package installer did not commit one complete candidate");
       } catch (...) {
         local_error = std::current_exception();
       }
+      package.capability->revoke();
       if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
         if (lane.size() == 1 && local_error)
           std::rethrow_exception(local_error);
@@ -1618,7 +2050,309 @@ void System<Dim>::finalize_native_packages() {
                                  package.identity);
       }
     }
+    std::vector<std::string> committed_contracts;
+    std::vector<ExactOrderedBytePair> committed_witnesses;
+    std::exception_ptr committed_witness_error;
+    try {
+      committed_contracts.reserve(package_order.size());
+      committed_witnesses.reserve(package_order.size());
+      for (const std::size_t index : package_order) {
+        const auto& package = packages[index];
+        if (package.kind != NativePackageKind::generic)
+          continue;
+        committed_contracts.push_back(
+            runtime::system::exact_native_system_package_contract(*package.capability->committed));
+        committed_witnesses.emplace_back("system-native-committed-package",
+                                         committed_contracts.back());
+      }
+    } catch (...) {
+      committed_witness_error = std::current_exception();
+    }
+    if (all_reduce_max(committed_witness_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && committed_witness_error)
+        std::rethrow_exception(committed_witness_error);
+      throw std::runtime_error(
+          "System committed native package witness preparation failed collectively");
+    }
+    if (!all_ranks_agree_exact_ordered_byte_pairs(committed_witnesses, lane))
+      throw std::runtime_error("System committed native package differs across MPI ranks");
+    // Materialize every host-owned block and elliptic/backend image into the detached candidate.
+    // No live registry, carrier, block, boundary, or field image is reachable through the
+    // preparation helpers below.
+    snapshot->auxiliary_registry.swap_complete(*registry_candidate);
+    snapshot->provider_carrier_owner = published_carrier_owner;
+    snapshot->auxiliary_registry_consensus_verified = true;
+    p_->native_package_finalize_candidate_ = &*snapshot;
+    for (const std::size_t index : package_order) {
+      const auto& package = packages[index];
+      if (package.kind != NativePackageKind::generic)
+        continue;
+      std::exception_ptr block_error;
+      try {
+        auto candidate = prepare_block_installation<Dim>(
+            *p_, snapshot->auxiliary_registry, snapshot->blocks, snapshot->boundary_registry,
+            package.capability->committed->consumer_qid,
+            std::move(package.capability->committed->block));
+        snapshot->blocks.blocks.push_back(std::move(candidate.block));
+        snapshot->append_boundary_hook_image(snapshot->blocks.blocks.back());
+        if (candidate.converted_boundary)
+          snapshot->boundary_registry.boundary(candidate.name).authority =
+              std::move(candidate.converted_boundary);
+      } catch (...) {
+        block_error = std::current_exception();
+      }
+      if (all_reduce_max(block_error ? 1L : 0L, lane) != 0) {
+        if (lane.size() == 1 && block_error)
+          std::rethrow_exception(block_error);
+        throw std::runtime_error("System native block preparation failed collectively: " +
+                                 package.identity);
+      }
+    }
+
+    // Field plans and provider-bound output payloads were prepared before finalization and already
+    // agree exactly on this lane. Materialize each backend once, against the complete detached block
+    // and auxiliary image, before any package-owned RHS closure is attached.
+    for (const auto& [slot, output] : snapshot->staged_native_field_outputs) {
+      std::exception_ptr field_output_error;
+      try {
+        const auto plan = snapshot->field_plans.find(slot);
+        if (plan == snapshot->field_plans.end() || output.block != plan->second.output_block ||
+            output.field != plan->second.output_key)
+          throw std::logic_error(
+              "System detached native field output differs from its exact field plan");
+        register_elliptic_field(output.block, output.field, output.output_keys,
+                                output.gradient_sign);
+      } catch (...) {
+        field_output_error = std::current_exception();
+      }
+      if (all_reduce_max(field_output_error ? 1L : 0L, lane) != 0) {
+        if (lane.size() == 1 && field_output_error)
+          std::rethrow_exception(field_output_error);
+        throw std::runtime_error("System native field output failed collectively: " + slot);
+      }
+    }
+
+    std::set<std::pair<std::string, std::string>> expected_field_attachments;
+    std::exception_ptr expected_field_error;
+    try {
+      for (const auto& [slot, plan] : snapshot->field_plans)
+        for (const typename Impl::FieldProviderBinding& binding : plan.providers)
+          expected_field_attachments.emplace(slot, binding.block);
+    } catch (...) {
+      expected_field_error = std::current_exception();
+    }
+    if (all_reduce_max(expected_field_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && expected_field_error)
+        std::rethrow_exception(expected_field_error);
+      throw std::runtime_error("System exact field attachment preparation failed collectively");
+    }
+    for (const std::size_t index : package_order) {
+      const auto& package = packages[index];
+      if (package.kind != NativePackageKind::generic)
+        continue;
+      auto& candidate = *package.capability->committed;
+      for (auto& attachment : candidate.elliptic_attachments) {
+        std::exception_ptr field_error;
+        try {
+          auto selected = snapshot->field_plans.end();
+          for (auto plan = snapshot->field_plans.begin(); plan != snapshot->field_plans.end();
+               ++plan) {
+            if (plan->second.output_key != attachment.field)
+              continue;
+            const bool contributes =
+                std::any_of(plan->second.providers.begin(), plan->second.providers.end(),
+                            [&](const typename Impl::FieldProviderBinding& binding) {
+                              return binding.block == package.capability->identity;
+                            });
+            if (!contributes)
+              continue;
+            if (selected != snapshot->field_plans.end())
+              throw std::logic_error(
+                  "System native elliptic attachment resolves to multiple field plans");
+            selected = plan;
+          }
+          if (selected == snapshot->field_plans.end())
+            throw std::logic_error("System native elliptic attachment has no resolved field plan");
+          const auto staged = snapshot->staged_native_field_outputs.find(selected->first);
+          if (staged == snapshot->staged_native_field_outputs.end() ||
+              staged->second.gradient_sign != attachment.gradient_sign ||
+              (!attachment.outputs.empty() && staged->second.output_keys != attachment.outputs))
+            throw std::logic_error(
+                "System native elliptic attachment differs from its staged output contract");
+          if (!expected_field_attachments.erase({selected->first, package.capability->identity}))
+            throw std::logic_error(
+                "System native elliptic attachment is duplicate or was not required");
+          set_block_elliptic_field(package.capability->identity, attachment.field,
+                                   std::move(attachment.rhs));
+        } catch (...) {
+          field_error = std::current_exception();
+        }
+        if (all_reduce_max(field_error ? 1L : 0L, lane) != 0) {
+          if (lane.size() == 1 && field_error)
+            std::rethrow_exception(field_error);
+          throw std::runtime_error("System native elliptic attachment failed collectively: " +
+                                   attachment.rhs_identity);
+        }
+      }
+    }
+    const long missing_field_attachments = expected_field_attachments.empty() ? 0L : 1L;
+    if (all_reduce_max(missing_field_attachments, lane) != 0)
+      throw std::runtime_error(
+          "System native packages collectively omitted a required exact field RHS attachment");
+
+    // Prepared-boundary packages are deliberately last: every generic package has already become
+    // one complete block/field candidate. Their installers can only extend the detached hook
+    // values above and cannot observe or mutate the live System block store.
+    const std::size_t boundary_contract_begin = snapshot->prepared_boundary_hook_contracts.size();
+    for (const std::size_t index : package_order) {
+      const auto& package = packages[index];
+      if (package.kind != NativePackageKind::prepared_boundary)
+        continue;
+      std::exception_ptr boundary_error;
+      try {
+        pops::dynlib::invoke_with_host_exception(package.install,
+                                                 "prepared System boundary installer");
+      } catch (...) {
+        boundary_error = std::current_exception();
+      }
+      if (all_reduce_max(boundary_error ? 1L : 0L, lane) != 0) {
+        if (lane.size() == 1 && boundary_error)
+          std::rethrow_exception(boundary_error);
+        throw std::runtime_error("System prepared boundary installer failed collectively: " +
+                                 package.identity);
+      }
+      for (const auto& expected : package.expected_boundary_hooks)
+        snapshot->publish_boundary_hook_noexcept(expected.block, expected.hook);
+    }
+
+    std::exception_ptr boundary_witness_error;
+    try {
+      std::set<std::string> expected_packages;
+      std::vector<typename Impl::PreparedBoundaryHookContract> expected_hooks;
+      for (const std::size_t index : package_order) {
+        const auto& package = packages[index];
+        if (package.kind != NativePackageKind::prepared_boundary)
+          continue;
+        if (package.expected_boundary_hooks.empty())
+          throw std::logic_error(
+              "System prepared boundary package has no exact staged hook contract");
+        expected_packages.insert(package.identity);
+        for (const auto& expected : package.expected_boundary_hooks) {
+          if (expected.package_identity != package.identity)
+            throw std::logic_error(
+                "System prepared boundary staged hook differs from its package identity");
+          expected_hooks.push_back(expected);
+        }
+      }
+      const std::size_t boundary_contract_count =
+          snapshot->prepared_boundary_hook_contracts.size() - boundary_contract_begin;
+      if (boundary_contract_count != expected_hooks.size() ||
+          !std::equal(expected_hooks.begin(), expected_hooks.end(),
+                      snapshot->prepared_boundary_hook_contracts.begin() +
+                          static_cast<std::ptrdiff_t>(boundary_contract_begin)))
+        throw std::logic_error(
+            "System prepared boundary installers differ from their exact staged hook contracts");
+      std::set<std::string> materialized_packages;
+      std::set<std::tuple<std::string, std::string, std::string, std::string, std::string>>
+          exact_hooks;
+      for (std::size_t index = boundary_contract_begin;
+           index < snapshot->prepared_boundary_hook_contracts.size(); ++index) {
+        const auto& record = snapshot->prepared_boundary_hook_contracts[index];
+        if (!expected_packages.contains(record.package_identity) || record.block.empty() ||
+            record.component_contract.empty() || record.component_authority_contract.empty())
+          throw std::logic_error(
+              "System prepared boundary installer published an unexpected hook contract");
+        auto& hook = snapshot->boundary_hook(record.block);
+        const bool callable =
+            (record.hook == "ghost" && hook.ghost_target && *hook.ghost_target) ||
+            (record.hook == "flux" && hook.flux_target && *hook.flux_target) ||
+            (record.hook == "field-residual" && hook.residual_target && *hook.residual_target) ||
+            (record.hook == "field-jvp" && hook.jvp_target && *hook.jvp_target);
+        if (!callable ||
+            !exact_hooks
+                 .emplace(record.package_identity, record.block, record.hook,
+                          record.component_contract, record.component_authority_contract)
+                 .second)
+          throw std::logic_error(
+              "System prepared boundary hook contract is duplicate or not callable");
+        materialized_packages.insert(record.package_identity);
+      }
+      if (materialized_packages != expected_packages)
+        throw std::logic_error(
+            "System prepared boundary packages did not materialize their exact hook contracts");
+    } catch (...) {
+      boundary_witness_error = std::current_exception();
+    }
+    if (all_reduce_max(boundary_witness_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && boundary_witness_error)
+        std::rethrow_exception(boundary_witness_error);
+      throw std::runtime_error("System prepared boundary hook witness failed collectively");
+    }
+
+    std::string materialized_contract;
+    std::exception_ptr materialized_error;
+    try {
+      ExactContractBuilder materialized;
+      materialized.text("pops.system-native-materialized-candidate")
+          .scalar(std::uint32_t{2})
+          .bytes(snapshot->auxiliary_registry.collective_contract())
+          .scalar(static_cast<std::uint64_t>(snapshot->blocks.blocks.size()));
+      for (std::size_t index = 0; index < snapshot->blocks.blocks.size(); ++index) {
+        const auto& block = snapshot->blocks.blocks[index];
+        const auto& hook = snapshot->boundary_hooks[index];
+        materialized.text(block.name)
+            .text(block.state_identity)
+            .scalar(std::int32_t{block.ncomp})
+            .scalar(std::int32_t{block.substeps})
+            .scalar(block.evolve)
+            .scalar(std::int32_t{block.stride})
+            .presence(static_cast<bool>(block.boundary))
+            .presence(hook.ghost_target && static_cast<bool>(*hook.ghost_target))
+            .presence(hook.flux_target && static_cast<bool>(*hook.flux_target))
+            .presence(hook.residual_target && static_cast<bool>(*hook.residual_target))
+            .presence(hook.jvp_target && static_cast<bool>(*hook.jvp_target));
+      }
+      materialized.scalar(
+          static_cast<std::uint64_t>(snapshot->prepared_boundary_hook_contracts.size()));
+      for (const auto& record : snapshot->prepared_boundary_hook_contracts)
+        materialized.text(record.package_identity)
+            .text(record.block)
+            .text(record.hook)
+            .bytes(record.component_contract)
+            .bytes(record.component_authority_contract);
+      materialized.scalar(static_cast<std::uint64_t>(snapshot->named_fields.size()));
+      for (const auto& [slot, field] : snapshot->named_fields) {
+        if (!field)
+          throw std::logic_error("System detached native field candidate is null");
+        materialized.text(slot)
+            .text(field->identity())
+            .text(field->output_block())
+            .text(field->solver_provider_identity())
+            .scalar(static_cast<std::uint64_t>(field->output_keys().size()));
+        for (const auto& key : field->output_keys())
+          materialized.text(key.exact_key());
+      }
+      materialized_contract = std::move(materialized).release();
+    } catch (...) {
+      materialized_error = std::current_exception();
+    }
+    if (all_reduce_max(materialized_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && materialized_error)
+        std::rethrow_exception(materialized_error);
+      throw std::runtime_error(
+          "System materialized native candidate witness preparation failed collectively");
+    }
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{"system-native-materialized-candidate", materialized_contract}}, lane))
+      throw std::runtime_error("System materialized native candidate differs across MPI ranks");
+    snapshot->staged_native_field_outputs.clear();
+    p_->native_package_finalize_candidate_ = nullptr;
   } catch (...) {
+    p_->native_package_finalize_candidate_ = nullptr;
+    for (auto& package : packages)
+      if (package.kind == NativePackageKind::generic && package.capability &&
+          !package.capability->revoke_called)
+        package.capability->revoke();
     // Sealing can copy DSO-owned launcher managers. Normalize even indirect package exceptions
     // while every package lifetime is still retained by ``packages``.
     try {
@@ -1631,13 +2365,35 @@ void System<Dim>::finalize_native_packages() {
 
   const long failed = failure ? 1L : 0L;
   if (all_reduce_max(failed, lane) != 0) {
-    // Every rank restores the same pre-finalization image.  ``packages`` then drops its DSO owners,
-    // so no failed package code can remain reachable from the restored System.
-    snapshot->restore_noexcept(*p_);
+    rollback_snapshot->restore_noexcept(*p_);
+    for (auto& package : packages)
+      if (package.kind == NativePackageKind::generic && package.capability)
+        package.capability->reset_for_retry();
     if (lane.size() == 1 && failure)
       std::rethrow_exception(failure);
     throw std::runtime_error("System native package finalization rolled back collectively");
   }
+
+  // All fallible work and exact-lane witnesses are complete. Publication is swaps/moves of already
+  // allocated owners only, and cannot expose a partially committed native package.
+  p_->auxiliary_registry_.swap_complete(snapshot->auxiliary_registry);
+  if (p_->auxiliary_registry_.slot_count() != 0) {
+    if (!snapshot->provider_carrier_owner)
+      std::terminate();
+    p_->provider_carrier_ = std::move(snapshot->provider_carrier_owner);
+  } else {
+    if (p_->provider_carrier_)
+      std::terminate();
+  }
+  p_->auxiliary_registry_consensus_verified_ = true;
+  p_->blocks_.blocks.swap(snapshot->blocks.blocks);
+  p_->prepared_boundary_hook_contracts_.swap(snapshot->prepared_boundary_hook_contracts);
+  static_assert(std::is_nothrow_swappable_v<typename Impl::boundary_registry_type>);
+  std::swap(p_->boundary_registry_, snapshot->boundary_registry);
+  snapshot->publish_named_field_rhs_noexcept();
+  p_->named_fields_.swap(snapshot->named_fields);
+  p_->staged_native_field_outputs_.swap(snapshot->staged_native_field_outputs);
+  p_->field_plan_consensus_verified_ = true;
 
   p_->publish_reserved_native_packages_noexcept(packages);
 }
@@ -2042,16 +2798,15 @@ template void System<kNativeDimension>::add_dt_bound(const std::string&, std::fu
 template std::string System<kNativeDimension>::last_dt_bound() const;
 template void System<kNativeDimension>::register_native_package(
     const std::string&, const std::string&, const std::string&, const std::string&,
-    const std::string&, const std::string&, double, int, bool, int, const std::vector<double>&,
-    double);
+    const std::string&, const std::string&, const std::string&, const std::string&, double, int,
+    bool, int, const std::vector<double>&, double);
 template void System<kNativeDimension>::register_external_riemann_package(
     const std::string&, const std::string&, const std::string&, const std::string&, int, int,
     const std::string&, const std::string&, const std::string&, const std::string&,
     const std::string&, double, int, bool, int, double, double);
-template void System<kNativeDimension>::stage_prepared_native_package(std::string,
-                                                                      std::function<void()>,
-                                                                      std::function<void()>,
-                                                                      std::shared_ptr<void>);
+template void System<kNativeDimension>::stage_prepared_native_package(
+    std::string, std::function<void()>, std::function<void()>, std::shared_ptr<void>,
+    std::shared_ptr<runtime::system::NativePackageCapabilityState<kNativeDimension>>);
 template void System<kNativeDimension>::finalize_native_packages();
 template void System<kNativeDimension>::add_coupled_source(const CoupledSourceProgram&, double,
                                                            const std::string&);

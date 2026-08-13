@@ -218,6 +218,8 @@ class Spatial:
                 **({
                     "external_library_sha256": self.external_flux_library_sha256,
                     "external_abi_key": self.external_flux_abi_key,
+                    "external_system_abi_version": self.external_flux_system_abi_version,
+                    "external_system_abi_key": self.external_flux_system_abi_key,
                     "external_native_abi_key": self.external_flux_native_abi_key,
                     "external_model_identity": self.external_flux_model_identity,
                     "external_dimension": self.external_flux_dimension,
@@ -306,6 +308,8 @@ class Spatial:
         self.external_flux_library_path = None
         self.external_flux_library_sha256 = None
         self.external_flux_abi_key = None
+        self.external_flux_system_abi_version = None
+        self.external_flux_system_abi_key = None
         self.external_flux_native_abi_key = None
         self.external_flux_model_identity = None
         self.external_flux_dimension = None
@@ -317,8 +321,8 @@ class Spatial:
                 self.external_flux_id = getattr(flux, "name", None)
                 options = getattr(flux, "options", None)
                 required = {
-                    "library_path", "library_sha256", "abi_version", "abi_key", "native_abi_key",
-                    "supported_layouts",
+                    "library_path", "library_sha256", "abi_version", "abi_key",
+                    "system_abi_version", "system_abi_key", "native_abi_key", "supported_layouts",
                     "model_identity",
                     "dimension", "n_vars", "provider_count",
                 }
@@ -336,6 +340,21 @@ class Spatial:
                 )
                 if options["abi_version"] != 4 or options["abi_key"] != expected_abi_key:
                     raise ValueError("external Riemann descriptor carries an incompatible ABI")
+                expected_system_abi_key = (
+                    "pops.external-riemann.system/v6;receiver=prepared-native-package;"
+                    "providers=qualified;dim=%s" % dimension
+                )
+                system_version = options["system_abi_version"]
+                system_key = options["system_abi_key"]
+                if (system_version is None) != (system_key is None):
+                    raise ValueError(
+                        "external Riemann descriptor carries an incomplete System ABI"
+                    )
+                if (system_version is not None
+                        and (system_version != 6 or system_key != expected_system_abi_key)):
+                    raise ValueError(
+                        "external Riemann descriptor carries an incompatible System v6 ABI"
+                    )
                 if (
                     type(dimension) is not int or dimension not in (1, 2, 3)
                     or type(n_vars) is not int or n_vars < 1
@@ -348,6 +367,8 @@ class Spatial:
                 self.external_flux_library_path = options["library_path"]
                 self.external_flux_library_sha256 = options["library_sha256"]
                 self.external_flux_abi_key = options["abi_key"]
+                self.external_flux_system_abi_version = system_version
+                self.external_flux_system_abi_key = options["system_abi_key"]
                 self.external_flux_native_abi_key = options["native_abi_key"]
                 self.external_flux_supported_layouts = tuple(options["supported_layouts"])
                 self.external_flux_model_identity = options["model_identity"]

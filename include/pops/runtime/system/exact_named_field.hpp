@@ -17,6 +17,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -160,18 +161,37 @@ class ExactNamedField final {
     if (prepared.provider_identity.empty() || prepared.provider_version == 0 ||
         prepared.exact_prepared_contract.empty())
       throw std::invalid_argument("named-field nullspace lacks an exact prepared authority");
-    solver_->install_nullspace(prepared.plan, std::move(distribution));
+    solver_->install_nullspace(std::move(prepared.plan), std::move(distribution));
     prepared_nullspace_ = std::move(prepared);
+  }
+
+  using rhs_image_type = std::vector<std::vector<PreparedRhs>>;
+
+  static void append_rhs(rhs_image_type& image, std::size_t block, rhs_type rhs, Real coefficient) {
+    if (block >= image.size())
+      throw std::out_of_range("named-field RHS block index is outside the prepared registry");
+    if (!rhs || !std::isfinite(static_cast<double>(coefficient)))
+      throw std::invalid_argument("named-field RHS provider or coefficient is invalid");
+    image[block].push_back({std::move(rhs), coefficient});
   }
 
   void add_rhs(std::size_t block, rhs_type rhs, Real coefficient) {
     if (active_)
       throw std::logic_error("cannot add a named-field RHS while a solve is active");
-    if (block >= rhs_by_block_.size())
-      throw std::out_of_range("named-field RHS block index is outside the prepared registry");
-    if (!rhs || !std::isfinite(static_cast<double>(coefficient)))
-      throw std::invalid_argument("named-field RHS provider or coefficient is invalid");
-    rhs_by_block_[block].push_back({std::move(rhs), coefficient});
+    append_rhs(rhs_by_block_, block, std::move(rhs), coefficient);
+  }
+
+  [[nodiscard]] rhs_image_type rhs_image() const {
+    if (active_)
+      throw std::logic_error("cannot snapshot a named-field RHS while a solve is active");
+    return rhs_by_block_;
+  }
+
+  void publish_rhs_image(rhs_image_type& candidate) noexcept {
+    static_assert(std::is_nothrow_swappable_v<rhs_image_type>);
+    if (active_ || candidate.size() != rhs_by_block_.size())
+      std::terminate();
+    rhs_by_block_.swap(candidate);
   }
 
   SolveReport solve_candidate(

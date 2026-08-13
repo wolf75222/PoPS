@@ -36,7 +36,7 @@ from pops.codegen.compile_provenance import (
     write_artifact_sidecar,
 )
 from pops.codegen.abi import _abi_key_python
-from pops.codegen._compile_emit import emit_cpp_native_loader
+from pops.codegen._compile_emit import emit_cpp_native_loader, model_hash
 from pops.codegen._backends import lower_backend
 from pops.codegen._compile_command_redact import _redact_compile_command  # noqa: F401
 from pops.codegen.compile_link_flags import deterministic_program_link_flags
@@ -47,7 +47,7 @@ from pops.codegen.module_lowering import _module_to_model  # noqa: F401
 
 def compile_native(model: Any, so_path: Any, include: Any = None, name: Any = None, cxx: Any = None,
                    std: Any = "c++23", target: Any = "system",
-                   hoist_reciprocals: Any = False) -> Any:
+                   hoist_reciprocals: Any = False, model_identity: Any = None) -> Any:
     """Backend "production": generate the NATIVE LOADER (emit_cpp_native_loader)
     and compile it into a .so loadable by System.add_native_block
     (target="system") or AmrSystem.add_native_block (target="amr_system").
@@ -61,7 +61,9 @@ def compile_native(model: Any, so_path: Any, include: Any = None, name: Any = No
     sig = _check_headers_match_module(include)
     _warn_kokkos_parity()
     src = emit_cpp_native_loader(model, name=name, target=target,
-                                 hoist_reciprocals=hoist_reciprocals)
+                                 hoist_reciprocals=hoist_reciprocals,
+                                 model_identity=(model_hash(model) if model_identity is None
+                                                 else model_identity))
     cc, native_compile_flags, native_link_flags = pops_loader_build_flags(cxx)
     if not cc:
         raise RuntimeError(
@@ -104,7 +106,7 @@ def compile_native(model: Any, so_path: Any, include: Any = None, name: Any = No
 def compile_model(model: Any, so_path: Any = None, include: Any = None, backend: Any = "production",
                   name: Any = None, cxx: Any = None, std: Any = None,
                   require_metadata: Any = False, target: Any = "system",
-                  hoist_reciprocals: Any = False) -> Any:
+                  hoist_reciprocals: Any = False, model_identity: Any = None) -> Any:
     """Compilation facade by INTENTION: compiles *model* (a ``HyperbolicModel``)
     into a native fixed-ABI package and returns its path.
 
@@ -140,7 +142,8 @@ def compile_model(model: Any, so_path: Any = None, include: Any = None, backend:
 
     def _compile_and_authenticate(path: Any, destination: Any = None) -> Any:
         out_path = compile_native(m, path, include, name=name, cxx=cxx, std=std,
-                                  target=target, hoist_reciprocals=hoist_reciprocals)
+                                  target=target, hoist_reciprocals=hoist_reciprocals,
+                                  model_identity=model_identity)
         if destination is None:
             write_artifact_sidecar(
                 out_path, semantic_identity=semantic_identity, spec_identity=spec_identity)

@@ -219,6 +219,8 @@ void copy_component(const MultiFab<Dim>& source, int source_component, MultiFab<
 /// communicator lane as the rest of the native mesh runtime.
 template <int Dim>
 class CartesianPoissonSolver {
+  struct DeferCollectivePreparation {};
+
  public:
   using field_type = MultiFab<Dim>;
 
@@ -226,6 +228,69 @@ class CartesianPoissonSolver {
                          const mesh::Distribution<Dim>& distribution, Index<Dim> local_rank,
                          BoundaryTopology<Dim> topology, CartesianPoissonOptions<Dim> options,
                          const ExecutionLane& lane)
+      : CartesianPoissonSolver(geometry, layout, distribution, local_rank, std::move(topology),
+                               std::move(options), lane, DeferCollectivePreparation{}) {
+    finish_preparation_collectively(lane);
+  }
+
+  /// Construct every rank-local allocation and validate the operator without entering a
+  /// collective. The caller must converge construction failures on @p lane before calling
+  /// finish_preparation_collectively().
+  static CartesianPoissonSolver prepare_local(const Geometry<Dim>& geometry,
+                                              const mesh::BoxArray<Dim>& layout,
+                                              const mesh::Distribution<Dim>& distribution,
+                                              Index<Dim> local_rank, BoundaryTopology<Dim> topology,
+                                              CartesianPoissonOptions<Dim> options,
+                                              const ExecutionLane& lane) {
+    return CartesianPoissonSolver(geometry, layout, distribution, local_rank, std::move(topology),
+                                  std::move(options), lane, DeferCollectivePreparation{});
+  }
+
+  /// Complete only the collective transport phases after prepare_local() succeeded everywhere.
+  void finish_preparation_collectively(const ExecutionLane& lane) {
+    if (&lane != lane_)
+      throw std::invalid_argument("Cartesian Poisson preparation lane changed");
+    const bool distributed_halo = all_reduce_max(schedule_.has_remote_jobs() ? 1L : 0L, lane) != 0;
+    if (!distributed_halo)
+      return;
+    void* storage = nullptr;
+    std::exception_ptr allocation_error;
+    try {
+      storage = ::operator new(sizeof(HaloExchange<Dim>));
+    } catch (...) {
+      allocation_error = std::current_exception();
+    }
+    if (all_reduce_max(allocation_error ? 1L : 0L, lane) != 0) {
+      ::operator delete(storage);
+      if (lane.size() == 1 && allocation_error)
+        std::rethrow_exception(allocation_error);
+      throw std::runtime_error("Cartesian Poisson halo allocation failed collectively");
+    }
+    HaloExchangeContext context{};
+    context.context_generation = 1;
+    context.schedule_generation = 1;
+    HaloExchange<Dim>* prepared_exchange = nullptr;
+    std::exception_ptr construction_error;
+    try {
+      prepared_exchange = ::new (storage) HaloExchange<Dim>(schedule_, lane, context);
+    } catch (...) {
+      ::operator delete(storage);
+      construction_error = std::current_exception();
+    }
+    if (all_reduce_max(construction_error ? 1L : 0L, lane) != 0) {
+      delete prepared_exchange;
+      if (lane.size() == 1 && construction_error)
+        std::rethrow_exception(construction_error);
+      throw std::runtime_error("Cartesian Poisson halo preparation failed collectively");
+    }
+    exchange_.reset(prepared_exchange);
+  }
+
+ private:
+  CartesianPoissonSolver(const Geometry<Dim>& geometry, const mesh::BoxArray<Dim>& layout,
+                         const mesh::Distribution<Dim>& distribution, Index<Dim> local_rank,
+                         BoundaryTopology<Dim> topology, CartesianPoissonOptions<Dim> options,
+                         const ExecutionLane& lane, DeferCollectivePreparation)
       : geometry_(geometry),
         topology_(topology),
         options_(options),
@@ -239,26 +304,10 @@ class CartesianPoissonSolver {
                                         detail::exact_halo_budget(layout, geometry.domain(), 1))),
         lane_(&lane),
         lane_borrow_(lane.borrow_immutably()) {
-    std::exception_ptr validation_error;
-    try {
-      validate_options_();
-    } catch (...) {
-      validation_error = std::current_exception();
-    }
-    if (all_reduce_max(validation_error ? 1L : 0L, lane) != 0) {
-      if (lane.size() == 1 && validation_error)
-        std::rethrow_exception(validation_error);
-      throw std::runtime_error("Cartesian Poisson preparation failed collectively");
-    }
-    const bool distributed_halo = all_reduce_max(schedule_.has_remote_jobs() ? 1L : 0L, lane) != 0;
-    if (distributed_halo) {
-      HaloExchangeContext context{};
-      context.context_generation = 1;
-      context.schedule_generation = 1;
-      exchange_ = std::make_unique<HaloExchange<Dim>>(schedule_, lane, context);
-    }
+    validate_options_();
   }
 
+ public:
   CartesianPoissonSolver(const CartesianPoissonSolver&) = delete;
   CartesianPoissonSolver& operator=(const CartesianPoissonSolver&) = delete;
   CartesianPoissonSolver(CartesianPoissonSolver&&) = default;

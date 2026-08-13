@@ -39,6 +39,8 @@ using pops::runtime::program::ExternalBrickHandle;
 namespace {
 
 constexpr double kGamma = 1.4;
+constexpr const char* kModelIdentity =
+    "0000000000000000000000000000000000000000000000000000000000000000";
 
 // The C++ an advanced user ships in my_riemann.cpp: a NumericalFlux policy (here a thin wrapper over
 // the native RusanovFlux so the test can prove BIT-IDENTICAL dispatch) + the two macros that register
@@ -71,7 +73,7 @@ struct Model : pops::nd::IdealGasEuler<pops::kNativeDimension> {
 POPS_DEFINE_EMPTY_EXTERNAL_RIEMANN_PROVIDER_ROUTES(user_brick::Model);
 POPS_DEFINE_EXTERNAL_RIEMANN_BRICK(
     "my_riemann", UserRusanov, user_brick::Model,
-    "test.euler-rusanov.v1",
+    "0000000000000000000000000000000000000000000000000000000000000000",
     "physical_flux,provider_pack,stability_bound");
 POPS_DEFINE_BRICK_MANIFEST();
 )CPP";
@@ -217,10 +219,12 @@ static int pops_run_test_external_riemann_dispatch() {
   }
 
   pops::test::Checker chk;
+  const std::string digest = pops::dynlib::AuthenticatedNativeFile(so).content_sha256();
 
   // (1) dlopen + manifest visibility + requirements surface.
   ExternalBrickHandle handle(so, "my_riemann", RefModel::n_vars, pops::provider_count<RefModel>(),
-                             "test.euler-rusanov.v1");
+                             kModelIdentity, digest, true);
+  handle.require_system_v6();
   chk(handle.id() == "my_riemann", "handle_id");
   chk(handle.dimension() == pops::kNativeDimension, "native_dimension_authenticated");
   chk(handle.nvars() == RefModel::n_vars, "state_shape_authenticated");
@@ -233,8 +237,9 @@ static int pops_run_test_external_riemann_dispatch() {
   chk(entry != nullptr && entry->category == "riemann", "manifest_visible_in_registry");
   bool identity_threw = false;
   try {
-    ExternalBrickHandle wrong_model(so, "my_riemann", RefModel::n_vars,
-                                    pops::provider_count<RefModel>(), "different-model-hash");
+    ExternalBrickHandle wrong_model(
+        so, "my_riemann", RefModel::n_vars, pops::provider_count<RefModel>(),
+        "1111111111111111111111111111111111111111111111111111111111111111", digest);
   } catch (const std::runtime_error& e) {
     identity_threw = true;
     chk(std::string(e.what()).find("different compiled model identity") != std::string::npos,
@@ -301,7 +306,7 @@ static int pops_run_test_external_riemann_dispatch() {
   bool threw = false;
   try {
     ExternalBrickHandle bad(so, "no_such_brick", RefModel::n_vars, pops::provider_count<RefModel>(),
-                            "test.euler-rusanov.v1");
+                            kModelIdentity, digest);
   } catch (const std::runtime_error& e) {
     threw = true;
     const std::string msg = e.what();
@@ -323,8 +328,10 @@ static int pops_run_test_external_riemann_dispatch() {
   }
   threw = false;
   try {
+    const std::string legacy_digest =
+        pops::dynlib::AuthenticatedNativeFile(legacy_so).content_sha256();
     ExternalBrickHandle legacy(legacy_so, "legacy_riemann", RefModel::n_vars,
-                               pops::provider_count<RefModel>(), "test.euler-rusanov.v1");
+                               pops::provider_count<RefModel>(), kModelIdentity, legacy_digest);
   } catch (const std::runtime_error& e) {
     threw = true;
     const std::string msg = e.what();

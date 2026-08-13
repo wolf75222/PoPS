@@ -169,13 +169,14 @@ double System<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, doub
 
   double selected = std::numeric_limits<double>::infinity();
   std::string reason = "degenerate";
-  for (typename Impl::Species& block : p_->sp) {
+  const ExecutionLane& lane = prepared_boundary_execution_lane();
+  for (std::size_t block_index = 0; block_index < p_->sp.size(); ++block_index) {
+    typename Impl::Species& block = p_->sp[block_index];
     if (!block.evolve)
       continue;
-    if (!block.max_speed)
-      throw std::runtime_error("System block '" + block.name +
-                               "' lacks a dimension-qualified stability-speed provider");
-    const Real speed = std::max(block.max_speed(block.U), static_cast<Real>(speed_floor));
+    const Real speed =
+        std::max(block_max_speed_prepared_(static_cast<int>(block_index), block.U, lane),
+                 static_cast<Real>(speed_floor));
     double block_dt = cfl * static_cast<double>(minimum_spacing) * block.substeps /
                       (static_cast<double>(block.stride) * static_cast<double>(speed));
     const char* block_reason = "transport";

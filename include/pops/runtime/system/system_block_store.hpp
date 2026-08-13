@@ -74,7 +74,7 @@ class SystemBlockStore {
     int stride = 1;
     double gamma = 1.0;
     Residual rhs_into;
-    std::function<Real(const field_type&)> max_speed;
+    std::function<Real(const field_type&, const ExecutionLane&)> max_speed;
     ConstResidual add_poisson_rhs;
 
     VariableSet cons_vars;

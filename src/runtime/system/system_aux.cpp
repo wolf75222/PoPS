@@ -174,20 +174,9 @@ template <int Dim>
 void System<Dim>::install_auxiliary_consumer_plan(
     runtime::system::AuxiliaryConsumerProviderPlan<Dim> plan) {
   require_assembling(p_->lifecycle_, "install_auxiliary_consumer_plan");
-  if (native_route_registrar_active_) {
-    // A native registrar is a rank-local callback inside finalize_native_packages.  Even when an
-    // earlier package already sealed the registry, extend a private value image locally and leave
-    // the sole exact-lane consensus to seal_auxiliary_providers_ after every registrar converges.
-    auto candidate = p_->auxiliary_registry_;
-    candidate.add_consumer_plan(std::move(plan));
-    p_->auxiliary_registry_.swap_complete(candidate);
-    p_->auxiliary_registry_consensus_verified_ = false;
-    return;
-  }
   if (!p_->auxiliary_registry_.sealed()) {
-    // Native package registrars execute rank-locally inside the enclosing finalization candidate.
-    // Their outer phase converges failures before the one collective seal; entering a collective
-    // here could mismatch another rank that failed earlier in the same registrar.
+    // Analytic and Program consumers can be assembled before the provider graph seals. Native DSO
+    // registrars use a separate detached capability and never mutate this live registry.
     p_->auxiliary_registry_.add_consumer_plan(std::move(plan));
     p_->auxiliary_registry_consensus_verified_ = false;
     return;
@@ -236,14 +225,14 @@ void System<Dim>::seal_auxiliary_providers_(const CommunicatorView& communicator
   using registry_type = runtime::system::ExactAuxiliaryRegistry<Dim>;
   using carrier_type = runtime::system::AuxiliaryStorageGroups<Dim>;
   std::optional<registry_type> candidate_registry;
-  std::optional<carrier_type> candidate_carrier;
+  std::shared_ptr<carrier_type> candidate_carrier;
   std::exception_ptr local_error;
   try {
     candidate_registry.emplace(p_->auxiliary_registry_);
     pops::dynlib::invoke_with_host_exception([&] { candidate_registry->seal(); },
                                              "System auxiliary provider seal");
     if (candidate_registry->slot_count() != 0) {
-      candidate_carrier.emplace();
+      candidate_carrier = std::make_shared<carrier_type>();
       for (const auto& group : candidate_registry->storage_groups()) {
         if (group.component_count > static_cast<std::size_t>(std::numeric_limits<int>::max()))
           throw std::overflow_error("System auxiliary storage-group width exceeds int");
@@ -267,9 +256,17 @@ void System<Dim>::seal_auxiliary_providers_(const CommunicatorView& communicator
           {{"system-auxiliary-registry", candidate_registry->collective_contract()}}, communicator))
     throw std::runtime_error("System auxiliary registry differs across MPI ranks");
 
-  static_assert(std::is_nothrow_swappable_v<std::optional<carrier_type>>);
+  static_assert(std::is_nothrow_swappable_v<std::shared_ptr<carrier_type>>);
   p_->auxiliary_registry_.swap_complete(*candidate_registry);
-  p_->provider_carrier_.swap(candidate_carrier);
+  if (candidate_carrier) {
+    if (p_->provider_carrier_)
+      std::swap(*p_->provider_carrier_, *candidate_carrier);
+    else
+      p_->provider_carrier_.swap(candidate_carrier);
+  } else {
+    if (p_->provider_carrier_)
+      throw std::logic_error("System auxiliary reseal cannot revoke a published carrier owner");
+  }
   p_->auxiliary_ghost_transport_.reset();
   p_->auxiliary_registry_consensus_verified_ = true;
 }
@@ -391,7 +388,7 @@ void System<Dim>::refresh_auxiliary(const AuxiliaryEvaluationPoint& point) {
     runtime::system::require_finite_auxiliary_groups(candidate, &*p_->auxiliary_ghost_lane_,
                                                      "System auxiliary publication");
     transaction.accept();
-    p_->provider_carrier_ = std::move(candidate);
+    std::swap(*p_->provider_carrier_, candidate);
     p_->dirty_auxiliary_providers_.clear();
   } catch (...) {
     transaction.reject();
@@ -657,9 +654,13 @@ void System<Dim>::restore_auxiliary_checkpoint_accepted_state(
 
   // Publication is irrevocable and allocation-free: both complete private candidates replace the
   // accepted carrier/provenance through noexcept ownership swaps.
-  static_assert(std::is_nothrow_swappable_v<std::optional<carrier_type>>);
+  static_assert(std::is_nothrow_swappable_v<carrier_type>);
   static_assert(std::is_nothrow_swappable_v<decltype(p_->dirty_auxiliary_providers_)>);
-  p_->provider_carrier_.swap(candidate_carrier);
+  if (candidate_carrier) {
+    if (!p_->provider_carrier_)
+      std::terminate();
+    std::swap(*p_->provider_carrier_, *candidate_carrier);
+  }
   p_->auxiliary_registry_.swap_accepted_publication(*candidate_registry);
   p_->dirty_auxiliary_providers_.swap(candidate_dirty);
   p_->auxiliary_registry_consensus_verified_ = true;
@@ -693,6 +694,14 @@ const MultiFab<Dim>* System<Dim>::prepared_block_auxiliary_storage() const {
   if (p_->provider_carrier_->groups.size() != 1)
     throw std::logic_error("mixed provider storage groups require plan-qualified access");
   return &p_->provider_carrier_->groups.begin()->second;
+}
+
+template <int Dim>
+std::shared_ptr<const runtime::system::AuxiliaryStorageGroups<Dim>>
+System<Dim>::prepared_block_provider_storage_owner() const {
+  if (!p_->auxiliary_registry_.sealed())
+    throw std::logic_error("System provider storage owner is unavailable before registry seal");
+  return p_->provider_carrier_;
 }
 
 template <int Dim>
@@ -737,6 +746,8 @@ template void System<kNativeDimension>::restore_auxiliary_checkpoint_accepted_st
     const System<kNativeDimension>::AuxiliaryCheckpointByteViewProvider&);
 template const MultiFab<kNativeDimension>*
 System<kNativeDimension>::prepared_block_auxiliary_storage() const;
+template std::shared_ptr<const runtime::system::AuxiliaryStorageGroups<kNativeDimension>>
+System<kNativeDimension>::prepared_block_provider_storage_owner() const;
 template const runtime::system::AuxiliaryStorageGroups<kNativeDimension>*
 System<kNativeDimension>::prepared_block_provider_storage_groups() const;
 template runtime::system::AuxiliaryStorageGroups<kNativeDimension>*

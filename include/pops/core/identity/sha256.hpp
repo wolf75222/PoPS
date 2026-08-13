@@ -5,8 +5,11 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <vector>
+
+#include <pops/core/identity/canonical_value.hpp>
 
 namespace pops::identity {
 namespace detail {
@@ -95,6 +98,38 @@ inline std::string sha256_hex(const std::vector<std::uint8_t>& input) {
       out.push_back(kHex[(word >> shift) & 0xfU]);
   }
   return out;
+}
+
+inline CanonicalValue::Bytes sha256_hex_bytes(const std::string& hex) {
+  if (hex.size() != 64)
+    throw std::logic_error("sha256: digest does not contain 32 bytes");
+  CanonicalValue::Bytes bytes;
+  bytes.reserve(32);
+  for (std::size_t index = 0; index < hex.size(); index += 2) {
+    const auto digit = [](char value) -> std::uint8_t {
+      if (value >= '0' && value <= '9')
+        return static_cast<std::uint8_t>(value - '0');
+      if (value >= 'a' && value <= 'f')
+        return static_cast<std::uint8_t>(value - 'a' + 10);
+      throw std::logic_error("sha256: digest is not lowercase hexadecimal");
+    };
+    bytes.push_back(static_cast<std::uint8_t>((digit(hex[index]) << 4U) | digit(hex[index + 1])));
+  }
+  return bytes;
+}
+
+inline std::string binary_identity_token(const CanonicalValue::Bytes& digest, std::int64_t size) {
+  if (digest.size() != 32 || size < 0)
+    throw std::logic_error("binary identity requires a 32-byte digest and non-negative size");
+  CanonicalValue payload = CanonicalValue::map({{"algorithm", CanonicalValue::text("sha256")},
+                                                {"content_digest", CanonicalValue::bytes(digest)},
+                                                {"size", CanonicalValue(size)}});
+  CanonicalValue envelope =
+      CanonicalValue::map({{"protocol", CanonicalValue::text("pops.identity")},
+                           {"domain", CanonicalValue::text("binary")},
+                           {"schema_version", CanonicalValue(std::int64_t{1})},
+                           {"payload", std::move(payload)}});
+  return "pops.binary.v1:sha256:" + sha256_hex(canonical_bytes(envelope));
 }
 
 }  // namespace pops::identity

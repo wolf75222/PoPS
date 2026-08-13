@@ -590,8 +590,10 @@ void bind_system_assembly(py::class_<System>& cls) {
       // Private package-install seam. The resolved parameter vector is injected before native
       // closures are built; no mutable per-block parameter side channel exists.
       .def("_register_native_package", &System::register_native_package, py::arg("name"),
-           py::arg("so_path"), py::arg("limiter") = "minmod", py::arg("riemann") = "rusanov",
-           py::arg("recon") = "conservative", py::arg("time") = "explicit",
+           py::arg("so_path"), py::arg("expected_model_identity"),
+           py::arg("expected_binary_identity"), py::arg("limiter") = "minmod",
+           py::arg("riemann") = "rusanov", py::arg("recon") = "conservative",
+           py::arg("time") = "explicit",
            py::arg("gamma") = static_cast<double>(kPhysicalDefaultGamma), py::arg("substeps") = 1,
            py::arg("evolve") = true, py::arg("stride") = 1,
            py::arg("params") = std::vector<double>{}, py::arg("positivity_floor") = 0.0)

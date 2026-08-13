@@ -122,10 +122,11 @@ class _CodegenMixin(_HyperbolicModel):
         return _cg._emit_metadata(self, model_alias)
 
     def emit_cpp_native_loader(self, name: Any = None, target: str = "system",
-                               hoist_reciprocals: bool = False) -> Any:
+                               hoist_reciprocals: bool = False, model_identity: Any = None) -> Any:
         """Thin wrapper: delegates to pops.codegen._compile.emit_cpp_native_loader."""
         return _cg_compile().emit_cpp_native_loader(self, name=name, target=target,
-                                          hoist_reciprocals=hoist_reciprocals)
+                                          hoist_reciprocals=hoist_reciprocals,
+                                          model_identity=model_identity)
 
     def compile_native(self, so_path: Any, include: Any = None, name: Any = None, cxx: Any = None,
                        std: str = "c++23", target: str = "system",
@@ -161,12 +162,13 @@ class _CodegenMixin(_HyperbolicModel):
 
     def compile(self, so_path: Any = None, include: Any = None, backend: str = "production", name: Any = None,
                 cxx: Any = None, std: Any = None, require_metadata: bool = False, target: str = "system",
-                hoist_reciprocals: bool = False) -> Any:
+                hoist_reciprocals: bool = False, model_identity: Any = None) -> Any:
         """Thin wrapper: delegates to pops.codegen._compile.compile_model."""
         return _cg_compile().compile_model(self, so_path=so_path, include=include, backend=backend,
                                  name=name, cxx=cxx, std=std,
                                  require_metadata=require_metadata, target=target,
-                                 hoist_reciprocals=hoist_reciprocals)
+                                 hoist_reciprocals=hoist_reciprocals,
+                                 model_identity=model_identity)
 
     def emit_cpp_elliptic(self, name: Any = None, namespace: str = "pops_generated", cse: bool = True,
                           hoist_reciprocals: bool = False) -> Any:

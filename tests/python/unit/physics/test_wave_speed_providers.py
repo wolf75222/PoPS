@@ -239,6 +239,11 @@ def test_external_flux_uses_its_declared_wave_speed_capability_not_its_name():
             "pops.external-riemann/v4;scalar=f64;index=i32;periodicity=nd;"
             "providers=qualified;dim=2"
         ),
+        "system_abi_version": 6,
+        "system_abi_key": (
+            "pops.external-riemann.system/v6;receiver=prepared-native-package;"
+            "providers=qualified;dim=2"
+        ),
         "native_abi_key": "host-native-abi",
         "supported_layouts": ("uniform", "amr"),
         "model_identity": "compiled-model-hash",
@@ -285,6 +290,11 @@ def test_external_flux_reuses_standard_model_predicates_without_a_route_name():
             "abi_version": 4,
             "abi_key": (
                 "pops.external-riemann/v4;scalar=f64;index=i32;periodicity=nd;"
+                "providers=qualified;dim=2"
+            ),
+            "system_abi_version": 6,
+            "system_abi_key": (
+                "pops.external-riemann.system/v6;receiver=prepared-native-package;"
                 "providers=qualified;dim=2"
             ),
             "native_abi_key": "host-native-abi",

@@ -23,6 +23,7 @@
 #include <pops/runtime/system/auxiliary_checkpoint.hpp>
 #include <pops/runtime/system/derived_aux_provider.hpp>
 #include <pops/runtime/system/system_block_closures.hpp>
+#include <pops/runtime/system/native_package_capability.hpp>
 
 #include <array>
 #include <cstddef>
@@ -302,11 +303,11 @@ class System {
                  double positivity_floor = 0.0, bool wave_speed_cache = false,
                  double weno_epsilon = static_cast<double>(kWenoEpsilon));
 
-  /// Internal installation seam for a compiled production package. The loader
-  /// inlines the header template pops::add_compiled_model<ProdModel>, which builds the closures on the
-  /// real System context and installs a zero-copy native block. The complete canonical BindSchema
-  /// vector crosses the fixed ABI once and is injected into the generated model before those closures
-  /// are constructed. Package and module ABI keys must match.
+  /// Internal installation seam for a compiled production package. The loader prepares one
+  /// revocable, detached block capability against the exact aggregate provider graph. The complete
+  /// canonical BindSchema vector crosses the fixed ABI once and is injected into the generated
+  /// model before its closures are constructed. Package and module ABI keys must match; the expected
+  /// model identity and ``pops.binary.v1`` token must match the authenticated facade artifact.
   /// @param limiter "none" | "minmod" | "vanleer" | "weno5" | "mc" | "superbee"
   ///                (weno5: add_compiled_model reallocates the block state to block_n_ghost = 3
   ///                ghosts after install_block, like add_block)
@@ -317,18 +318,17 @@ class System {
   /// @param gamma   adiabatic index of the block (set_density / inter-species couplings)
   /// @param params complete resolved runtime-parameter vector in declaration order
   /// @param stride block cadence (1 = every step, default; cf. add_block)
-  /// Stage one compiled package.  Staging validates the DSO and registers its typed auxiliary
-  /// routes, but deliberately does not build its blocks: all packages must first contribute to the
-  /// one global provider graph.  Call ``finalize_native_packages`` exactly once afterwards.
-  void register_native_package(const std::string& name, const std::string& so_path,
-                               const std::string& limiter = "minmod",
-                               const std::string& riemann = "rusanov",
-                               const std::string& recon = "conservative",
-                               const std::string& time = "explicit",
-                               double gamma = static_cast<double>(kPhysicalDefaultGamma),
-                               int substeps = 1, bool evolve = true, int stride = 1,
-                               const std::vector<double>& params = {},
-                               double positivity_floor = 0.0);
+  /// Stage one compiled package. Staging authenticates the exact bytes and ABI but neither publishes
+  /// routes nor builds blocks. ``finalize_native_packages`` invokes every registrar into one detached
+  /// provider graph, prepares the complete block/field image, and publishes only after consensus.
+  void register_native_package(
+      const std::string& name, const std::string& so_path,
+      const std::string& expected_model_identity, const std::string& expected_binary_identity,
+      const std::string& limiter = "minmod", const std::string& riemann = "rusanov",
+      const std::string& recon = "conservative", const std::string& time = "explicit",
+      double gamma = static_cast<double>(kPhysicalDefaultGamma), int substeps = 1,
+      bool evolve = true, int stride = 1, const std::vector<double>& params = {},
+      double positivity_floor = 0.0);
 
   /// Authenticate and stage one exact-ranked external Riemann package. The external DSO owns the
   /// prepared model and numerical flux type; its handle is retained by the ordinary native-package
@@ -347,17 +347,18 @@ class System {
 
   /// Seal the aggregate auxiliary graph, allocate its exact compact carrier, then install every
   /// staged native block in canonical package order. Any registrar, seal, or installer failure
-  /// restores the complete pre-finalization System image and unloads the staged packages.
+  /// restores the complete pre-finalization System image and re-arms the exact staged journal for
+  /// retry without publishing candidate closures.
   void finalize_native_packages();
 
   /// Native-loader-only hand-off after ABI/manifest validation. The canonical registrar is required
   /// even for an empty provider graph; only private boundary-component staging may omit it. The
   /// package lifetime keeps its local DSO resident until all closures it installed are destroyed.
   /// This is intentionally a typed C++ seam, not a metadata/JSON parser.
-  POPS_EXPORT void stage_prepared_native_package(std::string identity,
-                                                 std::function<void()> route_registrar,
-                                                 std::function<void()> installer,
-                                                 std::shared_ptr<void> package_lifetime);
+  POPS_EXPORT void stage_prepared_native_package(
+      std::string identity, std::function<void()> route_registrar, std::function<void()> installer,
+      std::shared_ptr<void> package_lifetime,
+      std::shared_ptr<runtime::system::NativePackageCapabilityState<Dim>> capability);
 
   /// ABI key of the module (compiler + C++ standard + signature of the pops headers, frozen at
   /// compilation). Compared to the key baked into a native loader .so by add_native_block; also exposed
@@ -430,6 +431,10 @@ class System {
   /// exactly when the sealed graph has no provider values; callers with ``ProviderValues<0>`` must
   /// not dereference it.  A non-null carrier has exactly ``registry.slot_count()`` components.
   [[nodiscard]] POPS_EXPORT const MultiFab<Dim>* prepared_block_auxiliary_storage() const;
+  /// Shared lifetime authority for the same immutable-address carrier. Generated direct-System
+  /// adapters retain this owner so prepared callbacks cannot outlive the accepted provider image.
+  [[nodiscard]] POPS_EXPORT std::shared_ptr<const runtime::system::AuxiliaryStorageGroups<Dim>>
+  prepared_block_provider_storage_owner() const;
   [[nodiscard]] POPS_EXPORT const runtime::system::AuxiliaryStorageGroups<Dim>*
   prepared_block_provider_storage_groups() const;
   /// AMR preparation owns the collective halo-fill phase and therefore receives the accepted group
@@ -1018,10 +1023,10 @@ class System {
   POPS_EXPORT void require_cartesian_generated_operator(int b, const std::string& operation) const;
   /// The maximum |wave speed| of block @p b evaluated on @p U -- the SAME per-block reduction
   /// step_cfl reads (BlockState::max_speed, the HasStabilitySpeed / max_wave_speed closure set at
-  /// add_block time): a collective reduction over the block's cells. A compiled time Program reads it
-  /// (ProgramContext::max_wave_speed) to express its own dt bound (epic ADC-399 / ADC-417, spec s18).
-  /// REUSES the block's wave-speed closure -- it does not recompute the speed. POPS_EXPORT: resolved by
-  /// the generated problem.so across the dlopen boundary, like the other seam accessors.
+  /// add_block time): a collective reduction over the block's cells. This Uniform entry point uses
+  /// the System's authenticated execution lane; generated Programs pass that lane explicitly through
+  /// the private prepared seam below. REUSES the block's wave-speed closure -- it does not recompute
+  /// the speed. POPS_EXPORT: resolved across the dlopen boundary like the other seam accessors.
   POPS_EXPORT Real block_max_speed(int b, const MultiFab<Dim>& U) const;
   /// The minimum physical cell spacing across every compiled axis -- the same hmin the native CFL
   /// uses (System::step_cfl). A compiled time Program reads it
@@ -1412,6 +1417,10 @@ class System {
   POPS_EXPORT void validate_program_state_publication_candidate_(int block,
                                                                  const MultiFab<Dim>& candidate,
                                                                  const ExecutionLane& lane) const;
+  /// Exact-lane maximum-speed seam for generated ProgramContext. Local block/provider/allocation
+  /// failures converge before the closure's scalar reduction; no implicit WORLD lane is permitted.
+  POPS_EXPORT Real block_max_speed_prepared_(int block, const MultiFab<Dim>& state,
+                                             const ExecutionLane& lane) const;
   /// Immediate provider calls are an exported implementation seam for generated ProgramContext
   /// code, never a public publication route. Every public field solve and every Program solve wraps
   /// these methods in the same physical accepted/candidate transaction.
@@ -1442,11 +1451,12 @@ class System {
   POPS_EXPORT SolveOutcome stage_field_publication_outcome_(SolveReport report);
   SolveOutcome run_field_publication_outcome_(const std::function<SolveReport()>& solve);
   enum class NativePackageKind { generic, prepared_boundary };
-  void stage_native_package_(std::string identity, std::function<void()> route_registrar,
-                             std::function<void()> installer,
-                             std::shared_ptr<void> package_lifetime, NativePackageKind kind);
+  void stage_native_package_(
+      std::string identity, std::function<void()> route_registrar, std::function<void()> installer,
+      std::shared_ptr<void> package_lifetime,
+      std::shared_ptr<runtime::system::NativePackageCapabilityState<Dim>> capability,
+      NativePackageKind kind);
   void seal_auxiliary_providers_(const CommunicatorView& communicator);
-  bool native_route_registrar_active_ = false;
   /// Read-only compiled-artifact capability check.  Kept private so only ProgramContext can issue
   /// an authenticated apply token; installation writes Impl directly and no public setter exists.
   POPS_EXPORT bool program_owns_operator_authority(

@@ -62,7 +62,8 @@ class _FacadeCompileMixin(_FacadeModel):
             resolve_component_provider_packs(self.module)
         )
         return self._m.emit_cpp_native_loader(
-            name=name, target=target, hoist_reciprocals=hoist_reciprocals)
+            name=name, target=target, hoist_reciprocals=hoist_reciprocals,
+            model_identity=self._model_hash())
 
     def _model_hash(self) -> Any:
         """Stable hash of the model: formulas (flux/eig/source/elliptic/primitives/cons_from) + roles +
@@ -207,7 +208,8 @@ class _FacadeCompileMixin(_FacadeModel):
             # The loader emits the target-specific fixed ABI entry point.
             out_path = m.compile(so_path, include, backend=backend, name=name, cxx=cxx, std=std,
                                  require_metadata=require_metadata, target=target,
-                                 hoist_reciprocals=hoist_reciprocals)
+                                 hoist_reciprocals=hoist_reciprocals,
+                                 model_identity=model_hash)
             binary_identity, final_artifact_identity = write_artifact_sidecar(
                 out_path, semantic_identity=semantic_identity, spec_identity=spec_identity)
         cons_roles = roles_for(m.cons_names, m.cons_roles)

@@ -462,7 +462,7 @@ def _emit_auxiliary_route_registration(model: Any, *, target: str = "system") ->
         ))
         return "\n".join(lines)
     native_type = (
-        "pops::System<pops::kNativeDimension>"
+        "pops::runtime::system::PreparedNativeRouteRegistrar<pops::kNativeDimension>"
         if target == "system"
         else "pops::AmrSystem<pops::kNativeDimension>"
     )
@@ -471,9 +471,11 @@ def _emit_auxiliary_route_registration(model: Any, *, target: str = "system") ->
         if target == "system"
         else "pops_register_provider_routes_amr"
     )
+    receiver = "void* receiver" if target == "system" else "%s* sys" % native_type
     lines = [
-        "POPS_LOADER_API void %s(%s* sys) {" % (hook, native_type),
-        "  if (sys == nullptr) throw std::invalid_argument(\"auxiliary route installer received null exact runtime\");",
+        "POPS_LOADER_API void %s(%s) {" % (hook, receiver),
+        "  if (%s == nullptr) throw std::invalid_argument(\"auxiliary route installer received null exact runtime\");" % ("receiver" if target == "system" else "sys"),
+        "  auto* sys = static_cast<%s*>(receiver);" % native_type if target == "system" else "",
         "  using namespace pops::runtime::system;",
         "  using Key = AuxiliaryComponentKey;",
         "  using Contract = AuxiliaryComponentContract;",
@@ -570,7 +572,7 @@ def _emit_auxiliary_route_registration(model: Any, *, target: str = "system") ->
 
 
 def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
-                           hoist_reciprocals: Any = False) -> str:
+                           hoist_reciprocals: Any = False, model_identity: Any = None) -> str:
     """Source of the sole production package.
 
     The generated module carries the model and installs it directly into the native
@@ -587,6 +589,9 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
         raise ValueError("emit_cpp_native_loader: target 'system' | 'amr_system' (got %r)"
                          % (target,))
     nv, bricks, composite = _emit_bricks(m, name, hoist_reciprocals=hoist_reciprocals)
+    model_identity = str(model_identity if model_identity is not None else model_hash(m))
+    if len(model_identity) != 64 or any(ch not in "0123456789abcdef" for ch in model_identity):
+        raise ValueError("emit_cpp_native_loader requires one lowercase 64-hex model identity")
     nm = _cpp_identifier(name or (m.name.capitalize() + "Gen"))
     ell_field_regs = _elliptic_field_registrations(m, nm)
     head = ('#include <Kokkos_Core.hpp>\n'
@@ -612,7 +617,14 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
            '#endif\n'
            'POPS_LOADER_API const char* pops_native_abi_key() {\n'
            '  return POPS_ABI_KEY_LITERAL;\n'
-           '}\n')
+           '}\n'
+           'POPS_LOADER_API const char* pops_compiled_model_identity() {\n'
+           '  return "%s";\n'
+           '}\n' % model_identity)
+    if target == "system":
+        key += ('POPS_LOADER_API int pops_native_system_package_abi_version() {\n'
+                '  return pops::runtime::system::kNativeSystemPackageAbiVersion;\n'
+                '}\n')
     # Construct every elliptic RHS closure while ``model`` still owns the runtime parameters bound
     # from BindSchema.  The default field must capture the generated CompositeModel: its Ell brick
     # intentionally exposes only rhs(State), while CompositeModel supplies State + elliptic_rhs.
@@ -621,6 +633,7 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
     # must exist before set_block_elliptic_field is called.
     ell_field_prepare_lines = ""
     ell_field_attach_lines = ""
+    ell_field_package_lines = ""
     for index, (fld, brick, output_keys) in enumerate(ell_field_regs):
         gradient_sign = m._elliptic_fields[fld]["gradient_sign"]
         if type(gradient_sign) is not int or gradient_sign not in (-1, 1):
@@ -658,6 +671,12 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
                 index,
             )
         )
+        ell_field_package_lines += (
+            '  package.elliptic_attachments.push_back({"%s", "%s/%s", '
+            'std::vector<pops::runtime::system::AuxiliaryComponentKey>{%s}, %d, '
+            'std::move(named_elliptic_rhs_%d)});\n'
+            % (fld, model_identity, fld, key_values, gradient_sign, index)
+        )
     if m._elliptic is not None:
         ell_field_prepare_lines += (
             '  auto fields_from_state_rhs = pops::make_poisson_rhs(model);\n'
@@ -666,22 +685,29 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
             '  s->set_block_elliptic_field(name, "fields_from_state", '
             'std::move(fields_from_state_rhs));\n'
         )
+        ell_field_package_lines += (
+            '  package.elliptic_attachments.push_back({"fields_from_state", '
+            '"%s/fields_from_state", {}, 1, std::move(fields_from_state_rhs)});\n'
+            % model_identity
+        )
     if target == "system":
         install = ('POPS_LOADER_API void pops_install_native(void* sys, const char* name, const char* limiter,\n'
                    '                                    const char* riemann, const char* recon,\n'
                    '                                    const char* time, double gamma, int substeps,\n'
                    '                                    int evolve, int stride, const double* params,\n'
                    '                                    int nparams, double pos_floor) {\n'
-                   '  using NativeSystem = pops::System<pops::kNativeDimension>;\n'
-                   '  auto* s = reinterpret_cast<NativeSystem*>(sys);\n'
+                   '  using Installer = pops::runtime::system::PreparedNativeBlockInstaller<pops::kNativeDimension>;\n'
+                   '  auto* s = static_cast<Installer*>(sys);\n'
                    '  auto model = pops::compiled_model::bind_runtime_params(\n'
                    '      pops_generated::ProdModel{}, params, nparams);\n'
                    + ell_field_prepare_lines +
-                   '  pops::add_compiled_model<pops::kNativeDimension>(*s, name, std::move(model),\n'
-                   '                                                    limiter, riemann, recon, time, gamma,\n'
-                   '                                                    substeps, evolve != 0, stride,\n'
-                   '                                                    pos_floor);\n'
-                   + ell_field_attach_lines +
+                   '  pops::runtime::system::PreparedNativeSystemPackage<pops::kNativeDimension> package;\n'
+                   '  package.consumer_qid = ' +
+                   json.dumps(str(m.owner_path.canonical()) + "/physical_flux") + ';\n'
+                   '  package.block = pops::prepare_compiled_system_block<pops::kNativeDimension>(*s, name, package.consumer_qid, std::move(model),\n'
+                   '      limiter, riemann, recon, time, gamma, substeps, evolve != 0, stride, pos_floor);\n'
+                   + ell_field_package_lines +
+                   '  s->commit(std::move(package));\n'
                    '}\n')
     else:
         # NAMED elliptic fields on the AMR layout (ADC-428): mirror the uniform System branch, but on the

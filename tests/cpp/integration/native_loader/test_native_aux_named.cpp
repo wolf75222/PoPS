@@ -8,6 +8,7 @@
 #include "native_dso_compiler.hpp"
 
 #include <pops/core/state/state.hpp>
+#include <pops/runtime/dynamic/authenticated_native_file.hpp>
 #include <pops/runtime/system.hpp>
 
 #include <cmath>
@@ -94,6 +95,12 @@ std::string package_source() {
     extern "C" const char* pops_native_abi_key() {
       return POPS_ABI_KEY_LITERAL;
     }
+    extern "C" const char* pops_compiled_model_identity() {
+      return "0000000000000000000000000000000000000000000000000000000000000000";
+    }
+    extern "C" int pops_native_system_package_abi_version() {
+      return 2;
+    }
     extern "C" const char* pops_compiled_route_manifest() {
       return pops::kRouteRegistrySignature;
     }
@@ -103,7 +110,10 @@ std::string package_source() {
     extern "C" const char* pops_compiled_param_names() {
       return "";
     }
-    extern "C" void pops_register_provider_routes(pops::System<pops::kNativeDimension>* system) {
+    extern "C" void pops_register_provider_routes(void* raw) {
+      auto* system =
+          static_cast<pops::runtime::system::PreparedNativeRouteRegistrar<pops::kNativeDimension>*>(
+              raw);
       if (system == nullptr)
         throw std::invalid_argument("auxiliary route installer received null exact runtime");
       using namespace pops::runtime::system;
@@ -172,9 +182,11 @@ std::string package_source() {
                                         const char* riemann, const char* recon, const char* time,
                                         double gamma, int substeps, int evolve, int stride,
                                         const double*, int, double pos_floor) {
-      auto* system = reinterpret_cast<pops::System<pops::kNativeDimension>*>(raw);
-      pops::add_compiled_model(*system, name, NamedAuxModel{}, limiter, riemann, recon, time, gamma,
-                               substeps, evolve != 0, stride, pos_floor);
+      auto* system =
+          static_cast<pops::runtime::system::PreparedNativeBlockInstaller<pops::kNativeDimension>*>(
+              raw);
+      pops::add_compiled_model(*system, name, "scalar", NamedAuxModel{}, limiter, riemann, recon,
+                               time, gamma, substeps, evolve != 0, stride, pos_floor);
     }
   )CPP";
 }
@@ -197,6 +209,7 @@ static int pops_run_test_native_aux_named(int argc, char** argv) {
     pops::test::native_dso::report_compile_failure("test_native_aux_named", package);
     return 1;
   }
+  const std::string binary_identity = dynlib::AuthenticatedNativeFile(library).binary_identity();
 
   constexpr int n = 8;
   constexpr double kappa = 0.7;
@@ -215,7 +228,9 @@ static int pops_run_test_native_aux_named(int argc, char** argv) {
   AuxiliaryComponentKey input_key{"test.native-aux", "input", "coefficient", "kappa"};
   AuxiliaryComponentKey derived_key{"test.native-aux", "derived", "coefficient", "effective-kappa"};
   system.install_block_state_route("scalar", "test.native-aux/scalar/state@1");
-  system.register_native_package("scalar", library, "none", "rusanov", "conservative", "euler");
+  system.register_native_package("scalar", library,
+                                 "0000000000000000000000000000000000000000000000000000000000000000",
+                                 binary_identity, "none", "rusanov", "conservative", "euler");
   system.finalize_native_packages();
   const auto& consumer = system.prepared_auxiliary_consumer_plan("scalar");
   const auto address = system.auxiliary_address(derived_key);
@@ -240,19 +255,18 @@ static int pops_run_test_native_aux_named(int argc, char** argv) {
     for (double value : residual)
       error = std::fmax(error, std::fabs(value - kappa));
 
-  bool registrar_failure_exact = false;
+  bool retryable_failure_exact = false;
   bool rollback_missing_key_exact = false;
   bool retry_valid = false;
   System<kNativeDimension> rejected(config);
-  rejected.register_native_package("duplicate-a", library, "none", "rusanov", "conservative",
-                                   "euler");
-  rejected.register_native_package("duplicate-b", library, "none", "rusanov", "conservative",
-                                   "euler");
+  rejected.register_native_package(
+      "scalar", library, "0000000000000000000000000000000000000000000000000000000000000000",
+      binary_identity, "none", "rusanov", "conservative", "euler");
   try {
     rejected.finalize_native_packages();
-  } catch (const std::invalid_argument& error) {
-    registrar_failure_exact =
-        std::string(error.what()) == "auxiliary registry contains duplicate consumer identity";
+  } catch (const std::runtime_error& error) {
+    retryable_failure_exact = std::string(error.what()) ==
+                              "System prepared block lacks its exact pre-installed state identity";
   }
   System<kNativeDimension> sealed_empty(config);
   sealed_empty.seal_auxiliary_providers();
@@ -262,9 +276,8 @@ static int pops_run_test_native_aux_named(int argc, char** argv) {
     rollback_missing_key_exact =
         std::string(error.what()) == "System auxiliary input key is not produced by this registry";
   }
-  if (registrar_failure_exact) {
+  if (retryable_failure_exact) {
     rejected.install_block_state_route("scalar", "test.native-aux/scalar/state@1");
-    rejected.register_native_package("scalar", library, "none", "rusanov", "conservative", "euler");
     rejected.finalize_native_packages();
     rejected.set_state("scalar", std::vector<double>(cells, 1.0));
     rejected.stage_auxiliary_input(input_key, std::vector<double>(cells, kappa));
@@ -276,13 +289,13 @@ static int pops_run_test_native_aux_named(int argc, char** argv) {
       retry_valid = std::isfinite(value) && std::fabs(value - kappa) <= 1e-14 && retry_valid;
   }
 
-  if (!route_valid || !residual_valid || error > 1e-14 || !registrar_failure_exact ||
+  if (!route_valid || !residual_valid || error > 1e-14 || !retryable_failure_exact ||
       !rollback_missing_key_exact || !retry_valid) {
     std::printf(
         "FAIL native named aux: route_valid=%d residual_valid=%d residual_size=%zu error=%.3e "
-        "registrar_failure_exact=%d rollback_missing_key_exact=%d retry_valid=%d\n",
+        "retryable_failure_exact=%d rollback_missing_key_exact=%d retry_valid=%d\n",
         route_valid ? 1 : 0, residual_valid ? 1 : 0, residual.size(), error,
-        registrar_failure_exact ? 1 : 0, rollback_missing_key_exact ? 1 : 0, retry_valid ? 1 : 0);
+        retryable_failure_exact ? 1 : 0, rollback_missing_key_exact ? 1 : 0, retry_valid ? 1 : 0);
     return 1;
   }
   std::printf("OK test_native_aux_named (authenticated native package, error=%.1e)\n", error);
