@@ -164,11 +164,17 @@ def _emit_schedule_wrap(program: Any, v: Any, var: Any, lines: Any, start: Any) 
     if (lowering.due.kind is ScheduleDueKind.ALWAYS
             and lowering.domain.timeline is ScheduleTimeline.ACCEPTED_STEP):
         return
+    policy = lowering.off
+    is_aux = v.op in _AUX_OUTPUT_OPS
+    if not is_aux and policy.comment is ScheduleComment.SKIP:
+        raise NotImplementedError(
+            "scheduled scratch node %r uses Skip, but its invocation scratch is cleared before "
+            "the cadence guard and is not prepared accepted transactional state; Skip refuses "
+            "before artifact creation" % v.name
+        )
     body = lines[start:]
     del lines[start:]
     due = _schedule_due_expression(v, lowering, var)
-    policy = lowering.off
-    is_aux = v.op in _AUX_OUTPUT_OPS
     cache_backed = (not is_aux and ScheduleAction.STORE in policy.after_due
                     and ScheduleAction.RESTORE in policy.off_cadence)
     # One decision seam surrounds every non-trivial due primitive (period, start, predicate,

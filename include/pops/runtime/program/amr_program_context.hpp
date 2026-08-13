@@ -5056,11 +5056,6 @@ class AmrProgramContext {
   [[noreturn]] static void unavailable_(std::string_view provider) {
     throw std::runtime_error("AmrProgramContext has no prepared " + std::string(provider));
   }
-  [[noreturn]] static void deferred_op(std::string_view id, std::string_view detail) {
-    throw std::runtime_error("AmrProgramContext deferred capability '" + std::string(id) +
-                             "': " + std::string(detail));
-  }
-
   /// Provider-owned physical law used by both the authenticated build request and the generated
   /// flat Krylov boundary session. Keep one retained instance per prepared level; consumers never
   /// reconstruct this law from topology alone.
