@@ -1,6 +1,7 @@
 // Final production-package coverage for a model-named auxiliary field. The test compiles an
-// authenticated package, installs it through System::add_native_block, writes the named channel and
-// executes the real native residual. No host callback or flat-array model path is involved.
+// authenticated package, registers and finalizes it through System's native-package transaction,
+// writes the named channel and executes the real native residual. No host callback or flat-array
+// model path is involved.
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
@@ -117,8 +118,8 @@ static int pops_run_test_native_aux_named(int argc, char** argv) {
       {}});
   system.install_auxiliary_consumer_plan(AuxiliaryConsumerProviderPlan<kNativeDimension>{
       "scalar", {{{input_key, contract, shape}, 0}}});
-  system.seal_auxiliary_providers();
-  system.add_native_block("scalar", library, "none", "rusanov", "conservative", "euler");
+  system.register_native_package("scalar", library, "none", "rusanov", "conservative", "euler");
+  system.finalize_native_packages();
   system.set_state("scalar", std::vector<double>(cells, 1.0));
   system.stage_auxiliary_input(input_key, std::vector<double>(cells, kappa));
   system.refresh_auxiliary(AuxiliaryEvaluationPoint{"test.native-aux", 0, 0, 0, 0, 0, 0,
