@@ -4,7 +4,6 @@
 #include <pops/parallel/load_balance.hpp>
 #include <pops/parallel/prepared_load_balance.hpp>
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -318,7 +317,7 @@ TEST(test_nd_load_balance, budgets_weights_geometry_and_strategy_fail_closed) {
 
 TEST(test_nd_load_balance, produced_distribution_constructs_a_level_layout_without_translation) {
   const Box<2> domain{Index<2>{-2, 4}, Index<2>{1, 7}};
-  const auto patches = BoxArray<2>::from_domain(domain, std::array<int, 2>{2, 2});
+  const auto patches = BoxArray<2>::from_domain(domain, Extent<2>{2, 2});
   const RankSpace<2> ranks(Index<2>{3, -1}, Extent<2>{2, 1});
   const auto ownership =
       LoadBalanceProvider<2>::space_filling_curve().prepare(patches, ranks, budget());

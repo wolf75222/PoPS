@@ -2,7 +2,6 @@
 
 #include <pops/amr/tagging/tag_mask.hpp>
 
-#include <array>
 #include <stdexcept>
 #include <vector>
 
@@ -40,7 +39,7 @@ hierarchy::LevelLayout<Dim> make_partitioned_level(int level, const Box<Dim>& do
 
 TEST(test_nd_tag_mask, partitioned_storage_contains_only_owned_patches) {
   const Box<1> domain{Index<1>{-4}, Index<1>{3}};
-  const mesh::BoxArray<1> patches = mesh::BoxArray<1>::from_domain(domain, std::array<int, 1>{2});
+  const mesh::BoxArray<1> patches = mesh::BoxArray<1>::from_domain(domain, Extent<1>{2});
   const mesh::RankSpace<1> ranks{Index<1>{10}, Extent<1>{2}};
   const auto level = make_partitioned_level<1>(
       0, domain, patches, ranks, {Index<1>{10}, Index<1>{11}, Index<1>{10}, Index<1>{11}},
@@ -89,7 +88,7 @@ TEST(test_nd_tag_mask, all_storage_dimensions_honor_nonzero_origins_and_axis_zer
 
 TEST(test_nd_tag_mask, explicit_metadata_cell_byte_and_identity_budgets_fail_closed) {
   const Box<1> domain{Index<1>{0}, Index<1>{7}};
-  const mesh::BoxArray<1> patches = mesh::BoxArray<1>::from_domain(domain, std::array<int, 1>{4});
+  const mesh::BoxArray<1> patches = mesh::BoxArray<1>::from_domain(domain, Extent<1>{4});
   const mesh::RankSpace<1> ranks{Index<1>{0}, Extent<1>{1}};
   const auto level = make_partitioned_level<1>(
       0, domain, patches, ranks, {Index<1>{0}, Index<1>{0}}, pops::amr::RefinementRatio<1>{1});
@@ -118,7 +117,7 @@ TEST(test_nd_tag_mask, explicit_metadata_cell_byte_and_identity_budgets_fail_clo
 
 TEST(test_nd_tag_mask, exact_identity_tracks_rank_patch_topology_and_tag_bits) {
   const Box<1> domain{Index<1>{0}, Index<1>{3}};
-  const mesh::BoxArray<1> patches = mesh::BoxArray<1>::from_domain(domain, std::array<int, 1>{2});
+  const mesh::BoxArray<1> patches = mesh::BoxArray<1>::from_domain(domain, Extent<1>{2});
   const mesh::RankSpace<1> ranks{Index<1>{4}, Extent<1>{2}};
   const auto level = make_partitioned_level<1>(
       0, domain, patches, ranks, {Index<1>{4}, Index<1>{5}}, pops::amr::RefinementRatio<1>{1});
