@@ -246,8 +246,9 @@ TEST(test_poisson_fft, capability_is_cartesian_nd_and_spectral_fails_closed) {
   EXPECT_EQ(pops::PoissonFFTCapabilities<2>::rejection_reason(
                 pops::PoissonFFTSymbol::continuous_spectral),
             "continuous spectral FFT has no exact apply/residual provider");
-  EXPECT_THROW((void)pops::PoissonFFTFactory<2>{lane, pops::PoissonFFTSymbol::continuous_spectral},
-               std::invalid_argument);
+  EXPECT_THROW(
+      (void)(pops::PoissonFFTFactory<2>{lane, pops::PoissonFFTSymbol::continuous_spectral}),
+      std::invalid_argument);
 }
 
 TEST(test_poisson_fft, device_engine_executes_same_cartesian_trace_in_one_and_three_dimensions) {
@@ -344,7 +345,7 @@ TEST(test_poisson_fft, discrete_provider_matches_exact_rank_geometric_mg) {
   ASSERT_TRUE(fft_report.solved()) << fft_report.reason;
   ASSERT_TRUE(mg_report.solved()) << mg_report.reason;
   EXPECT_LT(fft_report.residual_norm, pops::Real(1e-9));
-  const pops::Real reference = pops::all_reduce_max(pops::reduce_norm_inf_local(mg.phi()), lane);
+  const pops::Real reference = pops::all_reduce_max(pops::norm_inf(mg.phi()), lane);
   ASSERT_GT(reference, pops::Real(0));
   EXPECT_LT(maximum_difference(fft.phi(), mg.phi(), lane) / reference, pops::Real(1e-6));
 }
