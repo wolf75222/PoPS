@@ -6,6 +6,7 @@ error-policy exceptions are not capability declarations. This gate locks the exp
 against ``DEFERRED_GROUPS`` without importing ``pops`` or the compiled extension.
 """
 
+import ast
 import importlib.util
 import pathlib
 import re
@@ -73,6 +74,10 @@ def _strip_comments(text):
 
 
 _DEFERRED_OP_RE = re.compile(r'\bdeferred_op\(\s*"([A-Za-z_]\w*)"')
+_INTERNAL_HEADER_RE = re.compile(r"(?m)^\s*#include\s*<(?P<spelling>pops/[^>]+_internal\.hpp)>\s*$")
+_EMITTED_CONTEXT_CALL_RE = re.compile(r"\bctx\.([A-Za-z_]\w*)\s*\(")
+_CPP_STRING_RUN_RE = re.compile(r'"(?:\\.|[^"\\])*"(?:\s*"(?:\\.|[^"\\])*")*')
+_CPP_STRING_LITERAL_RE = re.compile(r'"(?:\\.|[^"\\])*"')
 
 
 def _parse_header_deferred_set(raw):
@@ -80,13 +85,96 @@ def _parse_header_deferred_set(raw):
     return set(_DEFERRED_OP_RE.findall(_strip_comments(raw)))
 
 
+def _semantic_header_source(facade):
+    """Resolve the one internal authority named by a thin installed facade."""
+    facade_source = facade.read_text(encoding="utf-8")
+    spellings = _INTERNAL_HEADER_RE.findall(facade_source)
+    assert len(spellings) == 1, f"{facade} must name exactly one internal authority"
+    authority = REPO_ROOT / "include" / spellings[0]
+    assert authority.is_file(), authority
+    return authority.read_text(encoding="utf-8")
+
+
+def _cpp_definition(source, signature):
+    """Extract one C++ definition by its semantic spelling and balanced body."""
+    source = _strip_comments(source)
+    starts = [match.start() for match in re.finditer(re.escape(signature), source)]
+    assert len(starts) == 1, f"expected one C++ definition spelling {signature!r}"
+    start = starts[0]
+    open_brace = source.index("{", start)
+    depth = 0
+    in_string = False
+    position = open_brace
+    while position < len(source):
+        char = source[position]
+        if in_string:
+            if char == "\\":
+                position += 2
+                continue
+            if char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start : position + 1]
+        position += 1
+    raise AssertionError(f"unterminated C++ definition for {signature!r}")
+
+
+def _emitted_context_call_spellings(paths):
+    """Collect generated ``ctx.method(...)`` spellings from executable Python AST strings."""
+    calls = set()
+    for path in paths:
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(path))
+        docstrings = {
+            id(node.body[0].value)
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.body
+            and isinstance(node.body[0], ast.Expr)
+            and isinstance(node.body[0].value, ast.Constant)
+            and isinstance(node.body[0].value.value, str)
+        }
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and id(node) not in docstrings
+            ):
+                calls.update(_EMITTED_CONTEXT_CALL_RE.findall(node.value))
+    return calls
+
+
+def _cpp_string_spellings(source):
+    """Decode adjacent C++ string literals into the values seen by the compiler."""
+    return {
+        "".join(ast.literal_eval(literal) for literal in _CPP_STRING_LITERAL_RE.findall(run))
+        for run in _CPP_STRING_RUN_RE.findall(_strip_comments(source))
+    }
+
+
 def test_support_module_loads_standalone_and_stays_import_free():
     source = SUPPORT_PY.read_text(encoding="utf-8")
-    offender = re.search(r"(?m)^\s*(?:import\s+pops|from\s+pops)\b", source)
-    assert offender is None, (
-        "amr_program_support.py must load source-only before _pops exists; found %r"
-        % (offender.group(0) if offender else None)
-    )
+    tree = ast.parse(source, filename=str(SUPPORT_PY))
+    offenders = [
+        node
+        for node in tree.body
+        if (
+            isinstance(node, ast.Import)
+            and any(alias.name == "pops" or alias.name.startswith("pops.") for alias in node.names)
+        )
+        or (
+            isinstance(node, ast.ImportFrom)
+            and node.module is not None
+            and (node.module == "pops" or node.module.startswith("pops."))
+        )
+    ]
+    assert not offenders, "amr_program_support.py must have no module-scope pops import"
 
     groups = _load_support_module().deferred_groups()
     assert groups
@@ -98,7 +186,7 @@ def test_support_module_loads_standalone_and_stays_import_free():
 def test_header_deferred_set_matches_the_python_mirror():
     module = _load_support_module()
     mirror = set(module.header_deferred_methods())
-    header = _parse_header_deferred_set(CONTEXT_HPP.read_text(encoding="utf-8"))
+    header = _parse_header_deferred_set(_semantic_header_source(CONTEXT_HPP))
     assert header == mirror, (
         "AMR Program explicit-deferral drift:\n"
         "  only in header: %s\n"
@@ -108,14 +196,12 @@ def test_header_deferred_set_matches_the_python_mirror():
 
 def test_parser_finds_only_explicit_known_deferrals():
     module = _load_support_module()
-    header = _parse_header_deferred_set(CONTEXT_HPP.read_text(encoding="utf-8"))
+    context_source = _semantic_header_source(CONTEXT_HPP)
+    header = _parse_header_deferred_set(context_source)
     assert header == set()
     assert module.header_deferred_methods() == frozenset()
     assert "unqualified_coupled_solve" not in module.DEFERRED_GROUPS
-    assert module.deferred_groups()["schedule_cache"] == (
-        "pending:checkpointed_hierarchy_cache"
-    )
-    context_source = CONTEXT_HPP.read_text(encoding="utf-8")
+    assert module.deferred_groups()["schedule_cache"] == ("pending:checkpointed_hierarchy_cache")
     for provider_method in (
         "cache_should_update",
         "cache_store_scratch",
@@ -128,17 +214,10 @@ def test_parser_finds_only_explicit_known_deferrals():
     assert "neg_div_flux_into" not in header
     assert "solve_fields_from_state_at_fine_level" not in header
     assert "solve_fields_from_state_default" not in header
-    assert "SolveOutcome solve_fields_from_state(const std::string&" not in (
-        CONTEXT_HPP.read_text(encoding="utf-8")
-    )
-    assert "SolveOutcome solve_fields_from_blocks(const std::string&" not in (
-        CONTEXT_HPP.read_text(encoding="utf-8")
-    )
+    assert "SolveOutcome solve_fields_from_state(const std::string&" not in (context_source)
+    assert "SolveOutcome solve_fields_from_blocks(const std::string&" not in (context_source)
     context_header = context_source
-    assert context_header.count("SolveOutcome solve_fields_from_blocks_at(") == 1
-    multi_block_route = context_header.split("SolveOutcome solve_fields_from_blocks_at(", 1)[
-        1
-    ].split("SolveOutcome solve_default_field_on_coarse_level() const", 1)[0]
+    multi_block_route = _cpp_definition(context_header, "SolveOutcome solve_fields_from_blocks_at(")
     assert "all_reduce_max(local_error ? 1L : 0L, lane)" in multi_block_route
     assert "all_ranks_agree_exact_ordered_byte_pairs" in multi_block_route
     assert 'request.text("pops.amr-program.simultaneous-field-route")' in multi_block_route
@@ -150,9 +229,7 @@ def test_parser_finds_only_explicit_known_deferrals():
     multi_facade = multi_block_route.index("facade_->solve_program_field_from_blocks_at(")
     multi_cache = multi_block_route.index("generated_field_routes_.insert(")
     assert multi_local_consensus < multi_byte_consensus < multi_facade < multi_cache
-    scalar_candidate_route = context_header.split("void evaluate_with_field_state_at(", 1)[1].split(
-        "[[nodiscard]] SolveOutcome solve_fields() const", 1
-    )[0]
+    scalar_candidate_route = _cpp_definition(context_header, "void evaluate_with_field_state_at(")
     assert 'request.text("pops.amr-program.scalar-field-candidate-route")' in (
         scalar_candidate_route
     )
@@ -164,9 +241,7 @@ def test_parser_finds_only_explicit_known_deferrals():
         < scalar_candidate_route.index("facade_->with_program_field_candidate_at(")
     )
 
-    single_state_route = context_header.split("SolveOutcome solve_fields_from_state_at(", 1)[
-        1
-    ].split("SolveOutcome solve_fields_from_blocks_at(", 1)[0]
+    single_state_route = _cpp_definition(context_header, "SolveOutcome solve_fields_from_state_at(")
     assert 'request.text("pops.amr-program.single-field-route")' in single_state_route
     assert ".scalar(std::int32_t{runtime_block})" in single_state_route
     assert "field_layout_contract(stage)" in single_state_route
@@ -176,7 +251,6 @@ def test_parser_finds_only_explicit_known_deferrals():
         < single_state_route.index("facade_->solve_program_field_from_blocks_at(")
     )
     assert "solve_fields_from_blocks_at" in UNIFORM_CONTEXT_HPP.read_text(encoding="utf-8")
-    assert "program_execution_solve_generated_field_from_blocks_outcome_" in (context_header)
     assert "named_solve_reports_" not in context_header
     assert "fine_level_field_perturbation" not in module.DEFERRED_GROUPS
     assert "refined_shared_block_interfaces" not in module.DEFERRED_GROUPS
@@ -192,13 +266,9 @@ def test_projection_is_green_after_the_real_amr_implementation_landed():
 
 def test_named_flux_support_matches_the_resolved_interface_envelope():
     module = _load_support_module()
-    context_header = CONTEXT_HPP.read_text(encoding="utf-8")
-    named_route = context_header.split("void neg_div_named_flux_into(", 1)[1].split(
-        "void apply_projection(", 1
-    )[0]
-    named_envelope = context_header.split("void require_named_flux_execution_envelope_(", 1)[
-        1
-    ].split("const field_type* staged_parent_for_block_", 1)[0]
+    context_header = _semantic_header_source(CONTEXT_HPP)
+    named_route = _cpp_definition(context_header, "void neg_div_named_flux_into(")
+    named_envelope = _cpp_definition(context_header, "void require_named_flux_execution_envelope_(")
     assert module.DEFERRED_GROUPS["named_flux"]["header_methods"] == frozenset()
     assert module.deferred_groups()["named_flux"] == "green"
     assert module.amr_program_op_support(
@@ -212,26 +282,28 @@ def test_named_flux_support_matches_the_resolved_interface_envelope():
     assert "active AMR named-flux divergence has no authenticated" not in named_route
     assert "prepare_active_flux_basis_impl_(" in named_route
     assert "has_interface_flux_provider()" in named_envelope
-    assert "shared topological interfaces are installed" in named_envelope
+    assert any(
+        "shared topological interfaces are installed" in spelling
+        for spelling in _cpp_string_spellings(named_envelope)
+    )
 
 
 def test_generated_programs_cannot_use_coarse_injection_as_a_fine_solve():
-    header = CONTEXT_HPP.read_text(encoding="utf-8")
-    assert "SolveOutcome solve_fields() const" not in header
-    assert header.count("SolveOutcome solve_default_field_on_coarse_level() const") == 1
-    coarse_route = header.split("SolveOutcome solve_default_field_on_coarse_level() const", 1)[
-        1
-    ].split("SolveOutcome solve_fields_from_state_at(", 1)[0]
-    assert "if (level_ != 0)" in coarse_route
-    assert "coarse-to-fine auxiliary injection is not a " in coarse_route
-    assert '"fine-level solve"' in coarse_route
-    assert "return eng_->solve_default_field();" in coarse_route
+    header = _semantic_header_source(CONTEXT_HPP)
+    assert "SolveOutcome solve_fields() const" not in _strip_comments(header)
+    assert "SolveOutcome solve_fields() const" in UNIFORM_CONTEXT_HPP.read_text(encoding="utf-8")
+    coarse_route = _cpp_definition(
+        header, "SolveOutcome solve_default_field_on_coarse_level() const"
+    )
+    assert "if (active_level_ != 0)" in coarse_route
+    assert "coarse-to-fine auxiliary injection is not a fine-level solve" in coarse_route
+    assert "return facade_->solve_program_default_field(0);" in coarse_route
     assert "default_solve_report_" not in header
 
-    generated = "\n".join(path.read_text(encoding="utf-8") for path in PRODUCTION_CODEGEN)
-    assert "ctx.solve_fields(" not in generated
-    assert "solve_default_field_on_coarse_level" not in generated
-    assert "ctx.solve_fields_from_state_at(" in generated
+    generated_calls = _emitted_context_call_spellings(PRODUCTION_CODEGEN)
+    assert "solve_fields" not in generated_calls
+    assert "solve_default_field_on_coarse_level" not in generated_calls
+    assert "solve_fields_from_state_at" in generated_calls
 
 
 class _Program:

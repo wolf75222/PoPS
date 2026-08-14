@@ -151,8 +151,10 @@ api pops/numerics/spatial_operator.hpp
 api pops/numerics/time/amr/levels/amr_clock.hpp
 api pops/numerics/time/amr/levels/amr_patch_range.hpp
 api pops/numerics/time/amr/levels/amr_subcycling.hpp
+sdk-support pops/numerics/time/amr/levels/amr_subcycling_internal.hpp
 api pops/numerics/time/amr/prepared_coarse_fine_operator.hpp
 api pops/numerics/time/amr/reflux/amr_flux_helpers.hpp
+sdk-support pops/numerics/time/amr/reflux/amr_flux_helpers_internal.hpp
 api pops/numerics/time/amr/reflux/amr_flux_ledger.hpp
 api pops/numerics/time/amr/reflux/amr_interface_flux_ledger.hpp
 api pops/numerics/time/amr/reflux/amr_reflux_mf.hpp
@@ -249,6 +251,7 @@ sdk-support pops/runtime/output_piece.hpp
 sdk-support pops/runtime/output_piece_collective.hpp
 sdk-support pops/runtime/program/amr_program_checkpoint.hpp
 sdk-root pops/runtime/program/amr_program_context.hpp
+sdk-support pops/runtime/program/amr_program_context_internal.hpp
 sdk-support pops/runtime/program/cache_manager.hpp
 sdk-support pops/runtime/program/cell_temporal_partition.hpp
 sdk-support pops/runtime/program/cell_temporal_partition_executor.hpp

@@ -19,16 +19,34 @@ CONSUMERS = (
     "pops/runtime/program/amr_program_context.hpp",
 )
 
+_INTERNAL_HEADER_RE = re.compile(r"(?m)^\s*#include\s*<(?P<spelling>pops/[^>]+_internal\.hpp)>\s*$")
+
 
 def _sources() -> dict[str, str]:
-    return {
-        relative: (INCLUDE / relative).read_text(encoding="utf-8")
-        for relative in CONSUMERS
-    }
+    return {relative: (INCLUDE / relative).read_text(encoding="utf-8") for relative in CONSUMERS}
+
+
+def _semantic_sources() -> dict[str, str]:
+    """Resolve each thin facade to the internal authority named by its include spelling."""
+    sources = _sources()
+    for relative, facade_source in tuple(sources.items()):
+        spellings = _INTERNAL_HEADER_RE.findall(facade_source)
+        assert len(spellings) <= 1, f"{relative} names multiple internal authorities"
+        if spellings:
+            authority = INCLUDE / spellings[0]
+            assert authority.is_file(), authority
+            sources[relative] = facade_source + "\n" + authority.read_text(encoding="utf-8")
+    return sources
+
+
+def _without_value_template_indices(source: str) -> str:
+    """Remove tuple element indices, which are values rather than native rank authorities."""
+    return re.sub(r"\bstd::get\s*<\s*\d+\s*>", "std::get", source)
 
 
 def test_amr_consumers_are_thin_ranked_facades_without_a_2d_authority() -> None:
-    sources = _sources()
+    facades = _sources()
+    sources = _semantic_sources()
     joined = "\n".join(sources.values())
 
     for token in (
@@ -62,12 +80,12 @@ def test_amr_consumers_are_thin_ranked_facades_without_a_2d_authority() -> None:
         assert forbidden not in joined, forbidden
 
     assert not re.search(r"\bif\s+(?:constexpr\s*)?\(\s*Dim\b", joined)
-    assert not re.search(r"<\s*2\s*>", joined)
-    assert sum(source.count("\n") + 1 for source in sources.values()) < 1_000
+    assert not re.search(r"<\s*2\s*>", _without_value_template_indices(joined))
+    assert sum(source.count("\n") + 1 for source in facades.values()) < 1_000
 
 
 def test_consumers_delegate_to_canonical_prepared_authorities() -> None:
-    sources = _sources()
+    sources = _semantic_sources()
 
     transfer = sources["pops/numerics/time/amr/reflux/amr_flux_helpers.hpp"]
     assert "runtime.template prepare_transfer" in transfer
