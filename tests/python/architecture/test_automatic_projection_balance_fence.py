@@ -2,11 +2,16 @@
 
 from pathlib import Path
 
+from tests.python.architecture.test_final_nd_amr_consumers import (
+    ROOTS as AMR_CONSUMER_ROOTS,
+    _semantic_closure as _amr_semantic_closure,
+    _source as _amr_semantic_source,
+)
+
 
 ROOT = Path(__file__).resolve().parents[3]
 PROGRAM_STATE = ROOT / "include/pops/runtime/program/program_runtime_state.hpp"
 UNIFORM_CONTEXT = ROOT / "include/pops/runtime/program/program_context.hpp"
-AMR_CONTEXT = ROOT / "include/pops/runtime/program/amr_program_context.hpp"
 BALANCE_CODEGEN = ROOT / "python/pops/codegen/program_balance_due.py"
 RETIRED_SERVICES = ROOT / "include/pops/runtime/program/program_execution_services.hpp"
 
@@ -50,7 +55,7 @@ def test_projection_dispatch_lives_on_the_ranked_context_not_a_parallel_service(
     assert "runtime_state().note_automatic_balance_capture_due" in uniform
     assert "template <int Dim>" in uniform
 
-    amr = AMR_CONTEXT.read_text(encoding="utf-8")
+    amr = _amr_semantic_source(_amr_semantic_closure(AMR_CONSUMER_ROOTS["program"]))
     assert "ProgramExecutionServices" not in amr
     projection = _between(
         amr,

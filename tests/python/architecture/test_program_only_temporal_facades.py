@@ -17,6 +17,12 @@ import ast
 import re
 from pathlib import Path
 
+from tests.python.architecture.test_final_nd_amr_consumers import (
+    ROOTS as AMR_CONSUMER_ROOTS,
+    _semantic_closure as _amr_semantic_closure,
+    _source as _amr_semantic_source,
+)
+
 
 ROOT = Path(__file__).resolve().parents[3]
 SYSTEM_CPP = ROOT / "src/runtime/system/system.cpp"
@@ -28,9 +34,7 @@ LEGACY_PUBLIC_TIME_SCHEDULER = ROOT / "include/pops/numerics/time/schemes/schedu
 AMR_SYSTEM_CPP = ROOT / "src/runtime/amr/amr_system.cpp"
 AMR_SYSTEM_HEADER = ROOT / "include/pops/runtime/amr_system.hpp"
 AMR_RUNTIME = ROOT / "include/pops/runtime/amr/amr_runtime.hpp"
-AMR_SUBCYCLING = ROOT / "include/pops/numerics/time/amr/levels/amr_subcycling.hpp"
 PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/program_context.hpp"
-AMR_PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/amr_program_context.hpp"
 AMR_DSL_BLOCK = ROOT / "include/pops/runtime/builders/compiled/amr_dsl_block.hpp"
 BLOCK_BUILDER = ROOT / "include/pops/runtime/builders/block/block_builder.hpp"
 POLAR_BLOCK_BUILDER = ROOT / "include/pops/runtime/builders/block/block_builder_polar.hpp"
@@ -104,6 +108,14 @@ SEMANTIC_SSPRK_TABLEAUS = {
 
 def _ast_tree(path: Path) -> ast.Module:
     return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+
+def _amr_program_context_source() -> str:
+    return _amr_semantic_source(_amr_semantic_closure(AMR_CONSUMER_ROOTS["program"]))
+
+
+def _amr_subcycling_source() -> str:
+    return _amr_semantic_source(_amr_semantic_closure(AMR_CONSUMER_ROOTS["subcycling"]))
 
 
 def _dotted_name(node: ast.AST) -> str:
@@ -434,14 +446,14 @@ def test_amr_spatial_runtime_owns_no_cfl_or_temporal_advance_authority():
 
 def test_amr_regrid_is_an_explicit_prepared_program_operation():
     runtime = AMR_RUNTIME.read_text(encoding="utf-8")
-    context = AMR_PROGRAM_CONTEXT.read_text(encoding="utf-8")
+    context = _amr_program_context_source()
     assert "void regrid_if_due(" not in runtime
     assert "regrid_interval" not in runtime
     assert "regrid_if_due" not in context
     prepare = _function_body(
-        context, "  ::pops::amr::regridding::PreparedRegrid<Dim> prepare_regrid("
+        context, "::pops::amr::regridding::PreparedRegrid<Dim> prepare_regrid("
     )
-    publish = _function_body(context, "  void publish_regrid(")
+    publish = _function_body(context, "void publish_regrid(")
     assert "runtime_->prepare_regrid(" in prepare
     assert 'require_history_free_for_topology_change_("regrid")' in publish
     assert "runtime_->publish_regrid(" in publish
@@ -590,8 +602,8 @@ def test_production_has_no_second_amr_time_engine():
 
 
 def test_prepared_amr_subcycle_plan_is_the_only_spatial_reflux_route():
-    source = AMR_SUBCYCLING.read_text(encoding="utf-8")
-    context = AMR_PROGRAM_CONTEXT.read_text(encoding="utf-8")
+    source = _amr_subcycling_source()
+    context = _amr_program_context_source()
     assert "class PreparedAmrSubcyclePlan" in source
     assert "class PreparedAmrSubcycleTransition" in source
     assert "PreparedAmrProgramReflux" not in source
@@ -631,8 +643,10 @@ def test_nonlinear_amr_semantics_use_the_compiled_program_not_a_blocker():
 
 def test_program_contexts_do_not_claim_implicit_temporal_primitives():
     """Keep retired temporal primitives absent from both exact Program contexts."""
-    for path in (PROGRAM_CONTEXT, AMR_PROGRAM_CONTEXT):
-        source = path.read_text(encoding="utf-8")
+    for source in (
+        PROGRAM_CONTEXT.read_text(encoding="utf-8"),
+        _amr_program_context_source(),
+    ):
         for legacy_engine_primitive in (
             "coupled_source_step(",
             "backward_euler_source(",
@@ -643,7 +657,7 @@ def test_program_contexts_do_not_claim_implicit_temporal_primitives():
 
 def test_ranked_program_context_owns_candidate_state_coupling_not_a_live_state_step():
     uniform = PROGRAM_CONTEXT.read_text(encoding="utf-8")
-    amr = AMR_PROGRAM_CONTEXT.read_text(encoding="utf-8")
+    amr = _amr_program_context_source()
     retired = ROOT / "include" / "pops" / "runtime" / "program" / "program_execution_services.hpp"
     runtime = AMR_RUNTIME.read_text(encoding="utf-8")
     assert not retired.exists()

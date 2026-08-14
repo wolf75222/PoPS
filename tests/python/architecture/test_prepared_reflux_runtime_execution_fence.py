@@ -2,12 +2,17 @@
 
 from pathlib import Path
 
+from tests.python.architecture.test_final_nd_amr_consumers import (
+    ROOTS as AMR_CONSUMER_ROOTS,
+    _semantic_closure as _amr_semantic_closure,
+    _source as _amr_semantic_source,
+)
+
 
 ROOT = Path(__file__).resolve().parents[3]
 PATCH_RANGE = (
     ROOT / "include" / "pops" / "numerics" / "time" / "amr" / "levels" / "amr_patch_range.hpp"
 )
-SUBCYCLING = PATCH_RANGE.with_name("amr_subcycling.hpp")
 LEDGER = ROOT / "include" / "pops" / "amr" / "reflux" / "face_flux_ledger.hpp"
 METRIC_REFLUX = LEDGER.with_name("metric_reflux.hpp")
 AMR_RUNTIME = ROOT / "include" / "pops" / "runtime" / "amr" / "amr_runtime.hpp"
@@ -23,7 +28,7 @@ def test_edge_strip_program_reflux_facade_is_retired() -> None:
 
 
 def test_subcycle_transition_routes_only_through_the_live_ranked_runtime() -> None:
-    source = SUBCYCLING.read_text(encoding="utf-8")
+    source = _amr_semantic_source(_amr_semantic_closure(AMR_CONSUMER_ROOTS["subcycling"]))
     assert "class PreparedAmrSubcycleTransition" in source
     assert "class PreparedAmrSubcyclePlan" in source
     assert "template <int Dim" in source
@@ -70,9 +75,10 @@ def test_metric_reflux_authenticates_exact_time_and_tangential_faces() -> None:
 
 
 def test_program_context_and_runtime_share_the_same_prepared_authority() -> None:
-    context = PROGRAM_CONTEXT.read_text(encoding="utf-8")
+    context_root = PROGRAM_CONTEXT.read_text(encoding="utf-8")
+    context = _amr_semantic_source(_amr_semantic_closure(AMR_CONSUMER_ROOTS["program"]))
     runtime = AMR_RUNTIME.read_text(encoding="utf-8")
-    assert "PreparedAmrSubcyclePlan<Dim" in context
+    assert "PreparedAmrSubcyclePlan<Dim" in context_root
     assert "prepare_subcycling(" in context
     assert "runtime_->reconcile_reflux(" in context
     assert "TransactionalFaceFluxLedger<Dim, Payload>" in context

@@ -5,6 +5,12 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from tests.python.architecture.test_final_nd_amr_consumers import (
+    ROOTS as AMR_CONSUMER_ROOTS,
+    _semantic_closure as _amr_semantic_closure,
+    _source as _amr_semantic_source,
+)
+
 
 ROOT = Path(__file__).resolve().parents[3]
 HEADERS = {
@@ -19,6 +25,8 @@ HEADERS = {
 
 
 def _source(name: str) -> str:
+    if name == "amr":
+        return _amr_semantic_source(_amr_semantic_closure(AMR_CONSUMER_ROOTS["flux"]))
     return HEADERS[name].read_text(encoding="utf-8")
 
 
