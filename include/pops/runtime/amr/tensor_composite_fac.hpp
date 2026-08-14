@@ -248,23 +248,28 @@ struct ResidualKernel {
   }
 };
 
+/// One colour of a tensor-stencil Gauss-Seidel sweep.  A full tensor stencil couples diagonal
+/// neighbours, so two colours are insufficient: every axis-parity combination is its own colour.
+/// Updating one colour at a time keeps the in-place sweep race-free for Dim=1, 2, and 3.
 template <int Dim>
-struct JacobiKernel {
-  FieldView<Real, Dim> destination{};
-  FieldView<const Real, Dim> iterate{};
+struct ColoredGaussSeidelKernel {
+  FieldView<Real, Dim> iterate{};
   FieldView<const Real, Dim> rhs{};
   FieldView<const Real, Dim> covered{};
   TensorStencil<Dim> stencil{};
-  Real relaxation = Real(0.65);
+  unsigned colour = 0;
+  Real relaxation = Real(1);
   bool mask_covered = true;
   POPS_HD void operator()(const Index<Dim>& index) const {
-    if (mask_covered && covered(index, 0) >= Real(0.5)) {
-      destination(index, 0) = iterate(index, 0);
+    unsigned index_colour = 0;
+    for (int axis = 0; axis < Dim; ++axis)
+      index_colour |= (static_cast<unsigned>(index[axis]) & 1u) << axis;
+    if (index_colour != colour)
       return;
-    }
+    if (mask_covered && covered(index, 0) >= Real(0.5))
+      return;
     const Real diagonal = stencil.diagonal(index);
-    destination(index, 0) =
-        iterate(index, 0) + relaxation * (rhs(index, 0) - stencil.image(index)) / diagonal;
+    iterate(index, 0) += relaxation * (rhs(index, 0) - stencil.image(index)) / diagonal;
   }
 };
 
@@ -1159,16 +1164,20 @@ class FullTensorCompositeFac {
       return;
     Level& level = *levels_[level_index];
     for (int sweep = 0; sweep < sweeps; ++sweep) {
-      fill_solution_ghosts_(level_index, iterate, homogeneous);
-      for (std::size_t local = 0; local < iterate.local_size(); ++local)
-        for_each_cell(iterate.box(local),
-                      detail::JacobiKernel<Dim>{
-                          level.scratch.fab(local).view(), std::as_const(iterate.fab(local)).view(),
-                          std::as_const(rhs.fab(local)).view(),
-                          std::as_const(level.covered.fab(local)).view(),
-                          stencil_(level, local, iterate), Real(0.65), mask_covered});
-      Kokkos::fence();
-      detail::copy_valid<Dim>(iterate, level.scratch);
+      constexpr unsigned colours = 1u << Dim;
+      for (unsigned colour = 0; colour < colours; ++colour) {
+        // Each colour consumes values written by the preceding one.  Refreshing here (rather than
+        // once per sweep) also makes those in-place updates visible across local patch boundaries
+        // and through the prepared same-level halo exchange.
+        fill_solution_ghosts_(level_index, iterate, homogeneous);
+        for (std::size_t local = 0; local < iterate.local_size(); ++local)
+          for_each_cell(iterate.box(local),
+                        detail::ColoredGaussSeidelKernel<Dim>{
+                            iterate.fab(local).view(), std::as_const(rhs.fab(local)).view(),
+                            std::as_const(level.covered.fab(local)).view(),
+                            stencil_(level, local, iterate), colour, Real(1), mask_covered});
+        Kokkos::fence();
+      }
     }
   }
 

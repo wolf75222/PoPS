@@ -77,7 +77,12 @@ pops::Real exact(pops::Real x, pops::Real y) {
   return x * (pops::Real(1) - x) * y * (pops::Real(1) - y);
 }
 
-double solve_error(int cells) {
+struct SolveMeasurement {
+  double error = 0;
+  pops::SolveReport report{};
+};
+
+SolveMeasurement solve_error(int cells) {
   using namespace pops;
   using namespace pops::runtime::program;
   auto build = request(cells);
@@ -113,11 +118,16 @@ double solve_error(int cells) {
     fab.copy_from_host(host);
     solver->stage_initial_guess(level, nullptr);
   }
+  auto outcome =
+      solve_prepared_hierarchy_tensor_collectively(*solver, {Real(8e-7), Real(1e-12), 80}, lane);
   const SolveReport report =
-      solve_prepared_hierarchy_tensor_collectively(*solver, {Real(8e-7), Real(1e-12), 80}, lane)
-          .consume(SolveConsumption::kAccept);
+      outcome.consume(outcome.report().solved_value_available()
+                          ? SolveConsumption::kAccept
+                          : (outcome.report().action == SolveAction::kRejectAttempt
+                                 ? SolveConsumption::kRejectAttempt
+                                 : SolveConsumption::kFailRun));
   if (!report.solved())
-    throw std::runtime_error(report.reason);
+    return {0, report};
 
   constexpr int measured_level = 1;
   const auto& solution = solver->solution(measured_level);
@@ -133,15 +143,19 @@ double solve_error(int cells) {
       error = std::max(error, std::abs(static_cast<double>(
                                   host(ordinal(fab.grown_box(), Index<2>{i, j})) - exact(x, y))));
     }
-  return error;
+  return {error, report};
 }
 
 }  // namespace
 
 TEST(test_composite_fac_tensor, full_tensor_composite_retains_refinement_accuracy) {
   constexpr int coarse_cells = 24;
-  const double coarse_refined = solve_error(coarse_cells);
-  const double fine_refined = solve_error(2 * coarse_cells);
+  const SolveMeasurement coarse = solve_error(coarse_cells);
+  const SolveMeasurement fine = solve_error(2 * coarse_cells);
+  ASSERT_TRUE(coarse.report.solved()) << coarse.report.reason;
+  ASSERT_TRUE(fine.report.solved()) << fine.report.reason;
+  const double coarse_refined = coarse.error;
+  const double fine_refined = fine.error;
   EXPECT_GT(coarse_refined, 0.0);
   EXPECT_LT(fine_refined, 0.4 * coarse_refined)
       << "genuinely refined full-tensor FAC must converge under hierarchy refinement";
