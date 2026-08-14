@@ -44,13 +44,14 @@ using runtime::system::AuxiliaryProviderKind;
 using runtime::system::AuxiliaryStorageShape;
 using runtime::system::PreparedAuxiliaryProvider;
 
-// Shares the Cartesian ExB B_z provider slot (grad[2] then B[3]).
+// Shares the Cartesian ExB B_z provider slot (grad[kNativeDimension] then B[3]).
 struct BzSource {
-  static constexpr int n_providers = 5;
+  static constexpr int kBzProviderSlot = kNativeDimension + 2;
+  static constexpr int n_providers = kBzProviderSlot + 1;
   template <class State, class Providers>
   POPS_HD State apply(const State& u, const Providers& providers) const {
     State s{};
-    s[0] = provider_value<4>(providers) * u[0];
+    s[0] = provider_value<kBzProviderSlot>(providers) * u[0];
     return s;
   }
 };
@@ -62,7 +63,8 @@ struct NoEll {
 };
 
 using MagModel = CompositeModel<CartesianExBDrift, BzSource, NoEll>;
-static_assert(MagModel::n_providers == 5, "the composite consumes grad[2] + B[3]");
+static_assert(MagModel::n_providers == kNativeDimension + 3,
+              "the composite consumes grad[kNativeDimension] + B[3]");
 
 TEST(AuxRuntimeBz, RuntimeSystemReadsSharedBzChannelAndClearsWithZero) {
 #if defined(POPS_HAS_KOKKOS)
@@ -71,8 +73,11 @@ TEST(AuxRuntimeBz, RuntimeSystemReadsSharedBzChannelAndClearsWithZero) {
 
   const int n = 32;
   const double c = 0.7;
-  std::vector<double> ones(static_cast<std::size_t>(n) * n, 1.0);
-  std::vector<double> bz(static_cast<std::size_t>(n) * n, c);  // B_z = c partout
+  std::size_t cells = 1;
+  for (int axis = 0; axis < kNativeDimension; ++axis)
+    cells *= static_cast<std::size_t>(n);
+  std::vector<double> ones(cells, 1.0);
+  std::vector<double> bz(cells, c);  // B_z = c partout
 
   SystemConfig<kNativeDimension> cfg;
   for (int axis = 0; axis < kNativeDimension; ++axis) {
@@ -87,12 +92,15 @@ TEST(AuxRuntimeBz, RuntimeSystemReadsSharedBzChannelAndClearsWithZero) {
   AuxiliaryStorageShape<kNativeDimension> shape;
   for (int axis = 0; axis < kNativeDimension; ++axis)
     shape.halo[axis] = 2;
-  std::array<AuxiliaryComponentKey, 5> keys{
-      AuxiliaryComponentKey{"test.exb", "field", "phi", "grad-x"},
-      AuxiliaryComponentKey{"test.exb", "field", "phi", "grad-y"},
-      AuxiliaryComponentKey{"test.exb", "input", "magnetic", "B-x"},
-      AuxiliaryComponentKey{"test.exb", "input", "magnetic", "B-y"},
-      AuxiliaryComponentKey{"test.exb", "input", "magnetic", "B-z"}};
+  constexpr std::array<const char*, 3> gradient_components{"grad-x", "grad-y", "grad-z"};
+  constexpr std::array<const char*, 3> magnetic_components{"B-x", "B-y", "B-z"};
+  std::array<AuxiliaryComponentKey, kNativeDimension + 3> keys{};
+  for (int axis = 0; axis < kNativeDimension; ++axis)
+    keys[static_cast<std::size_t>(axis)] =
+        AuxiliaryComponentKey{"test.exb", "field", "phi", gradient_components[axis]};
+  for (int component = 0; component < 3; ++component)
+    keys[static_cast<std::size_t>(kNativeDimension + component)] =
+        AuxiliaryComponentKey{"test.exb", "input", "magnetic", magnetic_components[component]};
   std::vector<AuxiliaryOutput<kNativeDimension>> outputs;
   for (const auto& key : keys)
     outputs.push_back({key, contract, shape});
@@ -111,12 +119,12 @@ TEST(AuxRuntimeBz, RuntimeSystemReadsSharedBzChannelAndClearsWithZero) {
   sys.install_block_state_route("a", "test.exb.a.state@1");
   add_compiled_model(sys, "a", MagModel{}, "minmod", "rusanov", "conservative", "explicit");
   sys.set_state("a", ones);
-  std::vector<double> zero(static_cast<std::size_t>(n) * n, 0.0);
-  sys.stage_auxiliary_input(keys[0], zero);
-  sys.stage_auxiliary_input(keys[1], zero);
-  sys.stage_auxiliary_input(keys[2], zero);
-  sys.stage_auxiliary_input(keys[3], zero);
-  sys.stage_auxiliary_input(keys[4], bz);
+  std::vector<double> zero(cells, 0.0);
+  for (int axis = 0; axis < kNativeDimension; ++axis)
+    sys.stage_auxiliary_input(keys[static_cast<std::size_t>(axis)], zero);
+  for (int component = 0; component < 3; ++component)
+    sys.stage_auxiliary_input(keys[static_cast<std::size_t>(kNativeDimension + component)],
+                              component == 2 ? bz : zero);
   sys.refresh_auxiliary(AuxiliaryEvaluationPoint{"test.exb", 0, 0, 0, 0, 0, 0,
                                                  AuxiliaryEvaluationEvent::initialization});
 
@@ -129,7 +137,7 @@ TEST(AuxRuntimeBz, RuntimeSystemReadsSharedBzChannelAndClearsWithZero) {
                               << ", providers=" << MagModel::n_providers << ")";
 
   // A zero vector has no E x B direction: the same accepted provider plan must fail closed.
-  sys.stage_auxiliary_input(keys[4], zero);
+  sys.stage_auxiliary_input(keys[static_cast<std::size_t>(BzSource::kBzProviderSlot)], zero);
   sys.refresh_auxiliary(AuxiliaryEvaluationPoint{"test.exb", 1, 0, 0, 0, 0, 0,
                                                  AuxiliaryEvaluationEvent::initialization});
   EXPECT_THROW((void)sys.eval_rhs("a"), std::runtime_error);
