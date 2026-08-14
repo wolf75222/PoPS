@@ -1083,7 +1083,7 @@ class RestartV3:
     def reopen(self, runtime: Any, path: Any) -> ReopenedRestart:
         self.validate_configuration()
         from ._checkpoint_collective import _bounded_checkpoint_path_bytes, root_bytes
-        from pops.runtime._checkpoint_resource_budget import require_checkpoint_resource_budget
+        from ._checkpoint_contract import require_checkpoint_resource_budget
 
         topology = checkpoint_topology(runtime)
         local_target = canonical_checkpoint_path(path)

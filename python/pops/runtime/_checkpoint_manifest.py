@@ -11,8 +11,7 @@ from pops._manifest_protocol import strict_json_loads
 from pops._generated_release_contract import (
     CHECKPOINT_ENVELOPE_SCHEMA_VERSION as CHECKPOINT_SCHEMA_VERSION,
 )
-MANIFEST_KEY = "pops_checkpoint_manifest"
-IDENTITY_KEY = "pops_restart_identity"
+from pops.output._checkpoint_contract import IDENTITY_KEY, MANIFEST_KEY
 
 
 def _payload_files(payload: Any) -> set[str]:

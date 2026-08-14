@@ -3,21 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
 import json
 import sys
 from typing import Any
 
-
-def _capacity(value: Any, *, where: str, positive: bool = False) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise TypeError("%s must be an exact integer" % where)
-    minimum = 1 if positive else 0
-    if value < minimum:
-        raise ValueError("%s must be >= %d" % (where, minimum))
-    if value > sys.maxsize:
-        raise OverflowError("%s exceeds the native addressable range" % where)
-    return value
+from pops.output._checkpoint_contract import (
+    CheckpointResourceBudget,
+    _capacity,
+    require_checkpoint_resource_budget,
+)
 
 
 def _add(left: int, right: int, *, where: str) -> int:
@@ -44,37 +38,6 @@ def _product(values: Any, *, where: str) -> int:
     for value in values:
         result = _mul(result, _capacity(value, where=where, positive=True), where=where)
     return result
-
-
-@dataclass(frozen=True, slots=True)
-class CheckpointResourceBudget:
-    """Trusted allocation envelope installed from one authenticated live runtime."""
-
-    runtime_kind: str
-    max_members: int
-    max_manifest_characters: int
-    max_array_bytes: int
-    max_uncompressed_bytes: int
-    max_archive_bytes: int
-    authority: str
-
-    def __post_init__(self) -> None:
-        if self.runtime_kind not in {"uniform", "amr", "multi_layout_uniform"}:
-            raise ValueError("checkpoint resource budget has an unsupported runtime kind")
-        for name in (
-            "max_members",
-            "max_manifest_characters",
-            "max_array_bytes",
-            "max_uncompressed_bytes",
-            "max_archive_bytes",
-        ):
-            _capacity(getattr(self, name), where="checkpoint budget %s" % name, positive=True)
-        if self.max_array_bytes > self.max_uncompressed_bytes:
-            raise ValueError(
-                "checkpoint per-array resource capacity exceeds its aggregate capacity"
-            )
-        if not isinstance(self.authority, str) or not self.authority:
-            raise TypeError("checkpoint resource budget authority must be non-empty text")
 
 
 def _archive_byte_capacity(
@@ -342,7 +305,7 @@ def _checkpoint_member_names(
     rank_capacity: int,
 ) -> tuple[str, ...]:
     from pops.runtime._checkpoint_embedded_boundary import EMBEDDED_BOUNDARY_CONTRACT_KEY
-    from pops.runtime._checkpoint_manifest import IDENTITY_KEY, MANIFEST_KEY
+    from pops.output._checkpoint_contract import IDENTITY_KEY, MANIFEST_KEY
     from pops.runtime._checkpoint_spatial import SPATIAL_CONTRACT_KEY
 
     cadence = (
@@ -740,13 +703,6 @@ def install_layout_checkpoint_resource_budget(
     if existing is not None and existing != candidate:
         raise RuntimeError("layout checkpoint resource authority changed during bind")
     owner._checkpoint_resource_budget = candidate
-
-
-def require_checkpoint_resource_budget(owner: Any) -> CheckpointResourceBudget:
-    budget = getattr(owner, "_checkpoint_resource_budget", None)
-    if type(budget) is not CheckpointResourceBudget:
-        raise RuntimeError("checkpoint decode requires the authenticated live resource budget")
-    return budget
 
 
 def aggregate_checkpoint_resource_budgets(
