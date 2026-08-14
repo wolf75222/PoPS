@@ -80,6 +80,21 @@ def _parse_header_deferred_set(raw):
     return set(_DEFERRED_OP_RE.findall(_strip_comments(raw)))
 
 
+def _extract_method_body(header, signature):
+    """Return one method body, matched with balanced braces from its signature."""
+    start = header.index(signature)
+    open_brace = header.index("{", start)
+    depth = 0
+    for index in range(open_brace, len(header)):
+        if header[index] == "{":
+            depth += 1
+        elif header[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return header[open_brace : index + 1]
+    raise AssertionError("unterminated method body: %s" % signature)
+
+
 def test_support_module_loads_standalone_and_stays_import_free():
     source = SUPPORT_PY.read_text(encoding="utf-8")
     offender = re.search(r"(?m)^\s*(?:import\s+pops|from\s+pops)\b", source)
@@ -112,9 +127,7 @@ def test_parser_finds_only_explicit_known_deferrals():
     assert header == set()
     assert module.header_deferred_methods() == frozenset()
     assert "unqualified_coupled_solve" not in module.DEFERRED_GROUPS
-    assert module.deferred_groups()["schedule_cache"] == (
-        "pending:checkpointed_hierarchy_cache"
-    )
+    assert module.deferred_groups()["schedule_cache"] == ("pending:checkpointed_hierarchy_cache")
     context_source = CONTEXT_HPP.read_text(encoding="utf-8")
     for provider_method in (
         "cache_should_update",
@@ -151,7 +164,7 @@ def test_parser_finds_only_explicit_known_deferrals():
     multi_cache = multi_block_route.index("generated_field_routes_.insert(")
     assert multi_local_consensus < multi_byte_consensus < multi_facade < multi_cache
     scalar_candidate_route = context_header.split("void evaluate_with_field_state_at(", 1)[1].split(
-        "[[nodiscard]] SolveOutcome solve_fields() const", 1
+        "[[nodiscard]] SolveOutcome solve_fields_from_state_at(", 1
     )[0]
     assert 'request.text("pops.amr-program.scalar-field-candidate-route")' in (
         scalar_candidate_route
@@ -219,13 +232,15 @@ def test_generated_programs_cannot_use_coarse_injection_as_a_fine_solve():
     header = CONTEXT_HPP.read_text(encoding="utf-8")
     assert "SolveOutcome solve_fields() const" not in header
     assert header.count("SolveOutcome solve_default_field_on_coarse_level() const") == 1
-    coarse_route = header.split("SolveOutcome solve_default_field_on_coarse_level() const", 1)[
-        1
-    ].split("SolveOutcome solve_fields_from_state_at(", 1)[0]
-    assert "if (level_ != 0)" in coarse_route
-    assert "coarse-to-fine auxiliary injection is not a " in coarse_route
-    assert '"fine-level solve"' in coarse_route
-    assert "return eng_->solve_default_field();" in coarse_route
+    coarse_route = _extract_method_body(
+        header, "SolveOutcome solve_default_field_on_coarse_level() const"
+    )
+    assert "if (active_level_ != 0)" in coarse_route
+    assert "coarse-to-fine auxiliary injection is not a fine-level solve" in coarse_route
+    assert coarse_route.index("active_level_ != 0") < coarse_route.index("refresh_resources_()")
+    assert coarse_route.index("refresh_resources_()") < coarse_route.index(
+        "facade_->solve_program_default_field(0)"
+    )
     assert "default_solve_report_" not in header
 
     generated = "\n".join(path.read_text(encoding="utf-8") for path in PRODUCTION_CODEGEN)

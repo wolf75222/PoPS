@@ -2185,11 +2185,6 @@ class AmrProgramContext {
                                              std::move(prepared_evaluate));
   }
 
-  [[nodiscard]] SolveOutcome solve_fields() const {
-    refresh_resources_();
-    return facade_->solve_program_default_field(active_level_);
-  }
-
   [[nodiscard]] SolveOutcome solve_fields_from_state_at(
       const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
       int program_block, field_type& stage) const {
@@ -2350,6 +2345,9 @@ class AmrProgramContext {
   }
 
   [[nodiscard]] SolveOutcome solve_default_field_on_coarse_level() const {
+    if (active_level_ != 0)
+      throw std::logic_error(
+          "AMR Program coarse-to-fine auxiliary injection is not a fine-level solve");
     refresh_resources_();
     return facade_->solve_program_default_field(0);
   }
