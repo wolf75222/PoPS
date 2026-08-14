@@ -296,6 +296,7 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         if suite["mpi_variants"]
     }
     assert variant_targets == {
+        "test_amr_multiblock_coupled_source": (2,),
         "test_amr_program_positivity_floor": (2,),
         "test_copy_schedule_cache": (1, 2, 4),
         "test_coupled_fieldsolve": (2,),
@@ -321,7 +322,7 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         for suite in all_suites
     )
     ctest_plan = sel.cpp_mpi_ctest_plan(manifest)
-    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 90
+    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 91
     assert ctest_plan["test_mpi_external_lifecycle_np1"] == 1
     assert ctest_plan["test_mpi_hdf5_collective_np2"] == 2
     assert ctest_plan["test_mpi_amr_compiled_parity_rank_parity"] == 4
@@ -1010,7 +1011,10 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     # the outer watchdog aligned with that complete sequential contract.
     assert "timeout-minutes: 180" in mpi_block
     assert "timeout-minutes: 35" in mpi_block
-    assert '/usr/bin/python3 -u "$mpi_test"' in mpi_block
+    assert "native_script_bootstrap=" in mpi_block
+    assert "select_native_dimension(2)" in mpi_block
+    assert '-u -c "$native_script_bootstrap" "$mpi_test"' in mpi_block
+    assert '/usr/bin/python3 -u "$mpi_test"' not in mpi_block
     assert "mpiexec -n \"$mpi_ranks\"" not in mpi_block
     assert "test_amr_clean_route_program_mpi.py" not in mpi_block
     assert "test_amr_history_mpi.py" not in mpi_block
@@ -1096,7 +1100,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         "            ccache_maxsize: 2G"
     ) in openmp_block
     assert openmp_block.count("if: matrix.kind == 'cpp'") == 6
-    assert openmp_block.count("if: matrix.kind == 'python'") == 6
+    assert openmp_block.count("if: matrix.kind == 'python'") == 7
     assert "CCACHE_MAXSIZE: ${{ matrix.ccache_maxsize }}" in openmp_block
     assert "uses: actions/cache/restore@v6" in openmp_block
     assert "uses: actions/cache/save@v6" in openmp_block

@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from pops.physics.roles import ComponentRole, native_role_token
 from pops.runtime._numeric import exact_real, positive_int, strict_bool
 from pops.runtime.defaults import (
     NEWTON_DEFAULT_ABS_TOL,
@@ -66,6 +65,10 @@ def _norm_implicit(label: Any, implicit_vars: Any, implicit_roles: Any) -> Any:
     validates every axis when the block is bound.  The mask lives on the temporal policy, so the same
     model can be reused with distinct implicit treatments.
     """
+
+    # Keep the runtime package source-loadable without importing the public physics layer.
+    # The typed role vocabulary is needed only while normalizing an authored IMEX policy.
+    from pops.physics.roles import ComponentRole, native_role_token
 
     def as_list(x: Any, what: Any) -> Any:
         if x is None:

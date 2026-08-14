@@ -59,12 +59,13 @@ _ALLOWED_STEPPER_CLASSES = {
     "build-time IR authoring decorator, not a numerical advance loop",
 }
 
-# lib/time/rk.py:ButcherTableau is a DATA helper (A/b/c coefficient table), not a stepper: it is not
-# exported from pops.time and defines no step/advance/integrate. Named here as the single justified
-# non-stepper class the time surface may define with an RK-adjacent name.
+# lib/time/rk.py exports two DATA helpers, neither of which is a stepper: ButcherTableau stores
+# coefficients and RungeKuttaRoute binds one exact state/rate pair for multi-route authoring.
 _ALLOWED_NON_STEPPER_DATA = {
     "ButcherTableau": "python/pops/lib/time/rk.py: a Butcher A/b/c coefficient table (data), not a "
     "stepper; carries no step/advance/integrate and is not exported as a stepper",
+    "RungeKuttaRoute": "python/pops/lib/time/rk.py: an exact state/rate route record (data), not a "
+    "stepper; carries no step/advance/integrate",
 }
 
 # The canonical physical field-operator base + its home package. A second public class exposing a
@@ -381,7 +382,13 @@ def test_native_named_field_solve_uses_exact_block_slots_not_a_representative():
     assert "representative" not in context
     assert "template <int Dim>" in context
     assert "SolveOutcome solve_fields_from_blocks_at(" in context
-    assert "unavailable_field_provider_();" in context
+    for exact_route_seam in (
+        "require_program_block_map_",
+        "prepare_named_field_publication_storage_",
+        "run_field_publication_outcome_",
+        "solve_fields_from_blocks_at_in_place_",
+    ):
+        assert exact_route_seam in context
     assert "solve_fields_from_state(field, representative" not in context
 
 
