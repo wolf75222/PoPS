@@ -20,6 +20,7 @@
 
 using namespace pops;
 using namespace pops::mesh::nd_proof;
+using pops::mesh::BoxHashBudget;
 using pops::mesh::Distribution;
 using pops::mesh::RankSpace;
 
@@ -104,8 +105,9 @@ TranslationSchedule<Dim> make_schedule(int ranks, int rank, bool replicated, int
   ghosts[0] = ghost;
   for (int axis = 1; axis < Dim; ++axis)
     ghosts[axis] = 1;
-  std::array<int, Dim> hash_bins{};
-  hash_bins.fill(2);
+  Extent<Dim> hash_bins{};
+  for (int axis = 0; axis < Dim; ++axis)
+    hash_bins[axis] = 2;
   std::array<bool, Dim> periodic{};
   periodic[0] = true;
   return TranslationSchedule<Dim>{layout,
