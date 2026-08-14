@@ -126,7 +126,9 @@ def test_implicit_source_publication_consumes_one_collective_outcome():
         source, "const MultiFab<Dim, MemorySpace>* active_cells = nullptr)"
     )
     assert publication.count("PreparedImplicitSourceKernel<Dim, Model>") == 1
-    assert publication.count("SolveOutcome::collective_world") == 1
+    assert publication.count("SolveOutcome::collective_lane") == 1
+    assert "SolveOutcome::collective_world" not in publication
+    assert "std::move(solve), lane," in publication
     assert "ImplicitSourcePublication" in publication
     assert "solved_value_available()" not in publication
 

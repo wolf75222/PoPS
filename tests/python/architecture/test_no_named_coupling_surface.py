@@ -3,14 +3,17 @@
 The named inter-species couplings (ionization / collision / thermal exchange) used to be hard-coded
 C++ methods (``System::add_ionization`` / ``add_collision`` / ``add_thermal_exchange``) with a pybind
 ``.def`` each; the raw coupled-source bytecode ABI was a PUBLIC ``add_coupled_source`` binding. After
-ADC-595 the named couplings are Python PRESETS lowering to the generic coupled source, and the raw
-bytecode ABI is an INTERNAL escape hatch (``_add_coupled_source``); a coupling registers through the one
-typed ``add_coupling_operator``. This source-only test pins that surface so a new coupling cannot
-re-introduce a bespoke C++ method:
+ADC-595 the named couplings are Python PRESETS lowering to the generic coupled source. The uniform
+runtime retains one INTERNAL ``_add_coupled_source`` escape hatch beside its typed
+``add_coupling_operator``; AMR exposes no raw bytecode binding and receives only a prepared typed
+provider. This source-only test pins that surface so a new coupling cannot re-introduce a bespoke C++
+method:
 
   - ``include/pops/runtime/system.hpp`` declares none of the three named coupling methods;
   - ``python/bindings/core/init/init_system.cpp`` binds none of them, and the raw bytecode ABI is bound
     only as the INTERNAL ``_add_coupled_source`` (no public ``add_coupled_source`` def);
+  - ``python/bindings/core/init/init_amr.cpp`` binds no raw coupled-source ABI; its native facade owns
+    only the prepared typed provider installation seam;
   - ``engine.Ionization`` / ``Collision`` / ``ThermalExchange`` survive only as preset descriptors that
     carry data (no ``add_*`` C++ dispatch method);
   - the typed ``add_coupling_operator`` entry IS present (the one generic registration path).
@@ -67,11 +70,15 @@ def test_init_system_binds_no_named_coupling_and_internalizes_raw_abi():
         "the typed add_coupling_operator entry must be bound (the single generic registration path)")
 
 
-def test_init_amr_internalizes_raw_abi():
+def test_init_amr_exposes_no_raw_coupling_abi():
     src = _read(BINDINGS, "core/init/init_amr.cpp")
-    assert '"_add_coupled_source"' in src and '"add_coupled_source"' not in src, (
-        "the AMR raw coupled-source bytecode ABI must be INTERNAL (_add_coupled_source), ADC-595")
-    assert '"add_coupling_operator"' in src, "the AMR typed add_coupling_operator entry must be bound"
+    assert '"_add_coupled_source"' not in src
+    assert '"add_coupled_source"' not in src
+
+    header = _read(INCLUDE, "runtime/amr_system.hpp")
+    assert "install_prepared_amr_coupling_operator(" in header, (
+        "AMR couplings must enter through the prepared typed provider seam"
+    )
 
 
 def test_named_couplings_survive_only_as_preset_descriptors():

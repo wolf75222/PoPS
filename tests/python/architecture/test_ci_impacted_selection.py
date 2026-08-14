@@ -1169,7 +1169,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     )
     assert "name: Cache exact OpenMP Python module" in openmp_block
     assert "id: openmp-python-module-cache" in openmp_block
-    assert "pops-module-openmp-${{ runner.os }}" in openmp_block
+    assert "pops-module-openmp-dim2-${{ runner.os }}" in openmp_block
     assert "id: openmp-python" in openmp_block
     assert "steps.openmp-python.outputs.python-version" in openmp_block
     assert "hashFiles('include/**', 'src/**', 'python/bindings/**'" in openmp_block
@@ -1178,6 +1178,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         "\n      - name: Cache exact OpenMP Python module", 1
     )[1].split("\n      - name:", 1)[0]
     assert "restore-keys:" not in openmp_module_cache_block
+    assert "path: build-kokkos-py/python/pops" in openmp_module_cache_block
     assert (
         "if: matrix.kind == 'python' && "
         "steps.openmp-python-module-cache.outputs.cache-hit == 'true'"
@@ -1187,12 +1188,27 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         "steps.openmp-python-module-cache.outputs.cache-hit != 'true'"
     ) in openmp_block
     assert "rsync -aI --delete" in openmp_block
-    assert "exact OpenMP module cache hit but no _pops*.so present" in openmp_block
+    assert "--exclude='_native/***'" in openmp_block
+    assert "Exact authenticated OpenMP module cache hit; native rebuild skipped." in openmp_block
+    openmp_native_auth_block = openmp_block.split(
+        "\n      - name: Authenticate Dim=2 OpenMP Python native variant", 1
+    )[1].split("\n      - name:", 1)[0]
+    assert "if: matrix.kind == 'python'" in openmp_native_auth_block
+    assert "cache-hit" not in openmp_native_auth_block
+    assert "PYTHONPATH: ${{ github.workspace }}/build-kokkos-py/python" in openmp_native_auth_block
+    assert "python3 scripts/verify_installed_native.py" in openmp_native_auth_block
+    assert '--expect-dim "$POPS_NATIVE_DIM" --expect-serial' in openmp_native_auth_block
     assert openmp_block.index("Cache exact OpenMP Python module") < openmp_block.index(
         "Restore ccache (Kokkos OpenMP"
     )
     assert openmp_block.index("Build + install Kokkos (OpenMP)") < openmp_block.index(
         "Restore ccache (Kokkos OpenMP"
+    )
+    assert openmp_block.index("Reuse exact OpenMP module") < openmp_block.index(
+        "Authenticate Dim=2 OpenMP Python native variant"
+    )
+    assert openmp_block.index("Build module Python `pops`") < openmp_block.index(
+        "Authenticate Dim=2 OpenMP Python native variant"
     )
     assert (
         "matrix.kind != 'python' || "

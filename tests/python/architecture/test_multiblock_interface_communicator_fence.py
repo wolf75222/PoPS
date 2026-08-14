@@ -29,7 +29,8 @@ def test_interface_scheduler_hot_path_never_falls_back_to_mpi_world():
 
     assert "MPI_COMM_WORLD" not in consensus
     assert "MPI_COMM_WORLD" not in apply_one
-    assert "const CommunicatorView& communicator" in consensus
+    assert "PreparedInterface& prepared" in consensus
+    assert "prepared.communicator" in consensus
     assert "prepared.communicator" in apply_one
 
 
@@ -37,7 +38,7 @@ def test_interface_scheduler_limits_world_rank_space_to_storage_admission():
     source = SCHEDULER.read_text(encoding="utf-8")
     install = _function(
         source,
-        "void install(AxisAlignedInterface route, MultiFab& left_state,",
+        "void install(route_type route, field_type& left_state,",
     )
     hot_path = source.split(
         "void apply(const BoundaryEvaluationPoint& point,",
@@ -49,4 +50,5 @@ def test_interface_scheduler_limits_world_rank_space_to_storage_admission():
     assert "const CommunicatorView field_rank_space =" in install
     assert "MPI_Comm_compare(communicator, field_rank_space.native_handle()" in install
     assert "execution_communicator = CommunicatorView{communicator};" in install
+    assert "prepared.communicator = execution_communicator;" in install
     assert "world_communicator_view()" not in hot_path

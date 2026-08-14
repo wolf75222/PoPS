@@ -62,11 +62,28 @@ def test_native_selector_requires_complete_owner_level_component_evidence() -> N
     assert "both Program and native producer authority" in selector
     assert 'term == "reflux" ? levels.size() - 1 : levels.size()' in selector
 
-    uniform = SYSTEM.read_text()
+    uniform = _between(
+        SYSTEM.read_text(),
+        "std::map<std::string, Real> System<Dim>::selected_accepted_balance_terms(",
+        "void System<Dim>::begin_step_projection_report(",
+    )
     assert "const int runtime_block = p_->index(block);" in uniform
-    assert "levels != std::vector<int>{0}" in uniform
+    assert "if (component < 0 || component >= p_->find(block).ncomp)" in uniform
+    assert "if (levels.size() != 1 || levels.front() != 0)" in uniform
+    assert (
+        "p_->program_.selected_accepted_balance_terms(route, runtime_block, component, levels,"
+        in uniform
+    )
+    assert 'automatic_terms, "System")' in uniform
 
-    adaptive = AMR.read_text()
-    assert "const std::size_t runtime_block = p_->block_index_or_throw(block);" in adaptive
-    assert "p_->runtime->block_n_vars(runtime_block)" in adaptive
-    assert "p_->runtime->nlev()" in adaptive
+    adaptive = _between(
+        AMR.read_text(),
+        "std::map<std::string, double> AmrSystem<Dim>::selected_accepted_balance_terms(",
+        "void AmrSystem<Dim>::begin_step_projection_report(",
+    )
+    assert "const typename Impl::BlockSpec& selected = p_->block(block);" in adaptive
+    assert "if (component < 0 || component >= selected.ncomp)" in adaptive
+    assert "p_->engine->hierarchy().num_levels()" in adaptive
+    assert "const int runtime_block = static_cast<int>(&selected - p_->blocks.data());" in adaptive
+    assert "p_->program.selected_accepted_balance_terms(" in adaptive
+    assert 'automatic_terms, "AmrSystem")' in adaptive
