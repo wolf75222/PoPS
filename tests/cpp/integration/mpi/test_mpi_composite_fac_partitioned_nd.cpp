@@ -19,6 +19,7 @@
 using pops::BoundaryTopology;
 using pops::Box;
 using pops::EllipticBuildRequest;
+using pops::ExecutionLane;
 using pops::Extent;
 using pops::Face;
 using pops::Geometry;
@@ -204,8 +205,8 @@ void expect_partitioned_fac() {
   options.coarse_rel_tol = Real(1e-4);
   options.coarse_abs_tol = Real(1e-10);
   options.coarse_cycles = 192;
-  CompositeFacPoisson<Dim> solver(make_request<Dim>(), lane, options, Real(1));
-  EXPECT_TRUE(solver.borrows_execution_lane(lane));
+  CompositeFacPoisson<Dim> solver(make_request<Dim>(), options, Real(1));
+  EXPECT_TRUE(solver.owns_execution_lane());
   EXPECT_EQ(pops::all_reduce_min(solver.has_remote_same_level_halo() ? 1L : 0L, lane), 1L);
   EXPECT_EQ(pops::all_reduce_min(solver.has_remote_parent_gather() ? 1L : 0L, lane), 1L);
   EXPECT_EQ(pops::all_reduce_min(solver.has_remote_fine_restriction() ? 1L : 0L, lane), 1L);
@@ -227,8 +228,7 @@ template <int Dim>
 void expect_exact_rank_ratio_prepares(const std::array<int, Dim>& ratio_components) {
   const ExecutionLane lane =
       ExecutionLane::world("pops.test.composite-fac.ratio:" + std::to_string(Dim));
-  CompositeFacPoisson<Dim> solver(make_request_with_ratio<Dim>(ratio_components), lane, {},
-                                  Real(1));
+  CompositeFacPoisson<Dim> solver(make_request_with_ratio<Dim>(ratio_components), {}, Real(1));
   EXPECT_EQ(solver.n_levels(), 2);
 }
 
@@ -240,7 +240,7 @@ void expect_collective_budget_failure() {
   bool rejected = false;
   std::string message;
   try {
-    CompositeFacPoisson<1> solver(make_request<1>(preparation), lane, {}, Real(1));
+    CompositeFacPoisson<1> solver(make_request<1>(preparation), {}, Real(1));
     (void)solver;
   } catch (const std::exception& error) {
     rejected = true;
