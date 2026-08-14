@@ -24,12 +24,7 @@ __all__ = (
     "__has_parallel_hdf5__",
     "__native_loader_contract__",
     "__mpi_contract__",
-    "__aux_named_base__",
-    "__aux_max_extra__",
-    "__aux_base_comps__",
-    "__aux_max_comps__",
     "__max_runtime_params__",
-    "__aux_canonical__",
     "abi_key",
     "my_rank",
     "n_ranks",
@@ -62,12 +57,7 @@ __has_mpi__: bool
 __has_parallel_hdf5__: bool
 __native_loader_contract__: dict[str, object]
 __mpi_contract__: dict[str, object] | None
-__aux_named_base__: int
-__aux_max_extra__: int
-__aux_base_comps__: int
-__aux_max_comps__: int
 __max_runtime_params__: int
-__aux_canonical__: dict[str, int]
 
 class StepAttemptRejected(RuntimeError):
     status: Literal[

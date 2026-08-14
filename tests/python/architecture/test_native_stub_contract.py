@@ -23,8 +23,7 @@ PUBLIC_METADATA = {
     "__checkpoint_schema_version__", "__cxx_std__", "__cxx_compiler__", "__has_kokkos__",
     "__kokkos_contract__", "__native_dimension__",
     "__has_mpi__", "__has_parallel_hdf5__", "__native_loader_contract__", "__mpi_contract__",
-    "__aux_named_base__", "__aux_max_extra__",
-    "__aux_base_comps__", "__aux_max_comps__", "__max_runtime_params__", "__aux_canonical__",
+    "__max_runtime_params__",
 }
 PUBLIC_CALLABLES = {
     "abi_key", "my_rank", "n_ranks", "mpi_world", "module_capabilities", "capability_report",

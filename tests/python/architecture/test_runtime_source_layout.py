@@ -17,6 +17,7 @@ RUNTIME = ROOT / "src" / "runtime"
 BINDINGS = ROOT / "python" / "bindings"
 ROOT_CMAKE = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
 SRC_CMAKE = (ROOT / "src" / "CMakeLists.txt").read_text(encoding="utf-8")
+SRC_CMAKE_BEHAVIOR = re.sub(r"(?m)#.*$", "", SRC_CMAKE)
 PYTHON_CMAKE = (ROOT / "python" / "CMakeLists.txt").read_text(encoding="utf-8")
 TESTS_CMAKE = (ROOT / "tests" / "CMakeLists.txt").read_text(encoding="utf-8")
 PRESETS = json.loads((ROOT / "CMakePresets.json").read_text(encoding="utf-8"))
@@ -80,7 +81,7 @@ def test_src_cmake_is_the_single_runtime_source_authority():
     missing = []
     for source in hand_written_sources:
         manifest_path = source.relative_to(ROOT / "src").as_posix()
-        if SRC_CMAKE.count(manifest_path) != 1:
+        if SRC_CMAKE_BEHAVIOR.count(manifest_path) != 1:
             missing.append(manifest_path)
     assert not missing, "runtime .cpp must occur exactly once in src/CMakeLists.txt: " + str(missing)
 
@@ -103,11 +104,26 @@ def test_python_and_tests_consume_the_central_targets():
     for target in ("pops_runtime_system", "pops_runtime_amr", "pops_runtime_output"):
         assert target in TESTS_CMAKE, f"tests have no consumers for {target}"
 
-    for target in ("pops_runtime_system", "pops_runtime_amr", "pops_runtime_output"):
+    for target in ("pops_runtime_system", "pops_runtime_output"):
         assert re.search(
             rf"target_link_libraries\(\s*{target}\s+PUBLIC\s+pops_runtime_core\s*\)",
             SRC_CMAKE,
         ), f"{target} does not carry the shared runtime ABI authority transitively"
+    assert re.search(
+        r"add_library\(pops_runtime_system_abi\s+STATIC\s+"
+        r"\$<TARGET_OBJECTS:pops_runtime_system>\s*\)",
+        SRC_CMAKE,
+    )
+    assert re.search(
+        r"target_link_libraries\(pops_runtime_system_abi\s+INTERFACE\s+"
+        r"pops_runtime_core\s*\)",
+        SRC_CMAKE,
+    )
+    assert re.search(
+        r"target_link_libraries\(pops_runtime_amr\s+PUBLIC\s+"
+        r"pops_runtime_core\s+pops_runtime_system_abi\s*\)",
+        SRC_CMAKE,
+    )
 
     positions = {
         name: re.search(rf"(?m)^\s*add_subdirectory\({name}\)\s*$", ROOT_CMAKE).start()
