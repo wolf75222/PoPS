@@ -13,6 +13,12 @@ RUNTIME = ROOT / "python/pops/runtime/_runtime_consumers.py"
 STUB = ROOT / "python/pops/_pops.pyi"
 
 
+def _binding(source: str, name: str) -> str:
+    start = source.index(f'"{name}",')
+    end = source.index("\n      .def(", start)
+    return source[start:end]
+
+
 def test_native_root_output_surface_requires_an_owned_consumer_lane():
     collective = COLLECTIVE.read_text(encoding="utf-8")
     system = SYSTEM.read_text(encoding="utf-8")
@@ -30,10 +36,17 @@ def test_python_root_output_bridge_rejects_the_process_world_type():
     amr = AMR_BINDING.read_text(encoding="utf-8")
     stub = STUB.read_text(encoding="utf-8")
 
-    assert "WorldCommunicator" not in system
-    assert "WorldCommunicator" not in amr
-    assert "const ObserverMpiLane& lane" in system
-    assert "const ObserverMpiLane& lane" in amr
+    for source in (system, amr):
+        for name in (
+            "output_state_root_pieces",
+            "output_field_root_pieces",
+            "output_embedded_boundary_root_pieces",
+        ):
+            bridge = _binding(source, name)
+            assert "WorldCommunicator" not in bridge
+            assert "MPI_COMM_WORLD" not in bridge
+            assert "const ObserverMpiLane& lane" in bridge
+            assert 'py::arg("lane")' in bridge
     assert "lane: _NativeObserverMpiLane" in stub
 
 
