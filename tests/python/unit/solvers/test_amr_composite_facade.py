@@ -303,13 +303,9 @@ def test_native_install_receives_exact_resolved_plan_identity(probe_type, target
         plan.native_options["provider_identity_text"],
     )
     if target == "amr_system":
-        output = plan.native_options["output_route"]
-        assert probe._s.field_solver_args[6:8] == (
-            output["component_keys"],
-            output["gradient_sign"],
-        )
+        assert probe._s.field_solver_args[3] == plan.output_publication_data()
         hierarchy = plan.native_options["hierarchy_policy"]
-        assert probe._s.field_solver_args[13:17] == (
+        assert probe._s.field_solver_args[9:13] == (
             hierarchy["policy_id"],
             hierarchy["interface_version"],
             hierarchy["option_schema"],

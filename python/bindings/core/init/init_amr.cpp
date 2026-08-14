@@ -82,6 +82,65 @@ py::dict prepared_provider_options_to_python(const pops::PreparedProviderOptions
   return result;
 }
 
+struct PreparedAmrFieldOutputPublication {
+  std::string owner_identity;
+  std::string block;
+  std::string field;
+  std::vector<pops::runtime::system::AuxiliaryComponentKey> output_keys;
+  int gradient_sign = 1;
+};
+
+std::string exact_publication_string(const py::handle& value, std::string_view field) {
+  if (!PyUnicode_CheckExact(value.ptr()))
+    throw py::type_error("AMR field output publication '" + std::string(field) +
+                         "' must be an exact string");
+  const std::string result = py::cast<std::string>(value);
+  if (result.empty())
+    throw py::value_error("AMR field output publication '" + std::string(field) +
+                          "' must be non-empty");
+  return result;
+}
+
+PreparedAmrFieldOutputPublication prepared_amr_field_output_publication_from_python(
+    const py::dict& publication) {
+  if (!PyDict_CheckExact(publication.ptr()) || publication.size() != 6 ||
+      !publication.contains("schema_version") || !publication.contains("owner_identity") ||
+      !publication.contains("block") || !publication.contains("field") ||
+      !publication.contains("output_keys") || !publication.contains("gradient_sign"))
+    throw py::value_error("AMR field output publication must be one exact schema-v1 record");
+  const py::handle schema = publication["schema_version"];
+  const py::handle sign = publication["gradient_sign"];
+  if (!PyLong_CheckExact(schema.ptr()) || py::cast<std::uint32_t>(schema) != 1)
+    throw py::value_error("AMR field output publication schema_version must be exactly 1");
+  if (!PyLong_CheckExact(sign.ptr()))
+    throw py::type_error("AMR field output publication gradient_sign must be an exact int");
+  const py::handle rows = publication["output_keys"];
+  if (!PyList_CheckExact(rows.ptr()) && !PyTuple_CheckExact(rows.ptr()))
+    throw py::type_error("AMR field output publication output_keys must be an exact sequence");
+
+  PreparedAmrFieldOutputPublication result;
+  result.owner_identity = exact_publication_string(publication["owner_identity"], "owner_identity");
+  result.block = exact_publication_string(publication["block"], "block");
+  result.field = exact_publication_string(publication["field"], "field");
+  result.gradient_sign = py::cast<int>(sign);
+  const py::sequence output_rows = py::reinterpret_borrow<py::sequence>(rows);
+  result.output_keys.reserve(py::len(output_rows));
+  for (const py::handle item : output_rows) {
+    if (!PyDict_CheckExact(item.ptr()))
+      throw py::type_error("AMR field output publication keys must be exact dicts");
+    const py::dict row = py::reinterpret_borrow<py::dict>(item);
+    if (row.size() != 4 || !row.contains("owner_qid") || !row.contains("space_kind") ||
+        !row.contains("space_name") || !row.contains("component"))
+      throw py::value_error("AMR field output publication requires exact ComponentKey records");
+    result.output_keys.push_back(
+        {exact_publication_string(row["owner_qid"], "output_keys.owner_qid"),
+         exact_publication_string(row["space_kind"], "output_keys.space_kind"),
+         exact_publication_string(row["space_name"], "output_keys.space_name"),
+         exact_publication_string(row["component"], "output_keys.component")});
+  }
+  return result;
+}
+
 void require_amr_cell_array_shape(const AmrSystem& system, const py::array& array,
                                   std::string_view operation) {
   const std::vector<py::ssize_t> expected = ranked_numpy_shape(system.spatial_shape());
@@ -538,9 +597,7 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
       .def(
           "set_field_solver_plan",
           [](AmrSystem& system, const std::string& provider_slot, const std::string& plan_identity,
-             const std::string& provider_identity, const std::string& output_owner_identity,
-             const std::string& output_block, const std::string& output_key,
-             const std::vector<py::dict>& output_rows, int output_gradient_sign,
+             const std::string& provider_identity, const py::dict& output_publication,
              const std::vector<std::string>& provider_identities,
              const std::vector<std::string>& provider_blocks,
              const std::vector<std::string>& provider_keys,
@@ -550,18 +607,8 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
              const std::string& hierarchy_policy_option_schema,
              const py::dict& hierarchy_policy_options, const std::string& schema_identity,
              const py::dict& options) {
-            std::vector<runtime::system::AuxiliaryComponentKey> output_keys;
-            output_keys.reserve(output_rows.size());
-            for (const py::dict& row : output_rows) {
-              if (row.size() != 4 || !row.contains("owner_qid") || !row.contains("space_kind") ||
-                  !row.contains("space_name") || !row.contains("component"))
-                throw std::invalid_argument(
-                    "AMR field plan output requires an exact ComponentKey mapping");
-              output_keys.push_back({py::cast<std::string>(row["owner_qid"]),
-                                     py::cast<std::string>(row["space_kind"]),
-                                     py::cast<std::string>(row["space_name"]),
-                                     py::cast<std::string>(row["component"])});
-            }
+            const PreparedAmrFieldOutputPublication publication =
+                prepared_amr_field_output_publication_from_python(output_publication);
             const AmrFieldHierarchyPolicyAuthority hierarchy_policy{
                 hierarchy_policy_id,
                 hierarchy_policy_interface_version,
@@ -569,18 +616,18 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
                                                       hierarchy_policy_options),
             };
             system.set_field_solver_plan(
-                provider_slot, plan_identity, provider_identity, output_owner_identity,
-                output_block, output_key, output_keys, output_gradient_sign, provider_identities,
-                provider_blocks, provider_keys, provider_coefficients, solver, hierarchy_policy,
+                provider_slot, plan_identity, provider_identity, publication.owner_identity,
+                publication.block, publication.field, publication.output_keys,
+                publication.gradient_sign, provider_identities, provider_blocks, provider_keys,
+                provider_coefficients, solver, hierarchy_policy,
                 prepared_provider_options_from_python(schema_identity, options));
           },
           py::arg("provider_slot"), py::arg("plan_identity"), py::arg("provider_identity"),
-          py::arg("output_owner_identity"), py::arg("output_block"), py::arg("output_key"),
-          py::arg("output_keys"), py::arg("output_gradient_sign"), py::arg("provider_identities"),
-          py::arg("provider_blocks"), py::arg("provider_keys"), py::arg("provider_coefficients"),
-          py::arg("solver"), py::arg("hierarchy_policy_id"),
-          py::arg("hierarchy_policy_interface_version"), py::arg("hierarchy_policy_option_schema"),
-          py::arg("hierarchy_policy_options"), py::arg("schema_identity"), py::arg("options"))
+          py::arg("output_publication"), py::arg("provider_identities"), py::arg("provider_blocks"),
+          py::arg("provider_keys"), py::arg("provider_coefficients"), py::arg("solver"),
+          py::arg("hierarchy_policy_id"), py::arg("hierarchy_policy_interface_version"),
+          py::arg("hierarchy_policy_option_schema"), py::arg("hierarchy_policy_options"),
+          py::arg("schema_identity"), py::arg("options"))
       .def(
           "register_field_solver_provider",
           [](AmrSystem& system, const std::string& provider_slot,
