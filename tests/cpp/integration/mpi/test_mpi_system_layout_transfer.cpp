@@ -7,6 +7,7 @@
 #include <pops/runtime/builders/compiled/dsl_block.hpp>
 #include <pops/runtime/builders/compiled/generated_system_block.hpp>
 #include <pops/runtime/config/generated_component_abi.hpp>
+#include <pops/runtime/dynamic/authenticated_native_file.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
 #include <pops/runtime/system.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
@@ -217,11 +218,14 @@ struct PassiveScalar {
   }
 };
 
-pops::component::ExpectedNativeComponent expected_component() {
-  return {
-      kComponentId,         kSemanticIdentity,
-      kManifestIdentity,    POPS_COMPONENT_CATALOG_SHA256_V1,
-      POPS_ABI_KEY_LITERAL, {{POPS_NATIVE_INTERFACE_TRANSFER_V1, 1, sizeof(PopsTransferApiV1)}}};
+pops::component::ExpectedNativeComponent expected_component(const std::string& library) {
+  return {kComponentId,
+          kSemanticIdentity,
+          kManifestIdentity,
+          POPS_COMPONENT_CATALOG_SHA256_V1,
+          POPS_ABI_KEY_LITERAL,
+          pops::dynlib::AuthenticatedNativeFile(library).binary_identity(),
+          {{POPS_NATIVE_INTERFACE_TRANSFER_V1, 1, sizeof(PopsTransferApiV1)}}};
 }
 
 pops::SystemLayoutTransferExecution transfer_execution(MPI_Comm communicator) {
@@ -448,7 +452,7 @@ int run_mpi_system_layout_transfer(int argc, char** argv) {
     std::shared_ptr<pops::component::LoadedComponent> component;
     bool healthy = phase("authenticated Transfer DSO load", [&] {
       component = std::make_shared<pops::component::LoadedComponent>(
-          pops::component::LoadedComponent::load(library, expected_component()));
+          pops::component::LoadedComponent::load(library, expected_component(library)));
     });
 
     std::unique_ptr<NativeSystem> fine;

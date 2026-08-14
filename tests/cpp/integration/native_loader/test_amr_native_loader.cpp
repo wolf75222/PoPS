@@ -3,6 +3,7 @@
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/runtime/dynamic/component_consumers.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
+#include <pops/runtime/dynamic/authenticated_native_file.hpp>
 #include <pops/runtime/dynamic/prepared_execution_context.hpp>
 
 #include "component_abi_test_helpers.hpp"
@@ -514,12 +515,13 @@ std::filesystem::path compile_component(FluxTableFixture fixture = FluxTableFixt
   return library;
 }
 
-pops::component::ExpectedNativeComponent expected() {
+pops::component::ExpectedNativeComponent expected(const std::filesystem::path& library) {
   return {kComponentId,
           kSemanticIdentity,
           kManifestIdentity,
           POPS_COMPONENT_CATALOG_SHA256_V1,
           POPS_ABI_KEY_LITERAL,
+          pops::dynlib::AuthenticatedNativeFile(library.string()).binary_identity(),
           {{POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, sizeof(PopsNumericalFluxApiV1)},
            {POPS_NATIVE_INTERFACE_TRANSFER_V1, 1, sizeof(PopsTransferApiV1)},
            {POPS_NATIVE_INTERFACE_GHOST_BOUNDARY_V1, 1, sizeof(PopsGhostBoundaryApiV1)},
@@ -542,7 +544,7 @@ std::shared_ptr<const pops::component::PreparedExecutionContextV1> prepared_exec
 TEST(test_amr_native_loader, LoadsAuthenticatesAndExecutesExactFinalTable) {
   const auto library = compile_component();
   {
-    auto loaded = pops::component::LoadedComponent::load(library.string(), expected());
+    auto loaded = pops::component::LoadedComponent::load(library.string(), expected(library));
     const auto& table =
         loaded.table<PopsNumericalFluxApiV1>(POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1);
     std::array<std::size_t, kDim> extents{};
@@ -604,7 +606,7 @@ TEST(test_amr_native_loader, CachesPreparedResourcesPerExactTargetAndPinsExecuti
   ASSERT_NE(prepare_count, nullptr);
   ASSERT_NE(destroy_count, nullptr);
   {
-    auto loaded = pops::component::LoadedComponent::load(library.string(), expected());
+    auto loaded = pops::component::LoadedComponent::load(library.string(), expected(library));
     const auto execution = abi::host_execution_context();
     auto anonymous_execution = execution;
     anonymous_execution.execution_identity = "";
@@ -662,7 +664,7 @@ TEST(test_amr_native_loader, FreshSessionStatesAreIndependentMoveOnlyRaiiOwners)
   ASSERT_NE(prepare_count, nullptr);
   ASSERT_NE(destroy_count, nullptr);
   {
-    auto loaded = pops::component::LoadedComponent::load(library.string(), expected());
+    auto loaded = pops::component::LoadedComponent::load(library.string(), expected(library));
     const auto execution = abi::host_execution_context();
     {
       auto first =
@@ -687,27 +689,27 @@ TEST(test_amr_native_loader, FreshSessionStatesAreIndependentMoveOnlyRaiiOwners)
 
 TEST(test_amr_native_loader, RefusesIdentityInterfaceAndTableSizeMismatches) {
   const auto library = compile_component();
-  auto forged = expected();
+  auto forged = expected(library);
   forged.semantic_identity = "forged-semantic";
   EXPECT_THROW(pops::component::LoadedComponent::load(library.string(), forged),
                std::runtime_error);
 
-  auto undeclared_export = expected();
+  auto undeclared_export = expected(library);
   undeclared_export.interfaces.pop_back();
   EXPECT_THROW(pops::component::LoadedComponent::load(library.string(), undeclared_export),
                std::runtime_error);
 
-  auto duplicate_expectation = expected();
+  auto duplicate_expectation = expected(library);
   duplicate_expectation.interfaces.push_back(duplicate_expectation.interfaces.front());
   EXPECT_THROW(pops::component::LoadedComponent::load(library.string(), duplicate_expectation),
                std::runtime_error);
 
-  auto missing = expected();
+  auto missing = expected(library);
   missing.interfaces = {{POPS_NATIVE_INTERFACE_TRANSFER_V1, 1, sizeof(PopsTransferApiV1)}};
   EXPECT_THROW(pops::component::LoadedComponent::load(library.string(), missing),
                std::runtime_error);
 
-  auto truncated = expected();
+  auto truncated = expected(library);
   truncated.interfaces[0].minimum_table_size = sizeof(PopsNumericalFluxApiV1) + 1;
   EXPECT_THROW(pops::component::LoadedComponent::load(library.string(), truncated),
                std::runtime_error);
@@ -716,21 +718,21 @@ TEST(test_amr_native_loader, RefusesIdentityInterfaceAndTableSizeMismatches) {
 
 TEST(test_amr_native_loader, RefusesHonestlyReportedHeaderOnlyInterfaceTable) {
   const auto library = compile_component(FluxTableFixture::HeaderOnly);
-  EXPECT_THROW(pops::component::LoadedComponent::load(library.string(), expected()),
+  EXPECT_THROW(pops::component::LoadedComponent::load(library.string(), expected(library)),
                std::runtime_error);
   std::filesystem::remove(library);
 }
 
 TEST(test_amr_native_loader, RefusesHeaderOnlyTableWithForgedFullEntrySize) {
   const auto library = compile_component(FluxTableFixture::ForgedEntrySize);
-  EXPECT_THROW(pops::component::LoadedComponent::load(library.string(), expected()),
+  EXPECT_THROW(pops::component::LoadedComponent::load(library.string(), expected(library)),
                std::runtime_error);
   std::filesystem::remove(library);
 }
 
 TEST(test_amr_native_loader, RefusesComponentBuiltForAnotherNativeAbi) {
   const auto library = compile_component(FluxTableFixture::WrongAbi);
-  EXPECT_THROW(pops::component::LoadedComponent::load(library.string(), expected()),
+  EXPECT_THROW(pops::component::LoadedComponent::load(library.string(), expected(library)),
                std::runtime_error);
   std::filesystem::remove(library);
 }
