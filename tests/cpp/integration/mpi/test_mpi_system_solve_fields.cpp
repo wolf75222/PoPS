@@ -24,12 +24,14 @@
 #include <pops/physics/bricks/source.hpp>                // NoSource
 #include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
 #include <pops/runtime/builders/compiled/generated_system_block.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/runtime/system.hpp>
 
 #include <pops/parallel/comm.hpp>
 
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -119,6 +121,9 @@ static int pops_run_test_mpi_system_solve_fields(int argc, char** argv) {
   const NativeSystemConfig cfg = native_config(n);
 
   NativeSystem sys(cfg);
+  sys.install_prepared_boundary_execution_lane(
+      std::make_shared<ExecutionLane>(ExecutionLane::duplicate_world_collectively(
+          "test.mpi-system-solve-fields.runtime-instance@1")));
   GasModel gas_model{};
   gas_model.hyp = NativeGasLaw::prepare(static_cast<Real>(gamma));
   sys.install_block_state_route("gas", "test.mpi-system-solve-fields.gas.state@1");
