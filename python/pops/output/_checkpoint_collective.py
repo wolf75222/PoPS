@@ -452,8 +452,7 @@ def decode_checkpoint_bytes(
         raise TypeError("restart payload must be non-empty exact bytes")
     import numpy as np
     from pops._manifest_protocol import strict_json_loads
-    from pops.runtime._checkpoint_resource_budget import CheckpointResourceBudget
-    from pops.runtime._checkpoint_manifest import IDENTITY_KEY, MANIFEST_KEY
+    from ._checkpoint_contract import CheckpointResourceBudget, IDENTITY_KEY, MANIFEST_KEY
 
     if type(budget) is not CheckpointResourceBudget:
         raise TypeError("restart decode requires one exact live checkpoint resource budget")
@@ -1392,7 +1391,7 @@ def restore_checkpoint_path(
         raise RuntimeError("%s target consensus lost its local path" % phase_prefix)
     if any(row["value"] != target_text for row in rows):
         raise ValueError("%s target differs across ranks" % phase_prefix)
-    from pops.runtime._checkpoint_resource_budget import require_checkpoint_resource_budget
+    from ._checkpoint_contract import require_checkpoint_resource_budget
 
     archive_budget = require_checkpoint_resource_budget(executor).max_archive_bytes
     payload = root_bytes(
