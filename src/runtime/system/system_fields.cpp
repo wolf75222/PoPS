@@ -498,8 +498,15 @@ std::vector<double> System<Dim>::get_primitive_state(const std::string& name) {
   const std::vector<double> conservative = gather_global(block.U, p_->dom, block.ncomp);
   std::vector<double> primitive;
   const UniformRecoveryBatchReport report = block.batch_cons_to_prim(conservative, primitive);
-  if (!report.publication_permitted())
-    throw std::runtime_error("System::get_primitive_state batch variable recovery failed");
+  if (!report.publication_permitted()) {
+    const std::string failed_cell =
+        report.failed_cell == kNoRecoveryCell ? "none" : std::to_string(report.failed_cell);
+    throw std::runtime_error(
+        "System::get_primitive_state batch variable recovery failed: last_method_kind=" +
+        std::string(recovery_method_kind_name(report.recovery.last_method_kind)) +
+        ", last_method_index=" + std::to_string(report.recovery.last_method) +
+        ", failed_cell=" + failed_cell);
+  }
   return primitive;
 }
 
