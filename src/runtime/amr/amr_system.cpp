@@ -15752,7 +15752,11 @@ POPS_EXPORT void AmrSystem<Dim>::install_program(const std::string& so_path) {
         pops::dynlib::sym(handle, "pops_program_block_name"));
     if (!block_count || !block_name)
       throw std::runtime_error(
-          "AmrSystem::install_program: the exact Program block identity table is missing");
+          "AmrSystem::install_program: compiled Program '" + so_path +
+          "' does not export the required block identity table "
+          "(pops_program_block_count + pops_program_block_name). Positional Program-to-AmrSystem "
+          "binding has been removed; regenerate the Program library with the current PoPS "
+          "codegen and headers.");
     const int count = block_count();
     if (count < 0)
       throw std::runtime_error("AmrSystem::install_program: Program block count is negative");

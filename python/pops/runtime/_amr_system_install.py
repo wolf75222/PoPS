@@ -86,7 +86,6 @@ class _PreparedAmrFieldSolverInstall:
             raise TypeError("native AMR field solver provider route must be non-empty")
         contract = binding.resolution.to_data()["native_contract"]
         routes = self.options["provider_pack"]
-        output = self.options["output_route"]
         hierarchy_policy = self.options["hierarchy_policy"]
         if not isinstance(hierarchy_policy, Mapping) or set(hierarchy_policy) != {
             "policy_id",
@@ -101,11 +100,7 @@ class _PreparedAmrFieldSolverInstall:
             self.slot,
             self.field_plan.identity.token,
             self.options["provider_identity_text"],
-            canonical_bytes(output["owner_identity"]).hex(),
-            output["owner_block"],
-            output["key"],
-            output["component_keys"],
-            output["gradient_sign"],
+            self.field_plan.output_publication_data(),
             [canonical_bytes(route["provider_identity"]).hex() for route in routes],
             [route["owner_block"] for route in routes],
             [route["key"] for route in routes],

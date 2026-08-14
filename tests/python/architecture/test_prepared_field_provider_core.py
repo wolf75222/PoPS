@@ -104,6 +104,18 @@ def test_runtime_adapters_do_not_interpret_method_owned_install_records(
     assert not {pattern for pattern in concrete if re.search(pattern, source)}
 
 
+def test_amr_adapter_forwards_one_authenticated_output_publication_record() -> None:
+    plan = (ROOT / "python/pops/codegen/field_install_plan.py").read_text(encoding="utf-8")
+    adapter = (ROOT / "python/pops/runtime/_amr_system_install.py").read_text(encoding="utf-8")
+    binding = (ROOT / "python/bindings/core/init/init_amr.cpp").read_text(encoding="utf-8")
+
+    assert "def output_publication_data" in plan
+    assert "binding.resolution.native_options" in plan
+    assert "self.field_plan.output_publication_data()" in adapter
+    assert "prepared_amr_field_output_publication_from_python" in binding
+    assert 'py::arg("output_publication")' in binding
+
+
 @pytest.mark.parametrize("path", GENERIC_NATIVE_NULLSPACE_PROTOCOLS, ids=lambda path: path.stem)
 def test_native_nullspace_protocol_has_no_cartesian_boundary_record_leak(
     path: Path,
