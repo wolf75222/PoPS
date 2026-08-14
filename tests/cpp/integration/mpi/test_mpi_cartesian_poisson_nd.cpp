@@ -103,7 +103,9 @@ void prove_distributed_manufactured_mode() {
   options.relative_tolerance = Real{1e-12};
   options.absolute_tolerance = Real{1e-14};
   options.maximum_iterations = 32;
-  CartesianPoissonSolver<Dim> solver(geometry, layout, distribution, local_rank, topology, options);
+  const ExecutionLane lane = ExecutionLane::world("pops.test.mpi-cartesian-poisson.nd");
+  CartesianPoissonSolver<Dim> solver(geometry, layout, distribution, local_rank, topology, options,
+                                     lane);
   MultiFab<Dim> warm_start(layout, distribution, local_rank, 1, uniform_extent<Dim>(1));
   warm_start.set_val(Real{0});
 
@@ -125,7 +127,7 @@ void prove_distributed_manufactured_mode() {
     fab.copy_from_host(host);
   }
 
-  const SolveReport report = solver.solve(warm_start);
+  const SolveReport report = solver.solve(warm_start, lane);
   ASSERT_TRUE(report.solved_value_available()) << report.reason;
   Real local_error = Real{0};
   for (std::size_t local = 0; local < solver.candidate().local_size(); ++local) {
@@ -139,7 +141,7 @@ void prove_distributed_manufactured_mode() {
                                                    manufactured_value(geometry, index)));
     }
   }
-  EXPECT_LT(all_reduce_max(static_cast<double>(local_error)), 5e-10);
+  EXPECT_LT(all_reduce_max(static_cast<double>(local_error), lane), 5e-10);
   if (my_rank() == 2)
     EXPECT_EQ(solver.candidate().local_size(), 0U);
 }
