@@ -6,6 +6,7 @@ error-policy exceptions are not capability declarations. This gate locks the exp
 against ``DEFERRED_GROUPS`` without importing ``pops`` or the compiled extension.
 """
 
+import ast
 import importlib.util
 import pathlib
 import re
@@ -95,12 +96,30 @@ def _extract_method_body(header, signature):
     raise AssertionError("unterminated method body: %s" % signature)
 
 
+def _module_scope_pops_imports(source):
+    """Return package imports which would break standalone source-only execution."""
+    tree = ast.parse(source, filename=str(SUPPORT_PY))
+    offenders = []
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            offenders.extend(
+                alias.name
+                for alias in node.names
+                if alias.name == "pops" or alias.name.startswith("pops.")
+            )
+        elif isinstance(node, ast.ImportFrom) and node.module and (
+            node.module == "pops" or node.module.startswith("pops.")
+        ):
+            offenders.append("from " + node.module)
+    return offenders
+
+
 def test_support_module_loads_standalone_and_stays_import_free():
     source = SUPPORT_PY.read_text(encoding="utf-8")
-    offender = re.search(r"(?m)^\s*(?:import\s+pops|from\s+pops)\b", source)
-    assert offender is None, (
+    offenders = _module_scope_pops_imports(source)
+    assert offenders == [], (
         "amr_program_support.py must load source-only before _pops exists; found %r"
-        % (offender.group(0) if offender else None)
+        % offenders
     )
 
     groups = _load_support_module().deferred_groups()
@@ -189,7 +208,8 @@ def test_parser_finds_only_explicit_known_deferrals():
         < single_state_route.index("facade_->solve_program_field_from_blocks_at(")
     )
     assert "solve_fields_from_blocks_at" in UNIFORM_CONTEXT_HPP.read_text(encoding="utf-8")
-    assert "program_execution_solve_generated_field_from_blocks_outcome_" in (context_header)
+    assert "program_execution_solve_generated_field_from_blocks_outcome_" not in context_header
+    assert "facade_->solve_program_field_from_blocks_at(" in context_header
     assert "named_solve_reports_" not in context_header
     assert "fine_level_field_perturbation" not in module.DEFERRED_GROUPS
     assert "refined_shared_block_interfaces" not in module.DEFERRED_GROUPS
@@ -225,7 +245,11 @@ def test_named_flux_support_matches_the_resolved_interface_envelope():
     assert "active AMR named-flux divergence has no authenticated" not in named_route
     assert "prepare_active_flux_basis_impl_(" in named_route
     assert "has_interface_flux_provider()" in named_envelope
-    assert "shared topological interfaces are installed" in named_envelope
+    assert (
+        '"AMR named flux currently refuses the complete prepared carrier pack when shared "'
+        in named_envelope
+    )
+    assert '"topological interfaces are installed"' in named_envelope
 
 
 def test_generated_programs_cannot_use_coarse_injection_as_a_fine_solve():

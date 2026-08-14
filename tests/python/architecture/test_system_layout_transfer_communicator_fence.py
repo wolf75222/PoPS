@@ -36,14 +36,17 @@ def test_layout_transfer_accepts_a_live_world_congruent_execution_context():
 
 def test_layout_transfer_retains_the_resolved_context_for_every_hot_collective():
     source = SOURCE.read_text(encoding="utf-8")
-    implementation = source.split("struct PreparedSystemLayoutTransfer::Impl", maxsplit=1)[1]
-    hot_path = source.split("void PreparedSystemLayoutTransfer::begin_transaction", maxsplit=1)[1]
+    implementation = source.split("struct PreparedSystemLayoutTransfer<Dim>::Impl", maxsplit=1)[1]
+    hot_path = source.split(
+        "void PreparedSystemLayoutTransfer<Dim>::begin_transaction", maxsplit=1
+    )[1]
 
     assert source.count("world_communicator_view()") == 1
     assert "CommunicatorView communicator;" in implementation
     assert "CommunicatorView world;" not in implementation
     assert "p_->world" not in hot_path
     assert "world_communicator_view()" not in hot_path
-    assert "parallel_copy(p_->source_snapshot, p_->source_state(), p_->communicator)" in hot_path
+    assert "parallel_copy(p_->source_snapshot, p_->source_state(), *p_->source_copy_schedule)" in hot_path
+    assert "source_copy_schedule" in implementation
     assert "collective_elements(local_source_elements, p_->communicator)" in hot_path
     assert "collective_elements(local_target_elements, p_->communicator)" in hot_path
