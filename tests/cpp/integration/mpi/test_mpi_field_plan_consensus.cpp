@@ -854,7 +854,7 @@ int run_multiblock_field_solve(int argc, char** argv) {
     context->begin_step(0.01);
     auto point = context->boundary_evaluation_point(3);
 
-    pops::SolveOutcome prepared_rhs = context->solve_fields();
+    pops::SolveOutcome prepared_rhs = context->solve_default_field_on_coarse_level();
     require(prepared_rhs.report().solved_value_available(),
             "prepared block-level add_poisson_rhs solve succeeds");
     (void)prepared_rhs.consume(pops::SolveConsumption::kAccept);
