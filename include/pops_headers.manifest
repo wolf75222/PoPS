@@ -192,12 +192,16 @@ api pops/runtime/amr/hierarchy_policy_authority.hpp
 sdk-support pops/runtime/amr/bootstrap_transfer_builtins.hpp
 sdk-support pops/runtime/amr/composite_reduction.hpp
 sdk-support pops/runtime/amr/coarse_fine_ghost_schedule.hpp
+sdk-support pops/runtime/amr/detail/native_tagger_session.hpp
 api pops/runtime/amr/exact_field_solver_provider.hpp
 sdk-support pops/runtime/amr/field_solver_options.hpp
 sdk-support pops/runtime/amr/persistent_tagging_state.hpp
 sdk-support pops/runtime/amr/prepared_amr_ghost_fill.hpp
+sdk-support pops/runtime/amr/prepared_clustering_component.hpp
 sdk-support pops/runtime/amr/prepared_component_providers.hpp
 sdk-support pops/runtime/amr/prepared_multiblock_hierarchy.hpp
+sdk-support pops/runtime/amr/prepared_reflux_component.hpp
+sdk-support pops/runtime/amr/prepared_tagger_component.hpp
 sdk-support pops/runtime/amr/prepared_tagging_execution.hpp
 api pops/runtime/amr_system.hpp
 api pops/runtime/amr_patch.hpp
