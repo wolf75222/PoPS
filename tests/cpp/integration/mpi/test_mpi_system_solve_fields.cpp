@@ -21,16 +21,17 @@
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/physics/composition/composite.hpp>
 #include <pops/physics/bricks/elliptic.hpp>
-#include <pops/physics/bricks/hyperbolic.hpp>
 #include <pops/physics/bricks/source.hpp>                // NoSource
 #include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
 #include <pops/runtime/builders/compiled/generated_system_block.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/runtime/system.hpp>
 
 #include <pops/parallel/comm.hpp>
 
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -72,8 +73,9 @@ struct TeSource {
   }
 };
 // Bloc de CHARGE : alimente le second membre du Poisson (elliptic_rhs = densite de charge q n).
-using ProbeModel =
-    CompositeModel<CartesianExBDrift, TeSource, ChargeDensity>;       // lit T_e + charge le Poisson
+// L'advection scalaire est volontairement neutre : ce fixture vise solve_fields() sur rang local vide,
+// pas les fournisseurs electromagnetiques supplementaires de CartesianExBDrift.
+using ProbeModel = CompositeModel<nd::ScalarAdvection<kTestDimension>, TeSource, ChargeDensity>;
 using GasModel = CompositeModel<NativeGasLaw, NoSource, NoElliptic>;  // fournit p/rho
 
 std::size_t cell_count(int n) {
@@ -119,6 +121,9 @@ static int pops_run_test_mpi_system_solve_fields(int argc, char** argv) {
   const NativeSystemConfig cfg = native_config(n);
 
   NativeSystem sys(cfg);
+  sys.install_prepared_boundary_execution_lane(
+      std::make_shared<ExecutionLane>(ExecutionLane::duplicate_world_collectively(
+          "test.mpi-system-solve-fields.runtime-instance@1")));
   GasModel gas_model{};
   gas_model.hyp = NativeGasLaw::prepare(static_cast<Real>(gamma));
   sys.install_block_state_route("gas", "test.mpi-system-solve-fields.gas.state@1");
@@ -139,7 +144,11 @@ static int pops_run_test_mpi_system_solve_fields(int argc, char** argv) {
       "probe", {{{temperature_key, temperature_contract, temperature_shape}, 0}}});
   sys.seal_auxiliary_providers();
   sys.install_block_state_route("probe", "test.mpi-system-solve-fields.probe.state@1");
-  add_compiled_model(sys, "probe", ProbeModel{}, "minmod", "rusanov", "conservative", "explicit");
+  RealVector<kTestDimension> probe_velocity{};
+  ProbeModel probe_model{};
+  probe_model.hyp = nd::ScalarAdvection<kTestDimension>::prepare(probe_velocity);
+  add_compiled_model(sys, "probe", std::move(probe_model), "minmod", "rusanov", "conservative",
+                     "explicit");
   sys.set_poisson("composite",
                   "cartesian_cg");  // f = somme des briques elliptiques (ici la charge)
 
@@ -193,9 +202,9 @@ static int pops_run_test_mpi_system_solve_fields(int argc, char** argv) {
     chk(finite, "potential_finite");
     chk(maxabs > 0.0, "potential_nonzero");  // une charge non nulle -> un potentiel non trivial
 
-    // solve_fields() a peuple le canal aux (phi, grad phi, T_e) : eval_rhs(probe) = -div F + S lit
-    // ce canal sans crash et reste fini (la derivation par cellule a bien tourne sur le rang
-    // proprietaire ; la correction T_e exacte est verifiee a part par test_aux_te en serie).
+    // Le probe conserve la lecture du fournisseur T_e : eval_rhs(probe) reste fini apres
+    // solve_fields(). Les oracles potential_* couvrent separement le solveur Poisson et son
+    // potentiel sur le rang proprietaire.
     bool rfin = !R.empty();
     for (double r : R)
       rfin = rfin && std::isfinite(r);

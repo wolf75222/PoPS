@@ -1345,14 +1345,16 @@ std::array<bool, Dim> System<Dim>::prepared_block_periodicity() const {
 template <int Dim>
 void System<Dim>::install_prepared_block(PreparedSystemBlock<Dim> prepared) {
   require_assembling(p_->lifecycle_, "install_prepared_block");
+  const std::string provider_consumer_qid = prepared.name;
   auto* finalize = p_->native_package_finalize_candidate_;
   auto& auxiliary_registry =
       finalize == nullptr ? p_->auxiliary_registry_ : finalize->auxiliary_registry;
   auto& blocks = finalize == nullptr ? p_->blocks_ : finalize->blocks;
   auto& boundary_registry =
       finalize == nullptr ? p_->boundary_registry_ : finalize->boundary_registry;
-  auto candidate = prepare_block_installation<Dim>(
-      *p_, auxiliary_registry, blocks, boundary_registry, prepared.name, std::move(prepared));
+  auto candidate =
+      prepare_block_installation<Dim>(*p_, auxiliary_registry, blocks, boundary_registry,
+                                      provider_consumer_qid, std::move(prepared));
   blocks.blocks.push_back(std::move(candidate.block));
   if (candidate.converted_boundary)
     boundary_registry.boundary(candidate.name).authority = std::move(candidate.converted_boundary);
