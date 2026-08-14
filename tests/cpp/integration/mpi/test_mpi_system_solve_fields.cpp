@@ -60,6 +60,7 @@ using NativeSystem = System<kTestDimension>;
 using NativeSystemConfig = SystemConfig<kTestDimension>;
 using NativeField = MultiFab<kTestDimension>;
 using NativeGasLaw = nd::IdealGasEuler<kTestDimension>;
+using NativeScalarAdvection = nd::ScalarAdvection<kTestDimension>;
 
 // Source qui lit T_e : exerce le canal auxiliaire dérivé (apply_te) dans solve_fields().
 struct TeSource {
@@ -73,7 +74,7 @@ struct TeSource {
 };
 // Bloc de CHARGE : alimente le second membre du Poisson (elliptic_rhs = densite de charge q n).
 using ProbeModel =
-    CompositeModel<CartesianExBDrift, TeSource, ChargeDensity>;       // lit T_e + charge le Poisson
+    CompositeModel<NativeScalarAdvection, TeSource, ChargeDensity>;  // lit T_e + charge le Poisson
 using GasModel = CompositeModel<NativeGasLaw, NoSource, NoElliptic>;  // fournit p/rho
 
 std::size_t cell_count(int n) {
@@ -139,7 +140,10 @@ static int pops_run_test_mpi_system_solve_fields(int argc, char** argv) {
       "probe", {{{temperature_key, temperature_contract, temperature_shape}, 0}}});
   sys.seal_auxiliary_providers();
   sys.install_block_state_route("probe", "test.mpi-system-solve-fields.probe.state@1");
-  add_compiled_model(sys, "probe", ProbeModel{}, "minmod", "rusanov", "conservative", "explicit");
+  ProbeModel probe_model{};
+  probe_model.hyp = NativeScalarAdvection::prepare(RealVector<kTestDimension>{});
+  add_compiled_model(sys, "probe", std::move(probe_model), "minmod", "rusanov", "conservative",
+                     "explicit");
   sys.set_poisson("composite",
                   "cartesian_cg");  // f = somme des briques elliptiques (ici la charge)
 
