@@ -109,6 +109,55 @@ double mode_error(const pops::MultiFab<Dim>& field, const pops::Geometry<Dim>& g
 }
 
 template <int Dim>
+double quadratic_point_error(const pops::MultiFab<Dim>& source,
+                             const pops::Geometry<Dim>& source_geometry,
+                             const pops::Geometry<Dim>& target_geometry,
+                             const pops::Box<Dim>& target_region, int ratio) {
+  const pops::Real pi = std::acos(pops::Real(-1));
+  const auto& fab = source.fab(0);
+  auto host = fab.create_host_mirror();
+  fab.copy_to_host(host);
+  double error = 0;
+  for (std::size_t n = 0; n < static_cast<std::size_t>(target_region.numPts()); ++n) {
+    const auto target = index_from_ordinal(target_region, n);
+    pops::Index<Dim> parent{};
+    pops::Real weights[Dim][3]{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      const int relative = target[axis] - target_geometry.domain().lo[axis];
+      const int parent_relative = relative / ratio;
+      const int child = relative - parent_relative * ratio;
+      parent[axis] = source_geometry.domain().lo[axis] + parent_relative;
+      const pops::Real s =
+          static_cast<pops::Real>(2 * child + 1 - ratio) / static_cast<pops::Real>(2 * ratio);
+      const pops::Real d = s * s;
+      weights[axis][0] = (d - s) / pops::Real(2);
+      weights[axis][1] = pops::Real(1) - d;
+      weights[axis][2] = (d + s) / pops::Real(2);
+    }
+    pops::Real value = pops::Real(0);
+    constexpr int points = Dim == 1 ? 3 : Dim == 2 ? 9 : 27;
+    for (int ordinal = 0; ordinal < points; ++ordinal) {
+      int remainder = ordinal;
+      auto source_index = parent;
+      pops::Real weight = pops::Real(1);
+      for (int axis = 0; axis < Dim; ++axis) {
+        const int stencil = remainder % 3;
+        remainder /= 3;
+        source_index[axis] += stencil - 1;
+        weight *= weights[axis][stencil];
+      }
+      if (weight != pops::Real(0))
+        value += weight * host(storage_ordinal(fab.grown_box(), source_index));
+    }
+    pops::Real exact = pops::Real(1);
+    for (int axis = 0; axis < Dim; ++axis)
+      exact *= std::sin(pi * target_geometry.cell_coordinate(axis, target[axis]));
+    error = std::max(error, std::abs(static_cast<double>(value - exact)));
+  }
+  return pops::all_reduce_max(error);
+}
+
+template <int Dim>
 double average_down_defect(const pops::MultiFab<Dim>& parent_field,
                            const pops::MultiFab<Dim>& child_field,
                            const pops::Box<Dim>& child_footprint) {
@@ -192,10 +241,6 @@ void expect_three_level_coupling() {
   EXPECT_EQ(solver.n_levels(), 3);
   EXPECT_GT(pops::norm_inf(solver.phi_level(2)), pops::Real(0));
 
-  pops::Index<Dim> coarse_inner_lo{};
-  pops::Index<Dim> coarse_inner_hi{};
-  pops::Index<Dim> middle_inner_lo{};
-  pops::Index<Dim> middle_inner_hi{};
   pops::Index<Dim> fine_inner_lo{};
   pops::Index<Dim> fine_inner_hi{};
   pops::Index<Dim> middle_footprint_lo{};
@@ -203,10 +248,6 @@ void expect_three_level_coupling() {
   pops::Index<Dim> fine_footprint_lo{};
   pops::Index<Dim> fine_footprint_hi{};
   for (int axis = 0; axis < Dim; ++axis) {
-    coarse_inner_lo[axis] = 10;
-    coarse_inner_hi[axis] = 13;
-    middle_inner_lo[axis] = 20;
-    middle_inner_hi[axis] = 27;
     fine_inner_lo[axis] = 40;
     fine_inner_hi[axis] = 55;
     middle_footprint_lo[axis] = middle_patch.lo[axis] / 2;
@@ -214,16 +255,27 @@ void expect_three_level_coupling() {
     fine_footprint_lo[axis] = fine_patch.lo[axis] / 2;
     fine_footprint_hi[axis] = fine_patch.hi[axis] / 2;
   }
-  const double coarse_error =
-      mode_error(coarse_solver.phi(), coarse, pops::Box<Dim>{coarse_inner_lo, coarse_inner_hi});
-  const double middle_error =
-      mode_error(solver.phi_level(1), middle, pops::Box<Dim>{middle_inner_lo, middle_inner_hi});
-  const double fine_error =
+  pops::elliptic::mg::CompositeFacBuildRequest<Dim> two_level_hierarchy{
+      {request(coarse, coarse_layout), request(middle, middle_layout)}, {ratio}};
+  pops::elliptic::mg::CompositeFacPoisson<Dim> two_level_solver(std::move(two_level_hierarchy),
+                                                                lane, controls);
+  two_level_solver.install_nullspace(pops::FieldNullspacePlan<Dim>{},
+                                     {pops::PreparedVectorDistribution<Dim>::replicated(),
+                                      pops::PreparedVectorDistribution<Dim>::replicated()});
+  fill_mode(two_level_solver.rhs_level(0), coarse);
+  fill_mode(two_level_solver.rhs_level(1), middle);
+  const pops::SolveReport two_level_report = two_level_solver.solve();
+  ASSERT_TRUE(two_level_report.solved()) << two_level_report.reason;
+
+  const pops::Box<Dim> fine_inner{fine_inner_lo, fine_inner_hi};
+  const double three_level_fine_error =
       mode_error(solver.phi_level(2), fine, pops::Box<Dim>{fine_inner_lo, fine_inner_hi});
-  EXPECT_GT(coarse_error, 0.0);
-  EXPECT_LT(middle_error, coarse_error);
-  EXPECT_LT(fine_error, middle_error)
-      << "each nested sparse level must add measurable MMS accuracy";
+  const double two_level_at_fine_error =
+      quadratic_point_error(two_level_solver.phi_level(1), middle, fine, fine_inner, 2);
+  const double coarse_at_fine_error =
+      quadratic_point_error(coarse_solver.phi(), coarse, fine, fine_inner, 4);
+  EXPECT_LT(three_level_fine_error, two_level_at_fine_error);
+  EXPECT_LT(two_level_at_fine_error, coarse_at_fine_error);
 
   EXPECT_LT(average_down_defect(solver.phi_level(0), solver.phi_level(1),
                                 pops::Box<Dim>{middle_footprint_lo, middle_footprint_hi}),

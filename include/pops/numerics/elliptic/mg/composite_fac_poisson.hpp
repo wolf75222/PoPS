@@ -447,13 +447,17 @@ class CompositeFacPoisson {
 
   struct Connection {
     ::pops::amr::RefinementRatio<Dim> ratio;
-    std::vector<fac_detail::InjectionTransfer<Dim>> coarse_fine_phi;
-    std::vector<fac_detail::InjectionTransfer<Dim>> coarse_fine_residual_view;
-    std::vector<fac_detail::InjectionTransfer<Dim>> coarse_fine_direction_view;
+    std::vector<fac_detail::QuadraticInterpolationTransfer<Dim>> coarse_fine_phi;
+    std::vector<fac_detail::QuadraticInterpolationTransfer<Dim>> coarse_fine_residual_view;
+    std::vector<fac_detail::QuadraticInterpolationTransfer<Dim>> coarse_fine_direction_view;
+    std::vector<fac_detail::QuadraticInterpolationTransfer<Dim>> coarse_fine_correction;
     std::vector<fac_detail::CellTransfer<Dim>> residual_restriction;
     std::vector<fac_detail::CellTransfer<Dim>> solution_restriction;
     std::vector<fac_detail::CellTransfer<Dim>> direction_restriction;
     std::vector<fac_detail::CellTransfer<Dim>> correction_prolongation;
+    std::vector<fac_detail::FluxMismatchTransfer<Dim>> flux_mismatch;
+    std::vector<fac_detail::FluxMismatchTransfer<Dim>> dynamic_flux_mismatch_residual;
+    std::vector<fac_detail::FluxMismatchTransfer<Dim>> dynamic_flux_mismatch_direction;
   };
 
   static FieldNullspacePlan<Dim> coarse_correction_plan_(
@@ -535,7 +539,8 @@ class CompositeFacPoisson {
     for (std::size_t parent_index = 0; parent_index < ratios.size(); ++parent_index) {
       Level& parent = *levels_[parent_index];
       Level& child = *levels_[parent_index + 1];
-      Connection connection{ratios[parent_index], {}, {}, {}, {}, {}, {}, {}};
+      Connection connection{};
+      connection.ratio = ratios[parent_index];
       mark_coverage_(parent, child, connection.ratio);
       prepare_connection_(parent, child, connection);
       connections_.push_back(std::move(connection));
@@ -564,11 +569,12 @@ class CompositeFacPoisson {
         ::pops::amr::transfer::TransferProvider<Dim, ::pops::amr::transfer::Centering::Cell>;
     const Provider restriction = Provider::conservative_restriction();
     const Provider prolongation = Provider::linear_prolongation();
-
     for (std::size_t child_local = 0; child_local < child.phi.local_size(); ++child_local) {
       const std::size_t child_global = child.phi.global_index(child_local);
       const Box<Dim>& fine_valid = child.phi.box(child_local);
       const Extent<Dim> ratio_value = detail::ratio_extent(connection.ratio);
+      const ::pops::amr::transfer::IndexMapping<Dim> mapping{parent.geometry.domain().lo,
+                                                             child.geometry.domain().lo};
       const Box<Dim> footprint = coarsen(fine_valid, ratio_value);
       std::int64_t restricted_cells = 0;
       for (std::size_t parent_local = 0; parent_local < parent.phi.local_size(); ++parent_local) {
@@ -611,7 +617,13 @@ class CompositeFacPoisson {
         throw std::invalid_argument(
             "composite FAC correction prolongation does not cover a fine patch exactly");
 
-      std::vector<Box<Dim>> pending{child.phi.fab(child_local).grown_box()};
+      append_flux_mismatches_(parent, child, connection, child_local, footprint);
+
+      // Physical ghosts are supplied by the level boundary condition below.  Every remaining
+      // ghost is interpolated from a parent *valid* cell, so the parent one-cell halo supplies
+      // the complete linear stencil without using an extrapolated parent value as its center.
+      std::vector<Box<Dim>> pending{
+          child.phi.fab(child_local).grown_box().intersect(child.geometry.domain())};
       for (const Box<Dim>& valid : child.phi.layout().boxes())
         fac_detail::subtract_from_regions(pending, valid);
       for (const HaloJob<Dim>& halo : child.halo_schedule.canonical_jobs())
@@ -619,34 +631,33 @@ class CompositeFacPoisson {
           fac_detail::subtract_from_regions(pending, halo.destination_region);
 
       for (std::size_t parent_local = 0; parent_local < parent.phi.local_size(); ++parent_local) {
-        const Box<Dim> parent_reach = refine(parent.phi.fab(parent_local).grown_box(), ratio_value);
+        const Box<Dim> parent_reach = refine(parent.phi.box(parent_local), ratio_value);
         std::vector<Box<Dim>> next;
         for (const Box<Dim>& region : pending) {
           const Box<Dim> destination = region.intersect(parent_reach);
           if (!destination.empty()) {
             const auto source = static_cast<const field_type&>(parent.phi).fab(parent_local).view();
-            connection.coarse_fine_phi.push_back(fac_detail::InjectionTransfer<Dim>{
-                source, child.phi.fab(child_local).view(), destination, connection.ratio, {}});
+            connection.coarse_fine_phi.push_back({source, child.phi.fab(child_local).view(),
+                                                  destination, connection.ratio, mapping});
             const auto residual_source =
                 static_cast<const field_type&>(parent.residual_operator_view)
                     .fab(parent_local)
                     .view();
-            connection.coarse_fine_residual_view.push_back(fac_detail::InjectionTransfer<Dim>{
-                residual_source,
-                child.residual_operator_view.fab(child_local).view(),
-                destination,
-                connection.ratio,
-                {}});
+            connection.coarse_fine_residual_view.push_back(
+                {residual_source, child.residual_operator_view.fab(child_local).view(), destination,
+                 connection.ratio, mapping});
             const auto direction_source =
                 static_cast<const field_type&>(parent.direction_operator_view)
                     .fab(parent_local)
                     .view();
-            connection.coarse_fine_direction_view.push_back(fac_detail::InjectionTransfer<Dim>{
-                direction_source,
-                child.direction_operator_view.fab(child_local).view(),
-                destination,
-                connection.ratio,
-                {}});
+            connection.coarse_fine_direction_view.push_back(
+                {direction_source, child.direction_operator_view.fab(child_local).view(),
+                 destination, connection.ratio, mapping});
+            const auto correction_source =
+                static_cast<const field_type&>(parent.correction).fab(parent_local).view();
+            connection.coarse_fine_correction.push_back({correction_source,
+                                                         child.correction.fab(child_local).view(),
+                                                         destination, connection.ratio, mapping});
           }
           std::vector<Box<Dim>> remainder = fac_detail::subtract_box(region, destination);
           next.insert(next.end(), remainder.begin(), remainder.end());
@@ -656,6 +667,53 @@ class CompositeFacPoisson {
       if (!pending.empty())
         throw std::invalid_argument(
             "composite FAC could not prepare every coarse/fine ghost destination");
+    }
+  }
+
+  void append_flux_mismatches_(Level& parent, Level& child, Connection& connection,
+                               std::size_t child_local, const Box<Dim>& footprint) {
+    for (int axis = 0; axis < Dim; ++axis) {
+      Real transverse_refinement = Real(1);
+      for (int transverse = 0; transverse < Dim; ++transverse)
+        if (transverse != axis)
+          transverse_refinement *= static_cast<Real>(connection.ratio[transverse]);
+      const Real fine_face_weight =
+          static_cast<Real>(connection.ratio[axis]) / transverse_refinement;
+      const Real inverse_spacing = Real(1) / parent.geometry.spacing(axis);
+      const Real inverse_spacing_squared = inverse_spacing * inverse_spacing;
+
+      for (const int child_side : {-1, 1}) {
+        Box<Dim> interface = footprint;
+        if (child_side < 0) {
+          --interface.lo[axis];
+          interface.hi[axis] = interface.lo[axis];
+        } else {
+          ++interface.hi[axis];
+          interface.lo[axis] = interface.hi[axis];
+        }
+        for (std::size_t parent_local = 0; parent_local < parent.phi.local_size(); ++parent_local) {
+          const Box<Dim> destination = parent.phi.box(parent_local).intersect(interface);
+          if (destination.empty())
+            continue;
+          const auto covered =
+              static_cast<const field_type&>(parent.covered).fab(parent_local).view();
+          const auto append = [&](const field_type& parent_field, const field_type& child_field,
+                                  field_type& residual,
+                                  std::vector<fac_detail::FluxMismatchTransfer<Dim>>& transfers,
+                                  Real sign) {
+            transfers.push_back(fac_detail::FluxMismatchTransfer<Dim>{
+                static_cast<const field_type&>(parent_field).fab(parent_local).view(),
+                static_cast<const field_type&>(child_field).fab(child_local).view(),
+                residual.fab(parent_local).view(), covered, destination, connection.ratio, axis,
+                child_side, inverse_spacing_squared, fine_face_weight, sign});
+          };
+          append(parent.phi, child.phi, parent.residual, connection.flux_mismatch, Real(1));
+          append(parent.residual_operator_view, child.residual_operator_view, parent.residual,
+                 connection.dynamic_flux_mismatch_residual, Real(1));
+          append(parent.direction_operator_view, child.direction_operator_view, parent.scratch,
+                 connection.dynamic_flux_mismatch_direction, Real(-1));
+        }
+      }
     }
   }
 
@@ -675,15 +733,29 @@ class CompositeFacPoisson {
 
   void fill_level_ghosts_(std::size_t level_index, field_type& field, bool interpolate_parent) {
     Level& level = *levels_.at(level_index);
+    // Quadratic C/F interpolation reads the parent one-cell stencil, including its patch ghosts.
+    // Refresh that hierarchy first because a preceding coarse correction changes parent valid data.
+    if (interpolate_parent && level_index > 0)
+      fill_level_ghosts_(level_index - 1, levels_[level_index - 1]->phi, true);
     fill_boundary(field, level.halo_schedule);
     if (interpolate_parent && level_index > 0)
-      fac_detail::execute_injections(connections_.at(level_index - 1).coarse_fine_phi);
+      fac_detail::execute_quadratic_interpolations(
+          connections_.at(level_index - 1).coarse_fine_phi);
     fill_physical_boundary(field, level.physical_boundary);
   }
 
   void fill_all_ghosts_() {
     for (std::size_t level = 0; level < levels_.size(); ++level)
       fill_level_ghosts_(level, levels_[level]->phi, true);
+  }
+
+  void fill_correction_ghosts_(std::size_t level_index) {
+    Level& level = *levels_.at(level_index);
+    fill_boundary(level.correction, level.halo_schedule);
+    if (level_index > 0)
+      fac_detail::execute_quadratic_interpolations(
+          connections_.at(level_index - 1).coarse_fine_correction);
+    fill_physical_boundary(level.correction, level.homogeneous_physical_boundary);
   }
 
   void smooth_level_(std::size_t level_index, int sweeps) {
@@ -697,9 +769,18 @@ class CompositeFacPoisson {
     }
     for (int sweep = 0; sweep < sweeps; ++sweep) {
       fill_level_ghosts_(level_index, level.phi, true);
+      const field_type* effective_rhs = &level.rhs;
+      if (level_index + 1 < levels_.size()) {
+        // An intermediate level is the coarse side of its child interface.  Its smoother must
+        // use the composite RHS with the same coarse/fine flux replacement as the residual.
+        copy_scalar_valid(level.rhs, level.residual);
+        fill_level_ghosts_(level_index + 1, levels_[level_index + 1]->phi, true);
+        fac_detail::execute_flux_mismatches(connections_.at(level_index).flux_mismatch);
+        effective_rhs = &level.residual;
+      }
       for (std::size_t local = 0; local < level.phi.local_size(); ++local) {
         const auto phi_view = static_cast<const field_type&>(level.phi).fab(local).view();
-        const auto rhs_view = static_cast<const field_type&>(level.rhs).fab(local).view();
+        const auto rhs_view = static_cast<const field_type&>(*effective_rhs).fab(local).view();
         const auto covered_view = static_cast<const field_type&>(level.covered).fab(local).view();
         fac_detail::MaskedJacobiKernel<Dim> kernel{level.scratch.fab(local).view(),
                                                    phi_view,
@@ -733,6 +814,8 @@ class CompositeFacPoisson {
   void compute_composite_residual_() {
     for (std::size_t level = 0; level < levels_.size(); ++level)
       compute_level_residual_(level);
+    for (Connection& connection : connections_)
+      fac_detail::execute_flux_mismatches(connection.flux_mismatch);
   }
 
   void restrict_residual_tower_() {
@@ -744,7 +827,7 @@ class CompositeFacPoisson {
     for (std::size_t parent = 0; parent < connections_.size(); ++parent) {
       Level& parent_level = *levels_[parent];
       Level& child_level = *levels_[parent + 1];
-      fill_level_ghosts_(parent, parent_level.correction, false);
+      fill_correction_ghosts_(parent);
       child_level.correction.set_val(Real(0));
       fac_detail::execute_transfers(connections_[parent].correction_prolongation);
       saxpy(child_level.phi, Real(1), child_level.correction);
@@ -856,7 +939,8 @@ class CompositeFacPoisson {
     copy_valid_(level.phi, level.residual_operator_view);
     fill_boundary(level.residual_operator_view, level.halo_schedule);
     if (level_index > 0)
-      fac_detail::execute_injections(connections_.at(level_index - 1).coarse_fine_residual_view);
+      fac_detail::execute_quadratic_interpolations(
+          connections_.at(level_index - 1).coarse_fine_residual_view);
     fill_physical_boundary(level.residual_operator_view, level.physical_boundary);
     if (boundary_kernel_) {
       auto context = boundary_context_at_(level_index, iteration);
@@ -874,7 +958,8 @@ class CompositeFacPoisson {
     copy_valid_(level.correction, level.direction_operator_view);
     fill_boundary(level.direction_operator_view, level.halo_schedule);
     if (level_index > 0)
-      fac_detail::execute_injections(connections_.at(level_index - 1).coarse_fine_direction_view);
+      fac_detail::execute_quadratic_interpolations(
+          connections_.at(level_index - 1).coarse_fine_direction_view);
     fill_physical_boundary(level.direction_operator_view, level.homogeneous_physical_boundary);
     if (boundary_kernel_) {
       auto context = boundary_context_at_(level_index, iteration);
@@ -915,6 +1000,11 @@ class CompositeFacPoisson {
                                       "composite FAC dynamic residual closure failed collectively");
       }
       mask_covered_(level, level.residual);
+    }
+    for (Connection& connection : connections_)
+      fac_detail::execute_flux_mismatches(connection.dynamic_flux_mismatch_residual);
+    for (std::size_t level_index = 0; level_index < levels_.size(); ++level_index) {
+      Level& level = *levels_[level_index];
       copy_valid_(level.residual, output[level_index]);
       dynamic_const_view_[level_index] = &output[level_index];
     }
@@ -943,6 +1033,11 @@ class CompositeFacPoisson {
                                       "composite FAC dynamic JVP closure failed collectively");
       }
       mask_covered_(level, level.scratch);
+    }
+    for (Connection& connection : connections_)
+      fac_detail::execute_flux_mismatches(connection.dynamic_flux_mismatch_direction);
+    for (std::size_t level_index = 0; level_index < levels_.size(); ++level_index) {
+      Level& level = *levels_[level_index];
       copy_valid_(level.scratch, output[level_index]);
     }
   }

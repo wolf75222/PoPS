@@ -120,8 +120,10 @@ void subtract_from_regions(std::vector<Box<Dim>>& regions, const Box<Dim>& cut) 
 template <int Dim>
 using CellTransfer = ::pops::amr::transfer::PreparedTransfer<Dim>;
 
+/// Tensor-product quadratic interpolation of a cell-centered point field at a fine cell center.
+/// Each axis uses its parent cell and its two immediate neighbors, retaining all mixed terms.
 template <int Dim>
-struct InjectionTransfer {
+struct QuadraticInterpolationTransfer {
   FieldView<const Real, Dim> coarse{};
   FieldView<Real, Dim> fine{};
   Box<Dim> destination{};
@@ -130,22 +132,105 @@ struct InjectionTransfer {
 
   POPS_HD void operator()(const Index<Dim>& fine_index) const {
     Index<Dim> parent{};
+    Index<Dim> child{};
+    ::pops::amr::transfer::detail::fine_parent_and_child(fine_index, ratio, mapping, parent, child);
+    Real weights[Dim][3]{};
     for (int axis = 0; axis < Dim; ++axis) {
-      const std::int64_t relative =
-          static_cast<std::int64_t>(fine_index[axis]) - mapping.fine_origin[axis];
-      std::int64_t quotient = relative / ratio[axis];
-      if (relative % ratio[axis] < 0)
-        --quotient;
-      parent[axis] =
-          static_cast<int>(static_cast<std::int64_t>(mapping.coarse_origin[axis]) + quotient);
+      const Real s =
+          static_cast<Real>(2 * child[axis] + 1 - ratio[axis]) / static_cast<Real>(2 * ratio[axis]);
+      const Real d = s * s;
+      weights[axis][0] = (d - s) / Real(2);
+      weights[axis][1] = Real(1) - d;
+      weights[axis][2] = (d + s) / Real(2);
     }
-    fine(fine_index, 0) = coarse(parent, 0);
+
+    Real value = Real(0);
+    constexpr int points = Dim == 1 ? 3 : Dim == 2 ? 9 : 27;
+    for (int ordinal = 0; ordinal < points; ++ordinal) {
+      int remainder = ordinal;
+      Index<Dim> source_index = parent;
+      Real weight = Real(1);
+      for (int axis = 0; axis < Dim; ++axis) {
+        const int stencil = remainder % 3;
+        remainder /= 3;
+        source_index[axis] += stencil - 1;
+        weight *= weights[axis][stencil];
+      }
+      if (weight != Real(0))
+        value += weight * coarse(source_index, 0);
+    }
+    fine(fine_index, 0) = value;
   }
 };
 
 template <int Dim>
-void execute_injections(const std::vector<InjectionTransfer<Dim>>& transfers) {
-  for (const InjectionTransfer<Dim>& transfer : transfers)
+void execute_quadratic_interpolations(
+    const std::vector<QuadraticInterpolationTransfer<Dim>>& transfers) {
+  for (const QuadraticInterpolationTransfer<Dim>& transfer : transfers)
+    for_each_cell(transfer.destination, transfer);
+  Kokkos::fence();
+}
+
+/// Add the conservative coarse/fine flux replacement to one uncovered parent cell.  The parent
+/// operator contributes one coarse face difference; the composite operator replaces it with the
+/// corresponding sum of fine face differences.  The factor converts a fine face contribution to
+/// the parent control volume for arbitrary anisotropic refinement ratios.
+template <int Dim>
+struct FluxMismatchTransfer {
+  FieldView<const Real, Dim> parent{};
+  FieldView<const Real, Dim> fine{};
+  FieldView<Real, Dim> residual{};
+  FieldView<const Real, Dim> covered{};
+  Box<Dim> destination{};
+  ::pops::amr::RefinementRatio<Dim> ratio{};
+  int normal_axis = 0;
+  int child_side = 0;
+  Real inverse_spacing_squared = Real(0);
+  Real fine_face_weight = Real(0);
+  Real sign = Real(1);
+
+  POPS_HD void operator()(const Index<Dim>& coarse_index) const {
+    if (covered(coarse_index, 0) >= Real(0.5))
+      return;
+
+    Index<Dim> parent_neighbor = coarse_index;
+    parent_neighbor[normal_axis] -= child_side;
+    const Real coarse_face = parent(coarse_index, 0) - parent(parent_neighbor, 0);
+
+    Index<Dim> fine_inner{};
+    for (int axis = 0; axis < Dim; ++axis)
+      fine_inner[axis] = coarse_index[axis] * ratio[axis];
+    fine_inner[normal_axis] += child_side < 0 ? ratio[normal_axis] : -1;
+    Index<Dim> fine_ghost = fine_inner;
+    fine_ghost[normal_axis] += child_side;
+
+    Real fine_faces = Real(0);
+    std::int64_t tangential_count = 1;
+    for (int axis = 0; axis < Dim; ++axis)
+      if (axis != normal_axis)
+        tangential_count *= ratio[axis];
+    for (std::int64_t ordinal = 0; ordinal < tangential_count; ++ordinal) {
+      std::int64_t remainder = ordinal;
+      Index<Dim> fine_face_inner = fine_inner;
+      Index<Dim> fine_face_ghost = fine_ghost;
+      for (int axis = 0; axis < Dim; ++axis) {
+        if (axis == normal_axis)
+          continue;
+        const int child = static_cast<int>(remainder % ratio[axis]);
+        remainder /= ratio[axis];
+        fine_face_inner[axis] += child;
+        fine_face_ghost[axis] += child;
+      }
+      fine_faces += fine(fine_face_ghost, 0) - fine(fine_face_inner, 0);
+    }
+    residual(coarse_index, 0) +=
+        sign * inverse_spacing_squared * (coarse_face - fine_face_weight * fine_faces);
+  }
+};
+
+template <int Dim>
+void execute_flux_mismatches(const std::vector<FluxMismatchTransfer<Dim>>& transfers) {
+  for (const FluxMismatchTransfer<Dim>& transfer : transfers)
     for_each_cell(transfer.destination, transfer);
   Kokkos::fence();
 }
