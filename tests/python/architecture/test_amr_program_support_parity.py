@@ -24,6 +24,91 @@ PRODUCTION_CODEGEN = (
     REPO_ROOT / "python" / "pops" / "codegen" / "program_emit_ops.py",
     REPO_ROOT / "python" / "pops" / "codegen" / "program_emit_amr.py",
 )
+CONTEXT_ROOT = "pops/runtime/program/amr_program_context.hpp"
+CONTEXT_FRAGMENT_PATHS = frozenset(
+    {
+        "pops/runtime/program/amr_program_context_spatial.inc",
+        "pops/runtime/program/amr_program_context_field_runtime_public.inc",
+        "pops/runtime/program/amr_program_context_flux_expression_public.inc",
+        "pops/runtime/program/amr_program_context_spatial_operations.inc",
+        "pops/runtime/program/amr_program_context_history_checkpoint_public.inc",
+        "pops/runtime/program/amr_program_context_field_runtime_solver.inc",
+        "pops/runtime/program/amr_program_context_field_runtime_private.inc",
+        "pops/runtime/program/amr_program_context_flux_expression_polynomial.inc",
+        "pops/runtime/program/amr_program_context_cell_temporal_configuration.inc",
+        "pops/runtime/program/amr_program_context_history_checkpoint_definitions.inc",
+        "pops/runtime/program/amr_program_context_flux_basis_definitions.inc",
+        "pops/runtime/program/amr_program_context_flux_expression_definitions.inc",
+        "pops/runtime/program/amr_program_context_cell_temporal_level_runtime.inc",
+        "pops/runtime/program/amr_program_context_field_runtime_definitions.inc",
+        "pops/runtime/program/amr_program_context_flux_expression_services.inc",
+        "pops/runtime/program/amr_program_context_cell_temporal_runtime.inc",
+        "pops/runtime/program/amr_program_context_subcycling_runtime.inc",
+        "pops/runtime/program/amr_program_context_flux_basis.inc",
+        "pops/runtime/program/amr_program_context_flux_expression_runtime.inc",
+        "pops/runtime/program/amr_program_context_history_checkpoint_runtime.inc",
+        "pops/runtime/program/amr_program_context_field_runtime_services.inc",
+        "pops/runtime/program/amr_program_context_history_checkpoint_services.inc",
+        "pops/runtime/program/amr_program_context_spatial_operations_services.inc",
+    }
+)
+_LOCAL_INCLUDE_RE = re.compile(
+    r'^\s*#include\s*(?:<(pops/[^>]+)>|"(pops/[^"]+)")', re.MULTILINE
+)
+
+
+def _local_includes(source: str) -> tuple[str, ...]:
+    return tuple(next(part for part in match if part) for match in _LOCAL_INCLUDE_RE.findall(source))
+
+
+def _require_classified_context_include(include: str, known: frozenset[str]) -> None:
+    if include not in known and include.startswith("pops/runtime/program/amr_program_context_"):
+        raise AssertionError(f"unclassified AmrProgramContext definition authority: {include}")
+
+
+def _context_semantic_source() -> str:
+    """Read precisely the context root and its classified definition authorities."""
+    known = CONTEXT_FRAGMENT_PATHS | {CONTEXT_ROOT}
+    visiting: set[str] = set()
+    visited: set[str] = set()
+    sources: list[str] = []
+
+    def visit(relative: str) -> None:
+        assert relative not in visiting, f"AmrProgramContext semantic include cycle: {relative}"
+        if relative in visited:
+            return
+        visiting.add(relative)
+        visited.add(relative)
+        path = REPO_ROOT / "include" / relative
+        source = path.read_text(encoding="utf-8")
+        sources.append(source)
+        for include in _local_includes(source):
+            if include in known:
+                visit(include)
+            else:
+                _require_classified_context_include(include, known)
+        visiting.remove(relative)
+
+    visit(CONTEXT_ROOT)
+    assert visited == known, (
+        "AmrProgramContext semantic closure differs from its classified authorities: "
+        f"missing={sorted(known - visited)} extra={sorted(visited - known)}"
+    )
+    return "\n".join(sources)
+
+
+def test_context_include_parser_authenticates_both_delimiters_and_hidden_fragments():
+    assert _local_includes('#include <pops/a.hpp>\n#include "pops/b.hpp"') == (
+        "pops/a.hpp",
+        "pops/b.hpp",
+    )
+    hidden = _local_includes('#include "pops/runtime/program/amr_program_context_hidden.inc"')
+    try:
+        _require_classified_context_include(hidden[0], CONTEXT_FRAGMENT_PATHS)
+    except AssertionError as error:
+        assert "unclassified AmrProgramContext definition authority" in str(error)
+    else:
+        raise AssertionError("quoted hidden fragment bypassed AMR Program classification")
 
 
 def _load_support_module():
@@ -132,7 +217,7 @@ def test_support_module_loads_standalone_and_stays_import_free():
 def test_header_deferred_set_matches_the_python_mirror():
     module = _load_support_module()
     mirror = set(module.header_deferred_methods())
-    header = _parse_header_deferred_set(CONTEXT_HPP.read_text(encoding="utf-8"))
+    header = _parse_header_deferred_set(_context_semantic_source())
     assert header == mirror, (
         "AMR Program explicit-deferral drift:\n"
         "  only in header: %s\n"
@@ -142,12 +227,12 @@ def test_header_deferred_set_matches_the_python_mirror():
 
 def test_parser_finds_only_explicit_known_deferrals():
     module = _load_support_module()
-    header = _parse_header_deferred_set(CONTEXT_HPP.read_text(encoding="utf-8"))
+    header = _parse_header_deferred_set(_context_semantic_source())
     assert header == set()
     assert module.header_deferred_methods() == frozenset()
     assert "unqualified_coupled_solve" not in module.DEFERRED_GROUPS
     assert module.deferred_groups()["schedule_cache"] == ("pending:checkpointed_hierarchy_cache")
-    context_source = CONTEXT_HPP.read_text(encoding="utf-8")
+    context_source = _context_semantic_source()
     for provider_method in (
         "cache_should_update",
         "cache_store_scratch",
@@ -161,10 +246,10 @@ def test_parser_finds_only_explicit_known_deferrals():
     assert "solve_fields_from_state_at_fine_level" not in header
     assert "solve_fields_from_state_default" not in header
     assert "SolveOutcome solve_fields_from_state(const std::string&" not in (
-        CONTEXT_HPP.read_text(encoding="utf-8")
+        _context_semantic_source()
     )
     assert "SolveOutcome solve_fields_from_blocks(const std::string&" not in (
-        CONTEXT_HPP.read_text(encoding="utf-8")
+        _context_semantic_source()
     )
     context_header = context_source
     assert context_header.count("SolveOutcome solve_fields_from_blocks_at(") == 1
@@ -225,7 +310,7 @@ def test_projection_is_green_after_the_real_amr_implementation_landed():
 
 def test_named_flux_support_matches_the_resolved_interface_envelope():
     module = _load_support_module()
-    context_header = CONTEXT_HPP.read_text(encoding="utf-8")
+    context_header = _context_semantic_source()
     named_route = context_header.split("void neg_div_named_flux_into(", 1)[1].split(
         "void apply_projection(", 1
     )[0]
@@ -253,7 +338,7 @@ def test_named_flux_support_matches_the_resolved_interface_envelope():
 
 
 def test_generated_programs_cannot_use_coarse_injection_as_a_fine_solve():
-    header = CONTEXT_HPP.read_text(encoding="utf-8")
+    header = _context_semantic_source()
     assert "SolveOutcome solve_fields() const" not in header
     assert header.count("SolveOutcome solve_default_field_on_coarse_level() const") == 1
     coarse_route = _extract_method_body(
