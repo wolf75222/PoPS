@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/parallel/comm.hpp>
 #include <pops/runtime/amr/amr_tensor_elliptic.hpp>
 
