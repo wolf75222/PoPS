@@ -24,7 +24,6 @@
 #include <pops/runtime/program/prepared_tensor_boundary_session.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
 #include <pops/runtime/program/same_level_cell_temporal_provider.hpp>
-#include <pops/runtime/system/auxiliary_ghost_fill.hpp>
 #include <pops/runtime/system/provider_storage_binding.hpp>
 
 #include <algorithm>
