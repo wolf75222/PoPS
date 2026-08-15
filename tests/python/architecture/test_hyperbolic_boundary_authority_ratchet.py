@@ -200,7 +200,8 @@ def test_no_flux_is_a_builtin_face_law_of_the_same_prepared_pipeline() -> None:
     )
 
     assert 'condition_type: ClassVar[str] = "no_flux"' in transport
-    assert '"no_flux": LowLevelNoFlux' in transport
+    assert 'if condition_type == "no_flux":' in transport
+    assert "provider = LowLevelNoFlux(" in transport
     assert 'token == "no_flux"' in hyperbolic
     assert "HyperbolicBoundaryLaw::NoFlux" in hyperbolic
     assert "boundary->apply_physical_flux_conditions" in operator
