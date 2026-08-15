@@ -228,20 +228,25 @@ def program_provider_consumer_qid(model: Any, value_id: Any, block: Any = None) 
     """
     if isinstance(value_id, bool) or not isinstance(value_id, int) or value_id < 0:
         raise ValueError("Program provider consumer value id must be a non-negative integer")
-    owner_qid = None
     if block is not None:
         instance = getattr(block, "instance_owner_path", None)
         canonical = getattr(instance, "canonical", None)
-        if callable(canonical):
-            owner_qid = str(canonical())
-    if not owner_qid:
-        impl = _model_impl(model)
-        owner = getattr(impl, "owner_path", None)
-        canonical = getattr(owner, "canonical", None)
         if not callable(canonical):
-            raise ValueError("Program provider consumer model has no canonical owner path")
+            raise ValueError(
+                "Program provider consumer block has no canonical instance_owner_path"
+            )
         owner_qid = str(canonical())
-    return owner_qid + "/program/" + str(value_id)
+        if not owner_qid:
+            raise ValueError(
+                "Program provider consumer block instance_owner_path is empty"
+            )
+        return owner_qid + "/program/" + str(value_id)
+    impl = _model_impl(model)
+    owner = getattr(impl, "owner_path", None)
+    canonical = getattr(owner, "canonical", None)
+    if not callable(canonical):
+        raise ValueError("Program provider consumer model has no canonical owner path")
+    return str(canonical()) + "/program/" + str(value_id)
 
 
 def _prepared_native_components(program: Any) -> tuple[Any, ...]:

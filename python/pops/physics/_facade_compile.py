@@ -304,6 +304,7 @@ class _FacadeCompileMixin(_FacadeModel):
             # detached model preserves the declaration inventory while the resolved simulation plan
             # owns the field discretization and provider. Empty for the default-Poisson-only model.
             elliptic_field_names=list(m._elliptic_fields),
+            consumer_owner_qid=("" if consumer_owner_qid is None else str(consumer_owner_qid)),
         )
         cm.semantic_identity = semantic_identity
         cm.artifact_spec_identity = spec_identity

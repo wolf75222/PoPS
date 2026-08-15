@@ -18,6 +18,7 @@ from pops.model.bind_schema import BindSchema
 from pops.problem._snapshot import AuthoringSnapshot
 from pops.time import Program
 from tests.python.unit.codegen._typed_artifact_fixture import artifact_fixture
+from tests.python.support.block_instance_owner import make_testing_block_instance_owner
 from tests.python.support.layout_plan import cartesian_grid
 from tests.python.support.native_execution_context import artifact_execution_context
 
@@ -72,7 +73,8 @@ def _resolved_plan():
         time=Program("rk2"),
         blocks=(plans.ResolvedBlock(
             "fluid", _Canonical("model"), {"flux": ["hll"]}, "production", ("U",),
-            ("test::fluid::state::U",)),),
+            ("test::fluid::state::U",),
+            make_testing_block_instance_owner("typed-phases", "fluid", "model")),),
         bind_schema=BindSchema(),
         compile_values={},
         field_plans={},

@@ -78,8 +78,14 @@ def compile_install_models(plan: Any, options: Any) -> dict[str, Any]:
         key: value for key, value in options.items() if key in ("include", "cxx", "std")
     }
     roles = _resolved_native_amr_field_roles(plan)
-    return {
-        block.name: compile_install_model(
+    compiled: dict[str, Any] = {}
+    for block in plan.blocks:
+        if not block.instance_owner_qid:
+            raise ValueError(
+                "public compilation of block %r requires a canonical Case-block instance owner"
+                % block.name
+            )
+        compiled[block.name] = compile_install_model(
             block.name,
             block.model,
             block.backend,
@@ -89,8 +95,7 @@ def compile_install_models(plan: Any, options: Any) -> dict[str, Any]:
             native_field_roles=(roles[block.name] if plan.target == "amr_system" else None),
             consumer_owner_qid=block.instance_owner_qid,
         )
-        for block in plan.blocks
-    }
+    return compiled
 
 
 def build_program_model_graph(plan: Any) -> Any:
@@ -149,6 +154,9 @@ def compile_install_model(
                 raise ValueError(
                     "precompiled AMR block field roles differ from the resolved Case; recompile"
                 )
+        from pops.codegen._plans import attest_precompiled_consumer_owner
+
+        attest_precompiled_consumer_owner(model, consumer_owner_qid)
         return model
     from pops.codegen.module_lowering import lower_and_validate
 
