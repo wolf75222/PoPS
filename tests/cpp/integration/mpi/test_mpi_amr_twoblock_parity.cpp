@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "explicit_amr_program.hpp"
 #include "gtest_compat.hpp"
 #include "test_harness.hpp"
 #include "amr_tagging_test_authority.hpp"
@@ -77,6 +78,10 @@ AdvectionModel<Dim> advection_model() {
   return {pops::nd::ScalarAdvection<Dim>::prepare(velocity)};
 }
 
+std::string physical_flux_consumer_qid(std::string_view block) {
+  return "tests.mpi-amr-twoblock-parity/" + std::string(block) + "/physical_flux";
+}
+
 template <int Dim>
 std::size_t cell_count(const pops::Extent<Dim>& shape) {
   std::size_t result = 1;
@@ -129,8 +134,14 @@ RunResult run_mode(bool distribute_coarse) {
   }
   config.distribute_coarse = distribute_coarse;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(
+      system, distribute_coarse ? "tests.mpi-amr-twoblock-parity/distributed-runtime@1"
+                                : "tests.mpi-amr-twoblock-parity/replicated-runtime@1");
   system.install_block_state_route("first", "state/first");
-  pops::add_compiled_model<Dim>(system, "first", advection_model<Dim>());
+  pops::add_compiled_model<Dim>(
+      system, "first", advection_model<Dim>(), "minmod", "rusanov", "conservative", "explicit",
+      static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
+      static_cast<double>(pops::kWenoEpsilon), false, physical_flux_consumer_qid("first"));
   system.set_conservative_state("first", gaussian(config.shape));
   RunResult result;
   result.state = system.block_level_state_global("first", 0);
@@ -156,8 +167,13 @@ RefinedRunResult<Dim> run_refined_distributed_mode() {
     config.coarse_max_grid[axis] = 16;
   }
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system,
+                                            "tests.mpi-amr-twoblock-parity/refined-runtime@1");
   system.install_block_state_route("tracer", "state/tracer");
-  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  pops::add_compiled_model<Dim>(
+      system, "tracer", advection_model<Dim>(), "minmod", "rusanov", "conservative", "explicit",
+      static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
+      static_cast<double>(pops::kWenoEpsilon), false, physical_flux_consumer_qid("tracer"));
   system.set_conservative_state("tracer", gaussian(config.shape));
   pops::test::install_prepared_threshold_union(system, {{"tracer", "u", 1.2}});
 
@@ -201,8 +217,13 @@ bool parent_level_mismatch_is_collectively_refused() {
     }
   }
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(
+      system, "tests.mpi-amr-twoblock-parity/parent-level-mismatch-runtime@1");
   system.install_block_state_route("tracer", "state/tracer");
-  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  pops::add_compiled_model<Dim>(
+      system, "tracer", advection_model<Dim>(), "minmod", "rusanov", "conservative", "explicit",
+      static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
+      static_cast<double>(pops::kWenoEpsilon), false, physical_flux_consumer_qid("tracer"));
   system.set_conservative_state("tracer", gaussian(config.shape));
   pops::test::install_prepared_threshold_union(system, {{"tracer", "u", 0.0}});
   if (system.n_levels() != 3)
