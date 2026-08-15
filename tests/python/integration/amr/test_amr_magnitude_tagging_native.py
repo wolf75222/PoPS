@@ -82,8 +82,9 @@ def _install_state_transfer_routes(simulation, subject):
 def _native_hierarchy(node_type):
     graph, threshold, subject = _resolved_leaf(node_type)
     simulation = AmrSystem(
-        n=N,
-        L=1.0,
+        shape=(N, N),
+        lower=(0.0, 0.0),
+        upper=(1.0, 1.0),
         periodicity=(True, True),
         regrid_every=0,
         explicit_bootstrap=True,

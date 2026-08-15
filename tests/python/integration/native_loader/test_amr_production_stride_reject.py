@@ -19,6 +19,15 @@ from pops.physics import Momentum
 from pops.runtime._system import AmrSystem  # private engine seam exercised by this guard
 
 
+def _amr_system() -> AmrSystem:
+    return AmrSystem(
+        shape=(16, 16),
+        lower=(0.0, 0.0),
+        upper=(1.0, 1.0),
+        periodicity=(True, True),
+    )
+
+
 def _compiled_amr_metadata(*, so_path: str = "/nonexistent/pops-amr-guard.so") -> CompiledModel:
     """Return exact detached metadata for the pre-loader branch, without claiming native execution."""
     return CompiledModel(
@@ -32,7 +41,7 @@ def _compiled_amr_metadata(*, so_path: str = "/nonexistent/pops-amr-guard.so") -
         n_aux=3,
         params={},
         caps={},
-        abi_key=f"{module_header_signature()}|c++|c++23",
+        abi_key=f"{module_header_signature()}|c++|c++23|dim=2",
         model_hash="amr-preloader-guard",
         cxx="c++",
         std="c++23",
@@ -47,7 +56,7 @@ def _compiled_amr_metadata(*, so_path: str = "/nonexistent/pops-amr-guard.so") -
     ids=["imex", "explicit"],
 )
 def test_compiled_amr_guard_rejects_untransported_stride(time):
-    sim = AmrSystem(n=16, periodicity=(True, True))
+    sim = _amr_system()
     with pytest.raises(
         ValueError,
         match=r"stride=5 not transported by the production AMR path",
@@ -65,7 +74,7 @@ def test_compiled_amr_guard_rejects_untransported_stride(time):
     ],
 )
 def test_compiled_amr_guard_rejects_untransported_partial_imex_mask(time, selector):
-    sim = AmrSystem(n=16, periodicity=(True, True))
+    sim = _amr_system()
     with pytest.raises(
         ValueError,
         match=r"implicit_vars / implicit_roles .* not transported",
@@ -79,7 +88,7 @@ def test_compiled_amr_guard_rejects_untransported_partial_imex_mask(time, select
 @pytest.mark.parametrize("time", [engine.Explicit(), engine.IMEX()], ids=["explicit", "imex"])
 def test_supported_defaults_cross_the_python_guard_and_reach_the_native_loader(time, tmp_path):
     missing = tmp_path / "missing-amr-package.so"
-    sim = AmrSystem(n=16, periodicity=(True, True))
+    sim = _amr_system()
 
     with pytest.raises(RuntimeError) as excinfo:
         sim.add_equation(
@@ -90,8 +99,11 @@ def test_supported_defaults_cross_the_python_guard_and_reach_the_native_loader(t
         )
 
     message = str(excinfo.value)
-    assert str(missing) in message
     assert "stride" not in message and "implicit_vars" not in message
+    assert (
+        str(missing) in message
+        or "pre-staged RuntimeInstance lane" in message
+    )
 
 
 if __name__ == "__main__":

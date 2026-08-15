@@ -30,12 +30,22 @@ def _bump(n, amp):
     return r + (1.0 - r.mean())  # offset moyen nul -> Sum q n solvable en periodique
 
 
+def _amr_system(n, *, regrid_every):
+    return AmrSystem(
+        shape=(n, n),
+        lower=(0.0, 0.0),
+        upper=(1.0, 1.0),
+        periodicity=(True, True),
+        regrid_every=regrid_every,
+    )
+
+
 def _scalar_charge(q, B0=1.0):
     return engine.Model(engine.Scalar(), engine.ExB(), engine.NoSource(), engine.ChargeDensity(charge=q))
 
 
 def _build(n=32, regrid_every=0, *, tagging=()):
-    sim = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=regrid_every)
+    sim = _amr_system(n, regrid_every=regrid_every)
     sim.set_temporal_relations([2], [1], ["integral_only"])
     sim.add_equation("ions", _scalar_charge(+1.0),
                   spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()))
@@ -81,7 +91,7 @@ def main():
 
     # (d) MONO-BLOC deterministe (chemin AmrCouplerMP intouche) : run x2 -> dmax == 0.
     def run_mono():
-        s = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=0)
+        s = _amr_system(n, regrid_every=0)
         s.set_temporal_relations([2], [1], ["integral_only"])
         s.add_equation(
             "ne",

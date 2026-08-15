@@ -107,7 +107,12 @@ def _install_resolved_plan_on_native_carrier(solver: GeometricMG):
     resolved = _resolve(solver)
     assert len(resolved.field_plans) == 1
     field_name, field_plan = next(iter(resolved.field_plans.items()))
-    engine = AmrSystem(n=16, L=1.0)
+    engine = AmrSystem(
+        shape=(16, 16),
+        lower=(0.0, 0.0),
+        upper=(1.0, 1.0),
+        periodicity=(True, True),
+    )
     engine._install_field_plan(field_name, field_plan)
     configuration = engine.field_solver_configuration(
         field_plan.native_options["provider_slot"])
