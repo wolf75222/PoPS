@@ -253,6 +253,18 @@ class ProgramContext {
     return system_->prepared_boundary_execution_lane();
   }
 
+  /// Borrow the exact runtime-owned communicator for persistent generated materialization. The
+  /// generated Program never duplicates MPI_COMM_WORLD when its prepared boundary lane is owned by
+  /// an embedding communicator.
+  [[nodiscard]] ExecutionCommunicator prepared_execution_communicator() const {
+    const ExecutionLane& lane = prepared_execution_lane();
+#ifdef POPS_HAS_MPI
+    return ExecutionCommunicator::borrowed(lane.identity(), lane.native_handle());
+#else
+    return ExecutionCommunicator::world();
+#endif
+  }
+
   int sys_block(int program_block) const {
     const std::vector<int>& map = system_->program_block_map();
     if (map.empty())
@@ -1308,7 +1320,54 @@ class ProgramContext {
                                      KrylovWorkspace<Dim>& workspace, field_type& solution,
                                      const field_type& rhs,
                                      const KrylovControls<Dim>& controls) const {
-    require_prepared_lane_(workspace.execution_lane(), "Program prepared linear solve");
+    const ExecutionLane& runtime_lane = prepared_execution_lane();
+    const ExecutionLane& workspace_lane =
+        ::pops::detail::KrylovWorkspaceAccess::execution_lane(workspace);
+    const std::string_view workspace_token =
+        ::pops::detail::KrylovWorkspaceAccess::materialization_token(workspace);
+    std::string lane_contract;
+    std::exception_ptr local_error;
+    try {
+      const bool workspace_active = workspace_lane.active();
+      const bool workspace_named = !workspace_lane.identity().empty();
+      const bool workspace_tokened = !workspace_token.empty();
+      const bool runtime_active = runtime_lane.active();
+      const bool runtime_named = !runtime_lane.identity().empty();
+      // This is a local communicator comparison only. Every failure is converged below on the
+      // runtime-owned lane, so no rank can enter a workspace-lane collective conditionally.
+      const bool lanes_congruent = workspace_lane.congruent_with(runtime_lane);
+      ExactContractBuilder contract;
+      contract.text("pops.prepared-linear-workspace-lane")
+          .scalar(std::uint32_t{2})
+          .text(workspace_token)
+          .text(workspace_lane.identity())
+          .presence(workspace_active)
+          .presence(workspace_named)
+          .presence(workspace_tokened)
+          .text(runtime_lane.identity())
+          .presence(runtime_active)
+          .presence(runtime_named)
+          .presence(lanes_congruent);
+      lane_contract = std::move(contract).release();
+      if (!workspace_active || !workspace_named || !workspace_tokened || !runtime_active ||
+          !runtime_named || !lanes_congruent)
+        throw std::invalid_argument(
+            "Program prepared linear solve requires a workspace lane congruent with its "
+            "runtime-authenticated lane");
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_error ? 1L : 0L, runtime_lane) != 0) {
+      if (runtime_lane.size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error("Program prepared linear solve lane validation failed collectively");
+    }
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{std::string_view("pops.prepared-linear-workspace-lane"),
+              std::string_view(lane_contract)}},
+            runtime_lane))
+      throw std::invalid_argument(
+          "Program prepared linear solve workspace lane contract differs across MPI ranks");
     return pops::solve_prepared_affine_outcome(problem, workspace, solution, rhs, controls);
   }
 

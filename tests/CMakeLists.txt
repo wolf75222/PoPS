@@ -817,6 +817,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_coupled_fieldsolve 2)
   set(POPS_MPI_RANKS_test_amr_program_positivity_floor 2)
   set(POPS_MPI_RANKS_test_amr_multiblock_coupled_source 2)
+  set(POPS_MPI_RANKS_test_program_context_contract 2)
   set(POPS_MPI_RANKS_test_program_runtime 2)
   set(POPS_MPI_RANKS_test_generated_amr_system_block 2)
   set(POPS_MPI_RANKS_test_fill_boundary_cache 1 2 4)
@@ -968,6 +969,7 @@ if(POPS_HAS_MPI)
     test_geometric_mg
     test_coupled_fieldsolve
     test_program_runtime
+    test_program_context_contract
     test_generated_amr_system_block
     test_fill_boundary_cache
     test_copy_schedule_cache

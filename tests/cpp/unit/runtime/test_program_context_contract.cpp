@@ -311,6 +311,143 @@ TEST(ProgramContextContract, ProviderFreeViewDoesNotRequireAPlanOrStorageCarrier
   EXPECT_TRUE(providers.storage_components.empty());
 }
 
+TEST(ProgramContextContract, PreparedLinearSolveAcceptsDistinctCongruentWorkspaceLane) {
+  ensure_kokkos();
+  comm_init();
+  NativeSystem sim(native_config(4));
+  install_execution_lane(sim, "pops.test.program-context.prepared-linear-runtime");
+  add_gas(sim);
+  sim.set_state("gas", ic(4));
+  sim.set_program_block_map({0});
+  NativeProgramContext context(&sim);
+  context.begin_step(Real(1e-3));
+  context.set_stage_time(0, 1);
+
+  NativeField& prototype = context.state(0);
+  const KrylovFootprint<kTestDimension> footprint{prototype.ncomp(), prototype.ghosts(), false};
+  const PreparedKrylovMethod<kTestDimension> method = cg_krylov_method<kTestDimension>();
+  const OperatorFingerprint authority{UINT64_C(101), UINT64_C(102), UINT64_C(103), UINT64_C(104)};
+  const OperatorFingerprint resources{UINT64_C(105), UINT64_C(106), UINT64_C(107), UINT64_C(108)};
+  const OperatorEvaluationSnapshot snapshot =
+      context.operator_evaluation_snapshot(authority, prototype, resources);
+  PreparedAffineLinearProblem<kTestDimension> problem(
+      prototype,
+      PreparedAffineOperatorProvider<kTestDimension>::trusted_reentrant(
+          [](NativeField& out, const NativeField& in) {
+            detail::PreparedFieldAlgebra::copy(out, in);
+          },
+          [] { return std::size_t{0}; }),
+      PreparedLinearPreconditioner<kTestDimension>::identity(),
+      LinearOperatorProperties::symmetric_positive_definite(), footprint,
+      PreparedNullspacePolicy<kTestDimension>::nonsingular(), [snapshot] { return snapshot; });
+  const ExecutionCommunicator runtime_communicator = context.prepared_execution_communicator();
+  KrylovWorkspace<kTestDimension> workspace(
+      runtime_communicator, "pops.test.program-context.workspace",
+      "pops.test.program-context.workspace.positive", prototype, method, footprint);
+  KrylovWorkspace<kTestDimension> legacy_workspace(
+      runtime_communicator, "pops.test.program-context.workspace", prototype, method, footprint);
+  NativeField solution = context.scratch_state_like(prototype);
+  NativeField rhs = context.scratch_state_like(prototype);
+  solution.set_val(Real(0));
+  rhs.set_val(Real(1));
+  problem.prepare(snapshot);
+  workspace.bind(problem);
+  legacy_workspace.bind(problem);
+
+  const ExecutionLane& workspace_lane =
+      ::pops::detail::KrylovWorkspaceAccess::execution_lane(workspace);
+  EXPECT_NE(&workspace_lane, &context.prepared_execution_lane());
+  EXPECT_TRUE(workspace_lane.congruent_with(context.prepared_execution_lane()));
+  EXPECT_THROW((void)context.solve_prepared_linear(
+                   problem, legacy_workspace, solution, rhs,
+                   KrylovControls<kTestDimension>{method, Real(1e-12), Real(0), 4}),
+               std::invalid_argument);
+  SolveOutcome outcome = context.solve_prepared_linear(
+      problem, workspace, solution, rhs,
+      KrylovControls<kTestDimension>{method, Real(1e-12), Real(0), 4});
+  ASSERT_TRUE(outcome.report().solved_value_available()) << outcome.report().reason;
+  (void)outcome.consume(SolveConsumption::kAccept);
+  for (int component = 0; component < solution.ncomp(); ++component)
+    EXPECT_DOUBLE_EQ(context.sum_component(solution, component),
+                     context.sum_component(rhs, component));
+}
+
+TEST(ProgramContextContract,
+     PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection) {
+#ifndef POPS_HAS_MPI
+  GTEST_SKIP() << "rank-divergent prepared solve validation requires MPI";
+#else
+  ensure_kokkos();
+  comm_init();
+  if (n_ranks() < 2)
+    GTEST_SKIP() << "rank-divergent prepared solve validation requires at least two MPI ranks";
+
+  NativeSystem sim(native_config(4));
+  install_execution_lane(sim, "pops.test.program-context.prepared-linear-negative-runtime");
+  add_gas(sim);
+  sim.set_state("gas", ic(4));
+  sim.set_program_block_map({0});
+  NativeProgramContext context(&sim);
+  context.begin_step(Real(1e-3));
+  context.set_stage_time(0, 1);
+
+  NativeField& prototype = context.state(0);
+  const KrylovFootprint<kTestDimension> footprint{prototype.ncomp(), prototype.ghosts(), false};
+  const PreparedKrylovMethod<kTestDimension> method = cg_krylov_method<kTestDimension>();
+  const OperatorFingerprint authority{UINT64_C(111), UINT64_C(112), UINT64_C(113), UINT64_C(114)};
+  const OperatorFingerprint resources{UINT64_C(115), UINT64_C(116), UINT64_C(117), UINT64_C(118)};
+  const OperatorEvaluationSnapshot snapshot =
+      context.operator_evaluation_snapshot(authority, prototype, resources);
+  int apply_calls = 0;
+  PreparedAffineLinearProblem<kTestDimension> problem(
+      prototype,
+      PreparedAffineOperatorProvider<kTestDimension>::trusted_reentrant(
+          [&apply_calls](NativeField& out, const NativeField& in) {
+            ++apply_calls;
+            detail::PreparedFieldAlgebra::copy(out, in);
+          },
+          [] { return std::size_t{0}; }),
+      PreparedLinearPreconditioner<kTestDimension>::identity(),
+      LinearOperatorProperties::symmetric_positive_definite(), footprint,
+      PreparedNullspacePolicy<kTestDimension>::nonsingular(), [snapshot] { return snapshot; });
+  const ExecutionCommunicator runtime_communicator = context.prepared_execution_communicator();
+  KrylovWorkspace<kTestDimension> workspace_a(
+      runtime_communicator, "pops.test.program-context.workspace",
+      "pops.program.amr.krylov-workspace.77/level-owner-identity-0", prototype, method, footprint);
+  KrylovWorkspace<kTestDimension> workspace_b(
+      runtime_communicator, "pops.test.program-context.workspace",
+      "pops.program.amr.krylov-workspace.77/level-owner-identity-1", prototype, method, footprint);
+  problem.prepare(snapshot);
+  workspace_a.bind(problem);
+  workspace_b.bind(problem);
+  EXPECT_EQ(::pops::detail::KrylovWorkspaceAccess::execution_lane(workspace_a).identity(),
+            ::pops::detail::KrylovWorkspaceAccess::execution_lane(workspace_b).identity());
+  EXPECT_NE(::pops::detail::KrylovWorkspaceAccess::materialization_token(workspace_a),
+            ::pops::detail::KrylovWorkspaceAccess::materialization_token(workspace_b));
+
+  NativeField solution = context.scratch_state_like(prototype);
+  NativeField rhs = context.scratch_state_like(prototype);
+  solution.set_val(Real(0));
+  rhs.set_val(Real(1));
+  const int apply_calls_before_solve = apply_calls;
+  KrylovWorkspace<kTestDimension>& selected_workspace = my_rank() == 0 ? workspace_a : workspace_b;
+  bool refused = false;
+  try {
+    (void)context.solve_prepared_linear(
+        problem, selected_workspace, solution, rhs,
+        KrylovControls<kTestDimension>{method, Real(1e-12), Real(0), 4});
+  } catch (const std::invalid_argument& error) {
+    refused = true;
+    EXPECT_STREQ(error.what(),
+                 "Program prepared linear solve workspace lane contract differs across MPI ranks");
+  }
+  EXPECT_TRUE(refused);
+  EXPECT_EQ(apply_calls, apply_calls_before_solve)
+      << "the runtime-lane contract must reject before any selected private workspace solve";
+  EXPECT_EQ(all_reduce_min(refused ? 1L : 0L, context.prepared_execution_lane()), 1L);
+#endif
+}
+
 TEST(ProgramContextContract, ProjectionReportSurvivesScientificRollbackUntilConsumed) {
   ensure_kokkos();
   NativeSystemConfig cfg = native_config(2);

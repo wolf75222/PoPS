@@ -180,6 +180,41 @@ const PreparedVectorDistribution<Dim>& program_resource_vector_distribution() co
 int program_resource_field_level() const noexcept {
   return active_level_;
 }
+std::string program_resource_materialization_identity(std::string_view owner_identity) const {
+  const ExecutionLane& lane = prepared_execution_lane();
+  std::string identity;
+  std::exception_ptr local_error;
+  try {
+    refresh_resources_();
+    if (owner_identity.empty() || active_level_ < 0 || active_level_ >= nlev())
+      throw std::invalid_argument(
+          "AMR Program resource materialization requires an active exact owner identity");
+    ExactContractBuilder contract;
+    contract.text("pops.amr-program-resource-materialization")
+        .scalar(std::uint32_t{1})
+        .text(owner_identity)
+        .text(runtime_->spatial_contract())
+        .scalar(runtime_->topology_epoch())
+        .scalar(runtime_->materialization_generation())
+        .scalar(std::int32_t{active_level_})
+        .text(lane.identity());
+    identity = std::move(contract).release();
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error(
+        "AMR Program resource materialization identity preparation failed collectively");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("amr-program-resource-materialization"), std::string_view(identity)}},
+          lane))
+    throw std::invalid_argument(
+        "AMR Program resource materialization identity differs between MPI ranks");
+  return identity;
+}
 void configure_program_resource_field_nullspace(FieldNullspacePlan<Dim>& plan) const {
   Real cell_measure = Real(1);
   const Geometry<Dim> geom = geometry();
@@ -193,22 +228,54 @@ SolveOutcome solve_prepared_linear(const PreparedAffineLinearProblem<Dim>& probl
                                    KrylovWorkspace<Dim>& workspace, field_type& solution,
                                    const field_type& rhs,
                                    const KrylovControls<Dim>& controls) const {
-  const ExecutionLane& lane = workspace.execution_lane();
   const ExecutionLane& runtime_lane = prepared_execution_lane();
+  const ExecutionLane& workspace_lane =
+      ::pops::detail::KrylovWorkspaceAccess::execution_lane(workspace);
+  const std::string_view workspace_token =
+      ::pops::detail::KrylovWorkspaceAccess::materialization_token(workspace);
+  std::string lane_contract;
   std::exception_ptr local_error;
   try {
-    if (!lane.active() || lane.identity().empty() || !runtime_lane.active() ||
-        runtime_lane.identity().empty() || !lane.congruent_with(runtime_lane))
+    const bool workspace_active = workspace_lane.active();
+    const bool workspace_named = !workspace_lane.identity().empty();
+    const bool workspace_tokened = !workspace_token.empty();
+    const bool runtime_active = runtime_lane.active();
+    const bool runtime_named = !runtime_lane.identity().empty();
+    // This is a local communicator comparison only. Every failure is converged below on the
+    // runtime-owned lane, so no rank can enter a workspace-lane collective conditionally.
+    const bool lanes_congruent = workspace_lane.congruent_with(runtime_lane);
+    ExactContractBuilder contract;
+    contract.text("pops.prepared-linear-workspace-lane")
+        .scalar(std::uint32_t{2})
+        .text(workspace_token)
+        .text(workspace_lane.identity())
+        .presence(workspace_active)
+        .presence(workspace_named)
+        .presence(workspace_tokened)
+        .text(runtime_lane.identity())
+        .presence(runtime_active)
+        .presence(runtime_named)
+        .presence(lanes_congruent);
+    lane_contract = std::move(contract).release();
+    if (!workspace_active || !workspace_named || !workspace_tokened || !runtime_active ||
+        !runtime_named || !lanes_congruent)
       throw std::invalid_argument(
-          "AMR prepared linear solve requires its runtime-authenticated private lane");
+          "AMR prepared linear solve requires a workspace lane congruent with its "
+          "runtime-authenticated lane");
   } catch (...) {
     local_error = std::current_exception();
   }
-  if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
-    if (lane.size() == 1 && local_error)
+  if (all_reduce_max(local_error ? 1L : 0L, runtime_lane) != 0) {
+    if (runtime_lane.size() == 1 && local_error)
       std::rethrow_exception(local_error);
     throw std::runtime_error("AMR prepared linear solve lane validation failed collectively");
   }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("pops.prepared-linear-workspace-lane"),
+            std::string_view(lane_contract)}},
+          runtime_lane))
+    throw std::invalid_argument(
+        "AMR prepared linear solve workspace lane contract differs across MPI ranks");
   return pops::solve_prepared_affine_outcome(problem, workspace, solution, rhs, controls);
 }
 

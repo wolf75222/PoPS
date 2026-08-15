@@ -458,6 +458,7 @@ labels = ["integration", "runtime", "medium"]
 name = "test_program_context_contract"
 sources = ["tests/cpp/unit/runtime/test_program_context_contract.cpp"]
 labels = ["unit", "runtime", "small"]
+mpi_variants = [2]
 
 [[cpp.suite]]
 name = "test_facade_routing"

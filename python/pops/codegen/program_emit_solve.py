@@ -1317,19 +1317,39 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     vector_distribution_arg = ", " + vector_distribution_expr
     problem_authority_args = ""
     workspace_authority_args = ""
+    workspace_lane_identity = (
+        "pops.program.amr.krylov-workspace"
+        if target == "amr_system"
+        else "pops.program.krylov-workspace"
+    )
+    workspace_materialization_token = (
+        "pops.program.amr.krylov-workspace.%d" % int(v.id)
+        if target == "amr_system"
+        else "pops.program.krylov-workspace.%d" % int(v.id)
+    )
     if target == "amr_system":
         communicator_name = "prepared_krylov_communicator%d" % v.id
+        materialization_token_name = "krylov_workspace_materialization_token%d" % v.id
         prelude.append(
             "const auto %s = ctx.prepared_execution_communicator();"
             % communicator_name
+        )
+        prelude.append(
+            "const std::string %s = ctx.program_resource_materialization_identity(\"%s\");"
+            % (materialization_token_name, workspace_materialization_token)
         )
         problem_authority_args = (
             "%s, \"pops.program.amr.prepared-problem.%d\", "
             % (communicator_name, int(v.id))
         )
         workspace_authority_args = (
-            "%s, \"pops.program.amr.krylov-workspace.%d\", "
-            % (communicator_name, int(v.id))
+            "%s, \"%s\", %s, "
+            % (communicator_name, workspace_lane_identity, materialization_token_name)
+        )
+    else:
+        workspace_authority_args = (
+            "ctx.prepared_execution_communicator(), \"%s\", \"%s\", "
+            % (workspace_lane_identity, workspace_materialization_token)
         )
     prelude.append(
         "auto %s = "

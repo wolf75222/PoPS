@@ -156,6 +156,10 @@ struct KrylovWorkspaceAccess {
     return workspace.execution_lane();
   }
   template <int Dim>
+  static std::string_view materialization_token(const KrylovWorkspace<Dim>& workspace) noexcept {
+    return workspace.materialization_token_;
+  }
+  template <int Dim>
   static const MultiFab<Dim>& preconditioner_constant(const KrylovWorkspace<Dim>& workspace) {
     return workspace.preconditioner_constant();
   }

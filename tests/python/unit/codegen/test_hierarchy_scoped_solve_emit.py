@@ -325,6 +325,8 @@ def test_refined_hierarchy_uses_one_direct_solve_and_flat_path_executes_apply():
 
     assert amr.count("ctx.solve_prepared_linear(") == 1
     assert amr.count("ctx.solve_hierarchy_tensor(") == 1
+    assert "ctx.program_resource_materialization_identity(" in amr
+    assert '"pops.program.amr.krylov-workspace.' in amr
     assert "pops::PureFieldAlgebra::copy_allocated(*frozen_A" in source
     assert "pops::PureFieldAlgebra::copy(*frozen_A" not in source
     assert 'ctx.history_zero_start("blk.tensor_phi", 1, 1, 1)' in amr[:direct_phase]

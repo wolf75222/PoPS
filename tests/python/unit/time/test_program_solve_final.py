@@ -157,6 +157,8 @@ def test_typed_linear_problem_lowers_to_the_real_native_krylov_route():
     source = emit_cpp_program(program)
     assert "ctx.solve_prepared_linear" in source
     assert "pops::PreparedAffineLinearProblem" in source
+    assert "ctx.prepared_execution_communicator()" in source
+    assert "pops::ExecutionCommunicator::world()" not in source
 
 
 def test_problem_is_only_algebra_and_solver_rejects_option_bags():
