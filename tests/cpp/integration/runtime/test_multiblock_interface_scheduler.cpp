@@ -10,10 +10,15 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 using namespace pops;
 using namespace pops::runtime::multiblock;
+
+static_assert(std::is_same_v<InterfaceFluxScheduler<1>::memory_space, MultiFab<1>::memory_space>);
+static_assert(std::is_same_v<InterfaceFluxScheduler<2>::memory_space, MultiFab<2>::memory_space>);
+static_assert(std::is_same_v<InterfaceFluxScheduler<3>::memory_space, MultiFab<3>::memory_space>);
 
 namespace {
 

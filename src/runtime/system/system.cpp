@@ -31,14 +31,26 @@ System<Dim>::System(const SystemConfig<Dim>& config) {
   p_ = std::make_unique<Impl>(config);
 }
 
+// User-provided: GCC rejects an out-of-line `= default` when the same special members are
+// also explicitly instantiated for kNativeDimension.
 template <int Dim>
-System<Dim>::~System() = default;
+System<Dim>::~System() {}
 
 template <int Dim>
-System<Dim>::System(System&&) noexcept = default;
+System<Dim>::System(System&& other) noexcept
+    : prepared_boundary_execution_lane_(std::move(other.prepared_boundary_execution_lane_)),
+      p_(std::move(other.p_)) {}
 
 template <int Dim>
-System<Dim>& System<Dim>::operator=(System&&) noexcept = default;
+System<Dim>& System<Dim>::operator=(System&& other) noexcept {
+  if (this != &other) {
+    // Destroy Impl first: installed field solvers and boundary transports may hold
+    // ImmutableBorrow pins on the destination lane. Releasing the lane first terminates.
+    p_ = std::move(other.p_);
+    prepared_boundary_execution_lane_ = std::move(other.prepared_boundary_execution_lane_);
+  }
+  return *this;
+}
 
 template <int Dim>
 void System<Dim>::step(double dt) {

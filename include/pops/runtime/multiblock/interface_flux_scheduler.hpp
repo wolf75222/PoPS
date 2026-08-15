@@ -324,7 +324,7 @@ class InterfaceFluxScheduler {
       prepared.communicator_rank = communicator_rank;
       prepared.communicator_size = communicator_size;
       prepared.communicator_identity = std::move(communicator_identity);
-      prepared.memory_space = execution.memory_space;
+      prepared.execution_memory_space = execution.memory_space;
       prepared.device_identity = execution.device_identity;
       prepared.collective_identity = collective_identity;
       materialize_storage_(prepared);
@@ -837,7 +837,7 @@ class InterfaceFluxScheduler {
     int communicator_rank = 0;
     int communicator_size = 1;
     std::string communicator_identity;
-    PopsMemorySpaceV1 memory_space = POPS_MEMORY_SPACE_HOST_V1;
+    PopsMemorySpaceV1 execution_memory_space = POPS_MEMORY_SPACE_HOST_V1;
     std::string device_identity;
     std::string collective_identity;
     InterfaceFluxEvaluator evaluator;
@@ -1375,7 +1375,8 @@ class InterfaceFluxScheduler {
         prepared.face_count * static_cast<std::size_t>(prepared.component_count);
     if (prepared.distributed)
       all_reduce_sum_inplace(prepared.host_traces.data(), 2 * packed, prepared.communicator);
-    const bool native_memory_evaluation = prepared.memory_space != POPS_MEMORY_SPACE_HOST_V1;
+    const bool native_memory_evaluation =
+        prepared.execution_memory_space != POPS_MEMORY_SPACE_HOST_V1;
     const Real nan = std::numeric_limits<Real>::quiet_NaN();
     std::fill_n(prepared.host_flux.data(), packed, nan);
     if (native_memory_evaluation) {
@@ -1400,7 +1401,7 @@ class InterfaceFluxScheduler {
                                    static_cast<int>(prepared.face_count),
                                    prepared.component_count,
                                    prepared.face_measure,
-                                   prepared.memory_space};
+                                   prepared.execution_memory_space};
     std::exception_ptr evaluator_failure;
     try {
       prepared.evaluator(point, batch);

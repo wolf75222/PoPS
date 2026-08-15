@@ -56,6 +56,11 @@ namespace {
 constexpr int kTestDimension = kNativeDimension;
 using NativeSystem = System<kTestDimension>;
 using NativeSystemConfig = SystemConfig<kTestDimension>;
+static_assert(std::is_nothrow_destructible_v<NativeSystem>);
+static_assert(std::is_nothrow_move_constructible_v<NativeSystem>);
+static_assert(std::is_nothrow_move_assignable_v<NativeSystem>);
+static_assert(!std::is_copy_constructible_v<NativeSystem>);
+static_assert(!std::is_copy_assignable_v<NativeSystem>);
 using NativeProgramContext = runtime::program::ProgramContext<kTestDimension>;
 using NativeField = MultiFab<kTestDimension>;
 using NativeConstView = FieldView<const Real, kTestDimension>;
@@ -259,6 +264,29 @@ std::vector<double> ic(int n) {
         pressure / (kGamma - 1.0);
   }
   return U;
+}
+
+TEST(ProgramContextContract, SystemMoveTransfersPreparedExecutionLane) {
+  ensure_kokkos();
+  NativeSystem source(native_config(4));
+  install_execution_lane(source, "pops.test.system-move");
+  NativeSystem moved(std::move(source));
+  EXPECT_EQ(moved.prepared_boundary_execution_lane().identity(), "pops.test.system-move");
+  EXPECT_THROW(static_cast<void>(source.prepared_boundary_execution_lane()), std::logic_error);
+
+  // solve_fields materializes ExactNamedField + cartesian_cg, both of which pin the destination
+  // lane with ExecutionLane::ImmutableBorrow. Assignment must destroy that Impl first.
+  NativeSystem assigned(native_config(4));
+  install_execution_lane(assigned, "pops.test.system-move.destination");
+  add_gas(assigned);
+  assigned.set_state("gas", ic(4));
+  (void)pops::consume_solve_outcome(assigned.solve_fields());
+  assigned = std::move(assigned);
+  EXPECT_EQ(assigned.prepared_boundary_execution_lane().identity(),
+            "pops.test.system-move.destination");
+  assigned = std::move(moved);
+  EXPECT_EQ(assigned.prepared_boundary_execution_lane().identity(), "pops.test.system-move");
+  EXPECT_THROW(static_cast<void>(moved.prepared_boundary_execution_lane()), std::logic_error);
 }
 
 TEST(ProgramContextContract, AnonymousRateIdentityIsRejectedBeforeTopologyLookup) {

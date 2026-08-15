@@ -9394,7 +9394,7 @@ AmrSystem<Dim>::AmrSystem(const AmrSystemConfig<Dim>& config) {
 }
 
 template <int Dim>
-AmrSystem<Dim>::~AmrSystem() = default;
+AmrSystem<Dim>::~AmrSystem() {}
 
 template <int Dim>
 AmrSystem<Dim>::AmrSystem(AmrSystem&& other) {

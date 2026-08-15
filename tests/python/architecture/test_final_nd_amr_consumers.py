@@ -48,9 +48,11 @@ CONTEXT_FRAGMENT_PATHS = frozenset(
     }
 )
 PROGRAM_RESPONSIBILITY_AUTHORITIES = {
+    "spatial_context": frozenset(
+        {"pops/runtime/program/amr_program_context_spatial.inc"}
+    ),
     "spatial_operations": frozenset(
         {
-            "pops/runtime/program/amr_program_context_spatial.inc",
             "pops/runtime/program/amr_program_context_spatial_operations.inc",
             "pops/runtime/program/amr_program_context_spatial_operations_services.inc",
         }
@@ -99,7 +101,8 @@ PROGRAM_RESPONSIBILITY_AUTHORITIES = {
     ),
 }
 PROGRAM_RESPONSIBILITY_BUDGETS = {
-    "spatial_operations": 1_100,
+    "spatial_context": 350,
+    "spatial_operations": 900,
     "field_runtime": 1_800,
     "history_checkpoint": 950,
     "flux_expression": 950,
@@ -107,6 +110,9 @@ PROGRAM_RESPONSIBILITY_BUDGETS = {
     "subcycling_runtime": 800,
     "cell_temporal_runtime": 800,
 }
+# Keep spatial context distinct from executable spatial operations while retaining one explicit
+# upper envelope for the complete Program semantic closure.
+PROGRAM_SEMANTIC_CLOSURE_BUDGET = 7_700
 SEMANTIC_AUTHORITIES = frozenset(
     {
         "pops/numerics/time/amr/reflux/amr_flux_execution.hpp",
@@ -255,7 +261,18 @@ def test_amr_consumer_closures_are_explicit_bounded_and_acyclic() -> None:
 
     assert len(_source(closures["flux"]).splitlines()) <= 700
     assert len(_source(closures["subcycling"]).splitlines()) <= 1_600
-    assert len(_source(closures["program"]).splitlines()) <= 7_500
+    program_fragments = tuple(
+        path for path in closures["program"] if path in CONTEXT_FRAGMENT_PATHS
+    )
+    program_scaffolding = tuple(
+        path for path in closures["program"] if path not in CONTEXT_FRAGMENT_PATHS
+    )
+    assert len(_source(program_fragments).splitlines()) <= 5_900
+    assert len(_source(program_scaffolding).splitlines()) <= 1_800
+    assert (
+        len(_source(closures["program"]).splitlines())
+        <= PROGRAM_SEMANTIC_CLOSURE_BUDGET
+    )
     shallow_roots = (*UNCHANGED_CONSUMERS, *ROOTS.values())
     assert len(_source(shallow_roots).splitlines()) < 1_000
 

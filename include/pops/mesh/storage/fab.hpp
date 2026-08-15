@@ -135,8 +135,10 @@ class Fab {
   const storage_type& storage() const { return data_; }
 
   host_mirror_type create_host_mirror() const {
-    return host_mirror_type(size_ == 0 ? raw_host_mirror_type{} : Kokkos::create_mirror_view(data_),
-                            this, size_, generation_);
+    raw_host_mirror_type values{};
+    if (size_ != 0)
+      values = Kokkos::create_mirror_view(data_);
+    return host_mirror_type(std::move(values), this, size_, generation_);
   }
   void copy_to_host(const host_mirror_type& host) const {
     validate_mirror(host);
