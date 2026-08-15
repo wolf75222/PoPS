@@ -90,6 +90,7 @@
   "tests/python/unit/codegen/test_amr_artifact_metadata.py": 2.0,
   "tests/python/unit/codegen/test_amr_route_introspection.py": 2.0,
   "tests/python/unit/codegen/test_artifact_migration.py": 2.0,
+  "tests/python/unit/codegen/test_auxiliary_consumer_identity.py": 60.0,
   "tests/python/unit/codegen/test_auxiliary_producers.py": 1.0,
   "tests/python/unit/codegen/test_checkpoint_migration.py": 2.0,
   "tests/python/unit/codegen/test_artifact_model_metadata_protocol.py": 2.0,
@@ -316,6 +317,7 @@
   "tests/python/unit/runtime/test_manifest_ghost_depth_by_block.py": 1.0,
   "tests/python/unit/runtime/test_manifest_protocol.py": 1.0,
   "tests/python/unit/runtime/test_manifest_schema.py": 0.5,
+  "tests/python/unit/runtime/test_multi_layout_runtime_authorities.py": 5.0,
   "tests/python/unit/runtime/test_native_collectives.py": 1.0,
   "tests/python/unit/runtime/test_native_dimension_api_selection.py": 0.5,
   "tests/python/unit/runtime/test_native_observer_mpi_lane.py": 1.0,
@@ -422,7 +424,7 @@
     "unit_seconds": "per-file pytest wall time",
     "measured_source": "borrowed _pops.so locally plus GitHub Actions run 30190778708 per-test timings",
     "estimated_note": "Unmeasured files use conservative path/content tiers (1/2/5/30/60/120 s); compiler-gated files retain native-compile estimates. Refresh every estimated row from a full CI run gate-python timing artifact.",
-    "estimated_count": 249,
+    "estimated_count": 251,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_scalar_advection_final_example.py",
@@ -482,6 +484,7 @@
       "tests/python/unit/codegen/test_amr_route_introspection.py",
       "tests/python/unit/codegen/test_artifact_migration.py",
       "tests/python/unit/codegen/test_artifact_model_metadata_protocol.py",
+      "tests/python/unit/codegen/test_auxiliary_consumer_identity.py",
       "tests/python/unit/codegen/test_auxiliary_producers.py",
       "tests/python/unit/codegen/test_bind_schema.py",
       "tests/python/unit/codegen/test_boundary_jacvec_validation.py",
@@ -623,6 +626,7 @@
       "tests/python/unit/runtime/test_geometric_mg_options.py",
       "tests/python/unit/runtime/test_manifest_ghost_depth_by_block.py",
       "tests/python/unit/runtime/test_manifest_protocol.py",
+      "tests/python/unit/runtime/test_multi_layout_runtime_authorities.py",
       "tests/python/unit/runtime/test_native_collectives.py",
       "tests/python/unit/runtime/test_native_dimension_api_selection.py",
       "tests/python/unit/runtime/test_native_observer_mpi_lane.py",
@@ -674,6 +678,6 @@
       "tests/python/unit/time/test_typed_provenance_guards.py",
       "tests/python/unit/time/test_typed_schedule.py"
     ],
-    "total_files": 418
+    "total_files": 420
   }
 }
