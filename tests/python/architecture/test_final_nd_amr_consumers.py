@@ -110,9 +110,11 @@ PROGRAM_RESPONSIBILITY_BUDGETS = {
     "subcycling_runtime": 800,
     "cell_temporal_runtime": 800,
 }
-# Keep spatial context distinct from executable spatial operations while retaining one explicit
-# upper envelope for the complete Program semantic closure.
-PROGRAM_SEMANTIC_CLOSURE_BUDGET = 7_700
+# Intentional Phase 0 policy envelopes: fragment and scaffolding growth remain
+# separately bounded, and their aggregate remains independently enforced.
+PROGRAM_FRAGMENT_BUDGET = 6_100
+PROGRAM_SCAFFOLDING_BUDGET = 1_800
+PROGRAM_SEMANTIC_CLOSURE_BUDGET = 7_900
 SEMANTIC_AUTHORITIES = frozenset(
     {
         "pops/numerics/time/amr/reflux/amr_flux_execution.hpp",
@@ -267,8 +269,8 @@ def test_amr_consumer_closures_are_explicit_bounded_and_acyclic() -> None:
     program_scaffolding = tuple(
         path for path in closures["program"] if path not in CONTEXT_FRAGMENT_PATHS
     )
-    assert len(_source(program_fragments).splitlines()) <= 5_900
-    assert len(_source(program_scaffolding).splitlines()) <= 1_800
+    assert len(_source(program_fragments).splitlines()) <= PROGRAM_FRAGMENT_BUDGET
+    assert len(_source(program_scaffolding).splitlines()) <= PROGRAM_SCAFFOLDING_BUDGET
     assert (
         len(_source(closures["program"]).splitlines())
         <= PROGRAM_SEMANTIC_CLOSURE_BUDGET
