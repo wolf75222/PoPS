@@ -24,6 +24,7 @@
 #include <pops/runtime/program/prepared_tensor_boundary_session.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
 #include <pops/runtime/program/same_level_cell_temporal_provider.hpp>
+#include <pops/runtime/system/auxiliary_ghost_fill.hpp>
 #include <pops/runtime/system/provider_storage_binding.hpp>
 
 #include <algorithm>
@@ -52,6 +53,11 @@
 #include <vector>
 
 namespace pops::runtime::program {
+
+namespace detail {
+template <int Dim>
+struct AmrProgramHistoryRemapCollectiveTestAccess;
+}
 
 template <int Dim>
 struct ProgramSpatialSnapshot {
@@ -275,6 +281,9 @@ class AmrProgramContext {
 #include <pops/runtime/program/amr_program_context_field_runtime_services.inc>
 #include <pops/runtime/program/amr_program_context_history_checkpoint_services.inc>
 #include <pops/runtime/program/amr_program_context_spatial_operations_services.inc>
+
+  template <int TestDim>
+  friend struct detail::AmrProgramHistoryRemapCollectiveTestAccess;
 
   facade_type* facade_ = nullptr;
   runtime_type* runtime_ = nullptr;

@@ -152,6 +152,65 @@ void refresh_resources_() const {
 /// Validate the manager that the AMR engine has already remapped and exchanged in its outer
 /// transaction.  This does not prepare, allocate, or register histories: it merely authenticates
 /// the exact replacement against the previously live logical registry and the now-live hierarchy.
+///
+/// The metadata preflight is deliberately facade-free.  A rank-local malformed candidate must
+/// converge before another rank can reach one of the later hierarchy/provider observations.
+void validate_accepted_history_remap_metadata_() const {
+  const auto& manager = runtime_state().hist_;
+  if (history_levels_.empty() || manager.histories.empty())
+    throw std::runtime_error(
+        "AMR Program accepted history remap requires both prior and remapped history registries");
+
+  const auto require_exact_metadata_keys = [&](const auto& metadata) {
+    if (metadata.size() != manager.histories.size())
+      throw std::runtime_error("AMR Program accepted history remap metadata is incomplete");
+    for (const auto& [key, ring] : manager.histories) {
+      (void)ring;
+      if (!metadata.contains(key))
+        throw std::runtime_error("AMR Program accepted history remap metadata is incomplete");
+    }
+  };
+  require_exact_metadata_keys(manager.depth);
+  require_exact_metadata_keys(manager.initialized);
+  require_exact_metadata_keys(manager.fill_count);
+  require_exact_metadata_keys(manager.store_pending);
+  require_exact_metadata_keys(manager.owner);
+  require_exact_metadata_keys(manager.state_identity);
+  require_exact_metadata_keys(manager.space_identity);
+  require_exact_metadata_keys(manager.clock_identity);
+  require_exact_metadata_keys(manager.interpolation_identity);
+  require_exact_metadata_keys(manager.slot_dt);
+
+  const std::size_t live_levels = runtime_->hierarchy().num_levels();
+  if (live_levels == 0)
+    throw std::runtime_error("AMR Program accepted history remap has no live hierarchy level");
+  for (const auto& [key, ring] : manager.histories) {
+    const auto decoded = decode_history_key_(key);
+    if (!decoded || decoded->first < 0 || static_cast<std::size_t>(decoded->first) >= live_levels ||
+        key != history_key_(decoded->second, decoded->first))
+      throw std::runtime_error("AMR Program accepted history remap has a malformed ring key");
+    const int depth = manager.depth.at(key);
+    const int owner = manager.owner.at(key);
+    const bool initialized = manager.initialized.at(key);
+    const int fill_count = manager.fill_count.at(key);
+    const auto& slot_dt = manager.slot_dt.at(key);
+    if (depth < 1 || ring.size() != static_cast<std::size_t>(depth) || fill_count < 0 ||
+        fill_count > depth || initialized != (fill_count > 0) ||
+        slot_dt.size() != static_cast<std::size_t>(depth))
+      throw std::runtime_error("AMR Program accepted history remap has invalid ring metadata");
+    for (const Real dt : slot_dt) {
+      const double value = static_cast<double>(dt);
+      if (!std::isfinite(value) || (initialized ? !(value > 0.0) : value != 0.0))
+        throw std::runtime_error(
+            "AMR Program accepted history remap has invalid exact outgoing-dt metadata");
+    }
+    if (owner < 0 || owner >= n_blocks() || manager.state_identity.at(key).empty() ||
+        manager.space_identity.at(key).empty() || manager.clock_identity.at(key).empty() ||
+        manager.interpolation_identity.at(key).empty())
+      throw std::runtime_error("AMR Program accepted history remap has an invalid descriptor");
+  }
+}
+
 void validate_accepted_history_remap_() const {
   const auto& manager = runtime_state().hist_;
   if (history_levels_.empty() || manager.histories.empty())
@@ -277,7 +336,23 @@ void refresh_resources_after_accepted_history_remap_() const {
       resource_generation_ == runtime_->materialization_generation())
     throw std::runtime_error(
         "AMR Program accepted history remap requires a newly published hierarchy generation");
-  validate_accepted_history_remap_();
+  const ExecutionLane& lane = prepared_execution_lane();
+  std::exception_ptr metadata_error;
+  try {
+    validate_accepted_history_remap_metadata_();
+  } catch (...) {
+    metadata_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      metadata_error, &lane, "AMR Program accepted history remap failed collectively");
+  std::exception_ptr validation_error;
+  try {
+    validate_accepted_history_remap_();
+  } catch (...) {
+    validation_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      validation_error, &lane, "AMR Program accepted history remap failed collectively");
   scratches_.clear();
   synchronize_resource_generation_();
   if (active_level_ >= nlev())
