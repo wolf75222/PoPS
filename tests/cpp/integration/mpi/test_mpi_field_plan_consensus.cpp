@@ -60,9 +60,19 @@ constexpr std::string_view kAmrRegistryDivergence =
     "AmrSystem initial materialization contract differs between RuntimeInstance ranks";
 constexpr std::string_view kDistributedFacReason =
     "composite FAC distributed inter-level transfers are unavailable";
+constexpr std::string_view kEllipticFactoryConstructionRefusal =
+    "elliptic factory construction failed on at least one rank";
+constexpr std::string_view kEllipticFactoryInspectionRefusal =
+    "elliptic backend inspection failed on at least one rank";
+constexpr std::string_view kEllipticFactoryContractRefusal =
+    "elliptic backend did not materialize the requested operator and field contract";
 
 bool message_contains(const std::exception& error, std::string_view expected) {
   return std::string_view(error.what()).find(expected) != std::string_view::npos;
+}
+
+bool exact_message(const std::exception& error, std::string_view expected) {
+  return std::string_view(error.what()) == expected;
 }
 
 struct BoundaryBindingAudit {
@@ -321,6 +331,29 @@ enum class EllipticFactoryFault {
   wrong_distribution_on_rank_one,
   inspection_throws_on_rank_one,
 };
+
+std::string_view elliptic_factory_refusal_message(EllipticFactoryFault fault) {
+  switch (fault) {
+    case EllipticFactoryFault::throw_on_rank_one:
+    case EllipticFactoryFault::null_on_rank_one:
+      return kEllipticFactoryConstructionRefusal;
+    case EllipticFactoryFault::inspection_throws_on_rank_one:
+      return kEllipticFactoryInspectionRefusal;
+    case EllipticFactoryFault::wrong_components_on_rank_one:
+    case EllipticFactoryFault::aliased_fields_on_rank_one:
+    case EllipticFactoryFault::wrong_ghosts_on_rank_one:
+    case EllipticFactoryFault::wrong_operator_contract_on_rank_one:
+    case EllipticFactoryFault::wrong_distribution_on_rank_one:
+      return kEllipticFactoryContractRefusal;
+  }
+  return {};
+}
+
+bool elliptic_factory_refusal_is_runtime_error(EllipticFactoryFault fault) {
+  return fault == EllipticFactoryFault::throw_on_rank_one ||
+         fault == EllipticFactoryFault::null_on_rank_one ||
+         fault == EllipticFactoryFault::inspection_throws_on_rank_one;
+}
 
 class ConsensusElliptic {
  public:
@@ -708,8 +741,8 @@ bool system_registry_bind_rejected(std::string token) {
                                {"potential"}, {1.0}, "field/registry");
   try {
     system.mark_bound();
-  } catch (const std::exception& error) {
-    if (!message_contains(error, kSystemRegistryDivergence))
+  } catch (const std::runtime_error& error) {
+    if (!exact_message(error, kSystemRegistryDivergence))
       throw;
     return true;
   }
@@ -742,8 +775,8 @@ bool amr_registry_bind_rejected(std::string token) {
                                                   pops::CompositeFacOptions{}));
   try {
     system.mark_bound();
-  } catch (const std::exception& error) {
-    if (!message_contains(error, kAmrRegistryDivergence))
+  } catch (const std::invalid_argument& error) {
+    if (!exact_message(error, kAmrRegistryDivergence))
       throw;
     return true;
   }
@@ -839,6 +872,7 @@ bool elliptic_factory_rejected(const Field& prototype, const pops::AmrSystemConf
   for (int axis = 0; axis < Dim; ++axis)
     phi_ghosts[axis] = 1;
   const std::size_t count = prototype.layout().size();
+  const std::string_view expected = elliptic_factory_refusal_message(fault);
   try {
     (void)pops::make_elliptic_solver<ConsensusElliptic>(
         {geometry,
@@ -850,7 +884,13 @@ bool elliptic_factory_rejected(const Field& prototype, const pops::AmrSystemConf
          phi_ghosts,
          {count, count > 1 ? count * (count - 1) / 2 : 0}},
         ConsensusEllipticFactory{&constructions, fault});
-  } catch (const std::exception&) {
+  } catch (const std::runtime_error& error) {
+    if (!elliptic_factory_refusal_is_runtime_error(fault) || !exact_message(error, expected))
+      throw;
+    return true;
+  } catch (const std::invalid_argument& error) {
+    if (elliptic_factory_refusal_is_runtime_error(fault) || !exact_message(error, expected))
+      throw;
     return true;
   }
   return false;
