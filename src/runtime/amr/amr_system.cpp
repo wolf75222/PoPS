@@ -8829,12 +8829,12 @@ struct AmrSystem<Dim>::Impl {
     const std::uint64_t prior_topology_epoch = engine->topology_epoch();
     multiblock_hierarchy->publish_regrid(static_cast<std::size_t>(parent_level),
                                          std::move(*prepared), std::move(child_states));
-    const bool history_remap_swapped = remapped_histories.has_value();
-    if (remapped_histories) {
+    const bool topology_changed = engine->topology_epoch() != prior_topology_epoch;
+    const bool history_remap_swapped = topology_changed && remapped_histories.has_value();
+    if (history_remap_swapped) {
       static_assert(std::is_nothrow_swappable_v<runtime::program::HistoryManager<Dim>>);
       std::swap(program.hist_, *remapped_histories);
     }
-    const bool topology_changed = engine->topology_epoch() != prior_topology_epoch;
     if (topology_changed)
       ++checkpoint_regrid_count_value;
     tagging_plan.reset();
