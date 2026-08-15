@@ -9,6 +9,7 @@ import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 from pops.runtime._component_execution_context import component_execution_data
@@ -202,6 +203,56 @@ def _require_runtime_plan_projection(
     expected_providers = tuple(sorted({row.provider_id for row in transfers}))
     if runtime_plan.resources.mapping_provider_ids != expected_providers:
         raise ValueError("RuntimePlanBundle mapping providers differ from the consumed Transfers")
+
+
+def _layout_runtime_authority_plan(plan: Any, selected_names: Any) -> Any:
+    """Project one InstallPlan onto the exact block set owned by a child layout."""
+    names = tuple(selected_names)
+    if not names or len(names) != len(set(names)):
+        raise ValueError("layout authority projection requires unique selected block names")
+    selected = set(names)
+    compiled = tuple(row for row in plan.artifact.blocks if row.name in selected)
+    plan_blocks = tuple(row for row in plan.artifact.plan.blocks if row.name in selected)
+    if (
+        len(compiled) != len(names)
+        or len(plan_blocks) != len(names)
+        or {row.name for row in compiled} != selected
+        or {row.name for row in plan_blocks} != selected
+    ):
+        raise ValueError(
+            "layout authority projection must match the selected compiled/plan block set exactly"
+        )
+    artifact = plan.artifact
+    return SimpleNamespace(
+        artifact=SimpleNamespace(
+            resolved_dimension=artifact.resolved_dimension,
+            blocks=compiled,
+            plan=SimpleNamespace(blocks=plan_blocks, field_plans=artifact.plan.field_plans),
+            layout_plan=artifact.layout_plan,
+        ),
+        params=plan.params,
+        components=plan.components,
+        execution_context=plan.execution_context,
+    )
+
+
+def _release_layout_engines(engines: list[Any]) -> None:
+    """Destroy already-materialized child Systems in reverse install order."""
+    errors: list[BaseException] = []
+    while engines:
+        engine = engines.pop()
+        try:
+            destroy = getattr(engine, "destroy", None)
+            if callable(destroy):
+                destroy()
+            elif getattr(engine, "_s", None) is not None:
+                engine._s = None
+        except BaseException as error:
+            errors.append(error)
+    if errors:
+        raise RuntimeError(
+            "multi-layout child release failed: %s" % "; ".join(map(str, errors))
+        ) from errors[0]
 
 
 def _require_runtime_plan_bundle(plan: Any, runtime_plan: Any) -> None:
@@ -1275,10 +1326,6 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
         )
     if plan.artifact.plan.field_plans:
         raise NotImplementedError("multi-layout FieldOperator plans are not executable")
-    if any(block.boundaries for block in plan.artifact.plan.blocks):
-        raise NotImplementedError(
-            "multi-layout boundary components require per-layout boundary install authorities"
-        )
     blocks = _block_layouts(plan)
     programs = {row.layout_id: row for row in plan.artifact.layout_programs}
     if set(programs) != {row.handle.qualified_id for row in layouts.plan.layouts}:
@@ -1326,102 +1373,122 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
         ):
             raise ValueError("CONSERVATIVE_CELL_AVERAGE_V1 requires aligned fine-to-coarse layouts")
 
+    from pops.runtime._runtime_authorities import install_runtime_authorities
     from pops.runtime._runtime_executor import _uniform_initial_sources
 
     initial_sources = _uniform_initial_sources(plan)
     engines = {}
-    for row in layouts.rows:
-        layout_id = row.handle.qualified_id
-        engine = System(configs[layout_id])
-        from pops.runtime._checkpoint_spatial import install_checkpoint_spatial_contract
+    materialized: list[Any] = []
+    try:
+        for row in layouts.rows:
+            layout_id = row.handle.qualified_id
+            engine = System(configs[layout_id])
+            materialized.append(engine)
+            from pops.runtime._checkpoint_spatial import install_checkpoint_spatial_contract
 
-        normalized_layout = layouts.plan.normalized(row.handle)
-        install_checkpoint_spatial_contract(
-            engine,
-            normalized_layout.native_spatial_layout,
-            transition_ratios=normalized_layout.transition_ratios,
-        )
-        cast(Any, engine)._execution_context = plan.execution_context
-        install_embedded_boundary(engine, normalized_layout)
-        selected = {
-            name: spec for name, spec in plan.instances.items() if blocks[name] == layout_id
-        }
-        selected_initials = {
-            name: source for name, source in initial_sources.items() if name in selected
-        }
-        view = _LayoutCompiledView(plan.artifact, programs[layout_id])
-        engine._install_compiled(
-            view,
-            instances=selected,
-            params=plan.params,
-            aux={},
-            field_plans={},
-            initial_sources=selected_initials,
-            _layout_checkpoint_install=(
-                programs[layout_id].program.program,
-                tuple(programs[layout_id].block_names),
-                plan.artifact.artifact_identity,
-                plan.bind_identity,
-                plan,
-            ),
-        )
-        engines[layout_id] = engine
-
-    execution = component_execution_data(plan.execution_context)
-    transfer_routes = []
-    for transfer in runtime_plan.communication.transfers:
-        source_block, target_block = _mapping_blocks(plan, transfer)
-        source_engine = engines[transfer.source_layout_id]
-        target_engine = engines[transfer.target_layout_id]
-        source_shape = tuple(int(value) for value in source_engine.spatial_shape())
-        target_shape = tuple(int(value) for value in target_engine.spatial_shape())
-        if len(source_shape) != len(target_shape) or any(
-            source_extent < target_extent or source_extent % target_extent
-            for source_extent, target_extent in zip(source_shape, target_shape, strict=True)
-        ):
-            raise ValueError("CONSERVATIVE_CELL_AVERAGE_V1 requires aligned fine-to-coarse layouts")
-        ratio = tuple(
-            source_extent // target_extent
-            for source_extent, target_extent in zip(source_shape, target_shape, strict=True)
-        )
-        component = plan.components[transfer.component_id]
-        source_native = source_engine._native_step_target()
-        target_native = target_engine._native_step_target()
-        session = source_native._prepare_layout_transfer(
-            target_native,
-            component.native_handle,
-            {
-                "mapping_identity": transfer.mapping_id,
-                "provider_identity": transfer.provider_id,
-                "provider_component_identity": transfer.component_id,
-                "provider_manifest_identity": component.component_manifest.token,
-                "source_layout_identity": transfer.source_layout_id,
-                "target_layout_identity": transfer.target_layout_id,
-                "source_block": source_block,
-                "target_block": target_block,
-                "source_representation": transfer.source_representation_uri,
-                "target_representation": transfer.target_representation_uri,
-                "synchronization_identity": transfer.synchronization_uri,
-                "refinement_ratio": ratio,
-                "operation": transfer.operation_abi,
-            },
-            execution,
-        )
-        source_components = int(source_engine.n_vars(source_block))
-        target_components = int(target_engine.n_vars(target_block))
-        if source_components != target_components or source_components <= 0:
-            raise ValueError("layout transfer source/target component counts differ")
-        transfer_routes.append(
-            _NativeTransferRoute(
-                transfer=transfer,
-                source_block=source_block,
-                target_block=target_block,
-                session=session,
-                source_element_count=source_components * math.prod(source_shape),
-                destination_element_count=target_components * math.prod(target_shape),
+            normalized_layout = layouts.plan.normalized(row.handle)
+            install_checkpoint_spatial_contract(
+                engine,
+                normalized_layout.native_spatial_layout,
+                transition_ratios=normalized_layout.transition_ratios,
             )
+            cast(Any, engine)._execution_context = plan.execution_context
+            install_embedded_boundary(engine, normalized_layout)
+            selected = {
+                name: spec for name, spec in plan.instances.items() if blocks[name] == layout_id
+            }
+            selected_initials = {
+                name: source for name, source in initial_sources.items() if name in selected
+            }
+            view = _LayoutCompiledView(plan.artifact, programs[layout_id])
+            install_runtime_authorities(
+                engine, _layout_runtime_authority_plan(plan, tuple(selected))
+            )
+            engine._install_compiled(
+                view,
+                instances=selected,
+                params=plan.params,
+                aux={},
+                field_plans={},
+                initial_sources=selected_initials,
+                _layout_checkpoint_install=(
+                    programs[layout_id].program.program,
+                    tuple(programs[layout_id].block_names),
+                    plan.artifact.artifact_identity,
+                    plan.bind_identity,
+                    plan,
+                ),
+            )
+            engines[layout_id] = engine
+
+        execution = component_execution_data(plan.execution_context)
+        transfer_routes = []
+        for transfer in runtime_plan.communication.transfers:
+            source_block, target_block = _mapping_blocks(plan, transfer)
+            source_engine = engines[transfer.source_layout_id]
+            target_engine = engines[transfer.target_layout_id]
+            source_shape = tuple(int(value) for value in source_engine.spatial_shape())
+            target_shape = tuple(int(value) for value in target_engine.spatial_shape())
+            if len(source_shape) != len(target_shape) or any(
+                source_extent < target_extent or source_extent % target_extent
+                for source_extent, target_extent in zip(source_shape, target_shape, strict=True)
+            ):
+                raise ValueError(
+                    "CONSERVATIVE_CELL_AVERAGE_V1 requires aligned fine-to-coarse layouts"
+                )
+            ratio = tuple(
+                source_extent // target_extent
+                for source_extent, target_extent in zip(source_shape, target_shape, strict=True)
+            )
+            component = plan.components[transfer.component_id]
+            source_native = source_engine._native_step_target()
+            target_native = target_engine._native_step_target()
+            session = source_native._prepare_layout_transfer(
+                target_native,
+                component.native_handle,
+                {
+                    "mapping_identity": transfer.mapping_id,
+                    "provider_identity": transfer.provider_id,
+                    "provider_component_identity": transfer.component_id,
+                    "provider_manifest_identity": component.component_manifest.token,
+                    "source_layout_identity": transfer.source_layout_id,
+                    "target_layout_identity": transfer.target_layout_id,
+                    "source_block": source_block,
+                    "target_block": target_block,
+                    "source_representation": transfer.source_representation_uri,
+                    "target_representation": transfer.target_representation_uri,
+                    "synchronization_identity": transfer.synchronization_uri,
+                    "refinement_ratio": ratio,
+                    "operation": transfer.operation_abi,
+                },
+                execution,
+            )
+            source_components = int(source_engine.n_vars(source_block))
+            target_components = int(target_engine.n_vars(target_block))
+            if source_components != target_components or source_components <= 0:
+                raise ValueError("layout transfer source/target component counts differ")
+            transfer_routes.append(
+                _NativeTransferRoute(
+                    transfer=transfer,
+                    source_block=source_block,
+                    target_block=target_block,
+                    session=session,
+                    source_element_count=source_components * math.prod(source_shape),
+                    destination_element_count=target_components * math.prod(target_shape),
+                )
+            )
+        return _MultiLayoutUniformExecutor(
+            plan, runtime_plan, engines, blocks, tuple(transfer_routes)
         )
-    return _MultiLayoutUniformExecutor(plan, runtime_plan, engines, blocks, tuple(transfer_routes))
+    except BaseException as error:
+        engines.clear()
+        try:
+            _release_layout_engines(materialized)
+        except BaseException as release_error:
+            add_note = getattr(error, "add_note", None)
+            if callable(add_note):
+                add_note("multi-layout child release failed: %s" % release_error)
+        raise
 
 
 __all__ = ["install_multi_layout_uniform"]
