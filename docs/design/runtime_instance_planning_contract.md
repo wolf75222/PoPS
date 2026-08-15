@@ -85,10 +85,28 @@ complete bundle is retained in the array-free `RuntimeInstance.inspect()` report
 assumptions remain reviewable rather than becoming hidden installation state.
 Single-layout providers additionally require the exact ordered block/layout call projection,
 layout-qualified halos, and the absence of unconsumed Transfer or mapping-provider routes before
-constructing their sole native engine.
+constructing their sole native engine. Every planned halo is mapped back through its authenticated
+runtime call to the owning compiled block and declared read; its derived scalar depth must fit that
+block's authoritative compiled ghost allocation. That allocation is the existing per-block oracle
+combining resolved spatial requirements with field-plan/ProviderPack requirements, so a field solve
+that needs a deeper halo is retained and no second runtime ghost-depth knob exists.
 The multi-layout Uniform provider likewise authenticates ordered block/layout calls and the exact
 mapping-provider set backing its materialized Transfers before constructing child engines. It
 refuses non-empty runtime halo plans until an explicit per-layout halo scheduler exists.
+The provider boundary also refuses planned buffer allocations, cross-memory fences and clock joins
+before inspecting native backend state while no execution owner exists for those action classes.
+They are never accepted as advisory metadata. A planned collective is accepted only when an exact
+resolved `ConsumerGraph` quantity is owned by the call's block, uses the call's layout and runtime
+resource, and its installed output/diagnostic operation requires the same operation and strategy.
+The owning `RuntimeCall` must also contain the exact closed-schema collective requirement; a mere
+read or write of the resource cannot authorize an injected action. The collective and its enclosing
+communication plan must name the execution context's exact communicator. Orphaned, injected or
+cross-block collectives fail before native backend inspection; accepted collective identities are
+later carried by the separate authenticated, transactional consumer plan.
+For builtin components, `_runtime_component_manifests._consumer_contracts()` extracts those exact
+resource/operation/strategy requirements from the resolved graph before `build_runtime_plans()` and
+before the executor seam. External component manifests must close the same ownership check
+explicitly.
 
 For an accepted step, successful native finalization is an irreversible `native_finalized`
 boundary. The instance commits the engine state, accepted cursor set and consumer receipts across

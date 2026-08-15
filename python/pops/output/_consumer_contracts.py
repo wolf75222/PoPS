@@ -707,6 +707,28 @@ class ConsumerManifest:
         return {**self._payload(), "identity": self.identity.to_data()}
 
 
+def consumer_collective_requirements(
+    manifest: ConsumerManifest,
+) -> tuple[tuple[ConsumerQuantity | DiagnosticQuantity, str, str], ...]:
+    """Project one consumer onto the exact collectives executed by builtin providers."""
+    if type(manifest) is not ConsumerManifest:
+        raise TypeError(
+            "consumer collective requirements require an exact ConsumerManifest"
+        )
+    rows: list[tuple[ConsumerQuantity | DiagnosticQuantity, str, str]] = []
+    if manifest.parallel_mode in (ParallelMode.ROOT, ParallelMode.COLLECTIVE):
+        rows.extend(
+            (quantity, "gather", "explicit_communicator")
+            for quantity in manifest.quantities
+        )
+    rows.extend(
+        (quantity, operation, "native_reduction_provider")
+        for quantity in manifest.diagnostic_quantities
+        for operation in diagnostic_collective_operations(quantity.execution)
+    )
+    return tuple(rows)
+
+
 class ConsumerGraph:
     """Immutable authoring or resolved DAG with an explicit phase boundary.
 
@@ -1013,6 +1035,7 @@ class ConsumerCursorSet:
 __all__ = [
     "ConsumerCursorSet", "ConsumerFailureAction", "ConsumerGraph", "ConsumerKind",
     "ConsumerManifest", "ConsumerMoment", "ConsumerQuantity", "DiagnosticQuantity", "FailRun", "ParallelMode",
-    "Retry", "ScheduleCursor", "SkipSampleReported", "diagnostic_collective_operations",
+    "Retry", "ScheduleCursor", "SkipSampleReported", "consumer_collective_requirements",
+    "diagnostic_collective_operations",
     "validate_checkpoint_snapshot",
 ]
