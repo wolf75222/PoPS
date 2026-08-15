@@ -1102,6 +1102,60 @@ TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
   }
 }
 
+TEST(GeneratedAmrSystemBlock, NoopPreparedRegridPreservesInitializedHistory) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 8;
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/history-remap-noop");
+  system.install_block_state_route("tracer", "state/tracer");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  pops::test::install_prepared_threshold_union(system, {{"tracer", "u", 2.0}},
+                                               "tests.generated-amr/history-remap-noop-tagging@1");
+  ASSERT_NE(system.engine(), nullptr);
+  ASSERT_EQ(system.engine()->hierarchy().num_levels(), 1u);
+
+  auto context = pops::runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("clock.macro");
+  context->install([](double) {}, context);
+  system.set_program_block_map({0});
+  using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
+  system.install_prepared_amr_program_flux_expression_budget(
+      "tests.generated-amr/history-remap-noop@1", std::vector<FluxBudget>(1, FluxBudget{1, 1}), 0,
+      0);
+  context->register_history("tracer.rate", 1, 1, 0, "tracer.U", "cell.conservative", "clock.macro",
+                            "dense.linear");
+  for (const double dt : {0.1, 0.2, 0.3}) {
+    context->begin_step(dt);
+    pops::MultiFab<Dim> sample = context->scratch_state_like(context->state(0));
+    sample.set_val(pops::Real(dt));
+    context->store_history("tracer.rate", sample, 0);
+    context->rotate_histories("clock.macro");
+  }
+  const std::uint64_t topology_before = system.engine()->topology_epoch();
+  const std::uint64_t materialization_before = system.engine()->materialization_generation();
+  const auto names_before = system.history_names();
+  const int fill_before = system.history_fill_count("tracer.rate", 0);
+  const double dt0_before = system.history_slot_dt("tracer.rate", 0, 0);
+  const double dt1_before = system.history_slot_dt("tracer.rate", 0, 1);
+  const auto slot0_before = system.history_global("tracer.rate", 0, 0);
+  const auto slot1_before = system.history_global("tracer.rate", 0, 1);
+
+  EXPECT_FALSE(system.regrid_from_prepared_tagging(0));
+  EXPECT_EQ(system.engine()->hierarchy().num_levels(), 1u);
+  EXPECT_EQ(system.engine()->topology_epoch(), topology_before);
+  EXPECT_EQ(system.engine()->materialization_generation(), materialization_before);
+  EXPECT_EQ(system.history_names(), names_before);
+  EXPECT_TRUE(system.history_initialized("tracer.rate", 0));
+  EXPECT_EQ(system.history_fill_count("tracer.rate", 0), fill_before);
+  EXPECT_EQ(system.history_slot_dt("tracer.rate", 0, 0), dt0_before);
+  EXPECT_EQ(system.history_slot_dt("tracer.rate", 0, 1), dt1_before);
+  EXPECT_EQ(system.history_global("tracer.rate", 0, 0), slot0_before);
+  EXPECT_EQ(system.history_global("tracer.rate", 0, 1), slot1_before);
+}
+
 TEST(GeneratedAmrSystemBlock, CflUsesFinestExactGeometryAndPreparedModelSpeed) {
   constexpr int Dim = pops::kNativeDimension;
   pops::AmrSystemConfig<Dim> config;
