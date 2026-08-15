@@ -7,6 +7,7 @@ from pops.identity import make_identity
 from pops.model.bind_schema import BindSchema
 from pops.problem._snapshot import AuthoringSnapshot
 from pops.time import Program
+from tests.python.support.block_instance_owner import make_testing_block_instance_owner
 from tests.python.support.resolved_amr_plan import resolved_amr_plan
 from tests.python.support.layout_plan import resolved_layout_contract
 
@@ -112,7 +113,8 @@ def artifact_fixture(*, target="system", block_names=("fluid",), bind_schema=Non
         blocks=tuple(
             ResolvedBlock(
                 name, model, block_spatial, "production", ("U",),
-                ("test::%s::state::U" % name,))
+                ("test::%s::state::U" % name,),
+                make_testing_block_instance_owner("typed-artifact", name, "source-" + name))
             for name, model, block_spatial in zip(
                 block_names, source_models, spatial, strict=True)
         ),

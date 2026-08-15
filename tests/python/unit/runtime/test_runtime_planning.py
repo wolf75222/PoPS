@@ -26,6 +26,7 @@ from pops.model import ComponentManifest, Handle, OwnerPath
 from pops.model.bind_schema import BindSchema
 from pops.problem._snapshot import AuthoringSnapshot
 from pops.time import Program
+from tests.python.support.block_instance_owner import make_testing_block_instance_owner
 from pops.runtime._runtime_plan_contracts import (
     FieldAccess,
     RuntimeCall,
@@ -159,6 +160,7 @@ def _artifact(
                 "production",
                 ("U",),
                 ("test::%s::state::U" % name,),
+                make_testing_block_instance_owner("runtime-planning", name, "source-" + name),
             )
             for name in names
         ),

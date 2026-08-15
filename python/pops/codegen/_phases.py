@@ -205,7 +205,7 @@ def resolve(
             # compiled route agrees with Program, boundary and component authorities and never
             # contains a process-local authoring serial.
             state_identities=state_identities,
-            instance_owner_qid=str(block.instance_owner_path.canonical()),
+            instance_owner_qid=block,
             numerics=numerics,
         ))
     blocks = tuple(resolved_blocks)

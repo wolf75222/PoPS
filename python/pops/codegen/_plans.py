@@ -155,6 +155,83 @@ def _evidence(value: Any, *, where: str) -> Any:
         % (where, type(value).__name__))
 
 
+def canonical_block_instance_owner(*, case: Any, block: Any, model_owner: Any) -> Any:
+    """Return the official canonical OwnerPath of one Case-block model instance."""
+    from pops.model.ownership import OwnerKind, OwnerPath
+    from pops.problem.handles import BlockHandle
+
+    if isinstance(block, BlockHandle):
+        return block.instance_owner_path.canonical()
+    if not isinstance(block, str) or not block:
+        raise TypeError("block instance identity requires a BlockHandle or non-empty block name")
+    if isinstance(case, str):
+        case_owner = OwnerPath.case(case)
+    else:
+        case_owner = OwnerPath.coerce(case)
+        if case_owner.kind is not OwnerKind.CASE:
+            raise ValueError("block instance identity requires a Case owner")
+        if case_owner.is_authoring:
+            case_owner = case_owner.canonical()
+    return case_owner.child(OwnerKind.BLOCK, block).instance_of(model_owner).canonical()
+
+
+def authenticate_block_instance_owner_qid(
+    value: Any, *, allow_unscoped: bool = False
+) -> str:
+    """Return one official Case-block instance qid, or empty on the internal unscoped path."""
+    if value is None or value == "":
+        if allow_unscoped:
+            return ""
+        raise ValueError(
+            "public resolved/compiled plans require a canonical Case-block instance owner"
+        )
+    from pops.model.ownership import OwnerKind, OwnerPath, UnresolvedOwnershipError
+    from pops.problem.handles import BlockHandle
+
+    if isinstance(value, BlockHandle):
+        path = value.instance_owner_path.canonical()
+    elif isinstance(value, OwnerPath):
+        path = value.canonical()
+    elif isinstance(value, Mapping):
+        path = OwnerPath.from_data(value)
+        if path.is_authoring:
+            raise UnresolvedOwnershipError(
+                "block instance owner must be canonical before compilation"
+            )
+    else:
+        raise TypeError(
+            "block instance owner must be a BlockHandle, OwnerPath, or OwnerPath.to_data()"
+        )
+    kinds = tuple(node.kind for node in path.nodes)
+    if OwnerKind.CASE not in kinds or OwnerKind.BLOCK not in kinds:
+        raise ValueError("block instance owner must be Case-block qualified")
+    if kinds[-1] is not OwnerKind.MODEL_DEFINITION:
+        raise ValueError("block instance owner must instantiate a model definition")
+    if path.is_authoring:
+        raise UnresolvedOwnershipError(
+            "block instance owner must be canonical before compilation"
+        )
+    return str(path)
+
+
+def attest_precompiled_consumer_owner(model: Any, requested: Any) -> None:
+    """Refuse a precompiled binary whose baked consumer owner is not the requested instance."""
+    requested_qid = requested if isinstance(requested, str) and requested else (
+        authenticate_block_instance_owner_qid(requested, allow_unscoped=False)
+    )
+    if not isinstance(requested_qid, str) or not requested_qid:
+        raise ValueError(
+            "public compilation requires a canonical Case-block instance owner"
+        )
+    observed = getattr(model, "consumer_owner_qid", None)
+    if observed != requested_qid:
+        raise ValueError(
+            "precompiled model consumer owner %r was not baked for Case-block instance %r; "
+            "recompile the artifact for this owner"
+            % (observed, requested_qid)
+        )
+
+
 def _require_identity(value: Any, domain: str, *, where: str) -> Identity:
     if type(value) is not Identity:
         raise TypeError("%s must be an exact pops.identity.Identity" % where)
@@ -173,7 +250,7 @@ class ResolvedBlock:
     backend: str
     state_spaces: tuple[str, ...]
     state_identities: tuple[str, ...] = ()
-    instance_owner_qid: str = ""
+    instance_owner_qid: Any = ""
     numerics: Any = None
 
     def __post_init__(self) -> None:
@@ -196,11 +273,12 @@ class ResolvedBlock:
             raise TypeError(
                 "ResolvedBlock state_identities must uniquely qualify every state space")
         object.__setattr__(self, "state_identities", state_identities)
-        instance_owner_qid = self.instance_owner_qid
-        if instance_owner_qid != "" and (
-                not isinstance(instance_owner_qid, str) or not instance_owner_qid):
-            raise TypeError("ResolvedBlock instance_owner_qid must be an official owner qid")
-        object.__setattr__(self, "instance_owner_qid", instance_owner_qid)
+        object.__setattr__(
+            self,
+            "instance_owner_qid",
+            authenticate_block_instance_owner_qid(
+                self.instance_owner_qid, allow_unscoped=True),
+        )
         _evidence(self.model, where="ResolvedBlock.model")
         object.__setattr__(self, "spatial", _deep_freeze(self.spatial))
         _evidence(self.spatial, where="ResolvedBlock.spatial")
@@ -299,6 +377,12 @@ class ResolvedSimulationPlan:
         names = [block.name for block in blocks]
         if len(set(names)) != len(names):
             raise ValueError("ResolvedSimulationPlan block names must be unique")
+        missing = [block.name for block in blocks if not block.instance_owner_qid]
+        if missing:
+            raise ValueError(
+                "ResolvedSimulationPlan blocks %s have no canonical Case-block instance owner"
+                % missing
+            )
         object.__setattr__(self, "blocks", blocks)
         object.__setattr__(self, "layout", _deep_freeze(self.layout))
         object.__setattr__(self, "time", _deep_freeze(self.time))
@@ -413,6 +497,7 @@ class ResolvedSimulationPlan:
                 "backend": block.backend,
                 "state_spaces": block.state_spaces,
                 "state_identities": block.state_identities,
+                "instance_owner_qid": block.instance_owner_qid,
                 "model": _evidence(block.model, where="plan.block.model"),
                 "spatial": _evidence(block.spatial, where="plan.block.spatial"),
                 "numerics": _evidence(block.numerics, where="plan.block.numerics"),
@@ -745,5 +830,6 @@ def require_install_plan(value: Any) -> InstallPlan:
 
 __all__ = [
     "BindInputs", "InstallPlan", "ResolvedBlock", "ResolvedSimulationPlan",
-    "require_install_plan",
+    "authenticate_block_instance_owner_qid", "attest_precompiled_consumer_owner",
+    "canonical_block_instance_owner", "require_install_plan",
 ]

@@ -261,7 +261,8 @@ def typed_compiled_artifact(
         blocks=tuple(
             ResolvedBlock(
                 name, schema_modules[name], resolved_spatial, backend, ("U",),
-                (state_identities[name],))
+                (state_identities[name],),
+                block_refs[name])
             for name in names
         ),
         bind_schema=schema,
