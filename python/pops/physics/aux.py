@@ -68,24 +68,26 @@ def role_of(name: Any) -> Any:
     return native_role_token(Custom(name))
 
 
-def roles_for(names: Any, override: Any = None) -> Any:
+def roles_for(names: Any, override: Any = None, *, dimension: Any = None) -> Any:
     """Lower typed role descriptors to exact native tokens parallel to ``names``.
 
     ``None`` entries request canonical name inference.  This function is the sole
     authoring-to-token boundary: role strings are rejected instead of being treated
     as a compatibility vocabulary.
     """
+    names = tuple(names)
     if override is None:
-        return [role_of(nm) for nm in names]
-    if isinstance(override, (str, bytes)):
-        raise TypeError("roles must be an ordered iterable, not a string")
-    try:
-        values = list(override)
-    except TypeError:
-        raise TypeError("roles must be an ordered iterable") from None
-    if len(values) != len(names):
-        raise ValueError("roles: %d roles for %d variables" % (len(values), len(names)))
-    from .roles import ComponentRole, native_role_token
+        values = (None,) * len(names)
+    else:
+        if isinstance(override, (str, bytes)):
+            raise TypeError("roles must be an ordered iterable, not a string")
+        try:
+            values = tuple(override)
+        except TypeError:
+            raise TypeError("roles must be an ordered iterable") from None
+        if len(values) != len(names):
+            raise ValueError("roles: %d roles for %d variables" % (len(values), len(names)))
+    from .roles import ComponentRole, native_role_token, parse_role
 
     lowered = []
     for index, (name, role) in enumerate(zip(names, values, strict=True)):
@@ -98,5 +100,16 @@ def roles_for(names: Any, override: Any = None) -> Any:
             )
         if not isinstance(role, ComponentRole):
             raise TypeError("role %d must implement ComponentRole" % index)
-        lowered.append(native_role_token(role))
+        lowered.append(native_role_token(role, dimension=dimension))
+
+    seen: dict[str, int] = {}
+    for index, token in enumerate(lowered):
+        parsed = parse_role(token, dimension=dimension, where="state role %d" % index)
+        previous = seen.get(parsed.token)
+        if previous is not None:
+            raise ValueError(
+                "state roles declare duplicate token %r at components %d and %d"
+                % (parsed.token, previous, index)
+            )
+        seen[parsed.token] = index
     return lowered
