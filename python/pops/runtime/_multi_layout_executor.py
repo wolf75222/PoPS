@@ -227,13 +227,43 @@ def _layout_runtime_authority_plan(plan: Any, selected_names: Any) -> Any:
         artifact=SimpleNamespace(
             resolved_dimension=artifact.resolved_dimension,
             blocks=compiled,
-            plan=SimpleNamespace(blocks=plan_blocks, field_plans=artifact.plan.field_plans),
+            plan=SimpleNamespace(
+                blocks=plan_blocks,
+                field_plans=artifact.plan.field_plans,
+                capabilities=getattr(artifact.plan, "capabilities", {}),
+            ),
             layout_plan=artifact.layout_plan,
         ),
         params=plan.params,
         components=plan.components,
         execution_context=plan.execution_context,
     )
+
+
+def _release_layout_transfer_prep(routes: list[Any], natives: list[Any]) -> None:
+    """Drop prepared transfer sessions before child Systems can be destroyed.
+
+    ``_prepare_layout_transfer`` keep_alive-nurses both endpoint Systems. Clearing the
+    session list first releases those nurses; raw native handles are dropped next so
+    reverse child teardown does not race retained pybind patients.
+    """
+    errors: list[BaseException] = []
+    while routes:
+        route = routes.pop()
+        session = getattr(route, "session", None)
+        try:
+            closer = getattr(session, "close", None)
+            if callable(closer):
+                closer()
+        except BaseException as error:
+            errors.append(error)
+        del session
+        del route
+    natives.clear()
+    if errors:
+        raise RuntimeError(
+            "multi-layout transfer release failed: %s" % "; ".join(map(str, errors))
+        ) from errors[0]
 
 
 def _release_layout_engines(engines: list[Any]) -> None:
@@ -1379,6 +1409,8 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
     initial_sources = _uniform_initial_sources(plan)
     engines = {}
     materialized: list[Any] = []
+    transfer_routes: list[Any] = []
+    native_handles: list[Any] = []
     try:
         for row in layouts.rows:
             layout_id = row.handle.qualified_id
@@ -1401,9 +1433,8 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
                 name: source for name, source in initial_sources.items() if name in selected
             }
             view = _LayoutCompiledView(plan.artifact, programs[layout_id])
-            install_runtime_authorities(
-                engine, _layout_runtime_authority_plan(plan, tuple(selected))
-            )
+            authority_plan = _layout_runtime_authority_plan(plan, tuple(selected))
+            install_runtime_authorities(engine, authority_plan)
             engine._install_compiled(
                 view,
                 instances=selected,
@@ -1418,11 +1449,11 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
                     plan.bind_identity,
                     plan,
                 ),
+                authority_plan=authority_plan,
             )
             engines[layout_id] = engine
 
         execution = component_execution_data(plan.execution_context)
-        transfer_routes = []
         for transfer in runtime_plan.communication.transfers:
             source_block, target_block = _mapping_blocks(plan, transfer)
             source_engine = engines[transfer.source_layout_id]
@@ -1443,6 +1474,8 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
             component = plan.components[transfer.component_id]
             source_native = source_engine._native_step_target()
             target_native = target_engine._native_step_target()
+            native_handles.append(source_native)
+            native_handles.append(target_native)
             session = source_native._prepare_layout_transfer(
                 target_native,
                 component.native_handle,
@@ -1481,6 +1514,12 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
             plan, runtime_plan, engines, blocks, tuple(transfer_routes)
         )
     except BaseException as error:
+        try:
+            _release_layout_transfer_prep(transfer_routes, native_handles)
+        except BaseException as release_error:
+            add_note = getattr(error, "add_note", None)
+            if callable(add_note):
+                add_note("multi-layout transfer release failed: %s" % release_error)
         engines.clear()
         try:
             _release_layout_engines(materialized)

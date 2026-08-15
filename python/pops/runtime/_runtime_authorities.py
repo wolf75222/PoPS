@@ -1178,6 +1178,35 @@ def _install_amr_provider_authorities(engine: Any, install_plan: Any) -> None:
     engine._amr_provider_authorities = MappingProxyType(reports)
 
 
+def _shared_interface_declared(reports: Any) -> bool:
+    if not isinstance(reports, Mapping) or not reports:
+        return False
+    for report in reports.values():
+        if not isinstance(report, Mapping):
+            continue
+        bindings = report.get("interface_component_bindings") or []
+        endpoints = report.get("interface_endpoints") or []
+        if bindings or endpoints:
+            return True
+    return False
+
+
+def finalize_layout_runtime_authorities(engine: Any, authority_plan: Any) -> None:
+    """Finalize one child layout's shared-interface authority before freeze.
+
+    Empty declarations publish the empty report through ``finalize_runtime_authorities``.
+    Non-empty declarations must reach the native provider or fail closed; they must never
+    survive bind unfinalized.
+    """
+    if authority_plan is None:
+        if _shared_interface_declared(getattr(engine, "_boundary_authorities", None)):
+            raise RuntimeError(
+                "layout bind reached freeze with unfinalized shared-interface declarations"
+            )
+        return
+    finalize_runtime_authorities(engine, authority_plan)
+
+
 def install_runtime_authorities(engine: Any, install_plan: Any) -> None:
     """Install every pre-build authority carried by one normalized install plan."""
     _install_boundary_authorities(engine, install_plan)
@@ -1276,4 +1305,8 @@ def install_runtime_authorities(engine: Any, install_plan: Any) -> None:
         )
 
 
-__all__ = ["finalize_runtime_authorities", "install_runtime_authorities"]
+__all__ = [
+    "finalize_layout_runtime_authorities",
+    "finalize_runtime_authorities",
+    "install_runtime_authorities",
+]

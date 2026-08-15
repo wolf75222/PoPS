@@ -319,6 +319,7 @@ class _SystemUnifiedInstall(_System):
         install_plan=None,
         initial_sources=None,
         _layout_checkpoint_install=None,
+        authority_plan=None,
     ):
         """INTERNAL low-level install seam (Spec 5 sec.11): wire a compiled handle + per-instance
         state/spatial + params + aux + resolved field plans in one call, then install the compiled time
@@ -533,6 +534,9 @@ class _SystemUnifiedInstall(_System):
                 or len(_layout_checkpoint_install) != 5
             ):
                 raise TypeError("layout bind has an invalid checkpoint resource authority")
+            from pops.runtime._runtime_authorities import finalize_layout_runtime_authorities
+
+            finalize_layout_runtime_authorities(self, authority_plan)
             from pops.runtime._checkpoint_resource_budget import (
                 install_layout_checkpoint_resource_budget,
             )
