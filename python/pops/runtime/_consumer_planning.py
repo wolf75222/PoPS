@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import math
 from typing import Any
 
@@ -18,6 +19,7 @@ from pops.output._consumer_contracts import (
     ConsumerQuantity,
     ParallelMode,
     ScheduleCursor,
+    consumer_collective_requirements,
     diagnostic_collective_operations,
 )
 from ._consumer_effects import (
@@ -180,18 +182,7 @@ def _resource_bindings(
             "supports a singleton collective" % manifest.parallel_mode.name,
             evidence={"communicator": communicator},
         )
-    rows = []
-    for quantity in manifest.quantities:
-        expected = (
-            frozenset({"gather"})
-            if manifest.parallel_mode in (ParallelMode.ROOT, ParallelMode.COLLECTIVE)
-            else frozenset()
-        )
-        rows.append((quantity, expected))
-    for quantity in manifest.diagnostic_quantities:
-        rows.append((quantity, frozenset(
-            diagnostic_collective_operations(quantity.execution)
-        )))
+    rows = _consumer_resource_rows(manifest)
 
     result = []
     for quantity, expected_collectives in rows:
@@ -243,6 +234,105 @@ def _resource_bindings(
             collective_ids,
         ))
     return tuple(result)
+
+
+def _consumer_resource_rows(
+    manifest: ConsumerManifest,
+) -> tuple[tuple[Any, frozenset[str]], ...]:
+    """Return each quantity and the exact collective operations its provider executes."""
+    rows = []
+    for quantity in manifest.quantities:
+        expected = (
+            frozenset({"gather"})
+            if manifest.parallel_mode in (ParallelMode.ROOT, ParallelMode.COLLECTIVE)
+            else frozenset()
+        )
+        rows.append((quantity, expected))
+    for quantity in manifest.diagnostic_quantities:
+        rows.append((quantity, frozenset(
+            diagnostic_collective_operations(quantity.execution)
+        )))
+    return tuple(rows)
+
+
+def require_consumer_collective_ownership(
+    runtime_plan: Any,
+    graph: Any,
+    communicator_id: str,
+) -> None:
+    """Require every planned collective to have a resolved ConsumerGraph operation owner."""
+    if type(runtime_plan) is not RuntimePlanBundle:
+        raise TypeError("collective ownership requires an exact RuntimePlanBundle")
+    if type(graph) is not ConsumerGraph or not graph.is_resolved:
+        raise TypeError("collective ownership requires an exact resolved ConsumerGraph")
+    if not isinstance(communicator_id, str) or not communicator_id:
+        raise TypeError("collective ownership requires an exact communicator identity")
+    calls = {row.identity.token: row for row in runtime_plan.calls}
+    expectations = tuple(
+        (manifest, quantity, operation, strategy)
+        for manifest in graph.nodes
+        for quantity, operation, strategy in consumer_collective_requirements(manifest)
+    )
+    for collective in runtime_plan.communication.collectives:
+        call = calls.get(collective.call_id)
+        call_accesses = () if call is None else (*call.reads, *call.writes)
+        owns_call_resource = any(
+            access.resource == collective.resource for access in call_accesses
+        )
+        expected_requirement = {
+            "capability": "collective",
+            "resource": collective.resource,
+            "operation": collective.operation,
+            "strategy": collective.strategy,
+        }
+        owns_call_requirement = any(
+            isinstance(requirement, Mapping)
+            and set(requirement) == set(expected_requirement)
+            and all(
+                requirement[name] == value
+                for name, value in expected_requirement.items()
+            )
+            for requirement in (() if call is None else call.requirements)
+        )
+        owners = tuple(
+            (manifest.qualified_id, quantity.identity.token)
+            for manifest, quantity, operation, strategy in expectations
+            if call is not None
+            and getattr(quantity.reference.block_ref, "qualified_id", None)
+            == call.block_id
+            and quantity.layout_id == call.layout_id
+            and quantity.runtime_resource == collective.resource
+            and operation == collective.operation
+            and strategy == collective.strategy
+        )
+        exact_communicator = (
+            runtime_plan.communication.communicator_id == communicator_id
+            and collective.communicator_id == communicator_id
+        )
+        if (
+            call is None
+            or not exact_communicator
+            or not owns_call_resource
+            or not owns_call_requirement
+            or not owners
+        ):
+            refuse(
+                "runtime_collective_without_consumer_owner",
+                "runtime_plan.communication.collectives[%s]"
+                % collective.identity.token,
+                "planned collective has no exact ConsumerGraph "
+                "block/resource/operation/strategy/communicator owner",
+                evidence={
+                    "call_id": collective.call_id,
+                    "resource": collective.resource,
+                    "operation": collective.operation,
+                    "strategy": collective.strategy,
+                    "communicator": collective.communicator_id,
+                    "expected_communicator": communicator_id,
+                    "owns_call_requirement": owns_call_requirement,
+                    "owners": [list(owner) for owner in owners],
+                },
+            )
 
 
 def _field_consumer(kind: ConsumerKind) -> Any:
@@ -408,4 +498,8 @@ def plan_accepted_side_effects(
     return EffectPlan(graph.identity, runtime_plan.identity, tuple(effects), coverage)
 
 
-__all__ = ["next_consumer_deadline", "plan_accepted_side_effects"]
+__all__ = [
+    "next_consumer_deadline",
+    "plan_accepted_side_effects",
+    "require_consumer_collective_ownership",
+]
