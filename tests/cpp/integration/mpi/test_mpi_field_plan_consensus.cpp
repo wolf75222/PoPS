@@ -621,7 +621,9 @@ void install_consensus_provider_plan(pops::AmrSystem<Dim>& system, const std::st
       "tests.mpi.multiblock-field", "a", "provider-potential",
       {{"tests.mpi.multiblock-field", "field", "provider-potential", slot}}, 1,
       {"tests.mpi.multiblock-field/a/rhs", "tests.mpi.multiblock-field/b/rhs"}, {"a", "b"},
-      {"potential", "potential"}, {2.0, -0.5}, identity, hierarchy, {});
+      {"potential", "potential"}, {2.0, -0.5}, identity, hierarchy,
+      pops::geometric_mg_amr_field_solver_options(pops::GeometricMgOptions{},
+                                                  pops::CompositeFacOptions{}));
   system.set_field_reaction(slot, 2.0);
   if (audit_boundary) {
     system.set_field_boundary_dependencies(slot, {"a"}, {0}, {}, {}, {});
