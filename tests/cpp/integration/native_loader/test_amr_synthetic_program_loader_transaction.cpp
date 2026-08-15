@@ -345,7 +345,8 @@ void build_refined_system(pops::AmrSystem<Dim>& system, const std::string& share
   // The real loader authenticates the Program block table, hash and four flux-expression budget
   // symbols before it calls the artifact installer and materializes the hierarchy.
   system.install_program(shared_object);
-  system.mark_bound();
+  // Match the public bind lifecycle: explicit bootstrap remains inside the assembling transaction,
+  // and the final bound transition rechecks the Program checkpoint-capacity seal afterward.
   system.begin_bootstrap_plan();
   (void)system.materialize_bootstrap_action(kStateRoute, "initialize_level_zero",
                                             "bound_level_zero", 0);
@@ -356,6 +357,7 @@ void build_refined_system(pops::AmrSystem<Dim>& system, const std::string& share
   (void)system.materialize_bootstrap_action(kStateRoute, "prolong_from_parent",
                                             "conservative_linear", 1);
   system.commit_bootstrap_level();
+  system.mark_bound();
 }
 
 double max_difference(const std::vector<double>& left, const std::vector<double>& right) {

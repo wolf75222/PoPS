@@ -3277,6 +3277,7 @@ struct AmrSystem<Dim>::Impl {
   mutable std::optional<std::pair<std::size_t, std::size_t>>
       checkpoint_program_state_capacity_value;
   mutable std::string checkpoint_program_state_capacity_contract;
+  mutable bool checkpoint_program_state_capacity_provisional = false;
   std::optional<TaggingSpec> tagging_spec;
   struct TaggerComponentAuthority {
     std::shared_ptr<component::LoadedComponent> component{};
@@ -14862,11 +14863,18 @@ void AmrSystem<Dim>::begin_bootstrap_plan() {
           "AmrSystem explicit bootstrap sources do not uniquely cover the runtime blocks");
   }
   p_->ensure_engine();
+  const bool artifact_backed = p_->program.artifact_backed_;
+  if (artifact_backed)
+    (void)checkpoint_program_state_capacity();
   auto transaction = p_->prepare_accepted_snapshot_collectively("explicit bootstrap");
   p_->history_regrid_sequence_sources = p_->prepare_history_hierarchy_images();
   runtime::amr::PersistentTaggingState<Dim> staged_state = p_->tagging_state;
   staged_state.begin_cycle(p_->tagging_spec->min_cycles);
   p_->bootstrap_transaction = std::move(transaction);
+  // Explicit bootstrap may replace the live topology while preserving the configured-depth byte
+  // ceiling.  Keep that ceiling active for every accepted-state restore, then let the first
+  // post-bootstrap resource/freeze read authenticate the final topology-qualified contract.
+  p_->checkpoint_program_state_capacity_provisional = artifact_backed;
   p_->tagging_state = std::move(staged_state);
 }
 
@@ -18063,8 +18071,17 @@ std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_cap
     throw std::invalid_argument(
         "AMR Program checkpoint capacities differ between prepared-lane ranks");
   if (p_->checkpoint_program_state_capacity_value) {
-    if (*p_->checkpoint_program_state_capacity_value != *candidate ||
-        p_->checkpoint_program_state_capacity_contract != candidate_contract)
+    if (*p_->checkpoint_program_state_capacity_value != *candidate)
+      throw std::logic_error(
+          "AMR Program checkpoint byte capacity changed after its bind-time seal");
+    if (p_->checkpoint_program_state_capacity_provisional) {
+      if (p_->bootstrap_transaction)
+        return *candidate;
+      p_->checkpoint_program_state_capacity_contract.swap(candidate_contract);
+      p_->checkpoint_program_state_capacity_provisional = false;
+      return *candidate;
+    }
+    if (p_->checkpoint_program_state_capacity_contract != candidate_contract)
       throw std::logic_error("AMR Program checkpoint capacity changed after its bind-time seal");
     return *candidate;
   }
