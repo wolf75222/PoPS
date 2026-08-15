@@ -167,7 +167,7 @@ void materialize_mean_free_density(const NativeField& state, NativeField& rhs) {
   }
 }
 
-void add_gas_block(NativeSystem& s, const std::string& name) {
+void add_gas_block(NativeSystem& s, const std::string& name, int* projection_calls = nullptr) {
   s.install_block_state_route(name, "test::state::" + name);
   const GasModel model = GasModel::prepare(Real(kGamma));
   PreparedSystemBlock<kTestDimension> prepared;
@@ -208,6 +208,10 @@ void add_gas_block(NativeSystem& s, const std::string& name) {
                                                                    const auto&) {};
   prepared.closures.prepare_generated_state_with_transport_prepared =
       [](const auto&, NativeField&, const auto&, const ExecutionLane&, const auto&) {};
+  if (projection_calls != nullptr)
+    prepared.closures.project = [projection_calls](NativeField&, const ExecutionLane&) {
+      ++*projection_calls;
+    };
   prepared.closures.external_ghost_boundary =
       std::make_shared<SystemBlockClosures<kTestDimension>::ExternalGhostBoundary>(
           [](const auto&, NativeField&, const auto&, const ExecutionLane&) {});
@@ -444,6 +448,51 @@ TEST(ProgramContextContract,
   EXPECT_TRUE(refused);
   EXPECT_EQ(apply_calls, apply_calls_before_solve)
       << "the runtime-lane contract must reject before any selected private workspace solve";
+  EXPECT_EQ(all_reduce_min(refused ? 1L : 0L, context.prepared_execution_lane()), 1L);
+#endif
+}
+
+TEST(ProgramContextContract,
+     ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProviderInvocation) {
+#ifndef POPS_HAS_MPI
+  GTEST_SKIP() << "rank-divergent projection validation requires MPI";
+#else
+  ensure_kokkos();
+  comm_init();
+  if (n_ranks() < 2)
+    GTEST_SKIP() << "rank-divergent projection validation requires at least two MPI ranks";
+
+  NativeSystem sim(native_config(4));
+  install_execution_lane(sim, "pops.test.program-context.projection-route-negative-runtime");
+  int projection_calls = 0;
+  add_gas_block(sim, "left", &projection_calls);
+  add_gas_block(sim, "right", &projection_calls);
+  const int selected_block = my_rank() == 0 ? 0 : 1;
+  sim.set_program_block_map({selected_block});
+  NativeProgramContext context(&sim);
+
+  bool system_refused = false;
+  try {
+    sim.block_project(selected_block, sim.block_state(selected_block));
+  } catch (const std::runtime_error& error) {
+    system_refused = true;
+    EXPECT_STREQ(error.what(), "System projection block index differs across MPI ranks");
+  }
+  EXPECT_TRUE(system_refused);
+  EXPECT_EQ(projection_calls, 0)
+      << "the System seam must agree its block route before invoking a projection provider";
+
+  bool refused = false;
+  try {
+    context.apply_projection(0, context.state(0));
+  } catch (const std::runtime_error& error) {
+    refused = true;
+    EXPECT_STREQ(error.what(), "Program projection block differs across MPI ranks");
+  }
+  EXPECT_TRUE(refused);
+  EXPECT_EQ(projection_calls, 0)
+      << "the exact lane route must refuse before a projection provider is invoked";
+  EXPECT_EQ(all_reduce_min(system_refused ? 1L : 0L, context.prepared_execution_lane()), 1L);
   EXPECT_EQ(all_reduce_min(refused ? 1L : 0L, context.prepared_execution_lane()), 1L);
 #endif
 }

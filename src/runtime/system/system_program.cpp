@@ -871,6 +871,22 @@ void System<Dim>::block_project(int block, MultiFab<Dim>& state) {
     if (block < 0 || block >= p_->blocks_.size())
       throw std::out_of_range("System projection block index is out of range");
     selected = &p_->sp[static_cast<std::size_t>(block)];
+    require_same_block_field(state, selected->U, "System projection state");
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("System projection state preflight failed collectively");
+  }
+
+  const long local_block = static_cast<long>(block);
+  if (all_reduce_min(local_block, lane) != all_reduce_max(local_block, lane))
+    throw std::runtime_error("System projection block index differs across MPI ranks");
+
+  local_error = nullptr;
+  try {
     if (p_->embedded_boundary_ &&
         p_->embedded_boundary_->mode() != runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
       family = &select_embedded_residual_family<Dim>(*selected, p_->embedded_boundary_->mode());
