@@ -234,8 +234,10 @@ bool parent_level_mismatch_is_collectively_refused() {
   try {
     (void)system.execute_prepared_tagging(pops::my_rank() == 0 ? 0 : 1);
   } catch (const std::invalid_argument& error) {
-    refused =
-        std::string_view(error.what()).find("differs between MPI ranks") != std::string_view::npos;
+    if (std::string_view(error.what()) !=
+        "AMR tagging execution request differs between prepared hierarchy ranks")
+      throw;
+    refused = true;
   }
   if (system.patch_boxes() != before || system.mass("tracer") != mass_before)
     throw std::runtime_error("parent-level consensus refusal mutated accepted AMR state");
@@ -280,7 +282,7 @@ int run_collective_parity(int argc, char** argv) {
       EXPECT_TRUE(pops::all_ranks_agree_exact_ordered_byte_pairs(
           {{std::string_view("prepared-tagging-layout"), std::string_view(patch_contract)}}));
       EXPECT_EQ(spread(refined.mass), 0.0);
-      EXPECT_TRUE(mismatched_parent_refused);
+      EXPECT_EQ(mismatched_parent_refused, pops::n_ranks() > 1);
       EXPECT_EQ(spread(mismatched_parent_refused ? 1.0 : 0.0), 0.0);
     } catch (const std::exception& error) {
       std::fprintf(stderr, "rank %d exact package parity failed: %s\n", pops::my_rank(),
