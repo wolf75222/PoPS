@@ -61,6 +61,7 @@ def compile_native(
     hoist_reciprocals: Any = False,
     model_identity: Any = None,
     native_field_roles: Any = None,
+    consumer_owner_qid: Any = None,
 ) -> Any:
     """Backend "production": generate the NATIVE LOADER (emit_cpp_native_loader)
     and compile it into a .so loadable by System.add_native_block
@@ -82,6 +83,7 @@ def compile_native(
         hoist_reciprocals=hoist_reciprocals,
         model_identity=(model_hash(model) if model_identity is None else model_identity),
         native_field_roles=native_field_roles,
+        consumer_owner_qid=consumer_owner_qid,
     )
     cc, native_compile_flags, native_link_flags = pops_loader_build_flags(cxx)
     if not cc:
@@ -157,6 +159,7 @@ def compile_model(
     hoist_reciprocals: Any = False,
     model_identity: Any = None,
     _native_field_roles: Any = None,
+    consumer_owner_qid: Any = None,
 ) -> Any:
     """Compilation facade by INTENTION: compiles *model* (a ``HyperbolicModel``)
     into a native fixed-ABI package and returns its path.
@@ -218,6 +221,7 @@ def compile_model(
         standard=std,
         abi_key=str(abi_key),
         hoist_reciprocals=hoist_reciprocals,
+        consumer_owner_qid=consumer_owner_qid,
     )
 
     def _compile_and_authenticate(path: Any, destination: Any = None) -> Any:
@@ -232,6 +236,7 @@ def compile_model(
             hoist_reciprocals=hoist_reciprocals,
             model_identity=model_identity,
             native_field_roles=(normalized_field_roles if target == "amr_system" else None),
+            consumer_owner_qid=consumer_owner_qid,
         )
         if destination is None:
             write_artifact_sidecar(

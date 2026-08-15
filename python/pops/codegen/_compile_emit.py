@@ -444,7 +444,22 @@ def _emit_route_manifest(symbol_name: Any) -> str:
     )
 
 
-def _emit_auxiliary_route_registration(model: Any, *, target: str = "system") -> str:
+def _consumer_owner_qid(model: Any, consumer_owner_qid: Any = None) -> str:
+    """Return the official consumer-plan owner; providers stay model-owned."""
+    if consumer_owner_qid is None or consumer_owner_qid == "":
+        owner = getattr(model, "owner_path", None)
+        canonical = getattr(owner, "canonical", None)
+        if not callable(canonical):
+            raise ValueError("auxiliary consumer emission requires a canonical owner path")
+        return str(canonical())
+    if not isinstance(consumer_owner_qid, str) or not consumer_owner_qid:
+        raise ValueError("auxiliary consumer owner qid must be a non-empty official owner path")
+    return consumer_owner_qid
+
+
+def _emit_auxiliary_route_registration(
+    model: Any, *, target: str = "system", consumer_owner_qid: Any = None
+) -> str:
     """Emit one DSO hook that registers, but never seals, auxiliary routes.
 
     The host stages this canonical hook with *every* package, invokes all
@@ -792,7 +807,7 @@ def _emit_auxiliary_route_registration(model: Any, *, target: str = "system") ->
         else:
             lines.append("      std::vector<Dependency>{}});")
 
-    owner_qid = owned_provider_qid
+    owner_qid = _consumer_owner_qid(model, consumer_owner_qid)
 
     def emit_plan(identity: str, plan: Any) -> None:
         lines.append(
@@ -830,6 +845,7 @@ def emit_cpp_native_loader(
     hoist_reciprocals: Any = False,
     model_identity: Any = None,
     native_field_roles: Any = None,
+    consumer_owner_qid: Any = None,
 ) -> str:
     """Source of the sole production package.
 
@@ -1057,7 +1073,7 @@ def emit_cpp_native_loader(
             + system_elliptic_prepare_lines
             + "  pops::runtime::system::PreparedNativeSystemPackage<pops::kNativeDimension> package;\n"
             "  package.consumer_qid = "
-            + json.dumps(str(m.owner_path.canonical()) + "/physical_flux")
+            + json.dumps(_consumer_owner_qid(m, consumer_owner_qid) + "/physical_flux")
             + ";\n"
             "  package.block = pops::prepare_compiled_system_block<pops::kNativeDimension>(*s, name, package.consumer_qid, std::move(model),\n"
             "      limiter, riemann, recon, time, gamma, substeps, evolve != 0, stride, pos_floor);\n"
@@ -1086,7 +1102,7 @@ def emit_cpp_native_loader(
             "  package.block = pops::prepare_compiled_amr_system_block<pops::kNativeDimension>(\n"
             "      name, std::move(model), limiter, riemann, recon, time, gamma, substeps,\n"
             "      /*stride=*/1, pos_floor, weno_epsilon, wave_speed_cache, %s);\n"
-            % json.dumps(str(m.owner_path.canonical()) + "/physical_flux")
+            % json.dumps(_consumer_owner_qid(m, consumer_owner_qid) + "/physical_flux")
             + amr_elliptic_package_lines
             + "  s->install_prepared_native_amr_package(std::move(package));\n"
             "}\n"
@@ -1110,7 +1126,9 @@ def emit_cpp_native_loader(
             "}\n"
             "}  // namespace pops_generated\n"
         )
-    auxiliary_routes = _emit_auxiliary_route_registration(m, target=target)
+    auxiliary_routes = _emit_auxiliary_route_registration(
+        m, target=target, consumer_owner_qid=consumer_owner_qid
+    )
     return (
         head
         + bricks

@@ -603,7 +603,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             node_model, v.attrs["transform"], var[state_in.id], var[v.id], status,
             active_mask, bidx,
             provider_plans=provider_plans,
-            consumer_qid=program_provider_consumer_qid(node_model, v.id),
+            consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block),
         )
         reduced = "transform_failed_%d" % v.id
         lines.append(
@@ -754,7 +754,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         for source_name in named:
             plan_exprs.extend(_model_impl(node_model)._source_terms[source_name])
         consumer_qid = (
-            program_provider_consumer_qid(node_model, v.id)
+            program_provider_consumer_qid(node_model, v.id, v.block)
             if plan_exprs or named_fluxes is not None or named
             else None
         )
@@ -809,7 +809,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         lines += _emit_source_kernel(
             node_model, v.attrs["source"], var[state_in.id], var[v.id], bidx,
             provider_plans=provider_plans,
-            consumer_qid=program_provider_consumer_qid(node_model, v.id),
+            consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block),
         )
     elif v.op == "apply":
         state_in = v.inputs[0]  # apply inputs = (state[, fields]); the state is first
@@ -822,7 +822,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                      % (var[v.id], int(v.id), var[state_in.id]))
         lines += _emit_apply_kernel(node_model, v.attrs["linear_source"], var[state_in.id], var[v.id],
                                     bidx, provider_plans=provider_plans,
-                                    consumer_qid=program_provider_consumer_qid(node_model, v.id))
+                                    consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block))
     elif v.op == "solve_local_linear":
         rhs_in = v.inputs[0]  # solve inputs = (rhs_state, op_value[, fields]); rhs first
         var[v.id] = "u%d" % v.id
@@ -839,7 +839,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             node_model, v.attrs["linear_source"], v.attrs["a_coeff"],
             var[rhs_in.id], var[v.id], status, bidx,
             provider_plans=provider_plans,
-            consumer_qid=program_provider_consumer_qid(node_model, v.id),
+            consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block),
         )
         _append_pointwise_solve_report(
             program, v, status, lines, label="local_linear", stem="local_solve")
@@ -860,7 +860,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         lines += _emit_solve_local_nonlinear_kernel(
             node_model, v, var[guess_in.id], var[v.id], status, active_mask, bidx,
             provider_plans=provider_plans,
-            consumer_qid=program_provider_consumer_qid(node_model, v.id),
+            consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block),
         )
         report = "ln_report_%d" % v.id
         outcome = _append_local_nonlinear_report(program, v, status, report, lines)
@@ -943,7 +943,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         emit_condensed_op(
             v, var, node_model, lines, prelude,
             provider_plans=provider_plans,
-            consumer_qid=program_provider_consumer_qid(node_model, v.id),
+            consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block),
             program_block=_required_block_index(
                 block_idx, v.block, "condensed op %r" % v.name
             ),

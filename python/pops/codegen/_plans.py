@@ -173,6 +173,7 @@ class ResolvedBlock:
     backend: str
     state_spaces: tuple[str, ...]
     state_identities: tuple[str, ...] = ()
+    instance_owner_qid: str = ""
     numerics: Any = None
 
     def __post_init__(self) -> None:
@@ -195,6 +196,11 @@ class ResolvedBlock:
             raise TypeError(
                 "ResolvedBlock state_identities must uniquely qualify every state space")
         object.__setattr__(self, "state_identities", state_identities)
+        instance_owner_qid = self.instance_owner_qid
+        if instance_owner_qid != "" and (
+                not isinstance(instance_owner_qid, str) or not instance_owner_qid):
+            raise TypeError("ResolvedBlock instance_owner_qid must be an official owner qid")
+        object.__setattr__(self, "instance_owner_qid", instance_owner_qid)
         _evidence(self.model, where="ResolvedBlock.model")
         object.__setattr__(self, "spatial", _deep_freeze(self.spatial))
         _evidence(self.spatial, where="ResolvedBlock.spatial")

@@ -220,16 +220,28 @@ class ProgramProviderPlans:
         return "\n".join(lines)
 
 
-def program_provider_consumer_qid(model: Any, value_id: Any) -> str:
-    """Return the stable Program-node qid; block names never enter this identity."""
+def program_provider_consumer_qid(model: Any, value_id: Any, block: Any = None) -> str:
+    """Return the stable Program-node consumer qid.
+
+    Display names never enter this identity.  A block-qualified node uses the official
+    Case-block instance owner; an unscoped node keeps the model-definition owner.
+    """
     if isinstance(value_id, bool) or not isinstance(value_id, int) or value_id < 0:
         raise ValueError("Program provider consumer value id must be a non-negative integer")
-    impl = _model_impl(model)
-    owner = getattr(impl, "owner_path", None)
-    canonical = getattr(owner, "canonical", None)
-    if not callable(canonical):
-        raise ValueError("Program provider consumer model has no canonical owner path")
-    return str(canonical()) + "/program/" + str(value_id)
+    owner_qid = None
+    if block is not None:
+        instance = getattr(block, "instance_owner_path", None)
+        canonical = getattr(instance, "canonical", None)
+        if callable(canonical):
+            owner_qid = str(canonical())
+    if not owner_qid:
+        impl = _model_impl(model)
+        owner = getattr(impl, "owner_path", None)
+        canonical = getattr(owner, "canonical", None)
+        if not callable(canonical):
+            raise ValueError("Program provider consumer model has no canonical owner path")
+        owner_qid = str(canonical())
+    return owner_qid + "/program/" + str(value_id)
 
 
 def _prepared_native_components(program: Any) -> tuple[Any, ...]:

@@ -87,6 +87,7 @@ def compile_install_models(plan: Any, options: Any) -> dict[str, Any]:
             compile_options,
             state_spaces=block.state_spaces,
             native_field_roles=(roles[block.name] if plan.target == "amr_system" else None),
+            consumer_owner_qid=block.instance_owner_qid,
         )
         for block in plan.blocks
     }
@@ -112,6 +113,7 @@ def compile_install_model(
     *,
     state_spaces: Any = ("U",),
     native_field_roles: Any = None,
+    consumer_owner_qid: Any = None,
 ) -> Any:
     from pops.codegen.loader import CompiledModel
     from pops.codegen._compiled_model_boundary import validate_compiled_model_result
@@ -171,6 +173,7 @@ def compile_install_model(
         backend=backend,
         target=target,
         _native_field_roles=(expected_roles if target == "amr_system" else None),
+        consumer_owner_qid=consumer_owner_qid,
         **compile_options,
     )
     if type(compiled) is not CompiledModel:
