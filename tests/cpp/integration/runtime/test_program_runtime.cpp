@@ -347,18 +347,54 @@ static void add_projecting_gas(System<kNativeDimension>& system, double gamma) {
       system, "gas", model, "none", "rusanov", "conservative", "explicit", gamma,
       /*substeps=*/1, /*evolve=*/true, /*stride=*/1);
   prepared.provider_identity += "/test-projection@1";
-  prepared.closures.project = [](MultiFab<kNativeDimension>& state) {
+  prepared.closures.project = [](MultiFab<kNativeDimension>& state, const ExecutionLane&) {
     project_density_exact(state);
   };
   prepared.closures.project_masked = prepared.closures.project;
   const auto embedded_projection =
       [](MultiFab<kNativeDimension>& state,
-         const runtime::system::PreparedEmbeddedBoundaryGeometry<kNativeDimension>& embedded) {
-        project_density_exact(state, embedded);
-      };
+         const runtime::system::PreparedEmbeddedBoundaryGeometry<kNativeDimension>& embedded,
+         const ExecutionLane&) { project_density_exact(state, embedded); };
   prepared.closures.staircase.project = embedded_projection;
   prepared.closures.cut_cell.project = embedded_projection;
   install_prepared_block(system, std::move(prepared));
+}
+
+static void add_generated_projecting_gas(System<kNativeDimension>& system, double gamma) {
+  system.install_block_state_route("gas",
+                                   "test.program-runtime.generated-projecting-gas.state@1");
+  system.seal_auxiliary_providers();
+  ProjectingEuler transport;
+  transport.gamma = gamma;
+  ProjectingGasModel model;
+  model.hyp = transport;
+  add_compiled_model(system, "gas", model, "none", "rusanov", "conservative", "explicit", gamma);
+}
+
+struct ConditionalFiniteProjectingEuler : EulerND<kNativeDimension> {
+  template <class Providers>
+  POPS_HD State project(const State& input, const Providers&) const {
+    State output = input;
+    if (!(input[0] > Real(0)))
+      output[0] = std::numeric_limits<Real>::quiet_NaN();
+    else
+      output[0] = Real(2);
+    return output;
+  }
+};
+using ConditionalFiniteProjectingGasModel =
+    CompositeModel<ConditionalFiniteProjectingEuler, NoSource, NoEll>;
+
+static void add_generated_conditional_projecting_gas(System<kNativeDimension>& system,
+                                                    double gamma) {
+  system.install_block_state_route(
+      "gas", "test.program-runtime.generated-conditional-projecting-gas.state@1");
+  system.seal_auxiliary_providers();
+  ConditionalFiniteProjectingEuler transport;
+  transport.gamma = gamma;
+  ConditionalFiniteProjectingGasModel model;
+  model.hyp = transport;
+  add_compiled_model(system, "gas", model, "none", "rusanov", "conservative", "explicit", gamma);
 }
 
 static void add_diffusive_gas(System<kNativeDimension>& system, double gamma) {
@@ -1986,6 +2022,122 @@ TEST(ProgramRuntime, ProjectAndRecheckFailureConsumesSolveAndRollsBackWithoutPub
   EXPECT_FALSE(sim.history_initialized("gas.guard_candidate"));
   EXPECT_FALSE(sim.program_cache().has(666002));
   EXPECT_TRUE(sim.program_diagnostics().empty());
+}
+
+TEST(ProgramRuntime, GeneratedUniformBlockSuppliesProjectionRoutesOnlyForCapableModels) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  constexpr double gamma = 1.4;
+  System<kNativeDimension> system(unit_domain_config<kNativeDimension>(4));
+  install_execution_lane(system, "pops.test.program-runtime.generated-projection-routes");
+  system.install_block_state_route("gas", "test.program-runtime.generated-projection-routes.state@1");
+  system.seal_auxiliary_providers();
+
+  ProjectingEuler transport;
+  transport.gamma = gamma;
+  ProjectingGasModel projecting;
+  projecting.hyp = transport;
+  auto prepared = prepare_compiled_system_block<kNativeDimension>(
+      system, "gas", projecting, "none", "rusanov", "conservative", "explicit", gamma,
+      /*substeps=*/1, /*evolve=*/true, /*stride=*/1);
+  EXPECT_TRUE(static_cast<bool>(prepared.closures.project));
+  EXPECT_TRUE(static_cast<bool>(prepared.closures.project_masked));
+  EXPECT_TRUE(static_cast<bool>(prepared.closures.staircase.project));
+  EXPECT_TRUE(static_cast<bool>(prepared.closures.cut_cell.project));
+
+  GasModel plain;
+  plain.hyp = EulerND<kNativeDimension>{gamma};
+  auto incapable = prepare_compiled_system_block<kNativeDimension>(
+      system, "gas", plain, "none", "rusanov", "conservative", "explicit", gamma,
+      /*substeps=*/1, /*evolve=*/true, /*stride=*/1);
+  EXPECT_FALSE(static_cast<bool>(incapable.closures.project));
+  EXPECT_FALSE(static_cast<bool>(incapable.closures.project_masked));
+  EXPECT_FALSE(static_cast<bool>(incapable.closures.staircase.project));
+  EXPECT_FALSE(static_cast<bool>(incapable.closures.cut_cell.project));
+}
+
+TEST(ProgramRuntime, GeneratedUniformProjectionPreservesEmbeddedBoundaryInactiveCells) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  constexpr int n = 12;
+  constexpr double gamma = 1.4;
+  const std::size_t cells = exact_cell_count<kNativeDimension>(n);
+  std::vector<double> initial(static_cast<std::size_t>(kGasComponents) * cells);
+  fill_ic(initial, n, gamma);
+
+  const auto install_projection_step = [](System<kNativeDimension>& system) {
+    system.set_program_block_map({0});
+    runtime::program::ProgramContext context(&system);
+    context.configure_primary_clock("macro");
+    context.install([context](double step) {
+      context.begin_step(step);
+      context.apply_projection(0, context.state(0));
+    });
+    system.set_program_block_map({0});
+  };
+
+  System<kNativeDimension> cartesian(unit_domain_config<kNativeDimension>(n));
+  install_execution_lane(cartesian, "pops.test.program-runtime.generated-projection.cartesian");
+  add_generated_projecting_gas(cartesian, gamma);
+  cartesian.set_state("gas", initial);
+  install_projection_step(cartesian);
+  cartesian.step(0.1);
+  const auto cartesian_state = cartesian.get_state("gas");
+
+  System<kNativeDimension> cutcell(unit_domain_config<kNativeDimension>(n));
+  install_execution_lane(cutcell, "pops.test.program-runtime.generated-projection.cutcell");
+  add_generated_projecting_gas(cutcell, gamma);
+  cutcell.set_state("gas", initial);
+  install_centered_ball(cutcell, 0.31, "cutcell");
+  const auto mask = cutcell.embedded_boundary_mask();
+  install_projection_step(cutcell);
+  cutcell.step(0.1);
+  const auto cutcell_state = cutcell.get_state("gas");
+
+  int active_cells = 0;
+  int inactive_cells = 0;
+  for (std::size_t cell = 0; cell < cells; ++cell) {
+    const bool active = mask[cell] >= 0.5;
+    active_cells += active ? 1 : 0;
+    inactive_cells += active ? 0 : 1;
+    EXPECT_DOUBLE_EQ(cartesian_state[cell], 2.0);
+    EXPECT_DOUBLE_EQ(cutcell_state[cell], active ? 2.0 : initial[cell]);
+    for (int component = 1; component < kGasComponents; ++component) {
+      const std::size_t index = static_cast<std::size_t>(component) * cells + cell;
+      EXPECT_DOUBLE_EQ(cartesian_state[index], initial[index]);
+      EXPECT_DOUBLE_EQ(cutcell_state[index], initial[index]);
+    }
+  }
+  EXPECT_GT(active_cells, 0);
+  EXPECT_GT(inactive_cells, 0);
+}
+
+TEST(ProgramRuntime, GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional) {
+  comm_init();
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  constexpr int n = 8;
+  constexpr double gamma = 1.4;
+  auto config = distributed_boundary_domain_config<kNativeDimension>(n);
+  System<kNativeDimension> system(config);
+  install_execution_lane(system,
+                         "pops.test.program-runtime.generated-projection.nonfinite");
+  add_generated_conditional_projecting_gas(system, gamma);
+  std::vector<double> initial;
+  fill_ic(initial, n, gamma);
+  initial[0] = -1.0;
+  system.set_state("gas", initial);
+  system.set_program_block_map({0});
+
+  runtime::program::ProgramContext context(&system);
+  context.configure_primary_clock("macro");
+  context.begin_step(1.0e-3);
+  MultiFab<kNativeDimension>& candidate = context.state(0);
+  EXPECT_THROW(context.apply_projection(0, candidate), std::runtime_error);
+  EXPECT_EQ(system.get_state("gas"), initial);
 }
 
 TEST(ProgramRuntime, EmbeddedBoundaryRejectsUnqualifiedBoundaryLinearizationEntryPoints) {

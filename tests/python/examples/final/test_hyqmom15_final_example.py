@@ -48,6 +48,9 @@ def test_hyqmom15_example_runs_outputs_and_restarts_bit_identically(tmp_path) ->
     )
     assert report["nonrealizable_rollback"] is True
     assert "hyqmom15_realizability_density" in report["rejection_reason"]
+    assert "dimension-qualified projection provider" not in report["rejection_reason"]
+    assert "dimension-qualified projection provider" not in completed.stderr
+    assert "dimension-qualified projection provider" not in completed.stdout
     assert report["runtime_steps"] == 2
     assert report["rollback_stores"] == [
         store.value for store in ALL_PROVISIONAL_STORES

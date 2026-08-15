@@ -221,6 +221,44 @@ def test_final_authoring_resolves_rate_pack_after_potential_binding() -> None:
     )
 
 
+@pytest.mark.compiler
+@pytest.mark.kokkos
+@pytest.mark.native_loader
+def test_final_uniform_compile_bind_run_reaches_native_projection(tmp_path) -> None:
+    import os
+
+    import pops
+    from pops._native_selector import selected_native_dimension
+
+    if os.environ.get("POPS_NATIVE_DIM", "") != "2" and selected_native_dimension() != 2:
+        pytest.skip("HyQMOM15 public Uniform lifecycle is Dim2")
+
+    example = _load_example()
+    target, resolved, artifact = example.compile_final_case(
+        cells=4, inject_nonrealizable=True,
+    )
+    assert resolved.resolved_dimension == 2
+
+    simulation = example._bind_artifact(
+        artifact, initial_state=example.build_initial_state(cells=4),
+    )
+    before = example._snapshot(simulation)
+    with pytest.raises(RuntimeError, match="hyqmom15_realizability_density") as raised:
+        pops.run(
+            simulation,
+            t_end=example.DEFAULT_T_END,
+            max_steps=1,
+            output_dir=tmp_path / "rejected_nonrealizable",
+        )
+    assert "dimension-qualified projection provider" not in str(raised.value)
+    after = example._snapshot(simulation)
+    example._require_same_snapshot(
+        before, after, where="rejected non-realizable native projection",
+    )
+    assert target.realizability.is_hyqmom15_realizable(before.state)
+    assert not target.realizability.is_hyqmom15_realizable(-before.state)
+
+
 def test_final_uniform_case_resolves_cartesian_cg_field_provider() -> None:
     import pops
     from pops.layouts import Uniform

@@ -70,7 +70,8 @@ struct SystemBlockClosures {
   using embedded_geometry_type = runtime::system::PreparedEmbeddedBoundaryGeometry<Dim>;
   using EmbeddedResidual =
       std::function<void(field_type&, field_type&, const embedded_geometry_type&)>;
-  using EmbeddedProjection = std::function<void(field_type&, const embedded_geometry_type&)>;
+  using EmbeddedProjection =
+      std::function<void(field_type&, const embedded_geometry_type&, const ExecutionLane&)>;
 
   struct EmbeddedResidualFamily {
     EmbeddedResidual full;
@@ -112,8 +113,8 @@ struct SystemBlockClosures {
   PreparedPointStateTransport prepare_generated_state_with_transport_prepared;
   std::shared_ptr<ExternalGhostBoundary> external_ghost_boundary;
 
-  std::function<void(field_type&)> project;
-  std::function<void(field_type&)> project_masked;
+  std::function<void(field_type&, const ExecutionLane&)> project;
+  std::function<void(field_type&, const ExecutionLane&)> project_masked;
   EmbeddedResidualFamily staircase;
   EmbeddedResidualFamily cut_cell;
 };
