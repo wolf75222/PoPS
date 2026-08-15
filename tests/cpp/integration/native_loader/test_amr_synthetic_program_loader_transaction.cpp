@@ -388,7 +388,7 @@ double max_departure_from_equilibrium(const std::vector<double>& values) {
 }
 
 std::vector<std::size_t> interior_level_indices(pops::AmrSystem<Dim>& system, int level) {
-  const pops::Box<Dim>& domain = system.prepared_amr_level_geometry(level).domain();
+  const pops::Box<Dim> domain = system.prepared_amr_level_geometry(level).domain();
   const auto& boxes = system.prepared_amr_block_state(0, level).layout().boxes();
   std::vector<std::size_t> indices;
   for (const pops::Box<Dim>& patch : boxes) {
@@ -475,6 +475,8 @@ TEST(test_amr_synthetic_program_loader_transaction,
   ASSERT_FALSE(fine_interior_indices.empty());
   const std::vector<double> fine_interior_before =
       select_indices(fine_before, fine_interior_indices);
+  EXPECT_GT(max_departure_from_equilibrium(fine_interior_before), 0.0);
+  EXPECT_LT(max_departure_from_equilibrium(fine_interior_before), 0.25);
 
   try {
     continuous.step(dt);
