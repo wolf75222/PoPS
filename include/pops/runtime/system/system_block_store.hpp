@@ -84,8 +84,8 @@ class SystemBlockStore {
     std::function<Real(const field_type&)> source_frequency;
     std::optional<Real> parabolic_frequency;
     std::function<Real(const field_type&)> stability_dt;
-    std::function<void(field_type&)> project;
-    std::function<void(field_type&)> project_masked;
+    std::function<void(field_type&, const ExecutionLane&)> project;
+    std::function<void(field_type&, const ExecutionLane&)> project_masked;
     Residual rhs_flux_only;
     std::map<std::string, ConstResidual> named_poisson_rhs;
     Residual source_only;

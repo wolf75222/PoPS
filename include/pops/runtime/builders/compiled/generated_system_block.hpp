@@ -140,6 +140,36 @@ struct MaterializeSource {
 };
 
 template <int Dim, class Model>
+struct MaterializePointwiseProjection {
+  static constexpr int provider_count = provider_count_for<Model, Dim>();
+  Model model;
+  FieldView<const Real, Dim> source{};
+  FieldView<Real, Dim> destination{};
+  ProviderStorageView<Dim, provider_count> providers{};
+  FieldView<const Real, Dim> active{};
+  FieldView<Real, Dim> status{};
+  bool has_active_mask = false;
+
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    if (has_active_mask && active(index) < Real(0.5)) {
+      for (int component = 0; component < Model::n_vars; ++component)
+        destination(index, component) = source(index, component);
+      status(index) = Real(0);
+      return;
+    }
+    const auto projected = model.project(load_state<Model>(source, index),
+                                         load_provider_values<provider_count>(providers, index));
+    Real failure = Real(0);
+    for (int component = 0; component < Model::n_vars; ++component) {
+      destination(index, component) = projected[component];
+      if (!Kokkos::isfinite(projected[component]))
+        failure = Real(1);
+    }
+    status(index) = failure;
+  }
+};
+
+template <int Dim, class Model>
 struct MaterializePoissonRhs {
   Model model;
   FieldView<const Real, Dim> state{};
@@ -532,6 +562,57 @@ Real maximum_speed(const Model& model, const MultiFab<Dim>& state,
 }
 
 template <int Dim, class Model>
+void apply_pointwise_projection(
+    const Model& model, MultiFab<Dim>& state,
+    const runtime::system::AuxiliaryStorageGroups<Dim>* provider_storage,
+    const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>* plan,
+    const MultiFab<Dim>* active_cells, const ExecutionLane& lane) {
+  constexpr int provider_count = provider_count_for<Model, Dim>();
+  std::optional<MultiFab<Dim>> candidate;
+  std::optional<MultiFab<Dim>> status;
+  Real local_status = Real(0);
+  prepared_boundary_collective_phase(
+      lane,
+      [&] {
+        if constexpr (provider_count > 0) {
+          if (provider_storage == nullptr)
+            throw std::invalid_argument("generated projection requires resolved provider storage");
+          runtime::system::require_pointwise_provider_groups<Dim, provider_count>(
+              state, provider_storage, plan, "generated projection providers");
+        }
+        if (active_cells != nullptr)
+          require_same_layout(state, *active_cells, 1, "generated projection active mask");
+        candidate.emplace(state.layout(), state.distribution(), state.local_rank(), Model::n_vars,
+                          state.ghosts());
+        status.emplace(state.layout(), state.distribution(), state.local_rank(), 1, state.ghosts());
+        for (std::size_t local = 0; local < state.local_size(); ++local)
+          for_each_cell(state.box(local),
+                        MaterializePointwiseProjection<Dim, Model>{
+                            model, std::as_const(state).fab(local).view(),
+                            candidate->fab(local).view(),
+                            runtime::system::bind_provider_storage_view<Dim, provider_count>(
+                                plan, provider_storage, local),
+                            active_cells == nullptr ? FieldView<const Real, Dim>{}
+                                                    : active_cells->fab(local).view(),
+                            status->fab(local).view(), active_cells != nullptr});
+        device_fence();
+        if (state.local_size() != 0)
+          local_status = reduce_max_local(*status);
+      },
+      "generated pointwise projection failed collectively");
+  if (all_reduce_max(local_status, lane) != Real(0))
+    throw std::runtime_error("generated pointwise projection produced a non-finite value");
+  prepared_boundary_collective_phase(
+      lane,
+      [&] {
+        if (!candidate.has_value())
+          throw std::logic_error("generated pointwise projection lost its unpublished candidate");
+        copy_valid(*candidate, state);
+      },
+      "generated pointwise projection publication failed collectively");
+}
+
+template <int Dim, class Model>
 void add_poisson_rhs(const Model& model, const MultiFab<Dim>& state, MultiFab<Dim>& rhs) {
   // This provider is deliberately rank-local. ExactNamedField owns the surrounding exact-lane
   // failure consensus after every rank returns (or throws) from this callback.
@@ -900,6 +981,25 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
         prepare_state_with_external(point, state, &boundary, lane, transport);
       };
   result.closures.external_ghost_boundary = std::move(external_ghost_boundary);
+
+  if constexpr (HasPointwiseProjection<Model>) {
+    auto cartesian_projection = [model, provider_storage_owner, provider_plan_owner,
+                                 provider_storage,
+                                 provider_plan](MultiFab<Dim>& state, const ExecutionLane& lane) {
+      apply_pointwise_projection<Dim, Model>(model, state, provider_storage, provider_plan, nullptr,
+                                             lane);
+    };
+    result.closures.project = cartesian_projection;
+    result.closures.project_masked = cartesian_projection;
+    auto embedded_projection =
+        [model, provider_storage_owner, provider_plan_owner, provider_storage, provider_plan](
+            MultiFab<Dim>& state, const auto& embedded, const ExecutionLane& lane) {
+          apply_pointwise_projection<Dim, Model>(model, state, provider_storage, provider_plan,
+                                                 &embedded.active_mask(), lane);
+        };
+    result.closures.staircase.project = embedded_projection;
+    result.closures.cut_cell.project = embedded_projection;
+  }
 
   result.maximum_speed = [model, provider_storage_owner, provider_plan_owner, provider_storage,
                           provider_plan](const MultiFab<Dim>& state, const ExecutionLane& lane) {
