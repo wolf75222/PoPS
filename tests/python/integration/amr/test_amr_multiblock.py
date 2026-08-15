@@ -15,12 +15,15 @@ from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.reconstruction.limiters import Minmod
 from pops.numerics.riemann import Rusanov
 import numpy as np
+from pops.codegen.abi import module_header_signature
+from pops.codegen.loader import CompiledModel
 
 import pops.runtime._engine_descriptors as engine
 from pops.runtime._engine_descriptors import Periodic
 from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
 from tests.python.support.explicit_program import install_forward_euler_program
 from tests.python.support.amr_tagging import install_prepared_threshold_union
+from tests.python.support.native_execution_context import install_compiled_model_amr_test_lane
 
 
 def _bump(n, amp):
@@ -30,12 +33,45 @@ def _bump(n, amp):
     return r + (1.0 - r.mean())  # offset moyen nul -> Sum q n solvable en periodique
 
 
+def _amr_system(n, *, regrid_every):
+    return AmrSystem(
+        shape=(n, n),
+        lower=(0.0, 0.0),
+        upper=(1.0, 1.0),
+        periodicity=(True, True),
+        regrid_every=regrid_every,
+    )
+
+
+def _amr_lane_model():
+    """Detached exact-rank package metadata used solely to authenticate this test lane."""
+    return CompiledModel(
+        so_path="<amr-multiblock-lane>",
+        backend="production",
+        cons_names=["n"],
+        cons_roles=["density"],
+        prim_names=["n"],
+        n_vars=1,
+        gamma=None,
+        n_aux=0,
+        params={},
+        caps={},
+        abi_key=f"{module_header_signature()}|c++|c++23|dim=2",
+        model_hash="amr-multiblock-lane",
+        cxx="c++",
+        std="c++23",
+        native_dimension=2,
+        target="amr_system",
+    )
+
+
 def _scalar_charge(q, B0=1.0):
     return engine.Model(engine.Scalar(), engine.ExB(), engine.NoSource(), engine.ChargeDensity(charge=q))
 
 
 def _build(n=32, regrid_every=0, *, tagging=()):
-    sim = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=regrid_every)
+    sim = _amr_system(n, regrid_every=regrid_every)
+    install_compiled_model_amr_test_lane(sim, _amr_lane_model())
     sim.set_temporal_relations([2], [1], ["integral_only"])
     sim.add_equation("ions", _scalar_charge(+1.0),
                   spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()))
@@ -81,7 +117,8 @@ def main():
 
     # (d) MONO-BLOC deterministe (chemin AmrCouplerMP intouche) : run x2 -> dmax == 0.
     def run_mono():
-        s = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=0)
+        s = _amr_system(n, regrid_every=0)
+        install_compiled_model_amr_test_lane(s, _amr_lane_model())
         s.set_temporal_relations([2], [1], ["integral_only"])
         s.add_equation(
             "ne",

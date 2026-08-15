@@ -2,9 +2,10 @@
 """Pre-dispatch guards for a detached compiled-AMR package.
 
 This module is deliberately *not* an end-to-end native-loader test: the package metadata below is
-synthetic and no shared library is loaded.  It verifies only the Python contract that rejects values
-which the flat AMR package ABI cannot transport (multirate stride and a partial IMEX mask) before
-native loading.  Actual compiled-package execution is covered by ``test_dsl_production_amr.py``.
+synthetic.  It verifies the Python contract that rejects values which the flat AMR package ABI
+cannot transport (multirate stride and a partial IMEX mask) before native loading.  Its supported
+default witness installs the exact RuntimeInstance lane and reaches the missing-library loader
+failure; actual compiled-package execution is covered by ``test_dsl_production_amr.py``.
 """
 
 import sys
@@ -17,6 +18,16 @@ from pops.codegen.loader import CompiledModel
 from pops.frames import X_AXIS
 from pops.physics import Momentum
 from pops.runtime._system import AmrSystem  # private engine seam exercised by this guard
+from tests.python.support.native_execution_context import install_compiled_model_amr_test_lane
+
+
+def _amr_system() -> AmrSystem:
+    return AmrSystem(
+        shape=(16, 16),
+        lower=(0.0, 0.0),
+        upper=(1.0, 1.0),
+        periodicity=(True, True),
+    )
 
 
 def _compiled_amr_metadata(*, so_path: str = "/nonexistent/pops-amr-guard.so") -> CompiledModel:
@@ -32,7 +43,7 @@ def _compiled_amr_metadata(*, so_path: str = "/nonexistent/pops-amr-guard.so") -
         n_aux=3,
         params={},
         caps={},
-        abi_key=f"{module_header_signature()}|c++|c++23",
+        abi_key=f"{module_header_signature()}|c++|c++23|dim=2",
         model_hash="amr-preloader-guard",
         cxx="c++",
         std="c++23",
@@ -47,13 +58,15 @@ def _compiled_amr_metadata(*, so_path: str = "/nonexistent/pops-amr-guard.so") -
     ids=["imex", "explicit"],
 )
 def test_compiled_amr_guard_rejects_untransported_stride(time):
-    sim = AmrSystem(n=16, periodicity=(True, True))
+    sim = _amr_system()
+    model = _compiled_amr_metadata()
+    install_compiled_model_amr_test_lane(sim, model)
     with pytest.raises(
         ValueError,
         match=r"stride=5 not transported by the production AMR path",
     ):
         sim.add_equation(
-            "gas", _compiled_amr_metadata(), spatial=engine.Spatial(), time=time
+            "gas", model, spatial=engine.Spatial(), time=time
         )
 
 
@@ -65,13 +78,15 @@ def test_compiled_amr_guard_rejects_untransported_stride(time):
     ],
 )
 def test_compiled_amr_guard_rejects_untransported_partial_imex_mask(time, selector):
-    sim = AmrSystem(n=16, periodicity=(True, True))
+    sim = _amr_system()
+    model = _compiled_amr_metadata()
+    install_compiled_model_amr_test_lane(sim, model)
     with pytest.raises(
         ValueError,
         match=r"implicit_vars / implicit_roles .* not transported",
     ) as excinfo:
         sim.add_equation(
-            "gas", _compiled_amr_metadata(), spatial=engine.Spatial(), time=time
+            "gas", model, spatial=engine.Spatial(), time=time
         )
     assert selector in str(excinfo.value)
 
@@ -79,19 +94,21 @@ def test_compiled_amr_guard_rejects_untransported_partial_imex_mask(time, select
 @pytest.mark.parametrize("time", [engine.Explicit(), engine.IMEX()], ids=["explicit", "imex"])
 def test_supported_defaults_cross_the_python_guard_and_reach_the_native_loader(time, tmp_path):
     missing = tmp_path / "missing-amr-package.so"
-    sim = AmrSystem(n=16, periodicity=(True, True))
+    sim = _amr_system()
+    model = _compiled_amr_metadata(so_path=str(missing))
+    install_compiled_model_amr_test_lane(sim, model)
 
     with pytest.raises(RuntimeError) as excinfo:
         sim.add_equation(
             "gas",
-            _compiled_amr_metadata(so_path=str(missing)),
+            model,
             spatial=engine.Spatial(),
             time=time,
         )
 
     message = str(excinfo.value)
-    assert str(missing) in message
     assert "stride" not in message and "implicit_vars" not in message
+    assert str(missing) in message
 
 
 if __name__ == "__main__":

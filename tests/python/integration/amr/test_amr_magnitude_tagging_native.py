@@ -13,6 +13,8 @@ from types import SimpleNamespace
 import numpy as np
 import pops
 import pytest
+from pops.codegen.abi import module_header_signature
+from pops.codegen.loader import CompiledModel
 from pops.mesh._amr import (
     Above,
     ConflictPolicy,
@@ -26,6 +28,7 @@ from pops.runtime import _engine_descriptors as engine
 from pops.runtime._engine_descriptors import Periodic
 from pops.runtime._runtime_mesh_lowering import flow_bootstrap_tagging
 from pops.runtime._system import AmrSystem
+from tests.python.support.native_execution_context import install_compiled_model_amr_test_lane
 
 
 N = 16
@@ -55,6 +58,28 @@ def _resolved_leaf(node_type):
     return graph, bound_threshold, indicator.qualified_id
 
 
+def _amr_lane_model():
+    """Detached exact-rank package metadata used solely to authenticate this test lane."""
+    return CompiledModel(
+        so_path="<native-magnitude-tagging-lane>",
+        backend="production",
+        cons_names=["n"],
+        cons_roles=["density"],
+        prim_names=["n"],
+        n_vars=1,
+        gamma=None,
+        n_aux=0,
+        params={},
+        caps={},
+        abi_key=f"{module_header_signature()}|c++|c++23|dim=2",
+        model_hash="native-magnitude-tagging-lane",
+        cxx="c++",
+        std="c++23",
+        native_dimension=2,
+        target="amr_system",
+    )
+
+
 def _install_state_transfer_routes(simulation, subject):
     routes = (
         ("prolongation", "conservative_linear", 2, [1]),
@@ -82,12 +107,14 @@ def _install_state_transfer_routes(simulation, subject):
 def _native_hierarchy(node_type):
     graph, threshold, subject = _resolved_leaf(node_type)
     simulation = AmrSystem(
-        n=N,
-        L=1.0,
+        shape=(N, N),
+        lower=(0.0, 0.0),
+        upper=(1.0, 1.0),
         periodicity=(True, True),
         regrid_every=0,
         explicit_bootstrap=True,
     )
+    install_compiled_model_amr_test_lane(simulation, _amr_lane_model())
     # This direct-runtime fixture still consumes the resolved Case Handle. Install that exact
     # owner-qualified identity before declaring the native block, just as pops.bind does.
     simulation._s._install_block_state_route("tracer", subject)
