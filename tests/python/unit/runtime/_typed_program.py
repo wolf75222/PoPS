@@ -274,10 +274,13 @@ def typed_compiled_artifact(
         lowering_coverage=layout_coverage,
     )
     compiled.bind_schema = schema
+    owners = {block.name: block for block in plan.blocks}
     for name, model in by_name.items():
         model.bind_schema = schema
         if getattr(model, "definition_identity", None) is None:
             model.definition_identity = model_compile_identity(schema_modules[name])
+        model.consumer_owner_qid = owners[name].instance_owner_qid
+        model.declares_auxiliary_providers = owners[name].declares_auxiliary_providers
     return CompiledSimulationArtifact(
         plan=plan,
         program=compiled,

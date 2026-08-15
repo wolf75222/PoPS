@@ -36,7 +36,8 @@ class CompiledModel:
                  characteristic_no_inflow: Any = False,
                  hllc_provider: Any = None, roe_provider: Any = None,
                  roe_entropy_policy: Any = None, roe_entropy_delta: Any = None,
-                 consumer_owner_qid: Any = None) -> None:
+                 consumer_owner_qid: Any = None,
+                 declares_auxiliary_providers: bool = True) -> None:
         from pops.numerics.riemann.providers import RiemannProviderEvidence
 
         riemann_evidence = RiemannProviderEvidence(
@@ -133,6 +134,7 @@ class CompiledModel:
         if not isinstance(consumer_owner_qid, str):
             raise TypeError("CompiledModel consumer_owner_qid must be a string")
         self.consumer_owner_qid = consumer_owner_qid
+        self.declares_auxiliary_providers = bool(declares_auxiliary_providers)
 
     def _seal(self) -> None:
         """Freeze a public per-block artifact after orchestration attaches metadata."""

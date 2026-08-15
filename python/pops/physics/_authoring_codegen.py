@@ -155,6 +155,7 @@ class _CodegenMixin(_HyperbolicModel):
         model_identity: Any = None,
         native_field_roles: Any = None,
         consumer_owner_qid: Any = None,
+        declare_auxiliary_providers: bool = True,
     ) -> Any:
         """Thin wrapper: delegates to pops.codegen._compile.emit_cpp_native_loader."""
         return _cg_compile().emit_cpp_native_loader(
@@ -165,6 +166,7 @@ class _CodegenMixin(_HyperbolicModel):
             model_identity=model_identity,
             native_field_roles=native_field_roles,
             consumer_owner_qid=consumer_owner_qid,
+            declare_auxiliary_providers=declare_auxiliary_providers,
         )
 
     def compile_native(
@@ -178,6 +180,7 @@ class _CodegenMixin(_HyperbolicModel):
         hoist_reciprocals: bool = False,
         _native_field_roles: Any = None,
         consumer_owner_qid: Any = None,
+        declare_auxiliary_providers: bool = True,
     ) -> Any:
         """Thin wrapper: delegates to pops.codegen._compile.compile_native."""
         return _cg_compile().compile_native(
@@ -191,6 +194,7 @@ class _CodegenMixin(_HyperbolicModel):
             hoist_reciprocals=hoist_reciprocals,
             native_field_roles=_native_field_roles,
             consumer_owner_qid=consumer_owner_qid,
+            declare_auxiliary_providers=declare_auxiliary_providers,
         )
 
     def _model_hash(self, params: Any = None) -> Any:
@@ -232,6 +236,7 @@ class _CodegenMixin(_HyperbolicModel):
         model_identity: Any = None,
         _native_field_roles: Any = None,
         consumer_owner_qid: Any = None,
+        declare_auxiliary_providers: bool = True,
     ) -> Any:
         """Thin wrapper: delegates to pops.codegen._compile.compile_model."""
         return _cg_compile().compile_model(
@@ -248,6 +253,7 @@ class _CodegenMixin(_HyperbolicModel):
             model_identity=model_identity,
             _native_field_roles=_native_field_roles,
             consumer_owner_qid=consumer_owner_qid,
+            declare_auxiliary_providers=declare_auxiliary_providers,
         )
 
     def emit_cpp_elliptic(

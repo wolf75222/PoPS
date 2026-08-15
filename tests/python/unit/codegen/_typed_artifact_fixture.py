@@ -21,7 +21,7 @@ class CanonicalValue:
 
 
 class CompiledComponent:
-    def __init__(self, name, *, target):
+    def __init__(self, name, *, target, consumer_owner_qid="", declares_auxiliary_providers=False):
         self.name = name
         self.program = None
         self.program_name = name
@@ -35,6 +35,8 @@ class CompiledComponent:
         self.cxx = "clang++"
         self.std = "c++23"
         self.native_dimension = 2
+        self.consumer_owner_qid = consumer_owner_qid
+        self.declares_auxiliary_providers = declares_auxiliary_providers
         self.artifact_identity = make_identity("artifact", {"component": name})
 
     def inspect(self):
@@ -81,7 +83,15 @@ def artifact_fixture(*, target="system", block_names=("fluid",), bind_schema=Non
             tag_parameter=tag_parameter,
             name="typed-artifact",
         )
-        components = tuple(CompiledComponent(name, target=target) for name in block_names)
+        components = tuple(
+            CompiledComponent(
+                name,
+                target=target,
+                consumer_owner_qid=resolved.instance_owner_qid,
+                declares_auxiliary_providers=resolved.declares_auxiliary_providers,
+            )
+            for name, resolved in zip(block_names, plan.blocks, strict=True)
+        )
         blocks = tuple(
             CompiledBlockArtifact(name, component, resolved.spatial, resolved.state_spaces)
             for name, component, resolved in zip(
@@ -126,7 +136,15 @@ def artifact_fixture(*, target="system", block_names=("fluid",), bind_schema=Non
         capabilities={"cpu": True, "amr": target == "amr_system"},
         lowering_coverage=layout_coverage,
     )
-    components = tuple(CompiledComponent(name, target=target) for name in block_names)
+    components = tuple(
+        CompiledComponent(
+            name,
+            target=target,
+            consumer_owner_qid=resolved.instance_owner_qid,
+            declares_auxiliary_providers=resolved.declares_auxiliary_providers,
+        )
+        for name, resolved in zip(block_names, plan.blocks, strict=True)
+    )
     blocks = tuple(
         CompiledBlockArtifact(name, component, resolved.spatial, resolved.state_spaces)
         for name, component, resolved in zip(block_names, components, plan.blocks, strict=True)

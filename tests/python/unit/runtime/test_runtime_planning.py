@@ -172,7 +172,15 @@ def _artifact(
         capabilities={},
         lowering_coverage=LoweringCoverageReport(()),
     )
-    components = tuple(CompiledComponent(name, target="system") for name in names)
+    components = tuple(
+        CompiledComponent(
+            name,
+            target="system",
+            consumer_owner_qid=planned.instance_owner_qid,
+            declares_auxiliary_providers=planned.declares_auxiliary_providers,
+        )
+        for name, planned in zip(names, resolved.blocks, strict=True)
+    )
     for component in components:
         component.memory_spaces = memory_spaces
     blocks = tuple(

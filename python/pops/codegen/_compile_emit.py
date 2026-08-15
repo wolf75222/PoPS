@@ -458,7 +458,11 @@ def _consumer_owner_qid(model: Any, consumer_owner_qid: Any = None) -> str:
 
 
 def _emit_auxiliary_route_registration(
-    model: Any, *, target: str = "system", consumer_owner_qid: Any = None
+    model: Any,
+    *,
+    target: str = "system",
+    consumer_owner_qid: Any = None,
+    declare_auxiliary_providers: bool = True,
 ) -> str:
     """Emit one DSO hook that registers, but never seals, auxiliary routes.
 
@@ -740,7 +744,7 @@ def _emit_auxiliary_route_registration(
         "  using ConsumerPlan = AuxiliaryConsumerProviderPlan<pops::kNativeDimension>;",
     ]
     owned_provider_qid = str(model.owner_path.canonical())
-    for row in pack["entries"]:
+    for row in pack["entries"] if declare_auxiliary_providers else ():
         if row["key"]["owner_qid"] != owned_provider_qid:
             # A package may consume a foreign owner-qualified component.  Its
             # consumer plan below records that dependency, but only the owning
@@ -846,6 +850,7 @@ def emit_cpp_native_loader(
     model_identity: Any = None,
     native_field_roles: Any = None,
     consumer_owner_qid: Any = None,
+    declare_auxiliary_providers: bool = True,
 ) -> str:
     """Source of the sole production package.
 
@@ -1127,7 +1132,10 @@ def emit_cpp_native_loader(
             "}  // namespace pops_generated\n"
         )
     auxiliary_routes = _emit_auxiliary_route_registration(
-        m, target=target, consumer_owner_qid=consumer_owner_qid
+        m,
+        target=target,
+        consumer_owner_qid=consumer_owner_qid,
+        declare_auxiliary_providers=declare_auxiliary_providers,
     )
     return (
         head

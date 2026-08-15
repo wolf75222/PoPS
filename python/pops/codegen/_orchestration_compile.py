@@ -94,6 +94,7 @@ def compile_install_models(plan: Any, options: Any) -> dict[str, Any]:
             state_spaces=block.state_spaces,
             native_field_roles=(roles[block.name] if plan.target == "amr_system" else None),
             consumer_owner_qid=block.instance_owner_qid,
+            declare_auxiliary_providers=block.declares_auxiliary_providers,
         )
     return compiled
 
@@ -119,6 +120,7 @@ def compile_install_model(
     state_spaces: Any = ("U",),
     native_field_roles: Any = None,
     consumer_owner_qid: Any = None,
+    declare_auxiliary_providers: bool = True,
 ) -> Any:
     from pops.codegen.loader import CompiledModel
     from pops.codegen._compiled_model_boundary import validate_compiled_model_result
@@ -156,7 +158,11 @@ def compile_install_model(
                 )
         from pops.codegen._plans import attest_precompiled_consumer_owner
 
-        attest_precompiled_consumer_owner(model, consumer_owner_qid)
+        attest_precompiled_consumer_owner(
+            model,
+            consumer_owner_qid,
+            declare_auxiliary_providers=declare_auxiliary_providers,
+        )
         return model
     from pops.codegen.module_lowering import lower_and_validate
 
@@ -182,6 +188,7 @@ def compile_install_model(
         target=target,
         _native_field_roles=(expected_roles if target == "amr_system" else None),
         consumer_owner_qid=consumer_owner_qid,
+        declare_auxiliary_providers=declare_auxiliary_providers,
         **compile_options,
     )
     if type(compiled) is not CompiledModel:

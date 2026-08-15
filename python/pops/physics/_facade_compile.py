@@ -58,6 +58,7 @@ class _FacadeCompileMixin(_FacadeModel):
         target: str = "system",
         hoist_reciprocals: bool = False,
         consumer_owner_qid: Any = None,
+        declare_auxiliary_providers: bool = True,
     ) -> str:
         """Emit a native package without exposing the private formula carrier."""
         from pops.codegen.component_provider_packs import resolve_component_provider_packs
@@ -69,6 +70,7 @@ class _FacadeCompileMixin(_FacadeModel):
             hoist_reciprocals=hoist_reciprocals,
             model_identity=self._model_hash(),
             consumer_owner_qid=consumer_owner_qid,
+            declare_auxiliary_providers=declare_auxiliary_providers,
         )
 
     def _model_hash(self) -> Any:
@@ -94,6 +96,7 @@ class _FacadeCompileMixin(_FacadeModel):
         hoist_reciprocals: bool = False,
         _native_field_roles: Any = None,
         consumer_owner_qid: Any = None,
+        declare_auxiliary_providers: bool = True,
     ) -> Any:
         """Compiles the model into a CompiledModel (Phase A). Delegates the GENERATION + compilation to
         the native package compiler, then
@@ -215,6 +218,7 @@ class _FacadeCompileMixin(_FacadeModel):
             "roe_entropy_policy": riemann_evidence.roe_entropy_policy or "none",
             "roe_entropy_delta": riemann_evidence.roe_entropy_delta or "none",
             "consumer_owner_qid": str(consumer_owner_qid or ""),
+            "declares_auxiliary_providers": bool(declare_auxiliary_providers),
         }
         if target == "amr_system":
             from pops.identity import canonical_bytes
@@ -267,6 +271,7 @@ class _FacadeCompileMixin(_FacadeModel):
                 model_identity=model_hash,
                 _native_field_roles=(normalized_field_roles if target == "amr_system" else None),
                 consumer_owner_qid=consumer_owner_qid,
+                declare_auxiliary_providers=declare_auxiliary_providers,
             )
             binary_identity, final_artifact_identity = write_artifact_sidecar(
                 out_path, semantic_identity=semantic_identity, spec_identity=spec_identity
@@ -305,6 +310,7 @@ class _FacadeCompileMixin(_FacadeModel):
             # owns the field discretization and provider. Empty for the default-Poisson-only model.
             elliptic_field_names=list(m._elliptic_fields),
             consumer_owner_qid=("" if consumer_owner_qid is None else str(consumer_owner_qid)),
+            declares_auxiliary_providers=bool(declare_auxiliary_providers),
         )
         cm.semantic_identity = semantic_identity
         cm.artifact_spec_identity = spec_identity
