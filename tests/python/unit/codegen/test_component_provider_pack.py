@@ -259,6 +259,48 @@ def test_board_field_binding_keeps_operator_requirements_component_resolvable():
     assert tuple((key.space_name, key.component) for key in pack) == (("potential", "electric_x"),)
 
 
+def test_board_field_binding_selects_projected_space_for_fields_only_consumer():
+    module, _ = _board_bound_field_module()
+    fields = module.field_spaces()["fields"]
+    operator = SimpleNamespace(
+        name="consumer",
+        signature=SimpleNamespace(inputs=(fields,)),
+        requirements={},
+    )
+
+    pack = build_operator_provider_pack(module, operator)
+
+    assert tuple((key.space_name, key.component) for key in pack) == (
+        ("potential", "potential"),
+        ("potential", "electric_x"),
+        ("potential", "electric_y"),
+    )
+    assert not any(key.space_name == "fields" for key in pack)
+
+
+def test_board_field_binding_selects_projected_and_unclaimed_fields_together():
+    module, _ = _board_bound_field_module(legacy_input=True)
+    fields = module.field_spaces()["fields"]
+    operator = SimpleNamespace(
+        name="consumer",
+        signature=SimpleNamespace(inputs=(fields,)),
+        requirements={},
+    )
+
+    pack = build_operator_provider_pack(module, operator)
+
+    assert [
+        (key.space_name, key.component)
+        for key in pack
+        if key.space_kind == "field"
+    ] == [
+        ("fields", "external_input"),
+        ("potential", "potential"),
+        ("potential", "electric_x"),
+        ("potential", "electric_y"),
+    ]
+
+
 def test_direct_module_field_space_without_binding_is_unchanged():
     module = Module("direct_provider_pack")
     state = module.state_space("U", ("rho",))

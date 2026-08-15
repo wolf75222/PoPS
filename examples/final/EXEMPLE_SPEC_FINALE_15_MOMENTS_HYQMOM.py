@@ -40,7 +40,7 @@ from pops.output import (
 )
 from pops.params import ConstParam
 from pops.solvers import DenseLU
-from pops.solvers.elliptic import GeometricMG
+from pops.solvers.elliptic import CartesianCG
 from pops.time import (
     ALL_PROVISIONAL_STORES,
     AdaptiveCFL,
@@ -99,8 +99,15 @@ def user_hyqmom15_closure(standardized: Any) -> dict[str, Any]:
 def _native_output_mode() -> ParallelMode:
     """Return the portable shared-file topology for the loaded native backend."""
 
+    import os
+
+    from pops._native_selector import select_native_dimension, selected_native_module
     from pops.runtime_environment import runtime_environment_report
 
+    if selected_native_module(required=False) is None:
+        launched = os.environ.get("POPS_NATIVE_DIM")
+        if launched in {"1", "2", "3"}:
+            select_native_dimension(int(launched))
     communicator = runtime_environment_report().get("communicator")
     if communicator == "serial":
         return ParallelMode.SERIAL
@@ -320,7 +327,7 @@ def build_authoring(
         FieldDiscretization(
             method=CellCenteredSecondOrder(),
             boundaries=(BoundaryCondition(AllPhysicalBoundaries(), Periodic()),),
-            solver=GeometricMG(),
+            solver=CartesianCG(),
             nullspace=ConstantNullspace(),
             gauge=MeanValueGauge(0.0),
         ),

@@ -347,27 +347,21 @@ class ProviderPack:
         return result
 
 
-def _bound_field_projections(
+def _authenticated_field_bindings(
     module: Any,
     *,
     canonical_owner: Any,
     field_spaces: Mapping[str, Any],
-) -> tuple[list[tuple[ComponentKey, ComponentContract, ProviderEntry]], set[tuple[str, str]]]:
-    """Project explicit physical-field bindings through one declared storage carrier.
+) -> Iterator[tuple[Any, Any, Any, FieldSpace, Any]]:
+    """Yield authenticated ``(subject, target, operator, output, carrier)`` field bindings.
 
-    A Board field handle is a scientific declaration, not the legacy aggregate ``FieldSpace`` the
-    formula backend uses for storage.  The binding registry is the sole authority joining that
-    subject to a field operator.  This deliberately does not try to infer either side from a name,
-    an alias, or an overlapping component spelling.
+    The binding registry is the sole authority joining a Board field handle to a field operator.
+    This deliberately does not try to infer either side from a name, an alias, or an overlapping
+    component spelling.
     """
-    owner_qid = str(canonical_owner)
     declaration_index = module.declaration_index()
     operator_registry = module.operator_registry()
     operator_index = operator_registry.declaration_index()
-    rows = []
-    claimed = set()
-    projected = set()
-
     for raw_subject, raw_target in module.operator_bindings().items():
         if getattr(raw_subject, "kind", None) != "field":
             continue
@@ -417,7 +411,29 @@ def _bound_field_projections(
                 "field operator binding for subject %r has ambiguous storage carriers %r"
                 % (subject.local_id, sorted(carrier.name for carrier in carriers))
             )
-        carrier = carriers[0]
+        yield subject, target, operator, output, carriers[0]
+
+
+def _bound_field_projections(
+    module: Any,
+    *,
+    canonical_owner: Any,
+    field_spaces: Mapping[str, Any],
+) -> tuple[list[tuple[ComponentKey, ComponentContract, ProviderEntry]], set[tuple[str, str]]]:
+    """Project explicit physical-field bindings through one declared storage carrier.
+
+    A Board field handle is a scientific declaration, not the legacy aggregate ``FieldSpace`` the
+    formula backend uses for storage.  Claimed carrier components are published under the
+    authenticated field handle name and are not also retained on the legacy carrier.
+    """
+    owner_qid = str(canonical_owner)
+    rows = []
+    claimed = set()
+    projected = set()
+
+    for subject, target, _operator, output, carrier in _authenticated_field_bindings(
+        module, canonical_owner=canonical_owner, field_spaces=field_spaces
+    ):
         producer = target._resolved(canonical_owner).qualified_id
         for output_slot, component in enumerate(output.components):
             carrier_slot = carrier.components.index(component)
@@ -458,6 +474,57 @@ def _bound_field_projections(
                 ProviderEntry(producer, True, carrier_slot),
             ))
     return rows, claimed
+
+
+def _field_input_spaces_after_binding(
+    module: Any,
+    requested: Iterable[tuple[str, str]],
+    *,
+    pack: ProviderPack,
+) -> list[tuple[str, str]]:
+    """Expand FieldSpace inputs through authenticated field-operator projections.
+
+    A leftover unclaimed carrier is kept when it still exists in ``pack``.  Bindings that
+    projected that carrier (or the field-operator output of the same name) also select the
+    scientific field handle names.  Missing names are left unchanged so
+    :meth:`ProviderPack.select_spaces` remains the resolve-time failure.
+    """
+    canonical_owner = module.owner_path.canonical()
+    owner_qid = str(canonical_owner)
+    projections: dict[str, set[str]] = {}
+    for subject, _target, _operator, output, carrier in _authenticated_field_bindings(
+        module, canonical_owner=canonical_owner, field_spaces=module.field_spaces()
+    ):
+        projected = subject.local_id
+        projections.setdefault(carrier.name, set()).add(projected)
+        if output.name != carrier.name:
+            projections.setdefault(output.name, set()).add(projected)
+    existing = {
+        (key.space_kind, key.space_name)
+        for key in pack
+        if key.owner_qid == owner_qid
+    }
+    selected: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for kind, name in requested:
+        if kind != "field":
+            pair = (kind, name)
+            if pair not in seen:
+                selected.append(pair)
+                seen.add(pair)
+            continue
+        mapped = []
+        if ("field", name) in existing:
+            mapped.append(name)
+        mapped.extend(sorted(projections.get(name, ())))
+        if not mapped:
+            mapped.append(name)
+        for space_name in mapped:
+            pair = ("field", space_name)
+            if pair not in seen:
+                selected.append(pair)
+                seen.add(pair)
+    return selected
 
 
 def build_provider_pack(module: Any) -> ProviderPack:
@@ -543,9 +610,11 @@ def build_operator_provider_pack(module: Any, operator: Any) -> ProviderPack:
     """Build the minimal exact provider pack consumed by one typed operator.
 
     State traces are explicit NumericalFlux operands and therefore are not duplicated in the
-    provider pack.  Every FieldSpace input is retained with its complete qualified contract.  The
-    selection goes through :meth:`ProviderPack.select_spaces`, so a stale signature or missing
-    producer is a resolve-time error rather than a runtime zero.
+    provider pack.  Every FieldSpace input is retained with its complete qualified contract.
+    Field-operator bindings may have projected that carrier onto scientific field handle names;
+    selection honors those authenticated projections and any leftover unclaimed carrier
+    components.  The result goes through :meth:`ProviderPack.select_spaces`, so a stale
+    signature or missing producer is a resolve-time error rather than a runtime zero.
     """
     full = build_provider_pack(module)
     spaces = []
@@ -574,7 +643,10 @@ def build_operator_provider_pack(module: Any, operator: Any) -> ProviderPack:
         return full.select(selected)
     if not spaces:
         return ProviderPack(capacity=full.capacity)
-    return full.select_spaces(owner_qid=owner_qid, spaces=spaces)
+    return full.select_spaces(
+        owner_qid=owner_qid,
+        spaces=_field_input_spaces_after_binding(module, spaces, pack=full),
+    )
 
 
 __all__ = ["ComponentKey", "ComponentContract", "ProviderEntry", "ProviderPack",

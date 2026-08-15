@@ -190,6 +190,56 @@ def test_final_authoring_derives_field_storage_and_complete_generic_program() ->
     assert projection.kind == "projection"
 
 
+def test_final_authoring_resolves_rate_pack_after_potential_binding() -> None:
+    from pops.codegen.component_provider_packs import resolve_component_provider_packs
+
+    target = _load_example().build_authoring()
+    module = target.model.module
+    transport = module.operator_registry().get("transport")
+    assert any(
+        getattr(space, "kind", None) == "field" and space.name == "fields"
+        for space in transport.signature.inputs
+    )
+    assert not transport.requirements.get("aux")
+
+    packs = resolve_component_provider_packs(module)
+    pack = packs.by_operator["transport"]
+    claimed = ("phi", "grad_x", "grad_y")
+    assert [
+        (key.space_name, key.component)
+        for key in pack
+        if key.space_kind == "field"
+    ] == [
+        ("electrostatic_potential", component)
+        for component in claimed
+    ]
+    assert not any(
+        key.space_kind == "field"
+        and key.space_name == "fields"
+        and key.component in claimed
+        for key in packs.complete
+    )
+
+
+def test_final_uniform_case_resolves_cartesian_cg_field_provider() -> None:
+    import pops
+    from pops.layouts import Uniform
+    from pops.mesh import CartesianGrid, PeriodicAxes
+
+    example = _load_example()
+    target = example.build_authoring()
+    frame = target.model.frame
+    resolved = pops.resolve(
+        pops.validate(target.case),
+        layout=Uniform(CartesianGrid(
+            frame=frame,
+            cells=(4, 4),
+            periodic=PeriodicAxes(frame.axes),
+        )),
+    )
+    assert resolved.resolved_dimension == 2
+
+
 def test_particle_number_diagnostic_integrates_m00_and_rejects_drift() -> None:
     example = _load_example()
     target = example.build_authoring()
@@ -259,6 +309,8 @@ def test_hyqmom15_projection_checks_all_moments_and_refuses_to_manufacture_densi
 def test_final_example_uses_only_the_root_lifecycle_and_public_layout_home() -> None:
     source = EXAMPLE.read_text(encoding="utf-8")
     assert "from pops.layouts import Uniform" in source
+    assert "from pops.solvers.elliptic import CartesianCG" in source
+    assert "GeometricMG" not in source
     assert "pops.mesh.layouts" not in source
     assert "BindInputs" not in source
     assert "simulation.run(" not in source
