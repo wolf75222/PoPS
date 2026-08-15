@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "amr_tagging_test_authority.hpp"
+#include "explicit_amr_program.hpp"
 
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
@@ -98,6 +99,7 @@ struct Fixture {
   std::shared_ptr<pops::runtime::program::AmrProgramContext<Dim>> context;
 
   Fixture() : system(config()) {
+    pops::test::install_amr_runtime_authority(system, "test.amr-history.fixture/runtime@1");
     system.install_block_state_route("tracer", "state/tracer");
     install_advection(system);
     system.set_conservative_state("tracer", std::vector<double>(cell_count(config().shape), 1.0));
@@ -237,10 +239,11 @@ TEST(test_amr_history_ring, RegisteredHistoryRejectsTopologyPublicationBeforeMut
   EXPECT_EQ(engine->hierarchy().num_levels(), 1U);
 }
 
-TEST(test_amr_history_ring, ThreeLevelProgramFailsClosedWithoutConservativeCatchUpProvider) {
+TEST(test_amr_history_ring, ThreeLevelProgramFailsClosedWithoutExactFluxExpressionBudget) {
   constexpr int Dim = pops::kNativeDimension;
   const pops::AmrSystemConfig<Dim> config = three_level_config<Dim>();
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "test.amr-history.three-level/runtime@1");
   system.set_temporal_relations({2, 2}, {1, 1}, {"integral_only", "integral_only"});
   system.install_block_state_route("tracer", "state/tracer");
   install_advection(system);
@@ -289,13 +292,11 @@ TEST(test_amr_history_ring, ThreeLevelProgramFailsClosedWithoutConservativeCatch
       ++level_advances[static_cast<std::size_t>(context->level())];
       context->state(0).set_val(pops::Real(9));
     });
-  } catch (const std::runtime_error& error) {
+  } catch (const std::logic_error& error) {
     refusal = error.what();
   }
 
-  EXPECT_EQ(refusal,
-            "AmrProgramContext::advance_synchronized_hierarchy requires a prepared exact-ranked "
-            "conservative multi-level synchronization provider before any level state is advanced");
+  EXPECT_EQ(refusal, "installed AMR Program has no prepared flux-expression budget");
   EXPECT_EQ(level_advances, (std::array<int, 3>{0, 0, 0}));
   for (std::size_t level = 0; level < runtime->hierarchy().num_levels(); ++level) {
     EXPECT_EQ(pops::reduce_min_local(runtime->hierarchy().state(level)), pops::Real(1));

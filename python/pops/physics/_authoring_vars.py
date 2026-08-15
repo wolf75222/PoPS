@@ -121,7 +121,7 @@ class _VariablesMixin(_HyperbolicModel):
 
         used = _dependencies(self._source or ())
         return [
-            "    const pops::Real %s = a.template flux_provider<%d>();"
+            "    const pops::Real %s = pops::provider_value<%d>(a);"
             % (name, self._consumer_provider_slot("source_default", name))
             for name in self._provider_components if name in used
         ]
@@ -129,9 +129,10 @@ class _VariablesMixin(_HyperbolicModel):
     def _flux_provider_locals_lines(self) -> Any:
         """C++ locals read from the exact physical-flux provider protocol.
 
-        This emits no global auxiliary storage access. ``BoundFluxProviders<Model>`` implements
-        ``flux_provider<ConsumerSlot>()`` over the exact physical-flux consumer plan, so generated
-        physical laws keep one formula while the finite-volume route consumes only its resolved pack.
+        This emits no global auxiliary storage access. ``provider_value<ConsumerSlot>`` accepts
+        both the compact ``ProviderValues`` preparation carrier and the model-qualified
+        ``BoundFluxProviders<Model>`` used by the finite-volume route, while exposing only the
+        consumer's resolved pack.
         """
         from pops._ir.visitors import _dependencies
 
@@ -152,7 +153,7 @@ class _VariablesMixin(_HyperbolicModel):
             )
         used = _dependencies(expressions)
         return [
-            "    const pops::Real %s = a.template flux_provider<%d>();"
+            "    const pops::Real %s = pops::provider_value<%d>(a);"
             % (name, self._physical_flux_consumer_slot(name))
             for name in self._provider_components if name in used
         ]

@@ -109,19 +109,6 @@ struct CopyValidField {
   }
 };
 
-template <int Dim>
-struct ApplyActiveMask {
-  FieldView<Real, Dim> values{};
-  FieldView<const Real, Dim> active{};
-  int ncomp = 0;
-
-  POPS_HD void operator()(const Index<Dim>& index) const {
-    const Real weight = active(index) >= Real(0.5) ? Real(1) : Real(0);
-    for (int component = 0; component < ncomp; ++component)
-      values(index, component) *= weight;
-  }
-};
-
 template <int Dim, class Model>
 struct MaterializeSource {
   static constexpr int provider_count = provider_count_for<Model, Dim>();
@@ -130,8 +117,16 @@ struct MaterializeSource {
   ProviderStorageView<Dim, provider_count> providers{};
   FieldView<Real, Dim> source{};
   FieldView<Real, Dim> status{};
+  FieldView<const Real, Dim> active{};
+  bool has_active = false;
 
   POPS_HD void operator()(const Index<Dim>& index) const {
+    if (has_active && active(index, 0) < Real(0.5)) {
+      for (int component = 0; component < Model::n_vars; ++component)
+        source(index, component) = Real(0);
+      status(index) = Real(0);
+      return;
+    }
     const auto value = model.source(load_state<Model>(state, index),
                                     load_provider_values<provider_count>(providers, index));
     Real failure = Real(0);
@@ -211,6 +206,18 @@ struct MaterializeStabilityDt {
   }
 };
 
+/// Return the immutable q = 2 nu sum_a h_a^-2 for a prepared Cartesian metric.  q is independent
+/// of state and providers, so generated closures capture it once rather than allocating a field or
+/// reducing it during step_cfl.
+template <int Dim, class Model, class Metric>
+Real parabolic_frequency(const Model& model, const Metric& metric) {
+  const auto bound = nd::cell_parabolic_frequency<Dim>(model, metric, metric.identity().domain.lo);
+  const Real frequency = bound.succeeded() ? bound.value : std::numeric_limits<Real>::quiet_NaN();
+  if (!std::isfinite(frequency) || frequency < Real(0))
+    throw std::runtime_error("generated parabolic frequency is invalid");
+  return frequency;
+}
+
 inline std::size_t checked_product(std::size_t left, std::size_t right, const char* label) {
   if (left != 0 && right > std::numeric_limits<std::size_t>::max() / left)
     throw std::length_error(label);
@@ -279,7 +286,8 @@ template <int Dim, class Model>
 MultiFab<Dim> materialize_source(
     const Model& model, const MultiFab<Dim>& state,
     const runtime::system::AuxiliaryStorageGroups<Dim>* provider_storage,
-    const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>* plan) {
+    const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>* plan,
+    const MultiFab<Dim>* active_cells = nullptr) {
   constexpr int provider_count = provider_count_for<Model, Dim>();
   if constexpr (provider_count > 0) {
     if (provider_storage == nullptr)
@@ -287,6 +295,8 @@ MultiFab<Dim> materialize_source(
     runtime::system::require_pointwise_provider_groups<Dim, provider_count>(
         state, provider_storage, plan, "generated source providers");
   }
+  if (active_cells != nullptr)
+    require_same_layout(state, *active_cells, 1, "generated source active mask");
   MultiFab<Dim> candidate(state.layout(), state.distribution(), state.local_rank(), Model::n_vars,
                           state.ghosts());
   if constexpr (GeneratedSourceModel<Dim, Model>) {
@@ -298,7 +308,10 @@ MultiFab<Dim> materialize_source(
                         model, state.fab(local).view(),
                         runtime::system::bind_provider_storage_view<Dim, provider_count>(
                             plan, provider_storage, local),
-                        candidate.fab(local).view(), status.fab(local).view()});
+                        candidate.fab(local).view(), status.fab(local).view(),
+                        active_cells == nullptr ? FieldView<const Real, Dim>{}
+                                                : active_cells->fab(local).view(),
+                        active_cells != nullptr});
     if (reduce_max(status) != Real(0))
       throw std::runtime_error("generated source produced a non-finite component");
   } else {
@@ -353,15 +366,9 @@ MultiFab<Dim> materialize_masked_source(
     const runtime::system::AuxiliaryStorageGroups<Dim>* provider_storage,
     const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>* plan,
     const runtime::system::PreparedEmbeddedBoundaryGeometry<Dim>& embedded) {
-  MultiFab<Dim> candidate = materialize_source<Dim>(model, state, provider_storage, plan);
   const MultiFab<Dim>& active = embedded.active_mask();
   require_same_layout(state, active, 1, "generated embedded-boundary active mask");
-  for (std::size_t local = 0; local < candidate.local_size(); ++local)
-    for_each_cell(
-        candidate.box(local),
-        ApplyActiveMask<Dim>{candidate.fab(local).view(), active.fab(local).view(), Model::n_vars});
-  device_fence();
-  return candidate;
+  return materialize_source<Dim>(model, state, provider_storage, plan, &active);
 }
 
 template <int Dim>
@@ -459,7 +466,7 @@ EmbeddedResidualFamily<Dim> make_cut_cell_residual_family(
   return make_embedded_residual_family<Dim>(std::move(flux), std::move(source));
 }
 
-// The AMR v4 block image still owns its established hierarchy-wide reduction contract and calls
+// The AMR generated block image still owns its established hierarchy-wide reduction contract and calls
 // this shared pointwise evaluator directly. Uniform System packages never bind this overload: their
 // installed closure below requires the authenticated System ExecutionLane explicitly.
 template <int Dim, class Model>
@@ -939,12 +946,16 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
       return frequency;
     };
   }
+  if constexpr (DiffusiveModel<Model>) {
+    const Real q = parabolic_frequency<Dim>(model, spatial.metric());
+    result.parabolic_frequency = q;
+  }
   if constexpr (requires(const Model& value, const typename Model::State& state,
                          const ProviderValues<provider_count>& providers) {
                   value.stability_dt(state, providers);
                 }) {
-    result.stability_dt = [model, provider_storage_owner, provider_plan_owner, provider_storage,
-                           provider_plan](const MultiFab<Dim>& state) {
+    auto model_stability_dt = [model, provider_storage_owner, provider_plan_owner, provider_storage,
+                               provider_plan](const MultiFab<Dim>& state) {
       MultiFab<Dim> values(state.layout(), state.distribution(), state.local_rank(), 1,
                            state.ghosts());
       for (std::size_t local = 0; local < state.local_size(); ++local)
@@ -959,6 +970,7 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
         throw std::runtime_error("generated stability dt is invalid");
       return dt;
     };
+    result.stability_dt = std::move(model_stability_dt);
   }
   return result;
 }

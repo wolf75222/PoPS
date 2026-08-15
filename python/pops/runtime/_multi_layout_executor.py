@@ -989,6 +989,24 @@ class _MultiLayoutUniformExecutor:
         )
 
     def checkpoint(self, path: Any) -> str:
+        """Capture a public multi-layout checkpoint with atomic final publication."""
+        return self._checkpoint(path)
+
+    def _checkpoint_precreated_inode(self, path: Any, *, precreated_descriptor: int | None) -> str:
+        """Internal RuntimeInstance seam retaining its precreated output inode."""
+        return self._checkpoint(
+            path,
+            precreated_inode=True,
+            precreated_descriptor=precreated_descriptor,
+        )
+
+    def _checkpoint(
+        self,
+        path: Any,
+        *,
+        precreated_inode: bool = False,
+        precreated_descriptor: int | None = None,
+    ) -> str:
         import numpy as np
         from pops.runtime._engine_descriptors import abi_key
         from pops.runtime._checkpoint_manifest import (
@@ -1000,6 +1018,7 @@ class _MultiLayoutUniformExecutor:
             checkpoint_topology,
             consensus,
             root_effect,
+            write_precreated_checkpoint_payload,
         )
 
         topology = checkpoint_topology(self)
@@ -1034,17 +1053,25 @@ class _MultiLayoutUniformExecutor:
                         child, dtype=np.uint8
                     ).copy()
                 seal_checkpoint_payload(self, payload, runtime_kind="multi_layout_uniform")
-                fd, temporary_name = tempfile.mkstemp(
-                    prefix=".%s." % target.name, suffix=".tmp", dir=target.parent
-                )
-                os.close(fd)
-                temporary = os.fspath(temporary_name)
-                try:
-                    with open(temporary, "wb") as stream:
-                        np.savez_compressed(stream, **payload)
-                    os.replace(temporary, target)
-                finally:
-                    Path(temporary).unlink(missing_ok=True)
+                if precreated_inode:
+                    if type(precreated_descriptor) is not int:
+                        raise RuntimeError(
+                            "precreated multi-layout checkpoint publication requires the root "
+                            "descriptor"
+                        )
+                    write_precreated_checkpoint_payload(precreated_descriptor, payload)
+                else:
+                    fd, temporary_name = tempfile.mkstemp(
+                        prefix=".%s." % target.name, suffix=".tmp", dir=target.parent
+                    )
+                    os.close(fd)
+                    temporary = os.fspath(temporary_name)
+                    try:
+                        with open(temporary, "wb") as stream:
+                            np.savez_compressed(stream, **payload)
+                        os.replace(temporary, target)
+                    finally:
+                        Path(temporary).unlink(missing_ok=True)
                 from pops.output._checkpoint_collective import (
                     _bounded_checkpoint_path_bytes,
                     decode_checkpoint_bytes,

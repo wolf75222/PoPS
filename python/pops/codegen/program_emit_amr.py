@@ -382,7 +382,11 @@ def _require_bounded_cell_local_program(program: Any, target: Any, hierarchy_bod
     commits = dict(program._commits)
     routes = []
     for state in states:
-        matching_rhs = tuple(rhs for rhs in rhs_values if tuple(rhs.inputs) == (state,))
+        matching_rhs = tuple(
+            rhs
+            for rhs in rhs_values
+            if len(rhs.inputs) == 1 and rhs.inputs[0] is state
+        )
         if len(matching_rhs) != 1:
             raise ValueError(
                 "Program.cell_local_time requires one typed default-flux RHS per accepted state"
@@ -398,9 +402,11 @@ def _require_bounded_cell_local_program(program: Any, target: Any, hierarchy_bod
                 "Program.cell_local_time requires default-flux RHS routes without sources or fields"
             )
         result = commits.get(state.state_ref)
-        if not any(result is candidate for candidate in results) or tuple(result.inputs) != (
-            state,
-            rhs,
+        if (
+            not any(result is candidate for candidate in results)
+            or len(result.inputs) != 2
+            or result.inputs[0] is not state
+            or result.inputs[1] is not rhs
         ):
             raise ValueError(
                 "Program.cell_local_time ForwardEuler commit must consume its accepted state and RHS"

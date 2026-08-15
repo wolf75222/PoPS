@@ -158,13 +158,19 @@ def test_central_targets_preserve_consumer_specific_compile_contracts():
         "VISIBILITY_INLINES_HIDDEN ON",
         "pops_dev_options",
         "_pops_EXPORTS",
-        "POPS_HEADER_SIG=\"${POPS_NATIVE_HEADER_SIGNATURE}\"",
+        'POPS_HEADER_SIG="${POPS_NATIVE_HEADER_SIGNATURE}"',
     )
     missing = [fact for fact in required if fact not in SRC_CMAKE]
     assert not missing, "central runtime targets lost compile-contract facts: " + str(missing)
     assert SRC_CMAKE.count("JOB_POOL_COMPILE pops_heavy_test_tu") == 1
     assert SRC_CMAKE.count("JOB_POOL_COMPILE pops_heavy_module_tu") == 1
     assert "elseif(POPS_BUILD_PYTHON)" in SRC_CMAKE
+    header_signature_definition = (
+        "target_compile_definitions(${_runtime_target} PRIVATE\n"
+        '    POPS_HEADER_SIG="${POPS_NATIVE_HEADER_SIGNATURE}")'
+    )
+    assert SRC_CMAKE.count(header_signature_definition) == 1
+    assert SRC_CMAKE.index(header_signature_definition) < SRC_CMAKE.index("\nif(POPS_BUILD_PYTHON)")
     assert "target_compile_options(${_runtime_target} PUBLIC" not in SRC_CMAKE
 
     # Only test executables receive the fast -O0 override.  Central runtime objects keep the same

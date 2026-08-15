@@ -201,6 +201,11 @@ void add_gas_block(NativeSystem& s, const std::string& name) {
   prepared.closures.prepare_generated_state_at_point = [](const auto&, NativeField&) {};
   prepared.closures.prepare_generated_state_at_point_prepared = [](const auto&, NativeField&,
                                                                    const auto&) {};
+  prepared.closures.prepare_generated_state_with_transport_prepared =
+      [](const auto&, NativeField&, const auto&, const ExecutionLane&, const auto&) {};
+  prepared.closures.external_ghost_boundary =
+      std::make_shared<SystemBlockClosures<kTestDimension>::ExternalGhostBoundary>(
+          [](const auto&, NativeField&, const auto&, const ExecutionLane&) {});
   prepared.maximum_speed = [](const NativeField&, const ExecutionLane&) { return Real(1); };
   prepared.poisson_rhs = [](const NativeField& state, NativeField& rhs) {
     materialize_mean_free_density(state, rhs);
@@ -259,6 +264,7 @@ std::vector<double> ic(int n) {
 TEST(ProgramContextContract, AnonymousRateIdentityIsRejectedBeforeTopologyLookup) {
   ensure_kokkos();
   NativeSystem sim(native_config(2));
+  install_execution_lane(sim, "pops.test.program-context.anonymous-rate");
   NativeProgramContext context(&sim);
   EXPECT_THROW((void)context.boundary_evaluation_point(-1), std::invalid_argument);
 }
@@ -266,6 +272,7 @@ TEST(ProgramContextContract, AnonymousRateIdentityIsRejectedBeforeTopologyLookup
 TEST(ProgramContextContract, ProviderFreeViewDoesNotRequireAPlanOrStorageCarrier) {
   ensure_kokkos();
   NativeSystem sim(native_config(2));
+  install_execution_lane(sim, "pops.test.program-context.provider-free-view");
   NativeProgramContext context(&sim);
 
   // This System has neither registered providers nor a program-block map.  Count zero therefore
@@ -280,6 +287,7 @@ TEST(ProgramContextContract, ProjectionReportSurvivesScientificRollbackUntilCons
   ensure_kokkos();
   NativeSystemConfig cfg = native_config(2);
   NativeSystem sim(cfg);
+  install_execution_lane(sim, "pops.test.program-context.projection-report");
 
   sim.begin_step_projection_report();
   EXPECT_TRUE(sim.consume_step_projections().empty());
@@ -298,6 +306,7 @@ TEST(ProgramContextContract, AcceptedBalanceEvidenceIsCurrentAttemptExactAndFail
   ensure_kokkos();
   NativeSystemConfig cfg = native_config(2);
   NativeSystem sim(cfg);
+  install_execution_lane(sim, "pops.test.program-context.balance-evidence");
   NativeProgramContext context(&sim);
   const std::string route = "pops.balance-ledger-route.v1:sha256:" + std::string(64, '1');
   const std::array<std::pair<const char*, double>, 5> terms{{
@@ -478,6 +487,7 @@ TEST(ProgramContextContract, GeneratedScratchIsPersistentExactAndNonAliasing) {
   ensure_kokkos();
   NativeSystemConfig cfg = native_config(8);
   NativeSystem sim(cfg);
+  install_execution_lane(sim, "pops.test.program-context.generated-scratch");
   add_gas(sim);
   sim.set_program_block_map({0});
   NativeProgramContext ctx(&sim);
@@ -516,6 +526,7 @@ TEST(ProgramContextContract,
   ensure_kokkos();
   NativeSystemConfig cfg = native_config(8);
   NativeSystem sim(cfg);
+  install_execution_lane(sim, "pops.test.program-context.named-field-workspace");
   add_gas_block(sim, "a");
   add_gas_block(sim, "b");
   sim.set_poisson("charge_density", "cartesian_cg");
@@ -717,13 +728,13 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
   const std::vector<double> U0 = ic(n);
 
   NativeSystem sim(cfg);
-  sim.install_prepared_boundary_execution_lane(std::make_shared<ExecutionLane>(
-      ExecutionLane::world("pops.test.program-context.seam-surface")));
+  install_execution_lane(sim, "pops.test.program-context.seam-surface");
   add_gas(sim);
   sim.set_state("gas", U0);
   sim.set_program_block_map({0});
   NativeProgramContext ctx(&sim);
   ctx.configure_primary_clock("clock.macro");
+  ctx.declare_clock_relation("clock.macro", "clock.fast", 2);
   ctx.begin_step(dt);
   ctx.set_stage_time(0, 1);
   {
@@ -733,6 +744,42 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
 
   const int b = 0;
   NativeField& U = ctx.state(b);
+
+  // Cartesian generated pointwise kernels receive no sparse mask, while their status reduction
+  // remains on the prepared lane. A foreign mask cannot silently change participating cells.
+  NativeField pointwise_status = ctx.alloc_scalar_field(1, 0);
+  pointwise_status.set_val(Real(0));
+  const NativeField* const active_cells = ctx.pointwise_active_mask(b, pointwise_status);
+  EXPECT_EQ(active_cells, nullptr);
+  EXPECT_EQ(
+      ctx.pointwise_status_max(b, pointwise_status, active_cells, ctx.prepared_execution_lane()),
+      Real(0));
+  pointwise_status.set_val(Real(2));
+  EXPECT_EQ(
+      ctx.pointwise_status_max(b, pointwise_status, active_cells, ctx.prepared_execution_lane()),
+      Real(2));
+  pointwise_status.set_val(Real(0));
+  const AllocationEventStats pointwise_allocations_before = allocation_event_stats();
+  const std::uint64_t pointwise_consensus_before = exact_consensus_dynamic_storage_calls();
+  for (int repeat = 0; repeat < 3; ++repeat) {
+    EXPECT_EQ(ctx.pointwise_active_mask(b, pointwise_status), nullptr);
+    EXPECT_EQ(
+        ctx.pointwise_status_max(b, pointwise_status, active_cells, ctx.prepared_execution_lane()),
+        Real(0));
+  }
+  const AllocationEventStats pointwise_allocations_after = allocation_event_stats();
+  const std::uint64_t pointwise_consensus_after = exact_consensus_dynamic_storage_calls();
+  EXPECT_EQ(pointwise_allocations_after, pointwise_allocations_before)
+      << "warmed Cartesian pointwise path must not allocate owning storage";
+  EXPECT_EQ(pointwise_consensus_after, pointwise_consensus_before)
+      << "warmed Cartesian pointwise path must not use dynamic exact consensus";
+  pointwise_status.set_val(std::numeric_limits<Real>::quiet_NaN());
+  EXPECT_EQ(
+      ctx.pointwise_status_max(b, pointwise_status, active_cells, ctx.prepared_execution_lane()),
+      Real(3));
+  EXPECT_THROW(ctx.pointwise_status_max(b, pointwise_status, &pointwise_status,
+                                        ctx.prepared_execution_lane()),
+               std::invalid_argument);
 
   // rhs_into == neg_div_flux_default_into + source_default_into (the split-then-sum identity, ADC-425).
   NativeField Rfull = ctx.rhs_scratch_like(U);
@@ -788,10 +835,13 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
       << "an undeclared projection capability must fail loud";
 
   // history register/store/read/rotate through the context seam.
-  ctx.register_history("h", 1);
+  ctx.register_history("h", 2);
   NativeField hv = ctx.rhs_scratch_like(U);
   hv.set_val(Real(3));
   ctx.store_history("h", hv);
+  for (int slot = 0; slot < 3; ++slot)
+    EXPECT_EQ(sim.history_slot_dt("h", slot), dt)
+        << "first exact store cold-fills every history dt slot";
   {
     NativeField& r = ctx.history("h", 1);  // cold-start fill -> lag 1 == the stored value
     EXPECT_TRUE(r.ncomp() == U.ncomp()) << "owner-qualified history preserves the whole field";
@@ -804,7 +854,28 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
   EXPECT_TRUE(scalar_history.ncomp() == 1) << "narrow history is a scalar NativeField";
   EXPECT_TRUE(std::fabs(ctx.sum_component(scalar_history, 0)) < 1e-12)
       << "owner-qualified zero-start history preserves its declared cold start";
-  ctx.rotate_histories();  // no throw
+  ctx.rotate_histories();
+  EXPECT_EQ(sim.history_fill_count("h"), 1);
+  for (int slot = 0; slot < 3; ++slot)
+    EXPECT_EQ(sim.history_slot_dt("h", slot), dt)
+        << "cold-filled history dt ledger rotates with its ring";
+
+  const double next_dt = 2.0 * dt;
+  ctx.begin_step(next_dt);
+  hv.set_val(Real(4));
+  ctx.store_history("h", hv);
+  EXPECT_EQ(sim.history_slot_dt("h", 0), next_dt);
+  EXPECT_EQ(sim.history_slot_dt("h", 1), dt);
+  EXPECT_EQ(sim.history_slot_dt("h", 2), dt);
+  NativeField interpolated = ctx.rhs_scratch_like(U);
+  ctx.interpolate_history_linear(interpolated, "h", 2, 0, "clock.macro", "clock.fast", -1, Real(0));
+  EXPECT_EQ(first_value(interpolated), Real(3.5));
+  ctx.rotate_histories();
+  EXPECT_EQ(sim.history_fill_count("h"), 2);
+  EXPECT_EQ(sim.history_slot_dt("h", 1), next_dt);
+  EXPECT_EQ(sim.history_slot_dt("h", 2), dt);
+  EXPECT_EQ(first_value(ctx.history("h", 1)), Real(4));
+  EXPECT_EQ(first_value(ctx.history("h", 2)), Real(3));
 
   // diagnostics: record_scalar -> program_diagnostic round-trip.
   ctx.record_scalar("mass", ctx.sum_component(U, 0));
@@ -942,6 +1013,7 @@ TEST(ProgramContextContract, BlockResolutionRequiresACompleteExplicitMap) {
   ensure_kokkos();
   NativeSystemConfig cfg = native_config(8);
   NativeSystem sim(cfg);
+  install_execution_lane(sim, "pops.test.program-context.block-resolution");
   add_gas(sim);
   NativeProgramContext ctx(&sim);
   const std::vector<const NativeField*> stages{&sim.block_state(0)};

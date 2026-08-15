@@ -53,6 +53,7 @@ def _history_contracts(program: Any) -> dict[str, Any]:
 def build_temporal_manifest(program: Any) -> dict[str, Any]:
     """Build and validate the exact nested-clock execution schedule for ``program``."""
     from pops.time._program.serialization import _json_ready
+    from pops.time._schedule.api import Schedule, native_schedule_cache_required
 
     nodes = tuple(_walk(program._values))
     clocks = {program.clock}
@@ -92,11 +93,22 @@ def build_temporal_manifest(program: Any) -> dict[str, Any]:
             })
         schedule = value.attrs.get("schedule")
         if schedule is not None:
+            where = "node %r (op '%s')" % (value.name, value.op)
+            if not isinstance(schedule, Schedule):
+                raise TypeError(
+                    "schedule on node %r must implement the Schedule interface; got %s"
+                    % (value.name, type(schedule).__name__)
+                )
+            schedule.validate_site(
+                clock=value.clock, point=value.point, where="schedule on %s" % where
+            )
             clocks.add(schedule.clock)
             schedules.append({
                 "node_id": value.id,
                 "schedule": schedule.to_data(),
-                "cache_required": bool(schedule.needs_cache()),
+                "cache_required": native_schedule_cache_required(
+                    schedule, where=where
+                ),
             })
 
     for state in getattr(program, "_time_states", {}).values():

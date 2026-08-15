@@ -765,4 +765,91 @@ TEST(ExactAuxiliaryRegistryNd, CheckpointPersistsExactGroupsKeysShapesAndAccepte
   verifies_auxiliary_checkpoint_is_exact_and_restart_atomic<3>();
 }
 
+template <int Dim>
+std::vector<std::uint8_t> blank_contract_empty_auxiliary_checkpoint() {
+  namespace detail = pops::runtime::system::auxiliary_checkpoint_detail;
+  detail::Writer out;
+  out.raw(detail::kMagic);
+  out.i32(Dim);
+  out.string({});
+  out.u64(0);
+  out.size(0);
+  out.size(0);
+  out.size(0);
+  return std::move(out).take();
+}
+
+template <int Dim>
+void verifies_empty_auxiliary_checkpoint_attestation() {
+  using pops::runtime::system::attest_empty_auxiliary_checkpoint_state;
+
+  ExactAuxiliaryRegistry<Dim> empty;
+  empty.seal();
+  const auto empty_image = pops::runtime::system::serialize_auxiliary_checkpoint_state(
+      pops::runtime::system::capture_auxiliary_checkpoint_state(empty));
+  const auto proof = attest_empty_auxiliary_checkpoint_state<Dim>(empty_image);
+  EXPECT_EQ(proof.dimension, Dim);
+  EXPECT_EQ(proof.registry_contract, empty.collective_contract());
+  EXPECT_EQ(proof.accepted_generation, 0U);
+  EXPECT_EQ(proof.groups, 0U);
+  EXPECT_EQ(proof.components, 0U);
+  EXPECT_EQ(proof.providers, 0U);
+
+  auto accepted_empty_publication = empty.begin_publication(
+      point("empty-attestation", 0, AuxiliaryEvaluationEvent::initialization));
+  accepted_empty_publication.accept();
+  ASSERT_EQ(empty.accepted_generation(), 1U);
+  const auto accepted_empty_image = pops::runtime::system::serialize_auxiliary_checkpoint_state(
+      pops::runtime::system::capture_auxiliary_checkpoint_state(empty));
+  const auto accepted_proof = attest_empty_auxiliary_checkpoint_state<Dim>(accepted_empty_image);
+  EXPECT_EQ(accepted_proof.accepted_generation, 1U);
+  EXPECT_EQ(accepted_proof.registry_contract, empty.collective_contract());
+  EXPECT_EQ(accepted_proof.groups, 0U);
+  EXPECT_EQ(accepted_proof.components, 0U);
+  EXPECT_EQ(accepted_proof.providers, 0U);
+
+  ExactAuxiliaryRegistry<Dim> provider_free_consumer;
+  provider_free_consumer.add_consumer_plan({"consumer/provider-free", {}});
+  provider_free_consumer.seal();
+  EXPECT_EQ(provider_free_consumer.provider_count(), 0U);
+  const auto provider_free_image = pops::runtime::system::serialize_auxiliary_checkpoint_state(
+      pops::runtime::system::capture_auxiliary_checkpoint_state(provider_free_consumer));
+  const auto provider_free_proof =
+      attest_empty_auxiliary_checkpoint_state<Dim>(provider_free_image);
+  EXPECT_NE(provider_free_proof.registry_contract, empty.collective_contract());
+  EXPECT_EQ(provider_free_proof.accepted_generation, 0U);
+  EXPECT_EQ(provider_free_proof.groups, 0U);
+  EXPECT_EQ(provider_free_proof.components, 0U);
+  EXPECT_EQ(provider_free_proof.providers, 0U);
+
+  auto exhausted = pops::runtime::system::capture_auxiliary_checkpoint_state(empty);
+  exhausted.accepted_generation = std::numeric_limits<std::uint64_t>::max();
+  EXPECT_THROW(static_cast<void>(attest_empty_auxiliary_checkpoint_state<Dim>(
+                   pops::runtime::system::serialize_auxiliary_checkpoint_state(exhausted))),
+               std::runtime_error);
+
+  EXPECT_THROW(static_cast<void>(attest_empty_auxiliary_checkpoint_state<Dim>(
+                   blank_contract_empty_auxiliary_checkpoint<Dim>())),
+               std::exception);
+  const auto accepted =
+      accepted_registry_for_checkpoint<Dim>(std::make_shared<std::vector<std::string>>());
+  const auto nonempty = pops::runtime::system::serialize_auxiliary_checkpoint_state(
+      pops::runtime::system::capture_auxiliary_checkpoint_state(accepted));
+  EXPECT_THROW(static_cast<void>(attest_empty_auxiliary_checkpoint_state<Dim>(nonempty)),
+               std::runtime_error);
+  constexpr int WrongDim = Dim == 1 ? 2 : 1;
+  ExactAuxiliaryRegistry<WrongDim> wrong_dimension_registry;
+  wrong_dimension_registry.seal();
+  const auto wrong_dimension = pops::runtime::system::serialize_auxiliary_checkpoint_state(
+      pops::runtime::system::capture_auxiliary_checkpoint_state(wrong_dimension_registry));
+  EXPECT_THROW(static_cast<void>(attest_empty_auxiliary_checkpoint_state<Dim>(wrong_dimension)),
+               std::runtime_error);
+}
+
+TEST(ExactAuxiliaryRegistryNd, EmptyAuxiliaryCheckpointAttestationIsExactAndFailClosed) {
+  verifies_empty_auxiliary_checkpoint_attestation<1>();
+  verifies_empty_auxiliary_checkpoint_attestation<2>();
+  verifies_empty_auxiliary_checkpoint_attestation<3>();
+}
+
 }  // namespace

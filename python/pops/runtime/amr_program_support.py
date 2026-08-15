@@ -24,6 +24,7 @@ sets and ``Program.ir_nodes`` are reached LAZILY inside the functions that need 
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -334,7 +335,7 @@ def _scheduled_values(program: Any, nodes: Any) -> list[tuple[Any, tuple[tuple[i
     scheduled = []
     for value, ancestry in values:
         attrs = getattr(value, "attrs", None)
-        if not isinstance(attrs, dict):
+        if not isinstance(attrs, Mapping):
             raise TypeError("AMR Program value attrs must be a mapping")
         if attrs.get("schedule") is not None:
             scheduled.append((value, ancestry))
@@ -388,7 +389,8 @@ def _schedule_groups(
         and lowering.domain.timeline is ScheduleTimeline.ACCEPTED_STEP
     ):
         return set()
-    actions = lowering.off.before_due + lowering.off.after_due + lowering.off_cadence
+    policy = lowering.off
+    actions = policy.before_due + policy.after_due + policy.off_cadence
     is_aux = value.op in _AUX_OUTPUT_OPS
     if is_aux and any(
         action in {ScheduleAction.ZERO, ScheduleAction.ACCUMULATE_DT} for action in actions
@@ -433,7 +435,7 @@ def _schedule_groups(
     return groups
 
 
-def _has_named_fluxes(attrs: dict) -> bool:
+def _has_named_fluxes(attrs: Mapping[str, Any]) -> bool:
     """True when a ``rhs`` op's ``fluxes`` attr names non-default fluxes.
 
     Mirrors ``program_emit_kernels._named_fluxes``: ``None`` / ``["default"]`` is the default -div F
@@ -462,14 +464,14 @@ def _ir_nodes(program: Any) -> Any:
     if not isinstance(nodes, list):
         raise TypeError("Program.ir_nodes(recursive=True) must return a list")
     for index, node in enumerate(nodes):
-        if not isinstance(node, dict):
+        if not isinstance(node, Mapping):
             raise TypeError("Program.ir_nodes(recursive=True)[%d] must be a mapping" % index)
         op = node.get("op")
         attrs = node.get("attrs")
         if not isinstance(op, str) or not op:
             raise TypeError(
                 "Program.ir_nodes(recursive=True)[%d].op must be a non-empty string" % index)
-        if not isinstance(attrs, dict):
+        if not isinstance(attrs, Mapping):
             raise TypeError(
                 "Program.ir_nodes(recursive=True)[%d].attrs must be a mapping" % index)
     return list(nodes)

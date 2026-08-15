@@ -345,10 +345,128 @@ class ProviderPack:
         return result
 
 
+def _bound_field_projections(
+    module: Any,
+    *,
+    canonical_owner: Any,
+    field_spaces: Mapping[str, Any],
+) -> tuple[list[tuple[ComponentKey, ComponentContract, ProviderEntry]], set[tuple[str, str]]]:
+    """Project explicit physical-field bindings through one declared storage carrier.
+
+    A Board field handle is a scientific declaration, not the legacy aggregate ``FieldSpace`` the
+    formula backend uses for storage.  The binding registry is the sole authority joining that
+    subject to a field operator.  This deliberately does not try to infer either side from a name,
+    an alias, or an overlapping component spelling.
+    """
+    owner_qid = str(canonical_owner)
+    declaration_index = module.declaration_index()
+    operator_registry = module.operator_registry()
+    operator_index = operator_registry.declaration_index()
+    rows = []
+    claimed = set()
+    projected = set()
+
+    for raw_subject, raw_target in module.operator_bindings().items():
+        if getattr(raw_subject, "kind", None) != "field":
+            continue
+        try:
+            subject = declaration_index.authenticate(raw_subject)
+            target = operator_index.authenticate(raw_target)
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                "invalid field operator binding for subject %r" %
+                getattr(raw_subject, "local_id", raw_subject)
+            ) from exc
+        if getattr(target, "kind", None) != "field_operator":
+            raise ValueError(
+                "invalid field operator binding for subject %r: target is not a field_operator"
+                % subject.local_id
+            )
+        try:
+            operator = operator_registry.get(target.registered_operator_name)
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                "invalid field operator binding for subject %r: target is not registered"
+                % subject.local_id
+            ) from exc
+        output = getattr(getattr(operator, "signature", None), "output", None)
+        if getattr(output, "kind", None) != "field":
+            raise ValueError(
+                "invalid field operator binding for subject %r: target has no FieldSpace output"
+                % subject.local_id
+            )
+
+        carriers = []
+        for name, carrier in field_spaces.items():
+            if getattr(carrier, "name", None) != name:
+                raise ValueError(
+                    "Module field-space registry key %r does not match carrier name %r"
+                    % (name, getattr(carrier, "name", None))
+                )
+            if all(component in carrier.components for component in output.components):
+                carriers.append(carrier)
+        if not carriers:
+            raise ValueError(
+                "field operator binding for subject %r has no declared storage carrier for %r"
+                % (subject.local_id, output.name)
+            )
+        if len(carriers) != 1:
+            raise ValueError(
+                "field operator binding for subject %r has ambiguous storage carriers %r"
+                % (subject.local_id, sorted(carrier.name for carrier in carriers))
+            )
+        carrier = carriers[0]
+        producer = target._resolved(canonical_owner).qualified_id
+        for output_slot, component in enumerate(output.components):
+            carrier_slot = carrier.components.index(component)
+            output_contract = ComponentContract(
+                output.representation,
+                output.centering,
+                output.units[output_slot],
+                output.layout,
+            )
+            carrier_contract = ComponentContract(
+                carrier.representation,
+                carrier.centering,
+                carrier.units[carrier_slot],
+                carrier.layout,
+            )
+            if carrier_contract != output_contract:
+                raise ValueError(
+                    "field operator binding for subject %r has contract mismatch for component %r"
+                    % (subject.local_id, component)
+                )
+            carrier_key = (carrier.name, component)
+            if carrier_key in claimed:
+                raise ValueError(
+                    "field operator bindings claim legacy carrier component %s/%s more than once"
+                    % carrier_key
+                )
+            key = ComponentKey(owner_qid, "field", subject.local_id, component)
+            if key in projected:
+                raise ValueError(
+                    "field operator bindings collide on projected component %s/%s"
+                    % (subject.local_id, component)
+                )
+            claimed.add(carrier_key)
+            projected.add(key)
+            rows.append((
+                key,
+                output_contract,
+                ProviderEntry(producer, True, carrier_slot),
+            ))
+    return rows, claimed
+
+
 def build_provider_pack(module: Any) -> ProviderPack:
     """Build the canonical logical provider pack from one qualified Module authority."""
     canonical_owner = module.owner_path.canonical()
     owner_qid = str(canonical_owner)
+    state_spaces = module.state_spaces()
+    field_spaces = module.field_spaces()
+    projected_rows, claimed_field_components = _bound_field_projections(
+        module, canonical_owner=canonical_owner, field_spaces=field_spaces
+    )
     rows = []
     field_producers = {}
     for operator in module.operator_registry():
@@ -356,8 +474,7 @@ def build_provider_pack(module: Any) -> ProviderPack:
         if getattr(output, "kind", None) == "field":
             field_producers.setdefault(output, []).append(module.operator_handle(operator.name))
 
-    for space_kind, spaces in (("state", module.state_spaces()),
-                               ("field", module.field_spaces())):
+    for space_kind, spaces in (("state", state_spaces), ("field", field_spaces)):
         for space in spaces.values():
             producers = field_producers.get(space, ()) if space_kind == "field" else ()
             resolved_producers = tuple(sorted(
@@ -380,6 +497,8 @@ def build_provider_pack(module: Any) -> ProviderPack:
                 # based fallback.
                 producer = "initial_state" if space_kind == "state" else "runtime_input"
             for slot, component in enumerate(space.components):
+                if space_kind == "field" and (space.name, component) in claimed_field_components:
+                    continue
                 rows.append((
                     ComponentKey(owner_qid, space_kind, space.name, component),
                     ComponentContract(
@@ -387,6 +506,14 @@ def build_provider_pack(module: Any) -> ProviderPack:
                     ProviderEntry(producer, producer is not None,
                                   slot if producer is not None else None),
                 ))
+    existing_keys = {key for key, _, _ in rows}
+    projection_keys = {key for key, _, _ in projected_rows}
+    if existing_keys & projection_keys:
+        raise ValueError(
+            "field operator bindings collide with declared provider components %r"
+            % sorted(existing_keys & projection_keys)
+        )
+    rows.extend(projected_rows)
     aux_producers = module.aux_providers()
     for slot, aux in enumerate(module.aux().values()):
         declared = aux_producers.get(aux.name)

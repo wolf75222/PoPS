@@ -75,14 +75,24 @@ def test_coupled_implicit_uses_one_prepared_provider_with_explicit_action():
     assert "Jinv_" not in source
     assert "for (int it_ =" not in source
     assert "Ueval[0] - G_[0] - static_cast<pops::Real>(pops::Real(1)) * dt *" in source
-    assert "pops::reduce_max(ci_status_" in source
     assert "ctx.scalar_scratch(2, 0, u0, 11, 0)" in source
-    assert "pops::collective_first_local_nonlinear_failure(" in source
     assert "encode_ranked_local_nonlinear_failure" not in source
-    assert "collective status/location precedence mismatch" in source
-    assert "pops::reduce_sum(ci_status_" in source
+    assert "const pops::ExecutionLane& ci_report_2_lane = ctx.prepared_execution_lane();" in source
+    assert (
+        "pops::all_reduce_max(pops::reduce_max_local(ci_status_2, 10), "
+        "ci_report_2_lane)" in source
+    )
+    assert (
+        "pops::all_reduce_sum(pops::reduce_sum_local(ci_status_2, 9), "
+        "ci_report_2_lane)" in source
+    )
     assert "pops::local_nonlinear_status_priority(solved_.status)" in source
     assert "pops::local_nonlinear_status_from_priority(" in source
+    assert (
+        "pops::collective_first_local_nonlinear_failure("
+        "ci_status_2, ci_report_2_priority, 10, 8, ci_report_2_lane)" in source
+    )
+    assert "collective status/location precedence mismatch" in source
     assert "pops::SolveAction::kRejectAttempt" in source
     assert "SolveStatus::kSingular" in source
     assert "StepAttemptRejected" in source

@@ -14,6 +14,7 @@ set(POPS_CPP_TEST_SOURCE_test_amr_named_field "tests/cpp/integration/amr/test_am
 set(POPS_CPP_TEST_SOURCE_test_amr_native_loader "tests/cpp/integration/native_loader/test_amr_native_loader.cpp")
 set(POPS_CPP_TEST_SOURCE_test_amr_potential "tests/cpp/integration/amr/test_amr_potential.cpp")
 set(POPS_CPP_TEST_SOURCE_test_amr_program_diffusion "tests/cpp/integration/amr/test_amr_program_diffusion.cpp")
+set(POPS_CPP_TEST_SOURCE_test_amr_program_embedded_boundary "tests/cpp/integration/amr/test_amr_program_embedded_boundary.cpp")
 set(POPS_CPP_TEST_SOURCE_test_amr_program_positivity_floor "tests/cpp/integration/amr/test_amr_program_positivity_floor.cpp")
 set(POPS_CPP_TEST_SOURCE_test_amr_regrid_mpi_parity "tests/cpp/integration/mpi/test_amr_regrid_mpi_parity.cpp")
 set(POPS_CPP_TEST_SOURCE_test_amr_regrid_variable "tests/cpp/integration/amr/test_amr_regrid_variable.cpp")

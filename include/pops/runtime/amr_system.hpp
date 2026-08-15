@@ -286,8 +286,9 @@ class AmrSystem {
   /// inert this step. Hook for non-local constraints (coupling, scheduler, user ramp).
   void add_dt_bound(const std::string& label, std::function<double()> fn);
 
-  /// ACTIVE bound of the last step_cfl: "transport:<block>" | "source_frequency:<block>" |
-  /// "stability_dt:<block>" | "global:<label>" | "degenerate" | "" (no CFL step yet).
+  /// ACTIVE bound of the last step_cfl: "transport:<block>" | "parabolic_frequency:<block>" |
+  /// "source_frequency:<block>" | "stability_dt:<block>" | "global:<label>" | "degenerate" | ""
+  /// (no CFL step yet).
   std::string last_dt_bound() const;
 
   /// Adds a block carried on the AMR. Same spatial-scheme parameters as System
@@ -593,16 +594,17 @@ class AmrSystem {
   /// Execute the immutable exact-ranked tagging program against one live parent level. The
   /// returned masks are owner-local candidates; no clustering, hysteresis, or topology mutation is
   /// performed by this inspection route.
-  runtime::amr::PreparedTaggerCandidates<Dim> execute_prepared_tagging(int parent_level);
+  POPS_EXPORT runtime::amr::PreparedTaggerCandidates<Dim> execute_prepared_tagging(
+      int parent_level);
   /// Consume the prepared candidates for one parent, cluster their exact global union, transfer
   /// accepted state into the candidate child, and publish the regrid atomically. Returns whether a
   /// child remains active after publication.
-  bool regrid_from_prepared_tagging(int parent_level);
+  POPS_EXPORT bool regrid_from_prepared_tagging(int parent_level);
   /// Freeze every accepted history ring/level/slot before a multi-parent restart regrid.  Every
   /// transition then uses this immutable same-level overlap image while prolongating new coverage
   /// from the successively remapped parent.
-  void begin_restart_regrid_history_sequence();
-  void end_restart_regrid_history_sequence() noexcept;
+  POPS_EXPORT void begin_restart_regrid_history_sequence();
+  POPS_EXPORT void end_restart_regrid_history_sequence() noexcept;
   /// Install one exact parent/child temporal relation per AMR transition.  These ratios are an
   /// independent execution authority and are never inferred from spatial refinement.
   void set_temporal_relations(const std::vector<std::int64_t>& numerators,
@@ -621,6 +623,15 @@ class AmrSystem {
   void set_poisson(const std::string& rhs = "charge_density",
                    const std::string& solver = "geometric_mg", const std::string& bc = "auto",
                    const AmrFieldSolverOptions& solver_options = {});
+  /// Attach the default field's exact-ranked provider outputs before hierarchy materialization.
+  /// ``output_keys`` contains either the potential alone or the potential followed by one gradient
+  /// component per native axis. Every key must be unique and owned by the sealed auxiliary
+  /// registry's ``field_output`` provider class. An exact repeat is idempotent; every differing
+  /// repeat is refused. This is the explicit direct-C++ publication seam for the default field;
+  /// typed Python authoring publishes outputs through its named ``Case.field`` plan instead, while
+  /// native ``fields_from_state`` attachments remain RHS-only by contract.
+  POPS_EXPORT void register_default_elliptic_field_output(
+      const std::vector<runtime::system::AuxiliaryComponentKey>& output_keys, int gradient_sign);
 
   /// Install one fully resolved AMR field route. The registry key is the digest of its
   /// block-qualified provider identity. ``plan_identity`` independently commits the complete
@@ -920,7 +931,11 @@ class AmrSystem {
   /// Volume-weighted L2 norm of each block's accepted AMR macro-step change. Collective and valid
   /// while the retained outer transaction snapshot still owns U^n.
   POPS_EXPORT std::map<std::string, double> step_change_l2() const;
-  /// Advances at dt = cfl * coarse_dx / max wave speed. @return the dt used.
+  /// Advances using the smallest exact-ranked level/block bound.  Each explicit Cartesian
+  /// diffusive candidate uses cfl * substeps / (stride * (max(speed, speed_floor) / h_min +
+  /// 2 nu sum_a h_a^-2)); source, model, global, Program and strategy bounds may reduce it further.
+  /// The request, prepared schedule and selected decision are authenticated on the hierarchy lane.
+  /// @return the dt used.
   double step_cfl(double cfl, double speed_floor = static_cast<double>(kCflSpeedFloor),
                   double max_dt = std::numeric_limits<double>::infinity(), double min_dt = 0.0);
 
@@ -1147,7 +1162,7 @@ class AmrSystem {
   void reset_profiling();
   std::string profile_report() const;
   /// @}
-  int n_blocks() const;  ///< number of blocks on the shared AmrRuntime engine
+  POPS_EXPORT int n_blocks() const;  ///< number of blocks on the shared AmrRuntime engine
   /// Names of the blocks in add order (parity with System::block_names): the IO facade iterates over them
   /// to write EACH block by its name (an empty name -> block 0, historical mono-block compat).
   std::vector<std::string> block_names() const;
@@ -1181,9 +1196,9 @@ class AmrSystem {
   /// Potential, hierarchy and aux remain shared. The _global variants all_reduce_sum
   /// the per-rank fabs so a np>1 checkpoint gathers onto rank 0 (mono-rank: identity, bit-identical).
   /// Force the lazy build (ensure_built) like patch_boxes()/mass(). @p k: level (0 = coarse, >= 1 = fine).
-  int n_levels();             ///< number of levels of the hierarchy (>= 1; mono OR multi-block)
-  int max_levels();           ///< resolved maximum active hierarchy depth
-  int configured_n_levels();  ///< immutable resolved hierarchy capacity
+  int n_levels();    ///< number of levels of the hierarchy (>= 1; mono OR multi-block)
+  int max_levels();  ///< resolved maximum active hierarchy depth
+  POPS_EXPORT int configured_n_levels();  ///< immutable resolved hierarchy capacity
   int n_vars();  ///< number of conserved components (MONO-BLOCK; multi-block: block_n_vars)
   /// FULL conservative state of level @p k, flat component-major c*nf*nf + j*nf + i (nf = n << k;
   /// zeros outside the patches at the fine level -- only the patch interior is defined). MONO-BLOCK.

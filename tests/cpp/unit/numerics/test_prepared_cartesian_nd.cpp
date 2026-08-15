@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <pops/numerics/spatial/operators/cartesian_operator.hpp>
+#include <pops/numerics/spatial/operators/masked_operator.hpp>
 #include <pops/numerics/spatial/primitives/state_access.hpp>
 
 #include <algorithm>
@@ -94,6 +95,110 @@ Extent<Dim> uniform_extent(int value) {
 }
 
 template <int Dim>
+class DiffusiveStaticScalar : public nd::ScalarAdvection<Dim> {
+ public:
+  using State = typename nd::ScalarAdvection<Dim>::State;
+
+  explicit DiffusiveStaticScalar(Real diffusivity) : diffusivity_(diffusivity) {}
+
+  POPS_HD Real diffusivity() const { return diffusivity_; }
+
+ private:
+  Real diffusivity_ = Real(0);
+};
+
+static_assert(DiffusiveModel<DiffusiveStaticScalar<1>>);
+static_assert(DiffusiveModel<DiffusiveStaticScalar<2>>);
+static_assert(DiffusiveModel<DiffusiveStaticScalar<3>>);
+
+template <int Dim>
+void check_centered_fickian_flux() {
+  constexpr Real diffusivity = Real(0.125);
+  const Box<Dim> domain = Box<Dim>::from_extents(uniform_extent<Dim>(7));
+  const auto geometry = unit_geometry(domain);
+  const auto op = nd::prepare_cartesian_operator<Dim>(
+      geometry, DiffusiveStaticScalar<Dim>{diffusivity}, NoSlope{}, RusanovFlux{});
+  Fab<Dim> state(domain, 1, uniform_extent<Dim>(NoSlope::n_ghost));
+  fill_periodic(state, [](const Index<Dim>& index, int) {
+    Real value = Real(0);
+    for (int axis = 0; axis < Dim; ++axis)
+      value += Real(index[axis] * index[axis]);
+    return value;
+  });
+
+  Fab<Dim> residual(domain, 1);
+  op.assemble_residual(state, residual);
+  auto host = residual.create_host_mirror();
+  residual.copy_to_host(host);
+  Index<Dim> center{};
+  Real expected = Real(0);
+  for (int axis = 0; axis < Dim; ++axis) {
+    center[axis] = 3;
+    const Real spacing = geometry.spacing(axis);
+    expected += Real(2) * diffusivity / (spacing * spacing);
+  }
+  EXPECT_NEAR(host(host_offset(residual.grown_box(), center, 0)), expected, Real(2e-12));
+}
+
+template <int Dim>
+void check_diffusive_cfl_bound() {
+  constexpr Real diffusivity = Real(0.125);
+  const Box<Dim> domain = Box<Dim>::from_extents(uniform_extent<Dim>(7));
+  const auto geometry = unit_geometry(domain);
+  const DiffusiveStaticScalar<Dim> model{diffusivity};
+  const auto op = nd::prepare_cartesian_operator<Dim>(geometry, model, NoSlope{}, RusanovFlux{});
+  const auto& metric = op.metric();
+  typename DiffusiveStaticScalar<Dim>::State state{Real(1)};
+  const Index<Dim> cell{};
+
+  Real expected_inverse_dt = Real(0);
+  for (int axis = 0; axis < Dim; ++axis) {
+    const Real spacing = geometry.spacing(axis);
+    expected_inverse_dt += Real(2) * diffusivity / (spacing * spacing);
+  }
+  const auto bound = nd::cell_cfl_bound<Dim>(model, state, metric, cell);
+  ASSERT_TRUE(bound.succeeded());
+  EXPECT_NEAR(bound.inverse_dt, expected_inverse_dt, Real(2e-12));
+
+  const auto frequency = nd::cell_parabolic_frequency<Dim>(model, metric, cell);
+  ASSERT_TRUE(frequency.succeeded());
+  EXPECT_NEAR(frequency.value, expected_inverse_dt, Real(2e-12));
+  const auto parabolic = nd::cell_parabolic_time_step<Dim>(model, metric, cell);
+  ASSERT_TRUE(parabolic.succeeded());
+  EXPECT_NEAR(parabolic.value, Real(1) / expected_inverse_dt, Real(2e-12));
+  const auto stepped = nd::cell_time_step<Dim>(model, state, metric, cell, Real(0.4));
+  ASSERT_TRUE(stepped.succeeded());
+  EXPECT_NEAR(stepped.value, Real(0.4) / expected_inverse_dt, Real(2e-12));
+
+  const DiffusiveStaticScalar<Dim> invalid{std::numeric_limits<Real>::quiet_NaN()};
+  EXPECT_EQ(nd::cell_cfl_bound<Dim>(invalid, state, metric, cell).status,
+            nd::FiniteVolumeStatus::InvalidWaveSpeed);
+}
+
+template <int Dim>
+void check_masked_diffusion_is_refused() {
+  constexpr Real diffusivity = Real(0.125);
+  const Box<Dim> domain = Box<Dim>::from_extents(uniform_extent<Dim>(7));
+  const auto geometry = unit_geometry(domain);
+  const auto regular = nd::prepare_cartesian_operator<Dim>(
+      geometry, DiffusiveStaticScalar<Dim>{diffusivity}, NoSlope{}, RusanovFlux{});
+  const auto op = nd::prepare_masked_cartesian_operator<Dim>(
+      DiffusiveStaticScalar<Dim>{diffusivity}, regular.metric(), NoSlope{}, RusanovFlux{});
+  Fab<Dim> state(domain, 1, uniform_extent<Dim>(NoSlope::n_ghost));
+  fill_periodic(state, [](const Index<Dim>& index, int) {
+    Real value = Real(0);
+    for (int axis = 0; axis < Dim; ++axis)
+      value += Real(index[axis] * index[axis]);
+    return value;
+  });
+  Fab<Dim> active(domain, 1, uniform_extent<Dim>(1));
+  fill_periodic(active,
+                [](const Index<Dim>& index, int) { return index[0] == 0 ? Real(0) : Real(1); });
+  Fab<Dim> residual(domain, 1);
+  EXPECT_THROW(op.assemble_residual(state, active, residual), std::invalid_argument);
+}
+
+template <int Dim>
 void check_constant_and_conservation(const Extent<Dim>& extents) {
   const Box<Dim> domain = Box<Dim>::from_extents(extents);
   RealVector<Dim> velocity{};
@@ -179,6 +284,24 @@ void check_ranked_state_access() {
 
 TEST(test_prepared_cartesian_nd, one_dimensional_kernel_preserves_constant_state_and_conservation) {
   check_constant_and_conservation<1>(Extent<1>{32});
+}
+
+TEST(test_prepared_cartesian_nd, centered_fickian_flux_survives_the_canonical_ranked_face_path) {
+  check_centered_fickian_flux<1>();
+  check_centered_fickian_flux<2>();
+  check_centered_fickian_flux<3>();
+}
+
+TEST(test_prepared_cartesian_nd, diffusive_cfl_bound_is_parabolic_and_rejects_invalid_nu) {
+  check_diffusive_cfl_bound<1>();
+  check_diffusive_cfl_bound<2>();
+  check_diffusive_cfl_bound<3>();
+}
+
+TEST(test_prepared_cartesian_nd, masked_diffusion_is_refused_without_embedded_face_geometry) {
+  check_masked_diffusion_is_refused<1>();
+  check_masked_diffusion_is_refused<2>();
+  check_masked_diffusion_is_refused<3>();
 }
 
 TEST(test_prepared_cartesian_nd,

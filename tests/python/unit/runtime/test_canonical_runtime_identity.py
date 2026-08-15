@@ -485,7 +485,7 @@ def test_checkpoint_install_requires_native_products_to_match_before_publishing_
     assert not hasattr(owner, "_checkpoint_spatial_contract")
 
 
-def test_checkpoint_manifest_authenticates_exact_payload_and_runtime_identities(monkeypatch):
+def test_checkpoint_manifest_authenticates_exact_payload_and_runtime_identities(tmp_path, monkeypatch):
     snapshot = _bound_snapshot()
     run = RunManifest(
         bind_identity=snapshot.bind_identity,
@@ -511,7 +511,7 @@ def test_checkpoint_manifest_authenticates_exact_payload_and_runtime_identities(
         "t": 0.5,
         "macro_step": 2,
         "abi_key": "test-abi",
-        "state_tracer": np.arange(4, dtype=np.float64),
+        "state_tracer": np.asfortranarray(np.arange(12, dtype=np.float64).reshape(3, 4)),
         "inactive_level": np.empty((0, 4), dtype=np.float64),
     }
     monkeypatch.setattr("pops.runtime._engine_descriptors.abi_key", lambda: "test-abi")
@@ -537,8 +537,21 @@ def test_checkpoint_manifest_authenticates_exact_payload_and_runtime_identities(
     manifest = json.loads(payload[MANIFEST_KEY])
     assert manifest["runtime_kind"] == "uniform"
     assert manifest["arrays"]["inactive_level"]["shape"] == [0, 4]
+    assert manifest["arrays"]["macro_step"]["shape"] == []
+    assert not payload["state_tracer"].flags.c_contiguous
 
-    payload["state_tracer"] = np.arange(4, dtype=np.float64) + 1.0
+    path = tmp_path / "scalar-envelope.npz"
+    np.savez_compressed(path, **payload)
+    with np.load(path, allow_pickle=False) as stored:
+        assert stored["macro_step"].shape == ()
+        saved_manifest, saved_restart = inspect_checkpoint_payload_integrity(
+            stored,
+            runtime_kind="uniform",
+        )
+    assert saved_restart == restart
+    assert saved_manifest["arrays"]["macro_step"]["shape"] == []
+
+    payload["state_tracer"] = np.arange(12, dtype=np.float64).reshape(3, 4) + 1.0
     with pytest.raises(ValueError, match="digest mismatch"):
         authenticate_checkpoint_payload(owner, PayloadView(), runtime_kind="uniform")
 

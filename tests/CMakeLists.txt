@@ -599,6 +599,9 @@ pops_add_gtest_suite(NAME test_amr_potential SOURCES "${_src}" EXTRA_LIBS ${CMAK
 pops_test_source(_src test_amr_program_diffusion)
 pops_add_gtest_suite(NAME test_amr_program_diffusion SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
+pops_test_source(_src test_amr_program_embedded_boundary)
+pops_add_gtest_suite(NAME test_amr_program_embedded_boundary SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+
 pops_test_source(_src test_amr_program_positivity_floor)
 pops_add_gtest_suite(NAME test_amr_program_positivity_floor SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 

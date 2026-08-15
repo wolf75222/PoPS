@@ -11,6 +11,7 @@ import importlib.util
 import pathlib
 import re
 import sys
+from types import MappingProxyType
 
 import pytest
 
@@ -380,6 +381,31 @@ def test_complete_query_requires_resolved_context():
     module = _load_support_module()
     with pytest.raises(TypeError, match="resolved AMRProgramSupportContext"):
         module.amr_program_op_support(_Program([]), context=None)
+
+
+def test_immutable_ir_carriers_are_accepted_but_malformed_attrs_stay_fail_closed():
+    module = _load_support_module()
+    immutable_node = MappingProxyType(
+        {
+            "op": "rhs",
+            "attrs": MappingProxyType({"fluxes": ["transport"]}),
+        }
+    )
+
+    assert module.amr_program_op_support(
+        _Program([immutable_node]), context=_context(module, refined=True)
+    ) == {"named_flux": "green"}
+
+    with pytest.raises(TypeError, match=r"\[0\]\.attrs must be a mapping"):
+        module.amr_program_op_support(
+            _Program([MappingProxyType({"op": "rhs", "attrs": ()})]),
+            context=_context(module),
+        )
+    with pytest.raises(TypeError, match=r"\[0\]\.attrs must be a mapping"):
+        module.amr_program_op_support(
+            _Program([MappingProxyType({"op": "rhs"})]),
+            context=_context(module),
+        )
 
 
 def test_context_sensitive_routes_report_green_or_pending_from_resolved_hierarchy():

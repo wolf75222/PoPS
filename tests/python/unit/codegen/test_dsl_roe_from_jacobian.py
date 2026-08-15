@@ -13,6 +13,7 @@ from pops._dense_spectral import (
 )
 from pops._ir.expr import Const
 from pops.codegen import Production
+from pops.codegen.module_lowering import lower_and_validate
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.layouts import Uniform
@@ -20,6 +21,10 @@ from pops.lib.time import ForwardEuler
 from pops.math import ddt, div
 from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
+from pops.numerics.riemann.providers import (
+    ROE_FLUX_JACOBIAN,
+    authoring_provider_evidence,
+)
 from pops.numerics.spatial import FiniteVolume
 from pops.physics import Model
 from pops.time import FixedDt
@@ -94,6 +99,22 @@ def _diagonal_roe_model(name: str, components: int) -> Model:
     return model
 
 
+def _emit_cpp_brick(model: Model, *, name: str) -> str:
+    """Resolve the public Model through its canonical Module/provider-pack route."""
+    emit_model, source_module = lower_and_validate(model, facade=model)
+    assert source_module is model.module
+    assert type(emit_model._auxiliary_provider_pack).__name__ == "ProviderPack"
+    return emit_model._m.emit_cpp_brick(name=name)
+
+
+def _lower_model(model: Model):
+    """Resolve the public Model without requiring an independently emitted brick."""
+    emit_model, source_module = lower_and_validate(model, facade=model)
+    assert source_module is model.module
+    assert type(emit_model._auxiliary_provider_pack).__name__ == "ProviderPack"
+    return emit_model
+
+
 def test_dense_roe_complex_spectrum_fails_without_rusanov_fallback(
     isolated_native_cache, native_cxx, kokkos_root
 ) -> None:
@@ -155,7 +176,7 @@ def test_dense_roe_complex_spectrum_fails_without_rusanov_fallback(
 def test_roe_dense_spectral_capacity_fails_during_authoring() -> None:
     boundary = _diagonal_roe_model("dense_roe_boundary", 16)
     boundary.roe_from_jacobian(entropy_fix=riemann.Harten(1.0e-6))
-    assert boundary._dsl._m._roe_jacobian is not None
+    assert authoring_provider_evidence(_lower_model(boundary)).roe_provider == ROE_FLUX_JACOBIAN
 
     too_large = _diagonal_roe_model("dense_roe_too_large", 17)
     with pytest.raises(DenseSpectralCapacityError) as caught:
@@ -165,14 +186,14 @@ def test_roe_dense_spectral_capacity_fails_during_authoring() -> None:
     assert "HLL" in str(caught.value)
     assert "model.wave_speeds" in str(caught.value)
     assert "native Roe spectral provider" in str(caught.value)
-    assert too_large._dsl._m._roe_jacobian is None
+    assert authoring_provider_evidence(_lower_model(too_large)).roe_provider != ROE_FLUX_JACOBIAN
 
 
 def test_flux_jacobian_roe_emits_generic_characteristic_no_inflow_provider() -> None:
     model = _diagonal_roe_model("dense_characteristic_boundary", 2)
     model.wave_speeds_from_jacobian()
     model.roe_from_jacobian()
-    source = model._dsl._m.emit_cpp_brick(name="DenseCharacteristicBoundary")
+    source = _emit_cpp_brick(model, name="DenseCharacteristicBoundary")
     assert "bool characteristic_no_inflow(" in source
     assert "pops::characteristic_incoming_apply" in source
     assert "outward_sign" in source
@@ -187,7 +208,7 @@ def test_auxiliary_dependent_jacobian_does_not_advertise_characteristic_provider
     model = Model("aux_characteristic_boundary", frame=frame)
     state = model.state("U", components=("q",))
     (q,) = state
-    coefficient = model._dsl._m.aux_field("coefficient")
+    coefficient = model.aux("coefficient")
     model.flux(
         "transport",
         frame=frame,
@@ -197,5 +218,5 @@ def test_auxiliary_dependent_jacobian_does_not_advertise_characteristic_provider
     model.wave_speeds_from_jacobian()
     model.roe_from_jacobian()
 
-    source = model._dsl._m.emit_cpp_brick(name="AuxCharacteristicBoundary")
+    source = _emit_cpp_brick(model, name="AuxCharacteristicBoundary")
     assert "bool characteristic_no_inflow(" not in source

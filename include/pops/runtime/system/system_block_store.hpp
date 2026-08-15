@@ -82,6 +82,7 @@ class SystemBlockStore {
     CellConvert prim_to_cons;
     CellRecovery cons_to_prim;
     std::function<Real(const field_type&)> source_frequency;
+    std::optional<Real> parabolic_frequency;
     std::function<Real(const field_type&)> stability_dt;
     std::function<void(field_type&)> project;
     std::function<void(field_type&)> project_masked;

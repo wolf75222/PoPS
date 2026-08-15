@@ -306,6 +306,7 @@ void refresh_accepted_hierarchy_state_() const {
     throw std::logic_error("AMR Program accepted-state refresh crossed an active attempt");
   refresh_resources_();
   requalify_cell_temporal_configuration_();
+  prepare_multiblock_subcycling_engine_();
   const auto state = accepted_state_();
   facade_->restore_program_accepted_state(serialize_amr_program_accepted_state(state));
   accepted_state_revision_ = facade_->program_accepted_state_revision();

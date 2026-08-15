@@ -774,6 +774,15 @@ void System<Dim>::require_cartesian_generated_operator(int block,
     throw std::out_of_range("System generated Program operator block index is out of range");
   if (operation.empty())
     throw std::invalid_argument("System generated Program operator identity cannot be empty");
+  if (p_->embedded_boundary_ &&
+      p_->embedded_boundary_->mode() != runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
+    throw std::runtime_error(
+        "System generated Program operator '" + operation + "' on block " + std::to_string(block) +
+        " requires an unqualified Cartesian kernel; active embedded-boundary " + "mode '" +
+        std::string(
+            runtime::system::prepared_embedded_boundary_mode_name(p_->embedded_boundary_->mode())) +
+        "' requires a mask-qualified operator");
+  }
 }
 
 template <int Dim>

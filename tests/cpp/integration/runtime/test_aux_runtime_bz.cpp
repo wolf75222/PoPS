@@ -9,7 +9,8 @@
 #include <gtest/gtest.h>
 
 #include <pops/physics/composition/composite.hpp>
-#include <pops/physics/bricks/hyperbolic.hpp>            // CartesianExBDrift
+#include <pops/physics/bricks/hyperbolic.hpp>  // CartesianExBDrift
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
 #include <pops/runtime/builders/compiled/generated_system_block.hpp>
 #include <pops/runtime/system.hpp>
@@ -17,6 +18,8 @@
 
 #include <array>
 #include <cmath>
+#include <memory>
+#include <string>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -43,6 +46,11 @@ using runtime::system::AuxiliaryOutput;
 using runtime::system::AuxiliaryProviderKind;
 using runtime::system::AuxiliaryStorageShape;
 using runtime::system::PreparedAuxiliaryProvider;
+
+void install_execution_lane(System<kNativeDimension>& system, std::string identity) {
+  system.install_prepared_boundary_execution_lane(
+      std::make_shared<ExecutionLane>(ExecutionLane::world(std::move(identity))));
+}
 
 // Shares the Cartesian ExB B_z provider slot (grad[kNativeDimension] then B[3]).
 struct BzSource {
@@ -88,6 +96,7 @@ TEST(AuxRuntimeBz, RuntimeSystemReadsSharedBzChannelAndClearsWithZero) {
   }
 
   System<kNativeDimension> sys(cfg);
+  install_execution_lane(sys, "pops.test.aux-runtime-bz.shared-channel");
   const AuxiliaryComponentContract contract{"cell-average", "cell", "unitless", "input", "scalar"};
   AuxiliaryStorageShape<kNativeDimension> shape;
   for (int axis = 0; axis < kNativeDimension; ++axis)

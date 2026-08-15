@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-foreach(_required POPS_SOURCE_DIR POPS_REJECT_BUILD_DIR)
+foreach(_required POPS_SOURCE_DIR POPS_REJECT_BUILD_DIR POPS_NATIVE_DIM)
   if(NOT DEFINED ${_required})
     message(FATAL_ERROR "HDF5 fail-closed smoke is missing -D${_required}=...")
   endif()
@@ -13,6 +13,7 @@ set(_configure_command
   -B "${POPS_REJECT_BUILD_DIR}"
   -DPOPS_BUILD_TESTS=OFF
   -DPOPS_BUILD_PYTHON=OFF
+  "-DPOPS_NATIVE_DIM=${POPS_NATIVE_DIM}"
   -DPOPS_USE_MPI=OFF
   -DPOPS_USE_HDF5=ON)
 if(DEFINED POPS_GENERATOR AND NOT POPS_GENERATOR STREQUAL "")

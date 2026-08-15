@@ -343,8 +343,8 @@ def _emit_roe_provided(model: Any, nc: Any) -> list:
         out += ["    const pops::Real %s%s = %s;" % (side, p, _cpp_roe(e, side))
                 for p, e in model.prim_defs.items()]
         if has_aux:
-            out += ["    const pops::Real %s%s = %s.template flux_provider<%d>();"
-                    % (side, n, av, model._physical_flux_consumer_slot(n))
+            out += ["    const pops::Real %s%s = pops::provider_value<%d>(%s);"
+                    % (side, n, model._physical_flux_consumer_slot(n), av)
                     for n in provider_components]
     out.append("    State d{};")
     for ordinal, axis in enumerate(axes):

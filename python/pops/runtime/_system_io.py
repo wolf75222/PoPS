@@ -33,9 +33,98 @@ class _PreparedUniformCapture:
     payload: dict[str, Any]
     blocks: tuple[str, ...]
     field_slots: tuple[str, ...]
+    spatial_shape: tuple[int, ...]
     history_plan: Any
     cache_nodes: tuple[int, ...]
     capture_identity: str
+
+
+_DEFAULT_FIELD_SLOT = "pops.system.default-field"
+
+
+def _validated_uniform_phi_alias(payload, *, spatial_shape: tuple[int, ...], field_slots):
+    """Validate the legacy ``phi`` member without normalizing its stored bits.
+
+    ``phi`` is only an alias for the installed default field.  A field-free checkpoint retains the
+    member for wire compatibility, but it has exactly one permitted representation: C-contiguous
+    binary64 positive zero at every spatial cell.
+    """
+    import numpy as np
+
+    phi = np.asarray(payload["phi"])
+    if phi.dtype != np.dtype(np.float64) or phi.shape != spatial_shape:
+        raise ValueError(
+            "restart: potential payload must be a binary64 array with spatial shape %r"
+            % (spatial_shape,)
+        )
+    if _DEFAULT_FIELD_SLOT not in field_slots:
+        if not phi.flags.c_contiguous:
+            raise ValueError("restart: field-free potential payload must be C-contiguous")
+        if np.any(phi.view(np.uint64) != 0):
+            raise ValueError(
+                "restart: field-free potential payload must contain only canonical +0.0"
+            )
+        return False
+
+    index = field_slots.index(_DEFAULT_FIELD_SLOT)
+    key = "field_potential_%d" % index
+    if key not in payload:
+        raise RuntimeError("checkpoint default field potential is missing")
+    default_phi = np.asarray(payload[key])
+    if default_phi.dtype != np.dtype(np.float64) or default_phi.shape != spatial_shape:
+        raise RuntimeError(
+            "checkpoint default field potential must be a binary64 array with spatial shape %r"
+            % (spatial_shape,)
+        )
+    if not phi.flags.c_contiguous or not default_phi.flags.c_contiguous:
+        raise ValueError("restart: default field potential payloads must be C-contiguous")
+    if phi.tobytes(order="C") != default_phi.tobytes(order="C"):
+        raise ValueError(
+            "restart: legacy potential differs bitwise from field provider %s"
+            % _DEFAULT_FIELD_SLOT
+        )
+    return True
+
+
+def _authenticate_uniform_checkpoint_field_slots(native, checkpoint_slots):
+    """Authenticate checkpoint slots against the installed/configured restart authority.
+
+    Named identities stay exact and ordered. The only permitted materialization gap is an
+    absent checkpoint-declared default on a fresh target that can still materialize it.
+    """
+    slots = [str(slot) for slot in checkpoint_slots]
+    if len(slots) != len(set(slots)):
+        raise ValueError("checkpoint field-provider slots must be unique")
+    materialized = [str(slot) for slot in native.field_provider_slots()]
+    configured_query = getattr(native, "configured_field_provider_slots", None)
+    if not callable(configured_query):
+        if slots != materialized:
+            raise RuntimeError(
+                "checkpoint qualified field providers %r != installed providers %r"
+                % (slots, materialized)
+            )
+        return
+    configured = [str(slot) for slot in configured_query()]
+    if slots == materialized:
+        return
+    if (
+        slots == configured
+        and configured[:1] == [_DEFAULT_FIELD_SLOT]
+        and configured[1:] == materialized
+    ):
+        return
+    if _DEFAULT_FIELD_SLOT in slots and _DEFAULT_FIELD_SLOT not in configured:
+        raise RuntimeError(
+            "checkpoint default field is not available from the installed prepared RHS"
+        )
+    if _DEFAULT_FIELD_SLOT not in slots and _DEFAULT_FIELD_SLOT in materialized:
+        raise RuntimeError(
+            "checkpoint omits the default field while the target has a materialized accepted potential"
+        )
+    raise RuntimeError(
+        "checkpoint qualified field providers %r != installed providers %r"
+        % (slots, materialized)
+    )
 
 
 class _SystemIO(_System):
@@ -85,7 +174,7 @@ class _SystemIO(_System):
         blocks = tuple(str(block) for block in self._s.block_names())
         if not blocks or len(blocks) != len(set(blocks)):
             raise ValueError("checkpoint requires a non-empty unique Uniform block order")
-        required_collectives = ["state_global", "potential_global"]
+        required_collectives = ["state_global"]
         if not callable(getattr(self._s, "capture_auxiliary_checkpoint_accepted_state", None)):
             raise TypeError("checkpoint Uniform engine lacks exact auxiliary checkpoint capture")
         out = {
@@ -113,7 +202,9 @@ class _SystemIO(_System):
         field_slots = tuple(str(slot) for slot in self._s.field_provider_slots())
         if len(field_slots) != len(set(field_slots)):
             raise ValueError("checkpoint field-provider slots must be unique")
-        out["field_provider_slots"] = np.array(field_slots)
+        out["field_provider_slots"] = np.asarray(field_slots, dtype=str)
+        if _DEFAULT_FIELD_SLOT in field_slots:
+            required_collectives.append("potential_global")
         if field_slots:
             required_collectives.append("field_potential_global")
         prog_hash = (
@@ -208,7 +299,14 @@ class _SystemIO(_System):
             },
         ).token
         return _PreparedUniformCapture(
-            target, out, blocks, field_slots, history_plan, cache_nodes, capture_identity
+            target=target,
+            payload=out,
+            blocks=blocks,
+            field_slots=field_slots,
+            spatial_shape=spatial.shape,
+            history_plan=history_plan,
+            cache_nodes=cache_nodes,
+            capture_identity=capture_identity,
         )
 
     def _capture_checkpoint(self, prepared: _PreparedUniformCapture) -> tuple[dict[str, Any], str]:
@@ -222,7 +320,8 @@ class _SystemIO(_System):
         out = dict(prepared.payload)
         for block in prepared.blocks:
             out["state_" + block] = np.asarray(self._s.state_global(block), dtype=np.float64)
-        out["phi"] = np.asarray(self._s.potential_global(), dtype=np.float64)
+        if _DEFAULT_FIELD_SLOT in prepared.field_slots:
+            out["phi"] = np.asarray(self._s.potential_global(), dtype=np.float64)
         for index, slot in enumerate(prepared.field_slots):
             out["field_potential_%d" % index] = np.asarray(
                 self._s.field_potential_global(slot), dtype=np.float64
@@ -240,14 +339,45 @@ class _SystemIO(_System):
             out["cache_value_%d" % node] = np.asarray(
                 self._s.program_cache_global(node), dtype=np.float64
             )
+        # Fabricating the wire-compatible field-free alias and validating its local byte image are
+        # deliberately deferred until every planned native gather has completed.  A rank-local
+        # allocation or validation failure is then converged by collective_checkpoint_capture's
+        # sealed-payload consensus instead of leaving peers entering a later native collective.
+        if _DEFAULT_FIELD_SLOT not in prepared.field_slots:
+            out["phi"] = np.zeros(prepared.spatial_shape, dtype=np.float64)
+        _validated_uniform_phi_alias(
+            out,
+            spatial_shape=prepared.spatial_shape,
+            field_slots=prepared.field_slots,
+        )
         identity = seal_checkpoint_payload(self, out, runtime_kind="uniform")
         return out, identity.token
 
     def checkpoint(self, path: Any) -> Any:
-        """Capture the exact accepted state through the collective checkpoint protocol."""
+        """Capture the exact accepted state through the public atomic checkpoint protocol."""
+        return self._checkpoint(path)
+
+    def _checkpoint_precreated_inode(self, path: Any, *, precreated_descriptor: int | None) -> Any:
+        """Internal RuntimeInstance seam preserving its transaction-created inode authority."""
+        return self._checkpoint(
+            path,
+            precreated_inode=True,
+            precreated_descriptor=precreated_descriptor,
+        )
+
+    def _checkpoint(
+        self,
+        path: Any,
+        *,
+        precreated_inode: bool = False,
+        precreated_descriptor: int | None = None,
+    ) -> Any:
         import os
         import numpy as np
-        from pops.output._checkpoint_collective import collective_checkpoint_capture
+        from pops.output._checkpoint_collective import (
+            collective_checkpoint_capture,
+            write_precreated_checkpoint_payload,
+        )
 
         prepared_holder = {}
 
@@ -258,6 +388,13 @@ class _SystemIO(_System):
 
         def publish(payload):
             prepared = prepared_holder["plan"]
+            if precreated_inode:
+                if type(precreated_descriptor) is not int:
+                    raise RuntimeError(
+                        "precreated Uniform checkpoint publication requires the root descriptor"
+                    )
+                write_precreated_checkpoint_payload(precreated_descriptor, payload)
+                return str(prepared.target)
             temporary = prepared.target.with_name(prepared.target.name + ".tmp")
             try:
                 with open(temporary, "wb") as stream:
@@ -368,15 +505,8 @@ class _SystemIO(_System):
                 )
             if np.asarray(d["state_" + block]).size != ncomp * cells:
                 raise ValueError("restart : block '%s' state payload has the wrong size" % block)
-        if np.asarray(d["phi"]).size != cells:
-            raise ValueError("restart : potential payload has the wrong size")
         slots = [str(slot) for slot in d["field_provider_slots"]]
-        current_slots = list(self._s.field_provider_slots())
-        if slots != current_slots:
-            raise RuntimeError(
-                "checkpoint qualified field providers %r != installed providers %r"
-                % (slots, current_slots)
-            )
+        _authenticate_uniform_checkpoint_field_slots(self._s, slots)
         for index, slot in enumerate(slots):
             key = "field_potential_%d" % index
             if key not in d or np.asarray(d[key]).size != cells:
@@ -384,6 +514,7 @@ class _SystemIO(_System):
                     "checkpoint potential for qualified field provider %s is missing or malformed"
                     % slot
                 )
+        _validated_uniform_phi_alias(d, spatial_shape=spatial.shape, field_slots=slots)
         checkpoint_hash = str(d["program_hash"])
         current_hash = (
             self._s.installed_program_hash() if hasattr(self._s, "installed_program_hash") else ""
@@ -546,8 +677,12 @@ class _SystemIO(_System):
         d = prepared.payload
         for block in (str(value) for value in d["blocks"]):
             self._s.set_state(block, np.asarray(d["state_" + block], dtype=np.float64))
-        self._s.set_potential(np.asarray(d["phi"], dtype=np.float64).ravel())
-        for index, slot in enumerate(str(value) for value in d["field_provider_slots"]):
+        slots = tuple(str(value) for value in d["field_provider_slots"])
+        if _DEFAULT_FIELD_SLOT in slots:
+            self._s.set_potential(np.asarray(d["phi"], dtype=np.float64).ravel())
+        for index, slot in enumerate(slots):
+            if slot == _DEFAULT_FIELD_SLOT:
+                continue
             self._s.set_field_potential(
                 slot, np.asarray(d["field_potential_%d" % index], dtype=np.float64).ravel()
             )

@@ -10,11 +10,13 @@ import pytest
 
 from pops.codegen.module_lowering import lower_and_validate
 from pops.codegen.program_codegen import emit_cpp_program
+from pops.frames import X_AXIS, Y_AXIS, Z_AXIS
 from pops.identity.scalar import scalar_cpp, scalar_data
 from pops.lib.models import author_electrostatic_lorentz
 from pops.linalg import LinearProblem
 from pops.numerics.terms import Flux
 from pops.params import ConstParam
+from pops.physics import Custom, Density, Momentum
 from pops.solvers import CompositeTensorFAC, Hierarchy
 from pops.time import FailRun, Program
 
@@ -58,9 +60,9 @@ def _coupled_model(name):
 @pytest.mark.parametrize(
     ("roles", "expected_dimension"),
     (
-        (("tracer", "momentum:0", "density"), 1),
-        (("momentum:1", "tracer", "density", "momentum:0"), 2),
-        (("momentum:2", "density", "momentum:0", "tracer", "momentum:1"), 3),
+        ((Custom("tracer"), Momentum(X_AXIS), Density()), 1),
+        ((Momentum(Y_AXIS), Custom("tracer"), Density(), Momentum(X_AXIS)), 2),
+        ((Momentum(Z_AXIS), Density(), Momentum(X_AXIS), Custom("tracer"), Momentum(Y_AXIS)), 3),
     ),
 )
 def test_electrostatic_lorentz_resolves_permuted_exact_rank_state(
@@ -89,9 +91,9 @@ def test_electrostatic_lorentz_resolves_permuted_exact_rank_state(
     )
     assert name == "electrostatic_lorentz_J"
     momentum = {
-        int(role.split(":", 1)[1]): index
+        role.axis.index: index
         for index, role in enumerate(roles)
-        if role.startswith("momentum:")
+        if isinstance(role, Momentum)
     }
     expected = (
         (0.0, 5.0, -3.0),
@@ -444,5 +446,7 @@ def test_refined_solution_publishes_atomically_before_synchronized_advance():
     provider = (root / "include" / "pops" / "runtime" / "amr"
                 / "hierarchy_tensor_solver_provider.hpp").read_text(encoding="utf-8")
     solved = provider.index("if (!report.solved_value_available())")
-    publication = provider.index("collective_capture_(candidate_publication_)", solved)
+    publication = provider.index(
+        "collective_capture_(candidate_publication_, execution_lane)", solved
+    )
     assert solved < publication, "a failed hierarchy solve must not publish a partial iterate"

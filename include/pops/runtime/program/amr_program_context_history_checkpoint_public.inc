@@ -241,24 +241,55 @@ const field_type* pointwise_active_mask(int program_block, const field_type& fie
   const int runtime_block = sys_block(program_block);
   const field_type& accepted = facade_->prepared_amr_block_state(runtime_block, active_level_);
   require_same_layout_(field, accepted, "AMR Program pointwise mask");
-  if (nlev() != 1)
-    unavailable_("composite active-cell AMR pointwise mask provider");
   const field_type* const active =
       facade_->prepared_amr_block_level_active_mask(runtime_block, active_level_);
   if (active != nullptr)
     require_same_layout_(*active, accepted, "AMR Program pointwise active mask");
   return active;
 }
+
+/// Reduce generated per-cell status over every live owner level.  Inactive values, including
+/// inactive NaNs, are ignored.  An active negative or non-finite status is failure code 3; a
+/// globally empty active domain is 0; otherwise the lane maximum finite severity is returned.
 Real pointwise_status_max(int program_block, const field_type& status,
                           const field_type* active_cells, const ExecutionLane& lane) const {
-  if (&lane != &prepared_execution_lane())
-    throw std::invalid_argument("AMR Program pointwise status requires its prepared lane");
-  const field_type* expected = pointwise_active_mask(program_block, status);
-  if (active_cells != expected)
+  require_prepared_lane_(lane, "AMR Program pointwise status");
+  std::exception_ptr local_error;
+  long ncomp_error = 1;
+  long mask_error = 1;
+  MaskedMaxLocalResult local;
+  try {
+    ncomp_error = status.ncomp() == 1 ? 0L : 1L;
+    mask_error = 0;
+    for_each_owner_active_level_(
+        program_block, status, nullptr,
+        [&](const field_type& level_status, const field_type*, const field_type* expected) {
+          if (&level_status == &status && active_cells != expected)
+            mask_error = 1;
+          if (ncomp_error != 0)
+            return;
+          const MaskedMaxLocalResult part =
+              pops::reduce_masked_max_local(level_status, 0, expected);
+          local.has_active = local.has_active || part.has_active;
+          local.has_invalid = local.has_invalid || part.has_invalid;
+          local.maximum = std::max(local.maximum, part.maximum);
+        });
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("AMR Program pointwise status reduction failed collectively");
+  }
+  if (all_reduce_max(ncomp_error, lane) != 0)
+    throw std::invalid_argument("AMR Program pointwise status requires exactly one component");
+  if (all_reduce_max(mask_error, lane) != 0)
     throw std::invalid_argument("AMR Program pointwise status received a foreign active-cell mask");
-  if (status.ncomp() < 1)
-    throw std::invalid_argument("AMR Program pointwise status requires one component");
-  const Real result = static_cast<Real>(
-      all_reduce_max(static_cast<double>(pops::reduce_max_local(status, 0)), lane));
-  return result == -std::numeric_limits<Real>::infinity() ? Real(0) : result;
+  if (all_reduce_max(local.has_invalid ? 1L : 0L, lane) != 0)
+    return Real(3);
+  if (all_reduce_max(local.has_active ? 1L : 0L, lane) == 0)
+    return Real(0);
+  const Real maximum = static_cast<Real>(all_reduce_max(static_cast<double>(local.maximum), lane));
+  return std::isfinite(maximum) ? maximum : Real(3);
 }

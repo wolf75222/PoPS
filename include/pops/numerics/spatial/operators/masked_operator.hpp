@@ -98,9 +98,9 @@ struct MaterializeMaskedFaceFlux {
       context = metric_face_context<Axis, MetricFaceSide::Lower>(metric, right_cell);
     else
       context = metric_face_context<Axis, MetricFaceSide::Upper>(metric, left_cell);
-    const auto evaluation = evaluate_numerical_flux_at(
-        numerical_flux, model, traces.left, providers, left_cell, traces.right, providers,
-        right_cell, context);
+    const auto evaluation =
+        evaluate_numerical_flux_at(numerical_flux, model, traces.left, providers, left_cell,
+                                   traces.right, providers, right_cell, context);
     if (!evaluation.succeeded()) {
       clear(face, FiniteVolumeStatus::InvalidWaveSpeed);
       return;
@@ -130,21 +130,12 @@ void materialize_axes(const Model& model, const Metric& metric,
                       FaceField<Dim, MemorySpace>& integrated_fluxes,
                       FaceField<Dim, MemorySpace>& statuses,
                       const BoundaryFaceOmission<Dim>& omission) {
-  for_each_face<Axis>(
-      state.box(),
-      MaterializeMaskedFaceFlux<Axis, Variables, Dim, Model, Metric, Reconstruction, NumericalFlux,
-                                ProviderStorage>{model,
-                                                 metric,
-                                                 reconstruction,
-                                                 numerical_flux,
-                                                 positivity_floor,
-                                                 positivity_component,
-                                                 state.view(),
-                                                 providers,
-                                                 active_cells.view(),
-                                                 integrated_fluxes.view(),
-                                                 statuses.view(),
-                                                 omission});
+  for_each_face<Axis>(state.box(),
+                      MaterializeMaskedFaceFlux<Axis, Variables, Dim, Model, Metric, Reconstruction,
+                                                NumericalFlux, ProviderStorage>{
+                          model, metric, reconstruction, numerical_flux, positivity_floor,
+                          positivity_component, state.view(), providers, active_cells.view(),
+                          integrated_fluxes.view(), statuses.view(), omission});
   if constexpr (Axis + 1 < Dim)
     materialize_axes<Axis + 1, Variables>(
         model, metric, reconstruction, numerical_flux, positivity_floor, positivity_component,
@@ -237,8 +228,7 @@ class PreparedMaskedCartesianOperator {
   }
 
   template <class MemorySpace>
-  void assemble_residual(const Fab<Dim, MemorySpace>& state,
-                         const Fab<Dim, MemorySpace>& providers,
+  void assemble_residual(const Fab<Dim, MemorySpace>& state, const Fab<Dim, MemorySpace>& providers,
                          const Fab<Dim, MemorySpace>& active_cells, Fab<Dim, MemorySpace>& residual,
                          BoundaryFaceOmission<Dim> omission = {}) const {
     if (!(providers.box() == state.box()) || providers.ncomp() < flux_provider_count<Model> ||
@@ -253,8 +243,7 @@ class PreparedMaskedCartesianOperator {
   template <class MemorySpace, int Count>
   void assemble_residual(const Fab<Dim, MemorySpace>& state,
                          const ProviderStorageView<Dim, Count>& providers,
-                         const Fab<Dim, MemorySpace>& active_cells,
-                         Fab<Dim, MemorySpace>& residual,
+                         const Fab<Dim, MemorySpace>& active_cells, Fab<Dim, MemorySpace>& residual,
                          BoundaryFaceOmission<Dim> omission = {}) const
     requires(Count == flux_provider_count<Model>)
   {
@@ -301,6 +290,10 @@ class PreparedMaskedCartesianOperator {
                           const Fab<Dim, MemorySpace>& active_cells,
                           Fab<Dim, MemorySpace>& residual,
                           BoundaryFaceOmission<Dim> omission) const {
+    if constexpr (DiffusiveModel<Model>)
+      throw std::invalid_argument(
+          "prepared ND masked transport does not support Fickian diffusion without EB face "
+          "geometry");
     if (!base_.domain().contains(state.box()))
       throw std::invalid_argument("prepared ND masked state lies outside the metric domain");
     require_reconstruction_storage<Reconstruction>(state, state.box(), n_vars);
@@ -319,19 +312,19 @@ class PreparedMaskedCartesianOperator {
 
     Fab<Dim, MemorySpace> candidate(state.box(), n_vars);
     Fab<Dim, MemorySpace> cell_statuses(state.box(), 1);
-    for_each_cell(state.box(),
-                  masked_operator_detail::MaterializeMaskedResidual<Dim, Metric, n_vars>{
-                      metric(),
-                      static_cast<const FaceField<Dim, MemorySpace>&>(integrated_fluxes).view(),
-                      active_cells.view(), candidate.view(), cell_statuses.view()});
+    for_each_cell(
+        state.box(),
+        masked_operator_detail::MaterializeMaskedResidual<Dim, Metric, n_vars>{
+            metric(), static_cast<const FaceField<Dim, MemorySpace>&>(integrated_fluxes).view(),
+            active_cells.view(), candidate.view(), cell_statuses.view()});
     const Real cell_failure = for_each_cell_reduce_max(
         state.box(), cartesian_operator_detail::FieldStatusMaximum<Dim>{
                          static_cast<const Fab<Dim, MemorySpace>&>(cell_statuses).view()});
     if (cell_failure != static_cast<Real>(FiniteVolumeStatus::Success))
       throw std::runtime_error("prepared ND masked residual refused publication");
     for_each_cell(state.box(), cartesian_operator_detail::CopyCellField<Dim>{
-                                    static_cast<const Fab<Dim, MemorySpace>&>(candidate).view(),
-                                    residual.view(), n_vars});
+                                   static_cast<const Fab<Dim, MemorySpace>&>(candidate).view(),
+                                   residual.view(), n_vars});
     device_fence();
   }
 
@@ -375,9 +368,9 @@ auto prepare_masked_cartesian_operator(Model model, Metric metric,
                                        NumericalFlux numerical_flux = {},
                                        Real positivity_floor = Real(0)) {
   return PreparedMaskedCartesianOperator<Dim, Model, Metric, Reconstruction, NumericalFlux,
-                                         Variables>(
-      std::move(model), std::move(metric), std::move(reconstruction), std::move(numerical_flux),
-      positivity_floor);
+                                         Variables>(std::move(model), std::move(metric),
+                                                    std::move(reconstruction),
+                                                    std::move(numerical_flux), positivity_floor);
 }
 
 }  // namespace pops::nd

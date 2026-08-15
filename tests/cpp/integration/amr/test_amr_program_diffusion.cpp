@@ -191,6 +191,7 @@ void verify_refined_program_diffusion() {
   const pops::AmrSystemConfig<Dim> config = refined_config<Dim>();
   const std::vector<double> initial = periodic_mode(config.shape);
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.amr.program-diffusion/runtime@1");
   system.set_temporal_relations({2}, {1}, {"integral_only"});
   system.install_block_state_route("heat", "tests.amr.program-diffusion/state/heat");
   pops::add_compiled_model<Dim>(
@@ -219,8 +220,10 @@ void verify_refined_program_diffusion() {
   ASSERT_EQ(coarse.ncomp(), 1);
   ASSERT_EQ(fine.ncomp(), 1);
 
-  pops::test::install_forward_euler_program(system);
-  ASSERT_EQ(system.program_interface_flux_ledger_manifest().size(), 1U);
+  pops::test::install_forward_euler_program(system, false);
+  EXPECT_TRUE(system.program_interface_flux_ledger_manifest().empty());
+  const auto accepted_flux_before = system.program_flux_ledger_manifest();
+  EXPECT_TRUE(accepted_flux_before.empty());
 
   pops::MultiFab<Dim> coarse_before(coarse);
   pops::MultiFab<Dim> fine_before(fine);
@@ -233,6 +236,17 @@ void verify_refined_program_diffusion() {
   pops::MultiFab<Dim> coarse_trial(system.prepared_amr_block_state(0, 0));
   pops::MultiFab<Dim> fine_trial(system.prepared_amr_block_state(0, 1));
   const double mass_trial = system.composite_reduce("heat", "sum", 0);
+  const auto trial_flux = system.program_flux_ledger_manifest();
+  bool saw_coarse_flux = false;
+  bool saw_fine_flux = false;
+  for (const auto& row : trial_flux) {
+    if (row.size() != 13)
+      continue;
+    saw_coarse_flux = saw_coarse_flux || row[10].ends_with("_coarse");
+    saw_fine_flux = saw_fine_flux || row[10].ends_with("_fine");
+  }
+  EXPECT_TRUE(saw_coarse_flux);
+  EXPECT_TRUE(saw_fine_flux);
   system.rollback_step_transaction();
 
   EXPECT_EQ(pops::difference_sum_sq_all(system.prepared_amr_block_state(0, 0), coarse_before),
@@ -240,6 +254,7 @@ void verify_refined_program_diffusion() {
   EXPECT_EQ(pops::difference_sum_sq_all(system.prepared_amr_block_state(0, 1), fine_before),
             pops::Real(0));
   EXPECT_DOUBLE_EQ(system.composite_reduce("heat", "sum", 0), mass_before);
+  EXPECT_EQ(system.program_flux_ledger_manifest(), accepted_flux_before);
 
   system.step(dt);
   EXPECT_EQ(pops::difference_sum_sq_all(system.prepared_amr_block_state(0, 0), coarse_trial),
@@ -248,6 +263,7 @@ void verify_refined_program_diffusion() {
             pops::Real(0));
   EXPECT_NEAR(system.composite_reduce("heat", "sum", 0), mass_before, 2.0e-12);
   EXPECT_DOUBLE_EQ(system.composite_reduce("heat", "sum", 0), mass_trial);
+  EXPECT_EQ(system.program_flux_ledger_manifest(), trial_flux);
   expect_covered_coarse_equals_fine_restriction(system, config.transition_ratios.front());
   EXPECT_LT(pops::reduce_max(system.prepared_amr_block_state(0, 1)),
             peak_before - pops::Real(1e-7));

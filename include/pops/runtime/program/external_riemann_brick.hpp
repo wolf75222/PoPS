@@ -15,7 +15,7 @@
 // kernel then runs the statically-instantiated functor with no string comparison on the hot path.
 // The limiter route is selected once while preparing the installed operator.
 //
-// The residual and AMR contracts remain ABI v4. The System registrar/installer contract is v6: its
+// The residual and AMR contracts remain ABI v5. The System registrar/installer contract is v7: its
 // receivers are revocable prepared-package capabilities, never System*. Those installers build
 // directly on the runtime-owned MultiFab/hierarchy, so production execution is zero-copy and keeps
 // the ordinary Kokkos, MPI-halo and AMR-reflux paths. The exact ABI identities, native rank,
@@ -58,19 +58,19 @@ namespace pops::runtime::program {
 #define POPS_EXTERNAL_RIEMANN_STRINGIFY_IMPL_(value) #value
 #define POPS_EXTERNAL_RIEMANN_STRINGIFY_(value) POPS_EXTERNAL_RIEMANN_STRINGIFY_IMPL_(value)
 
-inline constexpr int kExternalRiemannBrickAbiVersion = 4;
+inline constexpr int kExternalRiemannBrickAbiVersion = 5;
 inline constexpr const char* kExternalRiemannBrickAbiKey =
     "pops.external-riemann/"
-    "v4;scalar=f64;index=i32;periodicity=nd;providers=qualified;"
+    "v5;scalar=f64;index=i32;periodicity=nd;providers=qualified;"
     "dim=" POPS_EXTERNAL_RIEMANN_STRINGIFY_(POPS_NATIVE_DIM);
 
 inline constexpr const char* kExternalRiemannBrickAbiVersionSymbol =
     "pops_external_riemann_abi_version";
 inline constexpr const char* kExternalRiemannBrickAbiKeySymbol = "pops_external_riemann_abi_key";
-inline constexpr int kExternalRiemannSystemAbiVersion = 6;
+inline constexpr int kExternalRiemannSystemAbiVersion = 7;
 inline constexpr const char* kExternalRiemannSystemAbiKey =
     "pops.external-riemann.system/"
-    "v6;receiver=prepared-native-package;providers=qualified;"
+    "v7;receiver=prepared-native-package;providers=qualified;"
     "dim=" POPS_EXTERNAL_RIEMANN_STRINGIFY_(POPS_NATIVE_DIM);
 inline constexpr const char* kExternalRiemannSystemAbiVersionSymbol =
     "pops_external_riemann_system_abi_version";
@@ -78,16 +78,16 @@ inline constexpr const char* kExternalRiemannSystemAbiKeySymbol =
     "pops_external_riemann_system_abi_key";
 inline constexpr const char* kExternalRiemannBrickDimensionSymbol =
     "pops_external_riemann_dimension";
-inline constexpr const char* kExternalRiemannBrickResidualSymbol = "pops_brick_residual_v4";
+inline constexpr const char* kExternalRiemannBrickResidualSymbol = "pops_brick_residual_v5";
 inline constexpr const char* kExternalRiemannBrickInstallSystemSymbol =
-    "pops_brick_install_system_v6";
-inline constexpr const char* kExternalRiemannBrickInstallAmrSymbol = "pops_brick_install_amr_v4";
+    "pops_brick_install_system_v7";
+inline constexpr const char* kExternalRiemannBrickInstallAmrSymbol = "pops_brick_install_amr_v5";
 inline constexpr const char* kExternalRiemannBrickModelIdentitySymbol = "pops_brick_model_identity";
 inline constexpr const char* kExternalRiemannBrickProviderCountSymbol = "pops_brick_nproviders";
 inline constexpr const char* kExternalRiemannBrickKokkosBackendSymbol = "pops_brick_kokkos_backend";
 inline constexpr const char* kExternalRiemannBrickKokkosVersionSymbol = "pops_brick_kokkos_version";
 inline constexpr const char* kExternalRiemannBrickSystemRoutesSymbol =
-    "pops_register_provider_routes_system_v6";
+    "pops_register_provider_routes_system_v7";
 inline constexpr const char* kExternalRiemannBrickAmrRoutesSymbol =
     "pops_register_provider_routes_amr";
 
@@ -491,7 +491,7 @@ class ExternalBrickHandle {
   ExternalBrickHandle(const std::string& so_path, const std::string& id, int expected_nvars,
                       int expected_provider_count, const std::string& expected_model_identity,
                       const std::string& expected_sha256 = {},
-                      bool require_system_package_v6 = false)
+                      bool require_system_package_v7 = false)
       : id_(id) {
     if (id_.empty() || expected_nvars < 1 || expected_provider_count < 0 ||
         expected_model_identity.size() != 64 ||
@@ -521,11 +521,11 @@ class ExternalBrickHandle {
 #endif
     std::exception_ptr preflight_error;
     try {
-      // A System caller opts into v6 explicitly. Reject an earlier receiver ABI by versioned
+      // A System caller opts into v7 explicitly. Reject an earlier receiver ABI by versioned
       // symbol/key
       // inspection before invoking even the manifest callback, and therefore before any
       // registrar/installer receiver can be reached.
-      if (require_system_package_v6) {
+      if (require_system_package_v7) {
         auto system_version_fn = reinterpret_cast<int (*)()>(
             dynlib::sym(handle_, kExternalRiemannSystemAbiVersionSymbol));
         auto system_key_fn = reinterpret_cast<const char* (*)()>(
@@ -538,7 +538,7 @@ class ExternalBrickHandle {
             install_system_ == nullptr || register_system_routes_symbol_ == nullptr)
           throw std::runtime_error(
               "external riemann brick '" + id_ +
-              "' lacks the System v6 prepared-package ABI; rebuild it before registration");
+              "' lacks the System v7 prepared-package ABI; rebuild it before registration");
         const int system_version =
             dynlib::invoke_with_host_exception([system_version_fn] { return system_version_fn(); },
                                                kExternalRiemannSystemAbiVersionSymbol);
@@ -550,7 +550,7 @@ class ExternalBrickHandle {
               "external riemann brick '" + id_ +
               "' has an incompatible System registrar/installer ABI; rebuild it with current "
               "PoPS headers");
-        system_v6_compatible_ = true;
+        system_v7_compatible_ = true;
       }
       auto manifest_fn =
           reinterpret_cast<const char* (*)()>(dynlib::sym(handle_, "pops_brick_manifest"));
@@ -581,19 +581,19 @@ class ExternalBrickHandle {
       require_abi_symbol(*selected, kExternalRiemannBrickKokkosVersionSymbol);
       require_abi_symbol(*selected, kExternalRiemannBrickAmrRoutesSymbol);
 
-      const std::array<const char*, 4> system_v6_symbols{
+      const std::array<const char*, 4> system_v7_symbols{
           kExternalRiemannSystemAbiVersionSymbol, kExternalRiemannSystemAbiKeySymbol,
           kExternalRiemannBrickInstallSystemSymbol, kExternalRiemannBrickSystemRoutesSymbol};
-      const std::size_t declared_system_v6 = static_cast<std::size_t>(std::count_if(
-          system_v6_symbols.begin(), system_v6_symbols.end(),
+      const std::size_t declared_system_v7 = static_cast<std::size_t>(std::count_if(
+          system_v7_symbols.begin(), system_v7_symbols.end(),
           [&](const char* symbol) { return csv_has(selected->exported_symbols, symbol); }));
-      if (declared_system_v6 != 0 && declared_system_v6 != system_v6_symbols.size())
+      if (declared_system_v7 != 0 && declared_system_v7 != system_v7_symbols.size())
         throw std::runtime_error("external riemann brick '" + id_ +
-                                 "' declares an incomplete System v6 ABI");
-      const bool has_system_v6 = declared_system_v6 == system_v6_symbols.size();
-      if (require_system_package_v6 && !has_system_v6)
+                                 "' declares an incomplete System v7 ABI");
+      const bool has_system_v7 = declared_system_v7 == system_v7_symbols.size();
+      if (require_system_package_v7 && !has_system_v7)
         throw std::runtime_error("external riemann brick '" + id_ +
-                                 "' manifest does not authenticate its System v6 ABI");
+                                 "' manifest does not authenticate its System v7 ABI");
       auto version_fn =
           reinterpret_cast<int (*)()>(dynlib::sym(handle_, kExternalRiemannBrickAbiVersionSymbol));
       auto abi_key_fn = reinterpret_cast<const char* (*)()>(
@@ -627,7 +627,7 @@ class ExternalBrickHandle {
                                  std::string(kExternalRiemannBrickResidualSymbol));
       InstallSystemFn candidate_install_system = nullptr;
       void* candidate_register_system_routes = nullptr;
-      if (has_system_v6) {
+      if (has_system_v7) {
         auto system_version_fn = reinterpret_cast<int (*)()>(
             dynlib::sym(handle_, kExternalRiemannSystemAbiVersionSymbol));
         auto system_key_fn = reinterpret_cast<const char* (*)()>(
@@ -639,7 +639,7 @@ class ExternalBrickHandle {
         if (system_version_fn == nullptr || system_key_fn == nullptr ||
             candidate_install_system == nullptr || candidate_register_system_routes == nullptr)
           throw std::runtime_error("external riemann brick '" + id_ +
-                                   "' declares but does not export its complete System v6 ABI");
+                                   "' declares but does not export its complete System v7 ABI");
         const int system_version =
             dynlib::invoke_with_host_exception([system_version_fn] { return system_version_fn(); },
                                                kExternalRiemannSystemAbiVersionSymbol);
@@ -677,7 +677,7 @@ class ExternalBrickHandle {
           dynlib::sym(handle_, kExternalRiemannBrickAmrRoutesSymbol);
       if (candidate_register_amr_routes == nullptr)
         throw std::runtime_error("external riemann brick '" + id_ +
-                                 "' does not export its canonical AMR v4 provider registrar");
+                                 "' does not export its canonical AMR v5 provider registrar");
       const char* model_identity =
           dynlib::invoke_with_host_exception([model_identity_fn] { return model_identity_fn(); },
                                              kExternalRiemannBrickModelIdentitySymbol);
@@ -714,7 +714,7 @@ class ExternalBrickHandle {
       dimension_ = candidate_dimension;
       nvars_ = candidate_nvars;
       provider_count_ = candidate_provider_count;
-      system_v6_compatible_ = has_system_v6;
+      system_v7_compatible_ = has_system_v7;
       register_system_routes_symbol_ = candidate_register_system_routes;
       register_amr_routes_symbol_ = candidate_register_amr_routes;
       BrickRegistry::instance().register_brick(*selected);
@@ -740,19 +740,19 @@ class ExternalBrickHandle {
   // The resolved residual entry point: a direct call into the `.so`'s statically-instantiated flux.
   ResidualFn residual() const { return residual_; }
 
-  void require_system_v6() const {
-    if (!system_v6_compatible_ || install_system_ == nullptr ||
+  void require_system_v7() const {
+    if (!system_v7_compatible_ || install_system_ == nullptr ||
         register_system_routes_symbol_ == nullptr)
       throw std::runtime_error(
           "external riemann brick '" + id_ +
-          "' lacks the System v6 prepared-package ABI; rebuild it before System registration");
+          "' lacks the System v7 prepared-package ABI; rebuild it before System registration");
   }
 
   void install_system(void* system, const std::string& name,
                       const std::string& provider_consumer_qid, const std::string& limiter,
                       const std::string& recon, const std::string& time, double gamma, int substeps,
                       bool evolve, int stride, double positivity_floor, double weno_epsilon) const {
-    require_system_v6();
+    require_system_v7();
     dynlib::invoke_with_host_exception(
         [&] {
           install_system_(system, name.c_str(), provider_consumer_qid.c_str(), limiter.c_str(),
@@ -786,7 +786,7 @@ class ExternalBrickHandle {
   template <int Dim>
   void register_system_routes(runtime::system::PreparedNativeRouteRegistrar<Dim>& system) const {
     static_assert(Dim == kNativeDimension);
-    require_system_v6();
+    require_system_v7();
     using RegisterSystemRoutesFn = void (*)(void*);
     const auto registrar = reinterpret_cast<RegisterSystemRoutesFn>(register_system_routes_symbol_);
     dynlib::invoke_with_host_exception([&] { registrar(static_cast<void*>(&system)); },
@@ -924,7 +924,7 @@ class ExternalBrickHandle {
   int nvars_ = -1;
   int provider_count_ = -1;
   int dimension_ = 0;
-  bool system_v6_compatible_ = false;
+  bool system_v7_compatible_ = false;
   void* register_system_routes_symbol_ = nullptr;
   void* register_amr_routes_symbol_ = nullptr;
   std::string id_;
@@ -955,7 +955,7 @@ class ExternalBrickHandle {
 //                interchangeable and are rejected before install;
 // @p reqs_csv    the CSV of model capabilities the brick requires (surfaced in the manifest).
 //
-// The emitted pops_brick_residual_v4 instantiates the exact-ranked Cartesian operator at the .so's
+// The emitted pops_brick_residual_v5 instantiates the exact-ranked Cartesian operator at the .so's
 // compile time: the flux and native rank are STATIC template arguments, never per-cell or runtime
 // dimension lookups. pops_brick_nvars / pops_brick_nproviders let the host validate its exact
 // state and qualified-provider carrier before an installer can publish a block.
@@ -970,7 +970,7 @@ class ExternalBrickHandle {
 #define POPS_DEFINE_EMPTY_EXTERNAL_RIEMANN_PROVIDER_ROUTES(Model)                            \
   static_assert(::pops::provider_count_for<Model, ::pops::kNativeDimension>() == 0,          \
                 "empty external Riemann provider hooks require a zero-provider model");      \
-  extern "C" void pops_register_provider_routes_system_v6(void* receiver) {                  \
+  extern "C" void pops_register_provider_routes_system_v7(void* receiver) {                  \
     auto* system = static_cast<                                                              \
         ::pops::runtime::system::PreparedNativeRouteRegistrar<::pops::kNativeDimension>*>(   \
         receiver);                                                                           \
@@ -994,9 +994,9 @@ class ExternalBrickHandle {
          "pops_brick_nvars,pops_brick_nproviders,pops_external_riemann_abi_version,"               \
          "pops_external_riemann_abi_key,pops_external_riemann_system_abi_version,"                 \
          "pops_external_riemann_system_abi_key,pops_external_riemann_dimension,"                   \
-         "pops_brick_residual_v4,pops_brick_install_system_v6,pops_brick_install_amr_v4,"          \
+         "pops_brick_residual_v5,pops_brick_install_system_v7,pops_brick_install_amr_v5,"          \
          "pops_brick_model_identity,pops_brick_kokkos_backend,"                                    \
-         "pops_brick_kokkos_version,pops_register_provider_routes_system_v6,"                      \
+         "pops_brick_kokkos_version,pops_register_provider_routes_system_v7,"                      \
          "pops_register_provider_routes_amr"});                                                    \
     return true;                                                                                   \
   }();                                                                                             \
@@ -1030,7 +1030,7 @@ class ExternalBrickHandle {
   extern "C" int pops_external_riemann_dimension() {                                               \
     return ::pops::kNativeDimension;                                                               \
   }                                                                                                \
-  extern "C" void pops_brick_install_system_v6(                                                    \
+  extern "C" void pops_brick_install_system_v7(                                                    \
       void* system, const char* name, const char* provider_consumer_qid, const char* limiter,      \
       const char* recon, const char* time, double gamma, int substeps, int evolve, int stride,     \
       double positivity_floor, double weno_epsilon) {                                              \
@@ -1045,7 +1045,7 @@ class ExternalBrickHandle {
         (id), name, provider_consumer_qid, limiter, recon, time, gamma, substeps, evolve != 0,     \
         stride, positivity_floor, weno_epsilon);                                                   \
   }                                                                                                \
-  extern "C" void pops_brick_install_amr_v4(                                                       \
+  extern "C" void pops_brick_install_amr_v5(                                                       \
       void* system, const char* name, const char* provider_consumer_qid, const char* limiter,      \
       const char* recon, const char* time, double gamma, int substeps, int stride,                 \
       double positivity_floor, double weno_epsilon) {                                              \
@@ -1057,7 +1057,7 @@ class ExternalBrickHandle {
         provider_consumer_qid, limiter, recon, time, gamma, substeps, stride, positivity_floor,    \
         weno_epsilon);                                                                             \
   }                                                                                                \
-  extern "C" void pops_brick_residual_v4(                                                          \
+  extern "C" void pops_brick_residual_v5(                                                          \
       const double* U, double* R, const double* provider_values, const int* shape,                 \
       const double* spacing, const int* periodic, const char* lim, int recon_prim,                 \
       double pos_floor, double weno_epsilon) {                                                     \

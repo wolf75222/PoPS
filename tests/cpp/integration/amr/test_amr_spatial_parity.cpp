@@ -3,14 +3,17 @@
 
 #include <gtest/gtest.h>
 
+#include "explicit_amr_program.hpp"
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/runtime/builders/compiled/dsl_block.hpp>
 #include <pops/runtime/builders/compiled/generated_system_block.hpp>
 
 #include <cmath>
 #include <cstddef>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -193,14 +196,18 @@ struct SpatialPair {
 SpatialPair evaluate_pair(const std::string& riemann, const std::string& reconstruction,
                           const std::vector<double>& state) {
   pops::System<Dim> uniform(system_config());
-  uniform.install_block_state_route("gas", "test.amr-spatial-parity/system/gas/state");
+  uniform.install_prepared_boundary_execution_lane(
+      std::make_shared<pops::ExecutionLane>(pops::ExecutionLane::duplicate_world_collectively(
+          "tests.amr-spatial-parity/uniform-runtime@1")));
+  uniform.install_block_state_route("gas", "tests.amr-spatial-parity/system/gas/state@1");
   uniform.seal_auxiliary_providers();
   pops::add_compiled_model<Dim>(uniform, "gas", EulerModel<Dim>{}, "minmod", riemann,
                                 reconstruction, "explicit", static_cast<double>(kGamma));
   uniform.set_state("gas", state);
 
   pops::AmrSystem<Dim> adaptive(amr_config());
-  adaptive.install_block_state_route("gas", "test.amr-spatial-parity/amr/gas/state");
+  pops::test::install_amr_runtime_authority(adaptive, "tests.amr-spatial-parity/amr-runtime@1");
+  adaptive.install_block_state_route("gas", "tests.amr-spatial-parity/amr/gas/state@1");
   pops::add_compiled_model<Dim>(adaptive, "gas", EulerModel<Dim>{}, "minmod", riemann,
                                 reconstruction, "explicit", static_cast<double>(kGamma), 1, 1, {},
                                 {}, 0.0, static_cast<double>(pops::kWenoEpsilon), false,

@@ -13,6 +13,7 @@ _codegen_exprs, _live_prims, _prim_block, _jac_entries
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 import json
 from typing import Any
 
@@ -59,7 +60,7 @@ def _ranked_axes(model: Any) -> tuple[str, ...]:
 def _axis_values(model: Any, values: Any, *, where: str) -> list:
     """Flatten one exact-ranked carrier in the physical-flux axis order."""
     axes = _ranked_axes(model)
-    if not isinstance(values, dict) or tuple(values) != axes:
+    if not isinstance(values, Mapping) or tuple(values) != axes:
         raise ValueError(
             "%s must cover the exact emitted axis set %s" % (where, axes)
         )

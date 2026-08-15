@@ -19,6 +19,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -286,6 +287,9 @@ struct PreparedSystemBlock {
   std::function<RecoveryReport(const double*, double*)> conservative_to_primitive;
   UniformCellRecovery batch_conservative_to_primitive;
   std::function<Real(const field_type&)> source_frequency;
+  /// Additive explicit Fickian inverse frequency q = 2 nu sum_a h_a^-2.  The runtime combines
+  /// it with transport before applying the user CFL, rather than treating it as a separate dt.
+  std::optional<Real> parabolic_frequency;
   std::function<Real(const field_type&)> stability_dt;
 };
 

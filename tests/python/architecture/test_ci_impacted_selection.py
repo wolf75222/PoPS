@@ -10,7 +10,7 @@ Ground-truth edges asserted below were verified by reading the source:
 * ``python/pops/runtime/_bind_adapters.py`` is imported directly by the final typed bind gate;
 * ``python/pops/numerics/riemann/waves.py`` is imported by
   ``test_wave_speed_providers.py``;
-* the codegen cross-test helper: ``test_dsl_cse.py`` imports sibling ``test_dsl_brick.py``;
+* the codegen cross-test helper: ``test_dsl_cse.py`` imports sibling ``test_dsl_compose.py``;
 * the LAZY (function-scope) edge ``pops.codegen._phases`` ->
   ``pops.runtime._bind_adapters`` must be captured, so a ``_bind_adapters`` change
   reaches the orchestration-dependent tests.
@@ -101,11 +101,11 @@ def test_bind_adapters_change_selects_bind_adapters_test():
 # --------------------------------------------------------------------------- #
 # Cross-test edge closure (both directions)                                    #
 # --------------------------------------------------------------------------- #
-def test_cross_test_forward_pulls_shared_brick_helper():
-    """Selecting the CSE test pulls the sibling brick helper it imports."""
+def test_cross_test_forward_pulls_shared_compose_helper():
+    """Selecting the CSE test pulls the sibling compose helper it imports."""
     _, edges = cic.test_imports(REPO_ROOT)
     importer = "tests/python/unit/codegen/test_dsl_cse.py"
-    helper = "tests/python/unit/codegen/test_dsl_brick.py"
+    helper = "tests/python/unit/codegen/test_dsl_compose.py"
     assert edges.get(importer) == {helper}
     selected = {importer}
     cic._close_cross_test(selected, edges)
@@ -113,9 +113,9 @@ def test_cross_test_forward_pulls_shared_brick_helper():
 
 
 def test_cross_test_reverse_pulls_dependents_of_shared_helper():
-    """Selecting the brick helper pulls its remaining sibling dependent."""
+    """Selecting the compose helper pulls its remaining sibling dependent."""
     _, edges = cic.test_imports(REPO_ROOT)
-    selected = {"tests/python/unit/codegen/test_dsl_brick.py"}
+    selected = {"tests/python/unit/codegen/test_dsl_compose.py"}
     cic._close_cross_test(selected, edges)
     assert "tests/python/unit/codegen/test_dsl_cse.py" in selected
 
@@ -195,7 +195,7 @@ def test_plan_python_direct_test_edit_pulls_cross_test_family(tmp_path):
     assert outputs["python_mode"] == "subset"
     assert "direct-test" in outputs["python_why"]
     assert importer in selected
-    assert "tests/python/unit/codegen/test_dsl_brick.py" in selected
+    assert "tests/python/unit/codegen/test_dsl_compose.py" in selected
 
 
 def test_plan_python_nested_suite_test_is_in_the_selection_universe(tmp_path):

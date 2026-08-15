@@ -1025,7 +1025,7 @@ class _RestartSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class RestartV3:
-    """Compatibility-named adapter over strict Uniform v7 / AMR v10 accepted-state payloads."""
+    """Compatibility-named adapter over strict Uniform v8 / AMR v10 accepted-state payloads."""
 
     __pops_ir_immutable__ = True
     bit_identical: bool = False

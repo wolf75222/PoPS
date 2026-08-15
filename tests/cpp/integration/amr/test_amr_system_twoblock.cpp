@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include "explicit_amr_program.hpp"
+
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
@@ -97,6 +99,7 @@ TEST(test_amr_system_twoblock, AcceptedStatesRollbackTogether) {
   constexpr int Dim = pops::kNativeDimension;
   const auto cfg = config<Dim>();
   pops::AmrSystem<Dim> system(cfg);
+  pops::test::install_amr_runtime_authority(system, "tests.amr.system-twoblock/rollback-runtime@1");
   system.install_block_state_route("a", "state/a");
   system.install_block_state_route("b", "state/b");
   install(system, "a");
@@ -132,6 +135,7 @@ TEST(test_amr_system_twoblock, SingleBlockIsTheNEqualsOneCarrierCase) {
   constexpr int Dim = pops::kNativeDimension;
   const auto cfg = config<Dim>();
   pops::AmrSystem<Dim> system(cfg);
+  pops::test::install_amr_runtime_authority(system, "tests.amr.system-twoblock/single-runtime@1");
   system.install_block_state_route("only", "state/only");
   install(system, "only");
   system.set_conservative_state("only", std::vector<double>(cells(cfg), 3.0));
@@ -149,6 +153,8 @@ TEST(test_amr_system_twoblock, MalformedConservationOwnerCannotPublishMaterializ
   constexpr int Dim = pops::kNativeDimension;
   const auto cfg = config<Dim>();
   pops::AmrSystem<Dim> system(cfg);
+  pops::test::install_amr_runtime_authority(system,
+                                            "tests.amr.system-twoblock/malformed-runtime@1");
   system.install_block_state_route("a", "state/a");
   system.install_block_state_route("b", "state/b");
   install(system, "a");

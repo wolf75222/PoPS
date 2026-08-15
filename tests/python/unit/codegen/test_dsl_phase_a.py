@@ -29,7 +29,7 @@ from tests.python.support.initial_states import euler_bubble_state
 from tests.python.support.physics_roles import FRAME, X_AXIS, Y_AXIS
 from tests.python.support.requirements import repo_include
 from test_dsl_coupled import compile_euler_artifact
-from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System, SystemConfig  # ADC-545 advanced runtime seam
 INCLUDE = repo_include()
 GAMMA = 1.6667
 
@@ -70,6 +70,18 @@ def build_euler_predef(name="euler_predef"):
 
 def initial_state(n):
     return euler_bubble_state(n, GAMMA)
+
+
+def system_config_2d(n):
+    """Return the complete exact-rank Cartesian authority for this uniform witness."""
+    config = SystemConfig()
+    config.shape = (n, n)
+    config.lower = (0.0, 0.0)
+    config.upper = (1.0, 1.0)
+    config.periodicity = (True, True)
+    config.boxes = (((0, 0), (n, n)),)
+    config.coordinate_system = "pops://coordinates/cartesian-2d@1"
+    return config
 
 
 def expect_raises(exc, fn, label):
@@ -132,7 +144,7 @@ def pure_python_checks():
 
     # add_equation : erreurs sur un CompiledModel FACTICE (pas de .so reel necessaire, les gardes
     # levent AVANT la frontiere C++).
-    sys = System(n=16, periodicity=(True, True))
+    sys = System(system_config_2d(16))
     fake = CompiledModel(so_path="/inexistant.so", backend="production",
                          cons_names=["rho", "rho_u", "rho_v", "E"],
                          cons_roles=["density", "momentum:0", "momentum:1", "energy"],
@@ -193,12 +205,15 @@ def modelspec_substeps_check():
     """substeps= doit etre forwarde pour un ModelSpec (pas seulement pour un CompiledModel) : la
     branche ModelSpec d'add_equation appelle _s.add_block DIRECTEMENT avec nsub (pas self.add_block,
     qui retomberait sur time.substeps et IGNORERAIT l'override). Verifie via un espion sur _s.add_block."""
-    s = System(n=16, periodicity=(True, True))
+    s = System(system_config_2d(16))
     spec = engine.Model(state=engine.FluidState("isothermal", cs2=1.0), transport=engine.IsothermalFlux(),
                      source=engine.NoSource(), elliptic=engine.ChargeDensity(charge=-1.0))
     calls = []
 
     class _Spy:
+        def spatial_shape(self):
+            return (16, 16)
+
         def add_block(self, *a):
             calls.append(a)
 

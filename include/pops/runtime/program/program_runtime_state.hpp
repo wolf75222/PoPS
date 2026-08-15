@@ -467,7 +467,6 @@ struct ProgramRuntimeState {
           balance_replay_active_(accepted.balance_replay_active_),
           balance_step_completed_(accepted.balance_step_completed_),
           balance_program_was_due_(accepted.balance_program_was_due_),
-          step_projections_(accepted.step_projections_),
           block_params_(accepted.block_params_),
           cache_(accepted.cache_),
           hist_(accepted.hist_),
@@ -495,7 +494,6 @@ struct ProgramRuntimeState {
     bool balance_replay_active_ = false;
     bool balance_step_completed_ = false;
     bool balance_program_was_due_ = false;
-    std::vector<std::string> step_projections_;
     std::map<int, RuntimeParams> block_params_;
     CacheManager<Dim> cache_;
     HistoryManager<Dim> hist_;
@@ -515,7 +513,6 @@ struct ProgramRuntimeState {
     static_assert(noexcept(diagnostics_.swap(prepared.diagnostics_)));
     static_assert(noexcept(step_balance_terms_.swap(prepared.step_balance_terms_)));
     static_assert(noexcept(automatic_balance_terms_.swap(prepared.automatic_balance_terms_)));
-    static_assert(noexcept(step_projections_.swap(prepared.step_projections_)));
     static_assert(noexcept(block_params_.swap(prepared.block_params_)));
     static_assert(std::is_nothrow_swappable_v<CacheManager<Dim>>);
     static_assert(std::is_nothrow_swappable_v<HistoryManager<Dim>>);
@@ -540,7 +537,6 @@ struct ProgramRuntimeState {
     balance_replay_active_ = prepared.balance_replay_active_;
     balance_step_completed_ = prepared.balance_step_completed_;
     balance_program_was_due_ = prepared.balance_program_was_due_;
-    step_projections_.swap(prepared.step_projections_);
     block_params_.swap(prepared.block_params_);
     std::swap(cache_, prepared.cache_);
     std::swap(hist_, prepared.hist_);

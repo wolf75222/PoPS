@@ -69,12 +69,109 @@ void expect_reductions() {
   EXPECT_DOUBLE_EQ(norm_inf(destination), Real{0});
 }
 
+template <int Dim>
+void expect_masked_local_max() {
+  const Box<Dim> domain = cube<Dim>(0, 1);
+  const BoxArray<Dim> layout(std::vector<Box<Dim>>{domain});
+  const auto distribution = Distribution<Dim>::replicated(layout, one_rank_space<Dim>());
+  HostMultiFab<Dim> field(layout, distribution, Index<Dim>{}, 1, Extent<Dim>{});
+  HostMultiFab<Dim> active(layout, distribution, Index<Dim>{}, 1, Extent<Dim>{});
+
+  fill_valid(field, Real{0},
+             [](const Index<Dim>& index, int) { return index[0] == 0 ? Real{4} : Real{99}; });
+  fill_valid(active, Real{0},
+             [](const Index<Dim>& index, int) { return index[0] == 0 ? Real{1} : Real{0}; });
+  const MaskedMaxLocalResult finite = reduce_masked_max_local(field, 0, &active);
+  EXPECT_EQ(finite.maximum, Real{4});
+  EXPECT_TRUE(finite.has_active);
+  EXPECT_FALSE(finite.has_invalid);
+
+  fill_valid(field, Real{0}, [](const Index<Dim>& index, int) {
+    return index[0] == 0 ? Real{4} : std::numeric_limits<Real>::quiet_NaN();
+  });
+  const MaskedMaxLocalResult inactive_nan = reduce_masked_max_local(field, 0, &active);
+  EXPECT_EQ(inactive_nan.maximum, Real{4});
+  EXPECT_FALSE(inactive_nan.has_invalid);
+
+  for (const Real invalid :
+       {std::numeric_limits<Real>::quiet_NaN(), std::numeric_limits<Real>::infinity(),
+        -std::numeric_limits<Real>::infinity(), Real{-1}}) {
+    fill_valid(field, Real{0}, [invalid](const Index<Dim>& index, int) {
+      return index[0] == 0 ? invalid : Real{0};
+    });
+    const MaskedMaxLocalResult active_invalid = reduce_masked_max_local(field, 0, &active);
+    EXPECT_TRUE(active_invalid.has_active);
+    EXPECT_TRUE(active_invalid.has_invalid);
+  }
+
+  active.set_val(Real{0});
+  fill_valid(field, Real{0},
+             [](const Index<Dim>&, int) { return std::numeric_limits<Real>::quiet_NaN(); });
+  const MaskedMaxLocalResult empty = reduce_masked_max_local(field, 0, &active);
+  EXPECT_EQ(empty.maximum, -std::numeric_limits<Real>::infinity());
+  EXPECT_FALSE(empty.has_active);
+  EXPECT_FALSE(empty.has_invalid);
+
+  HostMultiFab<Dim> two_component_mask(layout, distribution, Index<Dim>{}, 2, Extent<Dim>{});
+  EXPECT_THROW((void)reduce_masked_max_local(field, 0, &two_component_mask), std::invalid_argument);
+}
+
+template <int Dim>
+void expect_active_local_extrema() {
+  const Box<Dim> domain = cube<Dim>(0, 2);
+  const BoxArray<Dim> layout(std::vector<Box<Dim>>{domain});
+  const auto distribution = Distribution<Dim>::replicated(layout, one_rank_space<Dim>());
+  HostMultiFab<Dim> field(layout, distribution, Index<Dim>{}, 1, Extent<Dim>{});
+  HostMultiFab<Dim> active(layout, distribution, Index<Dim>{}, 1, Extent<Dim>{});
+
+  fill_valid(field, Real{0}, [](const Index<Dim>& index, int) {
+    if (index[0] == 0)
+      return Real{4};
+    return index[0] == 1 ? Real{99} : Real{-99};
+  });
+  fill_valid(active, Real{0},
+             [](const Index<Dim>& index, int) { return index[0] == 0 ? Real{1} : Real{0}; });
+  EXPECT_EQ(reduce_active_max_local(field, 0, &active), Real{4});
+  EXPECT_EQ(reduce_active_min_local(field, 0, &active), Real{4});
+  EXPECT_EQ(reduce_active_norm_inf_local(field, 0, &active), Real{4});
+
+  fill_valid(field, Real{0}, [](const Index<Dim>& index, int) {
+    if (index[0] == 0)
+      return Real{4};
+    return index[0] == 1 ? Real{-3} : Real{99};
+  });
+  fill_valid(active, Real{0},
+             [](const Index<Dim>& index, int) { return index[0] <= 1 ? Real{1} : Real{0}; });
+  EXPECT_EQ(reduce_active_max_local(field, 0, &active), Real{4});
+  EXPECT_EQ(reduce_active_min_local(field, 0, &active), Real{-3});
+  EXPECT_EQ(reduce_active_norm_inf_local(field, 0, &active), Real{4});
+
+  active.set_val(Real{0});
+  const Real all_inactive_max = reduce_active_max_local(field, 0, &active);
+  const Real all_inactive_min = reduce_active_min_local(field, 0, &active);
+  EXPECT_EQ(all_inactive_max, -std::numeric_limits<Real>::infinity());
+  EXPECT_EQ(all_inactive_min, std::numeric_limits<Real>::infinity());
+  EXPECT_EQ(reduce_active_norm_inf_local(field, 0, &active), Real{0});
+}
+
 }  // namespace
 
 TEST(test_reduce, arithmetic_and_collectives_are_dimension_generic) {
   expect_reductions<1>();
   expect_reductions<2>();
   expect_reductions<3>();
+}
+
+TEST(test_reduce, masked_local_max_ignores_inactive_values_in_every_dimension) {
+  expect_masked_local_max<1>();
+  expect_masked_local_max<2>();
+  expect_masked_local_max<3>();
+}
+
+TEST(test_reduce, active_local_extrema_use_raw_active_domain_identity_in_every_dimension) {
+  expect_active_local_extrema<1>();
+  expect_active_local_extrema<2>();
+  expect_active_local_extrema<3>();
 }
 
 TEST(test_reduce, relative_cell_measure_uses_exact_nd_metric_identity) {

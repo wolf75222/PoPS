@@ -14,6 +14,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace pops {
 
@@ -22,6 +23,14 @@ template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::m
 struct RelativeCellMeasure {
   const MultiFab<Dim, MemorySpace>* active_cells = nullptr;
   const MultiFab<Dim, MemorySpace>* inverse_volume_fraction = nullptr;
+};
+
+/// Allocation-free local summary of an active-cell maximum.  ``has_invalid`` is raised for a
+/// negative or non-finite active status: generated pointwise status fields encode severities.
+struct MaskedMaxLocalResult {
+  Real maximum = -std::numeric_limits<Real>::infinity();
+  bool has_active = false;
+  bool has_invalid = false;
 };
 
 namespace mf_arith_detail {
@@ -115,6 +124,46 @@ struct MaxKernel {
   FieldView<const Real, Dim> values{};
   int component = 0;
   POPS_HD Real operator()(const Index<Dim>& index) const { return values(index, component); }
+};
+
+template <int Dim>
+struct MaskedHasActiveKernel {
+  FieldView<const Real, Dim> active{};
+  bool has_mask = false;
+
+  POPS_HD Real operator()(const Index<Dim>& index) const {
+    return !has_mask || active(index, 0) >= Real{0.5} ? Real{1} : Real{0};
+  }
+};
+
+template <int Dim>
+struct MaskedInvalidKernel {
+  FieldView<const Real, Dim> values{};
+  FieldView<const Real, Dim> active{};
+  int component = 0;
+  bool has_mask = false;
+
+  POPS_HD Real operator()(const Index<Dim>& index) const {
+    if (has_mask && active(index, 0) < Real{0.5})
+      return Real{0};
+    const Real value = values(index, component);
+    return !Kokkos::isfinite(value) || value < Real{0} ? Real{1} : Real{0};
+  }
+};
+
+template <int Dim>
+struct MaskedFiniteMaxKernel {
+  FieldView<const Real, Dim> values{};
+  FieldView<const Real, Dim> active{};
+  int component = 0;
+  bool has_mask = false;
+
+  POPS_HD Real operator()(const Index<Dim>& index) const {
+    if (has_mask && active(index, 0) < Real{0.5})
+      return -std::numeric_limits<Real>::infinity();
+    const Real value = values(index, component);
+    return Kokkos::isfinite(value) ? value : -std::numeric_limits<Real>::infinity();
+  }
 };
 
 template <int Dim>
@@ -384,6 +433,50 @@ Real reduce_max_local(const MultiFab<Dim, MemorySpace>& field, int component = 0
   return result;
 }
 
+/// Reduce a valid-cell maximum locally, optionally excluding cells whose mask is below ``0.5``.
+/// This helper deliberately performs no MPI communication and never allocates owning storage.
+template <int Dim, class MemorySpace>
+MaskedMaxLocalResult reduce_masked_max_local(
+    const MultiFab<Dim, MemorySpace>& field, int component = 0,
+    const MultiFab<Dim, MemorySpace>* active_cells = nullptr) {
+  mf_arith_detail::require_component(field, component, "pops::reduce_masked_max_local");
+  if (active_cells != nullptr) {
+    if (field.layout() != active_cells->layout() ||
+        field.distribution() != active_cells->distribution() ||
+        field.local_rank() != active_cells->local_rank() ||
+        field.local_size() != active_cells->local_size())
+      throw std::invalid_argument(
+          "pops::reduce_masked_max_local requires the same exact valid-cell layout");
+    if (active_cells->ncomp() != 1)
+      throw std::invalid_argument("pops::reduce_masked_max_local mask requires one component");
+  }
+
+  MaskedMaxLocalResult result;
+  const bool has_mask = active_cells != nullptr;
+  for (std::size_t local = 0; local < field.local_size(); ++local) {
+    const FieldView<const Real, Dim> active =
+        has_mask ? std::as_const(active_cells->fab(local)).view() : FieldView<const Real, Dim>{};
+    const FieldView<const Real, Dim> values = std::as_const(field.fab(local)).view();
+    const Box<Dim>& box = field.box(local);
+    if (box.empty())
+      continue;
+    const bool local_has_active =
+        for_each_cell_reduce_max(
+            box, mf_arith_detail::MaskedHasActiveKernel<Dim>{active, has_mask}) > Real{0.5};
+    if (!local_has_active)
+      continue;
+    result.has_active = true;
+    result.has_invalid =
+        result.has_invalid ||
+        for_each_cell_reduce_max(box, mf_arith_detail::MaskedInvalidKernel<Dim>{
+                                          values, active, component, has_mask}) > Real{0.5};
+    result.maximum = std::max(
+        result.maximum, for_each_cell_reduce_max(box, mf_arith_detail::MaskedFiniteMaxKernel<Dim>{
+                                                          values, active, component, has_mask}));
+  }
+  return result;
+}
+
 template <int Dim, class MemorySpace>
 Real reduce_min_local(const MultiFab<Dim, MemorySpace>& field, int component = 0) {
   mf_arith_detail::require_component(field, component, "pops::reduce_min_local");
@@ -417,6 +510,136 @@ Real dot_local(const MultiFab<Dim, MemorySpace>& left, const MultiFab<Dim, Memor
     result += for_each_cell_reduce_sum(
         left.box(local), mf_arith_detail::DotKernel<Dim>{left.fab(local).view(),
                                                          right.fab(local).view(), component});
+  return result;
+}
+
+/// Reduce raw algebra over the active valid-cell subset without applying a cut-cell volume
+/// fraction.  Generated Program reductions use these local helpers and perform their collective on
+/// the authenticated execution lane; physical integrals remain the responsibility of the measured
+/// ``reduce_*`` overloads below.
+template <int Dim, class MemorySpace>
+Real reduce_active_sum_local(const MultiFab<Dim, MemorySpace>& field, int component,
+                             const MultiFab<Dim, MemorySpace>* active_cells) {
+  if (active_cells == nullptr)
+    return reduce_sum_local(field, component);
+  const RelativeCellMeasure<Dim, MemorySpace> measure{active_cells, nullptr};
+  mf_arith_detail::require_component(field, component, "pops::reduce_active_sum_local");
+  mf_arith_detail::validate_measure(field, measure, "pops::reduce_active_sum_local");
+  Real result = 0;
+  for (std::size_t local = 0; local < field.local_size(); ++local)
+    result += for_each_cell_reduce_sum(
+        field.box(local),
+        mf_arith_detail::MeasuredValueKernel<Dim>{
+            field.fab(local).view(), active_cells->fab(local).view(), {}, component, false, false});
+  return result;
+}
+
+template <int Dim, class MemorySpace>
+Real reduce_active_abs_sum_local(const MultiFab<Dim, MemorySpace>& field, int component,
+                                 const MultiFab<Dim, MemorySpace>* active_cells) {
+  if (active_cells == nullptr)
+    return reduce_abs_sum_local(field, component);
+  const RelativeCellMeasure<Dim, MemorySpace> measure{active_cells, nullptr};
+  mf_arith_detail::require_component(field, component, "pops::reduce_active_abs_sum_local");
+  mf_arith_detail::validate_measure(field, measure, "pops::reduce_active_abs_sum_local");
+  Real result = 0;
+  for (std::size_t local = 0; local < field.local_size(); ++local)
+    result += for_each_cell_reduce_sum(
+        field.box(local),
+        mf_arith_detail::MeasuredValueKernel<Dim>{
+            field.fab(local).view(), active_cells->fab(local).view(), {}, component, true, false});
+  return result;
+}
+
+template <int Dim, class MemorySpace>
+Real reduce_active_max_local(const MultiFab<Dim, MemorySpace>& field, int component,
+                             const MultiFab<Dim, MemorySpace>* active_cells) {
+  if (active_cells == nullptr)
+    return reduce_max_local(field, component);
+  const RelativeCellMeasure<Dim, MemorySpace> measure{active_cells, nullptr};
+  mf_arith_detail::require_component(field, component, "pops::reduce_active_max_local");
+  mf_arith_detail::validate_measure(field, measure, "pops::reduce_active_max_local");
+  Real result = -std::numeric_limits<Real>::infinity();
+  for (std::size_t local = 0; local < field.local_size(); ++local) {
+    const Box<Dim>& box = field.box(local);
+    if (box.empty())
+      continue;
+    const bool local_has_active =
+        for_each_cell_reduce_max(box, mf_arith_detail::MaskedHasActiveKernel<Dim>{
+                                          active_cells->fab(local).view(), true}) > Real{0.5};
+    if (!local_has_active)
+      continue;
+    result = std::max(result, for_each_cell_reduce_max(
+                                  box, mf_arith_detail::ActiveMaxKernel<Dim>{
+                                           field.fab(local).view(), active_cells->fab(local).view(),
+                                           component, false, false}));
+  }
+  return result;
+}
+
+template <int Dim, class MemorySpace>
+Real reduce_active_min_local(const MultiFab<Dim, MemorySpace>& field, int component,
+                             const MultiFab<Dim, MemorySpace>* active_cells) {
+  if (active_cells == nullptr)
+    return reduce_min_local(field, component);
+  const RelativeCellMeasure<Dim, MemorySpace> measure{active_cells, nullptr};
+  mf_arith_detail::require_component(field, component, "pops::reduce_active_min_local");
+  mf_arith_detail::validate_measure(field, measure, "pops::reduce_active_min_local");
+  Real result = std::numeric_limits<Real>::infinity();
+  for (std::size_t local = 0; local < field.local_size(); ++local) {
+    const Box<Dim>& box = field.box(local);
+    if (box.empty())
+      continue;
+    const bool local_has_active =
+        for_each_cell_reduce_max(box, mf_arith_detail::MaskedHasActiveKernel<Dim>{
+                                          active_cells->fab(local).view(), true}) > Real{0.5};
+    if (!local_has_active)
+      continue;
+    const Real negated = for_each_cell_reduce_max(
+        box, mf_arith_detail::ActiveMaxKernel<Dim>{
+                 field.fab(local).view(), active_cells->fab(local).view(), component, true, false});
+    result = std::min(result, -negated);
+  }
+  return result;
+}
+
+template <int Dim, class MemorySpace>
+Real reduce_active_norm_inf_local(const MultiFab<Dim, MemorySpace>& field, int component,
+                                  const MultiFab<Dim, MemorySpace>* active_cells) {
+  if (active_cells == nullptr)
+    return norm_inf(field, component);
+  const RelativeCellMeasure<Dim, MemorySpace> measure{active_cells, nullptr};
+  mf_arith_detail::require_component(field, component, "pops::reduce_active_norm_inf_local");
+  mf_arith_detail::validate_measure(field, measure, "pops::reduce_active_norm_inf_local");
+  Real result = 0;
+  for (std::size_t local = 0; local < field.local_size(); ++local)
+    result = std::max(
+        result, for_each_cell_reduce_max(
+                    field.box(local), mf_arith_detail::ActiveMaxKernel<Dim>{
+                                          field.fab(local).view(), active_cells->fab(local).view(),
+                                          component, false, true}));
+  return result;
+}
+
+template <int Dim, class MemorySpace>
+Real dot_active_local(const MultiFab<Dim, MemorySpace>& left,
+                      const MultiFab<Dim, MemorySpace>& right, int component,
+                      const MultiFab<Dim, MemorySpace>* active_cells) {
+  if (active_cells == nullptr)
+    return dot_local(left, right, component);
+  mf_arith_detail::require_same_layout(left, right, "pops::dot_active_local");
+  const RelativeCellMeasure<Dim, MemorySpace> measure{active_cells, nullptr};
+  mf_arith_detail::require_component(left, component, "pops::dot_active_local");
+  mf_arith_detail::validate_measure(left, measure, "pops::dot_active_local");
+  Real result = 0;
+  for (std::size_t local = 0; local < left.local_size(); ++local)
+    result += for_each_cell_reduce_sum(
+        left.box(local), mf_arith_detail::MeasuredDotKernel<Dim>{left.fab(local).view(),
+                                                                 right.fab(local).view(),
+                                                                 active_cells->fab(local).view(),
+                                                                 {},
+                                                                 component,
+                                                                 false});
   return result;
 }
 

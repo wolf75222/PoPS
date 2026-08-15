@@ -113,6 +113,8 @@ AmrSystemConfig<Dim> make_cfg(int n) {
     cfg.lower[axis] = Real(0);
     cfg.upper[axis] = Real(1);
     cfg.periodicity[axis] = true;
+    cfg.transition_buffers.front()[axis] = 1;
+    cfg.transition_lookaheads.front()[axis] = 0;
   }
   cfg.level_count = 2;
   cfg.regrid_every = 4;
@@ -139,6 +141,8 @@ struct Snap {
   double initial_mass = 0;
   int n_patches = 0;
   int n_levels = 0;
+  std::int64_t refined_cells = 0;
+  std::int64_t fine_domain_cells = 0;
   int bootstrap_regrid_count = 0;
   int regrid_count = 0;
   int cadence_regrid_count = 0;
@@ -163,14 +167,12 @@ Snap run(AmrSystem<Dim>& s, int nsteps) {
   s.set_temporal_relations({2}, {1}, {"integral_only"});
   s.set_poisson("charge_density", "geometric_mg");
   test::install_prepared_threshold_union(s, {{"gas", "rho", 1.2}});
-  auto context = test::install_forward_euler_program_context(s);
+  auto context = test::install_forward_euler_program_context(s, true);
   context->declare_clock_relation(kPrimaryClock, kFineClock, 2);
-  using FluxBudget = typename AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
-  s.install_prepared_amr_program_flux_expression_budget(
-      "tests.amr-riemann-native/program/forward-euler@1", std::vector<FluxBudget>{{1, 1}}, 0, 0);
 
-  // mass() materializes the engine and performs the automatic initial hierarchy bootstrap.  The
-  // cadence witness must therefore advance strictly after this baseline, not merely be non-zero.
+  // Installing the explicit Program materializes the engine and performs the automatic initial
+  // hierarchy bootstrap.  The cadence witness must therefore advance strictly after this baseline,
+  // not merely be non-zero.
   const double initial_mass = s.mass();
   const int bootstrap_regrid_count = s.checkpoint_regrid_count();
   const double dt = 2e-4;
@@ -183,6 +185,11 @@ Snap run(AmrSystem<Dim>& s, int nsteps) {
   snap.initial_mass = initial_mass;
   snap.n_patches = s.n_patches();
   snap.n_levels = s.n_levels();
+  if (snap.n_levels >= 2) {
+    for (const pops::Box<Dim>& patch : s.prepared_amr_block_state(0, 1).layout().boxes())
+      snap.refined_cells += patch.numPts();
+    snap.fine_domain_cells = s.prepared_amr_level_geometry(1).domain().numPts();
+  }
   snap.bootstrap_regrid_count = bootstrap_regrid_count;
   snap.regrid_count = s.checkpoint_regrid_count();
   snap.cadence_regrid_count = snap.regrid_count - bootstrap_regrid_count;
@@ -211,7 +218,7 @@ Snap run(AmrSystem<Dim>& s, int nsteps) {
     } else if (row[10].ends_with("_fine")) {
       ++snap.fine_flux_fragments;
       snap.saw_fine_dt = snap.saw_fine_dt || std::fabs(duration - dt / 2.0) < 1e-12;
-      if (row[7] == "2" && row[6] == "0")
+      if (row[7] == "1" && row[6] == "0")
         snap.fine_phase_mask |= 1;
       if (row[7] == "2" && row[6] == "1")
         snap.fine_phase_mask |= 2;
@@ -312,7 +319,9 @@ static int pops_run_test_amr_riemann_native(int argc, char** argv) {
   (void)argv;
 #endif
   const int n = 64;
-  const int nsteps = 12;
+  // Exercise two cadence regrids (steps 4 and 8), then retain one complete accepted subcycling
+  // witness on the live topology instead of sampling immediately after the step-12 invalidation.
+  const int nsteps = 10;
   const std::vector<double> initial_state = bubble_state<kDim>(n);
 
   int fails = 0;
@@ -358,6 +367,9 @@ static int pops_run_test_amr_riemann_native(int argc, char** argv) {
     std::snprintf(w, sizeof w, "[%s/%s/%s] hierarchie AMR et patches fins reels", riem, recon,
                   route);
     chk(snap.n_levels >= 2 && snap.n_patches > 0, w);
+    std::snprintf(w, sizeof w, "[%s/%s/%s] interface coarse-fine strictement partielle", riem,
+                  recon, route);
+    chk(snap.refined_cells > 0 && snap.refined_cells < snap.fine_domain_cells, w);
     std::snprintf(w, sizeof w, "[%s/%s/%s] regrid cadence apres bootstrap", riem, recon, route);
     chk(snap.cadence_regrid_count > 0 && snap.regrid_count > snap.bootstrap_regrid_count, w);
     std::snprintf(w, sizeof w, "[%s/%s/%s] horloges acceptees 1:2", riem, recon, route);

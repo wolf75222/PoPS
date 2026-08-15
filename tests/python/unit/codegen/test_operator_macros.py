@@ -1,6 +1,8 @@
 """Final operator-first time factories compose exact typed handles into ordinary Programs."""
 from tests.python.support.requirements import require_native_or_skip
+from pops.codegen.module_lowering import lower_and_validate
 from pops.codegen.program_codegen import emit_cpp_program
+from pops.model import ProviderPack
 import inspect
 
 import pytest
@@ -35,6 +37,15 @@ def _model(name, gain=1.0):
 
 def _handle(m, name):
     return m.module.operator_handle(name)
+
+
+def _lowered_emit_model(model):
+    """Use the compiler-authenticated facade, never an unbound authoring model."""
+    emit_model, source_module = lower_and_validate(model, facade=model)
+    assert emit_model is model
+    assert source_module is model.module
+    assert type(emit_model._m._auxiliary_provider_pack) is ProviderPack
+    return emit_model
 
 
 def _references(m, name="plasma"):
@@ -132,7 +143,7 @@ def test_factory_reused_across_modules():
             explicit_operator=_handle(model, "explicit_rhs"),
             implicit_operator=_handle(model, "implicit"),
         )
-        return emit_cpp_program(program, model=model)
+        return emit_cpp_program(program, model=_lowered_emit_model(model))
 
     def no_field_model(name, gain):
         model = Model(name)
@@ -197,7 +208,10 @@ def test_field_reject_attempt_codegen_filters_selected_statuses_and_fails_closed
     program = _field_factory_builders(model)["RungeKutta"](
         RejectAttempt(statuses=("iteration_limit", "breakdown")))
     source = emit_cpp_program(
-        program, model=model, field_plans=codegen_field_plans(program))
+        program,
+        model=_lowered_emit_model(model),
+        field_plans=codegen_field_plans(program),
+    )
     start = source.index("if (!field_report_")
     end = source.index(".action_name()", start)
     guard = source[start:end]

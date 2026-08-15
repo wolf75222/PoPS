@@ -227,10 +227,16 @@ class PreparedAmrGhostFill {
   }
 
  private:
+  struct InterpolationSlot {
+    Box<Dim> destination{};
+    ::pops::amr::transfer::IndexMapping<Dim> mapping{};
+    std::optional<::pops::amr::transfer::PreparedTransfer<Dim>> transfer{};
+  };
+
   struct ScratchPatch {
     std::size_t fine_patch = 0;
     Fab<Dim, MemorySpace> coarse{};
-    std::vector<::pops::amr::transfer::PreparedTransfer<Dim>> interpolations{};
+    std::vector<InterpolationSlot> interpolations{};
   };
 
   using job_type = CoarseFineGhostJob<Dim>;
@@ -299,7 +305,6 @@ class PreparedAmrGhostFill {
 
   struct State {
     const field_type* coarse = nullptr;
-    field_type* fine = nullptr;
     const ExecutionLane* lane = nullptr;
     std::optional<ExecutionLane::ImmutableBorrow> lane_borrow{};
     AmrGhostFillPreparation<Dim> preparation{};
@@ -312,7 +317,6 @@ class PreparedAmrGhostFill {
     device_buffer_type local_buffer{};
     std::vector<PeerStorage> peers{};
     std::vector<const Real*> coarse_storage{};
-    std::vector<const Real*> fine_storage{};
     std::string exact_contract{};
     bool sealed = false;
 #ifdef POPS_HAS_MPI
@@ -341,7 +345,6 @@ class PreparedAmrGhostFill {
         throw std::invalid_argument(
             "prepared AMR ghost fill lane differs from the field process-coordinate space");
       coarse = &coarse_field;
-      fine = &fine_field;
       lane = &requested_lane;
       preparation = std::move(requested);
       const auto provider =
@@ -364,32 +367,27 @@ class PreparedAmrGhostFill {
           *coarse_fine, preparation.topology, preparation, requested_lane.identity());
     }
 
-    void prepare_storage() {
+    void prepare_storage(field_type& fine_field) {
       lane_borrow.emplace(lane->borrow_immutably());
       scratch_by_fine_patch.assign(coarse_fine->fine_layout().size(), no_scratch);
-      scratch.reserve(fine->local_size());
+      scratch.reserve(fine_field.local_size());
       for (const auto& plan : coarse_fine->patch_plans()) {
-        if (!fine->contains_local(plan.fine_patch) || plan.coarse_staging_region.empty())
+        if (!fine_field.contains_local(plan.fine_patch) || plan.coarse_staging_region.empty())
           continue;
         scratch_by_fine_patch[plan.fine_patch] = scratch.size();
         ScratchPatch patch{};
         patch.fine_patch = plan.fine_patch;
         patch.coarse =
-            Fab<Dim, MemorySpace>(plan.coarse_staging_region, fine->ncomp(), Extent<Dim>{});
+            Fab<Dim, MemorySpace>(plan.coarse_staging_region, fine_field.ncomp(), Extent<Dim>{});
         patch.interpolations.reserve(plan.fine_destination_regions.size());
         scratch.push_back(std::move(patch));
       }
 
-      const auto provider =
-          ::pops::amr::transfer::TransferProvider<Dim, ::pops::amr::transfer::Centering::Cell>(
-              preparation.interpolation_kind);
       for (const auto& plan : coarse_fine->patch_plans()) {
         const std::size_t scratch_index = scratch_by_fine_patch[plan.fine_patch];
         if (scratch_index == no_scratch)
           continue;
         ScratchPatch& patch = scratch[scratch_index];
-        const auto source = std::as_const(patch.coarse).view();
-        auto destination = fine->fab_global(plan.fine_patch).view();
         for (const auto& region : plan.fine_destination_regions) {
           ::pops::amr::transfer::IndexMapping<Dim> mapping{};
           mapping.coarse_origin = preparation.coarse_domain.lo;
@@ -404,15 +402,13 @@ class PreparedAmrGhostFill {
             mapping.fine_origin[axis] = static_cast<int>(origin);
           }
           patch.interpolations.push_back(
-              provider.prepare(source, destination, region.destination, preparation.ratio, mapping,
-                               ::pops::amr::transfer::ComponentRange{0, 0, fine->ncomp()}));
+              InterpolationSlot{region.destination, mapping, std::nullopt});
         }
       }
 
       local_buffer = device_buffer_type("pops_amr_parent_local", coarse_fine->local_elements());
       prepare_peers();
       coarse_storage = prepared_amr_ghost_detail::storage_identity(*coarse);
-      fine_storage = prepared_amr_ghost_detail::storage_identity(*fine);
     }
 
     void prepare_peers() {
@@ -508,11 +504,10 @@ class PreparedAmrGhostFill {
     void require_binding(field_type& requested_fine, std::uint64_t topology_generation,
                          std::uint64_t materialization_generation,
                          const ExecutionLane& requested_lane) const {
-      long invalid = sealed || &requested_fine != fine || &requested_lane != lane ||
+      long invalid = sealed || &requested_lane != lane ||
                              topology_generation != preparation.topology_generation ||
                              materialization_generation != preparation.materialization_generation ||
-                             !prepared_amr_ghost_detail::storage_matches(*coarse, coarse_storage) ||
-                             !prepared_amr_ghost_detail::storage_matches(*fine, fine_storage)
+                             !prepared_amr_ghost_detail::storage_matches(*coarse, coarse_storage)
                          ? 1L
                          : 0L;
       try {
@@ -524,6 +519,39 @@ class PreparedAmrGhostFill {
       if (!gate(invalid))
         throw std::invalid_argument(
             "prepared AMR ghost fill is stale for the requested hierarchy materialization");
+    }
+
+    void rebind_parent_interpolations(field_type& requested_fine) {
+      long binding_failure = 0;
+      std::exception_ptr binding_error;
+      try {
+        const auto provider =
+            ::pops::amr::transfer::TransferProvider<Dim, ::pops::amr::transfer::Centering::Cell>(
+                preparation.interpolation_kind);
+        const auto components = ::pops::amr::transfer::ComponentRange{0, 0, coarse_fine->ncomp()};
+        for (ScratchPatch& patch : scratch) {
+          const auto source = std::as_const(patch.coarse).view();
+          auto destination = requested_fine.fab_global(patch.fine_patch).view();
+          for (InterpolationSlot& slot : patch.interpolations)
+            slot.transfer.emplace(provider.prepare(source, destination, slot.destination,
+                                                   preparation.ratio, slot.mapping, components));
+        }
+      } catch (...) {
+        binding_failure = 1;
+        binding_error = std::current_exception();
+      }
+      if (!gate(binding_failure)) {
+        release_parent_interpolations();
+        if (binding_error)
+          std::rethrow_exception(binding_error);
+        throw std::runtime_error("prepared AMR ghost interpolation rebinding failed collectively");
+      }
+    }
+
+    void release_parent_interpolations() noexcept {
+      for (ScratchPatch& patch : scratch)
+        for (InterpolationSlot& slot : patch.interpolations)
+          slot.transfer.reset();
     }
 
     void gather_parent() {
@@ -671,8 +699,12 @@ class PreparedAmrGhostFill {
       long publication_failure = 0;
       try {
         for (ScratchPatch& patch : scratch)
-          for (const auto& interpolation : patch.interpolations)
-            for_each_cell(interpolation.destination_region(), interpolation);
+          for (const InterpolationSlot& slot : patch.interpolations) {
+            if (!slot.transfer)
+              throw std::logic_error(
+                  "prepared AMR ghost interpolation was not rebound to its destination");
+            for_each_cell(slot.transfer->destination_region(), *slot.transfer);
+          }
         Kokkos::fence();
       } catch (...) {
         publication_failure = 1;
@@ -687,14 +719,21 @@ class PreparedAmrGhostFill {
                  std::uint64_t materialization_generation, const ExecutionLane& requested_lane) {
       require_binding(requested_fine, topology_generation, materialization_generation,
                       requested_lane);
-      gather_parent();
-      if (same_level_exchange)
-        same_level_exchange->begin(requested_fine, requested_lane);
-      interpolate_parent_ghosts();
-      if (same_level_exchange)
-        same_level_exchange->complete(requested_fine, requested_lane);
-      else
-        fill_boundary(requested_fine, *same_level);
+      rebind_parent_interpolations(requested_fine);
+      try {
+        gather_parent();
+        if (same_level_exchange)
+          same_level_exchange->begin(requested_fine, requested_lane);
+        interpolate_parent_ghosts();
+        if (same_level_exchange)
+          same_level_exchange->complete(requested_fine, requested_lane);
+        else
+          fill_boundary(requested_fine, *same_level);
+      } catch (...) {
+        release_parent_interpolations();
+        throw;
+      }
+      release_parent_interpolations();
     }
   };
 
@@ -748,7 +787,7 @@ PreparedAmrGhostFill<Dim, MemorySpace> prepare_amr_ghost_fill(
   long allocation_failure = 0;
   std::exception_ptr allocation_error;
   try {
-    state->prepare_storage();
+    state->prepare_storage(fine);
   } catch (...) {
     allocation_failure = 1;
     allocation_error = std::current_exception();

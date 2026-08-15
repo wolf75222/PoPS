@@ -121,6 +121,9 @@ std::string loader_source() {
 #include <memory>
 #include <stdexcept>
 #include <utility>
+#if !defined(POPS_RUNTIME_SHARED_EXCEPTION_ABI)
+#error "synthetic Program loader requires the shared runtime exception ABI"
+#endif
 namespace pops_generated {
 template <int Dim>
 struct RelaxingAdvection {
@@ -342,6 +345,7 @@ void build_refined_system(pops::AmrSystem<Dim>& system, const std::string& share
   // The real loader authenticates the Program block table, hash and four flux-expression budget
   // symbols before it calls the artifact installer and materializes the hierarchy.
   system.install_program(shared_object);
+  system.mark_bound();
   system.begin_bootstrap_plan();
   (void)system.materialize_bootstrap_action(kStateRoute, "initialize_level_zero",
                                             "bound_level_zero", 0);
@@ -381,6 +385,40 @@ double max_departure_from_equilibrium(const std::vector<double>& values) {
   return result;
 }
 
+std::vector<std::size_t> covered_level_indices(pops::AmrSystem<Dim>& system, int level) {
+  const pops::Box<Dim>& domain = system.prepared_amr_level_geometry(level).domain();
+  const auto& boxes = system.prepared_amr_block_state(0, level).layout().boxes();
+  std::vector<std::size_t> indices;
+  for (const pops::Box<Dim>& patch : boxes) {
+    indices.reserve(indices.size() + static_cast<std::size_t>(patch.numPts()));
+    for (std::int64_t ordinal = 0; ordinal < patch.numPts(); ++ordinal) {
+      std::int64_t remaining = ordinal;
+      pops::Index<Dim> cell{};
+      for (int axis = 0; axis < Dim; ++axis) {
+        cell[axis] = patch.lo[axis] + remaining % patch.length(axis);
+        remaining /= patch.length(axis);
+      }
+      std::size_t linear = 0;
+      std::size_t stride = 1;
+      for (int axis = 0; axis < Dim; ++axis) {
+        linear += static_cast<std::size_t>(cell[axis] - domain.lo[axis]) * stride;
+        stride *= static_cast<std::size_t>(domain.length(axis));
+      }
+      indices.push_back(linear);
+    }
+  }
+  return indices;
+}
+
+std::vector<double> select_indices(const std::vector<double>& values,
+                                   const std::vector<std::size_t>& indices) {
+  std::vector<double> selected;
+  selected.reserve(indices.size());
+  for (const std::size_t index : indices)
+    selected.push_back(values.at(index));
+  return selected;
+}
+
 }  // namespace
 
 TEST(test_amr_synthetic_program_loader_transaction,
@@ -399,7 +437,8 @@ TEST(test_amr_synthetic_program_loader_transaction,
     std::ofstream source(source_path);
     source << loader_source();
   }
-  const auto package = pops::test::native_dso::compile_shared(source_path, shared_object);
+  const auto package = pops::test::native_dso::compile_shared(
+      source_path, shared_object, "-DPOPS_RUNTIME_SHARED_EXCEPTION_ABI");
   if (!package.ok) {
     pops::test::native_dso::report_compile_failure("test_amr_synthetic_program_loader_transaction",
                                                    package);
@@ -425,6 +464,9 @@ TEST(test_amr_synthetic_program_loader_transaction,
 
   const std::vector<double> coarse_before = continuous.block_level_state_global(kBlock, 0);
   const std::vector<double> fine_before = continuous.block_level_state_global(kBlock, 1);
+  const std::vector<std::size_t> fine_covered = covered_level_indices(continuous, 1);
+  ASSERT_FALSE(fine_covered.empty());
+  const std::vector<double> fine_before_covered = select_indices(fine_before, fine_covered);
 
   try {
     continuous.step(dt);
@@ -442,14 +484,15 @@ TEST(test_amr_synthetic_program_loader_transaction,
   continuous.step(dt);
   const std::vector<double> coarse_first = continuous.block_level_state_global(kBlock, 0);
   const std::vector<double> fine_first = continuous.block_level_state_global(kBlock, 1);
+  const std::vector<double> fine_first_covered = select_indices(fine_first, fine_covered);
   ASSERT_TRUE(all_finite(coarse_first));
   ASSERT_TRUE(all_finite(fine_first));
   EXPECT_GT(max_difference(coarse_first, coarse_before), 0.0);
   EXPECT_GT(max_difference(fine_first, fine_before), 0.0);
   EXPECT_LT(max_departure_from_equilibrium(coarse_first),
             max_departure_from_equilibrium(coarse_before));
-  EXPECT_LT(max_departure_from_equilibrium(fine_first),
-            max_departure_from_equilibrium(fine_before));
+  EXPECT_LT(max_departure_from_equilibrium(fine_first_covered),
+            max_departure_from_equilibrium(fine_before_covered));
   EXPECT_EQ(continuous.macro_step(), 1);
   EXPECT_DOUBLE_EQ(continuous.time(), dt);
 
@@ -457,12 +500,13 @@ TEST(test_amr_synthetic_program_loader_transaction,
   continuous.step(dt);
   const std::vector<double> coarse_accepted = continuous.block_level_state_global(kBlock, 0);
   const std::vector<double> fine_accepted = continuous.block_level_state_global(kBlock, 1);
+  const std::vector<double> fine_accepted_covered = select_indices(fine_accepted, fine_covered);
   ASSERT_TRUE(all_finite(coarse_accepted));
   ASSERT_TRUE(all_finite(fine_accepted));
   EXPECT_LT(max_departure_from_equilibrium(coarse_accepted),
             max_departure_from_equilibrium(coarse_first));
-  EXPECT_LT(max_departure_from_equilibrium(fine_accepted),
-            max_departure_from_equilibrium(fine_first));
+  EXPECT_LT(max_departure_from_equilibrium(fine_accepted_covered),
+            max_departure_from_equilibrium(fine_first_covered));
   EXPECT_EQ(continuous.macro_step(), 3);
   EXPECT_DOUBLE_EQ(continuous.time(), 3.0 * dt);
 }

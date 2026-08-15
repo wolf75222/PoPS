@@ -423,7 +423,7 @@ positive-definiteness are mutually exclusive. Consequently CG requires the globa
 when `nullspace=None`, and the complement-SPD certificate for `ConstantNullspace`; PoPS never swaps
 methods or upgrades a certificate from stencil metadata.
 
-Field warm starts are checkpoint payloads keyed by the complete qualified provider slot.  The AMR v8
+Field warm starts are checkpoint payloads keyed by the complete qualified provider slot.  The AMR v10
 reader preflights topology, ownership maps, state, aux, potentials, provider slots and history rings,
 then authenticates the runtime-owned tagging hysteresis before publishing the accepted Program image.
 It restores the hierarchy through the final clock update inside one native accepted-state transaction.
@@ -443,7 +443,7 @@ Dense; source ranks must agree on the runtime-owned tagging payload and rank-cou
 preserves it exactly. Native `SymbolicTagger` therefore accepts non-zero temporal hysteresis.
 External Tagger components still refuse non-zero hysteresis until their adapter owns that persistent
 route. `RegridOnRestart()` has a distinct `accepted_state_after_regrid` guarantee and identity. The
-builtin accepted-state-v5 provider first restores and validates the AMR v8 accepted hierarchy,
+builtin accepted-state-v5 provider first restores and validates the AMR v10 accepted hierarchy,
 state, histories, counters, clock and accepted shared-interface flux audit, then requests one
 artifact-owned scientific regrid at that accepted coordinate. Each interface fragment retains its
 topology epoch, exact clock window, rational Program weight, face measure and local duration; strict

@@ -112,9 +112,9 @@ def test_identity_owns_complete_flat_and_refined_solve_contract():
     assert authority["capabilities"] == [
         "pops.hierarchy.composite-tensor-fac.exact-rank",
         "pops.hierarchy.composite-tensor-fac.flat-krylov",
+        "pops.hierarchy.composite-tensor-fac.full-tensor-nd@3",
         "pops.hierarchy.composite-tensor-fac.partitioned-mpi",
         "pops.hierarchy.composite-tensor-fac.preallocated-publication",
-        "pops.hierarchy.composite-tensor-fac.full-tensor-nd@3",
         "pops.hierarchy.composite-tensor-fac.refined-full-tensor-fac",
     ]
     assert authority["flat_execution"]["mode"] == "prepared_krylov_fallback"

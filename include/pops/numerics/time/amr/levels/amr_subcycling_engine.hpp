@@ -180,9 +180,20 @@ class PreparedMultiBlockAmrSubcyclingEngine {
     return accepted_ledgers_.at(block).at(parent_level);
   }
 
+  /// Four-argument advance keeps a no-op staging path so generic callers retain their
+  /// existing collective sequence.
   template <class Advance, class Reflux, class Validate>
   void advance(const ::pops::amr::ClockWindow& root, Advance&& advance_level, Reflux&& reflux,
                Validate&& validate) {
+    advance(root, std::forward<Advance>(advance_level), std::forward<Reflux>(reflux),
+            std::forward<Validate>(validate), DefaultPublicationStage{});
+  }
+
+  /// `stage` runs after every candidate is validated and before any live hierarchy publication.
+  /// The callback is generic; embedded-boundary policy belongs to the caller.
+  template <class Advance, class Reflux, class Validate, class Stage>
+  void advance(const ::pops::amr::ClockWindow& root, Advance&& advance_level, Reflux&& reflux,
+               Validate&& validate, Stage&& stage) {
     require_live_();
     if (root.begin.level != 0 || root.end.level != 0 ||
         root.begin.macro_step != root.end.macro_step || !(root.begin.phase < root.end.phase) ||
@@ -234,13 +245,20 @@ class PreparedMultiBlockAmrSubcyclingEngine {
               [&] { validate(block, level, std::as_const(candidates[block][level])); },
               "multi-block AMR candidate validation failed collectively");
 
+      std::vector<std::vector<field_type*>> packs(hierarchy_->level_count());
       for (std::size_t level = 0; level < hierarchy_->level_count(); ++level) {
-        std::vector<field_type*> pack;
-        pack.reserve(hierarchy_->block_count());
+        packs[level].reserve(hierarchy_->block_count());
         for (std::size_t block = 0; block < hierarchy_->block_count(); ++block)
-          pack.push_back(&candidates[block][level]);
+          packs[level].push_back(&candidates[block][level]);
+        if constexpr (!std::is_same_v<std::decay_t<Stage>, DefaultPublicationStage>) {
+          invoke_collectively_([&] { stage(level, std::span<field_type*>(packs[level])); },
+                               "multi-block AMR candidate staging failed collectively");
+        }
+      }
+
+      for (std::size_t level = 0; level < hierarchy_->level_count(); ++level) {
         publication_started = true;
-        hierarchy_->publish_program_candidates(program_map_, level, pack);
+        hierarchy_->publish_program_candidates(program_map_, level, packs[level]);
       }
       accepted_histories_.swap(candidate_histories);
       accepted_clocks_.swap(candidate_clocks);
@@ -255,6 +273,10 @@ class PreparedMultiBlockAmrSubcyclingEngine {
   }
 
  private:
+  struct DefaultPublicationStage {
+    void operator()(std::size_t, std::span<field_type*>) const noexcept {}
+  };
+
   using CandidateMatrix = std::vector<std::vector<field_type>>;
   using HistoryMatrix = std::vector<std::vector<std::optional<AcceptedHistory>>>;
   using ClockMatrix = std::vector<std::vector<std::optional<::pops::amr::ClockStamp>>>;
@@ -301,7 +323,6 @@ class PreparedMultiBlockAmrSubcyclingEngine {
     std::exception_ptr local_error;
     try {
       callback();
-      Kokkos::fence();
     } catch (const ::pops::runtime::program::StepAttemptRejected& rejected) {
       try {
         rejection_payload = encode_step_rejection_(rejected);
@@ -310,6 +331,12 @@ class PreparedMultiBlockAmrSubcyclingEngine {
         kind = ExceptionKind::Ordinary;
         local_error = std::current_exception();
       }
+    } catch (...) {
+      kind = ExceptionKind::Ordinary;
+      local_error = std::current_exception();
+    }
+    try {
+      Kokkos::fence();
     } catch (...) {
       kind = ExceptionKind::Ordinary;
       local_error = std::current_exception();

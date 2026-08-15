@@ -42,6 +42,8 @@ PopsConstFieldViewV1 const_field_view(const double* data,
   result.struct_size = sizeof(PopsConstFieldViewV1);
   result.data = data;
   result.dimension = Dim;
+  for (std::size_t& extent : result.extents)
+    extent = 1;
   std::ptrdiff_t stride = static_cast<std::ptrdiff_t>(components);
   for (int axis = 0; axis < Dim; ++axis) {
     result.extents[axis] = extents[axis];
@@ -66,6 +68,8 @@ PopsFieldViewV1 field_view(double* data, const std::array<std::size_t, Dim>& ext
   result.struct_size = sizeof(PopsFieldViewV1);
   result.data = data;
   result.dimension = Dim;
+  for (std::size_t& extent : result.extents)
+    extent = 1;
   std::ptrdiff_t stride = static_cast<std::ptrdiff_t>(components);
   for (int axis = 0; axis < Dim; ++axis) {
     result.extents[axis] = extents[axis];
@@ -88,6 +92,9 @@ enum class FluxTableFixture { Exact, HeaderOnly, ForgedEntrySize, WrongAbi };
 constexpr const char* kComponentId = "pops://test/final-flux@1.0.0";
 constexpr const char* kSemanticIdentity = "semantic-final-flux";
 constexpr const char* kManifestIdentity = "manifest-final-flux";
+using PreparedStateOracle = std::array<std::uintptr_t, 2>;
+constexpr std::size_t kPreparedExecutionIdentityIndex = 0;
+constexpr std::size_t kPreparedOrdinalIndex = 1;
 
 std::string component_source() {
   return R"CPP(
@@ -97,10 +104,23 @@ std::string component_source() {
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 
     namespace {
     int prepare_count = 0;
     int destroy_count = 0;
+    int canonical_execution_identity_token = 0;
+    int other_execution_identity_token = 0;
+    using PreparedStateOracle = std::array<std::uintptr_t, 2>;
+
+    struct PreparedStateLifetimeOracle {
+      ~PreparedStateLifetimeOracle() {
+        if (prepare_count != destroy_count)
+          std::abort();
+      }
+    } prepared_state_lifetime_oracle;
+
     int tag_call_count = 0;
     int partial_tag_output = 0;
     const void* last_tag_state_data = nullptr;
@@ -173,7 +193,7 @@ std::string component_source() {
       for (std::size_t point = 0; point < points; ++point)
         for (std::size_t component = 0; component < request->ghosts.component_count; ++component) {
           const auto index = field_offset(request->ghosts, point, component);
-          values[index] = static_cast<double>(*static_cast<int*>(state));
+          values[index] = static_cast<double>((*static_cast<const PreparedStateOracle*>(state))[1]);
         }
       *status = {sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr};
       return 0;
@@ -388,14 +408,22 @@ std::string component_source() {
       return 0;
     }
 
-    int prepare(const PopsComponentPrepareRequestV1*, void** state, PopsComponentStatusV1* status) {
-      *state = new int(++prepare_count);
+    int prepare(const PopsComponentPrepareRequestV1* request, void** state,
+                PopsComponentStatusV1* status) {
+      const bool canonical_execution =
+          request != nullptr && request->execution.execution_identity != nullptr &&
+          std::strcmp(request->execution.execution_identity, "test::execution-context") == 0;
+      const void* execution_identity =
+          canonical_execution ? static_cast<const void*>(&canonical_execution_identity_token)
+                              : static_cast<const void*>(&other_execution_identity_token);
+      *state = new PreparedStateOracle{reinterpret_cast<std::uintptr_t>(execution_identity),
+                                       static_cast<std::uintptr_t>(++prepare_count)};
       *status = {sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr};
       return 0;
     }
     void destroy(void* state) {
       ++destroy_count;
-      delete static_cast<int*>(state);
+      delete static_cast<PreparedStateOracle*>(state);
     }
 
 #if defined(POPS_TEST_HEADER_ONLY_FLUX_TABLE)
@@ -459,12 +487,6 @@ std::string component_source() {
 
     extern "C" const PopsComponentApiV1* pops_component_interface_v1() {
       return &component;
-    }
-    extern "C" int pops_test_prepare_count() {
-      return prepare_count;
-    }
-    extern "C" int pops_test_destroy_count() {
-      return destroy_count;
     }
     extern "C" int pops_test_tag_call_count() {
       return tag_call_count;
@@ -596,15 +618,6 @@ TEST(test_amr_native_loader, LoadsAuthenticatesAndExecutesExactFinalTable) {
 
 TEST(test_amr_native_loader, CachesPreparedResourcesPerExactTargetAndPinsExecutionContext) {
   const auto library = compile_component();
-  const auto inspection = pops::dynlib::open(library.string());
-  ASSERT_TRUE(pops::dynlib::valid(inspection));
-  using CounterFn = int (*)();
-  const auto prepare_count =
-      reinterpret_cast<CounterFn>(pops::dynlib::sym(inspection, "pops_test_prepare_count"));
-  const auto destroy_count =
-      reinterpret_cast<CounterFn>(pops::dynlib::sym(inspection, "pops_test_destroy_count"));
-  ASSERT_NE(prepare_count, nullptr);
-  ASSERT_NE(destroy_count, nullptr);
   {
     auto loaded = pops::component::LoadedComponent::load(library.string(), expected(library));
     const auto execution = abi::host_execution_context();
@@ -614,25 +627,30 @@ TEST(test_amr_native_loader, CachesPreparedResourcesPerExactTargetAndPinsExecuti
         (void)loaded.prepared_state(POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, anonymous_execution,
                                     R"({"scheme":"shared"})", R"({"identity":"target-a"})"),
         std::invalid_argument);
-    EXPECT_EQ(prepare_count(), 0);
     auto incomplete_execution = execution;
     incomplete_execution.backend_identity = nullptr;
     EXPECT_THROW((void)loaded.prepared_state(POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1,
                                              incomplete_execution, R"({"scheme":"shared"})",
                                              R"({"identity":"target-a"})"),
                  std::invalid_argument);
-    EXPECT_EQ(prepare_count(), 0);
     void* first = loaded.prepared_state(POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, execution,
                                         R"({"scheme":"shared"})", R"({"identity":"target-a"})");
-    EXPECT_EQ(prepare_count(), 1);
+    ASSERT_NE(first, nullptr);
+    const auto& first_oracle = *static_cast<const PreparedStateOracle*>(first);
+    const std::uintptr_t canonical_execution_identity =
+        first_oracle[kPreparedExecutionIdentityIndex];
+    EXPECT_NE(canonical_execution_identity, std::uintptr_t{0});
+    EXPECT_EQ(first_oracle[kPreparedOrdinalIndex], std::uintptr_t{1});
     EXPECT_EQ(loaded.prepared_state(POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, execution,
                                     R"({"scheme":"shared"})", R"({"identity":"target-a"})"),
               first);
-    EXPECT_EQ(prepare_count(), 1);
     void* second = loaded.prepared_state(POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, execution,
                                          R"({"scheme":"shared"})", R"({"identity":"target-b"})");
+    ASSERT_NE(second, nullptr);
     EXPECT_NE(second, first);
-    EXPECT_EQ(prepare_count(), 2);
+    const auto& second_oracle = *static_cast<const PreparedStateOracle*>(second);
+    EXPECT_EQ(second_oracle[kPreparedExecutionIdentityIndex], canonical_execution_identity);
+    EXPECT_EQ(second_oracle[kPreparedOrdinalIndex], std::uintptr_t{2});
 
     auto mismatched_context = execution;
     mismatched_context.execution_identity = "test::other-execution-context";
@@ -640,11 +658,18 @@ TEST(test_amr_native_loader, CachesPreparedResourcesPerExactTargetAndPinsExecuti
         (void)loaded.prepared_state(POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, mismatched_context,
                                     R"({"scheme":"shared"})", R"({"identity":"target-c"})"),
         std::invalid_argument);
-    EXPECT_EQ(prepare_count(), 2);
-    EXPECT_EQ(destroy_count(), 0);
+    void* third = loaded.prepared_state(POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, execution,
+                                        R"({"scheme":"shared"})", R"({"identity":"target-c"})");
+    ASSERT_NE(third, nullptr);
+    EXPECT_NE(third, first);
+    EXPECT_NE(third, second);
+    const auto& third_oracle = *static_cast<const PreparedStateOracle*>(third);
+    EXPECT_EQ(third_oracle[kPreparedExecutionIdentityIndex], canonical_execution_identity);
+    EXPECT_EQ(third_oracle[kPreparedOrdinalIndex], std::uintptr_t{3});
+    EXPECT_EQ(loaded.prepared_state(POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, execution,
+                                    R"({"scheme":"shared"})", R"({"identity":"target-c"})"),
+              third);
   }
-  EXPECT_EQ(destroy_count(), 2);
-  pops::dynlib::close(inspection);
   std::filesystem::remove(library);
 }
 
@@ -654,15 +679,6 @@ TEST(test_amr_native_loader, FreshSessionStatesAreIndependentMoveOnlyRaiiOwners)
       std::is_nothrow_move_constructible_v<pops::component::LoadedComponent::PreparedState>);
 
   const auto library = compile_component();
-  const auto inspection = pops::dynlib::open(library.string());
-  ASSERT_TRUE(pops::dynlib::valid(inspection));
-  using CounterFn = int (*)();
-  const auto prepare_count =
-      reinterpret_cast<CounterFn>(pops::dynlib::sym(inspection, "pops_test_prepare_count"));
-  const auto destroy_count =
-      reinterpret_cast<CounterFn>(pops::dynlib::sym(inspection, "pops_test_destroy_count"));
-  ASSERT_NE(prepare_count, nullptr);
-  ASSERT_NE(destroy_count, nullptr);
   {
     auto loaded = pops::component::LoadedComponent::load(library.string(), expected(library));
     const auto execution = abi::host_execution_context();
@@ -673,17 +689,22 @@ TEST(test_amr_native_loader, FreshSessionStatesAreIndependentMoveOnlyRaiiOwners)
       auto second =
           loaded.prepare_fresh_state(POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, execution,
                                      R"({"scheme":"session"})", R"({"identity":"same-target"})");
+      ASSERT_NE(first.get(), nullptr);
+      ASSERT_NE(second.get(), nullptr);
       EXPECT_NE(first.get(), second.get());
-      EXPECT_EQ(prepare_count(), 2);
-      EXPECT_EQ(destroy_count(), 0);
+      const auto& first_oracle = *static_cast<const PreparedStateOracle*>(first.get());
+      const auto& second_oracle = *static_cast<const PreparedStateOracle*>(second.get());
+      EXPECT_NE(first_oracle[kPreparedExecutionIdentityIndex], std::uintptr_t{0});
+      EXPECT_EQ(second_oracle[kPreparedExecutionIdentityIndex],
+                first_oracle[kPreparedExecutionIdentityIndex]);
+      EXPECT_EQ(first_oracle[kPreparedOrdinalIndex], std::uintptr_t{1});
+      EXPECT_EQ(second_oracle[kPreparedOrdinalIndex], std::uintptr_t{2});
 
       auto moved = std::move(first);
       EXPECT_EQ(first.get(), nullptr);
       EXPECT_NE(moved.get(), nullptr);
     }
-    EXPECT_EQ(destroy_count(), 2);
   }
-  pops::dynlib::close(inspection);
   std::filesystem::remove(library);
 }
 

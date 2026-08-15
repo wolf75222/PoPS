@@ -22,7 +22,7 @@
 
 namespace pops::runtime::system {
 
-inline constexpr int kNativeSystemPackageAbiVersion = 2;
+inline constexpr int kNativeSystemPackageAbiVersion = 3;
 inline constexpr const char* kNativeSystemPackageAbiVersionSymbol =
     "pops_native_system_package_abi_version";
 
@@ -61,7 +61,7 @@ inline std::string exact_native_system_package_contract(
   const PreparedSystemBlock<Dim>& block = package.block;
   ExactContractBuilder contract;
   contract.text("pops.prepared-native-system-package")
-      .scalar(std::uint32_t{2})
+      .scalar(std::uint32_t{3})
       .scalar(std::int32_t{Dim})
       .text(package.consumer_qid)
       .text(block.name)
@@ -126,6 +126,8 @@ inline std::string exact_native_system_package_contract(
       .presence(static_cast<bool>(block.conservative_to_primitive))
       .presence(static_cast<bool>(block.batch_conservative_to_primitive))
       .presence(static_cast<bool>(block.source_frequency))
+      .presence(block.parabolic_frequency.has_value())
+      .scalar(block.parabolic_frequency.value_or(Real(0)))
       .presence(static_cast<bool>(block.stability_dt));
   contract.sequence(
       package.elliptic_attachments,

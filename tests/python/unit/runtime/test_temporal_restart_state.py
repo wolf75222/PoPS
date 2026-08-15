@@ -72,6 +72,16 @@ def _bound_state(strategy=None):
     return state
 
 
+def _bound_runtime_step_strategy(runtime):
+    import pops
+
+    clock = (runtime.time(), runtime.macro_step())
+    report = pops.run(runtime, t_end=runtime.time(), max_steps=0, console=False)
+    assert report.accepted_steps == 0
+    assert (runtime.time(), runtime.macro_step()) == clock
+    return runtime
+
+
 def _uniform_artifact(native_cxx, *, attempt_policy):
     """Compile a real Uniform artifact with the requested native attempt policy."""
     if attempt_policy not in {"forced_reject", "error_retry"}:
@@ -514,41 +524,29 @@ def test_accepted_attempt_advances_cursor_and_round_trips_exact_controller_state
         restored.begin_run(run_control_payload(FixedDt(0.25)), time=0.125, macro_step=1)
 
 
-def test_system_direct_step_requires_the_installed_python_program_strategy():
-    """A native-only program cannot select a second Python temporal service."""
-    import pops.runtime._engine_descriptors as engine
-    from pops.numerics.reconstruction import FirstOrder
-    from pops.numerics.riemann import Rusanov
-    from pops.runtime._system import System
-    from tests.python.support.explicit_program import install_forward_euler_program
-
-    n = 8
+@pytest.mark.compiler
+@pytest.mark.native_loader
+def test_system_direct_step_requires_the_installed_python_program_strategy(
+    isolated_native_cache, native_cxx, kokkos_root
+):
+    """A direct step refuses when the installed Program strategy authority is removed."""
+    del isolated_native_cache, kokkos_root
     dt = 0.01
-    system = System(n=n, L=1.0, periodicity=(True, True))
-    system.add_equation(
-        "scalar",
-        engine.Model(
-            state=engine.FluidState("isothermal", cs2=0.5),
-            transport=engine.IsothermalFlux(),
-            source=engine.NoSource(),
-            elliptic=engine.BackgroundDensity(alpha=0.0, n0=0.0),
-        ),
-        spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-        time=engine.Explicit(method="euler"),
-    )
-    coordinates = (np.arange(n, dtype=np.float64) + 0.5) / n
-    x, y = np.meshgrid(coordinates, coordinates, indexing="ij")
-    rho = 1.0 + 0.2 * np.sin(2.0 * np.pi * x) * np.cos(2.0 * np.pi * y)
-    initial = np.stack((rho, 0.3 * rho, -0.1 * rho))
-    system.set_state("scalar", initial)
-    install_forward_euler_program(system)
+    runtime = _bound_uniform_runtime(native_cxx, attempt_policy="forced_reject")
+    engine = runtime._executor
+    assert isinstance(engine._step_strategy, FixedDt)
+    assert engine._step_strategy.to_data() == FixedDt(0.125).to_data()
+    assert engine._step_transaction_plan.strategy is engine._step_strategy
+    initial = np.asarray(runtime.state_global("blk"), dtype=np.float64).copy()
+    initial_clock = (runtime.time(), runtime.macro_step())
+
+    engine._step_strategy = None
 
     with pytest.raises(TypeError, match=r"Program\.step_strategy"):
-        system.step(dt)
+        engine.step(dt)
 
-    assert system.macro_step() == 0
-    assert system.time() == 0.0
-    assert np.array_equal(np.asarray(system.get_state("scalar")), initial)
+    assert (runtime.time(), runtime.macro_step()) == initial_clock
+    assert np.array_equal(np.asarray(runtime.state_global("blk"), dtype=np.float64), initial)
 
 
 def test_nested_clock_cursors_round_trip_at_only_the_accepted_boundary():
@@ -797,8 +795,8 @@ def test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible(
         "queue": {
             "temporal_restart_state": np.asarray(
                 str(pristine["temporal_restart_state"]).replace(
-                    "error_controlled_dt.proposal",
-                    "error_controlled_dt.corrupt",
+                        "error_controlled_dt.proposal",
+                        "error_controlled_dt.corrupt!",
                 )
             ),
         },
@@ -1165,6 +1163,36 @@ def test_uniform_preflight_rejects_incomplete_dynamic_indexes_before_native_rest
         preflight_uniform_restart(payload)
 
 
+def test_uniform_preflight_rejects_noncanonical_scheduled_cache_name():
+    payload = _Payload(
+        {
+            "t": np.array(1.0, dtype=np.float64),
+            "macro_step": np.array(1, dtype=np.int64),
+            "pops_spatial_contract": np.array("{}"),
+            "pops_embedded_boundary_contract": np.array("{}"),
+            "program_hash": np.array("ab" * 32),
+            "history_names": np.array([], dtype="U1"),
+            "cache_nodes": np.array([7], dtype=np.int64),
+            "cache_names": np.array(["wrong_name"]),
+            "temporal_restart_state": np.array("{}"),
+            "program_cadence_substeps": np.array(1, dtype=np.int64),
+            "program_cadence_stride": np.array(1, dtype=np.int64),
+            "program_cadence_window_steps": np.array(0, dtype=np.int64),
+            "program_cadence_window_dt": np.array(0.0, dtype=np.float64),
+            "program_cadence_window_start_time": np.array(0.0, dtype=np.float64),
+            "program_last_dt": np.array(0.0, dtype=np.float64),
+            "cache_ncomp_7": np.array(1, dtype=np.int64),
+            "cache_ngrow_7": np.array(0, dtype=np.int64),
+            "cache_last_update_7": np.array(0, dtype=np.int64),
+            "cache_accum_dt_7": np.array(0.0, dtype=np.float64),
+            "cache_value_7": np.ones((1, 1), dtype=np.float64),
+        }
+    )
+
+    with pytest.raises(ValueError, match="node 7 must use canonical cache name 'node_7'"):
+        preflight_uniform_restart(payload)
+
+
 class _CadenceEngine:
     def __init__(
         self, *, substeps=2, stride=3, held_steps=2, dt=0.3, start=4.0, last_dt=0.07
@@ -1250,6 +1278,9 @@ def test_uniform_restart_restores_clock_before_selective_history_replay(monkeypa
         def set_potential(self, values):
             events.append(("potential", len(values)))
 
+        def restore_auxiliary_checkpoint_accepted_state(self, values):
+            assert values == b"POPSAUX2"
+
         def set_clock(self, time, macro_step):
             assert self.staged == (0.125, time, macro_step)
             self.clock = (time, macro_step)
@@ -1300,6 +1331,7 @@ def test_uniform_restart_restores_clock_before_selective_history_replay(monkeypa
             window_start_time=0.0,
             last_dt=0.125,
         ),
+        auxiliary_checkpoint=b"POPSAUX2",
     )
 
     class Owner:
@@ -1311,6 +1343,446 @@ def test_uniform_restart_restores_clock_before_selective_history_replay(monkeypa
     assert _SystemIO._apply_checkpoint_restart(owner, prepared) == "restart-id"
     assert owner._last_restart_report == "replay-report"
     assert events.index(("clock", 1.5, 3)) < events.index(("history", (1.5, 3)))
+
+
+@pytest.mark.parametrize(
+    ("field_slots", "field_values"),
+    [
+        ((), {}),
+        (("pops.test.named-field",), {"pops.test.named-field": np.full((2, 2), 3.0)}),
+    ],
+)
+def test_uniform_capture_uses_field_slots_without_materializing_default_field(
+    monkeypatch, tmp_path, field_slots, field_values
+):
+    from pops.runtime._system_io import _PreparedUniformCapture, _SystemIO
+    import pops.runtime._checkpoint_manifest as checkpoint_manifest
+    import pops.runtime._system_io_history as history_io
+
+    calls = []
+
+    class Native:
+        def state_global(self, block):
+            calls.append(("state", block))
+            return np.ones((1, 2, 2), dtype=np.float64)
+
+        def potential_global(self):
+            raise AssertionError("field-free/named-only capture must not materialize default field")
+
+        def field_potential_global(self, slot):
+            calls.append(("field", slot))
+            return field_values[slot]
+
+        def capture_auxiliary_checkpoint_accepted_state(self):
+            return b"POPSAUX2"
+
+    monkeypatch.setattr(history_io, "capture_histories", lambda *_args: None)
+    monkeypatch.setattr(
+        checkpoint_manifest,
+        "seal_checkpoint_payload",
+        lambda *_args, **_kwargs: type("Identity", (), {"token": "sealed"})(),
+    )
+    prepared = _PreparedUniformCapture(
+        target=tmp_path / "checkpoint.npz",
+        payload={},
+        blocks=("blk",),
+        field_slots=field_slots,
+        spatial_shape=(2, 2),
+        history_plan=object(),
+        cache_nodes=(),
+        capture_identity="capture",
+    )
+    owner = type("Owner", (), {"_s": Native()})()
+    payload, token = _SystemIO._capture_checkpoint(owner, prepared)
+
+    assert token == "sealed"
+    assert calls == [("state", "blk")] + [("field", slot) for slot in field_slots]
+    assert payload["phi"].dtype == np.dtype(np.float64)
+    assert payload["phi"].shape == (2, 2)
+    assert payload["phi"].flags.c_contiguous
+    assert np.all(payload["phi"].view(np.uint64) == 0)
+    for index, slot in enumerate(field_slots):
+        np.testing.assert_array_equal(payload["field_potential_%d" % index], field_values[slot])
+
+
+def test_uniform_capture_defers_field_free_alias_until_every_native_gather_finishes(
+    monkeypatch, tmp_path
+):
+    from pops.runtime._system_io import _PreparedUniformCapture, _SystemIO
+    import pops.runtime._system_io_history as history_io
+
+    calls = []
+
+    class Native:
+        def state_global(self, block):
+            calls.append(("state", block))
+            return np.ones((1, 2, 2), dtype=np.float64)
+
+        def capture_auxiliary_checkpoint_accepted_state(self):
+            calls.append(("auxiliary",))
+            return b"POPSAUX2"
+
+        def program_cache_global(self, node):
+            calls.append(("cache", node))
+            return np.ones((1, 2, 2), dtype=np.float64)
+
+    def capture_histories(_native, _plan, _payload):
+        calls.append(("history",))
+
+    def fail_alias_allocation(*_args, **_kwargs):
+        calls.append(("phi",))
+        raise MemoryError("injected field-free alias allocation failure")
+
+    monkeypatch.setattr(history_io, "capture_histories", capture_histories)
+    monkeypatch.setattr(np, "zeros", fail_alias_allocation)
+    prepared = _PreparedUniformCapture(
+        target=tmp_path / "checkpoint.npz",
+        payload={},
+        blocks=("blk",),
+        field_slots=(),
+        spatial_shape=(2, 2),
+        history_plan=object(),
+        cache_nodes=(7,),
+        capture_identity="capture",
+    )
+
+    with pytest.raises(MemoryError, match="field-free alias allocation failure"):
+        _SystemIO._capture_checkpoint(type("Owner", (), {"_s": Native()})(), prepared)
+
+    assert calls == [
+        ("state", "blk"),
+        ("auxiliary",),
+        ("history",),
+        ("cache", 7),
+        ("phi",),
+    ]
+
+
+def test_uniform_capture_default_field_keeps_the_legacy_phi_as_an_exact_alias(monkeypatch, tmp_path):
+    from pops.runtime._system_io import _DEFAULT_FIELD_SLOT, _PreparedUniformCapture, _SystemIO
+    import pops.runtime._checkpoint_manifest as checkpoint_manifest
+    import pops.runtime._system_io_history as history_io
+
+    calls = []
+    default = np.array([[0.0, -0.0], [2.0, 3.0]], dtype=np.float64)
+
+    class Native:
+        def state_global(self, block):
+            calls.append(("state", block))
+            return np.ones((1, 2, 2), dtype=np.float64)
+
+        def potential_global(self):
+            calls.append(("potential",))
+            return default.copy()
+
+        def field_potential_global(self, slot):
+            calls.append(("field", slot))
+            assert slot == _DEFAULT_FIELD_SLOT
+            return default.copy()
+
+        def capture_auxiliary_checkpoint_accepted_state(self):
+            return b"POPSAUX2"
+
+    monkeypatch.setattr(history_io, "capture_histories", lambda *_args: None)
+    monkeypatch.setattr(
+        checkpoint_manifest,
+        "seal_checkpoint_payload",
+        lambda *_args, **_kwargs: type("Identity", (), {"token": "sealed"})(),
+    )
+    prepared = _PreparedUniformCapture(
+        target=tmp_path / "checkpoint.npz",
+        payload={},
+        blocks=("blk",),
+        field_slots=(_DEFAULT_FIELD_SLOT,),
+        spatial_shape=(2, 2),
+        history_plan=object(),
+        cache_nodes=(),
+        capture_identity="capture",
+    )
+    payload, _token = _SystemIO._capture_checkpoint(
+        type("Owner", (), {"_s": Native()})(), prepared
+    )
+
+    assert calls == [("state", "blk"), ("potential",), ("field", _DEFAULT_FIELD_SLOT)]
+    assert payload["phi"].tobytes(order="C") == payload["field_potential_0"].tobytes(order="C")
+
+    class MismatchedNative(Native):
+        def field_potential_global(self, slot):
+            calls.append(("field", slot))
+            return default + 1.0
+
+    with pytest.raises(ValueError, match="differs bitwise"):
+        _SystemIO._capture_checkpoint(type("Owner", (), {"_s": MismatchedNative()})(), prepared)
+
+
+def test_uniform_phi_alias_validation_and_restore_uses_default_once():
+    from pops.runtime._program_cadence_checkpoint import ProgramCadenceCheckpointState
+    from pops.runtime._system_io import (
+        _DEFAULT_FIELD_SLOT,
+        _PreparedUniformRestart,
+        _SystemIO,
+        _validated_uniform_phi_alias,
+    )
+
+    default = np.array([[0.0, -0.0], [2.0, 3.0]], dtype=np.float64)
+    payload = {
+        "phi": default.copy(),
+        "field_potential_0": default.copy(),
+        "field_potential_1": np.full((2, 2), 7.0, dtype=np.float64),
+    }
+    assert _validated_uniform_phi_alias(
+        payload,
+        spatial_shape=(2, 2),
+        field_slots=[_DEFAULT_FIELD_SLOT, "pops.test.named-field"],
+    )
+    payload["field_potential_0"][0, 1] = 0.0
+    with pytest.raises(ValueError, match="differs bitwise"):
+        _validated_uniform_phi_alias(
+            payload,
+            spatial_shape=(2, 2),
+            field_slots=[_DEFAULT_FIELD_SLOT, "pops.test.named-field"],
+        )
+    payload["field_potential_0"] = np.asfortranarray(default)
+    with pytest.raises(ValueError, match="C-contiguous"):
+        _validated_uniform_phi_alias(
+            payload,
+            spatial_shape=(2, 2),
+            field_slots=[_DEFAULT_FIELD_SLOT, "pops.test.named-field"],
+        )
+    for invalid in (
+        np.array([[0.0, -0.0], [0.0, 0.0]], dtype=np.float64),
+        np.array([[0.0, np.nan], [0.0, 0.0]], dtype=np.float64),
+    ):
+        with pytest.raises(ValueError, match=r"canonical \+0.0"):
+            _validated_uniform_phi_alias(
+                {"phi": invalid}, spatial_shape=(2, 2), field_slots=[]
+            )
+
+    calls = []
+
+    class Native:
+        def set_potential(self, values):
+            calls.append(("default", np.asarray(values).copy()))
+
+        def set_field_potential(self, slot, values):
+            calls.append(("named", slot, np.asarray(values).copy()))
+
+        def restore_auxiliary_checkpoint_accepted_state(self, values):
+            assert values == b"POPSAUX2"
+
+        def restore_program_cadence_window(self, *_args):
+            pass
+
+        def set_clock(self, *_args):
+            pass
+
+    restart_payload = {
+        "blocks": np.array([], dtype="U1"),
+        "phi": default,
+        "field_provider_slots": np.array([_DEFAULT_FIELD_SLOT, "pops.test.named-field"]),
+        "field_potential_0": default,
+        "field_potential_1": np.full((2, 2), 7.0, dtype=np.float64),
+        "history_names": np.array([], dtype="U1"),
+        "cache_names": np.array([], dtype="U1"),
+        "cache_nodes": np.array([], dtype=np.int64),
+        "t": np.array(0.0, dtype=np.float64),
+        "macro_step": np.array(0, dtype=np.int64),
+    }
+    prepared = _PreparedUniformRestart(
+        payload=restart_payload,
+        restart_identity="restart-id",
+        temporal_state="temporal-state",
+        cadence_state=ProgramCadenceCheckpointState(1, 1, 0, 0.0, 0.0, 0.0),
+        auxiliary_checkpoint=b"POPSAUX2",
+    )
+    owner = type(
+        "Owner",
+        (),
+        {"_s": Native(), "_temporal_restart_state": None, "_step_controller": None},
+    )()
+    _SystemIO._apply_checkpoint_restart(owner, prepared)
+    assert [row[0] for row in calls] == ["default", "named"]
+    assert calls[1][1] == "pops.test.named-field"
+
+    calls.clear()
+    field_free = dict(restart_payload)
+    field_free["phi"] = np.zeros((2, 2), dtype=np.float64)
+    field_free["field_provider_slots"] = np.array([], dtype="U1")
+    field_free.pop("field_potential_0")
+    field_free.pop("field_potential_1")
+    _SystemIO._apply_checkpoint_restart(
+        owner,
+        _PreparedUniformRestart(
+            payload=field_free,
+            restart_identity="restart-id",
+            temporal_state="temporal-state",
+            cadence_state=ProgramCadenceCheckpointState(1, 1, 0, 0.0, 0.0, 0.0),
+            auxiliary_checkpoint=b"POPSAUX2",
+        ),
+    )
+    assert calls == []
+
+
+def _field_slot_native(*, materialized=(), configured=None):
+    class Native:
+        def field_provider_slots(self):
+            return list(materialized)
+
+        if configured is not None:
+
+            def configured_field_provider_slots(self):
+                return list(configured)
+
+    return Native()
+
+
+def test_uniform_restart_preflight_accepts_unmaterialized_default_on_configured_target():
+    from pops.runtime._system_io import (
+        _DEFAULT_FIELD_SLOT,
+        _authenticate_uniform_checkpoint_field_slots,
+    )
+
+    native = _field_slot_native(
+        materialized=("pops.test.named-field",),
+        configured=(_DEFAULT_FIELD_SLOT, "pops.test.named-field"),
+    )
+    _authenticate_uniform_checkpoint_field_slots(
+        native, (_DEFAULT_FIELD_SLOT, "pops.test.named-field")
+    )
+    assert list(native.field_provider_slots()) == ["pops.test.named-field"]
+
+
+def test_uniform_restart_preflight_rejects_unavailable_default_authority():
+    from pops.runtime._system_io import (
+        _DEFAULT_FIELD_SLOT,
+        _authenticate_uniform_checkpoint_field_slots,
+    )
+
+    native = _field_slot_native(materialized=(), configured=())
+    with pytest.raises(RuntimeError, match="installed prepared RHS"):
+        _authenticate_uniform_checkpoint_field_slots(native, (_DEFAULT_FIELD_SLOT,))
+
+
+def test_uniform_restart_preflight_rejects_materialized_default_when_checkpoint_omits_it():
+    from pops.runtime._system_io import (
+        _DEFAULT_FIELD_SLOT,
+        _authenticate_uniform_checkpoint_field_slots,
+    )
+
+    native = _field_slot_native(
+        materialized=(_DEFAULT_FIELD_SLOT, "pops.test.named-field"),
+        configured=(_DEFAULT_FIELD_SLOT, "pops.test.named-field"),
+    )
+    with pytest.raises(RuntimeError, match="omits the default field"):
+        _authenticate_uniform_checkpoint_field_slots(native, ("pops.test.named-field",))
+
+
+@pytest.mark.parametrize(
+    ("checkpoint", "materialized", "configured"),
+    [
+        (("pops.test.other-field",), ("pops.test.named-field",), ("pops.test.named-field",)),
+        (
+            ("pops.test.named-b", "pops.test.named-a"),
+            ("pops.test.named-a", "pops.test.named-b"),
+            ("pops.test.named-a", "pops.test.named-b"),
+        ),
+        (
+            ("pops.test.named-field", "pops.system.default-field"),
+            ("pops.test.named-field",),
+            ("pops.system.default-field", "pops.test.named-field"),
+        ),
+    ],
+)
+def test_uniform_restart_preflight_rejects_unknown_or_reordered_named_slots(
+    checkpoint, materialized, configured
+):
+    from pops.runtime._system_io import _authenticate_uniform_checkpoint_field_slots
+
+    native = _field_slot_native(materialized=materialized, configured=configured)
+    with pytest.raises(RuntimeError, match="qualified field providers"):
+        _authenticate_uniform_checkpoint_field_slots(native, checkpoint)
+
+
+def test_uniform_restart_preflight_keeps_field_free_and_named_only_exact_match():
+    from pops.runtime._system_io import (
+        _DEFAULT_FIELD_SLOT,
+        _authenticate_uniform_checkpoint_field_slots,
+    )
+
+    field_free = _field_slot_native(materialized=(), configured=(_DEFAULT_FIELD_SLOT,))
+    _authenticate_uniform_checkpoint_field_slots(field_free, ())
+    named_only = _field_slot_native(
+        materialized=("pops.test.named-field",),
+        configured=(_DEFAULT_FIELD_SLOT, "pops.test.named-field"),
+    )
+    _authenticate_uniform_checkpoint_field_slots(named_only, ("pops.test.named-field",))
+
+
+@pytest.mark.compiler
+@pytest.mark.native_loader
+def test_uniform_restart_restores_default_field_onto_fresh_unmaterialized_target(
+    tmp_path, isolated_native_cache, native_cxx, kokkos_root
+):
+    del isolated_native_cache, kokkos_root
+    from pops._native_selector import selected_native_module
+    from pops.runtime._system_io import _DEFAULT_FIELD_SLOT
+
+    native_module = selected_native_module(required=True)
+    if not hasattr(native_module.System, "configured_field_provider_slots"):
+        pytest.skip(
+            "native rebuild required: configured field-provider restart authority is absent"
+        )
+    artifact = _uniform_artifact(native_cxx, attempt_policy="forced_reject")
+    source = _bound_runtime_step_strategy(_bind_uniform_artifact(artifact))
+    source_native = source._executor._s
+    assert list(source_native.field_provider_slots()) == []
+    cells = int(np.prod(np.asarray(source.state_global("blk")).shape[1:]))
+    expected = np.linspace(0.25, 1.25, cells, dtype=np.float64)
+    source_native.set_potential(expected.tolist())
+    assert list(source_native.field_provider_slots()) == [_DEFAULT_FIELD_SLOT]
+    checkpoint = Path(source.checkpoint(tmp_path / "default-field-source"))
+    with np.load(checkpoint, allow_pickle=False) as stored:
+        assert list(map(str, stored["field_provider_slots"])) == [_DEFAULT_FIELD_SLOT]
+        stored_phi = np.asarray(stored["phi"], dtype=np.float64).reshape(-1)
+
+    target = _bound_runtime_step_strategy(_bind_uniform_artifact(artifact))
+    target_native = target._executor._s
+    assert list(target_native.field_provider_slots()) == []
+    assert _DEFAULT_FIELD_SLOT in list(target_native.configured_field_provider_slots())
+
+    seen = {"begin": None}
+
+    original_begin = target._executor._begin_checkpoint_restart
+
+    def begin_and_witness():
+        seen["begin"] = list(target_native.field_provider_slots())
+        return original_begin()
+
+    target._executor._begin_checkpoint_restart = begin_and_witness
+    target.restart(checkpoint)
+    assert seen["begin"] == []
+    assert list(target_native.field_provider_slots()) == [_DEFAULT_FIELD_SLOT]
+    restored = np.asarray(target_native.potential_global(), dtype=np.float64).reshape(-1)
+    assert restored.tobytes() == stored_phi.tobytes()
+    assert restored.tobytes() == expected.tobytes()
+
+    omitted = _bound_runtime_step_strategy(_bind_uniform_artifact(artifact))
+    omitted_native = omitted._executor._s
+    omitted_native.set_potential(np.full(cells, 7.0, dtype=np.float64).tolist())
+    field_free = _bound_runtime_step_strategy(_bind_uniform_artifact(artifact))
+    field_free_checkpoint = Path(field_free.checkpoint(tmp_path / "field-free-source"))
+    with pytest.raises(RuntimeError, match="omits the default field"):
+        omitted.restart(field_free_checkpoint)
+    assert list(omitted_native.field_provider_slots()) == [_DEFAULT_FIELD_SLOT]
+
+    rollback_target = _bind_uniform_artifact(artifact)
+    rollback_native = rollback_target._executor._s
+    assert list(rollback_native.field_provider_slots()) == []
+    rollback_native._begin_restart_transaction()
+    rollback_native.set_potential(expected.tolist())
+    assert list(rollback_native.field_provider_slots()) == [_DEFAULT_FIELD_SLOT]
+    rollback_native._rollback_restart_transaction()
+    assert list(rollback_native.field_provider_slots()) == []
 
 
 @pytest.mark.parametrize(

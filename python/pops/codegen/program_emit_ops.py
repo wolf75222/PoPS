@@ -74,6 +74,54 @@ def _required_block_index(block_idx: Any, block: Any, where: str) -> int:
     return index
 
 
+def _value_owner_block(value: Any) -> Any:
+    """Return one declared block identity carried by ``value``, or None."""
+    block = getattr(value, "block", None)
+    if block is not None:
+        return block
+    state_ref = getattr(value, "state_ref", None)
+    return getattr(state_ref, "block_ref", None)
+
+
+def _unique_dataflow_owner_block(value: Any, *, where: str) -> Any:
+    """Return the single authenticated block on ``value``'s producer dataflow.
+
+    Top-level generated Cartesian ops may themselves be unqualified. Their owner is
+    the unique BlockHandle on the op or its producer SSA, never a default index.
+    """
+    seen: set[int] = set()
+    owners: list[Any] = []
+
+    def visit(node: Any) -> None:
+        ident = getattr(node, "id", None)
+        key = ident if isinstance(ident, int) else id(node)
+        if key in seen:
+            return
+        seen.add(key)
+        block = _value_owner_block(node)
+        if block is not None and block not in owners:
+            owners.append(block)
+        for item in getattr(node, "inputs", ()) or ():
+            visit(item)
+
+    visit(value)
+    if len(owners) == 1:
+        return owners[0]
+    if not owners:
+        raise ValueError(
+            "%s: generated Cartesian operator has no unique authenticated owner block"
+            % where)
+    raise ValueError(
+        "%s: generated Cartesian operator has conflicting owner blocks %s"
+        % (where, sorted(block_name(item) for item in owners)))
+
+
+def _cartesian_generated_owner_index(block_idx: Any, value: Any, *, where: str) -> int:
+    """Map a generated Cartesian op to its unique runtime owner index."""
+    return _required_block_index(
+        block_idx, _unique_dataflow_owner_block(value, where=where), where)
+
+
 def _canonical_metadata_int(value: Any, *, where: str) -> int:
     """Decode one graph-canonical integer without accepting an approximate numeric cast."""
     if isinstance(value, bool):
@@ -544,8 +592,8 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>(ctx.scratch_state_like(ctx.state(%d)));"
             % (state_resource, bidx))
         prelude.append(
-            "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>(ctx.alloc_scalar_field(1, 0));"
-            % status_resource)
+            "auto* %s = &ctx.scalar_scratch(%d, 0, ctx.state(%d), 1, 0);"
+            % (status_resource, int(v.id), bidx))
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = *%s;" % (var[v.id], state_resource))
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = *%s;" % (status, status_resource))
         lines.append(
@@ -576,6 +624,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # `where` op selects on); no aux / model needed -- it reads component 0 of the input field.
         (field_in,) = v.inputs
         var[v.id] = "m%d" % v.id
+        if target == "system":
+            lines.append(
+                "ctx.require_cartesian_generated_operator(%d, %s);"
+                % (bidx, json.dumps("cell_compare")))
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%d, 0, %s, 1, 1);"
                      % (var[v.id], int(v.id), var[field_in.id]))
         lines += _emit_cell_compare_kernel(var[field_in.id], var[v.id], v.attrs["cmp"],
@@ -586,6 +638,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # ternary is decided per cell inside the kernel (NOT the scalar lazy ``branch`` op).
         mask_in, a_in, b_in = v.inputs
         var[v.id] = "w%d" % v.id
+        if target == "system":
+            lines.append(
+                "ctx.require_cartesian_generated_operator(%d, %s);"
+                % (bidx, json.dumps("where")))
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[a_in.id]))
         lines += _emit_where_kernel(var[mask_in.id], var[a_in.id], var[b_in.id], var[v.id])
@@ -783,10 +839,6 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         guess_in = v.inputs[0]  # solve inputs = (initial_guess,)
         var[v.id] = "u%d" % v.id
         status = "ln_status_%d" % v.id
-        if target == "system":
-            lines.append(
-                "ctx.require_cartesian_generated_operator(%d, %s);"
-                % (bidx, json.dumps("solve_local_nonlinear")))
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[base.id]))
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%d, 1, %s, 11, 0);"
@@ -838,14 +890,32 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # Step-body bare Laplacian (e.g. Lap phi^n for the condensed RHS). Inside an apply sub-block
         # this op is handled by _emit_matrix_free_operator; here it is the top-level path.
         o, i = v.inputs
+        if target == "system":
+            owner = _cartesian_generated_owner_index(
+                block_idx, v, where="preflight laplacian %r" % v.name)
+            lines.append(
+                "ctx.require_cartesian_generated_operator(%d, %s);"
+                % (owner, json.dumps("laplacian")))
         lines.append("ctx.laplacian(%s, %s);" % (_deref(var[o.id]), _deref(var[i.id])))
         var[v.id] = var[o.id]
     elif v.op == "gradient":
         o, p = v.inputs
+        if target == "system":
+            owner = _cartesian_generated_owner_index(
+                block_idx, v, where="preflight gradient %r" % v.name)
+            lines.append(
+                "ctx.require_cartesian_generated_operator(%d, %s);"
+                % (owner, json.dumps("gradient")))
         lines.append("ctx.gradient(%s, %s);" % (_deref(var[o.id]), _deref(var[p.id])))
         var[v.id] = var[o.id]
     elif v.op == "divergence":
         o, flux = v.inputs
+        if target == "system":
+            owner = _cartesian_generated_owner_index(
+                block_idx, v, where="preflight divergence %r" % v.name)
+            lines.append(
+                "ctx.require_cartesian_generated_operator(%d, %s);"
+                % (owner, json.dumps("divergence")))
         lines.append("ctx.divergence(%s, %s);"
                      % (_deref(var[o.id]), _deref(var[flux.id])))
         var[v.id] = var[o.id]
@@ -856,6 +926,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # th_dt*J) on a momentum subset -- no coupling/schur call. The thin dispatch lives in
         # program_emit_condensed to keep this router (and its budget) small; condensed_coeffs allocates
         # its persistent row-major tensor field there.
+        if target == "system" and v.op == "condensed_rhs":
+            lines.append(
+                "ctx.require_cartesian_generated_operator(%d, %s);"
+                % (bidx, json.dumps("condensed_rhs")))
         emit_condensed_op(
             v, var, node_model, lines, prelude,
             provider_plans=provider_plans,
@@ -895,10 +969,11 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         else:
             var[v.id] = var[source.id]
     elif v.op == "reduce":
-        # A collective physical-domain reduction -> a C++ scalar.  Route every operation through
-        # ProgramContext with the exact Program block owner: the runtime then selects its prepared
-        # full-grid/staircase/cut-cell measure without the generated code knowing a geometry shape.
-        # All ranks execute the same context call, including ranks that own no box.
+        # A collective owner/block/layout/lane-authenticated raw active-domain algebra
+        # reduction -> a C++ scalar. Inactive cells are excluded; there is no kappa/volume
+        # weighting. Physical weighted integrals stay System services. Route every
+        # operation through ProgramContext with the exact Program block owner. All ranks
+        # execute the same context call, including ranks that own no box.
         var[v.id] = "s%d" % v.id
         kind = v.attrs["kind"]
         owner = _required_block_index(block_idx, v.block, "reduce value %r" % v.name)

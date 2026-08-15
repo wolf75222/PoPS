@@ -550,17 +550,24 @@ enum class VariableRecoveryInversionFailure : std::uint8_t {
 
 /// Candidate space for the generic prepared authority.
 ///
-/// A model with the explicit PhysicalModel primitive contract owns a distinct primitive candidate
-/// and conversion.  Every other model has one state space, so its mathematically declared
+/// A model with an explicit fallible recovery owns a distinct primitive candidate even when it
+/// deliberately does not satisfy the wider PhysicalModel concept.  The latter concept is useful
+/// to spatial operators, but must not erase a conservative-to-primitive refusal at this runtime
+/// boundary.  Every model without either declared conversion has one state space, so its
 /// conservative-to-recovery map is the typed identity on State.  A specialized trait is required
-/// here: conditional_t would still form Model::Prim for identity models during substitution.
-template <class Model, bool = HasPrimitiveVars<Model>>
+/// here: conditional_t would still form Model::Primitive for identity models during substitution.
+template <class Model, bool = HasDeclaredStateRecovery<Model>, bool = HasPrimitiveVars<Model>>
 struct ModelRecoveryCandidate {
   using type = typename Model::State;
 };
 
+template <class Model, bool HasPrimitiveContract>
+struct ModelRecoveryCandidate<Model, true, HasPrimitiveContract> {
+  using type = typename Model::Primitive;
+};
+
 template <class Model>
-struct ModelRecoveryCandidate<Model, true> {
+struct ModelRecoveryCandidate<Model, false, true> {
   using type = typename Model::Prim;
 };
 
@@ -583,8 +590,9 @@ struct ModelVariableInversionSource {
   }
 
   void serialize_exact_parameters(ExactContractBuilder& contract) const {
-    contract.scalar(std::uint32_t{2})
+    contract.scalar(std::uint32_t{3})
         .scalar(std::int32_t{Model::n_vars})
+        .scalar(static_cast<std::uint8_t>(HasDeclaredStateRecovery<Model> ? 1 : 0))
         .scalar(static_cast<std::uint8_t>(HasPrimitiveVars<Model> ? 1 : 0));
     if constexpr (requires(const Model& value, ExactContractBuilder& builder) {
                     value.serialize_exact_parameters(builder);
@@ -595,14 +603,20 @@ struct ModelVariableInversionSource {
   POPS_HD InversionResult<ModelRecoveryCandidateType<Model>, VariableRecoveryInversionFailure>
   operator()(const typename Model::State& state, const ProviderValues<0>&,
              InversionWorkspaceView) const {
-    // Either mathematical map produces only a detached candidate. Finite and model predicates
-    // are deliberately evaluated later by the one ordered AdmissibleSet authority.
-    if constexpr (HasPrimitiveVars<Model>) {
-      return InversionResult<ModelRecoveryCandidateType<Model>,
-                             VariableRecoveryInversionFailure>::success(model.to_primitive(state));
+    using Result =
+        InversionResult<ModelRecoveryCandidateType<Model>, VariableRecoveryInversionFailure>;
+    // A declared recovery owns its refusal: do not replace it with an identity merely because the
+    // model is not a full PhysicalModel.  Once it produces a detached candidate, finite and model
+    // predicates are still evaluated later by the one ordered AdmissibleSet authority.
+    if constexpr (HasDeclaredStateRecovery<Model>) {
+      const auto recovered = model.recover(state);
+      if (!recovered.succeeded())
+        return Result::fail(VariableRecoveryInversionFailure::kSourceRejected);
+      return Result::success(recovered.value);
+    } else if constexpr (HasPrimitiveVars<Model>) {
+      return Result::success(model.to_primitive(state));
     } else {
-      return InversionResult<ModelRecoveryCandidateType<Model>,
-                             VariableRecoveryInversionFailure>::success(state);
+      return Result::success(state);
     }
   }
 };

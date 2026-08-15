@@ -115,6 +115,28 @@ AdvectionModel<Dim> advection_model() {
 }
 
 template <int Dim>
+struct DiffusiveAdvectionModel : AdvectionModel<Dim> {
+  pops::Real diffusivity_value = pops::Real(0);
+
+  static pops::PreparedProviderIdentity provider_identity() noexcept {
+    return {"test.generated-amr.diffusive-scalar-advection", 1};
+  }
+  void serialize_exact_parameters(pops::ExactContractBuilder& contract) const {
+    AdvectionModel<Dim>::serialize_exact_parameters(contract);
+    contract.scalar(diffusivity_value);
+  }
+  POPS_HD pops::Real diffusivity() const { return diffusivity_value; }
+};
+
+template <int Dim>
+DiffusiveAdvectionModel<Dim> diffusive_advection_model(pops::Real diffusivity) {
+  DiffusiveAdvectionModel<Dim> result;
+  result.law = pops::nd::ScalarAdvection<Dim>::prepare({});
+  result.diffusivity_value = diffusivity;
+  return result;
+}
+
+template <int Dim>
 pops::runtime::system::AuxiliaryComponentKey install_field_output(pops::AmrSystem<Dim>& system,
                                                                   const std::string& owner,
                                                                   const std::string& field) {
@@ -606,6 +628,27 @@ TEST(GeneratedAmrSystemBlock, CutCellCapabilityExecutesAtExactRank) {
   EXPECT_NO_THROW((void)system.evaluate_prepared_amr_level(point<Dim>(0)));
 }
 
+TEST(GeneratedAmrSystemBlock, DiffusiveEmbeddedRoutesRefuseWithoutFaceGeometry) {
+  constexpr int Dim = pops::kNativeDimension;
+  for (const std::string mode : {"staircase", "cutcell"}) {
+    pops::AmrSystemConfig<Dim> config;
+    config.level_count = 1;
+    config.transition_ratios.clear();
+    config.transition_buffers.clear();
+    config.transition_lookaheads.clear();
+    for (int axis = 0; axis < Dim; ++axis)
+      config.shape[axis] = 8;
+    pops::AmrSystem<Dim> system(config);
+    pops::test::install_amr_runtime_authority(
+        system, "tests.generated-amr/diffusive-embedded-refusal/" + mode);
+    system.install_block_state_route("diffusive", "state/diffusive");
+    pops::add_compiled_model<Dim>(system, "diffusive", diffusive_advection_model<Dim>(0.125));
+    system.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.5, 0.0}, mode);
+    system.set_conservative_state("diffusive", std::vector<double>(cell_count(config.shape), 1.0));
+    EXPECT_THROW((void)system.evaluate_prepared_amr_level(point<Dim>(0)), std::invalid_argument);
+  }
+}
+
 TEST(GeneratedAmrSystemBlock, EmbeddedBoundaryAuthoringRejectsDivergentMpiInputBeforeMutation) {
   if (pops::n_ranks() == 1)
     return;
@@ -921,10 +964,7 @@ TEST(GeneratedAmrSystemBlock, ProgramContextRefusesUnsynchronizedHierarchyBefore
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
   publish_centered_fine_level(system);
   system.refresh_prepared_amr_levels();
-  system.set_program_block_map({0});
-
-  auto context = pops::runtime::program::make_program_execution_provider(&system);
-  context->configure_primary_clock("test-clock");
+  auto context = pops::test::install_forward_euler_program_context(system, false);
   EXPECT_THROW(
       context->advance_hierarchy(0.01, [&](double) { context->state(0).set_val(pops::Real(9)); }),
       std::runtime_error);
@@ -1031,6 +1071,29 @@ TEST(GeneratedAmrSystemBlock, CflUsesFinestExactGeometryAndPreparedModelSpeed) {
   const double expected = cfl * (1.0 / 16.0) * 2.0 / static_cast<double>(Dim);
   EXPECT_NEAR(dt, expected, 1.0e-12);
   EXPECT_EQ(system.last_dt_bound(), "transport:tracer");
+}
+
+TEST(GeneratedAmrSystemBlock, DiffusiveCflUsesFinestParabolicGeometryAndReportsFrequency) {
+  constexpr int Dim = pops::kNativeDimension;
+  constexpr pops::Real diffusivity = pops::Real(0.125);
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 8;
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/diffusive-cfl");
+  system.install_block_state_route("diffusive", "state/diffusive");
+  pops::add_compiled_model<Dim>(system, "diffusive", diffusive_advection_model<Dim>(diffusivity),
+                                "minmod", "rusanov", "conservative", "explicit", 1.4, 2, 3);
+  system.set_conservative_state("diffusive", std::vector<double>(cell_count(config.shape), 1.0));
+  publish_centered_fine_level(system);
+  system.install_program_step([](double) {});
+
+  pops::Real inverse_dt = pops::Real(0);
+  for (int axis = 0; axis < Dim; ++axis)
+    inverse_dt += pops::Real(2) * diffusivity * pops::Real(16 * 16);
+  const double expected = 0.4 * 2.0 / (3.0 * static_cast<double>(inverse_dt));
+  EXPECT_NEAR(system.step_cfl(0.4, 1.0e-12), expected, 1.0e-12);
+  EXPECT_EQ(system.last_dt_bound(), "parabolic_frequency:diffusive");
 }
 
 TEST(GeneratedAmrSystemBlock, CflAuthenticatesRequestsAndBoundOrderBeforeCallbacks) {

@@ -16,12 +16,22 @@
 #include <cstdlib>
 #include <ctime>
 #include <fstream>
+#include <memory>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 using namespace pops;
 
 namespace {
+
+template <int Dim>
+void install_runtime_authority(System<Dim>& system, std::string_view identity) {
+  auto lane =
+      std::make_shared<ExecutionLane>(ExecutionLane::duplicate_world_collectively(identity));
+  system.install_prepared_boundary_execution_lane(std::move(lane));
+}
 
 std::string package_source() {
   return R"CPP(
@@ -99,7 +109,7 @@ std::string package_source() {
       return "0000000000000000000000000000000000000000000000000000000000000000";
     }
     extern "C" int pops_native_system_package_abi_version() {
-      return 2;
+      return 3;
     }
     extern "C" const char* pops_compiled_route_manifest() {
       return pops::kRouteRegistrySignature;
@@ -224,6 +234,7 @@ static int pops_run_test_native_aux_named(int argc, char** argv) {
   }
 
   System<kNativeDimension> system(config);
+  install_runtime_authority(system, "test.native-aux/runtime-primary@1");
   using namespace runtime::system;
   AuxiliaryComponentKey input_key{"test.native-aux", "input", "coefficient", "kappa"};
   AuxiliaryComponentKey derived_key{"test.native-aux", "derived", "coefficient", "effective-kappa"};
@@ -259,6 +270,7 @@ static int pops_run_test_native_aux_named(int argc, char** argv) {
   bool rollback_missing_key_exact = false;
   bool retry_valid = false;
   System<kNativeDimension> rejected(config);
+  install_runtime_authority(rejected, "test.native-aux/runtime-rejected@1");
   rejected.register_native_package(
       "scalar", library, "0000000000000000000000000000000000000000000000000000000000000000",
       binary_identity, "none", "rusanov", "conservative", "euler");
@@ -269,6 +281,7 @@ static int pops_run_test_native_aux_named(int argc, char** argv) {
                               "System prepared block lacks its exact pre-installed state identity";
   }
   System<kNativeDimension> sealed_empty(config);
+  install_runtime_authority(sealed_empty, "test.native-aux/runtime-sealed-empty@1");
   sealed_empty.seal_auxiliary_providers();
   try {
     sealed_empty.stage_auxiliary_input(input_key, std::vector<double>(cells, kappa));

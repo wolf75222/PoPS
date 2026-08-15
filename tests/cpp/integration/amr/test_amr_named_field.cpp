@@ -251,8 +251,10 @@ void verifies_auxiliary_publication_rolls_back_every_sparse_level() {
     EXPECT_EQ(value, 3.0);
   const auto retried_metadata = system.capture_auxiliary_checkpoint_accepted_state();
   ASSERT_EQ(retried_metadata.size(), 2U);
-  EXPECT_EQ(retried_metadata[0].accepted_generation, 2U);
-  EXPECT_EQ(retried_metadata[1].accepted_generation, 2U);
+  ASSERT_EQ(retried_metadata.size(), accepted_metadata.size());
+  for (std::size_t level = 0; level < retried_metadata.size(); ++level)
+    EXPECT_EQ(retried_metadata[level].accepted_generation,
+              accepted_metadata[level].accepted_generation + 1);
 }
 
 }  // namespace

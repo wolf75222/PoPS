@@ -286,6 +286,7 @@ TEST(test_amr_composite_poisson,
   pops::AmrSystemConfig<Dim> config;
   config.level_count = 2;
   config.regrid_every = 0;
+  config.periodicity.fill(false);
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = kCells;
   pops::AmrSystem<Dim> system(config);
@@ -304,7 +305,18 @@ TEST(test_amr_composite_poisson,
       {{"test.amr-composite-poisson", "field", "phi", "potential"}}, 1, {"test.manufactured-rhs"},
       {"tracer"}, {"manufactured"}, {1.0}, "geometric_mg", hierarchy,
       pops::geometric_mg_amr_field_solver_options(pops::GeometricMgOptions{}, fac_controls));
-  system.install_block_state_route("tracer", "state/tracer");
+  constexpr const char* state_route = "state/tracer";
+  system.install_block_state_route("tracer", state_route);
+  std::vector<std::string> face_types(static_cast<std::size_t>(2 * Dim), "dirichlet");
+  std::vector<std::string> face_identities;
+  face_identities.reserve(static_cast<std::size_t>(2 * Dim));
+  for (int face = 0; face < 2 * Dim; ++face)
+    face_identities.push_back("tests.amr.composite-poisson/exact-provider-face-" +
+                              std::to_string(face));
+  system.install_hyperbolic_boundary(
+      "tracer", "tests.amr.composite-poisson/exact-provider-boundary@1", 1, face_types,
+      std::vector<double>(static_cast<std::size_t>(2 * Dim), 0.0), face_identities, {"Scalar"},
+      state_route);
   pops::add_test_compiled_model(system, "tracer", advection_model());
   const auto output_key = install_field_output(system);
   system.register_elliptic_field("tracer", "phi", {output_key}, 1);
@@ -332,8 +344,12 @@ TEST(test_amr_composite_poisson,
   stage.set_val(pops::Real(1));
   pops::SolveOutcome outcome =
       context->solve_fields_from_state_at(evaluation_point(), slot, 0, stage);
-  ASSERT_TRUE(outcome.report().solved_value_available()) << outcome.report().reason;
-  const pops::SolveReport accepted = outcome.consume(pops::SolveConsumption::kAccept);
+  const pops::SolveReport accepted =
+      outcome.consume(outcome.report().solved_value_available()
+                          ? pops::SolveConsumption::kAccept
+                          : (outcome.report().action == pops::SolveAction::kRejectAttempt
+                                 ? pops::SolveConsumption::kRejectAttempt
+                                 : pops::SolveConsumption::kFailRun));
   ASSERT_TRUE(accepted.solved()) << accepted.reason;
 
   EXPECT_EQ(system.field_provider_slots(), std::vector<std::string>{slot});

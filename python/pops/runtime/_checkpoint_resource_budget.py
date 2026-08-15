@@ -7,6 +7,10 @@ import json
 import sys
 from typing import Any
 
+from pops._checkpoint_migration_protocol import (
+    _CHECKPOINT_MIGRATION_PROVENANCE_MAX_CHARACTERS,
+    _checkpoint_migration_provenance_characters,
+)
 from pops.output._checkpoint_contract import (
     CheckpointResourceBudget,
     _capacity,
@@ -81,7 +85,7 @@ def _program_for_install(install_plan: Any) -> tuple[Any, dict[str, int]]:
     if program_handle is None or getattr(program_handle, "program", None) is None:
         raise RuntimeError("checkpoint budget requires the artifact's exact compiled Program")
     program = program_handle.program
-    instances = dict(artifact.program.arguments().instances)
+    instances = dict(artifact.arguments().instances)
     block_nvars = {}
     for block in artifact.blocks:
         row = instances.get(block.name)
@@ -157,27 +161,65 @@ def _history_capacity(
     return tuple(member_names), data_bytes
 
 
-def _cache_capacity(owner: Any, shape: tuple[int, ...]) -> tuple[tuple[str, ...], int, Any]:
+def _cache_capacity(
+    owner: Any,
+    shape: tuple[int, ...],
+    *,
+    program: Any,
+    block_nvars_by_name: dict[str, int],
+) -> tuple[tuple[str, ...], int, Any]:
+    """Reserve every cacheable schedule node from the immutable Program authority.
+
+    Native cache nodes are intentionally lazy: before the first accepted execution they need not
+    exist at all.  Their mutable materialization state is therefore validation evidence, not the
+    source of the resource envelope or its bind identity.
+    """
     native = owner._s
+    temporal = program.temporal_manifest()
+    if not isinstance(temporal, Mapping):
+        raise TypeError("checkpoint cache authority requires a temporal manifest mapping")
+    schedules = temporal.get("schedules")
+    if not isinstance(schedules, list):
+        raise TypeError("checkpoint cache authority requires temporal schedule rows")
+    declared_nodes = []
+    potential_nodes = []
+    for index, row in enumerate(schedules):
+        if not isinstance(row, Mapping):
+            raise TypeError("checkpoint cache schedule %d must be a mapping" % index)
+        raw_node = row.get("node_id")
+        if type(raw_node) is not int:
+            raise TypeError("checkpoint cache schedule node id must be an exact integer")
+        node = _capacity(
+            raw_node,
+            where="checkpoint cache schedule node id",
+        )
+        declared_nodes.append(node)
+        cache_required = row.get("cache_required")
+        if type(cache_required) is not bool:
+            raise TypeError("checkpoint cache schedule cache_required must be bool")
+        if cache_required:
+            potential_nodes.append(node)
+    potential = tuple(sorted(potential_nodes))
+    if len(declared_nodes) != len(set(declared_nodes)):
+        raise ValueError("checkpoint cache authority has duplicate schedule node ids")
+
     provider = getattr(native, "program_cache_nodes", None)
-    nodes = tuple(int(node) for node in provider()) if callable(provider) else ()
-    if nodes != tuple(sorted(set(nodes))) or any(node < 0 for node in nodes):
+    nodes = tuple(provider()) if callable(provider) else ()
+    if (
+        nodes != tuple(sorted(set(nodes)))
+        or any(type(node) is not int or node < 0 for node in nodes)
+    ):
         raise ValueError("checkpoint cache authority has invalid exact node ids")
+    unknown = tuple(node for node in nodes if node not in potential)
+    if unknown:
+        raise ValueError("checkpoint cache authority has live nodes outside the Program schedule")
+
+    width = _sum(block_nvars_by_name.values(), where="checkpoint cache scalar width")
+    valid_cells = _product(shape, where="checkpoint cache valid cells")
     names = ["cache_nodes", "cache_names"]
     data_bytes = 0
     evidence = []
-    for node in nodes:
-        name = str(native.program_cache_name(node))
-        ncomp = _capacity(
-            int(native.program_cache_ncomp(node)),
-            where="checkpoint cache component count",
-            positive=True,
-        )
-        ngrow = _capacity(
-            int(native.program_cache_ngrow(node)), where="checkpoint cache ghost width"
-        )
-        if not name:
-            raise ValueError("checkpoint cache authority has an empty exact node name")
+    for node in potential:
         names.extend(
             (
                 "cache_ncomp_%d" % node,
@@ -187,20 +229,31 @@ def _cache_capacity(owner: Any, shape: tuple[int, ...]) -> tuple[tuple[str, ...]
                 "cache_value_%d" % node,
             )
         )
-        grown = _product(
-            (_add(extent, 2 * ngrow, where="checkpoint cache grown shape") for extent in shape),
-            where="checkpoint cache grown cells",
-        )
         data_bytes = _add(
             data_bytes,
             _mul(
-                _mul(grown, ncomp, where="checkpoint cache scalar budget"),
+                _mul(valid_cells, width, where="checkpoint cache scalar budget"),
                 8,
                 where="checkpoint cache byte budget",
             ),
             where="checkpoint cache byte budget",
         )
-        evidence.append((node, name, ncomp, ngrow, grown))
+        # This stable potential-node evidence deliberately does not depend on whether native
+        # execution has materialized the lazy cache yet.
+        evidence.append((node, "node_%d" % node, width))
+
+    for node in nodes:
+        name = native.program_cache_name(node)
+        ncomp = _capacity(
+            native.program_cache_ncomp(node),
+            where="checkpoint cache component count",
+            positive=True,
+        )
+        _capacity(native.program_cache_ngrow(node), where="checkpoint cache ghost width")
+        if name != "node_%d" % node:
+            raise ValueError("checkpoint cache authority has a noncanonical exact node name")
+        if ncomp > width:
+            raise ValueError("checkpoint cache component count exceeds the Program width")
     return tuple(names), data_bytes, evidence
 
 
@@ -336,6 +389,7 @@ def _checkpoint_member_names(
             "program_hash",
             "phi",
             "auxiliary_checkpoint",
+            "checkpoint_migration",
             *cache_names,
             *history_names,
         ]
@@ -435,7 +489,14 @@ def _common_budget(
         block_nvars=block_nvars_by_name,
     )
     cache_names, cache_bytes, cache_evidence = (
-        _cache_capacity(owner, shape) if runtime_kind == "uniform" else ((), 0, ())
+        _cache_capacity(
+            owner,
+            shape,
+            program=program,
+            block_nvars_by_name=block_nvars_by_name,
+        )
+        if runtime_kind == "uniform"
+        else ((), 0, ())
     )
     auxiliary_bytes = _mul(auxiliary_components, 8, where="auxiliary scalar width")
     auxiliary_bytes = _mul(
@@ -451,6 +512,15 @@ def _common_budget(
         1,
         where="accepted Program checkpoint byte budget",
     )
+    migration_bytes = 0
+    if runtime_kind == "uniform":
+        import numpy as np
+
+        migration_bytes = _mul(
+            _CHECKPOINT_MIGRATION_PROVENANCE_MAX_CHARACTERS,
+            int(np.dtype("U1").itemsize),
+            where="checkpoint migration provenance byte capacity",
+        )
     payload_bytes = 0
     for addition in (
         scientific_bytes,
@@ -460,6 +530,7 @@ def _common_budget(
         program_bytes,
         source_authority_bytes,
         structural_bytes,
+        migration_bytes,
     ):
         payload_bytes = _add(payload_bytes, addition, where="checkpoint payload byte budget")
 
@@ -544,7 +615,14 @@ def _common_budget(
         runtime_kind,
         len(names),
         max_manifest_characters,
-        max(payload_bytes, text_bytes, accepted_program_bytes, source_authority_bytes, 1),
+        max(
+            payload_bytes,
+            text_bytes,
+            accepted_program_bytes,
+            source_authority_bytes,
+            migration_bytes,
+            1,
+        ),
         uncompressed,
         archive_bytes,
         authority,
@@ -815,6 +893,14 @@ def _producer_checkpoint_resource_budget(
         not isinstance(name, str) or not name for name in names
     ):
         raise ValueError("producer checkpoint budget requires unique non-empty member names")
+    migration_characters = _checkpoint_migration_provenance_characters(payload)
+    migration_bytes = 0
+    if "checkpoint_migration" in payload:
+        migration_bytes = _mul(
+            _CHECKPOINT_MIGRATION_PROVENANCE_MAX_CHARACTERS,
+            int(np.dtype("U1").itemsize),
+            where="checkpoint migration provenance byte capacity",
+        )
     total = 0
     maximum = 1
     for name in names:
@@ -822,6 +908,11 @@ def _producer_checkpoint_resource_budget(
         if value.dtype.hasobject or value.dtype.itemsize <= 0 or value.ndim > 4:
             raise TypeError("producer checkpoint member %r has no bounded primitive array" % name)
         size = _capacity(int(value.nbytes), where="producer checkpoint array bytes")
+        if name == "checkpoint_migration":
+            # Keep the producer envelope independent of the particular reviewed mapping spelling.
+            # Decode therefore has the same fixed reservation for every accepted provenance.
+            assert migration_characters <= _CHECKPOINT_MIGRATION_PROVENANCE_MAX_CHARACTERS
+            size = migration_bytes
         total = _add(total, size, where="producer checkpoint aggregate bytes")
         maximum = max(maximum, size)
     total = _add(

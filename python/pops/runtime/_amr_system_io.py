@@ -45,7 +45,7 @@ class _AmrSystemIO(_AmrSystem):
         return getattr(self, "_last_restart_regrid_receipt", None)
 
     def checkpoint(self, path: Any) -> Any:
-        """Encode the complete accepted AMR state for the RuntimeInstance checkpoint provider.
+        """Encode the complete accepted AMR state using public atomic publication.
 
         The provider owns collective publication; this adapter serializes the installed hierarchy,
         temporal state, histories, and regrid state for frozen or active regridding.
@@ -58,6 +58,20 @@ class _AmrSystemIO(_AmrSystem):
             path,
             self._regrid_every,
             getattr(self, "_history_persistence", None) or {},
+        )
+
+    def _checkpoint_precreated_inode(self, path: Any, *, precreated_descriptor: int | None) -> Any:
+        """Internal RuntimeInstance seam preserving its transaction-created inode authority."""
+        from pops.runtime._amr_checkpoint_v3 import write_v3
+
+        return write_v3(
+            self,
+            self._s,
+            path,
+            self._regrid_every,
+            getattr(self, "_history_persistence", None) or {},
+            precreated_inode=True,
+            precreated_descriptor=precreated_descriptor,
         )
 
     def _prepare_checkpoint_restart(

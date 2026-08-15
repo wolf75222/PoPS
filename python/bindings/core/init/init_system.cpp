@@ -806,6 +806,9 @@ void bind_system_physics(py::class_<System>& cls) {
       .def("set_clock", &System::set_clock, py::arg("t"), py::arg("macro_step"))
       .def("set_potential", &System::set_potential, py::arg("phi"))
       .def("field_provider_slots", &System::field_provider_slots)
+      .def("configured_field_provider_slots", &System::configured_field_provider_slots,
+           "Read-only installed/configured field-provider restart authority; does not materialize "
+           "the default field")
       .def("set_field_potential", &System::set_field_potential, py::arg("provider_slot"),
            py::arg("phi"))
       // INTERNAL raw coupled-source ABI (ADC-595): the flat 12-kwarg bytecode form is now an INTERNAL
@@ -1427,4 +1430,31 @@ void init_system(py::module_& m) {
   bind_system_physics(cls);
   bind_system_stepping(cls);
   bind_system_data(cls);
+  m.def(
+      "_attest_empty_uniform_auxiliary_checkpoint",
+      [](py::object payload) {
+        if (!PyBytes_CheckExact(payload.ptr()))
+          throw py::type_error(
+              "Uniform provider-empty auxiliary checkpoint attestation requires a bytes object");
+        char* data = nullptr;
+        Py_ssize_t size = 0;
+        if (PyBytes_AsStringAndSize(payload.ptr(), &data, &size) != 0)
+          throw py::error_already_set();
+        const auto proof =
+            pops::runtime::system::attest_empty_auxiliary_checkpoint_state<pops::kNativeDimension>(
+                {reinterpret_cast<const std::uint8_t*>(data), static_cast<std::size_t>(size)});
+        py::dict result;
+        result["format"] = "POPSAUX2";
+        result["dimension"] = proof.dimension;
+        result["registry_contract"] = py::bytes(proof.registry_contract);
+        result["accepted_generation"] = proof.accepted_generation;
+        result["groups"] = proof.groups;
+        result["components"] = proof.components;
+        result["providers"] = proof.providers;
+        result["empty"] = true;
+        return result;
+      },
+      py::arg("payload"),
+      "Read-only native proof that POPSAUX2 is a provider-empty Uniform auxiliary image; its "
+      "opaque registry contract is pinned externally.");
 }

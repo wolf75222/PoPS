@@ -282,7 +282,11 @@ def check_schedules_lowerable(program: Any, *, target: str | None = None) -> Non
                                where="schedule on node %r" % value.name)
         lowering = _lower_schedule_ir(value, schedule)
         from pops.codegen.program_emit_kernels import _AUX_OUTPUT_OPS
-        from pops.time._schedule.api import ScheduleComment, ScheduleTimeline
+        from pops.time._schedule.api import (
+            ScheduleComment,
+            ScheduleTimeline,
+            schedule_lowering_cache_required,
+        )
         if target == "system" and lowering.domain.timeline is ScheduleTimeline.AMR_LEVEL:
             raise NotImplementedError(
                 "AMRLevel schedule on node %r requires target='amr_system'" % value.name)
@@ -297,7 +301,9 @@ def check_schedules_lowerable(program: Any, *, target: str | None = None) -> Non
             )
         if (
             target == "amr_system"
-            and schedule.needs_cache()
+            and schedule_lowering_cache_required(
+                lowering, where="node %r (op '%s')" % (value.name, value.op)
+            )
             and value.op not in _AUX_OUTPUT_OPS
         ):
             raise NotImplementedError(

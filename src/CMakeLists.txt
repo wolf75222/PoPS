@@ -52,6 +52,8 @@ set(POPS_RUNTIME_TARGETS pops_runtime_core_objects pops_runtime_core ${POPS_RUNT
 foreach(_runtime_target IN LISTS POPS_RUNTIME_TARGETS)
   target_link_libraries(${_runtime_target} PUBLIC pops::pops ${CMAKE_DL_LIBS})
   target_compile_features(${_runtime_target} PRIVATE cxx_std_${POPS_CXX_STD})
+  target_compile_definitions(${_runtime_target} PRIVATE
+    POPS_HEADER_SIG="${POPS_NATIVE_HEADER_SIGNATURE}")
   # These targets own every out-of-line POPS_EXPORT runtime seam. The shared-exception switch keeps
   # Shared runtime exceptions declaration-only and BUILDING selects dllexport on Windows; both propagate to
   # the final module/executable embedding these static/object targets. Generated native components
@@ -107,8 +109,7 @@ if(POPS_BUILD_PYTHON)
       _pops_EXPORTS
       POPS_CXX_STD=${POPS_CXX_STD}
       POPS_VERSION="${PROJECT_VERSION}"
-      POPS_CXX_COMPILER="${CMAKE_CXX_COMPILER}"
-      POPS_HEADER_SIG="${POPS_NATIVE_HEADER_SIGNATURE}")
+      POPS_CXX_COMPILER="${CMAKE_CXX_COMPILER}")
   endforeach()
 
   # Make the exact native facts available to the pybind-only adapter TUs in python/CMakeLists.txt.

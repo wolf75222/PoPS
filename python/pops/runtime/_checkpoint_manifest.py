@@ -100,7 +100,7 @@ def _identity_from_json(value: Any) -> Identity:
 def _array_evidence(value: Any) -> dict[str, Any]:
     import numpy as np
 
-    array = np.ascontiguousarray(np.asarray(value))
+    array = np.asarray(value, order="C")
     if array.dtype.hasobject:
         raise TypeError("checkpoint payload cannot contain object dtype")
     header = canonical_bytes({

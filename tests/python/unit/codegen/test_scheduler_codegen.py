@@ -128,7 +128,7 @@ def _nested_field_skip_program(kind):
 
     def scheduled_copy(builder, value):
         field(value, schedule=_every(builder.clock, 5, adctime.Skip()))
-        return builder.value("%s_scheduled_state" % kind, value)
+        return builder.value("%s_scheduled_state" % kind, 1 * value)
 
     if kind == "branch":
         program.branch(
@@ -398,15 +398,8 @@ def test_field_hold_refuses_raw_provider_storage_cache():
     assert "ctx.schedule_decision(17," in cpp and ", false))" in cpp
     assert "cache_store_aux" not in cpp
     assert "cache_restore_aux" not in cpp
-    program = _field_program(lambda clock: _every(clock, 10, adctime.Hold()))
-    assert amr_program_op_support(program, context=_amr_context(frozen=False)) == {
-        "named_field_solve": "green",
-        "schedule_due": "green",
-        "schedule_field_hold": "green",
-    }
-    assert amr_program_op_support(
-        program, context=_amr_context(frozen=False, rematerializer=False)
-    )["schedule_field_hold"] == "pending:dynamic_hierarchy_provider_pack"
+    with pytest.raises(ValueError, match=r"not cacheable; cannot use schedule Hold"):
+        _field_program(lambda clock: _every(clock, 10, adctime.Hold()))
 
 
 def test_field_zero_refuses_raw_provider_storage_mutation():

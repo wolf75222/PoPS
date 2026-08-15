@@ -21,8 +21,11 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <memory>
 #include <numeric>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -50,6 +53,13 @@ using Model = CompositeModel<EulerND<Dim>, GravityForceND<Dim>, GravityCoupling>
 
 constexpr const char* kGravityFieldSlot = "test.weno5-compiled/gravity-field";
 constexpr const char* kGravityField = "gravity-potential";
+
+template <int RuntimeDim>
+void install_runtime_authority(System<RuntimeDim>& system, std::string_view identity) {
+  auto lane =
+      std::make_shared<ExecutionLane>(ExecutionLane::duplicate_world_collectively(identity));
+  system.install_prepared_boundary_execution_lane(std::move(lane));
+}
 
 Model gravity_model(double rho0) {
   Model model{};
@@ -169,6 +179,7 @@ struct CompiledRun {
 // Real public compiled-package route: prepare, install, field-output publication, then residual.
 CompiledRun run_compiled(int n, double L, const std::vector<double>& rho, double rho0) {
   NativeSystem sys(native_config(n, L));
+  install_runtime_authority(sys, "test.weno5-compiled/runtime@1");
   sys.install_block_state_route("gas", "test.weno5-compiled/gas/state");
   sys.set_poisson("charge_density", "cartesian_cg");
   const auto field_outputs = install_gravity_field_authority(sys);

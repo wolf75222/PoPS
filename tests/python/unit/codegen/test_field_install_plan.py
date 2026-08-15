@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import MappingProxyType
+
 import pytest
 
 from pops.codegen._orchestration_compile import capture_field_plans
@@ -27,7 +29,8 @@ from pops.fields.bcs import (
 )
 from pops.math import Laplacian, elliptic_terms, laplacian
 from pops.layouts import Uniform
-from pops.physics import Model
+from pops.physics import Density, Model, Momentum
+from pops.frames import X_AXIS
 from pops.problem import Case
 from pops.solvers.elliptic import CartesianCG, GeometricMG
 from pops.solvers.options import CompositeFAC
@@ -111,6 +114,84 @@ def _field(model: Model, name: str, rhs: object):
         equation=(-laplacian(unknown) == rhs),
         outputs=(FieldOutput(name, unknown),),
     )
+
+
+@pytest.mark.parametrize("target", ("system", "amr_system"))
+def test_cell_centered_output_install_thaws_only_the_pybind_commit_carrier(target: str) -> None:
+    from pops.codegen._cell_centered_field_lowering import _install_output
+    from pops.fields._prepared_field_lowering_registry import PreparedFieldRuntimeInstallContext
+
+    source_keys = (
+        MappingProxyType(
+            {
+                "owner_qid": "case/material",
+                "space_kind": "field",
+                "space_name": "potential",
+                "component": "potential",
+            }
+        ),
+        MappingProxyType(
+            {
+                "owner_qid": "case/material",
+                "space_kind": "field",
+                "space_name": "potential",
+                "component": "potential_x",
+            }
+        ),
+    )
+    source_payload = MappingProxyType(
+        {
+            "block": "material",
+            "field": "electrostatic",
+            "output_keys": source_keys,
+            "gradient_sign": -1,
+        }
+    )
+    received = []
+
+    class Engine:
+        def register_elliptic_field(self, block, field, output_keys, gradient_sign):
+            assert type(output_keys) is list
+            assert all(type(row) is dict for row in output_keys)
+            received.append((block, field, [dict(row) for row in output_keys], gradient_sign))
+            output_keys[0]["component"] = "engine-owned-mutation"
+
+    context = PreparedFieldRuntimeInstallContext(
+        target=target,
+        engine=Engine(),
+        resources={},
+        slot="field/case/material/electrostatic",
+    )
+    _install_output(object(), context, source_payload)
+
+    assert received == [
+        (
+            "material",
+            "electrostatic",
+            [
+                {
+                    "owner_qid": "case/material",
+                    "space_kind": "field",
+                    "space_name": "potential",
+                    "component": "potential",
+                },
+                {
+                    "owner_qid": "case/material",
+                    "space_kind": "field",
+                    "space_name": "potential",
+                    "component": "potential_x",
+                },
+            ],
+            -1,
+        )
+    ]
+    assert type(source_payload) is MappingProxyType
+    assert type(source_payload["output_keys"]) is tuple
+    assert source_keys[0]["component"] == "potential"
+    with pytest.raises(TypeError):
+        source_payload["gradient_sign"] = 1
+    with pytest.raises(TypeError):
+        source_keys[0]["component"] = "mutation"
 
 
 def _disc(
@@ -527,7 +608,11 @@ def test_iterate_dependent_boundary_requires_newton_and_emits_exact_jvp() -> Non
 
 def test_boundary_state_component_and_logical_time_lower_to_direct_provider_pack() -> None:
     model = Model("prepared-boundary-model")
-    state = model.state("U", components=["rho", "momentum"])
+    state = model.state(
+        "U",
+        components=["rho", "rho_u"],
+        roles={"rho": Density(), "rho_u": Momentum(X_AXIS)},
+    )
     rho, _ = state
     unknown = model.field("potential")
     operator = model.field_operator(
@@ -573,7 +658,11 @@ def test_boundary_state_component_and_logical_time_lower_to_direct_provider_pack
 
 def test_multilevel_amr_level_local_boundary_state_has_exact_level_route() -> None:
     model = Model("amr-level-boundary-model")
-    state = model.state("U", components=["rho", "momentum"])
+    state = model.state(
+        "U",
+        components=["rho", "rho_u"],
+        roles={"rho": Density(), "rho_u": Momentum(X_AXIS)},
+    )
     rho, _ = state
     unknown = model.field("potential")
     operator = model.field_operator(
@@ -815,7 +904,11 @@ def test_boundary_state_value_requires_explicit_component_contract() -> None:
     from pops.math import ValueExpr
 
     model = Model("ambiguous-boundary-model")
-    state = model.state("U", components=["rho", "momentum"])
+    state = model.state(
+        "U",
+        components=["rho", "rho_u"],
+        roles={"rho": Density(), "rho_u": Momentum(X_AXIS)},
+    )
     rho, _ = state
     unknown = model.field("potential")
     operator = model.field_operator(

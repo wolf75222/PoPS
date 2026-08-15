@@ -789,6 +789,7 @@ PreparedBlockInstallation<Dim, Implementation> prepare_block_installation(
   candidate.cons_to_prim = std::move(prepared.conservative_to_primitive);
   candidate.batch_cons_to_prim = std::move(prepared.batch_conservative_to_primitive);
   candidate.source_frequency = std::move(prepared.source_frequency);
+  candidate.parabolic_frequency = prepared.parabolic_frequency;
   candidate.stability_dt = std::move(prepared.stability_dt);
   candidate.project = std::move(prepared.closures.project);
   candidate.project_masked = std::move(prepared.closures.project_masked);
@@ -1738,13 +1739,13 @@ void System<Dim>::register_external_riemann_package(
   auto authority = std::make_shared<runtime::program::ExternalBrickHandle>(
       so_path, brick_id, expected_nvars, expected_provider_count, expected_model_identity,
       expected_sha256, true);
-  // ExternalBrickHandle is also the AMR v4 authority. System opts into the distinct v6 prepared
-  // receiver contract explicitly and rejects an old v4 System installer before manifest or
+  // ExternalBrickHandle is also the AMR v5 authority. System opts into the distinct v7 prepared
+  // receiver contract explicitly and rejects an older System installer before manifest or
   // staging callbacks.
 
   ExactContractBuilder exact;
   exact.text("pops.external-riemann.system-package")
-      .scalar(std::uint32_t{6})
+      .scalar(std::uint32_t{7})
       .scalar(std::int32_t{Dim})
       .text(name)
       .text(brick_id)

@@ -207,8 +207,9 @@ void exercise_identity_model_recovery() {
   const pops::Real nonfinite[1] = {std::numeric_limits<pops::Real>::infinity()};
   const auto rejected = recovery.recover(nonfinite);
   EXPECT_EQ(rejected.outcome.status, pops::RecoveryStatus::kRejected);
-  EXPECT_EQ(rejected.outcome.cause, pops::RecoveryCause::kInadmissibleCandidate);
-  EXPECT_NE(rejected.outcome.reason_code, 0u);
+  EXPECT_EQ(rejected.outcome.cause, pops::RecoveryCause::kExplicitRejection);
+  EXPECT_EQ(rejected.outcome.reason_code,
+            static_cast<std::uint32_t>(pops::VariableRecoveryInversionFailure::kSourceRejected));
   EXPECT_EQ(recovery.workspace_allocation_identity(), allocation);
 }
 

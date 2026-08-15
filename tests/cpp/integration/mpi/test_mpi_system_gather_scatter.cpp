@@ -40,6 +40,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <stdexcept>
 #include <vector>
 
@@ -115,6 +116,20 @@ struct ScalarModel {
 };
 
 template <int Dim>
+struct DiffusiveScalarModel : ScalarModel<Dim> {
+  Real nu = Real(0);
+
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"test.mpi-system-gather-scatter.diffusive-scalar", 1};
+  }
+  void serialize_exact_parameters(ExactContractBuilder& contract) const {
+    ScalarModel<Dim>::serialize_exact_parameters(contract);
+    contract.scalar(nu);
+  }
+  POPS_HD Real diffusivity() const { return nu; }
+};
+
+template <int Dim>
 struct DirectDtProbe {
   using Schema = nd::ScalarStateSchema<Dim>;
   using State = typename Schema::Conservative;
@@ -159,6 +174,10 @@ static int pops_run_test_mpi_system_gather_scatter(int argc, char** argv) {
   cfg.boxes = {Box<Dim>::from_extents(cfg.shape)};
 
   NativeSystem sys(cfg);
+  sys.install_prepared_boundary_execution_lane(
+      std::make_shared<ExecutionLane>(ExecutionLane::duplicate_world_collectively(
+          "test.mpi-system-gather-scatter.runtime-instance@1")));
+  sys.install_block_state_route("u", "test.mpi-system-gather-scatter.state.u@1");
   // add_compiled_model branche les fermetures natives rhs_into / advance / max_speed : ce sont
   // exactement les sites du finding 8.
   add_compiled_model(sys, "u", ScalarModel<Dim>{}, "none", "rusanov", "conservative", "explicit");
@@ -255,6 +274,28 @@ static int pops_run_test_mpi_system_gather_scatter(int argc, char** argv) {
 
   const Real direct_dt = nd::min_stability_dt_mf(DirectDtProbe<Dim>{Real(0.25)}, reduction_state);
   chk(direct_dt == Real(0.25), "stability_dt_valide_diffusee_aux_rangs_vides");
+
+  // The direct C++ installation route does not cross the native-package witness.  Its immutable
+  // parabolic frequency must nevertheless be authenticated before solve_fields or any state
+  // mutation.  Deliberately author different diffusivities and require one collective refusal.
+  if (np > 1) {
+    NativeSystem divergent(cfg);
+    divergent.install_prepared_boundary_execution_lane(
+        std::make_shared<ExecutionLane>(ExecutionLane::duplicate_world_collectively(
+            "test.mpi-system-gather-scatter.divergent-parabolic@1")));
+    divergent.install_block_state_route("q", "test.mpi-system-gather-scatter.state.q@1");
+    DiffusiveScalarModel<Dim> model;
+    model.nu = me == 0 ? Real(0.125) : Real(0.25);
+    add_compiled_model(divergent, "q", model, "none", "rusanov", "conservative", "explicit");
+    test::install_forward_euler_program(divergent);
+    bool rejected_divergent_q = false;
+    try {
+      (void)divergent.step_cfl(0.5);
+    } catch (const std::invalid_argument&) {
+      rejected_divergent_q = true;
+    }
+    chk(rejected_divergent_q, "parabolic_frequency_divergente_rejetee_collectivement");
+  }
 
 #ifdef POPS_HAS_MPI
   if (np > 1) {

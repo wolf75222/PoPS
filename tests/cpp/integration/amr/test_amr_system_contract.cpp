@@ -193,7 +193,8 @@ void install_gas_boundary(pops::AmrSystem<Dim>& system, const std::vector<double
 
 template <int Dim>
 void verify_model_qualified_primitive_boundary_conversion() {
-  const pops::AmrSystemConfig<Dim> config = single_level_config<Dim>(6);
+  pops::AmrSystemConfig<Dim> config = single_level_config<Dim>(6);
+  config.periodicity.fill(false);
   std::vector<double> primitive(static_cast<std::size_t>(Dim + 2), 0.0);
   primitive[0] = 2.0;
   for (int axis = 0; axis < Dim; ++axis)
@@ -256,8 +257,9 @@ void verify_prepared_installation_parity() {
   constexpr const char* consumer_qid = "tests.amr.system-contract/parity/physical-flux";
   pops::AmrSystem<Dim> direct(config);
   pops::AmrSystem<Dim> prepared(config);
-  pops::test::install_amr_runtime_authority(direct, "test.amr-system-contract.direct-package");
-  pops::test::install_amr_runtime_authority(prepared, "test.amr-system-contract.prepared-package");
+  constexpr const char* runtime_identity = "test.amr-system-contract.parity-package";
+  pops::test::install_amr_runtime_authority(direct, runtime_identity);
+  pops::test::install_amr_runtime_authority(prepared, runtime_identity);
   direct.install_block_state_route("tracer", state_route);
   prepared.install_block_state_route("tracer", state_route);
 
@@ -485,15 +487,15 @@ std::vector<std::vector<double>> run_magnetic_source(pops::Real bz) {
       {{"fluid", "rho", 1.5, pops::test::PreparedThresholdRelation::Above,
         "tests.amr.system-contract/magnetic/state"}},
       "tests.amr.system-contract/magnetic/tagging@1");
-  materialize_magnetic_bootstrap(system, config, state);
-  EXPECT_EQ(system.n_levels(), 2);
   const std::vector<double> zero(cells, 0.0);
   system.stage_auxiliary_input(keys[0], zero);
   system.stage_auxiliary_input(keys[1], zero);
   system.stage_auxiliary_input(keys[2], std::vector<double>(cells, static_cast<double>(bz)));
+  materialize_magnetic_bootstrap(system, config, state);
+  EXPECT_EQ(system.n_levels(), 2);
   system.refresh_auxiliary({"tests.amr.system-contract/magnetic-clock", 0, 0, 0, 0, 0, 0,
                             AuxiliaryEvaluationEvent::initialization});
-  pops::test::install_forward_euler_program(system);
+  pops::test::install_forward_euler_program(system, false);
   system.advance(0.01, 1);
 
   const auto bz_values = system.auxiliary_component(keys[2]);
@@ -720,7 +722,7 @@ MultiblockRegridObservation run_two_block_regrid_with_bz(pops::Real bz) {
   EXPECT_EQ(system.block_level_state_global(names[0], 0), block_oracles[0][0]);
   EXPECT_EQ(system.block_level_state_global(names[1], 0), block_oracles[1][0]);
 
-  pops::test::install_forward_euler_program(system);
+  pops::test::install_forward_euler_program(system, false);
   system.step(1.0e-4);
 
   result.topology_after = system.engine()->topology_epoch();
@@ -993,7 +995,7 @@ TEST(test_amr_system_contract, AcceptedClockSerializationPreservesNonAssociative
   system.install_block_state_route("tracer", "tests.amr.system-contract/clock/state");
   install_direct_tracer(system, "tracer", "tests.amr.system-contract/clock/physical-flux");
   system.set_clock(0.1, 0);
-  pops::test::install_forward_euler_program(system);
+  pops::test::install_forward_euler_program(system, false);
   system.set_program_cadence(3, 3);
 
   const double accepted_endpoint = ((0.1 + 0.1) + 0.1) + 0.3;

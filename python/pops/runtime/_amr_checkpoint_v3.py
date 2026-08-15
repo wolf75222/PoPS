@@ -264,7 +264,7 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
         "program_hash": str(sim.installed_program_hash())
         if hasattr(sim, "installed_program_hash")
         else "",
-        "field_provider_slots": np.asarray(field_slots),
+        "field_provider_slots": np.asarray(field_slots, dtype=str),
         "field_provider_manifest": np.asarray(
             json.dumps(field_manifest, separators=(",", ":"), ensure_ascii=True)
         ),
@@ -456,11 +456,23 @@ def _capture_v3(owner, sim, prepared):
     return out, identity.token
 
 
-def write_v3(owner, sim, path, regrid_every, persistence=None):
+def write_v3(
+    owner,
+    sim,
+    path,
+    regrid_every,
+    persistence=None,
+    *,
+    precreated_inode=False,
+    precreated_descriptor=None,
+):
     """Capture exact AMR accepted state with preflight consensus before native gathers."""
     import os
     import numpy as np
-    from pops.output._checkpoint_collective import collective_checkpoint_capture
+    from pops.output._checkpoint_collective import (
+        collective_checkpoint_capture,
+        write_precreated_checkpoint_payload,
+    )
 
     prepared_holder = {}
 
@@ -474,6 +486,13 @@ def write_v3(owner, sim, path, regrid_every, persistence=None):
 
     def publish(payload):
         prepared = prepared_holder["plan"]
+        if precreated_inode:
+            if type(precreated_descriptor) is not int:
+                raise RuntimeError(
+                    "precreated AMR checkpoint publication requires the root descriptor"
+                )
+            write_precreated_checkpoint_payload(precreated_descriptor, payload)
+            return str(prepared.target)
         temporary = prepared.target.with_name(prepared.target.name + ".tmp")
         try:
             with open(temporary, "wb") as stream:

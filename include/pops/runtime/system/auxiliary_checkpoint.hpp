@@ -86,6 +86,20 @@ struct AuxiliaryCheckpointAcceptedState final {
                          const AuxiliaryCheckpointAcceptedState&) = default;
 };
 
+/// Read-only evidence that a POPSAUX2 carrier is an exact provider-empty Uniform image.
+///
+/// This deliberately carries the decoded facts rather than a magic-only boolean so an
+/// authenticated Python checkpoint migration can retain the native proof it consumed.  It does
+/// not authorize restore or publication of any registry state.
+struct AuxiliaryCheckpointEmptyAttestation final {
+  int dimension = 0;
+  std::string registry_contract;
+  std::uint64_t accepted_generation = 0;
+  std::size_t groups = 0;
+  std::size_t components = 0;
+  std::size_t providers = 0;
+};
+
 namespace auxiliary_checkpoint_detail {
 
 inline constexpr std::array<std::uint8_t, 8> kMagic{'P', 'O', 'P', 'S', 'A', 'U', 'X', '2'};
@@ -310,6 +324,48 @@ inline void require_valid_kind(AuxiliaryProviderKind kind) {
 }
 
 template <int Dim>
+[[nodiscard]] AuxiliaryCheckpointAcceptedState<Dim> read_state(Reader& in) {
+  in.expect_raw(kMagic);
+  if (in.i32() != Dim)
+    throw std::runtime_error("invalid exact auxiliary checkpoint: native dimension differs");
+  AuxiliaryCheckpointAcceptedState<Dim> state;
+  state.registry_contract = in.string();
+  state.accepted_generation = in.u64();
+  state.groups.resize(in.size(kMinStorageGroupBytes<Dim>));
+  for (auto& group : state.groups) {
+    group.identity = in.string();
+    group.contract = read_contract(in);
+    group.shape = read_shape<Dim>(in);
+    group.component_count = in.index();
+    group.payload.resize(in.size(sizeof(double)));
+    for (double& value : group.payload)
+      value = in.real();
+  }
+  state.components.resize(in.size(kMinComponentBytes<Dim>));
+  for (auto& component : state.components) {
+    component.provider_identity = in.string();
+    component.provider_kind = read_kind(in);
+    component.key = read_key(in);
+    component.contract = read_contract(in);
+    component.shape = read_shape<Dim>(in);
+    component.address.group = in.string();
+    component.address.component = in.index();
+  }
+  state.providers.resize(in.size(kMinProviderBytes));
+  for (auto& provider : state.providers) {
+    provider.identity = in.string();
+    provider.kind = read_kind(in);
+    const std::uint64_t present = in.u64();
+    if (present > 1U)
+      throw std::runtime_error("invalid exact auxiliary checkpoint: invalid point tag");
+    if (present)
+      provider.accepted_point = read_point(in);
+  }
+  in.finish();
+  return state;
+}
+
+template <int Dim>
 void validate_state(const AuxiliaryCheckpointAcceptedState<Dim>& state) {
   if (state.registry_contract.empty())
     throw std::invalid_argument("auxiliary checkpoint requires a sealed registry contract");
@@ -443,45 +499,36 @@ template <int Dim>
     std::span<const std::uint8_t> bytes) {
   namespace detail = auxiliary_checkpoint_detail;
   detail::Reader in(bytes);
-  in.expect_raw(detail::kMagic);
-  if (in.i32() != Dim)
-    throw std::runtime_error("invalid exact auxiliary checkpoint: native dimension differs");
-  AuxiliaryCheckpointAcceptedState<Dim> state;
-  state.registry_contract = in.string();
-  state.accepted_generation = in.u64();
-  state.groups.resize(in.size(detail::kMinStorageGroupBytes<Dim>));
-  for (auto& group : state.groups) {
-    group.identity = in.string();
-    group.contract = detail::read_contract(in);
-    group.shape = detail::read_shape<Dim>(in);
-    group.component_count = in.index();
-    group.payload.resize(in.size(sizeof(double)));
-    for (double& value : group.payload)
-      value = in.real();
-  }
-  state.components.resize(in.size(detail::kMinComponentBytes<Dim>));
-  for (auto& component : state.components) {
-    component.provider_identity = in.string();
-    component.provider_kind = detail::read_kind(in);
-    component.key = detail::read_key(in);
-    component.contract = detail::read_contract(in);
-    component.shape = detail::read_shape<Dim>(in);
-    component.address.group = in.string();
-    component.address.component = in.index();
-  }
-  state.providers.resize(in.size(detail::kMinProviderBytes));
-  for (auto& provider : state.providers) {
-    provider.identity = in.string();
-    provider.kind = detail::read_kind(in);
-    const std::uint64_t present = in.u64();
-    if (present > 1U)
-      throw std::runtime_error("invalid exact auxiliary checkpoint: invalid point tag");
-    if (present)
-      provider.accepted_point = detail::read_point(in);
-  }
-  in.finish();
+  auto state = detail::read_state<Dim>(in);
   detail::validate_state(state);
   return state;
+}
+
+/// Decode and prove the provider-empty Uniform POPSAUX2 carrier without restoring it.
+///
+/// The native decoder authenticates the complete carrier, including its opaque non-empty registry
+/// contract.  The migration authority pins that contract externally; this proof deliberately does
+/// not claim compatibility with a target registry.  A provider-empty registry may have consumer
+/// plans and accepted one or more publications, so its generation remains authentic provenance.
+/// Migration needs that narrower proof without restoration, so a successful attestation cannot
+/// change runtime state or make an image restorable.
+template <int Dim>
+[[nodiscard]] AuxiliaryCheckpointEmptyAttestation attest_empty_auxiliary_checkpoint_state(
+    std::span<const std::uint8_t> bytes) {
+  namespace detail = auxiliary_checkpoint_detail;
+  detail::Reader in(bytes);
+  const auto state = detail::read_state<Dim>(in);
+  detail::validate_state(state);
+  if (state.accepted_generation == std::numeric_limits<std::uint64_t>::max() ||
+      !state.groups.empty() || !state.components.empty() || !state.providers.empty())
+    throw std::runtime_error(
+        "invalid exact auxiliary checkpoint: expected provider-empty Uniform state");
+  return {Dim,
+          state.registry_contract,
+          state.accepted_generation,
+          state.groups.size(),
+          state.components.size(),
+          state.providers.size()};
 }
 
 /// Verify a rank-local carrier allocation before a backend copies its checkpoint payload into it.

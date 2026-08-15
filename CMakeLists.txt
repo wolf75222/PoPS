@@ -464,6 +464,7 @@ if(POPS_BUILD_TESTS)
       "-DPOPS_FIXTURE_SOURCE_DIR=${CMAKE_SOURCE_DIR}/tests/cmake/serial_parent_mpi_target"
       "-DPOPS_KOKKOS_FIXTURE_DIR=${CMAKE_SOURCE_DIR}/tests/cmake/mpi_abi_mismatch"
       "-DPOPS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}/serial-parent-mpi-smoke"
+      "-DPOPS_NATIVE_DIM=${POPS_NATIVE_DIM}"
       "-DPOPS_GENERATOR=${CMAKE_GENERATOR}"
       -P "${CMAKE_SOURCE_DIR}/tests/cmake/run_serial_parent_mpi_target.cmake")
   set_tests_properties(test_serial_add_subdirectory_ignores_parent_mpi PROPERTIES
@@ -627,6 +628,7 @@ if(POPS_INSTALL)
         COMMAND "${CMAKE_COMMAND}"
           "-DPOPS_SOURCE_DIR=${CMAKE_SOURCE_DIR}"
           "-DPOPS_REJECT_BUILD_DIR=${CMAKE_BINARY_DIR}/hdf5-without-mpi-rejected"
+          "-DPOPS_NATIVE_DIM=${POPS_NATIVE_DIM}"
           "-DPOPS_GENERATOR=${CMAKE_GENERATOR}"
           -P "${CMAKE_SOURCE_DIR}/tests/cmake/expect_hdf5_without_mpi_rejected.cmake")
       set_tests_properties(test_hdf5_without_mpi_rejected PROPERTIES

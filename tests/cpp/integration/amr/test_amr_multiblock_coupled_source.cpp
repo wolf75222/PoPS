@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include "explicit_amr_program.hpp"
+
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
@@ -107,9 +109,10 @@ struct ConservativeExchange {
   pops::FieldView<pops::Real, Dim> donor{};
   pops::FieldView<pops::Real, Dim> receiver{};
   pops::Real dt = pops::Real(0);
+  pops::Real strength = pops::Real(0);
 
   POPS_HD void operator()(const pops::Index<Dim>& cell) const {
-    const pops::Real amount = dt * pops::Real(0.25) * donor(cell, 0);
+    const pops::Real amount = dt * strength * donor(cell, 0);
     donor(cell, 0) -= amount;
     receiver(cell, 0) += amount;
   }
@@ -166,13 +169,17 @@ bool byte_exact_block_levels(const BlockLevelSnapshot<Dim>& expected,
 
 template <int Dim>
 struct CoupledFixture {
+  static constexpr pops::Real kExchangeStrength = pops::Real(0.25);
+
   pops::AmrSystem<Dim> system;
   std::shared_ptr<pops::runtime::program::AmrProgramContext<Dim>> context;
   std::shared_ptr<bool> fail_on_rank_zero = std::make_shared<bool>(false);
   std::shared_ptr<bool> violate_conservation_on_rank_zero = std::make_shared<bool>(false);
   std::shared_ptr<bool> cross_owner_projection_scratch = std::make_shared<bool>(false);
 
-  CoupledFixture() : system(config()) {
+  explicit CoupledFixture(pops::Real exchange_strength) : system(config()) {
+    pops::test::install_amr_runtime_authority(system,
+                                              "test.amr.multiblock-coupled-source/runtime@1");
     system.install_block_state_route("donor", "state/donor");
     system.install_block_state_route("receiver", "state/receiver");
     pops::add_compiled_model<Dim>(system, "donor", scalar_model<Dim>(), "minmod", "rusanov",
@@ -196,16 +203,18 @@ struct CoupledFixture {
     system.install_prepared_amr_coupling_operator(
         "test.amr.multiblock-coupled-source/exchange@1", std::move(view),
         pops::runtime::system::PreparedCouplingOperator<Dim>(
-            [fail = fail_on_rank_zero, violate = violate_conservation_on_rank_zero](
+            [exchange_strength, fail = fail_on_rank_zero,
+             violate = violate_conservation_on_rank_zero](
                 pops::Real dt, const std::vector<pops::MultiFab<Dim>*>& canonical_states) {
               if (canonical_states.size() != 2)
                 throw std::runtime_error("coupled source lost its complete canonical state pack");
               auto& donor = *canonical_states[0];
               auto& receiver = *canonical_states[1];
               for (std::size_t local = 0; local < donor.local_size(); ++local)
-                pops::for_each_cell(donor.box(local),
-                                    ConservativeExchange<Dim>{donor.fab(local).view(),
-                                                              receiver.fab(local).view(), dt});
+                pops::for_each_cell(
+                    donor.box(local),
+                    ConservativeExchange<Dim>{donor.fab(local).view(), receiver.fab(local).view(),
+                                              dt, exchange_strength});
               Kokkos::fence();
               if (*violate && pops::my_rank() == 0 && donor.local_size() != 0) {
                 const auto values = donor.fab(0).view();
@@ -325,7 +334,8 @@ struct CoupledFixture {
 
 template <int Dim>
 void prove_conservative_execution_rollback_and_retry() {
-  CoupledFixture<Dim> fixture;
+  CoupledFixture<Dim> fixture(CoupledFixture<Dim>::kExchangeStrength);
+  CoupledFixture<Dim> control(pops::Real(0));
   ASSERT_EQ(fixture.system.n_levels(), 2);
   const BlockLevelSnapshot<Dim> initial = snapshot_block_levels(fixture.system);
   const double total_before = fixture.system.mass("donor") + fixture.system.mass("receiver");
@@ -354,12 +364,9 @@ void prove_conservative_execution_rollback_and_retry() {
   EXPECT_TRUE(byte_exact_block_levels(initial, fixture.system));
 
   fixture.system.step(0.4);
-  for (int level = 0; level < fixture.system.n_levels(); ++level) {
-    EXPECT_LT(pops::reduce_max(fixture.system.prepared_amr_block_state(0, level)),
-              pops::reduce_max(initial[0][static_cast<std::size_t>(level)]));
-    EXPECT_GT(pops::reduce_min(fixture.system.prepared_amr_block_state(1, level)),
-              pops::reduce_min(initial[1][static_cast<std::size_t>(level)]));
-  }
+  control.system.step(0.4);
+  EXPECT_LT(fixture.system.mass("donor"), control.system.mass("donor"));
+  EXPECT_GT(fixture.system.mass("receiver"), control.system.mass("receiver"));
   EXPECT_NEAR(fixture.system.mass("donor") + fixture.system.mass("receiver"), total_before,
               2.0e-11);
 

@@ -655,8 +655,9 @@ class System {
   void add_dt_bound(const std::string& label, std::function<double()> fn);
 
   /// Name of the ACTIVE bound (the one that set dt) of the last step_cfl: "transport:<block>",
-  /// "source_frequency:<block>", "stability_dt:<block>", "global:<label>", "degenerate" (no evolving
-  /// block), or "" if no step_cfl has run. Diagnostic of the step policy.
+  /// "parabolic_frequency:<block>", "source_frequency:<block>", "stability_dt:<block>",
+  /// "global:<label>", "degenerate" (no evolving block), or "" if no step_cfl has run. Diagnostic
+  /// of the step policy.
   std::string last_dt_bound() const;
 
   // The named inter-species couplings (ionization / collision / thermal exchange) are no longer C++
@@ -730,7 +731,8 @@ class System {
   /// Internal Program publication preflight. Validates one terminal candidate through the exact
   /// block model's prepared conservative-to-primitive recovery before commit_many copies any block
   /// into accepted storage. The operation is collective and read-only; refusal leaves every live
-  /// state unchanged.
+  /// state unchanged. The public wrapper discards the authenticated active-cell mask returned by
+  /// the private validator.
   POPS_EXPORT void validate_program_state_publication_candidate(
       int block, const MultiFab<Dim>& candidate) const;
 
@@ -817,7 +819,11 @@ class System {
   /// this collective only while an outer transaction still retains U^n.
   POPS_EXPORT std::map<std::string, double> step_change_l2() const;
 
-  /// Advances one step at dt = cfl * h / max wave speed of the system. @return the dt used.
+  /// Advances one step using the smallest prepared bound.  For an explicit Cartesian diffusive
+  /// block, dt = cfl * substeps / (stride * (max(speed, speed_floor) / h_min +
+  /// 2 nu sum_a h_a^-2)); source, model, coupled, global, Program and strategy bounds may reduce
+  /// it further.  The exact request and selected decision are authenticated on the RuntimeInstance
+  /// lane before publication. @return the dt used.
   double step_cfl(double cfl, double speed_floor = static_cast<double>(kCflSpeedFloor),
                   double max_dt = std::numeric_limits<double>::infinity(), double min_dt = 0.0);
   /// @name Profiling (Spec 3 section 29-30, ADC-459)
@@ -1015,11 +1021,10 @@ class System {
   /// POPS_EXPORT: resolved by the generated problem.so across the
   /// dlopen boundary, like block_neg_div_flux_into.
   POPS_EXPORT void block_source_into(int b, MultiFab<Dim>& U, MultiFab<Dim>& R);
-  /// Preflight one generated pointwise Program operator. Such kernels currently own only a
-  /// Cartesian storage contract: evaluating them everywhere and zeroing inactive outputs afterwards
-  /// is not valid because primitive conversion, local Newton or user expressions may already have
-  /// consumed inactive data. The generated step calls this before allocating or launching the
-  /// operator and an active embedded boundary is rejected without mutation.
+  /// Preflight one unqualified Cartesian generated Program operator.  Such kernels cannot evaluate
+  /// inactive cells before zeroing their outputs, so an active embedded boundary is rejected before
+  /// mutation.  Only unqualified Cartesian kernels use this seam; local_transform and
+  /// solve_local_nonlinear are mask-qualified.
   POPS_EXPORT void require_cartesian_generated_operator(int b, const std::string& operation) const;
   /// The maximum |wave speed| of block @p b evaluated on @p U -- the SAME per-block reduction
   /// step_cfl reads (BlockState::max_speed, the HasStabilitySpeed / max_wave_speed closure set at
@@ -1340,6 +1345,11 @@ class System {
   /// same exact-ranked flattened layout as potential().
   void set_potential(const std::vector<double>& phi);
   std::vector<std::string> field_provider_slots() const;
+  /// Read-only restart authority. Named identities match ``field_provider_slots`` exactly and in
+  /// order. The default slot is included when the installed prepared RHS/configuration can
+  /// materialize that exact field, even if it has not been instantiated yet. This query never
+  /// constructs ExactNamedField.
+  std::vector<std::string> configured_field_provider_slots() const;
   void set_field_potential(const std::string& provider_slot, const std::vector<double>& phi);
 
   /// @name GLOBAL accessors (MPI-safe collectives) -- outputs / multi-rank accepted-state checkpoint
@@ -1414,13 +1424,20 @@ class System {
   POPS_EXPORT bool program_balance_consumer_is_due(const std::string& contract,
                                                    const std::string& route, int every_n) const;
   POPS_EXPORT runtime::program::ProgramRuntimeState<Dim>& program_runtime_state_();
-  POPS_EXPORT void validate_program_state_publication_candidate_(int block,
-                                                                 const MultiFab<Dim>& candidate,
-                                                                 const ExecutionLane& lane) const;
+  /// Program-terminal publication validator. Recovers only active valid cells and returns the
+  /// authenticated prepared active-cell mask for this block/layout/lane, or null when the
+  /// candidate is Cartesian or the embedded boundary is inactive.
+  [[nodiscard]] POPS_EXPORT const MultiFab<Dim>* validate_program_state_publication_candidate_(
+      int block, const MultiFab<Dim>& candidate, const ExecutionLane& lane) const;
   /// Exact-lane maximum-speed seam for generated ProgramContext. Local block/provider/allocation
   /// failures converge before the closure's scalar reduction; no implicit WORLD lane is permitted.
   POPS_EXPORT Real block_max_speed_prepared_(int block, const MultiFab<Dim>& state,
                                              const ExecutionLane& lane) const;
+  /// Generated Uniform pointwise kernels obtain their optional embedded-boundary active mask only
+  /// through this authenticated, non-owning seam.  It is private so the stable mask address cannot
+  /// become a public publication route.
+  [[nodiscard]] POPS_EXPORT const MultiFab<Dim>* prepared_program_block_active_mask_(
+      int runtime_block, const MultiFab<Dim>& field, const ExecutionLane& lane) const;
   /// Immediate provider calls are an exported implementation seam for generated ProgramContext
   /// code, never a public publication route. Every public field solve and every Program solve wraps
   /// these methods in the same physical accepted/candidate transaction.

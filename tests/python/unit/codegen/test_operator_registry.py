@@ -57,7 +57,7 @@ def test_spaces():
     assert state.roles["mx"] == "momentum:0"
     fields = m.field_space()
     assert isinstance(fields, model.FieldSpace)
-    assert fields.components == ("phi", "grad_x", "grad_y", "B_z")
+    assert fields.components == ("phi", "grad_x", "grad_y", "B_z", "psi", "psi_x", "psi_y")
     # A Rate retains the complete immutable StateSpace structure (no name-only wildcard).
     assert model.Rate(state) == model.Rate(state)
     assert model.Rate(model.StateSpace("U", ("rho",))) != model.Rate(state)

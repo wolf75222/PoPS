@@ -224,7 +224,7 @@ static int pops_run_test_external_riemann_dispatch() {
   // (1) dlopen + manifest visibility + requirements surface.
   ExternalBrickHandle handle(so, "my_riemann", RefModel::n_vars, pops::provider_count<RefModel>(),
                              kModelIdentity, digest, true);
-  handle.require_system_v6();
+  handle.require_system_v7();
   chk(handle.id() == "my_riemann", "handle_id");
   chk(handle.dimension() == pops::kNativeDimension, "native_dimension_authenticated");
   chk(handle.nvars() == RefModel::n_vars, "state_shape_authenticated");

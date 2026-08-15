@@ -4,6 +4,7 @@
     "default_parallel_share_seconds": 2.0,
     "estimated_targets": [
       "test_amr_program_diffusion",
+      "test_amr_program_embedded_boundary",
       "test_amr_program_positivity_floor",
       "test_box",
       "test_cartesian_poisson_nd",
@@ -42,7 +43,7 @@
     "refresh_source_run": "30190778708",
     "source_job": "87152034744",
     "source_run": "29352485297",
-    "target_count": 168,
+    "target_count": 169,
     "unit_seconds": "modeled shard wall time: measured serial-pool TU or parallel-share floor"
   },
   "test_amr_compiled_model": 2.0,
@@ -61,6 +62,7 @@
   "test_amr_native_loader": 2.0,
   "test_amr_potential": 3.85,
   "test_amr_program_diffusion": 300.0,
+  "test_amr_program_embedded_boundary": 300.0,
   "test_amr_program_positivity_floor": 300.0,
   "test_amr_regrid_variable": 3.72,
   "test_amr_riemann_native": 26.64,

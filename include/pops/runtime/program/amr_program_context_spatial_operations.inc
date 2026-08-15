@@ -93,6 +93,168 @@ void apply_coupling_operators(std::string_view graph_identity, std::string_view 
       interface_flux_ledger_->in_transaction() ? &*prepared_publication : nullptr)));
 }
 
+private:
+/// Visit every live hierarchy level of an authenticated Program owner exactly once.  The seed
+/// field identifies the owner's state, scratch, history, or current-level layout; each visit
+/// receives that level's matching field and prepared active-cell mask (null when Cartesian).
+template <class Visitor>
+void for_each_owner_active_level_(int program_block, const field_type& left,
+                                  const field_type* right, Visitor&& visitor) const {
+  refresh_resources_();
+  const int runtime_block = sys_block(program_block);
+  const int levels = nlev();
+  if (levels < 1)
+    return;
+
+  const auto same_layout = [](const field_type& a, const field_type& b) {
+    return a.layout() == b.layout() && a.distribution() == b.distribution() &&
+           a.local_rank() == b.local_rank() && a.local_size() == b.local_size();
+  };
+
+  enum class Family : std::uint8_t { Unset, State, Scratch, History, Direct };
+  struct Identity {
+    Family family = Family::Unset;
+    int scratch_kind = -1;
+    int scratch_owner = -1;
+    std::int64_t scratch_value_id = -1;
+    int scratch_subslot = -1;
+    std::string history_name;
+    int history_lag = -1;
+    int direct_level = -1;
+  };
+
+  const auto classify = [&](const field_type& seed, const char* role) {
+    Identity identity;
+    for (int level = 0; level < levels; ++level) {
+      if (&seed == &facade_->prepared_amr_block_state(runtime_block, level))
+        identity.family = Family::State;
+    }
+    if (!active_attempt_states_.empty()) {
+      const field_type* const attempt =
+          active_attempt_states_.at(static_cast<std::size_t>(runtime_block));
+      if (attempt != nullptr && &seed == attempt)
+        identity.family = Family::State;
+    }
+    for (const auto& [key, scratch] : scratches_) {
+      if (&seed != &scratch)
+        continue;
+      if (std::get<2>(key) != runtime_block)
+        throw std::invalid_argument(std::string(role) +
+                                    " received a foreign AMR Program owner field");
+      if (identity.family != Family::Unset && identity.family != Family::Scratch)
+        throw std::logic_error(std::string(role) +
+                               " aliases multiple AMR Program field identities");
+      identity.family = Family::Scratch;
+      identity.scratch_kind = static_cast<int>(std::get<0>(key));
+      identity.scratch_owner = std::get<2>(key);
+      identity.scratch_value_id = std::get<3>(key);
+      identity.scratch_subslot = std::get<4>(key);
+    }
+    const auto& manager = runtime_state().hist_;
+    for (const auto& [key, ring] : manager.histories) {
+      for (std::size_t lag = 0; lag < ring.size(); ++lag) {
+        if (&seed != &ring[lag])
+          continue;
+        const auto decoded = decode_history_key_(key);
+        const auto owner = manager.owner.find(key);
+        if (!decoded || owner == manager.owner.end() || owner->second != runtime_block)
+          throw std::invalid_argument(std::string(role) +
+                                      " received a foreign AMR Program history field");
+        if (identity.family != Family::Unset && identity.family != Family::History)
+          throw std::logic_error(std::string(role) +
+                                 " aliases multiple AMR Program field identities");
+        identity.family = Family::History;
+        identity.history_name = decoded->second;
+        identity.history_lag = static_cast<int>(lag);
+      }
+    }
+    if (identity.family == Family::Unset) {
+      for (int level = 0; level < levels; ++level) {
+        if (!same_layout(seed, facade_->prepared_amr_block_state(runtime_block, level)))
+          continue;
+        if (identity.direct_level >= 0)
+          throw std::logic_error(std::string(role) + " matches multiple AMR Program owner levels");
+        identity.direct_level = level;
+      }
+      if (identity.direct_level < 0)
+        throw std::invalid_argument(std::string(role) +
+                                    " has no authenticated AMR Program owner layout");
+      identity.family = Family::Direct;
+    }
+    return identity;
+  };
+
+  const auto resolve = [&](const field_type& seed, const Identity& identity, int level,
+                           const char* role) -> const field_type& {
+    const field_type& accepted = facade_->prepared_amr_block_state(runtime_block, level);
+    const field_type* current = nullptr;
+    if (identity.family == Family::State) {
+      if (!active_attempt_states_.empty() && level == active_level_) {
+        current = active_attempt_states_.at(static_cast<std::size_t>(runtime_block));
+        if (current == nullptr)
+          throw std::logic_error(std::string(role) + " attempt state is null");
+      } else {
+        current = &accepted;
+      }
+    } else if (identity.family == Family::Scratch) {
+      for (const auto& [key, scratch] : scratches_) {
+        if (static_cast<int>(std::get<0>(key)) == identity.scratch_kind &&
+            std::get<1>(key) == level && std::get<2>(key) == identity.scratch_owner &&
+            std::get<3>(key) == identity.scratch_value_id &&
+            std::get<4>(key) == identity.scratch_subslot) {
+          current = &scratch;
+          break;
+        }
+      }
+      if (current == nullptr)
+        throw std::runtime_error(std::string(role) +
+                                 " scratch is missing a live AMR Program owner level");
+    } else if (identity.family == Family::History) {
+      const auto& manager = runtime_state().hist_;
+      const auto found = manager.histories.find(history_key_(identity.history_name, level));
+      if (found == manager.histories.end() || identity.history_lag < 0 ||
+          static_cast<std::size_t>(identity.history_lag) >= found->second.size())
+        throw std::runtime_error(std::string(role) +
+                                 " history is missing a live AMR Program owner level");
+      current = &found->second[static_cast<std::size_t>(identity.history_lag)];
+    } else {
+      if (level != identity.direct_level)
+        throw std::runtime_error(std::string(role) +
+                                 " cannot cover every live AMR Program owner level");
+      current = &seed;
+    }
+    require_same_layout_(*current, accepted, role);
+    return *current;
+  };
+
+  const Identity left_identity = classify(left, "AMR Program reduction");
+  const std::optional<Identity> right_identity =
+      right == nullptr ? std::nullopt
+                       : std::optional<Identity>(classify(*right, "AMR Program reduction"));
+  for (int level = 0; level < levels; ++level) {
+    const field_type& accepted = facade_->prepared_amr_block_state(runtime_block, level);
+    const field_type& left_field = resolve(left, left_identity, level, "AMR Program reduction");
+    const field_type* right_field = nullptr;
+    if (right_identity)
+      right_field = &resolve(*right, *right_identity, level, "AMR Program reduction");
+    const field_type* const active =
+        facade_->prepared_amr_block_level_active_mask(runtime_block, level);
+    if (active != nullptr)
+      require_same_layout_(*active, accepted, "AMR Program reduction active mask");
+    visitor(left_field, right_field, active);
+  }
+}
+
+void converge_owner_reduction_(std::exception_ptr local_error, const ExecutionLane& lane,
+                               const char* operation) const {
+  if (all_reduce_max(local_error ? 1L : 0L, lane) == 0)
+    return;
+  if (lane.size() == 1 && local_error)
+    std::rethrow_exception(local_error);
+  throw std::runtime_error(std::string(operation) + " failed collectively");
+}
+
+public:
 Real sum_component(const field_type& field, int component) const {
   return static_cast<Real>(
       all_reduce_sum(pops::reduce_sum_local(field, component), prepared_execution_lane()));
@@ -105,16 +267,140 @@ Real min_component(const field_type& field, int component) const {
   return static_cast<Real>(
       all_reduce_min(pops::reduce_min_local(field, component), prepared_execution_lane()));
 }
-Real norm2(int, const field_type& field) const {
-  return std::sqrt(static_cast<Real>(
-      all_reduce_sum(pops::dot_local(field, field, 0), prepared_execution_lane())));
+
+/// Generated AMR reductions authenticate the Program owner and exclude inactive cells on every
+/// live level exactly once.  They stay raw active-domain algebra: no kappa, volume, or geometry
+/// weighting.  Empty active domains use sum/abs_sum/dot/norm2/norm_inf = 0, max = -inf, min = +inf.
+Real sum_component(int program_block, const field_type& field, int component) const {
+  const ExecutionLane& lane = prepared_execution_lane();
+  std::exception_ptr local_error;
+  Real local = Real(0);
+  try {
+    for_each_owner_active_level_(
+        program_block, field, nullptr,
+        [&](const field_type& level_field, const field_type*, const field_type* active) {
+          local += pops::reduce_active_sum_local(level_field, component, active);
+        });
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  converge_owner_reduction_(local_error, lane, "AMR Program sum reduction");
+  return static_cast<Real>(all_reduce_sum(static_cast<double>(local), lane));
 }
-Real norm_inf(int, const field_type& field) const {
-  return static_cast<Real>(all_reduce_max(pops::norm_inf(field, 0), prepared_execution_lane()));
+Real abs_sum_component(int program_block, const field_type& field, int component) const {
+  const ExecutionLane& lane = prepared_execution_lane();
+  std::exception_ptr local_error;
+  Real local = Real(0);
+  try {
+    for_each_owner_active_level_(
+        program_block, field, nullptr,
+        [&](const field_type& level_field, const field_type*, const field_type* active) {
+          local += pops::reduce_active_abs_sum_local(level_field, component, active);
+        });
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  converge_owner_reduction_(local_error, lane, "AMR Program abs-sum reduction");
+  return static_cast<Real>(all_reduce_sum(static_cast<double>(local), lane));
 }
-Real dot(int, const field_type& left, const field_type& right) const {
-  return static_cast<Real>(
-      all_reduce_sum(pops::dot_local(left, right, 0), prepared_execution_lane()));
+Real max_component(int program_block, const field_type& field, int component) const {
+  const ExecutionLane& lane = prepared_execution_lane();
+  std::exception_ptr local_error;
+  Real local = -std::numeric_limits<Real>::infinity();
+  long participation = 0;
+  try {
+    for_each_owner_active_level_(
+        program_block, field, nullptr,
+        [&](const field_type& level_field, const field_type*, const field_type* active) {
+          const MaskedMaxLocalResult probe =
+              pops::reduce_masked_max_local(level_field, component, active);
+          if (!probe.has_active)
+            return;
+          ++participation;
+          local = std::max(local, pops::reduce_active_max_local(level_field, component, active));
+        });
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  converge_owner_reduction_(local_error, lane, "AMR Program max reduction");
+  const long global_participation = all_reduce_sum(participation, lane);
+  const Real reduced = static_cast<Real>(all_reduce_max(static_cast<double>(local), lane));
+  return global_participation == 0 ? -std::numeric_limits<Real>::infinity() : reduced;
+}
+Real min_component(int program_block, const field_type& field, int component) const {
+  const ExecutionLane& lane = prepared_execution_lane();
+  std::exception_ptr local_error;
+  Real local = std::numeric_limits<Real>::infinity();
+  long participation = 0;
+  try {
+    for_each_owner_active_level_(
+        program_block, field, nullptr,
+        [&](const field_type& level_field, const field_type*, const field_type* active) {
+          const MaskedMaxLocalResult probe =
+              pops::reduce_masked_max_local(level_field, component, active);
+          if (!probe.has_active)
+            return;
+          ++participation;
+          local = std::min(local, pops::reduce_active_min_local(level_field, component, active));
+        });
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  converge_owner_reduction_(local_error, lane, "AMR Program min reduction");
+  const long global_participation = all_reduce_sum(participation, lane);
+  const Real reduced = static_cast<Real>(all_reduce_min(static_cast<double>(local), lane));
+  return global_participation == 0 ? std::numeric_limits<Real>::infinity() : reduced;
+}
+Real norm2(int program_block, const field_type& field) const {
+  const ExecutionLane& lane = prepared_execution_lane();
+  std::exception_ptr local_error;
+  Real local = Real(0);
+  try {
+    for_each_owner_active_level_(
+        program_block, field, nullptr,
+        [&](const field_type& level_field, const field_type*, const field_type* active) {
+          local += pops::dot_active_local(level_field, level_field, 0, active);
+        });
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  converge_owner_reduction_(local_error, lane, "AMR Program norm2 reduction");
+  return std::sqrt(static_cast<Real>(all_reduce_sum(static_cast<double>(local), lane)));
+}
+Real norm_inf(int program_block, const field_type& field) const {
+  const ExecutionLane& lane = prepared_execution_lane();
+  std::exception_ptr local_error;
+  Real local = Real(0);
+  try {
+    for_each_owner_active_level_(
+        program_block, field, nullptr,
+        [&](const field_type& level_field, const field_type*, const field_type* active) {
+          local = std::max(local, pops::reduce_active_norm_inf_local(level_field, 0, active));
+        });
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  converge_owner_reduction_(local_error, lane, "AMR Program norm-inf reduction");
+  return static_cast<Real>(all_reduce_max(static_cast<double>(local), lane));
+}
+Real dot(int program_block, const field_type& left, const field_type& right) const {
+  const ExecutionLane& lane = prepared_execution_lane();
+  std::exception_ptr local_error;
+  Real local = Real(0);
+  try {
+    for_each_owner_active_level_(
+        program_block, left, &right,
+        [&](const field_type& left_field, const field_type* right_field, const field_type* active) {
+          if (right_field == nullptr)
+            throw std::logic_error("AMR Program dot is missing its right owner field");
+          require_same_field_contract_(left_field, *right_field, "AMR Program dot");
+          local += pops::dot_active_local(left_field, *right_field, 0, active);
+        });
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  converge_owner_reduction_(local_error, lane, "AMR Program dot reduction");
+  return static_cast<Real>(all_reduce_sum(static_cast<double>(local), lane));
 }
 
 Geometry<Dim> geometry() const {

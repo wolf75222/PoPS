@@ -27,6 +27,7 @@
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel, GravityForce, GravityCoupling
 #include <pops/physics/fluids/euler.hpp>   // EulerND
+#include <pops/runtime/amr/field_solver_options.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // add_compiled_model(AmrSystem, ...)
 #include <pops/runtime/amr_system.hpp>
 
@@ -35,6 +36,8 @@
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <string>
+#include <utility>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -100,6 +103,62 @@ Model<Dim> gravity_model() {
 }
 
 template <int Dim>
+std::vector<double> gravity_state(const std::vector<double>& density) {
+  using Gas = EulerND<Dim>;
+  const std::size_t cells = density.size();
+  std::vector<double> state(static_cast<std::size_t>(Gas::n_vars) * cells, 0.0);
+  for (std::size_t cell = 0; cell < cells; ++cell) {
+    state[static_cast<std::size_t>(Gas::density_component) * cells + cell] = density[cell];
+    state[static_cast<std::size_t>(Gas::energy_component) * cells + cell] = 2.5;
+  }
+  return state;
+}
+
+constexpr const char* kGravityConsumerQid = "tests.amr-distribute-coarse/gas/physical-flux@1";
+
+AmrFieldSolverOptions gravity_field_solver_options() {
+  CompositeFacOptions fac;
+  fac.abs_tol = Real(1e-10);
+  fac.coarse_abs_tol = Real(1e-12);
+  return geometric_mg_amr_field_solver_options(GeometricMgOptions{}, fac);
+}
+
+template <int Dim>
+void install_default_gravity_field_output(AmrSystem<Dim>& system) {
+  using namespace runtime::system;
+  const AuxiliaryComponentContract contract{"cell-average", "cell", "unitless", "field", "scalar"};
+  AuxiliaryStorageShape<Dim> shape;
+  for (int axis = 0; axis < Dim; ++axis)
+    shape.halo[axis] = 2;
+
+  std::vector<AuxiliaryComponentKey> keys;
+  std::vector<AuxiliaryOutput<Dim>> outputs;
+  keys.reserve(static_cast<std::size_t>(Dim + 1));
+  outputs.reserve(static_cast<std::size_t>(Dim + 1));
+  for (int component = 0; component <= Dim; ++component) {
+    AuxiliaryComponentKey key{
+        "tests.amr-distribute-coarse/gravity-output@1", "field", "fields_from_state",
+        component == 0 ? "potential" : "gradient-" + std::to_string(component - 1)};
+    keys.push_back(key);
+    outputs.push_back({std::move(key), contract, shape});
+  }
+  system.install_prepared_auxiliary_provider(PreparedAuxiliaryProvider<Dim>{
+      "tests.amr-distribute-coarse/gravity-field-output@1",
+      AuxiliaryProviderKind::field_output,
+      {AuxiliaryEvaluationEvent::before_field_solve, AuxiliaryFreshness::evaluation},
+      std::move(outputs),
+      {}});
+  AuxiliaryConsumerProviderPlan<Dim> consumer{kGravityConsumerQid, {}};
+  consumer.values.reserve(static_cast<std::size_t>(Dim));
+  for (int axis = 0; axis < Dim; ++axis)
+    consumer.values.push_back({{keys[static_cast<std::size_t>(axis + 1)], contract, shape},
+                               static_cast<std::size_t>(axis)});
+  system.install_auxiliary_consumer_plan(std::move(consumer));
+  system.seal_auxiliary_providers();
+  system.register_default_elliptic_field_output(keys, 1);
+}
+
+template <int Dim>
 AmrSystemConfig<Dim> make_config(int n, bool distribute) {
   AmrSystemConfig<Dim> config;
   for (int axis = 0; axis < Dim; ++axis) {
@@ -134,12 +193,15 @@ Result run(int n, int nsteps, double dt, bool distribute) {
   // regression happens to use the same ratio as the spatial hierarchy.  The runtime must never
   // infer a clock relation from mesh refinement.
   sys.set_temporal_relations({2}, {1}, {"integral_only"});
+  sys.install_block_state_route("gas", "tests.amr-distribute-coarse/gas/state@1");
   add_compiled_model<Dim>(sys, "gas", gravity_model<Dim>(), "minmod", "rusanov", "conservative",
-                          "explicit", /*gamma=*/1.4);
-  sys.set_poisson("charge_density", "geometric_mg");
+                          "explicit", /*gamma=*/1.4, 1, 1, {}, {}, 0.0,
+                          static_cast<double>(kWenoEpsilon), false, kGravityConsumerQid);
+  sys.set_poisson("charge_density", "geometric_mg", "periodic", gravity_field_solver_options());
+  install_default_gravity_field_output(sys);
   test::install_prepared_threshold_union(sys, {{"gas", "rho", 1.2}});
-  sys.set_density("gas", rho);
-  test::install_forward_euler_program(sys);
+  sys.set_conservative_state("gas", gravity_state<Dim>(rho));
+  test::install_forward_euler_program(sys, true);
 
   Result R;
   R.m0 = sys.mass();
@@ -188,12 +250,15 @@ static int pops_run_test_amr_distribute_coarse_serial(int argc, char** argv) {
   AmrSystem<Dim> probe(probe_cfg);
   test::install_amr_runtime_authority(probe, "test.amr-distribute-coarse.probe-runtime");
   probe.set_temporal_relations({2}, {1}, {"integral_only"});
+  probe.install_block_state_route("gas", "tests.amr-distribute-coarse/gas/state@1");
   add_compiled_model<Dim>(probe, "gas", gravity_model<Dim>(), "minmod", "rusanov", "conservative",
-                          "explicit", /*gamma=*/1.4);
-  probe.set_poisson("charge_density", "geometric_mg");
+                          "explicit", /*gamma=*/1.4, 1, 1, {}, {}, 0.0,
+                          static_cast<double>(kWenoEpsilon), false, kGravityConsumerQid);
+  probe.set_poisson("charge_density", "geometric_mg", "periodic", gravity_field_solver_options());
+  install_default_gravity_field_output(probe);
   test::install_prepared_threshold_union(probe, {{"gas", "rho", 1.2}});
-  probe.set_density("gas", four_bubbles(probe_cfg.shape));
-  test::install_forward_euler_program(probe);
+  probe.set_conservative_state("gas", gravity_state<Dim>(four_bubbles(probe_cfg.shape)));
+  test::install_forward_euler_program(probe, true);
   const double dt_cfl = probe.step_cfl(0.4);
   chk(std::isfinite(dt_cfl), "distribute_coarse step_cfl returns a finite dt");
   chk(dt_cfl > 0.0, "distribute_coarse step_cfl returns a positive dt");

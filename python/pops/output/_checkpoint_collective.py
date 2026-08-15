@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import json
 import math
+import stat
 import struct
 import sys
 import zipfile
@@ -1054,6 +1055,43 @@ def collective_checkpoint_capture(
     )
 
 
+def write_precreated_checkpoint_payload(descriptor: int, payload: Mapping[str, Any]) -> None:
+    """Write one NPZ payload through a retained transaction-created regular-file descriptor.
+
+    This is deliberately an internal capability seam: ``descriptor`` originates from the
+    private restart transaction's ``O_NOFOLLOW`` create, rather than from a later lexical
+    lookup of the checkpoint target.  It therefore preserves the authority of the precreated
+    inode for RuntimeInstance envelope capture.  Direct/public checkpoint writers keep their
+    independent temporary-file-and-rename publication protocol.
+    """
+    if type(descriptor) is not int or descriptor < 0:
+        raise TypeError("precreated checkpoint descriptor must be one open file descriptor")
+    if not isinstance(payload, Mapping):
+        raise TypeError("precreated checkpoint payload must be a mapping")
+    retained = os.fstat(descriptor)
+    if not stat.S_ISREG(retained.st_mode):
+        raise RuntimeError("precreated checkpoint descriptor is not a regular file")
+
+    import numpy as np
+
+    writable = os.dup(descriptor)
+    try:
+        with os.fdopen(writable, "wb", closefd=False) as stream:
+            stream.seek(0)
+            stream.truncate(0)
+            np.savez_compressed(stream, **payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+    finally:
+        os.close(writable)
+    current = os.fstat(descriptor)
+    if not stat.S_ISREG(current.st_mode) or (current.st_dev, current.st_ino) != (
+        retained.st_dev,
+        retained.st_ino,
+    ):
+        raise RuntimeError("precreated checkpoint descriptor changed during payload write")
+
+
 def _result_evidence(value: Any) -> Any:
     from pops.identity import Identity
 
@@ -1436,4 +1474,5 @@ __all__ = [
     "root_bytes",
     "root_attempt",
     "root_value",
+    "write_precreated_checkpoint_payload",
 ]

@@ -73,7 +73,7 @@ def test_manifest_schema_and_spaces():
     assert manifest.aux["B_z"]["aux_kind"] == "cell_scalar"
     assert manifest.provider_pack["schema_version"] == 1
     assert len(manifest.provider_pack["entries"]) == 7
-    assert manifest.has_eigenvalues == {"x": False, "y": False}
+    assert manifest.has_eigenvalues == {}
     assert manifest.wave_speed_provider is None
 
     data = manifest.to_dict()

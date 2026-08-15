@@ -4,6 +4,7 @@
 /// @brief Typed, fallible variable inversion with a reusable backend workspace.
 
 #include <pops/core/foundation/types.hpp>
+#include <pops/core/foundation/kokkos_env.hpp>
 #include <pops/core/identity/prepared_provider.hpp>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -67,6 +68,7 @@ class InversionDeviceWorkspace final {
     const std::size_t allocation_bytes =
         budget_.bytes + (budget_.bytes == 0 ? 0 : budget_.alignment - 1);
 #if defined(POPS_HAS_KOKKOS)
+    detail::ensure_kokkos_initialized();
     allocation_ = Allocation("pops.variable_inversion.workspace", allocation_bytes);
     base_ = aligned_(reinterpret_cast<std::byte*>(allocation_.data()), budget_.alignment);
 #else

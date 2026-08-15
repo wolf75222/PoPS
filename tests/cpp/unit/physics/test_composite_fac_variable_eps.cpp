@@ -24,8 +24,7 @@ pops::PhysicalBoundaryConditions<Dim> dirichlet(const pops::Geometry<Dim>& geome
   return {pops::BoundaryTopology<Dim>::physical(), faces, spacing};
 }
 
-pops::runtime::program::HierarchyTensorSolverBuildRequest<2> request(int cells,
-                                                                     bool with_refinement) {
+pops::runtime::program::HierarchyTensorSolverBuildRequest<2> request(int cells) {
   using namespace pops;
   using namespace pops::runtime::program;
   const Box<2> domain{Index<2>{0, 0}, Index<2>{cells - 1, cells - 1}};
@@ -44,11 +43,8 @@ pops::runtime::program::HierarchyTensorSolverBuildRequest<2> request(int cells,
   result.block = 2;
   result.components = 1;
   result.levels = {{coarse, dirichlet(coarse), coarse_layout, coarse_distribution, Index<2>{0, 0}}};
-  if (with_refinement) {
-    result.levels.push_back(
-        {fine, dirichlet(fine), fine_layout, fine_distribution, Index<2>{0, 0}});
-    result.ratios = {amr::RefinementRatio<2>{std::array<int, 2>{2, 2}}};
-  }
+  result.levels.push_back({fine, dirichlet(fine), fine_layout, fine_distribution, Index<2>{0, 0}});
+  result.ratios = {amr::RefinementRatio<2>{std::array<int, 2>{2, 2}}};
   result.plan_identity = "tests.variable-epsilon-composite";
   result.operator_contract_identity =
       std::string(tensor_elliptic_detail::kScalarTensorEllipticContract);
@@ -86,10 +82,10 @@ pops::Real rhs_value(pops::Real x, pops::Real y) {
   return pops::Real(2) * kPi * kPi * epsilon(x, y) * u - ex * ux - ey * uy;
 }
 
-double solve_error(int cells, bool with_refinement) {
+double solve_error(int cells) {
   using namespace pops;
   using namespace pops::runtime::program;
-  auto build = request(cells, with_refinement);
+  auto build = request(cells);
   std::vector<Geometry<2>> geometries;
   for (const auto& level : build.levels)
     geometries.push_back(level.geometry);
@@ -122,24 +118,17 @@ double solve_error(int cells, bool with_refinement) {
     rhs.fab(0).copy_from_host(rhs_host);
     solver->stage_initial_guess(level, nullptr);
   }
-  const SolveReport report =
-      solve_prepared_hierarchy_tensor_collectively(*solver, {Real(1e-6), Real(1e-12), 100}, lane)
-          .consume(SolveConsumption::kAccept);
+  SolveOutcome outcome =
+      solve_prepared_hierarchy_tensor_collectively(*solver, {Real(1e-6), Real(1e-12), 100}, lane);
+  const SolveReport report = consume_solve_outcome(std::move(outcome));
   if (!report.solved())
     throw std::runtime_error(report.reason);
-  const int measured_level = with_refinement ? 1 : 0;
+  constexpr int measured_level = 1;
   const auto& solution = solver->solution(measured_level);
   const auto& fab = solution.fab(0);
   auto host = fab.create_host_mirror();
   fab.copy_to_host(host);
-  Box<2> region = fab.box();
-  if (with_refinement) {
-    region = region.grow(-std::max(2, cells / 4));
-  } else {
-    region =
-        Box<2>{Index<2>{cells / 4, cells / 4}, Index<2>{3 * cells / 4 - 1, 3 * cells / 4 - 1}}.grow(
-            -std::max(1, cells / 8));
-  }
+  const Box<2> region = fab.box().grow(-std::max(2, cells / 4));
   double error = 0;
   for (int j = region.lo[1]; j <= region.hi[1]; ++j)
     for (int i = region.lo[0]; i <= region.hi[0]; ++i) {
@@ -155,9 +144,9 @@ double solve_error(int cells, bool with_refinement) {
 
 TEST(test_composite_fac_variable_eps, variable_diagonal_composite_retains_refinement_accuracy) {
   constexpr int coarse_cells = 24;
-  const double coarse = solve_error(coarse_cells, false);
-  const double refined = solve_error(coarse_cells, true);
-  EXPECT_GT(coarse, 0.0);
-  EXPECT_LT(refined, 0.75 * coarse)
-      << "a fine level must improve the variable-epsilon solution at fixed coarse resolution";
+  const double coarse_refined = solve_error(coarse_cells);
+  const double fine_refined = solve_error(2 * coarse_cells);
+  EXPECT_GT(coarse_refined, 0.0);
+  EXPECT_LT(fine_refined, 0.75 * coarse_refined)
+      << "genuinely refined variable-epsilon FAC must converge under hierarchy refinement";
 }

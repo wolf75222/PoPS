@@ -431,16 +431,23 @@ class FixedDtController(StepController[FixedDt]):
     ) -> _PreparedStepAttempts:
         now = float(native.time())
         remaining = t_end - now
-        dt = min(self.strategy.dt, remaining)
-        if math.isclose(
-            now + dt,
-            t_end,
-            rel_tol=0.0,
-            abs_tol=4.0 * max(math.ulp(now + dt), math.ulp(t_end)),
-        ):
-            dt = remaining
+        if not remaining > 0.0:
+            raise RuntimeError("FixedDt has no positive interval left before the final time")
+        if now + self.strategy.dt == t_end:
+            dt = self.strategy.dt
+        else:
+            dt = min(self.strategy.dt, remaining)
+            if math.isclose(
+                now + dt,
+                t_end,
+                rel_tol=0.0,
+                abs_tol=4.0 * max(math.ulp(now + dt), math.ulp(t_end)),
+            ):
+                dt = remaining
         if not dt > 0.0:
             raise RuntimeError("FixedDt has no positive interval left before the final time")
+        if not now + dt > now:
+            raise RuntimeError("FixedDt interval does not advance binary64 time")
 
         def attempt() -> None:
             _native_attempt(engine, native, lambda: native.step(dt))

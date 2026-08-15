@@ -13,14 +13,14 @@ from pops._manifest_protocol import strict_json_loads
 BRICK_TYPES = ("native", "generated", "macro", "external_cpp")
 
 BRICK_MANIFEST_SCHEMA_VERSION = 3
-_EXTERNAL_RIEMANN_ABI_VERSION = 4
+_EXTERNAL_RIEMANN_ABI_VERSION = 5
 _EXTERNAL_RIEMANN_ABI_KEY = (
-    "pops.external-riemann/v4;scalar=f64;index=i32;periodicity=nd;"
+    "pops.external-riemann/v5;scalar=f64;index=i32;periodicity=nd;"
     "providers=qualified;dim={dimension}"
 )
-_EXTERNAL_RIEMANN_SYSTEM_ABI_VERSION = 6
+_EXTERNAL_RIEMANN_SYSTEM_ABI_VERSION = 7
 _EXTERNAL_RIEMANN_SYSTEM_ABI_KEY = (
-    "pops.external-riemann.system/v6;receiver=prepared-native-package;"
+    "pops.external-riemann.system/v7;receiver=prepared-native-package;"
     "providers=qualified;dim={dimension}"
 )
 _EXTERNAL_RIEMANN_ABI_SYMBOLS = frozenset(
@@ -30,8 +30,8 @@ _EXTERNAL_RIEMANN_ABI_SYMBOLS = frozenset(
         "pops_external_riemann_dimension",
         "pops_brick_nvars",
         "pops_brick_nproviders",
-        "pops_brick_residual_v4",
-        "pops_brick_install_amr_v4",
+        "pops_brick_residual_v5",
+        "pops_brick_install_amr_v5",
         "pops_brick_model_identity",
         "pops_brick_kokkos_backend",
         "pops_brick_kokkos_version",
@@ -42,8 +42,8 @@ _EXTERNAL_RIEMANN_SYSTEM_ABI_SYMBOLS = frozenset(
     {
         "pops_external_riemann_system_abi_version",
         "pops_external_riemann_system_abi_key",
-        "pops_brick_install_system_v6",
-        "pops_register_provider_routes_system_v6",
+        "pops_brick_install_system_v7",
+        "pops_register_provider_routes_system_v7",
     }
 )
 _BRICK_MANIFEST_TOP_KEYS = frozenset({"schema_version", "abi_key", "annotations", "bricks"})
@@ -599,7 +599,7 @@ def load_cpp_library(path: Any) -> int:
     records, _abi_key, _annotations = _parse_brick_manifest_document(manifest_json)
     riemann_rows = [record for record in records if record["category"] == "riemann"]
     if riemann_rows:
-        system_v6_rows = []
+        system_v7_rows = []
         for record in riemann_rows:
             exported = set(record["exported_symbols"])
             missing = sorted(_EXTERNAL_RIEMANN_ABI_SYMBOLS - exported)
@@ -612,15 +612,15 @@ def load_cpp_library(path: Any) -> int:
             declared_system = _EXTERNAL_RIEMANN_SYSTEM_ABI_SYMBOLS & exported
             if declared_system and declared_system != _EXTERNAL_RIEMANN_SYSTEM_ABI_SYMBOLS:
                 raise ValueError(
-                    "external Riemann brick %r declares an incomplete System v6 ABI; missing %s"
+                    "external Riemann brick %r declares an incomplete System v7 ABI; missing %s"
                     % (record["id"], sorted(_EXTERNAL_RIEMANN_SYSTEM_ABI_SYMBOLS - declared_system))
                 )
-            system_v6_rows.append(bool(declared_system))
-        if len(set(system_v6_rows)) != 1:
+            system_v7_rows.append(bool(declared_system))
+        if len(set(system_v7_rows)) != 1:
             raise ValueError(
-                "external Riemann manifest mixes System v4-only and v6 brick contracts"
+                "external Riemann manifest mixes residual/AMR v5-only and System v7 brick contracts"
             )
-        has_system_v6 = system_v6_rows[0]
+        has_system_v7 = system_v7_rows[0]
         try:
             version_fn = handle.pops_external_riemann_abi_version
             key_fn = handle.pops_external_riemann_abi_key
@@ -628,14 +628,14 @@ def load_cpp_library(path: Any) -> int:
             nvars_fn = handle.pops_brick_nvars
             provider_count_fn = handle.pops_brick_nproviders
             _ = (
-                handle.pops_brick_residual_v4,
-                handle.pops_brick_install_amr_v4,
+                handle.pops_brick_residual_v5,
+                handle.pops_brick_install_amr_v5,
             )
             model_identity_fn = handle.pops_brick_model_identity
             _ = (handle.pops_brick_kokkos_backend, handle.pops_brick_kokkos_version)
         except AttributeError as err:
             raise ValueError(
-                "external Riemann brick library %r does not export its exact residual/AMR v4 "
+                "external Riemann brick library %r does not export its exact residual/AMR v5 "
                 "version/key/symbol contract" % (path,)
             ) from err
         version_fn.restype = ctypes.c_int
@@ -665,22 +665,22 @@ def load_cpp_library(path: Any) -> int:
             _ = handle.pops_register_provider_routes_amr
         except AttributeError as err:
             raise ValueError(
-                "external Riemann brick library %r does not export its canonical AMR v4 "
+                "external Riemann brick library %r does not export its canonical AMR v5 "
                 "provider registrar" % (path,)
             ) from err
         system_key = None
-        if has_system_v6:
+        if has_system_v7:
             try:
                 system_version_fn = handle.pops_external_riemann_system_abi_version
                 system_key_fn = handle.pops_external_riemann_system_abi_key
                 _ = (
-                    handle.pops_brick_install_system_v6,
-                    handle.pops_register_provider_routes_system_v6,
+                    handle.pops_brick_install_system_v7,
+                    handle.pops_register_provider_routes_system_v7,
                 )
             except AttributeError as err:
                 raise ValueError(
                     "external Riemann brick library %r declares but does not export its exact "
-                    "System v6 ABI" % (path,)
+                    "System v7 ABI" % (path,)
                 ) from err
             system_version_fn.restype = ctypes.c_int
             system_key_fn.restype = ctypes.c_char_p
@@ -694,7 +694,7 @@ def load_cpp_library(path: Any) -> int:
                 or system_key != expected_system_key
             ):
                 raise ValueError(
-                    "external Riemann brick library %r has incompatible System v6 "
+                    "external Riemann brick library %r has incompatible System v7 "
                     "registrar/installer ABI; rebuild it with the current PoPS headers" % (path,)
                 )
         if not model_identity_raw:

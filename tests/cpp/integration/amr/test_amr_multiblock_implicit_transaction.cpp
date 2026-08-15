@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include "explicit_amr_program.hpp"
+
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
@@ -179,6 +181,8 @@ TEST(test_amr_multiblock_implicit_transaction,
     config.shape[axis] = 8;
 
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system,
+                                            "tests.implicit-transaction/multiblock-runtime@1");
   system.install_block_state_route("slow", "state/slow");
   system.install_block_state_route("fast", "state/fast");
   pops::add_compiled_model<Dim>(system, "slow", relaxing_model<Dim>(pops::Real(8), pops::Real(2)),
@@ -193,9 +197,6 @@ TEST(test_amr_multiblock_implicit_transaction,
                                 "tests.implicit-transaction/fast/physical-flux");
   system.set_conservative_state("slow", std::vector<double>(cell_count(config.shape), 0.25));
   system.set_conservative_state("fast", std::vector<double>(cell_count(config.shape), 3.0));
-  // Program block zero owns runtime block one, and vice versa.
-  system.set_program_block_map({1, 0});
-
   auto context = pops::runtime::program::make_program_execution_provider(&system);
   auto inject_retry = std::make_shared<bool>(true);
   context->configure_primary_clock("tests.implicit-transaction.multiblock-clock");
@@ -233,6 +234,10 @@ TEST(test_amr_multiblock_implicit_transaction,
         });
       },
       context);
+  // Installing a whole-system Program resets its unverified binding image.  Bind this Program
+  // order only after that installation so the rollback snapshot and the prepared budget carry
+  // the same exact non-positional map.
+  system.set_program_block_map({1, 0});
   using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
   system.install_prepared_amr_program_flux_expression_budget(
       "tests.implicit-transaction.multiblock-program-v1", std::vector<FluxBudget>{{1, 1}, {1, 1}},
@@ -276,6 +281,8 @@ TEST(test_amr_multiblock_implicit_transaction, MetadataNeverCreatesAnImplicitTem
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(
+      system, "tests.implicit-transaction/no-native-dispatch-runtime@1");
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", relaxing_model<Dim>(pops::Real(1), pops::Real(0)),
                                 "minmod", "rusanov", "conservative", "imex",
@@ -285,6 +292,11 @@ TEST(test_amr_multiblock_implicit_transaction, MetadataNeverCreatesAnImplicitTem
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
   const std::vector<double> accepted = system.block_level_state_global("tracer", 0);
 
-  EXPECT_THROW(system.step(0.1), std::logic_error);
+  try {
+    system.step(0.1);
+    FAIL() << "metadata must not synthesize an implicit Program";
+  } catch (const std::logic_error& error) {
+    EXPECT_STREQ(error.what(), "AmrSystem::step requires an installed whole-system Program");
+  }
   EXPECT_EQ(system.block_level_state_global("tracer", 0), accepted);
 }

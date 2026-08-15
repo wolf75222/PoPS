@@ -703,6 +703,7 @@ struct System<Dim>::Impl {
     void restore(Impl& owner) {
       if (states.size() != owner.sp.size())
         throw std::logic_error("System transaction snapshot composition changed");
+      auto prepared_program_restore = owner.program_.prepare_accepted_restore(program);
       for (std::size_t block = 0; block < states.size(); ++block)
         owner.sp[block].U = states[block];
       owner.auxiliary_registry_ = auxiliary_registry;
@@ -721,11 +722,14 @@ struct System<Dim>::Impl {
       owner.active_field_stale_auxiliary_providers_.clear();
       owner.staged_auxiliary_inputs_ = staged_auxiliary_inputs;
       owner.dirty_auxiliary_providers_ = dirty_auxiliary_providers;
-      owner.program_ = program;
-      if (default_field_state.has_value() != static_cast<bool>(owner.default_field_))
-        throw std::logic_error("System transaction snapshot default-field ownership changed");
-      if (default_field_state)
+      owner.program_.publish_prepared_accepted_restore(std::move(prepared_program_restore));
+      if (!default_field_state) {
+        owner.default_field_.reset();
+      } else {
+        if (!owner.default_field_)
+          throw std::logic_error("System transaction snapshot default-field presence vanished");
         owner.default_field_->restore_accepted_state(*default_field_state);
+      }
       if (named_field_states.size() != owner.named_fields_.size())
         throw std::logic_error("System transaction snapshot named-field composition changed");
       for (const auto& [slot, values] : named_field_states) {

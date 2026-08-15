@@ -78,15 +78,20 @@ POPS_HD StateConversion<typename Model::State> reconstruct_conservative(
     const Reconstruction& reconstruction) {
   typename Model::State face = pops::load_state<Model>(state, source);
   for (int component = 0; component < Model::n_vars; ++component) {
-    const ConservativeComponentSampler<Axis, Orientation, Dim> sample{state, source, component};
-    const Real center = sample(0);
     if constexpr (CellValueReconstruction<Reconstruction>) {
+      const ConservativeComponentSampler<Axis, Orientation, Dim> sample{state, source, component};
+      const Real center = sample(0);
       face[component] = reconstruction.cell_face_value(center);
     } else if constexpr (SlopeReconstruction<Reconstruction>) {
+      // Limiter differences are always formed in canonical axis order. Orientation selects the
+      // side of the resulting centered slope exactly once below.
+      const ConservativeComponentSampler<Axis, 1, Dim> sample{state, source, component};
+      const Real center = sample(0);
       face[component] =
           center + Real(0.5) * Real(Orientation) *
                        reconstruction.limited_slope(center - sample(-1), sample(1) - center);
     } else {
+      const ConservativeComponentSampler<Axis, Orientation, Dim> sample{state, source, component};
       face[component] = reconstruction.stencil_face_value(sample);
     }
   }

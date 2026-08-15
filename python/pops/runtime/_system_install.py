@@ -326,15 +326,15 @@ class _SystemInstall(_System):
                     % spatial.external_flux_id
                 )
             expected_system_abi_key = (
-                "pops.external-riemann.system/v6;receiver=prepared-native-package;"
+                "pops.external-riemann.system/v7;receiver=prepared-native-package;"
                 "providers=qualified;dim=%s" % compiled.native_dimension
             )
             if (
-                spatial.external_flux_system_abi_version != 6
+                spatial.external_flux_system_abi_version != 7
                 or spatial.external_flux_system_abi_key != expected_system_abi_key
             ):
                 raise ValueError(
-                    "add_equation: external Riemann brick %r lacks the System v6 "
+                    "add_equation: external Riemann brick %r lacks the System v7 "
                     "prepared-package ABI" % spatial.external_flux_id
                 )
             self._s._register_external_riemann_package(

@@ -386,13 +386,13 @@ class Spatial:
                 n_vars = options["n_vars"]
                 provider_count = options["provider_count"]
                 expected_abi_key = (
-                    "pops.external-riemann/v4;scalar=f64;index=i32;periodicity=nd;"
+                    "pops.external-riemann/v5;scalar=f64;index=i32;periodicity=nd;"
                     "providers=qualified;dim=%s" % dimension
                 )
-                if options["abi_version"] != 4 or options["abi_key"] != expected_abi_key:
+                if options["abi_version"] != 5 or options["abi_key"] != expected_abi_key:
                     raise ValueError("external Riemann descriptor carries an incompatible ABI")
                 expected_system_abi_key = (
-                    "pops.external-riemann.system/v6;receiver=prepared-native-package;"
+                    "pops.external-riemann.system/v7;receiver=prepared-native-package;"
                     "providers=qualified;dim=%s" % dimension
                 )
                 system_version = options["system_abi_version"]
@@ -400,10 +400,10 @@ class Spatial:
                 if (system_version is None) != (system_key is None):
                     raise ValueError("external Riemann descriptor carries an incomplete System ABI")
                 if system_version is not None and (
-                    system_version != 6 or system_key != expected_system_abi_key
+                    system_version != 7 or system_key != expected_system_abi_key
                 ):
                     raise ValueError(
-                        "external Riemann descriptor carries an incompatible System v6 ABI"
+                        "external Riemann descriptor carries an incompatible System v7 ABI"
                     )
                 if (
                     type(dimension) is not int

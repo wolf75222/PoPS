@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include "explicit_amr_program.hpp"
+
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
@@ -115,6 +117,7 @@ TEST(test_amr_multiblock_compiled, TwoCompiledBlocksUseOneTransactionalCarrier) 
   constexpr int Dim = pops::kNativeDimension;
   const auto cfg = config<Dim>();
   pops::AmrSystem<Dim> system(cfg);
+  pops::test::install_amr_runtime_authority(system, "tests.amr.multiblock.compiled/runtime@1");
   system.install_block_state_route("ion", "state/ion");
   system.install_block_state_route("neutral", "state/neutral");
   add_block(system, "ion", pops::Real(0.25));

@@ -150,9 +150,16 @@ def test_var_rejects_unstable_identity_metadata(name, kind):
         Var(name, kind)
 
 
-@pytest.mark.parametrize("axis", [True, -1, 2, "0"])
+@pytest.mark.parametrize("axis", [0, 1, 2])
+def test_partial_accepts_canonical_cartesian_axes(axis):
+    partial = Partial(Unknown("phi"), axis)
+
+    assert partial.axis == axis
+
+
+@pytest.mark.parametrize("axis", [True, -1, 3, "0", 1.0])
 def test_partial_rejects_implicit_or_out_of_range_axes(axis):
-    with pytest.raises(ValueError, match="integer 0 or 1"):
+    with pytest.raises(ValueError, match=r"canonical Cartesian ordinal \(0, 1, or 2\)"):
         Partial(Unknown("phi"), axis)
 
 

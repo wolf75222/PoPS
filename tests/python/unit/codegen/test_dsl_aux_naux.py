@@ -47,7 +47,7 @@ def test_provider_pack_assigns_compact_slots_and_emits_consumer_local_reads() ->
     source = model._m.emit_cpp_source(name="GenericAuxSource")
 
     assert "static constexpr int n_aux = 1;" in source
-    assert "flux_provider<0>()" in source
+    assert "pops::provider_value<0>(a)" in source
     assert "B_z" not in source
     assert "T_e" not in source
     assert "AUX_NAMED_BASE" not in source

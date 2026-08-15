@@ -38,7 +38,7 @@ std::string stub_source() {
          "\"; }\n"
          "extern \"C\" const char* pops_compiled_model_identity() { return "
          "\"0000000000000000000000000000000000000000000000000000000000000000\"; }\n"
-         "extern \"C\" int pops_native_system_package_abi_version() { return 2; }\n"
+         "extern \"C\" int pops_native_system_package_abi_version() { return 3; }\n"
          "extern \"C\" const char* pops_compiled_route_manifest() { return \"" +
          route_registry_signature() +
          "\"; }\n"

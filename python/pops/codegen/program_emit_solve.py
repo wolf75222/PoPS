@@ -1096,6 +1096,40 @@ def _validated_direct_solve_components(v: Any, operator: Any) -> int:
     return solve_components
 
 
+def _apply_graph_has_nearest_neighbour_stencil(operator: Any) -> bool:
+    """True when the apply subgraph carries an authenticated nearest-neighbour stencil."""
+    from pops.time.stencil import StencilAccess
+
+    attrs = getattr(operator, "attrs", None)
+    if not isinstance(attrs, Mapping):
+        return False
+    block = attrs.get("apply_block")
+    if not isinstance(block, (list, tuple)):
+        return False
+    nearest = StencilAccess.nearest_neighbour()
+    return any(
+        type(node.attrs.get("stencil_access")) is StencilAccess
+        and node.attrs.get("stencil_access") == nearest
+        for node in block
+    )
+
+
+def _require_system_matrix_free_stencil(
+        program: Any, solve: Any, operator: Any, lines: Any, *, target: str) -> None:
+    """Emit one Cartesian preflight for a Uniform System nearest-neighbour matrix-free solve."""
+    if target != "system" or not _apply_graph_has_nearest_neighbour_stencil(operator):
+        return
+    indices = program._block_indices()
+    owner = solve.block
+    if owner not in indices:
+        raise ValueError(
+            "solve_linear %r has no authenticated owner block for the Cartesian "
+            "matrix-free stencil" % solve.name)
+    lines.append(
+        "ctx.require_cartesian_generated_operator(%d, %s);"
+        % (indices[owner], json.dumps("matrix_free_stencil")))
+
+
 def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
                        lines: Any, target: Any = "system") -> None:
     """Lower solve_linear to a call into the runtime's matrix-free Krylov loop. The solution field
@@ -1193,6 +1227,8 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
 
     if footprint is None or problem_contract is None:
         raise RuntimeError("prepared Krylov emission has no authenticated contract")
+
+    _require_system_matrix_free_stencil(program, v, op_value, lines, target=target)
 
     method_expr = prepared_krylov_method_provider_from_attrs(v.attrs).emit_cpp(v)
 

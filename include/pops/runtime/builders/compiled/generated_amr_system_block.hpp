@@ -15,6 +15,7 @@
 #include <pops/runtime/builders/compiled/generated_system_block.hpp>
 #include <pops/runtime/multiblock/evaluation_point.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <concepts>
 #include <cstddef>
@@ -306,10 +307,11 @@ void require_level_context(const runtime::amr::AmrRuntime<Dim, MemorySpace>& run
 template <int Dim, class MemorySpace>
 std::string level_contract(const runtime::amr::AmrRuntime<Dim, MemorySpace>& runtime,
                            const GeneratedAmrLevelContext<Dim, MemorySpace>& context,
-                           std::string_view provider_identity) {
+                           std::string_view provider_identity,
+                           std::optional<Real> parabolic_frequency) {
   ExactContractBuilder contract;
   contract.text("pops.generated-amr-level-block")
-      .scalar(std::uint32_t{1})
+      .scalar(std::uint32_t{2})
       .scalar(std::int32_t{Dim})
       .scalar(static_cast<std::uint64_t>(context.level))
       .text(provider_identity)
@@ -323,7 +325,9 @@ std::string level_contract(const runtime::amr::AmrRuntime<Dim, MemorySpace>& run
       .optional_collective_contract(context.state_ghost_fill)
       .optional_collective_contract(context.provider_ghost_fill)
       .optional_collective_contract(context.root_state_ghost_fill)
-      .optional_collective_contract(context.root_provider_ghost_fill);
+      .optional_collective_contract(context.root_provider_ghost_fill)
+      .presence(parabolic_frequency.has_value())
+      .scalar(parabolic_frequency.value_or(Real(0)));
   contract.presence(static_cast<bool>(context.embedded_boundary));
   if (context.embedded_boundary)
     contract
@@ -510,17 +514,15 @@ class PreparedGeneratedAmrLevelBlock {
   using Speed = std::function<Real(const field_type&)>;
   using PoissonRhs = std::function<void(const field_type&, field_type&)>;
 
-  PreparedGeneratedAmrLevelBlock(runtime_type& runtime, std::size_t level, field_type& state,
-                                 std::string state_identity, std::string provider_identity,
-                                 std::string collective_contract, const ExecutionLane& lane,
-                                 StatePreparation prepare_state,
-                                 PhysicalBoundaryPreparation prepare_physical, Evaluator evaluator,
-                                 Evaluator flux_evaluator, Evaluator core_evaluator,
-                                 Evaluator flux_core_evaluator, Evaluator boundary_evaluator,
-                                 BoundaryJvp boundary_jvp, SourceEvaluator source_evaluator,
-                                 ImplicitSourceSolver implicit_source_solver, Speed maximum_speed,
-                                 PoissonRhs poisson_rhs, PointwiseProjection pointwise_projection,
-                                 Speed source_frequency, Speed stability_dt)
+  PreparedGeneratedAmrLevelBlock(
+      runtime_type& runtime, std::size_t level, field_type& state, std::string state_identity,
+      std::string provider_identity, std::string collective_contract, const ExecutionLane& lane,
+      StatePreparation prepare_state, PhysicalBoundaryPreparation prepare_physical,
+      Evaluator evaluator, Evaluator flux_evaluator, Evaluator core_evaluator,
+      Evaluator flux_core_evaluator, Evaluator boundary_evaluator, BoundaryJvp boundary_jvp,
+      SourceEvaluator source_evaluator, ImplicitSourceSolver implicit_source_solver,
+      Speed maximum_speed, PoissonRhs poisson_rhs, PointwiseProjection pointwise_projection,
+      Speed source_frequency, std::optional<Real> parabolic_frequency, Speed stability_dt)
       : runtime_(&runtime),
         level_(level),
         state_(&state),
@@ -542,6 +544,7 @@ class PreparedGeneratedAmrLevelBlock {
         poisson_rhs_(std::move(poisson_rhs)),
         pointwise_projection_(std::move(pointwise_projection)),
         source_frequency_(std::move(source_frequency)),
+        parabolic_frequency_(std::move(parabolic_frequency)),
         stability_dt_(std::move(stability_dt)),
         topology_epoch_(runtime.topology_epoch()),
         materialization_generation_(runtime.materialization_generation()) {
@@ -748,6 +751,11 @@ class PreparedGeneratedAmrLevelBlock {
     return stability_dt_(*state_);
   }
 
+  std::optional<Real> parabolic_frequency() const {
+    require_live_();
+    return parabolic_frequency_;
+  }
+
  private:
   static void require_prepared_point_(const point_type& point, const point_type& prepared) {
     if (prepared.clock.capacity() < point.clock.size())
@@ -832,6 +840,7 @@ class PreparedGeneratedAmrLevelBlock {
   PoissonRhs poisson_rhs_;
   PointwiseProjection pointwise_projection_;
   Speed source_frequency_;
+  std::optional<Real> parabolic_frequency_;
   Speed stability_dt_;
   std::uint64_t topology_epoch_ = 0;
   std::uint64_t materialization_generation_ = 0;
@@ -939,6 +948,10 @@ void materialize_masked_patch(
     nd::FaceField<Dim, MemorySpace>& faces, Fab<Dim, MemorySpace>& residual,
     nd::FaceField<Dim, MemorySpace>& face_candidate, nd::FaceField<Dim, MemorySpace>& face_statuses,
     Fab<Dim, MemorySpace>& residual_candidate, Fab<Dim, MemorySpace>& cell_statuses) {
+  if constexpr (DiffusiveModel<Model>)
+    throw std::invalid_argument(
+        "generated AMR embedded transport does not support Fickian diffusion without EB face "
+        "geometry");
   const int positivity_component =
       nd::cartesian_operator_detail::resolve_positivity_component<Model>(positivity_floor);
   nd::masked_operator_detail::materialize_axes<0, Variables>(
@@ -1035,7 +1048,7 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
 
   ExactContractBuilder package_contract;
   package_contract.text("pops.prepared-generated-amr-system-block")
-      .scalar(std::uint32_t{4})
+      .scalar(std::uint32_t{5})
       .scalar(std::int32_t{Dim})
       .text(name)
       .text(provider_identity)
@@ -1304,13 +1317,20 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
           *lane,
           [&] {
             if constexpr (generated_system_detail::GeneratedSourceModel<Dim, Model>) {
+              const bool has_active_mask =
+                  embedded_boundary && embedded_boundary->mode() !=
+                                           runtime::system::PreparedEmbeddedBoundaryMode::inactive;
               for (std::size_t local = 0; local < image.local_size(); ++local)
-                for_each_cell(image.box(local),
-                              generated_system_detail::MaterializeSource<Dim, Model>{
-                                  model, std::as_const(image).fab(local).view(),
-                                  runtime::system::bind_provider_storage_view<Dim, provider_count>(
-                                      provider_plan, provider_storage, local),
-                                  source.fab(local).view(), status.fab(local).view()});
+                for_each_cell(
+                    image.box(local),
+                    generated_system_detail::MaterializeSource<Dim, Model>{
+                        model, std::as_const(image).fab(local).view(),
+                        runtime::system::bind_provider_storage_view<Dim, provider_count>(
+                            provider_plan, provider_storage, local),
+                        source.fab(local).view(), status.fab(local).view(),
+                        has_active_mask ? embedded_boundary->active_mask().fab(local).view()
+                                        : FieldView<const Real, Dim>{},
+                        has_active_mask});
               local_status = reduce_max_local(status);
             }
           },
@@ -1318,18 +1338,7 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
       if (all_reduce_max(local_status, *lane) != Real(0))
         throw std::runtime_error("generated AMR source produced a non-finite component");
       collective_phase(
-          *lane,
-          [&] {
-            if (embedded_boundary && embedded_boundary->mode() !=
-                                         runtime::system::PreparedEmbeddedBoundaryMode::inactive)
-              for (std::size_t local = 0; local < source.local_size(); ++local)
-                for_each_cell(
-                    source.box(local),
-                    generated_system_detail::ApplyActiveMask<Dim>{
-                        source.fab(local).view(),
-                        embedded_boundary->active_mask().fab(local).view(), Model::n_vars});
-            generated_system_detail::copy_valid(source, result);
-          },
+          *lane, [&] { generated_system_detail::copy_valid(source, result); },
           "generated AMR source publication failed collectively");
     };
     auto implicit_source_solver = [model, provider_storage, provider_plan, prepare_state,
@@ -1376,6 +1385,10 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
               if constexpr (generated_system_detail::GeneratedSourceModel<Dim, Model>) {
                 auto& status = evaluation_scratch->source_status;
                 status.set_val(Real(0));
+                const bool has_active_mask =
+                    embedded_boundary &&
+                    embedded_boundary->mode() !=
+                        runtime::system::PreparedEmbeddedBoundaryMode::inactive;
                 for (std::size_t local = 0; local < source_image.local_size(); ++local)
                   for_each_cell(
                       source_image.box(local),
@@ -1383,7 +1396,10 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
                           model, std::as_const(source_image).fab(local).view(),
                           runtime::system::bind_provider_storage_view<Dim, provider_count>(
                               provider_plan, provider_storage, local),
-                          source.fab(local).view(), status.fab(local).view()});
+                          source.fab(local).view(), status.fab(local).view(),
+                          has_active_mask ? embedded_boundary->active_mask().fab(local).view()
+                                          : FieldView<const Real, Dim>{},
+                          has_active_mask});
                 local_status = reduce_max_local(status);
               }
             },
@@ -1391,18 +1407,7 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
         if (all_reduce_max(local_status, *lane) != Real(0))
           throw std::runtime_error("generated AMR source produced a non-finite component");
         collective_phase(
-            *lane,
-            [&] {
-              if (embedded_boundary && embedded_boundary->mode() !=
-                                           runtime::system::PreparedEmbeddedBoundaryMode::inactive)
-                for (std::size_t local = 0; local < source.local_size(); ++local)
-                  for_each_cell(
-                      source.box(local),
-                      generated_system_detail::ApplyActiveMask<Dim>{
-                          source.fab(local).view(),
-                          embedded_boundary->active_mask().fab(local).view(), Model::n_vars});
-              saxpy(evaluation.residual, Real(1), source);
-            },
+            *lane, [&] { saxpy(evaluation.residual, Real(1), source); },
             "generated AMR source residual accumulation failed collectively");
       };
     };
@@ -1536,17 +1541,24 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
         return source_frequency<Dim>(model, state, provider_storage, provider_plan, *lane);
       };
     }
+    std::optional<Real> parabolic_frequency_bound;
+    if constexpr (DiffusiveModel<Model>) {
+      const Real q = generated_system_detail::parabolic_frequency<Dim>(model, spatial.metric());
+      parabolic_frequency_bound = q;
+    }
     typename PreparedGeneratedAmrLevelBlock<Dim>::Speed stability_dt_bound;
     if constexpr (requires(const Model& value, const typename Model::State& state,
                            const ProviderValues<provider_count>& providers) {
                     value.stability_dt(state, providers);
                   }) {
-      stability_dt_bound = [model, provider_storage, provider_plan,
-                            lane](const MultiFab<Dim>& state) {
+      auto model_stability_dt = [model, provider_storage, provider_plan,
+                                 lane](const MultiFab<Dim>& state) {
         return stability_dt<Dim>(model, state, provider_storage, provider_plan, *lane);
       };
+      stability_dt_bound = std::move(model_stability_dt);
     }
-    std::string contract = level_contract(runtime, context, provider_identity);
+    std::string contract =
+        level_contract(runtime, context, provider_identity, parabolic_frequency_bound);
     MultiFab<Dim>* const bound_state = context.state;
     return PreparedGeneratedAmrLevelBlock<Dim>(
         runtime, level, *bound_state, std::move(context.state_identity), provider_identity,
@@ -1555,7 +1567,7 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
         std::move(flux_core_evaluator), std::move(boundary_evaluator), std::move(boundary_jvp),
         std::move(source_evaluator), std::move(implicit_source_solver), std::move(speed),
         std::move(poisson_rhs), std::move(pointwise_projection), std::move(source_frequency_bound),
-        std::move(stability_dt_bound));
+        std::move(parabolic_frequency_bound), std::move(stability_dt_bound));
   };
 
   result.primitive_to_conservative = [model](const double* primitive, double* conservative) {

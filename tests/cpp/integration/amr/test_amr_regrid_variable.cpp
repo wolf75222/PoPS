@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "amr_tagging_test_authority.hpp"
+#include "explicit_amr_program.hpp"
 
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/runtime/amr_patch.hpp>
@@ -93,8 +94,12 @@ std::vector<pops::AmrPatch<Dim>> run_selector(const std::string& variable) {
     config.shape[axis] = 32;
   config.regrid_every = 1;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "test.amr-regrid-variable/runtime@1");
   system.install_block_state_route("gas", "state/gas");
-  pops::add_compiled_model<Dim>(system, "gas", EulerModel<Dim>{});
+  pops::add_compiled_model<Dim>(
+      system, "gas", EulerModel<Dim>{}, "minmod", "rusanov", "conservative", "explicit",
+      static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
+      static_cast<double>(pops::kWenoEpsilon), false, "test.amr-regrid-variable/physical-flux");
   system.set_conservative_state("gas", energy_bump(config.shape));
   pops::test::install_prepared_threshold_union(system, {{"gas", variable, 4.0}});
   return system.patch_boxes();
@@ -125,5 +130,10 @@ TEST(test_amr_regrid_variable, AuthoredVariableSelectsTheExactConservativeCompon
 
 TEST(test_amr_regrid_variable, UnknownVariableFailsBeforeHierarchyPublication) {
   constexpr int Dim = pops::kNativeDimension;
-  EXPECT_THROW((void)run_selector<Dim>("not_a_conservative_variable"), std::invalid_argument);
+  try {
+    (void)run_selector<Dim>("not_a_conservative_variable");
+    FAIL() << "unknown conservative tagging variables must fail before hierarchy publication";
+  } catch (const std::invalid_argument& error) {
+    EXPECT_STREQ(error.what(), "AMR tagging names an unknown conservative variable");
+  }
 }

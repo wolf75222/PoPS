@@ -61,6 +61,26 @@ program schedule with the installed program before native state mutation and req
 checkpointed step strategy for the next attempt. Schema v1 and other historical payloads require an
 offline migration; runtime restart contains no compatibility branch.
 
+## Embedded-boundary active-cell contract
+
+Under an active staircase/cut-cell boundary, a qualified pointwise `local_transform` or local
+nonlinear solve evaluates only active cells and preserves the accepted values of inactive cells.
+The default model source follows the same rule: an inactive cell is short-circuited before any
+model or provider read. Generated reductions are raw owner/block/layout/lane-authenticated
+reductions over active cells; they do not apply kappa or volume weights. Physically weighted
+integrals remain explicit System services rather than an implicit reduction policy.
+
+Terminal recoverability and admissibility validation ignores inactive cells, while transactional
+publication preserves their accepted bits after every candidate in the batch has been validated.
+The same active-mask semantics apply at every AMR level; the implementation must not narrow the
+mask to `nlev == 1`. Unmasked pointwise Cartesian operations (`where`/`cell_compare`) and
+Cartesian stencil operators (`laplacian`, `gradient`, `divergence`, condensed-RHS stencils, and
+matrix-free stencils) fail closed under an active embedded boundary. Their exact
+owner-authenticated preflight rejects before the unsupported operation evaluates; for matrix-free
+stencils it rejects before preparation or iteration enters Krylov. Persistent scratch or other
+resources may have been prepared earlier. These statements document the contract; they are not a
+claim that the corresponding serial, MPI, GPU, or performance runtime gates are green.
+
 ## Cell-local temporal-partition restart foundation
 
 The AMR Program accepted image now has an explicit temporal-partition section. Its cell-local form
@@ -145,16 +165,29 @@ Offline envelope inspection authenticates only the integrity of a canonical chec
 a migration. The frozen release-v2 Uniform checkpoint predates the envelope and omits lifecycle
 identities, temporal state, consumer cursors, and field-provider state. The explicit
 `pops.codegen.checkpoint_migration` route can migrate exactly that frozen, store-all Uniform v2
-schema only when the caller supplies both a complete authenticated current-v6 authority checkpoint
-and a reviewed mapping. The mapping pins the source bytes, source ABI and Program hash, the
-authority restart and target lifecycle/ABI/Program identities, every block/component/history
-correspondence, and the closed set of current metadata inherited from the authority. The supported
-route requires the same grid and accepted clock, Dense fully stored histories with a matching
-outgoing-`dt` ledger, and no qualified field providers, scheduled caches, or ConsumerGraph state.
-It validates and reopens the complete current payload before an atomic no-clobber publication; the
-source and authority are never modified. Other v2 variants remain unsupported. Runtime restart
-contains no migration import or compatibility branch and continues to reject every historical
-payload.
+schema-4 mapping only when the caller supplies both a complete, separately authenticated current-v8
+authority checkpoint and a reviewed mapping. The v2 source contains no auxiliary authority. The
+authority must carry an empty POPSAUX2 image natively attested by the installed specialization; the
+mapping pins the exact source and authority bytes, source ABI and Program hash, authority restart
+and target lifecycle/ABI/Program identities, the SHA-256 of the exact auxiliary image bytes and of
+the binary registry contract bytes, every block/component/history correspondence, and the closed
+set of current metadata inherited from the authority. For the native dimension, that image is
+provider-/payload-empty only when persisted groups, components and providers are all zero while
+the opaque sealed registry contract is nonempty and `accepted_generation` is in
+`[0, UINT64_MAX)`. It need not equal a freshly sealed bare-registry contract: real code generation
+may install zero-valued consumer plans (the real authority contract is 1312 bytes). The attestor
+alone does not establish target-registry compatibility; the full-image and raw-registry-contract
+SHA-256 pins, byte-identical copy and strict live target restart provide that exactness. Migration
+copies that POPSAUX2 image byte-identically from the authority and never fabricates it from v2. The
+generation is preserved provenance, not rewritten: this AB2 fixture records `0`, structurally empty
+publication may produce a value greater than zero, and `UINT64_MAX` is refused as wrap poison. The
+emitted `checkpoint_migration` member is reserved by the live Uniform resource budget in a fixed 16 Ki
+character envelope. The supported route requires the same grid and accepted clock, Dense fully
+stored histories with a matching outgoing-`dt` ledger, and no qualified field providers, scheduled
+caches, or ConsumerGraph state. It validates and reopens the complete current payload before an
+atomic no-clobber publication; the source and authority are never modified. Other v2 variants
+remain unsupported. Runtime restart contains no migration import or compatibility branch and
+continues to reject every historical payload.
 
 `RuntimeInstance` obtains each consumer moment from the accepted cursor of the consumer's qualified
 clock. A missing clock, provisional phase, or desynchronized cursor is an error. Consequently a

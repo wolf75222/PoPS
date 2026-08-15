@@ -5,18 +5,16 @@ from __future__ import annotations
 import base64
 from dataclasses import replace
 import hashlib
-import importlib.util
 import json
 import os
 from pathlib import Path
-import sys
-from types import SimpleNamespace
-from types import ModuleType
 
 import numpy as np
 import pytest
 
+import pops
 from pops._generated_release_contract import UNIFORM_CHECKPOINT_PAYLOAD_VERSION
+from pops._checkpoint_migration_protocol import _CHECKPOINT_MIGRATION_PROVENANCE_MAX_CHARACTERS
 from pops.codegen.checkpoint_migration import (
     UNIFORM_V2_AUTHORITY_TRANSFERS,
     UniformV2BlockMapping,
@@ -24,34 +22,34 @@ from pops.codegen.checkpoint_migration import (
     UniformV2MigrationMapping,
     migrate_uniform_v2_checkpoint,
 )
-from pops.identity import make_identity
-from pops.mesh._layout_plan_contracts import NativeSpatialLayout
 from pops.output._checkpoint_collective import decode_checkpoint_bytes
-from pops.runtime._checkpoint_embedded_boundary import (
-    CheckpointEmbeddedBoundaryContract,
-    add_checkpoint_embedded_boundary_contract,
-)
 from pops.runtime._checkpoint_manifest import (
+    IDENTITY_KEY,
+    MANIFEST_KEY,
     inspect_checkpoint_payload_integrity,
     seal_checkpoint_payload,
 )
 from pops.runtime._checkpoint_resource_budget import (
+    _producer_checkpoint_resource_budget,
     _reviewed_archive_checkpoint_resource_budget,
 )
-from pops.runtime._checkpoint_spatial import (
-    add_checkpoint_spatial_contract,
-    install_checkpoint_spatial_contract,
+from pops.runtime._uniform_restart_preflight import preflight_uniform_restart
+from pops.solvers.elliptic import CartesianCG
+from pops.time import FixedDt
+from tests.python.integration._final_field_program import (
+    passive_field_model,
+    resolve_periodic_field_program,
 )
-from pops.runtime._temporal_restart import TemporalRestartState
-from pops.time import Clock, FixedDt, TimePoint
-from pops.time._history.persistence import Dense
+from tests.python.support.native_execution_context import artifact_execution_context
+from tests.python.integration.native_loader.test_uniform_restart_missing_history import (
+    DT,
+    _bound_history_runtime,
+)
 
 
 ROOT = Path(__file__).resolve().parents[4]
 FROZEN_UNIFORM_V2_B64 = ROOT / "tests/data/adc667/uniform_v2_ab2_98b7ffe6.npz.b64"
 FROZEN_UNIFORM_V2_SHA256 = "82490ddc97dbf37e6431c3c0ddb61c30439bdf4df9166f659146634d27766226"
-TARGET_PROGRAM_HASH = hashlib.sha256(b"adc667-current-program").hexdigest()
-TARGET_ABI_KEY = "adc667-current-test-abi"
 _REVIEWED_RESOURCE_LIMITS = {
     "max_members": 256,
     "max_manifest_characters": 1 << 20,
@@ -71,90 +69,133 @@ def _decode_reviewed(raw, *, unsealed=False):
     return decode_checkpoint_bytes(raw, budget, allow_reviewed_unsealed=unsealed)
 
 
-def _native_layout():
-    return NativeSpatialLayout(
-        layout_id="case:adc667/layout:grid",
-        coordinate_system="pops://coordinates/cartesian-nd@1",
-        cell_measure="pops://measures/cartesian-cell@1",
-        axis_names=("x", "y"),
-        shape=(4, 4),
-        lower=(0.0, 0.0),
-        upper=(1.0, 1.0),
-        periodicity=(True, True),
-        centering="cell",
-        decomposition={"kind": "single_box", "shape": [4, 4]},
+def test_checkpoint_migration_provenance_has_a_fixed_budgeted_envelope():
+    from pops.identity import make_identity
+
+    mapping = {"reviewed_mapping_id": "test-envelope"}
+    provenance = json.dumps(
+        {
+            "protocol": "pops.uniform-checkpoint-v2-offline-migration.v1",
+            "mapping_identity": make_identity("uniform-v2-migration-map", mapping).token,
+            "mapping": mapping,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
     )
-
-
-def _schedule():
-    macro = Clock("macro")
-    block = {"kind": "block", "qualified_id": "case/blk"}
-    state = {"kind": "state", "qualified_id": "case/blk/U", "block_ref": block}
-    space = {"kind": "state", "name": "U", "components": ["rho"]}
-    interpolation = {"kind": "linear", "schema_version": 1, "minimum_samples": 2}
-    validity = {
-        "schema_version": 1,
-        "oldest": TimePoint(macro, step=-1).to_data(),
-        "newest": TimePoint(macro).to_data(),
+    payload = {
+        "state": np.zeros((1,), dtype=np.float64),
+        "checkpoint_migration": np.asarray(provenance),
     }
-    return {
-        "schema_version": 1,
-        "kind": "pops.temporal-program-schedule",
-        "primary_clock": macro.qualified_id,
-        "clocks": [{"id": macro.qualified_id, "descriptor": macro.to_data(), "ticks_per_macro": 1}],
-        "subcycles": [],
-        "synchronizations": [],
-        "schedules": [],
-        "histories": [
+    budget = _producer_checkpoint_resource_budget(
+        payload,
+        runtime_kind="uniform",
+        authority="test-migration-provenance",
+    )
+    assert budget.max_members == 2
+    assert budget.max_archive_bytes > budget.max_uncompressed_bytes
+    near_capacity = dict(payload)
+    near_mapping = {
+        "reviewed_mapping_id": "x" * (_CHECKPOINT_MIGRATION_PROVENANCE_MAX_CHARACTERS // 2)
+    }
+    near_capacity["checkpoint_migration"] = np.asarray(
+        json.dumps(
             {
-                "name": "blk.R",
-                "owner": block,
-                "state": state,
-                "space": space,
-                "clock": macro.qualified_id,
-                "depth": 1,
-                "ring_slots": 2,
-                "ncomp": 1,
-                "validity": validity,
-                "interpolation": interpolation,
-                "checkpoint_policy": None,
-            }
-        ],
+                "protocol": "pops.uniform-checkpoint-v2-offline-migration.v1",
+                "mapping_identity": make_identity(
+                    "uniform-v2-migration-map", near_mapping
+                ).token,
+                "mapping": near_mapping,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
+    near_capacity_budget = _producer_checkpoint_resource_budget(
+        near_capacity,
+        runtime_kind="uniform",
+        authority="test-migration-provenance",
+    )
+    assert near_capacity_budget == budget
+    payload["checkpoint_migration"] = np.asarray(
+        "x" * (_CHECKPOINT_MIGRATION_PROVENANCE_MAX_CHARACTERS + 1)
+    )
+    with pytest.raises(ValueError, match="fixed character capacity"):
+        _producer_checkpoint_resource_budget(
+            payload,
+            runtime_kind="uniform",
+            authority="test-migration-provenance",
+        )
+
+
+def _migration_provenance(mapping=None):
+    from pops.identity import make_identity
+
+    mapping = {"reviewed_mapping_id": "test-provenance"} if mapping is None else mapping
+    return {
+        "protocol": "pops.uniform-checkpoint-v2-offline-migration.v1",
+        "mapping_identity": make_identity("uniform-v2-migration-map", mapping).token,
+        "mapping": mapping,
     }
 
 
-def _temporal_json(schedule):
-    state = TemporalRestartState()
-    state.configure_program(schedule, time=0.0, macro_step=0)
-    strategy = FixedDt(0.01)
-    state.begin_run(
-        {"strategy": strategy.to_data(), "controls": {}},
-        time=0.0,
-        macro_step=0,
+def _strict_uniform_preflight_payload():
+    return {
+        "t": np.asarray(0.0, dtype=np.float64),
+        "macro_step": np.asarray(0, dtype=np.int64),
+        "pops_spatial_contract": np.asarray("{}"),
+        "pops_embedded_boundary_contract": np.asarray("{}"),
+        "program_hash": np.asarray("ab" * 32),
+        "history_names": np.asarray([], dtype="U1"),
+        "cache_nodes": np.asarray([], dtype=np.int64),
+        "cache_names": np.asarray([], dtype="U1"),
+        "temporal_restart_state": np.asarray("{}"),
+        "program_cadence_substeps": np.asarray(1, dtype=np.int64),
+        "program_cadence_stride": np.asarray(1, dtype=np.int64),
+        "program_cadence_window_steps": np.asarray(0, dtype=np.int64),
+        "program_cadence_window_dt": np.asarray(0.0, dtype=np.float64),
+        "program_cadence_window_start_time": np.asarray(0.0, dtype=np.float64),
+        "program_last_dt": np.asarray(0.0, dtype=np.float64),
+    }
+
+
+def test_checkpoint_migration_provenance_is_consumed_by_producer_and_restart():
+    payload = _strict_uniform_preflight_payload()
+    preflight_uniform_restart(payload)
+    payload["checkpoint_migration"] = np.asarray(
+        json.dumps(_migration_provenance(), sort_keys=True, separators=(",", ":"))
     )
-    before = 0.0
-    for step, now in enumerate((0.01, 0.02, 0.03), start=1):
-        state.accept(
-            before_time=before,
-            before_step=step - 1,
-            time=now,
-            macro_step=step,
+    _producer_checkpoint_resource_budget(
+        payload,
+        runtime_kind="uniform",
+        authority="test-migration-provenance",
+    )
+    preflight_uniform_restart(payload)
+
+    cases = (
+        (lambda record: {key: value for key, value in record.items() if key != "mapping"}, "exactly"),
+        (
+            lambda record: {**record, "mapping": {"reviewed_mapping_id": "altered"}},
+            "does not match",
+        ),
+        (lambda record: {**record, "unreviewed": True}, "exactly"),
+    )
+    for mutate, match in cases:
+        invalid = dict(payload)
+        invalid["checkpoint_migration"] = np.asarray(
+            json.dumps(mutate(_migration_provenance()), sort_keys=True, separators=(",", ":"))
         )
-        before = now
-    return state.checkpoint_json(time=0.03, macro_step=3)
+        with pytest.raises((TypeError, ValueError), match=match):
+            _producer_checkpoint_resource_budget(
+                invalid,
+                runtime_kind="uniform",
+                authority="test-migration-provenance",
+            )
+        with pytest.raises((TypeError, ValueError), match=match):
+            preflight_uniform_restart(invalid)
 
-
-class _AuthorityOwner:
-    def __init__(self):
-        self.identities = (
-            make_identity("semantic", {"case": "adc667"}),
-            make_identity("artifact", {"case": "adc667"}),
-            make_identity("bind", {"case": "adc667"}),
-        )
-        self.last_run_identity = make_identity("run", {"case": "adc667"})
-
-    def _checkpoint_identities(self):
-        return self.identities
+    payload["unreviewed_archive_member"] = np.asarray("forbidden")
+    with pytest.raises(ValueError, match="unknown archive members"):
+        preflight_uniform_restart(payload)
 
 
 def _write_source(tmp_path):
@@ -173,73 +214,107 @@ def _write_source(tmp_path):
     return path, decode_checkpoint_bytes(raw, budget, allow_reviewed_unsealed=True)
 
 
-def _write_authority(tmp_path, *, history_slot_dt=(0.01, 0.01)):
-    from pops.output._consumer_contracts import ConsumerGraph
+@pytest.mark.parametrize("replacement", [1.0, -0.0, np.nan])
+def test_frozen_v2_fixture_refuses_noncanonical_legacy_phi(replacement, tmp_path):
+    from pops.codegen._checkpoint_migration_uniform_v2 import _validate_legacy_v2
 
-    schedule = _schedule()
+    _path, source = _write_source(tmp_path)
+    payload = {name: np.array(source[name], copy=True) for name in source.files}
+    payload["phi"].flat[0] = replacement
+    with pytest.raises(ValueError, match=r"canonical \+0.0"):
+        _validate_legacy_v2(payload)
+
+
+def _write_authority(tmp_path, native_cxx, *, history_slot_dt=(0.01, 0.01)):
+    """Capture the authority from the real bound history runtime, never a Python imitation."""
+    runtime = _bound_history_runtime(native_cxx)
+    report = pops.run(runtime, t_end=0.03, max_steps=3)
+    assert report.accepted_steps == 3
+    assert report.final_time == 3 * DT
+    path = Path(runtime.checkpoint(tmp_path / "authority-v8.npz"))
+    if history_slot_dt != (0.01, 0.01):
+        with np.load(path, allow_pickle=False) as stored:
+            payload = {
+                name: np.asarray(stored[name]).copy()
+                for name in stored.files
+                if name not in {MANIFEST_KEY, IDENTITY_KEY}
+            }
+        history = tuple(str(name) for name in payload["history_names"])
+        assert len(history) == 1
+        payload["history_slot_dt_" + history[0]] = np.asarray(history_slot_dt, dtype=np.float64)
+        restart = seal_checkpoint_payload(runtime, payload, runtime_kind="uniform")
+        np.savez_compressed(path, **payload)
+    else:
+        authority_payload = decode_checkpoint_bytes(
+            path.read_bytes(), runtime._checkpoint_resource_budget
+        )
+        slots = np.asarray(authority_payload["field_provider_slots"])
+        assert slots.shape == (0,)
+        assert slots.dtype.kind in "US"
+        _, restart = inspect_checkpoint_payload_integrity(authority_payload, runtime_kind="uniform")
+        histories = tuple(str(name) for name in authority_payload["history_names"])
+        assert histories == ("blk.rate",)
+        history = histories[0]
+        assert int(authority_payload["history_depth_" + history]) == 2
+        assert int(authority_payload["history_fill_count_" + history]) == 2
+        slot_dt = np.asarray(authority_payload["history_slot_dt_" + history])
+        assert slot_dt.dtype == np.dtype(np.float64)
+        assert np.array_equal(slot_dt, np.asarray((DT, DT), dtype=np.float64))
+    return path, runtime, restart, None
+
+
+@pytest.mark.compiler
+@pytest.mark.native_loader
+def test_dense_uniform_authority_refuses_spurious_regrid_replay_schedule(
+    tmp_path, native_cxx
+):
+    from pops.codegen._checkpoint_migration_uniform_v2 import _current_authority
+
+    authority, owner, _restart, _ = _write_authority(tmp_path, native_cxx)
+    decoded = decode_checkpoint_bytes(authority.read_bytes(), owner._checkpoint_resource_budget)
     payload = {
-        "pops_checkpoint_version": UNIFORM_CHECKPOINT_PAYLOAD_VERSION,
-        "t": 0.03,
-        "macro_step": 3,
-        "abi_key": TARGET_ABI_KEY,
-        "program_hash": TARGET_PROGRAM_HASH,
-        "blocks": np.asarray(["blk"]),
-        "ncomp_blk": 1,
-        "names_blk": np.asarray(["rho"]),
-        "state_blk": np.zeros((1, 4, 4), dtype=np.float64),
-        "phi": np.zeros((4, 4), dtype=np.float64),
-        "field_provider_slots": np.asarray([], dtype=str),
-        "temporal_restart_state": np.asarray(_temporal_json(schedule)),
-        "program_cadence_substeps": 1,
-        "program_cadence_stride": 1,
-        "program_cadence_window_steps": 0,
-        "program_cadence_window_dt": 0.0,
-        "program_cadence_window_start_time": 0.0,
-        "program_last_dt": 0.01,
-        "history_names": np.asarray(["blk.R"]),
-        "history_depth_blk.R": 2,
-        "history_ncomp_blk.R": 1,
-        "history_init_blk.R": True,
-        "history_fill_count_blk.R": 2,
-        "history_policy_blk.R": np.asarray(
-            json.dumps(Dense().to_manifest(), sort_keys=True, separators=(",", ":"))
-        ),
-        "history_requested_stored_slots_blk.R": np.asarray([0, 1], dtype=np.int64),
-        "history_stored_slots_blk.R": np.asarray([0, 1], dtype=np.int64),
-        "history_storage_mode_blk.R": np.asarray("policy"),
-        "history_slot_dt_blk.R": np.asarray(history_slot_dt, dtype=np.float64),
-        "history_blk.R_0": np.zeros((1, 4, 4), dtype=np.float64),
-        "history_blk.R_1": np.zeros((1, 4, 4), dtype=np.float64),
-        "cache_nodes": np.asarray([], dtype=np.int64),
-        "cache_names": np.asarray([], dtype=str),
-        "runtime_consumer_graph": np.asarray(ConsumerGraph(()).identity.token),
-        "runtime_consumer_cursors": np.asarray(
-            json.dumps({"schema_version": 1, "rows": []}, separators=(",", ":"))
-        ),
-        "runtime_consumer_diagnostics": np.asarray(
-            json.dumps(
-                {"schema_version": 2, "baselines": {}, "diagnostics": []},
-                separators=(",", ":"),
-            )
-        ),
+        name: np.asarray(decoded[name]).copy()
+        for name in decoded.files
+        if name not in {MANIFEST_KEY, IDENTITY_KEY}
     }
-    owner = _AuthorityOwner()
-    spatial = install_checkpoint_spatial_contract(owner, _native_layout())
-    add_checkpoint_spatial_contract(payload, spatial)
-    add_checkpoint_embedded_boundary_contract(
-        payload,
-        CheckpointEmbeddedBoundaryContract(2, False, "none", 0.0, 0.0, 0.0, ""),
-    )
-    restart = seal_checkpoint_payload(owner, payload, runtime_kind="uniform")
-    path = tmp_path / "authority-v7.npz"
-    with open(path, "wb") as stream:
-        np.savez_compressed(stream, **payload)
-    return path, owner, restart, schedule
+    histories = tuple(str(name) for name in payload["history_names"])
+    assert histories == ("blk.rate",)
+    payload["history_regrid_steps_" + histories[0]] = np.asarray((1,), dtype=np.int64)
+    seal_checkpoint_payload(owner, payload, runtime_kind="uniform")
+
+    with pytest.raises(ValueError, match="Dense history .* spurious replay schedule"):
+        _current_authority(payload)
 
 
 def _mapping(source_payload, owner, restart, authority):
+    authority_payload = decode_checkpoint_bytes(
+        authority.read_bytes(), owner._checkpoint_resource_budget
+    )
+
+
+    source_blocks = tuple(str(name) for name in source_payload["blocks"])
+    authority_blocks = tuple(str(name) for name in authority_payload["blocks"])
+    source_histories = tuple(str(name) for name in source_payload["history_names"])
+    authority_histories = tuple(str(name) for name in authority_payload["history_names"])
+    assert source_blocks == ("blk",) and len(authority_blocks) == 1
+    assert source_histories == ("blk.R",) and len(authority_histories) == 1
+    semantic, artifact, bind = owner._checkpoint_identities()
+    auxiliary_checkpoint = np.asarray(authority_payload["auxiliary_checkpoint"])
+    from pops._native_selector import selected_native_module
+
+    attest = getattr(
+        selected_native_module(required=True),
+        "_attest_empty_uniform_auxiliary_checkpoint",
+        None,
+    )
+    assert callable(attest)
+    attestation = attest(auxiliary_checkpoint.tobytes())
+    assert type(attestation["registry_contract"]) is bytes
+    assert type(attestation["accepted_generation"]) is int
+    assert not isinstance(attestation["accepted_generation"], bool)
+    assert 0 <= attestation["accepted_generation"] < (1 << 64) - 1
     return UniformV2MigrationMapping(
-        reviewed_mapping_id="ADC-667-frozen-uniform-v2-to-current-v7",
+        reviewed_mapping_id="ADC-667-frozen-uniform-v2-to-current-v8",
         source_content_sha256=FROZEN_UNIFORM_V2_SHA256,
         source_max_members=_REVIEWED_RESOURCE_LIMITS["max_members"],
         source_max_manifest_characters=_REVIEWED_RESOURCE_LIMITS["max_manifest_characters"],
@@ -249,164 +324,72 @@ def _mapping(source_payload, owner, restart, authority):
         source_abi_key=str(source_payload["abi_key"]),
         source_program_hash=str(source_payload["program_hash"]),
         authority_content_sha256=hashlib.sha256(authority.read_bytes()).hexdigest(),
+        authority_auxiliary_checkpoint_sha256=hashlib.sha256(
+            auxiliary_checkpoint.tobytes()
+        ).hexdigest(),
+        authority_auxiliary_registry_contract_sha256=hashlib.sha256(
+            attestation["registry_contract"]
+        ).hexdigest(),
         authority_max_members=_REVIEWED_RESOURCE_LIMITS["max_members"],
         authority_max_manifest_characters=_REVIEWED_RESOURCE_LIMITS["max_manifest_characters"],
         authority_max_array_bytes=_REVIEWED_RESOURCE_LIMITS["max_array_bytes"],
         authority_max_uncompressed_bytes=_REVIEWED_RESOURCE_LIMITS["max_uncompressed_bytes"],
         authority_max_archive_bytes=_REVIEWED_RESOURCE_LIMITS["max_archive_bytes"],
         authority_restart_identity=restart.token,
-        target_semantic_identity=owner.identities[0].token,
-        target_artifact_identity=owner.identities[1].token,
-        target_bind_identity=owner.identities[2].token,
+        target_semantic_identity=semantic.token,
+        target_artifact_identity=artifact.token,
+        target_bind_identity=bind.token,
         target_run_identity=owner.last_run_identity.token,
-        target_abi_key=TARGET_ABI_KEY,
-        target_program_hash=TARGET_PROGRAM_HASH,
+        target_abi_key=str(authority_payload["abi_key"]),
+        target_program_hash=str(authority_payload["program_hash"]),
         authority_transfers=UNIFORM_V2_AUTHORITY_TRANSFERS,
-        blocks=(UniformV2BlockMapping("blk", "blk", (("rho", "rho"),)),),
-        histories=(UniformV2HistoryMapping("blk.R", "blk.R", ((0, 0),)),),
+        blocks=(UniformV2BlockMapping("blk", authority_blocks[0], (("rho", "rho"),)),),
+        histories=(
+            UniformV2HistoryMapping("blk.R", authority_histories[0], ((0, 0),)),
+        ),
     )
 
 
-class _NativeTarget:
-    def __init__(self):
-        self.state = np.zeros((1, 4, 4), dtype=np.float64)
-        self.potential = np.zeros(16, dtype=np.float64)
-        self.histories = {}
-        self.history_dt = {}
-        self.history_initialized = {}
-        self.history_fill = {}
-        self.clock = (0.0, 0)
-        self.cadence = None
-        self.transaction = None
+def _captured_nonempty_auxiliary_checkpoint(native_cxx):
+    """Capture a real registered FieldOutput image; this test never fabricates POPSAUX2."""
+    from pops.lib.time import ForwardEuler
+    from pops.time import FailRun
 
-    def program_substeps(self):
-        return 1
+    def program(state, rate, field):
+        result = ForwardEuler(state, rate=rate, fields=field, solve_action=FailRun())
+        result.step_strategy(FixedDt(1.0e-4))
+        return result
 
-    def program_stride(self):
-        return 1
-
-    def restore_program_cadence_window(self, *values):
-        self.cadence = values
-
-    def _prepare_checkpoint_spatial_contract(self, contract):
-        return [int(np.prod(contract["shape"], dtype=np.int64))]
-
-    def effective_options_report(self):
-        return {
-            "topology": {"dimension": 2, "periodicity": [True, True]},
-            "eb": {
-                "enabled": False,
-                "geometry_mode": "none",
-                "kappa_min": 0.01,
-                "face_open_eps": 1.0e-6,
-                "cut_theta_min": 1.0e-3,
-                "semantic_digest": "",
-                "materialization_digest": "",
-                "generation": 0,
-            },
-        }
-
-    def nx(self):
-        return 4
-
-    def ny(self):
-        return 4
-
-    def block_names(self):
-        return ["blk"]
-
-    def n_vars(self, block):
-        assert block == "blk"
-        return 1
-
-    def field_provider_slots(self):
-        return []
-
-    def installed_program_hash(self):
-        return TARGET_PROGRAM_HASH
-
-    def history_names(self):
-        return []
-
-    def set_state(self, block, values):
-        assert block == "blk"
-        self.state = np.array(values, copy=True)
-
-    def set_potential(self, values):
-        self.potential = np.array(values, copy=True)
-
-    def set_clock(self, time, macro_step):
-        self.clock = (float(time), int(macro_step))
-
-    def restore_history(self, name, slot, values):
-        self.histories[name, int(slot)] = np.array(values, copy=True)
-
-    def restore_history_slot_dt(self, name, slot, dt):
-        self.history_dt[name, int(slot)] = float(dt)
-
-    def set_history_initialized(self, name, initialized):
-        self.history_initialized[name] = bool(initialized)
-
-    def restore_history_fill_count(self, name, fill_count):
-        self.history_fill[name] = int(fill_count)
-
-    def _begin_step_transaction(self):
-        assert self.transaction is None
-        self.transaction = "active"
-
-    def _commit_step_transaction(self):
-        assert self.transaction == "active"
-        self.transaction = "committed"
-
-    def _finalize_step_transaction(self):
-        assert self.transaction == "committed"
-        self.transaction = None
-
-    def _rollback_step_transaction(self):
-        self.transaction = None
-
-
-def _strict_uniform_target(owner, schedule, monkeypatch):
-    engine_descriptors = ModuleType("pops.runtime._engine_descriptors")
-    engine_descriptors.abi_key = lambda: TARGET_ABI_KEY
-    monkeypatch.setitem(
-        sys.modules,
-        "pops.runtime._engine_descriptors",
-        engine_descriptors,
+    model = passive_field_model("migration-nonempty-auxiliary", coefficient=0.0)
+    resolved = resolve_periodic_field_program(
+        model,
+        program,
+        name="migration-nonempty-auxiliary",
+        block_name="material",
+        target="system",
+        n=4,
+        field_solver=CartesianCG(),
+        cxx=native_cxx,
+        include=str(ROOT / "include"),
     )
-    module_name = "_pops_adc667_strict_system_io"
-    module_path = ROOT / "python/pops/runtime/_system_io.py"
-    specification = importlib.util.spec_from_file_location(module_name, module_path)
-    assert specification is not None and specification.loader is not None
-    module = importlib.util.module_from_spec(specification)
-    sys.modules[module_name] = module
-    try:
-        specification.loader.exec_module(module)
-    finally:
-        sys.modules.pop(module_name, None)
-    _SystemIO = module._SystemIO
-
-    class _StrictUniformTarget(_SystemIO):
-        def __init__(self):
-            self._s = _NativeTarget()
-            self._execution_context = SimpleNamespace(
-                communicator=SimpleNamespace(identity="serial", handle=None)
-            )
-            self._identities = owner.identities
-            self.last_run_identity = owner.last_run_identity
-            self._temporal_restart_state = SimpleNamespace(program_schedule=schedule)
-            install_checkpoint_spatial_contract(self, _native_layout())
-
-        def _checkpoint_identities(self):
-            return self._identities
-
-    return _StrictUniformTarget()
+    artifact = pops.compile(resolved)
+    simulation = pops.bind(
+        artifact,
+        initial_state={"material": np.ones((1, 4, 4), dtype=np.float64)},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
+    payload = simulation._executor._s.capture_auxiliary_checkpoint_accepted_state()
+    assert type(payload) is bytes and payload.startswith(b"POPSAUX2")
+    return payload
 
 
-def test_true_frozen_v2_migrates_and_strict_uniform_restart_accepts(tmp_path, monkeypatch):
+@pytest.mark.compiler
+@pytest.mark.native_loader
+def test_true_frozen_v2_migrates_and_strict_uniform_restart_accepts(tmp_path, native_cxx):
     source, source_payload = _write_source(tmp_path)
-    authority, owner, authority_restart, schedule = _write_authority(tmp_path)
-    destination = tmp_path / "migrated-v7.npz"
+    authority, owner, authority_restart, _ = _write_authority(tmp_path, native_cxx)
+    authority_bytes = authority.read_bytes()
+    destination = tmp_path / "migrated-v8.npz"
 
     report = migrate_uniform_v2_checkpoint(
         source,
@@ -419,25 +402,29 @@ def test_true_frozen_v2_migrates_and_strict_uniform_restart_accepts(tmp_path, mo
         b"".join(FROZEN_UNIFORM_V2_B64.read_bytes().split()),
         validate=True,
     )
+    assert authority.read_bytes() == authority_bytes
     migrated = _decode_reviewed(destination.read_bytes())
     _, restart = inspect_checkpoint_payload_integrity(migrated, runtime_kind="uniform")
     assert report.destination_restart_identity == restart.token
-    assert int(migrated["pops_checkpoint_version"]) == 7
-    assert str(migrated["program_hash"]) == TARGET_PROGRAM_HASH
+    assert int(migrated["pops_checkpoint_version"]) == UNIFORM_CHECKPOINT_PAYLOAD_VERSION
+    authority_payload = decode_checkpoint_bytes(authority_bytes, owner._checkpoint_resource_budget)
+    assert str(migrated["program_hash"]) == str(authority_payload["program_hash"])
+    assert np.array_equal(
+        migrated["auxiliary_checkpoint"], authority_payload["auxiliary_checkpoint"]
+    )
     assert np.array_equal(migrated["state_blk"], source_payload["state_blk"])
     assert np.array_equal(migrated["phi"], source_payload["phi"])
+    assert migrated["phi"].dtype == np.dtype(np.float64)
+    assert migrated["phi"].flags.c_contiguous
+    assert np.all(migrated["phi"].view(np.uint64) == 0)
     for slot in (0, 1):
         assert np.array_equal(
-            migrated["history_blk.R_%d" % slot],
+            migrated["history_%s_%d" % (str(authority_payload["history_names"][0]), slot)],
             source_payload["history_blk.R_%d" % slot],
         )
 
-    target = _strict_uniform_target(owner, schedule, monkeypatch)
-    accepted = target.restart(destination, bit_identical=True)
+    accepted = owner.restart(destination)
     assert accepted.token == report.destination_restart_identity
-    assert np.array_equal(target._s.state, source_payload["state_blk"])
-    assert target._s.clock == (0.03, 3)
-    assert target._s.history_fill == {"blk.R": 2}
 
 
 @pytest.mark.parametrize(
@@ -462,6 +449,17 @@ def test_true_frozen_v2_migrates_and_strict_uniform_restart_accepts(tmp_path, mo
             "authority or target lifecycle pins",
         ),
         (
+            lambda mapping: replace(mapping, authority_auxiliary_checkpoint_sha256="0" * 64),
+            "auxiliary checkpoint SHA-256",
+        ),
+        (
+            lambda mapping: replace(
+                mapping,
+                authority_auxiliary_registry_contract_sha256="0" * 64,
+            ),
+            "auxiliary registry contract",
+        ),
+        (
             lambda mapping: replace(mapping, blocks=()),
             "block mapping",
         ),
@@ -474,10 +472,14 @@ def test_true_frozen_v2_migrates_and_strict_uniform_restart_accepts(tmp_path, mo
         ),
     ],
 )
-def test_refused_mapping_publishes_no_destination(tmp_path, change, match):
+@pytest.mark.compiler
+@pytest.mark.native_loader
+def test_refused_mapping_publishes_no_destination(tmp_path, native_cxx, change, match):
     source, source_payload = _write_source(tmp_path)
-    authority, owner, restart, _ = _write_authority(tmp_path)
+    authority, owner, restart, _ = _write_authority(tmp_path, native_cxx)
     destination = tmp_path / "must-not-exist.npz"
+    source_bytes = source.read_bytes()
+    authority_bytes = authority.read_bytes()
 
     with pytest.raises(ValueError, match=match):
         migrate_uniform_v2_checkpoint(
@@ -487,11 +489,15 @@ def test_refused_mapping_publishes_no_destination(tmp_path, change, match):
             mapping=change(_mapping(source_payload, owner, restart, authority)),
         )
     assert not destination.exists()
+    assert source.read_bytes() == source_bytes
+    assert authority.read_bytes() == authority_bytes
 
 
-def test_ambiguous_legacy_schema_is_refused_without_publication(tmp_path):
+@pytest.mark.compiler
+@pytest.mark.native_loader
+def test_ambiguous_legacy_schema_is_refused_without_publication(tmp_path, native_cxx):
     source, source_payload = _write_source(tmp_path)
-    authority, owner, restart, _ = _write_authority(tmp_path)
+    authority, owner, restart, _ = _write_authority(tmp_path, native_cxx)
     arrays = {name: np.array(value, copy=True) for name, value in source_payload.items()}
     arrays["implicit_alias"] = np.asarray("forbidden")
     with open(source, "wb") as stream:
@@ -512,9 +518,11 @@ def test_ambiguous_legacy_schema_is_refused_without_publication(tmp_path):
     assert not destination.exists()
 
 
-def test_tampered_current_authority_is_refused_without_publication(tmp_path):
+@pytest.mark.compiler
+@pytest.mark.native_loader
+def test_tampered_current_authority_is_refused_without_publication(tmp_path, native_cxx):
     source, source_payload = _write_source(tmp_path)
-    authority, owner, restart, _ = _write_authority(tmp_path)
+    authority, owner, restart, _ = _write_authority(tmp_path, native_cxx)
     mapping = _mapping(source_payload, owner, restart, authority)
     authority_payload = _decode_reviewed(authority.read_bytes())
     damaged = {name: np.array(value, copy=True) for name, value in authority_payload.items()}
@@ -533,10 +541,93 @@ def test_tampered_current_authority_is_refused_without_publication(tmp_path):
     assert not destination.exists()
 
 
-def test_authority_history_ledger_must_match_the_legacy_trajectory(tmp_path):
+@pytest.mark.compiler
+@pytest.mark.native_loader
+def test_resealed_tampered_auxiliary_authority_is_refused_without_publication(
+    tmp_path, native_cxx
+):
+    source, source_payload = _write_source(tmp_path)
+    authority, owner, authority_restart, _ = _write_authority(tmp_path, native_cxx)
+    mapping = _mapping(source_payload, owner, authority_restart, authority)
+    with np.load(authority, allow_pickle=False) as stored:
+        payload = {
+            name: np.asarray(stored[name]).copy()
+            for name in stored.files
+            if name not in {MANIFEST_KEY, IDENTITY_KEY}
+        }
+    auxiliary = np.asarray(payload["auxiliary_checkpoint"]).copy()
+    auxiliary[-1] ^= np.uint8(1)
+    payload["auxiliary_checkpoint"] = auxiliary
+    restart = seal_checkpoint_payload(owner, payload, runtime_kind="uniform")
+    np.savez_compressed(authority, **payload)
+    source_bytes = source.read_bytes()
+    authority_bytes = authority.read_bytes()
+    destination = tmp_path / "must-not-exist.npz"
+    mapping = replace(
+        mapping,
+        authority_content_sha256=hashlib.sha256(authority_bytes).hexdigest(),
+        authority_auxiliary_checkpoint_sha256=hashlib.sha256(auxiliary.tobytes()).hexdigest(),
+        authority_restart_identity=restart.token,
+    )
+
+    with pytest.raises((RuntimeError, ValueError), match="auxiliary"):
+        migrate_uniform_v2_checkpoint(
+            source,
+            destination,
+            current_authority=authority,
+            mapping=mapping,
+        )
+    assert not destination.exists()
+    assert source.read_bytes() == source_bytes
+    assert authority.read_bytes() == authority_bytes
+
+
+@pytest.mark.compiler
+@pytest.mark.native_loader
+def test_resealed_nonempty_auxiliary_authority_is_refused_without_publication(
+    tmp_path, native_cxx
+):
+    source, source_payload = _write_source(tmp_path)
+    authority, owner, authority_restart, _ = _write_authority(tmp_path, native_cxx)
+    mapping = _mapping(source_payload, owner, authority_restart, authority)
+    nonempty = _captured_nonempty_auxiliary_checkpoint(native_cxx)
+    with np.load(authority, allow_pickle=False) as stored:
+        payload = {
+            name: np.asarray(stored[name]).copy()
+            for name in stored.files
+            if name not in {MANIFEST_KEY, IDENTITY_KEY}
+        }
+    payload["auxiliary_checkpoint"] = np.frombuffer(nonempty, dtype=np.uint8).copy()
+    restart = seal_checkpoint_payload(owner, payload, runtime_kind="uniform")
+    np.savez_compressed(authority, **payload)
+    source_bytes = source.read_bytes()
+    authority_bytes = authority.read_bytes()
+    destination = tmp_path / "must-not-exist.npz"
+    mapping = replace(
+        mapping,
+        authority_content_sha256=hashlib.sha256(authority_bytes).hexdigest(),
+        authority_auxiliary_checkpoint_sha256=hashlib.sha256(nonempty).hexdigest(),
+        authority_restart_identity=restart.token,
+    )
+
+    with pytest.raises((RuntimeError, ValueError), match="auxiliary"):
+        migrate_uniform_v2_checkpoint(
+            source,
+            destination,
+            current_authority=authority,
+            mapping=mapping,
+        )
+    assert not destination.exists()
+    assert source.read_bytes() == source_bytes
+    assert authority.read_bytes() == authority_bytes
+
+
+@pytest.mark.compiler
+@pytest.mark.native_loader
+def test_authority_history_ledger_must_match_the_legacy_trajectory(tmp_path, native_cxx):
     source, source_payload = _write_source(tmp_path)
     authority, owner, restart, _ = _write_authority(
-        tmp_path,
+        tmp_path, native_cxx,
         history_slot_dt=(0.02, 0.02),
     )
     destination = tmp_path / "must-not-exist.npz"
@@ -551,9 +642,11 @@ def test_authority_history_ledger_must_match_the_legacy_trajectory(tmp_path):
     assert not destination.exists()
 
 
-def test_existing_destination_is_never_replaced(tmp_path):
+@pytest.mark.compiler
+@pytest.mark.native_loader
+def test_existing_destination_is_never_replaced(tmp_path, native_cxx):
     source, source_payload = _write_source(tmp_path)
-    authority, owner, restart, _ = _write_authority(tmp_path)
+    authority, owner, restart, _ = _write_authority(tmp_path, native_cxx)
     destination = tmp_path / "existing.npz"
     destination.write_bytes(b"sentinel")
 
@@ -567,9 +660,11 @@ def test_existing_destination_is_never_replaced(tmp_path):
     assert destination.read_bytes() == b"sentinel"
 
 
-def test_destination_race_at_atomic_link_is_no_clobber(tmp_path, monkeypatch):
+@pytest.mark.compiler
+@pytest.mark.native_loader
+def test_destination_race_at_atomic_link_is_no_clobber(tmp_path, monkeypatch, native_cxx):
     source, source_payload = _write_source(tmp_path)
-    authority, owner, restart, _ = _write_authority(tmp_path)
+    authority, owner, restart, _ = _write_authority(tmp_path, native_cxx)
     destination = tmp_path / "raced.npz"
     real_link = os.link
 

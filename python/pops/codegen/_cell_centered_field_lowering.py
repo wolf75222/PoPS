@@ -789,7 +789,10 @@ def _install_output(
 ) -> None:
     """Commit the provider-owned output payload after every input preflight succeeded."""
     del binding
-    output_keys = output_payload["output_keys"]
+    # ``prepare_output_payload`` has already frozen and exact-validated this ordered ComponentKey
+    # sequence.  Pybind deliberately accepts only ``list[dict[str, str]]`` here, so thaw no earlier
+    # than the native commit boundary and never hand its mutable carrier back to the authority.
+    output_keys: list[dict[str, str]] = [dict(key) for key in output_payload["output_keys"]]
     context.engine.register_elliptic_field(
         output_payload["block"],
         output_payload["field"],

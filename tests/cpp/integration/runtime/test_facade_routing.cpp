@@ -15,6 +15,7 @@
 
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/runtime/builders/compiled/dsl_block.hpp>
 #include <pops/runtime/builders/compiled/generated_system_block.hpp>
 #include <pops/runtime/program/program_context.hpp>
@@ -23,6 +24,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <numeric>
 #include <string>
 #include <utility>
@@ -57,6 +59,11 @@ using NativeExtent = Extent<kTestDimension>;
 constexpr int kCompressibleComponents = kTestDimension + 2;
 using ScalarModel = nd::ScalarAdvection<kTestDimension>;
 using CompressibleModel = nd::IdealGasEuler<kTestDimension>;
+
+void install_execution_lane(NativeSystem& system, std::string identity) {
+  system.install_prepared_boundary_execution_lane(
+      std::make_shared<ExecutionLane>(ExecutionLane::world(std::move(identity))));
+}
 
 NativeSystemConfig native_config(int cells, Real length, bool periodic) {
   NativeSystemConfig config;
@@ -281,6 +288,7 @@ TEST(FacadeRouting, AnalyticEmbeddedBoundaryRoutingBehavesAcrossNoneStaircaseAnd
       ref_state;  // etat de reference (chemin plein cartesien), reutilise par (b)/(c)/(d)
   {
     NativeSystem base(config);
+    install_execution_lane(base, "pops.test.facade-routing.embedded.base");
     build_transport(base);
     base.set_density("n", rho0);
     for (int k = 0; k < n_steps; ++k)
@@ -288,6 +296,7 @@ TEST(FacadeRouting, AnalyticEmbeddedBoundaryRoutingBehavesAcrossNoneStaircaseAnd
     ref_state = base.get_state("n");
 
     NativeSystem none(config);
+    install_execution_lane(none, "pops.test.facade-routing.embedded.none");
     build_transport(none);
     none.set_density("n", rho0);
     install_centered_ball(none, radius, "none");
@@ -309,6 +318,7 @@ TEST(FacadeRouting, AnalyticEmbeddedBoundaryRoutingBehavesAcrossNoneStaircaseAnd
   // ----------------------------------------------------------------------
   {
     NativeSystem sc(config);
+    install_execution_lane(sc, "pops.test.facade-routing.embedded.staircase");
     build_transport(sc);
     sc.set_density("n", rho0);
     install_centered_ball(sc, radius, "staircase");
@@ -363,6 +373,7 @@ TEST(FacadeRouting, AnalyticEmbeddedBoundaryRoutingBehavesAcrossNoneStaircaseAnd
   {
     // (c1) cutting geometry: finite state + differs from Cartesian.
     NativeSystem cc(config);
+    install_execution_lane(cc, "pops.test.facade-routing.embedded.cutcell");
     build_transport(cc);
     cc.set_density("n", rho0);
     install_centered_ball(cc, radius, "cutcell");
@@ -377,12 +388,14 @@ TEST(FacadeRouting, AnalyticEmbeddedBoundaryRoutingBehavesAcrossNoneStaircaseAnd
     // (c2) enclosing level set: every cell active and no cut face, hence EB == Cartesian.
     const double enclosing_radius = 10.0 * L;
     NativeSystem sq(config);  // reference 1 pas plein
+    install_execution_lane(sq, "pops.test.facade-routing.embedded.square");
     build_transport(sq);
     sq.set_density("n", rho0);
     sq.step(dt);
     const std::vector<double> sq1 = sq.get_state("n");
 
     NativeSystem eb(config);
+    install_execution_lane(eb, "pops.test.facade-routing.embedded.enclosing");
     build_transport(eb);
     eb.set_density("n", rho0);
     install_centered_ball(eb, enclosing_radius, "cutcell");
@@ -409,6 +422,7 @@ TEST(FacadeRouting, GenericAnalyticLevelSetInstallsAfterBlockConstruction) {
   // The transport closure is deliberately built before geometry installation. The native program
   // owner must therefore accept the generic LevelSet without a geometry-specific authoring order.
   NativeSystem analytic(config);
+  install_execution_lane(analytic, "pops.test.facade-routing.generic-level-set");
   build_transport(analytic);
   analytic.set_density("n", rho0);
   install_centered_ball(analytic, radius, "cutcell");
@@ -424,6 +438,7 @@ TEST(FacadeRouting, AnalyticLevelSetReplacementIsTransactionalOnNonFiniteValues)
   (void)kokkos_scope();
 #endif
   NativeSystem system(native_config(20, Real(1), false));
+  install_execution_lane(system, "pops.test.facade-routing.transactional-level-set");
   system.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.5, 0.0}, "staircase", 0.2, 1e-5,
                                 0.1);
   const std::vector<double> original = system.embedded_boundary_mask();
@@ -451,12 +466,14 @@ TEST(FacadeRouting, PeriodicAnalyticLevelSetUsesTopologyAtTheSeam) {
   // a correct topology fill replaces that extension with the opposite valid cells and both prepared
   // metric fields become bit-identical. Direct evaluation at the fictitious x<0 ghost does not.
   NativeSystem topology(config);
+  install_execution_lane(topology, "pops.test.facade-routing.periodic-topology");
   add_periodic_transport(topology);
   topology.set_density("n", rho0);
   topology.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.25, 0.0}, "cutcell");
   install_forward_euler_program(topology);
 
   NativeSystem explicit_wrap(config);
+  install_execution_lane(explicit_wrap, "pops.test.facade-routing.periodic-explicit-wrap");
   add_periodic_transport(explicit_wrap);
   explicit_wrap.set_density("n", rho0);
   explicit_wrap.set_analytic_level_set(
@@ -479,6 +496,7 @@ TEST(FacadeRouting, PrimitiveMaterializationFailsClosedWithoutMutatingAcceptedSt
   constexpr int n = 4;
   const NativeSystemConfig config = native_config(n, Real(1), true);
   NativeSystem system(config);
+  install_execution_lane(system, "pops.test.facade-routing.primitive-materialization");
   add_compressible(system);
 
   // All components are finite, but Euler conservative -> primitive is undefined at rho=0.
@@ -505,6 +523,7 @@ TEST(FacadeRouting, PreparedBlockInstallationRefusesMissingBatchAuthorityWithout
 #endif
   constexpr int n = 4;
   NativeSystem system(native_config(n, Real(1), true));
+  install_execution_lane(system, "pops.test.facade-routing.prepared-block-refusal");
   system.install_block_state_route("gas", "test:facade-routing/gas/state");
   system.seal_auxiliary_providers();
   auto prepared = prepare_compiled_system_block<kTestDimension>(
@@ -532,6 +551,7 @@ TEST(FacadeRouting, PrimitiveInputRequiresPreparedRecoveryBeforeConservativePubl
   const NativeSystemConfig config = native_config(n, Real(1), true);
   const std::size_t cells = cell_count(config.shape);
   NativeSystem system(config);
+  install_execution_lane(system, "pops.test.facade-routing.primitive-input");
   add_compressible(system);
 
   std::vector<double> accepted(static_cast<std::size_t>(kCompressibleComponents) * cells, 0.0);

@@ -4,6 +4,7 @@
     "ctest_parallel_jobs": 4,
     "estimated_targets": [
       "test_amr_program_diffusion",
+      "test_amr_program_embedded_boundary",
       "test_amr_program_positivity_floor",
       "test_cartesian_poisson_nd",
       "test_cell_temporal_partition_executor",
@@ -41,7 +42,7 @@
     "refresh_source_run": "30190778708",
     "source_job": "87152034744",
     "source_run": "29352485297",
-    "target_count": 168,
+    "target_count": 169,
     "unit_seconds": "aggregate CTest wall time per build target"
   },
   "test_amr_compiled_model": 0.01,
@@ -60,6 +61,7 @@
   "test_amr_native_loader": 2.74,
   "test_amr_potential": 0.24,
   "test_amr_program_diffusion": 0.3,
+  "test_amr_program_embedded_boundary": 0.3,
   "test_amr_program_positivity_floor": 0.3,
   "test_amr_regrid_variable": 1.52,
   "test_amr_riemann_native": 5.27,

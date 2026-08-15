@@ -139,3 +139,29 @@ TEST(test_fill_boundary, remote_payloads_have_exact_component_major_prefixes) {
   EXPECT_EQ(schedule.send_elements(), 2U);
   EXPECT_EQ(schedule.receive_elements(), 2U);
 }
+
+TEST(test_fill_boundary, peer_plan_budget_counts_send_and_receive_plans_cumulatively) {
+  const Box<1> domain{Index<1>{0}, Index<1>{3}};
+  const BoxArray<1> layout(
+      std::vector<Box<1>>{Box<1>{Index<1>{0}, Index<1>{0}}, Box<1>{Index<1>{1}, Index<1>{1}},
+                          Box<1>{Index<1>{2}, Index<1>{2}}, Box<1>{Index<1>{3}, Index<1>{3}}});
+  const RankSpace<1> ranks{Index<1>{0}, Extent<1>{4}};
+  const auto distribution = Distribution<1>::partitioned(
+      layout, ranks, std::vector<Index<1>>{Index<1>{0}, Index<1>{1}, Index<1>{2}, Index<1>{3}});
+  HostMultiFab<1> fields(layout, distribution, Index<1>{0}, 1, Extent<1>{3});
+  const auto topology = BoundaryTopology<1>::axis_periodic(std::array<bool, 1>{true});
+
+  auto budget = halo_budget<1>(layout.size(), 3);
+  budget.peer_plans = 5;
+  EXPECT_THROW((void)prepare_halo_schedule(fields, domain, topology, budget), std::length_error);
+
+  budget.peer_plans = 6;
+  const auto schedule = prepare_halo_schedule(fields, domain, topology, budget);
+  ASSERT_EQ(schedule.send_plans().size(), 3U);
+  ASSERT_EQ(schedule.receive_plans().size(), 3U);
+  for (std::size_t peer = 0; peer < 3; ++peer) {
+    const Index<1> expected{static_cast<int>(peer + 1)};
+    EXPECT_EQ(schedule.send_plans()[peer].peer, expected);
+    EXPECT_EQ(schedule.receive_plans()[peer].peer, expected);
+  }
+}

@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "amr_tagging_test_authority.hpp"
+#include "explicit_amr_program.hpp"
 
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/amr/hierarchy/amr_hierarchy.hpp>
@@ -175,8 +176,13 @@ template <int Dim>
 pops::AmrSystem<Dim> make_system(const pops::AmrSystemConfig<Dim>& config,
                                  const std::vector<double>& initial) {
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "test.amr-seed-no-refine.runtime@1");
   system.install_block_state_route("tracer", "state/tracer");
-  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>(), "minmod", "rusanov",
+                                "conservative", "explicit",
+                                static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
+                                static_cast<double>(pops::kWenoEpsilon), false,
+                                "test.amr-seed-no-refine.tracer.provider-free@1");
   system.set_conservative_state("tracer", initial);
   return system;
 }

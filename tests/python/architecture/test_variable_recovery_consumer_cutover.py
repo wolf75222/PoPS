@@ -126,11 +126,32 @@ def test_program_terminal_state_publication_validates_every_candidate_before_fir
         "void commit_many(",
         "\n  void apply_coupling_operators(",
     )
-    validation = commit.index("validate_program_state_publication_candidate_(block, value,")
-    lane = commit.index("prepared_execution_lane()", validation)
-    publication = commit.index("*target = std::move(*snapshots[candidate])", validation)
-    assert validation < lane < publication
-    assert "validate_program_state_publication_candidate_(block, value," in uniform
+    validation = commit.index("validate_program_state_publication_candidate_(")
+    assert commit.count("validate_program_state_publication_candidate_(") == 1
+    validation_boundary = commit.index(
+        '"ProgramContext commit mask classification differs between ranks"', validation
+    )
+    snapshots = commit.index("std::vector<std::optional<field_type>> snapshots;", validation_boundary)
+    masked_copy = commit.index("copy_active_valid_cells_(", snapshots)
+    fence = commit.index("device_fence();", masked_copy)
+    staging_boundary = commit.index(
+        "if (all_reduce_max(staging_error ? 1L : 0L, lane) != 0)", fence
+    )
+    final_moves = [
+        match.start()
+        for match in re.finditer(
+            r"\*\w+\[[^]]+\]\s*=\s*std::move\(\*\w+\[[^]]+\]\)", commit
+        )
+    ]
+    masked_snapshot = re.search(
+        r"\.emplace\(\s*\*\w+\[[^]]+\]\s*\)\s*;\s*copy_active_valid_cells_\(",
+        commit[snapshots:fence],
+    )
+
+    assert validation < validation_boundary < snapshots < masked_copy < fence < staging_boundary
+    assert masked_snapshot
+    assert final_moves
+    assert all(staging_boundary < move for move in final_moves)
 
 
 def test_nd_face_reconstruction_consumes_typed_conversion_before_flux_evaluation():

@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import subprocess
+from types import MappingProxyType, SimpleNamespace
 
 import pytest
 
 from pops._ir import Var
+from pops.codegen.module_emit_helpers import _axis_values
 from pops.codegen.module_lowering import lower_and_validate
 from pops.codegen.toolchain import native_compile_environment, pops_loader_build_flags
 from pops.frames import X_AXIS, Y_AXIS, Z_AXIS
@@ -201,6 +203,28 @@ def test_provided_roe_refuses_a_partial_ranked_map() -> None:
 
     with pytest.raises(ValueError, match="exactly match set_flux"):
         model.roe_dissipation(x=[jump], y=[jump])
+
+
+def test_axis_values_accepts_immutable_exact_maps_and_refuses_axis_drift() -> None:
+    model = SimpleNamespace(_flux={"x": [0], "y": [0]})
+    expected = ["flux_x", "flux_y"]
+
+    assert (
+        _axis_values(
+            model,
+            MappingProxyType({"x": ["flux_x"], "y": ["flux_y"]}),
+            where="immutable fluxes",
+        )
+        == expected
+    )
+
+    for values in (
+        MappingProxyType({"x": ["flux_x"]}),
+        MappingProxyType({"y": ["flux_y"], "x": ["flux_x"]}),
+        MappingProxyType({"x": ["flux_x"], "y": ["flux_y"], "z": ["flux_z"]}),
+    ):
+        with pytest.raises(ValueError, match="exact emitted axis set"):
+            _axis_values(model, values, where="immutable fluxes")
 
 
 def test_ranked_hllc_and_roe_templates_are_cpp_well_formed(tmp_path) -> None:

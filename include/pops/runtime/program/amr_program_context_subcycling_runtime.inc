@@ -56,6 +56,9 @@ void advance_prepared_hierarchy_(double dt, Body&& body, std::string_view operat
         [&](std::size_t runtime_block, std::size_t level, const field_type& candidate) {
           facade_->validate_prepared_amr_state_publication_candidate(
               static_cast<int>(runtime_block), static_cast<int>(level), candidate);
+        },
+        [&](std::size_t level, std::span<field_type*> pack) {
+          stage_prepared_publication_candidates_(level, pack);
         });
     std::optional<typename interface_flux_ledger_type::PreparedCommit> prepared_commit;
     ledger_error = nullptr;
@@ -340,6 +343,92 @@ void advance_multiblock_level_group_(multiblock_level_group_type group, Body& bo
   clear_active_multiblock_group_();
 }
 
+void stage_prepared_publication_candidates_(std::size_t level, std::span<field_type*> pack) const {
+  const ExecutionLane& lane = prepared_execution_lane();
+  std::size_t blocks = 0;
+  std::vector<const field_type*> actives;
+  std::exception_ptr lookup_error;
+  try {
+    blocks = static_cast<std::size_t>(n_blocks());
+    if (pack.size() != blocks)
+      throw std::invalid_argument(
+          "AMR Program publication staging pack lost its complete block set");
+    actives.assign(blocks, nullptr);
+    for (std::size_t block = 0; block < blocks; ++block) {
+      if (pack[block] == nullptr)
+        throw std::invalid_argument("AMR Program publication staging pack contains a null state");
+      actives[block] = facade_->prepared_amr_block_level_active_mask(static_cast<int>(block),
+                                                                     static_cast<int>(level));
+    }
+  } catch (...) {
+    lookup_error = std::current_exception();
+  }
+  if (all_reduce_max(lookup_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && lookup_error)
+      std::rethrow_exception(lookup_error);
+    throw std::runtime_error("AMR Program publication staging mask lookup failed collectively");
+  }
+  for (std::size_t block = 0; block < blocks; ++block) {
+    const long masked = actives[block] != nullptr ? 1L : 0L;
+    if (all_reduce_min(masked, lane) != all_reduce_max(masked, lane))
+      throw std::runtime_error(
+          "AMR Program publication staging mask classification differs between ranks");
+  }
+
+  std::vector<std::optional<field_type>> staged;
+  std::exception_ptr stage_error;
+  try {
+    staged.resize(blocks);
+    for (std::size_t block = 0; block < blocks; ++block) {
+      const field_type* const active = actives[block];
+      if (active == nullptr)
+        continue;
+      const int runtime_block = static_cast<int>(block);
+      const int live_level = static_cast<int>(level);
+      const field_type& accepted = facade_->prepared_amr_block_state(runtime_block, live_level);
+      require_same_field_contract_(*pack[block], accepted,
+                                   "AMR Program publication staging candidate");
+      require_same_layout_(*active, accepted, "AMR Program publication staging active mask");
+      if (active->ncomp() != 1)
+        throw std::invalid_argument(
+            "AMR Program publication staging active mask requires one component");
+      staged[block].emplace(accepted);
+      const int components = pack[block]->ncomp();
+      for (std::size_t local = 0; local < pack[block]->local_size(); ++local) {
+        const auto& source_fab = pack[block]->fab(local);
+        auto& destination_fab = staged[block]->fab(local);
+        const auto& active_fab = active->fab(local);
+        if (pack[block]->global_index(local) != accepted.global_index(local) ||
+            pack[block]->global_index(local) != active->global_index(local) ||
+            source_fab.box() != destination_fab.box() || source_fab.box() != active_fab.box())
+          throw std::invalid_argument(
+              "AMR Program publication staging encountered different exact local patch ownership");
+        const FieldView<const Real, Dim> source = std::as_const(source_fab).view();
+        const FieldView<Real, Dim> destination = destination_fab.view();
+        const FieldView<const Real, Dim> mask = std::as_const(active_fab).view();
+        for_each_cell(source_fab.box(), [=] POPS_HD(const Index<Dim>& cell) {
+          if (mask(cell, 0) < Real(0.5))
+            return;
+          for (int component = 0; component < components; ++component)
+            destination(cell, component) = source(cell, component);
+        });
+      }
+    }
+  } catch (...) {
+    stage_error = std::current_exception();
+  }
+  try {
+    Kokkos::fence();
+  } catch (...) {
+    stage_error = std::current_exception();
+  }
+  if (stage_error)
+    std::rethrow_exception(stage_error);
+  for (std::size_t block = 0; block < blocks; ++block)
+    if (staged[block])
+      *pack[block] = std::move(*staged[block]);
+}
+
 void clear_active_multiblock_group_() const noexcept {
   active_attempt_states_.clear();
   active_staged_parents_.clear();
@@ -386,6 +475,7 @@ static std::vector<Index<Dim>> cells_in_box_(const Box<Dim>& box) {
 std::vector<ProgramInterfaceFace> program_interface_faces_(std::size_t parent_level) const {
   const auto& parent = runtime_->hierarchy().layout(parent_level);
   const auto& child = runtime_->hierarchy().layout(parent_level + 1);
+  const BoundaryTopology<Dim> topology = facade_->prepared_amr_boundary_topology();
   Extent<Dim> ratio{};
   for (int axis = 0; axis < Dim; ++axis)
     ratio[axis] = child.ratio_from_parent()[axis];
@@ -403,11 +493,16 @@ std::vector<ProgramInterfaceFace> program_interface_faces_(std::size_t parent_le
       for (int direction : {-1, 1}) {
         Index<Dim> outside = inside;
         outside[axis] += direction;
+        if (!parent.domain().contains(outside)) {
+          const BoundarySide side = direction < 0 ? BoundarySide::lower : BoundarySide::upper;
+          if (!topology.is_periodic(Face<Dim>{axis, side}))
+            continue;
+          outside[axis] = direction < 0 ? parent.domain().hi[axis] : parent.domain().lo[axis];
+        }
         const bool parent_cell =
             std::any_of(parent.patches().boxes().begin(), parent.patches().boxes().end(),
                         [&](const Box<Dim>& patch) { return patch.contains(outside); });
-        if (!parent.domain().contains(outside) || !parent_cell ||
-            covered.contains(index_key_(outside)))
+        if (!parent_cell || covered.contains(index_key_(outside)))
           continue;
         Index<Dim> face = inside;
         if (direction > 0)

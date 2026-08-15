@@ -352,18 +352,18 @@ struct AnalyticProgramView {
                            : instruction.op == AnalyticOp::Y ? 1
                                                              : 2;
           const bool available = axis < Dim;
-          values[sp] = available ? coordinates[axis]
-                                 : std::numeric_limits<Real>::quiet_NaN();
-          validity[sp++] = available && Kokkos::isfinite(values[sp - 1]) ? std::uint8_t{1}
-                                                                          : std::uint8_t{0};
+          values[sp] = available ? coordinates[axis] : std::numeric_limits<Real>::quiet_NaN();
+          validity[sp] =
+              available && Kokkos::isfinite(values[sp]) ? std::uint8_t{1} : std::uint8_t{0};
+          ++sp;
         } break;
         case AnalyticOp::Input: {
           assert(sp < kAnalyticMaxStack);
           const std::uint32_t slot = instruction.operand;
           const bool ok = inputs != nullptr && slot < input_count;
           values[sp] = ok ? inputs[slot] : std::numeric_limits<Real>::quiet_NaN();
-          validity[sp++] =
-              ok && Kokkos::isfinite(values[sp - 1]) ? std::uint8_t{1} : std::uint8_t{0};
+          validity[sp] = ok && Kokkos::isfinite(values[sp]) ? std::uint8_t{1} : std::uint8_t{0};
+          ++sp;
         } break;
         case AnalyticOp::Add: {
           const std::size_t right = --sp;
@@ -585,9 +585,11 @@ class AnalyticProgram {
   [[nodiscard]] AnalyticValueType result_type() const noexcept { return result_type_; }
 
   [[nodiscard]] AnalyticProgramView view() const noexcept {
-    return AnalyticProgramView{instructions_.data(), literals_.data(),
+    return AnalyticProgramView{instructions_.data(),
+                               literals_.data(),
                                static_cast<std::uint32_t>(instructions_.size()),
-                               static_cast<std::uint8_t>(required_stack_), required_dimension_,
+                               static_cast<std::uint8_t>(required_stack_),
+                               required_dimension_,
                                result_type_};
   }
 
@@ -597,8 +599,8 @@ class AnalyticProgram {
       throw std::logic_error("analytic expression: cannot evaluate an empty program");
     if (required_dimension_ > Dim)
       throw std::invalid_argument("analytic expression requires spatial dimension " +
-                                  std::to_string(required_dimension_) +
-                                  " but the target rank is " + std::to_string(Dim));
+                                  std::to_string(required_dimension_) + " but the target rank is " +
+                                  std::to_string(Dim));
     return view().eval(coordinates);
   }
 

@@ -209,6 +209,44 @@ def test_fixed_dt_merges_a_roundoff_equivalent_final_landing():
     assert native.calls[-1] == ("step", remaining)
 
 
+def test_fixed_dt_preserves_authored_interval_when_binary64_sum_lands_exactly():
+    native = _Native()
+    native.step(0.01)
+    native.step(0.01)
+    remaining = 0.03 - native.time()
+    assert remaining != 0.01
+
+    report = prepare_program_run(_Engine(FixedDt(0.01))).run_step(native, t_end=0.03)
+
+    assert report.attempts == 1
+    assert native.calls[-1] == ("step", 0.01)
+    assert native.time() == 0.03
+
+
+def test_fixed_dt_refuses_a_nonadvancing_terminal_equality():
+    native = _Native()
+    native.t = float(2**53)
+    assert native.time() + 0.1 == native.time()
+
+    with pytest.raises(RuntimeError, match="no positive interval"):
+        prepare_program_run(_Engine(FixedDt(0.1))).run_step(native, t_end=native.time())
+
+    assert native.calls == []
+
+
+def test_fixed_dt_refuses_a_positive_interval_below_the_current_time_ulp():
+    native = _Native()
+    native.t = float(2**53)
+    assert native.time() + 0.1 == native.time()
+
+    with pytest.raises(RuntimeError, match="does not advance binary64 time"):
+        prepare_program_run(_Engine(FixedDt(0.1))).run_step(
+            native, t_end=native.time() + 16.0
+        )
+
+    assert native.calls == []
+
+
 def test_error_controlled_exhaustion_preserves_rejection_and_exact_attempt_count():
     native = _Native(reject=4)
     engine = _Engine(_error_strategy())
@@ -559,7 +597,8 @@ def test_temporal_owner_uses_one_raw_attempt_and_preserves_authenticated_strateg
 def test_direct_facade_fixed_step_commits_one_temporal_envelope(facade_type):
     facade = object.__new__(facade_type)
     facade._s = _Native()
-    facade._step_strategy = FixedDt(0.1) if facade_type is System else None
+    strategy = FixedDt(0.1)
+    facade._step_strategy = strategy
     facade._step_transaction_plan = None
     facade._step_controller = None
     facade._last_step_transaction_report = None
@@ -573,7 +612,7 @@ def test_direct_facade_fixed_step_commits_one_temporal_envelope(facade_type):
         "rejected": 0,
         "failed": 0,
     }
-    assert facade._temporal_restart_state.strategy == run_control_payload(FixedDt(0.1))
+    assert facade._temporal_restart_state.strategy == run_control_payload(strategy)
 
 
 def test_multi_layout_attempt_advances_child_raw_targets_and_accepts_once():
@@ -736,9 +775,12 @@ def test_runtime_instance_keeps_error_controller_and_strategy_across_macro_steps
     owner = RuntimeOwner(raw, strategy)
     runtime = RuntimeInstance(plan, executor=owner)
 
-    report = runtime._run(t_end=0.5, max_steps=2)
+    report = runtime._run(t_end=0.25, max_steps=2)
 
     assert report.accepted_steps == 2
+    assert report.rejected_steps == 1
+    assert report.final_time == pytest.approx(0.25)
+    assert report.final_macro_step == 2
     assert owner.facade_step_calls == 0
     assert raw.calls == [pytest.approx(0.2), pytest.approx(0.1), pytest.approx(0.15)]
     controller = owner._step_controller

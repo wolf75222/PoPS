@@ -258,13 +258,13 @@ def test_external_flux_uses_its_declared_wave_speed_capability_not_its_name():
     authority = {
         "library_path": "/tmp/external-riemann.so",
         "library_sha256": "0" * 64,
-        "abi_version": 4,
+        "abi_version": 5,
         "abi_key": (
-            "pops.external-riemann/v4;scalar=f64;index=i32;periodicity=nd;providers=qualified;dim=2"
+            "pops.external-riemann/v5;scalar=f64;index=i32;periodicity=nd;providers=qualified;dim=2"
         ),
-        "system_abi_version": 6,
+        "system_abi_version": 7,
         "system_abi_key": (
-            "pops.external-riemann.system/v6;receiver=prepared-native-package;"
+            "pops.external-riemann.system/v7;receiver=prepared-native-package;"
             "providers=qualified;dim=2"
         ),
         "native_abi_key": "host-native-abi",
@@ -322,14 +322,14 @@ def test_external_flux_reuses_standard_model_predicates_without_a_route_name():
         options={
             "library_path": "/tmp/external-riemann.so",
             "library_sha256": "0" * 64,
-            "abi_version": 4,
+            "abi_version": 5,
             "abi_key": (
-                "pops.external-riemann/v4;scalar=f64;index=i32;periodicity=nd;"
+                "pops.external-riemann/v5;scalar=f64;index=i32;periodicity=nd;"
                 "providers=qualified;dim=2"
             ),
-            "system_abi_version": 6,
+            "system_abi_version": 7,
             "system_abi_key": (
-                "pops.external-riemann.system/v6;receiver=prepared-native-package;"
+                "pops.external-riemann.system/v7;receiver=prepared-native-package;"
                 "providers=qualified;dim=2"
             ),
             "native_abi_key": "host-native-abi",

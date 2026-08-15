@@ -2,7 +2,13 @@
 
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/coupling/base/elliptic_rhs.hpp>
-#include <pops/runtime/config/model_spec.hpp>
+#include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/parallel/execution_lane.hpp>
+#include <pops/physics/bricks/elliptic.hpp>
+#include <pops/physics/bricks/source.hpp>
+#include <pops/physics/composition/composite.hpp>
+#include <pops/runtime/builders/compiled/dsl_block.hpp>
+#include <pops/runtime/builders/compiled/generated_system_block.hpp>
 #include <pops/runtime/system/prepared_field_solver_component.hpp>
 #include <pops/runtime/system.hpp>
 #include <pops/runtime/system/derived_aux_provider.hpp>
@@ -12,14 +18,35 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <string>
 #include <vector>
+
+namespace pops {
+
+template <int Dim, class Model>
+PreparedSystemBlock<Dim> prepare_exact_system_block(
+    CompiledSystemBlockPreparation<Dim, Model> request) {
+  return prepare_generated_system_block(std::move(request));
+}
+
+}  // namespace pops
 
 namespace {
 
 constexpr int Dim = pops::kNativeDimension;
 using NativeSystem = pops::System<Dim>;
 using NativeField = pops::MultiFab<Dim>;
+using ChargeModel =
+    pops::CompositeModel<pops::nd::ScalarAdvection<Dim>, pops::NoSource, pops::ChargeDensity>;
+
+static_assert(ChargeModel::n_providers == 0);
+
+void install_execution_lane(NativeSystem& system) {
+  system.install_prepared_boundary_execution_lane(
+      std::make_shared<pops::ExecutionLane>(pops::ExecutionLane::duplicate_world_collectively(
+          "test.coupled-fieldsolve.runtime-instance@1")));
+}
 
 pops::SystemConfig<Dim> config(int cells) {
   pops::SystemConfig<Dim> result;
@@ -56,19 +83,22 @@ std::vector<double> charge_density(int cells, double amplitude, double phase) {
 }
 
 void add_charge_block(NativeSystem& system, const std::string& name) {
-  pops::ModelSpec spec;
-  spec.transport = "exb";
-  spec.source = "none";
-  spec.elliptic = "charge";
-  spec.q = 1.0;
-  system.add_block(name, spec, "minmod", "rusanov", "conservative", "explicit", 1, true);
+  system.install_block_state_route(name, "test.coupled-fieldsolve/" + name + "/state@1");
+  pops::RealVector<Dim> velocity{};
+  ChargeModel model{};
+  model.hyp = pops::nd::ScalarAdvection<Dim>::prepare(velocity);
+  model.ell.q = pops::Real(1);
+  pops::add_compiled_model(system, name, std::move(model), "minmod", "rusanov", "conservative",
+                           "explicit", static_cast<double>(pops::kPhysicalDefaultGamma), 1, true);
 }
 
 NativeSystem two_block_system(int cells, const std::vector<double>& first,
                               const std::vector<double>& second) {
   NativeSystem system(config(cells));
+  install_execution_lane(system);
   add_charge_block(system, "first");
   add_charge_block(system, "second");
+  system.seal_auxiliary_providers();
   system.set_poisson("charge_density", "cartesian_cg");
   system.set_density("first", first);
   system.set_density("second", second);
@@ -171,20 +201,15 @@ TEST(test_coupled_fieldsolve,
   const auto first = charge_density(cells, 1.0, 0.0);
   const auto second = charge_density(cells, 0.6, 0.25);
   NativeSystem system(config(cells));
+  install_execution_lane(system);
   add_charge_block(system, "first");
   add_charge_block(system, "second");
 
   const std::string slot = "qualified-coupled-provider";
-  const pops::PreparedProviderOptions backend_options{"pops.system.geometric-mg-options@1",
-                                                      {{"abs_tol", 0.0},
-                                                       {"bottom_sweeps", std::int64_t{50}},
-                                                       {"coarse_threshold", std::int64_t{0}},
-                                                       {"max_cycles", std::int64_t{50}},
-                                                       {"min_coarse", std::int64_t{2}},
-                                                       {"post_smooth", std::int64_t{2}},
-                                                       {"pre_smooth", std::int64_t{2}},
-                                                       {"rel_tol", 1.0e-8}}};
-  system.register_configured_field_solver_provider("geometric_mg", slot, backend_options);
+  const pops::PreparedProviderOptions backend_options{
+      "pops.system.cartesian-cg-options@1",
+      {{"abs_tol", 0.0}, {"max_iterations", std::int64_t{200}}, {"rel_tol", 1.0e-8}}};
+  system.register_configured_field_solver_provider("cartesian_cg", slot, backend_options);
   system.set_field_solver_plan(slot, "test.qualified-coupled-plan",
                                "test.qualified-coupled-provider", "test.qualified-coupled", "first",
                                "potential",
@@ -218,7 +243,8 @@ TEST(test_coupled_fieldsolve,
   const std::vector<double> all_live = system.field_potential_global(slot);
   ASSERT_EQ(all_live.size(), cell_count(cells));
   ASSERT_EQ(outputs.size(), static_cast<std::size_t>(Dim + 1));
-  EXPECT_FALSE(system.field_topology_report(slot).empty());
+  EXPECT_TRUE(system.field_topology_report(slot).empty())
+      << "the builtin Cartesian CG route has no external component-topology report";
 
   for (int axis = 0; axis < Dim; ++axis) {
     const auto gradient = system.auxiliary_component(outputs[static_cast<std::size_t>(axis + 1)]);

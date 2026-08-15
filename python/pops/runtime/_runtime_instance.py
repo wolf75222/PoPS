@@ -1733,10 +1733,88 @@ class RuntimeInstance:
             receipt_error = error
         consensus(topology, "private transaction receipt", error=receipt_error)
 
+        # Real engine adapters expose this capability-only method.  It writes through a duplicate
+        # of the transaction's retained ``O_NOFOLLOW`` descriptor; it never reopens ``expected``
+        # by path.  The legacy path-only fallback is intentionally retained for the narrow fake
+        # executors used by adversarial security tests, where replacement must still be refused
+        # by the candidate-owner checks below.
+        precreated_capture = None
+        seam_kind = None
+        seam_error = None
+        try:
+            precreated_capture = getattr(self._executor, "_checkpoint_precreated_inode", None)
+            seam_kind = "precreated-inode" if callable(precreated_capture) else "path-only"
+        except BaseException as error:
+            seam_error = error
+        rows = consensus(
+            topology,
+            "checkpoint capture seam",
+            error=seam_error,
+            value=seam_kind,
+        )
+        if any(row["value"] != seam_kind for row in rows):
+            error = RuntimeError("checkpoint capture seam differs across ranks")
+            if topology.rank == 0:
+                try:
+                    transaction_receipt.cleanup_owned()
+                except BaseException as cleanup_error:
+                    error.add_note("rank-zero checkpoint cleanup also failed: %s" % cleanup_error)
+            raise error
+        initial_entry = None
+        precreated_descriptor = None
+
+        def cleanup_native_capture_failure() -> None:
+            nonlocal initial_entry, precreated_descriptor
+            if topology.rank != 0:
+                return
+            if precreated_descriptor is not None:
+                descriptor = precreated_descriptor
+                precreated_descriptor = None
+                os.close(descriptor)
+            if initial_entry is not None:
+                entry = initial_entry
+                initial_entry = None
+                transaction_receipt.quarantine_entry_at(
+                    entry, phase="failed precreated native checkpoint cleanup"
+                )
+                transaction_receipt.cleanup_empty()
+                return
+            transaction_receipt.cleanup_owned()
+
+        if seam_kind == "precreated-inode":
+            acquisition_error = None
+            try:
+                if topology.rank == 0:
+                    initial_entry = transaction_receipt.take_native_entry()
+                    transaction_receipt.authenticate_entry_at(initial_entry)
+                    precreated_descriptor = initial_entry.duplicate()
+            except BaseException as error:
+                acquisition_error = error
+            try:
+                consensus(
+                    topology,
+                    "precreated checkpoint descriptor acquisition",
+                    error=acquisition_error,
+                )
+            except BaseException as error:
+                if topology.rank == 0:
+                    try:
+                        cleanup_native_capture_failure()
+                    except BaseException as cleanup_error:
+                        add_note = getattr(error, "add_note", None)
+                        if callable(add_note):
+                            add_note("rank-zero checkpoint cleanup also failed: %s" % cleanup_error)
+                raise
+
         target = None
         capture_error = None
         try:
-            target = canonical_checkpoint_path(self._executor.checkpoint(str(expected)))
+            if seam_kind == "precreated-inode":
+                target = canonical_checkpoint_path(
+                    precreated_capture(str(expected), precreated_descriptor=precreated_descriptor)
+                )
+            else:
+                target = canonical_checkpoint_path(self._executor.checkpoint(str(expected)))
             if target != expected:
                 raise RuntimeError(
                     "native checkpoint returned %s for shared staging target %s"
@@ -1744,6 +1822,11 @@ class RuntimeInstance:
                 )
         except BaseException as error:
             capture_error = error
+        finally:
+            if precreated_descriptor is not None:
+                descriptor = precreated_descriptor
+                precreated_descriptor = None
+                os.close(descriptor)
         try:
             rows = consensus(
                 topology,
@@ -1756,7 +1839,7 @@ class RuntimeInstance:
             # this state; only rank zero owns descriptors and compensates locally.
             if topology.rank == 0:
                 try:
-                    transaction_receipt.cleanup_owned()
+                    cleanup_native_capture_failure()
                 except BaseException as cleanup_error:
                     add_note = getattr(error, "add_note", None)
                     if callable(add_note):
@@ -1766,7 +1849,7 @@ class RuntimeInstance:
             error = RuntimeError("native checkpoint ranks returned different staged paths")
             if topology.rank == 0:
                 try:
-                    transaction_receipt.cleanup_owned()
+                    cleanup_native_capture_failure()
                 except BaseException as cleanup_error:
                     error.add_note("rank-zero checkpoint cleanup also failed: %s" % cleanup_error)
             raise error
@@ -1800,7 +1883,9 @@ class RuntimeInstance:
                 )
 
         def seal_root() -> dict[str, Any]:
-            initial = transaction_receipt.take_native_entry()
+            initial = initial_entry
+            if initial is None:
+                initial = transaction_receipt.take_native_entry()
             entries["expected"] = initial
             candidate = transaction_receipt.open_candidate_at(initial.name)
             entries["candidate"] = candidate
@@ -2094,6 +2179,8 @@ class RuntimeInstance:
     ) -> Any:
         from pops.output._checkpoint_collective import (
             decode_checkpoint_bytes,
+            require_restart_bit_identical,
+            require_restart_hierarchy_mode,
             restore_checkpoint_payload,
         )
         from ._checkpoint_resource_budget import require_checkpoint_resource_budget
@@ -2162,7 +2249,7 @@ class RuntimeInstance:
             if not isinstance(geometry_cache, dict):
                 raise TypeError("RuntimeInstance restart requires an exact mutable geometry cache")
             prepared_snapshot = {
-                "hierarchy_mode": hierarchy_mode,
+                "hierarchy_mode": selected_hierarchy_mode,
                 "source_run_identity": source_run_identity,
                 "restore_run_identity": restore_run_identity,
                 "canonical_diagnostics": canonical_diagnostics,
@@ -2245,15 +2332,15 @@ class RuntimeInstance:
             self,
             self._executor,
             payload,
-            bit_identical=bit_identical,
-            hierarchy_mode=hierarchy_mode,
+            bit_identical=policy,
+            hierarchy_mode=selected_hierarchy_mode,
             hierarchy_identity=hierarchy_identity,
             phase_prefix="native restart",
             prepare_outer_state=prepare_outer_state,
             after_native_apply=restore_outer_state,
             rollback_after_native_apply=rollback_outer_state,
         )
-        return result.restart_identity if hierarchy_mode == "regrid_on_restart" else result
+        return result.restart_identity if selected_hierarchy_mode == "regrid_on_restart" else result
 
     def restart(self, path: Any) -> Any:
         operation = self._restart_operation()

@@ -258,6 +258,8 @@ void parallel_copy(MultiFab<Dim, DestinationMemorySpace>& destination,
 template <int Dim, class DestinationMemorySpace, class SourceMemorySpace>
 void parallel_copy(MultiFab<Dim, DestinationMemorySpace>& destination,
                    const MultiFab<Dim, SourceMemorySpace>& source, CopyScheduleBudget budget) {
+  if (destination.ncomp() != source.ncomp())
+    throw std::invalid_argument("pops::parallel_copy fields have different component counts");
   const CopySchedule<Dim> schedule = prepare_copy_schedule(destination, source, budget);
   parallel_copy(destination, source, schedule);
 }

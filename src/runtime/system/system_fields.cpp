@@ -122,39 +122,81 @@ const MultiFab<Dim>& embedded_boundary_output_field(const Implementation& implem
 
 template <int Dim, class Species>
 void require_recoverable_candidate(const Species& state, const MultiFab<Dim>& candidate,
-                                   std::string_view operation, const ExecutionLane& lane) {
-  if (candidate.layout() != state.U.layout() ||
-      candidate.distribution() != state.U.distribution() ||
-      candidate.local_rank() != state.U.local_rank() || candidate.ncomp() != state.U.ncomp() ||
-      candidate.ghosts() != state.U.ghosts())
-    throw std::invalid_argument(std::string(operation) + ": candidate layout differs from block");
+                                   std::string_view operation, const ExecutionLane& lane,
+                                   const MultiFab<Dim>* active_cells = nullptr) {
+  std::exception_ptr layout_error;
+  try {
+    if (candidate.layout() != state.U.layout() ||
+        candidate.distribution() != state.U.distribution() ||
+        candidate.local_rank() != state.U.local_rank() || candidate.ncomp() != state.U.ncomp() ||
+        candidate.ghosts() != state.U.ghosts())
+      throw std::invalid_argument(std::string(operation) + ": candidate layout differs from block");
+    if (active_cells != nullptr &&
+        (active_cells->layout() != candidate.layout() ||
+         active_cells->distribution() != candidate.distribution() ||
+         active_cells->local_rank() != candidate.local_rank() ||
+         active_cells->local_size() != candidate.local_size() || active_cells->ncomp() != 1))
+      throw std::invalid_argument(std::string(operation) +
+                                  ": active-cell mask differs from the candidate layout");
+  } catch (...) {
+    layout_error = std::current_exception();
+  }
+  if (all_reduce_max(layout_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && layout_error)
+      std::rethrow_exception(layout_error);
+    throw std::invalid_argument(std::string(operation) + ": candidate layout failed collectively");
+  }
   if (all_reduce_max(state.cons_to_prim ? 0L : 1L, lane) != 0)
     throw std::runtime_error(std::string(operation) +
                              ": block has no prepared variable-recovery authority");
 
-  std::vector<double> conservative(static_cast<std::size_t>(state.ncomp));
-  std::vector<double> primitive(static_cast<std::size_t>(state.ncomp));
   long failures = 0;
-  for (std::size_t local = 0; local < candidate.local_size(); ++local) {
-    const Fab<Dim>& fab = candidate.fab(local);
-    auto host = fab.create_host_mirror();
-    fab.copy_to_host(host);
-    for_each_host_index(fab.box(), [&](const Index<Dim>& index, std::size_t) {
-      for (int component = 0; component < state.ncomp; ++component)
-        conservative[static_cast<std::size_t>(component)] =
-            static_cast<double>(host(storage_ordinal(fab, index, component)));
-      try {
-        const RecoveryReport report = state.cons_to_prim(conservative.data(), primitive.data());
-        const bool finite = std::all_of(conservative.begin(), conservative.end(),
-                                        [](double value) { return std::isfinite(value); }) &&
-                            std::all_of(primitive.begin(), primitive.end(),
-                                        [](double value) { return std::isfinite(value); });
-        if (!report.publication_permitted() || !finite)
+  std::exception_ptr recovery_error;
+  try {
+    std::vector<double> conservative(static_cast<std::size_t>(state.ncomp));
+    std::vector<double> primitive(static_cast<std::size_t>(state.ncomp));
+    for (std::size_t local = 0; local < candidate.local_size(); ++local) {
+      const Fab<Dim>& fab = candidate.fab(local);
+      auto host = fab.create_host_mirror();
+      const auto consider = [&](const Index<Dim>& index) {
+        for (int component = 0; component < state.ncomp; ++component)
+          conservative[static_cast<std::size_t>(component)] =
+              static_cast<double>(host(storage_ordinal(fab, index, component)));
+        try {
+          const RecoveryReport report = state.cons_to_prim(conservative.data(), primitive.data());
+          const bool finite = std::all_of(conservative.begin(), conservative.end(),
+                                          [](double value) { return std::isfinite(value); }) &&
+                              std::all_of(primitive.begin(), primitive.end(),
+                                          [](double value) { return std::isfinite(value); });
+          if (!report.publication_permitted() || !finite)
+            ++failures;
+        } catch (...) {
           ++failures;
-      } catch (...) {
-        ++failures;
+        }
+      };
+      if (active_cells == nullptr) {
+        fab.copy_to_host(host);
+        for_each_host_index(fab.box(),
+                            [&](const Index<Dim>& index, std::size_t) { consider(index); });
+        continue;
       }
-    });
+      const Fab<Dim>& mask_fab = active_cells->fab(local);
+      auto mask_host = mask_fab.create_host_mirror();
+      mask_fab.copy_to_host(mask_host);
+      fab.copy_to_host(host);
+      for_each_host_index(fab.box(), [&](const Index<Dim>& index, std::size_t) {
+        if (mask_host(storage_ordinal(mask_fab, index, 0)) < Real{0.5})
+          return;
+        consider(index);
+      });
+    }
+  } catch (...) {
+    recovery_error = std::current_exception();
+  }
+  if (all_reduce_max(recovery_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && recovery_error)
+      std::rethrow_exception(recovery_error);
+    throw std::runtime_error(std::string(operation) + ": variable recovery failed collectively");
   }
   failures = all_reduce_sum(failures, lane);
   if (failures != 0)
@@ -407,24 +449,44 @@ SolveReport solve_field_candidate(
   return field->solve_candidate(states, std::move(contexts), lane);
 }
 
+template <class Implementation>
+bool default_field_has_prepared_rhs(const Implementation& implementation) {
+  for (const auto& block : implementation.sp) {
+    if (block.add_poisson_rhs)
+      return true;
+  }
+  return false;
+}
+
+template <class Implementation>
+void append_named_field_provider_slots(const Implementation& implementation,
+                                       std::vector<std::string>& slots) {
+  slots.reserve(slots.size() + implementation.named_fields_.size());
+  for (const auto& [identity, field] : implementation.named_fields_) {
+    (void)field;
+    slots.push_back(identity);
+  }
+}
+
 }  // namespace
 
 template <int Dim>
 void System<Dim>::validate_program_state_publication_candidate(
     int block, const MultiFab<Dim>& candidate) const {
-  validate_program_state_publication_candidate_(block, candidate,
-                                                prepared_boundary_execution_lane());
+  (void)validate_program_state_publication_candidate_(block, candidate,
+                                                      prepared_boundary_execution_lane());
 }
 
 template <int Dim>
-void System<Dim>::validate_program_state_publication_candidate_(int block,
-                                                                const MultiFab<Dim>& candidate,
-                                                                const ExecutionLane& lane) const {
+const MultiFab<Dim>* System<Dim>::validate_program_state_publication_candidate_(
+    int block, const MultiFab<Dim>& candidate, const ExecutionLane& lane) const {
   if (all_reduce_max(block >= 0 && block < static_cast<int>(p_->sp.size()) ? 0L : 1L, lane) != 0)
     throw std::out_of_range(
         "System Program state publication block index differs across communicator ranks");
+  const MultiFab<Dim>* const active = prepared_program_block_active_mask_(block, candidate, lane);
   require_recoverable_candidate<Dim>(p_->sp[static_cast<std::size_t>(block)], candidate,
-                                     "System Program terminal state publication", lane);
+                                     "System Program terminal state publication", lane, active);
+  return active;
 }
 
 template <int Dim>
@@ -945,11 +1007,16 @@ std::vector<std::string> System<Dim>::field_provider_slots() const {
   std::vector<std::string> result;
   if (p_->default_field_)
     result.push_back("pops.system.default-field");
-  result.reserve(result.size() + p_->named_fields_.size());
-  for (const auto& [identity, field] : p_->named_fields_) {
-    (void)field;
-    result.push_back(identity);
-  }
+  append_named_field_provider_slots(*p_, result);
+  return result;
+}
+
+template <int Dim>
+std::vector<std::string> System<Dim>::configured_field_provider_slots() const {
+  std::vector<std::string> result;
+  if (p_->default_field_ || default_field_has_prepared_rhs(*p_))
+    result.push_back("pops.system.default-field");
+  append_named_field_provider_slots(*p_, result);
   return result;
 }
 
@@ -1479,7 +1546,8 @@ std::vector<double> System<Dim>::local_state(const std::string& name, int local_
 
 template void System<kNativeDimension>::validate_program_state_publication_candidate(
     int, const MultiFab<kNativeDimension>&) const;
-template void System<kNativeDimension>::validate_program_state_publication_candidate_(
+template const MultiFab<kNativeDimension>*
+System<kNativeDimension>::validate_program_state_publication_candidate_(
     int, const MultiFab<kNativeDimension>&, const ExecutionLane&) const;
 template void System<kNativeDimension>::set_density(const std::string&, const std::vector<double>&);
 template void System<kNativeDimension>::set_primitive_state(const std::string&,
@@ -1529,6 +1597,7 @@ template SolveOutcome System<kNativeDimension>::run_field_publication_outcome_(
     const std::function<SolveReport()>&);
 template void System<kNativeDimension>::set_potential(const std::vector<double>&);
 template std::vector<std::string> System<kNativeDimension>::field_provider_slots() const;
+template std::vector<std::string> System<kNativeDimension>::configured_field_provider_slots() const;
 template void System<kNativeDimension>::set_field_potential(const std::string&,
                                                             const std::vector<double>&);
 template std::vector<double> System<kNativeDimension>::eval_rhs(const std::string&);

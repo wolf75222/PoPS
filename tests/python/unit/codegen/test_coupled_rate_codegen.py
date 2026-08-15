@@ -8,7 +8,7 @@ kernel filling every block's rate scratch at once -- not independent single-bloc
 
 This test pins the EMIT + the un-gate + the cons-only deferral (pure Python, no compile): the
 ``_check_lowerable`` no longer raises for a cons-only coupled_rate; the emitted C++ holds ONE
-for_each_cell that binds BOTH input states' Array4s, binds ``ne``/``ni`` from the respective states,
+for_each_cell that binds BOTH input states' exact-ranked FieldViews, binds ``ne``/``ni`` from the respective states,
 writes BOTH block rate scratches, and the per-block out composes in a forward step; a formula that
 references a PRIM var raises the ADC-457 NotImplementedError. The compiled-.so collision STEP (the
 runtime that fills the rate and advances the species) is validated on ROMEO (Kokkos-only AOT), NOT
@@ -101,21 +101,29 @@ def test_frozen_coupled_rate_codegen_is_a_repeatable_pure_read():
     assert not hasattr(P, "_coupled_scratch")
 
 
-def test_emit_binds_both_input_state_array4s():
+def test_emit_binds_both_input_state_field_views():
     _mod, P = _two_fluid_program()
     src = emit_cpp_program(P, model=None)
-    # The two species states are ctx.state(0) / ctx.state(1) -> u0 / u1; each binds its OWN read handle.
-    assert "const pops::ConstArray4 u0A = u0.fab(li).const_array();" in src
-    assert "const pops::ConstArray4 u1A = u1.fab(li).const_array();" in src
+    # The two species states are ctx.state(0) / ctx.state(1) -> u0 / u1; each binds its OWN
+    # exact-ranked, read-only FieldView before the CellIndex kernel.
+    assert (
+        "const pops::FieldView<const pops::Real, pops::kNativeDimension> u0A = "
+        "std::as_const(u0).fab(li).view();" in src
+    )
+    assert (
+        "const pops::FieldView<const pops::Real, pops::kNativeDimension> u1A = "
+        "std::as_const(u1).fab(li).view();" in src
+    )
+    assert "const pops::CellIndex<pops::kNativeDimension>& index" in src
 
 
 def test_emit_binds_cons_vars_from_respective_states():
     _mod, P = _two_fluid_program()
     src = emit_cpp_program(P, model=None)
     # ne is component 0 of the electron state (u0), ni component 0 of the ion state (u1): each cons
-    # local reads from ITS OWN state's Array4, so the coupled formulas reference the right cells.
-    assert "const pops::Real ne = u0A(i, j, 0);" in src
-    assert "const pops::Real ni = u1A(i, j, 0);" in src
+    # local reads from ITS OWN state's FieldView, so the coupled formulas reference the right cells.
+    assert "const pops::Real ne = u0A(index, 0);" in src
+    assert "const pops::Real ni = u1A(index, 0);" in src
 
 
 def test_emit_writes_both_block_rate_scratches():
@@ -124,10 +132,10 @@ def test_emit_writes_both_block_rate_scratches():
     # Both blocks' rate scratches are allocated (shaped like their own state) and WRITTEN in the kernel.
     assert "ctx.rhs_scratch(2, 0, u0);" in src and "ctx.rhs_scratch(2, 1, u1);" in src
     # electron rate = [ni - ne, ne, ne]; ion rate = [ne - ni, ni, ni], each into its block's scratch.
-    assert "_electronsA(i, j, 0) = (ni - ne);" in src
-    assert "_electronsA(i, j, 1) = ne;" in src
-    assert "_ionsA(i, j, 0) = (ne - ni);" in src
-    assert "_ionsA(i, j, 2) = ni;" in src
+    assert "_electronsA(index, 0) = (ni - ne);" in src
+    assert "_electronsA(index, 1) = ne;" in src
+    assert "_ionsA(index, 0) = (ne - ni);" in src
+    assert "_ionsA(index, 2) = ni;" in src
 
 
 def test_per_block_out_composes_in_a_forward_step():
@@ -201,7 +209,7 @@ def test_coupled_rate_codegen_emits_no_forbidden_cpp_tokens():
 
 def test_read_only_catalyst_input_is_bound():
     # A coupled_rate may take a READ-ONLY catalyst input state that is NOT an output block (e.g. a
-    # background neutral in an ionization rate); the kernel must still bind that input's Array4 + its
+    # background neutral in an ionization rate); the kernel must still bind that input's FieldView + its
     # cons var so the formula can read it -- not only the output (bundle) blocks.
     mod = model.Module("ioniz")
     e = mod.state_space("e_st", ("ne",))
@@ -233,8 +241,10 @@ def test_read_only_catalyst_input_is_bound():
     })
     src = emit_cpp_program(P, model=None)
     # the catalyst's read handle (3rd input -> u2) and its cons local must be emitted
-    assert "u2.fab(li).const_array()" in src, "the catalyst input state's read handle is bound"
-    assert "const pops::Real nn = u2A(i, j, 0);" in src, "the catalyst cons var nn binds from u2"
+    assert (
+        "std::as_const(u2).fab(li).view()" in src
+    ), "the catalyst input state's read handle is bound"
+    assert "const pops::Real nn = u2A(index, 0);" in src, "the catalyst cons var nn binds from u2"
     assert "= (ni + nn);" in src and "= (ne + nn);" in src, "both rates read the catalyst nn"
 
 

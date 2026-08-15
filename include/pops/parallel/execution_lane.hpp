@@ -373,7 +373,15 @@ class ExecutionLane {
     return CommunicatorView{};
 #endif
   }
-  [[nodiscard]] bool active() const noexcept { return communicator().active(); }
+  [[nodiscard]] bool active() const noexcept {
+#ifdef POPS_HAS_MPI
+    return communicator().active();
+#else
+    // Serial lanes have no native communicator handle. Their identity is the live-state token,
+    // which is cleared explicitly when ownership is moved away.
+    return !identity().empty();
+#endif
+  }
   /// True only for a collectively duplicated MPI communicator. World and serial lanes borrow none.
   [[nodiscard]] bool owns_communicator() const noexcept {
 #ifdef POPS_HAS_MPI
@@ -431,6 +439,7 @@ class ExecutionLane {
     if (other.immutable_borrow_count_.load(std::memory_order_acquire) != 0)
       std::terminate();
     identity_ = std::move(other.identity_);
+    other.identity_.clear();
     static_identity_ = std::exchange(other.static_identity_, std::string_view{});
 #ifdef POPS_HAS_MPI
     communicator_ = std::exchange(other.communicator_, MPI_COMM_NULL);

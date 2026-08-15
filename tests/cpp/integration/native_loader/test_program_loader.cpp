@@ -33,7 +33,9 @@
 #include <exception>
 #include <fstream>
 #include <map>
+#include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -63,6 +65,13 @@ using GasLaw = nd::IdealGasEuler<kTestDimension>;
 using GasModel = CompositeModel<GasLaw, NoSource, NoElliptic>;
 constexpr double kGamma = 1.4;
 constexpr int kGasComponents = GasModel::n_vars;
+
+template <int Dim>
+void install_runtime_authority(System<Dim>& system, std::string_view identity) {
+  auto lane =
+      std::make_shared<ExecutionLane>(ExecutionLane::duplicate_world_collectively(identity));
+  system.install_prepared_boundary_execution_lane(std::move(lane));
+}
 
 std::size_t cell_count(int n) {
   std::size_t count = 1;
@@ -281,6 +290,7 @@ static int pops_run_test_program_loader(int argc, char** argv) {
 
   // Reference: one Forward-Euler step via the existing primitives, combined on the host.
   NativeSystem ref(cfg);
+  install_runtime_authority(ref, "test.program-loader/runtime-reference@1");
   add_gas(ref);
   ref.set_state("gas", U0);
   (void)pops::consume_solve_outcome(ref.solve_fields());
@@ -371,6 +381,7 @@ static int pops_run_test_program_loader(int argc, char** argv) {
   // A pre-spec library with no explicit block identity table must never install by add-order. The
   // old positional fallback could silently bind the right equations to the wrong instances.
   NativeSystem missing_identity(cfg);
+  install_runtime_authority(missing_identity, "test.program-loader/runtime-missing-identity@1");
   add_gas(missing_identity);
   try {
     missing_identity.install_program(legacy_so);
@@ -391,6 +402,7 @@ static int pops_run_test_program_loader(int argc, char** argv) {
   // candidate block map/history or replace an already usable direct step. The loader's generation
   // witness fails and restores the exact image.
   NativeSystem no_op(cfg);
+  install_runtime_authority(no_op, "test.program-loader/runtime-no-op@1");
   add_gas(no_op);
   no_op.install_program_step([](double) {});
   no_op.program_cache().store(7, no_op.block_state(0), 0, "kept-cache");
@@ -429,6 +441,7 @@ static int pops_run_test_program_loader(int argc, char** argv) {
   // A declared-but-missing dt-bound entry is rejected before any candidate facade state is
   // installed. Falling back to the native CFL would silently change the authored numerics.
   NativeSystem incomplete_dt(cfg);
+  install_runtime_authority(incomplete_dt, "test.program-loader/runtime-incomplete-dt@1");
   add_gas(incomplete_dt);
   incomplete_dt.install_program_step([](double) {});
   try {
@@ -453,15 +466,15 @@ static int pops_run_test_program_loader(int argc, char** argv) {
   // restore the static baseline while retaining the exact configured backend route.
   {
     NativeSystem replacement(cfg);
+    install_runtime_authority(replacement, "test.program-loader/runtime-replacement@1");
     add_gas(replacement);
     constexpr const char* slot = "program-boundary-field";
     constexpr const char* backend = "program-boundary-cartesian-cg";
     replacement.register_configured_field_solver_provider(
         "cartesian_cg", backend,
-        PreparedProviderOptions{"pops.system.cartesian-cg-options@1",
-                                {{"abs_tol", 0.0},
-                                 {"max_iterations", std::int64_t{200}},
-                                 {"rel_tol", 1.0e-8}}});
+        PreparedProviderOptions{
+            "pops.system.cartesian-cg-options@1",
+            {{"abs_tol", 0.0}, {"max_iterations", std::int64_t{200}}, {"rel_tol", 1.0e-8}}});
     replacement.set_field_solver_plan(
         slot, "test:program-boundary-plan", "test:program-boundary-provider", "test:gas", "gas",
         "program-boundary-potential", {"test:gas/program-boundary-rhs"}, {"gas"},
@@ -552,6 +565,7 @@ static int pops_run_test_program_loader(int argc, char** argv) {
   }
 
   NativeSystem sim(cfg);
+  install_runtime_authority(sim, "test.program-loader/runtime-simulation@1");
   add_gas(sim);
   sim.set_state("gas", U0);
   sim.install_program(so);  // dlopen + ABI check + pops_install_program(this)

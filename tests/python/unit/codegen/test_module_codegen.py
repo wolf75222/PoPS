@@ -7,6 +7,7 @@ validation, module_metadata.hpp); it must NOT appear in the step body, so operat
 there is no string lookup in a hot kernel. Pure-Python codegen-text check; skips if pops is absent.
 """
 from tests.python.support.requirements import require_native_or_skip
+from pops.codegen.module_lowering import lower_and_validate
 from pops.codegen.program_codegen import emit_cpp_program
 from types import SimpleNamespace
 
@@ -24,6 +25,16 @@ except Exception as exc:  # pops not importable here -> skip, never fake
 def _op(m, name):
     """A typed OperatorHandle for a registered operator (the de-stringed macro selector, ADC-532)."""
     return m.module.operator_handle(name)
+
+
+def _lowered_emit_model(model):
+    """Use the compiler-authenticated facade, never an unbound authoring model."""
+    emit_model, source_module = lower_and_validate(model, facade=model)
+    assert emit_model is model
+    assert source_module is model.module
+    assert type(emit_model._auxiliary_provider_pack).__name__ == "ProviderPack"
+    assert type(emit_model._component_flux_provider_pack).__name__ == "ProviderPack"
+    return emit_model
 
 
 def _model():
@@ -61,7 +72,7 @@ def _emit(program, model):
         },
     )
     return emit_cpp_program(
-        program, model=model, field_plans={field.local_id: plan})
+        program, model=_lowered_emit_model(model), field_plans={field.local_id: plan})
 
 
 def test_metadata_block_emitted():

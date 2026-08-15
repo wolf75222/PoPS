@@ -10,6 +10,7 @@
 #include <pops/numerics/fv/numerical_flux.hpp>
 #include <pops/numerics/spatial/nd/finite_volume.hpp>
 #include <pops/numerics/spatial/nd/reconstruction.hpp>
+#include <pops/numerics/spatial/primitives/state_access.hpp>
 
 #include <Kokkos_MathematicalFunctions.hpp>
 
@@ -190,7 +191,14 @@ struct MaterializeFaceFlux {
       fail(face, FiniteVolumeStatus::InvalidWaveSpeed);
       return;
     }
-    const auto integrated = apply_face_measure(evaluation.checked_density(), context);
+    auto integrated = apply_face_measure(evaluation.checked_density(), context);
+    if constexpr (DiffusiveModel<Model>) {
+      const Real spacing = context.cell_measure / context.face_measure;
+      const Real integrated_scale = context.face_measure * (-model.diffusivity()) / spacing;
+      for (int component = 0; component < Model::n_vars; ++component)
+        integrated.value[component] +=
+            integrated_scale * (state(right_cell, component) - state(left_cell, component));
+    }
     for (int component = 0; component < Model::n_vars; ++component) {
       if (!Kokkos::isfinite(integrated.value[component])) {
         fail(face, FiniteVolumeStatus::NonFiniteFaceFlux);
@@ -326,6 +334,14 @@ class PreparedCartesianOperator {
             cartesian_operator_detail::resolve_positivity_component<Model>(positivity_floor)) {
     if (metric_.identity().domain.empty())
       throw std::invalid_argument("prepared ND hyperbolic metric domain must be non-empty");
+    if constexpr (DiffusiveModel<Model>) {
+      if (Metric::capabilities().coordinate_map.kind != CoordinateMapKind::Cartesian)
+        throw std::invalid_argument("prepared ND isotropic diffusion requires a Cartesian metric");
+      const Real diffusivity = model_.diffusivity();
+      if (!std::isfinite(diffusivity) || diffusivity < Real(0))
+        throw std::invalid_argument(
+            "prepared ND isotropic diffusion requires a finite non-negative diffusivity");
+    }
   }
 
   const Model& model() const noexcept { return model_; }

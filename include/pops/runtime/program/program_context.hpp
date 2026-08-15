@@ -485,36 +485,111 @@ class ProgramContext {
   }
 
   void commit_many(std::initializer_list<std::pair<field_type*, const field_type*>> commits) const {
+    const ExecutionLane& lane = prepared_execution_lane();
     std::vector<field_type*> targets;
-    std::vector<std::optional<field_type>> snapshots;
-    targets.reserve(commits.size());
-    snapshots.reserve(commits.size());
-    for (const auto& [target, source] : commits) {
-      if (target == nullptr || source == nullptr)
-        throw std::invalid_argument("ProgramContext commit contains null storage");
-      if (std::find(targets.begin(), targets.end(), target) != targets.end())
-        throw std::invalid_argument("ProgramContext commit contains a duplicate target");
-      require_same_field_contract_(*target, *source, "ProgramContext commit");
-      targets.push_back(target);
-      snapshots.emplace_back(target == source ? std::nullopt : std::optional<field_type>(*source));
+    std::vector<const field_type*> sources;
+    std::exception_ptr structural_error;
+    try {
+      targets.reserve(commits.size());
+      sources.reserve(commits.size());
+      for (const auto& [target, source] : commits) {
+        if (target == nullptr || source == nullptr)
+          throw std::invalid_argument("ProgramContext commit contains null storage");
+        if (std::find(targets.begin(), targets.end(), target) != targets.end())
+          throw std::invalid_argument("ProgramContext commit contains a duplicate target");
+        require_same_field_contract_(*target, *source, "ProgramContext commit");
+        targets.push_back(target);
+        sources.push_back(source);
+      }
+    } catch (...) {
+      structural_error = std::current_exception();
     }
-    std::size_t candidate = 0;
-    for (const auto& [target, source] : commits) {
-      const field_type& value = snapshots[candidate] ? *snapshots[candidate] : *source;
-      for (int block = 0; block < system_->n_blocks(); ++block)
-        if (target == &system_->block_state(block)) {
-          system_->validate_program_state_publication_candidate_(block, value,
-                                                                 prepared_execution_lane());
-          break;
+    if (all_reduce_max(structural_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && structural_error)
+        std::rethrow_exception(structural_error);
+      throw std::runtime_error("ProgramContext commit classification failed collectively");
+    }
+
+    const long commit_count = static_cast<long>(targets.size());
+    if (all_reduce_min(commit_count, lane) != all_reduce_max(commit_count, lane))
+      throw std::runtime_error("ProgramContext commit count differs between MPI ranks");
+
+    std::vector<int> runtime_blocks;
+    std::vector<char> identity_commits;
+    std::vector<const field_type*> masks;
+    std::exception_ptr classification_error;
+    try {
+      runtime_blocks.assign(targets.size(), -1);
+      identity_commits.assign(targets.size(), 0);
+      masks.assign(targets.size(), nullptr);
+      for (std::size_t candidate = 0; candidate < targets.size(); ++candidate) {
+        identity_commits[candidate] = targets[candidate] == sources[candidate] ? 1 : 0;
+        for (int block = 0; block < system_->n_blocks(); ++block) {
+          if (targets[candidate] == &system_->block_state(block)) {
+            runtime_blocks[candidate] = block;
+            break;
+          }
         }
-      ++candidate;
+      }
+    } catch (...) {
+      classification_error = std::current_exception();
     }
-    candidate = 0;
-    for (const auto& [target, source] : commits) {
-      if (target != source)
-        *target = std::move(*snapshots[candidate]);
-      ++candidate;
+    if (all_reduce_max(classification_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && classification_error)
+        std::rethrow_exception(classification_error);
+      throw std::runtime_error("ProgramContext commit target classification failed collectively");
     }
+    for (std::size_t candidate = 0; candidate < targets.size(); ++candidate) {
+      const long owner = static_cast<long>(runtime_blocks[candidate]);
+      const long identity = static_cast<long>(identity_commits[candidate]);
+      if (all_reduce_min(owner, lane) != all_reduce_max(owner, lane) ||
+          all_reduce_min(identity, lane) != all_reduce_max(identity, lane))
+        throw std::runtime_error("ProgramContext commit target owner differs between MPI ranks");
+    }
+
+    for (std::size_t candidate = 0; candidate < targets.size(); ++candidate) {
+      if (runtime_blocks[candidate] < 0)
+        continue;
+      masks[candidate] = system_->validate_program_state_publication_candidate_(
+          runtime_blocks[candidate], *sources[candidate], lane);
+    }
+    for (std::size_t candidate = 0; candidate < targets.size(); ++candidate) {
+      const long masked = masks[candidate] != nullptr ? 1L : 0L;
+      if (all_reduce_min(masked, lane) != all_reduce_max(masked, lane))
+        throw std::runtime_error("ProgramContext commit mask classification differs between ranks");
+    }
+
+    std::vector<std::optional<field_type>> snapshots;
+    std::exception_ptr staging_error;
+    try {
+      snapshots.resize(targets.size());
+      for (std::size_t candidate = 0; candidate < targets.size(); ++candidate) {
+        if (identity_commits[candidate] != 0)
+          continue;
+        if (masks[candidate] != nullptr) {
+          snapshots[candidate].emplace(*targets[candidate]);
+          copy_active_valid_cells_(*sources[candidate], *snapshots[candidate], *masks[candidate]);
+        } else {
+          snapshots[candidate].emplace(*sources[candidate]);
+        }
+      }
+    } catch (...) {
+      staging_error = std::current_exception();
+    }
+    try {
+      device_fence();
+    } catch (...) {
+      staging_error = std::current_exception();
+    }
+    if (all_reduce_max(staging_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && staging_error)
+        std::rethrow_exception(staging_error);
+      throw std::runtime_error("ProgramContext commit staging failed collectively");
+    }
+
+    for (std::size_t candidate = 0; candidate < targets.size(); ++candidate)
+      if (snapshots[candidate])
+        *targets[candidate] = std::move(*snapshots[candidate]);
   }
 
   void apply_coupling_operators(Real dt,
@@ -531,9 +606,56 @@ class ProgramContext {
     count_kernel_(static_cast<std::int64_t>(system_->apply_coupling_operators(dt, runtime_states)));
   }
 
+  /// Return the prepared embedded-boundary mask for this pointwise block, or null for Cartesian / an
+  /// inactive embedded boundary.  The route consensus intentionally uses only fixed scalars: this
+  /// hot path must not build a dynamic exact-contract payload before every generated kernel.
+  const field_type* pointwise_active_mask(int program_block, const field_type& field) const {
+    const ExecutionLane& lane = prepared_execution_lane();
+    const int runtime_block = resolve_pointwise_program_block_(program_block, lane);
+    return system_->prepared_program_block_active_mask_(runtime_block, field, lane);
+  }
+
+  /// Reduce one generated per-cell status on the same authenticated lane and layout used by its
+  /// pointwise kernel.  Empty ranks contribute negative infinity, normalized to success only when
+  /// the entire collective layout is empty.
+  Real pointwise_status_max(int program_block, const field_type& status,
+                            const field_type* active_cells, const ExecutionLane& lane) const {
+    require_prepared_lane_(lane, "Program pointwise status");
+    const int runtime_block = resolve_pointwise_program_block_(program_block, lane);
+    const field_type* const expected =
+        system_->prepared_program_block_active_mask_(runtime_block, status, lane);
+    if (all_reduce_max(active_cells == expected ? 0L : 1L, lane) != 0)
+      throw std::invalid_argument("Program pointwise status received a foreign active-cell mask");
+    if (all_reduce_max(status.ncomp() == 1 ? 0L : 1L, lane) != 0)
+      throw std::invalid_argument("Program pointwise status requires exactly one component");
+    MaskedMaxLocalResult local;
+    std::exception_ptr local_error;
+    try {
+      local = pops::reduce_masked_max_local(status, 0, expected);
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error("Program pointwise status reduction failed collectively");
+    }
+    if (all_reduce_max(local.has_invalid ? 1L : 0L, lane) != 0)
+      return Real(3);
+    if (all_reduce_max(local.has_active ? 1L : 0L, lane) == 0)
+      return Real(0);
+    const Real maximum =
+        static_cast<Real>(all_reduce_max(static_cast<double>(local.maximum), lane));
+    return std::isfinite(maximum) ? maximum : Real(3);
+  }
+
   Real sum_component(const field_type& field, int component) const {
     return static_cast<Real>(
         all_reduce_sum(pops::reduce_sum_local(field, component), prepared_execution_lane()));
+  }
+  Real abs_sum_component(const field_type& field, int component) const {
+    return static_cast<Real>(
+        all_reduce_sum(pops::reduce_abs_sum_local(field, component), prepared_execution_lane()));
   }
   Real max_component(const field_type& field, int component) const {
     return static_cast<Real>(
@@ -543,16 +665,101 @@ class ProgramContext {
     return static_cast<Real>(
         all_reduce_min(pops::reduce_min_local(field, component), prepared_execution_lane()));
   }
-  Real norm2(int, const field_type& field) const {
-    return std::sqrt(static_cast<Real>(
-        all_reduce_sum(pops::dot_local(field, field, 0), prepared_execution_lane())));
+
+  /// Generated reductions authenticate the Program owner and exclude inactive embedded-boundary
+  /// cells.  They deliberately remain raw algebra: physical volume-fraction weighting belongs to
+  /// System reduction services, not to Program control-flow scalars.
+  Real sum_component(int program_block, const field_type& field, int component) const {
+    const ExecutionLane& lane = prepared_execution_lane();
+    const field_type* const active = pointwise_active_mask(program_block, field);
+    std::exception_ptr local_error;
+    Real local = Real(0);
+    try {
+      local = pops::reduce_active_sum_local(field, component, active);
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    converge_owner_reduction_(local_error, lane, "Program sum reduction");
+    return static_cast<Real>(all_reduce_sum(local, lane));
   }
-  Real norm_inf(int, const field_type& field) const {
-    return static_cast<Real>(all_reduce_max(pops::norm_inf(field, 0), prepared_execution_lane()));
+  Real abs_sum_component(int program_block, const field_type& field, int component) const {
+    const ExecutionLane& lane = prepared_execution_lane();
+    const field_type* const active = pointwise_active_mask(program_block, field);
+    std::exception_ptr local_error;
+    Real local = Real(0);
+    try {
+      local = pops::reduce_active_abs_sum_local(field, component, active);
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    converge_owner_reduction_(local_error, lane, "Program abs-sum reduction");
+    return static_cast<Real>(all_reduce_sum(local, lane));
   }
-  Real dot(int, const field_type& left, const field_type& right) const {
-    return static_cast<Real>(
-        all_reduce_sum(pops::dot_local(left, right, 0), prepared_execution_lane()));
+  Real max_component(int program_block, const field_type& field, int component) const {
+    const ExecutionLane& lane = prepared_execution_lane();
+    const field_type* const active = pointwise_active_mask(program_block, field);
+    std::exception_ptr local_error;
+    Real local = Real(0);
+    try {
+      local = pops::reduce_active_max_local(field, component, active);
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    converge_owner_reduction_(local_error, lane, "Program max reduction");
+    return static_cast<Real>(all_reduce_max(local, lane));
+  }
+  Real min_component(int program_block, const field_type& field, int component) const {
+    const ExecutionLane& lane = prepared_execution_lane();
+    const field_type* const active = pointwise_active_mask(program_block, field);
+    std::exception_ptr local_error;
+    Real local = Real(0);
+    try {
+      local = pops::reduce_active_min_local(field, component, active);
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    converge_owner_reduction_(local_error, lane, "Program min reduction");
+    return static_cast<Real>(all_reduce_min(local, lane));
+  }
+  Real norm2(int program_block, const field_type& field) const {
+    const ExecutionLane& lane = prepared_execution_lane();
+    const field_type* const active = pointwise_active_mask(program_block, field);
+    std::exception_ptr local_error;
+    Real local = Real(0);
+    try {
+      local = pops::dot_active_local(field, field, 0, active);
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    converge_owner_reduction_(local_error, lane, "Program norm2 reduction");
+    return std::sqrt(static_cast<Real>(all_reduce_sum(local, lane)));
+  }
+  Real norm_inf(int program_block, const field_type& field) const {
+    const ExecutionLane& lane = prepared_execution_lane();
+    const field_type* const active = pointwise_active_mask(program_block, field);
+    std::exception_ptr local_error;
+    Real local = Real(0);
+    try {
+      local = pops::reduce_active_norm_inf_local(field, 0, active);
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    converge_owner_reduction_(local_error, lane, "Program norm-inf reduction");
+    return static_cast<Real>(all_reduce_max(local, lane));
+  }
+  Real dot(int program_block, const field_type& left, const field_type& right) const {
+    const ExecutionLane& lane = prepared_execution_lane();
+    const field_type* const active = pointwise_active_mask(program_block, left);
+    std::exception_ptr local_error;
+    Real local = Real(0);
+    try {
+      require_same_field_contract_(left, right, "ProgramContext dot");
+      local = pops::dot_active_local(left, right, 0, active);
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    converge_owner_reduction_(local_error, lane, "Program dot reduction");
+    return static_cast<Real>(all_reduce_sum(local, lane));
   }
 
   Geometry<Dim> geometry() const { return system_->prepared_block_geometry(); }
@@ -918,7 +1125,13 @@ class ProgramContext {
   }
 
   void store_history(const std::string& name, const field_type& value) const {
-    store_history_(name, value, std::nullopt);
+    if (std::isfinite(current_dt_) && current_dt_ > 0.0) {
+      store_history_(name, value, static_cast<Real>(current_dt_));
+      return;
+    }
+    // Preserve the direct legacy route when this context has no active generated-step interval:
+    // System supplies its accepted last-dt provenance (or its zero-dt pre-step default).
+    system_->store_history(name, value);
   }
   void store_history(const std::string& name, const field_type& value, double dt) const {
     if (!std::isfinite(dt) || dt <= 0.0)
@@ -927,6 +1140,74 @@ class ProgramContext {
   }
   void rotate_histories() const { runtime_state().hist_.rotate(); }
   void rotate_histories(const std::string& clock) const { runtime_state().hist_.rotate(clock); }
+
+  /// Reconstruct one retained value at an exact target-clock coordinate.  The native history
+  /// ledger owns every bracketing interval; no current-state alias or fixed-dt inference is used.
+  void interpolate_history_linear(field_type& output, const std::string& name, int max_lag,
+                                  int program_owner, const std::string& source_clock,
+                                  const std::string& target_clock, int target_step,
+                                  Real target_offset) const {
+    const int owner = sys_block(program_owner);
+    if (max_lag < 1 || !std::isfinite(static_cast<double>(target_offset)))
+      throw std::invalid_argument(
+          "ProgramContext linear history interpolation has an invalid target");
+
+    auto& manager = runtime_state().hist_;
+    const auto found = manager.histories.find(name);
+    if (found == manager.histories.end() || manager.depth.at(name) <= max_lag ||
+        manager.owner.at(name) != owner || !manager.initialized.at(name))
+      throw std::runtime_error(
+          "ProgramContext linear history interpolation requires an initialized retained ring");
+    require_same_field_contract_(output, found->second.front(),
+                                 "ProgramContext linear history interpolation");
+
+    const double source_ticks = static_cast<double>(clock_schedule_.ticks_per_macro(source_clock));
+    const double target_ticks = static_cast<double>(clock_schedule_.ticks_per_macro(target_clock));
+    const double coordinate =
+        (static_cast<double>(target_step) + static_cast<double>(target_offset)) * source_ticks /
+        target_ticks;
+    if (!std::isfinite(coordinate) || coordinate > 0.0 ||
+        coordinate < -static_cast<double>(max_lag))
+      throw std::runtime_error(
+          "ProgramContext linear history interpolation target lies outside retained timestamps");
+    if (coordinate == 0.0) {
+      lincomb(output, Real(1), found->second.front(), Real(0), found->second.front());
+      return;
+    }
+
+    const int older_lag = static_cast<int>(std::ceil(-coordinate));
+    if (older_lag < 1 || older_lag > max_lag)
+      throw std::runtime_error(
+          "ProgramContext linear history interpolation could not select bracketing slots");
+    const auto dt_ledger = manager.slot_dt.find(name);
+    if (dt_ledger == manager.slot_dt.end() || dt_ledger->second.size() != found->second.size())
+      throw std::logic_error(
+          "ProgramContext linear history interpolation dt ledger differs from its ring depth");
+
+    double newer_time = static_cast<double>(physical_time());
+    double older_time = newer_time;
+    double bracket_dt = 0.0;
+    for (int lag = 1; lag <= older_lag; ++lag) {
+      const double interval = dt_ledger->second[static_cast<std::size_t>(lag)];
+      if (!std::isfinite(interval) || !(interval > 0.0))
+        throw std::runtime_error(
+            "ProgramContext linear history interpolation requires positive exact slot timestamps");
+      bracket_dt = interval;
+      older_time = newer_time - interval;
+      if (lag != older_lag)
+        newer_time = older_time;
+    }
+    const double logical_fraction = coordinate + static_cast<double>(older_lag);
+    const double target_time = older_time + logical_fraction * bracket_dt;
+    const double alpha = (target_time - older_time) / (newer_time - older_time);
+    if (!std::isfinite(alpha) || alpha < 0.0 || alpha > 1.0)
+      throw std::runtime_error(
+          "ProgramContext linear history interpolation target does not bracket retained "
+          "timestamps");
+    lincomb(output, Real(1) - static_cast<Real>(alpha),
+            found->second[static_cast<std::size_t>(older_lag)], static_cast<Real>(alpha),
+            found->second[static_cast<std::size_t>(older_lag - 1)]);
+  }
 
   bool cache_should_update(int node_id, int every_n) const {
     const bool due = runtime_state().cache_.is_due(node_id, macro_step(), every_n);
@@ -1219,6 +1500,41 @@ class ProgramContext {
                                   " requires the same exact ranked field contract");
   }
 
+  static void require_same_layout_(const field_type& left, const field_type& right,
+                                   const char* operation) {
+    if (left.layout() != right.layout() || left.distribution() != right.distribution() ||
+        left.local_rank() != right.local_rank() || left.local_size() != right.local_size())
+      throw std::invalid_argument(std::string(operation) +
+                                  " requires the same exact ranked layout");
+  }
+
+  static void copy_active_valid_cells_(const field_type& source, field_type& destination,
+                                       const field_type& active) {
+    require_same_layout_(source, destination, "ProgramContext commit active copy");
+    require_same_layout_(source, active, "ProgramContext commit active mask");
+    if (source.ncomp() != destination.ncomp() || active.ncomp() != 1)
+      throw std::invalid_argument(
+          "ProgramContext commit active copy requires matching components and a one-component "
+          "mask");
+    struct CopyActiveValid {
+      FieldView<const Real, Dim> source{};
+      FieldView<Real, Dim> destination{};
+      FieldView<const Real, Dim> active{};
+      int ncomp = 0;
+      POPS_HD void operator()(const Index<Dim>& index) const {
+        if (active(index, 0) < Real{0.5})
+          return;
+        for (int component = 0; component < ncomp; ++component)
+          destination(index, component) = source(index, component);
+      }
+    };
+    for (std::size_t local = 0; local < source.local_size(); ++local)
+      for_each_cell(
+          source.box(local),
+          CopyActiveValid{std::as_const(source).fab(local).view(), destination.fab(local).view(),
+                          std::as_const(active).fab(local).view(), source.ncomp()});
+  }
+
   int resolve_prepared_program_block_(int program_block, const ExecutionLane& lane,
                                       const char* operation) const {
     int runtime_block = -1;
@@ -1242,6 +1558,33 @@ class ProgramContext {
     if (!all_ranks_agree_exact_ordered_byte_pairs(
             {{std::string_view("program-prepared-boundary-route"), contract.view()}}, lane))
       throw std::runtime_error(std::string(operation) + " differs across MPI ranks");
+    return runtime_block;
+  }
+
+  void converge_owner_reduction_(std::exception_ptr local_error, const ExecutionLane& lane,
+                                 const char* operation) const {
+    if (all_reduce_max(local_error ? 1L : 0L, lane) == 0)
+      return;
+    if (lane.size() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error(std::string(operation) + " failed collectively");
+  }
+
+  int resolve_pointwise_program_block_(int program_block, const ExecutionLane& lane) const {
+    int runtime_block = -1;
+    long local_error = 0;
+    try {
+      runtime_block = sys_block(program_block);
+    } catch (...) {
+      local_error = 1;
+    }
+    if (all_reduce_max(local_error, lane) != 0)
+      throw std::runtime_error("Program pointwise block route failed collectively");
+    const long program = static_cast<long>(program_block);
+    const long runtime = static_cast<long>(runtime_block);
+    if (all_reduce_min(program, lane) != all_reduce_max(program, lane) ||
+        all_reduce_min(runtime, lane) != all_reduce_max(runtime, lane))
+      throw std::runtime_error("Program pointwise block route differs across ranks");
     return runtime_block;
   }
 
@@ -1401,14 +1744,20 @@ class ProgramContext {
     if (found == manager.histories.end())
       throw std::out_of_range("ProgramContext history is not registered");
     require_same_field_contract_(found->second.front(), value, "ProgramContext history store");
+    auto dt_ledger = manager.slot_dt.find(name);
+    if (dt_ledger == manager.slot_dt.end() || dt_ledger->second.size() != found->second.size())
+      throw std::logic_error("ProgramContext history dt ledger differs from its ring depth");
     found->second.front() = value;
     if (!manager.initialized.at(name))
-      for (std::size_t slot = 1; slot < found->second.size(); ++slot)
+      for (std::size_t slot = 1; slot < found->second.size(); ++slot) {
         found->second[slot] = value;
+        if (dt)
+          dt_ledger->second[slot] = *dt;
+      }
     manager.initialized[name] = true;
     manager.store_pending[name] = true;
     if (dt)
-      manager.slot_dt[name][0] = *dt;
+      dt_ledger->second.front() = *dt;
   }
 
   std::optional<ScheduleCoordinate> schedule_coordinate_(ScheduleDomainKind kind,

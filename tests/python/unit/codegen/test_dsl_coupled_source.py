@@ -21,12 +21,27 @@ Invariants verifies :
 (E) Pas de callback Python par cellule : la source est compilee en bytecode (verifie sur l'objet) ;
     l'evolution se produit dans System.step sans rappel Python.
 """
+from pathlib import Path
+
 import numpy as np
 
-import pops.runtime._engine_descriptors as engine
+import pops
+from pops.codegen import Production
+from pops.layouts import Uniform
+from pops.lib.time import ForwardEuler
+from pops.math import ddt, div
+from pops.mesh import CartesianGrid, PeriodicAxes
+from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
+from pops.numerics.spatial import FiniteVolume
+from pops.physics import Density, Model
 from pops.physics.multispecies import CoupledSource
-from pops.runtime._system import System  # ADC-545 advanced runtime seam
-from tests.python.support.explicit_program import install_forward_euler_program
+from pops.time import FixedDt
+from tests.python.support.native_execution_context import artifact_execution_context
+from tests.python.support.physics_roles import FRAME, X_AXIS, Y_AXIS
+
+
+ROOT = Path(__file__).resolve().parents[4]
+_DENSITY_COMPONENTS = {}
 
 
 def chk(cond, msg, fails):
@@ -49,30 +64,110 @@ def build_source(k):
     return src.compile(backend="production")
 
 
-def density_block(n0=1.0):
-    """Bloc scalaire transporte par la derive E x B avec un RHS elliptique nul.
+def system_config_2d(n):
+    """Return the complete exact-rank Cartesian authority for this uniform witness."""
+    from pops.runtime._system import SystemConfig
 
-    Ce test cible exclusivement la source couplee. Un alpha nul garde le solveur Poisson dans le
-    chemin de production tout en evitant qu'un etage partiel du splitting cree artificiellement une
-    charge periodique non neutre entre les mises a jour des especes.
-    """
-    return engine.Model(state=engine.Scalar(), transport=engine.ExB(),
-                     source=engine.NoSource(), elliptic=engine.BackgroundDensity(alpha=0.0, n0=n0))
+    config = SystemConfig()
+    config.shape = (n, n)
+    config.lower = (0.0, 0.0)
+    config.upper = (1.0, 1.0)
+    config.periodicity = (True, True)
+    config.boxes = (((0, 0), (n, n)),)
+    config.coordinate_system = "pops://coordinates/cartesian-2d@1"
+    return config
+
+
+def density_component(n, block_name):
+    """Compile one fixture-unique passive density Module through the public Case lifecycle."""
+    cache_key = (n, block_name)
+    cached = _DENSITY_COMPONENTS.get(cache_key)
+    if cached is not None:
+        return cached
+
+    model = Model("coupled-source-density-%s" % block_name, frame=FRAME)
+    state = model.state("U", components=("density",), roles={"density": Density()})
+    (rho,) = state
+    flux = model.flux(
+        "inert-transport",
+        frame=FRAME,
+        state=state,
+        components={X_AXIS: (0.0 * rho,), Y_AXIS: (0.0 * rho,)},
+        waves={X_AXIS: (0.0 * rho,), Y_AXIS: (0.0 * rho,)},
+    )
+    rate = model.rate("inert-rate", equation=ddt(state) == -div(flux))
+
+    case = pops.Case("coupled-source-density-case-%s" % block_name)
+    block = case.block("density", model)
+    numerics = DiscretizationPlan()
+    numerics.rates.add(
+        rate,
+        FiniteVolume(
+            flux=flux,
+            variables=variables.Conservative(state),
+            reconstruction=reconstruction.FirstOrder(),
+            riemann=riemann.Rusanov(),
+        ),
+    )
+    case.numerics(numerics, block=block)
+    program = ForwardEuler(block[state], rate=rate)
+    program.step_strategy(FixedDt(0.01))
+    case.program(program)
+    layout = Uniform(
+        CartesianGrid(frame=FRAME, cells=(n, n), periodic=PeriodicAxes(FRAME.axes))
+    )
+    resolved = pops.resolve(
+        pops.validate(case),
+        layout=layout,
+        backend=Production(),
+        compile_options={"include": str(ROOT / "include")},
+    )
+    artifact = pops.compile(resolved)
+    artifact.verify()
+    component = artifact.blocks[0].model
+    _DENSITY_COMPONENTS[cache_key] = (component, artifact)
+    return component, artifact
+
+
+def install_runtime_lane(sim, components):
+    """Install this fixture's exact runtime authority before package materialization."""
+    context = artifact_execution_context(components[0][2])
+    sim._execution_context = context
+    sim._s._prepare_boundary_execution_lane(
+        context.communicator.handle,
+        context.identity.token,
+    )
+    for block_name, _component, artifact in components:
+        (state_identity,) = artifact.plan.blocks[0].state_identities
+        sim._s._install_block_state_route(block_name, state_identity)
+
+
+def finalize_provider_pack(sim):
+    """Materialize all staged PreparedSystemBlocks through their one sealed ProviderPack."""
+    if sim._pending_native_packages:
+        sim._s._finalize_native_packages()
+        sim._pending_native_packages = 0
 
 
 def make_system(n, ne0, ni0, ng0):
-    sim = System(n=n, L=1.0, periodicity=(True, True))
-    # Le RHS elliptique est volontairement nul : cette preuve porte sur le couplage, pas sur Poisson.
-    sim.add_equation(
-        "electrons", model=density_block(n0=ne0),
-        spatial=engine.Spatial(none=True))
-    sim.add_equation(
-        "ions", model=density_block(n0=ni0),
-        spatial=engine.Spatial(none=True))
-    sim.add_equation(
-        "neutrals", model=density_block(n0=ng0),
-        spatial=engine.Spatial(none=True))
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg")
+    # This two-axis fixture owns the exact Dim=2 variant before its private runtime seam imports.
+    # Do not construct a ModelSpec or call the retired native add_block path here.
+    from pops._native_selector import select_native_dimension
+
+    select_native_dimension(2)
+    from pops.runtime import _engine_descriptors as engine
+    from pops.runtime._system import System
+
+    components = [(name, *density_component(n, name))
+                  for name in ("electrons", "ions", "neutrals")]
+    sim = System(system_config_2d(n))
+    install_runtime_lane(sim, components)
+    for name, component, _artifact in components:
+        sim.add_equation(name, model=component, spatial=engine.Spatial(none=True))
+    finalize_provider_pack(sim)
+    # The generated model has a zero elliptic contribution, so Poisson stays on the production path
+    # without changing this uniform-source witness.
+    sim.set_poisson(rhs="charge_density", solver="cartesian_cg")
     sim.set_density("electrons", np.full((n, n), ne0))
     sim.set_density("ions", np.full((n, n), ni0))
     sim.set_density("neutrals", np.full((n, n), ng0))
@@ -102,6 +197,8 @@ def main():
 
     # --- (D) defaut : System SANS couplage reste a l'identique (densites uniformes inchangees) ---
     base = make_system(n, ne0, ni0, ng0)
+    from tests.python.support.explicit_program import install_forward_euler_program
+
     install_forward_euler_program(base)
     for _ in range(nsteps):
         base.step(dt)

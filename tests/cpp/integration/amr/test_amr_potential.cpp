@@ -1,29 +1,49 @@
 // AmrSystem::potential() : le getter qui expose phi du NIVEAU GROSSIER (base) dans l'ordre natif
 // aplati exact-rank, pendant raffine de System::potential(). Sans raffinement (seuil enorme -> un seul
 // niveau grossier mono-box couvrant tout le domaine), AmrSystem resout EXACTEMENT le meme Poisson discret que System
-// avec solver='geometric_mg' (meme operateur lap(phi)=f, meme rhs f = elliptic_rhs(U), meme BC, meme
-// box). On verifie donc :
+// avec son solveur uniforme autorise `cartesian_cg` (meme operateur lap(phi)=f, meme rhs
+// f = elliptic_rhs(U), meme BC, meme box). On verifie donc :
 //   (1) forme (produit des axes), valeurs FINIES, champ NON TRIVIAL (variation spatiale reelle) ;
 //   (2) Poisson periodique a source NEUTRE (alpha (n - n0), integrale nulle) -> phi de moyenne ~0 ;
-//   (3) PARITE avec System::potential() (geometric_mg) sur le MEME modele / densite : meme phi a la
-//       tolerance MG pres (les deux passent par GeometricMG sur le meme grossier mono-box) ;
-//   (4) apres quelques pas (regrid inclus), potential() reste fini et non trivial (rafraichi).
-// Le modele est un transport ExB pur + fond neutralisant (briques exb / none / background), proche du
-// scenario diocotron qui echantillonne phi sur un cercle median (FFT azimutale).
+//   (3) PARITE avec System::potential() (cartesian_cg) sur le MEME modele / densite : meme phi a la
+//       tolerance iterative pres, sans contourner la separation uniforme/AMR des solveurs ;
+//   (4) apres quelques pas de transport periodique, l'etat puis potential() changent reellement :
+//       l'oracle refuse un champ elliptique stale tout en gardant le test sans raffinement.
+// Le modele est une advection scalaire exacte + fond neutralisant : ce test isole le contrat Poisson
+// et son rafraichissement sans pretendre authentifier le transport ExB du scenario diocotron.
 #include <gtest/gtest.h>
 
 #include "explicit_amr_program.hpp"
 #include <pops/core/foundation/native_dimension.hpp>
+#include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/physics/bricks/bricks.hpp>
 #include <pops/runtime/amr_system.hpp>
-#include <pops/runtime/config/model_spec.hpp>
+#include <pops/runtime/amr/field_solver_options.hpp>
+#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
+#include <pops/runtime/builders/compiled/dsl_block.hpp>
+#include <pops/runtime/builders/compiled/generated_system_block.hpp>
 #include <pops/runtime/system.hpp>
 
 #include <cmath>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
 #include <Kokkos_Core.hpp>
 #endif
+
+namespace pops {
+
+template <int Dim, class Model>
+PreparedSystemBlock<Dim> prepare_exact_system_block(
+    CompiledSystemBlockPreparation<Dim, Model> request) {
+  return prepare_generated_system_block(std::move(request));
+}
+
+}  // namespace pops
 
 using namespace pops;
 
@@ -58,14 +78,39 @@ static std::vector<double> blob(const Extent<Dim>& shape, double& mean_out) {
   return rho;
 }
 
-static ModelSpec exb_background(double n0) {
-  ModelSpec spec;
-  spec.transport = "exb";        // derive E x B (a divergence nulle)
-  spec.source = "none";          // pas de force source
-  spec.elliptic = "background";  // f = alpha (n - n0) : fond neutralisant
-  spec.alpha = 1.0;
-  spec.n0 = n0;  // fond = moyenne -> source d'integrale nulle (Poisson periodique)
-  return spec;
+template <int Dim>
+using PotentialModel = CompositeModel<nd::ScalarAdvection<Dim>, NoSource, BackgroundDensity>;
+
+constexpr std::string_view kPotentialConsumerQid = "tests.amr.potential/phi-test/providers@1";
+
+static_assert(PotentialModel<1>::n_providers == 0);
+static_assert(PotentialModel<2>::n_providers == 0);
+static_assert(PotentialModel<3>::n_providers == 0);
+
+template <int Dim>
+PotentialModel<Dim> potential_model(double n0) {
+  RealVector<Dim> velocity{};
+  for (int axis = 0; axis < Dim; ++axis)
+    velocity[axis] = Real(0.25) / Real(axis + 1);
+  PotentialModel<Dim> model{};
+  model.hyp = nd::ScalarAdvection<Dim>::prepare(velocity);
+  model.src = NoSource{};
+  model.ell = BackgroundDensity{Real(1), Real(n0), 0};
+  return model;
+}
+
+template <int Dim>
+void install_system_runtime_authority(System<Dim>& system, std::string_view identity) {
+  auto lane =
+      std::make_shared<ExecutionLane>(ExecutionLane::duplicate_world_collectively(identity));
+  system.install_prepared_boundary_execution_lane(std::move(lane));
+}
+
+AmrFieldSolverOptions periodic_amr_field_solver_options() {
+  CompositeFacOptions fac;
+  fac.abs_tol = Real(1e-10);
+  fac.coarse_abs_tol = Real(1e-12);
+  return geometric_mg_amr_field_solver_options(GeometricMgOptions{}, fac);
 }
 
 TEST(test_amr_potential, Runs) {
@@ -86,10 +131,16 @@ TEST(test_amr_potential, Runs) {
   cfg.regrid_every = 0;  // pas de re-raffinement apres l'init (seuil enorme de toute facon)
 
   AmrSystem<Dim> amr(cfg);
-  amr.add_block("phi_test", exb_background(n0), "minmod", "rusanov", "conservative", "explicit", 1);
-  amr.set_poisson("charge_density", "geometric_mg", "auto");
+  test::install_amr_runtime_authority(amr, "tests.amr.potential/amr-runtime@1");
+  amr.install_block_state_route("phi_test", "tests.amr.potential/amr-state/phi-test@1");
+  add_compiled_model<Dim>(amr, "phi_test", potential_model<Dim>(n0), "minmod", "rusanov",
+                          "conservative", "explicit", 1.4, 1, 1, {}, {}, 0.0,
+                          static_cast<double>(kWenoEpsilon), false,
+                          std::string(kPotentialConsumerQid));
+  amr.set_poisson("charge_density", "geometric_mg", "periodic",
+                  periodic_amr_field_solver_options());
   amr.set_density("phi_test", rho);
-  test::install_forward_euler_program(amr);
+  test::install_forward_euler_program(amr, true);
 
   const std::vector<double> pa = amr.potential();
 
@@ -112,23 +163,26 @@ TEST(test_amr_potential, Runs) {
   EXPECT_TRUE(std::fabs(pmean) < 1e-6 * (pmax - pmin) + 1e-9)
       << "potential() : moyenne ~0 (source neutre)";
 
-  // --- System (solver geometric_mg) sur le MEME modele/densite : oracle de parite ---
+  // --- System (solver cartesian_cg) sur le MEME modele/densite : oracle de parite ---
   SystemConfig<Dim> scfg;
   for (int axis = 0; axis < Dim; ++axis) {
     scfg.shape[axis] = n;
     scfg.periodicity[axis] = true;
   }
   System<Dim> sys(scfg);
-  sys.add_block("phi_test", exb_background(n0), "minmod", "rusanov", "conservative", "explicit", 1);
-  sys.set_poisson("charge_density", "geometric_mg", "auto");
+  install_system_runtime_authority(sys, "tests.amr.potential/system-runtime@1");
+  sys.install_block_state_route("phi_test", "tests.amr.potential/system-state/phi-test@1");
+  add_compiled_model<Dim>(sys, "phi_test", potential_model<Dim>(n0), "minmod", "rusanov",
+                          "conservative", "explicit");
+  sys.set_poisson("charge_density", "cartesian_cg", "auto");
   sys.set_density("phi_test", rho);
   (void)pops::consume_solve_outcome(sys.solve_fields());
   const std::vector<double> ps = sys.potential();
   EXPECT_EQ(ps.size(), pa.size()) << "System.potential() meme taille qu'AmrSystem.potential()";
 
   // (3) parite a une constante additive pres (phi periodique defini modulo une constante) : on
-  // compare apres recentrage sur la moyenne. Tolerance MG : meme operateur, meme rhs, meme box ->
-  // l'ecart vient des iterations MG (rel_tol), pas du modele. Borne large mais discriminante.
+  // compare apres recentrage sur la moyenne. Les deux solveurs partagent l'operateur et le RHS ;
+  // seule leur convergence iterative differe. La borne reste large mais discriminante.
   double smean = 0;
   for (double v : ps)
     smean += v;
@@ -140,22 +194,38 @@ TEST(test_amr_potential, Runs) {
   }
   EXPECT_TRUE(ref > 1e-6) << "System phi non trivial (oracle valide)";
   EXPECT_TRUE(dmax < 1e-3 * (ref + 1e-12))
-      << "AmrSystem.potential() == System.potential() (geometric_mg) a la tolerance MG pres"
+      << "AmrSystem.potential() == System.potential() a la tolerance iterative pres"
       << " dmax=" << dmax << " ref=" << ref;
 
-  // (4) apres quelques pas (transport ExB + regrid), potential() reste fini et non trivial
+  // (4) le transport non nul doit faire evoluer l'etat puis republier un potentiel distinct.
   amr.advance(1e-3, 8);
+  const std::vector<double> rho2 = amr.density("phi_test");
+  ASSERT_EQ(rho2.size(), rho.size());
+  double density_change = 0.0;
+  for (std::size_t cell = 0; cell < rho.size(); ++cell)
+    density_change = std::fmax(density_change, std::fabs(rho2[cell] - rho[cell]));
+  EXPECT_GT(density_change, 1e-8)
+      << "advance doit modifier l'etat conservatif avant le rafraichissement elliptique";
+
   const std::vector<double> pa2 = amr.potential();
   EXPECT_EQ(pa2.size(), cell_count(cfg.shape))
       << "potential() apres advance rend le nombre exact-rank de valeurs";
   bool finite2 = true;
-  double p2min = pa2[0], p2max = pa2[0];
+  double p2min = pa2[0], p2max = pa2[0], p2sum = 0.0;
   for (double v : pa2) {
     if (!std::isfinite(v))
       finite2 = false;
     p2min = std::fmin(p2min, v);
     p2max = std::fmax(p2max, v);
+    p2sum += v;
   }
   EXPECT_TRUE(finite2) << "potential() apres advance : valeurs finies";
   EXPECT_TRUE((p2max - p2min) > 1e-6) << "potential() apres advance : champ non trivial";
+  const double p2mean = p2sum / static_cast<double>(pa2.size());
+  double potential_change = 0.0;
+  for (std::size_t cell = 0; cell < pa.size(); ++cell)
+    potential_change =
+        std::fmax(potential_change, std::fabs((pa2[cell] - p2mean) - (pa[cell] - pmean)));
+  EXPECT_GT(potential_change, 1e-9)
+      << "le solve elliptique doit republier le potentiel du nouvel etat accepte";
 }

@@ -10,6 +10,7 @@
 #include <gtest/gtest.h>
 
 #include "amr_tagging_test_authority.hpp"
+#include "explicit_amr_program.hpp"
 
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/core/identity/prepared_provider.hpp>
@@ -19,7 +20,6 @@
 #include <pops/numerics/fv/flux_interfaces.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>
-#include <pops/parallel/execution_lane.hpp>
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/runtime/program/amr_program_context.hpp>
@@ -204,12 +204,10 @@ template <int Dim>
 std::shared_ptr<ProgramEvidence> install_program(pops::AmrSystem<Dim>& system) {
   auto context = pops::runtime::program::make_program_execution_provider(&system);
   auto evidence = std::make_shared<ProgramEvidence>();
-  auto lane = std::make_shared<pops::ExecutionLane>(
-      pops::ExecutionLane::world("pops.test.amr-program-positivity-floor"));
   context->configure_primary_clock("test.amr.positivity.clock");
-  context->install([context, evidence, lane](double macro_dt) {
+  context->install([context, evidence](double macro_dt) {
     context->begin_step(macro_dt);
-    context->for_each_program_resource_level([context, evidence, lane, macro_dt](int selected) {
+    context->for_each_program_resource_level([context, evidence, macro_dt](int selected) {
       context->set_stage_time(0, 1);
       std::vector<pops::MultiFab<Dim>*> states;
       std::vector<pops::MultiFab<Dim>*> residuals;
@@ -223,9 +221,9 @@ std::shared_ptr<ProgramEvidence> install_program(pops::AmrSystem<Dim>& system) {
           };
           if (block != 0)
             ++evidence->nonzero_block_provider_binds;
-          pops::SolveOutcome source =
-              pops::backward_euler_source(DensityAdvection<Dim>{}, provider_at, state,
-                                          pops::Real(macro_dt), pops::NewtonOptions{}, *lane);
+          pops::SolveOutcome source = pops::backward_euler_source(
+              DensityAdvection<Dim>{}, provider_at, state, pops::Real(macro_dt),
+              pops::NewtonOptions{}, context->prepared_execution_lane());
           const pops::SolveReport accepted = source.consume(pops::SolveConsumption::kAccept);
           if (!accepted.solved())
             throw std::runtime_error("positivity test Program source solve failed: " +
@@ -281,6 +279,7 @@ template <int Dim>
 RunResult advance_with_floor(double positivity_floor) {
   const pops::AmrSystemConfig<Dim> system_config = config<Dim>();
   pops::AmrSystem<Dim> system(system_config);
+  pops::test::install_amr_runtime_authority(system, "test.amr.positivity/runtime@1");
   const auto speed_key = install_transport_speed(system);
   system.install_block_state_route("density", "test.amr.positivity/state/density");
   system.install_block_state_route("density_peer", "test.amr.positivity/state/density-peer");
