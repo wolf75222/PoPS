@@ -36,6 +36,7 @@ def problem_semantic_payload(problem: Any, *, layout: Any, time: Any) -> dict[st
     """
     from pops.identity.semantic import model_semantic_data, program_semantic_data, semantic_value
 
+    _stabilize_problem_models(problem)
     blocks = {}
     for name, spec in sorted(problem._block_registry.items()):
         block = problem._block_registry.canonical_block(problem._block_registry.handle(name))
@@ -84,7 +85,22 @@ def problem_semantic_payload(problem: Any, *, layout: Any, time: Any) -> dict[st
     return semantic_value(payload, where="Case semantic payload")
 
 
+def _stabilize_problem_models(problem: Any) -> None:
+    """Lock each block model's exact Module/ProviderPack identity before handle projection."""
+    from pops.problem._block_registry import stabilize_model_definition
+
+    seen: set[int] = set()
+    for _name, spec in problem._block_registry.items():
+        model = spec["model"]
+        marker = id(model)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        stabilize_model_definition(model)
+
+
 def _problem_snapshot_payload(problem: Any, *, artifact: bool) -> dict[str, Any]:
+    _stabilize_problem_models(problem)
     blocks = {
         name: {
             "handle": problem._block_registry.canonical_block(
@@ -279,22 +295,48 @@ def _artifact_manifest_data(manifest_owner: Any, manifest_data: Any) -> dict[str
     return result
 
 
+def _same_module_facade(model: Any, selected: Any) -> Any:
+    """Return the private facade only when it already hashes the selected Module.
+
+    A multi-module board shares one authoring owner with its leftover single-state
+    facade.  Hashing that facade would bind a second Module onto the owner and
+    rewrite issued block identities.  An empty ``_module_cache`` is not evidence
+    that the facade hashes ``selected``: ``_model_hash()`` can materialize a new
+    Module.  Only a positive ``cache is selected`` match is accepted.
+    """
+    facade = getattr(model, "_dsl", None)
+    if facade is None or selected is None:
+        return None
+    if not callable(getattr(facade, "_model_hash", None)):
+        return None
+    multi = getattr(model, "_multi_module", None)
+    if multi is not None:
+        return None
+    cached = getattr(facade, "_module_cache", None)
+    if cached is not selected:
+        return None
+    return facade
+
+
 def _scientific_model_hash(model: Any, manifest_owner: Any, *, artifact: bool = False) -> Any:
-    candidates = (
-        (model, "module_hash"),
-        (model, "_model_hash"),
-        (getattr(model, "_dsl", None), "_model_hash"),
-        (manifest_owner, "module_hash"),
-    )
     if artifact:
         # Only hashes that declare compile semantics may enter the artifact projection. The private
         # facade _model_hash historically included runtime defaults, whereas Module.module_hash now
         # consumes ParameterDeclaration.artifact_data().
-        candidates = (
+        candidates: list[tuple[Any, str]] = [
             (manifest_owner, "module_hash"),
             (model, "artifact_hash"),
             (model, "module_hash"),
-        )
+        ]
+    else:
+        candidates = [
+            (model, "module_hash"),
+            (model, "_model_hash"),
+        ]
+        facade = _same_module_facade(model, manifest_owner)
+        if facade is not None:
+            candidates.append((facade, "_model_hash"))
+        candidates.append((manifest_owner, "module_hash"))
     for candidate, name in candidates:
         method = getattr(candidate, name, None) if candidate is not None else None
         if callable(method):

@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from enum import Enum
 from itertools import count
 import re
+import threading
 from typing import Any
 from urllib.parse import quote
 
@@ -88,7 +89,7 @@ class _AuthoringAuthority:
 
     __slots__ = (
         "serial", "_fingerprint", "_fingerprint_priority", "_fingerprint_providers",
-        "_resolving",
+        "_lock", "_resolving",
     )
 
     def __init__(self) -> None:
@@ -96,14 +97,16 @@ class _AuthoringAuthority:
         self._fingerprint = None
         self._fingerprint_priority = -1
         self._fingerprint_providers = []
-        self._resolving = False
+        self._lock = threading.RLock()
+        self._resolving = threading.local()
 
     def bind_fingerprint(self, fingerprint: Any, *, priority: int) -> None:
         """Install a deterministic fallback when no richer definition provider is bound."""
         value = _validate_definition_fingerprint(fingerprint)
-        if priority >= self._fingerprint_priority:
-            self._fingerprint = value
-            self._fingerprint_priority = priority
+        with self._lock:
+            if priority >= self._fingerprint_priority:
+                self._fingerprint = value
+                self._fingerprint_priority = priority
 
     def bind_provider(self, provider: Any, *, priority: int) -> None:
         """Bind the richest available live content fingerprint provider."""
@@ -111,15 +114,19 @@ class _AuthoringAuthority:
             raise TypeError("definition fingerprint provider must be callable")
         if isinstance(priority, bool) or not isinstance(priority, int):
             raise TypeError("definition fingerprint provider priority must be an integer")
-        self._fingerprint_providers.append((priority, provider))
+        with self._lock:
+            self._fingerprint_providers.append((priority, provider))
 
     def fingerprint(self) -> str | None:
-        if self._resolving:
+        if getattr(self._resolving, "active", False):
             raise UnresolvedOwnershipError(
                 "model-definition fingerprint recursively depends on its own OwnerPath"
             )
-        self._resolving = True
+        self._resolving.active = True
         try:
+            with self._lock:
+                providers = list(self._fingerprint_providers)
+                fallback = self._fingerprint
             # Providers are weakly backed by their authoritative registries/builders. Retaining
             # older providers lets an unpublished transactional candidate disappear without
             # poisoning the shared owner authority it briefly used.
@@ -128,7 +135,7 @@ class _AuthoringAuthority:
             # pin the authority to stale content.  If the newer transactional view disappears and
             # returns None, iteration naturally falls back to the preceding live provider.
             ranked = sorted(
-                enumerate(self._fingerprint_providers),
+                enumerate(providers),
                 key=lambda indexed: (indexed[1][0], indexed[0]),
                 reverse=True,
             )
@@ -136,9 +143,9 @@ class _AuthoringAuthority:
                 value = provider()
                 if value is not None:
                     return _validate_definition_fingerprint(value)
-            return self._fingerprint
+            return fallback
         finally:
-            self._resolving = False
+            self._resolving.active = False
 
 
 _ROOT_KINDS = frozenset({
@@ -331,18 +338,19 @@ class OwnerPath:
             raise UnresolvedOwnershipError(
                 "definition fingerprint transactions require a live authoring OwnerPath"
             )
-        saved = (
-            authority._fingerprint,
-            authority._fingerprint_priority,
-            list(authority._fingerprint_providers),
-        )
-        try:
-            yield
-        except BaseException:
-            authority._fingerprint = saved[0]
-            authority._fingerprint_priority = saved[1]
-            authority._fingerprint_providers = saved[2]
-            raise
+        with authority._lock:
+            saved = (
+                authority._fingerprint,
+                authority._fingerprint_priority,
+                list(authority._fingerprint_providers),
+            )
+            try:
+                yield
+            except BaseException:
+                authority._fingerprint = saved[0]
+                authority._fingerprint_priority = saved[1]
+                authority._fingerprint_providers = saved[2]
+                raise
 
     def contains(self, kind: Any) -> bool:
         if not isinstance(kind, OwnerKind):

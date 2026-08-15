@@ -114,6 +114,101 @@ def test_definition_fingerprint_prefers_newest_live_provider_at_equal_priority()
     assert owner.definition_fingerprint == older
 
 
+def test_definition_fingerprint_refuses_same_thread_recursion():
+    owner = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, "recursive")
+
+    def recurse() -> str | None:
+        owner.canonical()
+        return None
+
+    owner._bind_definition_fingerprint_provider(recurse, priority=100)
+    with pytest.raises(UnresolvedOwnershipError, match="recursively depends"):
+        assert owner.definition_fingerprint is None
+
+
+def test_definition_fingerprint_resolution_is_thread_safe():
+    from concurrent.futures import ThreadPoolExecutor
+
+    owner = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, "concurrent")
+    expected = "pops.test:sha256:" + "a" * 64
+    owner._bind_definition_fingerprint_provider(lambda: expected, priority=100)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        values = list(pool.map(lambda _index: owner.definition_fingerprint, range(32)))
+
+    assert set(values) == {expected}
+
+
+def test_failed_fingerprint_transaction_preserves_concurrent_mutations():
+    import threading
+
+    owner = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, "transaction-race")
+    published = "pops.test:sha256:" + "1" * 64
+    unpublished = "pops.test:sha256:" + "2" * 64
+    concurrent = "pops.test:sha256:" + "3" * 64
+    concurrent_fallback = "pops.test:sha256:" + "4" * 64
+    live = {"published": published, "concurrent": concurrent}
+    owner._bind_definition_fingerprint_provider(lambda: live["published"], priority=50)
+    owner._bind_definition_fingerprint("pops.test:sha256:" + "0" * 64, priority=5)
+
+    in_transaction = threading.Event()
+    finish_transaction = threading.Event()
+    observed: list[str | None] = []
+    errors: list[BaseException] = []
+
+    def failing_transaction() -> None:
+        try:
+            with owner._definition_fingerprint_transaction():
+                owner._bind_definition_fingerprint_provider(lambda: unpublished, priority=100)
+                in_transaction.set()
+                if not finish_transaction.wait(2.0):
+                    raise TimeoutError("transaction partner did not resume")
+                raise ValueError("reject unpublished candidate")
+        except ValueError:
+            return
+        except BaseException as exc:
+            errors.append(exc)
+
+    def concurrent_mutator() -> None:
+        if not in_transaction.wait(2.0):
+            errors.append(TimeoutError("transaction never published its candidate"))
+            return
+        try:
+            owner._bind_definition_fingerprint_provider(lambda: live["concurrent"], priority=100)
+            owner._bind_definition_fingerprint(concurrent_fallback, priority=10)
+        except BaseException as exc:
+            errors.append(exc)
+
+    def observer() -> None:
+        if not in_transaction.wait(2.0):
+            errors.append(TimeoutError("observer missed the open transaction"))
+            return
+        try:
+            observed.append(owner.definition_fingerprint)
+        except BaseException as exc:
+            errors.append(exc)
+
+    workers = [
+        threading.Thread(target=failing_transaction),
+        threading.Thread(target=concurrent_mutator),
+        threading.Thread(target=observer),
+    ]
+    for worker in workers:
+        worker.start()
+    assert in_transaction.wait(2.0)
+    finish_transaction.set()
+    for worker in workers:
+        worker.join(2.0)
+        assert not worker.is_alive()
+
+    assert errors == []
+    assert unpublished not in observed
+    assert owner.definition_fingerprint == concurrent
+    live["published"] = None
+    live["concurrent"] = None
+    assert owner.definition_fingerprint == concurrent_fallback
+
+
 def test_same_local_name_in_different_canonical_owners_or_kinds_is_distinct():
     model_a = OwnerPath.model("a")
     model_b = OwnerPath.model("b")

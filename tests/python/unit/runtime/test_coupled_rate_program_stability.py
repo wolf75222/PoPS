@@ -36,6 +36,8 @@ from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
 from pops.params import RuntimeParam
 from pops.projection import ConservativeCellAverage
+from pops.representations import Conservative
+from pops.spaces import CellState
 from pops.time import AdaptiveCFL, every
 from tests.python.support.amr_snapshots import composite_active_block_state
 from tests.python.support.requirements import repo_include
@@ -190,6 +192,182 @@ def _resolve_coupled_rate_case(*, cxx: str | None = None):
         backend=Production(),
         compile_options=compile_options,
     )
+
+
+def test_two_block_repeated_snapshots_keep_authenticated_block_handles() -> None:
+    from pops.problem._snapshot import build_authoring_snapshot, build_problem_snapshot
+    from pops.time.references import block_name
+
+    case, layout = _coupled_rate_case()
+    electron = case.blocks()["electrons"]
+    ion = case.blocks()["ions"]
+    program = case._time_registry.program
+
+    first = build_problem_snapshot(case)
+    second = build_problem_snapshot(case)
+    compile_first = build_authoring_snapshot(case, layout=layout, time=program, libraries=())
+    compile_second = build_authoring_snapshot(case, layout=layout, time=program, libraries=())
+
+    assert first.hash == second.hash
+    assert first.artifact_hash == second.artifact_hash
+    assert compile_first.hash == compile_second.hash
+    assert compile_first.artifact_hash == compile_second.artifact_hash
+
+    first_blocks = first.to_dict()["blocks"]
+    second_blocks = second.to_dict()["blocks"]
+    electron_identity = first_blocks["electrons"]["handle"]["$handle"]
+    ion_identity = first_blocks["ions"]["handle"]["$handle"]
+    assert second_blocks["electrons"]["handle"]["$handle"] == electron_identity
+    assert second_blocks["ions"]["handle"]["$handle"] == ion_identity
+    assert electron_identity != ion_identity
+
+    resolved_electron = case.resolve(electron)
+    resolved_ion = case.resolve(ion)
+    assert resolved_electron.canonical_identity() == electron_identity
+    assert resolved_ion.canonical_identity() == ion_identity
+    assert case.resolve(resolved_electron).canonical_identity() == electron_identity
+    assert case.resolve(resolved_ion).canonical_identity() == ion_identity
+
+    coupled_blocks = [
+        value.attrs["out_block"]
+        for value in program._values
+        if value.op == "coupled_rate_out"
+    ]
+    assert {block_name(block) for block in coupled_blocks} == {"electrons", "ions"}
+    coupled_identities = {
+        block_name(block): case.resolve(block).canonical_identity()
+        for block in coupled_blocks
+    }
+    assert coupled_identities == {
+        "electrons": electron_identity,
+        "ions": ion_identity,
+    }
+    assert first.semantic_identity == second.semantic_identity
+    assert compile_first.semantic_identity == compile_second.semantic_identity
+
+
+def _single_module_source_case(coeff: float) -> pops.Case:
+    frame = Rectangle("single_module_domain", lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(
+        Cartesian2D()
+    )
+    model = pops.Model("scalar_source", frame=frame)
+    state = model.state(
+        "U",
+        components=("u",),
+        representation=Conservative(),
+        space=CellState(frame=frame),
+    )
+    model.source("forcing", on=state, value=(Const(coeff),))
+    case = pops.Case("single_module_source")
+    case.block("fluid", model)
+    return case
+
+
+def test_single_module_scientific_identity_is_formula_sensitive() -> None:
+    from pops.problem._snapshot import build_problem_snapshot
+
+    first = build_problem_snapshot(_single_module_source_case(1.0))
+    same = build_problem_snapshot(_single_module_source_case(1.0))
+    other = build_problem_snapshot(_single_module_source_case(2.0))
+    first_hash = first.to_dict()["blocks"]["fluid"]["model"]["scientific_hash"]
+    same_hash = same.to_dict()["blocks"]["fluid"]["model"]["scientific_hash"]
+    other_hash = other.to_dict()["blocks"]["fluid"]["model"]["scientific_hash"]
+
+    assert first_hash == same_hash
+    assert first.hash == same.hash
+    assert first_hash != other_hash
+    assert first.hash != other.hash
+    assert first.semantic_identity == same.semantic_identity
+
+
+def test_empty_facade_module_cache_does_not_materialize_a_competing_module() -> None:
+    from pops.problem._block_registry import stabilize_model_definition
+    from pops.problem._snapshot_payload import _same_module_facade, _scientific_model_hash
+
+    case = _single_module_source_case(1.0)
+    model = case._block_registry.spec("fluid")["model"]
+    selected = model.module
+    facade = model._dsl
+    fingerprint = model.owner_path.definition_fingerprint
+    facade._module_cache = None
+
+    assert _same_module_facade(model, selected) is None
+    fallback = _scientific_model_hash(model, selected)
+    assert facade._module_cache is None
+    assert fallback == selected.module_hash()
+    assert model.owner_path.definition_fingerprint == fingerprint
+
+    stabilize_model_definition(model)
+    assert facade._module_cache is selected
+    assert _same_module_facade(model, selected) is facade
+    assert _scientific_model_hash(model, selected) == facade._model_hash()
+    assert _scientific_model_hash(model, selected) != selected.module_hash()
+
+
+def test_concurrent_repeated_snapshots_keep_authenticated_block_handles() -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from pops.problem._snapshot import build_problem_snapshot
+
+    case, _layout = _coupled_rate_case()
+    electron = case.blocks()["electrons"]
+    ion = case.blocks()["ions"]
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        snapshots = list(pool.map(lambda _index: build_problem_snapshot(case), range(16)))
+
+    hashes = {snapshot.hash for snapshot in snapshots}
+    semantic = {snapshot.semantic_identity for snapshot in snapshots}
+    assert hashes == {snapshots[0].hash}
+    assert semantic == {snapshots[0].semantic_identity}
+    electron_identity = case.resolve(electron).canonical_identity()
+    ion_identity = case.resolve(ion).canonical_identity()
+    assert electron_identity != ion_identity
+    assert all(
+        snapshot.to_dict()["blocks"]["electrons"]["handle"]["$handle"] == electron_identity
+        and snapshot.to_dict()["blocks"]["ions"]["handle"]["$handle"] == ion_identity
+        for snapshot in snapshots
+    )
+
+
+def test_fresh_process_reconstructs_two_block_snapshot_identity() -> None:
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    from pops.problem._snapshot import build_problem_snapshot
+
+    case, _layout = _coupled_rate_case()
+    local = build_problem_snapshot(case)
+    repo = Path(__file__).resolve().parents[4]
+    script = (
+        "from tests.python.unit.runtime.test_coupled_rate_program_stability "
+        "import _coupled_rate_case\n"
+        "from pops.problem._snapshot import build_problem_snapshot\n"
+        "case, _layout = _coupled_rate_case()\n"
+        "snapshot = build_problem_snapshot(case)\n"
+        "print(snapshot.hash)\n"
+        "print(snapshot.semantic_identity.hexdigest)\n"
+        "print(snapshot.artifact_hash)\n"
+    )
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(repo / "python") + os.pathsep + str(repo) + os.pathsep + env.get(
+        "PYTHONPATH", ""
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    remote_hash, remote_semantic, remote_artifact = completed.stdout.strip().splitlines()
+    assert remote_hash == local.hash
+    assert remote_semantic == local.semantic_identity.hexdigest
+    assert remote_artifact == local.artifact_hash
 
 
 def test_coupled_rate_program_resolves_with_explicit_amr_stability_bound() -> None:

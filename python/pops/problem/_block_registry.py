@@ -21,6 +21,49 @@ from pops.problem.handles import BlockHandle
 from pops._report import ReportTree
 
 
+def stabilize_model_definition(model: Any) -> None:
+    """Materialize the exact Module/ProviderPack identity before owner projection.
+
+    Block handles capture the model's canonical owner.  Building that Module's
+    manifest (including its ProviderPack) and hashing it first keeps registration
+    and later snapshot/canonical walks on the same authenticated fingerprint.
+    Private facade ``_dsl._model_hash`` paths are not used here: they can project
+    a different Module onto the shared authoring owner and rewrite already-issued
+    block identities.
+    """
+    owner = getattr(model, "owner_path", None)
+    if owner is None or not hasattr(owner, "canonical"):
+        return
+    # Single-module public Model: ``model.module`` is the facade Module.  Multi-module
+    # boards return ``_multi_module`` and must never call ``_dsl.module``.
+    module = getattr(model, "module", None)
+    _reattach_selected_facade_cache(model, module)
+    manifest_owner = module if module is not None else model
+    manifest = getattr(manifest_owner, "manifest", None)
+    if callable(manifest):
+        manifest()
+    hasher = getattr(model, "module_hash", None)
+    if not callable(hasher):
+        hasher = getattr(manifest_owner, "module_hash", None)
+    if callable(hasher):
+        hasher()
+    owner.canonical()
+
+
+def _reattach_selected_facade_cache(model: Any, selected: Any) -> None:
+    """Restore an empty facade cache to the already-selected Module only.
+
+    ``facade.module`` / ``_model_hash()`` construct a new Module on the shared
+    owner when the cache is empty.  Reattaching ``selected`` cannot do that.
+    """
+    if selected is None or getattr(model, "_multi_module", None) is not None:
+        return
+    facade = getattr(model, "_dsl", None)
+    if facade is None or getattr(facade, "_module_cache", None) is not None:
+        return
+    facade._module_cache = selected
+
+
 class BlockRegistry(_FreezableRegistry):
     """Physics blocks and the sole authority for qualifying model declarations."""
 
@@ -104,8 +147,10 @@ class BlockRegistry(_FreezableRegistry):
         )
         # Building the authoritative declaration index attaches the richest available stable
         # content fingerprint (Module hash, operator-registry hash, or declaration fallback) before
-        # the owner is ever projected into canonical data.
+        # the owner is ever projected into canonical data.  Stabilize the exact Module/ProviderPack
+        # identity first so later snapshot hashing cannot rewrite already-issued block handles.
         declaration_index = self._provided_index(model, model_owner)
+        stabilize_model_definition(model)
         declared_states = tuple(
             handle for handle in declaration_index.records() if handle.kind == "state")
         if states is None:
@@ -447,4 +492,4 @@ class BlockRegistry(_FreezableRegistry):
         }
 
 
-__all__ = ["BlockRegistry"]
+__all__ = ["BlockRegistry", "stabilize_model_definition"]
