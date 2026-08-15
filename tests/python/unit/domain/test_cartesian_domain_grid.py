@@ -127,7 +127,7 @@ def test_rectangle_frame_round_trip_authenticates_domain_and_coordinates() -> No
     assert rebuilt.canonical_id == frame.canonical_id
     forged = copy.deepcopy(frame.to_dict())
     forged["coordinates"]["dimension"] = 3
-    with pytest.raises(ValueError, match="unsupported schema"):
+    with pytest.raises(ValueError, match="Cartesian2D data carries Cartesian dimension 3"):
         RectangleFrame.from_dict(forged)
 
 
@@ -181,9 +181,9 @@ def test_cartesian_grid_is_immutable_json_serializable_and_fail_closed() -> None
     assert CartesianGrid.from_dict(payload).canonical_id == grid.canonical_id
     with pytest.raises(FrozenInstanceError):
         grid.cells = (4, 4)  # type: ignore[misc]
-    with pytest.raises(TypeError, match="RectangleFrame"):
+    with pytest.raises(TypeError, match="bounded Cartesian domain"):
         CartesianGrid(frame=Cartesian2D(), cells=(4, 4))
-    with pytest.raises(TypeError, match="exactly two"):
+    with pytest.raises(TypeError, match="CartesianGrid.cells must contain exactly 2 integers"):
         CartesianGrid(frame=_framed_domain(), cells=(4,))
     with pytest.raises(TypeError, match="never bool"):
         CartesianGrid(frame=_framed_domain(), cells=(True, 4))
