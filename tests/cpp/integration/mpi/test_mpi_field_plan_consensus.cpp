@@ -620,16 +620,9 @@ void install_consensus_provider_plan(pops::AmrSystem<Dim>& system, const std::st
   }
 }
 
-pops::PreparedProviderOptions system_geometric_options() {
-  return {"pops.system.geometric-mg-options@1",
-          {{"abs_tol", 0.0},
-           {"bottom_sweeps", std::int64_t{50}},
-           {"coarse_threshold", std::int64_t{0}},
-           {"max_cycles", std::int64_t{50}},
-           {"min_coarse", std::int64_t{2}},
-           {"post_smooth", std::int64_t{2}},
-           {"pre_smooth", std::int64_t{2}},
-           {"rel_tol", 1.0e-8}}};
+pops::PreparedProviderOptions system_cartesian_cg_options() {
+  return {"pops.system.cartesian-cg-options@1",
+          {{"abs_tol", 0.0}, {"max_iterations", std::int64_t{200}}, {"rel_tol", 1.0e-8}}};
 }
 
 bool system_registry_bind_rejected(std::string token) {
@@ -637,8 +630,8 @@ bool system_registry_bind_rejected(std::string token) {
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 4;
   pops::System<Dim> system(config);
-  system.register_configured_field_solver_provider("geometric_mg", "field/registry",
-                                                   system_geometric_options());
+  system.register_configured_field_solver_provider("cartesian_cg", "field/registry",
+                                                   system_cartesian_cg_options());
   system.set_field_solver_plan("field/registry", std::move(token), "provider/registry",
                                "output/registry", "a", "potential", {"rhs/registry"}, {"a"},
                                {"potential"}, {1.0}, "field/registry");
