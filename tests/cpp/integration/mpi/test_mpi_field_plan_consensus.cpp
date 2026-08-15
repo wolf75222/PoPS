@@ -522,9 +522,15 @@ void add_constant(Field& field, pops::Real value) {
   pops::saxpy(field, pops::Real(1), increment);
 }
 
+template <int RuntimeDim>
+void install_system_runtime_authority(pops::System<RuntimeDim>& system, std::string_view identity) {
+  auto lane = std::make_shared<pops::ExecutionLane>(
+      pops::ExecutionLane::duplicate_world_collectively(identity));
+  system.install_prepared_boundary_execution_lane(std::move(lane));
+}
+
 void install_block(pops::AmrSystem<Dim>& system, const std::string& name) {
   const std::string state_identity = "tests.mpi.multiblock-field/state/" + name;
-  system.install_block_state_route(name, state_identity);
   std::vector<std::string> face_types(static_cast<std::size_t>(2 * Dim), "foextrap");
   std::vector<std::string> face_identities;
   face_identities.reserve(static_cast<std::size_t>(2 * Dim));
@@ -630,6 +636,7 @@ bool system_registry_bind_rejected(std::string token) {
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 4;
   pops::System<Dim> system(config);
+  install_system_runtime_authority(system, "tests.mpi.system-registry/runtime@1");
   system.register_configured_field_solver_provider("cartesian_cg", "field/registry",
                                                    system_cartesian_cg_options());
   system.set_field_solver_plan("field/registry", std::move(token), "provider/registry",
@@ -652,6 +659,7 @@ bool amr_registry_bind_rejected(std::string token) {
   config.distribute_coarse = true;
   pops::AmrSystem<Dim> system(config);
   pops::test::install_amr_runtime_authority(system, "tests.mpi.amr-registry/runtime");
+  system.install_block_state_route("a", "tests.mpi.multiblock-field/state/a");
   install_block(system, "a");
   const pops::AmrFieldHierarchyPolicyAuthority hierarchy{
       "pops.field-hierarchy.level-local", 1, {"pops.field-hierarchy.options.empty@1", {}}};
@@ -760,6 +768,8 @@ int run_multiblock_field_solve(int argc, char** argv) {
     const pops::AmrSystemConfig<Dim> config = exact_config();
     pops::AmrSystem<Dim> system(config);
     pops::test::install_amr_runtime_authority(system, "tests.mpi.multiblock-field/runtime");
+    system.install_block_state_route("a", "tests.mpi.multiblock-field/state/a");
+    system.install_block_state_route("b", "tests.mpi.multiblock-field/state/b");
     install_block(system, "a");
     install_block(system, "b");
     system.set_poisson("charge_density", "geometric_mg", "dirichlet");
