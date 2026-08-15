@@ -154,6 +154,7 @@ class _CodegenMixin(_HyperbolicModel):
         hoist_reciprocals: bool = False,
         model_identity: Any = None,
         native_field_roles: Any = None,
+        consumer_owner_qid: Any = None,
     ) -> Any:
         """Thin wrapper: delegates to pops.codegen._compile.emit_cpp_native_loader."""
         return _cg_compile().emit_cpp_native_loader(
@@ -163,6 +164,7 @@ class _CodegenMixin(_HyperbolicModel):
             hoist_reciprocals=hoist_reciprocals,
             model_identity=model_identity,
             native_field_roles=native_field_roles,
+            consumer_owner_qid=consumer_owner_qid,
         )
 
     def compile_native(
@@ -175,6 +177,7 @@ class _CodegenMixin(_HyperbolicModel):
         target: str = "system",
         hoist_reciprocals: bool = False,
         _native_field_roles: Any = None,
+        consumer_owner_qid: Any = None,
     ) -> Any:
         """Thin wrapper: delegates to pops.codegen._compile.compile_native."""
         return _cg_compile().compile_native(
@@ -187,6 +190,7 @@ class _CodegenMixin(_HyperbolicModel):
             target=target,
             hoist_reciprocals=hoist_reciprocals,
             native_field_roles=_native_field_roles,
+            consumer_owner_qid=consumer_owner_qid,
         )
 
     def _model_hash(self, params: Any = None) -> Any:
@@ -227,6 +231,7 @@ class _CodegenMixin(_HyperbolicModel):
         hoist_reciprocals: bool = False,
         model_identity: Any = None,
         _native_field_roles: Any = None,
+        consumer_owner_qid: Any = None,
     ) -> Any:
         """Thin wrapper: delegates to pops.codegen._compile.compile_model."""
         return _cg_compile().compile_model(
@@ -242,6 +247,7 @@ class _CodegenMixin(_HyperbolicModel):
             hoist_reciprocals=hoist_reciprocals,
             model_identity=model_identity,
             _native_field_roles=_native_field_roles,
+            consumer_owner_qid=consumer_owner_qid,
         )
 
     def emit_cpp_elliptic(

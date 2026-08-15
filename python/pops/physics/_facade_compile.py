@@ -57,6 +57,7 @@ class _FacadeCompileMixin(_FacadeModel):
         name: Any = None,
         target: str = "system",
         hoist_reciprocals: bool = False,
+        consumer_owner_qid: Any = None,
     ) -> str:
         """Emit a native package without exposing the private formula carrier."""
         from pops.codegen.component_provider_packs import resolve_component_provider_packs
@@ -67,6 +68,7 @@ class _FacadeCompileMixin(_FacadeModel):
             target=target,
             hoist_reciprocals=hoist_reciprocals,
             model_identity=self._model_hash(),
+            consumer_owner_qid=consumer_owner_qid,
         )
 
     def _model_hash(self) -> Any:
@@ -91,6 +93,7 @@ class _FacadeCompileMixin(_FacadeModel):
         require_metadata: bool = False,
         hoist_reciprocals: bool = False,
         _native_field_roles: Any = None,
+        consumer_owner_qid: Any = None,
     ) -> Any:
         """Compiles the model into a CompiledModel (Phase A). Delegates the GENERATION + compilation to
         the native package compiler, then
@@ -211,6 +214,7 @@ class _FacadeCompileMixin(_FacadeModel):
             "roe_provider": riemann_evidence.roe_provider or "none",
             "roe_entropy_policy": riemann_evidence.roe_entropy_policy or "none",
             "roe_entropy_delta": riemann_evidence.roe_entropy_delta or "none",
+            "consumer_owner_qid": str(consumer_owner_qid or ""),
         }
         if target == "amr_system":
             from pops.identity import canonical_bytes
@@ -262,6 +266,7 @@ class _FacadeCompileMixin(_FacadeModel):
                 hoist_reciprocals=hoist_reciprocals,
                 model_identity=model_hash,
                 _native_field_roles=(normalized_field_roles if target == "amr_system" else None),
+                consumer_owner_qid=consumer_owner_qid,
             )
             binary_identity, final_artifact_identity = write_artifact_sidecar(
                 out_path, semantic_identity=semantic_identity, spec_identity=spec_identity

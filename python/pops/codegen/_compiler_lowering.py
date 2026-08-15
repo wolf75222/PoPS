@@ -15,7 +15,7 @@ class _CompilerEmitter(Protocol):
     def __pops_bind_component_provider_packs__(self, packs: Any) -> None: ...
     def __pops_native_loader_source__(
         self, *, name: Any = None, target: str = "system",
-        hoist_reciprocals: bool = False,
+        hoist_reciprocals: bool = False, consumer_owner_qid: Any = None,
     ) -> str: ...
 
 
@@ -37,11 +37,12 @@ class CompilerLowering:
 
     def native_loader_source(
         self, *, name: Any = None, target: str = "system",
-        hoist_reciprocals: bool = False,
+        hoist_reciprocals: bool = False, consumer_owner_qid: Any = None,
     ) -> str:
         """Emit the native package through the emitter's explicit typed protocol."""
         source = self.emit_model.__pops_native_loader_source__(
-            name=name, target=target, hoist_reciprocals=hoist_reciprocals)
+            name=name, target=target, hoist_reciprocals=hoist_reciprocals,
+            consumer_owner_qid=consumer_owner_qid)
         if not isinstance(source, str) or not source:
             raise TypeError("native loader source protocol must return non-empty text")
         return source
