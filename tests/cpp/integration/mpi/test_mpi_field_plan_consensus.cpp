@@ -529,6 +529,10 @@ void install_system_runtime_authority(pops::System<RuntimeDim>& system, std::str
   system.install_prepared_boundary_execution_lane(std::move(lane));
 }
 
+std::string block_consumer_qid(std::string_view name) {
+  return "tests.mpi.multiblock-field/physical-flux/" + std::string(name);
+}
+
 void install_block_boundary(pops::AmrSystem<Dim>& system, const std::string& name) {
   const std::string state_identity = "tests.mpi.multiblock-field/state/" + name;
   std::vector<std::string> face_types(static_cast<std::size_t>(2 * Dim), "foextrap");
@@ -549,7 +553,7 @@ void install_block(pops::AmrSystem<Dim>& system, const std::string& name) {
   Model<Dim> model{pops::nd::ScalarAdvection<Dim>::prepare(velocity)};
   pops::add_compiled_model<Dim>(system, name, model, "none", "rusanov", "conservative", "explicit",
                                 1.4, 1, 1, {}, {}, 0.0, static_cast<double>(pops::kWenoEpsilon),
-                                false, "tests.mpi.multiblock-field/physical-flux/" + name);
+                                false, block_consumer_qid(name));
 }
 
 pops::runtime::system::AuxiliaryComponentKey install_field_output(pops::AmrSystem<Dim>& system) {
@@ -567,9 +571,9 @@ pops::runtime::system::AuxiliaryComponentKey install_field_output(pops::AmrSyste
       {{key, contract, shape}},
       {}});
   system.install_auxiliary_consumer_plan(
-      AuxiliaryConsumerProviderPlan<Dim>{"a", {{{key, contract, shape}, 0}}});
+      AuxiliaryConsumerProviderPlan<Dim>{block_consumer_qid("a"), {{{key, contract, shape}, 0}}});
   system.install_auxiliary_consumer_plan(
-      AuxiliaryConsumerProviderPlan<Dim>{"b", {{{key, contract, shape}, 0}}});
+      AuxiliaryConsumerProviderPlan<Dim>{block_consumer_qid("b"), {{{key, contract, shape}, 0}}});
   system.seal_auxiliary_providers();
   return key;
 }
@@ -612,14 +616,15 @@ void install_rejecting_field_plan(pops::AmrSystem<Dim>& system) {
 void install_consensus_provider_plan(pops::AmrSystem<Dim>& system, const std::string& slot,
                                      AmrProviderFault fault, bool audit_boundary = false) {
   const std::string identity = "tests.mpi.multiblock-field/provider/" + slot;
+  const std::string output_key = "provider-potential/" + slot;
   system.register_field_solver_provider(
       std::make_shared<ConsensusAmrFieldProvider>(identity, fault));
   const pops::AmrFieldHierarchyPolicyAuthority hierarchy{
       "pops.field-hierarchy.level-local", 1, {"pops.field-hierarchy.options.empty@1", {}}};
   system.set_field_solver_plan(
       slot, "tests.mpi.multiblock-field/plan/" + slot + "@1", identity,
-      "tests.mpi.multiblock-field", "a", "provider-potential",
-      {{"tests.mpi.multiblock-field", "field", "provider-potential", slot}}, 1,
+      "tests.mpi.multiblock-field", "a", output_key,
+      {{"tests.mpi.multiblock-field", "field", output_key, "value"}}, 1,
       {"tests.mpi.multiblock-field/a/rhs", "tests.mpi.multiblock-field/b/rhs"}, {"a", "b"},
       {"potential", "potential"}, {2.0, -0.5}, identity, hierarchy,
       pops::geometric_mg_amr_field_solver_options(pops::GeometricMgOptions{},
