@@ -84,7 +84,7 @@ pops::runtime::amr::AmrRuntime<Dim> make_partitioned_runtime(
   pops::Index<Dim> upper{};
   upper[0] = 4 * ranks - 1;
   for (int axis = 1; axis < Dim; ++axis)
-    upper[axis] = 3;
+    upper[axis] = 4;
   const pops::Box<Dim> domain{pops::Index<Dim>{}, upper};
   std::vector<pops::Box<Dim>> patch_values;
   std::vector<pops::Index<Dim>> owners;
@@ -225,7 +225,7 @@ GatheredTagShards<Dim> gather_rank_local_tag_shards(const hierarchy::LevelLayout
   pops::Index<Dim> tagged = level.patches()[static_cast<std::size_t>(author)].lo;
   ++tagged[0];
   for (int axis = 1; axis < Dim; ++axis)
-    ++tagged[axis];
+    tagged[axis] += 2;
   const std::size_t cells = static_cast<std::size_t>(level.patches()[0].numPts());
   const tagging::TagMaskBudget budget{
       static_cast<std::size_t>(ranks), 1, cells, cells, cells, 1U << 22};
