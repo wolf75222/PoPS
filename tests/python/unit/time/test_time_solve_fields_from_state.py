@@ -41,7 +41,7 @@ from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Periodic
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
 from pops.physics import Model as BoardModel
-from pops.solvers.elliptic import GeometricMG
+from pops.solvers.elliptic import CartesianCG
 from pops.solvers.tolerances import Relative
 
 from pops.numerics.terms import Flux as FinalFlux, SourceTerm
@@ -120,8 +120,8 @@ def _public_field_program_artifact(name="sffs_public", *, scheme="heun"):
             method=CellCenteredSecondOrder(),
             boundaries=(BoundaryCondition(AllPhysicalBoundaries(), Periodic()),),
             # A strict solve makes the independently-bound FE stages a stable 1e-12 oracle even
-            # though the Heun stage-2 solve may start from a different native MG iterate.
-            solver=GeometricMG(tolerance=Relative(1e-12), max_cycles=100),
+            # though the Heun stage-2 solve may start from a different native CG iterate.
+            solver=CartesianCG(tolerance=Relative(1e-12), max_iterations=100),
             nullspace=ConstantNullspace(), gauge=MeanValueGauge(0.0),
         ),
     )

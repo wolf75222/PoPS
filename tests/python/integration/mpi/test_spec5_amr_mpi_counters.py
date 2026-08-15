@@ -27,7 +27,7 @@ import sys
 
 import numpy as np
 import pytest
-from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
+from pops.runtime._system import AmrSystem, AmrSystemConfig  # ADC-545 advanced runtime seam
 
 pops = pytest.importorskip("pops")
 import pops.runtime._engine_descriptors as engine  # noqa: E402
@@ -35,6 +35,17 @@ from pops.runtime._engine_descriptors import Periodic  # noqa: E402
 
 from pops.runtime._profile import PerformanceSummary, Profile  # noqa: E402
 from tests.python.support.explicit_program import install_forward_euler_program  # noqa: E402
+
+
+def _amr_config(n: int, *, regrid_every: int) -> AmrSystemConfig:
+    config = AmrSystemConfig()
+    config.shape = (n, n)
+    config.lower = (0.0, 0.0)
+    config.upper = (1.0, 1.0)
+    config.periodicity = (True, True)
+    config.boxes = (((0, 0), (n, n)),)
+    config.regrid_every = regrid_every
+    return config
 
 
 def _comp():
@@ -61,7 +72,7 @@ def _built_multiblock(n=64, regrid_every=1):
     Two Euler blocks on the shared hierarchy; block 0 carries an energy bump in the bottom-left
     corner and the prepared refinement graph tags exact variable ``E``.
     """
-    sim = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=regrid_every)
+    sim = AmrSystem(_amr_config(n, regrid_every=regrid_every))
     sim.set_temporal_relations([2], [1], ["integral_only"])
     sim.add_equation("gas0", _comp(), time=engine.Explicit())
     sim.add_equation("gas1", _comp(), time=engine.Explicit())
@@ -76,7 +87,7 @@ def _built_multiblock(n=64, regrid_every=1):
 
 def _has_amr_profiling():
     """True iff this _pops exposes the AmrSystem profiling bindings (skip-guard, pre-rebuild)."""
-    sim = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=0)
+    sim = AmrSystem(_amr_config(16, regrid_every=0))
     return all(hasattr(sim, m) for m in
                ("enable_profiling", "disable_profiling", "reset_profiling", "profile_report"))
 

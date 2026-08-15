@@ -434,7 +434,7 @@ def _run_one(t, pops, np, program, name):
     or None if the toolchain is unavailable."""
     try:
         import pops.runtime._engine_descriptors as engine
-        from pops.runtime._system import System  # ADC-545 advanced runtime seam
+        from pops.runtime._system import System, SystemConfig  # ADC-545 advanced runtime seam
     except Exception as exc:  # noqa: BLE001 -- pure source tests intentionally lack pops._pops
         require_native_or_skip(
             "-- (B) skipped: native runtime unavailable: %s --" % exc
@@ -442,7 +442,13 @@ def _run_one(t, pops, np, program, name):
         return None
 
     n = 16
-    sim = System(n=n, L=1.0, periodicity=(True, True))
+    config = SystemConfig()
+    config.shape = (n, n)
+    config.lower = (0.0, 0.0)
+    config.upper = (1.0, 1.0)
+    config.periodicity = (True, True)
+    config.boxes = (((0, 0), (n, n)),)
+    sim = System(config)
     if not hasattr(sim, "install_program"):
         require_native_or_skip('-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --')
         return None

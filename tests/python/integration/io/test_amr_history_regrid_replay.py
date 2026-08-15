@@ -56,7 +56,7 @@ try:
     from pops.frames import Cartesian2D
     from pops.math import ddt, div
     from pops.physics import Model
-    from pops.runtime._system import AmrSystem
+    from pops.runtime._system import AmrSystem, AmrSystemConfig
     from pops.time._history.persistence import Interval
     from tests.python.integration._final_field_program import compile_block_model
     from tests.python.support.typed_program import program_states
@@ -67,6 +67,19 @@ except Exception as exc:  # noqa: BLE001
 N = 16
 DT = 2.0e-3
 _C = 0.6  # linear source S(rho) = _C*rho: the ring is load-bearing (R changes every step)
+
+
+def _amr_config(n: int, *, regrid_every: int) -> AmrSystemConfig:
+    config = AmrSystemConfig()
+    config.shape = (n, n)
+    config.lower = (0.0, 0.0)
+    config.upper = (1.0, 1.0)
+    config.periodicity = (True, True)
+    config.boxes = (((0, 0), (n, n)),)
+    config.regrid_every = regrid_every
+    return config
+
+
 def _advance(sim, nsteps):
     return sim.run(
         t_end=float(sim.time()) + nsteps * DT,
@@ -178,7 +191,7 @@ def _complete_native_bind(amr, compiled, initials, *, regrid_every):
 
 
 def _build(program_factory, regrid_every):
-    amr = AmrSystem(n=N, L=1.0, regrid_every=regrid_every)
+    amr = AmrSystem(_amr_config(N, regrid_every=regrid_every))
     amr.set_temporal_relations([2], [1], ["integral_only"])
     if not hasattr(amr, "install_program") or not hasattr(amr, "history_names"):
         require_native_or_skip(

@@ -3,15 +3,40 @@
 import json
 
 import pytest
-from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
+from pops.runtime._system import (  # ADC-545 advanced runtime seam
+    AmrSystem,
+    AmrSystemConfig,
+    System,
+    SystemConfig,
+)
 
 pops = pytest.importorskip("pops")
 from pops.layouts import Uniform  # noqa: E402
 from tests.python.support.layout_plan import cartesian_grid, final_amr_layout  # noqa: E402
 
 
+def _system_config(n: int) -> SystemConfig:
+    config = SystemConfig()
+    config.shape = (n, n)
+    config.lower = (0.0, 0.0)
+    config.upper = (1.0, 1.0)
+    config.periodicity = (True, True)
+    config.boxes = (((0, 0), (n, n)),)
+    return config
+
+
+def _amr_config(n: int) -> AmrSystemConfig:
+    config = AmrSystemConfig()
+    config.shape = (n, n)
+    config.lower = (0.0, 0.0)
+    config.upper = (1.0, 1.0)
+    config.periodicity = (True, True)
+    config.boxes = (((0, 0), (n, n)),)
+    return config
+
+
 def test_system_inspect_is_structured_and_array_free():
-    sim = System(n=8, L=1.0, periodicity=(True, True))
+    sim = System(_system_config(8))
     rep = sim.inspect()
     d = rep.to_dict()
     assert d["schema_version"] == 1
@@ -29,13 +54,13 @@ def test_system_inspect_is_structured_and_array_free():
     assert any(row["key"] == "elliptic.fft.direct_dft"
                for row in d["diagnostics"]["fallbacks"]["entries"])
     assert d["options"]["defaults"]["newton"]["max_iters"] == 25
-    assert d["options"]["poisson"]["solver"] == "geometric_mg"
+    assert d["options"]["poisson"]["solver"] == "cartesian_cg"
     assert "array(" not in str(rep)
     assert json.loads(rep.to_json())["runtime"] == "system"
 
 
 def test_amr_system_inspect_composes_amr_snapshot():
-    sim = AmrSystem(n=8, L=1.0, periodicity=(True, True))
+    sim = AmrSystem(_amr_config(8))
     rep = sim.inspect()
     d = rep.to_dict()
     assert d["runtime"] == "amr_system"

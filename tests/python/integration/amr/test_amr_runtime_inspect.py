@@ -18,7 +18,12 @@ import sys
 
 import numpy as np
 import pytest
-from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
+from pops.runtime._system import (  # ADC-545 advanced runtime seam
+    AmrSystem,
+    AmrSystemConfig,
+    System,
+    SystemConfig,
+)
 from tests.python.support.amr_tagging import install_prepared_threshold_union
 
 pops = pytest.importorskip("pops")
@@ -48,11 +53,36 @@ def _model():
     )
 
 
+def _system_config(n: int) -> SystemConfig:
+    config = SystemConfig()
+    config.shape = (n, n)
+    config.lower = (0.0, 0.0)
+    config.upper = (1.0, 1.0)
+    config.periodicity = (True, True)
+    config.boxes = (((0, 0), (n, n)),)
+    return config
+
+
+def _amr_config(
+    n: int, *, regrid_every: int | None = None, coarse_max_grid: int | None = None,
+) -> AmrSystemConfig:
+    config = AmrSystemConfig()
+    config.shape = (n, n)
+    config.lower = (0.0, 0.0)
+    config.upper = (1.0, 1.0)
+    config.periodicity = (True, True)
+    config.boxes = (((0, 0), (n, n)),)
+    if regrid_every is not None:
+        config.regrid_every = regrid_every
+    if coarse_max_grid is not None:
+        config.coarse_max_grid = (coarse_max_grid, coarse_max_grid)
+    return config
+
+
 def _built_amr(regrid_every=2, n=32):
     """A small shared-hierarchy AmrSystem with one refined patch and live regrid counters."""
-    sim = AmrSystem(
-        n=n, L=1.0, periodicity=(True, True), regrid_every=regrid_every, coarse_max_grid=16
-    )
+    sim = AmrSystem(_amr_config(
+        n, regrid_every=regrid_every, coarse_max_grid=16))
     sim.add_equation(
         "ne", model=_model(), spatial=engine.Spatial(minmod=True), time=engine.Explicit()
     )
@@ -73,7 +103,7 @@ def _built_amr(regrid_every=2, n=32):
 
 # --- the handle ----------------------------------------------------------------
 def test_amr_handle_is_an_inert_runtime_view():
-    sim = AmrSystem(n=16, L=1.0, periodicity=(True, True))
+    sim = AmrSystem(_amr_config(16))
     view = sim.amr
     assert isinstance(view, AmrRuntimeView)
     # A fresh view every access (handle, not cached state); both bound to the same system.
@@ -98,7 +128,7 @@ def test_amr_handle_is_an_inert_runtime_view():
 
 
 def test_system_has_no_amr_handle_with_a_clear_error():
-    sim = System(n=16, L=1.0, periodicity=(True, True))
+    sim = System(_system_config(16))
     assert not hasattr(sim, "amr")
     # The remedy speaks the bind vocabulary (layout=AMR on the Case), not the native engine.
     with pytest.raises(AttributeError, match=r"layout=AMR\(.*inspect\(layout\)"):
@@ -107,7 +137,7 @@ def test_system_has_no_amr_handle_with_a_clear_error():
 
 # --- patch_table ---------------------------------------------------------------
 def test_patch_table_before_build_reports_unbuilt():
-    sim = AmrSystem(n=16, L=1.0, periodicity=(True, True))
+    sim = AmrSystem(_amr_config(16))
     rep = sim.amr.patch_table()
     assert isinstance(rep, PatchReport)
     assert rep.built is False
@@ -177,7 +207,7 @@ def test_hierarchy_snapshot_composes_config_envelope_and_live_patches():
 
 # --- explain_regrid ------------------------------------------------------------
 def test_explain_regrid_dynamic_vs_frozen():
-    dyn = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=4).amr.explain_regrid()
+    dyn = AmrSystem(_amr_config(16, regrid_every=4)).amr.explain_regrid()
     assert isinstance(dyn, RegridReport)
     assert dyn.frozen is False and dyn.regrid_every == 4
     assert dyn.regrid_count == 0 and dyn.topology_epoch == 0
@@ -186,7 +216,7 @@ def test_explain_regrid_dynamic_vs_frozen():
     # The criteria are described by the public AMR tagging authority.
     assert "AMR tagging predicate" in blob and "grad phi" in blob
 
-    frozen = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=0).amr.explain_regrid()
+    frozen = AmrSystem(_amr_config(16, regrid_every=0)).amr.explain_regrid()
     assert frozen.frozen is True and frozen.regrid_every == 0
     assert frozen.regrid_count == 0 and frozen.topology_epoch == 0
     assert any("frozen" in n for n in frozen.notes)
@@ -206,7 +236,7 @@ def test_explain_regrid_reports_completed_native_regrid_and_topology_epoch():
 
 # --- explain_ghosts (honest deferral) -----------------------------------------
 def test_explain_ghosts_defers_per_level_depth_honestly():
-    rep = AmrSystem(n=16, L=1.0, periodicity=(True, True)).amr.explain_ghosts()
+    rep = AmrSystem(_amr_config(16)).amr.explain_ghosts()
     assert isinstance(rep, GhostReport)
     # Per-level ghost depth is NOT fabricated: it is None and rendered as unavailable.
     assert rep.per_level_depth is None
@@ -217,7 +247,7 @@ def test_explain_ghosts_defers_per_level_depth_honestly():
 
 # --- explain_reflux ------------------------------------------------------------
 def test_explain_reflux_reports_route_requirement():
-    rep = AmrSystem(n=16, L=1.0, periodicity=(True, True)).amr.explain_reflux()
+    rep = AmrSystem(_amr_config(16)).amr.explain_reflux()
     assert isinstance(rep, RefluxReport)
     assert rep.enabled is True
     # The per-stage timing is honestly unavailable (route property, not a counter).
@@ -227,7 +257,7 @@ def test_explain_reflux_reports_route_requirement():
 
 # --- explain_checkpoint --------------------------------------------------------
 def test_explain_checkpoint_restartable_for_frozen_single_block():
-    sim = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=0)
+    sim = AmrSystem(_amr_config(16, regrid_every=0))
     sim.add_equation("ne", model=_model())
     rep = sim.amr.explain_checkpoint()
     assert isinstance(rep, CheckpointReport)
@@ -237,7 +267,7 @@ def test_explain_checkpoint_restartable_for_frozen_single_block():
 
 
 def test_explain_checkpoint_supports_dynamic_regrid():
-    sim = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=3)
+    sim = AmrSystem(_amr_config(16, regrid_every=3))
     sim.add_equation("ne", model=_model())
     rep = sim.amr.explain_checkpoint()
     assert rep.restartable is True and rep.violations == []
@@ -285,7 +315,7 @@ def test_inspect_returns_unified_runtime_inspection():
 
 
 def test_inspect_before_build_reports_unbuilt_patches_honestly():
-    sim = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=0)
+    sim = AmrSystem(_amr_config(16, regrid_every=0))
     report = sim.amr.inspect()
     assert report.patches.built is False
     assert report.hierarchy.patch_table.built is False
@@ -293,7 +323,7 @@ def test_inspect_before_build_reports_unbuilt_patches_honestly():
 
 
 def test_inspect_no_longer_lists_the_served_fine_level_field_jacvec_as_a_limitation():
-    report = AmrSystem(n=16, L=1.0, periodicity=(True, True)).amr.inspect()
+    report = AmrSystem(_amr_config(16)).amr.inspect()
     rows = [row for row in report.limitations if row["feature"] == "amr:field_coupled_rhs_jacvec"]
 
     assert rows == []
