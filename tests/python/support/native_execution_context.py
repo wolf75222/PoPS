@@ -100,8 +100,48 @@ def compiled_problem_execution_context(compiled: Any, *, target: str) -> Any:
     return platform_execution_context(platform)
 
 
+def install_compiled_model_amr_test_lane(runtime: Any, model: Any) -> Any:
+    """Install the exact AMR package lane required by a low-level test fixture.
+
+    This is deliberately narrower than ``pops.bind``: the caller retains its
+    low-level ``AmrSystem`` fixture, while this helper derives the same native
+    execution context from its exact detached ``CompiledModel`` and installs
+    the owned RuntimeInstance lane before any package can materialize.
+    """
+    from pops import _pops
+    from pops._platform_contracts import artifact_platform_manifest
+    from pops.codegen.loader import CompiledModel
+    from pops.codegen._native_mpi import native_mpi_communicator
+    from pops.runtime._component_execution_context import component_execution_data
+    from pops.runtime._platform_manifest import native_runtime_backend_for_route
+
+    if type(model) is not CompiledModel:
+        raise TypeError("AMR test lane requires an exact CompiledModel")
+    if model.target != "amr_system" or model.native_dimension != 2:
+        raise ValueError("AMR test lane requires one exact Dim=2 amr_system CompiledModel")
+    native = getattr(runtime, "_s", runtime)
+    prepare_lane = getattr(native, "_prepare_boundary_execution_lane", None)
+    if not callable(prepare_lane):
+        raise TypeError("AMR test lane requires the native lane-preparation seam")
+
+    communicator = native_mpi_communicator(_pops)
+    backend = native_runtime_backend_for_route("production", "amr_system", communicator)
+    platform = artifact_platform_manifest(
+        backend="production",
+        target="amr_system",
+        component=model,
+        communicator=communicator,
+        runtime_backend=backend,
+    )
+    context = platform_execution_context(platform)
+    runtime._execution_context = context
+    prepare_lane(context.communicator.handle, component_execution_data(context))
+    return context
+
+
 __all__ = [
     "artifact_execution_context",
     "compiled_problem_execution_context",
+    "install_compiled_model_amr_test_lane",
     "platform_execution_context",
 ]
