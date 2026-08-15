@@ -50,7 +50,13 @@ def test_projection_dispatch_lives_on_the_ranked_context_not_a_parallel_service(
         "void apply_projection(int program_block, field_type& state_value) const",
         "Real max_wave_speed(",
     )
-    assert "system_->block_project(sys_block(program_block), state_value)" in projection
+    assert "const ExecutionLane& lane = prepared_execution_lane();" in projection
+    assert "const int runtime_block =" in projection
+    assert (
+        'resolve_prepared_program_block_(program_block, lane, "Program projection block")'
+        in projection
+    )
+    assert "system_->block_project(runtime_block, state_value);" in projection
     assert "void note_automatic_balance_capture_due(bool due) const" in uniform
     assert "runtime_state().note_automatic_balance_capture_due" in uniform
     assert "template <int Dim>" in uniform
