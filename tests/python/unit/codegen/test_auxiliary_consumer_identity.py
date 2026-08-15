@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -122,7 +123,7 @@ def test_resolved_plan_requires_and_identifies_instance_owner() -> None:
 
 
 def test_resolved_block_refuses_a_raw_string_owner() -> None:
-    with pytest.raises(TypeError, match="BlockHandle"):
+    with pytest.raises(ValueError, match="canonical OwnerPath string"):
         ResolvedBlock(
             "fluid",
             _Canonical("model"),
@@ -131,6 +132,40 @@ def test_resolved_block_refuses_a_raw_string_owner() -> None:
             ("U",),
             ("test::fluid::state::U",),
             "not-an-authenticated-owner",
+        )
+
+
+def test_resolved_block_round_trips_its_canonical_owner_qid() -> None:
+    owner = make_testing_block_instance_owner("aux-plan", "fluid", "transport")
+    original = _resolved_plan("fluid", owner).blocks[0]
+
+    restored = replace(original, instance_owner_qid=original.instance_owner_qid)
+
+    assert restored.instance_owner_qid == str(owner)
+    assert restored.instance_owner == owner.to_data()
+    assert restored.model_owner == original.model_owner
+
+
+@pytest.mark.parametrize(
+    "qid",
+    (
+        "not-an-authenticated-owner",
+        "case:aux-plan#authoring=7/block:fluid/model_definition:transport@"
+        "pops.model:sha256:" + "0" * 64,
+        "case:%61ux-plan/block:fluid/model_definition:transport@"
+        "pops.model:sha256:" + "0" * 64,
+    ),
+)
+def test_resolved_block_refuses_malformed_authoring_or_noncanonical_owner_qid(qid: str) -> None:
+    with pytest.raises(ValueError, match="canonical OwnerPath string"):
+        ResolvedBlock(
+            "fluid",
+            _Canonical("model"),
+            None,
+            "production",
+            ("U",),
+            ("test::fluid::state::U",),
+            qid,
         )
 
 
@@ -333,7 +368,10 @@ def test_instance_owner_model_must_match_resolved_model() -> None:
 
 def test_public_amr_shared_model_bind_if_native_available() -> None:
     pytest.importorskip("pops._pops")
-    from pops.amr import AMRExecution, AMRHierarchy, AMRRegrid, AMRTagging, AMRTransfer
+    from pops.amr import (
+        AMRExecution, AMRHierarchy, AMRRegrid, AMRTagging, AMRTransfer,
+        Buffer, ConflictPolicy, EqualityPolicy, Hysteresis, Tag,
+    )
     from pops.codegen import Production
     from pops.domain import Rectangle
     from pops.frames import Cartesian2D
@@ -341,10 +379,11 @@ def test_public_amr_shared_model_bind_if_native_available() -> None:
     from pops.layouts import AMR
     from pops.lib.amr import StateTransfer
     from pops.lib.initial import Constant
-    from pops.math import ddt, div
+    from pops.math import ValueExpr, ddt, div
     from pops.mesh import CartesianGrid, PeriodicAxes
     from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
     from pops.numerics.spatial import FiniteVolume
+    from pops.params import RuntimeParam
     from pops.projection import ConservativeCellAverage
     from pops.time import FixedDt, every
     from tests.python.support.requirements import missing_compiler_requirement, repo_include
@@ -402,10 +441,15 @@ def test_public_amr_shared_model_bind_if_native_available() -> None:
     transfer = AMRTransfer()
     transfer.state(ions[state], StateTransfer())
     transfer.state(electrons[state], StateTransfer())
+    refine_threshold = case.param(RuntimeParam("aux_shared_refine_threshold", default=2.0))
     layout = AMR(
         grid=CartesianGrid(frame=frame, cells=(8, 8), periodic=PeriodicAxes(frame.axes)),
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
-        tagging=AMRTagging(),
+        tagging=AMRTagging(
+            rules=(Tag(ValueExpr(ions[state]) > case.value(refine_threshold)), Buffer(cells=1)),
+            hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
+            conflict_policy=ConflictPolicy.REFINE_WINS,
+        ),
         regrid=AMRRegrid(schedule=every(100, clock=program.clock)),
         transfer=transfer,
         execution=AMRExecution.synchronous(),

@@ -15,6 +15,7 @@ from enum import Enum
 from fractions import Fraction
 from types import MappingProxyType
 from typing import Any, cast
+from urllib.parse import unquote
 
 from pops.identity import Identity, canonical_bytes, make_identity
 
@@ -212,6 +213,49 @@ def _model_definition_owner(path: Any) -> Any:
     )
 
 
+def _canonical_owner_path_from_qid(qid: str) -> Any:
+    """Parse and authenticate the sole accepted string owner representation.
+
+    Resolved-plan records persist ``str(OwnerPath)`` rather than a live owner
+    object.  Accepting that representation is safe only when it parses back to
+    the exact canonical ``OwnerPath`` spelling; a display string, an authoring
+    capability, or a merely similar path must not become identity authority.
+    """
+    from pops.model.ownership import OwnerKind, OwnerPath, OwnerSegment
+
+    if not qid or "#authoring=" in qid:
+        raise ValueError("block instance owner qid must be a canonical OwnerPath string")
+    try:
+        nodes = []
+        fingerprint = None
+        for raw_segment in qid.split("/"):
+            kind_text, separator, encoded_name = raw_segment.partition(":")
+            if not separator or not kind_text or not encoded_name:
+                raise ValueError("owner qid segment is malformed")
+            kind = OwnerKind(kind_text)
+            if kind is OwnerKind.MODEL_DEFINITION:
+                encoded_name, marker, encoded_fingerprint = encoded_name.partition("@")
+                if not marker or not encoded_name or not encoded_fingerprint:
+                    raise ValueError("model-definition qid segment is malformed")
+                if fingerprint is not None:
+                    raise ValueError("owner qid contains multiple definition fingerprints")
+                fingerprint = unquote(encoded_fingerprint)
+            elif "@" in encoded_name:
+                raise ValueError("owner qid contains an unexpected fingerprint marker")
+            nodes.append((kind, unquote(encoded_name)))
+        path = OwnerPath(
+            tuple(OwnerSegment(kind, name) for kind, name in nodes),
+            _definition_fingerprint=fingerprint,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "block instance owner qid must be a canonical OwnerPath string"
+        ) from exc
+    if str(path) != qid:
+        raise ValueError("block instance owner qid must be a canonical OwnerPath string")
+    return path
+
+
 def authenticate_block_instance_owner(
     value: Any,
     *,
@@ -233,6 +277,8 @@ def authenticate_block_instance_owner(
         path = value.instance_owner_path.canonical()
     elif isinstance(value, OwnerPath):
         path = value.canonical()
+    elif isinstance(value, str):
+        path = _canonical_owner_path_from_qid(value)
     elif isinstance(value, Mapping):
         path = OwnerPath.from_data(value)
         if path.is_authoring:
