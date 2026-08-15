@@ -336,7 +336,8 @@ static void add_draining_gas(System<kNativeDimension>& system, const std::string
   add_compiled_model(system, name, model, "none", "rusanov", "conservative", "explicit", gamma);
 }
 
-static void add_projecting_gas(System<kNativeDimension>& system, double gamma) {
+static void add_projecting_gas(System<kNativeDimension>& system, double gamma,
+                               int* projection_calls = nullptr) {
   system.install_block_state_route("gas", "test.program-runtime.projecting-gas.state@1");
   system.seal_auxiliary_providers();
   ProjectingEuler transport;
@@ -347,7 +348,10 @@ static void add_projecting_gas(System<kNativeDimension>& system, double gamma) {
       system, "gas", model, "none", "rusanov", "conservative", "explicit", gamma,
       /*substeps=*/1, /*evolve=*/true, /*stride=*/1);
   prepared.provider_identity += "/test-projection@1";
-  prepared.closures.project = [](MultiFab<kNativeDimension>& state, const ExecutionLane&) {
+  prepared.closures.project = [projection_calls](MultiFab<kNativeDimension>& state,
+                                                 const ExecutionLane&) {
+    if (projection_calls != nullptr)
+      ++*projection_calls;
     project_density_exact(state);
   };
   prepared.closures.project_masked = prepared.closures.project;
@@ -2138,6 +2142,36 @@ TEST(ProgramRuntime, GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTr
   context.begin_step(1.0e-3);
   MultiFab<kNativeDimension>& candidate = context.state(0);
   EXPECT_THROW(context.apply_projection(0, candidate), std::runtime_error);
+  EXPECT_EQ(system.get_state("gas"), initial);
+}
+
+TEST(ProgramRuntime, SystemProjectionRefusesForeignFieldContractsBeforeProviderInvocation) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  constexpr int n = 4;
+  constexpr double gamma = 1.4;
+  int projection_calls = 0;
+  System<kNativeDimension> system(unit_domain_config<kNativeDimension>(n));
+  install_execution_lane(system, "pops.test.program-runtime.projection-field-preflight");
+  add_projecting_gas(system, gamma, &projection_calls);
+  std::vector<double> initial;
+  fill_ic(initial, n, gamma);
+  system.set_state("gas", initial);
+
+  MultiFab<kNativeDimension>& accepted = system.block_state(0);
+  MultiFab<kNativeDimension> wrong_ncomp(accepted.layout(), accepted.distribution(),
+                                         accepted.local_rank(), accepted.ncomp() - 1,
+                                         accepted.ghosts());
+  EXPECT_THROW(system.block_project(0, wrong_ncomp), std::invalid_argument);
+  EXPECT_EQ(projection_calls, 0);
+
+  System<kNativeDimension> foreign_system(unit_domain_config<kNativeDimension>(n + 1));
+  install_execution_lane(foreign_system,
+                         "pops.test.program-runtime.projection-field-preflight.foreign");
+  add_projecting_gas(foreign_system, gamma);
+  EXPECT_THROW(system.block_project(0, foreign_system.block_state(0)), std::invalid_argument);
+  EXPECT_EQ(projection_calls, 0);
   EXPECT_EQ(system.get_state("gas"), initial);
 }
 

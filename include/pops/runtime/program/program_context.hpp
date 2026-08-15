@@ -458,8 +458,11 @@ class ProgramContext {
   }
 
   void apply_projection(int program_block, field_type& state_value) const {
+    const ExecutionLane& lane = prepared_execution_lane();
+    const int runtime_block =
+        resolve_prepared_program_block_(program_block, lane, "Program projection block");
     count_kernel_();
-    system_->block_project(sys_block(program_block), state_value);
+    system_->block_project(runtime_block, state_value);
   }
 
   Real max_wave_speed(int program_block, const field_type& state_value) const {
