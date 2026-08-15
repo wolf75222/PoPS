@@ -19,7 +19,7 @@ _SCALAR_FIELDS = (
     "so_path", "backend", "target",
     "n_vars", "gamma", "n_aux", "native_dimension", "abi_key", "model_hash", "cxx", "std",
     "wave_speed_provider", "hllc_provider", "roe_provider", "roe_entropy_policy",
-    "roe_entropy_delta", "consumer_owner_qid",
+    "roe_entropy_delta", "consumer_owner_qid", "declares_auxiliary_providers",
 )
 _CORE_FIELDS = set(_SEQUENCE_FIELDS) | set(_SCALAR_FIELDS) | {
     "params", "caps", "bind_schema", "install_plan", "definition_identity",

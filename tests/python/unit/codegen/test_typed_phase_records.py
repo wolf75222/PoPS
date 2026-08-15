@@ -101,6 +101,8 @@ def _artifact(tmp_path):
         raise RuntimeError("loaded native runtime exposes no authenticated ABI key")
     program.abi_key = native_abi
     block.abi_key = native_abi
+    block.consumer_owner_qid = plan.blocks[0].instance_owner_qid
+    block.declares_auxiliary_providers = plan.blocks[0].declares_auxiliary_providers
     artifact = CompiledSimulationArtifact(
         plan,
         program,

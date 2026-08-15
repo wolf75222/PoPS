@@ -188,16 +188,21 @@ def test_precompiled_consumer_owner_match_and_mismatch() -> None:
     electrons = case.block("electrons", model)
     ion_owner = authenticate_block_instance_owner_qid(ions)
     electron_owner = authenticate_block_instance_owner_qid(electrons)
-    baked = SimpleNamespace(consumer_owner_qid=ion_owner)
+    baked = SimpleNamespace(consumer_owner_qid=ion_owner, declares_auxiliary_providers=True)
     attest_precompiled_consumer_owner(baked, ion_owner)
+    attest_precompiled_consumer_owner(
+        baked, ion_owner, declare_auxiliary_providers=True)
     with pytest.raises(ValueError, match="recompile"):
         attest_precompiled_consumer_owner(baked, electron_owner)
+    with pytest.raises(ValueError, match="provider-declaration role"):
+        attest_precompiled_consumer_owner(
+            baked, ion_owner, declare_auxiliary_providers=False)
     with pytest.raises(ValueError, match="canonical Case-block instance owner"):
         attest_precompiled_consumer_owner(baked, "")
 
 
-def test_shared_model_blocks_keep_identical_provider_identities() -> None:
-    model = Model("shared_aux_providers")
+def _aux_model(name: str) -> Model:
+    model = Model(name)
     (density,) = model.conservative_vars("density")
     rate = model.aux("collision_rate")
     model.flux(x=[rate * density])
@@ -205,24 +210,125 @@ def test_shared_model_blocks_keep_identical_provider_identities() -> None:
     model.primitive_vars(density=density)
     model.conservative_from([density])
     model.source([-(rate * density)])
-    case = Case("aux-provider-collision")
+    return model
+
+
+def test_shared_model_sibling_emits_consumers_only() -> None:
+    model = _aux_model("shared_aux_providers")
+    case = Case("aux-provider-single-declaration")
     ions = case.block("ions", model)
     electrons = case.block("electrons", model)
     ion_owner = authenticate_block_instance_owner_qid(ions)
     electron_owner = authenticate_block_instance_owner_qid(electrons)
+    declared = model.__pops_native_loader_source__(
+        name="ions", target="system", consumer_owner_qid=ion_owner,
+        declare_auxiliary_providers=True)
+    sibling = model.__pops_native_loader_source__(
+        name="electrons", target="system", consumer_owner_qid=electron_owner,
+        declare_auxiliary_providers=False)
+    provider = "install_prepared_auxiliary_provider(Provider{"
+    assert declared.count(provider) == 1
+    assert provider not in sibling
+    assert 'ConsumerPlan{"%s/physical_flux"' % ion_owner in declared
+    assert 'ConsumerPlan{"%s/physical_flux"' % electron_owner in sibling
+    assert str(model.owner_path.canonical()) in declared
+
+
+def test_duplicate_provider_emission_is_identical_and_must_not_both_register() -> None:
+    model = _aux_model("shared_aux_duplicate")
+    case = Case("aux-provider-duplicate")
+    ions = case.block("ions", model)
+    electrons = case.block("electrons", model)
     ion_src = model.__pops_native_loader_source__(
-        name="ions", target="system", consumer_owner_qid=ion_owner)
+        name="ions", target="system",
+        consumer_owner_qid=authenticate_block_instance_owner_qid(ions),
+        declare_auxiliary_providers=True)
     electron_src = model.__pops_native_loader_source__(
-        name="electrons", target="system", consumer_owner_qid=electron_owner)
-    model_owner = str(model.owner_path.canonical())
-    provider = 'install_prepared_auxiliary_provider(Provider{'
-    assert ion_src.count(provider) == electron_src.count(provider) == 1
-    assert model_owner in ion_src
-    assert model_owner in electron_src
-    assert ion_owner + "/physical_flux" in ion_src
-    assert electron_owner + "/physical_flux" in electron_src
-    assert ion_src.count('ConsumerPlan{"%s/physical_flux"' % ion_owner) == 1
-    assert electron_src.count('ConsumerPlan{"%s/physical_flux"' % electron_owner) == 1
+        name="electrons", target="system",
+        consumer_owner_qid=authenticate_block_instance_owner_qid(electrons),
+        declare_auxiliary_providers=True)
+    marker = "install_prepared_auxiliary_provider(Provider{"
+    ion_decl = ion_src[ion_src.index(marker):ion_src.index("install_auxiliary_consumer_plan")]
+    electron_decl = electron_src[
+        electron_src.index(marker):electron_src.index("install_auxiliary_consumer_plan")]
+    assert ion_decl == electron_decl
+    assert ion_decl.count(marker) == 1
+
+
+def test_plan_selects_one_declaration_owner_and_reorder_changes_identity() -> None:
+    model = _Canonical("shared")
+    first = _two_block_plan(("ions", "electrons"), model)
+    second = _two_block_plan(("electrons", "ions"), model)
+    assert first.blocks[0].declares_auxiliary_providers is True
+    assert first.blocks[1].declares_auxiliary_providers is False
+    assert second.blocks[0].name == "electrons"
+    assert second.blocks[0].declares_auxiliary_providers is True
+    assert second.blocks[1].declares_auxiliary_providers is False
+    assert first.plan_identity != second.plan_identity
+    first_record = CompiledPlanRecord.from_resolved(first)
+    second_record = CompiledPlanRecord.from_resolved(second)
+    assert first_record.contract_identity != second_record.contract_identity
+    assert first_record.blocks[0].declares_auxiliary_providers is True
+    assert first_record.blocks[1].declares_auxiliary_providers is False
+
+
+def test_declaration_role_separates_cache_identity() -> None:
+    semantic = make_identity("semantic", {"kind": "model", "name": "shared"})
+
+    def spec(*, declare: bool) -> object:
+        return artifact_spec_identity(
+            semantic,
+            target="system",
+            backend="production",
+            precision="binary64",
+            abi="test-abi",
+            toolchain="c++|c++23",
+            routes={"registry": "test", "features": "test"},
+            components={
+                "model_hash": "x",
+                "emitted_name": "ions",
+                "consumer_owner_qid": "owner",
+                "declares_auxiliary_providers": declare,
+            },
+            flags=[],
+            libraries=(),
+        )
+
+    assert spec(declare=True) != spec(declare=False)
+
+
+def test_instance_owner_block_name_must_match() -> None:
+    owner = make_testing_block_instance_owner("aux-plan", "ions", "transport")
+    with pytest.raises(ValueError, match="does not match resolved block name"):
+        ResolvedBlock(
+            "electrons",
+            _Canonical("model"),
+            None,
+            "production",
+            ("U",),
+            ("test::electrons::state::U",),
+            owner,
+        )
+
+
+def test_instance_owner_model_must_match_resolved_model() -> None:
+    from pops.codegen._plans import canonical_block_instance_owner
+    from tests.python.support.block_instance_owner import testing_model_owner
+
+    model = _transport()
+    _ = model.module
+    wrong = canonical_block_instance_owner(
+        case="aux-model-mismatch", block="ions", model_owner=testing_model_owner("other"))
+    with pytest.raises(ValueError, match="does not match resolved model owner"):
+        ResolvedBlock(
+            "ions",
+            model,
+            None,
+            "production",
+            ("U",),
+            ("test::ions::state::U",),
+            wrong,
+        )
 
 
 def test_public_amr_shared_model_bind_if_native_available() -> None:
@@ -324,6 +430,45 @@ class _Canonical:
 
     def to_data(self) -> dict[str, str]:
         return {"name": self.name}
+
+
+def _two_block_plan(order: tuple[str, str], model: object) -> ResolvedSimulationPlan:
+    case_owner = OwnerPath.case("aux-decl")
+    layout_plan = normalize_layout_plan(
+        Uniform(cartesian_grid(n=8)),
+        owner=case_owner,
+        blocks=tuple(Handle(name, kind="block", owner=case_owner) for name in order),
+    )
+    return ResolvedSimulationPlan(
+        snapshot=AuthoringSnapshot({"case": "aux-decl", "order": list(order)}),
+        target="system",
+        backend="production",
+        layout={"mesh": {"shape": [8, 8]}},
+        layout_plan=layout_plan,
+        layout_targets={
+            row.handle.qualified_id: "system" for row in layout_plan.layouts
+        },
+        time=Program("rk2"),
+        blocks=tuple(
+            ResolvedBlock(
+                name,
+                model,
+                {"flux": ["hll"]},
+                "production",
+                ("U",),
+                ("test::%s::state::U" % name,),
+                make_testing_block_instance_owner("aux-decl", name, "shared"),
+            )
+            for name in order
+        ),
+        bind_schema=BindSchema(),
+        compile_values={},
+        field_plans={},
+        libraries=(),
+        requirements={},
+        capabilities={"cpu": True},
+        lowering_coverage=layout_lowering_coverage(layout_plan),
+    )
 
 
 def _resolved_plan(block_name: str, instance_owner: object) -> ResolvedSimulationPlan:

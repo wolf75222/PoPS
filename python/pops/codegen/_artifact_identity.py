@@ -8,6 +8,7 @@ from typing import Any
 def model_artifact_spec(
     model: Any, *, backend: str, target: str, name: Any, compiler: str, standard: str,
     abi_key: str, hoist_reciprocals: bool, consumer_owner_qid: Any = None,
+    declare_auxiliary_providers: bool = True,
 ) -> tuple[Any, Any]:
     """Return semantic and artifact-spec identities for one formula model."""
     from pops.codegen.cache import (
@@ -35,6 +36,7 @@ def model_artifact_spec(
             "model_hash": digest,
             "emitted_name": str(name or ""),
             "consumer_owner_qid": str(consumer_owner_qid or ""),
+            "declares_auxiliary_providers": bool(declare_auxiliary_providers),
         },
         flags=[_platform_cache_key(), *_dsl_optflags(),
                "hoist_reciprocals=%d" % bool(hoist_reciprocals)],
