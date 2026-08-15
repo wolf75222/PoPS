@@ -405,6 +405,109 @@ def _prepare_layout_transfer_route(prepared: Any, execution: Any) -> tuple[Any, 
         raise
 
 
+def _transfer_publication_containers() -> tuple[list[Any], list[Any]]:
+    return [], []
+
+
+def _publish_layout_transfer_route(
+    routes: list[Any],
+    natives: list[Any],
+    plan: Any,
+    transfer: Any,
+    engines: dict[str, Any],
+    execution: Any,
+) -> None:
+    """Prepare one route and publish it; the caller never owns last-route locals."""
+    prepared = None
+    route = None
+    handles = None
+    native_start = None
+    try:
+        prepared = _validated_layout_transfer(plan, transfer, engines)
+        route, handles = _prepare_layout_transfer_route(prepared, execution)
+        prepared = None
+        routes.append(route)
+        native_start = len(natives)
+        natives.extend(handles)
+        route = None
+        handles = None
+    except BaseException as error:
+        if native_start is not None:
+            del natives[native_start:]
+        if route is not None and routes and routes[-1] is route:
+            routes.pop()
+        session = getattr(route, "session", None)
+        source = handles[0] if handles else None
+        target = handles[1] if handles and len(handles) > 1 else None
+        message = _abandon_unpublished_transfer(session, source, target)
+        prepared = None
+        route = None
+        handles = None
+        session = None
+        source = None
+        target = None
+        native_start = None
+        if message is not None:
+            add_note = getattr(error, "add_note", None)
+            if callable(add_note):
+                add_note("multi-layout unpublished transfer release failed: %s" % message)
+        raise
+
+
+def _rollback_child_bound_snapshots(engines: Any, previous: dict[int, Any]) -> None:
+    if not isinstance(engines, dict):
+        return
+    for engine in engines.values():
+        current = getattr(engine, "_bound_snapshot", None)
+        expected = previous.get(id(engine))
+        if current is not expected:
+            engine._bound_snapshot = expected
+
+
+def _scrub_failed_multi_layout_executor(executor: Any) -> None:
+    if executor is None:
+        return
+    executor._transfer_routes = ()
+    executor._engines = {}
+    executor._block_layouts = {}
+    executor._plan = None
+    executor._runtime_plan = None
+    executor._bound_snapshot = None
+    executor._temporal_restart_state = None
+    executor._checkpoint_resource_budget = None
+    executor._step_strategy = None
+    executor._step_transaction_plan = None
+    executor._execution_context = None
+
+
+def _build_multi_layout_executor(
+    plan: Any,
+    runtime_plan: Any,
+    engines: dict[str, Any],
+    blocks: dict[str, str],
+    transfer_routes: tuple[Any, ...] | list[Any],
+) -> Any:
+    """Construct the coordinator; a failed self is scrubbed before the traceback escapes."""
+    previous_snapshots = {
+        id(engine): getattr(engine, "_bound_snapshot", None) for engine in engines.values()
+    }
+    executor = _MultiLayoutUniformExecutor.__new__(_MultiLayoutUniformExecutor)
+    try:
+        executor.__init__(plan, runtime_plan, engines, blocks, transfer_routes)
+        return executor
+    except BaseException:
+        _rollback_child_bound_snapshots(engines, previous_snapshots)
+        _scrub_failed_multi_layout_executor(executor)
+        plan = None
+        runtime_plan = None
+        engines = None
+        blocks = None
+        transfer_routes = None
+        previous_snapshots = None
+        executor = None
+        raise
+
+
 def _require_runtime_plan_bundle(plan: Any, runtime_plan: Any) -> None:
     """Authenticate the exact bundle and its Transfer projection against one InstallPlan."""
     from pops.runtime._runtime_plan_contracts import LayoutTransfer
@@ -543,73 +646,87 @@ class _MultiLayoutUniformExecutor:
         blocks: dict[str, str],
         transfer_routes: tuple[_NativeTransferRoute, ...],
     ) -> None:
-        self._plan = plan
-        self._execution_context = plan.execution_context
-        self._runtime_plan = runtime_plan
-        self._engines = dict(engines)
-        self._block_layouts = dict(blocks)
-        self._transfer_routes = tuple(transfer_routes)
-        self._mapping_evaluations = {
-            row.mapping_id: 0 for row in runtime_plan.communication.transfers
-        }
-        self._mapping_snapshot = None
-        self._transfer_generation = 0
-        self._active_transfer_generation = None
-        self._transfer_attempt = 0
-        self._last_mapping_receipts = ()
-        self._last_run_manifest = None
-        self._last_run_identity = None
-        self._restart_lineage_identity = None
-        self._last_restart_identity = None
-        self._step_strategy = _common_exact(
-            (engine._step_strategy for engine in self._engines.values()),
-            where="multi-layout step strategy",
-        )
-        self._step_transaction_plan = _common_exact(
-            (engine._step_transaction_plan for engine in self._engines.values()),
-            where="multi-layout transaction plan",
-        )
-        self._temporal_restart_state = _CompositeTemporalRestartState(
-            engine._temporal_restart_state for engine in self._engines.values()
-        )
-        self._step_controller = None
-        self._last_step_transaction_report = None
-        from pops.runtime._bound_snapshot import MultiLayoutBoundSnapshot
+        snapshot = None
+        child_budgets = None
+        budget_authority = None
+        try:
+            self._plan = plan
+            self._execution_context = plan.execution_context
+            self._runtime_plan = runtime_plan
+            self._engines = dict(engines)
+            self._block_layouts = dict(blocks)
+            self._transfer_routes = tuple(transfer_routes)
+            self._mapping_evaluations = {
+                row.mapping_id: 0 for row in runtime_plan.communication.transfers
+            }
+            self._mapping_snapshot = None
+            self._transfer_generation = 0
+            self._active_transfer_generation = None
+            self._transfer_attempt = 0
+            self._last_mapping_receipts = ()
+            self._last_run_manifest = None
+            self._last_run_identity = None
+            self._restart_lineage_identity = None
+            self._last_restart_identity = None
+            self._step_strategy = _common_exact(
+                (engine._step_strategy for engine in self._engines.values()),
+                where="multi-layout step strategy",
+            )
+            self._step_transaction_plan = _common_exact(
+                (engine._step_transaction_plan for engine in self._engines.values()),
+                where="multi-layout transaction plan",
+            )
+            self._temporal_restart_state = _CompositeTemporalRestartState(
+                engine._temporal_restart_state for engine in self._engines.values()
+            )
+            self._step_controller = None
+            self._last_step_transaction_report = None
+            from pops.runtime._bound_snapshot import MultiLayoutBoundSnapshot
 
-        snapshot = MultiLayoutBoundSnapshot(
-            plan, tuple(engine.bound_snapshot for engine in self._engines.values())
-        )
-        self._bound_snapshot = snapshot
-        from pops.identity import make_identity
-        from pops.runtime._checkpoint_resource_budget import (
-            aggregate_checkpoint_resource_budgets,
-            require_checkpoint_resource_budget,
-        )
+            snapshot = MultiLayoutBoundSnapshot(
+                plan, tuple(engine.bound_snapshot for engine in self._engines.values())
+            )
+            self._bound_snapshot = snapshot
+            for engine in self._engines.values():
+                engine._bound_snapshot = snapshot
+            from pops.identity import make_identity
+            from pops.runtime._checkpoint_resource_budget import (
+                aggregate_checkpoint_resource_budgets,
+                require_checkpoint_resource_budget,
+            )
 
-        child_budgets = tuple(
-            require_checkpoint_resource_budget(engine) for engine in self._engines.values()
-        )
-        budget_authority = make_identity(
-            "multi-layout-checkpoint-resource-budget",
-            {
-                "artifact": plan.artifact.artifact_identity.token,
-                "bind": plan.bind_identity.token,
-                "layouts": [
-                    {"layout": layout_id, "budget": budget.authority}
-                    for layout_id, budget in zip(self._engines, child_budgets, strict=True)
-                ],
-                "mappings": tuple(self._mapping_evaluations),
-            },
-        ).token
-        self._checkpoint_resource_budget = aggregate_checkpoint_resource_budgets(
-            child_budgets,
-            authority=budget_authority,
-            install_plan=plan,
-            layout_ids=tuple(self._engines),
-            mapping_ids=tuple(self._mapping_evaluations),
-        )
-        for engine in self._engines.values():
-            engine._bound_snapshot = snapshot
+            child_budgets = tuple(
+                require_checkpoint_resource_budget(engine) for engine in self._engines.values()
+            )
+            budget_authority = make_identity(
+                "multi-layout-checkpoint-resource-budget",
+                {
+                    "artifact": plan.artifact.artifact_identity.token,
+                    "bind": plan.bind_identity.token,
+                    "layouts": [
+                        {"layout": layout_id, "budget": budget.authority}
+                        for layout_id, budget in zip(self._engines, child_budgets, strict=True)
+                    ],
+                    "mappings": tuple(self._mapping_evaluations),
+                },
+            ).token
+            self._checkpoint_resource_budget = aggregate_checkpoint_resource_budgets(
+                child_budgets,
+                authority=budget_authority,
+                install_plan=plan,
+                layout_ids=tuple(self._engines),
+                mapping_ids=tuple(self._mapping_evaluations),
+            )
+        except BaseException:
+            plan = None
+            runtime_plan = None
+            engines = None
+            blocks = None
+            transfer_routes = None
+            snapshot = None
+            child_budgets = None
+            budget_authority = None
+            raise
 
     @property
     def bound_snapshot(self) -> Any:
@@ -1529,8 +1646,7 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
     initial_sources = _uniform_initial_sources(plan)
     engines = {}
     materialized: list[Any] = []
-    transfer_routes: list[Any] = []
-    native_handles: list[Any] = []
+    transfer_routes, native_handles = _transfer_publication_containers()
     try:
         for row in layouts.rows:
             layout_id = row.handle.qualified_id
@@ -1575,12 +1691,12 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
 
         execution = component_execution_data(plan.execution_context)
         for transfer in runtime_plan.communication.transfers:
-            prepared = _validated_layout_transfer(plan, transfer, engines)
-            route, handles = _prepare_layout_transfer_route(prepared, execution)
-            transfer_routes.append(route)
-            native_handles.extend(handles)
-        return _MultiLayoutUniformExecutor(
-            plan, runtime_plan, engines, blocks, tuple(transfer_routes)
+            _publish_layout_transfer_route(
+                transfer_routes, native_handles, plan, transfer, engines, execution
+            )
+        execution = None
+        return _build_multi_layout_executor(
+            plan, runtime_plan, engines, blocks, transfer_routes
         )
     except BaseException as error:
         transfer_note = None

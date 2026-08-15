@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
 import sys
 from types import ModuleType, SimpleNamespace
@@ -620,16 +621,70 @@ def _exception_chain(error):
 
 
 def _exception_holds_keep_alive(error, *, type_name="RetainingSession"):
+    return _traceback_graph_holds(
+        error, lambda value: type(value).__name__ == type_name and getattr(value, "source", value)
+    )
+
+
+def _object_graph_holds(root, predicate, *, seen=None, depth=0):
+    if root is None or isinstance(root, (str, bytes, int, float, bool, type)):
+        return False
+    if seen is None:
+        seen = set()
+    ident = id(root)
+    if ident in seen or depth > 24:
+        return False
+    seen.add(ident)
+    try:
+        if predicate(root):
+            return True
+    except Exception:
+        return False
+    values = []
+    if isinstance(root, Mapping):
+        values.extend(root.keys())
+        values.extend(root.values())
+    elif isinstance(root, (list, tuple, set, frozenset)):
+        values.extend(root)
+    else:
+        namespace = getattr(root, "__dict__", None)
+        if isinstance(namespace, dict):
+            values.extend(namespace.values())
+        slots = getattr(root, "__slots__", ())
+        if isinstance(slots, str):
+            slots = (slots,)
+        for name in slots or ():
+            if name != "__dict__" and hasattr(root, name):
+                values.append(getattr(root, name))
+    return any(
+        _object_graph_holds(value, predicate, seen=seen, depth=depth + 1) for value in values
+    )
+
+
+def _traceback_graph_holds(error, predicate):
+    seen = set()
     for item in _exception_chain(error):
-        if type(item).__name__ == type_name:
+        if _object_graph_holds(item, predicate, seen=seen):
             return True
         traceback = item.__traceback__
         while traceback is not None:
-            for value in traceback.tb_frame.f_locals.values():
-                if type(value).__name__ == type_name:
+            for value in tuple(traceback.tb_frame.f_locals.values()):
+                if _object_graph_holds(value, predicate, seen=seen):
                     return True
             traceback = traceback.tb_next
     return False
+
+
+def _is_live_session(value):
+    return type(value).__name__ == "RetainingSession" and getattr(value, "source", None) is not None
+
+
+def _executor_holds_captured_children(value):
+    if type(value).__name__ != "_MultiLayoutUniformExecutor":
+        return False
+    routes = getattr(value, "_transfer_routes", ()) or ()
+    engines = getattr(value, "_engines", {}) or {}
+    return bool(routes) or bool(engines)
 
 
 def _two_layout_transfer_plan():
@@ -730,9 +785,17 @@ def _retaining_transfer_system(events, *, fail_prepare=None, fail_close=False):
         def __init__(self, config):
             self.config = config
             self._s = Native(config.name)
+            self._bound_snapshot = "child-%s" % config.name
+            self._step_strategy = "shared"
+            self._step_transaction_plan = "shared"
+            self._temporal_restart_state = SimpleNamespace()
+
+        @property
+        def bound_snapshot(self):
+            return self._bound_snapshot
 
         def destroy(self):
-            events.append(("destroy", self.config.name))
+            events.append(("destroy", self.config.name, self._bound_snapshot))
             assert self._s.retained_by == [], (
                 "transfer session still retained native handle %s" % self.config.name
             )
@@ -740,6 +803,7 @@ def _retaining_transfer_system(events, *, fail_prepare=None, fail_close=False):
 
         def _install_compiled(self, *args, **kwargs):
             self.authority_plan = kwargs.get("authority_plan")
+            self._bound_snapshot = "child-%s" % self.config.name
 
         def _native_step_target(self):
             return self._s
@@ -804,8 +868,8 @@ def test_failed_transfer_prepare_releases_retained_handles_before_children(monke
     assert events == [
         ("retain", "fine", "coarse"),
         ("release", "fine", "coarse"),
-        ("destroy", "coarse"),
-        ("destroy", "fine"),
+        ("destroy", "coarse", "child-coarse"),
+        ("destroy", "fine", "child-fine"),
     ]
 
 
@@ -840,8 +904,8 @@ def test_successful_session_prepublication_failure_abandons_unpublished_session(
         ("retain", "fine", "coarse"),
         ("release", "fine", "coarse"),
         ("release", "fine", "coarse"),
-        ("destroy", "coarse"),
-        ("destroy", "fine"),
+        ("destroy", "coarse", "child-coarse"),
+        ("destroy", "fine", "child-fine"),
     ]
 
 
@@ -867,12 +931,46 @@ def test_session_close_failure_keeps_only_inert_cleanup_text(monkeypatch):
     assert events == [
         ("retain", "fine", "coarse"),
         ("release", "fine", "coarse"),
-        ("destroy", "coarse"),
-        ("destroy", "fine"),
+        ("destroy", "coarse", "child-coarse"),
+        ("destroy", "fine", "child-fine"),
     ]
 
 
-def test_executor_constructor_failure_releases_published_routes_before_children(monkeypatch):
+class _FailOn:
+    def __init__(self, action):
+        self.action = action
+
+    def append(self, item):
+        if self.action == "append" and list.__len__(self) >= 1:
+            raise RuntimeError("injected append failure")
+        return list.append(self, item)
+
+    def extend(self, items):
+        if self.action == "extend" and list.__len__(self) >= 2:
+            raise RuntimeError("injected extend failure")
+        return list.extend(self, items)
+
+
+class _FailingPublishList(_FailOn, list):
+    pass
+
+
+def _assert_closed_before_destroy(events):
+    release_at = [index for index, event in enumerate(events) if event[0] == "release"]
+    destroy_at = [index for index, event in enumerate(events) if event[0] == "destroy"]
+    assert release_at
+    assert destroy_at
+    assert max(release_at) < min(destroy_at)
+
+
+def _assert_traceback_scrubbed(error):
+    assert not _traceback_graph_holds(error, _is_live_session)
+    assert not _traceback_graph_holds(error, _executor_holds_captured_children)
+
+
+def test_append_failure_scrubs_unpublished_route_before_child_teardown(monkeypatch):
+    from pops.runtime import _multi_layout_executor as multi_executor
+
     plan, runtime_plan, fake_layouts = _two_layout_transfer_plan()
     events = []
     _patch_two_layout_transfer_install(
@@ -883,21 +981,100 @@ def test_executor_constructor_failure_releases_published_routes_before_children(
         fake_layouts,
     )
     monkeypatch.setattr(
-        "pops.runtime._multi_layout_executor._MultiLayoutUniformExecutor",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            RuntimeError("injected executor constructor failure")
-        ),
+        multi_executor,
+        "_transfer_publication_containers",
+        lambda: (_FailingPublishList("append"), []),
     )
 
-    with pytest.raises(RuntimeError, match="injected executor constructor failure"):
+    with pytest.raises(RuntimeError, match="injected append failure") as raised:
         install_multi_layout_uniform(plan, runtime_plan)
 
-    assert events == [
+    _assert_traceback_scrubbed(raised.value)
+    _assert_closed_before_destroy(events)
+    assert events[:4] == [
         ("retain", "fine", "coarse"),
         ("retain", "fine", "coarse"),
         ("release", "fine", "coarse"),
         ("release", "fine", "coarse"),
-        ("destroy", "coarse"),
-        ("destroy", "fine"),
     ]
+    assert events[-2:] == [
+        ("destroy", "coarse", "child-coarse"),
+        ("destroy", "fine", "child-fine"),
+    ]
+
+
+def test_extend_failure_scrubs_unpublished_handles_before_child_teardown(monkeypatch):
+    from pops.runtime import _multi_layout_executor as multi_executor
+
+    plan, runtime_plan, fake_layouts = _two_layout_transfer_plan()
+    events = []
+    _patch_two_layout_transfer_install(
+        monkeypatch,
+        plan,
+        runtime_plan,
+        _retaining_transfer_system(events),
+        fake_layouts,
+    )
+    monkeypatch.setattr(
+        multi_executor,
+        "_transfer_publication_containers",
+        lambda: ([], _FailingPublishList("extend")),
+    )
+
+    with pytest.raises(RuntimeError, match="injected extend failure") as raised:
+        install_multi_layout_uniform(plan, runtime_plan)
+
+    _assert_traceback_scrubbed(raised.value)
+    _assert_closed_before_destroy(events)
+    assert events[:4] == [
+        ("retain", "fine", "coarse"),
+        ("retain", "fine", "coarse"),
+        ("release", "fine", "coarse"),
+        ("release", "fine", "coarse"),
+    ]
+    assert events[-2:] == [
+        ("destroy", "coarse", "child-coarse"),
+        ("destroy", "fine", "child-fine"),
+    ]
+
+
+def test_constructor_failure_after_capture_scrubs_self_and_rolls_back_snapshots(monkeypatch):
+    plan, runtime_plan, fake_layouts = _two_layout_transfer_plan()
+    events = []
+    _patch_two_layout_transfer_install(
+        monkeypatch,
+        plan,
+        runtime_plan,
+        _retaining_transfer_system(events),
+        fake_layouts,
+    )
+
+    class PublishedSnapshot:
+        token = "published-multi"
+
+    monkeypatch.setattr(
+        "pops.runtime._bound_snapshot.MultiLayoutBoundSnapshot",
+        lambda *_args, **_kwargs: PublishedSnapshot(),
+    )
+
+    def fail_after_publish(*_args, **_kwargs):
+        raise RuntimeError("injected constructor failure after capture")
+
+    monkeypatch.setattr(
+        "pops.runtime._checkpoint_resource_budget.require_checkpoint_resource_budget",
+        fail_after_publish,
+    )
+
+    with pytest.raises(RuntimeError, match="injected constructor failure after capture") as raised:
+        install_multi_layout_uniform(plan, runtime_plan)
+
+    _assert_traceback_scrubbed(raised.value)
+    _assert_closed_before_destroy(events)
+    assert ("retain", "fine", "coarse") in events
+    assert events[-2:] == [
+        ("destroy", "coarse", "child-coarse"),
+        ("destroy", "fine", "child-fine"),
+    ]
+    assert all(event[2] != PublishedSnapshot() for event in events if event[0] == "destroy")
+    assert all(event[2].startswith("child-") for event in events if event[0] == "destroy")
 
