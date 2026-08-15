@@ -999,8 +999,8 @@ labels = ["unit", "runtime", "fast"]
 [[cpp.suite]]
 name = "test_prepared_embedded_boundary_nd"
 sources = ["tests/cpp/unit/runtime/test_prepared_embedded_boundary_nd.cpp"]
-labels = ["unit", "runtime", "mesh", "mpi", "fast", "nd"]
-mpi_nproc = [2]
+labels = ["unit", "runtime", "mesh", "fast", "nd"]
+mpi_variants = [2]
 
 [[cpp.suite]]
 name = "test_embedded_boundary_generic"

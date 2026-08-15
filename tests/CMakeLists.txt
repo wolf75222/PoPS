@@ -962,6 +962,7 @@ if(POPS_HAS_MPI)
   # declared authoritatively as `mpi_variants` in tests/test_manifest.toml; the source-only
   # architecture gate compares this projection and these CMake registrations exactly.
   set(POPS_CPP_MPI_VARIANT_TESTS
+    test_prepared_embedded_boundary_nd
     test_amr_program_positivity_floor
     test_amr_multiblock_coupled_source
     test_krylov_workspace_reentrancy
