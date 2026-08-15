@@ -8829,6 +8829,7 @@ struct AmrSystem<Dim>::Impl {
     const std::uint64_t prior_topology_epoch = engine->topology_epoch();
     multiblock_hierarchy->publish_regrid(static_cast<std::size_t>(parent_level),
                                          std::move(*prepared), std::move(child_states));
+    const bool history_remap_swapped = remapped_histories.has_value();
     if (remapped_histories) {
       static_assert(std::is_nothrow_swappable_v<runtime::program::HistoryManager<Dim>>);
       std::swap(program.hist_, *remapped_histories);
@@ -8866,7 +8867,10 @@ struct AmrSystem<Dim>::Impl {
         require_prepared_engine_lane("AMR regrid Program hierarchy-state publication");
     std::exception_ptr program_refresh_error;
     try {
-      program.refresh_hierarchy_state("AmrSystem::regrid_from_prepared_tagging");
+      if (history_remap_swapped)
+        program.accept_history_remap("AmrSystem::regrid_from_prepared_tagging");
+      else
+        program.refresh_hierarchy_state("AmrSystem::regrid_from_prepared_tagging");
     } catch (...) {
       program_refresh_error = std::current_exception();
     }
@@ -15996,6 +16000,12 @@ void AmrSystem<Dim>::install_program_hierarchy_refresh(std::function<void()> ref
 }
 
 template <int Dim>
+void AmrSystem<Dim>::install_program_history_remap_accepted(std::function<void()> refresh) {
+  p_->require_no_native_package_callback("install_program_history_remap_accepted");
+  p_->program.install_history_remap_accepted(std::move(refresh), "AmrSystem");
+}
+
+template <int Dim>
 void AmrSystem<Dim>::install_program_restart_hooks(
     std::function<void()> preflight, std::function<void()> regrid, std::function<void()> resync,
     runtime::program::AcceptedProgramContextSnapshotFactory accepted_context_snapshot) {
@@ -16315,6 +16325,9 @@ POPS_EXPORT void AmrSystem<Dim>::install_program(const std::string& so_path) {
     if (!p_->program.hierarchy_refresh_)
       throw std::runtime_error(
           "AmrSystem::install_program: artifact lacks its hierarchy refresh hook");
+    if (!p_->program.history_remap_accepted_)
+      throw std::runtime_error(
+          "AmrSystem::install_program: artifact lacks its accepted history-remap hook");
     if (!p_->program.restart_regrid_preflight_ || !p_->program.restart_regrid_ ||
         !p_->program.restart_resync_ || !p_->program.accepted_context_snapshot_)
       throw std::runtime_error(
@@ -19073,6 +19086,8 @@ template void AmrSystem<kNativeDimension>::restore_checkpoint_counters(int, std:
 template void AmrSystem<kNativeDimension>::install_program(const std::string&);
 template void AmrSystem<kNativeDimension>::install_program_step(std::function<void(double)>);
 template void AmrSystem<kNativeDimension>::install_program_hierarchy_refresh(std::function<void()>);
+template void AmrSystem<kNativeDimension>::install_program_history_remap_accepted(
+    std::function<void()>);
 template void AmrSystem<kNativeDimension>::install_program_restart_hooks(
     std::function<void()>, std::function<void()>, std::function<void()>,
     runtime::program::AcceptedProgramContextSnapshotFactory);

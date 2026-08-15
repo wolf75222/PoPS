@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "amr_tagging_test_authority.hpp"
 #include "explicit_amr_program.hpp"
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace_provider.hpp>
@@ -1050,6 +1051,55 @@ TEST(GeneratedAmrSystemBlock, ProgramContextRefusesHistoryRegridBeforeTopologyMu
 
   EXPECT_THROW(context->publish_regrid(std::move(prepared), std::move(child)), std::runtime_error);
   EXPECT_EQ(engine->hierarchy().num_levels(), 1u);
+}
+
+TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 8;
+  config.regrid_every = 1;
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/history-remap-acceptance");
+  system.set_temporal_relations({2}, {1}, {"integral_only"});
+  system.install_block_state_route("tracer", "state/tracer");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  pops::test::install_prepared_threshold_union(system, {{"tracer", "u", 0.5}},
+                                               "tests.generated-amr/history-remap-tagging@1");
+  ASSERT_NE(system.engine(), nullptr);
+  ASSERT_EQ(system.engine()->hierarchy().num_levels(), 2u);
+
+  auto context = pops::runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("clock.macro");
+  context->declare_clock_relation("clock.macro", "clock.level.1", 2);
+  context->install([](double) {}, context);
+  system.set_program_block_map({0});
+  using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
+  system.install_prepared_amr_program_flux_expression_budget(
+      "tests.generated-amr/history-remap@1", std::vector<FluxBudget>(1, FluxBudget{1, 1}), 0, 0);
+  context->for_each_program_resource_level([&](int) {
+    context->register_history("tracer.rate", 1, 1, 0, "tracer.U", "cell.conservative",
+                              "clock.macro", "dense.linear");
+  });
+  for (const double dt : {0.1, 0.2, 0.3}) {
+    context->begin_step(dt);
+    context->for_each_program_resource_level([&](int) {
+      pops::MultiFab<Dim> sample = context->scratch_state_like(context->state(0));
+      sample.set_val(pops::Real(dt));
+      context->store_history("tracer.rate", sample, 0);
+    });
+    context->for_each_program_resource_level(
+        [&](int) { context->rotate_histories("clock.macro"); });
+  }
+  ASSERT_TRUE(system.regrid_from_prepared_tagging(0));
+  EXPECT_EQ(system.history_names(), (std::vector<std::string>{"tracer.rate"}));
+  for (const int level : {0, 1}) {
+    EXPECT_TRUE(system.history_initialized("tracer.rate", level));
+    EXPECT_EQ(system.history_fill_count("tracer.rate", level), 2);
+    EXPECT_GT(system.history_slot_dt("tracer.rate", level, 0), 0.0);
+    EXPECT_GT(system.history_slot_dt("tracer.rate", level, 1), 0.0);
+  }
 }
 
 TEST(GeneratedAmrSystemBlock, CflUsesFinestExactGeometryAndPreparedModelSpeed) {
