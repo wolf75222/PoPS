@@ -64,8 +64,9 @@ int run_collective_refusal() {
     config.shape[axis] = 4;
     config.periodicity[axis] = true;
   }
-  // Keep the fixture's compiled transport boundary-free: the route below is refused by the
-  // cell-local Program guard, not by block materialization.
+  // The physical-boundary exclusion is the intended refusal witness. A default-device build
+  // reaches the host-only preparation guard first with the same otherwise valid route.
+  config.periodicity[0] = false;
   // The declared 2:1 temporal relation below is qualified against one configured AMR
   // transition, even though this refusal fixture never publishes a fine level.
   config.level_count = 2;
@@ -76,6 +77,22 @@ int run_collective_refusal() {
   system.set_temporal_relations({2}, {1}, {"integral_only"});
   using Transport = CompositeModel<EulerND<Dim>, NoSource, NoElliptic>;
   system.install_block_state_route("tracer", "tests.cell-temporal-refusal/tracer/state@1");
+  std::vector<std::string> face_types;
+  std::vector<std::string> face_identities;
+  for (int axis = 0; axis < Dim; ++axis)
+    for (int side = 0; side < 2; ++side) {
+      face_types.push_back(config.periodicity[axis] ? "periodic" : "foextrap");
+      face_identities.push_back("tests.cell-temporal-refusal/tracer/face/" +
+                                std::to_string(2 * axis + side));
+    }
+  std::vector<std::string> component_roles{"density"};
+  for (int axis = 0; axis < Dim; ++axis)
+    component_roles.push_back("momentum:" + std::to_string(axis));
+  component_roles.push_back("energy");
+  system.install_hyperbolic_boundary(
+      "tracer", "tests.cell-temporal-refusal/tracer/boundary@1", 1, face_types,
+      std::vector<double>(component_roles.size() * static_cast<std::size_t>(2 * Dim), 0.0),
+      face_identities, component_roles, "tests.cell-temporal-refusal/tracer/state@1");
   add_compiled_model<Dim>(system, "tracer",
                           Transport{{}, EulerND<Dim>::prepare(Real(1.4)), NoSource{}, NoElliptic{}},
                           "minmod", "rusanov", "conservative", "explicit", 1.4, 1, 1, {}, {}, 0.0,
@@ -102,7 +119,7 @@ int run_collective_refusal() {
 
   bool refused = false;
   try {
-    const std::array route{runtime::program::SameLevelCellTemporalForwardEulerRoute{0, -1, -1}};
+    const std::array route{runtime::program::SameLevelCellTemporalForwardEulerRoute{0, -1, 0}};
     context->prepare_same_level_cell_temporal_execution("test.clock.cell-local-mpi-refusal", 100, 0,
                                                         route);
   } catch (const std::runtime_error& error) {
