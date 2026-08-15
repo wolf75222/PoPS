@@ -155,7 +155,10 @@ class _FacadeCompileMixin(_FacadeModel):
             raise ValueError("compile: target 'system' | 'amr_system' (got %r)" % (target,))
         if target == "system" and _native_field_roles is not None:
             raise ValueError("resolved AMR field roles cannot be compiled for System")
-        from pops.codegen._compile_emit import _normalize_native_amr_field_roles
+        from pops.codegen._compile_emit import (
+            _native_amr_field_roles_identity,
+            _normalize_native_amr_field_roles,
+        )
 
         normalized_field_roles = (
             _normalize_native_amr_field_roles(_native_field_roles) if target == "amr_system" else ()
@@ -212,7 +215,9 @@ class _FacadeCompileMixin(_FacadeModel):
         if target == "amr_system":
             from pops.identity import canonical_bytes
 
-            spec_components["amr_field_roles"] = canonical_bytes(normalized_field_roles).hex()
+            spec_components["amr_field_roles"] = canonical_bytes(
+                _native_amr_field_roles_identity(normalized_field_roles)
+            ).hex()
         spec_identity = artifact_spec_identity(
             semantic_identity,
             target=target,

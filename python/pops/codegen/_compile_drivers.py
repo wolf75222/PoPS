@@ -36,7 +36,11 @@ from pops.codegen.compile_provenance import (
     write_artifact_sidecar,
 )
 from pops.codegen.abi import _abi_key_python
-from pops.codegen._compile_emit import emit_cpp_native_loader, model_hash
+from pops.codegen._compile_emit import (
+    _native_amr_field_roles_identity,
+    emit_cpp_native_loader,
+    model_hash,
+)
 from pops.codegen._backends import lower_backend
 from pops.codegen._compile_command_redact import _redact_compile_command  # noqa: F401
 from pops.codegen.compile_link_flags import deterministic_program_link_flags
@@ -203,7 +207,7 @@ def compile_model(
 
         identity_name = "%s#amr-field-roles:%s" % (
             "" if name is None else name,
-            canonical_bytes(normalized_field_roles).hex(),
+            canonical_bytes(_native_amr_field_roles_identity(normalized_field_roles)).hex(),
         )
     semantic_identity, spec_identity = model_artifact_spec(
         m,

@@ -155,6 +155,20 @@ def _normalize_native_amr_field_roles(value: Any) -> tuple[dict[str, Any], ...]:
     return tuple(result)
 
 
+def _native_amr_field_roles_identity(
+    normalized_field_roles: tuple[dict[str, Any], ...],
+) -> tuple[dict[str, Any], ...]:
+    """Project normalized runtime roles onto the float-free artifact-identity vocabulary."""
+    return tuple(
+        (
+            {**role, "coefficient": role["coefficient"].hex()}
+            if role["kind"] == "rhs"
+            else dict(role)
+        )
+        for role in normalized_field_roles
+    )
+
+
 # ---------------------------------------------------------------------------
 # model_hash -- stable hash of a HyperbolicModel
 # ---------------------------------------------------------------------------

@@ -20,6 +20,7 @@ from pops.fields.bcs import (
 from pops.frames import Cartesian2D
 from pops.math import ddt, div, laplacian
 from pops.physics import Model
+from pops.codegen._compile_emit import _native_amr_field_roles_identity
 from pops.problem import Case
 from pops.solvers.elliptic import GeometricMG
 
@@ -139,6 +140,32 @@ def test_case_field_rejects_duplicate_physical_operator_identity() -> None:
 
     with pytest.raises(ValueError, match="already exists"):
         case.field(operator, discretization)
+
+
+def test_amr_field_role_identity_projects_coefficients_without_changing_runtime_roles() -> None:
+    from pops.identity import canonical_bytes
+
+    roles = (
+        {
+            "kind": "rhs",
+            "field": "tests.electrostatic.slot",
+            "block": "material",
+            "binding_ordinal": 0,
+            "binding_identity": "tests.electrostatic.binding.0",
+            "provider_key": "electrostatic",
+            "coefficient": 0.1,
+        },
+    )
+
+    with pytest.raises(TypeError, match=r"float\.hex\(\)"):
+        canonical_bytes(roles)
+
+    identity_roles = _native_amr_field_roles_identity(roles)
+
+    assert roles[0]["coefficient"] == 0.1
+    assert type(roles[0]["coefficient"]) is float
+    assert identity_roles[0]["coefficient"] == (0.1).hex()
+    assert canonical_bytes(identity_roles)
 
 
 def test_gradient_output_sign_reaches_model_hash_and_both_native_loaders() -> None:

@@ -85,7 +85,7 @@ def test_native_config_installs_every_ranked_hierarchy_transition(dimension: int
     assert config.level_count == 3
     assert config.transition_ratios == ratios
     assert config.transition_buffers == buffers
-    assert config.transition_lookaheads == (1, 2)
+    assert config.transition_lookaheads == ((1,) * dimension, (2,) * dimension)
     assert not hasattr(config, "regrid_margin")
     assert not hasattr(config, "regrid_grow")
 
