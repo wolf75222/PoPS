@@ -64,7 +64,6 @@ struct AdvectionModel {
   POPS_HD void wave_speeds(const State& state, pops::Real& lower, pops::Real& upper) const {
     law.template wave_speeds<Axis>(state, lower, upper);
   }
-  POPS_HD State source(const State&, const pops::ProviderValues<0>&) const { return {}; }
   POPS_HD pops::Real elliptic_rhs(const State&) const { return pops::Real(0); }
 };
 
@@ -123,16 +122,17 @@ struct Fixture {
 };
 
 template <int Dim>
-pops::AmrSystemConfig<Dim> three_level_config() {
+pops::AmrSystemConfig<Dim> two_level_config() {
   pops::AmrSystemConfig<Dim> result;
-  result.level_count = 3;
+  result.level_count = 2;
   result.regrid_every = 0;
-  result.transition_ratios.resize(2);
-  result.transition_buffers.resize(2);
-  result.transition_lookaheads.resize(2);
+  result.explicit_bootstrap = true;
+  result.transition_ratios.resize(1);
+  result.transition_buffers.resize(1);
+  result.transition_lookaheads.resize(1);
   for (int axis = 0; axis < Dim; ++axis) {
     result.shape[axis] = 8;
-    for (std::size_t transition = 0; transition < 2; ++transition) {
+    for (std::size_t transition = 0; transition < 1; ++transition) {
       result.transition_ratios[transition][axis] = 2;
       result.transition_buffers[transition][axis] = 1;
       result.transition_lookaheads[transition][axis] = 1;
@@ -237,34 +237,41 @@ TEST(test_amr_history_ring, RegisteredHistoryRejectsTopologyPublicationBeforeMut
   EXPECT_EQ(engine->hierarchy().num_levels(), 1U);
 }
 
-TEST(test_amr_history_ring, ThreeLevelProgramFailsClosedWithoutConservativeCatchUpProvider) {
+TEST(test_amr_history_ring, TwoLevelProgramSynchronizesAtomicallyAndRetries) {
   constexpr int Dim = pops::kNativeDimension;
-  const pops::AmrSystemConfig<Dim> config = three_level_config<Dim>();
+  const pops::AmrSystemConfig<Dim> config = two_level_config<Dim>();
   pops::AmrSystem<Dim> system(config);
-  system.set_temporal_relations({2, 2}, {1, 1}, {"integral_only", "integral_only"});
+  system.set_temporal_relations({2}, {1}, {"integral_only"});
   system.install_block_state_route("tracer", "state/tracer");
   install_advection(system);
-  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  std::vector<double> initial(cell_count(config.shape), 0.0);
+  std::fill_n(initial.begin(), initial.size() / 2, 1.0);
+  system.set_conservative_state("tracer", initial);
   pops::test::install_prepared_threshold_union(system, {{"tracer", "u", 0.5}},
                                                "test.amr-history.three-level-tagging@1");
 
   auto* runtime = system.engine();
   ASSERT_NE(runtime, nullptr);
-  ASSERT_EQ(runtime->hierarchy().num_levels(), 3U);
+  pops::Index<Dim> level_one_lo{};
+  pops::Index<Dim> level_one_hi{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    level_one_hi[axis] = axis == 0 ? 7 : 15;
+  }
+  system.rebuild_hierarchy({pops::AmrPatch<Dim>{1, {level_one_lo, level_one_hi}}}, {0});
+  runtime = system.engine();
+  ASSERT_EQ(runtime->hierarchy().num_levels(), 2U);
   for (std::size_t level = 1; level < runtime->hierarchy().num_levels(); ++level)
     for (int axis = 0; axis < Dim; ++axis)
       EXPECT_EQ(runtime->hierarchy().layout(level).ratio_from_parent()[axis], 2);
   EXPECT_EQ(system.checkpoint_temporal_relations(),
-            (std::vector<std::vector<std::string>>{{"0", "1", "2", "1", "integral_only"},
-                                                   {"1", "2", "2", "1", "integral_only"}}));
-  EXPECT_TRUE(system.program_sync_manifest().empty());
-  EXPECT_TRUE(system.program_interface_flux_ledger_manifest().empty());
+            (std::vector<std::vector<std::string>>{{"0", "1", "2", "1", "integral_only"}}));
+  EXPECT_EQ(system.program_sync_manifest().size(), 1U);
+  EXPECT_EQ(system.program_interface_flux_ledger_manifest().size(), 1U);
 
   system.set_program_block_map({0});
   auto context = pops::runtime::program::make_program_execution_provider(&system);
   context->configure_primary_clock("clock.level.0");
   context->declare_clock_relation("clock.level.0", "clock.level.1", 2);
-  context->declare_clock_relation("clock.level.1", "clock.level.2", 2);
 
   std::size_t maximum_patches = 0;
   for (std::size_t level = 1; level < runtime->hierarchy().num_levels(); ++level)
@@ -272,33 +279,77 @@ TEST(test_amr_history_ring, ThreeLevelProgramFailsClosedWithoutConservativeCatch
         std::max(maximum_patches, runtime->hierarchy().layout(level).patches().size());
   ASSERT_GT(maximum_patches, 0U);
   const std::size_t overlap_pairs = maximum_patches * (maximum_patches - 1U) / 2U;
-  const std::array<int, 2> temporal_substeps{2, 2};
+  const std::array<int, 1> temporal_substeps{2};
   const auto plan =
       context->prepare_subcycling(std::span<const int>(temporal_substeps),
                                   {temporal_substeps.size(), {maximum_patches, overlap_pairs}});
   plan.require_live(*runtime);
-  ASSERT_EQ(plan.size(), 2U);
+  ASSERT_EQ(plan.size(), 1U);
   EXPECT_EQ(plan.transition(0).temporal_substeps(), 2);
-  EXPECT_EQ(plan.transition(1).temporal_substeps(), 2);
-  EXPECT_EQ(plan.transition(0).temporal_substeps() * plan.transition(1).temporal_substeps(), 4);
 
-  std::array<int, 3> level_advances{};
-  std::string refusal;
+  context->for_each_program_resource_level([&](int) {
+    context->register_history("tracer.rate", 2, 1, 0, "tracer.U", "cell.conservative",
+                              "clock.level.0", "dense.linear");
+  });
+
+  std::array<std::vector<double>, 2> accepted;
+  for (int level = 0; level < 2; ++level)
+    accepted[static_cast<std::size_t>(level)] = system.level_state_global(level);
+
+  std::array<int, 2> rejected_advances{};
+  std::vector<int> rejected_order;
+  bool inject_failure = true;
   try {
-    context->advance_synchronized_hierarchy(0.125, [&](double) {
-      ++level_advances[static_cast<std::size_t>(context->level())];
-      context->state(0).set_val(pops::Real(9));
+    context->advance_synchronized_hierarchy(0.125, [&](double level_dt) {
+      const int level = context->level();
+      rejected_order.push_back(level);
+      ++rejected_advances[static_cast<std::size_t>(level)];
+      context->state(0).set_val(
+          pops::Real(10 * (level + 1) + rejected_advances[static_cast<std::size_t>(level)]));
+      auto rhs = context->rhs_scratch_like(context->state(0));
+      context->rhs_into(0, context->state(0), rhs, 0);
+      context->store_history("tracer.rate", context->state(0), 0);
+      if (inject_failure && pops::n_ranks() > 1 && pops::my_rank() == 1 && level == 1 &&
+          rejected_advances[1] == 1)
+        throw std::runtime_error("rank-local synchronized hierarchy rejection");
+      if (inject_failure && pops::n_ranks() == 1 && level == 1 && rejected_advances[1] == 1)
+        throw std::runtime_error("serial synchronized hierarchy rejection");
+      EXPECT_GT(level_dt, 0.0);
     });
-  } catch (const std::runtime_error& error) {
-    refusal = error.what();
+  } catch (const std::runtime_error&) {
   }
 
-  EXPECT_EQ(refusal,
-            "AmrProgramContext::advance_synchronized_hierarchy requires a prepared exact-ranked "
-            "conservative multi-level synchronization provider before any level state is advanced");
-  EXPECT_EQ(level_advances, (std::array<int, 3>{0, 0, 0}));
-  for (std::size_t level = 0; level < runtime->hierarchy().num_levels(); ++level) {
-    EXPECT_EQ(pops::reduce_min_local(runtime->hierarchy().state(level)), pops::Real(1));
-    EXPECT_EQ(pops::reduce_max_local(runtime->hierarchy().state(level)), pops::Real(1));
-  }
+  EXPECT_EQ(rejected_advances[0], 1);
+  EXPECT_EQ(rejected_advances[1], 1);
+  EXPECT_EQ(rejected_order, (std::vector<int>{0, 1}));
+  for (int level = 0; level < 2; ++level)
+    EXPECT_EQ(system.level_state_global(level), accepted[static_cast<std::size_t>(level)]);
+
+  inject_failure = false;
+  std::array<int, 2> accepted_advances{};
+  std::vector<int> accepted_order;
+  context->advance_synchronized_hierarchy(0.125, [&](double level_dt) {
+    const int level = context->level();
+    accepted_order.push_back(level);
+    ++accepted_advances[static_cast<std::size_t>(level)];
+    context->state(0).set_val(
+        pops::Real(10 * (level + 1) + accepted_advances[static_cast<std::size_t>(level)]));
+    auto rhs = context->rhs_scratch_like(context->state(0));
+    context->rhs_into(0, context->state(0), rhs, 0);
+    context->store_history("tracer.rate", context->state(0), 0);
+    EXPECT_GT(level_dt, 0.0);
+  });
+
+  EXPECT_EQ(accepted_order, (std::vector<int>{0, 1, 1}));
+  EXPECT_EQ(accepted_advances, (std::array<int, 2>{1, 2}));
+  const std::vector<double> fine = system.level_state_global(1);
+  ASSERT_FALSE(fine.empty());
+  EXPECT_EQ(*std::max_element(fine.begin(), fine.end()), 22.0);
+  EXPECT_NE(std::find(fine.begin(), fine.end(), 22.0), fine.end());
+  const std::vector<double> coarse = system.level_state_global(0);
+  ASSERT_FALSE(coarse.empty());
+  EXPECT_NE(std::find(coarse.begin(), coarse.end(), 22.0), coarse.end());
+  EXPECT_TRUE(std::any_of(coarse.begin(), coarse.end(), [](double value) {
+    return value != 11.0 && value != 22.0;
+  }));
 }

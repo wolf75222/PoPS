@@ -35,6 +35,7 @@ void expect_exact_local_copy() {
       destination_layout.size() * (destination_layout.size() - 1) / 2, 0};
   const auto schedule = prepare_copy_schedule(destination, source, budget);
   ASSERT_FALSE(schedule.has_remote_jobs());
+  ASSERT_EQ(schedule.canonical_jobs().size(), destination_layout.size());
   ASSERT_EQ(schedule.local_jobs().size(), destination_layout.size());
   parallel_copy(destination, source, schedule);
 
@@ -59,7 +60,7 @@ TEST(test_copy_schedule_cache, exact_redistribution_is_dimension_generic) {
 
 TEST(test_copy_schedule_cache, remote_copy_refuses_before_destination_mutation) {
   const Box<1> domain{Index<1>{0}, Index<1>{3}};
-  const BoxArray<1> layout = BoxArray<1>::from_domain(domain, std::array<int, 1>{2});
+  const BoxArray<1> layout = BoxArray<1>::from_domain(domain, Extent<1>{2});
   const RankSpace<1> ranks{Index<1>{0}, Extent<1>{2}};
   const auto source_distribution =
       Distribution<1>::partitioned(layout, ranks, std::vector<Index<1>>{Index<1>{0}, Index<1>{1}});
@@ -74,6 +75,7 @@ TEST(test_copy_schedule_cache, remote_copy_refuses_before_destination_mutation) 
   const CopyScheduleBudget budget{4, 2, 1, 1};
   const auto schedule = prepare_copy_schedule(destination, source, budget);
   ASSERT_TRUE(schedule.has_remote_jobs());
+  ASSERT_EQ(schedule.canonical_jobs().size(), 2u);
   EXPECT_THROW(parallel_copy(destination, source, schedule), std::logic_error);
   EXPECT_EQ(snapshot(destination), before);
 }

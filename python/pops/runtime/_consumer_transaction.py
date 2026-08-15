@@ -42,7 +42,9 @@ class PublicationReceipt:
     identity: Identity = field(init=False)
 
     def __post_init__(self) -> None:
-        _identity(self.effect_identity, "accepted-side-effect", "PublicationReceipt.effect_identity")
+        _identity(
+            self.effect_identity, "accepted-side-effect", "PublicationReceipt.effect_identity"
+        )
         _identity(self.payload_identity, "consumer-payload", "PublicationReceipt.payload_identity")
         _text(self.publisher_id, "PublicationReceipt.publisher_id")
         _text(self.artifact_id, "PublicationReceipt.artifact_id")
@@ -67,13 +69,17 @@ class PublicationReceipt:
         if self.parallel_mode is ParallelMode.PER_RANK:
             if len(ranks) < 2 or ranks != tuple(range(len(ranks))):
                 raise ValueError(
-                    "PER_RANK receipt must aggregate one artifact for every contiguous rank")
+                    "PER_RANK receipt must aggregate one artifact for every contiguous rank"
+                )
         elif normalized != [(0, self.artifact_id)]:
             raise ValueError(
                 "%s receipt must authenticate the sole shared rank-0 artifact"
-                % self.parallel_mode.name)
+                % self.parallel_mode.name
+            )
         object.__setattr__(self, "rank_artifacts", tuple(normalized))
-        object.__setattr__(self, "identity", make_identity("consumer-publication-receipt", self._payload()))
+        object.__setattr__(
+            self, "identity", make_identity("consumer-publication-receipt", self._payload())
+        )
 
     def _payload(self) -> dict[str, Any]:
         return {
@@ -83,8 +89,7 @@ class PublicationReceipt:
             "artifact_id": self.artifact_id,
             "parallel_mode": self.parallel_mode.value,
             "rank_artifacts": [
-                {"rank": rank, "artifact_id": artifact}
-                for rank, artifact in self.rank_artifacts
+                {"rank": rank, "artifact_id": artifact} for rank, artifact in self.rank_artifacts
             ],
         }
 
@@ -135,6 +140,7 @@ class ConsumerPublisher(ABC):
 
     @abstractmethod
     def prepare(self, effect: AcceptedSideEffect) -> PreparedPublication:
+        """Return one cleanup owner or remove all partial work before raising."""
         raise NotImplementedError
 
 
@@ -147,12 +153,17 @@ class SkippedSampleReport:
     reason: str
 
     def __post_init__(self) -> None:
-        _identity(self.effect_identity, "accepted-side-effect", "SkippedSampleReport.effect_identity")
+        _identity(
+            self.effect_identity, "accepted-side-effect", "SkippedSampleReport.effect_identity"
+        )
         _text(self.consumer_id, "SkippedSampleReport.consumer_id")
         if self.phase not in ("prepare", "publish"):
             raise ValueError("SkippedSampleReport.phase must be prepare or publish")
-        if isinstance(self.attempts, bool) or not isinstance(self.attempts, int) \
-                or self.attempts < 1:
+        if (
+            isinstance(self.attempts, bool)
+            or not isinstance(self.attempts, int)
+            or self.attempts < 1
+        ):
             raise ValueError("SkippedSampleReport.attempts must be positive")
         _text(self.reason, "SkippedSampleReport.reason")
 
@@ -210,8 +221,16 @@ class ConsumerTransaction:
     """Own temporaries until a step controller explicitly accepts or rejects the attempt."""
 
     __slots__ = (
-        "_plan", "_publisher", "_initial_cursors", "_prepared", "_accepted",
-        "_cursor_updates", "_skipped", "_state", "_finalize_pending", "_recoveries",
+        "_plan",
+        "_publisher",
+        "_initial_cursors",
+        "_prepared",
+        "_accepted",
+        "_cursor_updates",
+        "_skipped",
+        "_state",
+        "_finalize_pending",
+        "_recoveries",
     )
 
     def __init__(
@@ -243,7 +262,18 @@ class ConsumerTransaction:
         ] = []
         self._recoveries: list[Any] = []
         self._state = "preparing"
-        self._prepare_all()
+        try:
+            self._prepare_all()
+        except BaseException as error:
+            # A cancellation is deliberately not converted into a retry/failure action, but this
+            # constructor is also the sole owner of earlier preparations until it returns.  Clean
+            # those preparations here because the enclosing runtime cannot abort an object it
+            # never received.
+            if self._state != "failed":
+                _rolled_back, diagnostics = self._discard_staged()
+                self._state = "failed"
+                self._add_cleanup_notes(error, diagnostics)
+            raise
         self._state = "staged"
 
     def _attempt_limit(self, effect: AcceptedSideEffect) -> int:
@@ -251,32 +281,49 @@ class ConsumerTransaction:
         return action.max_attempts if type(action) is Retry else 1
 
     def _validate_prepared(
-        self, effect: AcceptedSideEffect, prepared: Any,
+        self,
+        effect: AcceptedSideEffect,
+        prepared: Any,
     ) -> PreparedPublication:
         if not isinstance(prepared, PreparedPublication):
             raise TypeError("ConsumerPublisher.prepare must return PreparedPublication")
-        if prepared.effect_identity != effect.identity \
-                or prepared.payload_identity != effect.payload.identity:
+        if (
+            prepared.effect_identity != effect.identity
+            or prepared.payload_identity != effect.payload.identity
+        ):
             raise ValueError("prepared publication does not authenticate its exact effect payload")
         return prepared
 
     def _prepare_one(
-        self, effect: AcceptedSideEffect, start_attempt: int = 0,
+        self,
+        effect: AcceptedSideEffect,
+        start_attempt: int = 0,
     ) -> tuple[PreparedPublication | None, int, Exception | None]:
         attempts, last_error = start_attempt, None
         while attempts < self._attempt_limit(effect):
             attempts += 1
             try:
-                return self._validate_prepared(effect, self._publisher.prepare(effect)), attempts, None
+                return (
+                    self._validate_prepared(effect, self._publisher.prepare(effect)),
+                    attempts,
+                    None,
+                )
             except Exception as exc:  # writer failures are classified by the typed action
                 last_error = exc
         return None, attempts, last_error
 
     @staticmethod
-    def _reason(error: Exception | None) -> str:
+    def _reason(error: BaseException | None) -> str:
         if error is None:
             return "consumer publication failed without diagnostic"
         return "%s: %s" % (type(error).__name__, error)
+
+    @staticmethod
+    def _add_cleanup_notes(error: BaseException, diagnostics: tuple[str, ...]) -> None:
+        add_note = getattr(error, "add_note", None)
+        if callable(add_note):
+            for diagnostic in diagnostics:
+                add_note("consumer transaction cleanup: " + diagnostic)
 
     def _retain_recoveries(self, prepared: PreparedPublication) -> str | None:
         try:
@@ -286,7 +333,7 @@ class ConsumerTransaction:
             for recovery in recoveries:
                 if not any(value is recovery for value in self._recoveries):
                     self._recoveries.append(recovery)
-        except Exception as exc:
+        except BaseException as exc:
             return "recovery ownership transfer failed: %s" % self._reason(exc)
         return None
 
@@ -294,7 +341,7 @@ class ConsumerTransaction:
         failure = None
         try:
             prepared.discard()
-        except Exception as exc:
+        except BaseException as exc:
             failure = "discard failed: %s" % self._reason(exc)
         recovery_failure = self._retain_recoveries(prepared)
         if recovery_failure is not None:
@@ -305,7 +352,7 @@ class ConsumerTransaction:
         failure = None
         try:
             prepared.rollback()
-        except Exception as exc:
+        except BaseException as exc:
             failure = "publication rollback failed: %s" % self._reason(exc)
         recovery_failure = self._retain_recoveries(prepared)
         if recovery_failure is not None:
@@ -357,8 +404,8 @@ class ConsumerTransaction:
         self._state = "failed"
         reason = self._reason(error)
         return ConsumerPublicationError(
-            "consumer %s failed under %s: %s" % (
-                effect.consumer_id, type(effect.failure_action).__name__, reason),
+            "consumer %s failed under %s: %s"
+            % (effect.consumer_id, type(effect.failure_action).__name__, reason),
             report=report,
         )
 
@@ -369,10 +416,15 @@ class ConsumerTransaction:
                 self._prepared.append((effect, prepared, attempts))
                 continue
             if type(effect.failure_action) is SkipSampleReported:
-                self._skipped.append(SkippedSampleReport(
-                    effect.identity, effect.consumer_id, "prepare", attempts,
-                    self._reason(error),
-                ))
+                self._skipped.append(
+                    SkippedSampleReport(
+                        effect.identity,
+                        effect.consumer_id,
+                        "prepare",
+                        attempts,
+                        self._reason(error),
+                    )
+                )
                 continue
             raise self._failed(effect, error, cursors=self._initial_cursors) from error
 
@@ -390,7 +442,9 @@ class ConsumerTransaction:
             diagnostics=diagnostics,
         )
         if diagnostics:
-            raise ConsumerPublicationError("consumer rollback left unremoved temporaries", report=report)
+            raise ConsumerPublicationError(
+                "consumer rollback left unremoved temporaries", report=report
+            )
         return report
 
     def accept(self) -> ConsumerTransactionReport:
@@ -405,33 +459,64 @@ class ConsumerTransaction:
                 receipt = prepared.publish()
                 if type(receipt) is not PublicationReceipt:
                     raise TypeError("PreparedPublication.publish must return PublicationReceipt")
-                if receipt.effect_identity != effect.identity \
-                        or receipt.payload_identity != effect.payload.identity:
-                    raise ValueError("PublicationReceipt does not authenticate its exact effect payload")
+                if (
+                    receipt.effect_identity != effect.identity
+                    or receipt.payload_identity != effect.payload.identity
+                ):
+                    raise ValueError(
+                        "PublicationReceipt does not authenticate its exact effect payload"
+                    )
                 if receipt.parallel_mode is not effect.target.parallel_mode:
                     raise ValueError(
-                        "PublicationReceipt parallel mode differs from its accepted target")
-            except Exception as exc:
+                        "PublicationReceipt parallel mode differs from its accepted target"
+                    )
+            except BaseException as exc:
+                if not isinstance(exc, Exception):
+                    # Cancellation is outside the typed FailRun/Retry/Skip policy.  Compensate the
+                    # current publication, every earlier artifact, and every still-staged effect,
+                    # then preserve the original BaseException for the caller.
+                    diagnostics = []
+                    cleanup = self._rollback(prepared)
+                    if cleanup is not None:
+                        diagnostics.append("%s: %s" % (effect.consumer_id, cleanup))
+                    self._prepared.extend(pending)
+                    _accepted_rollback, accepted_cleanup = self._rollback_accepted()
+                    diagnostics.extend(accepted_cleanup)
+                    _staged_rollback, staged_cleanup = self._discard_staged()
+                    diagnostics.extend(staged_cleanup)
+                    self._state = "failed"
+                    self._add_cleanup_notes(exc, tuple(diagnostics))
+                    raise
                 error = exc
                 cleanup = self._rollback(prepared)
                 rolled_back = (effect.identity.token,) if cleanup is None else ()
-                if cleanup is None and type(effect.failure_action) is Retry \
-                        and attempts < self._attempt_limit(effect):
+                if (
+                    cleanup is None
+                    and type(effect.failure_action) is Retry
+                    and attempts < self._attempt_limit(effect)
+                ):
                     replacement, attempts, prepare_error = self._prepare_one(effect, attempts)
                     if replacement is not None:
                         pending.insert(0, (effect, replacement, attempts))
                         continue
                     error = prepare_error
                 if type(effect.failure_action) is SkipSampleReported:
-                    self._skipped.append(SkippedSampleReport(
-                        effect.identity, effect.consumer_id, "publish", attempts,
-                        self._reason(error),
-                    ))
+                    self._skipped.append(
+                        SkippedSampleReport(
+                            effect.identity,
+                            effect.consumer_id,
+                            "publish",
+                            attempts,
+                            self._reason(error),
+                        )
+                    )
                     if cleanup is not None:
                         self._prepared.extend(pending)
                         accepted_rollback, accepted_cleanup = self._rollback_accepted()
                         raise self._failed(
-                            effect, error, cursors=self._initial_cursors,
+                            effect,
+                            error,
+                            cursors=self._initial_cursors,
                             diagnostics=(cleanup,) + accepted_cleanup,
                             rolled_back=accepted_rollback,
                         ) from error
@@ -440,7 +525,9 @@ class ConsumerTransaction:
                 accepted_rollback, accepted_cleanup = self._rollback_accepted()
                 diagnostics = ((cleanup,) if cleanup is not None else ()) + accepted_cleanup
                 raise self._failed(
-                    effect, error, cursors=self._initial_cursors,
+                    effect,
+                    error,
+                    cursors=self._initial_cursors,
                     diagnostics=diagnostics,
                     rolled_back=rolled_back + accepted_rollback,
                 ) from error
@@ -488,7 +575,8 @@ class ConsumerTransaction:
         )
         if diagnostics:
             raise ConsumerPublicationError(
-                "accepted consumer publication could not be compensated", report=report)
+                "accepted consumer publication could not be compensated", report=report
+            )
         return report
 
     def seal(self) -> tuple[str, ...]:
@@ -509,8 +597,7 @@ class ConsumerTransaction:
                     raise TypeError("PreparedPublication.finalize() must return None")
             except BaseException as error:
                 pending.append((effect, prepared, receipt))
-                failures.append(
-                    "%s: %s: %s" % (effect.consumer_id, type(error).__name__, error))
+                failures.append("%s: %s: %s" % (effect.consumer_id, type(error).__name__, error))
             recovery_failure = self._retain_recoveries(prepared)
             if recovery_failure is not None:
                 if not pending or pending[-1][1] is not prepared:
@@ -529,7 +616,11 @@ class ConsumerTransaction:
 
 
 __all__ = [
-    "ConsumerPublicationError", "ConsumerPublisher", "ConsumerTransaction",
-    "ConsumerTransactionReport", "PreparedPublication", "PublicationReceipt",
+    "ConsumerPublicationError",
+    "ConsumerPublisher",
+    "ConsumerTransaction",
+    "ConsumerTransactionReport",
+    "PreparedPublication",
+    "PublicationReceipt",
     "SkippedSampleReport",
 ]

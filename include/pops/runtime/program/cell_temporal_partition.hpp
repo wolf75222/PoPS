@@ -20,9 +20,10 @@ enum class TemporalPartitionKind : std::uint8_t { Global = 0, CellLocal = 1 };
 
 /// Rank-independent identity and accepted logical clock of one cell.
 ///
-/// ``cell`` is a provider-owned canonical cell id within ``level``. It deliberately does not carry
-/// an MPI rank or patch-local address, so ownership migration can rematerialize device storage from
-/// the same accepted scientific image.
+/// ``cell`` is a provider-owned canonical cell id within ``level``. Same-level mesh providers use
+/// ``canonical_patch_cell_id`` below: the high 32 bits are the global patch ordinal and the low 32
+/// bits are the cell ordinal inside that patch. It deliberately carries no MPI rank, so ownership
+/// migration can rematerialize local device storage from the same accepted scientific image.
 struct CellTemporalPartitionRecord {
   int level = 0;
   std::uint64_t cell = 0;
@@ -32,6 +33,25 @@ struct CellTemporalPartitionRecord {
   friend bool operator==(const CellTemporalPartitionRecord&,
                          const CellTemporalPartitionRecord&) = default;
 };
+
+inline constexpr std::uint64_t kCanonicalPatchCellOrdinalLimit = std::uint64_t{1} << 32u;
+
+[[nodiscard]] inline std::uint64_t canonical_patch_cell_id(std::size_t global_patch,
+                                                           std::uint64_t cell_ordinal) {
+  if (global_patch >= kCanonicalPatchCellOrdinalLimit ||
+      cell_ordinal >= kCanonicalPatchCellOrdinalLimit)
+    throw std::overflow_error(
+        "canonical temporal cell identity exceeds its authenticated 32-bit patch/cell budget");
+  return (static_cast<std::uint64_t>(global_patch) << 32u) | cell_ordinal;
+}
+
+[[nodiscard]] inline constexpr std::uint32_t canonical_patch_ordinal(std::uint64_t cell) noexcept {
+  return static_cast<std::uint32_t>(cell >> 32u);
+}
+
+[[nodiscard]] inline constexpr std::uint32_t canonical_cell_ordinal(std::uint64_t cell) noexcept {
+  return static_cast<std::uint32_t>(cell);
+}
 
 /// Compact accepted-boundary image for a prepared temporal-partition provider.
 ///

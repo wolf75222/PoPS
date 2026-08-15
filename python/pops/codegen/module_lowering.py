@@ -29,21 +29,16 @@ from .lowering_coverage import (
     LoweringRejection,
 )
 
-def _lower_native_role(value: Any) -> str | None:
-    from pops.physics.roles import ComponentRole, native_role_token, parse_role
+def _lower_native_role(value: Any) -> Any:
+    """Resolve one Module metadata value to the canonical typed role authority."""
+    from pops.physics.roles import ComponentRole, RoleKey, native_role_token, parse_role
 
+    if isinstance(value, RoleKey):
+        return value
     if isinstance(value, ComponentRole):
-        return native_role_token(value)
+        return parse_role(native_role_token(value), where="Module StateSpace role")
     if isinstance(value, str):
-        try:
-            parsed = parse_role(value, where="Module StateSpace role")
-        except (TypeError, ValueError):
-            return None
-        # Module IR may carry canonical physical tokens or the explicit generic
-        # ``custom`` sentinel. Arbitrary labels and legacy spellings do not turn
-        # into a physical role during lowering.
-        if parsed.token == value and (parsed.physical or value == "custom"):
-            return parsed.token
+        return parse_role(value, where="Module StateSpace role")
     return None
 
 
@@ -56,24 +51,13 @@ def _typed_lowering_roles(state: Any) -> list[Any] | None:
     """
     from pops.physics.roles import ComponentRole
 
-    class _LoweredComponentRole(ComponentRole):
-        __slots__ = ("_native_name",)
-
-        def __init__(self, native_name: str) -> None:
-            self._native_name = native_name
-
-        @property
-        def native_name(self) -> str:
-            return self._native_name
-
     result = []
     for component in state.components:
         value = state.roles.get(component)
         if isinstance(value, ComponentRole):
             result.append(value)
             continue
-        token = _lower_native_role(value)
-        result.append(None if token is None else _LoweredComponentRole(token))
+        result.append(_lower_native_role(value))
     return None if all(role is None for role in result) else result
 
 

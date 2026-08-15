@@ -59,23 +59,25 @@ class ExactRankedTransportRuntime {
   static constexpr int dimension = Dim;
   using field_type = MultiFab<Dim>;
 
-  ExactRankedTransportRuntime()
+  explicit ExactRankedTransportRuntime(bool multibox = false)
       : domain_(Box<Dim>::from_extents(test_extents<Dim>())),
-        layout_(std::vector<Box<Dim>>{domain_}),
+        layout_(make_layout_(domain_, multibox)),
         rank_space_(Index<Dim>{}, unit_extent<Dim>()),
-        distribution_(mesh::Distribution<Dim>::partitioned(layout_, rank_space_,
-                                                           std::vector<Index<Dim>>{Index<Dim>{}})),
+        distribution_(mesh::Distribution<Dim>::partitioned(
+            layout_, rank_space_, std::vector<Index<Dim>>(layout_.size(), Index<Dim>{}))),
         state_(layout_, distribution_, Index<Dim>{}, 2, unit_extent<Dim>()),
         geometry_(
             Geometry<Dim>::from_bounds(domain_, physical_lower<Dim>(), physical_upper<Dim>())) {
     periodicity_.fill(true);
     state_.set_val(Real(0));
-    const auto values = state_.fab(0).view();
-    same_level_cell_temporal_detail::for_each_index(
-        domain_, [&](const Index<Dim>& index, std::size_t) {
-          for (int component = 0; component < state_.ncomp(); ++component)
-            values(index, component) = initial_value(index, component);
-        });
+    for (std::size_t local = 0; local < state_.local_size(); ++local) {
+      const auto values = state_.fab(local).view();
+      same_level_cell_temporal_detail::for_each_index(
+          state_.box(local), [&](const Index<Dim>& index, std::size_t) {
+            for (int component = 0; component < state_.ncomp(); ++component)
+              values(index, component) = initial_value(index, component);
+          });
+    }
   }
 
   [[nodiscard]] std::uint64_t topology_epoch() const noexcept { return topology_epoch_; }
@@ -84,8 +86,16 @@ class ExactRankedTransportRuntime {
   }
   [[nodiscard]] std::size_t same_level_cell_block_count() const noexcept { return 1; }
   [[nodiscard]] int same_level_cell_level_count() const noexcept { return 1; }
-  [[nodiscard]] field_type& same_level_cell_state() noexcept { return state_; }
-  [[nodiscard]] const Geometry<Dim>& same_level_cell_geometry() const noexcept { return geometry_; }
+  [[nodiscard]] field_type& same_level_cell_state(int level) noexcept {
+    if (level != 0)
+      std::terminate();
+    return state_;
+  }
+  [[nodiscard]] const Geometry<Dim>& same_level_cell_geometry(int level) const noexcept {
+    if (level != 0)
+      std::terminate();
+    return geometry_;
+  }
   [[nodiscard]] const std::array<bool, Dim>& same_level_cell_periodicity() const noexcept {
     return periodicity_;
   }
@@ -99,6 +109,9 @@ class ExactRankedTransportRuntime {
     return "test.exact-ranked-spatial-contract.v1";
   }
   [[nodiscard]] bool same_level_cell_has_prepared_boundary_plan() const noexcept { return false; }
+  [[nodiscard]] const ExecutionLane& same_level_cell_execution_lane() const noexcept {
+    return lane_;
+  }
 
   void capture_same_level_negative_flux_divergence(
       const runtime::multiblock::BoundaryEvaluationPoint& point, field_type& state,
@@ -106,21 +119,25 @@ class ExactRankedTransportRuntime {
     last_point_ = point;
     ++capture_count_;
     residual.set_val(Real(0));
-    const auto residual_view = residual.fab(0).view();
-    same_level_cell_temporal_detail::for_each_index(
-        domain_, [&](const Index<Dim>& index, std::size_t) {
-          for (int component = 0; component < state.ncomp(); ++component)
-            residual_view(index, component) = residual_value(index, component);
-        });
+    for (std::size_t local = 0; local < residual.local_size(); ++local) {
+      const auto residual_view = residual.fab(local).view();
+      same_level_cell_temporal_detail::for_each_index(
+          residual.box(local), [&](const Index<Dim>& index, std::size_t) {
+            for (int component = 0; component < state.ncomp(); ++component)
+              residual_view(index, component) = residual_value(index, component);
+          });
+    }
     for (int axis = 0; axis < Dim; ++axis) {
       fluxes[axis]->set_val(Real(0));
-      const Box<Dim> faces = fluxes[axis]->box(0);
-      const auto flux_view = fluxes[axis]->fab(0).view();
-      same_level_cell_temporal_detail::for_each_index(
-          faces, [&](const Index<Dim>& index, std::size_t) {
-            for (int component = 0; component < state.ncomp(); ++component)
-              flux_view(index, component) = flux_value(axis, index, component);
-          });
+      for (std::size_t local = 0; local < fluxes[axis]->local_size(); ++local) {
+        const Box<Dim> faces = fluxes[axis]->box(local);
+        const auto flux_view = fluxes[axis]->fab(local).view();
+        same_level_cell_temporal_detail::for_each_index(
+            faces, [&](const Index<Dim>& index, std::size_t) {
+              for (int component = 0; component < state.ncomp(); ++component)
+                flux_view(index, component) = flux_value(axis, index, component);
+            });
+      }
     }
   }
 
@@ -155,6 +172,17 @@ class ExactRankedTransportRuntime {
   }
 
  private:
+  static mesh::BoxArray<Dim> make_layout_(const Box<Dim>& domain, bool multibox) {
+    if (!multibox)
+      return mesh::BoxArray<Dim>(std::vector<Box<Dim>>{domain});
+    Box<Dim> lower = domain;
+    Box<Dim> upper = domain;
+    const int split = domain.lo[0] + domain.length(0) / 2;
+    lower.hi[0] = split - 1;
+    upper.lo[0] = split;
+    return mesh::BoxArray<Dim>(std::vector<Box<Dim>>{lower, upper});
+  }
+
   Box<Dim> domain_;
   mesh::BoxArray<Dim> layout_;
   mesh::RankSpace<Dim> rank_space_;
@@ -166,6 +194,7 @@ class ExactRankedTransportRuntime {
   std::uint64_t materialization_generation_ = 31;
   int capture_count_ = 0;
   runtime::multiblock::BoundaryEvaluationPoint last_point_{};
+  ExecutionLane lane_ = ExecutionLane::world("test.exact-ranked.cell-temporal");
 };
 
 template <int Dim>
@@ -188,7 +217,7 @@ std::string execute_exact_ranked_provider() {
       prepare_same_level_transport_euler_partition<Dim>(runtime, 0, 100, 0);
   auto ledger = std::make_shared<SameLevelCellIntegratedFluxLedger<Dim>>(
       runtime.topology_epoch(), runtime.materialization_generation(), 0, 0, partition.cells.size(),
-      runtime.same_level_cell_state().ncomp());
+      runtime.same_level_cell_state(0).ncomp());
   ExactProvider<Dim> provider(runtime, partition, ledger, "test.clock.exact-ranked");
   PreparedBatchedCellTemporalExecutor executor(partition, std::move(provider));
   const std::string exact_contract = executor.exact_contract();
@@ -207,7 +236,7 @@ std::string execute_exact_ranked_provider() {
   EXPECT_EQ(ledger->end_tick(), 2);
   EXPECT_EQ(ledger->tick_denominator(), 100);
 
-  const MultiFab<Dim>& state = runtime.same_level_cell_state();
+  const MultiFab<Dim>& state = runtime.same_level_cell_state(0);
   const Box<Dim>& box = state.box(0);
   const auto values = state.fab(0).view();
   same_level_cell_temporal_detail::for_each_index(
@@ -239,8 +268,8 @@ void prove_rollback_and_generation_authentication() {
       prepare_same_level_transport_euler_partition<Dim>(runtime, 0, 100, 0);
   auto ledger = std::make_shared<SameLevelCellIntegratedFluxLedger<Dim>>(
       runtime.topology_epoch(), runtime.materialization_generation(), 0, 0, partition.cells.size(),
-      runtime.same_level_cell_state().ncomp());
-  MultiFab<Dim> accepted = runtime.same_level_cell_state();
+      runtime.same_level_cell_state(0).ncomp());
+  MultiFab<Dim> accepted = runtime.same_level_cell_state(0);
   ExactProvider<Dim> provider(runtime, partition, ledger, "test.clock.exact-ranked");
   PreparedBatchedCellTemporalExecutor executor(partition, std::move(provider));
 
@@ -248,7 +277,7 @@ void prove_rollback_and_generation_authentication() {
   executor.advance_to_barrier();
   executor.rollback();
   const auto accepted_view = accepted.fab(0).view();
-  const auto live_view = runtime.same_level_cell_state().fab(0).view();
+  const auto live_view = runtime.same_level_cell_state(0).fab(0).view();
   same_level_cell_temporal_detail::for_each_index(
       accepted.box(0), [&](const Index<Dim>& index, std::size_t) {
         for (int component = 0; component < accepted.ncomp(); ++component)
@@ -267,13 +296,45 @@ void prove_rollback_and_generation_authentication() {
       prepare_same_level_transport_euler_partition<Dim>(layout_runtime, 0, 100, 0);
   auto layout_ledger = std::make_shared<SameLevelCellIntegratedFluxLedger<Dim>>(
       layout_runtime.topology_epoch(), layout_runtime.materialization_generation(), 0, 0,
-      layout_partition.cells.size(), layout_runtime.same_level_cell_state().ncomp());
+      layout_partition.cells.size(), layout_runtime.same_level_cell_state(0).ncomp());
   ExactProvider<Dim> layout_provider(layout_runtime, layout_partition, layout_ledger,
                                      "test.clock.exact-ranked");
   PreparedBatchedCellTemporalExecutor layout_executor(layout_partition, std::move(layout_provider));
   layout_runtime.replace_field_metadata_without_generation();
   EXPECT_THROW(layout_executor.begin_attempt(1), std::runtime_error);
   EXPECT_EQ(layout_ledger->publication_generation(), 0u);
+}
+
+template <int Dim>
+void prove_multibox_canonical_identity_and_shared_face_ledger() {
+  ExactRankedTransportRuntime<Dim> runtime(true);
+  const CellTemporalPartitionAcceptedState partition =
+      prepare_same_level_transport_euler_partition<Dim>(runtime, 0, 100, 0);
+  ASSERT_EQ(runtime.same_level_cell_state(0).layout().size(), 2u);
+  const auto first_count =
+      static_cast<std::size_t>(runtime.same_level_cell_state(0).layout()[0].numPts());
+  const auto shared_lower =
+      static_cast<std::size_t>(runtime.same_level_cell_state(0).layout()[0].length(0) - 1);
+  ASSERT_GT(first_count, 0u);
+  ASSERT_LT(first_count, partition.cells.size());
+  EXPECT_EQ(canonical_patch_ordinal(partition.cells[first_count - 1].cell), 0u);
+  EXPECT_EQ(canonical_patch_ordinal(partition.cells[first_count].cell), 1u);
+  EXPECT_EQ(canonical_cell_ordinal(partition.cells[first_count].cell), 0u);
+
+  auto ledger = std::make_shared<SameLevelCellIntegratedFluxLedger<Dim>>(
+      runtime.topology_epoch(), runtime.materialization_generation(), 0, 0, partition.cells.size(),
+      runtime.same_level_cell_state(0).ncomp());
+  ExactProvider<Dim> provider(runtime, partition, ledger, "test.clock.exact-ranked.multibox");
+  PreparedBatchedCellTemporalExecutor executor(partition, std::move(provider));
+  executor.begin_attempt(1);
+  executor.advance_to_barrier();
+  executor.commit();
+
+  for (int component = 0; component < runtime.same_level_cell_state(0).ncomp(); ++component) {
+    EXPECT_DOUBLE_EQ(
+        ledger->integrated_flux(shared_lower, {0, SameLevelCellFaceSide::High}, component),
+        ledger->integrated_flux(first_count, {0, SameLevelCellFaceSide::Low}, component));
+  }
 }
 
 }  // namespace
@@ -295,4 +356,23 @@ TEST(test_cell_temporal_program_route,
   prove_rollback_and_generation_authentication<1>();
   prove_rollback_and_generation_authentication<2>();
   prove_rollback_and_generation_authentication<3>();
+}
+
+TEST(test_cell_temporal_program_route,
+     multibox_canonical_identity_and_shared_face_ledger_are_exact_ranked) {
+  ensure_runtime();
+  prove_multibox_canonical_identity_and_shared_face_ledger<1>();
+  prove_multibox_canonical_identity_and_shared_face_ledger<2>();
+  prove_multibox_canonical_identity_and_shared_face_ledger<3>();
+}
+
+TEST(test_cell_temporal_program_route,
+     canonical_patch_cell_budget_refuses_overflow_without_aliasing) {
+  EXPECT_THROW((void)canonical_patch_cell_id(kCanonicalPatchCellOrdinalLimit, 0),
+               std::overflow_error);
+  EXPECT_THROW((void)canonical_patch_cell_id(0, kCanonicalPatchCellOrdinalLimit),
+               std::overflow_error);
+  EXPECT_NE(canonical_patch_cell_id(0, 1), canonical_patch_cell_id(1, 0));
+  EXPECT_EQ(canonical_patch_ordinal(canonical_patch_cell_id(7, 11)), 7u);
+  EXPECT_EQ(canonical_cell_ordinal(canonical_patch_cell_id(7, 11)), 11u);
 }

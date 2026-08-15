@@ -111,52 +111,59 @@ def test_header_deferred_set_matches_the_python_mirror():
 def test_parser_finds_only_explicit_known_deferrals():
     module = _load_support_module()
     header = _parse_header_deferred_set(CONTEXT_HPP.read_text(encoding="utf-8"))
-    for identifier in (
-        "cache_should_update",
-        "cache_effective_dt",
-        "neg_div_flux_into",
-        "solve_fields_from_blocks_default",
-    ):
-        assert identifier in header
-    assert "solve_fields_from_state_at_fine_level" not in header
-    assert "solve_fields_from_state_default" not in header
-    assert "SolveOutcome solve_fields_from_state(const std::string&" not in (
-        CONTEXT_HPP.read_text(encoding="utf-8")
-    )
-    assert "SolveOutcome solve_fields_from_blocks(const std::string&" not in (
-        CONTEXT_HPP.read_text(encoding="utf-8")
-    )
-    assert "solve_fields_from_blocks_at" not in CONTEXT_HPP.read_text(encoding="utf-8")
+    assert header == {
+        "composite_mask",
+        "iterate_dependent_boundary",
+        "matrix_free_coupled_jacobian",
+        "matrix_free_split_residual",
+        "multi_block_coupling",
+        "multi_block_cell_local_temporal",
+        "multi_block_field_state",
+        "multi_block_history",
+        "multi_block_hierarchy_synchronization",
+        "multi_block_mask",
+        "multi_block_residual",
+        "multi_block_state",
+        "multi_block_state_preparation",
+        "multi_block_state_publication",
+        "multi_block_wave_speed",
+        "perturbed_field_state",
+        "projection",
+        "scheduler_cache",
+        "split_default_flux",
+        "split_default_source",
+        "tensor_elliptic",
+    }
+    source = CONTEXT_HPP.read_text(encoding="utf-8")
+    assert "unavailable_(" not in source
+    assert "SolveOutcome solve_fields_from_state_at(" in source
+    assert "SolveOutcome solve_fields_from_blocks_at(" in source
     assert "solve_fields_from_blocks_at" in UNIFORM_CONTEXT_HPP.read_text(encoding="utf-8")
-    assert "solve_fields_from_blocks_at" not in CONTEXT_HPP.read_text(encoding="utf-8")
-    assert "program_execution_solve_generated_field_from_blocks_outcome_" in (
-        CONTEXT_HPP.read_text(encoding="utf-8")
-    )
-    assert "named_solve_reports_" not in CONTEXT_HPP.read_text(encoding="utf-8")
     assert "fine_level_field_perturbation" not in module.DEFERRED_GROUPS
     assert "refined_shared_block_interfaces" not in module.DEFERRED_GROUPS
-    assert "apply_projection" not in header
-    assert not any(identifier.startswith("history") for identifier in header)
 
 
-def test_projection_is_green_after_the_real_amr_implementation_landed():
+def test_projection_is_pending_until_the_amr_provider_is_prepared():
     module = _load_support_module()
-    assert module.DEFERRED_GROUPS["projection"]["header_methods"] == frozenset()
-    assert module.deferred_groups()["projection"] == "green"
+    assert module.DEFERRED_GROUPS["projection"]["header_methods"] == frozenset({"projection"})
+    assert module.deferred_groups()["projection"] == "pending"
 
 
 def test_generated_programs_cannot_use_coarse_injection_as_a_fine_solve():
     header = CONTEXT_HPP.read_text(encoding="utf-8")
-    assert "SolveOutcome solve_fields() const" not in header
-    assert header.count("SolveOutcome solve_default_field_on_coarse_level() const") == 1
-    coarse_route = header.split("SolveOutcome solve_default_field_on_coarse_level() const", 1)[
-        1
-    ].split("SolveOutcome solve_fields_from_state_at(", 1)[0]
-    assert "if (level_ != 0)" in coarse_route
-    assert "coarse-to-fine auxiliary injection is not a " in coarse_route
-    assert '"fine-level solve"' in coarse_route
-    assert "return eng_->solve_default_field();" in coarse_route
-    assert "default_solve_report_" not in header
+    default_solve = header.split("SolveOutcome solve_fields() const", 1)[1].split(
+        "SolveOutcome solve_fields_from_state_at(", 1
+    )[0]
+    assert "facade_->solve_program_default_field(active_level_)" in default_solve
+    assert "solve_default_field_on_coarse_level" not in default_solve
+
+    named_solve = header.split("SolveOutcome solve_fields_from_state_at(", 1)[1].split(
+        "SolveOutcome solve_default_field_on_coarse_level() const", 1
+    )[0]
+    assert "facade_->solve_program_field_at(point, provider_slot, active_level_, &stage)" in named_solve
+    assert "facade_->solve_program_field_from_blocks_at(" in named_solve
+    assert "active_level_, runtime_stages" in named_solve
+    assert "solve_program_default_field(0)" not in named_solve
 
     generated = "\n".join(path.read_text(encoding="utf-8") for path in PRODUCTION_CODEGEN)
     assert "ctx.solve_fields(" not in generated
@@ -165,12 +172,16 @@ def test_generated_programs_cannot_use_coarse_injection_as_a_fine_solve():
 
 
 class _Program:
-    def __init__(self, nodes, *, recursive_nodes=None):
+    def __init__(self, nodes, *, recursive_nodes=None, cell_local_time_contract=None):
         self._nodes = list(nodes)
         self._recursive_nodes = list(self._nodes if recursive_nodes is None else recursive_nodes)
+        self._cell_local_time_contract = cell_local_time_contract
 
     def ir_nodes(self, *, recursive=False):
         return list(self._recursive_nodes if recursive else self._nodes)
+
+    def cell_local_time_contract(self):
+        return self._cell_local_time_contract
 
 
 def _context(module, *, refined=False, interfaces=False, frozen=True):
@@ -198,12 +209,12 @@ def test_context_sensitive_routes_report_green_or_pending_from_resolved_hierarch
             {"op": "rhs_jacvec", "attrs": {"field_coupled": True}},
         ],
     )
-    assert (
-        module.amr_program_op_support(field_jacobian, context=_context(module, refined=False)) == {}
-    )
-    assert (
-        module.amr_program_op_support(field_jacobian, context=_context(module, refined=True)) == {}
-    )
+    assert module.amr_program_op_support(
+        field_jacobian, context=_context(module, refined=False)
+    ) == {"matrix_free": "pending"}
+    assert module.amr_program_op_support(
+        field_jacobian, context=_context(module, refined=True)
+    ) == {"matrix_free": "pending"}
     assert module.amr_program_op_support(
         _Program([]), context=_context(
             module, refined=True, interfaces=True, frozen=False)) == {}
@@ -228,6 +239,40 @@ def test_context_sensitive_routes_report_green_or_pending_from_resolved_hierarch
     )
     assert frozen_three.supports_shared_interface_fragments
     assert dynamic_three.supports_shared_interface_fragments
+
+    assert module.amr_program_op_support(
+        _Program([{"op": "project", "attrs": {}}]), context=_context(module)
+    ) == {"projection": "pending"}
+    assert module.amr_program_op_support(
+        _Program([{"op": "rhs", "attrs": {"flux": False, "sources": ["default"]}}]),
+        context=_context(module),
+    ) == {"split_default_rhs": "pending"}
+    assert module.amr_program_op_support(
+        _Program([{"op": "rhs", "attrs": {"flux": True, "sources": []}}]),
+        context=_context(module),
+    ) == {"split_default_rhs": "pending"}
+    assert module.amr_program_op_support(
+        _Program([{"op": "apply_laplacian_coeff", "attrs": {}}]), context=_context(module)
+    ) == {"tensor_elliptic": "pending"}
+    assert module.amr_program_op_support(
+        _Program([{"op": "cell_compare", "attrs": {}}]), context=_context(module)
+    ) == {"masks": "pending"}
+    assert module.amr_program_op_support(
+        _Program([{"op": "state", "attrs": {"schedule": "held"}}]), context=_context(module)
+    ) == {"scheduler": "pending"}
+    assert module.amr_program_op_support(
+        _Program([], cell_local_time_contract=object()), context=_context(module)
+    ) == {"cell_local_temporal": "green"}
+    assert module.amr_program_op_support(
+        _Program(
+            [
+                {"op": "state", "attrs": {}, "block": {"id": "left"}},
+                {"op": "state", "attrs": {}, "block": {"id": "right"}},
+            ],
+            cell_local_time_contract=object(),
+        ),
+        context=_context(module),
+    ) == {"cell_local_temporal": "green", "multi_block": "pending"}
 
 
 def test_ir_ops_mirror_the_codegen_op_group_sets():

@@ -4,9 +4,9 @@ import pytest
 
 import pops
 from pops.diagnostics import Balance, BalanceLedger, Integral, StepChangeNorm
-from pops.domain import Rectangle
+from pops.domain import CartesianDomain, Rectangle
 from pops.frames import Cartesian2D
-from pops.mesh import LayoutPlanBuilder, normalize_layout_plan
+from pops.mesh import CartesianGrid, LayoutPlanBuilder, normalize_layout_plan
 from pops.layouts import Uniform
 from pops.output import (
     Checkpoint,
@@ -27,7 +27,7 @@ from pops.output._balance_due_contract import BalanceDueContract
 from pops.representations import Conservative
 from pops.spaces import CellState
 from pops.time import Clock, FailRun as SolveFailRun, every, on_start
-from tests.python.support.layout_plan import cartesian_grid
+from tests.python.support.layout_plan import cartesian_grid, final_amr_layout
 
 
 def _case():
@@ -111,6 +111,67 @@ def test_direct_consumers_resolve_references_layout_levels_and_parallel_mode():
     assert checkpoint.operation_data["guarantee"] == "bit_identical_accepted_state"
     assert checkpoint.operation_data["supports_regrid_on_restart"] is True
     assert case.snapshot.to_dict()["consumers"]["phase"] == "authoring"
+
+
+@pytest.mark.parametrize("dimension", (1, 2, 3))
+@pytest.mark.parametrize("adaptive", (False, True), ids=("uniform", "amr"))
+def test_ranked_consumer_authoring_preserves_homonymous_multicomponent_owners(
+    dimension: int,
+    adaptive: bool,
+) -> None:
+    frame = CartesianDomain(
+        "consumer-ranked-%d" % dimension,
+        (0.0,) * dimension,
+        (1.0,) * dimension,
+    ).frame()
+    model = pops.Model("transport", frame=frame)
+    components = tuple("q%d" % component for component in range(dimension + 1))
+    state = model.state(
+        "U",
+        components=components,
+        representation=Conservative(),
+        space=CellState(frame=frame),
+    )
+    case = pops.Case("consumer-ranked-%d-%s" % (dimension, "amr" if adaptive else "uniform"))
+    left = case.block("left", model)[state]
+    right = case.block("right", model)[state]
+    schedule = every(1, clock=Clock("macro", owner=case.owner_path))
+    graph = ConsumerGraph.from_consumers(
+        (
+            ScientificOutput(
+                format=ParaView(),
+                schedule=schedule,
+                fields=(left, right),
+                target="state/ranked",
+            ),
+        )
+    )
+    case.consumers(graph)
+    pops.validate(case)
+
+    subjects = case.layout_subjects()
+    grid = CartesianGrid(frame=frame, cells=(4,) * dimension)
+    descriptor = final_amr_layout(grid, max_levels=2) if adaptive else Uniform(grid)
+    layout = normalize_layout_plan(
+        descriptor,
+        owner=case.owner_path.canonical(),
+        states=subjects.states,
+        fields=subjects.fields,
+        blocks=subjects.blocks,
+        handle_resolver=case.resolve,
+    )
+    resolved = graph.resolve(case.resolve, layout, owner=case.owner_path.canonical())
+
+    (manifest,) = resolved.nodes
+    quantities = {quantity.reference: quantity for quantity in manifest.quantities}
+    expected = {case.resolve(left), case.resolve(right)}
+    assert set(quantities) == expected
+    assert len({reference.block_ref for reference in quantities}) == 2
+    assert len({quantity.identity for quantity in quantities.values()}) == 2
+    assert {quantity.runtime_resource for quantity in quantities.values()} == {
+        "declaration:%s" % reference.qualified_id for reference in expected
+    }
+    assert {quantity.levels for quantity in quantities.values()} == {((0, 1) if adaptive else (0,))}
 
 
 def test_checkpoint_hierarchy_policies_have_distinct_exact_identities_and_guarantees():
@@ -260,15 +321,17 @@ def test_balance_consumer_resolves_one_exact_native_ledger_route():
     clock = Clock("macro", owner=case.owner_path)
     schedule = every(4, clock=clock)
     ledger = BalanceLedger("mass")
-    graph = ConsumerGraph.from_consumers((
-        ScientificOutput(
-            format=ParaView(),
-            schedule=schedule,
-            fields=(state,),
-            diagnostics=(Balance(ledger, block=block),),
-            target="state/balance",
-        ),
-    ))
+    graph = ConsumerGraph.from_consumers(
+        (
+            ScientificOutput(
+                format=ParaView(),
+                schedule=schedule,
+                fields=(state,),
+                diagnostics=(Balance(ledger, block=block),),
+                target="state/balance",
+            ),
+        )
+    )
     case.consumers(graph)
     pops.validate(case)
     subjects = case.layout_subjects()
@@ -282,8 +345,8 @@ def test_balance_consumer_resolves_one_exact_native_ledger_route():
     )
 
     resolved = graph.resolve(case.resolve, layout, owner=case.owner_path.canonical())
-    quantity, = resolved.nodes[0].diagnostic_quantities
-    operation, = quantity.execution["operations"]
+    (quantity,) = resolved.nodes[0].diagnostic_quantities
+    (operation,) = quantity.execution["operations"]
     contract = BalanceDueContract.from_consumer_graph(resolved)
     route = ledger.route_identity(case.resolve(block))
     assert not schedule.consumer_may_fire_at_start()
@@ -299,18 +362,18 @@ def test_balance_consumer_retains_native_term_selector_in_due_contract():
     case, block, state = _case()
     clock = Clock("macro", owner=case.owner_path)
     schedule = every(4, clock=clock)
-    ledger = BalanceLedger(
-        "mass-native", automatic_terms=("projection", "reflux")
+    ledger = BalanceLedger("mass-native", automatic_terms=("projection", "reflux"))
+    graph = ConsumerGraph.from_consumers(
+        (
+            ScientificOutput(
+                format=ParaView(),
+                schedule=schedule,
+                fields=(state,),
+                diagnostics=(Balance(ledger, block=block),),
+                target="state/native-balance",
+            ),
+        )
     )
-    graph = ConsumerGraph.from_consumers((
-        ScientificOutput(
-            format=ParaView(),
-            schedule=schedule,
-            fields=(state,),
-            diagnostics=(Balance(ledger, block=block),),
-            target="state/native-balance",
-        ),
-    ))
     case.consumers(graph)
     pops.validate(case)
     subjects = case.layout_subjects()
@@ -324,8 +387,8 @@ def test_balance_consumer_retains_native_term_selector_in_due_contract():
     )
 
     resolved = graph.resolve(case.resolve, layout, owner=case.owner_path.canonical())
-    quantity, = resolved.nodes[0].diagnostic_quantities
-    operation, = quantity.execution["operations"]
+    (quantity,) = resolved.nodes[0].diagnostic_quantities
+    (operation,) = quantity.execution["operations"]
     route = ledger.route_identity(case.resolve(block))
     contract = BalanceDueContract.from_consumer_graph(resolved)
 
@@ -338,15 +401,17 @@ def test_balance_consumer_refuses_a_schedule_that_can_fire_at_start():
     case, block, state = _case()
     clock = Clock("macro", owner=case.owner_path)
     schedule = on_start(clock=clock)
-    graph = ConsumerGraph.from_consumers((
-        ScientificOutput(
-            format=ParaView(),
-            schedule=schedule,
-            fields=(state,),
-            diagnostics=(Balance(BalanceLedger("mass"), block=block),),
-            target="state/balance",
-        ),
-    ))
+    graph = ConsumerGraph.from_consumers(
+        (
+            ScientificOutput(
+                format=ParaView(),
+                schedule=schedule,
+                fields=(state,),
+                diagnostics=(Balance(BalanceLedger("mass"), block=block),),
+                target="state/balance",
+            ),
+        )
+    )
     case.consumers(graph)
     pops.validate(case)
     subjects = case.layout_subjects()

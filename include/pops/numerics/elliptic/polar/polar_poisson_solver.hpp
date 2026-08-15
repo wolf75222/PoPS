@@ -53,16 +53,14 @@ concept PolarEllipticSolver = requires(Solver solver, const Solver constant_solv
   { solver.phi() } -> std::same_as<typename Solver::field_type&>;
   { solver.solve() } -> std::same_as<SolveReport>;
   { constant_solver.residual() } -> std::convertible_to<Real>;
-  { constant_solver.geom() } ->
-      std::same_as<const PolarGeometry<Solver::dimension>&>;
+  { constant_solver.geom() } -> std::same_as<const PolarGeometry<Solver::dimension>&>;
 };
 
 namespace polar_poisson_detail {
 
 inline std::size_t host_offset(const Box<2>& storage, int i, int j) {
   return static_cast<std::size_t>(i - storage.lo[0]) +
-         static_cast<std::size_t>(j - storage.lo[1]) *
-             static_cast<std::size_t>(storage.length(0));
+         static_cast<std::size_t>(j - storage.lo[1]) * static_cast<std::size_t>(storage.length(0));
 }
 
 inline bool radial_boundary_supported(const PhysicalBoundaryFace& face) noexcept {
@@ -170,8 +168,7 @@ class PolarPoissonSolver {
           "PolarPoissonSolver<2> requires one exact full-annulus local patch");
 
     const auto& bc = request.boundary;
-    if (bc.spacing()[0] != request.geometry.dr() ||
-        bc.spacing()[1] != request.geometry.dtheta())
+    if (bc.spacing()[0] != request.geometry.dr() || bc.spacing()[1] != request.geometry.dtheta())
       throw std::invalid_argument("polar Poisson boundary spacing differs from its geometry");
     for (const BoundarySide side : {BoundarySide::lower, BoundarySide::upper}) {
       const Face<Dim> radial{0, side};
@@ -209,7 +206,7 @@ class PolarPoissonSolver {
         row[static_cast<std::size_t>(azimuthal)] =
             complex_type(host(polar_poisson_detail::host_offset(storage, i, j)), Real(0));
       }
-      fft1d(row.data(), nth, false);
+      polar_local_transform_(row, false);
     }
     return transformed;
   }
@@ -232,8 +229,7 @@ class PolarPoissonSolver {
       lower[static_cast<std::size_t>(radial)] = geometry_.r_face(i) * inverse;
       upper[static_cast<std::size_t>(radial)] = geometry_.r_face(i + 1) * inverse;
       radial_diagonal[static_cast<std::size_t>(radial)] =
-          -(lower[static_cast<std::size_t>(radial)] +
-            upper[static_cast<std::size_t>(radial)]);
+          -(lower[static_cast<std::size_t>(radial)] + upper[static_cast<std::size_t>(radial)]);
       inverse_radius_squared[static_cast<std::size_t>(radial)] = Real(1) / (radius * radius);
     }
 
@@ -251,12 +247,10 @@ class PolarPoissonSolver {
     std::vector<complex_type> mode_solution(static_cast<std::size_t>(nr));
     for (int mode = 0; mode < nth; ++mode) {
       const int signed_mode = mode <= nth / 2 ? mode : mode - nth;
-      const Real eigenvalue =
-          -static_cast<Real>(signed_mode) * static_cast<Real>(signed_mode);
+      const Real eigenvalue = -static_cast<Real>(signed_mode) * static_cast<Real>(signed_mode);
       for (int radial = 0; radial < nr; ++radial) {
         const std::size_t index = static_cast<std::size_t>(radial);
-        diagonal[index] = radial_diagonal[index] +
-                          eigenvalue * inverse_radius_squared[index];
+        diagonal[index] = radial_diagonal[index] + eigenvalue * inverse_radius_squared[index];
         mode_rhs[index] = rhs_hat[index][static_cast<std::size_t>(mode)];
       }
       if (low_dirichlet) {
@@ -270,14 +264,12 @@ class PolarPoissonSolver {
       if (high_dirichlet) {
         diagonal[last] -= upper[last];
         if (mode == 0)
-          mode_rhs[last] -=
-              Real(2) * upper[last] * high.value * static_cast<Real>(nth);
+          mode_rhs[last] -= Real(2) * upper[last] * high.value * static_cast<Real>(nth);
       } else {
         diagonal[last] += upper[last];
       }
 
-      thomas_(lower, diagonal, upper, mode_rhs, mode_solution,
-              pin_constant && mode == 0);
+      thomas_(lower, diagonal, upper, mode_rhs, mode_solution, pin_constant && mode == 0);
       for (int radial = 0; radial < nr; ++radial)
         phi_hat[static_cast<std::size_t>(radial)][static_cast<std::size_t>(mode)] =
             mode_solution[static_cast<std::size_t>(radial)];
@@ -289,7 +281,7 @@ class PolarPoissonSolver {
     const Box<Dim>& storage = output.grown_box();
     for (int radial = 0; radial < nr; ++radial) {
       auto& row = phi_hat[static_cast<std::size_t>(radial)];
-      fft1d(row.data(), nth, true);
+      polar_local_transform_(row, true);
       for (int azimuthal = 0; azimuthal < nth; ++azimuthal) {
         const int i = valid.lo[0] + radial;
         const int j = valid.lo[1] + azimuthal;
@@ -298,6 +290,26 @@ class PolarPoissonSolver {
       }
     }
     output.copy_from_host(host);
+  }
+
+  // Polar is an explicit one-box 2D provider: transform only its theta row locally.
+  static void polar_local_transform_(std::vector<complex_type>& values, bool inverse) {
+    const std::size_t count = values.size();
+    if (count == 0)
+      throw std::invalid_argument("polar Poisson transform requires a non-empty theta row");
+    std::vector<complex_type> transformed(count);
+    const Real sign = inverse ? Real(1) : Real(-1);
+    const Real scale = inverse ? Real(1) / static_cast<Real>(count) : Real(1);
+    const Real two_pi = Real(2) * std::acos(Real(-1));
+    for (std::size_t mode = 0; mode < count; ++mode) {
+      for (std::size_t sample = 0; sample < count; ++sample) {
+        const Real angle =
+            sign * two_pi * static_cast<Real>(mode * sample) / static_cast<Real>(count);
+        transformed[mode] += values[sample] * complex_type(std::cos(angle), std::sin(angle));
+      }
+      transformed[mode] *= scale;
+    }
+    values = std::move(transformed);
   }
 
   void thomas_(const std::vector<Real>& lower, const std::vector<Real>& diagonal,
@@ -326,8 +338,7 @@ class PolarPoissonSolver {
     }
     for (std::size_t row = size - 1; row-- > 0;)
       solution[row] =
-          (working_rhs_[row] - working_upper_[row] * solution[row + 1]) /
-          working_diagonal_[row];
+          (working_rhs_[row] - working_upper_[row] * solution[row + 1]) / working_diagonal_[row];
   }
 
   Real residual_of_(const field_type& candidate) const {
@@ -346,8 +357,7 @@ class PolarPoissonSolver {
     Real maximum = 0;
     for (int mode = 0; mode < nth; ++mode) {
       const int signed_mode = mode <= nth / 2 ? mode : mode - nth;
-      const Real eigenvalue =
-          -static_cast<Real>(signed_mode) * static_cast<Real>(signed_mode);
+      const Real eigenvalue = -static_cast<Real>(signed_mode) * static_cast<Real>(signed_mode);
       for (int radial = 0; radial < nr; ++radial) {
         if (pin_constant && mode == 0 && radial == 0)
           continue;
@@ -365,24 +375,21 @@ class PolarPoissonSolver {
           if (low_dirichlet && mode == 0)
             expected -= Real(2) * lower * low.value * static_cast<Real>(nth);
         } else {
-          applied += lower *
-                     phi_hat[static_cast<std::size_t>(radial - 1)]
-                            [static_cast<std::size_t>(mode)];
+          applied +=
+              lower * phi_hat[static_cast<std::size_t>(radial - 1)][static_cast<std::size_t>(mode)];
         }
         if (radial == nr - 1) {
           diagonal += high_dirichlet ? -upper : upper;
           if (high_dirichlet && mode == 0)
             expected -= Real(2) * upper * high.value * static_cast<Real>(nth);
         } else {
-          applied += upper *
-                     phi_hat[static_cast<std::size_t>(radial + 1)]
-                            [static_cast<std::size_t>(mode)];
+          applied +=
+              upper * phi_hat[static_cast<std::size_t>(radial + 1)][static_cast<std::size_t>(mode)];
         }
-        applied += diagonal *
-                   phi_hat[static_cast<std::size_t>(radial)][static_cast<std::size_t>(mode)];
-        maximum = std::max(maximum,
-                           static_cast<Real>(std::abs(applied - expected)) /
-                               static_cast<Real>(nth));
+        applied +=
+            diagonal * phi_hat[static_cast<std::size_t>(radial)][static_cast<std::size_t>(mode)];
+        maximum = std::max(
+            maximum, static_cast<Real>(std::abs(applied - expected)) / static_cast<Real>(nth));
       }
     }
     return maximum;
@@ -397,8 +404,8 @@ class PolarPoissonSolver {
     Real maximum = 0;
     for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
       for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
-        maximum = std::max(maximum,
-                           std::abs(host(polar_poisson_detail::host_offset(storage, i, j))));
+        maximum =
+            std::max(maximum, std::abs(host(polar_poisson_detail::host_offset(storage, i, j))));
     return maximum;
   }
 
@@ -418,8 +425,7 @@ static_assert(PolarEllipticSolver<PolarPoissonSolver<2>>);
 /// Dimension-diagnostic provider.  The build operation does not exist for rank 1 or 3.
 template <int Dim>
 struct PolarPoissonProvider {
-  static_assert(Dim >= 1 && Dim <= 3,
-                "PolarPoissonProvider only supports dimensions 1, 2, and 3");
+  static_assert(Dim >= 1 && Dim <= 3, "PolarPoissonProvider only supports dimensions 1, 2, and 3");
 
   static constexpr bool available = PolarPoissonCapabilities<Dim>::available;
   static constexpr std::string_view rejection_reason() noexcept {

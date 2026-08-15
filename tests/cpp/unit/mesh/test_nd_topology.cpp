@@ -10,6 +10,8 @@
 
 using namespace pops;
 using namespace pops::mesh::nd_proof;
+using pops::mesh::BoxArray;
+using pops::mesh::BoxHashBudget;
 
 namespace {
 

@@ -1,276 +1,170 @@
-// AMR MULTI-BLOCS, premiere PR du capstone (docs/AMR_MULTIBLOCK_DESIGN.md).
-//
-// Verrouille la FACADE RUNTIME multi-blocs (AmrSystem -> AmrRuntime) : DEUX blocs EXPLICITES a
-// SCHEMAS SPATIAUX DIFFERENTS, co-localises sur UNE hierarchie AMR PARTAGEE, avec un Poisson de
-// SYSTEME a second membre SOMME (Sum_b q_b n_b lu aux memes cellules). Assertions (cf. tache PR1) :
-//   (a) les DEUX blocs evoluent sur la hierarchie partagee (densite changee par le transport) ;
-//   (b) le RHS Poisson EST la SOMME co-localisee des elliptic_rhs des deux blocs (q0 n0 + q1 n1),
-//       compare au RHS assemble a la main sur le grossier partage ;
-//   (c) la MASSE de CHAQUE bloc est conservee (reflux + average_down, PAR BLOC) a ~machine ;
-//   (d) le chemin MONO-BLOC reste BIT-IDENTIQUE (dmax == 0) : meme cas en 1 bloc via AmrSystem
-//       (chemin AmrCouplerMP, intouche) avant et apres l'introduction du multi-blocs -- ici la
-//       non-regression est verifiee en comparant le mono-bloc a une reference recalculee a part
-//       (le binaire de reference n'etant pas disponible en CI, on verifie l'INVARIANCE de l'API
-//       mono-bloc : 1 bloc passe TOUJOURS par AmrCouplerMP, jamais par AmrRuntime) ;
-//   (e) multi-blocs + regrid_every > 0 est ACCEPTE (deverrouillage Phase 2, C.6 : regrid d'union).
-//
-// Le point (b) (co-localisation du Poisson somme) est verifie au niveau du MOTEUR AmrRuntime +
-// build_amr_block (les briques introduites par cette PR), ou l'on a acces au RHS du MG et aux
-// niveaux des blocs ; les points (a)(c)(d)(e) au niveau de la facade AmrSystem.
-
 #include <gtest/gtest.h>
 
-#include "explicit_amr_program.hpp"
-#include "load_balance_test_authority.hpp"
-#include "amr_transfer_test_authority.hpp"
+#include <pops/core/foundation/native_dimension.hpp>
+#include <pops/mesh/storage/mf_arith.hpp>
+#include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/runtime/amr_system.hpp>
+#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
+#include <pops/runtime/system/system_coupling_registry.hpp>
 
-#include <pops/coupling/base/elliptic_rhs.hpp>  // add_scaled_component (RHS de reference assemble main)
-#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
-#include <pops/runtime/amr/amr_runtime.hpp>                  // AmrRuntime, AmrRuntimeBlock
-#include <pops/runtime/amr_system.hpp>                       // facade AmrSystem
-#include <pops/runtime/config/model_spec.hpp>
-#include <pops/physics/bricks/bricks.hpp>
-#include <pops/mesh/storage/mf_arith.hpp>  // norm_inf
-#include <pops/mesh/storage/multifab.hpp>
-
-#include <cmath>
-#include <cstdio>
-#include <numeric>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
-#if defined(POPS_HAS_KOKKOS)
-#include <Kokkos_Core.hpp>
-#endif
+namespace {
 
-using namespace pops;
-
-// Modele ExB scalaire (1 var) a charge q : transport E x B (advection pilotee par grad phi), densite
-// de charge q n pour le Poisson de systeme. La charge q (signe inclus) distingue electrons / ions.
-using ExBModel = CompositeModel<CartesianExBDrift, NoSource, ChargeDensity>;
-static ExBModel exb_model(double q, double) {
-  return ExBModel{CartesianExBDrift{}, NoSource{}, ChargeDensity{Real(q)}};
-}
-
-static ModelSpec exb_spec(double q, double B0) {
-  ModelSpec spec;
-  spec.transport = "exb";
-  spec.source = "none";
-  spec.elliptic = "charge";
-  spec.q = q;
-  return spec;
-}
-
-// A single periodic species needs an explicitly authored neutralizing background: q*n alone has a
-// non-zero constant-mode moment and is not a solvable periodic Poisson problem.  This is used only
-// by the mono-block routing parity check below; the two-block case remains the physical q0*n0+q1*n1
-// co-located system source.
-static ModelSpec exb_neutralized_charge(double q, double B0, double n0) {
-  ModelSpec s;
-  s.transport = "exb";
-  s.source = "none";
-  s.elliptic = "background";
-  s.alpha = q;
-  s.n0 = n0;
-  return s;
-}
-
-// densite de charge a moyenne nulle (solvable en periodique) : un creneau centre +/- d'amplitude a
-// autour de 1, n*n row-major.
-static std::vector<double> bump(int n, double base, double amp) {
-  std::vector<double> r(static_cast<std::size_t>(n) * n, base);
-  for (int j = 0; j < n; ++j)
-    for (int i = 0; i < n; ++i) {
-      const bool in = (i >= n / 4 && i < 3 * n / 4 && j >= n / 4 && j < 3 * n / 4);
-      r[static_cast<std::size_t>(j) * n + i] = base + (in ? amp : -amp / 3.0);
-    }
-  return r;
-}
-
-TEST(test_amr_system_twoblock, Runs) {
-#if defined(POPS_HAS_KOKKOS)
-  int argc = 0;
-  char** argv = nullptr;
-  Kokkos::ScopeGuard guard(argc, argv);
-#endif
-
-  const int N = 32;
-  const double L = 1.0, B0 = 1.0;
-  const double q0 = +1.0, q1 = -1.0;  // ions (block 0), electrons (block 1)
-  // densites DIFFERENTES (amplitudes distinctes) -> charge nette q0 n0 + q1 n1 = n0 - n1 NON nulle
-  // localement (mais a moyenne nulle, Poisson periodique solvable). Verifie que les DEUX densites
-  // contribuent reellement au RHS somme (sinon n0 == n1 le rendrait identiquement nul).
-  std::vector<double> rho0 = bump(N, 1.0, 0.40);
-  std::vector<double> rho1 = bump(N, 1.0, 0.20);
-  const double mono_background =
-      std::accumulate(rho0.begin(), rho0.end(), 0.0) / static_cast<double>(rho0.size());
-
-  // ============================================================================================
-  // (b) POISSON SOMME CO-LOCALISE, au niveau du moteur AmrRuntime + build_amr_block (cette PR).
-  //     On monte deux blocs ExB a charges opposees + schemas DIFFERENTS sur le layout PARTAGE, on
-  //     resout les champs, puis on compare le RHS du MG a la somme assemblee a la main des deux
-  //     densites grossieres (q0 n0 + q1 n1) sur le MEME grossier. Egalite a ~machine => co-localise.
-  // ============================================================================================
-  {
-    AmrBuildParams bp;
-    bp.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
-    bp.mesh.periodicity = Periodicity{true, true};
-    bp.mesh.n = N;
-    bp.mesh.L = L;
-    bp.mesh.regrid_every = 0;  // hierarchie figee (multi-blocs PR1)
-    bp.poisson.bc = BCRec{};   // periodique
-    const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp);
-
-    std::vector<AmrRuntimeBlock> blocks;
-    // bloc 0 : ions q=+1, schema none/rusanov.
-    blocks.push_back(detail::dispatch_amr_block(exb_model(q0, B0), "none", "rusanov", S, "ions",
-                                                rho0, /*has_density=*/true, 1.4, 1, false));
-    // bloc 1 : electrons q=-1, schema minmod/rusanov (DIFFERENT du bloc 0).
-    blocks.push_back(detail::dispatch_amr_block(exb_model(q1, B0), "minmod", "rusanov", S,
-                                                "electrons", rho1, /*has_density=*/true, 1.4, 1,
-                                                false));
-
-    AmrRuntime rt(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
-                  S.replicated_coarse, S.wall);
-    test::install_second_order_amr_transfer_authorities(rt, 2);
-    rt.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
-        0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
-    EXPECT_EQ(rt.n_blocks(), 2) << "twoblock_engine_two_blocks";
-    EXPECT_EQ(rt.nlev(), 2) << "twoblock_engine_two_levels";
-
-    {
-      auto outcome = rt.solve_fields();
-      (void)outcome.consume(SolveConsumption::kAccept);
-    }  // average_down par bloc + Poisson somme co-localise + aux
-
-    // RHS de REFERENCE assemble a la main sur le grossier partage : q0 n0 + q1 n1, lu aux MEMES
-    // cellules (memes fabs/box que le grossier des blocs, APRES le average_down de solve_fields).
-    // ChargeDensity::rhs = q n -> elliptic_rhs = q n, donc le RHS de systeme attendu = q0 n0 + q1 n1.
-    MultiFab ref(S.ba_coarse, S.dm_coarse, 1, 0);
-    ref.set_val(Real(0));
-    add_scaled_component(rt.levels(0)[0].U, Real(q0), 0, ref);
-    add_scaled_component(rt.levels(1)[0].U, Real(q1), 0, ref);
-    // RHS EFFECTIVEMENT assemble par le moteur (chemin reel : chaque bloc accumule add_elliptic_rhs
-    // = elliptic_rhs = q n sur mg_.rhs()). On le compare cellule a cellule a la reference.
-    MultiFab& got = rt.poisson_rhs();
-    MultiFab diff(S.ba_coarse, S.dm_coarse, 1, 0);
-    diff.set_val(Real(0));
-    add_scaled_component(got, Real(1), 0, diff);
-    add_scaled_component(ref, Real(-1), 0, diff);
-    EXPECT_LT(norm_inf(diff), Real(1e-13)) << "twoblock_poisson_rhs_is_sum_colocated";
-    // somme non triviale (les deux densites contribuent) + phi non nul -> Poisson de systeme actif.
-    EXPECT_GT(norm_inf(ref), Real(1e-6)) << "twoblock_poisson_rhs_nonzero";
-    EXPECT_GT(norm_inf(rt.phi()), Real(1e-8)) << "twoblock_poisson_phi_nonzero";
-
-    // Temporal evolution is exercised below through an explicitly authored Program on AmrSystem.
-    // This direct-engine section owns only the co-located elliptic assembly contract; it must not
-    // invoke the retired AmrRuntime temporal engine as a second authority.
+template <int Dim>
+struct ConstantModel {
+  using Law = pops::nd::ScalarAdvection<Dim>;
+  using Schema = typename Law::Schema;
+  using State = typename Law::State;
+  using Primitive = typename Law::Primitive;
+  static constexpr int dimension = Dim;
+  static constexpr int n_vars = 1;
+  Law law;
+  static pops::PreparedProviderIdentity provider_identity() noexcept {
+    return {"tests.amr.system-twoblock.constant", 1};
   }
-
-  // ============================================================================================
-  // FACADE AmrSystem : (a) evolution des deux blocs, (c) masse par bloc, (e) refus regrid.
-  // ============================================================================================
-  {
-    AmrSystemConfig cfg;
-    cfg.n = N;
-    cfg.L = L;
-    cfg.periodicity = {true, true};
-    cfg.regrid_every = 0;  // multi-blocs PR1 : hierarchie figee
-
-    AmrSystem sim(cfg);
-    sim.set_temporal_relations({2}, {1}, {"integral_only"});
-    sim.add_block("ions", exb_spec(q0, B0), "none", "rusanov", "conservative", "explicit", 1);
-    sim.add_block("electrons", exb_spec(q1, B0), "minmod", "rusanov", "conservative", "explicit",
-                  1);  // SCHEMA DIFFERENT du bloc 0
-    sim.set_poisson("charge_density", "geometric_mg", "periodic");
-    sim.set_density("ions", rho0);
-    sim.set_density("electrons", rho1);
-
-    EXPECT_EQ(sim.n_blocks(), 2) << "facade_two_blocks";
-
-    const std::vector<double> d0_before = sim.density("ions");
-    const std::vector<double> d1_before = sim.density("electrons");
-    const double m0_before = sim.mass("ions");
-    const double m1_before = sim.mass("electrons");
-
-    test::install_forward_euler_program(sim);
-    sim.advance(0.01, 5);
-
-    const std::vector<double> d0_after = sim.density("ions");
-    const std::vector<double> d1_after = sim.density("electrons");
-    const double m0_after = sim.mass("ions");
-    const double m1_after = sim.mass("electrons");
-
-    // (a) les DEUX blocs ont evolue (transport E x B a deplace la densite, non nulle).
-    double dmax0 = 0, dmax1 = 0;
-    for (std::size_t i = 0; i < d0_after.size(); ++i) {
-      dmax0 = std::max(dmax0, std::fabs(d0_after[i] - d0_before[i]));
-      dmax1 = std::max(dmax1, std::fabs(d1_after[i] - d1_before[i]));
-    }
-    EXPECT_GT(dmax0, 1e-6) << "facade_block0_evolved";
-    EXPECT_GT(dmax1, 1e-6) << "facade_block1_evolved";
-
-    // (c) masse de CHAQUE bloc conservee a ~machine (advection periodique conservative, par bloc).
-    EXPECT_LT(std::fabs(m0_after - m0_before), 1e-10) << "facade_block0_mass_conserved";
-    EXPECT_LT(std::fabs(m1_after - m1_before), 1e-10) << "facade_block1_mass_conserved";
-
-    // potentiel de systeme non trivial (Poisson somme co-localise q0 n0 + q1 n1).
-    const std::vector<double> phi = sim.potential();
-    double pmax = 0;
-    for (double v : phi)
-      pmax = std::max(pmax, std::fabs(v));
-    EXPECT_GT(pmax, 1e-8) << "facade_potential_nonzero";
-
-    EXPECT_GE(sim.n_patches(), 1) << "facade_shared_hierarchy_has_fine_patch";
+  void serialize_exact_parameters(pops::ExactContractBuilder& contract) const {
+    for (int axis = 0; axis < Dim; ++axis)
+      contract.scalar(law.velocity()[axis]);
   }
-
-  // (e) multi-blocs + regrid_every > 0 ACCEPTE au build (deverrouillage Phase 2, C.6 : regrid d'union
-  //     des tags). L'ancien refus (hierarchie figee) est leve ; ensure_built construit le moteur avec
-  //     la cadence de regrid active. Le mouvement effectif de la hierarchie est verrouille en detail
-  //     par test_amr_multiblock_regrid_union ; ici on verifie seulement que la facade NE LEVE PLUS.
-  EXPECT_NO_THROW({
-    AmrSystemConfig cfg;
-    cfg.n = N;
-    cfg.L = L;
-    cfg.regrid_every = 10;  // > 0
-    AmrSystem sim(cfg);
-    sim.set_temporal_relations({2}, {1}, {"integral_only"});
-    sim.add_block("ions", exb_spec(q0, B0), "none", "rusanov", "conservative", "explicit", 1);
-    sim.add_block("electrons", exb_spec(q1, B0), "minmod", "rusanov", "conservative", "explicit",
-                  1);
-    sim.set_density("ions", rho0);
-    sim.set_density("electrons", rho1);
-    (void)sim.mass("ions");  // declenche ensure_built -> moteur multi-blocs + regrid d'union actif
-  }) << "multiblock_regrid_now_accepted";
-
-  // ============================================================================================
-  // (d) MONO-BLOC BIT-IDENTIQUE : un seul bloc passe TOUJOURS par AmrCouplerMP (jamais AmrRuntime).
-  //     On verifie l'INVARIANCE de l'API mono-bloc : meme cas joue deux fois donne le MEME resultat
-  //     au bit pres (dmax == 0). C'est la garantie que le routage facade n'a pas devie le mono-bloc
-  //     vers le nouveau moteur (qui differe sur l'ordre des operations flottantes).
-  // ============================================================================================
-  {
-    auto run_mono = [&]() {
-      AmrSystemConfig cfg;
-      cfg.n = N;
-      cfg.L = L;
-      cfg.periodicity = {true, true};
-      cfg.regrid_every = 0;
-      AmrSystem sim(cfg);
-      sim.add_block("ne", exb_neutralized_charge(q0, B0, mono_background), "none", "rusanov",
-                    "conservative", "explicit", 1);
-      sim.set_poisson("charge_density", "geometric_mg", "periodic");
-      sim.set_density("ne", rho0);
-      test::install_forward_euler_program(sim);
-      sim.advance(0.01, 5);
-      return sim.density("ne");
-    };
-    const std::vector<double> a = run_mono();
-    const std::vector<double> b = run_mono();
-    double dmax = 0;
-    for (std::size_t i = 0; i < a.size(); ++i)
-      dmax = std::max(dmax, std::fabs(a[i] - b[i]));
-    EXPECT_EQ(dmax, 0.0) << "monoblock_bit_identical_dmax0";
+  static pops::VariableSet conservative_vars() {
+    return {pops::VariableKind::Conservative, {"u"}, 1, {pops::VariableRole::Scalar}};
   }
+  static pops::VariableSet primitive_vars() {
+    return {pops::VariableKind::Primitive, {"u"}, 1, {pops::VariableRole::Scalar}};
+  }
+  POPS_HD pops::nd::StateConversion<Primitive> recover(const State& state) const {
+    return law.recover(state);
+  }
+  POPS_HD pops::nd::StateConversion<State> make_conservative(const Primitive& value) const {
+    return law.make_conservative(value);
+  }
+  POPS_HD pops::nd::StateConversionStatus admissibility(const State& state) const {
+    return law.admissibility(state);
+  }
+  template <int Axis>
+  POPS_HD State flux(const State& state) const {
+    return law.template flux<Axis>(state);
+  }
+  template <int Axis>
+  POPS_HD pops::Real max_wave_speed(const State& state) const {
+    return law.template max_wave_speed<Axis>(state);
+  }
+  template <int Axis>
+  POPS_HD void wave_speeds(const State& state, pops::Real& lower, pops::Real& upper) const {
+    law.template wave_speeds<Axis>(state, lower, upper);
+  }
+  POPS_HD State source(const State&, const pops::ProviderValues<0>&) const { return {}; }
+  POPS_HD pops::Real elliptic_rhs(const State&) const { return pops::Real(0); }
+};
+
+template <int Dim>
+pops::AmrSystemConfig<Dim> config() {
+  pops::AmrSystemConfig<Dim> result;
+  result.level_count = 1;
+  result.transition_ratios.clear();
+  result.transition_buffers.clear();
+  result.transition_lookaheads.clear();
+  for (int axis = 0; axis < Dim; ++axis) {
+    result.shape[axis] = 4;
+    result.periodicity[axis] = true;
+  }
+  return result;
+}
+
+template <int Dim>
+void install(pops::AmrSystem<Dim>& system, const std::string& name) {
+  pops::RealVector<Dim> velocity{};
+  ConstantModel<Dim> model{pops::nd::ScalarAdvection<Dim>::prepare(velocity)};
+  pops::add_compiled_model<Dim>(system, name, model, "minmod", "rusanov", "conservative",
+                                "explicit", static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1,
+                                {}, {}, 0.0, static_cast<double>(pops::kWenoEpsilon), false,
+                                "tests.amr.system-twoblock/physical_flux");
+}
+
+template <int Dim>
+std::size_t cells(const pops::AmrSystemConfig<Dim>& cfg) {
+  std::size_t result = 1;
+  for (int axis = 0; axis < Dim; ++axis)
+    result *= static_cast<std::size_t>(cfg.shape[axis]);
+  return result;
+}
+
+}  // namespace
+
+TEST(test_amr_system_twoblock, AcceptedStatesRollbackTogether) {
+  constexpr int Dim = pops::kNativeDimension;
+  const auto cfg = config<Dim>();
+  pops::AmrSystem<Dim> system(cfg);
+  system.install_block_state_route("a", "state/a");
+  system.install_block_state_route("b", "state/b");
+  install(system, "a");
+  install(system, "b");
+  system.set_conservative_state("a", std::vector<double>(cells(cfg), 2.0));
+  system.set_conservative_state("b", std::vector<double>(cells(cfg), 5.0));
+  system.install_program_step([](double) {});
+  system.set_program_block_map({0, 1});
+  using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
+  system.install_prepared_amr_program_flux_expression_budget(
+      "tests.amr.system-twoblock/manual-program", std::vector<FluxBudget>{{8, 16}, {0, 0}});
+  const auto& prepared_budget = system.prepared_amr_program_flux_expression_budget();
+  ASSERT_EQ(prepared_budget.blocks.size(), 2U);
+  EXPECT_EQ(prepared_budget.blocks[1].rhs_basis_bound, 0U);
+  EXPECT_EQ(prepared_budget.program_block_map.canonical_indices, (std::vector<std::size_t>{0, 1}));
+
+  pops::MultiFab<Dim> first(system.prepared_amr_block_state(0, 0));
+  pops::MultiFab<Dim> second(system.prepared_amr_block_state(1, 0));
+  first.set_val(pops::Real(7));
+  second.set_val(pops::Real(11));
+  std::vector<pops::MultiFab<Dim>*> candidates{&first, &second};
+
+  system.begin_step_transaction();
+  system.publish_prepared_amr_program_candidates(0, candidates);
+  EXPECT_EQ(pops::reduce_min_local(system.prepared_amr_block_state(0, 0)), pops::Real(7));
+  EXPECT_EQ(pops::reduce_min_local(system.prepared_amr_block_state(1, 0)), pops::Real(11));
+  system.rollback_step_transaction();
+  EXPECT_EQ(pops::reduce_min_local(system.prepared_amr_block_state(0, 0)), pops::Real(2));
+  EXPECT_EQ(pops::reduce_min_local(system.prepared_amr_block_state(1, 0)), pops::Real(5));
+}
+
+TEST(test_amr_system_twoblock, SingleBlockIsTheNEqualsOneCarrierCase) {
+  constexpr int Dim = pops::kNativeDimension;
+  const auto cfg = config<Dim>();
+  pops::AmrSystem<Dim> system(cfg);
+  system.install_block_state_route("only", "state/only");
+  install(system, "only");
+  system.set_conservative_state("only", std::vector<double>(cells(cfg), 3.0));
+  system.set_program_block_map({0});
+
+  ASSERT_EQ(system.prepared_amr_program_block_map().canonical_indices.size(), 1U);
+  pops::MultiFab<Dim> candidate(system.prepared_amr_block_state(0, 0));
+  candidate.set_val(pops::Real(4));
+  std::vector<pops::MultiFab<Dim>*> candidates{&candidate};
+  system.publish_prepared_amr_program_candidates(0, candidates);
+  EXPECT_EQ(pops::reduce_min_local(system.prepared_amr_block_state(0, 0)), pops::Real(4));
+}
+
+TEST(test_amr_system_twoblock, MalformedConservationOwnerCannotPublishMaterialization) {
+  constexpr int Dim = pops::kNativeDimension;
+  const auto cfg = config<Dim>();
+  pops::AmrSystem<Dim> system(cfg);
+  system.install_block_state_route("a", "state/a");
+  system.install_block_state_route("b", "state/b");
+  install(system, "a");
+  install(system, "b");
+  system.set_conservative_state("a", std::vector<double>(cells(cfg), 2.0));
+  system.set_conservative_state("b", std::vector<double>(cells(cfg), 5.0));
+
+  using Group = pops::runtime::system::PreparedCouplingConservationGroup;
+  using Operator = typename pops::AmrSystem<Dim>::PreparedCouplingOperator;
+  Operator malformed(
+      [](pops::Real, const std::vector<pops::MultiFab<Dim>*>&) {},
+      std::vector<Group>{{"scalar-total", {{"not-a", 0, 0, "scalar"}, {"b", 1, 0, "scalar"}}}});
+  system.install_prepared_amr_coupling_operator("tests.amr.system-twoblock/malformed-owner",
+                                                pops::CouplingOperatorView{"malformed-owner"},
+                                                std::move(malformed));
+
+  EXPECT_ANY_THROW((void)system.prepared_amr_block_state(0, 0));
+  EXPECT_ANY_THROW((void)system.prepared_amr_block_state(1, 0));
 }

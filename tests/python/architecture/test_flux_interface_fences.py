@@ -31,13 +31,25 @@ def test_spatial_operators_own_geometric_measure_exactly_once():
     )
     combined = "\n".join(_behavior(path) for path in paths)
     assert "nflux(model" not in combined
-    assert "apply_face_measure" in combined
     assert ".density" not in combined
     assert "checked_density()" in combined
-    assert "evaluate_axis_flux<Axis>" in combined
-    assert "evaluate_numerical_flux_at" not in combined
+    for path in (paths[0], paths[2]):
+        operator = _behavior(path)
+        evaluation = operator.index("evaluate_numerical_flux_at(")
+        integration = operator.index(
+            "apply_face_measure(evaluation.checked_density(), context)"
+        )
+        assert evaluation < integration
+    assert "evaluate_axis_flux<Axis>" not in combined
     assert "rf * F[" not in combined
     assert "alpha * F[" not in combined
+
+    polar = _behavior(paths[1])
+    embedded = _behavior(paths[3])
+    multipatch = _behavior(paths[4])
+    assert "prepare_cartesian_operator<2" in polar
+    assert "PreparedMaskedCartesianOperator<Dim" in embedded
+    assert "prepared.materialize_face_fluxes" in multipatch
 
 
 def test_bound_native_flux_pack_is_exact_and_does_not_store_global_aux():

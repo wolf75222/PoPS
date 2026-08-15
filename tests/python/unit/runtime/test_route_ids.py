@@ -30,6 +30,7 @@ from pops.runtime._engine_descriptors import Periodic  # noqa: E402
 from pops.numerics.riemann import HLL  # noqa: E402
 from pops.runtime import routes  # noqa: E402
 from pops.runtime._bricks_scheme import _FLUX_SCHEMES  # noqa: E402
+from pops.model import ComponentManifestError  # noqa: E402
 
 
 def test_route_manifest_registry_integrity():
@@ -39,11 +40,14 @@ def test_route_manifest_registry_integrity():
     assert len(manifest) >= 40, "route registry shrank below 40 entries: %d" % len(manifest)
     seen = set()
     for row in manifest:
-        for key in ("family", "id", "token", "native_entry"):
+        for key in ("family", "id", "token", "native_entry", "target_dimensions", "target"):
             assert key in row, "manifest row missing %r key: %r" % (key, row)
         route = routes.resolve(row["family"], row["token"])
         assert str(route) == row["token"], "token %r != str value %r" % (row["token"], str(route))
         assert route.id == row["id"] == "%s.%s" % (row["family"], row["token"]), row
+        assert row["target_dimensions"] == list(dict.fromkeys(
+            variant["dimension"] for variant in row["target"]["variants"]
+        ))
         assert row["id"] not in seen, "duplicate route id %r" % row["id"]
         seen.add(row["id"])
 
@@ -60,10 +64,33 @@ def test_route_component_contract_is_immutable_and_classifies_metadata():
     manifest = route.component_manifest()
     assert manifest.parameters == ()
     capability_names = {row["name"] for row in manifest.capabilities}
-    assert capability_names == {"n_vars", "polar_ok"}
+    assert capability_names == {"n_vars_by_dimension", "polar_ok"}
     docs = manifest.extensions["pops://schemas/extensions/route-inspection"]["data"]
     assert docs["summary"].startswith("scalar Cartesian E x B drift")
     assert "summary" not in capability_names and "parameters" not in capability_names
+
+
+def test_route_component_targets_are_exact_ranked_and_polar_is_two_dimensional_only():
+    def target(dimension):
+        return {
+            "dimension": dimension,
+            "scalar": "float64",
+            "device": "cpu",
+            "features": [],
+        }
+
+    generic = routes.resolve("field_solver", "cartesian_cg")
+    assert generic.target_dimensions == (1, 2, 3)
+    for dimension in (1, 2, 3):
+        generic.component_manifest().require_target(target(dimension))
+
+    polar = routes.resolve("field_solver", "polar")
+    assert polar.target_dimensions == (2,)
+    polar.component_manifest().require_target(target(2))
+    for dimension in (1, 3):
+        with pytest.raises(ComponentManifestError) as error:
+            polar.component_manifest().require_target(target(dimension))
+        assert error.value.code == "unsupported_target_combination"
 
 
 def test_spatial_defaults_lower_to_typed_routes():

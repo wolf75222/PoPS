@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -13,6 +14,9 @@ from tests.python.conftest import _requires_process_collection
 ROOT = Path(__file__).resolve().parents[3]
 MANIFEST = ROOT / "tests/gates/m2_temporal_execution.toml"
 RUNNER = ROOT / "scripts/run_m2_gate.py"
+GTEST_PATTERN = re.compile(
+    r"\bTEST(?:_F)?\(\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*\)"
+)
 
 
 def _load_runner():
@@ -26,7 +30,31 @@ def _load_runner():
 def test_m2_manifest_references_only_real_mandatory_proofs():
     data, errors = _load_runner().validate_manifest(MANIFEST)
     assert not errors, "M2 gate matrix is incomplete:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 39
+    identities = {
+        (row["kind"], row.get("nodeid", row.get("test_regex")))
+        for row in data["check"]
+    }
+    assert len(identities) == len(data["check"])
+
+
+def test_m2_ctest_selectors_resolve_one_current_registered_case():
+    runner = _load_runner()
+    data, errors = runner.validate_manifest(MANIFEST)
+    assert not errors
+    suites = runner._ctest_suites()
+    for row in data["check"]:
+        if row["kind"] != "ctest":
+            continue
+        declared = {
+            f"{suite}.{case}"
+            for relative in suites[row["target"]].get("sources", ())
+            for suite, case in GTEST_PATTERN.findall(
+                (ROOT / relative).read_text(encoding="utf-8")
+            )
+        }
+        assert sorted(
+            name for name in declared if re.fullmatch(row["test_regex"], name)
+        ) == [row["test_regex"][1:-1].replace(r"\.", ".")]
 
 
 def test_m2_final_gate_has_no_deferred_requirement():
@@ -213,7 +241,7 @@ def test_m2_restart_hierarchy_and_program_only_routes_use_real_exact_proofs():
         "refusal": (
             "ctest",
             "test_amr_history_ring",
-            r"^test_amr_history_ring\.FineNonFiniteAfterCoarseSuccessRestoresCompleteAcceptedState$",
+            r"^test_amr_history_ring\.ThreeLevelProgramFailsClosedWithoutConservativeCatchUpProvider$",
         ),
     }
     temporal_routes = {
@@ -227,7 +255,7 @@ def test_m2_restart_hierarchy_and_program_only_routes_use_real_exact_proofs():
         "tests/python/architecture/test_program_only_temporal_facades.py"
         "::test_amr_temporal_facades_use_amr_runtime_only_as_the_spatial_engine",
         "tests/python/architecture/test_program_only_temporal_facades.py"
-        "::test_static_system_temporal_driver_is_test_only",
+        "::test_static_system_assembler_is_retired_from_the_final_runtime_surface",
         "tests/python/architecture/test_program_only_temporal_facades.py"
         "::test_nonlinear_amr_semantics_use_the_compiled_program_not_a_blocker",
     }

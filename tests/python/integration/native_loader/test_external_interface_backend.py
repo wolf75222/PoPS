@@ -143,3 +143,30 @@ def test_boundary_handle_native_routes_are_generated_from_exact_interfaces():
     for interface_name, operation in generated.NATIVE_COMPONENT_BOUNDARY_HANDLE_ROUTES.values():
         assert operation in generated.NATIVE_COMPONENT_INTERFACE_BY_NAME[
             interface_name]["operations"]
+
+
+def test_uniform_runtime_exposes_the_complete_supported_external_boundary_route():
+    """The first production cutover is deliberately the dependency-free GhostBoundary route.
+
+    BoundaryFlux and field residual/JVP remain fail-closed at Python's pre-mutation installer
+    lookup until their generated block workspaces have a typed publication seam.
+    """
+    root = Path(__file__).resolve().parents[4]
+    binding = (root / "python/bindings/core/init/init_system.cpp").read_text(encoding="utf-8")
+    system = (root / "include/pops/runtime/system.hpp").read_text(encoding="utf-8")
+    runtime = (root / "python/pops/runtime/_runtime_authorities.py").read_text(encoding="utf-8")
+
+    assert binding.count('"_install_ghost_boundary_component"') == 1
+    assert "stage_prepared_ghost_boundary_component" in binding
+    assert "stage_prepared_ghost_boundary_component" in system
+    for unsupported in (
+        '"_install_boundary_flux_component"',
+        '"_install_field_boundary_residual_component"',
+        '"_install_field_boundary_jvp_component"',
+    ):
+        assert unsupported not in binding
+    assert (
+        '"apply_region_batch": getattr(native, "_install_ghost_boundary_component", None)'
+        in runtime
+    )
+    assert "Uniform native GhostBoundary requires one exact primary-state output" in runtime

@@ -16,7 +16,7 @@ from typing import Any
 
 import numpy as np
 import pops
-from pops.domain import Rectangle
+from pops.domain import CartesianDomain
 from pops.fields import (
     CellCenteredSecondOrder,
     ConstantNullspace,
@@ -26,7 +26,6 @@ from pops.fields import (
     MeanValueGauge,
 )
 from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Periodic
-from pops.frames import Cartesian2D
 from pops.layouts import Uniform
 from pops.lib.models.moments import HyQMOM15
 from pops.math import laplacian
@@ -269,9 +268,9 @@ def build_authoring(
     if output_mode is None:
         output_mode = ParallelMode.SERIAL
     realizability = RealizabilityProjection()
-    frame = Rectangle(
+    frame = CartesianDomain(
         "unit_square", lower=(0.0, 0.0), upper=(1.0, 1.0),
-    ).frame(Cartesian2D())
+    ).frame()
     model = HyQMOM15.vlasov_lorentz(
         closure=user_hyqmom15_closure,
         q_over_m=ConstParam("q_over_m", -1.0),

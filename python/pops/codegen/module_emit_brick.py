@@ -263,8 +263,10 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
             user_roles = ", ".join(json.dumps(label) for label in labels)
         return ", ".join(semantics), user_roles
 
-    croles, cuser_roles = roles_init(_roles_for(model.cons_names, model.cons_roles))
-    proles, puser_roles = roles_init(_roles_for(model.prim_state, model.prim_roles))
+    croles, cuser_roles = roles_init(
+        _roles_for(model.cons_names, model.cons_roles, dimension=dimension))
+    proles, puser_roles = roles_init(
+        _roles_for(model.prim_state, model.prim_roles, dimension=dimension))
     # P7-b : assign the runtime indices BEFORE any to_cpp() (a RuntimeParamRef raises otherwise).
     rt_member = model._runtime_params_member()
     S = [

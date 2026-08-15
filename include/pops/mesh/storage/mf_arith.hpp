@@ -544,14 +544,13 @@ Real reduce_abs_sum(const MultiFab<Dim, MemorySpace>& field, int component,
 }
 
 template <int Dim, class MemorySpace>
-Real dot(const MultiFab<Dim, MemorySpace>& left, const MultiFab<Dim, MemorySpace>& right,
-         int component, const RelativeCellMeasure<Dim, MemorySpace>& measure) {
+Real dot_local(const MultiFab<Dim, MemorySpace>& left, const MultiFab<Dim, MemorySpace>& right,
+               int component, const RelativeCellMeasure<Dim, MemorySpace>& measure) {
   mf_arith_detail::require_same_layout(left, right, "pops::dot(measure)");
   mf_arith_detail::require_component(left, component, "pops::dot(measure)");
   mf_arith_detail::validate_measure(left, measure, "pops::dot(measure)");
   if (measure.active_cells == nullptr)
-    return dot(left, right, component);
-  mf_arith_detail::require_collective_identity(left, "pops::dot(measure)");
+    return dot_local(left, right, component);
   Real local_result = 0;
   for (std::size_t local = 0; local < left.local_size(); ++local) {
     const FieldView<const Real, Dim> inverse =
@@ -564,7 +563,14 @@ Real dot(const MultiFab<Dim, MemorySpace>& left, const MultiFab<Dim, MemorySpace
                              measure.active_cells->fab(local).view(), inverse, component,
                              measure.inverse_volume_fraction != nullptr});
   }
-  return static_cast<Real>(all_reduce_sum(local_result));
+  return local_result;
+}
+
+template <int Dim, class MemorySpace>
+Real dot(const MultiFab<Dim, MemorySpace>& left, const MultiFab<Dim, MemorySpace>& right,
+         int component, const RelativeCellMeasure<Dim, MemorySpace>& measure) {
+  mf_arith_detail::require_collective_identity(left, "pops::dot(measure)");
+  return static_cast<Real>(all_reduce_sum(dot_local(left, right, component, measure)));
 }
 
 template <int Dim, class MemorySpace>

@@ -176,7 +176,8 @@ TEST(test_nd_distribution,
 TEST(test_nd_distribution,
      multifab_assignment_and_nonempty_1d_3d_partitioned_layouts_remain_local) {
   const RankSpace<1> ranks1{Index<1>{3}, Extent<1>{2}};
-  const BoxArray<1> line = BoxArray<1>::from_domain(Box<1>{Index<1>{-2}, Index<1>{3}}, {2});
+  const BoxArray<1> line =
+      BoxArray<1>::from_domain(Box<1>{Index<1>{-2}, Index<1>{3}}, Extent<1>{2});
   const auto dist1 =
       Distribution<1>::partitioned(line, ranks1, {Index<1>{3}, Index<1>{4}, Index<1>{3}});
   MultiFab<1> first(line, dist1, Index<1>{3}, 2, Extent<1>{2});

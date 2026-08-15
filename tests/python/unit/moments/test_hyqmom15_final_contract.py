@@ -17,7 +17,7 @@ from pops.moments import (
     moment_flux_expressions,
     moment_names,
 )
-from pops.domain import RectangleFrame
+from pops.domain import CartesianDomainFrame
 from pops.frames import Cartesian2D
 from pops.physics import Model
 from pops.time import ALL_PROVISIONAL_STORES, ProjectAndRecheck, RejectAttempt
@@ -168,7 +168,7 @@ def test_final_authoring_derives_field_storage_and_complete_generic_program() ->
     assert target.closure(_STANDARDIZED_SAMPLE) == pytest.approx(
         HyQMOM15Closure()(_STANDARDIZED_SAMPLE)
     )
-    assert isinstance(target.model.frame, RectangleFrame)
+    assert isinstance(target.model.frame, CartesianDomainFrame)
     assert target.components == tuple(moment_names(4))
     assert target.model.field_spaces()[target.field.local_id].components == (
         "phi", "grad_x", "grad_y")

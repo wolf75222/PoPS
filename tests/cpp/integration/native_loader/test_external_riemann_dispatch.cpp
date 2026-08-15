@@ -31,6 +31,7 @@
 #include <cstdio>
 #include <ctime>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -84,27 +85,47 @@ std::string legacy_brick_source() {
   )CPP";
 }
 
-// A smooth periodic Euler state (rho, mx, my, E) in component-major layout c*n*n + j*n + i.
-std::vector<double> euler_state(int n) {
-  const std::size_t nn = static_cast<std::size_t>(n) * n;
-  std::vector<double> U(4 * nn);
-  for (int j = 0; j < n; ++j)
-    for (int i = 0; i < n; ++i) {
-      const double x = (i + 0.5) / n - 0.5, y = (j + 0.5) / n - 0.5;
-      const double pi = std::acos(-1.0);
-      const double rho = 1.0 + 0.3 * std::exp(-(x * x + y * y) / 0.02) +
-                         0.08 * std::sin(2.0 * pi * x) + 0.05 * std::cos(4.0 * pi * y);
-      const double u = 0.1, v = -0.05, p = 1.0;
-      const std::size_t k = static_cast<std::size_t>(j) * n + i;
-      U[0 * nn + k] = rho;
-      U[1 * nn + k] = rho * u;
-      U[2 * nn + k] = rho * v;
-      U[3 * nn + k] = p / (kGamma - 1.0) + 0.5 * rho * (u * u + v * v);
-    }
-  return U;
-}
-
 using RefModel = pops::nd::IdealGasEuler<pops::kNativeDimension>;
+using RefProviderValues = pops::ProviderValues<pops::provider_count<RefModel>()>;
+
+static_assert(RefProviderValues::size == pops::provider_count<RefModel>());
+
+// A smooth periodic Euler state in component-major layout c*cells + flattened-cell. The vector
+// has the exact artifact rank: rho, one momentum per axis, then total energy.
+template <int Dim>
+std::vector<double> euler_state(const std::array<int, Dim>& shape) {
+  std::size_t cells = 1;
+  for (int axis = 0; axis < Dim; ++axis)
+    cells *= static_cast<std::size_t>(shape[static_cast<std::size_t>(axis)]);
+  std::vector<double> state(static_cast<std::size_t>(Dim + 2) * cells);
+  const double pi = std::acos(-1.0);
+  for (std::size_t cell = 0; cell < cells; ++cell) {
+    std::size_t quotient = cell;
+    double radius_squared = 0.0;
+    double wave = 0.0;
+    double velocity_squared = 0.0;
+    std::array<double, Dim> velocity{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      const int extent = shape[static_cast<std::size_t>(axis)];
+      const int coordinate = static_cast<int>(quotient % static_cast<std::size_t>(extent));
+      quotient /= static_cast<std::size_t>(extent);
+      const double x = (static_cast<double>(coordinate) + 0.5) / extent - 0.5;
+      radius_squared += x * x;
+      wave += 0.04 * static_cast<double>(axis + 1) * std::sin((axis + 2) * pi * x);
+      velocity[static_cast<std::size_t>(axis)] = 0.1 / static_cast<double>(axis + 1);
+      velocity_squared +=
+          velocity[static_cast<std::size_t>(axis)] * velocity[static_cast<std::size_t>(axis)];
+    }
+    const double rho = 1.0 + 0.3 * std::exp(-radius_squared / 0.02) + wave;
+    state[cell] = rho;
+    for (int axis = 0; axis < Dim; ++axis)
+      state[static_cast<std::size_t>(axis + 1) * cells + cell] =
+          rho * velocity[static_cast<std::size_t>(axis)];
+    state[static_cast<std::size_t>(Dim + 1) * cells + cell] =
+        1.0 / (kGamma - 1.0) + 0.5 * rho * velocity_squared;
+  }
+  return state;
+}
 
 template <int Dim>
 struct ExactRankedAdvection {
@@ -145,6 +166,20 @@ struct ForwardRusanov {
   }
 };
 
+struct NonFiniteFlux {
+  template <pops::PhysicalFlux Physical>
+  POPS_HD pops::FluxEvaluation<typename Physical::State> operator()(
+      const Physical&, const typename Physical::Trace&, const typename Physical::Trace&,
+      const pops::FaceContext&) const {
+    typename Physical::State value{};
+    for (int component = 0; component < Physical::n_vars; ++component)
+      value[component] = std::numeric_limits<pops::Real>::quiet_NaN();
+    return pops::FluxEvaluation<typename Physical::State>::ok(
+        value, {pops::Real(1), pops::StabilityUnit::kLengthPerTime,
+                pops::StabilityConvention::kNormalSpectralRadius});
+  }
+};
+
 template <int Dim>
 void check_exact_ranked_flat_residual() {
   std::array<int, Dim> shape{};
@@ -175,6 +210,25 @@ void check_exact_ranked_flat_residual() {
     magnitude = std::max(magnitude, std::fabs(external[cell]));
   }
   EXPECT_GT(magnitude, 1e-8);
+
+  const std::vector<double> sentinel(cells, 17.0);
+  std::vector<double> rejected = sentinel;
+  EXPECT_THROW((pops::runtime::program::detail::external_residual<Dim, ExactRankedAdvection<Dim>,
+                                                                  NonFiniteFlux>(
+                   state.data(), rejected.data(), nullptr, shape.data(), spacing.data(),
+                   periodic.data(), "minmod", false, 0.0)),
+               std::exception);
+  EXPECT_EQ(rejected, sentinel) << "a non-finite external flux must not partially publish";
+
+  std::vector<double> nonfinite_state = state;
+  nonfinite_state[cells / 2] = std::numeric_limits<double>::quiet_NaN();
+  rejected = sentinel;
+  EXPECT_THROW((pops::runtime::program::detail::external_residual<Dim, ExactRankedAdvection<Dim>,
+                                                                  ForwardRusanov>(
+                   nonfinite_state.data(), rejected.data(), nullptr, shape.data(), spacing.data(),
+                   periodic.data(), "minmod", false, 0.0)),
+               std::invalid_argument);
+  EXPECT_EQ(rejected, sentinel) << "a non-finite input must fail before residual publication";
 }
 
 }  // namespace
@@ -196,10 +250,12 @@ static int pops_run_test_external_riemann_dispatch() {
   pops::test::Checker chk;
 
   // (1) dlopen + manifest visibility + requirements surface.
-  ExternalBrickHandle handle(so, "my_riemann", {}, RefModel::n_vars, pops::aux_comps<RefModel>(),
+  ExternalBrickHandle handle(so, "my_riemann", RefModel::n_vars, pops::provider_count<RefModel>(),
                              "test.euler-rusanov.v1");
   chk(handle.id() == "my_riemann", "handle_id");
   chk(handle.dimension() == pops::kNativeDimension, "native_dimension_authenticated");
+  chk(handle.nvars() == RefModel::n_vars, "state_shape_authenticated");
+  chk(handle.provider_count() == pops::provider_count<RefModel>(), "provider_shape_authenticated");
   chk(handle.requirements() == "physical_flux,provider_pack,stability_bound",
       "requirements_surface");
   chk(handle.residual() != nullptr, "residual_resolved");
@@ -208,40 +264,54 @@ static int pops_run_test_external_riemann_dispatch() {
   chk(entry != nullptr && entry->category == "riemann", "manifest_visible_in_registry");
   bool identity_threw = false;
   try {
-    ExternalBrickHandle wrong_model(so, "my_riemann", {}, RefModel::n_vars,
-                                    pops::aux_comps<RefModel>(), "different-model-hash");
+    ExternalBrickHandle wrong_model(so, "my_riemann", RefModel::n_vars,
+                                    pops::provider_count<RefModel>(), "different-model-hash");
   } catch (const std::runtime_error& e) {
     identity_threw = true;
     chk(std::string(e.what()).find("different compiled model identity") != std::string::npos,
         "model_identity_error_is_actionable");
   }
   chk(identity_threw, "same_shape_different_model_rejected");
+  bool provider_shape_threw = false;
+  try {
+    ExternalBrickHandle wrong_providers(so, "my_riemann", RefModel::n_vars,
+                                        pops::provider_count<RefModel>() + 1,
+                                        "test.euler-rusanov.v1");
+  } catch (const std::runtime_error& e) {
+    provider_shape_threw = true;
+    chk(std::string(e.what()).find("model shape") != std::string::npos,
+        "provider_shape_error_is_actionable");
+  }
+  chk(provider_shape_threw, "different_provider_shape_rejected");
 
   // (2) BIT-IDENTICAL dispatch: external brick residual == native rusanov residual.
+  constexpr int Dim = pops::kNativeDimension;
   const int n = 48;
-  const double dx = 1.0 / n, dy = 1.0 / n;
-  const std::array<int, 2> shape{n, n};
-  const std::array<double, 2> spacing{dx, dy};
-  const std::vector<double> U = euler_state(n);
-  const std::size_t nn = static_cast<std::size_t>(n) * n;
-  std::vector<double> Rext(4 * nn, 0.0), Rnat(4 * nn, 0.0);
+  std::array<int, Dim> shape{};
+  std::array<double, Dim> spacing{};
+  std::size_t cells = 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    shape[static_cast<std::size_t>(axis)] = n;
+    spacing[static_cast<std::size_t>(axis)] = 1.0 / n;
+    cells *= static_cast<std::size_t>(n);
+  }
+  const std::vector<double> U = euler_state<Dim>(shape);
+  std::vector<double> Rext(static_cast<std::size_t>(RefModel::n_vars) * cells, 0.0);
+  std::vector<double> Rnat(Rext.size(), 0.0);
 
-  const std::array<std::array<int, 2>, 4> topologies{{
-      {{0, 0}},
-      {{1, 0}},
-      {{0, 1}},
-      {{1, 1}},
-  }};
   std::vector<double> residual_x_only, residual_y_only;
-  for (const auto& periodic : topologies) {
+  for (int mask = 0; mask < (1 << Dim); ++mask) {
+    std::array<int, Dim> periodic{};
+    for (int axis = 0; axis < Dim; ++axis)
+      periodic[static_cast<std::size_t>(axis)] = (mask >> axis) & 1;
     std::fill(Rext.begin(), Rext.end(), 0.0);
     std::fill(Rnat.begin(), Rnat.end(), 0.0);
-    handle.residual()(U.data(), Rext.data(), /*aux=*/nullptr, shape.data(), spacing.data(),
-                      periodic.data(), "minmod", /*recon_prim=*/0, /*pos_floor=*/0.0,
-                      static_cast<double>(pops::kWenoEpsilon));
-    pops::runtime::program::detail::external_residual<2, RefModel, pops::RusanovFlux>(
-        U.data(), Rnat.data(), /*aux=*/nullptr, shape.data(), spacing.data(), periodic.data(),
-        "minmod", /*recon_prim=*/false, /*pos_floor=*/0.0);
+    handle.residual()(U.data(), Rext.data(), /*provider_values=*/nullptr, shape.data(),
+                      spacing.data(), periodic.data(), "minmod", /*recon_prim=*/0,
+                      /*pos_floor=*/0.0, static_cast<double>(pops::kWenoEpsilon));
+    pops::runtime::program::detail::external_residual<Dim, RefModel, pops::RusanovFlux>(
+        U.data(), Rnat.data(), /*provider_values=*/nullptr, shape.data(), spacing.data(),
+        periodic.data(), "minmod", /*recon_prim=*/false, /*pos_floor=*/0.0);
     double dmax = 0.0, nrm = 0.0;
     for (std::size_t k = 0; k < Rext.size(); ++k) {
       dmax = std::max(dmax, std::fabs(Rext[k] - Rnat[k]));
@@ -249,21 +319,32 @@ static int pops_run_test_external_riemann_dispatch() {
     }
     chk(nrm > 1e-8, "native_residual_nontrivial");
     chk(dmax == 0.0, "external_dispatch_bit_identical_to_native_rusanov");
-    if (periodic[0] != 0 && periodic[1] == 0)
-      residual_x_only = Rext;
-    if (periodic[0] == 0 && periodic[1] != 0)
-      residual_y_only = Rext;
+    if constexpr (Dim >= 2) {
+      bool x_only = periodic[0] != 0;
+      bool y_only = periodic[1] != 0;
+      for (int axis = 2; axis < Dim; ++axis) {
+        x_only = x_only && periodic[static_cast<std::size_t>(axis)] == 0;
+        y_only = y_only && periodic[static_cast<std::size_t>(axis)] == 0;
+      }
+      if (x_only && periodic[1] == 0)
+        residual_x_only = Rext;
+      if (y_only && periodic[0] == 0)
+        residual_y_only = Rext;
+    }
   }
-  double mixed_axis_difference = 0.0;
-  for (std::size_t k = 0; k < residual_x_only.size(); ++k)
-    mixed_axis_difference =
-        std::max(mixed_axis_difference, std::fabs(residual_x_only[k] - residual_y_only[k]));
-  chk(mixed_axis_difference > 1e-8, "x_only_and_y_only_are_not_flattened");
+  if constexpr (Dim >= 2) {
+    double mixed_axis_difference = 0.0;
+    for (std::size_t k = 0; k < residual_x_only.size(); ++k)
+      mixed_axis_difference =
+          std::max(mixed_axis_difference, std::fabs(residual_x_only[k] - residual_y_only[k]));
+    chk(mixed_axis_difference > 1e-8, "x_only_and_y_only_are_not_flattened");
+  }
 
   // (3) Unknown id -> clear error.
   bool threw = false;
   try {
-    ExternalBrickHandle bad(so, "no_such_brick");
+    ExternalBrickHandle bad(so, "no_such_brick", RefModel::n_vars, pops::provider_count<RefModel>(),
+                            "test.euler-rusanov.v1");
   } catch (const std::runtime_error& e) {
     threw = true;
     const std::string msg = e.what();
@@ -285,7 +366,8 @@ static int pops_run_test_external_riemann_dispatch() {
   }
   threw = false;
   try {
-    ExternalBrickHandle legacy(legacy_so, "legacy_riemann");
+    ExternalBrickHandle legacy(legacy_so, "legacy_riemann", RefModel::n_vars,
+                               pops::provider_count<RefModel>(), "test.euler-rusanov.v1");
   } catch (const std::runtime_error& e) {
     threw = true;
     const std::string msg = e.what();

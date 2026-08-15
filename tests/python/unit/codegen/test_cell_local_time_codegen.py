@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 import pops
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.lib import time as libtime
 from pops.physics._facade import Model
+
+
+ROOT = Path(__file__).resolve().parents[4]
 
 
 def _transport_program(factory=libtime.ForwardEuler):
@@ -50,7 +55,8 @@ def test_cell_local_time_contract_is_frozen_rebuilt_and_hashed() -> None:
     ],
 )
 def test_cell_local_time_contract_refuses_invalid_integer_clocks(
-        tick_denominator, rung, message) -> None:
+    tick_denominator, rung, message
+) -> None:
     program, _ = _transport_program()
     with pytest.raises(ValueError, match=message):
         program.cell_local_time(tick_denominator=tick_denominator, rung=rung)
@@ -68,6 +74,21 @@ def test_amr_codegen_selects_only_the_prepared_cell_local_driver() -> None:
     assert "ctx_owner->advance_same_level_cell_temporal(dt);" in source
     assert "ctx.advance_hierarchy(dt" not in source
     assert "ctx.advance_synchronized_hierarchy(dt" not in source
+
+
+def test_amr_cell_local_driver_uses_the_distributed_context_provider() -> None:
+    source = (ROOT / "include/pops/runtime/program/amr_program_context.hpp").read_text(
+        encoding="utf-8"
+    )
+    begin = source.index("void prepare_same_level_cell_temporal_execution(")
+    end = source.index("bool uses_prepared_krylov_fallback()", begin)
+    prepared_route = source[begin:end]
+
+    assert "void advance_same_level_cell_temporal" in prepared_route
+    assert "advance_prepared_hierarchy_(" in prepared_route
+    assert "route.advance(target);" in prepared_route
+    assert "cell_temporal_routes_[level].restore" in prepared_route
+    assert "deferred capability 'cell_local_temporal'" not in prepared_route
 
 
 def test_cell_local_codegen_refuses_non_euler_and_nondefault_cadence() -> None:

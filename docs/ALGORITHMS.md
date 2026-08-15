@@ -635,10 +635,11 @@ implicit/explicit partitioning
 goes through the `PartiallyImplicitModel` concept (trait `M::is_implicit(c)`), `model_is_implicit<Model>`
 (default: everything implicit when the trait is absent), the POD carrier `ImplicitMask<N>` (`active`, `flag[N]`,
 carried by the block, passed by value on the device) and `is_implicit_component<Model, N>` (an active mask
-with priority over the model default). `ImplicitSourceStepper` models the concept
-`ImplicitBlockStepper` for isolated numerical tests. Production `System` and `AmrSystem` do not
-schedule that helper: their normalized `ProgramGraph` must place a typed implicit primitive
-explicitly, and an unavailable lowering fails closed.
+with priority over the model default). The adapter returns an unconsumed `SolveOutcome`; no installed
+implicit-source helper may select `Accept`, `RejectAttempt`, or `FailRun` eagerly. The normalized
+`ProgramGraph` must place the typed implicit primitive explicitly, and its outer transaction consumes
+the outcome in production. Standalone numerical callers must likewise consume the outcome explicitly;
+an unavailable Program lowering fails closed.
 
 **Constraints / remarks.** The implicit step is unconditionally stable for a linear relaxation
 (where a plain Picard fixed point would diverge as soon as `dt * stiffness > 1`, precisely the
@@ -667,7 +668,7 @@ must place both the transport and the typed implicit primitive explicitly; the s
 runtime does not infer that split. Validation:
 `test_imex_ap` (AP property on a stiff linear relaxation source),
 `test_ap_limit` (quantified AP limit, stiffness sweep over 8 decades at fixed `dt`),
-`test_implicit_source_nd` plus `test_amr_imex_native` (typed partial/transport composition), and
+`test_implicit_source_nd` plus `test_amr_program_positivity_floor` (typed partial/transport composition), and
 `test_newton_robustness` plus `test_mpi_field_plan_consensus` (exact first-failure selection across
 large signed indices, including fatal-over-recoverable precedence between ranks).
 
@@ -952,9 +953,9 @@ hyperbolic CFL in $h$), not handled by `step_cfl` which only weighs the wave spe
 diffusion-dominated, fix $\text{dt}$ explicitly. Known limit: `SourceFreeModel` (explicit half-step
 IMEX) does not expose `diffusivity()`, so a diffusive IMEX block would lose its Fickian flux in the
 explicit half-step (a separate refinement); and the masked path `assemble_rhs_masked` does not mask the
-Laplacian. Tests: `test_diffusion` (the core $+\nu\,\Delta U$ via the divergence of the Fickian flux),
-and `test_amr_program_diffusion` (a genuinely refined hierarchy smooths while its composite integral
-remains conservative through the Program-owned flux ledger and reflux described in section 17).
+Laplacian. `test_diffusion` validates the core $+\nu\,\Delta U$ through the divergence of the
+Fickian flux. The AMR coverage remains limited to the exact-rank transfer and ledger primitives
+documented in section 17: the full multi-level `Program` scheduler still refuses more than one level.
 
 
 ---
@@ -1729,10 +1730,10 @@ fine + ghost interpolation), `test_nd_amr_consumers` (exact-ranked parent footpr
 (quantitative 1D/2D/3D transfer, parent-average conservation and coverage-aware order-two/order-five
 coarse/fine interpolation),
 `test_nd_flux_ledger` and `test_program_reflux_ledger` (exact Program coefficients and transactional
-ledger), `test_amr_program_diffusion` (diffusive flux crossing a coarse/fine interface), and
-`test_amr_diagnostics` (mass and drift velocity via the seam reducer). `test_amr_history_ring`
-currently pins the honest three-level refusal and zero-mutation guarantee; it is not a positive
-multi-level advance proof.
+ledger), and `test_amr_diagnostics` (mass and drift velocity via the seam reducer). These are
+validated primitives, not a complete multi-level Program trajectory: the full scheduler still
+refuses more than one level. `test_amr_history_ring` pins that refusal and its zero-mutation
+guarantee; it is not a positive multi-level advance proof.
 
 ## 18. Multi-patch AMR: coverage-aware reflux, MPI-distributed
 
@@ -1804,8 +1805,10 @@ coarse-fine ghost fill likewise replaces its per-cell `mf_find_box` scan with a 
 lookup (`MfBoxLookup`): the parent valid boxes are disjoint, so the first-hit the linear scan returned is the only
 hit, and the lookup returns the identical box index. The regrid profiler exposes `tag_density`,
 `box_hash_rebuilds` and `copy_cache_hits`/`copy_cache_misses` counters for this machinery (ADC-607).
-Validation: `test_amr_spatial_parity` (the spatial core of the AMR path is identical to that of `System`:
-same primitive reconstruction, same HLLC/Roe flux), `test_mpi_mbox_parity` (residual invariant to the box
+Validation: `test_nd_finite_volume` and `test_roe_flux` (one exact-ranked flux/divergence authority
+for HLLC and Roe in 1D/2D/3D), `test_prepared_cartesian_nd` (the prepared face field is the sole
+boundary to conservative divergence, with primitive reconstruction and axis-permutation checks),
+`test_mpi_mbox_parity` (residual invariant to the box
 splitting AND to the number of ranks np = 1/2/4, dmax = 0), `test_mpi_amr_distributed_coarse` (distributed coarse
 identical to the replicated coarse bit-for-bit, np = 1/2/4).
 
@@ -2007,7 +2010,8 @@ bounce avoided if the MPI stack is CUDA-aware); a `device_fence()` separates the
 **Validation.** `test_box_array`, `test_multifab`, `test_load_balance`; under MPI:
 `test_mpi_fillboundary` (halo exchange), `test_mpi_poisson` (distributed Poisson),
 `test_mpi_fft_distributed` (FFT by bands), `test_mpi_redistribute`, `test_mpi_array_reduce`,
-`test_mpi_coupler_inject` (np=4, results bit-identical to np=1/2/4).
+`test_mpi_system_layout_transfer` (prepared cross-owner layout transport), and
+`test_mpi_composite_fac_partitioned_nd` (partitioned FAC in the native dimension).
 
 ## 21. Exact auxiliary provider graph
 

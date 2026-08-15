@@ -32,6 +32,8 @@ from ._generated_component_routes import (
     ROUTE_REGISTRY_SIGNATURE,
     ROUTE_REGISTRY_VERSION as ROUTE_REGISTRY_VERSION,
     ROUTE_TABLES as _GENERATED_ROUTE_TABLES,
+    ROUTE_TARGET_DIMENSIONS as _GENERATED_TARGET_DIMENSIONS,
+    ROUTE_TARGET_VARIANTS as _GENERATED_TARGET_VARIANTS,
 )
 from pops._generated_component_interfaces import NATIVE_COMPONENT_INTERFACE_BY_NAME
 
@@ -75,9 +77,12 @@ class Route(str):
     requirements: tuple
     limitations: tuple
     metadata: dict
+    target_dimensions: tuple
+    target_variants: tuple
 
     def __new__(cls, family: str, token: str, native_entry: str,
-                requirements: Any = (), limitations: Any = (), metadata: Any = None) -> Route:
+                requirements: Any = (), limitations: Any = (), metadata: Any = None,
+                target_dimensions: Any = (), target_variants: Any = ()) -> Route:
         self = super().__new__(cls, token)
         self.family = family
         self.id = "%s.%s" % (family, token)
@@ -85,6 +90,8 @@ class Route(str):
         self.requirements = tuple(requirements)
         self.limitations = tuple(limitations)
         self.metadata = _freeze_catalog_value(dict(metadata or {}))
+        self.target_dimensions = tuple(target_dimensions)
+        self.target_variants = _freeze_catalog_value(tuple(target_variants))
         self._frozen = True
         return self
 
@@ -108,6 +115,8 @@ class Route(str):
             "requirements": list(self.requirements),
             "limitations": list(self.limitations),
             "capabilities": _thaw_catalog_value(self.metadata),
+            "target_dimensions": list(self.target_dimensions),
+            "target": {"variants": _thaw_catalog_value(self.target_variants)},
             "catalog_digest": COMPONENT_CATALOG_SHA256,
             "catalog_semantic_digest": COMPONENT_CATALOG_SEMANTIC_SHA256,
         }
@@ -148,7 +157,7 @@ class Route(str):
             "effects": list(defaults["effects"]),
             "layouts": list(defaults["layouts"]),
             "clocks": list(defaults["clocks"]),
-            "target": _thaw_catalog_value(defaults["target"]),
+            "target": {"variants": _thaw_catalog_value(self.target_variants)},
             "determinism": dict(defaults["determinism"]),
             "restart": dict(defaults["restart"]),
             "precision": {key: list(value) if isinstance(value, list) else value
@@ -189,7 +198,9 @@ _FAMILY_NATIVE_INTERFACES = _freeze_catalog_value(_GENERATED_FAMILY_NATIVE_INTER
 
 _REGISTRY = {
     family: {token: Route(family, token, entry, req, lim,
-                          _GENERATED_ROUTE_METADATA[family][token])
+                          _GENERATED_ROUTE_METADATA[family][token],
+                          _GENERATED_TARGET_DIMENSIONS[family][token],
+                          _GENERATED_TARGET_VARIANTS[family][token])
              for (token, entry, req, lim) in rows}
     for family, rows in _TABLES.items()
 }

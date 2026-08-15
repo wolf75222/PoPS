@@ -12,7 +12,7 @@
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/layout/refinement.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
-#include <pops/numerics/elliptic/amr/partitioned_region_transfer.hpp>
+#include <pops/mesh/parallel/region_transfer.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/parallel/execution_lane.hpp>
 
@@ -663,9 +663,9 @@ class FullTensorCompositeFac {
   };
 
   struct Connection {
-    using transfer_job = elliptic::amr::partitioned_transfer::RegionTransferJob<Dim>;
-    using transfer_plan = elliptic::amr::partitioned_transfer::RegionTransferPlan<Dim>;
-    using transport_type = elliptic::amr::partitioned_transfer::RegionTransport<Dim, MemorySpace>;
+    using transfer_job = mesh::parallel::RegionTransferJob<Dim>;
+    using transfer_plan = mesh::parallel::RegionTransferPlan<Dim>;
+    using transport_type = mesh::parallel::RegionTransport<Dim, MemorySpace>;
     using host_mirror_type = typename Fab<Dim, MemorySpace>::host_mirror_type;
 
     struct ScratchPatch {
@@ -793,7 +793,7 @@ class FullTensorCompositeFac {
                                                                 std::to_string(ordinal));
     }
 
-    static elliptic::amr::partitioned_transfer::RegionTransferBudget exact_transfer_budget_(
+    static mesh::parallel::RegionTransferBudget exact_transfer_budget_(
         const std::vector<transfer_job>& jobs) {
       std::size_t elements = 0;
       for (const transfer_job& job : jobs)

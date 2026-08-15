@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pops.physics.roles import ComponentRole, native_role_token
+from pops.model.identity import ComponentRole, native_role_token
 from pops.runtime._numeric import exact_real, positive_int, strict_bool
 from pops.runtime.defaults import (
     NEWTON_DEFAULT_ABS_TOL,

@@ -64,9 +64,9 @@ def test_native_selector_requires_complete_owner_level_component_evidence() -> N
 
     uniform = SYSTEM.read_text()
     assert "const int runtime_block = p_->index(block);" in uniform
-    assert "levels != std::vector<int>{0}" in uniform
+    assert "levels.size() != 1 || levels.front() != 0" in uniform
 
     adaptive = AMR.read_text()
-    assert "const std::size_t runtime_block = p_->block_index_or_throw(block);" in adaptive
-    assert "p_->runtime->block_n_vars(runtime_block)" in adaptive
-    assert "p_->runtime->nlev()" in adaptive
+    assert "const typename Impl::BlockSpec& selected = p_->block(block);" in adaptive
+    assert "const int runtime_block = static_cast<int>(&selected - p_->blocks.data());" in adaptive
+    assert "p_->engine->hierarchy().num_levels()" in adaptive

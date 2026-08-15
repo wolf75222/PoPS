@@ -17,7 +17,7 @@ from typing import Any
 
 import numpy as np
 import pops
-from pops.domain import Rectangle, RectangleBoundaryNames
+from pops.domain import CartesianBoundaryNames, CartesianDomain
 from pops.fields import (
     CellCenteredSecondOrder,
     CompositeHierarchySolve,
@@ -25,7 +25,6 @@ from pops.fields import (
     FieldOutput,
 )
 from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Dirichlet
-from pops.frames import Cartesian2D
 from pops.math import ValueExpr, ddt, div, laplacian
 from pops.mesh import CartesianGrid
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
@@ -304,14 +303,16 @@ def build_authoring(
     field_solver: Any | None = None,
     relaxation_domain: Any | None = None,
 ) -> IMEXAMRAuthoring:
-    domain = Rectangle(
+    domain = CartesianDomain(
         "unit_square",
         lower=(0.0, 0.0),
         upper=(1.0, 1.0),
-        boundaries=RectangleBoundaryNames(
-            x_min="inlet_x", x_max="outlet_x", y_min="inlet_y", y_max="outlet_y"),
+        boundaries=CartesianBoundaryNames((
+            ("inlet_x", "outlet_x"),
+            ("inlet_y", "outlet_y"),
+        )),
     ).tag("fluid")
-    frame = domain.frame(Cartesian2D())
+    frame = domain.frame()
     x_axis, y_axis = frame.axes
     grid = CartesianGrid(frame=frame, cells=(32, 32))
 
@@ -446,12 +447,14 @@ def build_boundaries(core: IMEXAMRAuthoring) -> Any:
     from pops.boundary.transport import Inflow, Outflow
 
     boundary = core.frame.boundaries
+    x_boundary = boundary.pair(core.frame.x)
+    y_boundary = boundary.pair(core.frame.y)
     inlet = core.model.value(core.inlet_value)
     return TransportBoundarySet({
-        boundary.x_min: Inflow(state=core.tracer_state, value=inlet),
-        boundary.x_max: Outflow(state=core.tracer_state),
-        boundary.y_min: Inflow(state=core.tracer_state, value=inlet),
-        boundary.y_max: Outflow(state=core.tracer_state),
+        x_boundary.lower: Inflow(state=core.tracer_state, value=inlet),
+        x_boundary.upper: Outflow(state=core.tracer_state),
+        y_boundary.lower: Inflow(state=core.tracer_state, value=inlet),
+        y_boundary.upper: Outflow(state=core.tracer_state),
     })
 
 

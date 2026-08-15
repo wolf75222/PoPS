@@ -37,21 +37,23 @@ from pops.codegen.module_lowering import (  # noqa: E402
     _lower_native_role, _module_to_model, _typed_lowering_roles,
     lower_and_validate, remap_lowering_error)
 from pops.frames import X_AXIS, Z_AXIS  # noqa: E402
-from pops.physics import Axial, Density, Momentum, Scalar  # noqa: E402
+from pops.physics import Axial, Density, Momentum, RoleKey, Scalar  # noqa: E402
 from pops.physics.roles import native_role_token  # noqa: E402
 from pops.physics._coupled_abi import role_canonical  # noqa: E402
 
 
 def test_module_role_lowering_preserves_typed_boundary_semantics():
-    assert _lower_native_role(Density()) == "density"
-    assert _lower_native_role(Momentum(axis=X_AXIS)) == "momentum:0"
-    assert _lower_native_role(Axial(axis=X_AXIS)) == "axial:0"
-    assert _lower_native_role(Axial(axis=Z_AXIS)) == "axial:2"
-    assert _lower_native_role(Scalar()) == "scalar"
-    assert _lower_native_role("momentum:1") == "momentum:1"
-    assert _lower_native_role("momentum:01") is None
-    assert _lower_native_role("momentum_x") is None
-    assert _lower_native_role("Custom") is None
+    assert native_role_token(_lower_native_role(Density())) == "density"
+    assert native_role_token(_lower_native_role(Momentum(axis=X_AXIS))) == "momentum:0"
+    assert native_role_token(_lower_native_role(Axial(axis=X_AXIS))) == "axial:0"
+    assert native_role_token(_lower_native_role(Axial(axis=Z_AXIS))) == "axial:2"
+    assert native_role_token(_lower_native_role(Scalar())) == "scalar"
+    assert native_role_token(_lower_native_role("momentum:1")) == "momentum:1"
+    assert native_role_token(_lower_native_role("q1")) == "q1"
+    with pytest.raises(ValueError, match="malformed reserved physical role"):
+        _lower_native_role("momentum:01")
+    assert native_role_token(_lower_native_role("momentum_x")) == "momentum_x"
+    assert native_role_token(_lower_native_role("Custom")) == "Custom"
     assert role_canonical("axial:2") == "axial:2"
 
 
@@ -74,9 +76,30 @@ def test_module_exact_role_tokens_reenter_private_authoring_as_typed_values(dime
     )
 
 
-def test_module_legacy_pascal_role_is_not_a_physical_alias():
+def test_module_custom_role_tokens_reenter_authoring_without_label_loss():
+    state = SimpleNamespace(
+        components=("first", "second"),
+        roles={"first": "q1", "second": "q2"},
+    )
+
+    lowered = _typed_lowering_roles(state)
+
+    assert lowered is not None
+    assert all(isinstance(role, RoleKey) for role in lowered)
+    assert tuple(native_role_token(role) for role in lowered) == ("q1", "q2")
+
+    module = model_pkg.Module("custom_role_module")
+    module.state_space(
+        "U", ("first", "second"), roles={"first": "q1", "second": "q2"})
+    emitted = _module_to_model(module)
+    assert tuple(native_role_token(role) for role in emitted._m.cons_roles) == ("q1", "q2")
+
+
+def test_module_pascal_role_remains_an_exact_custom_label_not_a_physical_alias():
     state = SimpleNamespace(components=("q",), roles={"q": "MomentumX"})
-    assert _typed_lowering_roles(state) is None
+    roles = _typed_lowering_roles(state)
+    assert roles is not None
+    assert native_role_token(roles[0]) == "MomentumX"
 
 
 def _facade_model(name="ep"):

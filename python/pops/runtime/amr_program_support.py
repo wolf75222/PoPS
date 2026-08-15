@@ -98,13 +98,13 @@ DEFERRED_GROUPS: dict = {
         "issue": None,
         "op_source": "program_emit_kernels._named_fluxes (rhs with named fluxes)",
         "ir_ops": frozenset({"neg_div_flux_into"}),
-        "header_methods": frozenset({"neg_div_flux_into"}),
+        "header_methods": frozenset(),
     },
     "projection": {
         "issue": None,
         "op_source": "program_emit_kernels._ALLOWED_OPS['project']",
         "ir_ops": frozenset({"project"}),
-        "header_methods": frozenset(),
+        "header_methods": frozenset({"projection"}),
     },
     "coupled_solve": {
         "issue": None,
@@ -124,15 +124,59 @@ DEFERRED_GROUPS: dict = {
         "issue": None,
         "op_source": "not representable in final Program IR (field identity is mandatory)",
         "ir_ops": frozenset(),
-        "header_methods": frozenset({"solve_fields_from_blocks_default"}),
+        "header_methods": frozenset(),
     },
     "scheduler": {
         "issue": None,
         "op_source": "program_emit_schedule (held / scheduled cache_* seams)",
         "ir_ops": frozenset(),  # scheduling is an attr on an op node, not a distinct IR op
-        "header_methods": frozenset({"cache_should_update", "cache_store_aux", "cache_restore_aux",
-                                    "cache_store_scratch", "cache_restore_scratch",
-                                    "cache_accumulate_dt", "cache_effective_dt"}),
+        "header_methods": frozenset({"scheduler_cache"}),
+    },
+    "cell_local_temporal": {
+        "issue": None,
+        "op_source": "Program.cell_local_time_contract()",
+        "ir_ops": frozenset(),
+        "header_methods": frozenset(),
+    },
+    "split_default_rhs": {
+        "issue": None,
+        "op_source": "rhs flux/sources attrs lowering to split default routes",
+        "ir_ops": frozenset(),
+        "header_methods": frozenset(),
+    },
+    "tensor_elliptic": {
+        "issue": None,
+        "op_source": "matrix_free apply_laplacian_coeff",
+        "ir_ops": frozenset({"apply_laplacian_coeff"}),
+        "header_methods": frozenset({"tensor_elliptic"}),
+    },
+    "masks": {
+        "issue": None,
+        "op_source": "cell_compare and local nonlinear solve masks",
+        "ir_ops": frozenset({"cell_compare", "solve_coupled_implicit"}),
+        "header_methods": frozenset({"multi_block_mask", "composite_mask"}),
+    },
+    "matrix_free": {
+        "issue": None,
+        "op_source": "matrix_free rhs_jacvec lowering",
+        "ir_ops": frozenset({"rhs_jacvec"}),
+        "header_methods": frozenset({
+            "iterate_dependent_boundary",
+            "matrix_free_split_residual",
+            "matrix_free_coupled_jacobian",
+            "perturbed_field_state",
+        }),
+    },
+    "multi_block": {
+        "issue": None,
+        "op_source": "Program IR references more than one block",
+        "ir_ops": frozenset(),
+        "header_methods": frozenset({
+            "multi_block_state",
+            "multi_block_history",
+            "multi_block_field_state",
+            "multi_block_cell_local_temporal",
+        }),
     },
 }
 
@@ -221,6 +265,8 @@ def _used_groups(program: Any, *, context: AMRProgramSupportContext) -> set:
         # A rhs with named fluxes (not the default flux) lowers to the deferred named-flux -div seam.
         if op == "rhs" and _has_named_fluxes(attrs):
             used.add("named_flux")
+        if op == "rhs" and _uses_split_default_rhs(attrs):
+            used.add("split_default_rhs")
         # The canonical IR op is solve_fields; code generation alone lowers that operation to the
         # exact C++ AmrProgramContext::solve_fields_from_state_at seam.
         if op == "solve_fields" and attrs.get("field"):
@@ -228,6 +274,10 @@ def _used_groups(program: Any, *, context: AMRProgramSupportContext) -> set:
         # A held / scheduled node lowers to the deferred scheduler cache seams.
         if attrs.get("schedule") is not None:
             used.add("scheduler")
+    if _uses_cell_local_temporal_execution(program):
+        used.add("cell_local_temporal")
+    if len({_block_identity(node) for node in nodes if node.get("block") is not None}) > 1:
+        used.add("multi_block")
     return used
 
 
@@ -242,6 +292,26 @@ def _has_named_fluxes(attrs: dict) -> bool:
     if not fluxes or fluxes == ["default"]:
         return False
     return any(f != "default" for f in fluxes)
+
+
+def _uses_split_default_rhs(attrs: dict) -> bool:
+    """Whether an ``rhs`` lowers through the prepared split default flux/source providers."""
+    sources = attrs.get("sources")
+    wants_default_source = sources is None or "default" in sources
+    if attrs.get("flux", True) is False:
+        return wants_default_source
+    return not _has_named_fluxes(attrs) and not wants_default_source
+
+
+def _uses_cell_local_temporal_execution(program: Any) -> bool:
+    """Whether AMR artifact installation would call the cell-local temporal seam."""
+    contract = getattr(program, "cell_local_time_contract", None)
+    return callable(contract) and contract() is not None
+
+
+def _block_identity(node: dict) -> str:
+    """Return a stable-enough inspection identity for one serialized Program block handle."""
+    return repr(node["block"])
 
 
 def _ir_nodes(program: Any) -> Any:

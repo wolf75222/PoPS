@@ -5,6 +5,7 @@
 #include <pops/mesh/boundary/prepared_hyperbolic_boundary.hpp>
 #include <pops/mesh/topology/boundary_topology.hpp>
 #include <pops/numerics/nonlinear/newton_options.hpp>
+#include <pops/numerics/time/amr/levels/amr_clock.hpp>
 #include <pops/coupling/source/coupling_operator.hpp>  // CouplingOperator / CouplingOperatorView (typed contract, ADC-595)
 #include <pops/runtime/export.hpp>  // POPS_EXPORT: exact package seams resolved by native loaders
 #include <pops/runtime/facade_options.hpp>  // CoupledSourceProgram (facade POD, ADC-214)
@@ -15,6 +16,7 @@
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/runtime/numerical_defaults.hpp>
 #include <pops/runtime/amr/prepared_tagging_execution.hpp>
+#include <pops/runtime/amr/prepared_multiblock_hierarchy.hpp>
 #include <pops/runtime/amr/exact_field_solver_provider.hpp>
 #include <pops/runtime/amr/field_solver_options.hpp>
 #include <pops/runtime/amr/hierarchy_tensor_solver_provider.hpp>
@@ -31,6 +33,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -69,9 +72,11 @@ class SolveOutcome;
 
 namespace component {
 class LoadedComponent;
-}
+class PreparedExecutionContextV1;
+}  // namespace component
 
 class ObserverMpiLane;
+class ExecutionLane;
 namespace runtime::program {
 template <int Dim, class MemorySpace>
 class AmrProgramContext;
@@ -165,6 +170,20 @@ struct AmrSystemConfig : RuntimeSpatialDomain<Dim> {
   PreparedProviderOptions load_balance_options{"pops.amr.load-balance.space-filling-curve@1", {}};
 };
 
+/// One owner-qualified bootstrap payload staged by the RuntimeInstance before hierarchy
+/// materialization. Empty `block` is reserved for non-cell carriers; unsupported space/centering
+/// pairs are rejected by the native registry before any subject is published.
+struct AmrBootstrapSubject {
+  std::string subject_identity;
+  std::string block;
+  std::string space;
+  std::string centering;
+  std::string payload_kind;
+  std::vector<double> discrete_array;
+  std::vector<std::vector<std::string>> analytic_opcodes;
+  std::vector<std::vector<double>> analytic_literals;
+};
+
 /// Frozen parameters passed to the deferred build of the compiled path (add_compiled_model). Materialized
 /// by AmrSystem at ensure_built time: the geometry, Poisson and initial-state choices known
 /// at that moment. The amr_dsl_block header consumes them to instantiate AmrCouplerMP<Model>.
@@ -241,6 +260,21 @@ class AmrSystem {
   using memory_space = typename MultiFab<Dim>::memory_space;
   using PreparedBlock = PreparedAmrSystemBlock<Dim, memory_space>;
   using PreparedLevelEvaluation = PreparedAmrLevelEvaluation<Dim, memory_space>;
+  using PreparedMultiBlockHierarchy =
+      runtime::amr::PreparedMultiBlockAmrHierarchy<Dim, memory_space>;
+  using ProgramBlockMap = typename PreparedMultiBlockHierarchy::ProgramBlockMap;
+  using PreparedCouplingOperator = runtime::system::PreparedCouplingOperator<Dim>;
+  struct PreparedAmrProgramFluxExpressionBlockBudget {
+    std::size_t rhs_basis_bound = 0;
+    std::size_t coefficient_term_bound = 0;
+  };
+  struct PreparedAmrProgramFluxExpressionBudget {
+    std::string program_hash;
+    std::uint64_t generation = 0;
+    ProgramBlockMap program_block_map;
+    std::vector<PreparedAmrProgramFluxExpressionBlockBudget> blocks;
+    std::string exact_contract;
+  };
   static constexpr int dimension = Dim;
 
   explicit AmrSystem(const AmrSystemConfig<Dim>& cfg);
@@ -334,6 +368,37 @@ class AmrSystem {
   /// runtime block, or dimension-erased fallback is published by this route.
   POPS_EXPORT void install_prepared_amr_block(PreparedBlock block);
 
+  /// Borrow one accepted block/level carrier through its authenticated runtime identity. Storage
+  /// ownership remains in PreparedMultiBlockHierarchy and is never exposed to generated artifacts.
+  POPS_EXPORT const MultiFab<Dim>& prepared_amr_block_state(int runtime_block, int level) const;
+  POPS_EXPORT MultiFab<Dim>& prepared_amr_block_state(int runtime_block, int level);
+  /// Stage one owner-qualified multi-block coupling provider. The registry is copied and validated
+  /// on every rank before publication, then installed into the carrier before its collective seal.
+  POPS_EXPORT void install_prepared_amr_coupling_operator(std::string provider_contract,
+                                                          CouplingOperatorView view,
+                                                          PreparedCouplingOperator operation);
+  /// The exact Program ordering retained by the prepared carrier. It is an all-block permutation;
+  /// an empty or partial map is never synthesized positionally.
+  POPS_EXPORT const ProgramBlockMap& prepared_amr_program_block_map() const;
+  /// Install an explicit finite flux-expression preparation budget for a manually installed
+  /// Program. The vector is in Program order and is authenticated against the installed step,
+  /// exact block map, hierarchy generation and carrier lane before publication.
+  POPS_EXPORT void install_prepared_amr_program_flux_expression_budget(
+      std::string program_hash, std::vector<PreparedAmrProgramFluxExpressionBlockBudget> blocks);
+  /// Exact prepared flux-expression budget retained for the installed Program and current
+  /// hierarchy materialization. Generated artifacts publish the same carrier from mandatory DSO
+  /// metadata; there is no inferred or single-block default.
+  POPS_EXPORT const PreparedAmrProgramFluxExpressionBudget&
+  prepared_amr_program_flux_expression_budget() const;
+  /// Apply the sealed coupling registry to a complete private Program pack. Candidate order is the
+  /// retained Program order, while validation and execution use canonical block identities.
+  POPS_EXPORT std::size_t apply_prepared_amr_program_candidates(
+      int level, Real dt, std::span<MultiFab<Dim>* const> program_candidates);
+  /// Publish a complete private Program pack in one all-rank transaction. Any local or remote
+  /// failure restores every accepted block before the failure is reported.
+  POPS_EXPORT void publish_prepared_amr_program_candidates(
+      int level, std::span<MultiFab<Dim>* const> program_candidates);
+
   /// Materialize every level-bound operator, auxiliary owner, halo provider and flux ledger for
   /// the current exact hierarchy generation. A topology mutation invalidates the prior graph and
   /// this operation prepares a complete replacement before publication.
@@ -349,15 +414,59 @@ class AmrSystem {
       const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab<Dim>& state);
   POPS_EXPORT const PreparedLevelEvaluation& evaluate_prepared_amr_level_at(
       const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab<Dim>& state);
+  POPS_EXPORT void prepare_generated_amr_block_level_state(
+      int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      MultiFab<Dim>& state);
+  POPS_EXPORT const PreparedLevelEvaluation& evaluate_prepared_amr_block_level_at(
+      int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      MultiFab<Dim>& state);
+  /// Split Program providers: flux-only publishes the exact face ledger without adding the local
+  /// source, while source-into accumulates only the generated local source into caller storage.
+  POPS_EXPORT const PreparedLevelEvaluation& evaluate_prepared_amr_block_level_flux_at(
+      int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      MultiFab<Dim>& state);
+  POPS_EXPORT void prepared_amr_block_level_source_into_at(
+      int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      MultiFab<Dim>& state, MultiFab<Dim>& rhs);
+  [[nodiscard]] POPS_EXPORT SolveOutcome solve_prepared_amr_block_level_source_at(
+      int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      MultiFab<Dim>& state, Real dt, const NewtonOptions& options);
   POPS_EXPORT const PreparedLevelEvaluation& prepared_amr_level_evaluation(int level) const;
+  /// Return the prepared evaluation when this attempt evaluated @p level, or null when its body
+  /// performed no conservative residual evaluation.  The pointer remains valid until that level is
+  /// evaluated again or all attempt evaluations are cleared.
+  POPS_EXPORT const PreparedLevelEvaluation* prepared_amr_level_evaluation_if_present(
+      int level) const noexcept;
+  POPS_EXPORT void clear_prepared_amr_level_evaluations() const noexcept;
+  /// Bind the complete attempt-local hierarchy image used by coarse/fine ghost preparation while a
+  /// Program advance is in flight. The candidate carriers remain caller-owned and are never
+  /// published by this seam; level evaluation stages and restores their ancestors collectively.
+  POPS_EXPORT void bind_program_hierarchy_candidates(
+      const std::vector<MultiFab<Dim>>* candidates) const;
+  POPS_EXPORT void unbind_program_hierarchy_candidates(
+      const std::vector<MultiFab<Dim>>* candidates) const noexcept;
+  POPS_EXPORT void bind_program_block_hierarchy_candidates(
+      int runtime_block, const std::vector<MultiFab<Dim>>* candidates) const;
+  POPS_EXPORT void unbind_program_block_hierarchy_candidates(
+      int runtime_block, const std::vector<MultiFab<Dim>>* candidates) const noexcept;
 
   /// Exact level geometry/topology and model speed retained by the prepared hierarchy graph.
   POPS_EXPORT Geometry<Dim> prepared_amr_level_geometry(int level) const;
   POPS_EXPORT BoundaryTopology<Dim> prepared_amr_boundary_topology() const;
   POPS_EXPORT Real prepared_amr_level_maximum_speed(int level, const MultiFab<Dim>& state) const;
+  POPS_EXPORT Real prepared_amr_block_level_maximum_speed(int runtime_block, int level,
+                                                          const MultiFab<Dim>& state) const;
+  /// Validate a terminal Program-state candidate against the retained generated block before any
+  /// accepted hierarchy storage is replaced.  The runtime block and hierarchy level are both
+  /// authenticated at the caller; every rank enters this collective pre-publication gate.
+  POPS_EXPORT void validate_prepared_amr_state_publication_candidate(
+      int runtime_block, int level, const MultiFab<Dim>& candidate) const;
 
   /// Accumulate the generated block's exact elliptic right-hand side on one live level.
   POPS_EXPORT void add_prepared_amr_poisson_rhs(int level, MultiFab<Dim>& rhs);
+  POPS_EXPORT void add_prepared_amr_block_poisson_rhs(int runtime_block, int level,
+                                                      const MultiFab<Dim>& state,
+                                                      MultiFab<Dim>& rhs);
 
   /// Install the same exact-ranked hyperbolic authority as System. Same-level halo exchange and
   /// coarse/fine transfer remain separate hierarchy operations; physical laws are evaluated only
@@ -441,6 +550,15 @@ class AmrSystem {
       const std::vector<std::int32_t>& coarsen_ops, const std::vector<std::int32_t>& coarsen_args,
       int min_cycles, const std::string& equality_policy, const std::string& conflict_policy,
       const std::string& clock_identity, const std::string& provider_identity);
+  /// Install one authenticated native Tagger component. This private runtime seam selects the
+  /// candidate evaluator only; all policy and hierarchy publication remain in AmrSystem.
+  void install_tagger_component(
+      std::shared_ptr<component::LoadedComponent> component, const std::string& component_id,
+      const std::string& manifest_identity, std::uint32_t interface_version,
+      const std::string& provider_identity, const std::string& tagging_graph_identity,
+      const std::string& layout_identity, const std::string& clock_identity,
+      const std::string& execution_mode,
+      std::shared_ptr<const component::PreparedExecutionContextV1> execution);
   /// Execute the immutable exact-ranked tagging program against one live parent level. The
   /// returned masks are owner-local candidates; no clustering, hysteresis, or topology mutation is
   /// performed by this inspection route.
@@ -575,6 +693,11 @@ class AmrSystem {
   /// @throws std::runtime_error if the system is already built, if U is empty, or if its size
   ///         is not a multiple of the exact-ranked coarse cell count.
   void set_conservative_state(const std::string& name, const std::vector<double>& U);
+
+  /// Atomically install one complete, exact bootstrap-subject registry. The only payload forms are
+  /// a ranked discrete array and a validated generic analytic program; physical source names do
+  /// not cross this boundary.
+  void install_bootstrap_subjects(const std::vector<AmrBootstrapSubject>& subjects);
   void begin_bootstrap_plan();
   bool bootstrap_next_level();  ///< execute the next exact ranked transition if tagged
   void commit_bootstrap_level();
@@ -804,6 +927,11 @@ class AmrSystem {
   POPS_EXPORT std::vector<std::vector<std::string>> program_flux_ledger_manifest() const;
   POPS_EXPORT std::vector<std::vector<std::string>> program_interface_flux_ledger_manifest() const;
   POPS_EXPORT std::vector<std::vector<std::string>> program_sync_manifest() const;
+  /// Exact parent/child clock authorities consumed by the single-block Program hierarchy provider.
+  /// These are authored independently from spatial refinement and remain immutable after hierarchy
+  /// materialization.
+  POPS_EXPORT std::vector<::pops::amr::ParentChildClockRelation>
+  prepared_program_temporal_relations() const;
 
   /// @name Runtime freeze lifecycle (ADC-592, parity with System)
   /// Assembly mutable BEFORE bind, composition FROZEN once pops.bind completes. mark_bound() is
@@ -1061,6 +1189,33 @@ class AmrSystem {
  private:
   template <int ContextDim, class MemorySpace>
   friend class runtime::program::AmrProgramContext;
+  /// Borrow the exact lane retained by the current prepared hierarchy. Generated Program
+  /// providers use this private seam so numerical collectives never fall back to MPI_COMM_WORLD.
+  POPS_EXPORT const ExecutionLane& prepared_program_execution_lane_() const noexcept;
+  /// Internal Program-provider borrow. The carrier remains facade-owned, sealed and lifetime-stable
+  /// for the current hierarchy generation; generated artifacts never receive its raw storage.
+  POPS_EXPORT PreparedMultiBlockHierarchy& prepared_amr_multiblock_hierarchy_();
+  POPS_EXPORT const PreparedMultiBlockHierarchy& prepared_amr_multiblock_hierarchy_() const;
+  /// Subcycled generated-provider calls receive the parent image interpolated at the child
+  /// window's beginning.  These context-only overloads authenticate and stage that one exact
+  /// block/level parent only for the duration of the synchronous provider callback.
+  POPS_EXPORT void prepare_generated_amr_block_level_state(
+      int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      MultiFab<Dim>& state, int parent_level, const MultiFab<Dim>* staged_parent);
+  POPS_EXPORT const PreparedLevelEvaluation& evaluate_prepared_amr_block_level_at(
+      int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      MultiFab<Dim>& state, int parent_level, const MultiFab<Dim>* staged_parent);
+  POPS_EXPORT const PreparedLevelEvaluation& evaluate_prepared_amr_block_level_flux_at(
+      int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      MultiFab<Dim>& state, int parent_level, const MultiFab<Dim>* staged_parent);
+  POPS_EXPORT void prepared_amr_block_level_source_into_at(
+      int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      MultiFab<Dim>& state, MultiFab<Dim>& rhs, int parent_level,
+      const MultiFab<Dim>* staged_parent);
+  [[nodiscard]] POPS_EXPORT SolveOutcome solve_prepared_amr_block_level_source_at(
+      int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      MultiFab<Dim>& state, Real dt, const NewtonOptions& options, int parent_level,
+      const MultiFab<Dim>* staged_parent);
   /// Dedicated generated-Program sink for one validated, attempt-local balance term. It remains
   /// private to AmrProgramContext and is deliberately absent from Python bindings.
   POPS_EXPORT void record_program_balance_term(const std::string& route, const std::string& term,

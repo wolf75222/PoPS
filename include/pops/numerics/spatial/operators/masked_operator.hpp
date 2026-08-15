@@ -105,7 +105,15 @@ struct MaterializeMaskedFaceFlux {
       clear(face, FiniteVolumeStatus::InvalidWaveSpeed);
       return;
     }
-    const auto integrated = apply_face_measure(evaluation.checked_density(), context);
+    auto flux_density = evaluation.checked_density();
+    if constexpr (DiffusiveModel<Model>) {
+      if (!add_isotropic_fickian_flux_density<Axis>(model, metric, state, left_cell, right_cell,
+                                                    flux_density.value)) {
+        clear(face, FiniteVolumeStatus::NonFiniteFaceFlux);
+        return;
+      }
+    }
+    const auto integrated = apply_face_measure(flux_density, context);
     for (int component = 0; component < Model::n_vars; ++component) {
       if (!Kokkos::isfinite(integrated.value[component])) {
         clear(face, FiniteVolumeStatus::NonFiniteFaceFlux);

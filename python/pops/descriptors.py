@@ -12,14 +12,20 @@ from pops._manifest_protocol import strict_json_loads
 BRICK_TYPES = ("native", "generated", "macro", "external_cpp")
 
 BRICK_MANIFEST_SCHEMA_VERSION = 3
-_EXTERNAL_RIEMANN_ABI_VERSION = 2
-_EXTERNAL_RIEMANN_ABI_KEY = b"pops.external-riemann/v2;scalar=f64;index=i32;periodicity=xy"
+_EXTERNAL_RIEMANN_ABI_VERSION = 4
+_EXTERNAL_RIEMANN_ABI_KEY = (
+    "pops.external-riemann/v4;scalar=f64;index=i32;periodicity=nd;"
+    "providers=qualified;dim={dimension}"
+)
 _EXTERNAL_RIEMANN_ABI_SYMBOLS = frozenset({
     "pops_external_riemann_abi_version",
     "pops_external_riemann_abi_key",
-    "pops_brick_residual_v2",
-    "pops_brick_install_system_v2",
-    "pops_brick_install_amr_v2",
+    "pops_external_riemann_dimension",
+    "pops_brick_nvars",
+    "pops_brick_nproviders",
+    "pops_brick_residual_v4",
+    "pops_brick_install_system_v4",
+    "pops_brick_install_amr_v4",
     "pops_brick_model_identity",
     "pops_brick_kokkos_backend",
     "pops_brick_kokkos_version",
@@ -501,27 +507,42 @@ def load_cpp_library(path: Any) -> int:
         try:
             version_fn = handle.pops_external_riemann_abi_version
             key_fn = handle.pops_external_riemann_abi_key
-            getattr(handle, "pops_brick_residual_v2")
-            getattr(handle, "pops_brick_install_system_v2")
-            getattr(handle, "pops_brick_install_amr_v2")
+            dimension_fn = handle.pops_external_riemann_dimension
+            nvars_fn = handle.pops_brick_nvars
+            provider_count_fn = handle.pops_brick_nproviders
+            getattr(handle, "pops_brick_residual_v4")
+            getattr(handle, "pops_brick_install_system_v4")
+            getattr(handle, "pops_brick_install_amr_v4")
             model_identity_fn = handle.pops_brick_model_identity
             getattr(handle, "pops_brick_kokkos_backend")
             getattr(handle, "pops_brick_kokkos_version")
         except AttributeError as err:
             raise ValueError(
-                "external Riemann brick library %r declares ABI v2 but does not export its exact "
+                "external Riemann brick library %r declares ABI v4 but does not export its exact "
                 "version/key/residual symbols" % (path,)
             ) from err
         version_fn.restype = ctypes.c_int
         key_fn.restype = ctypes.c_char_p
+        dimension_fn.restype = ctypes.c_int
+        nvars_fn.restype = ctypes.c_int
+        provider_count_fn.restype = ctypes.c_int
         model_identity_fn.restype = ctypes.c_char_p
         version = version_fn()
         key = key_fn()
+        dimension = dimension_fn()
+        nvars = nvars_fn()
+        provider_count = provider_count_fn()
         model_identity_raw = model_identity_fn()
-        if version != _EXTERNAL_RIEMANN_ABI_VERSION or key != _EXTERNAL_RIEMANN_ABI_KEY:
+        expected_key = _EXTERNAL_RIEMANN_ABI_KEY.format(dimension=dimension).encode("ascii")
+        if version != _EXTERNAL_RIEMANN_ABI_VERSION or key != expected_key:
             raise ValueError(
                 "external Riemann brick library %r has incompatible numerical ABI version/key; "
                 "rebuild it with the current PoPS headers" % (path,)
+            )
+        if dimension not in (1, 2, 3) or nvars < 1 or provider_count < 0:
+            raise ValueError(
+                "external Riemann brick library %r exports an invalid dimension/model/provider "
+                "contract" % (path,)
             )
         if not model_identity_raw:
             raise ValueError(
@@ -529,9 +550,14 @@ def load_cpp_library(path: Any) -> int:
         model_identity = model_identity_raw.decode("utf-8")
     else:
         model_identity = None
+        dimension = nvars = provider_count = None
+        key = None
     registered = _register_manifest(manifest_json)
     for record in records:
-        identity = (str(library), digest, handle, model_identity)
+        identity = (
+            str(library), digest, handle, model_identity, dimension, nvars, provider_count,
+            None if key is None else key.decode("ascii"),
+        )
         previous = _EXTERNAL_BRICK_LIBRARIES.get(record["id"])
         if previous is not None and previous[:2] != identity[:2]:
             raise ValueError(
@@ -565,10 +591,13 @@ def _external_descriptor(brick_id: Any, *, expect_category: Any = None) -> Brick
         "library_path": runtime[0],
         "library_sha256": runtime[1],
         "abi_version": _EXTERNAL_RIEMANN_ABI_VERSION,
-        "abi_key": _EXTERNAL_RIEMANN_ABI_KEY.decode("ascii"),
+        "abi_key": runtime[7],
         "native_abi_key": _EXTERNAL_BRICK_ORIGINS[entry["id"]][0],
         "supported_layouts": tuple(entry["supported_layouts"]),
         "model_identity": runtime[3],
+        "dimension": runtime[4],
+        "n_vars": runtime[5],
+        "provider_count": runtime[6],
     }
     return BrickDescriptor(entry["id"], "external_cpp", category=entry["category"],
                            native_id=entry["native_id"], scheme="user",

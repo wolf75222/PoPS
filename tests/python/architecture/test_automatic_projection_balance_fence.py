@@ -52,4 +52,9 @@ def test_projection_dispatch_lives_on_the_ranked_context_not_a_parallel_service(
 
     amr = AMR_CONTEXT.read_text(encoding="utf-8")
     assert "ProgramExecutionServices" not in amr
-    assert "apply_projection(" not in amr
+    projection = _between(
+        amr,
+        "[[noreturn]] void apply_projection(int, field_type&) const",
+        "Real max_wave_speed(",
+    )
+    assert 'deferred_op("projection", "generated AMR projection provider")' in projection

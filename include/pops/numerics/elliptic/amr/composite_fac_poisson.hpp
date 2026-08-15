@@ -11,8 +11,11 @@
 #include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/mesh/layout/refinement.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
-#include <pops/numerics/elliptic/amr/partitioned_region_transfer.hpp>
+#include <pops/mesh/parallel/region_transfer.hpp>
 #include <pops/numerics/elliptic/interface/elliptic_solver.hpp>
+#include <pops/numerics/elliptic/interface/amr_field_newton_krylov.hpp>
+#include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace_workspace.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
 #include <pops/runtime/numerical_defaults.hpp>
@@ -43,8 +46,8 @@ struct CompositeFacPreparationBudget {
   std::size_t interpolation_regions = 0;
   std::size_t local_scratch_cells = 0;
   HaloScheduleBudget same_level_halo{};
-  partitioned_transfer::RegionTransferBudget parent_gather{};
-  partitioned_transfer::RegionTransferBudget fine_restriction{};
+  mesh::parallel::RegionTransferBudget parent_gather{};
+  mesh::parallel::RegionTransferBudget fine_restriction{};
 };
 
 template <int Dim>
@@ -67,7 +70,7 @@ struct CompositeFacCapabilities {
   bool conservative_restriction = true;
   bool injection_prolongation = true;
   bool periodic_sparse_levels = false;
-  bool singular_nullspace = false;
+  bool singular_nullspace = true;
   bool variable_coefficient = false;
   bool embedded_boundary = false;
 
@@ -420,6 +423,8 @@ class CompositeFacPoisson {
   static constexpr int dimension = Dim;
   using field_type = MultiFab<Dim, MemorySpace>;
   using request_type = CompositeFacBuildRequest<Dim>;
+  using nonlinear_workspace_type = AmrFieldNewtonKrylovWorkspace<Dim, MemorySpace>;
+  using nonlinear_hierarchy_type = typename nonlinear_workspace_type::hierarchy_type;
 
   CompositeFacPoisson(request_type request, CompositeFacOptions options = {},
                       Real reaction = Real(0))
@@ -485,7 +490,13 @@ class CompositeFacPoisson {
 
   std::string_view exact_prepared_contract() const noexcept { return exact_contract_; }
   int n_levels() const noexcept { return static_cast<int>(levels_.size()); }
-  int maximum_iterations() const noexcept { return options_.max_iters; }
+  int maximum_iterations() const noexcept {
+    if (newton_workspace_)
+      return newton_workspace_->options().max_iterations;
+    if (linear_boundary_workspace_)
+      return linear_boundary_workspace_->options().max_iterations;
+    return options_.max_iters;
+  }
   const Geometry<Dim>& geom() const noexcept { return levels_.front()->geometry; }
   field_type& rhs() noexcept { return levels_.front()->rhs; }
   const field_type& rhs() const noexcept { return levels_.front()->rhs; }
@@ -519,7 +530,107 @@ class CompositeFacPoisson {
     });
   }
 
+  void install_newton(FieldNewtonOptions options) {
+    if (newton_workspace_)
+      throw std::logic_error("partitioned FAC Newton authority is already installed");
+    if (!nullspace_workspace_)
+      throw std::logic_error(
+          "partitioned FAC Newton requires prepared vector-distribution authority");
+    validate_field_newton_options(options);
+    const auto layouts = newton_layouts_();
+    const auto masks = active_masks_();
+    const auto measures = level_cell_measures_();
+    newton_workspace_.emplace(layouts, masks, measures, nullspace_distributions_, *lane_, options);
+    linear_boundary_workspace_.reset();
+    prepare_dynamic_views_();
+  }
+
+  void install_boundary_kernel(CompiledFieldBoundaryKernel<Dim> kernel) {
+    if (boundary_kernel_)
+      throw std::logic_error("partitioned FAC boundary kernel is already installed");
+    kernel.validate();
+    boundary_kernel_ = std::move(kernel);
+    boundary_contexts_.clear();
+    if (!newton_workspace_ && !boundary_kernel_->observes_iteration) {
+      if (!nullspace_workspace_)
+        throw std::logic_error(
+            "partitioned FAC boundary kernel requires prepared vector-distribution authority");
+      const FieldNewtonOptions options = linear_boundary_newton_options_();
+      const auto layouts = newton_layouts_();
+      const auto masks = active_masks_();
+      const auto measures = level_cell_measures_();
+      linear_boundary_workspace_.emplace(layouts, masks, measures, nullspace_distributions_, *lane_,
+                                         options);
+    }
+    prepare_dynamic_views_();
+  }
+
+  void set_boundary_contexts(std::vector<FieldBoundaryExecutionContext<Dim>> contexts) {
+    if (!boundary_kernel_)
+      throw std::logic_error("partitioned FAC has no compiled dynamic boundary kernel");
+    if (contexts.size() != levels_.size())
+      throw std::invalid_argument(
+          "partitioned FAC requires one dynamic boundary context per live AMR level");
+    for (const FieldBoundaryExecutionContext<Dim>& context : contexts)
+      if (context.failure == nullptr)
+        throw std::invalid_argument(
+            "partitioned FAC dynamic boundary requires fallible execution channels");
+    boundary_contexts_ = std::move(contexts);
+  }
+
+  void install_nullspace(FieldNullspacePlan<Dim> plan,
+                         std::vector<PreparedVectorDistribution<Dim>> distributions) {
+    if (nullspace_workspace_)
+      throw std::logic_error("partitioned FAC nullspace authority is already installed");
+    if (distributions.size() != levels_.size())
+      throw std::invalid_argument(
+          "partitioned FAC nullspace authority requires one distribution per hierarchy level");
+    if (singular_() != !plan.empty())
+      throw std::invalid_argument(
+          "partitioned FAC nullspace plan disagrees with the prepared operator kernel");
+
+    std::vector<const MultiFab<Dim>*> rhs_layouts;
+    std::vector<MultiFab<Dim>*> candidates;
+    rhs_layouts.reserve(levels_.size());
+    candidates.reserve(levels_.size());
+    for (const auto& level : levels_) {
+      rhs_layouts.push_back(&level->rhs);
+      candidates.push_back(&level->phi);
+    }
+    auto workspace =
+        std::make_unique<FieldNullspaceWorkspace<Dim>>(plan, rhs_layouts, distributions, *lane_);
+    nullspace_rhs_ = std::move(rhs_layouts);
+    nullspace_candidates_ = std::move(candidates);
+    nullspace_distributions_ = std::move(distributions);
+    nullspace_workspace_ = std::move(workspace);
+  }
+
   SolveReport solve() {
+    if (!nullspace_workspace_) {
+      if (singular_())
+        throw std::logic_error(
+            "singular partitioned FAC solve has no prepared nullspace authority");
+    } else {
+      try {
+        nullspace_workspace_->require_compatible(nullspace_rhs_);
+      } catch (const FieldNullspaceIncompatibleRhs& error) {
+        SolveReport report;
+        report.mark_failed(SolveStatus::kIncompatibleRhs, SolveAction::kFailRun, error.what());
+        last_report_ = report;
+        return last_report_;
+      } catch (const FieldNullspaceInvalidEvaluation& error) {
+        SolveReport report;
+        report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun, error.what());
+        last_report_ = report;
+        return last_report_;
+      }
+    }
+    if (newton_workspace_ || boundary_kernel_)
+      return solve_dynamic_();
+
+    backup_candidates_();
+    if (nullspace_workspace_)
+      nullspace_workspace_->apply_gauge(nullspace_candidates_);
     compute_composite_residual_();
     const Real reference = composite_residual_norm_();
     SolveReport report;
@@ -527,13 +638,16 @@ class CompositeFacPoisson {
     if (!std::isfinite(static_cast<double>(reference))) {
       report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun,
                          "partitioned_fac_non_finite_initial_residual");
+      restore_candidates_();
       last_report_ = report;
       return last_report_;
     }
     report.reference_residual_norm = reference;
     report.residual_norm = reference;
     report.rel_residual = reference > Real(0) ? Real(1) : Real(0);
-    const Real stop = std::max(options_.abs_tol, options_.rel_tol * reference);
+    const Real roundoff_stop =
+        Real(128) * std::numeric_limits<Real>::epsilon() * std::max(Real(1), composite_rhs_norm_());
+    const Real stop = std::max({options_.abs_tol, options_.rel_tol * reference, roundoff_stop});
     if (reference <= stop) {
       fill_all_solution_ghosts_();
       report.mark_solved("partitioned_fac_initial_residual");
@@ -556,6 +670,8 @@ class CompositeFacPoisson {
       for (std::size_t level = 1; level < levels_.size(); ++level)
         smooth_(level, levels_[level]->phi, levels_[level]->rhs, post, true, false);
       average_solution_down_();
+      if (nullspace_workspace_)
+        nullspace_workspace_->apply_gauge(nullspace_candidates_);
 
       compute_composite_residual_();
       ++report.evaluations;
@@ -565,6 +681,7 @@ class CompositeFacPoisson {
       if (!std::isfinite(static_cast<double>(report.residual_norm))) {
         report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun,
                            "partitioned_fac_non_finite_iteration");
+        restore_candidates_();
         last_report_ = report;
         return last_report_;
       }
@@ -577,6 +694,7 @@ class CompositeFacPoisson {
     }
     report.mark_failed(SolveStatus::kIterationLimit, SolveAction::kFailRun,
                        "partitioned_fac_iteration_limit");
+    restore_candidates_();
     last_report_ = report;
     return last_report_;
   }
@@ -590,6 +708,9 @@ class CompositeFacPoisson {
     field_type residual;
     field_type scratch;
     field_type correction;
+    field_type candidate_backup;
+    field_type residual_operator_view;
+    field_type direction_operator_view;
     field_type covered;
     field_type active;
     HaloSchedule<Dim> halo_schedule;
@@ -608,6 +729,12 @@ class CompositeFacPoisson {
           scratch(request.boxes, request.distribution, request.local_rank, 1, Extent<Dim>{}),
           correction(request.boxes, request.distribution, request.local_rank, 1,
                      fac_detail::unit_ghosts<Dim>()),
+          candidate_backup(request.boxes, request.distribution, request.local_rank, 1,
+                           fac_detail::unit_ghosts<Dim>()),
+          residual_operator_view(request.boxes, request.distribution, request.local_rank, 1,
+                                 fac_detail::unit_ghosts<Dim>()),
+          direction_operator_view(request.boxes, request.distribution, request.local_rank, 1,
+                                  fac_detail::unit_ghosts<Dim>()),
           covered(request.boxes, request.distribution, request.local_rank, 1, Extent<Dim>{}),
           active(request.boxes, request.distribution, request.local_rank, 1, Extent<Dim>{}),
           halo_schedule(prepare_halo_schedule(
@@ -626,15 +753,18 @@ class CompositeFacPoisson {
       residual.set_val(Real(0));
       scratch.set_val(Real(0));
       correction.set_val(Real(0));
+      candidate_backup.set_val(Real(0));
+      residual_operator_view.set_val(Real(0));
+      direction_operator_view.set_val(Real(0));
       covered.set_val(Real(0));
       active.set_val(Real(1));
     }
   };
 
   struct Connection {
-    using transfer_job = partitioned_transfer::RegionTransferJob<Dim>;
-    using transfer_plan = partitioned_transfer::RegionTransferPlan<Dim>;
-    using transport_type = partitioned_transfer::RegionTransport<Dim, MemorySpace>;
+    using transfer_job = mesh::parallel::RegionTransferJob<Dim>;
+    using transfer_plan = mesh::parallel::RegionTransferPlan<Dim>;
+    using transport_type = mesh::parallel::RegionTransport<Dim, MemorySpace>;
 
     struct ScratchPatch {
       std::size_t fine_patch = 0;
@@ -694,13 +824,24 @@ class CompositeFacPoisson {
 
       std::vector<transfer_job> gather_jobs;
       std::vector<transfer_job> restriction_jobs;
+      const bool replicated_parent = parent->phi.distribution().replicated();
+      const bool replicated_child = child->phi.distribution().replicated();
+      const auto& rank_space = parent->phi.rank_space();
       const std::size_t pair_count =
           fac_detail::checked_product(child->phi.layout().size(), parent->phi.layout().size(),
                                       "partitioned FAC parent-child pair count exceeds size_t");
-      if (pair_count > budget.parent_child_patch_pairs)
+      const std::size_t gather_pair_count = fac_detail::checked_product(
+          pair_count, replicated_parent && replicated_child ? rank_space.size() : std::size_t{1},
+          "partitioned FAC replicated parent-gather pair count exceeds size_t");
+      const std::size_t restriction_pair_count = fac_detail::checked_product(
+          pair_count, replicated_parent ? rank_space.size() : std::size_t{1},
+          "partitioned FAC replicated fine-restriction pair count exceeds size_t");
+      if (gather_pair_count > budget.parent_gather.canonical_jobs ||
+          restriction_pair_count > budget.fine_restriction.canonical_jobs ||
+          pair_count > budget.parent_child_patch_pairs)
         throw std::length_error("partitioned FAC parent-child pair budget exceeded");
-      gather_jobs.reserve(pair_count);
-      restriction_jobs.reserve(pair_count);
+      gather_jobs.reserve(gather_pair_count);
+      restriction_jobs.reserve(restriction_pair_count);
       for (std::size_t fine_patch = 0; fine_patch < child->phi.layout().size(); ++fine_patch) {
         const Box<Dim>& valid = child->phi.layout()[fine_patch];
         const Box<Dim> staging =
@@ -714,19 +855,39 @@ class CompositeFacPoisson {
           if (!gathered.empty()) {
             if (!gather_coverage.add(mesh::ExactCellCount::from_box(gathered)))
               throw std::overflow_error("partitioned FAC gather coverage overflows");
-            gather_jobs.push_back(transfer_job{
-                parent_patch, fine_patch, parent->phi.distribution().owner(parent_patch),
-                child->phi.distribution().owner(fine_patch), gathered, gathered});
+            if (replicated_child) {
+              for (std::size_t rank = 0; rank < rank_space.size(); ++rank) {
+                const Index<Dim> coordinate = rank_space.coordinate(rank);
+                gather_jobs.push_back(transfer_job{parent_patch, fine_patch, coordinate, coordinate,
+                                                   gathered, gathered});
+              }
+            } else {
+              const Index<Dim> child_owner = child->phi.distribution().owner(fine_patch);
+              const Index<Dim> parent_owner =
+                  replicated_parent ? child_owner : parent->phi.distribution().owner(parent_patch);
+              gather_jobs.push_back(transfer_job{parent_patch, fine_patch, parent_owner,
+                                                 child_owner, gathered, gathered});
+            }
           }
           const Box<Dim> restricted_region =
               footprint.intersect(parent->phi.layout()[parent_patch]);
           if (!restricted_region.empty()) {
             if (!restriction_coverage.add(mesh::ExactCellCount::from_box(restricted_region)))
               throw std::overflow_error("partitioned FAC restriction coverage overflows");
-            restriction_jobs.push_back(transfer_job{fine_patch, parent_patch,
-                                                    child->phi.distribution().owner(fine_patch),
-                                                    parent->phi.distribution().owner(parent_patch),
-                                                    restricted_region, restricted_region});
+            if (replicated_parent) {
+              const Index<Dim> source_rank = replicated_child
+                                                 ? rank_space.coordinate(0)
+                                                 : child->phi.distribution().owner(fine_patch);
+              for (std::size_t rank = 0; rank < rank_space.size(); ++rank)
+                restriction_jobs.push_back(transfer_job{fine_patch, parent_patch, source_rank,
+                                                        rank_space.coordinate(rank),
+                                                        restricted_region, restricted_region});
+            } else {
+              restriction_jobs.push_back(transfer_job{
+                  fine_patch, parent_patch, child->phi.distribution().owner(fine_patch),
+                  parent->phi.distribution().owner(parent_patch), restricted_region,
+                  restricted_region});
+            }
           }
         }
         if (gather_coverage != mesh::ExactCellCount::from_box(staging))
@@ -824,21 +985,30 @@ class CompositeFacPoisson {
     for (std::size_t level = 0; level < request.levels.size(); ++level) {
       const auto& current = request.levels[level];
       fac_detail::validate_boundary(current.geometry, current.boundary);
-      for (int axis = 0; axis < Dim; ++axis)
-        for (const BoundarySide side : {BoundarySide::lower, BoundarySide::upper})
-          if (current.boundary.topology().is_periodic(Face<Dim>{axis, side}))
-            throw std::invalid_argument(
-                "partitioned FAC sparse periodic coarse/fine interpolation is not a registered "
-                "capability");
+      const bool sparse_level =
+          !current.boxes.tiles_exactly(current.geometry.domain(), current.layout_budget);
+      if (level != 0 && sparse_level)
+        for (const Box<Dim>& patch : current.boxes.boxes()) {
+          const Box<Dim> grown = patch.grow(1);
+          if (grown != fac_detail::clipped_growth(patch, current.geometry.domain()))
+            for (int axis = 0; axis < Dim; ++axis)
+              for (const BoundarySide side : {BoundarySide::lower, BoundarySide::upper})
+                if (current.boundary.topology().is_periodic(Face<Dim>{axis, side}))
+                  throw std::invalid_argument(
+                      "partitioned FAC sparse periodic coarse/fine interpolation crossing the "
+                      "periodic domain boundary is not a registered capability");
+        }
       if (current.geometry.domain().empty() || current.boxes.empty() ||
           !current.distribution.matches_layout(current.boxes) ||
-          current.distribution.replicated() || current.distribution.rank_space() != rank_space ||
+          current.distribution.rank_space() != rank_space ||
           rank_space.size() != static_cast<std::size_t>(n_ranks()) ||
           !rank_space.contains(current.local_rank) ||
           rank_space.linear_rank(current.local_rank) != static_cast<std::size_t>(my_rank()) ||
           !current.boxes.is_disjoint_within(current.geometry.domain(), current.layout_budget))
+        throw std::invalid_argument("partitioned FAC level has an invalid exact-rank layout");
+      if (level != 0 && current.distribution.replicated())
         throw std::invalid_argument(
-            "partitioned FAC level has an invalid non-replicated exact-rank layout");
+            "partitioned FAC supports replicated parents only before partitioned fine levels");
       if (level == 0 &&
           !current.boxes.tiles_exactly(current.geometry.domain(), current.layout_budget))
         throw std::invalid_argument("partitioned FAC coarse level must tile its full domain");
@@ -862,10 +1032,7 @@ class CompositeFacPoisson {
           throw std::invalid_argument(
               "partitioned FAC fine patch is not aligned to its refinement ratio");
     }
-    if (fac_detail::singular(request.levels.front().boundary, reaction))
-      throw std::invalid_argument(
-          "partitioned FAC singular nullspaces are not a registered capability; use reaction>0 "
-          "or an anchoring physical boundary");
+    (void)reaction;
   }
 
   void build_levels_(const request_type& request) {
@@ -1026,6 +1193,311 @@ class CompositeFacPoisson {
       connections_[child - 1]->restrict_into(levels_[child]->phi, levels_[child - 1]->phi);
   }
 
+  std::vector<const field_type*> newton_layouts_() const {
+    std::vector<const field_type*> result;
+    result.reserve(levels_.size());
+    for (const auto& level : levels_)
+      result.push_back(&level->phi);
+    return result;
+  }
+
+  std::vector<const field_type*> active_masks_() const {
+    std::vector<const field_type*> result;
+    result.reserve(levels_.size());
+    for (const auto& level : levels_)
+      result.push_back(&level->active);
+    return result;
+  }
+
+  std::vector<Real> level_cell_measures_() const {
+    std::vector<Real> result;
+    result.reserve(levels_.size());
+    for (const auto& level : levels_) {
+      Real measure = Real(1);
+      for (int axis = 0; axis < Dim; ++axis)
+        measure *= level->geometry.spacing(axis);
+      result.push_back(measure);
+    }
+    return result;
+  }
+
+  void prepare_dynamic_views_() {
+    candidate_view_.resize(levels_.size());
+    dynamic_const_view_.resize(levels_.size());
+    dynamic_mutable_view_.resize(levels_.size());
+    for (std::size_t level = 0; level < levels_.size(); ++level)
+      candidate_view_[level] = &levels_[level]->phi;
+  }
+
+  static void copy_valid_(const field_type& source, field_type& destination) {
+    ::pops::elliptic::mg::copy_scalar_valid(source, destination);
+  }
+
+  static void copy_grown_(const field_type& source, field_type& destination) {
+    if (source.layout() != destination.layout() ||
+        source.distribution() != destination.distribution() ||
+        source.local_rank() != destination.local_rank() || source.ncomp() != 1 ||
+        destination.ncomp() != 1 || source.ghosts() != destination.ghosts())
+      throw std::invalid_argument("partitioned FAC dynamic operator views differ from candidates");
+    for (std::size_t local = 0; local < source.local_size(); ++local) {
+      const auto values = source.fab(local).view();
+      const auto published = destination.fab(local).view();
+      for_each_cell(source.fab(local).grown_box(),
+                    [=] POPS_HD(const Index<Dim>& cell) { published(cell, 0) = values(cell, 0); });
+    }
+    Kokkos::fence();
+  }
+
+  void backup_candidates_() {
+    for (auto& level : levels_)
+      copy_grown_(level->phi, level->candidate_backup);
+  }
+
+  void restore_candidates_() {
+    for (auto& level : levels_)
+      copy_grown_(level->candidate_backup, level->phi);
+  }
+
+  void stage_dynamic_iterate_(const nonlinear_hierarchy_type& iterate) {
+    if (iterate.size() != levels_.size())
+      throw std::invalid_argument("partitioned FAC nonlinear iterate has the wrong level count");
+    for (std::size_t level = 0; level < levels_.size(); ++level)
+      copy_valid_(iterate[level], levels_[level]->residual_operator_view);
+    for (std::size_t child = levels_.size(); child-- > 1;)
+      connections_[child - 1]->restrict_into(levels_[child]->residual_operator_view,
+                                             levels_[child - 1]->residual_operator_view);
+  }
+
+  void stage_dynamic_direction_(const nonlinear_hierarchy_type& direction) {
+    if (direction.size() != levels_.size())
+      throw std::invalid_argument("partitioned FAC nonlinear direction has the wrong level count");
+    for (std::size_t level = 0; level < levels_.size(); ++level)
+      copy_valid_(direction[level], levels_[level]->direction_operator_view);
+    for (std::size_t child = levels_.size(); child-- > 1;)
+      connections_[child - 1]->restrict_into(levels_[child]->direction_operator_view,
+                                             levels_[child - 1]->direction_operator_view);
+  }
+
+  FieldBoundaryExecutionContext<Dim>& boundary_context_at_(std::size_t level, int iteration) {
+    if (boundary_contexts_.size() != levels_.size())
+      throw std::logic_error("partitioned FAC dynamic boundary contexts are absent");
+    boundary_contexts_[level].point.iteration = iteration;
+    return boundary_contexts_[level];
+  }
+
+  template <class Operation>
+  void run_boundary_phase_(FieldBoundaryExecutionContext<Dim>& context, const char* message,
+                           Operation&& operation) {
+    context.failure->reset();
+    long local_exception = 0;
+    try {
+      std::forward<Operation>(operation)();
+      Kokkos::fence();
+    } catch (...) {
+      local_exception = 1;
+    }
+    if (all_reduce_max(local_exception, *lane_) != 0)
+      throw std::runtime_error(message);
+
+    const bool local_failed = context.failure->failed();
+    const long failure_count = all_reduce_sum(local_failed ? 1L : 0L, *lane_);
+    if (failure_count == 0) {
+      context.failure->reset();
+      return;
+    }
+    const int rank = lane_->rank();
+    const int owner = static_cast<int>(
+        all_reduce_min(static_cast<double>(local_failed ? rank : lane_->size()), *lane_));
+    const bool publish = local_failed && rank == owner;
+    context.failure->code = static_cast<int>(
+        all_reduce_sum(publish ? static_cast<long>(context.failure->code) : 0L, *lane_));
+    context.failure->face = static_cast<int>(
+        all_reduce_sum(publish ? static_cast<long>(context.failure->face) : 0L, *lane_));
+    for (int axis = 0; axis < Dim; ++axis)
+      context.failure->cell[axis] = static_cast<int>(
+          all_reduce_sum(publish ? static_cast<long>(context.failure->cell[axis]) : 0L, *lane_));
+    context.failure->value = static_cast<Real>(
+        all_reduce_sum(publish ? static_cast<double>(context.failure->value) : 0.0, *lane_));
+    throw std::runtime_error(message);
+  }
+
+  void fill_dynamic_residual_ghosts_(std::size_t level_index, const field_type& iterate,
+                                     int iteration) {
+    Level& level = *levels_.at(level_index);
+    if (level_index > 0) {
+      Connection& connection = *connections_[level_index - 1];
+      connection.gather_parent(levels_[level_index - 1]->residual_operator_view);
+      connection.interpolate_ghosts(level.residual_operator_view);
+    }
+    same_level_fill_(level, level.residual_operator_view);
+    fill_physical_boundary(level.residual_operator_view, level.physical_boundary);
+    if (boundary_kernel_) {
+      auto& context = boundary_context_at_(level_index, iteration);
+      run_boundary_phase_(
+          context, "partitioned FAC dynamic boundary residual failed collectively", [&] {
+            for (int face = 0; face < 2 * Dim; ++face)
+              boundary_kernel_->prepare_residual_view(face, iterate, level.residual_operator_view,
+                                                      level.geometry, context);
+          });
+    }
+  }
+
+  void fill_dynamic_jvp_ghosts_(std::size_t level_index, const nonlinear_hierarchy_type& iterate,
+                                const nonlinear_hierarchy_type& direction, int iteration) {
+    Level& level = *levels_.at(level_index);
+    if (level_index > 0) {
+      Connection& connection = *connections_[level_index - 1];
+      connection.gather_parent(levels_[level_index - 1]->direction_operator_view);
+      connection.interpolate_ghosts(level.direction_operator_view);
+    }
+    same_level_fill_(level, level.direction_operator_view);
+    fill_physical_boundary(level.direction_operator_view, level.homogeneous_physical_boundary);
+    if (boundary_kernel_) {
+      auto& context = boundary_context_at_(level_index, iteration);
+      run_boundary_phase_(context, "partitioned FAC dynamic boundary JVP failed collectively", [&] {
+        for (int face = 0; face < 2 * Dim; ++face)
+          boundary_kernel_->prepare_jvp_view(face, iterate[level_index], direction[level_index],
+                                             level.direction_operator_view, level.geometry,
+                                             context);
+      });
+    }
+  }
+
+  static void mask_covered_(Level& level, field_type& values) {
+    for (std::size_t local = 0; local < values.local_size(); ++local)
+      for_each_cell(values.box(local),
+                    fac_detail::MaskResidualKernel<Dim>{
+                        values.fab(local).view(), std::as_const(level.covered).fab(local).view()});
+    Kokkos::fence();
+  }
+
+  void evaluate_dynamic_residual_(const nonlinear_hierarchy_type& iterate,
+                                  nonlinear_hierarchy_type& output, int iteration) {
+    if (output.size() != levels_.size())
+      throw std::invalid_argument("partitioned FAC nonlinear residual has the wrong level count");
+    stage_dynamic_iterate_(iterate);
+    for (std::size_t level_index = 0; level_index < levels_.size(); ++level_index) {
+      Level& level = *levels_[level_index];
+      fill_dynamic_residual_ghosts_(level_index, iterate[level_index], iteration);
+      ::pops::elliptic::mg::poisson_residual_valid(level.residual_operator_view, level.rhs,
+                                                   level.geometry, level.residual, reaction_);
+      if (boundary_kernel_) {
+        auto& context = boundary_context_at_(level_index, iteration);
+        run_boundary_phase_(
+            context, "partitioned FAC dynamic residual closure failed collectively", [&] {
+              for (int face = 0; face < 2 * Dim; ++face)
+                boundary_kernel_->add_residual(face, level.residual_operator_view, level.residual,
+                                               level.geometry, context);
+            });
+      }
+      mask_covered_(level, level.residual);
+      copy_valid_(level.residual, output[level_index]);
+      dynamic_const_view_[level_index] = &output[level_index];
+    }
+    nullspace_workspace_->require_compatible(dynamic_const_view_);
+  }
+
+  void apply_dynamic_linearized_(const nonlinear_hierarchy_type& iterate,
+                                 const nonlinear_hierarchy_type& direction,
+                                 nonlinear_hierarchy_type& output, int iteration) {
+    if (output.size() != levels_.size())
+      throw std::invalid_argument("partitioned FAC nonlinear JVP has the wrong level count");
+    stage_dynamic_iterate_(iterate);
+    stage_dynamic_direction_(direction);
+    for (std::size_t level_index = 0; level_index < levels_.size(); ++level_index) {
+      Level& level = *levels_[level_index];
+      fill_dynamic_jvp_ghosts_(level_index, iterate, direction, iteration);
+      ::pops::elliptic::mg::apply_poisson_operator_valid(level.direction_operator_view,
+                                                         level.geometry, level.scratch, reaction_);
+      if (boundary_kernel_) {
+        auto& context = boundary_context_at_(level_index, iteration);
+        run_boundary_phase_(
+            context, "partitioned FAC dynamic JVP closure failed collectively", [&] {
+              for (int face = 0; face < 2 * Dim; ++face)
+                boundary_kernel_->apply_jvp(face, iterate[level_index], direction[level_index],
+                                            level.scratch, level.geometry, context);
+            });
+      }
+      mask_covered_(level, level.scratch);
+      copy_valid_(level.scratch, output[level_index]);
+    }
+  }
+
+  void apply_dynamic_gauge_(nonlinear_hierarchy_type& values) {
+    if (values.size() != levels_.size())
+      throw std::invalid_argument("partitioned FAC nonlinear gauge has the wrong level count");
+    for (std::size_t level = 0; level < levels_.size(); ++level)
+      dynamic_mutable_view_[level] = &values[level];
+    nullspace_workspace_->apply_gauge(dynamic_mutable_view_);
+  }
+
+  SolveReport solve_dynamic_() {
+    if (boundary_kernel_ && boundary_contexts_.size() != levels_.size())
+      throw std::logic_error("partitioned FAC dynamic boundary has no level-qualified contexts");
+    if (boundary_kernel_ && boundary_kernel_->observes_iteration && !newton_workspace_)
+      throw std::logic_error(
+          "iterate-dependent partitioned FAC boundary requires a prepared Newton authority");
+    auto* workspace = newton_workspace_ ? &*newton_workspace_ : &*linear_boundary_workspace_;
+    backup_candidates_();
+    SolveReport report;
+    try {
+      report = workspace->solve(
+          candidate_view_,
+          [this](const nonlinear_hierarchy_type& iterate, nonlinear_hierarchy_type& residual,
+                 int iteration) { evaluate_dynamic_residual_(iterate, residual, iteration); },
+          [this](const nonlinear_hierarchy_type& iterate, const nonlinear_hierarchy_type& direction,
+                 nonlinear_hierarchy_type& output, int iteration) {
+            apply_dynamic_linearized_(iterate, direction, output, iteration);
+          },
+          [this](nonlinear_hierarchy_type& values) { apply_dynamic_gauge_(values); });
+    } catch (const FieldNullspaceIncompatibleRhs& error) {
+      report.mark_failed(SolveStatus::kIncompatibleRhs, SolveAction::kFailRun, error.what());
+    } catch (const FieldNullspaceInvalidEvaluation& error) {
+      report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun, error.what());
+    } catch (const std::exception& error) {
+      report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kRejectAttempt,
+                         error.what());
+    }
+    if (report.solved_value_available()) {
+      try {
+        average_solution_down_();
+        nullspace_workspace_->apply_gauge(nullspace_candidates_);
+        for (std::size_t level = 0; level < levels_.size(); ++level)
+          copy_valid_(levels_[level]->phi, levels_[level]->residual_operator_view);
+        for (std::size_t child = levels_.size(); child-- > 1;)
+          connections_[child - 1]->restrict_into(levels_[child]->residual_operator_view,
+                                                 levels_[child - 1]->residual_operator_view);
+        for (std::size_t level = 0; level < levels_.size(); ++level) {
+          fill_dynamic_residual_ghosts_(level, levels_[level]->phi, report.iters);
+          copy_grown_(levels_[level]->residual_operator_view, levels_[level]->phi);
+        }
+      } catch (const std::exception& error) {
+        report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kRejectAttempt,
+                           error.what());
+      }
+    }
+    if (!report.solved_value_available())
+      restore_candidates_();
+    last_report_ = report;
+    return last_report_;
+  }
+
+  FieldNewtonOptions linear_boundary_newton_options_() const {
+    FieldNewtonOptions options;
+    options.tolerance = std::max(options_.rel_tol,
+                                 options_.abs_tol > Real(0) ? options_.abs_tol : options_.rel_tol);
+    options.max_iterations = 1;
+    options.linear_tolerance = options_.rel_tol;
+    options.linear_max_iterations = std::max(1, options_.max_iters);
+    options.restart = std::min(30, options.linear_max_iterations);
+    validate_field_newton_options(options);
+    return options;
+  }
+
+  bool singular_() const noexcept {
+    return fac_detail::singular(levels_.front()->boundary, reaction_);
+  }
+
   Real global_norm_inf_(const field_type& field) const {
     return static_cast<Real>(
         all_reduce_max(static_cast<double>(norm_inf(field)), lane_->communicator()));
@@ -1038,6 +1510,13 @@ class CompositeFacPoisson {
     return static_cast<Real>(all_reduce_max(static_cast<double>(local), lane_->communicator()));
   }
 
+  Real composite_rhs_norm_() const {
+    Real local = Real(0);
+    for (const auto& level : levels_)
+      local = std::max(local, norm_inf(level->rhs));
+    return static_cast<Real>(all_reduce_max(static_cast<double>(local), lane_->communicator()));
+  }
+
   CompositeFacOptions options_{};
   Real reaction_ = Real(0);
   std::optional<ExecutionLane> lane_{};
@@ -1045,6 +1524,17 @@ class CompositeFacPoisson {
   std::vector<std::unique_ptr<Connection>> connections_{};
   std::string lane_identity_{};
   std::string exact_contract_{};
+  std::vector<const MultiFab<Dim>*> nullspace_rhs_{};
+  std::vector<MultiFab<Dim>*> nullspace_candidates_{};
+  std::vector<PreparedVectorDistribution<Dim>> nullspace_distributions_{};
+  std::unique_ptr<FieldNullspaceWorkspace<Dim>> nullspace_workspace_{};
+  std::optional<CompiledFieldBoundaryKernel<Dim>> boundary_kernel_{};
+  std::vector<FieldBoundaryExecutionContext<Dim>> boundary_contexts_{};
+  std::optional<nonlinear_workspace_type> newton_workspace_{};
+  std::optional<nonlinear_workspace_type> linear_boundary_workspace_{};
+  std::vector<field_type*> candidate_view_{};
+  std::vector<const field_type*> dynamic_const_view_{};
+  std::vector<field_type*> dynamic_mutable_view_{};
   SolveReport last_report_{};
 };
 

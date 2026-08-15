@@ -37,14 +37,12 @@ from pops.codegen.cpp_writer import _cpp_identifier
 # Re-export the moved helpers + the brick emitter so the public surface of
 # ``pops.codegen.module_codegen`` is unchanged (every name resolves here).
 from pops.codegen.module_emit_helpers import (  # noqa: F401
-    _CANONICAL_ROLES,
     _codegen_exprs,
     _exact_brick_contract,
     _jac_entries,
     _live_prims,
     _prim_block,
     _ranked_axes,
-    _role_of,
     _roles_for,
 )
 from pops.codegen.module_emit_brick import emit_cpp_brick  # noqa: F401

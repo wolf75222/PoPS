@@ -140,11 +140,15 @@ def test_manifest_requires_unique_sorted_rows_and_exact_expected_set():
 
 def test_writer_cli_is_fully_explicit():
     source = WRITER.read_text(encoding="utf-8")
+    selector = (ROOT / "python" / "pops" / "_native_selector.py").read_text(
+        encoding="utf-8"
+    )
 
     for option in ("--extension", "--manifest", "--dimension", "--version"):
         assert option in source
     assert "required=True" in source
     assert 'name = "pops._pops"' in source
+    assert "POPS_NATIVE_VARIANTS_ROOT" not in selector
 
 
 def test_cmake_authenticates_and_installs_the_exact_linked_leaf():

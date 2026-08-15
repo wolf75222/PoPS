@@ -166,7 +166,8 @@ def test_public_patch_layout_roundtrips_through_resolution_and_native_lowering(m
         row.buffer for row in authorities.hierarchy.plan.transitions
     )
     assert config.transition_lookaheads == tuple(
-        row.lookahead for row in authorities.hierarchy.plan.transitions
+        tuple(row.lookahead for _axis in row.ratio)
+        for row in authorities.hierarchy.plan.transitions
     )
     assert not hasattr(config, "regrid_margin")
     assert not hasattr(config, "regrid_grow")

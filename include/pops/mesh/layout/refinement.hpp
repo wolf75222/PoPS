@@ -217,8 +217,8 @@ mesh::BoxArray<Dim> refine(const mesh::BoxArray<Dim>& layout, int ratio) {
   return refine(layout, refinement_detail::isotropic_ratio<Dim>(ratio, "pops::refine(layout)"));
 }
 
-/// Replay an authenticated exact-overlap schedule.  Remote plans reject before any destination
-/// kernel is submitted.
+/// Replay the local part of an authenticated exact-overlap schedule. Remote plans require the
+/// prepared mesh::parallel transport and reject here before any destination kernel is submitted.
 template <int Dim, class DestinationMemorySpace, class SourceMemorySpace>
 void parallel_copy(MultiFab<Dim, DestinationMemorySpace>& destination,
                    const MultiFab<Dim, SourceMemorySpace>& source,

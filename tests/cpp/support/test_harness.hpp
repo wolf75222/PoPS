@@ -41,7 +41,7 @@ inline constexpr double kPi = 3.14159265358979323846;
 ///   sortie des deux familles de tests existantes :
 ///   - `Style::Terse`   (defaut) : n'imprime QUE les echecs, `FAIL <libelle>\n` (cf. test_box) ;
 ///   - `Style::Verbose` : imprime chaque ligne `  [OK ] <libelle>` / `  [XX ] <libelle>`
-///     (cf. test_dense_eig, test_amr_system_contract).
+///     (cf. test_dense_eig).
 /// Contraintes : non copiable par valeur n'est pas requis ; on le capture par reference dans une
 ///   lambda `chk` si le main() prefere garder cette forme (cf. exemple ci-dessous).
 class Checker {
@@ -78,7 +78,7 @@ class Checker {
 
 /// Renvoie true si l'appel @p f leve un `std::runtime_error` (le refus attendu d'un contrat).
 ///
-/// Copie de la lambda `raises` dupliquee dans les tests de contrat (test_amr_system_contract, ...).
+/// Copie de la lambda `raises` dupliquee dans les tests de contrat.
 /// Une exception d'un autre type, ou aucune exception, renvoie false.
 template <class F>
 bool raises(F&& f) {

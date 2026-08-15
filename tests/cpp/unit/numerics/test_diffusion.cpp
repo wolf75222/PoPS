@@ -1,156 +1,250 @@
 /// @file
-/// @brief Exact-ranked SSPRK2 integration of an isotropic periodic diffusion eigenmode.
+/// @brief Exact-ranked production-operator proofs for isotropic Fickian diffusion.
 
 #include <gtest/gtest.h>
 
-#include <pops/core/foundation/native_dimension.hpp>
-#include <pops/mesh/execution/for_each.hpp>
-#include <pops/mesh/layout/box_array.hpp>
-#include <pops/mesh/layout/distribution.hpp>
-#include <pops/mesh/storage/multifab.hpp>
-#include <pops/numerics/time/integrators/time_steppers.hpp>
-
-#include <Kokkos_MathematicalFunctions.hpp>
+#include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/numerics/spatial/operators/cartesian_operator.hpp>
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <numeric>
+#include <stdexcept>
 #include <vector>
+
+using namespace pops;
 
 namespace {
 
-constexpr int kDim = pops::kNativeDimension;
-constexpr pops::Real kPi = pops::Real(3.141592653589793238462643383279502884L);
-using Field = pops::MultiFab<kDim>;
+template <int Dim>
+class DiffusiveScalar : public nd::ScalarAdvection<Dim> {
+ public:
+  explicit DiffusiveScalar(Real diffusivity) : diffusivity_(diffusivity) {}
+
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"test.nd.diffusive-scalar", 1};
+  }
+
+  void serialize_exact_parameters(ExactContractBuilder& contract) const {
+    contract.scalar(diffusivity_);
+  }
+
+  POPS_HD Real diffusivity() const { return diffusivity_; }
+
+ private:
+  Real diffusivity_ = Real(0);
+};
+
+static_assert(DiffusiveModel<DiffusiveScalar<1>>);
+static_assert(nd::ConservationLaw<1, DiffusiveScalar<1>>);
+static_assert(nd::ConservationLaw<2, DiffusiveScalar<2>>);
+static_assert(nd::ConservationLaw<3, DiffusiveScalar<3>>);
+
+template <int Dim, class Function>
+void for_each_host_index(const Box<Dim>& box, Function&& function) {
+  for (std::int64_t linear = 0; linear < box.numPts(); ++linear) {
+    std::int64_t remaining = linear;
+    Index<Dim> index{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      index[axis] = box.lo[axis] + static_cast<int>(remaining % box.length(axis));
+      remaining /= box.length(axis);
+    }
+    function(index);
+  }
+}
 
 template <int Dim>
-pops::Extent<Dim> filled_extent(std::int64_t value) {
-  pops::Extent<Dim> result{};
+std::size_t host_offset(const Box<Dim>& storage, const Index<Dim>& index, int component = 0) {
+  std::int64_t linear = 0;
+  std::int64_t stride = 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    linear += static_cast<std::int64_t>(index[axis] - storage.lo[axis]) * stride;
+    stride *= storage.length(axis);
+  }
+  return static_cast<std::size_t>(component * storage.numPts() + linear);
+}
+
+template <int Dim>
+Extent<Dim> uniform_extent(int value) {
+  Extent<Dim> result{};
   for (int axis = 0; axis < Dim; ++axis)
     result[axis] = value;
   return result;
 }
 
 template <int Dim>
-struct InitializeMode {
-  pops::FieldView<pops::Real, Dim> state{};
-  pops::Box<Dim> domain{};
-  pops::Real amplitude = pops::Real(0);
-
-  POPS_HD void operator()(const pops::Index<Dim>& cell) const {
-    const pops::Real x = (static_cast<pops::Real>(cell[0] - domain.lo[0]) + pops::Real(0.5)) /
-                         static_cast<pops::Real>(domain.length(0));
-    state(cell) = pops::Real(1) + amplitude * Kokkos::cos(pops::Real(2) * kPi * x);
+Index<Dim> periodic_image(Index<Dim> index, const Box<Dim>& domain) {
+  for (int axis = 0; axis < Dim; ++axis) {
+    const int length = static_cast<int>(domain.length(axis));
+    while (index[axis] < domain.lo[axis])
+      index[axis] += length;
+    while (index[axis] > domain.hi[axis])
+      index[axis] -= length;
   }
-};
-
-template <int Dim>
-struct PeriodicDiffusionResidual {
-  pops::FieldView<const pops::Real, Dim> state{};
-  pops::FieldView<pops::Real, Dim> residual{};
-  pops::Box<Dim> domain{};
-  pops::Real diffusivity = pops::Real(0);
-
-  POPS_HD void operator()(const pops::Index<Dim>& cell) const {
-    pops::Real laplacian = pops::Real(0);
-    for (int axis = 0; axis < Dim; ++axis) {
-      pops::Index<Dim> lower = cell;
-      pops::Index<Dim> upper = cell;
-      lower[axis] = cell[axis] == domain.lo[axis] ? domain.hi[axis] : cell[axis] - 1;
-      upper[axis] = cell[axis] == domain.hi[axis] ? domain.lo[axis] : cell[axis] + 1;
-      const pops::Real inverse_spacing = static_cast<pops::Real>(domain.length(axis));
-      laplacian += (state(lower) - pops::Real(2) * state(cell) + state(upper)) * inverse_spacing *
-                   inverse_spacing;
-    }
-    residual(cell) = diffusivity * laplacian;
-  }
-};
-
-template <int Dim>
-struct ModeProjection {
-  pops::FieldView<const pops::Real, Dim> state{};
-  pops::Box<Dim> domain{};
-
-  POPS_HD pops::Real operator()(const pops::Index<Dim>& cell) const {
-    const pops::Real x = (static_cast<pops::Real>(cell[0] - domain.lo[0]) + pops::Real(0.5)) /
-                         static_cast<pops::Real>(domain.length(0));
-    return (state(cell) - pops::Real(1)) * Kokkos::cos(pops::Real(2) * kPi * x);
-  }
-};
-
-struct Fixture {
-  explicit Fixture(int cells)
-      : domain(pops::Box<kDim>::from_extents(filled_extent<kDim>(cells))),
-        layout(std::vector<pops::Box<kDim>>{domain}),
-        ranks(pops::Index<kDim>{}, filled_extent<kDim>(1)),
-        distribution(pops::mesh::Distribution<kDim>::replicated(layout, ranks)),
-        state(layout, distribution, pops::Index<kDim>{}, 1, filled_extent<kDim>(0)) {}
-
-  pops::Real amplitude() const {
-    pops::Real projection = pops::Real(0);
-    for (std::size_t local = 0; local < state.local_size(); ++local)
-      projection += pops::for_each_cell_reduce_sum(
-          state.box(local), ModeProjection<kDim>{state.fab(local).view(), domain});
-    return pops::Real(2) * projection / static_cast<pops::Real>(domain.numPts());
-  }
-
-  void initialize(pops::Real amplitude) {
-    for (std::size_t local = 0; local < state.local_size(); ++local)
-      pops::for_each_cell(state.box(local),
-                          InitializeMode<kDim>{state.fab(local).view(), domain, amplitude});
-  }
-
-  auto residual(pops::Real diffusivity) {
-    return [this, diffusivity](Field& candidate, Field& rate) {
-      for (std::size_t local = 0; local < candidate.local_size(); ++local)
-        pops::for_each_cell(
-            candidate.box(local),
-            PeriodicDiffusionResidual<kDim>{static_cast<const Field&>(candidate).fab(local).view(),
-                                            rate.fab(local).view(), domain, diffusivity});
-    };
-  }
-
-  pops::Box<kDim> domain;
-  pops::mesh::BoxArray<kDim> layout;
-  pops::mesh::RankSpace<kDim> ranks;
-  pops::mesh::Distribution<kDim> distribution;
-  Field state;
-};
-
-static_assert(pops::TimeStepperFor<pops::ForwardEuler<kDim>, kDim>);
-static_assert(pops::TimeStepperFor<pops::SSPRK2Step<kDim>, kDim>);
-static_assert(pops::TimeStepperFor<pops::SSPRK3Step<kDim>, kDim>);
-
-TEST(Diffusion, ZeroCoefficientIsExactlyStaticInNativeRank) {
-  Fixture fixture(16);
-  fixture.initialize(pops::Real(1.0e-3));
-  const pops::Real initial = fixture.amplitude();
-  auto residual = fixture.residual(pops::Real(0));
-  for (int step = 0; step < 20; ++step)
-    pops::SSPRK2Step<kDim>{}.take_step(residual, fixture.state, pops::Real(2.0e-3));
-  EXPECT_EQ(fixture.amplitude(), initial);
+  return index;
 }
 
-TEST(Diffusion, SSPRK2MatchesExactDiscreteModeAmplification) {
-  constexpr int cells = 16;
-  constexpr int steps = 100;
-  constexpr pops::Real dt = pops::Real(2.0e-3);
-  constexpr pops::Real diffusivity = pops::Real(0.05);
-  Fixture fixture(cells);
-  fixture.initialize(pops::Real(1.0e-3));
-  const pops::Real initial = fixture.amplitude();
-  auto residual = fixture.residual(diffusivity);
-  pops::SSPRK2Step<kDim>::Scratch scratch(fixture.state);
-  for (int step = 0; step < steps; ++step)
-    pops::SSPRK2Step<kDim>{}.take_step(residual, fixture.state, dt, scratch);
+template <int Dim, class Function>
+void fill_fab(Fab<Dim>& field, Function&& value) {
+  auto host = field.create_host_mirror();
+  for_each_host_index(field.grown_box(), [&](const Index<Dim>& index) {
+    host(host_offset(field.grown_box(), index)) = value(index);
+  });
+  field.copy_from_host(host);
+}
 
-  const pops::Real theta = pops::Real(2) * kPi / static_cast<pops::Real>(cells);
-  const pops::Real eigenvalue = diffusivity * pops::Real(2) * (pops::Real(1) - Kokkos::cos(theta)) *
-                                static_cast<pops::Real>(cells * cells);
-  const pops::Real one_step =
-      pops::Real(1) - eigenvalue * dt + pops::Real(0.5) * eigenvalue * eigenvalue * dt * dt;
-  const pops::Real expected = initial * std::pow(one_step, steps);
-  EXPECT_NEAR(fixture.amplitude(), expected, pops::Real(2.0e-12));
-  EXPECT_LT(fixture.amplitude(), pops::Real(0.8) * initial);
+template <int Dim>
+Real fab_value(const Fab<Dim>& field, const Index<Dim>& index) {
+  auto host = field.create_host_mirror();
+  field.copy_to_host(host);
+  return host(host_offset(field.grown_box(), index));
+}
+
+template <int Axis, int Dim>
+void expect_all_face_values(const nd::FaceField<Dim>& faces, Real expected) {
+  const auto& field = faces.template field<Axis>();
+  auto host = field.create_host_mirror();
+  field.copy_to_host(host);
+  for (std::size_t index = 0; index < host.size(); ++index)
+    EXPECT_EQ(host(index), expected);
+  if constexpr (Axis + 1 < Dim)
+    expect_all_face_values<Axis + 1>(faces, expected);
+}
+
+template <int Dim>
+Geometry<Dim> unit_geometry(const Box<Dim>& domain) {
+  RealVector<Dim> lower{};
+  RealVector<Dim> upper{};
+  for (int axis = 0; axis < Dim; ++axis)
+    upper[axis] = Real(1);
+  return Geometry<Dim>::from_bounds(domain, lower, upper);
+}
+
+template <int Dim>
+void check_periodic_manufactured_mode() {
+  constexpr int cells = 12;
+  constexpr Real diffusivity = Real(0.07);
+  constexpr Real two_pi = Real(6.283185307179586476925286766559);
+  const Box<Dim> domain = Box<Dim>::from_extents(uniform_extent<Dim>(cells));
+  const auto geometry = unit_geometry(domain);
+  const auto op = nd::prepare_cartesian_operator<Dim>(geometry, DiffusiveScalar<Dim>{diffusivity});
+  Fab<Dim> state(domain, 1, uniform_extent<Dim>(1));
+  Fab<Dim> residual(domain, 1);
+  nd::FaceField<Dim> faces(domain, 1);
+
+  const auto mode = [&](const Index<Dim>& input) {
+    const Index<Dim> index = periodic_image(input, domain);
+    Real value = Real(1);
+    for (int axis = 0; axis < Dim; ++axis)
+      value += (Real(0.1) + Real(0.02) * axis) *
+               std::cos(two_pi * (Real(index[axis] - domain.lo[axis]) + Real(0.5)) /
+                        static_cast<Real>(cells));
+    return value;
+  };
+  fill_fab(state, mode);
+  op.materialize_face_fluxes(state, faces);
+  op.assemble_residual_from_face_fluxes(faces, residual);
+
+  Real integral = Real(0);
+  for_each_host_index(domain, [&](const Index<Dim>& cell) {
+    Real expected = Real(0);
+    for (int axis = 0; axis < Dim; ++axis) {
+      Index<Dim> lower = cell;
+      Index<Dim> upper = cell;
+      --lower[axis];
+      ++upper[axis];
+      expected +=
+          diffusivity * Real(cells * cells) * (mode(lower) - Real(2) * mode(cell) + mode(upper));
+    }
+    const Real actual = fab_value(residual, cell);
+    EXPECT_NEAR(actual, expected, Real(3e-12));
+    integral += actual * op.metric().cell_measure(cell);
+  });
+  EXPECT_NEAR(integral, Real(0), Real(3e-13));
+
+  Index<Dim> face = domain.lo;
+  ++face[0];
+  Index<Dim> left = face;
+  --left[0];
+  const auto& axis_faces = faces.template field<0>();
+  const Real integrated = fab_value(axis_faces, face);
+  const Real face_measure =
+      op.metric().template oriented_face_area_vector<0, MetricFaceSide::Upper>(left)[0];
+  const Real expected_face = -diffusivity * (mode(face) - mode(left)) * Real(cells) * face_measure;
+  EXPECT_NEAR(integrated, expected_face, Real(3e-14));
+}
+
+template <int Dim>
+void check_halo_contract() {
+  const Box<Dim> domain = Box<Dim>::from_extents(uniform_extent<Dim>(5));
+  const auto geometry = unit_geometry(domain);
+  const auto op = nd::prepare_cartesian_operator<Dim>(geometry, DiffusiveScalar<Dim>{Real(0.2)});
+  Fab<Dim> no_halo(domain, 1);
+  nd::FaceField<Dim> rejected_faces(domain, 1);
+  EXPECT_THROW(op.materialize_face_fluxes(no_halo, rejected_faces), std::invalid_argument);
+
+  Fab<Dim> state(domain, 1, uniform_extent<Dim>(1));
+  fill_fab(state, [](const Index<Dim>& index) {
+    Real value = Real(0.5);
+    for (int axis = 0; axis < Dim; ++axis)
+      value += Real(0.25 + 0.05 * axis) * Real(index[axis]);
+    return value;
+  });
+  nd::FaceField<Dim> faces(domain, 1);
+  op.materialize_face_fluxes(state, faces);
+  const auto& axis_faces = faces.template field<0>();
+  Index<Dim> lower_face = domain.lo;
+  Index<Dim> upper_face = domain.lo;
+  upper_face[0] = domain.hi[0] + 1;
+  EXPECT_NEAR(fab_value(axis_faces, lower_face), fab_value(axis_faces, upper_face), Real(2e-14));
+  EXPECT_LT(fab_value(axis_faces, lower_face), Real(0));
+}
+
+template <int Dim>
+void check_candidate_rollback() {
+  const Box<Dim> domain = Box<Dim>::from_extents(uniform_extent<Dim>(4));
+  const auto geometry = unit_geometry(domain);
+  EXPECT_THROW((void)nd::prepare_cartesian_operator<Dim>(
+                   geometry, DiffusiveScalar<Dim>{std::numeric_limits<Real>::quiet_NaN()}),
+               std::invalid_argument);
+  EXPECT_THROW(
+      (void)nd::prepare_cartesian_operator<Dim>(geometry, DiffusiveScalar<Dim>{Real(-0.1)}),
+      std::invalid_argument);
+
+  const auto op = nd::prepare_cartesian_operator<Dim>(geometry, DiffusiveScalar<Dim>{Real(0.1)});
+  Fab<Dim> state(domain, 1, uniform_extent<Dim>(1));
+  fill_fab(state, [](const Index<Dim>&) { return Real(1); });
+  auto state_host = state.create_host_mirror();
+  state.copy_to_host(state_host);
+  Index<Dim> bad_ghost = domain.lo;
+  --bad_ghost[0];
+  state_host(host_offset(state.grown_box(), bad_ghost)) = std::numeric_limits<Real>::quiet_NaN();
+  state.copy_from_host(state_host);
+
+  nd::FaceField<Dim> output(domain, 1);
+  output.set_val(Real(17));
+  EXPECT_THROW(op.materialize_face_fluxes(state, output), std::runtime_error);
+  expect_all_face_values<0>(output, Real(17));
+}
+
+TEST(Diffusion, PeriodicManufacturedResidualAndIntegratedFacesAreExactRanked) {
+  check_periodic_manufactured_mode<1>();
+  check_periodic_manufactured_mode<2>();
+  check_periodic_manufactured_mode<3>();
+}
+
+TEST(Diffusion, PhysicalAndPeriodicCallersMustSupplyTheExactHalo) {
+  check_halo_contract<1>();
+  check_halo_contract<2>();
+  check_halo_contract<3>();
+}
+
+TEST(Diffusion, InvalidCandidatesAndConstitutiveDataNeverPublish) {
+  check_candidate_rollback<1>();
+  check_candidate_rollback<2>();
+  check_candidate_rollback<3>();
 }
 
 }  // namespace

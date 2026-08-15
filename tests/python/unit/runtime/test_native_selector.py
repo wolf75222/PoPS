@@ -191,6 +191,17 @@ def test_manifest_selects_and_hashes_only_requested_leaf(
         selector._variant_from_manifest(2)
 
 
+def test_native_manifest_root_comes_only_from_the_imported_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package_root = tmp_path / "installed" / "pops"
+    ambient_root = tmp_path / "ambient" / "_native"
+    monkeypatch.setattr(pops, "__path__", [str(package_root)])
+    monkeypatch.setenv("POPS_NATIVE_VARIANTS_ROOT", str(ambient_root))
+
+    assert selector._native_roots() == (package_root / "_native",)
+
+
 @pytest.mark.parametrize("dimension", [None, True, 0, 4, 2.0, "2"])
 def test_dimension_is_an_exact_supported_integer(dimension: object) -> None:
     with pytest.raises(ValueError, match="exactly 1, 2, or 3"):

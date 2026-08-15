@@ -6,6 +6,21 @@ operators and small protocols returned by ``Model``.
 """
 
 from .board import Model
+from .admissibility import (
+    AdmissibilityConstraint,
+    AdmissibleSet,
+    ConstraintKind,
+    EnforcementPhase,
+    EnforcementRule,
+    EnforcementSchedule,
+    ProjectionProvider,
+)
+from .inversion import (
+    InversionProviderCatalog,
+    InversionWorkspaceBudget,
+    PreparedInversionProvider,
+    VariableInversionProblem,
+)
 from .roles import (
     Axial,
     ComponentRole,
@@ -14,12 +29,17 @@ from .roles import (
     Energy,
     Momentum,
     Pressure,
+    RoleKey,
     Scalar,
+    StateSchema,
     Temperature,
     Velocity,
 )
 
 __all__ = [
-    "Model", "Axial", "ComponentRole", "Custom", "Density", "Energy", "Momentum",
-    "Pressure", "Scalar", "Temperature", "Velocity",
+    "AdmissibilityConstraint", "AdmissibleSet", "ConstraintKind", "EnforcementPhase",
+    "EnforcementRule", "EnforcementSchedule", "InversionProviderCatalog",
+    "InversionWorkspaceBudget", "Model", "PreparedInversionProvider", "ProjectionProvider",
+    "VariableInversionProblem", "Axial", "ComponentRole", "Custom", "Density", "Energy",
+    "Momentum", "Pressure", "RoleKey", "Scalar", "StateSchema", "Temperature", "Velocity",
 ]

@@ -107,6 +107,16 @@ FORBIDDEN_FINAL_IMPORTS = (
     "pops.runtime.integrate",
     "CartesianMesh",
 )
+REQUIRED_RANK_GENERIC_DOMAIN_MARKERS = (
+    "CartesianDomain(",
+    ".frame()",
+)
+FORBIDDEN_FIXED_RANK_DOMAIN_MARKERS = (
+    "Rectangle(",
+    "Cartesian1D(",
+    "Cartesian2D(",
+    "Cartesian3D(",
+)
 # The complete source suite is authenticated by the release workflow's ``full-source-matrix`` job.
 # The exact published wheel repeats the closed M4 Python ledger plus the final-example ledger; it
 # must not serialize the complete suite a second time under a short release timeout.
@@ -199,6 +209,7 @@ def release_matrix_source_errors(root: Path) -> list[str]:
         Path(".github/workflows/ci.yml"),
         Path(".github/workflows/wheels.yml"),
         Path(".github/workflows/release.yml"),
+        Path("scripts/assemble_native_variant_wheel.py"),
     )
     sources: dict[Path, str] = {}
     for relative in relative_sources:
@@ -216,6 +227,25 @@ def release_matrix_source_errors(root: Path) -> list[str]:
             errors.append(
                 "%s lacks executable workflow markers %s in %s" % (label, missing, relative)
             )
+
+    dimensions = matrix.get("native_dimensions")
+    if dimensions != [1, 2, 3]:
+        errors.append("supported native dimensions must be exactly [1, 2, 3]")
+    else:
+        require(
+            Path("scripts/assemble_native_variant_wheel.py"),
+            "fat-wheel native dimension set",
+            "FAT_WHEEL_DIMENSIONS = (1, 2, 3)",
+            "fat wheel inputs must be exactly dimensions 1, 2, and 3",
+        )
+        require(
+            Path(".github/workflows/wheels.yml"),
+            "fat-wheel native dimension build",
+            "for dim in 1 2 3; do",
+            '--variant "1=${variant_wheels[1]}"',
+            '--variant "2=${variant_wheels[2]}"',
+            '--variant "3=${variant_wheels[3]}"',
+        )
 
     language = matrix.get("language")
     if not isinstance(language, dict):
@@ -467,6 +497,18 @@ def source_contract_errors(root: Path) -> list[str]:
         if forbidden:
             errors.append(
                 "%s imports transitional/internal authoring names %s" % (relative, forbidden)
+            )
+        missing_domain = [
+            marker for marker in REQUIRED_RANK_GENERIC_DOMAIN_MARKERS if marker not in text
+        ]
+        fixed_rank_domain = [
+            marker for marker in FORBIDDEN_FIXED_RANK_DOMAIN_MARKERS if marker in text
+        ]
+        if missing_domain or fixed_rank_domain:
+            errors.append(
+                "%s must derive its spatial rank from CartesianDomain vectors "
+                "(missing %s, fixed-rank %s)"
+                % (relative, missing_domain, fixed_rank_domain)
             )
         formats = FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS.get(relative)
         if not isinstance(formats, dict) or set(formats) != {"hdf5", "npz", "paraview"}:

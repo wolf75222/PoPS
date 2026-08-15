@@ -75,6 +75,8 @@ api pops/mesh/layout/distribution.hpp
 api pops/mesh/layout/field_distribution.hpp
 api pops/mesh/layout/rank_space.hpp
 api pops/mesh/layout/refinement.hpp
+sdk-support pops/mesh/parallel/copy_transport.hpp
+sdk-support pops/mesh/parallel/region_transfer.hpp
 api pops/mesh/storage/fab.hpp
 sdk-support pops/mesh/storage/field_replica_consensus.hpp
 api pops/mesh/storage/field_view.hpp
@@ -82,7 +84,6 @@ api pops/mesh/storage/mf_arith.hpp
 api pops/mesh/storage/multifab.hpp
 api pops/mesh/topology/boundary_topology.hpp
 sdk-support pops/numerics/elliptic/amr/composite_fac_poisson.hpp
-sdk-support pops/numerics/elliptic/amr/partitioned_region_transfer.hpp
 api pops/numerics/elliptic/interface/amr_field_newton_krylov.hpp
 test-only pops/numerics/elliptic/interface/elliptic_interface.hpp
 api pops/numerics/elliptic/interface/elliptic_problem.hpp
@@ -139,6 +140,7 @@ api pops/numerics/spatial/nd/state_schema.hpp
 api pops/numerics/spatial/operators/cartesian_operator.hpp
 sdk-support pops/numerics/spatial/operators/masked_operator.hpp
 sdk-support pops/numerics/spatial/operators/polar_operator.hpp
+sdk-support pops/numerics/spatial/primitives/diffusive_flux.hpp
 sdk-support pops/numerics/spatial/primitives/face_flux.hpp
 sdk-support pops/numerics/spatial/primitives/positivity.hpp
 sdk-support pops/numerics/spatial/primitives/state_access.hpp
@@ -167,6 +169,10 @@ sdk-support pops/parallel/world_communicator.hpp
 api pops/parallel/load_balance.hpp
 api pops/parallel/ownership_plan.hpp
 api pops/parallel/prepared_load_balance.hpp
+api pops/physics/admissibility/admissibility.hpp
+api pops/physics/admissibility/admissible_set.hpp
+api pops/physics/admissibility/enforcement_schedule.hpp
+api pops/physics/admissibility/projection.hpp
 api pops/physics/bricks/bricks.hpp
 api pops/physics/bricks/elliptic.hpp
 api pops/physics/bricks/hyperbolic.hpp
@@ -174,6 +180,8 @@ api pops/physics/bricks/source.hpp
 api pops/physics/composition/composite.hpp
 api pops/physics/composition/exact_brick_contract.hpp
 api pops/physics/fluids/euler.hpp
+api pops/physics/inversion/inversion.hpp
+api pops/physics/inversion/variable_inversion.hpp
 sdk-support pops/runtime/accelerator/prepared_stream_executor.hpp
 sdk-support pops/runtime/amr/amr_runtime.hpp
 sdk-support pops/runtime/amr/amr_tensor_elliptic.hpp

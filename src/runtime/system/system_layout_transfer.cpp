@@ -2,6 +2,7 @@
 
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/mesh/layout/refinement.hpp>
+#include <pops/mesh/parallel/copy_transport.hpp>
 #include <pops/parallel/comm.hpp>
 #include <pops/runtime/dynamic/component_consumers.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
@@ -212,6 +213,27 @@ CopySchedule<Dim> prepare_exact_copy_schedule(
 }
 
 template <int Dim>
+mesh::parallel::RegionTransferBudget exact_copy_transport_budget(const CopySchedule<Dim>& schedule,
+                                                                 int components) {
+  if (components < 1)
+    throw std::invalid_argument("layout-transfer copy transport requires positive components");
+  std::size_t elements = 0;
+  for (const CopyJob<Dim>& job : schedule.canonical_jobs()) {
+    const std::int64_t cells = job.region.numPts();
+    if (cells < 1 || static_cast<std::uint64_t>(cells) > std::numeric_limits<std::size_t>::max() /
+                                                             static_cast<std::size_t>(components))
+      throw std::overflow_error("layout-transfer copy payload exceeds size_t");
+    const std::size_t job_elements =
+        static_cast<std::size_t>(cells) * static_cast<std::size_t>(components);
+    if (job_elements > std::numeric_limits<std::size_t>::max() - elements)
+      throw std::overflow_error("layout-transfer copy payload total exceeds size_t");
+    elements += job_elements;
+  }
+  return {schedule.canonical_jobs().size(), schedule.source_distribution().rank_space().size(),
+          elements, elements, elements};
+}
+
+template <int Dim>
 std::uint64_t checked_elements(const Box<Dim>& box, int components) {
   const std::int64_t cells = box.numPts();
   if (cells <= 0 || components <= 0 ||
@@ -289,11 +311,12 @@ struct PreparedSystemLayoutTransfer<Dim>::Impl {
   SystemLayoutTransferExecution execution;
   PopsExecutionContextV1 execution_abi{};
   CommunicatorView communicator;
+  std::optional<ExecutionLane> source_copy_lane;
   int source_block_index = -1;
   int target_block_index = -1;
   int components = 0;
   field_type source_snapshot;
-  std::optional<CopySchedule<Dim>> source_copy_schedule;
+  std::unique_ptr<mesh::parallel::PreparedCopyTransport<Dim>> source_copy_transport;
   std::vector<std::string> source_patch_identities;
   std::vector<std::string> target_patch_identities;
   std::uint64_t active_generation = 0;
@@ -324,8 +347,10 @@ struct PreparedSystemLayoutTransfer<Dim>::Impl {
         source_carrier_boxes<Dim>(target->ba, source->dom, target->dom, spec.refinement_ratio);
     source_snapshot = field_type(carrier, rebind_distribution(carrier, target->dm),
                                  target->local_rank, components, Extent<Dim>{});
-    source_copy_schedule.emplace(prepare_exact_copy_schedule(source_snapshot, source_state()));
-    source_copy_schedule->require_local_execution();
+    CopySchedule<Dim> copy_schedule = prepare_exact_copy_schedule(source_snapshot, source_state());
+    const auto copy_budget = exact_copy_transport_budget(copy_schedule, components);
+    source_copy_transport = std::make_unique<mesh::parallel::PreparedCopyTransport<Dim>>(
+        std::move(copy_schedule), components, copy_budget);
     source_patch_identities.reserve(carrier.size());
     target_patch_identities.reserve(carrier.size());
     for (std::size_t global = 0; global < carrier.size(); ++global) {
@@ -447,6 +472,19 @@ struct PreparedSystemLayoutTransfer<Dim>::Impl {
         component_handle->prepare_fresh_state(POPS_NATIVE_INTERFACE_TRANSFER_V1, 1u, execution_abi);
   }
 
+  void prepare_copy_execution_lane() {
+    if (!source_copy_transport)
+      throw std::logic_error("prepared System layout transfer copy transport is absent");
+#ifdef POPS_HAS_MPI
+    const ExecutionCommunicator parent = ExecutionCommunicator::borrowed(
+        execution.communicator_identity, communicator.native_handle());
+#else
+    const ExecutionCommunicator parent = ExecutionCommunicator::world();
+#endif
+    source_copy_lane.emplace(ExecutionLane::duplicate_collectively(parent, spec.mapping_identity));
+    source_copy_transport->attach_lane(*source_copy_lane);
+  }
+
   void validate_active(std::uint64_t generation, std::uint64_t attempt, const char* where) const {
     if (!active || generation == 0 || generation != active_generation)
       throw std::logic_error(std::string(where) + " crossed its active transfer generation");
@@ -482,15 +520,15 @@ std::shared_ptr<PreparedSystemLayoutTransfer<Dim>> PreparedSystemLayoutTransfer<
                                      std::move(execution), communicator);
   });
   const std::string payload = pending->consensus_payload();
-  if (!all_ranks_agree_exact_ordered_byte_pairs({{"prepared-system-layout-transfer-v2", payload}},
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"prepared-system-layout-transfer-v3", payload}},
                                                 communicator))
     throw std::invalid_argument(
         "prepared System layout-transfer contract differs between MPI ranks");
   collectively_validate(communicator, "native Transfer provider preparation",
                         [&] { pending->prepare_provider(); });
+  pending->prepare_copy_execution_lane();
   collectively_validate(communicator, "prepared System layout-transfer warmup", [&] {
-    parallel_copy(pending->source_snapshot, pending->source_state(),
-                  *pending->source_copy_schedule);
+    pending->source_copy_transport->execute(pending->source_snapshot, pending->source_state());
   });
   return std::shared_ptr<PreparedSystemLayoutTransfer>(
       new PreparedSystemLayoutTransfer(std::move(pending)));
@@ -531,7 +569,7 @@ void PreparedSystemLayoutTransfer<Dim>::capture(std::uint64_t generation, std::u
       throw std::logic_error("layout-transfer source was already captured for another attempt");
   });
   collectively_validate(p_->communicator, "layout-transfer source capture", [&] {
-    parallel_copy(p_->source_snapshot, p_->source_state(), *p_->source_copy_schedule);
+    p_->source_copy_transport->execute(p_->source_snapshot, p_->source_state());
   });
   p_->captured_attempt = attempt;
 }

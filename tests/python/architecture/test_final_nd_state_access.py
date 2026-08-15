@@ -1,4 +1,4 @@
-"""One ranked field-access authority feeds reconstruction and elliptic RHS assembly."""
+"""One ranked field-access authority feeds state, provider, and elliptic consumers."""
 
 from __future__ import annotations
 
@@ -12,13 +12,14 @@ RECONSTRUCTION = ROOT / "include/pops/numerics/spatial/nd/reconstruction.hpp"
 ELLIPTIC_RHS = ROOT / "include/pops/coupling/base/elliptic_rhs.hpp"
 CPP_PROOF = ROOT / "tests/cpp/unit/numerics/test_prepared_cartesian_nd.cpp"
 AUX_PROOF = ROOT / "tests/cpp/unit/physics/test_aux_single_source.cpp"
+ELLIPTIC_PROOF = ROOT / "tests/cpp/integration/runtime/test_system_abstraction.cpp"
 
 
 def _source(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_state_and_aux_loaders_accept_only_ranked_field_views() -> None:
+def test_state_and_provider_loaders_accept_only_ranked_field_views() -> None:
     source = _source(STATE_ACCESS)
     assert "#include <pops/mesh/storage/field_view.hpp>" in source
     assert re.search(
@@ -27,12 +28,16 @@ def test_state_and_aux_loaders_accept_only_ranked_field_views() -> None:
         source,
     )
     assert re.search(
-        r"load_aux\(const FieldView<const Real, Dim>& field,\s*"
+        r"load_provider_values\(const Storage& storage,\s*"
         r"const Index<Dim>& index\)",
         source,
     )
+    assert "struct ProviderStorageView" in source
+    assert "std::array<FieldView<const Real, Dim>" in source
+    assert "std::array<int" in source
     assert "field(index, component)" in source
-    assert "field(index, kAuxNamedBase + k)" in source
+    assert "storage(index, slot)" in source
+    assert "kAuxNamedBase" not in source
     for forbidden in ("ConstArray4", "Array4", "Fab2D", "Box2D"):
         assert forbidden not in source
 
@@ -81,19 +86,28 @@ def test_n_species_preflight_precedes_clear_and_all_accumulation() -> None:
     assert preflight < clear < accumulation
 
 
-def test_cpp_proof_instantiates_ranked_access_and_rhs_paths() -> None:
+def test_cpp_proof_instantiates_ranked_state_and_provider_access() -> None:
     source = _source(CPP_PROOF)
     for rank in (1, 2, 3):
         assert f"check_ranked_state_access<{rank}>()" in source
-    assert "SingleModelEllipticRhs<1" in source
-    assert "TwoFieldChargeDensityRhs<2>" in source
-    assert "ChargeDensityRhs<3>" in source
-    assert "wrong_distribution" in source
-    assert "wrong_layout" in source
+    assert "ProviderStorageView<Dim, Dim>" in source
+    assert "mapped.storage_components[slot] = ncomp - 1 - slot" in source
+    assert "load_provider_values<Dim>(mapped, sample)" in source
 
     auxiliary = _source(AUX_PROOF)
     for rank in (1, 2, 3):
-        assert f"check_device_and_host_marshaling<{rank}>()" in auxiliary
-        assert f"check_base_width_ignores_extra_fields<{rank}>()" in auxiliary
+        assert f"check_magnetic_factory_dispatch<{rank}>()" in auxiliary
+    assert "ProviderValues, QualifiedConsumersDoNotAliasBySpelling" in auxiliary
+    assert "ProviderValues, GradientSourcesUseExplicitPermutedSlotsInEveryRank" in auxiliary
     for forbidden in ("ConstArray4", "Array4", "Fab2D", "Box2D"):
         assert forbidden not in auxiliary
+
+
+def test_native_elliptic_rhs_proof_uses_the_ranked_assembler() -> None:
+    source = _source(ELLIPTIC_PROOF)
+    for rank in (1, 2, 3):
+        assert f"check_ranked_elliptic_rhs<{rank}>()" in source
+    assert "TwoFieldChargeDensityRhs<Dim> charge" in source
+    assert "ProviderValues<0>" in source
+    assert "charge(Ue, Ui, rhs)" in source
+    assert "charge_density_rhs" in source

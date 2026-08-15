@@ -753,28 +753,43 @@ TEST(GeneratedAmrSystemBlock, DefaultFieldPublishesOnlyAfterSolveOutcomeAcceptan
 TEST(GeneratedAmrSystemBlock, NamedFieldConsumesExactStageWithoutPublishingState) {
   constexpr int Dim = pops::kNativeDimension;
   pops::AmrSystemConfig<Dim> config;
-  config.level_count = 1;
-  config.transition_ratios.clear();
-  config.transition_buffers.clear();
-  config.transition_lookaheads.clear();
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
   const pops::AmrFieldHierarchyPolicyAuthority hierarchy{
-      "pops.field-hierarchy.level-local", 1, {"pops.field-hierarchy.options.empty@1", {}}};
+      "pops.field-hierarchy.composite", 1, {"pops.field-hierarchy.options.empty@1", {}}};
+  pops::CompositeFacOptions rejected_fac;
+  rejected_fac.max_iters = 1;
+  rejected_fac.rel_tol = pops::Real(1.0e-30);
+  rejected_fac.abs_tol = pops::Real(0);
   system.set_field_solver_plan("field/tracer", "test.named-field-plan", "test.named-field",
                                "test.aux-owner", "tracer", "phi", {"test.rhs"}, {"tracer"},
                                {"charge"}, {1.0}, "geometric_mg", hierarchy,
                                pops::geometric_mg_amr_field_solver_options(
                                    pops::GeometricMgOptions{}, pops::CompositeFacOptions{}));
+  system.set_field_reaction("field/tracer", 50.0);
+  system.set_field_solver_plan("field/rejected", "test.rejected-field-plan",
+                               "test.rejected-field", "test.aux-owner", "tracer", "psi",
+                               {"test.rejected-rhs"}, {"tracer"}, {"charge"}, {1.0},
+                               "geometric_mg", hierarchy,
+                               pops::geometric_mg_amr_field_solver_options(pops::GeometricMgOptions{},
+                                                                          rejected_fac));
+  system.set_field_reaction("field/rejected", 50.0);
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
   const auto output_key = install_field_output(system, "test.aux-owner", "phi");
   system.register_elliptic_field("tracer", "phi", {output_key}, 1);
   system.set_block_elliptic_field(
       "tracer", "phi",
-      [](const pops::MultiFab<Dim>&, pops::MultiFab<Dim>& rhs) { rhs.set_val(pops::Real(0)); });
+      [](const pops::MultiFab<Dim>&, pops::MultiFab<Dim>& rhs) { rhs.set_val(pops::Real(1)); });
+  system.set_block_elliptic_field(
+      "tracer", "psi",
+      [](const pops::MultiFab<Dim>&, pops::MultiFab<Dim>& rhs) { rhs.set_val(pops::Real(1)); });
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  publish_centered_fine_level(system);
+  ASSERT_TRUE(system.engine()->hierarchy().layout(0).distribution().replicated());
+  ASSERT_FALSE(system.engine()->hierarchy().layout(1).distribution().replicated());
+  system.refresh_prepared_amr_levels();
   system.set_program_block_map({0});
 
   auto context = pops::runtime::program::make_program_execution_provider(&system);
@@ -782,6 +797,12 @@ TEST(GeneratedAmrSystemBlock, NamedFieldConsumesExactStageWithoutPublishingState
   context->begin_step(0.01);
   pops::MultiFab<Dim> stage = context->scratch_state_like(context->state(0));
   stage.set_val(pops::Real(3));
+  pops::SolveOutcome rejected =
+      context->solve_fields_from_state_at(point<Dim>(0), "field/rejected", 0, stage);
+  ASSERT_FALSE(rejected.report().solved_value_available());
+  EXPECT_EQ(rejected.consume(pops::SolveConsumption::kFailRun).action, pops::SolveAction::kFailRun);
+  EXPECT_EQ(system.field_potential_level_global("field/rejected", 0),
+            std::vector<double>(cell_count(config.shape), 0.0));
   pops::SolveOutcome outcome =
       context->solve_fields_from_state_at(point<Dim>(0), "field/tracer", 0, stage);
   ASSERT_TRUE(outcome.report().solved_value_available());
@@ -789,7 +810,7 @@ TEST(GeneratedAmrSystemBlock, NamedFieldConsumesExactStageWithoutPublishingState
   (void)outcome.consume(pops::SolveConsumption::kAccept);
   EXPECT_EQ(pops::reduce_max_local(context->state(0), 0), pops::Real(1));
   EXPECT_EQ(system.auxiliary_component(output_key).size(), cell_count(config.shape));
-  EXPECT_EQ(system.field_provider_levels("field/tracer"), 1);
+  EXPECT_EQ(system.field_provider_levels("field/tracer"), 2);
 }
 
 TEST(GeneratedAmrSystemBlock,
@@ -797,6 +818,10 @@ TEST(GeneratedAmrSystemBlock,
   constexpr int Dim = pops::kNativeDimension;
   RuntimeFieldBoundaryProbe<Dim>::reset();
   pops::AmrSystemConfig<Dim> config;
+  config.level_count = 1;
+  config.transition_ratios.clear();
+  config.transition_buffers.clear();
+  config.transition_lookaheads.clear();
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
@@ -820,8 +845,7 @@ TEST(GeneratedAmrSystemBlock,
       "tracer", "phi",
       [](const pops::MultiFab<Dim>&, pops::MultiFab<Dim>& rhs) { rhs.set_val(pops::Real(1)); });
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
-  publish_centered_fine_level(system);
-  system.refresh_prepared_amr_levels();
+  ASSERT_TRUE(system.engine()->hierarchy().layout(0).distribution().replicated());
   system.set_program_block_map({0});
 
   auto context = pops::runtime::program::make_program_execution_provider(&system);
@@ -846,19 +870,55 @@ TEST(GeneratedAmrSystemBlock,
   EXPECT_GT(RuntimeFieldBoundaryProbe<Dim>::residual_calls, 0);
   EXPECT_GT(RuntimeFieldBoundaryProbe<Dim>::jvp_calls, 0);
   EXPECT_TRUE(RuntimeFieldBoundaryProbe<Dim>::levels[0]);
-  EXPECT_TRUE(RuntimeFieldBoundaryProbe<Dim>::levels[1]);
   EXPECT_EQ(RuntimeFieldBoundaryProbe<Dim>::stage, 4);
   EXPECT_EQ(RuntimeFieldBoundaryProbe<Dim>::time, pops::Real(0.125));
   EXPECT_EQ(RuntimeFieldBoundaryProbe<Dim>::state_min_by_level[0], pops::Real(3));
-  EXPECT_EQ(RuntimeFieldBoundaryProbe<Dim>::state_min_by_level[1], pops::Real(1));
 
   const pops::SolveReport accepted = outcome.consume(pops::SolveConsumption::kAccept);
   EXPECT_TRUE(accepted.solved());
+
+  pops::AmrSystemConfig<Dim> mixed_config;
+  for (int axis = 0; axis < Dim; ++axis)
+    mixed_config.shape[axis] = 8;
+  pops::AmrSystem<Dim> mixed(mixed_config);
+  mixed.set_field_solver_plan("field/tracer", "test.mixed-newton-plan", "test.mixed-newton",
+                              "test.aux-owner", "tracer", "phi", {"test.rhs"}, {"tracer"},
+                              {"charge"}, {1.0}, "geometric_mg", hierarchy,
+                              pops::geometric_mg_amr_field_solver_options(
+                                  pops::GeometricMgOptions{}, pops::CompositeFacOptions{}));
+  mixed.set_field_reaction("field/tracer", 50.0);
+  mixed.set_field_newton_plan("field/tracer", 1.0e-9, 4, 1.0e-10, 80, 20, 1.0e-4,
+                              1.0 / 1024.0);
+  mixed.install_block_state_route("tracer", "state/tracer");
+  pops::add_compiled_model<Dim>(mixed, "tracer", advection_model<Dim>());
+  const auto mixed_output_key = install_field_output(mixed, "test.aux-owner", "phi");
+  mixed.register_elliptic_field("tracer", "phi", {mixed_output_key}, 1);
+  mixed.set_block_elliptic_field(
+      "tracer", "phi",
+      [](const pops::MultiFab<Dim>&, pops::MultiFab<Dim>& rhs) { rhs.set_val(pops::Real(1)); });
+  mixed.set_conservative_state("tracer",
+                               std::vector<double>(cell_count(mixed_config.shape), 1.0));
+  publish_centered_fine_level(mixed);
+  ASSERT_TRUE(mixed.engine()->hierarchy().layout(0).distribution().replicated());
+  ASSERT_FALSE(mixed.engine()->hierarchy().layout(1).distribution().replicated());
+  try {
+    (void)mixed.field_potential_level_global("field/tracer", 0);
+    FAIL() << "mixed composite Newton preparation must fail before publication";
+  } catch (const std::invalid_argument& error) {
+    EXPECT_NE(std::string(error.what()).find("no prepared Newton/Krylov capability"),
+              std::string::npos);
+  }
+  EXPECT_EQ(pops::reduce_max_local(mixed.engine()->hierarchy().state(0)), pops::Real(1));
+  EXPECT_EQ(pops::reduce_max_local(mixed.engine()->hierarchy().state(1)), pops::Real(1));
 }
 
 TEST(GeneratedAmrSystemBlock, CompositeFieldInstallsCoverageAwareNullspaceOnEveryLiveLevel) {
   constexpr int Dim = pops::kNativeDimension;
   pops::AmrSystemConfig<Dim> config;
+  config.level_count = 1;
+  config.transition_ratios.clear();
+  config.transition_buffers.clear();
+  config.transition_lookaheads.clear();
   for (int axis = 0; axis < Dim; ++axis) {
     config.shape[axis] = 8;
     config.periodicity[axis] = true;
@@ -868,8 +928,7 @@ TEST(GeneratedAmrSystemBlock, CompositeFieldInstallsCoverageAwareNullspaceOnEver
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
-  publish_centered_fine_level(system);
-  system.refresh_prepared_amr_levels();
+  ASSERT_TRUE(system.engine()->hierarchy().layout(0).distribution().replicated());
   system.set_program_block_map({0});
 
   auto context = pops::runtime::program::make_program_execution_provider(&system);
@@ -879,14 +938,33 @@ TEST(GeneratedAmrSystemBlock, CompositeFieldInstallsCoverageAwareNullspaceOnEver
   ASSERT_TRUE(outcome.report().solved_value_available());
   (void)outcome.consume(pops::SolveConsumption::kAccept);
 
-  EXPECT_EQ(system.field_provider_levels("pops.amr.default-field"), 2);
+  EXPECT_EQ(system.field_provider_levels("pops.amr.default-field"), 1);
   EXPECT_EQ(system.field_potential_level_global("pops.amr.default-field", 0).size(),
             cell_count(config.shape));
-  pops::Extent<Dim> fine_shape{};
-  for (int axis = 0; axis < Dim; ++axis)
-    fine_shape[axis] = 16;
-  EXPECT_EQ(system.field_potential_level_global("pops.amr.default-field", 1).size(),
-            cell_count(fine_shape));
+
+  pops::AmrSystemConfig<Dim> mixed_config;
+  for (int axis = 0; axis < Dim; ++axis) {
+    mixed_config.shape[axis] = 8;
+    mixed_config.periodicity[axis] = true;
+  }
+  pops::AmrSystem<Dim> mixed(mixed_config);
+  mixed.set_poisson();
+  mixed.install_block_state_route("tracer", "state/tracer");
+  pops::add_compiled_model<Dim>(mixed, "tracer", advection_model<Dim>());
+  mixed.seal_auxiliary_providers();
+  mixed.set_conservative_state("tracer", std::vector<double>(cell_count(mixed_config.shape), 1.0));
+  publish_centered_fine_level(mixed);
+  ASSERT_TRUE(mixed.engine()->hierarchy().layout(0).distribution().replicated());
+  ASSERT_FALSE(mixed.engine()->hierarchy().layout(1).distribution().replicated());
+  try {
+    (void)mixed.field_potential_level_global("pops.amr.default-field", 0);
+    FAIL() << "mixed composite singular-nullspace preparation must fail before publication";
+  } catch (const std::invalid_argument& error) {
+    EXPECT_NE(std::string(error.what()).find("singular nullspaces are not a registered capability"),
+              std::string::npos);
+  }
+  EXPECT_EQ(pops::reduce_max_local(mixed.engine()->hierarchy().state(0)), pops::Real(1));
+  EXPECT_EQ(pops::reduce_max_local(mixed.engine()->hierarchy().state(1)), pops::Real(1));
 }
 
 TEST(GeneratedAmrSystemBlock, ProgramContextRefusesUnsynchronizedHierarchyBeforeMutation) {

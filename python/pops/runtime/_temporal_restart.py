@@ -464,20 +464,29 @@ class TemporalRestartState:
             (self.clock_cursors, self.schedule_cursors, self.synchronization_cursors,
              self.history_cursors, self.cache_cursors) = cursors
 
+    def authenticate_run(
+        self, strategy: dict[str, Any], *, time: Any, macro_step: Any,
+    ) -> dict[str, Any]:
+        """Validate one installed Program strategy without changing accepted state."""
+        now, step = _clock(time, macro_step)
+        candidate = validate_step_strategy_manifest(strategy)
+        if self.strategy is not None or self._restored_pending:
+            self._require_live_clock(now, step)
+        if self._restored_pending and candidate != self.strategy:
+            raise RuntimeError(
+                "restart requires the checkpointed step strategy for the exact next attempt")
+        return candidate
+
     def begin_run(self, strategy: dict[str, Any], *, time: Any, macro_step: Any) -> None:
         """Bind the controller for this run, enforcing the first post-restart attempt."""
         now, step = _clock(time, macro_step)
+        candidate = self.authenticate_run(strategy, time=time, macro_step=macro_step)
         if self.strategy is None and not self._restored_pending:
             self.time_hex = now
             self.macro_step = step
             (self.clock_cursors, self.schedule_cursors, self.synchronization_cursors,
              self.history_cursors, self.cache_cursors) = _boundary_cursors(
                  self.program_schedule, time_hex=now, macro_step=step)
-        self._require_live_clock(now, step)
-        candidate = validate_step_strategy_manifest(strategy)
-        if self._restored_pending and candidate != self.strategy:
-            raise RuntimeError(
-                "restart requires the checkpointed step strategy for the exact next attempt")
         if not self._restored_pending:
             self.strategy = candidate
             if (candidate["strategy"]["kind"] == "error_controlled_dt"
@@ -638,8 +647,14 @@ class TemporalRestartState:
     def to_data(self) -> dict[str, Any]:
         return {
             "schema_version": _SCHEMA_VERSION,
-            "strategy": self.strategy,
-            "program_schedule": self.program_schedule,
+            "strategy": (
+                None if self.strategy is None
+                else _json_copy(self.strategy, where="step strategy")
+            ),
+            "program_schedule": (
+                None if self.program_schedule is None
+                else _json_copy(self.program_schedule, where="temporal program schedule")
+            ),
             "clock": {"time": self.time_hex, "macro_step": self.macro_step},
             "clock_cursors": _json_copy(self.clock_cursors, where="clock cursors"),
             "schedule_cursors": _json_copy(self.schedule_cursors, where="schedule cursors"),

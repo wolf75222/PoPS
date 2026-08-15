@@ -47,10 +47,12 @@ class SystemBlockStore {
   using PointResidual = std::function<void(const evaluation_point&, field_type&, field_type&)>;
   using PreparedPointResidual =
       std::function<void(const evaluation_point&, field_type&, field_type&, const boundary_type&)>;
-  using PointJvp =
-      std::function<void(const evaluation_point&, field_type&, const field_type&, field_type&)>;
+  using PreparedPointBoundaryResidual = std::function<void(
+      const evaluation_point&, field_type&, field_type&, const boundary_type&, const ExecutionLane&,
+      const runtime::program::PreparedScalarBoundarySession<Dim>&)>;
   using PreparedPointJvp = std::function<void(
-      const evaluation_point&, field_type&, const field_type&, field_type&, const boundary_type&)>;
+      const evaluation_point&, field_type&, const field_type&, field_type&, const boundary_type&,
+      const ExecutionLane&, const runtime::program::PreparedScalarBoundarySession<Dim>&)>;
   using PointStatePreparation = std::function<void(const evaluation_point&, field_type&)>;
   using PreparedPointStatePreparation =
       std::function<void(const evaluation_point&, field_type&, const boundary_type&)>;
@@ -90,11 +92,10 @@ class SystemBlockStore {
     PointResidual rhs_flux_only_without_prepared_interfaces;
     PointResidual rhs_core_at_point;
     PointResidual rhs_flux_only_core_at_point;
-    PointResidual boundary_residual_at_point;
-    PointJvp boundary_jvp_at_point;
     PreparedPointResidual rhs_core_at_point_prepared;
     PreparedPointResidual rhs_flux_only_core_at_point_prepared;
-    PreparedPointResidual boundary_residual_at_point_prepared;
+    PreparedPointBoundaryResidual boundary_full_at_point_prepared;
+    PreparedPointBoundaryResidual boundary_residual_at_point_prepared;
     PreparedPointJvp boundary_jvp_at_point_prepared;
     PointStatePreparation prepare_generated_state_at_point;
     PreparedPointStatePreparation prepare_generated_state_at_point_prepared;

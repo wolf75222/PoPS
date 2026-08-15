@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -34,13 +35,36 @@ class FieldNullspaceWorkspace {
   FieldNullspaceWorkspace(FieldNullspacePlan<Dim> plan, std::vector<const MultiFab<Dim>*> layouts,
                           std::vector<PreparedVectorDistribution<Dim>> distributions,
                           int first_level = 0)
+      : FieldNullspaceWorkspace(std::move(plan), std::move(layouts), std::move(distributions),
+                                nullptr, first_level) {}
+
+  /// Borrow and pin the exact execution lane used by the owning prepared solver. Every
+  /// preflight, replica check, and scientific reduction stays on this communicator.
+  FieldNullspaceWorkspace(FieldNullspacePlan<Dim> plan, std::vector<const MultiFab<Dim>*> layouts,
+                          std::vector<PreparedVectorDistribution<Dim>> distributions,
+                          const ExecutionLane& lane, int first_level = 0)
+      : FieldNullspaceWorkspace(std::move(plan), std::move(layouts), std::move(distributions),
+                                &lane, first_level) {}
+
+ private:
+  FieldNullspaceWorkspace(FieldNullspacePlan<Dim> plan, std::vector<const MultiFab<Dim>*> layouts,
+                          std::vector<PreparedVectorDistribution<Dim>> distributions,
+                          const ExecutionLane* lane, int first_level)
       : plan_(std::move(plan)),
         layouts_(std::move(layouts)),
         distributions_(std::move(distributions)),
-        first_level_(first_level) {
-    validate_field_nullspace_basis<Dim>(
-        layouts_, plan_, std::span<const PreparedVectorDistribution<Dim>>(distributions_),
-        first_level_);
+        first_level_(first_level),
+        lane_(lane) {
+    if (lane_ != nullptr) {
+      lane_borrow_.emplace(lane_->borrow_immutably());
+      validate_field_nullspace_basis<Dim>(
+          layouts_, plan_, std::span<const PreparedVectorDistribution<Dim>>(distributions_), *lane_,
+          first_level_);
+    } else {
+      validate_field_nullspace_basis<Dim>(
+          layouts_, plan_, std::span<const PreparedVectorDistribution<Dim>>(distributions_),
+          first_level_);
+    }
     basis_count_ = plan_.bases.size();
     if (basis_count_ == 0)
       return;
@@ -71,7 +95,10 @@ class FieldNullspaceWorkspace {
     } catch (...) {
       allocation_failed = 1;
     }
-    if (all_reduce_max(allocation_failed) != 0) {
+    const long global_allocation_failed = lane_ == nullptr
+                                              ? all_reduce_max(allocation_failed)
+                                              : all_reduce_max(allocation_failed, *lane_);
+    if (global_allocation_failed != 0) {
       clear_storage_();
       throw std::runtime_error(
           "field-nullspace workspace allocation failed on at least one communicator rank");
@@ -79,6 +106,7 @@ class FieldNullspaceWorkspace {
     assemble_gram_factor_();
   }
 
+ public:
   FieldNullspaceWorkspace(const FieldNullspaceWorkspace&) = delete;
   FieldNullspaceWorkspace& operator=(const FieldNullspaceWorkspace&) = delete;
   FieldNullspaceWorkspace(FieldNullspaceWorkspace&&) noexcept = default;
@@ -229,13 +257,19 @@ class FieldNullspaceWorkspace {
     } catch (...) {
       invalid_local = 1;
     }
-    if (all_reduce_max(invalid_local) != 0)
+    const long invalid =
+        lane_ == nullptr ? all_reduce_max(invalid_local) : all_reduce_max(invalid_local, *lane_);
+    if (invalid != 0)
       throw std::invalid_argument(std::string(where) +
                                   " valid-cell layout differs from its prepared vector space");
     for (std::size_t level = 0; level < fields.size(); ++level) {
       const std::size_t bytes = distributions_[level].validation_scratch_byte_count();
-      distributions_[level].require_exact_values(
-          *fields[level], std::span<char>(validation_scratch_.data(), bytes), where);
+      if (lane_ == nullptr)
+        distributions_[level].require_exact_values(
+            *fields[level], std::span<char>(validation_scratch_.data(), bytes), where);
+      else
+        distributions_[level].require_exact_values(
+            *fields[level], std::span<char>(validation_scratch_.data(), bytes), where, *lane_);
     }
   }
 
@@ -298,8 +332,12 @@ class FieldNullspaceWorkspace {
     for (std::size_t level = 0; level < layouts_.size(); ++level) {
       std::span<double> values(level_values_.data() + level * value_capacity_, width);
       const std::size_t scratch_count = distributions_[level].reduction_scratch_value_count(width);
-      distributions_[level].reduce_sum_values(
-          values, std::span<double>(reduction_scratch_.data(), scratch_count), quantity);
+      if (lane_ == nullptr)
+        distributions_[level].reduce_sum_values(
+            values, std::span<double>(reduction_scratch_.data(), scratch_count), quantity);
+      else
+        distributions_[level].reduce_sum_values(
+            values, std::span<double>(reduction_scratch_.data(), scratch_count), quantity, *lane_);
       for (std::size_t index = 0; index < width; ++index)
         reduced_values_[index] += values[index];
     }
@@ -328,6 +366,8 @@ class FieldNullspaceWorkspace {
   std::size_t compatibility_value_count_ = 0;
   std::size_t value_capacity_ = 0;
   int first_level_ = 0;
+  const ExecutionLane* lane_ = nullptr;
+  std::optional<ExecutionLane::ImmutableBorrow> lane_borrow_;
 };
 
 }  // namespace pops

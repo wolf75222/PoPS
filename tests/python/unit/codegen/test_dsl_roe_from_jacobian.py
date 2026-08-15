@@ -1,4 +1,5 @@
 """Compiled generic Roe regression through the final public lifecycle."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -13,6 +14,7 @@ from pops._dense_spectral import (
 )
 from pops._ir.expr import Const
 from pops.codegen import Production
+from pops.codegen.component_provider_packs import resolve_component_provider_packs
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.layouts import Uniform
@@ -55,9 +57,9 @@ def test_exact_block_triangular_certificate_is_structural_and_complete() -> None
 
 
 def _nonhyperbolic_roe_model() -> Model:
-    frame = Rectangle(
-        "nonhyperbolic-roe-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)
-    ).frame(Cartesian2D())
+    frame = Rectangle("nonhyperbolic-roe-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(
+        Cartesian2D()
+    )
     x_axis, y_axis = frame.axes
     model = Model("nonhyperbolic_dense_roe", frame=frame)
     state = model.state("U", components=("q1", "q2"))
@@ -78,13 +80,10 @@ def _nonhyperbolic_roe_model() -> Model:
 
 
 def _diagonal_roe_model(name: str, components: int) -> Model:
-    frame = Rectangle(
-        "%s-domain" % name, lower=(0.0, 0.0), upper=(1.0, 1.0)
-    ).frame(Cartesian2D())
+    frame = Rectangle("%s-domain" % name, lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(Cartesian2D())
     x_axis, y_axis = frame.axes
     model = Model(name, frame=frame)
-    state = model.state(
-        "U", components=tuple("q%d" % index for index in range(components)))
+    state = model.state("U", components=tuple("q%d" % index for index in range(components)))
     model.flux(
         "transport",
         frame=frame,
@@ -172,22 +171,29 @@ def test_flux_jacobian_roe_emits_generic_characteristic_no_inflow_provider() -> 
     model = _diagonal_roe_model("dense_characteristic_boundary", 2)
     model.wave_speeds_from_jacobian()
     model.roe_from_jacobian()
+    model._dsl.__pops_bind_component_provider_packs__(
+        resolve_component_provider_packs(model.module)
+    )
     source = model._dsl._m.emit_cpp_brick(name="DenseCharacteristicBoundary")
     assert "bool characteristic_no_inflow(" in source
+    assert "characteristic_no_inflow_contract_version = 1" in source
+    assert "characteristic_no_inflow_dimension = dimension" in source
+    assert "characteristic_no_inflow_components = n_vars" in source
+    assert "characteristic_no_inflow_conservative = true" in source
     assert "pops::characteristic_incoming_apply" in source
     assert "outward_sign" in source
     assert "Euler" not in source
 
 
 def test_auxiliary_dependent_jacobian_does_not_advertise_characteristic_provider() -> None:
-    frame = Rectangle(
-        "aux-characteristic-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)
-    ).frame(Cartesian2D())
+    frame = Rectangle("aux-characteristic-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(
+        Cartesian2D()
+    )
     x_axis, y_axis = frame.axes
     model = Model("aux_characteristic_boundary", frame=frame)
     state = model.state("U", components=("q",))
     (q,) = state
-    coefficient = model._dsl._m.aux_field("coefficient")
+    coefficient = model.aux("coefficient")
     model.flux(
         "transport",
         frame=frame,
@@ -196,6 +202,9 @@ def test_auxiliary_dependent_jacobian_does_not_advertise_characteristic_provider
     )
     model.wave_speeds_from_jacobian()
     model.roe_from_jacobian()
+    model._dsl.__pops_bind_component_provider_packs__(
+        resolve_component_provider_packs(model.module)
+    )
 
     source = model._dsl._m.emit_cpp_brick(name="AuxCharacteristicBoundary")
     assert "bool characteristic_no_inflow(" not in source

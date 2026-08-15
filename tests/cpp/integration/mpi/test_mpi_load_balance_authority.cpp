@@ -1,230 +1,266 @@
-// Native MPI contract for the prepared AMR ownership authority: exact replicated metadata,
-// weighted deterministic mapping, and uniform fail-closed behavior on rank-local divergence.
+// Native MPI contract for prepared exact-ranked AMR ownership: deterministic weighted plans,
+// collective fail-closed provenance, and a distributed prepared-regrid publication.
 
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
 #include <pops/amr/hierarchy/amr_hierarchy.hpp>
-#include <pops/amr/tagging/cluster.hpp>
-#include <pops/coupling/amr/amr_regrid_coupler.hpp>
-#include <pops/mesh/layout/refinement.hpp>
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/parallel/comm.hpp>
 #include <pops/parallel/prepared_load_balance.hpp>
+#include <pops/runtime/amr/amr_runtime.hpp>
 
-#include <algorithm>
+#include <Kokkos_Core.hpp>
+
+#include <array>
 #include <cstdint>
 #include <cstdio>
+#include <exception>
+#include <limits>
+#include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
-
-#if defined(POPS_HAS_KOKKOS)
-#include <Kokkos_Core.hpp>
-#endif
-
-using namespace pops;
 
 namespace {
 
-class RankFailingClusteringProvider final : public amr::ClusteringProvider {
- public:
-  explicit RankFailingClusteringProvider(int failing_rank) : failing_rank_(failing_rank) {}
+namespace hierarchy = pops::amr::hierarchy;
+namespace regridding = pops::amr::regridding;
+namespace tagging = pops::amr::tagging;
 
-  std::vector<Box2D> cluster(const TagBox& tags) const override {
-    if (my_rank() == failing_rank_)
-      throw std::runtime_error("rank-local synthetic clustering failure");
-    return berger_rigoutsos(tags, ClusterParams{});
-  }
+constexpr pops::mesh::BoxArrayValidationBudget kLayoutBudget{128, 8'192};
+constexpr hierarchy::HierarchyValidationBudget kHierarchyBudget{2, 8'192};
+constexpr pops::parallel::LoadBalancePreparationBudget kLoadBalanceBudget{
+    128, 64, std::numeric_limits<std::int64_t>::max()};
 
- private:
-  int failing_rank_;
-};
-
-bool hierarchy_regrid_is_collective_and_owner_authenticated(
-    const std::shared_ptr<const PreparedLoadBalanceAuthority>& authority) {
-  const int ranks = n_ranks();
-  const int rank = my_rank();
-  const Box2D domain = Box2D::from_extents(std::max(8, ranks * 4), 4);
-  const HierarchyRegridOptions options{/*tag_buffer=*/0, /*nesting_margin=*/0,
-                                       RegridPeriodicity{false, false}, nullptr};
-  const RegridProlongation prolong = [](const MultiFab& coarse, MultiFab& fine, int, int ratio,
-                                        bool, const CommunicatorView& communicator) {
-    interpolate(coarse, fine, ratio, communicator);
-  };
-
-  // L0 is unique-owner distributed. Only the final rank authors a tag; every rank must still build
-  // and publish the same child layout through the mandatory tag OR.
-  AmrHierarchy hierarchy(domain, /*max_grid_size=*/2, /*ncomp=*/1, /*ngrow=*/1, authority);
-  hierarchy.data(0).set_val(Real(0));
-  if (rank == ranks - 1 && hierarchy.data(0).local_size() > 0) {
-    const Box2D local = hierarchy.data(0).box(0);
-    hierarchy.data(0).fab(0)(local.lo[0], local.lo[1], 0) = Real(1);
-  }
-  const amr::BergerRigoutsosProvider clustering(ClusterParams{});
-  const auto criterion = [] POPS_HD(const ConstArray4& values, int i, int j) {
-    return values(i, j, 0) > Real(0.5);
-  };
-  if (!regrid_hierarchy_level(hierarchy, 0, criterion, options, clustering, prolong,
-                              world_communicator_view()) ||
-      hierarchy.num_levels() != 2)
-    return false;
-
-  // A rank-local extension failure is converted into one collective failure point and cannot
-  // replace the already-published fine level on any peer.
-  const std::vector<Box2D> stable_boxes = hierarchy.boxes(1).boxes();
-  RankFailingClusteringProvider failing(ranks > 1 ? 1 : 0);
-  bool rejected = false;
-  try {
-    (void)regrid_hierarchy_level(hierarchy, 0, criterion, options, failing, prolong,
-                                 world_communicator_view());
-  } catch (const std::exception&) {
-    rejected = true;
-  }
-  if (!rejected || hierarchy.num_levels() != 2 || hierarchy.boxes(1).boxes() != stable_boxes)
-    return false;
-
-  // install_level authenticates the exact owner vector against the same prepared authority. A
-  // geometrically valid field with a rotated owner map is not accepted as equivalent provenance.
-  if (ranks > 1) {
-    AmrHierarchy install_target(domain, /*max_grid_size=*/2, /*ncomp=*/1, /*ngrow=*/1, authority);
-    const BoxArray fine = BoxArray::from_domain(domain.refine(2), 4);
-    const DistributionMapping expected =
-        authority->distribute(fine, ranks, {}, world_communicator_view());
-    std::vector<int> rotated = expected.ranks();
-    for (int& owner : rotated)
-      owner = (owner + 1) % ranks;
-    MultiFab wrong(fine, DistributionMapping(std::move(rotated)), 1, 1);
-    rejected = false;
-    try {
-      install_target.install_level(1, fine, std::move(wrong), world_communicator_view());
-    } catch (const std::exception&) {
-      rejected = true;
-    }
-    if (!rejected || install_target.num_levels() != 1)
-      return false;
-    MultiFab correct(fine, expected, 1, 1);
-    install_target.install_level(1, fine, std::move(correct), world_communicator_view());
-    if (install_target.num_levels() != 2 ||
-        install_target.data(1).dmap().ranks() != expected.ranks())
-      return false;
-  }
-  return true;
+template <int Dim>
+pops::Extent<Dim> filled_extent(int value) {
+  pops::Extent<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = value;
+  return result;
 }
 
-int run_mpi_load_balance_authority(int argc, char** argv) {
-  comm_init(&argc, &argv);
-#if defined(POPS_HAS_KOKKOS)
-  Kokkos::ScopeGuard guard(argc, argv);
-#endif
-  const int rank = my_rank();
-  const int ranks = n_ranks();
-  long failures = 0;
+template <int Dim>
+pops::mesh::RankSpace<Dim> rank_space_for(int ranks) {
+  pops::Extent<Dim> extent = filled_extent<Dim>(1);
+  int remaining = ranks;
+  int factor_slot = 0;
+  for (int factor = 2; factor <= remaining / factor; ++factor) {
+    while (remaining % factor == 0) {
+      extent[factor_slot % Dim] *= factor;
+      remaining /= factor;
+      ++factor_slot;
+    }
+  }
+  if (remaining > 1)
+    extent[factor_slot % Dim] *= remaining;
+  return {pops::Index<Dim>{}, extent};
+}
 
-  const int box_count = std::max(4, ranks * 4);
-  const BoxArray boxes = BoxArray::from_domain(Box2D::from_extents(box_count, 1), 1);
-  std::vector<std::int64_t> weights(static_cast<std::size_t>(box_count), 1);
+template <int Dim>
+pops::amr::RefinementRatio<Dim> ratio_two() {
+  std::array<int, Dim> values{};
+  values.fill(2);
+  return pops::amr::RefinementRatio<Dim>(values);
+}
+
+template <int Dim>
+std::shared_ptr<const pops::PreparedLoadBalanceAuthority<Dim>> load_balance_authority(
+    std::string identity) {
+  return std::make_shared<const pops::PreparedLoadBalanceAuthority<Dim>>(
+      pops::prepare_load_balance_authority<Dim>(
+          "space_filling_curve", std::move(identity),
+          pops::PreparedProviderOptions{"pops.amr.load-balance.space-filling-curve@1", {}}));
+}
+
+template <int Dim>
+pops::mesh::BoxArray<Dim> partitioned_boxes(const pops::mesh::RankSpace<Dim>& ranks) {
+  pops::Extent<Dim> domain_extent{};
+  for (int axis = 0; axis < Dim; ++axis)
+    domain_extent[axis] = 4 * ranks.extent()[axis];
+  return pops::mesh::BoxArray<Dim>::from_domain(pops::Box<Dim>::from_extents(domain_extent),
+                                                  filled_extent<Dim>(4));
+}
+
+template <int Dim>
+regridding::RegridPreparationBudget regrid_budget() {
+  return {.clustered_parent_layout = kLayoutBudget,
+          .fine_layout = kLayoutBudget,
+          .load_balance = kLoadBalanceBudget};
+}
+
+template <int Dim>
+tagging::ClusterResult<Dim> clustered_parent_boxes(const hierarchy::LevelLayout<Dim>& parent) {
+  tagging::ClusterOptions<Dim> options;
+  options.min_efficiency = 0.7;
+  for (int axis = 0; axis < Dim; ++axis) {
+    options.min_box_size[axis] = 1;
+    options.max_box_size[axis] = 64;
+  }
+  options.budget = {128, 8'192, 1U << 20, 128, 1U << 22};
+  const pops::mesh::BoxArray<Dim> boxes(parent.patches().boxes());
+  tagging::ClusterResultIdentity<Dim> identity{
+      "test.mpi-load-balance-authority.clustered-parent@1", parent.exact_identity(), options, {},
+      boxes.boxes()};
+  return {boxes, std::move(identity)};
+}
+
+template <int Dim>
+pops::runtime::amr::AmrRuntime<Dim> make_partitioned_runtime(
+    const pops::mesh::RankSpace<Dim>& ranks, const pops::Index<Dim>& local_rank,
+    std::shared_ptr<const pops::PreparedLoadBalanceAuthority<Dim>> authority) {
+  const pops::mesh::BoxArray<Dim> patches = partitioned_boxes(ranks);
+  const auto prepared = authority->prepare(patches, ranks, kLoadBalanceBudget);
+  const auto& distribution = prepared.plan().distribution();
+  const pops::Box<Dim> domain = patches.bounding_box();
+  hierarchy::LevelLayout<Dim> coarse(0, domain, patches, distribution,
+                                     pops::amr::RefinementRatio<Dim>{}, kLayoutBudget);
+  pops::MultiFab<Dim> state(patches, distribution, local_rank, 1, filled_extent<Dim>(1));
+  state.set_val(pops::Real(1));
+  return pops::runtime::amr::AmrRuntime<Dim>(
+      hierarchy::AmrHierarchy<Dim>::from_coarse(coarse, std::move(state), kHierarchyBudget),
+      std::move(authority), "test.mpi-load-balance-authority/state-qid@1");
+}
+
+template <int Dim>
+bool hierarchy_regrid_is_collective_and_owner_authenticated(
+    const pops::mesh::RankSpace<Dim>& ranks, const pops::Index<Dim>& local_rank,
+    const std::shared_ptr<const pops::PreparedLoadBalanceAuthority<Dim>>& authority) {
+  auto runtime = make_partitioned_runtime(ranks, local_rank, authority);
+  const auto stable_contract = runtime.spatial_contract();
+  const auto stable_epoch = runtime.topology_epoch();
+
+  auto rejected_prepared = runtime.prepare_regrid(
+      0, ratio_two<Dim>(), clustered_parent_boxes(runtime.hierarchy().layout(0)), regrid_budget<Dim>());
+  if (!rejected_prepared.fine_layout())
+    return false;
+  const auto& expected = rejected_prepared.fine_layout()->distribution();
+  std::vector<pops::Index<Dim>> rotated;
+  rotated.reserve(expected.owners().size());
+  for (const pops::Index<Dim>& owner : expected.owners())
+    rotated.push_back(ranks.coordinate((ranks.linear_rank(owner) + 1) % ranks.size()));
+  pops::MultiFab<Dim> wrong(rejected_prepared.fine_layout()->patches(),
+                             pops::mesh::Distribution<Dim>::partitioned(
+                                 rejected_prepared.fine_layout()->patches(), ranks, std::move(rotated)),
+                             local_rank, 1, filled_extent<Dim>(1));
+  bool rejected = false;
+  try {
+    runtime.publish_regrid(0, std::move(rejected_prepared), std::move(wrong));
+  } catch (const std::invalid_argument&) {
+    rejected = true;
+  }
+  if (!rejected || runtime.spatial_contract() != stable_contract || runtime.topology_epoch() != stable_epoch)
+    return false;
+
+  auto accepted_prepared = runtime.prepare_regrid(
+      0, ratio_two<Dim>(), clustered_parent_boxes(runtime.hierarchy().layout(0)), regrid_budget<Dim>());
+  if (!accepted_prepared.fine_layout())
+    return false;
+  pops::MultiFab<Dim> accepted(accepted_prepared.fine_layout()->patches(),
+                                accepted_prepared.fine_layout()->distribution(), local_rank, 1,
+                                filled_extent<Dim>(1));
+  accepted.set_val(pops::Real(2));
+  const auto expected_owners = accepted_prepared.fine_layout()->distribution().owners();
+  runtime.publish_regrid(0, std::move(accepted_prepared), std::move(accepted));
+  return runtime.hierarchy().num_levels() == 2 &&
+         runtime.hierarchy().layout(1).distribution().owners() == expected_owners &&
+         runtime.topology_epoch() == stable_epoch + 1;
+}
+
+template <int Dim>
+bool authority_decisions_are_exact_and_collective(const pops::mesh::RankSpace<Dim>& ranks,
+                                                  const pops::Index<Dim>& local_rank,
+                                                  int rank) {
+  const pops::mesh::BoxArray<Dim> boxes = partitioned_boxes(ranks);
+  std::vector<std::int64_t> weights(boxes.size(), 1);
   weights.front() = 17;
+  const auto authority = load_balance_authority<Dim>("test.mpi.weighted-sfc.semantic-identity@1");
+  const auto first = authority->prepare(boxes, ranks, kLoadBalanceBudget, weights);
+  const auto second = authority->prepare(boxes, ranks, kLoadBalanceBudget, weights);
+  if (first.plan().distribution() != second.plan().distribution() ||
+      first.plan().distribution().owners().size() != boxes.size())
+    return false;
+  for (const pops::Index<Dim>& owner : first.plan().distribution().owners())
+    if (!ranks.contains(owner))
+      return false;
 
-  const auto authority = prepare_load_balance_authority(
-      "space_filling_curve", "test.mpi.weighted-sfc.semantic-identity",
-      PreparedProviderOptions{"pops.amr.load-balance.space-filling-curve@1", {}});
-  const auto hierarchy_authority =
-      std::make_shared<PreparedLoadBalanceAuthority>(prepare_load_balance_authority(
-          "space_filling_curve", "test.mpi.hierarchy-sfc.semantic-identity",
-          PreparedProviderOptions{"pops.amr.load-balance.space-filling-curve@1", {}}));
-  if (!hierarchy_regrid_is_collective_and_owner_authenticated(hierarchy_authority))
-    ++failures;
-  const DistributionMapping first = authority.distribute(boxes, ranks, weights);
-  const DistributionMapping second = authority.distribute(boxes, ranks, weights);
-  if (first.ranks() != second.ranks() || first.size() != boxes.size())
-    ++failures;
-  for (const int owner : first.ranks())
-    if (owner < 0 || owner >= ranks)
-      ++failures;
-
-  // The prepared authority, not the migration consumer, owns cost interpretation. Start from an
-  // intentionally concentrated map so the measured uniform workload produces a deterministic
-  // beneficial proposal and an exact topology-qualified RebalanceDecision on every rank.
-  constexpr std::uint64_t topology_epoch = 10;
-  constexpr std::uint64_t materialization_generation = 20;
-  std::vector<ResourceEstimate> estimates(static_cast<std::size_t>(box_count));
-  for (ResourceEstimate& estimate : estimates) {
-    estimate.topology_epoch = topology_epoch;
-    estimate.materialization_generation = materialization_generation;
+  std::vector<pops::ResourceEstimate> estimates(boxes.size());
+  for (pops::ResourceEstimate& estimate : estimates) {
+    estimate.topology_epoch = 10;
+    estimate.materialization_generation = 20;
     estimate.samples = 1;
     estimate.cell_updates = 1;
     estimate.compute_nanoseconds = 1000;
     estimate.memory_bytes = 64;
     estimate.resident_bytes = 64;
   }
-  RebalancePolicy policy;
+  pops::RebalancePolicy policy;
   policy.minimum_improvement_ppm = 0;
   policy.amortization_steps = 100;
   policy.migration_bandwidth_bytes_per_second = 1'000'000'000'000LL;
   policy.per_patch_migration_latency_nanoseconds = 0;
-  const DistributionMapping concentrated(std::vector<int>(static_cast<std::size_t>(box_count), 0));
-  const RebalanceDecision beneficial = authority.decide_rebalance(
-      1, boxes, concentrated, ranks, topology_epoch, materialization_generation, estimates, policy);
-  if (!beneficial.accepted || beneficial.reason != RebalanceReason::NetBenefit ||
-      beneficial.moved_patches <= 0 ||
-      beneficial.proposed_mapping.ranks() == concentrated.ranks() ||
-      beneficial.exact_contract != detail::exact_rebalance_decision(beneficial))
-    ++failures;
+  const pops::mesh::Distribution<Dim> concentrated =
+      pops::mesh::Distribution<Dim>::partitioned(
+          boxes, ranks, std::vector<pops::Index<Dim>>(boxes.size(), ranks.coordinate(0)));
+  const auto beneficial = authority->decide_rebalance(1, boxes, concentrated, 10, 20, estimates,
+                                                       kLoadBalanceBudget, policy);
+  if (!beneficial.accepted || beneficial.reason != pops::RebalanceReason::NetBenefit ||
+      beneficial.moved_patches <= 0 || beneficial.exact_contract.empty())
+    return false;
+  const auto unchanged = authority->decide_rebalance(
+      1, boxes, beneficial.proposed.plan().distribution(), 10, 20, estimates, kLoadBalanceBudget,
+      policy);
+  if (unchanged.accepted || unchanged.reason != pops::RebalanceReason::MappingUnchanged ||
+      unchanged.moved_patches != 0 || unchanged.exact_contract.empty())
+    return false;
 
-  const RebalanceDecision unchanged =
-      authority.decide_rebalance(1, boxes, beneficial.proposed_mapping, ranks, topology_epoch,
-                                 materialization_generation, estimates, policy);
-  if (unchanged.accepted || unchanged.reason != RebalanceReason::MappingUnchanged ||
-      unchanged.moved_patches != 0 ||
-      unchanged.exact_contract != detail::exact_rebalance_decision(unchanged))
-    ++failures;
-
-  if (ranks > 1) {
-    auto divergent_weights = weights;
-    if (rank == 1)
-      divergent_weights.back() += 1;
+  if (ranks.size() > 1) {
     bool rejected = false;
     try {
-      (void)authority.distribute(boxes, ranks, divergent_weights);
+      const auto divergent = load_balance_authority<Dim>(
+          rank == 1 ? "test.mpi.other-sfc.semantic-identity@1"
+                    : "test.mpi.weighted-sfc.semantic-identity@1");
+      (void)divergent->prepare(boxes, ranks, kLoadBalanceBudget, weights);
     } catch (const std::invalid_argument&) {
       rejected = true;
     }
     if (!rejected)
-      ++failures;
-
-    const auto divergent_identity = prepare_load_balance_authority(
-        "space_filling_curve",
-        rank == 1 ? "test.mpi.other-sfc.semantic-identity"
-                  : "test.mpi.weighted-sfc.semantic-identity",
-        PreparedProviderOptions{"pops.amr.load-balance.space-filling-curve@1", {}});
-    rejected = false;
-    try {
-      (void)divergent_identity.distribute(boxes, ranks, weights);
-    } catch (const std::invalid_argument&) {
-      rejected = true;
-    }
-    if (!rejected)
-      ++failures;
-
-    auto invalid_weights = weights;
-    if (rank == 1)
-      invalid_weights.front() = 0;
-    rejected = false;
-    try {
-      (void)authority.distribute(boxes, ranks, invalid_weights);
-    } catch (const std::invalid_argument&) {
-      rejected = true;
-    }
-    if (!rejected)
-      ++failures;
+      return false;
   }
+  (void)local_rank;
+  return true;
+}
 
-  failures = all_reduce_sum(failures);
-  if (rank == 0)
-    std::printf("%s test_mpi_load_balance_authority (np=%d)\n", failures == 0 ? "OK" : "FAIL",
-                ranks);
-  comm_finalize();
-  return failures == 0 ? 0 : 1;
+int run_mpi_load_balance_authority(int argc, char** argv) {
+  pops::comm_init(&argc, &argv);
+  int failure = 0;
+  {
+    Kokkos::ScopeGuard guard(argc, argv);
+    try {
+      constexpr int Dim = pops::kNativeDimension;
+      const auto ranks = rank_space_for<Dim>(pops::n_ranks());
+      const auto local_rank = ranks.coordinate(static_cast<std::size_t>(pops::my_rank()));
+      const auto hierarchy_authority =
+          load_balance_authority<Dim>("test.mpi.hierarchy-sfc.semantic-identity@1");
+      if (!authority_decisions_are_exact_and_collective<Dim>(ranks, local_rank, pops::my_rank()) ||
+          !hierarchy_regrid_is_collective_and_owner_authenticated<Dim>(ranks, local_rank,
+                                                                       hierarchy_authority))
+        failure = 1;
+    } catch (const std::exception& error) {
+      std::fprintf(stderr, "rank %d exact load-balance authority proof failed: %s\n", pops::my_rank(),
+                   error.what());
+      failure = 1;
+    }
+    failure = static_cast<int>(
+        pops::all_reduce_max(static_cast<long>(failure || ::testing::Test::HasFailure())));
+    if (pops::my_rank() == 0 && failure == 0)
+      std::printf("OK test_mpi_load_balance_authority np=%d dim=%d exact-ranked\n", pops::n_ranks(),
+                  pops::kNativeDimension);
+  }
+  pops::comm_finalize();
+  return failure;
 }
 
 }  // namespace

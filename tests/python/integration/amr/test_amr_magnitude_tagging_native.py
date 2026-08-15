@@ -5,6 +5,7 @@ The negative seed distinguishes magnitude tagging from ordinary ``Above``:
 fine level through the same prepared Kokkos tagging program used by bound AMR
 simulations.
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -54,7 +55,7 @@ def _resolved_leaf(node_type):
     return graph, bound_threshold, indicator.qualified_id
 
 
-def _install_state_transfer_routes(simulation, subject):
+def _install_state_transfer_routes(simulation, subject, values):
     routes = (
         ("prolongation", "conservative_linear", 2, [1]),
         ("restriction", "volume_average", 1, [0]),
@@ -75,7 +76,21 @@ def _install_state_transfer_routes(simulation, subject):
             ghost_depth * 2,
             [2, 2],
         )
-    simulation._s._bind_bootstrap_block_subject(subject, "tracer")
+    simulation._s._install_bootstrap_subjects(
+        [
+            {
+                "schema_version": 1,
+                "subject_identity": subject,
+                "block": "tracer",
+                "space": "cell",
+                "centering": "cell",
+                "payload": {
+                    "kind": "discrete_array",
+                    "values": np.ascontiguousarray(values[np.newaxis, ...]),
+                },
+            }
+        ]
+    )
 
 
 def _native_hierarchy(node_type):
@@ -110,9 +125,8 @@ def _native_hierarchy(node_type):
         clock_identity="case::native-magnitude-tagging-clock",
     )
     values = np.zeros((N, N), dtype=np.float64)
-    values[N // 2 - 2:N // 2 + 2, N // 2 - 2:N // 2 + 2] = -1.0
-    simulation.set_density("tracer", values)
-    _install_state_transfer_routes(simulation, subject)
+    values[N // 2 - 2 : N // 2 + 2, N // 2 - 2 : N // 2 + 2] = -1.0
+    _install_state_transfer_routes(simulation, subject, values)
     simulation._s._begin_bootstrap_plan()
     created = bool(simulation._s._bootstrap_next_level())
     simulation._s._commit_bootstrap_level()

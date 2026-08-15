@@ -10,6 +10,7 @@
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
 #include <pops/numerics/elliptic/interface/field_nonlinear.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
+#include <pops/numerics/elliptic/amr/composite_fac_poisson.hpp>
 #include <pops/numerics/elliptic/mg/composite_fac_poisson.hpp>
 #include <pops/runtime/export.hpp>
 
@@ -25,16 +26,24 @@ namespace pops::runtime::amr {
 
 enum class ExactFieldHierarchyMode : unsigned char { level_local = 0, composite = 1 };
 
+/// The composite route is part of the exact prepared request: a partitioned hierarchy is never
+/// silently rebuilt through the replicated implementation.
+enum class ExactFieldCompositeRoute : unsigned char {
+  partitioned = 0,
+  replicated = 1,
+};
+
 template <int Dim>
 struct ExactAmrFieldSolverBuildRequest {
   static_assert(Dim >= 1 && Dim <= 3,
                 "ExactAmrFieldSolverBuildRequest only supports dimensions 1, 2, and 3");
 
   static constexpr int dimension = Dim;
-  using hierarchy_type = elliptic::mg::CompositeFacBuildRequest<Dim>;
+  using hierarchy_type = elliptic::amr::CompositeFacBuildRequest<Dim>;
 
   hierarchy_type hierarchy;
   ExactFieldHierarchyMode mode = ExactFieldHierarchyMode::level_local;
+  ExactFieldCompositeRoute composite_route = ExactFieldCompositeRoute::partitioned;
   PreparedProviderOptions provider_options;
   Real reaction = Real(0);
   std::string use_contract;
@@ -49,15 +58,17 @@ std::string make_exact_amr_field_solver_contract(
         "exact AMR field solver contract requires provider, use, and spatial identities");
   ExactContractBuilder contract;
   contract.text("pops.amr.exact-field-solver")
-      .scalar(std::uint32_t{3})
+      .scalar(std::uint32_t{4})
       .scalar(std::int32_t{Dim})
       .text(provider_identity)
       .scalar(request.mode)
+      .scalar(request.composite_route)
       .text(request.use_contract)
       .bytes(request.spatial_contract)
       .bytes(request.provider_options.exact_contract())
       .scalar(request.reaction)
-      .bytes(elliptic::mg::detail::fac_hierarchy_contract(request.hierarchy));
+      .bytes(elliptic::amr::fac_detail::exact_contract(
+          request.hierarchy, CompositeFacOptions{}, request.reaction));
   return std::move(contract).release();
 }
 
@@ -95,7 +106,7 @@ class ExactAmrFieldSolverProvider {
 
   virtual ~ExactAmrFieldSolverProvider() = default;
   virtual std::string_view identity() const noexcept = 0;
-  virtual std::uint64_t interface_version() const noexcept { return 3; }
+  virtual std::uint64_t interface_version() const noexcept { return 4; }
   virtual std::string_view collective_contract() const noexcept = 0;
   virtual PreparedProviderSupport supports(const request_type& request) const noexcept = 0;
   virtual std::string expected_prepared_contract(const request_type& request) const = 0;

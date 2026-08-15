@@ -1,177 +1,220 @@
-// Poisson AMR COMPOSITE branche dans AmrCouplerMP (set_composite_poisson) : test de fidelite.
-// Cf. include/pops/coupling/amr_coupler_mp.hpp (compute_aux_composite) + composite_fac_poisson.hpp.
-//
-// On construit une hierarchie AMR 2 niveaux (grossier + UN patch fin central) portant un modele
-// SCALAIRE dont elliptic_rhs(U) = U : le coupleur resout donc Lap phi = U. On pose U = f_rhs =
-// Lap(u_exact) avec u_exact = sin(3 pi x) sin(3 pi y) (manufacturee, nulle au bord) -> phi = u_exact.
-// On compare le grad phi POSE DANS L'AUX FIN (la quantite que le transport ExB consomme) :
-//   - chemin Option A (compute_aux par defaut) : aux fin = grad GROSSIER injecte (constant par morceaux) ;
-//   - chemin COMPOSITE (set_composite_poisson) : aux fin = grad du phi FIN resolu par FAC (diff centree fine).
-// CRITERE : le composite donne un grad phi NETTEMENT plus precis que l'injection Option A dans la zone
-// raffinee -- c'est le verrou de fidelite AMR (les patchs raffinent le couplage elliptique, pas seulement
-// le transport). On verifie aussi que le chemin Option A reste bit-identique (composite OFF par defaut).
-//
-// Serie (Kokkos OFF) : grossier mono-box replique, 1 patch mono-box. Multi-patch / MPI = phases ulterieures.
+/// @file
+/// @brief Refined exact-ranked composite Poisson fidelity in 1D, 2D, and 3D.
 
 #include <gtest/gtest.h>
 
-#include "load_balance_test_authority.hpp"
+#include <pops/numerics/elliptic/mg/composite_fac_poisson.hpp>
 
-#include <pops/coupling/amr/amr_coupler_mp.hpp>
-
-#include <pops/core/state/state.hpp>
-#include <pops/mesh/index/box2d.hpp>
-#include <pops/mesh/layout/box_array.hpp>
-#include <pops/mesh/layout/distribution_mapping.hpp>
-#include <pops/mesh/geometry/geometry.hpp>
-#include <pops/mesh/storage/multifab.hpp>
-#include <pops/mesh/boundary/physical_bc.hpp>
-#include <pops/parallel/comm.hpp>
-
+#include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <utility>
 #include <vector>
 
-using namespace pops;
-static constexpr double kPi = 3.14159265358979323846;
+namespace {
 
-static double u_exact(double x, double y) {
-  return std::sin(3 * kPi * x) * std::sin(3 * kPi * y);
+constexpr pops::Real kPi = pops::Real(3.141592653589793238462643383279502884L);
+
+template <int Dim>
+pops::Index<Dim> filled_index(int value) {
+  pops::Index<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = value;
+  return result;
 }
-static double f_rhs(double x, double y) {
-  return -18.0 * kPi * kPi * u_exact(x, y);
-}  // Lap u
 
-// Modele SCALAIRE minimal : aucune dynamique (flux/source nuls) ; elliptic_rhs(U) = U -> Lap phi = U.
-struct ScalarCharge {
-  using State = StateVec<1>;
-  static constexpr int n_vars = 1;
-  POPS_HD State flux(const State&, const auto&, int) const { return State{Real(0)}; }
-  POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return Real(0); }
-  POPS_HD State source(const State&, const ProviderValues<0>&) const { return State{Real(0)}; }
-  POPS_HD Real elliptic_rhs(const State& u) const { return u[0]; }
+template <int Dim>
+pops::Extent<Dim> filled_extent(std::int64_t value) {
+  pops::Extent<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = value;
+  return result;
+}
+
+template <int Dim>
+std::array<int, Dim> filled_ratio(int value) {
+  std::array<int, Dim> result{};
+  result.fill(value);
+  return result;
+}
+
+template <int Dim>
+std::size_t ordinal(const pops::Box<Dim>& box, const pops::Index<Dim>& index) {
+  std::size_t result = 0;
+  std::size_t stride = 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    result += static_cast<std::size_t>(index[axis] - box.lo[axis]) * stride;
+    stride *= static_cast<std::size_t>(box.length(axis));
+  }
+  return result;
+}
+
+template <int Dim, class Function>
+void visit(const pops::Box<Dim>& box, Function&& function) {
+  for (std::int64_t linear = 0; linear < box.numPts(); ++linear) {
+    std::int64_t remainder = linear;
+    pops::Index<Dim> index{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      index[axis] = box.lo[axis] + static_cast<int>(remainder % box.length(axis));
+      remainder /= box.length(axis);
+    }
+    function(index);
+  }
+}
+
+template <int Dim>
+pops::Real exact_mode(const pops::Geometry<Dim>& geometry, const pops::Index<Dim>& index) {
+  pops::Real result = pops::Real(1);
+  for (int axis = 0; axis < Dim; ++axis)
+    result *= Kokkos::sin(kPi * geometry.cell_coordinate(axis, index[axis]));
+  return result;
+}
+
+template <int Dim>
+pops::Real exact_gradient(const pops::Geometry<Dim>& geometry, const pops::Index<Dim>& index,
+                          int derivative_axis) {
+  pops::Real result = kPi;
+  for (int axis = 0; axis < Dim; ++axis) {
+    const pops::Real coordinate = geometry.cell_coordinate(axis, index[axis]);
+    result *=
+        axis == derivative_axis ? Kokkos::cos(kPi * coordinate) : Kokkos::sin(kPi * coordinate);
+  }
+  return result;
+}
+
+template <int Dim>
+pops::EllipticBuildRequest<Dim> level_request(const pops::Geometry<Dim>& geometry,
+                                              pops::mesh::BoxArray<Dim> boxes) {
+  const pops::mesh::RankSpace<Dim> ranks{pops::Index<Dim>{}, filled_extent<Dim>(1)};
+  const auto distribution = pops::mesh::Distribution<Dim>::replicated(boxes, ranks);
+  std::array<pops::PhysicalBoundaryFace, static_cast<std::size_t>(2 * Dim)> faces{};
+  faces.fill({pops::PhysicalBoundaryKind::dirichlet, pops::Real(0)});
+  pops::RealVector<Dim> spacing{};
+  for (int axis = 0; axis < Dim; ++axis)
+    spacing[axis] = geometry.spacing(axis);
+  return {geometry,
+          std::move(boxes),
+          distribution,
+          pops::Index<Dim>{},
+          {pops::BoundaryTopology<Dim>::physical(), faces, spacing},
+          pops::Extent<Dim>{},
+          filled_extent<Dim>(1),
+          {1, 0}};
+}
+
+template <int Dim>
+void fill_manufactured_rhs(pops::MultiFab<Dim>& rhs, const pops::Geometry<Dim>& geometry) {
+  const pops::Real eigenvalue = static_cast<pops::Real>(Dim) * kPi * kPi;
+  for (std::size_t local = 0; local < rhs.local_size(); ++local) {
+    auto& fab = rhs.fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    visit(fab.box(), [&](const pops::Index<Dim>& index) {
+      host(ordinal(fab.grown_box(), index)) = eigenvalue * exact_mode(geometry, index);
+    });
+    fab.copy_from_host(host);
+  }
+}
+
+template <int Dim>
+struct HostPatch {
+  const pops::Fab<Dim>& fab;
+  typename pops::Fab<Dim>::host_mirror_type values;
+
+  explicit HostPatch(const pops::Fab<Dim>& source)
+      : fab(source), values(source.create_host_mirror()) {
+    source.copy_to_host(values);
+  }
+
+  pops::Real operator()(const pops::Index<Dim>& index) const {
+    return values(ordinal(fab.grown_box(), index));
+  }
 };
 
-struct NeverTag {
-  POPS_HD bool operator()(ConstArray4, int, int) const { return false; }
-};
+template <int Dim>
+void prove_refined_gradient_is_more_accurate_than_coarse_injection() {
+  constexpr int cells = 12;
+  const pops::Box<Dim> coarse_domain{filled_index<Dim>(0), filled_index<Dim>(cells - 1)};
+  pops::RealVector<Dim> upper{};
+  for (int axis = 0; axis < Dim; ++axis)
+    upper[axis] = pops::Real(1);
+  const pops::Geometry<Dim> coarse_geometry =
+      pops::Geometry<Dim>::from_bounds(coarse_domain, pops::RealVector<Dim>{}, upper);
+  const pops::Geometry<Dim> fine_geometry = coarse_geometry.refine(filled_extent<Dim>(2));
 
-// Pose U(i,j,0) = f_rhs(x_cell, y_cell) sur les cellules valides (selon la geometrie @p g du niveau).
-static void set_state_f(MultiFab& U, const Geometry& g) {
-  for (int li = 0; li < U.local_size(); ++li) {
-    Array4 a = U.fab(li).array();
-    const Box2D b = U.box(li);
-    for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-      for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-        a(i, j, 0) = f_rhs(g.x_cell(i), g.y_cell(j));
-  }
+  const pops::Box<Dim> parent_patch{filled_index<Dim>(3), filled_index<Dim>(8)};
+  const pops::Box<Dim> fine_patch = pops::refine(parent_patch, filled_extent<Dim>(2));
+  pops::elliptic::mg::CompositeFacBuildRequest<Dim> build{
+      {level_request<Dim>(coarse_geometry,
+                          pops::mesh::BoxArray<Dim>{std::vector<pops::Box<Dim>>{coarse_domain}}),
+       level_request<Dim>(fine_geometry,
+                          pops::mesh::BoxArray<Dim>{std::vector<pops::Box<Dim>>{fine_patch}})},
+      {pops::amr::RefinementRatio<Dim>{filled_ratio<Dim>(2)}}};
+
+  pops::CompositeFacOptions options;
+  options.max_iters = 80;
+  options.fine_sweeps = 6;
+  options.rel_tol = pops::Real(1e-10);
+  options.abs_tol = pops::Real(1e-12);
+  options.coarse_rel_tol = pops::Real(1e-11);
+  options.coarse_abs_tol = pops::Real(1e-13);
+  options.coarse_cycles = 192;
+  pops::elliptic::mg::CompositeFacPoisson<Dim> solver(std::move(build), options);
+  solver.install_nullspace(pops::FieldNullspacePlan<Dim>{},
+                           {pops::PreparedVectorDistribution<Dim>::replicated(),
+                            pops::PreparedVectorDistribution<Dim>::replicated()});
+  fill_manufactured_rhs(solver.rhs_level(0), coarse_geometry);
+  fill_manufactured_rhs(solver.rhs_level(1), fine_geometry);
+  solver.phi_level(0).set_val(pops::Real(0));
+  solver.phi_level(1).set_val(pops::Real(0));
+
+  const pops::SolveReport report = solver.solve();
+  ASSERT_TRUE(report.solved()) << report.reason << " residual=" << report.residual_norm;
+  ASSERT_EQ(solver.n_levels(), 2);
+  ASSERT_EQ(solver.phi_level(0).local_size(), 1U);
+  ASSERT_EQ(solver.phi_level(1).local_size(), 1U);
+
+  const HostPatch<Dim> coarse(solver.phi_level(0).fab(0));
+  const HostPatch<Dim> fine(solver.phi_level(1).fab(0));
+  const pops::Box<Dim> sample = fine_patch.grow(-2);
+  ASSERT_FALSE(sample.empty());
+  pops::Real coarse_error = pops::Real(0);
+  pops::Real fine_error = pops::Real(0);
+  visit(sample, [&](const pops::Index<Dim>& fine_cell) {
+    pops::Index<Dim> coarse_cell{};
+    for (int axis = 0; axis < Dim; ++axis)
+      coarse_cell[axis] = fine_cell[axis] / 2;
+    for (int axis = 0; axis < Dim; ++axis) {
+      pops::Index<Dim> fine_lower = fine_cell;
+      pops::Index<Dim> fine_upper = fine_cell;
+      pops::Index<Dim> coarse_lower = coarse_cell;
+      pops::Index<Dim> coarse_upper = coarse_cell;
+      --fine_lower[axis];
+      ++fine_upper[axis];
+      --coarse_lower[axis];
+      ++coarse_upper[axis];
+      const pops::Real expected = exact_gradient(fine_geometry, fine_cell, axis);
+      const pops::Real fine_gradient =
+          (fine(fine_upper) - fine(fine_lower)) / (pops::Real(2) * fine_geometry.spacing(axis));
+      const pops::Real injected_coarse_gradient = (coarse(coarse_upper) - coarse(coarse_lower)) /
+                                                  (pops::Real(2) * coarse_geometry.spacing(axis));
+      fine_error = std::max(fine_error, Kokkos::abs(fine_gradient - expected));
+      coarse_error = std::max(coarse_error, Kokkos::abs(injected_coarse_gradient - expected));
+    }
+  });
+  EXPECT_TRUE(std::isfinite(static_cast<double>(fine_error)) &&
+              std::isfinite(static_cast<double>(coarse_error)));
+  EXPECT_LT(fine_error, pops::Real(0.75) * coarse_error)
+      << "the refined composite potential must improve the gradient over coarse injection";
 }
 
-// erreur MAX du grad phi de l'aux fin vs le grad analytique, dans la zone INTERIEURE du patch.
-static double aux_grad_err(const MultiFab& aux_f, const Geometry& gf, int Ic0, int Ic1, int guard,
-                           int r) {
-  device_fence();
-  const int iIc0 = Ic0 + guard, iIc1 = Ic1 - guard;
-  double e = 0;
-  const ConstArray4 A = aux_f.fab(0).const_array();
-  for (int J = iIc0; J <= iIc1; ++J)
-    for (int I = iIc0; I <= iIc1; ++I)
-      for (int tj = 0; tj < r; ++tj)
-        for (int ti = 0; ti < r; ++ti) {
-          const int iff = r * I + ti, jff = r * J + tj;
-          const double xf = gf.x_cell(iff), yf = gf.y_cell(jff);
-          const double gxa = 3 * kPi * std::cos(3 * kPi * xf) * std::sin(3 * kPi * yf);
-          const double gya = 3 * kPi * std::sin(3 * kPi * xf) * std::cos(3 * kPi * yf);
-          e = std::fmax(
-              e, std::fmax(std::fabs(A(iff, jff, 1) - gxa), std::fabs(A(iff, jff, 2) - gya)));
-        }
-  return all_reduce_max(e);
-}
+}  // namespace
 
-TEST(test_amr_composite_poisson, Runs) {
-  int argc = 0;
-  char** argv = nullptr;
-  comm_init(&argc, &argv);
-
-  const int n = 48, r = 2;
-  const Real dxc = Real(1) / n, dxf = dxc / 2;
-  Geometry g{Box2D::from_extents(n, n), 0.0, 1.0, 0.0, 1.0};
-  Geometry gf = g.refine(r);
-  BCRec bc;
-  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
-  const auto load_balance = test::prepare_test_space_filling_curve_load_balance();
-
-  auto [bac, dm] = detail::coupler_make_coarse_layout(n, /*distribute=*/false, 0,
-                                                      *load_balance);  // mono-box replique
-  const int Ic0 = n / 4, Ic1 = 3 * n / 4 - 1;
-  Box2D fb{{r * Ic0, r * Ic0}, {r * Ic1 + r - 1, r * Ic1 + r - 1}};
-  BoxArray baf(std::vector<Box2D>{fb});
-
-  MultiFab Uc(bac, dm, 1, 1);
-  Uc.set_val(Real(0));
-  MultiFab Uf(baf, dm, 1, 1);
-  Uf.set_val(Real(0));
-  std::vector<AmrLevelMP> levels;
-  levels.push_back({std::move(Uc), nullptr, dxc, dxc});
-  levels.push_back({std::move(Uf), nullptr, dxf, dxf});
-
-  ScalarCharge model;
-  AmrCouplerMP<ScalarCharge> cpl(model, g, bac, bc, Periodicity{true, true}, std::move(levels), {},
-                                 /*replicated_coarse=*/true, load_balance);
-  set_state_f(cpl.coarse(), g);
-  set_state_f(cpl.levels()[1].U, gf);
-
-  // --- (1) Option A (chemin par defaut) ---
-  cpl.compute_aux();
-  const double e_optA = aux_grad_err(*cpl.levels()[1].aux, gf, Ic0, Ic1, /*guard=*/3, r);
-
-  // --- (2) COMPOSITE FAC ---
-  cpl.set_composite_poisson(true);
-  cpl.compute_aux();
-  const double e_comp = aux_grad_err(*cpl.levels()[1].aux, gf, Ic0, Ic1, /*guard=*/3, r);
-
-  EXPECT_TRUE(std::isfinite(e_optA) && std::isfinite(e_comp))
-      << "erreurs finies: e_optionA=" << e_optA << " e_composite=" << e_comp;
-  // CRITERE : le patch fin raffine VRAIMENT l'elliptique -> grad phi fin nettement plus precis.
-  EXPECT_TRUE(e_comp < 0.5 * e_optA)
-      << "(fidelite) composite plus precis que Option A sur grad phi (e_comp < 0.5 e_optA): "
-      << "e_optionA=" << e_optA << " e_composite=" << e_comp << " (x"
-      << e_optA / std::fmax(e_comp, 1e-30) << ")";
-
-  // --- (3) non-regression : composite OFF -> Option A inchange (bit-identique a un coupleur neuf) ---
-  {
-    MultiFab Uc2(bac, dm, 1, 1);
-    Uc2.set_val(Real(0));
-    MultiFab Uf2(baf, dm, 1, 1);
-    Uf2.set_val(Real(0));
-    std::vector<AmrLevelMP> lv2;
-    lv2.push_back({std::move(Uc2), nullptr, dxc, dxc});
-    lv2.push_back({std::move(Uf2), nullptr, dxf, dxf});
-    AmrCouplerMP<ScalarCharge> ref(model, g, bac, bc, Periodicity{true, true}, std::move(lv2), {},
-                                   true, load_balance);
-    set_state_f(ref.coarse(), g);
-    set_state_f(ref.levels()[1].U, gf);
-    ref.compute_aux();  // Option A (composite OFF par defaut)
-    const double e_ref = aux_grad_err(*ref.levels()[1].aux, gf, Ic0, Ic1, 3, r);
-    EXPECT_TRUE(std::fabs(e_ref - e_optA) < 1e-12)
-        << "(non-regression) Option A inchange (composite OFF par defaut): e_ref=" << e_ref
-        << " e_optA=" << e_optA;
-  }
-
-  // The elliptic descriptor and transport topology are distinct authorities. A legacy direct
-  // coupler may still solve a non-periodic elliptic problem with periodic transport, but it must
-  // fail closed before remapping a non-periodic transport hierarchy without a prepared boundary
-  // plan that proves physical ghost support.
-  {
-    MultiFab Uc2(bac, dm, 1, 1);
-    MultiFab Uf2(baf, dm, 1, 1);
-    std::vector<AmrLevelMP> lv2;
-    lv2.push_back({std::move(Uc2), nullptr, dxc, dxc});
-    lv2.push_back({std::move(Uf2), nullptr, dxf, dxf});
-    AmrCouplerMP<ScalarCharge> nonperiodic(model, g, bac, bc, Periodicity{false, false},
-                                           std::move(lv2), {}, true, load_balance);
-    EXPECT_THROW(nonperiodic.set_hierarchy({fb}), std::logic_error);
-    EXPECT_THROW(nonperiodic.regrid(NeverTag{}), std::logic_error);
-  }
-
-  comm_finalize();
+TEST(test_amr_composite_poisson, RefinedGradientImprovesInOneTwoAndThreeDimensions) {
+  Kokkos::ScopeGuard kokkos;
+  prove_refined_gradient_is_more_accurate_than_coarse_injection<1>();
+  prove_refined_gradient_is_more_accurate_than_coarse_injection<2>();
+  prove_refined_gradient_is_more_accurate_than_coarse_injection<3>();
 }

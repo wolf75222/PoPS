@@ -5,6 +5,14 @@ may declare fixed-ratio child clocks with `Program.subcycle(...)`. A value cross
 through `Program.synchronize(..., relation=...)`; `SampleAndHold()` is the first native relation.
 There is no implicit clock cast, inferred parent relation, or fallback to the macro-step counter.
 
+Python has the same single-authority boundary. Private Uniform and AMR facades, plus the public
+`RuntimeInstance` returned by `pops.bind`, resolve their installed `Program.step_strategy(...)`
+through one prepared temporal service. `FixedDt`, `AdaptiveCFL`, `ErrorControlledDt`, and
+`ExternalTimeGrid` therefore materialize one registered controller path; the facades contain no
+independent run loop or eager strategy decoder. `RuntimeInstance` adds the ConsumerGraph
+transaction around that same accepted-attempt service. Logical cadence remains the Program's
+integer clock/tick manifest, never a floating-point interval reconstructed by a facade.
+
 ```python
 fast_state = T.synchronize(
     state.n, at=TimePoint(fast), relation=SampleAndHold())
@@ -101,19 +109,21 @@ the complete attempt and leaves the accepted checkpoint unchanged.
 
 `PreparedSameLevelTransportEulerStageFluxProvider` is the first scientific consumer of this
 executor. It reuses the selected AMR block's real compiled transport closure to materialize
-`-div(F)` and the exact x/y face-flux fields, advances the conservative candidate with forward
-Euler, and accumulates four time-integrated face records per valid cell. Both state and ledger stay
+`-div(F)` and the exact `2*Dim` face-flux fields, advances the conservative candidate with forward
+Euler, and accumulates `2*Dim` time-integrated face records per valid cell. Both state and ledger stay
 in fixed attempt-local storage; the barrier commit is their sole accepted publication. The exact
 provider contract includes the block state identity, model-owned transport identity and parameters,
 limiter/Riemann route, spatial options, hierarchy/materialization identity, clock, tick scale,
 layout and distribution. A type-erased spatial closure without that builder-owned contract is
 refused rather than authenticated from a caller label.
 
-This first scientific route is deliberately bounded to a host/serial 2D hierarchy with exactly one
-block, one level, one rank-owned box, one common cell rung, frozen attempt auxiliary fields,
-built-in periodic/Foextrap transport boundaries and transport-only forward Euler. A prepared
+This scientific route is deliberately bounded to exactly one Program block and one common cell
+rung, with frozen attempt auxiliary fields, built-in periodic/Foextrap transport boundaries and
+transport-only forward Euler. Its prepared context is exact-ranked and executes distributed
+multi-box ownership collectively; one-block MPI execution and collective rollback are supported.
+Multiple Program blocks remain explicitly deferred as `multi_block_cell_local_temporal`. A prepared
 physical-boundary plan is refused until its exact executable contract can join the provider
-identity. The route also has no MPI, GPU, heterogeneous-rung interpolation, coarse/fine ledger,
+identity. The route still has no GPU, heterogeneous-rung interpolation, coarse/fine ledger,
 source-stage integration, regrid/rank-change rematerialization, diagnostic-ledger checkpoint
 persistence or performance proof.
 
@@ -127,9 +137,9 @@ schema does not persist the last interval's diagnostic face ledger, restart inva
 publication until the next accepted interval instead of exposing stale fluxes.
 
 The remaining production extensions are explicit dependencies, not capabilities inferred from this
-slice: canonical rank/box ownership and halo-stage snapshots for MPI; distributed face-ledger
-reconciliation and collective failure draining; device-resident provider storage and publication for
-GPU; temporal neighbour interpolation and subface synchronization for heterogeneous rungs;
+slice: multi-block cell-local composition; cross-rank halo-stage snapshots and distributed
+face-ledger reconciliation beyond the proved collective route; device-resident provider storage and
+publication for GPU; temporal neighbour interpolation and subface synchronization for heterogeneous rungs;
 coarse/fine space-time ledgers, reflux and local refinement ratios for multilevel AMR; exact provider
 rematerialization after regrid or rank migration; prepared source, field and physical-boundary stage
 contracts; an accepted-state schema extension if the last diagnostic ledger must survive restart;

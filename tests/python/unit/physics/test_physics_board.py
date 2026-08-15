@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from pops import model as _model
-from pops.physics import Density
+from pops.physics import Custom, Density
 from tests.python.support.physics_roles import FRAME, X_AXIS, Y_AXIS, planar_fluid_roles
 
 physics = pytest.importorskip("pops.physics")
@@ -81,6 +81,36 @@ def test_state_lowers_to_state_space():
     # Board roles lower once to the structured native token vocabulary.
     # Riemann capability lookup recognizes them (ADC-456).
     assert st.roles.get("rho") == "density"
+
+
+def test_board_preserves_exact_custom_role_labels_in_module_authority():
+    model = physics.Model("custom_board_roles")
+
+    model.state(
+        "U",
+        components=("first", "second"),
+        roles={"first": Custom("q1"), "second": Custom("q2")},
+    )
+
+    assert tuple(model.module.state_spaces()["U"].roles.values()) == ("q1", "q2")
+
+
+def test_board_rejects_inferred_and_explicit_role_collisions_atomically():
+    inferred = physics.Model("inferred_collision")
+    with pytest.raises(ValueError, match="duplicate token 'density'"):
+        inferred.state("U", components=("rho", "density"))
+    assert inferred._states == {}
+    assert inferred._dsl._m.cons_names == []
+
+    explicit = physics.Model("explicit_collision")
+    with pytest.raises(ValueError, match="collide.*'q1'"):
+        explicit.state(
+            "U",
+            components=("first", "second"),
+            roles={"first": Custom("q1"), "second": Custom("q1")},
+        )
+    assert explicit._states == {}
+    assert explicit._dsl._m.cons_names == []
 
 
 def test_state_is_unpackable_into_components():

@@ -5,14 +5,20 @@
 
 #include <pops/core/foundation/kokkos_env.hpp>
 #include <pops/mesh/execution/for_each.hpp>
+#include <pops/mesh/geometry/coordinate_map.hpp>
+#include <pops/mesh/geometry/prepared_metric_provider.hpp>
 #include <pops/numerics/spatial/embedded_boundary/cut_geometry.hpp>
+#include <pops/numerics/spatial/embedded_boundary/operator.hpp>
+#include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/runtime/system/prepared_embedded_boundary.hpp>
 
 #include <cmath>
 #include <array>
 #include <cstddef>
+#include <limits>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -22,6 +28,70 @@ struct SumField {
   pops::FieldView<const pops::Real, Dim> view;
 
   POPS_HD pops::Real operator()(const pops::Index<Dim>& index) const { return view(index); }
+};
+
+template <int Dim>
+struct FillTransportState {
+  pops::FieldView<pops::Real, Dim> state;
+
+  POPS_HD void operator()(const pops::Index<Dim>& cell) const {
+    pops::Real value = pops::Real(1);
+    for (int axis = 0; axis < Dim; ++axis)
+      value += pops::Real(0.1 * (axis + 1)) * static_cast<pops::Real>(cell[axis]);
+    state(cell) = value;
+  }
+};
+
+template <int Dim>
+struct CountCutMetricCells {
+  pops::FieldView<const pops::Real, Dim> inverse;
+
+  POPS_HD pops::Real operator()(const pops::Index<Dim>& cell) const {
+    return inverse(cell) > pops::Real(1) ? pops::Real(1) : pops::Real(0);
+  }
+};
+
+template <int Dim>
+struct CountNonFiniteValues {
+  pops::FieldView<const pops::Real, Dim> values;
+
+  POPS_HD pops::Real operator()(const pops::Index<Dim>& cell) const {
+    return Kokkos::isfinite(values(cell)) ? pops::Real(0) : pops::Real(1);
+  }
+};
+
+template <int Dim>
+struct MaximumMaskedResidual {
+  pops::FieldView<const pops::Real, Dim> residual;
+  pops::FieldView<const pops::Real, Dim> active;
+  bool select_active = false;
+
+  POPS_HD pops::Real operator()(const pops::Index<Dim>& cell) const {
+    if ((active(cell) >= pops::Real(0.5)) != select_active)
+      return pops::Real(0);
+    return Kokkos::abs(residual(cell));
+  }
+};
+
+template <int Dim>
+struct PoisonActiveInverseVolume {
+  pops::FieldView<pops::Real, Dim> inverse;
+  pops::FieldView<const pops::Real, Dim> active;
+
+  POPS_HD void operator()(const pops::Index<Dim>& cell) const {
+    if (active(cell) >= pops::Real(0.5))
+      inverse(cell) = std::numeric_limits<pops::Real>::quiet_NaN();
+  }
+};
+
+template <int Dim>
+struct MaximumSentinelDifference {
+  pops::FieldView<const pops::Real, Dim> values;
+  pops::Real sentinel;
+
+  POPS_HD pops::Real operator()(const pops::Index<Dim>& cell) const {
+    return Kokkos::abs(values(cell) - sentinel);
+  }
 };
 
 template <int Dim>
@@ -277,6 +347,98 @@ TEST(PreparedEmbeddedBoundaryND, NonFiniteReplacementRollsBackAcceptedOwner) {
                std::domain_error);
   EXPECT_EQ(accepted.get(), original);
   EXPECT_EQ(accepted->digest(), digest);
+}
+
+template <int Dim>
+void prove_prepared_level_set_metric_operator_composition() {
+  auto lane = pops::ExecutionLane::world("test/prepared-eb-metric-operator");
+  if (lane.size() != 1)
+    GTEST_SKIP() << "serial exact-rank execution proof";
+
+  Fixture<Dim> fixture;
+  const auto prepared = pops::runtime::system::prepare_embedded_boundary_geometry_collectively(
+      {"x", "constant", "sub"}, {0.0, 0.53, 0.0}, fixture.geometry,
+      pops::BoundaryTopology<Dim>::physical(), fixture.prototype,
+      pops::runtime::system::PreparedEmbeddedBoundaryMode::cut_cell, pops::EbThresholds{}, 7, lane);
+
+  pops::RealVector<Dim> lengths{};
+  pops::RealVector<Dim> velocity{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    lengths[axis] = fixture.geometry.upper()[axis] - fixture.geometry.lower()[axis];
+    velocity[axis] = axis == 0 ? pops::Real(0.25) : pops::Real(0);
+  }
+  const auto metric = pops::prepare_metric_provider(
+      fixture.domain, pops::CartesianCoordinateMap<Dim>::make(fixture.geometry.lower(), lengths));
+  const auto model = pops::nd::ScalarAdvection<Dim>::prepare(velocity);
+  const auto embedded = pops::nd::prepare_embedded_boundary_operator(model, metric);
+
+  pops::MultiFab<Dim> state(fixture.layout, fixture.distribution, pops::Index<Dim>{}, 1,
+                            filled_extent<Dim>(1));
+  pops::MultiFab<Dim> residual(fixture.layout, fixture.distribution, pops::Index<Dim>{}, 1,
+                               pops::Extent<Dim>{});
+  pops::for_each_cell(state.fab(0).grown_box(), FillTransportState<Dim>{state.fab(0).view()});
+  embedded.assemble_residual(state, *prepared, residual);
+
+  const auto active = std::as_const(prepared->active_mask().fab(0)).view();
+  const auto inverse = std::as_const(prepared->inverse_volume_fraction().fab(0)).view();
+  const auto result = std::as_const(residual.fab(0)).view();
+  EXPECT_GT(pops::for_each_cell_reduce_sum(fixture.domain, CountCutMetricCells<Dim>{inverse}),
+            pops::Real(0));
+  EXPECT_EQ(pops::for_each_cell_reduce_sum(fixture.domain, CountNonFiniteValues<Dim>{result}),
+            pops::Real(0));
+  EXPECT_EQ(pops::for_each_cell_reduce_max(fixture.domain,
+                                           MaximumMaskedResidual<Dim>{result, active, false}),
+            pops::Real(0));
+  EXPECT_GT(pops::for_each_cell_reduce_max(fixture.domain,
+                                           MaximumMaskedResidual<Dim>{result, active, true}),
+            pops::Real(0));
+
+  pops::MultiFab<Dim> invalid_inverse(prepared->inverse_volume_fraction());
+  pops::for_each_cell(fixture.domain,
+                      PoisonActiveInverseVolume<Dim>{invalid_inverse.fab(0).view(), active});
+  constexpr pops::Real sentinel = pops::Real(23);
+  residual.set_val(sentinel);
+  EXPECT_THROW(
+      embedded.assemble_residual(state, prepared->active_mask(), invalid_inverse, residual),
+      std::runtime_error);
+  EXPECT_EQ(pops::for_each_cell_reduce_max(
+                fixture.domain,
+                MaximumSentinelDifference<Dim>{std::as_const(residual.fab(0)).view(), sentinel}),
+            pops::Real(0));
+}
+
+TEST(PreparedEmbeddedBoundaryND,
+     AnalyticLevelSetFeedsCartesianCutMetricOperatorTransactionInOneTwoAndThreeDimensions) {
+  prove_prepared_level_set_metric_operator_composition<1>();
+  prove_prepared_level_set_metric_operator_composition<2>();
+  prove_prepared_level_set_metric_operator_composition<3>();
+}
+
+TEST(PreparedEmbeddedBoundaryND, DistributedResidualWithoutExecutionLaneFailsBeforePublication) {
+  constexpr int Dim = 1;
+  const auto domain = pops::Box<Dim>::from_extents(filled_extent<Dim>(4));
+  const pops::mesh::BoxArray<Dim> layout{std::vector<pops::Box<Dim>>{domain}};
+  const pops::mesh::RankSpace<Dim> ranks{pops::Index<Dim>{}, filled_extent<Dim>(2)};
+  const auto distribution = pops::mesh::Distribution<Dim>::replicated(layout, ranks);
+  pops::MultiFab<Dim> state{layout, distribution, pops::Index<Dim>{}, 1, filled_extent<Dim>(1)};
+  pops::MultiFab<Dim> active{layout, distribution, pops::Index<Dim>{}, 1, filled_extent<Dim>(1)};
+  pops::MultiFab<Dim> inverse{layout, distribution, pops::Index<Dim>{}, 1, pops::Extent<Dim>{}};
+  pops::MultiFab<Dim> residual{layout, distribution, pops::Index<Dim>{}, 1, pops::Extent<Dim>{}};
+  state.set_val(pops::Real(1));
+  active.set_val(pops::Real(1));
+  inverse.set_val(pops::Real(1));
+  constexpr pops::Real sentinel = pops::Real(31);
+  residual.set_val(sentinel);
+
+  const auto metric = pops::prepare_metric_provider(
+      domain, pops::CartesianCoordinateMap<Dim>::make(filled_real<Dim>(0), filled_real<Dim>(1)));
+  const auto model = pops::nd::ScalarAdvection<Dim>::prepare(filled_real<Dim>(0.25));
+  const auto embedded = pops::nd::prepare_embedded_boundary_operator(model, metric);
+  EXPECT_THROW(embedded.assemble_residual(state, active, inverse, residual), std::logic_error);
+  EXPECT_EQ(
+      pops::for_each_cell_reduce_max(
+          domain, MaximumSentinelDifference<Dim>{std::as_const(residual.fab(0)).view(), sentinel}),
+      pops::Real(0));
 }
 
 TEST(PreparedEmbeddedBoundaryND, RankDivergentRequestFailsBeforePublication) {

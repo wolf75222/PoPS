@@ -8,12 +8,21 @@
 
 #include <Kokkos_MathematicalFunctions.hpp>
 
+#include <concepts>
 #include <cstddef>
 #include <limits>
 #include <stdexcept>
 #include <utility>
 
 namespace pops::nd {
+
+template <int Dim, class MemorySpace, class Owner>
+concept PreparedEmbeddedBoundaryFieldOwner = requires(const Owner& owner) {
+  Owner::dimension;
+  requires Owner::dimension == Dim;
+  { owner.active_mask() } -> std::same_as<const MultiFab<Dim, MemorySpace>&>;
+  { owner.inverse_volume_fraction() } -> std::same_as<const MultiFab<Dim, MemorySpace>&>;
+};
 
 template <int Dim>
 struct EmbeddedBoundaryCapabilities {
@@ -76,7 +85,8 @@ class PreparedEmbeddedBoundaryMetric {
 
   template <class MemorySpace>
   static PreparedEmbeddedBoundaryMetric prepare(
-      BaseMetric base, const Fab<Dim, MemorySpace>& inverse_volume_fraction, const Box<Dim>& cells) {
+      BaseMetric base, const Fab<Dim, MemorySpace>& inverse_volume_fraction,
+      const Box<Dim>& cells) {
     if (inverse_volume_fraction.ncomp() != 1 || !(inverse_volume_fraction.box() == cells))
       throw std::invalid_argument(
           "prepared embedded-boundary inverse-volume field does not match the patch");
@@ -116,7 +126,8 @@ class PreparedEmbeddedBoundaryOperator {
         positivity_floor_(positivity_floor) {}
 
   template <class MemorySpace>
-  void assemble_residual(const Fab<Dim, MemorySpace>& state, const Fab<Dim, MemorySpace>& active_cells,
+  void assemble_residual(const Fab<Dim, MemorySpace>& state,
+                         const Fab<Dim, MemorySpace>& active_cells,
                          const Fab<Dim, MemorySpace>& inverse_volume_fraction,
                          Fab<Dim, MemorySpace>& residual,
                          BoundaryFaceOmission<Dim> omission = {}) const
@@ -131,8 +142,7 @@ class PreparedEmbeddedBoundaryOperator {
   }
 
   template <class MemorySpace>
-  void assemble_residual(const Fab<Dim, MemorySpace>& state,
-                         const Fab<Dim, MemorySpace>& providers,
+  void assemble_residual(const Fab<Dim, MemorySpace>& state, const Fab<Dim, MemorySpace>& providers,
                          const Fab<Dim, MemorySpace>& active_cells,
                          const Fab<Dim, MemorySpace>& inverse_volume_fraction,
                          Fab<Dim, MemorySpace>& residual,
@@ -170,6 +180,7 @@ class PreparedEmbeddedBoundaryOperator {
                          BoundaryFaceOmission<Dim> omission = {}) const
     requires(flux_provider_count<Model> == 0)
   {
+    require_local_publication_(state);
     masked_operator_detail::require_same_multifab_layout(
         state, active_cells, "prepared EB state and active-mask layouts differ");
     masked_operator_detail::require_same_multifab_layout(
@@ -182,7 +193,7 @@ class PreparedEmbeddedBoundaryOperator {
       throw std::invalid_argument("prepared EB MultiFab components differ or alias");
 
     MultiFab<Dim, MemorySpace> candidate(residual.layout(), residual.distribution(),
-                                       residual.local_rank(), Model::n_vars, residual.ghosts());
+                                         residual.local_rank(), Model::n_vars, residual.ghosts());
     for (std::size_t local = 0; local < state.local_size(); ++local)
       assemble_residual(state.fab(local), active_cells.fab(local),
                         inverse_volume_fraction.fab(local), candidate.fab(local), omission);
@@ -201,6 +212,7 @@ class PreparedEmbeddedBoundaryOperator {
                          const MultiFab<Dim, MemorySpace>& inverse_volume_fraction,
                          MultiFab<Dim, MemorySpace>& residual,
                          BoundaryFaceOmission<Dim> omission = {}) const {
+    require_local_publication_(state);
     masked_operator_detail::require_same_multifab_layout(
         state, providers, "prepared EB state and provider layouts differ");
     masked_operator_detail::require_same_multifab_layout(
@@ -215,7 +227,7 @@ class PreparedEmbeddedBoundaryOperator {
       throw std::invalid_argument("prepared EB MultiFab components differ or alias");
 
     MultiFab<Dim, MemorySpace> candidate(residual.layout(), residual.distribution(),
-                                       residual.local_rank(), Model::n_vars, residual.ghosts());
+                                         residual.local_rank(), Model::n_vars, residual.ghosts());
     for (std::size_t local = 0; local < state.local_size(); ++local)
       assemble_residual(state.fab(local), providers.fab(local), active_cells.fab(local),
                         inverse_volume_fraction.fab(local), candidate.fab(local), omission);
@@ -227,7 +239,24 @@ class PreparedEmbeddedBoundaryOperator {
     device_fence();
   }
 
+  template <class MemorySpace, class Owner>
+    requires(flux_provider_count<Model> == 0 &&
+             PreparedEmbeddedBoundaryFieldOwner<Dim, MemorySpace, Owner>)
+  void assemble_residual(const MultiFab<Dim, MemorySpace>& state, const Owner& embedded,
+                         MultiFab<Dim, MemorySpace>& residual,
+                         BoundaryFaceOmission<Dim> omission = {}) const {
+    assemble_residual(state, embedded.active_mask(), embedded.inverse_volume_fraction(), residual,
+                      omission);
+  }
+
  private:
+  template <class MemorySpace>
+  static void require_local_publication_(const MultiFab<Dim, MemorySpace>& state) {
+    if (state.rank_space().size() != 1)
+      throw std::logic_error(
+          "distributed prepared EB residual publication requires an explicit ExecutionLane route");
+  }
+
   Model model_;
   BaseMetric metric_;
   Reconstruction reconstruction_;

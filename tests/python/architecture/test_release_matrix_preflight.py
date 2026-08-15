@@ -19,6 +19,7 @@ PROOF_SOURCES = (
     Path(".github/workflows/ci.yml"),
     Path(".github/workflows/wheels.yml"),
     Path(".github/workflows/release.yml"),
+    Path("scripts/assemble_native_variant_wheel.py"),
 )
 
 
@@ -99,6 +100,18 @@ def test_release_matrix_preflight_refuses_an_unimplemented_declared_lane(tmp_pat
     errors = contract.release_matrix_source_errors(tmp_path)
 
     assert any("has no executable release proof" in error for error in errors)
+
+
+def test_release_matrix_preflight_refuses_native_dimension_drift(tmp_path):
+    _copy_proof_sources(tmp_path)
+    path = tmp_path / "schemas" / "release_contract.v2.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["supported_matrix"]["native_dimensions"] = [2]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    errors = contract.release_matrix_source_errors(tmp_path)
+
+    assert errors == ["supported native dimensions must be exactly [1, 2, 3]"]
 
 
 def test_both_release_entrypoints_run_matrix_preflight_before_the_build():

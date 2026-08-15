@@ -220,6 +220,9 @@ class Spatial:
                     "external_abi_key": self.external_flux_abi_key,
                     "external_native_abi_key": self.external_flux_native_abi_key,
                     "external_model_identity": self.external_flux_model_identity,
+                    "external_dimension": self.external_flux_dimension,
+                    "external_n_vars": self.external_flux_n_vars,
+                    "external_provider_count": self.external_flux_provider_count,
                 } if self.external_flux_id is not None else {}),
             },
             "variables": str(self.recon),
@@ -305,6 +308,9 @@ class Spatial:
         self.external_flux_abi_key = None
         self.external_flux_native_abi_key = None
         self.external_flux_model_identity = None
+        self.external_flux_dimension = None
+        self.external_flux_n_vars = None
+        self.external_flux_provider_count = None
         self.external_flux_supported_layouts = ()
         if flux is not None and not isinstance(flux, str):
             if getattr(flux, "scheme", None) == "user":
@@ -314,22 +320,40 @@ class Spatial:
                     "library_path", "library_sha256", "abi_version", "abi_key", "native_abi_key",
                     "supported_layouts",
                     "model_identity",
+                    "dimension", "n_vars", "provider_count",
                 }
                 if not isinstance(options, dict) or set(options) != required:
                     raise ValueError(
                         "external Riemann descriptor has no authenticated loaded-library authority; "
                         "create it with pops.lib.load_cpp_library(...) then riemann.User(id)"
                     )
-                if options["abi_version"] != 2 \
-                        or options["abi_key"] != \
-                        "pops.external-riemann/v2;scalar=f64;index=i32;periodicity=xy":
+                dimension = options["dimension"]
+                n_vars = options["n_vars"]
+                provider_count = options["provider_count"]
+                expected_abi_key = (
+                    "pops.external-riemann/v4;scalar=f64;index=i32;periodicity=nd;"
+                    "providers=qualified;dim=%s" % dimension
+                )
+                if options["abi_version"] != 4 or options["abi_key"] != expected_abi_key:
                     raise ValueError("external Riemann descriptor carries an incompatible ABI")
+                if (
+                    type(dimension) is not int or dimension not in (1, 2, 3)
+                    or type(n_vars) is not int or n_vars < 1
+                    or type(provider_count) is not int or provider_count < 0
+                ):
+                    raise ValueError(
+                        "external Riemann descriptor carries an invalid dimension/model/provider "
+                        "contract"
+                    )
                 self.external_flux_library_path = options["library_path"]
                 self.external_flux_library_sha256 = options["library_sha256"]
                 self.external_flux_abi_key = options["abi_key"]
                 self.external_flux_native_abi_key = options["native_abi_key"]
                 self.external_flux_supported_layouts = tuple(options["supported_layouts"])
                 self.external_flux_model_identity = options["model_identity"]
+                self.external_flux_dimension = dimension
+                self.external_flux_n_vars = n_vars
+                self.external_flux_provider_count = provider_count
         # ADC-645 ride-along (mirror of waves_provider): a reconstruction descriptor built with
         # WENO5(epsilon=...) carries the WENO-Z regulariser in options["epsilon"]. None (the default)
         # keeps the native kWenoEpsilon -> nothing forwarded, byte-identical.

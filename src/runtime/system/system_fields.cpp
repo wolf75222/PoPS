@@ -364,12 +364,27 @@ std::optional<PreparedBoundaryContext<Dim>> prepare_boundary_context(
   return prepared;
 }
 
-template <int Dim, class Implementation>
+template <int Dim, class Implementation, class PrepareStates>
 SolveReport solve_field_candidate(
     Implementation& implementation, const std::string& provider_slot,
     const std::shared_ptr<runtime::system::ExactNamedField<Dim>>& field,
-    std::vector<const MultiFab<Dim>*> states) {
-  auto storage = prepare_boundary_context<Dim>(implementation, provider_slot, states);
+    PrepareStates&& prepare_states) {
+  std::vector<const MultiFab<Dim>*> states;
+  std::optional<PreparedBoundaryContext<Dim>> storage;
+  std::exception_ptr preparation_error;
+  try {
+    states = std::forward<PrepareStates>(prepare_states)();
+    storage = prepare_boundary_context<Dim>(implementation, provider_slot, states);
+  } catch (...) {
+    preparation_error = std::current_exception();
+  }
+  // The exact field backend assembles the RHS and then enters its solver collectives.  Selection
+  // and boundary preparation are rank-local and may reject first, so agree on that outcome before
+  // handing any rank to the backend; otherwise a peer can strand in RHS/FAC after another rank has
+  // escaped through the outer SolveOutcome error path.
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      preparation_error, nullptr,
+      "System field solve preparation failed collectively before RHS assembly");
   std::optional<FieldBoundaryExecutionContext<Dim>> context;
   if (storage)
     context = storage->view();
@@ -459,8 +474,13 @@ std::vector<double> System<Dim>::get_primitive_state(const std::string& name) {
   const std::vector<double> conservative = gather_global(block.U, p_->dom, block.ncomp);
   std::vector<double> primitive;
   const UniformRecoveryBatchReport report = block.batch_cons_to_prim(conservative, primitive);
-  if (!report.publication_permitted())
-    throw std::runtime_error("System::get_primitive_state batch variable recovery failed");
+  if (!report.publication_permitted()) {
+    const RecoveryReport& recovery = report.recovery;
+    throw std::runtime_error(
+        std::string("System::get_primitive_state batch variable recovery failed: ") +
+        "recovery_method_kind=" + recovery_method_kind_name(recovery.last_method_kind) +
+        " last_method_index=" + std::to_string(recovery.last_method));
+  }
   return primitive;
 }
 
@@ -495,20 +515,22 @@ template <int Dim>
 SolveReport System<Dim>::solve_fields_in_place_() {
   const auto field = prepare_default_field<Dim>(*p_);
   p_->active_field_ = field;
-  return solve_field_candidate<Dim>(*p_, field->identity(), field, select_states<Dim>(p_->sp, {}));
+  return solve_field_candidate<Dim>(*p_, field->identity(), field,
+                                    [this] { return select_states<Dim>(p_->sp, {}); });
 }
 
 template <int Dim>
 SolveReport System<Dim>::solve_fields_from_state_in_place_(int block_index,
                                                            const MultiFab<Dim>& stage) {
-  if (block_index < 0 || block_index >= static_cast<int>(p_->sp.size()))
-    throw std::out_of_range("System field stage block index is outside the registry");
-  std::vector<const MultiFab<Dim>*> overrides(p_->sp.size(), nullptr);
-  overrides[static_cast<std::size_t>(block_index)] = &stage;
   const auto field = prepare_default_field<Dim>(*p_);
   p_->active_field_ = field;
-  return solve_field_candidate<Dim>(*p_, field->identity(), field,
-                                    select_states<Dim>(p_->sp, overrides));
+  return solve_field_candidate<Dim>(*p_, field->identity(), field, [this, block_index, &stage] {
+    if (block_index < 0 || block_index >= static_cast<int>(p_->sp.size()))
+      throw std::out_of_range("System field stage block index is outside the registry");
+    std::vector<const MultiFab<Dim>*> overrides(p_->sp.size(), nullptr);
+    overrides[static_cast<std::size_t>(block_index)] = &stage;
+    return select_states<Dim>(p_->sp, overrides);
+  });
 }
 
 template <int Dim>
@@ -527,18 +549,26 @@ SolveReport System<Dim>::solve_fields_from_blocks_in_place_(
   const auto field = prepare_default_field<Dim>(*p_);
   p_->active_field_ = field;
   return solve_field_candidate<Dim>(*p_, field->identity(), field,
-                                    select_states<Dim>(p_->sp, stages));
+                                    [this, &stages] { return select_states<Dim>(p_->sp, stages); });
 }
 
 template <int Dim>
 SolveReport System<Dim>::solve_fields_from_state_in_place_(const std::string& field,
                                                            int block_index,
                                                            const MultiFab<Dim>& stage) {
-  if (block_index < 0 || block_index >= static_cast<int>(p_->sp.size()))
-    throw std::out_of_range("System named-field block index is outside the registry");
-  std::vector<const MultiFab<Dim>*> stages(p_->sp.size(), nullptr);
-  stages[static_cast<std::size_t>(block_index)] = &stage;
-  return solve_fields_from_blocks_in_place_(field, stages);
+  const std::string provider_slot = p_->resolve_named_field_slot(field);
+  const auto found = p_->named_fields_.find(provider_slot);
+  if (found == p_->named_fields_.end())
+    throw std::out_of_range("System named elliptic field is not registered: " + field);
+  p_->active_field_ = found->second;
+  return solve_field_candidate<Dim>(*p_, provider_slot, found->second,
+                                    [this, block_index, &stage] {
+    if (block_index < 0 || block_index >= static_cast<int>(p_->sp.size()))
+      throw std::out_of_range("System named-field block index is outside the registry");
+    std::vector<const MultiFab<Dim>*> stages(p_->sp.size(), nullptr);
+    stages[static_cast<std::size_t>(block_index)] = &stage;
+    return select_states<Dim>(p_->sp, stages);
+  });
 }
 
 template <int Dim>
@@ -550,7 +580,7 @@ SolveReport System<Dim>::solve_fields_from_blocks_in_place_(
     throw std::out_of_range("System named elliptic field is not registered: " + field);
   p_->active_field_ = found->second;
   return solve_field_candidate<Dim>(*p_, provider_slot, found->second,
-                                    select_states<Dim>(p_->sp, stages));
+                                    [this, &stages] { return select_states<Dim>(p_->sp, stages); });
 }
 
 template <int Dim>

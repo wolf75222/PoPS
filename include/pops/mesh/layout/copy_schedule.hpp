@@ -104,17 +104,16 @@ class CopySchedule {
       throw std::length_error("pops::CopySchedule patch-pair budget exceeded");
 
     mesh::ExactCellCount covered;
-    std::vector<job_type> jobs;
     for (std::size_t destination = 0; destination < destination_layout_.size(); ++destination) {
       for (std::size_t source = 0; source < source_layout_.size(); ++source) {
         const Box<Dim> region = destination_layout_[destination].intersect(source_layout_[source]);
         if (region.empty())
           continue;
-        if (jobs.size() >= budget.jobs)
+        if (canonical_.size() >= budget.jobs)
           throw std::length_error("pops::CopySchedule job budget exceeded");
         if (!covered.add(mesh::ExactCellCount::from_box(region)))
           throw std::overflow_error("pops::CopySchedule covered-cell count overflow");
-        jobs.push_back(job_type{source, destination, region});
+        canonical_.push_back(job_type{source, destination, region});
       }
     }
     if (covered != destination_layout_.exact_cell_count() ||
@@ -122,7 +121,7 @@ class CopySchedule {
       throw std::invalid_argument(
           "pops::CopySchedule source and destination layouts must cover the same cells exactly");
 
-    for (const job_type& job : jobs)
+    for (const job_type& job : canonical_)
       classify_(job);
   }
 
@@ -135,6 +134,7 @@ class CopySchedule {
     return source_distribution_;
   }
   const Index<Dim>& local_rank() const noexcept { return local_rank_; }
+  const std::vector<job_type>& canonical_jobs() const noexcept { return canonical_; }
   const std::vector<job_type>& local_jobs() const noexcept { return local_; }
   const std::vector<peer_plan_type>& send_plans() const noexcept { return send_; }
   const std::vector<peer_plan_type>& receive_plans() const noexcept { return receive_; }
@@ -144,7 +144,7 @@ class CopySchedule {
   void require_local_execution() const {
     if (has_remote_jobs())
       throw std::logic_error(
-          "pops::CopySchedule contains remote ND jobs; this build has no production ND transport");
+          "pops::CopySchedule contains remote jobs; use a prepared mesh::parallel copy transport");
   }
 
   template <class DestinationMemorySpace, class SourceMemorySpace>
@@ -199,6 +199,7 @@ class CopySchedule {
   mesh::BoxArray<Dim> source_layout_{};
   mesh::Distribution<Dim> source_distribution_{};
   Index<Dim> local_rank_{};
+  std::vector<job_type> canonical_{};
   std::vector<job_type> local_{};
   std::vector<peer_plan_type> send_{};
   std::vector<peer_plan_type> receive_{};

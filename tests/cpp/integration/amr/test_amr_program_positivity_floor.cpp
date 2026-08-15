@@ -26,6 +26,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -244,6 +245,89 @@ bool all_finite(const std::vector<double>& values) {
                      [](double value) { return std::isfinite(value); });
 }
 
+template <int Dim>
+bool field_bytes_exact_collectively(const pops::MultiFab<Dim>& left,
+                                    const pops::MultiFab<Dim>& right) {
+  bool same = left.layout() == right.layout() && left.distribution() == right.distribution() &&
+              left.local_rank() == right.local_rank() && left.local_size() == right.local_size() &&
+              left.ncomp() == right.ncomp() && left.ghosts() == right.ghosts();
+  for (std::size_t local = 0; same && local < left.local_size(); ++local) {
+    const pops::Fab<Dim>& left_fab = left.fab(local);
+    const pops::Fab<Dim>& right_fab = right.fab(local);
+    if (left.global_index(local) != right.global_index(local) ||
+        left_fab.grown_box() != right_fab.grown_box()) {
+      same = false;
+      break;
+    }
+    auto left_host = left_fab.create_host_mirror();
+    auto right_host = right_fab.create_host_mirror();
+    left_fab.copy_to_host(left_host);
+    right_fab.copy_to_host(right_host);
+    const std::size_t entries = static_cast<std::size_t>(left.ncomp()) *
+                                static_cast<std::size_t>(left_fab.grown_box().numPts());
+    for (std::size_t entry = 0; entry < entries; ++entry) {
+      const auto left_bytes =
+          std::bit_cast<std::array<std::byte, sizeof(pops::Real)>>(left_host(entry));
+      const auto right_bytes =
+          std::bit_cast<std::array<std::byte, sizeof(pops::Real)>>(right_host(entry));
+      if (left_bytes != right_bytes) {
+        same = false;
+        break;
+      }
+    }
+  }
+  return pops::all_reduce_max(same ? 0L : 1L) == 0;
+}
+
+template <int Dim>
+void verify_collective_program_commit_many(pops::AmrSystem<Dim>& system) {
+  auto context = pops::runtime::program::make_program_execution_provider(&system);
+  context->for_each_program_resource_level([&](int) {
+    pops::MultiFab<Dim>& accepted = context->state(0);
+    pops::MultiFab<Dim> scratch(accepted);
+    const pops::MultiFab<Dim> accepted_before(accepted);
+    const pops::MultiFab<Dim> scratch_before(scratch);
+
+    pops::MultiFab<Dim> invalid_candidate(accepted);
+    if (pops::my_rank() == 0)
+      invalid_candidate.set_val(std::numeric_limits<pops::Real>::quiet_NaN());
+    pops::MultiFab<Dim> scratch_candidate(scratch);
+    scratch_candidate.set_val(pops::Real(0.5));
+
+    bool rejected = false;
+    try {
+      context->commit_many({{&accepted, &invalid_candidate}, {&scratch, &scratch_candidate}});
+    } catch (const std::exception&) {
+      rejected = true;
+    }
+    EXPECT_TRUE(rejected);
+    EXPECT_TRUE(field_bytes_exact_collectively(accepted, accepted_before));
+    EXPECT_TRUE(field_bytes_exact_collectively(scratch, scratch_before));
+
+    if (pops::n_ranks() > 1) {
+      bool divergent_count_rejected = false;
+      try {
+        if (pops::my_rank() == 0)
+          context->commit_many({{&accepted, &accepted_before}});
+        else
+          context->commit_many(
+              {{&accepted, &accepted_before}, {&scratch, &scratch_candidate}});
+      } catch (const std::exception&) {
+        divergent_count_rejected = true;
+      }
+      EXPECT_TRUE(divergent_count_rejected);
+      EXPECT_TRUE(field_bytes_exact_collectively(accepted, accepted_before));
+      EXPECT_TRUE(field_bytes_exact_collectively(scratch, scratch_before));
+    }
+
+    pops::MultiFab<Dim> accepted_retry(accepted);
+    accepted_retry.set_val(pops::Real(0.25));
+    context->commit_many({{&accepted, &accepted_retry}, {&scratch, &scratch_candidate}});
+    EXPECT_TRUE(field_bytes_exact_collectively(accepted, accepted_retry));
+    EXPECT_TRUE(field_bytes_exact_collectively(scratch, scratch_candidate));
+  });
+}
+
 double max_difference(const std::vector<double>& left, const std::vector<double>& right) {
   if (left.size() != right.size())
     return std::numeric_limits<double>::infinity();
@@ -356,6 +440,7 @@ RunResult advance_with_floor(double positivity_floor) {
   result.fine_after = system.block_level_state_global("density", 1);
   result.fine_interior_after = select_fine_interior(result.fine_after);
   result.accepted_source_solves = evidence->accepted_source_solves;
+  verify_collective_program_commit_many(system);
   return result;
 }
 

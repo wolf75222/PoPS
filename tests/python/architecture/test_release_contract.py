@@ -97,6 +97,7 @@ def test_release_contract_versions_every_protocol_and_declares_exact_matrix():
     assert generated.SUPPORTED_MATRIX["wheels"] == (
         {"arch": "arm64", "backend": "Kokkos Serial", "os": "macos", "python": "cp312"},
     )
+    assert generated.SUPPORTED_MATRIX["native_dimensions"] == (1, 2, 3)
     assert "CUDA wheel" in generated.SUPPORTED_MATRIX["not_promised"]
 
 

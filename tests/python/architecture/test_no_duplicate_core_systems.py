@@ -372,17 +372,20 @@ def test_field_handle_is_the_sole_public_field_solve_route():
 
 
 def test_native_named_field_solve_uses_exact_block_slots_not_a_representative():
-    """The ranked context fails closed instead of consulting a parallel service."""
+    """The ranked context retains every block identity for a real simultaneous solve."""
     context = _read(REPO_ROOT / "include" / "pops" / "runtime" / "program" / "program_context.hpp")
     retired = (
         REPO_ROOT / "include" / "pops" / "runtime" / "program" / "program_execution_services.hpp"
     )
     assert not retired.exists()
-    assert "representative" not in context
     assert "template <int Dim>" in context
-    assert "SolveOutcome solve_fields_from_blocks_at(" in context
-    assert "unavailable_field_provider_();" in context
-    assert "solve_fields_from_state(field, representative" not in context
+    solve = context.split("SolveOutcome solve_fields_from_blocks_at(", 1)[1].split(
+        "const std::vector<int>& require_program_block_map_() const", 1
+    )[0]
+    assert "const std::vector<int>& block_map = require_program_block_map_();" in solve
+    assert "Program simultaneous field solve contains a duplicate Program block" in solve
+    assert "Program simultaneous field solve cannot alias one stage across blocks" in context
+    assert "system_->solve_fields_from_blocks_at_in_place_(point, provider_slot, runtime_stages)" in solve
 
 
 # ---------------------------------------------------------------------------------------------

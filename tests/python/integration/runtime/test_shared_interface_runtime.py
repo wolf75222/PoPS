@@ -1,6 +1,8 @@
 """One real Case -> compile -> bind -> Program step through a native shared NumericalFlux."""
 from __future__ import annotations
 
+from copy import deepcopy
+from dataclasses import replace
 import importlib.util
 import json
 from pathlib import Path
@@ -18,6 +20,7 @@ from pops.linalg import LinearOperatorProperties, LinearProblem
 from pops.mesh import CartesianGrid
 from pops.mesh.boundaries import (
     BlockInterfaceSide,
+    BoundaryComponentBinding,
     ConservativeInterface,
 )
 from pops.model import ComponentManifest
@@ -151,6 +154,229 @@ def _flux_component(tmp_path: Path):
     )
 
 
+def _ghost_source_component(tmp_path: Path):
+    """Build one real GhostBoundary library that fails once after dirtying ABI scratch."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    interface = interfaces.GhostBoundary
+    manifest = ComponentManifest(
+        uri="pops://external.test/uniform-boundary/fail-once",
+        component_type="ghost_boundary",
+        version="1.0.0",
+        facets=interface.facets,
+        signature={
+            "generic": True,
+            "state_components": 1,
+            "native_interface": interface.signature_declaration(),
+        },
+        interfaces=interface.manifest_declarations(),
+        target={
+            "variants": [
+                {
+                    "dimension": 2,
+                    "scalar": "float64",
+                    "device": "cpu",
+                    "features": [],
+                }
+            ]
+        },
+        entry_points={"interface_table": "pops_component_interface_v1"},
+    )
+    expected_parameters_json = json.dumps(
+        manifest.to_data()["parameters"], sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    )
+    expected_target_json = json.dumps(
+        manifest.to_data()["target"], sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    )
+    source = f"""#include <pops/runtime/config/generated_component_abi.hpp>
+#include <atomic>
+#include <cstddef>
+#include <cstring>
+
+namespace {{
+std::atomic<int> apply_count{{0}};
+
+int prepare(const PopsComponentPrepareRequestV1* request, void** state,
+            PopsComponentStatusV1* status) {{
+  if (!request || !state || !status || !request->parameters_json ||
+      !request->target_json ||
+      std::strcmp(request->parameters_json, {json.dumps(expected_parameters_json)}) != 0 ||
+      std::strcmp(request->target_json, {json.dumps(expected_target_json)}) != 0) {{
+    if (status)
+      *status = {{sizeof(PopsComponentStatusV1), 51,
+                  POPS_COMPONENT_ABORT_RUN_V1, "unauthenticated ghost prepare JSON"}};
+    return 51;
+  }}
+  *state = new int(91);
+  *status = {{sizeof(PopsComponentStatusV1), 0,
+              POPS_COMPONENT_CONTINUE_V1, nullptr}};
+  return 0;
+}}
+
+void destroy(void* state) {{ delete static_cast<int*>(state); }}
+
+int apply(void* state, const PopsGhostBoundaryRequestV1* request,
+          PopsComponentStatusV1* status) {{
+  if (!state || *static_cast<int*>(state) != 91 || !request || !status ||
+      !request->producer_identity || !request->state_identity ||
+      !request->ghost_identity || !request->execution.execution_identity ||
+      request->region.kind != POPS_BOUNDARY_FACE_V1 ||
+      request->region.dimension != 2 || request->region.codimension != 1 ||
+      request->region.axis_count != 1 || !request->region.axes ||
+      !request->region.sides || request->region.axes[0] != 0 ||
+      request->region.sides[0] != -1 || request->dependency_count != 0 ||
+      request->parameter_count != 0 || !request->ghosts.data ||
+      request->ghosts.dimension != 2 || request->ghosts.component_count != 1) {{
+    if (status)
+      *status = {{sizeof(PopsComponentStatusV1), 52,
+                  POPS_COMPONENT_ABORT_RUN_V1, "incomplete exact ghost request"}};
+    return 52;
+  }}
+  auto* ghosts = static_cast<double*>(request->ghosts.data);
+  std::size_t points = 1;
+  for (int axis = 0; axis < request->ghosts.dimension; ++axis)
+    points *= request->ghosts.extents[axis];
+  const bool fail = apply_count.fetch_add(1) == 0;
+  for (std::size_t point = 0; point < points; ++point)
+    ghosts[point] = fail ? -1234.0 : 9.0;
+  if (fail) {{
+    *status = {{sizeof(PopsComponentStatusV1), 53,
+                POPS_COMPONENT_ABORT_RUN_V1, "injected ghost failure"}};
+    return 53;
+  }}
+  *status = {{sizeof(PopsComponentStatusV1), 0,
+              POPS_COMPONENT_CONTINUE_V1, nullptr}};
+  return 0;
+}}
+
+const PopsGhostBoundaryApiV1 ghost_table = {{
+  {{sizeof(PopsGhostBoundaryApiV1), POPS_COMPONENT_PROTOCOL_ABI_V1,
+    POPS_NATIVE_INTERFACE_GHOST_BOUNDARY_V1, 1, &prepare, &destroy}},
+  &apply
+}};
+const PopsComponentInterfaceEntryV1 entry = {{
+  POPS_NATIVE_INTERFACE_GHOST_BOUNDARY_V1, 1,
+  sizeof(PopsGhostBoundaryApiV1), &ghost_table
+}};
+const PopsComponentApiV1 api = {{
+  sizeof(PopsComponentApiV1), POPS_COMPONENT_PROTOCOL_ABI_V1,
+  POPS_ABI_KEY_LITERAL,
+  POPS_COMPONENT_CATALOG_SHA256_V1,
+  {json.dumps(manifest.component_id)},
+  {json.dumps(manifest.semantic_digest.token)},
+  {json.dumps(manifest.manifest_digest.token)},
+  1, &entry
+}};
+}}
+extern "C" const PopsComponentApiV1* pops_component_interface_v1() {{ return &api; }}
+""".encode()
+    source_name = "uniform_fail_once_ghost.cpp"
+    (tmp_path / source_name).write_bytes(source)
+    package = build_source_package_manifest(
+        components={"ghost": manifest}, payloads={source_name: ("source", source)}
+    )
+    package_path = tmp_path / "uniform-fail-once-ghost.pops.json"
+    package_path.write_text(json.dumps(package), encoding="utf-8")
+    return load(package_path).require("ghost", interface=interfaces.GhostBoundary)()
+
+
+class _ExternalGhostFaceExecutionAuthority:
+    """Keep the resolved physical authority, but reserve one exact face for its component."""
+
+    def __init__(self, base, producer_identity: str):
+        self._base = base
+        self._producer_identity = producer_identity
+
+    def canonical_identity(self):
+        return {
+            "schema_version": 1,
+            "authority_type": "external_ghost_face_test",
+            "base": self._base.canonical_identity(),
+            "producer_identity": self._producer_identity,
+        }
+
+    def _externalize(self, data):
+        result = deepcopy(data)
+        matches = [face for face in result["faces"] if face["producer"] == self._producer_identity]
+        if len(matches) != 1:
+            raise ValueError("external GhostBoundary test requires one exact physical face")
+        matches[0]["type"] = "external"
+        matches[0]["values"] = []
+        return result
+
+    def compile_boundary_data(self):
+        return self._externalize(self._base.compile_boundary_data())
+
+    def runtime_boundary_data(self, params):
+        return self._externalize(self._base.runtime_boundary_data(params))
+
+
+class _ExternalGhostBoundaryAuthority:
+    """Open authoring composer used to attach one real source-built x-min provider."""
+
+    def __init__(self, base, component):
+        self._base = base
+        self._component = component
+
+    def inspect(self):
+        return {
+            "schema_version": 1,
+            "authority_type": "external_ghost_boundary_test_authoring",
+            "base": self._base.inspect(),
+            "component_id": self._component.component_manifest.component_id,
+            "component_manifest_identity": (
+                self._component.component_manifest.manifest_digest.token
+            ),
+        }
+
+    def resolve_for_numerics(self, context):
+        return _ResolvedExternalGhostBoundaryAuthority(
+            self._base.resolve_for_numerics(context), self._component
+        )
+
+
+class _ResolvedExternalGhostBoundaryAuthority:
+    def __init__(self, base, component):
+        self._base = base
+        self._component = component
+
+    def canonical_identity(self):
+        return {
+            "schema_version": 1,
+            "authority_type": "external_ghost_boundary_test",
+            "base": self._base.canonical_identity(),
+            "component_id": self._component.component_manifest.component_id,
+            "component_manifest_identity": (
+                self._component.component_manifest.manifest_digest.token
+            ),
+        }
+
+    def ghost_plan_composer_capability(self):
+        return {"schema_version": 1, "scope": "self"}
+
+    def compose_ghost_plan(self, context):
+        from pops.mesh.boundaries.composition import compose_transport_boundary
+
+        boundary = compose_transport_boundary(self._base, context=context)
+        matches = [
+            production
+            for production in boundary.productions
+            if production.region.boundary is not None
+            and production.region.boundary.orientation.axis == 0
+            and production.region.boundary.orientation.outward_sign == -1
+        ]
+        assert len(matches) == 1
+        providers = matches[0].producer.boundary_providers
+        assert len(providers) == 1
+        target = providers[0].handle
+        return replace(
+            boundary,
+            execution_authority=_ExternalGhostFaceExecutionAuthority(
+                boundary.execution_authority, target.qualified_id
+            ),
+            component_bindings=(BoundaryComponentBinding(target, self._component),),
+        )
+
+
 def _program(left_state, right_state, rate):
     program = pops.Program("shared_interface_forward_euler")
     left = program.state(left_state)
@@ -275,6 +501,113 @@ def _assert_same_shared_interface_image(runtime, expected):
     assert len(actual["states"]) == len(expected["states"])
     for current, recorded in zip(actual["states"], expected["states"], strict=True):
         np.testing.assert_array_equal(current, recorded)
+
+
+def test_runtime_instance_executes_external_ghost_with_rollback_and_retry(tmp_path):
+    example = _load_example()
+    core = example.build_authoring(output_root=tmp_path / "unused")
+    finite_volume = FiniteVolume(
+        flux=core.flux,
+        variables=variables.Conservative(core.state),
+        reconstruction=reconstruction.FirstOrder(),
+        riemann=riemann.ScalarUpwind(velocity=core.velocity),
+    )
+    from pops.boundary import TransportBoundarySet
+    from pops.boundary.transport import Inflow, Outflow
+
+    boundaries = core.frame.boundaries
+    x_boundaries = boundaries.pair(core.frame.x)
+    y_boundaries = boundaries.pair(core.frame.y)
+    component = _ghost_source_component(tmp_path / "component")
+    numerics = DiscretizationPlan()
+    numerics.rates.add(core.rate, finite_volume)
+    numerics.boundaries.add(
+        _ExternalGhostBoundaryAuthority(
+            TransportBoundarySet(
+                {
+                    x_boundaries.lower: Outflow(state=core.tracer_state),
+                    x_boundaries.upper: Outflow(state=core.tracer_state),
+                    y_boundaries.lower: Inflow(
+                        state=core.tracer_state, value=core.inlet_y_value
+                    ),
+                    y_boundaries.upper: Outflow(state=core.tracer_state),
+                }
+            ),
+            component,
+        )
+    )
+    core.case.numerics(numerics, block=core.tracer)
+
+    program = pops.Program("external_ghost_forward_euler")
+    tracer = program.state(core.tracer_state)
+    stage = StagePoint("external_ghost_stage", {"main": TimePoint(program.clock, 0)})
+    rate = program.value("external_ghost_rate", core.rate(tracer.n), at=stage)
+    next_state = program.value(
+        "external_ghost_next", tracer.n + program.dt * rate, at=tracer.next.point
+    )
+    program.commit(tracer.next, next_state)
+    program.step_strategy(FixedDt(1.0e-3))
+    core.case.program(program)
+
+    validated = pops.validate(core.case)
+    from pops.layouts import Uniform
+
+    resolved = pops.resolve(
+        validated,
+        layout=Uniform(CartesianGrid(frame=core.frame, cells=(8, 8))),
+        components=(component,),
+        compile_options={"include": str(ROOT / "include")},
+    )
+    resolved.verify()
+    artifact = pops.compile(resolved)
+    params = {
+        core.case.resolve(handle, block=core.tracer): value
+        for handle, value in (
+            (core.velocity_x_param, 1.0),
+            (core.velocity_y_param, 0.0),
+            (core.inlet_x_param, 0.0),
+            (core.inlet_y_param, 0.0),
+        )
+    }
+    params.update(
+        {
+            core.case.resolve(core.refine_threshold): 0.10,
+            core.case.resolve(core.coarsen_threshold): 0.04,
+        }
+    )
+    runtime = example._bind_artifact(
+        artifact,
+        initial_state={"tracer": np.ones((1, 8, 8), dtype=np.float64)},
+        params=params,
+    )
+    native = runtime._executor._s
+    before = (
+        float(runtime.time()),
+        int(runtime.macro_step()),
+        bytes(native.program_accepted_state()),
+        np.asarray(runtime.get_state("tracer"), dtype=np.float64).copy(),
+    )
+
+    with pytest.raises(RuntimeError, match="ghost|GhostBoundary|component"):
+        pops.run(runtime, t_end=1.0e-3, max_steps=1)
+
+    assert (float(runtime.time()), int(runtime.macro_step())) == before[:2]
+    assert bytes(native.program_accepted_state()) == before[2]
+    np.testing.assert_array_equal(
+        np.asarray(runtime.get_state("tracer"), dtype=np.float64), before[3]
+    )
+
+    pops.run(runtime, t_end=1.0e-3, max_steps=1)
+
+    assert runtime.time() == pytest.approx(1.0e-3, rel=0.0, abs=1.0e-15)
+    assert runtime.macro_step() == 1
+    state = np.asarray(runtime.get_state("tracer"), dtype=np.float64).reshape(1, 8, 8)
+    np.testing.assert_allclose(
+        state[0, 1:-1, 0],
+        1.064,
+        rtol=0.0,
+        atol=1.0e-14,
+    )
 
 
 def test_runtime_instance_executes_one_two_sided_shared_flux(tmp_path):

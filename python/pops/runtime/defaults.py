@@ -1,10 +1,10 @@
 """Structured native numerical/solver/physical defaults."""
 from __future__ import annotations
 
-import importlib
 from collections.abc import Mapping
 from typing import Any
 
+from pops._native_selector import selected_native_module
 
 # ADC-618: the classification of EVERY user-visible native numeric constant. This is the single
 # Python-side source of truth (mirrored by numerical_defaults_report_to_dict in C++). The
@@ -163,22 +163,16 @@ class NativeDefaultsReportError(RuntimeError):
 
 
 def _native_extension() -> Any:
-    """Return the extension only when it is genuinely absent; preserve load failures."""
-    for name in ("_pops", "pops._pops"):
-        try:
-            return importlib.import_module(name)
-        except ModuleNotFoundError as exc:
-            if exc.name != name:
-                raise
-    return None
+    """Return the process-selected extension without inferring a native dimension."""
+    return selected_native_module(required=False)
 
 
 def numerical_defaults_report() -> dict:
     """Return native defaults, or an explicitly labelled source-only report.
 
-    The source-only report is permitted exclusively when no extension can be imported.  Once an
-    extension is loaded, a missing, failing, or malformed native report is actionable and therefore
-    fails closed.
+    The source-only report is permitted exclusively before a native dimension is selected.  Once an
+    extension is selected, a missing, failing, or malformed native report is actionable and
+    therefore fails closed.
     """
     mod = _native_extension()
     if mod is None:

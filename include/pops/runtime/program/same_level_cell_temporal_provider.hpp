@@ -10,6 +10,7 @@
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/parallel/comm.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/runtime/multiblock/evaluation_point.hpp>
 #include <pops/runtime/program/cell_temporal_partition_executor.hpp>
 
@@ -237,9 +238,9 @@ concept SameLevelCellTemporalRuntime =
       { constant_runtime.materialization_generation() } noexcept -> std::same_as<std::uint64_t>;
       { constant_runtime.same_level_cell_block_count() } noexcept -> std::same_as<std::size_t>;
       { constant_runtime.same_level_cell_level_count() } noexcept -> std::same_as<int>;
-      { runtime.same_level_cell_state() } noexcept -> std::same_as<MultiFab<Dim>&>;
+      { runtime.same_level_cell_state(0) } noexcept -> std::same_as<MultiFab<Dim>&>;
       {
-        constant_runtime.same_level_cell_geometry()
+        constant_runtime.same_level_cell_geometry(0)
       } noexcept -> std::same_as<const Geometry<Dim>&>;
       {
         constant_runtime.same_level_cell_periodicity()
@@ -257,6 +258,9 @@ concept SameLevelCellTemporalRuntime =
         constant_runtime.same_level_cell_has_prepared_boundary_plan()
       } noexcept -> std::same_as<bool>;
       {
+        constant_runtime.same_level_cell_execution_lane()
+      } noexcept -> std::same_as<const ExecutionLane&>;
+      {
         runtime.capture_same_level_negative_flux_divergence(point, state, residual, fluxes)
       } -> std::same_as<void>;
     };
@@ -265,23 +269,17 @@ template <int Dim, class Runtime>
   requires SameLevelCellTemporalRuntime<Dim, Runtime>
 CellTemporalPartitionAcceptedState prepare_same_level_transport_euler_partition(
     Runtime& runtime, std::int64_t synchronization_tick, std::int64_t tick_denominator,
-    int rung = 0) {
-  if (n_ranks() != 1 || runtime.same_level_cell_block_count() != 1 ||
-      runtime.same_level_cell_level_count() != 1)
+    int rung = 0, int level = 0) {
+  if (runtime.same_level_cell_block_count() != 1 || level < 0 ||
+      level >= runtime.same_level_cell_level_count())
     throw std::invalid_argument(
-        "same-level transport Euler partition requires serial execution, one block and one level");
+        "same-level transport Euler partition requires one block and one live level selection");
   if (rung < 0 || rung > 30 || synchronization_tick < 0 || tick_denominator <= 0 ||
       synchronization_tick % (std::int64_t{1} << rung) != 0)
     throw std::invalid_argument("same-level transport Euler partition has invalid tick/rung data");
-  const MultiFab<Dim>& state = runtime.same_level_cell_state();
-  if (state.layout().size() != 1 || state.local_size() != 1 || state.rank_space().size() != 1 ||
-      !state.contains_local(0))
-    throw std::invalid_argument(
-        "same-level transport Euler partition requires one serial-owned exact-ranked patch");
-  const std::int64_t count64 = state.box(0).numPts();
-  if (count64 <= 0 || static_cast<std::uint64_t>(count64) >
-                          static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()))
-    throw std::overflow_error("same-level transport Euler partition cell count is invalid");
+  const MultiFab<Dim>& state = runtime.same_level_cell_state(level);
+  if (state.layout().empty())
+    throw std::invalid_argument("same-level transport Euler partition requires live patches");
 
   CellTemporalPartitionAcceptedState result;
   result.kind = TemporalPartitionKind::CellLocal;
@@ -289,9 +287,24 @@ CellTemporalPartitionAcceptedState prepare_same_level_transport_euler_partition(
   result.topology_epoch = runtime.topology_epoch();
   result.synchronization_tick = synchronization_tick;
   result.tick_denominator = tick_denominator;
-  result.cells.reserve(static_cast<std::size_t>(count64));
-  for (std::uint64_t cell = 0; cell < static_cast<std::uint64_t>(count64); ++cell)
-    result.cells.push_back({0, cell, rung, synchronization_tick});
+  std::size_t cell_budget = 0;
+  for (std::size_t patch = 0; patch < state.layout().size(); ++patch) {
+    const std::int64_t count64 = state.layout()[patch].numPts();
+    if (count64 <= 0 || static_cast<std::uint64_t>(count64) >= kCanonicalPatchCellOrdinalLimit ||
+        static_cast<std::uint64_t>(patch) >= kCanonicalPatchCellOrdinalLimit ||
+        static_cast<std::uint64_t>(count64) >
+            static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max() - cell_budget))
+      throw std::overflow_error(
+          "same-level transport Euler partition exceeds its canonical patch/cell budget");
+    cell_budget += static_cast<std::size_t>(count64);
+  }
+  result.cells.reserve(cell_budget);
+  for (std::size_t patch = 0; patch < state.layout().size(); ++patch) {
+    const auto count = static_cast<std::uint64_t>(state.layout()[patch].numPts());
+    for (std::uint64_t cell = 0; cell < count; ++cell)
+      result.cells.push_back(
+          {level, canonical_patch_cell_id(patch, cell), rung, synchronization_tick});
+  }
   validate_cell_temporal_partition_state(result);
   return result;
 }
@@ -307,8 +320,8 @@ mesh::BoxArray<Dim> face_boxes(const mesh::BoxArray<Dim>& cells, int axis) {
   for (const Box<Dim>& box : cells.boxes()) {
     Box<Dim> faces = box;
     faces.hi[axis] =
-        detail::checked_box_index(static_cast<std::int64_t>(faces.hi[axis]) + 1,
-                                  "same-level face layout exceeds the signed index range");
+        ::pops::detail::checked_box_index(static_cast<std::int64_t>(faces.hi[axis]) + 1,
+                                          "same-level face layout exceeds the signed index range");
     boxes.push_back(faces);
   }
   return mesh::BoxArray<Dim>(std::move(boxes));
@@ -359,22 +372,43 @@ void copy_box(const Fab<Dim>& source, Fab<Dim>& destination, const Box<Dim>& box
   });
 }
 
+template <int Dim>
+void copy_field(const MultiFab<Dim>& source, MultiFab<Dim>& destination, bool include_ghosts) {
+  if (source.layout() != destination.layout() ||
+      source.distribution() != destination.distribution() ||
+      source.local_rank() != destination.local_rank() ||
+      source.local_size() != destination.local_size() || source.ncomp() != destination.ncomp() ||
+      source.ghosts() != destination.ghosts())
+    throw std::invalid_argument("same-level temporal field copy changed its exact layout");
+  for (std::size_t local = 0; local < source.local_size(); ++local)
+    copy_box(source.fab(local), destination.fab(local),
+             include_ghosts ? source.fab(local).grown_box() : source.box(local), source.ncomp());
+}
+
 POPS_HD inline bool finite_device_value(Real value) noexcept {
   return value == value && value <= std::numeric_limits<Real>::max() &&
          value >= -std::numeric_limits<Real>::max();
 }
 
 template <int Dim>
-struct SameLevelTransportEulerDeviceView {
+struct SameLevelTransportEulerCellLocation {
   FieldView<const Real, Dim> state;
   FieldView<const Real, Dim> residual;
   std::array<FieldView<const Real, Dim>, Dim> fluxes{};
   FieldView<Real, Dim> candidate;
+  Index<Dim> index{};
+  std::uint64_t canonical_cell = 0;
+  bool local = false;
+};
+
+template <int Dim>
+struct SameLevelTransportEulerDeviceView {
+  const SameLevelTransportEulerCellLocation<Dim>* locations = nullptr;
   Real* integrated_flux = nullptr;
   Real seconds_per_tick = Real(0);
   std::size_t cell_count = 0;
   int component_count = 0;
-  Box<Dim> valid_box{};
+  int expected_level = 0;
   int expected_rung = 0;
   std::int64_t expected_begin_tick = 0;
   std::int64_t expected_end_tick = 0;
@@ -382,32 +416,35 @@ struct SameLevelTransportEulerDeviceView {
 
   [[nodiscard]] POPS_HD CellTemporalStageOutcome
   evaluate_local_stage_and_record_space_time_flux(CellTemporalStagePoint point) const noexcept {
-    if (point.level != 0 || point.rung != expected_rung || point.record_index >= cell_count ||
-        point.cell != static_cast<std::uint64_t>(point.record_index) || component_count <= 0 ||
+    if (point.level != expected_level || point.rung != expected_rung ||
+        point.record_index >= cell_count || component_count <= 0 || locations == nullptr ||
         integrated_flux == nullptr || point.begin_tick != expected_begin_tick ||
         point.end_tick != expected_end_tick ||
         point.tick_denominator != expected_tick_denominator || point.end_tick <= point.begin_tick)
       return CellTemporalStageOutcome::failed(0x756001u);
-    const Index<Dim> index = index_from_ordinal(valid_box, point.record_index);
+    const SameLevelTransportEulerCellLocation<Dim>& location = locations[point.record_index];
+    if (!location.local || location.canonical_cell != point.cell)
+      return CellTemporalStageOutcome::failed(0x756004u);
+    const Index<Dim> index = location.index;
     const Real dt = static_cast<Real>(point.end_tick - point.begin_tick) * seconds_per_tick;
     if (!(dt > Real(0)) || !finite_device_value(dt))
       return CellTemporalStageOutcome::failed(0x756002u);
 
     for (int component = 0; component < component_count; ++component) {
-      const Real next = state(index, component) + dt * residual(index, component);
+      const Real next = location.state(index, component) + dt * location.residual(index, component);
       std::array<Real, std::size_t{2} * Dim> integrated_faces{};
       bool finite = finite_device_value(next);
       for (int axis = 0; axis < Dim; ++axis) {
         Index<Dim> high = index;
         ++high[axis];
-        integrated_faces[std::size_t{2} * axis] = dt * fluxes[axis](index, component);
-        integrated_faces[std::size_t{2} * axis + 1] = dt * fluxes[axis](high, component);
+        integrated_faces[std::size_t{2} * axis] = dt * location.fluxes[axis](index, component);
+        integrated_faces[std::size_t{2} * axis + 1] = dt * location.fluxes[axis](high, component);
         finite = finite && finite_device_value(integrated_faces[std::size_t{2} * axis]) &&
                  finite_device_value(integrated_faces[std::size_t{2} * axis + 1]);
       }
       if (!finite)
         return CellTemporalStageOutcome::rejected(0x756003u);
-      candidate(index, component) = next;
+      location.candidate(index, component) = next;
       for (int axis = 0; axis < Dim; ++axis) {
         const SameLevelCellFace low{axis, SameLevelCellFaceSide::Low};
         const SameLevelCellFace high{axis, SameLevelCellFaceSide::High};
@@ -469,6 +506,12 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
   void serialize_exact_parameters(ExactContractBuilder& contract) const {
     contract.bytes(exact_parameters_);
   }
+  [[nodiscard]] CommunicatorView communicator() const noexcept {
+    return runtime_->same_level_cell_execution_lane().communicator();
+  }
+  [[nodiscard]] std::span<const std::size_t> local_record_indices() const noexcept {
+    return local_record_indices_;
+  }
 
   [[nodiscard]] PreparedProviderSupport begin_attempt(
       CellTemporalAttemptDescriptor attempt) noexcept {
@@ -476,8 +519,6 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
       return PreparedProviderSupport::reject(0x756101u, "provider attempt is already active");
     if (!host_execution_())
       return PreparedProviderSupport::reject(0x756102u, "provider has no GPU execution proof");
-    if (n_ranks() != 1)
-      return PreparedProviderSupport::reject(0x756103u, "provider has no MPI execution proof");
     if (!runtime_storage_is_current_())
       return PreparedProviderSupport::reject(0x756104u,
                                              "provider storage is stale after topology change");
@@ -486,9 +527,9 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
         attempt.tick_denominator != tick_denominator_ || attempt.cell_count != cell_count_)
       return PreparedProviderSupport::reject(0x756105u,
                                              "attempt differs from prepared temporal authority");
+    live_ = &runtime_->same_level_cell_state(selected_level_);
     device_fence();
-    same_level_cell_temporal_detail::copy_box(live_->fab(0), state_a_.fab(0),
-                                              live_->fab(0).grown_box(), component_count_);
+    same_level_cell_temporal_detail::copy_field(*live_, state_a_, true);
     std::fill(attempt_flux_.begin(), attempt_flux_.end(), Real(0));
     current_is_a_ = true;
     attempt_begin_tick_ = attempt.begin_tick;
@@ -504,24 +545,23 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
         batch.begin_tick != current_tick_ ||
         batch.end_tick - batch.begin_tick != (std::int64_t{1} << common_rung_) ||
         batch.end_tick > attempt_target_tick_ || batch.tick_denominator != tick_denominator_ ||
-        batch.cell_count != cell_count_)
+        batch.cell_count != cell_count_ || batch.local_cell_count != local_record_indices_.size())
       throw std::logic_error("same-level transport provider received an unprepared rung batch");
     const Real dt = static_cast<Real>(batch.end_tick - batch.begin_tick) * seconds_per_tick_;
     multiblock::BoundaryEvaluationPoint point;
     point.clock = clock_identity_;
     point.tick = batch.begin_tick;
-    point.level = 0;
+    point.level = selected_level_;
     point.substep = static_cast<int>((batch.begin_tick - attempt_begin_tick_) >> common_rung_);
     point.stage = 0;
-    point.stage_fraction = amr::Rational(0, 1);
+    point.stage_fraction = ::pops::amr::Rational(0, 1);
     point.dt = static_cast<double>(dt);
     point.physical_time = static_cast<double>(batch.begin_tick) * seconds_per_tick_;
     const auto fluxes = face_flux_pointers_();
     runtime_->capture_same_level_negative_flux_divergence(point, current_state_(), residual_,
                                                           fluxes);
-    same_level_cell_temporal_detail::copy_box(current_state_().fab(0), candidate_state_().fab(0),
-                                              current_state_().fab(0).grown_box(),
-                                              component_count_);
+    same_level_cell_temporal_detail::copy_field(current_state_(), candidate_state_(), true);
+    refresh_device_locations_();
     batch_end_tick_ = batch.end_tick;
     batch_active_ = true;
   }
@@ -536,16 +576,12 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
     if (!active_ || !batch_active_)
       return {};
     DeviceView view;
-    view.state = static_cast<const field_type&>(current_state_()).fab(0).view();
-    view.residual = residual_.fab(0).view();
-    for (int axis = 0; axis < Dim; ++axis)
-      view.fluxes[axis] = face_fluxes_[axis].fab(0).view();
-    view.candidate = candidate_state_().fab(0).view();
+    view.locations = device_locations_.data();
     view.integrated_flux = attempt_flux_.data();
     view.seconds_per_tick = seconds_per_tick_;
     view.cell_count = cell_count_;
     view.component_count = component_count_;
-    view.valid_box = valid_box_;
+    view.expected_level = selected_level_;
     view.expected_rung = common_rung_;
     view.expected_begin_tick = current_tick_;
     view.expected_end_tick = batch_end_tick_;
@@ -563,8 +599,8 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
           0x756107u, "provider storage changed before accepted publication");
     if (!ledger_ || ledger_->topology_epoch() != topology_epoch_ ||
         ledger_->materialization_generation() != materialization_generation_ ||
-        ledger_->block() != 0 || ledger_->level() != 0 || ledger_->cell_count() != cell_count_ ||
-        ledger_->component_count() != component_count_)
+        ledger_->block() != 0 || ledger_->level() != selected_level_ ||
+        ledger_->cell_count() != cell_count_ || ledger_->component_count() != component_count_)
       return PreparedProviderSupport::reject(
           0x756108u, "provider flux ledger changed before accepted publication");
     return PreparedProviderSupport::accept();
@@ -574,8 +610,7 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
     const PreparedProviderSupport support = prepare_commit_attempt();
     if (!support.well_formed() || !support.accepted())
       std::terminate();
-    same_level_cell_temporal_detail::copy_box(current_state_().fab(0), live_->fab(0), valid_box_,
-                                              component_count_);
+    same_level_cell_temporal_detail::copy_field(current_state_(), *live_, false);
     ledger_->publish_(attempt_begin_tick_, attempt_target_tick_, tick_denominator_,
                       attempt_flux_.data(), attempt_flux_.size());
     synchronization_tick_ = attempt_target_tick_;
@@ -613,16 +648,16 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
   }
 
   [[nodiscard]] bool runtime_storage_is_current_() const noexcept {
-    const field_type& current = runtime_->same_level_cell_state();
+    if (selected_level_ < 0 || selected_level_ >= runtime_->same_level_cell_level_count())
+      return false;
+    const field_type& current = runtime_->same_level_cell_state(selected_level_);
     return runtime_->topology_epoch() == topology_epoch_ &&
            runtime_->materialization_generation() == materialization_generation_ &&
-           runtime_->same_level_cell_block_count() == 1 &&
-           runtime_->same_level_cell_level_count() == 1 && &current == live_ &&
-           current.layout() == prepared_layout_ &&
+           runtime_->same_level_cell_block_count() == 1 && current.layout() == prepared_layout_ &&
            current.distribution() == prepared_distribution_ &&
            current.local_rank() == prepared_local_rank_ && current.ghosts() == prepared_ghosts_ &&
            current.ncomp() == component_count_ && prepared_geometry_.has_value() &&
-           runtime_->same_level_cell_geometry() == *prepared_geometry_ &&
+           runtime_->same_level_cell_geometry(selected_level_) == *prepared_geometry_ &&
            runtime_->same_level_cell_periodicity() == prepared_periodicity_ &&
            std::string_view(runtime_->same_level_cell_state_identity()) ==
                prepared_state_identity_ &&
@@ -630,7 +665,7 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
                prepared_flux_provider_identity_ &&
            std::string_view(runtime_->same_level_cell_flux_parameter_contract()) ==
                prepared_flux_parameter_contract_ &&
-           !runtime_->same_level_cell_has_prepared_boundary_plan();
+           runtime_->same_level_cell_has_prepared_boundary_plan() == prepared_boundary_plan_;
   }
 
   [[nodiscard]] field_type& current_state_() const noexcept {
@@ -648,62 +683,82 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
     return result;
   }
 
+  void refresh_device_locations_() {
+    for (std::size_t record_index : local_record_indices_) {
+      const CellTemporalPartitionRecord& record = prepared_cells_.at(record_index);
+      const std::size_t global_patch = canonical_patch_ordinal(record.cell);
+      const std::size_t local_patch = current_state_().local_index_of(global_patch);
+      const Index<Dim> index = same_level_cell_temporal_detail::index_from_ordinal(
+          current_state_().layout()[global_patch], canonical_cell_ordinal(record.cell));
+      auto& location = device_locations_.at(record_index);
+      location.state = static_cast<const field_type&>(current_state_()).fab(local_patch).view();
+      location.residual = static_cast<const field_type&>(residual_).fab(local_patch).view();
+      for (int axis = 0; axis < Dim; ++axis)
+        location.fluxes[axis] =
+            static_cast<const field_type&>(face_fluxes_[axis]).fab(local_patch).view();
+      location.candidate = candidate_state_().fab(local_patch).view();
+      location.index = index;
+      location.canonical_cell = record.cell;
+      location.local = true;
+    }
+  }
+
   void validate_and_materialize_(const CellTemporalPartitionAcceptedState& partition) {
     validate_cell_temporal_partition_state(partition);
     if (partition.provider_identity != kSameLevelTransportEulerStageFluxProvider ||
-        runtime_->same_level_cell_block_count() != 1 ||
-        runtime_->same_level_cell_level_count() != 1 || n_ranks() != 1)
+        runtime_->same_level_cell_block_count() != 1)
       throw std::invalid_argument(
-          "same-level transport provider requires its exact serial one-block/one-level partition");
+          "same-level transport provider requires its exact one-block partition");
     if (clock_identity_.empty())
       throw std::invalid_argument(
           "same-level transport provider requires a non-empty clock identity");
-    live_ = &runtime_->same_level_cell_state();
-    if (live_->layout().size() != 1 || live_->local_size() != 1 ||
-        live_->rank_space().size() != 1 || !live_->contains_local(0))
-      throw std::invalid_argument(
-          "same-level transport provider requires one serial-owned exact-ranked patch");
+    selected_level_ = partition.cells.front().level;
+    if (selected_level_ < 0 || selected_level_ >= runtime_->same_level_cell_level_count())
+      throw std::invalid_argument("same-level transport provider selected a stale level");
+    live_ = &runtime_->same_level_cell_state(selected_level_);
+    if (live_->layout().size() == 0)
+      throw std::invalid_argument("same-level transport provider requires live patches");
     if (std::string_view(runtime_->same_level_cell_state_identity()).empty() ||
         std::string_view(runtime_->same_level_cell_flux_provider_identity()).empty() ||
         std::string_view(runtime_->same_level_cell_flux_parameter_contract()).empty())
       throw std::invalid_argument(
           "same-level transport provider requires exact state and spatial contracts");
-    if (runtime_->same_level_cell_has_prepared_boundary_plan())
-      throw std::invalid_argument(
-          "same-level transport provider has no exact prepared-boundary contract proof");
-    valid_box_ = live_->box(0);
-    if (runtime_->same_level_cell_geometry().domain() != valid_box_)
-      throw std::invalid_argument(
-          "same-level transport geometry differs from its exact-ranked live patch");
-    const std::int64_t count64 = valid_box_.numPts();
-    if (count64 <= 0 || static_cast<std::uint64_t>(count64) >
-                            static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()))
-      throw std::overflow_error("same-level transport provider cell count is invalid");
-    cell_count_ = static_cast<std::size_t>(count64);
+    cell_count_ = partition.cells.size();
     component_count_ = live_->ncomp();
     prepared_layout_ = live_->layout();
     prepared_distribution_ = live_->distribution();
     prepared_local_rank_ = live_->local_rank();
     prepared_ghosts_ = live_->ghosts();
-    prepared_geometry_ = runtime_->same_level_cell_geometry();
+    prepared_geometry_ = runtime_->same_level_cell_geometry(selected_level_);
     prepared_periodicity_ = runtime_->same_level_cell_periodicity();
     prepared_state_identity_ = runtime_->same_level_cell_state_identity();
     prepared_flux_provider_identity_ = runtime_->same_level_cell_flux_provider_identity();
     prepared_flux_parameter_contract_ = runtime_->same_level_cell_flux_parameter_contract();
-    if (partition.topology_epoch != topology_epoch_ || partition.cells.size() != cell_count_)
+    prepared_boundary_plan_ = runtime_->same_level_cell_has_prepared_boundary_plan();
+    if (partition.topology_epoch != topology_epoch_)
       throw std::invalid_argument("same-level transport partition differs from the live topology");
     common_rung_ = partition.cells.front().rung;
-    for (std::size_t index = 0; index < partition.cells.size(); ++index) {
-      const CellTemporalPartitionRecord& cell = partition.cells[index];
-      if (cell.level != 0 || cell.cell != static_cast<std::uint64_t>(index) ||
-          cell.rung != common_rung_)
-        throw std::invalid_argument(
-            "same-level transport provider requires canonical cells on one common rung");
+    std::size_t record_index = 0;
+    for (std::size_t patch = 0; patch < live_->layout().size(); ++patch) {
+      const auto count = static_cast<std::uint64_t>(live_->layout()[patch].numPts());
+      for (std::uint64_t ordinal = 0; ordinal < count; ++ordinal, ++record_index) {
+        if (record_index >= partition.cells.size())
+          throw std::invalid_argument("same-level transport partition omits canonical cells");
+        const CellTemporalPartitionRecord& cell = partition.cells[record_index];
+        if (cell.level != selected_level_ || cell.cell != canonical_patch_cell_id(patch, ordinal) ||
+            cell.rung != common_rung_)
+          throw std::invalid_argument(
+              "same-level transport provider requires canonical patch/cell records on one rung");
+        if (live_->contains_local(patch))
+          local_record_indices_.push_back(record_index);
+      }
     }
+    if (record_index != partition.cells.size())
+      throw std::invalid_argument("same-level transport partition has extra canonical cells");
     if (!ledger_ || ledger_->topology_epoch() != topology_epoch_ ||
         ledger_->materialization_generation() != materialization_generation_ ||
-        ledger_->block() != 0 || ledger_->level() != 0 || ledger_->cell_count() != cell_count_ ||
-        ledger_->component_count() != component_count_)
+        ledger_->block() != 0 || ledger_->level() != selected_level_ ||
+        ledger_->cell_count() != cell_count_ || ledger_->component_count() != component_count_)
       throw std::invalid_argument("same-level transport provider received the wrong flux ledger");
 
     synchronization_tick_ = partition.synchronization_tick;
@@ -717,14 +772,18 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
           *live_, same_level_cell_temporal_detail::face_boxes(live_->layout(), axis),
           Extent<Dim>{});
     attempt_flux_.assign(ledger_->value_count(), Real(0));
+    prepared_cells_ = partition.cells;
+    device_locations_.resize(cell_count_);
     current_is_a_ = true;
 
-    const Geometry<Dim>& geometry = runtime_->same_level_cell_geometry();
+    const Geometry<Dim>& geometry = runtime_->same_level_cell_geometry(selected_level_);
     const std::array<bool, Dim>& periodicity = runtime_->same_level_cell_periodicity();
     ExactContractBuilder parameters;
     parameters.text("pops.amr.same-level-transport-euler-stage-flux")
-        .scalar(std::uint32_t{1})
+        .scalar(std::uint32_t{2})
         .scalar(std::int32_t{Dim})
+        .text("canonical-patch-cell-32x32")
+        .scalar(kCanonicalPatchCellOrdinalLimit)
         .text(runtime_->same_level_cell_state_identity())
         .text(runtime_->same_level_cell_flux_provider_identity())
         .bytes(runtime_->same_level_cell_flux_parameter_contract())
@@ -735,6 +794,9 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
         .scalar(seconds_per_tick_)
         .scalar(topology_epoch_)
         .scalar(materialization_generation_)
+        .scalar(static_cast<std::int32_t>(selected_level_))
+        .scalar(static_cast<std::int32_t>(communicator().size()))
+        .scalar(prepared_boundary_plan_)
         .scalar(static_cast<std::int32_t>(common_rung_))
         .scalar(tick_denominator_)
         .scalar(static_cast<std::int32_t>(component_count_))
@@ -747,8 +809,7 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
           .scalar(geometry.upper()[axis])
           .scalar(periodicity[axis])
           .scalar(static_cast<std::int32_t>(live_->rank_space().origin()[axis]))
-          .scalar(static_cast<std::int64_t>(live_->rank_space().extent()[axis]))
-          .scalar(static_cast<std::int32_t>(live_->local_rank()[axis]));
+          .scalar(static_cast<std::int64_t>(live_->rank_space().extent()[axis]));
     }
     parameters.sequence(live_->layout().boxes(),
                         [](ExactContractBuilder& item, const Box<Dim>& box) {
@@ -781,7 +842,8 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
   std::string prepared_state_identity_;
   std::string prepared_flux_provider_identity_;
   std::string prepared_flux_parameter_contract_;
-  Box<Dim> valid_box_{};
+  bool prepared_boundary_plan_ = false;
+  int selected_level_ = -1;
   std::size_t cell_count_ = 0;
   int component_count_ = 0;
   int common_rung_ = 0;
@@ -791,6 +853,12 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
   mutable field_type state_b_;
   field_type residual_;
   std::array<field_type, Dim> face_fluxes_{};
+  std::vector<CellTemporalPartitionRecord> prepared_cells_;
+  std::vector<std::size_t> local_record_indices_;
+  mutable std::vector<
+      same_level_cell_temporal_detail::SameLevelTransportEulerCellLocation<Dim>,
+      fab_allocator<same_level_cell_temporal_detail::SameLevelTransportEulerCellLocation<Dim>>>
+      device_locations_;
   mutable std::vector<Real, fab_allocator<Real>> attempt_flux_;
   bool current_is_a_ = true;
   std::int64_t attempt_begin_tick_ = 0;

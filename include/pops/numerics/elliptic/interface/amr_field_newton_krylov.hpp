@@ -5,12 +5,14 @@
 
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/numerics/elliptic/interface/field_nonlinear.hpp>
+#include <pops/numerics/elliptic/linear/vector_distribution.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -76,6 +78,32 @@ class AmrFieldNewtonKrylovWorkspace final {
     sine_.resize(restart);
     rotated_rhs_.resize(restart + 1u);
     coefficients_.resize(restart);
+  }
+
+  /// Bind the hierarchy algebra to one immutable prepared lane and to the exact distribution of
+  /// every level.  The borrow guard pins the lane's address and communicator until this workspace
+  /// is destroyed; replicated levels are reduced once through their distribution provider instead
+  /// of being over-counted or falling back to MPI_COMM_WORLD.
+  AmrFieldNewtonKrylovWorkspace(std::span<const field_type* const> layouts,
+                                std::span<const field_type* const> active_cells,
+                                std::span<const Real> cell_measures,
+                                std::span<const PreparedVectorDistribution<Dim>> distributions,
+                                const ExecutionLane& lane, FieldNewtonOptions options)
+      : AmrFieldNewtonKrylovWorkspace(layouts, active_cells, cell_measures, options) {
+    if (distributions.size() != layouts.size())
+      throw std::invalid_argument(
+          "AMR field Newton requires one vector distribution per hierarchy level");
+    distributions_.assign(distributions.begin(), distributions.end());
+    lane_ = &lane;
+    lane_borrow_.emplace(lane.borrow_immutably());
+    std::size_t scratch_count = 0;
+    for (std::size_t level = 0; level < layouts.size(); ++level) {
+      distributions_[level].require_collective_layout(*layouts[level],
+                                                      "AMR field Newton vector space", lane);
+      scratch_count = std::max(scratch_count,
+                               distributions_[level].reduction_scratch_value_count(std::size_t{1}));
+    }
+    distribution_scratch_.assign(scratch_count, 0.0);
   }
 
   AmrFieldNewtonKrylovWorkspace(const AmrFieldNewtonKrylovWorkspace&) = delete;
@@ -387,7 +415,19 @@ class AmrFieldNewtonKrylovWorkspace final {
     Real result = Real(0);
     for (std::size_t level = 0; level < left.size(); ++level) {
       const RelativeCellMeasure<Dim, MemorySpace> measure{active_cells_[level], nullptr};
-      result += cell_measures_[level] * dot(left[level], right[level], 0, measure);
+      if (lane_ == nullptr) {
+        result += cell_measures_[level] * dot(left[level], right[level], 0, measure);
+        continue;
+      }
+      double contribution = static_cast<double>(cell_measures_[level] *
+                                                dot_local(left[level], right[level], 0, measure));
+      const std::size_t scratch_count =
+          distributions_[level].reduction_scratch_value_count(std::size_t{1});
+      distributions_[level].reduce_sum_values(
+          std::span<double>(&contribution, std::size_t{1}),
+          std::span<double>(distribution_scratch_.data(), scratch_count),
+          "AMR field Newton metric dot product", *lane_);
+      result += static_cast<Real>(contribution);
     }
     return result;
   }
@@ -426,6 +466,10 @@ class AmrFieldNewtonKrylovWorkspace final {
   std::vector<Real> sine_;
   std::vector<Real> rotated_rhs_;
   std::vector<Real> coefficients_;
+  std::vector<PreparedVectorDistribution<Dim>> distributions_;
+  mutable std::vector<double> distribution_scratch_;
+  const ExecutionLane* lane_ = nullptr;
+  std::optional<ExecutionLane::ImmutableBorrow> lane_borrow_;
 };
 
 }  // namespace pops

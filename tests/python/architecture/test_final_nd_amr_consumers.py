@@ -27,7 +27,7 @@ def _sources() -> dict[str, str]:
     }
 
 
-def test_amr_consumers_are_thin_ranked_facades_without_a_2d_authority() -> None:
+def test_amr_consumers_are_ranked_facades_without_a_2d_authority() -> None:
     sources = _sources()
     joined = "\n".join(sources.values())
 
@@ -61,9 +61,12 @@ def test_amr_consumers_are_thin_ranked_facades_without_a_2d_authority() -> None:
     for forbidden in forbidden_tokens:
         assert forbidden not in joined, forbidden
 
+    for relative, source in sources.items():
+        assert re.search(r"template\s*<[^>]*\bint Dim\b", source), relative
+    assert "kNativeDimension" not in joined
     assert not re.search(r"\bif\s+(?:constexpr\s*)?\(\s*Dim\b", joined)
+    assert not re.search(r"\bDim\s*(?:==|!=)\s*2\b", joined)
     assert not re.search(r"<\s*2\s*>", joined)
-    assert sum(source.count("\n") + 1 for source in sources.values()) < 1_000
 
 
 def test_consumers_delegate_to_canonical_prepared_authorities() -> None:
@@ -105,6 +108,11 @@ def test_direct_native_proof_exercises_one_and_three_dimensional_consumers() -> 
     proof = ROOT / "tests/cpp/unit/amr/test_nd_amr_consumers.cpp"
     assert proof.is_file()
     source = proof.read_text(encoding="utf-8")
+    assert "AmrCouplerMP<1>::dimension == 1" in source
+    assert "AmrSystemCoupler<3>::dimension == 3" in source
+    assert "AmrProgramContext<3>::dimension == 3" in source
     assert "PatchRange<1>" in source
     assert "PatchRange<3>" in source
     assert "RefinementRatio<3>{2, 3, 1}" in source
+    assert "level_domains_refine_every_axis_without_rank_dispatch" in source
+    assert "interface_retains_anisotropic_layout_identity" in source

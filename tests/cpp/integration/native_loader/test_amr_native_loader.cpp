@@ -2,6 +2,7 @@
 
 #include <pops/runtime/dynamic/component_consumers.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
+#include <pops/runtime/dynamic/prepared_execution_context.hpp>
 
 #include "component_abi_test_helpers.hpp"
 #include "native_dso_compiler.hpp"

@@ -37,6 +37,7 @@ MANIFEST_SEMANTIC_FIELDS = (
 MANIFEST_TOP_LEVEL_FIELDS = MANIFEST_SEMANTIC_FIELDS + ("extensions", "digests")
 TARGET_FIELDS = ("variants",)
 DIGEST_FIELDS = ("semantic", "manifest")
+SUPPORTED_TARGET_DIMENSIONS = frozenset((1, 2, 3))
 
 
 class CatalogError(ValueError):
@@ -67,6 +68,66 @@ def _strings(value: Any, where: str) -> list[str]:
     if len(value) != len(set(value)):
         raise CatalogError(f"{where} contains duplicates")
     return value
+
+
+def _target_dimensions(value: Any, where: str) -> tuple[int, ...]:
+    if not isinstance(value, list) or not value:
+        raise CatalogError(f"{where} must be a non-empty list")
+    dimensions: list[int] = []
+    for index, dimension in enumerate(value):
+        if (
+            isinstance(dimension, bool)
+            or not isinstance(dimension, int)
+            or dimension not in SUPPORTED_TARGET_DIMENSIONS
+        ):
+            raise CatalogError(f"{where}[{index}] must be one of 1, 2, or 3")
+        dimensions.append(dimension)
+    if len(dimensions) != len(set(dimensions)):
+        raise CatalogError(f"{where} contains duplicates")
+    if dimensions != sorted(dimensions):
+        raise CatalogError(f"{where} must be in canonical ascending order")
+    return tuple(dimensions)
+
+
+def _target_variant_templates(value: Any, where: str) -> tuple[dict[str, Any], ...]:
+    if not isinstance(value, list) or not value:
+        raise CatalogError(f"{where} must be a non-empty list")
+    templates: list[dict[str, Any]] = []
+    identities: list[str] = []
+    for index, template in enumerate(value):
+        template = _exact(template, {"scalar", "device", "features"}, f"{where}[{index}]")
+        for name in ("scalar", "device"):
+            item = template[name]
+            if not isinstance(item, str) or not item or item != item.strip():
+                raise CatalogError(f"{where}[{index}].{name} must be canonical text")
+        features = _strings(template["features"], f"{where}[{index}].features")
+        normalized = {
+            "scalar": template["scalar"],
+            "device": template["device"],
+            "features": tuple(features),
+        }
+        templates.append(normalized)
+        identities.append(json.dumps(template, sort_keys=True, separators=(",", ":")))
+    if len(identities) != len(set(identities)):
+        raise CatalogError(f"{where} contains duplicates")
+    return tuple(templates)
+
+
+def _route_target_variants(
+    route: dict[str, Any], defaults: dict[str, Any]
+) -> tuple[dict[str, Any], ...]:
+    dimensions = tuple(route["target_dimensions"])
+    templates = defaults["target_variant_templates"]
+    return tuple(
+        {
+            "dimension": dimension,
+            "scalar": template["scalar"],
+            "device": template["device"],
+            "features": tuple(template["features"]),
+        }
+        for dimension in dimensions
+        for template in templates
+    )
 
 
 def _catalog_digests(data: dict[str, Any]) -> tuple[str, str]:
@@ -320,8 +381,8 @@ def _load_catalog() -> tuple[dict[str, Any], str, str]:
 
     defaults = _exact(data["route_component_defaults"], {
         "version", "facets", "signature", "reads", "writes", "parameters", "interfaces",
-        "effects", "layouts", "clocks", "target", "determinism", "restart", "precision",
-        "conservation", "extensions",
+        "effects", "layouts", "clocks", "target_variant_templates", "determinism", "restart",
+        "precision", "conservation", "extensions",
     }, "route_component_defaults")
     version = _exact(defaults["version"], {"major", "minor", "patch"},
                      "route_component_defaults.version")
@@ -336,26 +397,9 @@ def _load_catalog() -> tuple[dict[str, Any], str, str]:
             raise CatalogError(f"route_component_defaults.{name} must be a list")
     if not isinstance(defaults["signature"], dict):
         raise CatalogError("route_component_defaults.signature must be an object")
-    target = _exact(defaults["target"], set(TARGET_FIELDS), "route_component_defaults.target")
-    variants = target["variants"]
-    if not isinstance(variants, list) or not variants:
-        raise CatalogError("route_component_defaults.target.variants must be a non-empty list")
-    normalized_variants = []
-    for index, variant in enumerate(variants):
-        variant = _exact(variant, {"dimension", "scalar", "device", "features"},
-                         f"route_component_defaults.target.variants[{index}]")
-        dimension = variant["dimension"]
-        if isinstance(dimension, bool) or not isinstance(dimension, int) or dimension < 1:
-            raise CatalogError("route target variant dimension must be an integer >= 1")
-        for name in ("scalar", "device"):
-            value = variant[name]
-            if not isinstance(value, str) or not value or value != value.strip():
-                raise CatalogError(f"route target variant {name} must be canonical text")
-        _strings(variant["features"],
-                 f"route_component_defaults.target.variants[{index}].features")
-        normalized_variants.append(json.dumps(variant, sort_keys=True, separators=(",", ":")))
-    if len(normalized_variants) != len(set(normalized_variants)):
-        raise CatalogError("route_component_defaults.target.variants contains duplicates")
+    _target_variant_templates(
+        defaults["target_variant_templates"], "route_component_defaults.target_variant_templates"
+    )
     determinism = _exact(defaults["determinism"], {"classification", "scope"},
                          "route_component_defaults.determinism")
     if determinism["classification"] not in {
@@ -402,7 +446,7 @@ def _load_catalog() -> tuple[dict[str, Any], str, str]:
         cpp_ids: set[str] = set()
         for index, route in enumerate(routes):
             route = _exact(route, {
-                "token", "wire_id", "cpp_id", "native_entry", "requirements",
+                "token", "wire_id", "target_dimensions", "cpp_id", "native_entry", "requirements",
                 "limitations", "aliases", "metadata",
             }, f"{name}.routes[{index}]")
             token = route["token"]
@@ -411,6 +455,7 @@ def _load_catalog() -> tuple[dict[str, Any], str, str]:
             if token in tokens:
                 raise CatalogError(f"duplicate route token {name}.{token}")
             tokens.add(token)
+            _target_dimensions(route["target_dimensions"], f"{name}.{token}.target_dimensions")
             if isinstance(route["wire_id"], bool) or not isinstance(route["wire_id"], int) \
                     or route["wire_id"] != index:
                 raise CatalogError(f"{name}.{token} wire_id must equal its stable position {index}")
@@ -525,8 +570,11 @@ def _render_routes(catalog: dict[str, Any], digest: str,
     semantic_digest = semantic_digest or digest
     tables: dict[str, tuple[Any, ...]] = {}
     metadata: dict[str, dict[str, dict[str, Any]]] = {}
+    target_dimensions: dict[str, dict[str, tuple[int, ...]]] = {}
+    target_variants: dict[str, dict[str, tuple[dict[str, Any], ...]]] = {}
     cpp: dict[str, dict[str, Any]] = {}
     brick_rows: list[dict[str, Any]] = []
+    defaults = catalog["route_component_defaults"]
     for family in catalog["route_families"]:
         name = family["name"]
         tables[name] = tuple((
@@ -534,6 +582,12 @@ def _render_routes(catalog: dict[str, Any], digest: str,
             tuple(row["limitations"]),
         ) for row in family["routes"])
         metadata[name] = {row["token"]: row["metadata"] for row in family["routes"]}
+        target_dimensions[name] = {
+            row["token"]: tuple(row["target_dimensions"]) for row in family["routes"]
+        }
+        target_variants[name] = {
+            row["token"]: _route_target_variants(row, defaults) for row in family["routes"]
+        }
         cpp[name] = {
             "enum": family["cpp_enum"], "table": family["cpp_table"],
             "ids": tuple(row["cpp_id"] for row in family["routes"]),
@@ -566,6 +620,8 @@ def _render_routes(catalog: dict[str, Any], digest: str,
         "ROUTE_REGISTRY_SIGNATURE": signature,
         "ROUTE_TABLES": tables,
         "ROUTE_METADATA": metadata,
+        "ROUTE_TARGET_DIMENSIONS": target_dimensions,
+        "ROUTE_TARGET_VARIANTS": target_variants,
         "ROUTE_CPP_BINDINGS": cpp,
         "ROUTE_COMPONENT_DEFAULTS": catalog["route_component_defaults"],
         "ROUTE_FAMILY_INTERFACES": catalog["route_family_interfaces"],
@@ -1998,10 +2054,18 @@ def _render_cpp(catalog: dict[str, Any], digest: str,
         "",
         "struct RouteInfo {",
         "  int index;",
+        "  std::array<int, 3> target_dimensions;",
+        "  std::size_t target_dimension_count;",
         "  const char* token;",
         "  const char* native_entry;",
         "  const char* requirements;",
         "  const char* limitations;",
+        "  constexpr bool supports_dimension(int dimension) const {",
+        "    for (std::size_t i = 0; i < target_dimension_count; ++i)",
+        "      if (target_dimensions[i] == dimension)",
+        "        return true;",
+        "    return false;",
+        "  }",
         "};",
         "",
         "enum class ComponentInterfaceId : std::uint8_t {",
@@ -2047,8 +2111,12 @@ def _render_cpp(catalog: dict[str, Any], digest: str,
         for row in family["routes"]:
             requirements = ",".join(row["requirements"])
             limitations = ",".join(row["limitations"])
+            dimensions = list(row["target_dimensions"])
+            padded_dimensions = dimensions + [0] * (3 - len(dimensions))
             out.append(
-                f"  {{{row['wire_id']}, {_cpp_string(row['token'])}, "
+                f"  {{{row['wire_id']}, "
+                f"{{{{{', '.join(str(value) for value in padded_dimensions)}}}}}, "
+                f"{len(dimensions)}, {_cpp_string(row['token'])}, "
                 f"{_cpp_string(row['native_entry'])}, {_cpp_string(requirements)}, "
                 f"{_cpp_string(limitations)}}},"
             )

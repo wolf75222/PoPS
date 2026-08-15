@@ -3,6 +3,7 @@
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/runtime/analytic/initial_materialization.hpp>
 #include <pops/runtime/named_field_publication.hpp>
+#include <pops/runtime/output_piece.hpp>
 
 #include <Kokkos_Core.hpp>
 
@@ -139,6 +140,82 @@ void expect_ranked_mapped_inputs() {
   EXPECT_DOUBLE_EQ(host_value(fab, constant_host, filled_index<Dim>(0), 0), 7.0);
 }
 
+template <int Dim>
+void expect_exact_ranked_native_capture() {
+  pops::Index<Dim> lower{};
+  pops::Index<Dim> upper{};
+  pops::Extent<Dim> max_grid{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    lower[axis] = axis;
+    upper[axis] = 2 * axis + 3;
+    max_grid[axis] = 2;
+  }
+  const pops::Box<Dim> domain{lower, upper};
+  const auto layout = pops::mesh::BoxArray<Dim>::from_domain(domain, max_grid);
+  const pops::mesh::RankSpace<Dim> ranks(filled_index<Dim>(0), filled_extent<Dim>(1));
+  constexpr int component_count = 3;
+  for (int mode = 0; mode < 2; ++mode) {
+    const bool replicated = mode == 1;
+    const auto distribution =
+        replicated ? pops::mesh::Distribution<Dim>::replicated(layout, ranks)
+                   : pops::mesh::Distribution<Dim>::partitioned(
+                         layout, ranks,
+                         std::vector<pops::Index<Dim>>(layout.size(), filled_index<Dim>(0)));
+    pops::MultiFab<Dim> state(layout, distribution, filled_index<Dim>(0), component_count,
+                              filled_extent<Dim>(1));
+    for (std::size_t local = 0; local < state.local_size(); ++local) {
+      const auto view = state.fab(local).view();
+      pops::for_each_cell(
+          state.box(local), KOKKOS_LAMBDA(const pops::Index<Dim>& index) {
+            for (int component = 0; component < component_count; ++component) {
+              pops::Real value = static_cast<pops::Real>(1000 * (component + 1));
+              for (int axis = 0; axis < Dim; ++axis)
+                value += static_cast<pops::Real>((axis + 1) * index[axis]);
+              view(index, component) = value;
+            }
+          });
+    }
+
+    const auto pieces = pops::output_local_pieces(state, /*level=*/2, replicated);
+    ASSERT_EQ(pieces.size(), state.local_size());
+    ASSERT_GT(pieces.size(), 1U);
+    for (std::size_t local = 0; local < pieces.size(); ++local) {
+      const auto& piece = pieces[local];
+      const std::size_t global = state.global_index(local);
+      EXPECT_EQ(piece.dimension, Dim);
+      EXPECT_EQ(piece.level, 2);
+      EXPECT_EQ(piece.global_box_index, static_cast<int>(global));
+      EXPECT_EQ(piece.replicated, replicated);
+      EXPECT_EQ(piece.ncomp, component_count);
+      const int expected_owner = replicated ? pops::my_rank()
+                                            : static_cast<int>(state.rank_space().linear_rank(
+                                                  state.distribution().owner(global)));
+      EXPECT_EQ(piece.owner_rank, expected_owner);
+      for (int axis = 0; axis < Dim; ++axis) {
+        EXPECT_EQ(piece.box.lo[axis], state.box(local).lo[axis]);
+        EXPECT_EQ(piece.box.hi[axis], state.box(local).hi[axis]);
+      }
+
+      const std::size_t cell_count = static_cast<std::size_t>(piece.box.numPts());
+      ASSERT_EQ(piece.values.size(), static_cast<std::size_t>(component_count) * cell_count);
+      for (int component = 0; component < component_count; ++component) {
+        for (std::size_t linear = 0; linear < cell_count; ++linear) {
+          std::size_t remainder = linear;
+          double expected = static_cast<double>(1000 * (component + 1));
+          for (int axis = 0; axis < Dim; ++axis) {
+            const auto extent = static_cast<std::size_t>(piece.box.length(axis));
+            const int coordinate = piece.box.lo[axis] + static_cast<int>(remainder % extent);
+            remainder /= extent;
+            expected += static_cast<double>((axis + 1) * coordinate);
+          }
+          EXPECT_DOUBLE_EQ(piece.values[static_cast<std::size_t>(component) * cell_count + linear],
+                           expected);
+        }
+      }
+    }
+  }
+}
+
 }  // namespace
 
 TEST(NamedFieldOutput, ValidatesOneOrExactlyDimPlusOneCompactComponents) {
@@ -174,4 +251,10 @@ TEST(NamedFieldOutput, MappedAnalyticInputsReadDistinctExactFieldsInEveryRank) {
   expect_ranked_mapped_inputs<1>();
   expect_ranked_mapped_inputs<2>();
   expect_ranked_mapped_inputs<3>();
+}
+
+TEST(NativeOutputCapture, PreservesExactRankedBoxesComponentsAndOwnership) {
+  expect_exact_ranked_native_capture<1>();
+  expect_exact_ranked_native_capture<2>();
+  expect_exact_ranked_native_capture<3>();
 }

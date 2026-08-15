@@ -113,8 +113,8 @@ mesh::RankSpace<Dim> one_rank_space() {
 }
 
 template <int Dim>
-std::array<int, Dim> axis_sizes(int axis_zero, int other) {
-  std::array<int, Dim> result{};
+Extent<Dim> axis_sizes(int axis_zero, int other) {
+  Extent<Dim> result{};
   for (int axis = 0; axis < Dim; ++axis)
     result[axis] = axis == 0 ? axis_zero : other;
   return result;

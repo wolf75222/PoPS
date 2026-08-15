@@ -405,16 +405,13 @@
     "effects": [],
     "layouts": [],
     "clocks": [],
-    "target": {
-      "variants": [
-        {
-          "dimension": 2,
-          "scalar": "float64",
-          "device": "cpu",
-          "features": []
-        }
-      ]
-    },
+    "target_variant_templates": [
+      {
+        "scalar": "float64",
+        "device": "cpu",
+        "features": []
+      }
+    ],
     "determinism": {
       "classification": "unspecified",
       "scope": []
@@ -445,6 +442,7 @@
         {
           "token": "rusanov",
           "wire_id": 0,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kRusanov",
           "native_entry": "pops::RusanovFlux",
           "requirements": [
@@ -464,6 +462,7 @@
         {
           "token": "hll",
           "wire_id": 1,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kHll",
           "native_entry": "pops::HLLFlux",
           "requirements": [
@@ -484,6 +483,7 @@
         {
           "token": "hllc",
           "wire_id": 2,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kHllc",
           "native_entry": "pops::HLLCFlux",
           "requirements": [
@@ -507,6 +507,7 @@
         {
           "token": "roe",
           "wire_id": 3,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kRoe",
           "native_entry": "pops::RoeFlux",
           "requirements": [
@@ -527,6 +528,7 @@
         {
           "token": "roe_hll_rusanov_recovery",
           "wire_id": 4,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kRoeHllRusanovRecovery",
           "native_entry": "pops::PreparedRiemannRecoveryPolicy<pops::RoeFlux,pops::HLLFlux,pops::RusanovFlux,pops::RejectRiemannRecovery>",
           "requirements": [
@@ -558,6 +560,7 @@
         {
           "token": "none",
           "wire_id": 0,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kNone",
           "native_entry": "pops::NoSlope",
           "requirements": [
@@ -576,6 +579,7 @@
         {
           "token": "minmod",
           "wire_id": 1,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kMinmod",
           "native_entry": "pops::Minmod",
           "requirements": [],
@@ -590,6 +594,7 @@
         {
           "token": "vanleer",
           "wire_id": 2,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kVanLeer",
           "native_entry": "pops::VanLeer",
           "requirements": [],
@@ -604,6 +609,7 @@
         {
           "token": "weno5",
           "wire_id": 3,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kWeno5",
         "native_entry": "pops::Weno5",
           "requirements": [
@@ -620,6 +626,7 @@
         {
           "token": "mc",
           "wire_id": 4,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kMc",
           "native_entry": "pops::MC",
           "requirements": [],
@@ -634,6 +641,7 @@
         {
           "token": "superbee",
           "wire_id": 5,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kSuperbee",
           "native_entry": "pops::Superbee",
           "requirements": [],
@@ -655,6 +663,7 @@
         {
           "token": "conservative",
           "wire_id": 0,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kConservative",
           "native_entry": "pops::make_block(recon_prim=false)",
           "requirements": [],
@@ -665,6 +674,7 @@
         {
           "token": "primitive",
           "wire_id": 1,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kPrimitive",
           "native_entry": "pops::make_block(recon_prim=true)",
           "requirements": [
@@ -686,6 +696,7 @@
         {
           "token": "explicit",
           "wire_id": 0,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kExplicitSsprk2",
           "native_entry": "pops::SSPRK2",
           "requirements": [],
@@ -696,6 +707,7 @@
         {
           "token": "ssprk3",
           "wire_id": 1,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kSsprk3",
           "native_entry": "pops::SSPRK3",
           "requirements": [],
@@ -706,6 +718,7 @@
         {
           "token": "euler",
           "wire_id": 2,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kForwardEuler",
           "native_entry": "pops::ForwardEuler<pops::kNativeDimension>",
           "requirements": [],
@@ -718,6 +731,7 @@
         {
           "token": "imex",
           "wire_id": 3,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kImex",
           "native_entry": "generated ProgramGraph(additive_imex_euler)",
           "requirements": [
@@ -732,6 +746,7 @@
         {
           "token": "imexrk_ars222",
           "wire_id": 4,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kImexRkArs222",
           "native_entry": "generated ProgramGraph(additive_imex_ars222)",
           "requirements": [
@@ -753,6 +768,7 @@
         {
           "token": "geometric_mg",
           "wire_id": 0,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kGeometricMg",
           "native_entry": "pops::GeometricMG",
           "requirements": [],
@@ -763,6 +779,7 @@
         {
           "token": "fft",
           "wire_id": 1,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kFft",
           "native_entry": "pops::PoissonFFTSolver<Dim>",
           "requirements": [
@@ -780,6 +797,7 @@
         {
           "token": "polar",
           "wire_id": 2,
+          "target_dimensions": [2],
           "cpp_id": "kPolar",
           "native_entry": "pops::PolarPoissonSolver<2>",
           "requirements": [
@@ -797,6 +815,7 @@
         {
           "token": "cartesian_cg",
           "wire_id": 3,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kCartesianCg",
           "native_entry": "pops::elliptic::nd::CartesianPoissonSolver<Dim>",
           "requirements": [
@@ -819,6 +838,7 @@
         {
           "token": "auto",
           "wire_id": 0,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kAuto",
           "native_entry": "resolved from the wall/periodic system config",
           "requirements": [],
@@ -829,6 +849,7 @@
         {
           "token": "periodic",
           "wire_id": 1,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kPeriodic",
           "native_entry": "pops::fill_boundary(periodic)",
           "requirements": [],
@@ -839,6 +860,7 @@
         {
           "token": "dirichlet",
           "wire_id": 2,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kDirichlet",
           "native_entry": "pops::PhysicalBc(dirichlet)",
           "requirements": [],
@@ -849,6 +871,7 @@
         {
           "token": "neumann",
           "wire_id": 3,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kNeumann",
           "native_entry": "pops::PhysicalBc(neumann)",
           "requirements": [],
@@ -866,6 +889,7 @@
         {
           "token": "uniform",
           "wire_id": 0,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kUniform",
           "native_entry": "pops::System",
           "requirements": [],
@@ -876,6 +900,7 @@
         {
           "token": "amr",
           "wire_id": 1,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kAmr",
           "native_entry": "pops::AmrSystem",
           "requirements": [],
@@ -895,6 +920,7 @@
         {
           "token": "exb",
           "wire_id": 0,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kExb",
           "native_entry": "pops::CartesianExBDrift",
           "requirements": [],
@@ -917,6 +943,7 @@
         {
           "token": "compressible",
           "wire_id": 1,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kCompressible",
           "native_entry": "pops::CompressibleFlux",
           "requirements": [],
@@ -940,6 +967,7 @@
         {
           "token": "isothermal",
           "wire_id": 2,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kIsothermal",
           "native_entry": "pops::IsothermalFlux",
           "requirements": [],
@@ -969,6 +997,7 @@
         {
           "token": "none",
           "wire_id": 0,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kNone",
           "native_entry": "pops::NoSource",
           "requirements": [],
@@ -983,6 +1012,7 @@
         {
           "token": "potential",
           "wire_id": 1,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kPotential",
           "native_entry": "pops::PotentialForce",
           "requirements": [
@@ -1001,6 +1031,7 @@
         {
           "token": "gravity",
           "wire_id": 2,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kGravity",
           "native_entry": "pops::GravityForce",
           "requirements": [
@@ -1017,6 +1048,7 @@
         {
           "token": "magnetic",
           "wire_id": 3,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kMagneticLorentz",
           "native_entry": "pops::MagneticLorentzForce",
           "requirements": [
@@ -1038,6 +1070,7 @@
         {
           "token": "potential_magnetic",
           "wire_id": 4,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kPotentialMagneticLorentz",
           "native_entry": "pops::CompositeSource<PotentialForce, MagneticLorentzForce>",
           "requirements": [
@@ -1064,6 +1097,7 @@
         {
           "token": "charge",
           "wire_id": 0,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kCharge",
           "native_entry": "pops::ChargeDensity",
           "requirements": [],
@@ -1079,6 +1113,7 @@
         {
           "token": "background",
           "wire_id": 1,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kBackground",
           "native_entry": "pops::BackgroundDensity",
           "requirements": [],
@@ -1095,6 +1130,7 @@
         {
           "token": "gravity",
           "wire_id": 2,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kGravity",
           "native_entry": "pops::GravityCoupling",
           "requirements": [],
@@ -1119,6 +1155,7 @@
         {
           "token": "charge_density",
           "wire_id": 0,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kChargeDensity",
           "native_entry": "per-block ChargeDensity bricks summed",
           "requirements": [],
@@ -1131,6 +1168,7 @@
         {
           "token": "composite",
           "wire_id": 1,
+          "target_dimensions": [1, 2, 3],
           "cpp_id": "kComposite",
           "native_entry": "per-block elliptic bricks summed",
           "requirements": [],

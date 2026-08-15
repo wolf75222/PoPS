@@ -24,7 +24,7 @@ from pops.codegen.toolchain import native_compile_environment, pops_loader_build
 from pops.math import sqrt
 from pops.frames import X_AXIS, Y_AXIS
 from pops.codegen.module_lowering import lower_and_validate
-from pops.physics import Density, Energy, Momentum, Pressure, Velocity
+from pops.physics import Custom, Density, Energy, Momentum, Pressure, Velocity
 from pops.physics._facade import Model
 from tests.python.support.requirements import repo_include
 
@@ -216,6 +216,25 @@ def main():
     assert out.strip() == "OK", "index_of(role) n'a pas retrouve la bonne composante : %s" % out.strip()
     print("OK  index_of(role) retrouve la composante par son SENS dans un layout non standard")
     print("test_dsl_roles : tout est vert")
+
+
+def test_custom_role_labels_reach_generated_variable_set_metadata() -> None:
+    model = Model("explicit_custom_labels")
+    first, second = model.conservative_vars(
+        "first", "second", roles=(Custom("q1"), Custom("q2")))
+    model.flux(x=(first, second), y=(second, first))
+    model.eigenvalues(x=(first, second), y=(second, first))
+    model.primitive_vars(
+        first, second, roles=(Custom("q1"), Custom("q2")))
+    model.conservative_from((first, second))
+
+    source = emit_brick(model, name="CustomLabels")
+
+    expected = (
+        '{pops::VariableSemantic::Custom, pops::VariableSemantic::Custom}, '
+        '{"q1", "q2"}'
+    )
+    assert source.count(expected) == 2
 
 
 if __name__ == "__main__":

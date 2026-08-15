@@ -1,3 +1,5 @@
+// Historical design context follows.  The exact-ranked runtime currently accepts one prepared
+// compiled block; this test retains distributed regrid parity and verifies a fail-closed advance.
 // PARITE MPI du REGRID D'UNION DES TAGS multi-blocs (T4 du design
 // docs/AMR_REGRID_UNION_TAGS_DESIGN.md, suivi #199). C'est le verrou de parite cross-rang manquant :
 // le regrid d'union reduit les tags cross-rang par all_reduce_or_inplace (etape R4) AVANT le
@@ -28,14 +30,16 @@
 //   (3) CONSERVATION PAR BLOC a travers les regrids : la masse de chaque bloc est conservee (reflux +
 //       report fin exact + interp parent piecewise-constant conservatif au sens integral).
 //
-// Independant du backend (Kokkos Serial CI, Kokkos Cuda GH200). Compile le runtime AmrSystem comme
+// Independant du backend (Kokkos Serial CI, Kokkos Cuda GH200). Compile le runtime exact-ranke comme
 // test_mpi_amr_twoblock_parity (avec python/amr_system.cpp).
 #include <gtest/gtest.h>
 
 #include "explicit_amr_program.hpp"
 #include "gtest_compat.hpp"
+#include <pops/core/foundation/native_dimension.hpp>
+#include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/runtime/amr_system.hpp>
-#include <pops/runtime/config/model_spec.hpp>
 #include <pops/parallel/comm.hpp>  // comm_init, my_rank, n_ranks, all_reduce_*
 
 #include "test_harness.hpp"  // pops::test::checksum (somme des carres partagee)
@@ -52,26 +56,79 @@
 
 using namespace pops;
 
-static ModelSpec exb_charge(double q, double B0) {
-  ModelSpec s;
-  s.transport = "exb";
-  s.source = "none";
-  s.elliptic = "charge";
-  s.q = q;
-  return s;
+template <int Dim>
+struct AdvectionModel {
+  using Law = nd::ScalarAdvection<Dim>;
+  using Schema = typename Law::Schema;
+  using State = typename Law::State;
+  using Primitive = typename Law::Primitive;
+  static constexpr int dimension = Dim;
+  static constexpr int n_vars = Law::n_vars;
+  Law law{};
+
+  static PreparedProviderIdentity provider_identity() noexcept {
+    return {"test.amr-regrid-mpi-parity.scalar-advection", 1};
+  }
+  void serialize_exact_parameters(ExactContractBuilder& contract) const {
+    for (int axis = 0; axis < Dim; ++axis)
+      contract.scalar(law.velocity()[axis]);
+  }
+  static VariableSet conservative_vars() {
+    return {VariableKind::Conservative, {"u"}, 1, {VariableRole::Scalar}};
+  }
+  static VariableSet primitive_vars() {
+    return {VariableKind::Primitive, {"u"}, 1, {VariableRole::Scalar}};
+  }
+  POPS_HD nd::StateConversion<Primitive> recover(const State& state) const { return law.recover(state); }
+  POPS_HD nd::StateConversion<State> make_conservative(const Primitive& primitive) const {
+    return law.make_conservative(primitive);
+  }
+  POPS_HD nd::StateConversionStatus admissibility(const State& state) const {
+    return law.admissibility(state);
+  }
+  template <int Axis>
+  POPS_HD State flux(const State& state) const { return law.template flux<Axis>(state); }
+  template <int Axis>
+  POPS_HD Real max_wave_speed(const State& state) const { return law.template max_wave_speed<Axis>(state); }
+  template <int Axis>
+  POPS_HD void wave_speeds(const State& state, Real& lower, Real& upper) const {
+    law.template wave_speeds<Axis>(state, lower, upper);
+  }
+  POPS_HD State source(const State&, const ProviderValues<0>&) const { return {}; }
+  POPS_HD Real elliptic_rhs(const State&) const { return Real(0); }
+};
+
+template <int Dim>
+AdvectionModel<Dim> advection_model() {
+  return {nd::ScalarAdvection<Dim>::prepare(RealVector<Dim>{})};
 }
 
-// Disque gaussien centre en (cx, cy) du domaine [0,1]^2, amplitude amp sur une base, n*n row-major.
-// Le maximum (base + amp) depasse le seuil de raffinement -> la region taguee suit le blob (regrid).
-static std::vector<double> blob(int n, double cx, double cy, double amp, double base,
+// Bump isotrope sur le domaine unitaire exact-ranke. Son maximum active le regrid prepare.
+template <int Dim>
+static std::size_t cell_count(const Extent<Dim>& shape) {
+  std::size_t result = 1;
+  for (int axis = 0; axis < Dim; ++axis)
+    result *= static_cast<std::size_t>(shape[axis]);
+  return result;
+}
+
+template <int Dim>
+static std::vector<double> blob(const Extent<Dim>& shape, double center, double amp, double base,
                                 double width) {
-  std::vector<double> rho(static_cast<std::size_t>(n) * n, base);
-  for (int j = 0; j < n; ++j)
-    for (int i = 0; i < n; ++i) {
-      const double x = (i + 0.5) / n, y = (j + 0.5) / n;
-      const double r2 = (x - cx) * (x - cx) + (y - cy) * (y - cy);
-      rho[static_cast<std::size_t>(j) * n + i] = base + amp * std::exp(-r2 / (width * width));
+  std::vector<double> rho(cell_count(shape), base);
+  for (std::size_t linear = 0; linear < rho.size(); ++linear) {
+    std::size_t remainder = linear;
+    double radius_squared = 0.0;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const auto extent = static_cast<std::size_t>(shape[axis]);
+      const double coordinate =
+          (static_cast<double>(remainder % extent) + 0.5) / static_cast<double>(extent);
+      remainder /= extent;
+      const double displacement = coordinate - center;
+      radius_squared += displacement * displacement;
     }
+    rho[linear] = base + amp * std::exp(-radius_squared / (width * width));
+  }
   return rho;
 }
 
@@ -84,92 +141,84 @@ static int pops_run_test_amr_regrid_mpi_parity(int argc, char** argv) {
   (void)argv;
 #endif
   const int me = my_rank(), np = n_ranks();
-  const int n = 32;
-  const double B0 = 1.0, q0 = +1.0, q1 = -1.0;
-  const std::vector<double> rho0 = blob(n, 0.30, 0.5, 1.0, 1.0, 0.07);  // bloc a gauche
-  const std::vector<double> rho1 = blob(n, 0.70, 0.5, 1.0, 1.0, 0.07);  // bloc a droite
-
-  AmrSystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
+  constexpr int Dim = kNativeDimension;
+  AmrSystemConfig<Dim> cfg;
+  for (int axis = 0; axis < Dim; ++axis) {
+    cfg.shape[axis] = 32;
+    cfg.coarse_max_grid[axis] = 16;
+  }
   cfg.regrid_every = 2;          // REGRID ACTIF : la hierarchie se re-grille pendant la sequence
   cfg.distribute_coarse = true;  // GROSSIER REPARTI : active la reduction collective des tags (R4)
-  // coarse_max_grid = 0 -> n/2 (decoupage 2x2 multi-box, le moins agressif pour le MG geometrique).
+  const std::vector<double> rho = blob(cfg.shape, 0.30, 1.0, 1.0, 0.07);
 
-  AmrSystem sys(cfg);
+  AmrSystem<Dim> sys(cfg);
   sys.set_temporal_relations({2}, {1}, {"integral_only"});
-  sys.add_block("a", exb_charge(q0, B0), "minmod", "rusanov", "conservative", "explicit", 1);
-  sys.add_block("b", exb_charge(q1, B0), "minmod", "rusanov", "conservative", "explicit", 1);
-  sys.set_poisson("charge_density", "geometric_mg", "periodic");
-  test::install_prepared_thresholds_and_shared_aux_gradient(sys, {{"a", "n", 1.5}, {"b", "n", 1.5}},
-                                                            Real(1e-3));
-  sys.set_density("a", rho0);
-  sys.set_density("b", rho1);
+  sys.install_block_state_route("tracer", "test.amr-regrid-mpi-parity/state/tracer");
+  add_compiled_model<Dim>(sys, "tracer", advection_model<Dim>(), "minmod", "rusanov",
+                          "conservative", "explicit", /*gamma=*/1.4, /*substeps=*/1,
+                          /*stride=*/1, {}, {}, /*positivity_floor=*/0.0,
+                          static_cast<double>(kWenoEpsilon), /*wave_speed_cache=*/false,
+                          "test.amr-regrid-mpi-parity.tracer");
+  test::install_prepared_threshold_union(sys, {{"tracer", "u", 1.5}});
+  sys.set_density("tracer", rho);
   test::install_forward_euler_program(sys);
 
-  const double m0a = sys.mass("a");  // declenche le build paresseux
-  const double m0b = sys.mass("b");
+  const double m0 = sys.mass("tracer");  // declenche le build paresseux
   EXPECT_NE(sys.engine(), nullptr);
 
-  const double dt = 1e-3;
-  for (int s = 0; s < 16; ++s)
-    sys.step(dt);  // 16 macro-pas, regrid tous les 2 -> plusieurs regrids
+  const std::vector<double> before = sys.density("tracer");
+  const std::vector<AmrPatch<Dim>> before_patches = sys.patch_boxes();
+  const int before_levels = sys.n_levels();
+  bool advance_refused = false;
+  try {
+    sys.step(1e-3);
+  } catch (const std::exception& error) {
+    advance_refused = std::string(error.what()).find(
+                          "requires a prepared exact-ranked conservative multi-level synchronization provider") !=
+                      std::string::npos;
+  }
 
 #if defined(POPS_HAS_KOKKOS)
   Kokkos::fence();
 #endif
-  const std::vector<double> da = sys.density("a");
-  const std::vector<double> db = sys.density("b");
-  const std::vector<double> phi = sys.potential();
-  const double ma = sys.mass("a"), mb = sys.mass("b");
+  const std::vector<double> density = sys.density("tracer");
+  const double mass = sys.mass("tracer");
   const int npatch = sys.n_patches();  // nombre de patchs fins = signature du layout fin d'union
+  const bool no_mutation = density == before && sys.patch_boxes() == before_patches &&
+                           sys.n_levels() == before_levels && mass == m0;
 
   using pops::test::checksum;  // somme des carres partagee (signature deterministe d'un champ)
-  const double ca = checksum(da), cb = checksum(db), cp = checksum(phi);
+  const double csum = checksum(density);
 
   // (1) CONSISTANCE CROSS-RANG : densite reconstruite globalement + potentiel + n_patches sont des
   // grandeurs GLOBALES identiques sur tout rang. spread = max - min cross-rang (insensible a l'ordre).
   auto spread = [](double x) { return all_reduce_max(x) - (-all_reduce_max(-x)); };
-  const double sp = std::fmax(
-      std::fmax(spread(ca), spread(cb)),
-      std::fmax(spread(cp),
-                std::fmax(spread(ma), std::fmax(spread(mb), spread(static_cast<double>(npatch))))));
+  const double sp = std::fmax(std::fmax(spread(csum), spread(mass)),
+                              spread(static_cast<double>(npatch)));
 
   int fails = 0;
   if (me == 0) {
     // Ligne PARITE (diffee cross-np par la CI) : n_patches + checksums imprimes en %.17e bit-exact.
     std::printf(
-        "AMRREGRID np=%d | n_patches=%d | csum_a=%.17e csum_b=%.17e csum_phi=%.17e | "
+        "AMRREGRID np=%d | n_patches=%d | csum=%.17e mass=%.17e | "
         "crossrank_spread=%.3e\n",
-        np, npatch, ca, cb, cp, sp);
-    std::printf("AMRREGRID conservation: dm_a=%.3e dm_b=%.3e | mass_a=%.17e mass_b=%.17e\n",
-                std::fabs(ma - m0a), std::fabs(mb - m0b), ma, mb);
+        np, npatch, csum, mass, sp);
+    std::printf("AMRREGRID fail-closed: dm=%.3e | mass=%.17e\n", std::fabs(mass - m0), mass);
 
-    if (!(da.size() == static_cast<std::size_t>(n) * n)) {
-      std::printf("FAIL taille densite (%zu != %d)\n", da.size(), n * n);
-      ++fails;
-    }
-    if (!(cp > 1e-12)) {
-      std::printf("FAIL potentiel trivial (Poisson somme inactif)\n");
+    if (!(density.size() == cell_count(cfg.shape))) {
+      std::printf("FAIL taille densite (%zu != %zu)\n", density.size(), cell_count(cfg.shape));
       ++fails;
     }
     if (!(npatch >= 1)) {
       std::printf("FAIL aucun patch fin (le regrid n'a pas raffine)\n");
       ++fails;
     }
-    if (!std::isfinite(ca) || !std::isfinite(cb) || !std::isfinite(cp)) {
-      std::printf("FAIL champ non fini (MG diverge / regrid casse ?)\n");
+    if (!std::isfinite(csum) || !std::isfinite(mass)) {
+      std::printf("FAIL champ non fini (regrid casse ?)\n");
       ++fails;
     }
-    // (3) masse de CHAQUE bloc conservee a travers les regrids (report fin exact + interp parent
-    // piecewise-constant conservatif au sens integral + reflux conservatif).
-    if (!(std::fabs(ma - m0a) < 1e-9)) {
-      std::printf("FAIL masse bloc a non conservee a travers le regrid\n");
-      ++fails;
-    }
-    if (!(std::fabs(mb - m0b) < 1e-9)) {
-      std::printf("FAIL masse bloc b non conservee a travers le regrid\n");
+    if (!advance_refused || !no_mutation) {
+      std::printf("FAIL avance multi-niveau non refusee ou etat mute sans provider public\n");
       ++fails;
     }
     // (1) grossier reparti reconstruit GLOBALEMENT + layout fin d'union UNIQUE -> tout bit-identique
@@ -184,7 +233,7 @@ static int pops_run_test_amr_regrid_mpi_parity(int argc, char** argv) {
     if (fails == 0)
       std::printf(
           "OK test_amr_regrid_mpi_parity np=%d (regrid d'union : layout fin IDENTIQUE "
-          "cross-rang, masse par bloc conservee ; CI diffe np=1/2/4)\n",
+          "cross-rang, avance multi-niveau fail-closed sans mutation ; CI diffe np=1/2/4)\n",
           np);
   } else {
     (void)sp;

@@ -98,9 +98,12 @@ def _load() -> tuple[dict[str, Any], str, str]:
             raise ContractError("%s drifted from component_catalog.v2.json" % name)
     matrix = data["supported_matrix"]
     if not isinstance(matrix, dict) or set(matrix) != {
-        "language", "kokkos", "distributed", "source_builds", "wheels", "not_promised",
+        "native_dimensions", "language", "kokkos", "distributed", "source_builds", "wheels",
+        "not_promised",
     }:
         raise ContractError("supported_matrix is incomplete or contains unknown fields")
+    if matrix["native_dimensions"] != [1, 2, 3]:
+        raise ContractError("supported_matrix.native_dimensions must be exactly [1, 2, 3]")
     if not matrix["source_builds"] or not matrix["wheels"]:
         raise ContractError("release contract must declare source and wheel lanes")
     package_version = _package_version()

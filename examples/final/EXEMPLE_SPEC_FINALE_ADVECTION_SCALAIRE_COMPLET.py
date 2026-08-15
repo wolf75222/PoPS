@@ -17,8 +17,7 @@ from typing import Any
 
 import numpy as np
 import pops
-from pops.domain import Rectangle, RectangleBoundaryNames
-from pops.frames import Cartesian2D
+from pops.domain import CartesianBoundaryNames, CartesianDomain
 from pops.math import ValueExpr, ddt, div
 from pops.mesh import CartesianGrid
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
@@ -223,18 +222,16 @@ def build_authoring(
     if not callable(program_builder):
         raise TypeError("program_builder must construct one ordinary pops.Program")
 
-    domain = Rectangle(
+    domain = CartesianDomain(
         "unit_square",
         lower=(0.0, 0.0),
         upper=(1.0, 1.0),
-        boundaries=RectangleBoundaryNames(
-            x_min="inlet_x",
-            x_max="outlet_x",
-            y_min="inlet_y",
-            y_max="outlet_y",
-        ),
+        boundaries=CartesianBoundaryNames((
+            ("inlet_x", "outlet_x"),
+            ("inlet_y", "outlet_y"),
+        )),
     ).tag("fluid")
-    frame = domain.frame(Cartesian2D())
+    frame = domain.frame()
     x_axis, y_axis = frame.axes
     grid = CartesianGrid(frame=frame, cells=(128, 128))
 
@@ -357,18 +354,20 @@ def build_transport_boundaries(core: ScalarAdvectionAuthoring) -> Any:
     from pops.boundary.transport import Inflow, Outflow
 
     boundaries = core.frame.boundaries
+    x_boundaries = boundaries.pair(core.frame.x)
+    y_boundaries = boundaries.pair(core.frame.y)
     return TransportBoundarySet(
         {
-            boundaries.x_min: Inflow(
+            x_boundaries.lower: Inflow(
                 state=core.tracer_state,
                 value=core.inlet_x_value,
             ),
-            boundaries.x_max: Outflow(state=core.tracer_state),
-            boundaries.y_min: Inflow(
+            x_boundaries.upper: Outflow(state=core.tracer_state),
+            y_boundaries.lower: Inflow(
                 state=core.tracer_state,
                 value=core.inlet_y_value,
             ),
-            boundaries.y_max: Outflow(state=core.tracer_state),
+            y_boundaries.upper: Outflow(state=core.tracer_state),
         }
     )
 

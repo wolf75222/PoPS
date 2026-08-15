@@ -105,6 +105,59 @@ void require_amr_state_array_shape(const AmrSystem& system, const py::array& arr
                             ": state shape differs from the exact native spatial shape");
 }
 
+std::vector<pops::AmrBootstrapSubject> bootstrap_subjects_from_python(const py::sequence& rows) {
+  std::vector<pops::AmrBootstrapSubject> subjects;
+  subjects.reserve(static_cast<std::size_t>(rows.size()));
+  for (const py::handle value : rows) {
+    if (!PyDict_CheckExact(value.ptr()))
+      throw py::type_error("AMR bootstrap subject rows must be exact dicts");
+    const py::dict row = py::reinterpret_borrow<py::dict>(value);
+    if (row.size() != 6 || !row.contains("schema_version") || !row.contains("subject_identity") ||
+        !row.contains("block") || !row.contains("space") || !row.contains("centering") ||
+        !row.contains("payload") || !PyLong_CheckExact(row["schema_version"].ptr()) ||
+        py::cast<int>(row["schema_version"]) != 1 ||
+        !PyUnicode_CheckExact(row["subject_identity"].ptr()) ||
+        !(row["block"].is_none() || PyUnicode_CheckExact(row["block"].ptr())) ||
+        !PyUnicode_CheckExact(row["space"].ptr()) ||
+        !PyUnicode_CheckExact(row["centering"].ptr()))
+      throw py::value_error("AMR bootstrap subject row has an unsupported schema");
+
+    pops::AmrBootstrapSubject subject;
+    subject.subject_identity = py::cast<std::string>(row["subject_identity"]);
+    if (!row["block"].is_none())
+      subject.block = py::cast<std::string>(row["block"]);
+    subject.space = py::cast<std::string>(row["space"]);
+    subject.centering = py::cast<std::string>(row["centering"]);
+
+    const py::handle payload_value = row["payload"];
+    if (!PyDict_CheckExact(payload_value.ptr()))
+      throw py::type_error("AMR bootstrap payloads must be exact dicts");
+    const py::dict payload = py::reinterpret_borrow<py::dict>(payload_value);
+    if (!payload.contains("kind") || !PyUnicode_CheckExact(payload["kind"].ptr()))
+      throw py::value_error("AMR bootstrap payload has no typed kind");
+    subject.payload_kind = py::cast<std::string>(payload["kind"]);
+    if (subject.payload_kind == "discrete_array") {
+      if (payload.size() != 2 || !payload.contains("values"))
+        throw py::value_error("AMR discrete bootstrap payload has an unsupported schema");
+      using Array = py::array_t<double, py::array::c_style | py::array::forcecast>;
+      Array array = Array::ensure(payload["values"]);
+      if (!array)
+        throw py::type_error("AMR discrete bootstrap payload must be a finite float64 array");
+      subject.discrete_array = flat(array);
+    } else if (subject.payload_kind == "analytic_program") {
+      if (payload.size() != 3 || !payload.contains("opcodes") || !payload.contains("literals"))
+        throw py::value_error("AMR analytic bootstrap payload has an unsupported schema");
+      subject.analytic_opcodes =
+          py::cast<std::vector<std::vector<std::string>>>(payload["opcodes"]);
+      subject.analytic_literals = py::cast<std::vector<std::vector<double>>>(payload["literals"]);
+    } else {
+      throw py::value_error("AMR bootstrap payload kind is not prepared");
+    }
+    subjects.push_back(std::move(subject));
+  }
+  return subjects;
+}
+
 typename pops::runtime::amr::PreparedTaggingProgram<pops::kNativeDimension>::Stencil
 amr_tagging_stencil_from_python(const py::dict& row) {
   using Program = pops::runtime::amr::PreparedTaggingProgram<pops::kNativeDimension>;
@@ -249,6 +302,24 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
            "Bind one exact solved-field Handle to native provider storage.")
       .def("_discard_boundary_plans", &AmrSystem::discard_hyperbolic_boundaries,
            "Roll back one failed pre-block boundary authority transaction.")
+      .def(
+          "_install_amr_tagger_component",
+          [](AmrSystem& system, std::shared_ptr<pops::component::LoadedComponent> component,
+             const py::dict& binding, const py::dict& execution_data) {
+            const py::dict capability = py::cast<py::dict>(binding["tagging_capability"]);
+            system.install_tagger_component(
+                std::move(component), py::cast<std::string>(binding["component_id"]),
+                py::cast<std::string>(binding["component_manifest_identity"]),
+                py::cast<std::uint32_t>(binding["interface_version"]),
+                py::cast<std::string>(binding["provider_identity"]),
+                py::cast<std::string>(binding["tagging_graph_identity"]),
+                py::cast<std::string>(binding["layout_identity"]),
+                py::cast<std::string>(binding["clock_identity"]),
+                py::cast<std::string>(capability["execution_mode"]),
+                pops::python::detail::make_component_execution_context(execution_data));
+          },
+          py::arg("component"), py::arg("binding"), py::arg("execution_context"),
+          "Install one authenticated native Tagger candidate evaluator.")
       // Private production-package seam. Parameters are fixed before AMR closures are built.
       .def("_install_native_block", &AmrSystem::add_native_block, py::arg("name"),
            py::arg("so_path"), py::arg("limiter") = "minmod", py::arg("riemann") = "rusanov",
@@ -544,6 +615,12 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
             s.set_conservative_state(name, flat(arr));
           },
           py::arg("name"), py::arg("U"))
+      .def(
+          "_install_bootstrap_subjects",
+          [](AmrSystem& system, const py::sequence& subjects) {
+            system.install_bootstrap_subjects(bootstrap_subjects_from_python(subjects));
+          },
+          py::arg("subjects"), "Install one exact transactional AMR bootstrap-subject registry.")
       .def("_begin_bootstrap_plan", &AmrSystem::begin_bootstrap_plan)
       .def("_bootstrap_next_level", &AmrSystem::bootstrap_next_level)
       .def("_commit_bootstrap_level", &AmrSystem::commit_bootstrap_level)

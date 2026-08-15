@@ -6,6 +6,11 @@ interfaces as any other PoPS physics. `HyQMOM15.vlasov_lorentz(...)` returns an 
 retrieved from the model's immutable typed families. No preset-specific result wrapper, model-name
 test or native `hyqmom15` dispatch exists.
 
+This physics preset is intentionally spatially 2D:
+`HyQMOM15.supported_spatial_dimensions == (2,)`. The executable derives that rank from the two
+coordinate vectors of `CartesianDomain(...).frame()` and refuses 1D/3D frames; it does not claim a
+different rank by selecting a native variant or changing metadata.
+
 The final executable target is
 [`examples/final/EXEMPLE_SPEC_FINALE_15_MOMENTS_HYQMOM.py`](../../examples/final/EXEMPLE_SPEC_FINALE_15_MOMENTS_HYQMOM.py).
 It adds an ordinary model-owned Poisson unknown and operator to the provided model. A fixed unit ion

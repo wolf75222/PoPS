@@ -130,7 +130,10 @@ def _write_final_source_tree(root: Path) -> None:
             + "\n".join(contract.REQUIRED_PROOF_MARKERS)
             + "\n"
             + "\n".join('# target="%s"' % target for target in output_targets)
-            + "\nif __name__ == \"__main__\":\n    pass\n",
+            + "\nfrom pops.domain import CartesianDomain\n"
+            + "domain = CartesianDomain('proof', (0.0, 0.0), (1.0, 1.0))\n"
+            + "frame = domain.frame()\n"
+            + "if __name__ == \"__main__\":\n    pass\n",
             encoding="utf-8",
         )
     test_sources = {}
@@ -202,6 +205,28 @@ def test_final_release_source_contract_requires_executable_restart_output_proof(
 
     assert any("--output-dir" in error for error in errors)
     assert any("lacks final proof markers" in error for error in errors)
+
+
+def test_final_release_source_contract_requires_rank_derived_cartesian_domains(tmp_path):
+    _write_final_source_tree(tmp_path)
+    path = tmp_path / contract.FINAL_EXAMPLES[0]
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        source.replace(
+            "from pops.domain import CartesianDomain\n"
+            "domain = CartesianDomain('proof', (0.0, 0.0), (1.0, 1.0))\n"
+            "frame = domain.frame()\n",
+            "from pops.domain import Rectangle\n"
+            "from pops.frames import Cartesian2D\n"
+            "domain = Rectangle('proof', (0.0, 0.0), (1.0, 1.0))\n"
+            "frame = domain.frame(Cartesian2D())\n",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = contract.source_contract_errors(tmp_path)
+
+    assert any("derive its spatial rank from CartesianDomain vectors" in error for error in errors)
 
 
 def test_final_release_source_contract_requires_exact_scientific_output_targets(tmp_path):

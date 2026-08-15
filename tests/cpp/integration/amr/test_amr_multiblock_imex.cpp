@@ -136,7 +136,10 @@ TEST(test_amr_multiblock_imex, ExactFacadeRejectsSecondSpatialPackageBeforeState
   pops::AmrSystem<Dim> system(config);
   system.install_block_state_route("first", "state/first");
   pops::add_compiled_model<Dim>(system, "first", advection_model<Dim>(), "minmod", "rusanov",
-                                "conservative", "imex");
+                                "conservative", "imex",
+                                static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
+                                static_cast<double>(pops::kWenoEpsilon), false,
+                                "tests.amr-imex.scalar-advection/physical_flux");
   system.set_conservative_state("first", std::vector<double>(cell_count(config.shape), 1.0));
   const std::vector<double> accepted = system.block_level_state_global("first", 0);
   ASSERT_EQ(system.n_blocks(), 1);
@@ -158,7 +161,10 @@ TEST(test_amr_multiblock_imex, ImexMetadataNeverCreatesAnImplicitTemporalFallbac
   pops::AmrSystem<Dim> system(config);
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>(), "minmod", "rusanov",
-                                "conservative", "imex");
+                                "conservative", "imex",
+                                static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
+                                static_cast<double>(pops::kWenoEpsilon), false,
+                                "tests.amr-imex.scalar-advection/physical_flux");
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
   const std::vector<double> accepted = system.block_level_state_global("tracer", 0);
 

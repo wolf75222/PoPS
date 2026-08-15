@@ -208,6 +208,19 @@ TEST(RouteIds, RouteInfoCarriesNativeEntryRequirementsAndLimitations) {
       << "route_info(kForwardEuler) : route native reservee a la validation";
 }
 
+TEST(RouteIds, RouteInfoCarriesExactTargetDimensions) {
+  const auto& cartesian = route_info(FieldSolverRouteId::kCartesianCg);
+  EXPECT_EQ(cartesian.target_dimension_count, 3U);
+  for (int dimension : {1, 2, 3})
+    EXPECT_TRUE(cartesian.supports_dimension(dimension));
+
+  const auto& polar = route_info(FieldSolverRouteId::kPolar);
+  EXPECT_EQ(polar.target_dimension_count, 1U);
+  EXPECT_TRUE(polar.supports_dimension(2));
+  EXPECT_FALSE(polar.supports_dimension(1));
+  EXPECT_FALSE(polar.supports_dimension(3));
+}
+
 TEST(RouteIds, RouteTokensMirrorRegistryTagNamesInOrder) {
   EXPECT_TRUE(tokens_mirror(kRiemannRoutes, kRiemanns))
       << "kRiemannRoutes tokens == kRiemanns names (ordre)";
@@ -224,7 +237,7 @@ TEST(RouteIds, EveryRouteFamilyEnumeratorNamesItself) {
       RouteFamily::kLimiter,  RouteFamily::kRiemann,     RouteFamily::kRecon,
       RouteFamily::kTime,     RouteFamily::kFieldSolver, RouteFamily::kPoissonBc,
       RouteFamily::kLayout,   RouteFamily::kTransport,   RouteFamily::kSource,
-      RouteFamily::kElliptic, RouteFamily::kPoissonRhs,  RouteFamily::kWall,
+      RouteFamily::kElliptic, RouteFamily::kPoissonRhs,
   };
   bool ok = true;
   for (RouteFamily f : fams)

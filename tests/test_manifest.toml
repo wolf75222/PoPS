@@ -82,16 +82,6 @@ sources = ["tests/cpp/integration/amr/test_amr_seed_no_refine.cpp"]
 labels = ["integration", "amr", "medium"]
 
 [[cpp.suite]]
-name = "test_amr_spatial_parity"
-sources = ["tests/cpp/integration/amr/test_amr_spatial_parity.cpp"]
-labels = ["integration", "amr", "medium"]
-
-[[cpp.suite]]
-name = "test_amr_system_contract"
-sources = ["tests/cpp/integration/amr/test_amr_system_contract.cpp"]
-labels = ["integration", "amr", "medium"]
-
-[[cpp.suite]]
 name = "test_amr_system_twoblock"
 sources = ["tests/cpp/integration/amr/test_amr_system_twoblock.cpp"]
 labels = ["integration", "amr", "medium"]
@@ -126,8 +116,20 @@ labels = ["backend", "mpi", "medium"]
 mpi_nproc = [1, 2, 4]
 
 [[cpp.suite]]
-name = "test_mpi_cell_temporal_program_refusal"
-sources = ["tests/cpp/integration/mpi/test_mpi_cell_temporal_program_refusal.cpp"]
+name = "test_mpi_cell_temporal_program"
+sources = ["tests/cpp/integration/mpi/test_mpi_cell_temporal_program.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [2]
+
+[[cpp.suite]]
+name = "test_mpi_cell_temporal_program_multibox"
+sources = ["tests/cpp/integration/mpi/test_mpi_cell_temporal_program.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [2]
+
+[[cpp.suite]]
+name = "test_mpi_cell_temporal_program_collective_rollback"
+sources = ["tests/cpp/integration/mpi/test_mpi_cell_temporal_program.cpp"]
 labels = ["backend", "mpi", "medium"]
 mpi_nproc = [2]
 
@@ -156,12 +158,6 @@ labels = ["backend", "mpi", "medium"]
 mpi_nproc = [4]
 
 [[cpp.suite]]
-name = "test_mpi_composite_fac"
-sources = ["tests/cpp/integration/mpi/test_mpi_composite_fac.cpp"]
-labels = ["backend", "mpi", "medium"]
-mpi_nproc = [1, 2, 4]
-
-[[cpp.suite]]
 name = "test_mpi_composite_fac_partitioned_nd"
 sources = ["tests/cpp/integration/mpi/test_mpi_composite_fac_partitioned_nd.cpp"]
 labels = ["backend", "elliptic", "amr", "mpi", "nd", "medium"]
@@ -178,12 +174,6 @@ name = "test_mpi_coupled_source"
 sources = ["tests/cpp/integration/mpi/test_mpi_coupled_source.cpp"]
 labels = ["backend", "mpi", "medium"]
 mpi_nproc = [1, 2, 4]
-
-[[cpp.suite]]
-name = "test_mpi_coupler_inject"
-sources = ["tests/cpp/integration/mpi/test_mpi_coupler_inject.cpp"]
-labels = ["backend", "mpi", "medium"]
-mpi_nproc = [4]
 
 [[cpp.suite]]
 name = "test_mpi_external_lifecycle"
@@ -927,6 +917,11 @@ labels = ["unit", "physics", "fast"]
 [[cpp.suite]]
 name = "test_coupled_source_stack_limit"
 sources = ["tests/cpp/unit/physics/test_coupled_source_stack_limit.cpp"]
+labels = ["unit", "physics", "fast"]
+
+[[cpp.suite]]
+name = "test_generic_inversion_admissibility"
+sources = ["tests/cpp/unit/physics/test_generic_inversion_admissibility.cpp"]
 labels = ["unit", "physics", "fast"]
 
 [[cpp.suite]]

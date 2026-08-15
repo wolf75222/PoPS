@@ -6,6 +6,7 @@
 #include <pops/core/foundation/allocator.hpp>
 #include <pops/core/foundation/kokkos_env.hpp>
 #include <pops/core/identity/prepared_provider.hpp>
+#include <pops/parallel/comm.hpp>
 #include <pops/runtime/program/cell_temporal_partition.hpp>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -15,8 +16,11 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
+#include <iterator>
 #include <limits>
 #include <map>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -70,6 +74,7 @@ struct CellTemporalRungBatchDescriptor {
   std::int64_t end_tick = 0;
   std::int64_t tick_denominator = 1;
   std::size_t cell_count = 0;
+  std::size_t local_cell_count = 0;
 };
 
 enum class CellTemporalStageDisposition : std::uint32_t {
@@ -182,6 +187,15 @@ concept CellTemporalAcceptedBoundaryLifecycle =
     requires(Provider& provider, const CellTemporalPartitionAcceptedState& accepted) {
       { provider.restore_accepted_boundary(accepted) } noexcept -> std::same_as<void>;
     };
+
+/// Optional distributed ownership protocol. The accepted partition remains identical on every
+/// rank, while only the canonical record indices returned here enter the local device kernel.
+/// Collectives always use the provider's borrowed runtime-owned communicator.
+template <class Provider>
+concept DistributedCellTemporalStageFluxProvider = requires(const Provider& provider) {
+  { provider.communicator() } noexcept -> std::same_as<CommunicatorView>;
+  { provider.local_record_indices() } noexcept -> std::same_as<std::span<const std::size_t>>;
+};
 
 struct CellTemporalExecutionStats {
   /// Number of combined stage/ledger kernels (or host batches without Kokkos), never per-cell.
@@ -327,8 +341,7 @@ class PreparedBatchedCellTemporalExecutor {
   /// Providers without the explicit lifecycle hook cannot be safely retained and fail closed.
   void restore_accepted_boundary(CellTemporalPartitionAcceptedState accepted) {
     if (attempt_active_)
-      throw std::logic_error(
-          "cell-local temporal executor cannot restore an active attempt");
+      throw std::logic_error("cell-local temporal executor cannot restore an active attempt");
     validate_cell_temporal_partition_state(accepted);
     BatchedCellTemporalPartition candidate(accepted);
     candidate.require_prepared_execution_route(provider_identity_);
@@ -364,7 +377,27 @@ class PreparedBatchedCellTemporalExecutor {
   }
 
   void begin_attempt(std::int64_t target_tick) {
-    partition_.begin_attempt(target_tick);
+    const bool had_active_attempt = attempt_active_;
+    std::exception_ptr partition_error;
+    if (had_active_attempt) {
+      partition_error = std::make_exception_ptr(
+          std::logic_error("cell-local temporal executor attempt is already active"));
+    } else {
+      try {
+        partition_.begin_attempt(target_tick);
+      } catch (...) {
+        partition_error = std::current_exception();
+      }
+    }
+    try {
+      require_phase_consensus_("attempt clock preparation", partition_error);
+    } catch (...) {
+      if (had_active_attempt)
+        abort_attempt_();
+      else
+        partition_.rollback();
+      throw;
+    }
     const CellTemporalPartitionAcceptedState& accepted = partition_.accepted_state();
     for (std::size_t index = 0; index < accepted.cells.size(); ++index)
       pending_ticks_[index] = accepted.cells[index].accepted_tick;
@@ -375,12 +408,15 @@ class PreparedBatchedCellTemporalExecutor {
         accepted.topology_epoch, accepted.synchronization_tick, target_tick,
         accepted.tick_denominator, accepted.cells.size()};
     const PreparedProviderSupport support = provider_.begin_attempt(descriptor);
-    if (!support.well_formed() || !support.accepted()) {
+    const long local_refusal = !support.well_formed() || !support.accepted() ? 1L : 0L;
+    if (all_reduce_max(local_refusal, communicator_()) != 0) {
       provider_.rollback_attempt();
       partition_.rollback();
-      const std::string reason = !support.well_formed()
-                                     ? "malformed prepared-provider support decision"
-                                     : std::string(support.reason);
+      const std::string reason =
+          local_refusal == 0
+              ? "another rank refused the prepared attempt"
+              : (!support.well_formed() ? "malformed prepared-provider support decision"
+                                        : std::string(support.reason));
       throw std::runtime_error("cell-local temporal provider refused attempt preparation: " +
                                reason);
     }
@@ -394,25 +430,47 @@ class PreparedBatchedCellTemporalExecutor {
       throw std::logic_error("cell-local temporal execution requires an active attempt");
     while (RungBatch* batch = next_batch_())
       execute_batch_(*batch);
-    partition_.require_barrier("cell-local temporal executor");
+    std::exception_ptr barrier_error;
+    try {
+      partition_.require_barrier("cell-local temporal executor");
+    } catch (...) {
+      barrier_error = std::current_exception();
+    }
+    try {
+      require_phase_consensus_("synchronization-barrier validation", barrier_error);
+    } catch (...) {
+      abort_attempt_();
+      throw;
+    }
   }
 
   void commit() {
     if (!attempt_active_)
       throw std::logic_error("cell-local temporal commit requires an active attempt");
-    partition_.require_barrier("cell-local temporal provider commit");
     try {
-      CellTemporalPartitionAcceptedState next = partition_.accepted_state();
-      next.synchronization_tick = target_tick_;
-      for (CellTemporalPartitionRecord& cell : next.cells)
-        cell.accepted_tick = target_tick_;
-      std::string next_exact_contract =
-          cell_temporal_detail::exact_execution_contract(next, provider_);
+      CellTemporalPartitionAcceptedState next;
+      std::string next_exact_contract;
+      std::exception_ptr publication_preflight_error;
+      try {
+        partition_.require_barrier("cell-local temporal provider commit");
+        next = partition_.accepted_state();
+        next.synchronization_tick = target_tick_;
+        for (CellTemporalPartitionRecord& cell : next.cells)
+          cell.accepted_tick = target_tick_;
+        next_exact_contract = cell_temporal_detail::exact_execution_contract(next, provider_);
+      } catch (...) {
+        publication_preflight_error = std::current_exception();
+      }
+      require_phase_consensus_("accepted-publication contract preparation",
+                               publication_preflight_error);
       const PreparedProviderSupport support = provider_.prepare_commit_attempt();
-      if (!support.well_formed() || !support.accepted()) {
-        const std::string reason = !support.well_formed()
-                                       ? "malformed prepared-provider support decision"
-                                       : std::string(support.reason);
+      const long local_refusal = !support.well_formed() || !support.accepted() ? 1L : 0L;
+      if (all_reduce_max(local_refusal, communicator_()) != 0) {
+        const std::string reason =
+            local_refusal == 0
+                ? "another rank refused accepted publication"
+                : (!support.well_formed() ? "malformed prepared-provider support decision"
+                                          : std::string(support.reason));
         throw std::runtime_error("cell-local temporal provider refused accepted publication: " +
                                  reason);
       }
@@ -443,7 +501,25 @@ class PreparedBatchedCellTemporalExecutor {
     std::int64_t current_tick = 0;
     std::size_t offset = 0;
     std::vector<std::size_t> indices;
+    std::vector<std::size_t> local_indices;
   };
+
+  [[nodiscard]] CommunicatorView communicator_() const noexcept {
+    if constexpr (DistributedCellTemporalStageFluxProvider<Provider>)
+      return provider_.communicator();
+    return CommunicatorView{};
+  }
+
+  void require_phase_consensus_(std::string_view phase,
+                                const std::exception_ptr& local_error) const {
+    const long local_failure = local_error ? 1L : 0L;
+    if (all_reduce_max(local_failure, communicator_()) == 0)
+      return;
+    if (local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("cell-local temporal " + std::string(phase) +
+                             " failed on another rank");
+  }
 
   void prepare_batches_() {
     const auto& cells = partition_.accepted_state().cells;
@@ -455,12 +531,29 @@ class PreparedBatchedCellTemporalExecutor {
     }
     record_indices_.reserve(cells.size());
     batches_.reserve(grouped.size());
+    std::span<const std::size_t> owned;
+    if constexpr (DistributedCellTemporalStageFluxProvider<Provider>) {
+      owned = provider_.local_record_indices();
+      if (!std::is_sorted(owned.begin(), owned.end()) ||
+          std::adjacent_find(owned.begin(), owned.end()) != owned.end() ||
+          (!owned.empty() && owned.back() >= cells.size()))
+        throw std::invalid_argument(
+            "distributed cell-local provider returned invalid canonical local records");
+    }
     for (auto& [rung, indices] : grouped) {
       const std::size_t offset = record_indices_.size();
-      record_indices_.insert(record_indices_.end(), indices.begin(), indices.end());
+      std::vector<std::size_t> local_indices;
+      if constexpr (DistributedCellTemporalStageFluxProvider<Provider>) {
+        local_indices.reserve(indices.size());
+        std::set_intersection(indices.begin(), indices.end(), owned.begin(), owned.end(),
+                              std::back_inserter(local_indices));
+      } else {
+        local_indices = indices;
+      }
+      record_indices_.insert(record_indices_.end(), local_indices.begin(), local_indices.end());
       batches_.push_back({rung, std::int64_t{1} << rung,
                           partition_.accepted_state().synchronization_tick, offset,
-                          std::move(indices)});
+                          std::move(indices), std::move(local_indices)});
     }
   }
 
@@ -495,13 +588,23 @@ class PreparedBatchedCellTemporalExecutor {
       throw std::logic_error("prepared cell-local rung crosses its synchronization barrier");
     }
 
-    const CellTemporalRungBatchDescriptor descriptor{batch.rung, begin_tick, end_tick,
+    const CellTemporalRungBatchDescriptor descriptor{batch.rung,
+                                                     begin_tick,
+                                                     end_tick,
                                                      partition_.accepted_state().tick_denominator,
-                                                     batch.indices.size()};
+                                                     batch.indices.size(),
+                                                     batch.local_indices.size()};
     std::uint64_t aggregate = 0;
     try {
-      if constexpr (CellTemporalRungBatchLifecycle<Provider>)
-        provider_.begin_rung_batch(descriptor);
+      std::exception_ptr rung_preparation_error;
+      try {
+        if constexpr (CellTemporalRungBatchLifecycle<Provider>)
+          provider_.begin_rung_batch(descriptor);
+      } catch (...) {
+        rung_preparation_error = std::current_exception();
+      }
+      require_phase_consensus_("rung-batch preparation", rung_preparation_error);
+
       using DeviceView = CellTemporalStageFluxDeviceViewType<Provider>;
       const DeviceView view = provider_.device_view();
       const cell_temporal_detail::EvaluateRungBatch<DeviceView> kernel{
@@ -513,19 +616,26 @@ class PreparedBatchedCellTemporalExecutor {
           end_tick,
           partition_.accepted_state().tick_denominator,
           view};
+      std::exception_ptr kernel_error;
+      try {
 #if defined(POPS_HAS_KOKKOS)
-      using Policy =
-          Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace, Kokkos::IndexType<std::int64_t>>;
-      Kokkos::parallel_reduce("pops_cell_temporal_stage_flux_batch",
-                              Policy(0, static_cast<std::int64_t>(batch.indices.size())), kernel,
-                              Kokkos::Max<std::uint64_t>(aggregate));
-      device_fence();
+        using Policy =
+            Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace, Kokkos::IndexType<std::int64_t>>;
+        Kokkos::parallel_reduce("pops_cell_temporal_stage_flux_batch",
+                                Policy(0, static_cast<std::int64_t>(batch.local_indices.size())),
+                                kernel, Kokkos::Max<std::uint64_t>(aggregate));
+        device_fence();
 #else
-      for (std::size_t index = 0; index < batch.indices.size(); ++index)
-        kernel(static_cast<std::int64_t>(index), aggregate);
+        for (std::size_t index = 0; index < batch.local_indices.size(); ++index)
+          kernel(static_cast<std::int64_t>(index), aggregate);
 #endif
+      } catch (...) {
+        kernel_error = std::current_exception();
+      }
+      require_phase_consensus_("rung-batch device execution", kernel_error);
       ++stats_.rung_batch_launches;
-      stats_.stage_evaluations += static_cast<std::uint64_t>(batch.indices.size());
+      stats_.stage_evaluations += static_cast<std::uint64_t>(batch.local_indices.size());
+      aggregate = all_reduce_max(aggregate, communicator_());
       if (aggregate != 0) {
         const auto disposition =
             static_cast<CellTemporalStageDisposition>(static_cast<std::uint32_t>(aggregate >> 32u));
@@ -538,8 +648,14 @@ class PreparedBatchedCellTemporalExecutor {
       abort_attempt_();
       throw;
     }
+    std::exception_ptr clock_advance_error;
     try {
       partition_.advance_batch(batch.rung, batch.indices, end_tick);
+    } catch (...) {
+      clock_advance_error = std::current_exception();
+    }
+    try {
+      require_phase_consensus_("rung-batch clock advance", clock_advance_error);
     } catch (...) {
       abort_attempt_();
       throw;

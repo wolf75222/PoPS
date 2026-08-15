@@ -186,7 +186,14 @@ def _install_native_hierarchy_config(
     config.level_count = lowering.level_count
     config.transition_ratios = tuple(tuple(row) for row in lowering.transition_ratios)
     config.transition_buffers = tuple(tuple(row) for row in lowering.transition_buffers)
-    config.transition_lookaheads = tuple(lowering.transition_lookaheads)
+    # The public hierarchy contract owns one isotropic lookahead radius per
+    # transition.  The native exact-rank ABI owns one value per spatial axis;
+    # expand that authored scalar explicitly instead of relying on a pybind
+    # scalar-to-ranked compatibility path.
+    config.transition_lookaheads = tuple(
+        tuple(value for _axis in range(dimension))
+        for value in lowering.transition_lookaheads
+    )
 
 
 def amr_config_from_layout(

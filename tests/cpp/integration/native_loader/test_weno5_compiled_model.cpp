@@ -5,18 +5,18 @@
 //
 // On exige :
 //  (1) PARITE STRICTE weno5 : add_compiled_model("gas", ..., "weno5") == add_block(..., "weno5") sur
-//      eval_rhs ET potentiel (BIT-IDENTIQUE : MEME make_block / install_block / fill_boundary, donc
-//      meme code, meme allocation 3 ghosts) ; le residu n'est pas trivial.
+//      eval_rhs ET potentiel (BIT-IDENTIQUE : meme preparateur de paquet exact et meme publication,
+//      donc meme code, meme allocation 3 ghosts) ; le residu n'est pas trivial.
 //  (2) NO-DEFAULT-CHANGE : pour none et minmod (<= 2 ghosts), add_compiled_model reste BIT-IDENTIQUE
-//      a add_block -- la reallocation set_block_ghosts est un NO-OP (U a deja 2 ghosts), donc
+//      a prepare+install -- la reallocation set_block_ghosts est un NO-OP (U a deja 2 ghosts), donc
 //      l'allocation et le resultat sont inchanges vs avant ce chantier.
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
-#include <pops/physics/bricks/bricks.hpp>  // CompositeModel, GravityForce, GravityCoupling
+#include <pops/physics/bricks/bricks.hpp>  // CompositeModel, GravityCoupling, NoSource
 #include <pops/physics/fluids/euler.hpp>   // Euler (= CompressibleFlux)
 #include <pops/runtime/builders/compiled/dsl_block.hpp>
-#include <pops/runtime/config/model_spec.hpp>
+#include <pops/runtime/builders/compiled/generated_system_block.hpp>
 #include <pops/runtime/system.hpp>
 
 #include <cmath>
@@ -30,7 +30,41 @@
 
 using namespace pops;
 
+namespace pops {
+
+template <int Dim, class Model>
+PreparedSystemBlock<Dim> prepare_exact_system_block(
+    CompiledSystemBlockPreparation<Dim, Model> request) {
+  return prepare_generated_system_block(std::move(request));
+}
+
+}  // namespace pops
+
 namespace {
+
+constexpr int Dim = kNativeDimension;
+using NativeSystem = System<Dim>;
+using NativeSystemConfig = SystemConfig<Dim>;
+using Model = CompositeModel<EulerND<Dim>, NoSource, GravityCoupling>;
+
+Model gravity_model(double rho0) {
+  return {{},
+          EulerND<Dim>::prepare(Real(1.4)),
+          NoSource{},
+          GravityCoupling{Real(-1.0), Real(1.0), static_cast<Real>(rho0)}};
+}
+
+NativeSystemConfig native_config(int n, double length) {
+  NativeSystemConfig config;
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = n;
+    config.lower[axis] = Real(0);
+    config.upper[axis] = static_cast<Real>(length);
+    config.periodicity[static_cast<std::size_t>(axis)] = true;
+  }
+  config.boxes = {Box<Dim>::from_extents(config.shape)};
+  return config;
+}
 
 // Densite lisse (bulle gaussienne) : transport regulier ou WENO5 est pleinement actif.
 std::vector<double> smooth_rho(int n) {
@@ -46,51 +80,40 @@ std::vector<double> smooth_rho(int n) {
 // Residu + potentiel du bloc COMPILE NATIF (add_compiled_model) pour le schema (limiter, rusanov).
 void run_compiled(int n, double L, const std::vector<double>& rho, double rho0, const char* limiter,
                   std::vector<double>& R, std::vector<double>& phi) {
-  SystemConfig cfg;
-  cfg.n = n;
-  cfg.L = L;
-  cfg.periodicity = {true, true};
-  System sys(cfg);
-  using Model = CompositeModel<Euler, GravityForce, GravityCoupling>;
-  add_compiled_model(sys, "gas",
-                     Model{Euler{1.4}, GravityForce{}, GravityCoupling{-1.0, 1.0, rho0}}, limiter,
-                     "rusanov", "conservative", "explicit", /*gamma=*/1.4);
-  sys.set_poisson("charge_density", "geometric_mg");
+  const NativeSystemConfig cfg = native_config(n, L);
+  NativeSystem sys(cfg);
+  sys.install_block_state_route("gas", "test.weno5-compiled/gas/state");
+  add_compiled_model(sys, "gas", gravity_model(rho0), limiter, "rusanov", "conservative",
+                     "explicit", /*gamma=*/1.4);
+  sys.set_poisson("charge_density", "cartesian_cg");
   sys.set_density("gas", rho);
   (void)pops::consume_solve_outcome(sys.solve_fields());
   R = sys.eval_rhs("gas");
   phi = sys.potential();
 }
 
-// Reference NATIVE (add_block, dispatch d'une ModelSpec euler_poisson) pour le MEME schema.
-void run_native(int n, double L, const std::vector<double>& rho, double rho0, const char* limiter,
-                std::vector<double>& R, std::vector<double>& phi) {
-  SystemConfig cfg;
-  cfg.n = n;
-  cfg.L = L;
-  cfg.periodicity = {true, true};
-  System sys(cfg);
-  ModelSpec spec;
-  spec.transport = "compressible";
-  spec.source = "gravity";
-  spec.elliptic = "gravity";
-  spec.gamma = 1.4;
-  spec.sign = -1.0;
-  spec.four_pi_G = 1.0;
-  spec.rho0 = rho0;
-  sys.add_block("gas", spec, limiter, "rusanov", "conservative", "explicit", 1, true);
-  sys.set_poisson("charge_density", "geometric_mg");
+// Reference package preparation and explicit publication for the same exact model and routes.
+void run_prepared(int n, double L, const std::vector<double>& rho, double rho0, const char* limiter,
+                  std::vector<double>& R, std::vector<double>& phi) {
+  const NativeSystemConfig cfg = native_config(n, L);
+  NativeSystem sys(cfg);
+  sys.install_block_state_route("gas", "test.weno5-compiled/gas/state");
+  install_prepared_block(
+      sys, prepare_compiled_system_block<Dim>(sys, "gas", gravity_model(rho0), limiter, "rusanov",
+                                              "conservative", "explicit", /*gamma=*/1.4,
+                                              /*substeps=*/1, /*evolve=*/true, /*stride=*/1));
+  sys.set_poisson("charge_density", "cartesian_cg");
   sys.set_density("gas", rho);
   (void)pops::consume_solve_outcome(sys.solve_fields());
   R = sys.eval_rhs("gas");
   phi = sys.potential();
 }
 
-// Compare compile-natif vs natif pour @p limiter : residu non trivial + ecarts max BIT-IDENTIQUES.
+// Compare the package convenience route with explicit exact preparation for @p limiter.
 int compare(int n, double L, const std::vector<double>& rho, double rho0, const char* limiter) {
   std::vector<double> Rc, pc, Rn, pn;
   run_compiled(n, L, rho, rho0, limiter, Rc, pc);
-  run_native(n, L, rho, rho0, limiter, Rn, pn);
+  run_prepared(n, L, rho, rho0, limiter, Rn, pn);
 
   double dres = 0, dphi = 0, nrm = 0;
   for (std::size_t k = 0; k < Rc.size(); ++k) {
@@ -102,21 +125,22 @@ int compare(int n, double L, const std::vector<double>& rho, double rho0, const 
 
   int fails = 0;
   if (!(nrm > 1e-6)) {
-    std::printf("FAIL [%s] residu natif trivial\n", limiter);
+    std::printf("FAIL [%s] residu package trivial\n", limiter);
     ++fails;
   }
-  // Meme chemin compile (make_block + install_block + meme allocation ghost) => bit-identique.
+  // Same exact package preparation and publication => bit-identical.
   if (!(dres == 0.0)) {
-    std::printf("FAIL [%s] eval_rhs compile != natif (ecart %.3e, attendu 0)\n", limiter, dres);
+    std::printf("FAIL [%s] eval_rhs compiled != prepared (ecart %.3e, attendu 0)\n", limiter, dres);
     ++fails;
   }
   if (!(dphi == 0.0)) {
-    std::printf("FAIL [%s] potentiel compile != natif (ecart %.3e, attendu 0)\n", limiter, dphi);
+    std::printf("FAIL [%s] potentiel compiled != prepared (ecart %.3e, attendu 0)\n", limiter,
+                dphi);
     ++fails;
   }
   if (fails == 0)
-    std::printf("OK [%s] add_compiled_model == add_block (dres=%.1e dphi=%.1e)\n", limiter, dres,
-                dphi);
+    std::printf("OK [%s] add_compiled_model == prepare+install (dres=%.1e dphi=%.1e)\n", limiter,
+                dres, dphi);
   return fails;
 }
 

@@ -28,8 +28,7 @@ from pops.fields import (
     MeanValueGauge,
 )
 from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Periodic
-from pops.domain import Rectangle
-from pops.frames import Cartesian2D
+from pops.domain import CartesianDomain
 from pops.math import Const, ValueExpr, Var, ddt, div, laplacian
 from pops.numerics import DiscretizationPlan, FiniteVolume, reconstruction, riemann, variables
 from pops.physics import Density, Momentum
@@ -143,8 +142,9 @@ class ExecutionEvidence:
 def build_authoring(*, output_mode: Any = None) -> MultiphysicsAuthoring:
     """Build the complete two-state transactional Program and accepted-side-effect graph."""
 
-    frame = Rectangle("unit_square", lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(
-        Cartesian2D())
+    frame = CartesianDomain(
+        "unit_square", lower=(0.0, 0.0), upper=(1.0, 1.0),
+    ).frame()
     x_axis, y_axis = frame.axes
     model = pops.Model("electrostatic_two_fluid", frame=frame)
     electrons = model.species(

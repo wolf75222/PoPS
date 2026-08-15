@@ -481,20 +481,19 @@ exclusivement dans `pops.amr`.
 ### 6.1 Domaine et frame
 
 ```python
-from pops.domain import Rectangle, RectangleBoundaryNames
-from pops.frames import Cartesian2D
+from pops.domain import CartesianBoundaryNames, CartesianDomain
 from pops.mesh import CartesianGrid, PeriodicAxes
 
-domain = Rectangle(
+domain = CartesianDomain(
     "unit_square",
     lower=(0.0, 0.0),
     upper=(1.0, 1.0),
-    boundaries=RectangleBoundaryNames(
-        x_min="inlet_x", x_max="outlet_x",
-        y_min="inlet_y", y_max="outlet_y",
-    ),
+    boundaries=CartesianBoundaryNames((
+        ("inlet_x", "outlet_x"),
+        ("inlet_y", "outlet_y"),
+    )),
 ).tag("fluid")
-frame = domain.frame(Cartesian2D())
+frame = domain.frame()
 grid = CartesianGrid(frame=frame, cells=(128, 128))
 
 # Pour identifier les deux paires de faces opposées :
@@ -504,11 +503,11 @@ periodic_grid = CartesianGrid(
     periodic=PeriodicAxes(frame.axes),
 )
 
-# Présentation pure : sauvegarde le rectangle et ses frontières.
-domain.show(path="unit_square.svg")
 ```
 
-Les frontières sont des handles topologiques issus du frame (`frame.boundaries.x_min`, etc.). Les
+La longueur de `lower`/`upper` est l'unique autorité de dimension (1, 2 ou 3) ; aucun second `dim=`
+ou constructeur de frame fixe ne peut diverger du domaine. Les frontières sont des handles
+topologiques issus du frame (`frame.boundaries.pair(frame.x).lower`, etc.). Les
 noms personnalisés sont des labels ; orientation, côté, périodicité et connexions restent typés.
 `PeriodicAxes` accepte uniquement des axes du frame, sans booléen, string ou indice. La topologie
 canonique dérive alors les paires périodiques et les axes physiques complémentaires. Omettre
@@ -521,22 +520,20 @@ un descripteur inerte de géométrie annulaire et de sortie scientifique ; le ru
 refuse son fournisseur non cartésien pendant la résolution. Il ne constitue pas une seconde route
 cartésienne et n'est pas réexporté à la racine `pops`.
 
-`Rectangle.preview(geometry=...)` et son raccourci `Rectangle.show(...)` constituent la surface de
-présentation du domaine. Sans géométrie, le renderer montre les bornes et les labels des quatre
-frontières. Avec une géométrie, il passe exclusivement par le protocole
+`Rectangle.preview(geometry=...)` et son raccourci `Rectangle.show(...)` restent une commodité de
+présentation strictement 2D ; ils ne sont pas l'autorité de rang des exemples exécutables. Avec une
+géométrie, ce renderer passe exclusivement par le protocole
 `Geometry.level_set(frame) -> LevelSet` : `Disc`, `HalfPlane`, un `LevelSet` analytique ou toute
 composition CSG utilisent donc le même échantillonneur, sans branche par forme. Le sampling NumPy et
 le renderer Matplotlib sont hors du runtime numérique ; ils ne créent aucun layout et n'entrent dans
 aucun kernel. Matplotlib est importé seulement par `show()`. Fournir `path="domain.svg"` enregistre
 sans ouvrir de fenêtre ; omettre `path` ouvre la vue interactive.
 
-Le `SystemConfig` uniforme livré ne possède encore qu'un scalaire `n`, un scalaire `L` et aucune
-origine. Son lowering accepte donc un `CartesianGrid` seulement si `lower == (0, 0)`, si les deux
-longueurs sont égales et si les deux nombres de cellules sont égaux. Toute grille rectangulaire,
-anisotrope ou translatée est refusée avant construction du moteur ; elle n'est jamais aplatie vers
-un carré représentatif. Son unique booléen natif de périodicité représente exactement deux cas :
-aucun axe périodique ou tous les axes périodiques. Une topologie partielle reste valide dans la DSL,
-mais ce backend la refuse avant bind tant qu'il ne sait pas conserver cette partition par axe.
+Le lowering transporte les vecteurs exacts `lower`, `upper`, `cells` et la périodicité par axe dans
+le layout normalisé. L'artefact retient un unique rang parmi `{1,2,3}` et toute divergence entre ce
+rang, le provider installé et la géométrie est refusée avant allocation. Cette généricité de
+structure n'est pas une preuve que chaque solveur, writer ou combinaison MPI/GPU existe dans les
+trois rangs : ces capacités restent lues dans les manifests et rapports du provider sélectionné.
 
 Un `Case` ne possède pas son layout. Après validation, `case.layout_subjects()` expose l'ensemble
 immuable des blocs, états et champs à assigner. Un `LayoutPlan` associe explicitement ces sujets aux
@@ -722,20 +719,21 @@ n'invente jamais `time_ratio = space_ratio`; une relation non intégrale exige e
 `EXPLICIT_FINAL_SUBSTEP`, sinon elle est refusée. Le nombre de relations et leurs niveaux adjacents
 doivent couvrir exactement la hiérarchie.
 
-Le provider natif livré matérialise le coeur maillage/stockage en 2D et ses kernels de transfert,
-correction conservative et sous-cyclage AMR exigent un ratio de transition égal à 2. La correction
+Le coeur natif maillage/stockage et les contrats de transfert sont spécialisés à la compilation
+pour un rang exact parmi 1, 2 et 3, sans adaptateur `Box2D`. Cette disponibilité structurelle ne
+qualifie pas à elle seule chaque exécution AMR/MPI/output dans les trois rangs. Les ratios acceptés
+et les providers de transfert, correction conservative et sous-cyclage restent ceux du manifest de
+l'artefact sélectionné. La correction
 coarse/fine reste l'unique ledger de flux détenu par PoPS. L'interface native `Reflux` ne peut
 déléguer qu'un kernel local et non collectif : PoPS lui fournit les flux coarse/fine déjà intégrés
 dans le temps et ramenés sur la même face coarse ; le kernel écrit la correction locale
 `side * (fine - coarse) / dx`. PoPS conserve exclusivement la topologie d'interface, le ledger, la
 réduction MPI, la transaction et l'application à l'état. Un provider `Reflux` ne devient donc jamais
-une seconde autorité conservative. Une autre dimension ou un autre ratio est refusé pendant la
-résolution ou le bind avec les capacités observées. Le coeur de
-planification ne normalise jamais la demande vers ce sous-ensemble. Défensivement,
-`AmrProgramContext` revalide aussi chaque transition à sa construction et refuse un ratio différent
-de 2 avant le premier pas : cette limite appartient au provider natif reflux/average-down installé,
-pas aux protocoles publics `AMRHierarchy`, `Transfer` et `AMRExecution`, qui restent extensibles par
-sélection d'un autre provider déclarant les capacités correspondantes.
+une seconde autorité conservative. Une dimension ou un ratio absent des capacités observées est
+refusé pendant la résolution ou le bind. Le coeur de planification ne normalise jamais la demande
+vers un sous-ensemble historique. Défensivement, `AmrProgramContext<Dim>` revalide chaque vecteur de
+transition exact-rank à sa construction avant le premier pas ; l'enveloppe acceptée appartient au
+provider installé, pas aux protocoles publics `AMRHierarchy`, `Transfer` et `AMRExecution`.
 
 Les critères booléens et les politiques de transfert sont des protocoles authentifiés ouverts. Une
 nouvelle implémentation fournit données canoniques, requirements/capabilities et lowering ; elle ne
@@ -1516,9 +1514,10 @@ La release est conforme uniquement pour les lignes prouvées par la matrice nati
 Les dimensions, ratios, nombres de niveaux, géométries, solveurs et combinaisons device réellement
 exécutables sont lus dans les manifests/capability reports. Le provider livré matérialise soit une
 hiérarchie AMR unique, soit un ou plusieurs layouts `Uniform` reliés par les mappings natifs prouvés.
-Il exécute un seul `StateSpace` par bloc, le coeur de stockage 2D et les transitions AMR de ratio 2 ;
-toute demande hors de cette enveloppe est un refus avant construction du moteur, pas une
-normalisation du plan.
+Il exécute un seul `StateSpace` par bloc. Le coeur de stockage exact-rank existe pour 1D, 2D et 3D,
+mais cette seule propriété ne ferme ni la matrice AMR/MPI/output, ni la qualification scientifique
+d'un modèle. Toute demande absente du capability report exact de l'artefact reste un refus avant
+construction du moteur, pas une normalisation du plan.
 
 L'ABI et les manifests décrivent un communicator, un datatype, un stream et un device explicites.
 La route finale transporte host/`float64` avec le communicator série ou exactement
@@ -1545,12 +1544,20 @@ native absente, un mode incompatible ou un backend Kokkos GPU/device handle non 
 constructeur de `System`/`AmrSystem`; aucune route série implicite ne remplace une demande MPI.
 
 Les maillages non structurés, mobiles/déformables ou changeant de topologie, de nouvelles familles de
-stockage, la 3D sur ces routes et une algèbre d'unités ne font pas partie de la release. Ils sont refusés,
-pas simulés par des placeholders publics.
+stockage et une algèbre d'unités ne font pas partie de la release. La 1D/3D n'est promise pour une
+route que lorsque l'artefact exact-rank et son test d'exécution l'authentifient ; les quatre exemples
+normatifs ci-dessous restent des preuves physiques 2D. Une route non qualifiée est refusée, jamais
+simulée par un changement de metadata.
 
 ## 13. Exemples exécutables normatifs
 
 Quatre scripts sont des tests d'acceptation, pas des esquisses :
+
+Ils utilisent tous `CartesianDomain(...).frame()` afin que le rang provienne des vecteurs de
+géométrie. Leur configuration normative est 2D : les deux exemples d'advection déclarent deux flux
+et deux lois de frontière, le multiphysique porte deux composantes de quantité de mouvement, et
+`HyQMOM15.supported_spatial_dimensions == (2,)`. Ils ne constituent donc pas une preuve d'exécution
+1D/3D des mêmes scénarios.
 
 1. `examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py` : flux conservatif, parité du
    `Program` SSPRK2 explicite avec `pops.lib.time.SSPRK2`, layout AMR avec au moins un niveau raffiné

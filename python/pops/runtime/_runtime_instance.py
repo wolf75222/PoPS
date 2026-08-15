@@ -1465,18 +1465,14 @@ class RuntimeInstance:
         require_observer_world = getattr(self._publisher, "require_observer_world_available", None)
         if callable(require_observer_world):
             require_observer_world()
-        from pops.runtime._step_strategy import (
-            prepare_step_controller,
-            resolve_run_strategy,
-            run_control_payload,
-        )
-        from pops.runtime._native_step_target import native_step_target
+        from pops.runtime._step_strategy import drive_program_run, prepare_program_run
         from pops.runtime.run_report import RunStopReason
 
         native = self._executor
-        step_target = native_step_target(native)
-        selected = resolve_run_strategy(native)
-        control = run_control_payload(selected, controller_controls)
+        prepared_run = prepare_program_run(native, controls=controller_controls)
+        step_target = prepared_run.step_target
+        selected = prepared_run.strategy
+        prepared_controls = prepared_run.controls
         self._step_transaction_methods()
         entry_temporal = copy.deepcopy(getattr(native, "_temporal_restart_state", None))
         entry_controller = copy.deepcopy(getattr(native, "_step_controller", None))
@@ -1496,16 +1492,8 @@ class RuntimeInstance:
         console_session = None
         manifest = None
         try:
-            prepare_step_controller(native, selected, controller_controls)
-            temporal = getattr(native, "_temporal_restart_state", None)
-            if temporal is not None:
-                temporal.begin_run(control, time=native.time(), macro_step=native.macro_step())
-            from pops.runtime._run_manifest import begin_run
-
-            manifest = begin_run(
-                native,
+            manifest = prepared_run.begin(
                 t_end=t_end,
-                step_transaction=control,
                 max_steps=max_steps,
                 output_dir=output_dir,
             )
@@ -1517,10 +1505,12 @@ class RuntimeInstance:
             if callable(begin_post_commit):
                 begin_post_commit(manifest.run_identity)
             self._fire_consumers(at_start=True)
-            while native.time() < t_end and steps < max_steps:
+
+            def advance_program_step() -> None:
+                nonlocal rejected_steps, steps
                 deadline = next_consumer_deadline(self._consumer_graph, self._moments())
                 run_end = float(t_end)
-                _validate_external_grid_deadline(selected, controller_controls, deadline, run_end)
+                _validate_external_grid_deadline(selected, prepared_controls, deadline, run_end)
                 # A tolerance can validate a controller landing, but it must never extend the
                 # requested run.  In particular, a threshold one ULP above t_end is a future
                 # occurrence, not an end-of-run sample.
@@ -1536,12 +1526,21 @@ class RuntimeInstance:
                     step_target,
                     selected,
                     t_end=step_end,
-                    controls=controller_controls,
+                    controls=prepared_controls,
                     deadline=deadline if deadline_is_active else None,
                     at_end=lambda: not (native.time() < t_end),
                 )
                 rejected_steps += int(step_report.attempts) - 1
                 steps += 1
+
+            accepted_steps = drive_program_run(
+                prepared_run,
+                t_end=t_end,
+                max_steps=max_steps,
+                advance=advance_program_step,
+            )
+            if accepted_steps != steps:
+                raise RuntimeError("Program temporal service lost accepted-step accounting")
             if native.time() < t_end:
                 raise RuntimeError(
                     "max_steps exhausted before t_end: "

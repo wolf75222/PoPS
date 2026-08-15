@@ -56,7 +56,11 @@ def normalize_components(value: Any, where: str) -> tuple[str, ...]:
 def normalize_roles(roles: Any, components: tuple[str, ...], where: str) -> dict[str, Any]:
     """Validate optional component-role metadata without truth-value coercion."""
     if roles is None:
-        return {}
+        result = {}
+        from .aux import roles_for
+
+        roles_for(components)
+        return result
     if not isinstance(roles, Mapping):
         raise TypeError("%s roles must be a mapping or None" % where)
     result = dict(roles)
@@ -84,6 +88,9 @@ def normalize_roles(roles: Any, components: tuple[str, ...], where: str) -> dict
                     "%s roles %s and %s collide on native token %r"
                     % (where, tokens[token], component, token))
             tokens[token] = component
+    from .aux import roles_for
+
+    roles_for(components, (result.get(component) for component in components))
     return result
 
 

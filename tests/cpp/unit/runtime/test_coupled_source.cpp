@@ -30,12 +30,15 @@ pops::Extent<Dim> filled_extent(std::int64_t value) {
 
 struct Inert {
   using State = pops::StateVec<1>;
-  using Aux = pops::AuxState<kDim>;
+  using Providers = pops::ProviderValues<0>;
+  static constexpr int dimension = kDim;
   static constexpr int n_vars = 1;
 
-  POPS_HD State flux(const State&, const Aux&, int) const { return State{pops::Real(0)}; }
-  POPS_HD pops::Real max_wave_speed(const State&, const Aux&, int) const { return pops::Real(0); }
-  POPS_HD State source(const State&, const Aux&) const { return State{pops::Real(0)}; }
+  POPS_HD State flux(const State&, const Providers&, int) const { return State{pops::Real(0)}; }
+  POPS_HD pops::Real max_wave_speed(const State&, const Providers&, int) const {
+    return pops::Real(0);
+  }
+  POPS_HD State source(const State&, const Providers&) const { return State{pops::Real(0)}; }
   POPS_HD pops::Real elliptic_rhs(const State& state) const { return state[0]; }
 };
 

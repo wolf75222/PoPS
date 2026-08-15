@@ -1,64 +1,26 @@
-// IMEX (source implicite raide) porte par un ProgramGraph de test sur le chemin natif AMR.
-// Pendant de tests/cpp/integration/native_loader/test_amr_riemann_native.cpp /
-// test_amr_weno5_native.cpp : prouve que les trois chemins d'entree assemblent la MEME hierarchie
-// spatiale et donnent une trajectoire BIT-IDENTIQUE sous la MEME composition Program. Le test prouve
-// aussi que le traitement IMEX est actif (different de l'explicite et stable la ou l'explicite
-// explose sur une source raide).
-//
-// Le Program de test applique (a) une avance de transport sans source, dont les flux alimentent le
-// ledger conservatif, PUIS (b) la source raide en IMPLICITE par backward_euler_source (Newton local,
-// foncteur device nomme), le tout sur des candidats prives avant commit. La source restant
-// CELLULE-LOCALE (hors flux de face), elle n'entre pas dans le reflux : la conservation aux interfaces
-// grossier-fin est intacte (prouve ici). Ce helper est une preuve numerique de la primitive attendue ;
-// la facade publique continue de refuser une composition IMEX qui n'a pas ete lower-ee en Program.
-//
-// Deux modeles, pour couvrir les deux exigences sans toucher aux briques de production (write-set) :
-//
-//   (A) PARITE 3 CHEMINS + IMEX ACTIF, modele ModelSpec-atteignable
-//       CompositeModel<Euler, PotentialForce, BackgroundDensity>
-//       (source="potential", elliptic="background") :
-//         - add_compiled_model(AmrSystem&) == add_block(ModelSpec) == add_native_block(.so), dmax==0,
-//           sous time="imex" -> le drapeau IMEX est cable a l'IDENTIQUE sur les trois entrees ;
-//         - IMEX != explicite sur le MEME etat -> le pas implicite est bien pris (non silencieux) ;
-//         - masse grossiere conservee a ~machine sous IMEX (PotentialForce ne touche pas la densite ;
-//           la source est cellule-locale, hors reflux) -> conservation preservee.
-//       La source de PotentialForce ne demontre PAS l'explosion explicite (sa raideur vit dans le
-//       couplage au champ self-consistent, gele dans le solve implicite cellule-local), d'ou (B).
-//
-//   (B) AP / SOURCE RAIDE (explicite EXPLOSE, IMEX stable), modele a source de RELAXATION lineaire
-//       definie ICI (StiffRelax, S = (u_eq - u)/eps cellule-locale) -- une telle brique n'existe pas
-//       dans la dispatch ModelSpec, donc seuls les chemins a Model concret (add_compiled_model et
-//       add_native_block) la portent. Pour eps << dt : l'explicite (facteur |1 - dt/eps| >> 1) DIVERGE
-//       (non fini), l'IMEX (backward Euler, inconditionnellement stable) reste fini et capture
-//       l'equilibre. + parite add_compiled_model == add_native_block (dmax==0) en regime non explosif.
-//
-//   (A), (B) et le chargeur .so tournent avec le meme contrat de compilation que le binaire hote,
-//   y compris Kokkos. Aucun backend ni echec de compilation n'est accepte silencieusement.
-//
-// CMake injecte POPS_TEST_CXX, POPS_TEST_INCLUDE, POPS_TEST_CXX_STD, POPS_TEST_TMPDIR (meme pattern que
-// test_amr_riemann_native).
+/// @file
+/// @brief Source-built exact-ranked AMR IMEX trajectory through PreparedAmrSystemBlock.
+
 #include <gtest/gtest.h>
 
+#include "amr_tagging_test_authority.hpp"
 #include "gtest_compat.hpp"
 #include "native_dso_compiler.hpp"
-#include <pops/physics/bricks/bricks.hpp>  // CompositeModel, Euler, PotentialForce, BackgroundDensity
-#include <pops/numerics/time/integrators/implicit_stepper.hpp>
-#include <pops/runtime/amr/amr_runtime.hpp>
-#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
+
+#include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/parallel/comm.hpp>
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/program/amr_program_context.hpp>
-
-#include "amr_tagging_test_authority.hpp"
 #include <pops/runtime/program/step_transaction.hpp>
-#include <pops/runtime/config/model_spec.hpp>
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
-#include <cstdlib>
 #include <ctime>
 #include <fstream>
+#include <limits>
 #include <memory>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -66,466 +28,380 @@
 #include <Kokkos_Core.hpp>
 #endif
 
-using namespace pops;
-
 namespace {
 
-constexpr double kGamma = 1.4;
-constexpr double kQom =
-    200.0;  // q/m de PotentialForce : assez fort pour IMEX != explicite, sans exploser
+constexpr int Dim = pops::kNativeDimension;
+constexpr std::uint32_t kInjectedRetryReason = 0x494d4558u;
+constexpr const char* kBlock = "tracer";
+constexpr const char* kStateRoute = "tests.amr-imex/state/tracer";
+constexpr const char* kProviderConsumer = "tests.amr-imex/providers/tracer";
+constexpr const char* kImexProgramHash = "tests.amr-imex/program/imex-v1";
+constexpr const char* kTransportProgramHash = "tests.amr-imex/program/transport-v1";
+constexpr const char* kExplicitProgramHash = "tests.amr-imex/program/explicit-source-v1";
 
-// (A) modele ModelSpec-atteignable : Euler + force du potentiel (source raide self-consistent) + charge.
-using PotModel = CompositeModel<Euler, PotentialForce, BackgroundDensity>;
-PotModel make_pot() {
-  return PotModel{Euler{static_cast<Real>(kGamma)}, PotentialForce{static_cast<Real>(kQom)},
-                  BackgroundDensity{Real(1), Real(1)}};
-}
-ModelSpec make_pot_spec() {
-  ModelSpec spec;
-  spec.transport = "compressible";
-  spec.source = "potential";
-  spec.elliptic = "background";
-  spec.gamma = kGamma;
-  spec.qom = kQom;
-  spec.alpha = 1.0;
-  spec.n0 = 1.0;
-  return spec;
+std::size_t cell_count(const pops::Extent<Dim>& shape) {
+  std::size_t count = 1;
+  for (int axis = 0; axis < Dim; ++axis)
+    count *= static_cast<std::size_t>(shape[axis]);
+  return count;
 }
 
-// (B) source de RELAXATION lineaire RAIDE, cellule-locale : S = (u_eq - u)/eps sur toutes les
-// variables conservees. backward Euler (IMEX) est inconditionnellement stable ; Euler avant explose
-// des que dt/eps > 2 (cf. test_imex_ap). Definie ICI (hors briques de production, write-set).
-struct StiffRelax {
-  Real inv_eps = Real(0);
-  Real u_eq[4] = {Real(1), Real(0), Real(0), Real(2.5)};  // rho, mx, my, E d'equilibre
-  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
-    return {"test.amr.stiff-relax", 1};
+pops::AmrSystemConfig<Dim> config() {
+  pops::AmrSystemConfig<Dim> result;
+  const int width = Dim == 3 ? 12 : 24;
+  result.level_count = 2;
+  result.transition_ratios.resize(1);
+  result.transition_buffers.resize(1);
+  result.transition_lookaheads.resize(1);
+  result.regrid_every = 0;
+  result.explicit_bootstrap = true;
+  result.distribute_coarse = true;
+  for (int axis = 0; axis < Dim; ++axis) {
+    result.shape[axis] = width;
+    result.lower[axis] = pops::Real(0);
+    result.upper[axis] = pops::Real(1);
+    result.periodicity[axis] = true;
+    result.coarse_max_grid[axis] = width / 2;
+    result.transition_ratios[0][axis] = 2;
+    result.transition_buffers[0][axis] = 1;
+    result.transition_lookaheads[0][axis] = 1;
   }
-  void serialize_exact_parameters(ExactContractBuilder& contract) const {
-    contract.scalar(inv_eps).scalar(u_eq[0]).scalar(u_eq[1]).scalar(u_eq[2]).scalar(u_eq[3]);
-  }
-  template <class State>
-  POPS_HD State apply(const State& u, const ProviderValues<0>&) const {
-    State s{};
-    for (int c = 0; c < State::size(); ++c)
-      s[c] = inv_eps * (u_eq[c] - u[c]);
-    return s;
-  }
-};
-// elliptic "background" alpha=0 : rhs nul -> phi=0, aucun couplage au champ (raideur purement locale).
-using StiffModel = CompositeModel<Euler, StiffRelax, BackgroundDensity>;
-StiffModel make_stiff(double eps) {
-  StiffRelax r;
-  r.inv_eps = static_cast<Real>(1.0 / eps);
-  return StiffModel{Euler{static_cast<Real>(kGamma)}, r, BackgroundDensity{Real(0), Real(0)}};
+  return result;
 }
 
-std::vector<double> bubble(int n) {
-  std::vector<double> rho(static_cast<std::size_t>(n) * n);
-  double perturbation_sum = 0.0;
-  for (int j = 0; j < n; ++j)
-    for (int i = 0; i < n; ++i) {
-      const double x = (i + 0.5) / n - 0.5, y = (j + 0.5) / n - 0.5;
-      const double perturbation = 0.5 * std::exp(-(x * x + y * y) / 0.02);
-      rho[static_cast<std::size_t>(j) * n + i] = perturbation;
-      perturbation_sum += perturbation;
+std::vector<double> initial_state(const pops::Extent<Dim>& shape) {
+  const std::size_t cells = cell_count(shape);
+  std::vector<double> result(cells, 1.0);
+  const double pi = std::acos(-1.0);
+  for (std::size_t cell = 0; cell < cells; ++cell) {
+    std::size_t quotient = cell;
+    double wave = 0.08;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const int coordinate = static_cast<int>(quotient % static_cast<std::size_t>(shape[axis]));
+      quotient /= static_cast<std::size_t>(shape[axis]);
+      const double x = (static_cast<double>(coordinate) + 0.5) / shape[axis];
+      const double envelope = std::sin(pi * x);
+      wave *= envelope * envelope;
     }
-  const double perturbation_mean = perturbation_sum / static_cast<double>(rho.size());
-  for (double& value : rho)
-    value += 1.0 - perturbation_mean;
-  return rho;
+    result[cell] += wave;
+  }
+  return result;
 }
 
-AmrSystemConfig make_cfg(int n) {
-  AmrSystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
-  cfg.regrid_every = 4;
-  return cfg;
-}
-
-double maxdiff(const std::vector<double>& a, const std::vector<double>& b) {
-  double d = 0;
-  for (std::size_t k = 0; k < a.size() && k < b.size(); ++k)
-    d = std::fmax(d, std::fabs(a[k] - b[k]));
-  return d;
-}
-double maxabs(const std::vector<double>& a) {
-  double m = 0;
-  for (double v : a)
-    m = std::fmax(m, std::fabs(v));
-  return m;
-}
-bool all_finite(const std::vector<double>& a) {
-  for (double v : a)
-    if (!std::isfinite(v))
-      return false;
-  return true;
-}
-// Source du loader AMR : MEME forme que dsl.emit_cpp_native_loader(target="amr_system"), DEUX modeles
-// en dur (PotModel pour A, StiffModel pour B) selectionnes par le nom du bloc ("pot" | "stiff:<eps>").
 std::string loader_source() {
-  // Generated C++ source raw string: clang-format would reindent (or, with the
-  // interleaved R"CPP( delimiters, runaway-indent) the inner content. Fence it to keep the
-  // emitted source verbatim.
   // clang-format off
   return R"CPP(
+#include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/numerics/time/integrators/implicit_stepper.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/runtime/config/route_ids.hpp>
 #include <pops/runtime/dynamic/abi_key.hpp>
-#include <pops/physics/bricks/bricks.hpp>
-#include <cstdlib>
-#include <cstring>
-#include <string>
 namespace pops_generated {
-using PotModel = pops::CompositeModel<pops::Euler, pops::PotentialForce, pops::BackgroundDensity>;
-struct StiffRelax {
-  pops::Real inv_eps = pops::Real(0);
-  pops::Real u_eq[4] = {pops::Real(1), pops::Real(0), pops::Real(0), pops::Real(2.5)};
-  [[nodiscard]] static constexpr pops::PreparedProviderIdentity provider_identity() noexcept {
-    return {"test.amr.stiff-relax", 1};
+template <int Dim>
+struct RelaxingAdvection {
+  using Law = pops::nd::ScalarAdvection<Dim>;
+  using Schema = typename Law::Schema;
+  using State = typename Law::State;
+  using Primitive = typename Law::Primitive;
+  static constexpr int dimension = Dim;
+  static constexpr int n_vars = Law::n_vars;
+  Law law{};
+  pops::Real decay = pops::Real(0);
+  static pops::PreparedProviderIdentity provider_identity() noexcept {
+    return {"test.amr-imex.relaxing-advection", 1};
   }
   void serialize_exact_parameters(pops::ExactContractBuilder& contract) const {
-    contract.scalar(inv_eps).scalar(u_eq[0]).scalar(u_eq[1]).scalar(u_eq[2]).scalar(u_eq[3]);
+    for (int axis = 0; axis < Dim; ++axis) contract.scalar(law.velocity()[axis]);
+    contract.scalar(decay);
   }
-  template <class State>
-  POPS_HD State apply(const State& u, const pops::ProviderValues<0>&) const {
-    State s{};
-    for (int c = 0; c < State::size(); ++c) s[c] = inv_eps * (u_eq[c] - u[c]);
-    return s;
+  static pops::VariableSet conservative_vars() {
+    return {pops::VariableKind::Conservative, {"u"}, 1, {pops::VariableRole::Scalar}};
   }
+  static pops::VariableSet primitive_vars() {
+    return {pops::VariableKind::Primitive, {"u"}, 1, {pops::VariableRole::Scalar}};
+  }
+  POPS_HD pops::nd::StateConversion<Primitive> recover(const State& state) const {
+    return law.recover(state);
+  }
+  POPS_HD pops::nd::StateConversion<State> make_conservative(const Primitive& primitive) const {
+    return law.make_conservative(primitive);
+  }
+  POPS_HD pops::nd::StateConversionStatus admissibility(const State& state) const {
+    return law.admissibility(state);
+  }
+  template <int Axis> POPS_HD State flux(const State& state) const {
+    return law.template flux<Axis>(state);
+  }
+  template <int Axis> POPS_HD pops::Real max_wave_speed(const State& state) const {
+    return law.template max_wave_speed<Axis>(state);
+  }
+  template <int Axis>
+  POPS_HD void wave_speeds(const State& state, pops::Real& lower, pops::Real& upper) const {
+    law.template wave_speeds<Axis>(state, lower, upper);
+  }
+  POPS_HD State source(const State& state, const pops::ProviderValues<0>&) const {
+    const pops::Real departure = state[0] - pops::Real(1);
+    return State{-decay * (departure + departure * departure * departure)};
+  }
+  POPS_HD void source_jacobian(const State& state, const pops::ProviderValues<0>&,
+                               pops::Real (&jacobian)[1][1]) const {
+    const pops::Real departure = state[0] - pops::Real(1);
+    jacobian[0][0] = -decay * (pops::Real(1) + pops::Real(3) * departure * departure);
+  }
+  POPS_HD pops::Real elliptic_rhs(const State&) const { return pops::Real(0); }
 };
-using StiffModel = pops::CompositeModel<pops::Euler, StiffRelax, pops::BackgroundDensity>;
+using Model = RelaxingAdvection<pops::kNativeDimension>;
 }
-// LITTERAL preprocesseur (PAS abi_key_string() : une inline serait interposee, ELF/RTLD_GLOBAL,
-// vers la copie du module deja charge -> cle du module renvoyee -> garde d'ABI tautologique).
 extern "C" const char* pops_native_abi_key() { return POPS_ABI_KEY_LITERAL; }
 extern "C" const char* pops_compiled_route_manifest() { return pops::kRouteRegistrySignature; }
 extern "C" int pops_compiled_nparams() { return 0; }
 extern "C" const char* pops_compiled_param_names() { return ""; }
 extern "C" void pops_install_native_amr(void* sys, const char* name, const char* limiter,
-                                       const char* riemann, const char* recon, const char* time,
-                                       double gamma, int substeps, const double*, int,
-                                       double pos_floor, double weno_epsilon,
-                                       bool wave_speed_cache) {
-  pops::AmrSystem* s = reinterpret_cast<pops::AmrSystem*>(sys);
-  if (std::strncmp(name, "stiff:", 6) == 0) {
-    const double eps = std::atof(name + 6);
-    pops_generated::StiffRelax r;
-    r.inv_eps = static_cast<pops::Real>(1.0 / eps);
-    pops::add_compiled_model<pops_generated::StiffModel>(
-        *s, name,
-        pops_generated::StiffModel{pops::Euler{static_cast<pops::Real>(gamma)}, r,
-                                  pops::BackgroundDensity{pops::Real(0), pops::Real(0)}},
-        limiter, riemann, recon, time, gamma, substeps, 1, {}, {}, pos_floor, weno_epsilon,
-        wave_speed_cache);
-    return;
-  }
-  pops::add_compiled_model<pops_generated::PotModel>(
-      *s, name,
-      pops_generated::PotModel{pops::Euler{static_cast<pops::Real>(gamma)},
-                              pops::PotentialForce{static_cast<pops::Real>()CPP" +
-         std::to_string(kQom) + R"CPP()},
-                              pops::BackgroundDensity{pops::Real(1), pops::Real(1)}},
-      limiter, riemann, recon, time, gamma, substeps, 1, {}, {}, pos_floor, weno_epsilon,
-      wave_speed_cache);
+                                        const char* riemann, const char* recon, const char* time,
+                                        double gamma, int substeps, const double*, int,
+                                        double pos_floor, double weno_epsilon,
+                                        bool wave_speed_cache) {
+  pops::RealVector<pops::kNativeDimension> velocity{};
+  for (int axis = 0; axis < pops::kNativeDimension; ++axis)
+    velocity[axis] = pops::Real(0.2) / pops::Real(axis + 1);
+  pops_generated::Model model{
+      pops::nd::ScalarAdvection<pops::kNativeDimension>::prepare(velocity), pops::Real(80)};
+  auto* system = static_cast<pops::AmrSystem<pops::kNativeDimension>*>(sys);
+  pops::add_compiled_model<pops::kNativeDimension>(
+      *system, name, model, limiter, riemann, recon, time, gamma, substeps, 1, {}, {}, pos_floor,
+      weno_epsilon, wave_speed_cache, "tests.amr-imex/providers/tracer");
 }
 )CPP";
   // clang-format on
 }
 
-// --- helpers de run (Part A : potential ; Part B : stiff) ---
-
-// Configure le Poisson + raffinement + densite et avance nsteps de dt. Renvoie densite + masse.
-struct Snap {
-  std::vector<double> density;
-  double mass = 0;
-  int n_patches = 0;
+struct ProgramEvidence {
+  bool inject_retry = false;
+  int rejected_solves = 0;
+  int accepted_solves = 0;
+  int coarse_transport_evaluations = 0;
+  int fine_transport_evaluations = 0;
 };
 
-void configure_refined_execution(AmrSystem& system, const std::string& block) {
-  // Time subcycling is independent from mesh refinement and must remain authored explicitly.
-  system.set_temporal_relations({2}, {1}, {"integral_only"});
-  // The centered BackgroundDensity source has zero integral by construction, so the periodic
-  // nullspace is physically compatible without any silent mean projection.
-  system.set_poisson("charge_density", "geometric_mg", "periodic");
-  test::install_prepared_threshold_union(system, {{block, "rho", 1.2}});
-}
-
-template <class Model>
-void install_single_block_test_program(AmrSystem& system, Model model, bool implicit_source) {
-  system.set_program_block_map({0});
-  // Select and materialize the common spatial runtime before binding the typed Program context.
-  system.install_program_step([](double) {});
-  if (!system.uses_runtime_engine() || system.engine() == nullptr)
-    throw std::runtime_error("native IMEX fixture failed to materialize AmrRuntime");
-
-  auto context = std::make_shared<runtime::program::AmrProgramContext>(system.engine(), &system);
-  context->configure_primary_clock("test.amr.imex.macro");
-  context->install([context, model, implicit_source](double macro_dt) {
-    context->advance_hierarchy(macro_dt, [context, model, implicit_source](double level_dt) {
+std::shared_ptr<ProgramEvidence> install_imex_program(pops::AmrSystem<Dim>& system,
+                                                      bool inject_retry) {
+  auto context = pops::runtime::program::make_program_execution_provider(&system);
+  auto evidence = std::make_shared<ProgramEvidence>();
+  evidence->inject_retry = inject_retry;
+  context->configure_primary_clock("tests.amr-imex.clock");
+  context->install([context, evidence](double macro_dt) {
+    context->advance_hierarchy(macro_dt, [context, evidence](double level_dt) {
       context->set_stage_time(0, 1);
+      pops::MultiFab<Dim>& accepted = context->state(0);
+      pops::MultiFab<Dim>& transport = context->scratch_state(1000, 0, accepted);
+      pops::MultiFab<Dim>& explicit_rate = context->rhs_scratch(2000, 0, accepted);
+      context->neg_div_flux_default_into(0, accepted, explicit_rate, 3000);
       if (context->level() == 0)
-        (void)consume_solve_outcome(context->solve_default_field_on_coarse_level());
+        ++evidence->coarse_transport_evaluations;
+      else
+        ++evidence->fine_transport_evaluations;
+      context->lincomb(transport, pops::Real(1), accepted, pops::Real(0), accepted);
+      context->axpy(transport, pops::Real(level_dt), explicit_rate);
 
-      MultiFab& live = context->state(0);
-      MultiFab& candidate = context->scratch_state(1000, 0, live);
-      MultiFab& rate = context->rhs_scratch(2000, 0, candidate);
-      context->lincomb(candidate, Real(1), live, Real(0), live);
-      if (implicit_source) {
-        context->neg_div_flux_default_into(0, candidate, rate, 3000);
-        context->axpy(candidate, Real(level_dt), rate, Real(level_dt), {{1, 1, 1}});
-        (void)consume_solve_outcome(backward_euler_source(
-            model, [](std::size_t) { return ProviderStorageView<kNativeDimension, 0>{}; },
-            candidate, Real(level_dt), NewtonOptions{}, ImplicitMask<Model::n_vars>{}, nullptr));
-      } else {
-        context->rhs_into(0, candidate, rate, 3000);
-        context->axpy(candidate, Real(level_dt), rate, Real(level_dt), {{1, 1, 1}});
+      pops::NewtonOptions options;
+      if (evidence->inject_retry)
+        options.max_iters = 1;
+      evidence->inject_retry = false;
+      pops::SolveOutcome implicit =
+          context->solve_source_default(0, transport, pops::Real(level_dt), options);
+      if (!implicit.report().solved_value_available()) {
+        const pops::SolveReport rejected = implicit.consume(pops::SolveConsumption::kRejectAttempt);
+        ++evidence->rejected_solves;
+        throw pops::runtime::program::StepAttemptRejected(
+            rejected.status, pops::runtime::program::StepAttemptDisposition::kRetry,
+            kInjectedRetryReason, "implicit-source", rejected.reason);
       }
-      context->commit_many({{&live, &candidate}});
+      const pops::SolveReport accepted_solve = implicit.consume(pops::SolveConsumption::kAccept);
+      if (!accepted_solve.solved())
+        throw std::logic_error("accepted IMEX source solve did not publish a solved value");
+      ++evidence->accepted_solves;
+      context->commit_many({{&accepted, &transport}});
     });
   });
   system.set_program_block_map({0});
+  using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
+  system.install_prepared_amr_program_flux_expression_budget(kImexProgramHash,
+                                                             std::vector<FluxBudget>{{1, 1}});
+  return evidence;
 }
 
-// @p setup installe l'unique bloc (add_compiled_model ou add_block) ; le reste (Poisson, raffinement,
-// densite, avance) est commun. Construit son propre AmrSystem (pas de fuite).
-template <class Model, class Setup>
-Snap run(int n, const std::vector<double>& rho, int nsteps, double dt, Model model,
-         bool implicit_source, Setup setup) {
-  AmrSystem s(make_cfg(n));
-  setup(s);
-  configure_refined_execution(s, "gas");
-  s.set_density("gas", rho);
-  install_single_block_test_program(s, model, implicit_source);
-  for (int k = 0; k < nsteps; ++k)
-    s.step(dt);
-  return Snap{s.density(), s.mass(), s.n_patches()};
+void install_transport_program(pops::AmrSystem<Dim>& system, bool explicit_source) {
+  auto context = pops::runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock(explicit_source ? "tests.amr-imex.explicit-clock"
+                                                   : "tests.amr-imex.transport-clock");
+  context->install([context, explicit_source](double macro_dt) {
+    context->advance_hierarchy(macro_dt, [context, explicit_source](double level_dt) {
+      context->set_stage_time(0, 1);
+      pops::MultiFab<Dim>& accepted = context->state(0);
+      pops::MultiFab<Dim>& candidate = context->scratch_state(4000, 0, accepted);
+      pops::MultiFab<Dim>& rate = context->rhs_scratch(5000, 0, accepted);
+      context->neg_div_flux_default_into(0, accepted, rate, 6000);
+      context->lincomb(candidate, pops::Real(1), accepted, pops::Real(0), accepted);
+      context->axpy(candidate, pops::Real(level_dt), rate);
+      if (explicit_source) {
+        context->source_default_into(0, candidate, rate);
+        context->axpy(candidate, pops::Real(level_dt), rate);
+      }
+      context->commit_many({{&accepted, &candidate}});
+    });
+  });
+  system.set_program_block_map({0});
+  using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
+  system.install_prepared_amr_program_flux_expression_budget(
+      explicit_source ? kExplicitProgramHash : kTransportProgramHash,
+      std::vector<FluxBudget>{{1, 1}});
+}
+
+void build_refined_system(pops::AmrSystem<Dim>& system, const std::string& shared_object,
+                          const std::vector<double>& state) {
+  system.install_block_state_route(kBlock, kStateRoute);
+  system.add_native_block(kBlock, shared_object, "minmod", "rusanov", "conservative", "imex", 1.4,
+                          1);
+  system.set_temporal_relations({2}, {1}, {"integral_only"});
+  system.set_conservative_state(kBlock, state);
+  pops::test::install_prepared_threshold_union(system, {{kBlock, "u", 1.03}},
+                                               "tests.amr-imex.tagging@1");
+  system.begin_bootstrap_plan();
+  if (!system.bootstrap_next_level()) {
+    system.rollback_bootstrap_level();
+    throw std::runtime_error("native IMEX fixture did not create its refined level");
+  }
+  system.commit_bootstrap_level();
+}
+
+double max_difference(const std::vector<double>& left, const std::vector<double>& right) {
+  if (left.size() != right.size())
+    return std::numeric_limits<double>::infinity();
+  double result = 0.0;
+  for (std::size_t index = 0; index < left.size(); ++index)
+    result = std::max(result, std::fabs(left[index] - right[index]));
+  return result;
+}
+
+bool all_finite(const std::vector<double>& values) {
+  return std::all_of(values.begin(), values.end(),
+                     [](double value) { return std::isfinite(value); });
+}
+
+double max_departure_from_equilibrium(const std::vector<double>& values) {
+  double result = 0.0;
+  for (const double value : values)
+    result = std::max(result, std::fabs(value - 1.0));
+  return result;
 }
 
 }  // namespace
 
-static int pops_run_test_amr_imex_native(int argc, char** argv) {
+TEST(test_amr_imex_native, SourceBuiltRefinedTrajectoryRollsBackRetriesAndRestartsExactly) {
 #if defined(POPS_HAS_KOKKOS)
+  int argc = 0;
+  char** argv = nullptr;
   Kokkos::ScopeGuard guard(argc, argv);
-#else
-  (void)argc;
-  (void)argv;
 #endif
-  const int n = 64;
-  const int nsteps = 12;
-  const std::vector<double> rho = bubble(n);
-
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
-  // ============================================================================================
-  // (A) PARITE 3 CHEMINS sous IMEX + IMEX ACTIF + CONSERVATION, modele potential (ModelSpec).
-  // ============================================================================================
-  const double dtA = 5e-3;  // regime ou IMEX differe nettement de l'explicite (PotentialForce fort)
-
-  // (A1) add_compiled_model == add_block sous time="imex" : dmax==0 (chemin direct, tous backends).
-  Snap A_compiled =
-      run(n, rho, nsteps, dtA, make_pot(), /*implicit_source=*/true, [](AmrSystem& s) {
-        add_compiled_model(s, "gas", make_pot(), "minmod", "rusanov", "conservative", "imex",
-                           kGamma);
-      });
-  Snap A_block = run(n, rho, nsteps, dtA, make_pot(), /*implicit_source=*/true, [](AmrSystem& s) {
-    s.add_block("gas", make_pot_spec(), "minmod", "rusanov", "conservative", "imex", 1);
-  });
-  chk(maxabs(A_block.density) > 1e-6, "[A] densite IMEX non triviale");
-  chk(maxdiff(A_compiled.density, A_block.density) == 0.0,
-      "[A] add_compiled_model == add_block sous IMEX (dmax==0)");
-  chk(std::fabs(A_compiled.mass - A_block.mass) < 1e-12 * (std::fabs(A_block.mass) + 1.0),
-      "[A] masse add_compiled_model == add_block sous IMEX");
-  chk(A_compiled.n_patches == A_block.n_patches, "[A] n_patches identique sous IMEX");
-  std::printf("OK  [A] add_compiled_model == add_block sous IMEX (dmax==0)\n");
-
-  // (A2) IMEX ACTIF : different de l'explicite sur le MEME etat (le pas implicite est bien pris).
-  Snap A_explicit =
-      run(n, rho, nsteps, dtA, make_pot(), /*implicit_source=*/false, [](AmrSystem& s) {
-        add_compiled_model(s, "gas", make_pot(), "minmod", "rusanov", "conservative", "explicit",
-                           kGamma);
-      });
-  chk(maxdiff(A_compiled.density, A_explicit.density) > 1e-9,
-      "[A] IMEX != explicite sur le meme etat (pas implicite actif, non silencieux)");
-  std::printf("OK  [A] IMEX != explicite (dmax=%.3e)\n",
-              maxdiff(A_compiled.density, A_explicit.density));
-
-  // (A3) CONSERVATION : la masse grossiere est conservee a ~machine sous IMEX (PotentialForce ne
-  // touche pas la densite ; la source est cellule-locale, hors registres de reflux). On la compare a
-  // la masse de l'explicite : les deux conservent la masse exactement -> ecart machine.
+  const std::string stem = std::string(POPS_TEST_TMPDIR) + "/amr_imex_native_" +
+                           std::to_string(pops::my_rank()) + "_" +
+                           std::to_string(static_cast<long>(std::clock()));
+  const std::string source_path = stem + ".cpp";
+  const std::string shared_object = stem + ".so";
   {
-    AmrSystem s(make_cfg(n));
-    add_compiled_model(s, "gas", make_pot(), "minmod", "rusanov", "conservative", "imex", kGamma);
-    configure_refined_execution(s, "gas");
-    s.set_density("gas", rho);
-    install_single_block_test_program(s, make_pot(), /*implicit_source=*/true);
-    const double m0 = s.mass();
-    for (int k = 0; k < nsteps; ++k)
-      s.step(dtA);
-    const double m1 = s.mass();
-    const double drift = std::fabs(m1 - m0) / (std::fabs(m0) + 1e-30);
-    chk(drift < 1e-12, "[A] masse conservee a ~machine sous IMEX (reflux intact)");
-    std::printf("OK  [A] conservation IMEX : derive relative de masse = %.3e\n", drift);
+    std::ofstream source(source_path);
+    source << loader_source();
   }
-
-  // ============================================================================================
-  // (B) SOURCE RAIDE : explicite EXPLOSE, IMEX stable ; add_compiled_model == add_native_block.
-  // ============================================================================================
-  // Regime RAIDE (eps << dt) : explicite diverge, IMEX reste fini et borne.
-  {
-    const double eps = 1e-5, dtB = 1e-3;
-    Snap B_imex =
-        run(n, rho, nsteps, dtB, make_stiff(eps), /*implicit_source=*/true, [eps](AmrSystem& s) {
-          add_compiled_model(s, "gas", make_stiff(eps), "minmod", "rusanov", "conservative", "imex",
-                             kGamma);
-        });
-    Snap B_expl;
-    bool explicit_rejected_nonfinite = false;
-    try {
-      B_expl =
-          run(n, rho, nsteps, dtB, make_stiff(eps), /*implicit_source=*/false, [eps](AmrSystem& s) {
-            add_compiled_model(s, "gas", make_stiff(eps), "minmod", "rusanov", "conservative",
-                               "explicit", kGamma);
-          });
-    } catch (const FieldNullspaceInvalidEvaluation&) {
-      // The final runtime is fail-closed: once the unstable explicit state becomes non-finite, the
-      // next field solve rejects it before NaNs can be published as a completed step.
-      explicit_rejected_nonfinite = true;
-    } catch (const runtime::program::StepAttemptRejected& rejection) {
-      if (rejection.status() != SolveStatus::kInvalidEvaluation ||
-          rejection.disposition() != runtime::program::StepAttemptDisposition::kReject ||
-          rejection.reason_code() != 0x53544201u || rejection.phase() != "stage")
-        throw;
-      explicit_rejected_nonfinite = true;
-    } catch (const std::runtime_error& error) {
-      // This section deliberately calls AmrRuntime below the facade transaction boundary, so the
-      // finite-volume kernel may expose its fail-closed reason directly instead of the facade's
-      // StepAttemptRejected wrapper.
-      if (std::string(error.what()).find("reason_code=0x53544201") == std::string::npos)
-        throw;
-      explicit_rejected_nonfinite = true;
-    }
-    chk(all_finite(B_imex.density) && maxabs(B_imex.density) < 1e3,
-        "[B] IMEX stable sur source raide (fini, borne)");
-    chk(explicit_rejected_nonfinite || (all_finite(B_expl.density) && maxabs(B_expl.density) > 1e3),
-        "[B] explicite refuse avant publication ou diverge en restant fini");
-    std::printf(
-        "OK  [B] source raide (eps=%.0e, dt=%.0e) : IMEX max=%.3e (stable) | explicite %s\n", eps,
-        dtB, maxabs(B_imex.density),
-        explicit_rejected_nonfinite
-            ? "REJETE NON FINI (fail-closed)"
-            : (all_finite(B_expl.density) ? "borne >> 1" : "ETAT NON FINI PUBLIE (ECHEC)"));
-  }
-
-  // (B2) PARITE add_compiled_model == add_block sous IMEX en regime NON explosif (eps modere) :
-  // le drapeau IMEX traverse aussi la dispatch ModelSpec a l'identique pour un modele a source
-  // (ici on reste sur potential car StiffRelax n'est pas ModelSpec-atteignable ; (A) couvre deja
-  // la parite 3 chemins du drapeau IMEX). On verifie en plus que la source raide IMEX est stable
-  // en regime modere et borne pour add_compiled_model == add_compiled_model (idempotence du build).
-  {
-    const double eps = 1e-3, dtB = 2e-4;
-    Snap B1 =
-        run(n, rho, nsteps, dtB, make_stiff(eps), /*implicit_source=*/true, [eps](AmrSystem& s) {
-          add_compiled_model(s, "gas", make_stiff(eps), "minmod", "rusanov", "conservative", "imex",
-                             kGamma);
-        });
-    Snap B2 =
-        run(n, rho, nsteps, dtB, make_stiff(eps), /*implicit_source=*/true, [eps](AmrSystem& s) {
-          add_compiled_model(s, "gas", make_stiff(eps), "minmod", "rusanov", "conservative", "imex",
-                             kGamma);
-        });
-    chk(maxdiff(B1.density, B2.density) == 0.0,
-        "[B] add_compiled_model deterministe sous IMEX (dmax==0)");
-    chk(all_finite(B1.density), "[B] IMEX stable en regime modere");
-    std::printf("OK  [B] add_compiled_model IMEX deterministe (dmax==0)\n");
-  }
-
-  std::printf(
-      "OK  (direct) IMEX cable a parite (add_compiled_model == add_block, dmax==0) ; IMEX "
-      "actif (!= explicite) ; stable sur source raide (explicite explose) ; masse conservee\n");
-
-  // ============================================================================================
-  // (C) CHEMIN .so : add_native_block(loader) == add_compiled_model, sous IMEX (A potential + B stiff).
-  // Le DSO rejoue exactement le contrat de compilation Kokkos du binaire de test.
-  // ============================================================================================
-  const std::string tmp = std::string(POPS_TEST_TMPDIR) + "/amr_imex_native_" +
-                          std::to_string(static_cast<long>(std::clock()));
-  const std::string src = tmp + ".cpp";
-  const std::string so = tmp + ".so";
-  {
-    std::ofstream f(src);
-    f << loader_source();
-  }
-  const auto package = pops::test::native_dso::compile_shared(src, so);
+  const auto package = pops::test::native_dso::compile_shared(source_path, shared_object);
   if (!package.ok) {
     pops::test::native_dso::report_compile_failure("test_amr_imex_native", package);
-    return 1;
+    FAIL() << "source-built AMR IMEX artifact did not compile";
   }
-  // (C-A) potential sous IMEX : add_native_block == add_compiled_model (dmax==0).
-  {
-    AmrSystem A(make_cfg(n));
-    A.add_native_block("pot", so, "minmod", "rusanov", "conservative", "imex", kGamma, 1);
-    configure_refined_execution(A, "pot");
-    A.set_density("pot", rho);
-    install_single_block_test_program(A, make_pot(), /*implicit_source=*/true);
-    for (int k = 0; k < nsteps; ++k)
-      A.step(dtA);
 
-    AmrSystem B(make_cfg(n));
-    add_compiled_model(B, "gas", make_pot(), "minmod", "rusanov", "conservative", "imex", kGamma);
-    configure_refined_execution(B, "gas");
-    B.set_density("gas", rho);
-    install_single_block_test_program(B, make_pot(), /*implicit_source=*/true);
-    for (int k = 0; k < nsteps; ++k)
-      B.step(dtA);
+  const auto system_config = config();
+  const std::vector<double> initial = initial_state(system_config.shape);
+  constexpr double dt = 3.0e-2;
 
-    chk(maxdiff(A.density(), B.density()) == 0.0,
-        "[C-A] add_native_block == add_compiled_model sous IMEX (potential, dmax==0)");
-    chk(A.n_patches() == B.n_patches(), "[C-A] n_patches loader == direct");
+  pops::AmrSystem<Dim> synchronization_control(system_config);
+  build_refined_system(synchronization_control, shared_object, initial);
+  install_transport_program(synchronization_control, false);
+  synchronization_control.step(1.0e-12);
+
+  pops::AmrSystem<Dim> transport_control(system_config);
+  build_refined_system(transport_control, shared_object, initial);
+  install_transport_program(transport_control, false);
+  transport_control.step(dt);
+  const double synchronized_mass = synchronization_control.mass(kBlock);
+  EXPECT_NEAR(transport_control.mass(kBlock), synchronized_mass,
+              2.0e-10 * (std::fabs(synchronized_mass) + 1.0));
+
+  pops::AmrSystem<Dim> explicit_control(system_config);
+  build_refined_system(explicit_control, shared_object, initial);
+  install_transport_program(explicit_control, true);
+  for (int step = 0; step < 3; ++step)
+    explicit_control.step(dt);
+  const std::vector<double> coarse_explicit = explicit_control.block_level_state_global(kBlock, 0);
+  ASSERT_TRUE(all_finite(coarse_explicit));
+
+  pops::AmrSystem<Dim> continuous(system_config);
+  build_refined_system(continuous, shared_object, initial);
+  ASSERT_EQ(continuous.n_levels(), 2);
+  ASSERT_GT(continuous.n_patches(), 0);
+  const std::vector<double> coarse_before = continuous.block_level_state_global(kBlock, 0);
+  const std::vector<double> fine_before = continuous.block_level_state_global(kBlock, 1);
+  const auto evidence = install_imex_program(continuous, true);
+
+  try {
+    continuous.step(dt);
+    FAIL() << "the injected implicit-source retry was not surfaced";
+  } catch (const pops::runtime::program::StepAttemptRejected& rejected) {
+    EXPECT_EQ(rejected.disposition(), pops::runtime::program::StepAttemptDisposition::kRetry);
+    EXPECT_EQ(rejected.reason_code(), kInjectedRetryReason);
+    EXPECT_EQ(rejected.phase(), "implicit-source");
   }
-  // (C-B) stiff sous IMEX (regime modere, fini) : add_native_block == add_compiled_model (dmax==0).
-  {
-    const double eps = 1e-3, dtB = 2e-4;
-    const std::string bname = "stiff:" + std::to_string(eps);
-    AmrSystem A(make_cfg(n));
-    A.add_native_block(bname, so, "minmod", "rusanov", "conservative", "imex", kGamma, 1);
-    configure_refined_execution(A, bname);
-    A.set_density(bname, rho);
-    install_single_block_test_program(A, make_stiff(eps), /*implicit_source=*/true);
-    for (int k = 0; k < nsteps; ++k)
-      A.step(dtB);
+  EXPECT_EQ(evidence->rejected_solves, 1);
+  EXPECT_EQ(continuous.macro_step(), 0);
+  EXPECT_DOUBLE_EQ(continuous.time(), 0.0);
+  EXPECT_EQ(continuous.block_level_state_global(kBlock, 0), coarse_before);
+  EXPECT_EQ(continuous.block_level_state_global(kBlock, 1), fine_before);
 
-    AmrSystem B(make_cfg(n));
-    add_compiled_model(B, "gas", make_stiff(eps), "minmod", "rusanov", "conservative", "imex",
-                       kGamma);
-    configure_refined_execution(B, "gas");
-    B.set_density("gas", rho);
-    install_single_block_test_program(B, make_stiff(eps), /*implicit_source=*/true);
-    for (int k = 0; k < nsteps; ++k)
-      B.step(dtB);
+  continuous.step(dt);
+  const std::vector<double> coarse_first = continuous.block_level_state_global(kBlock, 0);
+  const std::vector<double> fine_first = continuous.block_level_state_global(kBlock, 1);
+  ASSERT_TRUE(all_finite(coarse_first));
+  ASSERT_TRUE(all_finite(fine_first));
+  EXPECT_GT(max_difference(coarse_first, coarse_before), 0.0);
+  EXPECT_GT(max_difference(fine_first, fine_before), 0.0);
+  EXPECT_GT(evidence->coarse_transport_evaluations, 0);
+  EXPECT_GT(evidence->fine_transport_evaluations, 0);
+  EXPECT_GT(evidence->accepted_solves, 0);
 
-    chk(maxdiff(A.density(), B.density()) == 0.0,
-        "[C-B] add_native_block == add_compiled_model sous IMEX (stiff, dmax==0)");
-  }
-  std::printf(
-      "OK (C) add_native_block == add_compiled_model sous IMEX (potential + stiff, dmax==0)\n");
+  continuous.step(dt);
+  continuous.step(dt);
+  const std::vector<double> coarse_accepted = continuous.block_level_state_global(kBlock, 0);
+  const std::vector<double> fine_accepted = continuous.block_level_state_global(kBlock, 1);
+  EXPECT_LT(max_departure_from_equilibrium(coarse_accepted),
+            max_departure_from_equilibrium(coarse_explicit));
 
-  if (fails == 0)
-    std::printf(
-        "OK test_amr_imex_native (IMEX sur AMR : add_native_block == add_compiled_model == "
-        "add_block bit-identique ; IMEX actif vs explicite ; stable sur source raide ; "
-        "masse conservee au reflux)\n");
-  return fails ? 1 : 0;
-}
+  const std::vector<std::uint8_t> accepted_program = continuous.program_accepted_state();
+  const double accepted_time = continuous.time();
+  const int accepted_macro_step = continuous.macro_step();
 
-TEST(test_amr_imex_native, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_amr_imex_native, "test_amr_imex_native"), 0);
+  pops::AmrSystem<Dim> restarted(system_config);
+  build_refined_system(restarted, shared_object, initial);
+  static_cast<void>(install_imex_program(restarted, false));
+  restarted.set_block_level_state(kBlock, 0, coarse_accepted);
+  restarted.set_block_level_state(kBlock, 1, fine_accepted);
+  restarted.restore_checkpoint_accepted_state(accepted_program);
+  restarted.set_clock(accepted_time, accepted_macro_step);
+
+  continuous.step(dt);
+  restarted.step(dt);
+  EXPECT_EQ(restarted.macro_step(), continuous.macro_step());
+  EXPECT_DOUBLE_EQ(restarted.time(), continuous.time());
+  EXPECT_EQ(restarted.block_level_state_global(kBlock, 0),
+            continuous.block_level_state_global(kBlock, 0));
+  EXPECT_EQ(restarted.block_level_state_global(kBlock, 1),
+            continuous.block_level_state_global(kBlock, 1));
+  EXPECT_DOUBLE_EQ(restarted.mass(kBlock), continuous.mass(kBlock));
 }

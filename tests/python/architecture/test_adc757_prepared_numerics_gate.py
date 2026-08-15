@@ -26,8 +26,18 @@ def test_adc757_slice_references_exact_real_mandatory_native_proofs():
     runner = _load_runner()
     data, errors = runner.validate_manifest(MANIFEST)
     assert not errors, "ADC-757 slice matrix is invalid:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 96
-    assert {row["requirement"] for row in data["check"]} == runner.EXPECTED_REQUIREMENTS
+    identities = {
+        (
+            row.get("kind", "ctest"),
+            row.get("target", row.get("path")),
+            row.get("test_regex", row.get("test")),
+        )
+        for row in data["check"]
+    }
+    assert len(identities) == len(data["check"])
+    assert {row["requirement"] for row in data["check"]} == (
+        runner.EXPECTED_REQUIREMENTS | runner.EXPECTED_UNAVAILABLE_REQUIREMENTS
+    )
     assert data["evidence_from"] == [
         "ADC-682",
         "ADC-711",
@@ -58,9 +68,7 @@ def test_adc757_slice_executes_runtime_recovery_publication_proofs():
     rows = [row for row in data["check"] if row["requirement"] in claimed]
     assert {row["requirement"] for row in rows} == claimed
     assert {(row["requirement"], row["polarity"]) for row in rows} == {
-        (requirement, polarity)
-        for requirement in claimed
-        for polarity in ("positive", "refusal")
+        (requirement, polarity) for requirement in claimed for polarity in ("positive", "refusal")
     }
 
 
@@ -75,9 +83,7 @@ def test_adc757_slice_executes_new_prepared_recovery_policy_proofs():
     rows = [row for row in data["check"] if row["requirement"] in claimed]
     assert {row["requirement"] for row in rows} == claimed
     assert {(row["requirement"], row["polarity"]) for row in rows} == {
-        (requirement, polarity)
-        for requirement in claimed
-        for polarity in ("positive", "refusal")
+        (requirement, polarity) for requirement in claimed for polarity in ("positive", "refusal")
     }
 
 
@@ -92,15 +98,14 @@ def test_adc757_slice_executes_qualified_flux_provider_pack_proofs():
             "requirement": "qualified_flux_provider_pack",
             "polarity": "positive",
             "target": "test_flux_interfaces",
-            "test_regex": "^test_flux_interfaces\\."
-            "generated_provider_requirements_own_native_slot_reads$",
+            "test_regex": "^FluxProviders\\.ExactDensePackBindsOnlyDeclaredSlots$",
         },
         {
             "requirement": "qualified_flux_provider_pack",
             "polarity": "refusal",
             "kind": "pytest",
             "path": "tests/python/unit/codegen/test_compiler_model_provider.py",
-            "test": "test_field_dependent_flux_without_provider_fails_before_native_source",
+            "test": "test_incomplete_or_false_compiler_provider_is_rejected_before_compile",
         },
     ]
 
@@ -109,16 +114,13 @@ def test_adc757_slice_executes_post_riemann_boundary_flux_proofs():
     runner = _load_runner()
     data, errors = runner.validate_manifest(MANIFEST)
     assert not errors
-    assert [
-        row for row in data["check"]
-        if row["requirement"] == "post_riemann_boundary_flux"
-    ] == [
+    assert [row for row in data["check"] if row["requirement"] == "post_riemann_boundary_flux"] == [
         {
             "requirement": "post_riemann_boundary_flux",
             "polarity": "positive",
-            "target": "test_amr_native_loader",
-            "test_regex": "^test_amr_native_loader\\."
-            "PostRiemannBoundaryFluxUsesOutwardOrientationAndPreservesCanonicalFaceStorage$",
+            "target": "test_prepared_hyperbolic_boundary",
+            "test_regex": "^test_prepared_hyperbolic_boundary\\."
+            "no_flux_is_enforced_on_the_post_riemann_face_field$",
         },
         {
             "requirement": "post_riemann_boundary_flux",
@@ -145,13 +147,14 @@ def test_adc757_slice_separates_mpi_executables_from_authenticated_hardware_proo
     assert "runtime_consumer_cutover_and_legacy_deletion" not in data["deferred"]
     assert "boundary_geometry_riemann_and_spatial_provider_families" not in data["deferred"]
     assert "amr_regrid_migration_and_restart_coherence" not in data["deferred"]
-    assert "remaining_local_time_migration_and_load_balance_runtime_integration" not in data[
-        "deferred"
-    ]
-    assert "remaining_multirank_multibox_amr_local_time_execution" in data["deferred"]
-    assert [
-        row for row in data["check"] if row.get("kind") == "mpi_ctest"
-    ] == [
+    assert (
+        "remaining_local_time_migration_and_load_balance_runtime_integration"
+        not in data["deferred"]
+    )
+    assert "bounded_cell_local_program_runtime" not in data["deferred"]
+    assert "standalone_exact_ranked_cell_temporal_provider" not in data["deferred"]
+    assert "remaining_multirank_multibox_amr_local_time_execution" not in data["deferred"]
+    assert [row for row in data["check"] if row.get("kind") == "mpi_ctest"] == [
         {
             "requirement": "mpi_collective_execution",
             "polarity": "positive",
@@ -186,22 +189,35 @@ def test_adc757_slice_separates_mpi_executables_from_authenticated_hardware_proo
         },
         {
             "requirement": "bounded_cell_local_program_runtime",
+            "polarity": "positive",
+            "kind": "mpi_ctest",
+            "target": "test_mpi_cell_temporal_program",
+            "test_regex": "^test_mpi_cell_temporal_program_np2$",
+            "nproc": 2,
+        },
+        {
+            "requirement": "remaining_multirank_multibox_amr_local_time_execution",
+            "polarity": "positive",
+            "kind": "mpi_ctest",
+            "target": "test_mpi_cell_temporal_program_multibox",
+            "test_regex": "^test_mpi_cell_temporal_program_multibox_np2$",
+            "nproc": 2,
+        },
+        {
+            "requirement": "remaining_multirank_multibox_amr_local_time_execution",
             "polarity": "refusal",
             "kind": "mpi_ctest",
-            "target": "test_mpi_cell_temporal_program_refusal",
-            "test_regex": "^test_mpi_cell_temporal_program_refusal_np2$",
+            "target": "test_mpi_cell_temporal_program_collective_rollback",
+            "test_regex": "^test_mpi_cell_temporal_program_collective_rollback_np2$",
             "nproc": 2,
         },
     ]
     assert data["hardware_evidence"] == runner.EXPECTED_HARDWARE_EVIDENCE
     hardware_rows = [
-        row
-        for row in data["check"]
-        if row["requirement"] in runner.EXPECTED_HARDWARE_REQUIREMENTS
+        row for row in data["check"] if row["requirement"] in runner.EXPECTED_HARDWARE_REQUIREMENTS
     ]
     assert {(row["requirement"], row["polarity"]) for row in hardware_rows} == {
-        (requirement, "refusal")
-        for requirement in runner.EXPECTED_HARDWARE_REQUIREMENTS
+        (requirement, "refusal") for requirement in runner.EXPECTED_HARDWARE_REQUIREMENTS
     }
     assert all(row["polarity"] != "positive" for row in hardware_rows)
     assert runner.main(["--check-only", "--closure"]) == 3
@@ -214,8 +230,7 @@ def test_adc757_slice_includes_exact_public_measured_load_balance_policy_proofs(
     public_rows = [
         row
         for row in data["check"]
-        if row.get("kind") == "pytest"
-        and row["requirement"] == "measured_load_balance_decision"
+        if row.get("kind") == "pytest" and row["requirement"] == "measured_load_balance_decision"
     ]
     assert public_rows == [
         {
@@ -235,7 +250,7 @@ def test_adc757_slice_includes_exact_public_measured_load_balance_policy_proofs(
     ]
 
 
-def test_adc757_slice_executes_rebalance_and_bounded_cell_local_runtime_proofs():
+def test_adc757_slice_authenticates_standalone_and_installed_cell_temporal_routes():
     runner = _load_runner()
     data, errors = runner.validate_manifest(MANIFEST)
     assert not errors
@@ -252,18 +267,55 @@ def test_adc757_slice_executes_rebalance_and_bounded_cell_local_runtime_proofs()
         ("refusal", "ctest", "test_program_reflux_ledger"),
     ]
 
-    cell_local = [
+    standalone = [
         row
         for row in data["check"]
-        if row["requirement"] == "bounded_cell_local_program_runtime"
+        if row["requirement"] == "standalone_exact_ranked_cell_temporal_provider"
     ]
-    assert [(row["polarity"], row.get("kind", "ctest")) for row in cell_local] == [
+    assert [(row["polarity"], row.get("kind", "ctest")) for row in standalone] == [
         ("positive", "ctest"),
         ("refusal", "ctest"),
-        ("refusal", "mpi_ctest"),
         ("positive", "pytest"),
         ("refusal", "pytest"),
     ]
+    runtime = [
+        row for row in data["check"] if row["requirement"] == "bounded_cell_local_program_runtime"
+    ]
+    assert runtime == [
+        {
+            "requirement": "bounded_cell_local_program_runtime",
+            "polarity": "positive",
+            "kind": "pytest",
+            "path": "tests/python/unit/codegen/test_cell_local_time_codegen.py",
+            "test": "test_amr_cell_local_driver_uses_the_distributed_context_provider",
+        },
+        {
+            "requirement": "bounded_cell_local_program_runtime",
+            "polarity": "positive",
+            "kind": "mpi_ctest",
+            "target": "test_mpi_cell_temporal_program",
+            "test_regex": "^test_mpi_cell_temporal_program_np2$",
+            "nproc": 2,
+        },
+        {
+            "requirement": "bounded_cell_local_program_runtime",
+            "polarity": "refusal",
+            "kind": "pytest",
+            "path": "tests/python/unit/codegen/test_cell_local_time_codegen.py",
+            "test": "test_cell_local_codegen_refuses_uniform_target",
+        },
+    ]
+    multirank = [
+        row
+        for row in data["check"]
+        if row["requirement"] == "remaining_multirank_multibox_amr_local_time_execution"
+    ]
+    assert [(row["polarity"], row["target"], row["nproc"]) for row in multirank] == [
+        ("positive", "test_mpi_cell_temporal_program_multibox", 2),
+        ("refusal", "test_mpi_cell_temporal_program_collective_rollback", 2),
+    ]
+    assert "bounded_cell_local_program_runtime" not in data["deferred"]
+    assert "remaining_multirank_multibox_amr_local_time_execution" not in data["deferred"]
 
 
 def test_adc757_slice_authenticates_the_only_ranked_transport_boundary_authority():
@@ -279,16 +331,14 @@ def test_adc757_slice_authenticates_the_only_ranked_transport_boundary_authority
             "requirement": "prepared_hyperbolic_boundary_only_transport_authority",
             "polarity": "positive",
             "kind": "pytest",
-            "path": "tests/python/architecture/"
-            "test_hyperbolic_boundary_authority_ratchet.py",
+            "path": "tests/python/architecture/test_hyperbolic_boundary_authority_ratchet.py",
             "test": "test_prepared_hyperbolic_boundary_is_the_only_native_transport_authority",
         },
         {
             "requirement": "prepared_hyperbolic_boundary_only_transport_authority",
             "polarity": "refusal",
             "kind": "pytest",
-            "path": "tests/python/architecture/"
-            "test_hyperbolic_boundary_authority_ratchet.py",
+            "path": "tests/python/architecture/test_hyperbolic_boundary_authority_ratchet.py",
             "test": "test_legacy_transport_boundary_authorities_are_deleted",
         },
         {
@@ -321,17 +371,14 @@ def test_adc757_slice_authenticates_prepared_batch_as_the_only_recovery_authorit
             "requirement": "prepared_batch_recovery_only_runtime_authority",
             "polarity": "positive",
             "kind": "pytest",
-            "path": "tests/python/architecture/"
-            "test_variable_recovery_consumer_cutover.py",
-            "test": "test_runtime_materialization_consumes_only_prepared_batch_before_"
-            "publication",
+            "path": "tests/python/architecture/test_variable_recovery_consumer_cutover.py",
+            "test": "test_runtime_materialization_consumes_only_prepared_batch_before_publication",
         },
         {
             "requirement": "prepared_batch_recovery_only_runtime_authority",
             "polarity": "refusal",
             "kind": "pytest",
-            "path": "tests/python/architecture/"
-            "test_variable_recovery_consumer_cutover.py",
+            "path": "tests/python/architecture/test_variable_recovery_consumer_cutover.py",
             "test": "test_runtime_materialization_has_no_pointwise_compatibility_authority",
         },
         {
@@ -339,7 +386,7 @@ def test_adc757_slice_authenticates_prepared_batch_as_the_only_recovery_authorit
             "polarity": "refusal",
             "target": "test_facade_routing",
             "test_regex": "^FacadeRouting\\."
-            "PrimitiveMaterializationRefusesMissingPreparedBatchAuthority$",
+            "PreparedBlockInstallationRefusesMissingBatchAuthorityWithoutPublication$",
         },
     ]
 
@@ -348,9 +395,7 @@ def test_adc757_slice_executes_host_workspace_reentrancy_without_claiming_stream
     runner = _load_runner()
     data, errors = runner.validate_manifest(MANIFEST)
     assert not errors
-    assert [
-        row for row in data["check"] if row["requirement"] == "host_workspace_reentrancy"
-    ] == [
+    assert [row for row in data["check"] if row["requirement"] == "host_workspace_reentrancy"] == [
         {
             "requirement": "host_workspace_reentrancy",
             "polarity": "positive",
@@ -433,8 +478,7 @@ def test_adc757_closure_requires_revision_matched_hardware_evidence(monkeypatch,
         runner,
         "_run_hardware_evidence",
         lambda evidence, path, revision: (
-            observed.append((evidence, path, revision))
-            or runner.EXPECTED_HARDWARE_REQUIREMENTS
+            observed.append((evidence, path, revision)) or runner.EXPECTED_HARDWARE_REQUIREMENTS
         ),
     )
     assert (
@@ -450,9 +494,7 @@ def test_adc757_closure_requires_revision_matched_hardware_evidence(monkeypatch,
         )
         == 0
     )
-    assert observed == [
-        (runner.EXPECTED_HARDWARE_EVIDENCE, report, "a" * 40)
-    ]
+    assert observed == [(runner.EXPECTED_HARDWARE_EVIDENCE, report, "a" * 40)]
 
 
 def test_adc757_hardware_evidence_requires_a_full_exact_candidate_revision(tmp_path):
@@ -523,9 +565,7 @@ def test_adc757_manifest_refuses_missing_polarity_and_unknown_target(tmp_path):
     _, errors = runner.validate_manifest(unknown_pytest)
     assert any("unknown top-level pytest" in error for error in errors)
 
-    skipped = runner.ast.parse(
-        "@pytest.mark.xfail\ndef test_skipped():\n    pass\n"
-    ).body[0]
+    skipped = runner.ast.parse("@pytest.mark.xfail\ndef test_skipped():\n    pass\n").body[0]
     assert runner._pytest_is_skipped(skipped)
 
     skipped_ctest = tmp_path / "skipped_ctest.toml"
@@ -547,8 +587,7 @@ def test_adc757_manifest_refuses_missing_polarity_and_unknown_target(tmp_path):
         source.replace(
             '  "accelerator_stream_partitioning",\n'
             '  "performance_baselines_and_regression_thresholds",',
-            '  "gpu_backend_execution",\n'
-            '  "performance_baselines_and_regression_thresholds",',
+            '  "gpu_backend_execution",\n  "performance_baselines_and_regression_thresholds",',
             1,
         ),
         encoding="utf-8",

@@ -21,6 +21,14 @@ def _memory_artifact(*, program=None):
     )
 
 
+def _select_memory_extension(monkeypatch, extension):
+    def selected_native_module(*, required=False):
+        assert required is True
+        return extension
+
+    monkeypatch.setattr(inspect_compiled, "selected_native_module", selected_native_module)
+
+
 def test_capability_report_is_explicitly_source_only_only_without_extension(monkeypatch):
     monkeypatch.setattr(capability_reports, "_native_extension", lambda: None)
     report = capability_reports.native_capability_report()
@@ -115,15 +123,16 @@ def test_mpi_world_route_reports_only_proved_native_availability(supports_mpi, e
         "SolveOutcome on synchronous two-level 2D AMR"
     )
     cell_local = routes["amr:cell_local_temporal_transport"]
-    assert cell_local.status == "partial"
+    assert cell_local.status == "unavailable"
     assert cell_local.layout == "amr"
-    assert cell_local.backend == "production"
+    assert cell_local.backend == "none"
     assert cell_local.mpi is False
     assert cell_local.gpu is False
-    assert "four time-integrated face records" in cell_local.limitation
     assert "Program.cell_local_time" in cell_local.limitation
-    assert "same-topology restart" in cell_local.limitation
-    assert "prepared physical-boundary plans" in cell_local.limitation
+    assert "explicit noreturn refusals" in cell_local.limitation
+    assert "no public AmrSystem install-to-execute route" in cell_local.limitation
+    assert "dimensions 1, 2, and 3" in cell_local.limitation
+    assert "outside the public AMR Program runtime" in cell_local.available_route
     external_amr = routes["amr:external_field_solver_v2"]
     assert external_amr.status == "available"
     assert external_amr.layout == "amr"
@@ -195,9 +204,11 @@ def test_transport_boundary_routes_report_exact_supported_envelope_and_missing_k
     assert characteristic.layout == "uniform|amr"
     assert characteristic.backend == "production"
     assert characteristic.mpi is False and characteristic.gpu is False
+    assert "compile-time-ranked 1D/2D/3D Cartesian" in characteristic.limitation
     assert "m.roe_from_jacobian()" in characteristic.limitation
     assert "sonic subspace as neutral" in characteristic.limitation
-    assert "rolls back ghosts" in characteristic.limitation
+    assert "publishes the complete boundary image only after success" in characteristic.limitation
+    assert "fail before publication" in characteristic.limitation
     post_riemann = routes["boundary:post_riemann_flux"]
     assert post_riemann.status == "partial"
     assert post_riemann.layout == "uniform|amr"
@@ -324,12 +335,13 @@ def test_toolchain_does_not_treat_a_broken_extension_as_absent(monkeypatch):
 
 
 def test_absolute_memory_estimate_refuses_unknown_native_precision(monkeypatch):
-    def absent_extension(name):
-        raise ModuleNotFoundError("absent", name=name)
+    def absent_selection(*, required=False):
+        assert required is True
+        raise RuntimeError("no PoPS native dimension is selected")
 
-    monkeypatch.setattr(inspect_compiled.importlib, "import_module", absent_extension)
+    monkeypatch.setattr(inspect_compiled, "selected_native_module", absent_selection)
     with pytest.raises(
-        inspect_compiled.MemoryEstimateCapabilityError, match="source-only"
+        inspect_compiled.MemoryEstimateCapabilityError, match="successfully selected native dimension"
     ) as excinfo:
         inspect_compiled.build_memory_estimate(SimpleNamespace(), SimpleNamespace())
     assert excinfo.value.field == "runtime.precision"
@@ -341,7 +353,7 @@ def test_absolute_memory_estimate_refuses_untyped_shape_before_any_formula(monke
         def runtime_environment_report():
             return {"dimension": 2, "real_bytes": 16}
 
-    monkeypatch.setattr(inspect_compiled.importlib, "import_module", lambda _name: Extension())
+    _select_memory_extension(monkeypatch, Extension())
     with pytest.raises(
         inspect_compiled.MemoryEstimateCapabilityError, match="CartesianGrid"
     ) as excinfo:
@@ -364,7 +376,7 @@ def test_absolute_memory_estimate_uses_reported_native_byte_width(monkeypatch):
             return {"buffer_count": 0, "heavy_kernels": 0}
 
     mesh = cartesian_grid(n=4)
-    monkeypatch.setattr(inspect_compiled.importlib, "import_module", lambda _name: Extension())
+    _select_memory_extension(monkeypatch, Extension())
     monkeypatch.setattr(
         inspect_compiled, "_model_metadata", lambda _compiled: ((), 2, {}, (), 0, "U")
     )
@@ -388,7 +400,7 @@ def test_absolute_memory_estimate_accepts_final_cartesian_grid_cells(monkeypatch
 
     frame = Rectangle("estimate-grid", (0.0, 0.0), (1.0, 1.0)).frame(Cartesian2D())
     grid = CartesianGrid(frame=frame, cells=(3, 5))
-    monkeypatch.setattr(inspect_compiled.importlib, "import_module", lambda _name: Extension())
+    _select_memory_extension(monkeypatch, Extension())
     monkeypatch.setattr(
         inspect_compiled, "_model_metadata", lambda _compiled: ((), 2, {}, (), 0, "U")
     )
@@ -417,7 +429,7 @@ def test_absolute_memory_estimate_is_rank_generic(monkeypatch, shape):
 
     domain = CartesianDomain("estimate", (0.0,) * dimension, (1.0,) * dimension)
     grid = CartesianGrid(frame=domain.frame(), cells=shape)
-    monkeypatch.setattr(inspect_compiled.importlib, "import_module", lambda _name: Extension())
+    _select_memory_extension(monkeypatch, Extension())
     monkeypatch.setattr(
         inspect_compiled, "_model_metadata", lambda _compiled: ((), 2, {}, (), 0, "U")
     )
@@ -458,7 +470,7 @@ def test_absolute_memory_estimate_accepts_strict_final_amr_protocol(monkeypatch)
             )
 
     mesh = cartesian_grid(n=4)
-    monkeypatch.setattr(inspect_compiled.importlib, "import_module", lambda _name: Extension())
+    _select_memory_extension(monkeypatch, Extension())
     monkeypatch.setattr(
         inspect_compiled, "_model_metadata", lambda _compiled: ((), 2, {}, (), 0, "U")
     )
@@ -492,7 +504,7 @@ def test_absolute_memory_estimate_uses_spatial_rank_for_amr_refinement(monkeypat
 
     domain = CartesianDomain("volume", (0.0, 0.0, 0.0), (1.0, 1.0, 1.0))
     mesh = CartesianGrid(frame=domain.frame(), cells=(2, 3, 4))
-    monkeypatch.setattr(inspect_compiled.importlib, "import_module", lambda _name: Extension())
+    _select_memory_extension(monkeypatch, Extension())
     monkeypatch.setattr(
         inspect_compiled, "_model_metadata", lambda _compiled: ((), 2, {}, (), 0, "U")
     )
@@ -517,7 +529,7 @@ def test_absolute_memory_estimate_refuses_amr_without_transition_ratios(monkeypa
         def capabilities():
             return CapabilitySet({"layout": "amr", "dim": 2, "max_levels": 2})
 
-    monkeypatch.setattr(inspect_compiled.importlib, "import_module", lambda _name: Extension())
+    _select_memory_extension(monkeypatch, Extension())
     monkeypatch.setattr(
         inspect_compiled, "_model_metadata", lambda _compiled: ((), 1, {}, (), 0, "U")
     )

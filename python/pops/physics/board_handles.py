@@ -33,7 +33,7 @@ from ._board_contract import (normalize_components, normalize_roles, normalize_s
 
 __all__ = ["Invariant", "FluxHandle", "SourceHandle", "FieldsHandle", "FieldOutputs", "FieldHandle",
            "LocalLinearOperatorExpr", "StateHandle", "VectorHandle",
-           "_safe_name", "_canon_role", "_roles_for", "_BOARD_ROLE"]
+           "_safe_name", "_canon_role", "_roles_for"]
 
 
 def _safe_name(name: Any) -> str:
@@ -45,17 +45,6 @@ def _safe_name(name: Any) -> str:
     if s[0].isdigit():
         s = "_" + s
     return s
-
-
-# Board role vocabulary -> structured native semantic ABI.  Axis-bearing roles use a numeric axis,
-# not a coordinate-name enum, so the same authored operator reaches every native specialization.
-_BOARD_ROLE = {
-    "density": "density",
-    "momentum:0": "momentum:0",
-    "momentum:1": "momentum:1",
-    "momentum:2": "momentum:2",
-    "energy": "energy", "pressure": "pressure", "temperature": "temperature",
-}
 
 
 def _canon_role(role: Any) -> Any:

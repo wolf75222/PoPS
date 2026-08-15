@@ -1,83 +1,138 @@
-// API memoire explicite : sync_host() / sync_device() (cf. for_each.hpp,
-// multifab.hpp). Encodent l'intention de residence des donnees. Sous memoire
-// unifiee (Kokkos::SharedSpace) sync_host() est un device_fence() cible et
-// sync_device() un no-op ; le comportement doit rester BIT-IDENTIQUE a un acces
-// hote nu. Ce test verifie :
-//   1) les seams libres pops::sync_host()/sync_device() s'appellent (idempotents,
-//      sans effet observable sur les donnees) ;
-//   2) les methodes MultiFab::sync_host()/sync_device() sont idempotentes : un
-//      sync repete ne change AUCUN bit des fabs ;
-//   3) une lecture/ecriture hote encadree par sync_host() donne exactement le
-//      meme resultat qu'aujourd'hui (set_val + sum inchanges) ;
-//   4) sync_device() avant un kernel for_each_cell ne perturbe pas le calcul.
-
 #include <gtest/gtest.h>
 
-#include <pops/mesh/layout/box_array.hpp>
-#include <pops/mesh/layout/distribution_mapping.hpp>
-#include <pops/mesh/storage/fab2d.hpp>
 #include <pops/mesh/execution/for_each.hpp>
+#include <pops/mesh/layout/box_array.hpp>
+#include <pops/mesh/layout/distribution.hpp>
+#include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 
-using namespace pops;
+#include <cstddef>
+#include <cstdint>
+#include <vector>
 
-// Pipeline stateful : le meme MultiFab est synchronise et relu en plusieurs etapes.
-TEST(test_sync_residence, sync_host_device_idempotent_and_bit_exact) {
-  // 1) Les seams libres existent et sont des appels surs et repetables. Sous
-  // SharedSpace : sync_host == fence cible, sync_device == no-op. Aucun effet
-  // observable, on verifie juste qu'ils s'enchainent sans planter.
-  sync_host();
-  sync_host();
-  sync_device();
-  sync_device();
-  SUCCEED() << "free_seams_callable";
+namespace {
 
-  Box2D dom = Box2D::from_extents(8, 8);
-  BoxArray ba = BoxArray::from_domain(dom, 4);  // 4 boxes
-  DistributionMapping dm(ba.size(), n_ranks());
-  MultiFab mf(ba, dm, /*ncomp=*/1, /*ngrow=*/1);
+template <int Dim>
+pops::Extent<Dim> filled_extent(std::int64_t value) {
+  pops::Extent<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = value;
+  return result;
+}
 
-  // 2) set_val passe deja par sync_host() en interne. La somme doit etre exacte.
-  mf.set_val(3.0);
-  const Real s0 = sum(mf);
-  EXPECT_EQ(s0, 3.0 * 64) << "set_val_sum_exact";
-
-  // 3) IDEMPOTENCE : sync_host()/sync_device() repetes ne touchent aucune
-  // donnee. La somme apres N sync est BIT-IDENTIQUE (==, pas une tolerance).
-  mf.sync_host();
-  mf.sync_device();
-  mf.sync_host();
-  const Real s1 = sum(mf);
-  EXPECT_EQ(s1, s0) << "sync_idempotent_sum";
-
-  // ecrire un champ via for_each_cell, encadre par les sync explicites comme le
-  // ferait un appelant qui declare son intention de residence.
-  mf.sync_device();  // intention : un kernel va ecrire (no-op sous unifiee)
-  for (int li = 0; li < mf.local_size(); ++li) {
-    Array4 a = mf.fab(li).array();
-    for_each_cell(mf.box(li), [a] POPS_HD(int i, int j) { a(i, j, 0) = i + 100.0 * j; });
+template <int Dim>
+pops::Index<Dim> index_from_ordinal(const pops::Box<Dim>& box, std::size_t ordinal) {
+  pops::Index<Dim> index{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    const std::size_t extent = static_cast<std::size_t>(box.length(axis));
+    index[axis] = box.lo[axis] + static_cast<int>(ordinal % extent);
+    ordinal /= extent;
   }
-  mf.sync_host();  // intention : on va relire cote hote (fence cible)
+  return index;
+}
 
-  Real expected = 0;
-  for (int j = 0; j < 8; ++j)
-    for (int i = 0; i < 8; ++i)
-      expected += i + 100.0 * j;
-  const Real sf = sum(mf);
-  EXPECT_EQ(sf, expected) << "field_after_sync_exact";
+template <int Dim>
+std::size_t field_offset(const pops::Box<Dim>& grown, const pops::Index<Dim>& index,
+                         int component = 0) {
+  std::size_t cell = 0;
+  std::size_t stride = 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    cell += static_cast<std::size_t>(index[axis] - grown.lo[axis]) * stride;
+    stride *= static_cast<std::size_t>(grown.length(axis));
+  }
+  return static_cast<std::size_t>(component) * stride + cell;
+}
 
-  // 4) re-sync apres lecture : toujours bit-identique (aucune migration).
-  mf.sync_host();
-  EXPECT_EQ(sum(mf), sf) << "resync_no_drift";
+template <int Dim>
+POPS_HD pops::Real encoded_value(const pops::Index<Dim>& index) {
+  pops::Real result = 0;
+  pops::Real scale = 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    result += scale * static_cast<pops::Real>(index[axis]);
+    scale *= pops::Real{97};
+  }
+  return result;
+}
 
-  // une cellule precise : la valeur lue cote hote apres sync_host() est exacte.
-  bool found = false;
-  for (int li = 0; li < mf.local_size(); ++li) {
-    if (mf.box(li).contains(5, 6)) {
-      found = true;
-      mf.sync_host();
-      EXPECT_EQ(mf.fab(li)(5, 6, 0), 5 + 600.0) << "cell_value_after_sync";
+template <int Dim>
+struct EncodeCells {
+  pops::FieldView<pops::Real, Dim> values{};
+
+  POPS_HD void operator()(const pops::Index<Dim>& index) const {
+    values(index) = encoded_value(index);
+  }
+};
+
+template <int Dim>
+void prove_exact_rank_residence() {
+  pops::Index<Dim> lower{};
+  pops::Index<Dim> upper{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    lower[axis] = -axis;
+    upper[axis] = 3 + axis;
+  }
+  const pops::Box<Dim> domain{lower, upper};
+  const auto layout = pops::mesh::BoxArray<Dim>::from_domain(domain, filled_extent<Dim>(2));
+  const pops::mesh::RankSpace<Dim> ranks{pops::Index<Dim>{}, filled_extent<Dim>(1)};
+  const auto distribution = pops::mesh::Distribution<Dim>::replicated(layout, ranks);
+  pops::MultiFab<Dim> fields(layout, distribution, pops::Index<Dim>{}, 1, filled_extent<Dim>(1));
+
+  fields.set_val(pops::Real{3});
+  const pops::Real initial = pops::reduce_sum_local(fields);
+  EXPECT_EQ(initial, pops::Real{3} * static_cast<pops::Real>(domain.numPts()));
+
+  pops::sync_host();
+  pops::sync_device();
+  pops::sync_host();
+  EXPECT_EQ(pops::reduce_sum_local(fields), initial);
+
+  pops::sync_device();
+  for (std::size_t local = 0; local < fields.local_size(); ++local)
+    pops::for_each_cell(fields.box(local), EncodeCells<Dim>{fields.fab(local).view()});
+  pops::sync_host();
+
+  pops::Real expected_sum = 0;
+  std::vector<pops::Real> first_snapshot;
+  for (std::size_t local = 0; local < fields.local_size(); ++local) {
+    const auto& fab = fields.fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    const auto& valid = fab.box();
+    for (std::size_t ordinal = 0; ordinal < static_cast<std::size_t>(valid.numPts()); ++ordinal) {
+      const auto index = index_from_ordinal(valid, ordinal);
+      const pops::Real expected = encoded_value(index);
+      const pops::Real actual = host(field_offset(fab.grown_box(), index));
+      EXPECT_EQ(actual, expected);
+      expected_sum += expected;
+      first_snapshot.push_back(actual);
     }
   }
-  EXPECT_TRUE(found) << "cell_located";
+  EXPECT_EQ(pops::reduce_sum_local(fields), expected_sum);
+
+  pops::sync_host();
+  std::vector<pops::Real> second_snapshot;
+  for (std::size_t local = 0; local < fields.local_size(); ++local) {
+    const auto& fab = fields.fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    const auto& valid = fab.box();
+    for (std::size_t ordinal = 0; ordinal < static_cast<std::size_t>(valid.numPts()); ++ordinal) {
+      const auto index = index_from_ordinal(valid, ordinal);
+      second_snapshot.push_back(host(field_offset(fab.grown_box(), index)));
+    }
+  }
+  EXPECT_EQ(second_snapshot, first_snapshot);
+}
+
+}  // namespace
+
+TEST(test_sync_residence, host_device_intent_and_explicit_mirrors_are_exact_in_1d_2d_3d) {
+  pops::sync_host();
+  pops::sync_host();
+  pops::sync_device();
+  pops::sync_device();
+
+  prove_exact_rank_residence<1>();
+  prove_exact_rank_residence<2>();
+  prove_exact_rank_residence<3>();
 }

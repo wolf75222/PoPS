@@ -10,17 +10,6 @@
 
 namespace pops {
 
-/// Per-direction translation periodicity used by the historical axis-aligned halo scheduler.
-struct Periodicity {
-  bool x = false;
-  bool y = false;
-};
-
-/// Exact topology equality shared by uniform, AMR and prepared-boundary validation.
-constexpr bool same_periodicity(Periodicity left, Periodicity right) noexcept {
-  return left.x == right.x && left.y == right.y;
-}
-
 /// One signed/permuted identification between two oriented Cartesian faces.
 ///
 /// Face ordinals are axis-major: axis 0 lower/upper, axis 1 lower/upper, and so on. For each source

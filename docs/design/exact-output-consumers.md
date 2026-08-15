@@ -437,13 +437,17 @@ re-emission; a rank-local `KeyboardInterrupt`/`SystemExit` cannot split collecti
   recentered. Unknown coordinates and unsupported VTK scalar dtypes are likewise rejected before
   publication. Supported selected arrays preserve their exact dtype.
 
-These distribution and presentation features do not widen the native discretization contract. The
-current native runtime capture and Catalyst blueprint path remain two-dimensional and cell-centered.
-Uniform and AMR hierarchies, including sparse multilevel boxes, are supported inside that native
-boundary. The dimension-generic VTU layer can also consume an exact externally constructed 1D/3D or
-nodal `OutputSnapshot`; this is a format capability, not a claim that the PoPS solver already owns a
-native 1D/3D or nodal state path. Face-centered visualization is rejected rather than silently
-projected or recentered.
+These distribution and presentation features do not invent a wider centering contract. A native
+runtime built for `Dim=1`, `Dim=2` or `Dim=3` now captures its exact compile-time rank, local valid
+boxes, owner-qualified fields and every selected component for both Uniform and AMR hierarchies.
+Per-rank and collective publication keep array pieces local to their owning rank; only the explicit
+`ROOT` mode uses the bounded native root gather. The Catalyst Blueprint path consumes the same
+immutable snapshot as line, quad or hex domains and retains sparse multilevel box identity. Catalyst
+remains an optional runtime: a missing or incompatible Catalyst/Conduit lifecycle or MPI ABI is
+rejected before numerical advancement rather than replaced by a stub. Native solver capture remains
+cell-centered, while the VTU layer may also consume an exact externally constructed nodal snapshot.
+The polar-annulus mapping is explicitly two-dimensional, and face-centered visualization is rejected
+rather than silently projected or recentered.
 
 Composite reductions multiply by explicit metric volumes and include only valid-box cells that are
 not marked as covered on a coarser AMR level. `BalanceTerms` requires storage change, outward boundary flux, sources, reflux and

@@ -85,7 +85,8 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _RecoveryMixin, _FluxMi
             "native_dimension": len(self._flux),
             "state_spaces": ("U",),
             "cons_names": tuple(self.cons_names),
-            "cons_roles": tuple(roles_for(self.cons_names, self.cons_roles)),
+            "cons_roles": tuple(roles_for(
+                self.cons_names, self.cons_roles, dimension=len(self._flux))),
             "n_vars": self.n_vars,
             "params": params,
             "provider_components": tuple(self._provider_components),

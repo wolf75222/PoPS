@@ -701,11 +701,17 @@ lifecycle.
 
 The VTK XML writer itself accepts authenticated Cartesian snapshots in one, two or three spatial
 dimensions and maps cell- and node-centred arrays to `CellData` and `PointData`/`PPointData`.
-The native PoPS capture path and built-in Catalyst Blueprint path remain two-dimensional and
-cell-centred; the generic writer does not imply a native 1D, 3D or nodal solver state. VTK array
-names come from explicit declaration strings such as `model.state("U", ...)`, not Python
-left-hand-side variable names. A real materialised PVSM is created only by a real ParaView
-`pvpython`; the portable JSON/Python recipe remains the installation-independent representation.
+The native capture path preserves the selected compile-time `Dim` in 1D, 2D or 3D for Uniform and
+AMR states, including local valid boxes, owner-qualified selections and all selected cell-centred
+components. Per-rank and collective publication retain rank-local array pieces; only explicit
+`ROOT` output performs the bounded native root gather. The built-in Catalyst provider maps that same
+immutable snapshot to Blueprint line, quad or hex domains. It remains optional and fails before the
+first numerical step if the Catalyst/Conduit lifecycle or requested MPI ABI cannot be authenticated;
+there is no stub or dimension-erasing fallback. Native nodal and face-centred solver capture is not
+claimed, and the polar-annulus mapping remains explicitly two-dimensional. VTK array names come from
+explicit declaration strings such as `model.state("U", ...)`, not Python left-hand-side variable
+names. A real materialised PVSM is created only by a real ParaView `pvpython`; the portable
+JSON/Python recipe remains the installation-independent representation.
 
 ## Using the library
 

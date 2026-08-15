@@ -29,13 +29,45 @@ std::string package_source() {
 #include <pops/runtime/config/route_ids.hpp>
 #include <pops/runtime/dynamic/abi_key.hpp>
 
+    namespace pops {
+    template <int Dim, class Model>
+    PreparedSystemBlock<Dim> prepare_exact_system_block(
+        CompiledSystemBlockPreparation<Dim, Model> request) {
+      return prepare_generated_system_block(std::move(request));
+    }
+    }
+
     struct NamedAuxModel {
-      using State = pops::StateVec<1>;
-      using Prim = pops::StateVec<1>;
+      static constexpr int dimension = POPS_NATIVE_DIM;
+      using Law = pops::nd::ScalarAdvection<dimension>;
+      using Schema = typename Law::Schema;
+      using State = typename Law::State;
+      using Primitive = typename Law::Primitive;
+      using Prim = Primitive;
       static constexpr int n_vars = 1;
       static constexpr int n_providers = 1;
-      POPS_HD State flux(const State&, const auto&, int) const { return State{}; }
-      POPS_HD pops::Real max_wave_speed(const State&, const auto&, int) const { return pops::Real(0); }
+      Law conversion{};
+      [[nodiscard]] static constexpr pops::PreparedProviderIdentity provider_identity() noexcept {
+        return {"test.native-aux.model", 1};
+      }
+      void serialize_exact_parameters(pops::ExactContractBuilder& contract) const {
+        contract.scalar(std::int32_t{dimension});
+      }
+      POPS_HD pops::nd::StateConversion<Primitive> recover(const State& state) const {
+        return conversion.recover(state);
+      }
+      POPS_HD pops::nd::StateConversion<State> make_conservative(const Primitive& primitive) const {
+        return conversion.make_conservative(primitive);
+      }
+      POPS_HD pops::nd::StateConversionStatus admissibility(const State& state) const {
+        return conversion.admissibility(state);
+      }
+      template <int Axis, class Providers>
+      POPS_HD State flux(const State&, const Providers&) const { return State{}; }
+      template <int Axis, class Providers>
+      POPS_HD pops::Real max_wave_speed(const State&, const Providers&) const {
+        return pops::Real(0);
+      }
       POPS_HD State source(const State& u, const pops::ProviderValues<1>& providers) const {
         return State{providers[0] * u[0]};
       }
@@ -43,10 +75,10 @@ std::string package_source() {
       POPS_HD Prim to_primitive(const State& u) const { return u; }
       POPS_HD State to_conservative(const Prim& p) const { return p; }
       static pops::VariableSet conservative_vars() {
-        return {pops::VariableKind::Conservative, {"u"}, 1, {pops::VariableRole::Custom}};
+        return {pops::VariableKind::Conservative, {"u"}, 1, {pops::VariableRole::Scalar}};
       }
       static pops::VariableSet primitive_vars() {
-        return {pops::VariableKind::Primitive, {"u"}, 1, {pops::VariableRole::Custom}};
+        return {pops::VariableKind::Primitive, {"u"}, 1, {pops::VariableRole::Scalar}};
       }
     };
 
@@ -66,9 +98,10 @@ std::string package_source() {
                                         const char* riemann, const char* recon, const char* time,
                                         double gamma, int substeps, int evolve, int stride,
                                         const double*, int, double pos_floor) {
-      auto* system = reinterpret_cast<pops::System*>(raw);
-      pops::add_compiled_model(*system, name, NamedAuxModel{}, limiter, riemann, recon, time, gamma,
-                               substeps, evolve != 0, stride, pos_floor);
+      auto* system = reinterpret_cast<pops::System<POPS_NATIVE_DIM>*>(raw);
+      pops::add_compiled_model<POPS_NATIVE_DIM>(*system, name, NamedAuxModel{}, limiter, riemann,
+                                                recon, time, gamma, substeps, evolve != 0, stride,
+                                                pos_floor);
     }
   )CPP";
 }
@@ -94,13 +127,14 @@ static int pops_run_test_native_aux_named(int argc, char** argv) {
 
   constexpr int n = 8;
   constexpr double kappa = 0.7;
-  const std::size_t cells = static_cast<std::size_t>(n) * n;
-  SystemConfig config;
-  config.n = n;
-  config.L = 1.0;
-  config.periodicity = {true, true};
+  std::size_t cells = 1;
+  SystemConfig<kNativeDimension> config;
+  for (int axis = 0; axis < kNativeDimension; ++axis) {
+    config.shape[axis] = n;
+    cells *= static_cast<std::size_t>(n);
+  }
 
-  System system(config);
+  System<kNativeDimension> system(config);
   using namespace runtime::system;
   AuxiliaryStorageShape<kNativeDimension> shape;
   AuxiliaryComponentKey input_key{"test.native-aux", "input", "coefficient", "kappa"};
@@ -113,8 +147,9 @@ static int pops_run_test_native_aux_named(int argc, char** argv) {
       {}});
   system.install_auxiliary_consumer_plan(AuxiliaryConsumerProviderPlan<kNativeDimension>{
       "scalar", {{{input_key, contract, shape}, 0}}});
-  system.seal_auxiliary_providers();
-  system.add_native_block("scalar", library, "none", "rusanov", "conservative", "euler");
+  system.install_block_state_route("scalar", "tests.native-aux.state/scalar");
+  system.register_native_package("scalar", library, "none", "rusanov", "conservative", "euler");
+  system.finalize_native_packages();
   system.set_state("scalar", std::vector<double>(cells, 1.0));
   system.stage_auxiliary_input(input_key, std::vector<double>(cells, kappa));
   system.refresh_auxiliary(AuxiliaryEvaluationPoint{"test.native-aux", 0, 0, 0, 0, 0, 0,
@@ -126,7 +161,7 @@ static int pops_run_test_native_aux_named(int argc, char** argv) {
 
   bool missing_provider_rejected = false;
   try {
-    System empty(config);
+    System<kNativeDimension> empty(config);
     empty.stage_auxiliary_input(input_key, std::vector<double>(cells, kappa));
   } catch (const std::logic_error&) {
     missing_provider_rejected = true;

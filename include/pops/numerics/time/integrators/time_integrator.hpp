@@ -7,10 +7,9 @@
 ///        PrescribedTime.
 ///
 /// Layer: `include/pops/numerics/time`.
-/// Role: separate TWO levels -- the mathematical scheme (SSPRK, IMEX, user implicit) and the
-///        usage policy in a coupled system (explicit/implicit, substeps, cadence, or prescribed
-///        field). The core keeps the generic schemes and the scheduler; cases choose a policy
-///        per block without changing the local PhysicalModel.
+/// Role: descriptor-only numerical metadata retained by EquationBlock and test reference formulas.
+///        This header has no scheduler, accepted clock, rollback, retry, or publication authority.
+///        Production cadence and method selection must be lowered into the installed Program.
 ///
 /// Invariants:
 /// - SubstepsT >= 1 and StrideT >= 1 (static_assert);

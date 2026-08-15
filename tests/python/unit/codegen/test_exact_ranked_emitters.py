@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import subprocess
+from types import MappingProxyType, SimpleNamespace
 
 import pytest
 
 from pops._ir import Var
 from pops.codegen.module_lowering import lower_and_validate
+from pops.codegen.module_emit_helpers import _axis_values
 from pops.codegen.toolchain import native_compile_environment, pops_loader_build_flags
 from pops.frames import X_AXIS, Y_AXIS, Z_AXIS
 from pops.math import sqrt
@@ -18,6 +20,22 @@ from tests.python.support.requirements import repo_include
 
 AXES = ("x", "y", "z")
 ROLE_AXES = (X_AXIS, Y_AXIS, Z_AXIS)
+
+
+def test_axis_values_accepts_frozen_mapping_and_keeps_exact_axis_order() -> None:
+    model = SimpleNamespace(_flux=MappingProxyType({"x": (1,), "y": (2,)}))
+
+    assert _axis_values(
+        model,
+        MappingProxyType({"x": ("x0", "x1"), "y": ("y0",)}),
+        where="frozen physical flux",
+    ) == ["x0", "x1", "y0"]
+    with pytest.raises(ValueError, match="exact emitted axis set"):
+        _axis_values(
+            model,
+            MappingProxyType({"y": ("y0",), "x": ("x0",)}),
+            where="reordered physical flux",
+        )
 
 
 def _emit_cpp_brick(model: Model, **kwargs: object) -> tuple[str, object]:

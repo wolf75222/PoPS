@@ -45,6 +45,10 @@ IMPLICIT_STEPPER = ROOT / "include/pops/numerics/time/integrators/implicit_stepp
 SYSTEM_IMPL = ROOT / "src/runtime/system/system_impl.hpp"
 SYSTEM_INSTALL = ROOT / "src/runtime/system/system_install.cpp"
 PYTHON_SYSTEM_INSTALL = ROOT / "python/pops/runtime/_system_install.py"
+PYTHON_SYSTEM = ROOT / "python/pops/runtime/_system.py"
+PYTHON_AMR_SYSTEM = ROOT / "python/pops/runtime/_amr_system.py"
+PYTHON_RUNTIME_INSTANCE = ROOT / "python/pops/runtime/_runtime_instance.py"
+PYTHON_TEMPORAL_SERVICE = ROOT / "python/pops/runtime/_step_strategy.py"
 BINDINGS_DETAIL = ROOT / "python/bindings/core/bindings_detail.hpp"
 AMR_BINDING = ROOT / "python/bindings/core/init/init_amr.cpp"
 LEGACY_AMR_ADVANCE_HEADER = ROOT / "include/pops/numerics/time/amr/advance/amr_advance.hpp"
@@ -110,6 +114,40 @@ def test_system_temporal_facades_dispatch_only_through_an_installed_program():
     assert "step_adaptive" not in source
     assert "step_adaptive" not in SYSTEM_HEADER.read_text(encoding="utf-8")
     assert "step_adaptive" not in SYSTEM_BINDING.read_text(encoding="utf-8")
+
+
+def test_python_temporal_facades_share_one_program_run_service():
+    """Uniform, AMR and RuntimeInstance must not materialize parallel controllers or loops."""
+    uniform = PYTHON_SYSTEM.read_text(encoding="utf-8")
+    amr = PYTHON_AMR_SYSTEM.read_text(encoding="utf-8")
+    runtime = PYTHON_RUNTIME_INSTANCE.read_text(encoding="utf-8")
+    service = PYTHON_TEMPORAL_SERVICE.read_text(encoding="utf-8")
+
+    for source in (uniform, amr):
+        step = _python_function_source(source, "step")
+        run = _python_function_source(source, "run")
+        assert "run_fixed_program_step(self, dt)" in step
+        assert "run_program_facade(" in run
+        for forbidden in (
+            "FixedDt(",
+            "prepare_step_controller(",
+            "resolve_run_strategy(",
+            "run_step_attempt(",
+            "while ",
+        ):
+            assert forbidden not in step
+            assert forbidden not in run
+
+    runtime_run = _python_function_source(runtime, "_run")
+    assert runtime_run.count("prepare_program_run(") == 1
+    assert runtime_run.count("drive_program_run(") == 1
+    assert "resolve_run_strategy(" not in runtime_run
+    assert "prepare_step_controller(" not in runtime_run
+    assert "run_control_payload(" not in runtime_run
+    assert "while " not in runtime_run
+    assert "class PreparedProgramRun" in service
+    assert service.count("def drive_program_run(") == 1
+    assert service.count("@register_step_controller_factory(") == 4
 
 
 def test_static_system_assembler_is_retired_from_the_final_runtime_surface():
@@ -210,6 +248,10 @@ def test_local_implicit_solve_has_one_typed_options_route():
     assert "const NewtonOptions& options" in source
     assert "int iters = 2" not in source
     assert "Legacy signature with a bare iteration budget" not in source
+    assert "ImplicitBlockStepper" not in source
+    assert "ImplicitSourceStepper" not in source
+    assert "consume_implicit_source_fail_run" not in source
+    assert "return SolveOutcome::" in source
 
 
 def test_amr_temporal_facades_use_amr_runtime_only_as_the_spatial_engine():
@@ -463,7 +505,8 @@ def test_ranked_program_context_owns_candidate_state_coupling_not_a_live_state_s
     assert "ProgramContext coupling requires every runtime block candidate" in uniform
     assert "system_->apply_coupling_operators(dt, runtime_states)" in uniform
     assert "[[noreturn]] void apply_coupling_operators(" in amr
-    assert 'unavailable_("exact-ranked multi-block AMR coupling provider")' in amr
+    assert ('deferred_op("multi_block_coupling", '
+            '"exact-ranked multi-block AMR coupling provider")') in amr
     assert "void coupled_source_step(" not in runtime
     assert "void step(Real dt)" not in runtime
 

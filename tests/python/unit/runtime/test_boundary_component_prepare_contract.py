@@ -107,6 +107,7 @@ def test_mapped_periodicity_preserves_one_dynamic_rank_three_row_for_provider_ro
 
 
 @pytest.mark.parametrize("prepare_fails", (False, True))
+@pytest.mark.parametrize("dimension", (1, 2, 3))
 @pytest.mark.parametrize(
     ("operation", "native_interface", "expected_installer"),
     (
@@ -117,11 +118,11 @@ def test_mapped_periodicity_preserves_one_dynamic_rank_three_row_for_provider_ro
     ),
 )
 def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
-        prepare_fails, operation, native_interface, expected_installer):
+        prepare_fails, dimension, operation, native_interface, expected_installer):
     component_id = "pops://external.test/boundary@1.0.0"
     manifest_identity = "component-manifest:boundary-test"
     region = {
-        "kind": "face", "dimension": 2, "codimension": 1,
+        "kind": "face", "dimension": dimension, "codimension": 1,
         "axes": [0], "sides": [-1], "identity": "left-face",
     }
     component_row = {
@@ -150,7 +151,7 @@ def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
                 "type": "foextrap",
                 "values": [0.0],
             }
-            for ordinal in range(4)
+            for ordinal in range(2 * dimension)
         ],
         "omitted_interface_faces": [],
         "component_regions": [component_row],
@@ -220,7 +221,7 @@ def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
         interface=Interface(), native_handle=native_handle,
     )
     artifact = SimpleNamespace(
-        resolved_dimension=2,
+        resolved_dimension=dimension,
         blocks=(SimpleNamespace(
             name="block", model=SimpleNamespace(n_vars=1, cons_roles=("Scalar",))),),
         plan=SimpleNamespace(blocks=(BoundaryBlock(),), field_plans={}),

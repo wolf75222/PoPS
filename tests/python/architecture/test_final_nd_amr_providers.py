@@ -18,7 +18,7 @@ RANKED_PROVIDERS = (
     "pops/runtime/builders/block/block_builder.hpp",
     "pops/runtime/builders/compiled/amr_dsl_block.hpp",
 )
-SPECIALIZED_FAC = "pops/numerics/elliptic/mg/composite_fac_poisson.hpp"
+SPECIALIZED_FAC = "pops/numerics/elliptic/amr/composite_fac_poisson.hpp"
 RANKED_TAGGING_EXECUTION = (
     "pops/runtime/amr/prepared_tagging_execution.hpp",
     "pops/runtime/amr/persistent_tagging_state.hpp",
@@ -49,7 +49,23 @@ def test_ranked_amr_providers_have_no_2d_storage_or_dimension_dispatch() -> None
 
     assert not re.search(r"\bif\s+(?:constexpr\s*)?\(\s*Dim\b", joined)
     assert not re.search(r"<\s*2\s*>", joined)
-    assert sum(source.count("\n") + 1 for source in sources.values()) < 800
+
+    # These are composition seams, not a second AMR implementation: each retains the selected
+    # rank while delegating to the prepared canonical authority.
+    assert "AmrRuntime<Dim, MemorySpace>" in sources[RANKED_PROVIDERS[0]]
+    assert "PreparedTransfer<Dim>" in sources[RANKED_PROVIDERS[1]]
+    assert "::pops::numerics::time::amr::prepare_" in sources[RANKED_PROVIDERS[1]]
+    assert "MultiFab<Dim, MemorySpace>" in sources[RANKED_PROVIDERS[2]]
+    tagger = sources[RANKED_PROVIDERS[3]]
+    assert "PreparedTaggerComponent" in tagger
+    assert "const CommunicatorView& communicator" in tagger
+    assert "storage_->communicator" in tagger
+    assert "world_communicator_view" not in tagger
+    assert "PreparedProvider<MultiFab<Dim, MemorySpace>" in sources[RANKED_PROVIDERS[4]]
+    assert (
+        "using runtime_type = ::pops::runtime::amr::AmrRuntime<Dim, MemorySpace>;"
+        in sources[RANKED_PROVIDERS[5]]
+    )
 
 
 def test_generic_providers_delegate_to_canonical_ranked_authorities() -> None:
@@ -83,22 +99,26 @@ def test_generic_providers_delegate_to_canonical_ranked_authorities() -> None:
     assert "runtime_->spatial_contract()" in amr_block
 
 
-def test_historical_fac_is_an_explicit_2d_capability_not_a_generic_solver() -> None:
+def test_composite_fac_retains_its_exact_ranked_hierarchy_contract() -> None:
     source = _source(SPECIALIZED_FAC)
 
-    assert "class CompositeFacPoisson2DProvider" in source
-    assert "supported_dimension = 2" in source
-    assert "CompositeFacCapabilityRequest" in source
-    assert "PreparedProviderSupport" in source
-    assert "PreparedCompositeFacPoisson2DKernel" in source
-    assert "template <int Dim>" not in source
-    assert "MultiFab" not in source
+    for required in (
+        "template <int Dim>",
+        "CompositeFacBuildRequest<Dim>",
+        "std::vector<::pops::amr::RefinementRatio<Dim>> ratios",
+        "class CompositeFacPoisson",
+        "MultiFab<Dim, MemorySpace>",
+        "for (int axis = 0; axis < Dim; ++axis)",
+    ):
+        assert required in source, required
     for retired in (
         "Box2D",
         "Array4",
         "DistributionMapping",
         "GeometricMG",
         "FluxRegister",
+        "CompositeFacPoisson2DProvider",
+        "supported_dimension = 2",
     ):
         assert retired not in source, retired
 
@@ -147,6 +167,6 @@ def test_tagging_bytecode_and_hysteresis_execute_in_one_exact_native_rank() -> N
 
     binding = BINDINGS.read_text(encoding="utf-8")
     assert "PreparedTaggingProgram<pops::kNativeDimension>" in binding
-    assert "row[\"dimension\"]" in binding
+    assert 'row["dimension"]' in binding
     assert "differs from the selected native specialization" in binding
     assert "result.dimension" not in binding

@@ -59,20 +59,25 @@ def _runtime(*, collective: bool = False):
     install = _install()
     requirements = ()
     if collective:
-        requirements = ({
-            "capability": "collective",
-            "resource": "state:u",
-            "operation": "gather",
-            "strategy": "ordered_tree",
-        },)
-    runtime = build_runtime_plans(install, {
-        "fluid": _manifest(
-            "fluid",
-            reads=({"resource": "state:u"},),
-            writes=({"resource": "rate:u"},),
-            requirements=requirements,
-        ),
-    })
+        requirements = (
+            {
+                "capability": "collective",
+                "resource": "state:u",
+                "operation": "gather",
+                "strategy": "ordered_tree",
+            },
+        )
+    runtime = build_runtime_plans(
+        install,
+        {
+            "fluid": _manifest(
+                "fluid",
+                reads=({"resource": "state:u"},),
+                writes=({"resource": "rate:u"},),
+                requirements=requirements,
+            ),
+        },
+    )
     return install, runtime
 
 
@@ -145,6 +150,8 @@ class _Prepared(PreparedPublication):
 
     def publish(self):
         self.publisher.publish_calls += 1
+        if self.publisher.publish_calls in self.publisher.cancel_publish_on:
+            raise KeyboardInterrupt("injected publication cancellation")
         if self.publisher.publish_calls in self.publisher.fail_on:
             raise OSError("injected publication failure")
         self.publisher.temporaries.remove(self.temp_id)
@@ -153,9 +160,7 @@ class _Prepared(PreparedPublication):
         mode = self.effect.target.parallel_mode
         rank_artifacts = ()
         if mode is ParallelMode.PER_RANK:
-            rank_artifacts = tuple(
-                (rank, "%s-r%d" % (artifact, rank)) for rank in range(2)
-            )
+            rank_artifacts = tuple((rank, "%s-r%d" % (artifact, rank)) for rank in range(2))
         return PublicationReceipt(
             self.effect.identity,
             self.effect.payload.identity,
@@ -184,10 +189,18 @@ class _Prepared(PreparedPublication):
 
 class _Publisher(ConsumerPublisher):
     def __init__(
-        self, *, fail_publications=0, fail_on=(), fail_finalizations=0,
+        self,
+        *,
+        fail_publications=0,
+        fail_on=(),
+        fail_finalizations=0,
         non_none_finalize=False,
+        cancel_prepare_on=(),
+        cancel_publish_on=(),
     ):
         self.fail_on = set(fail_on) or set(range(1, fail_publications + 1))
+        self.cancel_prepare_on = set(cancel_prepare_on)
+        self.cancel_publish_on = set(cancel_publish_on)
         self.prepare_calls = 0
         self.publish_calls = 0
         self.finalize_calls = 0
@@ -198,6 +211,8 @@ class _Publisher(ConsumerPublisher):
 
     def prepare(self, effect):
         self.prepare_calls += 1
+        if self.prepare_calls in self.cancel_prepare_on:
+            raise KeyboardInterrupt("injected preparation cancellation")
         return _Prepared(effect, self)
 
 
@@ -218,12 +233,17 @@ def test_graph_and_plan_are_semantic_and_insertion_order_independent():
     )
     changed_schedule = replace(first, schedule=Schedule(Every(AcceptedStep(clock), 3)))
     changed_action = replace(first, failure_action=Retry(2))
-    assert len({
-        first.identity,
-        changed_selection.identity,
-        changed_schedule.identity,
-        changed_action.identity,
-    }) == 4
+    assert (
+        len(
+            {
+                first.identity,
+                changed_selection.identity,
+                changed_schedule.identity,
+                changed_action.identity,
+            }
+        )
+        == 4
+    )
 
     plan = plan_accepted_side_effects(runtime, reversed_graph, _moment(clock))
     assert [value.consumer_id for value in plan.effects] == [
@@ -251,9 +271,7 @@ def test_distributed_modes_require_a_nonserial_context_before_planning(parallel_
             parallel_mode=ParallelMode.SERIAL,
         )
         with pytest.raises(RuntimePlanningError) as error:
-            plan_accepted_side_effects(
-                serial_runtime, ConsumerGraph((manifest,)), _moment(clock)
-            )
+            plan_accepted_side_effects(serial_runtime, ConsumerGraph((manifest,)), _moment(clock))
         assert error.value.code == "serial_consumer_requires_serial_context"
         assert error.value.evidence == {
             "communicator": serial_runtime.communication.communicator_id
@@ -280,8 +298,7 @@ def test_distributed_modes_require_a_nonserial_context_before_planning(parallel_
         parallel_mode=parallel_mode,
     )
     with pytest.raises(RuntimePlanningError) as error:
-        plan_accepted_side_effects(
-            collective_runtime, ConsumerGraph((manifest,)), _moment(clock))
+        plan_accepted_side_effects(collective_runtime, ConsumerGraph((manifest,)), _moment(clock))
     assert error.value.code == "distributed_consumer_requires_distributed_context"
     assert error.value.evidence == {"communicator": "serial"}
 
@@ -290,8 +307,7 @@ def test_singleton_collective_requires_an_explicit_provider_capability():
     _, serial_runtime = _runtime()
     clock = Clock("solution", owner=OwnerPath.consumer("adc-685-singleton"))
     manifest = ConsumerManifest(
-        handle=Handle(
-            "checkpoint", kind="consumer", owner=OwnerPath.consumer("adc-685-singleton")),
+        handle=Handle("checkpoint", kind="consumer", owner=OwnerPath.consumer("adc-685-singleton")),
         kind=ConsumerKind.CHECKPOINT,
         quantities=(),
         schedule=Schedule(Every(AcceptedStep(clock), 2)),
@@ -301,8 +317,7 @@ def test_singleton_collective_requires_an_explicit_provider_capability():
         operation=RestartV3(bit_identical=True),
     )
 
-    plan = plan_accepted_side_effects(
-        serial_runtime, ConsumerGraph((manifest,)), _moment(clock))
+    plan = plan_accepted_side_effects(serial_runtime, ConsumerGraph((manifest,)), _moment(clock))
     assert len(plan.effects) == 1
     assert manifest.operation_data["supports_singleton_collective"] is True
 
@@ -311,8 +326,7 @@ def test_console_root_is_the_serial_process_for_a_singleton_run():
     _, serial_runtime = _runtime()
     clock = Clock("solution", owner=OwnerPath.consumer("console-singleton"))
     manifest = ConsumerManifest(
-        handle=Handle(
-            "console", kind="consumer", owner=OwnerPath.consumer("console-singleton")),
+        handle=Handle("console", kind="consumer", owner=OwnerPath.consumer("console-singleton")),
         kind=ConsumerKind.DIAGNOSTIC,
         quantities=(),
         schedule=Schedule(Every(AcceptedStep(clock), 2)),
@@ -322,8 +336,7 @@ def test_console_root_is_the_serial_process_for_a_singleton_run():
         operation=ConsolePresentation(template=None, handler=None),
     )
 
-    plan = plan_accepted_side_effects(
-        serial_runtime, ConsumerGraph((manifest,)), _moment(clock))
+    plan = plan_accepted_side_effects(serial_runtime, ConsumerGraph((manifest,)), _moment(clock))
     assert len(plan.effects) == 1
     assert manifest.operation_data["supports_singleton_collective"] is True
 
@@ -336,10 +349,12 @@ def test_stale_field_requires_explicit_policy_and_records_recompute_without_solv
     layout = LayoutBinding(install.artifact.plan.layout_plan.layouts[0].handle, generation=4)
     context = FieldContext(
         operator=Handle("phi", kind="field_operator", owner=owner),
-        inputs=(FieldInput(
-            Handle("rho", kind="state", owner=owner),
-            make_identity("field-input-version", {"step": 1}),
-        ),),
+        inputs=(
+            FieldInput(
+                Handle("rho", kind="state", owner=owner),
+                make_identity("field-input-version", {"step": 1}),
+            ),
+        ),
         clock=clock,
         point=current,
         layout=layout,
@@ -369,10 +384,12 @@ def test_stale_field_requires_explicit_policy_and_records_recompute_without_solv
 
     explicit = replace(
         manifest,
-        quantities=(replace(
-            quantity,
-            field_policy=RecomputeAtOutput(on_failure=FailFieldRead()),
-        ),),
+        quantities=(
+            replace(
+                quantity,
+                field_policy=RecomputeAtOutput(on_failure=FailFieldRead()),
+            ),
+        ),
     )
     plan = plan_accepted_side_effects(runtime, ConsumerGraph((explicit,)), moment)
     assert plan.effects[0].payload.fields[0].action == "recompute"
@@ -490,9 +507,10 @@ def test_every_dt_is_due_only_on_reached_physical_thresholds_and_deduplicates():
     )
     assert len(second.effects) == 1
 
-    assert manifest.schedule.trigger.consumer_next_deadline(
-        physical_time_hex=(0.2).hex()
-    ) == (0.3).hex()
+    assert (
+        manifest.schedule.trigger.consumer_next_deadline(physical_time_hex=(0.2).hex())
+        == (0.3).hex()
+    )
     assert (
         plan_accepted_side_effects(
             runtime,
@@ -523,9 +541,9 @@ def test_every_dt_deduplicates_one_lattice_index_across_nearby_deadlines():
     cursors = ConsumerCursorSet()
 
     decimal_landing = plan_accepted_side_effects(
-        runtime, graph, _moment(clock, step=3, physical_time=0.3), cursors)
-    assert [effect.consumer_id for effect in decimal_landing.effects] == [
-        first.qualified_id]
+        runtime, graph, _moment(clock, step=3, physical_time=0.3), cursors
+    )
+    assert [effect.consumer_id for effect in decimal_landing.effects] == [first.qualified_id]
     accepted = ConsumerTransaction(decimal_landing, cursors, _Publisher()).accept()
 
     nextafter_landing = plan_accepted_side_effects(
@@ -534,8 +552,7 @@ def test_every_dt_deduplicates_one_lattice_index_across_nearby_deadlines():
         _moment(clock, step=4, physical_time=math.nextafter(0.3, math.inf)),
         accepted.cursors,
     )
-    assert [effect.consumer_id for effect in nextafter_landing.effects] == [
-        second.qualified_id]
+    assert [effect.consumer_id for effect in nextafter_landing.effects] == [second.qualified_id]
 
 
 def test_accepted_publications_remain_compensatable_until_the_outer_transaction_seals():
@@ -543,8 +560,7 @@ def test_accepted_publications_remain_compensatable_until_the_outer_transaction_
     clock = Clock("solution", owner=OwnerPath.consumer("adc-685-compensate"))
     manifest = _manifest_for(runtime, "compensate", clock)
     cursors = ConsumerCursorSet()
-    plan = plan_accepted_side_effects(
-        runtime, ConsumerGraph((manifest,)), _moment(clock), cursors)
+    plan = plan_accepted_side_effects(runtime, ConsumerGraph((manifest,)), _moment(clock), cursors)
     publisher = _Publisher()
     transaction = ConsumerTransaction(plan, cursors, publisher)
 
@@ -565,8 +581,7 @@ def test_seal_explicitly_finalizes_every_accepted_publication_once():
     clock = Clock("solution", owner=OwnerPath.consumer("adc-685-finalize"))
     manifest = _manifest_for(runtime, "finalize", clock)
     cursors = ConsumerCursorSet()
-    plan = plan_accepted_side_effects(
-        runtime, ConsumerGraph((manifest,)), _moment(clock), cursors)
+    plan = plan_accepted_side_effects(runtime, ConsumerGraph((manifest,)), _moment(clock), cursors)
     publisher = _Publisher()
     transaction = ConsumerTransaction(plan, cursors, publisher)
 
@@ -584,8 +599,7 @@ def test_seal_failure_is_non_compensating_diagnostic_and_retryable():
     clock = Clock("solution", owner=OwnerPath.consumer("adc-685-finalize-retry"))
     manifest = _manifest_for(runtime, "finalize-retry", clock)
     cursors = ConsumerCursorSet()
-    plan = plan_accepted_side_effects(
-        runtime, ConsumerGraph((manifest,)), _moment(clock), cursors)
+    plan = plan_accepted_side_effects(runtime, ConsumerGraph((manifest,)), _moment(clock), cursors)
     publisher = _Publisher(fail_finalizations=1)
     transaction = ConsumerTransaction(plan, cursors, publisher)
 
@@ -606,8 +620,7 @@ def test_seal_rejects_a_non_none_finalizer_result_without_compensation():
     clock = Clock("solution", owner=OwnerPath.consumer("adc-685-finalize-result"))
     manifest = _manifest_for(runtime, "finalize-result", clock)
     cursors = ConsumerCursorSet()
-    plan = plan_accepted_side_effects(
-        runtime, ConsumerGraph((manifest,)), _moment(clock), cursors)
+    plan = plan_accepted_side_effects(runtime, ConsumerGraph((manifest,)), _moment(clock), cursors)
     publisher = _Publisher(non_none_finalize=True)
     transaction = ConsumerTransaction(plan, cursors, publisher)
 
@@ -626,7 +639,8 @@ def test_later_publication_failure_compensates_every_earlier_artifact():
     second = _manifest_for(runtime, "second", clock, n=1, dependency=first.handle)
     cursors = ConsumerCursorSet()
     plan = plan_accepted_side_effects(
-        runtime, ConsumerGraph((first, second)), _moment(clock, step=1), cursors)
+        runtime, ConsumerGraph((first, second)), _moment(clock, step=1), cursors
+    )
     publisher = _Publisher(fail_on=(2,))
 
     with pytest.raises(ConsumerPublicationError) as failure:
@@ -636,3 +650,46 @@ def test_later_publication_failure_compensates_every_earlier_artifact():
     assert failure.value.report.cursors.to_data() == cursors.to_data()
     assert publisher.temporaries == set()
     assert publisher.artifacts == set()
+
+
+def test_prepare_cancellation_discards_every_earlier_temporary_without_a_cursor():
+    _, runtime = _runtime()
+    clock = Clock("solution", owner=OwnerPath.consumer("cancel-prepare"))
+    first = _manifest_for(runtime, "first", clock, n=1)
+    second = _manifest_for(runtime, "second", clock, n=1, dependency=first.handle)
+    cursors = ConsumerCursorSet()
+    plan = plan_accepted_side_effects(
+        runtime, ConsumerGraph((first, second)), _moment(clock, step=1), cursors
+    )
+    publisher = _Publisher(cancel_prepare_on=(2,))
+
+    with pytest.raises(KeyboardInterrupt, match="injected preparation cancellation"):
+        ConsumerTransaction(plan, cursors, publisher)
+
+    assert publisher.publish_calls == 0
+    assert publisher.temporaries == set()
+    assert publisher.artifacts == set()
+    assert cursors.to_data() == ConsumerCursorSet().to_data()
+
+
+def test_publish_cancellation_compensates_prior_artifacts_and_preserves_cursor_snapshot():
+    _, runtime = _runtime()
+    clock = Clock("solution", owner=OwnerPath.consumer("cancel-publish"))
+    first = _manifest_for(runtime, "first", clock, n=1)
+    second = _manifest_for(runtime, "second", clock, n=1, dependency=first.handle)
+    cursors = ConsumerCursorSet()
+    plan = plan_accepted_side_effects(
+        runtime, ConsumerGraph((first, second)), _moment(clock, step=1), cursors
+    )
+    publisher = _Publisher(cancel_publish_on=(2,))
+    transaction = ConsumerTransaction(plan, cursors, publisher)
+
+    with pytest.raises(KeyboardInterrupt, match="injected publication cancellation"):
+        transaction.accept()
+
+    with pytest.raises(RuntimeError, match="only after acceptance"):
+        _ = transaction.cursor_updates
+    assert transaction.abort() is None
+    assert publisher.temporaries == set()
+    assert publisher.artifacts == set()
+    assert cursors.to_data() == ConsumerCursorSet().to_data()

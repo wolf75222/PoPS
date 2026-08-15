@@ -19,10 +19,12 @@ from pops.runtime._step_strategy import (
     StepController,
     StepAttemptRejected,
     _phase,
+    prepare_program_run,
     prepare_step_controller,
     register_step_controller_factory,
     resolve_run_strategy,
     run_control_payload,
+    run_fixed_program_step,
     run_step_attempt,
 )
 from pops.runtime._system import System
@@ -30,6 +32,7 @@ from pops.runtime._temporal_restart import TemporalRestartState
 from pops.time import AdaptiveCFL, ErrorControlledDt, ExternalTimeGrid, FixedDt, StepStrategy
 from pops.time._step.strategy import register_step_strategy_type
 from pops.time._step.strategy import validate_step_strategy_manifest
+from pops.time._step.transaction import StepTransactionPlan
 
 
 class _Engine:
@@ -246,6 +249,72 @@ def test_controls_are_validated_before_controller_or_manifest_publication():
     assert [row["value"] for row in payload["controls"]["forcing_times"]] == [
         (0.0).hex(), (0.5).hex(), (1.0).hex(),
     ]
+
+
+def test_prepared_program_run_refuses_strategy_plan_drift_before_mutation():
+    strategy = FixedDt(0.1)
+    owner = _TemporalOwner(strategy)
+    owner._step_transaction_plan = StepTransactionPlan(FixedDt(0.1))
+
+    with pytest.raises(RuntimeError, match="exact transaction-plan authority"):
+        prepare_program_run(owner)
+
+    assert owner._step_controller is None
+    assert owner._temporal_restart_state.strategy is None
+
+    owner._step_transaction_plan = StepTransactionPlan(strategy)
+    prepared = prepare_program_run(owner)
+    assert prepared.engine is owner
+    assert prepared.step_target is owner.raw
+    assert prepared.strategy is strategy
+    assert prepared.control_payload == run_control_payload(strategy)
+
+
+def test_prepared_program_run_detaches_its_canonical_runtime_controls():
+    strategy = ExternalTimeGrid("grid")
+    owner = _TemporalOwner(strategy)
+    owner._step_transaction_plan = StepTransactionPlan(strategy)
+    grid = [0.0, 0.25, 1.0]
+
+    prepared = prepare_program_run(owner, controls={"grid": grid})
+    grid[1] = 0.5
+
+    assert prepared.controls == {"grid": [0.0, 0.25, 1.0]}
+    with pytest.raises(TypeError):
+        prepared.control_payload["controls"] = {}
+
+
+def test_direct_fixed_step_reuses_the_installed_program_strategy_authority():
+    strategy = FixedDt(0.1)
+    owner = _TemporalOwner(strategy)
+    owner._step_transaction_plan = StepTransactionPlan(strategy)
+
+    run_fixed_program_step(owner, 0.1)
+
+    assert owner._step_controller.strategy is strategy
+    mismatch = _TemporalOwner(strategy)
+    mismatch._step_transaction_plan = StepTransactionPlan(strategy)
+    with pytest.raises(RuntimeError, match="differs from the installed Program"):
+        run_fixed_program_step(mismatch, 0.2)
+    assert mismatch._step_controller is None
+    assert mismatch._temporal_restart_state.strategy is None
+
+
+def test_prepare_program_run_refuses_restart_strategy_drift_before_controller_mutation():
+    strategy = FixedDt(0.1)
+    state = TemporalRestartState()
+    state.begin_run(run_control_payload(FixedDt(0.2)), time=0.0, macro_step=0)
+    restored = TemporalRestartState.from_json(
+        state.checkpoint_json(time=0.0, macro_step=0), time=0.0, macro_step=0)
+    owner = _TemporalOwner(strategy)
+    owner._step_transaction_plan = StepTransactionPlan(strategy)
+    owner._temporal_restart_state = restored
+
+    with pytest.raises(RuntimeError, match="checkpointed step strategy"):
+        prepare_program_run(owner)
+
+    assert owner._step_controller is None
+    assert owner._temporal_restart_state.to_data() == restored.to_data()
 
 
 def test_controller_identity_normalizes_external_grid_list_and_tuple():

@@ -12,10 +12,18 @@ namespace pops {
 
 struct RouteInfo {
   int index;
+  std::array<int, 3> target_dimensions;
+  std::size_t target_dimension_count;
   const char* token;
   const char* native_entry;
   const char* requirements;
   const char* limitations;
+  constexpr bool supports_dimension(int dimension) const {
+    for (std::size_t i = 0; i < target_dimension_count; ++i)
+      if (target_dimensions[i] == dimension)
+        return true;
+    return false;
+  }
 };
 
 enum class ComponentInterfaceId : std::uint8_t {
@@ -91,11 +99,11 @@ enum class RiemannRouteId : int {
   kRoeHllRusanovRecovery = 4,
 };
 inline constexpr RouteInfo kRiemannRoutes[] = {
-  {0, "rusanov", "pops::RusanovFlux", "physical_flux,provider_pack,stability_bound", ""},
-  {1, "hll", "pops::HLLFlux", "physical_flux,provider_pack,stability_bound,wave_speeds", ""},
-  {2, "hllc", "pops::HLLCFlux", "physical_flux,provider_pack,stability_bound,pressure,wave_speeds,contact_speed,hllc_star_state", ""},
-  {3, "roe", "pops::RoeFlux", "physical_flux,provider_pack,stability_bound,roe_dissipation", ""},
-  {4, "roe_hll_rusanov_recovery", "pops::PreparedRiemannRecoveryPolicy<pops::RoeFlux,pops::HLLFlux,pops::RusanovFlux,pops::RejectRiemannRecovery>", "physical_flux,provider_pack,stability_bound,wave_speeds,roe_dissipation", "fixed ordered policy Roe -> HLL -> Rusanov -> reject,annular polar route unavailable"},
+  {0, {{1, 2, 3}}, 3, "rusanov", "pops::RusanovFlux", "physical_flux,provider_pack,stability_bound", ""},
+  {1, {{1, 2, 3}}, 3, "hll", "pops::HLLFlux", "physical_flux,provider_pack,stability_bound,wave_speeds", ""},
+  {2, {{1, 2, 3}}, 3, "hllc", "pops::HLLCFlux", "physical_flux,provider_pack,stability_bound,pressure,wave_speeds,contact_speed,hllc_star_state", ""},
+  {3, {{1, 2, 3}}, 3, "roe", "pops::RoeFlux", "physical_flux,provider_pack,stability_bound,roe_dissipation", ""},
+  {4, {{1, 2, 3}}, 3, "roe_hll_rusanov_recovery", "pops::PreparedRiemannRecoveryPolicy<pops::RoeFlux,pops::HLLFlux,pops::RusanovFlux,pops::RejectRiemannRecovery>", "physical_flux,provider_pack,stability_bound,wave_speeds,roe_dissipation", "fixed ordered policy Roe -> HLL -> Rusanov -> reject,annular polar route unavailable"},
 };
 inline constexpr const char* kRiemannRouteTokensCsv = "rusanov|hll|hllc|roe|roe_hll_rusanov_recovery";
 
@@ -108,12 +116,12 @@ enum class LimiterRouteId : int {
   kSuperbee = 5,
 };
 inline constexpr RouteInfo kLimiterRoutes[] = {
-  {0, "none", "pops::NoSlope", "provider_pack,ComponentKeys grad_phi[0:Dim],ComponentKeys B_x,B_y,B_z", ""},
-  {1, "minmod", "pops::Minmod", "", ""},
-  {2, "vanleer", "pops::VanLeer", "", ""},
-  {3, "weno5", "pops::Weno5", "3-cell halo", ""},
-  {4, "mc", "pops::MC", "", ""},
-  {5, "superbee", "pops::Superbee", "", ""},
+  {0, {{1, 2, 3}}, 3, "none", "pops::NoSlope", "provider_pack,ComponentKeys grad_phi[0:Dim],ComponentKeys B_x,B_y,B_z", ""},
+  {1, {{1, 2, 3}}, 3, "minmod", "pops::Minmod", "", ""},
+  {2, {{1, 2, 3}}, 3, "vanleer", "pops::VanLeer", "", ""},
+  {3, {{1, 2, 3}}, 3, "weno5", "pops::Weno5", "3-cell halo", ""},
+  {4, {{1, 2, 3}}, 3, "mc", "pops::MC", "", ""},
+  {5, {{1, 2, 3}}, 3, "superbee", "pops::Superbee", "", ""},
 };
 inline constexpr const char* kLimiterRouteTokensCsv = "none|minmod|vanleer|weno5|mc|superbee";
 
@@ -122,8 +130,8 @@ enum class ReconRouteId : int {
   kPrimitive = 1,
 };
 inline constexpr RouteInfo kReconRoutes[] = {
-  {0, "conservative", "pops::make_block(recon_prim=false)", "", ""},
-  {1, "primitive", "pops::make_block(recon_prim=true)", "primitive_vars", "requires a model exposing primitive variables"},
+  {0, {{1, 2, 3}}, 3, "conservative", "pops::make_block(recon_prim=false)", "", ""},
+  {1, {{1, 2, 3}}, 3, "primitive", "pops::make_block(recon_prim=true)", "primitive_vars", "requires a model exposing primitive variables"},
 };
 inline constexpr const char* kReconRouteTokensCsv = "conservative|primitive";
 
@@ -135,11 +143,11 @@ enum class TimeRouteId : int {
   kImexRkArs222 = 4,
 };
 inline constexpr RouteInfo kTimeRoutes[] = {
-  {0, "explicit", "pops::SSPRK2", "", ""},
-  {1, "ssprk3", "pops::SSPRK3", "", ""},
-  {2, "euler", "pops::ForwardEuler<pops::kNativeDimension>", "", "validation use, never default"},
-  {3, "imex", "generated ProgramGraph(additive_imex_euler)", "implicit source term", "typed implicit Program solve required; no block-local native advance"},
-  {4, "imexrk_ars222", "generated ProgramGraph(additive_imex_ars222)", "implicit source term", "typed implicit Program solve required; no block-local native advance"},
+  {0, {{1, 2, 3}}, 3, "explicit", "pops::SSPRK2", "", ""},
+  {1, {{1, 2, 3}}, 3, "ssprk3", "pops::SSPRK3", "", ""},
+  {2, {{1, 2, 3}}, 3, "euler", "pops::ForwardEuler<pops::kNativeDimension>", "", "validation use, never default"},
+  {3, {{1, 2, 3}}, 3, "imex", "generated ProgramGraph(additive_imex_euler)", "implicit source term", "typed implicit Program solve required; no block-local native advance"},
+  {4, {{1, 2, 3}}, 3, "imexrk_ars222", "generated ProgramGraph(additive_imex_ars222)", "implicit source term", "typed implicit Program solve required; no block-local native advance"},
 };
 inline constexpr const char* kTimeRouteTokensCsv = "explicit|ssprk3|euler|imex|imexrk_ars222";
 
@@ -150,10 +158,10 @@ enum class FieldSolverRouteId : int {
   kCartesianCg = 3,
 };
 inline constexpr RouteInfo kFieldSolverRoutes[] = {
-  {0, "geometric_mg", "pops::GeometricMG", "", ""},
-  {1, "fft", "pops::PoissonFFTSolver<Dim>", "Cartesian native rank one / two / three,periodic bc,constant coefficient,canonical ordered MPI slabs", "walls, variable epsilon and non-canonical decompositions are rejected; non-radix-2 extents use the diagnosed direct-DFT path"},
-  {2, "polar", "pops::PolarPoissonSolver<2>", "exact rank two,annular polar geometry,single MPI rank,single full-annulus patch", "spatial dimensions one / three and distributed annuli are rejected"},
-  {3, "cartesian_cg", "pops::elliptic::nd::CartesianPoissonSolver<Dim>", "uniform Cartesian layout,constant-coefficient Poisson operator", "no AMR, screened operator, embedded boundary, or dynamic boundary"},
+  {0, {{1, 2, 3}}, 3, "geometric_mg", "pops::GeometricMG", "", ""},
+  {1, {{1, 2, 3}}, 3, "fft", "pops::PoissonFFTSolver<Dim>", "Cartesian native rank one / two / three,periodic bc,constant coefficient,canonical ordered MPI slabs", "walls, variable epsilon and non-canonical decompositions are rejected; non-radix-2 extents use the diagnosed direct-DFT path"},
+  {2, {{2, 0, 0}}, 1, "polar", "pops::PolarPoissonSolver<2>", "exact rank two,annular polar geometry,single MPI rank,single full-annulus patch", "spatial dimensions one / three and distributed annuli are rejected"},
+  {3, {{1, 2, 3}}, 3, "cartesian_cg", "pops::elliptic::nd::CartesianPoissonSolver<Dim>", "uniform Cartesian layout,constant-coefficient Poisson operator", "no AMR, screened operator, embedded boundary, or dynamic boundary"},
 };
 inline constexpr const char* kFieldSolverRouteTokensCsv = "geometric_mg|fft|polar|cartesian_cg";
 
@@ -164,10 +172,10 @@ enum class PoissonBcRouteId : int {
   kNeumann = 3,
 };
 inline constexpr RouteInfo kPoissonBcRoutes[] = {
-  {0, "auto", "resolved from the wall/periodic system config", "", ""},
-  {1, "periodic", "pops::fill_boundary(periodic)", "", ""},
-  {2, "dirichlet", "pops::PhysicalBc(dirichlet)", "", ""},
-  {3, "neumann", "pops::PhysicalBc(neumann)", "", ""},
+  {0, {{1, 2, 3}}, 3, "auto", "resolved from the wall/periodic system config", "", ""},
+  {1, {{1, 2, 3}}, 3, "periodic", "pops::fill_boundary(periodic)", "", ""},
+  {2, {{1, 2, 3}}, 3, "dirichlet", "pops::PhysicalBc(dirichlet)", "", ""},
+  {3, {{1, 2, 3}}, 3, "neumann", "pops::PhysicalBc(neumann)", "", ""},
 };
 inline constexpr const char* kPoissonBcRouteTokensCsv = "auto|periodic|dirichlet|neumann";
 
@@ -176,8 +184,8 @@ enum class LayoutRouteId : int {
   kAmr = 1,
 };
 inline constexpr RouteInfo kLayoutRoutes[] = {
-  {0, "uniform", "pops::System", "", ""},
-  {1, "amr", "pops::AmrSystem", "", "transition ratios are authenticated by the exact-rank hierarchy; FFT field solves are Uniform-only"},
+  {0, {{1, 2, 3}}, 3, "uniform", "pops::System", "", ""},
+  {1, {{1, 2, 3}}, 3, "amr", "pops::AmrSystem", "", "transition ratios are authenticated by the exact-rank hierarchy; FFT field solves are Uniform-only"},
 };
 inline constexpr const char* kLayoutRouteTokensCsv = "uniform|amr";
 
@@ -187,9 +195,9 @@ enum class TransportRouteId : int {
   kIsothermal = 2,
 };
 inline constexpr RouteInfo kTransportRoutes[] = {
-  {0, "exb", "pops::CartesianExBDrift", "", "scalar (1 var); no fluid source,requires one explicit potential-gradient provider per native axis and three explicit Cartesian magnetic providers"},
-  {1, "compressible", "pops::CompressibleFlux", "", "polar geometry not wired"},
-  {2, "isothermal", "pops::IsothermalFlux", "", ""},
+  {0, {{1, 2, 3}}, 3, "exb", "pops::CartesianExBDrift", "", "scalar (1 var); no fluid source,requires one explicit potential-gradient provider per native axis and three explicit Cartesian magnetic providers"},
+  {1, {{1, 2, 3}}, 3, "compressible", "pops::CompressibleFlux", "", "polar geometry not wired"},
+  {2, {{1, 2, 3}}, 3, "isothermal", "pops::IsothermalFlux", "", ""},
 };
 inline constexpr const char* kTransportRouteTokensCsv = "exb|compressible|isothermal";
 
@@ -201,11 +209,11 @@ enum class SourceRouteId : int {
   kPotentialMagneticLorentz = 4,
 };
 inline constexpr RouteInfo kSourceRoutes[] = {
-  {0, "none", "pops::NoSource", "", ""},
-  {1, "potential", "pops::PotentialForce", "fluid transport (>= 3 vars)", ""},
-  {2, "gravity", "pops::GravityForce", "fluid transport (>= 3 vars)", ""},
-  {3, "magnetic", "pops::MagneticLorentzForce", "fluid transport (>= 3 vars),aux Cartesian magnetic vector channel", "explicit regime (stiff regime -> condensed Schur stage)"},
-  {4, "potential_magnetic", "pops::CompositeSource<PotentialForce, MagneticLorentzForce>", "fluid transport (>= 3 vars),aux Cartesian magnetic vector channel", ""},
+  {0, {{1, 2, 3}}, 3, "none", "pops::NoSource", "", ""},
+  {1, {{1, 2, 3}}, 3, "potential", "pops::PotentialForce", "fluid transport (>= 3 vars)", ""},
+  {2, {{1, 2, 3}}, 3, "gravity", "pops::GravityForce", "fluid transport (>= 3 vars)", ""},
+  {3, {{1, 2, 3}}, 3, "magnetic", "pops::MagneticLorentzForce", "fluid transport (>= 3 vars),aux Cartesian magnetic vector channel", "explicit regime (stiff regime -> condensed Schur stage)"},
+  {4, {{1, 2, 3}}, 3, "potential_magnetic", "pops::CompositeSource<PotentialForce, MagneticLorentzForce>", "fluid transport (>= 3 vars),aux Cartesian magnetic vector channel", ""},
 };
 inline constexpr const char* kSourceRouteTokensCsv = "none|potential|gravity|magnetic|potential_magnetic";
 
@@ -215,9 +223,9 @@ enum class EllipticRouteId : int {
   kGravity = 2,
 };
 inline constexpr RouteInfo kEllipticRoutes[] = {
-  {0, "charge", "pops::ChargeDensity", "", ""},
-  {1, "background", "pops::BackgroundDensity", "", ""},
-  {2, "gravity", "pops::GravityCoupling", "", ""},
+  {0, {{1, 2, 3}}, 3, "charge", "pops::ChargeDensity", "", ""},
+  {1, {{1, 2, 3}}, 3, "background", "pops::BackgroundDensity", "", ""},
+  {2, {{1, 2, 3}}, 3, "gravity", "pops::GravityCoupling", "", ""},
 };
 inline constexpr const char* kEllipticRouteTokensCsv = "charge|background|gravity";
 
@@ -226,8 +234,8 @@ enum class PoissonRhsRouteId : int {
   kComposite = 1,
 };
 inline constexpr RouteInfo kPoissonRhsRoutes[] = {
-  {0, "charge_density", "per-block ChargeDensity bricks summed", "", "alias of composite when every block carries a charge density (bit-identical)"},
-  {1, "composite", "per-block elliptic bricks summed", "", ""},
+  {0, {{1, 2, 3}}, 3, "charge_density", "per-block ChargeDensity bricks summed", "", "alias of composite when every block carries a charge density (bit-identical)"},
+  {1, {{1, 2, 3}}, 3, "composite", "per-block elliptic bricks summed", "", ""},
 };
 inline constexpr const char* kPoissonRhsRouteTokensCsv = "charge_density|composite";
 
@@ -304,9 +312,9 @@ inline constexpr int kComponentCatalogSchemaVersion = 2;
 inline constexpr int kComponentManifestSchemaVersion = 2;
 inline constexpr int kRouteRegistryVersion = 4;
 inline constexpr int kCapabilityVocabularyVersion = 4;
-inline constexpr const char* kComponentCatalogSha256 = "520c51b60d3ae00bdffa0ed040f437fed772b80160e8d5fae7e4c86c829b8305";
-inline constexpr const char* kComponentCatalogSemanticSha256 = "47dfb51e5f2aba1e78fb7b760f2775b820d210934c8e101826ac372dbc6032b3";
-inline constexpr const char* kRouteRegistrySignature = "v4:47dfb51e5f2aba1e78fb7b760f2775b820d210934c8e101826ac372dbc6032b3";
+inline constexpr const char* kComponentCatalogSha256 = "adf5508fc12cdf79ea2ec16e80721884f05e67d5d088545db89143179c41ee88";
+inline constexpr const char* kComponentCatalogSemanticSha256 = "a42cfe559ba2a99b3e27d1fc5682fbc1e881f42fb5fa18d384cf9cbc03e0f74b";
+inline constexpr const char* kRouteRegistrySignature = "v4:a42cfe559ba2a99b3e27d1fc5682fbc1e881f42fb5fa18d384cf9cbc03e0f74b";
 inline constexpr const char* kComponentManifestSemanticFields[] = {
   "schema_version",
   "uri",

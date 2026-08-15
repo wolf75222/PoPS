@@ -1,9 +1,9 @@
 // HLLC/Roe + reconstruction primitive sur le chemin "production" NATIF cote AMR (Gap 1 parite).
 // Pendant de tests/cpp/integration/native_loader/test_amr_weno5_native.cpp : prouve que riemann=hllc/roe ET recon=primitive
-// tournent la MEME hierarchie AMR (AmrCouplerMP<Model> + reflux + regrid), BIT-IDENTIQUE, sur les
+// tournent le MEME niveau AMR exact-rank, BIT-IDENTIQUE, sur les
 // trois chemins, et que hllc/roe produisent un resultat DIFFERENT de rusanov (flux actif, non muet).
 //
-//   (A) add_compiled_model(AmrSystem&) == add_block(ModelSpec)   -- direct, sans .so : tourne sous
+//   (A) add_compiled_model(AmrSystem&) == prepare+install explicite -- direct, sans .so : tourne sous
 //       TOUS les backends (hote, Kokkos Serial), c'est la parite decisive qui ne casse pas nvcc.
 //       4 combos : (hllc/roe) x (conservative/primitive), chacun dmax==0.
 //       + rusanov conservatif (oracle) -> hllc != rusanov et roe != rusanov (flux actif).
@@ -23,14 +23,12 @@
 #include "gtest_compat.hpp"
 #include "native_dso_compiler.hpp"
 #include "explicit_amr_program.hpp"
-#include <pops/physics/bricks/bricks.hpp>  // CompositeModel, Euler, NoSource, BackgroundDensity
+#include <pops/physics/bricks/bricks.hpp>  // CompositeModel, EulerND, NoSource, BackgroundDensity
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/runtime/amr_system.hpp>
 
-#include "amr_tagging_test_authority.hpp"
-#include <pops/runtime/config/model_spec.hpp>
-
 #include <cmath>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
@@ -46,44 +44,77 @@ using namespace pops;
 
 namespace {
 
-using ProdModel = CompositeModel<Euler, NoSource, BackgroundDensity>;
+constexpr int Dim = kNativeDimension;
+constexpr const char* kProviderConsumerQid = "tests.amr-riemann.providers/gas";
+using NativeAmrSystem = AmrSystem<Dim>;
+using NativeAmrSystemConfig = AmrSystemConfig<Dim>;
+using ProdModel = CompositeModel<EulerND<Dim>, NoSource, BackgroundDensity>;
+using ProdProviderValues = ProviderValues<provider_count<ProdModel>()>;
 constexpr double kGamma = 1.4;
+
+static_assert(ProdProviderValues::size == provider_count<ProdModel>());
 
 ProdModel make_model() {
   // alpha=0 : elliptic_rhs nul -> phi=0, parite stricte.
-  return ProdModel{Euler{static_cast<Real>(kGamma)}, NoSource{},
-                   BackgroundDensity{Real(0), Real(0)}};
-}
-
-// ModelSpec equivalente pour le chemin add_block (MEME type concret).
-ModelSpec make_spec() {
-  ModelSpec spec;
-  spec.transport = "compressible";
-  spec.source = "none";
-  spec.elliptic = "background";
-  spec.gamma = kGamma;
-  spec.alpha = 0.0;
-  spec.n0 = 0.0;
-  return spec;
+  return ProdModel{
+      {}, EulerND<Dim>{static_cast<Real>(kGamma)}, NoSource{}, BackgroundDensity{Real(0), Real(0)}};
 }
 
 std::vector<double> bubble(int n) {
-  std::vector<double> rho(static_cast<std::size_t>(n) * n);
-  for (int j = 0; j < n; ++j)
-    for (int i = 0; i < n; ++i) {
-      const double x = (i + 0.5) / n - 0.5, y = (j + 0.5) / n - 0.5;
-      rho[static_cast<std::size_t>(j) * n + i] = 1.0 + 0.5 * std::exp(-(x * x + y * y) / 0.02);
+  std::size_t cells = 1;
+  for (int axis = 0; axis < Dim; ++axis)
+    cells *= static_cast<std::size_t>(n);
+  std::vector<double> rho(cells);
+  for (std::size_t cell = 0; cell < cells; ++cell) {
+    std::size_t quotient = cell;
+    double radius_squared = 0.0;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const int coordinate = static_cast<int>(quotient % static_cast<std::size_t>(n));
+      quotient /= static_cast<std::size_t>(n);
+      const double x = (static_cast<double>(coordinate) + 0.5) / n - 0.5;
+      radius_squared += x * x;
     }
+    rho[cell] = 1.0 + 0.5 * std::exp(-radius_squared / 0.02);
+  }
   return rho;
 }
 
-AmrSystemConfig make_cfg(int n) {
-  AmrSystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
-  cfg.regrid_every = 4;
+std::vector<double> conservative_state(const std::vector<double>& density) {
+  const std::size_t cells = density.size();
+  std::vector<double> state(static_cast<std::size_t>(ProdModel::n_vars) * cells, 0.0);
+  double velocity_squared = 0.0;
+  for (int axis = 0; axis < Dim; ++axis) {
+    const double velocity = 0.05 * static_cast<double>(axis + 1);
+    velocity_squared += velocity * velocity;
+    for (std::size_t cell = 0; cell < cells; ++cell)
+      state[static_cast<std::size_t>(axis + 1) * cells + cell] = density[cell] * velocity;
+  }
+  for (std::size_t cell = 0; cell < cells; ++cell) {
+    state[cell] = density[cell];
+    state[static_cast<std::size_t>(Dim + 1) * cells + cell] =
+        1.0 / (kGamma - 1.0) + 0.5 * density[cell] * velocity_squared;
+  }
+  return state;
+}
+
+NativeAmrSystemConfig make_cfg(int n) {
+  NativeAmrSystemConfig cfg;
+  for (int axis = 0; axis < Dim; ++axis) {
+    cfg.shape[static_cast<std::size_t>(axis)] = n;
+    cfg.lower[static_cast<std::size_t>(axis)] = Real(0);
+    cfg.upper[static_cast<std::size_t>(axis)] = Real(1);
+    cfg.periodicity[static_cast<std::size_t>(axis)] = true;
+  }
+  cfg.regrid_every = 0;
+  cfg.level_count = 1;
+  cfg.transition_ratios.clear();
+  cfg.transition_buffers.clear();
+  cfg.transition_lookaheads.clear();
   return cfg;
+}
+
+void install_gas_state_route(NativeAmrSystem& system) {
+  system.install_block_state_route("gas", "tests.amr-riemann.state/gas");
 }
 
 struct Snap {
@@ -92,12 +123,8 @@ struct Snap {
   int n_patches = 0;
 };
 
-Snap run(AmrSystem& s, int nsteps) {
-  // Time subcycling is an independent execution contract. Keep it explicit even though this test
-  // deliberately chooses the same value as the spatial refinement ratio.
-  s.set_temporal_relations({2}, {1}, {"integral_only"});
+Snap run(NativeAmrSystem& s, int nsteps) {
   s.set_poisson("charge_density", "geometric_mg");
-  test::install_prepared_threshold_union(s, {{"gas", "rho", 1.2}});
   test::install_forward_euler_program(s);
   const double dt = 2e-4;
   for (int k = 0; k < nsteps; ++k)
@@ -131,7 +158,8 @@ std::string loader_source() {
 #include <pops/physics/bricks/bricks.hpp>
 #include <string>
 namespace pops_generated {
-using ProdModel = pops::CompositeModel<pops::Euler, pops::NoSource, pops::BackgroundDensity>;
+using ProdModel = pops::CompositeModel<pops::EulerND<pops::kNativeDimension>, pops::NoSource,
+                                       pops::BackgroundDensity>;
 }
 // LITTERAL preprocesseur (PAS abi_key_string() : une inline serait interposee, ELF/RTLD_GLOBAL,
 // vers la copie du module deja charge -> cle du module renvoyee -> garde d'ABI tautologique).
@@ -144,13 +172,16 @@ extern "C" void pops_install_native_amr(void* sys, const char* name, const char*
                                        double gamma, int substeps, const double*, int,
                                        double pos_floor, double weno_epsilon,
                                        bool wave_speed_cache) {
-  pops::AmrSystem* s = reinterpret_cast<pops::AmrSystem*>(sys);
-  pops::add_compiled_model<pops_generated::ProdModel>(
+  pops::AmrSystem<pops::kNativeDimension>* s =
+      reinterpret_cast<pops::AmrSystem<pops::kNativeDimension>*>(sys);
+  pops::add_compiled_model<pops::kNativeDimension>(
       *s, name,
-      pops_generated::ProdModel{pops::Euler{static_cast<pops::Real>(gamma)}, pops::NoSource{},
+      pops_generated::ProdModel{{}, pops::EulerND<pops::kNativeDimension>{
+                                      static_cast<pops::Real>(gamma)},
+                                pops::NoSource{},
                                pops::BackgroundDensity{pops::Real(0), pops::Real(0)}},
       limiter, riemann, recon, time, gamma, substeps, 1, {}, {}, pos_floor, weno_epsilon,
-      wave_speed_cache);
+      wave_speed_cache, "tests.amr-riemann.providers/gas");
 }
 )CPP";
   // clang-format on
@@ -165,9 +196,10 @@ static int pops_run_test_amr_riemann_native(int argc, char** argv) {
   (void)argc;
   (void)argv;
 #endif
-  const int n = 64;
-  const int nsteps = 12;
+  const int n = Dim == 3 ? 16 : 64;
+  const int nsteps = Dim == 3 ? 4 : 12;
   const std::vector<double> rho = bubble(n);
+  const std::vector<double> initial_state = conservative_state(rho);
 
   int fails = 0;
   auto chk = [&](bool c, const char* w) {
@@ -177,8 +209,28 @@ static int pops_run_test_amr_riemann_native(int argc, char** argv) {
     }
   };
 
+  // A rejected built-in route must leave the facade empty and eligible for a later valid install.
+  {
+    NativeAmrSystem transactional(make_cfg(n));
+    install_gas_state_route(transactional);
+    bool rejected = false;
+    try {
+      add_compiled_model(transactional, "gas", make_model(), "minmod", "missing-riemann",
+                         "conservative", "explicit", kGamma, 1, 1, {}, {}, 0.0,
+                         static_cast<double>(kWenoEpsilon), false, kProviderConsumerQid);
+    } catch (const std::exception&) {
+      rejected = true;
+    }
+    chk(rejected, "unknown built-in Riemann route rejected");
+    chk(transactional.n_blocks() == 0, "failed built-in Riemann install is transactional");
+    add_compiled_model(transactional, "gas", make_model(), "minmod", "rusanov", "conservative",
+                       "explicit", kGamma, 1, 1, {}, {}, 0.0, static_cast<double>(kWenoEpsilon),
+                       false, kProviderConsumerQid);
+    chk(transactional.n_blocks() == 1, "valid built-in Riemann installs after rollback");
+  }
+
   // ============================================================================================
-  // (A) PARITE DECISIVE (sans .so) : add_compiled_model(AmrSystem&) == add_block(ModelSpec)
+  // (A) PARITE DECISIVE (sans .so) : convenience == preparation/publication explicite
   //     pour riemann=hllc/roe et recon=conservative/primitive (4 combos).
   //     Tourne sous TOUS les backends (hote, Kokkos Serial) -> ne casse pas nvcc.
   // ============================================================================================
@@ -186,35 +238,44 @@ static int pops_run_test_amr_riemann_native(int argc, char** argv) {
   // Calcule l'oracle rusanov conservatif (pour le NO-SILENT-FALLBACK hllc/roe != rusanov).
   std::vector<double> d_rusanov;
   {
-    AmrSystem Ref(make_cfg(n));
+    NativeAmrSystem Ref(make_cfg(n));
+    install_gas_state_route(Ref);
     add_compiled_model(Ref, "gas", make_model(), "minmod", "rusanov", "conservative", "explicit",
-                       kGamma);
-    Ref.set_density("gas", rho);
+                       kGamma, 1, 1, {}, {}, 0.0, static_cast<double>(kWenoEpsilon), false,
+                       kProviderConsumerQid);
+    Ref.set_conservative_state("gas", initial_state);
     d_rusanov = run(Ref, nsteps).density;
   }
 
-  // Parite add_compiled_model == add_block pour les 4 combos.
+  // Parite add_compiled_model == prepare+install pour les 4 combos.
   // Renvoie la densite add_compiled_model (pour le test rusanov != riemann).
   auto parity_direct = [&](const char* riem, const char* recon) -> std::vector<double> {
-    AmrSystem A(make_cfg(n));  // bloc COMPILE
-    add_compiled_model(A, "gas", make_model(), "minmod", riem, recon, "explicit", kGamma);
-    A.set_density("gas", rho);
+    NativeAmrSystem A(make_cfg(n));  // bloc COMPILE
+    install_gas_state_route(A);
+    add_compiled_model(A, "gas", make_model(), "minmod", riem, recon, "explicit", kGamma, 1, 1, {},
+                       {}, 0.0, static_cast<double>(kWenoEpsilon), false, kProviderConsumerQid);
+    A.set_conservative_state("gas", initial_state);
     const Snap sa = run(A, nsteps);
 
-    AmrSystem B(make_cfg(n));  // bloc NATIF via add_block
-    B.add_block("gas", make_spec(), "minmod", riem, recon, "explicit", 1);
-    B.set_density("gas", rho);
+    NativeAmrSystem B(make_cfg(n));  // publication preparee explicite
+    install_gas_state_route(B);
+    install_prepared_amr_block(
+        B, prepare_compiled_amr_system_block<Dim>(
+               "gas", make_model(), "minmod", riem, recon, "explicit", kGamma, 1, 1, 0.0,
+               static_cast<double>(kWenoEpsilon), false, kProviderConsumerQid));
+    B.set_conservative_state("gas", initial_state);
     const Snap sb = run(B, nsteps);
 
     const double nrm = maxabs(sb.density), dmax = maxdiff(sa.density, sb.density);
     char w[200];
     std::snprintf(w, sizeof w, "[%s/%s] densite non triviale", riem, recon);
     chk(nrm > 1e-6, w);
-    std::snprintf(w, sizeof w, "[%s/%s] add_compiled_model == add_block (dmax==0)", riem, recon);
+    std::snprintf(w, sizeof w, "[%s/%s] add_compiled_model == prepare+install (dmax==0)", riem,
+                  recon);
     chk(dmax == 0.0, w);
-    std::snprintf(w, sizeof w, "[%s/%s] masse add_compiled_model == add_block", riem, recon);
+    std::snprintf(w, sizeof w, "[%s/%s] masse add_compiled_model == prepare+install", riem, recon);
     chk(std::fabs(sa.mass - sb.mass) < 1e-12 * (std::fabs(sb.mass) + 1.0), w);
-    std::snprintf(w, sizeof w, "[%s/%s] n_patches identique (regrid deterministe)", riem, recon);
+    std::snprintf(w, sizeof w, "[%s/%s] n_patches identique", riem, recon);
     chk(sa.n_patches == sb.n_patches, w);
     std::printf("OK  [%s/%s] dmax=%.0f\n", riem, recon, dmax);
     return sa.density;
@@ -254,14 +315,17 @@ static int pops_run_test_amr_riemann_native(int argc, char** argv) {
     return 1;
   }
   auto parity_loader = [&](const char* riem, const char* recon) {
-    AmrSystem A(make_cfg(n));  // chemin "production" : loader .so -> add_native_block
+    NativeAmrSystem A(make_cfg(n));  // chemin "production" : loader .so -> add_native_block
+    install_gas_state_route(A);
     A.add_native_block("gas", so, "minmod", riem, recon, "explicit", kGamma, 1);
-    A.set_density("gas", rho);
+    A.set_conservative_state("gas", initial_state);
     const Snap sa = run(A, nsteps);
 
-    AmrSystem B(make_cfg(n));  // MEME modele installe EN DIRECT
-    add_compiled_model(B, "gas", make_model(), "minmod", riem, recon, "explicit", kGamma);
-    B.set_density("gas", rho);
+    NativeAmrSystem B(make_cfg(n));  // MEME modele installe EN DIRECT
+    install_gas_state_route(B);
+    add_compiled_model(B, "gas", make_model(), "minmod", riem, recon, "explicit", kGamma, 1, 1, {},
+                       {}, 0.0, static_cast<double>(kWenoEpsilon), false, kProviderConsumerQid);
+    B.set_conservative_state("gas", initial_state);
     const Snap sb = run(B, nsteps);
 
     const double dmax = maxdiff(sa.density, sb.density);
@@ -281,7 +345,7 @@ static int pops_run_test_amr_riemann_native(int argc, char** argv) {
   if (fails == 0)
     std::printf(
         "OK test_amr_riemann_native (hllc/roe x conservative/primitive : "
-        "add_compiled_model == add_block, bit-identique ; hllc/roe actifs vs rusanov)\n");
+        "add_compiled_model == prepare+install, bit-identique ; hllc/roe actifs vs rusanov)\n");
   return fails ? 1 : 0;
 }
 

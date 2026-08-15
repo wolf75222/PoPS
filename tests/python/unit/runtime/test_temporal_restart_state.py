@@ -513,6 +513,22 @@ def test_accepted_attempt_advances_cursor_and_round_trips_exact_controller_state
         restored.begin_run(run_control_payload(FixedDt(0.25)), time=0.125, macro_step=1)
 
 
+def test_restart_authenticates_the_installed_strategy_without_mutating_state():
+    state = _bound_state()
+    payload = state.checkpoint_json(time=0.0, macro_step=0)
+    restored = TemporalRestartState.from_json(payload, time=0.0, macro_step=0)
+    before = restored.to_data()
+
+    with pytest.raises(RuntimeError, match="checkpointed step strategy"):
+        restored.authenticate_run(
+            run_control_payload(FixedDt(0.25)), time=0.0, macro_step=0)
+
+    assert restored.to_data() == before
+    restored.authenticate_run(
+        run_control_payload(FixedDt(0.125)), time=0.0, macro_step=0)
+    assert restored.to_data() == before
+
+
 def test_system_direct_step_publishes_one_synchronized_fixed_dt_restart_envelope():
     """The real low-level System seam reports the accepted direct step without private reads."""
     import pops.runtime._engine_descriptors as engine

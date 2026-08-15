@@ -74,6 +74,9 @@ def _typed_component_roles(roles: Any, names: Any, *, where: str) -> list[Any] |
         # Validate custom implementations eagerly while preserving the typed
         # descriptor itself for authoring identity and later exact-rank checks.
         native_role_token(role)
+    from .aux import roles_for
+
+    roles_for(names, values)
     return values
 
 

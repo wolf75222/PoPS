@@ -11,7 +11,7 @@ requirement = "amr_step_transaction"
 polarity = "positive"
 kind = "ctest"
 target = "test_amr_history_ring"
-test_regex = "^test_amr_history_ring\\.AcceptedFacadeTransactionCommitsTopologyStateHistoryAndClock$"
+test_regex = "^test_amr_history_ring\\.RetainsAndInterpolatesExactRankedState$"
 
 [[check]]
 issue = "ADC-648"
@@ -19,7 +19,7 @@ requirement = "amr_step_transaction"
 polarity = "refusal"
 kind = "ctest"
 target = "test_amr_history_ring"
-test_regex = "^test_amr_history_ring\\.RejectedFacadeAttemptRestoresTopologyStateHistoryAndClock$"
+test_regex = "^test_amr_history_ring\\.FacadeTransactionRestoresAcceptedHistoryImage$"
 
 [[check]]
 issue = "ADC-661"
@@ -163,7 +163,7 @@ requirement = "refined_hierarchy_native_ordering"
 polarity = "refusal"
 kind = "ctest"
 target = "test_amr_history_ring"
-test_regex = "^test_amr_history_ring\\.FineNonFiniteAfterCoarseSuccessRestoresCompleteAcceptedState$"
+test_regex = "^test_amr_history_ring\\.ThreeLevelProgramFailsClosedWithoutConservativeCatchUpProvider$"
 
 [[check]]
 issue = "ADC-668"
@@ -203,7 +203,7 @@ requirement = "program_only_temporal_routes"
 polarity = "refusal"
 kind = "pytest"
 target = "architecture"
-nodeid = "tests/python/architecture/test_program_only_temporal_facades.py::test_static_system_temporal_driver_is_test_only"
+nodeid = "tests/python/architecture/test_program_only_temporal_facades.py::test_static_system_assembler_is_retired_from_the_final_runtime_surface"
 
 [[check]]
 issue = "ADC-668"

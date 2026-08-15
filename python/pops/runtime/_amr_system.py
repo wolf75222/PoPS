@@ -136,22 +136,9 @@ class AmrSystem(
 
     def step(self, dt: Any) -> None:
         """Advance one fixed step and synchronize exactly one temporal envelope."""
-        from pops.runtime._native_step_target import native_step_target
-        from pops.runtime._step_strategy import run_control_payload, run_step_attempt
-        from pops.time import FixedDt
+        from pops.runtime._step_strategy import run_fixed_program_step
 
-        strategy = FixedDt(dt)
-        self._temporal_restart_state.begin_run(
-            run_control_payload(strategy),
-            time=self._s.time(),
-            macro_step=self._s.macro_step(),
-        )
-        run_step_attempt(
-            self,
-            native_step_target(self),
-            strategy,
-            t_end=float(self._s.time()) + strategy.dt,
-        )
+        run_fixed_program_step(self, dt)
 
     def set_poisson(
         self,
@@ -179,35 +166,15 @@ class AmrSystem(
 
     def run(self, t_end, *, max_steps, output_dir=None, controls=None):
         """Advance up to ``t_end``; RuntimeInstance alone publishes ConsumerGraph effects."""
-        from pops.runtime._step_strategy import (
-            prepare_step_controller,
-            resolve_run_strategy,
-            run_control_payload,
-            run_step_attempt,
-        )
-        from pops.runtime._native_step_target import native_step_target
+        from pops.runtime._step_strategy import run_program_facade
 
-        strategy = resolve_run_strategy(self)
-        control_payload = run_control_payload(strategy, controls)
-        prepare_step_controller(self, strategy, controls)
-        self._temporal_restart_state.begin_run(
-            control_payload, time=self._s.time(), macro_step=self._s.macro_step()
-        )
-        from pops.runtime._run_manifest import begin_run
-
-        begin_run(
+        return run_program_facade(
             self,
-            t_end=t_end,
-            step_transaction=control_payload,
+            t_end,
             max_steps=max_steps,
             output_dir=output_dir,
+            controls=controls,
         )
-        step_target = native_step_target(self)
-        steps = 0
-        while self._s.time() < t_end and steps < max_steps:
-            run_step_attempt(self, step_target, strategy, t_end=float(t_end), controls=controls)
-            steps += 1
-        return steps
 
     def profile(self, profile: Any = None) -> Any:
         """Typed AMR / MPI profiling context manager (Spec 5 sec.12.5, criterion 43).

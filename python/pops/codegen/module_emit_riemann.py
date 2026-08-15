@@ -464,18 +464,24 @@ def _emit_roe_jacobian(model: Any, nc: Any, cse: Any) -> list:
     out.append("    if (%s) {" % apply_call)
     out += ["      d[%d] = out[%d];" % (i, i) for i in range(nc)]
     out.append("    } else {  // complexe/non converge : refus par le contrat residual natif")
-    out += ["      d[%d] = std::numeric_limits<pops::Real>::quiet_NaN();" % i
-            for i in range(nc)]
+    out += ["      d[%d] = std::numeric_limits<pops::Real>::quiet_NaN();" % i for i in range(nc)]
     out.append("    }")
     out += ["    return d;", "  }", ""]
     if not has_characteristic_no_inflow_provider(model):
         return out
     out.append("  // Prepared characteristic no-inflow: the same complete model Jacobian, oriented")
-    out.append("  // by the physical-face normal. Sonic modes are neutral; no model-specific fallback.")
+    out.append(
+        "  // by the physical-face normal. Sonic modes are neutral; no model-specific fallback."
+    )
+    out.append("  static constexpr int characteristic_no_inflow_contract_version = 1;")
+    out.append("  static constexpr int characteristic_no_inflow_dimension = dimension;")
+    out.append("  static constexpr int characteristic_no_inflow_components = n_vars;")
+    out.append("  static constexpr bool characteristic_no_inflow_conservative = true;")
     out.append("  POPS_HD bool characteristic_no_inflow(const State& interior, ")
     out.append("      const State& reference, int dir, int outward_sign, State& ghost) const {")
-    out += ["    const pops::Real %s = interior[%d];" % (c, i)
-            for i, c in enumerate(model.cons_names)]
+    out += [
+        "    const pops::Real %s = interior[%d];" % (c, i) for i, c in enumerate(model.cons_names)
+    ]
     out += _prim_block(model, live)
     out.append("    pops::Real A[%d][%d];" % (nc, nc))
     for ordinal, axis in enumerate(axes):
@@ -489,17 +495,13 @@ def _emit_roe_jacobian(model: Any, nc: Any, cse: Any) -> list:
         )
         out += temporaries
         for i in range(nc):
-            out += [
-                "      A[%d][%d] = %s;" % (i, j, expressions[i * nc + j])
-                for j in range(nc)
-            ]
+            out += ["      A[%d][%d] = %s;" % (i, j, expressions[i * nc + j]) for j in range(nc)]
         out.append("    }")
     out.append("    else {")
     out.append("      return false;")
     out.append("    }")
     out.append("    pops::Real jump[%d], incoming[%d];" % (nc, nc))
-    out += ["    jump[%d] = interior[%d] - reference[%d];" % (i, i, i)
-            for i in range(nc)]
+    out += ["    jump[%d] = interior[%d] - reference[%d];" % (i, i, i) for i in range(nc)]
     out.append(
         "    if (!pops::characteristic_incoming_apply(A, jump, incoming, outward_sign, "
         "80, static_cast<pops::Real>(1e-13), static_cast<pops::Real>(%s), %d))"

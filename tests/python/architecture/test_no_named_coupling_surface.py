@@ -69,9 +69,16 @@ def test_init_system_binds_no_named_coupling_and_internalizes_raw_abi():
 
 def test_init_amr_internalizes_raw_abi():
     src = _read(BINDINGS, "core/init/init_amr.cpp")
-    assert '"_add_coupled_source"' in src and '"add_coupled_source"' not in src, (
-        "the AMR raw coupled-source bytecode ABI must be INTERNAL (_add_coupled_source), ADC-595")
-    assert '"add_coupling_operator"' in src, "the AMR typed add_coupling_operator entry must be bound"
+    assert '"_add_coupled_source"' not in src
+    assert '"add_coupled_source"' not in src
+    assert '"add_coupling_operator"' not in src
+
+    amr_python = _read(POPS, "runtime/_amr_system.py")
+    add_coupling = amr_python.split("def add_coupling(self, coupling: Any) -> Any:", 1)[1].split(
+        "\n    @property", 1
+    )[0]
+    assert "raise NotImplementedError(" in add_coupling
+    assert "PreparedMultiBlockAmrHierarchy<Dim> coupling provider" in add_coupling
 
 
 def test_named_couplings_survive_only_as_preset_descriptors():

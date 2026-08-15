@@ -8,6 +8,10 @@ operator-first path. It has one runtime route:
 Model -> Case -> validate -> resolve(AMR) -> compile -> bind -> pops.run
 ```
 
+The normative physics is two-dimensional and derives that rank from the two coordinate vectors of
+`CartesianDomain(...).frame()`. The script does not select a fixed-rank frame constructor and does
+not advertise its 2D field/output qualification as an executed 1D or 3D route.
+
 The example does not select a named native time stepper or a separate AMR executor. Its executable
 acceptance path compares the manual `Program` and `pops.lib.time.IMEX` spelling node-for-node, checks
 their normalized semantic data and identity, then requires the same accepted runtime snapshot.

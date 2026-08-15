@@ -1,43 +1,31 @@
-// Verrou de non-regression du bug "finding 8" : acces fab(0) SANS garde local_size dans les
-// fermetures rhs_into / advance / max_speed des blocs natifs composes.
-//
-// System repartit UNE box unique en round-robin (DistributionMapping(1, n_ranks())), donc a np>1
-// un seul rang la possede ; les autres ont local_size()==0. Avant ce fix, les fermetures
-// rhs_into / advance / max_speed du chemin add_compiled_model appelaient copy_state(U, ...) /
-// write_state(U, ...) sans tester local_size() -> fab(0) hors-bornes -> crash UB silencieux ou
-// segfault sur les rangs vides.
-//
-// Ce test exerce System::add_compiled_model (chemin compile, fermetures type-erased) sous mpirun
-// -np {1,2,4} et exige :
-//   (a) aucun crash (fermetures no-op sur les rangs sans box) ;
-//   (b) resultat INVARIANT au nombre de rangs (la box vit sur rang 0 quel que soit np) ;
-//   (c) step() / step_cfl() COLLECTIFS (tous les rangs participent aux all_reduce internes).
-//
-// RAISONNEMENT COLLECTIF MPI : advance / max_speed gardent leur no-op local sur les rangs vides.
-// Le residual, lui, termine par un preflight natif collectif de finitude : eval_rhs() doit donc etre
-// appele par TOUS les rangs, comme step(), step_cfl() et mass(). Les rangs vides participent au
-// MPI_Allreduce puis renvoient naturellement un buffer local vide ; seul le proprietaire inspecte
-// les valeurs. Aucun communicateur factice ni branchement qui saute un collectif n'est permis.
-//
-// AVANT le fix : segfault / UB a np=2/4 sur les rangs sans box locale (rhs_into / advance /
-// max_speed dereferencaient fab(0) inexistant). APRES : np=1/2/4 verts, resultats identiques.
+// Exact-ranked collective System regression.  A single global patch is intentionally owned by
+// rank zero so every write/gather path has empty peers; no test-side local replica may mask a
+// missing collective payload transfer.
 
 #include <gtest/gtest.h>
 
-#include "explicit_system_program.hpp"
 #include "gtest_compat.hpp"
-#include <pops/physics/composition/composite.hpp>
-#include <pops/physics/bricks/hyperbolic.hpp>  // CartesianExBDrift (scalaire 1 var)
-#include <pops/physics/bricks/source.hpp>      // NoSource
+#include <pops/core/foundation/native_dimension.hpp>
+#include <pops/mesh/index/box.hpp>
+#include <pops/mesh/layout/box_array.hpp>
+#include <pops/mesh/layout/distribution.hpp>
+#include <pops/mesh/layout/rank_space.hpp>
+#include <pops/mesh/storage/multifab.hpp>
+#include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/numerics/spatial/primitives/wave_speed.hpp>
-#include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
-#include <pops/runtime/system.hpp>
-
 #include <pops/parallel/comm.hpp>
+#include <pops/runtime/builders/compiled/dsl_block.hpp>
+#include <pops/runtime/builders/compiled/generated_system_block.hpp>
+#include <pops/runtime/program/program_context.hpp>
+#include <pops/runtime/system.hpp>
+#include <pops/runtime/system/exact_field_marshaling.hpp>
 
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
+#include <numeric>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -47,154 +35,270 @@
 #include <mpi.h>
 #endif
 
-using namespace pops;
+namespace pops {
 
-// Brique elliptique nulle : Poisson avec second membre nul -> phi=0 -> pas de derive.
-// On teste l'avance en temps, pas la physique ; la densite reste uniforme.
-struct NoEll {
-  template <class State>
-  POPS_HD Real rhs(const State&) const {
-    return Real(0);
+template <int Dim, class Model>
+PreparedSystemBlock<Dim> prepare_exact_system_block(
+    CompiledSystemBlockPreparation<Dim, Model> request) {
+  return prepare_generated_system_block(std::move(request));
+}
+
+}  // namespace pops
+
+namespace {
+
+template <int Dim>
+struct ScalarAdvectionModel {
+  using Law = pops::nd::ScalarAdvection<Dim>;
+  using Schema = typename Law::Schema;
+  using State = typename Law::State;
+  using Primitive = typename Law::Primitive;
+
+  static constexpr int dimension = Dim;
+  static constexpr int n_vars = Law::n_vars;
+  static constexpr int n_providers = 0;
+  Law law{};
+
+  [[nodiscard]] static constexpr pops::PreparedProviderIdentity provider_identity() noexcept {
+    return {"test.mpi.system-gather-scatter.scalar", 1};
   }
+  void serialize_exact_parameters(pops::ExactContractBuilder& contract) const {
+    for (int axis = 0; axis < Dim; ++axis)
+      contract.scalar(law.velocity()[axis]);
+  }
+  static pops::VariableSet conservative_vars() {
+    return {pops::VariableKind::Conservative, {"u"}, 1, {pops::VariableRole::Scalar}};
+  }
+  static pops::VariableSet primitive_vars() {
+    return {pops::VariableKind::Primitive, {"u"}, 1, {pops::VariableRole::Scalar}};
+  }
+  POPS_HD pops::nd::StateConversion<Primitive> recover(const State& state) const {
+    return law.recover(state);
+  }
+  POPS_HD pops::nd::StateConversion<State> make_conservative(const Primitive& primitive) const {
+    return law.make_conservative(primitive);
+  }
+  POPS_HD pops::nd::StateConversionStatus admissibility(const State& state) const {
+    return law.admissibility(state);
+  }
+  template <int Axis>
+  POPS_HD State flux(const State& state) const {
+    return law.template flux<Axis>(state);
+  }
+  template <int Axis>
+  POPS_HD pops::Real max_wave_speed(const State& state) const {
+    return law.template max_wave_speed<Axis>(state);
+  }
+  template <int Axis>
+  POPS_HD void wave_speeds(const State& state, pops::Real& lower, pops::Real& upper) const {
+    law.template wave_speeds<Axis>(state, lower, upper);
+  }
+  POPS_HD State source(const State&, const pops::ProviderValues<0>&) const { return {}; }
+  POPS_HD pops::Real elliptic_rhs(const State&) const { return pops::Real(0); }
 };
-// Modele scalaire : transport E x B (vitesse nulle ici car phi=0) + source nulle + elliptic nul.
-using ScalarModel = CompositeModel<CartesianExBDrift, NoSource, NoEll>;
 
+template <int Dim>
+ScalarAdvectionModel<Dim> scalar_advection_model() {
+  pops::RealVector<Dim> velocity{};
+  for (int axis = 0; axis < Dim; ++axis)
+    velocity[axis] = axis == 0 ? pops::Real(0.25) : pops::Real(0);
+  return {pops::nd::ScalarAdvection<Dim>::prepare(velocity)};
+}
+
+template <int Dim>
+pops::SystemConfig<Dim> one_patch_config(int cells_per_axis) {
+  pops::SystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = cells_per_axis;
+    config.lower[axis] = pops::Real(0);
+    config.upper[axis] = pops::Real(1);
+    config.periodicity[axis] = true;
+  }
+  return config;
+}
+
+template <int Dim>
+std::size_t cell_count(const pops::Extent<Dim>& extent) {
+  std::size_t result = 1;
+  for (int axis = 0; axis < Dim; ++axis)
+    result *= static_cast<std::size_t>(extent[axis]);
+  return result;
+}
+
+template <int Dim>
+std::vector<double> gather_distributed_scalar_state(pops::System<Dim>& system, const char* name,
+                                                     const pops::SystemConfig<Dim>& config) {
+  const pops::Box<Dim> domain = config.index_domain();
+  const std::vector<double> local = system.get_state(name);
+  std::vector<double> global(cell_count(config.shape), 0.0);
+  std::size_t local_offset = 0;
+  for (const pops::Box<Dim>& local_box : system.local_boxes(name))
+    pops::runtime::system::marshaling::for_each_host_index(
+        local_box, [&](const pops::Index<Dim>& index, std::size_t) {
+          if (local_offset >= local.size())
+            throw std::runtime_error("local System state does not match its ranked patch geometry");
+          global[pops::runtime::system::marshaling::domain_ordinal(domain, index)] =
+              local[local_offset++];
+        });
+  if (local_offset != local.size())
+    throw std::runtime_error("local System state has trailing values after ranked marshaling");
+  pops::all_reduce_sum_inplace(global.data(), global.size());
+  return global;
+}
+
+template <int Dim>
 struct DirectDtProbe {
-  using State = StateVec<1>;
+  using State = pops::StateVec<1>;
+  static constexpr int dimension = Dim;
   static constexpr int n_vars = 1;
-  Real value;
+  pops::Real value;
 
-  POPS_HD Real stability_dt(const State&, const ProviderValues<0>&) const { return value; }
+  POPS_HD pops::Real stability_dt(const State&) const { return value; }
 };
 
-static int pops_run_test_mpi_system_gather_scatter(int argc, char** argv) {
-  comm_init(&argc, &argv);
+template <int Dim>
+void install_forward_euler_program(pops::System<Dim>& system) {
+  std::vector<int> block_map(static_cast<std::size_t>(system.n_blocks()));
+  std::iota(block_map.begin(), block_map.end(), 0);
+  system.set_program_block_map(block_map);
+
+  pops::runtime::program::ProgramContext<Dim> context(&system);
+  context.configure_primary_clock("test.clock.macro");
+  context.install([context](double dt) {
+    context.begin_step(dt);
+    context.set_stage_time(0, 1);
+    (void)pops::consume_solve_outcome(context.solve_fields());
+
+    std::vector<pops::MultiFab<Dim>*> states;
+    std::vector<pops::MultiFab<Dim>*> next_states;
+    states.reserve(static_cast<std::size_t>(context.n_blocks()));
+    next_states.reserve(static_cast<std::size_t>(context.n_blocks()));
+    for (int block = 0; block < context.n_blocks(); ++block) {
+      pops::MultiFab<Dim>& state = context.state(block);
+      pops::MultiFab<Dim>& residual = context.rhs_scratch(1000 + block, 0, state);
+      pops::MultiFab<Dim>& next = context.scratch_state(2000 + block, 0, state);
+      context.rhs_into(block, state, residual, 3000 + block);
+      context.lincomb(next, pops::Real(1), state, pops::Real(dt), residual);
+      states.push_back(&state);
+      next_states.push_back(&next);
+    }
+    for (std::size_t block = 0; block < states.size(); ++block)
+      context.lincomb(*states[block], pops::Real(0), *states[block], pops::Real(1),
+                      *next_states[block]);
+  });
+  system.set_program_block_map(block_map);
+}
+
+int pops_run_test_mpi_system_gather_scatter(int argc, char** argv) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::comm_init(&argc, &argv);
 #if defined(POPS_HAS_KOKKOS)
   Kokkos::ScopeGuard guard(argc, argv);
 #endif
-  const int me = my_rank(), np = n_ranks();
-  long fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("[rank %d/%d] FAIL %s\n", me, np, w);
-      ++fails;
+  const int rank = pops::my_rank();
+  const int ranks = pops::n_ranks();
+  long failures = 0;
+  const auto check = [&](bool condition, const char* what) {
+    if (!condition) {
+      std::printf("[rank %d/%d] FAIL %s\n", rank, ranks, what);
+      ++failures;
     }
   };
 
-  const int n = 16;
-  const double rho0 = 1.5, dt = 0.01;
-  const int nsteps = 5;
-  const std::size_t nn = static_cast<std::size_t>(n) * n;
+  const int cells_per_axis = 16;
+  const double density = 1.5;
+  const double dt = 0.01;
+  const int steps = 5;
+  const pops::SystemConfig<Dim> config = one_patch_config<Dim>(cells_per_axis);
+  const std::size_t cells = cell_count(config.shape);
 
-  SystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
+  pops::System<Dim> system(config);
+  system.install_block_state_route("u", "test.mpi.system-gather-scatter/u/state@1");
+  pops::add_compiled_model<Dim>(system, "u", scalar_advection_model<Dim>(), "none", "rusanov",
+                                "conservative", "explicit");
+  system.set_poisson("composite", "cartesian_cg");
+  install_forward_euler_program(system);
 
-  System sys(cfg);
-  // add_compiled_model branche les fermetures natives rhs_into / advance / max_speed : ce sont
-  // exactement les sites du finding 8.
-  add_compiled_model(sys, "u", ScalarModel{}, "none", "rusanov", "conservative", "explicit");
-  sys.set_poisson("composite", "geometric_mg");
-  test::install_forward_euler_program(sys);
+  // set_state authenticates and scatters one global component-major image.  Every rank enters the
+  // operation even though only rank zero owns the sole patch.
+  system.set_state("u", std::vector<double>(cells, density));
+  const std::vector<double> scattered = gather_distributed_scalar_state(system, "u", config);
+  bool scatter_preserved = scattered.size() == cells;
+  for (double value : scattered)
+    scatter_preserved = scatter_preserved && value == density;
+  check(scatter_preserved, "global scatter and gather preserve the initialized image");
 
-  // Init uniforme sur le rang proprietaire (box 0 = rang 0 sous DistributionMapping(1, np)).
-  // Les rangs vides ne touchent rien (set_density itere local_size() = 0 -> no-op).
-  const bool owns = (me == 0);
-  if (owns) {
-    sys.set_density("u", std::vector<double>(nn, rho0));
+  for (int step = 0; step < steps; ++step)
+    system.step(dt);
+
+  const double dt_cfl = system.step_cfl(0.5);
+  check(std::isfinite(dt_cfl) && dt_cfl > 0, "cfl step is collective and finite");
+
+  // eval_rhs performs its finite-value preflight collectively; empty ranks must participate and
+  // return their natural empty local image rather than taking a local-only route.
+  const std::vector<double> residual = system.eval_rhs("u");
+  if (rank == 0) {
+    bool residual_finite = residual.size() == cells;
+    for (double value : residual)
+      residual_finite = residual_finite && std::isfinite(value);
+    check(residual_finite, "owner residual is finite");
   }
 
-  // --- Exerce les 3 chemins du finding 8 sur TOUS les rangs ---
-  //
-  // (1) step() : appelle solve_fields (collectif) puis s.advance(U, dt, nsub) sur TOUS les rangs.
-  //     advance (finding 8, chemin compile) appelle copy_state / write_state sans garde -> crash
-  //     hors-bornes sur les rangs vides avant le fix. APRES : no-op sur les rangs vides.
-  for (int s = 0; s < nsteps; ++s)
-    sys.step(dt);
+  const std::vector<double> advanced = gather_distributed_scalar_state(system, "u", config);
+  bool state_finite = advanced.size() == cells;
+  for (double value : advanced)
+    state_finite = state_finite && std::isfinite(value) && std::fabs(value - density) < 1e-10;
+  check(state_finite, "global gathered state remains uniform after collective steps");
 
-  // (2) step_cfl(cfl) : appelle s.max_speed(U) sur TOUS les rangs, puis all_reduce_max du dt CFL
-  //     (collectif, APRES les max_speed). max_speed (finding 8) appelait copy_state sans garde.
-  //     APRES : no-op sur les rangs vides, 0 local -> l'all_reduce prend le vrai max du proprietaire.
-  const double dt_cfl = sys.step_cfl(0.5);
-  chk(std::isfinite(dt_cfl) && dt_cfl > 0, "dt_cfl_valide");
-  // dt_cfl INVARIANT en np : la box vit sur rang 0 quel que soit np ; le max_speed du proprietaire
-  // est diffuse par all_reduce_max -> meme dt_cfl sur tous les rangs (seul rang 0 a une vraie vitesse,
-  // les autres contribuent 0 a l'all_reduce, sans impact sur le max).
-  chk(std::isfinite(dt_cfl), "dt_cfl_fini");
+  const double total_mass = system.mass("u");
+  check(std::isfinite(total_mass), "mass reduction is finite");
+  check(std::fabs(total_mass - density * static_cast<double>(cells)) < 1e-9,
+        "mass reduction preserves the globally scattered state");
 
-  // (3) eval_rhs() exerce rhs_into (finding 8) : copie U -> applique le residu -> preflight
-  //     collectif de finitude -> copie retour. Tous les rangs doivent entrer dans ce contrat ; le
-  //     resultat n'est inspecte que par le rang proprietaire.
-  const std::vector<double> R = sys.eval_rhs("u");
-  if (owns) {
-    bool rfin = (R.size() == nn);
-    for (double r : R)
-      rfin = rfin && std::isfinite(r);
-    chk(rfin, "rhs_fini");
+  pops::Extent<Dim> reduction_extent{};
+  pops::Extent<Dim> process_extent{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    reduction_extent[axis] = 2;
+    process_extent[axis] = 1;
   }
-
-  // --- Verification du resultat physique (etat uniforme reste uniforme : transport nul, phi=0) ---
-  // Appelee UNIQUEMENT sur le rang proprietaire (densite stockee localement).
-  if (owns) {
-    const std::vector<double> d = sys.density("u");
-    chk(d.size() == nn, "densite_taille");
-    bool finite = true;
-    double dmin = d[0], dmax = d[0];
-    for (double v : d) {
-      finite = finite && std::isfinite(v);
-      if (v < dmin)
-        dmin = v;
-      if (v > dmax)
-        dmax = v;
-    }
-    chk(finite, "densite_finie");
-    // etat uniforme, phi=0 -> transport nul -> densite INCHANGEE (a la precision machine).
-    chk(std::fabs(dmin - rho0) < 1e-10, "densite_min_invariante");
-    chk(std::fabs(dmax - rho0) < 1e-10, "densite_max_invariante");
-    std::printf("[rank %d/%d] np=%d  rho_min=%.12f  rho_max=%.12f  dt_cfl=%.6e\n", me, np, np, dmin,
-                dmax, dt_cfl);
-  }
-
-  // mass() est COLLECTIVE (sum -> all_reduce) : TOUS les rangs l'appellent (sinon interblocage).
-  // La masse totale = rho0 * n*n INDEPENDANTE de np (la box vit toujours sur rang 0).
-  const double mtot = sys.mass("u");
-  chk(std::isfinite(mtot), "masse_finie");
-  chk(std::fabs(mtot - rho0 * static_cast<double>(nn)) < 1e-9, "masse_conservee");
-
-  // A direct model dt is also a native collective.  Only rank zero owns this one-box field; an
-  // invalid value observed there must make every empty peer reject at the same MPI_Allreduce, not
-  // return a different step or wait in a later collective.
-  const Box2D reduction_box = Box2D::from_extents(2, 2);
-  const BoxArray reduction_boxes(std::vector<Box2D>{reduction_box});
-  const DistributionMapping reduction_owners(1, np);
-  MultiFab reduction_state(reduction_boxes, reduction_owners, 1, 0);
-  reduction_state.set_val(Real(1));
+  process_extent[0] = ranks;
+  const pops::Box<Dim> reduction_box = pops::Box<Dim>::from_extents(reduction_extent);
+  const pops::mesh::BoxArray<Dim> reduction_boxes(std::vector<pops::Box<Dim>>{reduction_box});
+  const pops::mesh::RankSpace<Dim> rank_space(pops::Index<Dim>{}, process_extent);
+  const pops::mesh::Distribution<Dim> reduction_owners = pops::mesh::Distribution<Dim>::partitioned(
+      reduction_boxes, rank_space, {rank_space.coordinate(0)});
+  pops::MultiFab<Dim> reduction_state(reduction_boxes, reduction_owners,
+                                      rank_space.coordinate(static_cast<std::size_t>(rank)), 1,
+                                      pops::Extent<Dim>{});
+  reduction_state.set_val(pops::Real(1));
 
   bool rejected_invalid_dt = false;
   try {
-    (void)min_stability_dt_mf(DirectDtProbe{me == 0 ? Real(0) : Real(1)}, reduction_state);
+    (void)pops::nd::min_stability_dt_mf(
+        DirectDtProbe<Dim>{rank == 0 ? pops::Real(0) : pops::Real(1)}, reduction_state);
   } catch (const std::domain_error&) {
     rejected_invalid_dt = true;
   }
-  chk(rejected_invalid_dt, "stability_dt_invalide_rejetee_collectivement");
+  check(rejected_invalid_dt, "invalid stability bound is rejected collectively");
 
-  const Real direct_dt = min_stability_dt_mf(DirectDtProbe{Real(0.25)}, reduction_state);
-  chk(direct_dt == Real(0.25), "stability_dt_valide_diffusee_aux_rangs_vides");
+  const pops::Real direct_dt =
+      pops::nd::min_stability_dt_mf(DirectDtProbe<Dim>{pops::Real(0.25)}, reduction_state);
+  check(direct_dt == pops::Real(0.25), "valid stability bound is reduced to every empty peer");
 
 #ifdef POPS_HAS_MPI
-  if (np > 1) {
-    long g = 0;
-    MPI_Allreduce(&fails, &g, 1, MPI_LONG, MPI_SUM, MPI_COMM_WORLD);
-    fails = g;
+  if (ranks > 1) {
+    long global_failures = 0;
+    MPI_Allreduce(&failures, &global_failures, 1, MPI_LONG, MPI_SUM, MPI_COMM_WORLD);
+    failures = global_failures;
   }
 #endif
-  if (me == 0 && fails == 0)
-    std::printf("OK test_mpi_system_gather_scatter (np=%d)\n", np);
-  comm_finalize();
-  return fails == 0 ? 0 : 1;
+  if (rank == 0 && failures == 0)
+    std::printf("OK test_mpi_system_gather_scatter (np=%d dim=%d)\n", ranks, Dim);
+  pops::comm_finalize();
+  return failures == 0 ? 0 : 1;
 }
+
+}  // namespace
 
 TEST(test_mpi_system_gather_scatter, Runs) {
   EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_mpi_system_gather_scatter,

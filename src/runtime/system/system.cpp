@@ -32,13 +32,17 @@ System<Dim>::System(const SystemConfig<Dim>& config) {
 }
 
 template <int Dim>
-System<Dim>::~System() = default;
+System<Dim>::~System() {}
 
 template <int Dim>
-System<Dim>::System(System&&) noexcept = default;
+System<Dim>::System(System&& other) noexcept : p_(std::move(other.p_)) {}
 
 template <int Dim>
-System<Dim>& System<Dim>::operator=(System&&) noexcept = default;
+System<Dim>& System<Dim>::operator=(System&& other) noexcept {
+  if (this != &other)
+    p_ = std::move(other.p_);
+  return *this;
+}
 
 template <int Dim>
 void System<Dim>::step(double dt) {

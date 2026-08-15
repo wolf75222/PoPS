@@ -6,14 +6,13 @@ Python value object for ``_pops.capability_report()``), the lazy ``_pops`` bridg
 route-row builders (``_support_rows`` / ``_inventory_rows`` / ``_row``) and the
 public ``native_capability_report`` / ``native_capability_matrix`` entry points.
 Split out of ``_capabilities`` for the 500-line cap; ``pops._capabilities``
-re-exports every name here. ``_pops`` is imported LAZILY so this module stays
-importable without a compiled extension.
+re-exports every name here. The already-selected ``_pops`` module is read lazily,
+so this module stays importable before native rank selection.
 """
 
 from __future__ import annotations
 
 import json
-import importlib
 from collections.abc import Mapping
 from typing import Any
 
@@ -24,6 +23,7 @@ from pops._capabilities_common import (
     _status_from_flag,
     _unsupported_error,
 )
+from pops._native_selector import selected_native_module
 
 
 class NativeCapabilityReportError(RuntimeError):
@@ -31,29 +31,22 @@ class NativeCapabilityReportError(RuntimeError):
 
 
 def _native_extension() -> Any:
-    """Load the native extension, returning ``None`` only when it is truly absent.
+    """Return the selected native extension, or ``None`` before rank selection.
 
-    An import error *inside* an installed extension is evidence of a broken native route, not an
-    optional-source-only installation.  Preserve it so callers never turn a failed native report
-    into an ``unknown`` capability matrix.
+    Selection and loading belong exclusively to :mod:`pops._native_selector`; capability reporting
+    must never infer a spatial rank from an importable extension.
     """
-    for name in ("_pops", "pops._pops"):
-        try:
-            return importlib.import_module(name)
-        except ModuleNotFoundError as exc:
-            if exc.name != name:
-                raise
-    return None
+    return selected_native_module(required=False)
 
 
 def _module_capabilities(target: str = "module") -> Any:
     """The C++ authoritative capability dict, or ``None`` for a source-only install.
 
-    Lazily imports ``_pops`` (top-level then ``pops._pops``, mirroring the codegen toolchain) so the
-    module import graph stays acyclic and the catalog walk works with no compiled module present.
-    ``None`` means the extension is absent.  A loaded extension must expose and successfully call
-    ``module_capabilities``; an old, broken, or malformed native route is an error, never an
-    indistinguishable ``unknown`` fallback.
+    Reads the process-selected ``_pops`` module without loading or inferring a dimension, so the
+    module import graph stays acyclic and the catalog walk works before native rank selection.
+    ``None`` means no extension has been selected.  A selected extension must expose and
+    successfully call ``module_capabilities``; an old, broken, or malformed native route is an
+    error, never an indistinguishable ``unknown`` fallback.
     """
     mod = _native_extension()
     if mod is None:
@@ -407,19 +400,20 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             gpu=False,
             status="partial",
             limitation=(
-                "2D Cartesian conservative constant/RuntimeParam fixed-reference no-inflow uses "
-                "the exact compiled "
-                "flux-Jacobian provider emitted by m.roe_from_jacobian() (1..16 components); "
-                "the Kokkos kernel projects only outward-normal incoming modes, treats the "
-                "scale-relative sonic subspace as neutral, preflights the real spectrum "
-                "collectively, and rolls back ghosts on refusal; primitive/analytic references, "
-                "runtime/field-dependent eigenstructure, sonic-error policy, 3D, polar/embedded "
-                "geometry, and qualified MPI/GPU execution remain unavailable"
+                "compile-time-ranked 1D/2D/3D Cartesian conservative constant/RuntimeParam "
+                "fixed-reference no-inflow uses the exact callable flux-Jacobian provider emitted "
+                "by m.roe_from_jacobian() (1..16 components); one axis/side-generic Kokkos "
+                "transaction projects only outward-normal incoming modes, treats the "
+                "scale-relative sonic subspace as neutral, validates every candidate ghost, and "
+                "publishes the complete boundary image only after success; missing/incompatible "
+                "providers plus rejected or non-finite candidates fail before publication; "
+                "primitive/analytic references, runtime/field-dependent eigenstructure, "
+                "sonic-error policy, polar/embedded geometry, and qualified MPI/GPU execution "
+                "remain unavailable"
             ),
             requested="characteristic no-inflow/outflow transport boundary",
             available_route=(
-                "Inflow(state=U, value=U_ref, "
-                "characteristic=model_characteristic_no_inflow(U))"
+                "Inflow(state=U, value=U_ref, characteristic=model_characteristic_no_inflow(U))"
             ),
             alternative=(
                 "use fixed-state inflow/extrapolated outflow outside the qualified envelope"
@@ -512,12 +506,9 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
                 "advances, while polar geometry is refused and block/team counters, MPI fallback "
                 "reduction, GPU qualification, restart metadata, and a benchmark gate remain"
             ),
-            requested=(
-                "prepared Riemann recovery chain with requested/used solver diagnostics"
-            ),
+            requested=("prepared Riemann recovery chain with requested/used solver diagnostics"),
             available_route=(
-                "pops.numerics.riemann.Recovery(primary=Roe(), "
-                "fallbacks=(HLL(), Rusanov()))"
+                "pops.numerics.riemann.Recovery(primary=Roe(), fallbacks=(HLL(), Rusanov()))"
             ),
             alternative=(
                 "select one supported Riemann route explicitly and consume rejection through "
@@ -588,36 +579,29 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
         _row(
             "amr:cell_local_temporal_transport",
             layout="amr",
-            backend="production",
+            backend="none",
             platform="host",
             mpi=False,
             gpu=False,
-            status="partial",
+            status="unavailable",
             limitation=(
-                "Program.cell_local_time and its generated AmrProgramContext route cover one "
-                "serial host rank, one 2D block, one level, one owned box, one common cell rung, "
-                "transport-only forward Euler and frozen attempt auxiliary fields with built-in "
-                "periodic/Foextrap boundaries; the provider reuses the exact compiled AMR "
-                "residual/face-flux closure "
-                "and commits real conservative state plus four time-integrated face records per "
-                "cell as one accepted transaction at the synchronization barrier; its exact "
-                "contract includes model-owned transport parameters and the limiter/Riemann route; "
-                "same-topology restart restores numerical state and exact clocks but intentionally "
-                "invalidates the last-interval diagnostic flux ledger until another accepted step; "
-                "prepared physical-boundary plans, heterogeneous rungs, multi-box/multilevel and "
-                "coarse/fine ledgers, sources, MPI, GPU, regrid/rank-change rematerialization, "
-                "checkpoint persistence of the diagnostic ledger and performance proof remain "
-                "unavailable"
+                "Program.cell_local_time lowers calls to AmrProgramContext, but both "
+                "prepare_same_level_cell_temporal_execution and "
+                "advance_same_level_cell_temporal are explicit noreturn refusals reporting that "
+                "no prepared cell-local AMR temporal provider exists; consequently no public "
+                "AmrSystem install-to-execute route can publish conservative state or a "
+                "space-time flux ledger. A standalone exact-ranked provider test exercises one "
+                "algorithm in dimensions 1, 2, and 3, but it is not an AmrProgramContext runtime "
+                "capability"
             ),
             requested="prepared cell-local scientific stage and space-time flux transaction",
             available_route=(
-                "Program.cell_local_time plus the generated AmrProgramContext and native "
-                "PreparedSameLevelTransportEulerStageFluxProvider in their exact bounded "
-                "host/serial same-rung envelope"
+                "standalone exact-ranked PreparedSameLevelTransportEulerStageFluxProvider "
+                "qualification outside the public AMR Program runtime"
             ),
             alternative=(
-                "use the synchronous AMR Program route outside that envelope, or implement the "
-                "missing prepared local-time provider family"
+                "use the synchronous AMR Program route, or implement and qualify the missing "
+                "AmrProgramContext cell-local provider and transactional publication path"
             ),
             source=source,
         ),

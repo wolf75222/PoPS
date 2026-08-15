@@ -84,7 +84,7 @@ POPS_HD StateConversion<typename Model::State> reconstruct_conservative(
       face[component] = reconstruction.cell_face_value(center);
     } else if constexpr (SlopeReconstruction<Reconstruction>) {
       face[component] =
-          center + Real(0.5) * Real(Orientation) *
+          center + Real(0.5) *
                        reconstruction.limited_slope(center - sample(-1), sample(1) - center);
     } else {
       face[component] = reconstruction.stencil_face_value(sample);
@@ -120,7 +120,7 @@ POPS_HD StateConversion<typename Model::State> reconstruct_primitive(
     for (int component = 0; component < Model::n_vars; ++component)
       face[component] =
           center.value[component] +
-          Real(0.5) * Real(Orientation) *
+          Real(0.5) *
               reconstruction.limited_slope(center.value[component] - lower.value[component],
                                            upper.value[component] - center.value[component]);
     return model.make_conservative(face);

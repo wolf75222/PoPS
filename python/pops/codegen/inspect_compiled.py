@@ -20,10 +20,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-import importlib
 import math
 from typing import Any
 
+from pops._native_selector import selected_native_module
 from pops.codegen._artifact_models import (
     aggregate_model_metadata as _model_metadata,
     artifact_model_metadata as _artifact_model_metadata,
@@ -60,18 +60,15 @@ class _MemoryLayoutContext:
 
 def _native_memory_context() -> _MemoryRuntimeContext:
     """Read native precision/rank facts; an absolute estimate has no source-only mode."""
-    mod = None
-    for name in ("_pops", "pops._pops"):
-        try:
-            mod = importlib.import_module(name)
-            break
-        except ModuleNotFoundError as exc:
-            if exc.name != name:
-                raise
-    if mod is None:
+    try:
+        mod = selected_native_module(required=True)
+    except RuntimeError as exc:
         raise MemoryEstimateCapabilityError(
-            "estimate_memory requires _pops.runtime_environment_report(): absolute byte precision is "
-            "unknown in a source-only installation", field="runtime.precision")
+            "estimate_memory requires _pops.runtime_environment_report() from a successfully "
+            "selected native dimension: %s" % exc,
+            field="runtime.precision",
+        ) from exc
+    assert mod is not None
     fn = getattr(mod, "runtime_environment_report", None)
     if not callable(fn):
         raise MemoryEstimateCapabilityError(

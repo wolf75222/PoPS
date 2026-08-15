@@ -5,6 +5,8 @@
 
 #include <pops/core/foundation/types.hpp>
 #include <pops/mesh/execution/for_each.hpp>
+#include <pops/mesh/layout/refinement.hpp>
+#include <pops/mesh/parallel/region_transfer.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace.hpp>
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>
@@ -17,6 +19,7 @@
 #include <pops/runtime/program/clock_schedule.hpp>
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
+#include <pops/runtime/program/same_level_cell_temporal_provider.hpp>
 #include <pops/runtime/system/provider_storage_binding.hpp>
 
 #include <algorithm>
@@ -73,13 +76,23 @@ class AmrProgramContext {
   using runtime_type = ::pops::runtime::amr::AmrRuntime<Dim, MemorySpace>;
   using hierarchy_type = typename runtime_type::hierarchy_type;
   using field_type = typename runtime_type::field_type;
+  using level_evaluation_type = typename facade_type::PreparedLevelEvaluation;
   using runtime_state_type = ProgramRuntimeState<Dim>;
   using scalar_boundary_session_type = PreparedScalarBoundarySession<Dim>;
   using subcycle_plan_type = ::pops::numerics::time::amr::PreparedAmrSubcyclePlan<Dim, MemorySpace>;
+  using reflux_payload_type = std::vector<Real>;
+  using multiblock_subcycling_type =
+      ::pops::numerics::time::amr::PreparedMultiBlockAmrSubcyclingEngine<Dim, reflux_payload_type,
+                                                                         MemorySpace>;
+  using multiblock_level_group_type = typename multiblock_subcycling_type::LevelAdvanceGroup;
+  using multiblock_reflux_context_type = typename multiblock_subcycling_type::RefluxContext;
+  using multiblock_flux_ledger_type = typename multiblock_subcycling_type::ledger_type;
+  using flux_expression_budget_type = typename facade_type::PreparedAmrProgramFluxExpressionBudget;
   using hierarchy_tensor_provider_type = HierarchyTensorSolverProvider<Dim, MemorySpace>;
   using hierarchy_tensor_registry_type = HierarchyTensorSolverProviderRegistry<Dim, MemorySpace>;
   using hierarchy_tensor_solver_type = PreparedHierarchyTensorSolver<Dim, MemorySpace>;
   using hierarchy_tensor_request_type = HierarchyTensorSolverBuildRequest<Dim>;
+  using cell_temporal_ledger_type = SameLevelCellIntegratedFluxLedger<Dim>;
 
   struct ProgramResourceTopology {
     int levels = 0;
@@ -128,11 +141,25 @@ class AmrProgramContext {
   class LogicalEvaluationScope {
    public:
     LogicalEvaluationScope(const AmrProgramContext& owner, int iteration, int count)
-        : owner_(&owner), prior_dt_(owner.current_dt_), prior_substep_(owner.logical_substep_) {
+        : owner_(&owner),
+          prior_dt_(owner.current_dt_),
+          prior_interval_start_time_(owner.current_interval_start_time_),
+          prior_interval_begin_phase_(owner.current_interval_begin_phase_),
+          prior_interval_end_phase_(owner.current_interval_end_phase_),
+          prior_substep_(owner.logical_substep_) {
       if (iteration < 0 || count < 1 || iteration >= count || !std::isfinite(prior_dt_) ||
           !(prior_dt_ > 0.0))
         throw std::invalid_argument("AMR logical evaluation scope is invalid");
       owner_->current_dt_ = prior_dt_ / static_cast<double>(count);
+      owner_->current_interval_start_time_ =
+          prior_interval_start_time_ + static_cast<double>(iteration) * owner_->current_dt_;
+      const ::pops::amr::Rational span = prior_interval_end_phase_ - prior_interval_begin_phase_;
+      owner_->current_interval_begin_phase_ =
+          prior_interval_begin_phase_ +
+          span * ::pops::amr::Rational(iteration, static_cast<std::int64_t>(count));
+      owner_->current_interval_end_phase_ =
+          prior_interval_begin_phase_ +
+          span * ::pops::amr::Rational(iteration + 1, static_cast<std::int64_t>(count));
       owner_->logical_substep_ = iteration;
     }
     LogicalEvaluationScope(const LogicalEvaluationScope&) = delete;
@@ -140,10 +167,16 @@ class AmrProgramContext {
     LogicalEvaluationScope(LogicalEvaluationScope&& other) noexcept
         : owner_(std::exchange(other.owner_, nullptr)),
           prior_dt_(other.prior_dt_),
+          prior_interval_start_time_(other.prior_interval_start_time_),
+          prior_interval_begin_phase_(other.prior_interval_begin_phase_),
+          prior_interval_end_phase_(other.prior_interval_end_phase_),
           prior_substep_(other.prior_substep_) {}
     ~LogicalEvaluationScope() {
       if (owner_ != nullptr) {
         owner_->current_dt_ = prior_dt_;
+        owner_->current_interval_start_time_ = prior_interval_start_time_;
+        owner_->current_interval_begin_phase_ = prior_interval_begin_phase_;
+        owner_->current_interval_end_phase_ = prior_interval_end_phase_;
         owner_->logical_substep_ = prior_substep_;
       }
     }
@@ -152,6 +185,9 @@ class AmrProgramContext {
    private:
     const AmrProgramContext* owner_ = nullptr;
     double prior_dt_ = 0.0;
+    double prior_interval_start_time_ = 0.0;
+    ::pops::amr::Rational prior_interval_begin_phase_{0, 1};
+    ::pops::amr::Rational prior_interval_end_phase_{1, 1};
     int prior_substep_ = 0;
   };
 
@@ -185,7 +221,15 @@ class AmrProgramContext {
   const ::pops::amr::hierarchy::LevelLayout<Dim>& layout(std::size_t selected) const {
     return runtime_->hierarchy().layout(selected);
   }
-  field_type& state(std::size_t selected) const { return runtime_->hierarchy().state(selected); }
+  field_type& state(std::size_t selected) const {
+    if (!active_attempt_states_.empty()) {
+      if (selected != static_cast<std::size_t>(active_level_) ||
+          active_attempt_states_.front() == nullptr)
+        throw std::out_of_range("AMR Program attempt state lies outside the prepared hierarchy");
+      return *active_attempt_states_.front();
+    }
+    return runtime_->hierarchy().state(selected);
+  }
 
   ::pops::runtime::amr::PreparedTaggerCandidates<Dim> execute_prepared_tagging(
       int parent_level) const {
@@ -292,6 +336,9 @@ class AmrProgramContext {
     if (!std::isfinite(dt) || !(dt > 0.0))
       throw std::invalid_argument("AMR Program step requires a finite positive dt");
     current_dt_ = dt;
+    current_interval_start_time_ = facade_ == nullptr ? 0.0 : facade_->time();
+    current_interval_begin_phase_ = {0, 1};
+    current_interval_end_phase_ = {1, 1};
     stage_time_ = ::pops::amr::Rational(0, 1);
     logical_substep_ = 0;
   }
@@ -324,31 +371,116 @@ class AmrProgramContext {
             .stage = stage,
             .stage_fraction = stage_time_,
             .dt = current_dt_,
-            .physical_time = facade_->time() + stage_time_.value() * current_dt_};
+            .physical_time = current_interval_start_time_ + stage_time_.value() * current_dt_};
   }
 
   template <class Body>
   void advance_hierarchy(double dt, Body&& body) const {
-    begin_step(dt);
-    refresh_resources_();
-    require_single_level_conservative_route_("advance_hierarchy");
-    with_program_resource_level(0, [&] { std::forward<Body>(body)(dt); });
+    advance_prepared_hierarchy_(dt, std::forward<Body>(body), "advance_hierarchy");
   }
 
   template <class Body>
   void advance_synchronized_hierarchy(double dt, Body&& body) const {
-    begin_step(dt);
-    refresh_resources_();
-    require_single_level_conservative_route_("advance_synchronized_hierarchy");
-    with_program_resource_level(0, [&] { std::forward<Body>(body)(dt); });
+    advance_prepared_hierarchy_(dt, std::forward<Body>(body), "advance_synchronized_hierarchy");
   }
 
-  [[noreturn]] void prepare_same_level_cell_temporal_execution(std::string, std::int64_t,
-                                                               int = 0) const {
-    unavailable_("cell-local AMR temporal provider");
+  [[nodiscard]] std::uint64_t topology_epoch() const noexcept { return runtime_->topology_epoch(); }
+  [[nodiscard]] std::uint64_t materialization_generation() const noexcept {
+    return runtime_->materialization_generation();
   }
-  [[noreturn]] void advance_same_level_cell_temporal(double) const {
-    unavailable_("cell-local AMR temporal provider");
+  [[nodiscard]] std::size_t same_level_cell_block_count() const noexcept {
+    return facade_ == nullptr ? 0 : facade_->program_block_map().size();
+  }
+  [[nodiscard]] int same_level_cell_level_count() const noexcept {
+    return static_cast<int>(runtime_->hierarchy().num_levels());
+  }
+  [[nodiscard]] field_type& same_level_cell_state(int selected) noexcept {
+    if (!active_attempt_states_.empty())
+      return *active_attempt_states_.front();
+    return runtime_->hierarchy().state(static_cast<std::size_t>(selected));
+  }
+  [[nodiscard]] const Geometry<Dim>& same_level_cell_geometry(int selected) const noexcept {
+    return cell_temporal_geometries_[static_cast<std::size_t>(selected)];
+  }
+  [[nodiscard]] const std::array<bool, Dim>& same_level_cell_periodicity() const noexcept {
+    return cell_temporal_periodicity_;
+  }
+  [[nodiscard]] std::string_view same_level_cell_state_identity() const noexcept {
+    return runtime_->spatial_identity();
+  }
+  [[nodiscard]] std::string_view same_level_cell_flux_provider_identity() const noexcept {
+    return runtime_->spatial_identity();
+  }
+  [[nodiscard]] std::string_view same_level_cell_flux_parameter_contract() const noexcept {
+    return runtime_->spatial_contract();
+  }
+  [[nodiscard]] bool same_level_cell_has_prepared_boundary_plan() const noexcept { return true; }
+  [[nodiscard]] const ExecutionLane& same_level_cell_execution_lane() const noexcept;
+
+  void capture_same_level_negative_flux_divergence(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, field_type& stage,
+      field_type& residual, const std::array<field_type*, Dim>& fluxes) {
+    const auto& evaluation = facade_->evaluate_prepared_amr_level_at(point, stage);
+    if (evaluation.integrated_face_fluxes.size() != stage.local_size())
+      throw std::runtime_error(
+          "cell-local AMR evaluation lost one face-flux field per local patch");
+    copy_valid_(evaluation.residual, residual);
+    for (int axis = 0; axis < Dim; ++axis) {
+      if (fluxes[axis] == nullptr || fluxes[axis]->local_size() != stage.local_size())
+        throw std::invalid_argument(
+            "cell-local AMR evaluation received an invalid face-flux destination");
+      for (std::size_t local = 0; local < stage.local_size(); ++local) {
+        const auto source = evaluation.integrated_face_fluxes[local].view().axes[axis];
+        const auto destination = fluxes[axis]->fab(local).view();
+        same_level_cell_temporal_detail::for_each_index(
+            fluxes[axis]->box(local), [&](const Index<Dim>& face, std::size_t) {
+              for (int component = 0; component < stage.ncomp(); ++component)
+                destination(face, component) = source(face, component);
+            });
+      }
+    }
+    if (!active_attempt_states_.empty())
+      attach_active_flux_basis_(0, evaluation, residual);
+  }
+
+  void prepare_same_level_cell_temporal_execution(std::string clock, std::int64_t denominator,
+                                                  int rung = 0) const {
+    prepare_same_level_cell_temporal_execution_(std::move(clock), denominator, rung, false);
+  }
+  void advance_same_level_cell_temporal(double dt) const {
+    if (cell_temporal_routes_.empty())
+      throw std::logic_error("cell-local AMR temporal execution was not prepared");
+    if (cell_temporal_epoch_ != runtime_->topology_epoch() ||
+        cell_temporal_generation_ != runtime_->materialization_generation())
+      prepare_same_level_cell_temporal_execution_(
+          cell_temporal_clock_, cell_temporal_tick_denominator_, cell_temporal_rung_, true);
+
+    std::vector<CellTemporalPartitionAcceptedState> clocks;
+    std::vector<SameLevelCellIntegratedFluxLedgerAcceptedState<Dim>> ledgers;
+    clocks.reserve(cell_temporal_routes_.size());
+    ledgers.reserve(cell_temporal_routes_.size());
+    for (const CellTemporalLevelRoute& route : cell_temporal_routes_) {
+      clocks.push_back(route.checkpoint());
+      ledgers.push_back(route.ledger->accepted_state());
+    }
+    try {
+      advance_prepared_hierarchy_(
+          dt,
+          [this](double) {
+            CellTemporalLevelRoute& route =
+                cell_temporal_routes_.at(static_cast<std::size_t>(active_level_));
+            const std::int64_t target = exact_cell_temporal_tick_(
+                current_interval_start_time_ + current_dt_, cell_temporal_tick_denominator_);
+            route.advance(target);
+          },
+          "advance_same_level_cell_temporal");
+    } catch (...) {
+      for (std::size_t level = 0; level < cell_temporal_routes_.size(); ++level) {
+        cell_temporal_routes_[level].restore(std::move(clocks[level]));
+        cell_temporal_routes_[level].ledger->restore_accepted_state(ledgers[level]);
+      }
+      throw;
+    }
   }
 
   bool uses_prepared_krylov_fallback() const {
@@ -417,10 +549,11 @@ class AmrProgramContext {
   }
 
   field_type& state(int program_block) const {
-    if (sys_block(program_block) != 0)
-      unavailable_("exact-ranked multi-block AMR state provider");
     refresh_resources_();
-    return runtime_->hierarchy().state(static_cast<std::size_t>(active_level_));
+    const int runtime_block = sys_block(program_block);
+    if (!active_attempt_states_.empty())
+      return *active_attempt_states_.at(static_cast<std::size_t>(runtime_block));
+    return facade_->prepared_amr_block_state(runtime_block, active_level_);
   }
 
   /// Bind one generated consumer's compact provider view for the active AMR hierarchy level.
@@ -429,8 +562,9 @@ class AmrProgramContext {
   /// This is a rank-local Fab hot path: collective resource refresh belongs to the enclosing
   /// resource traversal, never to one invocation of the local provider callback.
   template <int Count>
-  [[nodiscard]] ProviderStorageView<Dim, Count> provider_values_view(
-      std::string_view consumer_qid, int program_block, std::size_t local_fab) const {
+  [[nodiscard]] ProviderStorageView<Dim, Count> provider_values_view(std::string_view consumer_qid,
+                                                                     int program_block,
+                                                                     std::size_t local_fab) const {
     static_assert(Count >= 0, "a provider consumer count cannot be negative");
     if constexpr (Count == 0) {
       (void)consumer_qid;
@@ -439,7 +573,7 @@ class AmrProgramContext {
       return {};
     } else {
       if (sys_block(program_block) != 0)
-        unavailable_("exact-ranked multi-block AMR state provider");
+        deferred_op("multi_block_state", "exact-ranked multi-block AMR state provider");
       if (resource_epoch_ != runtime_->topology_epoch() ||
           resource_generation_ != runtime_->materialization_generation())
         throw std::logic_error(
@@ -448,10 +582,9 @@ class AmrProgramContext {
         throw std::out_of_range("AMR Program provider level lies outside the live hierarchy");
       const field_type& state_field =
           runtime_->hierarchy().state(static_cast<std::size_t>(active_level_));
-      const auto* const groups =
-          facade_->prepared_amr_provider_storage_groups(active_level_);
-      const auto& plan = facade_->prepared_amr_auxiliary_consumer_plan(
-          std::string(consumer_qid), active_level_);
+      const auto* const groups = facade_->prepared_amr_provider_storage_groups(active_level_);
+      const auto& plan =
+          facade_->prepared_amr_auxiliary_consumer_plan(std::string(consumer_qid), active_level_);
       runtime::system::require_pointwise_provider_groups<Dim, Count>(
           state_field, groups, &plan, "AmrProgramContext provider values");
       return runtime::system::bind_provider_storage_view<Dim, Count>(&plan, groups, local_fab);
@@ -488,13 +621,19 @@ class AmrProgramContext {
   }
 
   void rhs_into(int program_block, field_type& stage_state, field_type& rhs, int rate_id) const {
-    if (sys_block(program_block) != 0)
-      unavailable_("exact-ranked multi-block AMR residual provider");
+    const int runtime_block = sys_block(program_block);
     require_rate_identity_(rate_id);
     require_same_field_contract_(stage_state, rhs, "AMR Program residual");
+    const auto point = boundary_evaluation_point(rate_id);
     const auto& evaluation =
-        facade_->evaluate_prepared_amr_level_at(boundary_evaluation_point(rate_id), stage_state);
+        active_attempt_states_.empty()
+            ? facade_->evaluate_prepared_amr_block_level_at(runtime_block, point, stage_state)
+            : facade_->evaluate_prepared_amr_block_level_at(
+                  runtime_block, point, stage_state, active_level_ - 1,
+                  staged_parent_for_block_(runtime_block));
     copy_valid_(evaluation.residual, rhs);
+    if (!active_attempt_states_.empty())
+      attach_active_flux_basis_(runtime_block, evaluation, rhs);
     count_kernel_();
   }
 
@@ -512,15 +651,57 @@ class AmrProgramContext {
     for (const RhsGroupRequest& request : requests)
       rhs_into(request.block, *request.state, candidates[index++], request.rate_id);
     index = 0;
-    for (const RhsGroupRequest& request : requests)
-      copy_valid_(candidates[index++], *request.rhs);
+    for (const RhsGroupRequest& request : requests) {
+      copy_valid_(candidates[index], *request.rhs);
+      copy_active_flux_expression_(candidates[index], *request.rhs);
+      clear_active_flux_expression_(candidates[index]);
+      ++index;
+    }
   }
 
-  [[noreturn]] void neg_div_flux_default_into(int, field_type&, field_type&, int) const {
-    unavailable_("split default-flux AMR provider");
+  void neg_div_flux_default_into(int program_block, field_type& stage_state, field_type& rhs,
+                                 int rate_id) const {
+    const int runtime_block = sys_block(program_block);
+    require_rate_identity_(rate_id);
+    require_same_field_contract_(stage_state, rhs, "AMR Program default flux residual");
+    const auto point = boundary_evaluation_point(rate_id);
+    const auto& evaluation =
+        active_attempt_states_.empty()
+            ? facade_->evaluate_prepared_amr_block_level_flux_at(runtime_block, point, stage_state)
+            : facade_->evaluate_prepared_amr_block_level_flux_at(
+                  runtime_block, point, stage_state, active_level_ - 1,
+                  staged_parent_for_block_(runtime_block));
+    copy_valid_(evaluation.residual, rhs);
+    if (!active_attempt_states_.empty())
+      attach_active_flux_basis_(runtime_block, evaluation, rhs);
+    count_kernel_();
   }
-  [[noreturn]] void source_default_into(int, field_type&, field_type&) const {
-    unavailable_("split default-source AMR provider");
+  void source_default_into(int program_block, field_type& stage_state, field_type& rhs) const {
+    const int runtime_block = sys_block(program_block);
+    require_same_field_contract_(stage_state, rhs, "AMR Program default source residual");
+    const auto point = boundary_evaluation_point(0);
+    if (active_attempt_states_.empty())
+      facade_->prepared_amr_block_level_source_into_at(runtime_block, point, stage_state, rhs);
+    else
+      facade_->prepared_amr_block_level_source_into_at(runtime_block, point, stage_state, rhs,
+                                                       active_level_ - 1,
+                                                       staged_parent_for_block_(runtime_block));
+    clear_active_flux_expression_(rhs);
+    count_kernel_();
+  }
+
+  [[nodiscard]] SolveOutcome solve_source_default(int program_block, field_type& stage_state,
+                                                  Real dt, const NewtonOptions& options) const {
+    const int runtime_block = sys_block(program_block);
+    const auto point = boundary_evaluation_point(0);
+    SolveOutcome outcome = active_attempt_states_.empty()
+                               ? facade_->solve_prepared_amr_block_level_source_at(
+                                     runtime_block, point, stage_state, dt, options)
+                               : facade_->solve_prepared_amr_block_level_source_at(
+                                     runtime_block, point, stage_state, dt, options,
+                                     active_level_ - 1, staged_parent_for_block_(runtime_block));
+    count_kernel_();
+    return outcome;
   }
 
   void require_cartesian_generated_operator(int program_block, const std::string& operation) const {
@@ -530,13 +711,21 @@ class AmrProgramContext {
   }
 
   void prepare_generated_state(int program_block, field_type& stage_state, int rate_id) const {
-    if (sys_block(program_block) != 0)
-      unavailable_("exact-ranked multi-block AMR state preparation");
+    const int runtime_block = sys_block(program_block);
     require_rate_identity_(rate_id);
-    facade_->prepare_generated_amr_level_state(boundary_evaluation_point(rate_id), stage_state);
+    const auto point = boundary_evaluation_point(rate_id);
+    if (active_attempt_states_.empty())
+      facade_->prepare_generated_amr_block_level_state(runtime_block, point, stage_state);
+    else
+      facade_->prepare_generated_amr_block_level_state(runtime_block, point, stage_state,
+                                                       active_level_ - 1,
+                                                       staged_parent_for_block_(runtime_block));
   }
 
   void neg_div_named_flux_into(field_type& rhs, const std::array<field_type*, Dim>& fluxes) const {
+    if (!active_attempt_states_.empty())
+      throw std::runtime_error(
+          "active AMR named-flux divergence has no authenticated face-fragment provider");
     const Geometry<Dim> geom = geometry();
     for (int axis = 0; axis < Dim; ++axis) {
       const field_type* flux = fluxes[static_cast<std::size_t>(axis)];
@@ -573,13 +762,12 @@ class AmrProgramContext {
   }
 
   [[noreturn]] void apply_projection(int, field_type&) const {
-    unavailable_("generated AMR projection provider");
+    deferred_op("projection", "generated AMR projection provider");
   }
 
   Real max_wave_speed(int program_block, const field_type& stage_state) const {
-    if (sys_block(program_block) != 0)
-      unavailable_("exact-ranked multi-block AMR wave-speed provider");
-    return facade_->prepared_amr_level_maximum_speed(active_level_, stage_state);
+    return facade_->prepared_amr_block_level_maximum_speed(sys_block(program_block), active_level_,
+                                                           stage_state);
   }
 
   Real hmin() const {
@@ -597,51 +785,246 @@ class AmrProgramContext {
 
   void axpy(field_type& destination, Real factor, const field_type& source) const {
     require_same_field_contract_(destination, source, "AMR Program axpy");
+    auto expression_update = prepare_active_axpy_flux_expression_(
+        destination, source, exact_runtime_axpy_coefficient_(factor, source));
     pops::saxpy(destination, factor, source);
+    publish_active_flux_expression_update_(std::move(expression_update));
     count_kernel_();
   }
-  void axpy(field_type& destination, Real factor, const field_type& source, Real,
-            std::initializer_list<ExactCoefficientTerm>) const {
-    axpy(destination, factor, source);
+  void axpy(field_type& destination, Real factor, const field_type& source, Real reference_dt,
+            std::initializer_list<ExactCoefficientTerm> terms) const {
+    require_same_field_contract_(destination, source, "AMR Program exact axpy");
+    const auto coefficient = exact_coefficient_(factor, reference_dt, terms);
+    auto expression_update = prepare_active_axpy_flux_expression_(destination, source, coefficient);
+    pops::saxpy(destination, factor, source);
+    publish_active_flux_expression_update_(std::move(expression_update));
+    count_kernel_();
   }
 
   void lincomb(field_type& destination, Real left_factor, const field_type& left, Real right_factor,
                const field_type& right) const {
     require_same_field_contract_(destination, left, "AMR Program linear combination");
     require_same_field_contract_(destination, right, "AMR Program linear combination");
+    auto expression_update = prepare_active_lincomb_flux_expression_(
+        destination, left, exact_runtime_coefficient_(left_factor), right,
+        exact_runtime_coefficient_(right_factor));
     pops::lincomb(destination, left_factor, left, right_factor, right);
+    publish_active_flux_expression_update_(std::move(expression_update));
     count_kernel_();
   }
   void lincomb(field_type& destination, Real left_factor, const field_type& left, Real right_factor,
-               const field_type& right, Real, std::initializer_list<ExactCoefficientTerm>,
-               std::initializer_list<ExactCoefficientTerm>) const {
-    lincomb(destination, left_factor, left, right_factor, right);
+               const field_type& right, Real reference_dt,
+               std::initializer_list<ExactCoefficientTerm> left_terms,
+               std::initializer_list<ExactCoefficientTerm> right_terms) const {
+    require_same_field_contract_(destination, left, "AMR Program exact linear combination");
+    require_same_field_contract_(destination, right, "AMR Program exact linear combination");
+    const auto left_coefficient = exact_coefficient_(left_factor, reference_dt, left_terms);
+    const auto right_coefficient = exact_coefficient_(right_factor, reference_dt, right_terms);
+    auto expression_update = prepare_active_lincomb_flux_expression_(
+        destination, left, left_coefficient, right, right_coefficient);
+    pops::lincomb(destination, left_factor, left, right_factor, right);
+    publish_active_flux_expression_update_(std::move(expression_update));
+    count_kernel_();
   }
 
   void commit_many(std::initializer_list<std::pair<field_type*, const field_type*>> commits) const {
+    const auto& commit_lane = facade_->prepared_amr_multiblock_hierarchy_().lane();
+    const auto commit_communicator = commit_lane.communicator();
     std::vector<field_type*> targets;
-    std::vector<std::optional<field_type>> candidates;
+    std::vector<field_type> snapshots;
+    std::vector<FluxExpression> snapshot_flux_expressions;
     targets.reserve(commits.size());
-    candidates.reserve(commits.size());
-    for (const auto& [target, source] : commits) {
-      if (target == nullptr || source == nullptr ||
-          std::find(targets.begin(), targets.end(), target) != targets.end())
-        throw std::invalid_argument("AMR Program commit has null or duplicate storage");
-      require_same_field_contract_(*target, *source, "AMR Program commit");
-      targets.push_back(target);
-      candidates.emplace_back(target == source ? std::nullopt : std::optional<field_type>(*source));
+    snapshots.reserve(commits.size());
+    snapshot_flux_expressions.reserve(commits.size());
+    std::exception_ptr snapshot_error;
+    try {
+      for (const auto& [target, source] : commits) {
+        if (target == nullptr || source == nullptr ||
+            std::find(targets.begin(), targets.end(), target) != targets.end())
+          throw std::invalid_argument("AMR Program commit has null or duplicate storage");
+        require_same_field_contract_(*target, *source, "AMR Program commit");
+        targets.push_back(target);
+        snapshots.emplace_back(*source);
+        snapshot_flux_expressions.push_back(active_flux_expression_(*source));
+      }
+    } catch (...) {
+      snapshot_error = std::current_exception();
     }
-    std::size_t index = 0;
-    for (const auto& [target, source] : commits) {
-      if (target != source)
-        *target = std::move(*candidates[index]);
-      ++index;
+    if (all_reduce_max(snapshot_error ? 1L : 0L, commit_communicator) != 0) {
+      if (commit_lane.size() == 1 && snapshot_error)
+        std::rethrow_exception(snapshot_error);
+      throw std::runtime_error("AMR Program commit snapshot failed collectively");
     }
+
+    const long commit_count = static_cast<long>(targets.size());
+    if (all_reduce_min(commit_count, commit_communicator) !=
+        all_reduce_max(commit_count, commit_communicator))
+      throw std::runtime_error("AMR Program commit count differs between MPI ranks");
+
+    std::vector<std::optional<int>> runtime_blocks;
+    runtime_blocks.reserve(targets.size());
+    std::exception_ptr classification_error;
+    try {
+      for (field_type* target : targets)
+        runtime_blocks.push_back(authenticated_runtime_block_for_state_target_(*target));
+    } catch (...) {
+      classification_error = std::current_exception();
+    }
+    if (all_reduce_max(classification_error ? 1L : 0L, commit_communicator) != 0) {
+      if (commit_lane.size() == 1 && classification_error)
+        std::rethrow_exception(classification_error);
+      throw std::runtime_error("AMR Program commit target classification failed collectively");
+    }
+
+    if (!active_attempt_states_.empty()) {
+      std::map<const field_type*, FluxExpression> expression_candidate;
+      std::exception_ptr active_commit_error;
+      try {
+        expression_candidate = active_flux_expressions_;
+        for (std::size_t candidate = 0; candidate < targets.size(); ++candidate) {
+          const bool detached_group_candidate =
+              std::find(active_attempt_states_.begin(), active_attempt_states_.end(),
+                        targets[candidate]) != active_attempt_states_.end();
+          const bool prepared_scratch =
+              std::any_of(scratches_.begin(), scratches_.end(),
+                          [&](const auto& entry) { return &entry.second == targets[candidate]; });
+          if (!detached_group_candidate && !prepared_scratch)
+            throw std::invalid_argument(
+                "active AMR Program commit target is neither a detached group candidate nor a "
+                "prepared scratch");
+          for (int runtime_block = 0; runtime_block < n_blocks(); ++runtime_block)
+            if (targets[candidate] ==
+                &facade_->prepared_amr_block_state(runtime_block, active_level_))
+              throw std::invalid_argument(
+                  "active AMR Program commit cannot target an accepted block carrier");
+          expression_candidate[targets[candidate]] = snapshot_flux_expressions[candidate];
+        }
+      } catch (...) {
+        active_commit_error = std::current_exception();
+      }
+      if (all_reduce_max(active_commit_error ? 1L : 0L, commit_communicator) != 0) {
+        if (commit_lane.size() == 1 && active_commit_error)
+          std::rethrow_exception(active_commit_error);
+        throw std::runtime_error("active AMR Program commit failed collectively");
+      }
+      for (std::size_t candidate = 0; candidate < targets.size(); ++candidate)
+        *targets[candidate] = std::move(snapshots[candidate]);
+      active_flux_expressions_.swap(expression_candidate);
+      return;
+    }
+
+    for (std::size_t candidate = 0; candidate < targets.size(); ++candidate) {
+      const std::optional<int> runtime_block = runtime_blocks[candidate];
+      const long state_target = runtime_block ? 1L : 0L;
+      if (all_reduce_min(state_target, commit_communicator) !=
+          all_reduce_max(state_target, commit_communicator))
+        throw std::runtime_error(
+            "AMR Program commit target state classification differs between MPI ranks");
+      if (runtime_block)
+        facade_->validate_prepared_amr_state_publication_candidate(*runtime_block, active_level_,
+                                                                   snapshots[candidate]);
+    }
+
+    std::vector<std::size_t> accepted_snapshot_by_runtime(static_cast<std::size_t>(n_blocks()),
+                                                          snapshots.size());
+    std::size_t accepted_targets = 0;
+    for (std::size_t candidate = 0; candidate < targets.size(); ++candidate) {
+      if (!runtime_blocks[candidate])
+        continue;
+      const int runtime_block = *runtime_blocks[candidate];
+      if (targets[candidate] != &facade_->prepared_amr_block_state(runtime_block, active_level_))
+        continue;
+      ++accepted_targets;
+      accepted_snapshot_by_runtime[static_cast<std::size_t>(runtime_block)] = candidate;
+    }
+    if (accepted_targets != 0) {
+      std::vector<field_type> publication_candidates;
+      std::exception_ptr publication_error;
+      try {
+        publication_candidates.reserve(static_cast<std::size_t>(n_blocks()));
+        for (int runtime_block = 0; runtime_block < n_blocks(); ++runtime_block) {
+          const std::size_t snapshot =
+              accepted_snapshot_by_runtime[static_cast<std::size_t>(runtime_block)];
+          if (snapshot == snapshots.size())
+            publication_candidates.emplace_back(
+                facade_->prepared_amr_block_state(runtime_block, active_level_));
+          else
+            publication_candidates.emplace_back(snapshots[snapshot]);
+        }
+      } catch (...) {
+        publication_error = std::current_exception();
+      }
+      if (all_reduce_max(publication_error ? 1L : 0L, commit_communicator) != 0) {
+        if (commit_lane.size() == 1 && publication_error)
+          std::rethrow_exception(publication_error);
+        throw std::runtime_error("AMR Program accepted-state publication pack failed collectively");
+      }
+      std::vector<field_type*> program_candidates(static_cast<std::size_t>(n_blocks()), nullptr);
+      for (int program_block = 0; program_block < n_blocks(); ++program_block) {
+        const int runtime_block = sys_block(program_block);
+        program_candidates[static_cast<std::size_t>(program_block)] =
+            &publication_candidates[static_cast<std::size_t>(runtime_block)];
+      }
+      facade_->publish_prepared_amr_program_candidates(
+          active_level_, std::span<field_type* const>(program_candidates));
+      for (std::size_t candidate = 0; candidate < targets.size(); ++candidate)
+        if (!runtime_blocks[candidate])
+          *targets[candidate] = std::move(snapshots[candidate]);
+      return;
+    }
+
+    for (std::size_t candidate = 0; candidate < targets.size(); ++candidate)
+      *targets[candidate] = std::move(snapshots[candidate]);
   }
 
-  [[noreturn]] void apply_coupling_operators(Real,
-                                             std::initializer_list<CouplingStateOverride>) const {
-    unavailable_("exact-ranked multi-block AMR coupling provider");
+  void apply_coupling_operators(Real dt,
+                                std::initializer_list<CouplingStateOverride> candidates) const {
+    require_facade_execution_();
+    std::vector<field_type*> program_states(static_cast<std::size_t>(n_blocks()), nullptr);
+    std::exception_ptr local_error;
+    try {
+      for (const CouplingStateOverride& candidate : candidates) {
+        const int runtime_block = sys_block(candidate.program_block);
+        if (candidate.state == nullptr ||
+            program_states[static_cast<std::size_t>(candidate.program_block)] != nullptr)
+          throw std::invalid_argument(
+              "AMR Program coupling candidates are incomplete, duplicate, or null");
+        require_same_field_contract_(
+            *candidate.state, facade_->prepared_amr_block_state(runtime_block, active_level_),
+            "AMR Program coupling candidate");
+        if (!active_attempt_states_.empty()) {
+          const bool detached_group_candidate =
+              std::find(active_attempt_states_.begin(), active_attempt_states_.end(),
+                        candidate.state) != active_attempt_states_.end();
+          const bool prepared_scratch =
+              std::any_of(scratches_.begin(), scratches_.end(),
+                          [&](const auto& entry) { return &entry.second == candidate.state; });
+          if (!detached_group_candidate && !prepared_scratch)
+            throw std::invalid_argument(
+                "active AMR Program coupling requires detached group candidates or prepared "
+                "scratches");
+          for (int accepted_block = 0; accepted_block < n_blocks(); ++accepted_block)
+            if (candidate.state ==
+                &facade_->prepared_amr_block_state(accepted_block, active_level_))
+              throw std::invalid_argument(
+                  "active AMR Program coupling cannot mutate an accepted block carrier");
+        }
+        program_states[static_cast<std::size_t>(candidate.program_block)] = candidate.state;
+      }
+      if (std::find(program_states.begin(), program_states.end(), nullptr) != program_states.end())
+        throw std::invalid_argument(
+            "AMR Program coupling requires every authenticated Program block candidate");
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    const auto& lane = facade_->prepared_amr_multiblock_hierarchy_().lane();
+    if (all_reduce_max(local_error ? 1L : 0L, lane.communicator()) != 0) {
+      if (lane.size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error("AMR Program coupling candidate pack failed collectively");
+    }
+    count_kernel_(static_cast<std::int64_t>(facade_->apply_prepared_amr_program_candidates(
+        active_level_, dt, std::span<field_type* const>(program_states))));
   }
 
   Real sum_component(const field_type& field, int component) const {
@@ -694,9 +1077,9 @@ class AmrProgramContext {
 
   std::shared_ptr<scalar_boundary_session_type> prepare_mesh_boundary_session(
       field_type& prototype, const ExecutionLane& lane) const {
-    return std::make_shared<scalar_boundary_session_type>(
-        geometry(), facade_->prepared_amr_boundary_topology(), prototype, lane,
-        next_boundary_generation_());
+    return scalar_boundary_session_type::prepare(geometry(),
+                                                 facade_->prepared_amr_boundary_topology(),
+                                                 prototype, lane, next_boundary_generation_());
   }
 
   std::shared_ptr<scalar_boundary_session_type> prepare_block_boundary_session(
@@ -714,9 +1097,10 @@ class AmrProgramContext {
   }
 
   void fill_boundary(field_type& field, const ExecutionLane& lane) const {
-    scalar_boundary_session_type session(geometry(), facade_->prepared_amr_boundary_topology(),
-                                         field, lane, next_boundary_generation_());
-    session.fill(field);
+    auto session =
+        scalar_boundary_session_type::prepare(geometry(), facade_->prepared_amr_boundary_topology(),
+                                              field, lane, next_boundary_generation_());
+    session->fill(field);
   }
 
   void laplacian(field_type& output, field_type& input) const {
@@ -843,11 +1227,11 @@ class AmrProgramContext {
   }
 
   [[noreturn]] void tensor_laplacian(field_type&, field_type&, const field_type&) const {
-    unavailable_("AMR tensor-elliptic provider");
+    deferred_op("tensor_elliptic", "AMR tensor-elliptic provider");
   }
   template <class... Arguments>
   [[noreturn]] void tensor_laplacian(Arguments&&...) const {
-    unavailable_("AMR tensor-elliptic provider");
+    deferred_op("tensor_elliptic", "AMR tensor-elliptic provider");
   }
 
   /// Copy one exact valid-cell component span without exposing distributed storage to generated
@@ -899,7 +1283,7 @@ class AmrProgramContext {
       throw std::invalid_argument(
           "AMR Program history requires complete owner/state/space/clock identities");
     if (sys_block(program_owner) != 0)
-      unavailable_("exact-ranked multi-block AMR history provider");
+      deferred_op("multi_block_history", "exact-ranked multi-block AMR history provider");
     refresh_resources_();
     const field_type& prototype = state(program_owner);
     const int components = ncomp < 0 ? prototype.ncomp() : ncomp;
@@ -1043,25 +1427,25 @@ class AmrProgramContext {
   /// windows participate in the AMR checkpoint/regrid transaction.  A cache-backed schedule is
   /// rejected at its decision seam, before its node body can mutate auxiliary or live storage.
   [[noreturn]] bool cache_should_update(int, int) const {
-    unavailable_("checkpointed AMR scheduler cache provider");
+    deferred_op("scheduler_cache", "checkpointed AMR scheduler cache provider");
   }
   [[noreturn]] void cache_store_aux(int) const {
-    unavailable_("checkpointed AMR scheduler cache provider");
+    deferred_op("scheduler_cache", "checkpointed AMR scheduler cache provider");
   }
   [[noreturn]] void cache_restore_aux(int) const {
-    unavailable_("checkpointed AMR scheduler cache provider");
+    deferred_op("scheduler_cache", "checkpointed AMR scheduler cache provider");
   }
   [[noreturn]] void cache_store_scratch(int, const field_type&) const {
-    unavailable_("checkpointed AMR scheduler cache provider");
+    deferred_op("scheduler_cache", "checkpointed AMR scheduler cache provider");
   }
   [[noreturn]] void cache_restore_scratch(int, field_type&) const {
-    unavailable_("checkpointed AMR scheduler cache provider");
+    deferred_op("scheduler_cache", "checkpointed AMR scheduler cache provider");
   }
   [[noreturn]] void cache_accumulate_dt(int, Real) const {
-    unavailable_("checkpointed AMR scheduler cache provider");
+    deferred_op("scheduler_cache", "checkpointed AMR scheduler cache provider");
   }
   [[noreturn]] Real cache_effective_dt(int, Real) const {
-    unavailable_("checkpointed AMR scheduler cache provider");
+    deferred_op("scheduler_cache", "checkpointed AMR scheduler cache provider");
   }
 
   bool schedule_domain_occurs(ScheduleDomainKind kind, const std::string& clock,
@@ -1084,7 +1468,7 @@ class AmrProgramContext {
     if (node_id < 0)
       throw std::invalid_argument("AMR Program schedule decision has an invalid node");
     if (cache_backed)
-      unavailable_("checkpointed AMR scheduler cache provider");
+      deferred_op("scheduler_cache", "checkpointed AMR scheduler cache provider");
     return runtime_state().profiler_.schedule_decision(due, false);
   }
   [[noreturn]] void scheduler_error(const std::string& message) const {
@@ -1094,11 +1478,11 @@ class AmrProgramContext {
 
   const field_type* pointwise_active_mask(int program_block, const field_type& field) const {
     if (sys_block(program_block) != 0)
-      unavailable_("exact-ranked multi-block AMR pointwise mask provider");
+      deferred_op("multi_block_mask", "exact-ranked multi-block AMR pointwise mask provider");
     refresh_resources_();
     require_same_layout_(field, state(program_block), "AMR Program pointwise mask");
     if (nlev() != 1)
-      unavailable_("composite active-cell AMR pointwise mask provider");
+      deferred_op("composite_mask", "composite active-cell AMR pointwise mask provider");
     return nullptr;
   }
   Real pointwise_status_max(int program_block, const field_type& status,
@@ -1342,25 +1726,25 @@ class AmrProgramContext {
   bool has_boundary_linearization(int) const noexcept { return false; }
   template <class... Arguments>
   [[noreturn]] void boundary_residual_into_at(Arguments&&...) const {
-    unavailable_("AMR iterate-dependent field boundary provider");
+    deferred_op("iterate_dependent_boundary", "AMR iterate-dependent field boundary provider");
   }
   template <class... Arguments>
   [[noreturn]] void boundary_jvp_into_at(Arguments&&...) const {
-    unavailable_("AMR iterate-dependent field boundary provider");
+    deferred_op("iterate_dependent_boundary", "AMR iterate-dependent field boundary provider");
   }
   template <class... Arguments>
   [[noreturn]] void rhs_core_into_at(Arguments&&...) const {
-    unavailable_("AMR matrix-free split residual provider");
+    deferred_op("matrix_free_split_residual", "AMR matrix-free split residual provider");
   }
   template <class... Arguments>
   [[noreturn]] void rhs_jacvec_pair_into_at(Arguments&&...) const {
-    unavailable_("AMR matrix-free coupled Jacobian provider");
+    deferred_op("matrix_free_coupled_jacobian", "AMR matrix-free coupled Jacobian provider");
   }
   template <class Function>
   void evaluate_with_field_state_at(const runtime::multiblock::BoundaryEvaluationPoint&,
                                     const std::string&, int, field_type&, const field_type&,
                                     Function&&) const {
-    unavailable_("AMR perturbed field-state provider");
+    deferred_op("perturbed_field_state", "AMR perturbed field-state provider");
   }
 
   [[nodiscard]] SolveOutcome solve_fields() const {
@@ -1372,12 +1756,12 @@ class AmrProgramContext {
       const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
       int program_block, field_type& stage) const {
     refresh_resources_();
-    require_boundary_point_(point, "AMR Program single-state field solve");
     if (provider_slot.empty())
       throw std::invalid_argument("AMR Program field solve requires an exact provider slot");
     if (sys_block(program_block) != 0)
-      unavailable_("exact-ranked multi-block AMR field-state provider");
-    require_same_field_contract_(stage, state(program_block), "AMR Program field stage override");
+      deferred_op("multi_block_field_state", "exact-ranked multi-block AMR field-state provider");
+    // The facade owns the collective evaluation-point and stage-contract preflight.  A local
+    // rejection here would let peer ranks enter the field solver's duplicated MPI communicator.
     return facade_->solve_program_field_at(point, provider_slot, active_level_, &stage);
   }
 
@@ -1411,7 +1795,7 @@ class AmrProgramContext {
         throw std::invalid_argument(
             "AMR Program simultaneous field solve maps two stages to one runtime block");
       if (runtime_block != 0)
-        unavailable_("exact-ranked multi-block AMR field-state provider");
+        deferred_op("multi_block_field_state", "exact-ranked multi-block AMR field-state provider");
       require_same_field_contract_(*override_value.state, state(override_value.program_block),
                                    "AMR Program simultaneous field stage override");
       candidate.program_blocks.push_back(override_value.program_block);
@@ -1437,6 +1821,34 @@ class AmrProgramContext {
  private:
   enum class ScratchKind : std::uint8_t { Rhs = 0, State = 1, Scalar = 2 };
   using ScratchKey = std::tuple<ScratchKind, int, std::int64_t, int>;
+  using ExactPolynomial = std::map<int, ::pops::amr::Rational>;
+
+  struct FluxBasisFace {
+    ::pops::amr::reflux::FaceLedgerRole role = ::pops::amr::reflux::FaceLedgerRole::Coarse;
+    int axis = 0;
+    Index<Dim> face{};
+    Index<Dim> coarse_face{};
+    double face_measure = 0.0;
+    std::vector<Real> flux_density;
+  };
+
+  struct FluxBasis {
+    std::uint64_t identity = 0;
+    std::size_t runtime_block = 0;
+    int level = 0;
+    ::pops::amr::Rational stage_fraction{0, 1};
+    ::pops::amr::ClockWindow window{};
+    std::vector<FluxBasisFace> faces;
+  };
+
+  struct FluxExpressionTerm {
+    std::shared_ptr<const FluxBasis> basis;
+    ExactPolynomial coefficient;
+  };
+
+  using FluxExpression = std::map<std::uint64_t, FluxExpressionTerm>;
+  using FluxExpressionRegistry = std::map<const field_type*, FluxExpression>;
+  using FluxExpressionUpdate = std::optional<FluxExpressionRegistry>;
 
   struct GeneratedFieldRoute {
     std::string field;
@@ -1466,20 +1878,1114 @@ class AmrProgramContext {
     if (rate_id < 0)
       throw std::invalid_argument("AMR Program rate identity must be non-negative");
   }
-  void require_single_level_conservative_route_(std::string_view operation) const {
-    if (runtime_->hierarchy().num_levels() != 1)
-      throw std::runtime_error(std::string("AmrProgramContext::") + std::string(operation) +
-                               " requires a prepared exact-ranked conservative multi-level "
-                               "synchronization provider before any level state is advanced");
+
+  static void erase_zero_terms_(ExactPolynomial& polynomial) {
+    for (auto term = polynomial.begin(); term != polynomial.end();) {
+      if (term->second.numerator == 0)
+        term = polynomial.erase(term);
+      else
+        ++term;
+    }
   }
+
+  static ExactPolynomial multiply_exact_polynomials_(const ExactPolynomial& left,
+                                                     const ExactPolynomial& right) {
+    ExactPolynomial result;
+    for (const auto& [left_power, left_factor] : left)
+      for (const auto& [right_power, right_factor] : right) {
+        if (left_power > std::numeric_limits<int>::max() - right_power)
+          throw std::overflow_error("AMR Program flux coefficient dt power exceeds int");
+        const int power = left_power + right_power;
+        const auto found = result.find(power);
+        const ::pops::amr::Rational product = left_factor * right_factor;
+        if (found == result.end())
+          result.emplace(power, product);
+        else
+          found->second = found->second + product;
+      }
+    erase_zero_terms_(result);
+    return result;
+  }
+
+  static void add_exact_polynomial_(ExactPolynomial& destination, const ExactPolynomial& source) {
+    for (const auto& [power, factor] : source) {
+      const auto found = destination.find(power);
+      if (found == destination.end())
+        destination.emplace(power, factor);
+      else
+        found->second = found->second + factor;
+    }
+    erase_zero_terms_(destination);
+  }
+
+  static Real evaluate_exact_polynomial_(const ExactPolynomial& polynomial, Real dt) {
+    Real result = Real(0);
+    for (const auto& [power, factor] : polynomial) {
+      Real dt_power = Real(1);
+      for (int exponent = 0; exponent < power; ++exponent)
+        dt_power *= dt;
+      result += static_cast<Real>(factor.value()) * dt_power;
+    }
+    return result;
+  }
+
+  ExactPolynomial exact_coefficient_unchecked_(
+      Real factor, Real reference_dt, std::initializer_list<ExactCoefficientTerm> terms) const {
+    if (!std::isfinite(static_cast<double>(factor)) ||
+        !std::isfinite(static_cast<double>(reference_dt)) || reference_dt != current_dt_)
+      throw std::invalid_argument("AMR Program flux coefficient does not name the active exact dt");
+    ExactPolynomial polynomial;
+    for (const ExactCoefficientTerm& term : terms) {
+      if (term.dt_power < 0 || term.denominator <= 0)
+        throw std::invalid_argument("AMR Program flux coefficient metadata is invalid");
+      const ::pops::amr::Rational coefficient{term.numerator, term.denominator};
+      if (coefficient.numerator != term.numerator || coefficient.denominator != term.denominator)
+        throw std::invalid_argument("AMR Program flux coefficient metadata is not canonical");
+      const auto found = polynomial.find(term.dt_power);
+      if (found == polynomial.end())
+        polynomial.emplace(term.dt_power, coefficient);
+      else
+        found->second = found->second + coefficient;
+    }
+    erase_zero_terms_(polynomial);
+    if (evaluate_exact_polynomial_(polynomial, reference_dt) != factor)
+      throw std::invalid_argument(
+          "AMR Program numerical coefficient differs from its exact metadata");
+    return polynomial;
+  }
+
+  static ::pops::amr::Rational exact_binary_rational_(Real value) {
+    if (!std::isfinite(static_cast<double>(value)))
+      throw std::invalid_argument("AMR Program coefficient is not finite");
+    if (value == Real(0))
+      return {0, 1};
+    int exponent = 0;
+    const double fraction = std::frexp(std::abs(static_cast<double>(value)), &exponent);
+    constexpr int digits = std::numeric_limits<double>::digits;
+    const auto mantissa = static_cast<std::uint64_t>(std::ldexp(fraction, digits));
+    const int binary_power = exponent - digits;
+    if (binary_power >= 0) {
+      if (binary_power >= 63 ||
+          mantissa > (static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) >>
+                      binary_power))
+        throw std::overflow_error("AMR Program coefficient exceeds exact int64 metadata");
+      const std::int64_t numerator = static_cast<std::int64_t>(mantissa << binary_power);
+      return {value < Real(0) ? -numerator : numerator, 1};
+    }
+    if (-binary_power >= 63)
+      throw std::overflow_error("AMR Program coefficient denominator exceeds exact int64 metadata");
+    const std::int64_t numerator = static_cast<std::int64_t>(mantissa);
+    const std::int64_t denominator = std::int64_t{1} << (-binary_power);
+    return {value < Real(0) ? -numerator : numerator, denominator};
+  }
+
+  ExactPolynomial exact_runtime_coefficient_unchecked_(Real factor) const {
+    if (active_attempt_states_.empty())
+      return {};
+    return {{0, exact_binary_rational_(factor)}};
+  }
+
+  template <class Build>
+  auto prepare_flux_metadata_collectively_(Build&& build, std::string_view failure) const
+      -> std::invoke_result_t<Build> {
+    using result_type = std::invoke_result_t<Build>;
+    if (active_attempt_states_.empty())
+      return std::forward<Build>(build)();
+    std::optional<result_type> result;
+    std::exception_ptr local_error;
+    try {
+      result.emplace(std::forward<Build>(build)());
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    const auto& lane = facade_->prepared_amr_multiblock_hierarchy_().lane();
+    if (all_reduce_max(local_error ? 1L : 0L, lane.communicator()) != 0) {
+      if (lane.size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error(std::string(failure));
+    }
+    return std::move(*result);
+  }
+
+  ExactPolynomial exact_coefficient_(Real factor, Real reference_dt,
+                                     std::initializer_list<ExactCoefficientTerm> terms) const {
+    return prepare_flux_metadata_collectively_(
+        [&] { return exact_coefficient_unchecked_(factor, reference_dt, terms); },
+        "AMR Program exact flux coefficient failed collectively");
+  }
+
+  ExactPolynomial exact_runtime_coefficient_(Real factor) const {
+    return prepare_flux_metadata_collectively_(
+        [&] { return exact_runtime_coefficient_unchecked_(factor); },
+        "AMR Program runtime flux coefficient failed collectively");
+  }
+
+  ExactPolynomial exact_runtime_axpy_coefficient_(Real factor, const field_type& source) const {
+    return prepare_flux_metadata_collectively_(
+        [&] {
+          if (active_attempt_states_.empty() || active_flux_expression_(source).empty())
+            return ExactPolynomial{};
+          if (!std::isfinite(current_dt_) || !(current_dt_ > 0.0))
+            throw std::logic_error("AMR Program flux axpy lacks its active dt");
+          const Real quotient = factor / static_cast<Real>(current_dt_);
+          if (quotient * static_cast<Real>(current_dt_) != factor)
+            throw std::invalid_argument(
+                "AMR Program flux axpy factor has no exact symbolic dt coefficient");
+          return ExactPolynomial{{1, exact_binary_rational_(quotient)}};
+        },
+        "AMR Program runtime flux axpy coefficient failed collectively");
+  }
+
+  FluxExpression active_flux_expression_(const field_type& field) const {
+    if (active_attempt_states_.empty())
+      return {};
+    const auto found = active_flux_expressions_.find(&field);
+    return found == active_flux_expressions_.end() ? FluxExpression{} : found->second;
+  }
+
+  void require_flux_expression_budget_(const FluxExpression& expression) const {
+    std::map<std::size_t, std::size_t> bases_by_block;
+    for (const auto& [identity, term] : expression) {
+      (void)identity;
+      if (!term.basis || term.basis->runtime_block >= prepared_rhs_basis_bounds_.size() ||
+          term.basis->runtime_block >= prepared_coefficient_term_bounds_.size())
+        throw std::logic_error("AMR Program flux expression has a foreign basis identity");
+      const std::size_t block = term.basis->runtime_block;
+      if (++bases_by_block[block] > prepared_rhs_basis_bounds_[block] ||
+          term.coefficient.size() > prepared_coefficient_term_bounds_[block])
+        throw std::length_error(
+            "AMR Program flux expression exceeds its authenticated artifact budget");
+    }
+  }
+
+  static FluxExpression scaled_flux_expression_(const FluxExpression& expression,
+                                                const ExactPolynomial& coefficient) {
+    FluxExpression result;
+    if (coefficient.empty())
+      return result;
+    for (const auto& [identity, term] : expression) {
+      ExactPolynomial scaled = multiply_exact_polynomials_(term.coefficient, coefficient);
+      if (!scaled.empty())
+        result.emplace(identity, FluxExpressionTerm{term.basis, std::move(scaled)});
+    }
+    return result;
+  }
+
+  static void add_flux_expression_(FluxExpression& destination, const FluxExpression& source) {
+    for (const auto& [identity, term] : source) {
+      const auto found = destination.find(identity);
+      if (found == destination.end()) {
+        destination.emplace(identity, term);
+        continue;
+      }
+      if (found->second.basis != term.basis)
+        throw std::logic_error("AMR Program flux basis identity aliases another evaluation");
+      add_exact_polynomial_(found->second.coefficient, term.coefficient);
+      if (found->second.coefficient.empty())
+        destination.erase(found);
+    }
+  }
+
+  FluxExpressionUpdate prepare_active_axpy_flux_expression_(
+      field_type& destination, const field_type& source, const ExactPolynomial& coefficient) const {
+    if (active_attempt_states_.empty())
+      return std::nullopt;
+    return prepare_flux_metadata_collectively_(
+        [&]() {
+          FluxExpressionRegistry candidate = active_flux_expressions_;
+          FluxExpression result = active_flux_expression_(destination);
+          add_flux_expression_(
+              result, scaled_flux_expression_(active_flux_expression_(source), coefficient));
+          require_flux_expression_budget_(result);
+          candidate[&destination] = std::move(result);
+          return FluxExpressionUpdate(std::move(candidate));
+        },
+        "AMR Program flux-expression axpy failed collectively");
+  }
+
+  FluxExpressionUpdate prepare_active_lincomb_flux_expression_(
+      field_type& destination, const field_type& left, const ExactPolynomial& left_coefficient,
+      const field_type& right, const ExactPolynomial& right_coefficient) const {
+    if (active_attempt_states_.empty())
+      return std::nullopt;
+    return prepare_flux_metadata_collectively_(
+        [&]() {
+          FluxExpressionRegistry candidate = active_flux_expressions_;
+          FluxExpression result =
+              scaled_flux_expression_(active_flux_expression_(left), left_coefficient);
+          add_flux_expression_(
+              result, scaled_flux_expression_(active_flux_expression_(right), right_coefficient));
+          require_flux_expression_budget_(result);
+          candidate[&destination] = std::move(result);
+          return FluxExpressionUpdate(std::move(candidate));
+        },
+        "AMR Program flux-expression linear combination failed collectively");
+  }
+
+  void publish_active_flux_expression_update_(FluxExpressionUpdate update) const noexcept {
+    if (update)
+      active_flux_expressions_.swap(*update);
+  }
+
+  void copy_active_flux_expression_(const field_type& source, field_type& destination) const {
+    if (active_attempt_states_.empty())
+      return;
+    FluxExpressionRegistry candidate = prepare_flux_metadata_collectively_(
+        [&] {
+          FluxExpressionRegistry result = active_flux_expressions_;
+          result[&destination] = active_flux_expression_(source);
+          return result;
+        },
+        "AMR Program flux-expression copy failed collectively");
+    active_flux_expressions_.swap(candidate);
+  }
+
+  void clear_active_flux_expression_(const field_type& field) const noexcept {
+    if (!active_attempt_states_.empty())
+      active_flux_expressions_.erase(&field);
+  }
+
+  struct CellTemporalLevelRoute {
+    int level = -1;
+    std::shared_ptr<cell_temporal_ledger_type> ledger;
+    std::function<CellTemporalPartitionAcceptedState()> checkpoint;
+    std::function<void(CellTemporalPartitionAcceptedState)> restore;
+    std::function<void(std::int64_t)> advance;
+  };
+
+  static std::int64_t exact_cell_temporal_tick_(double time, std::int64_t denominator) {
+    if (!std::isfinite(time) || time < 0.0 || denominator <= 0)
+      throw std::invalid_argument("cell-local AMR clock has an invalid physical time");
+    const long double scaled =
+        static_cast<long double>(time) * static_cast<long double>(denominator);
+    if (scaled > static_cast<long double>(std::numeric_limits<std::int64_t>::max()))
+      throw std::overflow_error("cell-local AMR clock exceeds int64 ticks");
+    const auto tick = static_cast<std::int64_t>(std::llround(scaled));
+    const long double tolerance = std::numeric_limits<double>::epsilon() *
+                                  std::max(static_cast<long double>(1), std::abs(scaled)) *
+                                  static_cast<long double>(32);
+    if (std::abs(scaled - static_cast<long double>(tick)) > tolerance)
+      throw std::invalid_argument(
+          "cell-local AMR dt is not exactly representable by its prepared tick denominator");
+    return tick;
+  }
+
+  void prepare_same_level_cell_temporal_execution_(std::string clock, std::int64_t denominator,
+                                                   int rung, bool rematerialization) const {
+    require_facade_execution_();
+    refresh_resources_();
+    if (!active_attempt_states_.empty())
+      throw std::logic_error(
+          "cell-local AMR temporal preparation cannot replace an active attempt");
+    if (clock.empty() || denominator <= 0 || rung < 0 || rung > 30)
+      throw std::invalid_argument("cell-local AMR temporal preparation has invalid clock data");
+    if (facade_->program_block_map().size() != 1 || facade_->program_block_map().front() != 0)
+      deferred_op("multi_block_cell_local_temporal",
+                  "cell-local AMR temporal execution for multiple Program blocks");
+
+    const std::int64_t synchronization_tick =
+        exact_cell_temporal_tick_(facade_->time(), denominator);
+    if (synchronization_tick % (std::int64_t{1} << rung) != 0)
+      throw std::invalid_argument(
+          "cell-local AMR accepted time is not aligned to its prepared rung");
+    const std::size_t level_count = runtime_->hierarchy().num_levels();
+    std::vector<Geometry<Dim>> geometries;
+    geometries.reserve(level_count);
+    for (std::size_t level = 0; level < level_count; ++level)
+      geometries.push_back(facade_->prepared_amr_level_geometry(static_cast<int>(level)));
+    std::array<bool, Dim> periodicity{};
+    const BoundaryTopology<Dim> topology = facade_->prepared_amr_boundary_topology();
+    for (int axis = 0; axis < Dim; ++axis)
+      periodicity[axis] = topology.is_periodic(Face<Dim>{axis, BoundarySide::lower});
+    cell_temporal_geometries_ = std::move(geometries);
+    cell_temporal_periodicity_ = periodicity;
+
+    using provider_type = PreparedSameLevelTransportEulerStageFluxProvider<Dim, AmrProgramContext>;
+    using executor_type = PreparedBatchedCellTemporalExecutor<provider_type>;
+    std::vector<CellTemporalLevelRoute> prepared;
+    std::vector<std::string> exact_contracts;
+    std::exception_ptr local_error;
+    try {
+      prepared.reserve(level_count);
+      exact_contracts.reserve(level_count);
+      auto& owner = *const_cast<AmrProgramContext*>(this);
+      for (std::size_t level = 0; level < level_count; ++level) {
+        CellTemporalPartitionAcceptedState partition =
+            prepare_same_level_transport_euler_partition<Dim>(
+                owner, synchronization_tick, denominator, rung, static_cast<int>(level));
+        auto ledger = std::make_shared<cell_temporal_ledger_type>(
+            runtime_->topology_epoch(), runtime_->materialization_generation(), 0,
+            static_cast<int>(level), partition.cells.size(),
+            runtime_->hierarchy().state(level).ncomp());
+        provider_type provider(owner, partition, ledger, clock);
+        auto executor = std::make_shared<executor_type>(partition, std::move(provider));
+        exact_contracts.push_back(executor->exact_contract());
+        prepared.push_back({static_cast<int>(level), ledger,
+                            [executor] { return executor->checkpoint(); },
+                            [executor](CellTemporalPartitionAcceptedState accepted) {
+                              executor->restore_accepted_boundary(std::move(accepted));
+                            },
+                            [executor](std::int64_t target) {
+                              executor->begin_attempt(target);
+                              executor->advance_to_barrier();
+                              executor->commit();
+                            }});
+      }
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    const CommunicatorView communicator = same_level_cell_execution_lane().communicator();
+    if (all_reduce_max(local_error ? 1L : 0L, communicator) != 0) {
+      if (local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error("cell-local AMR temporal preparation failed on another MPI rank");
+    }
+    for (std::size_t level = 0; level < exact_contracts.size(); ++level) {
+      const std::string label = "cell-local-amr-level-" + std::to_string(level);
+      if (!all_ranks_agree_exact_ordered_byte_pairs(
+              {{std::string_view(label), std::string_view(exact_contracts[level])}}, communicator))
+        throw std::invalid_argument("cell-local AMR temporal contract differs between MPI ranks");
+    }
+    cell_temporal_routes_ = std::move(prepared);
+    cell_temporal_clock_ = std::move(clock);
+    cell_temporal_tick_denominator_ = denominator;
+    cell_temporal_rung_ = rung;
+    cell_temporal_epoch_ = runtime_->topology_epoch();
+    cell_temporal_generation_ = runtime_->materialization_generation();
+    (void)rematerialization;
+  }
+
+  template <class Body>
+  void advance_prepared_hierarchy_(double dt, Body&& body, std::string_view operation) const {
+    if (!std::isfinite(dt) || !(dt > 0.0))
+      throw std::invalid_argument("AMR Program step requires a finite positive dt");
+    const int prior_level = active_level_;
+    const double prior_dt = current_dt_;
+    const double prior_interval_start = current_interval_start_time_;
+    const ::pops::amr::Rational prior_interval_begin = current_interval_begin_phase_;
+    const ::pops::amr::Rational prior_interval_end = current_interval_end_phase_;
+    const int prior_substep = logical_substep_;
+    const ::pops::amr::Rational prior_stage = stage_time_;
+    refresh_resources_();
+    require_facade_execution_();
+    if (!active_attempt_states_.empty())
+      throw std::logic_error("AMR Program hierarchy advance cannot nest another attempt");
+    try {
+      begin_step(dt);
+      prepare_multiblock_subcycling_engine_();
+      const ::pops::amr::ClockWindow root{
+          {0, static_cast<std::int64_t>(facade_->macro_step()), {0, 1}, facade_->time()},
+          {0, static_cast<std::int64_t>(facade_->macro_step()), {1, 1}, facade_->time() + dt}};
+      multiblock_subcycling_->advance(
+          root,
+          [&](multiblock_level_group_type group) { advance_multiblock_level_group_(group, body); },
+          [&](multiblock_reflux_context_type& reflux) { reconcile_multiblock_reflux_(reflux); },
+          [&](std::size_t runtime_block, std::size_t level, const field_type& candidate) {
+            facade_->validate_prepared_amr_state_publication_candidate(
+                static_cast<int>(runtime_block), static_cast<int>(level), candidate);
+          });
+    } catch (...) {
+      active_level_ = prior_level;
+      current_dt_ = prior_dt;
+      current_interval_start_time_ = prior_interval_start;
+      current_interval_begin_phase_ = prior_interval_begin;
+      current_interval_end_phase_ = prior_interval_end;
+      logical_substep_ = prior_substep;
+      stage_time_ = prior_stage;
+      clear_active_multiblock_group_();
+      throw;
+    }
+    active_level_ = prior_level;
+    current_dt_ = prior_dt;
+    current_interval_start_time_ = prior_interval_start;
+    current_interval_begin_phase_ = prior_interval_begin;
+    current_interval_end_phase_ = prior_interval_end;
+    logical_substep_ = prior_substep;
+    stage_time_ = prior_stage;
+    (void)operation;
+  }
+
+  static std::size_t checked_product_(std::size_t left, std::size_t right,
+                                      std::string_view operation) {
+    if (right != 0 && left > std::numeric_limits<std::size_t>::max() / right)
+      throw std::length_error(std::string(operation) + " exceeds size_t");
+    return left * right;
+  }
+
+  void prepare_multiblock_subcycling_engine_() const {
+    auto& hierarchy = facade_->prepared_amr_multiblock_hierarchy_();
+    std::vector<std::size_t> rhs_basis_bounds;
+    std::vector<std::size_t> coefficient_term_bounds;
+    std::string program_budget_contract;
+    std::exception_ptr local_error;
+    try {
+      const flux_expression_budget_type& expression_budget =
+          facade_->prepared_amr_program_flux_expression_budget();
+      const auto& prepared_map = facade_->prepared_amr_program_block_map();
+      const auto& program_map = facade_->program_block_map();
+      const std::size_t blocks = hierarchy.block_count();
+      if (expression_budget.program_hash.empty() ||
+          expression_budget.program_hash != facade_->installed_program_hash() ||
+          expression_budget.generation != runtime_->materialization_generation() ||
+          expression_budget.exact_contract.empty() ||
+          expression_budget.program_block_map.canonical_indices != prepared_map.canonical_indices ||
+          expression_budget.program_block_map.hierarchy_contract !=
+              prepared_map.hierarchy_contract ||
+          expression_budget.program_block_map.exact_contract != prepared_map.exact_contract ||
+          expression_budget.blocks.size() != blocks || program_map.size() != blocks ||
+          prepared_map.canonical_indices.size() != blocks)
+        throw std::logic_error(
+            "AMR Program flux-expression budget is not authentic for the active carrier");
+
+      rhs_basis_bounds.assign(blocks, 0);
+      coefficient_term_bounds.assign(blocks, 0);
+      std::vector<bool> seen(blocks, false);
+      for (std::size_t program_block = 0; program_block < blocks; ++program_block) {
+        const int mapped = program_map[program_block];
+        const std::size_t canonical = prepared_map.canonical_indices[program_block];
+        if (mapped < 0 || static_cast<std::size_t>(mapped) != canonical || canonical >= blocks ||
+            seen[canonical])
+          throw std::logic_error(
+              "AMR Program flux-expression budget differs from its exact block permutation");
+        seen[canonical] = true;
+        const auto& block_budget = expression_budget.blocks[program_block];
+        const bool active =
+            block_budget.rhs_basis_bound != 0 || block_budget.coefficient_term_bound != 0;
+        if (active &&
+            (block_budget.rhs_basis_bound == 0 || block_budget.coefficient_term_bound == 0))
+          throw std::logic_error(
+              "AMR Program flux-expression budget has a partial per-block bound");
+        rhs_basis_bounds[canonical] = block_budget.rhs_basis_bound;
+        coefficient_term_bounds[canonical] = block_budget.coefficient_term_bound;
+      }
+      program_budget_contract = expression_budget.exact_contract;
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    const auto communicator = hierarchy.lane().communicator();
+    if (all_reduce_max(local_error ? 1L : 0L, communicator) != 0) {
+      if (hierarchy.lane().size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error("AMR Program flux-expression budget validation failed collectively");
+    }
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{std::string_view("amr-program-flux-expression-budget"),
+              std::string_view(program_budget_contract)}},
+            communicator))
+      throw std::invalid_argument(
+          "AMR Program flux-expression budget differs between prepared-lane ranks");
+
+    if (multiblock_subcycling_ != nullptr &&
+        multiblock_subcycling_epoch_ == runtime_->topology_epoch() &&
+        multiblock_subcycling_generation_ == runtime_->materialization_generation() &&
+        multiblock_subcycling_program_budget_contract_ == program_budget_contract)
+      return;
+
+    std::unique_ptr<multiblock_subcycling_type> prepared;
+    local_error = nullptr;
+    try {
+      const auto relations = facade_->prepared_program_temporal_relations();
+      if (relations.size() + 1 != hierarchy.level_count())
+        throw std::logic_error(
+            "AMR Program subcycling lacks one temporal relation per live transition");
+
+      std::size_t maximum_patches = 1;
+      for (std::size_t level = 0; level < hierarchy.level_count(); ++level)
+        maximum_patches =
+            std::max(maximum_patches,
+                     hierarchy.topology_runtime().hierarchy().layout(level).patches().size());
+      const std::size_t overlap_pairs = maximum_patches < 2
+                                            ? 1
+                                            : checked_product_(maximum_patches, maximum_patches - 1,
+                                                               "AMR Program patch-overlap budget") /
+                                                  2;
+
+      // The ledger implementation requires a positive structural capacity even for an
+      // authenticated source-only Program.  Flux-producing Programs derive every retained entry
+      // from the exact per-block RHS-basis bound below; no evaluation-count fallback is used.
+      std::size_t maximum_entries = 1;
+      for (std::size_t parent = 0; parent < relations.size(); ++parent) {
+        const auto ratio =
+            hierarchy.topology_runtime().hierarchy().layout(parent + 1).ratio_from_parent();
+        const auto temporal = relations[parent].temporal_ratio();
+        const std::size_t substeps =
+            static_cast<std::size_t>(temporal.numerator / temporal.denominator +
+                                     (temporal.numerator % temporal.denominator == 0 ? 0 : 1));
+        for (std::size_t block = 0; block < hierarchy.block_count(); ++block) {
+          std::size_t block_entries = 0;
+          for (const ProgramInterfaceFace& interface : program_interface_faces_(parent)) {
+            std::size_t fine_faces = 1;
+            for (int axis = 0; axis < Dim; ++axis)
+              if (axis != interface.axis)
+                fine_faces = checked_product_(fine_faces, static_cast<std::size_t>(ratio[axis]),
+                                              "AMR Program fine-face budget");
+            const std::size_t fine_evaluations =
+                checked_product_(substeps, fine_faces, "AMR Program temporal fine-flux budget");
+            if (fine_evaluations == std::numeric_limits<std::size_t>::max())
+              throw std::length_error("AMR Program face-fragment budget exceeds size_t");
+            const std::size_t fragments_per_basis = 1 + fine_evaluations;
+            const std::size_t face_entries =
+                checked_product_(rhs_basis_bounds[block], fragments_per_basis,
+                                 "AMR Program authenticated face-flux expression budget");
+            if (block_entries > std::numeric_limits<std::size_t>::max() - face_entries)
+              throw std::length_error("AMR Program face-flux ledger budget exceeds size_t");
+            block_entries += face_entries;
+          }
+          maximum_entries = std::max(maximum_entries, block_entries);
+        }
+      }
+
+      ::pops::numerics::time::amr::MultiBlockAmrSubcyclingBudget budget;
+      budget.transitions = {relations.size(), {maximum_patches, overlap_pairs}};
+      budget.flux_ledger = {maximum_entries, maximum_entries, 1};
+      prepared = std::make_unique<multiblock_subcycling_type>(
+          multiblock_subcycling_type::prepare(hierarchy, relations, budget));
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_error ? 1L : 0L, communicator) != 0) {
+      if (hierarchy.lane().size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error("AMR Program subcycling preparation failed collectively");
+    }
+
+    multiblock_subcycling_ = std::move(prepared);
+    prepared_rhs_basis_bounds_ = std::move(rhs_basis_bounds);
+    prepared_coefficient_term_bounds_ = std::move(coefficient_term_bounds);
+    multiblock_subcycling_program_budget_contract_ = std::move(program_budget_contract);
+    multiblock_subcycling_epoch_ = runtime_->topology_epoch();
+    multiblock_subcycling_generation_ = runtime_->materialization_generation();
+  }
+
+  template <class Body>
+  void advance_multiblock_level_group_(multiblock_level_group_type group, Body& body) const {
+    const std::size_t blocks = facade_->prepared_amr_multiblock_hierarchy_().block_count();
+    if (group.size() != blocks || group.empty())
+      throw std::logic_error("AMR Program level group lost its complete block pack");
+
+    if (prepared_rhs_basis_bounds_.size() != blocks ||
+        prepared_coefficient_term_bounds_.size() != blocks)
+      throw std::logic_error(
+          "AMR Program level group lacks its authenticated flux-expression budget");
+    active_attempt_states_.assign(blocks, nullptr);
+    active_staged_parents_.assign(blocks, nullptr);
+    active_incoming_flux_.assign(blocks, nullptr);
+    active_outgoing_flux_.assign(blocks, nullptr);
+    active_block_identities_.assign(blocks, {});
+    active_flux_basis_counts_.assign(blocks, 0);
+    active_flux_expressions_.clear();
+    next_active_flux_basis_identity_ = 0;
+    for (auto& current : group) {
+      if (current.block >= blocks || current.level != group.front().level ||
+          current.substep != group.front().substep || current.attempt != group.front().attempt ||
+          current.window.begin != group.front().window.begin ||
+          current.window.end != group.front().window.end ||
+          active_attempt_states_[current.block] != nullptr)
+        throw std::logic_error("AMR Program level group is not canonical and simultaneous");
+      active_attempt_states_[current.block] = &current.candidate;
+      active_staged_parents_[current.block] = current.staged_parent;
+      active_incoming_flux_[current.block] = current.incoming_flux;
+      active_outgoing_flux_[current.block] = current.outgoing_flux;
+      active_block_identities_[current.block] = current.block_identity;
+    }
+    if (std::find(active_attempt_states_.begin(), active_attempt_states_.end(), nullptr) !=
+        active_attempt_states_.end())
+      throw std::logic_error("AMR Program level group omits a runtime block candidate");
+
+    active_level_ = static_cast<int>(group.front().level);
+    logical_substep_ = group.front().substep;
+    active_subcycling_attempt_ = group.front().attempt;
+    active_subcycling_window_ = group.front().window;
+    current_dt_ = group.front().window.end.physical_time - group.front().window.begin.physical_time;
+    current_interval_start_time_ = group.front().window.begin.physical_time;
+    current_interval_begin_phase_ = group.front().window.begin.phase;
+    current_interval_end_phase_ = group.front().window.end.phase;
+    stage_time_ = {0, 1};
+    facade_->clear_prepared_amr_level_evaluations();
+    try {
+      body(current_dt_);
+      for (std::size_t block = 0; block < blocks; ++block)
+        materialize_active_flux_expression_(block, *active_attempt_states_[block]);
+    } catch (...) {
+      clear_active_multiblock_group_();
+      throw;
+    }
+    clear_active_multiblock_group_();
+  }
+
+  void clear_active_multiblock_group_() const noexcept {
+    active_attempt_states_.clear();
+    active_staged_parents_.clear();
+    active_incoming_flux_.clear();
+    active_outgoing_flux_.clear();
+    active_block_identities_.clear();
+    active_flux_basis_counts_.clear();
+    active_flux_expressions_.clear();
+    next_active_flux_basis_identity_ = 0;
+    active_subcycling_attempt_ = 0;
+  }
+
+  struct ProgramInterfaceFace {
+    int axis = 0;
+    Index<Dim> coarse_face{};
+    Index<Dim> coarse_cell{};
+    ::pops::amr::reflux::CoarseCellFaceSide side = ::pops::amr::reflux::CoarseCellFaceSide::Lower;
+  };
+
+  static std::array<int, Dim> index_key_(const Index<Dim>& index) {
+    std::array<int, Dim> result{};
+    for (int axis = 0; axis < Dim; ++axis)
+      result[static_cast<std::size_t>(axis)] = index[axis];
+    return result;
+  }
+
+  static std::vector<Index<Dim>> cells_in_box_(const Box<Dim>& box) {
+    const std::size_t cells = static_cast<std::size_t>(box.numPts());
+    std::vector<Index<Dim>> result;
+    result.reserve(cells);
+    for (std::size_t ordinal = 0; ordinal < cells; ++ordinal) {
+      std::size_t remainder = ordinal;
+      Index<Dim> cell{};
+      for (int axis = 0; axis < Dim; ++axis) {
+        const std::size_t length = static_cast<std::size_t>(box.length(axis));
+        cell[axis] = box.lo[axis] + static_cast<int>(remainder % length);
+        remainder /= length;
+      }
+      result.push_back(cell);
+    }
+    return result;
+  }
+
+  std::vector<ProgramInterfaceFace> program_interface_faces_(std::size_t parent_level) const {
+    const auto& parent = runtime_->hierarchy().layout(parent_level);
+    const auto& child = runtime_->hierarchy().layout(parent_level + 1);
+    Extent<Dim> ratio{};
+    for (int axis = 0; axis < Dim; ++axis)
+      ratio[axis] = child.ratio_from_parent()[axis];
+    std::set<std::array<int, Dim>> covered;
+    for (const Box<Dim>& fine_patch : child.patches().boxes())
+      for (const Index<Dim>& cell : cells_in_box_(pops::coarsen(fine_patch, ratio)))
+        covered.insert(index_key_(cell));
+
+    std::vector<ProgramInterfaceFace> result;
+    for (const auto& coordinate : covered) {
+      Index<Dim> inside{};
+      for (int axis = 0; axis < Dim; ++axis)
+        inside[axis] = coordinate[static_cast<std::size_t>(axis)];
+      for (int axis = 0; axis < Dim; ++axis) {
+        for (int direction : {-1, 1}) {
+          Index<Dim> outside = inside;
+          outside[axis] += direction;
+          const bool parent_cell =
+              std::any_of(parent.patches().boxes().begin(), parent.patches().boxes().end(),
+                          [&](const Box<Dim>& patch) { return patch.contains(outside); });
+          if (!parent.domain().contains(outside) || !parent_cell ||
+              covered.contains(index_key_(outside)))
+            continue;
+          Index<Dim> face = inside;
+          if (direction > 0)
+            ++face[axis];
+          result.push_back({axis, face, outside,
+                            direction > 0 ? ::pops::amr::reflux::CoarseCellFaceSide::Lower
+                                          : ::pops::amr::reflux::CoarseCellFaceSide::Upper});
+        }
+      }
+    }
+    return result;
+  }
+
+  std::vector<Real> collective_face_payload_(const level_evaluation_type& evaluation,
+                                             const field_type& field, int axis,
+                                             const Index<Dim>& face) const {
+    std::vector<Real> payload;
+    std::exception_ptr local_error;
+    try {
+      std::size_t selected = field.layout().size();
+      for (std::size_t global = 0; global < field.layout().size(); ++global)
+        if (nd::face_box(field.layout()[global], axis).contains(face)) {
+          selected = global;
+          break;
+        }
+      if (selected == field.layout().size())
+        throw std::out_of_range("AMR Program interface face has no level flux patch");
+      const Index<Dim> owner = field.distribution().replicated()
+                                   ? field.rank_space().coordinate(0)
+                                   : field.distribution().owner(selected);
+      payload.assign(static_cast<std::size_t>(field.ncomp()), Real(0));
+      if (owner == field.local_rank()) {
+        const std::size_t local = field.local_index_of(selected);
+        if (local == field_type::not_local || local >= evaluation.integrated_face_fluxes.size())
+          throw std::runtime_error("AMR Program interface flux storage lost its local patch");
+        const FieldView<const Real, Dim> values =
+            evaluation.integrated_face_fluxes[local].view().axes[axis];
+        for (int component = 0; component < field.ncomp(); ++component) {
+          Real value = Real(0);
+          Kokkos::parallel_reduce(
+              "pops_program_amr_interface_face", Kokkos::RangePolicy<>(0, 1),
+              [=] POPS_HD(int, Real& sum) { sum += values(face, component); }, value);
+          payload[static_cast<std::size_t>(component)] = value;
+        }
+        Kokkos::fence();
+      }
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    const auto communicator = facade_->prepared_amr_multiblock_hierarchy_().lane().communicator();
+    if (all_reduce_max(local_error ? 1L : 0L, communicator) != 0) {
+      if (local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error("AMR Program interface flux failed on another MPI rank");
+    }
+    for (Real& value : payload)
+      value = all_reduce_sum(value, communicator);
+    return payload;
+  }
+
+  static void payload_axpy_(std::vector<Real>& destination, double factor,
+                            const std::vector<Real>& source) {
+    if (destination.empty())
+      destination.assign(source.size(), Real(0));
+    if (destination.size() != source.size())
+      throw std::invalid_argument("AMR Program reflux payload component counts differ");
+    for (std::size_t component = 0; component < source.size(); ++component)
+      destination[component] += static_cast<Real>(factor) * source[component];
+  }
+
+  static double face_measure_(const Geometry<Dim>& geometry, int normal_axis) {
+    double result = 1.0;
+    for (int axis = 0; axis < Dim; ++axis)
+      if (axis != normal_axis)
+        result *= static_cast<double>(geometry.spacing(axis));
+    return result;
+  }
+
+  static double cell_measure_(const Geometry<Dim>& geometry) {
+    double result = 1.0;
+    for (int axis = 0; axis < Dim; ++axis)
+      result *= static_cast<double>(geometry.spacing(axis));
+    return result;
+  }
+
+  void apply_reflux_payload_(field_type& coarse, const Index<Dim>& cell,
+                             const std::vector<Real>& correction) const {
+    for (std::size_t local = 0; local < coarse.local_size(); ++local) {
+      if (!coarse.box(local).contains(cell))
+        continue;
+      const FieldView<Real, Dim> values = coarse.fab(local).view();
+      for (int component = 0; component < static_cast<int>(correction.size()); ++component) {
+        const Real increment = correction[static_cast<std::size_t>(component)];
+        for_each_cell(Box<Dim>{cell, cell}, [=] POPS_HD(const Index<Dim>& index) {
+          values(index, component) += increment;
+        });
+      }
+      return;
+    }
+  }
+
+  void attach_active_flux_basis_(int runtime_block, const level_evaluation_type& evaluation,
+                                 field_type& rhs) const {
+    if (active_attempt_states_.empty())
+      return;
+    if (runtime_block < 0 ||
+        static_cast<std::size_t>(runtime_block) >= active_attempt_states_.size() ||
+        active_attempt_states_[static_cast<std::size_t>(runtime_block)] == nullptr)
+      throw std::logic_error("AMR Program flux evaluation has no active block candidate");
+
+    using fragment_role_type = ::pops::amr::reflux::FaceLedgerRole;
+    struct PendingFace {
+      fragment_role_type role = fragment_role_type::Coarse;
+      int axis = 0;
+      Index<Dim> face{};
+      Index<Dim> coarse_face{};
+      double measure = 0.0;
+    };
+
+    const std::size_t block = static_cast<std::size_t>(runtime_block);
+    std::vector<PendingFace> pending;
+    std::exception_ptr preparation_error;
+    try {
+      require_same_field_contract_(evaluation.residual, rhs,
+                                   "AMR Program flux-expression RHS basis");
+      if (evaluation.point.level != active_level_ || evaluation.point.substep != logical_substep_ ||
+          evaluation.point.stage_fraction != stage_time_ || evaluation.point.dt != current_dt_ ||
+          evaluation.topology_epoch != runtime_->topology_epoch() ||
+          evaluation.materialization_generation != runtime_->materialization_generation() ||
+          evaluation.integrated_face_fluxes.size() != rhs.local_size() ||
+          active_block_identities_[block].empty() ||
+          !(current_interval_begin_phase_ < current_interval_end_phase_) ||
+          !std::isfinite(current_interval_start_time_) || !std::isfinite(current_dt_) ||
+          !(current_dt_ > 0.0))
+        throw std::logic_error(
+            "AMR Program flux-expression basis differs from its active evaluation interval");
+      if (block >= prepared_rhs_basis_bounds_.size() ||
+          block >= prepared_coefficient_term_bounds_.size() ||
+          prepared_rhs_basis_bounds_[block] == 0 || prepared_coefficient_term_bounds_[block] == 0)
+        throw std::logic_error(
+            "flux-producing AMR Program block has no authenticated expression budget");
+      if (active_flux_basis_counts_.at(block) >= prepared_rhs_basis_bounds_[block])
+        throw std::length_error(
+            "AMR Program flux evaluations exceed their authenticated RHS-basis bound");
+      if (next_active_flux_basis_identity_ == std::numeric_limits<std::uint64_t>::max())
+        throw std::overflow_error("AMR Program flux basis identity exhausted uint64_t");
+
+      if (active_outgoing_flux_[block] != nullptr) {
+        const Geometry<Dim> geometry = facade_->prepared_amr_level_geometry(active_level_);
+        for (const ProgramInterfaceFace& interface :
+             program_interface_faces_(static_cast<std::size_t>(active_level_)))
+          pending.push_back({fragment_role_type::Coarse, interface.axis, interface.coarse_face,
+                             interface.coarse_face, face_measure_(geometry, interface.axis)});
+      }
+      if (active_incoming_flux_[block] != nullptr) {
+        const std::size_t parent = static_cast<std::size_t>(active_level_ - 1);
+        const auto& hierarchy = facade_->prepared_amr_multiblock_hierarchy_();
+        const auto ratio =
+            hierarchy.topology_runtime().hierarchy().layout(parent + 1).ratio_from_parent();
+        const ::pops::amr::reflux::FaceRefinementMapping<Dim> mapping{
+            hierarchy.topology_runtime().hierarchy().layout(parent).domain().lo,
+            hierarchy.topology_runtime().hierarchy().layout(parent + 1).domain().lo};
+        const Geometry<Dim> geometry = facade_->prepared_amr_level_geometry(active_level_);
+        for (const ProgramInterfaceFace& interface : program_interface_faces_(parent)) {
+          ::pops::amr::reflux::CoarseFaceRefluxKey<Dim> query;
+          query.owner = std::string(active_block_identities_[block]);
+          query.state = query.owner + "/state";
+          query.levels = {static_cast<int>(parent), static_cast<int>(parent + 1)};
+          query.axis = interface.axis;
+          query.coarse_face = interface.coarse_face;
+          query.attempt = active_subcycling_attempt_;
+          query.macro_step = evaluation.point.tick;
+          query.window_begin = current_interval_begin_phase_;
+          query.window_end = current_interval_end_phase_;
+          std::size_t fine_count = 1;
+          for (int axis = 0; axis < Dim; ++axis)
+            if (axis != interface.axis)
+              fine_count = checked_product_(fine_count, static_cast<std::size_t>(ratio[axis]),
+                                            "AMR Program fine-face enumeration");
+          const ::pops::amr::reflux::MetricRefluxBudget budget{fine_count, fine_count, 1};
+          for (const Index<Dim>& fine_face :
+               ::pops::amr::reflux::fine_faces_for_coarse_face(query, ratio, mapping, budget))
+            pending.push_back({fragment_role_type::Fine, interface.axis, fine_face,
+                               interface.coarse_face, face_measure_(geometry, interface.axis)});
+        }
+      }
+    } catch (...) {
+      preparation_error = std::current_exception();
+    }
+    const auto communicator = facade_->prepared_amr_multiblock_hierarchy_().lane().communicator();
+    if (all_reduce_max(preparation_error ? 1L : 0L, communicator) != 0) {
+      if (facade_->prepared_amr_multiblock_hierarchy_().lane().size() == 1 && preparation_error)
+        std::rethrow_exception(preparation_error);
+      throw std::runtime_error("AMR Program face-flux preparation failed collectively");
+    }
+
+    std::vector<FluxBasisFace> faces;
+    preparation_error = nullptr;
+    try {
+      faces.reserve(pending.size());
+    } catch (...) {
+      preparation_error = std::current_exception();
+    }
+    if (all_reduce_max(preparation_error ? 1L : 0L, communicator) != 0) {
+      if (facade_->prepared_amr_multiblock_hierarchy_().lane().size() == 1 && preparation_error)
+        std::rethrow_exception(preparation_error);
+      throw std::runtime_error("AMR Program face-flux basis reservation failed collectively");
+    }
+
+    for (const PendingFace& face : pending) {
+      std::vector<Real> payload = collective_face_payload_(evaluation, rhs, face.axis, face.face);
+      std::optional<FluxBasisFace> prepared_face;
+      std::exception_ptr payload_error;
+      try {
+        if (!(face.measure > 0.0) || !std::isfinite(face.measure))
+          throw std::invalid_argument("AMR Program flux basis has an invalid face measure");
+        for (Real& component : payload) {
+          if (!std::isfinite(static_cast<double>(component)))
+            throw std::invalid_argument("AMR Program flux basis contains a non-finite payload");
+          // Generated Cartesian operators retain face-integrated fluxes.  The metric ledger
+          // consumes a density and multiplies its authenticated face measure exactly once.
+          component /= static_cast<Real>(face.measure);
+        }
+        prepared_face.emplace(FluxBasisFace{face.role, face.axis, face.face, face.coarse_face,
+                                            face.measure, std::move(payload)});
+      } catch (...) {
+        payload_error = std::current_exception();
+      }
+      if (all_reduce_max(payload_error ? 1L : 0L, communicator) != 0) {
+        if (facade_->prepared_amr_multiblock_hierarchy_().lane().size() == 1 && payload_error)
+          std::rethrow_exception(payload_error);
+        throw std::runtime_error("AMR Program face-flux basis failed collectively");
+      }
+      faces.push_back(std::move(*prepared_face));
+    }
+
+    const std::uint64_t identity = next_active_flux_basis_identity_ + 1;
+    FluxExpressionRegistry expression_candidate;
+    std::exception_ptr expression_error;
+    try {
+      const ::pops::amr::ClockWindow interval{
+          {active_level_, evaluation.point.tick, current_interval_begin_phase_,
+           current_interval_start_time_},
+          {active_level_, evaluation.point.tick, current_interval_end_phase_,
+           current_interval_start_time_ + current_dt_}};
+      auto basis = std::make_shared<const FluxBasis>(FluxBasis{identity, block, active_level_,
+                                                               evaluation.point.stage_fraction,
+                                                               interval, std::move(faces)});
+      FluxExpression expression;
+      expression.emplace(identity, FluxExpressionTerm{std::move(basis), {{0, {1, 1}}}});
+      require_flux_expression_budget_(expression);
+      expression_candidate = active_flux_expressions_;
+      expression_candidate[&rhs] = std::move(expression);
+    } catch (...) {
+      expression_error = std::current_exception();
+    }
+    if (all_reduce_max(expression_error ? 1L : 0L, communicator) != 0) {
+      if (facade_->prepared_amr_multiblock_hierarchy_().lane().size() == 1 && expression_error)
+        std::rethrow_exception(expression_error);
+      throw std::runtime_error("AMR Program flux-expression attachment failed collectively");
+    }
+    active_flux_expressions_.swap(expression_candidate);
+    ++active_flux_basis_counts_[block];
+    next_active_flux_basis_identity_ = identity;
+  }
+
+  void materialize_active_flux_expression_(std::size_t runtime_block,
+                                           const field_type& candidate) const {
+    using fragment_key_type = ::pops::amr::reflux::FaceFluxFragmentKey<Dim>;
+    using fragment_role_type = ::pops::amr::reflux::FaceLedgerRole;
+    if (runtime_block >= active_attempt_states_.size() ||
+        runtime_block >= active_incoming_flux_.size() ||
+        runtime_block >= active_outgoing_flux_.size() ||
+        runtime_block >= active_block_identities_.size() ||
+        active_attempt_states_[runtime_block] != &candidate ||
+        active_block_identities_[runtime_block].empty())
+      throw std::logic_error("AMR Program final flux expression has no canonical block candidate");
+
+    const FluxExpression expression = active_flux_expression_(candidate);
+    require_flux_expression_budget_(expression);
+    for (const auto& [identity, term] : expression) {
+      if (!term.basis || term.basis->identity != identity ||
+          term.basis->runtime_block != runtime_block || term.basis->level != active_level_ ||
+          term.coefficient.size() != 1 || term.coefficient.begin()->first != 1)
+        throw std::invalid_argument(
+            "AMR Program final flux coefficient is not a supported exact dt integral");
+      const ::pops::amr::Rational weight = term.coefficient.begin()->second;
+      if (weight.denominator <= 0 ||
+          ::pops::amr::Rational{weight.numerator, weight.denominator} != weight)
+        throw std::invalid_argument(
+            "AMR Program final flux coefficient lost its canonical rational metadata");
+      const FluxBasis& basis = *term.basis;
+      if (basis.window.begin.level != active_level_ || basis.window.end.level != active_level_ ||
+          basis.window.begin.macro_step != active_subcycling_window_.begin.macro_step ||
+          basis.window.end.macro_step != active_subcycling_window_.end.macro_step ||
+          basis.window.begin.phase < active_subcycling_window_.begin.phase ||
+          active_subcycling_window_.end.phase < basis.window.end.phase ||
+          !(basis.window.begin.phase < basis.window.end.phase) ||
+          basis.stage_fraction.denominator <= 0 || basis.stage_fraction.numerator < 0 ||
+          basis.stage_fraction.numerator > basis.stage_fraction.denominator)
+        throw std::invalid_argument(
+            "AMR Program flux basis lies outside its canonical level/substep window");
+      const double duration = basis.window.end.physical_time - basis.window.begin.physical_time;
+      if (!std::isfinite(duration) || !(duration > 0.0))
+        throw std::invalid_argument("AMR Program flux basis has an invalid physical duration");
+      const ::pops::amr::Rational stage_phase =
+          basis.window.begin.phase +
+          (basis.window.end.phase - basis.window.begin.phase) * basis.stage_fraction;
+      const double stage_physical_time =
+          basis.window.begin.physical_time + basis.stage_fraction.value() * duration;
+      const std::string stage = "pops.program-flux-expression.v1/basis/" +
+                                std::to_string(identity) + "/dt-power/1/weight/" +
+                                std::to_string(weight.numerator) + "/" +
+                                std::to_string(weight.denominator) + "/stage/" +
+                                std::to_string(basis.stage_fraction.numerator) + "/" +
+                                std::to_string(basis.stage_fraction.denominator);
+
+      for (const FluxBasisFace& face : basis.faces) {
+        multiblock_flux_ledger_type* ledger = face.role == fragment_role_type::Coarse
+                                                  ? active_outgoing_flux_[runtime_block]
+                                                  : active_incoming_flux_[runtime_block];
+        if (ledger == nullptr)
+          throw std::logic_error(
+              "AMR Program flux basis targets no active hierarchy-transition ledger");
+        fragment_key_type key;
+        key.owner = std::string(active_block_identities_[runtime_block]);
+        key.state = key.owner + "/state";
+        key.levels = face.role == fragment_role_type::Coarse
+                         ? ::pops::amr::reflux::LevelTransition{active_level_, active_level_ + 1}
+                         : ::pops::amr::reflux::LevelTransition{active_level_ - 1, active_level_};
+        key.axis = face.axis;
+        key.face = face.face;
+        key.coarse_face = face.coarse_face;
+        key.clock = {active_level_, basis.window.begin.macro_step, stage_phase,
+                     stage_physical_time};
+        key.stage = stage;
+        key.attempt = active_subcycling_attempt_;
+        key.role = face.role;
+        ledger->accumulate(
+            std::move(key),
+            {weight, basis.window.begin.phase, basis.window.end.phase, duration, face.face_measure},
+            face.flux_density);
+      }
+    }
+  }
+
+  void reconcile_multiblock_reflux_(multiblock_reflux_context_type& context) const {
+    if (context.flux.published_size() == 0)
+      return;
+    const Geometry<Dim> geometry =
+        facade_->prepared_amr_level_geometry(static_cast<int>(context.parent_level));
+    std::size_t maximum_fine_faces = 1;
+    for (int axis = 0; axis < Dim; ++axis)
+      maximum_fine_faces = checked_product_(maximum_fine_faces,
+                                            static_cast<std::size_t>(context.spatial_ratio[axis]),
+                                            "AMR Program reflux fine-face budget");
+    const ::pops::amr::reflux::MetricRefluxBudget budget{
+        maximum_fine_faces, std::max<std::size_t>(context.flux.published_size(), 1),
+        std::max<std::size_t>(context.flux.published_size(), 1)};
+    const std::string state_identity = std::string(context.block_identity) + "/state";
+    for (const ProgramInterfaceFace& interface : program_interface_faces_(context.parent_level)) {
+      ::pops::amr::reflux::CoarseFaceRefluxKey<Dim> query;
+      query.owner = std::string(context.block_identity);
+      query.state = state_identity;
+      query.levels = {static_cast<int>(context.parent_level),
+                      static_cast<int>(context.parent_level + 1)};
+      query.axis = interface.axis;
+      query.coarse_face = interface.coarse_face;
+      query.attempt = context.attempt;
+      query.macro_step = context.parent_window.begin.macro_step;
+      query.window_begin = context.parent_window.begin.phase;
+      query.window_end = context.parent_window.end.phase;
+      bool found_coarse = false;
+      for (const auto& entry : context.flux.published_entries(interface.axis))
+        found_coarse =
+            found_coarse ||
+            (entry.key.owner == query.owner && entry.key.state == query.state &&
+             entry.key.levels == query.levels && entry.key.axis == query.axis &&
+             entry.key.coarse_face == query.coarse_face && entry.key.attempt == query.attempt &&
+             entry.key.role == ::pops::amr::reflux::FaceLedgerRole::Coarse);
+      if (!found_coarse)
+        throw std::runtime_error(
+            "AMR Program reflux ledger lacks its block-qualified coarse face: owner=" +
+            query.owner + " axis=" + std::to_string(query.axis) +
+            " published=" + std::to_string(context.flux.published_size()));
+      const auto reflux = facade_->prepared_amr_multiblock_hierarchy_()
+                              .topology_runtime()
+                              .reconcile_reflux_for_owner(
+                                  context.flux, query, context.block_identity, state_identity,
+                                  context.face_mapping, budget, payload_axpy_);
+      const std::vector<Real> correction = ::pops::amr::reflux::coarse_cell_reflux_correction(
+          reflux, cell_measure_(geometry), interface.side, payload_axpy_);
+      apply_reflux_payload_(context.parent, interface.coarse_cell, correction);
+    }
+  }
+
   void require_history_free_for_topology_change_(std::string_view operation) const {
     if (!history_levels_.empty())
       throw std::runtime_error(
           "AmrProgramContext cannot " + std::string(operation) +
           " while exact-ranked history rings lack a prepared rematerialization transaction");
   }
-  [[noreturn]] static void unavailable_(std::string_view provider) {
-    throw std::runtime_error("AmrProgramContext has no prepared " + std::string(provider));
+  [[noreturn]] static void deferred_op(std::string_view id, std::string_view detail) {
+    throw std::runtime_error("AmrProgramContext deferred capability '" + std::string(id) +
+                             "': " + std::string(detail));
   }
 
   PhysicalBoundaryConditions<Dim> hierarchy_tensor_boundary_(const Geometry<Dim>& geometry) const {
@@ -1621,6 +3127,7 @@ class AmrProgramContext {
         result.ghosts() != ghosts)
       throw std::runtime_error("AMR Program scratch identity changed its exact field contract");
     result.set_val(Real(0));
+    clear_active_flux_expression_(result);
     return result;
   }
 
@@ -1775,6 +3282,36 @@ class AmrProgramContext {
       throw std::invalid_argument(std::string(operation) + " has a foreign evaluation point");
   }
 
+  const field_type* staged_parent_for_block_(int runtime_block) const {
+    if (runtime_block < 0)
+      throw std::out_of_range("AMR Program staged-parent block is out of range");
+    if (active_staged_parents_.empty())
+      return nullptr;
+    if (static_cast<std::size_t>(runtime_block) >= active_staged_parents_.size())
+      throw std::logic_error("AMR Program staged-parent registry is incomplete");
+    return active_staged_parents_[static_cast<std::size_t>(runtime_block)];
+  }
+
+  std::optional<int> authenticated_runtime_block_for_state_target_(const field_type& target) const {
+    require_facade_execution_();
+    const auto& map = facade_->program_block_map();
+    if (map.size() != static_cast<std::size_t>(n_blocks()))
+      throw std::logic_error("AMR Program state target has no complete authenticated block map");
+    std::optional<int> match;
+    for (int runtime_block = 0; runtime_block < n_blocks(); ++runtime_block) {
+      const field_type* candidate = nullptr;
+      if (!active_attempt_states_.empty())
+        candidate = active_attempt_states_.at(static_cast<std::size_t>(runtime_block));
+      const field_type* accepted = &facade_->prepared_amr_block_state(runtime_block, active_level_);
+      if (&target != candidate && &target != accepted)
+        continue;
+      if (match)
+        throw std::logic_error("AMR Program state target aliases two runtime blocks");
+      match = runtime_block;
+    }
+    return match;
+  }
+
   static void copy_valid_(const field_type& source, field_type& destination) {
     require_same_field_contract_(source, destination, "AMR Program valid-field copy");
     for (std::size_t local = 0; local < destination.local_size(); ++local) {
@@ -1844,6 +3381,9 @@ class AmrProgramContext {
   runtime_type* runtime_ = nullptr;
   mutable int active_level_ = 0;
   mutable double current_dt_ = 0.0;
+  mutable double current_interval_start_time_ = 0.0;
+  mutable ::pops::amr::Rational current_interval_begin_phase_{0, 1};
+  mutable ::pops::amr::Rational current_interval_end_phase_{1, 1};
   mutable int logical_substep_ = 0;
   mutable ::pops::amr::Rational stage_time_{0, 1};
   mutable std::string primary_clock_;
@@ -1868,7 +3408,40 @@ class AmrProgramContext {
       std::numeric_limits<std::uint64_t>::max();
   mutable PreparedVectorDistribution<Dim> vector_distribution_ =
       PreparedVectorDistribution<Dim>::distributed();
+  mutable std::vector<field_type*> active_attempt_states_;
+  mutable std::vector<const field_type*> active_staged_parents_;
+  mutable std::vector<multiblock_flux_ledger_type*> active_incoming_flux_;
+  mutable std::vector<multiblock_flux_ledger_type*> active_outgoing_flux_;
+  mutable std::vector<std::string_view> active_block_identities_;
+  mutable FluxExpressionRegistry active_flux_expressions_;
+  mutable std::vector<std::size_t> active_flux_basis_counts_;
+  mutable std::uint64_t next_active_flux_basis_identity_ = 0;
+  mutable std::vector<std::size_t> prepared_rhs_basis_bounds_;
+  mutable std::vector<std::size_t> prepared_coefficient_term_bounds_;
+  mutable ::pops::amr::ClockWindow active_subcycling_window_{};
+  mutable std::uint64_t active_subcycling_attempt_ = 0;
+  mutable std::unique_ptr<multiblock_subcycling_type> multiblock_subcycling_;
+  mutable std::uint64_t multiblock_subcycling_epoch_ = std::numeric_limits<std::uint64_t>::max();
+  mutable std::uint64_t multiblock_subcycling_generation_ =
+      std::numeric_limits<std::uint64_t>::max();
+  mutable std::string multiblock_subcycling_program_budget_contract_;
+  mutable std::vector<Geometry<Dim>> cell_temporal_geometries_;
+  mutable std::array<bool, Dim> cell_temporal_periodicity_{};
+  mutable std::vector<CellTemporalLevelRoute> cell_temporal_routes_;
+  mutable std::string cell_temporal_clock_;
+  mutable std::int64_t cell_temporal_tick_denominator_ = 0;
+  mutable int cell_temporal_rung_ = 0;
+  mutable std::uint64_t cell_temporal_epoch_ = std::numeric_limits<std::uint64_t>::max();
+  mutable std::uint64_t cell_temporal_generation_ = std::numeric_limits<std::uint64_t>::max();
 };
+
+template <int Dim, class MemorySpace>
+const ExecutionLane& AmrProgramContext<Dim, MemorySpace>::same_level_cell_execution_lane()
+    const noexcept {
+  if (facade_ == nullptr)
+    std::terminate();
+  return facade_->prepared_program_execution_lane_();
+}
 
 template <int Dim>
 std::shared_ptr<AmrProgramContext<Dim>> make_program_execution_provider(

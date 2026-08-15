@@ -14,6 +14,7 @@
 #include <pops/mesh/storage/field_view.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/parallel/comm.hpp>
+#include <pops/parallel/execution_lane.hpp>
 
 #include <Kokkos_Core.hpp>
 
@@ -74,7 +75,7 @@ struct LocalNonlinearFailureComponentMin {
 
 template <int Dim, class MemorySpace, class Reducer>
 inline int local_nonlinear_failure_min(const MultiFab<Dim, MemorySpace>& statistics,
-                                       Reducer reducer) {
+                                       Reducer reducer, const ExecutionLane& lane) {
   detail::ensure_kokkos_initialized();
   LocalNonlinearMinimumView minimum("pops_local_nonlinear_failure_minimum");
   Kokkos::deep_copy(minimum, std::numeric_limits<int>::max());
@@ -87,7 +88,7 @@ inline int local_nonlinear_failure_min(const MultiFab<Dim, MemorySpace>& statist
 
   int local = std::numeric_limits<int>::max();
   Kokkos::deep_copy(local, minimum);
-  return static_cast<int>(all_reduce_min(static_cast<long>(local)));
+  return static_cast<int>(all_reduce_min(static_cast<long>(local), lane));
 }
 
 }  // namespace detail
@@ -99,7 +100,7 @@ inline int local_nonlinear_failure_min(const MultiFab<Dim, MemorySpace>& statist
 template <int Dim, class MemorySpace>
 inline LocalNonlinearFailureLocation<Dim> collective_first_local_nonlinear_failure(
     const MultiFab<Dim, MemorySpace>& statistics, int priority, int priority_component,
-    int component_component) {
+    int component_component, const ExecutionLane& lane) {
   if (priority <= 0)
     return {};
   if (priority_component < 0 || priority_component >= statistics.ncomp() ||
@@ -110,7 +111,8 @@ inline LocalNonlinearFailureLocation<Dim> collective_first_local_nonlinear_failu
   for (int axis = Dim - 1; axis >= 0; --axis) {
     const int coordinate = detail::local_nonlinear_failure_min(
         statistics, detail::LocalNonlinearFailureAxisMin<Dim>{
-                        {}, {}, priority, priority_component, axis, selected});
+                        {}, {}, priority, priority_component, axis, selected},
+        lane);
     if (coordinate == std::numeric_limits<int>::max())
       throw std::runtime_error("local nonlinear collective priority has no failing cell");
     selected[axis] = coordinate;
@@ -118,7 +120,8 @@ inline LocalNonlinearFailureLocation<Dim> collective_first_local_nonlinear_failu
 
   const int component = detail::local_nonlinear_failure_min(
       statistics, detail::LocalNonlinearFailureComponentMin<Dim>{
-                      {}, {}, priority, priority_component, component_component, selected});
+                      {}, {}, priority, priority_component, component_component, selected},
+      lane);
   if (component == std::numeric_limits<int>::max())
     throw std::runtime_error("local nonlinear collective selected cell has no component");
 

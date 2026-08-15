@@ -4,11 +4,16 @@
 #include "system_impl.hpp"
 
 #include <pops/core/foundation/native_dimension.hpp>
+#include <pops/parallel/execution_lane.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <exception>
+#include <memory>
 #include <stdexcept>
+#include <string>
 #include <utility>
+#include <vector>
 
 namespace pops {
 namespace {
@@ -41,6 +46,174 @@ void require_embedded_residual_route(const SystemBlockStore<Dim>& blocks,
   if (!available)
     throw std::runtime_error(std::string(operation) +
                              " has no exact provider for the selected EB mode and model");
+}
+
+template <int Dim>
+void require_same_block_field(const MultiFab<Dim>& candidate, const MultiFab<Dim>& accepted,
+                              const char* operation) {
+  if (candidate.layout() != accepted.layout() ||
+      candidate.distribution() != accepted.distribution() ||
+      candidate.local_rank() != accepted.local_rank() || candidate.ncomp() != accepted.ncomp() ||
+      candidate.ghosts() != accepted.ghosts())
+    throw std::invalid_argument(std::string(operation) +
+                                " requires the exact prepared block field contract");
+}
+
+template <int Dim>
+void copy_field_storage(const MultiFab<Dim>& source, MultiFab<Dim>& destination) {
+  require_same_block_field(source, destination, "prepared boundary field copy");
+  for (std::size_t local = 0; local < source.local_size(); ++local)
+    Kokkos::deep_copy(destination.fab(local).storage(), source.fab(local).storage());
+  Kokkos::fence();
+}
+
+template <int Dim>
+Real prepared_boundary_local_norm_inf(const MultiFab<Dim>& field) {
+  Real local_norm = Real(0);
+  for (int component = 0; component < field.ncomp(); ++component)
+    local_norm = std::max(local_norm, norm_inf(field, component));
+  return local_norm;
+}
+
+template <int Dim>
+void require_boundary_point(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                            const char* operation) {
+  if (point.clock.empty() || point.tick < 0 || point.level != 0 || point.substep < 0 ||
+      point.stage < 0 || point.stage_fraction < amr::Rational(0, 1) ||
+      amr::Rational(1, 1) < point.stage_fraction || !std::isfinite(point.dt) || point.dt <= 0.0 ||
+      !std::isfinite(point.physical_time))
+    throw std::invalid_argument(std::string(operation) +
+                                " requires a complete Uniform boundary evaluation point");
+}
+
+template <int Dim, class Validate>
+void collective_boundary_preflight(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, int block,
+    const System<Dim>* prepared_system, int prepared_block,
+    const runtime::multiblock::BoundaryEvaluationPoint& prepared_point, const ExecutionLane& lane,
+    const char* operation, Validate&& validate) {
+  std::exception_ptr local_error;
+  try {
+    require_boundary_point<Dim>(point, operation);
+    validate();
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error(std::string(operation) + " preflight failed collectively");
+  }
+
+  ExactContractBuilder invocation;
+  invocation.text(operation)
+      .scalar(std::int32_t{Dim})
+      .scalar(std::int32_t{block})
+      .text(point.clock)
+      .scalar(point.tick)
+      .scalar(point.level)
+      .scalar(point.substep)
+      .scalar(point.stage)
+      .scalar(point.stage_fraction.numerator)
+      .scalar(point.stage_fraction.denominator)
+      .scalar(point.dt)
+      .scalar(point.physical_time)
+      .scalar(prepared_block)
+      .text(prepared_point.clock)
+      .scalar(prepared_point.tick)
+      .scalar(prepared_point.level)
+      .scalar(prepared_point.substep)
+      .scalar(prepared_point.stage)
+      .scalar(prepared_point.stage_fraction.numerator)
+      .scalar(prepared_point.stage_fraction.denominator)
+      .scalar(prepared_point.dt)
+      .scalar(prepared_point.physical_time)
+      .scalar(prepared_system == nullptr ? std::uint8_t{0} : std::uint8_t{1})
+      .text(lane.identity());
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("system-prepared-boundary-invocation"), invocation.view()}},
+          lane.communicator()))
+    throw std::runtime_error(std::string(operation) +
+                             " differs across MPI ranks before publication");
+}
+
+template <int Dim, class Invoke>
+void invoke_prepared_boundary_transaction(MultiFab<Dim>& state, MultiFab<Dim>& result,
+                                          const ExecutionLane& lane, const char* operation,
+                                          Invoke&& invoke) {
+  std::exception_ptr local_error;
+  std::unique_ptr<MultiFab<Dim>> state_snapshot;
+  std::unique_ptr<MultiFab<Dim>> result_snapshot;
+  std::unique_ptr<MultiFab<Dim>> candidate;
+  try {
+    state_snapshot = std::make_unique<MultiFab<Dim>>(state);
+    result_snapshot = std::make_unique<MultiFab<Dim>>(result);
+    candidate = std::make_unique<MultiFab<Dim>>(result);
+    Kokkos::fence();
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error(std::string(operation) +
+                             " rollback allocation failed collectively before publication");
+  }
+
+  const auto rollback_and_throw = [&](std::exception_ptr failure, const char* reason) -> void {
+    std::exception_ptr restore_error;
+    try {
+      copy_field_storage(*state_snapshot, state);
+      copy_field_storage(*result_snapshot, result);
+    } catch (...) {
+      restore_error = std::current_exception();
+    }
+    if (all_reduce_max(restore_error ? 1L : 0L, lane) != 0)
+      throw std::runtime_error(std::string(operation) + " rollback failed collectively");
+    if (lane.size() == 1 && failure) {
+      try {
+        std::rethrow_exception(failure);
+      } catch (const std::exception& error) {
+        throw std::runtime_error(std::string(operation) + " " + reason +
+                                 " and rolled back collectively: " + error.what());
+      } catch (...) {
+        std::rethrow_exception(failure);
+      }
+    }
+    throw std::runtime_error(std::string(operation) + " " + reason +
+                             " and rolled back collectively");
+  };
+
+  local_error = nullptr;
+  try {
+    invoke(*candidate);
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_error ? 1L : 0L, lane) != 0)
+    rollback_and_throw(local_error, "evaluation failed");
+
+  Real local_norm = Real(0);
+  local_error = nullptr;
+  try {
+    local_norm = prepared_boundary_local_norm_inf(*candidate);
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_error ? 1L : 0L, lane) != 0)
+    rollback_and_throw(local_error, "finite-result validation failed");
+  const Real global_norm = static_cast<Real>(all_reduce_max(static_cast<double>(local_norm), lane));
+  if (!std::isfinite(global_norm))
+    rollback_and_throw({}, "produced a non-finite all-component result");
+
+  local_error = nullptr;
+  try {
+    copy_field_storage(*candidate, result);
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_error ? 1L : 0L, lane) != 0)
+    rollback_and_throw(local_error, "publication failed");
 }
 
 }  // namespace
@@ -290,22 +463,173 @@ void System<Dim>::block_rhs_group(const runtime::multiblock::BoundaryEvaluationP
 }
 
 template <int Dim>
-void System<Dim>::block_rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
-                                         int block, MultiFab<Dim>& state, MultiFab<Dim>& residual,
-                                         bool flux_only) {
-  if (block < 0 || block >= p_->blocks_.size())
-    throw std::out_of_range("System core RHS block index is out of range");
+void System<Dim>::block_rhs_core_into_at(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, int block, MultiFab<Dim>& state,
+    MultiFab<Dim>& residual, bool flux_only, const System* prepared_system, int prepared_block,
+    const runtime::multiblock::BoundaryEvaluationPoint& prepared_point, const ExecutionLane& lane,
+    const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+  const bool valid_block = block >= 0 && block < p_->blocks_.size();
+  collective_boundary_preflight<Dim>(
+      point, block, prepared_system, prepared_block, prepared_point, lane,
+      "System::block_rhs_core_into_at", [&] {
+        if (prepared_system != this)
+          throw std::invalid_argument("prepared boundary core session belongs to another System");
+        if (!valid_block)
+          throw std::out_of_range("System core RHS block index is out of range");
+        if (prepared_block != block || prepared_point != point)
+          throw std::invalid_argument(
+              "prepared boundary core session does not match its block or evaluation point");
+      });
+  typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
+  collective_boundary_preflight<Dim>(
+      point, block, prepared_system, prepared_block, prepared_point, lane,
+      "System::block_rhs_core_into_at", [&] {
+        require_same_block_field(state, selected.U, "prepared boundary core state");
+        require_same_block_field(residual, selected.U, "prepared boundary core result");
+        if (p_->embedded_boundary_ && p_->embedded_boundary_->mode() !=
+                                          runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
+          auto& family =
+              select_embedded_residual_family<Dim>(selected, p_->embedded_boundary_->mode());
+          auto& closure = flux_only ? family.flux_only : family.full;
+          require_embedded_residual_route<Dim>(p_->blocks_, selected, block,
+                                               static_cast<bool>(closure),
+                                               "System::block_rhs_core_into_at");
+        } else if (p_->blocks_.has_interfaces(block)) {
+          throw std::runtime_error(
+              "System::block_rhs_core_into_at has no prepared split-boundary interface authority");
+        } else if (selected.boundary && (!selected.boundary_full_at_point_prepared ||
+                                         !selected.boundary_residual_at_point_prepared)) {
+          throw std::runtime_error(
+              "System::block_rhs_core_into_at requires complete prepared boundary residual "
+              "authority");
+        }
+      });
   if (p_->embedded_boundary_ &&
       p_->embedded_boundary_->mode() != runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
-    typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
     auto& family = select_embedded_residual_family<Dim>(selected, p_->embedded_boundary_->mode());
     auto& closure = flux_only ? family.flux_only : family.full;
-    require_embedded_residual_route<Dim>(p_->blocks_, selected, block, static_cast<bool>(closure),
-                                         "System::block_rhs_core_into_at");
     closure(state, residual, *p_->embedded_boundary_);
     return;
   }
+  if (selected.boundary) {
+    invoke_prepared_boundary_transaction<Dim>(
+        state, residual, lane, "System::block_rhs_core_into_at", [&](MultiFab<Dim>& candidate) {
+          MultiFab<Dim> boundary_result(candidate);
+          selected.boundary_residual_at_point_prepared(point, state, boundary_result,
+                                                       *selected.boundary, lane, transport);
+          selected.boundary_full_at_point_prepared(point, state, candidate, *selected.boundary,
+                                                   lane, transport);
+          lincomb(candidate, Real(1), candidate, Real(-1), boundary_result);
+        });
+    return;
+  }
   p_->blocks_.evaluate_rhs_core(point, static_cast<std::size_t>(block), state, residual, flux_only);
+}
+
+template <int Dim>
+bool System<Dim>::has_block_boundary_linearization(int block) const {
+  if (block < 0 || block >= p_->blocks_.size())
+    return false;
+  const typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
+  return selected.boundary != nullptr &&
+         static_cast<bool>(selected.boundary_residual_at_point_prepared) &&
+         static_cast<bool>(selected.boundary_full_at_point_prepared) &&
+         static_cast<bool>(selected.boundary_jvp_at_point_prepared) &&
+         !p_->blocks_.has_interfaces(block) &&
+         !(p_->embedded_boundary_ && p_->embedded_boundary_->mode() !=
+                                         runtime::system::PreparedEmbeddedBoundaryMode::inactive);
+}
+
+template <int Dim>
+void System<Dim>::block_boundary_residual_into_at(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, int block, MultiFab<Dim>& state,
+    MultiFab<Dim>& residual, const System* prepared_system, int prepared_block,
+    const runtime::multiblock::BoundaryEvaluationPoint& prepared_point, const ExecutionLane& lane,
+    const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+  const bool valid_block = block >= 0 && block < p_->blocks_.size();
+  collective_boundary_preflight<Dim>(
+      point, block, prepared_system, prepared_block, prepared_point, lane,
+      "System::block_boundary_residual_into_at", [&] {
+        if (prepared_system != this)
+          throw std::invalid_argument(
+              "prepared boundary residual session belongs to another System");
+        if (!valid_block)
+          throw std::out_of_range("System boundary residual block index is out of range");
+        if (prepared_block != block || prepared_point != point)
+          throw std::invalid_argument(
+              "prepared boundary residual session does not match its block or evaluation point");
+      });
+  typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
+  collective_boundary_preflight<Dim>(
+      point, block, prepared_system, prepared_block, prepared_point, lane,
+      "System::block_boundary_residual_into_at", [&] {
+        if (&state == &residual)
+          throw std::invalid_argument("prepared boundary residual cannot alias state and result");
+        require_same_block_field(state, selected.U, "prepared boundary residual state");
+        require_same_block_field(residual, selected.U, "prepared boundary residual result");
+        if (!selected.boundary || !selected.boundary_residual_at_point_prepared)
+          throw std::runtime_error(
+              "System boundary residual requires one complete prepared boundary authority");
+        if (p_->blocks_.has_interfaces(block))
+          throw std::runtime_error(
+              "System boundary residual has no prepared shared-interface authority");
+        if (p_->embedded_boundary_ && p_->embedded_boundary_->mode() !=
+                                          runtime::system::PreparedEmbeddedBoundaryMode::inactive)
+          throw std::runtime_error(
+              "System boundary residual is unavailable with an active embedded boundary");
+      });
+  invoke_prepared_boundary_transaction<Dim>(
+      state, residual, lane, "System::block_boundary_residual_into_at",
+      [&](MultiFab<Dim>& candidate) {
+        selected.boundary_residual_at_point_prepared(point, state, candidate, *selected.boundary,
+                                                     lane, transport);
+      });
+}
+
+template <int Dim>
+void System<Dim>::block_boundary_jvp_into_at(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, int block, MultiFab<Dim>& state,
+    const MultiFab<Dim>& direction, MultiFab<Dim>& result, const System* prepared_system,
+    int prepared_block, const runtime::multiblock::BoundaryEvaluationPoint& prepared_point,
+    const ExecutionLane& lane,
+    const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+  const bool valid_block = block >= 0 && block < p_->blocks_.size();
+  collective_boundary_preflight<Dim>(
+      point, block, prepared_system, prepared_block, prepared_point, lane,
+      "System::block_boundary_jvp_into_at", [&] {
+        if (prepared_system != this)
+          throw std::invalid_argument("prepared boundary JVP session belongs to another System");
+        if (!valid_block)
+          throw std::out_of_range("System boundary JVP block index is out of range");
+        if (prepared_block != block || prepared_point != point)
+          throw std::invalid_argument(
+              "prepared boundary JVP session does not match its block or evaluation point");
+      });
+  typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
+  collective_boundary_preflight<Dim>(
+      point, block, prepared_system, prepared_block, prepared_point, lane,
+      "System::block_boundary_jvp_into_at", [&] {
+        if (&state == &result || &direction == &result)
+          throw std::invalid_argument("prepared boundary JVP result cannot alias an input field");
+        require_same_block_field(state, selected.U, "prepared boundary JVP state");
+        require_same_block_field(direction, selected.U, "prepared boundary JVP direction");
+        require_same_block_field(result, selected.U, "prepared boundary JVP result");
+        if (!selected.boundary || !selected.boundary_jvp_at_point_prepared)
+          throw std::runtime_error(
+              "System boundary JVP requires one complete prepared boundary authority");
+        if (p_->blocks_.has_interfaces(block))
+          throw std::runtime_error(
+              "System boundary JVP has no prepared shared-interface authority");
+        if (p_->embedded_boundary_ && p_->embedded_boundary_->mode() !=
+                                          runtime::system::PreparedEmbeddedBoundaryMode::inactive)
+          throw std::runtime_error(
+              "System boundary JVP is unavailable with an active embedded boundary");
+      });
+  invoke_prepared_boundary_transaction<Dim>(
+      state, result, lane, "System::block_boundary_jvp_into_at", [&](MultiFab<Dim>& candidate) {
+        selected.boundary_jvp_at_point_prepared(point, state, direction, candidate,
+                                                *selected.boundary, lane, transport);
+      });
 }
 
 template <int Dim>
@@ -556,7 +880,20 @@ template void System<kNativeDimension>::block_rhs_group(
     const std::vector<MultiFab<kNativeDimension>*>&, const std::vector<int>&);
 template void System<kNativeDimension>::block_rhs_core_into_at(
     const runtime::multiblock::BoundaryEvaluationPoint&, int, MultiFab<kNativeDimension>&,
-    MultiFab<kNativeDimension>&, bool);
+    MultiFab<kNativeDimension>&, bool, const System<kNativeDimension>*, int,
+    const runtime::multiblock::BoundaryEvaluationPoint&, const ExecutionLane&,
+    const runtime::program::PreparedScalarBoundarySession<kNativeDimension>&);
+template bool System<kNativeDimension>::has_block_boundary_linearization(int) const;
+template void System<kNativeDimension>::block_boundary_residual_into_at(
+    const runtime::multiblock::BoundaryEvaluationPoint&, int, MultiFab<kNativeDimension>&,
+    MultiFab<kNativeDimension>&, const System<kNativeDimension>*, int,
+    const runtime::multiblock::BoundaryEvaluationPoint&, const ExecutionLane&,
+    const runtime::program::PreparedScalarBoundarySession<kNativeDimension>&);
+template void System<kNativeDimension>::block_boundary_jvp_into_at(
+    const runtime::multiblock::BoundaryEvaluationPoint&, int, MultiFab<kNativeDimension>&,
+    const MultiFab<kNativeDimension>&, MultiFab<kNativeDimension>&, const System<kNativeDimension>*,
+    int, const runtime::multiblock::BoundaryEvaluationPoint&, const ExecutionLane&,
+    const runtime::program::PreparedScalarBoundarySession<kNativeDimension>&);
 template void System<kNativeDimension>::block_prepare_generated_state_at(
     const runtime::multiblock::BoundaryEvaluationPoint&, int, MultiFab<kNativeDimension>&);
 template void System<kNativeDimension>::block_neg_div_flux_into(int, MultiFab<kNativeDimension>&,

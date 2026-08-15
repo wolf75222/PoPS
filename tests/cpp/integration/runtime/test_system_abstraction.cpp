@@ -3,7 +3,6 @@
 
 #include <gtest/gtest.h>
 
-#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/coupling/base/elliptic_rhs.hpp>
@@ -19,8 +18,6 @@
 #include <vector>
 
 using namespace pops;
-
-constexpr int kDim = kNativeDimension;
 
 template <int Dim>
 Extent<Dim> filled_extent(std::int64_t value) {
@@ -44,54 +41,62 @@ Real sum_field(const MultiFab<Dim>& field) {
   return result;
 }
 
+template <int Dim>
 struct ElectronToy {
   using State = StateVec<1>;
-  using Aux = pops::AuxState<kDim>;
+  static constexpr int dimension = Dim;
   static constexpr int n_vars = 1;
+  static constexpr int n_providers = 0;
   POPS_HD State flux(const State&, const auto&, int) const { return State{Real(0)}; }
   POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return Real(0); }
-  POPS_HD State source(const State&, const Aux&) const { return State{Real(0)}; }
+  POPS_HD State source(const State&, const ProviderValues<0>&) const { return State{Real(0)}; }
   POPS_HD Real elliptic_rhs(const State& u) const { return -u[0]; }
 };
 
+template <int Dim>
 struct IonToy {
   using State = StateVec<1>;
-  using Aux = pops::AuxState<kDim>;
+  static constexpr int dimension = Dim;
   static constexpr int n_vars = 1;
+  static constexpr int n_providers = 0;
   POPS_HD State flux(const State&, const auto&, int) const { return State{Real(0)}; }
   POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return Real(0); }
-  POPS_HD State source(const State&, const Aux&) const { return State{Real(0)}; }
+  POPS_HD State source(const State&, const ProviderValues<0>&) const { return State{Real(0)}; }
   POPS_HD Real elliptic_rhs(const State& u) const { return u[0]; }
 };
 
+template <int Dim>
 using ElectronBlock =
-    EquationBlock<kDim, ElectronToy, MusclVanLeerHLLC, ImplicitTime<UserTimeIntegrator, 10>>;
-using IonBlock = EquationBlock<kDim, IonToy, MusclMinmod, ExplicitTime<SSPRK2, 1>>;
+    EquationBlock<Dim, ElectronToy<Dim>, MusclVanLeerHLLC, ImplicitTime<UserTimeIntegrator, 10>>;
 
-static_assert(EquationBlockLike<ElectronBlock>);
-static_assert(EquationBlockLike<IonBlock>);
-static_assert(ElectronBlock::Time::treatment == TimeTreatment::Implicit);
-static_assert(ElectronBlock::Time::substeps == 10);
-static_assert(IonBlock::Time::treatment == TimeTreatment::Explicit);
-static_assert(std::is_same_v<ElectronBlock::Spatial::NumericalFlux, HLLCFlux>);
-static_assert(std::is_same_v<IonBlock::Spatial::NumericalFlux, RusanovFlux>);
+template <int Dim>
+using IonBlock = EquationBlock<Dim, IonToy<Dim>, MusclMinmod, ExplicitTime<SSPRK2, 1>>;
 
-TEST(SystemAbstraction, CoupledSystemSubcyclesBlocksAndAssemblesChargeDensityRhs) {
-  const auto extent = filled_extent<kDim>(4);
-  const auto domain = Box<kDim>::from_extents(extent);
-  const mesh::BoxArray<kDim> layout(std::vector<Box<kDim>>{domain});
-  const mesh::RankSpace<kDim> ranks(Index<kDim>{}, filled_extent<kDim>(1));
-  const auto distribution = mesh::Distribution<kDim>::replicated(layout, ranks);
-  const Index<kDim> local_rank{};
+template <int Dim>
+void check_ranked_elliptic_rhs() {
+  static_assert(EquationBlockLike<ElectronBlock<Dim>>);
+  static_assert(EquationBlockLike<IonBlock<Dim>>);
+  static_assert(ElectronBlock<Dim>::Time::treatment == TimeTreatment::Implicit);
+  static_assert(ElectronBlock<Dim>::Time::substeps == 10);
+  static_assert(IonBlock<Dim>::Time::treatment == TimeTreatment::Explicit);
+  static_assert(std::is_same_v<typename ElectronBlock<Dim>::Spatial::NumericalFlux, HLLCFlux>);
+  static_assert(std::is_same_v<typename IonBlock<Dim>::Spatial::NumericalFlux, RusanovFlux>);
 
-  MultiFab<kDim> Ue(layout, distribution, local_rank, 1, filled_extent<kDim>(0));
-  MultiFab<kDim> Ui(layout, distribution, local_rank, 1, filled_extent<kDim>(0));
-  MultiFab<kDim> rhs(layout, distribution, local_rank, 1, filled_extent<kDim>(0));
+  const auto extent = filled_extent<Dim>(4);
+  const auto domain = Box<Dim>::from_extents(extent);
+  const mesh::BoxArray<Dim> layout(std::vector<Box<Dim>>{domain});
+  const mesh::RankSpace<Dim> ranks(Index<Dim>{}, filled_extent<Dim>(1));
+  const auto distribution = mesh::Distribution<Dim>::replicated(layout, ranks);
+  const Index<Dim> local_rank{};
+
+  MultiFab<Dim> Ue(layout, distribution, local_rank, 1, filled_extent<Dim>(0));
+  MultiFab<Dim> Ui(layout, distribution, local_rank, 1, filled_extent<Dim>(0));
+  MultiFab<Dim> rhs(layout, distribution, local_rank, 1, filled_extent<Dim>(0));
   Ue.set_val(2.0);
   Ui.set_val(5.0);
 
-  ElectronBlock electrons{"electrons", ElectronToy{}, Ue};
-  IonBlock ions{"ions", IonToy{}, Ui};
+  ElectronBlock<Dim> electrons{"electrons", ElectronToy<Dim>{}, Ue};
+  IonBlock<Dim> ions{"ions", IonToy<Dim>{}, Ui};
   CoupledSystem system{electrons, ions};
   static_assert(CoupledSystemLike<decltype(system)>);
   EXPECT_TRUE(decltype(system)::n_blocks == 2) << "two_blocks";
@@ -100,10 +105,10 @@ TEST(SystemAbstraction, CoupledSystemSubcyclesBlocksAndAssemblesChargeDensityRhs
   Real dte = 0, dti = 0;
   pops::test_support::advance_subcycled(system, Real(0.2), [&](auto& block, Real h, int, int) {
     using M = typename std::decay_t<decltype(block)>::Model;
-    if constexpr (std::is_same_v<M, ElectronToy>) {
+    if constexpr (std::is_same_v<M, ElectronToy<Dim>>) {
       ++ne;
       dte += h;
-    } else if constexpr (std::is_same_v<M, IonToy>) {
+    } else if constexpr (std::is_same_v<M, IonToy<Dim>>) {
       ++ni;
       dti += h;
     }
@@ -113,10 +118,16 @@ TEST(SystemAbstraction, CoupledSystemSubcyclesBlocksAndAssemblesChargeDensityRhs
   EXPECT_TRUE(std::fabs(dte - 0.2) < 1e-12) << "electron_dt_sum";
   EXPECT_TRUE(std::fabs(dti - 0.2) < 1e-12) << "ion_dt_sum";
 
-  TwoFieldChargeDensityRhs<kDim> charge;
+  TwoFieldChargeDensityRhs<Dim> charge;
   charge.q0 = Real(-1);  // electrons
   charge.q1 = Real(1);   // ions
   charge(Ue, Ui, rhs);
   EXPECT_TRUE(std::fabs(sum_field(rhs) - Real(3) * Real(domain.numPts())) < 1e-12)
       << "charge_density_rhs";
+}
+
+TEST(SystemAbstraction, CoupledSystemSubcyclesBlocksAndAssemblesChargeDensityRhsInEveryRank) {
+  check_ranked_elliptic_rhs<1>();
+  check_ranked_elliptic_rhs<2>();
+  check_ranked_elliptic_rhs<3>();
 }

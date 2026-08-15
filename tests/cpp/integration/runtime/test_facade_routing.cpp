@@ -192,11 +192,11 @@ void add_periodic_transport(NativeSystem& system) {
   system.set_poisson("composite", "cartesian_cg", "periodic");
 }
 
-void add_compressible(NativeSystem& system) {
+void add_compressible(NativeSystem& system, const CompressibleModel& model =
+                                                CompressibleModel::prepare(Real(1.4))) {
   system.install_block_state_route("gas", "test:facade-routing/gas/state");
   system.seal_auxiliary_providers();
-  add_compiled_model(system, "gas", CompressibleModel::prepare(Real(1.4)), "none", "rusanov",
-                     "conservative", "explicit", 1.4);
+  add_compiled_model(system, "gas", model, "none", "rusanov", "conservative", "explicit", 1.4);
 }
 
 // Construit un System d'advection scalaire exact-rank pret a stepper. Le domaine/mode est pose par
@@ -479,12 +479,19 @@ TEST(FacadeRouting, PrimitiveMaterializationFailsClosedWithoutMutatingAcceptedSt
   constexpr int n = 4;
   const NativeSystemConfig config = native_config(n, Real(1), true);
   NativeSystem system(config);
-  add_compressible(system);
 
   // All components are finite, but Euler conservative -> primitive is undefined at rho=0.
   // This exercises the real runtime registry and its prepared conversion, not a test-only callback.
   const std::vector<double> accepted(
       static_cast<std::size_t>(kCompressibleComponents) * cell_count(config.shape), 0.0);
+  const CompressibleModel model = CompressibleModel::prepare(Real(1.4));
+  const auto recovery_plan = prepare_model_variable_recovery(model);
+  Real conservative[CompressibleModel::n_vars] = {};
+  Real initial_guess[CompressibleModel::n_vars] = {};
+  const auto expected_recovery =
+      recover_prepared_variable(recovery_plan, conservative, initial_guess);
+  ASSERT_FALSE(expected_recovery.publication_permitted());
+  add_compressible(system, model);
   system.set_state("gas", accepted);
 
   bool rejected = false;
@@ -492,7 +499,14 @@ TEST(FacadeRouting, PrimitiveMaterializationFailsClosedWithoutMutatingAcceptedSt
     (void)system.get_primitive_state("gas");
   } catch (const std::runtime_error& error) {
     const std::string message = error.what();
-    rejected = message.find("batch variable recovery failed") != std::string::npos;
+    EXPECT_NE(message.find("batch variable recovery failed"), std::string::npos);
+    EXPECT_NE(message.find(std::string("recovery_method_kind=") +
+                           recovery_method_kind_name(expected_recovery.last_method_kind)),
+              std::string::npos);
+    EXPECT_NE(message.find("last_method_index=" +
+                           std::to_string(expected_recovery.last_method)),
+              std::string::npos);
+    rejected = true;
   }
   EXPECT_TRUE(rejected);
   EXPECT_EQ(system.get_state("gas"), accepted)

@@ -189,6 +189,8 @@ def test_periodicity_rows_are_ranked_and_never_restore_a_2d_core_authority() -> 
     }
     assert "template <int Dim>\nstruct PeriodicIdentification" in sources[PERIODICITY]
     assert "2 + 2 * Dim" in sources[PERIODICITY]
+    assert "struct Periodicity" not in sources[PERIODICITY]
+    assert "same_periodicity" not in sources[PERIODICITY]
     assert "2 + 2 * Dim" in sources[BINDING_DETAIL]
     assert "2 * dimension" in sources[RUNTIME_AUTHORITIES]
     for path, source in sources.items():

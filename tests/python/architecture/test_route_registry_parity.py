@@ -9,6 +9,8 @@ import re
 import subprocess
 import sys
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[3]
 CATALOG = ROOT / "schemas" / "component_catalog.v2.json"
@@ -60,6 +62,58 @@ def test_catalog_rows_are_the_generated_python_and_cpp_rows():
     assert generated.ROUTE_REGISTRY_SIGNATURE in cpp
 
 
+def test_every_route_owns_exact_target_dimensions_and_generated_variants():
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    generated = _load(PYTHON_ROUTES, "_generated_component_target_contract")
+    cpp = CPP_CATALOG.read_text(encoding="utf-8")
+    templates = catalog["route_component_defaults"]["target_variant_templates"]
+    assert templates == [{"scalar": "float64", "device": "cpu", "features": []}]
+
+    generic = []
+    specialized = []
+    for family in catalog["route_families"]:
+        family_name = family["name"]
+        for route in family["routes"]:
+            route_id = f"{family_name}.{route['token']}"
+            dimensions = tuple(route["target_dimensions"])
+            assert generated.ROUTE_TARGET_DIMENSIONS[family_name][route["token"]] == dimensions
+            assert generated.ROUTE_TARGET_VARIANTS[family_name][route["token"]] == tuple(
+                {
+                    "dimension": dimension,
+                    "scalar": template["scalar"],
+                    "device": template["device"],
+                    "features": tuple(template["features"]),
+                }
+                for dimension in dimensions
+                for template in templates
+            )
+            (generic if dimensions == (1, 2, 3) else specialized).append(
+                (route_id, dimensions)
+            )
+
+    assert len(generic) == 40
+    assert specialized == [("field_solver.polar", (2,))]
+    assert cpp.count("{{1, 2, 3}}, 3,") == 40
+    assert '{2, {{2, 0, 0}}, 1, "polar"' in cpp
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    (
+        ([], "non-empty"),
+        ([1, 1], "duplicates"),
+        ([2, 1], "ascending"),
+        ([0], "one of 1, 2, or 3"),
+        ([4], "one of 1, 2, or 3"),
+        ([True], "one of 1, 2, or 3"),
+    ),
+)
+def test_target_dimension_validation_is_closed(value, message):
+    generator = _load(GENERATOR, "_component_catalog_target_validation")
+    with pytest.raises(generator.CatalogError, match=message):
+        generator._target_dimensions(value, "probe.target_dimensions")
+
+
 def test_runtime_headers_consume_generated_catalog_instead_of_mirroring_rows():
     for path in (ROUTE_API, DISPATCH_API, MODEL_API):
         source = path.read_text(encoding="utf-8")
@@ -108,6 +162,7 @@ def test_one_catalog_row_generates_both_language_surfaces():
     family["routes"].append({
         "token": "contract_probe",
         "wire_id": len(family["routes"]),
+        "target_dimensions": [1, 2, 3],
         "cpp_id": "kContractProbe",
         "native_entry": "pops::ContractProbe",
         "requirements": [],
@@ -131,6 +186,7 @@ def test_one_new_family_generates_its_cpp_accessors_without_route_ids_edit():
         "routes": [{
             "token": "probe",
             "wire_id": 0,
+            "target_dimensions": [1, 2, 3],
             "cpp_id": "kProbe",
             "native_entry": "pops::ContractProbe",
             "requirements": [],

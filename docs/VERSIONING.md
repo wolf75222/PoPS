@@ -72,8 +72,11 @@ only by an offline migration tool that emits a complete current artifact.
 The normative matrix is the generated `SUPPORTED_MATRIX` projection of
 `schemas/release_contract.v2.json`. It currently promises Python 3.12, C++20, Kokkos 4.4.01 Serial
 and OpenMP source builds, a Serial OpenMPI source lane, and a macOS arm64 CPython 3.12 Serial wheel.
-CUDA/HIP, MPI and Windows wheels are explicitly not promised. A release may narrow or extend this
-matrix only by changing the versioned contract and proving every declared lane.
+That wheel contains separately built and authenticated native variants for dimensions 1, 2, and 3;
+selection is exact and has no dimensional fallback. This packaging fact does not by itself promise
+that every physics/provider/output combination executes in every rank. CUDA/HIP, MPI and Windows
+wheels are explicitly not promised. A release may narrow or extend this matrix only by changing the
+versioned contract and proving every declared lane.
 `release_matrix_source_errors()` is the source-only preflight joining each declared language,
 compiler, backend, source-build and wheel lane to its exact CI/wheel/release workflow markers. An
 unimplemented lane or workflow drift fails both `release_preflight.py` and `run_final_gate.py`

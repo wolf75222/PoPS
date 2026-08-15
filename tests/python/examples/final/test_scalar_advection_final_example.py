@@ -30,8 +30,9 @@ def test_supported_authoring_core_is_genuine_and_inert():
     module = _load_example()
     core = module.build_authoring()
 
-    assert core.domain.boundaries.x_min.name == "inlet_x"
-    assert core.domain.boundaries.x_max.name == "outlet_x"
+    x_boundaries = core.domain.boundaries.pair(core.frame.x)
+    assert x_boundaries.lower.name == "inlet_x"
+    assert x_boundaries.upper.name == "outlet_x"
     assert core.grid.cells == (128, 128)
     assert core.state.space.representation == "conservative"
     assert core.model.rate_contract(core.rate) == {

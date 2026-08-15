@@ -146,17 +146,21 @@ class _CodegenMixin(_HyperbolicModel):
             return
         missing = []
         roles = roles_for(self.cons_names, self.cons_roles)
-        if all(
-            not parse_role(role, where="compile metadata role").physical
-            for role in roles
+        parsed_roles = tuple(
+            parse_role(role, where="compile metadata role") for role in roles)
+        if any(
+            not role.physical and role.label is None
+            for role in parsed_roles
         ):
+            missing.append("exact custom role labels")
+        if all(not role.physical for role in parsed_roles):
             missing.append("physical roles (conservative_vars(..., roles=[...]) or canonical names)")
         if self.gamma is None:
             missing.append("gamma (set_gamma(...))")
         if missing:
             raise ValueError(
                 "compile(require_metadata=True): model '%s' does not provide %s; the .so "
-                "would fall back to the System fallback (roles 'custom' / gamma 1.4)"
+                "would fall back to unqualified variable semantics / gamma 1.4"
                 % (self.name, " nor ".join(missing)))
 
     def compile(self, so_path: Any = None, include: Any = None, backend: str = "production", name: Any = None,

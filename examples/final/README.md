@@ -33,9 +33,19 @@ and momentum diagnostics, refuses a required cross-layout read when no mapping p
 installed, and proves scientific outputs plus bind/layout-exact, bit-identical restart continuation
 through the public lifecycle.
 
+All four scripts derive their rank from the coordinate vectors passed to
+`pops.domain.CartesianDomain`; none selects `Cartesian1D`, `Cartesian2D`, or `Cartesian3D`
+independently. The current normative configurations are deliberately two-dimensional because their
+physics and qualification data are 2D: two-axis scalar transport, two-momentum electrostatic
+multiphysics, two-axis IMEX advection, and the explicitly 2D `HyQMOM15` model. They do not turn a 2D
+case into a 1D or 3D claim by changing metadata. Rank-generic 1D/2D/3D mesh/storage availability is
+reported separately by the resolved artifact and capability report; any unproved provider or output
+combination must fail during resolution or bind.
+
 ## Public contract
 
-- immutable typed rectangle, Cartesian frame, boundary handles, grid and periodic-axis partition;
+- immutable rank-derived Cartesian domain, frame, boundary handles, grid and periodic-axis
+  partition;
 - frame-aware conservative state placement;
 - strict Handle/Expr separation for every runtime parameter read;
 - typed vector and axis-keyed physical flux `F`;

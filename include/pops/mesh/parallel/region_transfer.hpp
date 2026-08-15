@@ -1,5 +1,5 @@
 /// @file
-/// @brief Prepared exact-rank point-to-point transport for composite AMR transfers.
+/// @brief Prepared exact-rank point-to-point transport for distributed mesh regions.
 
 #pragma once
 
@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <exception>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -23,7 +24,7 @@
 #include <utility>
 #include <vector>
 
-namespace pops::elliptic::amr::partitioned_transfer {
+namespace pops::mesh::parallel {
 
 struct RegionTransferBudget {
   std::size_t canonical_jobs = 0;
@@ -69,11 +70,11 @@ template <int Dim>
 std::size_t checked_elements(const Box<Dim>& source, const Box<Dim>& destination, int ncomp) {
   if (source.empty() || destination.empty() || source.extent() != destination.extent() || ncomp < 1)
     throw std::invalid_argument(
-        "partitioned AMR transfer requires non-empty equal-rank source/destination regions");
+        "region transfer requires non-empty equal-rank source/destination regions");
   const std::int64_t cells = source.numPts();
   if (cells <= 0 || static_cast<std::uint64_t>(cells) >
                         std::numeric_limits<std::size_t>::max() / static_cast<std::size_t>(ncomp))
-    throw std::overflow_error("partitioned AMR transfer payload exceeds size_t");
+    throw std::overflow_error("region transfer payload exceeds size_t");
   return static_cast<std::size_t>(cells) * static_cast<std::size_t>(ncomp);
 }
 
@@ -84,7 +85,7 @@ RegionTransferPeerPlan<Dim>& peer_plan(std::vector<RegionTransferPeerPlan<Dim>>&
     if (plan.peer == peer)
       return plan;
   if (plans.size() >= budget || plans.size() >= plans.max_size())
-    throw std::length_error("partitioned AMR transfer peer-plan budget exceeded");
+    throw std::length_error("region transfer peer-plan budget exceeded");
   plans.push_back(RegionTransferPeerPlan<Dim>{peer, {}, 0});
   return plans.back();
 }
@@ -150,17 +151,17 @@ class RegionTransferPlan {
   using job_type = RegionTransferJob<Dim>;
   using peer_plan_type = RegionTransferPeerPlan<Dim>;
 
-  RegionTransferPlan(mesh::RankSpace<Dim> rank_space, Index<Dim> local_rank, int ncomp,
+  RegionTransferPlan(RankSpace<Dim> rank_space, Index<Dim> local_rank, int ncomp,
                      std::vector<job_type> canonical_jobs, RegionTransferBudget budget)
       : rank_space_(rank_space), local_rank_(local_rank), ncomp_(ncomp) {
     if (!rank_space_.contains(local_rank_) || ncomp_ < 1)
-      throw std::invalid_argument("partitioned AMR transfer rank space or components are invalid");
+      throw std::invalid_argument("region transfer rank space or components are invalid");
     if (canonical_jobs.size() > budget.canonical_jobs)
-      throw std::length_error("partitioned AMR transfer canonical-job budget exceeded");
+      throw std::length_error("region transfer canonical-job budget exceeded");
     canonical_.reserve(canonical_jobs.size());
     for (job_type job : canonical_jobs) {
       if (!rank_space_.contains(job.source_rank) || !rank_space_.contains(job.destination_rank))
-        throw std::invalid_argument("partitioned AMR transfer job rank is outside its rank space");
+        throw std::invalid_argument("region transfer job rank is outside its rank space");
       job.elements = detail::checked_elements(job.source_region, job.destination_region, ncomp_);
       canonical_.push_back(job);
       const bool source_local = job.source_rank == local_rank_;
@@ -168,23 +169,23 @@ class RegionTransferPlan {
       if (source_local && destination_local) {
         job.offset = local_elements_;
         detail::checked_add(local_elements_, job.elements, budget.local_elements,
-                            "partitioned AMR transfer local-element budget exceeded");
+                            "region transfer local-element budget exceeded");
         local_.push_back(std::move(job));
       } else if (source_local) {
         auto& plan = detail::peer_plan(send_, job.destination_rank, budget.peer_plans);
         job.offset = plan.elements;
         detail::checked_add(plan.elements, job.elements, budget.send_elements,
-                            "partitioned AMR transfer peer send budget exceeded");
+                            "region transfer peer send budget exceeded");
         detail::checked_add(send_elements_, job.elements, budget.send_elements,
-                            "partitioned AMR transfer send-element budget exceeded");
+                            "region transfer send-element budget exceeded");
         plan.jobs.push_back(std::move(job));
       } else if (destination_local) {
         auto& plan = detail::peer_plan(receive_, job.source_rank, budget.peer_plans);
         job.offset = plan.elements;
         detail::checked_add(plan.elements, job.elements, budget.receive_elements,
-                            "partitioned AMR transfer peer receive budget exceeded");
+                            "region transfer peer receive budget exceeded");
         detail::checked_add(receive_elements_, job.elements, budget.receive_elements,
-                            "partitioned AMR transfer receive-element budget exceeded");
+                            "region transfer receive-element budget exceeded");
         plan.jobs.push_back(std::move(job));
       }
     }
@@ -195,7 +196,7 @@ class RegionTransferPlan {
     std::sort(receive_.begin(), receive_.end(), order);
   }
 
-  const mesh::RankSpace<Dim>& rank_space() const noexcept { return rank_space_; }
+  const RankSpace<Dim>& rank_space() const noexcept { return rank_space_; }
   const Index<Dim>& local_rank() const noexcept { return local_rank_; }
   int ncomp() const noexcept { return ncomp_; }
   const std::vector<job_type>& canonical_jobs() const noexcept { return canonical_; }
@@ -209,10 +210,10 @@ class RegionTransferPlan {
 
   std::string exact_contract(std::string_view identity) const {
     if (identity.empty())
-      throw std::invalid_argument("partitioned AMR transfer identity is empty");
+      throw std::invalid_argument("region transfer identity is empty");
     std::string bytes;
-    detail::append_text(bytes, "pops.elliptic.amr.partitioned-region-transfer");
-    detail::append_u64(bytes, 1);
+    detail::append_text(bytes, "pops.mesh.parallel.region-transfer");
+    detail::append_u64(bytes, 2);
     detail::append_i64(bytes, Dim);
     detail::append_text(bytes, identity);
     detail::append_index(bytes, rank_space_.origin());
@@ -233,7 +234,7 @@ class RegionTransferPlan {
   }
 
  private:
-  mesh::RankSpace<Dim> rank_space_{};
+  RankSpace<Dim> rank_space_{};
   Index<Dim> local_rank_{};
   int ncomp_ = 0;
   std::vector<job_type> canonical_{};
@@ -245,8 +246,9 @@ class RegionTransferPlan {
   std::size_t receive_elements_ = 0;
 };
 
-/// Reusable staged transport. All allocations occur before attach_lane and therefore before any
-/// solve-time collective. The owning lane is borrowed only after collective preparation succeeds.
+/// Reusable staged transport. The canonical plan is authenticated collectively before any
+/// rank-local peer classification or buffer/request allocation. The owning lane is borrowed only
+/// after collective preparation succeeds.
 template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
 class RegionTransport {
  public:
@@ -262,7 +264,7 @@ class RegionTransport {
   using execution_policy =
       Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace, Kokkos::IndexType<execution_index_type>>;
 
-  explicit RegionTransport(plan_type plan) : plan_(std::move(plan)) { allocate_storage_(); }
+  explicit RegionTransport(plan_type plan) : plan_(std::move(plan)) {}
 
   RegionTransport(const RegionTransport&) = delete;
   RegionTransport& operator=(const RegionTransport&) = delete;
@@ -272,25 +274,59 @@ class RegionTransport {
   void attach_lane(const ExecutionLane& lane) {
     long invalid = 0;
     try {
-      invalid = lane_ != nullptr || !lane.active() ||
+      invalid = lane_ != nullptr ||
+#ifdef POPS_HAS_MPI
+                        !lane.active() ||
+#endif
                         lane.size() != static_cast<int>(plan_.rank_space().size()) ||
                         lane.rank() !=
                             static_cast<int>(plan_.rank_space().linear_rank(plan_.local_rank()))
                     ? 1L
                     : 0L;
-#ifdef POPS_HAS_MPI
-      if (plan_.has_remote_jobs() && !lane.owns_communicator())
-        invalid = 1;
-#endif
     } catch (...) {
       invalid = 1;
     }
     if (all_reduce_max(invalid, lane.communicator()) != 0)
       throw std::invalid_argument(
-          "partitioned AMR transfer requires its exact owning duplicated ExecutionLane");
+          "region transfer requires its exact owning duplicated ExecutionLane");
+
+    std::string contract;
+    long serialization_failure = 0;
+    try {
+      contract = plan_.exact_contract("prepared-region-transport");
+    } catch (...) {
+      serialization_failure = 1;
+    }
+    if (all_reduce_max(serialization_failure, lane.communicator()) != 0)
+      throw std::runtime_error("region transfer contract serialization failed collectively");
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{std::string_view("pops-region-transfer-v2"), std::string_view(contract)}},
+            lane.communicator()))
+      throw std::invalid_argument("region transfer canonical schedule differs between MPI ranks");
+
+    const bool remote_any =
+        all_reduce_max(plan_.has_remote_jobs() ? 1L : 0L, lane.communicator()) != 0;
+#ifdef POPS_HAS_MPI
+    if (all_reduce_max(remote_any && !lane.owns_communicator() ? 1L : 0L,
+                       lane.communicator()) != 0)
+      throw std::invalid_argument(
+          "remote region transfer requires its exact owning duplicated ExecutionLane");
+#endif
+
+    std::unique_ptr<PreparedStorage> prepared;
+    long allocation_failure = 0;
+    try {
+      prepared = prepare_storage_();
+    } catch (...) {
+      allocation_failure = 1;
+    }
+    if (all_reduce_max(allocation_failure, lane.communicator()) != 0)
+      throw std::runtime_error("region transfer allocation failed collectively");
+
+    storage_ = std::move(prepared);
     lane_ = &lane;
     lane_borrow_.emplace(lane.borrow_immutably());
-    remote_any_ = all_reduce_max(plan_.has_remote_jobs() ? 1L : 0L, lane.communicator()) != 0;
+    remote_any_ = remote_any;
   }
 
   const plan_type& plan() const noexcept { return plan_; }
@@ -300,12 +336,12 @@ class RegionTransport {
   void execute(SourceAccessor&& source, DestinationAccessor&& destination) {
     require_attached_();
     if (sealed_)
-      throw std::runtime_error("partitioned AMR transfer is sealed after a collective failure");
+      throw std::runtime_error("region transfer is sealed after a collective failure");
 
     long validation_failure = 0;
     try {
       validate_jobs_(plan_.local_jobs(), source, destination);
-      for (const auto& peer : peers_) {
+      for (const auto& peer : storage_->peers) {
         if (peer.send != nullptr)
           validate_jobs_(peer.send->jobs, source, destination, true, false);
         if (peer.receive != nullptr)
@@ -315,13 +351,12 @@ class RegionTransport {
       validation_failure = 1;
     }
     if (!gate_(validation_failure))
-      throw std::invalid_argument(
-          "partitioned AMR transfer source/destination binding failed collectively");
+      throw std::invalid_argument("region transfer source/destination binding failed collectively");
 
     long packing_failure = 0;
     try {
-      pack_jobs_(plan_.local_jobs(), local_buffer_, source);
-      for (PeerStorage& peer : peers_)
+      pack_jobs_(plan_.local_jobs(), storage_->local_buffer, source);
+      for (PeerStorage& peer : storage_->peers)
         if (peer.send != nullptr) {
           pack_jobs_(peer.send->jobs, peer.device_send, source);
           Kokkos::deep_copy(peer.host_send, peer.device_send);
@@ -331,20 +366,20 @@ class RegionTransport {
       packing_failure = 1;
     }
     if (!gate_(packing_failure))
-      throw std::runtime_error("partitioned AMR transfer packing failed collectively");
+      throw std::runtime_error("region transfer packing failed collectively");
 
 #ifdef POPS_HAS_MPI
     if (remote_any_)
       exchange_remote_();
 #else
     if (remote_any_)
-      throw std::logic_error("remote partitioned AMR transfer requires an MPI build");
+      throw std::logic_error("remote region transfer requires an MPI build");
 #endif
 
     long publication_failure = 0;
     try {
-      unpack_jobs_(plan_.local_jobs(), local_buffer_, destination);
-      for (PeerStorage& peer : peers_)
+      unpack_jobs_(plan_.local_jobs(), storage_->local_buffer, destination);
+      for (PeerStorage& peer : storage_->peers)
         if (peer.receive != nullptr)
           unpack_jobs_(peer.receive->jobs, peer.device_receive, destination);
       Kokkos::fence();
@@ -366,6 +401,16 @@ class RegionTransport {
     device_buffer_type device_receive{};
     pinned_buffer_type host_send{};
     pinned_buffer_type host_receive{};
+  };
+
+  struct PreparedStorage {
+    device_buffer_type local_buffer{};
+    std::vector<PeerStorage> peers{};
+#ifdef POPS_HAS_MPI
+    std::vector<MPI_Request> receive_requests{};
+    std::vector<MPI_Request> send_requests{};
+    std::vector<MPI_Status> receive_statuses{};
+#endif
   };
 
   struct KernelJob {
@@ -420,7 +465,7 @@ class RegionTransport {
     if (job.elements == 0 || job.elements > execution_max || job.offset > execution_max ||
         job.elements > execution_max - job.offset ||
         job.elements % static_cast<std::size_t>(plan_.ncomp()) != 0)
-      throw std::overflow_error("partitioned AMR transfer job exceeds execution range");
+      throw std::overflow_error("region transfer job exceeds execution range");
     KernelJob result{};
     result.cells =
         static_cast<execution_index_type>(job.elements / static_cast<std::size_t>(plan_.ncomp()));
@@ -441,11 +486,10 @@ class RegionTransport {
     for (const job_type& job : jobs) {
       if (validate_source && !detail::contains(FieldView<const Real, Dim>(source(job)),
                                                job.source_region, plan_.ncomp()))
-        throw std::invalid_argument("partitioned AMR transfer source view is stale or incomplete");
+        throw std::invalid_argument("region transfer source view is stale or incomplete");
       if (validate_destination && !detail::contains(FieldView<Real, Dim>(destination(job)),
                                                     job.destination_region, plan_.ncomp()))
-        throw std::invalid_argument(
-            "partitioned AMR transfer destination view is stale or incomplete");
+        throw std::invalid_argument("region transfer destination view is stale or incomplete");
     }
   }
 
@@ -454,7 +498,7 @@ class RegionTransport {
                   SourceAccessor& source) const {
     for (const job_type& job : jobs) {
       const KernelJob lowered = lower_(job);
-      Kokkos::parallel_for("pops_fac_transfer_pack", execution_policy(0, lowered.elements),
+      Kokkos::parallel_for("pops_region_transfer_pack", execution_policy(0, lowered.elements),
                            PackKernel{buffer, FieldView<const Real, Dim>(source(job)), lowered});
     }
   }
@@ -464,7 +508,7 @@ class RegionTransport {
                     DestinationAccessor& destination) const {
     for (const job_type& job : jobs) {
       const KernelJob lowered = lower_(job);
-      Kokkos::parallel_for("pops_fac_transfer_unpack", execution_policy(0, lowered.elements),
+      Kokkos::parallel_for("pops_region_transfer_unpack", execution_policy(0, lowered.elements),
                            UnpackKernel{buffer, FieldView<Real, Dim>(destination(job)), lowered});
     }
   }
@@ -478,53 +522,59 @@ class RegionTransport {
   }
 
   void require_attached_() const {
-    if (lane_ == nullptr || !lane_borrow_)
-      throw std::logic_error("partitioned AMR transfer has no prepared ExecutionLane");
+    if (lane_ == nullptr || !lane_borrow_ || !storage_)
+      throw std::logic_error("region transfer has no prepared ExecutionLane");
   }
 
-  void allocate_storage_() {
-    local_buffer_ = device_buffer_type("pops_fac_transfer_local", plan_.local_elements());
+  std::unique_ptr<PreparedStorage> prepare_storage_() const {
+    auto storage = std::make_unique<PreparedStorage>();
+    storage->local_buffer =
+        device_buffer_type("pops_region_transfer_local", plan_.local_elements());
     const std::size_t plans = plan_.send_plans().size() + plan_.receive_plans().size();
-    if (plans > peers_.max_size())
-      throw std::length_error("partitioned AMR transfer peer storage exceeds vector capacity");
-    peers_.reserve(plans);
-    const auto attach = [this](const peer_plan_type& plan, bool send) {
+    if (plans > storage->peers.max_size())
+      throw std::length_error("region transfer peer storage exceeds vector capacity");
+    storage->peers.reserve(plans);
+    const auto attach = [this, &storage](const peer_plan_type& plan, bool send) {
       const std::size_t linear = plan_.rank_space().linear_rank(plan.peer);
       if (linear > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
           plan.elements > static_cast<std::size_t>(std::numeric_limits<int>::max()))
-        throw std::overflow_error("partitioned AMR transfer peer payload exceeds MPI int range");
-      auto found = std::find_if(peers_.begin(), peers_.end(), [linear](const PeerStorage& peer) {
-        return peer.mpi_rank == static_cast<int>(linear);
-      });
-      if (found == peers_.end()) {
-        peers_.push_back(PeerStorage{static_cast<int>(linear)});
-        found = std::prev(peers_.end());
+        throw std::overflow_error("region transfer peer payload exceeds MPI int range");
+      auto found =
+          std::find_if(storage->peers.begin(), storage->peers.end(),
+                       [linear](const PeerStorage& peer) {
+                         return peer.mpi_rank == static_cast<int>(linear);
+                       });
+      if (found == storage->peers.end()) {
+        storage->peers.push_back(PeerStorage{static_cast<int>(linear)});
+        found = std::prev(storage->peers.end());
       }
       const peer_plan_type*& slot = send ? found->send : found->receive;
       if (slot != nullptr)
-        throw std::logic_error("partitioned AMR transfer has a duplicate peer plan");
+        throw std::logic_error("region transfer has a duplicate peer plan");
       slot = &plan;
     };
     for (const auto& plan : plan_.send_plans())
       attach(plan, true);
     for (const auto& plan : plan_.receive_plans())
       attach(plan, false);
-    std::sort(peers_.begin(), peers_.end(), [](const PeerStorage& left, const PeerStorage& right) {
-      return left.mpi_rank < right.mpi_rank;
-    });
-    for (PeerStorage& peer : peers_) {
+    std::sort(storage->peers.begin(), storage->peers.end(),
+              [](const PeerStorage& left, const PeerStorage& right) {
+                return left.mpi_rank < right.mpi_rank;
+              });
+    for (PeerStorage& peer : storage->peers) {
       const std::size_t sends = peer.send == nullptr ? 0 : peer.send->elements;
       const std::size_t receives = peer.receive == nullptr ? 0 : peer.receive->elements;
-      peer.device_send = device_buffer_type("pops_fac_transfer_device_send", sends);
-      peer.device_receive = device_buffer_type("pops_fac_transfer_device_receive", receives);
-      peer.host_send = pinned_buffer_type("pops_fac_transfer_host_send", sends);
-      peer.host_receive = pinned_buffer_type("pops_fac_transfer_host_receive", receives);
+      peer.device_send = device_buffer_type("pops_region_transfer_device_send", sends);
+      peer.device_receive = device_buffer_type("pops_region_transfer_device_receive", receives);
+      peer.host_send = pinned_buffer_type("pops_region_transfer_host_send", sends);
+      peer.host_receive = pinned_buffer_type("pops_region_transfer_host_receive", receives);
     }
 #ifdef POPS_HAS_MPI
-    receive_requests_.resize(plan_.receive_plans().size(), MPI_REQUEST_NULL);
-    send_requests_.resize(plan_.send_plans().size(), MPI_REQUEST_NULL);
-    receive_statuses_.resize(plan_.receive_plans().size());
+    storage->receive_requests.resize(plan_.receive_plans().size(), MPI_REQUEST_NULL);
+    storage->send_requests.resize(plan_.send_plans().size(), MPI_REQUEST_NULL);
+    storage->receive_statuses.resize(plan_.receive_plans().size());
 #endif
+    return storage;
   }
 
 #ifdef POPS_HAS_MPI
@@ -538,14 +588,18 @@ class RegionTransport {
 
   bool drain_() noexcept {
     bool safe = true;
-    for (MPI_Request& request : receive_requests_)
+    for (MPI_Request& request : storage_->receive_requests)
       if (request != MPI_REQUEST_NULL && MPI_Cancel(&request) != MPI_SUCCESS)
         safe = false;
-    if (wait_all_(send_requests_) != MPI_SUCCESS || wait_all_(receive_requests_) != MPI_SUCCESS)
+    if (wait_all_(storage_->send_requests) != MPI_SUCCESS ||
+        wait_all_(storage_->receive_requests) != MPI_SUCCESS)
       safe = false;
     const auto null_request = [](MPI_Request request) { return request == MPI_REQUEST_NULL; };
-    return safe && std::all_of(send_requests_.begin(), send_requests_.end(), null_request) &&
-           std::all_of(receive_requests_.begin(), receive_requests_.end(), null_request);
+    return safe &&
+           std::all_of(storage_->send_requests.begin(), storage_->send_requests.end(),
+                       null_request) &&
+           std::all_of(storage_->receive_requests.begin(), storage_->receive_requests.end(),
+                       null_request);
   }
 
   [[noreturn]] void unsafe_failure_(const char* message) {
@@ -556,44 +610,45 @@ class RegionTransport {
   }
 
   void exchange_remote_() {
-    std::fill(receive_requests_.begin(), receive_requests_.end(), MPI_REQUEST_NULL);
-    std::fill(send_requests_.begin(), send_requests_.end(), MPI_REQUEST_NULL);
+    std::fill(storage_->receive_requests.begin(), storage_->receive_requests.end(),
+              MPI_REQUEST_NULL);
+    std::fill(storage_->send_requests.begin(), storage_->send_requests.end(), MPI_REQUEST_NULL);
     std::size_t receive_index = 0;
     int code = MPI_SUCCESS;
-    for (PeerStorage& peer : peers_)
+    for (PeerStorage& peer : storage_->peers)
       if (peer.receive != nullptr) {
         if (code == MPI_SUCCESS)
           code = MPI_Irecv(peer.host_receive.data(), static_cast<int>(peer.receive->elements),
                            MPI_DOUBLE, peer.mpi_rank, ExecutionLane::parallel_copy_message_tag,
-                           lane_->native_handle(), &receive_requests_[receive_index]);
+                           lane_->native_handle(), &storage_->receive_requests[receive_index]);
         ++receive_index;
       }
     if (!gate_(code == MPI_SUCCESS ? 0L : 1L))
-      unsafe_failure_("partitioned AMR transfer receive posting failed collectively");
+      unsafe_failure_("region transfer receive posting failed collectively");
 
     std::size_t send_index = 0;
     code = MPI_SUCCESS;
-    for (PeerStorage& peer : peers_)
+    for (PeerStorage& peer : storage_->peers)
       if (peer.send != nullptr) {
         if (code == MPI_SUCCESS)
           code = MPI_Isend(peer.host_send.data(), static_cast<int>(peer.send->elements), MPI_DOUBLE,
                            peer.mpi_rank, ExecutionLane::parallel_copy_message_tag,
-                           lane_->native_handle(), &send_requests_[send_index]);
+                           lane_->native_handle(), &storage_->send_requests[send_index]);
         ++send_index;
       }
     if (!gate_(code == MPI_SUCCESS ? 0L : 1L))
-      unsafe_failure_("partitioned AMR transfer send posting failed collectively");
+      unsafe_failure_("region transfer send posting failed collectively");
 
-    code = wait_all_(send_requests_);
-    if (code == MPI_SUCCESS && !receive_requests_.empty())
-      code = MPI_Waitall(static_cast<int>(receive_requests_.size()), receive_requests_.data(),
-                         receive_statuses_.data());
+    code = wait_all_(storage_->send_requests);
+    if (code == MPI_SUCCESS && !storage_->receive_requests.empty())
+      code = MPI_Waitall(static_cast<int>(storage_->receive_requests.size()),
+                         storage_->receive_requests.data(), storage_->receive_statuses.data());
     if (code == MPI_SUCCESS) {
       std::size_t status_index = 0;
-      for (const PeerStorage& peer : peers_)
+      for (const PeerStorage& peer : storage_->peers)
         if (peer.receive != nullptr) {
           int count = MPI_UNDEFINED;
-          const MPI_Status& status = receive_statuses_[status_index++];
+          const MPI_Status& status = storage_->receive_statuses[status_index++];
           if (MPI_Get_count(&status, MPI_DOUBLE, &count) != MPI_SUCCESS ||
               status.MPI_SOURCE != peer.mpi_rank ||
               status.MPI_TAG != ExecutionLane::parallel_copy_message_tag ||
@@ -604,12 +659,11 @@ class RegionTransport {
         }
     }
     if (!gate_(code == MPI_SUCCESS ? 0L : 1L))
-      unsafe_failure_(
-          "partitioned AMR transfer receive authentication or MPI wait failed collectively");
+      unsafe_failure_("region transfer receive authentication or MPI wait failed collectively");
 
     long staging_failure = 0;
     try {
-      for (PeerStorage& peer : peers_)
+      for (PeerStorage& peer : storage_->peers)
         if (peer.receive != nullptr)
           Kokkos::deep_copy(peer.device_receive, peer.host_receive);
       Kokkos::fence();
@@ -619,7 +673,7 @@ class RegionTransport {
     if (!gate_(staging_failure)) {
       sealed_ = true;
       throw std::runtime_error(
-          "partitioned AMR transfer receive staging failed collectively after a safe drain");
+          "region transfer receive staging failed collectively after a safe drain");
     }
   }
 #endif
@@ -627,15 +681,9 @@ class RegionTransport {
   plan_type plan_;
   const ExecutionLane* lane_ = nullptr;
   std::optional<ExecutionLane::ImmutableBorrow> lane_borrow_{};
-  device_buffer_type local_buffer_{};
-  std::vector<PeerStorage> peers_{};
+  std::unique_ptr<PreparedStorage> storage_{};
   bool remote_any_ = false;
   bool sealed_ = false;
-#ifdef POPS_HAS_MPI
-  std::vector<MPI_Request> receive_requests_{};
-  std::vector<MPI_Request> send_requests_{};
-  std::vector<MPI_Status> receive_statuses_{};
-#endif
 };
 
-}  // namespace pops::elliptic::amr::partitioned_transfer
+}  // namespace pops::mesh::parallel

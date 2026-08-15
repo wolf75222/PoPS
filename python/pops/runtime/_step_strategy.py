@@ -5,9 +5,11 @@ import bisect
 import math
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from typing import Any, Generic, Literal, TypeAlias, TypeVar, cast
 
 from pops._bootstrap import StepAttemptRejected
+from pops._frozen_data import freeze_data, thaw_data
 from pops.time.solve_outcome import SOLVE_STATUSES
 from pops.time._step.strategy import (
     AdaptiveCFL,
@@ -38,6 +40,65 @@ ControllerFactory = Callable[
 ]
 _CONTROLLER_FACTORIES: dict[type[StepStrategy], ControllerFactory] = {}
 _MISSING = object()
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedProgramRun:
+    """One Program-authenticated temporal service shared by every runtime facade.
+
+    Preparation is side-effect free. :meth:`begin` is the sole controller/restart/run-manifest
+    transition, and :meth:`step` is the sole standalone accepted-attempt route.  RuntimeInstance
+    wraps the same prepared service in its ConsumerGraph transaction instead of re-resolving a
+    strategy or materializing a parallel controller.
+    """
+
+    engine: Any
+    step_target: Any
+    strategy: StepStrategy
+    control_payload: Mapping[str, Any]
+
+    @property
+    def controls(self) -> dict[str, Any]:
+        """Reconstruct detached runtime controls from the immutable canonical payload."""
+        payload = thaw_data(self.control_payload)
+        return self.strategy.restore_runtime_controls(payload["controls"])
+
+    def begin(
+        self,
+        *,
+        t_end: Any,
+        max_steps: int,
+        output_dir: Any = None,
+    ) -> Any:
+        """Open the exact installed Program run after every control is validated."""
+        temporal = getattr(self.engine, "_temporal_restart_state", None)
+        if temporal is None or not callable(getattr(temporal, "begin_run", None)):
+            raise TypeError("Program temporal execution requires one restart/clock authority")
+        temporal.begin_run(
+            thaw_data(self.control_payload),
+            time=self.step_target.time(),
+            macro_step=self.step_target.macro_step(),
+        )
+        prepare_step_controller(self.engine, self.strategy, self.controls)
+        from pops.runtime._run_manifest import begin_run
+
+        return begin_run(
+            self.engine,
+            t_end=t_end,
+            step_transaction=thaw_data(self.control_payload),
+            max_steps=max_steps,
+            output_dir=output_dir,
+        )
+
+    def step(self, *, t_end: float) -> StepTransactionReport:
+        """Execute one accepted attempt through the shared controller service."""
+        return run_step_attempt(
+            self.engine,
+            self.step_target,
+            self.strategy,
+            t_end=float(t_end),
+            controls=self.controls,
+        )
 
 
 def register_step_controller_factory(
@@ -798,10 +859,139 @@ def run_control_payload(
     }
 
 
+def prepare_program_run(
+    engine: Any,
+    *,
+    controls: Mapping[str, Any] | None = None,
+) -> PreparedProgramRun:
+    """Resolve one installed Program into the shared temporal execution service.
+
+    The authored strategy and transaction plan must agree whenever the executor exposes the plan.
+    Synthetic extension adapters may omit a transaction plan only to exercise the controller
+    protocol in isolation; production bind installs both values atomically from the same Program.
+    """
+    from pops.runtime._native_step_target import native_step_target
+    from pops.time._step.transaction import StepTransactionPlan
+
+    strategy = resolve_run_strategy(engine)
+    plan = getattr(engine, "_step_transaction_plan", None)
+    if plan is not None:
+        if type(plan) is not StepTransactionPlan:
+            raise TypeError("installed Program transaction plan must be an exact StepTransactionPlan")
+        if plan.strategy is not strategy:
+            raise RuntimeError(
+                "installed Program strategy is not the exact transaction-plan authority")
+    values = {} if controls is None else dict(controls)
+    payload = run_control_payload(strategy, values)
+    temporal = getattr(engine, "_temporal_restart_state", None)
+    authenticate = getattr(temporal, "authenticate_run", None)
+    if temporal is None or not callable(authenticate):
+        raise TypeError("Program temporal execution requires one restart/clock authority")
+    step_target = native_step_target(engine)
+    authenticate(
+        payload,
+        time=step_target.time(),
+        macro_step=step_target.macro_step(),
+    )
+    return PreparedProgramRun(
+        engine=engine,
+        step_target=step_target,
+        strategy=strategy,
+        control_payload=freeze_data(payload, "Program temporal control payload"),
+    )
+
+
+def run_program_facade(
+    engine: Any,
+    t_end: Any,
+    *,
+    max_steps: int,
+    output_dir: Any = None,
+    controls: Mapping[str, Any] | None = None,
+) -> int:
+    """Run a private Uniform/AMR facade through the one Program temporal service."""
+    prepared = prepare_program_run(engine, controls=controls)
+    prepared.begin(t_end=t_end, max_steps=max_steps, output_dir=output_dir)
+    return drive_program_run(
+        prepared,
+        t_end=t_end,
+        max_steps=max_steps,
+        advance=lambda: prepared.step(t_end=float(t_end)),
+    )
+
+
+def drive_program_run(
+    prepared: PreparedProgramRun,
+    *,
+    t_end: Any,
+    max_steps: int,
+    advance: Callable[[], Any],
+) -> int:
+    """Own the sole Python accepted-step loop for direct and ConsumerGraph execution."""
+    if type(prepared) is not PreparedProgramRun:
+        raise TypeError("drive_program_run requires an exact PreparedProgramRun")
+    if not callable(advance):
+        raise TypeError("drive_program_run advance must be callable")
+    accepted_steps = 0
+    while prepared.step_target.time() < t_end and accepted_steps < max_steps:
+        advance()
+        accepted_steps += 1
+    return accepted_steps
+
+
+def run_fixed_program_step(engine: Any, dt: Any) -> StepTransactionReport:
+    """Execute the legacy low-level fixed-step seam through the shared service core.
+
+    This route remains private to the native facade and low-level tests.  It does not materialize a
+    second controller implementation: ``FixedDt`` lowers through the same registered adapter,
+    accepted-attempt transaction, and exact Program clock envelope as :func:`prepare_program_run`.
+    """
+    from pops.runtime._native_step_target import native_step_target
+
+    requested = FixedDt(dt)
+    selected = getattr(engine, "_step_strategy", None)
+    plan = getattr(engine, "_step_transaction_plan", None)
+    if selected is None:
+        if plan is not None:
+            raise RuntimeError("installed Program transaction plan has no strategy authority")
+        strategy = requested
+    else:
+        strategy = resolve_run_strategy(engine)
+        if plan is None or getattr(plan, "strategy", None) is not strategy:
+            raise RuntimeError(
+                "installed Program strategy is not the exact transaction-plan authority")
+        if type(strategy) is not FixedDt or strategy.dt.hex() != requested.dt.hex():
+            raise RuntimeError(
+                "direct fixed step differs from the installed Program step strategy")
+    step_target = native_step_target(engine)
+    temporal = getattr(engine, "_temporal_restart_state", None)
+    authenticate = getattr(temporal, "authenticate_run", None)
+    if temporal is None or not callable(authenticate):
+        raise TypeError("fixed Program step requires one restart/clock authority")
+    payload = run_control_payload(strategy)
+    authenticate(
+        payload,
+        time=step_target.time(),
+        macro_step=step_target.macro_step(),
+    )
+    temporal.begin_run(
+        payload,
+        time=step_target.time(),
+        macro_step=step_target.macro_step(),
+    )
+    return run_step_attempt(
+        engine,
+        step_target,
+        strategy,
+        t_end=float(step_target.time()) + strategy.dt,
+    )
+
+
 __all__ = [
     "AdaptiveCFLController", "ErrorControlledDtController", "ExternalTimeGridController",
-    "FixedDtController", "StepAttemptRejected", "StepController", "materialize_step_controller",
-    "prepare_step_attempts", "prepare_step_controller", "register_step_controller_factory",
-    "resolve_run_strategy", "run_control_payload", "run_prepared_step_attempt",
-    "run_step_attempt",
+    "FixedDtController", "PreparedProgramRun", "StepAttemptRejected", "StepController",
+    "drive_program_run", "materialize_step_controller", "prepare_program_run", "prepare_step_attempts",
+    "prepare_step_controller", "register_step_controller_factory", "resolve_run_strategy",
+    "run_control_payload", "run_fixed_program_step", "run_prepared_step_attempt",
+    "run_program_facade", "run_step_attempt",
 ]

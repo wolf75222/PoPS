@@ -10,6 +10,7 @@
 #include <pops/numerics/fv/numerical_flux.hpp>
 #include <pops/numerics/spatial/nd/finite_volume.hpp>
 #include <pops/numerics/spatial/nd/reconstruction.hpp>
+#include <pops/numerics/spatial/primitives/diffusive_flux.hpp>
 
 #include <Kokkos_MathematicalFunctions.hpp>
 
@@ -145,7 +146,15 @@ struct MaterializeFaceFlux {
       fail(face, FiniteVolumeStatus::InvalidWaveSpeed);
       return;
     }
-    const auto integrated = apply_face_measure(evaluation.checked_density(), context);
+    auto flux_density = evaluation.checked_density();
+    if constexpr (DiffusiveModel<Model>) {
+      if (!add_isotropic_fickian_flux_density<Axis>(model, metric, state, left_cell, right_cell,
+                                                    flux_density.value)) {
+        fail(face, FiniteVolumeStatus::NonFiniteFaceFlux);
+        return;
+      }
+    }
+    const auto integrated = apply_face_measure(flux_density, context);
     for (int component = 0; component < Model::n_vars; ++component) {
       if (!Kokkos::isfinite(integrated.value[component])) {
         fail(face, FiniteVolumeStatus::NonFiniteFaceFlux);
@@ -281,6 +290,7 @@ class PreparedCartesianOperator {
             cartesian_operator_detail::resolve_positivity_component<Model>(positivity_floor)) {
     if (metric_.identity().domain.empty())
       throw std::invalid_argument("prepared ND hyperbolic metric domain must be non-empty");
+    require_valid_diffusivity(model_);
   }
 
   const Model& model() const noexcept { return model_; }

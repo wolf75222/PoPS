@@ -6,6 +6,7 @@
 #include <pops/core/model/physical_model.hpp>
 #include <pops/mesh/boundary/fill_boundary.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/numerics/fv/numerical_flux.hpp>
 #include <pops/numerics/fv/reconstruction.hpp>
 #include <pops/numerics/spatial/embedded_boundary/operator.hpp>
@@ -13,6 +14,7 @@
 #include <pops/numerics/spatial/operators/masked_operator.hpp>
 #include <pops/runtime/config/route_ids.hpp>
 #include <pops/runtime/recovery/uniform_recovery_consumer.hpp>
+#include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
 #include <pops/runtime/system/provider_storage_binding.hpp>
 #include <pops/runtime/system/system_block_closures.hpp>
 
@@ -485,8 +487,14 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
   const Geometry<Dim> geometry = request.geometry;
   const BoundaryTopology<Dim> topology = request.topology;
 
-  auto prepare_state = [provider_storage, provider_plan, geometry, topology, ghosts](
+  auto prepare_state = [model, provider_storage, provider_plan, geometry, topology, ghosts](
                            MultiFab<Dim>& state, const PreparedHyperbolicBoundary<Dim>* boundary) {
+    if (boundary != nullptr) {
+      boundary->template require_model_qualified_characteristic_provider<Model>();
+      if (boundary->has_characteristic_no_inflow() && state.rank_space().size() != 1)
+        throw std::logic_error(
+            "distributed characteristic no-inflow requires the prepared boundary transport");
+    }
     const auto state_schedule = HaloSchedule<Dim>(
         state.layout(), state.distribution(), state.local_rank(), geometry.domain(), ghosts,
         topology, state.ncomp(), halo_budget(state, geometry.domain(), topology, ghosts));
@@ -496,8 +504,24 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
           state, provider_storage, provider_plan, "generated flux providers");
     }
     if (boundary != nullptr)
-      boundary->fill_physical(state, geometry);
+      boundary->fill_physical_model_qualified(state, geometry, model);
   };
+
+  auto prepare_state_with_transport =
+      [model, provider_storage, provider_plan, geometry](
+          MultiFab<Dim>& state, const PreparedHyperbolicBoundary<Dim>* boundary,
+          const ExecutionLane& lane,
+          const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+        if (boundary != nullptr)
+          boundary->template require_model_qualified_characteristic_provider<Model>();
+        transport.fill_halo(state);
+        if (provider_storage != nullptr) {
+          runtime::system::require_pointwise_provider_groups<Dim, provider_count>(
+              state, provider_storage, provider_plan, "generated flux providers");
+        }
+        if (boundary != nullptr)
+          boundary->fill_physical_model_qualified(state, geometry, model, lane);
+      };
 
   auto flux = [spatial, prepare_state, provider_storage, provider_plan, geometry](
                   MultiFab<Dim>& state, MultiFab<Dim>& residual,
@@ -531,6 +555,42 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
     saxpy(candidate, Real(1), source);
     copy_valid(candidate, residual);
   };
+  auto flux_with_transport =
+      [spatial, prepare_state_with_transport, provider_storage, provider_plan, geometry](
+          MultiFab<Dim>& state, MultiFab<Dim>& residual,
+          const PreparedHyperbolicBoundary<Dim>* boundary, const ExecutionLane& lane,
+          const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+        require_same_layout(state, residual, Model::n_vars, "generated flux residual");
+        prepare_state_with_transport(state, boundary, lane, transport);
+
+        auto faces = nd::make_face_flux_workspace(state);
+        for (std::size_t local = 0; local < state.local_size(); ++local) {
+          if constexpr (flux_provider_count<Model> == 0)
+            spatial.materialize_face_fluxes(state.fab(local), faces[local]);
+          else
+            spatial.materialize_face_fluxes(
+                state.fab(local),
+                runtime::system::bind_provider_storage_view<Dim, flux_provider_count<Model>>(
+                    provider_plan, provider_storage, local),
+                faces[local]);
+          if (boundary != nullptr)
+            boundary->apply_physical_flux_conditions(faces[local], geometry.domain());
+        }
+        spatial.assemble_residual_from_face_fluxes(faces, residual);
+      };
+  auto full_with_transport =
+      [flux_with_transport, model, provider_storage, provider_plan](
+          MultiFab<Dim>& state, MultiFab<Dim>& residual,
+          const PreparedHyperbolicBoundary<Dim>* boundary, const ExecutionLane& lane,
+          const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+        MultiFab<Dim> candidate(residual.layout(), residual.distribution(), residual.local_rank(),
+                                residual.ncomp(), residual.ghosts());
+        flux_with_transport(state, candidate, boundary, lane, transport);
+        MultiFab<Dim> source =
+            materialize_source<Dim>(model, state, provider_storage, provider_plan);
+        saxpy(candidate, Real(1), source);
+        copy_valid(candidate, residual);
+      };
   auto source = [model, provider_storage, provider_plan](MultiFab<Dim>& state,
                                                          MultiFab<Dim>& residual) {
     MultiFab<Dim> candidate =
@@ -605,6 +665,84 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
   result.closures.rhs_flux_only_core_at_point_prepared =
       [flux](const auto&, MultiFab<Dim>& state, MultiFab<Dim>& residual,
              const PreparedHyperbolicBoundary<Dim>& boundary) { flux(state, residual, &boundary); };
+  result.closures.boundary_full_at_point_prepared =
+      [full_with_transport](const auto&, MultiFab<Dim>& state, MultiFab<Dim>& residual,
+                            const PreparedHyperbolicBoundary<Dim>& boundary,
+                            const ExecutionLane& lane,
+                            const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+        full_with_transport(state, residual, &boundary, lane, transport);
+      };
+  result.closures.boundary_residual_at_point_prepared =
+      [full_with_transport](const auto&, MultiFab<Dim>& state, MultiFab<Dim>& residual,
+                            const PreparedHyperbolicBoundary<Dim>& boundary,
+                            const ExecutionLane& lane,
+                            const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+        MultiFab<Dim> boundary_state(state);
+        MultiFab<Dim> boundary_total(residual.layout(), residual.distribution(),
+                                     residual.local_rank(), residual.ncomp(), residual.ghosts());
+        MultiFab<Dim> core_total(residual.layout(), residual.distribution(), residual.local_rank(),
+                                 residual.ncomp(), residual.ghosts());
+        full_with_transport(boundary_state, boundary_total, &boundary, lane, transport);
+        MultiFab<Dim> core_state(boundary_state);
+        full_with_transport(core_state, core_total, nullptr, lane, transport);
+        saxpy(boundary_total, Real(-1), core_total);
+        copy_valid(boundary_total, residual);
+      };
+  result.closures.boundary_jvp_at_point_prepared =
+      [boundary_residual = result.closures.boundary_residual_at_point_prepared](
+          const auto& point, MultiFab<Dim>& state, const MultiFab<Dim>& direction,
+          MultiFab<Dim>& result_field, const PreparedHyperbolicBoundary<Dim>& boundary,
+          const ExecutionLane& lane,
+          const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+        require_same_layout(state, direction, Model::n_vars, "generated boundary JVP direction");
+        require_same_layout(state, result_field, Model::n_vars, "generated boundary JVP result");
+        Real local_state_scale = Real(0);
+        for (int component = 0; component < state.ncomp(); ++component) {
+          const Real component_scale = norm_inf(state, component);
+          if (!std::isfinite(component_scale)) {
+            local_state_scale = std::numeric_limits<Real>::infinity();
+            break;
+          }
+          local_state_scale = std::max(local_state_scale, component_scale);
+        }
+        const Real state_scale =
+            static_cast<Real>(all_reduce_max(static_cast<double>(local_state_scale), lane));
+        if (!std::isfinite(state_scale))
+          throw std::runtime_error("generated boundary JVP rejected a non-finite state norm");
+        Real local_direction_scale = Real(0);
+        for (int component = 0; component < direction.ncomp(); ++component) {
+          const Real component_scale = norm_inf(direction, component);
+          if (!std::isfinite(component_scale)) {
+            local_direction_scale = std::numeric_limits<Real>::infinity();
+            break;
+          }
+          local_direction_scale = std::max(local_direction_scale, component_scale);
+        }
+        const Real direction_scale =
+            static_cast<Real>(all_reduce_max(static_cast<double>(local_direction_scale), lane));
+        if (!std::isfinite(direction_scale))
+          throw std::runtime_error("generated boundary JVP rejected a non-finite direction norm");
+        if (direction_scale == Real(0)) {
+          result_field.set_val(Real(0));
+          return;
+        }
+        const Real increment = std::sqrt(std::numeric_limits<Real>::epsilon()) *
+                               (Real(1) + state_scale) / direction_scale;
+        if (!std::isfinite(increment) || !(increment > Real(0)))
+          throw std::runtime_error(
+              "generated boundary JVP produced an invalid finite-difference step");
+        MultiFab<Dim> perturbed(state);
+        lincomb(perturbed, Real(1), state, increment, direction);
+        MultiFab<Dim> base(result_field.layout(), result_field.distribution(),
+                           result_field.local_rank(), result_field.ncomp(), result_field.ghosts());
+        MultiFab<Dim> displaced(result_field.layout(), result_field.distribution(),
+                                result_field.local_rank(), result_field.ncomp(),
+                                result_field.ghosts());
+        boundary_residual(point, state, base, boundary, lane, transport);
+        boundary_residual(point, perturbed, displaced, boundary, lane, transport);
+        lincomb(displaced, Real(1) / increment, displaced, Real(-1) / increment, base);
+        copy_valid(displaced, result_field);
+      };
   result.closures.prepare_generated_state_at_point =
       [prepare_state](const auto&, MultiFab<Dim>& state) { prepare_state(state, nullptr); };
   result.closures.prepare_generated_state_at_point_prepared =
@@ -622,20 +760,19 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
   result.primitive_to_conservative = [model](const double* primitive, double* conservative) {
     generated_system_detail::publish_conservative_state(model, primitive, conservative);
   };
-  const auto recovery_plan = prepare_model_variable_recovery(model);
-  result.conservative_to_primitive = [recovery_plan](const double* conservative,
-                                                     double* primitive) {
+  auto recovery = std::make_shared<PreparedModelVariableInversionRecovery<Model>>(model);
+  result.conservative_to_primitive = [recovery](const double* conservative, double* primitive) {
     Real input[Model::n_vars]{};
-    Real initial[Model::n_vars]{};
     for (int component = 0; component < Model::n_vars; ++component)
       input[component] = static_cast<Real>(conservative[component]);
-    const auto outcome = recover_prepared_variable(recovery_plan, input, initial);
+    const auto prepared = recovery->recover(input);
+    const RecoveryOutcome<Model::n_vars>& outcome = prepared.outcome;
     if (outcome.publication_permitted())
       for (int component = 0; component < Model::n_vars; ++component)
         primitive[component] = static_cast<double>(outcome.value[component]);
     return recovery_report(outcome);
   };
-  result.batch_conservative_to_primitive = make_uniform_recovery_consumer(model);
+  result.batch_conservative_to_primitive = make_uniform_variable_inversion_consumer(recovery);
 
   if constexpr (requires(const Model& value, const typename Model::State& state,
                          const ProviderValues<provider_count>& providers) {

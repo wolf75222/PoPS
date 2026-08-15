@@ -80,16 +80,19 @@ ALLOWED = {
 LAYERS = set(ALLOWED)
 
 NATIVE_SELECTOR_CONSUMERS = frozenset({
+    "pops._capabilities_report",
     "pops._native_collectives",
     "pops._paraview_python_bootstrap",
     "pops._platform_contracts",
     "pops.codegen._compiled_artifact",
+    "pops.codegen.inspect_compiled",
     "pops.external.artifacts",
     "pops.external.compiler",
     "pops.output._writers.hdf5",
     "pops.runtime._platform_manifest",
     "pops.runtime._runtime_authorities",
     "pops.runtime._threading",
+    "pops.runtime.defaults",
     "pops.runtime.doctor",
     "pops.runtime.fallbacks",
 })
@@ -149,23 +152,154 @@ def test_layer_map_covers_every_top_level_package():
         sorted(actual - LAYERS), sorted(LAYERS - actual))
 
 
+_MAX_STATIC_IMPORT_VALUES = 32
+
+
+def _possible_string_values(node, bindings):
+    """Return statically enumerable string values, or ``None`` for a dynamic expression."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return frozenset({node.value})
+    if isinstance(node, ast.Name):
+        return bindings.get(node.id)
+    if isinstance(node, (ast.List, ast.Set, ast.Tuple)):
+        values = set()
+        for element in node.elts:
+            element_values = _possible_string_values(element, bindings)
+            if element_values is None:
+                return None
+            values.update(element_values)
+            if len(values) > _MAX_STATIC_IMPORT_VALUES:
+                return None
+        return frozenset(values)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _possible_string_values(node.left, bindings)
+        right = _possible_string_values(node.right, bindings)
+        if left is None or right is None \
+                or len(left) * len(right) > _MAX_STATIC_IMPORT_VALUES:
+            return None
+        return frozenset(prefix + suffix for prefix in left for suffix in right)
+    if isinstance(node, ast.JoinedStr):
+        parts = []
+        for value in node.values:
+            expression = value.value if isinstance(value, ast.FormattedValue) else value
+            possible = _possible_string_values(expression, bindings)
+            if possible is None:
+                return None
+            parts.append(possible)
+        values = {""}
+        for part in parts:
+            if len(values) * len(part) > _MAX_STATIC_IMPORT_VALUES:
+                return None
+            values = {prefix + suffix for prefix in values for suffix in part}
+        return frozenset(values)
+    return None
+
+
+def _static_string_bindings(tree):
+    """Over-approximate names assigned from finite string expressions at any lexical scope."""
+    bindings = {}
+    candidates = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            value = node.value
+            if value is None:
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else (node.target,)
+            candidates.extend((target, value) for target in targets)
+        elif isinstance(node, ast.For):
+            candidates.append((node.target, node.iter))
+
+    dynamic_targets = {
+        target.id
+        for target, value in candidates
+        if isinstance(target, ast.Name)
+        and any(
+            isinstance(dependency, ast.Name) and dependency.id == target.id
+            for dependency in ast.walk(value)
+        )
+    }
+    changed_names = set()
+    for _ in range(8):
+        changed_names = set()
+        for target, value in candidates:
+            if not isinstance(target, ast.Name) or target.id in dynamic_targets:
+                continue
+            possible = _possible_string_values(value, bindings)
+            if possible is None:
+                continue
+            merged = bindings.get(target.id, frozenset()) | possible
+            if len(merged) > _MAX_STATIC_IMPORT_VALUES:
+                dynamic_targets.add(target.id)
+                bindings.pop(target.id, None)
+                continue
+            if merged != bindings.get(target.id):
+                bindings[target.id] = merged
+                changed_names.add(target.id)
+        if not changed_names:
+            break
+    else:
+        dynamic_targets.update(changed_names)
+
+    changed = True
+    while changed:
+        changed = False
+        for target, value in candidates:
+            if not isinstance(target, ast.Name) or target.id in dynamic_targets:
+                continue
+            if any(
+                isinstance(dependency, ast.Name) and dependency.id in dynamic_targets
+                for dependency in ast.walk(value)
+            ):
+                dynamic_targets.add(target.id)
+                changed = True
+    for name in dynamic_targets:
+        bindings.pop(name, None)
+    return bindings
+
+
 def _native_import_lines(tree):
-    """Yield every direct or importlib native-extension load at any lexical scope."""
+    """Yield direct native loads and unresolved dynamic imports at any lexical scope."""
+    importlib_aliases = {"importlib"}
+    import_module_aliases = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             if any(alias.name in {"_pops", "pops._pops"} for alias in node.names):
                 yield node.lineno
+            importlib_aliases.update(
+                alias.asname or alias.name
+                for alias in node.names
+                if alias.name == "importlib"
+            )
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
             if module in {"_pops", "pops._pops"} or any(
                     alias.name == "_pops" and (module == "pops" or node.level)
                     for alias in node.names):
                 yield node.lineno
-        elif isinstance(node, ast.Call) and node.args \
-                and isinstance(node.func, ast.Attribute) \
-                and node.func.attr == "import_module" \
-                and isinstance(node.args[0], ast.Constant) \
-                and node.args[0].value in {"_pops", "pops._pops"}:
+            if node.level == 0 and module == "importlib":
+                import_module_aliases.update(
+                    alias.asname or alias.name
+                    for alias in node.names
+                    if alias.name == "import_module"
+                )
+
+    bindings = _static_string_bindings(tree)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not node.args:
+            continue
+        is_import = (
+            isinstance(node.func, ast.Name)
+            and node.func.id in import_module_aliases | {"__import__"}
+        ) or (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "import_module"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in importlib_aliases
+        )
+        if not is_import:
+            continue
+        possible = _possible_string_values(node.args[0], bindings)
+        if possible is None or possible & {"_pops", "pops._pops"}:
             yield node.lineno
 
 
@@ -177,8 +311,36 @@ def test_no_module_bypasses_the_native_selector_with_a_direct_extension_import()
         if lines:
             violations.append("%s:%s" % (module, ",".join(map(str, lines))))
     assert not violations, (
-        "direct native-extension load bypasses pops._native_selector: " + ", ".join(violations)
+        "direct or unresolved dynamic native-extension load bypasses pops._native_selector: "
+        + ", ".join(violations)
     )
+
+
+def test_native_import_fence_tracks_indirection_and_importlib_aliases():
+    indirect = ast.parse("""
+import importlib as loader
+for candidate in ("_pops", "pops._pops"):
+    loader.import_module(candidate)
+""")
+    imported_alias = ast.parse("""
+from importlib import import_module as load
+load("pops." + "_pops")
+""")
+    unresolved = ast.parse("""
+from importlib import import_module
+def load(candidate):
+    return import_module(candidate)
+""")
+    external = ast.parse("""
+import importlib
+for candidate in ("catalyst_conduit", "conduit"):
+    importlib.import_module(candidate)
+""")
+
+    assert tuple(_native_import_lines(indirect)) == (4,)
+    assert tuple(_native_import_lines(imported_alias)) == (3,)
+    assert tuple(_native_import_lines(unresolved)) == (4,)
+    assert tuple(_native_import_lines(external)) == ()
 
 
 def test_native_consumers_import_the_process_selector_explicitly():

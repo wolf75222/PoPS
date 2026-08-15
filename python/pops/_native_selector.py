@@ -44,13 +44,11 @@ def _exact_dimension(value: Any, *, where: str) -> int:
 
 
 def _native_roots() -> tuple[Path, ...]:
-    roots: list[Path] = []
-    explicit = os.environ.get("POPS_NATIVE_VARIANTS_ROOT")
-    if explicit:
-        roots.append(Path(explicit).absolute())
     package = sys.modules.get("pops")
-    roots.extend((Path(item).absolute() / "_native")
-                 for item in getattr(package, "__path__", ()))
+    roots = [
+        Path(item).absolute() / "_native"
+        for item in getattr(package, "__path__", ())
+    ]
     unique: list[Path] = []
     for root in roots:
         if root not in unique:
