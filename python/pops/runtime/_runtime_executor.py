@@ -255,7 +255,9 @@ def _require_single_layout_runtime_plan(plan: Any, runtime_plan: Any) -> None:
         ghost_depths = _ghost_depth_by_block(plan.artifact, tuple(compiled))
     for halo in runtime_plan.communication.halos:
         call = calls.get(halo.call_id)
-        block_name = None if call is None else block_names.get(call.block_id)
+        if call is None:
+            raise ValueError("RuntimePlanBundle halo has no installed block owner")
+        block_name = block_names.get(call.block_id)
         if block_name is None:
             raise ValueError("RuntimePlanBundle halo has no installed block owner")
         if halo.resource not in {row.resource for row in call.reads}:

@@ -383,30 +383,49 @@ def _resolved_condition(
         if condition_type == "no_flux"
         else GhostState(boundary=boundary, subject=state, representation=target)
     )
-    factory = {
-        "inflow": LowLevelInflow,
-        "no_flux": LowLevelNoFlux,
-        "outflow": LowLevelOutflow,
-        "slip_wall": GhostFormula,
-    }[condition_type]
-    if characteristic is not None:
-        if condition_type != "inflow":
-            raise ValueError("characteristic no-inflow is defined only for Inflow")
-        from pops.mesh.boundaries import DirectionalTransport
-
-        factory = DirectionalTransport
+    handle = _provider_handle(state, geometry, condition_type)
     if condition_type == "no_flux":
-        provider = factory(
-            handle=_provider_handle(state, geometry, condition_type),
+        if not isinstance(output, NumericalFlux):
+            raise TypeError("no_flux transport must emit a NumericalFlux port")
+        provider = LowLevelNoFlux(
+            handle=handle,
             output=output,
             dependencies=dependencies,
         )
     else:
-        provider = factory(
-            handle=_provider_handle(state, geometry, condition_type),
-            outputs=(output,),
-            dependencies=dependencies,
-        )
+        if not isinstance(output, GhostState):
+            raise TypeError("%s transport must emit a GhostState port" % condition_type)
+        outputs = (output,)
+        if characteristic is not None:
+            if condition_type != "inflow":
+                raise ValueError("characteristic no-inflow is defined only for Inflow")
+            from pops.mesh.boundaries import DirectionalTransport
+
+            provider = DirectionalTransport(
+                handle=handle,
+                outputs=outputs,
+                dependencies=dependencies,
+            )
+        elif condition_type == "inflow":
+            provider = LowLevelInflow(
+                handle=handle,
+                outputs=outputs,
+                dependencies=dependencies,
+            )
+        elif condition_type == "outflow":
+            provider = LowLevelOutflow(
+                handle=handle,
+                outputs=outputs,
+                dependencies=dependencies,
+            )
+        elif condition_type == "slip_wall":
+            provider = GhostFormula(
+                handle=handle,
+                outputs=outputs,
+                dependencies=dependencies,
+            )
+        else:
+            raise KeyError(condition_type)
     return ResolvedTransportCondition(
         geometry=geometry,
         condition_type=condition_type,

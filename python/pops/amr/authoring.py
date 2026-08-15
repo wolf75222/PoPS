@@ -54,15 +54,15 @@ def resolve_transition_ratios(
         authored = _authored_transition_ratio(
             value, where="%s[%d]" % (where, transition)
         )
-        if type(authored) is int:
-            row = (authored,) * dimension
-        else:
+        if isinstance(authored, tuple):
             row = authored
             if len(row) != dimension:
                 raise ValueError(
                     "%s[%d] has rank %d but the owning mesh has rank %d"
                     % (where, transition, len(row), dimension)
                 )
+        else:
+            row = (authored,) * dimension
         resolved.append(row)
     return tuple(resolved)
 
@@ -156,7 +156,7 @@ class AMRHierarchy:
             "authority_type": "amr_hierarchy",
             "max_levels": self.max_levels,
             "ratios": [
-                ratio if type(ratio) is int else list(ratio) for ratio in self.ratios
+                list(ratio) if isinstance(ratio, tuple) else ratio for ratio in self.ratios
             ],
         }
 

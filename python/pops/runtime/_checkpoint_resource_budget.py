@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 import json
 import sys
 from typing import Any
@@ -42,6 +42,12 @@ def _product(values: Any, *, where: str) -> int:
     for value in values:
         result = _mul(result, _capacity(value, where=where, positive=True), where=where)
     return result
+
+
+def _require_iterable(value: object, *, where: str) -> Iterable[object]:
+    if not isinstance(value, Iterable):
+        raise TypeError("%s must be iterable" % where)
+    return value
 
 
 def _archive_byte_capacity(
@@ -115,12 +121,15 @@ def _history_capacity(
         depth = _capacity(int(depth_value), where="history %r depth" % name, positive=True)
         ncomp = ncomps.get(name)
         if ncomp is None:
-            owner = owners.get(name)
-            if owner is not None:
+            raw_owner = owners.get(name)
+            owner_name = None
+            if raw_owner is not None:
                 from pops.time.references import block_name
 
-                owner = block_name(owner)
-            ncomp = block_nvars.get(owner)
+                owner_name = block_name(raw_owner)
+            ncomp = block_nvars.get(owner_name) if owner_name is not None else None
+        if ncomp is None:
+            raise ValueError("checkpoint history %r has no component authority" % name)
         ncomp = _capacity(int(ncomp), where="history %r components" % name, positive=True)
         member_names.extend(
             (
@@ -204,11 +213,18 @@ def _cache_capacity(
         raise ValueError("checkpoint cache authority has duplicate schedule node ids")
 
     provider = getattr(native, "program_cache_nodes", None)
-    nodes = tuple(provider()) if callable(provider) else ()
-    if (
-        nodes != tuple(sorted(set(nodes)))
-        or any(type(node) is not int or node < 0 for node in nodes)
-    ):
+    raw_nodes = (
+        _require_iterable(provider(), where="checkpoint cache native node evidence")
+        if callable(provider)
+        else ()
+    )
+    nodes = []
+    for node in raw_nodes:
+        if type(node) is not int or node < 0:
+            raise ValueError("checkpoint cache authority has invalid exact node ids")
+        nodes.append(node)
+    nodes = tuple(nodes)
+    if nodes != tuple(sorted(set(nodes))):
         raise ValueError("checkpoint cache authority has invalid exact node ids")
     unknown = tuple(node for node in nodes if node not in potential)
     if unknown:
@@ -283,17 +299,26 @@ def _amr_field_provider_manifest_capacity(
     provider = getattr(owner._s, "field_provider_checkpoint_manifest", None)
     if not callable(provider):
         raise TypeError("AMR checkpoint budget requires the native field-provider manifest")
-    raw_rows = provider()
-    try:
-        rows = tuple(tuple(row) for row in raw_rows)
-    except TypeError:
-        raise TypeError("AMR checkpoint field-provider manifest must contain exact rows") from None
+    raw_rows = _require_iterable(
+        provider(), where="AMR checkpoint field-provider manifest"
+    )
+    rows = []
+    for raw_row in raw_rows:
+        typed_row = []
+        for value in _require_iterable(
+            raw_row, where="AMR checkpoint field-provider manifest row"
+        ):
+            if not isinstance(value, str) or not value:
+                raise TypeError("AMR checkpoint field-provider manifest has an invalid row")
+            typed_row.append(value)
+        rows.append(tuple(typed_row))
+    rows = tuple(rows)
 
     maximum_uint64_text = str((1 << 64) - 1)
     bounded_rows = []
     slots = []
     for row in rows:
-        if len(row) < 14 or any(not isinstance(value, str) or not value for value in row):
+        if len(row) < 14:
             raise TypeError("AMR checkpoint field-provider manifest has an invalid row")
         if row[0] != "pops.amr.field-provider-checkpoint-manifest@1":
             raise ValueError("AMR checkpoint field-provider manifest has an unknown schema")

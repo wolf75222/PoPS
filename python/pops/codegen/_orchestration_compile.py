@@ -47,7 +47,7 @@ def _resolved_native_amr_field_roles(plan: Any) -> dict[str, tuple[dict[str, Any
                 raise ValueError(
                     "resolved AMR field %r provider names an unknown block or key" % field_name
                 )
-            if isinstance(coefficient, bool):
+            if coefficient is None or isinstance(coefficient, bool):
                 raise TypeError("resolved AMR field provider coefficient must be binary64")
             try:
                 coefficient = float(coefficient)

@@ -56,6 +56,28 @@ def _identity_data(value: Any) -> Any:
     )
 
 
+def _append_exception_note(error: BaseException, note: str) -> None:
+    """Attach cleanup context when Python exposes ``BaseException.add_note``."""
+    add_note = getattr(error, "add_note", None)
+    if callable(add_note):
+        add_note(note)
+
+
+def _require_iterable(value: object, *, where: str) -> Iterable[object]:
+    if not isinstance(value, Iterable):
+        raise TypeError("%s must be iterable" % where)
+    return value
+
+
+def _require_exact_ints(value: object, *, where: str) -> tuple[int, ...]:
+    values = []
+    for item in _require_iterable(value, where=where):
+        if type(item) is not int:
+            raise TypeError("%s must contain exact integers" % where)
+        values.append(item)
+    return tuple(values)
+
+
 def _regrid_receipt_identity_data(receipt: Mapping[str, Any]) -> dict[str, Any]:
     """Project the validated scientific receipt onto canonical identity scalars.
 
@@ -719,7 +741,7 @@ class RuntimeInstance:
         provider: Any = getattr(self._executor, "spatial_shape", None)
         if not callable(provider):
             raise NotImplementedError("runtime provider does not expose its exact spatial shape")
-        shape = tuple(provider())
+        shape = _require_exact_ints(provider(), where="native runtime spatial shape")
         if len(shape) not in (1, 2, 3) or any(
             type(value) is not int or value < 1 for value in shape
         ):
@@ -783,7 +805,7 @@ class RuntimeInstance:
         provider = getattr(self._executor, "history_levels", None)
         if not callable(provider):
             raise NotImplementedError("the Uniform history API has one implicit level")
-        return tuple(int(level) for level in provider(name))
+        return _require_exact_ints(provider(name), where="native runtime hierarchy levels")
 
     def history_global(self, name: str, level_or_slot: int, slot: int | None = None) -> Any:
         """Gather one history slot without changing the Uniform two-argument public seam."""
@@ -1758,7 +1780,10 @@ class RuntimeInstance:
                 try:
                     transaction_receipt.cleanup_owned()
                 except BaseException as cleanup_error:
-                    error.add_note("rank-zero checkpoint cleanup also failed: %s" % cleanup_error)
+                    _append_exception_note(
+                        error,
+                        "rank-zero checkpoint cleanup also failed: %s" % cleanup_error,
+                    )
             raise error
         initial_entry = None
         precreated_descriptor = None
@@ -1810,6 +1835,8 @@ class RuntimeInstance:
         capture_error = None
         try:
             if seam_kind == "precreated-inode":
+                if not callable(precreated_capture):
+                    raise RuntimeError("checkpoint capture seam lost its precreated-inode callable")
                 target = canonical_checkpoint_path(
                     precreated_capture(str(expected), precreated_descriptor=precreated_descriptor)
                 )
@@ -1851,7 +1878,10 @@ class RuntimeInstance:
                 try:
                     cleanup_native_capture_failure()
                 except BaseException as cleanup_error:
-                    error.add_note("rank-zero checkpoint cleanup also failed: %s" % cleanup_error)
+                    _append_exception_note(
+                        error,
+                        "rank-zero checkpoint cleanup also failed: %s" % cleanup_error,
+                    )
             raise error
 
         import numpy as np
@@ -2011,12 +2041,17 @@ class RuntimeInstance:
                 % attempt.transport_error
             )
             if attempt.producer_error is not None:
-                error.add_note("rank-zero producer also failed: %s" % attempt.producer_error)
+                _append_exception_note(
+                    error, "rank-zero producer also failed: %s" % attempt.producer_error
+                )
             if topology.rank == 0:
                 try:
                     cleanup_root()
                 except BaseException as cleanup_error:
-                    error.add_note("rank-zero checkpoint cleanup also failed: %s" % cleanup_error)
+                    _append_exception_note(
+                        error,
+                        "rank-zero checkpoint cleanup also failed: %s" % cleanup_error,
+                    )
             raise error from attempt.transport_error
         if attempt.producer_error is not None:
             error = attempt.producer_error
@@ -2077,7 +2112,10 @@ class RuntimeInstance:
                 try:
                     cleanup_root()
                 except BaseException as cleanup_error:
-                    error.add_note("rank-zero checkpoint cleanup also failed: %s" % cleanup_error)
+                    _append_exception_note(
+                        error,
+                        "rank-zero checkpoint cleanup also failed: %s" % cleanup_error,
+                    )
             raise error
         if topology.rank == 0:
             entries["proof"] = None

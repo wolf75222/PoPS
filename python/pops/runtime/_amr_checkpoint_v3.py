@@ -9,7 +9,7 @@ history ring to be Dense because selective replay is a same-rank operation. Hist
 fallback formats are refused.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 import hashlib
 import json
@@ -130,7 +130,15 @@ def _field_provider_manifest(sim):
     provider = getattr(sim, "field_provider_checkpoint_manifest", None)
     if not callable(provider):
         raise TypeError("AMR checkpoint requires the native field-provider manifest")
-    rows = tuple(tuple(str(value) for value in row) for row in provider())
+    raw_rows = provider()
+    if not isinstance(raw_rows, Iterable):
+        raise TypeError("native AMR field-provider manifest must be iterable")
+    rows = []
+    for raw_row in raw_rows:
+        if not isinstance(raw_row, Iterable):
+            raise TypeError("native AMR field-provider manifest must contain iterable rows")
+        rows.append(tuple(str(value) for value in raw_row))
+    rows = tuple(rows)
     seen = set()
     for row in rows:
         if len(row) < 14 or row[0] != "pops.amr.field-provider-checkpoint-manifest@1":
@@ -380,7 +388,12 @@ def _capture_v3(owner, sim, prepared):
             raise TypeError("checkpoint AMR engine lacks accepted-state consensus validation")
         if not callable(source_authority_provider):
             raise TypeError("checkpoint AMR engine lacks accepted-state source authority")
-        source_authority = bytes(source_authority_provider(rank_dmaps[0], prepared.topology.size))
+        raw_source_authority = source_authority_provider(
+            rank_dmaps[0], prepared.topology.size
+        )
+        if not isinstance(raw_source_authority, (bytes, bytearray, memoryview)):
+            raise TypeError("checkpoint AMR engine returned non-bytes source authority")
+        source_authority = bytes(raw_source_authority)
         if not source_authority:
             raise RuntimeError("checkpoint AMR engine returned an empty source authority")
         # Re-materializing onto the unchanged ownership is a non-mutating validation pass. It

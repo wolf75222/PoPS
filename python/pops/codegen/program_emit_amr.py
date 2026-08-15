@@ -402,9 +402,12 @@ def _require_bounded_cell_local_program(program: Any, target: Any, hierarchy_bod
                 "Program.cell_local_time requires default-flux RHS routes without sources or fields"
             )
         result = commits.get(state.state_ref)
+        if result is None or not any(result is candidate for candidate in results):
+            raise ValueError(
+                "Program.cell_local_time ForwardEuler commit must consume its accepted state and RHS"
+            )
         if (
-            not any(result is candidate for candidate in results)
-            or len(result.inputs) != 2
+            len(result.inputs) != 2
             or result.inputs[0] is not state
             or result.inputs[1] is not rhs
         ):

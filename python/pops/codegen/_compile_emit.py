@@ -769,6 +769,11 @@ def _emit_auxiliary_route_registration(model: Any, *, target: str = "system") ->
             )
         )
         if kind == "AuxiliaryProviderKind::derived":
+            if route is None:
+                raise ValueError(
+                    "derived auxiliary provider %r has no exact typed lowering route"
+                    % row["key"]["component"]
+                )
             lines.append(derived_launcher(identity, route) + ");")
         else:
             lines.append("      std::vector<Dependency>{}});")

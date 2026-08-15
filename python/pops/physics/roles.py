@@ -138,7 +138,15 @@ class StateSchema:
     def axes(self, family: str) -> tuple[int, ...]:
         if family not in _AXIS_FAMILIES:
             raise ValueError("%r is not an axis-bearing role family" % family)
-        return tuple(sorted(role.axis for role in self.roles if role.family == family))
+        axes: list[int] = []
+        for role in self.roles:
+            if role.family != family:
+                continue
+            axis = role.axis
+            if axis is None:
+                raise ValueError("axis-bearing role family %r is missing an axis" % family)
+            axes.append(axis)
+        return tuple(sorted(axes))
 
     def index(self, token: Any) -> int:
         """Return the unique component index for an exact physical or user role token."""

@@ -8,7 +8,7 @@ to ``dense_regrid_safety``; a non-default whole-Program cadence is promoted to
 ``dense_cadence_safety``. Restart replays only cadence-1/1 gaps proven exact by every guard.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 import json
 from typing import Any, cast
@@ -90,6 +90,21 @@ def _history_slot_key(name, level, slot):
         if level is None
         else "history_%s_level_%d_%d" % (name, level, slot)
     )
+
+
+def _require_iterable(value: object, *, where: str) -> Iterable[object]:
+    if not isinstance(value, Iterable):
+        raise TypeError("%s must be iterable" % where)
+    return value
+
+
+def _require_exact_ints(value: object, *, where: str) -> tuple[int, ...]:
+    values = []
+    for item in _require_iterable(value, where=where):
+        if type(item) is not int:
+            raise TypeError("%s must contain exact integers" % where)
+        values.append(item)
+    return tuple(values)
 
 
 def history_fill_count_from_payload(payload, name, depth, initialized, *, level=None):
@@ -259,7 +274,9 @@ def prepare_history_capture(system, persistence, *, macro_step=0, regrid_every=0
         policy = resolve_ring_policy(persistence.get(hname), depth)
         if callable(raw_levels_provider):
             try:
-                native_levels = tuple(int(level) for level in raw_levels_provider(hname))
+                native_levels = _require_exact_ints(
+                    raw_levels_provider(hname), where="native history levels"
+                )
             except (AttributeError, NotImplementedError):
                 native_levels = (None,)
         else:
@@ -440,13 +457,17 @@ def restore_histories(system, d, fired_out=None):
             if levels_key in d
             else (None,)
         )
-        if not levels or tuple(sorted(set(levels))) != levels:
+        if not levels or tuple(
+            sorted(set(levels), key=lambda value: -1 if value is None else value)
+        ) != levels:
             raise ValueError(
                 "restart : history '%s' levels must be non-empty, sorted, and unique" % hname
             )
         if levels_key in d:
             runtime_levels = getattr(system, "history_levels", None)
-            if not callable(runtime_levels) or tuple(int(v) for v in runtime_levels(hname)) != levels:
+            if not callable(runtime_levels) or _require_exact_ints(
+                runtime_levels(hname), where="runtime history levels"
+            ) != levels:
                 raise RuntimeError(
                     "restart : history '%s' hierarchy levels differ from the runtime" % hname
                 )

@@ -16,6 +16,13 @@ from ._checkpoint_collective import (
 )
 
 
+def _append_exception_note(error: BaseException, note: str) -> None:
+    """Attach diagnostic context when the configured Python runtime supports it."""
+    add_note = getattr(error, "add_note", None)
+    if callable(add_note):
+        add_note(note)
+
+
 def _owner(value: os.stat_result) -> tuple[int, int]:
     return int(value.st_dev), int(value.st_ino)
 
@@ -576,12 +583,17 @@ class _RestartSnapshot:
                 "checkpoint transport failed during staging selection: %s" % attempt.transport_error
             )
             if attempt.producer_error is not None:
-                error.add_note("rank-zero producer also failed: %s" % attempt.producer_error)
+                _append_exception_note(
+                    error, "rank-zero producer also failed: %s" % attempt.producer_error
+                )
             if self._topology.rank == 0 and created_transaction is not None:
                 try:
                     created_transaction.cleanup_owned()
                 except BaseException as cleanup_error:
-                    error.add_note("rank-zero checkpoint cleanup also failed: %s" % cleanup_error)
+                    _append_exception_note(
+                        error,
+                        "rank-zero checkpoint cleanup also failed: %s" % cleanup_error,
+                    )
             raise error from attempt.transport_error
         if attempt.producer_error is not None:
             if self._topology.rank == 0 and created_transaction is not None:
@@ -657,7 +669,8 @@ class _RestartSnapshot:
                 except BaseException as cleanup_error:
                     failures.append(cleanup_error)
                 if failures:
-                    error.add_note(
+                    _append_exception_note(
+                        error,
                         "rank-zero checkpoint cleanup also failed: "
                         + "; ".join(str(item) for item in failures)
                     )
@@ -906,12 +919,17 @@ class _RestartSnapshot:
                 "checkpoint transport failed during publication: %s" % attempt.transport_error
             )
             if attempt.producer_error is not None:
-                error.add_note("rank-zero producer also failed: %s" % attempt.producer_error)
+                _append_exception_note(
+                    error, "rank-zero producer also failed: %s" % attempt.producer_error
+                )
             if self._topology.rank == 0:
                 try:
                     self._cleanup_root(include_published=True)
                 except BaseException as cleanup_error:
-                    error.add_note("rank-zero checkpoint cleanup also failed: %s" % cleanup_error)
+                    _append_exception_note(
+                        error,
+                        "rank-zero checkpoint cleanup also failed: %s" % cleanup_error,
+                    )
             self._discarded = True
             raise error from attempt.transport_error
         if attempt.producer_error is not None:
@@ -987,7 +1005,9 @@ class _RestartSnapshot:
                 "checkpoint transport failed during %s: %s" % (phase, attempt.transport_error)
             )
             if attempt.producer_error is not None:
-                error.add_note("rank-zero cleanup also failed: %s" % attempt.producer_error)
+                _append_exception_note(
+                    error, "rank-zero cleanup also failed: %s" % attempt.producer_error
+                )
             raise error from attempt.transport_error
         if attempt.producer_error is not None:
             raise attempt.producer_error

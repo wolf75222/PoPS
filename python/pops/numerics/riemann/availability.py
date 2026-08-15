@@ -47,7 +47,8 @@ def _is_polar(context: Any) -> bool:
     if callable(capabilities):
         values = capabilities()
         data = getattr(values, "values", values)
-        if hasattr(data, "get") and data.get("geometry") == "polar":
+        getter = getattr(data, "get", None)
+        if callable(getter) and getter("geometry") == "polar":
             return True
     return False
 

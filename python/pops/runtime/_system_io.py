@@ -6,6 +6,7 @@ owns the restart payload codec and its native transaction; it has no format or M
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -40,6 +41,12 @@ class _PreparedUniformCapture:
 
 
 _DEFAULT_FIELD_SLOT = "pops.system.default-field"
+
+
+def _require_iterable(value: object, *, where: str) -> Iterable[object]:
+    if not isinstance(value, Iterable):
+        raise TypeError("%s must be iterable" % where)
+    return value
 
 
 def _validated_uniform_phi_alias(payload, *, spatial_shape: tuple[int, ...], field_slots):
@@ -104,7 +111,12 @@ def _authenticate_uniform_checkpoint_field_slots(native, checkpoint_slots):
                 % (slots, materialized)
             )
         return
-    configured = [str(slot) for slot in configured_query()]
+    configured = [
+        str(slot)
+        for slot in _require_iterable(
+            configured_query(), where="configured field-provider slots"
+        )
+    ]
     if slots == materialized:
         return
     if (

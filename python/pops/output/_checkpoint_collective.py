@@ -19,7 +19,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, cast
+from typing import Any, BinaryIO, Protocol, cast
 
 from pops._native_collectives import (
     allgather_value,
@@ -101,6 +101,20 @@ class _NpyMemberPlan:
     data_bytes: int
 
 
+class _NpyHeaderReader(Protocol):
+    """Bounded NumPy header reader (the stubs omit ``max_header_size``)."""
+
+    def __call__(
+        self, stream: BinaryIO, *, max_header_size: int
+    ) -> tuple[tuple[int, ...], bool, object]: ...
+
+
+class _NpyArrayReader(Protocol):
+    def __call__(
+        self, stream: BinaryIO, *, allow_pickle: bool, max_header_size: int
+    ) -> object: ...
+
+
 def _checked_array_bytes(shape: Any, dtype: Any, *, name: str) -> int:
     if type(shape) is not tuple or len(shape) > _CHECKPOINT_MAX_ARRAY_NDIM:
         raise TypeError("checkpoint member %r exceeds the exact native array-rank bound" % name)
@@ -133,19 +147,24 @@ def _read_npy_header(archive: Any, info: Any, name: str) -> _NpyMemberPlan:
 
     with archive.open(info, "r") as member:
         version = np.lib.format.read_magic(member)
+        bounded_member = cast(BinaryIO, member)
         if version == (1, 0):
-            shape, fortran_order, dtype = np.lib.format.read_array_header_1_0(
-                member, max_header_size=_NPY_HEADER_BUDGET
+            reader = cast(_NpyHeaderReader, np.lib.format.read_array_header_1_0)
+            shape, fortran_order, dtype = reader(
+                bounded_member, max_header_size=_NPY_HEADER_BUDGET
             )
         elif version == (2, 0):
-            shape, fortran_order, dtype = np.lib.format.read_array_header_2_0(
-                member, max_header_size=_NPY_HEADER_BUDGET
+            reader = cast(_NpyHeaderReader, np.lib.format.read_array_header_2_0)
+            shape, fortran_order, dtype = reader(
+                bounded_member, max_header_size=_NPY_HEADER_BUDGET
             )
         else:
             raise ValueError(
                 "checkpoint member %r uses unsupported NPY version %r" % (name, version)
             )
         header_bytes = int(member.tell())
+    if not isinstance(dtype, (str, type, np.dtype)):
+        raise TypeError("checkpoint member %r has an invalid NPY dtype descriptor" % name)
     dtype = np.dtype(dtype)
     _require_checkpoint_dtype(dtype, name=name)
     if fortran_order:
@@ -172,8 +191,9 @@ def _read_npy_array(archive: Any, plan: _NpyMemberPlan) -> Any:
     import numpy as np
 
     with archive.open(plan.info, "r") as member:
-        value = np.lib.format.read_array(
-            member, allow_pickle=False, max_header_size=_NPY_HEADER_BUDGET
+        reader = cast(_NpyArrayReader, np.lib.format.read_array)
+        value = reader(
+            cast(BinaryIO, member), allow_pickle=False, max_header_size=_NPY_HEADER_BUDGET
         )
         if member.read(1):
             raise ValueError("checkpoint member %r has trailing NPY bytes" % plan.name)

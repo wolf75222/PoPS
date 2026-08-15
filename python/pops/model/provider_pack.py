@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any
 
+from pops.model.spaces import FieldSpace
+
 
 class MissingInputProvider(LookupError):
     """An exact component has no usable provider in a :class:`ProviderPack`."""
@@ -390,7 +392,7 @@ def _bound_field_projections(
                 % subject.local_id
             ) from exc
         output = getattr(getattr(operator, "signature", None), "output", None)
-        if getattr(output, "kind", None) != "field":
+        if not isinstance(output, FieldSpace):
             raise ValueError(
                 "invalid field operator binding for subject %r: target has no FieldSpace output"
                 % subject.local_id

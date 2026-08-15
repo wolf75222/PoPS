@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, NoReturn
 
@@ -83,7 +84,10 @@ def field_layout_contract(layout: Any) -> FieldLayoutContract:
             mesh_to_dict = getattr(mesh_evidence, "to_dict", None)
             if not callable(mesh_to_dict):
                 raise TypeError("AMR field mesh capabilities must implement to_dict()")
-            dimension = mesh_to_dict().get("dim")
+            mesh_data = mesh_to_dict()
+            if not isinstance(mesh_data, Mapping):
+                raise TypeError("AMR field mesh capabilities must implement to_dict()")
+            dimension = mesh_data.get("dim")
         if type(dimension) is not int or dimension not in (1, 2, 3):
             raise ValueError("AMR field layout dimension must be 1, 2, or 3")
         raw_ratios = data.get("transition_ratios")

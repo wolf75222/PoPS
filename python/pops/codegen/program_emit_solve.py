@@ -317,7 +317,7 @@ def _coupled_interface_jacvec_plan(
     *,
     target: str,
     has_shared_interface_implicit_jacvec: bool,
-) -> Any:
+) -> tuple[tuple[Any, Any], tuple[int, int]] | None:
     jac_ops = [value for value in block if value.op == "rhs_jacvec"]
     if target != "amr_system" or len(jac_ops) != 2:
         return None
@@ -360,7 +360,7 @@ def _coupled_interface_jacvec_plan(
     if int(v.attrs["ncomp"]) != sum(widths):
         raise ValueError(
             "coupled shared-interface packed width differs from endpoint StateSpaces")
-    return tuple(jac_ops), tuple(widths)
+    return (jac_ops[0], jac_ops[1]), (widths[0], widths[1])
 
 
 def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
@@ -512,11 +512,15 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     # iterate. The exact BoundaryEvaluationPoint is a shared pointee because it must remain frozen
     # at r0's stage while other operator nodes may advance the shared context to a later stage.
     jac_ops = [w for w in block if w.op == "rhs_jacvec"]
-    coupled_pair = () if coupled_jacvec is None else coupled_jacvec[0]
-    coupled_widths = () if coupled_jacvec is None else coupled_jacvec[1]
-    coupled_width_by_id = {
-        value.id: width for value, width in zip(coupled_pair, coupled_widths, strict=True)
-    }
+    if coupled_jacvec is None:
+        coupled_pair = None
+        coupled_widths = None
+        coupled_width_by_id: dict[Any, int] = {}
+    else:
+        coupled_pair, coupled_widths = coupled_jacvec
+        coupled_width_by_id = {
+            value.id: width for value, width in zip(coupled_pair, coupled_widths, strict=True)
+        }
     coupled_packed_uk = None
     coupled_point = None
     coupled_cdt = None
@@ -644,10 +648,10 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         # removed from the frozen base so the finite difference covers only the core residual; their
         # derivative is supplied separately by boundary_jvp_into_at in the ApplyFn.
         stage = _rhs_stage_fraction(r0_in)
-        if coupled_jacvec is None or w is coupled_pair[0]:
+        if coupled_pair is None or w is coupled_pair[0]:
             evaluation_identity = (
                 _rhs_evaluation_identity(program, r0_in)
-                if coupled_jacvec is not None else int(r0_in.id)
+                if coupled_pair is not None else int(r0_in.id)
             )
             prepare_refresh.append(
                 "ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
@@ -657,7 +661,7 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             "pops::PureFieldAlgebra::copy(*%s, %s);" % (uk, var[iterate_in.id]))
         prepare_refresh.append(
             "pops::PureFieldAlgebra::copy(*%s, %s);" % (r0, var[r0_in.id]))
-        if coupled_jacvec is None or w is coupled_pair[0]:
+        if coupled_pair is None or w is coupled_pair[0]:
             prepare_refresh.append("*%s = %s;" % (cdt, _coeff_cpp(w.attrs["c_dt"])))
     tensor_ops = [w for w in block if w.op == "apply_laplacian_coeff"]
     tensor_boundary = None
@@ -765,7 +769,7 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
                         % (sub[o.id], _apply_in_arg(sub, i), tensor,
                            boundary, point_arg))
         elif w.op == "rhs_jacvec":
-            if coupled_jacvec is not None:
+            if coupled_pair is not None and coupled_widths is not None:
                 sub[w.id] = sub[w.inputs[0].id]
                 if w is coupled_pair[0]:
                     continue
@@ -1002,7 +1006,7 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
                    % ", ".join(prepare_captures))
     prelude.append("    auto& ctx = *ctx_owner;")
     prelude += ["    " + statement for statement in session_refresh]
-    if coupled_jacvec is not None:
+    if coupled_pair is not None and coupled_widths is not None:
         offset = 0
         for value, width in zip(coupled_pair, coupled_widths, strict=True):
             endpoint_uk = jac_scratch[value.id][0]

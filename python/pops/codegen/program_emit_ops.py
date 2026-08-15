@@ -754,9 +754,15 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         for source_name in named:
             plan_exprs.extend(_model_impl(node_model)._source_terms[source_name])
         consumer_qid = (
-            program_provider_consumer_qid(node_model, v.id) if plan_exprs else None
+            program_provider_consumer_qid(node_model, v.id)
+            if plan_exprs or named_fluxes is not None or named
+            else None
         )
         if named_fluxes is not None:
+            if consumer_qid is None:
+                raise ValueError(
+                    "named-flux kernel requires an explicit Program consumer qid"
+                )
             # The named-flux kernel and named sources below are one Program node:
             # their shared plan is the first-use union, not an operator plan.
             lines += _emit_flux_kernel(
@@ -781,6 +787,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             lines.append("pops::MultiFab<pops::kNativeDimension>& %s = "
                          "ctx.rhs_scratch(%d, %d, %s);"
                          % (ssrc, int(v.id), source_subslot, var[state_in.id]))
+            if consumer_qid is None:
+                raise ValueError(
+                    "named-source kernel requires an explicit Program consumer qid"
+                )
             lines += _emit_source_kernel(
                 node_model, s, var[state_in.id], ssrc, bidx,
                 provider_plans=provider_plans, consumer_qid=consumer_qid,
@@ -934,7 +944,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             v, var, node_model, lines, prelude,
             provider_plans=provider_plans,
             consumer_qid=program_provider_consumer_qid(node_model, v.id),
-            program_block=bidx,
+            program_block=_required_block_index(
+                block_idx, v.block, "condensed op %r" % v.name
+            ),
         )
     elif v.op == "matrix_free_operator":
         # Install-time: emit the apply lambda `apply_A{id}` into the prelude. Its persistent scratch

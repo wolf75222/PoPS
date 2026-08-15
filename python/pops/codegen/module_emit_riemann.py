@@ -15,6 +15,7 @@ _emit_roe_jacobian   -- m.roe_from_jacobian : d = |A| (UR-UL), A = dF/dU at Uavg
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from pops._dense_spectral import is_exact_block_triangular
@@ -49,7 +50,10 @@ def has_characteristic_no_inflow_provider(model: Any) -> bool:
         for row in jacobian[direction]
         for expression in row
     ]
-    return not bool(requirements(expressions).get("aux"))
+    required = requirements(expressions)
+    if not isinstance(required, Mapping):
+        raise TypeError("model auxiliary requirements must be a mapping")
+    return not bool(required.get("aux"))
 
 
 def _certified_roe_blocks(model: Any, jacobians: Any) -> Any:

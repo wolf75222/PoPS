@@ -30,8 +30,8 @@ class ComponentProviderPacks:
     auxiliary: ProviderPack
     auxiliary_routes: Mapping[ComponentKey, Mapping[str, Any]]
     auxiliary_route_metadata: tuple[Mapping[str, Any], ...]
-    consumer_plans: Mapping[str, tuple[dict[str, Any], ...]]
-    physical_flux_plan: tuple[dict[str, Any], ...]
+    consumer_plans: Mapping[str, tuple[Mapping[str, Any], ...]]
+    physical_flux_plan: tuple[Mapping[str, Any], ...]
 
     def __post_init__(self) -> None:
         if type(self.complete) is not ProviderPack:

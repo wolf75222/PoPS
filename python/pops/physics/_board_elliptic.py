@@ -19,6 +19,11 @@ else:
 class _EllipticAuthoringMixin(_BoardModel):
     """Construct physics-only field operators; numerics stay on ``Problem``."""
 
+    if TYPE_CHECKING:
+        _frame: Any
+
+        def _ranked_frame_axes(self, *, where: str) -> tuple[str, ...]: ...
+
     def field_operator(
         self,
         name: Any,
