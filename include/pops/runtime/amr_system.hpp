@@ -765,6 +765,11 @@ class AmrSystem {
   /// conservative transfer provider.  The active bootstrap snapshot owns rollback of every write.
   std::size_t materialize_bootstrap_action(const std::string& subject_id, const std::string& action,
                                            const std::string& action_route, int level);
+  /// Restrict one already-materialized fine state onto its live parent during an explicit
+  /// bootstrap transaction.  The subject must own the exact cell-conservative volume-average
+  /// restriction authority for this ranked transition; publication is collective on the prepared
+  /// hierarchy lane and changes only parent cells covered by the fine layout.
+  void synchronize_bootstrap_state(const std::string& subject_id, int fine_level);
   void begin_bootstrap_plan();
   bool bootstrap_next_level();  ///< execute the next exact ranked transition if tagged
   void commit_bootstrap_level();

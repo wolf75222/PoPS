@@ -900,6 +900,8 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
           py::arg("values"))
       .def("_materialize_bootstrap_action", &AmrSystem::materialize_bootstrap_action,
            py::arg("subject_id"), py::arg("action"), py::arg("action_route"), py::arg("level"))
+      .def("_synchronize_bootstrap_state", &AmrSystem::synchronize_bootstrap_state,
+           py::arg("subject_id"), py::arg("fine_level"))
       .def("_begin_bootstrap_plan", &AmrSystem::begin_bootstrap_plan)
       .def("_bootstrap_next_level", &AmrSystem::bootstrap_next_level)
       .def("_commit_bootstrap_level", &AmrSystem::commit_bootstrap_level)

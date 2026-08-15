@@ -16,6 +16,7 @@
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
 #include <pops/numerics/elliptic/interface/field_nonlinear.hpp>
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
+#include <pops/numerics/time/amr/reflux/amr_flux_execution.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace_provider.hpp>
 #include <pops/parallel/comm.hpp>
 #include <pops/parallel/solve_report_consensus.hpp>
@@ -14813,6 +14814,123 @@ std::size_t AmrSystem<Dim>::materialize_bootstrap_action(const std::string& subj
 }
 
 template <int Dim>
+void AmrSystem<Dim>::synchronize_bootstrap_state(const std::string& subject_id, int fine_level) {
+  p_->ensure_engine();
+  const ExecutionLane& lane =
+      p_->require_prepared_engine_lane("AMR bootstrap covered-cell synchronization");
+  std::size_t block_index = 0;
+  std::size_t child_level = 0;
+  std::string synchronization_contract;
+  std::exception_ptr local_error;
+  try {
+    if (!p_->bootstrap_transaction)
+      throw std::logic_error(
+          "AMR bootstrap covered-cell synchronization requires an active transaction");
+    if (subject_id.empty() || fine_level <= 0)
+      throw std::invalid_argument(
+          "AMR bootstrap covered-cell synchronization requires one non-root subject level");
+    child_level = static_cast<std::size_t>(fine_level);
+    if (child_level >= p_->engine->hierarchy().num_levels())
+      throw std::out_of_range("AMR bootstrap covered-cell synchronization level is not live");
+    if (!p_->bootstrap_materialized_actions.contains(std::make_pair(subject_id, fine_level)))
+      throw std::logic_error(
+          "AMR bootstrap covered-cell synchronization requires a materialized fine subject");
+
+    const auto source = p_->bootstrap_sources.find(subject_id);
+    if (source == p_->bootstrap_sources.end() ||
+        source->second.kind == Impl::BootstrapSourceKind::unstaged)
+      throw std::invalid_argument(
+          "AMR bootstrap covered-cell synchronization has no authenticated subject source");
+    if (p_->boundary_registry.state_route(source->second.runtime_block) != subject_id)
+      throw std::invalid_argument(
+          "AMR bootstrap covered-cell synchronization subject no longer owns its runtime block");
+    block_index = p_->block_index(source->second.runtime_block);
+
+    const auto subject_route =
+        p_->bootstrap_subject_routes.find(std::make_pair(subject_id, std::string("restriction")));
+    if (subject_route == p_->bootstrap_subject_routes.end())
+      throw std::invalid_argument(
+          "AMR bootstrap covered-cell synchronization has no registered restriction route");
+    const auto route = p_->bootstrap_transfer_routes.find(subject_route->second);
+    if (route == p_->bootstrap_transfer_routes.end())
+      throw std::logic_error(
+          "AMR bootstrap covered-cell synchronization lost its restriction authority");
+    const typename Impl::BootstrapTransferRoute& restriction = route->second;
+    if (restriction.operation != "restriction" || restriction.space != "cell" ||
+        restriction.centering != "cell" || restriction.representation != "conservative" ||
+        restriction.storage != "dense" || restriction.kernel != "volume_average" ||
+        restriction.order != 1 ||
+        std::find(restriction.subjects.begin(), restriction.subjects.end(), subject_id) ==
+            restriction.subjects.end())
+      throw std::invalid_argument(
+          "AMR bootstrap covered-cell synchronization restriction route is not exact");
+    for (int axis = 0; axis < Dim; ++axis)
+      if (restriction.ghost_depth[axis] != 0)
+        throw std::invalid_argument(
+            "AMR bootstrap covered-cell synchronization restriction route has non-zero ghosts");
+
+    const std::size_t transition = child_level - 1;
+    bool live_ratio_matches = transition < p_->cfg.transition_ratios.size();
+    if (live_ratio_matches)
+      for (int axis = 0; axis < Dim; ++axis)
+        live_ratio_matches =
+            live_ratio_matches &&
+            p_->engine->hierarchy().layout(child_level).ratio_from_parent()[axis] ==
+                p_->cfg.transition_ratios[transition][axis];
+    if (transition >= p_->cfg.transition_ratios.size() ||
+        restriction.refinement_ratio != p_->cfg.transition_ratios[transition] ||
+        !live_ratio_matches)
+      throw std::invalid_argument(
+          "AMR bootstrap covered-cell synchronization does not authenticate the live ranked "
+          "transition");
+
+    ExactContractBuilder exact;
+    exact.text("pops.amr.bootstrap-covered-cell-synchronization")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .text(subject_id)
+        .text(source->second.runtime_block)
+        .text(source->second.source_route)
+        .scalar(static_cast<std::uint64_t>(block_index))
+        .scalar(std::int32_t{fine_level})
+        .text(restriction.identity)
+        .text(restriction.provider_identity)
+        .text(restriction.kernel)
+        .scalar(restriction.order)
+        .scalar(p_->engine->topology_epoch())
+        .scalar(p_->engine->materialization_generation());
+    for (int axis = 0; axis < Dim; ++axis)
+      exact.scalar(restriction.ghost_depth[axis]).scalar(restriction.refinement_ratio[axis]);
+    synchronization_contract = std::move(exact).release();
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      local_error, &lane,
+      "AMR bootstrap covered-cell synchronization preflight failed collectively");
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("amr-bootstrap-covered-cell-synchronization"),
+            std::string_view(synchronization_contract)}},
+          lane))
+    throw std::invalid_argument(
+        "AMR bootstrap covered-cell synchronization authority differs between prepared-lane ranks");
+
+  std::exception_ptr execution_error;
+  try {
+    numerics::time::amr::execute_average_down_collectively(
+        p_->multiblock_hierarchy->topology_runtime(), child_level,
+        p_->multiblock_hierarchy->state(block_index, child_level),
+        p_->multiblock_hierarchy->state(block_index, child_level - 1), lane);
+  } catch (...) {
+    execution_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      execution_error, &lane,
+      "AMR bootstrap covered-cell synchronization execution failed collectively");
+  p_->discard_level_evaluations();
+}
+
+template <int Dim>
 runtime::amr::PreparedTaggerCandidates<Dim> AmrSystem<Dim>::execute_prepared_tagging(
     int parent_level) {
   p_->ensure_engine();
@@ -18670,6 +18788,7 @@ AmrSystem<kNativeDimension>::execute_prepared_tagging(int);
 template bool AmrSystem<kNativeDimension>::regrid_from_prepared_tagging(int);
 template void AmrSystem<kNativeDimension>::begin_restart_regrid_history_sequence();
 template void AmrSystem<kNativeDimension>::end_restart_regrid_history_sequence() noexcept;
+template void AmrSystem<kNativeDimension>::synchronize_bootstrap_state(const std::string&, int);
 template void AmrSystem<kNativeDimension>::begin_bootstrap_plan();
 template bool AmrSystem<kNativeDimension>::bootstrap_next_level();
 template void AmrSystem<kNativeDimension>::commit_bootstrap_level();

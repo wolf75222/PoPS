@@ -455,6 +455,96 @@ void materialize_magnetic_bootstrap(pops::AmrSystem<Dim>& system,
 }
 
 template <int Dim>
+void verify_bootstrap_covered_cell_synchronization() {
+  constexpr const char* state_route = "tests.amr.system-contract/bootstrap-sync/state";
+  pops::AmrSystemConfig<Dim> config = magnetic_config<Dim>();
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 16;
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system,
+                                            "test.amr-system-contract.bootstrap-sync-runtime");
+  system.install_block_state_route("tracer", state_route);
+  install_direct_tracer(system, "tracer", "tests.amr.system-contract/bootstrap-sync/flux");
+  pops::test::install_prepared_threshold_union(
+      system,
+      {{"tracer", "scalar", 1.5, pops::test::PreparedThresholdRelation::Above, state_route}},
+      "tests.amr.system-contract/bootstrap-sync/tagging@1");
+
+  const std::size_t cells = cell_count(config.shape);
+  std::vector<double> initial(cells, 1.0);
+  for (std::size_t cell = 0; cell < cells; ++cell)
+    if (cell % static_cast<std::size_t>(config.shape[0]) >= 2 &&
+        cell % static_cast<std::size_t>(config.shape[0]) <= 5)
+      initial[cell] = 2.0;
+  system.bind_bootstrap_subject(state_route, "tracer", "bound_level_zero");
+  system.stage_bootstrap_array(state_route, "tracer", "cell", "cell", 1, config.shape, initial);
+  pops::Extent<Dim> prolongation_ghosts{};
+  pops::Extent<Dim> restriction_ghosts{};
+  for (int axis = 0; axis < Dim; ++axis)
+    prolongation_ghosts[axis] = 1;
+  system.register_bootstrap_transfer_route(
+      "tests.amr.system-contract/bootstrap-sync/prolongation", {state_route},
+      "tests.amr.system-contract/bootstrap-sync/conservative-linear@1", "cell", "cell",
+      "conservative", "dense", "prolongation", "conservative_linear", 2, prolongation_ghosts,
+      config.transition_ratios.front());
+  system.register_bootstrap_transfer_route(
+      "tests.amr.system-contract/bootstrap-sync/restriction", {state_route},
+      "tests.amr.system-contract/bootstrap-sync/volume-average@1", "cell", "cell", "conservative",
+      "dense", "restriction", "volume_average", 1, restriction_ghosts,
+      config.transition_ratios.front());
+
+  EXPECT_THROW(system.synchronize_bootstrap_state(state_route, 1), std::logic_error);
+  system.begin_bootstrap_plan();
+  (void)system.materialize_bootstrap_action(state_route, "initialize_level_zero",
+                                            "bound_level_zero", 0);
+  if (!system.bootstrap_next_level()) {
+    system.rollback_bootstrap_level();
+    throw std::runtime_error("bootstrap synchronization witness did not create a fine level");
+  }
+  EXPECT_THROW(system.synchronize_bootstrap_state(state_route, 1), std::logic_error);
+  (void)system.materialize_bootstrap_action(state_route, "prolong_from_parent",
+                                            "conservative_linear", 1);
+
+  const std::vector<double> coarse_before = system.block_level_state_global("tracer", 0);
+  std::vector<double> fine = system.block_level_state_global("tracer", 1);
+  ASSERT_FALSE(fine.empty());
+  std::fill(fine.begin(), fine.end(), 9.0);
+  system.set_block_level_state("tracer", 1, fine);
+  system.synchronize_bootstrap_state(state_route, 1);
+  const std::vector<double> coarse_after = system.block_level_state_global("tracer", 0);
+  ASSERT_EQ(coarse_after.size(), coarse_before.size());
+
+  std::vector<bool> covered(cells, false);
+  const pops::Box<Dim>& coarse_domain = system.prepared_amr_level_geometry(0).domain();
+  const pops::MultiFab<Dim>& fine_carrier = system.prepared_amr_block_state(0, 1);
+  for (const pops::Box<Dim>& fine_patch : fine_carrier.layout().boxes()) {
+    const pops::Box<Dim> coarse_patch = pops::coarsen(fine_patch, config.transition_ratios.front());
+    for (std::int64_t ordinal = 0; ordinal < coarse_patch.numPts(); ++ordinal) {
+      std::int64_t remainder = ordinal;
+      std::size_t flattened = 0;
+      std::size_t stride = 1;
+      for (int axis = 0; axis < Dim; ++axis) {
+        const int coordinate =
+            coarse_patch.lo[axis] + static_cast<int>(remainder % coarse_patch.length(axis));
+        remainder /= coarse_patch.length(axis);
+        flattened += static_cast<std::size_t>(coordinate - coarse_domain.lo[axis]) * stride;
+        stride *= static_cast<std::size_t>(coarse_domain.length(axis));
+      }
+      covered[flattened] = true;
+    }
+  }
+  ASSERT_TRUE(std::any_of(covered.begin(), covered.end(), [](bool value) { return value; }));
+  ASSERT_TRUE(std::any_of(covered.begin(), covered.end(), [](bool value) { return !value; }));
+  for (std::size_t cell = 0; cell < cells; ++cell) {
+    if (covered[cell])
+      EXPECT_NEAR(coarse_after[cell], 9.0, 2.0e-12);
+    else
+      EXPECT_EQ(coarse_after[cell], coarse_before[cell]);
+  }
+  system.commit_bootstrap_level();
+}
+
+template <int Dim>
 std::vector<std::vector<double>> run_magnetic_source(pops::Real bz) {
   static_assert(Dim == 1 || Dim == 2);
   using namespace pops::runtime::system;
@@ -955,6 +1045,13 @@ TEST(test_amr_system_contract, PreparedBzHasZeroLongitudinalCrossProductInDim1) 
 #else
   GTEST_SKIP() << "the longitudinal zero-cross-product trajectory is an explicit Dim=1 proof";
 #endif
+}
+
+TEST(test_amr_system_contract, BootstrapRestrictionSynchronizesOnlyCoveredCoarseCells) {
+#if defined(POPS_HAS_KOKKOS)
+  Kokkos::ScopeGuard guard;
+#endif
+  verify_bootstrap_covered_cell_synchronization<pops::kNativeDimension>();
 }
 
 TEST(test_amr_system_contract, VariableDtStrideUsesOneExactPublicWindow) {
