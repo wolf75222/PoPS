@@ -632,6 +632,34 @@ def test_uniform_checkpoint_budget_reserves_lazy_schedule_cache_from_program_aut
         budget(SimpleNamespace(_s=Native((17,), name="held-density")), Program(cache_required=True))
 
 
+def test_checkpoint_budget_projects_opaque_consumer_evidence_to_canonical_hex():
+    from pops.identity import canonical_bytes
+    from pops.runtime._checkpoint_resource_budget import _consumer_evidence
+
+    consumer_data = {
+        "schema_version": 2,
+        "nodes": [{"operation": {"opaque_state": b"\x00\xff\x80checkpoint"}}],
+    }
+    graph = SimpleNamespace(
+        identity=SimpleNamespace(token="consumer-graph-identity"),
+        nodes=(),
+        to_data=lambda: consumer_data,
+    )
+    install_plan = SimpleNamespace(
+        artifact=SimpleNamespace(plan=SimpleNamespace(consumer_graph=graph))
+    )
+
+    identity, count, evidence = _consumer_evidence(install_plan)
+
+    assert (identity, count) == ("consumer-graph-identity", 0)
+    assert evidence == {
+        "encoding": "pops-canonical-cbor-hex-v1",
+        "payload": canonical_bytes(consumer_data).hex(),
+    }
+    assert bytes.fromhex(evidence["payload"]) == canonical_bytes(consumer_data)
+    json.dumps(evidence, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
 def test_checkpoint_zip64_capacity_uses_reviewed_checked_formula():
     from pops.runtime._checkpoint_resource_budget import (
         _amr_field_provider_manifest_capacity,

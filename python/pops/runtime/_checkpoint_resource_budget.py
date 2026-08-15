@@ -11,6 +11,7 @@ from pops._checkpoint_migration_protocol import (
     _CHECKPOINT_MIGRATION_PROVENANCE_MAX_CHARACTERS,
     _checkpoint_migration_provenance_characters,
 )
+from pops.identity import canonical_bytes
 from pops.output._checkpoint_contract import (
     CheckpointResourceBudget,
     _capacity,
@@ -288,8 +289,15 @@ def _consumer_evidence(install_plan: Any) -> tuple[str, int, Any]:
     ):
         raise TypeError("checkpoint budget requires the exact sealed ConsumerGraph")
     data = to_data()
-    json.dumps(data, sort_keys=True, separators=(",", ":"), allow_nan=False)
-    return identity, len(nodes), data
+    # Consumer evidence permits opaque byte strings.  Project the complete canonical CBOR payload
+    # into a tagged JSON-safe envelope for this budget identity rather than decoding binary data or
+    # weakening the sealed ConsumerGraph contract.
+    evidence = {
+        "encoding": "pops-canonical-cbor-hex-v1",
+        "payload": canonical_bytes(data).hex(),
+    }
+    json.dumps(evidence, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return identity, len(nodes), evidence
 
 
 def _amr_field_provider_manifest_capacity(
