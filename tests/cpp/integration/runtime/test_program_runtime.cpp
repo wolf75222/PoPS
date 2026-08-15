@@ -1761,7 +1761,8 @@ TEST(ProgramRuntime, Ssprk3ProgramAlgebraPreservesInactiveBits) {
     residual.set_val(Real(0));
     context.rhs_into(0, stage, residual, 102);
     context.axpy(stage, Real(step), residual);
-    context.lincomb(state, Real(1) / Real(3), initial_state, Real(2) / Real(3), stage);
+    context.lincomb(stage, Real(1) / Real(3), initial_state, Real(2) / Real(3), stage);
+    context.commit_many({{&state, &stage}});
   });
   program.set_program_block_map({0});
   program.step(1.0e-4);
