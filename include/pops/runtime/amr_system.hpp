@@ -1321,6 +1321,9 @@ class AmrSystem {
  private:
   template <int ContextDim, class MemorySpace>
   friend class runtime::program::AmrProgramContext;
+  /// Private DSO seam: only the generated AmrProgramContext may install the post-publication
+  /// prepared-history remap boundary. It is intentionally absent from the public facade surface.
+  POPS_EXPORT void install_program_history_remap_accepted(std::function<void()> refresh);
   std::vector<std::string> prepare_topology_field_order(
       std::string_view reason, const runtime::multiblock::BoundaryEvaluationPoint& accepted_point);
   std::vector<std::vector<std::string>> rematerialize_fields_after_topology_change(

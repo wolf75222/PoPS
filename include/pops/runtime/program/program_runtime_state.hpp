@@ -239,6 +239,10 @@ struct ProgramRuntimeState {
   /// closure lets the facade ask that persistent context to republish its level-qualified clocks and
   /// histories before committing each hierarchy transition. Uniform leaves it empty.
   std::function<void()> hierarchy_refresh_;
+  /// AMR-only, artifact-owned remap boundary. Unlike hierarchy_refresh_, this callback is reached
+  /// only after AmrSystem published a topology and atomically exchanged a prepared history manager.
+  /// Keeping it distinct prevents a generic hierarchy refresh from accepting stale history storage.
+  std::function<void()> history_remap_accepted_;
   /// Artifact-owned accepted-boundary hooks used only by the strict AMR restart transaction.
   /// `restart_regrid_preflight_` validates every rank-local prerequisite before peers enter the
   /// scientific regrid; `restart_regrid_` then performs that tag/regrid pass;
@@ -413,6 +417,7 @@ struct ProgramRuntimeState {
   struct ArtifactStepInstallSnapshot {
     std::function<void(double)> step;
     std::function<void()> hierarchy_refresh;
+    std::function<void()> history_remap_accepted;
     std::function<void()> restart_regrid_preflight;
     std::function<void()> restart_regrid;
     std::function<void()> restart_resync;
@@ -572,6 +577,7 @@ struct ProgramRuntimeState {
       throw std::overflow_error("Program step-install generation overflow");
     step_ = std::move(step);
     hierarchy_refresh_ = nullptr;
+    history_remap_accepted_ = nullptr;
     restart_regrid_preflight_ = nullptr;
     restart_regrid_ = nullptr;
     restart_resync_ = nullptr;
@@ -590,6 +596,7 @@ struct ProgramRuntimeState {
   ArtifactStepInstallSnapshot capture_artifact_step_install() const {
     return ArtifactStepInstallSnapshot{step_,
                                        hierarchy_refresh_,
+                                       history_remap_accepted_,
                                        restart_regrid_preflight_,
                                        restart_regrid_,
                                        restart_resync_,
@@ -622,6 +629,7 @@ struct ProgramRuntimeState {
   void rollback_artifact_step_install(ArtifactStepInstallSnapshot&& snapshot) noexcept {
     step_ = std::move(snapshot.step);
     hierarchy_refresh_ = std::move(snapshot.hierarchy_refresh);
+    history_remap_accepted_ = std::move(snapshot.history_remap_accepted);
     restart_regrid_preflight_ = std::move(snapshot.restart_regrid_preflight);
     restart_regrid_ = std::move(snapshot.restart_regrid);
     restart_resync_ = std::move(snapshot.restart_resync);
@@ -659,6 +667,17 @@ struct ProgramRuntimeState {
       throw std::invalid_argument(runtime +
                                   "::install_program_hierarchy_refresh requires a non-empty hook");
     hierarchy_refresh_ = std::move(refresh);
+  }
+
+  /// Attach the exact post-publication history-remap callback emitted beside an AMR Program.
+  void install_history_remap_accepted(std::function<void()> refresh, const std::string& runtime) {
+    if (!step_)
+      throw std::logic_error(
+          runtime + "::install_program_history_remap_accepted requires an installed Program");
+    if (!refresh)
+      throw std::invalid_argument(
+          runtime + "::install_program_history_remap_accepted requires a non-empty hook");
+    history_remap_accepted_ = std::move(refresh);
   }
 
   /// Attach the restart-only callbacks emitted by the same authenticated AMR artifact.
@@ -730,6 +749,13 @@ struct ProgramRuntimeState {
       return;
     }
     hierarchy_refresh_();
+  }
+
+  /// Accept only the engine-owned prepared-history remap publication, never a generic refresh.
+  void accept_history_remap(const std::string& runtime) const {
+    if (!history_remap_accepted_)
+      throw std::logic_error(runtime + " artifact lacks its accepted history-remap hook");
+    history_remap_accepted_();
   }
 
   bool authorizes_history_replay(const std::string& ring, int depth) const {

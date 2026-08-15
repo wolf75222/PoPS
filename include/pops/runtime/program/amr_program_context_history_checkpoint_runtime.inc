@@ -317,6 +317,23 @@ void refresh_accepted_hierarchy_state_() const {
   accepted_synchronization_events_ = state.synchronization_events;
 }
 
+void refresh_accepted_hierarchy_state_after_remap_() const {
+  require_facade_execution_();
+  if (!active_attempt_states_.empty())
+    throw std::logic_error("AMR Program accepted history remap crossed an active attempt");
+  refresh_resources_after_accepted_history_remap_();
+  requalify_cell_temporal_configuration_();
+  prepare_multiblock_subcycling_engine_();
+  const auto state = accepted_state_();
+  facade_->restore_program_accepted_state(serialize_amr_program_accepted_state(state));
+  accepted_state_revision_ = facade_->program_accepted_state_revision();
+  accepted_temporal_partition_ = state.temporal_partition;
+  accepted_flux_budget_contract_ = state.flux_budget_contract;
+  accepted_coupling_contract_ = state.coupling_contract;
+  accepted_face_flux_ = state.accepted_face_flux;
+  accepted_synchronization_events_ = state.synchronization_events;
+}
+
 void preflight_restart_regrid_() const {
   if (!active_attempt_states_.empty())
     throw std::logic_error("AMR RegridOnRestart requires an accepted Program boundary");
