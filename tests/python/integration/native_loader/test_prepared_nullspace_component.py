@@ -46,6 +46,7 @@ def _write_component(root: Path) -> None:
     header.parent.mkdir(parents=True)
     header.write_text(
         """#pragma once
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace.hpp>
 #include <pops/runtime/export.hpp>
 
@@ -60,9 +61,9 @@ namespace {
 // counter.
 std::atomic<std::uint64_t> plan_calls{0};
 
-pops::FieldNullspacePlan periodic_constant_plan() {
+pops::FieldNullspacePlan<pops::kNativeDimension> periodic_constant_plan() {
   plan_calls.fetch_add(1, std::memory_order_relaxed);
-  return pops::constant_mean_zero_nullspace(
+  return pops::constant_mean_zero_nullspace<pops::kNativeDimension>(
       "vendor-periodic-constant", "external prepared nullspace provider");
 }
 }  // namespace
@@ -214,7 +215,7 @@ def test_external_nullspace_provider_compiles_links_installs_and_runs(
     from pops.numerics.reconstruction import FirstOrder
     from pops.numerics.riemann import Rusanov
     from pops.runtime._engine_descriptors import Explicit, Spatial
-    from pops.runtime._system import System
+    from pops.runtime._system import System, SystemConfig
 
     include_root = tmp_path / "component-include"
     _write_component(include_root)
@@ -246,7 +247,13 @@ def test_external_nullspace_provider_compiles_links_installs_and_runs(
     compiled_model = _passive_model("external_nullspace_block_model").compile(
         backend="production", include=repo_include(), cxx=default_cxx()
     )
-    simulation = System(n=8, L=1.0, periodicity=(True, True))
+    config = SystemConfig()
+    config.shape = (8, 8)
+    config.lower = (0.0, 0.0)
+    config.upper = (1.0, 1.0)
+    config.periodicity = (True, True)
+    config.boxes = (((0, 0), (8, 8)),)
+    simulation = System(config)
     simulation.add_equation(
         "blk",
         compiled_model,

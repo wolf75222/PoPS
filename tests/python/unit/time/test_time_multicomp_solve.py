@@ -38,7 +38,7 @@ from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 from pops.solvers import krylov
 from pops.time import FailRun
-from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System, SystemConfig  # ADC-545 advanced runtime seam
 
 
 def _pops_time():
@@ -50,6 +50,16 @@ def _pops_time():
 
 
 _ALPHA = 0.1  # Helmholtz coefficient: A = I - alpha*Lap (SPD per component, well-conditioned for CG)
+
+
+def _system_config_2d(n):
+    config = SystemConfig()
+    config.shape = (n, n)
+    config.lower = (0.0, 0.0)
+    config.upper = (1.0, 1.0)
+    config.periodicity = (True, True)
+    config.boxes = (((0, 0), (n, n)),)
+    return config
 
 
 def _mc_program(t, ncomp, *, name="mc_solve", method=None, tol=1e-10, max_iter=200, alpha=_ALPHA):
@@ -299,7 +309,7 @@ def _run_one(t, pops, np, ncomp, init):
     import pops.runtime._engine_descriptors as engine
 
     n = init.shape[1]
-    sim = System(n=n, L=1.0, periodicity=(True, True))
+    sim = System(_system_config_2d(n))
     if not hasattr(sim, "install_program"):
         require_native_or_skip('-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --')
         return None

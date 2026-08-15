@@ -39,7 +39,7 @@ from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
 from pops.numerics.terms import Flux
 from pops.params import ConstParam
-from pops.solvers.elliptic import GeometricMG
+from pops.solvers.elliptic import CartesianCG
 from pops.time import FailRun, FixedDt, Program
 from tests.python.support.requirements import (
     default_cxx,
@@ -111,7 +111,7 @@ def _physics(name):
         },
     )
 
-    potential = model.field("potential")
+    potential = model.field("fields")
     field_operator = model.field_operator(
         "fields",
         unknown=potential,
@@ -152,7 +152,7 @@ def _field_discretization():
     return FieldDiscretization(
         method=CellCenteredSecondOrder(),
         boundaries=(BoundaryCondition(AllPhysicalBoundaries(), Periodic()),),
-        solver=GeometricMG(),
+        solver=CartesianCG(),
         nullspace=ConstantNullspace(),
         gauge=MeanValueGauge(0.0),
     )
@@ -292,8 +292,8 @@ chk(
     "the electric kernel reads -rho*grad_x / -rho*grad_y",
 )
 chk(
-    "auxA(i, j, 1)" in src and "auxA(i, j, 2)" in src,
-    "grad_x / grad_y use canonical aux components 1 / 2",
+    "providers(index, 0)" in src and "providers(index, 1)" in src,
+    "grad_x / grad_y use canonical typed-provider slots 0 / 1",
 )
 chk("ctx.axpy(" in src, "the named source is accumulated onto the residual")
 

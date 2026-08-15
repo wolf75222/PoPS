@@ -1,9 +1,11 @@
-"""Native production-package parity and ABI refusal.
+"""Prepared production-package runtime, public-bind parity, and ABI refusal.
 
 One final board model is compiled through ``Case -> validate -> resolve -> compile``.  Its detached
-component is bit-identical to the equivalent ModelSpec for Rusanov and HLLC and over a multi-step
-advance.  A deliberately recompiled package with a mismatched header signature must be rejected at
-the authenticated native boundary.
+component is materialized only through the authenticated lane/state-route boundary.  The runtime
+matches the public bind path bit-for-bit for the artifact's authored Rusanov/MUSCL plan, while an
+alternate HLLC/primitive installation preserves a stationary Euler contact that Rusanov
+necessarily diffuses.  A deliberately recompiled package with a mismatched header signature must
+be rejected at the native boundary.
 """
 import os
 import shutil
@@ -11,11 +13,13 @@ import tempfile
 
 import numpy as np
 
+import pops
 import pops.runtime._engine_descriptors as engine
 from pops.codegen.loader import CompiledModel
-from test_dsl_coupled import build_euler, compile_euler_component, GAMMA, INCLUDE
-from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from test_dsl_coupled import build_euler, compile_euler_artifact, GAMMA, INCLUDE
+from pops.runtime._system import System, SystemConfig  # ADC-545 advanced runtime seam
 from tests.python.support.explicit_program import install_forward_euler_program
+from tests.python.support.native_execution_context import artifact_execution_context
 from tests.python.support.requirements import (
     default_cxx,
     missing_native_compile_requirement,
@@ -26,12 +30,14 @@ from tests.python.support.requirements import (
 POPS_PROCESS_TIMEOUT = 900
 
 
-def _native_spec(rho0):
-    """Equivalent native Euler bricks used as the numerical parity oracle."""
-    return engine.Model(state=engine.FluidState("compressible", gamma=GAMMA),
-                     transport=engine.CompressibleFlux(),
-                     source=engine.NoSource(),
-                     elliptic=engine.BackgroundDensity(alpha=1.0, n0=rho0))
+def _system_config_2d(n, *, length=1.0):
+    config = SystemConfig()
+    config.shape = (n, n)
+    config.lower = (0.0, 0.0)
+    config.upper = (float(length), float(length))
+    config.periodicity = (True, True)
+    config.boxes = (((0, 0), (n, n)),)
+    return config
 
 
 def _initial_state(n):
@@ -50,6 +56,15 @@ def _initial_state(n):
     return U
 
 
+def _stationary_contact(n):
+    """Periodic constant-pressure contact: exact for HLLC, diffusive for Rusanov."""
+    U = np.zeros((4, n, n))
+    U[0, : n // 2, :] = 1.0
+    U[0, n // 2 :, :] = 2.0
+    U[3] = 1.0 / (GAMMA - 1.0)
+    return U
+
+
 def main():
     cxx = default_cxx()
     missing = missing_native_compile_requirement(INCLUDE, cxx)
@@ -60,12 +75,11 @@ def main():
     model = build_euler("production-parity")
     n, L = 48, 1.0
     U = _initial_state(n)
-    Uflat = U.reshape(-1).tolist()
-    spec = _native_spec(float(U[0].mean()))
     tmp = tempfile.mkdtemp()
     try:
-        # The component package is produced only by the final public lifecycle.
-        compiled = compile_euler_component(model, cells=16, cxx=cxx)
+        # The component package and its state/lane identities come from one full public artifact.
+        artifact = compile_euler_artifact(model, cells=n, cxx=cxx)
+        compiled = artifact.blocks[0].model
         assert compiled.backend == "production"
 
         def spatial(limiter, riemann, recon):
@@ -79,57 +93,76 @@ def main():
                 recon={"conservative": Conservative(), "primitive": Primitive()}[recon],
             )
 
-        def build_native(limiter, riemann, recon, evolve=True):
-            sys = System(n=n, L=L, periodicity=(True, True))
+        def build_native(limiter, riemann, recon, *, initial=U):
+            context = artifact_execution_context(artifact)
+            sys = System(_system_config_2d(n, length=L))
+            sys._s._prepare_boundary_execution_lane(
+                context.communicator.handle,
+                context.identity.token,
+            )
+            (state_identity,) = artifact.plan.blocks[0].state_identities
+            sys._s._install_block_state_route("gas", state_identity)
             sys.add_equation(
                 "gas", model=compiled, spatial=spatial(limiter, riemann, recon),
-                time=engine.Explicit(), evolve=evolve,
+                time=engine.Explicit(),
             )
-            sys.set_state("gas", Uflat)
-            return sys
-
-        def build_ref(limiter, riemann, recon, evolve=True):
-            sys = System(n=n, L=L, periodicity=(True, True))
-            sys.add_equation("gas", spec,
-                             spatial=spatial(limiter, riemann, recon),
-                             time=engine.Explicit(), evolve=evolve)
-            sys.set_state("gas", Uflat)
+            if sys._pending_native_packages:
+                sys._s._finalize_native_packages()
+                sys._pending_native_packages = 0
+            sys.set_state("gas", np.asarray(initial).reshape(-1).tolist())
+            install_forward_euler_program(sys)
             return sys
 
         def compare(limiter, riemann, recon):
-            prod = build_native(limiter, riemann, recon)
-            R_prod = np.array(prod.eval_rhs("gas")).reshape(4, n, n)
-
-            ref = build_ref(limiter, riemann, recon)
-            R_ref = np.array(ref.eval_rhs("gas")).reshape(4, n, n)
-
-            assert float(np.max(np.abs(R_prod))) > 1e-3, "%s : residu trivial" % riemann
-            dres = float(np.max(np.abs(R_prod - R_ref)))
-            # Parite STRICTE : meme chemin compile (install_block), donc bit-identique (pas seulement < 1e-9).
-            assert dres == 0.0, "%s : eval_rhs natif != add_block (ecart %.2e, attendu 0)" % (riemann, dres)
-            print("OK  bloc production %s+%s : eval_rhs BIT-IDENTIQUE a add_equation(ModelSpec)"
+            first = build_native(limiter, riemann, recon)
+            second = build_native(limiter, riemann, recon)
+            first_rhs = np.array(first.eval_rhs("gas")).reshape(4, n, n)
+            second_rhs = np.array(second.eval_rhs("gas")).reshape(4, n, n)
+            assert float(np.max(np.abs(first_rhs))) > 1e-3, "%s : residu trivial" % riemann
+            assert np.array_equal(first_rhs, second_rhs), (
+                "%s : le package prepare depend de l'instance runtime" % riemann
+            )
+            print("OK  bloc production %s+%s : eval_rhs prepare deterministe"
                   % (limiter, riemann))
 
         compare("minmod", "rusanov", "conservative")
-        compare("minmod", "hllc", "primitive")  # flux de production (pressure()/wave_speeds() generes)
 
-        # (2) avance Forward-Euler : etat final bit-identique au bloc natif sur 12 pas a dt fixe (meme dt des
-        # deux cotes -> pas de derive numerique possible si la numerique est la meme).
-        prod = build_native("minmod", "hllc", "primitive")
-        ref = build_ref("minmod", "hllc", "primitive")
-        install_forward_euler_program(prod)
-        install_forward_euler_program(ref)
-        dt = 1e-3
+        # HLLC must preserve a stationary contact exactly: pressure and velocity are uniform, so
+        # the physical flux is identical on both sides even though density jumps.  Rusanov is an
+        # independent control because its scalar dissipation necessarily moves density here.  This
+        # fails if the HLLC selection deterministically falls back to Rusanov.
+        contact = _stationary_contact(n)
+        hllc_contact = build_native(
+            "none", "hllc", "primitive", initial=contact
+        )
+        rusanov_contact = build_native(
+            "none", "rusanov", "primitive", initial=contact
+        )
+        hllc_rhs = np.array(hllc_contact.eval_rhs("gas")).reshape(4, n, n)
+        rusanov_rhs = np.array(rusanov_contact.eval_rhs("gas")).reshape(4, n, n)
+        assert float(np.max(np.abs(hllc_rhs))) <= 1e-12
+        assert float(np.max(np.abs(rusanov_rhs[0]))) > 1e-3
+        for _ in range(12):
+            hllc_contact.step(1e-3)
+        hllc_state = np.array(hllc_contact.get_state("gas")).reshape(4, n, n)
+        assert np.array_equal(hllc_state, contact)
+        print("OK  HLLC preserve le contact stationnaire que Rusanov diffuse")
+
+        # (2) le plan Rusanov/MUSCL authentifie est identique entre le package detache prepare et
+        # le lifecycle public bind/run.  C'est la reference supportee depuis le retrait de ModelSpec.
+        prod = build_native("minmod", "rusanov", "conservative")
+        public = pops.bind(artifact, initial_state={"gas": np.ascontiguousarray(U)})
+        dt = 1e-4
         for _ in range(12):
             prod.step(dt)
-            ref.step(dt)
+        report = pops.run(public, t_end=12 * dt, max_steps=12)
         Up = np.array(prod.get_state("gas")).reshape(4, n, n)
-        Ur = np.array(ref.get_state("gas")).reshape(4, n, n)
-        dstep = float(np.max(np.abs(Up - Ur)))
+        Ur = np.array(public.state_global("gas")).reshape(4, n, n)
+        assert report.accepted_steps == 12
         assert np.isfinite(Up).all() and Up[0].min() > 0, "etat de production non physique"
         assert float(np.abs(Up[1]).max()) > 1e-4, "le transport Euler est reste trivial"
-        assert dstep == 0.0, "etat apres 12 pas natif != add_block (ecart %.2e, attendu 0)" % dstep
-        print("OK  12 pas Forward-Euler : etat de production BIT-IDENTIQUE au bloc natif add_block")
+        assert np.array_equal(Up, Ur), "package prepare != public bind apres 12 pas"
+        print("OK  12 pas Forward-Euler : package prepare BIT-IDENTIQUE au public bind")
 
         # (3) GARDE-FOU ABI : on compile un loader dont la SIGNATURE D'EN-TETES bakee est volontairement
         # FAUSSE (-DPOPS_HEADER_SIG different). Sa cle pops_native_abi_key differe alors de celle du module
@@ -138,7 +171,7 @@ def main():
         # valide a la cle differente, ce qui teste exactement la frontiere d'ABI.)
         bad = _compile_wrong_abi(model, os.path.join(tmp, "euler_wrongabi.so"), cxx)
         bad_component = _component_at(compiled, bad)
-        sys = System(n=n, L=L, periodicity=(True, True))
+        sys = System(_system_config_2d(n, length=L))
         raised = False
         try:
             sys.add_equation(
@@ -204,11 +237,18 @@ def _component_at(component, so_path):
         native_dimension=component.native_dimension,
         hllc=component.has_hllc,
         roe=component.has_roe,
-        aux_extra_names=component.aux_extra_names,
+        provider_components=component.provider_components,
         wave_speeds=component.has_wave_speeds,
         wave_speed_provider=component.wave_speed_provider,
+        characteristic_no_inflow=component.has_characteristic_no_inflow,
+        hllc_provider=component.hllc_provider,
+        roe_provider=component.roe_provider,
+        roe_entropy_policy=component.roe_entropy_policy,
+        roe_entropy_delta=component.roe_entropy_delta,
         elliptic_field_names=component.elliptic_field_names,
+        bind_schema=component.bind_schema,
         definition_identity=component.definition_identity,
+        module_manifest=component.module_manifest,
     )
 
 

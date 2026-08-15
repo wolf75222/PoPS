@@ -43,14 +43,6 @@ from tests.python.support.requirements import (
     require_native_or_skip,
 )
 
-try:
-    from pops.numerics.reconstruction import FirstOrder
-    from pops.numerics.riemann import Rusanov
-    from pops.runtime._system import System  # ADC-545 advanced runtime seam
-except Exception as exc:  # noqa: BLE001 -- optional outside a native-capable checkout
-    require_native_or_skip("test_time_history_checkpoint cannot import its runtime: %s" % exc)
-
-
 def _pops_time():
     global lt  # ready schemes live in pops.lib.time (Spec 4)
     try:
@@ -156,43 +148,6 @@ def test_collective_failure_preserves_one_scientific_error_family():
     record = _error_record(BrokenMessage())
     assert record["family"] == "ValueError"
     assert record["message"] == "<exception message unavailable>"
-
-
-def _authorize_identity_runtime(sim, compiled):
-    """Attach the exact identity boundary to this deliberately low-level integration engine."""
-    from pops.identity import make_identity
-    from pops.model.bind_schema import BindSchema
-    from pops.runtime._bound_snapshot import BoundSnapshot
-    from tests.python.support.native_execution_context import (
-        compiled_problem_execution_context,
-    )
-
-    component = compiled.program
-    authored = getattr(component, "program", component)
-    context = compiled_problem_execution_context(compiled, target="system")
-    sim._execution_context = context
-    sim._step_strategy = authored._step_strategy
-    sim._step_transaction_plan = authored.transaction_plan()
-    sim._temporal_restart_state.configure_program(
-        authored.temporal_manifest(),
-        time=sim.time(),
-        macro_step=sim.macro_step(),
-    )
-    snapshot = BoundSnapshot(
-        semantic_identity=compiled.semantic_identity,
-        artifact_identity=compiled.artifact_identity,
-        layout={"kind": "uniform"},
-        blocks=[{"name": "blk"}],
-        field_plans={},
-        step_transaction=sim._step_transaction_plan.to_data(),
-        params=[],
-        aux_evidence={},
-        initial_evidence={},
-        bind_schema_identity=make_identity("bind-schema", BindSchema().to_dict()),
-        execution_context=context.to_data(),
-    )
-    sim._finalize_bind(snapshot)
-    return snapshot
 
 
 # ---- (A) Current strict NPZ envelope: pure numpy, always runs when numpy is present ----
@@ -424,7 +379,9 @@ def test_history_persistence_key_scheme():
             macro_step=9,
             regrid_every=0,
         ).rings[0]
-        assert fill_plan.fill_count == fill_count
+        assert len(fill_plan.levels) == 1
+        assert fill_plan.levels[0].level is None
+        assert fill_plan.levels[0].fill_count == fill_count
         if fill_count < depth:
             assert fill_plan.storage_mode == "dense_cold_start_safety"
             assert fill_plan.stored_slots == tuple(range(depth))
@@ -495,6 +452,7 @@ def test_history_persistence_key_scheme():
     # POLICY-COMPAT GUARD: a stored-slots array that disagrees with the policy is refused verbatim.
     bad = dict(payload)
     bad["history_stored_slots_" + hname] = np.asarray([0, 1, 4], dtype=np.int64)  # not Revolve(3)
+    bad["history_%s_1" % hname] = full[1]
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "bad.npz")
         with open(path, "wb") as f:
@@ -624,6 +582,7 @@ def test_restore_histories_installs_every_ring_before_replay():
 
     invalid = dict(payload)
     invalid["history_stored_slots_first.state"] = np.asarray([0, 1, 4], dtype=np.int64)
+    invalid["history_first.state_1"] = np.asarray([101.0], dtype=np.float64)
     untouched = CoupledReplayRuntime()
     try:
         restore_histories(untouched, invalid)
@@ -660,63 +619,62 @@ def test_restore_histories_installs_every_ring_before_replay():
     assert untouched.events == []
 
 
-# ---- shared engine setup for (B)/(C) ----
-def _passive_source_model(name):
-    """A 1-variable model (rho), ZERO flux, default LINEAR source S(rho) = _C*rho (R = c*rho changes
-    every step). A complete compilable block (flux + primitive + eigenvalue + source)."""
-    from pops.physics._facade import Model
-
-    m = Model(name)
-    (rho,) = m.conservative_vars("rho")
-    m.primitive_vars(rho)
-    m.conservative_from([rho])
-    m.flux(x=[0.0 * rho], y=[0.0 * rho])
-    m.eigenvalues(x=[0.0 * rho], y=[0.0 * rho])
-    m.source([_C * rho])
-    return m
-
-
-def _build_system(pops, np, n):
-    """A fresh n x n periodic System with the compiled passive-source block added; (sim, has_engine)."""
-    import pops.runtime._engine_descriptors as engine
-
-    sim = System(n=n, L=1.0, periodicity=(True, True))
-    if not hasattr(sim, "install_program") or not hasattr(sim, "history_names"):
-        require_native_or_skip(
-            "test_time_history_checkpoint requires install_program/history_names bindings"
-        )
-    compiled_model = _passive_source_model("ckpt_block").compile(backend="production")
-    sim.add_equation(
-        "blk",
-        compiled_model,
-        spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-        time=engine.Explicit(method="euler"),
-    )
-    return sim, True
-
-
 def _rho0(np, n):
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="ij")
     return 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
 
 
-def _compile_program(pops, t, builder, builder_options, prog_name, model_name):
-    """Compile a ready scheme built from exact final-API Case/Model handles."""
-    from pops.problem import Case
+def _compile_artifact(
+    pops,
+    t,
+    builder,
+    builder_options,
+    prog_name,
+    model_name,
+    n,
+    *,
+    step_strategy=None,
+    cadence=None,
+):
+    """Compile one exact public simulation artifact with strict restart authority."""
+    from tests.python.integration._final_field_program import (
+        passive_source_model,
+        resolve_periodic_field_program,
+    )
 
-    model = _passive_source_model(model_name)
-    rate = model.rate("%s_rate" % prog_name, flux=False, sources=("default",))
-    case = Case(name="%s-case" % prog_name)
-    block = case.block("blk", model.module)
-    spaces = tuple(model.module.state_spaces().values())
-    assert len(spaces) == 1, "the passive checkpoint model has exactly one state"
-    declaration = model.module.state_handle(spaces[0])
-    P = builder(block[declaration], rate=rate, **builder_options)
-    P.step_strategy(t.FixedDt(_DT))
-    from pops.codegen._compile_drivers import compile_problem
+    model = passive_source_model(model_name, coefficient=_C)
 
-    return compile_problem(model=model, time=P)
+    def program_factory(state, rate, _field):
+        program = builder(state, rate=rate, **builder_options)
+        if cadence is not None:
+            substeps, stride = cadence
+            program.cadence(substeps=substeps, stride=stride)
+        program.step_strategy(t.FixedDt(_DT) if step_strategy is None else step_strategy)
+        return program
+
+    resolved = resolve_periodic_field_program(
+        model,
+        program_factory,
+        name=prog_name,
+        block_name="blk",
+        target="system",
+        n=n,
+        rate_name="source_rate",
+        cxx=default_cxx(),
+        include=repo_include(),
+        strict_restart=True,
+    )
+    artifact = pops.compile(resolved)
+    artifact.verify()
+    return artifact
+
+
+def _bind_artifact(pops, np, artifact, initial):
+    return pops.bind(
+        artifact,
+        initial_state={"blk": np.ascontiguousarray(initial)},
+    )
 
 
 # ---- (B) spec 45 + 39: continuous == (run, checkpoint, restart, continue), bit-for-bit ----
@@ -732,30 +690,42 @@ def _run_section_b(t):
         )
 
     n = 16
-    sim_cont, has_engine = _build_system(pops, np, n)
-
-    compiled = _compile_program(pops, t, lt.AdamsBashforth, {"order": 2}, "ab2_ckpt", "ab2_prog_b")
-
+    artifact = _compile_artifact(
+        pops,
+        t,
+        lt.AdamsBashforth,
+        {"order": 2},
+        "ab2_ckpt",
+        "ab2_prog_b",
+        n,
+    )
     rho0 = _rho0(np, n)
+    initial = np.stack([rho0])
     half = _NSTEPS // 2
 
-    # (1) CONTINUOUS run: N steps in one go -> final state A.
-    sim_cont.set_state("blk", np.stack([rho0]))
-    sim_cont.install_program(compiled.so_path)
-    for _ in range(_NSTEPS):
-        sim_cont.step(_DT)
-    state_a = np.array(sim_cont.get_state("blk"))[0]
-
-    # (2) RUN N/2, CHECKPOINT.
-    sim1, _ = _build_system(pops, np, n)
-    sim1.set_state("blk", np.stack([rho0]))
-    sim1.install_program(compiled.so_path)
-    _authorize_identity_runtime(sim1, compiled)
-    sim1.run(t_end=half * _DT, max_steps=half)
-    from pops.time._history.persistence import Dense
-
-    sim1.set_history_persistence({name: Dense() for name in sim1._s.history_names()})
     with tempfile.TemporaryDirectory() as tmp:
+        # (1) CONTINUOUS run: N steps in one public run -> final state A.
+        sim_cont = _bind_artifact(pops, np, artifact, initial)
+        continuous_report = pops.run(
+            sim_cont,
+            t_end=_NSTEPS * _DT,
+            max_steps=_NSTEPS,
+            output_dir=os.path.join(tmp, "continuous"),
+            console=False,
+        )
+        assert continuous_report.accepted_steps == _NSTEPS
+        state_a = np.asarray(sim_cont.state_global("blk")).reshape(1, n, n)[0].copy()
+
+        # (2) Public bind, RUN N/2, CHECKPOINT.
+        sim1 = _bind_artifact(pops, np, artifact, initial)
+        interrupted_report = pops.run(
+            sim1,
+            t_end=half * _DT,
+            max_steps=half,
+            output_dir=os.path.join(tmp, "interrupted"),
+            console=False,
+        )
+        assert interrupted_report.accepted_steps == half
         ckpt = sim1.checkpoint(os.path.join(tmp, "ab2"))
 
         # A correctly authenticated payload may still advertise one extra ring. Clone the complete
@@ -785,33 +755,35 @@ def _run_section_b(t):
         with open(poisoned_ckpt, "wb") as stream:
             np.savez_compressed(stream, **poisoned_payload)
 
-        poisoned, _ = _build_system(pops, np, n)
-        poisoned.set_state("blk", np.stack([rho0]))
-        poisoned.install_program(compiled.so_path)
-        _authorize_identity_runtime(poisoned, compiled)
-        state_before = np.array(poisoned.get_state("blk"), copy=True)
+        poisoned = _bind_artifact(pops, np, artifact, initial)
+        state_before = np.array(poisoned.state_global("blk"), copy=True)
         time_before = poisoned.time()
         step_before = poisoned.macro_step()
-        histories_before = list(poisoned._s.history_names())
+        histories_before = list(poisoned.history_names())
         assert histories_before == [source_history]
         with pytest.raises(RuntimeError, match="checkpoint Program histories"):
             poisoned.restart(poisoned_ckpt)
-        assert np.array_equal(poisoned.get_state("blk"), state_before)
+        assert np.array_equal(poisoned.state_global("blk"), state_before)
         assert poisoned.time() == time_before
         assert poisoned.macro_step() == step_before
-        assert list(poisoned._s.history_names()) == histories_before
+        assert list(poisoned.history_names()) == histories_before
 
-        # (3) FRESH system, re-add block, re-install the SAME program, RESTART, run N/2 more -> B.
-        sim2, _ = _build_system(pops, np, n)
-        sim2.install_program(compiled.so_path)  # the hash guard needs the program installed first
-        _authorize_identity_runtime(sim2, compiled)
+        # (3) Fresh public bind of the same artifact, RESTART, then run N/2 more -> B.
+        sim2 = _bind_artifact(pops, np, artifact, initial)
         sim2.restart(ckpt)
         assert sim2.macro_step() == half, "restart restores macro_step (%d != %d)" % (
             sim2.macro_step(),
             half,
         )
-        sim2.run(t_end=_NSTEPS * _DT, max_steps=_NSTEPS - half)
-    state_b = np.array(sim2.get_state("blk"))[0]
+        resumed_report = pops.run(
+            sim2,
+            t_end=_NSTEPS * _DT,
+            max_steps=_NSTEPS - half,
+            output_dir=os.path.join(tmp, "restarted"),
+            console=False,
+        )
+        assert resumed_report.accepted_steps == _NSTEPS - half
+        state_b = np.asarray(sim2.state_global("blk")).reshape(1, n, n)[0].copy()
 
     err = float(np.abs(state_a - state_b).max())
     assert sim2.macro_step() == sim_cont.macro_step(), (
@@ -868,28 +840,44 @@ def _run_section_c(t):
         )
 
     n = 8
-    sim, has_engine = _build_system(pops, np, n)
-
-    ab2 = _compile_program(pops, t, lt.AdamsBashforth, {"order": 2}, "ab2_c", "ab2_prog_c")
-    fe = _compile_program(pops, t, lt.ForwardEuler, {}, "fe_c", "fe_prog_c")
-    assert ab2.program_hash != fe.program_hash, (
+    ab2 = _compile_artifact(
+        pops,
+        t,
+        lt.AdamsBashforth,
+        {"order": 2},
+        "program_identity_c",
+        "program_identity_model_c",
+        n,
+    )
+    fe = _compile_artifact(
+        pops,
+        t,
+        lt.ForwardEuler,
+        {},
+        "program_identity_c",
+        "program_identity_model_c",
+        n,
+    )
+    assert ab2.blocks[0].model.model_hash == fe.blocks[0].model.model_hash
+    assert ab2.program.program_hash != fe.program.program_hash, (
         "AB2 and Forward Euler must have different IR hashes (else the test is vacuous)"
     )
 
-    sim.set_state("blk", np.stack([np.ones((n, n))]))
-    sim.install_program(ab2.so_path)
-    _authorize_identity_runtime(sim, ab2)
-    sim.run(t_end=2 * _DT, max_steps=2)
-    from pops.time._history.persistence import Dense
-
-    sim.set_history_persistence({name: Dense() for name in sim._s.history_names()})
+    initial = np.stack([np.ones((n, n))])
     with tempfile.TemporaryDirectory() as tmp:
+        sim = _bind_artifact(pops, np, ab2, initial)
+        report = pops.run(
+            sim,
+            t_end=2 * _DT,
+            max_steps=2,
+            output_dir=os.path.join(tmp, "ab2"),
+            console=False,
+        )
+        assert report.accepted_steps == 2
         ckpt = sim.checkpoint(os.path.join(tmp, "ab2_for_mismatch"))
 
-        # A fresh system that installs the WRONG (Forward Euler) program, then restarts the AB2 ckpt.
-        sim2, _ = _build_system(pops, np, n)
-        sim2.install_program(fe.so_path)
-        _authorize_identity_runtime(sim2, fe)
+        # A fresh public bind of the WRONG Forward-Euler artifact restarts the AB2 checkpoint.
+        sim2 = _bind_artifact(pops, np, fe, initial)
         try:
             sim2.restart(ckpt)
         except ValueError as exc:
@@ -917,69 +905,77 @@ def test_uniform_variable_dt_stride_checkpoint_closes_like_continuous_run():
     _require_native_toolchain("variable-dt stride checkpoint")
     import numpy as np
     import pops
-    from pops.runtime._run_manifest import begin_run
-    from pops.runtime._step_strategy import run_control_payload
     from pops.time import ExternalTimeGrid
 
     n = 8
-    compiled = _compile_program(
+    grid_id = "checkpoint_test_grid"
+    # The first attempt after restart must repeat the checkpointed controller contract. The sequence
+    # is still genuinely variable while its third step closes the held cadence window.
+    steps = (0.01, 0.02, 0.02)
+    grid = (0.0, steps[0], steps[0] + steps[1], sum(steps))
+    artifact = _compile_artifact(
         pops,
         _pops_time(),
         lt.ForwardEuler,
         {},
         "fe_stride_ckpt",
         "fe_stride_ckpt_model",
+        n,
+        step_strategy=ExternalTimeGrid(grid_id),
+        cadence=(1, 3),
     )
     initial = np.stack([_rho0(np, n)])
-    # The first attempt after restart must repeat the checkpointed controller contract. The sequence
-    # is still genuinely variable while its third step closes the held cadence window.
-    steps = (0.01, 0.02, 0.02)
-    grid = (0.0, steps[0], steps[0] + steps[1], sum(steps))
-    direct_step_control = run_control_payload(
-        ExternalTimeGrid("checkpoint_test_grid"),
-        {"checkpoint_test_grid": grid},
-    )
 
     def fresh():
-        system, _ = _build_system(pops, np, n)
-        system.set_state("blk", initial)
-        system.install_program(compiled.so_path)
-        system._s.set_program_cadence(1, 3)
-        _authorize_identity_runtime(system, compiled)
-        begin_run(
-            system,
-            t_end=grid[-1],
-            step_transaction=direct_step_control,
-            max_steps=len(steps),
-            output_dir=None,
-        )
-        return system
-
-    continuous = fresh()
-    for dt in steps:
-        continuous.step(dt)
-
-    interrupted = fresh()
-    interrupted.step(steps[0])
-    interrupted.step(steps[1])
-    assert interrupted._s.program_cadence_window_steps() == 2
-    assert interrupted._s.program_cadence_window_dt() == steps[0] + steps[1]
-    assert interrupted._s.program_cadence_window_start_time() == 0.0
+        return _bind_artifact(pops, np, artifact, initial)
 
     with tempfile.TemporaryDirectory() as tmp:
+        continuous = fresh()
+        continuous_report = pops.run(
+            continuous,
+            t_end=grid[-1],
+            max_steps=len(steps),
+            output_dir=os.path.join(tmp, "continuous"),
+            console=False,
+            **{grid_id: grid},
+        )
+        assert continuous_report.accepted_steps == len(steps)
+
+        interrupted = fresh()
+        interrupted_report = pops.run(
+            interrupted,
+            t_end=grid[2],
+            max_steps=2,
+            output_dir=os.path.join(tmp, "interrupted"),
+            console=False,
+            **{grid_id: grid},
+        )
+        assert interrupted_report.accepted_steps == 2
+        assert interrupted._executor._s.program_cadence_window_steps() == 2
+        assert interrupted._executor._s.program_cadence_window_dt() == steps[0] + steps[1]
+        assert interrupted._executor._s.program_cadence_window_start_time() == 0.0
+
         checkpoint = interrupted.checkpoint(os.path.join(tmp, "variable_stride"))
         restarted = fresh()
         restarted.restart(checkpoint)
-        assert restarted._s.program_cadence_window_steps() == 2
-        assert restarted._s.program_cadence_window_dt() == steps[0] + steps[1]
-        assert restarted._s.program_cadence_window_start_time() == 0.0
-        restarted.step(steps[2])
+        assert restarted._executor._s.program_cadence_window_steps() == 2
+        assert restarted._executor._s.program_cadence_window_dt() == steps[0] + steps[1]
+        assert restarted._executor._s.program_cadence_window_start_time() == 0.0
+        resumed_report = pops.run(
+            restarted,
+            t_end=grid[-1],
+            max_steps=1,
+            output_dir=os.path.join(tmp, "restarted"),
+            console=False,
+            **{grid_id: grid},
+        )
+        assert resumed_report.accepted_steps == 1
 
     assert restarted.macro_step() == continuous.macro_step() == 3
     assert restarted.time() == continuous.time()
     assert np.array_equal(
-        np.asarray(restarted.get_state("blk")),
-        np.asarray(continuous.get_state("blk")),
+        np.asarray(restarted.state_global("blk")),
+        np.asarray(continuous.state_global("blk")),
     )
 
 

@@ -81,9 +81,15 @@ requires_engine = pytest.mark.skipif(
 
 
 def _build(n=32, L=1.0):
-    from pops.runtime._system import System  # advanced native runtime seam
+    from pops.runtime._system import System, SystemConfig  # advanced native runtime seam
 
-    return System(n=n, L=L, periodicity=(False, False))
+    config = SystemConfig()
+    config.shape = (n, n)
+    config.lower = (0.0, 0.0)
+    config.upper = (float(L), float(L))
+    config.periodicity = (False, False)
+    config.boxes = (((0, 0), (n, n)),)
+    return System(config)
 
 
 def _install_half_space(system, mode: str) -> None:

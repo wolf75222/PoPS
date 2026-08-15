@@ -10,9 +10,8 @@ imprime l'ecart max, qu'on exige < 1e-12. Lance avec python3.
 """
 import os
 import subprocess
-import sys
 import tempfile
-from pathlib import Path
+from functools import cache
 
 from tests.python.support.requirements import (
     default_cxx,
@@ -21,6 +20,7 @@ from tests.python.support.requirements import (
     require_native_or_skip,
 )
 from pops.codegen.module_lowering import lower_and_validate
+from pops.codegen.toolchain import pops_loader_build_flags
 from pops.math import sqrt
 from pops.physics._facade import Model
 
@@ -28,24 +28,38 @@ GAMMA = 1.4
 INCLUDE = repo_include()
 
 
-def header_only_cxx():
-    reason = missing_compiler_requirement(INCLUDE)
+@cache
+def _header_only_toolchain():
     cxx = default_cxx()
-    if reason or not cxx:
+    reason = missing_compiler_requirement(INCLUDE)
+    if reason or cxx is None:
         require_native_or_skip(reason or "compilateur C++ absent (CXX, c++, clang++)")
         return None
-    return cxx
+    try:
+        selected_cxx, compile_flags, link_flags = pops_loader_build_flags(cxx)
+    except RuntimeError as exc:
+        require_native_or_skip(str(exc))
+        return None
+    return selected_cxx, tuple(compile_flags), tuple(link_flags)
+
+
+def header_only_cxx():
+    toolchain = _header_only_toolchain()
+    return None if toolchain is None else toolchain[0]
 
 
 def header_only_flags():
+    toolchain = _header_only_toolchain()
+    if toolchain is None:
+        return []
+    _cxx, compile_flags, link_flags = toolchain
     return [
         "-std=c++20",
         "-O2",
-        "-DPOPS_NATIVE_DIM=" + os.environ.get("POPS_NATIVE_DIM", "2"),
         "-I",
         INCLUDE,
-        "-I",
-        str(Path(sys.prefix) / "include"),
+        *compile_flags,
+        *link_flags,
     ]
 
 
