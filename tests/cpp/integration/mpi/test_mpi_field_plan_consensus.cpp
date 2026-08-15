@@ -529,7 +529,7 @@ void install_system_runtime_authority(pops::System<RuntimeDim>& system, std::str
   system.install_prepared_boundary_execution_lane(std::move(lane));
 }
 
-void install_block(pops::AmrSystem<Dim>& system, const std::string& name) {
+void install_block_boundary(pops::AmrSystem<Dim>& system, const std::string& name) {
   const std::string state_identity = "tests.mpi.multiblock-field/state/" + name;
   std::vector<std::string> face_types(static_cast<std::size_t>(2 * Dim), "foextrap");
   std::vector<std::string> face_identities;
@@ -541,6 +541,9 @@ void install_block(pops::AmrSystem<Dim>& system, const std::string& name) {
                                      face_types,
                                      std::vector<double>(static_cast<std::size_t>(2 * Dim), 0.0),
                                      face_identities, {"Scalar"}, state_identity);
+}
+
+void install_block(pops::AmrSystem<Dim>& system, const std::string& name) {
   pops::RealVector<Dim> velocity{};
   velocity[0] = pops::Real(0.25);
   Model<Dim> model{pops::nd::ScalarAdvection<Dim>::prepare(velocity)};
@@ -660,6 +663,7 @@ bool amr_registry_bind_rejected(std::string token) {
   pops::AmrSystem<Dim> system(config);
   pops::test::install_amr_runtime_authority(system, "tests.mpi.amr-registry/runtime");
   system.install_block_state_route("a", "tests.mpi.multiblock-field/state/a");
+  install_block_boundary(system, "a");
   install_block(system, "a");
   const pops::AmrFieldHierarchyPolicyAuthority hierarchy{
       "pops.field-hierarchy.level-local", 1, {"pops.field-hierarchy.options.empty@1", {}}};
@@ -770,6 +774,8 @@ int run_multiblock_field_solve(int argc, char** argv) {
     pops::test::install_amr_runtime_authority(system, "tests.mpi.multiblock-field/runtime");
     system.install_block_state_route("a", "tests.mpi.multiblock-field/state/a");
     system.install_block_state_route("b", "tests.mpi.multiblock-field/state/b");
+    install_block_boundary(system, "a");
+    install_block_boundary(system, "b");
     install_block(system, "a");
     install_block(system, "b");
     system.set_poisson("charge_density", "geometric_mg", "dirichlet");
