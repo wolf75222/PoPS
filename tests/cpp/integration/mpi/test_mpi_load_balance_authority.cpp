@@ -10,6 +10,7 @@
 #include <pops/coupling/amr/amr_regrid_coupler.hpp>
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/parallel/comm.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/parallel/prepared_load_balance.hpp>
 #include <pops/parallel/world_communicator.hpp>
 #include <pops/runtime/amr/amr_runtime.hpp>
@@ -269,6 +270,8 @@ template <int Dim>
 bool prove_tagging_prolongation_and_owner_rollback(int ranks, int rank) {
   if (ranks < 2)
     return false;
+  pops::ExecutionLane lane = pops::ExecutionLane::duplicate_world_collectively(
+      "test.mpi-load-balance-authority.ghost-fill");
   const auto authority = load_balance<Dim>();
   auto runtime = make_partitioned_runtime<Dim>(ranks, rank, authority);
   tagging::BergerRigoutsosProvider<Dim> cluster_provider;
@@ -280,7 +283,8 @@ bool prove_tagging_prolongation_and_owner_rollback(int ranks, int rank) {
       .load_balance = kLoadBalanceBudget,
   };
   const auto gathered = gather_rank_local_tag_shards(runtime.hierarchy().layout(0), ranks, rank);
-  if (pops::all_reduce_sum(gathered.remote_gather_observed ? 1L : 0L) != ranks - 1)
+  if (pops::all_reduce_sum(gathered.remote_gather_observed ? 1L : 0L, lane.communicator()) !=
+      ranks - 1)
     return false;
   auto prepared = coupler.prepare(0, ratio, gathered.shards, cluster_options<Dim>(), budget);
   if (prepared.removes_fine_level() || !prepared.fine_layout())
@@ -330,10 +334,9 @@ bool prove_tagging_prolongation_and_owner_rollback(int ranks, int rank) {
   request.field_identity = "test.mpi-load-balance-authority.remote-fine-state";
   request.budget = {{128, 4'096, 16'384, 16'384, 128, 1U << 20, 1U << 20, 1U << 20},
                     {{128, 8'192}, 16'384, 16'384, 256, 128, 1U << 20, 1U << 20, 1U << 20}};
-  const pops::ExecutionLane lane = pops::ExecutionLane::world();
   const auto ghost_fill = pops::runtime::amr::prepare_amr_ghost_fill(coarse, fine, request, lane);
   const long remote_schedule_ranks =
-      pops::all_reduce_sum(ghost_fill.has_remote_parent_jobs() ? 1L : 0L);
+      pops::all_reduce_sum(ghost_fill.has_remote_parent_jobs() ? 1L : 0L, lane.communicator());
   pops::runtime::multiblock::BoundaryEvaluationPoint point{};
   point.level = 1;
   ghost_fill(fine, point);
@@ -359,8 +362,9 @@ bool prove_tagging_prolongation_and_owner_rollback(int ranks, int rank) {
   }
   const bool remote_materialized =
       rank == 0 && ghost_fill.has_remote_parent_jobs() && local_materialized > 0;
-  if (remote_schedule_ranks < 2 || pops::all_reduce_sum(remote_materialized ? 1L : 0L) != 1 ||
-      pops::all_reduce_max(static_cast<double>(local_error)) >= 2e-13)
+  if (remote_schedule_ranks < 2 ||
+      pops::all_reduce_sum(remote_materialized ? 1L : 0L, lane.communicator()) != 1 ||
+      pops::all_reduce_max(static_cast<double>(local_error), lane.communicator()) >= 2e-13)
     return false;
 
   constexpr pops::Real kRollbackSentinel = pops::Real(913.25);
