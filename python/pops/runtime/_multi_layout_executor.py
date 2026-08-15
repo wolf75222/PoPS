@@ -240,35 +240,62 @@ def _layout_runtime_authority_plan(plan: Any, selected_names: Any) -> Any:
     )
 
 
+def _render_cleanup_failure(error: BaseException) -> str:
+    """Render a cleanup failure without retaining the exception or its traceback."""
+    message = "%s: %s" % (type(error).__name__, error)
+    error.__traceback__ = None
+    error.__cause__ = None
+    error.__context__ = None
+    return message
+
+
+def _close_transfer_session(session: Any) -> str | None:
+    closer = getattr(session, "close", None)
+    if not callable(closer):
+        return None
+    try:
+        closer()
+    except BaseException as error:
+        return _render_cleanup_failure(error)
+    return None
+
+
+def _abandon_unpublished_transfer(session: Any, source_native: Any, target_native: Any) -> str | None:
+    """Close an unpublished session and drop raw handles before the error propagates."""
+    message = _close_transfer_session(session)
+    del session
+    del source_native
+    del target_native
+    return message
+
+
 def _release_layout_transfer_prep(routes: list[Any], natives: list[Any]) -> None:
-    """Drop prepared transfer sessions before child Systems can be destroyed.
+    """Drop published transfer sessions before child Systems can be destroyed.
 
     ``_prepare_layout_transfer`` keep_alive-nurses both endpoint Systems. Clearing the
     session list first releases those nurses; raw native handles are dropped next so
-    reverse child teardown does not race retained pybind patients.
+    reverse child teardown does not race retained pybind patients. Cleanup failures
+    keep only inert rendered text, never exception objects or tracebacks.
     """
-    errors: list[BaseException] = []
+    messages: list[str] = []
     while routes:
         route = routes.pop()
         session = getattr(route, "session", None)
-        try:
-            closer = getattr(session, "close", None)
-            if callable(closer):
-                closer()
-        except BaseException as error:
-            errors.append(error)
+        message = _close_transfer_session(session)
+        if message is not None:
+            messages.append(message)
         del session
         del route
     natives.clear()
-    if errors:
+    if messages:
         raise RuntimeError(
-            "multi-layout transfer release failed: %s" % "; ".join(map(str, errors))
-        ) from errors[0]
+            "multi-layout transfer release failed: %s" % "; ".join(messages)
+        ) from None
 
 
 def _release_layout_engines(engines: list[Any]) -> None:
     """Destroy already-materialized child Systems in reverse install order."""
-    errors: list[BaseException] = []
+    messages: list[str] = []
     while engines:
         engine = engines.pop()
         try:
@@ -278,11 +305,104 @@ def _release_layout_engines(engines: list[Any]) -> None:
             elif getattr(engine, "_s", None) is not None:
                 engine._s = None
         except BaseException as error:
-            errors.append(error)
-    if errors:
+            messages.append(_render_cleanup_failure(error))
+        del engine
+    if messages:
         raise RuntimeError(
-            "multi-layout child release failed: %s" % "; ".join(map(str, errors))
-        ) from errors[0]
+            "multi-layout child release failed: %s" % "; ".join(messages)
+        ) from None
+
+
+def _validated_layout_transfer(plan: Any, transfer: Any, engines: dict[str, Any]) -> Any:
+    """Authenticate every fallible route field before a native session exists."""
+    source_block, target_block = _mapping_blocks(plan, transfer)
+    try:
+        source_engine = engines[transfer.source_layout_id]
+        target_engine = engines[transfer.target_layout_id]
+    except KeyError:
+        raise ValueError("layout transfer names an unknown layout") from None
+    source_shape = tuple(int(value) for value in source_engine.spatial_shape())
+    target_shape = tuple(int(value) for value in target_engine.spatial_shape())
+    if len(source_shape) != len(target_shape) or any(
+        source_extent < target_extent or source_extent % target_extent
+        for source_extent, target_extent in zip(source_shape, target_shape, strict=True)
+    ):
+        raise ValueError("CONSERVATIVE_CELL_AVERAGE_V1 requires aligned fine-to-coarse layouts")
+    ratio = tuple(
+        source_extent // target_extent
+        for source_extent, target_extent in zip(source_shape, target_shape, strict=True)
+    )
+    component = plan.components.get(transfer.component_id)
+    if getattr(component, "native_handle", None) is None:
+        raise TypeError("mapping Transfer component has no authenticated native handle")
+    source_components = int(source_engine.n_vars(source_block))
+    target_components = int(target_engine.n_vars(target_block))
+    if source_components != target_components or source_components <= 0:
+        raise ValueError("layout transfer source/target component counts differ")
+    return SimpleNamespace(
+        transfer=transfer,
+        source_engine=source_engine,
+        target_engine=target_engine,
+        source_block=source_block,
+        target_block=target_block,
+        component=component,
+        spec={
+            "mapping_identity": transfer.mapping_id,
+            "provider_identity": transfer.provider_id,
+            "provider_component_identity": transfer.component_id,
+            "provider_manifest_identity": component.component_manifest.token,
+            "source_layout_identity": transfer.source_layout_id,
+            "target_layout_identity": transfer.target_layout_id,
+            "source_block": source_block,
+            "target_block": target_block,
+            "source_representation": transfer.source_representation_uri,
+            "target_representation": transfer.target_representation_uri,
+            "synchronization_identity": transfer.synchronization_uri,
+            "refinement_ratio": ratio,
+            "operation": transfer.operation_abi,
+        },
+        source_element_count=source_components * math.prod(source_shape),
+        destination_element_count=target_components * math.prod(target_shape),
+    )
+
+
+def _prepare_layout_transfer_route(prepared: Any, execution: Any) -> tuple[Any, tuple[Any, Any]]:
+    """Create one session as an inner transaction: publish the complete route or abandon it."""
+    source_native = None
+    target_native = None
+    session = None
+    try:
+        source_native = prepared.source_engine._native_step_target()
+        target_native = prepared.target_engine._native_step_target()
+        session = source_native._prepare_layout_transfer(
+            target_native,
+            prepared.component.native_handle,
+            prepared.spec,
+            execution,
+        )
+        route = _NativeTransferRoute(
+            transfer=prepared.transfer,
+            source_block=prepared.source_block,
+            target_block=prepared.target_block,
+            session=session,
+            source_element_count=prepared.source_element_count,
+            destination_element_count=prepared.destination_element_count,
+        )
+        published = (source_native, target_native)
+        session = None
+        source_native = None
+        target_native = None
+        return route, published
+    except BaseException as error:
+        message = _abandon_unpublished_transfer(session, source_native, target_native)
+        session = None
+        source_native = None
+        target_native = None
+        if message is not None:
+            add_note = getattr(error, "add_note", None)
+            if callable(add_note):
+                add_note("multi-layout unpublished transfer release failed: %s" % message)
+        raise
 
 
 def _require_runtime_plan_bundle(plan: Any, runtime_plan: Any) -> None:
@@ -1455,78 +1575,31 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
 
         execution = component_execution_data(plan.execution_context)
         for transfer in runtime_plan.communication.transfers:
-            source_block, target_block = _mapping_blocks(plan, transfer)
-            source_engine = engines[transfer.source_layout_id]
-            target_engine = engines[transfer.target_layout_id]
-            source_shape = tuple(int(value) for value in source_engine.spatial_shape())
-            target_shape = tuple(int(value) for value in target_engine.spatial_shape())
-            if len(source_shape) != len(target_shape) or any(
-                source_extent < target_extent or source_extent % target_extent
-                for source_extent, target_extent in zip(source_shape, target_shape, strict=True)
-            ):
-                raise ValueError(
-                    "CONSERVATIVE_CELL_AVERAGE_V1 requires aligned fine-to-coarse layouts"
-                )
-            ratio = tuple(
-                source_extent // target_extent
-                for source_extent, target_extent in zip(source_shape, target_shape, strict=True)
-            )
-            component = plan.components[transfer.component_id]
-            source_native = source_engine._native_step_target()
-            target_native = target_engine._native_step_target()
-            native_handles.append(source_native)
-            native_handles.append(target_native)
-            session = source_native._prepare_layout_transfer(
-                target_native,
-                component.native_handle,
-                {
-                    "mapping_identity": transfer.mapping_id,
-                    "provider_identity": transfer.provider_id,
-                    "provider_component_identity": transfer.component_id,
-                    "provider_manifest_identity": component.component_manifest.token,
-                    "source_layout_identity": transfer.source_layout_id,
-                    "target_layout_identity": transfer.target_layout_id,
-                    "source_block": source_block,
-                    "target_block": target_block,
-                    "source_representation": transfer.source_representation_uri,
-                    "target_representation": transfer.target_representation_uri,
-                    "synchronization_identity": transfer.synchronization_uri,
-                    "refinement_ratio": ratio,
-                    "operation": transfer.operation_abi,
-                },
-                execution,
-            )
-            source_components = int(source_engine.n_vars(source_block))
-            target_components = int(target_engine.n_vars(target_block))
-            if source_components != target_components or source_components <= 0:
-                raise ValueError("layout transfer source/target component counts differ")
-            transfer_routes.append(
-                _NativeTransferRoute(
-                    transfer=transfer,
-                    source_block=source_block,
-                    target_block=target_block,
-                    session=session,
-                    source_element_count=source_components * math.prod(source_shape),
-                    destination_element_count=target_components * math.prod(target_shape),
-                )
-            )
+            prepared = _validated_layout_transfer(plan, transfer, engines)
+            route, handles = _prepare_layout_transfer_route(prepared, execution)
+            transfer_routes.append(route)
+            native_handles.extend(handles)
         return _MultiLayoutUniformExecutor(
             plan, runtime_plan, engines, blocks, tuple(transfer_routes)
         )
     except BaseException as error:
+        transfer_note = None
+        engine_note = None
         try:
             _release_layout_transfer_prep(transfer_routes, native_handles)
         except BaseException as release_error:
-            add_note = getattr(error, "add_note", None)
-            if callable(add_note):
-                add_note("multi-layout transfer release failed: %s" % release_error)
+            transfer_note = _render_cleanup_failure(release_error)
         engines.clear()
         try:
             _release_layout_engines(materialized)
         except BaseException as release_error:
-            add_note = getattr(error, "add_note", None)
-            if callable(add_note):
-                add_note("multi-layout child release failed: %s" % release_error)
+            engine_note = _render_cleanup_failure(release_error)
+        add_note = getattr(error, "add_note", None)
+        if callable(add_note):
+            if transfer_note is not None:
+                add_note("multi-layout transfer release failed: %s" % transfer_note)
+            if engine_note is not None:
+                add_note("multi-layout child release failed: %s" % engine_note)
         raise
 
 

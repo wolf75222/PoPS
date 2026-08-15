@@ -607,62 +607,37 @@ def _transfer_row(mapping_id, source_layout, target_layout):
     )
 
 
-def test_failed_transfer_prepare_releases_retained_handles_before_children(monkeypatch):
+def _exception_chain(error):
+    seen = set()
+    stack = [error]
+    while stack:
+        item = stack.pop()
+        if item is None or id(item) in seen:
+            continue
+        seen.add(id(item))
+        yield item
+        stack.extend((getattr(item, "__cause__", None), getattr(item, "__context__", None)))
+
+
+def _exception_holds_keep_alive(error, *, type_name="RetainingSession"):
+    for item in _exception_chain(error):
+        if type(item).__name__ == type_name:
+            return True
+        traceback = item.__traceback__
+        while traceback is not None:
+            for value in traceback.tb_frame.f_locals.values():
+                if type(value).__name__ == type_name:
+                    return True
+            traceback = traceback.tb_next
+    return False
+
+
+def _two_layout_transfer_plan():
     execution_context = _execution_context()
     plan = _two_layout_install_plan(execution_context)
     strategy = FixedDt(1.0e-3)
-    events = []
     fine_cfg = _layout_config("fine", 16)
     coarse_cfg = _layout_config("coarse", 8)
-
-    class RetainingSession:
-        def __init__(self, source, target):
-            self.source = source
-            self.target = target
-            source.retained_by.append(self)
-            target.retained_by.append(self)
-            events.append(("retain", source.owner, target.owner))
-
-        def close(self):
-            events.append(("release", self.source.owner, self.target.owner))
-            self.source.retained_by.remove(self)
-            self.target.retained_by.remove(self)
-            self.source = None
-            self.target = None
-
-    class Native:
-        def __init__(self, owner):
-            self.owner = owner
-            self.retained_by = []
-
-        def _prepare_layout_transfer(self, target, handle, spec, execution):
-            if spec["mapping_identity"] == "map-second":
-                raise RuntimeError("injected transfer preparation failure")
-            return RetainingSession(self, target)
-
-    class FakeSystem:
-        def __init__(self, config):
-            self.config = config
-            self._s = Native(config.name)
-
-        def destroy(self):
-            events.append(("destroy", self.config.name))
-            assert self._s.retained_by == [], (
-                "transfer session still retained native handle %s" % self.config.name
-            )
-            self._s = None
-
-        def _install_compiled(self, *args, **kwargs):
-            self.authority_plan = kwargs.get("authority_plan")
-
-        def _native_step_target(self):
-            return self._s
-
-        def spatial_shape(self):
-            return self.config.shape
-
-        def n_vars(self, _block):
-            return 1
 
     class FakeLayouts:
         def __init__(self):
@@ -720,9 +695,67 @@ def test_failed_transfer_prepare_releases_retained_handles_before_children(monke
             )
         )
     )
+    return plan, runtime_plan, FakeLayouts
 
+
+def _retaining_transfer_system(events, *, fail_prepare=None, fail_close=False):
+    class RetainingSession:
+        def __init__(self, source, target):
+            self.source = source
+            self.target = target
+            source.retained_by.append(self)
+            target.retained_by.append(self)
+            events.append(("retain", source.owner, target.owner))
+
+        def close(self):
+            events.append(("release", self.source.owner, self.target.owner))
+            self.source.retained_by.remove(self)
+            self.target.retained_by.remove(self)
+            self.source = None
+            self.target = None
+            if fail_close:
+                raise RuntimeError("injected session close failure")
+
+    class Native:
+        def __init__(self, owner):
+            self.owner = owner
+            self.retained_by = []
+
+        def _prepare_layout_transfer(self, target, handle, spec, execution):
+            if fail_prepare is not None and spec["mapping_identity"] == fail_prepare:
+                raise RuntimeError("injected transfer preparation failure")
+            return RetainingSession(self, target)
+
+    class FakeSystem:
+        def __init__(self, config):
+            self.config = config
+            self._s = Native(config.name)
+
+        def destroy(self):
+            events.append(("destroy", self.config.name))
+            assert self._s.retained_by == [], (
+                "transfer session still retained native handle %s" % self.config.name
+            )
+            self._s = None
+
+        def _install_compiled(self, *args, **kwargs):
+            self.authority_plan = kwargs.get("authority_plan")
+
+        def _native_step_target(self):
+            return self._s
+
+        def spatial_shape(self):
+            return self.config.shape
+
+        def n_vars(self, _block):
+            return 1
+
+    return FakeSystem
+
+
+def _patch_two_layout_transfer_install(monkeypatch, plan, runtime_plan, system_cls, fake_layouts):
     fake_system = ModuleType("pops.runtime._system")
-    fake_system.System = FakeSystem
+    fake_system.System = system_cls
     monkeypatch.setitem(sys.modules, "pops.runtime._system", fake_system)
     monkeypatch.setattr(
         "pops.runtime._multi_layout_executor._require_runtime_plan_bundle",
@@ -730,7 +763,7 @@ def test_failed_transfer_prepare_releases_retained_handles_before_children(monke
     )
     monkeypatch.setattr(
         "pops.codegen._layout_resolution.ResolvedRuntimeLayouts",
-        FakeLayouts,
+        fake_layouts,
     )
     monkeypatch.setattr(
         "pops.runtime._runtime_mesh_lowering.system_config_from_layout",
@@ -753,11 +786,116 @@ def test_failed_transfer_prepare_releases_retained_handles_before_children(monke
         lambda engine, _plan: setattr(engine, "_boundary_authorities", {}),
     )
 
+
+def test_failed_transfer_prepare_releases_retained_handles_before_children(monkeypatch):
+    plan, runtime_plan, fake_layouts = _two_layout_transfer_plan()
+    events = []
+    _patch_two_layout_transfer_install(
+        monkeypatch,
+        plan,
+        runtime_plan,
+        _retaining_transfer_system(events, fail_prepare="map-second"),
+        fake_layouts,
+    )
+
     with pytest.raises(RuntimeError, match="injected transfer preparation failure"):
         install_multi_layout_uniform(plan, runtime_plan)
 
     assert events == [
         ("retain", "fine", "coarse"),
+        ("release", "fine", "coarse"),
+        ("destroy", "coarse"),
+        ("destroy", "fine"),
+    ]
+
+
+def test_successful_session_prepublication_failure_abandons_unpublished_session(monkeypatch):
+    from pops.runtime import _multi_layout_executor as multi_executor
+
+    plan, runtime_plan, fake_layouts = _two_layout_transfer_plan()
+    events = []
+    _patch_two_layout_transfer_install(
+        monkeypatch,
+        plan,
+        runtime_plan,
+        _retaining_transfer_system(events),
+        fake_layouts,
+    )
+    real_route = multi_executor._NativeTransferRoute
+    calls = {"n": 0}
+
+    def exploding_route(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("injected pre-publication failure")
+        return real_route(*args, **kwargs)
+
+    monkeypatch.setattr(multi_executor, "_NativeTransferRoute", exploding_route)
+
+    with pytest.raises(RuntimeError, match="injected pre-publication failure"):
+        install_multi_layout_uniform(plan, runtime_plan)
+
+    assert events == [
+        ("retain", "fine", "coarse"),
+        ("retain", "fine", "coarse"),
+        ("release", "fine", "coarse"),
+        ("release", "fine", "coarse"),
+        ("destroy", "coarse"),
+        ("destroy", "fine"),
+    ]
+
+
+def test_session_close_failure_keeps_only_inert_cleanup_text(monkeypatch):
+    plan, runtime_plan, fake_layouts = _two_layout_transfer_plan()
+    events = []
+    _patch_two_layout_transfer_install(
+        monkeypatch,
+        plan,
+        runtime_plan,
+        _retaining_transfer_system(events, fail_prepare="map-second", fail_close=True),
+        fake_layouts,
+    )
+
+    with pytest.raises(RuntimeError, match="injected transfer preparation failure") as raised:
+        install_multi_layout_uniform(plan, runtime_plan)
+
+    error = raised.value
+    notes = getattr(error, "__notes__", ())
+    assert any("injected session close failure" in note for note in notes)
+    assert error.__cause__ is None
+    assert not _exception_holds_keep_alive(error)
+    assert events == [
+        ("retain", "fine", "coarse"),
+        ("release", "fine", "coarse"),
+        ("destroy", "coarse"),
+        ("destroy", "fine"),
+    ]
+
+
+def test_executor_constructor_failure_releases_published_routes_before_children(monkeypatch):
+    plan, runtime_plan, fake_layouts = _two_layout_transfer_plan()
+    events = []
+    _patch_two_layout_transfer_install(
+        monkeypatch,
+        plan,
+        runtime_plan,
+        _retaining_transfer_system(events),
+        fake_layouts,
+    )
+    monkeypatch.setattr(
+        "pops.runtime._multi_layout_executor._MultiLayoutUniformExecutor",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("injected executor constructor failure")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="injected executor constructor failure"):
+        install_multi_layout_uniform(plan, runtime_plan)
+
+    assert events == [
+        ("retain", "fine", "coarse"),
+        ("retain", "fine", "coarse"),
+        ("release", "fine", "coarse"),
         ("release", "fine", "coarse"),
         ("destroy", "coarse"),
         ("destroy", "fine"),
