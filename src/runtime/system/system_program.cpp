@@ -863,21 +863,36 @@ bool System<Dim>::program_owns_operator_authority(
 
 template <int Dim>
 void System<Dim>::block_project(int block, MultiFab<Dim>& state) {
-  if (block < 0 || block >= p_->blocks_.size())
-    throw std::out_of_range("System projection block index is out of range");
-  typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
-  if (p_->embedded_boundary_ &&
-      p_->embedded_boundary_->mode() != runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
-    auto& family = select_embedded_residual_family<Dim>(selected, p_->embedded_boundary_->mode());
-    require_embedded_residual_route<Dim>(
-        p_->blocks_, selected, block, static_cast<bool>(family.project), "System::block_project");
-    family.project(state, *p_->embedded_boundary_);
-    return;
+  const ExecutionLane& lane = prepared_boundary_execution_lane();
+  typename Impl::Species* selected = nullptr;
+  typename SystemBlockStore<Dim>::EmbeddedResidualFamily* family = nullptr;
+  std::exception_ptr local_error;
+  try {
+    if (block < 0 || block >= p_->blocks_.size())
+      throw std::out_of_range("System projection block index is out of range");
+    selected = &p_->sp[static_cast<std::size_t>(block)];
+    if (p_->embedded_boundary_ &&
+        p_->embedded_boundary_->mode() != runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
+      family = &select_embedded_residual_family<Dim>(*selected, p_->embedded_boundary_->mode());
+      require_embedded_residual_route<Dim>(p_->blocks_, *selected, block,
+                                           static_cast<bool>(family->project),
+                                           "System::block_project");
+    } else if (!selected->project) {
+      throw std::runtime_error("System block '" + selected->name +
+                               "' has no dimension-qualified projection provider");
+    }
+  } catch (...) {
+    local_error = std::current_exception();
   }
-  if (!selected.project)
-    throw std::runtime_error("System block '" + selected.name +
-                             "' has no dimension-qualified projection provider");
-  selected.project(state);
+  if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("System projection provider preparation failed collectively");
+  }
+  if (family != nullptr)
+    family->project(state, *p_->embedded_boundary_, lane);
+  else
+    selected->project(state, lane);
 }
 
 template <int Dim>
