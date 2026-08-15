@@ -519,6 +519,22 @@ TEST(GeneratedAmrSystemBlock, FacadeRetainsAndExecutesPreparedRootLevel) {
   EXPECT_EQ(&system.prepared_amr_level_evaluation(0), &evaluation);
 }
 
+TEST(GeneratedAmrSystemBlock, VariableNamesReadAuthenticatedPreparedBlockMetadata) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 8;
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/variable-names");
+  system.install_block_state_route("tracer", "state/tracer");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+
+  EXPECT_EQ(system.variable_names("tracer", "conservative"), (std::vector<std::string>{"u"}));
+  EXPECT_EQ(system.variable_names("tracer", "primitive"), (std::vector<std::string>{"u"}));
+  EXPECT_THROW((void)system.variable_names("missing", "conservative"), std::runtime_error);
+  EXPECT_THROW((void)system.variable_names("tracer", "invalid"), std::invalid_argument);
+}
+
 TEST(GeneratedAmrSystemBlock, RegridRebuildsExactFineGhostProvidersAndInvalidatesLedger) {
   constexpr int Dim = pops::kNativeDimension;
   pops::AmrSystemConfig<Dim> config;

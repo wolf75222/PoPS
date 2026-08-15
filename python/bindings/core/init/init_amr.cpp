@@ -1100,6 +1100,10 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
 void bind_amr_data(py::class_<AmrSystem>& cls) {
   cls.def("n_blocks", &AmrSystem::n_blocks)
       .def("block_names", &AmrSystem::block_names)
+      .def("variable_names", &AmrSystem::variable_names,
+           "Installed variable names of one authenticated AMR block. kind = 'conservative' | "
+           "'primitive'.",
+           py::arg("name"), py::arg("kind") = "conservative")
       .def(
           "effective_options_report",
           [](const AmrSystem& s) {

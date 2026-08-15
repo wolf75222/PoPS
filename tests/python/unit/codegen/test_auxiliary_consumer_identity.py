@@ -464,7 +464,7 @@ def test_public_amr_shared_model_bind_if_native_available() -> None:
     assert len(owners) == 2
     assert owners[0] != owners[1]
     compiled = pops.compile(resolved)
-    bound = pops.bind(compiled, {})
+    bound = pops.bind(compiled, initial_state={})
     assert bound is not None
 
 

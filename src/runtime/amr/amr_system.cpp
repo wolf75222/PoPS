@@ -16756,6 +16756,18 @@ int AmrSystem<Dim>::n_vars() {
 }
 
 template <int Dim>
+std::vector<std::string> AmrSystem<Dim>::variable_names(const std::string& name,
+                                                        const std::string& kind) const {
+  const std::size_t block_index = p_->block_index(name);
+  const PreparedBlock& prepared = p_->prepared_blocks.at(block_index);
+  if (kind == "conservative")
+    return prepared.conservative_variables.names;
+  if (kind == "primitive")
+    return prepared.primitive_variables.names;
+  throw std::invalid_argument("AmrSystem variable kind is neither conservative nor primitive");
+}
+
+template <int Dim>
 int AmrSystem<Dim>::block_n_vars(const std::string& name) {
   return p_->block(name).ncomp;
 }
@@ -19145,6 +19157,8 @@ template int AmrSystem<kNativeDimension>::n_levels();
 template int AmrSystem<kNativeDimension>::max_levels();
 template int AmrSystem<kNativeDimension>::configured_n_levels();
 template int AmrSystem<kNativeDimension>::n_vars();
+template std::vector<std::string> AmrSystem<kNativeDimension>::variable_names(
+    const std::string&, const std::string&) const;
 template int AmrSystem<kNativeDimension>::block_n_vars(const std::string&);
 template int AmrSystem<kNativeDimension>::n_patches();
 template std::vector<AmrPatch<kNativeDimension>> AmrSystem<kNativeDimension>::patch_boxes();

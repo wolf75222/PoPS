@@ -1252,6 +1252,11 @@ class AmrSystem {
   /// level. The _global variant all_reduce_sum the per-rank fabs (np>1 gather, all ranks call); the
   /// shared hierarchy is the deterministic frozen central patch (regrid_every==0), reproduced at
   /// restart by replaying the same composition. @throws if @p name / @p k is out of bounds.
+  /// Installed variable names of one authenticated block. @p kind is "conservative" or
+  /// "primitive"; names are read from the prepared native block image, never reconstructed by a
+  /// facade-side convention.
+  std::vector<std::string> variable_names(const std::string& name,
+                                          const std::string& kind = "conservative") const;
   int block_n_vars(const std::string& name);  ///< conserved components of the named block
   std::vector<double> block_level_state(const std::string& name, int k);
   std::vector<double> block_level_state_global(const std::string& name,
