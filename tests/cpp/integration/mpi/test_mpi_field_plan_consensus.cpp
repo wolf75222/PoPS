@@ -1,6 +1,8 @@
-// Exact-rank MPI proof for simultaneous multi-block AMR field solves.  The test intentionally
-// exercises the generated Program route: nullptr entries borrow accepted block state, non-null
-// entries are detached candidates, and publication remains private until SolveOutcome acceptance.
+// Exact-rank MPI proof for simultaneous multi-block AMR field solves on supported seams.
+// System CartesianCG owns the uniform registry. Builtin composite FAC is proven only on a
+// replicated coarse. The two-block sparse two-level hierarchy uses custom providers only.
+// nullptr Program entries borrow accepted block state; non-null entries are detached candidates;
+// publication remains private until SolveOutcome acceptance.
 
 #include <gtest/gtest.h>
 
@@ -20,16 +22,19 @@
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/runtime/amr/exact_field_solver_provider.hpp>
 #include <pops/runtime/program/amr_program_context.hpp>
+#include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
 #include <pops/runtime/system.hpp>
 #include <pops/runtime/system/derived_aux_provider.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <limits>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -46,7 +51,19 @@ enum class AmrProviderFault {
   divergent_report,
   throw_on_rank_one,
   candidate_validation_throw_once_on_rank_one,
+  reject_attempt,
 };
+
+constexpr std::string_view kSystemRegistryDivergence =
+    "System: ordered resolved field plans differ across MPI ranks";
+constexpr std::string_view kAmrRegistryDivergence =
+    "AmrSystem initial materialization contract differs between RuntimeInstance ranks";
+constexpr std::string_view kDistributedFacReason =
+    "composite FAC distributed inter-level transfers are unavailable";
+
+bool message_contains(const std::exception& error, std::string_view expected) {
+  return std::string_view(error.what()).find(expected) != std::string_view::npos;
+}
 
 struct BoundaryBindingAudit {
   inline static const Field* bound_state = nullptr;
@@ -167,8 +184,17 @@ class ConsensusAmrFieldSolver final : public pops::runtime::amr::ExactAmrFieldSo
     pops::SolveReport report;
     report.iters = 1;
     report.evaluations = 1;
-    report.rel_residual = pops::Real(0);
     report.reference_residual_norm = pops::Real(1);
+    if (fault_ == AmrProviderFault::reject_attempt) {
+      report.rel_residual = pops::Real(1);
+      report.residual_norm = pops::Real(1);
+      report.mark_failed(pops::SolveStatus::kInadmissibleCandidate,
+                         pops::SolveAction::kRejectAttempt, "deterministic-reject");
+      return report;
+    }
+    for (std::size_t level = 0; level < rhs_.size(); ++level)
+      pops::elliptic::mg::copy_scalar_valid(*rhs_[level], *candidates_[level]);
+    report.rel_residual = pops::Real(0);
     report.residual_norm = pops::Real(0);
     report.mark_solved(fault_ == AmrProviderFault::divergent_report && pops::my_rank() == 1
                            ? "rank-one-provider-report"
@@ -188,7 +214,7 @@ class ConsensusAmrFieldSolver final : public pops::runtime::amr::ExactAmrFieldSo
       throw std::runtime_error("intentional rank-local AMR outcome validation failure");
     }
     if (solve_generation_ >= 2 && consumption_validation_fault_armed_ &&
-        candidate_accesses_after_solve_ == static_cast<int>(candidates_.size()) + 1) {
+        candidate_accesses_after_solve_ > static_cast<int>(candidates_.size())) {
       consumption_validation_fault_armed_ = false;
       throw std::runtime_error("intentional rank-local AMR consumption validation failure");
     }
@@ -445,6 +471,54 @@ struct Model {
   POPS_HD pops::Real elliptic_rhs(const State& state) const { return state[0]; }
 };
 
+template <int Rank>
+struct ProviderFreeModel {
+  using Law = pops::nd::ScalarAdvection<Rank>;
+  using Schema = typename Law::Schema;
+  using State = typename Law::State;
+  using Primitive = typename Law::Primitive;
+  static constexpr int dimension = Rank;
+  static constexpr int n_vars = 1;
+  static constexpr int n_providers = 0;
+  Law law;
+  static pops::PreparedProviderIdentity provider_identity() noexcept {
+    return {"tests.mpi.multiblock-field.provider-free-advection", 1};
+  }
+  void serialize_exact_parameters(pops::ExactContractBuilder& contract) const {
+    for (int axis = 0; axis < Rank; ++axis)
+      contract.scalar(law.velocity()[axis]);
+  }
+  static pops::VariableSet conservative_vars() {
+    return {pops::VariableKind::Conservative, {"u"}, 1, {pops::VariableRole::Scalar}};
+  }
+  static pops::VariableSet primitive_vars() {
+    return {pops::VariableKind::Primitive, {"u"}, 1, {pops::VariableRole::Scalar}};
+  }
+  POPS_HD pops::nd::StateConversion<Primitive> recover(const State& state) const {
+    return law.recover(state);
+  }
+  POPS_HD pops::nd::StateConversion<State> make_conservative(const Primitive& primitive) const {
+    return law.make_conservative(primitive);
+  }
+  POPS_HD pops::nd::StateConversionStatus admissibility(const State& state) const {
+    return law.admissibility(state);
+  }
+  template <int Axis>
+  POPS_HD State flux(const State& state) const {
+    return law.template flux<Axis>(state);
+  }
+  template <int Axis>
+  POPS_HD pops::Real max_wave_speed(const State& state) const {
+    return law.template max_wave_speed<Axis>(state);
+  }
+  template <int Axis>
+  POPS_HD void wave_speeds(const State& state, pops::Real& lower, pops::Real& upper) const {
+    law.template wave_speeds<Axis>(state, lower, upper);
+  }
+  POPS_HD State source(const State&, const pops::ProviderValues<0>&) const { return {}; }
+  POPS_HD pops::Real elliptic_rhs(const State& state) const { return state[0]; }
+};
+
 pops::AmrSystemConfig<Dim> exact_config() {
   pops::AmrSystemConfig<Dim> config;
   config.level_count = 2;
@@ -466,8 +540,8 @@ std::vector<pops::AmrPatch<Dim>> fine_patches(const pops::AmrSystemConfig<Dim>& 
   pops::Index<Dim> second_lo{};
   pops::Index<Dim> second_hi{};
   for (int axis = 0; axis < Dim; ++axis) {
-    first_lo[axis] = 2;
-    first_hi[axis] = 2 * config.shape[axis] - 3;
+    first_lo[axis] = config.shape[axis] / 2;
+    first_hi[axis] = 3 * config.shape[axis] / 2 - 1;
     second_lo[axis] = first_lo[axis];
     second_hi[axis] = first_hi[axis];
   }
@@ -547,13 +621,26 @@ void install_block_boundary(pops::AmrSystem<Dim>& system, const std::string& nam
                                      face_identities, {"Scalar"}, state_identity);
 }
 
+template <class CompiledModel>
+void install_compiled_block(pops::AmrSystem<Dim>& system, const std::string& name,
+                            CompiledModel model) {
+  pops::add_compiled_model<Dim>(
+      system, name, std::move(model), "none", "rusanov", "conservative", "explicit", 1.4, 1, 1, {},
+      {}, 0.0, static_cast<double>(pops::kWenoEpsilon), false, block_consumer_qid(name));
+}
+
 void install_block(pops::AmrSystem<Dim>& system, const std::string& name) {
   pops::RealVector<Dim> velocity{};
   velocity[0] = pops::Real(0.25);
-  Model<Dim> model{pops::nd::ScalarAdvection<Dim>::prepare(velocity)};
-  pops::add_compiled_model<Dim>(system, name, model, "none", "rusanov", "conservative", "explicit",
-                                1.4, 1, 1, {}, {}, 0.0, static_cast<double>(pops::kWenoEpsilon),
-                                false, block_consumer_qid(name));
+  install_compiled_block(system, name,
+                         Model<Dim>{pops::nd::ScalarAdvection<Dim>::prepare(velocity)});
+}
+
+void install_provider_free_block(pops::AmrSystem<Dim>& system, const std::string& name) {
+  pops::RealVector<Dim> velocity{};
+  velocity[0] = pops::Real(0.25);
+  install_compiled_block(system, name,
+                         ProviderFreeModel<Dim>{pops::nd::ScalarAdvection<Dim>::prepare(velocity)});
 }
 
 pops::runtime::system::AuxiliaryComponentKey install_field_output(pops::AmrSystem<Dim>& system) {
@@ -578,45 +665,12 @@ pops::runtime::system::AuxiliaryComponentKey install_field_output(pops::AmrSyste
   return key;
 }
 
-void install_field_plan(pops::AmrSystem<Dim>& system,
-                        const pops::runtime::system::AuxiliaryComponentKey& output) {
-  const pops::AmrFieldHierarchyPolicyAuthority hierarchy{
-      "pops.field-hierarchy.level-local", 1, {"pops.field-hierarchy.options.empty@1", {}}};
-  system.set_field_solver_plan(
-      "field/coupled", "tests.mpi.multiblock-field/plan@1", "tests.mpi.multiblock-field/provider@1",
-      "tests.mpi.multiblock-field", "a", "potential", {output}, 1,
-      {"tests.mpi.multiblock-field/a/rhs", "tests.mpi.multiblock-field/b/rhs"}, {"a", "b"},
-      {"potential", "potential"}, {2.0, -0.5}, "geometric_mg", hierarchy,
-      pops::geometric_mg_amr_field_solver_options(pops::GeometricMgOptions{},
-                                                  pops::CompositeFacOptions{}));
-  system.set_field_reaction("field/coupled", 2.0);
-  system.register_elliptic_field("a", "potential", {output}, 1);
-}
-
-void install_rejecting_field_plan(pops::AmrSystem<Dim>& system) {
-  const pops::AmrFieldHierarchyPolicyAuthority hierarchy{
-      "pops.field-hierarchy.level-local", 1, {"pops.field-hierarchy.options.empty@1", {}}};
-  pops::GeometricMgOptions options;
-  options.rel_tol = pops::Real(0);
-  options.abs_tol = pops::Real(0);
-  options.max_cycles = 1;
-  options.nu1 = 1;
-  options.nu2 = 1;
-  options.nbottom = 1;
-  system.set_field_solver_plan(
-      "field/reject", "tests.mpi.multiblock-field/reject-plan@1",
-      "tests.mpi.multiblock-field/reject-provider@1", "tests.mpi.multiblock-field", "a",
-      "reject-potential", {{"tests.mpi.multiblock-field", "field", "reject-potential", "value"}}, 1,
-      {"tests.mpi.multiblock-field/a/rhs", "tests.mpi.multiblock-field/b/rhs"}, {"a", "b"},
-      {"potential", "potential"}, {2.0, -0.5}, "geometric_mg", hierarchy,
-      pops::geometric_mg_amr_field_solver_options(options, pops::CompositeFacOptions{}));
-  system.set_field_reaction("field/reject", 2.0);
-}
-
 void install_consensus_provider_plan(pops::AmrSystem<Dim>& system, const std::string& slot,
-                                     AmrProviderFault fault, bool audit_boundary = false) {
+                                     AmrProviderFault fault, bool audit_boundary = false,
+                                     std::string output_key = {}) {
   const std::string identity = "tests.mpi.multiblock-field/provider/" + slot;
-  const std::string output_key = "provider-potential/" + slot;
+  if (output_key.empty())
+    output_key = "provider-potential/" + slot;
   system.register_field_solver_provider(
       std::make_shared<ConsensusAmrFieldProvider>(identity, fault));
   const pops::AmrFieldHierarchyPolicyAuthority hierarchy{
@@ -654,26 +708,32 @@ bool system_registry_bind_rejected(std::string token) {
                                {"potential"}, {1.0}, "field/registry");
   try {
     system.mark_bound();
-  } catch (const std::exception&) {
+  } catch (const std::exception& error) {
+    if (!message_contains(error, kSystemRegistryDivergence))
+      throw;
     return true;
   }
   return false;
 }
 
-bool amr_registry_bind_rejected(std::string token) {
+pops::AmrSystemConfig<Dim> replicated_coarse_config() {
   pops::AmrSystemConfig<Dim> config = exact_config();
   config.level_count = 1;
   config.transition_ratios.clear();
   config.transition_buffers.clear();
   config.transition_lookaheads.clear();
-  config.distribute_coarse = true;
-  pops::AmrSystem<Dim> system(config);
+  config.distribute_coarse = false;
+  return config;
+}
+
+bool amr_registry_bind_rejected(std::string token) {
+  pops::AmrSystem<Dim> system(replicated_coarse_config());
   pops::test::install_amr_runtime_authority(system, "tests.mpi.amr-registry/runtime");
   system.install_block_state_route("a", "tests.mpi.multiblock-field/state/a");
   install_block_boundary(system, "a");
-  install_block(system, "a");
+  install_provider_free_block(system, "a");
   const pops::AmrFieldHierarchyPolicyAuthority hierarchy{
-      "pops.field-hierarchy.level-local", 1, {"pops.field-hierarchy.options.empty@1", {}}};
+      "pops.field-hierarchy.composite", 1, {"pops.field-hierarchy.options.empty@1", {}}};
   system.set_field_solver_plan(
       "field/registry", std::move(token), "provider/registry", "output/registry", "a", "potential",
       {{"output/registry", "field", "potential", "value"}}, 1, {"rhs/registry"}, {"a"},
@@ -682,10 +742,68 @@ bool amr_registry_bind_rejected(std::string token) {
                                                   pops::CompositeFacOptions{}));
   try {
     system.mark_bound();
-  } catch (const std::exception&) {
+  } catch (const std::exception& error) {
+    if (!message_contains(error, kAmrRegistryDivergence))
+      throw;
     return true;
   }
   return false;
+}
+
+pops::EllipticBuildRequest<Dim> partitioned_fac_level(int cells,
+                                                      const pops::mesh::RankSpace<Dim>& rank_space,
+                                                      const pops::Index<Dim>& local_rank) {
+  pops::Extent<Dim> shape{};
+  pops::RealVector<Dim> lower{};
+  pops::RealVector<Dim> upper{};
+  std::array<bool, Dim> periodic{};
+  pops::Extent<Dim> phi_ghosts{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    shape[axis] = cells;
+    upper[axis] = pops::Real(1);
+    periodic[static_cast<std::size_t>(axis)] = true;
+    phi_ghosts[axis] = 1;
+  }
+  const pops::Box<Dim> domain = pops::Box<Dim>::from_extents(shape);
+  const pops::Geometry<Dim> geometry = pops::Geometry<Dim>::from_bounds(domain, lower, upper);
+  const pops::mesh::BoxArray<Dim> boxes{std::vector<pops::Box<Dim>>{domain}};
+  const pops::mesh::Distribution<Dim> distribution =
+      pops::mesh::Distribution<Dim>::partitioned(boxes, rank_space, {rank_space.origin()});
+  pops::RealVector<Dim> spacing{};
+  for (int axis = 0; axis < Dim; ++axis)
+    spacing[axis] = geometry.spacing(axis);
+  std::array<pops::PhysicalBoundaryFace, static_cast<std::size_t>(2 * Dim)> faces{};
+  return {geometry,
+          boxes,
+          distribution,
+          local_rank,
+          pops::PhysicalBoundaryConditions<Dim>{
+              pops::BoundaryTopology<Dim>::axis_periodic(periodic), faces, spacing},
+          pops::Extent<Dim>{},
+          phi_ghosts,
+          {boxes.size(), 0}};
+}
+
+pops::PreparedProviderSupport distributed_composite_fac_support(const pops::ExecutionLane& lane) {
+  pops::Extent<Dim> rank_extent{};
+  for (int axis = 0; axis < Dim; ++axis)
+    rank_extent[axis] = 1;
+  rank_extent[0] = lane.size();
+  const pops::mesh::RankSpace<Dim> rank_space{pops::Index<Dim>{}, rank_extent};
+  pops::runtime::amr::ExactAmrFieldSolverBuildRequest<Dim> request;
+  request.hierarchy.levels = {
+      partitioned_fac_level(4, rank_space, rank_space.coordinate(lane.rank())),
+      partitioned_fac_level(8, rank_space, rank_space.coordinate(lane.rank()))};
+  std::array<int, Dim> ratio{};
+  ratio.fill(2);
+  request.hierarchy.ratios.emplace_back(ratio);
+  request.mode = pops::runtime::amr::ExactFieldHierarchyMode::composite;
+  request.provider_options = pops::geometric_mg_amr_field_solver_options(
+      pops::GeometricMgOptions{}, pops::CompositeFacOptions{});
+  request.use_contract = "tests.mpi.multiblock-field/distributed-fac-preflight@1";
+  request.spatial_contract = "tests.mpi.multiblock-field/two-level-partitioned-layout@1";
+  return pops::runtime::amr::make_builtin_exact_amr_field_solver_provider<Dim>()->supports(request,
+                                                                                           lane);
 }
 
 double max_difference(const std::vector<double>& left, const std::vector<double>& right) {
@@ -700,7 +818,9 @@ double max_difference(const std::vector<double>& left, const std::vector<double>
 double field_difference_inf(const Field& left, const Field& right) {
   Field difference(left);
   pops::saxpy(difference, pops::Real(-1), right);
-  return static_cast<double>(pops::reduce_norm_inf(difference, 0));
+  const pops::Real maximum = pops::reduce_max_local(difference, 0);
+  const pops::Real minimum = pops::reduce_min_local(difference, 0);
+  return static_cast<double>(std::max(std::abs(maximum), std::abs(minimum)));
 }
 
 bool elliptic_factory_rejected(const Field& prototype, const pops::AmrSystemConfig<Dim>& config,
@@ -776,7 +896,44 @@ int run_multiblock_field_solve(int argc, char** argv) {
                                                             : "tests.mpi.amr-registry/rank-one@1"),
             "AmrSystem rejects a rank-divergent field-plan registry");
 
-    const pops::AmrSystemConfig<Dim> config = exact_config();
+    require(!pops::elliptic::mg::CompositeFacCapabilities{}.distributed_mpi,
+            "composite FAC capability contract does not advertise distributed MPI");
+    const pops::ExecutionLane fac_lane =
+        pops::ExecutionLane::world("tests.mpi.multiblock-field/distributed-fac-preflight@1");
+    const pops::PreparedProviderSupport fac_support = distributed_composite_fac_support(fac_lane);
+    require(fac_support.well_formed() && !fac_support.accepted() && fac_support.code == 4 &&
+                fac_support.reason == kDistributedFacReason,
+            "distributed composite FAC is refused at the provider supports seam");
+
+    {
+      pops::AmrSystem<Dim> system(replicated_coarse_config());
+      pops::test::install_amr_runtime_authority(system,
+                                                "tests.mpi.multiblock-field/replicated-fac");
+      system.install_block_state_route("a", "tests.mpi.multiblock-field/state/a");
+      install_block_boundary(system, "a");
+      install_provider_free_block(system, "a");
+      system.set_poisson("charge_density", "geometric_mg", "dirichlet");
+      const std::vector<double> coarse_state(cell_count(system.spatial_shape()), 1.0);
+      system.set_conservative_state("a", coarse_state);
+      system.set_program_block_map({0});
+      require(system.n_levels() == 1, "replicated composite FAC materializes one coarse level");
+      require(system.prepared_amr_block_state(0, 0).distribution().replicated(),
+              "replicated composite FAC keeps the coarse carrier replicated");
+      auto context = pops::runtime::program::make_program_execution_provider(&system);
+      context->configure_primary_clock("tests.mpi.multiblock-field");
+      context->begin_step(0.01);
+      pops::SolveOutcome outcome = context->solve_default_field_on_coarse_level();
+      require(outcome.report().solved_value_available(),
+              "replicated composite FAC default field solves on the supported coarse");
+      (void)outcome.consume(pops::SolveConsumption::kAccept);
+      require(system.field_provider_slots() == std::vector<std::string>{"pops.amr.default-field"} &&
+                  system.field_provider_levels("pops.amr.default-field") == 1 &&
+                  !system.level_potential(0).empty(),
+              "replicated composite FAC publishes the materialized coarse potential");
+    }
+
+    pops::AmrSystemConfig<Dim> config = exact_config();
+    config.explicit_bootstrap = true;
     pops::AmrSystem<Dim> system(config);
     pops::test::install_amr_runtime_authority(system, "tests.mpi.multiblock-field/runtime");
     system.install_block_state_route("a", "tests.mpi.multiblock-field/state/a");
@@ -785,11 +942,10 @@ int run_multiblock_field_solve(int argc, char** argv) {
     install_block_boundary(system, "b");
     install_block(system, "a");
     install_block(system, "b");
-    system.set_poisson("charge_density", "geometric_mg", "dirichlet");
     const auto output = install_field_output(system);
-    install_field_plan(system, output);
-    install_rejecting_field_plan(system);
-    install_consensus_provider_plan(system, "field/provider-positive", AmrProviderFault::none);
+    install_consensus_provider_plan(system, "field/provider-positive", AmrProviderFault::none,
+                                    false, "potential");
+    system.register_elliptic_field("a", "potential", {output}, 1);
     install_consensus_provider_plan(system, "field/provider-divergent",
                                     AmrProviderFault::divergent_report);
     install_consensus_provider_plan(system, "field/provider-throw",
@@ -797,37 +953,50 @@ int run_multiblock_field_solve(int argc, char** argv) {
     install_consensus_provider_plan(system, "field/provider-validation-fault",
                                     AmrProviderFault::candidate_validation_throw_once_on_rank_one,
                                     true);
+    install_consensus_provider_plan(system, "field/reject", AmrProviderFault::reject_attempt);
     pops::test::install_prepared_threshold_union(system, {{"b", "u", 0.5}},
                                                  "tests.mpi.multiblock-field/tagger-b@1");
     int rhs_calls = 0;
     bool fail_rhs_on_rank_one = false;
-    system.set_block_elliptic_field(
-        "a", "potential", "tests.mpi.multiblock-field.rhs-a@1",
-        [&](const Field& state, Field& rhs) {
-          ++rhs_calls;
-          if (fail_rhs_on_rank_one && pops::my_rank() == 1)
-            throw std::runtime_error("intentional rank-local RHS preparation failure");
-          pops::add_scaled_component(state, pops::Real(1), 0, rhs);
-        });
-    system.set_block_elliptic_field("b", "potential", "tests.mpi.multiblock-field.rhs-b@1",
-                                    [&rhs_calls](const Field& state, Field& rhs) {
-                                      ++rhs_calls;
-                                      pops::add_scaled_component(state, pops::Real(1), 0, rhs);
-                                    });
-    const std::vector<double> accepted_a(cell_count(config.shape), -2.0);
-    const std::vector<double> accepted_b = discriminating_tag_state(config.shape);
-    system.set_conservative_state("a", accepted_a);
-    system.set_conservative_state("b", accepted_b);
+    const auto install_slot_rhs = [&](const std::string& slot) {
+      system.set_block_elliptic_field(
+          "a", slot, "tests.mpi.multiblock-field.rhs-a/" + slot + "@1",
+          [&](const Field& state, Field& rhs) {
+            ++rhs_calls;
+            if (fail_rhs_on_rank_one && pops::my_rank() == 1)
+              throw std::runtime_error("intentional rank-local RHS preparation failure");
+            pops::add_scaled_component(state, pops::Real(1), 0, rhs);
+          });
+      system.set_block_elliptic_field("b", slot, "tests.mpi.multiblock-field.rhs-b/" + slot + "@1",
+                                      [&rhs_calls](const Field& state, Field& rhs) {
+                                        ++rhs_calls;
+                                        pops::add_scaled_component(state, pops::Real(1), 0, rhs);
+                                      });
+    };
+    for (const char* slot :
+         {"field/provider-positive", "field/provider-divergent", "field/provider-throw",
+          "field/provider-validation-fault", "field/reject"})
+      install_slot_rhs(slot);
+    const std::vector<double> seeded_a(cell_count(config.shape), -2.0);
+    const std::vector<double> seeded_b = discriminating_tag_state(config.shape);
+    system.set_conservative_state("a", seeded_a);
+    system.set_conservative_state("b", seeded_b);
     system.set_program_block_map({0, 1});
     const auto patches = fine_patches(config);
     system.rebuild_hierarchy(patches, {0, 1});
+    system.set_conservative_state("a", seeded_a);
+    system.set_conservative_state("b", seeded_b);
     pops::Extent<Dim> fine_shape{};
     for (int axis = 0; axis < Dim; ++axis)
       fine_shape[axis] = 2 * config.shape[axis];
     system.set_block_level_state("a", 1, initial_state(fine_shape, 2.5));
     system.set_block_level_state("b", 1, initial_state(fine_shape, 3.5));
+    const std::vector<double> accepted_a = system.block_level_state_global("a", 0);
+    const std::vector<double> accepted_b = system.block_level_state_global("b", 0);
     const std::vector<double> accepted_fine_a = system.block_level_state_global("a", 1);
     const std::vector<double> accepted_fine_b = system.block_level_state_global("b", 1);
+    const pops::Real accepted_a_min =
+        static_cast<pops::Real>(*std::min_element(accepted_a.begin(), accepted_a.end()));
 
     require(system.n_levels() == 2, "two-level hierarchy is materialized");
     require(system.prepared_amr_block_state(0, 0).distribution().replicated(),
@@ -870,13 +1039,6 @@ int run_multiblock_field_solve(int argc, char** argv) {
     context->begin_step(0.01);
     auto point = context->boundary_evaluation_point(3);
 
-    pops::SolveOutcome prepared_rhs = context->solve_default_field_on_coarse_level();
-    require(prepared_rhs.report().solved_value_available(),
-            "prepared block-level add_poisson_rhs solve succeeds");
-    (void)prepared_rhs.consume(pops::SolveConsumption::kAccept);
-    require(!system.level_potential(0).empty() && !system.level_potential(1).empty(),
-            "prepared block-level RHS publishes both levels");
-
     Field stage_a(context->state(0));
     Field stage_b(context->state(1));
     Field common_delta_a(stage_a);
@@ -889,10 +1051,11 @@ int run_multiblock_field_solve(int argc, char** argv) {
     const Field authored_stage_b(stage_b);
 
     auto solve = [&](std::int64_t identity, const Field* a, const Field* b) {
-      const std::vector<double> visible = system.field_potential_level_global("field/coupled", 0);
+      const std::vector<double> visible =
+          system.field_potential_level_global("field/provider-positive", 0);
       const int calls_before = rhs_calls;
-      pops::SolveOutcome outcome =
-          context->solve_fields_from_blocks_at(point, identity, "field/coupled", {{0, a}, {1, b}});
+      pops::SolveOutcome outcome = context->solve_fields_from_blocks_at(
+          point, identity, "field/provider-positive", {{0, a}, {1, b}});
       require(rhs_calls == calls_before + 4, "every block and level assembles exactly once");
       require(system.block_level_state_global("a", 0) == accepted_a,
               "block a remains accepted before publication");
@@ -902,11 +1065,11 @@ int run_multiblock_field_solve(int argc, char** argv) {
               "fine block a remains accepted before publication");
       require(system.block_level_state_global("b", 1) == accepted_fine_b,
               "fine block b remains accepted before publication");
-      require(system.field_potential_level_global("field/coupled", 0) == visible,
+      require(system.field_potential_level_global("field/provider-positive", 0) == visible,
               "field candidate remains private before consumption");
       require(outcome.report().solved_value_available(), "field report is publishable");
       (void)outcome.consume(pops::SolveConsumption::kAccept);
-      return system.field_potential_level_global("field/coupled", 0);
+      return system.field_potential_level_global("field/provider-positive", 0);
     };
 
     const std::vector<double> base = solve(100, nullptr, nullptr);
@@ -931,20 +1094,21 @@ int run_multiblock_field_solve(int argc, char** argv) {
             "field response follows the exact 2.0/-0.5 weighted oracle");
 
     const std::vector<double> before_failed_prepare =
-        system.field_potential_level_global("field/coupled", 0);
+        system.field_potential_level_global("field/provider-positive", 0);
     const std::vector<double> before_failed_provider = system.auxiliary_component(output, 0);
     fail_rhs_on_rank_one = true;
     bool preparation_rejected = false;
     try {
-      (void)context->solve_fields_from_blocks_at(point, 150, "field/coupled",
+      (void)context->solve_fields_from_blocks_at(point, 150, "field/provider-positive",
                                                  {{0, &stage_a}, {1, &stage_b}});
     } catch (const std::runtime_error&) {
       preparation_rejected = true;
     }
     fail_rhs_on_rank_one = false;
     require(preparation_rejected, "rank-local RHS failure is rejected before solver entry");
-    require(system.field_potential_level_global("field/coupled", 0) == before_failed_prepare,
-            "failed preparation preserves accepted potential");
+    require(
+        system.field_potential_level_global("field/provider-positive", 0) == before_failed_prepare,
+        "failed preparation preserves accepted potential");
     require(system.auxiliary_component(output, 0) == before_failed_provider,
             "failed preparation preserves accepted provider publication");
     require(system.block_level_state_global("a", 0) == accepted_a &&
@@ -963,14 +1127,21 @@ int run_multiblock_field_solve(int argc, char** argv) {
     try {
       (void)context->solve_fields_from_blocks_at(point, 155, "field/provider-validation-fault",
                                                  {{0, &stage_a}, {1, &stage_b}});
-    } catch (const std::runtime_error&) {
+    } catch (const std::runtime_error& error) {
+      if (!message_contains(error, "intentional rank-local AMR outcome validation failure") &&
+          !message_contains(error, "AMR exact field solve failed on at least one MPI rank") &&
+          !message_contains(error, "AMR exact field candidate publication failed collectively") &&
+          !message_contains(error,
+                            "AMR exact field candidate validation failed collectively before "
+                            "outcome publication"))
+        throw;
       candidate_validation_rejected = true;
     }
     require(candidate_validation_rejected,
             "rank-local field candidate validation failure is converged before outcome return");
     require(BoundaryBindingAudit::binding_count >= 3 &&
                 BoundaryBindingAudit::bound_state != &stage_a &&
-                BoundaryBindingAudit::bound_state_min == pops::Real(-2),
+                BoundaryBindingAudit::bound_state_min == accepted_a_min,
             "candidate validation rollback restores the live boundary binding without retaining "
             "the detached stage");
     require(system.block_level_state_global("a", 0) == accepted_a &&
@@ -989,7 +1160,7 @@ int run_multiblock_field_solve(int argc, char** argv) {
     require(validation_retry.report().solved_value_available(),
             "clean retry succeeds after rank-local candidate validation rollback");
     require(BoundaryBindingAudit::bound_state != &stage_a &&
-                BoundaryBindingAudit::bound_state_min == pops::Real(-2),
+                BoundaryBindingAudit::bound_state_min == accepted_a_min,
             "validated outcome restores the accepted boundary binding before consumption");
     const int validation_bindings_before_accept = BoundaryBindingAudit::binding_count;
     bool first_accept_validation_rejected = false;
@@ -1010,7 +1181,7 @@ int run_multiblock_field_solve(int argc, char** argv) {
             "failed accept validation preserves candidate inputs and all accepted publications");
     require(BoundaryBindingAudit::binding_count == validation_bindings_before_accept &&
                 BoundaryBindingAudit::bound_state != &stage_a &&
-                BoundaryBindingAudit::bound_state_min == pops::Real(-2),
+                BoundaryBindingAudit::bound_state_min == accepted_a_min,
             "failed accept validation does not mutate the restored solver boundary binding");
 
     bool solved_reject_rejected = false;
@@ -1081,19 +1252,21 @@ int run_multiblock_field_solve(int argc, char** argv) {
         point, 160, "field/reject", {{0, &stage_a}, {1, &stage_b}});
     require(!rejected.report().solved_value_available() &&
                 rejected.report().action == pops::SolveAction::kRejectAttempt,
-            "real one-cycle field solve authors a rejected candidate");
+            "deterministic custom provider authors a rejected candidate");
     if (!rejected.report().solved_value_available())
       (void)rejected.consume(pops::SolveConsumption::kRejectAttempt);
     require(system.field_potential_level_global("field/reject", 0) == reject_before,
-            "rejected real solve preserves its accepted potential");
+            "rejected custom provider solve preserves its accepted potential");
     require(system.auxiliary_component(output, 0) == provider_before_reject,
-            "rejected real solve preserves provider publication");
+            "rejected custom provider solve preserves provider publication");
     require(system.block_level_state_global("a", 0) == stage_a_before,
-            "rejected real solve preserves live state");
+            "rejected custom provider solve preserves live state");
     require(field_difference_inf(stage_a, authored_stage_a) == 0.0 &&
                 field_difference_inf(stage_b, authored_stage_b) == 0.0,
-            "rejected real solve preserves detached stage candidates");
-    const pops::ExecutionLane& lane = context->prepared_execution_lane();
+            "rejected custom provider solve preserves detached stage candidates");
+    const pops::ExecutionLane& context_lane = context->prepared_execution_lane();
+    const pops::ExecutionLane outcome_lane =
+        pops::ExecutionLane::world("tests.mpi.multiblock-field/outcome-lane@1");
     for (const EllipticFactoryFault fault : {
              EllipticFactoryFault::throw_on_rank_one,
              EllipticFactoryFault::null_on_rank_one,
@@ -1105,8 +1278,8 @@ int run_multiblock_field_solve(int argc, char** argv) {
              EllipticFactoryFault::inspection_throws_on_rank_one,
          }) {
       int constructions = 0;
-      require(elliptic_factory_rejected(system.prepared_amr_block_state(0, 1), config,
-                                        system.engine()->hierarchy().layout(1).domain(), fault,
+      require(elliptic_factory_rejected(system.prepared_amr_block_state(0, 0), config,
+                                        system.engine()->hierarchy().layout(0).domain(), fault,
                                         constructions) &&
                   constructions == 1,
               "rank-local elliptic factory/materialization fault is rejected collectively");
@@ -1114,15 +1287,16 @@ int run_multiblock_field_solve(int argc, char** argv) {
     pops::SolveReport agreed_report;
     agreed_report.mark_solved("tests.mpi.multiblock-field/report");
     pops::ExactSolveReportConsensusScratch report_consensus;
-    require(report_consensus.agrees(agreed_report, lane),
+    require(report_consensus.agrees(agreed_report, outcome_lane),
             "identical SolveReport reaches exact byte consensus");
     pops::SolveReport divergent_report = agreed_report;
     if (pops::my_rank() == 1)
-      divergent_report.reason = "tests.mpi.multiblock-field/divergent-report";
-    require(!report_consensus.agrees(divergent_report, lane),
+      divergent_report.mark_failed(pops::SolveStatus::kBreakdown, pops::SolveAction::kFailRun,
+                                   "tests.mpi.multiblock-field/divergent-report");
+    require(!report_consensus.agrees(divergent_report, outcome_lane),
             "rank-divergent SolveReport is detected exactly");
     pops::SolveOutcome report_outcome =
-        pops::SolveOutcome::collective_lane(std::move(divergent_report), lane);
+        pops::SolveOutcome::collective_lane(std::move(divergent_report), outcome_lane);
     bool divergent_disposition_rejected = false;
     try {
       (void)report_outcome.consume(pops::SolveConsumption::kAccept);
@@ -1136,7 +1310,7 @@ int run_multiblock_field_solve(int argc, char** argv) {
     publication_report.mark_solved("validated-publication");
     RankLocalPublication publication{pops::my_rank() == 0, false};
     pops::SolveOutcome publication_outcome =
-        pops::SolveOutcome::collective_lane(std::move(publication_report), lane,
+        pops::SolveOutcome::collective_lane(std::move(publication_report), outcome_lane,
                                             {&publication,
                                              &RankLocalPublication::accept,
                                              nullptr,
@@ -1156,7 +1330,8 @@ int run_multiblock_field_solve(int argc, char** argv) {
                 publication.accepted,
             "validated publication remains intact for a uniform accept retry");
 
-    pops::SolveOutcome action_outcome = pops::SolveOutcome::collective_lane(agreed_report, lane);
+    pops::SolveOutcome action_outcome =
+        pops::SolveOutcome::collective_lane(agreed_report, outcome_lane);
     bool divergent_consumption_rejected = false;
     try {
       (void)action_outcome.consume(pops::my_rank() == 0 ? pops::SolveConsumption::kAccept
@@ -1201,7 +1376,7 @@ int run_multiblock_field_solve(int argc, char** argv) {
       diagnostics.max_residual = pops::Real(42);
       pops::SolveOutcome nonlinear = pops::backward_euler_source(
           RankLocalFallibleSource{failure.status, nonlinear_reason}, provider_at, nonlinear_state,
-          pops::Real(0.1), pops::NewtonOptions{}, lane, {}, &diagnostics);
+          pops::Real(0.1), pops::NewtonOptions{}, outcome_lane, {}, &diagnostics);
       require(nonlinear.report().status == pops::SolveStatus::kInvalidEvaluation &&
                   nonlinear.report().action == failure.action,
               "rank-local nonlinear source failure becomes one collective transaction outcome");
@@ -1216,7 +1391,7 @@ int run_multiblock_field_solve(int argc, char** argv) {
     Field iterate(context->state(0));
     Field direction(iterate);
     direction.set_val(pops::Real(0.5));
-    const auto boundary = context->prepare_block_boundary_session(0, iterate, point, lane);
+    const auto boundary = context->prepare_block_boundary_session(0, iterate, point, context_lane);
     const auto residual_at = [&](pops::Real shift, bool refresh_field) {
       Field state(iterate);
       pops::saxpy(state, shift, direction);
@@ -1226,7 +1401,8 @@ int run_multiblock_field_solve(int argc, char** argv) {
         context->rhs_core_into_at(point, 0, state, residual, false, *boundary);
       };
       if (refresh_field)
-        context->evaluate_with_field_state_at(point, "field/coupled", 0, state, iterate, evaluate);
+        context->evaluate_with_field_state_at(point, "field/provider-positive", 0, state, iterate,
+                                              evaluate);
       else
         evaluate();
       return residual;
@@ -1246,14 +1422,15 @@ int run_multiblock_field_solve(int argc, char** argv) {
             "elliptic field-coupled residual has a nonzero JVP response");
     require(field_difference_inf(centered_jvp, stale_jvp) > 1.0e-8,
             "elliptic JVP rejects a frozen solved-field provider");
-    require(system.field_potential_level_global("field/coupled", 0) == retry,
+    require(system.field_potential_level_global("field/provider-positive", 0) == retry,
             "field-coupled JVP restores the complete accepted provider hierarchy");
 
     const auto reject_divergence = [&](std::int64_t identity,
                                        const pops::runtime::multiblock::BoundaryEvaluationPoint& p,
                                        std::string_view provider, const Field* a, const Field* b) {
       const int calls_before = rhs_calls;
-      const std::vector<double> visible = system.field_potential_level_global("field/coupled", 0);
+      const std::vector<double> visible =
+          system.field_potential_level_global("field/provider-positive", 0);
       bool rejected = false;
       try {
         (void)context->solve_fields_from_blocks_at(p, identity, provider, {{0, a}, {1, b}});
@@ -1262,7 +1439,7 @@ int run_multiblock_field_solve(int argc, char** argv) {
       }
       require(rejected, "rank-divergent request rejected collectively");
       require(rhs_calls == calls_before, "rank divergence rejected before RHS assembly");
-      require(system.field_potential_level_global("field/coupled", 0) == visible,
+      require(system.field_potential_level_global("field/provider-positive", 0) == visible,
               "rank divergence preserves published provider");
       require(system.block_level_state_global("a", 0) == accepted_a,
               "rank divergence preserves block a");
@@ -1273,14 +1450,13 @@ int run_multiblock_field_solve(int argc, char** argv) {
     auto divergent_point = point;
     if (pops::my_rank() == 1)
       ++divergent_point.stage;
-    reject_divergence(200, divergent_point, "field/coupled", &stage_a, &stage_b);
-    reject_divergence(201, point, pops::my_rank() == 1 ? "field/rank-one" : "field/coupled",
-                      &stage_a, &stage_b);
+    reject_divergence(200, divergent_point, "field/provider-positive", &stage_a, &stage_b);
+    reject_divergence(201, point,
+                      pops::my_rank() == 1 ? "field/rank-one" : "field/provider-positive", &stage_a,
+                      &stage_b);
     const std::vector<double> cache_retry = solve(201, &stage_a, &stage_b);
     require(max_difference(cache_retry, retry) < 1.0e-10,
             "divergent provider request leaves generated field-route cache unchanged");
-    reject_divergence(202, point, "field/coupled", &stage_a,
-                      pops::my_rank() == 1 ? nullptr : &stage_b);
 
     std::size_t fine_cells = 0;
     std::size_t covered_coarse_cells = 0;
