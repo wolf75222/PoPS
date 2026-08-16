@@ -9,7 +9,7 @@ history ring to be Dense because selective replay is a same-rank operation. Hist
 fallback formats are refused.
 """
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 import hashlib
 import json
@@ -61,6 +61,122 @@ class _PreparedAMRCapture:
     local_dmaps: tuple[tuple[int, ...], ...]
     local_program_state: bytes
     capture_identity: str
+
+
+def _encode_ranked_patch_boxes(raw_boxes, *, dimension, level_count):
+    """Flatten the live exact-ranked patch API for the fixed-width archive.
+
+    The native public seam deliberately returns ``(level, lower, upper)`` so that the
+    coordinate rank is explicit.  The archive remains a rectangular int64 matrix, but
+    only this boundary may flatten the two coordinate vectors.
+    """
+    if isinstance(dimension, bool) or not isinstance(dimension, int) or dimension < 1:
+        raise ValueError("checkpoint AMR patch-box dimension must be a positive exact integer")
+    if isinstance(level_count, bool) or not isinstance(level_count, int) or level_count < 1:
+        raise ValueError("checkpoint AMR patch-box level count must be a positive exact integer")
+    if isinstance(raw_boxes, (str, bytes)) or not isinstance(raw_boxes, Sequence):
+        raise TypeError("checkpoint AMR patch_boxes must be an ordered sequence")
+
+    ranked = []
+    flattened = []
+    seen = set()
+    previous_level = 0
+    for position, row in enumerate(raw_boxes):
+        if type(row) is not tuple or len(row) != 3:
+            raise TypeError(
+                "checkpoint AMR patch_boxes row %d must be an exact (level, lower, upper) tuple"
+                % position
+            )
+        level, raw_lower, raw_upper = row
+        if type(level) is not int:
+            raise TypeError("checkpoint AMR patch-box level %d must be an exact integer" % position)
+        if level < 1 or level >= level_count:
+            raise ValueError(
+                "checkpoint AMR patch-box level %d is outside [1, %d]"
+                % (level, level_count - 1)
+            )
+        if type(raw_lower) is not tuple or type(raw_upper) is not tuple:
+            raise TypeError(
+                "checkpoint AMR patch-box row %d bounds must be exact ranked tuples" % position
+            )
+        lower = tuple(raw_lower)
+        upper = tuple(raw_upper)
+        if len(lower) != dimension or len(upper) != dimension:
+            raise ValueError(
+                "checkpoint AMR patch-box row %d bounds must each have rank %d" % (position, dimension)
+            )
+        if any(type(value) is not int for value in lower + upper):
+            raise TypeError("checkpoint AMR patch-box row %d bounds must contain exact integers" % position)
+        if level < previous_level:
+            raise ValueError("checkpoint AMR patch_boxes level order drifted at row %d" % position)
+        previous_level = level
+        canonical = (level, lower, upper)
+        if canonical in seen:
+            raise ValueError("checkpoint AMR patch_boxes contain a duplicate row %r" % (canonical,))
+        seen.add(canonical)
+        ranked.append(canonical)
+        flattened.append((level, *lower, *upper))
+    return tuple(ranked), tuple(flattened)
+
+
+def _decode_ranked_patch_boxes(raw_boxes, *, dimension, level_count, spatial):
+    """Authenticate the fixed-width archive before recreating native ranked rows."""
+    import numpy as np
+
+    if isinstance(dimension, bool) or not isinstance(dimension, int) or dimension < 1:
+        raise ValueError("restart: AMR patch-box dimension must be a positive exact integer")
+    if isinstance(level_count, bool) or not isinstance(level_count, int) or level_count < 1:
+        raise ValueError("restart: AMR patch-box level count must be a positive exact integer")
+    boxes_array = np.asarray(raw_boxes)
+    width = 1 + 2 * dimension
+    if boxes_array.dtype != np.dtype("int64"):
+        raise TypeError("restart: patch_boxes must be an int64 matrix")
+    if boxes_array.ndim != 2 or boxes_array.shape[1] != width:
+        raise ValueError("restart: patch_boxes must contain level plus two bounds per spatial axis")
+
+    boxes = []
+    seen = set()
+    previous_level = 0
+    per_level_boxes = {level: [] for level in range(level_count)}
+    for position, row in enumerate(boxes_array):
+        level = int(row[0])
+        lower = tuple(int(value) for value in row[1 : 1 + dimension])
+        upper = tuple(int(value) for value in row[1 + dimension :])
+        if level < 1 or level >= level_count:
+            raise ValueError(
+                "restart: fine patch level %d is outside [1, %d]" % (level, level_count - 1)
+            )
+        if level < previous_level:
+            raise ValueError("restart: patch_boxes level order drifted at row %d" % position)
+        previous_level = level
+        canonical = (level, lower, upper)
+        if canonical in seen:
+            raise ValueError("restart: patch_boxes contain a duplicate row %r" % (canonical,))
+        seen.add(canonical)
+        level_shape = spatial.shape_at_level(level)
+        if any(
+            low < 0 or high < low or high >= extent
+            for low, high, extent in zip(lower, upper, level_shape, strict=True)
+        ):
+            raise ValueError(
+                "restart: invalid level-%d patch box %r for shape %r"
+                % (level, (lower, upper), level_shape)
+            )
+        for other_lower, other_upper in per_level_boxes[level]:
+            overlaps = all(
+                not (high < other_low or other_high < low)
+                for low, high, other_low, other_high in zip(
+                    lower, upper, other_lower, other_upper, strict=True
+                )
+            )
+            if overlaps:
+                raise ValueError(
+                    "restart: overlapping level-%d patch boxes %r and %r"
+                    % (level, (other_lower, other_upper), (lower, upper))
+                )
+        per_level_boxes[level].append((lower, upper))
+        boxes.append(canonical)
+    return tuple(boxes)
 
 
 def _live_amr_level_envelope(sim):
@@ -191,12 +307,10 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
     names = tuple(str(name) for name in sim.block_names())
     if levels <= 0 or not names or len(names) != len(set(names)):
         raise ValueError("checkpoint requires non-empty unique AMR blocks and levels")
-    patch_boxes = tuple(tuple(int(value) for value in row) for row in sim.patch_boxes())
+    _ranked_patch_boxes, patch_boxes = _encode_ranked_patch_boxes(
+        sim.patch_boxes(), dimension=spatial.dimension, level_count=levels
+    )
     box_width = 1 + 2 * spatial.dimension
-    if any(len(row) != box_width for row in patch_boxes):
-        raise ValueError(
-            "checkpoint AMR patch-box rows must contain level plus two bounds per axis"
-        )
     time = float(sim.time())
     macro_step = int(sim.macro_step())
     cadence = capture_program_cadence(sim, macro_step=macro_step)
@@ -299,6 +413,8 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
                 "active": levels,
                 "configured": configured_levels,
             },
+            # Authenticate the bytes-shape that will be sealed in ``patch_boxes``.  The encoder
+            # above is the sole ranked-to-flat conversion boundary.
             "patch_boxes": [list(row) for row in patch_boxes],
             # Distribution mappings and the opaque accepted Program image contain rank-local state.
             # Only their schema participates in the collective plan; capture stores every exact rank
@@ -726,39 +842,11 @@ def prepare_v3(
     # The manifest seal authenticates bytes; these guards prove that all writes are shape-compatible
     # with the live composition, so malformed state/aux/history cannot fail only after a hierarchy
     # mutation.  The native transaction remains the final exception-safety boundary.
-    raw_boxes = np.asarray(d["patch_boxes"], dtype=np.int64)
-    box_width = 1 + 2 * spatial.dimension
-    if raw_boxes.ndim != 2 or raw_boxes.shape[1] != box_width:
-        raise ValueError("restart: patch_boxes must contain level plus two bounds per spatial axis")
-    boxes = [tuple(int(x) for x in row) for row in raw_boxes]
+    boxes = _decode_ranked_patch_boxes(
+        d["patch_boxes"], dimension=spatial.dimension, level_count=nlev, spatial=spatial
+    )
     per_level_boxes = {k: [] for k in range(nlev)}
-    for box in boxes:
-        level = box[0]
-        lower = box[1 : 1 + spatial.dimension]
-        upper = box[1 + spatial.dimension :]
-        if level <= 0 or level >= nlev:
-            raise ValueError("restart: fine patch level %d is outside [1, %d]" % (level, nlev - 1))
-        level_shape = spatial.shape_at_level(level)
-        if any(
-            low < 0 or high < low or high >= extent
-            for low, high, extent in zip(lower, upper, level_shape, strict=True)
-        ):
-            raise ValueError(
-                "restart: invalid level-%d patch box %r for shape %r"
-                % (level, box[1:], level_shape)
-            )
-        for other in per_level_boxes[level]:
-            other_lower, other_upper = other
-            overlaps = all(
-                not (high < other_low or other_high < low)
-                for low, high, other_low, other_high in zip(
-                    lower, upper, other_lower, other_upper, strict=True
-                )
-            )
-            if overlaps:
-                raise ValueError(
-                    "restart: overlapping level-%d patch boxes %r and %r" % (level, other, box[1:])
-                )
+    for level, lower, upper in boxes:
         per_level_boxes[level].append((lower, upper))
     if nlev > 1:
         for level in range(1, nlev):

@@ -56,7 +56,23 @@ def _valid_field_recompute_dt(dt, accepted_step):
 def restart_topology_image(sim):
     """Return the compact identity of one accepted AMR hierarchy."""
     levels = int(sim.n_levels())
-    boxes = [[int(value) for value in box] for box in sim.patch_boxes()]
+    boxes = []
+    for position, row in enumerate(sim.patch_boxes()):
+        if type(row) is not tuple or len(row) != 3:
+            raise TypeError(
+                "native AMR patch_boxes row %d must be an exact (level, lower, upper) tuple"
+                % position
+            )
+        level, lower, upper = row
+        if type(level) is not int:
+            raise TypeError("native AMR patch-box level %d must be an exact integer" % position)
+        if type(lower) is not tuple or type(upper) is not tuple:
+            raise TypeError("native AMR patch-box bounds must be exact ranked tuples")
+        if len(lower) != len(upper) or not lower:
+            raise ValueError("native AMR patch-box bounds have mismatched rank")
+        if any(type(value) is not int for value in lower + upper):
+            raise TypeError("native AMR patch-box bounds must contain exact integers")
+        boxes.append([level, list(lower), list(upper)])
     owners = [[int(rank) for rank in sim.level_owner_ranks(level)] for level in range(levels)]
     topology_identity = make_identity(
         "restart-topology",

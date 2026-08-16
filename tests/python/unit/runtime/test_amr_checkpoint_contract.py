@@ -27,6 +27,8 @@ from pops.runtime._amr_checkpoint_contract import (
 )
 from pops.runtime._amr_checkpoint_v3 import (
     _checkpoint_amr_level_envelope,
+    _decode_ranked_patch_boxes,
+    _encode_ranked_patch_boxes,
     _live_amr_level_envelope,
     _require_exact_field_provider_depth,
 )
@@ -347,7 +349,7 @@ def test_regridded_contract_authenticates_transformed_topology_and_level_axes():
             return 5
 
         def patch_boxes(self):
-            return [(1, 4, 4, 11, 11), (2, 10, 10, 17, 17)]
+            return ((1, (4, 4), (11, 11)), (2, (10, 10), (17, 17)))
 
         def level_owner_ranks(self, level):
             return [[0], [0], [0]][level]
@@ -624,6 +626,184 @@ def test_topology_owner_alignment_is_level_local_and_strict():
         owner_ranks_for_boxes({}, boxes[:1], 3)
 
 
+def test_ranked_patch_boxes_round_trip_dim2_without_coordinate_flattening():
+    ranked, archived = _encode_ranked_patch_boxes(
+        ((1, (2, 4), (6, 9)), (2, (8, 10), (12, 14))), dimension=2, level_count=3
+    )
+    assert ranked == ((1, (2, 4), (6, 9)), (2, (8, 10), (12, 14)))
+    assert archived == ((1, 2, 4, 6, 9), (2, 8, 10, 12, 14))
+
+    class _Spatial:
+        @staticmethod
+        def shape_at_level(level):
+            return ((8, 12), (16, 16))[level - 1]
+
+    assert _decode_ranked_patch_boxes(
+        np.asarray(archived, dtype=np.int64), dimension=2, level_count=3, spatial=_Spatial()
+    ) == ranked
+
+
+def test_ranked_patch_box_decoder_preserves_inclusive_singletons_and_adjacency():
+    class _Spatial:
+        @staticmethod
+        def shape_at_level(level):
+            assert level == 1
+            return (8, 12)
+
+    assert _decode_ranked_patch_boxes(
+        np.array(
+            [
+                [1, 2, 4, 3, 6],
+                [1, 4, 4, 6, 6],
+                [1, 7, 11, 7, 11],
+            ],
+            dtype=np.int64,
+        ),
+        dimension=2,
+        level_count=2,
+        spatial=_Spatial(),
+    ) == (
+        (1, (2, 4), (3, 6)),
+        (1, (4, 4), (6, 6)),
+        (1, (7, 11), (7, 11)),
+    )
+
+
+@pytest.mark.parametrize("rows", [{(1, (2, 4), (6, 9))}, frozenset({(1, (2, 4), (6, 9))})])
+def test_ranked_patch_box_encoder_refuses_unordered_carriers(rows):
+    with pytest.raises(TypeError, match="ordered sequence"):
+        _encode_ranked_patch_boxes(rows, dimension=2, level_count=3)
+
+
+def test_ranked_patch_box_contract_refuses_subclassed_live_values():
+    class _Int(int):
+        pass
+
+    class _Tuple(tuple):
+        pass
+
+    malformed_rows = (
+        ((_Int(1), (2, 4), (6, 9)),),
+        (_Tuple((1, (2, 4), (6, 9))),),
+        ((1, _Tuple((2, 4)), (6, 9)),),
+        ((1, (2, 4), _Tuple((6, 9))),),
+        ((1, (_Int(2), 4), (6, 9)),),
+    )
+    for rows in malformed_rows:
+        with pytest.raises(TypeError):
+            _encode_ranked_patch_boxes(rows, dimension=2, level_count=3)
+
+    for rows in malformed_rows:
+        class _MalformedTopology:
+            def __init__(self, patch_rows):
+                self._patch_rows = patch_rows
+
+            def n_levels(self):
+                return 2
+
+            def patch_boxes(self):
+                return self._patch_rows
+
+        with pytest.raises(TypeError):
+            restart_topology_image(_MalformedTopology(rows))
+
+
+def test_ranked_patch_box_archive_requires_exact_dtype_and_refuses_overlap():
+    class _Spatial:
+        @staticmethod
+        def shape_at_level(level):
+            assert level == 1
+            return (8, 12)
+
+    with pytest.raises(TypeError, match="int64"):
+        _decode_ranked_patch_boxes(
+            np.array([[1, 2, 4, 6, 9]], dtype=np.int32),
+            dimension=2,
+            level_count=2,
+            spatial=_Spatial(),
+        )
+    with pytest.raises(ValueError, match="overlapping"):
+        _decode_ranked_patch_boxes(
+            np.array([[1, 2, 4, 5, 6], [1, 4, 4, 6, 6]], dtype=np.int64),
+            dimension=2,
+            level_count=2,
+            spatial=_Spatial(),
+        )
+
+
+@pytest.mark.parametrize(
+    ("dimension", "rows", "shapes"),
+    [
+        (1, ((1, (2,), (6,)),), ((8,),)),
+        (3, ((1, (2, 4, 6), (6, 9, 11)),), ((8, 12, 16),)),
+    ],
+)
+def test_ranked_patch_box_round_trip_retains_dim1_and_dim3_shape(dimension, rows, shapes):
+    class _Spatial:
+        @staticmethod
+        def shape_at_level(level):
+            assert level == 1
+            return shapes[level - 1]
+
+    ranked, archived = _encode_ranked_patch_boxes(rows, dimension=dimension, level_count=2)
+    assert _decode_ranked_patch_boxes(
+        np.asarray(archived, dtype=np.int64),
+        dimension=dimension,
+        level_count=2,
+        spatial=_Spatial(),
+    ) == ranked
+
+
+def test_ranked_patch_box_decoder_accepts_the_typed_empty_matrix():
+    class _Spatial:
+        @staticmethod
+        def shape_at_level(level):
+            raise AssertionError("no level may be queried for an empty patch matrix")
+
+    assert _decode_ranked_patch_boxes(
+        np.empty((0, 5), dtype=np.int64), dimension=2, level_count=3, spatial=_Spatial()
+    ) == ()
+
+
+@pytest.mark.parametrize(
+    ("rows", "match"),
+    [
+        (((1, (2,), (6, 9)),), "rank 2"),
+        (((0, (2, 4), (6, 9)),), "outside"),
+        (((2, (8, 10), (12, 14)), (1, (2, 4), (6, 9))), "order drifted"),
+    ],
+)
+def test_ranked_patch_box_encoder_refuses_malformed_rank_level_and_order(rows, match):
+    with pytest.raises((TypeError, ValueError), match=match):
+        _encode_ranked_patch_boxes(rows, dimension=2, level_count=3)
+
+
+@pytest.mark.parametrize(
+    ("archived", "match"),
+    [
+        (np.array([[1, 2, 4, 6]], dtype=np.int64), "spatial axis"),
+        (np.array([[0, 2, 4, 6, 9]], dtype=np.int64), "outside"),
+        (np.array([[1, 2, 4, 1, 9]], dtype=np.int64), "invalid"),
+        (
+            np.array([[1, 2, 4, 6, 9], [1, 2, 4, 6, 9]], dtype=np.int64),
+            "duplicate",
+        ),
+        (
+            np.array([[2, 8, 10, 12, 14], [1, 2, 4, 6, 9]], dtype=np.int64),
+            "order drifted",
+        ),
+    ],
+)
+def test_ranked_patch_box_decoder_refuses_malformed_archive(archived, match):
+    class _Spatial:
+        @staticmethod
+        def shape_at_level(level):
+            return ((8, 12), (16, 16))[level - 1]
+
+    with pytest.raises((TypeError, ValueError), match=match):
+        _decode_ranked_patch_boxes(archived, dimension=2, level_count=3, spatial=_Spatial())
+
+
 def _rank_topology_payload():
     return {
         "program_accepted_state": np.array([1, 2], dtype=np.uint8),
@@ -669,7 +849,7 @@ def test_rank_change_restart_rolls_back_after_hierarchy_rebuild_failure(monkeypa
     """
 
     accepted_native = {
-        "hierarchy": ((1, 0, 0, 7, 7),),
+        "hierarchy": ((1, (0, 0), (7, 7)),),
         "owners": ((0, 1),),
         "blocks": {"tracer": ((1.0, 2.0), (3.0, 4.0))},
         "aux": ((5.0, 6.0),),
@@ -733,7 +913,7 @@ def test_rank_change_restart_rolls_back_after_hierarchy_rebuild_failure(monkeypa
         assert owner is runtime
         assert sim is native
         sim.rebuild_hierarchy(
-            ((1, 8, 8, 15, 15),),
+            ((1, (8, 8), (15, 15)),),
             (0,),
         )
         sim.state["aux"] = ((201.0,),)

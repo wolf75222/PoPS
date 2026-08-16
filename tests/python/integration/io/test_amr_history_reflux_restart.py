@@ -116,7 +116,10 @@ def _capture(runtime: Any) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
     metadata = {
         "time_bits": np.float64(runtime.time()).tobytes(),
         "macro_step": int(runtime.macro_step()),
-        "patch_boxes": tuple(tuple(int(value) for value in row) for row in runtime.patch_boxes()),
+        "patch_boxes": tuple(
+            (int(level), tuple(int(value) for value in lower), tuple(int(value) for value in upper))
+            for level, lower, upper in runtime.patch_boxes()
+        ),
         "regrid_count": int(regrid.regrid_count),
         "topology_epoch": int(regrid.topology_epoch),
         "consumer_cursors": runtime.consumer_cursors.to_data(),
