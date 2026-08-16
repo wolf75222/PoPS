@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 import json
 import sys
-from typing import Any
+from typing import Any, cast
 
 from pops._checkpoint_migration_protocol import (
     _CHECKPOINT_MIGRATION_PROVENANCE_MAX_CHARACTERS,
@@ -112,14 +112,48 @@ def _history_capacity(
     cells: tuple[int, ...],
     amr: bool,
     block_nvars: dict[str, int],
-) -> tuple[tuple[str, ...], int]:
+    native: Any = None,
+) -> tuple[tuple[str, ...], int, tuple[tuple[str, int, int], ...]]:
+    """Budget slots from the installed native ring registry when it is available.
+
+    The Program declares logical history names and owners, while the native ring owns its actual
+    storage depth (for example AB2's two retained slots).  The two are authenticated here, before
+    a checkpoint archive exists; runtime fill state is deliberately not consulted.
+    """
     histories = dict(getattr(program, "_histories", None) or {})
     ncomps = dict(getattr(program, "_histories_ncomp", None) or {})
     owners = dict(getattr(program, "_history_blocks", None) or {})
+    declared_names = tuple(sorted(histories))
+    native_names = None
+    native_depth: Callable[[str], object] | None = None
+    native_ncomp: Callable[[str], object] | None = None
+    if native is not None:
+        providers = (
+            getattr(native, "history_names", None),
+            getattr(native, "history_depth", None),
+            getattr(native, "history_ncomp", None),
+        )
+        if all(callable(provider) for provider in providers):
+            name_provider = cast(Callable[[], object], providers[0])
+            raw_names = name_provider()
+            if not isinstance(raw_names, (tuple, list)) or any(
+                type(name) is not str or not name for name in raw_names
+            ):
+                raise TypeError("native checkpoint history registry has invalid names")
+            native_names = tuple(sorted(raw_names))
+            if len(native_names) != len(set(native_names)) or native_names != declared_names:
+                raise ValueError("native checkpoint history names differ from the Program declaration")
+            native_depth = cast(Callable[[str], object], providers[1])
+            native_ncomp = cast(Callable[[str], object], providers[2])
+
     member_names = ["history_names"]
     data_bytes = 0
-    for name, depth_value in sorted(histories.items()):
-        depth = _capacity(int(depth_value), where="history %r depth" % name, positive=True)
+    evidence = []
+    for name in declared_names:
+        depth_value = histories[name]
+        logical_depth = _capacity(
+            int(depth_value), where="history %r logical depth" % name, positive=True
+        )
         ncomp = ncomps.get(name)
         if ncomp is None:
             raw_owner = owners.get(name)
@@ -132,6 +166,19 @@ def _history_capacity(
         if ncomp is None:
             raise ValueError("checkpoint history %r has no component authority" % name)
         ncomp = _capacity(int(ncomp), where="history %r components" % name, positive=True)
+        if native_depth is not None and native_ncomp is not None:
+            depth_value = native_depth(name)
+            ncomp_value = native_ncomp(name)
+            if type(depth_value) is not int or depth_value < 1:
+                raise ValueError("native checkpoint history %r has an invalid storage depth" % name)
+            if type(ncomp_value) is not int or ncomp_value < 1:
+                raise ValueError("native checkpoint history %r has an invalid component width" % name)
+            if ncomp_value != ncomp:
+                raise ValueError("native checkpoint history %r component width differs from Program" % name)
+            depth = depth_value
+        else:
+            depth = logical_depth
+        evidence.append((name, logical_depth, depth))
         member_names.extend(
             (
                 "history_depth_" + name,
@@ -168,7 +215,7 @@ def _history_capacity(
                 _mul(values, 8, where="history byte budget"),
                 where="history byte budget",
             )
-    return tuple(member_names), data_bytes
+    return tuple(member_names), data_bytes, tuple(evidence)
 
 
 def _cache_capacity(
@@ -303,7 +350,7 @@ def _consumer_evidence(install_plan: Any) -> tuple[str, int, Any]:
 def _amr_field_provider_manifest_capacity(
     owner: Any, *, configured_levels: int
 ) -> tuple[tuple[str, ...], int, int]:
-    """Bound the v10 field-provider manifest from its live immutable native rows."""
+    """Bound the v11 field-provider manifest from its live immutable native rows."""
     provider = getattr(owner._s, "field_provider_checkpoint_manifest", None)
     if not callable(provider):
         raise TypeError("AMR checkpoint budget requires the native field-provider manifest")
@@ -389,6 +436,7 @@ def _checkpoint_member_names(
     cache_names: tuple[str, ...],
     levels: int,
     rank_capacity: int,
+    has_amr_legacy_phi: bool = False,
 ) -> tuple[str, ...]:
     from pops.runtime._checkpoint_embedded_boundary import EMBEDDED_BOUNDARY_CONTRACT_KEY
     from pops.output._checkpoint_contract import IDENTITY_KEY, MANIFEST_KEY
@@ -459,14 +507,16 @@ def _checkpoint_member_names(
             for level in range(levels):
                 names.append("state_%s_%d" % (block, level))
         for level in range(levels):
-            names.extend(("phi_%d" % level, "auxiliary_checkpoint_%d" % level))
+            if has_amr_legacy_phi:
+                names.append("phi_%d" % level)
+            names.append("auxiliary_checkpoint_%d" % level)
         for index in range(len(field_names)):
             names.append("field_provider_levels_%d" % index)
             for level in range(levels):
                 names.append("field_provider_phi_%d_%d" % (index, level))
         names.append("program_accepted_state")
         for level in range(levels):
-            names.append("dmap_%d" % level)
+            names.extend(("distribution_mode_%d" % level, "dmap_%d" % level))
     names.extend((*runtime, MANIFEST_KEY, IDENTITY_KEY))
     if not names or len(names) != len(set(names)):
         raise RuntimeError("checkpoint resource authority produced duplicate member names")
@@ -515,11 +565,12 @@ def _common_budget(
         8,
         where="checkpoint scientific byte budget",
     )
-    history_names, history_bytes = _history_capacity(
+    history_names, history_bytes, history_evidence = _history_capacity(
         program,
         cells=cells,
         amr=runtime_kind == "amr",
         block_nvars=block_nvars_by_name,
+        native=owner._s,
     )
     cache_names, cache_bytes, cache_evidence = (
         _cache_capacity(
@@ -575,6 +626,7 @@ def _common_budget(
         cache_names=cache_names,
         levels=len(cells),
         rank_capacity=rank_capacity,
+        has_amr_legacy_phi=runtime_kind == "amr" and bool(field_names),
     )
     consumer_identity, consumer_count, consumer_data = _consumer_evidence(install_plan)
     temporal_manifest = program.temporal_manifest()
@@ -588,6 +640,7 @@ def _common_budget(
         },
         "fields": list(field_names),
         "histories": sorted(getattr(program, "_histories", {})),
+        "history_storage": [list(row) for row in history_evidence],
         "cache": cache_evidence,
         "temporal": temporal_manifest,
         "consumer_graph": consumer_data,
@@ -738,7 +791,23 @@ def install_amr_checkpoint_resource_budget(owner: Any, install_plan: Any) -> Non
                 8,
                 where="AMR patch-box byte capacity",
             ),
-            _mul(patch_capacity, 8, where="AMR owner-map byte capacity"),
+            _add(
+                _mul(patch_capacity, 8, where="AMR owner-map byte capacity"),
+                _add(
+                    _mul(
+                        patch_capacity if field_slots else 0,
+                        8,
+                        where="AMR legacy phi byte capacity",
+                    ),
+                    _mul(
+                        configured_levels,
+                        44,
+                        where="AMR distribution-mode Unicode byte capacity",
+                    ),
+                    where="AMR structural checkpoint capacity",
+                ),
+                where="AMR structural checkpoint capacity",
+            ),
             where="AMR structural checkpoint capacity",
         ),
         field_manifest_bytes,

@@ -262,7 +262,7 @@ def test_explain_checkpoint_restartable_for_frozen_single_block():
     rep = sim.amr.explain_checkpoint()
     assert isinstance(rep, CheckpointReport)
     assert rep.restartable is True and rep.violations == []
-    assert "authenticated accepted-state v10" in str(rep)
+    assert "authenticated accepted-state v11" in str(rep)
     assert "bit-identical v5" not in str(rep)
 
 

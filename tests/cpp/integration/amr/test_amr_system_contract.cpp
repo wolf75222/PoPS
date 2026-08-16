@@ -455,6 +455,50 @@ void materialize_magnetic_bootstrap(pops::AmrSystem<Dim>& system,
 }
 
 template <int Dim>
+void verify_exact_rebuild_distribution_modes() {
+  constexpr const char* state_route = "tests.amr.system-contract/rebuild-distribution/state";
+  pops::AmrSystemConfig<Dim> config = magnetic_config<Dim>();
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(
+      system, "test.amr-system-contract.rebuild-distribution-runtime");
+  system.install_block_state_route("tracer", state_route);
+  install_direct_tracer(system, "tracer",
+                        "tests.amr.system-contract/rebuild-distribution/physical-flux");
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+
+  EXPECT_EQ(system.level_distribution_mode(0), "replicated");
+  EXPECT_TRUE(system.level_owner_ranks(0).empty());
+
+  pops::Index<Dim> replicated_lower{};
+  pops::Index<Dim> replicated_upper{};
+  pops::Index<Dim> adjacent_lower{};
+  pops::Index<Dim> adjacent_upper{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    replicated_lower[axis] = 2;
+    replicated_upper[axis] = 5;
+    adjacent_lower[axis] = 6;
+    adjacent_upper[axis] = 9;
+  }
+  const pops::AmrPatch<Dim> replicated_patch{1, {replicated_lower, replicated_upper}};
+  const pops::AmrPatch<Dim> adjacent_patch{1, {adjacent_lower, adjacent_upper}};
+
+  system.rebuild_hierarchy({replicated_patch}, {-1});
+  EXPECT_EQ(system.level_distribution_mode(1), "replicated");
+  EXPECT_TRUE(system.level_owner_ranks(1).empty());
+  const std::vector<pops::AmrPatch<Dim>> replicated_boxes = system.patch_boxes();
+
+  EXPECT_THROW(system.rebuild_hierarchy({replicated_patch, adjacent_patch}, {-1, 0}),
+               std::invalid_argument);
+  EXPECT_EQ(system.patch_boxes(), replicated_boxes);
+  EXPECT_EQ(system.level_distribution_mode(1), "replicated");
+  EXPECT_TRUE(system.level_owner_ranks(1).empty());
+
+  system.rebuild_hierarchy({replicated_patch}, {0});
+  EXPECT_EQ(system.level_distribution_mode(1), "partitioned");
+  EXPECT_EQ(system.level_owner_ranks(1), std::vector<int>({0}));
+}
+
+template <int Dim>
 void verify_bootstrap_covered_cell_synchronization() {
   constexpr const char* state_route = "tests.amr.system-contract/bootstrap-sync/state";
   pops::AmrSystemConfig<Dim> config = magnetic_config<Dim>();
@@ -1052,6 +1096,13 @@ TEST(test_amr_system_contract, BootstrapRestrictionSynchronizesOnlyCoveredCoarse
   Kokkos::ScopeGuard guard;
 #endif
   verify_bootstrap_covered_cell_synchronization<pops::kNativeDimension>();
+}
+
+TEST(test_amr_system_contract, RebuildDistributionModesPreserveReplicaAndPartitionContracts) {
+#if defined(POPS_HAS_KOKKOS)
+  Kokkos::ScopeGuard guard;
+#endif
+  verify_exact_rebuild_distribution_modes<pops::kNativeDimension>();
 }
 
 TEST(test_amr_system_contract, VariableDtStrideUsesOneExactPublicWindow) {

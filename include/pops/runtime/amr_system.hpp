@@ -1223,8 +1223,9 @@ class AmrSystem {
 
   /// Impose a mid-run hierarchy from a v3 checkpoint (ADC-542): @p boxes are ALL the
   /// checkpoint patch boxes (level tagged, level 0 implicit), @p owner_ranks the per-box owner rank
-  /// aligned with @p boxes. Routes to AmrRuntime::rebuild_hierarchy (all levels rebuilt, reusing regrid
-  /// R6/R7). The v3 restart calls this so restartable=True works under ACTIVE regridding.
+  /// aligned with @p boxes.  ``-1`` is the private rebuild-only replicated-level witness: all patches
+  /// of one fine level must use it, while concrete ranks select partitioned ownership. Routes to
+  /// AmrRuntime::rebuild_hierarchy (all levels rebuilt, reusing regrid R6/R7).
   void rebuild_hierarchy(const std::vector<AmrPatch<Dim>>& boxes,
                          const std::vector<int>& owner_ranks);
 
@@ -1232,18 +1233,22 @@ class AmrSystem {
   /// prepared at bind. This is a collective, non-mutating restart seam: geometry and box ordering
   /// stay unchanged while the returned owner list is aligned with @p boxes for the current
   /// communicator size.
-  std::vector<int> rematerialize_hierarchy_ownership(const std::vector<AmrPatch<Dim>>& boxes);
+  std::vector<int> rematerialize_hierarchy_ownership(const std::vector<AmrPatch<Dim>>& boxes,
+                                                     const std::vector<std::string>& level_modes);
 
   /// Merge exact source-rank Program images and return this rank's image under the current
   /// communicator ownership. Both ownership tables are indexed [level][global patch].  The
   /// source authority is an opaque contract emitted only while the source image is the live
   /// accepted state; it binds that image to its artifact, spatial epoch/generation and owner map.
   std::vector<std::uint8_t> program_accepted_state_source_authority(
-      const std::vector<std::vector<int>>& source_level_owners, int source_rank_count) const;
+      const std::vector<std::vector<int>>& source_level_owners,
+      const std::vector<std::string>& source_level_modes, int source_rank_count) const;
   std::vector<std::uint8_t> rematerialize_program_accepted_state(
       const std::vector<std::uint8_t>& source_state, int source_rank_count,
       const std::vector<std::vector<int>>& source_level_owners,
       const std::vector<std::vector<int>>& target_level_owners,
+      const std::vector<std::string>& source_level_modes,
+      const std::vector<std::string>& target_level_modes,
       const std::vector<std::uint8_t>& source_authority);
 
   /// Per-block per-level checkpoint accessors (ADC-509). The AmrRuntime engine shares the
@@ -1279,6 +1284,8 @@ class AmrSystem {
   /// level-@p k rows of patch_boxes(). The v3 checkpoint (ADC-542) serializes it so a restart
   /// reproduces the LOCAL-fab iteration order.
   std::vector<int> level_owner_ranks(int k);
+  /// Exact active-level distribution mode: ``replicated`` or ``partitioned``.
+  std::string level_distribution_mode(int k) const;
   /// @name Multistep history-ring checkpoint / replay (ADC-631, Uniform System seam names)
   /// The compiled-Program AMR route carries per-level `keep_history` / `T.prev` ring slots on the
   /// AmrRuntime engine (remapped through regrid).  Every value and provenance accessor is qualified

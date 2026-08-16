@@ -632,6 +632,59 @@ def test_uniform_checkpoint_budget_reserves_lazy_schedule_cache_from_program_aut
         budget(SimpleNamespace(_s=Native((17,), name="held-density")), Program(cache_required=True))
 
 
+def test_checkpoint_history_budget_uses_installed_storage_depth_not_program_lookback():
+    from pops.runtime._checkpoint_resource_budget import _history_capacity
+
+    class Program:
+        _histories = {"blk.rate": 1}
+        _histories_ncomp = {"blk.rate": 1}
+        _history_blocks = {}
+
+    class Native:
+        @staticmethod
+        def history_names():
+            return ["blk.rate"]
+
+        @staticmethod
+        def history_depth(name):
+            assert name == "blk.rate"
+            return 2
+
+        @staticmethod
+        def history_ncomp(name):
+            assert name == "blk.rate"
+            return 1
+
+    names, _bytes, evidence = _history_capacity(
+        Program(), cells=(8, 32), amr=True, block_nvars={"blk": 1}, native=Native()
+    )
+    assert evidence == (("blk.rate", 1, 2),)
+    assert "history_blk.rate_level_0_0" in names
+    assert "history_blk.rate_level_0_1" in names
+    assert "history_blk.rate_level_1_0" in names
+    assert "history_blk.rate_level_1_1" in names
+
+    class WrongNames(Native):
+        @staticmethod
+        def history_names():
+            return ["other.rate"]
+
+    with pytest.raises(ValueError, match="names differ"):
+        _history_capacity(
+            Program(), cells=(8,), amr=False, block_nvars={"blk": 1}, native=WrongNames()
+        )
+
+    class WrongComponents(Native):
+        @staticmethod
+        def history_ncomp(name):
+            return 2
+
+    with pytest.raises(ValueError, match="component width differs"):
+        _history_capacity(
+            Program(), cells=(8,), amr=False, block_nvars={"blk": 1}, native=WrongComponents()
+        )
+
+
 def test_checkpoint_budget_projects_opaque_consumer_evidence_to_canonical_hex():
     from pops.identity import canonical_bytes
     from pops.runtime._checkpoint_resource_budget import _consumer_evidence

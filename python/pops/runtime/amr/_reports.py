@@ -272,7 +272,7 @@ class RefluxReport:
 class CheckpointReport:
     """The checkpoint / restart policy of the live system (Spec 5 sec.8.12 ``explain_checkpoint()``).
 
-    Surfaces the authenticated AMR v10 accepted-state envelope: exact recorded patch geometry,
+    Surfaces the authenticated AMR v11 accepted-state envelope: exact recorded patch geometry,
     every block and level, field/history state, runtime-owned tagging hysteresis, regrid metadata,
     rational clocks and transfer-plan provenance. Owner ranks remain exact for bit-identical
     replay; the explicitly non-bit-identical route may rematerialize ownership without changing

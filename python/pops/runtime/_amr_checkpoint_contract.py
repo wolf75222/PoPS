@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
+from typing import cast
 import json
 import math
 import struct
@@ -73,12 +74,29 @@ def restart_topology_image(sim):
         if any(type(value) is not int for value in lower + upper):
             raise TypeError("native AMR patch-box bounds must contain exact integers")
         boxes.append([level, list(lower), list(upper)])
-    owners = [[int(rank) for rank in sim.level_owner_ranks(level)] for level in range(levels)]
+    mode_provider = getattr(sim, "level_distribution_mode", None)
+    owner_provider = getattr(sim, "level_owner_ranks", None)
+    if not callable(mode_provider) or not callable(owner_provider):
+        raise TypeError("native AMR restart topology lacks exact distribution accessors")
+    modes = [mode_provider(level) for level in range(levels)]
+    if any(type(mode) is not str or mode not in {"replicated", "partitioned"} for mode in modes):
+        raise ValueError("native AMR restart topology has an invalid distribution mode")
+    owners = [
+        [int(rank) for rank in cast(Iterable[int], owner_provider(level))]
+        for level in range(levels)
+    ]
+    if any(
+        (mode == "replicated" and ranks) or (mode == "partitioned" and not ranks)
+        for mode, ranks in zip(modes, owners, strict=True)
+    ):
+        raise ValueError("native AMR restart topology has a mode/map mismatch")
     topology_identity = make_identity(
-        "restart-topology",
+        "restart-topology-v2",
         {
+            "distribution_topology_schema": 2,
             "active_levels": levels,
             "patch_boxes": boxes,
+            "level_distribution_modes": modes,
             "level_owner_ranks": owners,
         },
     ).token

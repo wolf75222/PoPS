@@ -311,7 +311,7 @@ Supported native routes include:
   restored before the provider candidate can be consumed.
 - Runtime scientific output v1: typed `SERIAL`, `ROOT`, `COLLECTIVE` and `PER_RANK` publication on the
   exact modes advertised by NPZ, ParaView and HDF5, with native Uniform/AMR piece ownership.
-- Runtime accepted-state checkpoint v8 for Uniform and v10 for AMR. The single-file MPI route captures
+- Runtime accepted-state checkpoint v8 for Uniform and v11 for AMR. The single-file MPI route captures
   collectively only after every rank agrees on the exact gather-plan identity, agrees again on the
   sealed payload identity, and publishes once on rank 0 with atomic no-clobber semantics. The provider
   authority is resolved into the compiled plan, including the builtin v5 manual route. It persists
@@ -339,8 +339,8 @@ Explicit unsupported rows include:
 - `elliptic:fft_amr`: FFT requires a single uniform periodic mesh; AMR uses GeometricMG.
 - `checkpoint:parallel_hdf5`: parallel HDF5 is a scientific-output route, not a restartable checkpoint
   encoding; `RuntimeInstance.checkpoint()` and the typed `Checkpoint` consumer use uniform v8 or AMR
-  v10 accepted-state payloads.
-- `checkpoint:amr_dynamic_regrid` is available through the strict v10 accepted-state route. The single
+  v11 accepted-state payloads.
+- `checkpoint:amr_dynamic_regrid` is available through the strict v11 accepted-state route. The single
   authenticated artifact carries one exact DistributionMapping and compiled-Program accepted image
   per native rank. `bit_identical=True` therefore requires the recorded rank count. With the default
   non-bit-identical guarantee, `RestoreRecordedHierarchy()` may rematerialize hierarchy ownership and

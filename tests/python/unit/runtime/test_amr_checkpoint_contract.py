@@ -29,10 +29,13 @@ from pops.runtime._amr_checkpoint_v3 import (
     _checkpoint_amr_level_envelope,
     _decode_ranked_patch_boxes,
     _encode_ranked_patch_boxes,
+    _exact_archive_int64_scalar,
     _live_amr_level_envelope,
+    _preflight_current_base_distribution,
     _require_exact_field_provider_depth,
 )
 from pops.runtime._amr_checkpoint_topology import (
+    RecordedRankTopology,
     owner_ranks_for_boxes,
     recorded_rank_topology,
 )
@@ -354,6 +357,9 @@ def test_regridded_contract_authenticates_transformed_topology_and_level_axes():
         def level_owner_ranks(self, level):
             return [[0], [0], [0]][level]
 
+        def level_distribution_mode(self, level):
+            return "partitioned"
+
         def program_clock_manifest(self):
             return [["level", str(level), "4", "0", "1", "0.400000"] for level in range(3)] + [
                 ["logical", "clock.macro", "4"]
@@ -463,6 +469,27 @@ def test_checkpoint_level_envelope_accepts_derefined_active_depth():
     assert _checkpoint_amr_level_envelope(
         sim, {"n_levels": np.array(1), "configured_n_levels": np.array(3)}
     ) == (1, 3)
+
+
+@pytest.mark.parametrize("key", ["n_ranks", "n_levels", "configured_n_levels"])
+def test_amr_archive_authority_requires_a_canonical_signed_int64_scalar(key):
+    payload = {key: np.array(3, dtype=np.int64)}
+    assert _exact_archive_int64_scalar(
+        payload, key, label=key.replace("_", " "), minimum=1
+    ) == 3
+
+    for malformed in (
+        np.array(True),
+        np.array(3.0, dtype=np.float64),
+        np.array([3], dtype=np.int64),
+        np.array(3, dtype=np.int32),
+        np.array(3, dtype=np.uint64),
+    ):
+        payload[key] = malformed
+        with pytest.raises(TypeError, match="exact signed int64 scalar"):
+            _exact_archive_int64_scalar(
+                payload, key, label=key.replace("_", " "), minimum=1
+            )
 
 
 def test_checkpoint_level_envelope_refuses_a_different_configured_depth():
@@ -617,12 +644,14 @@ def test_field_provider_depth_must_equal_the_complete_active_hierarchy(phase):
 
 
 def test_topology_owner_alignment_is_level_local_and_strict():
-    payload = {"dmap_1": np.array([2, 0]), "dmap_2": np.array([1])}
-    boxes = [(1, 0, 0, 3, 3), (1, 4, 4, 7, 7), (2, 2, 2, 5, 5)]
-    assert owner_ranks_for_boxes(payload, boxes, 3) == [2, 0, 1]
+    topology = RecordedRankTopology(
+        b"", 3, ("partitioned", "partitioned", "partitioned"), ((0,), (2, 0), (1,))
+    )
+    boxes = ((1, (0, 0), (3, 3)), (1, (4, 4), (7, 7)), (2, (2, 2), (5, 5)))
+    assert owner_ranks_for_boxes(topology, boxes, 3) == (2, 0, 1)
     with pytest.raises(ValueError, match="truncated"):
-        owner_ranks_for_boxes(payload, boxes + [(2, 6, 6, 7, 7)], 3)
-    with pytest.raises(ValueError, match="lacks owner-rank map"):
+        owner_ranks_for_boxes(topology, boxes + ((2, (6, 6), (7, 7)),), 3)
+    with pytest.raises(TypeError, match="RecordedRankTopology"):
         owner_ranks_for_boxes({}, boxes[:1], 3)
 
 
@@ -807,6 +836,8 @@ def test_ranked_patch_box_decoder_refuses_malformed_archive(archived, match):
 def _rank_topology_payload():
     return {
         "program_accepted_state": np.array([1, 2], dtype=np.uint8),
+        "distribution_mode_0": np.array("partitioned"),
+        "distribution_mode_1": np.array("partitioned"),
         "dmap_0": np.array([0], dtype=np.int64),
         "dmap_1": np.array([0, 1], dtype=np.int64),
     }
@@ -816,6 +847,7 @@ def test_recorded_rank_topology_keeps_one_canonical_program_image_and_owner_map(
     topology = recorded_rank_topology(_rank_topology_payload(), 2, 2)
     assert topology.program_state == b"\x01\x02"
     assert topology.source_rank_count == 2
+    assert topology.level_distribution_modes == ("partitioned", "partitioned")
     assert topology.level_owner_ranks == ((0,), (0, 1))
 
 
@@ -837,6 +869,164 @@ def test_recorded_rank_topology_refuses_non_uint8_program_image():
     payload = _rank_topology_payload()
     payload["program_accepted_state"] = np.array([1, 2], dtype=np.int64)
     with pytest.raises(TypeError, match="must be a uint8 vector"):
+        recorded_rank_topology(payload, 2, 2)
+
+
+def test_recorded_rank_topology_authenticates_replicated_empty_maps_and_sentinel_rebuild_rows():
+    payload = {
+        "program_accepted_state": np.array([1], dtype=np.uint8),
+        "distribution_mode_0": np.array("replicated"),
+        "distribution_mode_1": np.array("replicated"),
+        "dmap_0": np.array([], dtype=np.int64),
+        "dmap_1": np.array([], dtype=np.int64),
+    }
+    topology = recorded_rank_topology(payload, 2, 1)
+    assert owner_ranks_for_boxes(topology, ((1, (0, 0), (3, 3)),), 2) == (-1,)
+
+    payload["dmap_1"] = np.array([0], dtype=np.int64)
+    with pytest.raises(ValueError, match="replicated.*empty"):
+        recorded_rank_topology(payload, 2, 1)
+
+
+def test_restart_base_distribution_keeps_exact_partition_map_at_unchanged_rank_count():
+    class _CurrentBase:
+        @staticmethod
+        def level_distribution_mode(level):
+            assert level == 0
+            return "partitioned"
+
+        @staticmethod
+        def level_owner_ranks(level):
+            assert level == 0
+            return [0, 1]
+
+        @staticmethod
+        def coarse_total_boxes():
+            return 2
+
+    recorded = RecordedRankTopology(
+        b"", 2, ("partitioned", "replicated"), ((0, 1), ())
+    )
+    assert _preflight_current_base_distribution(
+        _CurrentBase(), recorded, checkpoint_ranks=2, current_ranks=2
+    ) == ("partitioned", (0, 1))
+
+    class _DriftedCurrentBase(_CurrentBase):
+        @staticmethod
+        def level_owner_ranks(level):
+            assert level == 0
+            return [1, 0]
+
+    with pytest.raises(ValueError, match="recorded coarse owner map"):
+        _preflight_current_base_distribution(
+            _DriftedCurrentBase(), recorded, checkpoint_ranks=2, current_ranks=2
+        )
+
+
+def test_restart_base_distribution_allows_only_complete_rank_changed_target_partition():
+    class _RankChangedBase:
+        @staticmethod
+        def level_distribution_mode(level):
+            assert level == 0
+            return "partitioned"
+
+        @staticmethod
+        def level_owner_ranks(level):
+            assert level == 0
+            return [2, 0]
+
+        @staticmethod
+        def coarse_total_boxes():
+            return 2
+
+    recorded = RecordedRankTopology(
+        b"", 2, ("partitioned", "partitioned"), ((0, 1), (0,))
+    )
+    assert _preflight_current_base_distribution(
+        _RankChangedBase(), recorded, checkpoint_ranks=2, current_ranks=3
+    ) == ("partitioned", (2, 0))
+
+    for source_owners in ((0,), (0, 1, 0)):
+        malformed_source = RecordedRankTopology(
+            b"", 2, ("partitioned", "partitioned"), (source_owners, (0,))
+        )
+        with pytest.raises(
+            ValueError,
+            match=r"recorded coarse owner map has %d entries, expected 2" % len(source_owners),
+        ):
+            _preflight_current_base_distribution(
+                _RankChangedBase(), malformed_source, checkpoint_ranks=2, current_ranks=3
+            )
+
+    class _IncompleteTarget(_RankChangedBase):
+        @staticmethod
+        def level_owner_ranks(level):
+            assert level == 0
+            return [2]
+
+    with pytest.raises(ValueError, match="has 1 entries, expected 2"):
+        _preflight_current_base_distribution(
+            _IncompleteTarget(), recorded, checkpoint_ranks=2, current_ranks=3
+        )
+
+    class _OutOfRangeTarget(_RankChangedBase):
+        @staticmethod
+        def level_owner_ranks(level):
+            assert level == 0
+            return [2, 3]
+
+    with pytest.raises(ValueError, match=r"outside \[0, 3\)"):
+        _preflight_current_base_distribution(
+            _OutOfRangeTarget(), recorded, checkpoint_ranks=2, current_ranks=3
+        )
+
+
+def test_restart_base_distribution_preserves_replicated_empty_map_across_rank_change():
+    class _ReplicatedBase:
+        @staticmethod
+        def level_distribution_mode(level):
+            assert level == 0
+            return "replicated"
+
+        @staticmethod
+        def level_owner_ranks(level):
+            assert level == 0
+            return []
+
+        @staticmethod
+        def coarse_total_boxes():
+            return 1
+
+    recorded = RecordedRankTopology(b"", 2, ("replicated", "replicated"), ((), ()))
+    assert _preflight_current_base_distribution(
+        _ReplicatedBase(), recorded, checkpoint_ranks=2, current_ranks=3
+    ) == ("replicated", ())
+
+    class _ReplicatedWithOwners(_ReplicatedBase):
+        @staticmethod
+        def level_owner_ranks(level):
+            assert level == 0
+            return [0]
+
+    with pytest.raises(ValueError, match="replicated current coarse level has owner entries"):
+        _preflight_current_base_distribution(
+            _ReplicatedWithOwners(), recorded, checkpoint_ranks=2, current_ranks=3
+        )
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "match"),
+    [
+        ("distribution_mode_1", np.array("unknown"), "unknown"),
+        ("dmap_1", np.array([], dtype=np.int64), "partitioned.*owner map"),
+        ("dmap_1", np.array([0], dtype=np.int32), "int64"),
+        ("dmap_2", np.array([], dtype=np.int64), "surplus"),
+    ],
+)
+def test_recorded_rank_topology_refuses_mode_map_schema_ambiguity(key, value, match):
+    payload = _rank_topology_payload()
+    payload[key] = value
+    with pytest.raises((TypeError, ValueError), match=match):
         recorded_rank_topology(payload, 2, 2)
 
 

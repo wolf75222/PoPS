@@ -1313,6 +1313,9 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
       .def(
           "level_owner_ranks", [](AmrSystem& s, int k) { return s.level_owner_ranks(k); },
           py::arg("k"))
+      .def(
+          "level_distribution_mode",
+          [](const AmrSystem& s, int k) { return s.level_distribution_mode(k); }, py::arg("k"))
       // ADC-542: impose a mid-run MULTI-BLOCK hierarchy from a v3 checkpoint. @p boxes are the
       // level-tagged exact-ranked patch signatures; @p owner_ranks is the per-box owner
       // rank aligned with @p boxes. Routes to AmrRuntime::rebuild_hierarchy (all levels rebuilt).
@@ -1326,36 +1329,39 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
           py::arg("boxes"), py::arg("owner_ranks"))
       .def(
           "rematerialize_hierarchy_ownership",
-          [](AmrSystem& s, const py::handle& boxes) {
+          [](AmrSystem& s, const py::handle& boxes, const std::vector<std::string>& level_modes) {
             const std::vector<AmrPatch<pops::kNativeDimension>> bx =
                 ranked_amr_patches_from_python<pops::kNativeDimension>(
                     boxes, "AmrSystem.rematerialize_hierarchy_ownership");
             py::gil_scoped_release release;
-            return s.rematerialize_hierarchy_ownership(bx);
+            return s.rematerialize_hierarchy_ownership(bx, level_modes);
           },
-          py::arg("boxes"),
+          py::arg("boxes"), py::arg("level_modes"),
           "Collectively rematerialize exact recorded patch ownership for this communicator.")
       .def(
           "program_accepted_state_source_authority",
           [](const AmrSystem& s, const std::vector<std::vector<int>>& source_level_owners,
-             int source_rank_count) {
-            const auto authority =
-                s.program_accepted_state_source_authority(source_level_owners, source_rank_count);
+             const std::vector<std::string>& source_level_modes, int source_rank_count) {
+            const auto authority = s.program_accepted_state_source_authority(
+                source_level_owners, source_level_modes, source_rank_count);
             return py::bytes(reinterpret_cast<const char*>(authority.data()), authority.size());
           },
-          py::arg("source_level_owners"), py::arg("source_rank_count"),
+          py::arg("source_level_owners"), py::arg("source_level_modes"),
+          py::arg("source_rank_count"),
           "Seal the live accepted Program image under its artifact and source ownership.")
       .def(
           "rematerialize_program_accepted_state",
           [](AmrSystem& s, const py::bytes& source_state, int source_rank_count,
              const std::vector<std::vector<int>>& source_level_owners,
              const std::vector<std::vector<int>>& target_level_owners,
+             const std::vector<std::string>& source_level_modes,
+             const std::vector<std::string>& target_level_modes,
              const py::bytes& source_authority) {
             const std::string state = source_state;
             const std::string authority = source_authority;
             const auto rematerialized = s.rematerialize_program_accepted_state(
                 std::vector<std::uint8_t>(state.begin(), state.end()), source_rank_count,
-                source_level_owners, target_level_owners,
+                source_level_owners, target_level_owners, source_level_modes, target_level_modes,
                 std::vector<std::uint8_t>(authority.begin(), authority.end()));
             if (rematerialized.empty())
               return py::bytes();
@@ -1363,7 +1369,8 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
                              rematerialized.size());
           },
           py::arg("source_state"), py::arg("source_rank_count"), py::arg("source_level_owners"),
-          py::arg("target_level_owners"), py::arg("source_authority"),
+          py::arg("target_level_owners"), py::arg("source_level_modes"),
+          py::arg("target_level_modes"), py::arg("source_authority"),
           "Rematerialize one canonical Program image under current ownership.")
       .def(
           "_prepare_checkpoint_spatial_contract",

@@ -4477,7 +4477,8 @@ struct AmrSystem<Dim>::Impl {
 
   std::string source_accepted_state_authority_contract(
       const runtime::program::AmrProgramAcceptedState<Dim>& state,
-      const std::vector<std::vector<int>>& source_level_owners, int source_rank_count) const {
+      const std::vector<std::vector<int>>& source_level_owners,
+      const std::vector<std::string>& source_level_modes, int source_rank_count) const {
     const auto& artifact = require_prepared_program_flux_expression_budget();
     if (source_rank_count < 1)
       throw std::invalid_argument(
@@ -4485,14 +4486,15 @@ struct AmrSystem<Dim>::Impl {
     if (state.flux_budget_contract.empty() || state.coupling_contract.empty())
       throw std::invalid_argument(
           "AMR Program rematerialization source lacks its accepted authority contracts");
-    if (source_level_owners.size() != state.level_clocks.size())
+    if (source_level_owners.size() != state.level_clocks.size() ||
+        source_level_modes.size() != state.level_clocks.size())
       throw std::invalid_argument(
-          "AMR Program source authority ownership differs from its accepted hierarchy depth");
+          "AMR Program source authority topology differs from its accepted hierarchy depth");
     const std::vector<std::uint8_t> serialized =
         runtime::program::serialize_amr_program_accepted_state(state);
     ExactContractBuilder authority;
     authority.text("pops.amr-program.accepted-source-authority")
-        .scalar(std::uint32_t{1})
+        .scalar(std::uint32_t{2})
         .scalar(std::int32_t{Dim})
         .scalar(std::int32_t{source_rank_count})
         .text(artifact.program_hash)
@@ -4517,7 +4519,16 @@ struct AmrSystem<Dim>::Impl {
         .bytes(
             std::string_view(reinterpret_cast<const char*>(serialized.data()), serialized.size()))
         .scalar(static_cast<std::uint64_t>(source_level_owners.size()));
-    for (const auto& owners : source_level_owners) {
+    for (std::size_t level = 0; level < source_level_owners.size(); ++level) {
+      const auto& mode = source_level_modes[level];
+      const auto& owners = source_level_owners[level];
+      if (mode != "replicated" && mode != "partitioned")
+        throw std::invalid_argument(
+            "AMR Program source authority has an unknown distribution mode");
+      authority.text(mode);
+      if (mode == "replicated" && !owners.empty())
+        throw std::invalid_argument(
+            "AMR Program replicated source authority must have an empty owner map");
       authority.scalar(static_cast<std::uint64_t>(owners.size()));
       for (const int owner : owners) {
         if (owner < 0 || owner >= source_rank_count)
@@ -4526,7 +4537,7 @@ struct AmrSystem<Dim>::Impl {
         authority.scalar(std::int32_t{owner});
       }
     }
-    return prefixed_sha256("pops.amr-program.accepted-source-authority.v1:sha256:",
+    return prefixed_sha256("pops.amr-program.accepted-source-authority.v2:sha256:",
                            std::move(authority).release());
   }
 
@@ -17212,21 +17223,30 @@ void AmrSystem<Dim>::rebuild_hierarchy(const std::vector<AmrPatch<Dim>>& boxes,
       throw std::invalid_argument(
           "AmrSystem::rebuild_hierarchy boxes and owner ranks must align exactly");
     int active_levels = 1;
+    std::vector<int> level_mode;
     for (std::size_t index = 0; index < boxes.size(); ++index) {
       const AmrPatch<Dim>& patch = boxes[index];
       if (patch.level < 1 || patch.level >= p_->cfg.level_count || patch.box.empty())
         throw std::invalid_argument(
             "AmrSystem::rebuild_hierarchy requires non-empty configured fine-level patches");
-      if (owner_ranks[index] < 0 || owner_ranks[index] >= lane.size())
+      if (owner_ranks[index] < -1 || owner_ranks[index] >= lane.size())
         throw std::out_of_range(
             "AmrSystem::rebuild_hierarchy owner rank lies outside the execution lane");
+      const std::size_t level = static_cast<std::size_t>(patch.level);
+      if (level_mode.size() <= level)
+        level_mode.resize(level + 1, -2);
+      const int mode = owner_ranks[index] == -1 ? -1 : 0;
+      if (level_mode[level] != -2 && level_mode[level] != mode)
+        throw std::invalid_argument(
+            "AmrSystem::rebuild_hierarchy forbids mixed replicated and partitioned owner rows");
+      level_mode[level] = mode;
       active_levels = std::max(active_levels, patch.level + 1);
     }
     level_boxes.resize(static_cast<std::size_t>(active_levels));
     level_owners.resize(static_cast<std::size_t>(active_levels));
     ExactContractBuilder request;
     request.text("pops.amr-system.rebuild-hierarchy")
-        .scalar(std::uint32_t{1})
+        .scalar(std::uint32_t{2})
         .scalar(std::int32_t{Dim})
         .scalar(static_cast<std::uint64_t>(boxes.size()));
     for (std::size_t index = 0; index < boxes.size(); ++index) {
@@ -17274,11 +17294,15 @@ void AmrSystem<Dim>::rebuild_hierarchy(const std::vector<AmrPatch<Dim>>& boxes,
       level_domain = amr::hierarchy::refine_box(level_domain, ratio);
       mesh::BoxArray<Dim> patches(level_boxes[level]);
       std::vector<Index<Dim>> owners;
-      owners.reserve(level_owners[level].size());
-      for (int rank : level_owners[level])
-        owners.push_back(rank_space.coordinate(static_cast<std::size_t>(rank)));
+      const bool replicated = level_owners[level].front() == -1;
+      if (!replicated) {
+        owners.reserve(level_owners[level].size());
+        for (int rank : level_owners[level])
+          owners.push_back(rank_space.coordinate(static_cast<std::size_t>(rank)));
+      }
       mesh::Distribution<Dim> distribution =
-          mesh::Distribution<Dim>::partitioned(patches, rank_space, std::move(owners));
+          replicated ? mesh::Distribution<Dim>::replicated(patches, rank_space)
+                     : mesh::Distribution<Dim>::partitioned(patches, rank_space, std::move(owners));
       const mesh::BoxArrayValidationBudget layout_budget{patches.size(),
                                                          checked_pair_count(patches.size())};
       amr::hierarchy::LevelLayout<Dim> layout(static_cast<int>(level), level_domain, patches,
@@ -17393,7 +17417,7 @@ void AmrSystem<Dim>::rebuild_hierarchy(const std::vector<AmrPatch<Dim>>& boxes,
 
 template <int Dim>
 std::vector<int> AmrSystem<Dim>::rematerialize_hierarchy_ownership(
-    const std::vector<AmrPatch<Dim>>& boxes) {
+    const std::vector<AmrPatch<Dim>>& boxes, const std::vector<std::string>& level_modes) {
   p_->ensure_engine();
   if (!p_->prepared_hierarchy || !p_->prepared_hierarchy->lane)
     throw std::logic_error("AMR ownership rematerialization requires its prepared hierarchy lane");
@@ -17410,11 +17434,18 @@ std::vector<int> AmrSystem<Dim>::rematerialize_hierarchy_ownership(
             "AMR ownership rematerialization requires non-empty configured fine-level patches");
       active_levels = std::max(active_levels, patch.level + 1);
     }
+    if (level_modes.size() != static_cast<std::size_t>(active_levels))
+      throw std::invalid_argument(
+          "AMR ownership rematerialization modes must cover every active level");
+    for (const auto& mode : level_modes)
+      if (mode != "replicated" && mode != "partitioned")
+        throw std::invalid_argument(
+            "AMR ownership rematerialization has an unknown distribution mode");
     level_boxes.resize(static_cast<std::size_t>(active_levels));
     source_indices.resize(static_cast<std::size_t>(active_levels));
     ExactContractBuilder request;
     request.text("pops.amr-system.rematerialize-ownership")
-        .scalar(std::uint32_t{1})
+        .scalar(std::uint32_t{2})
         .scalar(std::int32_t{Dim})
         .scalar(static_cast<std::uint64_t>(boxes.size()));
     for (std::size_t index = 0; index < boxes.size(); ++index) {
@@ -17432,6 +17463,8 @@ std::vector<int> AmrSystem<Dim>::rematerialize_hierarchy_ownership(
       if (level_boxes[static_cast<std::size_t>(level)].empty())
         throw std::invalid_argument(
             "AMR ownership rematerialization requires contiguous active fine levels");
+    for (const auto& mode : level_modes)
+      request.text(mode);
     request_contract = std::move(request).release();
   } catch (...) {
     validation_error = std::current_exception();
@@ -17451,6 +17484,8 @@ std::vector<int> AmrSystem<Dim>::rematerialize_hierarchy_ownership(
   const mesh::RankSpace<Dim> rank_space = process_rank_space<Dim>(lane);
   std::vector<int> result(boxes.size(), -1);
   for (std::size_t level = 1; level < level_boxes.size(); ++level) {
+    if (level_modes[level] == "replicated")
+      continue;
     const mesh::BoxArray<Dim> patches(level_boxes[level]);
     const parallel::LoadBalancePreparationBudget budget{patches.size(), rank_space.size(),
                                                         checked_layout_cells(patches)};
@@ -17465,7 +17500,8 @@ std::vector<int> AmrSystem<Dim>::rematerialize_hierarchy_ownership(
 
 template <int Dim>
 std::vector<std::uint8_t> AmrSystem<Dim>::program_accepted_state_source_authority(
-    const std::vector<std::vector<int>>& source_level_owners, int source_rank_count) const {
+    const std::vector<std::vector<int>>& source_level_owners,
+    const std::vector<std::string>& source_level_modes, int source_rank_count) const {
   p_->ensure_engine();
   if (!p_->prepared_hierarchy || !p_->prepared_hierarchy->lane)
     throw std::logic_error("AMR Program source authority requires its prepared hierarchy lane");
@@ -17477,15 +17513,18 @@ std::vector<std::uint8_t> AmrSystem<Dim>::program_accepted_state_source_authorit
       throw std::invalid_argument(
           "AMR Program source authority rank count differs from its live prepared lane");
     const auto& hierarchy = p_->engine->hierarchy();
-    if (source_level_owners.size() != hierarchy.num_levels())
+    if (source_level_owners.size() != hierarchy.num_levels() ||
+        source_level_modes.size() != hierarchy.num_levels())
       throw std::invalid_argument(
-          "AMR Program source authority ownership must cover every active level");
+          "AMR Program source authority topology must cover every active level");
     for (std::size_t level = 0; level < source_level_owners.size(); ++level) {
       const auto& distribution = hierarchy.layout(level).distribution();
-      if (distribution.replicated() ||
-          source_level_owners[level].size() != distribution.owners().size())
+      const std::string expected_mode = distribution.replicated() ? "replicated" : "partitioned";
+      if (source_level_modes[level] != expected_mode ||
+          source_level_owners[level].size() !=
+              (distribution.replicated() ? 0 : distribution.owners().size()))
         throw std::invalid_argument(
-            "AMR Program source authority ownership differs from the live exact hierarchy");
+            "AMR Program source authority topology differs from the live exact hierarchy");
       for (std::size_t patch = 0; patch < source_level_owners[level].size(); ++patch)
         if (source_level_owners[level][patch] !=
             static_cast<int>(distribution.rank_space().linear_rank(distribution.owner(patch))))
@@ -17502,8 +17541,8 @@ std::vector<std::uint8_t> AmrSystem<Dim>::program_accepted_state_source_authorit
         runtime::program::deserialize_amr_program_accepted_state<Dim>(bytes, &interface_budget);
     runtime::program::require_live_amr_program_checkpoint(state, *p_->engine);
     p_->require_accepted_state_authority_contracts(state);
-    authority =
-        p_->source_accepted_state_authority_contract(state, source_level_owners, source_rank_count);
+    authority = p_->source_accepted_state_authority_contract(state, source_level_owners,
+                                                             source_level_modes, source_rank_count);
   } catch (...) {
     local_error = std::current_exception();
   }
@@ -17523,6 +17562,8 @@ std::vector<std::uint8_t> AmrSystem<Dim>::rematerialize_program_accepted_state(
     const std::vector<std::uint8_t>& source_state, int source_rank_count,
     const std::vector<std::vector<int>>& source_level_owners,
     const std::vector<std::vector<int>>& target_level_owners,
+    const std::vector<std::string>& source_level_modes,
+    const std::vector<std::string>& target_level_modes,
     const std::vector<std::uint8_t>& source_authority) {
   p_->ensure_engine();
   if (!p_->prepared_hierarchy || !p_->prepared_hierarchy->lane)
@@ -17541,14 +17582,27 @@ std::vector<std::uint8_t> AmrSystem<Dim>::rematerialize_program_accepted_state(
     p_->require_program_source_authority_capacity(source_authority.size(),
                                                   "AMR Program rematerialization source authority");
     const std::size_t levels = p_->engine->hierarchy().num_levels();
-    if (source_level_owners.size() != levels || target_level_owners.size() != levels)
+    if (source_level_owners.size() != levels || target_level_owners.size() != levels ||
+        source_level_modes.size() != levels || target_level_modes.size() != levels)
       throw std::invalid_argument(
-          "AMR Program rematerialization ownership must cover every active level");
+          "AMR Program rematerialization topology must cover every active level");
     for (std::size_t level = 0; level < levels; ++level) {
+      if ((source_level_modes[level] != "replicated" &&
+           source_level_modes[level] != "partitioned") ||
+          (target_level_modes[level] != "replicated" && target_level_modes[level] != "partitioned"))
+        throw std::invalid_argument(
+            "AMR Program rematerialization has an unknown distribution mode");
+      if (source_level_modes[level] != target_level_modes[level])
+        throw std::invalid_argument(
+            "AMR Program rematerialization cannot change an exact distribution mode");
       if (source_level_owners[level].size() != target_level_owners[level].size())
         throw std::invalid_argument(
             "AMR Program source and target ownership name different patch counts");
       const auto& live = p_->engine->hierarchy().layout(level).distribution();
+      const std::string live_mode = live.replicated() ? "replicated" : "partitioned";
+      if (target_level_modes[level] != live_mode)
+        throw std::invalid_argument(
+            "AMR Program target distribution mode differs from the published hierarchy");
       const std::size_t live_owners = live.replicated() ? 0 : live.owners().size();
       if (target_level_owners[level].size() != live_owners)
         throw std::invalid_argument(
@@ -17571,7 +17625,7 @@ std::vector<std::uint8_t> AmrSystem<Dim>::rematerialize_program_accepted_state(
     accepted.emplace(runtime::program::deserialize_amr_program_accepted_state<Dim>(
         source_state, &interface_budget));
     const std::string expected_source_authority = p_->source_accepted_state_authority_contract(
-        *accepted, source_level_owners, source_rank_count);
+        *accepted, source_level_owners, source_level_modes, source_rank_count);
     const std::string_view provided_source_authority(
         reinterpret_cast<const char*>(source_authority.data()), source_authority.size());
     if (provided_source_authority != expected_source_authority)
@@ -17596,19 +17650,23 @@ std::vector<std::uint8_t> AmrSystem<Dim>::rematerialize_program_accepted_state(
     p_->require_program_checkpoint_capacity(bytes.size(), "AMR Program rematerialization result");
     ExactContractBuilder request;
     request.text("pops.amr-system.rematerialize-program-state")
-        .scalar(std::uint32_t{1})
+        .scalar(std::uint32_t{2})
         .scalar(std::int32_t{Dim})
         .scalar(static_cast<std::uint64_t>(source_rank_count))
         .scalar(static_cast<std::uint64_t>(levels))
         .bytes(std::string_view(reinterpret_cast<const char*>(source_authority.data()),
                                 source_authority.size()))
         .bytes(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
-    for (const auto& owners : source_level_owners) {
+    for (std::size_t level = 0; level < source_level_owners.size(); ++level) {
+      request.text(source_level_modes[level]);
+      const auto& owners = source_level_owners[level];
       request.scalar(static_cast<std::uint64_t>(owners.size()));
       for (int owner : owners)
         request.scalar(std::int32_t{owner});
     }
-    for (const auto& owners : target_level_owners) {
+    for (std::size_t level = 0; level < target_level_owners.size(); ++level) {
+      request.text(target_level_modes[level]);
+      const auto& owners = target_level_owners[level];
       request.scalar(static_cast<std::uint64_t>(owners.size()));
       for (int owner : owners)
         request.scalar(std::int32_t{owner});
@@ -17639,12 +17697,22 @@ std::vector<int> AmrSystem<Dim>::level_owner_ranks(int level) {
   const auto& distribution =
       p_->engine->hierarchy().layout(static_cast<std::size_t>(level)).distribution();
   if (distribution.replicated())
-    throw std::runtime_error("replicated AMR levels have no unique owner ranks");
+    return {};
   std::vector<int> result;
   result.reserve(distribution.owners().size());
   for (const Index<Dim>& owner : distribution.owners())
     result.push_back(static_cast<int>(distribution.rank_space().linear_rank(owner)));
   return result;
+}
+
+template <int Dim>
+std::string AmrSystem<Dim>::level_distribution_mode(int level) const {
+  p_->ensure_engine();
+  if (level < 0 || static_cast<std::size_t>(level) >= p_->engine->hierarchy().num_levels())
+    throw std::out_of_range("AMR distribution level is out of range");
+  return p_->engine->hierarchy().layout(static_cast<std::size_t>(level)).distribution().replicated()
+             ? "replicated"
+             : "partitioned";
 }
 
 template <int Dim>
@@ -18267,7 +18335,7 @@ std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_cap
     const std::size_t accepted =
         runtime::program::serialized_amr_program_accepted_state_capacity(shape);
     constexpr std::string_view source_authority_prefix =
-        "pops.amr-program.accepted-source-authority.v1:sha256:";
+        "pops.amr-program.accepted-source-authority.v2:sha256:";
     constexpr std::size_t source_authority_bytes = source_authority_prefix.size() + 64;
 
     // The live prelude is evidence, never the capacity source.  It must be an exact subset of the
@@ -19343,15 +19411,17 @@ template void AmrSystem<kNativeDimension>::set_hierarchy(
 template void AmrSystem<kNativeDimension>::rebuild_hierarchy(
     const std::vector<AmrPatch<kNativeDimension>>&, const std::vector<int>&);
 template std::vector<int> AmrSystem<kNativeDimension>::rematerialize_hierarchy_ownership(
-    const std::vector<AmrPatch<kNativeDimension>>&);
+    const std::vector<AmrPatch<kNativeDimension>>&, const std::vector<std::string>&);
 template std::vector<std::uint8_t>
 AmrSystem<kNativeDimension>::program_accepted_state_source_authority(
-    const std::vector<std::vector<int>>&, int) const;
+    const std::vector<std::vector<int>>&, const std::vector<std::string>&, int) const;
 template std::vector<std::uint8_t>
 AmrSystem<kNativeDimension>::rematerialize_program_accepted_state(
     const std::vector<std::uint8_t>&, int, const std::vector<std::vector<int>>&,
-    const std::vector<std::vector<int>>&, const std::vector<std::uint8_t>&);
+    const std::vector<std::vector<int>>&, const std::vector<std::string>&,
+    const std::vector<std::string>&, const std::vector<std::uint8_t>&);
 template std::vector<int> AmrSystem<kNativeDimension>::level_owner_ranks(int);
+template std::string AmrSystem<kNativeDimension>::level_distribution_mode(int) const;
 template std::vector<std::string> AmrSystem<kNativeDimension>::history_names() const;
 template std::vector<int> AmrSystem<kNativeDimension>::history_levels(const std::string&) const;
 template int AmrSystem<kNativeDimension>::history_depth(const std::string&) const;

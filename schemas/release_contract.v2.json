@@ -12,7 +12,7 @@
   "checkpoint_envelope_schema_version": 1,
   "checkpoint_spatial_schema_version": 1,
   "uniform_checkpoint_payload_version": 8,
-  "amr_checkpoint_payload_version": 10,
+  "amr_checkpoint_payload_version": 11,
   "component_catalog_sha256": "520c51b60d3ae00bdffa0ed040f437fed772b80160e8d5fae7e4c86c829b8305",
   "component_catalog_semantic_sha256": "47dfb51e5f2aba1e78fb7b760f2775b820d210934c8e101826ac372dbc6032b3",
   "supported_matrix": {
