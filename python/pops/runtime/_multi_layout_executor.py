@@ -483,17 +483,19 @@ def _scrub_failed_multi_layout_executor(executor: Any) -> None:
 def _build_multi_layout_executor(
     plan: Any,
     runtime_plan: Any,
-    engines: dict[str, Any],
-    blocks: dict[str, str],
-    transfer_routes: tuple[Any, ...] | list[Any],
+    engines: dict[str, Any] | None,
+    blocks: dict[str, str] | None,
+    transfer_routes: tuple[_NativeTransferRoute, ...] | list[_NativeTransferRoute] | None,
 ) -> Any:
     """Construct the coordinator; a failed self is scrubbed before the traceback escapes."""
+    if engines is None or blocks is None or transfer_routes is None:
+        raise TypeError("multi-layout executor construction requires published children")
     previous_snapshots = {
         id(engine): getattr(engine, "_bound_snapshot", None) for engine in engines.values()
     }
     executor = _MultiLayoutUniformExecutor.__new__(_MultiLayoutUniformExecutor)
     try:
-        executor.__init__(plan, runtime_plan, engines, blocks, transfer_routes)
+        executor.__init__(plan, runtime_plan, engines, blocks, tuple(transfer_routes))
         return executor
     except BaseException:
         _rollback_child_bound_snapshots(engines, previous_snapshots)
@@ -642,13 +644,15 @@ class _MultiLayoutUniformExecutor:
         self,
         plan: Any,
         runtime_plan: Any,
-        engines: dict[str, Any],
-        blocks: dict[str, str],
-        transfer_routes: tuple[_NativeTransferRoute, ...],
+        engines: dict[str, Any] | None,
+        blocks: dict[str, str] | None,
+        transfer_routes: tuple[_NativeTransferRoute, ...] | None,
     ) -> None:
         snapshot = None
         child_budgets = None
         budget_authority = None
+        if engines is None or blocks is None or transfer_routes is None:
+            raise TypeError("multi-layout executor construction requires published children")
         try:
             self._plan = plan
             self._execution_context = plan.execution_context
