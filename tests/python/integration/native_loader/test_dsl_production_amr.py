@@ -109,8 +109,9 @@ def _build_euler_poisson():
 
 def _amr(n, L, branch, refine=1.2):
     cfg = AmrSystemConfig()
-    cfg.n = n
-    cfg.L = L
+    cfg.shape = (n, n)
+    cfg.lower = (0.0, 0.0)
+    cfg.upper = (float(L), float(L))
     cfg.periodicity = (True, True)
     cfg.regrid_every = 4
     s = AmrSystem(cfg)

@@ -27,6 +27,7 @@ from pops.runtime._amr_system_install import _AmrSystemInstall
 from pops.runtime._amr_system_io import _AmrSystemIO
 from pops.runtime._amr_system_program import _AmrSystemProgram
 from pops.runtime._profile import PerformanceSummary, Profile
+from pops.runtime._private_config_compat import private_constructor_config
 
 
 def _profile_payload(system: Any) -> Any:
@@ -91,9 +92,9 @@ class AmrSystem(
 
     def __init__(self, config: Any = None, **cfg_kw: Any) -> None:
         if config is None:
-            config = AmrSystemConfig()
-            for k, v in cfg_kw.items():
-                setattr(config, k, v)
+            config = private_constructor_config(
+                AmrSystemConfig, cfg_kw, runtime="AmrSystem", adaptive=True
+            )
         # cf. System.__init__ : _AmrSystem(config) triggers the Kokkos init (lazy). set_threads
         # has no more effect after this point.
         _threading._first_system_built = True

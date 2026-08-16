@@ -315,11 +315,11 @@ def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
 
     if prepare_fails:
         with pytest.raises(RuntimeError, match="component prepare rejected"):
-            install_runtime_authorities(engine, install_plan)
+            _install_boundary_authorities(engine, install_plan)
         assert native.discarded is True
         assert not hasattr(engine, "_boundary_authorities")
         native.prepare_fails = False
-        install_runtime_authorities(engine, install_plan)
+        _install_boundary_authorities(engine, install_plan)
         assert native.state_routes == [("block", "case::block::state")]
         assert native.staged_packages == [
             ("generic", "riemann"),

@@ -29,6 +29,7 @@ from pops.runtime._system_install import _SystemInstall
 from pops.runtime._system_io import _SystemIO
 from pops.runtime._system_unified_install import _SystemUnifiedInstall
 from pops.runtime._profile import PerformanceSummary, Profile
+from pops.runtime._private_config_compat import private_constructor_config
 
 
 def _profile_payload(system: Any) -> Any:
@@ -102,9 +103,9 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
 
     def __init__(self, config: Any = None, mesh: Any = None, **cfg_kw: Any) -> None:
         if config is None:
-            config = SystemConfig()
-            for k, v in cfg_kw.items():
-                setattr(config, k, v)
+            config = private_constructor_config(
+                SystemConfig, cfg_kw, runtime="System", adaptive=False
+            )
         if mesh is not None:
             raise NotImplementedError(
                 "System(mesh=...) was retired with the legacy 2-D polar runtime; native "
