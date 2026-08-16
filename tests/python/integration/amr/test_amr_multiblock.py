@@ -15,7 +15,6 @@ from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.reconstruction.limiters import Minmod
 from pops.numerics.riemann import Rusanov
 import numpy as np
-from pops.codegen.abi import module_header_signature
 from pops.codegen.loader import CompiledModel
 
 import pops.runtime._engine_descriptors as engine
@@ -23,7 +22,10 @@ from pops.runtime._engine_descriptors import Periodic
 from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
 from tests.python.support.explicit_program import install_forward_euler_program
 from tests.python.support.amr_tagging import install_prepared_threshold_union
-from tests.python.support.native_execution_context import install_compiled_model_amr_test_lane
+from tests.python.support.native_execution_context import (
+    install_compiled_model_amr_test_lane,
+    runtime_aligned_abi,
+)
 
 
 def _bump(n, amp):
@@ -45,6 +47,7 @@ def _amr_system(n, *, regrid_every):
 
 def _amr_lane_model():
     """Detached exact-rank package metadata used solely to authenticate this test lane."""
+    abi_key, std = runtime_aligned_abi()
     return CompiledModel(
         so_path="<amr-multiblock-lane>",
         backend="production",
@@ -56,10 +59,10 @@ def _amr_lane_model():
         n_aux=0,
         params={},
         caps={},
-        abi_key=f"{module_header_signature()}|c++|c++23|dim=2",
+        abi_key=abi_key,
         model_hash="amr-multiblock-lane",
         cxx="c++",
-        std="c++23",
+        std=std,
         native_dimension=2,
         target="amr_system",
     )

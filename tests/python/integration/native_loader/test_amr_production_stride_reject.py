@@ -13,12 +13,14 @@ import sys
 import pytest
 
 import pops.runtime._engine_descriptors as engine
-from pops.codegen.abi import module_header_signature
 from pops.codegen.loader import CompiledModel
 from pops.frames import X_AXIS
 from pops.physics import Momentum
 from pops.runtime._system import AmrSystem  # private engine seam exercised by this guard
-from tests.python.support.native_execution_context import install_compiled_model_amr_test_lane
+from tests.python.support.native_execution_context import (
+    install_compiled_model_amr_test_lane,
+    runtime_aligned_abi,
+)
 
 
 def _amr_system() -> AmrSystem:
@@ -32,6 +34,7 @@ def _amr_system() -> AmrSystem:
 
 def _compiled_amr_metadata(*, so_path: str = "/nonexistent/pops-amr-guard.so") -> CompiledModel:
     """Return exact detached metadata for the pre-loader branch, without claiming native execution."""
+    abi_key, std = runtime_aligned_abi()
     return CompiledModel(
         so_path=so_path,
         backend="production",
@@ -43,10 +46,10 @@ def _compiled_amr_metadata(*, so_path: str = "/nonexistent/pops-amr-guard.so") -
         n_aux=3,
         params={},
         caps={},
-        abi_key=f"{module_header_signature()}|c++|c++23|dim=2",
+        abi_key=abi_key,
         model_hash="amr-preloader-guard",
         cxx="c++",
-        std="c++23",
+        std=std,
         native_dimension=2,
         target="amr_system",
     )

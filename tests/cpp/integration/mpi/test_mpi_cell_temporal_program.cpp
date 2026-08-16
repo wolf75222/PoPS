@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "explicit_amr_program.hpp"
 #include "gtest_compat.hpp"
 #include "test_harness.hpp"
 
@@ -500,6 +501,7 @@ int run_collective_program_route(int split_axis, bool prove_collective_rollback)
   }
 
   AmrSystem<Dim> system(config);
+  test::install_amr_runtime_authority(system, "tests.mpi.cell-temporal-program/runtime@1");
   system.install_block_state_route("tracer", "test.mpi.cell-temporal-program/tracer/state@1");
   add_compiled_model<Dim>(system, "tracer", scalar_advection_model<Dim>(split_axis), "minmod",
                           "rusanov", "conservative", "explicit", 1.4, 1, 1, {}, {}, 0.0,

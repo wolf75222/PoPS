@@ -100,6 +100,19 @@ def compiled_problem_execution_context(compiled: Any, *, target: str) -> Any:
     return platform_execution_context(platform)
 
 
+def runtime_aligned_abi(*, dimension: int = 2) -> tuple[str, str]:
+    """Return ``(abi_key, std)`` that matches the loaded ``_pops`` module.
+
+    Synthetic ``CompiledModel`` fixtures that call ``validate_launch`` must not hardcode ``c++23``:
+    Kokkos Serial ``_pops`` proves ``std=202002L`` (``c++20``).
+    """
+    from pops.codegen.abi import module_header_signature
+    from pops.codegen.toolchain import loader_cxx_std
+
+    std = loader_cxx_std()
+    return "%s|c++|%s|dim=%d" % (module_header_signature(), std, dimension), std
+
+
 def install_compiled_model_amr_test_lane(runtime: Any, model: Any) -> Any:
     """Install the exact AMR package lane required by a low-level test fixture.
 
@@ -144,4 +157,5 @@ __all__ = [
     "compiled_problem_execution_context",
     "install_compiled_model_amr_test_lane",
     "platform_execution_context",
+    "runtime_aligned_abi",
 ]

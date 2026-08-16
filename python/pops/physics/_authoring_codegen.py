@@ -175,7 +175,7 @@ class _CodegenMixin(_HyperbolicModel):
         include: Any = None,
         name: Any = None,
         cxx: Any = None,
-        std: str = "c++23",
+        std: Any = None,
         target: str = "system",
         hoist_reciprocals: bool = False,
         _native_field_roles: Any = None,

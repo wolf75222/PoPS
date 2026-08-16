@@ -13,7 +13,6 @@ from types import SimpleNamespace
 import numpy as np
 import pops
 import pytest
-from pops.codegen.abi import module_header_signature
 from pops.codegen.loader import CompiledModel
 from pops.mesh._amr import (
     Above,
@@ -28,7 +27,10 @@ from pops.runtime import _engine_descriptors as engine
 from pops.runtime._engine_descriptors import Periodic
 from pops.runtime._runtime_mesh_lowering import flow_bootstrap_tagging
 from pops.runtime._system import AmrSystem
-from tests.python.support.native_execution_context import install_compiled_model_amr_test_lane
+from tests.python.support.native_execution_context import (
+    install_compiled_model_amr_test_lane,
+    runtime_aligned_abi,
+)
 
 
 N = 16
@@ -60,6 +62,7 @@ def _resolved_leaf(node_type):
 
 def _amr_lane_model():
     """Detached exact-rank package metadata used solely to authenticate this test lane."""
+    abi_key, std = runtime_aligned_abi()
     return CompiledModel(
         so_path="<native-magnitude-tagging-lane>",
         backend="production",
@@ -71,10 +74,10 @@ def _amr_lane_model():
         n_aux=0,
         params={},
         caps={},
-        abi_key=f"{module_header_signature()}|c++|c++23|dim=2",
+        abi_key=abi_key,
         model_hash="native-magnitude-tagging-lane",
         cxx="c++",
-        std="c++23",
+        std=std,
         native_dimension=2,
         target="amr_system",
     )

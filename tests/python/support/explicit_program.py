@@ -274,10 +274,10 @@ extern "C" pops::Real %s(%s*, pops::Real) {
         install = (
             """\
 extern "C" void pops_install_program(pops::System<pops::kNativeDimension>* sys) {
-  auto context = pops::runtime::program::make_program_execution_provider(sys);
-  context->configure_primary_clock("pops.test.clock.macro");
-  context->install([context](double dt) {
-    auto& ctx = *context;
+  auto ctx_owner = pops::runtime::program::make_program_execution_provider(sys);
+  ctx_owner->configure_primary_clock("pops.test.clock.macro");
+  ctx_owner->install([=](double dt) {
+    auto& ctx = *ctx_owner;
     ctx.begin_step(dt);
 %s
   });
@@ -289,14 +289,14 @@ extern "C" void pops_install_program(pops::System<pops::kNativeDimension>* sys) 
         install = (
             """\
 extern "C" void pops_install_program_amr(pops::AmrSystem<pops::kNativeDimension>* sys) {
-  auto context = pops::runtime::program::make_program_execution_provider(sys);
-  context->configure_primary_clock("pops.test.clock.macro");
-  context->install([context](double macro_dt) {
-    context->advance_hierarchy(macro_dt, [context](double dt) {
-      auto& ctx = *context;
+  auto ctx_owner = pops::runtime::program::make_program_execution_provider(sys);
+  ctx_owner->configure_primary_clock("pops.test.clock.macro");
+  ctx_owner->install([=](double macro_dt) {
+    ctx_owner->advance_hierarchy(macro_dt, [=](double dt) {
+      auto& ctx = *ctx_owner;
 %s
     });
-  }, context);
+  }, ctx_owner);
 }
 """
             % body

@@ -56,7 +56,7 @@ def compile_native(
     include: Any = None,
     name: Any = None,
     cxx: Any = None,
-    std: Any = "c++23",
+    std: Any = None,
     target: Any = "system",
     hoist_reciprocals: Any = False,
     model_identity: Any = None,
@@ -93,7 +93,7 @@ def compile_native(
             "compile_native: no C++ compiler found. The PRODUCTION native route is REQUIRED for "
             "the compile/bind target surface; the prototype/host routes are NOT a fallback (ADC-600)."
         )
-    std = _probe_cxx_std(cc, std)
+    std = _probe_cxx_std(cc, std or loader_cxx_std())
     with tempfile.TemporaryDirectory() as tmp:
         cpp = os.path.join(tmp, "model_native.cpp")
         src_eff = ('#define POPS_HEADER_SIG "%s"\n' % sig + src) if sys.platform == "win32" else src
