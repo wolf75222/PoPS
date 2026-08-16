@@ -122,7 +122,8 @@ void expect_partitioned_tensor_fac() {
   using namespace pops::runtime::program;
 
   auto request = partitioned_request<Dim>();
-  const ExecutionLane lane = ExecutionLane::world("pops.test.nd-tensor-fac.partitioned-mpi");
+  const ExecutionLane lane =
+      ExecutionLane::duplicate_world_collectively("pops.test.nd-tensor-fac.partitioned-mpi");
   const auto registry = make_default_hierarchy_tensor_solver_provider_registry<Dim>(lane);
   auto prepared = prepare_hierarchy_tensor_solver_collectively(
       *registry, tensor_elliptic_detail::kCompositeTensorProvider, std::move(request), lane);

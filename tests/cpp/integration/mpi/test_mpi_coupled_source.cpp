@@ -76,8 +76,6 @@ static std::vector<double> uniform_state(std::size_t cells, double density) {
 }
 
 static void install_ionization_program(NativeSystem& system) {
-  system.install_prepared_boundary_execution_lane(
-      std::make_shared<ExecutionLane>(ExecutionLane::world("pops.test.mpi-coupled-source")));
   system.set_program_block_map({0, 1, 2});
   runtime::program::ProgramContext<kDim> context(&system);
   context.configure_primary_clock("test.clock.macro");
@@ -100,8 +98,7 @@ static void install_ionization_program(NativeSystem& system) {
   system.set_program_block_map({0, 1, 2});
 }
 
-static int pops_run_test_mpi_coupled_source(int argc, char** argv) {
-  comm_init(&argc, &argv);
+static int run_test_mpi_coupled_source_body(int argc, char** argv) {
 #if defined(POPS_HAS_KOKKOS)
   Kokkos::ScopeGuard guard(argc, argv);
 #endif
@@ -130,6 +127,8 @@ static int pops_run_test_mpi_coupled_source(int argc, char** argv) {
   }
 
   NativeSystem sys(cfg);
+  sys.install_prepared_boundary_execution_lane(std::make_shared<ExecutionLane>(
+      ExecutionLane::duplicate_world_collectively("pops.test.mpi-coupled-source")));
   for (const std::string& block :
        {std::string("electrons"), std::string("ions"), std::string("neutrals")})
     sys.install_block_state_route(block, "test.mpi-coupled-source/" + block + "/state@1");
@@ -305,8 +304,14 @@ static int pops_run_test_mpi_coupled_source(int argc, char** argv) {
 #endif
   if (me == 0 && fails == 0)
     std::printf("OK test_mpi_coupled_source (np=%d)\n", np);
-  comm_finalize();
   return fails == 0 ? 0 : 1;
+}
+
+static int pops_run_test_mpi_coupled_source(int argc, char** argv) {
+  comm_init(&argc, &argv);
+  const int result = run_test_mpi_coupled_source_body(argc, argv);
+  comm_finalize();
+  return result;
 }
 
 TEST(test_mpi_coupled_source, Runs) {

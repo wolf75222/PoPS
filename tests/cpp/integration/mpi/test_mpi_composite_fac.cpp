@@ -654,7 +654,7 @@ void prove_periodic_tensor_fac(int rank_count, int rank) {
   for (const auto& level : request.levels)
     geometries.push_back(level.geometry);
 
-  const pops::ExecutionLane lane = pops::ExecutionLane::world(
+  const pops::ExecutionLane lane = pops::ExecutionLane::duplicate_world_collectively(
       "pops.test.mpi-composite-fac.periodic-tensor.dim-" + std::to_string(Dim));
   const auto registry = make_default_hierarchy_tensor_solver_provider_registry<Dim>(lane);
   const auto provider = registry->resolve(tensor_elliptic_detail::kCompositeTensorProvider);
