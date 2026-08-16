@@ -328,6 +328,7 @@
   "tests/python/unit/runtime/test_platform_manifest.py": 1.0,
   "tests/python/unit/runtime/test_pops_env.py": 0.5,
   "tests/python/unit/runtime/test_predictor_corrector.py": 117.4,
+  "tests/python/unit/runtime/test_private_config_compat.py": 0.5,
   "tests/python/unit/runtime/test_profile_api.py": 0.5,
   "tests/python/unit/runtime/test_profiling_counters.py": 0.5,
   "tests/python/unit/runtime/test_program_ir_nodes.py": 0.5,
@@ -424,7 +425,7 @@
     "unit_seconds": "per-file pytest wall time",
     "measured_source": "borrowed _pops.so locally plus GitHub Actions run 30190778708 per-test timings",
     "estimated_note": "Unmeasured files use conservative path/content tiers (1/2/5/30/60/120 s); compiler-gated files retain native-compile estimates. Refresh every estimated row from a full CI run gate-python timing artifact.",
-    "estimated_count": 251,
+    "estimated_count": 252,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_scalar_advection_final_example.py",
@@ -633,6 +634,7 @@
       "tests/python/unit/runtime/test_native_selector.py",
       "tests/python/unit/runtime/test_param_use_sites.py",
       "tests/python/unit/runtime/test_platform_manifest.py",
+      "tests/python/unit/runtime/test_private_config_compat.py",
       "tests/python/unit/runtime/test_public_embedded_boundary_lowering.py",
       "tests/python/unit/runtime/test_run_report.py",
       "tests/python/unit/runtime/test_runtime_executor_context.py",
@@ -678,6 +680,6 @@
       "tests/python/unit/time/test_typed_provenance_guards.py",
       "tests/python/unit/time/test_typed_schedule.py"
     ],
-    "total_files": 420
+    "total_files": 421
   }
 }
