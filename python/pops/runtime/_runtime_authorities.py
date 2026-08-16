@@ -310,6 +310,7 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
         analytic_opcodes = []
         analytic_literals = []
         analytic_clocks = []
+        has_analytic_programs = False
         plan_clocks = set()
         for comp in range(ncomp):
             for row in faces:
@@ -330,6 +331,7 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
                 raise NotImplementedError(
                     "prepared analytic boundary programs require conservative fixed-state inflow"
                 )
+            has_analytic_programs = has_analytic_programs or bool(programs)
             if clock is not None and (not isinstance(clock, str) or not clock or not programs):
                 raise TypeError(
                     "prepared boundary analytic Clock must be non-empty text on an analytic face"
@@ -361,6 +363,14 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
                     )
                 analytic_opcodes.append(opcodes)
                 analytic_literals.append([float(value) for value in literals])
+        # The native ABI distinguishes absent analytic-boundary authority from a
+        # populated per-face table.  Do not manufacture empty rows for an
+        # entirely non-analytic plan: those rows would select the external
+        # analytic path although no face has an authenticated program.
+        if not has_analytic_programs:
+            analytic_opcodes = []
+            analytic_literals = []
+            analytic_clocks = []
         if len(plan_clocks) > 1:
             raise ValueError("prepared analytic boundary plan cannot mix several logical Clocks")
         boundary_state_identity = _canonical_qualified_id(

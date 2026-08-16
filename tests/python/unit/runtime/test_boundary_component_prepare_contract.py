@@ -481,3 +481,80 @@ def test_signed_periodic_identification_reaches_native_install_without_callback(
     assert native.installed[12] == [[], [], ["x", "input", "add"], []]
     assert native.installed[13] == [[], [], [0.0, 0.0, 0.0], []]
     assert native.installed[14] == ["", "", "clock.analytic", ""]
+
+
+def test_boundary_install_omits_analytic_tables_when_no_face_has_a_program():
+    runtime_data = {
+        "schema_version": 1,
+        "authority_type": "prepared_boundary_plan",
+        "identity": "case::block::non-analytic-plan",
+        "state": {"qualified_id": "case::block::state"},
+        "required_depth": 2,
+        "faces": [
+            {
+                "ordinal": ordinal,
+                "producer": "case::block::non-analytic::face::%d" % ordinal,
+                "type": "foextrap",
+                "representation": "conservative",
+                "values": [0.0],
+                "analytic_programs": [],
+                "analytic_clock": None,
+            }
+            for ordinal in range(4)
+        ],
+        "omitted_interface_faces": [],
+        "periodic_identifications": [],
+        "component_regions": [],
+        "interface_component_bindings": [],
+        "interface_endpoints": [],
+    }
+
+    class Authority:
+        def runtime_boundary_data(self, params):
+            assert params == {}
+            return deepcopy(runtime_data)
+
+    class Native:
+        def __init__(self):
+            self.installed = None
+
+        def _install_block_state_route(self, block, identity):
+            assert (block, identity) == ("block", "case::block::state")
+
+        def _install_boundary_plan(self, *args):
+            self.installed = args
+
+        def _prepare_boundary_execution_lane(self, communicator_authority, execution_identity):
+            assert communicator_authority is None
+            assert execution_identity == execution_context.identity.token
+
+        def _discard_boundary_plans(self):
+            raise AssertionError("valid non-analytic installation must not roll back")
+
+    class BoundaryBlock:
+        name = "block"
+        state_identities = ("case::block::state",)
+        boundaries = (Authority(),)
+
+    native = Native()
+    engine = SimpleNamespace(_s=native)
+    execution_context = _execution_context()
+    artifact = SimpleNamespace(
+        resolved_dimension=2,
+        blocks=(
+            SimpleNamespace(name="block", model=SimpleNamespace(n_vars=1, cons_roles=("Scalar",))),
+        ),
+        plan=SimpleNamespace(blocks=(BoundaryBlock(),), field_plans={}),
+        layout_plan=SimpleNamespace(layouts=(SimpleNamespace(adaptive=False),)),
+    )
+    install_plan = SimpleNamespace(
+        artifact=artifact,
+        params={},
+        components={},
+        execution_context=execution_context,
+    )
+
+    install_runtime_authorities(engine, install_plan)
+
+    assert native.installed is not None
+    assert native.installed[12:15] == ([], [], [])
