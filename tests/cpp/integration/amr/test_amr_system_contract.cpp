@@ -515,7 +515,7 @@ void verify_bootstrap_covered_cell_synchronization() {
   ASSERT_EQ(coarse_after.size(), coarse_before.size());
 
   std::vector<bool> covered(cells, false);
-  const pops::Box<Dim>& coarse_domain = system.prepared_amr_level_geometry(0).domain();
+  const pops::Box<Dim> coarse_domain = system.prepared_amr_level_geometry(0).domain();
   const pops::MultiFab<Dim>& fine_carrier = system.prepared_amr_block_state(0, 1);
   for (const pops::Box<Dim>& fine_patch : fine_carrier.layout().boxes()) {
     const pops::Box<Dim> coarse_patch = pops::coarsen(fine_patch, config.transition_ratios.front());
