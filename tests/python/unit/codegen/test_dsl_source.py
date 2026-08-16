@@ -10,10 +10,15 @@ l'ecart max, qu'on exige < 1e-12. Lance avec python3.
 """
 import os
 import subprocess
-import sys
 import tempfile
-from pathlib import Path
+from functools import cache
 
+from pops._native_selector import select_native_dimension, selected_native_dimension
+from pops.codegen.toolchain import (
+    loader_cxx_std,
+    native_compile_environment,
+    pops_loader_build_flags,
+)
 from pops.codegen.module_lowering import lower_and_validate
 from pops.model import ProviderPack
 from pops.physics._facade import Model
@@ -101,25 +106,65 @@ int main() {
 """
 
 
-def _header_only_cxx():
-    reason = missing_compiler_requirement(INCLUDE)
+@cache
+def _header_only_toolchain():
     cxx = default_cxx()
-    if reason or not cxx:
+    reason = missing_compiler_requirement(INCLUDE)
+    if reason or cxx is None:
         require_native_or_skip(reason or "compilateur C++ absent (CXX, c++, clang++)")
         return None
-    return cxx
+    try:
+        dimension = selected_native_dimension()
+        if dimension is None:
+            configured_dimension = os.environ.get("POPS_NATIVE_DIM")
+            if configured_dimension is None:
+                raise RuntimeError(
+                    "header-only source harness requires a selected native dimension or POPS_NATIVE_DIM"
+                )
+            if configured_dimension not in {"1", "2", "3"}:
+                raise RuntimeError(
+                    "header-only source harness requires canonical POPS_NATIVE_DIM text 1, 2, or 3"
+                )
+            dimension = int(configured_dimension)
+            select_native_dimension(dimension)
+        selected_cxx, compile_flags, link_flags = pops_loader_build_flags(cxx)
+    except (RuntimeError, ValueError) as exc:
+        require_native_or_skip(str(exc))
+        return None
+    return selected_cxx, loader_cxx_std(), tuple(compile_flags), tuple(link_flags)
+
+
+def _header_only_cxx():
+    toolchain = _header_only_toolchain()
+    return None if toolchain is None else toolchain[0]
 
 
 def _header_only_flags():
+    toolchain = _header_only_toolchain()
+    if toolchain is None:
+        return []
+    _cxx, standard, compile_flags, link_flags = toolchain
     return [
-        "-std=c++20",
+        "-std=" + standard,
         "-O2",
-        "-DPOPS_NATIVE_DIM=" + os.environ.get("POPS_NATIVE_DIM", "2"),
         "-I",
         INCLUDE,
-        "-I",
-        str(Path(sys.prefix) / "include"),
+        *compile_flags,
+        *link_flags,
     ]
+
+
+def _header_only_compile_flags():
+    toolchain = _header_only_toolchain()
+    if toolchain is None:
+        return []
+    _cxx, standard, compile_flags, _link_flags = toolchain
+    return ["-std=" + standard, "-O2", "-I", INCLUDE, *compile_flags]
+
+
+def _header_only_link_flags():
+    toolchain = _header_only_toolchain()
+    return [] if toolchain is None else list(toolchain[3])
 
 
 def _compile_and_run(source, stem):
@@ -131,8 +176,15 @@ def _compile_and_run(source, stem):
         exe = os.path.join(tmp, stem)
         with open(cpp, "w") as f:
             f.write(source)
-        subprocess.run([cxx, *_header_only_flags(), cpp, "-o", exe], check=True)
-        return subprocess.run([exe], capture_output=True, text=True, check=True).stdout
+        subprocess.run(
+            [cxx, *_header_only_compile_flags(), cpp, "-o", exe, *_header_only_link_flags()],
+            check=True,
+            env=native_compile_environment(),
+        )
+        return subprocess.run(
+            [exe], capture_output=True, text=True, check=True,
+            env=native_compile_environment(),
+        ).stdout
 
 
 def main():

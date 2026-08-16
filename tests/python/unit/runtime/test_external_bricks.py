@@ -15,8 +15,11 @@ import os
 import json
 import subprocess
 import types
+from functools import cache
 
 import pytest
+
+from tests.python.support.requirements import default_cxx, repo_include, require_native_or_skip
 
 # Spec 5 (sec.4): the brick-loader + generic external() live in pops.descriptors, and
 # the riemann ``User`` selector in pops.numerics.riemann (formerly all under pops.lib).
@@ -31,7 +34,6 @@ lib = types.SimpleNamespace(
     _clear_external_catalog=_desc._clear_external_catalog,
 )
 
-from tests.python.support.requirements import default_cxx, repo_include, require_native_or_skip
 _INCLUDE = repo_include()
 
 # A minimal non-numerical external brick .so exercises the generic manifest path. The real Riemann
@@ -51,32 +53,72 @@ extern "C" void pops_brick_residual() {}
 """
 
 
-def _compile_brick_so(workdir, source=_BRICK_SRC, stem="external_brick"):
-    """Compile the minimal brick to a .so; a compiler failure is never converted to a skip."""
+@cache
+def _native_brick_toolchain():
     cxx = default_cxx()
     if not cxx or not os.path.isdir(_INCLUDE):
+        return None
+    from pops._native_selector import select_native_dimension, selected_native_dimension
+    from pops.codegen.toolchain import (
+        loader_cxx_std,
+        pops_loader_build_flags,
+    )
+
+    try:
+        dimension = selected_native_dimension()
+        if dimension is None:
+            configured_dimension = os.environ.get("POPS_NATIVE_DIM")
+            if configured_dimension is None:
+                raise RuntimeError(
+                    "external brick harness requires a selected native dimension or POPS_NATIVE_DIM"
+                )
+            if configured_dimension not in {"1", "2", "3"}:
+                raise RuntimeError(
+                    "external brick harness requires canonical POPS_NATIVE_DIM text 1, 2, or 3"
+                )
+            dimension = int(configured_dimension)
+            select_native_dimension(dimension)
+        selected_cxx, compile_flags, link_flags = pops_loader_build_flags(cxx)
+    except (RuntimeError, ValueError) as exc:
+        require_native_or_skip(str(exc), optional_skip=pytest.skip)
+        return None
+    return selected_cxx, loader_cxx_std(), tuple(compile_flags), tuple(link_flags)
+
+
+def _compile_brick_so(workdir, source=_BRICK_SRC, stem="external_brick"):
+    """Compile the minimal brick to a .so; a compiler failure is never converted to a skip."""
+    toolchain = _native_brick_toolchain()
+    if toolchain is None:
         require_native_or_skip(
-            f"native brick prerequisites unavailable: compiler={cxx!r}, include={_INCLUDE}",
+            "native brick prerequisites unavailable: "
+            f"compiler={default_cxx()!r}, include={_INCLUDE}",
             optional_skip=pytest.skip,
         )
         raise AssertionError("require_native_or_skip must not return")
+    cxx, standard, compile_flags, link_flags = toolchain
     src = os.path.join(workdir, stem + ".cpp")
     so = os.path.join(workdir, stem + ".so")
     with open(src, "w") as f:
         f.write(source)
-    flags = ["-shared", "-fPIC", "-std=c++20", "-O0", "-I", _INCLUDE]
+    compile_flags = [
+        "-shared", "-fPIC", "-std=" + standard, "-O0", "-I", _INCLUDE,
+        *compile_flags,
+    ]
     # ADC-622: on GCC compile the brick .so with -fno-gnu-unique so the header-only BrickRegistry
     # singleton is never emitted STB_GNU_UNIQUE (the loader would otherwise unify it across every
     # dlopen'd brick .so). Belt-and-suspenders behind the hidden-visibility BrickRegistry; harmless on
     # a compiler that already isolates (Clang / AppleClang reject the flag, so gate it on g++).
     cxx_name = os.path.basename(cxx)
     if "g++" in cxx_name and "clang" not in cxx_name:
-        flags.append("-fno-gnu-unique")
-    if os.uname().sysname == "Darwin":
-        flags.append("-undefined")
-        flags.append("dynamic_lookup")
-    subprocess.run([cxx, *flags, src, "-o", so], check=True,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        compile_flags.append("-fno-gnu-unique")
+    from pops.codegen.toolchain import native_compile_environment
+    subprocess.run(
+        [cxx, *compile_flags, src, "-o", so, *link_flags],
+        check=True,
+        env=native_compile_environment(),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
     return so
 
 
@@ -224,11 +266,15 @@ def test_load_cpp_library_rejects_a_non_brick_so(tmp_path):
     so = os.path.join(str(tmp_path), "not_a_brick.so")
     with open(src, "w") as f:
         f.write('extern "C" int unrelated_symbol() { return 0; }\n')
+    from pops.codegen.toolchain import native_compile_environment
     flags = ["-shared", "-fPIC", "-O0"]
-    if os.uname().sysname == "Darwin":
-        flags += ["-undefined", "dynamic_lookup"]
-    subprocess.run([cxx, *flags, src, "-o", so], check=True,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    subprocess.run(
+        [cxx, *flags, src, "-o", so],
+        check=True,
+        env=native_compile_environment(),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
     with pytest.raises(ValueError) as exc:
         lib.load_cpp_library(so)
     assert "pops_brick_manifest" in str(exc.value)
