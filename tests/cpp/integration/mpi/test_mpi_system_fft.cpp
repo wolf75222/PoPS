@@ -23,6 +23,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <exception>
+#include <memory>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -181,8 +182,8 @@ pops::Real manufactured_error(const pops::PoissonFFTSolver<Dim>& solver,
 
 template <int Dim>
 bool verify_exact_provider() {
-  const pops::ExecutionLane lane =
-      pops::ExecutionLane::world("pops.test.mpi-system-fft:" + std::to_string(Dim));
+  const pops::ExecutionLane lane = pops::ExecutionLane::duplicate_world_collectively(
+      "pops.test.mpi-system-fft/provider-" + std::to_string(Dim) + "@1");
   auto request = fft_request<Dim>(true);
   const auto expected = pops::PoissonFFTSolver<Dim>::expected_operator_contract(request);
   pops::Real cell_measure = pops::Real(1);
@@ -253,6 +254,9 @@ NativeSystemConfig system_fft_config() {
 bool verify_system_fft_materialization() {
   constexpr int Dim = pops::kNativeDimension;
   NativeSystem system(system_fft_config());
+  system.install_prepared_boundary_execution_lane(
+      std::make_shared<pops::ExecutionLane>(pops::ExecutionLane::duplicate_world_collectively(
+          "pops.test.mpi-system-fft/runtime-instance@1")));
   constexpr const char* slot = "test.mpi-system-fft/field";
   constexpr const char* field = "fft-potential";
   NativeModel model{};
@@ -334,21 +338,25 @@ bool verify_system_fft_materialization() {
 
 int run_exact_mpi_fft_provider(int argc, char** argv) {
   pops::comm_init(&argc, &argv);
+  int result = 1;
+  {
 #if defined(POPS_HAS_KOKKOS)
-  Kokkos::ScopeGuard guard(argc, argv);
+    Kokkos::ScopeGuard guard(argc, argv);
 #endif
-  pops::reset_poisson_fft_direct_dft_fallback_count();
-  long local_failures = 0;
-  local_failures += verify_exact_provider<1>() ? 0 : 1;
-  local_failures += verify_exact_provider<2>() ? 0 : 1;
-  local_failures += verify_exact_provider<3>() ? 0 : 1;
-  local_failures += verify_system_fft_materialization() ? 0 : 1;
-  local_failures += pops::poisson_fft_direct_dft_fallback_count() == 0 ? 0 : 1;
-  const long failures = pops::all_reduce_sum(local_failures);
-  if (failures == 0 && pops::my_rank() == 0)
-    std::printf("OK test_mpi_system_fft exact provider 1D/2D/3D (np=%d)\n", pops::n_ranks());
+    pops::reset_poisson_fft_direct_dft_fallback_count();
+    long local_failures = 0;
+    local_failures += verify_exact_provider<1>() ? 0 : 1;
+    local_failures += verify_exact_provider<2>() ? 0 : 1;
+    local_failures += verify_exact_provider<3>() ? 0 : 1;
+    local_failures += verify_system_fft_materialization() ? 0 : 1;
+    local_failures += pops::poisson_fft_direct_dft_fallback_count() == 0 ? 0 : 1;
+    const long failures = pops::all_reduce_sum(local_failures);
+    if (failures == 0 && pops::my_rank() == 0)
+      std::printf("OK test_mpi_system_fft exact provider 1D/2D/3D (np=%d)\n", pops::n_ranks());
+    result = failures == 0 ? 0 : 1;
+  }
   pops::comm_finalize();
-  return failures == 0 ? 0 : 1;
+  return result;
 }
 
 }  // namespace

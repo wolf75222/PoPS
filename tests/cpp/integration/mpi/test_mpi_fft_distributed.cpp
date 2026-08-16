@@ -180,22 +180,27 @@ bool verify_failure_boundaries_and_lane_unwind(const pops::ExecutionLane& lane) 
 
 int run_mpi_fft_distributed(int argc, char** argv) {
   pops::comm_init(&argc, &argv);
-  const pops::ExecutionLane lane = pops::ExecutionLane::world("pops.test.mpi-fft-distributed");
-  pops::reset_poisson_fft_direct_dft_fallback_count();
-  long failures = 0;
-  failures += verify_solver_dimension<1>(lane) ? 0 : 1;
-  failures += verify_solver_dimension<2>(lane) ? 0 : 1;
-  failures += verify_solver_dimension<3>(lane) ? 0 : 1;
-  failures += pops::poisson_fft_direct_dft_fallback_count() == 0 ? 0 : 1;
-  failures += verify_last_axis_fallback_contract(lane) ? 0 : 1;
-  failures += verify_divergent_valid_request_is_rejected_collectively(lane) ? 0 : 1;
-  failures += verify_rank_local_invalid_request_is_rejected_collectively(lane) ? 0 : 1;
-  failures += verify_failure_boundaries_and_lane_unwind(lane) ? 0 : 1;
-  failures = pops::all_reduce_sum(failures, lane);
-  if (failures == 0 && pops::my_rank() == 0)
-    std::printf("OK test_mpi_fft_distributed 1D/2D/3D np=%d\n", pops::n_ranks());
+  int result = 1;
+  {
+    const pops::ExecutionLane lane =
+        pops::ExecutionLane::duplicate_world_collectively("pops.test.mpi-fft-distributed@1");
+    pops::reset_poisson_fft_direct_dft_fallback_count();
+    long failures = 0;
+    failures += verify_solver_dimension<1>(lane) ? 0 : 1;
+    failures += verify_solver_dimension<2>(lane) ? 0 : 1;
+    failures += verify_solver_dimension<3>(lane) ? 0 : 1;
+    failures += pops::poisson_fft_direct_dft_fallback_count() == 0 ? 0 : 1;
+    failures += verify_last_axis_fallback_contract(lane) ? 0 : 1;
+    failures += verify_divergent_valid_request_is_rejected_collectively(lane) ? 0 : 1;
+    failures += verify_rank_local_invalid_request_is_rejected_collectively(lane) ? 0 : 1;
+    failures += verify_failure_boundaries_and_lane_unwind(lane) ? 0 : 1;
+    failures = pops::all_reduce_sum(failures, lane);
+    if (failures == 0 && pops::my_rank() == 0)
+      std::printf("OK test_mpi_fft_distributed 1D/2D/3D np=%d\n", pops::n_ranks());
+    result = failures == 0 ? 0 : 1;
+  }
   pops::comm_finalize();
-  return failures == 0 ? 0 : 1;
+  return result;
 }
 
 }  // namespace
