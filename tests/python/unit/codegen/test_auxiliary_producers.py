@@ -7,6 +7,7 @@ import pytest
 
 from pops._ir import ValueExpr
 from pops._ir.expr import Var
+from pops.codegen._artifact_freeze import seal_attributes
 from pops.codegen._compile_emit import _emit_auxiliary_route_registration
 from pops.codegen.program_emit_kernels import ProgramProviderPlans
 from pops.codegen.component_provider_packs import (
@@ -60,6 +61,38 @@ def test_input_and_derived_aux_routes_are_exact_and_emit_native_launcher() -> No
     assert "BoundaryKind::first_order_extrapolation" in source
     assert "std::vector<Output>{{" in source
     assert ", 0}}" not in source  # the package-local slot never crosses the DSO ABI
+
+
+def test_provider_pack_reattachment_normalizes_only_artifact_container_freezing() -> None:
+    """A list-to-tuple seal is storage-neutral, but changed metadata remains a conflict."""
+    packs = resolve_component_provider_packs(_module())
+    carrier = SimpleNamespace()
+    packs.attach(carrier)
+    seal_attributes(carrier)
+
+    # Artifact sealing recursively turns ProviderPack JSON lists into immutable tuples.  The same
+    # exact logical authority must remain idempotently attachable later in the compile lifecycle.
+    assert isinstance(carrier._component_provider_metadata["entries"], tuple)
+    packs.attach(carrier)
+
+    tampered = packs.complete.to_data()
+    tampered["entries"][0]["provider"]["producer"] = "different/provider"
+    object.__setattr__(carrier, "_component_provider_metadata", tampered)
+    with pytest.raises(ValueError, match="conflicting component-provider pack"):
+        packs.attach(carrier)
+
+
+def test_amr_auxiliary_hook_is_typed_and_distinct_from_the_system_hook() -> None:
+    module = _module()
+    packs = resolve_component_provider_packs(module)
+    carrier = SimpleNamespace(owner_path=module.owner_path)
+    packs.attach(carrier)
+
+    source = _emit_auxiliary_route_registration(carrier, target="amr_system")
+
+    assert "pops_register_provider_routes_amr" in source
+    assert "pops::AmrSystem<pops::kNativeDimension>* sys" in source
+    assert "pops::System<pops::kNativeDimension>* sys" not in source
 
 
 def test_aux_producer_rejects_duplicate_target_and_foreign_handle() -> None:

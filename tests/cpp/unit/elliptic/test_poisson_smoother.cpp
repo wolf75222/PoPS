@@ -123,7 +123,8 @@ TEST(test_poisson_smoother,
   options.absolute_tolerance = pops::Real(1e-12);
   options.maximum_cycles = 100;
   options.bottom_sweeps = 60;
-  Solver solver(request(16), options);
+  const pops::ExecutionLane lane = pops::ExecutionLane::world("tests.poisson-smoother");
+  Solver solver(request(16), lane, options);
   solver.install_nullspace(pops::FieldNullspacePlan<kDim>{},
                            pops::PreparedVectorDistribution<kDim>::replicated());
   fill_rhs(solver);

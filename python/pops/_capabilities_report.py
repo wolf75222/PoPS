@@ -17,6 +17,10 @@ import importlib
 from collections.abc import Mapping
 from typing import Any
 
+from pops._generated_release_contract import (
+    AMR_CHECKPOINT_PAYLOAD_VERSION,
+    UNIFORM_CHECKPOINT_PAYLOAD_VERSION,
+)
 from pops._capabilities_common import (
     CapabilityRouteMatrix,
     CapabilityRouteRow,
@@ -283,10 +287,13 @@ class NativeCapabilityReport:
         lines.append("  platform : %s" % self.platform)
         lines.append("  abi_key  : %s" % ((self.abi_key or "")[:12] or "none"))
         lines.append(
-            "  runtime  : dimension=%s amr_refinement_ratio=%s precision=%s communicator=%s"
+            "  runtime  : dimension=%s amr_refinement_ratio=%s selection=%s rank=%s "
+            "precision=%s communicator=%s"
             % (
                 self.runtime.get("dimension"),
                 self.runtime.get("amr_refinement_ratio"),
+                self.runtime.get("amr_refinement_ratio_selection"),
+                self.runtime.get("amr_refinement_ratio_rank"),
                 self.runtime.get("precision"),
                 self.runtime.get("communicator"),
             )
@@ -415,8 +422,7 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             ),
             requested="characteristic no-inflow/outflow transport boundary",
             available_route=(
-                "Inflow(state=U, value=U_ref, "
-                "characteristic=model_characteristic_no_inflow(U))"
+                "Inflow(state=U, value=U_ref, characteristic=model_characteristic_no_inflow(U))"
             ),
             alternative=(
                 "use fixed-state inflow/extrapolated outflow outside the qualified envelope"
@@ -509,12 +515,9 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
                 "advances, while polar geometry is refused and block/team counters, MPI fallback "
                 "reduction, GPU qualification, restart metadata, and a benchmark gate remain"
             ),
-            requested=(
-                "prepared Riemann recovery chain with requested/used solver diagnostics"
-            ),
+            requested=("prepared Riemann recovery chain with requested/used solver diagnostics"),
             available_route=(
-                "pops.numerics.riemann.Recovery(primary=Roe(), "
-                "fallbacks=(HLL(), Rusanov()))"
+                "pops.numerics.riemann.Recovery(primary=Roe(), fallbacks=(HLL(), Rusanov()))"
             ),
             alternative=(
                 "select one supported Riemann route explicitly and consume rejection through "
@@ -587,30 +590,31 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             layout="amr",
             backend="production",
             platform="host",
-            mpi=False,
+            mpi=mpi,
             gpu=False,
             status="partial",
             limitation=(
-                "Program.cell_local_time and its generated AmrProgramContext route cover one "
-                "serial host rank, one 2D block, one level, one owned box, one common cell rung, "
-                "transport-only forward Euler and frozen attempt auxiliary fields with built-in "
-                "periodic/Foextrap boundaries; the provider reuses the exact compiled AMR "
-                "residual/face-flux closure "
-                "and commits real conservative state plus four time-integrated face records per "
-                "cell as one accepted transaction at the synchronization barrier; its exact "
-                "contract includes model-owned transport parameters and the limiter/Riemann route; "
-                "same-topology restart restores numerical state and exact clocks but intentionally "
-                "invalidates the last-interval diagnostic flux ledger until another accepted step; "
-                "prepared physical-boundary plans, heterogeneous rungs, multi-box/multilevel and "
-                "coarse/fine ledgers, sources, MPI, GPU, regrid/rank-change rematerialization, "
-                "checkpoint persistence of the diagnostic ledger and performance proof remain "
-                "unavailable"
+                "Program.cell_local_time and its generated AmrProgramContext route cover exact-rank "
+                "host execution over independent multi-block, multi-level and distributed multi-box "
+                "AMR packs with transport-only forward Euler. One authored finest-level rung is "
+                "lifted through integral power-of-two temporal ratios to one homogeneous rung per "
+                "level-group, yielding exactly one FE batch per hierarchy window. The provider "
+                "reuses each compiled AMR residual and its exact face-flux carrier, aggregates one "
+                "bounded basis per route and publishes the complete state/authoritative reflux "
+                "transaction only at the synchronization barrier. Same-rank restart and regrid "
+                "rematerialize topology-derived records and exact clocks; the last-interval "
+                "diagnostic flux view is intentionally invalidated on restore. Heterogeneous rungs, "
+                "global/interface-coupled blocks, sources or fields, physical/non-periodic "
+                "boundaries, every GPU default execution or memory space, performance "
+                "qualification, rank-change cell-record rematerialization and checkpoint "
+                "persistence of the diagnostic view remain unavailable. Those boundary and device "
+                "envelopes fail collectively during exact-lane preparation"
             ),
             requested="prepared cell-local scientific stage and space-time flux transaction",
             available_route=(
                 "Program.cell_local_time plus the generated AmrProgramContext and native "
-                "PreparedSameLevelTransportEulerStageFluxProvider in their exact bounded "
-                "host/serial same-rung envelope"
+                "PreparedSameLevelTransportEulerPackStageFluxProvider in their exact bounded "
+                "host per-level homogeneous-rung envelope"
             ),
             alternative=(
                 "use the synchronous AMR Program route outside that envelope, or implement the "
@@ -627,7 +631,8 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             gpu=False,
             status="available",
             limitation=(
-                "host float64 and ratio-2 AMR only; MPI requires both components to declare "
+                "host float64 with hierarchy-selected AMR ratios; MPI requires both components "
+                "to declare "
                 "MPI_COMM_WORLD and "
                 "a distributed coarse level; executable MPI qualification currently covers "
                 "exactly two ranks with distributed L0/L1 and regrid rematerialization; "
@@ -737,10 +742,13 @@ def _support_rows(flags: Any, source: Any) -> list:
             platform="host",
             flags=flags,
             flag="supports_amr",
-            limitation="hierarchy depth is resource-policy controlled; native ratio=2",
+            limitation=(
+                "hierarchy depth and transition ratios are selected by the "
+                "authenticated AMR hierarchy"
+            ),
             requested="layout=AMR",
             available_route="backend='production' target='amr_system'",
-            alternative="use Uniform or an AMR hierarchy with 2:1 transitions",
+            alternative="use Uniform or an AMR hierarchy with explicit transition ratios",
             source=source,
         ),
         _row(
@@ -838,11 +846,13 @@ def _inventory_rows(flags: Any, source: Any) -> list:
         ORIENTED_FACE_CENTERINGS,
     )
 
-    physical_transfer_centerings = "/".join((
-        CELL_CENTERED.name,
-        *(centering.name for centering in ORIENTED_FACE_CENTERINGS),
-        NODE_CENTERED.name,
-    ))
+    physical_transfer_centerings = "/".join(
+        (
+            CELL_CENTERED.name,
+            *(centering.name for centering in ORIENTED_FACE_CENTERINGS),
+            NODE_CENTERED.name,
+        )
+    )
     return [
         _row(
             "layout:Uniform",
@@ -865,9 +875,11 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             flag="supports_amr",
             mpi=mpi,
             gpu=gpu,
-            limitation="resource-policy-controlled depth and native ratio=2",
-            requested="AMR hierarchy with a non-2:1 transition",
-            available_route="AMR hierarchy with 2:1 transitions",
+            limitation=(
+                "resource-policy-controlled depth and hierarchy-selected transition ratios"
+            ),
+            requested="AMR hierarchy with an unauthenticated transition ratio",
+            available_route="AMR hierarchy with explicit transition ratios",
             alternative="use Uniform or the native AMR envelope",
             source=source,
         ),
@@ -1003,8 +1015,8 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             layout="uniform|amr",
             backend="production",
             limitation=(
-                "ghost_depth=3; ratio-2 AMR in the compile-selected native rank selects the "
-                "conservative order-5 "
+                "ghost_depth=3; hierarchy-selected AMR in the compile-selected native rank "
+                "selects the conservative order-5 "
                 "cell-average provider from resolved spatial capabilities"
             ),
             source=source,
@@ -1041,8 +1053,8 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             mpi=mpi,
             gpu=gpu,
             limitation=(
-                "exact Dim=2, periodic, constant coefficient, power-of-two uniform grid, "
-                "canonical ordered MPI slabs; rank one/three and non-power-of-two grids refuse"
+                "exact Cartesian Dim in {1,2,3}, periodic, constant coefficient and canonical "
+                "ordered MPI slabs; radix-2 fast path with diagnosed direct-DFT fallback"
             ),
             source=source,
         ),
@@ -1094,8 +1106,8 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             gpu=gpu,
             status="partial",
             limitation=(
-                "AMR hierarchy, patch ranges, reflux and subcycling are ratio=2 only; "
-                "validate_amr_refinement_ratio() rejects other ratios"
+                "AMR transition ratios are exact hierarchy properties; the native runtime does "
+                "not advertise a process-global ratio invariant"
             ),
             source=source,
         ),
@@ -1138,10 +1150,13 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             status="partial",
             limitation=(
                 "physical transfer routes are exact dense %s "
-                "contracts; restriction, coarse-fine fill and temporal interpolation "
-                "currently accept cell-centered state only; derived fields recompute "
-                "through elliptic_solve and caches rebuild through patch_topology"
-            ) % physical_transfer_centerings,
+                "contracts; cell-centered state provides restriction, coarse-fine fill and "
+                "qualified temporal interpolation; complete oriented Cartesian face vectors "
+                "provide divergence-preserving prolongation and primitive node fields provide "
+                "multilinear prolongation; derived fields recompute through elliptic_solve and "
+                "caches rebuild through patch_topology"
+            )
+            % physical_transfer_centerings,
             source=source,
         ),
         _row(
@@ -1308,7 +1323,10 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             status="unavailable",
             limitation="parallel HDF5 checkpoint is not a native checkpoint route",
             requested="restartable checkpoint encoded as parallel HDF5",
-            available_route="strict accepted-state NPZ checkpoint (uniform v6, AMR v8)",
+            available_route=(
+                "strict accepted-state NPZ checkpoint (uniform v%d, AMR v%d)"
+                % (UNIFORM_CHECKPOINT_PAYLOAD_VERSION, AMR_CHECKPOINT_PAYLOAD_VERSION)
+            ),
             alternative="use RuntimeInstance.checkpoint() or the typed Checkpoint consumer",
             source=source,
         ),
@@ -1321,8 +1339,9 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             flag="supports_amr",
             mpi=mpi,
             limitation=(
-                "strict v7 accepted-state restart; exact rank-local AMR ownership and "
+                "strict v%d accepted-state restart; exact rank-local AMR ownership and "
                 "compiled-Program publications keep the native rank count"
+                % AMR_CHECKPOINT_PAYLOAD_VERSION
             ),
             source=source,
         ),

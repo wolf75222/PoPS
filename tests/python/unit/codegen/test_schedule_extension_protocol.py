@@ -22,6 +22,7 @@ try:
     from pops.numerics.terms import DefaultSource, Flux
     from pops.output._consumer_contracts import ConsumerMoment
     from pops.runtime._consumer_planning import _is_due, _schedule_coordinate
+    from pops.time._program.temporal_manifest import build_temporal_manifest
     from pops.time.points import TimePoint
     from pops.time import (
         ScheduleAction,
@@ -80,9 +81,32 @@ class ThirdPartyHold(adctime.OffPolicy):
 
 
 @dataclass(frozen=True, slots=True)
+class FalseNegativeThirdPartyHold(ThirdPartyHold):
+    """An extension cannot weaken cache authority outside its native action plan."""
+
+    def needs_cache(self) -> bool:
+        return False
+
+    manifest_tag = "test.false_negative_third_party_hold"
+    component_uri = "test://pops/time/schedule/off-policies/false-negative-hold"
+    component_version = 1
+
+
+@dataclass(frozen=True, slots=True)
 class ThirdPartySchedule(adctime.Schedule):
     audit_label: str = "external-schedule"
     component_uri = "test://pops/time/schedule"
+    component_version = 1
+
+
+@dataclass(frozen=True, slots=True)
+class FalseNegativeThirdPartySchedule(ThirdPartySchedule):
+    """A third-party Schedule cannot weaken its native cache action plan."""
+
+    def needs_cache(self) -> bool:
+        return False
+
+    component_uri = "test://pops/time/schedule/false-negative-cache"
     component_version = 1
 
 
@@ -217,6 +241,48 @@ def test_third_party_schedule_lowers_without_codegen_registration():
     )
     assert _schedule_coordinate(manifest, moment) == 6
     assert _is_due(manifest, moment) is True
+
+
+def test_temporal_manifest_derives_cache_authority_from_native_lowering_ir():
+    def make_schedule(clock):
+        return adctime.Schedule(
+            ConfigurableEvery(AcceptedChannel(clock), period=3),
+            off=FalseNegativeThirdPartyHold(),
+        )
+
+    schedule = make_schedule(adctime.Program("false_negative_cache").clock)
+    assert schedule.needs_cache() is True
+
+    manifest = build_temporal_manifest(_scratch_program(make_schedule))
+    scheduled = [entry for entry in manifest["schedules"] if entry["schedule"]]
+    assert scheduled and all(entry["cache_required"] is True for entry in scheduled)
+
+
+def test_third_party_schedule_cannot_weaken_native_cache_guards():
+    def make_schedule(clock):
+        return FalseNegativeThirdPartySchedule(
+            ConfigurableEvery(AcceptedChannel(clock), period=3), off=ThirdPartyHold()
+        )
+
+    program = adctime.Program("false_negative_schedule_cache")
+    state = typed_state(program, "ions")
+    schedule = make_schedule(program.clock)
+    assert schedule.needs_cache() is False
+
+    _expect_error(
+        ValueError,
+        "is not cacheable",
+        lambda: program._validate_schedule(
+            SimpleNamespace(name="uncacheable", capabilities={"cacheable": False}),
+            schedule,
+            (state,),
+        ),
+    )
+    _expect_error(
+        NotImplementedError,
+        "requires a persistent hierarchy value cache",
+        lambda: _check_schedules_lowerable(_scratch_program(make_schedule), target="amr_system"),
+    )
 
 
 def test_configurable_schedule_round_trip_preserves_exact_extension_identity():

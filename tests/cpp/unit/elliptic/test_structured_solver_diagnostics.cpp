@@ -118,7 +118,9 @@ TEST(test_structured_solver_diagnostics, geometric_multigrid_publishes_the_unifi
   options.relative_tolerance = pops::Real(1e-8);
   options.absolute_tolerance = pops::Real(1e-11);
   options.maximum_cycles = 100;
-  pops::elliptic::mg::GeometricMG<kDim> solver(complete_request(16), options);
+  const pops::ExecutionLane lane =
+      pops::ExecutionLane::world("tests.structured-diagnostics.geometric-mg");
+  pops::elliptic::mg::GeometricMG<kDim> solver(complete_request(16), lane, options);
   solver.install_nullspace(pops::FieldNullspacePlan<kDim>{},
                            pops::PreparedVectorDistribution<kDim>::replicated());
   solver.rhs().set_val(pops::Real(1));
@@ -135,7 +137,9 @@ TEST(test_structured_solver_diagnostics, geometric_multigrid_publishes_the_unifi
 TEST(test_structured_solver_diagnostics,
      geometric_multigrid_nonfinite_rhs_publishes_a_canonical_invalid_evaluation) {
   pops::elliptic::mg::GeometricMultigridOptions options;
-  pops::elliptic::mg::GeometricMG<kDim> solver(complete_request(8), options);
+  const pops::ExecutionLane lane =
+      pops::ExecutionLane::world("tests.structured-diagnostics.geometric-mg-nonfinite");
+  pops::elliptic::mg::GeometricMG<kDim> solver(complete_request(8), lane, options);
   solver.install_nullspace(pops::FieldNullspacePlan<kDim>{},
                            pops::PreparedVectorDistribution<kDim>::replicated());
   solver.rhs().set_val(std::numeric_limits<pops::Real>::quiet_NaN());
@@ -159,7 +163,9 @@ TEST(test_structured_solver_diagnostics,
   pops::elliptic::mg::CompositeFacBuildRequest<kDim> build{
       {std::move(coarse), std::move(fine)},
       {pops::amr::RefinementRatio<kDim>{filled<std::array<int, kDim>>(2)}}};
-  pops::elliptic::mg::CompositeFacPoisson<kDim> solver(std::move(build));
+  const pops::ExecutionLane lane =
+      pops::ExecutionLane::world("tests.structured-diagnostics.composite-fac");
+  pops::elliptic::mg::CompositeFacPoisson<kDim> solver(std::move(build), lane);
   solver.install_nullspace(pops::FieldNullspacePlan<kDim>{},
                            {pops::PreparedVectorDistribution<kDim>::replicated(),
                             pops::PreparedVectorDistribution<kDim>::replicated()});
@@ -184,7 +190,9 @@ TEST(test_structured_solver_diagnostics,
   pops::elliptic::mg::CompositeFacBuildRequest<kDim> build{
       {std::move(coarse), std::move(fine)},
       {pops::amr::RefinementRatio<kDim>{filled<std::array<int, kDim>>(2)}}};
-  pops::elliptic::mg::CompositeFacPoisson<kDim> solver(std::move(build));
+  const pops::ExecutionLane lane =
+      pops::ExecutionLane::world("tests.structured-diagnostics.composite-fac-nonfinite");
+  pops::elliptic::mg::CompositeFacPoisson<kDim> solver(std::move(build), lane);
   solver.install_nullspace(pops::FieldNullspacePlan<kDim>{},
                            {pops::PreparedVectorDistribution<kDim>::replicated(),
                             pops::PreparedVectorDistribution<kDim>::replicated()});

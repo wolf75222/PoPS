@@ -224,7 +224,7 @@ TEST(RouteIds, EveryRouteFamilyEnumeratorNamesItself) {
       RouteFamily::kLimiter,  RouteFamily::kRiemann,     RouteFamily::kRecon,
       RouteFamily::kTime,     RouteFamily::kFieldSolver, RouteFamily::kPoissonBc,
       RouteFamily::kLayout,   RouteFamily::kTransport,   RouteFamily::kSource,
-      RouteFamily::kElliptic, RouteFamily::kPoissonRhs,  RouteFamily::kWall,
+      RouteFamily::kElliptic, RouteFamily::kPoissonRhs,
   };
   bool ok = true;
   for (RouteFamily f : fams)

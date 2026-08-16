@@ -35,7 +35,7 @@ from pops.fields import (
     FieldDiscretization,
     FieldOutput,
 )
-from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Periodic
+from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Dirichlet, Periodic
 from pops.frames import Cartesian2D
 from pops.initial import InitialCondition
 from pops.layouts import AMR, Uniform
@@ -49,7 +49,7 @@ from pops.numerics.spatial import FiniteVolume
 from pops.params import RuntimeParam
 from pops.physics import Model
 from pops.projection import ConservativeCellAverage
-from pops.solvers.elliptic import GeometricMG
+from pops.solvers.elliptic import CartesianCG, GeometricMG
 from pops.time import FailRun, FixedDt, every
 from tests.python.support.native_execution_context import artifact_execution_context
 
@@ -245,7 +245,11 @@ def _resolved_named_field_runtime_parameter_case(*, target: str):
     field_operator = model.field_operator(
         "electrostatic",
         unknown=potential,
-        equation=-laplacian(phi) + 1.0 * phi == scale * rho,
+        equation=(
+            -laplacian(phi) + 1.0 * phi == scale * rho
+            if target == "amr_system"
+            else -laplacian(phi) == scale * rho
+        ),
         outputs=(FieldOutput("phi", potential),),
     )
 
@@ -267,8 +271,15 @@ def _resolved_named_field_runtime_parameter_case(*, target: str):
         field_operator,
         FieldDiscretization(
             method=CellCenteredSecondOrder(),
-            boundaries=(BoundaryCondition(AllPhysicalBoundaries(), Periodic()),),
-            solver=GeometricMG(),
+            boundaries=(
+                BoundaryCondition(
+                    AllPhysicalBoundaries(),
+                    Periodic() if target == "amr_system" else Dirichlet(0.0),
+                ),
+            ),
+            solver=(
+                GeometricMG() if target == "amr_system" else CartesianCG()
+            ),
             hierarchy_policy=(
                 CompositeHierarchySolve() if target == "amr_system" else None
             ),
@@ -287,7 +298,6 @@ def _resolved_named_field_runtime_parameter_case(*, target: str):
         layout = Uniform(CartesianGrid(
             frame=frame,
             cells=(N, N),
-            periodic=PeriodicAxes(frame.axes),
         ))
     else:
         case.initials.add(InitialCondition(

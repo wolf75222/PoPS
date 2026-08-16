@@ -9,6 +9,7 @@
 #include <pops/numerics/elliptic/interface/field_nullspace.hpp>
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
+#include <pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp>
 #include <pops/runtime/config/runtime_params.hpp>
 #include <pops/runtime/multiblock/evaluation_point.hpp>
 #include <pops/runtime/program/clock_schedule.hpp>
@@ -24,6 +25,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <functional>
 #include <initializer_list>
 #include <limits>
@@ -57,6 +59,49 @@ class ProgramContext {
   using provider_values_view_type = ProviderStorageView<Dim, Count>;
   using runtime_state_type = ProgramRuntimeState<Dim>;
   using scalar_boundary_session_type = PreparedScalarBoundarySession<Dim>;
+
+  /// Immutable authentication token for one generated block-boundary invocation.  It retains no
+  /// closure, state field, or mutable boundary image: System remains the sole owner of the exact
+  /// prepared authority installed with the block.
+  class PreparedBlockBoundarySession {
+   public:
+    PreparedBlockBoundarySession(const PreparedBlockBoundarySession&) = default;
+    PreparedBlockBoundarySession& operator=(const PreparedBlockBoundarySession&) = default;
+
+   private:
+    friend class ProgramContext;
+
+    PreparedBlockBoundarySession(const runtime_type* system, int runtime_block,
+                                 runtime::multiblock::BoundaryEvaluationPoint point,
+                                 const ExecutionLane& lane,
+                                 std::shared_ptr<scalar_boundary_session_type> transport)
+        : system_(system),
+          runtime_block_(runtime_block),
+          point_(std::move(point)),
+          lane_(&lane),
+          transport_(std::move(transport)) {
+      if (!transport_)
+        throw std::invalid_argument("prepared block boundary session requires halo transport");
+    }
+
+    [[nodiscard]] int runtime_block() const noexcept { return runtime_block_; }
+    [[nodiscard]] const runtime::multiblock::BoundaryEvaluationPoint& point() const noexcept {
+      return point_;
+    }
+    [[nodiscard]] const ExecutionLane& lane() const noexcept { return *lane_; }
+    [[nodiscard]] const runtime_type* system() const noexcept { return system_; }
+    [[nodiscard]] const scalar_boundary_session_type& transport() const noexcept {
+      return *transport_;
+    }
+
+    const runtime_type* system_ = nullptr;
+    int runtime_block_ = -1;
+    runtime::multiblock::BoundaryEvaluationPoint point_{};
+    const ExecutionLane* lane_ = nullptr;
+    std::shared_ptr<scalar_boundary_session_type> transport_;
+  };
+
+  using block_boundary_session_type = PreparedBlockBoundarySession;
 
   struct FieldStageOverride {
     int program_block = -1;
@@ -150,17 +195,14 @@ class ProgramContext {
     double prior_physical_time_offset_ = 0.0;
   };
 
-  explicit ProgramContext(runtime_type* system)
-      : system_(require_system_(system)),
-        scalar_boundary_lane_(
-            std::make_shared<ExecutionLane>(ExecutionLane::duplicate_world_collectively(
-                "pops.program.scalar-boundary.nd" + std::to_string(Dim)))) {}
+  explicit ProgramContext(runtime_type* system) : system_(require_system_(system)) {}
 
   void install(std::function<void(double)> step) const {
     system_->install_program_step(std::move(step));
   }
 
   void begin_step(double dt) const {
+    (void)prepared_execution_lane();
     if (!std::isfinite(dt) || dt <= 0.0)
       throw std::invalid_argument("ProgramContext step requires a finite positive dt");
     current_dt_ = dt;
@@ -205,6 +247,24 @@ class ProgramContext {
 
   int n_blocks() const { return system_->n_blocks(); }
 
+  /// Borrow the runtime-owned lane authenticated during Uniform boundary preparation. Generated
+  /// implicit reports use this same lane for every reduction, diagnostic selection, and outcome.
+  [[nodiscard]] const ExecutionLane& prepared_execution_lane() const {
+    return system_->prepared_boundary_execution_lane();
+  }
+
+  /// Borrow the exact runtime-owned communicator for persistent generated materialization. The
+  /// generated Program never duplicates MPI_COMM_WORLD when its prepared boundary lane is owned by
+  /// an embedding communicator.
+  [[nodiscard]] ExecutionCommunicator prepared_execution_communicator() const {
+    const ExecutionLane& lane = prepared_execution_lane();
+#ifdef POPS_HAS_MPI
+    return ExecutionCommunicator::borrowed(lane.identity(), lane.native_handle());
+#else
+    return ExecutionCommunicator::world();
+#endif
+  }
+
   int sys_block(int program_block) const {
     const std::vector<int>& map = system_->program_block_map();
     if (map.empty())
@@ -228,8 +288,9 @@ class ProgramContext {
   /// embed global group/component addresses.  ``Count == 0`` returns an empty device-copyable view
   /// without reading a consumer plan or provider storage, even if another block owns providers.
   template <int Count>
-  [[nodiscard]] provider_values_view_type<Count> provider_values_view(
-      std::string_view consumer_qid, int program_block, std::size_t local_fab) const {
+  [[nodiscard]] provider_values_view_type<Count> provider_values_view(std::string_view consumer_qid,
+                                                                      int program_block,
+                                                                      std::size_t local_fab) const {
     static_assert(Count >= 0, "a provider consumer count cannot be negative");
     if constexpr (Count == 0) {
       (void)consumer_qid;
@@ -282,8 +343,17 @@ class ProgramContext {
   void rhs_into(int program_block, field_type& state_value, field_type& rhs, int rate_id) const {
     require_rate_identity_(rate_id);
     count_kernel_();
-    system_->block_rhs_into_at(boundary_evaluation_point(rate_id), sys_block(program_block),
-                               state_value, rhs);
+    const auto point = boundary_evaluation_point(rate_id);
+    const int runtime_block = sys_block(program_block);
+    if (system_->requires_block_boundary_session(runtime_block)) {
+      const ExecutionLane& lane = system_->prepared_boundary_execution_lane();
+      auto boundary = prepare_block_boundary_session(program_block, state_value, point, lane);
+      system_->block_rhs_into_at_prepared(
+          point, runtime_block, state_value, rhs, boundary->system(), boundary->runtime_block(),
+          boundary->point(), boundary->lane(), boundary->transport());
+      return;
+    }
+    system_->block_rhs_into_at(point, runtime_block, state_value, rhs);
   }
 
   void neg_div_flux_default_into(int program_block, field_type& state_value, field_type& rhs,
@@ -346,7 +416,11 @@ class ProgramContext {
   /// Assemble the centered negative divergence of one already-materialized named flux field per
   /// native axis.  Axis count and storage rank are the same compile-time constant, so 1D/2D/3D use
   /// one algorithm and no runtime dimension selector.
-  void neg_div_named_flux_into(field_type& rhs, const std::array<field_type*, Dim>& fluxes) const {
+  void neg_div_named_flux_into(int program_block, field_type& stage_state, field_type& rhs,
+                               const std::array<field_type*, Dim>& fluxes, int rate_id) const {
+    (void)sys_block(program_block);
+    require_rate_identity_(rate_id);
+    require_same_field_contract_(stage_state, rhs, "ProgramContext named-flux residual");
     const Geometry<Dim> geometry = system_->prepared_block_geometry();
     for (int axis = 0; axis < Dim; ++axis) {
       const field_type* flux = fluxes[static_cast<std::size_t>(axis)];
@@ -384,12 +458,18 @@ class ProgramContext {
   }
 
   void apply_projection(int program_block, field_type& state_value) const {
+    const ExecutionLane& lane = prepared_execution_lane();
+    const int runtime_block =
+        resolve_prepared_program_block_(program_block, lane, "Program projection block");
     count_kernel_();
-    system_->block_project(sys_block(program_block), state_value);
+    system_->block_project(runtime_block, state_value);
   }
 
   Real max_wave_speed(int program_block, const field_type& state_value) const {
-    return system_->block_max_speed(sys_block(program_block), state_value);
+    const ExecutionLane& lane = prepared_execution_lane();
+    const int runtime_block =
+        resolve_prepared_program_block_(program_block, lane, "Program maximum-speed block");
+    return system_->block_max_speed_prepared_(runtime_block, state_value, lane);
   }
 
   Real hmin() const { return system_->cfl_min_dx(); }
@@ -420,35 +500,111 @@ class ProgramContext {
   }
 
   void commit_many(std::initializer_list<std::pair<field_type*, const field_type*>> commits) const {
+    const ExecutionLane& lane = prepared_execution_lane();
     std::vector<field_type*> targets;
-    std::vector<std::optional<field_type>> snapshots;
-    targets.reserve(commits.size());
-    snapshots.reserve(commits.size());
-    for (const auto& [target, source] : commits) {
-      if (target == nullptr || source == nullptr)
-        throw std::invalid_argument("ProgramContext commit contains null storage");
-      if (std::find(targets.begin(), targets.end(), target) != targets.end())
-        throw std::invalid_argument("ProgramContext commit contains a duplicate target");
-      require_same_field_contract_(*target, *source, "ProgramContext commit");
-      targets.push_back(target);
-      snapshots.emplace_back(target == source ? std::nullopt : std::optional<field_type>(*source));
+    std::vector<const field_type*> sources;
+    std::exception_ptr structural_error;
+    try {
+      targets.reserve(commits.size());
+      sources.reserve(commits.size());
+      for (const auto& [target, source] : commits) {
+        if (target == nullptr || source == nullptr)
+          throw std::invalid_argument("ProgramContext commit contains null storage");
+        if (std::find(targets.begin(), targets.end(), target) != targets.end())
+          throw std::invalid_argument("ProgramContext commit contains a duplicate target");
+        require_same_field_contract_(*target, *source, "ProgramContext commit");
+        targets.push_back(target);
+        sources.push_back(source);
+      }
+    } catch (...) {
+      structural_error = std::current_exception();
     }
-    std::size_t candidate = 0;
-    for (const auto& [target, source] : commits) {
-      const field_type& value = snapshots[candidate] ? *snapshots[candidate] : *source;
-      for (int block = 0; block < system_->n_blocks(); ++block)
-        if (target == &system_->block_state(block)) {
-          system_->validate_program_state_publication_candidate(block, value);
-          break;
+    if (all_reduce_max(structural_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && structural_error)
+        std::rethrow_exception(structural_error);
+      throw std::runtime_error("ProgramContext commit classification failed collectively");
+    }
+
+    const long commit_count = static_cast<long>(targets.size());
+    if (all_reduce_min(commit_count, lane) != all_reduce_max(commit_count, lane))
+      throw std::runtime_error("ProgramContext commit count differs between MPI ranks");
+
+    std::vector<int> runtime_blocks;
+    std::vector<char> identity_commits;
+    std::vector<const field_type*> masks;
+    std::exception_ptr classification_error;
+    try {
+      runtime_blocks.assign(targets.size(), -1);
+      identity_commits.assign(targets.size(), 0);
+      masks.assign(targets.size(), nullptr);
+      for (std::size_t candidate = 0; candidate < targets.size(); ++candidate) {
+        identity_commits[candidate] = targets[candidate] == sources[candidate] ? 1 : 0;
+        for (int block = 0; block < system_->n_blocks(); ++block) {
+          if (targets[candidate] == &system_->block_state(block)) {
+            runtime_blocks[candidate] = block;
+            break;
+          }
         }
-      ++candidate;
+      }
+    } catch (...) {
+      classification_error = std::current_exception();
     }
-    candidate = 0;
-    for (const auto& [target, source] : commits) {
-      if (target != source)
-        *target = std::move(*snapshots[candidate]);
-      ++candidate;
+    if (all_reduce_max(classification_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && classification_error)
+        std::rethrow_exception(classification_error);
+      throw std::runtime_error("ProgramContext commit target classification failed collectively");
     }
+    for (std::size_t candidate = 0; candidate < targets.size(); ++candidate) {
+      const long owner = static_cast<long>(runtime_blocks[candidate]);
+      const long identity = static_cast<long>(identity_commits[candidate]);
+      if (all_reduce_min(owner, lane) != all_reduce_max(owner, lane) ||
+          all_reduce_min(identity, lane) != all_reduce_max(identity, lane))
+        throw std::runtime_error("ProgramContext commit target owner differs between MPI ranks");
+    }
+
+    for (std::size_t candidate = 0; candidate < targets.size(); ++candidate) {
+      if (runtime_blocks[candidate] < 0)
+        continue;
+      masks[candidate] = system_->validate_program_state_publication_candidate_(
+          runtime_blocks[candidate], *sources[candidate], lane);
+    }
+    for (std::size_t candidate = 0; candidate < targets.size(); ++candidate) {
+      const long masked = masks[candidate] != nullptr ? 1L : 0L;
+      if (all_reduce_min(masked, lane) != all_reduce_max(masked, lane))
+        throw std::runtime_error("ProgramContext commit mask classification differs between ranks");
+    }
+
+    std::vector<std::optional<field_type>> snapshots;
+    std::exception_ptr staging_error;
+    try {
+      snapshots.resize(targets.size());
+      for (std::size_t candidate = 0; candidate < targets.size(); ++candidate) {
+        if (identity_commits[candidate] != 0)
+          continue;
+        if (masks[candidate] != nullptr) {
+          snapshots[candidate].emplace(*targets[candidate]);
+          copy_active_valid_cells_(*sources[candidate], *snapshots[candidate], *masks[candidate]);
+        } else {
+          snapshots[candidate].emplace(*sources[candidate]);
+        }
+      }
+    } catch (...) {
+      staging_error = std::current_exception();
+    }
+    try {
+      device_fence();
+    } catch (...) {
+      staging_error = std::current_exception();
+    }
+    if (all_reduce_max(staging_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && staging_error)
+        std::rethrow_exception(staging_error);
+      throw std::runtime_error("ProgramContext commit staging failed collectively");
+    }
+
+    for (std::size_t candidate = 0; candidate < targets.size(); ++candidate)
+      if (snapshots[candidate])
+        *targets[candidate] = std::move(*snapshots[candidate]);
   }
 
   void apply_coupling_operators(Real dt,
@@ -465,19 +621,160 @@ class ProgramContext {
     count_kernel_(static_cast<std::int64_t>(system_->apply_coupling_operators(dt, runtime_states)));
   }
 
+  /// Return the prepared embedded-boundary mask for this pointwise block, or null for Cartesian / an
+  /// inactive embedded boundary.  The route consensus intentionally uses only fixed scalars: this
+  /// hot path must not build a dynamic exact-contract payload before every generated kernel.
+  const field_type* pointwise_active_mask(int program_block, const field_type& field) const {
+    const ExecutionLane& lane = prepared_execution_lane();
+    const int runtime_block = resolve_pointwise_program_block_(program_block, lane);
+    return system_->prepared_program_block_active_mask_(runtime_block, field, lane);
+  }
+
+  /// Reduce one generated per-cell status on the same authenticated lane and layout used by its
+  /// pointwise kernel.  Empty ranks contribute negative infinity, normalized to success only when
+  /// the entire collective layout is empty.
+  Real pointwise_status_max(int program_block, const field_type& status,
+                            const field_type* active_cells, const ExecutionLane& lane) const {
+    require_prepared_lane_(lane, "Program pointwise status");
+    const int runtime_block = resolve_pointwise_program_block_(program_block, lane);
+    const field_type* const expected =
+        system_->prepared_program_block_active_mask_(runtime_block, status, lane);
+    if (all_reduce_max(active_cells == expected ? 0L : 1L, lane) != 0)
+      throw std::invalid_argument("Program pointwise status received a foreign active-cell mask");
+    if (all_reduce_max(status.ncomp() == 1 ? 0L : 1L, lane) != 0)
+      throw std::invalid_argument("Program pointwise status requires exactly one component");
+    MaskedMaxLocalResult local;
+    std::exception_ptr local_error;
+    try {
+      local = pops::reduce_masked_max_local(status, 0, expected);
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error("Program pointwise status reduction failed collectively");
+    }
+    if (all_reduce_max(local.has_invalid ? 1L : 0L, lane) != 0)
+      return Real(3);
+    if (all_reduce_max(local.has_active ? 1L : 0L, lane) == 0)
+      return Real(0);
+    const Real maximum =
+        static_cast<Real>(all_reduce_max(static_cast<double>(local.maximum), lane));
+    return std::isfinite(maximum) ? maximum : Real(3);
+  }
+
   Real sum_component(const field_type& field, int component) const {
-    return pops::reduce_sum(field, component);
+    return static_cast<Real>(
+        all_reduce_sum(pops::reduce_sum_local(field, component), prepared_execution_lane()));
+  }
+  Real abs_sum_component(const field_type& field, int component) const {
+    return static_cast<Real>(
+        all_reduce_sum(pops::reduce_abs_sum_local(field, component), prepared_execution_lane()));
   }
   Real max_component(const field_type& field, int component) const {
-    return pops::reduce_max(field, component);
+    return static_cast<Real>(
+        all_reduce_max(pops::reduce_max_local(field, component), prepared_execution_lane()));
   }
   Real min_component(const field_type& field, int component) const {
-    return pops::reduce_min(field, component);
+    return static_cast<Real>(
+        all_reduce_min(pops::reduce_min_local(field, component), prepared_execution_lane()));
   }
-  Real norm2(int, const field_type& field) const { return std::sqrt(pops::dot(field, field, 0)); }
-  Real norm_inf(int, const field_type& field) const { return pops::reduce_norm_inf(field, 0); }
-  Real dot(int, const field_type& left, const field_type& right) const {
-    return pops::dot(left, right, 0);
+
+  /// Generated reductions authenticate the Program owner and exclude inactive embedded-boundary
+  /// cells.  They deliberately remain raw algebra: physical volume-fraction weighting belongs to
+  /// System reduction services, not to Program control-flow scalars.
+  Real sum_component(int program_block, const field_type& field, int component) const {
+    const ExecutionLane& lane = prepared_execution_lane();
+    const field_type* const active = pointwise_active_mask(program_block, field);
+    std::exception_ptr local_error;
+    Real local = Real(0);
+    try {
+      local = pops::reduce_active_sum_local(field, component, active);
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    converge_owner_reduction_(local_error, lane, "Program sum reduction");
+    return static_cast<Real>(all_reduce_sum(local, lane));
+  }
+  Real abs_sum_component(int program_block, const field_type& field, int component) const {
+    const ExecutionLane& lane = prepared_execution_lane();
+    const field_type* const active = pointwise_active_mask(program_block, field);
+    std::exception_ptr local_error;
+    Real local = Real(0);
+    try {
+      local = pops::reduce_active_abs_sum_local(field, component, active);
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    converge_owner_reduction_(local_error, lane, "Program abs-sum reduction");
+    return static_cast<Real>(all_reduce_sum(local, lane));
+  }
+  Real max_component(int program_block, const field_type& field, int component) const {
+    const ExecutionLane& lane = prepared_execution_lane();
+    const field_type* const active = pointwise_active_mask(program_block, field);
+    std::exception_ptr local_error;
+    Real local = Real(0);
+    try {
+      local = pops::reduce_active_max_local(field, component, active);
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    converge_owner_reduction_(local_error, lane, "Program max reduction");
+    return static_cast<Real>(all_reduce_max(local, lane));
+  }
+  Real min_component(int program_block, const field_type& field, int component) const {
+    const ExecutionLane& lane = prepared_execution_lane();
+    const field_type* const active = pointwise_active_mask(program_block, field);
+    std::exception_ptr local_error;
+    Real local = Real(0);
+    try {
+      local = pops::reduce_active_min_local(field, component, active);
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    converge_owner_reduction_(local_error, lane, "Program min reduction");
+    return static_cast<Real>(all_reduce_min(local, lane));
+  }
+  Real norm2(int program_block, const field_type& field) const {
+    const ExecutionLane& lane = prepared_execution_lane();
+    const field_type* const active = pointwise_active_mask(program_block, field);
+    std::exception_ptr local_error;
+    Real local = Real(0);
+    try {
+      local = pops::dot_active_local(field, field, 0, active);
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    converge_owner_reduction_(local_error, lane, "Program norm2 reduction");
+    return std::sqrt(static_cast<Real>(all_reduce_sum(local, lane)));
+  }
+  Real norm_inf(int program_block, const field_type& field) const {
+    const ExecutionLane& lane = prepared_execution_lane();
+    const field_type* const active = pointwise_active_mask(program_block, field);
+    std::exception_ptr local_error;
+    Real local = Real(0);
+    try {
+      local = pops::reduce_active_norm_inf_local(field, 0, active);
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    converge_owner_reduction_(local_error, lane, "Program norm-inf reduction");
+    return static_cast<Real>(all_reduce_max(local, lane));
+  }
+  Real dot(int program_block, const field_type& left, const field_type& right) const {
+    const ExecutionLane& lane = prepared_execution_lane();
+    const field_type* const active = pointwise_active_mask(program_block, left);
+    std::exception_ptr local_error;
+    Real local = Real(0);
+    try {
+      require_same_field_contract_(left, right, "ProgramContext dot");
+      local = pops::dot_active_local(left, right, 0, active);
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    converge_owner_reduction_(local_error, lane, "Program dot reduction");
+    return static_cast<Real>(all_reduce_sum(local, lane));
   }
 
   Geometry<Dim> geometry() const { return system_->prepared_block_geometry(); }
@@ -496,39 +793,123 @@ class ProgramContext {
 
   std::shared_ptr<scalar_boundary_session_type> prepare_mesh_boundary_session(
       field_type& prototype, const ExecutionLane& lane) const {
-    return std::make_shared<scalar_boundary_session_type>(geometry(), scalar_boundary_topology_(),
-                                                          prototype, lane,
-                                                          next_scalar_boundary_generation_());
+    require_prepared_lane_(lane, "Program scalar boundary preparation");
+    return scalar_boundary_session_type::prepare(geometry(), scalar_boundary_topology_(), prototype,
+                                                 lane, next_scalar_boundary_generation_());
   }
 
-  std::shared_ptr<scalar_boundary_session_type> prepare_block_boundary_session(
+  std::shared_ptr<block_boundary_session_type> prepare_block_boundary_session(
       int program_block, field_type& prototype,
       const runtime::multiblock::BoundaryEvaluationPoint& point, const ExecutionLane& lane) const {
-    (void)sys_block(program_block);
-    require_boundary_point_(point, "Program block scalar boundary");
-    return prepare_mesh_boundary_session(prototype, lane);
+    require_prepared_lane_(lane, "Program block boundary preparation");
+    int runtime_block = -1;
+    std::exception_ptr local_error;
+    try {
+      runtime_block = sys_block(program_block);
+      require_boundary_point_(point, "Program prepared block boundary");
+      require_same_field_contract_(prototype, system_->block_state(runtime_block),
+                                   "Program block boundary prototype");
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error("Program prepared block boundary session failed collectively");
+    }
+    ExactContractBuilder contract;
+    contract.text("pops.program.prepared-block-boundary-session")
+        .scalar(std::int32_t{Dim})
+        .scalar(std::int32_t{runtime_block})
+        .text(lane.identity())
+        .text(point.clock)
+        .scalar(point.tick)
+        .scalar(point.level)
+        .scalar(point.substep)
+        .scalar(point.stage)
+        .scalar(point.stage_fraction.numerator)
+        .scalar(point.stage_fraction.denominator)
+        .scalar(point.dt)
+        .scalar(point.physical_time);
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{std::string_view("program-prepared-block-boundary-session"), contract.view()}}, lane))
+      throw std::runtime_error("Program prepared block boundary session differs across MPI ranks");
+    auto transport = scalar_boundary_session_type::prepare_block(
+        geometry(), scalar_boundary_topology_(), prototype, lane,
+        next_scalar_boundary_generation_());
+    std::shared_ptr<block_boundary_session_type> session;
+    local_error = nullptr;
+    try {
+      session = std::shared_ptr<block_boundary_session_type>(new block_boundary_session_type(
+          system_, runtime_block, point, lane, std::move(transport)));
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error(
+          "Program prepared block boundary session allocation failed collectively");
+    }
+    return session;
+  }
+
+  bool has_boundary_linearization(int program_block) const {
+    return system_->has_block_boundary_linearization(sys_block(program_block));
+  }
+
+  void rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                        int program_block, field_type& state, field_type& residual, bool flux_only,
+                        const block_boundary_session_type& boundary) const {
+    const int runtime_block =
+        resolve_prepared_program_block_(program_block, boundary.lane(), "Program core RHS block");
+    system_->block_rhs_core_into_at(point, runtime_block, state, residual, flux_only,
+                                    boundary.system(), boundary.runtime_block(), boundary.point(),
+                                    boundary.lane(), boundary.transport());
+  }
+
+  void boundary_residual_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                 int program_block, field_type& state, field_type& residual,
+                                 const block_boundary_session_type& boundary) const {
+    const int runtime_block = resolve_prepared_program_block_(program_block, boundary.lane(),
+                                                              "Program boundary residual block");
+    system_->block_boundary_residual_into_at(
+        point, runtime_block, state, residual, boundary.system(), boundary.runtime_block(),
+        boundary.point(), boundary.lane(), boundary.transport());
+  }
+
+  void boundary_jvp_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                            int program_block, field_type& state, const field_type& direction,
+                            field_type& result, const block_boundary_session_type& boundary) const {
+    const int runtime_block = resolve_prepared_program_block_(program_block, boundary.lane(),
+                                                              "Program boundary JVP block");
+    system_->block_boundary_jvp_into_at(point, runtime_block, state, direction, result,
+                                        boundary.system(), boundary.runtime_block(),
+                                        boundary.point(), boundary.lane(), boundary.transport());
   }
 
   void fill_boundary(field_type& field) const {
-    scalar_boundary_session_type session(geometry(), scalar_boundary_topology_(), field,
-                                         *scalar_boundary_lane_,
-                                         next_scalar_boundary_generation_());
-    session.fill(field);
+    auto session = scalar_boundary_session_type::prepare(geometry(), scalar_boundary_topology_(),
+                                                         field, prepared_execution_lane(),
+                                                         next_scalar_boundary_generation_());
+    session->fill(field);
   }
 
   void fill_boundary(field_type& field, const ExecutionLane& lane) const {
-    scalar_boundary_session_type session(geometry(), scalar_boundary_topology_(), field, lane,
-                                         next_scalar_boundary_generation_());
-    session.fill(field);
+    require_prepared_lane_(lane, "Program boundary fill");
+    auto session = scalar_boundary_session_type::prepare(
+        geometry(), scalar_boundary_topology_(), field, lane, next_scalar_boundary_generation_());
+    session->fill(field);
   }
 
   void laplacian(field_type& output, field_type& input) const {
-    auto boundary = prepare_mesh_boundary_session(input, *scalar_boundary_lane_);
+    auto boundary = prepare_mesh_boundary_session(input, prepared_execution_lane());
     laplacian(output, input, *boundary);
   }
 
   void laplacian(field_type& output, field_type& input,
                  const scalar_boundary_session_type& boundary) const {
+    require_prepared_lane_(boundary.lane(), "Program Laplacian boundary");
     require_scalar_stencil_(output, input, 1, "Program Laplacian");
     boundary.fill(input);
     const Geometry<Dim> geom = boundary.geometry();
@@ -560,12 +941,13 @@ class ProgramContext {
   }
 
   void gradient(field_type& output, field_type& input) const {
-    auto boundary = prepare_mesh_boundary_session(input, *scalar_boundary_lane_);
+    auto boundary = prepare_mesh_boundary_session(input, prepared_execution_lane());
     gradient(output, input, *boundary);
   }
 
   void gradient(field_type& output, field_type& input,
                 const scalar_boundary_session_type& boundary) const {
+    require_prepared_lane_(boundary.lane(), "Program gradient boundary");
     require_scalar_stencil_(output, input, Dim, "Program gradient");
     boundary.fill(input);
     const Geometry<Dim> geom = boundary.geometry();
@@ -592,12 +974,13 @@ class ProgramContext {
   }
 
   void divergence(field_type& output, field_type& flux) const {
-    auto boundary = prepare_mesh_boundary_session(flux, *scalar_boundary_lane_);
+    auto boundary = prepare_mesh_boundary_session(flux, prepared_execution_lane());
     divergence(output, flux, *boundary);
   }
 
   void divergence(field_type& output, field_type& flux,
                   const scalar_boundary_session_type& boundary) const {
+    require_prepared_lane_(boundary.lane(), "Program divergence boundary");
     if (output.ncomp() != 1 || flux.ncomp() != Dim || output.layout() != flux.layout() ||
         output.distribution() != flux.distribution() || output.local_rank() != flux.local_rank() ||
         output.local_size() != flux.local_size())
@@ -664,6 +1047,7 @@ class ProgramContext {
 
   void tensor_laplacian(field_type& output, field_type& input, const field_type& tensor,
                         const scalar_boundary_session_type& boundary) const {
+    require_prepared_lane_(boundary.lane(), "Program tensor Laplacian boundary");
     require_scalar_stencil_(output, input, 1, "Program tensor Laplacian");
     require_tensor_stencil_(input, tensor, "Program tensor Laplacian");
     boundary.fill(input);
@@ -672,64 +1056,11 @@ class ProgramContext {
       const FieldView<Real, Dim> result = output.fab(local).view();
       const FieldView<const Real, Dim> value = std::as_const(input).fab(local).view();
       const FieldView<const Real, Dim> coefficient = std::as_const(tensor).fab(local).view();
+      const auto tensor_operator = elliptic::nd::make_cartesian_tensor_operator<
+          elliptic::nd::CartesianTensorDivergenceSign::positive_divergence>(
+          value, elliptic::nd::packed_cartesian_tensor_coefficients<Dim>(coefficient), geom);
       for_each_cell(output.box(local), [=] POPS_HD(const Index<Dim>& cell) {
-        Real image = Real(0);
-        for (int row = 0; row < Dim; ++row) {
-          Index<Dim> lower_row = cell;
-          Index<Dim> upper_row = cell;
-          --lower_row[row];
-          ++upper_row[row];
-          Real lower_flux = Real(0);
-          Real upper_flux = Real(0);
-          for (int column = 0; column < Dim; ++column) {
-            const int component = row * Dim + column;
-            if (column == row) {
-              const Real center_coefficient = coefficient(cell, component);
-              const Real lower_coefficient = coefficient(lower_row, component);
-              const Real upper_coefficient = coefficient(upper_row, component);
-              const Real lower_sum = center_coefficient + lower_coefficient;
-              const Real upper_sum = center_coefficient + upper_coefficient;
-              const Real lower_face = lower_sum != Real(0) ? Real(2) * center_coefficient *
-                                                                 lower_coefficient / lower_sum
-                                                           : Real(0);
-              const Real upper_face = upper_sum != Real(0) ? Real(2) * center_coefficient *
-                                                                 upper_coefficient / upper_sum
-                                                           : Real(0);
-              lower_flux += lower_face * (value(cell, 0) - value(lower_row, 0)) / geom.spacing(row);
-              upper_flux += upper_face * (value(upper_row, 0) - value(cell, 0)) / geom.spacing(row);
-            } else {
-              Index<Dim> lower_column = cell;
-              Index<Dim> upper_column = cell;
-              Index<Dim> lower_row_lower_column = lower_row;
-              Index<Dim> lower_row_upper_column = lower_row;
-              Index<Dim> upper_row_lower_column = upper_row;
-              Index<Dim> upper_row_upper_column = upper_row;
-              --lower_column[column];
-              ++upper_column[column];
-              --lower_row_lower_column[column];
-              ++lower_row_upper_column[column];
-              --upper_row_lower_column[column];
-              ++upper_row_upper_column[column];
-              const Real lower_face =
-                  Real(0.5) * (coefficient(cell, component) + coefficient(lower_row, component));
-              const Real upper_face =
-                  Real(0.5) * (coefficient(cell, component) + coefficient(upper_row, component));
-              const Real tangent_scale = Real(4) * geom.spacing(column);
-              const Real lower_tangent =
-                  (value(upper_column, 0) - value(lower_column, 0) +
-                   value(lower_row_upper_column, 0) - value(lower_row_lower_column, 0)) /
-                  tangent_scale;
-              const Real upper_tangent =
-                  (value(upper_column, 0) - value(lower_column, 0) +
-                   value(upper_row_upper_column, 0) - value(upper_row_lower_column, 0)) /
-                  tangent_scale;
-              lower_flux += lower_face * lower_tangent;
-              upper_flux += upper_face * upper_tangent;
-            }
-          }
-          image += (upper_flux - lower_flux) / geom.spacing(row);
-        }
-        result(cell, 0) = image;
+        result(cell, 0) = tensor_operator.image(cell);
       });
     }
     count_kernel_();
@@ -809,7 +1140,13 @@ class ProgramContext {
   }
 
   void store_history(const std::string& name, const field_type& value) const {
-    store_history_(name, value, std::nullopt);
+    if (std::isfinite(current_dt_) && current_dt_ > 0.0) {
+      store_history_(name, value, static_cast<Real>(current_dt_));
+      return;
+    }
+    // Preserve the direct legacy route when this context has no active generated-step interval:
+    // System supplies its accepted last-dt provenance (or its zero-dt pre-step default).
+    system_->store_history(name, value);
   }
   void store_history(const std::string& name, const field_type& value, double dt) const {
     if (!std::isfinite(dt) || dt <= 0.0)
@@ -818,6 +1155,74 @@ class ProgramContext {
   }
   void rotate_histories() const { runtime_state().hist_.rotate(); }
   void rotate_histories(const std::string& clock) const { runtime_state().hist_.rotate(clock); }
+
+  /// Reconstruct one retained value at an exact target-clock coordinate.  The native history
+  /// ledger owns every bracketing interval; no current-state alias or fixed-dt inference is used.
+  void interpolate_history_linear(field_type& output, const std::string& name, int max_lag,
+                                  int program_owner, const std::string& source_clock,
+                                  const std::string& target_clock, int target_step,
+                                  Real target_offset) const {
+    const int owner = sys_block(program_owner);
+    if (max_lag < 1 || !std::isfinite(static_cast<double>(target_offset)))
+      throw std::invalid_argument(
+          "ProgramContext linear history interpolation has an invalid target");
+
+    auto& manager = runtime_state().hist_;
+    const auto found = manager.histories.find(name);
+    if (found == manager.histories.end() || manager.depth.at(name) <= max_lag ||
+        manager.owner.at(name) != owner || !manager.initialized.at(name))
+      throw std::runtime_error(
+          "ProgramContext linear history interpolation requires an initialized retained ring");
+    require_same_field_contract_(output, found->second.front(),
+                                 "ProgramContext linear history interpolation");
+
+    const double source_ticks = static_cast<double>(clock_schedule_.ticks_per_macro(source_clock));
+    const double target_ticks = static_cast<double>(clock_schedule_.ticks_per_macro(target_clock));
+    const double coordinate =
+        (static_cast<double>(target_step) + static_cast<double>(target_offset)) * source_ticks /
+        target_ticks;
+    if (!std::isfinite(coordinate) || coordinate > 0.0 ||
+        coordinate < -static_cast<double>(max_lag))
+      throw std::runtime_error(
+          "ProgramContext linear history interpolation target lies outside retained timestamps");
+    if (coordinate == 0.0) {
+      lincomb(output, Real(1), found->second.front(), Real(0), found->second.front());
+      return;
+    }
+
+    const int older_lag = static_cast<int>(std::ceil(-coordinate));
+    if (older_lag < 1 || older_lag > max_lag)
+      throw std::runtime_error(
+          "ProgramContext linear history interpolation could not select bracketing slots");
+    const auto dt_ledger = manager.slot_dt.find(name);
+    if (dt_ledger == manager.slot_dt.end() || dt_ledger->second.size() != found->second.size())
+      throw std::logic_error(
+          "ProgramContext linear history interpolation dt ledger differs from its ring depth");
+
+    double newer_time = static_cast<double>(physical_time());
+    double older_time = newer_time;
+    double bracket_dt = 0.0;
+    for (int lag = 1; lag <= older_lag; ++lag) {
+      const double interval = dt_ledger->second[static_cast<std::size_t>(lag)];
+      if (!std::isfinite(interval) || !(interval > 0.0))
+        throw std::runtime_error(
+            "ProgramContext linear history interpolation requires positive exact slot timestamps");
+      bracket_dt = interval;
+      older_time = newer_time - interval;
+      if (lag != older_lag)
+        newer_time = older_time;
+    }
+    const double logical_fraction = coordinate + static_cast<double>(older_lag);
+    const double target_time = older_time + logical_fraction * bracket_dt;
+    const double alpha = (target_time - older_time) / (newer_time - older_time);
+    if (!std::isfinite(alpha) || alpha < 0.0 || alpha > 1.0)
+      throw std::runtime_error(
+          "ProgramContext linear history interpolation target does not bracket retained "
+          "timestamps");
+    lincomb(output, Real(1) - static_cast<Real>(alpha),
+            found->second[static_cast<std::size_t>(older_lag)], static_cast<Real>(alpha),
+            found->second[static_cast<std::size_t>(older_lag - 1)]);
+  }
 
   bool cache_should_update(int node_id, int every_n) const {
     const bool due = runtime_state().cache_.is_due(node_id, macro_step(), every_n);
@@ -918,6 +1323,54 @@ class ProgramContext {
                                      KrylovWorkspace<Dim>& workspace, field_type& solution,
                                      const field_type& rhs,
                                      const KrylovControls<Dim>& controls) const {
+    const ExecutionLane& runtime_lane = prepared_execution_lane();
+    const ExecutionLane& workspace_lane =
+        ::pops::detail::KrylovWorkspaceAccess::execution_lane(workspace);
+    const std::string_view workspace_token =
+        ::pops::detail::KrylovWorkspaceAccess::materialization_token(workspace);
+    std::string lane_contract;
+    std::exception_ptr local_error;
+    try {
+      const bool workspace_active = workspace_lane.active();
+      const bool workspace_named = !workspace_lane.identity().empty();
+      const bool workspace_tokened = !workspace_token.empty();
+      const bool runtime_active = runtime_lane.active();
+      const bool runtime_named = !runtime_lane.identity().empty();
+      // This is a local communicator comparison only. Every failure is converged below on the
+      // runtime-owned lane, so no rank can enter a workspace-lane collective conditionally.
+      const bool lanes_congruent = workspace_lane.congruent_with(runtime_lane);
+      ExactContractBuilder contract;
+      contract.text("pops.prepared-linear-workspace-lane")
+          .scalar(std::uint32_t{2})
+          .text(workspace_token)
+          .text(workspace_lane.identity())
+          .presence(workspace_active)
+          .presence(workspace_named)
+          .presence(workspace_tokened)
+          .text(runtime_lane.identity())
+          .presence(runtime_active)
+          .presence(runtime_named)
+          .presence(lanes_congruent);
+      lane_contract = std::move(contract).release();
+      if (!workspace_active || !workspace_named || !workspace_tokened || !runtime_active ||
+          !runtime_named || !lanes_congruent)
+        throw std::invalid_argument(
+            "Program prepared linear solve requires a workspace lane congruent with its "
+            "runtime-authenticated lane");
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_error ? 1L : 0L, runtime_lane) != 0) {
+      if (runtime_lane.size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error("Program prepared linear solve lane validation failed collectively");
+    }
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{std::string_view("pops.prepared-linear-workspace-lane"),
+              std::string_view(lane_contract)}},
+            runtime_lane))
+      throw std::invalid_argument(
+          "Program prepared linear solve workspace lane contract differs across MPI ranks");
     return pops::solve_prepared_affine_outcome(problem, workspace, solution, rhs, controls);
   }
 
@@ -1093,6 +1546,13 @@ class ProgramContext {
       throw std::invalid_argument("ProgramContext rate identity must be non-negative");
   }
 
+  void require_prepared_lane_(const ExecutionLane& lane, const char* operation) const {
+    const ExecutionLane& prepared = prepared_execution_lane();
+    if (all_reduce_max(&lane == &prepared ? 0L : 1L, prepared) != 0)
+      throw std::invalid_argument(std::string(operation) +
+                                  " requires the context's authenticated execution lane");
+  }
+
   static void require_same_field_contract_(const field_type& left, const field_type& right,
                                            const char* operation) {
     if (left.layout() != right.layout() || left.distribution() != right.distribution() ||
@@ -1100,6 +1560,94 @@ class ProgramContext {
         left.ghosts() != right.ghosts())
       throw std::invalid_argument(std::string(operation) +
                                   " requires the same exact ranked field contract");
+  }
+
+  static void require_same_layout_(const field_type& left, const field_type& right,
+                                   const char* operation) {
+    if (left.layout() != right.layout() || left.distribution() != right.distribution() ||
+        left.local_rank() != right.local_rank() || left.local_size() != right.local_size())
+      throw std::invalid_argument(std::string(operation) +
+                                  " requires the same exact ranked layout");
+  }
+
+  static void copy_active_valid_cells_(const field_type& source, field_type& destination,
+                                       const field_type& active) {
+    require_same_layout_(source, destination, "ProgramContext commit active copy");
+    require_same_layout_(source, active, "ProgramContext commit active mask");
+    if (source.ncomp() != destination.ncomp() || active.ncomp() != 1)
+      throw std::invalid_argument(
+          "ProgramContext commit active copy requires matching components and a one-component "
+          "mask");
+    struct CopyActiveValid {
+      FieldView<const Real, Dim> source{};
+      FieldView<Real, Dim> destination{};
+      FieldView<const Real, Dim> active{};
+      int ncomp = 0;
+      POPS_HD void operator()(const Index<Dim>& index) const {
+        if (active(index, 0) < Real{0.5})
+          return;
+        for (int component = 0; component < ncomp; ++component)
+          destination(index, component) = source(index, component);
+      }
+    };
+    for (std::size_t local = 0; local < source.local_size(); ++local)
+      for_each_cell(
+          source.box(local),
+          CopyActiveValid{std::as_const(source).fab(local).view(), destination.fab(local).view(),
+                          std::as_const(active).fab(local).view(), source.ncomp()});
+  }
+
+  int resolve_prepared_program_block_(int program_block, const ExecutionLane& lane,
+                                      const char* operation) const {
+    int runtime_block = -1;
+    std::exception_ptr local_error;
+    try {
+      runtime_block = sys_block(program_block);
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error(std::string(operation) + " failed collectively");
+    }
+    ExactContractBuilder contract;
+    contract.text(operation)
+        .scalar(std::int32_t{Dim})
+        .scalar(std::int32_t{program_block})
+        .scalar(std::int32_t{runtime_block})
+        .text(lane.identity());
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{std::string_view("program-prepared-boundary-route"), contract.view()}}, lane))
+      throw std::runtime_error(std::string(operation) + " differs across MPI ranks");
+    return runtime_block;
+  }
+
+  void converge_owner_reduction_(std::exception_ptr local_error, const ExecutionLane& lane,
+                                 const char* operation) const {
+    if (all_reduce_max(local_error ? 1L : 0L, lane) == 0)
+      return;
+    if (lane.size() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error(std::string(operation) + " failed collectively");
+  }
+
+  int resolve_pointwise_program_block_(int program_block, const ExecutionLane& lane) const {
+    int runtime_block = -1;
+    long local_error = 0;
+    try {
+      runtime_block = sys_block(program_block);
+    } catch (...) {
+      local_error = 1;
+    }
+    if (all_reduce_max(local_error, lane) != 0)
+      throw std::runtime_error("Program pointwise block route failed collectively");
+    const long program = static_cast<long>(program_block);
+    const long runtime = static_cast<long>(runtime_block);
+    if (all_reduce_min(program, lane) != all_reduce_max(program, lane) ||
+        all_reduce_min(runtime, lane) != all_reduce_max(runtime, lane))
+      throw std::runtime_error("Program pointwise block route differs across ranks");
+    return runtime_block;
   }
 
   const std::vector<int>& require_program_block_map_() const {
@@ -1258,14 +1806,20 @@ class ProgramContext {
     if (found == manager.histories.end())
       throw std::out_of_range("ProgramContext history is not registered");
     require_same_field_contract_(found->second.front(), value, "ProgramContext history store");
+    auto dt_ledger = manager.slot_dt.find(name);
+    if (dt_ledger == manager.slot_dt.end() || dt_ledger->second.size() != found->second.size())
+      throw std::logic_error("ProgramContext history dt ledger differs from its ring depth");
     found->second.front() = value;
     if (!manager.initialized.at(name))
-      for (std::size_t slot = 1; slot < found->second.size(); ++slot)
+      for (std::size_t slot = 1; slot < found->second.size(); ++slot) {
         found->second[slot] = value;
+        if (dt)
+          dt_ledger->second[slot] = *dt;
+      }
     manager.initialized[name] = true;
     manager.store_pending[name] = true;
     if (dt)
-      manager.slot_dt[name][0] = *dt;
+      dt_ledger->second.front() = *dt;
   }
 
   std::optional<ScheduleCoordinate> schedule_coordinate_(ScheduleDomainKind kind,
@@ -1281,7 +1835,6 @@ class ProgramContext {
   }
 
   runtime_type* system_ = nullptr;
-  std::shared_ptr<ExecutionLane> scalar_boundary_lane_;
   mutable std::uint64_t scalar_boundary_generation_ = 0;
   mutable std::uint64_t operator_snapshot_revision_ = 0;
   mutable std::optional<OperatorEvaluationSnapshot> active_operator_snapshot_;

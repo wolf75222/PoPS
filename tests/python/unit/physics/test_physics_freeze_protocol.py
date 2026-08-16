@@ -59,7 +59,7 @@ def _attach_advection_numerics(case, block, model, state):
 def test_dsl_freeze_is_idempotent_deep_and_codegen_readable():
     model, u = _dsl_advection()
     cpp_before = model._m.emit_cpp()
-    hash_before = model._m._model_hash()
+    hash_before = model._model_hash()
 
     assert model.freeze() is model
     assert model.freeze() is model
@@ -86,7 +86,7 @@ def test_dsl_freeze_is_idempotent_deep_and_codegen_readable():
         del model._m.cons_names
 
     assert model._m.emit_cpp() == cpp_before
-    assert model._m._model_hash() == hash_before
+    assert model._model_hash() == hash_before
     assert model.check() is True
     assert model.list_operators()
 

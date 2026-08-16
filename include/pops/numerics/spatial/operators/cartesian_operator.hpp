@@ -10,6 +10,7 @@
 #include <pops/numerics/fv/numerical_flux.hpp>
 #include <pops/numerics/spatial/nd/finite_volume.hpp>
 #include <pops/numerics/spatial/nd/reconstruction.hpp>
+#include <pops/numerics/spatial/primitives/state_access.hpp>
 
 #include <Kokkos_MathematicalFunctions.hpp>
 
@@ -21,6 +22,52 @@
 #include <vector>
 
 namespace pops::nd {
+
+/// Per-field storage for allocation-free prepared Cartesian face and divergence evaluation.
+/// One generated level/block owns one instance and serializes its use with the surrounding
+/// prepared evaluation session; no process-global or operator-static scratch is shared.
+template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
+class PreparedCartesianOperatorScratch {
+ public:
+  explicit PreparedCartesianOperatorScratch(const MultiFab<Dim, MemorySpace>& prototype)
+      : residual_candidate_(prototype.layout(), prototype.distribution(), prototype.local_rank(),
+                            prototype.ncomp(), prototype.ghosts()),
+        residual_status_(prototype.layout(), prototype.distribution(), prototype.local_rank(), 1,
+                         prototype.ghosts()) {
+    face_candidates_.reserve(prototype.local_size());
+    face_statuses_.reserve(prototype.local_size());
+    for (std::size_t local = 0; local < prototype.local_size(); ++local) {
+      face_candidates_.emplace_back(prototype.box(local), prototype.ncomp());
+      face_statuses_.emplace_back(prototype.box(local), 1);
+    }
+  }
+
+  void require_layout(const MultiFab<Dim, MemorySpace>& field) const {
+    if (field.layout() != residual_candidate_.layout() ||
+        field.distribution() != residual_candidate_.distribution() ||
+        field.local_rank() != residual_candidate_.local_rank() ||
+        field.local_size() != residual_candidate_.local_size() ||
+        field.ncomp() != residual_candidate_.ncomp() ||
+        field.ghosts() != residual_candidate_.ghosts() ||
+        face_candidates_.size() != field.local_size() ||
+        face_statuses_.size() != field.local_size())
+      throw std::invalid_argument(
+          "prepared Cartesian operator scratch differs from its authenticated field layout");
+  }
+
+  FaceField<Dim, MemorySpace>& face_candidate(std::size_t local) {
+    return face_candidates_.at(local);
+  }
+  FaceField<Dim, MemorySpace>& face_status(std::size_t local) { return face_statuses_.at(local); }
+  MultiFab<Dim, MemorySpace>& residual_candidate() noexcept { return residual_candidate_; }
+  MultiFab<Dim, MemorySpace>& residual_status() noexcept { return residual_status_; }
+
+ private:
+  std::vector<FaceField<Dim, MemorySpace>> face_candidates_;
+  std::vector<FaceField<Dim, MemorySpace>> face_statuses_;
+  MultiFab<Dim, MemorySpace> residual_candidate_;
+  MultiFab<Dim, MemorySpace> residual_status_;
+};
 
 namespace cartesian_operator_detail {
 
@@ -48,8 +95,7 @@ int resolve_positivity_component(Real floor) {
     const int component = Model::conservative_vars().index_of(VariableRole::Density);
     if (component >= 0)
       return component;
-    throw std::invalid_argument(
-        "prepared ND positivity requires a conservative Density variable");
+    throw std::invalid_argument("prepared ND positivity requires a conservative Density variable");
   }
   throw std::invalid_argument(
       "prepared ND positivity requires conservative-variable introspection");
@@ -138,14 +184,21 @@ struct MaterializeFaceFlux {
     else
       context = metric_face_context<Axis, MetricFaceSide::Upper>(metric, left_cell);
 
-    const auto evaluation = evaluate_numerical_flux_at(
-        numerical_flux, model, traces.left, providers, left_cell, traces.right, providers,
-        right_cell, context);
+    const auto evaluation =
+        evaluate_numerical_flux_at(numerical_flux, model, traces.left, providers, left_cell,
+                                   traces.right, providers, right_cell, context);
     if (!evaluation.succeeded()) {
       fail(face, FiniteVolumeStatus::InvalidWaveSpeed);
       return;
     }
-    const auto integrated = apply_face_measure(evaluation.checked_density(), context);
+    auto integrated = apply_face_measure(evaluation.checked_density(), context);
+    if constexpr (DiffusiveModel<Model>) {
+      const Real spacing = context.cell_measure / context.face_measure;
+      const Real integrated_scale = context.face_measure * (-model.diffusivity()) / spacing;
+      for (int component = 0; component < Model::n_vars; ++component)
+        integrated.value[component] +=
+            integrated_scale * (state(right_cell, component) - state(left_cell, component));
+    }
     for (int component = 0; component < Model::n_vars; ++component) {
       if (!Kokkos::isfinite(integrated.value[component])) {
         fail(face, FiniteVolumeStatus::NonFiniteFaceFlux);
@@ -281,6 +334,14 @@ class PreparedCartesianOperator {
             cartesian_operator_detail::resolve_positivity_component<Model>(positivity_floor)) {
     if (metric_.identity().domain.empty())
       throw std::invalid_argument("prepared ND hyperbolic metric domain must be non-empty");
+    if constexpr (DiffusiveModel<Model>) {
+      if (Metric::capabilities().coordinate_map.kind != CoordinateMapKind::Cartesian)
+        throw std::invalid_argument("prepared ND isotropic diffusion requires a Cartesian metric");
+      const Real diffusivity = model_.diffusivity();
+      if (!std::isfinite(diffusivity) || diffusivity < Real(0))
+        throw std::invalid_argument(
+            "prepared ND isotropic diffusion requires a finite non-negative diffusivity");
+    }
   }
 
   const Model& model() const noexcept { return model_; }
@@ -297,10 +358,25 @@ class PreparedCartesianOperator {
 
     FaceField<Dim, MemorySpace> candidate(state.box(), n_vars);
     FaceField<Dim, MemorySpace> statuses(state.box(), 1);
+    materialize_face_fluxes(state, output, candidate, statuses);
+  }
+
+  template <class MemorySpace>
+  void materialize_face_fluxes(const Fab<Dim, MemorySpace>& state,
+                               FaceField<Dim, MemorySpace>& output,
+                               FaceField<Dim, MemorySpace>& candidate,
+                               FaceField<Dim, MemorySpace>& statuses) const
+    requires(flux_provider_count<Model> == 0)
+  {
+    if (&output == &candidate || &output == &statuses || &candidate == &statuses)
+      throw std::invalid_argument("prepared ND hyperbolic face output and scratch must not alias");
+    require_state_patch_(state);
+    cartesian_operator_detail::require_face_output(output, state.box(), n_vars);
+    cartesian_operator_detail::require_face_output(candidate, state.box(), n_vars);
+    cartesian_operator_detail::require_face_output(statuses, state.box(), 1);
     cartesian_operator_detail::materialize_axes<0, Variables>(
-        model_, metric_, reconstruction_, numerical_flux_, positivity_floor_,
-        positivity_component_, state,
-        cartesian_operator_detail::ProviderFreeStorage<Dim>{}, candidate, statuses);
+        model_, metric_, reconstruction_, numerical_flux_, positivity_floor_, positivity_component_,
+        state, cartesian_operator_detail::ProviderFreeStorage<Dim>{}, candidate, statuses);
     const Real failure = cartesian_operator_detail::maximum_face_status<0>(statuses);
     if (failure != static_cast<Real>(FiniteVolumeStatus::Success))
       throw std::runtime_error("prepared ND hyperbolic face evaluation refused publication");
@@ -319,9 +395,25 @@ class PreparedCartesianOperator {
 
     FaceField<Dim, MemorySpace> candidate(state.box(), n_vars);
     FaceField<Dim, MemorySpace> statuses(state.box(), 1);
+    materialize_face_fluxes(state, providers, output, candidate, statuses);
+  }
+
+  template <class MemorySpace>
+  void materialize_face_fluxes(const Fab<Dim, MemorySpace>& state,
+                               const Fab<Dim, MemorySpace>& providers,
+                               FaceField<Dim, MemorySpace>& output,
+                               FaceField<Dim, MemorySpace>& candidate,
+                               FaceField<Dim, MemorySpace>& statuses) const {
+    if (&output == &candidate || &output == &statuses || &candidate == &statuses)
+      throw std::invalid_argument("prepared ND hyperbolic face output and scratch must not alias");
+    require_state_patch_(state);
+    require_provider_patch_(state, providers);
+    cartesian_operator_detail::require_face_output(output, state.box(), n_vars);
+    cartesian_operator_detail::require_face_output(candidate, state.box(), n_vars);
+    cartesian_operator_detail::require_face_output(statuses, state.box(), 1);
     cartesian_operator_detail::materialize_axes<0, Variables>(
-        model_, metric_, reconstruction_, numerical_flux_, positivity_floor_,
-        positivity_component_, state, providers.view(), candidate, statuses);
+        model_, metric_, reconstruction_, numerical_flux_, positivity_floor_, positivity_component_,
+        state, providers.view(), candidate, statuses);
     const Real failure = cartesian_operator_detail::maximum_face_status<0>(statuses);
     if (failure != static_cast<Real>(FiniteVolumeStatus::Success))
       throw std::runtime_error("prepared ND hyperbolic face evaluation refused publication");
@@ -343,9 +435,26 @@ class PreparedCartesianOperator {
 
     FaceField<Dim, MemorySpace> candidate(state.box(), n_vars);
     FaceField<Dim, MemorySpace> statuses(state.box(), 1);
+    materialize_face_fluxes(state, providers, output, candidate, statuses);
+  }
+
+  template <class MemorySpace, int Count>
+  void materialize_face_fluxes(const Fab<Dim, MemorySpace>& state,
+                               const ProviderStorageView<Dim, Count>& providers,
+                               FaceField<Dim, MemorySpace>& output,
+                               FaceField<Dim, MemorySpace>& candidate,
+                               FaceField<Dim, MemorySpace>& statuses) const
+    requires(Count == flux_provider_count<Model>)
+  {
+    if (&output == &candidate || &output == &statuses || &candidate == &statuses)
+      throw std::invalid_argument("prepared ND hyperbolic face output and scratch must not alias");
+    require_state_patch_(state);
+    cartesian_operator_detail::require_face_output(output, state.box(), n_vars);
+    cartesian_operator_detail::require_face_output(candidate, state.box(), n_vars);
+    cartesian_operator_detail::require_face_output(statuses, state.box(), 1);
     cartesian_operator_detail::materialize_axes<0, Variables>(
-        model_, metric_, reconstruction_, numerical_flux_, positivity_floor_,
-        positivity_component_, state, providers, candidate, statuses);
+        model_, metric_, reconstruction_, numerical_flux_, positivity_floor_, positivity_component_,
+        state, providers, candidate, statuses);
     const Real failure = cartesian_operator_detail::maximum_face_status<0>(statuses);
     if (failure != static_cast<Real>(FiniteVolumeStatus::Success))
       throw std::runtime_error("prepared ND hyperbolic face evaluation refused publication");
@@ -369,6 +478,25 @@ class PreparedCartesianOperator {
 
     Fab<Dim, MemorySpace> candidate(cells, n_vars);
     Fab<Dim, MemorySpace> cell_statuses(cells, 1);
+    assemble_residual_from_face_fluxes(integrated_fluxes, residual, candidate, cell_statuses);
+  }
+
+  template <class MemorySpace>
+  void assemble_residual_from_face_fluxes(const FaceField<Dim, MemorySpace>& integrated_fluxes,
+                                          Fab<Dim, MemorySpace>& residual,
+                                          Fab<Dim, MemorySpace>& candidate,
+                                          Fab<Dim, MemorySpace>& cell_statuses) const {
+    if (&residual == &candidate || &residual == &cell_statuses || &candidate == &cell_statuses)
+      throw std::invalid_argument(
+          "prepared ND hyperbolic residual output and scratch must not alias");
+    const Box<Dim>& cells = integrated_fluxes.cell_box();
+    if (!domain().contains(cells))
+      throw std::invalid_argument(
+          "prepared ND hyperbolic face patch lies outside the metric domain");
+    cartesian_operator_detail::require_face_output(integrated_fluxes, cells, n_vars);
+    cartesian_operator_detail::require_residual_shape(residual, cells, n_vars);
+    cartesian_operator_detail::require_residual_shape(candidate, cells, n_vars);
+    cartesian_operator_detail::require_residual_shape(cell_statuses, cells, 1);
     for_each_cell(cells,
                   cartesian_operator_detail::MaterializeResidual<Dim, Metric, n_vars>{
                       metric_, integrated_fluxes.view(), candidate.view(), cell_statuses.view()});
@@ -385,8 +513,7 @@ class PreparedCartesianOperator {
   }
 
   template <class MemorySpace>
-  void assemble_residual(const Fab<Dim, MemorySpace>& state,
-                         Fab<Dim, MemorySpace>& residual) const
+  void assemble_residual(const Fab<Dim, MemorySpace>& state, Fab<Dim, MemorySpace>& residual) const
     requires(flux_provider_count<Model> == 0)
   {
     require_state_patch_(state);
@@ -395,9 +522,9 @@ class PreparedCartesianOperator {
     FaceField<Dim, MemorySpace> integrated_fluxes(state.box(), n_vars);
     FaceField<Dim, MemorySpace> face_statuses(state.box(), 1);
     cartesian_operator_detail::materialize_axes<0, Variables>(
-        model_, metric_, reconstruction_, numerical_flux_, positivity_floor_,
-        positivity_component_, state,
-        cartesian_operator_detail::ProviderFreeStorage<Dim>{}, integrated_fluxes, face_statuses);
+        model_, metric_, reconstruction_, numerical_flux_, positivity_floor_, positivity_component_,
+        state, cartesian_operator_detail::ProviderFreeStorage<Dim>{}, integrated_fluxes,
+        face_statuses);
     const Real face_failure = cartesian_operator_detail::maximum_face_status<0>(face_statuses);
     if (face_failure != static_cast<Real>(FiniteVolumeStatus::Success))
       throw std::runtime_error("prepared ND hyperbolic face evaluation refused publication");
@@ -405,8 +532,7 @@ class PreparedCartesianOperator {
   }
 
   template <class MemorySpace>
-  void assemble_residual(const Fab<Dim, MemorySpace>& state,
-                         const Fab<Dim, MemorySpace>& providers,
+  void assemble_residual(const Fab<Dim, MemorySpace>& state, const Fab<Dim, MemorySpace>& providers,
                          Fab<Dim, MemorySpace>& residual) const {
     require_state_patch_(state);
     require_provider_patch_(state, providers);
@@ -459,8 +585,7 @@ class PreparedCartesianOperator {
                          const MultiFab<Dim, MemorySpace>& providers,
                          MultiFab<Dim, MemorySpace>& residual) const {
     require_multifab_layout_(state, residual);
-    if (providers.layout() != state.layout() ||
-        providers.distribution() != state.distribution() ||
+    if (providers.layout() != state.layout() || providers.distribution() != state.distribution() ||
         providers.local_rank() != state.local_rank() ||
         providers.local_size() != state.local_size() ||
         providers.ncomp() < flux_provider_count<Model>)
@@ -496,14 +621,40 @@ class PreparedCartesianOperator {
 
     MultiFab<Dim, MemorySpace> candidate(residual.layout(), residual.distribution(),
                                          residual.local_rank(), n_vars, residual.ghosts());
+    MultiFab<Dim, MemorySpace> statuses(residual.layout(), residual.distribution(),
+                                        residual.local_rank(), 1, residual.ghosts());
+    assemble_residual_from_face_fluxes(integrated_fluxes, residual, candidate, statuses);
+  }
+
+  template <class MemorySpace>
+  void assemble_residual_from_face_fluxes(
+      const std::vector<FaceField<Dim, MemorySpace>>& integrated_fluxes,
+      MultiFab<Dim, MemorySpace>& residual, MultiFab<Dim, MemorySpace>& candidate,
+      MultiFab<Dim, MemorySpace>& statuses) const {
+    if (&residual == &candidate || &residual == &statuses || &candidate == &statuses)
+      throw std::invalid_argument(
+          "prepared ND hyperbolic divergence output and scratch must not alias");
+    if (residual.ncomp() != n_vars || integrated_fluxes.size() != residual.local_size() ||
+        candidate.layout() != residual.layout() ||
+        candidate.distribution() != residual.distribution() ||
+        candidate.local_rank() != residual.local_rank() || candidate.ncomp() != n_vars ||
+        candidate.ghosts() != residual.ghosts() || statuses.layout() != residual.layout() ||
+        statuses.distribution() != residual.distribution() ||
+        statuses.local_rank() != residual.local_rank() || statuses.ncomp() != 1 ||
+        statuses.ghosts() != residual.ghosts())
+      throw std::invalid_argument(
+          "prepared ND hyperbolic divergence scratch differs from the residual layout");
+    for (std::size_t local = 0; local < residual.local_size(); ++local) {
+      if (!(integrated_fluxes[local].cell_box() == residual.box(local)) ||
+          !domain().contains(residual.box(local)))
+        throw std::invalid_argument(
+            "prepared ND hyperbolic face workspace patch does not match the residual layout");
+      cartesian_operator_detail::require_face_output(integrated_fluxes[local], residual.box(local),
+                                                     n_vars);
+    }
     for (std::size_t local = 0; local < residual.local_size(); ++local)
-      assemble_residual_from_face_fluxes(integrated_fluxes[local], candidate.fab(local));
-    for (std::size_t local = 0; local < residual.local_size(); ++local)
-      for_each_cell(residual.box(local),
-                    cartesian_operator_detail::CopyCellField<Dim>{
-                        static_cast<const Fab<Dim, MemorySpace>&>(candidate.fab(local)).view(),
-                        residual.fab(local).view(), n_vars});
-    device_fence();
+      assemble_residual_from_face_fluxes(integrated_fluxes[local], residual.fab(local),
+                                         candidate.fab(local), statuses.fab(local));
   }
 
  private:
@@ -571,9 +722,9 @@ auto prepare_cartesian_operator(const Geometry<Dim>& geometry, Model model,
   const auto map = CartesianCoordinateMap<Dim>::make(geometry.lower(), lengths);
   auto metric = prepare_metric_provider(geometry.domain(), map);
   return prepare_cartesian_operator<Dim, Model, decltype(metric), Reconstruction, NumericalFlux,
-                                    Variables>(
-      std::move(model), std::move(metric), std::move(reconstruction), std::move(numerical_flux),
-      positivity_floor);
+                                    Variables>(std::move(model), std::move(metric),
+                                               std::move(reconstruction), std::move(numerical_flux),
+                                               positivity_floor);
 }
 
 template <int Dim, class MemorySpace>

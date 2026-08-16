@@ -163,8 +163,8 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _RecoveryMixin, _FluxMi
                                          # enable_roe / roe_from_jacobian; direct rows own theirs.
         self.prim_state = []    # ordered names of the primitive state (Prim layout); for the codegen
         self.cons_from = None   # list of Expr: conservative in terms of the primitives (to_conservative)
-        self.cons_roles = None  # explicit override of the conservative roles (otherwise canonical mapping)
-        self.prim_roles = None  # explicit override of the primitive roles (otherwise canonical mapping)
+        self.cons_roles = None  # typed conservative-role descriptors; None -> canonical name mapping
+        self.prim_roles = None  # typed primitive-role descriptors; None -> canonical name mapping
         self.gamma = None       # adiabatic index of the block (EOS), read by the inter-species couplings
                                 # on the System side. None -> symbol pops_compiled_gamma not emitted (the System
                                 # then falls back to its historical default 1.4, strict backward compatibility).

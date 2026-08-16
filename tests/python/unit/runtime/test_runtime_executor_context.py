@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import sys
 from types import SimpleNamespace
 
@@ -13,16 +14,35 @@ from pops._platform_contracts import (
     ExecutionResource,
     proven_serial_manifest,
 )
+from pops.codegen._compiled_artifact import CompiledSimulationArtifact
+from pops.codegen._plans import BindInputs, InstallPlan
 from pops.identity import make_identity
+from pops.model import Handle, OwnerKind, OwnerPath
+from pops.output._console_monitor import ConsolePresentation
+from pops.output._consumer_contracts import (
+    ConsumerGraph,
+    ConsumerKind,
+    ConsumerManifest,
+    ConsumerQuantity,
+    ParallelMode,
+)
+from pops.output._restart_provider import RestartAuthority
 from pops.runtime import _multi_layout_executor as multi_executor
 from pops.runtime import _platform_manifest as platform_manifest
 from pops.runtime import _runtime_executor as executor
 from pops.runtime import _runtime_planning as runtime_planning
+from pops.runtime._runtime_component_manifests import component_manifests_for_install
 from pops.runtime._runtime_plan_contracts import (
+    BufferAllocation,
+    ClockJoin,
+    Collective,
     DeterminismGuarantee,
+    Fence,
     RuntimePlanningError,
 )
 from pops.runtime._runtime_planning import build_runtime_plans
+from pops.time import AcceptedStep, Clock, Every, Schedule
+from tests.python.support.native_execution_context import artifact_execution_context
 from tests.python.unit.runtime.test_runtime_planning import _install, _manifest
 
 
@@ -152,7 +172,12 @@ def test_determinism_assumptions_are_rechecked_before_native_preflight(monkeypat
             {},
             make_identity("execution-context", {"test": "runtime-executor"}),
         ),
-        communication=SimpleNamespace(collectives=()),
+        resources=SimpleNamespace(buffers=()),
+        communication=SimpleNamespace(
+            collectives=(),
+            fences=(),
+            clock_joins=(),
+        ),
     )
     calls = []
 
@@ -200,9 +225,18 @@ def test_matching_runtime_determinism_assumptions_are_consumed():
 
 def _single_layout_projection():
     layout = SimpleNamespace(handle=SimpleNamespace(qualified_id="layout::primary"))
+    call_identity = SimpleNamespace(token="runtime-call::fluid")
+    compiled_block = SimpleNamespace(
+        name="fluid",
+        spatial={"ghost_depth": 2},
+    )
     plan = SimpleNamespace(
         artifact=SimpleNamespace(
-            blocks=(SimpleNamespace(name="fluid"),),
+            blocks=(compiled_block,),
+            plan=SimpleNamespace(
+                blocks=(compiled_block,),
+                field_plans={},
+            ),
             layout_plan=SimpleNamespace(
                 layouts=(layout,),
                 assignments=(
@@ -217,12 +251,26 @@ def _single_layout_projection():
         )
     )
     runtime_plan = SimpleNamespace(
-        calls=(SimpleNamespace(block_id="block::fluid", layout_id="layout::primary"),),
+        calls=(
+            SimpleNamespace(
+                identity=call_identity,
+                block_id="block::fluid",
+                layout_id="layout::primary",
+                reads=(SimpleNamespace(resource="state:u"),),
+            ),
+        ),
         communication=SimpleNamespace(
             transfers=(),
-            halos=(SimpleNamespace(layout_id="layout::primary"),),
+            halos=(
+                SimpleNamespace(
+                    call_id=call_identity.token,
+                    resource="state:u",
+                    layout_id="layout::primary",
+                    depth=2,
+                ),
+            ),
         ),
-        resources=SimpleNamespace(mapping_provider_ids=()),
+        resources=SimpleNamespace(mapping_provider_ids=(), buffers=()),
     )
     return plan, runtime_plan
 
@@ -239,6 +287,74 @@ def test_single_layout_provider_consumes_exact_call_and_halo_projection():
 
     runtime_plan.communication.halos[0].layout_id = "layout::other"
     with pytest.raises(ValueError, match="halo differs"):
+        executor._require_single_layout_runtime_plan(plan, runtime_plan)
+
+
+def test_single_layout_provider_authenticates_exact_halo_owner_and_storage():
+    plan = _install()
+    runtime_plan = build_runtime_plans(
+        plan,
+        {
+            "fluid": _manifest(
+                "fluid",
+                reads=({"resource": "state:u"},),
+                requirements=(
+                    {"capability": "halo", "depth": 2, "resource": "state:u"},
+                ),
+            ),
+        },
+    )
+
+    executor._require_single_layout_runtime_plan(plan, runtime_plan)
+
+
+def test_single_layout_provider_refuses_halo_deeper_than_compiled_storage():
+    plan = _install()
+    runtime_plan = build_runtime_plans(
+        plan,
+        {
+            "fluid": _manifest(
+                "fluid",
+                reads=({"resource": "state:u"},),
+                requirements=(
+                    {"capability": "halo", "depth": 3, "resource": "state:u"},
+                ),
+            ),
+        },
+    )
+
+    with pytest.raises(ValueError, match="exceeds compiled block.*ghost depth 2"):
+        executor._require_single_layout_runtime_plan(plan, runtime_plan)
+
+
+def test_single_layout_provider_requires_exact_compiled_halo_evidence():
+    plan, runtime_plan = _single_layout_projection()
+    plan.artifact.blocks[0].spatial = {}
+
+    with pytest.raises(ValueError, match="no exact ghost depth.*numerics/spatial plan"):
+        executor._require_single_layout_runtime_plan(plan, runtime_plan)
+
+
+def test_single_layout_halo_uses_field_plan_depth_above_spatial_depth():
+    plan, runtime_plan = _single_layout_projection()
+    plan.artifact.plan.field_plans = {
+        "potential": SimpleNamespace(
+            native_options={
+                "output_route": {"owner_block": "fluid"},
+                "method": {"ghost_depth": 3},
+            },
+        ),
+    }
+    runtime_plan.communication.halos[0].depth = 3
+
+    executor._require_single_layout_runtime_plan(plan, runtime_plan)
+
+
+def test_single_layout_provider_refuses_halo_without_authenticated_read_owner():
+    plan, runtime_plan = _single_layout_projection()
+    runtime_plan.communication.halos[0].resource = "state:foreign"
+
+    with pytest.raises(ValueError, match="no authenticated read owner"):
         executor._require_single_layout_runtime_plan(plan, runtime_plan)
 
 
@@ -335,6 +451,344 @@ def test_multi_layout_provider_refuses_unconsumed_halo_plan():
 
     with pytest.raises(NotImplementedError, match="explicit per-layout halo scheduler"):
         multi_executor._require_runtime_plan_projection(plan, runtime_plan, transfers)
+
+
+def _exact_runtime_plan_with_unowned_action(kind):
+    names = ("fluid", "solid") if kind == "fence" else ("fluid",)
+    plan = _install(names)
+    runtime_plan = build_runtime_plans(
+        plan,
+        {name: _manifest(name) for name in names},
+    )
+    communication = runtime_plan.communication
+    resources = runtime_plan.resources
+    if kind == "buffer":
+        resources = replace(
+            resources,
+            buffers=(BufferAllocation("scratch:flux", "host", 256, 0, 0),),
+        )
+    elif kind == "fence":
+        fence = Fence(
+            "state:u",
+            runtime_plan.calls[0].identity.token,
+            runtime_plan.calls[1].identity.token,
+            "host",
+            "device",
+        )
+        communication = replace(communication, fences=(fence,))
+        resources = replace(resources, fence_ids=(fence.identity.token,))
+    elif kind == "clock_join":
+        communication = replace(
+            communication,
+            clock_joins=(
+                ClockJoin(
+                    runtime_plan.calls[0].identity.token,
+                    "fast",
+                    "solution",
+                    "exact",
+                ),
+            ),
+        )
+    else:
+        raise AssertionError("unsupported test action")
+    return plan, replace(
+        runtime_plan,
+        communication=communication,
+        resources=resources,
+    )
+
+
+@pytest.mark.parametrize(
+    "kind,match",
+    [
+        ("buffer", "buffer allocations"),
+        ("fence", "cross-memory fences"),
+        ("clock_join", "clock joins"),
+    ],
+)
+def test_unowned_exact_runtime_action_fails_before_native_fact_probe(
+    monkeypatch, kind, match
+):
+    plan, runtime_plan = _exact_runtime_plan_with_unowned_action(kind)
+
+    def forbidden_native_facts():
+        raise AssertionError("native fact probe became reachable")
+
+    monkeypatch.setattr(executor, "_native_runtime_facts", forbidden_native_facts)
+    with pytest.raises(NotImplementedError, match=match):
+        executor.install_runtime_executor(plan, runtime_plan)
+
+
+def _collective_component_manifest(
+    name="fluid",
+    *,
+    resource="state:u",
+    operation="gather",
+    strategy="explicit_communicator",
+):
+    return _manifest(
+        name,
+        reads=({"resource": resource},),
+        requirements=(
+            {
+                "capability": "collective",
+                "resource": resource,
+                "operation": operation,
+                "strategy": strategy,
+            },
+        ),
+    )
+
+
+def _collective_owner_graph(plan, *, block_name="fluid"):
+    case_owner = plan.artifact.layout_plan.owner
+    graph_owner = case_owner.child(OwnerKind.CONSUMER, "graph")
+    assignment = next(
+        row
+        for row in plan.artifact.layout_plan.assignments
+        if row.subject_kind == "block" and row.subject.local_id == block_name
+    )
+    block = assignment.subject
+    declaration_owner = OwnerPath.model("runtime-collective-owner")
+    declaration = Handle("state", kind="state", owner=declaration_owner)
+    reference = declaration._with_owner(
+        block.owner_path.child(OwnerKind.BLOCK, block.local_id).instance_of(
+            declaration_owner
+        ),
+        declaration_ref=declaration,
+        block_ref=block,
+    )
+    quantity = ConsumerQuantity(
+        reference,
+        "state:u",
+        assignment.layout.qualified_id,
+    )
+    clock = Clock("solution", owner=graph_owner)
+    return ConsumerGraph((
+        ConsumerManifest(
+            Handle("console", kind="consumer", owner=graph_owner),
+            ConsumerKind.DIAGNOSTIC,
+            (quantity,),
+            Schedule(Every(AcceptedStep(clock), 1)),
+            "console/runtime-collective-owner",
+            None,
+            ParallelMode.ROOT,
+            operation=ConsolePresentation(template=None, handler=None),
+        ),
+    ))
+
+
+def _install_with_consumer_graph(base, graph):
+    record = replace(
+        base.artifact.plan,
+        consumer_graph=graph,
+        restart_authority=RestartAuthority.from_consumer_graph(graph),
+    )
+    artifact = CompiledSimulationArtifact(
+        record,
+        base.artifact.program,
+        base.artifact.blocks,
+    )
+    return InstallPlan(
+        artifact=artifact,
+        bind_inputs=BindInputs(),
+        instances={
+            block.name: {"model": block.model, "spatial": block.spatial}
+            for block in artifact.blocks
+        },
+        params=artifact.bind_schema.resolve_bind(
+            {}, compile_values=artifact.plan.compile_values
+        ),
+        aux={},
+        execution_context=artifact_execution_context(artifact),
+    )
+
+
+def test_owned_exact_consumer_collective_reaches_native_fact_probe(monkeypatch):
+    base = _install()
+    plan = _install_with_consumer_graph(base, _collective_owner_graph(base))
+    runtime_plan = build_runtime_plans(
+        plan,
+        component_manifests_for_install(plan),
+    )
+    assert runtime_plan.communication.collectives[0].strategy == "explicit_communicator"
+
+    class NativeFactProbeReached(Exception):
+        pass
+
+    def reached_native_facts():
+        raise NativeFactProbeReached
+
+    monkeypatch.setattr(executor, "_native_runtime_facts", reached_native_facts)
+    with pytest.raises(NativeFactProbeReached):
+        executor.install_runtime_executor(plan, runtime_plan)
+
+
+def test_unowned_exact_consumer_collective_fails_before_native_fact_probe(monkeypatch):
+    plan = _install()
+    runtime_plan = build_runtime_plans(
+        plan,
+        {"fluid": _collective_component_manifest()},
+    )
+
+    def forbidden_native_facts():
+        raise AssertionError("native fact probe became reachable")
+
+    monkeypatch.setattr(executor, "_native_runtime_facts", forbidden_native_facts)
+    with pytest.raises(RuntimePlanningError) as error:
+        executor.install_runtime_executor(plan, runtime_plan)
+    assert error.value.code == "runtime_collective_without_consumer_owner"
+
+
+@pytest.mark.parametrize(
+    "resource,operation",
+    [
+        ("state:u", "sum"),
+        ("state:foreign", "gather"),
+    ],
+)
+def test_consumer_collective_requires_exact_resource_and_operation_owner(
+    monkeypatch, resource, operation
+):
+    base = _install()
+    plan = _install_with_consumer_graph(base, _collective_owner_graph(base))
+    runtime_plan = build_runtime_plans(
+        plan,
+        {
+            "fluid": _collective_component_manifest(
+                resource=resource,
+                operation=operation,
+            ),
+        },
+    )
+
+    def forbidden_native_facts():
+        raise AssertionError("native fact probe became reachable")
+
+    monkeypatch.setattr(executor, "_native_runtime_facts", forbidden_native_facts)
+    with pytest.raises(RuntimePlanningError) as error:
+        executor.install_runtime_executor(plan, runtime_plan)
+    assert error.value.code == "runtime_collective_without_consumer_owner"
+
+
+def test_consumer_collective_requires_exact_block_owner_before_native_fact_probe(
+    monkeypatch,
+):
+    base = _install(("first", "second"))
+    plan = _install_with_consumer_graph(
+        base,
+        _collective_owner_graph(base, block_name="first"),
+    )
+    runtime_plan = build_runtime_plans(
+        plan,
+        {
+            "first": _manifest("first", reads=({"resource": "state:u"},)),
+            "second": _collective_component_manifest("second"),
+        },
+    )
+
+    def forbidden_native_facts():
+        raise AssertionError("native fact probe became reachable")
+
+    monkeypatch.setattr(executor, "_native_runtime_facts", forbidden_native_facts)
+    with pytest.raises(RuntimePlanningError) as error:
+        executor.install_runtime_executor(plan, runtime_plan)
+    assert error.value.code == "runtime_collective_without_consumer_owner"
+
+
+def test_consumer_collective_requires_exact_strategy_before_native_fact_probe(
+    monkeypatch,
+):
+    base = _install()
+    plan = _install_with_consumer_graph(base, _collective_owner_graph(base))
+    runtime_plan = build_runtime_plans(
+        plan,
+        {"fluid": _collective_component_manifest(strategy="ordered")},
+    )
+
+    def forbidden_native_facts():
+        raise AssertionError("native fact probe became reachable")
+
+    monkeypatch.setattr(executor, "_native_runtime_facts", forbidden_native_facts)
+    with pytest.raises(RuntimePlanningError) as error:
+        executor.install_runtime_executor(plan, runtime_plan)
+    assert error.value.code == "runtime_collective_without_consumer_owner"
+
+
+def test_consumer_collective_requires_exact_call_requirement_before_native_facts(
+    monkeypatch,
+):
+    base = _install()
+    plan = _install_with_consumer_graph(base, _collective_owner_graph(base))
+    runtime_plan = build_runtime_plans(
+        plan,
+        {"fluid": _manifest("fluid", reads=({"resource": "state:u"},))},
+    )
+    call = runtime_plan.calls[0]
+    communicator = runtime_plan.communication.communicator_id
+    communication = replace(
+        runtime_plan.communication,
+        collectives=(
+            Collective(
+                call.identity.token,
+                "state:u",
+                "gather",
+                "explicit_communicator",
+                communicator,
+                0,
+            ),
+        ),
+    )
+    runtime_plan = replace(runtime_plan, communication=communication)
+
+    def forbidden_native_facts():
+        raise AssertionError("native fact probe became reachable")
+
+    monkeypatch.setattr(executor, "_native_runtime_facts", forbidden_native_facts)
+    with pytest.raises(RuntimePlanningError) as error:
+        executor.install_runtime_executor(plan, runtime_plan)
+    assert error.value.code == "runtime_collective_without_consumer_owner"
+
+
+@pytest.mark.parametrize("replace_plan_communicator", [False, True])
+def test_consumer_collective_requires_exact_communicator_before_native_fact_probe(
+    monkeypatch, replace_plan_communicator
+):
+    base = _install()
+    plan = _install_with_consumer_graph(base, _collective_owner_graph(base))
+    runtime_plan = build_runtime_plans(
+        plan,
+        {"fluid": _collective_component_manifest()},
+    )
+    collective = runtime_plan.communication.collectives[0]
+    wrong_communicator = collective.communicator_id + ":foreign"
+    communication = replace(
+        runtime_plan.communication,
+        communicator_id=(
+            wrong_communicator
+            if replace_plan_communicator
+            else runtime_plan.communication.communicator_id
+        ),
+        collectives=(
+            Collective(
+                collective.call_id,
+                collective.resource,
+                collective.operation,
+                collective.strategy,
+                wrong_communicator,
+                collective.sequence,
+            ),
+        ),
+    )
+    runtime_plan = replace(runtime_plan, communication=communication)
+
+    def forbidden_native_facts():
+        raise AssertionError("native fact probe became reachable")
+
+    monkeypatch.setattr(executor, "_native_runtime_facts", forbidden_native_facts)
+    with pytest.raises(RuntimePlanningError) as error:
+        executor.install_runtime_executor(plan, runtime_plan)
+    assert error.value.code == "runtime_collective_without_consumer_owner"
 
 
 def test_before_step_transfer_cycle_captures_every_native_source_before_any_apply():

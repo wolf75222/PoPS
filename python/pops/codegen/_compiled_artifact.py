@@ -22,6 +22,10 @@ class CompiledPlanBlock:
     state_spaces: tuple[str, ...]
     boundaries: tuple[Any, ...] = ()
     state_identities: tuple[str, ...] = ()
+    instance_owner_qid: str = ""
+    instance_owner: Any = None
+    model_owner: Any = None
+    declares_auxiliary_providers: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name:
@@ -41,6 +45,16 @@ class CompiledPlanBlock:
             raise TypeError(
                 "CompiledPlanBlock state_identities must uniquely qualify every state space")
         object.__setattr__(self, "state_identities", state_identities)
+        if not isinstance(self.instance_owner_qid, str) or not self.instance_owner_qid:
+            raise TypeError(
+                "CompiledPlanBlock instance_owner_qid must be a canonical Case-block instance owner"
+            )
+        object.__setattr__(
+            self, "instance_owner", None if self.instance_owner is None else dict(self.instance_owner))
+        object.__setattr__(
+            self, "model_owner", None if self.model_owner is None else dict(self.model_owner))
+        object.__setattr__(
+            self, "declares_auxiliary_providers", bool(self.declares_auxiliary_providers))
         object.__setattr__(self, "spatial", _deep_freeze(self.spatial))
         _evidence(self.spatial, where="CompiledPlanBlock.spatial")
         from pops.mesh.boundaries.compiled_plan import CompiledBoundaryPlan
@@ -122,7 +136,11 @@ class CompiledPlanRecord:
                     spatial=block.spatial,
                     state_spaces=block.state_spaces,
                     boundaries=(() if block.numerics is None else block.numerics.boundaries),
-                    state_identities=block.state_identities)
+                    state_identities=block.state_identities,
+                    instance_owner_qid=block.instance_owner_qid,
+                    instance_owner=block.instance_owner,
+                    model_owner=block.model_owner,
+                    declares_auxiliary_providers=block.declares_auxiliary_providers)
                 for block in plan.blocks
             ),
             time_identity=_evidence(plan.time, where="resolved time"),
@@ -279,6 +297,10 @@ class CompiledPlanRecord:
                     "backend": block.backend,
                     "state_spaces": block.state_spaces,
                     "state_identities": block.state_identities,
+                    "instance_owner_qid": block.instance_owner_qid,
+                    "instance_owner": block.instance_owner,
+                    "model_owner": block.model_owner,
+                    "declares_auxiliary_providers": block.declares_auxiliary_providers,
                     "spatial": _evidence(
                         block.spatial, where="compiled plan block spatial"),
                     "boundaries": _evidence(
@@ -325,7 +347,7 @@ def _binary_evidence(value: Any, *, where: str) -> dict[str, Any]:
     metadata = {}
     for name in (
         "target", "backend", "abi_key", "model_hash", "definition_identity",
-        "module_manifest",
+        "module_manifest", "consumer_owner_qid", "declares_auxiliary_providers",
     ):
         item = getattr(value, name, None)
         if item is not None:
@@ -521,6 +543,16 @@ class CompiledSimulationArtifact:
             raise ValueError(
                 "CompiledSimulationArtifact blocks must match resolved plan order exactly")
         for compiled, resolved in zip(blocks, self.plan.blocks, strict=True):
+            observed_owner = getattr(compiled.model, "consumer_owner_qid", None)
+            if observed_owner != resolved.instance_owner_qid:
+                raise ValueError(
+                    "compiled block %r consumer owner %r differs from resolved instance owner %r"
+                    % (compiled.name, observed_owner, resolved.instance_owner_qid))
+            observed_declaration = getattr(compiled.model, "declares_auxiliary_providers", None)
+            if observed_declaration != resolved.declares_auxiliary_providers:
+                raise ValueError(
+                    "compiled block %r provider-declaration role %r differs from resolved role %r"
+                    % (compiled.name, observed_declaration, resolved.declares_auxiliary_providers))
             if compiled.state_spaces != resolved.state_spaces:
                 raise ValueError(
                     "compiled block %r changed the resolved state-space route" % compiled.name)

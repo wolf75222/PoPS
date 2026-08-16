@@ -37,6 +37,8 @@ struct UniformRecoveryBatchReport {
   std::size_t cell_count = 0;
   std::size_t recovered_cells = 0;
   std::size_t cache_hits = 0;
+  std::size_t projection_attempts = 0;
+  std::size_t projected_cells = 0;
   std::size_t failed_cell = kNoRecoveryCell;
   std::uint64_t topology_generation = 0;
   std::uint64_t state_generation = 0;
@@ -63,6 +65,23 @@ template <int N>
 bool exact_uniform_recovery_state(const std::array<double, N>& accepted,
                                   const std::array<double, N>& candidate) {
   return std::memcmp(accepted.data(), candidate.data(), sizeof(double) * N) == 0;
+}
+
+/// Explicit legacy-plan overload retained for the separately owned generated AMR consumer.
+template <int N, class Admissible, class Methods>
+PreparedVariableRecoveryAttempt<N> execute_uniform_recovery(
+    const PreparedVariableRecoveryPlan<N, Admissible, Methods>& plan, const Real (&conserved)[N],
+    const Real (&initial_guess)[N]) {
+  return {recover_prepared_variable(plan, conserved, initial_guess), false, false};
+}
+
+/// Uniform's final path consumes the shared prepared inversion authority directly.
+template <int N, class Authority>
+  requires(Authority::N == N)
+PreparedVariableRecoveryAttempt<N> execute_uniform_recovery(std::shared_ptr<Authority>& authority,
+                                                            const Real (&conserved)[N],
+                                                            const Real (&)[N]) {
+  return authority->recover(conserved);
 }
 
 }  // namespace recovery_detail
@@ -118,8 +137,13 @@ class PreparedUniformRecoveryConsumer {
             slot.load_if_current(topology_generation_, state_generation_, initial_guess))
           ++batch.cache_hits;
 
-        const RecoveryOutcome<N> outcome =
-            recover_prepared_variable(plan_, cell_conserved, initial_guess);
+        const PreparedVariableRecoveryAttempt<N> recovery =
+            recovery_detail::execute_uniform_recovery(plan_, cell_conserved, initial_guess);
+        const RecoveryOutcome<N>& outcome = recovery.outcome;
+        if (recovery.projection_attempted)
+          ++batch.projection_attempts;
+        if (recovery.projection_changed)
+          ++batch.projected_cells;
         batch.recovery = recovery_report(outcome);
         if (!outcome.publication_permitted()) {
           batch.failed_cell = cell;
@@ -184,7 +208,24 @@ class PreparedUniformRecoveryConsumer {
   bool topology_initialized_ = false;
 };
 
-/// Build one copyable type-erased consumer while retaining one shared authoritative cache.
+/// Build Uniform's batch consumer over the exact prepared authority already captured by this
+/// generated block's pointwise closure.  The shared object owns one reusable inversion workspace;
+/// this function deliberately prepares neither a second inversion nor a second admissibility set.
+template <class Authority>
+UniformCellRecovery make_uniform_variable_inversion_consumer(std::shared_ptr<Authority> authority) {
+  constexpr int N = Authority::N;
+  if (!authority)
+    throw std::invalid_argument("Uniform variable inversion authority must not be null");
+  using Consumer = PreparedUniformRecoveryConsumer<N, std::shared_ptr<Authority>>;
+  auto consumer = std::make_shared<Consumer>(std::move(authority));
+  return [consumer = std::move(consumer)](const std::vector<double>& conserved,
+                                          std::vector<double>& primitive) {
+    return consumer->recover(conserved, primitive);
+  };
+}
+
+/// Existing explicit-plan entry point retained solely for the separately owned generated AMR
+/// materialization. It is intentionally not selected by generated Uniform materialization.
 template <class Model>
 UniformCellRecovery make_uniform_recovery_consumer(const Model& model) {
   constexpr int N = Model::n_vars;

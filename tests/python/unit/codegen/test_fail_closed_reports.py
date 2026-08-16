@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from pops import _capabilities_report as capability_reports
+from pops import _native_selector
 from pops.codegen import inspect_compiled
 from pops.codegen import toolchain
 from pops.runtime import defaults
@@ -54,11 +55,13 @@ def test_amr_transfer_report_iterates_every_canonical_oriented_face_centering():
         source="test-manifest",
     )
     transfer = {row.feature: row for row in report.routes}["amr:transfer_contracts"]
-    expected = "/".join((
-        CELL_CENTERED.name,
-        *(centering.name for centering in ORIENTED_FACE_CENTERINGS),
-        NODE_CENTERED.name,
-    ))
+    expected = "/".join(
+        (
+            CELL_CENTERED.name,
+            *(centering.name for centering in ORIENTED_FACE_CENTERINGS),
+            NODE_CENTERED.name,
+        )
+    )
     assert "exact dense %s contracts" % expected in transfer.limitation
     assert "face_z" in transfer.limitation
 
@@ -89,7 +92,7 @@ def test_mpi_world_route_reports_only_proved_native_availability(supports_mpi, e
     assert "checkpoint:system_v1" not in routes
     weno = routes["reconstruction:weno5"]
     assert weno.layout == "uniform|amr"
-    assert "ratio-2 AMR in the compile-selected native rank" in weno.limitation
+    assert "hierarchy-selected AMR in the compile-selected native rank" in weno.limitation
     assert "order-5" in weno.limitation
     for feature in ("limiter:mc", "limiter:superbee"):
         limiter = routes[feature]
@@ -117,18 +120,25 @@ def test_mpi_world_route_reports_only_proved_native_availability(supports_mpi, e
     assert cell_local.status == "partial"
     assert cell_local.layout == "amr"
     assert cell_local.backend == "production"
-    assert cell_local.mpi is False
+    assert cell_local.mpi is supports_mpi
     assert cell_local.gpu is False
-    assert "four time-integrated face records" in cell_local.limitation
+    assert "multi-block, multi-level and distributed multi-box" in cell_local.limitation
+    assert "authoritative reflux" in cell_local.limitation
     assert "Program.cell_local_time" in cell_local.limitation
-    assert "same-topology restart" in cell_local.limitation
-    assert "prepared physical-boundary plans" in cell_local.limitation
+    assert "integral power-of-two temporal ratios" in cell_local.limitation
+    assert "one homogeneous rung per level-group" in cell_local.limitation
+    assert "Heterogeneous rungs" in cell_local.limitation
+    assert "Same-rank restart and regrid" in cell_local.limitation
+    assert "global/interface-coupled blocks" in cell_local.limitation
+    assert "physical/non-periodic boundaries" in cell_local.limitation
+    assert "every GPU default execution or memory space" in cell_local.limitation
+    assert "fail collectively during exact-lane preparation" in cell_local.limitation
     external_amr = routes["amr:external_field_solver_v2"]
     assert external_amr.status == "available"
     assert external_amr.layout == "amr"
     assert external_amr.mpi is supports_mpi
     assert external_amr.gpu is False
-    assert "ratio-2 AMR" in external_amr.limitation
+    assert "hierarchy-selected AMR ratios" in external_amr.limitation
     assert "both components to declare MPI_COMM_WORLD" in external_amr.limitation
     assert "distributed coarse level" in external_amr.limitation
     assert external_amr.available_route == (
@@ -208,9 +218,7 @@ def test_transport_boundary_routes_report_exact_supported_envelope_and_missing_k
         flags={"supports_mpi": True, "supports_gpu": True, "supports_amr": True},
         source="test-gpu-manifest",
     )
-    gpu_post_riemann = {
-        row.feature: row for row in gpu_report.routes
-    }["boundary:post_riemann_flux"]
+    gpu_post_riemann = {row.feature: row for row in gpu_report.routes}["boundary:post_riemann_flux"]
     assert gpu_post_riemann.gpu is False
 
 
@@ -285,7 +293,10 @@ def test_variable_recovery_routes_separate_delivered_consumers_from_complete_cut
     assert "fallible primitive-to-conservative conversion" not in cutover.limitation
     assert "AMR bootstrap/history transfer" not in cutover.limitation
     assert "primitive boundary traces" not in cutover.limitation
-    assert "persistent warm starts outside the host Uniform diagnostic materializer" in cutover.limitation
+    assert (
+        "persistent warm starts outside the host Uniform diagnostic materializer"
+        in cutover.limitation
+    )
     assert "transactional analytic initial-state materialization" in cutover.available_route
     assert "spatial face reconstruction" in cutover.available_route
     assert "fallible primitive-to-conservative setup conversion" in cutover.available_route
@@ -313,14 +324,11 @@ def test_defaults_source_only_is_not_used_for_a_loaded_broken_extension(monkeypa
 
 
 def test_toolchain_does_not_treat_a_broken_extension_as_absent(monkeypatch):
-    def broken_import(name):
-        if name == "_pops":
-            raise ImportError("missing dependent dylib")
-        raise AssertionError(
-            "relative import must not be attempted after a broken top-level extension"
-        )
+    def broken_selection(*, required=False):
+        assert required is False
+        raise ImportError("missing dependent dylib")
 
-    monkeypatch.setattr(toolchain.importlib, "import_module", broken_import)
+    monkeypatch.setattr(_native_selector, "selected_native_module", broken_selection)
     with pytest.raises(ImportError, match="dependent dylib"):
         toolchain._pops_module()
 
@@ -341,7 +349,7 @@ def test_absolute_memory_estimate_refuses_untyped_shape_before_any_formula(monke
     class Extension:
         @staticmethod
         def runtime_environment_report():
-            return {"dimension": 2, "real_bytes": 16, "amr_refinement_ratio": 3}
+            return {"dimension": 2, "real_bytes": 16}
 
     monkeypatch.setattr(inspect_compiled.importlib, "import_module", lambda _name: Extension())
     with pytest.raises(
@@ -358,7 +366,7 @@ def test_absolute_memory_estimate_uses_reported_native_byte_width(monkeypatch):
     class Extension:
         @staticmethod
         def runtime_environment_report():
-            return {"dimension": 2, "real_bytes": 16, "amr_refinement_ratio": 2}
+            return {"dimension": 2, "real_bytes": 16}
 
     class Program:
         @staticmethod
@@ -386,7 +394,7 @@ def test_absolute_memory_estimate_accepts_final_cartesian_grid_cells(monkeypatch
     class Extension:
         @staticmethod
         def runtime_environment_report():
-            return {"dimension": 2, "real_bytes": 16, "amr_refinement_ratio": 2}
+            return {"dimension": 2, "real_bytes": 16}
 
     frame = Rectangle("estimate-grid", (0.0, 0.0), (1.0, 1.0)).frame(Cartesian2D())
     grid = CartesianGrid(frame=frame, cells=(3, 5))
@@ -415,7 +423,7 @@ def test_absolute_memory_estimate_is_rank_generic(monkeypatch, shape):
     class Extension:
         @staticmethod
         def runtime_environment_report():
-            return {"dimension": dimension, "real_bytes": 8, "amr_refinement_ratio": 2}
+            return {"dimension": dimension, "real_bytes": 8}
 
     domain = CartesianDomain("estimate", (0.0,) * dimension, (1.0,) * dimension)
     grid = CartesianGrid(frame=domain.frame(), cells=shape)
@@ -442,7 +450,7 @@ def test_absolute_memory_estimate_accepts_strict_final_amr_protocol(monkeypatch)
     class Extension:
         @staticmethod
         def runtime_environment_report():
-            return {"dimension": 2, "real_bytes": 16, "amr_refinement_ratio": 2}
+            return {"dimension": 2, "real_bytes": 16}
 
     class FinalAMRProtocol:
         """The public final-AMR capability shape, without relying on a legacy layout class."""
@@ -454,8 +462,7 @@ def test_absolute_memory_estimate_accepts_strict_final_amr_protocol(monkeypatch)
                     "layout": "amr",
                     "dim": 2,
                     "max_levels": 3,
-                    "ratio": 2,
-                    "transition_ratios": [2, 2],
+                    "transition_ratios": [[3, 3], [3, 3]],
                     "supports_amr": True,
                 }
             )
@@ -469,7 +476,7 @@ def test_absolute_memory_estimate_accepts_strict_final_amr_protocol(monkeypatch)
         _memory_artifact(), mesh, layout=FinalAMRProtocol()
     )
     assert estimate.layout == "amr"
-    assert estimate.categories["amr_patch"] == (2**2 + 2**4) * (2 * 4 * 4 * 16)
+    assert estimate.categories["amr_patch"] == (3**2 + 3**4) * (2 * 4 * 4 * 16)
 
 
 def test_absolute_memory_estimate_uses_spatial_rank_for_amr_refinement(monkeypatch):
@@ -480,19 +487,20 @@ def test_absolute_memory_estimate_uses_spatial_rank_for_amr_refinement(monkeypat
     class Extension:
         @staticmethod
         def runtime_environment_report():
-            return {"dimension": 3, "real_bytes": 8, "amr_refinement_ratio": 2}
+            return {"dimension": 3, "real_bytes": 8}
 
     class ThreeDimensionalAMR:
         @staticmethod
         def capabilities():
-            return CapabilitySet({
-                "layout": "amr",
-                "dim": 3,
-                "max_levels": 3,
-                "ratio": 2,
-                "transition_ratios": [2, 2],
-                "supports_amr": True,
-            })
+            return CapabilitySet(
+                {
+                    "layout": "amr",
+                    "dim": 3,
+                    "max_levels": 3,
+                    "transition_ratios": [[2, 1, 3], [1, 4, 1]],
+                    "supports_amr": True,
+                }
+            )
 
     domain = CartesianDomain("volume", (0.0, 0.0, 0.0), (1.0, 1.0, 1.0))
     mesh = CartesianGrid(frame=domain.frame(), cells=(2, 3, 4))
@@ -504,7 +512,7 @@ def test_absolute_memory_estimate_uses_spatial_rank_for_amr_refinement(monkeypat
         _memory_artifact(), mesh, layout=ThreeDimensionalAMR()
     )
     state = 2 * 2 * 3 * 4 * 8
-    assert estimate.categories["amr_patch"] == (2**3 + 2**6) * state
+    assert estimate.categories["amr_patch"] == (6 + 24) * state
 
 
 def test_absolute_memory_estimate_refuses_amr_without_transition_ratios(monkeypatch):
@@ -514,12 +522,12 @@ def test_absolute_memory_estimate_refuses_amr_without_transition_ratios(monkeypa
     class Extension:
         @staticmethod
         def runtime_environment_report():
-            return {"dimension": 2, "real_bytes": 16, "amr_refinement_ratio": 2}
+            return {"dimension": 2, "real_bytes": 16}
 
     class IncompleteAMR:
         @staticmethod
         def capabilities():
-            return CapabilitySet({"layout": "amr", "dim": 2, "max_levels": 2, "ratio": 2})
+            return CapabilitySet({"layout": "amr", "dim": 2, "max_levels": 2})
 
     monkeypatch.setattr(inspect_compiled.importlib, "import_module", lambda _name: Extension())
     monkeypatch.setattr(

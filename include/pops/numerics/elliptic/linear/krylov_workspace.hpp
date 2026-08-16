@@ -52,24 +52,82 @@ class KrylovWorkspace {
                   PreparedVectorDistribution<Dim> vector_distribution =
                       PreparedVectorDistribution<Dim>::Distributed,
                   PreparedVectorMetric<Dim> metric = {})
-      : KrylovWorkspace(ExecutionCommunicator::world(), "pops.krylov-workspace", prototype,
+      : KrylovWorkspace(ExecutionCommunicator::world(), "pops.krylov-workspace", {}, prototype,
                         std::move(method), footprint, std::move(vector_distribution),
-                        std::move(metric)) {}
+                        std::move(metric), false) {}
 
-  /// Materialize one independent solve workspace on an authenticated communicator. Distinct
-  /// workspaces own distinct duplicated lanes; `lane_identity` names the logical workspace in the
-  /// parent's canonical materialization order and is never inferred from a process-local address.
+  /// Legacy generic materialization on an authenticated communicator. This overload intentionally
+  /// has no ProgramContext materialization token; generic callers retain their source-compatible
+  /// path, while ProgramContext/generated owners must use the explicit-token overload below.
   KrylovWorkspace(const ExecutionCommunicator& execution_communicator,
                   std::string_view lane_identity, const MultiFab<Dim>& prototype,
                   PreparedKrylovMethod<Dim> method, KrylovFootprint<Dim> footprint,
                   PreparedVectorDistribution<Dim> vector_distribution =
                       PreparedVectorDistribution<Dim>::Distributed,
                   PreparedVectorMetric<Dim> metric = {})
+      : KrylovWorkspace(execution_communicator, lane_identity, {}, prototype, std::move(method),
+                        footprint, std::move(vector_distribution), std::move(metric), false) {}
+
+  /// Materialize one independent solve workspace on an authenticated communicator. `lane_identity`
+  /// names the logical workspace while `materialization_token` identifies this exact live
+  /// workspace. Owners must provide a nonempty token in their canonical materialization order;
+  /// it is exact across ranks and distinct for concurrently live workspaces, even when they share
+  /// one logical lane identity. Neither value is inferred from a process-local address.
+  KrylovWorkspace(const ExecutionCommunicator& execution_communicator,
+                  std::string_view lane_identity, std::string_view materialization_token,
+                  const MultiFab<Dim>& prototype, PreparedKrylovMethod<Dim> method,
+                  KrylovFootprint<Dim> footprint,
+                  PreparedVectorDistribution<Dim> vector_distribution =
+                      PreparedVectorDistribution<Dim>::Distributed,
+                  PreparedVectorMetric<Dim> metric = {})
+      : KrylovWorkspace(execution_communicator, lane_identity, materialization_token, prototype,
+                        std::move(method), footprint, std::move(vector_distribution),
+                        std::move(metric), true) {}
+
+ private:
+  /// Internal materialization path. Generated/runtime owners must provide one stable token for
+  /// every workspace they expect a ProgramContext to select collectively; the legacy convenience
+  /// constructor deliberately retains no such token and is therefore unavailable to that seam.
+  KrylovWorkspace(const ExecutionCommunicator& execution_communicator,
+                  std::string_view lane_identity, std::string_view materialization_token,
+                  const MultiFab<Dim>& prototype, PreparedKrylovMethod<Dim> method,
+                  KrylovFootprint<Dim> footprint,
+                  PreparedVectorDistribution<Dim> vector_distribution,
+                  PreparedVectorMetric<Dim> metric, bool owner_supplied_materialization_token)
       : method_(std::move(method)),
         footprint_(footprint),
         vector_distribution_(std::move(vector_distribution)),
         metric_(std::move(metric)),
         lane_(ExecutionLane::duplicate_collectively(execution_communicator, lane_identity)) {
+    long materialization_token_failure_local = 0;
+    try {
+      if (owner_supplied_materialization_token && materialization_token.empty())
+        materialization_token_failure_local = 1;
+    } catch (...) {
+      materialization_token_failure_local = 1;
+    }
+    if (all_reduce_max(materialization_token_failure_local, lane_) != 0)
+      throw std::runtime_error(
+          "prepared Krylov workspace materialization token is absent on at least one "
+          "communicator rank");
+    if (owner_supplied_materialization_token &&
+        !all_ranks_agree_exact_ordered_byte_pairs(
+            {{std::string_view("prepared-krylov-workspace-materialization"),
+              materialization_token}},
+            lane_))
+      throw std::invalid_argument(
+          "prepared Krylov workspace materialization token differs between communicator ranks");
+    materialization_token_failure_local = 0;
+    try {
+      if (owner_supplied_materialization_token)
+        materialization_token_.assign(materialization_token);
+    } catch (...) {
+      materialization_token_failure_local = 1;
+    }
+    if (all_reduce_max(materialization_token_failure_local, lane_) != 0)
+      throw std::runtime_error(
+          "prepared Krylov workspace materialization token allocation failed on at least one "
+          "communicator rank");
     const long footprint_failure_local =
         footprint_.components != prototype.ncomp() || footprint_.input_ghosts != prototype.ghosts()
             ? 1L
@@ -173,6 +231,8 @@ class KrylovWorkspace {
     }
     allocation_count_ = requirements_.field_count + (footprint_.preconditioned ? 1u : 0u) + 1u;
   }
+
+ public:
   static std::size_t required_fields(const PreparedKrylovMethod<Dim>& method,
                                      const KrylovWorkspaceRequest<Dim>& request) {
     return method.workspace_requirements(request).field_count;
@@ -800,6 +860,7 @@ class KrylovWorkspace {
   std::vector<char, comm_allocator<char>> distribution_validation_data_;
   std::vector<std::uint64_t> state_words_;
   std::vector<double> gauge_coefficients_;
+  std::string materialization_token_;
   ExecutionLane lane_;
   PreparedAffineOperatorSession<Dim> operator_session_{};
   PreparedLinearPreconditionerSession<Dim> preconditioner_session_{};

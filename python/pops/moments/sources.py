@@ -16,17 +16,49 @@ from pops.descriptors_report import CapabilitySet
 from .model_builder import moment_indices, _pow
 
 
-def lorentz_sources(M: Any, ex: Any, ey: Any, q_over_m: Any, omega_c: Any) -> list:
-    """Sources of the moment hierarchy under the Lorentz force (Vlasov), generic in the
-    order and INDEPENDENT of the closure (no higher-order moment referenced: the electric
-    term LOWERS the order, the magnetic term CONSERVES it):
+MOMENT_VELOCITY_DIMENSION = 2
+
+
+def _two_velocity_components(values: Any, *, where: str) -> tuple[Any, Any]:
+    if isinstance(values, (str, bytes)):
+        raise TypeError("%s must be an ordered two-component vector" % where)
+    try:
+        components = tuple(values)
+    except TypeError as exc:
+        raise TypeError("%s must be an ordered two-component vector" % where) from exc
+    if len(components) != MOMENT_VELOCITY_DIMENSION:
+        raise ValueError(
+            "%s requires exactly %d components; got %d"
+            % (where, MOMENT_VELOCITY_DIMENSION, len(components)))
+    return components
+
+
+def lorentz_sources(
+    M: Any,
+    *,
+    electric_components: Any,
+    q_over_m: Any,
+    magnetic_rotation: Any,
+) -> list:
+    """Return the explicitly two-velocity-dimensional Vlasov-Lorentz hierarchy source.
+
+    The ``(p, q)`` moment basis is a 2V physical specialization, not a spatial-Dimension
+    fallback. ``electric_components`` therefore has exactly two ordered velocity components and
+    ``magnetic_rotation`` is the signed scalar cyclotron frequency about the unique axial
+    direction. The source is generic in moment order and independent of the closure (no
+    higher-order moment is referenced: the electric term lowers the order and the magnetic term
+    conserves it):
 
         S[M_pq] = q_over_m (p ex M_{p-1,q} + q ey M_{p,q-1}) + omega_c (p M_{p-1,q+1} - q M_{p+1,q-1})
 
     @p M: dict (p, q) -> Expr/value of the transported moments (keys = moment_indices).
-    @p ex, ey: electric field (aux Expr or values). @p q_over_m, omega_c: param Expr or
-    values. @return list aligned with moment_indices(order). Accepts plain numbers
-    everywhere (usable as a numeric oracle)."""
+    @p electric_components: exact ordered 2V electric vector. @p q_over_m: charge-to-mass
+    coefficient. @p magnetic_rotation: signed axial cyclotron frequency. @return list aligned
+    with moment_indices(order). Accepts plain numbers everywhere (usable as a numeric oracle).
+    """
+    ex, ey = _two_velocity_components(
+        electric_components, where="lorentz_sources.electric_components")
+    omega_c = magnetic_rotation
     order = max(p + q for (p, q) in M)
     out = []
     for (p, q) in moment_indices(order):
@@ -126,9 +158,20 @@ class VlasovSources:
     """
 
     @staticmethod
-    def lorentz(M: Any, ex: Any, ey: Any, q_over_m: Any, omega_c: Any) -> list:
+    def lorentz(
+        M: Any,
+        *,
+        electric_components: Any,
+        q_over_m: Any,
+        magnetic_rotation: Any,
+    ) -> list:
         """The Vlasov-Lorentz hierarchy source (forwards to :func:`lorentz_sources`)."""
-        return lorentz_sources(M, ex, ey, q_over_m, omega_c)
+        return lorentz_sources(
+            M,
+            electric_components=electric_components,
+            q_over_m=q_over_m,
+            magnetic_rotation=magnetic_rotation,
+        )
 
     @staticmethod
     def maxwellian_eq(M: Any) -> list:
@@ -142,10 +185,11 @@ class VlasovSources:
 
 
 class MagneticMomentSource(Descriptor):
-    """Descriptor of a pure-magnetic moment source: ``omega_c(B) = q_over_m * B``.
+    """Descriptor of a pure-magnetic source for the explicit 2V moment specialization.
 
-    It CHOOSES the magnetic-source route, binding which ``q_over_m`` param name and
-    ``b_field`` aux name the Lorentz magnetic branch reads, so it is a typed
+    It chooses the route binding one named axial provider component and one ``q_over_m``
+    parameter. The axial component is required explicitly: there is no reserved magnetic name or
+    silent planar default. The descriptor is a typed
     :class:`pops.descriptors.Descriptor` (Spec 5 sec.6): it declares its options /
     capabilities and is inspectable. :meth:`as_sources` returns a sources callable
     forwarding to the magnetic branch of :func:`lorentz_sources` (zero electric field).
@@ -154,33 +198,51 @@ class MagneticMomentSource(Descriptor):
 
     category = "moment_source"
 
-    def __init__(self, q_over_m: Any = "q_over_m", b_field: Any = "B_z") -> None:
-        self.q_over_m = str(q_over_m)
-        self.b_field = str(b_field)
+    def __init__(self, *, axial_component: Any, q_over_m: Any = "q_over_m") -> None:
+        for value, where in ((axial_component, "axial_component"),
+                             (q_over_m, "q_over_m")):
+            if not isinstance(value, str) or not value or value != value.strip() or "\x00" in value:
+                raise TypeError("MagneticMomentSource %s must be a non-empty exact name" % where)
+        self.q_over_m = q_over_m
+        self.axial_component = axial_component
 
     def options(self) -> dict:
-        return {"q_over_m": self.q_over_m, "b_field": self.b_field}
+        return {
+            "q_over_m": self.q_over_m,
+            "axial_component": self.axial_component,
+            "velocity_dimension": MOMENT_VELOCITY_DIMENSION,
+        }
 
     def capabilities(self) -> Any:
-        return CapabilitySet({"provides": "magnetic_lorentz"})
+        return CapabilitySet({
+            "provides": "magnetic_lorentz",
+            "velocity_dimension": MOMENT_VELOCITY_DIMENSION,
+            "axial_components": 1,
+        })
 
     def as_sources(self, q_over_m_value: Any = 1.0) -> Any:
         """A ``(m, M) -> list`` sources callable: ``omega_c = q_over_m * B`` (electric field 0).
 
         @p q_over_m_value: the default value of the declared ``q_over_m`` param.
         """
-        qom_name, b_name = self.q_over_m, self.b_field
+        qom_name, axial_name = self.q_over_m, self.axial_component
 
         def sources(m: Any, M: Any) -> Any:
             from pops.params import ConstParam
 
             qom_handle = m.param(ConstParam(qom_name, value=q_over_m_value))
             qom = m.value(qom_handle)
-            b_z = m.aux(b_name)
-            omega_c = qom * b_z
-            return lorentz_sources(M, 0.0, 0.0, qom, omega_c)
+            axial = m.aux(axial_name)
+            omega_c = qom * axial
+            return lorentz_sources(
+                M,
+                electric_components=(0.0, 0.0),
+                q_over_m=qom,
+                magnetic_rotation=omega_c,
+            )
 
         return sources
 
     def __repr__(self) -> str:
-        return "MagneticMomentSource(q_over_m=%r, b_field=%r)" % (self.q_over_m, self.b_field)
+        return "MagneticMomentSource(q_over_m=%r, axial_component=%r)" % (
+            self.q_over_m, self.axial_component)

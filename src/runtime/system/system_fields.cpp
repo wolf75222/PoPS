@@ -9,6 +9,7 @@
 #include <pops/parallel/solve_report_consensus.hpp>
 #include <pops/runtime/analytic/collective_preflight.hpp>
 #include <pops/runtime/output_piece_collective.hpp>
+#include <pops/runtime/system/auxiliary_ghost_fill.hpp>
 #include <pops/runtime/system/exact_field_marshaling.hpp>
 
 #include <algorithm>
@@ -66,29 +67,9 @@ void copy_field_outputs_to_provider_candidate(
   Kokkos::fence();
 }
 
-template <int Dim>
-void require_finite_provider_groups(const runtime::system::AuxiliaryStorageGroups<Dim>& groups) {
-  long nonfinite = 0;
-  for (const auto& [_, carrier] : groups.groups)
-    for (std::size_t local = 0; local < carrier.local_size(); ++local) {
-      const Fab<Dim>& fab = carrier.fab(local);
-      auto host = fab.create_host_mirror();
-      fab.copy_to_host(host);
-      runtime::system::marshaling::for_each_host_index(
-          fab.box(), [&](const Index<Dim>& index, std::size_t) {
-            for (int component = 0; component < carrier.ncomp(); ++component)
-              if (!std::isfinite(static_cast<double>(
-                      host(runtime::system::marshaling::storage_ordinal(fab, index, component)))))
-                ++nonfinite;
-          });
-    }
-  if (all_reduce_sum(nonfinite) != 0)
-    throw std::runtime_error("System field-output publication contains non-finite provider values");
-}
-
 template <int Dim, class Implementation>
 runtime::system::AuxiliaryEvaluationPoint field_output_evaluation_point(
-    const Implementation& implementation) {
+    const Implementation& implementation, const ExecutionLane& lane) {
   if (implementation.macro_step_ < 0)
     throw std::logic_error("System field-output publication has a negative accepted step");
   runtime::system::AuxiliaryEvaluationPoint point;
@@ -99,7 +80,7 @@ runtime::system::AuxiliaryEvaluationPoint field_output_evaluation_point(
   ExactContractBuilder exact;
   point.serialize_exact(exact);
   if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{"system-field-output-evaluation-point", std::move(exact).release()}}))
+          {{"system-field-output-evaluation-point", std::move(exact).release()}}, lane))
     throw std::runtime_error("System field-output evaluation point differs across MPI ranks");
   return point;
 }
@@ -141,41 +122,83 @@ const MultiFab<Dim>& embedded_boundary_output_field(const Implementation& implem
 
 template <int Dim, class Species>
 void require_recoverable_candidate(const Species& state, const MultiFab<Dim>& candidate,
-                                   std::string_view operation) {
-  if (candidate.layout() != state.U.layout() ||
-      candidate.distribution() != state.U.distribution() ||
-      candidate.local_rank() != state.U.local_rank() || candidate.ncomp() != state.U.ncomp() ||
-      candidate.ghosts() != state.U.ghosts())
-    throw std::invalid_argument(std::string(operation) + ": candidate layout differs from block");
-  if (all_reduce_max(state.cons_to_prim ? 0L : 1L) != 0)
+                                   std::string_view operation, const ExecutionLane& lane,
+                                   const MultiFab<Dim>* active_cells = nullptr) {
+  std::exception_ptr layout_error;
+  try {
+    if (candidate.layout() != state.U.layout() ||
+        candidate.distribution() != state.U.distribution() ||
+        candidate.local_rank() != state.U.local_rank() || candidate.ncomp() != state.U.ncomp() ||
+        candidate.ghosts() != state.U.ghosts())
+      throw std::invalid_argument(std::string(operation) + ": candidate layout differs from block");
+    if (active_cells != nullptr &&
+        (active_cells->layout() != candidate.layout() ||
+         active_cells->distribution() != candidate.distribution() ||
+         active_cells->local_rank() != candidate.local_rank() ||
+         active_cells->local_size() != candidate.local_size() || active_cells->ncomp() != 1))
+      throw std::invalid_argument(std::string(operation) +
+                                  ": active-cell mask differs from the candidate layout");
+  } catch (...) {
+    layout_error = std::current_exception();
+  }
+  if (all_reduce_max(layout_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && layout_error)
+      std::rethrow_exception(layout_error);
+    throw std::invalid_argument(std::string(operation) + ": candidate layout failed collectively");
+  }
+  if (all_reduce_max(state.cons_to_prim ? 0L : 1L, lane) != 0)
     throw std::runtime_error(std::string(operation) +
                              ": block has no prepared variable-recovery authority");
 
-  std::vector<double> conservative(static_cast<std::size_t>(state.ncomp));
-  std::vector<double> primitive(static_cast<std::size_t>(state.ncomp));
   long failures = 0;
-  for (std::size_t local = 0; local < candidate.local_size(); ++local) {
-    const Fab<Dim>& fab = candidate.fab(local);
-    auto host = fab.create_host_mirror();
-    fab.copy_to_host(host);
-    for_each_host_index(fab.box(), [&](const Index<Dim>& index, std::size_t) {
-      for (int component = 0; component < state.ncomp; ++component)
-        conservative[static_cast<std::size_t>(component)] =
-            static_cast<double>(host(storage_ordinal(fab, index, component)));
-      try {
-        const RecoveryReport report = state.cons_to_prim(conservative.data(), primitive.data());
-        const bool finite = std::all_of(conservative.begin(), conservative.end(),
-                                        [](double value) { return std::isfinite(value); }) &&
-                            std::all_of(primitive.begin(), primitive.end(),
-                                        [](double value) { return std::isfinite(value); });
-        if (!report.publication_permitted() || !finite)
+  std::exception_ptr recovery_error;
+  try {
+    std::vector<double> conservative(static_cast<std::size_t>(state.ncomp));
+    std::vector<double> primitive(static_cast<std::size_t>(state.ncomp));
+    for (std::size_t local = 0; local < candidate.local_size(); ++local) {
+      const Fab<Dim>& fab = candidate.fab(local);
+      auto host = fab.create_host_mirror();
+      const auto consider = [&](const Index<Dim>& index) {
+        for (int component = 0; component < state.ncomp; ++component)
+          conservative[static_cast<std::size_t>(component)] =
+              static_cast<double>(host(storage_ordinal(fab, index, component)));
+        try {
+          const RecoveryReport report = state.cons_to_prim(conservative.data(), primitive.data());
+          const bool finite = std::all_of(conservative.begin(), conservative.end(),
+                                          [](double value) { return std::isfinite(value); }) &&
+                              std::all_of(primitive.begin(), primitive.end(),
+                                          [](double value) { return std::isfinite(value); });
+          if (!report.publication_permitted() || !finite)
+            ++failures;
+        } catch (...) {
           ++failures;
-      } catch (...) {
-        ++failures;
+        }
+      };
+      if (active_cells == nullptr) {
+        fab.copy_to_host(host);
+        for_each_host_index(fab.box(),
+                            [&](const Index<Dim>& index, std::size_t) { consider(index); });
+        continue;
       }
-    });
+      const Fab<Dim>& mask_fab = active_cells->fab(local);
+      auto mask_host = mask_fab.create_host_mirror();
+      mask_fab.copy_to_host(mask_host);
+      fab.copy_to_host(host);
+      for_each_host_index(fab.box(), [&](const Index<Dim>& index, std::size_t) {
+        if (mask_host(storage_ordinal(mask_fab, index, 0)) < Real{0.5})
+          return;
+        consider(index);
+      });
+    }
+  } catch (...) {
+    recovery_error = std::current_exception();
   }
-  failures = all_reduce_sum(failures);
+  if (all_reduce_max(recovery_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && recovery_error)
+      std::rethrow_exception(recovery_error);
+    throw std::runtime_error(std::string(operation) + ": variable recovery failed collectively");
+  }
+  failures = all_reduce_sum(failures, lane);
   if (failures != 0)
     throw std::runtime_error(std::string(operation) +
                              ": variable recovery rejected the candidate (failed cells=" +
@@ -184,21 +207,21 @@ void require_recoverable_candidate(const Species& state, const MultiFab<Dim>& ca
 
 template <int Dim, class Species>
 void publish_recovered_candidate(Species& state, MultiFab<Dim>& candidate,
-                                 std::string_view operation) {
-  require_recoverable_candidate<Dim>(state, candidate, operation);
+                                 std::string_view operation, const ExecutionLane& lane) {
+  require_recoverable_candidate<Dim>(state, candidate, operation, lane);
   copy_valid(candidate, state.U);
 }
 
 template <int Dim>
 void require_exact_field_evaluation_request(
     const runtime::multiblock::BoundaryEvaluationPoint& point, std::string_view provider_slot,
-    std::string_view request_kind) {
+    std::string_view request_kind, const ExecutionLane& lane) {
   const bool invalid =
       request_kind.empty() || provider_slot.empty() || point.clock.empty() || point.tick < 0 ||
       point.level != 0 || point.substep < 0 || point.stage < 0 || !std::isfinite(point.dt) ||
       point.dt <= 0.0 || !std::isfinite(point.physical_time) ||
       point.stage_fraction < amr::Rational(0, 1) || amr::Rational(1, 1) < point.stage_fraction;
-  if (all_reduce_max(invalid ? 1L : 0L) != 0)
+  if (all_reduce_max(invalid ? 1L : 0L, lane) != 0)
     throw std::invalid_argument(
         "System exact field evaluation requires one complete level-zero point and provider slot");
   ExactContractBuilder request;
@@ -216,7 +239,7 @@ void require_exact_field_evaluation_request(
       .scalar(point.dt)
       .scalar(point.physical_time);
   if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{"system-exact-field-evaluation", std::move(request).release()}}))
+          {{"system-exact-field-evaluation", std::move(request).release()}}, lane))
     throw std::invalid_argument(
         "System exact field evaluation point differs between communicator ranks");
 }
@@ -244,7 +267,7 @@ elliptic::nd::CartesianPoissonOptions<Dim> poisson_options(const BoundaryTopolog
 
 template <int Dim, class Implementation>
 std::shared_ptr<runtime::system::ExactNamedField<Dim>> prepare_default_field(
-    Implementation& implementation) {
+    Implementation& implementation, const ExecutionLane& lane) {
   if (implementation.default_field_)
     return implementation.default_field_;
   runtime::field::NamedFieldOutput<Dim> output(static_cast<std::size_t>(Dim + 1), 1);
@@ -256,7 +279,7 @@ std::shared_ptr<runtime::system::ExactNamedField<Dim>> prepare_default_field(
   auto prepared = std::make_shared<runtime::system::ExactNamedField<Dim>>(
       "pops.system.default-field", implementation.sp.empty() ? "system" : implementation.sp[0].name,
       output, implementation.geom, implementation.ba, implementation.dm, implementation.local_rank,
-      topology, operator_options, implementation.sp.size());
+      topology, operator_options, implementation.sp.size(), lane);
   bool has_rhs = false;
   for (std::size_t block = 0; block < implementation.sp.size(); ++block) {
     if (!implementation.sp[block].add_poisson_rhs)
@@ -272,7 +295,7 @@ std::shared_ptr<runtime::system::ExactNamedField<Dim>> prepare_default_field(
   prepared->install_nullspace(
       implementation.prepare_uniform_field_nullspace(
           "pops.system.default-field", "pops.system.default-uniform-topology", nullspace_selection,
-          operator_options, prepared->accepted_potential(), false),
+          operator_options, prepared->accepted_potential(), false, lane),
       PreparedVectorDistribution<Dim>::distributed());
   implementation.default_field_ = prepared;
   return prepared;
@@ -325,24 +348,43 @@ struct PreparedBoundaryContext {
 };
 
 template <int Dim, class Implementation>
-std::optional<PreparedBoundaryContext<Dim>> prepare_boundary_context(
+std::shared_ptr<const PreparedFieldBoundaryContextSet<Dim>> prepare_boundary_context(
     Implementation& implementation, const std::string& provider_slot,
     const std::vector<const MultiFab<Dim>*>& selected_states) {
   const auto plan_entry = implementation.field_plans_.find(provider_slot);
   if (plan_entry == implementation.field_plans_.end() || !plan_entry->second.boundary_kernel)
-    return std::nullopt;
-  const auto& plan = plan_entry->second;
+    return {};
+  auto& plan = plan_entry->second;
   if (selected_states.size() != implementation.sp.size())
     throw std::invalid_argument(
         "System dynamic field boundary state selection does not cover every block");
 
-  PreparedBoundaryContext<Dim> prepared;
-  prepared.parameters = &plan.boundary_parameters;
-  if (plan.boundary_point)
-    prepared.point = *plan.boundary_point;
-  prepared.states.reserve(plan.boundary_state_blocks.size());
-  prepared.state_distributions.reserve(plan.boundary_state_blocks.size());
-  prepared.state_identities.reserve(plan.boundary_state_blocks.size());
+  const bool prepare_detached = !plan.boundary_context_storage;
+  if (prepare_detached != !plan.boundary_contexts)
+    throw std::logic_error("System prepared field boundary context cache is incomplete");
+
+  std::shared_ptr<PreparedBoundaryContext<Dim>> prepared =
+      prepare_detached
+          ? std::make_shared<PreparedBoundaryContext<Dim>>()
+          : std::static_pointer_cast<PreparedBoundaryContext<Dim>>(plan.boundary_context_storage);
+  if (prepare_detached) {
+    prepared->parameters = &plan.boundary_parameters;
+    prepared->states.reserve(plan.boundary_state_blocks.size());
+    prepared->state_distributions.reserve(plan.boundary_state_blocks.size());
+    prepared->state_identities.reserve(plan.boundary_state_blocks.size());
+    prepared->fields.reserve(plan.boundary_field_blocks.size());
+    prepared->field_distributions.reserve(plan.boundary_field_blocks.size());
+    prepared->field_identities.reserve(plan.boundary_field_blocks.size());
+  } else if (prepared->states.size() != plan.boundary_state_blocks.size() ||
+             prepared->state_distributions.size() != plan.boundary_state_blocks.size() ||
+             prepared->state_identities.size() != plan.boundary_state_blocks.size() ||
+             prepared->fields.size() != plan.boundary_field_blocks.size() ||
+             prepared->field_distributions.size() != plan.boundary_field_blocks.size() ||
+             prepared->field_identities.size() != plan.boundary_field_blocks.size()) {
+    throw std::logic_error("System prepared field boundary context cache is stale");
+  }
+  prepared->point = plan.boundary_point.value_or(FieldLogicalTimePoint{});
+
   for (std::size_t dependency = 0; dependency < plan.boundary_state_blocks.size(); ++dependency) {
     const int block = implementation.index(plan.boundary_state_blocks[dependency]);
     const auto* state = selected_states[static_cast<std::size_t>(block)];
@@ -350,15 +392,16 @@ std::optional<PreparedBoundaryContext<Dim>> prepare_boundary_context(
     if (state == nullptr || component < 0 || component >= state->ncomp())
       throw std::invalid_argument(
           "System dynamic field boundary state dependency is not materialized exactly");
-    prepared.states.push_back(state);
-    prepared.state_distributions.push_back(FieldDistribution::Distributed);
-    prepared.state_identities.push_back(
-        implementation.sp[static_cast<std::size_t>(block)].state_identity);
+    if (prepare_detached) {
+      prepared->states.push_back(state);
+      prepared->state_distributions.push_back(FieldDistribution::Distributed);
+      prepared->state_identities.push_back(
+          implementation.sp[static_cast<std::size_t>(block)].state_identity);
+    } else {
+      prepared->states[dependency] = state;
+    }
   }
 
-  prepared.fields.reserve(plan.boundary_field_blocks.size());
-  prepared.field_distributions.reserve(plan.boundary_field_blocks.size());
-  prepared.field_identities.reserve(plan.boundary_field_blocks.size());
   for (std::size_t dependency = 0; dependency < plan.boundary_field_blocks.size(); ++dependency) {
     if (plan.boundary_field_components[dependency] != 0)
       throw std::invalid_argument(
@@ -376,23 +419,53 @@ std::optional<PreparedBoundaryContext<Dim>> prepare_boundary_context(
     if (field == implementation.named_fields_.end())
       throw std::logic_error(
           "System dynamic boundary field dependency has not been materialized before its use");
-    prepared.fields.push_back(&field->second->dependency_potential());
-    prepared.field_distributions.push_back(FieldDistribution::Distributed);
-    prepared.field_identities.push_back(field->second->identity());
+    if (prepare_detached) {
+      prepared->fields.push_back(&field->second->dependency_potential());
+      prepared->field_distributions.push_back(FieldDistribution::Distributed);
+      prepared->field_identities.push_back(field->second->identity());
+    } else {
+      prepared->fields[dependency] = &field->second->dependency_potential();
+    }
   }
-  return prepared;
+
+  if (prepare_detached) {
+    auto retained_lifetime = std::static_pointer_cast<void>(prepared);
+    auto contexts = std::make_shared<PreparedFieldBoundaryContextSet<Dim>>(retained_lifetime, 1);
+    contexts->bind(0, prepared->view());
+    plan.boundary_context_storage = std::move(retained_lifetime);
+    plan.boundary_contexts = std::move(contexts);
+  } else {
+    plan.boundary_contexts->bind(0, prepared->view());
+  }
+  return plan.boundary_contexts;
 }
 
 template <int Dim, class Implementation>
 SolveReport solve_field_candidate(
     Implementation& implementation, const std::string& provider_slot,
     const std::shared_ptr<runtime::system::ExactNamedField<Dim>>& field,
-    std::vector<const MultiFab<Dim>*> states) {
-  auto storage = prepare_boundary_context<Dim>(implementation, provider_slot, states);
-  std::optional<FieldBoundaryExecutionContext<Dim>> context;
-  if (storage)
-    context = storage->view();
-  return field->solve_candidate(states, context ? &*context : nullptr);
+    std::vector<const MultiFab<Dim>*> states, const ExecutionLane& lane) {
+  auto contexts = prepare_boundary_context<Dim>(implementation, provider_slot, states);
+  return field->solve_candidate(states, std::move(contexts), lane);
+}
+
+template <class Implementation>
+bool default_field_has_prepared_rhs(const Implementation& implementation) {
+  for (const auto& block : implementation.sp) {
+    if (block.add_poisson_rhs)
+      return true;
+  }
+  return false;
+}
+
+template <class Implementation>
+void append_named_field_provider_slots(const Implementation& implementation,
+                                       std::vector<std::string>& slots) {
+  slots.reserve(slots.size() + implementation.named_fields_.size());
+  for (const auto& [identity, field] : implementation.named_fields_) {
+    (void)field;
+    slots.push_back(identity);
+  }
 }
 
 }  // namespace
@@ -400,11 +473,20 @@ SolveReport solve_field_candidate(
 template <int Dim>
 void System<Dim>::validate_program_state_publication_candidate(
     int block, const MultiFab<Dim>& candidate) const {
-  if (all_reduce_max(block >= 0 && block < static_cast<int>(p_->sp.size()) ? 0L : 1L) != 0)
+  (void)validate_program_state_publication_candidate_(block, candidate,
+                                                      prepared_boundary_execution_lane());
+}
+
+template <int Dim>
+const MultiFab<Dim>* System<Dim>::validate_program_state_publication_candidate_(
+    int block, const MultiFab<Dim>& candidate, const ExecutionLane& lane) const {
+  if (all_reduce_max(block >= 0 && block < static_cast<int>(p_->sp.size()) ? 0L : 1L, lane) != 0)
     throw std::out_of_range(
         "System Program state publication block index differs across communicator ranks");
+  const MultiFab<Dim>* const active = prepared_program_block_active_mask_(block, candidate, lane);
   require_recoverable_candidate<Dim>(p_->sp[static_cast<std::size_t>(block)], candidate,
-                                     "System Program terminal state publication");
+                                     "System Program terminal state publication", lane, active);
+  return active;
 }
 
 template <int Dim>
@@ -478,8 +560,15 @@ std::vector<double> System<Dim>::get_primitive_state(const std::string& name) {
   const std::vector<double> conservative = gather_global(block.U, p_->dom, block.ncomp);
   std::vector<double> primitive;
   const UniformRecoveryBatchReport report = block.batch_cons_to_prim(conservative, primitive);
-  if (!report.publication_permitted())
-    throw std::runtime_error("System::get_primitive_state batch variable recovery failed");
+  if (!report.publication_permitted()) {
+    const std::string failed_cell =
+        report.failed_cell == kNoRecoveryCell ? "none" : std::to_string(report.failed_cell);
+    throw std::runtime_error(
+        "System::get_primitive_state batch variable recovery failed: last_method_kind=" +
+        std::string(recovery_method_kind_name(report.recovery.last_method_kind)) +
+        ", last_method_index=" + std::to_string(report.recovery.last_method) +
+        ", failed_cell=" + failed_cell);
+  }
   return primitive;
 }
 
@@ -512,9 +601,11 @@ void System<Dim>::set_poisson(const std::string& rhs, const std::string& solver,
 
 template <int Dim>
 SolveReport System<Dim>::solve_fields_in_place_() {
-  const auto field = prepare_default_field<Dim>(*p_);
+  const ExecutionLane& lane = prepared_boundary_execution_lane();
+  const auto field = prepare_default_field<Dim>(*p_, lane);
   p_->active_field_ = field;
-  return solve_field_candidate<Dim>(*p_, field->identity(), field, select_states<Dim>(p_->sp, {}));
+  return solve_field_candidate<Dim>(*p_, field->identity(), field, select_states<Dim>(p_->sp, {}),
+                                    lane);
 }
 
 template <int Dim>
@@ -524,17 +615,19 @@ SolveReport System<Dim>::solve_fields_from_state_in_place_(int block_index,
     throw std::out_of_range("System field stage block index is outside the registry");
   std::vector<const MultiFab<Dim>*> overrides(p_->sp.size(), nullptr);
   overrides[static_cast<std::size_t>(block_index)] = &stage;
-  const auto field = prepare_default_field<Dim>(*p_);
+  const ExecutionLane& lane = prepared_boundary_execution_lane();
+  const auto field = prepare_default_field<Dim>(*p_, lane);
   p_->active_field_ = field;
   return solve_field_candidate<Dim>(*p_, field->identity(), field,
-                                    select_states<Dim>(p_->sp, overrides));
+                                    select_states<Dim>(p_->sp, overrides), lane);
 }
 
 template <int Dim>
 SolveReport System<Dim>::solve_fields_from_state_at_in_place_(
     const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
     int block_index, const MultiFab<Dim>& stage) {
-  require_exact_field_evaluation_request<Dim>(point, provider_slot, "single-stage");
+  require_exact_field_evaluation_request<Dim>(point, provider_slot, "single-stage",
+                                              prepared_boundary_execution_lane());
   if (provider_slot == "pops.system.default-field")
     return solve_fields_from_state_in_place_(block_index, stage);
   return solve_fields_from_state_in_place_(provider_slot, block_index, stage);
@@ -543,10 +636,11 @@ SolveReport System<Dim>::solve_fields_from_state_at_in_place_(
 template <int Dim>
 SolveReport System<Dim>::solve_fields_from_blocks_in_place_(
     const std::vector<const MultiFab<Dim>*>& stages) {
-  const auto field = prepare_default_field<Dim>(*p_);
+  const ExecutionLane& lane = prepared_boundary_execution_lane();
+  const auto field = prepare_default_field<Dim>(*p_, lane);
   p_->active_field_ = field;
   return solve_field_candidate<Dim>(*p_, field->identity(), field,
-                                    select_states<Dim>(p_->sp, stages));
+                                    select_states<Dim>(p_->sp, stages), lane);
 }
 
 template <int Dim>
@@ -568,21 +662,24 @@ SolveReport System<Dim>::solve_fields_from_blocks_in_place_(
   if (found == p_->named_fields_.end())
     throw std::out_of_range("System named elliptic field is not registered: " + field);
   p_->active_field_ = found->second;
+  const ExecutionLane& lane = prepared_boundary_execution_lane();
   return solve_field_candidate<Dim>(*p_, provider_slot, found->second,
-                                    select_states<Dim>(p_->sp, stages));
+                                    select_states<Dim>(p_->sp, stages), lane);
 }
 
 template <int Dim>
 SolveReport System<Dim>::solve_fields_from_blocks_at_in_place_(
     const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& field,
     const std::vector<const MultiFab<Dim>*>& stages) {
-  require_exact_field_evaluation_request<Dim>(point, field, "simultaneous-stages");
+  require_exact_field_evaluation_request<Dim>(point, field, "simultaneous-stages",
+                                              prepared_boundary_execution_lane());
   return solve_fields_from_blocks_in_place_(field, stages);
 }
 
 template <int Dim>
 SolveOutcome System<Dim>::run_field_publication_outcome_(
     const std::function<SolveReport()>& solve) {
+  const ExecutionLane& lane = prepared_boundary_execution_lane();
   begin_field_publication_outcome_();
   SolveReport report;
   std::exception_ptr local_error;
@@ -591,9 +688,9 @@ SolveOutcome System<Dim>::run_field_publication_outcome_(
   } catch (...) {
     local_error = std::current_exception();
   }
-  if (all_reduce_max(local_error ? 1L : 0L) != 0) {
+  if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
     rollback_field_publication_transaction();
-    if (n_ranks() == 1 && local_error)
+    if (lane.size() == 1 && local_error)
       std::rethrow_exception(local_error);
     throw std::runtime_error("System exact field solver failed on at least one MPI rank");
   }
@@ -602,16 +699,18 @@ SolveOutcome System<Dim>::run_field_publication_outcome_(
 
 template <int Dim>
 void System<Dim>::begin_field_publication_outcome_() {
+  const ExecutionLane& lane = prepared_boundary_execution_lane();
   const bool active = p_->active_field_ || p_->active_field_provider_candidate_ ||
                       p_->active_field_auxiliary_publication_ ||
                       !p_->active_field_stale_auxiliary_providers_.empty();
-  if (all_reduce_max(active ? 1L : 0L) != 0)
+  if (all_reduce_max(active ? 1L : 0L, lane) != 0)
     throw std::logic_error(
         "System field solves are sequential until their prior SolveOutcome is consumed");
 }
 
 template <int Dim>
 SolveOutcome System<Dim>::stage_field_publication_outcome_(SolveReport report) {
+  const ExecutionLane& lane = prepared_boundary_execution_lane();
   if (!solve_report_is_publishable(report, p_->active_field_
                                                ? p_->active_field_->maximum_iterations()
                                                : std::numeric_limits<int>::max())) {
@@ -619,13 +718,13 @@ SolveOutcome System<Dim>::stage_field_publication_outcome_(SolveReport report) {
     throw std::runtime_error("System exact field solver published a malformed SolveReport");
   }
   ExactSolveReportConsensusScratch consensus;
-  if (!consensus.agrees(report)) {
+  if (!consensus.agrees(report, lane)) {
     rollback_field_publication_transaction();
     throw std::runtime_error("System exact field solver report differs between MPI ranks");
   }
   if (!report.solved_value_available()) {
     rollback_field_publication_transaction();
-    return SolveOutcome::collective_world(std::move(report));
+    return SolveOutcome::collective_lane(std::move(report), lane);
   }
   try {
     stage_field_publication_candidate();
@@ -633,8 +732,8 @@ SolveOutcome System<Dim>::stage_field_publication_outcome_(SolveReport report) {
     rollback_field_publication_transaction();
     throw;
   }
-  return SolveOutcome::collective_world(
-      std::move(report),
+  return SolveOutcome::collective_lane(
+      std::move(report), lane,
       SolveOutcome::PublicationHooks{
           this,
           [](void* context) noexcept {
@@ -656,12 +755,14 @@ SolveOutcome System<Dim>::stage_field_publication_outcome_(SolveReport report) {
 
 template <int Dim>
 void System<Dim>::prepare_default_field_publication_storage_() {
-  (void)prepare_default_field<Dim>(*p_);
+  const ExecutionLane& lane = prepared_boundary_execution_lane();
+  (void)prepare_default_field<Dim>(*p_, lane);
 }
 
 template <int Dim>
 void System<Dim>::prepare_named_field_publication_storage_(const std::string& field) {
-  if (!all_ranks_agree_exact_ordered_byte_pairs({{"system-named-field-publication", field}}))
+  const ExecutionLane& lane = prepared_boundary_execution_lane();
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"system-named-field-publication", field}}, lane))
     throw std::invalid_argument("System named field request differs between MPI ranks");
   if (p_->named_fields_.find(p_->resolve_named_field_slot(field)) == p_->named_fields_.end())
     throw std::out_of_range("System named elliptic field is not registered: " + field);
@@ -725,42 +826,103 @@ void System<Dim>::begin_field_publication_transaction() {
 
 template <int Dim>
 void System<Dim>::stage_field_publication_candidate() {
-  if (!p_->active_field_)
-    throw std::logic_error("System field solve did not stage an exact provider candidate");
-  p_->active_field_->validate_candidate();
-  const auto& output_keys = p_->active_field_->output_keys();
+  const ExecutionLane& lane = prepared_boundary_execution_lane();
+  std::vector<runtime::system::AuxiliaryComponentKey> output_keys;
+  std::string output_contract;
+  std::exception_ptr preflight_error;
+  try {
+    if (!p_->active_field_)
+      throw std::logic_error("System field solve did not stage an exact provider candidate");
+    p_->active_field_->validate_candidate();
+    output_keys = p_->active_field_->output_keys();
+    if (!output_keys.empty() && (!p_->auxiliary_registry_.sealed() || !p_->provider_carrier_))
+      throw std::logic_error("System named field output requires a sealed provider carrier");
+    if (p_->active_field_provider_candidate_ || p_->active_field_auxiliary_publication_)
+      throw std::logic_error("System field provider publication candidate is already active");
+    ExactContractBuilder exact;
+    exact.text("pops.system-field-output-publication")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .text(p_->active_field_->identity())
+        .sequence(output_keys,
+                  [](ExactContractBuilder& item, const auto& key) { key.serialize_exact(item); });
+    output_contract = std::move(exact).release();
+  } catch (...) {
+    preflight_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      preflight_error, &lane,
+      "System field-output preflight failed collectively before transport preparation");
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("pops.system-field-output-publication"), output_contract}}, lane))
+    throw std::invalid_argument(
+        "System field-output publication contract differs between communicator ranks");
   if (output_keys.empty())
     return;
-  if (!p_->auxiliary_registry_.sealed() || !p_->provider_carrier_)
-    throw std::logic_error("System named field output requires a sealed provider carrier");
-  if (p_->active_field_provider_candidate_ || p_->active_field_auxiliary_publication_)
-    throw std::logic_error("System field provider publication candidate is already active");
 
   std::vector<std::string> provider_identities;
-  provider_identities.reserve(output_keys.size());
-  for (const auto& key : output_keys) {
-    const auto& provider = p_->auxiliary_registry_.provider_for_key(key);
-    if (provider.kind() != runtime::system::AuxiliaryProviderKind::field_output)
-      throw std::logic_error("System field output lost its field-output provider authority");
-    if (std::find(provider_identities.begin(), provider_identities.end(), provider.identity()) ==
-        provider_identities.end())
-      provider_identities.push_back(provider.identity());
-  }
-
-  p_->active_field_provider_candidate_ = *p_->provider_carrier_;
   try {
-    copy_field_outputs_to_provider_candidate(p_->active_field_->candidate_outputs(), output_keys,
-                                             p_->auxiliary_registry_,
-                                             *p_->active_field_provider_candidate_);
-    p_->active_field_auxiliary_publication_.emplace(
-        p_->auxiliary_registry_.begin_external_publication(field_output_evaluation_point<Dim>(*p_),
-                                                           provider_identities));
-    for (const std::string& identity : provider_identities)
-      p_->active_field_auxiliary_publication_->stage_external(identity);
+    std::exception_ptr materialization_error;
+    try {
+      provider_identities.reserve(output_keys.size());
+      for (const auto& key : output_keys) {
+        const auto& provider = p_->auxiliary_registry_.provider_for_key(key);
+        if (provider.kind() != runtime::system::AuxiliaryProviderKind::field_output)
+          throw std::logic_error("System field output lost its field-output provider authority");
+        if (std::find(provider_identities.begin(), provider_identities.end(),
+                      provider.identity()) == provider_identities.end())
+          provider_identities.push_back(provider.identity());
+      }
+      p_->active_field_provider_candidate_ = *p_->provider_carrier_;
+      copy_field_outputs_to_provider_candidate(p_->active_field_->candidate_outputs(), output_keys,
+                                               p_->auxiliary_registry_,
+                                               *p_->active_field_provider_candidate_);
+    } catch (...) {
+      materialization_error = std::current_exception();
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        materialization_error, &lane,
+        "System field-output materialization failed collectively before transport preparation");
+
+    const auto evaluation_point = field_output_evaluation_point<Dim>(*p_, lane);
+    std::exception_ptr publication_error;
+    try {
+      p_->active_field_auxiliary_publication_.emplace(
+          p_->auxiliary_registry_.begin_external_publication(evaluation_point,
+                                                             provider_identities));
+      for (const std::string& identity : provider_identities)
+        p_->active_field_auxiliary_publication_->stage_external(identity);
+    } catch (...) {
+      publication_error = std::current_exception();
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        publication_error, &lane,
+        "System field-output publication staging failed collectively before transport preparation");
+    p_->auxiliary_ghost_transport_.emplace(runtime::system::prepare_auxiliary_ghost_transport(
+        *p_->provider_carrier_, p_->auxiliary_registry_, p_->dom, p_->geom,
+        BoundaryTopology<Dim>::axis_periodic(p_->periodicity), &lane));
+    const auto refresh_candidate_ghosts = [&] {
+      p_->auxiliary_ghost_transport_->execute(*p_->active_field_provider_candidate_);
+    };
+    refresh_candidate_ghosts();
     p_->active_field_auxiliary_publication_->launch_ready_native(
-        {&*p_->provider_carrier_, &*p_->active_field_provider_candidate_});
-    Kokkos::fence();
-    require_finite_provider_groups(*p_->active_field_provider_candidate_);
+        {&*p_->provider_carrier_, &*p_->active_field_provider_candidate_},
+        [&](const auto&, std::exception_ptr local_error) {
+          runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+              local_error, &lane,
+              "System field-output auxiliary launch failed collectively before ghost fill");
+          refresh_candidate_ghosts();
+        });
+    std::exception_ptr fence_error;
+    try {
+      Kokkos::fence();
+    } catch (...) {
+      fence_error = std::current_exception();
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        fence_error, &lane, "System field-output device fence failed collectively");
+    runtime::system::require_finite_auxiliary_groups(*p_->active_field_provider_candidate_, &lane,
+                                                     "System field-output publication");
     p_->active_field_auxiliary_publication_->validate_complete();
     p_->active_field_stale_auxiliary_providers_ =
         p_->auxiliary_registry_.dependent_provider_identities(provider_identities);
@@ -798,7 +960,7 @@ void System<Dim>::accept_field_publication_candidate() noexcept {
       if (!p_->active_field_provider_candidate_ || !p_->provider_carrier_)
         std::terminate();
       p_->active_field_auxiliary_publication_->accept();
-      p_->provider_carrier_.swap(p_->active_field_provider_candidate_);
+      std::swap(*p_->provider_carrier_, *p_->active_field_provider_candidate_);
       for (const std::string& identity : p_->active_field_stale_auxiliary_providers_)
         if (std::find(p_->dirty_auxiliary_providers_.begin(), p_->dirty_auxiliary_providers_.end(),
                       identity) == p_->dirty_auxiliary_providers_.end())
@@ -836,7 +998,7 @@ bool System<Dim>::field_publication_transaction_active_() const noexcept {
 
 template <int Dim>
 void System<Dim>::set_potential(const std::vector<double>& potential_values) {
-  auto field = prepare_default_field<Dim>(*p_);
+  auto field = prepare_default_field<Dim>(*p_, prepared_boundary_execution_lane());
   write_global(field->accepted_potential_for_restore(), p_->dom, potential_values, 1);
 }
 
@@ -845,11 +1007,16 @@ std::vector<std::string> System<Dim>::field_provider_slots() const {
   std::vector<std::string> result;
   if (p_->default_field_)
     result.push_back("pops.system.default-field");
-  result.reserve(result.size() + p_->named_fields_.size());
-  for (const auto& [identity, field] : p_->named_fields_) {
-    (void)field;
-    result.push_back(identity);
-  }
+  append_named_field_provider_slots(*p_, result);
+  return result;
+}
+
+template <int Dim>
+std::vector<std::string> System<Dim>::configured_field_provider_slots() const {
+  std::vector<std::string> result;
+  if (p_->default_field_ || default_field_has_prepared_rhs(*p_))
+    result.push_back("pops.system.default-field");
+  append_named_field_provider_slots(*p_, result);
   return result;
 }
 
@@ -858,7 +1025,7 @@ void System<Dim>::set_field_potential(const std::string& provider_slot,
                                       const std::vector<double>& potential_values) {
   std::shared_ptr<runtime::system::ExactNamedField<Dim>> field;
   if (provider_slot == "pops.system.default-field")
-    field = prepare_default_field<Dim>(*p_);
+    field = prepare_default_field<Dim>(*p_, prepared_boundary_execution_lane());
   else {
     const auto found = p_->named_fields_.find(provider_slot);
     if (found == p_->named_fields_.end())
@@ -1010,10 +1177,12 @@ std::int64_t System<Dim>::set_analytic_expression_state(
     const std::string& name, const std::string& space, const std::string& centering,
     const std::string& projection, const std::vector<std::vector<std::string>>& opcodes,
     const std::vector<std::vector<double>>& literals) {
+  const ExecutionLane& lane = prepared_boundary_execution_lane();
   auto prepared = analytic::collectively_prepare_analytic_request(
       "System::set_analytic_expression_state",
       {{"centering", centering}, {"name", name}, {"projection", projection}, {"space", space}}, {},
-      opcodes, literals, [&] {
+      opcodes, literals,
+      [&] {
         require_assembling(p_->lifecycle_, "set_analytic_expression_state");
         if (space != "cell" || centering != "cell" || projection != "conservative_cell_average")
           throw std::invalid_argument(
@@ -1024,14 +1193,33 @@ std::int64_t System<Dim>::set_analytic_expression_state(
           throw std::invalid_argument("System analytic expression component count differs");
         return std::pair<typename Impl::Species*, std::vector<analytic::AnalyticProgram>>{
             &block, std::move(programs)};
-      });
-  MultiFab<Dim> candidate(prepared.first->U.layout(), prepared.first->U.distribution(),
-                          prepared.first->U.local_rank(), prepared.first->U.ncomp(),
-                          prepared.first->U.ghosts());
+      },
+      lane.communicator());
+  std::optional<MultiFab<Dim>> candidate;
+  std::optional<
+      analytic::PreparedAnalyticMaterialization<Dim, typename MultiFab<Dim>::memory_space>>
+      materialization;
+  std::exception_ptr local_error;
+  try {
+    candidate.emplace(prepared.first->U.layout(), prepared.first->U.distribution(),
+                      prepared.first->U.local_rank(), prepared.first->U.ncomp(),
+                      prepared.first->U.ghosts());
+    materialization.emplace(
+        analytic::prepare_cell_average_materialization(*candidate, p_->geom, prepared.second));
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  const long preparation_failures = all_reduce_sum(local_error ? 1L : 0L, lane.communicator());
+  if (preparation_failures != 0) {
+    if (lane.size() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("System analytic materialization preparation failed collectively on " +
+                             std::to_string(preparation_failures) + " rank(s)");
+  }
   const std::int64_t count =
-      analytic::materialize_cell_average(candidate, p_->geom, prepared.second);
-  publish_recovered_candidate<Dim>(*prepared.first, candidate,
-                                   "System::set_analytic_expression_state");
+      analytic::materialize_cell_average(*materialization, lane.communicator());
+  publish_recovered_candidate<Dim>(*prepared.first, *candidate,
+                                   "System::set_analytic_expression_state", lane);
   return count;
 }
 
@@ -1166,7 +1354,8 @@ std::int64_t System<Dim>::set_analytic_mapped_state(
   }
   const std::int64_t count =
       analytic::materialize_discrete_mapped_state(candidate, p_->geom, programs, resolved_inputs);
-  publish_recovered_candidate<Dim>(*block, candidate, "System::set_analytic_mapped_state");
+  publish_recovered_candidate<Dim>(*block, candidate, "System::set_analytic_mapped_state",
+                                   prepared_boundary_execution_lane());
   return count;
 }
 
@@ -1184,7 +1373,8 @@ std::int64_t System<Dim>::set_analytic_gaussian_state(const std::string& name,
   const std::int64_t count = analytic::materialize_gaussian_cell_average(
       candidate, p_->geom, center, static_cast<Real>(background), static_cast<Real>(amplitude),
       static_cast<Real>(inverse_width));
-  publish_recovered_candidate<Dim>(block, candidate, "System::set_analytic_gaussian_state");
+  publish_recovered_candidate<Dim>(block, candidate, "System::set_analytic_gaussian_state",
+                                   prepared_boundary_execution_lane());
   return count;
 }
 
@@ -1238,7 +1428,8 @@ std::vector<double> System<Dim>::density(const std::string& name) const {
 
 template <int Dim>
 std::vector<double> System<Dim>::potential() {
-  return gather_local_compact(prepare_default_field<Dim>(*p_)->accepted_potential(), 1);
+  return gather_local_compact(
+      prepare_default_field<Dim>(*p_, prepared_boundary_execution_lane())->accepted_potential(), 1);
 }
 
 template <int Dim>
@@ -1254,7 +1445,9 @@ std::vector<double> System<Dim>::state_global(const std::string& name) const {
 
 template <int Dim>
 std::vector<double> System<Dim>::potential_global() {
-  return gather_global(prepare_default_field<Dim>(*p_)->accepted_potential(), p_->dom, 1);
+  return gather_global(
+      prepare_default_field<Dim>(*p_, prepared_boundary_execution_lane())->accepted_potential(),
+      p_->dom, 1);
 }
 
 template <int Dim>
@@ -1281,7 +1474,9 @@ std::vector<OutputPiece<Dim>> System<Dim>::output_field_local_pieces(
   if (level != 0)
     throw std::out_of_range("Uniform System output has only level zero");
   if (provider_slot == "pops.system.default-field")
-    return output_local_pieces(prepare_default_field<Dim>(*p_)->accepted_potential(), 0, false);
+    return output_local_pieces(
+        prepare_default_field<Dim>(*p_, prepared_boundary_execution_lane())->accepted_potential(),
+        0, false);
   const auto found = p_->named_fields_.find(provider_slot);
   if (found == p_->named_fields_.end())
     throw std::out_of_range("System field provider slot is unknown: " + provider_slot);
@@ -1351,6 +1546,9 @@ std::vector<double> System<Dim>::local_state(const std::string& name, int local_
 
 template void System<kNativeDimension>::validate_program_state_publication_candidate(
     int, const MultiFab<kNativeDimension>&) const;
+template const MultiFab<kNativeDimension>*
+System<kNativeDimension>::validate_program_state_publication_candidate_(
+    int, const MultiFab<kNativeDimension>&, const ExecutionLane&) const;
 template void System<kNativeDimension>::set_density(const std::string&, const std::vector<double>&);
 template void System<kNativeDimension>::set_primitive_state(const std::string&,
                                                             const std::vector<double>&);
@@ -1399,6 +1597,7 @@ template SolveOutcome System<kNativeDimension>::run_field_publication_outcome_(
     const std::function<SolveReport()>&);
 template void System<kNativeDimension>::set_potential(const std::vector<double>&);
 template std::vector<std::string> System<kNativeDimension>::field_provider_slots() const;
+template std::vector<std::string> System<kNativeDimension>::configured_field_provider_slots() const;
 template void System<kNativeDimension>::set_field_potential(const std::string&,
                                                             const std::vector<double>&);
 template std::vector<double> System<kNativeDimension>::eval_rhs(const std::string&);

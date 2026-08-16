@@ -3,9 +3,18 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any
+from typing import Any, Protocol, TypeGuard
 
 from .hash_data import body_identity, canonical_hash_data
+from .handles import Handle
+
+
+class _UnaryExpr(Protocol):
+    a: Any
+
+
+def _has_unary_child(expression: object) -> TypeGuard[_UnaryExpr]:
+    return hasattr(expression, "a")
 
 
 def _aux_expr_hash_data(expression: Any) -> Any:
@@ -24,7 +33,8 @@ def _aux_expr_hash_data(expression: Any) -> Any:
         return {"const": expression.literal.to_data()}
     if isinstance(expression, ValueExpr):
         handle = expression.handle
-        return {"value": {"kind": handle.kind, "local_id": handle.local_id}}
+        if isinstance(handle, Handle):
+            return {"value": {"kind": handle.kind, "local_id": handle.local_id}}
     if isinstance(expression, _Bin):
         result = {
             "node": type(expression).__name__,
@@ -35,7 +45,7 @@ def _aux_expr_hash_data(expression: Any) -> Any:
         if comparison is not None:
             result["comparison"] = comparison
         return result
-    if isinstance(expression, Expr) and hasattr(expression, "a"):
+    if isinstance(expression, Expr) and _has_unary_child(expression):
         return {"node": type(expression).__name__, "a": _aux_expr_hash_data(expression.a)}
     raise TypeError(
         "Module auxiliary producer expression %s has no deterministic native hash projection"

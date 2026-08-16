@@ -1,278 +1,167 @@
-"""SSPRK3 (Shu-Osher, ordre 3) sur AMR avec REFLUX PAR ETAGE (ADC-64).
+"""SSPRK3 order discrimination through an authored, compiled Program.
 
-L'AMR sous-cycle (Berger-Oliger) avec reflux conservatif aux interfaces grossier-fin. SSPRK3 y est
-cable comme METHODE TEMPORELLE optionnelle (engine.Explicit(ssprk3=True) -> time.kind == "ssprk3"),
-mono-bloc (coupleur AmrCouplerMP) ET multi-blocs (moteur AmrRuntime). Le reflux enregistre le FLUX
-EFFECTIF du pas SSP, Feff = 1/6 F(U0) + 1/6 F(U1) + 2/3 F(U2) : la correction grossier-fin reste
-exactement conservative pour le pas d'ordre 3 porte par le ProgramGraph AMR.
-
-On verifie cote Python :
-  (a) AMR ssprk3 MONO-BLOC et MULTI-BLOCS tournent (etat fini) AVEC patchs fins actifs, et la MASSE
-      de chaque bloc est conservee a ~machine (reflux + average_down par etage) ;
-  (b) DEFAUT bit-identique : le temps omis est exactement le preset SSPRK2 explicite ;
-  (c) ORDRE : l'erreur L1 (temporelle, isolee par reference Richardson ssprk3 a dt/8) du pas ssprk3
-      est NETTEMENT plus petite que celle du pas euler (explicit) au MEME dt -- ssprk3 ordre 3 >> 1 ;
-  (d) imex + ssprk3 : combinaison REJETEE explicitement (ssprk3 = transport explicite, exclusif du
-      traitement IMEX de la source ; selecteur time.kind unique, parite avec System) ;
-
-Le chemin loader natif n'est pas simule ici. Sa vraie compilation et sa parite numerique SSPRK3 sont
-couvertes par ``integration/native_loader/test_ssprk3_production.py``.
-
-Test PUR Python (aucune compilation .so) : ne gate sur rien, toujours execute.
+The real refined mono/multi-block conservation matrix lives in
+``test_amr_explicit_family``.  This companion keeps the independent temporal-order evidence: the
+public SSPRK3 factory is graph-identical to the generic SSPRK3 tableau route and its compiled
+trajectory is closer than Forward Euler to an SSPRK3 small-step reference.
 """
 
-from pops.numerics.reconstruction import FirstOrder
-from pops.numerics.reconstruction.limiters import Minmod
-from pops.numerics.riemann import Rusanov
+from __future__ import annotations
+
+from pathlib import Path
+
 import numpy as np
+import pops
+import pops.lib.time as libtime
 import pytest
-
-import pops.runtime._engine_descriptors as engine
-from pops.runtime._engine_descriptors import Periodic
-from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
-from tests.python.support.explicit_program import (
-    install_forward_euler_program,
-    install_ssprk2_program,
-    install_ssprk3_program,
+from pops.codegen import Production
+from pops.domain import Rectangle
+from pops.frames import Cartesian2D
+from pops.initial import InitialCondition
+from pops.layouts import Uniform
+from pops.lib.initial import BindArray
+from pops.math import ddt, div
+from pops.mesh import CartesianGrid, PeriodicAxes
+from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
+from pops.numerics.spatial import FiniteVolume
+from pops.projection import ConservativeCellAverage
+from pops.time import FixedDt
+from pops.time._methods.properties import certify_program_graph
+from tests.python.support.requirements import (
+    default_cxx,
+    missing_native_compile_requirement,
+    repo_include,
+    require_native_or_skip,
 )
-from tests.python.support.amr_tagging import install_prepared_threshold_union
 
 
-def _bump(n, amp):
-    """Densite lisse, OFFSET MOYEN NUL (Sum q n solvable en Poisson periodique)."""
-    xs = (np.arange(n) + 0.5) / n
-    X, Y = np.meshgrid(xs, xs)
-    r = 1.0 + amp * np.exp(-((X - 0.5) ** 2 + (Y - 0.5) ** 2) / 0.01)
-    return r + (1.0 - r.mean())
+ROOT = Path(__file__).resolve().parents[4]
+N = 32
+POPS_PROCESS_TIMEOUT = 900
 
 
-def _scalar_charge(q, B0=1.0):
-    return engine.Model(
-        engine.Scalar(),
-        engine.ExB(B0=B0),
-        engine.NoSource(),
-        engine.BackgroundDensity(alpha=q, n0=1.0),
+def _authoring(method: str, dt: float, *, cxx: str | None):
+    frame = Rectangle("ssprk3-order-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(
+        Cartesian2D()
     )
-
-
-# --- (a) mono-bloc + multi-blocs ssprk3 : fini + masse conservee, patchs fins actifs ---
-def _check_mono(n=32):
-    sim = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=4)
-    sim.set_temporal_relations([2], [1], ["integral_only"])
-    sim.add_equation(
-        "ne",
-        _scalar_charge(+1.0),
-        spatial=engine.Spatial(limiter=Minmod(), flux=Rusanov()),
-        time=engine.Explicit(ssprk3=True),
-    )  # SSPRK3 mono-bloc (ProgramGraph, AmrRuntime spatial)
-    sim.set_poisson(bc=Periodic())
-    install_prepared_threshold_union(sim, (("ne", "n", 1.05),))
-    sim.set_density("ne", _bump(n, 0.40))
-    install_ssprk3_program(sim)
-    m0 = sim.mass()
-    sim.advance(0.002, 12)
-    d1 = np.asarray(sim.density())
-    m1 = sim.mass()
-    assert np.isfinite(d1).all(), "mono-bloc ssprk3 : etat non fini"
-    assert sim.n_patches() >= 1, "mono-bloc ssprk3 : aucun patch fin actif"
-    drift = abs(m1 - m0) / (abs(m0) + 1.0)
-    assert drift < 1e-9, "mono-bloc ssprk3 : masse non conservee (drift relatif=%.2e)" % drift
-    print(
-        "OK  (a) mono-bloc ssprk3 : fini, %d patch(s) fin(s), masse conservee (drift=%.2e)"
-        % (sim.n_patches(), drift)
+    x_axis, y_axis = frame.axes
+    model = pops.Model("ssprk3-order-transport", frame=frame)
+    state = model.state("U", components=("rho",))
+    (rho,) = state
+    flux = model.flux(
+        "transport",
+        frame=frame,
+        state=state,
+        components={x_axis: (0.8 * rho,), y_axis: (-0.35 * rho,)},
+        waves={x_axis: (0.8 + 0.0 * rho,), y_axis: (0.35 + 0.0 * rho,)},
     )
-
-
-def _check_multi(n=32):
-    sim = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=4)
-    sim.set_temporal_relations([2], [1], ["integral_only"])
-    sim.add_equation(
-        "ions",
-        _scalar_charge(+1.0),
-        spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-        time=engine.Explicit(ssprk3=True),
-    )  # SSPRK3 multi-blocs (ProgramGraph, AmrRuntime spatial)
-    sim.add_equation(
-        "electrons",
-        _scalar_charge(-1.0),
-        spatial=engine.Spatial(limiter=Minmod(), flux=Rusanov()),
-        time=engine.Explicit(ssprk3=True),
-    )  # 2e bloc ssprk3, SCHEMA SPATIAL DIFFERENT
-    sim.set_poisson(bc=Periodic())
-    install_prepared_threshold_union(
-        sim, (("ions", "n", 1.05), ("electrons", "n", 1.05)))
-    sim.set_density("ions", _bump(n, 0.40))
-    sim.set_density("electrons", _bump(n, 0.20))
-    install_ssprk3_program(sim)
-    m0i, m0e = sim.mass("ions"), sim.mass("electrons")
-    sim.advance(0.002, 12)
-    d1i = np.asarray(sim.density("ions"))
-    d1e = np.asarray(sim.density("electrons"))
-    m1i, m1e = sim.mass("ions"), sim.mass("electrons")
-    assert np.isfinite(d1i).all() and np.isfinite(d1e).all(), "multi-blocs ssprk3 : etat non fini"
-    assert sim.n_patches() >= 1, "multi-blocs ssprk3 : aucun patch fin actif"
-    di = abs(m1i - m0i) / (abs(m0i) + 1.0)
-    de = abs(m1e - m0e) / (abs(m0e) + 1.0)
-    assert di < 1e-9, "multi-blocs ssprk3 : masse ions non conservee (drift=%.2e)" % di
-    assert de < 1e-9, "multi-blocs ssprk3 : masse electrons non conservee (drift=%.2e)" % de
-    print(
-        "OK  (a) multi-blocs ssprk3 : 2 blocs schemas differents, fini, %d patch(s), masse par "
-        "bloc conservee (di=%.2e, de=%.2e)" % (sim.n_patches(), di, de)
-    )
-
-
-# --- (b) defaut bit-identique : defaut == preset SSPRK2 explicite -------------------------------
-def _check_default_ssprk2_bit_identical(n=32):
-    def run(time=None):
-        s = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=0)
-        s.set_temporal_relations([2], [1], ["integral_only"])
-        kwargs = {"spatial": engine.Spatial(limiter=Minmod(), flux=Rusanov())}
-        if time is not None:
-            kwargs["time"] = time
-        s.add_equation("ne", _scalar_charge(+1.0), **kwargs)
-        s.set_poisson(bc=Periodic())
-        s.set_density("ne", _bump(n, 0.40))
-        install_ssprk2_program(s)
-        s.advance(0.002, 10)
-        return np.asarray(s.density())
-
-    a = run()
-    b = run(engine.Explicit(method="ssprk2"))
-    dmax = float(np.abs(a - b).max())
-    assert dmax == 0.0, "temps par defaut != SSPRK2 explicite (dmax=%.3e)" % dmax
-    print("OK  (b) temps omis == Explicit(method='ssprk2') bit-identique : dmax == 0")
-
-
-# --- (c) ordre : erreur L1 temporelle ssprk3 << euler au meme dt (reference Richardson ssprk3 dt/8) --
-def _build_advect(n, kind):
-    """AMR mono-bloc, hierarchie FIGEE (regrid_every=0, patch seed central) : SEULE la methode
-    temporelle (time) change entre les runs -> l'erreur mesuree est purement TEMPORELLE."""
-    s = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=0)
-    s.set_temporal_relations([2], [1], ["integral_only"])
-    s.add_equation(
-        "ne",
-        _scalar_charge(+1.0),
-        spatial=engine.Spatial(
-            limiter=FirstOrder(), flux=Rusanov()
-        ),  # MEME schema spatial pour tous
-        time=(
-            engine.Explicit(method="ssprk3")
-            if kind == "ssprk3"
-            else engine.Explicit(method="euler")
+    rate = model.rate("transport_rate", equation=ddt(state) == -div(flux))
+    case = pops.Case("ssprk3-order-%s" % method)
+    block = case.block("tracer", model, states=(state,))
+    instance = block[state]
+    numerics = DiscretizationPlan()
+    numerics.rates.add(
+        rate,
+        FiniteVolume(
+            flux=flux,
+            variables=variables.Conservative(state),
+            reconstruction=reconstruction.FirstOrder(),
+            riemann=riemann.Rusanov(),
         ),
     )
-    s.set_poisson(bc=Periodic())
-    s.set_density("ne", _bump(n, 0.40))
-    if kind == "ssprk3":
-        install_ssprk3_program(s)
+    case.numerics(numerics, block=block)
+    if method == "euler":
+        program = libtime.ForwardEuler(instance, rate=rate)
+    elif method == "ssprk3":
+        program = libtime.SSPRK3(instance, rate=rate)
     else:
-        install_forward_euler_program(s)
-    return s
-
-
-def _check_order(n=32):
-    # dt FIXE, sonde a CFL ~ 0.5 : FE + Rusanov reste stable (TVD jusqu'a CFL ~ 1) MAIS son erreur de
-    # transport (O(dt^2) locale, ordre 1 globale) est alors GRANDE, de sorte qu'elle DOMINE l'erreur de
-    # SPLITTING champ/transport COMMUNE aux deux integrateurs (le coupleur resout Poisson une fois par
-    # pas puis gele le champ pendant les etages SSP : ce splitting de Lie est ordre 1 et borne l'ordre
-    # GLOBAL des deux schemas). En regime ou l'erreur de transport domine, l'integrateur d'ordre 3 reduit
-    # NETTEMENT l'erreur totale (l'erreur de transport SSPRK3 est negligeable devant celle d'Euler). La
-    # reference Richardson (SSPRK3 a dt/k) capture la solution temps-convergee, isolant l'ecart restant.
-    probe = _build_advect(n, "euler")
-    probe.step_cfl(0.5)
-    dt = float(probe.time())
-    assert dt > 0.0 and np.isfinite(dt), "sonde CFL : dt invalide (%r)" % dt
-    nsteps, k = 10, 8
-
-    se = _build_advect(n, "euler")
-    se.advance(dt, nsteps)
-    ss = _build_advect(n, "ssprk3")
-    ss.advance(dt, nsteps)
-    sr = _build_advect(n, "ssprk3")
-    sr.advance(dt / k, nsteps * k)  # reference temps-convergee
-
-    ref = np.asarray(sr.density())
-    err_euler = float(np.abs(np.asarray(se.density()) - ref).mean())  # L1 (moyenne) vs reference
-    err_ssprk3 = float(np.abs(np.asarray(ss.density()) - ref).mean())
-    assert np.isfinite(err_euler) and np.isfinite(err_ssprk3), "erreurs L1 non finies"
-    # erreur euler non triviale (sinon comparaison de bruit) ET ssprk3 plus precise (inegalite nette).
-    assert err_euler > 1e-12, (
-        "erreur euler trop petite (%.2e) : dt insuffisant pour isoler le temps" % err_euler
-    )
-    assert err_ssprk3 < err_euler, (
-        "ssprk3 pas plus precis qu'euler (L1 ssprk3=%.3e, euler=%.3e, ratio=%.2f)"
-        % (err_ssprk3, err_euler, err_ssprk3 / max(err_euler, 1e-300))
-    )
-    print(
-        "OK  (c) ordre : L1 temporelle ssprk3=%.3e < euler=%.3e (dt=%.3e, ratio=%.1fx)"
-        % (err_ssprk3, err_euler, dt, err_euler / max(err_ssprk3, 1e-300))
-    )
-
-
-# --- (d) imex + ssprk3 : combinaison rejetee explicitement ---
-def _check_imex_ssprk3_rejected(n=16):
-    # ssprk3 (time.kind) et imex (time.kind) sont des selecteurs MUTUELLEMENT EXCLUSIFS (parite avec
-    # System) : la facade standard ne peut PAS les combiner. On le prouve via le binding bas niveau --
-    # demander le traitement IMEX de la source (masque implicite implicit_vars, OU rapport Newton
-    # newton_diagnostics) AVEC time='ssprk3' est REJETE : ssprk3 = transport explicite, exclusif de
-    # l'IMEX. La normalisation du Program refuse cette composition avant execution.
-    model = _scalar_charge(+1.0)
-    newton_defaults = engine.IMEX()
-
-    def add(time, **kw):
-        s = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=0)
-        s.set_temporal_relations([2], [1], ["integral_only"])
-        kwargs = dict(
-            implicit_vars=[],
-            implicit_roles=[],
-            newton_max_iters=newton_defaults.newton_max_iters,
-            newton_rel_tol=newton_defaults.newton_rel_tol,
-            newton_abs_tol=newton_defaults.newton_abs_tol,
-            newton_fd_eps=newton_defaults.newton_fd_eps,
-            newton_damping=newton_defaults.newton_damping,
-            newton_diagnostics=False,
+        raise ValueError("unsupported method %r" % method)
+    program.step_strategy(FixedDt(dt))
+    case.program(program)
+    case.initials.add(
+        InitialCondition(
+            state=instance,
+            value=BindArray(),
+            projection=ConservativeCellAverage(),
         )
-        kwargs.update(kw)
-        s._s.add_block(
-            "b",
-            model,
-            "minmod",
-            "rusanov",
-            "conservative",
-            time,
-            1,
-            1,
-            kwargs["implicit_vars"],
-            kwargs["implicit_roles"],
-            kwargs["newton_max_iters"],
-            kwargs["newton_rel_tol"],
-            kwargs["newton_abs_tol"],
-            kwargs["newton_fd_eps"],
-            kwargs["newton_damping"],
-            kwargs["newton_diagnostics"],
-        )
-        return s
-
-    # ssprk3 SEUL accepte (transport explicite), imex SEUL accepte (source implicite) : chacun valide.
-    add("ssprk3")
-    add("imex")
-    # ssprk3 + masque implicite (IMEX partiel) -> rejet.
-    for kw, reason in (
-        (dict(implicit_vars=["rho"]), "implicit_vars / implicit_roles require time='imex'"),
-        (dict(newton_diagnostics=True), "newton_diagnostics requires time='imex'"),
-    ):
-        with pytest.raises(RuntimeError, match=reason):
-            add("ssprk3", **kw)
-    print("OK  (d) imex + ssprk3 rejete : ssprk3 (transport explicite) exclusif du traitement IMEX")
+    )
+    options = None
+    if cxx is not None:
+        options = {"include": str(ROOT / "include"), "cxx": cxx}
+    resolved = pops.resolve(
+        pops.validate(case),
+        layout=Uniform(
+            CartesianGrid(
+                frame=frame,
+                cells=(N, N),
+                periodic=PeriodicAxes(frame.axes),
+            )
+        ),
+        backend=Production(),
+        compile_options=options,
+    )
+    return resolved, instance, rate
 
 
-def main():
-    _check_mono()
-    _check_multi()
-    _check_default_ssprk2_bit_identical()
-    _check_order()
-    _check_imex_ssprk3_rejected()
-    print("OK test_amr_ssprk3")
+def _initial_state() -> np.ndarray:
+    axis = (np.arange(N, dtype=np.float64) + 0.5) / N
+    x, y = np.meshgrid(axis, axis, indexing="xy")
+    rho = 1.0 + 0.25 * np.sin(2.0 * np.pi * x) * np.cos(2.0 * np.pi * y)
+    return np.ascontiguousarray(rho[None, ...])
+
+
+def _run(method: str, dt: float, nsteps: int, cxx: str) -> np.ndarray:
+    resolved, instance, _rate = _authoring(method, dt, cxx=cxx)
+    simulation = pops.bind(
+        pops.compile(resolved),
+        initial_values={instance: _initial_state()},
+    )
+    report = pops.run(simulation, t_end=nsteps * dt, max_steps=nsteps)
+    assert report.accepted_steps == simulation.macro_step() == nsteps
+    assert simulation.time() == pytest.approx(nsteps * dt, rel=0.0, abs=2.0e-15)
+    result = np.asarray(simulation.block_level_state_global("tracer", 0), dtype=np.float64).reshape(
+        (1, N, N)
+    )[0]
+    assert np.isfinite(result).all()
+    return result
+
+
+def _check_typed_graph_authority() -> None:
+    resolved, instance, rate = _authoring("ssprk3", 1.0e-3, cxx=None)
+    generic = libtime.RungeKutta(
+        routes=(libtime.RungeKuttaRoute(instance, rate),),
+        tableau=libtime.SSPRK3_TABLEAU,
+    )
+    generic.step_strategy(FixedDt(1.0e-3))
+    assert generic.ir_nodes() == resolved.time.ir_nodes()
+    certificate = certify_program_graph(resolved.time.to_graph())
+    assert certificate.properties.order == 3
+    assert len([node for node in resolved.time.ir_nodes() if node["op"] == "rhs"]) == 3
+
+
+def _check_order(cxx: str) -> None:
+    dt = 8.0e-3
+    nsteps = 8
+    refinement = 8
+    euler = _run("euler", dt, nsteps, cxx)
+    ssprk3 = _run("ssprk3", dt, nsteps, cxx)
+    reference = _run("ssprk3", dt / refinement, nsteps * refinement, cxx)
+    euler_error = float(np.mean(np.abs(euler - reference)))
+    ssprk3_error = float(np.mean(np.abs(ssprk3 - reference)))
+    assert euler_error > 1.0e-12
+    assert ssprk3_error < euler_error, (
+        "compiled SSPRK3 did not improve on Forward Euler: %.3e >= %.3e"
+        % (ssprk3_error, euler_error)
+    )
+
+
+def main() -> None:
+    _check_typed_graph_authority()
+    cxx = default_cxx()
+    missing = missing_native_compile_requirement(repo_include(), cxx)
+    if missing:
+        require_native_or_skip(missing, optional_skip=pytest.skip)
+    _check_order(cxx)
 
 
 if __name__ == "__main__":

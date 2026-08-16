@@ -11,7 +11,7 @@ from pops.external import build_source_package_manifest, load
 from pops.fields import ExternalFieldSolver
 from pops.lib.initial import Gaussian
 from pops.model import ComponentManifest
-from pops.time import FailRun, FixedDt
+from pops.time import FailRun, FixedDt, Hold, Skip
 from tests.python.integration._final_field_program import (
     passive_field_model,
     resolve_periodic_field_program,
@@ -219,6 +219,7 @@ def _solver_source(
     solve_count_statement="++state->solve_count;",
     iterations_expression="state->solve_count",
     extra_includes="",
+    solve_observer_statement="",
 ):
     expected_parameters_json = json.dumps(
         {"answer": 7}, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
@@ -273,6 +274,7 @@ int solve(void* value, const PopsFieldSolverRequestV2* request,
       std::strstr(request->boundary_contract_json, "identity") == nullptr)
     return 3;
   {solve_count_statement}
+  {solve_observer_statement}
   for (std::size_t local = 0; local < request->local_patch_count; ++local) {{
     const auto& patch = request->local_patches[local];
     if (patch.metadata_index >= request->topology.patch_count ||
@@ -395,11 +397,15 @@ def _program(state, rate, field):
     return program
 
 
-def _moving_amr_program(state, rate, field):
+def _moving_amr_program(state, rate, field, *, off_policy):
     from pops.lib.time import ForwardEuler
+    from pops.time import AcceptedStep, Every, Schedule
 
     program = ForwardEuler(
         state, rate=rate, fields=field, solve_action=FailRun())
+    field_node = next(value for value in program._values if value.op == "solve_fields")
+    scheduled = Schedule(Every(AcceptedStep(program.clock), 5), off=off_policy)
+    program._replace_value(field_node, attrs={**field_node.attrs, "schedule": scheduled})
     program.step_strategy(FixedDt(8.0e-2))
     return program
 
@@ -468,7 +474,12 @@ def test_external_field_pair_executes_and_reports_materialized_topology(tmp_path
     assert simulation.inspect().to_dict()["instance"]["field_providers"] == providers
 
 
-def test_external_field_pair_executes_binary_coverage_across_amr_regrid(tmp_path):
+@pytest.mark.parametrize("off_policy", (Hold(), Skip()), ids=("hold", "skip"))
+def test_external_field_pair_executes_binary_coverage_across_amr_regrid(
+    tmp_path, off_policy,
+):
+    solve_observer = tmp_path / "amr-field-solves"
+    fault_marker = tmp_path / "amr-field-rematerialization-fault"
     topology = _component(
         tmp_path,
         name="amr-topology",
@@ -481,7 +492,19 @@ def test_external_field_pair_executes_binary_coverage_across_amr_regrid(tmp_path
         tmp_path,
         name="amr-solver",
         interface=interfaces.FieldSolver,
-        source_factory=_solver_source,
+        source_factory=lambda manifest: _solver_source(
+            manifest,
+            solution_expression=(
+                "std::filesystem::exists(%s) "
+                "? std::numeric_limits<double>::quiet_NaN() : 7.0"
+                % json.dumps(str(fault_marker))
+            ),
+            extra_includes="#include <filesystem>\n#include <fstream>\n#include <limits>",
+            solve_observer_statement=(
+                "std::ofstream(%s, std::ios::app) << state->solve_count << '\\n';"
+                % json.dumps(str(solve_observer))
+            ),
+        ),
         manifest_parameters=({"name": "answer", "kind": "runtime"},),
         instance_parameters={"answer": 7},
     )
@@ -501,7 +524,9 @@ def test_external_field_pair_executes_binary_coverage_across_amr_regrid(tmp_path
     # A compact super-threshold region moves far enough to replace the fine layout at step 2.
     resolved = resolve_periodic_field_program(
         model,
-        _moving_amr_program,
+        lambda state, rate, field: _moving_amr_program(
+            state, rate, field, off_policy=off_policy
+        ),
         name="external-amr-field-runtime",
         block_name="material",
         target="amr_system",
@@ -538,11 +563,40 @@ def test_external_field_pair_executes_binary_coverage_across_amr_regrid(tmp_path
     assert simulation.n_levels() == 2
     boxes_before = tuple(simulation.patch_boxes())
     regrids_before = simulation.amr.explain_regrid().regrid_count
-    report = pops.run(simulation, t_end=2.4e-1, max_steps=3)
-    assert report.accepted_steps == 3
+    first = pops.run(simulation, t_end=8.0e-2, max_steps=1)
+    assert first.accepted_steps == 1
+    accepted_before_fault = {
+        "time": simulation.time(),
+        "step": simulation.macro_step(),
+        "boxes": tuple(simulation.patch_boxes()),
+        "regrid_count": simulation.amr.explain_regrid().regrid_count,
+        "potential": np.asarray(simulation.field_potential_global(slot)).copy(),
+        "dirty": tuple(simulation._executor._s.dirty_auxiliary_provider_identities()),
+    }
+    fault_marker.write_text("fail the topology rematerialization solve", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="field"):
+        pops.run(simulation, t_end=1.6e-1, max_steps=1)
+    assert simulation.time() == accepted_before_fault["time"]
+    assert simulation.macro_step() == accepted_before_fault["step"]
+    assert tuple(simulation.patch_boxes()) == accepted_before_fault["boxes"]
+    assert simulation.amr.explain_regrid().regrid_count == accepted_before_fault["regrid_count"]
+    np.testing.assert_array_equal(
+        np.asarray(simulation.field_potential_global(slot)),
+        accepted_before_fault["potential"],
+    )
+    assert tuple(simulation._executor._s.dirty_auxiliary_provider_identities()) == (
+        accepted_before_fault["dirty"]
+    )
+    fault_marker.unlink()
+    report = pops.run(simulation, t_end=2.4e-1, max_steps=2)
+    assert first.accepted_steps + report.accepted_steps == 3
     assert report.final_time == pytest.approx(2.4e-1)
     assert simulation.amr.explain_regrid().regrid_count > regrids_before
     assert tuple(simulation.patch_boxes()) != boxes_before
+    # Initial topology materialization publishes generation 1; the initially-due Program solve is
+    # generation 2. Hold/Skip is then off-cadence, while failed and retried step-2 topology
+    # transactions each construct a fresh solver and attempt exactly generation 1.
+    assert solve_observer.read_text(encoding="utf-8").splitlines() == ["1", "2", "1", "1"]
 
 
 def test_real_prepared_field_solver_failure_rolls_back_runtime_instance_and_retries(

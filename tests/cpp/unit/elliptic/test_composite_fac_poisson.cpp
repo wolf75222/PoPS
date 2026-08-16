@@ -1,333 +1,318 @@
-// Solveur Poisson COMPOSITE FAC 2 niveaux (CompositeFacPoisson) : test MMS / convergence.
-// Cf. include/pops/numerics/elliptic/composite_fac_poisson.hpp.
-//
-// On resout Lap phi = f sur un domaine [0,1]^2 carre, Dirichlet phi = 0 au bord, avec une solution
-// MANUFACTUREE u_exact = sin(3 pi x) sin(3 pi y) (nulle au bord), f = Lap u = -18 pi^2 u. On compare,
-// dans la zone INTERIEURE du patch fin (loin du bord C-F pour eviter la contamination) :
-//   - le potentiel COARSE-ONLY (un seul solve grossier), interpole bilineairement aux centres fins ;
-//   - le potentiel COMPOSITE (solve grossier + patch fin couple par FAC), au meme centres fins.
-// CRITERE (le verrou de fidelite AMR, demande par le user) : le patch fin doit donner un phi PLUS
-// PRECIS que le coarse-only -- e_composite < e_coarse dans la zone raffinee -- et la difference doit
-// suivre le facteur de raffinement (~ (H/h)^2 = 4 pour une solution lisse). On verifie aussi que
-// l'iteration FAC CONVERGE (residu composite -> petit) et que phi_composite != phi_coarse (le patch
-// change effectivement la solution, pas un no-op).
-//
-// Serie (Kokkos OFF). Le grossier est mono-box replique ; la FAC mono-rang est validee ici.
-
 #include <gtest/gtest.h>
 
+#include <pops/mesh/layout/distribution.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace.hpp>
 #include <pops/numerics/elliptic/mg/composite_fac_poisson.hpp>
-#include <pops/mesh/layout/box_array.hpp>
-#include <pops/mesh/layout/distribution_mapping.hpp>
-#include <pops/mesh/execution/for_each.hpp>
-#include <pops/mesh/geometry/geometry.hpp>
-#include <pops/mesh/storage/multifab.hpp>
-#include <pops/mesh/boundary/physical_bc.hpp>
-#include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 #include <pops/parallel/comm.hpp>
 
+#include <algorithm>
+#include <array>
 #include <cmath>
-#include <cstdio>
+#include <cstddef>
+#include <cstdint>
 #include <limits>
-#include <stdexcept>
-#include <string>
 #include <utility>
 #include <vector>
 
-using namespace pops;
+namespace {
 
-static constexpr double kPi = 3.14159265358979323846;
+class CommEnvironment final : public ::testing::Environment {
+ public:
+  void SetUp() override { pops::comm_init(); }
+  void TearDown() override { pops::comm_finalize(); }
+};
 
-static double u_exact(double x, double y) {
-  return std::sin(3.0 * kPi * x) * std::sin(3.0 * kPi * y);
+[[maybe_unused]] const ::testing::Environment* const kCommEnvironment =
+    ::testing::AddGlobalTestEnvironment(new CommEnvironment);
+
+template <int Dim, class Value>
+std::array<Value, Dim> filled(Value value) {
+  std::array<Value, Dim> result{};
+  result.fill(value);
+  return result;
 }
-static double f_rhs(double x, double y) {  // Lap u = -(9+9) pi^2 u
-  return -18.0 * kPi * kPi * u_exact(x, y);
+
+template <class Ranked, int Dim, class Value>
+Ranked ranked(Value value) {
+  Ranked result{};
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = value;
+  return result;
 }
+
+template <int Dim>
+pops::Index<Dim> index_from_ordinal(const pops::Box<Dim>& box, std::size_t ordinal) {
+  pops::Index<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    const auto length = static_cast<std::size_t>(box.length(axis));
+    result[axis] = box.lo[axis] + static_cast<int>(ordinal % length);
+    ordinal /= length;
+  }
+  return result;
+}
+
+template <int Dim>
+std::size_t storage_ordinal(const pops::Box<Dim>& box, const pops::Index<Dim>& index) {
+  std::size_t ordinal = 0;
+  std::size_t stride = 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    ordinal += static_cast<std::size_t>(index[axis] - box.lo[axis]) * stride;
+    stride *= static_cast<std::size_t>(box.length(axis));
+  }
+  return ordinal;
+}
+
+template <int Dim>
+pops::EllipticBuildRequest<Dim> request(const pops::Geometry<Dim>& geometry,
+                                        pops::mesh::BoxArray<Dim> boxes) {
+  pops::Extent<Dim> rank_extent = ranked<pops::Extent<Dim>, Dim>(std::int64_t{1});
+  rank_extent[0] = pops::n_ranks();
+  pops::Index<Dim> local_rank{};
+  local_rank[0] = pops::my_rank();
+  const pops::mesh::RankSpace<Dim> ranks{pops::Index<Dim>{}, rank_extent};
+  const auto distribution = pops::mesh::Distribution<Dim>::replicated(boxes, ranks);
+  std::array<pops::PhysicalBoundaryFace, static_cast<std::size_t>(2 * Dim)> faces{};
+  faces.fill({pops::PhysicalBoundaryKind::dirichlet, pops::Real(0)});
+  pops::RealVector<Dim> spacing{};
+  for (int axis = 0; axis < Dim; ++axis)
+    spacing[axis] = geometry.spacing(axis);
+  const std::size_t pairs = boxes.size() * (boxes.size() - 1) / 2;
+  return {geometry,
+          std::move(boxes),
+          distribution,
+          local_rank,
+          pops::PhysicalBoundaryConditions<Dim>{pops::BoundaryTopology<Dim>::physical(), faces,
+                                                spacing},
+          pops::Extent<Dim>{},
+          ranked<pops::Extent<Dim>, Dim>(std::int64_t{1}),
+          {distribution.box_count(), pairs}};
+}
+
+template <int Dim>
+pops::Geometry<Dim> geometry(int cells) {
+  const pops::Box<Dim> domain{pops::Index<Dim>{}, ranked<pops::Index<Dim>, Dim>(cells - 1)};
+  return pops::Geometry<Dim>::from_bounds(domain, pops::RealVector<Dim>{},
+                                          ranked<pops::RealVector<Dim>, Dim>(pops::Real(1)));
+}
+
+template <int Dim>
+pops::Real exact(const pops::Geometry<Dim>& geometry, const pops::Index<Dim>& index) {
+  const pops::Real pi = std::acos(pops::Real(-1));
+  pops::Real value = pops::Real(1);
+  for (int axis = 0; axis < Dim; ++axis)
+    value *= std::sin(pi * geometry.cell_coordinate(axis, index[axis]));
+  return value;
+}
+
+template <int Dim>
+void fill_rhs(pops::MultiFab<Dim>& rhs, const pops::Geometry<Dim>& geometry,
+              pops::Real reaction = pops::Real(0)) {
+  const pops::Real pi = std::acos(pops::Real(-1));
+  const pops::Real eigenvalue = static_cast<pops::Real>(Dim) * pi * pi + reaction;
+  for (std::size_t local = 0; local < rhs.local_size(); ++local) {
+    auto& fab = rhs.fab(local);
+    auto host = fab.create_host_mirror();
+    for (std::size_t ordinal = 0; ordinal < static_cast<std::size_t>(fab.box().numPts());
+         ++ordinal) {
+      const auto index = index_from_ordinal(fab.box(), ordinal);
+      host(storage_ordinal(fab.grown_box(), index)) = eigenvalue * exact(geometry, index);
+    }
+    fab.copy_from_host(host);
+  }
+}
+
+template <int Dim>
+double error(const pops::MultiFab<Dim>& field, const pops::Geometry<Dim>& geometry,
+             const pops::Box<Dim>& region) {
+  double result = 0;
+  for (std::size_t local = 0; local < field.local_size(); ++local) {
+    const auto overlap = field.box(local).intersect(region);
+    if (overlap.empty())
+      continue;
+    const auto& fab = field.fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    for (std::size_t ordinal = 0; ordinal < static_cast<std::size_t>(overlap.numPts()); ++ordinal) {
+      const auto index = index_from_ordinal(overlap, ordinal);
+      result = std::max(result,
+                        std::abs(static_cast<double>(host(storage_ordinal(fab.grown_box(), index)) -
+                                                     exact(geometry, index))));
+    }
+  }
+  return pops::all_reduce_max(result);
+}
+
+template <int Dim>
+void install_nullspace(pops::elliptic::mg::CompositeFacPoisson<Dim>& solver, int levels) {
+  solver.install_nullspace(
+      pops::FieldNullspacePlan<Dim>{},
+      std::vector<pops::PreparedVectorDistribution<Dim>>(
+          static_cast<std::size_t>(levels), pops::PreparedVectorDistribution<Dim>::replicated()));
+}
+
+template <int Dim>
+struct CompositeFixture {
+  pops::Geometry<Dim> coarse_geometry;
+  pops::Geometry<Dim> fine_geometry;
+  pops::Box<Dim> coarse_region;
+  pops::Box<Dim> fine_patch;
+  pops::elliptic::mg::CompositeFacBuildRequest<Dim> hierarchy;
+};
+
+template <int Dim>
+CompositeFixture<Dim> composite_fixture(int cells) {
+  const auto coarse_geometry = geometry<Dim>(cells);
+  const auto fine_geometry =
+      coarse_geometry.refine(ranked<pops::Extent<Dim>, Dim>(std::int64_t{2}));
+  pops::Index<Dim> coarse_lo{};
+  pops::Index<Dim> coarse_hi{};
+  pops::Index<Dim> fine_lo{};
+  pops::Index<Dim> fine_hi{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    coarse_lo[axis] = cells / 4;
+    coarse_hi[axis] = 3 * cells / 4 - 1;
+    fine_lo[axis] = 2 * coarse_lo[axis];
+    fine_hi[axis] = 2 * coarse_hi[axis] + 1;
+  }
+  const pops::Box<Dim> coarse_region{coarse_lo, coarse_hi};
+  const pops::Box<Dim> fine_patch{fine_lo, fine_hi};
+  const pops::mesh::BoxArray<Dim> coarse_layout(
+      std::vector<pops::Box<Dim>>{coarse_geometry.domain()});
+  const pops::mesh::BoxArray<Dim> fine_layout(std::vector<pops::Box<Dim>>{fine_patch});
+  auto coarse = request(coarse_geometry, coarse_layout);
+  auto fine = request(fine_geometry, fine_layout);
+  return {
+      coarse_geometry,
+      fine_geometry,
+      coarse_region,
+      fine_patch,
+      {{std::move(coarse), std::move(fine)}, {pops::amr::RefinementRatio<Dim>{filled<Dim>(2)}}}};
+}
+
+template <int Dim>
+std::pair<pops::SolveReport, double> solve_composite(int cells, pops::Real reaction,
+                                                     pops::CompositeFacOptions options = {}) {
+  auto fixture = composite_fixture<Dim>(cells);
+  const pops::ExecutionLane lane = pops::ExecutionLane::world("tests.composite-fac.positive");
+  pops::elliptic::mg::CompositeFacPoisson<Dim> solver(std::move(fixture.hierarchy), lane, options,
+                                                      reaction);
+  install_nullspace(solver, 2);
+  fill_rhs(solver.rhs_level(0), fixture.coarse_geometry, reaction);
+  fill_rhs(solver.rhs_level(1), fixture.fine_geometry, reaction);
+  const pops::SolveReport report = solver.solve();
+  return {report, error(solver.phi_level(1), fixture.fine_geometry, fixture.fine_patch.grow(-6))};
+}
+
+template <int Dim>
+void expect_refined_accuracy() {
+  constexpr int cells = 24;
+  auto fixture = composite_fixture<Dim>(cells);
+  const pops::ExecutionLane lane = pops::ExecutionLane::world("tests.composite-fac.accuracy");
+
+  pops::elliptic::mg::GeometricMultigridOptions mg_options;
+  mg_options.relative_tolerance = pops::Real(1e-10);
+  mg_options.maximum_cycles = 100;
+  auto coarse_request = request(
+      fixture.coarse_geometry,
+      pops::mesh::BoxArray<Dim>(std::vector<pops::Box<Dim>>{fixture.coarse_geometry.domain()}));
+  pops::elliptic::mg::GeometricMG<Dim> coarse(std::move(coarse_request), lane, mg_options);
+  coarse.install_nullspace(pops::FieldNullspacePlan<Dim>{},
+                           pops::PreparedVectorDistribution<Dim>::replicated());
+  fill_rhs(coarse.rhs(), fixture.coarse_geometry);
+  const pops::SolveReport coarse_report = coarse.solve();
+  ASSERT_TRUE(coarse_report.solved()) << coarse_report.reason;
+
+  pops::CompositeFacOptions fac_options;
+  fac_options.max_iters = 60;
+  fac_options.fine_sweeps = 80;
+  fac_options.rel_tol = pops::Real(1e-9);
+  pops::elliptic::mg::CompositeFacPoisson<Dim> composite(std::move(fixture.hierarchy), lane,
+                                                         fac_options);
+  install_nullspace(composite, 2);
+  fill_rhs(composite.rhs_level(0), fixture.coarse_geometry);
+  fill_rhs(composite.rhs_level(1), fixture.fine_geometry);
+  const pops::SolveReport fac_report = composite.solve();
+  ASSERT_TRUE(fac_report.solved()) << fac_report.reason;
+
+  const double coarse_error =
+      error(coarse.phi(), fixture.coarse_geometry, fixture.coarse_region.grow(-3));
+  const double fine_error =
+      error(composite.phi_level(1), fixture.fine_geometry, fixture.fine_patch.grow(-6));
+  EXPECT_LT(fine_error, coarse_error)
+      << "refined composite solution must improve the exact-ranked coarse discretization";
+  EXPECT_GT(coarse_error, 0.0);
+}
+
+}  // namespace
 
 TEST(CompositeFacPoissonTest, fine_patch_improves_accuracy_over_coarse_only) {
-  comm_init();
-  const int me = my_rank();
+  expect_refined_accuracy<1>();
+  expect_refined_accuracy<2>();
+  expect_refined_accuracy<3>();
+}
 
-  const int n = 48;  // grossier
-  const int r = 2;
-  Box2D dom = Box2D::from_extents(n, n);
-  Geometry geom_c{dom, 0.0, 1.0, 0.0, 1.0};
-  BoxArray ba_c = BoxArray::from_domain(dom, n);  // mono-box couvrant le domaine
-  DistributionMapping dm_c(ba_c.size(), n_ranks());
-  BCRec bc;
-  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;  // phi = 0 au bord
-
-  // Patch fin sur la moitie centrale grossiere [n/4, 3n/4) -> box fine [2*n/4, 2*3n/4 - 1].
-  const int Ic0 = n / 4, Ic1 = 3 * n / 4 - 1;  // empreinte grossiere du patch
-  Box2D fine_box{{r * Ic0, r * Ic0}, {r * Ic1 + r - 1, r * Ic1 + r - 1}};
-  Geometry geom_f = geom_c.refine(r);
-
-  // --- second membre f aux centres (grossier et fin) ---
-  MultiFab f_c(ba_c, dm_c, 1, 0);
-  for (int li = 0; li < f_c.local_size(); ++li) {
-    Array4 a = f_c.fab(li).array();
-    const Box2D b = f_c.box(li);
-    for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-      for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-        a(i, j, 0) = f_rhs(geom_c.x_cell(i), geom_c.y_cell(j));
-  }
-
-  // --- (1) COARSE-ONLY : un seul solve grossier ---
-  GeometricMG mg0(geom_c, ba_c, bc, {}, FieldDistribution::Replicated);
-  for (int li = 0; li < mg0.rhs().local_size(); ++li) {
-    Array4 a = mg0.rhs().fab(li).array();
-    const ConstArray4 s = f_c.fab(li).const_array();
-    const Box2D b = mg0.rhs().box(li);
-    for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-      for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-        a(i, j, 0) = s(i, j, 0);
-  }
-  mg0.phi().set_val(0.0);
-  mg0.solve(1e-12, 100);
-  device_fence();
-
-  // --- (2) COMPOSITE FAC ---
-  CompositeFacPoisson fac(geom_c, ba_c, bc, fine_box, r);
-  // rhs grossier
-  for (int li = 0; li < fac.rhs_coarse().local_size(); ++li) {
-    Array4 a = fac.rhs_coarse().fab(li).array();
-    const ConstArray4 s = f_c.fab(li).const_array();
-    const Box2D b = fac.rhs_coarse().box(li);
-    for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-      for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-        a(i, j, 0) = s(i, j, 0);
-  }
-  // rhs fin
-  {
-    Array4 a = fac.rhs_fine().fab(0).array();
-    const Box2D b = fac.rhs_fine().box(0);
-    for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-      for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-        a(i, j, 0) = f_rhs(geom_f.x_cell(i), geom_f.y_cell(j));
-  }
-  const Real rfac =
-      fac.solve(/*max_iters=*/40, /*fine_sweeps=*/80, /*rel_tol=*/1e-10, /*abs_tol=*/0.0);
-  device_fence();
-
-  EXPECT_TRUE(std::isfinite(rfac)) << "FAC residu fini: rfac=" << rfac;
-  // residu composite reduit (relatif a l'echelle de f ~ 18pi^2 ~ 178).
-  EXPECT_TRUE(rfac < 1e-2) << "FAC converge (residu composite petit): rfac=" << rfac;
-
-  // --- comparaison dans la zone INTERIEURE du patch (retrecie de 'guard' cellules grossieres) ---
-  const int guard = 3;  // marge en cellules GROSSIERES pour eviter la contamination du bord C-F
-  const int iIc0 = Ic0 + guard, iIc1 = Ic1 - guard;
-  const ConstArray4 PC0 = mg0.phi().fab(0).const_array();  // coarse-only
-  const ConstArray4 PF = fac.phi_fine().fab(0).const_array();
-
-  const double dxc = geom_c.dx(), dxf = geom_f.dx();
-  double e_coarse = 0, e_comp = 0, diff_cf = 0;  // erreur sur phi
-  double eg_optA = 0, eg_comp = 0;               // erreur sur grad phi (la quantite physique ExB)
-  for (int J = iIc0; J <= iIc1; ++J)
-    for (int I = iIc0; I <= iIc1; ++I) {
-      // grad phi GROSSIER au centre (I,J) : centre, = ce qu'Option A injecte (constant par morceaux) aux fins.
-      const double gxc = (PC0(I + 1, J, 0) - PC0(I - 1, J, 0)) / (2 * dxc);
-      const double gyc = (PC0(I, J + 1, 0) - PC0(I, J - 1, 0)) / (2 * dxc);
-      for (int tj = 0; tj < r; ++tj)
-        for (int ti = 0; ti < r; ++ti) {
-          const int iff = r * I + ti, jff = r * J + tj;
-          const double xf = geom_f.x_cell(iff), yf = geom_f.y_cell(jff);
-          const double ue = u_exact(xf, yf);
-          // phi : coarse-only interpole bilineairement aux centres fins ; composite = phi_f.
-          const double pc = detail::fac_bilerp_coarse(PC0, iff, jff, r);
-          const double pf = PF(iff, jff, 0);
-          e_coarse = std::fmax(e_coarse, std::fabs(pc - ue));
-          e_comp = std::fmax(e_comp, std::fabs(pf - ue));
-          diff_cf = std::fmax(diff_cf, std::fabs(pf - pc));
-          // grad phi : Option A (grossier constant par morceaux) vs composite (diff centree FINE).
-          const double gxa = 3.0 * kPi * std::cos(3 * kPi * xf) * std::sin(3 * kPi * yf);
-          const double gya = 3.0 * kPi * std::sin(3 * kPi * xf) * std::cos(3 * kPi * yf);
-          const double gxf = (PF(iff + 1, jff, 0) - PF(iff - 1, jff, 0)) / (2 * dxf);
-          const double gyf = (PF(iff, jff + 1, 0) - PF(iff, jff - 1, 0)) / (2 * dxf);
-          eg_optA = std::fmax(eg_optA, std::fmax(std::fabs(gxc - gxa), std::fabs(gyc - gya)));
-          eg_comp = std::fmax(eg_comp, std::fmax(std::fabs(gxf - gxa), std::fabs(gyf - gya)));
-        }
-    }
-  e_coarse = all_reduce_max(e_coarse);
-  e_comp = all_reduce_max(e_comp);
-  diff_cf = all_reduce_max(diff_cf);
-  eg_optA = all_reduce_max(eg_optA);
-  eg_comp = all_reduce_max(eg_comp);
-
-  if (me == 0)
-    std::printf(
-        "  phi: e_coarse=%.3e e_composite=%.3e (x%.2f)  gradphi: e_optionA=%.3e e_composite=%.3e "
-        "(x%.2f)  rfac=%.2e\n",
-        e_coarse, e_comp, e_coarse / std::fmax(e_comp, 1e-30), eg_optA, eg_comp,
-        eg_optA / std::fmax(eg_comp, 1e-30), rfac);
-
-  EXPECT_TRUE(std::isfinite(e_comp) && std::isfinite(e_coarse))
-      << "erreurs finies: e_comp=" << e_comp << " e_coarse=" << e_coarse;
-  EXPECT_TRUE(rfac < 1e-6)
-      << "(convergence) l'iteration FAC converge (residu composite -> 0): rfac=" << rfac;
-  // CRITERE PRINCIPAL (fidelite) : le patch fin REDUIT l'erreur elliptique dans la zone raffinee.
-  EXPECT_TRUE(e_comp < 0.6 * e_coarse)
-      << "(fidelite phi) patch fin plus precis que coarse-only (e_comp < 0.6 e_coarse): e_comp="
-      << e_comp << " e_coarse=" << e_coarse;
-  // grad phi (la quantite physique de la derive ExB) : composite NETTEMENT meilleur que l'injection
-  // Option A (grad grossier constant par morceaux). C'est ce que le couplage elliptique raffine gagne.
-  EXPECT_TRUE(eg_comp < 0.5 * eg_optA)
-      << "(fidelite grad phi) composite plus precis qu'injection Option A (eg_comp < 0.5 eg_optA): "
-         "eg_comp="
-      << eg_comp << " eg_optA=" << eg_optA;
-  // le patch CHANGE effectivement la solution (pas un no-op / pas une simple injection coarse).
-  EXPECT_TRUE(diff_cf > 1e-4)
-      << "le patch fin change la solution (composite != coarse interpole): diff_cf=" << diff_cf;
-
-  if (me == 0)
-    std::printf("OK test_composite_fac_poisson\n");
-  comm_finalize();
+TEST(CompositeFacPoissonTest, resolved_candidate_keeps_relative_stop_on_the_forcing) {
+  auto fixture = composite_fixture<2>(24);
+  const pops::ExecutionLane lane =
+      pops::ExecutionLane::world("tests.composite-fac.resolved-candidate");
+  pops::elliptic::mg::CompositeFacPoisson<2> solver(std::move(fixture.hierarchy), lane);
+  install_nullspace(solver, 2);
+  fill_rhs(solver.rhs_level(0), fixture.coarse_geometry);
+  fill_rhs(solver.rhs_level(1), fixture.fine_geometry);
+  const pops::SolveReport first = solver.solve();
+  ASSERT_TRUE(first.solved()) << first.reason;
+  const pops::SolveReport again = solver.solve();
+  ASSERT_TRUE(again.solved()) << again.reason << " iters=" << again.iters
+                              << " rel=" << again.rel_residual;
+  EXPECT_EQ(again.reason, "composite_fac_initial_residual");
+  EXPECT_EQ(again.iters, 0);
 }
 
 TEST(CompositeFacPoissonTest, constant_reaction_matches_screened_mms_on_both_fac_paths) {
-  comm_init();
-  const int n = 32;
-  const int r = 2;
-  const Real reaction = Real(40);
-  const Box2D dom = Box2D::from_extents(n, n);
-  const Geometry geom_c{dom, 0.0, 1.0, 0.0, 1.0};
-  const Geometry geom_f = geom_c.refine(r);
-  const BoxArray ba_c = BoxArray::from_domain(dom, n);
-  BCRec bc;
-  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
-  const int Ic0 = n / 4, Ic1 = 3 * n / 4 - 1;
-  const Box2D fine_box{{r * Ic0, r * Ic0}, {r * Ic1 + r - 1, r * Ic1 + r - 1}};
-
-  auto solve_screened = [&](bool force_general) {
-    CompositeFacPoisson fac(geom_c, ba_c, bc, fine_box, r);
-    fac.set_reaction(reaction);
-    fac.force_general_path_for_test(force_general);
-    auto native_rhs = [&](Real x, Real y) {
-      // Public: -lap(u) + kappa*u = (18*pi^2+kappa)u. CompositeFAC stores the
-      // native sign-equivalent equation lap(u)-kappa*u = -(18*pi^2+kappa)u.
-      return -(Real(18) * Real(kPi) * Real(kPi) + reaction) *
-             Real(u_exact(static_cast<double>(x), static_cast<double>(y)));
-    };
-    for (int li = 0; li < fac.rhs_coarse().local_size(); ++li) {
-      Array4 rhs = fac.rhs_coarse().fab(li).array();
-      const Box2D box = fac.rhs_coarse().box(li);
-      for (int j = box.lo[1]; j <= box.hi[1]; ++j)
-        for (int i = box.lo[0]; i <= box.hi[0]; ++i)
-          rhs(i, j, 0) = native_rhs(geom_c.x_cell(i), geom_c.y_cell(j));
-    }
-    for (int li = 0; li < fac.rhs_fine().local_size(); ++li) {
-      Array4 rhs = fac.rhs_fine().fab(li).array();
-      const Box2D box = fac.rhs_fine().box(li);
-      for (int j = box.lo[1]; j <= box.hi[1]; ++j)
-        for (int i = box.lo[0]; i <= box.hi[0]; ++i)
-          rhs(i, j, 0) = native_rhs(geom_f.x_cell(i), geom_f.y_cell(j));
-    }
-
-    const Real residual = fac.solve(/*max_iters=*/60, /*fine_sweeps=*/100,
-                                    /*rel_tol=*/Real(1e-10), /*abs_tol=*/Real(0));
-    device_fence();
-    double error = 0.0;
-    const int guard = 3;
-    for (int li = 0; li < fac.phi_fine().local_size(); ++li) {
-      const ConstArray4 phi = fac.phi_fine().fab(li).const_array();
-      const Box2D box = fac.phi_fine().box(li);
-      for (int j = box.lo[1] + r * guard; j <= box.hi[1] - r * guard; ++j)
-        for (int i = box.lo[0] + r * guard; i <= box.hi[0] - r * guard; ++i)
-          error = std::fmax(error,
-                            std::fabs(phi(i, j, 0) - u_exact(geom_f.x_cell(i), geom_f.y_cell(j))));
-    }
-    return std::pair<double, double>{all_reduce_max(static_cast<double>(residual)),
-                                     all_reduce_max(error)};
-  };
-
-  const auto legacy = solve_screened(/*force_general=*/false);
-  const auto general = solve_screened(/*force_general=*/true);
-  EXPECT_LT(legacy.first, 1e-5);
-  EXPECT_LT(general.first, 1e-5);
-  // Omitting kappa or using the public RHS without the native sign conversion yields O(1e-1)
-  // amplitude error for this reaction. This bound is therefore a direct sign/carrier regression.
-  EXPECT_LT(legacy.second, 3e-2);
-  EXPECT_LT(general.second, 3e-2);
-  comm_finalize();
+  for (const pops::Real reaction : {pops::Real(0), pops::Real(40)}) {
+    const auto [report1, error1] = solve_composite<1>(24, reaction);
+    const auto [report2, error2] = solve_composite<2>(24, reaction);
+    const auto [report3, error3] = solve_composite<3>(16, reaction);
+    EXPECT_TRUE(report1.solved()) << report1.reason;
+    EXPECT_TRUE(report2.solved()) << report2.reason;
+    EXPECT_TRUE(report3.solved()) << report3.reason;
+    EXPECT_LT(error1, 5e-2);
+    EXPECT_LT(error2, 5e-2);
+    EXPECT_LT(error3, 8e-2);
+  }
 }
 
-// set_options(CompositeFacOptions{}) + no-argument solve() matches the explicit default contract.
-// solve(kFACDefaultMaxIters, kFACDefaultFineSweeps, kFACDefaultRelTol, kFACDefaultAbsTol) -- the
-// installed-options path
-// defaults to the kFAC* constants. An override changes the composite residual (the knobs are read).
-TEST(CompositeFacPoissonTest, installed_options_default_matches_explicit_solve) {
-  comm_init();
-  const int n = 32, r = 2;
-  Box2D dom = Box2D::from_extents(n, n);
-  Geometry geom_c{dom, 0.0, 1.0, 0.0, 1.0};
-  BoxArray ba_c = BoxArray::from_domain(dom, n);
-  DistributionMapping dm_c(ba_c.size(), n_ranks());
-  BCRec bc;
-  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
-  const int Ic0 = n / 4, Ic1 = 3 * n / 4 - 1;
-  Box2D fine_box{{r * Ic0, r * Ic0}, {r * Ic1 + r - 1, r * Ic1 + r - 1}};
-  Geometry geom_f = geom_c.refine(r);
+TEST(CompositeFacPoissonTest, installed_options_strictly_control_iteration_outcome) {
+  pops::CompositeFacOptions limited;
+  limited.max_iters = 1;
+  limited.fine_sweeps = 1;
+  limited.rel_tol = pops::Real(1e-14);
+  const auto [limited_report, limited_error] = solve_composite<2>(24, pops::Real(0), limited);
+  EXPECT_EQ(limited_report.status, pops::SolveStatus::kIterationLimit);
+  EXPECT_FALSE(limited_report.solved());
 
-  auto fill = [&](CompositeFacPoisson& fac) {
-    for (int li = 0; li < fac.rhs_coarse().local_size(); ++li) {
-      Array4 a = fac.rhs_coarse().fab(li).array();
-      const Box2D b = fac.rhs_coarse().box(li);
-      for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-        for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-          a(i, j, 0) = f_rhs(geom_c.x_cell(i), geom_c.y_cell(j));
-    }
-    Array4 af = fac.rhs_fine().fab(0).array();
-    const Box2D bf = fac.rhs_fine().box(0);
-    for (int j = bf.lo[1]; j <= bf.hi[1]; ++j)
-      for (int i = bf.lo[0]; i <= bf.hi[0]; ++i)
-        af(i, j, 0) = f_rhs(geom_f.x_cell(i), geom_f.y_cell(j));
-  };
-
-  CompositeFacPoisson explicit_fac(geom_c, ba_c, bc, fine_box, r);
-  fill(explicit_fac);
-  const Real r_explicit = explicit_fac.solve(kFACDefaultMaxIters, kFACDefaultFineSweeps,
-                                             kFACDefaultRelTol, kFACDefaultAbsTol);
-
-  CompositeFacPoisson installed_fac(geom_c, ba_c, bc, fine_box, r);
-  fill(installed_fac);
-  installed_fac.set_options(CompositeFacOptions{});  // defaults = kFAC*
-  const Real r_installed = installed_fac.solve();    // no-argument overload reads the options
-
-  EXPECT_EQ(r_explicit, r_installed) << "default installed options must match the explicit solve";
-
-  // A tighter composite tolerance + more iterations reaches a strictly smaller residual (knobs read).
-  CompositeFacPoisson tuned_fac(geom_c, ba_c, bc, fine_box, r);
-  fill(tuned_fac);
-  CompositeFacOptions tuned;
+  pops::CompositeFacOptions tuned;
   tuned.max_iters = 60;
-  tuned.rel_tol = Real(1e-12);
-  tuned_fac.set_options(tuned);
-  const Real r_tuned = tuned_fac.solve();
-  EXPECT_TRUE(std::isfinite(r_tuned));
-  EXPECT_LE(r_tuned, r_explicit) << "a tighter tol / more iters cannot worsen the residual";
-
-  comm_finalize();
+  tuned.fine_sweeps = 80;
+  tuned.rel_tol = pops::Real(1e-10);
+  const auto [tuned_report, tuned_error] = solve_composite<2>(24, pops::Real(0), tuned);
+  EXPECT_TRUE(tuned_report.solved()) << tuned_report.reason;
+  EXPECT_LT(tuned_report.rel_residual, limited_report.rel_residual);
+  EXPECT_LT(tuned_error, limited_error)
+      << "the installed controls must produce a strictly better accepted field";
 }
 
 TEST(CompositeFacPoissonTest, nonfinite_composite_residual_fails_closed) {
-  comm_init();
-  const int n = 16, r = 2;
-  const Box2D dom = Box2D::from_extents(n, n);
-  const Geometry geom_c{dom, 0.0, 1.0, 0.0, 1.0};
-  const BoxArray ba_c = BoxArray::from_domain(dom, n);
-  BCRec bc;
-  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
-  const Box2D fine_box{{n / 2, n / 2}, {n - 1, n - 1}};
-  CompositeFacPoisson fac(geom_c, ba_c, bc, fine_box, r);
-
-  fac.rhs_coarse().fab(0).array()(1, 1, 0) = std::numeric_limits<Real>::quiet_NaN();
-  const Real residual = fac.solve(/*max_iters=*/0, /*fine_sweeps=*/0,
-                                  /*rel_tol=*/Real(1e-8), /*abs_tol=*/Real(0));
-  const SolveReport& report = fac.last_solve_report();
-  EXPECT_TRUE(std::isinf(residual));
-  EXPECT_EQ(report.iters, 0);
-  EXPECT_EQ(report.status, SolveStatus::kInvalidEvaluation);
-  EXPECT_EQ(report.action, SolveAction::kRejectAttempt);
-
-  comm_finalize();
+  auto fixture = composite_fixture<2>(16);
+  const pops::ExecutionLane lane = pops::ExecutionLane::world("tests.composite-fac.nonfinite");
+  pops::elliptic::mg::CompositeFacPoisson<2> solver(std::move(fixture.hierarchy), lane);
+  install_nullspace(solver, 2);
+  auto& fab = solver.rhs_level(0).fab(0);
+  auto host = fab.create_host_mirror();
+  fab.copy_to_host(host);
+  host(0) = std::numeric_limits<pops::Real>::quiet_NaN();
+  fab.copy_from_host(host);
+  const pops::SolveReport report = solver.solve();
+  EXPECT_EQ(report.status, pops::SolveStatus::kInvalidEvaluation);
+  EXPECT_EQ(report.action, pops::SolveAction::kFailRun);
 }

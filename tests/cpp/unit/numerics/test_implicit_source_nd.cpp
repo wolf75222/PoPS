@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>
+#include <pops/parallel/execution_lane.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -80,7 +81,8 @@ void check_ranked_implicit_provider() {
 
   NewtonOptions options{};
   const auto provider_at = [](std::size_t) { return ProviderStorageView<Dim, 0>{}; };
-  auto outcome = backward_euler_source(Model{}, provider_at, state, Real(0.25), options);
+  const ExecutionLane lane = ExecutionLane::world("pops.test.implicit-source-nd.provider");
+  auto outcome = backward_euler_source(Model{}, provider_at, state, Real(0.25), options, lane);
   ASSERT_TRUE(outcome.report().solved()) << outcome.report().reason;
   const SolveReport accepted = outcome.consume(SolveConsumption::kAccept);
   EXPECT_TRUE(accepted.solved());
@@ -112,7 +114,8 @@ void check_ranked_failure_collective() {
   host(host_offset(statistics.fab(0).grown_box(), competitor, 8)) = Real(1);
   statistics.fab(0).copy_from_host(host);
 
-  const auto location = collective_first_local_nonlinear_failure(statistics, 7, 12, 8);
+  const ExecutionLane lane = ExecutionLane::world("pops.test.implicit-source-nd.failure");
+  const auto location = collective_first_local_nonlinear_failure(statistics, 7, 12, 8, lane);
   ASSERT_TRUE(location.found);
   EXPECT_EQ(location.priority, 7);
   EXPECT_EQ(location.component, 4);

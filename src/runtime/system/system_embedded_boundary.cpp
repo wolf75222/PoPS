@@ -5,8 +5,10 @@
 
 #include "system_impl.hpp"
 
+#include <array>
 #include <cmath>
 #include <cstdint>
+#include <exception>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -15,38 +17,6 @@
 
 namespace pops {
 namespace {
-
-template <int Dim>
-struct CutCellSystemCapability {
-  static void require(runtime::system::PreparedEmbeddedBoundaryMode mode) {
-    if (mode == runtime::system::PreparedEmbeddedBoundaryMode::cut_cell)
-      throw std::invalid_argument(
-          "cut-cell transport has no exact native provider for this spatial rank");
-  }
-};
-
-template <>
-struct CutCellSystemCapability<2> {
-  static void require(runtime::system::PreparedEmbeddedBoundaryMode) noexcept {}
-};
-
-template <int Dim>
-struct DiscLevelSetCapability {
-  static std::pair<std::vector<std::string>, std::vector<double>> make(double, double, double) {
-    throw std::invalid_argument("Disc is an exact rank-two authoring capability");
-  }
-};
-
-template <>
-struct DiscLevelSetCapability<2> {
-  static std::pair<std::vector<std::string>, std::vector<double>> make(double cx, double cy,
-                                                                       double radius) {
-    if (!std::isfinite(cx) || !std::isfinite(cy) || !std::isfinite(radius) || !(radius > 0.0))
-      throw std::invalid_argument("disc center and positive radius must be finite");
-    return {{"x", "constant", "sub", "y", "constant", "sub", "hypot", "constant", "sub"},
-            {0.0, cx, 0.0, 0.0, cy, 0.0, 0.0, radius, 0.0}};
-  }
-};
 
 EbThresholds resolved_eb_thresholds(double kappa_min, double face_open_eps, double cut_theta_min) {
   EbThresholds result;
@@ -74,7 +44,6 @@ void System<Dim>::set_analytic_level_set(const std::vector<std::string>& opcodes
                                          double face_open_eps, double cut_theta_min) {
   require_assembling(p_->lifecycle_, "set_analytic_level_set");
   const auto prepared_mode = runtime::system::parse_prepared_embedded_boundary_mode(mode);
-  CutCellSystemCapability<Dim>::require(prepared_mode);
   const EbThresholds thresholds = resolved_eb_thresholds(kappa_min, face_open_eps, cut_theta_min);
   const std::uint64_t generation =
       next_embedded_boundary_generation(p_->embedded_boundary_generation_);
@@ -98,17 +67,9 @@ void System<Dim>::set_analytic_level_set(const std::vector<std::string>& opcodes
 }
 
 template <int Dim>
-void System<Dim>::set_disc_domain(double cx, double cy, double radius, const std::string& mode,
-                                  double kappa_min, double face_open_eps, double cut_theta_min) {
-  auto [opcodes, literals] = DiscLevelSetCapability<Dim>::make(cx, cy, radius);
-  set_analytic_level_set(opcodes, literals, mode, kappa_min, face_open_eps, cut_theta_min);
-}
-
-template <int Dim>
 void System<Dim>::set_geometry_mode(const std::string& mode) {
   require_assembling(p_->lifecycle_, "set_geometry_mode");
   const auto prepared_mode = runtime::system::parse_prepared_embedded_boundary_mode(mode);
-  CutCellSystemCapability<Dim>::require(prepared_mode);
   if (!p_->embedded_boundary_) {
     if (prepared_mode == runtime::system::PreparedEmbeddedBoundaryMode::inactive)
       return;
@@ -127,7 +88,7 @@ void System<Dim>::set_geometry_mode(const std::string& mode) {
 }
 
 template <int Dim>
-std::vector<double> System<Dim>::disc_mask() const {
+std::vector<double> System<Dim>::embedded_boundary_mask() const {
   if (p_->embedded_boundary_)
     return p_->blocks_.copy_comp0(p_->embedded_boundary_->active_mask());
   MultiFab<Dim> active(p_->ba, p_->dm, p_->local_rank, 1, Extent<Dim>{});
@@ -135,13 +96,69 @@ std::vector<double> System<Dim>::disc_mask() const {
   return p_->blocks_.copy_comp0(active);
 }
 
+template <int Dim>
+const MultiFab<Dim>* System<Dim>::prepared_program_block_active_mask_(
+    int runtime_block, const MultiFab<Dim>& field, const ExecutionLane& lane) const {
+  const ExecutionLane& prepared = prepared_boundary_execution_lane();
+  if (all_reduce_max(&lane == &prepared ? 0L : 1L, prepared) != 0)
+    throw std::invalid_argument(
+        "System pointwise active-mask provider requires its authenticated execution lane");
+
+  const runtime::system::PreparedEmbeddedBoundaryGeometry<Dim>* embedded = nullptr;
+  long local_error = 0;
+  try {
+    if (runtime_block < 0 || runtime_block >= p_->blocks_.size())
+      throw std::out_of_range("System pointwise active-mask block index is out of range");
+    const MultiFab<Dim>& state = p_->sp[static_cast<std::size_t>(runtime_block)].U;
+    if (field.layout() != state.layout() || field.distribution() != state.distribution() ||
+        field.local_rank() != state.local_rank() || field.local_size() != state.local_size())
+      throw std::invalid_argument(
+          "System pointwise active-mask field differs from its exact block layout");
+    embedded = p_->embedded_boundary_.get();
+    if (embedded != nullptr) {
+      const MultiFab<Dim>& mask = embedded->active_mask();
+      if (mask.ncomp() != 1 || field.layout() != mask.layout() ||
+          field.distribution() != mask.distribution() || field.local_rank() != mask.local_rank() ||
+          field.local_size() != mask.local_size())
+        throw std::invalid_argument(
+            "System pointwise active-mask geometry differs from its exact block layout");
+    }
+  } catch (...) {
+    local_error = 1;
+  }
+  if (all_reduce_max(local_error, lane) != 0)
+    throw std::invalid_argument("System pointwise active-mask preparation failed collectively");
+
+  const long local_mode =
+      embedded == nullptr ? -1L : static_cast<long>(static_cast<unsigned char>(embedded->mode()));
+  const std::uint64_t local_generation = embedded == nullptr ? 0U : embedded->generation();
+  const std::array<long, 4> generation_words{
+      static_cast<long>((local_generation >> 0U) & 0xffffU),
+      static_cast<long>((local_generation >> 16U) & 0xffffU),
+      static_cast<long>((local_generation >> 32U) & 0xffffU),
+      static_cast<long>((local_generation >> 48U) & 0xffffU),
+  };
+  if (all_reduce_min(local_mode, lane) != all_reduce_max(local_mode, lane))
+    throw std::runtime_error("System pointwise active-mask mode differs across ranks");
+  for (const long word : generation_words)
+    if (all_reduce_min(word, lane) != all_reduce_max(word, lane))
+      throw std::runtime_error("System pointwise active-mask generation differs across ranks");
+
+  if (embedded == nullptr ||
+      embedded->mode() == runtime::system::PreparedEmbeddedBoundaryMode::inactive)
+    return nullptr;
+  return &embedded->active_mask();
+}
+
 template void System<kNativeDimension>::set_analytic_level_set(const std::vector<std::string>&,
                                                                const std::vector<double>&,
                                                                const std::string&, double, double,
                                                                double);
-template void System<kNativeDimension>::set_disc_domain(double, double, double, const std::string&,
-                                                        double, double, double);
 template void System<kNativeDimension>::set_geometry_mode(const std::string&);
-template std::vector<double> System<kNativeDimension>::disc_mask() const;
+template std::vector<double> System<kNativeDimension>::embedded_boundary_mask() const;
+template const MultiFab<kNativeDimension>*
+System<kNativeDimension>::prepared_program_block_active_mask_(int,
+                                                              const MultiFab<kNativeDimension>&,
+                                                              const ExecutionLane&) const;
 
 }  // namespace pops

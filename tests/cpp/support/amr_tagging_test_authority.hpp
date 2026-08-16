@@ -92,6 +92,28 @@ inline void install_prepared_threshold_union(
                                std::move(clock_identity), std::move(provider_identity));
 }
 
+/// Exact two-sided test authority: refine strictly above and coarsen strictly below the same
+/// threshold.  Unlike the union helper, this can contract an already-full child hierarchy.
+template <int Dim>
+inline void install_prepared_refine_coarsen_threshold(
+    AmrSystem<Dim>& system, const PreparedNamedThresholdTag& refine,
+    const PreparedNamedThresholdTag& coarsen,
+    std::string provider_identity = "test::prepared-refine-coarsen-threshold@1") {
+  if (refine.relation != PreparedThresholdRelation::Above ||
+      coarsen.relation != PreparedThresholdRelation::Below || refine.block != coarsen.block ||
+      refine.variable != coarsen.variable)
+    throw std::invalid_argument(
+        "test refine/coarsen authority requires matching above/below roots");
+  const std::string state = refine.state_identity.empty() ? direct_amr_state_identity(refine.block)
+                                                          : refine.state_identity;
+  system.set_bootstrap_tagging(
+      {"state", "state"}, {state, state}, {refine.block, coarsen.block},
+      {refine.variable, coarsen.variable}, {-1, -1}, {POPS_TAGGING_ABOVE_V1, POPS_TAGGING_BELOW_V1},
+      {refine.threshold, coarsen.threshold}, {-1, -1}, {}, {POPS_TAGGING_ABOVE_V1}, {0},
+      {POPS_TAGGING_BELOW_V1}, {1}, 0, "hold", "error", "test::prepared-tagging-clock",
+      std::move(provider_identity));
+}
+
 template <int Dim>
 inline void install_prepared_thresholds_and_shared_aux_gradient(
     AmrSystem<Dim>& system, std::initializer_list<PreparedNamedThresholdTag> criteria,

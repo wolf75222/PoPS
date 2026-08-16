@@ -208,6 +208,8 @@ def build_requirements(compiled: Any) -> Any:
             artifact.platform_manifest.capabilities["supported_dimensions"].require(
                 "compiled.platform.supported_dimensions")),
         "amr_refinement_ratio": runtime["amr_refinement_ratio"],
+        "amr_refinement_ratio_selection": runtime["amr_refinement_ratio_selection"],
+        "amr_refinement_ratio_rank": runtime["amr_refinement_ratio_rank"],
         "precision": runtime["precision"],
         "communicator": runtime["communicator"],
         "supports_custom_communicator": runtime["supports_custom_communicator"],

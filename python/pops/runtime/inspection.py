@@ -262,12 +262,25 @@ def _bound_snapshot(sim: Any) -> Any:
 def _history(sim: Any) -> Any:
     rows = []
     for name in _call(sim, "history_names", []) or []:
-        rows.append({
+        row = {
             "name": name,
             "depth": _call(sim, "history_depth", None, name),
             "ncomp": _call(sim, "history_ncomp", None, name),
-            "initialized": _call(sim, "history_initialized", None, name),
-        })
+        }
+        levels = _call(sim, "history_levels", None, name)
+        if levels is None:
+            row["initialized"] = _call(sim, "history_initialized", None, name)
+            row["fill_count"] = _call(sim, "history_fill_count", None, name)
+        else:
+            row["levels"] = [
+                {
+                    "level": int(level),
+                    "initialized": _call(sim, "history_initialized", None, name, int(level)),
+                    "fill_count": _call(sim, "history_fill_count", None, name, int(level)),
+                }
+                for level in levels
+            ]
+        rows.append(row)
     return rows
 
 

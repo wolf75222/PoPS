@@ -11,7 +11,7 @@ from pathlib import Path, PurePosixPath
 import sys
 import threading
 from types import ModuleType
-from typing import Any
+from typing import Any, Literal, Protocol, cast, overload
 
 
 _UNSELECTED = "unselected"
@@ -35,6 +35,12 @@ class _Variant:
     abi_key: str
     has_mpi: bool
     has_kokkos: bool
+
+
+class _PopsPackage(Protocol):
+    """The package-local extension binding established by this selector."""
+
+    _pops: ModuleType
 
 
 def _exact_dimension(value: Any, *, where: str) -> int:
@@ -256,7 +262,11 @@ def select_native_dimension(dimension: Any) -> ModuleType:
             _verify_collective_identity(module, variant)
             package = sys.modules.get("pops")
             if package is not None:
-                package._pops = module
+                # ``pops`` intentionally exposes the authenticated extension only after
+                # selector verification.  ``ModuleType`` has no declared ``_pops`` member,
+                # so narrow to the package-local binding contract before publishing it.
+                package_binding = cast(_PopsPackage, package)
+                package_binding._pops = module
             _MODULE = module
             _DIMENSION = selected_dimension
             _STATE = _SELECTED
@@ -274,6 +284,18 @@ def select_native_dimension(dimension: Any) -> ModuleType:
             _FAILURE = exc
             _STATE = _POISONED
             raise
+
+
+@overload
+def selected_native_module(*, required: Literal[True]) -> ModuleType: ...
+
+
+@overload
+def selected_native_module(*, required: Literal[False] = False) -> ModuleType | None: ...
+
+
+@overload
+def selected_native_module(*, required: bool) -> ModuleType | None: ...
 
 
 def selected_native_module(*, required: bool = False) -> ModuleType | None:

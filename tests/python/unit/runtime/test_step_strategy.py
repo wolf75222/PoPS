@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import ClassVar
@@ -19,11 +20,11 @@ from pops.runtime._step_strategy import (
     StepController,
     StepAttemptRejected,
     _phase,
+    prepare_program_run,
     prepare_step_controller,
     register_step_controller_factory,
     resolve_run_strategy,
     run_control_payload,
-    run_step_attempt,
 )
 from pops.runtime._system import System
 from pops.runtime._temporal_restart import TemporalRestartState
@@ -137,34 +138,59 @@ def test_resolve_requires_the_installed_authored_strategy():
     assert resolve_run_strategy(_Engine(authored)) is authored
 
 
+def test_prepared_program_run_retains_exact_strategy_and_detached_controls():
+    strategy = ExternalTimeGrid("forcing_times")
+    engine = _Engine(strategy)
+    caller_grid = [0.0, 0.125, 0.5]
+
+    prepared = prepare_program_run(engine, {"forcing_times": caller_grid})
+    caller_grid[1] = 0.25
+
+    assert prepared.strategy is strategy
+    assert prepared.controls["forcing_times"] == (0.0, 0.125, 0.5)
+    assert prepared.restart_payload == {
+        "strategy": run_control_payload(strategy, {"forcing_times": [0.0, 0.125, 0.5]}),
+        "program_schedule": None,
+    }
+    native = _Native()
+    engine._step_transaction_plan = object()
+    with pytest.raises(RuntimeError, match="transaction plan changed"):
+        prepared.run_step(native, t_end=0.5)
+    assert native.calls == []
+    assert engine._step_controller is None
+
+    engine._step_transaction_plan = prepared.transaction_plan
+    prepared.run_step(native, t_end=0.5)
+
+
 def test_all_four_controllers_execute_real_native_attempts():
     fixed_native = _Native()
-    fixed_report = run_step_attempt(
-        _Engine(), fixed_native, FixedDt(0.1), t_end=1.0)
+    fixed_report = prepare_program_run(_Engine(FixedDt(0.1))).run_step(
+        fixed_native, t_end=1.0)
     assert fixed_report.attempts == 1
     assert fixed_native.calls == [("step", 0.1)]
 
     cfl_native = _Native()
-    cfl_report = run_step_attempt(
-        _Engine(), cfl_native, AdaptiveCFL(0.4, max_dt=0.2), t_end=1.0,
-        controls={"dt_min": 0.01, "dt_max": 0.15})
+    cfl_report = prepare_program_run(
+        _Engine(AdaptiveCFL(0.4, max_dt=0.2)),
+        {"dt_min": 0.01, "dt_max": 0.15},
+    ).run_step(cfl_native, t_end=1.0)
     assert cfl_report.attempts == 1
     assert cfl_native.calls == [("step_cfl", 0.4, 0.15, 0.01)]
     assert cfl_native.time() == 0.15
 
     error_native = _Native(reject=1)
-    error_engine = _Engine()
-    error_report = run_step_attempt(
-        error_engine, error_native, _error_strategy(), t_end=1.0)
+    error_engine = _Engine(_error_strategy())
+    error_report = prepare_program_run(error_engine).run_step(error_native, t_end=1.0)
     assert error_report.attempts == 2
     assert error_native.calls == [("step", 0.2), ("step", 0.1)]
     assert error_native.time() == 0.1
 
     grid_native = _Native()
     grid = ExternalTimeGrid("forcing_times")
-    grid_report = run_step_attempt(
-        _Engine(), grid_native, grid, t_end=0.5,
-        controls={"forcing_times": [0.0, 0.125, 0.5]})
+    grid_report = prepare_program_run(
+        _Engine(grid), {"forcing_times": [0.0, 0.125, 0.5]}
+    ).run_step(grid_native, t_end=0.5)
     assert grid_report.attempts == 1
     assert grid_native.calls == [("step", 0.125)]
 
@@ -176,20 +202,56 @@ def test_fixed_dt_merges_a_roundoff_equivalent_final_landing():
     assert native.time() < 0.14
     remaining = 0.14 - native.time()
 
-    report = run_step_attempt(
-        _Engine(), native, FixedDt(0.01), t_end=0.14
-    )
+    report = prepare_program_run(_Engine(FixedDt(0.01))).run_step(native, t_end=0.14)
 
     assert report.attempts == 1
     assert native.time() == 0.14
     assert native.calls[-1] == ("step", remaining)
 
 
+def test_fixed_dt_preserves_authored_interval_when_binary64_sum_lands_exactly():
+    native = _Native()
+    native.step(0.01)
+    native.step(0.01)
+    remaining = 0.03 - native.time()
+    assert remaining != 0.01
+
+    report = prepare_program_run(_Engine(FixedDt(0.01))).run_step(native, t_end=0.03)
+
+    assert report.attempts == 1
+    assert native.calls[-1] == ("step", 0.01)
+    assert native.time() == 0.03
+
+
+def test_fixed_dt_refuses_a_nonadvancing_terminal_equality():
+    native = _Native()
+    native.t = float(2**53)
+    assert native.time() + 0.1 == native.time()
+
+    with pytest.raises(RuntimeError, match="no positive interval"):
+        prepare_program_run(_Engine(FixedDt(0.1))).run_step(native, t_end=native.time())
+
+    assert native.calls == []
+
+
+def test_fixed_dt_refuses_a_positive_interval_below_the_current_time_ulp():
+    native = _Native()
+    native.t = float(2**53)
+    assert native.time() + 0.1 == native.time()
+
+    with pytest.raises(RuntimeError, match="does not advance binary64 time"):
+        prepare_program_run(_Engine(FixedDt(0.1))).run_step(
+            native, t_end=native.time() + 16.0
+        )
+
+    assert native.calls == []
+
+
 def test_error_controlled_exhaustion_preserves_rejection_and_exact_attempt_count():
     native = _Native(reject=4)
-    engine = _Engine()
+    engine = _Engine(_error_strategy())
     with pytest.raises(StepAttemptRejected):
-        run_step_attempt(engine, native, _error_strategy(), t_end=1.0)
+        prepare_program_run(engine).run_step(native, t_end=1.0)
     assert engine._last_step_transaction_report.status == "rejected"
     assert engine._last_step_transaction_report.phase == "guard"
     assert engine._last_step_transaction_report.attempts == 4
@@ -223,10 +285,9 @@ def test_error_controller_preserves_both_dispositions_without_changing_retry_pol
             raise error
 
     native = RejectingNative()
-    engine = _Engine()
+    engine = _Engine(_error_strategy(max_rejections=1))
     with pytest.raises(StepAttemptRejected) as caught:
-        run_step_attempt(
-            engine, native, _error_strategy(max_rejections=1), t_end=1.0)
+        prepare_program_run(engine).run_step(native, t_end=1.0)
 
     assert native.calls == [("step", 0.2), ("step", 0.1)]
     assert caught.value.disposition == disposition
@@ -248,12 +309,22 @@ def test_controls_are_validated_before_controller_or_manifest_publication():
     ]
 
 
-def test_controller_identity_normalizes_external_grid_list_and_tuple():
+def test_controller_identity_normalizes_controls_but_rejects_a_failed_run_clone():
     strategy = ExternalTimeGrid("grid")
     engine = SimpleNamespace(_step_controller=None)
     first = prepare_step_controller(engine, strategy, {"grid": [0.0, 1.0]})
     second = prepare_step_controller(engine, strategy, {"grid": (0.0, 1.0)})
     assert second is first
+    # RuntimeInstance restores this shape after an entry-run failure.  Its strategy compares equal
+    # but cannot become the authority for a later prepared run.
+    restored = deepcopy(first)
+    assert restored.strategy == strategy
+    assert restored.strategy is not strategy
+    engine._step_controller = restored
+    rerun = prepare_step_controller(engine, strategy, {"grid": (0.0, 1.0)})
+    assert rerun is not first
+    assert rerun is not restored
+    assert rerun.strategy is strategy
 
 
 def test_error_controller_restores_the_exact_next_proposal_after_restart():
@@ -266,6 +337,7 @@ def test_error_controller_restores_the_exact_next_proposal_after_restart():
         dt=0.1 * strategy.growth, time=0.0, macro_step=0)
     temporal._restored_pending = True
     engine = SimpleNamespace(
+        _step_strategy=strategy,
         _step_controller=None,
         _temporal_restart_state=temporal,
         _step_transaction_plan=None,
@@ -275,7 +347,7 @@ def test_error_controller_restores_the_exact_next_proposal_after_restart():
 
     assert controller.next_dt == pytest.approx(0.15)
     native = _Native()
-    run_step_attempt(engine, native, strategy, t_end=1.0)
+    prepare_program_run(engine).run_step(native, t_end=1.0)
     assert native.calls == [("step", pytest.approx(0.15))]
 
 
@@ -330,6 +402,7 @@ def test_error_controller_queue_head_drives_attempt_replacement_and_next_decisio
     temporal.begin_run(
         run_control_payload(strategy), time=0.0, macro_step=0)
     engine = SimpleNamespace(
+        _step_strategy=strategy,
         _step_controller=None,
         _temporal_restart_state=temporal,
         _step_transaction_plan=None,
@@ -337,7 +410,7 @@ def test_error_controller_queue_head_drives_attempt_replacement_and_next_decisio
     )
     native = _Native(reject=1)
 
-    report = run_step_attempt(engine, native, strategy, t_end=1.0)
+    report = prepare_program_run(engine).run_step(native, t_end=1.0)
 
     assert report.attempts == 2
     assert native.calls == [("step", 0.2), ("step", 0.1)]
@@ -368,6 +441,7 @@ def test_error_controller_queue_head_drives_attempt_replacement_and_next_decisio
     restored = TemporalRestartState.from_json(
         payload, time=native.time(), macro_step=native.macro_step())
     restored_engine = SimpleNamespace(
+        _step_strategy=strategy,
         _step_controller=None,
         _temporal_restart_state=restored,
         _step_transaction_plan=None,
@@ -376,7 +450,7 @@ def test_error_controller_queue_head_drives_attempt_replacement_and_next_decisio
     resumed = _Native()
     resumed.t = native.time()
     resumed.cursor = native.macro_step()
-    run_step_attempt(restored_engine, resumed, strategy, t_end=1.0)
+    prepare_program_run(restored_engine).run_step(resumed, t_end=1.0)
     assert resumed.calls == [("step", next_dt)]
 
 
@@ -386,6 +460,7 @@ def test_error_controller_clips_the_queue_head_explicitly_at_the_run_deadline():
     temporal.begin_run(
         run_control_payload(strategy), time=0.0, macro_step=0)
     engine = SimpleNamespace(
+        _step_strategy=strategy,
         _step_controller=None,
         _temporal_restart_state=temporal,
         _step_transaction_plan=None,
@@ -393,7 +468,7 @@ def test_error_controller_clips_the_queue_head_explicitly_at_the_run_deadline():
     )
     native = _Native()
 
-    run_step_attempt(engine, native, strategy, t_end=0.05)
+    prepare_program_run(engine).run_step(native, t_end=0.05)
 
     assert temporal.replaced_heads[0]["payload"]["dt"] == strategy.dt_init.hex()
     assert temporal.attempted_events[0]["payload"]["dt"] == (0.05).hex()
@@ -500,8 +575,7 @@ def test_temporal_owner_uses_one_raw_attempt_and_preserves_authenticated_strateg
 
     target = native_step_target(owner)
     assert target is owner.raw
-    report = run_step_attempt(
-        owner, target, strategy, t_end=t_end, controls=controls)
+    report = prepare_program_run(owner, controls).run_step(target, t_end=t_end)
 
     assert report.attempts == len(calls)
     assert owner.facade_step_calls == 0
@@ -523,7 +597,8 @@ def test_temporal_owner_uses_one_raw_attempt_and_preserves_authenticated_strateg
 def test_direct_facade_fixed_step_commits_one_temporal_envelope(facade_type):
     facade = object.__new__(facade_type)
     facade._s = _Native()
-    facade._step_strategy = None
+    strategy = FixedDt(0.1)
+    facade._step_strategy = strategy
     facade._step_transaction_plan = None
     facade._step_controller = None
     facade._last_step_transaction_report = None
@@ -537,7 +612,7 @@ def test_direct_facade_fixed_step_commits_one_temporal_envelope(facade_type):
         "rejected": 0,
         "failed": 0,
     }
-    assert facade._temporal_restart_state.strategy == run_control_payload(FixedDt(0.1))
+    assert facade._temporal_restart_state.strategy == run_control_payload(strategy)
 
 
 def test_multi_layout_attempt_advances_child_raw_targets_and_accepts_once():
@@ -601,8 +676,8 @@ def test_multi_layout_attempt_advances_child_raw_targets_and_accepts_once():
     controller = prepare_step_controller(executor, strategy)
     executor._begin_step_transaction()
     try:
-        report = run_step_attempt(
-            executor, native_step_target(executor), strategy, t_end=0.1)
+        report = prepare_program_run(executor).run_step(
+            native_step_target(executor), t_end=0.1)
         executor._commit_step_transaction()
         executor._finalize_step_transaction()
     except BaseException:
@@ -665,9 +740,13 @@ def test_runtime_instance_keeps_error_controller_and_strategy_across_macro_steps
         def __init__(self, plan):
             super().__init__(plan)
             self.calls = []
+            self.reject = 1
 
         def step(self, dt):
             self.calls.append(float(dt))
+            if self.reject:
+                self.reject -= 1
+                raise StepAttemptRejected("step attempt rejected during guard: retry snapshot")
             return super().step(dt)
 
     class RuntimeOwner:
@@ -696,18 +775,21 @@ def test_runtime_instance_keeps_error_controller_and_strategy_across_macro_steps
     owner = RuntimeOwner(raw, strategy)
     runtime = RuntimeInstance(plan, executor=owner)
 
-    report = runtime._run(t_end=0.5, max_steps=2)
+    report = runtime._run(t_end=0.25, max_steps=2)
 
     assert report.accepted_steps == 2
+    assert report.rejected_steps == 1
+    assert report.final_time == pytest.approx(0.25)
+    assert report.final_macro_step == 2
     assert owner.facade_step_calls == 0
-    assert raw.calls == [pytest.approx(0.2), pytest.approx(0.3)]
+    assert raw.calls == [pytest.approx(0.2), pytest.approx(0.1), pytest.approx(0.15)]
     controller = owner._step_controller
     assert controller.strategy is strategy
-    assert controller.next_dt == pytest.approx(0.45)
+    assert controller.next_dt == pytest.approx(0.225)
     state = owner._temporal_restart_state
     assert state.transaction_stats == {
         "accepted": 2,
-        "rejected": 0,
+        "rejected": 1,
         "failed": 0,
     }
     checkpoint = json.loads(

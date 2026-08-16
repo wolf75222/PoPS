@@ -15,9 +15,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import sys
-from typing import Any
+from typing import Any, TypeAlias
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -33,7 +34,7 @@ try:
     import numpy as np
 
     import pops
-    from pops import _pops
+    from pops._native_selector import select_native_dimension
     from pops._native_collectives import allgather_value, barrier
     from pops.amr import (
         AMRExecution,
@@ -67,6 +68,7 @@ try:
     from pops.physics import Model
     from pops.projection import ConservativeCellAverage
     from pops.time import FixedDt, every
+    _pops = select_native_dimension(int(os.environ["POPS_NATIVE_DIM"]))
 except (Exception, SystemExit) as exc:
     require_mpi_or_skip("AMR rank-change probe imports are unavailable: %s" % exc)
 
@@ -79,6 +81,17 @@ HYSTERESIS_CYCLES = 4
 if getattr(_pops, "__has_mpi__", False) is not True:
     require_mpi_or_skip("AMR rank-change probe requires an MPI-enabled native module")
 _COMM = _pops.mpi_world()
+
+
+CanonicalPatchBox: TypeAlias = list[int | list[int]]
+
+
+def _canonical_patch_boxes(runtime: Any) -> list[CanonicalPatchBox]:
+    """Encode ranked patch boxes with no tuple-dependent representation."""
+    return [
+        [int(level), [int(value) for value in lower], [int(value) for value in upper]]
+        for level, lower, upper in runtime.patch_boxes()
+    ]
 
 
 def _resolved(*, bit_identical: bool) -> Any:
@@ -127,14 +140,8 @@ def _resolved(*, bit_identical: bool) -> Any:
     case.program(program)
 
     x_coord, y_coord = coordinates(frame)
-    left_radius_squared = (
-        (x_coord - 0.25) * (x_coord - 0.25)
-        + (y_coord - 0.25) * (y_coord - 0.25)
-    )
-    right_radius_squared = (
-        (x_coord - 0.75) * (x_coord - 0.75)
-        + (y_coord - 0.75) * (y_coord - 0.75)
-    )
+    left_radius_squared = (x_coord - 0.25) * (x_coord - 0.25) + (y_coord - 0.25) * (y_coord - 0.25)
+    right_radius_squared = (x_coord - 0.75) * (x_coord - 0.75) + (y_coord - 0.75) * (y_coord - 0.75)
     two_islands = 1.0 + 0.5 * maximum(
         exp(-220.0 * left_radius_squared),
         exp(-220.0 * right_radius_squared),
@@ -148,9 +155,7 @@ def _resolved(*, bit_identical: bool) -> Any:
     )
 
     threshold = case.param(RuntimeParam("rank_change_refine_threshold", default=1.12))
-    coarsen_threshold = case.param(
-        RuntimeParam("rank_change_coarsen_threshold", default=1.10)
-    )
+    coarsen_threshold = case.param(RuntimeParam("rank_change_coarsen_threshold", default=1.10))
     transfer = AMRTransfer()
     transfer.state(block_state, StateTransfer())
     layout = AMR(
@@ -214,12 +219,13 @@ def _advance(runtime: Any, steps: int) -> None:
     )
     if report.accepted_steps != steps:
         raise AssertionError(
-            "rank-change probe accepted %d/%d requested steps"
-            % (report.accepted_steps, steps)
+            "rank-change probe accepted %d/%d requested steps" % (report.accepted_steps, steps)
         )
 
 
-def _capture_arrays(runtime: Any, *, prefix: str) -> tuple[dict[str, Any], dict[str, Any]]:
+def _capture_arrays(
+    runtime: Any, *, prefix: str, require_current_flux_ledger: bool
+) -> tuple[dict[str, Any], dict[str, Any]]:
     levels = int(runtime.n_levels())
     names = tuple(runtime.history_names())
     arrays: dict[str, Any] = {}
@@ -232,31 +238,34 @@ def _capture_arrays(runtime: Any, *, prefix: str) -> tuple[dict[str, Any], dict[
     for history_index, name in enumerate(names):
         depth = int(runtime.history_depth(name))
         ncomp = int(runtime.history_ncomp(name))
-        histories.append({"name": name, "depth": depth, "ncomp": ncomp})
-        for slot in range(depth):
-            arrays["%s_history_%d_slot_%d" % (prefix, history_index, slot)] = np.asarray(
-                runtime.history_global(name, slot),
-                dtype=np.float64,
-            ).copy()
+        history_levels = [int(level) for level in runtime.history_levels(name)]
+        histories.append({"name": name, "depth": depth, "ncomp": ncomp, "levels": history_levels})
+        for history_level in history_levels:
+            for slot in range(depth):
+                arrays[
+                    "%s_history_%d_level_%d_slot_%d" % (prefix, history_index, history_level, slot)
+                ] = np.asarray(
+                    runtime.history_global(name, history_level, slot),
+                    dtype=np.float64,
+                ).copy()
     report = runtime.amr.explain_regrid()
     program = runtime.program_report()
-    if not program.flux_ledger or not any(
-        int(entry["level"]) == 1 for entry in program.flux_ledger
-    ):
+    has_refined_ledger = any(int(entry["level"]) == 1 for entry in program.flux_ledger)
+    if require_current_flux_ledger and (not program.flux_ledger or not has_refined_ledger):
         raise AssertionError(
             "rank-change proof requires an accepted non-zero-transport flux ledger "
             "on the refined level"
         )
+    if not require_current_flux_ledger and program.flux_ledger and not has_refined_ledger:
+        raise AssertionError("rank-change flux ledger omitted its refined-level row")
     synchronization = {str(event["phase"]) for event in program.synchronization}
     if not {"reflux", "average_down"} <= synchronization:
-        raise AssertionError(
-            "rank-change proof requires accepted reflux and average-down events"
-        )
+        raise AssertionError("rank-change proof requires accepted reflux and average-down events")
     metadata = {
         "time_hex": float(runtime.time()).hex(),
         "macro_step": int(runtime.macro_step()),
         "n_levels": levels,
-        "patch_boxes": [list(row) for row in runtime.patch_boxes()],
+        "patch_boxes": _canonical_patch_boxes(runtime),
         "histories": histories,
         "regrid_count": int(report.regrid_count),
         "topology_epoch": int(report.topology_epoch),
@@ -290,9 +299,7 @@ def _write_evidence(
     payload["checkpoint_tagging_hysteresis"] = np.frombuffer(
         tagging_hysteresis, dtype=np.uint8
     ).copy()
-    payload["metadata"] = np.asarray(
-        json.dumps(metadata, sort_keys=True, separators=(",", ":"))
-    )
+    payload["metadata"] = np.asarray(json.dumps(metadata, sort_keys=True, separators=(",", ":")))
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "wb") as stream:
         np.savez_compressed(stream, **payload)
@@ -302,9 +309,7 @@ def _load_evidence(path: Path) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
     with np.load(path, allow_pickle=False) as stored:
         metadata = json.loads(str(stored["metadata"]))
         arrays = {
-            name: np.asarray(stored[name]).copy()
-            for name in stored.files
-            if name != "metadata"
+            name: np.asarray(stored[name]).copy() for name in stored.files if name != "metadata"
         }
     if metadata.get("schema_version") != 1:
         raise ValueError("rank-change evidence has an unsupported schema")
@@ -317,8 +322,13 @@ def _assert_snapshot(
     expected_metadata: dict[str, Any],
     expected_arrays: dict[str, np.ndarray],
     prefix: str,
+    require_current_flux_ledger: bool,
 ) -> None:
-    actual_metadata, actual_arrays = _capture_arrays(runtime, prefix=prefix)
+    actual_metadata, actual_arrays = _capture_arrays(
+        runtime,
+        prefix=prefix,
+        require_current_flux_ledger=require_current_flux_ledger,
+    )
     if actual_metadata != expected_metadata:
         raise AssertionError(
             "restored AMR metadata differs:\nexpected=%r\nactual=%r"
@@ -350,9 +360,19 @@ def _accepted_tagging_hysteresis_span(payload: Any) -> tuple[bytes, int]:
         cursor += 8
         return value
 
-    if encoded[:8] != b"POPSAST5":
-        raise AssertionError("checkpoint does not contain accepted-state v5")
+    def skip_string() -> None:
+        nonlocal cursor
+        size = read_size()
+        cursor += size
+        if cursor > len(encoded):
+            raise AssertionError("accepted-state string is truncated")
+
+    if encoded[:8] != b"POPSAND4":
+        raise AssertionError("checkpoint does not contain exact-ranked accepted-state v4")
     cursor = 8
+    cursor += 8  # native dimension
+    skip_string()  # exact spatial contract
+    cursor += 2 * 8  # topology epoch, materialization generation
     level_count = read_size()
     clock_bytes = level_count * 40
     if cursor + clock_bytes > len(encoded):
@@ -364,6 +384,27 @@ def _accepted_tagging_hysteresis_span(payload: Any) -> tuple[bytes, int]:
         if cursor + name_size + 8 > len(encoded):
             raise AssertionError("accepted-state logical-clock map is truncated")
         cursor += name_size + 8
+    history_count = read_size()
+    for _ in range(history_count):
+        skip_string()
+        cursor += 8  # Program owner
+        for _identity in range(4):
+            skip_string()
+        cursor += 2 * 8  # depth, component count
+    history_slot_count = read_size()
+    for _ in range(history_slot_count):
+        skip_string()
+        cursor += 5 * 8  # level, slot, outgoing dt, initialized, fill count
+    pending_count = read_size()
+    for _ in range(pending_count):
+        skip_string()
+        cursor += 12 * 8  # two encoded i32, four u64, three i64, two real, consumed
+    if cursor > len(encoded):
+        raise AssertionError("accepted-state pending history remaps are truncated")
+    history_flux_size = read_size()
+    cursor += history_flux_size
+    if cursor > len(encoded):
+        raise AssertionError("accepted-state history-flux payload is truncated")
     cursor += 8  # CellTemporalPartitionKind
     provider_size = read_size()
     cursor += provider_size
@@ -379,31 +420,47 @@ def _accepted_tagging_hysteresis_span(payload: Any) -> tuple[bytes, int]:
 
 
 def _accepted_tagging_hysteresis(payload: Any) -> bytes:
-    """Extract the opaque persistent-tagging bytes from accepted-state v5."""
+    """Extract the opaque persistent-tagging bytes from exact-ranked accepted-state v4."""
     tagging, _ = _accepted_tagging_hysteresis_span(payload)
     return tagging
 
 
+def _replace_accepted_tagging_hysteresis(payload: Any, replacement: bytes) -> bytes:
+    """Return the same POPSAND4 image with only its final tagging payload replaced."""
+    encoded = (
+        bytes(payload)
+        if isinstance(payload, (bytes, bytearray, memoryview))
+        else np.asarray(payload, dtype=np.uint8).reshape(-1).tobytes()
+    )
+    tagging, offset = _accepted_tagging_hysteresis_span(encoded)
+    size_offset = offset - 8
+    if size_offset < 0:
+        raise AssertionError("accepted-state tagging size precedes the payload")
+    return (
+        encoded[:size_offset]
+        + len(replacement).to_bytes(8, "little")
+        + replacement
+        + encoded[offset + len(tagging) :]
+    )
+
+
 def _assert_active_tagging_hysteresis(encoded: bytes) -> None:
     """Require a real accepted transition window, not only an empty schema envelope."""
-    if encoded[:8] != b"POPSHYS1" or len(encoded) < 36:
+    if encoded[:8] != b"POPSHYS2" or len(encoded) < 40:
         raise AssertionError("checkpoint persistent-tagging payload is malformed")
-    minimum_cycles = int.from_bytes(encoded[8:12], "little")
-    cycle = int.from_bytes(encoded[12:20], "little")
-    identity_size = int.from_bytes(encoded[20:28], "little")
-    count_offset = 28 + identity_size
+    if int.from_bytes(encoded[8:12], "little") != 2:
+        raise AssertionError("checkpoint persistent-tagging dimension differs")
+    minimum_cycles = int.from_bytes(encoded[12:16], "little")
+    cycle = int.from_bytes(encoded[16:24], "little")
+    identity_size = int.from_bytes(encoded[24:32], "little")
+    count_offset = 32 + identity_size
     if count_offset + 8 > len(encoded):
         raise AssertionError("checkpoint persistent-tagging identity is truncated")
     active_entries = int.from_bytes(encoded[count_offset : count_offset + 8], "little")
-    if (
-        minimum_cycles != HYSTERESIS_CYCLES
-        or cycle == 0
-        or active_entries == 0
-    ):
+    if minimum_cycles != HYSTERESIS_CYCLES or cycle == 0 or active_entries == 0:
         raise AssertionError(
             "rank-change proof requires an active persistent-tagging window "
-            "(min_cycles=%d, cycle=%d, entries=%d)"
-            % (minimum_cycles, cycle, active_entries)
+            "(min_cycles=%d, cycle=%d, entries=%d)" % (minimum_cycles, cycle, active_entries)
         )
 
 
@@ -412,10 +469,7 @@ def _checkpoint_source_authorities(checkpoint: Path) -> tuple[tuple[int, ...], b
         if int(payload["n_ranks"]) != 2 or int(payload["n_levels"]) != 2:
             raise AssertionError("capture checkpoint must record exactly two ranks and two levels")
         boxes = np.asarray(payload["patch_boxes"], dtype=np.int64)
-        owners = tuple(
-            int(value)
-            for value in np.asarray(payload["dmap_rank_0_level_1"], dtype=np.int64)
-        )
+        owners = tuple(int(value) for value in np.asarray(payload["dmap_1"], dtype=np.int64))
         if boxes.ndim != 2 or boxes.shape[1] != 5:
             raise AssertionError("capture checkpoint has malformed AMR patch geometry")
         fine_boxes = sum(int(row[0]) == 1 for row in boxes)
@@ -428,48 +482,14 @@ def _checkpoint_source_authorities(checkpoint: Path) -> tuple[tuple[int, ...], b
             raise AssertionError(
                 "fine patches were not distributed across both source ranks: %r" % (owners,)
             )
-        for rank in range(2):
-            for level in range(2):
-                peer = tuple(
-                    int(value)
-                    for value in np.asarray(
-                        payload["dmap_rank_%d_level_%d" % (rank, level)],
-                        dtype=np.int64,
-                    )
-                )
-                root = tuple(
-                    int(value)
-                    for value in np.asarray(
-                        payload["dmap_rank_0_level_%d" % level],
-                        dtype=np.int64,
-                    )
-                )
-                if peer != root:
-                    raise AssertionError(
-                        "source rank %d records a divergent level-%d ownership map"
-                        % (rank, level)
-                    )
-        tagging = tuple(
-            _accepted_tagging_hysteresis(
-                payload["program_accepted_state_rank_%d" % rank]
-            )
-            for rank in range(2)
-        )
-        if not tagging[0]:
-            raise AssertionError(
-                "rank-change proof requires non-empty persistent tagging state"
-            )
-        _assert_active_tagging_hysteresis(tagging[0])
-        if tagging[1] != tagging[0]:
-            raise AssertionError(
-                "source MPI ranks published divergent persistent tagging state"
-            )
-    return owners, tagging[0]
+        tagging = _accepted_tagging_hysteresis(payload["program_accepted_state"])
+        if not tagging:
+            raise AssertionError("rank-change proof requires non-empty persistent tagging state")
+        _assert_active_tagging_hysteresis(tagging)
+    return owners, tagging
 
 
-def _assert_single_rank_checkpoint(
-    checkpoint: Path, *, expected_tagging_hysteresis: bytes
-) -> None:
+def _assert_single_rank_checkpoint(checkpoint: Path, *, expected_tagging_hysteresis: bytes) -> None:
     with np.load(checkpoint, allow_pickle=False) as payload:
         if int(payload["n_ranks"]) != 1 or int(payload["n_levels"]) != 2:
             raise AssertionError(
@@ -479,7 +499,7 @@ def _assert_single_rank_checkpoint(
             owners = tuple(
                 int(value)
                 for value in np.asarray(
-                    payload["dmap_rank_0_level_%d" % level],
+                    payload["dmap_%d" % level],
                     dtype=np.int64,
                 )
             )
@@ -488,9 +508,7 @@ def _assert_single_rank_checkpoint(
                     "level-%d ownership was not rematerialized entirely onto rank 0: %r"
                     % (level, owners)
                 )
-        actual_tagging = _accepted_tagging_hysteresis(
-            payload["program_accepted_state_rank_0"]
-        )
+        actual_tagging = _accepted_tagging_hysteresis(payload["program_accepted_state"])
         if actual_tagging != expected_tagging_hysteresis:
             raise AssertionError(
                 "persistent tagging state changed during two-to-one rematerialization"
@@ -500,8 +518,7 @@ def _assert_single_rank_checkpoint(
 def _capture(checkpoint: Path, evidence: Path | None, *, bit_identical: bool) -> None:
     if int(_COMM.size) != 2:
         require_mpi_or_skip(
-            "AMR rank-change capture requires exactly two MPI ranks (observed %d)"
-            % int(_COMM.size)
+            "AMR rank-change capture requires exactly two MPI ranks (observed %d)" % int(_COMM.size)
         )
     runtime = _runtime(bit_identical=bit_identical)
     initial_state = np.asarray(
@@ -510,7 +527,9 @@ def _capture(checkpoint: Path, evidence: Path | None, *, bit_identical: bool) ->
     initial_mass = float(runtime.integral("tracer", levels=(0,)))
     _advance(runtime, CHECKPOINT_STEPS)
     checkpoint_metadata, checkpoint_arrays = _capture_arrays(
-        runtime, prefix="checkpoint"
+        runtime,
+        prefix="checkpoint",
+        require_current_flux_ledger=True,
     )
     if checkpoint_metadata["n_levels"] != 2:
         raise AssertionError("rank-change capture did not build its second AMR level")
@@ -559,7 +578,11 @@ def _capture(checkpoint: Path, evidence: Path | None, *, bit_identical: bool) ->
 
     if not bit_identical:
         _advance(runtime, CONTINUATION_STEPS)
-        final_metadata, final_arrays = _capture_arrays(runtime, prefix="final")
+        final_metadata, final_arrays = _capture_arrays(
+            runtime,
+            prefix="final",
+            require_current_flux_ledger=False,
+        )
         final_mass = float(runtime.integral("tracer", levels=(0,)))
         if abs(final_mass - initial_mass) >= 1.0e-8:
             raise AssertionError(
@@ -587,8 +610,7 @@ def _capture(checkpoint: Path, evidence: Path | None, *, bit_identical: bool) ->
         root_evidence_error = str(evidence_errors[0])
         if root_evidence_error:
             raise RuntimeError(
-                "rank-change evidence publication failed collectively: %s"
-                % root_evidence_error
+                "rank-change evidence publication failed collectively: %s" % root_evidence_error
             )
     barrier(_COMM)
     if int(_COMM.rank) == 0:
@@ -602,13 +624,12 @@ def _capture(checkpoint: Path, evidence: Path | None, *, bit_identical: bool) ->
 def _restart_relaxed(checkpoint: Path, evidence: Path, rematerialized: Path) -> None:
     if int(_COMM.size) != 1:
         require_mpi_or_skip(
-            "AMR rank-change restart requires exactly one MPI rank (observed %d)"
-            % int(_COMM.size)
+            "AMR rank-change restart requires exactly one MPI rank (observed %d)" % int(_COMM.size)
         )
     metadata, arrays = _load_evidence(evidence)
-    expected_tagging_hysteresis = np.asarray(
-        arrays["checkpoint_tagging_hysteresis"], dtype=np.uint8
-    ).reshape(-1).tobytes()
+    expected_tagging_hysteresis = (
+        np.asarray(arrays["checkpoint_tagging_hysteresis"], dtype=np.uint8).reshape(-1).tobytes()
+    )
     if (
         hashlib.sha256(expected_tagging_hysteresis).hexdigest()
         != metadata["tagging_hysteresis_sha256"]
@@ -621,6 +642,7 @@ def _restart_relaxed(checkpoint: Path, evidence: Path, rematerialized: Path) -> 
         expected_metadata=metadata["checkpoint"],
         expected_arrays=arrays,
         prefix="checkpoint",
+        require_current_flux_ledger=True,
     )
     initial_mass = float.fromhex(str(metadata["initial_mass_hex"]))
     restored_mass = float(runtime.integral("tracer", levels=(0,)))
@@ -642,6 +664,7 @@ def _restart_relaxed(checkpoint: Path, evidence: Path, rematerialized: Path) -> 
         expected_metadata=metadata["checkpoint"],
         expected_arrays=arrays,
         prefix="checkpoint",
+        require_current_flux_ledger=True,
     )
 
     _advance(runtime, CONTINUATION_STEPS)
@@ -650,6 +673,7 @@ def _restart_relaxed(checkpoint: Path, evidence: Path, rematerialized: Path) -> 
         expected_metadata=metadata["final"],
         expected_arrays=arrays,
         prefix="final",
+        require_current_flux_ledger=False,
     )
     continued_mass = float(runtime.integral("tracer", levels=(0,)))
     if abs(continued_mass - initial_mass) >= 1.0e-8:
@@ -673,7 +697,7 @@ def _restart_strict(checkpoint: Path) -> None:
     state_before = np.asarray(
         runtime.block_level_state_global("tracer", 0), dtype=np.float64
     ).copy()
-    boxes_before = tuple(tuple(int(value) for value in row) for row in runtime.patch_boxes())
+    boxes_before = _canonical_patch_boxes(runtime)
     try:
         runtime.restart(checkpoint)
     except Exception as exc:  # noqa: BLE001 -- exact public refusal text is asserted below
@@ -688,10 +712,8 @@ def _restart_strict(checkpoint: Path) -> None:
             ) from exc
     else:
         raise AssertionError("bit_identical=True accepted a two-to-one MPI rank change")
-    state_after = np.asarray(
-        runtime.block_level_state_global("tracer", 0), dtype=np.float64
-    )
-    boxes_after = tuple(tuple(int(value) for value in row) for row in runtime.patch_boxes())
+    state_after = np.asarray(runtime.block_level_state_global("tracer", 0), dtype=np.float64)
+    boxes_after = _canonical_patch_boxes(runtime)
     if (
         runtime.macro_step() != 0
         or runtime.time() != 0.0
@@ -702,72 +724,78 @@ def _restart_strict(checkpoint: Path) -> None:
     print("PASS bit_identical=True refuses AMR two-to-one restart atomically", flush=True)
 
 
-def _capture_divergent(checkpoint: Path) -> None:
-    """Prove source-rank tagging disagreement aborts collectively before publication."""
+def _restore_negative(checkpoint: Path) -> None:
+    """Exercise normalized Program and strict checkpoint accepted-state restore gates.
+
+    These calls intentionally stay inside one two-rank job.  A normal checkpoint/restart cannot
+    create rank-local input bytes.  The Program entry accepts a missing tagging payload only as a
+    canonical omission, while the checkpoint entry remains strict; both leave rejected inputs
+    retryable byte-for-byte.
+    """
+    del checkpoint
     if int(_COMM.size) != 2:
         require_mpi_or_skip(
-            "AMR divergent capture requires exactly two MPI ranks (observed %d)"
+            "AMR accepted-state restore negatives require exactly two MPI ranks (observed %d)"
             % int(_COMM.size)
         )
     runtime = _runtime(bit_identical=False)
     _advance(runtime, CHECKPOINT_STEPS)
-    executor = getattr(runtime, "_executor", None)
-    native = getattr(executor, "_s", None)
-    if native is None:
-        raise AssertionError("rank-change probe cannot reach its bound native AMR engine")
-    prepare_error = ""
-    try:
-        original = bytes(native.program_accepted_state())
-        tagging, tagging_offset = _accepted_tagging_hysteresis_span(original)
-        _assert_active_tagging_hysteresis(tagging)
-        if int(_COMM.rank) == 1:
-            divergent = bytearray(original)
-            divergent[tagging_offset + len(tagging) - 1] ^= 1
-            native.restore_program_accepted_state(bytes(divergent))
-    except Exception as exc:  # noqa: BLE001 -- coordinate local preparation failures
-        prepare_error = "%s: %s" % (type(exc).__name__, exc)
-    prepare_rows = allgather_value(
-        _COMM,
-        {"rank": int(_COMM.rank), "error": prepare_error},
-    )
-    prepare_failures = tuple(
-        row for row in prepare_rows if str(row.get("error", ""))
-    )
-    if prepare_failures:
-        raise RuntimeError(
-            "divergent accepted-state preparation failed collectively: %r"
-            % (prepare_failures,)
-        )
+    native = runtime._executor._s
+    original = bytes(native.program_accepted_state())
+    tagging, tagging_offset = _accepted_tagging_hysteresis_span(original)
+    _assert_active_tagging_hysteresis(tagging)
+    omission = _replace_accepted_tagging_hysteresis(original, b"")
+    wrong = bytearray(original)
+    wrong[tagging_offset + len(tagging) - 1] ^= 1
+    divergent = bytearray(original)
+    if int(_COMM.rank) == 1:
+        divergent[tagging_offset + len(tagging) - 1] ^= 1
+    mixed = omission if int(_COMM.rank) == 0 else original
+    malformed = original[:-1]
 
-    caught = False
-    message = ""
-    try:
-        runtime.checkpoint(checkpoint)
-    except Exception as exc:  # noqa: BLE001 -- exact collective refusal is asserted below
-        caught = True
-        message = str(exc)
-    rows = allgather_value(
-        _COMM,
-        {"caught": caught, "message": message},
-    )
-    if len(rows) != 2 or any(
-        row.get("caught") is not True
-        or "collective checkpoint AMR accepted-state capture sealed payload failed"
-        not in row.get("message", "")
-        or "tagging hysteresis" not in row.get("message", "")
-        for row in rows
+    def require_success(entry_point: str, label: str, payload: bytes) -> None:
+        restore = getattr(native, entry_point)
+        restore(payload)
+        rows = allgather_value(_COMM, {"entry": entry_point, "case": label})
+        if len(rows) != 2 or bytes(native.program_accepted_state()) != original:
+            raise AssertionError("%s %s did not restore canonical accepted bytes" % (entry_point, label))
+
+    def require_refusal(entry_point: str, label: str, payload: bytes) -> None:
+        restore = getattr(native, entry_point)
+        caught = False
+        message = ""
+        try:
+            restore(payload)
+        except Exception as exc:  # noqa: BLE001 -- native collective refusal is the oracle
+            caught = True
+            message = str(exc)
+        rows = allgather_value(
+            _COMM,
+            {"caught": caught, "message": message, "entry": entry_point, "case": label},
+        )
+        if len(rows) != 2 or not all(row["caught"] is True for row in rows):
+            raise AssertionError("%s %s restore did not refuse collectively: %r" % (entry_point, label, rows))
+        if bytes(native.program_accepted_state()) != original:
+            raise AssertionError("%s %s restore mutated accepted bytes before refusal" % (entry_point, label))
+        # The unmodified image must be accepted immediately after every refusal.  This is the retry
+        # oracle for rings, slot_dt, FluxExpressions, pending marker and native scratch.
+        restore(original)
+        if bytes(native.program_accepted_state()) != original:
+            raise AssertionError("%s %s retry did not restore the exact accepted image" % (entry_point, label))
+
+    require_success("restore_program_accepted_state", "empty-omission", omission)
+    require_success("restore_program_accepted_state", "exact-echo", original)
+    for label, payload in (
+        ("wrong-tagging", bytes(wrong)),
+        ("rank-divergent-tagging", bytes(divergent)),
+        ("mixed-empty-exact", mixed),
+        ("malformed", malformed),
     ):
-        raise AssertionError(
-            "persistent-tagging producer disagreement did not fail identically "
-            "on every rank: %r" % (rows,)
-        )
-    residue = tuple(sorted(path.name for path in checkpoint.parent.iterdir()))
-    if residue:
-        raise AssertionError(
-            "collectively rejected checkpoint left partial publication: %r" % (residue,)
-        )
+        require_refusal("restore_program_accepted_state", label, payload)
+    for label, payload in (("empty-omission", omission), ("wrong-tagging", bytes(wrong))):
+        require_refusal("restore_checkpoint_accepted_state", label, payload)
     print(
-        "PASS divergent source tagging payload refuses collective publication atomically",
+        "PASS normalized Program and strict checkpoint AMR accepted-state restore gates are atomic",
         flush=True,
     )
 
@@ -779,7 +807,7 @@ def _parser() -> argparse.ArgumentParser:
         choices=(
             "capture-relaxed",
             "capture-strict",
-            "capture-divergent",
+            "restore-negative",
             "restart-relaxed",
             "restart-strict",
         ),
@@ -796,13 +824,11 @@ def main() -> None:
         _capture(args.checkpoint, args.evidence, bit_identical=False)
     elif args.mode == "capture-strict":
         _capture(args.checkpoint, None, bit_identical=True)
-    elif args.mode == "capture-divergent":
-        _capture_divergent(args.checkpoint)
+    elif args.mode == "restore-negative":
+        _restore_negative(args.checkpoint)
     elif args.mode == "restart-relaxed":
         if args.evidence is None or args.rematerialized_checkpoint is None:
-            raise ValueError(
-                "restart-relaxed requires --evidence and --rematerialized-checkpoint"
-            )
+            raise ValueError("restart-relaxed requires --evidence and --rematerialized-checkpoint")
         _restart_relaxed(
             args.checkpoint,
             args.evidence,

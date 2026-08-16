@@ -118,7 +118,7 @@ def test_cmake_source_install_wheel_and_signature_use_the_shared_contract():
     assert 'pops_install_headers("pops/include")' in python_cmake
     assert "POPS_INSTALLED_HEADERS" in cmake_contract
     assert "POPS_INSTALLED_HEADER_ROWS" in cmake_contract
-    assert "pops_compute_header_signature(POPS_NATIVE_HEADER_SIGNATURE)" in source_cmake
+    assert "pops_compute_header_signature(POPS_NATIVE_HEADER_SIGNATURE)" in root_cmake
     assert "${_pops_header_category} ${_pops_header}" in cmake_contract
     assert "install(DIRECTORY include/pops" not in root_cmake
     assert 'install(DIRECTORY "${_pops_include}/pops"' not in python_cmake

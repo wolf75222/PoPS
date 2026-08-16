@@ -42,7 +42,7 @@ class ProgramRuntimeReport:
     sections); a bound program fills the sections from the C++ Program subsystem accessors.
     """
 
-    schema_version = 4
+    schema_version = 5
     report_type = "program_runtime"
 
     def __init__(
@@ -161,14 +161,34 @@ def _params(sim: Any) -> Any:
 def _histories(sim: Any) -> Any:
     rows = []
     for name in _call(sim, "history_names", []) or []:
-        rows.append(
-            {
-                "name": name,
-                "depth": _call(sim, "history_depth", None, name),
-                "ncomp": _call(sim, "history_ncomp", None, name),
-                "initialized": _call(sim, "history_initialized", None, name),
-            }
-        )
+        depth = _call(sim, "history_depth", None, name)
+        row = {
+            "name": name,
+            "depth": depth,
+            "ncomp": _call(sim, "history_ncomp", None, name),
+        }
+        levels = _call(sim, "history_levels", None, name)
+        if levels is None:
+            row["initialized"] = _call(sim, "history_initialized", None, name)
+            row["fill_count"] = _call(sim, "history_fill_count", None, name)
+            row["slot_dt"] = [
+                _call(sim, "history_slot_dt", None, name, slot)
+                for slot in range(int(depth or 0))
+            ]
+        else:
+            row["levels"] = [
+                {
+                    "level": int(level),
+                    "initialized": _call(sim, "history_initialized", None, name, int(level)),
+                    "fill_count": _call(sim, "history_fill_count", None, name, int(level)),
+                    "slot_dt": [
+                        _call(sim, "history_slot_dt", None, name, int(level), slot)
+                        for slot in range(int(depth or 0))
+                    ],
+                }
+                for level in levels
+            ]
+        rows.append(row)
     return rows
 
 

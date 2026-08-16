@@ -111,17 +111,17 @@ nodeid = "tests/python/unit/codegen/test_component_adapters.py::test_registratio
 issue = "ADC-681"
 requirement = "external_boundary"
 polarity = "positive"
-kind = "ctest"
-target = "external_boundary@test_amr_native_loader"
-test_regex = "^test_amr_native_loader\\.BoundaryPlanSessionsOwnFreshLaneQualifiedComponentStates$"
+kind = "pytest"
+target = "external_boundary"
+nodeid = "tests/python/integration/runtime/test_shared_interface_runtime.py::test_runtime_instance_executes_external_ghost_with_rollback_and_retry"
 
 [[check]]
 issue = "ADC-681"
 requirement = "external_tagger"
 polarity = "positive"
-kind = "ctest"
-target = "external_tagger@test_amr_native_loader"
-test_regex = "^test_amr_native_loader\\.PreparedAmrProvidersExecuteExactTablesAndProvenance$"
+kind = "pytest"
+target = "external_tagger"
+nodeid = "tests/python/integration/runtime/test_shared_interface_runtime.py::test_runtime_instance_executes_dynamic_three_level_shared_flux"
 
 [[check]]
 issue = "ADC-682"
@@ -145,7 +145,7 @@ requirement = "platform_execution"
 polarity = "positive"
 kind = "ctest"
 target = "platform_execution@test_platform_manifest"
-test_regex = "^PlatformManifest\\.GenericTwoDimensionalDoubleRouteLaunches$"
+test_regex = "^PlatformManifest\\.GenericNativeRankDoubleRouteLaunches$"
 
 [[check]]
 issue = "ADC-683"

@@ -270,8 +270,11 @@ class GeometricMG {
   using nonlinear_workspace_type = AmrFieldNewtonKrylovWorkspace<Dim, MemorySpace>;
   using nonlinear_hierarchy_type = typename nonlinear_workspace_type::hierarchy_type;
 
-  GeometricMG(request_type request, GeometricMultigridOptions options = {})
-      : geometry_(request.geometry),
+  GeometricMG(request_type request, const ExecutionLane& lane,
+              GeometricMultigridOptions options = {})
+      : lane_(&lane),
+        lane_borrow_(lane.borrow_immutably()),
+        geometry_(request.geometry),
         boundary_(request.boundary),
         options_(options),
         singular_(detail::is_singular(boundary_, options_.reaction)) {
@@ -283,9 +286,9 @@ class GeometricMG {
           !request.boxes.tiles_exactly(request.geometry.domain(), request.layout_budget) ||
           !request.distribution.matches_layout(request.boxes) ||
           !request.distribution.rank_space().contains(request.local_rank) ||
-          request.distribution.rank_space().size() != static_cast<std::size_t>(n_ranks()) ||
+          request.distribution.rank_space().size() != static_cast<std::size_t>(lane.size()) ||
           request.distribution.rank_space().linear_rank(request.local_rank) !=
-              static_cast<std::size_t>(my_rank()))
+              static_cast<std::size_t>(lane.rank()))
         throw std::invalid_argument("geometric MG build request is not an exact collective layout");
       for (int axis = 0; axis < Dim; ++axis)
         if (request.rhs_ghosts[axis] != 0 || request.phi_ghosts[axis] < 1)
@@ -294,23 +297,30 @@ class GeometricMG {
     } catch (...) {
       validation_error = std::current_exception();
     }
-    if (all_reduce_max(validation_error ? 1L : 0L) != 0) {
-      if (n_ranks() == 1 && validation_error)
+    if (all_reduce_max(validation_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && validation_error)
         std::rethrow_exception(validation_error);
       throw std::runtime_error("geometric MG preparation failed collectively");
     }
 
     prepared_operator_contract_ = expected_operator_contract(request, options_);
-    build_hierarchy_(request);
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{"pops.geometric-mg.execution-lane", lane.identity()},
+             {"pops.geometric-mg.operator", prepared_operator_contract_.exact_fingerprint()}},
+            lane))
+      throw std::invalid_argument(
+          "geometric MG prepared lane or operator differs across communicator ranks");
+    build_hierarchy_(request, lane);
   }
 
   GeometricMG(const Geometry<Dim>& geometry, const mesh::BoxArray<Dim>& layout,
               const mesh::Distribution<Dim>& distribution, Index<Dim> local_rank,
-              PhysicalBoundaryConditions<Dim> boundary, GeometricMultigridOptions options = {})
+              PhysicalBoundaryConditions<Dim> boundary, const ExecutionLane& lane,
+              GeometricMultigridOptions options = {})
       : GeometricMG(request_type{geometry, layout, distribution, local_rank, std::move(boundary),
                                  Extent<Dim>{}, detail::unit_ghosts<Dim>(),
                                  detail::exact_layout_budget(layout)},
-                    options) {}
+                    lane, options) {}
 
   GeometricMG(const GeometricMG&) = delete;
   GeometricMG& operator=(const GeometricMG&) = delete;
@@ -349,6 +359,7 @@ class GeometricMG {
   Real residual() const noexcept { return last_report_.residual_norm; }
   const field_type& residual_field() const noexcept { return levels_.front()->residual; }
   const SolveReport& last_solve_report() const noexcept { return last_report_; }
+  bool borrows_execution_lane(const ExecutionLane& lane) const noexcept { return lane_ == &lane; }
 
   void install_nullspace(FieldNullspacePlan<Dim> plan,
                          PreparedVectorDistribution<Dim> distribution) {
@@ -360,7 +371,7 @@ class GeometricMG {
     std::vector<const MultiFab<Dim>*> layouts{&rhs()};
     std::vector<PreparedVectorDistribution<Dim>> distributions{std::move(distribution)};
     nullspace_workspace_ = std::make_unique<FieldNullspaceWorkspace<Dim>>(
-        std::move(plan), std::move(layouts), std::move(distributions));
+        std::move(plan), std::move(layouts), std::move(distributions), *lane_);
   }
 
   void install_newton(FieldNewtonOptions options) {
@@ -384,7 +395,7 @@ class GeometricMG {
     Level& fine = *levels_.front();
     ensure_boundary_view_();
     boundary_kernel_ = std::move(kernel);
-    boundary_context_.reset();
+    boundary_contexts_.reset();
     if (!newton_workspace_ && !boundary_kernel_->observes_iteration) {
       const FieldNewtonOptions options = linear_boundary_newton_options_();
       const std::array<const field_type*, 1> layouts{&fine.phi};
@@ -395,13 +406,15 @@ class GeometricMG {
     prepare_dynamic_view_();
   }
 
-  void set_boundary_context(const FieldBoundaryExecutionContext<Dim>& context) {
+  void set_boundary_contexts(std::shared_ptr<const PreparedFieldBoundaryContextSet<Dim>> contexts,
+                             std::size_t level = 0) {
     if (!boundary_kernel_)
       throw std::logic_error("geometric MG has no compiled dynamic boundary kernel");
-    if (context.failure == nullptr)
+    if (!contexts || level >= contexts->size() || contexts->contexts()[level].failure == nullptr)
       throw std::invalid_argument(
           "geometric MG dynamic boundary requires a fallible execution channel");
-    boundary_context_ = context;
+    boundary_contexts_ = std::move(contexts);
+    boundary_context_level_ = level;
   }
 
   SolveReport solve() {
@@ -489,12 +502,12 @@ class GeometricMG {
     HaloSchedule<Dim> halo_schedule;
     PreparedPhysicalBoundary<Dim> physical_boundary;
     PreparedPhysicalBoundary<Dim> homogeneous_physical_boundary;
-    std::unique_ptr<ExecutionLane> lane;
     std::unique_ptr<HaloExchange<Dim, MemorySpace>> exchange;
 
     Level(Geometry<Dim> level_geometry, mesh::BoxArray<Dim> layout,
           mesh::Distribution<Dim> distribution, Index<Dim> local_rank,
-          PhysicalBoundaryConditions<Dim> level_boundary, std::uint64_t generation)
+          PhysicalBoundaryConditions<Dim> level_boundary, std::uint64_t generation,
+          const ExecutionLane& lane)
         : geometry(level_geometry),
           boundary(std::move(level_boundary)),
           phi(layout, distribution, local_rank, 1, detail::unit_ghosts<Dim>()),
@@ -514,14 +527,12 @@ class GeometricMG {
                                         detail::boundary_for_geometry(boundary, geometry, true),
                                         detail::exact_boundary_budget<Dim>())) {
       active.set_val(Real(1));
-      const bool remote = all_reduce_max(halo_schedule.has_remote_jobs() ? 1L : 0L) != 0;
+      const bool remote = all_reduce_max(halo_schedule.has_remote_jobs() ? 1L : 0L, lane) != 0;
       if (remote) {
-        lane = std::make_unique<ExecutionLane>(ExecutionLane::duplicate_world_collectively(
-            "pops.geometric-mg.nd" + std::to_string(Dim) + "/level/" + std::to_string(generation)));
         HaloExchangeContext context{};
         context.context_generation = generation + 1;
         context.schedule_generation = generation + 1;
-        exchange = std::make_unique<HaloExchange<Dim, MemorySpace>>(halo_schedule, *lane, context);
+        exchange = std::make_unique<HaloExchange<Dim, MemorySpace>>(halo_schedule, lane, context);
       }
     }
   };
@@ -544,7 +555,7 @@ class GeometricMG {
     return true;
   }
 
-  void build_hierarchy_(const request_type& request) {
+  void build_hierarchy_(const request_type& request, const ExecutionLane& lane) {
     Geometry<Dim> level_geometry = request.geometry;
     mesh::BoxArray<Dim> level_layout = request.boxes;
     mesh::Distribution<Dim> level_distribution = request.distribution;
@@ -555,7 +566,7 @@ class GeometricMG {
           detail::boundary_for_geometry(request.boundary, level_geometry, correction_level);
       levels_.push_back(std::make_unique<Level>(level_geometry, level_layout, level_distribution,
                                                 request.local_rank, std::move(level_boundary),
-                                                generation));
+                                                generation, lane));
       if (!coarsenable_(level_geometry, level_layout, options_))
         break;
       const Extent<Dim> ratio = detail::ratio_two<Dim>();
@@ -575,7 +586,7 @@ class GeometricMG {
 
   void fill_ghosts_(Level& level) {
     if (level.exchange)
-      level.exchange->execute(level.phi, *level.lane);
+      level.exchange->execute(level.phi, *lane_);
     else
       fill_boundary(level.phi, level.halo_schedule);
     fill_physical_boundary(level.phi, level.physical_boundary);
@@ -587,13 +598,13 @@ class GeometricMG {
     Level& fine = *levels_.front();
     copy_scalar_valid(source, *boundary_view_);
     if (fine.exchange)
-      fine.exchange->execute(*boundary_view_, *fine.lane);
+      fine.exchange->execute(*boundary_view_, *lane_);
     else
       fill_boundary(*boundary_view_, fine.halo_schedule);
     fill_physical_boundary(*boundary_view_, fine.physical_boundary);
     if (!boundary_kernel_)
       return;
-    FieldBoundaryExecutionContext<Dim>& context = boundary_context_at_(iteration);
+    FieldBoundaryExecutionContext<Dim> context = boundary_context_at_(iteration);
     context.failure->reset();
     for (int face = 0; face < 2 * Dim; ++face)
       boundary_kernel_->prepare_residual_view(face, source, *boundary_view_, fine.geometry,
@@ -609,13 +620,13 @@ class GeometricMG {
     Level& fine = *levels_.front();
     copy_scalar_valid(direction, *boundary_view_);
     if (fine.exchange)
-      fine.exchange->execute(*boundary_view_, *fine.lane);
+      fine.exchange->execute(*boundary_view_, *lane_);
     else
       fill_boundary(*boundary_view_, fine.halo_schedule);
     fill_physical_boundary(*boundary_view_, fine.homogeneous_physical_boundary);
     if (!boundary_kernel_)
       return;
-    FieldBoundaryExecutionContext<Dim>& context = boundary_context_at_(iteration);
+    FieldBoundaryExecutionContext<Dim> context = boundary_context_at_(iteration);
     context.failure->reset();
     for (int face = 0; face < 2 * Dim; ++face)
       boundary_kernel_->prepare_jvp_view(face, iterate, direction, *boundary_view_, fine.geometry,
@@ -629,7 +640,7 @@ class GeometricMG {
     apply_poisson_operator_valid(*boundary_view_, fine.geometry, fine.scratch, options_.reaction);
     lincomb(output, Real(1), fine.rhs, Real(-1), fine.scratch);
     if (boundary_kernel_) {
-      FieldBoundaryExecutionContext<Dim>& context = boundary_context_at_(iteration);
+      FieldBoundaryExecutionContext<Dim> context = boundary_context_at_(iteration);
       context.failure->reset();
       for (int face = 0; face < 2 * Dim; ++face)
         boundary_kernel_->add_residual(face, iterate, output, fine.geometry, context);
@@ -645,7 +656,7 @@ class GeometricMG {
     fill_jvp_boundary_view_(iterate, direction, iteration);
     apply_poisson_operator_valid(*boundary_view_, fine.geometry, output, options_.reaction);
     if (boundary_kernel_) {
-      FieldBoundaryExecutionContext<Dim>& context = boundary_context_at_(iteration);
+      FieldBoundaryExecutionContext<Dim> context = boundary_context_at_(iteration);
       context.failure->reset();
       for (int face = 0; face < 2 * Dim; ++face)
         boundary_kernel_->apply_jvp(face, iterate, direction, output, fine.geometry, context);
@@ -655,7 +666,7 @@ class GeometricMG {
   }
 
   SolveReport solve_dynamic_(Level& fine) {
-    if (boundary_kernel_ && !boundary_context_)
+    if (boundary_kernel_ && !boundary_contexts_)
       throw std::logic_error("geometric MG dynamic boundary has no execution context");
     if (boundary_kernel_ && boundary_kernel_->observes_iteration && !newton_workspace_)
       throw std::logic_error(
@@ -676,7 +687,8 @@ class GeometricMG {
           },
           [this](nonlinear_hierarchy_type& values) {
             nullspace_workspace_->apply_gauge(values.front());
-          });
+          },
+          *lane_);
     } catch (const FieldNullspaceIncompatibleRhs& error) {
       report.mark_failed(SolveStatus::kIncompatibleRhs, SolveAction::kFailRun, error.what());
     } catch (const FieldNullspaceInvalidEvaluation& error) {
@@ -698,17 +710,16 @@ class GeometricMG {
     return last_report_;
   }
 
-  FieldBoundaryExecutionContext<Dim>& boundary_context_at_(int iteration) {
-    if (!boundary_context_)
+  FieldBoundaryExecutionContext<Dim> boundary_context_at_(int iteration) const {
+    if (!boundary_contexts_)
       throw std::logic_error("geometric MG dynamic boundary context is absent");
-    boundary_context_->point.iteration = iteration;
-    return *boundary_context_;
+    return boundary_contexts_->view(boundary_context_level_, iteration);
   }
 
-  static void synchronize_boundary_failure_(FieldBoundaryExecutionContext<Dim>& context,
-                                            const char* message) {
+  void synchronize_boundary_failure_(FieldBoundaryExecutionContext<Dim>& context,
+                                     const char* message) {
     Kokkos::fence();
-    if (context.failure->synchronize_across_ranks())
+    if (context.failure->synchronize_across_ranks(*lane_))
       throw std::runtime_error(message);
   }
 
@@ -784,9 +795,11 @@ class GeometricMG {
   }
 
   Real global_norm_inf_(const field_type& field) const {
-    return static_cast<Real>(all_reduce_max(static_cast<double>(norm_inf(field))));
+    return static_cast<Real>(all_reduce_max(static_cast<double>(norm_inf(field)), *lane_));
   }
 
+  const ExecutionLane* lane_ = nullptr;
+  ExecutionLane::ImmutableBorrow lane_borrow_;
   Geometry<Dim> geometry_;
   PhysicalBoundaryConditions<Dim> boundary_;
   GeometricMultigridOptions options_{};
@@ -794,7 +807,8 @@ class GeometricMG {
   std::vector<std::unique_ptr<Level>> levels_{};
   std::unique_ptr<FieldNullspaceWorkspace<Dim>> nullspace_workspace_{};
   std::optional<CompiledFieldBoundaryKernel<Dim>> boundary_kernel_{};
-  std::optional<FieldBoundaryExecutionContext<Dim>> boundary_context_{};
+  std::shared_ptr<const PreparedFieldBoundaryContextSet<Dim>> boundary_contexts_{};
+  std::size_t boundary_context_level_ = 0;
   std::optional<field_type> boundary_view_{};
   std::optional<nonlinear_workspace_type> newton_workspace_{};
   std::optional<nonlinear_workspace_type> linear_boundary_workspace_{};

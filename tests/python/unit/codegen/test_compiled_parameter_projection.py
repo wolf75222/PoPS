@@ -43,7 +43,7 @@ def _compiled(params):
         so_path="<compiled-parameter-stub>",
         backend="production",
         cons_names=("u",),
-        cons_roles=("Scalar",),
+        cons_roles=("scalar",),
         prim_names=("u",),
         n_vars=1,
         gamma=None,

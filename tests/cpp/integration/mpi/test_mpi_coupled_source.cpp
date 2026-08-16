@@ -15,18 +15,24 @@
 
 #include "gtest_compat.hpp"
 #include <pops/physics/composition/composite.hpp>
-#include <pops/physics/bricks/hyperbolic.hpp>  // ExBVelocity (scalaire 1 var, role Density)
-#include <pops/physics/bricks/source.hpp>      // NoSource
+#include <pops/physics/bricks/hyperbolic.hpp>
+#include <pops/physics/bricks/source.hpp>  // NoSource
+#include <pops/physics/fluids/euler.hpp>
+#include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
+#include <pops/runtime/builders/compiled/generated_system_block.hpp>
 #include <pops/runtime/program/program_context.hpp>
 #include <pops/runtime/system.hpp>
 
 #include <pops/coupling/source/coupled_source_program.hpp>  // CsOp (opcodes, miroir Python)
 #include <pops/parallel/comm.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -37,6 +43,17 @@
 #endif
 
 using namespace pops;
+constexpr int kDim = kNativeDimension;
+using NativeSystem = System<kDim>;
+using NativeMultiFab = MultiFab<kDim>;
+
+namespace pops {
+template <int Dim, class Model>
+PreparedSystemBlock<Dim> prepare_exact_system_block(
+    CompiledSystemBlockPreparation<Dim, Model> request) {
+  return prepare_generated_system_block(std::move(request));
+}
+}  // namespace pops
 
 struct NoEll {
   template <class State>
@@ -44,20 +61,32 @@ struct NoEll {
     return Real(0);
   }  // pas de charge -> phi=0 -> derive nulle
 };
-using Dens = CompositeModel<ExBVelocity, NoSource, NoEll>;  // densite scalaire, transport E x B
+using Dens = CompositeModel<EulerND<kDim>, NoSource, NoEll>;
 
-static void install_ionization_program(System& system) {
+static Dens density_model() {
+  return Dens{{}, EulerND<kDim>{Real(1.4)}, NoSource{}, NoEll{}};
+}
+
+static std::vector<double> uniform_state(std::size_t cells, double density) {
+  std::vector<double> state(static_cast<std::size_t>(kDim + 2) * cells, 0.0);
+  std::fill_n(state.begin(), static_cast<std::ptrdiff_t>(cells), density);
+  std::fill_n(state.begin() + static_cast<std::ptrdiff_t>((kDim + 1) * cells),
+              static_cast<std::ptrdiff_t>(cells), 2.5);
+  return state;
+}
+
+static void install_ionization_program(NativeSystem& system) {
   system.set_program_block_map({0, 1, 2});
-  runtime::program::ProgramContext context(&system);
+  runtime::program::ProgramContext<kDim> context(&system);
   context.configure_primary_clock("test.clock.macro");
   context.install([context](double step) {
     context.begin_step(step);
-    MultiFab& electrons = context.state(0);
-    MultiFab& ions = context.state(1);
-    MultiFab& neutrals = context.state(2);
-    MultiFab& next_electrons = context.scratch_state(100, 0, electrons);
-    MultiFab& next_ions = context.scratch_state(101, 0, ions);
-    MultiFab& next_neutrals = context.scratch_state(102, 0, neutrals);
+    NativeMultiFab& electrons = context.state(0);
+    NativeMultiFab& ions = context.state(1);
+    NativeMultiFab& neutrals = context.state(2);
+    NativeMultiFab& next_electrons = context.scratch_state(100, 0, electrons);
+    NativeMultiFab& next_ions = context.scratch_state(101, 0, ions);
+    NativeMultiFab& next_neutrals = context.scratch_state(102, 0, neutrals);
     context.lincomb(next_electrons, Real(1), electrons, Real(0), electrons);
     context.lincomb(next_ions, Real(1), ions, Real(0), ions);
     context.lincomb(next_neutrals, Real(1), neutrals, Real(0), neutrals);
@@ -69,8 +98,7 @@ static void install_ionization_program(System& system) {
   system.set_program_block_map({0, 1, 2});
 }
 
-static int pops_run_test_mpi_coupled_source(int argc, char** argv) {
-  comm_init(&argc, &argv);
+static int run_test_mpi_coupled_source_body(int argc, char** argv) {
 #if defined(POPS_HAS_KOKKOS)
   Kokkos::ScopeGuard guard(argc, argv);
 #endif
@@ -88,25 +116,38 @@ static int pops_run_test_mpi_coupled_source(int argc, char** argv) {
   const int nsteps = 25;
   const double ne0 = 0.30, ni0 = 0.10, ng0 = 1.00;
 
-  SystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
+  SystemConfig<kDim> cfg;
+  std::size_t cells = 1;
+  for (int axis = 0; axis < kDim; ++axis) {
+    cfg.shape[axis] = n;
+    cfg.lower[axis] = Real(0);
+    cfg.upper[axis] = Real(1);
+    cfg.periodicity[axis] = true;
+    cells *= static_cast<std::size_t>(n);
+  }
 
-  System sys(cfg);
-  add_compiled_model(sys, "electrons", Dens{}, "none", "rusanov", "conservative", "explicit");
-  add_compiled_model(sys, "ions", Dens{}, "none", "rusanov", "conservative", "explicit");
-  add_compiled_model(sys, "neutrals", Dens{}, "none", "rusanov", "conservative", "explicit");
-  sys.set_poisson("composite", "geometric_mg");
+  NativeSystem sys(cfg);
+  sys.install_prepared_boundary_execution_lane(std::make_shared<ExecutionLane>(
+      ExecutionLane::duplicate_world_collectively("pops.test.mpi-coupled-source")));
+  for (const std::string& block :
+       {std::string("electrons"), std::string("ions"), std::string("neutrals")})
+    sys.install_block_state_route(block, "test.mpi-coupled-source/" + block + "/state@1");
+  add_compiled_model<kDim>(sys, "electrons", density_model(), "none", "rusanov", "conservative",
+                           "explicit");
+  add_compiled_model<kDim>(sys, "ions", density_model(), "none", "rusanov", "conservative",
+                           "explicit");
+  add_compiled_model<kDim>(sys, "neutrals", density_model(), "none", "rusanov", "conservative",
+                           "explicit");
+  sys.set_poisson("composite", "cartesian_cg");
 
   // Init des densites UNIFORMES sur le rang proprietaire (set_density n'ecrit que la box locale).
-  const std::size_t nn = static_cast<std::size_t>(n) * n;
+  const std::size_t nn = cells;
   const bool owns = (me == 0);
-  if (owns) {
-    sys.set_density("electrons", std::vector<double>(nn, ne0));
-    sys.set_density("ions", std::vector<double>(nn, ni0));
-    sys.set_density("neutrals", std::vector<double>(nn, ng0));
-  }
+  // Exact field marshaling is collective: every rank authenticates the same global component-major
+  // image, while only the owner materializes its local patch.
+  sys.set_state("electrons", uniform_state(nn, ne0));
+  sys.set_state("ions", uniform_state(nn, ni0));
+  sys.set_state("neutrals", uniform_state(nn, ng0));
 
   // --- Source couplee generique (bytecode ionisation) : appelee sur TOUS les rangs (l'enregistrement
   //     resout des indices, aucun acces par cellule ; l'application itere local_size() -> no-op si vide).
@@ -136,11 +177,53 @@ static int pops_run_test_mpi_coupled_source(int argc, char** argv) {
   prog.prog_lens = lens;
   sys.add_coupled_source(prog);
   chk(sys.coupled_operators().size() == 1, "coupled_source_metadata_registered");
+
+  const std::size_t pre_probe_couplings = sys.coupled_operators().size();
+  bool divergent_preflight_rejected = false;
+  try {
+    sys.install_prepared_coupling_operator(
+        "test.mpi-coupling-invalid-preflight",
+        me == 0 ? std::string{} : std::string("test.mpi-coupling/provider@1"),
+        CouplingOperatorView{}, [](Real, const std::vector<NativeMultiFab*>&) {});
+  } catch (const std::exception&) {
+    divergent_preflight_rejected = true;
+  }
+  chk(divergent_preflight_rejected && sys.coupled_operators().size() == pre_probe_couplings,
+      "rank-local prepared coupling failure publishes no partial registry");
+
+  if (np > 1) {
+    bool byte_divergence_rejected = false;
+    try {
+      sys.install_prepared_coupling_operator(
+          "test.mpi-coupling-divergent-contract",
+          "test.mpi-coupling/provider@1;rank=" + std::to_string(me), CouplingOperatorView{},
+          [](Real, const std::vector<NativeMultiFab*>&) {});
+    } catch (const std::invalid_argument&) {
+      byte_divergence_rejected = true;
+    }
+    chk(byte_divergence_rejected && sys.coupled_operators().size() == pre_probe_couplings,
+        "byte-divergent prepared coupling contract is rejected collectively");
+  }
+
+  auto fail_rollback_probe = std::make_shared<bool>(false);
+  sys.install_prepared_coupling_operator(
+      "test.mpi-coupling-rollback", "test.mpi-coupling-rollback/provider@1;program=reject-v1",
+      CouplingOperatorView{},
+      [fail_rollback_probe](Real, const std::vector<NativeMultiFab*>& candidates) {
+        if (!*fail_rollback_probe)
+          return;
+        candidates.front()->set_val(Real(-17));
+        Kokkos::fence();
+        throw std::runtime_error("deliberate prepared coupling rejection");
+      });
   bool live_state_rejected = false;
   try {
     sys.apply_coupling_operators(Real(dt),
                                  {&sys.block_state(0), &sys.block_state(1), &sys.block_state(2)});
   } catch (const std::invalid_argument&) {
+    live_state_rejected = true;
+  } catch (const std::runtime_error&) {
+    // Multi-rank preflight reports one collective error after every rank rejects its live carrier.
     live_state_rejected = true;
   }
   chk(live_state_rejected, "accepted_live_states_are_not_coupling_workspace");
@@ -154,6 +237,24 @@ static int pops_run_test_mpi_coupled_source(int argc, char** argv) {
     ni += dt * rate;
     ng -= dt * rate;
   }
+
+  NativeMultiFab candidate_electrons(sys.block_state(0));
+  NativeMultiFab candidate_ions(sys.block_state(1));
+  NativeMultiFab candidate_neutrals(sys.block_state(2));
+  const Real rollback_electrons = reduce_max_local(candidate_electrons, 0);
+  const Real rollback_ions = reduce_max_local(candidate_ions, 0);
+  const Real rollback_neutrals = reduce_max_local(candidate_neutrals, 0);
+  *fail_rollback_probe = true;
+  bool rejected_and_rolled_back = false;
+  try {
+    sys.apply_coupling_operators(Real(dt),
+                                 {&candidate_electrons, &candidate_ions, &candidate_neutrals});
+  } catch (const std::runtime_error&) {
+    rejected_and_rolled_back = reduce_max_local(candidate_electrons, 0) == rollback_electrons &&
+                               reduce_max_local(candidate_ions, 0) == rollback_ions &&
+                               reduce_max_local(candidate_neutrals, 0) == rollback_neutrals;
+  }
+  chk(rejected_and_rolled_back, "prepared coupling failure rolls back every candidate");
 
   if (owns) {
     const std::vector<double> de = sys.density("electrons");
@@ -203,8 +304,14 @@ static int pops_run_test_mpi_coupled_source(int argc, char** argv) {
 #endif
   if (me == 0 && fails == 0)
     std::printf("OK test_mpi_coupled_source (np=%d)\n", np);
-  comm_finalize();
   return fails == 0 ? 0 : 1;
+}
+
+static int pops_run_test_mpi_coupled_source(int argc, char** argv) {
+  comm_init(&argc, &argv);
+  const int result = run_test_mpi_coupled_source_body(argc, argv);
+  comm_finalize();
+  return result;
 }
 
 TEST(test_mpi_coupled_source, Runs) {

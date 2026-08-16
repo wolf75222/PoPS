@@ -6,7 +6,7 @@
 #include <pops/core/foundation/types.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
-#include <pops/numerics/elliptic/poisson/poisson_fft.hpp>
+#include <pops/numerics/elliptic/poisson/poisson_fft_1d_internal.hpp>
 #include <pops/numerics/elliptic/polar/polar_geometry.hpp>
 #include <pops/parallel/comm.hpp>
 
@@ -209,7 +209,7 @@ class PolarPoissonSolver {
         row[static_cast<std::size_t>(azimuthal)] =
             complex_type(host(polar_poisson_detail::host_offset(storage, i, j)), Real(0));
       }
-      fft1d(row.data(), nth, false);
+      elliptic::poisson::internal::host_fft1d(row, false);
     }
     return transformed;
   }
@@ -289,7 +289,7 @@ class PolarPoissonSolver {
     const Box<Dim>& storage = output.grown_box();
     for (int radial = 0; radial < nr; ++radial) {
       auto& row = phi_hat[static_cast<std::size_t>(radial)];
-      fft1d(row.data(), nth, true);
+      elliptic::poisson::internal::host_fft1d(row, true);
       for (int azimuthal = 0; azimuthal < nth; ++azimuthal) {
         const int i = valid.lo[0] + radial;
         const int j = valid.lo[1] + azimuthal;

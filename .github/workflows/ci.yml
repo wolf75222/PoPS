@@ -766,6 +766,9 @@ jobs:
         lane: [system, amr-runtime, amr-fields]
 
     env:
+      # This source-matrix lane builds one explicit native specialization.  Runtime plans remain
+      # dimension-derived; the low-level CI build selector must never be inferred from artifacts.
+      POPS_NATIVE_DIM: "2"
       CCACHE_DIR: ${{ github.workspace }}/.ccache-py
       CCACHE_MAXSIZE: 2G
       CCACHE_BASEDIR: ${{ github.workspace }}
@@ -797,13 +800,14 @@ jobs:
         with:
           path: build-kokkos-py/python/pops
           lookup-only: true
-          key: pops-module-${{ runner.os }}-${{ steps.kokkos.outputs.cache-platform }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('include/**', 'src/**', 'python/bindings/**', 'python/CMakeLists.txt', 'CMakeLists.txt', 'cmake/**', 'CMakePresets.json', 'pyproject.toml', '.github/workflows/ci.yml', '.github/actions/setup-kokkos/**', 'scripts/ci_python_module_objects.py') }}-kokkos4.4.01-15dc143e
+          key: pops-module-dim2-${{ runner.os }}-${{ steps.kokkos.outputs.cache-platform }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('include/**', 'src/**', 'python/bindings/**', 'python/CMakeLists.txt', 'CMakeLists.txt', 'cmake/**', 'CMakePresets.json', 'pyproject.toml', '.github/workflows/ci.yml', '.github/actions/setup-kokkos/**', 'scripts/ci_python_module_objects.py') }}-kokkos4.4.01-15dc143e
 
       - name: Configure identical production module graph
         if: steps.module-cache-probe.outputs.cache-hit != 'true'
         run: |
           pip install --upgrade pip numpy pytest
           cmake --preset ci-kokkos-python -DCMAKE_LINKER_TYPE=MOLD \
+            -DPOPS_NATIVE_DIM="$POPS_NATIVE_DIM" \
             -DPOPS_HEAVY_MODULE_TU_POOL=4 \
             -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."
           python3 scripts/ci_python_module_objects.py \
@@ -902,6 +906,7 @@ jobs:
     if: needs.set-mode.outputs.python_required == 'true'
 
     env:
+      POPS_NATIVE_DIM: "2"
       # ccache dedie au module Python (.ccache-py) : meme separation que l'ancien job build-and-test.
       CCACHE_DIR: ${{ github.workspace }}/.ccache-py
       CCACHE_MAXSIZE: 2G
@@ -953,7 +958,7 @@ jobs:
         run: ccache --zero-stats
 
       # ADC-621 EVICTION GUARD for the pure-python fast path. The expensive artifact is the
-      # compiled _pops.so; on a PR that touches NO .so-affecting
+      # compiled, manifest-authenticated Dim=2 leaf; on a PR that touches NO native-affecting
       # input we want to reuse it instead of recompiling. The key hashes EVERY input that can change
       # the .so, so a stale binary can never be served:
       #   * include/** + src/** + python/bindings/** -- native runtime and pybind adapter sources;
@@ -965,12 +970,12 @@ jobs:
       # pure-Python/type source copies (build-kokkos-py/python/pops/**/*.{py,pyi} + py.typed) are NOT
       # keyed here -- they are re-synced from the PR checkout after a hit (next step), so the cache
       # serves only the binary.
-      - name: Cache built module (_pops.so)
+      - name: Cache authenticated Dim=2 native package
         id: modcache
         uses: actions/cache@v6
         with:
           path: build-kokkos-py/python/pops
-          key: pops-module-${{ runner.os }}-${{ steps.kokkos.outputs.cache-platform }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('include/**', 'src/**', 'python/bindings/**', 'python/CMakeLists.txt', 'CMakeLists.txt', 'cmake/**', 'CMakePresets.json', 'pyproject.toml', '.github/workflows/ci.yml', '.github/actions/setup-kokkos/**', 'scripts/ci_python_module_objects.py') }}-kokkos4.4.01-15dc143e
+          key: pops-module-dim2-${{ runner.os }}-${{ steps.kokkos.outputs.cache-platform }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('include/**', 'src/**', 'python/bindings/**', 'python/CMakeLists.txt', 'CMakeLists.txt', 'cmake/**', 'CMakePresets.json', 'pyproject.toml', '.github/workflows/ci.yml', '.github/actions/setup-kokkos/**', 'scripts/ci_python_module_objects.py') }}-kokkos4.4.01-15dc143e
 
       - name: Download parallel prewarm caches
         if: steps.modcache.outputs.cache-hit != 'true'
@@ -1005,17 +1010,15 @@ jobs:
           pip install --upgrade pip numpy pytest
           # Overwrite the (unkeyed, possibly stale) copied Python/type sources with THIS checkout.
           # -I (ignore-times) forces a content sync even if an mtime+size collision would fool the
-          # default quick check; --exclude='*' protects the cached _pops*.so from --delete. Mirrors
-          # the package copy while retaining .pyi stubs and the PEP 561 py.typed marker.
+          # default quick check.  The explicit _native exclusion protects both variants.json and
+          # its authenticated dim2 leaf from --delete; no root extension is accepted as a fallback.
           rsync -aI --delete --include='*/' --include='*.py' --include='*.pyi' \
-            --include='py.typed' --exclude='*' \
+            --include='py.typed' --exclude='_native/***' --exclude='*' \
             python/pops/ build-kokkos-py/python/pops/
-          test -n "$(find build-kokkos-py/python/pops -maxdepth 1 -name '_pops*.so' -print -quit)" \
-            || { echo "::error::module cache hit but no _pops*.so present"; exit 1; }
           {
             echo "### gate-python-build (module _pops, Kokkos Serial)"
             echo ""
-            echo "FAST PATH: exact authenticated module-cache hit -> reused the cached _pops.so,"
+            echo "FAST PATH: exact native-package cache hit -> retained variants.json + dim2 leaf,"
             echo "re-synced the pure-python sources, skipped the cmake build."
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -1043,6 +1046,7 @@ jobs:
           # guard and wheel builders keep their platform-specific bounded pools.
           export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
           cmake --preset ci-kokkos-python -DCMAKE_LINKER_TYPE=MOLD \
+            -DPOPS_NATIVE_DIM="$POPS_NATIVE_DIM" \
             -DPOPS_HEAVY_MODULE_TU_POOL=4 \
             -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."
           mapfile -t compile_contracts < <(
@@ -1089,6 +1093,14 @@ jobs:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-${{ runner.os }}-${{ env.CCACHE_CACHE_KEY }}
 
+      - name: Authenticate Dim=2 Python native variant
+        env:
+          PYTHONPATH: ${{ github.workspace }}/build-kokkos-py/python
+          PYTHONNOUSERSITE: "1"
+        run: >-
+          python3 scripts/verify_installed_native.py
+          --expect-dim "$POPS_NATIVE_DIM" --expect-serial
+
       - name: Upload Python module artifact
         uses: actions/upload-artifact@v7
         with:
@@ -1120,12 +1132,14 @@ jobs:
         # SHARD_TOTAL=strategy.job-total. ADC-623: files are packed by MEASURED DURATION
         # (scripts/ci_shard_binpack.py, greedy LPT over tests/python/test_durations.json), not by a
         # modulo of the file list, so the slowest shard -- the gate critical path -- is minimized.
-        # 6 shards (was 5): the ADC-621 cached _pops.so makes the marginal shard cheap. To rebalance,
+        # 7 shards: the measured 417-file universe packs to a 32.2-minute maximum test load, leaving
+        # setup and runner variance inside the unchanged 50-minute watchdog. To rebalance,
         # change the COUNT here only (job names stay "... shard N"; the required `gate` aggregates
         # them via a single matrix entry in its `needs`).
-        shard: [0, 1, 2, 3, 4, 5]
+        shard: [0, 1, 2, 3, 4, 5, 6]
 
     env:
+      POPS_NATIVE_DIM: "2"
       # ccache reste utile aux tests DSL qui compilent des loaders/.so a runtime dans chaque shard.
       CCACHE_DIR: ${{ github.workspace }}/.ccache-py
       CCACHE_MAXSIZE: 2G
@@ -1236,7 +1250,9 @@ jobs:
         if: steps.test-plan.outputs.python_shard_count != '0'
         run: |
           test -d build-kokkos-py/python/pops
-          test -n "$(find build-kokkos-py/python/pops -maxdepth 1 -name '_pops*.so' -print -quit)"
+          PYTHONPATH="$PWD/build-kokkos-py/python" PYTHONNOUSERSITE=1 \
+            python3 scripts/verify_installed_native.py \
+              --expect-dim "$POPS_NATIVE_DIM" --expect-serial
 
       - name: Cache ccache (Python runtime loaders)
         if: steps.test-plan.outputs.python_shard_count != '0'
@@ -1353,6 +1369,7 @@ jobs:
     if: needs.set-mode.outputs.python_required == 'true'
 
     env:
+      POPS_NATIVE_DIM: "2"
       CCACHE_DIR: ${{ github.workspace }}/.ccache-py
       CCACHE_MAXSIZE: 2G
       KOKKOS_PREFIX: ${{ github.workspace }}/.kokkos-install
@@ -1391,7 +1408,9 @@ jobs:
       - name: Verify Python module artifact
         run: |
           test -d build-kokkos-py/python/pops
-          test -n "$(find build-kokkos-py/python/pops -maxdepth 1 -name '_pops*.so' -print -quit)"
+          PYTHONPATH="$PWD/build-kokkos-py/python" PYTHONNOUSERSITE=1 \
+            python3 scripts/verify_installed_native.py \
+              --expect-dim "$POPS_NATIVE_DIM" --expect-serial
 
       - name: Cache ccache (Python runtime loaders)
         uses: actions/cache@v6
@@ -1477,6 +1496,7 @@ jobs:
         lane: [system, amr-runtime, amr-fields]
 
     env:
+      POPS_NATIVE_DIM: "2"
       CCACHE_DIR: ${{ github.workspace }}/.ccache-mpi-prewarm
       CCACHE_MAXSIZE: 2G
       CCACHE_BASEDIR: ${{ github.workspace }}
@@ -1551,6 +1571,7 @@ jobs:
           fi
           export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
           cmake --preset ci-mpi \
+            -DPOPS_NATIVE_DIM="$POPS_NATIVE_DIM" \
             -DPOPS_BUILD_PYTHON=ON \
             -DPOPS_USE_HDF5=ON \
             -DPOPS_HEAVY_TEST_TU_POOL="$lane_parallelism" \
@@ -1635,6 +1656,7 @@ jobs:
     if: needs.set-mode.outputs.mpi_required == 'true'
 
     env:
+      POPS_NATIVE_DIM: "2"
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 2G
       CCACHE_BASEDIR: ${{ github.workspace }}
@@ -1751,7 +1773,8 @@ jobs:
           test -s build-mpi/mpi-ctest-groups.tsv
 
       - name: Configure + build (MPI + Kokkos Serial)
-        timeout-minutes: 35
+        # Three sequential watchdogs total 38 minutes; retain bounded configure/verification margin.
+        timeout-minutes: 50
         # Flags : preset ci-mpi (source unique, cf. CMakePresets.json) ; Kokkos_ROOT vient de
         # $KOKKOS_PREFIX (env du job, install en cache). ccache auto-detecte.
         run: |
@@ -1793,6 +1816,7 @@ jobs:
             mpi_cmake_args+=("-DMPIEXEC_PREFLAGS=--mca;orte_abort_on_non_zero_status;1")
           fi
           cmake --preset ci-mpi \
+            -DPOPS_NATIVE_DIM="$POPS_NATIVE_DIM" \
             -DPOPS_BUILD_PYTHON=ON \
             -DPOPS_USE_HDF5=ON \
             -DPython_EXECUTABLE=/usr/bin/python3 \
@@ -1816,7 +1840,7 @@ jobs:
           # its own worker under peak memory pressure.
           run_with_heartbeat "MPI Python module link" 14m \
             cmake --build --preset ci-mpi --parallel 1 --target _pops
-          run_with_heartbeat "MPI native test build" 8m \
+          run_with_heartbeat "MPI native test build" 14m \
             cmake --build --preset ci-mpi --parallel 4 --target "${mpi_targets[@]}"
           run_with_heartbeat "M4 native test build" 10m \
             cmake --build --preset ci-mpi --parallel 4 --target "${m4_targets[@]}"
@@ -1911,6 +1935,7 @@ jobs:
         # the native C++ parallel-HDF5 writer has closed them.
         env:
           PYTHONPATH: ${{ github.workspace }}/build-mpi/python-package:${{ github.workspace }}
+          POPS_NATIVE_DIM: "2"
           POPS_INCLUDE: ${{ github.workspace }}/include
           POPS_KOKKOS_ROOT: ${{ github.workspace }}/.kokkos-install
           Kokkos_ROOT: ${{ github.workspace }}/.kokkos-install
@@ -1920,13 +1945,30 @@ jobs:
           POPS_REQUIRE_MPI_TESTS: "1"
         run: |
           rm -rf build-mpi/python-package
-          mkdir -p build-mpi/python-package/pops
+          mkdir -p build-mpi/python-package/pops/_native/dim2
           cp -R python/pops/. build-mpi/python-package/pops/
-          cp build-mpi/python/pops/_pops*.so build-mpi/python-package/pops/
+          native_evidence="$(
+            PYTHONPATH="$PWD/build-mpi/python" PYTHONNOUSERSITE=1 \
+              /usr/bin/python3 scripts/verify_installed_native.py \
+                --expect-dim "$POPS_NATIVE_DIM" --expect-mpi --expect-parallel-hdf5 --json
+          )"
+          native_extension="$(
+            /usr/bin/python3 -c \
+              'import json, sys; print(json.loads(sys.argv[1])["native_extension"])' \
+              "$native_evidence"
+          )"
+          cp build-mpi/python/pops/_native/variants.json \
+            build-mpi/python-package/pops/_native/variants.json
+          cp "$native_extension" build-mpi/python-package/pops/_native/dim2/
+          PYTHONPATH="$PWD/build-mpi/python-package" PYTHONNOUSERSITE=1 \
+            /usr/bin/python3 scripts/verify_installed_native.py \
+              --expect-dim "$POPS_NATIVE_DIM" --expect-mpi --expect-parallel-hdf5
           /usr/bin/python3 - <<'PY'
-          import pops
-          from pops import _pops
           import h5py
+          import pops
+          from pops._native_selector import select_native_dimension
+
+          _pops = select_native_dimension(2)
 
           if not _pops.__has_mpi__:
               raise SystemExit("collective HDF5 lifecycle requires an MPI-enabled _pops")
@@ -1961,11 +2003,12 @@ jobs:
             fi
             return "$status"
           }
+          native_script_bootstrap="from pops._native_selector import select_native_dimension; select_native_dimension(2); import runpy, sys; runpy.run_path(sys.argv[1], run_name='__main__')"
           while IFS=$'\t' read -r mpi_ranks mpi_test; do
             test -n "$mpi_ranks" && test -f "$mpi_test"
             echo "Running Python MPI contract: ${mpi_test} (np=${mpi_ranks})"
             run_mpi "Python MPI contract ${mpi_test}" \
-              -n "$mpi_ranks" /usr/bin/python3 -u "$mpi_test"
+              -n "$mpi_ranks" /usr/bin/python3 -u -c "$native_script_bootstrap" "$mpi_test"
           done < build-mpi/python-mpi-plan.tsv
           # This pytest process stays outside MPI: each manifest-owned orchestrator creates and
           # tears down its own independent rank worlds (for example np=2 capture, then np=1 restart).
@@ -1980,6 +2023,7 @@ jobs:
         timeout-minutes: 45
         env:
           PYTHONPATH: ${{ github.workspace }}/build-mpi/python-package:${{ github.workspace }}
+          POPS_NATIVE_DIM: "2"
           POPS_INCLUDE: ${{ github.workspace }}/include
           POPS_KOKKOS_ROOT: ${{ github.workspace }}/.kokkos-install
           Kokkos_ROOT: ${{ github.workspace }}/.kokkos-install
@@ -2040,6 +2084,7 @@ jobs:
         lane: [system, amr-runtime, amr-fields]
 
     env:
+      POPS_NATIVE_DIM: "2"
       CCACHE_DIR: ${{ github.workspace }}/.ccache-openmp-prewarm
       CCACHE_MAXSIZE: 2G
       CCACHE_BASEDIR: ${{ github.workspace }}
@@ -2155,6 +2200,7 @@ jobs:
             pool_option=POPS_HEAVY_TEST_TU_POOL
           fi
           cmake --preset "$preset" -DCMAKE_LINKER_TYPE=MOLD \
+            -DPOPS_NATIVE_DIM="$POPS_NATIVE_DIM" \
             -D"${pool_option}=$lane_parallelism" \
             -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."
           python3 scripts/ci_python_module_objects.py --build-dir "$build_dir" --verify
@@ -2248,6 +2294,7 @@ jobs:
     if: needs.set-mode.outputs.openmp_required == 'true'
 
     env:
+      POPS_NATIVE_DIM: "2"
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       # Chaque lane C++ fusionne le socle runtime OpenMP prechauffe avant d'ajouter les objets de
       # son septieme du graphe. Deux Gio evitent d'evincer immediatement ce socle authentifie.
@@ -2339,7 +2386,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: build-kokkos-py/python/pops
-          key: pops-module-openmp-${{ runner.os }}-${{ steps.kokkos-platform.outputs.key }}-py${{ steps.openmp-python.outputs.python-version }}-${{ hashFiles('include/**', 'src/**', 'python/bindings/**', 'python/CMakeLists.txt', 'CMakeLists.txt', 'cmake/**', 'CMakePresets.json', 'pyproject.toml', '.github/workflows/ci.yml') }}-kokkos${{ env.KOKKOS_VERSION }}-${{ env.KOKKOS_COMMIT }}
+          key: pops-module-openmp-dim2-${{ runner.os }}-${{ steps.kokkos-platform.outputs.key }}-py${{ steps.openmp-python.outputs.python-version }}-${{ hashFiles('include/**', 'src/**', 'python/bindings/**', 'python/CMakeLists.txt', 'CMakeLists.txt', 'cmake/**', 'CMakePresets.json', 'pyproject.toml', '.github/workflows/ci.yml') }}-kokkos${{ env.KOKKOS_VERSION }}-${{ env.KOKKOS_COMMIT }}
 
       - name: Build + install Kokkos (OpenMP)
         # Reconstruit Kokkos UNIQUEMENT sur cache miss.
@@ -2438,6 +2485,7 @@ jobs:
           }
           export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
           cmake --preset ci-kokkos -DCMAKE_LINKER_TYPE=MOLD \
+            -DPOPS_NATIVE_DIM="$POPS_NATIVE_DIM" \
             -DPOPS_HEAVY_TEST_TU_POOL=2 \
             -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."
           mapfile -t compile_contracts < <(
@@ -2495,12 +2543,10 @@ jobs:
         if: matrix.kind == 'python' && steps.openmp-python-module-cache.outputs.cache-hit == 'true'
         run: |
           # Pure-Python and typing sources are intentionally outside the native cache key.  Force
-          # their contents from this checkout while protecting the authenticated cached _pops.so.
+          # their contents from this checkout while protecting variants.json and its Dim=2 leaf.
           rsync -aI --delete --include='*/' --include='*.py' --include='*.pyi' \
-            --include='py.typed' --exclude='*' \
+            --include='py.typed' --exclude='_native/***' --exclude='*' \
             python/pops/ build-kokkos-py/python/pops/
-          test -n "$(find build-kokkos-py/python/pops -maxdepth 1 -name '_pops*.so' -print -quit)" \
-            || { echo "::error::exact OpenMP module cache hit but no _pops*.so present"; exit 1; }
           echo "Exact authenticated OpenMP module cache hit; native rebuild skipped." \
             >> "$GITHUB_STEP_SUMMARY"
 
@@ -2557,6 +2603,7 @@ jobs:
           # unchanged 45-minute cold-build watchdog without relying on an OOM-prone assumption.
           # The same 35-object graph completed cold with pool=4 in 29 minutes on the Serial lane.
           cmake --preset ci-kokkos-python -DCMAKE_LINKER_TYPE=MOLD \
+            -DPOPS_NATIVE_DIM="$POPS_NATIVE_DIM" \
             -DPOPS_HEAVY_MODULE_TU_POOL=2 \
             -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."
           mapfile -t compile_contracts < <(
@@ -2569,6 +2616,15 @@ jobs:
             --verify-contracts "${compile_contracts[@]}"
           run_with_heartbeat "Kokkos OpenMP Python module build" 45m \
             cmake --build --preset ci-kokkos-python
+
+      - name: Authenticate Dim=2 OpenMP Python native variant
+        if: matrix.kind == 'python'
+        env:
+          PYTHONPATH: ${{ github.workspace }}/build-kokkos-py/python
+          PYTHONNOUSERSITE: "1"
+        run: >-
+          python3 scripts/verify_installed_native.py
+          --expect-dim "$POPS_NATIVE_DIM" --expect-serial
 
       # ADC-548 (a): this add_native_block section is the bind-RUN / ProgramContext EXECUTION smoke --
       # it compiles a production model at runtime and actually RUNS it (System + AMR) via

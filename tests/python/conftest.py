@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import ast
+import json
 import os
 import shutil
 import subprocess
 import sys
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from functools import cache
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -20,6 +21,11 @@ from tests.python.support.requirements import (
     native_tests_required,
     require_mpi_or_skip,
     require_native_or_skip,
+)
+from scripts.write_native_variant_manifest import (
+    NativeVariantManifestError,
+    sha256_file,
+    validate_manifest_payload,
 )
 
 
@@ -48,9 +54,30 @@ class PythonProcessItem(pytest.Item):
         env["POPS_PYTEST_PROCESS"] = "1"
         env["PYTHONUNBUFFERED"] = "1"
         env["PYTHONDONTWRITEBYTECODE"] = "1"
-        env["PYTHONPATH"] = _process_pythonpath(env.get("PYTHONPATH"))
+        native_dimension = _explicit_native_dimension(env)
+        env["PYTHONPATH"] = _process_pythonpath(
+            env.get("PYTHONPATH"),
+            native_dimension=native_dimension,
+        )
+        command = [sys.executable, str(self.path)]
+        if native_dimension is not None:
+            # Process-isolated files cannot inherit the already selected extension from the
+            # pytest process.  Re-select the launcher-declared specialization before executing
+            # the file; never infer a dimension from its name, imports, or available leaves.
+            command = [
+                sys.executable,
+                "-c",
+                (
+                    "import runpy, sys; "
+                    "from pops._native_selector import select_native_dimension; "
+                    "select_native_dimension(int(sys.argv[1])); "
+                    "runpy.run_path(sys.argv[2], run_name='__main__')"
+                ),
+                str(native_dimension),
+                str(self.path),
+            ]
         result = subprocess.run(
-            [sys.executable, str(self.path)],
+            command,
             cwd=REPO_ROOT,
             env=env,
             stdout=subprocess.PIPE,
@@ -102,6 +129,26 @@ def pytest_configure(config: pytest.Config) -> None:
     }
     for marker, description in markers.items():
         config.addinivalue_line("markers", f"{marker}: {description}")
+
+    native_dimension = _explicit_native_dimension(os.environ)
+    if native_dimension is not None:
+        # CI and other native launchers must choose one exact specialization before collection:
+        # several binding tests import ``pops._pops`` at module scope.  The environment value is
+        # an explicit launcher contract, not a filename scan or a default-dimension fallback.
+        from pops._native_selector import select_native_dimension
+
+        select_native_dimension(native_dimension)
+
+
+def _explicit_native_dimension(environment: Mapping[str, str]) -> int | None:
+    value = environment.get("POPS_NATIVE_DIM")
+    if value is None:
+        return None
+    if value not in {"1", "2", "3"}:
+        raise pytest.UsageError(
+            "POPS_NATIVE_DIM must explicitly select exactly one native dimension: 1, 2, or 3"
+        )
+    return int(value)
 
 
 def pytest_pycollect_makemodule(module_path: Path, parent: pytest.Collector) -> pytest.File | None:
@@ -311,16 +358,21 @@ def _process_test_dirs() -> tuple[str, ...]:
     return tuple(sorted(dirs))
 
 
-def _process_pythonpath(existing: str | None) -> str:
+def _process_pythonpath(
+    existing: str | None,
+    *,
+    native_dimension: int | None,
+) -> str:
     """Build a subprocess path without masking an installed native package.
 
-    A source checkout contains ``pops/__init__.py`` but normally not ``pops._pops``. Putting that
-    directory ahead of site-packages makes process-isolated integration tests import a package that
-    can never load its native extension, even immediately after ``scripts/build_python.sh`` installed
-    a coherent wheel. Use the source package only when it carries a compatible extension itself;
-    otherwise exercise the freshly installed wheel while keeping the repository/test helpers visible.
+    The source package is eligible only when the launcher selected a dimension and its native
+    manifest authenticates that exact nested leaf. A loose ``python/pops/_pops.*`` residue has no
+    authority. Otherwise exercise the freshly installed wheel while keeping repository/test helpers
+    visible.
     """
-    source_usable = _source_python_has_native_extension()
+    source_usable = native_dimension is not None and _source_python_has_native_variant(
+        native_dimension
+    )
     entries: list[str] = []
     if existing:
         entries.extend(
@@ -342,12 +394,31 @@ def _process_pythonpath(existing: str | None) -> str:
 
 
 @cache
-def _source_python_has_native_extension() -> bool:
-    package = SOURCE_PYTHON / "pops"
-    suffixes = (".so", ".dylib", ".pyd")
-    return any(
-        path.name.startswith("_pops.") and path.suffix in suffixes for path in package.iterdir()
-    )
+def _source_python_has_native_variant(dimension: int) -> bool:
+    """Authenticate the one explicitly selected source-tree native leaf."""
+    manifest = SOURCE_PYTHON / "pops" / "_native" / "variants.json"
+    if manifest.is_symlink() or not manifest.is_file():
+        return False
+    try:
+        rows = validate_manifest_payload(json.loads(manifest.read_text(encoding="utf-8")))
+    except (OSError, UnicodeError, json.JSONDecodeError, NativeVariantManifestError):
+        return False
+    selected = next((row for row in rows if row["dimension"] == dimension), None)
+    if selected is None:
+        return False
+    native_root = manifest.parent.resolve()
+    leaf = native_root.joinpath(*PurePosixPath(selected["path"]).parts)
+    if leaf.is_symlink() or not leaf.is_file():
+        return False
+    resolved = leaf.resolve()
+    try:
+        resolved.relative_to(native_root)
+    except ValueError:
+        return False
+    try:
+        return sha256_file(resolved) == selected["sha256"]
+    except OSError:
+        return False
 
 
 @cache

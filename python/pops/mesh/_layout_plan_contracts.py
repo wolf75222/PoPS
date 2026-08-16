@@ -168,17 +168,37 @@ class LayoutHandle(Handle):
 @dataclass(frozen=True, slots=True)
 class LayoutLevel:
     index: int
-    refinement: int
+    refinement: tuple[int, ...]
 
     def __post_init__(self) -> None:
         if isinstance(self.index, bool) or not isinstance(self.index, int) or self.index < 0:
             raise ValueError("LayoutLevel.index must be an integer >= 0")
-        if isinstance(self.refinement, bool) or not isinstance(self.refinement, int) \
-                or self.refinement < 1:
-            raise ValueError("LayoutLevel.refinement must be an integer >= 1")
+        if isinstance(self.refinement, (str, bytes)):
+            raise TypeError("LayoutLevel.refinement must be an exact axis vector")
+        try:
+            refinement = tuple(self.refinement)
+        except TypeError as exc:
+            raise TypeError("LayoutLevel.refinement must be an exact axis vector") from exc
+        if not refinement or len(refinement) > 3 or any(
+            type(value) is not int or value < 1 for value in refinement
+        ):
+            raise ValueError(
+                "LayoutLevel.refinement must contain one, two, or three integers >= 1"
+            )
+        object.__setattr__(self, "refinement", refinement)
 
-    def to_data(self) -> dict[str, int]:
-        return {"index": self.index, "refinement": self.refinement}
+    def to_data(self) -> dict[str, Any]:
+        return {"index": self.index, "refinement": list(self.refinement)}
+
+    @classmethod
+    def from_data(cls, data: Any) -> LayoutLevel:
+        if not isinstance(data, Mapping) or set(data) != {"index", "refinement"} \
+                or not isinstance(data["refinement"], list):
+            raise TypeError("LayoutLevel data has an unsupported shape")
+        result = cls(data["index"], tuple(data["refinement"]))
+        if result.to_data() != dict(data):
+            raise ValueError("LayoutLevel data is not canonical")
+        return result
 
 
 def _geometry_uri(value: Any, *, where: str) -> str:
@@ -496,7 +516,7 @@ class NormalizedLayout:
     descriptor_type: str
     descriptor_name: str
     adaptive: bool
-    transition_ratios: tuple[int, ...]
+    transition_ratios: tuple[tuple[int, ...], ...]
     levels: tuple[LayoutLevel, ...]
     geometry: NormalizedGeometry
     options: Mapping[str, Any]
@@ -511,6 +531,15 @@ class NormalizedLayout:
         handle_identity(self.handle, where="NormalizedLayout.handle", kind="layout")
         if type(self.geometry) is not NormalizedGeometry:
             raise TypeError("NormalizedLayout.geometry must be an exact NormalizedGeometry")
+        if type(self.adaptive) is not bool:
+            raise TypeError("NormalizedLayout.adaptive must be an exact bool")
+        for name in ("descriptor_type", "descriptor_name"):
+            if type(getattr(self, name)) is not str or not getattr(self, name):
+                raise TypeError("NormalizedLayout.%s must be non-empty exact text" % name)
+        levels = tuple(self.levels)
+        if not levels or any(type(level) is not LayoutLevel for level in levels):
+            raise TypeError("NormalizedLayout.levels must contain exact LayoutLevel values")
+        object.__setattr__(self, "levels", levels)
         object.__setattr__(self, "geometry", NormalizedGeometry.from_data(
             self.geometry.to_data()))
         native = self.native_spatial_layout
@@ -530,22 +559,66 @@ class NormalizedLayout:
                     "NormalizedLayout native spatial facts differ from normalized geometry")
             object.__setattr__(self, "native_spatial_layout", NativeSpatialLayout.from_data(
                 native.to_data()))
-        ratios = tuple(self.transition_ratios)
-        if len(ratios) != max(0, len(self.levels) - 1) or any(
-                isinstance(value, bool) or not isinstance(value, int) or value < 2
-                for value in ratios):
+        dimension = self.geometry.dimension
+        ratios = tuple(tuple(row) for row in self.transition_ratios)
+        if len(ratios) != max(0, len(self.levels) - 1):
             raise ValueError(
-                "NormalizedLayout.transition_ratios must contain one integer >= 2 per transition"
+                "NormalizedLayout.transition_ratios must contain one exact-rank row per transition"
             )
-        refinement = 1
+        for index, row in enumerate(ratios):
+            if len(row) != dimension or any(
+                type(value) is not int or value < 1 for value in row
+            ) or not any(value > 1 for value in row):
+                raise ValueError(
+                    "NormalizedLayout.transition_ratios[%d] must contain %d positive integers "
+                    "and refine at least one axis" % (index, dimension)
+                )
+        refinement = (1,) * dimension
         for index, level in enumerate(self.levels):
             if level.index != index or level.refinement != refinement:
                 raise ValueError(
                     "NormalizedLayout.levels must preserve exact cumulative transition refinement"
                 )
             if index < len(ratios):
-                refinement *= ratios[index]
+                refinement = tuple(
+                    refinement[axis] * ratios[index][axis]
+                    for axis in range(dimension)
+                )
         object.__setattr__(self, "transition_ratios", ratios)
+        if not isinstance(self.capabilities, Mapping):
+            raise TypeError("NormalizedLayout.capabilities must be a mapping")
+        capability_dimension = self.capabilities.get("dim")
+        if capability_dimension is not None and capability_dimension != dimension:
+            raise ValueError(
+                "NormalizedLayout capability dimension differs from normalized geometry"
+            )
+        supports_amr = self.capabilities.get("supports_amr")
+        if type(supports_amr) is not bool or supports_amr is not self.adaptive:
+            raise ValueError(
+                "NormalizedLayout adaptive flag differs from supports_amr capability"
+            )
+        raw_capability_ratios = self.capabilities.get("transition_ratios")
+        if not isinstance(raw_capability_ratios, (tuple, list)):
+            raise TypeError(
+                "NormalizedLayout capabilities require exact-ranked transition_ratios"
+            )
+        try:
+            capability_ratios = tuple(tuple(row) for row in raw_capability_ratios)
+        except TypeError as exc:
+            raise TypeError(
+                "NormalizedLayout capabilities require exact-ranked transition_ratios"
+            ) from exc
+        if capability_ratios != ratios:
+            raise ValueError(
+                "NormalizedLayout transition ratios differ from capability evidence"
+            )
+        capability_levels = self.capabilities.get(
+            "max_levels", self.capabilities.get("levels")
+        )
+        if capability_levels != len(self.levels):
+            raise ValueError(
+                "NormalizedLayout level count differs from capability evidence"
+            )
         for key in ("options", "capabilities", "requirements", "descriptor_snapshot"):
             data = json_data(getattr(self, key), where="NormalizedLayout.%s" % key)
             if not isinstance(data, dict):
@@ -558,7 +631,7 @@ class NormalizedLayout:
             "descriptor_type": self.descriptor_type,
             "descriptor_name": self.descriptor_name,
             "adaptive": self.adaptive,
-            "transition_ratios": list(self.transition_ratios),
+            "transition_ratios": [list(row) for row in self.transition_ratios],
             "levels": [level.to_data() for level in self.levels],
             "geometry": self.geometry.to_data(),
             "options": thaw(self.options),
@@ -570,6 +643,57 @@ class NormalizedLayout:
                 else self.native_spatial_layout.to_data()
             ),
         }
+
+    @classmethod
+    def from_data(cls, data: Any) -> NormalizedLayout:
+        required = {
+            "handle",
+            "descriptor_type",
+            "descriptor_name",
+            "adaptive",
+            "transition_ratios",
+            "levels",
+            "geometry",
+            "options",
+            "capabilities",
+            "requirements",
+            "descriptor_snapshot",
+            "native_spatial_layout",
+        }
+        if not isinstance(data, Mapping) or set(data) != required:
+            raise TypeError("NormalizedLayout data has an unsupported shape")
+        if not isinstance(data["transition_ratios"], list) or not isinstance(
+            data["levels"], list
+        ):
+            raise TypeError(
+                "NormalizedLayout data requires ordered transition-ratio and level vectors"
+            )
+        native_data = data["native_spatial_layout"]
+        native = (
+            None
+            if native_data is None
+            else NativeSpatialLayout.from_data(native_data)
+        )
+        result = cls(
+            handle=LayoutHandle.from_canonical_identity(data["handle"]),
+            descriptor_type=data["descriptor_type"],
+            descriptor_name=data["descriptor_name"],
+            adaptive=data["adaptive"],
+            transition_ratios=tuple(
+                tuple(row) if isinstance(row, list) else row
+                for row in data["transition_ratios"]
+            ),
+            levels=tuple(LayoutLevel.from_data(row) for row in data["levels"]),
+            geometry=NormalizedGeometry.from_data(data["geometry"]),
+            options=data["options"],
+            capabilities=data["capabilities"],
+            requirements=data["requirements"],
+            descriptor_snapshot=data["descriptor_snapshot"],
+            native_spatial_layout=native,
+        )
+        if result.to_data() != dict(data):
+            raise ValueError("NormalizedLayout data failed canonical round-trip authentication")
+        return result
 
 
 @dataclass(frozen=True, slots=True)

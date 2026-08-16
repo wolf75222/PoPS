@@ -1,26 +1,21 @@
-// Chantier T5-PR3 : CABLAGE du transport disque (staircase + cut-cell EB) dans System::step.
-//
-// CONTEXTE (cf. docs/HOFFART_FIDELITY.md ligne 39, verrou "bords d'anneau cartesiens" ; le footgun T2 :
-// set_disc_domain materialisait un masque MAIS System::step ne le consultait jamais -> le disque etait
-// INERTE). Ce PR aiguille l'avance de transport de step() vers l'operateur disque selon un MODE explicite
-// (none | staircase | cutcell), porte par set_disc_domain(mode=) / set_geometry_mode et lu par le stepper.
+// Exact-rank analytic embedded-boundary routing (staircase + cut-cell) in System::step.
 //
 // On valide (vraies assertions, pas de no-op) :
-//   (a) NO-DISC PAR DEFAUT : un pas avec set_disc_domain(mode='none') est BYTE-IDENTIQUE a un pas SANS
-//       set_disc_domain (le masque est materialise mais le transport l'ignore) -> diff EXACTEMENT 0.
-//   (b) ROUTING-LIVE (staircase) : mode='staircase' produit un etat DIFFERENT du carre sur le MEME init
-//       (max|diff| > 0 : le routage N'EST PAS inerte) ET la masse sur les cellules ACTIVES du disque est
+//   (a) NO-MASK : an analytic LevelSet with mode='none' is BYTE-IDENTIQUE to no EB.
+//   (b) ROUTING-LIVE (staircase) : mode='staircase' produces a different state on the same init,
+//       and mass on the active region is
 //       conservee a la machine (aucun flux ne franchit la frontiere du masque) -> propre au schema masque.
-//   (c) CUTCELL : mode='cutcell' tourne, etat FINI partout (aucun NaN/Inf), DIFFERENT du carre ; et sur
-//       un disque ENGLOBANT (rayon > diagonale, aucune cellule coupee) un pas est BIT-IDENTIQUE au carre.
+//   (c) CUTCELL : mode='cutcell' runs with finite state, differs from Cartesian; an enclosing
+//       LevelSet is BIT-IDENTIQUE to Cartesian.
 //
-// Modele : loi d'advection scalaire compilee pour le rang natif. La vitesse constante a divergence
-// nulle isole le routage geometrie/EB et impose la conservation de masse sans autorite 2D cachee.
+// Model: exact-ranked scalar advection. Constant divergence-free velocity isolates EB routing and
+// proves conservation without a two-dimensional geometric authority.
 
 #include <gtest/gtest.h>
 
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/runtime/builders/compiled/dsl_block.hpp>
 #include <pops/runtime/builders/compiled/generated_system_block.hpp>
 #include <pops/runtime/program/program_context.hpp>
@@ -29,6 +24,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <numeric>
 #include <string>
 #include <utility>
@@ -63,6 +59,11 @@ using NativeExtent = Extent<kTestDimension>;
 constexpr int kCompressibleComponents = kTestDimension + 2;
 using ScalarModel = nd::ScalarAdvection<kTestDimension>;
 using CompressibleModel = nd::IdealGasEuler<kTestDimension>;
+
+void install_execution_lane(NativeSystem& system, std::string identity) {
+  system.install_prepared_boundary_execution_lane(
+      std::make_shared<ExecutionLane>(ExecutionLane::world(std::move(identity))));
+}
 
 NativeSystemConfig native_config(int cells, Real length, bool periodic) {
   NativeSystemConfig config;
@@ -192,6 +193,7 @@ ScalarModel scalar_transport_model() {
 
 void add_periodic_transport(NativeSystem& system) {
   system.install_block_state_route("n", "test:facade-routing/n/state");
+  system.seal_auxiliary_providers();
   add_compiled_model(system, "n", scalar_transport_model(), "none", "rusanov", "conservative",
                      "explicit");
   system.set_poisson("composite", "cartesian_cg", "periodic");
@@ -199,6 +201,7 @@ void add_periodic_transport(NativeSystem& system) {
 
 void add_compressible(NativeSystem& system) {
   system.install_block_state_route("gas", "test:facade-routing/gas/state");
+  system.seal_auxiliary_providers();
   add_compiled_model(system, "gas", CompressibleModel::prepare(Real(1.4)), "none", "rusanov",
                      "conservative", "explicit", 1.4);
 }
@@ -211,6 +214,7 @@ void build_transport(NativeSystem& s) {
   // than reading inactive cells. The same provider is used in every mode so this test isolates only
   // residual routing.
   s.install_block_state_route("n", "test:facade-routing/n/state");
+  s.seal_auxiliary_providers();
   add_compiled_model(s, "n", scalar_transport_model(), "none", "rusanov", "conservative",
                      "explicit");
   // Le Program conserve son solve de champ exact-rank ; le modele scalaire fournit un RHS nul et
@@ -234,30 +238,57 @@ bool all_finite(const std::vector<double>& a) {
   return true;
 }
 
+// Build phi = hypot(x0-c, ..., x{Dim-1}-c) - radius directly in the native postfix VM.  The
+// expression consumes every coordinate of the compiled rank: no fixed-axis adapter owns the
+// geometry used by these runtime assertions.
+void install_centered_ball(NativeSystem& system, double radius, const std::string& mode,
+                           double kappa_min = 0.0, double face_open_eps = 0.0,
+                           double cut_theta_min = 0.0) {
+  static constexpr const char* coordinates[] = {"x", "y", "z"};
+  std::vector<std::string> opcodes;
+  std::vector<double> literals;
+  for (int axis = 0; axis < kTestDimension; ++axis) {
+    opcodes.emplace_back(coordinates[axis]);
+    literals.push_back(0.0);
+    opcodes.emplace_back("constant");
+    literals.push_back(0.5);
+    opcodes.emplace_back("sub");
+    literals.push_back(0.0);
+    if (axis > 0) {
+      opcodes.emplace_back("hypot");
+      literals.push_back(0.0);
+    }
+  }
+  opcodes.emplace_back("constant");
+  literals.push_back(radius);
+  opcodes.emplace_back("sub");
+  literals.push_back(0.0);
+  system.set_analytic_level_set(opcodes, literals, mode, kappa_min, face_open_eps, cut_theta_min);
+}
+
 }  // namespace
 
-TEST(FacadeRouting, DiscModeRoutingBehavesAcrossNoneStaircaseCutcellAndSplittings) {
+TEST(FacadeRouting, AnalyticEmbeddedBoundaryRoutingBehavesAcrossNoneStaircaseAndCutcell) {
 #if defined(POPS_HAS_KOKKOS)
   (void)kokkos_scope();
 #endif
   const int n = 48;
   const double L = 1.0;
-  const double R_disc =
-      0.30 * L;  // disque de transport (plus petit : de vraies cellules inactives)
-  const double cx = 0.5 * L, cy = 0.5 * L;
-  const double dt = 2e-4;  // pas court, advection sous-CFL
+  const double radius = 0.30 * L;  // smaller than the box: genuine inactive cells
+  const double dt = 2e-4;          // pas court, advection sous-CFL
   const int n_steps = 12;
   const NativeSystemConfig config = native_config(n, L, true);
   const NativeGeometry geometry = native_geometry(config);
   const std::vector<double> rho0 = ring_density(config);
 
   // ----------------------------------------------------------------------
-  // (a) NO-DISC PAR DEFAUT : mode='none' (disque materialise) == jamais set_disc_domain (byte a byte).
+  // (a) NO-MASK: a prepared analytic geometry in mode='none' == no EB (byte for byte).
   // ----------------------------------------------------------------------
   std::vector<double>
       ref_state;  // etat de reference (chemin plein cartesien), reutilise par (b)/(c)/(d)
   {
     NativeSystem base(config);
+    install_execution_lane(base, "pops.test.facade-routing.embedded.base");
     build_transport(base);
     base.set_density("n", rho0);
     for (int k = 0; k < n_steps; ++k)
@@ -265,35 +296,35 @@ TEST(FacadeRouting, DiscModeRoutingBehavesAcrossNoneStaircaseCutcellAndSplitting
     ref_state = base.get_state("n");
 
     NativeSystem none(config);
+    install_execution_lane(none, "pops.test.facade-routing.embedded.none");
     build_transport(none);
     none.set_density("n", rho0);
-    none.set_disc_domain(cx, cy, R_disc, "none");  // disque pose, mode none : doit rester inerte
+    install_centered_ball(none, radius, "none");
     for (int k = 0; k < n_steps; ++k)
       none.step(dt);
     const std::vector<double> none_state = none.get_state("n");
 
     const double d = max_abs_diff(ref_state, none_state);
-    // Egalite BYTE A BYTE : mode none emprunte exactement assemble_rhs, le disque materialise n'a AUCUN
-    // effet sur le transport. Pas une tolerance -- l'invariant "inerte par defaut".
-    EXPECT_TRUE(d == 0.0)
-        << "(a) mode='none' BIT-IDENTIQUE au chemin sans disque (routage inerte sauf opt-in) : "
-           "max|diff| = "
-        << d << " (attendu 0)";
+    // Equality is byte-for-byte: mode none follows exactly the Cartesian residual path.
+    EXPECT_TRUE(d == 0.0) << "(a) analytic mode='none' is BIT-IDENTIQUE to Cartesian: "
+                             "max|diff| = "
+                          << d << " (attendu 0)";
     EXPECT_TRUE(all_finite(ref_state) && ref_state.size() == cell_count(config.shape))
         << "(a) etat de reference fini et de taille shape.product (le pas plein a bien tourne)";
   }
 
   // ----------------------------------------------------------------------
-  // (b) ROUTING-LIVE (staircase) : etat DIFFERENT du carre + masse active conservee a la machine.
+  // (b) staircase: different from Cartesian + active mass conserved to roundoff.
   // ----------------------------------------------------------------------
   {
     NativeSystem sc(config);
+    install_execution_lane(sc, "pops.test.facade-routing.embedded.staircase");
     build_transport(sc);
     sc.set_density("n", rho0);
-    sc.set_disc_domain(cx, cy, R_disc, "staircase");
+    install_centered_ball(sc, radius, "staircase");
 
     // Masse initiale sur les cellules ACTIVES (masque 0/1 du System) AVANT les pas.
-    const std::vector<double> mask = sc.disc_mask();  // (ny, nx) row-major, 1.0 actif
+    const std::vector<double> mask = sc.embedded_boundary_mask();
     const std::vector<double> dens0 = sc.density("n");
     double cell_measure = 1.0;
     for (int axis = 0; axis < kTestDimension; ++axis)
@@ -308,7 +339,7 @@ TEST(FacadeRouting, DiscModeRoutingBehavesAcrossNoneStaircaseCutcellAndSplitting
         ++n_inactive;
     }
     ASSERT_TRUE(n_active > 0 && n_inactive > 0)
-        << "(b) le disque partitionne la grille en cellules actives ET inactives (test non vide)";
+        << "(b) the analytic LevelSet partitions active and inactive cells";
 
     for (int k = 0; k < n_steps; ++k)
       sc.step(dt);
@@ -324,13 +355,10 @@ TEST(FacadeRouting, DiscModeRoutingBehavesAcrossNoneStaircaseCutcellAndSplitting
     const double d_vs_square = max_abs_diff(ref_state, sc_state);
     const double rel_drift = std::fabs(mass1 - mass0) / std::fabs(mass0);
 
-    // Le routage N'EST PAS inerte : l'operateur masque ferme les faces a la frontiere du disque, donc
-    // l'etat diverge du chemin plein cartesien. C'est la preuve directe contre le footgun T2.
+    // The masked operator closes faces at the implicit boundary, so it must differ from Cartesian.
     EXPECT_TRUE(d_vs_square > 1e-10)
-        << "(b) staircase produit un etat DIFFERENT du carre (le transport disque est REELLEMENT "
-           "cable) : max|diff| = "
-        << d_vs_square << " (attendu > 0)";
-    EXPECT_TRUE(all_finite(sc_state)) << "(b) etat staircase fini partout (aucun NaN/Inf)";
+        << "(b) staircase differs from Cartesian: max|diff| = " << d_vs_square << " (attendu > 0)";
+    EXPECT_TRUE(all_finite(sc_state)) << "(b) staircase state is finite";
     // La masse sur les cellules actives est conservee a la machine (flux normal nul aux faces
     // active/inactive). Borne juste au-dessus du bruit flottant des sommes telescopiques de flux.
     EXPECT_TRUE(rel_drift < 1e-12)
@@ -340,78 +368,69 @@ TEST(FacadeRouting, DiscModeRoutingBehavesAcrossNoneStaircaseCutcellAndSplitting
   }
 
   // ----------------------------------------------------------------------
-  // (c) CUTCELL : tourne, FINI partout, DIFFERENT du carre ; disque ENGLOBANT == carre (bit a bit).
+  // (c) cut-cell: finite and different; enclosing LevelSet == Cartesian (bit for bit).
   // ----------------------------------------------------------------------
   {
-    // (c1) disque coupant : etat fini + different du carre.
+    // (c1) cutting geometry: finite state + differs from Cartesian.
     NativeSystem cc(config);
+    install_execution_lane(cc, "pops.test.facade-routing.embedded.cutcell");
     build_transport(cc);
     cc.set_density("n", rho0);
-    cc.set_disc_domain(cx, cy, R_disc, "cutcell");
+    install_centered_ball(cc, radius, "cutcell");
     for (int k = 0; k < n_steps; ++k)
       cc.step(dt);
     const std::vector<double> cc_state = cc.get_state("n");
     const double d_vs_square = max_abs_diff(ref_state, cc_state);
-    EXPECT_TRUE(all_finite(cc_state))
-        << "(c1) etat cutcell fini partout (clamp small-cell -> pas de NaN/Inf)";
+    EXPECT_TRUE(all_finite(cc_state)) << "(c1) cut-cell state is finite";
     EXPECT_TRUE(d_vs_square > 1e-10)
-        << "(c1) cutcell produit un etat DIFFERENT du carre (transport EB cable) : max|diff| = "
-        << d_vs_square << " (attendu > 0)";
+        << "(c1) cut-cell differs from Cartesian: max|diff| = " << d_vs_square << " (attendu > 0)";
 
-    // (c2) disque ENGLOBANT (rayon > demi-diagonale) : TOUTE cellule est active, AUCUNE face coupee ->
-    // assemble_rhs_eb == assemble_rhs (kappa=1, alpha=1 partout, cf. test_eb_transport bit-identite).
-    // Un pas cutcell doit alors etre BIT-IDENTIQUE au pas carre sur le meme init.
-    const double R_big = 10.0 * L;  // englobe largement la boite
-    NativeSystem sq(config);        // reference 1 pas plein
+    // (c2) enclosing level set: every cell active and no cut face, hence EB == Cartesian.
+    const double enclosing_radius = 10.0 * L;
+    NativeSystem sq(config);  // reference 1 pas plein
+    install_execution_lane(sq, "pops.test.facade-routing.embedded.square");
     build_transport(sq);
     sq.set_density("n", rho0);
     sq.step(dt);
     const std::vector<double> sq1 = sq.get_state("n");
 
     NativeSystem eb(config);
+    install_execution_lane(eb, "pops.test.facade-routing.embedded.enclosing");
     build_transport(eb);
     eb.set_density("n", rho0);
-    eb.set_disc_domain(cx, cy, R_big, "cutcell");
+    install_centered_ball(eb, enclosing_radius, "cutcell");
     eb.step(dt);
     const std::vector<double> eb1 = eb.get_state("n");
 
     const double d_enclosing = max_abs_diff(sq1, eb1);
-    EXPECT_TRUE(d_enclosing == 0.0) << "(c2) cutcell sans coupe BIT-IDENTIQUE au carre (kappa=1, "
-                                       "alpha=1 partout) : max|diff| = "
-                                    << d_enclosing << " (attendu 0)";
+    EXPECT_TRUE(d_enclosing == 0.0)
+        << "(c2) uncut cut-cell EB is BIT-IDENTIQUE to Cartesian: max|diff| = " << d_enclosing
+        << " (attendu 0)";
   }
 }
 
-TEST(FacadeRouting, GenericAnalyticLevelSetMatchesDiscSugarAfterBlockConstruction) {
+TEST(FacadeRouting, GenericAnalyticLevelSetInstallsAfterBlockConstruction) {
 #if defined(POPS_HAS_KOKKOS)
   (void)kokkos_scope();
 #endif
   const int n = 24;
   const double L = 1.0;
-  const double cx = 0.5;
-  const double cy = 0.5;
   const double radius = 0.31;
   const NativeSystemConfig config = native_config(n, L, true);
   const std::vector<double> rho0 = ring_density(config);
 
-  // Both transport closures are deliberately built before their geometry is installed. The stable
-  // native program owner must therefore make authoring order irrelevant.
-  NativeSystem disc(config);
-  build_transport(disc);
-  disc.set_density("n", rho0);
-  disc.set_disc_domain(cx, cy, radius, "cutcell");
-
+  // The transport closure is deliberately built before geometry installation. The native program
+  // owner must therefore accept the generic LevelSet without a geometry-specific authoring order.
   NativeSystem analytic(config);
+  install_execution_lane(analytic, "pops.test.facade-routing.generic-level-set");
   build_transport(analytic);
   analytic.set_density("n", rho0);
-  analytic.set_analytic_level_set(
-      {"x", "constant", "sub", "y", "constant", "sub", "hypot", "constant", "sub"},
-      {0.0, cx, 0.0, 0.0, cy, 0.0, 0.0, radius, 0.0}, "cutcell");
-
-  EXPECT_EQ(disc.disc_mask(), analytic.disc_mask());
-  disc.step(2e-4);
+  install_centered_ball(analytic, radius, "cutcell");
+  const auto mask = analytic.embedded_boundary_mask();
+  EXPECT_GT(std::count(mask.begin(), mask.end(), 1.0), 0);
+  EXPECT_GT(std::count(mask.begin(), mask.end(), 0.0), 0);
   analytic.step(2e-4);
-  EXPECT_EQ(disc.get_state("n"), analytic.get_state("n"));
+  EXPECT_TRUE(all_finite(analytic.get_state("n")));
 }
 
 TEST(FacadeRouting, AnalyticLevelSetReplacementIsTransactionalOnNonFiniteValues) {
@@ -419,9 +438,10 @@ TEST(FacadeRouting, AnalyticLevelSetReplacementIsTransactionalOnNonFiniteValues)
   (void)kokkos_scope();
 #endif
   NativeSystem system(native_config(20, Real(1), false));
+  install_execution_lane(system, "pops.test.facade-routing.transactional-level-set");
   system.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.5, 0.0}, "staircase", 0.2, 1e-5,
                                 0.1);
-  const std::vector<double> original = system.disc_mask();
+  const std::vector<double> original = system.embedded_boundary_mask();
 
   // (x - x) / 0 is structurally valid but non-finite at every sampled cell. Rejection must happen
   // before publishing either the new program, the new mask, the thresholds, or the routing mode.
@@ -430,7 +450,7 @@ TEST(FacadeRouting, AnalyticLevelSetReplacementIsTransactionalOnNonFiniteValues)
   EXPECT_THROW(
       system.set_analytic_level_set(invalid_ops, invalid_literals, "cutcell", 0.3, 2e-5, 0.2),
       std::domain_error);
-  EXPECT_EQ(original, system.disc_mask());
+  EXPECT_EQ(original, system.embedded_boundary_mask());
 }
 
 TEST(FacadeRouting, PeriodicAnalyticLevelSetUsesTopologyAtTheSeam) {
@@ -446,12 +466,14 @@ TEST(FacadeRouting, PeriodicAnalyticLevelSetUsesTopologyAtTheSeam) {
   // a correct topology fill replaces that extension with the opposite valid cells and both prepared
   // metric fields become bit-identical. Direct evaluation at the fictitious x<0 ghost does not.
   NativeSystem topology(config);
+  install_execution_lane(topology, "pops.test.facade-routing.periodic-topology");
   add_periodic_transport(topology);
   topology.set_density("n", rho0);
   topology.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.25, 0.0}, "cutcell");
   install_forward_euler_program(topology);
 
   NativeSystem explicit_wrap(config);
+  install_execution_lane(explicit_wrap, "pops.test.facade-routing.periodic-explicit-wrap");
   add_periodic_transport(explicit_wrap);
   explicit_wrap.set_density("n", rho0);
   explicit_wrap.set_analytic_level_set(
@@ -460,7 +482,7 @@ TEST(FacadeRouting, PeriodicAnalyticLevelSetUsesTopologyAtTheSeam) {
       {0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.25, 0.0, 0.0, 0.25, 0.0, 0.0}, "cutcell");
   install_forward_euler_program(explicit_wrap);
 
-  ASSERT_EQ(topology.disc_mask(), explicit_wrap.disc_mask());
+  ASSERT_EQ(topology.embedded_boundary_mask(), explicit_wrap.embedded_boundary_mask());
   topology.step(2e-4);
   explicit_wrap.step(2e-4);
   EXPECT_EQ(topology.get_state("n"), explicit_wrap.get_state("n"));
@@ -474,6 +496,7 @@ TEST(FacadeRouting, PrimitiveMaterializationFailsClosedWithoutMutatingAcceptedSt
   constexpr int n = 4;
   const NativeSystemConfig config = native_config(n, Real(1), true);
   NativeSystem system(config);
+  install_execution_lane(system, "pops.test.facade-routing.primitive-materialization");
   add_compressible(system);
 
   // All components are finite, but Euler conservative -> primitive is undefined at rho=0.
@@ -500,6 +523,9 @@ TEST(FacadeRouting, PreparedBlockInstallationRefusesMissingBatchAuthorityWithout
 #endif
   constexpr int n = 4;
   NativeSystem system(native_config(n, Real(1), true));
+  install_execution_lane(system, "pops.test.facade-routing.prepared-block-refusal");
+  system.install_block_state_route("gas", "test:facade-routing/gas/state");
+  system.seal_auxiliary_providers();
   auto prepared = prepare_compiled_system_block<kTestDimension>(
       system, "gas", CompressibleModel::prepare(Real(1.4)), "none", "rusanov", "conservative",
       "explicit", 1.4, 1, true, 1);
@@ -525,6 +551,7 @@ TEST(FacadeRouting, PrimitiveInputRequiresPreparedRecoveryBeforeConservativePubl
   const NativeSystemConfig config = native_config(n, Real(1), true);
   const std::size_t cells = cell_count(config.shape);
   NativeSystem system(config);
+  install_execution_lane(system, "pops.test.facade-routing.primitive-input");
   add_compressible(system);
 
   std::vector<double> accepted(static_cast<std::size_t>(kCompressibleComponents) * cells, 0.0);

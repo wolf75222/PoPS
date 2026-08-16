@@ -31,14 +31,26 @@ System<Dim>::System(const SystemConfig<Dim>& config) {
   p_ = std::make_unique<Impl>(config);
 }
 
+// User-provided: GCC rejects an out-of-line `= default` when the same special members are
+// also explicitly instantiated for kNativeDimension.
 template <int Dim>
-System<Dim>::~System() = default;
+System<Dim>::~System() {}
 
 template <int Dim>
-System<Dim>::System(System&&) noexcept = default;
+System<Dim>::System(System&& other) noexcept
+    : prepared_boundary_execution_lane_(std::move(other.prepared_boundary_execution_lane_)),
+      p_(std::move(other.p_)) {}
 
 template <int Dim>
-System<Dim>& System<Dim>::operator=(System&&) noexcept = default;
+System<Dim>& System<Dim>::operator=(System&& other) noexcept {
+  if (this != &other) {
+    // Destroy Impl first: installed field solvers and boundary transports may hold
+    // ImmutableBorrow pins on the destination lane. Releasing the lane first terminates.
+    p_ = std::move(other.p_);
+    prepared_boundary_execution_lane_ = std::move(other.prepared_boundary_execution_lane_);
+  }
+  return *this;
+}
 
 template <int Dim>
 void System<Dim>::step(double dt) {
@@ -114,16 +126,90 @@ void System<Dim>::rollback_step_transaction() {
 }
 
 template <int Dim>
+void System<Dim>::begin_restart_transaction() {
+  begin_step_transaction();
+}
+
+template <int Dim>
+void System<Dim>::commit_restart_transaction() {
+  commit_step_transaction();
+}
+
+template <int Dim>
+void System<Dim>::finalize_restart_transaction() noexcept {
+  p_->external_step_transaction_.reset();
+  p_->external_step_transaction_committed_ = false;
+}
+
+template <int Dim>
+void System<Dim>::rollback_restart_transaction() {
+  rollback_step_transaction();
+}
+
+template <int Dim>
 double System<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, double min_dt) {
-  p_->program_.require_step_installed("System::step_cfl");
-  if (!std::isfinite(cfl) || !(cfl > 0.0))
-    throw std::invalid_argument("System::step_cfl cfl must be finite and positive");
-  if (!std::isfinite(speed_floor) || !(speed_floor > 0.0))
-    throw std::invalid_argument("System::step_cfl speed_floor must be finite and positive");
-  if (std::isnan(max_dt) || max_dt <= 0.0)
-    throw std::invalid_argument("System::step_cfl max_dt must be positive or +infinity");
-  if (!std::isfinite(min_dt) || min_dt < 0.0)
-    throw std::invalid_argument("System::step_cfl min_dt must be finite and non-negative");
+  const ExecutionLane& lane = prepared_boundary_execution_lane();
+  std::string request_contract;
+  std::exception_ptr request_error;
+  try {
+    p_->program_.require_step_installed("System::step_cfl");
+    if (!std::isfinite(cfl) || !(cfl > 0.0))
+      throw std::invalid_argument("System::step_cfl cfl must be finite and positive");
+    if (!std::isfinite(speed_floor) || !(speed_floor > 0.0))
+      throw std::invalid_argument("System::step_cfl speed_floor must be finite and positive");
+    if (std::isnan(max_dt) || max_dt <= 0.0)
+      throw std::invalid_argument("System::step_cfl max_dt must be positive or +infinity");
+    if (!std::isfinite(min_dt) || min_dt < 0.0)
+      throw std::invalid_argument("System::step_cfl min_dt must be finite and non-negative");
+    ExactContractBuilder contract;
+    contract.text("pops.system.step-cfl-request")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .scalar(cfl)
+        .scalar(speed_floor)
+        .scalar(max_dt)
+        .scalar(min_dt)
+        .scalar(static_cast<std::uint64_t>(p_->sp.size()));
+    for (const typename Impl::Species& block : p_->sp) {
+      contract.text(block.name)
+          .scalar(block.evolve)
+          .scalar(block.substeps)
+          .scalar(block.stride)
+          .presence(static_cast<bool>(block.source_frequency))
+          .presence(block.parabolic_frequency.has_value());
+      if (block.parabolic_frequency) {
+        const Real parabolic = *block.parabolic_frequency;
+        if (!std::isfinite(parabolic) || parabolic < Real(0))
+          throw std::runtime_error("System generated parabolic frequency is invalid");
+        contract.scalar(parabolic);
+      }
+      contract.presence(static_cast<bool>(block.stability_dt));
+    }
+    contract.scalar(static_cast<std::uint64_t>(p_->coupling_.coupled_freqs.size()));
+    for (const runtime::system::CoupledFreq& frequency : p_->coupling_.coupled_freqs)
+      contract.text(frequency.label).scalar(frequency.mu);
+    contract.scalar(static_cast<std::uint64_t>(p_->coupling_.coupled_frequencies.size()));
+    for (const runtime::system::PreparedCoupledFrequency& frequency :
+         p_->coupling_.coupled_frequencies)
+      contract.text(frequency.label).presence(static_cast<bool>(frequency.maximum_frequency));
+    contract.scalar(static_cast<std::uint64_t>(p_->coupling_.dt_bounds.size()));
+    for (const runtime::system::GlobalDtBound& bound : p_->coupling_.dt_bounds)
+      contract.text(bound.label).presence(static_cast<bool>(bound.fn));
+    contract.presence(static_cast<bool>(p_->program_.dt_bound_));
+    request_contract = std::move(contract).release();
+  } catch (...) {
+    request_error = std::current_exception();
+  }
+  if (all_reduce_max(request_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && request_error)
+      std::rethrow_exception(request_error);
+    throw std::runtime_error("System::step_cfl request validation failed collectively");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("system-step-cfl-request"), std::string_view(request_contract)}},
+          lane))
+    throw std::invalid_argument(
+        "System::step_cfl inputs or prepared scalar authorities differ between MPI ranks");
 
   SolveOutcome field_outcome = solve_fields();
   const SolveConsumption field_consumption =
@@ -148,16 +234,28 @@ double System<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, doub
 
   double selected = std::numeric_limits<double>::infinity();
   std::string reason = "degenerate";
-  for (typename Impl::Species& block : p_->sp) {
+  for (std::size_t block_index = 0; block_index < p_->sp.size(); ++block_index) {
+    typename Impl::Species& block = p_->sp[block_index];
     if (!block.evolve)
       continue;
-    if (!block.max_speed)
-      throw std::runtime_error("System block '" + block.name +
-                               "' lacks a dimension-qualified stability-speed provider");
-    const Real speed = std::max(block.max_speed(block.U), static_cast<Real>(speed_floor));
+    const Real speed =
+        std::max(block_max_speed_prepared_(static_cast<int>(block_index), block.U, lane),
+                 static_cast<Real>(speed_floor));
     double block_dt = cfl * static_cast<double>(minimum_spacing) * block.substeps /
                       (static_cast<double>(block.stride) * static_cast<double>(speed));
     const char* block_reason = "transport";
+    if (block.parabolic_frequency) {
+      const Real parabolic = *block.parabolic_frequency;
+      if (parabolic > Real(0)) {
+        // Explicit advection--diffusion uses CFL / (speed / h + 2 nu sum_a h_a^-2), rather
+        // than min(CFL h / speed, 1 / q): the two spectral radii act in the same stage.
+        block_dt = cfl * block.substeps /
+                   (static_cast<double>(block.stride) *
+                    (static_cast<double>(speed) / static_cast<double>(minimum_spacing) +
+                     static_cast<double>(parabolic)));
+        block_reason = "parabolic_frequency";
+      }
+    }
     if (block.source_frequency) {
       const Real frequency = block.source_frequency(block.U);
       if (frequency > Real(0)) {
@@ -220,7 +318,7 @@ double System<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, doub
     double candidate = bound.fn();
     if (!(candidate > 0.0) || !std::isfinite(candidate))
       candidate = std::numeric_limits<double>::infinity();
-    candidate = all_reduce_min(candidate);
+    candidate = all_reduce_min(candidate, lane);
     if (candidate < selected) {
       selected = candidate;
       reason = "global:" + bound.label;
@@ -240,8 +338,30 @@ double System<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, doub
     selected = max_dt;
     reason = "strategy:max_dt";
   }
-  if (selected < min_dt)
+  if (all_reduce_max(selected < min_dt ? 1L : 0L, lane) != 0)
     throw std::runtime_error("System::step_cfl stability bound is below declared min_dt");
+
+  std::string decision_contract;
+  std::exception_ptr decision_error;
+  try {
+    ExactContractBuilder contract;
+    contract.text("pops.system.step-cfl-decision")
+        .scalar(std::uint32_t{1})
+        .scalar(selected)
+        .text(reason);
+    decision_contract = std::move(contract).release();
+  } catch (...) {
+    decision_error = std::current_exception();
+  }
+  if (all_reduce_max(decision_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && decision_error)
+      std::rethrow_exception(decision_error);
+    throw std::runtime_error("System::step_cfl decision preparation failed collectively");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("system-step-cfl-decision"), std::string_view(decision_contract)}},
+          lane))
+    throw std::runtime_error("System::step_cfl selected different bounds across MPI ranks");
 
   p_->last_dt_reason_ = std::move(reason);
   p_->execute_step_transaction(
@@ -395,6 +515,10 @@ template void System<kNativeDimension>::commit_step_transaction();
 template std::map<std::string, double> System<kNativeDimension>::step_change_l2() const;
 template void System<kNativeDimension>::finalize_step_transaction();
 template void System<kNativeDimension>::rollback_step_transaction();
+template void System<kNativeDimension>::begin_restart_transaction();
+template void System<kNativeDimension>::commit_restart_transaction();
+template void System<kNativeDimension>::finalize_restart_transaction() noexcept;
+template void System<kNativeDimension>::rollback_restart_transaction();
 template double System<kNativeDimension>::step_cfl(double, double, double, double);
 template int System<kNativeDimension>::macro_step() const;
 template void System<kNativeDimension>::mark_bound();

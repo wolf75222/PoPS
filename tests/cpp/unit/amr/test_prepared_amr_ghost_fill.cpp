@@ -63,6 +63,15 @@ Real expected_linear_parent(const Index<Dim>& fine, int component) {
   return result;
 }
 
+Real fifth_power(Real value) {
+  const Real square = value * value;
+  return square * square * value;
+}
+
+Real quartic_average(Real lower, Real upper) {
+  return (fifth_power(upper) - fifth_power(lower)) / (Real(5) * (upper - lower));
+}
+
 template <int Dim>
 void prove_sparse_parent_interpolation() {
   const Box<Dim> coarse_domain = box<Dim>(0, 7);
@@ -112,6 +121,91 @@ TEST(test_prepared_amr_ghost_fill, sparse_parent_interpolation_is_exact_in_1d_2d
   prove_sparse_parent_interpolation<1>();
   prove_sparse_parent_interpolation<2>();
   prove_sparse_parent_interpolation<3>();
+}
+
+TEST(test_prepared_amr_ghost_fill,
+     prepared_prototype_rebinds_an_exact_candidate_without_mutating_the_prototype) {
+  const Box<1> coarse_domain{Index<1>{0}, Index<1>{7}};
+  const Box<1> fine_domain{Index<1>{0}, Index<1>{15}};
+  const BoxArray<1> coarse_layout(std::vector<Box<1>>{coarse_domain});
+  const BoxArray<1> fine_layout(std::vector<Box<1>>{{Index<1>{4}, Index<1>{11}}});
+  HostMultiFab<1> coarse(coarse_layout, replicated(coarse_layout), Index<1>{}, 1, Extent<1>{0});
+  HostMultiFab<1> prototype(fine_layout, replicated(fine_layout), Index<1>{}, 1, Extent<1>{1});
+  HostMultiFab<1> candidate(fine_layout, replicated(fine_layout), Index<1>{}, 1, Extent<1>{1});
+  fill_valid_encoded(coarse, Real{-1});
+  fill_valid(prototype, Real{-111}, [](const Index<1>&, int) { return Real(3100); });
+  fill_valid(candidate, Real{-222}, [](const Index<1>&, int) { return Real(4200); });
+
+  AmrGhostFillPreparation<1> request{};
+  request.fine_level = 1;
+  request.coarse_domain = coarse_domain;
+  request.fine_domain = fine_domain;
+  request.ratio = ::pops::amr::RefinementRatio<1>(2);
+  request.topology_generation = 13;
+  request.materialization_generation = 17;
+  request.field_identity = "state";
+  request.budget = budget<1>(1, 1);
+  const ExecutionLane lane = ExecutionLane::world();
+  const auto fill = prepare_amr_ghost_fill(coarse, prototype, request, lane);
+  const auto prototype_before = snapshot(prototype);
+
+  runtime::multiblock::BoundaryEvaluationPoint point{};
+  point.level = 1;
+  fill(candidate, point);
+
+  const auto& candidate_fab = candidate.fab_global(0);
+  const std::size_t cells = static_cast<std::size_t>(candidate_fab.grown_box().numPts());
+  for (std::size_t ordinal = 0; ordinal < cells; ++ordinal) {
+    const Index<1> index = index_from_ordinal(candidate_fab.grown_box(), ordinal);
+    const Real expected =
+        candidate_fab.box().contains(index) ? Real(4200) : expected_linear_parent(index, 0);
+    EXPECT_DOUBLE_EQ(value_at(candidate, 0, index), expected);
+  }
+  EXPECT_EQ(snapshot(prototype), prototype_before);
+}
+
+TEST(test_prepared_amr_ghost_fill,
+     fifth_order_route_stages_its_radius_two_parent_stencil_without_linear_fallback) {
+  const Box<1> coarse_domain{Index<1>{0}, Index<1>{11}};
+  const Box<1> fine_domain{Index<1>{0}, Index<1>{23}};
+  const BoxArray<1> coarse_layout(std::vector<Box<1>>{coarse_domain});
+  const BoxArray<1> fine_layout(std::vector<Box<1>>{{Index<1>{8}, Index<1>{15}}});
+  HostMultiFab<1> coarse(coarse_layout, replicated(coarse_layout), Index<1>{}, 1, Extent<1>{0});
+  HostMultiFab<1> fine(fine_layout, replicated(fine_layout), Index<1>{}, 1, Extent<1>{3});
+  fill_valid(coarse, Real{-1}, [](const Index<1>& index, int) {
+    const Real center = static_cast<Real>(index[0]);
+    return quartic_average(center - Real(0.5), center + Real(0.5));
+  });
+  fill_valid(fine, Real{-777}, [](const Index<1>&, int) { return Real(700); });
+
+  AmrGhostFillPreparation<1> request{};
+  request.fine_level = 1;
+  request.coarse_domain = coarse_domain;
+  request.fine_domain = fine_domain;
+  request.ratio = ::pops::amr::RefinementRatio<1>(2);
+  request.interpolation_kind =
+      ::pops::amr::transfer::TransferKind::FifthOrderCoarseFineGhostInterpolation;
+  request.topology = BoundaryTopology<1>::physical();
+  request.topology_generation = 17;
+  request.materialization_generation = 19;
+  request.field_identity = "weno-state";
+  request.budget = budget<1>(1, 1);
+  const ExecutionLane lane = ExecutionLane::world();
+  const auto fill = prepare_amr_ghost_fill(coarse, fine, request, lane);
+  runtime::multiblock::BoundaryEvaluationPoint point{};
+  point.level = 1;
+  fill(fine, point);
+
+  for (int fine_index = 5; fine_index <= 18; ++fine_index) {
+    if (fine_index >= 8 && fine_index <= 15) {
+      EXPECT_DOUBLE_EQ(value_at(fine, 0, Index<1>{fine_index}), Real(700));
+      continue;
+    }
+    const Real lower = static_cast<Real>(fine_index) / Real(2) - Real(0.5);
+    const Real upper = static_cast<Real>(fine_index + 1) / Real(2) - Real(0.5);
+    EXPECT_NEAR(value_at(fine, 0, Index<1>{fine_index}), quartic_average(lower, upper),
+                Real(2e-10));
+  }
 }
 
 TEST(test_prepared_amr_ghost_fill, same_level_values_override_parent_interpolation) {

@@ -45,7 +45,7 @@ class _AmrSystemIO(_AmrSystem):
         return getattr(self, "_last_restart_regrid_receipt", None)
 
     def checkpoint(self, path: Any) -> Any:
-        """Encode the complete accepted AMR state for the RuntimeInstance checkpoint provider.
+        """Encode the complete accepted AMR state using public atomic publication.
 
         The provider owns collective publication; this adapter serializes the installed hierarchy,
         temporal state, histories, and regrid state for frozen or active regridding.
@@ -58,6 +58,20 @@ class _AmrSystemIO(_AmrSystem):
             path,
             self._regrid_every,
             getattr(self, "_history_persistence", None) or {},
+        )
+
+    def _checkpoint_precreated_inode(self, path: Any, *, precreated_descriptor: int | None) -> Any:
+        """Internal RuntimeInstance seam preserving its transaction-created inode authority."""
+        from pops.runtime._amr_checkpoint_v3 import write_v3
+
+        return write_v3(
+            self,
+            self._s,
+            path,
+            self._regrid_every,
+            getattr(self, "_history_persistence", None) or {},
+            precreated_inode=True,
+            precreated_descriptor=precreated_descriptor,
         )
 
     def _prepare_checkpoint_restart(
@@ -75,6 +89,7 @@ class _AmrSystemIO(_AmrSystem):
             require_restart_hierarchy_mode,
         )
         from pops._generated_release_contract import AMR_CHECKPOINT_PAYLOAD_VERSION
+        from pops.runtime._checkpoint_resource_budget import require_checkpoint_resource_budget
         from pops.runtime._checkpoint_manifest import (
             authenticate_checkpoint_payload,
             require_exact_payload_version,
@@ -85,7 +100,7 @@ class _AmrSystemIO(_AmrSystem):
         selected_hierarchy_mode = require_restart_hierarchy_mode(
             hierarchy_mode, where="AMR restart"
         )
-        data = decode_checkpoint_bytes(payload)
+        data = decode_checkpoint_bytes(payload, require_checkpoint_resource_budget(self))
         identity = authenticate_checkpoint_payload(self, data, runtime_kind="amr")
         require_exact_payload_version(
             data,
@@ -136,14 +151,12 @@ class _AmrSystemIO(_AmrSystem):
         return prepared.restart_identity
 
     def _commit_checkpoint_restart(self) -> None:
-        # Keep the native AcceptedSnapshot live through the all-rank commit consensus.
-        self._checkpoint_restart_committed = True
+        # Native commit is a collective readiness/authentication phase.  It marks the transaction
+        # committed while retaining the AcceptedSnapshot for rollback through Python consensus.
+        self._s.commit_restart_transaction()
 
     def _finalize_checkpoint_restart(self) -> None:
-        if not self.__dict__.get("_checkpoint_restart_committed", False):
-            raise RuntimeError("AMR checkpoint restart transaction was not committed")
-        self._s.commit_restart_transaction()
-        del self._checkpoint_restart_committed
+        self._s.finalize_restart_transaction()
         del self._checkpoint_restart_python_snapshot
 
     def _rollback_checkpoint_restart(self) -> None:
@@ -158,7 +171,6 @@ class _AmrSystemIO(_AmrSystem):
                 self._temporal_restart_state,
                 self._step_controller,
             ) = snapshot
-            self.__dict__.pop("_checkpoint_restart_committed", None)
             del self._checkpoint_restart_python_snapshot
 
     def restart(self, path: Any, *, bit_identical: bool = False) -> Any:

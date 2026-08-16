@@ -45,8 +45,8 @@ FROZEN_STRUCTURAL = frozenset({
     "set_block_elliptic_field", "set_compiled_block",
     # inter-species couplings
     "add_ionization", "add_collision", "add_thermal_exchange", "add_coupled_source",
-    # geometry / disc domain
-    "set_disc_domain", "set_geometry_mode",
+    # embedded geometry
+    "set_geometry_mode",
     # AMR layout
     "set_conservative_state",
     # installed time Program
@@ -81,7 +81,7 @@ def guard_assembling(engine: Any, what: Any) -> Any:
     """Raise :func:`freeze_error` when @p engine is already bound (the Python-layer structural guard).
 
     Called at the TOP of each Python-implemented structural method (add_equation /
-    set_poisson / set_disc_domain / _install_compiled / ...). Enforces the freeze
+    set_poisson / set_analytic_level_set / _install_compiled / ...). Enforces the freeze
     at the Python layer WITHOUT the native ``mark_bound`` (bypass-proof on a prebuilt ``.so``): it
     reads the engine's ``_lifecycle`` flag, defaulting to ``assembling`` (so an engine constructed
     before this flag existed is never spuriously frozen). The default keeps a fresh engine mutable

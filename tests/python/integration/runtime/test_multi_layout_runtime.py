@@ -276,11 +276,10 @@ def test_two_native_layouts_execute_sliced_programs_and_exact_transfer(compiled_
 
     assert artifact.program is None
     assert {row.block_names for row in artifact.layout_programs} == {("coarse",), ("tracer",)}
-    assert instance._executor_for_layout(coarse_id).nx() == 8
-    assert instance._executor_for_layout(fine_id).nx() == 16
+    assert instance._executor_for_layout(coarse_id).spatial_shape()[0] == 8
+    assert instance._executor_for_layout(fine_id).spatial_shape()[0] == 16
     assert instance._executor_for_block("tracer") is instance._executor_for_layout(fine_id)
-    with pytest.raises(ValueError, match="executor_for_layout"):
-        instance.nx()
+    assert not hasattr(instance, "nx")
 
     transfer = instance._runtime_plan.communication.transfers[0]
     native = instance._executor

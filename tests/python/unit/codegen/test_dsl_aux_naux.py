@@ -47,7 +47,7 @@ def test_provider_pack_assigns_compact_slots_and_emits_consumer_local_reads() ->
     source = model._m.emit_cpp_source(name="GenericAuxSource")
 
     assert "static constexpr int n_aux = 1;" in source
-    assert "flux_provider<0>()" in source
+    assert "pops::provider_value<0>(a)" in source
     assert "B_z" not in source
     assert "T_e" not in source
     assert "AUX_NAMED_BASE" not in source
@@ -57,12 +57,22 @@ def test_native_package_registers_routes_without_sealing_the_global_registry() -
     model = _model()
     source = model.__pops_native_loader_source__(name="GenericAux", target="system")
 
-    assert "pops_register_auxiliary_routes" in source
+    assert "pops_register_provider_routes" in source
     assert "install_prepared_auxiliary_provider" in source
     assert "install_auxiliary_consumer_plan" in source
     assert "seal_auxiliary_providers" not in source
     assert "pops_compiled_aux_provider_pack" in source
     assert "pops_compiled_aux_consumer_plans" in source
+
+
+def test_amr_native_package_registers_routes_through_its_typed_hook() -> None:
+    model = _model()
+    source = model.__pops_native_loader_source__(name="GenericAuxAmr", target="amr_system")
+
+    assert "pops_register_provider_routes_amr" in source
+    assert "install_auxiliary_consumer_plan" in source
+    assert "pops::AmrSystem<pops::kNativeDimension>* sys" in source
+    assert "seal_auxiliary_providers" not in source
 
 
 def test_native_package_accepts_an_empty_provider_pack() -> None:
@@ -76,5 +86,5 @@ def test_native_package_accepts_an_empty_provider_pack() -> None:
     source = model.__pops_native_loader_source__(name="NoAux", target="system")
 
     assert "static constexpr int n_aux" not in source
-    assert "pops_register_auxiliary_routes" in source
+    assert "pops_register_provider_routes" in source
     assert "install_auxiliary_consumer_plan" in source

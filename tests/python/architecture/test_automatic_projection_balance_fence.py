@@ -2,11 +2,16 @@
 
 from pathlib import Path
 
+from tests.python.architecture.test_final_nd_amr_consumers import (
+    ROOTS as AMR_CONSUMER_ROOTS,
+    _semantic_closure as _amr_semantic_closure,
+    _source as _amr_semantic_source,
+)
+
 
 ROOT = Path(__file__).resolve().parents[3]
 PROGRAM_STATE = ROOT / "include/pops/runtime/program/program_runtime_state.hpp"
 UNIFORM_CONTEXT = ROOT / "include/pops/runtime/program/program_context.hpp"
-AMR_CONTEXT = ROOT / "include/pops/runtime/program/amr_program_context.hpp"
 BALANCE_CODEGEN = ROOT / "python/pops/codegen/program_balance_due.py"
 RETIRED_SERVICES = ROOT / "include/pops/runtime/program/program_execution_services.hpp"
 
@@ -45,11 +50,29 @@ def test_projection_dispatch_lives_on_the_ranked_context_not_a_parallel_service(
         "void apply_projection(int program_block, field_type& state_value) const",
         "Real max_wave_speed(",
     )
-    assert "system_->block_project(sys_block(program_block), state_value)" in projection
+    assert "const ExecutionLane& lane = prepared_execution_lane();" in projection
+    assert "const int runtime_block =" in projection
+    assert (
+        'resolve_prepared_program_block_(program_block, lane, "Program projection block")'
+        in projection
+    )
+    assert "system_->block_project(runtime_block, state_value);" in projection
     assert "void note_automatic_balance_capture_due(bool due) const" in uniform
     assert "runtime_state().note_automatic_balance_capture_due" in uniform
     assert "template <int Dim>" in uniform
 
-    amr = AMR_CONTEXT.read_text(encoding="utf-8")
+    amr = _amr_semantic_source(_amr_semantic_closure(AMR_CONSUMER_ROOTS["program"]))
     assert "ProgramExecutionServices" not in amr
-    assert "apply_projection(" not in amr
+    projection = _between(
+        amr,
+        "void apply_projection(int program_block, field_type& detached_candidate) const",
+        "Real max_wave_speed(",
+    )
+    assert "const int runtime_block = sys_block(program_block);" in projection
+    assert (
+        "const int candidate_owner = projection_candidate_owner_(detached_candidate);" in projection
+    )
+    assert (
+        "project_prepared_amr_block_level_state(runtime_block, active_level_, candidate_owner,"
+        in projection
+    )

@@ -196,17 +196,18 @@ def build_moment_model(name: Any, order: Any, closure: Any, blocks: Any = None,
        available for the moment system (no fluid roles / pressure needed). Complex/non-converged
        spectra are refused; no other Riemann solver is substituted. Additive to exact_speeds (which
        still provides max_wave_speed for the CFL dt). Emitted by the production backend.
-    @p frame: a typed Cartesian frame exposing the ``x`` and ``y`` axes; ``None`` selects
-       :class:`Cartesian2D`.
+    @p frame: the required typed Cartesian frame exposing exactly the ``x`` and ``y`` axes.
+       The two-dimensional specialization is explicit; no spatial-rank default is inferred.
     @return the canonical :class:`pops.physics.Model`, ready to attach to a Problem."""
-    from pops.frames import Cartesian2D
     from pops.math import ddt, div
     from pops.physics import Density, Model
 
     if isinstance(order, bool) or not isinstance(order, int) or order < 2:
         raise ValueError("build_moment_model: order must be an int >= 2 "
                          "(standardization relies on C20/C02; order %r)" % (order,))
-    selected_frame = Cartesian2D() if frame is None else frame
+    if frame is None:
+        raise TypeError("build_moment_model requires an explicit two-axis Cartesian frame")
+    selected_frame = frame
     axes = getattr(selected_frame, "axes", None)
     if (not isinstance(axes, tuple) or len(axes) != 2
             or tuple(getattr(axis, "name", None) for axis in axes) != ("x", "y")):

@@ -188,6 +188,36 @@ def _require_runtime_determinism(
     runtime_plan.determinism.require_assumptions(actual)
 
 
+def _require_supported_runtime_actions(plan: Any, runtime_plan: Any) -> None:
+    """Refuse derived actions for which no native execution owner exists yet."""
+    unsupported = (
+        ("buffer allocations", runtime_plan.resources.buffers),
+        ("cross-memory fences", runtime_plan.communication.fences),
+        ("clock joins", runtime_plan.communication.clock_joins),
+    )
+    for label, rows in unsupported:
+        if rows:
+            raise NotImplementedError(
+                "native RuntimeInstance has no execution owner for planned %s" % label
+            )
+    if runtime_plan.communication.collectives:
+        from pops.output._consumer_contracts import ConsumerGraph
+        from pops.runtime._consumer_planning import (
+            require_consumer_collective_ownership,
+        )
+
+        # Builtin component manifests derive these actions from this resolved graph before
+        # build_runtime_plans(); external manifests must prove the same ownership explicitly.
+        graph = plan.artifact.plan.consumer_graph
+        if graph is None:
+            graph = ConsumerGraph(())
+        require_consumer_collective_ownership(
+            runtime_plan,
+            graph,
+            plan.execution_context.communicator.identity,
+        )
+
+
 def _require_single_layout_runtime_plan(plan: Any, runtime_plan: Any) -> None:
     """Require the exact call/layout projection consumed by one native engine."""
     layout_plan = plan.artifact.layout_plan
@@ -211,6 +241,34 @@ def _require_single_layout_runtime_plan(plan: Any, runtime_plan: Any) -> None:
         raise ValueError("single-layout native provider cannot consume mapping providers")
     if any(row.layout_id != layout_id for row in runtime_plan.communication.halos):
         raise ValueError("RuntimePlanBundle halo differs from the installed single layout")
+    calls = {row.identity.token: row for row in runtime_plan.calls}
+    if len(calls) != len(runtime_plan.calls):
+        raise ValueError("RuntimePlanBundle contains duplicate RuntimeCall identities")
+    block_names = {subject_id: name for name, (subject_id, _) in assignments.items()}
+    compiled = {row.name: row for row in plan.artifact.blocks}
+    if set(compiled) != set(assignments):
+        raise ValueError("compiled block set differs from the single-layout plan")
+    ghost_depths = {}
+    if runtime_plan.communication.halos:
+        from pops.codegen.inspect_compiled import _ghost_depth_by_block
+
+        ghost_depths = _ghost_depth_by_block(plan.artifact, tuple(compiled))
+    for halo in runtime_plan.communication.halos:
+        call = calls.get(halo.call_id)
+        if call is None:
+            raise ValueError("RuntimePlanBundle halo has no installed block owner")
+        block_name = block_names.get(call.block_id)
+        if block_name is None:
+            raise ValueError("RuntimePlanBundle halo has no installed block owner")
+        if halo.resource not in {row.resource for row in call.reads}:
+            raise ValueError("RuntimePlanBundle halo has no authenticated read owner")
+        block = compiled[block_name]
+        available = ghost_depths[block_name]
+        if halo.depth > available:
+            raise ValueError(
+                "RuntimePlanBundle halo depth %d exceeds compiled block %r ghost depth %d"
+                % (halo.depth, block.name, available)
+            )
 
 
 class _UniformNativeProvider(RuntimeExecutorProvider):
@@ -229,7 +287,7 @@ class _UniformNativeProvider(RuntimeExecutorProvider):
         _require_single_layout_runtime_plan(plan, runtime_plan)
         _require_native_geometry(plan)
         from pops.runtime._runtime_mesh_lowering import (
-            install_uniform_embedded_boundary,
+            install_embedded_boundary,
             system_config_from_layout,
         )
         from pops.runtime._system import System
@@ -245,7 +303,7 @@ class _UniformNativeProvider(RuntimeExecutorProvider):
             transition_ratios=normalized_layout.transition_ratios,
         )
         cast(Any, engine)._execution_context = plan.execution_context
-        install_uniform_embedded_boundary(engine, normalized_layout)
+        install_embedded_boundary(engine, normalized_layout)
         from pops.runtime._runtime_authorities import install_runtime_authorities
 
         install_runtime_authorities(engine, plan)
@@ -297,6 +355,9 @@ class _AdaptiveNativeProvider(RuntimeExecutorProvider):
             transition_ratios=normalized_layout.transition_ratios,
         )
         engine._execution_context = plan.execution_context
+        from pops.runtime._runtime_mesh_lowering import install_embedded_boundary
+
+        install_embedded_boundary(engine, normalized_layout)
         from pops.runtime._runtime_authorities import install_runtime_authorities
 
         install_runtime_authorities(engine, plan)
@@ -362,6 +423,7 @@ def install_runtime_executor(install_plan: Any, runtime_plan: Any = None) -> Any
     from pops.runtime._runtime_planning import require_runtime_plan_bundle
 
     runtime_plan = require_runtime_plan_bundle(plan, runtime_plan)
+    _require_supported_runtime_actions(plan, runtime_plan)
     native_facts = _native_runtime_facts()
     _require_runtime_determinism(plan, runtime_plan, native_facts)
     _require_supported_execution_context(plan, native_facts)

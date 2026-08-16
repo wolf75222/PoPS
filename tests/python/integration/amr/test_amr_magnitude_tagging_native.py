@@ -5,6 +5,7 @@ The negative seed distinguishes magnitude tagging from ordinary ``Above``:
 fine level through the same prepared Kokkos tagging program used by bound AMR
 simulations.
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -12,6 +13,8 @@ from types import SimpleNamespace
 import numpy as np
 import pops
 import pytest
+from pops.codegen.abi import module_header_signature
+from pops.codegen.loader import CompiledModel
 from pops.mesh._amr import (
     Above,
     ConflictPolicy,
@@ -25,6 +28,7 @@ from pops.runtime import _engine_descriptors as engine
 from pops.runtime._engine_descriptors import Periodic
 from pops.runtime._runtime_mesh_lowering import flow_bootstrap_tagging
 from pops.runtime._system import AmrSystem
+from tests.python.support.native_execution_context import install_compiled_model_amr_test_lane
 
 
 N = 16
@@ -54,12 +58,33 @@ def _resolved_leaf(node_type):
     return graph, bound_threshold, indicator.qualified_id
 
 
+def _amr_lane_model():
+    """Detached exact-rank package metadata used solely to authenticate this test lane."""
+    return CompiledModel(
+        so_path="<native-magnitude-tagging-lane>",
+        backend="production",
+        cons_names=["n"],
+        cons_roles=["density"],
+        prim_names=["n"],
+        n_vars=1,
+        gamma=None,
+        n_aux=0,
+        params={},
+        caps={},
+        abi_key=f"{module_header_signature()}|c++|c++23|dim=2",
+        model_hash="native-magnitude-tagging-lane",
+        cxx="c++",
+        std="c++23",
+        native_dimension=2,
+        target="amr_system",
+    )
+
+
 def _install_state_transfer_routes(simulation, subject):
     routes = (
         ("prolongation", "conservative_linear", 2, [1]),
         ("restriction", "volume_average", 1, [0]),
-        ("coarse_fine_fill", "conservative_coarse_fine", 2, [2]),
-        ("temporal_interpolation", "linear_time_interpolation", 2, [0]),
+        ("coarse_fine_fill", "conservative_coarse_fine", 2, [1]),
     )
     for operation, kernel, order, ghost_depth in routes:
         simulation._s._register_bootstrap_transfer_route(
@@ -76,18 +101,20 @@ def _install_state_transfer_routes(simulation, subject):
             ghost_depth * 2,
             [2, 2],
         )
-    simulation._s._bind_bootstrap_block_subject(subject, "tracer")
+    simulation._s._bind_bootstrap_subject(subject, "tracer", "bound_level_zero")
 
 
 def _native_hierarchy(node_type):
     graph, threshold, subject = _resolved_leaf(node_type)
     simulation = AmrSystem(
-        n=N,
-        L=1.0,
+        shape=(N, N),
+        lower=(0.0, 0.0),
+        upper=(1.0, 1.0),
         periodicity=(True, True),
         regrid_every=0,
         explicit_bootstrap=True,
     )
+    install_compiled_model_amr_test_lane(simulation, _amr_lane_model())
     # This direct-runtime fixture still consumes the resolved Case Handle. Install that exact
     # owner-qualified identity before declaring the native block, just as pops.bind does.
     simulation._s._install_block_state_route("tracer", subject)
@@ -96,7 +123,7 @@ def _native_hierarchy(node_type):
         "tracer",
         engine.Model(
             engine.Scalar(),
-            engine.ExB(B0=1.0),
+            engine.ExB(),
             engine.NoSource(),
             engine.BackgroundDensity(alpha=0.0, n0=0.0),
         ),
@@ -111,11 +138,18 @@ def _native_hierarchy(node_type):
         clock_identity="case::native-magnitude-tagging-clock",
     )
     values = np.zeros((N, N), dtype=np.float64)
-    values[N // 2 - 2:N // 2 + 2, N // 2 - 2:N // 2 + 2] = -1.0
-    simulation.set_density("tracer", values)
+    values[N // 2 - 2 : N // 2 + 2, N // 2 - 2 : N // 2 + 2] = -1.0
     _install_state_transfer_routes(simulation, subject)
+    simulation._s._stage_bootstrap_array(subject, "tracer", "cell", "cell", values[np.newaxis, ...])
     simulation._s._begin_bootstrap_plan()
+    simulation._s._materialize_bootstrap_action(
+        subject, "initialize_level_zero", "bound_level_zero", 0
+    )
     created = bool(simulation._s._bootstrap_next_level())
+    if created:
+        simulation._s._materialize_bootstrap_action(
+            subject, "prolong_from_parent", "conservative_linear", 1
+        )
     simulation._s._commit_bootstrap_level()
     return simulation, created
 

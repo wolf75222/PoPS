@@ -11,6 +11,7 @@
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/numerics/nonlinear/prepared_variable_recovery.hpp>
 #include <pops/mesh/boundary/prepared_hyperbolic_boundary.hpp>
+#include <pops/mesh/boundary/prepared_boundary_component.hpp>
 #include <pops/runtime/export.hpp>  // POPS_EXPORT (methods resolved by the native loader through dlopen)
 #include <pops/runtime/facade_options.hpp>  // CoupledSourceProgram (facade POD, ADC-214)
 #include <pops/runtime/config/model_spec.hpp>
@@ -19,8 +20,10 @@
 #include <pops/runtime/numerical_defaults.hpp>
 #include <pops/runtime/output_piece.hpp>
 #include <pops/runtime/recovery/uniform_recovery_consumer.hpp>
+#include <pops/runtime/system/auxiliary_checkpoint.hpp>
 #include <pops/runtime/system/derived_aux_provider.hpp>
 #include <pops/runtime/system/system_block_closures.hpp>
+#include <pops/runtime/system/native_package_capability.hpp>
 
 #include <array>
 #include <cstddef>
@@ -28,6 +31,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -179,6 +183,8 @@ class CacheManager;  // scheduler value cache (ADC-458); full type in program/ca
 template <int Dim>
 class ProgramContext;
 template <int Dim>
+class PreparedScalarBoundarySession;
+template <int Dim>
 struct ProgramRuntimeState;
 }  // namespace runtime::program
 
@@ -190,6 +196,8 @@ struct FieldTopologyReportRow;
 namespace runtime::multiblock {
 struct BoundaryEvaluationPoint;
 }  // namespace runtime::multiblock
+
+class ExecutionLane;
 
 /// Exact compile-time-ranked mesh authority shared by every block of one uniform runtime.
 /// Shape, physical bounds, topology and decomposition are lowered once from the resolved layout;
@@ -295,11 +303,11 @@ class System {
                  double positivity_floor = 0.0, bool wave_speed_cache = false,
                  double weno_epsilon = static_cast<double>(kWenoEpsilon));
 
-  /// Internal installation seam for a compiled production package. The loader
-  /// inlines the header template pops::add_compiled_model<ProdModel>, which builds the closures on the
-  /// real System context and installs a zero-copy native block. The complete canonical BindSchema
-  /// vector crosses the fixed ABI once and is injected into the generated model before those closures
-  /// are constructed. Package and module ABI keys must match.
+  /// Internal installation seam for a compiled production package. The loader prepares one
+  /// revocable, detached block capability against the exact aggregate provider graph. The complete
+  /// canonical BindSchema vector crosses the fixed ABI once and is injected into the generated
+  /// model before its closures are constructed. Package and module ABI keys must match; the expected
+  /// model identity and ``pops.binary.v1`` token must match the authenticated facade artifact.
   /// @param limiter "none" | "minmod" | "vanleer" | "weno5" | "mc" | "superbee"
   ///                (weno5: add_compiled_model reallocates the block state to block_n_ghost = 3
   ///                ghosts after install_block, like add_block)
@@ -310,41 +318,47 @@ class System {
   /// @param gamma   adiabatic index of the block (set_density / inter-species couplings)
   /// @param params complete resolved runtime-parameter vector in declaration order
   /// @param stride block cadence (1 = every step, default; cf. add_block)
-  /// Stage one compiled package.  Staging validates the DSO and registers its typed auxiliary
-  /// routes, but deliberately does not build its blocks: all packages must first contribute to the
-  /// one global provider graph.  Call ``finalize_native_packages`` exactly once afterwards.
-  void register_native_package(const std::string& name, const std::string& so_path,
-                               const std::string& limiter = "minmod",
-                               const std::string& riemann = "rusanov",
-                               const std::string& recon = "conservative",
-                               const std::string& time = "explicit",
-                               double gamma = static_cast<double>(kPhysicalDefaultGamma),
-                               int substeps = 1, bool evolve = true, int stride = 1,
-                               const std::vector<double>& params = {},
-                               double positivity_floor = 0.0);
+  /// Stage one compiled package. Staging authenticates the exact bytes and ABI but neither publishes
+  /// routes nor builds blocks. ``finalize_native_packages`` invokes every registrar into one detached
+  /// provider graph, prepares the complete block/field image, and publishes only after consensus.
+  void register_native_package(
+      const std::string& name, const std::string& so_path,
+      const std::string& expected_model_identity, const std::string& expected_binary_identity,
+      const std::string& limiter = "minmod", const std::string& riemann = "rusanov",
+      const std::string& recon = "conservative", const std::string& time = "explicit",
+      double gamma = static_cast<double>(kPhysicalDefaultGamma), int substeps = 1,
+      bool evolve = true, int stride = 1, const std::vector<double>& params = {},
+      double positivity_floor = 0.0);
+
+  /// Authenticate and stage one exact-ranked external Riemann package. The external DSO owns the
+  /// prepared model and numerical flux type; its handle is retained by the ordinary native-package
+  /// transaction so every installed closure remains resident for the lifetime of this System.
+  /// Both canonical DSO provider hooks are mandatory. A zero-provider brick exports explicit empty
+  /// System/AMR hooks; the System hook is staged before the one global provider graph is sealed.
+  void register_external_riemann_package(
+      const std::string& name, const std::string& so_path, const std::string& brick_id,
+      const std::string& expected_sha256, int expected_nvars, int expected_provider_count,
+      const std::string& expected_model_identity, const std::string& provider_consumer_qid,
+      const std::string& limiter = "minmod", const std::string& recon = "conservative",
+      const std::string& time = "explicit",
+      double gamma = static_cast<double>(kPhysicalDefaultGamma), int substeps = 1,
+      bool evolve = true, int stride = 1, double positivity_floor = 0.0,
+      double weno_epsilon = static_cast<double>(kWenoEpsilon));
 
   /// Seal the aggregate auxiliary graph, allocate its exact compact carrier, then install every
-  /// staged native block in canonical package order.  Any installer failure restores the complete
-  /// pre-finalization System image and unloads the staged packages.
+  /// staged native block in canonical package order. Any registrar, seal, or installer failure
+  /// restores the complete pre-finalization System image and re-arms the exact staged journal for
+  /// retry without publishing candidate closures.
   void finalize_native_packages();
 
-  /// Native-loader-only hand-off after ABI/manifest validation.  The package lifetime keeps its
-  /// local DSO resident until all closures it installed have been destroyed.  This is intentionally
-  /// a typed C++ seam, not a metadata/JSON parser.
-  POPS_EXPORT void stage_prepared_native_package(std::string identity,
-                                                 std::function<void()> installer,
-                                                 std::shared_ptr<void> package_lifetime);
-
-  /// Installs an authenticated external Riemann policy against its compiled Model on the real
-  /// System storage. The loaded library remains alive until every installed closure is destroyed.
-  void add_external_riemann_block(const std::string& name, const std::string& so_path,
-                                  const std::string& brick_id, const std::string& sha256,
-                                  const std::string& limiter, const std::string& recon,
-                                  const std::string& time, double gamma, int substeps, bool evolve,
-                                  int stride, int expected_nvars, int expected_naux,
-                                  const std::string& expected_model_identity,
-                                  double positivity_floor = 0.0,
-                                  double weno_epsilon = static_cast<double>(kWenoEpsilon));
+  /// Native-loader-only hand-off after ABI/manifest validation. The canonical registrar is required
+  /// even for an empty provider graph; only private boundary-component staging may omit it. The
+  /// package lifetime keeps its local DSO resident until all closures it installed are destroyed.
+  /// This is intentionally a typed C++ seam, not a metadata/JSON parser.
+  POPS_EXPORT void stage_prepared_native_package(
+      std::string identity, std::function<void()> route_registrar, std::function<void()> installer,
+      std::shared_ptr<void> package_lifetime,
+      std::shared_ptr<runtime::system::NativePackageCapabilityState<Dim>> capability);
 
   /// ABI key of the module (compiler + C++ standard + signature of the pops headers, frozen at
   /// compilation). Compared to the key baked into a native loader .so by add_native_block; also exposed
@@ -378,11 +392,26 @@ class System {
   /// Bind one exact solved-field Handle identity to its authenticated provider storage slot.
   POPS_EXPORT void install_field_storage_route(const std::string& field_identity,
                                                const std::string& provider_slot);
+  /// Retain the exact RuntimeInstance communicator lane used by every prepared Uniform boundary
+  /// operation. The lane is materialized from the caller's authenticated ExecutionContext before
+  /// any state route or boundary plan is published.
+  POPS_EXPORT void install_prepared_boundary_execution_lane(std::shared_ptr<ExecutionLane> lane);
+  [[nodiscard]] POPS_EXPORT const ExecutionLane& prepared_boundary_execution_lane() const;
+  /// Stage one authenticated host GhostBoundary component before its block package is built. The
+  /// late package installer wraps the exact prepared block after materialization, inside the same
+  /// collective native-package snapshot/rollback transaction.
+  POPS_EXPORT void stage_prepared_ghost_boundary_component(
+      const std::string& block, std::shared_ptr<PreparedGhostBoundaryComponent> component);
+  POPS_EXPORT void stage_prepared_boundary_flux_component(
+      const std::string& block, std::shared_ptr<PreparedBoundaryFluxComponent> component);
+  POPS_EXPORT void stage_prepared_field_boundary_component_pair(
+      const std::string& block, std::shared_ptr<PreparedFieldBoundaryResidualComponent> residual,
+      std::shared_ptr<PreparedFieldBoundaryJvpComponent> jvp);
   /// Roll back a failed all-block pre-build boundary transaction.  Internal bind seam only.
   POPS_EXPORT void discard_hyperbolic_boundaries();
   /// Install one already-authenticated exact-ranked shared-interface provider after every endpoint
   /// block has been materialized. Interface geometry remains private to that provider; the generic
-  /// System never rebuilds a two-dimensional axis route from scalar metadata.
+  /// System never rebuilds an axis route from scalar metadata.
   POPS_EXPORT void install_interface_provider(SystemInterfaceProvider<Dim> provider);
   /// Roll back a failed all-interface post-block installation transaction.
   POPS_EXPORT void discard_interface_flux_components();
@@ -402,6 +431,10 @@ class System {
   /// exactly when the sealed graph has no provider values; callers with ``ProviderValues<0>`` must
   /// not dereference it.  A non-null carrier has exactly ``registry.slot_count()`` components.
   [[nodiscard]] POPS_EXPORT const MultiFab<Dim>* prepared_block_auxiliary_storage() const;
+  /// Shared lifetime authority for the same immutable-address carrier. Generated direct-System
+  /// adapters retain this owner so prepared callbacks cannot outlive the accepted provider image.
+  [[nodiscard]] POPS_EXPORT std::shared_ptr<const runtime::system::AuxiliaryStorageGroups<Dim>>
+  prepared_block_provider_storage_owner() const;
   [[nodiscard]] POPS_EXPORT const runtime::system::AuxiliaryStorageGroups<Dim>*
   prepared_block_provider_storage_groups() const;
   /// AMR preparation owns the collective halo-fill phase and therefore receives the accepted group
@@ -452,6 +485,25 @@ class System {
   [[nodiscard]] POPS_EXPORT std::string auxiliary_registry_contract() const;
   [[nodiscard]] POPS_EXPORT const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>&
   prepared_auxiliary_consumer_plan(const std::string& consumer_qid) const;
+  /// Durable accepted auxiliary metadata for the Uniform runtime.  Rank-local group payloads are
+  /// staged by the checkpoint backend; this image authenticates exact group identities,
+  /// owner-qualified ComponentKeys, shapes, and accepted provider generations before publication.
+  [[nodiscard]] POPS_EXPORT runtime::system::AuxiliaryCheckpointAcceptedState<Dim>
+  capture_auxiliary_checkpoint_accepted_state() const;
+  /// Rank-local checkpoint capacity derived from the sealed auxiliary registry. The pair is
+  /// ``(payload-free POPSAUX2 bytes, scalar values per full-domain level)``.
+  [[nodiscard]] POPS_EXPORT std::pair<std::size_t, std::size_t> checkpoint_auxiliary_capacity()
+      const;
+  /// Restore the accepted provider provenance only after the checkpoint backend has staged a
+  /// compatible rank-local group payload privately.  The collective preflight and rollback image
+  /// ensure a rejected checkpoint cannot expose a partial auxiliary generation.
+  POPS_EXPORT void restore_auxiliary_checkpoint_accepted_state(
+      const runtime::system::AuxiliaryCheckpointAcceptedState<Dim>& state);
+  /// Decode one sealed POPSAUX2 image inside the authenticated System execution lane.  Local
+  /// decode/allocation failure is agreed before the typed restore enters its first collective.
+  using AuxiliaryCheckpointByteViewProvider = std::function<std::span<const std::uint8_t>()>;
+  POPS_EXPORT void restore_auxiliary_checkpoint_accepted_state_bytes(
+      const AuxiliaryCheckpointByteViewProvider& payload);
   /// @}
 
   /// Configures the shared Poisson.
@@ -558,35 +610,8 @@ class System {
                               double kappa_min = 0.0, double face_open_eps = 0.0,
                               double cut_theta_min = 0.0);
 
-  /// Sets the TRANSPORT DOMAIN as a DISC centered at (@p cx, @p cy) with radius @p R
-  /// (T2 work, CONTRACT inert by default). Materializes a 0/1 cell-centered mask (cell
-  /// active when its center is inside the disc, level set hypot(x-cx, y-cy) - R < 0, SAME convention
-  /// as the conducting wall of the Poisson). It is the FV counterpart of the elliptic wall: it lets the
-  /// FV transport act on the true disc instead of the full cartesian square (otherwise the circle lives
-  /// only in the Poisson wall -- the "cartesian ring edges" lock, cf. docs/HOFFART_FIDELITY.md). The
-  /// mask makes possible a CONSERVATIVE mask-aware transport (zero normal flux at active/inactive faces).
-  ///
-  /// DISC TRANSPORT MODE (T5-PR3 work, @p mode): dispatches the transport advance of step() to
-  /// the corresponding disc operator. Default "none" -> full cartesian path (assemble_rhs), BIT-
-  /// IDENTICAL to history even after set_disc_domain (the mask is materialized but transport
-  /// ignores it while the mode is "none"). "staircase" -> conservative masked transport (assemble_rhs_
-  /// masked, 0/1 face gate, jagged boundary). "cutcell" -> the current embedded-boundary transport
-  /// (binary open faces between active centres and a clamped approximate volume fraction prepared
-  /// from signed samples). Both EB policies currently require an explicitly capable first-order
-  /// reconstruction and reject diffusion, native boundary components and shared interfaces.
-  /// The mode is honored by the native transport step. A mode != "none" without a transportable
-  /// cartesian block raises an EXPLICIT error at the step (never a silent full transport). Unknown mode
-  /// -> error. R > 0 required.
-  ///
-  /// ADC-615: @p kappa_min (small-cell volume-fraction floor), @p face_open_eps (binary face-open
-  /// threshold) and @p cut_theta_min (signed-sample fraction clamp) tune the transport metrics. Each
-  /// <= 0 keeps the kEb* default. This API does not claim an elliptic cut-cell consumer.
-  void set_disc_domain(double cx, double cy, double R, const std::string& mode = "none",
-                       double kappa_min = 0.0, double face_open_eps = 0.0,
-                       double cut_theta_min = 0.0);
-
   /// Sets ONLY the level-set transport mode: "none" | "staircase" | "cutcell". Useful to toggle
-  /// the mode after installing either a generic analytic level set or a disc, or to reset it to "none"
+  /// the mode after installing a generic analytic level set, or to reset it to "none"
   /// (back to the full cartesian path, bit-identical). Requesting a mode != "none" without a prepared
   /// signed level set raises an explicit error (the mode alone has no geometry to apply).
   void set_geometry_mode(const std::string& mode);
@@ -594,13 +619,7 @@ class System {
   /// @return the 0/1 cell-centered domain mask over the exact-ranked flattened layout. Without
   /// a level-set installation, returns an ALL-ACTIVE mask (only 1.0): the transport sub-domain is
   /// the entire domain (default path). Diagnostic / contract verification.
-  std::vector<double> disc_mask() const;
-
-  /// Guarantees that the SHARED aux channel has at least @p ncomp components. Called by
-  /// add_compiled_model (cf. dsl_block.hpp) with aux_comps<Model> when adding a block that reads extra
-  /// auxiliary fields. Reallocating preserves the ADDRESS of the System's aux (the already-installed
-  /// block closures point to &aux), and re-applies B_z if it was supplied.
-  /// POPS_EXPORT: called by add_compiled_model (header) -> must be exported for the loader .so.
+  std::vector<double> embedded_boundary_mask() const;
 
   /// Sets the density of a species (component 0), n*n row-major array. The other
   /// components (momentum, energy) are set to the at-rest equilibrium.
@@ -636,8 +655,9 @@ class System {
   void add_dt_bound(const std::string& label, std::function<double()> fn);
 
   /// Name of the ACTIVE bound (the one that set dt) of the last step_cfl: "transport:<block>",
-  /// "source_frequency:<block>", "stability_dt:<block>", "global:<label>", "degenerate" (no evolving
-  /// block), or "" if no step_cfl has run. Diagnostic of the step policy.
+  /// "parabolic_frequency:<block>", "source_frequency:<block>", "stability_dt:<block>",
+  /// "global:<label>", "degenerate" (no evolving block), or "" if no step_cfl has run. Diagnostic
+  /// of the step policy.
   std::string last_dt_bound() const;
 
   // The named inter-species couplings (ionization / collision / thermal exchange) are no longer C++
@@ -687,9 +707,10 @@ class System {
   void add_coupling_operator(const CouplingOperator& op);
 
   /// Install one executable coupling that was prepared by an authenticated dimension-qualified
-  /// package. The operator receives the simultaneous candidate-state pack selected by Program.
+  /// package. `provider_contract` is its immutable identity/version/program digest; the operator
+  /// receives the simultaneous candidate-state pack selected by Program.
   POPS_EXPORT void install_prepared_coupling_operator(
-      const std::string& label, CouplingOperatorView view,
+      const std::string& label, const std::string& provider_contract, CouplingOperatorView view,
       std::function<void(Real, const std::vector<MultiFab<Dim>*>&)> operation,
       double constant_frequency = 0.0, std::function<Real()> maximum_frequency = {});
 
@@ -710,7 +731,8 @@ class System {
   /// Internal Program publication preflight. Validates one terminal candidate through the exact
   /// block model's prepared conservative-to-primitive recovery before commit_many copies any block
   /// into accepted storage. The operation is collective and read-only; refusal leaves every live
-  /// state unchanged.
+  /// state unchanged. The public wrapper discards the authenticated active-cell mask returned by
+  /// the private validator.
   POPS_EXPORT void validate_program_state_publication_candidate(
       int block, const MultiFab<Dim>& candidate) const;
 
@@ -787,18 +809,23 @@ class System {
   void finalize_step_transaction();
   /// Restore the accepted snapshot, including after commit but before finalize.
   void rollback_step_transaction();
+  /// Checkpoint-specific aliases over the same accepted native snapshot.  Commit authenticates the
+  /// fallible precondition while retaining rollback authority; finalize only releases ownership.
+  void begin_restart_transaction();
+  void commit_restart_transaction();
+  void finalize_restart_transaction() noexcept;
+  void rollback_restart_transaction();
   /// Volume-weighted L2 norm of each block's accepted macro-step change. RuntimeInstance calls
   /// this collective only while an outer transaction still retains U^n.
   POPS_EXPORT std::map<std::string, double> step_change_l2() const;
 
-  /// Advances one step at dt = cfl * h / max wave speed of the system. @return the dt used.
+  /// Advances one step using the smallest prepared bound.  For an explicit Cartesian diffusive
+  /// block, dt = cfl * substeps / (stride * (max(speed, speed_floor) / h_min +
+  /// 2 nu sum_a h_a^-2)); source, model, coupled, global, Program and strategy bounds may reduce
+  /// it further.  The exact request and selected decision are authenticated on the RuntimeInstance
+  /// lane before publication. @return the dt used.
   double step_cfl(double cfl, double speed_floor = static_cast<double>(kCflSpeedFloor),
                   double max_dt = std::numeric_limits<double>::infinity(), double min_dt = 0.0);
-  /// Diagnostic (ADC-182): {w, i, j} of the GLOBAL cell that dominates the transport
-  /// CFL bound of the block -- to locate a realizability erosion / a collapsing dt.
-  /// On demand, off the hot path (step/step_cfl unchanged).
-  std::array<double, 3> dt_hotspot(const std::string& name);
-
   /// @name Profiling (Spec 3 section 29-30, ADC-459)
   /// Per-phase / per-brick wall-clock timing of the step. Disabled by default (no hot-path cost
   /// when off). enable_profiling() then step()/step_cfl() then profile_report() returns the table;
@@ -845,13 +872,11 @@ class System {
   std::vector<std::string> variable_names(const std::string& name,
                                           const std::string& kind = "conservative") const;
   /// PHYSICAL roles of the variables of a block (parallel to variable_names): "density",
-  /// "momentum_x", "energy", ... or "custom" if the block does not provide its roles. This is what
+  /// "momentum:0", "energy", ... or "custom" if the block does not provide its roles. This is what
   /// the inter-species couplings resolve (index_of(role)) instead of a literal index.
   std::vector<std::string> variable_roles(const std::string& name,
                                           const std::string& kind = "conservative") const;
-  /// Adiabatic index (gamma) of the block, read by the inter-species couplings (collision, thermal
-  /// exchange, T_e). Equals the historical default 1.4 unless the block declares it (add_block: ModelSpec
-  /// gamma; compiled / dynamic block: optional symbol pops_compiled_gamma of the .so ABI).
+  /// Adiabatic index declared by the block and read by model-aware coupling providers.
   double block_gamma(const std::string& name) const;
   /// @}
 
@@ -946,9 +971,39 @@ class System {
                                    const std::vector<MultiFab<Dim>*>& states,
                                    const std::vector<MultiFab<Dim>*>& rhs,
                                    const std::vector<int>& flux_only);
-  POPS_EXPORT void block_rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
-                                          int b, MultiFab<Dim>& U, MultiFab<Dim>& R,
-                                          bool flux_only);
+  POPS_EXPORT void block_rhs_core_into_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab<Dim>& U,
+      MultiFab<Dim>& R, bool flux_only, const System* prepared_system, int prepared_block,
+      const runtime::multiblock::BoundaryEvaluationPoint& prepared_point, const ExecutionLane& lane,
+      const runtime::program::PreparedScalarBoundarySession<Dim>& transport);
+  /// Evaluate one full generated boundary RHS under the exact Program-owned lane and publish it
+  /// only after collective finite validation.
+  POPS_EXPORT void block_rhs_into_at_prepared(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab<Dim>& U,
+      MultiFab<Dim>& R, const System* prepared_system, int prepared_block,
+      const runtime::multiblock::BoundaryEvaluationPoint& prepared_point, const ExecutionLane& lane,
+      const runtime::program::PreparedScalarBoundarySession<Dim>& transport);
+  /// Whether ordinary Program RHS evaluation must use a standalone prepared boundary session.
+  /// This reports retained boundary state rather than closure completeness so an incomplete
+  /// boundary authority fails loudly instead of falling back to the legacy no-lane route.
+  POPS_EXPORT bool requires_block_boundary_session(int b) const;
+  /// Whether one block retains the complete generated boundary residual/JVP pair.  This is a
+  /// capability query only; execution still requires one authenticated evaluation point.
+  POPS_EXPORT bool has_block_boundary_linearization(int b) const;
+  /// Evaluate the generated prepared boundary contribution into a transactionally published
+  /// scratch result.  The retained boundary authority is immutable and remains owned by System.
+  POPS_EXPORT void block_boundary_residual_into_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab<Dim>& U,
+      MultiFab<Dim>& R, const System* prepared_system, int prepared_block,
+      const runtime::multiblock::BoundaryEvaluationPoint& prepared_point, const ExecutionLane& lane,
+      const runtime::program::PreparedScalarBoundarySession<Dim>& transport);
+  /// Apply the generated prepared boundary Jacobian-vector product under the same exact point.
+  POPS_EXPORT void block_boundary_jvp_into_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab<Dim>& U,
+      const MultiFab<Dim>& direction, MultiFab<Dim>& R, const System* prepared_system,
+      int prepared_block, const runtime::multiblock::BoundaryEvaluationPoint& prepared_point,
+      const ExecutionLane& lane,
+      const runtime::program::PreparedScalarBoundarySession<Dim>& transport);
   /// Fill same-level and physical halos for one generated pointwise stencil through the block's
   /// retained exact-ranked package.  This is a preparation seam, not a second boundary engine.
   POPS_EXPORT void block_prepare_generated_state_at(
@@ -966,18 +1021,17 @@ class System {
   /// POPS_EXPORT: resolved by the generated problem.so across the
   /// dlopen boundary, like block_neg_div_flux_into.
   POPS_EXPORT void block_source_into(int b, MultiFab<Dim>& U, MultiFab<Dim>& R);
-  /// Preflight one generated pointwise Program operator. Such kernels currently own only a
-  /// Cartesian storage contract: evaluating them everywhere and zeroing inactive outputs afterwards
-  /// is not valid because primitive conversion, local Newton or user expressions may already have
-  /// consumed inactive data. The generated step calls this before allocating or launching the
-  /// operator and an active embedded boundary is rejected without mutation.
+  /// Preflight one unqualified Cartesian generated Program operator.  Such kernels cannot evaluate
+  /// inactive cells before zeroing their outputs, so an active embedded boundary is rejected before
+  /// mutation.  Only unqualified Cartesian kernels use this seam; local_transform and
+  /// solve_local_nonlinear are mask-qualified.
   POPS_EXPORT void require_cartesian_generated_operator(int b, const std::string& operation) const;
   /// The maximum |wave speed| of block @p b evaluated on @p U -- the SAME per-block reduction
   /// step_cfl reads (BlockState::max_speed, the HasStabilitySpeed / max_wave_speed closure set at
-  /// add_block time): a collective reduction over the block's cells. A compiled time Program reads it
-  /// (ProgramContext::max_wave_speed) to express its own dt bound (epic ADC-399 / ADC-417, spec s18).
-  /// REUSES the block's wave-speed closure -- it does not recompute the speed. POPS_EXPORT: resolved by
-  /// the generated problem.so across the dlopen boundary, like the other seam accessors.
+  /// add_block time): a collective reduction over the block's cells. This Uniform entry point uses
+  /// the System's authenticated execution lane; generated Programs pass that lane explicitly through
+  /// the private prepared seam below. REUSES the block's wave-speed closure -- it does not recompute
+  /// the speed. POPS_EXPORT: resolved across the dlopen boundary like the other seam accessors.
   POPS_EXPORT Real block_max_speed(int b, const MultiFab<Dim>& U) const;
   /// The minimum physical cell spacing across every compiled axis -- the same hmin the native CFL
   /// uses (System::step_cfl). A compiled time Program reads it
@@ -1141,10 +1195,9 @@ class System {
   /// until mark_bound() runs, so the historical setters keep working.
   /// @{
   /// Mark the composition as bound (frozen): every structural setter (add_block / set_poisson /
-  /// install_program / set_disc_domain / ...) then rejects with a precise error.
-  /// The runtime-data setters (set_state / set_density / set_program_params /
-  /// set_magnetic_field / set_aux_field_component / set_clock / set_potential) stay allowed. A second
-  /// mark_bound() throws (a composition binds exactly once).
+  /// install_program / set_analytic_level_set / ...) then rejects with a precise error.
+  /// Runtime-data publication through exact state, field, parameter and ComponentKey provider
+  /// authorities stays allowed. A second mark_bound() throws (a composition binds exactly once).
   void mark_bound();
   /// The runtime lifecycle state: "assembling" (not yet bound -- the composition is mutable),
   /// "bound" (mark_bound() ran, no macro-step advanced yet), "running" (bound AND macro_step() > 0).
@@ -1285,13 +1338,18 @@ class System {
   /// Structured report of effective numerical, solver and physical options currently configured.
   EffectiveOptionsReport effective_options_report() const;
   double mass(const std::string& name) const;
-  std::vector<double> density(const std::string& name) const;  ///< ny*nx row-major (j slow, i fast)
-  std::vector<double> potential();  ///< phi, ny*nx row-major (j slow, i fast)
+  std::vector<double> density(const std::string& name) const;  ///< native index order
+  std::vector<double> potential();                             ///< phi, native index order
   /// RESTORES the potential phi (accepted-state restart): without it the multigrid would restart from
-  /// a blank phi and the resume would not be bit-identical (warm start lost). Field ny*nx row-major
-  /// (same layout as potential()).
+  /// a blank phi and the resume would not be bit-identical (warm start lost). The field uses the
+  /// same exact-ranked flattened layout as potential().
   void set_potential(const std::vector<double>& phi);
   std::vector<std::string> field_provider_slots() const;
+  /// Read-only restart authority. Named identities match ``field_provider_slots`` exactly and in
+  /// order. The default slot is included when the installed prepared RHS/configuration can
+  /// materialize that exact field, even if it has not been instantiated yet. This query never
+  /// constructs ExactNamedField.
+  std::vector<std::string> configured_field_provider_slots() const;
   void set_field_potential(const std::string& provider_slot, const std::vector<double>& phi);
 
   /// @name GLOBAL accessors (MPI-safe collectives) -- outputs / multi-rank accepted-state checkpoint
@@ -1306,9 +1364,11 @@ class System {
   /// RuntimeInstance uses them for accepted-state checkpoint capture, then seals and publishes
   /// the single artifact only on rank 0.
   /// @{
-  std::vector<double> density_global(const std::string& name) const;  ///< comp0, ny*nx global
-  std::vector<double> state_global(const std::string& name) const;    ///< U, ncomp*ny*nx global
-  std::vector<double> potential_global();                             ///< phi, ny*nx global
+  std::vector<double> density_global(
+      const std::string& name) const;  ///< comp0, global cell product
+  std::vector<double> state_global(
+      const std::string& name) const;      ///< U, ncomp*global cell product
+  std::vector<double> potential_global();  ///< phi, global cell product
   std::vector<double> field_potential_global(const std::string& provider_slot);
   /// Unified writer getters. Uniform layouts have exactly level zero; other levels fail loudly.
   /// Local pieces preserve native ranked ownership and never gather.
@@ -1346,11 +1406,11 @@ class System {
   /// rank 0 and nothing elsewhere -- true hyperslab parallelism appears only on a MULTI-BOX
   /// geometry (cf. AMR). The API stays correct in the general case (iteration over all the local fabs,
   /// GLOBAL indices in the box). Layout of local_state IDENTICAL to state_global but
-  /// relative to the local box: (c*bny + (j - jlo))*bnx + (i - ilo), component-major.
+  /// relative to the local box: component-major with the final native axis contiguous.
   /// @{
   std::vector<Box<Dim>> local_boxes(const std::string& name) const;
   std::vector<double> local_state(const std::string& name,
-                                  int li) const;  ///< U of fab li, flat (ncomp*bny*bnx)
+                                  int li) const;  ///< U of fab li, flat (ncomp*box.numPts())
                                                   /// @}
                                                   /// @}
 
@@ -1364,6 +1424,20 @@ class System {
   POPS_EXPORT bool program_balance_consumer_is_due(const std::string& contract,
                                                    const std::string& route, int every_n) const;
   POPS_EXPORT runtime::program::ProgramRuntimeState<Dim>& program_runtime_state_();
+  /// Program-terminal publication validator. Recovers only active valid cells and returns the
+  /// authenticated prepared active-cell mask for this block/layout/lane, or null when the
+  /// candidate is Cartesian or the embedded boundary is inactive.
+  [[nodiscard]] POPS_EXPORT const MultiFab<Dim>* validate_program_state_publication_candidate_(
+      int block, const MultiFab<Dim>& candidate, const ExecutionLane& lane) const;
+  /// Exact-lane maximum-speed seam for generated ProgramContext. Local block/provider/allocation
+  /// failures converge before the closure's scalar reduction; no implicit WORLD lane is permitted.
+  POPS_EXPORT Real block_max_speed_prepared_(int block, const MultiFab<Dim>& state,
+                                             const ExecutionLane& lane) const;
+  /// Generated Uniform pointwise kernels obtain their optional embedded-boundary active mask only
+  /// through this authenticated, non-owning seam.  It is private so the stable mask address cannot
+  /// become a public publication route.
+  [[nodiscard]] POPS_EXPORT const MultiFab<Dim>* prepared_program_block_active_mask_(
+      int runtime_block, const MultiFab<Dim>& field, const ExecutionLane& lane) const;
   /// Immediate provider calls are an exported implementation seam for generated ProgramContext
   /// code, never a public publication route. Every public field solve and every Program solve wraps
   /// these methods in the same physical accepted/candidate transaction.
@@ -1393,11 +1467,23 @@ class System {
   POPS_EXPORT void begin_field_publication_outcome_();
   POPS_EXPORT SolveOutcome stage_field_publication_outcome_(SolveReport report);
   SolveOutcome run_field_publication_outcome_(const std::function<SolveReport()>& solve);
+  enum class NativePackageKind { generic, prepared_boundary };
+  void stage_native_package_(
+      std::string identity, std::function<void()> route_registrar, std::function<void()> installer,
+      std::shared_ptr<void> package_lifetime,
+      std::shared_ptr<runtime::system::NativePackageCapabilityState<Dim>> capability,
+      NativePackageKind kind);
+  void seal_auxiliary_providers_(const CommunicatorView& communicator);
   /// Read-only compiled-artifact capability check.  Kept private so only ProgramContext can issue
   /// an authenticated apply token; installation writes Impl directly and no public setter exists.
   POPS_EXPORT bool program_owns_operator_authority(
       const std::array<std::uint64_t, 4>& authority) const noexcept;
+  void add_coupled_source_prepared_(const CoupledSourceProgram& program, double frequency,
+                                    const std::string& label, CouplingOperatorView inspect);
   struct Impl;
+  // Declared before Impl so installed Program closures and their immutable lane borrows are
+  // destroyed before the owning communicator is released.
+  std::shared_ptr<ExecutionLane> prepared_boundary_execution_lane_;
   std::unique_ptr<Impl> p_;
 };
 

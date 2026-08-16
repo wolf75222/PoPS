@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import Any
 
 from .model_builder import build_moment_model, moment_indices, moment_names
-from .sources import lorentz_sources
+from .sources import MOMENT_VELOCITY_DIMENSION, lorentz_sources
 from .closures import gaussian_closure
 from .ordering import MomentOrdering
 from .basis import MomentBasis
@@ -40,6 +40,20 @@ def _identifier(value: Any, *, name: str) -> str:
     if not isinstance(value, str) or not value.isidentifier():
         raise TypeError("MomentModel %s must be a non-empty identifier" % name)
     return value
+
+
+def _component_names(values: Any, *, name: str) -> tuple[str, ...]:
+    if isinstance(values, (str, bytes)):
+        raise TypeError("MomentModel %s must be an ordered component vector" % name)
+    try:
+        components = tuple(values)
+    except TypeError as exc:
+        raise TypeError("MomentModel %s must be an ordered component vector" % name) from exc
+    if len(components) != MOMENT_VELOCITY_DIMENSION:
+        raise ValueError(
+            "MomentModel %s requires exactly %d components; got %d"
+            % (name, MOMENT_VELOCITY_DIMENSION, len(components)))
+    return tuple(_identifier(component, name="%s component" % name) for component in components)
 
 
 def _coefficient(value: Any, *, name: str) -> Any:
@@ -137,12 +151,16 @@ def CartesianVelocityMoments(order: Any, *, closure: Any = None, robust: bool = 
 
 
 class MomentModel:
-    """A recorded 2D moment-model specification; builds a ``physics.Model`` on demand.
+    """A recorded explicit 2V/2D moment specialization; builds a Model on demand.
 
     Every chainable method mutates a small option dict and returns ``self``. The recorded
     options map literally onto :func:`build_moment_model`'s signature; :meth:`build` is the
-    ONLY place that touches the engine.
+    ONLY place that touches the engine. This ``(p, q)`` hierarchy advertises its exact two-axis
+    physical scope; it is not a generic-spatial-rank fallback.
     """
+
+    velocity_dimension = MOMENT_VELOCITY_DIMENSION
+    supported_spatial_dimensions = (MOMENT_VELOCITY_DIMENSION,)
 
     def __init__(self, order: Any) -> None:
         self._order = _order(order)
@@ -152,7 +170,7 @@ class MomentModel:
         self._roe = False
         self._proj = RealizabilityProjection()
         # Recorded source contributions, assembled into ONE callable at build:
-        self._electric: Any = None       # (ex, ey, q_over_m) names
+        self._electric: Any = None       # (ordered provider components, q_over_m)
         self._magnetic: Any = None       # omega_c name
         self._extra_sources: Any = None  # an advanced pre-built (m, M) -> list
         # Recorded Poisson coupling (applied to the built model):
@@ -182,12 +200,12 @@ class MomentModel:
         )
         return self
 
-    def add_vlasov_electric_source(self, ex: Any, ey: Any, q_over_m: Any) -> Any:
-        """Record the Vlasov electric source: the Lorentz electric branch over the aux fields
-        @p ex / @p ey (e.g. ``grad_x`` / ``grad_y``) scaled by the param @p q_over_m."""
+    def add_vlasov_electric_source(
+        self, electric_components: Any, q_over_m: Any,
+    ) -> Any:
+        """Record the exact ordered 2V electric provider vector and charge-to-mass ratio."""
         self._electric = (
-            _identifier(ex, name="electric x field"),
-            _identifier(ey, name="electric y field"),
+            _component_names(electric_components, name="electric_components"),
             _coefficient(q_over_m, name="q_over_m"),
         )
         return self
@@ -250,14 +268,23 @@ class MomentModel:
                     acc[k] = t if acc[k] is None else (acc[k] + t)
 
             if electric is not None:
-                ex_name, ey_name, qom_declaration = electric
-                ex = m.aux(ex_name)
-                ey = m.aux(ey_name)
+                component_names, qom_declaration = electric
+                electric_values = tuple(m.aux(component) for component in component_names)
                 qom = _parameter_value(m, qom_declaration, registered)
-                add(lorentz_sources(M, ex, ey, qom, 0.0))
+                add(lorentz_sources(
+                    M,
+                    electric_components=electric_values,
+                    q_over_m=qom,
+                    magnetic_rotation=0.0,
+                ))
             if magnetic is not None:
                 omega_c = _parameter_value(m, magnetic, registered)
-                add(lorentz_sources(M, 0.0, 0.0, 1.0, omega_c))
+                add(lorentz_sources(
+                    M,
+                    electric_components=(0.0, 0.0),
+                    q_over_m=1.0,
+                    magnetic_rotation=omega_c,
+                ))
             if extra is not None:
                 add(extra(m, M))
             return [0.0 if term is None else term for term in acc]
@@ -269,7 +296,7 @@ class MomentModel:
 
         Maps the recorded options literally onto :func:`build_moment_model`, then authors the
         recorded Poisson coupling through the same field/operator contracts as user code. ``frame``
-        may provide the domain-owned Cartesian frame required by a final ``CartesianGrid`` layout.
+        is the explicit domain-owned two-axis Cartesian frame; no spatial rank is inferred.
         """
         registered: dict[str, Any] = {}
         m = build_moment_model(
@@ -297,9 +324,8 @@ class MomentModel:
             background = _parameter_value(m, background_declaration, registered)
             source_density = density - background
         phi = m.field(phi_name)
-        # Sources that call ``m.aux('grad_x')`` / ``m.aux('grad_y')`` are bound to the
-        # model's canonical FieldSpace named ``fields``. The provider must materialize that
-        # exact space rather than an isomorphic FieldSpace under another local name.
+        # The recorded electric vector is bound to this canonical FieldSpace. The provider must
+        # materialize that exact space rather than an isomorphic space under another local name.
         m.field_operator(
             "fields",
             unknown=phi,
@@ -318,6 +344,9 @@ class MomentHierarchy:
     It describes the structure (ordering, basis, transforms, sources, projection, speeds); it
     makes NO engine call and holds no numeric data.
     """
+
+    velocity_dimension = MOMENT_VELOCITY_DIMENSION
+    supported_spatial_dimensions = (MOMENT_VELOCITY_DIMENSION,)
 
     def __init__(self, model: Any) -> None:
         order = model._order

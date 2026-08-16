@@ -317,7 +317,7 @@ def _coupled_interface_jacvec_plan(
     *,
     target: str,
     has_shared_interface_implicit_jacvec: bool,
-) -> Any:
+) -> tuple[tuple[Any, Any], tuple[int, int]] | None:
     jac_ops = [value for value in block if value.op == "rhs_jacvec"]
     if target != "amr_system" or len(jac_ops) != 2:
         return None
@@ -360,7 +360,7 @@ def _coupled_interface_jacvec_plan(
     if int(v.attrs["ncomp"]) != sum(widths):
         raise ValueError(
             "coupled shared-interface packed width differs from endpoint StateSpaces")
-    return tuple(jac_ops), tuple(widths)
+    return (jac_ops[0], jac_ops[1]), (widths[0], widths[1])
 
 
 def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
@@ -512,11 +512,15 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     # iterate. The exact BoundaryEvaluationPoint is a shared pointee because it must remain frozen
     # at r0's stage while other operator nodes may advance the shared context to a later stage.
     jac_ops = [w for w in block if w.op == "rhs_jacvec"]
-    coupled_pair = () if coupled_jacvec is None else coupled_jacvec[0]
-    coupled_widths = () if coupled_jacvec is None else coupled_jacvec[1]
-    coupled_width_by_id = {
-        value.id: width for value, width in zip(coupled_pair, coupled_widths, strict=True)
-    }
+    if coupled_jacvec is None:
+        coupled_pair = None
+        coupled_widths = None
+        coupled_width_by_id: dict[Any, int] = {}
+    else:
+        coupled_pair, coupled_widths = coupled_jacvec
+        coupled_width_by_id = {
+            value.id: width for value, width in zip(coupled_pair, coupled_widths, strict=True)
+        }
     coupled_packed_uk = None
     coupled_point = None
     coupled_cdt = None
@@ -644,10 +648,10 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         # removed from the frozen base so the finite difference covers only the core residual; their
         # derivative is supplied separately by boundary_jvp_into_at in the ApplyFn.
         stage = _rhs_stage_fraction(r0_in)
-        if coupled_jacvec is None or w is coupled_pair[0]:
+        if coupled_pair is None or w is coupled_pair[0]:
             evaluation_identity = (
                 _rhs_evaluation_identity(program, r0_in)
-                if coupled_jacvec is not None else int(r0_in.id)
+                if coupled_pair is not None else int(r0_in.id)
             )
             prepare_refresh.append(
                 "ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
@@ -657,8 +661,41 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             "pops::PureFieldAlgebra::copy(*%s, %s);" % (uk, var[iterate_in.id]))
         prepare_refresh.append(
             "pops::PureFieldAlgebra::copy(*%s, %s);" % (r0, var[r0_in.id]))
-        if coupled_jacvec is None or w is coupled_pair[0]:
+        if coupled_pair is None or w is coupled_pair[0]:
             prepare_refresh.append("*%s = %s;" % (cdt, _coeff_cpp(w.attrs["c_dt"])))
+    tensor_ops = [w for w in block if w.op == "apply_laplacian_coeff"]
+    tensor_boundary = None
+    tensor_point = None
+    if tensor_ops and target == "amr_system":
+        indices = program._block_indices()
+        tensor_blocks = {
+            indices[w.inputs[2].block]
+            for w in tensor_ops
+            if w.inputs[2].block in indices
+        }
+        if len(tensor_blocks) != 1 or any(
+            w.inputs[2].block not in indices for w in tensor_ops
+        ):
+            raise ValueError(
+                "AMR tensor apply requires one exact owner-qualified Program block"
+            )
+        tensor_block_idx = next(iter(tensor_blocks))
+        tensor_point = "tensor_point%d" % apply_id
+        prelude.append(
+            "auto %s = std::make_shared<"
+            "pops::runtime::multiblock::BoundaryEvaluationPoint>();" % tensor_point
+        )
+        captures.append(tensor_point)
+        session_points.append(tensor_point)
+        tensor_boundary = "operator_tensor_boundary_session%d" % apply_id
+        session_dynamic.append(
+            (
+                tensor_boundary,
+                "ctx_owner->prepare_tensor_boundary_session(%d, *session_%s, "
+                "*session_%s, lane)" % (tensor_block_idx, acc_sp, tensor_point),
+            )
+        )
+        var[("operator_tensor_point", apply_id)] = tensor_point
     boundary_sessions = {}
     for block_idx in (() if coupled_jacvec is not None else
                       sorted({entry[-2] for entry in jac_scratch.values()})):
@@ -672,9 +709,9 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
              "ctx_owner->prepare_block_boundary_session(%d, *session_%s, "
              "*session_%s, lane)" % (block_idx, prototype, preparation_point)))
         boundary_sessions[block_idx] = name
-    stencil_ops = {
-        "laplacian", "gradient", "divergence", "apply_laplacian_coeff",
-    }
+    stencil_ops = {"laplacian", "gradient", "divergence"}
+    if target != "amr_system":
+        stencil_ops.add("apply_laplacian_coeff")
     has_stencil = any(w.op in stencil_ops for w in block)
     stencil_boundary = None
     stencil_point = None
@@ -725,12 +762,14 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             o, i, coeffs = w.inputs
             tensor = frozen_coefficients[var[coeffs.id]]
             sub[w.id] = sub[o.id]
-            point_arg = ", *%s" % stencil_point if stencil_point else ""
+            boundary = tensor_boundary or stencil_boundary
+            point = tensor_point if tensor_boundary else stencil_point
+            point_arg = ", *%s" % point if point else ""
             body.append("ctx.tensor_laplacian(*%s, %s, *%s, *%s%s);"
                         % (sub[o.id], _apply_in_arg(sub, i), tensor,
-                           stencil_boundary, point_arg))
+                           boundary, point_arg))
         elif w.op == "rhs_jacvec":
-            if coupled_jacvec is not None:
+            if coupled_pair is not None and coupled_widths is not None:
                 sub[w.id] = sub[w.inputs[0].id]
                 if w is coupled_pair[0]:
                     continue
@@ -948,6 +987,10 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         local = "session_%s" % name
         prelude.append("  auto %s = %s;" % (local, expression))
         session_capture_initializers.append("%s = %s" % (name, local))
+    if tensor_boundary is not None:
+        session_refresh.append(
+            "%s->refresh_point(*%s);" % (tensor_boundary, tensor_point)
+        )
     allocation_terms = ["std::size_t{%d}" % len(session_fields)]
     allocation_terms.extend(
         "(%s ? std::size_t{1} : std::size_t{0})" % name
@@ -963,7 +1006,7 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
                    % ", ".join(prepare_captures))
     prelude.append("    auto& ctx = *ctx_owner;")
     prelude += ["    " + statement for statement in session_refresh]
-    if coupled_jacvec is not None:
+    if coupled_pair is not None and coupled_widths is not None:
         offset = 0
         for value, width in zip(coupled_pair, coupled_widths, strict=True):
             endpoint_uk = jac_scratch[value.id][0]
@@ -1055,6 +1098,40 @@ def _validated_direct_solve_components(v: Any, operator: Any) -> int:
     if solve_components != operator_components:
         raise ValueError("direct hierarchy solve component count disagrees with its operator")
     return solve_components
+
+
+def _apply_graph_has_nearest_neighbour_stencil(operator: Any) -> bool:
+    """True when the apply subgraph carries an authenticated nearest-neighbour stencil."""
+    from pops.time.stencil import StencilAccess
+
+    attrs = getattr(operator, "attrs", None)
+    if not isinstance(attrs, Mapping):
+        return False
+    block = attrs.get("apply_block")
+    if not isinstance(block, (list, tuple)):
+        return False
+    nearest = StencilAccess.nearest_neighbour()
+    return any(
+        type(node.attrs.get("stencil_access")) is StencilAccess
+        and node.attrs.get("stencil_access") == nearest
+        for node in block
+    )
+
+
+def _require_system_matrix_free_stencil(
+        program: Any, solve: Any, operator: Any, lines: Any, *, target: str) -> None:
+    """Emit one Cartesian preflight for a Uniform System nearest-neighbour matrix-free solve."""
+    if target != "system" or not _apply_graph_has_nearest_neighbour_stencil(operator):
+        return
+    indices = program._block_indices()
+    owner = solve.block
+    if owner not in indices:
+        raise ValueError(
+            "solve_linear %r has no authenticated owner block for the Cartesian "
+            "matrix-free stencil" % solve.name)
+    lines.append(
+        "ctx.require_cartesian_generated_operator(%d, %s);"
+        % (indices[owner], json.dumps("matrix_free_stencil")))
 
 
 def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
@@ -1155,6 +1232,8 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     if footprint is None or problem_contract is None:
         raise RuntimeError("prepared Krylov emission has no authenticated contract")
 
+    _require_system_matrix_free_stencil(program, v, op_value, lines, target=target)
+
     method_expr = prepared_krylov_method_provider_from_attrs(v.attrs).emit_cpp(v)
 
     properties = problem_contract["operator_properties"]
@@ -1236,22 +1315,59 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     if not isinstance(freeze_expr, str):
         raise ValueError("matrix-free operator has no prepared resource contract")
     vector_distribution_arg = ", " + vector_distribution_expr
+    problem_authority_args = ""
+    workspace_authority_args = ""
+    workspace_lane_identity = (
+        "pops.program.amr.krylov-workspace"
+        if target == "amr_system"
+        else "pops.program.krylov-workspace"
+    )
+    workspace_materialization_token = (
+        "pops.program.amr.krylov-workspace.%d" % int(v.id)
+        if target == "amr_system"
+        else "pops.program.krylov-workspace.%d" % int(v.id)
+    )
+    if target == "amr_system":
+        communicator_name = "prepared_krylov_communicator%d" % v.id
+        materialization_token_name = "krylov_workspace_materialization_token%d" % v.id
+        prelude.append(
+            "const auto %s = ctx.prepared_execution_communicator();"
+            % communicator_name
+        )
+        prelude.append(
+            "const std::string %s = ctx.program_resource_materialization_identity(\"%s\");"
+            % (materialization_token_name, workspace_materialization_token)
+        )
+        problem_authority_args = (
+            "%s, \"pops.program.amr.prepared-problem.%d\", "
+            % (communicator_name, int(v.id))
+        )
+        workspace_authority_args = (
+            "%s, \"%s\", %s, "
+            % (communicator_name, workspace_lane_identity, materialization_token_name)
+        )
+    else:
+        workspace_authority_args = (
+            "ctx.prepared_execution_communicator(), \"%s\", \"%s\", "
+            % (workspace_lane_identity, workspace_materialization_token)
+        )
     prelude.append(
         "auto %s = "
         "std::make_shared<pops::PreparedAffineLinearProblem<pops::kNativeDimension>>("
-        "*%s, %s, %s, %s, %s, %s, "
+        "%s*%s, %s, %s, %s, %s, %s, "
         "[ctx_owner, %s]() { "
         "return ctx_owner->probe_operator_evaluation({%s}, %s->topology, {%s}, %s->revision); }, "
         "%s%s);"
-        % (problem_name, sol_sp, lam, preconditioner_expr, properties_expr, footprint_name,
+        % (problem_name, problem_authority_args, sol_sp, lam, preconditioner_expr,
+           properties_expr, footprint_name,
            nullspace_policy_expr,
            snapshot_name, authority_cpp, snapshot_name, resources_cpp, snapshot_name,
            freeze_expr, vector_distribution_arg))
     workspace_name = "krylov_workspace%d" % v.id
     prelude.append(
         "auto %s = std::make_shared<pops::KrylovWorkspace<pops::kNativeDimension>>("
-        "*%s, %s, %s%s);"
-        % (workspace_name, sol_sp, method_expr, footprint_name,
+        "%s*%s, %s, %s%s);"
+        % (workspace_name, workspace_authority_args, sol_sp, method_expr, footprint_name,
            vector_distribution_arg))
     controls_name = "krylov_controls%d" % v.id
     prelude.append(
@@ -1267,6 +1383,13 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     solve_stage = _solve_stage_fraction(v)
     lines.append("ctx.set_stage_time(%d, %d);" %
                  (solve_stage.numerator, solve_stage.denominator))
+    tensor_point = var.get(("operator_tensor_point", op_value.id))
+    if tensor_point is not None:
+        if not isinstance(tensor_point, str) or target != "amr_system":
+            raise ValueError("matrix-free tensor boundary point is not AMR-authenticated")
+        lines.append(
+            "*%s = ctx.boundary_evaluation_point(%d);" % (tensor_point, int(v.id))
+        )
     for capture in dt_captures:
         lines.append("*%s = static_cast<pops::Real>(dt);" % capture)
     lines.append(

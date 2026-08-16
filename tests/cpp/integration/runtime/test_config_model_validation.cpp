@@ -399,10 +399,8 @@ TEST(ConfigModelValidation, EveryBuiltinRegistryTagIsRouted) {
   }
   EXPECT_TRUE(all_el) << "ADC-331 : tout elliptic builtin de la registry est route (pas de derive)";
 
-  // dispatch_source est templatise sur NV et garde les forces fluides derriere `if constexpr
-  // (NV >= 3)` ; a NV=4 (Euler) les sept orthographes builtin routent. Une ligne kSources ajoutee
-  // sans branche dans dispatch_source ferait echouer ce passage (meme garde de derive que pour
-  // transport / elliptic, etendue a l'axe source que le if/else NV-dependant rend moins evident).
+  // dispatch_source est templatise sur le rang exact et NV. Toutes les forces cartésiennes fluides,
+  // y compris Lorentz, doivent être routées par la même factory en 1D, 2D et 3D.
   bool all_src = true;
   for (const SourceTag& t : kSources) {
     ModelSpec s;
@@ -413,12 +411,8 @@ TEST(ConfigModelValidation, EveryBuiltinRegistryTagIsRouted) {
     } catch (...) {
       routed = false;
     }
-    bool expected_routed = true;
-    if constexpr (kTestDimension != 2)
-      expected_routed =
-          std::string(t.name) != "magnetic" && std::string(t.name) != "potential_magnetic";
-    EXPECT_EQ(routed, expected_routed) << "source route capability: " << t.name;
-    all_src = all_src && (routed == expected_routed);
+    EXPECT_TRUE(routed) << "source route capability: " << t.name;
+    all_src = all_src && routed;
   }
   EXPECT_TRUE(all_src)
       << "ADC-331 : chaque source builtin suit exactement sa capacité de rang native";

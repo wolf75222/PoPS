@@ -8,43 +8,55 @@ to ``dense_regrid_safety``; a non-default whole-Program cadence is promoted to
 ``dense_cadence_safety``. Restart replays only cadence-1/1 gaps proven exact by every guard.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 import json
 from typing import Any, cast
 
 
 @dataclass(frozen=True, slots=True)
+class HistoryLevelCapture:
+    """Exact accepted provenance for one native hierarchy level (or Uniform ``None``)."""
+
+    level: int | None
+    initialized: bool
+    fill_count: int
+    slot_dt: tuple[float, ...]
+
+    def to_data(self):
+        return {
+            "level": self.level,
+            "initialized": self.initialized,
+            "fill_count": self.fill_count,
+            "slot_dt": [float(value).hex() for value in self.slot_dt],
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class HistoryRingCapture:
-    """Collective-free metadata fixing one ring's subsequent gather order."""
+    """Collective-free metadata fixing one ring's subsequent level/slot gather order."""
 
     name: str
     depth: int
     ncomp: int
-    initialized: bool
-    fill_count: int
     policy_json: str
     requested_stored_slots: tuple[int, ...]
     stored_slots: tuple[int, ...]
     storage_mode: str
     regrid_steps: tuple[int, ...] | None
-    slot_dt: tuple[float, ...]
+    levels: tuple[HistoryLevelCapture, ...]
 
     def to_data(self):
         return {
             "name": self.name,
             "depth": self.depth,
             "ncomp": self.ncomp,
-            "initialized": self.initialized,
-            "fill_count": self.fill_count,
             "policy_json": self.policy_json,
             "requested_stored_slots": list(self.requested_stored_slots),
             "stored_slots": list(self.stored_slots),
             "storage_mode": self.storage_mode,
             "regrid_steps": (None if self.regrid_steps is None else list(self.regrid_steps)),
-            # This projection participates in the checkpoint capture identity.  Canonical CBOR
-            # intentionally refuses Python floats, so preserve each binary64 value exactly.
-            "slot_dt": [float(value).hex() for value in self.slot_dt],
+            "levels": [level.to_data() for level in self.levels],
         }
 
 
@@ -68,9 +80,36 @@ def resolve_ring_policy(policy, depth):
     return policy
 
 
-def history_fill_count_from_payload(payload, name, depth, initialized):
+def _history_level_key(prefix, name, level):
+    return prefix + name if level is None else "%s%s_level_%d" % (prefix, name, level)
+
+
+def _history_slot_key(name, level, slot):
+    return (
+        "history_%s_%d" % (name, slot)
+        if level is None
+        else "history_%s_level_%d_%d" % (name, level, slot)
+    )
+
+
+def _require_iterable(value: object, *, where: str) -> Iterable[object]:
+    if not isinstance(value, Iterable):
+        raise TypeError("%s must be iterable" % where)
+    return value
+
+
+def _require_exact_ints(value: object, *, where: str) -> tuple[int, ...]:
+    values = []
+    for item in _require_iterable(value, where=where):
+        if type(item) is not int:
+            raise TypeError("%s must contain exact integers" % where)
+        values.append(item)
+    return tuple(values)
+
+
+def history_fill_count_from_payload(payload, name, depth, initialized, *, level=None):
     """Return the mandatory authenticated fill age from a strict v5 payload."""
-    key = "history_fill_count_" + name
+    key = _history_level_key("history_fill_count_", name, level)
     if key not in payload:
         raise ValueError("history '%s' lacks strict fill-count metadata" % name)
     fill_count = int(payload[key])
@@ -83,7 +122,7 @@ def history_fill_count_from_payload(payload, name, depth, initialized):
     return fill_count
 
 
-def validate_history_slot_dt_payload(payload, name, depth, fill_count):
+def validate_history_slot_dt_payload(payload, name, depth, fill_count, *, level=None):
     """Validate and return one strict binary64 outgoing-dt ledger.
 
     An uninitialized ring has no accepted interval and therefore carries exact zeros. Once the first
@@ -93,7 +132,7 @@ def validate_history_slot_dt_payload(payload, name, depth, fill_count):
     """
     import numpy as np
 
-    key = "history_slot_dt_" + name
+    key = _history_level_key("history_slot_dt_", name, level)
     if key not in payload:
         raise ValueError("history '%s' lacks its strict outgoing-dt ledger" % name)
     values = np.asarray(payload[key])
@@ -191,6 +230,23 @@ def resolve_history_storage(
     return requested, requested, "policy", regrid_steps
 
 
+def resolve_hierarchy_history_storage(rows, depth):
+    """Close per-level persistence decisions into one replay-safe ring slot plan."""
+    first = rows[0]
+    if all(row == first for row in rows[1:]):
+        return first
+    requested = first[0]
+    if any(row[0] != requested for row in rows[1:]):
+        raise RuntimeError("checkpoint history policy differs between hierarchy levels")
+    fingerprints = [row[3] for row in rows]
+    regrid_steps = (
+        None
+        if any(steps is None for steps in fingerprints)
+        else tuple(sorted({step for steps in fingerprints for step in steps}))
+    )
+    return requested, tuple(range(depth)), "dense_hierarchy_level_safety", regrid_steps
+
+
 def prepare_history_capture(system, persistence, *, macro_step=0, regrid_every=0):
     """Validate every ring and freeze its exact gather order without a collective call."""
     import numpy as np
@@ -203,7 +259,8 @@ def prepare_history_capture(system, persistence, *, macro_step=0, regrid_every=0
         raise TypeError(
             "checkpoint history capture requires the native history_slot_dt(name, slot) seam"
         )
-    slot_dt_provider = cast(Callable[[str, int], Any], raw_slot_dt_provider)
+    slot_dt_provider = cast(Callable[..., Any], raw_slot_dt_provider)
+    raw_levels_provider = getattr(system, "history_levels", None)
     rings = []
     program_substeps = (
         int(system.program_substeps()) if callable(getattr(system, "program_substeps", None)) else 1
@@ -214,46 +271,79 @@ def prepare_history_capture(system, persistence, *, macro_step=0, regrid_every=0
     for hname in names:
         depth = int(system.history_depth(hname))
         ncomp = int(system.history_ncomp(hname))
-        initialized = bool(system.history_initialized(hname))
-        fill_count = int(system.history_fill_count(hname))
-        if initialized != (fill_count > 0):
-            raise RuntimeError(
-                "checkpoint history '%s' has inconsistent initialized/fill-count metadata" % hname
-            )
         policy = resolve_ring_policy(persistence.get(hname), depth)
-        requested, stored, storage_mode, regrid_steps = resolve_history_storage(
-            policy,
-            depth,
-            fill_count=fill_count,
-            macro_step=int(macro_step),
-            regrid_every=int(regrid_every),
-            program_substeps=program_substeps,
-            program_stride=program_stride,
-        )
-        slot_dt_key = "history_slot_dt_" + hname
-        slot_dt = validate_history_slot_dt_payload(
-            {
-                slot_dt_key: np.asarray(
-                    tuple(slot_dt_provider(hname, k) for k in range(depth))
+        if callable(raw_levels_provider):
+            try:
+                native_levels = _require_exact_ints(
+                    raw_levels_provider(hname), where="native history levels"
                 )
-            },
-            hname,
-            depth,
-            fill_count,
+            except (AttributeError, NotImplementedError):
+                native_levels = (None,)
+        else:
+            native_levels = (None,)
+        if not native_levels or tuple(sorted(set(native_levels), key=lambda value: -1 if value is None else value)) != native_levels:
+            raise ValueError("checkpoint history levels must be non-empty, sorted, and unique")
+        levels = []
+        storage_rows = []
+        for level in native_levels:
+            initialized = bool(
+                system.history_initialized(hname, level)
+                if level is not None
+                else system.history_initialized(hname)
+            )
+            fill_count = int(
+                system.history_fill_count(hname, level)
+                if level is not None
+                else system.history_fill_count(hname)
+            )
+            if initialized != (fill_count > 0):
+                raise RuntimeError(
+                    "checkpoint history '%s' level %r has inconsistent initialized/fill-count metadata"
+                    % (hname, level)
+                )
+            storage_rows.append(
+                resolve_history_storage(
+                    policy,
+                    depth,
+                    fill_count=fill_count,
+                    macro_step=int(macro_step),
+                    regrid_every=int(regrid_every),
+                    program_substeps=program_substeps,
+                    program_stride=program_stride,
+                )
+            )
+            slot_dt_key = _history_level_key("history_slot_dt_", hname, level)
+            slot_dt = validate_history_slot_dt_payload(
+                {
+                    slot_dt_key: np.asarray(
+                        tuple(
+                            slot_dt_provider(hname, level, k)
+                            if level is not None
+                            else slot_dt_provider(hname, k)
+                            for k in range(depth)
+                        )
+                    )
+                },
+                hname,
+                depth,
+                fill_count,
+                level=level,
+            )
+            levels.append(HistoryLevelCapture(level, initialized, fill_count, slot_dt))
+        requested, stored, storage_mode, regrid_steps = resolve_hierarchy_history_storage(
+            storage_rows, depth
         )
         rings.append(
             HistoryRingCapture(
                 name=hname,
                 depth=depth,
                 ncomp=ncomp,
-                initialized=initialized,
-                fill_count=fill_count,
                 policy_json=json.dumps(policy.to_manifest(), sort_keys=True, separators=(",", ":")),
                 requested_stored_slots=requested,
                 stored_slots=stored,
                 storage_mode=storage_mode,
                 regrid_steps=regrid_steps,
-                slot_dt=slot_dt,
+                levels=tuple(levels),
             )
         )
     return HistoryCapturePlan(tuple(rings))
@@ -276,8 +366,6 @@ def capture_histories(system, plan, out):
         depth = ring.depth
         out["history_depth_" + hname] = depth
         out["history_ncomp_" + hname] = ring.ncomp
-        out["history_init_" + hname] = ring.initialized
-        out["history_fill_count_" + hname] = ring.fill_count
         out["history_policy_" + hname] = np.array(ring.policy_json)
         out["history_requested_stored_slots_" + hname] = np.asarray(
             ring.requested_stored_slots, dtype=np.int64
@@ -289,11 +377,25 @@ def capture_histories(system, plan, out):
         # carries no fabricated cursor fingerprint.
         if ring.regrid_steps is not None:
             out["history_regrid_steps_" + hname] = np.asarray(ring.regrid_steps, dtype=np.int64)
-        out["history_slot_dt_" + hname] = np.asarray(ring.slot_dt, dtype=np.float64)
-        for k in ring.stored_slots:
-            out["history_%s_%d" % (hname, k)] = np.asarray(
-                system.history_global(hname, k), dtype=np.float64
+        qualified = ring.levels[0].level is not None
+        if qualified:
+            out["history_levels_" + hname] = np.asarray(
+                [level.level for level in ring.levels], dtype=np.int64
             )
+        for level in ring.levels:
+            out[_history_level_key("history_init_", hname, level.level)] = level.initialized
+            out[_history_level_key("history_fill_count_", hname, level.level)] = level.fill_count
+            out[_history_level_key("history_slot_dt_", hname, level.level)] = np.asarray(
+                level.slot_dt, dtype=np.float64
+            )
+            for k in ring.stored_slots:
+                key = _history_slot_key(hname, level.level, k)
+                values = (
+                    system.history_global(hname, level.level, k)
+                    if qualified
+                    else system.history_global(hname, k)
+                )
+                out[key] = np.asarray(values, dtype=np.float64)
 
 
 def serialize_histories(system, persistence, out):
@@ -325,11 +427,15 @@ def restore_histories(system, d, fired_out=None):
     names = tuple(str(h) for h in d["history_names"])
     if len(names) != len(set(names)):
         raise ValueError("restart : checkpoint history names must be unique")
-    required_restore_seams = (
-        "restore_history",
-        "set_history_initialized",
-        "restore_history_fill_count",
+    atomic_metadata_restore = callable(getattr(system, "restore_history_metadata", None))
+    atomic_provenance_restore = callable(
+        getattr(system, "restore_history_provenance", None)
     )
+    required_restore_seams = ["restore_history"]
+    if not atomic_metadata_restore:
+        required_restore_seams.extend(
+            ("set_history_initialized", "restore_history_fill_count")
+        )
     missing_restore_seams = tuple(
         seam for seam in required_restore_seams if not hasattr(system, seam)
     )
@@ -345,8 +451,26 @@ def restore_histories(system, d, fired_out=None):
     prepared = []
     for hname in names:
         depth = int(d["history_depth_" + hname])
-        initialized = bool(d["history_init_" + hname])
-        fill_count = history_fill_count_from_payload(d, hname, depth, initialized)
+        levels_key = "history_levels_" + hname
+        levels = (
+            tuple(int(level) for level in d[levels_key])
+            if levels_key in d
+            else (None,)
+        )
+        if not levels or tuple(
+            sorted(set(levels), key=lambda value: -1 if value is None else value)
+        ) != levels:
+            raise ValueError(
+                "restart : history '%s' levels must be non-empty, sorted, and unique" % hname
+            )
+        if levels_key in d:
+            runtime_levels = getattr(system, "history_levels", None)
+            if not callable(runtime_levels) or _require_exact_ints(
+                runtime_levels(hname), where="runtime history levels"
+            ) != levels:
+                raise RuntimeError(
+                    "restart : history '%s' hierarchy levels differ from the runtime" % hname
+                )
         policy_key = "history_policy_" + hname
         if policy_key not in d:
             raise RuntimeError(
@@ -360,14 +484,43 @@ def restore_histories(system, d, fired_out=None):
             raise RuntimeError("restart : history '%s' lacks its resolved storage plan" % hname)
         requested = tuple(sorted(int(s) for s in d[requested_key]))
         stored = tuple(sorted(int(s) for s in d[stored_key]))
-        expected_requested, expected_stored, expected_mode, _steps = resolve_history_storage(
-            policy,
-            depth,
-            fill_count=fill_count,
-            macro_step=int(d.get("macro_step", 0)),
-            regrid_every=int(d.get("regrid_every", 0)),
-            program_substeps=int(d.get("program_cadence_substeps", 1)),
-            program_stride=int(d.get("program_cadence_stride", 1)),
+        level_rows = []
+        storage_rows = []
+        for level in levels:
+            init_key = _history_level_key("history_init_", hname, level)
+            if init_key not in d:
+                raise ValueError(
+                    "restart : history '%s' level %r lacks initialized metadata"
+                    % (hname, level)
+                )
+            initialized = bool(d[init_key])
+            fill_count = history_fill_count_from_payload(
+                d, hname, depth, initialized, level=level
+            )
+            storage_rows.append(
+                resolve_history_storage(
+                    policy,
+                    depth,
+                    fill_count=fill_count,
+                    macro_step=int(d.get("macro_step", 0)),
+                    regrid_every=int(d.get("regrid_every", 0)),
+                    program_substeps=int(d.get("program_cadence_substeps", 1)),
+                    program_stride=int(d.get("program_cadence_stride", 1)),
+                )
+            )
+            anchors = tuple(
+                (
+                    k,
+                    np.asarray(d[_history_slot_key(hname, level, k)], dtype=np.float64),
+                )
+                for k in stored
+            )
+            slot_dt = validate_history_slot_dt_payload(
+                d, hname, depth, fill_count, level=level
+            )
+            level_rows.append((level, fill_count, anchors, slot_dt, initialized))
+        expected_requested, expected_stored, expected_mode, _steps = resolve_hierarchy_history_storage(
+            storage_rows, depth
         )
         if list(requested) != list(expected_requested):
             raise RuntimeError(
@@ -379,18 +532,9 @@ def restore_histories(system, d, fired_out=None):
                 "restart : history '%s' resolved storage plan (%r, %s) != expected (%r, %s)"
                 % (hname, list(stored), str(d[mode_key]), list(expected_stored), expected_mode)
             )
-        anchors = tuple(
-            (
-                k,
-                np.asarray(
-                    d["history_%s_%d" % (hname, k)],
-                    dtype=np.float64,
-                ),
-            )
-            for k in stored
-        )
-        slot_dt = validate_history_slot_dt_payload(d, hname, depth, fill_count)
-        if slot_dt is not None and not hasattr(system, "restore_history_slot_dt"):
+        if level_rows and not atomic_provenance_restore and not hasattr(
+            system, "restore_history_slot_dt"
+        ):
             raise RuntimeError(
                 "restart : history '%s' carries per-slot dt but the runtime "
                 "does not expose restore_history_slot_dt" % hname
@@ -404,15 +548,21 @@ def restore_histories(system, d, fired_out=None):
             (
                 hname,
                 depth,
-                fill_count,
                 policy,
                 requested,
                 stored,
                 expected_mode,
-                anchors,
-                slot_dt,
-                initialized,
+                tuple(level_rows),
             )
+        )
+
+    if not atomic_metadata_restore and any(
+        initialized != (fill_count > 0)
+        for _, _, _, _, _, _, level_rows in prepared
+        for _, fill_count, _, _, initialized in level_rows
+    ):
+        raise RuntimeError(
+            "restart : runtime cannot atomically restore independent history initialized/fill_count metadata"
         )
 
     # Phase 1b -- publish every exact anchor and its metadata before executing the first Program
@@ -420,22 +570,44 @@ def restore_histories(system, d, fired_out=None):
     for (
         hname,
         _depth,
-        fill_count,
         _policy,
         _requested,
         _stored,
         _expected_mode,
-        anchors,
-        slot_dt,
-        initialized,
+        level_rows,
     ) in prepared:
-        for k, values in anchors:
-            system.restore_history(hname, k, values)
-        if slot_dt is not None:
+        qualified = level_rows[0][0] is not None
+        for level, fill_count, anchors, slot_dt, initialized in level_rows:
+            for k, values in anchors:
+                if qualified:
+                    system.restore_history(hname, level, k, values)
+                else:
+                    system.restore_history(hname, k, values)
+            if qualified and atomic_provenance_restore:
+                system.restore_history_provenance(
+                    hname,
+                    level,
+                    np.asarray(slot_dt, dtype=np.float64),
+                    initialized,
+                    fill_count,
+                )
+                continue
             for k, dt in enumerate(slot_dt):
-                system.restore_history_slot_dt(hname, k, dt)
-        system.set_history_initialized(hname, initialized)
-        system.restore_history_fill_count(hname, fill_count)
+                if qualified:
+                    system.restore_history_slot_dt(hname, level, k, dt)
+                else:
+                    system.restore_history_slot_dt(hname, k, dt)
+            if atomic_metadata_restore:
+                if qualified:
+                    system.restore_history_metadata(hname, level, initialized, fill_count)
+                else:
+                    system.restore_history_metadata(hname, initialized, fill_count)
+            elif qualified:
+                system.set_history_initialized(hname, level, initialized)
+                system.restore_history_fill_count(hname, level, fill_count)
+            else:
+                system.set_history_initialized(hname, initialized)
+                system.restore_history_fill_count(hname, fill_count)
 
     # Phase 2 -- all ring dependencies now expose the checkpoint image.  Native replay restores its
     # own save bracket after each ring and returns one count per Program step, which is also the
@@ -444,14 +616,11 @@ def restore_histories(system, d, fired_out=None):
     for (
         hname,
         depth,
-        _fill_count,
         policy,
         requested,
         stored,
         expected_mode,
-        _anchors,
-        _slot_dt,
-        _initialized,
+        _level_rows,
     ) in prepared:
         recomputed = 0
         replay_steps = 0
@@ -488,6 +657,7 @@ __all__ = [
     "prepare_history_capture",
     "replay_regrid_steps",
     "resolve_history_storage",
+    "resolve_hierarchy_history_storage",
     "resolve_ring_policy",
     "restore_histories",
     "serialize_histories",

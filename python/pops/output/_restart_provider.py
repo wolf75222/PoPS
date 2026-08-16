@@ -16,6 +16,13 @@ from ._checkpoint_collective import (
 )
 
 
+def _append_exception_note(error: BaseException, note: str) -> None:
+    """Attach diagnostic context when the configured Python runtime supports it."""
+    add_note = getattr(error, "add_note", None)
+    if callable(add_note):
+        add_note(note)
+
+
 def _owner(value: os.stat_result) -> tuple[int, int]:
     return int(value.st_dev), int(value.st_ino)
 
@@ -576,12 +583,17 @@ class _RestartSnapshot:
                 "checkpoint transport failed during staging selection: %s" % attempt.transport_error
             )
             if attempt.producer_error is not None:
-                error.add_note("rank-zero producer also failed: %s" % attempt.producer_error)
+                _append_exception_note(
+                    error, "rank-zero producer also failed: %s" % attempt.producer_error
+                )
             if self._topology.rank == 0 and created_transaction is not None:
                 try:
                     created_transaction.cleanup_owned()
                 except BaseException as cleanup_error:
-                    error.add_note("rank-zero checkpoint cleanup also failed: %s" % cleanup_error)
+                    _append_exception_note(
+                        error,
+                        "rank-zero checkpoint cleanup also failed: %s" % cleanup_error,
+                    )
             raise error from attempt.transport_error
         if attempt.producer_error is not None:
             if self._topology.rank == 0 and created_transaction is not None:
@@ -657,7 +669,8 @@ class _RestartSnapshot:
                 except BaseException as cleanup_error:
                     failures.append(cleanup_error)
                 if failures:
-                    error.add_note(
+                    _append_exception_note(
+                        error,
                         "rank-zero checkpoint cleanup also failed: "
                         + "; ".join(str(item) for item in failures)
                     )
@@ -906,12 +919,17 @@ class _RestartSnapshot:
                 "checkpoint transport failed during publication: %s" % attempt.transport_error
             )
             if attempt.producer_error is not None:
-                error.add_note("rank-zero producer also failed: %s" % attempt.producer_error)
+                _append_exception_note(
+                    error, "rank-zero producer also failed: %s" % attempt.producer_error
+                )
             if self._topology.rank == 0:
                 try:
                     self._cleanup_root(include_published=True)
                 except BaseException as cleanup_error:
-                    error.add_note("rank-zero checkpoint cleanup also failed: %s" % cleanup_error)
+                    _append_exception_note(
+                        error,
+                        "rank-zero checkpoint cleanup also failed: %s" % cleanup_error,
+                    )
             self._discarded = True
             raise error from attempt.transport_error
         if attempt.producer_error is not None:
@@ -987,7 +1005,9 @@ class _RestartSnapshot:
                 "checkpoint transport failed during %s: %s" % (phase, attempt.transport_error)
             )
             if attempt.producer_error is not None:
-                error.add_note("rank-zero cleanup also failed: %s" % attempt.producer_error)
+                _append_exception_note(
+                    error, "rank-zero cleanup also failed: %s" % attempt.producer_error
+                )
             raise error from attempt.transport_error
         if attempt.producer_error is not None:
             raise attempt.producer_error
@@ -1025,7 +1045,7 @@ class _RestartSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class RestartV3:
-    """Compatibility-named adapter over strict Uniform v6 / AMR v8 accepted-state payloads."""
+    """Compatibility-named adapter over strict Uniform v8 / AMR v11 accepted-state payloads."""
 
     __pops_ir_immutable__ = True
     bit_identical: bool = False
@@ -1082,7 +1102,8 @@ class RestartV3:
 
     def reopen(self, runtime: Any, path: Any) -> ReopenedRestart:
         self.validate_configuration()
-        from ._checkpoint_collective import root_bytes
+        from ._checkpoint_collective import _bounded_checkpoint_path_bytes, root_bytes
+        from ._checkpoint_contract import require_checkpoint_resource_budget
 
         topology = checkpoint_topology(runtime)
         local_target = canonical_checkpoint_path(path)
@@ -1096,17 +1117,23 @@ class RestartV3:
         )
         consensus(topology, "restart target agreement", error=target_error)
         root_payload = b""
+        archive_budget = require_checkpoint_resource_budget(runtime).max_archive_bytes
 
         def read_and_authenticate_root() -> dict[str, Any]:
             nonlocal root_payload
-            root_payload = target.read_bytes()
+            root_payload = _bounded_checkpoint_path_bytes(target, archive_budget)
             cursors = runtime._inspect_checkpoint_payload(root_payload)
             return cursors.to_data()
 
         cursor_data = root_value(
             topology, "restart read and authentication", read_and_authenticate_root
         )
-        payload = root_bytes(topology, "restart payload broadcast", lambda: root_payload)
+        payload = root_bytes(
+            topology,
+            "restart payload broadcast",
+            lambda: root_payload,
+            max_bytes=archive_budget,
+        )
         cursors = None
         cursor_error = None
         try:

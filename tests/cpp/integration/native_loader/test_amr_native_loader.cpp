@@ -1,14 +1,12 @@
 #include <gtest/gtest.h>
 
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/runtime/dynamic/component_consumers.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
-#include <pops/runtime/amr/prepared_component_providers.hpp>
-#include <pops/runtime/amr_system.hpp>
-#include <pops/runtime/config/model_spec.hpp>
-#include <pops/runtime/program/amr_program_context.hpp>
+#include <pops/runtime/dynamic/authenticated_native_file.hpp>
+#include <pops/runtime/dynamic/prepared_execution_context.hpp>
 
 #include "component_abi_test_helpers.hpp"
-#include "amr_tagging_test_authority.hpp"
 #include "native_dso_compiler.hpp"
 
 #include <algorithm>
@@ -18,7 +16,6 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <limits>
 #include <memory>
 #include <string>
 #include <type_traits>
@@ -27,40 +24,150 @@
 namespace {
 
 namespace abi = pops::component::test_support;
+constexpr int kDim = pops::kNativeDimension;
+
+template <std::size_t Dim>
+std::size_t extent_product(const std::array<std::size_t, Dim>& extents) {
+  std::size_t result = 1;
+  for (const std::size_t extent : extents)
+    result *= extent;
+  return result;
+}
+
+template <int Dim>
+PopsConstFieldViewV1 const_field_view(const double* data,
+                                      const std::array<std::size_t, Dim>& extents,
+                                      std::size_t components) {
+  PopsConstFieldViewV1 result{};
+  result.struct_size = sizeof(PopsConstFieldViewV1);
+  result.data = data;
+  result.dimension = Dim;
+  for (std::size_t& extent : result.extents)
+    extent = 1;
+  std::ptrdiff_t stride = static_cast<std::ptrdiff_t>(components);
+  for (int axis = 0; axis < Dim; ++axis) {
+    result.extents[axis] = extents[axis];
+    result.axis_strides[axis] = stride;
+    stride *= static_cast<std::ptrdiff_t>(extents[axis]);
+  }
+  result.component_count = components;
+  result.component_stride = 1;
+  result.centering = POPS_FIELD_CENTERING_CELL_V1;
+  result.scalar_type = POPS_SCALAR_FLOAT64_V1;
+  result.memory_space = POPS_MEMORY_SPACE_HOST_V1;
+  result.layout_identity = "test::layout";
+  result.patch_identity = "test::patch";
+  result.ownership = POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1;
+  return result;
+}
+
+template <int Dim>
+PopsFieldViewV1 field_view(double* data, const std::array<std::size_t, Dim>& extents,
+                           std::size_t components) {
+  PopsFieldViewV1 result{};
+  result.struct_size = sizeof(PopsFieldViewV1);
+  result.data = data;
+  result.dimension = Dim;
+  for (std::size_t& extent : result.extents)
+    extent = 1;
+  std::ptrdiff_t stride = static_cast<std::ptrdiff_t>(components);
+  for (int axis = 0; axis < Dim; ++axis) {
+    result.extents[axis] = extents[axis];
+    result.axis_strides[axis] = stride;
+    stride *= static_cast<std::ptrdiff_t>(extents[axis]);
+  }
+  result.component_count = components;
+  result.component_stride = 1;
+  result.centering = POPS_FIELD_CENTERING_CELL_V1;
+  result.scalar_type = POPS_SCALAR_FLOAT64_V1;
+  result.memory_space = POPS_MEMORY_SPACE_HOST_V1;
+  result.layout_identity = "test::layout";
+  result.patch_identity = "test::patch";
+  result.ownership = POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1;
+  return result;
+}
 
 enum class FluxTableFixture { Exact, HeaderOnly, ForgedEntrySize, WrongAbi };
 
 constexpr const char* kComponentId = "pops://test/final-flux@1.0.0";
 constexpr const char* kSemanticIdentity = "semantic-final-flux";
 constexpr const char* kManifestIdentity = "manifest-final-flux";
+using PreparedStateOracle = std::array<std::uintptr_t, 2>;
+constexpr std::size_t kPreparedExecutionIdentityIndex = 0;
+constexpr std::size_t kPreparedOrdinalIndex = 1;
 
 std::string component_source() {
   return R"CPP(
 #include <pops/runtime/config/generated_component_abi.hpp>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 
     namespace {
     int prepare_count = 0;
     int destroy_count = 0;
+    int canonical_execution_identity_token = 0;
+    int other_execution_identity_token = 0;
+    using PreparedStateOracle = std::array<std::uintptr_t, 2>;
+
+    struct PreparedStateLifetimeOracle {
+      ~PreparedStateLifetimeOracle() {
+        if (prepare_count != destroy_count)
+          std::abort();
+      }
+    } prepared_state_lifetime_oracle;
+
     int tag_call_count = 0;
     int partial_tag_output = 0;
     const void* last_tag_state_data = nullptr;
     std::int64_t last_tag_logical_tick = -1;
     double last_tag_physical_time = -1.0;
 
+    template <class View>
+    std::size_t point_count(const View& view) {
+      std::size_t result = 1;
+      for (std::int32_t axis = 0; axis < view.dimension; ++axis)
+        result *= view.extents[axis];
+      return result;
+    }
+
+    template <class View>
+    std::ptrdiff_t field_offset(const View& view, std::size_t point, std::size_t component) {
+      std::ptrdiff_t result = static_cast<std::ptrdiff_t>(component) * view.component_stride;
+      for (std::int32_t axis = 0; axis < view.dimension; ++axis) {
+        const std::size_t coordinate = point % view.extents[axis];
+        point /= view.extents[axis];
+        result += static_cast<std::ptrdiff_t>(coordinate) * view.axis_strides[axis];
+      }
+      return result;
+    }
+
     int evaluate(void*, const PopsNumericalFluxRequestV1* request, PopsNumericalFluxResultV1* result) {
       const auto* left = static_cast<const double*>(request->left.data);
       const auto* right = static_cast<const double*>(request->right.data);
+      const auto* normals = static_cast<const double*>(request->normals.data);
       auto* output = static_cast<double*>(result->normal_flux.data);
-      const auto points = request->left.extents[0] * request->left.extents[1];
+      const auto points = point_count(request->left);
       for (std::size_t point = 0; point < points; ++point) {
+        double squared_normal = 0.0;
+        for (std::int32_t axis = 0; axis < request->normals.dimension; ++axis) {
+          const double normal = normals[field_offset(request->normals, point, axis)];
+          squared_normal += normal * normal;
+        }
+        if (!std::isfinite(squared_normal) || squared_normal == 0.0) {
+          result->status = {sizeof(PopsComponentStatusV1), 40, POPS_COMPONENT_ABORT_RUN_V1,
+                            "numerical flux normal is invalid"};
+          return 40;
+        }
         for (std::size_t component = 0; component < request->left.component_count; ++component) {
-          const auto index = point * static_cast<std::size_t>(request->left.axis_strides[1]) +
-                             component * static_cast<std::size_t>(request->left.component_stride);
-          output[index] = 0.25 * left[index] + 0.75 * right[index];
+          const auto left_index = field_offset(request->left, point, component);
+          const auto right_index = field_offset(request->right, point, component);
+          const auto output_index = field_offset(result->normal_flux, point, component);
+          output[output_index] = 0.25 * left[left_index] + 0.75 * right[right_index];
         }
         result->stability_bounds[point] = 3.0;
         result->actions[point] = POPS_COMPONENT_CONTINUE_V1;
@@ -82,12 +189,11 @@ std::string component_source() {
         return 41;
       }
       auto* values = static_cast<double*>(request->ghosts.data);
-      const auto points = request->ghosts.extents[0] * request->ghosts.extents[1];
+      const auto points = point_count(request->ghosts);
       for (std::size_t point = 0; point < points; ++point)
         for (std::size_t component = 0; component < request->ghosts.component_count; ++component) {
-          const auto index = point * static_cast<std::size_t>(request->ghosts.axis_strides[0]) +
-                             component * static_cast<std::size_t>(request->ghosts.component_stride);
-          values[index] = static_cast<double>(*static_cast<int*>(state));
+          const auto index = field_offset(request->ghosts, point, component);
+          values[index] = static_cast<double>((*static_cast<const PreparedStateOracle*>(state))[1]);
         }
       *status = {sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr};
       return 0;
@@ -108,14 +214,11 @@ std::string component_source() {
       const auto* base = static_cast<const double*>(request->base_outward_normal_flux.data);
       const auto* normals = static_cast<const double*>(request->outward_normals.data);
       auto* output = static_cast<double*>(result->outward_normal_flux.data);
-      const auto points = request->base_outward_normal_flux.extents[0] *
-                          request->base_outward_normal_flux.extents[1];
+      const auto points = point_count(request->base_outward_normal_flux);
       const auto axis = static_cast<std::size_t>(request->region.axes[0]);
       const double side = static_cast<double>(request->region.sides[0]);
       for (std::size_t point = 0; point < points; ++point) {
-        const auto normal_offset =
-            point * static_cast<std::size_t>(request->outward_normals.axis_strides[0]) +
-            axis * static_cast<std::size_t>(request->outward_normals.component_stride);
+        const auto normal_offset = field_offset(request->outward_normals, point, axis);
         if (normals[normal_offset] != side || request->face_measures[point] <= 0.0) {
           result->status = {sizeof(PopsComponentStatusV1), 43, POPS_COMPONENT_ABORT_RUN_V1,
                             "boundary flux orientation is inconsistent"};
@@ -123,11 +226,9 @@ std::string component_source() {
         }
         for (std::size_t component = 0;
              component < request->base_outward_normal_flux.component_count; ++component) {
-          const auto index =
-              point * static_cast<std::size_t>(request->base_outward_normal_flux.axis_strides[0]) +
-              component *
-                  static_cast<std::size_t>(request->base_outward_normal_flux.component_stride);
-          output[index] = base[index] + 10.0;
+          const auto base_index = field_offset(request->base_outward_normal_flux, point, component);
+          const auto output_index = field_offset(result->outward_normal_flux, point, component);
+          output[output_index] = base[base_index] + 10.0;
         }
         result->actions[point] = POPS_COMPONENT_CONTINUE_V1;
       }
@@ -171,12 +272,27 @@ std::string component_source() {
                                 std::size_t instruction_count, PopsTaggerMaskViewV2 candidates,
                                 PopsTaggerMaskViewV2 equalities) -> bool {
         const auto& reference = request->states[0].values;
-        const std::size_t nx =
-            reference.extents[0] - reference.ghost_lower[0] - reference.ghost_upper[0];
+        std::array<std::size_t, 3> interior_extents{1, 1, 1};
+        std::size_t interior_points = 1;
+        for (std::int32_t axis = 0; axis < reference.dimension; ++axis) {
+          interior_extents[axis] =
+              reference.extents[axis] - reference.ghost_lower[axis] - reference.ghost_upper[axis];
+          interior_points *= interior_extents[axis];
+        }
+        if (interior_points != points) {
+          *status = {sizeof(PopsComponentStatusV1), 22, POPS_COMPONENT_ABORT_RUN_V1,
+                     "AMR tag mask shape differs from the exact-ranked state"};
+          return false;
+        }
         for (std::size_t point = 0; point < points; ++point) {
           bool matches[128]{}, equality[128]{};
           std::size_t depth = 0;
-          const std::size_t i = point % nx, j = point / nx;
+          std::array<std::size_t, 3> coordinates{};
+          std::size_t remaining = point;
+          for (std::int32_t axis = 0; axis < reference.dimension; ++axis) {
+            coordinates[axis] = remaining % interior_extents[axis];
+            remaining /= interior_extents[axis];
+          }
           for (std::size_t instruction = 0; instruction < instruction_count; ++instruction) {
             const int32_t opcode = opcodes[instruction];
             const int32_t argument = arguments[instruction];
@@ -184,14 +300,18 @@ std::string component_source() {
               const auto& leaf = request->program.leaves[argument];
               const auto& view = request->states[leaf.state_index].values;
               const auto* values = static_cast<const double*>(view.data);
-              const auto read = [&](std::ptrdiff_t x, std::ptrdiff_t y) {
-                const auto offset =
-                    (x + static_cast<std::ptrdiff_t>(view.ghost_lower[0])) * view.axis_strides[0] +
-                    (y + static_cast<std::ptrdiff_t>(view.ghost_lower[1])) * view.axis_strides[1] +
-                    static_cast<std::ptrdiff_t>(leaf.component) * view.component_stride;
+              const auto read = [&](const std::array<std::ptrdiff_t, 3>& sample_coordinates) {
+                auto offset = static_cast<std::ptrdiff_t>(leaf.component) * view.component_stride;
+                for (std::int32_t axis = 0; axis < view.dimension; ++axis)
+                  offset += (sample_coordinates[axis] +
+                             static_cast<std::ptrdiff_t>(view.ghost_lower[axis])) *
+                            view.axis_strides[axis];
                 return values[offset];
               };
-              double sample = read(static_cast<std::ptrdiff_t>(i), static_cast<std::ptrdiff_t>(j));
+              std::array<std::ptrdiff_t, 3> sample_coordinates{};
+              for (std::int32_t axis = 0; axis < view.dimension; ++axis)
+                sample_coordinates[axis] = static_cast<std::ptrdiff_t>(coordinates[axis]);
+              double sample = read(sample_coordinates);
               if (opcode == 3)
                 sample = sample < 0.0 ? -sample : sample;
               if (opcode == 4 || opcode == 5) {
@@ -201,11 +321,9 @@ std::string component_source() {
                   const auto& axis = stencil.axes[axis_index];
                   double derivative = 0.0;
                   for (std::size_t term = 0; term < axis.term_count; ++term) {
-                    const auto x =
-                        static_cast<std::ptrdiff_t>(i) + (axis.axis == 0 ? axis.offsets[term] : 0);
-                    const auto y =
-                        static_cast<std::ptrdiff_t>(j) + (axis.axis == 1 ? axis.offsets[term] : 0);
-                    derivative += axis.coefficients[term] * read(x, y);
+                    auto stencil_coordinates = sample_coordinates;
+                    stencil_coordinates[axis.axis] += axis.offsets[term];
+                    derivative += axis.coefficients[term] * read(stencil_coordinates);
                   }
                   derivative /= request->cell_size[axis.axis];
                   squared_norm += derivative * derivative;
@@ -259,42 +377,53 @@ std::string component_source() {
     }
 
     int cluster(void*, const PopsClusteringRequestV1* request, PopsComponentStatusV1* status) {
-      if (request->dimension != 2 || request->box_capacity < 1)
+      if (request->dimension < 1 || request->dimension > 3 || request->box_capacity < 1)
         return 2;
-      const std::size_t nx = static_cast<std::size_t>(request->extents[0]);
-      std::int64_t lo_x = request->extents[0], lo_y = request->extents[1];
-      std::int64_t hi_x = -1, hi_y = -1;
+      std::array<std::int64_t, 3> lo{0, 0, 0};
+      std::array<std::int64_t, 3> hi{-1, -1, -1};
+      for (std::int32_t axis = 0; axis < request->dimension; ++axis)
+        lo[axis] = request->extents[axis];
       for (std::size_t point = 0; point < request->tags.size; ++point) {
         if (request->tags.data[point] == 0)
           continue;
-        const auto i = static_cast<std::int64_t>(point % nx);
-        const auto j = static_cast<std::int64_t>(point / nx);
-        lo_x = std::min(lo_x, i);
-        lo_y = std::min(lo_y, j);
-        hi_x = std::max(hi_x, i);
-        hi_y = std::max(hi_y, j);
+        std::size_t remaining = point;
+        for (std::int32_t axis = 0; axis < request->dimension; ++axis) {
+          const auto coordinate = static_cast<std::int64_t>(
+              remaining % static_cast<std::size_t>(request->extents[axis]));
+          remaining /= static_cast<std::size_t>(request->extents[axis]);
+          lo[axis] = std::min(lo[axis], coordinate);
+          hi[axis] = std::max(hi[axis], coordinate);
+        }
       }
-      if (hi_x < 0) {
+      if (hi[0] < 0) {
         *request->box_count = 0;
       } else {
-        request->boxes[0] = lo_x;
-        request->boxes[1] = lo_y;
-        request->boxes[2] = hi_x;
-        request->boxes[3] = hi_y;
+        for (std::int32_t axis = 0; axis < request->dimension; ++axis) {
+          request->boxes[axis] = lo[axis];
+          request->boxes[request->dimension + axis] = hi[axis];
+        }
         *request->box_count = 1;
       }
       *status = {sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr};
       return 0;
     }
 
-    int prepare(const PopsComponentPrepareRequestV1*, void** state, PopsComponentStatusV1* status) {
-      *state = new int(++prepare_count);
+    int prepare(const PopsComponentPrepareRequestV1* request, void** state,
+                PopsComponentStatusV1* status) {
+      const bool canonical_execution =
+          request != nullptr && request->execution.execution_identity != nullptr &&
+          std::strcmp(request->execution.execution_identity, "test::execution-context") == 0;
+      const void* execution_identity =
+          canonical_execution ? static_cast<const void*>(&canonical_execution_identity_token)
+                              : static_cast<const void*>(&other_execution_identity_token);
+      *state = new PreparedStateOracle{reinterpret_cast<std::uintptr_t>(execution_identity),
+                                       static_cast<std::uintptr_t>(++prepare_count)};
       *status = {sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr};
       return 0;
     }
     void destroy(void* state) {
       ++destroy_count;
-      delete static_cast<int*>(state);
+      delete static_cast<PreparedStateOracle*>(state);
     }
 
 #if defined(POPS_TEST_HEADER_ONLY_FLUX_TABLE)
@@ -359,12 +488,6 @@ std::string component_source() {
     extern "C" const PopsComponentApiV1* pops_component_interface_v1() {
       return &component;
     }
-    extern "C" int pops_test_prepare_count() {
-      return prepare_count;
-    }
-    extern "C" int pops_test_destroy_count() {
-      return destroy_count;
-    }
     extern "C" int pops_test_tag_call_count() {
       return tag_call_count;
     }
@@ -414,12 +537,13 @@ std::filesystem::path compile_component(FluxTableFixture fixture = FluxTableFixt
   return library;
 }
 
-pops::component::ExpectedNativeComponent expected() {
+pops::component::ExpectedNativeComponent expected(const std::filesystem::path& library) {
   return {kComponentId,
           kSemanticIdentity,
           kManifestIdentity,
           POPS_COMPONENT_CATALOG_SHA256_V1,
           POPS_ABI_KEY_LITERAL,
+          pops::dynlib::AuthenticatedNativeFile(library.string()).binary_identity(),
           {{POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, sizeof(PopsNumericalFluxApiV1)},
            {POPS_NATIVE_INTERFACE_TRANSFER_V1, 1, sizeof(PopsTransferApiV1)},
            {POPS_NATIVE_INTERFACE_GHOST_BOUNDARY_V1, 1, sizeof(PopsGhostBoundaryApiV1)},
@@ -442,33 +566,47 @@ std::shared_ptr<const pops::component::PreparedExecutionContextV1> prepared_exec
 TEST(test_amr_native_loader, LoadsAuthenticatesAndExecutesExactFinalTable) {
   const auto library = compile_component();
   {
-    auto loaded = pops::component::LoadedComponent::load(library.string(), expected());
+    auto loaded = pops::component::LoadedComponent::load(library.string(), expected(library));
     const auto& table =
         loaded.table<PopsNumericalFluxApiV1>(POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1);
-    const std::array<double, 4> left{1.0, 3.0, 5.0, 7.0};
-    const std::array<double, 4> right{2.0, 4.0, 6.0, 8.0};
-    const std::array<double, 4> normals{1.0, 0.0, 1.0, 0.0};
-    std::array<double, 4> flux{};
-    std::array<double, 2> stability{};
-    std::array<PopsComponentActionV1, 2> actions{};
+    std::array<std::size_t, kDim> extents{};
+    extents.fill(2);
+    const std::size_t points = extent_product(extents);
+    constexpr std::size_t components = 2;
+    std::vector<double> left(points * components);
+    std::vector<double> right(points * components);
+    std::vector<double> normals(points * static_cast<std::size_t>(kDim), 0.0);
+    for (std::size_t index = 0; index < left.size(); ++index) {
+      left[index] = static_cast<double>(2 * index + 1);
+      right[index] = static_cast<double>(2 * index + 2);
+    }
+    for (std::size_t point = 0; point < points; ++point)
+      normals[point * static_cast<std::size_t>(kDim)] = 1.0;
+    std::vector<double> flux(points * components, 0.0);
+    std::vector<double> stability(points, 0.0);
+    std::vector<PopsComponentActionV1> actions(points);
     const auto execution = abi::host_execution_context();
-    const PopsNumericalFluxRequestV1 request{sizeof(PopsNumericalFluxRequestV1),
-                                             abi::const_field_view(left.data(), 1, 2, 2),
-                                             abi::const_field_view(right.data(), 1, 2, 2),
-                                             abi::const_field_view(normals.data(), 1, 2, 2),
-                                             nullptr,
-                                             abi::logical_time(),
-                                             execution};
+    const PopsNumericalFluxRequestV1 request{
+        sizeof(PopsNumericalFluxRequestV1),
+        const_field_view<kDim>(left.data(), extents, components),
+        const_field_view<kDim>(right.data(), extents, components),
+        const_field_view<kDim>(normals.data(), extents, static_cast<std::size_t>(kDim)),
+        nullptr,
+        abi::logical_time(),
+        execution};
     PopsNumericalFluxResultV1 result{sizeof(PopsNumericalFluxResultV1),
-                                     abi::field_view(flux.data(), 1, 2, 2),
+                                     field_view<kDim>(flux.data(), extents, components),
                                      stability.data(),
                                      actions.data(),
                                      {}};
     void* state = loaded.prepared_state(POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, execution);
     ASSERT_NE(state, nullptr);
-    ASSERT_EQ(pops::component::evaluate_faces(table, state, request, result), 0);
-    EXPECT_EQ(flux, (std::array<double, 4>{1.75, 3.75, 5.75, 7.75}));
-    EXPECT_EQ(stability, (std::array<double, 2>{3.0, 3.0}));
+    ASSERT_EQ(pops::component::evaluate_faces<kDim>(table, state, request, result), 0);
+    std::vector<double> expected_flux(left.size());
+    for (std::size_t index = 0; index < expected_flux.size(); ++index)
+      expected_flux[index] = 0.25 * left[index] + 0.75 * right[index];
+    EXPECT_EQ(flux, expected_flux);
+    EXPECT_EQ(stability, std::vector<double>(points, 3.0));
     auto mismatched_context = execution;
     mismatched_context.execution_identity = "test::other-execution-context";
     EXPECT_THROW(
@@ -478,554 +616,10 @@ TEST(test_amr_native_loader, LoadsAuthenticatesAndExecutesExactFinalTable) {
   std::filesystem::remove(library);
 }
 
-TEST(test_amr_native_loader, PreparedAmrProvidersExecuteExactTablesAndProvenance) {
-  const auto library = compile_component();
-  const auto inspection = pops::dynlib::open(library.string());
-  ASSERT_TRUE(pops::dynlib::valid(inspection));
-  using CounterFn = int (*)();
-  using SetIntFn = void (*)(int);
-  using PointerFn = const void* (*)();
-  using TickFn = std::int64_t (*)();
-  using PhysicalTimeFn = double (*)();
-  const auto tag_call_count =
-      reinterpret_cast<CounterFn>(pops::dynlib::sym(inspection, "pops_test_tag_call_count"));
-  const auto set_partial_tag_output =
-      reinterpret_cast<SetIntFn>(pops::dynlib::sym(inspection, "pops_test_set_partial_tag_output"));
-  const auto last_tag_state_data =
-      reinterpret_cast<PointerFn>(pops::dynlib::sym(inspection, "pops_test_last_tag_state_data"));
-  const auto last_tag_logical_tick =
-      reinterpret_cast<TickFn>(pops::dynlib::sym(inspection, "pops_test_last_tag_logical_tick"));
-  const auto last_tag_physical_time = reinterpret_cast<PhysicalTimeFn>(
-      pops::dynlib::sym(inspection, "pops_test_last_tag_physical_time"));
-  ASSERT_NE(tag_call_count, nullptr);
-  ASSERT_NE(set_partial_tag_output, nullptr);
-  ASSERT_NE(last_tag_state_data, nullptr);
-  ASSERT_NE(last_tag_logical_tick, nullptr);
-  ASSERT_NE(last_tag_physical_time, nullptr);
-  {
-    auto component = std::make_shared<pops::component::LoadedComponent>(
-        pops::component::LoadedComponent::load(library.string(), expected()));
-    const auto execution = prepared_execution();
-    pops::runtime::amr::PreparedTaggerSpec tagger_spec{
-        "test::tagger-provider",
-        kComponentId,
-        kManifestIdentity,
-        "case::layout",
-        "case::clock",
-        {1, 2, 3, 4, 5},
-        {16, 17, 18},
-        {POPS_TAGGING_STENCIL_ROUTE_LINEAR_AXIS_STENCIL_L2_V1},
-        POPS_TAGGING_MAXIMUM_STENCIL_TERMS_V1,
-        128,
-        POPS_TAGGING_NON_FINITE_REJECT_V1,
-        POPS_TAGGER_EXECUTION_NATIVE_BACKEND_V2,
-        POPS_TAGGER_COLLECTIVE_NONE_V2,
-        {POPS_MEMORY_SPACE_HOST_V1},
-        2,
-        execution};
-    pops::runtime::amr::PreparedClusteringSpec clustering_spec{
-        "test::clustering-provider", kComponentId, kManifestIdentity, "case::layout", 1, execution};
-    pops::runtime::amr::PreparedTaggerComponent tagger(std::move(tagger_spec), component);
-    pops::runtime::amr::PreparedClusteringComponent clustering(std::move(clustering_spec),
-                                                               component);
-    const pops::runtime::amr::PreparedTaggingProgram program{
-        {},
-        {{0, 0, 1, 0.5, POPS_TAGGING_NO_STENCIL_V1}},
-        {1},
-        {0},
-        {},
-        {},
-        0,
-        0,
-        0,
-        POPS_TAGGING_NON_FINITE_REJECT_V1,
-        "case::clock",
-        "case::bound-tagging-program",
-        true};
-
-    const pops::Box2D domain{{0, 0}, {3, 2}};
-    const std::vector<pops::Box2D> patches{pops::Box2D{{0, 0}, {1, 2}},
-                                           pops::Box2D{{2, 0}, {3, 2}}};
-    pops::MultiFab state(pops::BoxArray(patches), pops::DistributionMapping(2, pops::n_ranks()), 1,
-                         1);
-    state.set_val(pops::Real(0));
-    for (int local = 0; local < state.local_size(); ++local) {
-      auto values = state.fab(local).array();
-      if (state.box(local).contains(1, 0))
-        values(1, 0, 0) = pops::Real(2);
-      if (state.box(local).contains(2, 1))
-        values(2, 1, 0) = pops::Real(3);
-    }
-    const int calls_before = tag_call_count();
-    auto candidates = tagger.tag({{"case::tracer::U", &state}}, program, domain, 0, 7, 0.25, 0.25,
-                                 1.0 / 3.0, false, false, false);
-    pops::TagBox& tags = candidates.refine;
-    EXPECT_EQ(tag_call_count() - calls_before, state.local_size());
-    ASSERT_GT(state.local_size(), 0);
-    EXPECT_EQ(last_tag_state_data(), state.fab(state.local_size() - 1).data())
-        << "native-backend Tagger must borrow the resident field instead of staging HostSpace";
-    ASSERT_EQ(tags.count(), 2);
-    EXPECT_TRUE(tags.tagged(1, 0));
-    EXPECT_TRUE(tags.tagged(2, 1));
-    ASSERT_EQ(tagger.provider_identity(), "test::tagger-provider");
-
-    pops::runtime::amr::PreparedTaggerSpec host_tagger_spec{
-        "test::host-tagger-provider",
-        kComponentId,
-        kManifestIdentity,
-        "case::layout",
-        "case::clock",
-        {1, 2, 3, 4, 5},
-        {16, 17, 18},
-        {POPS_TAGGING_STENCIL_ROUTE_LINEAR_AXIS_STENCIL_L2_V1},
-        POPS_TAGGING_MAXIMUM_STENCIL_TERMS_V1,
-        128,
-        POPS_TAGGING_NON_FINITE_REJECT_V1,
-        POPS_TAGGER_EXECUTION_HOST_V2,
-        POPS_TAGGER_COLLECTIVE_NONE_V2,
-        {POPS_MEMORY_SPACE_HOST_V1},
-        2,
-        execution};
-    pops::runtime::amr::PreparedTaggerComponent host_tagger(std::move(host_tagger_spec), component);
-    const auto host_candidates = host_tagger.tag({{"case::tracer::U", &state}}, program, domain, 0,
-                                                 7, 0.25, 0.25, 1.0 / 3.0, false, false, false);
-    EXPECT_EQ(host_candidates.refine.count(), candidates.refine.count());
-    EXPECT_NE(last_tag_state_data(), state.fab(state.local_size() - 1).data())
-        << "only an explicitly host-scoped Tagger may receive a staged field image";
-
-    set_partial_tag_output(1);
-    EXPECT_THROW((void)tagger.tag({{"case::tracer::U", &state}}, program, domain, 0, 7, 0.25, 0.25,
-                                  1.0 / 3.0, false, false, false),
-                 std::runtime_error);
-    set_partial_tag_output(0);
-
-    const auto set_state = [&state](int i, int j, pops::Real value) {
-      for (int local = 0; local < state.local_size(); ++local)
-        if (state.box(local).contains(i, j))
-          state.fab(local).array()(i, j, 0) = value;
-    };
-    set_state(0, 0, std::numeric_limits<pops::Real>::quiet_NaN());
-    EXPECT_THROW((void)tagger.tag({{"case::tracer::U", &state}}, program, domain, 0, 7, 0.25, 0.25,
-                                  1.0 / 3.0, false, false, false),
-                 std::runtime_error);
-    set_state(0, 0, pops::Real(0));
-
-    auto exact_gradient = program;
-    using TagProgram = pops::runtime::amr::PreparedTaggingProgram;
-    exact_gradient.stencils = {
-        TagProgram::Stencil{"case::forward-gradient",
-                            POPS_TAGGING_STENCIL_ROUTE_LINEAR_AXIS_STENCIL_L2_V1,
-                            "l2",
-                            "inverse_cell_size",
-                            "ghost_extension",
-                            2,
-                            {TagProgram::AxisStencil{0, 1, 1, 0, 1, {0, 1}, {-1.0, 1.0}},
-                             TagProgram::AxisStencil{1, 1, 1, 0, 1, {0, 1}, {-1.0, 1.0}}}}};
-    exact_gradient.leaves[0].opcode = POPS_TAGGING_GRADIENT_ABOVE_V1;
-    exact_gradient.leaves[0].threshold = 6.0;
-    exact_gradient.leaves[0].stencil_index = 0;
-    exact_gradient.refine_ops = {POPS_TAGGING_GRADIENT_ABOVE_V1};
-    exact_gradient.provider_identity = "case::bound-tagging-program-forward-gradient";
-    const auto gradient_candidates =
-        tagger.tag({{"case::tracer::U", &state}}, exact_gradient, domain, 0, 7, 0.25, 0.25,
-                   1.0 / 3.0, false, false, false);
-    EXPECT_TRUE(gradient_candidates.refine.tagged(0, 0));
-    EXPECT_GT(gradient_candidates.refine.count(), 0);
-
-    set_state(0, 0, std::numeric_limits<pops::Real>::quiet_NaN());
-    EXPECT_THROW((void)tagger.tag({{"case::tracer::U", &state}}, exact_gradient, domain, 0, 7, 0.25,
-                                  0.25, 1.0 / 3.0, false, false, false),
-                 std::runtime_error);
-    set_state(0, 0, pops::Real(0));
-
-    set_state(0, 0, -std::numeric_limits<pops::Real>::max());
-    set_state(1, 0, std::numeric_limits<pops::Real>::max());
-    const int calls_before_derived_overflow = tag_call_count();
-    EXPECT_THROW((void)tagger.tag({{"case::tracer::U", &state}}, exact_gradient, domain, 0, 7, 0.25,
-                                  0.25, 1.0 / 3.0, false, false, false),
-                 std::runtime_error);
-    EXPECT_GT(tag_call_count(), calls_before_derived_overflow);
-    set_state(0, 0, pops::Real(0));
-    set_state(1, 0, pops::Real(2));
-
-    auto false_order = exact_gradient;
-    false_order.stencils[0].axes[0].formal_order = 2;
-    false_order.provider_identity = "case::forged-gradient-order";
-    EXPECT_THROW((void)tagger.tag({{"case::tracer::U", &state}}, false_order, domain, 0, 7, 0.25,
-                                  0.25, 1.0 / 3.0, false, false, false),
-                 std::runtime_error);
-
-    auto insufficient_halo = exact_gradient;
-    insufficient_halo.stencils[0].axes[0] =
-        TagProgram::AxisStencil{0, 1, 1, 0, 2, {0, 2}, {-0.5, 0.5}};
-    insufficient_halo.provider_identity = "case::gradient-halo-too-thin";
-    const int calls_before_halo_rejection = tag_call_count();
-    EXPECT_THROW((void)tagger.tag({{"case::tracer::U", &state}}, insufficient_halo, domain, 0, 7,
-                                  0.25, 0.25, 1.0 / 3.0, false, false, false),
-                 std::runtime_error);
-    EXPECT_EQ(tag_call_count(), calls_before_halo_rejection);
-
-    auto minimum_offset = exact_gradient;
-    minimum_offset.stencils[0].axes[0] = TagProgram::AxisStencil{
-        0, 1, 1, 0, 0, {std::numeric_limits<std::int32_t>::min(), 0}, {-1.0, 1.0}};
-    minimum_offset.provider_identity = "case::gradient-minimum-offset";
-    const int calls_before_minimum_offset = tag_call_count();
-    EXPECT_THROW((void)tagger.tag({{"case::tracer::U", &state}}, minimum_offset, domain, 0, 7, 0.25,
-                                  0.25, 1.0 / 3.0, false, false, false),
-                 std::runtime_error);
-    EXPECT_EQ(tag_call_count(), calls_before_minimum_offset);
-
-    auto not_equality = program;
-    not_equality.leaves[0].threshold = 0.0;
-    not_equality.refine_ops = {POPS_TAGGING_ABOVE_V1, POPS_TAGGING_NOT_V1};
-    not_equality.refine_args = {0, 1};
-    not_equality.provider_identity = "case::bound-tagging-program-not-equality";
-    const auto not_candidates = tagger.tag({{"case::tracer::U", &state}}, not_equality, domain, 0,
-                                           7, 0.25, 0.25, 1.0 / 3.0, false, false, false);
-    EXPECT_EQ(not_candidates.refine.count(), 0);
-    EXPECT_EQ(not_candidates.refine_equalities.count(), 10);
-    set_state(0, 0, std::numeric_limits<pops::Real>::quiet_NaN());
-    EXPECT_THROW((void)tagger.tag({{"case::tracer::U", &state}}, not_equality, domain, 0, 7, 0.25,
-                                  0.25, 1.0 / 3.0, false, false, false),
-                 std::runtime_error);
-    set_state(0, 0, pops::Real(0));
-
-    auto any_equality = program;
-    any_equality.leaves[0].threshold = 0.0;
-    any_equality.leaves.push_back({0, 0, POPS_TAGGING_BELOW_V1, -1.0, POPS_TAGGING_NO_STENCIL_V1});
-    any_equality.refine_ops = {POPS_TAGGING_ABOVE_V1, POPS_TAGGING_BELOW_V1,
-                               POPS_TAGGING_ANY_OF_V1};
-    any_equality.refine_args = {0, 1, 2};
-    any_equality.provider_identity = "case::bound-tagging-program-any-equality";
-    const auto any_candidates = tagger.tag({{"case::tracer::U", &state}}, any_equality, domain, 0,
-                                           7, 0.25, 0.25, 1.0 / 3.0, false, false, false);
-    EXPECT_EQ(any_candidates.refine.count(), 2);
-    EXPECT_EQ(any_candidates.refine_equalities.count(), 10);
-
-    auto all_equality = program;
-    all_equality.leaves[0].threshold = 0.0;
-    all_equality.leaves.push_back({0, 0, POPS_TAGGING_BELOW_V1, 1.0, POPS_TAGGING_NO_STENCIL_V1});
-    all_equality.refine_ops = {POPS_TAGGING_ABOVE_V1, POPS_TAGGING_BELOW_V1,
-                               POPS_TAGGING_ALL_OF_V1};
-    all_equality.refine_args = {0, 1, 2};
-    all_equality.provider_identity = "case::bound-tagging-program-all-equality";
-    const auto all_candidates = tagger.tag({{"case::tracer::U", &state}}, all_equality, domain, 0,
-                                           7, 0.25, 0.25, 1.0 / 3.0, false, false, false);
-    EXPECT_EQ(all_candidates.refine.count(), 0);
-    EXPECT_EQ(all_candidates.refine_equalities.count(), 10);
-
-    auto changed_threshold = program;
-    changed_threshold.leaves[0].threshold = 2.5;
-    changed_threshold.provider_identity = "case::bound-tagging-program-threshold-2.5";
-    const auto changed = tagger.tag({{"case::tracer::U", &state}}, changed_threshold, domain, 0, 7,
-                                    0.25, 0.25, 1.0 / 3.0, false, false, false);
-    EXPECT_EQ(changed.refine.count(), 1);
-    EXPECT_TRUE(changed.refine.tagged(2, 1));
-
-    auto refine_and_coarsen = program;
-    refine_and_coarsen.leaves.push_back({0, 0, 2, 1.0, POPS_TAGGING_NO_STENCIL_V1});
-    refine_and_coarsen.coarsen_ops = {2};
-    refine_and_coarsen.coarsen_args = {1};
-    refine_and_coarsen.provider_identity = "case::bound-tagging-program-with-coarsen";
-    const auto dual = tagger.tag({{"case::tracer::U", &state}}, refine_and_coarsen, domain, 0, 7,
-                                 0.25, 0.25, 1.0 / 3.0, false, false, false);
-    EXPECT_EQ(dual.refine.count(), 2);
-    EXPECT_EQ(dual.coarsen.count(), 10);
-
-    // A direct/restarted Program context must publish its current evaluation coordinate at the
-    // tagger boundary. The facade clock is changed only after the lazy runtime build, so observing
-    // either build-time zero here would prove that stale runtime metadata leaked into regrid.
-    pops::AmrSystemConfig config;
-    config.n = 4;
-    config.ny = 4;
-    config.L = 1.0;
-    config.Ly = 1.0;
-    config.level_count = 2;
-    config.regrid_every = 1;
-    config.periodicity = {true, true};
-    pops::AmrSystem system(config);
-    system.set_temporal_relations({2}, {1}, {"integral_only"});
-    pops::ModelSpec model;
-    model.transport = "compressible";
-    model.source = "none";
-    model.elliptic = "background";
-    model.gamma = 1.4;
-    model.alpha = 0.0;
-    model.n0 = 0.0;
-    system.add_block("gas", model, "minmod", "rusanov", "conservative", "explicit", 1);
-    const std::size_t cells = static_cast<std::size_t>(config.n) * config.ny;
-    std::vector<double> conservative(4u * cells, 0.0);
-    std::fill_n(conservative.data(), cells, 1.0);
-    std::fill_n(conservative.data() + 3u * cells, cells, 2.5);
-    system.set_conservative_state("gas", conservative);
-    pops::test::install_prepared_threshold_union(
-        system, {{"gas", "rho", 0.5}}, "test::direct-context-tagger-provider", "amr::refinement");
-    pops::runtime::amr::PreparedTaggerSpec context_tagger_spec{
-        "test::direct-context-tagger-provider",
-        kComponentId,
-        kManifestIdentity,
-        "case::direct-context-layout",
-        "amr::refinement",
-        {1, 2, 3, 4, 5},
-        {16, 17, 18},
-        {POPS_TAGGING_STENCIL_ROUTE_LINEAR_AXIS_STENCIL_L2_V1},
-        POPS_TAGGING_MAXIMUM_STENCIL_TERMS_V1,
-        128,
-        POPS_TAGGING_NON_FINITE_REJECT_V1,
-        POPS_TAGGER_EXECUTION_HOST_V2,
-        POPS_TAGGER_COLLECTIVE_NONE_V2,
-        {POPS_MEMORY_SPACE_HOST_V1},
-        2,
-        execution};
-    system.install_amr_tagger_component(std::move(context_tagger_spec), component);
-    ASSERT_TRUE(system.uses_runtime_engine());
-    ASSERT_NE(system.engine(), nullptr);
-    system.set_clock(2.75, 99);
-    pops::runtime::program::AmrProgramContext direct_context(system.engine(), &system);
-    const int direct_calls_before = tag_call_count();
-    direct_context.regrid_if_due(1);
-    EXPECT_GT(tag_call_count(), direct_calls_before);
-    EXPECT_EQ(last_tag_logical_tick(), 1);
-    EXPECT_DOUBLE_EQ(last_tag_physical_time(), 2.75);
-
-    // GLOBAL Program substeps share one public AMR macro-step. They must cover distinct physical
-    // intervals while the head-of-step regrid/tagger runs exactly once, not once per closure call.
-    system.set_clock(3.0, 1);
-    system.set_program_block_map({0});
-    system.set_program_cadence(/*substeps=*/2, /*stride=*/1);
-    pops::runtime::program::AmrProgramContext cadence_context(system.engine(), &system);
-    cadence_context.configure_primary_clock("clock.macro");
-    std::vector<double> cadence_times;
-    std::vector<int> cadence_macro_steps;
-    std::vector<int> cadence_tag_counts;
-    cadence_context.install([&](double step) {
-      cadence_times.push_back(static_cast<double>(cadence_context.physical_time()));
-      cadence_macro_steps.push_back(cadence_context.macro_step());
-      cadence_context.advance_hierarchy(step, [&](double level_step) {
-        cadence_context.set_stage_time(0, 1);
-        pops::MultiFab& state = cadence_context.state(0);
-        pops::MultiFab& rate = cadence_context.rhs_scratch(101, 0, state);
-        cadence_context.rhs_into(0, state, rate, 101);
-        cadence_context.axpy(state, static_cast<pops::Real>(level_step), rate,
-                             static_cast<pops::Real>(level_step), {{1, 1, 1}});
-      });
-      cadence_tag_counts.push_back(tag_call_count());
-    });
-    system.set_program_block_map({0});
-    const int cadence_calls_before = tag_call_count();
-    system.step(0.2);
-    ASSERT_EQ(cadence_times.size(), 2u);
-    ASSERT_EQ(cadence_macro_steps.size(), 2u);
-    ASSERT_EQ(cadence_tag_counts.size(), 2u);
-    EXPECT_NEAR(cadence_times[0], 3.0, 1.0e-14);
-    EXPECT_NEAR(cadence_times[1], 3.1, 1.0e-14);
-    EXPECT_EQ(cadence_macro_steps[0], 1);
-    EXPECT_EQ(cadence_macro_steps[1], 1);
-    EXPECT_GT(cadence_tag_counts[0], cadence_calls_before);
-    EXPECT_EQ(cadence_tag_counts[1], cadence_tag_counts[0]);
-    EXPECT_EQ(last_tag_logical_tick(), 1);
-    EXPECT_DOUBLE_EQ(last_tag_physical_time(), 3.0);
-    EXPECT_NEAR(system.time(), 3.2, 1.0e-14);
-    EXPECT_EQ(system.macro_step(), 2);
-
-    const auto configure_cadenced_system = [&](pops::AmrSystem& target,
-                                               const std::string& provider_identity,
-                                               const std::string& layout_identity) {
-      target.set_temporal_relations({2}, {1}, {"integral_only"});
-      target.add_block("gas", model, "minmod", "rusanov", "conservative", "explicit", 1);
-      target.set_conservative_state("gas", conservative);
-      pops::test::install_prepared_threshold_union(target, {{"gas", "rho", 0.5}}, provider_identity,
-                                                   "amr::refinement");
-      pops::runtime::amr::PreparedTaggerSpec spec{
-          provider_identity,
-          kComponentId,
-          kManifestIdentity,
-          layout_identity,
-          "amr::refinement",
-          {1, 2, 3, 4, 5},
-          {16, 17, 18},
-          {POPS_TAGGING_STENCIL_ROUTE_LINEAR_AXIS_STENCIL_L2_V1},
-          POPS_TAGGING_MAXIMUM_STENCIL_TERMS_V1,
-          128,
-          POPS_TAGGING_NON_FINITE_REJECT_V1,
-          POPS_TAGGER_EXECUTION_HOST_V2,
-          POPS_TAGGER_COLLECTIVE_NONE_V2,
-          {POPS_MEMORY_SPACE_HOST_V1},
-          2,
-          execution};
-      target.install_amr_tagger_component(std::move(spec), component);
-      ASSERT_TRUE(target.uses_runtime_engine());
-      ASSERT_NE(target.engine(), nullptr);
-      target.set_program_block_map({0});
-    };
-
-    // A stride-two Program closes windows at facade ticks 1, 3, 5, ... but regrid cadence belongs
-    // to the accepted Program clock at the START of each window.  The second window must therefore
-    // tag at tick 2 / t=0.2.  Passing the facade cursor (the old behavior) yields 1, 3, 5 and this
-    // regrid_every=2 fixture never calls the tagger.
-    pops::AmrSystemConfig stride_config = config;
-    stride_config.regrid_every = 2;
-    pops::AmrSystem stride_system(stride_config);
-    configure_cadenced_system(stride_system, "test::stride-window-tagger-provider",
-                              "case::stride-window-layout");
-    stride_system.set_clock(0.0, 0);
-    stride_system.set_program_cadence(/*substeps=*/1, /*stride=*/2);
-    pops::runtime::program::AmrProgramContext stride_context(stride_system.engine(),
-                                                             &stride_system);
-    stride_context.configure_primary_clock("clock.macro");
-    std::vector<double> stride_context_times;
-    std::vector<int> stride_context_macro_steps;
-    stride_context.install([&](double step) {
-      stride_context_macro_steps.push_back(stride_context.macro_step());
-      stride_context.advance_hierarchy(step, [&](double level_step) {
-        if (stride_context.level() == 0)
-          stride_context_times.push_back(static_cast<double>(stride_context.physical_time()));
-        stride_context.set_stage_time(0, 1);
-        pops::MultiFab& state_value = stride_context.state(0);
-        pops::MultiFab& rate = stride_context.rhs_scratch(201, 0, state_value);
-        stride_context.rhs_into(0, state_value, rate, 201);
-        stride_context.axpy(state_value, static_cast<pops::Real>(level_step), rate,
-                            static_cast<pops::Real>(level_step), {{1, 1, 1}});
-      });
-    });
-    stride_system.set_program_block_map({0});
-    const int stride_calls_before = tag_call_count();
-    stride_system.step(0.05);  // held
-    stride_system.step(0.15);  // first variable-dt window starts at tick 0
-    EXPECT_EQ(tag_call_count(), stride_calls_before);
-    stride_system.step(0.07);  // held
-    stride_system.step(0.13);  // second window starts at accepted tick 2: regrid is due
-    ASSERT_EQ(stride_context_times.size(), 2u);
-    ASSERT_EQ(stride_context_macro_steps.size(), 2u);
-    EXPECT_NEAR(stride_context_times[0], 0.0, 1.0e-14);
-    EXPECT_NEAR(stride_context_times[1], 0.2, 1.0e-14);
-    EXPECT_EQ(stride_context_macro_steps[0], 0);
-    EXPECT_EQ(stride_context_macro_steps[1], 2);
-    EXPECT_GT(tag_call_count(), stride_calls_before);
-    EXPECT_EQ(last_tag_logical_tick(), 2);
-    EXPECT_NEAR(last_tag_physical_time(), 0.2, 1.0e-14);
-    EXPECT_NEAR(stride_system.time(), 0.4, 1.0e-14);
-    EXPECT_EQ(stride_system.macro_step(), 4);
-
-    // The first GLOBAL substep commits an AMR-context image before the second starts.  If substep
-    // two fails, the facade transaction rolls back farther than that inner image.  A retry must
-    // import the original accepted context, repeat the head-of-window regrid/tagger, and traverse
-    // exactly the same physical coordinates instead of retaining the substep-one marker/clock.
-    pops::AmrSystemConfig retry_config = config;
-    retry_config.regrid_every = 2;
-    pops::AmrSystem retry_system(retry_config);
-    configure_cadenced_system(retry_system, "test::substep-retry-tagger-provider",
-                              "case::substep-retry-layout");
-    retry_system.set_clock(1.25, 2);
-    retry_system.set_program_cadence(/*substeps=*/2, /*stride=*/1);
-    pops::runtime::program::AmrProgramContext retry_context(retry_system.engine(), &retry_system);
-    retry_context.configure_primary_clock("clock.macro");
-    bool reject_second_substep = true;
-    int program_invocation = 0;
-    std::vector<double> retry_context_times;
-    std::vector<int> retry_context_macro_steps;
-    retry_context.install([&](double step) {
-      ++program_invocation;
-      retry_context_macro_steps.push_back(retry_context.macro_step());
-      retry_context.advance_hierarchy(step, [&](double level_step) {
-        if (retry_context.level() == 0)
-          retry_context_times.push_back(static_cast<double>(retry_context.physical_time()));
-        retry_context.set_stage_time(0, 1);
-        pops::MultiFab& state_value = retry_context.state(0);
-        pops::MultiFab& rate = retry_context.rhs_scratch(301, 0, state_value);
-        retry_context.rhs_into(0, state_value, rate, 301);
-        retry_context.axpy(state_value, static_cast<pops::Real>(level_step), rate,
-                           static_cast<pops::Real>(level_step), {{1, 1, 1}});
-        if (reject_second_substep && program_invocation == 2 && retry_context.level() == 0)
-          throw std::runtime_error("intentional second AMR Program substep failure");
-      });
-    });
-    retry_system.set_program_block_map({0});
-
-    const double retry_time_before = retry_system.time();
-    const int retry_macro_before = retry_system.macro_step();
-    const int retry_levels_before = retry_system.engine()->nlev();
-    const int retry_regrids_before = retry_system.checkpoint_regrid_count();
-    const std::uint64_t retry_topology_before = retry_system.checkpoint_topology_epoch();
-    const std::vector<double> retry_state_before = retry_system.engine()->block_level_state(0, 0);
-    const std::vector<std::uint8_t> retry_program_state_before =
-        retry_system.program_accepted_state();
-    const std::uint64_t retry_program_revision_before =
-        retry_system.program_accepted_state_revision();
-    const int retry_calls_before = tag_call_count();
-
-    EXPECT_THROW(retry_system.step(0.2), std::runtime_error);
-    ASSERT_EQ(retry_context_times.size(), 2u);
-    ASSERT_EQ(retry_context_macro_steps.size(), 2u);
-    EXPECT_NEAR(retry_context_times[0], 1.25, 1.0e-14);
-    EXPECT_NEAR(retry_context_times[1], 1.35, 1.0e-14);
-    EXPECT_EQ(retry_context_macro_steps[0], retry_macro_before);
-    EXPECT_EQ(retry_context_macro_steps[1], retry_macro_before);
-    EXPECT_GT(tag_call_count(), retry_calls_before);
-    EXPECT_EQ(last_tag_logical_tick(), retry_macro_before);
-    EXPECT_NEAR(last_tag_physical_time(), retry_time_before, 1.0e-14);
-    EXPECT_DOUBLE_EQ(retry_system.time(), retry_time_before);
-    EXPECT_EQ(retry_system.macro_step(), retry_macro_before);
-    EXPECT_EQ(retry_system.engine()->nlev(), retry_levels_before);
-    EXPECT_EQ(retry_system.checkpoint_regrid_count(), retry_regrids_before);
-    EXPECT_EQ(retry_system.checkpoint_topology_epoch(), retry_topology_before);
-    EXPECT_EQ(retry_system.engine()->block_level_state(0, 0), retry_state_before);
-    EXPECT_EQ(retry_system.program_accepted_state(), retry_program_state_before);
-    EXPECT_EQ(retry_system.program_accepted_state_revision(), retry_program_revision_before);
-    EXPECT_NEAR(static_cast<double>(retry_context.physical_time()), retry_time_before, 1.0e-14);
-
-    reject_second_substep = false;
-    const int retry_calls_after_failure = tag_call_count();
-    retry_system.step(0.2);
-    ASSERT_EQ(retry_context_times.size(), 4u);
-    ASSERT_EQ(retry_context_macro_steps.size(), 4u);
-    EXPECT_NEAR(retry_context_times[2], retry_context_times[0], 1.0e-14);
-    EXPECT_NEAR(retry_context_times[3], retry_context_times[1], 1.0e-14);
-    EXPECT_EQ(retry_context_macro_steps[2], retry_macro_before);
-    EXPECT_EQ(retry_context_macro_steps[3], retry_macro_before);
-    EXPECT_GT(tag_call_count(), retry_calls_after_failure)
-        << "rollback must not retain the failed attempt's automatic-regrid marker";
-    EXPECT_EQ(last_tag_logical_tick(), retry_macro_before);
-    EXPECT_NEAR(last_tag_physical_time(), retry_time_before, 1.0e-14);
-    EXPECT_NEAR(retry_system.time(), retry_time_before + 0.2, 1.0e-14);
-    EXPECT_EQ(retry_system.macro_step(), retry_macro_before + 1);
-    EXPECT_GT(retry_system.checkpoint_regrid_count(), retry_regrids_before);
-    EXPECT_GT(retry_system.checkpoint_topology_epoch(), retry_topology_before);
-
-    auto unsupported_hysteresis = program;
-    unsupported_hysteresis.min_cycles = 1;
-    unsupported_hysteresis.provider_identity = "case::bound-tagging-program-hysteresis-1";
-    const int calls_before_hysteresis = tag_call_count();
-    EXPECT_THROW((void)tagger.tag({{"case::tracer::U", &state}}, unsupported_hysteresis, domain, 0,
-                                  7, 0.25, 0.25, 1.0 / 3.0, false, false, false),
-                 std::runtime_error);
-    EXPECT_EQ(tag_call_count(), calls_before_hysteresis);
-
-    const std::vector<pops::Box2D> boxes = clustering.cluster(tags);
-    ASSERT_EQ(boxes.size(), 1u);
-    EXPECT_EQ(boxes[0].lo[0], 1);
-    EXPECT_EQ(boxes[0].lo[1], 0);
-    EXPECT_EQ(boxes[0].hi[0], 2);
-    EXPECT_EQ(boxes[0].hi[1], 1);
-    ASSERT_EQ(clustering.provider_identity(), "test::clustering-provider");
-  }
-  pops::dynlib::close(inspection);
-  std::filesystem::remove(library);
-}
-
 TEST(test_amr_native_loader, CachesPreparedResourcesPerExactTargetAndPinsExecutionContext) {
   const auto library = compile_component();
-  const auto inspection = pops::dynlib::open(library.string());
-  ASSERT_TRUE(pops::dynlib::valid(inspection));
-  using CounterFn = int (*)();
-  const auto prepare_count =
-      reinterpret_cast<CounterFn>(pops::dynlib::sym(inspection, "pops_test_prepare_count"));
-  const auto destroy_count =
-      reinterpret_cast<CounterFn>(pops::dynlib::sym(inspection, "pops_test_destroy_count"));
-  ASSERT_NE(prepare_count, nullptr);
-  ASSERT_NE(destroy_count, nullptr);
   {
-    auto loaded = pops::component::LoadedComponent::load(library.string(), expected());
+    auto loaded = pops::component::LoadedComponent::load(library.string(), expected(library));
     const auto execution = abi::host_execution_context();
     auto anonymous_execution = execution;
     anonymous_execution.execution_identity = "";
@@ -1033,25 +627,30 @@ TEST(test_amr_native_loader, CachesPreparedResourcesPerExactTargetAndPinsExecuti
         (void)loaded.prepared_state(POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, anonymous_execution,
                                     R"({"scheme":"shared"})", R"({"identity":"target-a"})"),
         std::invalid_argument);
-    EXPECT_EQ(prepare_count(), 0);
     auto incomplete_execution = execution;
     incomplete_execution.backend_identity = nullptr;
     EXPECT_THROW((void)loaded.prepared_state(POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1,
                                              incomplete_execution, R"({"scheme":"shared"})",
                                              R"({"identity":"target-a"})"),
                  std::invalid_argument);
-    EXPECT_EQ(prepare_count(), 0);
     void* first = loaded.prepared_state(POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, execution,
                                         R"({"scheme":"shared"})", R"({"identity":"target-a"})");
-    EXPECT_EQ(prepare_count(), 1);
+    ASSERT_NE(first, nullptr);
+    const auto& first_oracle = *static_cast<const PreparedStateOracle*>(first);
+    const std::uintptr_t canonical_execution_identity =
+        first_oracle[kPreparedExecutionIdentityIndex];
+    EXPECT_NE(canonical_execution_identity, std::uintptr_t{0});
+    EXPECT_EQ(first_oracle[kPreparedOrdinalIndex], std::uintptr_t{1});
     EXPECT_EQ(loaded.prepared_state(POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, execution,
                                     R"({"scheme":"shared"})", R"({"identity":"target-a"})"),
               first);
-    EXPECT_EQ(prepare_count(), 1);
     void* second = loaded.prepared_state(POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, execution,
                                          R"({"scheme":"shared"})", R"({"identity":"target-b"})");
+    ASSERT_NE(second, nullptr);
     EXPECT_NE(second, first);
-    EXPECT_EQ(prepare_count(), 2);
+    const auto& second_oracle = *static_cast<const PreparedStateOracle*>(second);
+    EXPECT_EQ(second_oracle[kPreparedExecutionIdentityIndex], canonical_execution_identity);
+    EXPECT_EQ(second_oracle[kPreparedOrdinalIndex], std::uintptr_t{2});
 
     auto mismatched_context = execution;
     mismatched_context.execution_identity = "test::other-execution-context";
@@ -1059,11 +658,18 @@ TEST(test_amr_native_loader, CachesPreparedResourcesPerExactTargetAndPinsExecuti
         (void)loaded.prepared_state(POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, mismatched_context,
                                     R"({"scheme":"shared"})", R"({"identity":"target-c"})"),
         std::invalid_argument);
-    EXPECT_EQ(prepare_count(), 2);
-    EXPECT_EQ(destroy_count(), 0);
+    void* third = loaded.prepared_state(POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, execution,
+                                        R"({"scheme":"shared"})", R"({"identity":"target-c"})");
+    ASSERT_NE(third, nullptr);
+    EXPECT_NE(third, first);
+    EXPECT_NE(third, second);
+    const auto& third_oracle = *static_cast<const PreparedStateOracle*>(third);
+    EXPECT_EQ(third_oracle[kPreparedExecutionIdentityIndex], canonical_execution_identity);
+    EXPECT_EQ(third_oracle[kPreparedOrdinalIndex], std::uintptr_t{3});
+    EXPECT_EQ(loaded.prepared_state(POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, execution,
+                                    R"({"scheme":"shared"})", R"({"identity":"target-c"})"),
+              third);
   }
-  EXPECT_EQ(destroy_count(), 2);
-  pops::dynlib::close(inspection);
   std::filesystem::remove(library);
 }
 
@@ -1073,17 +679,8 @@ TEST(test_amr_native_loader, FreshSessionStatesAreIndependentMoveOnlyRaiiOwners)
       std::is_nothrow_move_constructible_v<pops::component::LoadedComponent::PreparedState>);
 
   const auto library = compile_component();
-  const auto inspection = pops::dynlib::open(library.string());
-  ASSERT_TRUE(pops::dynlib::valid(inspection));
-  using CounterFn = int (*)();
-  const auto prepare_count =
-      reinterpret_cast<CounterFn>(pops::dynlib::sym(inspection, "pops_test_prepare_count"));
-  const auto destroy_count =
-      reinterpret_cast<CounterFn>(pops::dynlib::sym(inspection, "pops_test_destroy_count"));
-  ASSERT_NE(prepare_count, nullptr);
-  ASSERT_NE(destroy_count, nullptr);
   {
-    auto loaded = pops::component::LoadedComponent::load(library.string(), expected());
+    auto loaded = pops::component::LoadedComponent::load(library.string(), expected(library));
     const auto execution = abi::host_execution_context();
     {
       auto first =
@@ -1092,43 +689,48 @@ TEST(test_amr_native_loader, FreshSessionStatesAreIndependentMoveOnlyRaiiOwners)
       auto second =
           loaded.prepare_fresh_state(POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, execution,
                                      R"({"scheme":"session"})", R"({"identity":"same-target"})");
+      ASSERT_NE(first.get(), nullptr);
+      ASSERT_NE(second.get(), nullptr);
       EXPECT_NE(first.get(), second.get());
-      EXPECT_EQ(prepare_count(), 2);
-      EXPECT_EQ(destroy_count(), 0);
+      const auto& first_oracle = *static_cast<const PreparedStateOracle*>(first.get());
+      const auto& second_oracle = *static_cast<const PreparedStateOracle*>(second.get());
+      EXPECT_NE(first_oracle[kPreparedExecutionIdentityIndex], std::uintptr_t{0});
+      EXPECT_EQ(second_oracle[kPreparedExecutionIdentityIndex],
+                first_oracle[kPreparedExecutionIdentityIndex]);
+      EXPECT_EQ(first_oracle[kPreparedOrdinalIndex], std::uintptr_t{1});
+      EXPECT_EQ(second_oracle[kPreparedOrdinalIndex], std::uintptr_t{2});
 
       auto moved = std::move(first);
       EXPECT_EQ(first.get(), nullptr);
       EXPECT_NE(moved.get(), nullptr);
     }
-    EXPECT_EQ(destroy_count(), 2);
   }
-  pops::dynlib::close(inspection);
   std::filesystem::remove(library);
 }
 
 TEST(test_amr_native_loader, RefusesIdentityInterfaceAndTableSizeMismatches) {
   const auto library = compile_component();
-  auto forged = expected();
+  auto forged = expected(library);
   forged.semantic_identity = "forged-semantic";
   EXPECT_THROW(pops::component::LoadedComponent::load(library.string(), forged),
                std::runtime_error);
 
-  auto undeclared_export = expected();
+  auto undeclared_export = expected(library);
   undeclared_export.interfaces.pop_back();
   EXPECT_THROW(pops::component::LoadedComponent::load(library.string(), undeclared_export),
                std::runtime_error);
 
-  auto duplicate_expectation = expected();
+  auto duplicate_expectation = expected(library);
   duplicate_expectation.interfaces.push_back(duplicate_expectation.interfaces.front());
   EXPECT_THROW(pops::component::LoadedComponent::load(library.string(), duplicate_expectation),
                std::runtime_error);
 
-  auto missing = expected();
+  auto missing = expected(library);
   missing.interfaces = {{POPS_NATIVE_INTERFACE_TRANSFER_V1, 1, sizeof(PopsTransferApiV1)}};
   EXPECT_THROW(pops::component::LoadedComponent::load(library.string(), missing),
                std::runtime_error);
 
-  auto truncated = expected();
+  auto truncated = expected(library);
   truncated.interfaces[0].minimum_table_size = sizeof(PopsNumericalFluxApiV1) + 1;
   EXPECT_THROW(pops::component::LoadedComponent::load(library.string(), truncated),
                std::runtime_error);
@@ -1137,21 +739,21 @@ TEST(test_amr_native_loader, RefusesIdentityInterfaceAndTableSizeMismatches) {
 
 TEST(test_amr_native_loader, RefusesHonestlyReportedHeaderOnlyInterfaceTable) {
   const auto library = compile_component(FluxTableFixture::HeaderOnly);
-  EXPECT_THROW(pops::component::LoadedComponent::load(library.string(), expected()),
+  EXPECT_THROW(pops::component::LoadedComponent::load(library.string(), expected(library)),
                std::runtime_error);
   std::filesystem::remove(library);
 }
 
 TEST(test_amr_native_loader, RefusesHeaderOnlyTableWithForgedFullEntrySize) {
   const auto library = compile_component(FluxTableFixture::ForgedEntrySize);
-  EXPECT_THROW(pops::component::LoadedComponent::load(library.string(), expected()),
+  EXPECT_THROW(pops::component::LoadedComponent::load(library.string(), expected(library)),
                std::runtime_error);
   std::filesystem::remove(library);
 }
 
 TEST(test_amr_native_loader, RefusesComponentBuiltForAnotherNativeAbi) {
   const auto library = compile_component(FluxTableFixture::WrongAbi);
-  EXPECT_THROW(pops::component::LoadedComponent::load(library.string(), expected()),
+  EXPECT_THROW(pops::component::LoadedComponent::load(library.string(), expected(library)),
                std::runtime_error);
   std::filesystem::remove(library);
 }

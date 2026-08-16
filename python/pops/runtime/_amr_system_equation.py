@@ -1,9 +1,8 @@
-"""AmrSystem equation/aux mixin (Spec-4 PR-F).
+"""AmrSystem equation mixin (Spec-4 PR-F).
 
-``add_equation`` (the AMR backend dispatcher) + the named-aux resolution / set of
-:class:`pops.runtime._amr_system.AmrSystem`, plus the module-level guard
+``add_equation`` (the AMR backend dispatcher) plus the module-level guard
 ``_reject_newton_amr_compiled`` used only by this path. Mixed in via inheritance; operates on
-``self._s`` and ``self._aux_field_index``.
+``self._s``.
 """
 
 from __future__ import annotations
@@ -100,9 +99,9 @@ class _AmrSystemEquation(_AmrSystem):
 
         - a private ``ModelSpec`` -> the native ``AmrSystem::add_block`` ABI (bricks composed on
           the hierarchy);
-        - a CompiledModel(backend='production', target='amr_system') installs a package whose loader
-          inlines add_compiled_model(AmrSystem&), so the block runs
-          the same AMR hierarchy as the native-brick ABI (conservative reflux, regrid), ZERO-COPY.
+        - a CompiledModel(backend='production', target='amr_system') installs one complete inert
+          package containing its prepared block and elliptic attachments, so the block runs the
+          same AMR hierarchy as the native-brick ABI (conservative reflux, regrid), ZERO-COPY.
 
         The ``time`` value carried by a block is immutable Program-authoring metadata, not an
         executable method in the AMR spatial runtime. The compiled ``pops.Program`` installed after
@@ -136,7 +135,6 @@ class _AmrSystemEquation(_AmrSystem):
         guard_assembling(self, "add_equation")  # frozen once pops.bind completes (ADC-592)
         # Late imports (the codegen/physics modules import this package: avoid the cycle).
         from pops.codegen.loader import CompiledModel
-        from pops.physics.aux import aux_layout
 
         spatial = self._lower_spatial(spatial)
         time = time if time is not None else Explicit()
@@ -155,6 +153,13 @@ class _AmrSystemEquation(_AmrSystem):
         # Forward the complete authoring request to the native contract. Unsupported masks and
         # Newton controls are rejected there rather than retained by the spatial runtime.
         if isinstance(model, ModelSpec):
+            from pops.runtime._system_install import (
+                _candidate_coupling_contracts,
+                _model_coupling_contract,
+            )
+
+            contract = _model_coupling_contract(model, dimension=len(self._shape))
+            contract_candidate = _candidate_coupling_contracts(self, name, contract)
             # The installed Program remains the sole time authority.
             spatial_options: dict[str, bool | float] = {
                 "wave_speed_cache": bool(getattr(spatial, "wave_speed_cache", False)),
@@ -198,6 +203,7 @@ class _AmrSystemEquation(_AmrSystem):
                 ),
                 **spatial_options,
             )
+            self._coupling_block_contracts = contract_candidate
             return
 
         if not isinstance(model, CompiledModel):
@@ -216,7 +222,7 @@ class _AmrSystemEquation(_AmrSystem):
             raise ValueError(
                 "AmrSystem.add_equation: the CompiledModel was compiled for target='system'; "
                 "re-resolve and compile the Case for its AMR layout so that the loader inlines "
-                "add_compiled_model(AmrSystem&) (symbol pops_install_native_amr)"
+                "the complete prepared AMR package (symbol pops_install_native_amr)"
             )
 
         # Descriptor-owned model predicates are shared verbatim with System and availability.
@@ -252,10 +258,10 @@ class _AmrSystemEquation(_AmrSystem):
         # through the .so loader. Explicit rejection prevents silent substitution of the prepared
         # provider defaults, in parity with the stride/mask rejection above and System.add_equation.
         _reject_newton_amr_compiled("AmrSystem.add_equation", time)
-        # positivity_floor (ADC-322): the regenerated .so loader carries the Zhang-Shu floor now
-        # (pops_install_native_amr -> add_compiled_model -> set_compiled_block), so it is threaded
-        # through instead of rejected. 0 (default) = inactive, bit-identical. The C++
-        # The native package seam validates floor >= 0 and finite (parity with add_block).
+        # positivity_floor (ADC-322): the regenerated .so loader carries the Zhang-Shu floor in
+        # the complete prepared package, so it is threaded through instead of rejected. 0
+        # (default) = inactive, bit-identical. The native package seam validates floor >= 0 and
+        # finite (parity with add_block).
 
         # PRE-DLOPEN guard at attach (covers the cache HIT, cf. System.add_equation): module
         # _pops stale vs .so compiled against the up-to-date headers -> actionable error, not a dlopen
@@ -292,10 +298,22 @@ class _AmrSystemEquation(_AmrSystem):
             spatial_options["weno_epsilon"] = native_real(
                 spatial.weno_epsilon, where="AmrSystem.add_equation.weno_epsilon"
             )
+        weno_epsilon = spatial_options.get(
+            "weno_epsilon", float(numerical_defaults_report()["weno"]["epsilon"])
+        )
         positivity_floor = native_real(
             getattr(spatial, "positivity_floor", 0.0),
             where="AmrSystem.add_equation.positivity_floor",
         )
+        from pops.runtime._system_install import (
+            _candidate_coupling_contracts,
+            _model_coupling_contract,
+        )
+
+        contract = _model_coupling_contract(
+            compiled, dimension=compiled.native_dimension, adiabatic_index=gamma
+        )
+        contract_candidate = _candidate_coupling_contracts(self, name, contract)
         if spatial.external_flux_id is not None:
             if "amr" not in spatial.external_flux_supported_layouts:
                 raise ValueError(
@@ -304,8 +322,24 @@ class _AmrSystemEquation(_AmrSystem):
                 )
             if runtime_names:
                 raise ValueError(
-                    "AmrSystem.add_equation: external Riemann ABI v2 does not transport model "
+                    "AmrSystem.add_equation: external Riemann ABI does not transport model "
                     "RuntimeParams"
+                )
+            expected_provider_count = len(tuple(compiled.provider_components))
+            external_shape = (
+                spatial.external_flux_dimension,
+                spatial.external_flux_n_vars,
+                spatial.external_flux_provider_count,
+            )
+            compiled_shape = (
+                compiled.native_dimension,
+                compiled.n_vars,
+                expected_provider_count,
+            )
+            if external_shape != compiled_shape:
+                raise ValueError(
+                    "AmrSystem.add_equation: external Riemann brick %r carries model shape %r, "
+                    "not %r" % (spatial.external_flux_id, external_shape, compiled_shape)
                 )
             if spatial.external_flux_model_identity != compiled.model_hash:
                 raise ValueError(
@@ -323,32 +357,33 @@ class _AmrSystemEquation(_AmrSystem):
                 )
             if spatial_options["wave_speed_cache"]:
                 raise ValueError(
-                    "AmrSystem.add_equation: external Riemann ABI v2 does not transport "
+                    "AmrSystem.add_equation: external Riemann ABI does not transport "
                     "wave_speed_cache"
                 )
-            self._s._install_external_riemann_block(
+            self._s._register_external_riemann_package(
                 name,
                 spatial.external_flux_library_path,
                 spatial.external_flux_id,
                 spatial.external_flux_library_sha256,
+                spatial.external_flux_n_vars,
+                spatial.external_flux_provider_count,
+                spatial.external_flux_model_identity,
+                name,
                 spatial.limiter,
                 spatial.recon,
                 time.kind,
                 gamma,
                 nsub,
                 nstride,
-                compiled.n_vars,
-                compiled.n_aux,
-                compiled.model_hash,
                 positivity_floor,
-                spatial_options.get(
-                    "weno_epsilon", float(numerical_defaults_report()["weno"]["epsilon"])
-                ),
+                weno_epsilon,
             )
         else:
             self._s._install_native_block(
                 name,
                 compiled.so_path,
+                compiled.model_hash,
+                str(compiled.binary_identity),
                 spatial.limiter,
                 spatial.flux,
                 spatial.recon,
@@ -359,55 +394,4 @@ class _AmrSystemEquation(_AmrSystem):
                 positivity_floor,
                 **spatial_options,
             )
-        # ADC-291: record the named aux fields the block declares (component of the k-th name =
-        # AUX_NAMED_BASE + k), so set_aux_field(block, name, array) can resolve name -> component.
-        extra = list(getattr(compiled, "aux_extra_names", []) or [])
-        if extra:
-            named_base = aux_layout(compiled.native_dimension).named_base
-            self._aux_field_index[name] = {nm: named_base + k for k, nm in enumerate(extra)}
-
-    def _resolve_aux_field(self, block: Any, name: Any) -> Any:
-        """Resolve (block, named aux field) -> aux channel component (ADC-291). Mirror of
-        System._resolve_aux_field: a canonical name is redirected to its dedicated path; an unknown
-        block or an undeclared field raises (no silent component-0 fallback)."""
-        from pops.physics.aux import AUX_CANONICAL_NAMES
-
-        if name in AUX_CANONICAL_NAMES:
-            if name == "B_z":
-                raise ValueError(
-                    "set_aux_field: 'B_z' (magnetic field) is set via sim.set_magnetic_field(Bz), "
-                    "NOT via set_aux_field (B_z is a canonical aux field, not a named field)."
-                )
-            raise ValueError(
-                "set_aux_field: '%s' is a CANONICAL aux field (derived by the solver, not settable); "
-                "set_aux_field only carries the NAMED fields declared by m.aux_field(...)." % name
-            )
-        table = self._aux_field_index.get(block)
-        if table is None:
-            raise ValueError(
-                "set_aux_field: block '%s' unknown (or bound without a named aux field); declare "
-                "m.aux_field('%s') on that block's model in the pops.Case." % (block, name)
-            )
-        if name not in table:
-            raise ValueError(
-                "set_aux_field: aux field '%s' not declared by block '%s'; known named fields: %s"
-                % (name, block, sorted(table))
-            )
-        return table[name]
-
-    def set_aux_field(self, block: Any, name: Any, field: Any, halo: Any = None) -> Any:
-        """Set a model-NAMED aux field of @p block (declared via m.aux_field(name)) on the AMR
-        hierarchy. AMR counterpart of System.set_aux_field. ``field`` is exactly one 2D
-        ``(ny, nx)`` array on the coarse level; it is static (re-applied each step, injected to the
-        fine levels, survives a regrid). Call before the first step (like ``set_density``).
-
-        @p halo (ADC-369): an optional ``pops.mesh.AuxHalo`` declaring this field's coarse-level ghost
-        boundary policy (foextrap / dirichlet), applied to the non-periodic faces after the shared aux
-        fill. Default None inherits the shared aux BC (bit-identical)."""
-        import numpy as np
-
-        comp = self._resolve_aux_field(block, name)
-        arr = np.asarray(field, dtype=float)
-        self._s.set_aux_field_component(comp, arr)
-        if halo is not None:
-            self._s.set_aux_field_halo_component(comp, halo.bc_type, halo.value)
+        self._coupling_block_contracts = contract_candidate

@@ -4,6 +4,7 @@ This module does not compile, emit, cache, or install anything.  It consumes an 
 ``Case`` plus resolved layout/library values and returns one strict JSON-ready proof document.
 Unknown evidence is a refusal: compile may consume this result, but may not repair or recompute it.
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -36,7 +37,8 @@ def resolve_capability_evidence(
     """
     if not bool(getattr(problem, "frozen", False)):
         raise TypeError(
-            "resolve capabilities requires a frozen pops.Case; validate/freeze it before resolve")
+            "resolve capabilities requires a frozen pops.Case; validate/freeze it before resolve"
+        )
     layout_name = _layout_name(layout)
     provider_sources: dict[str, set[str]] = {}
     required: set[str] = set()
@@ -53,13 +55,14 @@ def resolve_capability_evidence(
             # A component cannot prove its own prerequisites.  Capabilities from other resolved
             # providers remain eligible, including another brick in the same library.
             external_providers = {
-                capability for capability, sources in provider_sources.items()
+                capability
+                for capability, sources in provider_sources.items()
                 if sources.difference({source})
             }
             external_evidence.append(
-                _resolve_external_row(source, row, layout_name, external_providers))
-    amr_evidence = _resolve_amr_program(
-        layout_name, time, context=amr_program_context)
+                _resolve_external_row(source, row, layout_name, external_providers)
+            )
+    amr_evidence = _resolve_amr_program(layout_name, time, context=amr_program_context)
     evidence = {
         "schema_version": CAPABILITY_EVIDENCE_SCHEMA_VERSION,
         "layout": layout_name,
@@ -84,14 +87,20 @@ def canonical_capability_evidence_json(evidence: Any) -> str:
         raise TypeError("capability evidence must be a mapping")
     try:
         return json.dumps(
-            dict(evidence), sort_keys=True, separators=(",", ":"), ensure_ascii=True,
-            allow_nan=False)
+            dict(evidence),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        )
     except (TypeError, ValueError) as exc:
         raise TypeError("capability evidence must contain strict JSON data: %s" % exc) from exc
 
 
 def _collect_problem_evidence(
-    problem: Any, provider_sources: dict[str, set[str]], required: set[str],
+    problem: Any,
+    provider_sources: dict[str, set[str]],
+    required: set[str],
 ) -> None:
     problem_caps = _projection(getattr(problem, "capabilities", None))
     _add_tokens(provider_sources, "problem", _tokens(problem_caps))
@@ -131,23 +140,27 @@ def _library_rows(libraries: Any) -> tuple[list[tuple[str, Mapping]], list[Any]]
     if values:
         raise TypeError(
             "resolved libraries are retired; external components enter through authenticated "
-            "source packages and canonical component descriptors")
+            "source packages and canonical component descriptors"
+        )
     return [], []
 
 
 def _resolve_external_row(
-    source: str, row: Mapping, layout_name: str, provided: set[str],
+    source: str,
+    row: Mapping,
+    layout_name: str,
+    provided: set[str],
 ) -> dict[str, Any]:
     required_fields = ("requirements", "capabilities", "options")
     missing = [name for name in required_fields if row.get(name) is None]
     if missing:
         raise CapabilityResolutionError(
-            "%s has unknown external brick evidence %s" % (source, sorted(missing)))
+            "%s has unknown external brick evidence %s" % (source, sorted(missing))
+        )
     options = row.get("options")
     supported = options.get("supported_layouts") if isinstance(options, Mapping) else None
     if not supported:
-        raise CapabilityResolutionError(
-            "%s has unknown supported_layouts evidence" % source)
+        raise CapabilityResolutionError("%s has unknown supported_layouts evidence" % source)
     projected = dict(row)
     projected["supported_layouts"] = supported
     return _external_evidence(projected, layout_name, provided)
@@ -160,15 +173,18 @@ def _external_evidence(record: Mapping, layout_name: str, provided: set[str]) ->
     if missing:
         raise CapabilityResolutionError(
             "external brick %r requires missing capability %r; providers are %s"
-            % (brick_id, missing[0], sorted(provided) or "(none)"))
+            % (brick_id, missing[0], sorted(provided) or "(none)")
+        )
     supported = sorted(str(value).lower() for value in record.get("supported_layouts", ()))
     if not supported:
         raise CapabilityResolutionError(
-            "external brick %r has unknown supported_layouts evidence" % brick_id)
+            "external brick %r has unknown supported_layouts evidence" % brick_id
+        )
     if layout_name not in supported:
         raise CapabilityResolutionError(
             "external brick %r does not support layout=%s; supported layouts are %s"
-            % (brick_id, layout_name, supported))
+            % (brick_id, layout_name, supported)
+        )
     return {
         "id": str(brick_id),
         "requirements": requirements,
@@ -179,27 +195,53 @@ def _external_evidence(record: Mapping, layout_name: str, provided: set[str]) ->
 
 
 def _resolve_amr_program(
-    layout_name: str, time: Any, *, context: Any,
+    layout_name: str,
+    time: Any,
+    *,
+    context: Any,
 ) -> dict[str, Any]:
     if layout_name != "amr" or time is None:
         return {"groups": [], "status": "not_applicable"}
-    from pops.runtime.amr_program_support import amr_program_op_support
+    from pops.runtime.amr_program_support import AMRProgramSupportError, amr_program_op_support
 
     if context is None:
         raise CapabilityResolutionError(
             "AMR Program resolution requires resolved hierarchy, shared-interface and "
-            "field-provider evidence")
-    support = amr_program_op_support(time, context=context)
+            "field-provider evidence"
+        )
+    if context.refined_hierarchy and _uses_local_transform(time):
+        raise CapabilityResolutionError(
+            "AMR Program local_transform is unavailable on a refined hierarchy: it requires a "
+            "semantically correct post-synchronization Program phase after reflux"
+        )
+    try:
+        support = amr_program_op_support(time, context=context)
+    except AMRProgramSupportError as exc:
+        raise CapabilityResolutionError(str(exc)) from exc
     pending = {name: status for name, status in support.items() if status != "green"}
     if pending:
         details = ", ".join("%s=%s" % item for item in sorted(pending.items()))
         raise CapabilityResolutionError(
             "AMR Program uses unsupported capability group(s) %s; resolution refuses before "
-            "artifact creation" % details)
+            "artifact creation" % details
+        )
     return {
         "groups": [{"name": name, "status": support[name]} for name in sorted(support)],
         "status": "proven",
     }
+
+
+def _uses_local_transform(program: Any) -> bool:
+    """Return whether the resolved Program reaches a pointwise local transform.
+
+    A flat AMR level can run the prepared pointwise transform directly.  On a refined hierarchy,
+    however, executing it before the reflux/synchronization boundary would give the transform a
+    different semantic position than the uniform route.  The resolved hierarchy context is the
+    authority for that distinction, so reject before artifact creation rather than advertising a
+    late runtime guard as support.
+    """
+    nodes = program.ir_nodes(recursive=True)
+    return any(isinstance(node, Mapping) and node.get("op") == "local_transform" for node in nodes)
 
 
 def _layout_name(layout: Any) -> str:
@@ -208,20 +250,19 @@ def _layout_name(layout: Any) -> str:
     from pops.mesh import LayoutPlan
 
     if isinstance(layout, LayoutPlan):
-        tokens = {
-            row.capabilities.get("layout")
-            for row in layout.layouts
-        }
+        tokens = {row.capabilities.get("layout") for row in layout.layouts}
         if len(tokens) != 1:
             raise CapabilityResolutionError(
-                "runtime capability resolution requires one common layout capability family")
+                "runtime capability resolution requires one common layout capability family"
+            )
         caps = {"layout": next(iter(tokens))}
     else:
         caps = _projection(getattr(layout, "capabilities", None))
     token = caps.get("layout") if isinstance(caps, Mapping) else None
     if not isinstance(token, str) or not token or token.strip() != token:
         raise CapabilityResolutionError(
-            "resolved layout must declare a canonical capabilities()['layout'] token")
+            "resolved layout must declare a canonical capabilities()['layout'] token"
+        )
     return token.lower()
 
 

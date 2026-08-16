@@ -11,6 +11,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <exception>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -214,15 +215,22 @@ struct GaussianCellAverageFiniteKernel {
 };
 
 template <int Dim, class MemorySpace>
-long invalid_materialization_target(const MultiFab<Dim, MemorySpace>& values,
-                                    const Geometry<Dim>& geometry,
-                                    const std::vector<AnalyticProgram>& programs) {
+bool invalid_materialization_target_local(const MultiFab<Dim, MemorySpace>& values,
+                                          const Geometry<Dim>& geometry,
+                                          const std::vector<AnalyticProgram>& programs) {
   bool invalid = programs.size() != static_cast<std::size_t>(values.ncomp());
   for (const AnalyticProgram& program : programs)
     invalid = invalid || program.required_dimension() > Dim;
   for (std::size_t local = 0; local < values.local_size(); ++local)
     invalid = invalid || !geometry.domain().contains(values.box(local));
-  return all_reduce_sum(invalid ? 1L : 0L);
+  return invalid;
+}
+
+template <int Dim, class MemorySpace>
+long invalid_materialization_target(const MultiFab<Dim, MemorySpace>& values,
+                                    const Geometry<Dim>& geometry,
+                                    const std::vector<AnalyticProgram>& programs) {
+  return all_reduce_sum(invalid_materialization_target_local(values, geometry, programs) ? 1L : 0L);
 }
 
 template <int Dim>
@@ -245,33 +253,86 @@ std::int64_t checked_layout_cell_count(const mesh::BoxArray<Dim>& layout) {
 
 }  // namespace detail
 
-/// Project each expression to cell averages with one Dim-generic tensor Gauss--Legendre algorithm.
 template <int Dim, class MemorySpace>
-std::int64_t materialize_cell_average(MultiFab<Dim, MemorySpace>& values,
-                                      const Geometry<Dim>& geometry,
-                                      const std::vector<AnalyticProgram>& programs) {
-  if (detail::invalid_materialization_target(values, geometry, programs) != 0)
+struct PreparedAnalyticMaterialization {
+  MultiFab<Dim, MemorySpace>* values = nullptr;
+  Geometry<Dim> geometry{};
+  const std::vector<AnalyticProgram>* programs = nullptr;
+  bool invalid_target = true;
+  std::int64_t materialized_values = 0;
+};
+
+/// Complete every fallible local validation/count phase before the caller enters a collective.
+template <int Dim, class MemorySpace>
+PreparedAnalyticMaterialization<Dim, MemorySpace> prepare_cell_average_materialization(
+    MultiFab<Dim, MemorySpace>& values, const Geometry<Dim>& geometry,
+    const std::vector<AnalyticProgram>& programs) {
+  const std::int64_t cells = detail::checked_layout_cell_count(values.layout());
+  if (values.ncomp() > 0 && cells > std::numeric_limits<std::int64_t>::max() / values.ncomp())
+    throw std::overflow_error("analytic materialization value count exceeds int64_t");
+  return PreparedAnalyticMaterialization<Dim, MemorySpace>{
+      .values = &values,
+      .geometry = geometry,
+      .programs = &programs,
+      .invalid_target = detail::invalid_materialization_target_local(values, geometry, programs),
+      .materialized_values = cells * values.ncomp(),
+  };
+}
+
+/// Project one fully locally prepared expression set with phase-gated lane collectives.
+template <int Dim, class MemorySpace>
+std::int64_t materialize_cell_average(
+    const PreparedAnalyticMaterialization<Dim, MemorySpace>& prepared,
+    const CommunicatorView& communicator) {
+  if (all_reduce_sum(prepared.invalid_target ? 1L : 0L, communicator) != 0)
     throw std::invalid_argument("analytic initial materialization target/profile mismatch");
+  MultiFab<Dim, MemorySpace>& values = *prepared.values;
+  const Geometry<Dim>& geometry = prepared.geometry;
+  const std::vector<AnalyticProgram>& programs = *prepared.programs;
   long invalid_local = 0;
-  for (std::size_t local = 0; local < values.local_size(); ++local)
-    for (int component = 0; component < values.ncomp(); ++component)
-      invalid_local += static_cast<long>(for_each_cell_reduce_sum(
-          values.box(local),
-          detail::AnalyticInitialFiniteKernel<Dim>{
-              {programs[static_cast<std::size_t>(component)].view(), geometry}}));
-  const long invalid = all_reduce_sum(invalid_local);
+  std::exception_ptr local_error;
+  try {
+    for (std::size_t local = 0; local < values.local_size(); ++local)
+      for (int component = 0; component < values.ncomp(); ++component)
+        invalid_local += static_cast<long>(for_each_cell_reduce_sum(
+            values.box(local),
+            detail::AnalyticInitialFiniteKernel<Dim>{
+                {programs[static_cast<std::size_t>(component)].view(), geometry}}));
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  const long local_failures = all_reduce_sum(local_error ? 1L : 0L, communicator);
+  if (local_failures != 0) {
+    if (communicator.size() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("analytic initial finite-value phase failed collectively on " +
+                             std::to_string(local_failures) + " rank(s)");
+  }
+  const long invalid = all_reduce_sum(invalid_local, communicator);
   if (invalid != 0)
     throw std::runtime_error("analytic initial expression produced non-finite cell values (count=" +
                              std::to_string(invalid) + ")");
-  for (std::size_t local = 0; local < values.local_size(); ++local)
-    for (int component = 0; component < values.ncomp(); ++component)
-      for_each_cell(values.box(local),
-                    detail::AnalyticInitialKernel<Dim>{
-                        values.fab(local).view(),
-                        component,
-                        {programs[static_cast<std::size_t>(component)].view(), geometry}});
-  device_fence();
-  return detail::checked_layout_cell_count(values.layout()) * values.ncomp();
+  local_error = {};
+  try {
+    for (std::size_t local = 0; local < values.local_size(); ++local)
+      for (int component = 0; component < values.ncomp(); ++component)
+        for_each_cell(values.box(local),
+                      detail::AnalyticInitialKernel<Dim>{
+                          values.fab(local).view(),
+                          component,
+                          {programs[static_cast<std::size_t>(component)].view(), geometry}});
+    device_fence();
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  const long execution_failures = all_reduce_sum(local_error ? 1L : 0L, communicator);
+  if (execution_failures != 0) {
+    if (communicator.size() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("analytic initial execution failed collectively on " +
+                             std::to_string(execution_failures) + " rank(s)");
+  }
+  return prepared.materialized_values;
 }
 
 /// Evaluate mapped analytic state at cell centers using ranked native field views.

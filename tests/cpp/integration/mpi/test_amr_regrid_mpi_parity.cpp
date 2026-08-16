@@ -7,21 +7,21 @@
 // grilles de tags differentes, le clustering divergerait par rang et MPI desynchroniserait (risques
 // X1/X2 du design).
 //
-// SCENARIO (le MEME a np=1/2/4) : deux blocs ExB a charges opposees (Poisson de systeme somme), un
-// blob a gauche et un a droite, sur une hierarchie 2 niveaux. GROSSIER REPARTI (distribute_coarse=true,
+// SCENARIO (le MEME a np=1/2/4) : deux blocs ExB alimentes par un champ electrique et magnetique
+// explicitement prepare, un blob a gauche et un a droite, sur une hierarchie 2 niveaux. GROSSIER
+// REPARTI (distribute_coarse=true,
 // BoxArray multi-box round-robin) : c'est le seul chemin ou (R4) est active (en grossier REPLIQUE,
 // chaque rang a deja la grille de tags complete, all_reduce_or serait l'identite). regrid_every=2 :
 // la grille se re-grille effectivement pendant la sequence, en suivant l'union des tags densite par
-// bloc + le tag de phi sur |grad phi|, tous installes dans un seul graphe prepare. On avance
+// bloc, installes dans un seul graphe prepare. On avance
 // plusieurs macro-pas (donc plusieurs regrids), puis on observe la hierarchie finale.
 //
 // ASSERTIONS :
 //   (1) CONSISTANCE CROSS-RANG (dans CHAQUE run) : la densite grossiere de chaque bloc est reconstruite
 //       GLOBALEMENT (all_reduce des boites disjointes du grossier reparti), donc n*n sur chaque rang ;
-//       son checksum, le potentiel de systeme et n_patches sont des grandeurs GLOBALES -> spread max
-//       cross-rang == 0 (insensible a l'ordre via all_reduce_max). Un bug de halo / Poisson somme /
-//       layout fin divergent le casserait.
-//   (2) PARITE AU NB DE RANGS : on imprime n_patches + des checksums (densite par bloc + potentiel) ;
+//       son checksum et n_patches sont des grandeurs GLOBALES -> spread max cross-rang == 0
+//       (insensible a l'ordre via all_reduce_max). Un bug de halo / layout fin divergent le casserait.
+//   (2) PARITE AU NB DE RANGS : on imprime n_patches + les checksums des deux densites ;
 //       la CI relance le MEME binaire en np=1/2/4 et DIFFE la ligne AMRREGRID (np=1 = oracle ;
 //       np=2/4 doivent etre BIT-IDENTIQUES). Le n_patches identique cross-np = layout fin identique
 //       cross-np (LE point du regrid d'union : un seul fb/dmap pour tous les rangs).
@@ -34,16 +34,20 @@
 
 #include "explicit_amr_program.hpp"
 #include "gtest_compat.hpp"
+#include <pops/core/foundation/native_dimension.hpp>
+#include <pops/physics/bricks/bricks.hpp>
+#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/runtime/amr_system.hpp>
-#include <pops/runtime/config/model_spec.hpp>
 #include <pops/parallel/comm.hpp>  // comm_init, my_rank, n_ranks, all_reduce_*
 
 #include "test_harness.hpp"  // pops::test::checksum (somme des carres partagee)
 #include "amr_tagging_test_authority.hpp"
 
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <string>
+#include <utility>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -52,27 +56,103 @@
 
 using namespace pops;
 
-static ModelSpec exb_charge(double q, double B0) {
-  ModelSpec s;
-  s.transport = "exb";
-  s.source = "none";
-  s.elliptic = "charge";
-  s.q = q;
-  s.B0 = B0;
-  return s;
+namespace {
+
+constexpr std::array<const char*, 2> kStateRoutes{"tests.amr-regrid-mpi-parity/a/state@1",
+                                                  "tests.amr-regrid-mpi-parity/b/state@1"};
+constexpr std::array<const char*, 2> kConsumerQids{"tests.amr-regrid-mpi-parity/a/physical-flux@1",
+                                                   "tests.amr-regrid-mpi-parity/b/physical-flux@1"};
+
+template <int Dim>
+using ExbTransportModel = CompositeModel<CartesianExBDriftND<Dim>, NoSource, NoElliptic>;
+
+template <int Dim>
+ExbTransportModel<Dim> exb_transport() {
+  return {};
 }
 
-// Disque gaussien centre en (cx, cy) du domaine [0,1]^2, amplitude amp sur une base, n*n row-major.
+template <int Dim>
+std::vector<runtime::system::AuxiliaryComponentKey> install_exb_auxiliary_authority(
+    AmrSystem<Dim>& system) {
+  using namespace runtime::system;
+  const AuxiliaryComponentContract electric_contract{"cell-average", "cell", "unitless",
+                                                     "tests-exb-electric-input", "scalar"};
+  const AuxiliaryComponentContract magnetic_contract{"cell-average", "cell", "tesla",
+                                                     "tests-exb-magnetic-input", "scalar"};
+  AuxiliaryStorageShape<Dim> shape;
+  for (int axis = 0; axis < Dim; ++axis)
+    shape.halo[axis] = 2;
+
+  std::vector<AuxiliaryComponentKey> keys;
+  std::vector<AuxiliaryOutput<Dim>> outputs;
+  keys.reserve(static_cast<std::size_t>(Dim + 3));
+  outputs.reserve(static_cast<std::size_t>(Dim + 3));
+  for (int axis = 0; axis < Dim; ++axis) {
+    AuxiliaryComponentKey key{"tests.amr-regrid-mpi-parity", "input", "electric",
+                              "gradient-" + std::to_string(axis)};
+    keys.push_back(key);
+    outputs.push_back({std::move(key), electric_contract, shape});
+  }
+  for (int component = 0; component < 3; ++component) {
+    AuxiliaryComponentKey key{"tests.amr-regrid-mpi-parity", "input", "magnetic",
+                              "B-" + std::to_string(component)};
+    keys.push_back(key);
+    outputs.push_back({std::move(key), magnetic_contract, shape});
+  }
+  system.install_prepared_auxiliary_provider(PreparedAuxiliaryProvider<Dim>{
+      "tests.amr-regrid-mpi-parity/exb-input@1",
+      AuxiliaryProviderKind::input,
+      {AuxiliaryEvaluationEvent::initialization, AuxiliaryFreshness::once},
+      std::move(outputs),
+      {}});
+
+  for (const char* consumer_qid : kConsumerQids) {
+    AuxiliaryConsumerProviderPlan<Dim> plan;
+    plan.consumer_qid = consumer_qid;
+    plan.values.reserve(static_cast<std::size_t>(Dim + 3));
+    for (int axis = 0; axis < Dim; ++axis)
+      plan.values.push_back({{keys[static_cast<std::size_t>(axis)], electric_contract, shape},
+                             static_cast<std::size_t>(axis)});
+    for (std::size_t component = 0; component < 3; ++component)
+      plan.values.push_back(
+          {{keys[static_cast<std::size_t>(Dim) + component], magnetic_contract, shape},
+           static_cast<std::size_t>(Dim) + component});
+    system.install_auxiliary_consumer_plan(std::move(plan));
+  }
+  system.seal_auxiliary_providers();
+  return keys;
+}
+
+}  // namespace
+
+// Bulle gaussienne centree sur l'axe 0 (et au milieu des autres axes), aplatie dans l'ordre natif.
 // Le maximum (base + amp) depasse le seuil de raffinement -> la region taguee suit le blob (regrid).
-static std::vector<double> blob(int n, double cx, double cy, double amp, double base,
+template <int Dim>
+std::size_t cell_count(const Extent<Dim>& shape) {
+  std::size_t result = 1;
+  for (int axis = 0; axis < Dim; ++axis)
+    result *= static_cast<std::size_t>(shape[axis]);
+  return result;
+}
+
+template <int Dim>
+static std::vector<double> blob(const Extent<Dim>& shape, double x_center, double amp, double base,
                                 double width) {
-  std::vector<double> rho(static_cast<std::size_t>(n) * n, base);
-  for (int j = 0; j < n; ++j)
-    for (int i = 0; i < n; ++i) {
-      const double x = (i + 0.5) / n, y = (j + 0.5) / n;
-      const double r2 = (x - cx) * (x - cx) + (y - cy) * (y - cy);
-      rho[static_cast<std::size_t>(j) * n + i] = base + amp * std::exp(-r2 / (width * width));
+  std::vector<double> rho(cell_count(shape), base);
+  for (std::size_t ordinal = 0; ordinal < rho.size(); ++ordinal) {
+    std::size_t remainder = ordinal;
+    double radius_squared = 0.0;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const auto extent = static_cast<std::size_t>(shape[axis]);
+      const double coordinate =
+          (static_cast<double>(remainder % extent) + 0.5) / static_cast<double>(extent);
+      remainder /= extent;
+      const double center = axis == 0 ? x_center : 0.5;
+      const double delta = coordinate - center;
+      radius_squared += delta * delta;
     }
+    rho[ordinal] = base + amp * std::exp(-radius_squared / (width * width));
+  }
   return rho;
 }
 
@@ -86,32 +166,57 @@ static int pops_run_test_amr_regrid_mpi_parity(int argc, char** argv) {
 #endif
   const int me = my_rank(), np = n_ranks();
   const int n = 32;
-  const double B0 = 1.0, q0 = +1.0, q1 = -1.0;
-  const std::vector<double> rho0 = blob(n, 0.30, 0.5, 1.0, 1.0, 0.07);  // bloc a gauche
-  const std::vector<double> rho1 = blob(n, 0.70, 0.5, 1.0, 1.0, 0.07);  // bloc a droite
+  constexpr int Dim = kNativeDimension;
+  const double B0 = 1.0;
 
-  AmrSystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
+  AmrSystemConfig<Dim> cfg;
+  for (int axis = 0; axis < Dim; ++axis) {
+    cfg.shape[axis] = n;
+    cfg.periodicity[axis] = true;
+    cfg.coarse_max_grid[axis] = n / 2;
+  }
+  const mesh::BoxArray<Dim> coarse_layout =
+      mesh::BoxArray<Dim>::from_domain(cfg.index_domain(), cfg.coarse_max_grid);
+  cfg.boxes = coarse_layout.boxes();
+  const std::vector<double> rho0 = blob(cfg.shape, 0.30, 1.0, 1.0, 0.07);  // bloc a gauche
+  const std::vector<double> rho1 = blob(cfg.shape, 0.70, 1.0, 1.0, 0.07);  // bloc a droite
   cfg.regrid_every = 2;          // REGRID ACTIF : la hierarchie se re-grille pendant la sequence
   cfg.distribute_coarse = true;  // GROSSIER REPARTI : active la reduction collective des tags (R4)
-  // coarse_max_grid = 0 -> n/2 (decoupage 2x2 multi-box, le moins agressif pour le MG geometrique).
+  // n/2 par axe -> 2^Dim boites grossieres reparties round-robin entre les rangs.
 
-  AmrSystem sys(cfg);
+  AmrSystem<Dim> sys(cfg);
+  test::install_amr_runtime_authority(sys, "tests.amr-regrid-mpi-parity/runtime-instance@1");
   sys.set_temporal_relations({2}, {1}, {"integral_only"});
-  sys.add_block("a", exb_charge(q0, B0), "minmod", "rusanov", "conservative", "explicit", 1);
-  sys.add_block("b", exb_charge(q1, B0), "minmod", "rusanov", "conservative", "explicit", 1);
-  sys.set_poisson("charge_density", "geometric_mg", "periodic");
-  test::install_prepared_thresholds_and_shared_aux_gradient(sys, {{"a", "n", 1.5}, {"b", "n", 1.5}},
-                                                            Real(1e-3));
+  sys.install_block_state_route("a", kStateRoutes[0]);
+  sys.install_block_state_route("b", kStateRoutes[1]);
+  add_compiled_model<Dim>(sys, "a", exb_transport<Dim>(), "minmod", "rusanov", "conservative",
+                          "explicit", static_cast<double>(kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
+                          static_cast<double>(kWenoEpsilon), false, kConsumerQids[0]);
+  add_compiled_model<Dim>(sys, "b", exb_transport<Dim>(), "minmod", "rusanov", "conservative",
+                          "explicit", static_cast<double>(kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
+                          static_cast<double>(kWenoEpsilon), false, kConsumerQids[1]);
+  const auto auxiliary_keys = install_exb_auxiliary_authority(sys);
+  const std::vector<double> zero_input(cell_count(cfg.shape), 0.0);
+  const std::vector<double> unit_input(cell_count(cfg.shape), 1.0);
+  for (int axis = 0; axis < Dim; ++axis)
+    sys.stage_auxiliary_input(auxiliary_keys[static_cast<std::size_t>(axis)],
+                              axis == 0 ? unit_input : zero_input);
+  for (int component = 0; component < 3; ++component)
+    sys.stage_auxiliary_input(
+        auxiliary_keys[static_cast<std::size_t>(Dim + component)],
+        component == 2 ? std::vector<double>(cell_count(cfg.shape), B0) : zero_input);
+  test::install_prepared_threshold_union(
+      sys, {{"a", "n", 1.5, test::PreparedThresholdRelation::Above, kStateRoutes[0]},
+            {"b", "n", 1.5, test::PreparedThresholdRelation::Above, kStateRoutes[1]}});
   sys.set_density("a", rho0);
   sys.set_density("b", rho1);
-  test::install_forward_euler_program(sys);
+  test::install_forward_euler_program(sys, false);
 
   const double m0a = sys.mass("a");  // declenche le build paresseux
   const double m0b = sys.mass("b");
   EXPECT_NE(sys.engine(), nullptr);
+  const int coarse_local = sys.coarse_local_boxes();
+  const int coarse_total = sys.coarse_total_boxes();
 
   const double dt = 1e-3;
   for (int s = 0; s < 16; ++s)
@@ -122,45 +227,50 @@ static int pops_run_test_amr_regrid_mpi_parity(int argc, char** argv) {
 #endif
   const std::vector<double> da = sys.density("a");
   const std::vector<double> db = sys.density("b");
-  const std::vector<double> phi = sys.potential();
   const double ma = sys.mass("a"), mb = sys.mass("b");
   const int npatch = sys.n_patches();  // nombre de patchs fins = signature du layout fin d'union
 
   using pops::test::checksum;  // somme des carres partagee (signature deterministe d'un champ)
-  const double ca = checksum(da), cb = checksum(db), cp = checksum(phi);
+  const double ca = checksum(da), cb = checksum(db);
 
-  // (1) CONSISTANCE CROSS-RANG : densite reconstruite globalement + potentiel + n_patches sont des
+  // (1) CONSISTANCE CROSS-RANG : densite reconstruite globalement + n_patches sont des
   // grandeurs GLOBALES identiques sur tout rang. spread = max - min cross-rang (insensible a l'ordre).
   auto spread = [](double x) { return all_reduce_max(x) - (-all_reduce_max(-x)); };
   const double sp = std::fmax(
       std::fmax(spread(ca), spread(cb)),
-      std::fmax(spread(cp),
-                std::fmax(spread(ma), std::fmax(spread(mb), spread(static_cast<double>(npatch))))));
+      std::fmax(spread(ma),
+                std::fmax(spread(mb), std::fmax(spread(static_cast<double>(npatch)),
+                                                spread(static_cast<double>(coarse_total))))));
+  const double max_coarse_local = all_reduce_max(static_cast<double>(coarse_local));
 
   int fails = 0;
   if (me == 0) {
     // Ligne PARITE (diffee cross-np par la CI) : n_patches + checksums imprimes en %.17e bit-exact.
     std::printf(
-        "AMRREGRID np=%d | n_patches=%d | csum_a=%.17e csum_b=%.17e csum_phi=%.17e | "
+        "AMRREGRID np=%d | coarse_boxes=%d n_patches=%d | csum_a=%.17e csum_b=%.17e | "
         "crossrank_spread=%.3e\n",
-        np, npatch, ca, cb, cp, sp);
+        np, coarse_total, npatch, ca, cb, sp);
     std::printf("AMRREGRID conservation: dm_a=%.3e dm_b=%.3e | mass_a=%.17e mass_b=%.17e\n",
                 std::fabs(ma - m0a), std::fabs(mb - m0b), ma, mb);
 
-    if (!(da.size() == static_cast<std::size_t>(n) * n)) {
-      std::printf("FAIL taille densite (%zu != %d)\n", da.size(), n * n);
-      ++fails;
-    }
-    if (!(cp > 1e-12)) {
-      std::printf("FAIL potentiel trivial (Poisson somme inactif)\n");
+    if (!(da.size() == cell_count(cfg.shape))) {
+      std::printf("FAIL taille densite (%zu != %zu)\n", da.size(), cell_count(cfg.shape));
       ++fails;
     }
     if (!(npatch >= 1)) {
       std::printf("FAIL aucun patch fin (le regrid n'a pas raffine)\n");
       ++fails;
     }
-    if (!std::isfinite(ca) || !std::isfinite(cb) || !std::isfinite(cp)) {
-      std::printf("FAIL champ non fini (MG diverge / regrid casse ?)\n");
+    const int expected_coarse_boxes = 1 << Dim;
+    if (!(coarse_total == expected_coarse_boxes &&
+          (np == 1 ? coarse_local == coarse_total : max_coarse_local < coarse_total))) {
+      std::printf(
+          "FAIL grossier non distribue (local=%d max_local=%.0f total=%d expected=%d np=%d)\n",
+          coarse_local, max_coarse_local, coarse_total, expected_coarse_boxes, np);
+      ++fails;
+    }
+    if (!std::isfinite(ca) || !std::isfinite(cb)) {
+      std::printf("FAIL champ non fini (transport / regrid casse ?)\n");
       ++fails;
     }
     // (3) masse de CHAQUE bloc conservee a travers les regrids (report fin exact + interp parent

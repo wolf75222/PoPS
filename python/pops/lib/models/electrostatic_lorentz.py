@@ -1,65 +1,113 @@
-"""pops.lib.models.electrostatic_lorentz -- the electrostatic-Lorentz source linearization (ADC-637).
+"""Exact-ranked Cartesian electrostatic-Lorentz source linearization.
 
-The condensed-implicit electrostatic push eliminates the implicit Lorentz rotation of the momentum
-against a gradient-linear Poisson coupling. Its per-cell block linearization is the ROTATION GENERATOR
-``J = [[0, B_z], [-B_z, 0]]`` on the momentum subset (mx, my): with ``M = I - theta*dt*J`` this is the
-Schur brick's ``B = [[1, -w], [w, 1]]`` (``w = theta*dt*B_z``, the retiring ``LorentzEliminator``). This
-module authors that ``J`` on a model as a plain ``m.local_linear_map``. An explicit ``Program`` graph
-combines it with the matrix-free field operator and solver; the block-inverse codegen therefore needs
-no Schur/Lorentz vocabulary in its emitted kernels.
+The helper authors the local rotation generator on the momentum subspace,
 
-``J`` reads B_z from the shared aux (canonical component 3, filled by ``solve_fields``) and NOTHING
-else, so its coefficients are constant in U over the block -- the eliminable-source contract
-(``m.linear_source`` refuses a cons/prim-dependent coefficient at registration).
+``J[a,b] = sum_c epsilon[a,b,c] B[c]``.
+
+Momentum indices come from the model's structured ``StateSchema`` and the magnetic input is one
+explicit three-component provider vector.  There are no ``mx/my`` slots, reserved ``B_z`` name, or
+planar runtime path.  In one dimension the projected generator is exactly zero, in two dimensions
+only the axial component contributes, and in three dimensions the full cross-product matrix is
+materialized.  Geometry-specific bases remain outside this Cartesian authoring helper.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
-#: Canonical readable name used by the provided authoring helper. The helper returns the typed
-#: handle; time macros never recover it from this string.
+from pops.physics.aux import roles_for
+from pops.physics.roles import StateSchema
+
+
 LORENTZ_J_NAME = "electrostatic_lorentz_J"
 
 
-def author_electrostatic_lorentz(m: Any, *, name: str = LORENTZ_J_NAME, c_mx: int = 1, c_my: int = 2,
-                                 bz_aux: str = "B_z") -> Any:
-    """Author the electrostatic-Lorentz linearization ``J = [[0, B_z], [-B_z, 0]]`` on the momentum
-    subset (@p c_mx, @p c_my) of model @p m, as an ``m.local_linear_map`` named @p name. Returns the
-    typed operator handle.
+def _levi_civita(first: int, second: int, third: int) -> int:
+    if first == second or second == third or first == third:
+        return 0
+    return 1 if (first, second, third) in ((0, 1, 2), (1, 2, 0), (2, 0, 1)) else -1
 
-    ``J`` is the full ``n_cons x n_cons`` matrix (zeros outside the momentum 2x2), so the emitter reads
-    the coupled block ``J[(c_mx, c_my)][(c_mx, c_my)] = [[0, B_z], [-B_z, 0]]``. @p bz_aux is the aux
-    field carrying B_z (canonical ``"B_z"``, aux component 3). The sign convention matches the Schur
-    brick's ``B`` (see ``LorentzEliminator``): the rotation generator, not the operator ``M`` itself
-    (the macro forms ``M = I - theta*dt*J``).
 
-    Requires the momentum conservative variables and the B_z aux to be declared on @p m already (the
-    canonical condensed-Schur block: rho / mx / my + grad_x / grad_y / B_z). Raises the model's own
-    error if @p bz_aux is not a declared aux or the indices are out of range.
-    """
-    n_cons = len(m.cons_names) if hasattr(m, "cons_names") else _n_cons(m)
-    if not (0 <= c_mx < n_cons and 0 <= c_my < n_cons) or c_mx == c_my:
+def _model_dimension(model: Any, explicit: Any) -> int:
+    frame = getattr(model, "_frame", None)
+    axes = None if frame is None else getattr(frame, "axes", None)
+    frame_dimension = len(axes) if isinstance(axes, tuple) else None
+    if explicit is None:
+        if frame_dimension not in (1, 2, 3):
+            raise TypeError(
+                "author_electrostatic_lorentz requires an explicit dimension or typed frame")
+        return frame_dimension
+    if isinstance(explicit, bool) or not isinstance(explicit, int) or explicit not in (1, 2, 3):
+        raise ValueError("author_electrostatic_lorentz dimension must be 1, 2, or 3")
+    if frame_dimension is not None and frame_dimension != explicit:
         raise ValueError(
-            "author_electrostatic_lorentz: the momentum subset (c_mx=%d, c_my=%d) must be two distinct "
-            "conservative components in [0, %d)" % (c_mx, c_my, n_cons))
-    bz = m.aux(bz_aux)  # the B_z aux Expr (canonical component 3), the only variable J reads
-    zero = 0.0
-    matrix = [[zero] * n_cons for _ in range(n_cons)]
-    # The rotation generator on the momentum 2x2: (mx row, my col) = +B_z, (my row, mx col) = -B_z.
-    matrix[c_mx][c_my] = bz
-    matrix[c_my][c_mx] = -bz
-    return m.local_linear_map(name, matrix)
+            "author_electrostatic_lorentz dimension %d differs from frame dimension %d"
+            % (explicit, frame_dimension))
+    return explicit
 
 
-def _n_cons(m: Any) -> int:
-    """The conservative-variable count of @p m, tolerating the facade (``m.cons_names``) or a bare
-    HyperbolicModel (``m._cons`` / ``m._cons_names``)."""
-    for attr in ("cons_names", "_cons_names"):
-        v = getattr(m, attr, None)
-        if v is not None:
-            return len(v)
-    inner = getattr(m, "_m", None)
-    if inner is not None:
-        return _n_cons(inner)
-    raise AttributeError("author_electrostatic_lorentz: cannot determine the conservative-variable "
-                         "count of the model (%r)" % type(m))
+def _schema(model: Any, dimension: int) -> StateSchema:
+    authored = getattr(model, "_m", None)
+    if authored is None:
+        authored = getattr(getattr(model, "_dsl", None), "_m", model)
+    names = getattr(authored, "cons_names", None)
+    if names is None:
+        names = getattr(authored, "_cons_names", None)
+    if names is None:
+        raise AttributeError(
+            "author_electrostatic_lorentz cannot resolve the model conservative state")
+    tokens = tuple(roles_for(names, getattr(authored, "cons_roles", None)))
+    return StateSchema.resolve(
+        tokens, dimension=dimension, where="electrostatic Lorentz state")
+
+
+def author_electrostatic_lorentz(
+    model: Any,
+    *,
+    magnetic_components: Sequence[str],
+    dimension: int | None = None,
+    name: str = LORENTZ_J_NAME,
+) -> Any:
+    """Author the exact Cartesian Lorentz generator on ``model``.
+
+    ``magnetic_components`` must name the three provider components in Cartesian x/y/z order.
+    Conservative momentum indices are resolved by ``momentum:<axis>`` roles independently of state
+    ordering. ``dimension`` is required when the model has no typed frame and must equal a present
+    frame's exact rank otherwise. The returned handle is produced by the model's generic
+    local-linear-operator API.
+    """
+    if isinstance(magnetic_components, (str, bytes)):
+        raise TypeError("magnetic_components must be an ordered three-component provider vector")
+    components = tuple(magnetic_components)
+    if (len(components) != 3 or any(not isinstance(item, str) or not item for item in components) or
+            len(set(components)) != 3):
+        raise ValueError(
+            "magnetic_components must contain three unique non-empty Cartesian component names")
+
+    schema = _schema(model, _model_dimension(model, dimension))
+    magnetic = tuple(model.aux(component) for component in components)
+    n_cons = len(schema.roles)
+    momentum = tuple(schema.index("momentum:%d" % axis) for axis in range(schema.dimension))
+    matrix: list[list[Any]] = [[0.0] * n_cons for _ in range(n_cons)]
+    for row_axis, row in enumerate(momentum):
+        for column_axis, column in enumerate(momentum):
+            coefficient: Any = None
+            for magnetic_axis in range(3):
+                sign = _levi_civita(row_axis, column_axis, magnetic_axis)
+                if sign == 0:
+                    continue
+                term = magnetic[magnetic_axis] if sign > 0 else -magnetic[magnetic_axis]
+                coefficient = term if coefficient is None else coefficient + term
+            matrix[row][column] = 0.0 if coefficient is None else coefficient
+
+    local_operator = getattr(model, "local_linear_operator", None)
+    if callable(local_operator):
+        return local_operator(name, matrix=matrix)
+    local_map = getattr(model, "local_linear_map", None)
+    if callable(local_map):
+        return local_map(name, matrix)
+    raise TypeError(
+        "author_electrostatic_lorentz requires a generic local-linear-operator authoring API")
+
+
+__all__ = ["LORENTZ_J_NAME", "author_electrostatic_lorentz"]

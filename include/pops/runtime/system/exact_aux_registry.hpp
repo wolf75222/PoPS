@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -61,6 +62,14 @@ class ExactAuxiliaryRegistry final {
     }
     [[nodiscard]] const AuxiliaryEvaluationPoint& point() const noexcept { return point_; }
 
+    /// Whether this exact transaction requires @p provider_identity to publish a candidate.
+    /// Runtimes use this authority for external InputAux/field routes so an explicitly dirtied
+    /// ``once`` provider is not accidentally skipped by re-evaluating freshness policy alone.
+    [[nodiscard]] bool requires_staging(std::string_view provider_identity) const {
+      ensure_active_();
+      return due_[registry_->provider_index_(provider_identity)];
+    }
+
     /// Stage one externally prepared input/field route.  Derived routes cannot bypass their typed
     /// native launcher, and routes not due at this exact point cannot be smuggled into a candidate.
     void stage_external(std::string_view provider_identity) {
@@ -80,6 +89,24 @@ class ExactAuxiliaryRegistry final {
     /// complete transaction.  The registry preserves an empty binding for contract-only tests;
     /// production runtime integration validates the binding before entering this method.
     void launch_ready_native(AuxiliaryCarrierStorage<Dim> storage = {}) {
+      launch_ready_native_(storage, [](const provider_type&, std::exception_ptr error) {
+        if (error)
+          std::rethrow_exception(error);
+      });
+    }
+
+    /// Variant for runtime-owned carrier transports. The completion hook runs on every rank after
+    /// each native launch attempt, carrying any rank-local exception, and before a dependent
+    /// provider can launch. The storage owner must collectively reject a local error before it
+    /// enters a halo exchange; this keeps a throwing rank from stranding its peers in MPI.
+    template <class Completion>
+    void launch_ready_native(AuxiliaryCarrierStorage<Dim> storage, Completion&& completion) {
+      launch_ready_native_(storage, std::forward<Completion>(completion));
+    }
+
+   private:
+    template <class Completion>
+    void launch_ready_native_(AuxiliaryCarrierStorage<Dim> storage, Completion&& completion) {
       ensure_active_();
       bool progressed = true;
       while (progressed) {
@@ -88,14 +115,23 @@ class ExactAuxiliaryRegistry final {
           if (!due_[index] || staged_[index] || !registry_->providers_[index].has_launcher() ||
               !dependencies_ready_(index))
             continue;
-          registry_->providers_[index].launch(
-              registry_->launch_context_(index, point_, candidate_generation_, storage));
+          std::exception_ptr local_error;
+          try {
+            registry_->providers_[index].launch(
+                registry_->launch_context_(index, point_, candidate_generation_, storage));
+          } catch (...) {
+            local_error = std::current_exception();
+          }
+          completion(registry_->providers_[index], local_error);
+          if (local_error)
+            std::rethrow_exception(local_error);
           staged_[index] = true;
           progressed = true;
         }
       }
     }
 
+   public:
     /// Atomically make the complete candidate generation visible in registry metadata.  The
     /// integrating owner must pair this with its own storage publication after this preflight; an
     /// incomplete graph, a stale point, or any earlier exception leaves accepted state unchanged.
@@ -307,6 +343,27 @@ class ExactAuxiliaryRegistry final {
     require_sealed_();
     return collective_contract_;
   }
+
+  /// Prepare a private structural image that may accept additional providers and consumer plans.
+  /// Only authoritative declarations are copied: every resolved slot, schedule, contract, and
+  /// publication generation is rebuilt by a later @ref seal.  Native package assembly uses this
+  /// before exposing the candidate to an untrusted rank-local registrar, so a previously sealed
+  /// registry never has to weaken its immutable runtime contract in place.
+  [[nodiscard]] ExactAuxiliaryRegistry structural_extension_candidate() const {
+    if (candidate_open_)
+      throw std::logic_error(
+          "cannot extend an auxiliary registry during an active publication candidate");
+    if (accepted_generation_ != 0 ||
+        std::any_of(accepted_points_.begin(), accepted_points_.end(),
+                    [](const auto& point) { return point.has_value(); }))
+      throw std::logic_error(
+          "cannot structurally extend an auxiliary registry after accepted runtime publication");
+    ExactAuxiliaryRegistry candidate;
+    candidate.providers_ = providers_;
+    candidate.consumer_plans_ = consumer_plans_;
+    return candidate;
+  }
+
   [[nodiscard]] const std::vector<std::size_t>& topological_order() const {
     require_sealed_();
     return topological_order_;
@@ -358,7 +415,8 @@ class ExactAuxiliaryRegistry final {
   /// Immutable accepted publication provenance in canonical provider order.  Checkpoint owners
   /// persist these exact integer points together with @ref accepted_generation rather than trying
   /// to infer freshness from physical time or a carrier component number.
-  [[nodiscard]] const std::vector<std::optional<AuxiliaryEvaluationPoint>>& accepted_points() const {
+  [[nodiscard]] const std::vector<std::optional<AuxiliaryEvaluationPoint>>& accepted_points()
+      const {
     require_sealed_();
     return accepted_points_;
   }
@@ -384,6 +442,48 @@ class ExactAuxiliaryRegistry final {
     // retain an exact rollback image if any rank rejects a checkpoint preflight.
     accepted_points_ = std::move(accepted_points);
     accepted_generation_ = generation;
+  }
+
+  /// Allocation-free publication seam for a fully validated private registry candidate.  The
+  /// caller must already have authenticated both sealed graphs and closed candidate state through
+  /// its collective preflight; this operation deliberately swaps only accepted provenance.
+  void swap_accepted_publication(ExactAuxiliaryRegistry& candidate) noexcept {
+    static_assert(
+        std::is_nothrow_swappable_v<std::vector<std::optional<AuxiliaryEvaluationPoint>>>);
+    accepted_points_.swap(candidate.accepted_points_);
+    std::swap(accepted_generation_, candidate.accepted_generation_);
+  }
+
+  /// Allocation-free exchange of one complete, already materialized registry image.  Native
+  /// package finalization builds its candidate directly in the live System only after retaining a
+  /// full snapshot; rollback uses this seam before releasing any DSO that may own provider
+  /// launchers.  Every member exchange is statically required to be non-throwing.
+  void swap_complete(ExactAuxiliaryRegistry& other) noexcept {
+    static_assert(noexcept(providers_.swap(other.providers_)));
+    static_assert(noexcept(consumer_plans_.swap(other.consumer_plans_)));
+    static_assert(noexcept(dependency_providers_.swap(other.dependency_providers_)));
+    static_assert(noexcept(resolved_outputs_.swap(other.resolved_outputs_)));
+    static_assert(noexcept(resolved_dependencies_.swap(other.resolved_dependencies_)));
+    static_assert(noexcept(resolved_storage_groups_.swap(other.resolved_storage_groups_)));
+    static_assert(noexcept(resolved_consumer_plans_.swap(other.resolved_consumer_plans_)));
+    static_assert(noexcept(topological_order_.swap(other.topological_order_)));
+    static_assert(noexcept(accepted_points_.swap(other.accepted_points_)));
+    static_assert(noexcept(collective_contract_.swap(other.collective_contract_)));
+    static_assert(std::is_nothrow_swappable_v<std::uint64_t>);
+    static_assert(std::is_nothrow_swappable_v<bool>);
+    providers_.swap(other.providers_);
+    consumer_plans_.swap(other.consumer_plans_);
+    dependency_providers_.swap(other.dependency_providers_);
+    resolved_outputs_.swap(other.resolved_outputs_);
+    resolved_dependencies_.swap(other.resolved_dependencies_);
+    resolved_storage_groups_.swap(other.resolved_storage_groups_);
+    resolved_consumer_plans_.swap(other.resolved_consumer_plans_);
+    topological_order_.swap(other.topological_order_);
+    accepted_points_.swap(other.accepted_points_);
+    collective_contract_.swap(other.collective_contract_);
+    std::swap(accepted_generation_, other.accepted_generation_);
+    std::swap(sealed_, other.sealed_);
+    std::swap(candidate_open_, other.candidate_open_);
   }
   [[nodiscard]] const ResolvedAuxiliaryConsumerPlan<Dim>& consumer_plan(
       std::string_view consumer_qid) const {

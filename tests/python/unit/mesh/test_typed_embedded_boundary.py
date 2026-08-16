@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Typed-only embedded-geometry and transport-mask contract."""
+"""Typed exact-rank embedded-geometry and transport-mask contract."""
 
 import pytest
 
-from pops.mesh.geometry import Disc, NoWall, DiscDomain
+from pops.mesh.geometry import Disc, NoWall
 from pops.mesh.masks import CutCell, NoMask, Staircase, TransportMask, lower_transport_mask
 
 
@@ -37,32 +37,15 @@ def test_transport_mask_extension_uses_the_small_typed_interface():
         lower_transport_mask(UnsupportedMask())
 
 
-def test_disc_domain_lowers_to_set_disc_domain_args():
-    dd = DiscDomain(center=(0.5, 0.5), radius=0.4, mode=CutCell())
-    assert dd.lower() == (0.5, 0.5, 0.4, "cutcell")
-    # Default mode is the inert NoMask -> "none" (mask only, full Cartesian transport).
-    assert DiscDomain(center=(0.25, 0.75), radius=0.3).lower() == (0.25, 0.75, 0.3, "none")
-    with pytest.raises(TypeError, match="TransportMask"):
-        DiscDomain(center=(0.0, 0.0), radius=0.2, mode="staircase")
-
-
 def test_lowering_rejects_bad_inputs():
     with pytest.raises(TypeError):
         lower_transport_mask(42)
     with pytest.raises(ValueError):
         Disc(radius=-1.0)  # radius must be > 0
-    with pytest.raises(ValueError):
-        DiscDomain(center=(0, 0), radius=0.0)  # radius must be > 0
-    with pytest.raises(ValueError, match="exactly two"):
-        DiscDomain(center=(0, 0, 0), radius=1.0)
-    with pytest.raises(ValueError, match="finite"):
-        DiscDomain(center=(float("nan"), 0), radius=1.0)
     with pytest.raises(ValueError, match="finite"):
         Disc(radius=float("inf"))
     with pytest.raises(TypeError, match="real number"):
         Disc(radius=True)
-    with pytest.raises(TypeError, match="real number"):
-        DiscDomain(center=(False, 0), radius=1.0)
 
 
 def test_descriptors_inspect_and_available_honestly():
@@ -73,14 +56,7 @@ def test_descriptors_inspect_and_available_honestly():
     assert cc["capabilities"]["conservative"] is True
     # NoMask is masked_transport=False (inert / bit-identical default).
     assert NoMask().inspect()["capabilities"] == {"masked_transport": False}
-    # DiscDomain surfaces its mode's requirements + an explainable availability.
-    dd = DiscDomain(center=(0.5, 0.5), radius=0.4, mode=CutCell())
-    insp = dd.inspect()
-    assert insp["category"] == "disc_domain"
-    assert insp["options"]["mode"] == "CutCell"
-    assert insp["requirements"] == {"embedded_boundary_support": True}
-    assert dd.available().ok  # yes (the mask is available; the runtime gates the native physics)
-    # Disc / NoWall describe themselves as level-set geometries.
+    # Disc / NoWall describe themselves as level-set geometries; neither configures native EB alone.
     assert NoWall().inspect()["capabilities"] == {"provides": "level_set"}
     assert Disc(radius=0.4).inspect()["category"] == "geometry"
 
@@ -105,27 +81,45 @@ requires_engine = pytest.mark.skipif(
 
 
 def _build(n=32, L=1.0):
-    from pops.runtime._system import System  # advanced native runtime seam
+    from pops.runtime._system import System, SystemConfig  # advanced native runtime seam
 
-    return System(n=n, L=L, periodicity=(False, False))
+    config = SystemConfig()
+    config.shape = (n, n)
+    config.lower = (0.0, 0.0)
+    config.upper = (float(L), float(L))
+    config.periodicity = (False, False)
+    config.boxes = (((0, 0), (n, n)),)
+    return System(config)
+
+
+def _install_half_space(system, mode: str) -> None:
+    from pops.analytic import coordinates
+    from pops.domain import CartesianDomain
+    from pops.mesh.geometry import LevelSet
+    from pops.runtime._analytic_expression_lowering import lower_analytic_components
+
+    frame = CartesianDomain("test-typed-eb", (0.0, 0.0), (1.0, 1.0)).frame()
+    level_set = LevelSet(coordinates(frame)[0] - 0.5)
+    ((opcodes, literals),) = lower_analytic_components(
+        (level_set.expression.to_data(),), frame_id=frame.canonical_id
+    )
+    system._s._set_analytic_level_set(
+        list(opcodes), list(literals), mode, 0.0, 0.0, 0.0
+    )
 
 
 @requires_engine
-def test_set_disc_domain_accepts_typed_disc_domain():
+def test_analytic_level_set_configures_typed_transport_mode():
     system = _build()
-    system.set_disc_domain(DiscDomain(center=(0.5, 0.5), radius=0.3, mode=NoMask()))
+    _install_half_space(system, NoMask().lower())
     system.set_geometry_mode(NoMask())
-    mask = np.array(system.disc_mask())
+    mask = np.array(system.embedded_boundary_mask())
     assert mask.shape == (32, 32)
     assert 0 < int(mask.sum()) < 32 * 32
 
 
 @requires_engine
-def test_runtime_rejects_untyped_disc_and_mode_selectors():
-    with pytest.raises(TypeError, match="DiscDomain"):
-        _build().set_disc_domain("cutcell")
-    with pytest.raises(TypeError):
-        _build().set_disc_domain(0.5, 0.5, 0.3, "none")
+def test_runtime_rejects_untyped_mode_selector():
     with pytest.raises(TypeError, match="TransportMask"):
         _build().set_geometry_mode("none")
 

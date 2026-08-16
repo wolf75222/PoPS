@@ -1,9 +1,10 @@
-"""ADC-700: fail closed until every temporal route has an explicit Program primitive.
+"""ADC-700: temporal semantics are authored by typed Python Programs.
 
-The ordinary explicit runtime tests may install the small Programs from
-``tests.python.support.explicit_program``.  Semantic implicit tests must use
-typed Program primitives: forward Euler cannot stand in for backward Euler,
-partial IMEX, ARS(2,2,2), or nonlinear local solves.
+The Forward-Euler program in ``tests.python.support.explicit_program`` is a low-level
+runtime/spatial fixture.  SSPRK semantics use ``pops.lib.time`` factories and tableaus through the
+normal Case compilation lifecycle; no raw native SSPRK body or installer remains.  In particular,
+forward Euler cannot stand in for backward Euler, partial IMEX, ARS(2,2,2),
+or nonlinear local solves.
 
 The blocker ledger is intentionally empty. Coupled sources, linear IMEX and nonlinear local IMEX
 execute through ordinary Programs. The former dimension-erased polar runtime builder is retired;
@@ -16,6 +17,12 @@ import ast
 import re
 from pathlib import Path
 
+from tests.python.architecture.test_final_nd_amr_consumers import (
+    ROOTS as AMR_CONSUMER_ROOTS,
+    _semantic_closure as _amr_semantic_closure,
+    _source as _amr_semantic_source,
+)
+
 
 ROOT = Path(__file__).resolve().parents[3]
 SYSTEM_CPP = ROOT / "src/runtime/system/system.cpp"
@@ -23,21 +30,15 @@ SYSTEM_HEADER = ROOT / "include/pops/runtime/system.hpp"
 SYSTEM_BINDING = ROOT / "python/bindings/core/init/init_system.cpp"
 RETIRED_REFERENCE_SYSTEM_DRIVER = ROOT / "tests/cpp/support/reference_system_driver.hpp"
 REFERENCE_TIME_SCHEDULER = ROOT / "tests/cpp/support/reference_time_scheduler.hpp"
-LEGACY_PUBLIC_TIME_SCHEDULER = (
-    ROOT / "include/pops/numerics/time/schemes/scheduler.hpp"
-)
+LEGACY_PUBLIC_TIME_SCHEDULER = ROOT / "include/pops/numerics/time/schemes/scheduler.hpp"
 AMR_SYSTEM_CPP = ROOT / "src/runtime/amr/amr_system.cpp"
 AMR_SYSTEM_HEADER = ROOT / "include/pops/runtime/amr_system.hpp"
 AMR_RUNTIME = ROOT / "include/pops/runtime/amr/amr_runtime.hpp"
-AMR_SUBCYCLING = ROOT / "include/pops/numerics/time/amr/levels/amr_subcycling.hpp"
 PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/program_context.hpp"
-AMR_PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/amr_program_context.hpp"
 AMR_DSL_BLOCK = ROOT / "include/pops/runtime/builders/compiled/amr_dsl_block.hpp"
 BLOCK_BUILDER = ROOT / "include/pops/runtime/builders/block/block_builder.hpp"
 POLAR_BLOCK_BUILDER = ROOT / "include/pops/runtime/builders/block/block_builder_polar.hpp"
-RETIRED_SYSTEM_BLOCK_SEAM = (
-    ROOT / "include/pops/runtime/builders/block/block_seam.hpp"
-)
+RETIRED_SYSTEM_BLOCK_SEAM = ROOT / "include/pops/runtime/builders/block/block_seam.hpp"
 SYSTEM_BLOCK_STORE = ROOT / "include/pops/runtime/system/system_block_store.hpp"
 GRID_CONTEXT = ROOT / "include/pops/runtime/context/grid_context.hpp"
 NUMERICAL_DEFAULTS = ROOT / "include/pops/runtime/numerical_defaults.hpp"
@@ -45,6 +46,8 @@ IMPLICIT_STEPPER = ROOT / "include/pops/numerics/time/integrators/implicit_stepp
 SYSTEM_IMPL = ROOT / "src/runtime/system/system_impl.hpp"
 SYSTEM_INSTALL = ROOT / "src/runtime/system/system_install.cpp"
 PYTHON_SYSTEM_INSTALL = ROOT / "python/pops/runtime/_system_install.py"
+PYTHON_SYSTEM_RUNTIME = ROOT / "python/pops/runtime/_system.py"
+PYTHON_AMR_RUNTIME = ROOT / "python/pops/runtime/_amr_system.py"
 BINDINGS_DETAIL = ROOT / "python/bindings/core/bindings_detail.hpp"
 AMR_BINDING = ROOT / "python/bindings/core/init/init_amr.cpp"
 LEGACY_AMR_ADVANCE_HEADER = ROOT / "include/pops/numerics/time/amr/advance/amr_advance.hpp"
@@ -57,6 +60,201 @@ ALGORITHMS_DOC = ROOT / "docs/ALGORITHMS.md"
 LEGACY_DIRECT_AMR_STEP_TESTS = set()
 NONLINEAR_AMR_TEST = ROOT / "tests/python/integration/amr/test_amr_newton_full.py"
 V3_FEATURES_TEST = ROOT / "tests/python/unit/runtime/test_v3_features.py"
+RAW_TEMPORAL_FIXTURE = ROOT / "tests/python/support/explicit_program.py"
+RAW_TEMPORAL_FIXTURE_MODULE = "tests.python.support.explicit_program"
+RAW_SSPRK_INSTALLERS = frozenset({"install_ssprk2_program", "install_ssprk3_program"})
+SEMANTIC_SSPRK_CALLERS = {
+    "tests/python/integration/amr/test_amr_explicit_family.py": {
+        "libtime.RungeKuttaRoute",
+        "libtime.RungeKutta",
+        "libtime.SSPRK2",
+        "libtime.SSPRK3",
+        "pops.compile",
+        "pops.bind",
+    },
+    "tests/python/integration/amr/test_amr_ssprk3.py": {
+        "libtime.RungeKuttaRoute",
+        "libtime.RungeKutta",
+        "libtime.SSPRK3",
+        "pops.compile",
+        "pops.bind",
+    },
+    "tests/python/integration/native_loader/test_ssprk3_production.py": {
+        "libtime.RungeKuttaRoute",
+        "libtime.RungeKutta",
+        "libtime.SSPRK2",
+        "libtime.SSPRK3",
+        "pops.compile",
+        "pops.bind",
+    },
+    "tests/python/unit/time/test_time_euler.py": {
+        "libtime.RungeKuttaRoute",
+        "libtime.RungeKutta",
+        "libtime.SSPRK2",
+        "pops.compile",
+        "pops.bind",
+    },
+}
+SEMANTIC_SSPRK_TABLEAUS = {
+    "tests/python/integration/amr/test_amr_explicit_family.py": {
+        "libtime.SSPRK2_TABLEAU",
+        "libtime.SSPRK3_TABLEAU",
+    },
+    "tests/python/integration/amr/test_amr_ssprk3.py": {"libtime.SSPRK3_TABLEAU"},
+    "tests/python/integration/native_loader/test_ssprk3_production.py": {"libtime.SSPRK3_TABLEAU"},
+    "tests/python/unit/time/test_time_euler.py": {"libtime.SSPRK2_TABLEAU"},
+}
+
+
+def _ast_tree(path: Path) -> ast.Module:
+    return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+
+def _amr_program_context_source() -> str:
+    return _amr_semantic_source(_amr_semantic_closure(AMR_CONSUMER_ROOTS["program"]))
+
+
+def _amr_subcycling_source() -> str:
+    return _amr_semantic_source(_amr_semantic_closure(AMR_CONSUMER_ROOTS["subcycling"]))
+
+
+def _dotted_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        prefix = _dotted_name(node.value)
+        return "%s.%s" % (prefix, node.attr) if prefix else node.attr
+    if isinstance(node, ast.Call):
+        return _dotted_name(node.func)
+    return ""
+
+
+def _raw_fixture_imports(tree: ast.AST) -> tuple[dict[str, str], dict[str, str]]:
+    """Return local direct-installer names and module aliases without inspecting text."""
+    direct: dict[str, str] = {}
+    modules: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for imported in node.names:
+                if imported.name == RAW_TEMPORAL_FIXTURE_MODULE:
+                    modules[imported.asname or imported.name.split(".")[0]] = imported.name
+        elif isinstance(node, ast.ImportFrom):
+            if node.module == RAW_TEMPORAL_FIXTURE_MODULE:
+                for imported in node.names:
+                    direct[imported.asname or imported.name] = imported.name
+            elif node.module == "tests.python.support":
+                for imported in node.names:
+                    if imported.name == "explicit_program":
+                        modules[imported.asname or imported.name] = RAW_TEMPORAL_FIXTURE_MODULE
+    return direct, modules
+
+
+def _raw_fixture_call_name(
+    call: ast.Call, direct: dict[str, str], modules: dict[str, str]
+) -> str | None:
+    """Resolve direct, aliased, and module-qualified raw-fixture calls structurally."""
+    dotted = _dotted_name(call.func)
+    if dotted in direct:
+        return direct[dotted]
+    for local_name, module_name in modules.items():
+        prefix = local_name + "."
+        if dotted.startswith(prefix):
+            candidate = dotted.removeprefix(prefix)
+            if "." not in candidate:
+                return candidate
+        if dotted.startswith(module_name + "."):
+            candidate = dotted.removeprefix(module_name + ".")
+            if "." not in candidate:
+                return candidate
+    return None
+
+
+def _function_call_graph(tree: ast.Module) -> tuple[dict[str, set[str]], set[str]]:
+    """Find local functions executable from pytest tests or the module's ``__main__`` entry point."""
+    functions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    graph: dict[str, set[str]] = {}
+    for name, function in functions.items():
+        graph[name] = {
+            call.func.id
+            for call in ast.walk(function)
+            if isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id in functions
+        }
+    roots = {name for name in functions if name.startswith("test_")}
+    for node in tree.body:
+        if not isinstance(node, ast.If):
+            continue
+        is_main_guard = any(
+            isinstance(child, ast.Compare)
+            and isinstance(child.left, ast.Name)
+            and child.left.id == "__name__"
+            and any(
+                isinstance(value, ast.Constant) and value.value == "__main__"
+                for value in child.comparators
+            )
+            for child in ast.walk(node.test)
+        )
+        if is_main_guard:
+            roots.update(
+                call.func.id
+                for call in ast.walk(node)
+                if isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Name)
+                and call.func.id in functions
+            )
+    return graph, roots
+
+
+def _reachable_functions(tree: ast.Module) -> set[str]:
+    graph, pending = _function_call_graph(tree)
+    reachable: set[str] = set()
+    while pending:
+        name = pending.pop()
+        if name in reachable:
+            continue
+        reachable.add(name)
+        pending.update(graph.get(name, set()) - reachable)
+    return reachable
+
+
+def _enclosing_function_names(tree: ast.Module) -> dict[ast.AST, str | None]:
+    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+    enclosing: dict[ast.AST, str | None] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        current = node
+        name: str | None = None
+        while current in parents:
+            current = parents[current]
+            if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                name = current.name
+                break
+        enclosing[node] = name
+    return enclosing
+
+
+def _executable_call_dotted_names(tree: ast.Module) -> set[str]:
+    """Return calls reachable from a test function, ``__main__`` runner, or module execution."""
+    reachable = _reachable_functions(tree)
+    enclosing = _enclosing_function_names(tree)
+    return {
+        _dotted_name(call.func)
+        for call in ast.walk(tree)
+        if isinstance(call, ast.Call)
+        and (enclosing[call] is None or enclosing[call] in reachable)
+        and _dotted_name(call.func)
+    }
+
+
+def _all_dotted_names(tree: ast.Module) -> set[str]:
+    """Return every structurally referenced dotted name, including tableau constants."""
+    return {_dotted_name(node) for node in ast.walk(tree) if _dotted_name(node)}
 
 
 def _function_body(source: str, signature: str) -> str:
@@ -112,6 +310,18 @@ def test_system_temporal_facades_dispatch_only_through_an_installed_program():
     assert "step_adaptive" not in SYSTEM_BINDING.read_text(encoding="utf-8")
 
 
+def test_python_system_temporal_facades_prepare_only_the_installed_program_run():
+    for path in (PYTHON_SYSTEM_RUNTIME, PYTHON_AMR_RUNTIME):
+        source = path.read_text(encoding="utf-8")
+        step = _python_function_source(source, "step")
+        run = _python_function_source(source, "run")
+        for body in (step, run):
+            assert "prepare_program_run" in body
+            assert "run_control_payload" not in body
+            assert "run_step_attempt" not in body
+        assert "FixedDt" not in step
+
+
 def test_static_system_assembler_is_retired_from_the_final_runtime_surface():
     """The exact-ranked System owns assembly; no static 2D coupling facade remains."""
     production_sources = (
@@ -127,12 +337,9 @@ def test_static_system_assembler_is_retired_from_the_final_runtime_surface():
         if retired_identity.search(path.read_text(encoding="utf-8"))
     }
     assert violations == set()
-    assert not (
-        ROOT / "include/pops/coupling/system/system_coupler.hpp"
-    ).exists()
-    assert (
-        "pops/coupling/system/system_coupler.hpp"
-        not in HEADERS_MANIFEST.read_text(encoding="utf-8")
+    assert not (ROOT / "include/pops/coupling/system/system_coupler.hpp").exists()
+    assert "pops/coupling/system/system_coupler.hpp" not in HEADERS_MANIFEST.read_text(
+        encoding="utf-8"
     )
 
     assert not RETIRED_REFERENCE_SYSTEM_DRIVER.exists()
@@ -141,9 +348,8 @@ def test_static_system_assembler_is_retired_from_the_final_runtime_surface():
 def test_historical_block_scheduler_is_not_an_installed_temporal_authority():
     """The old TimePolicy scheduler remains only as a test oracle."""
     assert not LEGACY_PUBLIC_TIME_SCHEDULER.exists()
-    assert (
-        "pops/numerics/time/schemes/scheduler.hpp"
-        not in HEADERS_MANIFEST.read_text(encoding="utf-8")
+    assert "pops/numerics/time/schemes/scheduler.hpp" not in HEADERS_MANIFEST.read_text(
+        encoding="utf-8"
     )
 
     public_sources = tuple((ROOT / "include/pops").rglob("*.hpp"))
@@ -157,9 +363,7 @@ def test_historical_block_scheduler_is_not_an_installed_temporal_authority():
     reference_scheduler = REFERENCE_TIME_SCHEDULER.read_text(encoding="utf-8")
     assert "namespace pops::test_support" in reference_scheduler
     assert "void advance_subcycled(" in reference_scheduler
-    assert REFERENCE_TIME_SCHEDULER.relative_to(ROOT).as_posix().startswith(
-        "tests/cpp/support/"
-    )
+    assert REFERENCE_TIME_SCHEDULER.relative_to(ROOT).as_posix().startswith("tests/cpp/support/")
 
 
 def test_public_coupling_headers_are_spatial_only():
@@ -199,10 +403,7 @@ def test_public_coupling_headers_are_spatial_only():
 
     retired_single = PUBLIC_COUPLING_ROOT / "single/coupler.hpp"
     assert not retired_single.exists()
-    assert (
-        "pops/coupling/single/coupler.hpp"
-        not in HEADERS_MANIFEST.read_text(encoding="utf-8")
-    )
+    assert "pops/coupling/single/coupler.hpp" not in HEADERS_MANIFEST.read_text(encoding="utf-8")
 
 
 def test_local_implicit_solve_has_one_typed_options_route():
@@ -245,12 +446,14 @@ def test_amr_spatial_runtime_owns_no_cfl_or_temporal_advance_authority():
 
 def test_amr_regrid_is_an_explicit_prepared_program_operation():
     runtime = AMR_RUNTIME.read_text(encoding="utf-8")
-    context = AMR_PROGRAM_CONTEXT.read_text(encoding="utf-8")
+    context = _amr_program_context_source()
     assert "void regrid_if_due(" not in runtime
     assert "regrid_interval" not in runtime
     assert "regrid_if_due" not in context
-    prepare = _function_body(context, "  ::pops::amr::regridding::PreparedRegrid<Dim> prepare_regrid(")
-    publish = _function_body(context, "  void publish_regrid(")
+    prepare = _function_body(
+        context, "::pops::amr::regridding::PreparedRegrid<Dim> prepare_regrid("
+    )
+    publish = _function_body(context, "void publish_regrid(")
     assert "runtime_->prepare_regrid(" in prepare
     assert 'require_history_free_for_topology_change_("regrid")' in publish
     assert "runtime_->publish_regrid(" in publish
@@ -399,8 +602,8 @@ def test_production_has_no_second_amr_time_engine():
 
 
 def test_prepared_amr_subcycle_plan_is_the_only_spatial_reflux_route():
-    source = AMR_SUBCYCLING.read_text(encoding="utf-8")
-    context = AMR_PROGRAM_CONTEXT.read_text(encoding="utf-8")
+    source = _amr_subcycling_source()
+    context = _amr_program_context_source()
     assert "class PreparedAmrSubcyclePlan" in source
     assert "class PreparedAmrSubcycleTransition" in source
     assert "PreparedAmrProgramReflux" not in source
@@ -438,10 +641,12 @@ def test_nonlinear_amr_semantics_use_the_compiled_program_not_a_blocker():
     assert "installed whole-system Program" in d2_guard
 
 
-def test_program_contexts_do_not_claim_missing_coupling_or_implicit_primitives():
-    """Keep the missing native seams visible instead of silently reaching old engines."""
-    for path in (PROGRAM_CONTEXT, AMR_PROGRAM_CONTEXT):
-        source = path.read_text(encoding="utf-8")
+def test_program_contexts_do_not_claim_implicit_temporal_primitives():
+    """Keep retired temporal primitives absent from both exact Program contexts."""
+    for source in (
+        PROGRAM_CONTEXT.read_text(encoding="utf-8"),
+        _amr_program_context_source(),
+    ):
         for legacy_engine_primitive in (
             "coupled_source_step(",
             "backward_euler_source(",
@@ -452,20 +657,63 @@ def test_program_contexts_do_not_claim_missing_coupling_or_implicit_primitives()
 
 def test_ranked_program_context_owns_candidate_state_coupling_not_a_live_state_step():
     uniform = PROGRAM_CONTEXT.read_text(encoding="utf-8")
-    amr = AMR_PROGRAM_CONTEXT.read_text(encoding="utf-8")
-    retired = (
-        ROOT / "include" / "pops" / "runtime" / "program" / "program_execution_services.hpp"
-    )
+    amr = _amr_program_context_source()
+    retired = ROOT / "include" / "pops" / "runtime" / "program" / "program_execution_services.hpp"
     runtime = AMR_RUNTIME.read_text(encoding="utf-8")
     assert not retired.exists()
     assert uniform.count("struct CouplingStateOverride") == 1
     assert uniform.count("void apply_coupling_operators(") == 1
     assert "ProgramContext coupling requires every runtime block candidate" in uniform
     assert "system_->apply_coupling_operators(dt, runtime_states)" in uniform
-    assert "[[noreturn]] void apply_coupling_operators(" in amr
-    assert 'unavailable_("exact-ranked multi-block AMR coupling provider")' in amr
+    assert (
+        "void apply_coupling_operators(std::string_view graph_identity, "
+        "std::string_view rate_identity," in amr
+    )
+    assert "std::string_view application_identity, Real dt," in amr
+    assert "graph_identity != facade_->installed_program_hash()" in amr
+    assert "rate_identity.empty() || application_identity.empty()" in amr
+    assert '"AMR Program coupling requires exact graph, rate, and application identities"' in amr
+    assert 'unavailable_("exact-ranked multi-block AMR coupling provider")' not in amr
     assert "void coupled_source_step(" not in runtime
     assert "void step(Real dt)" not in runtime
+
+
+def test_ssprk_semantics_have_only_typed_python_program_authority():
+    """Raw SSPRK bodies/installers cannot return; every semantic caller executes typed factories."""
+    fixture_tree = _ast_tree(RAW_TEMPORAL_FIXTURE)
+    fixture_functions = {
+        node.name
+        for node in fixture_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assert {name for name in fixture_functions if name.startswith("install_")} == {
+        "install_forward_euler_program"
+    }
+    assert fixture_functions.isdisjoint(RAW_SSPRK_INSTALLERS)
+    fixture_source = RAW_TEMPORAL_FIXTURE.read_text(encoding="utf-8")
+    assert all(name not in fixture_source for name in RAW_SSPRK_INSTALLERS)
+
+    forbidden_users: set[str] = set()
+    for path in (ROOT / "tests/python").rglob("*.py"):
+        tree = _ast_tree(path)
+        direct, modules = _raw_fixture_imports(tree)
+        if RAW_SSPRK_INSTALLERS.intersection(direct.values()):
+            forbidden_users.add(path.relative_to(ROOT).as_posix())
+        calls = [
+            call
+            for call in ast.walk(tree)
+            if isinstance(call, ast.Call)
+            and _raw_fixture_call_name(call, direct, modules) in RAW_SSPRK_INSTALLERS
+        ]
+        if calls:
+            forbidden_users.add(path.relative_to(ROOT).as_posix())
+    assert forbidden_users == set()
+
+    for relative, required_calls in SEMANTIC_SSPRK_CALLERS.items():
+        tree = _ast_tree(ROOT / relative)
+        executable = _executable_call_dotted_names(tree)
+        assert required_calls <= executable, relative
+        assert SEMANTIC_SSPRK_TABLEAUS[relative] <= _all_dotted_names(tree), relative
 
 
 def test_direct_amr_runtime_step_callers_remain_absent():
@@ -499,16 +747,23 @@ def test_gpu_amr_step_harnesses_install_a_program_authority():
         ), path.relative_to(ROOT).as_posix()
 
 
-def test_gpu_amr_program_harness_retains_the_bz_device_probe():
+def test_gpu_amr_program_harness_retains_the_exact_magnetic_provider_device_probe():
     source = (ROOT / "tests/gpu/romeo/amrmpi_integrated.cpp").read_text(encoding="utf-8")
     for marker in (
-        "run_bz_program_probe(",
-        "set_magnetic_field(",
+        "run_magnetic_provider_program_probe(",
+        "AuxiliaryComponentKey",
+        "install_prepared_auxiliary_provider(",
+        "install_auxiliary_consumer_plan(",
+        "stage_auxiliary_input(",
+        '"B-x"',
+        '"B-y"',
+        '"B-z"',
         'block_level_state_global("magnetic", level)',
         "baseline.size() < 2",
-        "B_z not consumed on device",
+        "three-component provider projection incorrect on device",
     ):
         assert marker in source
+    assert "set_magnetic_field(" not in source
 
     for retired_harness in (
         "gpu_amr_bz_validate.cpp",

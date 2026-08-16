@@ -8,9 +8,9 @@ ARBITRARY board formulas and the end-to-end compile remain ADC-456 follow-ups.
 """
 from pops.params import ConstParam
 import pytest
+import types as _t
 
 physics = pytest.importorskip("pops.physics")
-import types as _t
 _num = pytest.importorskip("pops.numerics")
 _desc = pytest.importorskip("pops.descriptors")
 # Spec 5: the catalogs moved out of pops.lib. This alias maps the old pops.lib attribute surface
@@ -61,8 +61,8 @@ def _euler(with_pressure=True, with_roles=True):
 def test_board_roles_canonicalize_to_dsl_roles():
     m, _ = _euler()
     space = m.module.state_spaces()["U"]
-    roles = [space.roles.get(component, "Custom") for component in space.components]
-    assert roles == ["Density", "MomentumX", "MomentumY", "Energy"]
+    roles = [space.roles.get(component, "custom") for component in space.components]
+    assert roles == ["density", "momentum:0", "momentum:1", "energy"]
 
 
 def test_hllc_accepts_role_tagged_model_with_pressure():
@@ -83,10 +83,10 @@ def test_hllc_rejects_model_without_fluid_roles():
     U = m.state("U", components=["q0", "q1", "q2"])
     m.primitive("p", U[0])
     space = m.module.state_spaces()["U"]
-    assert [space.roles.get(component, "Custom") for component in space.components] == [
-        "Custom",
-        "Custom",
-        "Custom",
+    assert [space.roles.get(component, "custom") for component in space.components] == [
+        "q0",
+        "q1",
+        "q2",
     ]
     with pytest.raises(ValueError, match="requires model capability 'hllc_star_state'"):
         m.riemann("hllc")

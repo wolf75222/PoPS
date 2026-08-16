@@ -839,7 +839,7 @@ TEST(ComponentInterfaces, BoundaryFluxValidatesCoordinatesAndNormalsAcrossExactR
                                     0,
                                     nullptr,
                                     abi::logical_time(),
-                                    abi::host_execution_context()};
+                                    abi::noncollective_host_execution_context()};
   PopsBoundaryFluxResultV1 result{
       sizeof(PopsBoundaryFluxResultV1), transformed_view, actions.data(), {}};
   EXPECT_EQ(pops::component::transform_boundary_flux(api, nullptr, request, result), 0);
@@ -909,6 +909,7 @@ TEST(ComponentInterfaces, ExactAbiConsumersExecuteEveryClosedScientificFamily) {
   EXPECT_FALSE(pops::component::component_status_is_well_formed(malformed_component_action));
   std::array<double, 2> left{2.0, 4.0}, right{6.0, 8.0}, normal{1.0, 0.0};
   const auto execution = abi::host_execution_context();
+  const auto noncollective_execution = abi::noncollective_host_execution_context();
   EXPECT_NO_THROW(pops::component::validate_execution_context(execution));
   auto anonymous_execution = execution;
   anonymous_execution.execution_identity = "";
@@ -1029,7 +1030,7 @@ TEST(ComponentInterfaces, ExactAbiConsumersExecuteEveryClosedScientificFamily) {
                                            1,
                                            ghost_parameters,
                                            abi::logical_time(),
-                                           execution};
+                                           noncollective_execution};
   auto status = ok_status();
   EXPECT_EQ(pops::component::apply_ghost_boundary(ghost_api, nullptr, ghost_request, status), 0);
   EXPECT_EQ(ghosts, (std::array<double, 2>{-2.0, -4.0}));
@@ -1088,7 +1089,7 @@ TEST(ComponentInterfaces, ExactAbiConsumersExecuteEveryClosedScientificFamily) {
       0,
       nullptr,
       abi::logical_time(),
-      execution};
+      noncollective_execution};
   PopsBoundaryFluxResultV1 boundary_flux_result{
       sizeof(PopsBoundaryFluxResultV1), transformed_outward_flux_view, &boundary_flux_action, {}};
   EXPECT_EQ(pops::component::transform_boundary_flux(boundary_flux_api, nullptr,
@@ -1166,7 +1167,7 @@ TEST(ComponentInterfaces, ExactAbiConsumersExecuteEveryClosedScientificFamily) {
        abi::const_field_view(left.data(), 1, 1, 2)},
       2,
       abi::logical_time(),
-      execution};
+      noncollective_execution};
   EXPECT_EQ(pops::component::evaluate_field_boundary(field_boundary_api, nullptr,
                                                      field_boundary_request, status, true),
             0);

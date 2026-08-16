@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <pops/amr/hierarchy/level_layout.hpp>
+#include <pops/amr/transfer/temporal_interpolation_provider.hpp>
 #include <pops/amr/transfer/transfer_provider.hpp>
 #include <pops/numerics/time/amr/prepared_coarse_fine_operator.hpp>
 
@@ -21,8 +22,12 @@ using pops::PreparedCoarseFineTransform;
 using pops::Real;
 using pops::amr::transfer::Centering;
 using pops::amr::transfer::ComponentRange;
+using pops::amr::transfer::DivergencePreservingFaceTransferProvider;
 using pops::amr::transfer::IndexMapping;
+using pops::amr::transfer::LinearTemporalInterpolationProvider;
 using pops::amr::transfer::PreparedTransfer;
+using pops::amr::transfer::QualifiedTemporalState;
+using pops::amr::transfer::TemporalComponentRange;
 using pops::amr::RefinementRatio;
 using pops::amr::transfer::SlopeLimiter;
 using pops::amr::transfer::TransferKind;
@@ -218,6 +223,80 @@ void fill_affine(HostField<Dim>& field, const IndexMapping<Dim>& mapping) {
   visit(field.box(), [&](const Index<Dim>& index) {
     for (int component = 0; component < 2; ++component)
       field(index, component) = affine_coarse(index, mapping, component);
+  });
+}
+
+Real test_integer_power(Real value, int exponent) {
+  Real result = Real(1);
+  for (int power = 0; power < exponent; ++power)
+    result *= value;
+  return result;
+}
+
+Real quartic_axis_average(Real lower, Real upper, int axis) {
+  const Real coefficients[5] = {Real(1) + Real(0.125) * axis, Real(0.07) * (axis + 1),
+                                -Real(0.013) * (axis + 1), Real(0.004) * (axis + 1),
+                                Real(0.001) * (axis + 1)};
+  Real integral = Real(0);
+  for (int degree = 0; degree < 5; ++degree) {
+    const int power = degree + 1;
+    integral += coefficients[degree] *
+                (test_integer_power(upper, power) - test_integer_power(lower, power)) /
+                static_cast<Real>(power);
+  }
+  return integral / (upper - lower);
+}
+
+template <int Dim>
+Real quartic_coarse_average(const Index<Dim>& index, const IndexMapping<Dim>& mapping) {
+  Real result = Real(1);
+  for (int axis = 0; axis < Dim; ++axis) {
+    const Real center = static_cast<Real>(index[axis] - mapping.coarse_origin[axis]);
+    result *= quartic_axis_average(center - Real(0.5), center + Real(0.5), axis);
+  }
+  return result;
+}
+
+template <int Dim>
+Real quartic_fine_average(const Index<Dim>& index, const RefinementRatio<Dim>& ratio,
+                          const IndexMapping<Dim>& mapping) {
+  Real result = Real(1);
+  for (int axis = 0; axis < Dim; ++axis) {
+    const Real relative = static_cast<Real>(index[axis] - mapping.fine_origin[axis]);
+    const Real lower = relative / static_cast<Real>(ratio[axis]) - Real(0.5);
+    const Real upper = (relative + Real(1)) / static_cast<Real>(ratio[axis]) - Real(0.5);
+    result *= quartic_axis_average(lower, upper, axis);
+  }
+  return result;
+}
+
+template <int Dim>
+void expect_fifth_order_quartic_and_parent_average(const RefinementRatio<Dim>& ratio) {
+  const auto mapping = sample_mapping<Dim>();
+  const Box<Dim> coarse_region = sample_coarse_region(mapping);
+  const Box<Dim> fine_region = refine_for_test(coarse_region, ratio, mapping);
+  HostField<Dim> coarse(sample_coarse_source(mapping), 1);
+  HostField<Dim> fine(fine_region, 1);
+  visit(coarse.box(),
+        [&](const Index<Dim>& index) { coarse(index) = quartic_coarse_average(index, mapping); });
+
+  const auto provider =
+      TransferProvider<Dim, Centering::Cell>::fifth_order_coarse_fine_ghost_interpolation();
+  const auto prepared =
+      provider.prepare(coarse.const_view(), fine.view(), fine_region, ratio, mapping);
+  EXPECT_EQ(prepared.kind(), TransferKind::FifthOrderCoarseFineGhostInterpolation);
+  EXPECT_EQ(prepared.slope_limiter(), SlopeLimiter::None);
+  visit(prepared.destination_region(), [&](const Index<Dim>& index) { prepared(index); });
+
+  visit(fine_region, [&](const Index<Dim>& index) {
+    EXPECT_NEAR(fine(index), quartic_fine_average(index, ratio, mapping), Real(3e-12));
+  });
+  visit(coarse_region, [&](const Index<Dim>& parent) {
+    const Box<Dim> children = refine_for_test(Box<Dim>{parent, parent}, ratio, mapping);
+    Real average = Real(0);
+    visit(children, [&](const Index<Dim>& child) { average += fine(child); });
+    average /= static_cast<Real>(ratio.child_count());
+    EXPECT_NEAR(average, coarse(parent), Real(3e-12));
   });
 }
 
@@ -452,6 +531,274 @@ void expect_negative_offset_ghost_interpolation() {
   });
 }
 
+template <int Dim>
+Box<Dim> two_parent_cells(const IndexMapping<Dim>& mapping) {
+  Index<Dim> upper = mapping.coarse_origin;
+  for (int axis = 0; axis < Dim; ++axis)
+    ++upper[axis];
+  return {mapping.coarse_origin, upper};
+}
+
+template <int Dim>
+Real multilinear_value(const Index<Dim>& index, const Index<Dim>& origin) {
+  Real coordinates[Dim]{};
+  for (int axis = 0; axis < Dim; ++axis)
+    coordinates[axis] = static_cast<Real>(index[axis] - origin[axis]);
+  Real value = Real(0.75);
+  for (int mask = 1; mask < (1 << Dim); ++mask) {
+    Real term = Real(0.03 * (mask + 1));
+    for (int axis = 0; axis < Dim; ++axis)
+      if ((mask & (1 << axis)) != 0)
+        term *= coordinates[axis];
+    value += term;
+  }
+  return value;
+}
+
+template <int Dim>
+Real multilinear_fine_value(const Index<Dim>& index, const RefinementRatio<Dim>& ratio,
+                            const IndexMapping<Dim>& mapping) {
+  Real coordinates[Dim]{};
+  for (int axis = 0; axis < Dim; ++axis)
+    coordinates[axis] =
+        static_cast<Real>(index[axis] - mapping.fine_origin[axis]) / static_cast<Real>(ratio[axis]);
+  Real value = Real(0.75);
+  for (int mask = 1; mask < (1 << Dim); ++mask) {
+    Real term = Real(0.03 * (mask + 1));
+    for (int axis = 0; axis < Dim; ++axis)
+      if ((mask & (1 << axis)) != 0)
+        term *= coordinates[axis];
+    value += term;
+  }
+  return value;
+}
+
+template <int Dim>
+void expect_node_multilinear(const RefinementRatio<Dim>& ratio) {
+  const auto mapping = sample_mapping<Dim>();
+  Index<Dim> coarse_upper = mapping.coarse_origin;
+  Index<Dim> fine_upper = mapping.fine_origin;
+  for (int axis = 0; axis < Dim; ++axis) {
+    coarse_upper[axis] += 2;
+    fine_upper[axis] += 2 * ratio[axis];
+  }
+  const Box<Dim> coarse_nodes{mapping.coarse_origin, coarse_upper};
+  const Box<Dim> fine_nodes{mapping.fine_origin, fine_upper};
+  HostField<Dim> coarse(coarse_nodes, 1);
+  HostField<Dim> fine(fine_nodes, 1);
+  visit(coarse_nodes, [&](const Index<Dim>& index) {
+    coarse(index) = multilinear_value(index, mapping.coarse_origin);
+  });
+  const auto prepared =
+      TransferProvider<Dim, Centering::Node>::node_multilinear_prolongation().prepare(
+          coarse.const_view(), fine.view(), fine_nodes, ratio, mapping);
+  execute(prepared);
+  visit(fine_nodes, [&](const Index<Dim>& index) {
+    EXPECT_NEAR(fine(index), multilinear_fine_value(index, ratio, mapping), Real(3e-13));
+  });
+}
+
+template <int Dim>
+Real face_source_value(int normal_axis, const Index<Dim>& face, const IndexMapping<Dim>& mapping) {
+  Real value = Real(0.2 * (normal_axis + 1));
+  for (int axis = 0; axis < Dim; ++axis) {
+    const Real coordinate = static_cast<Real>(face[axis] - mapping.coarse_origin[axis]);
+    value += Real(0.07 * (normal_axis + 1) * (axis + 1)) * coordinate;
+    value += Real(0.011 * (axis + 1)) * coordinate * coordinate;
+  }
+  if constexpr (Dim > 1)
+    value += Real(0.013 * (normal_axis + 1)) *
+             static_cast<Real>(face[0] - mapping.coarse_origin[0]) *
+             static_cast<Real>(face[Dim - 1] - mapping.coarse_origin[Dim - 1]);
+  return value;
+}
+
+template <int Dim>
+Real affine_face_value(int normal_axis, const Index<Dim>& face, const IndexMapping<Dim>& mapping) {
+  Real value = Real(0.35 * (normal_axis + 1));
+  for (int axis = 0; axis < Dim; ++axis)
+    value += Real(0.06 * (normal_axis + 1) * (axis + 1)) *
+             Real(face[axis] - mapping.coarse_origin[axis]);
+  return value;
+}
+
+template <int Dim>
+Real affine_fine_face_value(int normal_axis, const Index<Dim>& fine_face,
+                            const RefinementRatio<Dim>& ratio, const IndexMapping<Dim>& mapping) {
+  Real value = Real(0.35 * (normal_axis + 1));
+  for (int axis = 0; axis < Dim; ++axis) {
+    const Real relative = Real(fine_face[axis] - mapping.fine_origin[axis]);
+    const Real coordinate = axis == normal_axis
+                                ? relative / Real(ratio[axis])
+                                : (relative + Real(0.5)) / Real(ratio[axis]) - Real(0.5);
+    value += Real(0.06 * (normal_axis + 1) * (axis + 1)) * coordinate;
+  }
+  return value;
+}
+
+template <int Dim>
+void expect_divergence_preserving_faces(const RefinementRatio<Dim>& ratio) {
+  const auto mapping = sample_mapping<Dim>();
+  const Box<Dim> coarse_cells = two_parent_cells(mapping);
+  const Box<Dim> fine_cells = refine_for_test(coarse_cells, ratio, mapping);
+  Index<Dim> source_lower = mapping.coarse_origin;
+  Index<Dim> source_upper = coarse_cells.hi;
+  for (int axis = 0; axis < Dim; ++axis) {
+    --source_lower[axis];
+    source_upper[axis] += 2;
+  }
+  const Box<Dim> source_box{source_lower, source_upper};
+
+  std::vector<HostField<Dim>> coarse_faces;
+  std::vector<HostField<Dim>> fine_faces;
+  coarse_faces.reserve(Dim);
+  fine_faces.reserve(Dim);
+  std::array<Box<Dim>, Dim> fine_face_regions{};
+  for (int normal_axis = 0; normal_axis < Dim; ++normal_axis) {
+    coarse_faces.emplace_back(source_box, 1);
+    fine_face_regions[normal_axis] = fine_cells;
+    ++fine_face_regions[normal_axis].hi[normal_axis];
+    fine_faces.emplace_back(fine_face_regions[normal_axis], 1);
+    visit(source_box, [&](const Index<Dim>& face) {
+      coarse_faces[static_cast<std::size_t>(normal_axis)](face) =
+          face_source_value(normal_axis, face, mapping);
+    });
+  }
+
+  std::array<FieldView<const Real, Dim>, Dim> source_views{};
+  std::array<FieldView<Real, Dim>, Dim> destination_views{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    source_views[axis] = coarse_faces[static_cast<std::size_t>(axis)].const_view();
+    destination_views[axis] = fine_faces[static_cast<std::size_t>(axis)].view();
+  }
+  const auto prepared = DivergencePreservingFaceTransferProvider<Dim>{}.prepare(
+      source_views, destination_views, fine_cells, ratio, mapping);
+  for (int axis = 0; axis < Dim; ++axis)
+    visit(prepared.destination_face_region(axis),
+          [&](const Index<Dim>& face) { prepared(axis, face); });
+
+  visit(fine_cells, [&](const Index<Dim>& fine) {
+    const Index<Dim> parent = parent_of(fine, ratio, mapping);
+    Real coarse_divergence = Real(0);
+    Real fine_divergence = Real(0);
+    for (int axis = 0; axis < Dim; ++axis) {
+      Index<Dim> coarse_upper_face = parent;
+      Index<Dim> fine_upper_face = fine;
+      ++coarse_upper_face[axis];
+      ++fine_upper_face[axis];
+      coarse_divergence += coarse_faces[static_cast<std::size_t>(axis)](coarse_upper_face) -
+                           coarse_faces[static_cast<std::size_t>(axis)](parent);
+      fine_divergence += static_cast<Real>(ratio[axis]) *
+                         (fine_faces[static_cast<std::size_t>(axis)](fine_upper_face) -
+                          fine_faces[static_cast<std::size_t>(axis)](fine));
+    }
+    EXPECT_NEAR(fine_divergence, coarse_divergence, Real(2e-12));
+  });
+
+  visit(coarse_cells, [&](const Index<Dim>& parent) {
+    for (int normal_axis = 0; normal_axis < Dim; ++normal_axis) {
+      for (int side = 0; side < 2; ++side) {
+        Index<Dim> child_lower{};
+        Index<Dim> child_upper{};
+        for (int axis = 0; axis < Dim; ++axis)
+          child_upper[axis] = axis == normal_axis ? 0 : ratio[axis] - 1;
+        Real sum = Real(0);
+        int count = 0;
+        visit(Box<Dim>{child_lower, child_upper}, [&](const Index<Dim>& child) {
+          Index<Dim> fine_face{};
+          for (int axis = 0; axis < Dim; ++axis) {
+            fine_face[axis] = mapping.fine_origin[axis] +
+                              (parent[axis] - mapping.coarse_origin[axis]) * ratio[axis] +
+                              child[axis];
+          }
+          fine_face[normal_axis] += side * ratio[normal_axis];
+          sum += fine_faces[static_cast<std::size_t>(normal_axis)](fine_face);
+          ++count;
+        });
+        Index<Dim> coarse_face = parent;
+        coarse_face[normal_axis] += side;
+        EXPECT_NEAR(sum / static_cast<Real>(count),
+                    coarse_faces[static_cast<std::size_t>(normal_axis)](coarse_face), Real(8e-13));
+      }
+    }
+  });
+
+  for (int normal_axis = 0; normal_axis < Dim; ++normal_axis) {
+    visit(source_box, [&](const Index<Dim>& face) {
+      coarse_faces[static_cast<std::size_t>(normal_axis)](face) =
+          affine_face_value(normal_axis, face, mapping);
+    });
+  }
+  for (int axis = 0; axis < Dim; ++axis)
+    source_views[axis] = coarse_faces[static_cast<std::size_t>(axis)].const_view();
+  const auto affine = DivergencePreservingFaceTransferProvider<Dim>{}.prepare(
+      source_views, destination_views, fine_cells, ratio, mapping);
+  for (int axis = 0; axis < Dim; ++axis) {
+    visit(affine.destination_face_region(axis), [&](const Index<Dim>& face) {
+      affine(axis, face);
+      EXPECT_NEAR(fine_faces[static_cast<std::size_t>(axis)](face),
+                  affine_fine_face_value(axis, face, ratio, mapping), Real(2e-12));
+    });
+  }
+}
+
+template <int Dim>
+void expect_linear_temporal_interpolation(const RefinementRatio<Dim>& ratio) {
+  Index<Dim> upper{};
+  for (int axis = 0; axis < Dim; ++axis)
+    upper[axis] = 1;
+  const Box<Dim> region{Index<Dim>{}, upper};
+  HostField<Dim> older(region, 2);
+  HostField<Dim> newer(region, 2);
+  HostField<Dim> candidate(region, 2);
+  visit(region, [&](const Index<Dim>& index) {
+    Real coordinate = Real(0);
+    for (int axis = 0; axis < Dim; ++axis)
+      coordinate += Real(axis + 1) * static_cast<Real>(index[axis]);
+    older(index, 0) = Real(2) + coordinate;
+    older(index, 1) = Real(-4) + Real(0.5) * coordinate;
+    newer(index, 0) = Real(10) - Real(2) * coordinate;
+    newer(index, 1) = Real(8) + coordinate;
+    candidate(index, 0) = Real(-99);
+    candidate(index, 1) = Real(-99);
+  });
+
+  const std::string spatial = "test.temporal.spatial";
+  QualifiedTemporalState older_state{"state/U", spatial, 7, 11,
+                                     pops::amr::ClockStamp{0, 4, pops::amr::Rational(0, 1), 2.0}};
+  QualifiedTemporalState newer_state{"state/U", spatial, 7, 11,
+                                     pops::amr::ClockStamp{0, 4, pops::amr::Rational(1, 1), 5.0}};
+  QualifiedTemporalState target_state{"state/U", spatial, 7, 11,
+                                      pops::amr::ClockStamp{0, 4, pops::amr::Rational(1, 3), 3.0}};
+  const auto prepared = LinearTemporalInterpolationProvider<Dim>{}.prepare(
+      older.const_view(), newer.const_view(), candidate.view(), region, ratio, older_state,
+      newer_state, target_state, TemporalComponentRange{0, 0, 0, 2});
+  EXPECT_NEAR(prepared.alpha(), Real(1.0 / 3.0), Real(1e-15));
+  visit(region, [&](const Index<Dim>& index) { prepared(index); });
+  visit(region, [&](const Index<Dim>& index) {
+    for (int component = 0; component < 2; ++component)
+      EXPECT_NEAR(candidate(index, component),
+                  older(index, component) +
+                      Real(1.0 / 3.0) * (newer(index, component) - older(index, component)),
+                  Real(4e-15));
+  });
+
+  QualifiedTemporalState wrong_target = target_state;
+  ++wrong_target.topology_generation;
+  visit(region, [&](const Index<Dim>& index) {
+    candidate(index, 0) = Real(-101);
+    candidate(index, 1) = Real(-101);
+  });
+  EXPECT_THROW((void)LinearTemporalInterpolationProvider<Dim>{}.prepare(
+                   older.const_view(), newer.const_view(), candidate.view(), region, ratio,
+                   older_state, newer_state, wrong_target, TemporalComponentRange{0, 0, 0, 2}),
+               std::invalid_argument);
+  visit(region, [&](const Index<Dim>& index) {
+    EXPECT_DOUBLE_EQ(candidate(index, 0), Real(-101));
+    EXPECT_DOUBLE_EQ(candidate(index, 1), Real(-101));
+  });
+}
+
 }  // namespace
 
 TEST(test_nd_transfer, anisotropic_ratios_validate_once_and_fail_closed) {
@@ -477,6 +824,10 @@ TEST(test_nd_transfer, prepared_contract_is_fixed_size_and_reports_exact_capabil
   static_assert(std::is_trivially_copyable_v<PreparedTransfer<2>>);
   static_assert(std::is_trivially_copyable_v<PreparedTransfer<3>>);
   static_assert(std::is_trivially_copyable_v<TransferProvider<3, Centering::Cell>>);
+  static_assert(std::is_trivially_copyable_v<
+                pops::amr::transfer::PreparedDivergencePreservingFaceTransfer<3>>);
+  static_assert(
+      std::is_trivially_copyable_v<pops::amr::transfer::PreparedLinearTemporalInterpolation<3>>);
 
   EXPECT_EQ((TransferProvider<2, Centering::Cell>::conservative_restriction().capabilities()),
             (pops::amr::transfer::TransferCapabilities{1, 0, true, true, SlopeLimiter::None}));
@@ -485,6 +836,16 @@ TEST(test_nd_transfer, prepared_contract_is_fixed_size_and_reports_exact_capabil
                                                        SlopeLimiter::MonotonizedCentral}));
   EXPECT_EQ((TransferProvider<2, Centering::Cell>::constant_injection().capabilities()),
             (pops::amr::transfer::TransferCapabilities{1, 0, true, true, SlopeLimiter::None}));
+  EXPECT_EQ((TransferProvider<2, Centering::Cell>::fifth_order_coarse_fine_ghost_interpolation()
+                 .capabilities()),
+            (pops::amr::transfer::TransferCapabilities{5, 2, false, true, SlopeLimiter::None}));
+  EXPECT_EQ((TransferProvider<2, Centering::Node>::node_multilinear_prolongation().capabilities()),
+            (pops::amr::transfer::TransferCapabilities{2, 0, false, true, SlopeLimiter::None}));
+  EXPECT_EQ((DivergencePreservingFaceTransferProvider<2>::capabilities()),
+            (pops::amr::transfer::TransferCapabilities{2, 1, true, true,
+                                                       SlopeLimiter::MonotonizedCentral}));
+  EXPECT_EQ((LinearTemporalInterpolationProvider<2>::capabilities()),
+            (pops::amr::transfer::TransferCapabilities{2, 0, true, true, SlopeLimiter::None}));
   EXPECT_THROW((void)(TransferProvider<2, Centering::Node>::linear_prolongation().capabilities()),
                std::invalid_argument);
   EXPECT_THROW(
@@ -531,6 +892,46 @@ TEST(test_nd_transfer, coarse_fine_ghost_interpolation_handles_negative_offsets_
   expect_negative_offset_ghost_interpolation<3>();
 }
 
+TEST(test_nd_transfer,
+     fifth_order_coarse_fine_reproduces_quartics_and_parent_averages_for_ratios_two_and_three) {
+  expect_fifth_order_quartic_and_parent_average<1>(RefinementRatio<1>{2});
+  expect_fifth_order_quartic_and_parent_average<1>(RefinementRatio<1>{3});
+  expect_fifth_order_quartic_and_parent_average<2>(RefinementRatio<2>{2, 2});
+  expect_fifth_order_quartic_and_parent_average<2>(RefinementRatio<2>{3, 3});
+  expect_fifth_order_quartic_and_parent_average<3>(RefinementRatio<3>{2, 2, 2});
+  expect_fifth_order_quartic_and_parent_average<3>(RefinementRatio<3>{3, 3, 3});
+  expect_fifth_order_quartic_and_parent_average<3>(RefinementRatio<3>{2, 1, 3});
+}
+
+TEST(test_nd_transfer,
+     node_multilinear_prolongation_reproduces_multilinear_fields_for_exact_ranked_ratios) {
+  expect_node_multilinear<1>(RefinementRatio<1>{2});
+  expect_node_multilinear<1>(RefinementRatio<1>{3});
+  expect_node_multilinear<2>(RefinementRatio<2>{2, 2});
+  expect_node_multilinear<2>(RefinementRatio<2>{3, 3});
+  expect_node_multilinear<3>(RefinementRatio<3>{2, 2, 2});
+  expect_node_multilinear<3>(RefinementRatio<3>{3, 3, 3});
+  expect_node_multilinear<3>(RefinementRatio<3>{2, 1, 3});
+}
+
+TEST(test_nd_transfer,
+     coupled_face_prolongation_preserves_boundary_fluxes_and_cell_divergence_in_1d_2d_3d) {
+  expect_divergence_preserving_faces<1>(RefinementRatio<1>{2});
+  expect_divergence_preserving_faces<1>(RefinementRatio<1>{3});
+  expect_divergence_preserving_faces<2>(RefinementRatio<2>{2, 2});
+  expect_divergence_preserving_faces<2>(RefinementRatio<2>{3, 3});
+  expect_divergence_preserving_faces<3>(RefinementRatio<3>{2, 2, 2});
+  expect_divergence_preserving_faces<3>(RefinementRatio<3>{3, 3, 3});
+  expect_divergence_preserving_faces<3>(RefinementRatio<3>{2, 1, 3});
+}
+
+TEST(test_nd_transfer,
+     linear_temporal_provider_interpolates_two_qualified_states_for_exact_ranked_transitions) {
+  expect_linear_temporal_interpolation<1>(RefinementRatio<1>{3});
+  expect_linear_temporal_interpolation<2>(RefinementRatio<2>{2, 3});
+  expect_linear_temporal_interpolation<3>(RefinementRatio<3>{2, 1, 3});
+}
+
 TEST(test_nd_transfer, preparation_rejects_missing_stencils_components_aliases_and_regions) {
   const RefinementRatio<2> ratio{2, 3};
   const IndexMapping<2> mapping{};
@@ -539,9 +940,42 @@ TEST(test_nd_transfer, preparation_rejects_missing_stencils_components_aliases_a
   HostField<2> coarse(coarse_without_halo, 1);
   HostField<2> fine(fine_region, 1);
   const auto linear = TransferProvider<2, Centering::Cell>::linear_prolongation();
+  const auto fifth_order =
+      TransferProvider<2, Centering::Cell>::fifth_order_coarse_fine_ghost_interpolation();
 
   EXPECT_THROW((void)linear.prepare(coarse.const_view(), fine.view(), fine_region, ratio, mapping),
                std::invalid_argument);
+  EXPECT_THROW(
+      (void)fifth_order.prepare(coarse.const_view(), fine.view(), fine_region, ratio, mapping),
+      std::invalid_argument);
+
+  visit(fine_region, [&](const Index<2>& index) { fine(index) = Real(-17); });
+  EXPECT_THROW((void)(TransferProvider<2, Centering::Node>::node_multilinear_prolongation().prepare(
+                   coarse.const_view(), fine.view(), fine_region, ratio, mapping)),
+               std::invalid_argument);
+  visit(fine_region, [&](const Index<2>& index) { EXPECT_DOUBLE_EQ(fine(index), Real(-17)); });
+
+  Box<2> first_face_region = fine_region;
+  Box<2> second_face_region = fine_region;
+  ++first_face_region.hi[0];
+  ++second_face_region.hi[1];
+  HostField<2> first_parent_faces(coarse_without_halo, 1);
+  HostField<2> second_parent_faces(coarse_without_halo, 1);
+  HostField<2> first_child_faces(first_face_region, 1);
+  HostField<2> second_child_faces(second_face_region, 1);
+  visit(first_face_region, [&](const Index<2>& index) { first_child_faces(index) = Real(-29); });
+  visit(second_face_region, [&](const Index<2>& index) { second_child_faces(index) = Real(-29); });
+  const std::array<FieldView<const Real, 2>, 2> parent_faces{first_parent_faces.const_view(),
+                                                             second_parent_faces.const_view()};
+  const std::array<FieldView<Real, 2>, 2> child_faces{first_child_faces.view(),
+                                                      second_child_faces.view()};
+  EXPECT_THROW((void)DivergencePreservingFaceTransferProvider<2>{}.prepare(
+                   parent_faces, child_faces, fine_region, ratio, mapping),
+               std::invalid_argument);
+  visit(first_face_region,
+        [&](const Index<2>& index) { EXPECT_DOUBLE_EQ(first_child_faces(index), Real(-29)); });
+  visit(second_face_region,
+        [&](const Index<2>& index) { EXPECT_DOUBLE_EQ(second_child_faces(index), Real(-29)); });
 
   const Box<2> source_with_halo{Index<2>{-1, -1}, Index<2>{2, 2}};
   HostField<2> valid_source(source_with_halo, 1);

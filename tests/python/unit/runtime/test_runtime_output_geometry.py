@@ -64,6 +64,7 @@ class _Engine:
         self.topology_epoch = 0
         self.boxes = ()
         self.active_levels = 1
+        self.level_refinements = {}
 
     def nx(self) -> int:
         return self._nx
@@ -81,7 +82,7 @@ class _Engine:
         self.geometry_calls += 1
         if len(args) == 4:
             origin, spacing, shape, cell_measure = args
-            level, ratio = 0, 0
+            level, ratio = 0, (0,) * len(shape)
             materialized = ((tuple(0 for _ in shape), tuple(item - 1 for item in shape)),)
         else:
             level, origin, spacing, shape, ratio, cell_measure = args
@@ -96,7 +97,12 @@ class _Engine:
             )
         shape = tuple(shape)
         self.geometry_shapes.append(shape)
-        assert shape == tuple(item * (2 ** level) for item in self._shape)
+        refinement = self.level_refinements.get(
+            level, (2 ** level,) * len(self._shape)
+        )
+        assert shape == tuple(
+            item * refinement[axis] for axis, item in enumerate(self._shape)
+        )
         cell_shape = tuple(reversed(shape))
         boxes = tuple(
             tuple(reversed(lower)) + tuple(item + 1 for item in reversed(upper))
@@ -108,11 +114,15 @@ class _Engine:
                 box[:len(shape)], box[len(shape):], strict=True
             ))] = True
         coverage = np.zeros(cell_shape, dtype=np.bool_)
-        if ratio:
+        if any(ratio):
             for box_level, lower, upper in self.boxes:
                 if box_level == level + 1:
-                    parent_lower = tuple(item // ratio for item in lower)
-                    parent_upper = tuple(item // ratio + 1 for item in upper)
+                    parent_lower = tuple(
+                        item // ratio[axis] for axis, item in enumerate(lower)
+                    )
+                    parent_upper = tuple(
+                        item // ratio[axis] + 1 for axis, item in enumerate(upper)
+                    )
                     coverage[tuple(slice(low, high) for low, high in zip(
                         reversed(parent_lower), reversed(parent_upper), strict=True
                     ))] = True
@@ -172,8 +182,14 @@ def test_runtime_output_geometry_is_deduplicated_and_invalidated_by_topology_epo
         owner=OwnerPath.case("output-cache"),
     )
     layout = replace(
-        plan.layouts[0], adaptive=True, transition_ratios=(2,),
-        levels=(LayoutLevel(0, 1), LayoutLevel(1, 2)),
+        plan.layouts[0], adaptive=True, transition_ratios=((2, 2),),
+        levels=(LayoutLevel(0, (1, 1)), LayoutLevel(1, (2, 2))),
+        capabilities={
+            **dict(plan.layouts[0].capabilities),
+            "supports_amr": True,
+            "transition_ratios": [[2, 2]],
+            "max_levels": 2,
+        },
     )
     engine = _Engine(4, 4)
     engine.boxes = ((1, (2, 2), (5, 5)),)
@@ -212,8 +228,18 @@ def test_runtime_output_intersects_authored_levels_with_live_amr_depth():
     layout = replace(
         plan.layouts[0],
         adaptive=True,
-        transition_ratios=(2, 2),
-        levels=(LayoutLevel(0, 1), LayoutLevel(1, 2), LayoutLevel(2, 4)),
+        transition_ratios=((2, 2), (2, 2)),
+        levels=(
+            LayoutLevel(0, (1, 1)),
+            LayoutLevel(1, (2, 2)),
+            LayoutLevel(2, (4, 4)),
+        ),
+        capabilities={
+            **dict(plan.layouts[0].capabilities),
+            "supports_amr": True,
+            "transition_ratios": [[2, 2], [2, 2]],
+            "max_levels": 3,
+        },
     )
     engine = _Engine(4, 4)
     engine.active_levels = 2
@@ -237,8 +263,14 @@ def test_runtime_output_accepts_adaptive_rectangular_geometry():
         owner=OwnerPath.case("adaptive-rectangle-output"),
     )
     layout = replace(
-        plan.layouts[0], adaptive=True, transition_ratios=(2,),
-        levels=(LayoutLevel(0, 1), LayoutLevel(1, 2)),
+        plan.layouts[0], adaptive=True, transition_ratios=((2, 2),),
+        levels=(LayoutLevel(0, (1, 1)), LayoutLevel(1, (2, 2))),
+        capabilities={
+            **dict(plan.layouts[0].capabilities),
+            "supports_amr": True,
+            "transition_ratios": [[2, 2]],
+            "max_levels": 2,
+        },
     )
     engine = _Engine(4, 3)
     engine.boxes = ((1, (2, 1), (5, 4)),)
@@ -332,7 +364,12 @@ def _generic_layout(geometry: NormalizedGeometry, *, owner: str):
         Uniform(CartesianGrid(frame=frame, cells=(4, 4))),
         owner=OwnerPath.case(owner),
     )
-    return replace(plan.layouts[0], geometry=geometry, native_spatial_layout=None)
+    return replace(
+        plan.layouts[0],
+        geometry=geometry,
+        levels=(LayoutLevel(0, (1,) * geometry.dimension),),
+        native_spatial_layout=None,
+    )
 
 
 @pytest.mark.parametrize(
@@ -397,14 +434,22 @@ def test_runtime_output_preserves_rank_three_amr_patch_bounds():
         (4.0, 2.0, 4.0),
         (4, 3, 2),
     )
+    base_layout = _generic_layout(geometry, owner="rank-three-amr")
     layout = replace(
-        _generic_layout(geometry, owner="rank-three-amr"),
+        base_layout,
         adaptive=True,
-        transition_ratios=(2,),
-        levels=(LayoutLevel(0, 1), LayoutLevel(1, 2)),
+        transition_ratios=((2, 1, 3),),
+        levels=(LayoutLevel(0, (1, 1, 1)), LayoutLevel(1, (2, 1, 3))),
+        capabilities={
+            **dict(base_layout.capabilities),
+            "supports_amr": True,
+            "transition_ratios": [[2, 1, 3]],
+            "max_levels": 2,
+        },
     )
     engine = _Engine(shape=geometry.cells)
-    engine.boxes = ((1, (2, 1, 0), (5, 4, 3)),)
+    engine.level_refinements[1] = (2, 1, 3)
+    engine.boxes = ((1, (2, 0, 0), (5, 2, 5)),)
     engine.active_levels = 2
     owner = SimpleNamespace(
         _layout_plan=SimpleNamespace(layouts=(layout,)),
@@ -413,9 +458,9 @@ def test_runtime_output_preserves_rank_three_amr_patch_bounds():
 
     result = RuntimeOutputSnapshot(owner)._geometry(layout, 1)
 
-    assert result.cell_shape == (4, 6, 8)
-    assert result.boxes == ((0, 1, 2, 4, 5, 6),)
-    assert int(np.count_nonzero(result.valid_cells)) == 4 * 4 * 4
+    assert result.cell_shape == (6, 3, 8)
+    assert result.boxes == ((0, 0, 2, 6, 3, 6),)
+    assert int(np.count_nonzero(result.valid_cells)) == 4 * 3 * 6
 
 
 def test_runtime_output_rejects_native_rank_that_differs_from_compiled_geometry():

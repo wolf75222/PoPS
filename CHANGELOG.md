@@ -18,6 +18,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- Native `RuntimeInstance` installation now authenticates each single-layout halo against its exact
+  compiled block/read owner and the shared spatial-plus-field-plan ghost oracle. It fails before
+  backend inspection when a planned buffer, cross-memory fence or clock join has no execution
+  owner, or when a collective lacks an exact ConsumerGraph block/resource/operation/strategy owner
+  and matching RuntimeCall requirement on the execution context's communicator.
 - Uniform checkpoint payload v7 and AMR payload v8 persist one release-versioned rank-generic
   spatial authority. Shape, bounds, periodicity, patch boxes and AMR refinement ratios carry exactly
   `Dim` components; restart authenticates the resolved 1D/2D/3D specialization before native

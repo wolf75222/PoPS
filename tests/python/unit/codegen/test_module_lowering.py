@@ -20,6 +20,7 @@ Guarded with ``pytest.importorskip("pops")``; the ``__main__`` block runs pytest
 from pops.codegen.program_codegen import emit_cpp_program
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from pops.numerics.terms import DefaultSource, Flux
@@ -33,9 +34,11 @@ from pops import time as adctime  # noqa: E402
 from pops._ir.expr import Const  # noqa: E402
 from pops.physics._facade import Model  # noqa: E402
 from pops.codegen.module_lowering import (  # noqa: E402
-    _lower_native_role, _module_to_model, lower_and_validate, remap_lowering_error)
+    _lower_native_role, _module_to_model, _typed_lowering_roles,
+    lower_and_validate, remap_lowering_error)
 from pops.frames import X_AXIS, Z_AXIS  # noqa: E402
 from pops.physics import Axial, Density, Momentum, Scalar  # noqa: E402
+from pops.physics.roles import native_role_token  # noqa: E402
 from pops.physics._coupled_abi import role_canonical  # noqa: E402
 
 
@@ -46,8 +49,34 @@ def test_module_role_lowering_preserves_typed_boundary_semantics():
     assert _lower_native_role(Axial(axis=Z_AXIS)) == "axial:2"
     assert _lower_native_role(Scalar()) == "scalar"
     assert _lower_native_role("momentum:1") == "momentum:1"
+    assert _lower_native_role("momentum:01") is None
+    assert _lower_native_role("momentum_x") is None
     assert _lower_native_role("Custom") is None
     assert role_canonical("axial:2") == "axial:2"
+
+
+@pytest.mark.parametrize("dimension", (1, 2, 3))
+def test_module_exact_role_tokens_reenter_private_authoring_as_typed_values(dimension):
+    components = ("density", *("p%d" % axis for axis in range(dimension)))
+    state = SimpleNamespace(
+        components=components,
+        roles={
+            "density": "density",
+            **{"p%d" % axis: "momentum:%d" % axis for axis in range(dimension)},
+        },
+    )
+
+    roles = _typed_lowering_roles(state)
+    assert roles is not None
+    assert tuple(native_role_token(role) for role in roles) == (
+        "density",
+        *("momentum:%d" % axis for axis in range(dimension)),
+    )
+
+
+def test_module_legacy_pascal_role_is_not_a_physical_alias():
+    state = SimpleNamespace(components=("q",), roles={"q": "MomentumX"})
+    assert _typed_lowering_roles(state) is None
 
 
 def _facade_model(name="ep"):

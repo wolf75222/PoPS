@@ -462,6 +462,10 @@ class BoundaryResidualContribution:
     region: GhostRegion
     producer: Handle
     residual: Handle
+    states: tuple[Handle, ...] = ()
+    fields: tuple[Handle, ...] = ()
+    runtime_params: tuple[Handle, ...] = ()
+    rate: Handle | None = None
 
     def __post_init__(self) -> None:
         _handle(self.handle, where="BoundaryResidualContribution.handle",
@@ -472,12 +476,28 @@ class BoundaryResidualContribution:
                 kinds=frozenset(("ghost_producer",)))
         _handle(self.residual, where="BoundaryResidualContribution.residual",
                 kinds=frozenset(("residual_operator",)))
+        object.__setattr__(self, "states", _handles(
+            self.states, where="BoundaryResidualContribution.states", kinds=frozenset(("state",))))
+        object.__setattr__(self, "fields", _handles(
+            self.fields, where="BoundaryResidualContribution.fields", kinds=frozenset(("field",))))
+        object.__setattr__(self, "runtime_params", _handles(
+            self.runtime_params, where="BoundaryResidualContribution.runtime_params",
+            kinds=frozenset(("parameter",))))
+        if any(getattr(row, "param_kind", None) != "runtime" for row in self.runtime_params):
+            raise TypeError("BoundaryResidualContribution.runtime_params requires RuntimeParam handles")
+        if self.rate is not None:
+            _handle(self.rate, where="BoundaryResidualContribution.rate",
+                    kinds=frozenset(("state", "field")))
 
     def canonical_identity(self) -> dict[str, Any]:
         return {"handle": self.handle.canonical_identity(),
                 "region": self.region.canonical_identity(),
                 "producer": self.producer.canonical_identity(),
-                "residual": self.residual.canonical_identity()}
+                "residual": self.residual.canonical_identity(),
+                "states": [row.canonical_identity() for row in self.states],
+                "fields": [row.canonical_identity() for row in self.fields],
+                "runtime_params": [row.canonical_identity() for row in self.runtime_params],
+                "rate": None if self.rate is None else self.rate.canonical_identity()}
 
     def inspect(self) -> dict[str, Any]:
         return {"report_type": "boundary_residual_contribution",
@@ -490,6 +510,10 @@ class BoundaryLinearizationContribution:
     region: GhostRegion
     producer: Handle
     linearization: Handle
+    states: tuple[Handle, ...] = ()
+    fields: tuple[Handle, ...] = ()
+    runtime_params: tuple[Handle, ...] = ()
+    rate: Handle | None = None
 
     def __post_init__(self) -> None:
         _handle(self.handle, where="BoundaryLinearizationContribution.handle",
@@ -500,12 +524,31 @@ class BoundaryLinearizationContribution:
                 kinds=frozenset(("ghost_producer",)))
         _handle(self.linearization, where="BoundaryLinearizationContribution.linearization",
                 kinds=frozenset(("linearization_operator",)))
+        object.__setattr__(self, "states", _handles(
+            self.states, where="BoundaryLinearizationContribution.states",
+            kinds=frozenset(("state",))))
+        object.__setattr__(self, "fields", _handles(
+            self.fields, where="BoundaryLinearizationContribution.fields",
+            kinds=frozenset(("field",))))
+        object.__setattr__(self, "runtime_params", _handles(
+            self.runtime_params, where="BoundaryLinearizationContribution.runtime_params",
+            kinds=frozenset(("parameter",))))
+        if any(getattr(row, "param_kind", None) != "runtime" for row in self.runtime_params):
+            raise TypeError(
+                "BoundaryLinearizationContribution.runtime_params requires RuntimeParam handles")
+        if self.rate is not None:
+            _handle(self.rate, where="BoundaryLinearizationContribution.rate",
+                    kinds=frozenset(("state", "field")))
 
     def canonical_identity(self) -> dict[str, Any]:
         return {"handle": self.handle.canonical_identity(),
                 "region": self.region.canonical_identity(),
                 "producer": self.producer.canonical_identity(),
-                "linearization": self.linearization.canonical_identity()}
+                "linearization": self.linearization.canonical_identity(),
+                "states": [row.canonical_identity() for row in self.states],
+                "fields": [row.canonical_identity() for row in self.fields],
+                "runtime_params": [row.canonical_identity() for row in self.runtime_params],
+                "rate": None if self.rate is None else self.rate.canonical_identity()}
 
     def inspect(self) -> dict[str, Any]:
         return {"report_type": "boundary_linearization_contribution",

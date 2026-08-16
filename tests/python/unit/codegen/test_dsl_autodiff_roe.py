@@ -19,6 +19,7 @@ Invariants par assert ; imprime "OK test_dsl_autodiff_roe" en cas de succes.
 """
 from pops.numerics.reconstruction.limiters import Minmod
 from pops.numerics.riemann import Roe
+from pops.codegen._compiler_lowering import require_compiler_lowering
 import os
 import shutil
 import sys
@@ -30,9 +31,10 @@ import pops.runtime._engine_descriptors as engine
 from pops._ir.expr import Expr, Var
 from pops._ir.lowering import diff
 from pops._ir.ops import left, right, sqrt
-from pops.physics._facade import Model
-from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from pops.physics import Density, Model, Momentum
+from pops.runtime._system import System, SystemConfig  # ADC-545 advanced runtime seam
 from tests.python.support.explicit_program import install_forward_euler_program
+from tests.python.support.physics_roles import FRAME, X_AXIS, Y_AXIS
 from tests.python.support.requirements import (
     missing_compiler_requirement,
     repo_include,
@@ -41,6 +43,27 @@ from tests.python.support.requirements import (
 INCLUDE = repo_include()
 CS2 = 0.5  # vitesse du son au carre (isotherme / pseudo-pression p = cs2 rho)
 fails = 0
+
+
+def lower_model(model):
+    """Select the board executable emitter without pre-binding native packs."""
+    lowering = require_compiler_lowering(model)
+    emit_model, source_module = lowering.emit_model, lowering.source_module
+    assert source_module is model.module
+    emit_model.check()
+    return emit_model
+
+
+def system_config_2d(n):
+    """Return the complete exact-rank Cartesian authority for this uniform witness."""
+    config = SystemConfig()
+    config.shape = (n, n)
+    config.lower = (0.0, 0.0)
+    config.upper = (1.0, 1.0)
+    config.periodicity = (True, True)
+    config.boxes = (((0, 0), (n, n)),)
+    config.coordinate_system = "pops://coordinates/cartesian-2d@1"
+    return config
 
 
 def chk(cond, label):
@@ -114,23 +137,31 @@ print("== (b) m.flux_jacobian : Jacobien de flux auto-derive == analytique connu
 
 
 def iso_model(name):
-    """Isotherme 3-var (rho, mx, my), p = cs2 rho, flux et valeurs propres standard."""
-    m = Model(name)
-    rho, mx, my = m.conservative_vars("rho", "mx", "my",
-                                      roles=["Density", "MomentumX", "MomentumY"])
+    """Public isothermal authoring on the exact typed two-axis frame."""
+    m = Model(name, frame=FRAME)
+    state = m.state(
+        "U", components=("rho", "mx", "my"),
+        roles={"rho": Density(), "mx": Momentum(X_AXIS), "my": Momentum(Y_AXIS)},
+    )
+    rho, mx, my = state
     u = m.primitive("u", mx / rho)
     v = m.primitive("v", my / rho)
-    m.primitive("p", CS2 * rho)
+    m.scalar("p", CS2 * rho)
     c = sqrt(CS2)
-    m.flux(x=[mx, mx * u + CS2 * rho, mx * v], y=[my, my * u, my * v + CS2 * rho])
-    m.eigenvalues(x=[u - c, u, u + c], y=[v - c, v, v + c])
-    m.primitive_vars(rho, u, v)
-    m.conservative_from([rho, rho * u, rho * v])
-    m.elliptic_rhs(0.0 * rho)
-    return m
+    m.primitive_state(rho, u, v, conservative=(rho, rho * u, rho * v))
+    m.flux(
+        "transport", frame=FRAME, state=state,
+        components={
+            X_AXIS: (mx, mx * u + CS2 * rho, mx * v),
+            Y_AXIS: (my, my * u, my * v + CS2 * rho),
+        },
+        waves={X_AXIS: (u - c, u, u + c), Y_AXIS: (v - c, v, v + c)},
+    )
+    return m, rho, mx, my
 
 
-m = iso_model("iso_jac")
+m_board, _, _, _ = iso_model("iso_jac")
+m = lower_model(m_board)
 N = 50
 U = np.stack([rng.uniform(0.5, 2.0, N), rng.uniform(-1.0, 1.0, N), rng.uniform(-1.0, 1.0, N)])
 uu, vv = U[1] / U[0], U[2] / U[0]
@@ -157,14 +188,14 @@ for tag, Aref, d in (("x", Ax_ref, 0), ("y", Ay_ref, 1)):
 chk(len(m.flux_jacobian("x")) == 3 and len(m.flux_jacobian(0)) == 3,
     "flux_jacobian accepte 0/'x' et 1/'y'")
 try:
-    iso_model("iso_nodir").flux_jacobian(2)
+    lower_model(iso_model("iso_nodir")[0]).flux_jacobian(2)
     chk(False, "direction invalide aurait du lever")
 except ValueError as ex:
     chk("direction" in str(ex), f"direction invalide rejetee ({str(ex)[:40]})")
 try:
-    mm = Model("noflux")
-    mm.conservative_vars("a", "b", "c")
-    mm.flux_jacobian(0)
+    mm = Model("noflux", frame=FRAME)
+    mm.state("U", components=("a", "b", "c"))
+    mm.roe_from_jacobian()
     chk(False, "flux_jacobian sans flux aurait du lever")
 except ValueError as ex:
     chk("set_flux" in str(ex), "flux_jacobian sans set_flux rejete")
@@ -176,47 +207,44 @@ L, R = left, right
 
 
 def iso_bare():
-    m = Model("iso_rej")
-    rho, mx, my = m.conservative_vars("rho", "mx", "my",
-                                      roles=["Density", "MomentumX", "MomentumY"])
-    m.primitive("u", mx / rho)
-    m.primitive("p", CS2 * rho)
-    return m, rho, mx, my
+    """Build every exact flux axis before exercising the two-state Roe guards."""
+    board, rho, mx, my = iso_model("iso_rej")
+    return board, lower_model(board), rho, mx, my
 
 
-m0, rho0, mx0, my0 = iso_bare()
+m0_board, m0, rho0, mx0, my0 = iso_bare()
 try:
     m0.roe_dissipation(x=[L(rho0) - R(rho0)], y=[L(rho0), L(mx0), L(my0)])
     chk(False, "dimension fausse aurait du lever")
 except ValueError as ex:
     chk("roe_dissipation" in str(ex), "dimensions fausses rejetees")
 
-m0, rho0, mx0, my0 = iso_bare()
+m0_board, m0, rho0, mx0, my0 = iso_bare()
 try:
     m0.roe_dissipation(x=[L(rho0) - R(rho0), mx0, L(my0)], y=[L(rho0), L(mx0), L(my0)])
     chk(False, "variable nue aurait du lever")
 except ValueError as ex:
     chk("'mx'" in str(ex), "variable hors left()/right() rejetee")
 
-m0, rho0, mx0, my0 = iso_bare()
+m0_board, m0, rho0, mx0, my0 = iso_bare()
 try:
     m0.roe_dissipation(x=[L(R(rho0)), L(mx0), L(my0)], y=[L(rho0), L(mx0), L(my0)])
     chk(False, "marqueur imbrique aurait du lever")
 except ValueError as ex:
     chk("left()/right()" in str(ex), "marqueur left()/right() imbrique rejete")
 
-m0, rho0, mx0, my0 = iso_bare()
-m0.enable_roe()
+m0_board, m0, rho0, mx0, my0 = iso_bare()
+m0_board.riemann(Roe())
 try:
     m0.roe_dissipation(x=[L(rho0), L(mx0), L(my0)], y=[L(rho0), L(mx0), L(my0)])
     chk(False, "enable_roe puis roe_dissipation aurait du lever")
 except ValueError as ex:
     chk("one single provider" in str(ex), "enable_roe -> roe_dissipation rejete (un seul hook)")
 
-m0, rho0, mx0, my0 = iso_bare()
+m0_board, m0, rho0, mx0, my0 = iso_bare()
 m0.roe_dissipation(x=[L(rho0), L(mx0), L(my0)], y=[L(rho0), L(mx0), L(my0)])
 try:
-    m0.enable_roe()
+    m0_board.riemann(Roe())
     chk(False, "roe_dissipation puis enable_roe aurait du lever")
 except ValueError as ex:
     chk("one single provider" in str(ex), "roe_dissipation -> enable_roe rejete (un seul hook)")
@@ -235,18 +263,26 @@ def iso_roe_hand(name):
     """Isotherme 3-var avec roe_dissipation FOURNIE a la main (algebre de Roe isotherme, sans
     Energy, transcrite en left()/right() des deux etats). Pas d'enable_roe : l'utilisateur fournit
     tout le hook."""
-    m = Model(name)
-    rho, mx, my = m.conservative_vars("rho", "mx", "my",
-                                      roles=["Density", "MomentumX", "MomentumY"])
+    m = Model(name, frame=FRAME)
+    state = m.state(
+        "U", components=("rho", "mx", "my"),
+        roles={"rho": Density(), "mx": Momentum(X_AXIS), "my": Momentum(Y_AXIS)},
+    )
+    rho, mx, my = state
     u = m.primitive("u", mx / rho)
     v = m.primitive("v", my / rho)
-    p = m.primitive("p", CS2 * rho)
+    p = m.scalar("p", CS2 * rho)
     c0 = sqrt(CS2)
-    m.flux(x=[mx, mx * u + CS2 * rho, mx * v], y=[my, my * u, my * v + CS2 * rho])
-    m.eigenvalues(x=[u - c0, u, u + c0], y=[v - c0, v, v + c0])
-    m.primitive_vars(rho, u, v)
-    m.conservative_from([rho, rho * u, rho * v])
-    m.elliptic_rhs(0.0 * rho)
+    m.primitive_state(rho, u, v, conservative=(rho, rho * u, rho * v))
+    m.flux(
+        "transport", frame=FRAME, state=state,
+        components={
+            X_AXIS: (mx, mx * u + CS2 * rho, mx * v),
+            Y_AXIS: (my, my * u, my * v + CS2 * rho),
+        },
+        waves={X_AXIS: (u - c0, u, u + c0), Y_AXIS: (v - c0, v, v + c0)},
+    )
+    m = lower_model(m)
 
     def dissipation(norm, tang):
         """Lignes (densite, normale, tangentielle) de d = |A_roe| dU, moyennes de Roe explicites."""
@@ -274,25 +310,34 @@ def iso_roe_hand(name):
     dDx, dNx, dTx = dissipation(u, v)  # dir x : normale = u (indice 1), tangentielle = v (indice 2)
     dDy, dNy, dTy = dissipation(v, u)  # dir y : normale = v (indice 2), tangentielle = u (indice 1)
     m.roe_dissipation(x=[dDx, dNx, dTx], y=[dDy, dTy, dNy])
+    # ``Model.compile`` owns the one canonical Module/provider-pack binding for
+    # native emission; lower_model selected only the executable emitter above.
     return m
 
 
 def iso_roe_roles(name):
     """Meme isotherme avec enable_roe() (capability generee depuis les ROLES) : la reference."""
-    m = Model(name)
-    rho, mx, my = m.conservative_vars("rho", "mx", "my",
-                                      roles=["Density", "MomentumX", "MomentumY"])
+    m = Model(name, frame=FRAME)
+    state = m.state(
+        "U", components=("rho", "mx", "my"),
+        roles={"rho": Density(), "mx": Momentum(X_AXIS), "my": Momentum(Y_AXIS)},
+    )
+    rho, mx, my = state
     u = m.primitive("u", mx / rho)
     v = m.primitive("v", my / rho)
-    m.primitive("p", CS2 * rho)
+    m.scalar("p", CS2 * rho)
     c0 = sqrt(CS2)
-    m.flux(x=[mx, mx * u + CS2 * rho, mx * v], y=[my, my * u, my * v + CS2 * rho])
-    m.eigenvalues(x=[u - c0, u, u + c0], y=[v - c0, v, v + c0])
-    m.primitive_vars(rho, u, v)
-    m.conservative_from([rho, rho * u, rho * v])
-    m.elliptic_rhs(0.0 * rho)
-    m.enable_roe()
-    return m
+    m.primitive_state(rho, u, v, conservative=(rho, rho * u, rho * v))
+    m.flux(
+        "transport", frame=FRAME, state=state,
+        components={
+            X_AXIS: (mx, mx * u + CS2 * rho, mx * v),
+            Y_AXIS: (my, my * u, my * v + CS2 * rho),
+        },
+        waves={X_AXIS: (u - c0, u, u + c0), Y_AXIS: (v - c0, v, v + c0)},
+    )
+    m.riemann(Roe())
+    return lower_model(m)
 
 
 def gaussian(n, amp=0.4):
@@ -315,14 +360,14 @@ try:
     rho0 = gaussian(n)
     z = np.zeros((n, n))
 
-    s_hand = System(n=n, L=1.0, periodicity=(True, True))
+    s_hand = System(config=system_config_2d(n))
     s_hand.set_poisson()
     s_hand.add_equation("f", model=cm_hand,
                         spatial=engine.Spatial(limiter=Minmod(), flux=Roe()),
                         time=engine.Explicit())
     s_hand.set_primitive_state("f", rho=rho0, u=z + 0.1, v=z)
 
-    s_ref = System(n=n, L=1.0, periodicity=(True, True))
+    s_ref = System(config=system_config_2d(n))
     s_ref.set_poisson()
     s_ref.add_equation("f", model=cm_ref,
                        spatial=engine.Spatial(limiter=Minmod(), flux=Roe()),

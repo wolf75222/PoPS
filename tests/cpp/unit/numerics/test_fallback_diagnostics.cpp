@@ -1,8 +1,9 @@
 #include <gtest/gtest.h>
 
 #include <pops/diagnostics/fallback_diagnostics.hpp>
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/mesh/execution/for_each.hpp>
-#include <pops/mesh/index/box2d.hpp>
+#include <pops/mesh/index/box.hpp>
 #include <pops/numerics/elliptic/poisson/poisson_fft.hpp>
 #include <pops/numerics/linalg/dense_eig.hpp>
 
@@ -39,10 +40,12 @@ TEST(test_fallback_diagnostics, counters_and_report_track_triggered_fallbacks) {
       << "positivity fallback policy is reported";
 
   {
-    PoissonFFT solver(6, 6, 1.0, 1.0);
-    std::vector<double> rho(36, 0.0), phi;
-    rho[0] = 1.0;
-    solver.solve(rho, phi);
+    const ExecutionLane lane = ExecutionLane::world("tests.fallback-diagnostics.poisson-fft");
+    PoissonFFT<2> solver({6, 6}, {1.0, 1.0}, lane, "tests.fallback-diagnostics.poisson-fft");
+    PoissonFFT<2>::device_view rhs("fallback_fft_rhs", solver.local_cell_count());
+    PoissonFFT<2>::device_view phi("fallback_fft_phi", solver.local_cell_count());
+    Kokkos::deep_copy(rhs, PoissonFFT<2>::complex_type(0.0, 0.0));
+    solver.solve(rhs, phi);
     EXPECT_GT(poisson_fft_direct_dft_fallback_count(), 0u)
         << "direct DFT fallback increments counter";
   }
@@ -60,7 +63,11 @@ TEST(test_fallback_diagnostics, counters_and_report_track_triggered_fallbacks) {
   if constexpr (std::is_same_v<Kokkos::DefaultExecutionSpace, Kokkos::DefaultHostExecutionSpace>) {
     const std::size_t before = fallback_count(FallbackCounter::kForeachSerialSmallBox);
     if (detail::foreach_serial_threshold() > 1) {
-      for_each_cell(Box2D::from_extents(1, 1), [] POPS_HD(int, int) {});
+      Extent<kNativeDimension> extent{};
+      for (int axis = 0; axis < kNativeDimension; ++axis)
+        extent[axis] = 1;
+      for_each_cell(Box<kNativeDimension>::from_extents(extent),
+                    [] POPS_HD(const CellIndex<kNativeDimension>&) {});
       EXPECT_GT(fallback_count(FallbackCounter::kForeachSerialSmallBox), before)
           << "small host for_each serial fallback increments counter";
     }

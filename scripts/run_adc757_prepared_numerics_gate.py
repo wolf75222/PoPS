@@ -9,6 +9,7 @@ from collections import Counter, defaultdict
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -35,17 +36,11 @@ EXPECTED_REQUIREMENTS = {
     "qualified_flux_provider_pack",
     "capability_driven_riemann",
     "mpi_collective_execution",
-    "typed_flux_recovery_consumption",
-    "prepared_riemann_recovery_policy",
     "public_prepared_riemann_recovery",
     "runtime_recovery_consumer_publication",
     "uniform_recovery_warm_start",
     "analytic_initial_recovery_publication",
     "fallible_primitive_to_conservative_publication",
-    "amr_regrid_recovery_publication",
-    "amr_restriction_recovery_publication",
-    "amr_bootstrap_recovery_publication",
-    "amr_history_recovery_publication",
     "physical_boundary_trace_recovery_publication",
     "terminal_source_recovery_publication",
     "type_erased_recovery_method_identity",
@@ -60,15 +55,23 @@ EXPECTED_REQUIREMENTS = {
     "characteristic_boundary_geometry_matrix",
     "measured_load_balance_decision",
     "amr_rebalance_migration_and_restart_coherence",
+    "standalone_exact_ranked_cell_temporal_provider",
     "bounded_cell_local_program_runtime",
+    "remaining_multirank_multibox_amr_local_time_execution",
     "prepared_hyperbolic_boundary_only_transport_authority",
     "polar_runtime_capability_honesty",
     "prepared_batch_recovery_only_runtime_authority",
+    "prepared_riemann_recovery_policy",
+    "remaining_runtime_nd_metric_eb_characteristic_execution",
+    "typed_flux_recovery_consumption",
     *EXPECTED_HARDWARE_REQUIREMENTS,
 }
+EXPECTED_UNAVAILABLE_REQUIREMENTS = set()
 EXPECTED_DEFERRED = (
-    "remaining_runtime_nd_metric_eb_characteristic_execution",
-    "remaining_multirank_multibox_amr_local_time_execution",
+    "amr_bootstrap_recovery_publication",
+    "amr_history_recovery_publication",
+    "amr_regrid_recovery_publication",
+    "amr_restriction_recovery_publication",
 )
 GTEST_PATTERN = re.compile(r"\bTEST(?:_F)?\(\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*\)")
 FULL_GIT_REVISION = re.compile(r"[0-9a-f]{40}")
@@ -104,6 +107,21 @@ def _python_files() -> set[str]:
     return files
 
 
+def _python_mpi_entrypoints() -> dict[str, int]:
+    data = tomllib.loads(TEST_MANIFEST.read_text(encoding="utf-8"))
+    entries: dict[str, int] = {}
+    for suite in data.get("python", {}).get("suite", ()):
+        for row in suite.get("mpi_entrypoints", ()):
+            path = str(row.get("path", ""))
+            nproc = row.get("nproc")
+            if not path or isinstance(nproc, bool) or not isinstance(nproc, int) or nproc < 1:
+                raise ValueError("invalid Python MPI entrypoint %r" % row)
+            if path in entries:
+                raise ValueError("duplicate Python MPI entrypoint %s" % path)
+            entries[path] = nproc
+    return entries
+
+
 def _declared_gtests(suite: dict) -> tuple[dict[str, bool], list[str]]:
     tests: dict[str, bool] = {}
     errors: list[str] = []
@@ -121,7 +139,7 @@ def _declared_gtests(suite: dict) -> tuple[dict[str, bool], list[str]]:
                 errors.append("duplicate declared GTest %s" % name)
                 continue
             end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
-            body = text[match.start():end]
+            body = text[match.start() : end]
             tests[name] = (
                 suite_name.startswith("DISABLED_")
                 or test_name.startswith("DISABLED_")
@@ -163,6 +181,29 @@ def _pytest_is_skipped(test: ast.FunctionDef) -> bool:
     )
 
 
+def _validate_mpi_python_nodeid(
+    nodeid: object, python_files: set[str], where: str, errors: list[str]
+) -> str | None:
+    if not isinstance(nodeid, str) or nodeid.count("::") != 1:
+        errors.append("%s must contain one exact file::test nodeid" % where)
+        return None
+    relative, test_name = nodeid.split("::")
+    if relative not in python_files:
+        errors.append("%s references unknown Python test file %r" % (where, relative))
+        return None
+    declared, source_errors = _declared_pytests(relative)
+    errors.extend("%s: %s" % (where, error) for error in source_errors)
+    test = declared.get(test_name)
+    if test is None:
+        errors.append(
+            "%s references unknown top-level pytest %r in %r" % (where, test_name, relative)
+        )
+        return None
+    if _pytest_is_skipped(test):
+        errors.append("%s MPI Python proof %r is skipped or xfailed" % (where, test_name))
+    return relative
+
+
 def _validate_hardware_evidence(data: dict, errors: list[str]) -> tuple[str, ...]:
     """Validate the one external report route and return its positive requirements."""
     evidence = data.get("hardware_evidence")
@@ -183,9 +224,7 @@ def _validate_hardware_evidence(data: dict, errors: list[str]) -> tuple[str, ...
     if len(set(requirements)) != len(requirements):
         errors.append("hardware_evidence requirements must be unique")
     return tuple(
-        requirement
-        for requirement in requirements
-        if requirement in EXPECTED_HARDWARE_REQUIREMENTS
+        requirement for requirement in requirements if requirement in EXPECTED_HARDWARE_REQUIREMENTS
     )
 
 
@@ -240,6 +279,11 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
         checks = []
     suites = _cpp_suites()
     python_files = _python_files()
+    try:
+        python_mpi_entrypoints = _python_mpi_entrypoints()
+    except (OSError, tomllib.TOMLDecodeError, ValueError) as exc:
+        errors.append("cannot read Python MPI entrypoints: %s" % exc)
+        python_mpi_entrypoints = {}
     coverage: dict[str, set[str]] = defaultdict(set)
     for requirement in hardware_requirements:
         coverage[requirement].add("positive")
@@ -250,6 +294,8 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
         kind = row.get("kind", "ctest")
         if kind == "pytest":
             expected_row_fields = {"requirement", "polarity", "kind", "path", "test"}
+        elif kind == "mpi_python":
+            expected_row_fields = {"requirement", "polarity", "kind", "nodeid", "nproc"}
         else:
             expected_row_fields = {"requirement", "polarity", "target", "test_regex"}
         if kind == "mpi_ctest":
@@ -261,12 +307,14 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
         polarity = row.get("polarity")
         target = row.get("target")
         selector = row.get("test_regex")
-        if requirement not in EXPECTED_REQUIREMENTS:
+        if requirement not in EXPECTED_REQUIREMENTS | EXPECTED_UNAVAILABLE_REQUIREMENTS:
             errors.append("%s has unknown requirement %r" % (where, requirement))
         if polarity not in {"positive", "refusal"}:
             errors.append("%s polarity must be positive or refusal" % where)
         else:
             coverage[str(requirement)].add(str(polarity))
+        if requirement in EXPECTED_UNAVAILABLE_REQUIREMENTS and polarity != "refusal":
+            errors.append("%s unavailable requirement may carry refusal evidence only" % where)
         if requirement in EXPECTED_HARDWARE_REQUIREMENTS and polarity == "positive":
             errors.append(
                 "%s hardware positive evidence must come only from hardware_evidence" % where
@@ -283,12 +331,28 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
             errors.extend("%s: %s" % (where, error) for error in source_errors)
             if test_name not in declared:
                 errors.append(
-                    "%s references unknown top-level pytest %r in %r"
-                    % (where, test_name, relative)
+                    "%s references unknown top-level pytest %r in %r" % (where, test_name, relative)
                 )
                 continue
             if _pytest_is_skipped(declared[str(test_name)]):
                 errors.append("%s pytest proof %r is skipped or xfailed" % (where, test_name))
+            continue
+        if kind == "mpi_python":
+            nodeid = row.get("nodeid")
+            nproc = row.get("nproc")
+            identity = (kind, nodeid)
+            identities[identity] += 1
+            relative = _validate_mpi_python_nodeid(nodeid, python_files, where, errors)
+            if isinstance(nproc, bool) or not isinstance(nproc, int) or nproc < 1:
+                errors.append("%s MPI Python row requires a positive integer nproc" % where)
+            elif relative is not None:
+                manifest_nproc = python_mpi_entrypoints.get(relative)
+                if manifest_nproc is None:
+                    errors.append("%s is not a manifest-owned MPI Python entrypoint" % relative)
+                elif manifest_nproc != nproc:
+                    errors.append(
+                        "%s requires nproc=%d, not %d" % (relative, manifest_nproc, nproc)
+                    )
             continue
         identity = (kind, target, selector)
         identities[identity] += 1
@@ -347,13 +411,14 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
     if duplicates:
         errors.append("duplicate executable checks: %s" % duplicates)
     if mpi_checks["mpi_collective_execution"] != 2:
-        errors.append(
-            "the closed mpi_collective_execution family requires exactly two MPI CTests"
-        )
+        errors.append("the closed mpi_collective_execution family requires exactly two MPI CTests")
     for requirement in sorted(EXPECTED_REQUIREMENTS):
         missing = {"positive", "refusal"} - coverage[requirement]
         if missing:
             errors.append("%s lacks %s coverage" % (requirement, "/".join(sorted(missing))))
+    for requirement in sorted(EXPECTED_UNAVAILABLE_REQUIREMENTS):
+        if coverage[requirement] != {"refusal"}:
+            errors.append("%s must carry exactly refusal evidence while deferred" % requirement)
     return data, errors
 
 
@@ -430,9 +495,20 @@ def _run_pytest(relative: str, test_name: str) -> None:
             raise subprocess.CalledProcessError(completed.returncode, command)
 
 
-def _run_hardware_evidence(
-    evidence: dict, report: Path, expected_revision: str
-) -> tuple[str, ...]:
+def _mpi_python_command(mpi_exec: str, nproc: int, relative: str) -> list[str]:
+    if shutil.which(mpi_exec) is None:
+        raise RuntimeError("required MPI launcher %r is unavailable" % mpi_exec)
+    return [mpi_exec, "-n", str(nproc), sys.executable, str(ROOT / relative)]
+
+
+def _required_mpi_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    environment["POPS_REQUIRE_MPI_TESTS"] = "1"
+    environment["POPS_REQUIRE_NATIVE_TESTS"] = "1"
+    return environment
+
+
+def _run_hardware_evidence(evidence: dict, report: Path, expected_revision: str) -> tuple[str, ...]:
     if FULL_GIT_REVISION.fullmatch(expected_revision) is None:
         raise RuntimeError("ADC-757 closure requires one full lowercase 40-hex Git revision")
     if not report.is_file():
@@ -460,6 +536,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--build-dir", type=Path, default=ROOT / "build")
+    parser.add_argument("--mpi-exec", default="mpiexec")
     parser.add_argument("--check-only", action="store_true")
     parser.add_argument(
         "--closure",
@@ -515,8 +592,7 @@ def main(argv: list[str] | None = None) -> int:
             print("ADC-757 closure refused: %s" % error, file=sys.stderr)
             return 4
         print(
-            "ADC-757 authenticated hardware report proves: %s"
-            % ", ".join(proved),
+            "ADC-757 authenticated hardware report proves: %s" % ", ".join(proved),
             flush=True,
         )
     if args.check_only:
@@ -525,15 +601,26 @@ def main(argv: list[str] | None = None) -> int:
         data["check"],
         key=lambda value: (
             value.get("kind", "ctest"),
-            value.get("target", value.get("path", "")),
-            value.get("test_regex", value.get("test", "")),
+            value.get("target", value.get("path", value.get("nodeid", ""))),
+            value.get("test_regex", value.get("test", value.get("nproc", ""))),
         ),
     )
     for row in checks:
         if row.get("kind") == "pytest":
             _run_pytest(row["path"], row["test"])
-        else:
+        elif row.get("kind", "ctest") in {"ctest", "mpi_ctest"}:
             _run_ctest(args.build_dir, row["target"], row["test_regex"])
+    mpi_entrypoints = sorted(
+        {
+            (row["nodeid"].split("::", 1)[0], row["nproc"])
+            for row in checks
+            if row.get("kind") == "mpi_python"
+        }
+    )
+    for relative, nproc in mpi_entrypoints:
+        command = _mpi_python_command(args.mpi_exec, nproc, relative)
+        print("+", " ".join(command), flush=True)
+        subprocess.run(command, cwd=ROOT, check=True, env=_required_mpi_environment())
     return 0
 
 

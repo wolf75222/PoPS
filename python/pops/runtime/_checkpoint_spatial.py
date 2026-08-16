@@ -221,12 +221,18 @@ class CheckpointSpatialContract:
         dimension = native_layout.dimension
         rows = []
         for transition, ratio in enumerate(transition_ratios):
-            if isinstance(ratio, bool):
-                raise TypeError("checkpoint transition ratio %d must be exact" % transition)
-            if isinstance(ratio, int):
-                rows.append(tuple(ratio for _axis in range(dimension)))
-            else:
+            if isinstance(ratio, (str, bytes)):
+                raise TypeError(
+                    "checkpoint transition ratio %d must already be an exact-rank axis vector"
+                    % transition
+                )
+            try:
                 rows.append(tuple(ratio))
+            except TypeError as exc:
+                raise TypeError(
+                    "checkpoint transition ratio %d must already be an exact-rank axis vector"
+                    % transition
+                ) from exc
         return cls(
             dimension=dimension,
             shape=native_layout.shape,

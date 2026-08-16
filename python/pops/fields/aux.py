@@ -89,6 +89,8 @@ class _AuxProducer(Descriptor):
     producer_kind = ""
     restart_policy = ""
     regrid_policy = ""
+    _target: Handle
+    boundary: AuxiliaryBoundary
 
     def __init__(self, target: Any, *, boundary: Any = None) -> None:
         object.__setattr__(self, "_target", _aux_target(target))
@@ -177,6 +179,7 @@ class DerivedAux(_AuxProducer):
     producer_kind = "derived"
     restart_policy = "recompute"
     regrid_policy = "recompute"
+    expression: Expr
 
     def __init__(self, target: Any, expression: Any, *, boundary: Any = None) -> None:
         if not isinstance(expression, Expr):

@@ -50,9 +50,7 @@ _GTEST_DECLARATION = re.compile(
     r"\bTEST(?:_F)?\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*"
     r"([A-Za-z_][A-Za-z0-9_]*)\s*\)"
 )
-_CPP_RAW_STRING_START = re.compile(
-    r'(?:u8|u|U|L)?R"([^\s()\\]{0,16})\('
-)
+_CPP_RAW_STRING_START = re.compile(r'(?:u8|u|U|L)?R"([^\s()\\]{0,16})\(')
 
 
 def _dotted_name(node: ast.AST) -> str:
@@ -148,12 +146,13 @@ def _registered_ctest_cases(target: str, suite: dict) -> set[str]:
         if not source.is_file():
             continue
         cases.update(_registered_gtest_cases(source.read_text(encoding="utf-8")))
-    for field in ("mpi_nproc", "mpi_rank_parity"):
-        cases.update(
-            "%s_np%d" % (target, nproc)
-            for nproc in suite.get(field, ())
-            if not isinstance(nproc, bool) and isinstance(nproc, int) and nproc > 0
-        )
+    cases.update(
+        "%s_np%d" % (target, nproc)
+        for nproc in suite.get("mpi_nproc", ())
+        if not isinstance(nproc, bool) and isinstance(nproc, int) and nproc > 0
+    )
+    if suite.get("mpi_rank_parity"):
+        cases.add("%s_rank_parity" % target)
     return cases
 
 
@@ -198,8 +197,7 @@ def _python_mpi_orchestrators() -> set[str]:
         for row in suite.get("mpi_orchestrators", ()):
             if not isinstance(row, dict) or set(row) != {"path"}:
                 raise ValueError(
-                    "invalid Python MPI orchestrator %r; expected exactly one path field"
-                    % row
+                    "invalid Python MPI orchestrator %r; expected exactly one path field" % row
                 )
             path = row["path"]
             if not isinstance(path, str) or not path:
@@ -320,9 +318,7 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
                 and relative.startswith("tests/python/integration/mpi/")
                 and relative not in python_mpi_orchestrators
             ):
-                errors.append(
-                    "%s is not a manifest-owned serial MPI orchestrator" % relative
-                )
+                errors.append("%s is not a manifest-owned serial MPI orchestrator" % relative)
             if polarity == "positive" and relative in NATIVE_PYTEST_FILES:
                 native_positive_issues.add(str(issue))
         elif kind == "mpi_python":
@@ -437,8 +433,7 @@ def _run_required_pytest(nodeids: list[str]) -> None:
         skipped = _pytest_skip_count(report)
         if skipped:
             raise RuntimeError(
-                "M3 pytest reported %d skipped/xfail proof(s); every proof is mandatory"
-                % skipped
+                "M3 pytest reported %d skipped/xfail proof(s); every proof is mandatory" % skipped
             )
         if completed.returncode != 0:
             raise subprocess.CalledProcessError(completed.returncode, command)

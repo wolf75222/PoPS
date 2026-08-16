@@ -50,7 +50,8 @@ def test_cell_local_time_contract_is_frozen_rebuilt_and_hashed() -> None:
     ],
 )
 def test_cell_local_time_contract_refuses_invalid_integer_clocks(
-        tick_denominator, rung, message) -> None:
+    tick_denominator, rung, message
+) -> None:
     program, _ = _transport_program()
     with pytest.raises(ValueError, match=message):
         program.cell_local_time(tick_denominator=tick_denominator, rung=rung)
@@ -64,10 +65,44 @@ def test_amr_codegen_selects_only_the_prepared_cell_local_driver() -> None:
 
     assert "ctx.configure_primary_clock(" in source
     assert "ctx.prepare_same_level_cell_temporal_execution(" in source
+    assert "SameLevelCellTemporalForwardEulerRoute, 1>" in source
+    assert "{0, -1," in source
+    assert "pops.amr.same-level-transport-euler-stage-flux@2" in source
+    assert "pops_program_checkpoint_temporal_cells_per_topology_cell" in source
+    assert "return UINT64_C(1);" in source
     assert program.clock.qualified_id in source
     assert "ctx_owner->advance_same_level_cell_temporal(dt);" in source
     assert "ctx.advance_hierarchy(dt" not in source
     assert "ctx.advance_synchronized_hierarchy(dt" not in source
+
+
+def test_amr_codegen_emits_one_typed_cell_local_route_per_block() -> None:
+    model = Model("cell_local_multiroute")
+    model.conservative_vars("u")
+    rate = model.rate("transport", flux=True, sources=())
+    state = next(
+        declaration
+        for declaration in model.declaration_index().records()
+        if declaration.kind == "state"
+    )
+    case = pops.Case("cell_local_multiroute_case")
+    first = case.block("first", model)
+    second = case.block("second", model)
+    routes = (
+        libtime.RungeKuttaRoute(first[state], rate),
+        libtime.RungeKuttaRoute(second[state], rate),
+    )
+    program = libtime.RungeKutta(
+        routes=routes,
+        tableau=libtime.FORWARD_EULER_TABLEAU,
+    )
+    program.cell_local_time(tick_denominator=64, rung=1)
+
+    source = emit_cpp_program(program, model=model, target="amr_system")
+
+    assert "SameLevelCellTemporalForwardEulerRoute, 2>" in source
+    assert "{0, -1," in source and "{1, -1," in source
+    assert "return UINT64_C(2);" in source
 
 
 def test_cell_local_codegen_refuses_non_euler_and_nondefault_cadence() -> None:

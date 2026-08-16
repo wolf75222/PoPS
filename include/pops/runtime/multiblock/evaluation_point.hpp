@@ -22,6 +22,11 @@ struct BoundaryEvaluationPoint {
   ::pops::amr::Rational stage_fraction{0, 1};
   double dt = std::numeric_limits<double>::quiet_NaN();
   double physical_time = std::numeric_limits<double>::quiet_NaN();
+  /// Exact compiled-Program identities for an authored coupling application.  Ordinary residual
+  /// evaluations may leave these empty; an interface-flux publication must carry all three.
+  std::string graph_identity;
+  std::string rate_identity;
+  std::string application_identity;
 
   friend bool operator==(const BoundaryEvaluationPoint&, const BoundaryEvaluationPoint&) = default;
 };

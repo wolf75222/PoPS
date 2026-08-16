@@ -55,12 +55,12 @@ class Staircase(TransportMask):
 
 
 class CutCell(TransportMask):
-    """Disc-specific center-sampled cut-distance transport (mode='cutcell').
+    """Exact-ranked implicit-surface cut-cell transport (mode='cutcell').
 
-    The present native route is retained for the historical :class:`~pops.mesh.geometry.Disc`
-    problem.  It is not accepted for arbitrary ``LevelSet`` or CSG geometry: those require true
-    face apertures, intersection volumes and a typed wall-flux policy.  Use :class:`Staircase` for
-    generic implicit geometry until that complete route exists; PoPS never silently substitutes it.
+    Every geometry is lowered through the same deterministic :class:`~pops.mesh.geometry.LevelSet`
+    contract. The native prepared operator reconstructs axis-wise crossings, face apertures and
+    cell fractions in the artifact's compile-time rank; ``Disc`` is merely one authoring geometry,
+    never a privileged runtime path.
 
     ADC-615 exposes the cut-cell numeric thresholds, previously hardcoded native constants:
 

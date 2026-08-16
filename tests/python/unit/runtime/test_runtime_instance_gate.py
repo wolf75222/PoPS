@@ -111,7 +111,9 @@ class _Executor:
         self._nx, self._ny = geometry.cells
         self._time = 0.0
         self._step = 0
+        self._last_run_manifest = None
         self._last_run_identity = None
+        self._restart_lineage_identity = None
         self._last_restart_identity = None
         self._prepared_restart_bit_identical = None
         self._step_snapshot = None
@@ -124,6 +126,25 @@ class _Executor:
             semantic_identity=plan.artifact.semantic_identity,
             artifact_identity=plan.artifact.artifact_identity,
             bind_identity=plan.bind_identity,
+        )
+        from pops.runtime._checkpoint_resource_budget import (
+            _producer_checkpoint_resource_budget,
+        )
+
+        self._checkpoint_resource_budget = _producer_checkpoint_resource_budget(
+            {
+                "t": np.asarray(0.0),
+                "macro_step": np.asarray(0, dtype=np.int64),
+                "abi_key": np.asarray("x" * 512),
+                "runtime_consumer_graph": np.asarray("x" * 512),
+                "runtime_consumer_cursors": np.asarray("x" * 4096),
+                "runtime_consumer_diagnostics": np.asarray("x" * 4096),
+                "pops_checkpoint_manifest": np.asarray("x" * 32768),
+                "pops_restart_identity": np.asarray("x" * 128),
+                "temporal_restart_state": np.asarray("x" * 32768),
+            },
+            runtime_kind="uniform",
+            authority=plan.bind_identity.token,
         )
         graph = plan.artifact.plan.consumer_graph
         clocks = (
@@ -159,6 +180,14 @@ class _Executor:
                 time=0.0,
                 macro_step=0,
             )
+        from pops.runtime._step_strategy import prepare_program_run
+
+        prepared_run = prepare_program_run(self)
+        self._temporal_restart_state.begin_run(
+            prepared_run.restart_payload,
+            time=self._time,
+            macro_step=self._step,
+        )
 
     @property
     def last_run_identity(self):
@@ -229,7 +258,10 @@ class _Executor:
 
     def local_boxes(self, block):
         assert block == "fluid"
-        return [(0, 0, self._nx - 1, self._ny - 1)]
+        return [((0, 0), (self._nx, self._ny))]
+
+    def spatial_shape(self):
+        return self._nx, self._ny
 
     def _output_geometry_snapshot(self, origin, spacing, shape, cell_measure):
         assert tuple(shape) == (self._nx, self._ny)
@@ -296,6 +328,10 @@ class _Executor:
             "t": self._time,
             "macro_step": self._step,
             "abi_key": abi_key(),
+            "temporal_restart_state": self._temporal_restart_state.checkpoint_json(
+                time=self._time,
+                macro_step=self._step,
+            ),
         }
         seal_checkpoint_payload(self, payload, runtime_kind="uniform")
         target = path if str(path).endswith(".npz") else str(path) + ".npz"
@@ -304,7 +340,13 @@ class _Executor:
         return target
 
     def restart(self, path):
-        prepared = self._prepare_checkpoint_restart(Path(path).read_bytes(), bit_identical=False)
+        from pops.output._checkpoint_collective import _bounded_checkpoint_path_bytes
+        from pops.runtime._checkpoint_resource_budget import require_checkpoint_resource_budget
+
+        budget = require_checkpoint_resource_budget(self).max_archive_bytes
+        prepared = self._prepare_checkpoint_restart(
+            _bounded_checkpoint_path_bytes(Path(path), budget), bit_identical=False
+        )
         self._begin_checkpoint_restart()
         result = self._apply_checkpoint_restart(prepared)
         self._commit_checkpoint_restart()
@@ -313,21 +355,29 @@ class _Executor:
 
     def _prepare_checkpoint_restart(self, payload, *, bit_identical):
         from pops.output._checkpoint_collective import decode_checkpoint_bytes
+        from pops.runtime._checkpoint_resource_budget import require_checkpoint_resource_budget
         from pops.runtime._checkpoint_manifest import authenticate_checkpoint_payload
 
         if type(bit_identical) is not bool:
             raise TypeError("test restart bit_identical must be an exact bool")
         self._prepared_restart_bit_identical = bit_identical
-        stored = decode_checkpoint_bytes(payload)
+        stored = decode_checkpoint_bytes(payload, require_checkpoint_resource_budget(self))
         identity = authenticate_checkpoint_payload(self, stored, runtime_kind="uniform")
-        return identity, float(stored["t"]), int(stored["macro_step"])
+        temporal = TemporalRestartState.from_json(
+            stored["temporal_restart_state"],
+            time=stored["t"],
+            macro_step=stored["macro_step"],
+            program_schedule=self._temporal_restart_state.program_schedule,
+        )
+        return identity, float(stored["t"]), int(stored["macro_step"]), temporal
 
     def _begin_checkpoint_restart(self):
         self._begin_step_transaction()
         self._restart_identity_snapshot = self._last_restart_identity
+        self._restart_temporal_snapshot = self._temporal_restart_state
 
     def _apply_checkpoint_restart(self, prepared):
-        identity, self._time, self._step = prepared
+        identity, self._time, self._step, self._temporal_restart_state = prepared
         self._last_restart_identity = identity
         return identity
 
@@ -337,11 +387,14 @@ class _Executor:
     def _finalize_checkpoint_restart(self):
         self._finalize_step_transaction()
         del self._restart_identity_snapshot
+        del self._restart_temporal_snapshot
 
     def _rollback_checkpoint_restart(self):
         self._rollback_step_transaction()
         self._last_restart_identity = self._restart_identity_snapshot
+        self._temporal_restart_state = self._restart_temporal_snapshot
         del self._restart_identity_snapshot
+        del self._restart_temporal_snapshot
 
 
 class _CustomNPZ:
@@ -444,7 +497,7 @@ def _with_graph(
 
 def test_runtime_instance_retains_complete_multilayout_plan_without_target_dispatch():
     plan = _install(("fluid", "solid"), heterogeneous=True)
-    runtime = RuntimeInstance(plan, executor=object())
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
 
     assert runtime._layout_plan is plan.artifact.layout_plan
     assert runtime._runtime_plan.layout_plan_id == runtime._layout_plan.qualified_id
@@ -454,6 +507,325 @@ def test_runtime_instance_retains_complete_multilayout_plan_without_target_dispa
         runtime._runtime_plan.communication.transfers[0].provider_id
         == runtime._layout_plan.mappings[0].provider_id
     )
+
+
+def test_runtime_instance_refuses_executor_without_checkpoint_resource_authority():
+    plan = _install(("fluid", "solid"), heterogeneous=True)
+
+    with pytest.raises(TypeError, match="lacks its authenticated checkpoint resource authority"):
+        RuntimeInstance(plan, executor=object())
+
+
+def test_checkpoint_budget_uses_authenticated_artifact_block_metadata():
+    """The local Program is not a substitute for the artifact's block authority."""
+    from pops.runtime._checkpoint_resource_budget import _program_for_install
+    from tests.python.unit.codegen._typed_artifact_fixture import CompiledComponent
+
+    template = _planning_artifact(("ions", "electrons"))
+    local_program = CompiledComponent("checkpoint-budget-local-program", target="system")
+    local_program.program = object()
+    local_program.program_block_routes = ((0, "ions"), (1, "electrons"))
+
+    def reject_local_arguments():
+        raise AssertionError("checkpoint budgeting must not read local Program arguments")
+
+    local_program.arguments = reject_local_arguments
+    layout_program = CompiledLayoutProgram(
+        template.layout_programs[0].layout_id,
+        "system",
+        ("ions", "electrons"),
+        local_program,
+    )
+    artifact = CompiledSimulationArtifact(
+        template.plan,
+        local_program,
+        template.blocks,
+        (layout_program,),
+    )
+    artifact.verify()
+
+    program, components = _program_for_install(SimpleNamespace(artifact=artifact))
+
+    assert program is local_program.program
+    assert components == {"ions": 1, "electrons": 1}
+
+
+def test_uniform_checkpoint_budget_reserves_lazy_schedule_cache_from_program_authority():
+    from pops.runtime._checkpoint_resource_budget import _common_budget
+
+    class Native:
+        def __init__(self, live_nodes=(), name="node_17"):
+            self.live_nodes = live_nodes
+            self.name = name
+
+        @staticmethod
+        def variable_names(block, space):
+            assert (block, space) == ("fluid", "conservative")
+            return ("rho",)
+
+        def program_cache_nodes(self):
+            return self.live_nodes
+
+        def program_cache_name(self, node):
+            assert node == 17
+            return self.name
+
+        @staticmethod
+        def program_cache_ncomp(node):
+            assert node == 17
+            return 1
+
+        @staticmethod
+        def program_cache_ngrow(node):
+            assert node == 17
+            return 9
+
+    class Program:
+        def __init__(self, cache_required):
+            self.cache_required = cache_required
+            self._histories = {}
+            self._histories_ncomp = {}
+            self._history_blocks = {}
+
+        def temporal_manifest(self):
+            return {
+                "schedules": [
+                    {"node_id": 17, "schedule": {"kind": "hold"}, "cache_required": self.cache_required}
+                ]
+            }
+
+    install_plan = SimpleNamespace(
+        artifact=SimpleNamespace(
+            artifact_identity=SimpleNamespace(token="artifact"),
+            plan=SimpleNamespace(consumer_graph=None),
+        ),
+        bind_identity=SimpleNamespace(token="bind"),
+    )
+
+    def budget(owner, program):
+        return _common_budget(
+            owner,
+            install_plan,
+            runtime_kind="uniform",
+            cells=(6,),
+            shape=(2, 3),
+            rank_capacity=1,
+            auxiliary_metadata_bytes=0,
+            auxiliary_components=0,
+            accepted_program_bytes=0,
+            source_authority_bytes=0,
+            structural_bytes=0,
+            field_provider_manifest_characters=0,
+            program=program,
+            block_nvars_by_name={"fluid": 1},
+            field_names=(),
+        )
+
+    no_cache = budget(SimpleNamespace(_s=Native()), Program(cache_required=False))
+    before_run = budget(SimpleNamespace(_s=Native()), Program(cache_required=True))
+    after_run = budget(SimpleNamespace(_s=Native((17,))), Program(cache_required=True))
+
+    assert before_run.max_members == no_cache.max_members + 5
+    assert before_run == after_run
+    assert before_run.max_uncompressed_bytes > no_cache.max_uncompressed_bytes
+    with pytest.raises(ValueError, match="noncanonical exact node name"):
+        budget(SimpleNamespace(_s=Native((17,), name="held-density")), Program(cache_required=True))
+
+
+def test_checkpoint_history_budget_uses_installed_storage_depth_not_program_lookback():
+    from pops.runtime._checkpoint_resource_budget import _history_capacity
+
+    class Program:
+        _histories = {"blk.rate": 1}
+        _histories_ncomp = {"blk.rate": 1}
+        _history_blocks = {}
+
+    class Native:
+        @staticmethod
+        def history_names():
+            return ["blk.rate"]
+
+        @staticmethod
+        def history_depth(name):
+            assert name == "blk.rate"
+            return 2
+
+        @staticmethod
+        def history_ncomp(name):
+            assert name == "blk.rate"
+            return 1
+
+    names, _bytes, evidence = _history_capacity(
+        Program(), cells=(8, 32), amr=True, block_nvars={"blk": 1}, native=Native()
+    )
+    assert evidence == (("blk.rate", 1, 2),)
+    assert "history_blk.rate_level_0_0" in names
+    assert "history_blk.rate_level_0_1" in names
+    assert "history_blk.rate_level_1_0" in names
+    assert "history_blk.rate_level_1_1" in names
+
+    class WrongNames(Native):
+        @staticmethod
+        def history_names():
+            return ["other.rate"]
+
+    with pytest.raises(ValueError, match="names differ"):
+        _history_capacity(
+            Program(), cells=(8,), amr=False, block_nvars={"blk": 1}, native=WrongNames()
+        )
+
+    class WrongComponents(Native):
+        @staticmethod
+        def history_ncomp(name):
+            return 2
+
+    with pytest.raises(ValueError, match="component width differs"):
+        _history_capacity(
+            Program(), cells=(8,), amr=False, block_nvars={"blk": 1}, native=WrongComponents()
+        )
+
+
+def test_checkpoint_budget_projects_opaque_consumer_evidence_to_canonical_hex():
+    from pops.identity import canonical_bytes
+    from pops.runtime._checkpoint_resource_budget import _consumer_evidence
+
+    consumer_data = {
+        "schema_version": 2,
+        "nodes": [{"operation": {"opaque_state": b"\x00\xff\x80checkpoint"}}],
+    }
+    graph = SimpleNamespace(
+        identity=SimpleNamespace(token="consumer-graph-identity"),
+        nodes=(),
+        to_data=lambda: consumer_data,
+    )
+    install_plan = SimpleNamespace(
+        artifact=SimpleNamespace(plan=SimpleNamespace(consumer_graph=graph))
+    )
+
+    identity, count, evidence = _consumer_evidence(install_plan)
+
+    assert (identity, count) == ("consumer-graph-identity", 0)
+    assert evidence == {
+        "encoding": "pops-canonical-cbor-hex-v1",
+        "payload": canonical_bytes(consumer_data).hex(),
+    }
+    assert bytes.fromhex(evidence["payload"]) == canonical_bytes(consumer_data)
+    json.dumps(evidence, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def test_checkpoint_zip64_capacity_uses_reviewed_checked_formula():
+    from pops.runtime._checkpoint_resource_budget import (
+        _amr_field_provider_manifest_capacity,
+        _archive_byte_capacity,
+        _checkpoint_member_names,
+    )
+
+    uncompressed = 4_321_987
+    names = ("state_fluid", "pops_checkpoint_manifest", "pops_restart_identity")
+
+    assert _archive_byte_capacity(uncompressed, names, where="test") == (
+        uncompressed
+        + (uncompressed >> 12)
+        + (uncompressed >> 14)
+        + (uncompressed >> 25)
+        + 145 * len(names)
+        + 2 * sum(map(len, names))
+        + 98
+    )
+
+    field_row = [
+        "pops.amr.field-provider-checkpoint-manifest@1",
+        "field-slot-\N{GREEK SMALL LETTER PHI}",
+        "2",
+        "provider-identity",
+        "plan-identity",
+        "configuration-identity",
+        "17",
+        "23",
+        "materialized",
+        "output-owner",
+        "fluid",
+        "phi",
+        "1",
+        "dependency-identity",
+        "fluid",
+        "rho",
+        "1",
+        "fluid",
+        "boundary-phi",
+    ]
+    owner = SimpleNamespace(
+        _s=SimpleNamespace(field_provider_checkpoint_manifest=lambda: [field_row])
+    )
+    field_slots, manifest_characters, structural_bytes = _amr_field_provider_manifest_capacity(
+        owner, configured_levels=12
+    )
+    maximal_row = list(field_row)
+    maximal_row[2] = "12"
+    maximal_row[6] = str((1 << 64) - 1)
+    maximal_row[7] = str((1 << 64) - 1)
+    maximal_row[8] = "unmaterialized"
+    maximal_text = json.dumps((tuple(maximal_row),), separators=(",", ":"), ensure_ascii=True)
+
+    assert field_slots == (field_row[1],)
+    assert manifest_characters == len(maximal_text)
+    assert structural_bytes == len(maximal_text) * np.dtype("U1").itemsize
+    uniform_member_names = _checkpoint_member_names(
+        runtime_kind="uniform",
+        block_names=("fluid",),
+        field_names=(),
+        history_names=(),
+        cache_names=(),
+        levels=1,
+        rank_capacity=1,
+    )
+    member_names = _checkpoint_member_names(
+        runtime_kind="amr",
+        block_names=("fluid",),
+        field_names=field_slots,
+        history_names=(),
+        cache_names=(),
+        levels=12,
+        rank_capacity=2,
+    )
+    assert uniform_member_names.count("checkpoint_migration") == 1
+    assert member_names.count("checkpoint_migration") == 0
+    assert member_names.count("field_provider_manifest") == 1
+
+
+@pytest.mark.parametrize(
+    ("shape", "bounds"),
+    (
+        ((7,), ((1,), (6,))),
+        ((7, 9), ((1, 2), (6, 8))),
+        ((7, 9, 11), ((1, 2, 3), (6, 8, 10))),
+    ),
+)
+def test_local_boxes_preserve_exact_ranked_half_open_bounds(shape, bounds):
+    runtime = object.__new__(RuntimeInstance)
+    runtime._executor = SimpleNamespace(
+        spatial_shape=lambda: shape,
+        local_boxes=lambda block: (bounds,) if block == "fluid" else (),
+    )
+
+    assert runtime.local_boxes("fluid") == (bounds,)
+
+
+def test_local_boxes_reject_a_fixed_rank_or_non_integral_provider_shape():
+    runtime = object.__new__(RuntimeInstance)
+    runtime._executor = SimpleNamespace(
+        spatial_shape=lambda: (7, 9, 11),
+        local_boxes=lambda _block: (((0, 0), (7, 9)),),
+    )
+    with pytest.raises(TypeError, match="exact rank 3"):
+        runtime.local_boxes("fluid")
+
+    runtime._executor = SimpleNamespace(
+        spatial_shape=lambda: (7,),
+        local_boxes=lambda _block: (((0.0,), (7,)),),
+    )
+    with pytest.raises(TypeError, match="plain integer"):
+        runtime.local_boxes("fluid")
 
 
 def test_private_engines_expose_no_scientific_output_policy_surface():
@@ -490,8 +862,7 @@ def test_runtime_instance_inspection_exposes_install_and_consumer_evidence():
     assert payload["runtime_environment"]["dimension"] == 2
     assert payload["runtime_environment"]["supported_dimensions"] == [2]
     assert payload["instance"]["native_spatial_layouts"] == {
-        layout_id: row.to_data()
-        for layout_id, row in plan.artifact.native_layouts.items()
+        layout_id: row.to_data() for layout_id, row in plan.artifact.native_layouts.items()
     }
     assert payload["instance"]["runtime_plan"] == runtime._runtime_plan.to_data()
     assert (
@@ -530,6 +901,145 @@ def test_checkpoint_graph_provider_is_the_resolved_restart_authority(tmp_path):
     assert authority.to_data()["operation"] == dict(manifest.operation_data)
     assert runtime._restart_operation() is authority.operation
     assert graph.to_data()["identity"] == runtime.consumer_graph.to_data()["identity"]
+
+
+def test_checkpoint_uses_explicit_precreated_inode_seam(monkeypatch, tmp_path):
+    from pops.output._checkpoint_collective import write_precreated_checkpoint_payload
+    from pops.runtime._checkpoint_manifest import seal_checkpoint_payload
+    from pops.runtime._engine_descriptors import abi_key
+
+    plan, _, _ = _with_graph(
+        tmp_path,
+        kind=ConsumerKind.CHECKPOINT,
+        output_format=None,
+        operation=RestartV3(),
+    )
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+    runtime._executor._last_run_identity = make_identity(
+        "run", {"test": "checkpoint-precreated-inode-seam"}
+    )
+    evidence = {}
+
+    def checkpoint_precreated(path, *, precreated_descriptor):
+        assert type(precreated_descriptor) is int
+        before = os.fstat(precreated_descriptor)
+        payload = {
+            "t": runtime._executor._time,
+            "macro_step": runtime._executor._step,
+            "abi_key": abi_key(),
+        }
+        seal_checkpoint_payload(runtime._executor, payload, runtime_kind="uniform")
+        write_precreated_checkpoint_payload(precreated_descriptor, payload)
+        after = os.fstat(precreated_descriptor)
+        evidence.update(
+            path=Path(path),
+            owner=(int(before.st_dev), int(before.st_ino)),
+            after=(int(after.st_dev), int(after.st_ino)),
+        )
+        return str(path)
+
+    monkeypatch.setattr(
+        runtime._executor,
+        "_checkpoint_precreated_inode",
+        checkpoint_precreated,
+        raising=False,
+    )
+
+    assert runtime.checkpoint(tmp_path / "restart") == str(tmp_path / "restart.npz")
+    assert evidence["owner"] == evidence["after"]
+    assert not evidence["path"].exists()
+    assert (tmp_path / "restart.npz").is_file()
+
+
+def test_precreated_checkpoint_write_failure_closes_only_the_helper_owned_duplicate(
+    monkeypatch, tmp_path
+):
+    from pops.output import _checkpoint_collective
+
+    descriptor = os.open(tmp_path / "precreated.npz", os.O_CREAT | os.O_RDWR, 0o600)
+    real_close = os.close
+    real_dup = os.dup
+    real_fdopen = os.fdopen
+    duplicated = []
+    explicit_closes = []
+    fdopen_closefds = []
+
+    def record_dup(source):
+        duplicate = real_dup(source)
+        duplicated.append(duplicate)
+        return duplicate
+
+    def record_close(target):
+        explicit_closes.append(target)
+        real_close(target)
+
+    def record_fdopen(target, mode, *, closefd):
+        fdopen_closefds.append(closefd)
+        return real_fdopen(target, mode, closefd=closefd)
+
+    def fail_save(*_args, **_kwargs):
+        raise RuntimeError("injected NPZ write failure")
+
+    monkeypatch.setattr(_checkpoint_collective.os, "dup", record_dup)
+    monkeypatch.setattr(_checkpoint_collective.os, "close", record_close)
+    monkeypatch.setattr(_checkpoint_collective.os, "fdopen", record_fdopen)
+    monkeypatch.setattr(np, "savez_compressed", fail_save)
+    try:
+        with pytest.raises(RuntimeError, match="injected NPZ write failure"):
+            _checkpoint_collective.write_precreated_checkpoint_payload(
+                descriptor, {"value": np.array([1], dtype=np.int64)}
+            )
+
+        assert len(duplicated) == 1
+        assert fdopen_closefds == [False]
+        assert explicit_closes == [duplicated[0]]
+        with pytest.raises(OSError):
+            os.fstat(duplicated[0])
+        assert os.fstat(descriptor).st_ino > 0
+    finally:
+        real_close(descriptor)
+
+
+def test_precreated_checkpoint_fdopen_failure_closes_only_the_owned_duplicate(monkeypatch, tmp_path):
+    from pops.output import _checkpoint_collective
+
+    descriptor = os.open(tmp_path / "precreated.npz", os.O_CREAT | os.O_RDWR, 0o600)
+    real_close = os.close
+    real_dup = os.dup
+    duplicated = []
+    explicit_closes = []
+
+    def record_dup(source):
+        duplicate = real_dup(source)
+        duplicated.append(duplicate)
+        return duplicate
+
+    def record_close(target):
+        explicit_closes.append(target)
+        real_close(target)
+
+    def fail_fdopen(target, mode, *, closefd):
+        assert target == duplicated[0]
+        assert mode == "wb"
+        assert closefd is False
+        raise RuntimeError("injected fdopen construction failure")
+
+    monkeypatch.setattr(_checkpoint_collective.os, "dup", record_dup)
+    monkeypatch.setattr(_checkpoint_collective.os, "close", record_close)
+    monkeypatch.setattr(_checkpoint_collective.os, "fdopen", fail_fdopen)
+    try:
+        with pytest.raises(RuntimeError, match="injected fdopen construction failure"):
+            _checkpoint_collective.write_precreated_checkpoint_payload(
+                descriptor, {"value": np.array([1], dtype=np.int64)}
+            )
+
+        assert len(duplicated) == 1
+        assert explicit_closes == [duplicated[0]]
+        with pytest.raises(OSError):
+            os.fstat(duplicated[0])
+        assert os.fstat(descriptor).st_ino > 0
+    finally:
+        real_close(descriptor)
 
 
 def test_checkpoint_reseal_failure_removes_its_owned_native_staging(monkeypatch, tmp_path):
@@ -1705,10 +2215,15 @@ def test_every_dt_restart_rederives_next_deadline_without_republishing_boundary(
     )
     runtime = RuntimeInstance(plan, executor=_Executor(plan))
     runtime._run(t_end=0.5, max_steps=2)
+    source_temporal = runtime._executor._temporal_restart_state.to_data()
     checkpoint = runtime.checkpoint(tmp_path / "physical-cadence-restart")
 
     restored = RuntimeInstance(plan, executor=_Executor(plan))
     restored.restart(checkpoint)
+    restored_temporal = restored._executor._temporal_restart_state
+    assert restored_temporal.time_hex == (0.5).hex()
+    assert restored_temporal.macro_step == 2
+    assert restored_temporal.to_data() == source_temporal
     report = restored._run(t_end=0.75, max_steps=1)
 
     assert report.accepted_steps == 1
@@ -2054,30 +2569,69 @@ def test_checkpoint_restore_invalidates_geometry_after_native_topology_restore(m
             assert data == ("canonical",)
             events.append("diagnostics")
 
+        @staticmethod
+        def diagnostic_restart_state():
+            return ("before",)
+
     class _SnapshotBuilder:
+        def __init__(self):
+            self._geometry_cache = {}
+
         @staticmethod
         def invalidate_geometry_cache():
             events.append("geometry")
 
-    def restore_checkpoint_payload(owner, executor, payload, *, bit_identical, phase_prefix):
-        assert executor is native
+    def restore_checkpoint_payload(
+        runtime,
+        executor,
+        payload,
+        *,
+        bit_identical,
+        hierarchy_mode,
+        hierarchy_identity,
+        phase_prefix,
+        prepare_outer_state,
+        after_native_apply,
+        rollback_after_native_apply,
+    ):
+        assert runtime is owner and executor is native
         assert payload == b"checkpoint"
         assert bit_identical is True
+        assert hierarchy_mode == "restore_recorded_hierarchy"
+        assert hierarchy_identity is None
         assert phase_prefix == "native restart"
+        assert callable(prepare_outer_state)
+        assert callable(after_native_apply)
+        assert callable(rollback_after_native_apply)
+        prepare_outer_state()
         events.append("native")
-        return "restored"
+        result = "restored"
+        after_native_apply(result)
+        return result
 
     class _Native:
+        def __init__(self):
+            self._last_run_manifest = None
+            self._last_run_identity = None
+            self._restart_lineage_identity = None
+
         @staticmethod
         def _restore_checkpoint_run_identity(identity):
             assert identity == source_run_identity
             events.append("run")
 
     native = _Native()
+    from pops.runtime._checkpoint_resource_budget import _producer_checkpoint_resource_budget
+
+    resource_budget = _producer_checkpoint_resource_budget(
+        {"checkpoint": np.frombuffer(b"checkpoint", dtype=np.uint8)},
+        runtime_kind="uniform",
+        authority="test-runtime-restore",
+    )
     monkeypatch.setattr(
         _checkpoint_collective,
         "decode_checkpoint_bytes",
-        lambda payload: {
+        lambda _payload, _budget: {
             "runtime_consumer_diagnostics": np.array(json.dumps({"schema_version": 1}))
         },
     )
@@ -2094,6 +2648,7 @@ def test_checkpoint_restore_invalidates_geometry_after_native_topology_restore(m
         _snapshot_builder=_SnapshotBuilder(),
         _publisher=_Publisher(),
         _consumer_cursors=None,
+        _checkpoint_resource_budget=resource_budget,
     )
 
     assert (
@@ -2351,7 +2906,7 @@ def test_regrid_restart_derives_distinct_run_identity_from_global_receipt(monkey
     restart_identity = make_identity("restart", {"test": "checkpoint"})
     hierarchy = RegridOnRestart()
     receipt = {
-        "schema_version": 2,
+        "schema_version": 3,
         "policy_identity": hierarchy.identity.token,
         "changed": True,
         "accepted_time": 0.5,
@@ -2370,9 +2925,19 @@ def test_regrid_restart_derives_distinct_run_identity_from_global_receipt(monkey
         "history_consensus_identity_after": make_identity(
             "restart-history-image", {"phase": "after"}
         ).token,
+        "field_manifest_identity_before": make_identity(
+            "restart-field-provider-manifest", {"phase": "before"}
+        ).token,
+        "field_manifest_identity_after": make_identity(
+            "restart-field-provider-manifest", {"phase": "after"}
+        ).token,
+        "field_manifest_before": [],
+        "field_manifest_after": [],
+        "field_recompute_witness": [],
         "composite_integrals_before": [{"block": "tracer", "component": 0, "value": 1.25}],
         "composite_integrals_after": [{"block": "tracer", "component": 0, "value": 1.25}],
     }
+    events = []
     published = []
 
     class _Publisher:
@@ -2382,14 +2947,26 @@ def test_regrid_restart_derives_distinct_run_identity_from_global_receipt(monkey
 
         @staticmethod
         def restore_diagnostic_restart_state(_data):
-            return None
+            events.append("diagnostics")
+
+        @staticmethod
+        def diagnostic_restart_state():
+            return {"schema_version": 1}
 
     class _SnapshotBuilder:
+        def __init__(self):
+            self._geometry_cache = {}
+
         @staticmethod
         def invalidate_geometry_cache():
-            return None
+            events.append("geometry")
 
     class _Native:
+        def __init__(self):
+            self._last_run_manifest = None
+            self._last_run_identity = None
+            self._restart_lineage_identity = None
+
         @staticmethod
         def last_restart_regrid_receipt():
             return receipt
@@ -2397,6 +2974,7 @@ def test_regrid_restart_derives_distinct_run_identity_from_global_receipt(monkey
         @staticmethod
         def _restore_checkpoint_run_identity(identity):
             published.append(identity)
+            events.append("run")
 
     def restore_checkpoint_payload(
         owner,
@@ -2407,25 +2985,43 @@ def test_regrid_restart_derives_distinct_run_identity_from_global_receipt(monkey
         hierarchy_mode,
         hierarchy_identity,
         phase_prefix,
+        prepare_outer_state,
+        after_native_apply,
+        rollback_after_native_apply,
     ):
         assert owner is runtime and executor is native
         assert payload == b"checkpoint" and bit_identical is False
         assert hierarchy_mode == "regrid_on_restart"
         assert hierarchy_identity == hierarchy.identity.token
         assert phase_prefix == "native restart"
-        return _AMRRegridRestartEvidence(restart_identity, receipt)
+        assert callable(prepare_outer_state)
+        assert callable(after_native_apply)
+        assert callable(rollback_after_native_apply)
+        prepare_outer_state()
+        events.append("native")
+        result = _AMRRegridRestartEvidence(restart_identity, receipt)
+        after_native_apply(result)
+        return result
 
     native = _Native()
+    from pops.runtime._checkpoint_resource_budget import _producer_checkpoint_resource_budget
+
+    resource_budget = _producer_checkpoint_resource_budget(
+        {"checkpoint": np.frombuffer(b"checkpoint", dtype=np.uint8)},
+        runtime_kind="amr",
+        authority="test-amr-regrid-restore",
+    )
     runtime = SimpleNamespace(
         _executor=native,
         _snapshot_builder=_SnapshotBuilder(),
         _publisher=_Publisher(),
         _consumer_cursors=None,
+        _checkpoint_resource_budget=resource_budget,
     )
     monkeypatch.setattr(
         _checkpoint_collective,
         "decode_checkpoint_bytes",
-        lambda _payload: {
+        lambda _payload, _budget: {
             "runtime_consumer_diagnostics": np.array(json.dumps({"schema_version": 1}))
         },
     )
@@ -2453,6 +3049,7 @@ def test_regrid_restart_derives_distinct_run_identity_from_global_receipt(monkey
     assert len(published) == 1
     assert published[0].domain == "run"
     assert published[0] != source_run_identity
+    assert events == ["native", "geometry", "diagnostics", "run"]
     receipt_identity = {
         **receipt,
         "accepted_time": receipt["accepted_time"].hex(),

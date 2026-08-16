@@ -638,6 +638,11 @@ def _run(command: list[str], *, env: dict[str, str] | None = None) -> None:
 
 def _required_environment() -> dict[str, str]:
     environment = os.environ.copy()
+    if environment.get("POPS_NATIVE_DIM") != "2":
+        raise RuntimeError(
+            "M4 execution requires launcher-provided POPS_NATIVE_DIM=2; "
+            "native dimension inference is forbidden"
+        )
     environment["POPS_REQUIRE_MPI_TESTS"] = "1"
     environment["POPS_REQUIRE_NATIVE_TESTS"] = "1"
     root = str(ROOT)
@@ -655,7 +660,21 @@ def _required_environment() -> dict[str, str]:
 def _mpi_python_command(mpi_exec: str, nproc: int, relative: str) -> list[str]:
     if shutil.which(mpi_exec) is None:
         raise RuntimeError("required MPI launcher %r is unavailable" % mpi_exec)
-    return [mpi_exec, "-n", str(nproc), sys.executable, str(ROOT / relative)]
+    bootstrap = (
+        "from pops._native_selector import select_native_dimension; "
+        "select_native_dimension(2); "
+        "import runpy, sys; "
+        "runpy.run_path(sys.argv[1], run_name='__main__')"
+    )
+    return [
+        mpi_exec,
+        "-n",
+        str(nproc),
+        sys.executable,
+        "-c",
+        bootstrap,
+        str(ROOT / relative),
+    ]
 
 
 def _junit_skip_count(report: Path, producer: str) -> int:

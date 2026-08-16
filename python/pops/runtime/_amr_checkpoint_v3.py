@@ -4,14 +4,15 @@ The sealed payload preserves owner-rank mappings, all block/level state, aux and
 regrid counters, qualified history rings, rational clocks, lagged flux publications, level relations
 and transfer-plan provenance. Restore is transactional: ``bit_identical=True`` requires the recorded
 rank topology, while the default exact-geometry policy may rematerialize hierarchy ownership and
-rank-owned Program state for a new MPI cardinality. Rank-count changes require every persisted
+the canonical Program state for a new MPI cardinality. Rank-count changes require every persisted
 history ring to be Dense because selective replay is a same-rank operation. Historical or weaker
 fallback formats are refused.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 import hashlib
+import json
 from typing import Any, TypeVar, cast
 
 from pops._generated_release_contract import AMR_CHECKPOINT_PAYLOAD_VERSION as _VERSION
@@ -25,8 +26,10 @@ class _PreparedAMRRestart:
     temporal_state: Any
     cadence_state: Any
     program_state: Any
-    source_program_states: tuple[bytes, ...]
+    source_program_state: bytes
+    source_level_distribution_modes: tuple[str, ...]
     source_level_owner_ranks: tuple[tuple[int, ...], ...]
+    source_program_authority: bytes
     checkpoint_ranks: int
     regrid_count: int
     topology_epoch: int
@@ -35,7 +38,7 @@ class _PreparedAMRRestart:
     owner_ranks: tuple[int, ...]
     multi: bool
     state_payload: tuple[Any, ...]
-    aux_payload: tuple[Any, ...]
+    auxiliary_checkpoint_payload: tuple[bytes, ...]
     potential_payload: tuple[Any, ...]
     field_payload: tuple[Any, ...]
     hierarchy_mode: str
@@ -52,11 +55,202 @@ class _PreparedAMRCapture:
     configured_levels: int
     field_slots: tuple[str, ...]
     field_levels: tuple[int, ...]
+    phi_provider_slot: str
+    field_manifest: tuple[tuple[str, ...], ...]
     history_plan: Any
     topology: Any
+    local_distribution_modes: tuple[str, ...]
     local_dmaps: tuple[tuple[int, ...], ...]
     local_program_state: bytes
     capture_identity: str
+
+
+def _preflight_current_base_distribution(
+    sim,
+    recorded_topology,
+    *,
+    checkpoint_ranks: int,
+    current_ranks: int,
+) -> tuple[str, tuple[int, ...]]:
+    """Bind recorded ownership to the already-materialized target coarse layout.
+
+    A rank-count change can legitimately choose a different *target* partition for the
+    same coarse geometry.  It cannot change a distribution mode, leave a partition
+    map incomplete, or make a replicated level carry owners.  The archived source map
+    remains the sole source-side authority and is compared byte-for-byte only when the
+    communicator cardinality is unchanged.
+    """
+    from pops.runtime._amr_checkpoint_topology import RecordedRankTopology
+
+    if not isinstance(recorded_topology, RecordedRankTopology):
+        raise TypeError("restart: AMR base distribution requires RecordedRankTopology")
+    if type(checkpoint_ranks) is not int or checkpoint_ranks < 1:
+        raise ValueError("restart: AMR checkpoint rank count must be a positive exact integer")
+    if type(current_ranks) is not int or current_ranks < 1:
+        raise ValueError("restart: AMR current rank count must be a positive exact integer")
+    mode_provider = getattr(sim, "level_distribution_mode", None)
+    owner_provider = getattr(sim, "level_owner_ranks", None)
+    coarse_count_provider = getattr(sim, "coarse_total_boxes", None)
+    if (
+        not callable(mode_provider)
+        or not callable(owner_provider)
+        or not callable(coarse_count_provider)
+    ):
+        raise TypeError("restart: AMR engine lacks exact coarse distribution topology accessors")
+    mode = mode_provider(0)
+    if type(mode) is not str or mode not in {"replicated", "partitioned"}:
+        raise ValueError("restart: current coarse distribution mode is invalid")
+    raw_owners = owner_provider(0)
+    if isinstance(raw_owners, (str, bytes)) or not isinstance(raw_owners, Iterable):
+        raise TypeError("restart: current coarse owner map must be an ordered integer carrier")
+    owners = tuple(raw_owners)
+    if any(type(rank) is not int for rank in owners):
+        raise TypeError("restart: current coarse owner map must contain exact integers")
+    coarse_count = coarse_count_provider()
+    if type(coarse_count) is not int or coarse_count < 1:
+        raise ValueError("restart: current coarse box count must be a positive exact integer")
+    recorded_mode = recorded_topology.level_distribution_modes[0]
+    recorded_owners = recorded_topology.level_owner_ranks[0]
+    if mode != recorded_mode:
+        raise ValueError("restart: recorded coarse distribution mode differs from current composition")
+    if mode == "replicated":
+        if owners:
+            raise ValueError("restart: replicated current coarse level has owner entries")
+    else:
+        if len(recorded_owners) != coarse_count:
+            raise ValueError(
+                "restart: recorded coarse owner map has %d entries, expected %d"
+                % (len(recorded_owners), coarse_count)
+            )
+        if len(owners) != coarse_count:
+            raise ValueError(
+                "restart: current coarse owner map has %d entries, expected %d"
+                % (len(owners), coarse_count)
+            )
+        if any(rank < 0 or rank >= current_ranks for rank in owners):
+            raise ValueError(
+                "restart: current coarse owner map contains an owner outside [0, %d)"
+                % current_ranks
+            )
+    if checkpoint_ranks == current_ranks and owners != recorded_owners:
+        raise ValueError("restart: recorded coarse owner map differs from current composition")
+    return mode, owners
+
+
+def _encode_ranked_patch_boxes(raw_boxes, *, dimension, level_count):
+    """Flatten the live exact-ranked patch API for the fixed-width archive.
+
+    The native public seam deliberately returns ``(level, lower, upper)`` so that the
+    coordinate rank is explicit.  The archive remains a rectangular int64 matrix, but
+    only this boundary may flatten the two coordinate vectors.
+    """
+    if isinstance(dimension, bool) or not isinstance(dimension, int) or dimension < 1:
+        raise ValueError("checkpoint AMR patch-box dimension must be a positive exact integer")
+    if isinstance(level_count, bool) or not isinstance(level_count, int) or level_count < 1:
+        raise ValueError("checkpoint AMR patch-box level count must be a positive exact integer")
+    if isinstance(raw_boxes, (str, bytes)) or not isinstance(raw_boxes, Sequence):
+        raise TypeError("checkpoint AMR patch_boxes must be an ordered sequence")
+
+    ranked = []
+    flattened = []
+    seen = set()
+    previous_level = 0
+    for position, row in enumerate(raw_boxes):
+        if type(row) is not tuple or len(row) != 3:
+            raise TypeError(
+                "checkpoint AMR patch_boxes row %d must be an exact (level, lower, upper) tuple"
+                % position
+            )
+        level, raw_lower, raw_upper = row
+        if type(level) is not int:
+            raise TypeError("checkpoint AMR patch-box level %d must be an exact integer" % position)
+        if level < 1 or level >= level_count:
+            raise ValueError(
+                "checkpoint AMR patch-box level %d is outside [1, %d]"
+                % (level, level_count - 1)
+            )
+        if type(raw_lower) is not tuple or type(raw_upper) is not tuple:
+            raise TypeError(
+                "checkpoint AMR patch-box row %d bounds must be exact ranked tuples" % position
+            )
+        lower = tuple(raw_lower)
+        upper = tuple(raw_upper)
+        if len(lower) != dimension or len(upper) != dimension:
+            raise ValueError(
+                "checkpoint AMR patch-box row %d bounds must each have rank %d" % (position, dimension)
+            )
+        if any(type(value) is not int for value in lower + upper):
+            raise TypeError("checkpoint AMR patch-box row %d bounds must contain exact integers" % position)
+        if level < previous_level:
+            raise ValueError("checkpoint AMR patch_boxes level order drifted at row %d" % position)
+        previous_level = level
+        canonical = (level, lower, upper)
+        if canonical in seen:
+            raise ValueError("checkpoint AMR patch_boxes contain a duplicate row %r" % (canonical,))
+        seen.add(canonical)
+        ranked.append(canonical)
+        flattened.append((level, *lower, *upper))
+    return tuple(ranked), tuple(flattened)
+
+
+def _decode_ranked_patch_boxes(raw_boxes, *, dimension, level_count, spatial):
+    """Authenticate the fixed-width archive before recreating native ranked rows."""
+    import numpy as np
+
+    if isinstance(dimension, bool) or not isinstance(dimension, int) or dimension < 1:
+        raise ValueError("restart: AMR patch-box dimension must be a positive exact integer")
+    if isinstance(level_count, bool) or not isinstance(level_count, int) or level_count < 1:
+        raise ValueError("restart: AMR patch-box level count must be a positive exact integer")
+    boxes_array = np.asarray(raw_boxes)
+    width = 1 + 2 * dimension
+    if boxes_array.dtype != np.dtype("int64"):
+        raise TypeError("restart: patch_boxes must be an int64 matrix")
+    if boxes_array.ndim != 2 or boxes_array.shape[1] != width:
+        raise ValueError("restart: patch_boxes must contain level plus two bounds per spatial axis")
+
+    boxes = []
+    seen = set()
+    previous_level = 0
+    per_level_boxes = {level: [] for level in range(level_count)}
+    for position, row in enumerate(boxes_array):
+        level = int(row[0])
+        lower = tuple(int(value) for value in row[1 : 1 + dimension])
+        upper = tuple(int(value) for value in row[1 + dimension :])
+        if level < 1 or level >= level_count:
+            raise ValueError(
+                "restart: fine patch level %d is outside [1, %d]" % (level, level_count - 1)
+            )
+        if level < previous_level:
+            raise ValueError("restart: patch_boxes level order drifted at row %d" % position)
+        previous_level = level
+        canonical = (level, lower, upper)
+        if canonical in seen:
+            raise ValueError("restart: patch_boxes contain a duplicate row %r" % (canonical,))
+        seen.add(canonical)
+        level_shape = spatial.shape_at_level(level)
+        if any(
+            low < 0 or high < low or high >= extent
+            for low, high, extent in zip(lower, upper, level_shape, strict=True)
+        ):
+            raise ValueError(
+                "restart: invalid level-%d patch box %r for shape %r"
+                % (level, (lower, upper), level_shape)
+            )
+        for other_lower, other_upper in per_level_boxes[level]:
+            overlaps = all(
+                not (high < other_low or other_high < low)
+                for low, high, other_low, other_high in zip(
+                    lower, upper, other_lower, other_upper, strict=True
+                )
+            )
+            if overlaps:
+                raise ValueError(
+                    "restart: overlapping level-%d patch boxes %r and %r"
+                    % (level, (other_lower, other_upper), (lower, upper))
+                )
+        per_level_boxes[level].append((lower, upper))
+        boxes.append(canonical)
+    return tuple(boxes)
 
 
 def _live_amr_level_envelope(sim):
@@ -80,6 +274,21 @@ def _live_amr_level_envelope(sim):
     return active, configured
 
 
+def _exact_archive_int64_scalar(payload, key, *, label, minimum):
+    """Decode one signed int64 scalar archive authority without coercion."""
+    import numpy as np
+
+    if key not in payload:
+        raise ValueError("restart: AMR checkpoint lacks its exact %s" % label)
+    raw = np.asarray(payload[key])
+    if raw.shape != () or raw.dtype != np.dtype("int64"):
+        raise TypeError("restart: AMR %s must be an exact signed int64 scalar" % label)
+    value = int(raw.item())
+    if value < minimum:
+        raise ValueError("restart: AMR %s must be at least %d" % (label, minimum))
+    return value
+
+
 def _checkpoint_amr_level_envelope(sim, payload):
     """Authenticate a persisted active depth against the complete installed envelope."""
     stored_files = getattr(payload, "files", None)
@@ -98,15 +307,19 @@ def _checkpoint_amr_level_envelope(sim, payload):
             "restart: strict AMR checkpoint lacks level-envelope key(s) %r; "
             "historical checkpoints require offline migration" % missing
         )
-    checkpoint_active = int(payload["n_levels"])
+    checkpoint_active = _exact_archive_int64_scalar(
+        payload, "n_levels", label="active level count", minimum=1
+    )
     _current_active, current_configured = _live_amr_level_envelope(sim)
-    checkpoint_configured = int(payload["configured_n_levels"])
+    checkpoint_configured = _exact_archive_int64_scalar(
+        payload, "configured_n_levels", label="configured level count", minimum=1
+    )
     if checkpoint_configured != current_configured:
         raise ValueError(
             "restart: checkpoint configured AMR depth %d != installed configured depth %d"
             % (checkpoint_configured, current_configured)
         )
-    if checkpoint_active < 1 or checkpoint_active > checkpoint_configured:
+    if checkpoint_active > checkpoint_configured:
         raise ValueError(
             "restart: checkpoint active AMR depth %d lies outside its configured [1, %d] envelope"
             % (checkpoint_active, checkpoint_configured)
@@ -120,6 +333,36 @@ def _require_exact_field_provider_depth(slot, provider_levels, active_levels, *,
             "%s: field provider %s has %d levels; expected exactly the %d active AMR levels"
             % (phase, slot, provider_levels, active_levels)
         )
+
+
+def _field_provider_manifest(sim):
+    provider = getattr(sim, "field_provider_checkpoint_manifest", None)
+    if not callable(provider):
+        raise TypeError("AMR checkpoint requires the native field-provider manifest")
+    raw_rows = provider()
+    if not isinstance(raw_rows, Iterable):
+        raise TypeError("native AMR field-provider manifest must be iterable")
+    rows = []
+    for raw_row in raw_rows:
+        if not isinstance(raw_row, Iterable):
+            raise TypeError("native AMR field-provider manifest must contain iterable rows")
+        rows.append(tuple(str(value) for value in raw_row))
+    rows = tuple(rows)
+    seen = set()
+    for row in rows:
+        if len(row) < 14 or row[0] != "pops.amr.field-provider-checkpoint-manifest@1":
+            raise ValueError("native AMR field-provider manifest has an invalid row")
+        if row[1] in seen:
+            raise ValueError("native AMR field-provider manifest contains a duplicate slot")
+        seen.add(row[1])
+        if int(row[2]) < 1 or row[8] not in {"materialized", "unmaterialized"}:
+            raise ValueError("native AMR field-provider manifest has invalid live evidence")
+    return rows
+
+
+def _field_manifest_semantics(rows):
+    """Drop only topology/materialization evidence; retain every immutable provider fact."""
+    return tuple(row[:6] + row[9:] for row in rows)
 
 
 def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
@@ -157,12 +400,10 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
     names = tuple(str(name) for name in sim.block_names())
     if levels <= 0 or not names or len(names) != len(set(names)):
         raise ValueError("checkpoint requires non-empty unique AMR blocks and levels")
-    patch_boxes = tuple(tuple(int(value) for value in row) for row in sim.patch_boxes())
+    _ranked_patch_boxes, patch_boxes = _encode_ranked_patch_boxes(
+        sim.patch_boxes(), dimension=spatial.dimension, level_count=levels
+    )
     box_width = 1 + 2 * spatial.dimension
-    if any(len(row) != box_width for row in patch_boxes):
-        raise ValueError(
-            "checkpoint AMR patch-box rows must contain level plus two bounds per axis"
-        )
     time = float(sim.time())
     macro_step = int(sim.macro_step())
     cadence = capture_program_cadence(sim, macro_step=macro_step)
@@ -172,27 +413,39 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
     temporal_json = temporal.checkpoint_json(time=time, macro_step=macro_step)
     program_state = bytes(sim.program_accepted_state())
     accepted_contract = encode_contract(sim)
+    mode_provider = getattr(sim, "level_distribution_mode", None)
+    owner_provider = getattr(sim, "level_owner_ranks", None)
+    if not callable(mode_provider) or not callable(owner_provider):
+        raise TypeError("checkpoint AMR engine lacks exact distribution mode and owner-map accessors")
+    distribution_modes = tuple(cast(str, mode_provider(level)) for level in range(levels))
+    if any(type(mode) is not str or mode not in {"replicated", "partitioned"} for mode in distribution_modes):
+        raise ValueError("checkpoint AMR engine returned an invalid exact distribution mode")
     dmaps = tuple(
-        tuple(int(rank) for rank in sim.level_owner_ranks(level))
-        if hasattr(sim, "level_owner_ranks")
-        else ()
+        tuple(int(rank) for rank in cast(Iterable[int], owner_provider(level)))
         for level in range(levels)
     )
+    if any(
+        (mode == "replicated" and ranks) or (mode == "partitioned" and not ranks)
+        for mode, ranks in zip(distribution_modes, dmaps, strict=True)
+    ):
+        raise ValueError("checkpoint AMR engine returned a mode/map mismatch")
     nvars = tuple(int(sim.block_n_vars(name)) if multi else int(sim.n_vars()) for name in names)
     if any(value <= 0 for value in nvars):
         raise ValueError("checkpoint AMR blocks must have a positive conservative size")
-    field_slots = (
-        tuple(str(slot) for slot in sim.field_provider_slots())
-        if hasattr(sim, "field_provider_slots")
-        else ()
-    )
+    field_manifest = _field_provider_manifest(sim)
+    field_slots = tuple(row[1] for row in field_manifest)
     if len(field_slots) != len(set(field_slots)):
         raise ValueError("checkpoint AMR field-provider slots must be unique")
-    field_levels = tuple(int(sim.field_provider_levels(slot)) for slot in field_slots)
+    field_levels = tuple(int(row[2]) for row in field_manifest)
     for slot, provider_levels in zip(field_slots, field_levels, strict=True):
         _require_exact_field_provider_depth(
             slot, provider_levels, levels, phase="checkpoint capture"
         )
+    phi_provider_slot = str(sim.checkpoint_phi_provider_slot())
+    if field_slots and (not phi_provider_slot or phi_provider_slot not in field_slots):
+        raise ValueError("checkpoint AMR legacy phi member lacks an exact field-provider alias")
+    if not field_slots and phi_provider_slot:
+        raise ValueError("checkpoint AMR field-free topology has an unexpected phi-provider alias")
     history_plan = prepare_history_capture(
         sim,
         persistence or {},
@@ -201,19 +454,12 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
     )
     required_collectives = []
     if topology.distributed:
-        required_collectives.extend(
-            [
-                "block_level_state_global" if multi else "level_state_global",
-                "level_potential_global",
-                "level_aux_flat_global",
-            ]
+        required_collectives.append(
+            "block_level_state_global" if multi else "level_state_global"
         )
     else:
-        required_collectives.extend(
-            ["block_level_state" if multi else "level_state", "level_potential", "level_aux_flat"]
-        )
-    if field_slots:
-        required_collectives.append("field_potential_level_global")
+        required_collectives.append("block_level_state" if multi else "level_state")
+    required_collectives.append("field_potential_level_global")
     if any(ring.stored_slots for ring in history_plan.rings):
         required_collectives.append("history_global")
     missing_collectives = sorted(
@@ -221,6 +467,8 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
     )
     if missing_collectives:
         raise TypeError("checkpoint AMR engine lacks capture accessors %r" % missing_collectives)
+    if not callable(getattr(sim, "capture_auxiliary_checkpoint_accepted_state", None)):
+        raise TypeError("checkpoint AMR engine lacks exact auxiliary checkpoint capture")
     out = {
         "pops_amr_checkpoint_version": _VERSION,
         "t": time,
@@ -243,7 +491,10 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
         "program_hash": str(sim.installed_program_hash())
         if hasattr(sim, "installed_program_hash")
         else "",
-        "field_provider_slots": np.asarray(field_slots),
+        "field_provider_slots": np.asarray(field_slots, dtype=str),
+        "field_provider_manifest": np.asarray(
+            json.dumps(field_manifest, separators=(",", ":"), ensure_ascii=True)
+        ),
     }
     add_checkpoint_spatial_contract(out, spatial)
     out.update(cadence.to_payload())
@@ -252,7 +503,7 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
     for index, value in enumerate(field_levels):
         out["field_provider_levels_%d" % index] = value
     capture_identity = make_identity(
-        "checkpoint-capture-plan",
+        "checkpoint-capture-plan-v2",
         {
             "runtime_kind": "amr",
             "target": str(target),
@@ -267,15 +518,21 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
                 "active": levels,
                 "configured": configured_levels,
             },
+            # Authenticate the bytes-shape that will be sealed in ``patch_boxes``.  The encoder
+            # above is the sole ranked-to-flat conversion boundary.
             "patch_boxes": [list(row) for row in patch_boxes],
+            "distribution_topology_schema": 2,
             # Distribution mappings and the opaque accepted Program image contain rank-local state.
             # Only their schema participates in the collective plan; capture stores every exact rank
             # image in the single authenticated artifact below.
+            "distribution_modes": list(distribution_modes),
             "dmap_sizes": [len(row) for row in dmaps],
             "field_slots": [
                 {"name": slot, "levels": count}
                 for slot, count in zip(field_slots, field_levels, strict=True)
             ],
+            "phi_provider_slot": phi_provider_slot or None,
+            "field_provider_manifest": [list(row) for row in field_manifest],
             "program_hash": str(out["program_hash"]),
             "program_cadence": cadence.to_data(),
             "program_state_present": bool(program_state),
@@ -294,8 +551,11 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
         configured_levels,
         field_slots,
         field_levels,
+        phi_provider_slot,
+        field_manifest,
         history_plan,
         topology,
+        distribution_modes,
         dmaps,
         program_state,
         capture_identity,
@@ -319,17 +579,28 @@ def _capture_v3(owner, sim, prepared):
         if prepared.topology.distributed
         else (prepared.local_program_state,)
     )
+    if any(state != program_states[0] for state in program_states[1:]):
+        raise ValueError("checkpoint AMR accepted Program image differs across source ranks")
+    canonical_program_state = program_states[0]
     rank_rows = consensus(
         prepared.topology,
-        "AMR rank-local owner maps",
-        value={"dmaps": [list(row) for row in prepared.local_dmaps]},
+        "AMR rank-local distribution topology",
+        value={
+            "distribution_modes": list(prepared.local_distribution_modes),
+            "dmaps": [list(row) for row in prepared.local_dmaps],
+        },
     )
     rank_dmaps = []
     for row in rank_rows:
         metadata = row["value"]
-        if not isinstance(metadata, dict) or set(metadata) != {"dmaps"}:
+        if not isinstance(metadata, dict) or set(metadata) != {"distribution_modes", "dmaps"}:
             raise RuntimeError("checkpoint AMR rank-local metadata has an invalid schema")
+        modes = metadata["distribution_modes"]
         dmaps = metadata["dmaps"]
+        if not isinstance(modes, list) or any(type(mode) is not str for mode in modes):
+            raise TypeError("checkpoint AMR rank-local distribution modes must be exact strings")
+        if tuple(modes) != prepared.local_distribution_modes:
+            raise ValueError("checkpoint AMR rank-local distribution modes disagree with its capture plan")
         if not isinstance(dmaps, list) or len(dmaps) != prepared.levels:
             raise ValueError("checkpoint AMR rank-local owner maps have an invalid level count")
         normalized_dmaps = []
@@ -339,23 +610,44 @@ def _capture_v3(owner, sim, prepared):
             ):
                 raise TypeError("checkpoint AMR rank-local owner map must contain integers")
             normalized_dmaps.append(tuple(ranks))
-        rank_dmaps.append(tuple(normalized_dmaps))
-    if any(dmaps != rank_dmaps[0] for dmaps in rank_dmaps[1:]):
-        raise ValueError("checkpoint AMR owner maps disagree across source ranks")
+        rank_dmaps.append((tuple(modes), tuple(normalized_dmaps)))
+    if any(topology != rank_dmaps[0] for topology in rank_dmaps[1:]):
+        raise ValueError("checkpoint AMR distribution topology disagrees across source ranks")
+    rank_modes, canonical_dmaps = rank_dmaps[0]
     if prepared.local_program_state:
         rematerialize = getattr(sim, "rematerialize_program_accepted_state", None)
+        source_authority_provider = getattr(sim, "program_accepted_state_source_authority", None)
         if not callable(rematerialize):
             raise TypeError("checkpoint AMR engine lacks accepted-state consensus validation")
+        if not callable(source_authority_provider):
+            raise TypeError("checkpoint AMR engine lacks accepted-state source authority")
+        raw_source_authority = source_authority_provider(
+            canonical_dmaps, rank_modes, prepared.topology.size
+        )
+        if not isinstance(raw_source_authority, (bytes, bytearray, memoryview)):
+            raise TypeError("checkpoint AMR engine returned non-bytes source authority")
+        source_authority = bytes(raw_source_authority)
+        if not source_authority:
+            raise RuntimeError("checkpoint AMR engine returned an empty source authority")
         # Re-materializing onto the unchanged ownership is a non-mutating validation pass. It
         # authenticates every rank-independent accepted field, including persistent tagging,
         # before any rank may seal or publish a checkpoint.
-        rematerialize(program_states, rank_dmaps[0], rank_dmaps[0])
-    for rank, dmaps in enumerate(rank_dmaps):
-        out["program_accepted_state_rank_%d" % rank] = np.frombuffer(
-            program_states[rank], dtype=np.uint8
+        rematerialize(
+            canonical_program_state,
+            prepared.topology.size,
+            canonical_dmaps,
+            canonical_dmaps,
+            rank_modes,
+            rank_modes,
+            source_authority,
+        )
+        out["program_accepted_state_source_authority"] = np.frombuffer(
+            source_authority, dtype=np.uint8
         ).copy()
-        for level, ranks in enumerate(dmaps):
-            out["dmap_rank_%d_level_%d" % (rank, level)] = np.asarray(ranks, dtype=np.int64)
+    out["program_accepted_state"] = np.frombuffer(canonical_program_state, dtype=np.uint8).copy()
+    for level, (mode, ranks) in enumerate(zip(rank_modes, canonical_dmaps, strict=True)):
+        out["distribution_mode_%d" % level] = np.asarray(mode)
+        out["dmap_%d" % level] = np.asarray(ranks, dtype=np.int64)
     if prepared.multi:
         for name in prepared.names:
             for level in range(prepared.levels):
@@ -372,11 +664,12 @@ def _capture_v3(owner, sim, prepared):
                 sim.level_state_global(level) if gather else sim.level_state(level),
                 dtype=np.float64,
             )
-    for level in range(prepared.levels):
-        out["phi_%d" % level] = np.asarray(
-            sim.level_potential_global(level) if gather else sim.level_potential(level),
-            dtype=np.float64,
-        )
+    if prepared.phi_provider_slot:
+        for level in range(prepared.levels):
+            out["phi_%d" % level] = np.asarray(
+                sim.field_potential_level_global(prepared.phi_provider_slot, level),
+                dtype=np.float64,
+            )
     for index, (slot, count) in enumerate(
         zip(prepared.field_slots, prepared.field_levels, strict=True)
     ):
@@ -384,21 +677,52 @@ def _capture_v3(owner, sim, prepared):
             out["field_provider_phi_%d_%d" % (index, level)] = np.asarray(
                 sim.field_potential_level_global(slot, level), dtype=np.float64
             )
-    for level in range(prepared.levels):
-        out["aux_%d" % level] = np.asarray(
-            sim.level_aux_flat_global(level) if gather else sim.level_aux_flat(level),
-            dtype=np.float64,
+    final_field_manifest = _field_provider_manifest(sim)
+    if _field_manifest_semantics(final_field_manifest) != _field_manifest_semantics(
+        prepared.field_manifest
+    ):
+        raise RuntimeError("AMR field-provider semantics changed during checkpoint capture")
+    out["field_provider_manifest"] = np.asarray(
+        json.dumps(final_field_manifest, separators=(",", ":"), ensure_ascii=True)
+    )
+    from pops.runtime._amr_checkpoint_contract import encode_contract
+
+    final_accepted_contract = encode_contract(sim)
+    out["amr_accepted_contract"] = final_accepted_contract
+    auxiliary_checkpoint = sim.capture_auxiliary_checkpoint_accepted_state()
+    if type(auxiliary_checkpoint) is not list or len(auxiliary_checkpoint) != prepared.levels:
+        raise RuntimeError(
+            "native AMR exact auxiliary checkpoint has an invalid level-qualified image"
         )
+    for level, payload in enumerate(auxiliary_checkpoint):
+        if type(payload) is not bytes or not payload:
+            raise RuntimeError(
+                "native AMR exact auxiliary checkpoint level %d is not a non-empty bytes image"
+                % level
+            )
+        out["auxiliary_checkpoint_%d" % level] = np.frombuffer(payload, dtype=np.uint8).copy()
     capture_histories(sim, prepared.history_plan, out)
     identity = seal_checkpoint_payload(owner, out, runtime_kind="amr")
     return out, identity.token
 
 
-def write_v3(owner, sim, path, regrid_every, persistence=None):
+def write_v3(
+    owner,
+    sim,
+    path,
+    regrid_every,
+    persistence=None,
+    *,
+    precreated_inode=False,
+    precreated_descriptor=None,
+):
     """Capture exact AMR accepted state with preflight consensus before native gathers."""
     import os
     import numpy as np
-    from pops.output._checkpoint_collective import collective_checkpoint_capture
+    from pops.output._checkpoint_collective import (
+        collective_checkpoint_capture,
+        write_precreated_checkpoint_payload,
+    )
 
     prepared_holder = {}
 
@@ -412,6 +736,13 @@ def write_v3(owner, sim, path, regrid_every, persistence=None):
 
     def publish(payload):
         prepared = prepared_holder["plan"]
+        if precreated_inode:
+            if type(precreated_descriptor) is not int:
+                raise RuntimeError(
+                    "precreated AMR checkpoint publication requires the root descriptor"
+                )
+            write_precreated_checkpoint_payload(precreated_descriptor, payload)
+            return str(prepared.target)
         temporary = prepared.target.with_name(prepared.target.name + ".tmp")
         try:
             with open(temporary, "wb") as stream:
@@ -435,7 +766,7 @@ def prepare_v3(
     hierarchy_mode="restore_recorded_hierarchy",
     hierarchy_identity=None,
 ):
-    """Validate an accepted-state v8 AMR payload without mutating the native engine.
+    """Validate an accepted-state v11 AMR payload without mutating the native engine.
 
     This is the all-rank preflight boundary used before ``begin_restart_transaction``.
     """
@@ -454,11 +785,9 @@ def prepare_v3(
     current_ranks = topology.size
     if type(bit_identical) is not bool:
         raise TypeError("restart: bit_identical policy must be an exact bool")
-    if "n_ranks" not in d:
-        raise ValueError("restart: AMR checkpoint lacks its exact native rank count")
-    checkpoint_ranks = int(d["n_ranks"])
-    if checkpoint_ranks < 1:
-        raise ValueError("restart: AMR checkpoint rank count must be positive")
+    checkpoint_ranks = _exact_archive_int64_scalar(
+        d, "n_ranks", label="native rank count", minimum=1
+    )
     if bit_identical and checkpoint_ranks != current_ranks:
         raise ValueError(
             "restart: bit_identical=True requires the recorded MPI rank topology "
@@ -502,16 +831,21 @@ def prepare_v3(
     from pops.runtime._amr_checkpoint_topology import recorded_rank_topology
 
     recorded_topology = recorded_rank_topology(d, checkpoint_levels, checkpoint_ranks)
+    source_program_authority = b""
+    if recorded_topology.program_state:
+        authority_key = "program_accepted_state_source_authority"
+        if authority_key not in d:
+            raise ValueError(
+                "restart: compiled Program checkpoint lacks its sealed source authority"
+            )
+        authority = np.asarray(d[authority_key])
+        if authority.dtype != np.dtype(np.uint8) or authority.ndim != 1 or not authority.size:
+            raise ValueError(
+                "restart: compiled Program source authority must be non-empty one-dimensional uint8"
+            )
+        source_program_authority = authority.tobytes()
     selected = dict(d)
     selected["configured_n_levels"] = checkpoint_configured_levels
-    selected_source_rank = topology.rank if checkpoint_ranks == current_ranks else 0
-    selected["program_accepted_state"] = np.asarray(
-        d["program_accepted_state_rank_%d" % selected_source_rank], dtype=np.uint8
-    )
-    for level in range(checkpoint_levels):
-        selected["dmap_%d" % level] = np.asarray(
-            recorded_topology.level_owner_ranks[level], dtype=np.int64
-        )
     d = selected
     preflight_program_state, regrid_count, topology_epoch = preflight_contract(sim, d)
     program_state = preflight_program_state if checkpoint_ranks == current_ranks else b""
@@ -543,7 +877,7 @@ def prepare_v3(
             "(replay the SAME composition before restart)" % (chk_blocks, cur_blocks)
         )
     nlev = checkpoint_levels
-    # Program-hash guard: an accepted-state v8 checkpoint refuses a different compiled Program.
+    # Program-hash guard: an accepted-state v11 checkpoint refuses a different compiled Program.
     chk_hash = str(d["program_hash"])
     cur_hash = sim.installed_program_hash() if hasattr(sim, "installed_program_hash") else ""
     if chk_hash != cur_hash:
@@ -574,10 +908,31 @@ def prepare_v3(
             "restart : checkpoint qualified field providers %r != installed providers %r"
             % (checkpoint_slots, current_slots)
         )
-    if hierarchy_mode == "regrid_on_restart" and checkpoint_slots:
-        raise NotImplementedError(
-            "restart: bounded RegridOnRestart does not yet support elliptic field providers"
+    if "field_provider_manifest" not in d:
+        raise ValueError("restart: checkpoint lacks its exact field-provider manifest")
+    from pops._manifest_protocol import strict_json_loads
+
+    raw_field_manifest = strict_json_loads(
+        str(d["field_provider_manifest"]), where="AMR field-provider manifest"
+    )
+    if not isinstance(raw_field_manifest, list):
+        raise TypeError("restart: AMR field-provider manifest must be a list of rows")
+    checkpoint_field_manifest = tuple(
+        tuple(str(value) for value in row)
+        for row in raw_field_manifest
+        if isinstance(row, list)
+    )
+    if len(checkpoint_field_manifest) != len(raw_field_manifest):
+        raise TypeError("restart: AMR field-provider manifest contains a non-row value")
+    current_field_manifest = _field_provider_manifest(sim)
+    if _field_manifest_semantics(checkpoint_field_manifest) != _field_manifest_semantics(
+        current_field_manifest
+    ):
+        raise ValueError(
+            "restart: checkpoint field-provider semantics differ from the installed native plans"
         )
+    if tuple(row[1] for row in checkpoint_field_manifest) != tuple(checkpoint_slots):
+        raise ValueError("restart: field-provider manifest differs from its ordered slot registry")
     field_payload = []
     for index, slot in enumerate(checkpoint_slots):
         levels_key = "field_provider_levels_%d" % index
@@ -606,41 +961,11 @@ def prepare_v3(
     # The manifest seal authenticates bytes; these guards prove that all writes are shape-compatible
     # with the live composition, so malformed state/aux/history cannot fail only after a hierarchy
     # mutation.  The native transaction remains the final exception-safety boundary.
-    raw_boxes = np.asarray(d["patch_boxes"], dtype=np.int64)
-    box_width = 1 + 2 * spatial.dimension
-    if raw_boxes.ndim != 2 or raw_boxes.shape[1] != box_width:
-        raise ValueError(
-            "restart: patch_boxes must contain level plus two bounds per spatial axis"
-        )
-    boxes = [tuple(int(x) for x in row) for row in raw_boxes]
+    boxes = _decode_ranked_patch_boxes(
+        d["patch_boxes"], dimension=spatial.dimension, level_count=nlev, spatial=spatial
+    )
     per_level_boxes = {k: [] for k in range(nlev)}
-    for box in boxes:
-        level = box[0]
-        lower = box[1 : 1 + spatial.dimension]
-        upper = box[1 + spatial.dimension :]
-        if level <= 0 or level >= nlev:
-            raise ValueError("restart: fine patch level %d is outside [1, %d]" % (level, nlev - 1))
-        level_shape = spatial.shape_at_level(level)
-        if any(
-            low < 0 or high < low or high >= extent
-            for low, high, extent in zip(lower, upper, level_shape, strict=True)
-        ):
-            raise ValueError(
-                "restart: invalid level-%d patch box %r for shape %r"
-                % (level, box[1:], level_shape)
-            )
-        for other in per_level_boxes[level]:
-            other_lower, other_upper = other
-            overlaps = all(
-                not (high < other_low or other_high < low)
-                for low, high, other_low, other_high in zip(
-                    lower, upper, other_lower, other_upper, strict=True
-                )
-            )
-            if overlaps:
-                raise ValueError(
-                    "restart: overlapping level-%d patch boxes %r and %r" % (level, other, box[1:])
-                )
+    for level, lower, upper in boxes:
         per_level_boxes[level].append((lower, upper))
     if nlev > 1:
         for level in range(1, nlev):
@@ -649,36 +974,25 @@ def prepare_v3(
                     "restart: %d-level hierarchy has no patch at fine level %d" % (nlev, level)
                 )
 
-    owner_ranks = []
-    if multi:
-        from pops.runtime._amr_checkpoint_topology import owner_ranks_for_boxes
+    from pops.runtime._amr_checkpoint_topology import owner_ranks_for_boxes
 
-        current_base_owner_count = len(sim.level_owner_ranks(0))
-        recorded_base_owner_count = len(recorded_topology.level_owner_ranks[0])
-        if recorded_base_owner_count != current_base_owner_count:
+    _preflight_current_base_distribution(
+        sim,
+        recorded_topology,
+        checkpoint_ranks=checkpoint_ranks,
+        current_ranks=current_ranks,
+    )
+    owner_ranks = owner_ranks_for_boxes(recorded_topology, boxes, nlev)
+    for level in range(1, nlev):
+        mode = recorded_topology.level_distribution_modes[level]
+        ranks = recorded_topology.level_owner_ranks[level]
+        if mode == "partitioned" and len(ranks) != len(per_level_boxes[level]):
             raise ValueError(
-                "restart: recorded coarse owner map has %d entries, current composition has %d"
-                % (recorded_base_owner_count, current_base_owner_count)
+                "restart: owner-rank map for level %d has %d entries, expected %d"
+                % (level, len(ranks), len(per_level_boxes[level]))
             )
-        owner_ranks = owner_ranks_for_boxes(d, boxes, nlev)
-        nranks = checkpoint_ranks
-        for level in range(1, nlev):
-            key = "dmap_%d" % level
-            if key not in d:
-                raise ValueError(
-                    "restart: checkpoint lacks owner-rank map for AMR level %d" % level
-                )
-            ranks = np.asarray(d[key], dtype=np.int64).ravel()
-            if ranks.size != len(per_level_boxes[level]):
-                raise ValueError(
-                    "restart: owner-rank map for level %d has %d entries, expected %d"
-                    % (level, ranks.size, len(per_level_boxes[level]))
-                )
-            if any(int(rank) < 0 or int(rank) >= nranks for rank in ranks):
-                raise ValueError(
-                    "restart: owner-rank map for level %d contains a rank outside [0, %d)"
-                    % (level, nranks)
-                )
+        if mode == "replicated" and ranks:
+            raise ValueError("restart: replicated AMR level %d has owner entries" % level)
 
     state_payload = []
     for block in cur_blocks:
@@ -709,35 +1023,67 @@ def prepare_v3(
             levels.append(state)
         state_payload.append((block, levels))
 
-    aux_payload = []
     phi_payload = []
-    coarse_width = spatial.cells_at_level(0)
-    coarse_aux_size = len(sim.level_aux_flat(0))
-    if coarse_width < 1 or coarse_aux_size % coarse_width:
-        raise ValueError("restart: installed coarse auxiliary storage has an invalid shape")
-    aux_components = coarse_aux_size // coarse_width
+    auxiliary_checkpoint_payload = []
+    if not callable(
+        getattr(sim, "restore_restart_auxiliary_checkpoint_accepted_state", None)
+    ):
+        raise TypeError("restart: AMR engine lacks prepared-lane auxiliary checkpoint restore")
     for level in range(nlev):
-        aux_key = "aux_%d" % level
+        aux_key = "auxiliary_checkpoint_%d" % level
         phi_key = "phi_%d" % level
-        if aux_key not in d or phi_key not in d:
+        if aux_key not in d:
             raise ValueError(
-                "restart: checkpoint lacks aux or potential payload for level %d" % level
+                "restart: checkpoint lacks exact auxiliary payload for level %d"
+                % level
             )
-        aux = np.asarray(d[aux_key], dtype=np.float64).ravel()
-        expected_cells = spatial.cells_at_level(level)
-        expected_aux = aux_components * expected_cells
-        if aux.size != expected_aux:
+        aux = np.asarray(d[aux_key])
+        if aux.dtype != np.dtype(np.uint8) or aux.ndim != 1:
             raise ValueError(
-                "restart: level %d aux has size %d, expected %d" % (level, aux.size, expected_aux)
+                "restart: exact auxiliary checkpoint level %d must be a one-dimensional "
+                "uint8 array" % level
             )
-        phi = np.asarray(d[phi_key], dtype=np.float64).ravel()
-        if phi.size != expected_cells:
+        if not aux.size:
+            raise ValueError("restart: exact auxiliary checkpoint level %d is empty" % level)
+        auxiliary_checkpoint_payload.append(aux.tobytes())
+        if checkpoint_slots:
+            if phi_key not in d:
+                raise ValueError("restart: checkpoint lacks legacy potential payload for level %d" % level)
+            expected_cells = spatial.cells_at_level(level)
+            phi = np.asarray(d[phi_key], dtype=np.float64).ravel()
+            if phi.size != expected_cells:
+                raise ValueError(
+                    "restart: level %d potential has size %d, expected %d"
+                    % (level, phi.size, expected_cells)
+                )
+            phi_payload.append(phi)
+        elif phi_key in d:
+            raise ValueError("restart: field-free AMR checkpoint has a surplus legacy potential")
+
+    phi_provider_slot = str(sim.checkpoint_phi_provider_slot())
+    if checkpoint_slots and (not phi_provider_slot or phi_provider_slot not in checkpoint_slots):
+        raise ValueError(
+            "restart: legacy phi payload lacks its exact field-provider alias"
+        )
+    if not checkpoint_slots and phi_provider_slot:
+        raise ValueError("restart: field-free AMR composition has an unexpected phi-provider alias")
+    if checkpoint_slots:
+        phi_provider_levels = dict(field_payload)[phi_provider_slot]
+        if len(phi_provider_levels) != len(phi_payload):
             raise ValueError(
-                "restart: level %d potential has size %d, expected %d"
-                % (level, phi.size, expected_cells)
+                "restart: legacy phi payload depth differs from its field-provider image"
             )
-        aux_payload.append(aux)
-        phi_payload.append(phi)
+        exact_f64 = np.dtype("<f8")
+        for level, (phi, provider_phi) in enumerate(
+            zip(phi_payload, phi_provider_levels, strict=True)
+        ):
+            phi_bytes = np.asarray(phi, dtype=exact_f64).ravel().tobytes(order="C")
+            provider_bytes = np.asarray(provider_phi, dtype=exact_f64).ravel().tobytes(order="C")
+            if phi_bytes != provider_bytes:
+                raise ValueError(
+                    "restart: legacy phi level %d differs bitwise from field provider %s"
+                    % (level, phi_provider_slot)
+                )
 
     _preflight_histories_v3(sim, d, current_ranks, spatial)
 
@@ -746,8 +1092,10 @@ def prepare_v3(
         temporal_state=restored_temporal,
         cadence_state=cadence,
         program_state=program_state,
-        source_program_states=recorded_topology.program_states,
+        source_program_state=recorded_topology.program_state,
+        source_level_distribution_modes=recorded_topology.level_distribution_modes,
         source_level_owner_ranks=recorded_topology.level_owner_ranks,
+        source_program_authority=source_program_authority,
         checkpoint_ranks=checkpoint_ranks,
         regrid_count=int(regrid_count),
         topology_epoch=int(topology_epoch),
@@ -756,7 +1104,7 @@ def prepare_v3(
         owner_ranks=tuple(int(rank) for rank in owner_ranks),
         multi=bool(multi),
         state_payload=tuple((block, tuple(levels)) for block, levels in state_payload),
-        aux_payload=tuple(aux_payload),
+        auxiliary_checkpoint_payload=tuple(auxiliary_checkpoint_payload),
         potential_payload=tuple(phi_payload),
         field_payload=tuple((slot, tuple(levels)) for slot, levels in field_payload),
         hierarchy_mode=hierarchy_mode,
@@ -775,6 +1123,20 @@ def _restart_accepted_contract_identity(sim):
     from pops.runtime._amr_checkpoint_contract import contract_for
 
     return make_identity("restart-accepted-contract", contract_for(sim)).token
+
+
+def _restart_field_manifest_witness(owner, sim, *, phase):
+    rows = _restart_collective_phase(
+        owner,
+        "%s field-provider manifest" % phase,
+        lambda: [list(row) for row in _field_provider_manifest(sim)],
+    )
+    from pops.identity import make_identity
+
+    identity = make_identity(
+        "restart-field-provider-manifest", {"schema_version": 1, "providers": rows}
+    ).token
+    return rows, identity
 
 
 def _restart_collective_phase(
@@ -825,21 +1187,28 @@ def _restart_history_identity(owner, sim, *, phase):
                 "name": str(name),
                 "depth": int(sim.history_depth(name)),
                 "ncomp": int(sim.history_ncomp(name)),
-                "initialized": bool(sim.history_initialized(name)),
-                "fill_count": int(sim.history_fill_count(name)),
+                "levels": [
+                    {
+                        "level": int(level),
+                        "initialized": bool(sim.history_initialized(name, level)),
+                        "fill_count": int(sim.history_fill_count(name, level)),
+                    }
+                    for level in sim.history_levels(name)
+                ],
             }
             for name in sim.history_names()
         ],
     )
 
-    def slot_image(name, slot):
+    def slot_image(name, level, slot):
         import numpy as np
 
-        values = np.asarray(sim.history_global(name, slot), dtype=np.dtype("<f8")).ravel()
+        values = np.asarray(sim.history_global(name, level, slot), dtype=np.dtype("<f8")).ravel()
         return {
+            "level": level,
             "slot": slot,
             "size": int(values.size),
-            "dt": float(sim.history_slot_dt(name, slot)).hex(),
+            "dt": float(sim.history_slot_dt(name, level, slot)).hex(),
             "sha256": hashlib.sha256(values.tobytes(order="C")).hexdigest(),
         }
 
@@ -849,9 +1218,12 @@ def _restart_history_identity(owner, sim, *, phase):
         row["slots"] = [
             _restart_collective_phase(
                 owner,
-                "%s history %s slot %d" % (phase, history["name"], slot),
-                lambda name=history["name"], slot=slot: slot_image(name, slot),
+                "%s history %s level %d slot %d" % (phase, history["name"], level["level"], slot),
+                lambda name=history["name"], level=level["level"], slot=slot: slot_image(
+                    name, level, slot
+                ),
             )
+            for level in history["levels"]
             for slot in range(history["depth"])
         ]
         rows.append(row)
@@ -920,36 +1292,46 @@ def apply_v3(owner, sim, prepared):
     rank_topology_changed = prepared.checkpoint_ranks != current_ranks
     target_owner_ranks = prepared.owner_ranks
 
-    # (3) Impose the exact recorded hierarchy.
-    if prepared.multi:
+    # (3) Impose the exact recorded hierarchy.  Even a single compiled block must pass through
+    # the sentinel-aware rebuild seam: set_hierarchy's owner-zero shortcut fabricates replicas.
+    if prepared.levels >= 2:
         if rank_topology_changed:
             target_owner_ranks = tuple(
-                int(rank) for rank in sim.rematerialize_hierarchy_ownership(prepared.boxes)
+                int(rank)
+                for rank in sim.rematerialize_hierarchy_ownership(
+                    prepared.boxes, prepared.source_level_distribution_modes
+                )
             )
             if len(target_owner_ranks) != len(prepared.boxes):
                 raise RuntimeError(
                     "restart: native ownership rematerialization returned the wrong patch count"
                 )
         sim.rebuild_hierarchy(prepared.boxes, target_owner_ranks)
-    elif prepared.levels >= 2:
-        if rank_topology_changed:
-            raise ValueError(
-                "restart: rank-topology rematerialization requires the unified AMR runtime"
-            )
-        sim.set_hierarchy(prepared.boxes)
+
+    # The recorded hierarchy is now live but its temporary rebuild epoch is not an authority for
+    # the accepted Program image.  Publish the checkpoint epoch before materializing or decoding
+    # any accepted-state carrier; the enclosing native restart transaction still owns rollback.
+    sim.restore_checkpoint_counters(prepared.regrid_count, prepared.topology_epoch)
 
     program_state = prepared.program_state
     if rank_topology_changed:
-        if prepared.source_program_states and prepared.source_program_states[0]:
+        if prepared.source_program_state:
             target_level_owners = tuple(
                 tuple(int(rank) for rank in sim.level_owner_ranks(level))
                 for level in range(prepared.levels)
             )
+            target_level_modes = tuple(
+                sim.level_distribution_mode(level) for level in range(prepared.levels)
+            )
             program_state = bytes(
                 sim.rematerialize_program_accepted_state(
-                    prepared.source_program_states,
+                    prepared.source_program_state,
+                    prepared.checkpoint_ranks,
                     prepared.source_level_owner_ranks,
                     target_level_owners,
+                    prepared.source_level_distribution_modes,
+                    target_level_modes,
+                    prepared.source_program_authority,
                 )
             )
             if not program_state:
@@ -993,16 +1375,11 @@ def apply_v3(owner, sim, prepared):
             else:
                 sim.set_level_state(level, state)
 
-    # (5) Restore shared aux only on the runtime route (the coupler deliberately persists an
-    # explicit empty aux payload), then all elliptic warm starts.
-    for level, aux in enumerate(prepared.aux_payload):
-        if aux.size:
-            sim.set_level_aux_flat(level, aux)
-    for level, phi in enumerate(prepared.potential_payload):
-        sim.set_level_potential(level, phi)
-    for slot, levels in prepared.field_payload:
-        for level, value in enumerate(levels):
-            sim.set_field_potential_level(slot, level, value)
+    # (5) Restore the native owner-qualified accepted auxiliary image.  It carries exact groups,
+    # ComponentKeys and provider generations; Python never reconstructs a flat carrier.
+    sim.restore_restart_auxiliary_checkpoint_accepted_state(
+        list(prepared.auxiliary_checkpoint_payload)
+    )
 
     # (6) Selectively stored clean-window histories may replay the Program. A window containing a
     # scheduled regrid was explicitly promoted to dense storage during capture.
@@ -1024,8 +1401,6 @@ def apply_v3(owner, sim, prepared):
     sim.restore_checkpoint_accepted_state(program_state)
     from pops.runtime._amr_checkpoint_contract import validate_restored_contract
 
-    sim.restore_checkpoint_counters(prepared.regrid_count, prepared.topology_epoch)
-
     # (8) Clock last: the next cadence decision is identical to the uninterrupted run.
     restore_program_cadence(
         sim,
@@ -1034,6 +1409,18 @@ def apply_v3(owner, sim, prepared):
         accepted_time=float(d["t"]),
     )
     sim.set_clock(float(d["t"]), macro_step)
+    # Topology epoch restoration refreshes the PreparedHierarchy and intentionally invalidates all
+    # solver layouts. Publish the detached all-provider warm-start image only after that final
+    # topology mutation, so exact restore and the RegridOnRestart source witness see the same
+    # materialized field contract captured in the checkpoint.
+    if prepared.field_payload:
+        restore_fields = getattr(sim, "restore_field_potentials", None)
+        if not callable(restore_fields):
+            raise TypeError("restart: AMR engine lacks atomic all-provider field restore")
+        restore_fields(
+            [slot for slot, _levels in prepared.field_payload],
+            [[value.tolist() for value in levels] for _slot, levels in prepared.field_payload],
+        )
     if prepared.hierarchy_mode == "regrid_on_restart":
         _restart_collective_phase(
             owner,
@@ -1056,6 +1443,9 @@ def apply_v3(owner, sim, prepared):
             lambda: _restart_accepted_contract_identity(sim),
         )
         before_history_identity = _restart_history_identity(owner, sim, phase="recorded hierarchy")
+        before_field_manifest, before_field_manifest_identity = _restart_field_manifest_witness(
+            owner, sim, phase="recorded hierarchy"
+        )
         before_integrals = _restart_composite_integrals(owner, sim, phase="recorded hierarchy")
         _restart_collective_phase(
             owner,
@@ -1066,6 +1456,11 @@ def apply_v3(owner, sim, prepared):
             owner,
             "native transform",
             sim.regrid_on_restart,
+        )
+        recompute_witness = _restart_collective_phase(
+            owner,
+            "native derived-field recompute",
+            sim.recompute_fields_after_restart_regrid,
         )
         after_topology = _restart_collective_phase(
             owner,
@@ -1080,9 +1475,12 @@ def apply_v3(owner, sim, prepared):
         after_history_identity = _restart_history_identity(
             owner, sim, phase="transformed hierarchy"
         )
+        after_field_manifest, after_field_manifest_identity = _restart_field_manifest_witness(
+            owner, sim, phase="transformed hierarchy"
+        )
         after_integrals = _restart_composite_integrals(owner, sim, phase="transformed hierarchy")
         receipt = {
-            "schema_version": 2,
+            "schema_version": 3,
             "policy_identity": prepared.hierarchy_identity,
             "changed": (
                 before_topology["topology_identity"] != after_topology["topology_identity"]
@@ -1095,6 +1493,11 @@ def apply_v3(owner, sim, prepared):
             "accepted_contract_identity_after": after_contract_identity,
             "history_consensus_identity_before": before_history_identity,
             "history_consensus_identity_after": after_history_identity,
+            "field_manifest_identity_before": before_field_manifest_identity,
+            "field_manifest_identity_after": after_field_manifest_identity,
+            "field_manifest_before": before_field_manifest,
+            "field_manifest_after": after_field_manifest,
+            "field_recompute_witness": recompute_witness,
             "composite_integrals_before": before_integrals,
             "composite_integrals_after": after_integrals,
         }
@@ -1129,13 +1532,11 @@ def _preflight_histories_v3(sim, d, current_ranks, spatial):
         required = [
             "history_depth_" + name,
             "history_ncomp_" + name,
-            "history_init_" + name,
-            "history_fill_count_" + name,
+            "history_levels_" + name,
             "history_policy_" + name,
             "history_requested_stored_slots_" + name,
             "history_stored_slots_" + name,
             "history_storage_mode_" + name,
-            "history_slot_dt_" + name,
         ]
         missing = [key for key in required if key not in d]
         if missing:
@@ -1149,26 +1550,42 @@ def _preflight_histories_v3(sim, d, current_ranks, spatial):
         policy = HistoryPersistence.from_json(str(d["history_policy_" + name]))
         from pops.runtime._system_io_history import (
             history_fill_count_from_payload,
+            resolve_hierarchy_history_storage,
             resolve_history_storage,
             validate_history_slot_dt_payload,
         )
 
-        fill_count = history_fill_count_from_payload(
-            d,
-            name,
-            depth,
-            bool(d["history_init_" + name]),
-        )
-        expected_requested, expected_stored, expected_mode, expected_steps = (
-            resolve_history_storage(
-                policy,
-                depth,
-                fill_count=fill_count,
-                macro_step=int(d["macro_step"]),
-                regrid_every=int(d["regrid_every"]),
-                program_substeps=int(d["program_cadence_substeps"]),
-                program_stride=int(d["program_cadence_stride"]),
+        levels = tuple(int(level) for level in d["history_levels_" + name])
+        if levels != tuple(range(int(d["n_levels"]))):
+            raise ValueError(
+                "restart: history '%s' level identities %r differ from hierarchy %r"
+                % (name, levels, tuple(range(int(d["n_levels"]))))
             )
+        storage_rows = []
+        fill_counts = []
+        for level in levels:
+            init_key = "history_init_%s_level_%d" % (name, level)
+            if init_key not in d:
+                raise ValueError(
+                    "restart: history '%s' level %d lacks initialized metadata" % (name, level)
+                )
+            fill_count = history_fill_count_from_payload(
+                d, name, depth, bool(d[init_key]), level=level
+            )
+            fill_counts.append(fill_count)
+            storage_rows.append(
+                resolve_history_storage(
+                    policy,
+                    depth,
+                    fill_count=fill_count,
+                    macro_step=int(d["macro_step"]),
+                    regrid_every=int(d["regrid_every"]),
+                    program_substeps=int(d["program_cadence_substeps"]),
+                    program_stride=int(d["program_cadence_stride"]),
+                )
+            )
+        expected_requested, expected_stored, expected_mode, expected_steps = (
+            resolve_hierarchy_history_storage(storage_rows, depth)
         )
         requested = sorted(int(slot) for slot in d["history_requested_stored_slots_" + name])
         stored = sorted(int(slot) for slot in d["history_stored_slots_" + name])
@@ -1215,24 +1632,25 @@ def _preflight_histories_v3(sim, d, current_ranks, spatial):
                     "restart: history '%s' dense safety regrid fingerprint %r is inconsistent "
                     "with manifest cadence %r" % (name, recorded, list(expected_steps))
                 )
-        expected_values = ncomp * sum(
-            spatial.cells_at_level(level) for level in range(int(d["n_levels"]))
-        )
-        for slot in stored:
-            key = "history_%s_%d" % (name, slot)
-            if key not in d:
-                raise ValueError("restart: history '%s' lacks stored slot %d" % (name, slot))
-            values = np.asarray(d[key], dtype=np.float64).ravel()
-            if values.size != expected_values:
-                raise ValueError(
-                    "restart: history '%s' slot %d has size %d, expected %d"
-                    % (name, slot, values.size, expected_values)
-                )
-        validate_history_slot_dt_payload(d, name, depth, fill_count)
+        for level, fill_count in zip(levels, fill_counts, strict=True):
+            expected_values = ncomp * spatial.cells_at_level(level)
+            for slot in stored:
+                key = "history_%s_level_%d_%d" % (name, level, slot)
+                if key not in d:
+                    raise ValueError(
+                        "restart: history '%s' level %d lacks stored slot %d" % (name, level, slot)
+                    )
+                values = np.asarray(d[key], dtype=np.float64).ravel()
+                if values.size != expected_values:
+                    raise ValueError(
+                        "restart: history '%s' level %d slot %d has size %d, expected %d"
+                        % (name, level, slot, values.size, expected_values)
+                    )
+            validate_history_slot_dt_payload(d, name, depth, fill_count, level=level)
 
 
 def _restore_histories_v3(sim, d, cur_ranks):
-    """Restore accepted-state v8 rings and replay only policy-omitted slots on a stable hierarchy.
+    """Restore accepted-state v11 rings and replay only policy-omitted slots on a stable hierarchy.
 
     Capture resolves any selective ring whose replay window contains a scheduled regrid, cold slot,
     or non-default whole-Program cadence to explicit dense safety storage. Therefore this function

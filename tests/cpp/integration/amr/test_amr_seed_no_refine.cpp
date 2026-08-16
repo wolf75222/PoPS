@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "amr_tagging_test_authority.hpp"
+#include "explicit_amr_program.hpp"
 
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/amr/hierarchy/amr_hierarchy.hpp>
@@ -24,10 +25,8 @@ struct AdvectionModel {
   using Schema = typename Law::Schema;
   using State = typename Law::State;
   using Primitive = typename Law::Primitive;
-  using Aux = pops::AuxState<Dim>;
   static constexpr int dimension = Dim;
   static constexpr int n_vars = Law::n_vars;
-  static constexpr int n_aux = pops::aux_comps_for<Law, Dim>();
 
   Law law{};
 
@@ -65,7 +64,7 @@ struct AdvectionModel {
   POPS_HD void wave_speeds(const State& state, pops::Real& lower, pops::Real& upper) const {
     law.template wave_speeds<Axis>(state, lower, upper);
   }
-  POPS_HD State source(const State&, const Aux&) const { return {}; }
+  POPS_HD State source(const State&, const pops::ProviderValues<0>&) const { return {}; }
   POPS_HD pops::Real elliptic_rhs(const State&) const { return pops::Real(0); }
 };
 
@@ -177,8 +176,13 @@ template <int Dim>
 pops::AmrSystem<Dim> make_system(const pops::AmrSystemConfig<Dim>& config,
                                  const std::vector<double>& initial) {
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "test.amr-seed-no-refine.runtime@1");
   system.install_block_state_route("tracer", "state/tracer");
-  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>(), "minmod", "rusanov",
+                                "conservative", "explicit",
+                                static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
+                                static_cast<double>(pops::kWenoEpsilon), false,
+                                "test.amr-seed-no-refine.tracer.provider-free@1");
   system.set_conservative_state("tracer", initial);
   return system;
 }
@@ -414,6 +418,20 @@ TEST(test_amr_seed_no_refine,
   restored.restore_checkpoint_accepted_state(accepted);
   EXPECT_EQ(restored.program_accepted_state(), accepted);
 
+  auto omitted_tagging = decoded;
+  omitted_tagging.tagging_hysteresis_state.clear();
+  const std::vector<std::uint8_t> omission =
+      pops::runtime::program::serialize_amr_program_accepted_state(omitted_tagging);
+  const std::uint64_t revision_before_omission = restored.program_accepted_state_revision();
+  restored.restore_program_accepted_state(omission);
+  EXPECT_EQ(restored.program_accepted_state(), accepted);
+  EXPECT_EQ(restored.program_accepted_state_revision(), revision_before_omission + 1);
+
+  const std::uint64_t revision_before_echo = restored.program_accepted_state_revision();
+  restored.restore_program_accepted_state(accepted);
+  EXPECT_EQ(restored.program_accepted_state(), accepted);
+  EXPECT_EQ(restored.program_accepted_state_revision(), revision_before_echo + 1);
+
   auto corrupted = decoded;
   ASSERT_FALSE(corrupted.tagging_hysteresis_state.empty());
   corrupted.tagging_hysteresis_state.back() ^= std::uint8_t{0xff};
@@ -421,6 +439,12 @@ TEST(test_amr_seed_no_refine,
       pops::runtime::program::serialize_amr_program_accepted_state(corrupted);
   const auto before = restored.program_accepted_state();
   const std::uint64_t revision_before = restored.program_accepted_state_revision();
+  EXPECT_THROW(restored.restore_program_accepted_state(invalid), std::invalid_argument);
+  EXPECT_EQ(restored.program_accepted_state(), before);
+  EXPECT_EQ(restored.program_accepted_state_revision(), revision_before);
+  EXPECT_THROW(restored.restore_checkpoint_accepted_state(omission), std::invalid_argument);
+  EXPECT_EQ(restored.program_accepted_state(), before);
+  EXPECT_EQ(restored.program_accepted_state_revision(), revision_before);
   EXPECT_THROW(restored.restore_checkpoint_accepted_state(invalid), std::invalid_argument);
   EXPECT_EQ(restored.program_accepted_state(), before);
   EXPECT_EQ(restored.program_accepted_state_revision(), revision_before);

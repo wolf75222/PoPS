@@ -1,11 +1,13 @@
 #include <gtest/gtest.h>
 
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/parallel/world_communicator.hpp>
 #include <pops/runtime/output_piece_collective.hpp>
 
 #include <atomic>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -105,6 +107,45 @@ TEST(WorldCommunicator, RequiresProcessGlobalThreadMultipleForNativeCallSites) {
   EXPECT_EQ(failures.load(std::memory_order_relaxed), 0);
 #else
   EXPECT_EQ(world.thread_level(), 0);
+#endif
+}
+
+TEST(ExecutionLane, PreservesLiveStateAndOwnershipOnlyAtMoveDestination) {
+  constexpr std::string_view kWorldIdentity = "test/execution-lane/world";
+  pops::ExecutionLane world = pops::ExecutionLane::world(kWorldIdentity);
+  ASSERT_TRUE(world.active());
+  EXPECT_FALSE(world.owns_communicator());
+
+  pops::ExecutionLane moved_world = std::move(world);
+  EXPECT_TRUE(moved_world.active());
+  EXPECT_EQ(moved_world.identity(), kWorldIdentity);
+  EXPECT_FALSE(moved_world.owns_communicator());
+  EXPECT_FALSE(world.active());
+  EXPECT_TRUE(world.identity().empty());
+  EXPECT_FALSE(world.owns_communicator());
+
+  constexpr std::string_view kOwnedIdentity = "test/execution-lane/duplicate";
+  pops::ExecutionLane owned = pops::ExecutionLane::duplicate_world_collectively(kOwnedIdentity);
+  ASSERT_TRUE(owned.active());
+  const std::string qualified_owned_identity(owned.identity());
+  EXPECT_EQ(qualified_owned_identity, std::string(pops::ExecutionCommunicator::world().identity()) +
+                                          "/" + std::string(kOwnedIdentity));
+#ifdef POPS_HAS_MPI
+  EXPECT_TRUE(owned.owns_communicator());
+#else
+  EXPECT_FALSE(owned.owns_communicator());
+#endif
+
+  pops::ExecutionLane moved_owned = std::move(owned);
+  EXPECT_TRUE(moved_owned.active());
+  EXPECT_EQ(moved_owned.identity(), qualified_owned_identity);
+  EXPECT_FALSE(owned.active());
+  EXPECT_TRUE(owned.identity().empty());
+  EXPECT_FALSE(owned.owns_communicator());
+#ifdef POPS_HAS_MPI
+  EXPECT_TRUE(moved_owned.owns_communicator());
+#else
+  EXPECT_FALSE(moved_owned.owns_communicator());
 #endif
 }
 

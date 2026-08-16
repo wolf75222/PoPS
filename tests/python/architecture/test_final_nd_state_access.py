@@ -10,7 +10,9 @@ ROOT = Path(__file__).resolve().parents[3]
 STATE_ACCESS = ROOT / "include/pops/numerics/spatial/primitives/state_access.hpp"
 RECONSTRUCTION = ROOT / "include/pops/numerics/spatial/nd/reconstruction.hpp"
 ELLIPTIC_RHS = ROOT / "include/pops/coupling/base/elliptic_rhs.hpp"
+SYSTEM_BLOCK = ROOT / "include/pops/runtime/builders/compiled/generated_system_block.hpp"
 CPP_PROOF = ROOT / "tests/cpp/unit/numerics/test_prepared_cartesian_nd.cpp"
+RHS_CPP_PROOF = ROOT / "tests/cpp/unit/elliptic/test_elliptic_composite_rhs.cpp"
 AUX_PROOF = ROOT / "tests/cpp/unit/physics/test_aux_single_source.cpp"
 
 
@@ -18,7 +20,7 @@ def _source(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_state_and_aux_loaders_accept_only_ranked_field_views() -> None:
+def test_state_and_provider_loaders_accept_only_ranked_field_views() -> None:
     source = _source(STATE_ACCESS)
     assert "#include <pops/mesh/storage/field_view.hpp>" in source
     assert re.search(
@@ -26,13 +28,18 @@ def test_state_and_aux_loaders_accept_only_ranked_field_views() -> None:
         r"const Index<Dim>& index\)",
         source,
     )
+    assert "field(index, component)" in source
+    assert "struct ProviderStorageView" in source
+    assert "std::array<FieldView<const Real, Dim>" in source
+    assert "std::array<int" in source
     assert re.search(
-        r"load_aux\(const FieldView<const Real, Dim>& field,\s*"
-        r"const Index<Dim>& index\)",
+        r"load_provider_values\(const Storage& storage,\s*const Index<Dim>& index\)",
         source,
     )
-    assert "field(index, component)" in source
-    assert "field(index, kAuxNamedBase + k)" in source
+    assert "result[slot] = storage(index, slot)" in source
+    generated = _source(SYSTEM_BLOCK)
+    assert "ProviderStorageView<Dim, provider_count> providers{}" in generated
+    assert "load_provider_values<provider_count>(providers, index)" in generated
     for forbidden in ("ConstArray4", "Array4", "Fab2D", "Box2D"):
         assert forbidden not in source
 
@@ -85,15 +92,20 @@ def test_cpp_proof_instantiates_ranked_access_and_rhs_paths() -> None:
     source = _source(CPP_PROOF)
     for rank in (1, 2, 3):
         assert f"check_ranked_state_access<{rank}>()" in source
-    assert "SingleModelEllipticRhs<1" in source
-    assert "TwoFieldChargeDensityRhs<2>" in source
-    assert "ChargeDensityRhs<3>" in source
-    assert "wrong_distribution" in source
-    assert "wrong_layout" in source
+
+    rhs = _source(RHS_CPP_PROOF)
+    for rank in (1, 2, 3):
+        assert f"expect_composite_rhs_assembly<{rank}>()" in rhs
+    assert "SingleModelEllipticRhs<Dim" in rhs
+    assert "add_model_elliptic_rhs(charge, first, rhs)" in rhs
+    assert "add_model_elliptic_rhs(gravity, second, rhs)" in rhs
 
     auxiliary = _source(AUX_PROOF)
     for rank in (1, 2, 3):
-        assert f"check_device_and_host_marshaling<{rank}>()" in auxiliary
-        assert f"check_base_width_ignores_extra_fields<{rank}>()" in auxiliary
+        assert f"check_magnetic_factory_dispatch<{rank}>()" in auxiliary
+        assert f"PhysicalModelFor<ProviderModel<{rank}, 0>, {rank}>" in auxiliary
+    assert "EmptyPackIsAFirstClassDeviceCarrier" in auxiliary
+    assert "CompositePropagatesItsExactProviderCount" in auxiliary
+    assert "ProviderValues<Model::n_providers>" in auxiliary
     for forbidden in ("ConstArray4", "Array4", "Fab2D", "Box2D"):
         assert forbidden not in auxiliary

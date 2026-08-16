@@ -36,6 +36,47 @@ def _require_provider_component_name(value: Any, *, where: str = "provider") -> 
     return value
 
 
+def _typed_component_roles(roles: Any, names: Any, *, where: str) -> list[Any] | None:
+    """Validate one optional ordered public role layout without lowering it.
+
+    Authoring retains :class:`ComponentRole` values.  The sole conversion to the
+    native structured token vocabulary happens in :func:`pops.physics.aux.roles_for`;
+    accepting role strings here would recreate a second, untyped role language.
+    ``None`` remains the explicit request to infer the role from the component name.
+    """
+    if roles is None:
+        return None
+    if isinstance(roles, (str, bytes)):
+        raise TypeError("%s roles must be an ordered iterable, not a string" % where)
+    try:
+        values = list(roles)
+    except TypeError:
+        raise TypeError("%s roles must be an ordered iterable" % where) from None
+    if len(values) != len(names):
+        raise ValueError(
+            "%s: %d roles for %d variables" % (where, len(values), len(names))
+        )
+
+    from .roles import ComponentRole, native_role_token
+
+    for index, role in enumerate(values):
+        if role is None:
+            continue
+        if isinstance(role, str):
+            raise TypeError(
+                "%s role %d requires a typed ComponentRole, not a string"
+                % (where, index)
+            )
+        if not isinstance(role, ComponentRole):
+            raise TypeError(
+                "%s role %d must implement ComponentRole" % (where, index)
+            )
+        # Validate custom implementations eagerly while preserving the typed
+        # descriptor itself for authoring identity and later exact-rank checks.
+        native_role_token(role)
+    return values
+
+
 class _VariablesMixin(_HyperbolicModel):
     """Conservative / primitive / auxiliary variable declarations."""
 
@@ -44,13 +85,16 @@ class _VariablesMixin(_HyperbolicModel):
         return Var(name, "cons")
 
     def conservative_vars(self, *names: Any, roles: Any = None) -> Any:
-        """Declare the conservative variables. @p roles (optional): list of the same length explicitly
-        setting the physical role of each component (string 'Density'/'MomentumX'... or None
-        to fall back on the canonical mapping of the name); useful for a non-standard layout where the names
-        do not suffice to deduce the meaning. Without roles, the canonical name -> role mapping applies."""
-        if roles is not None and len(roles) != len(names):
-            raise ValueError("conservative_vars: %d roles for %d variables" % (len(roles), len(names)))
-        self.cons_roles = list(roles) if roles is not None else None
+        """Declare conservative variables with optional typed component roles.
+
+        ``roles`` is an ordered sequence of :class:`ComponentRole` descriptors or
+        ``None`` entries (name-derived inference).  Coordinate-name strings and
+        ``MomentumX``-style aliases are not an authoring language.
+        """
+        checked_roles = _typed_component_roles(
+            roles, names, where="conservative_vars"
+        )
+        self.cons_roles = checked_roles
         return tuple(self.cons(n) for n in names)
 
     def primitive(self, name: Any, expr: Any) -> Any:
@@ -77,7 +121,7 @@ class _VariablesMixin(_HyperbolicModel):
 
         used = _dependencies(self._source or ())
         return [
-            "    const pops::Real %s = a.template flux_provider<%d>();"
+            "    const pops::Real %s = pops::provider_value<%d>(a);"
             % (name, self._consumer_provider_slot("source_default", name))
             for name in self._provider_components if name in used
         ]
@@ -85,9 +129,10 @@ class _VariablesMixin(_HyperbolicModel):
     def _flux_provider_locals_lines(self) -> Any:
         """C++ locals read from the exact physical-flux provider protocol.
 
-        This emits no global auxiliary storage access. ``BoundFluxProviders<Model>`` implements
-        ``flux_provider<ConsumerSlot>()`` over the exact physical-flux consumer plan, so generated
-        physical laws keep one formula while the finite-volume route consumes only its resolved pack.
+        This emits no global auxiliary storage access. ``provider_value<ConsumerSlot>`` accepts
+        both the compact ``ProviderValues`` preparation carrier and the model-qualified
+        ``BoundFluxProviders<Model>`` used by the finite-volume route, while exposing only the
+        consumer's resolved pack.
         """
         from pops._ir.visitors import _dependencies
 
@@ -108,7 +153,7 @@ class _VariablesMixin(_HyperbolicModel):
             )
         used = _dependencies(expressions)
         return [
-            "    const pops::Real %s = a.template flux_provider<%d>();"
+            "    const pops::Real %s = pops::provider_value<%d>(a);"
             % (name, self._physical_flux_consumer_slot(name))
             for name in self._provider_components if name in used
         ]
@@ -166,13 +211,14 @@ class _VariablesMixin(_HyperbolicModel):
     def set_primitive_state(self, *vars_or_names: Any, roles: Any = None) -> None:
         """Declares the ORDERED layout of the primitive state (Prim): component names, in order.
         Necessary for the brick codegen (to_primitive fills Prim in this order). Each name must
-        be a conservative variable or an already-defined primitive. @p roles (optional): same
-        convention as conservative_vars (explicit per-component override, None = canonical mapping)."""
-        self.prim_state = [v.name if isinstance(v, Var) else str(v) for v in vars_or_names]
-        if roles is not None and len(roles) != len(self.prim_state):
-            raise ValueError("set_primitive_state : %d roles for %d variables"
-                             % (len(roles), len(self.prim_state)))
-        self.prim_roles = list(roles) if roles is not None else None
+        be a conservative variable or an already-defined primitive. ``roles`` follows
+        :meth:`conservative_vars`: typed descriptors or ``None`` for name inference."""
+        names = [v.name if isinstance(v, Var) else str(v) for v in vars_or_names]
+        checked_roles = _typed_component_roles(
+            roles, names, where="set_primitive_state"
+        )
+        self.prim_state = names
+        self.prim_roles = checked_roles
 
     def set_conservative_from(self, exprs: Any) -> None:
         """Formulas of the conservative state as a function of the primitives (one per conservative

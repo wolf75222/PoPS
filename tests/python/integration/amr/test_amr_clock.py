@@ -27,7 +27,7 @@ import numpy as np
 
 import pops.runtime._engine_descriptors as engine
 from pops.runtime._engine_descriptors import Periodic
-from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
+from pops.runtime._system import AmrSystem, AmrSystemConfig  # ADC-545 advanced runtime seam
 from tests.python.support.explicit_program import install_forward_euler_program
 
 
@@ -39,13 +39,24 @@ def _bump(n, amp):
 
 
 def _scalar_charge(q, B0=1.0):
-    return engine.Model(engine.Scalar(), engine.ExB(B0=B0), engine.NoSource(), engine.ChargeDensity(charge=q))
+    return engine.Model(engine.Scalar(), engine.ExB(), engine.NoSource(), engine.ChargeDensity(charge=q))
+
+
+def _amr_config(n: int, *, regrid_every: int) -> AmrSystemConfig:
+    config = AmrSystemConfig()
+    config.shape = (n, n)
+    config.lower = (0.0, 0.0)
+    config.upper = (1.0, 1.0)
+    config.periodicity = (True, True)
+    config.boxes = (((0, 0), (n, n)),)
+    config.regrid_every = regrid_every
+    return config
 
 
 def _build_stride(n=32):
     """AMR multi-blocs : un bloc a stride=2 (cadence hold-then-catch-up) -> la cadence depend du
     compteur de macro-pas, ce que macro_step()/set_clock() exposent et restaurent."""
-    sim = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=0)
+    sim = AmrSystem(_amr_config(n, regrid_every=0))
     sim.set_temporal_relations([2], [1], ["integral_only"])
     sim.add_equation("ions", _scalar_charge(+1.0),
                   spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()))

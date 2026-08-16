@@ -29,6 +29,7 @@ from pops.solvers import (
 )
 from pops.solvers.providers import (
     PreparedHierarchySolverNativeEmission,
+    PreparedHierarchySolverEmitRequest,
     prepared_hierarchy_solver_provider_from_attrs,
 )
 from pops.time import Program
@@ -109,12 +110,12 @@ def test_identity_owns_complete_flat_and_refined_solve_contract():
     assert authority["provider_id"] == "pops.hierarchy.composite-tensor-fac"
     assert authority["interface_version"] == 2
     assert authority["capabilities"] == [
-        "pops.hierarchy.composite-tensor-fac.exact-rank@2",
-        "pops.hierarchy.composite-tensor-fac.flat-krylov@2",
-        "pops.hierarchy.composite-tensor-fac.partitioned-mpi@2",
-        "pops.hierarchy.composite-tensor-fac.preallocated-publication@2",
-        "pops.hierarchy.composite-tensor-fac.rank2-only@2",
-        "pops.hierarchy.composite-tensor-fac.refined-full-tensor-fac@2",
+        "pops.hierarchy.composite-tensor-fac.exact-rank",
+        "pops.hierarchy.composite-tensor-fac.flat-krylov",
+        "pops.hierarchy.composite-tensor-fac.full-tensor-nd@3",
+        "pops.hierarchy.composite-tensor-fac.partitioned-mpi",
+        "pops.hierarchy.composite-tensor-fac.preallocated-publication",
+        "pops.hierarchy.composite-tensor-fac.refined-full-tensor-fac",
     ]
     assert authority["flat_execution"]["mode"] == "prepared_krylov_fallback"
     assert authority["flat_execution"]["krylov"]["method_provider"]["provider_id"] == (
@@ -345,6 +346,30 @@ def test_hierarchy_provider_registry_is_append_only():
         register_prepared_hierarchy_solver_provider(provider)
 
 
+@pytest.mark.parametrize("dimension", (1, 2, 3))
+def test_builtin_emission_carries_the_native_dimension_through_tensor_slots(dimension):
+    provider = prepared_hierarchy_solver_provider_by_id(
+        "pops.hierarchy.composite-tensor-fac"
+    )
+    request = PreparedHierarchySolverEmitRequest(
+        node=SimpleNamespace(attrs={"hierarchy_solver_identity": "nd-provider-token"}),
+        target="amr_system",
+        report_name="outcome",
+        solution_name="solution",
+        components=1,
+        block_index=0,
+        relative_tolerance_cpp="pops::Real(1e-8)",
+        absolute_tolerance_cpp="pops::Real(0)",
+        max_iterations=8,
+    )
+    emission = provider.emitter(request, provider, CompositeTensorFAC().canonical_options())
+    source = "\n".join(emission.configure)
+    assert dimension in (1, 2, 3)
+    assert "scalar-tensor-elliptic.exact-rank@3" in source
+    assert "Dim * Dim" in source
+    assert "coefficient.0.1" not in source
+
+
 def test_hierarchy_program_and_codegen_core_have_no_builtin_backend_branch():
     root = Path(__file__).resolve().parents[4]
     core = (
@@ -411,8 +436,6 @@ def _public_amr_hierarchy_case(
         "external-hierarchy-square", lower=(0.0, 0.0), upper=(1.0, 1.0)
     ).frame(Cartesian2D())
     x_axis, y_axis = frame.axes
-    if bound_plasma and manufactured_plasma:
-        raise ValueError("the bound and manufactured plasma profiles are exclusive")
 
     model = pops.Model("external-hierarchy-plasma", frame=frame)
     state = model.state(
@@ -590,9 +613,7 @@ def _public_amr_hierarchy_case(
     case.program(program)
 
     plasma_initial = Constant((2.0, 0.25, -0.5))
-    if bound_plasma:
-        plasma_initial = BindArray()
-    elif manufactured_plasma:
+    if manufactured_plasma:
         # Continuous manufactured solution for the first condensed solve.  With
         # M = I - dt*J, A = I + dt^2*rho*M^-1 and phi*=a sin(2pi x)sin(2pi y),
         # choose m = dt^-1 M A grad(phi*).  Then the authored condensed RHS is
@@ -622,6 +643,8 @@ def _public_amr_hierarchy_case(
                 _HIERARCHY_ROTATION_RATE * potential_x + momentum_factor * potential_y,
             ),
         )
+    elif bound_plasma:
+        plasma_initial = BindArray()
     case.initials.add(
         InitialCondition(
             state=state_instance,
@@ -708,6 +731,12 @@ def _external_hierarchy_counters(so_path):
         int(library.pops_test_hierarchy_execution_queries()),
         int(library.pops_test_hierarchy_solve_calls()),
     )
+
+
+def _external_hierarchy_fallback_queries(so_path):
+    library = ctypes.CDLL(so_path)
+    library.pops_test_hierarchy_fallback_queries.restype = ctypes.c_uint64
+    return int(library.pops_test_hierarchy_fallback_queries())
 
 
 def _external_hierarchy_carry_metrics(so_path):
@@ -834,14 +863,97 @@ def _periodic_condensed_fourier_oracle(initial, *, dt, rotation_rate):
     )
 
 
+def _dirichlet_condensed_oracle(initial, *, dt, rotation_rate):
+    """Independent dense inverse with the provider's zero face-value Dirichlet law."""
+    density, east, north = np.asarray(initial, dtype=np.float64)
+    cells = density.shape[0]
+    assert density.shape == east.shape == north.shape == (cells, cells)
+    np.testing.assert_allclose(
+        density, np.full_like(density, density[0, 0]), rtol=0.0, atol=5.0e-15
+    )
+    spacing = 1.0 / cells
+
+    def extrapolated_centered_difference(values, *, axis):
+        padding = [(0, 0), (0, 0)]
+        padding[axis] = (1, 1)
+        extended = np.pad(values, padding, mode="edge")
+        lower = [slice(None), slice(None)]
+        upper = [slice(None), slice(None)]
+        lower[axis] = slice(0, cells)
+        upper[axis] = slice(2, cells + 2)
+        return (extended[tuple(upper)] - extended[tuple(lower)]) / (
+            2.0 * spacing
+        )
+
+    rotation = dt * rotation_rate
+    denominator = 1.0 + rotation * rotation
+    flux_east = (east + rotation * north) / denominator
+    flux_north = (-rotation * east + north) / denominator
+    rhs = -dt * (
+        extrapolated_centered_difference(flux_east, axis=1)
+        + extrapolated_centered_difference(flux_north, axis=0)
+    )
+    assert np.max(np.abs(rhs)) > 1.0e-2
+
+    coefficient = 1.0 + dt * dt * float(density[0, 0]) / denominator
+    scale = coefficient / (spacing * spacing)
+    matrix = np.zeros((cells * cells, cells * cells), dtype=np.float64)
+    for y in range(cells):
+        for x in range(cells):
+            row = y * cells + x
+            boundary_faces = int(x == 0) + int(x == cells - 1)
+            boundary_faces += int(y == 0) + int(y == cells - 1)
+            matrix[row, row] = scale * (4 + boundary_faces)
+            for neighbour_y, neighbour_x in (
+                (y, x - 1),
+                (y, x + 1),
+                (y - 1, x),
+                (y + 1, x),
+            ):
+                if 0 <= neighbour_x < cells and 0 <= neighbour_y < cells:
+                    matrix[row, neighbour_y * cells + neighbour_x] = -scale
+    potential = np.linalg.solve(matrix, rhs.reshape(-1)).reshape(cells, cells)
+    np.testing.assert_allclose(
+        (matrix @ potential.reshape(-1)).reshape(cells, cells),
+        rhs,
+        rtol=2.0e-14,
+        atol=2.0e-14,
+    )
+    extrapolated_matrix = matrix.copy()
+    for y in range(cells):
+        for x in range(cells):
+            row = y * cells + x
+            extrapolated_matrix[row, row] -= 2.0 * scale * (
+                int(x == 0)
+                + int(x == cells - 1)
+                + int(y == 0)
+                + int(y == cells - 1)
+            )
+    extrapolated_residual = (
+        extrapolated_matrix @ potential.reshape(-1) - rhs.reshape(-1)
+    )
+    assert (
+        np.linalg.norm(extrapolated_residual) / np.linalg.norm(rhs)
+        > 1.0e-2
+    )
+
+    gradient_east = extrapolated_centered_difference(potential, axis=1)
+    gradient_north = extrapolated_centered_difference(potential, axis=0)
+    velocity_east = east / density - dt * gradient_east
+    velocity_north = north / density - dt * gradient_north
+    expected_east = density * (velocity_east + rotation * velocity_north) / denominator
+    expected_north = (
+        density * (-rotation * velocity_east + velocity_north) / denominator
+    )
+    return np.stack((density, expected_east, expected_north)), potential, rhs
+
+
 def _amr_history_level(values, *, level, base_cells=8):
-    """Decode one scalar level from the public concatenated AMR history convention."""
+    """Decode one exact level-qualified scalar history buffer."""
     flat = np.asarray(values, dtype=np.float64)
     cells = base_cells * 2**level
-    offset = sum((base_cells * 2**coarse) ** 2 for coarse in range(level))
-    end = offset + cells * cells
-    assert flat.size >= end
-    return flat[offset:end].reshape(cells, cells)
+    assert flat.size == cells * cells
+    return flat.reshape(cells, cells)
 
 
 def _patch_interior(mask, *, guard_cells=1):
@@ -893,6 +1005,7 @@ using BuiltinTensorProvider = pops::runtime::program::CompositeTensorHierarchyPr
 std::atomic<std::uint64_t> register_calls{0};
 std::atomic<std::uint64_t> prepare_calls{0};
 std::atomic<std::uint64_t> execution_queries{0};
+std::atomic<std::uint64_t> fallback_queries{0};
 std::atomic<std::uint64_t> solve_calls{0};
 std::atomic<std::uint64_t> second_guess_calls{0};
 // Provider orchestration is single-threaded.  The Kokkos reductions complete before these host-only
@@ -921,7 +1034,11 @@ class DelegatingPrepared final : public PreparedTensorSolver {
   pops::runtime::program::HierarchyTensorSolverExecutionPath execution_path()
       const noexcept override {
     execution_queries.fetch_add(1, std::memory_order_relaxed);
-    return delegate_->execution_path();
+    const auto selected = delegate_->execution_path();
+    if (selected ==
+        pops::runtime::program::HierarchyTensorSolverExecutionPath::PreparedKrylovFallback)
+      fallback_queries.fetch_add(1, std::memory_order_relaxed);
+    return selected;
   }
   int level_count() const noexcept override {
     return delegate_->level_count();
@@ -940,11 +1057,13 @@ class DelegatingPrepared final : public PreparedTensorSolver {
     delegate_->stage_initial_guess(level, guess);
   }
   pops::SolveReport solve(
-      const pops::runtime::program::HierarchyTensorSolveControls& controls) override {
+      const pops::runtime::program::HierarchyTensorSolveControls& controls,
+      const pops::ExecutionLane& lane) override {
     const std::uint64_t solve_index =
         solve_calls.fetch_add(1, std::memory_order_relaxed);
     auto outcome =
-        pops::runtime::program::solve_prepared_hierarchy_tensor_collectively(*delegate_, controls);
+        pops::runtime::program::solve_prepared_hierarchy_tensor_collectively(
+            *delegate_, controls, lane);
     const auto action =
         outcome.report().solved_value_available()
             ? pops::SolveConsumption::kAccept
@@ -1029,11 +1148,12 @@ class Provider final : public TensorProvider {
         .bytes(pops::runtime::program::hierarchy_tensor_detail::request_contract(request));
     return std::move(contract).release();
   }
-  std::unique_ptr<PreparedTensorSolver> prepare(const TensorRequest& request) const override {
+  std::unique_ptr<PreparedTensorSolver> prepare(
+      const TensorRequest& request, const pops::ExecutionLane& lane) const override {
     if (!supports(request).accepted())
       throw std::invalid_argument("header-only hierarchy provider rejected the request");
     const BuiltinTensorProvider delegate;
-    auto prepared_delegate = delegate.prepare(delegate_request(request));
+    auto prepared_delegate = delegate.prepare(delegate_request(request), lane);
     std::vector<bool> level_populated;
     level_populated.reserve(request.levels.size());
     for (const auto& level : request.levels)
@@ -1068,6 +1188,10 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_prepare_calls() noexcep
 
 extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_execution_queries() noexcept {
   return pops_test_hierarchy::execution_queries.load(std::memory_order_relaxed);
+}
+
+extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_fallback_queries() noexcept {
+  return pops_test_hierarchy::fallback_queries.load(std::memory_order_relaxed);
 }
 
 extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_solve_calls() noexcept {
@@ -1145,6 +1269,15 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
     assert "pops_test_hierarchy::register_provider(ctx);" in source
     assert '"tests.hierarchy.header-only"' in source
     amr = source.split('extern "C" void pops_install_program_amr', 1)[1]
+    assert "ctx.prepared_execution_communicator()" in amr
+    assert '"pops.program.amr.prepared-problem.' in amr
+    assert '"pops.program.amr.krylov-workspace.' in amr
+    assert "prepare_tensor_boundary_session(" in amr
+    tensor_calls = [line for line in amr.splitlines() if "ctx.tensor_laplacian(" in line]
+    assert len(tensor_calls) == 1
+    assert "operator_tensor_boundary_session" in tensor_calls[0]
+    assert "tensor_point" in tensor_calls[0]
+    assert "operator_mesh_boundary_session" not in tensor_calls[0]
     branch = amr.index("if (ctx.uses_prepared_krylov_fallback())")
     gather = amr.index(".gather(hierarchy_dt)", branch)
     solve_once = amr.index("_level_programs->front().solve(hierarchy_dt)", gather)
@@ -1161,14 +1294,15 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
     )
 
     # The same descriptor must survive the public AMR lifecycle.  Bind registers and prepares the
-    # external provider, while run must query its provider-selected execution path and invoke its real
-    # hierarchy solve.  The external provider delegates numerical storage/iterations to the
-    # authenticated builtin FAC provider but retains its own identity, exact prepared contract and
-    # observable lifecycle.
+    # external provider, while run must query its provider-selected execution path. Refined runs
+    # invoke its real hierarchy solve; the flat run must instead select generated prepared Krylov.
+    # The provider retains its identity, exact prepared contract and observable lifecycle in both.
     import pops
     from pops.codegen import Production
 
     manufactured_errors = {}
+    flat_periodic_fallback_proved = False
+    flat_dirichlet_fallback_proved = False
     constant_oracle = _constant_rotation_oracle(
         dt=_HIERARCHY_DT,
         rate=_HIERARCHY_ROTATION_RATE,
@@ -1177,6 +1311,12 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
         north=-0.5,
     )
     configurations = (
+        # One level has an empty ratio set and must execute the provider-selected prepared Krylov
+        # fallback over the frozen packed tensor, without calling the provider's direct solve.
+        (1, (), 1, False, True, _HIERARCHY_BASE_CELLS),
+        # The same fallback must consume the provider-authenticated zero-Dirichlet face law.  This
+        # dense-oracle case distinguishes it from the generic scalar constant extrapolation.
+        (1, (), 1, True, True, _HIERARCHY_BASE_CELLS),
         # Preserve the two-step outflow/reflux/history-carry composition.
         (2, (3,), 2, True, False, _HIERARCHY_BASE_CELLS),
         # Independently quantify the nonzero two-level solve at h and h/2.
@@ -1218,13 +1358,16 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
         simulation = pops.bind(
             compiled,
             initial_values=(
-                {plasma_state: _nonuniform_plasma_initial()} if bound_plasma else None
+                {plasma_state: _nonuniform_plasma_initial()}
+                if bound_plasma and not manufactured_plasma
+                else None
             ),
             resources={"execution_context": artifact_execution_context(compiled)},
         )
         bound_register, bound_prepare, bound_execution, bound_solve = (
             _external_hierarchy_counters(compiled.so_path)
         )
+        bound_fallback = _external_hierarchy_fallback_queries(compiled.so_path)
         assert bound_register > before_bind[0]
         assert bound_prepare > before_bind[1]
         assert bound_execution >= before_bind[2]
@@ -1239,7 +1382,11 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
                 dtype=np.float64,
             ).reshape(3, finest_cells, finest_cells)
             active = finest_initial[0] > 0.0
-            assert np.any(active) and np.any(~active)
+            assert np.any(active)
+            if max_levels == 1:
+                assert np.all(active)
+            else:
+                assert np.any(~active)
             uniform_initial = _manufactured_plasma_initial(finest_cells)
             np.testing.assert_allclose(
                 finest_initial[:, active],
@@ -1247,7 +1394,12 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
                 rtol=2.0e-13,
                 atol=2.0e-13,
             )
-            manufactured_oracle = _periodic_condensed_fourier_oracle(
+            oracle = (
+                _dirichlet_condensed_oracle
+                if bound_plasma
+                else _periodic_condensed_fourier_oracle
+            )
+            manufactured_oracle = oracle(
                 uniform_initial,
                 dt=_HIERARCHY_DT,
                 rotation_rate=_HIERARCHY_ROTATION_RATE,
@@ -1258,11 +1410,17 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
         run_register, run_prepare, run_execution, run_solve = (
             _external_hierarchy_counters(compiled.so_path)
         )
+        run_fallback = _external_hierarchy_fallback_queries(compiled.so_path)
         assert report.accepted_steps == steps
         assert run_register == bound_register
         assert run_prepare == bound_prepare
         assert run_execution > bound_execution
-        assert run_solve == bound_solve + steps
+        if max_levels == 1:
+            assert run_fallback > bound_fallback
+            assert run_solve == bound_solve
+        else:
+            assert run_fallback == bound_fallback
+            assert run_solve == bound_solve + steps
 
         # Each level owns a distinct qualified clock, while the authored temporal ratios remain
         # independent from the spatial ratio two (and from each other in the three-level tower).
@@ -1299,7 +1457,7 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
             "average_down",
         }
 
-        if bound_plasma:
+        if bound_plasma and not manufactured_plasma:
             # ADC-639 composition: the Gaussian marker has nontrivial C/F transport fluxes while the
             # sibling plasma block executes its hierarchy solve.  The accepted marker mass remains
             # conservative after both refluxed macro-steps.
@@ -1370,11 +1528,11 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
         # FAC, generated C++, and the external provider.  Compare the qualified fine potential away
         # from the exact C/F interpolation band; the measured error must converge under refinement.
         assert manufactured_oracle is not None
-        _, expected_potential, manufactured_rhs = manufactured_oracle
+        expected_state, expected_potential, manufactured_rhs = manufactured_oracle
         assert float(np.linalg.norm(manufactured_rhs.ravel())) > 1.0
         actual_potential = _amr_history_level(
             # The accepted macro-step rotates the just-stored phi into lag-1.
-            simulation.history_global("plasma.tensor-potential", 1),
+            simulation.history_global("plasma.tensor-potential", max_levels - 1, 1),
             level=max_levels - 1,
             base_cells=base_cells,
         )
@@ -1384,6 +1542,48 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
             dtype=np.float64,
         ).reshape(3, finest_cells, finest_cells)
         active = final_finest[0] > 0.0
+        if max_levels == 1:
+            assert np.all(active)
+            difference = actual_potential - expected_potential
+            if not bound_plasma:
+                difference -= float(difference.mean())
+            relative_l2 = float(np.linalg.norm(difference) / np.linalg.norm(expected_potential))
+            assert np.isfinite(relative_l2) and relative_l2 < 2.0e-6
+            assert np.isfinite(final_finest).all()
+            np.testing.assert_allclose(final_finest, expected_state, rtol=2.0e-8, atol=2.0e-8)
+            assert float(np.max(np.abs(actual_potential))) > 1.0e-6
+            if bound_plasma:
+                flat_dirichlet_fallback_proved = True
+            else:
+                flat_periodic_fallback_proved = True
+
+            # Re-enter the same installed solve at a distinct macro point.  The prepared affine
+            # problem must reuse its tensor session, refresh the authenticated evaluation point,
+            # and execute fallback again without crossing into the provider's direct hierarchy
+            # solve.
+            second_report = pops.run(
+                simulation,
+                t_end=2.0 * _HIERARCHY_DT,
+                max_steps=1,
+            )
+            assert second_report.accepted_steps == 1
+            refreshed_fallback = _external_hierarchy_fallback_queries(compiled.so_path)
+            refreshed_counters = _external_hierarchy_counters(compiled.so_path)
+            assert refreshed_fallback > run_fallback
+            assert refreshed_counters[3] == run_solve
+            refreshed_program_report = simulation.program_report()
+            refreshed_level_clocks = [
+                row
+                for row in refreshed_program_report.clocks
+                if row["kind"] == "level"
+            ]
+            assert all(row["macro_step"] == 2 for row in refreshed_level_clocks)
+            refreshed_finest = np.asarray(
+                simulation.block_level_state_global("plasma", 0), dtype=np.float64
+            )
+            assert np.isfinite(refreshed_finest).all()
+            assert float(np.max(np.abs(refreshed_finest))) > 1.0e-6
+            continue
         interior = _patch_interior(active)
         difference = actual_potential - expected_potential
         # The periodic operator admits an arbitrary constant. Remove exactly that gauge mode before
@@ -1414,6 +1614,8 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
     # The two-level runs use h and h/2 on their finest patches.  This is an observed
     # convergence requirement, not a loose absolute tolerance: a zero-RHS solve, level-0-only solve,
     # stale publication or arbitrary C/F fill cannot exhibit the expected refined MMS convergence.
+    assert flat_periodic_fallback_proved
+    assert flat_dirichlet_fallback_proved
     assert set(manufactured_errors) == {
         _HIERARCHY_BASE_CELLS,
         2 * _HIERARCHY_BASE_CELLS,

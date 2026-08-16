@@ -4,8 +4,11 @@
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/layout/field_distribution.hpp>
 #include <pops/mesh/storage/multifab.hpp>
-#include <pops/parallel/comm.hpp>
+#include <pops/parallel/execution_lane.hpp>
 
+#include <functional>
+#include <memory>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -22,9 +25,11 @@ struct FieldLogicalTimePoint {
   int partition_slot = 0;
   int stage_slot = 0;
   int level = 0;
-  int step = 0;
+  std::int64_t step = 0;
   int substep = 0;
   int iteration = 0;
+  std::int64_t stage_fraction_numerator = 0;
+  std::int64_t stage_fraction_denominator = 1;
 };
 
 /// Fallible device evaluation report. Generated launchers perform their own device reduction and
@@ -46,23 +51,24 @@ struct FieldBoundaryFailure {
   /// receive the same code/face/cell/value.  This intentionally lives at the host launcher seam:
   /// device functors first reduce into their local witness, then every rank calls this method in the
   /// same order even when it saw no local failure.
-  bool synchronize_across_ranks() {
+  bool synchronize_across_ranks(const ExecutionLane& lane) {
     const bool local_failed = failed();
-    const long failure_count = all_reduce_sum(local_failed ? 1L : 0L);
+    const long failure_count = all_reduce_sum(local_failed ? 1L : 0L, lane);
     if (failure_count == 0) {
       reset();
       return false;
     }
 
-    const int rank = my_rank();
-    const int owner =
-        static_cast<int>(all_reduce_min(static_cast<double>(local_failed ? rank : n_ranks())));
+    const int rank = lane.rank();
+    const int owner = static_cast<int>(
+        all_reduce_min(static_cast<double>(local_failed ? rank : lane.size()), lane));
     const bool publish = local_failed && rank == owner;
-    code = static_cast<int>(all_reduce_sum(publish ? static_cast<long>(code) : 0L));
-    face = static_cast<int>(all_reduce_sum(publish ? static_cast<long>(face) : 0L));
+    code = static_cast<int>(all_reduce_sum(publish ? static_cast<long>(code) : 0L, lane));
+    face = static_cast<int>(all_reduce_sum(publish ? static_cast<long>(face) : 0L, lane));
     for (int axis = 0; axis < Dim; ++axis)
-      cell[axis] = static_cast<int>(all_reduce_sum(publish ? static_cast<long>(cell[axis]) : 0L));
-    value = static_cast<Real>(all_reduce_sum(publish ? static_cast<double>(value) : 0.0));
+      cell[axis] =
+          static_cast<int>(all_reduce_sum(publish ? static_cast<long>(cell[axis]) : 0L, lane));
+    value = static_cast<Real>(all_reduce_sum(publish ? static_cast<double>(value) : 0.0, lane));
     return true;
   }
 };
@@ -97,22 +103,67 @@ struct FieldBoundaryExecutionContext {
   const std::vector<Real>* parameters = nullptr;
   int parameter_count = 0;
   FieldBoundaryFailure<Dim>* failure = nullptr;
+  // Optional host-only Program Clock authority used by external host-batch executors. It is last
+  // so generated device-kernel aggregate initializers retain their established numeric layout.
+  const std::string* clock_identity = nullptr;
 };
 
-/// Generated residual and JVP launchers.  A call handles one complete physical face and launches its
-/// device-clean named Kokkos functor over all local face cells.  The function pointer is selected once
-/// per solve/face outside the iterative hot loop; the function itself contains no runtime registry.
+/// Stable owner for an already-routed set of level-qualified execution views. The retained
+/// lifetime pins every pointer/string table referenced by the views; solvers retain this owner and
+/// copy only one lightweight scalar/pointer view when stamping an iteration number.
 template <int Dim>
-using FieldBoundaryPrepareResidualFn = void (*)(int face, const MultiFab<Dim>& iterate,
-                                                MultiFab<Dim>& operator_view,
-                                                const Geometry<Dim>& geometry,
-                                                const FieldBoundaryExecutionContext<Dim>& context);
+class PreparedFieldBoundaryContextSet {
+ public:
+  using context_type = FieldBoundaryExecutionContext<Dim>;
+
+  PreparedFieldBoundaryContextSet(std::shared_ptr<void> retained_lifetime, std::size_t levels)
+      : retained_lifetime_(std::move(retained_lifetime)), contexts_(levels) {
+    if (!retained_lifetime_ || levels == 0)
+      throw std::invalid_argument(
+          "prepared field boundary contexts require a retained owner and live levels");
+  }
+
+  PreparedFieldBoundaryContextSet(const PreparedFieldBoundaryContextSet&) = delete;
+  PreparedFieldBoundaryContextSet& operator=(const PreparedFieldBoundaryContextSet&) = delete;
+
+  std::size_t size() const noexcept { return contexts_.size(); }
+  std::span<const context_type> contexts() const noexcept { return contexts_; }
+
+  /// Binding happens before solver entry while its owning System/AMR session is exclusively held.
+  /// No allocation or ownership change occurs; the solver receives only the resulting const owner.
+  void bind(std::size_t level, context_type context) {
+    if (level >= contexts_.size() || context.failure == nullptr)
+      throw std::invalid_argument(
+          "prepared field boundary context binding requires a valid level and failure channel");
+    contexts_[level] = context;
+  }
+
+  context_type view(std::size_t level, int iteration) const {
+    if (level >= contexts_.size() || contexts_[level].failure == nullptr)
+      throw std::logic_error("prepared field boundary context view is unavailable");
+    context_type result = contexts_[level];
+    result.point.iteration = iteration;
+    return result;
+  }
+
+ private:
+  std::shared_ptr<void> retained_lifetime_;
+  std::vector<context_type> contexts_;
+};
+
+/// Prepared residual and JVP launchers. A call handles one complete physical face. Generated
+/// launchers remain device-clean named Kokkos functors; external providers may instead retain a
+/// session-owned host-batch executor. The callable is selected and authenticated before the solve,
+/// and no registry lookup or process-global trampoline enters the iterative path.
 template <int Dim>
-using FieldBoundaryPrepareJvpFn = void (*)(int face, const MultiFab<Dim>& iterate,
-                                           const MultiFab<Dim>& direction,
-                                           MultiFab<Dim>& direction_view,
-                                           const Geometry<Dim>& geometry,
-                                           const FieldBoundaryExecutionContext<Dim>& context);
+using FieldBoundaryPrepareResidualFn = std::function<void(
+    int face, const MultiFab<Dim>& iterate, MultiFab<Dim>& operator_view,
+    const Geometry<Dim>& geometry, const FieldBoundaryExecutionContext<Dim>& context)>;
+template <int Dim>
+using FieldBoundaryPrepareJvpFn =
+    std::function<void(int face, const MultiFab<Dim>& iterate, const MultiFab<Dim>& direction,
+                       MultiFab<Dim>& direction_view, const Geometry<Dim>& geometry,
+                       const FieldBoundaryExecutionContext<Dim>& context)>;
 /// Residual launchers use additive semantics: @c residual already contains `f-L(phi)` and the
 /// launcher adds the exact boundary closure/elimination term `C(phi)` on boundary cells.
 ///
@@ -123,14 +174,13 @@ using FieldBoundaryPrepareJvpFn = void (*)(int face, const MultiFab<Dim>& iterat
 /// this sign at the generated-kernel ABI makes a residual/JVP finite-difference check unambiguous.
 /// The iterate and direction are immutable mathematical inputs.
 template <int Dim>
-using FieldBoundaryResidualFn = void (*)(int face, const MultiFab<Dim>& iterate,
-                                         MultiFab<Dim>& residual, const Geometry<Dim>& geometry,
-                                         const FieldBoundaryExecutionContext<Dim>& context);
+using FieldBoundaryResidualFn = std::function<void(
+    int face, const MultiFab<Dim>& iterate, MultiFab<Dim>& residual, const Geometry<Dim>& geometry,
+    const FieldBoundaryExecutionContext<Dim>& context)>;
 template <int Dim>
-using FieldBoundaryJvpFn = void (*)(int face, const MultiFab<Dim>& iterate,
-                                    const MultiFab<Dim>& direction, MultiFab<Dim>& output,
-                                    const Geometry<Dim>& geometry,
-                                    const FieldBoundaryExecutionContext<Dim>& context);
+using FieldBoundaryJvpFn = std::function<void(
+    int face, const MultiFab<Dim>& iterate, const MultiFab<Dim>& direction, MultiFab<Dim>& output,
+    const Geometry<Dim>& geometry, const FieldBoundaryExecutionContext<Dim>& context)>;
 
 template <int Dim>
 struct CompiledFieldBoundaryKernel {
@@ -140,34 +190,37 @@ struct CompiledFieldBoundaryKernel {
   std::string identity;
   std::string residual_identity;
   std::string jvp_identity;
-  FieldBoundaryPrepareResidualFn<Dim> prepare_residual = nullptr;
-  FieldBoundaryPrepareJvpFn<Dim> prepare_jvp = nullptr;
-  FieldBoundaryResidualFn<Dim> residual = nullptr;
-  FieldBoundaryJvpFn<Dim> jvp = nullptr;
+  FieldBoundaryPrepareResidualFn<Dim> prepare_residual{};
+  FieldBoundaryPrepareJvpFn<Dim> prepare_jvp{};
+  FieldBoundaryResidualFn<Dim> residual{};
+  FieldBoundaryJvpFn<Dim> jvp{};
   bool observes_iteration = false;
 
-  bool empty() const { return residual == nullptr; }
+  bool empty() const { return !residual; }
+  bool prepares_operator_views() const noexcept {
+    return static_cast<bool>(prepare_residual) || static_cast<bool>(prepare_jvp);
+  }
 
   void validate() const {
-    if (identity.empty() || residual_identity.empty() || jvp_identity.empty() ||
-        prepare_residual == nullptr || prepare_jvp == nullptr || residual == nullptr ||
-        jvp == nullptr)
+    if (identity.empty() || residual_identity.empty() || jvp_identity.empty() || !residual ||
+        !jvp || static_cast<bool>(prepare_residual) != static_cast<bool>(prepare_jvp))
       throw std::runtime_error(
-          "compiled field boundary kernel requires exact residual and JVP launchers");
+          "prepared field boundary kernel requires an exact residual/JVP pair and a complete "
+          "optional operator-view preparation pair");
   }
 
   void prepare_residual_view(int face, const MultiFab<Dim>& iterate, MultiFab<Dim>& operator_view,
                              const Geometry<Dim>& geometry,
                              const FieldBoundaryExecutionContext<Dim>& context) const {
-    prepare_residual(face, iterate, operator_view, geometry, context);
+    if (prepare_residual)
+      prepare_residual(face, iterate, operator_view, geometry, context);
   }
 
   void prepare_jvp_view(int face, const MultiFab<Dim>& iterate, const MultiFab<Dim>& direction,
                         MultiFab<Dim>& direction_view, const Geometry<Dim>& geometry,
                         const FieldBoundaryExecutionContext<Dim>& context) const {
-    if (prepare_jvp == nullptr)
-      throw std::runtime_error("field boundary closure has no compiled JVP preparation launcher");
-    prepare_jvp(face, iterate, direction, direction_view, geometry, context);
+    if (prepare_jvp)
+      prepare_jvp(face, iterate, direction, direction_view, geometry, context);
   }
 
   void add_residual(int face, const MultiFab<Dim>& iterate, MultiFab<Dim>& output,
@@ -179,7 +232,7 @@ struct CompiledFieldBoundaryKernel {
   void apply_jvp(int face, const MultiFab<Dim>& iterate, const MultiFab<Dim>& direction,
                  MultiFab<Dim>& output, const Geometry<Dim>& geometry,
                  const FieldBoundaryExecutionContext<Dim>& context) const {
-    if (jvp == nullptr)
+    if (!jvp)
       throw std::runtime_error("field boundary closure has no compiled JVP launcher");
     jvp(face, iterate, direction, output, geometry, context);
   }

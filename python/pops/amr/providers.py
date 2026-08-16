@@ -84,12 +84,10 @@ class ResolvedAMRProviderBinding:
 
 @dataclass(frozen=True, slots=True)
 class PreparedAMRProviderInstallation:
-    """Validated runtime job; ``installer`` is absent for an intrinsic builtin provider."""
+    """Validated intrinsic AMR authority retained by the native runtime."""
 
     role: str
     binding: dict[str, Any]
-    installer: Callable[..., Any] | None = None
-    native_handle: Any = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,6 +240,10 @@ def _require_tagger_target_execution(component: Any, capability: Mapping[str, An
     from pops import interfaces
 
     targets = interfaces.Tagger.native_target_variants(component)
+    if capability["execution_mode"] == "host":
+        # The prepared adapter owns bounded Kokkos HostSpace mirrors for every selected target.
+        # Host callbacks therefore never borrow a device carrier or claim its pointer is host data.
+        return
     if capability["execution_mode"] != "native_backend":
         return
     required_spaces = {
@@ -493,7 +495,6 @@ class _AMRRuntimeInterfaceProtocol:
     role: str
     native_interface: Mapping[str, Any]
     builtin_provider_id: str
-    component_installer: str
 
     @property
     def resolved_identity_namespace(self) -> str:
@@ -503,12 +504,6 @@ class _AMRRuntimeInterfaceProtocol:
         self, binding: Mapping[str, Any], resolved_tagging_identity: str | None,
     ) -> None:
         del binding, resolved_tagging_identity
-
-    def validate_installed_capability(
-        self, binding: Mapping[str, Any], installed: Any,
-        resolved_tagging_identity: str | None,
-    ) -> None:
-        del binding, installed, resolved_tagging_identity
 
     def builtin_native_config(self, binding: Mapping[str, Any]) -> dict[str, Any]:
         del binding
@@ -640,26 +635,6 @@ class _TaggerRuntimeInterfaceProtocol(_AMRRuntimeInterfaceProtocol):
             raise ValueError(
                 "AMR Tagger lacks the exact resolved candidate-program authority")
 
-    def validate_installed_capability(
-        self, binding: Mapping[str, Any], installed: Any,
-        resolved_tagging_identity: str | None,
-    ) -> None:
-        from pops.identity.semantic import semantic_value
-
-        self.validate_resolved_capability(binding, resolved_tagging_identity)
-        manifest_capability = _normalize_tagger_capability(
-            installed.runtime_contract.capabilities)
-        if semantic_value(
-                binding.get("tagging_capability"),
-                where="installed AMR Tagger capability") != semantic_value(
-                    manifest_capability,
-                    where="manifest AMR Tagger capability") \
-                or not isinstance(binding.get("clock_identity"), str) \
-                or not binding["clock_identity"]:
-            raise ValueError(
-                "external AMR Tagger lacks its exact graph/capability/clock contract")
-
-
 @dataclass(frozen=True, slots=True)
 class _RefluxRuntimeInterfaceProtocol(_AMRRuntimeInterfaceProtocol):
     """The local Reflux callback is qualified by the accepted Program clock."""
@@ -671,14 +646,6 @@ class _RefluxRuntimeInterfaceProtocol(_AMRRuntimeInterfaceProtocol):
         if not isinstance(binding.get("clock_identity"), str) \
                 or not binding["clock_identity"]:
             raise ValueError("AMR Reflux lacks its exact Program clock authority")
-
-    def validate_installed_capability(
-        self, binding: Mapping[str, Any], installed: Any,
-        resolved_tagging_identity: str | None,
-    ) -> None:
-        del installed
-        self.validate_resolved_capability(binding, resolved_tagging_identity)
-
 
 def _runtime_interface_key(value: Any) -> tuple[Any, ...]:
     if not isinstance(value, Mapping):
@@ -706,19 +673,16 @@ def _runtime_interface_protocols() -> dict[tuple[Any, ...], _AMRRuntimeInterface
             role="clustering",
             native_interface=interfaces.Clustering.to_data(),
             builtin_provider_id="pops.lib.amr::berger_rigoutsos",
-            component_installer="_install_amr_clustering_component",
         ),
         _TaggerRuntimeInterfaceProtocol(
             role="tagger",
             native_interface=interfaces.Tagger.to_data(),
             builtin_provider_id="pops.lib.amr::symbolic_tagger",
-            component_installer="_install_amr_tagger_component",
         ),
         _RefluxRuntimeInterfaceProtocol(
             role="reflux",
             native_interface=interfaces.Reflux.to_data(),
             builtin_provider_id="pops.lib.amr::flux_register_reflux",
-            component_installer="_install_amr_reflux_component",
         ),
     )
     return {_runtime_interface_key(row.native_interface): row for row in protocols}
@@ -791,6 +755,24 @@ def _validate_external_binding(
             raise ValueError(
                 "external AMR %s provider differs from its component authority"
                 % protocol.role)
+    if binding.get("provider_identity") != amr_provider_binding_identity(
+            protocol.role, binding):
+        raise ValueError(
+            "AMR %s provider_identity does not authenticate its resolved authority"
+            % protocol.role)
+    if protocol.role == "tagger":
+        return
+    executable_authority = {
+        "clustering": "BergerRigoutsosProvider<Dim>",
+        "tagger": "PreparedTaggingExecutionPlan<Dim>",
+        "reflux": "the transactional AmrRuntime<Dim> reflux ledger",
+    }[protocol.role]
+    raise NotImplementedError(
+        "external AMR %s component installation requires a complete atomic AMR "
+        "provider-pack authority; no external component installer is published. "
+        "The executable authority remains %s"
+        % (protocol.role, executable_authority)
+    )
 
 
 _BINDING_PROTOCOLS: dict[
@@ -860,49 +842,21 @@ def _prepare_builtin_provider(
     return PreparedAMRProviderInstallation(protocol.role, binding)
 
 
-def _prepare_external_provider(
+def _prepare_external_tagger_provider(
     protocol: _AMRRuntimeInterfaceProtocol,
     binding: dict[str, Any],
-    *,
-    components: Mapping[str, Any],
-    native: Any,
-    resolved_tagging_identity: str | None,
+    **_: Any,
 ) -> PreparedAMRProviderInstallation:
-    component_id = binding.get("component_id")
-    if not isinstance(component_id, str) or not component_id:
-        raise ValueError(
-            "AMR %s provider requires one non-empty component identity" % protocol.role)
-    installed = components.get(component_id)
-    if installed is None:
-        raise ValueError(
-            "AMR %s provider requires exact component %r; it is not installed"
-            % (protocol.role, component_id))
-    if installed.component_manifest.token != binding.get("component_manifest_identity"):
-        raise ValueError("AMR %s provider changed component manifest identity" % protocol.role)
-    if installed.interface.to_data() != binding.get("native_interface") \
-            or installed.interface.version != binding.get("interface_version"):
-        raise ValueError("AMR %s provider changed native interface/version" % protocol.role)
-    if installed.native_handle is None:
-        raise ValueError("AMR %s component must be loaded before installation" % protocol.role)
-    component = binding.get("component")
-    if not isinstance(component, Mapping) \
-            or component.get("component_id") != component_id \
-            or component.get("component_manifest") != installed.component_manifest.token \
-            or component.get("interface") != installed.interface.to_data():
-        raise ValueError("AMR %s provider lost its exact component declaration" % protocol.role)
-    protocol.validate_installed_capability(
-        binding, installed, resolved_tagging_identity)
-    installer = getattr(native, protocol.component_installer, None)
-    if not callable(installer):
+    if protocol.role != "tagger":
         raise NotImplementedError(
-            "the selected native provider cannot install external AMR %s" % protocol.role)
-    return PreparedAMRProviderInstallation(
-        protocol.role, binding, installer, installed.native_handle)
+            "external AMR %s provider runtime protocol is not implemented" % protocol.role
+        )
+    return PreparedAMRProviderInstallation(protocol.role, binding)
 
 
 _INSTALLATION_PROTOCOLS: dict[str, Callable[..., PreparedAMRProviderInstallation]] = {
     "builtin": _prepare_builtin_provider,
-    "external_component": _prepare_external_provider,
+    "external_component": _prepare_external_tagger_provider,
 }
 
 
@@ -916,27 +870,11 @@ def _builtin_native_config(
         protocol.role, protocol.builtin_native_config(binding), {})
 
 
-def _external_native_config(
-    protocol: _AMRRuntimeInterfaceProtocol,
-    binding: dict[str, Any],
-) -> PreparedAMRProviderNativeConfig:
-    component = binding.get("component")
-    parameters = component.get("parameters") if isinstance(component, Mapping) else None
-    if not isinstance(parameters, Mapping):
-        raise TypeError(
-            "external AMR %s provider lost its canonical component parameters"
-            % protocol.role)
-    # The external component receives these exact options through LoadedComponent preparation;
-    # they are deliberately not reinterpreted as controls of a builtin algorithm.
-    return PreparedAMRProviderNativeConfig(protocol.role, {}, dict(parameters))
-
-
 _NATIVE_CONFIG_PROTOCOLS: dict[
     str, Callable[[_AMRRuntimeInterfaceProtocol, dict[str, Any]],
                   PreparedAMRProviderNativeConfig]
 ] = {
     "builtin": _builtin_native_config,
-    "external_component": _external_native_config,
 }
 
 
@@ -974,8 +912,6 @@ def prepare_amr_provider_installation(
     role: str,
     frozen_binding: Any,
     layout_identity: str,
-    components: Mapping[str, Any],
-    native: Any,
     resolved_tagging_identity: str | None,
 ) -> PreparedAMRProviderInstallation:
     """Lower one detached provider through its native-interface protocol.
@@ -1010,9 +946,6 @@ def prepare_amr_provider_installation(
     return lowering(
         protocol,
         binding,
-        components=components,
-        native=native,
-        resolved_tagging_identity=resolved_tagging_identity,
     )
 
 

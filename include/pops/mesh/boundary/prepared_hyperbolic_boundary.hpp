@@ -10,6 +10,7 @@
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/spatial/nd/face_field.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/runtime/analytic/expression.hpp>
 
 #include <Kokkos_Core.hpp>
@@ -17,10 +18,13 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -267,6 +271,81 @@ struct ZeroBoundaryFaceFlux {
   }
 };
 
+template <class Model, int Dim>
+concept ExactCharacteristicNoInflowModel =
+    requires(const Model& model, const typename Model::State& interior,
+             const typename Model::State& reference, typename Model::State& ghost) {
+      Model::dimension;
+      Model::n_vars;
+      Model::characteristic_no_inflow_contract_version;
+      Model::characteristic_no_inflow_dimension;
+      Model::characteristic_no_inflow_components;
+      Model::characteristic_no_inflow_conservative;
+      { model.characteristic_no_inflow(interior, reference, 0, -1, ghost) } -> std::same_as<bool>;
+    } &&
+    Model::dimension == Dim && Model::characteristic_no_inflow_contract_version == 1 &&
+    Model::characteristic_no_inflow_dimension == Dim &&
+    Model::characteristic_no_inflow_components == Model::n_vars &&
+    Model::characteristic_no_inflow_conservative;
+
+template <int Axis, int Side, int Dim, class Model>
+struct FillCharacteristicNoInflowFace {
+  static_assert(Axis >= 0 && Axis < Dim);
+  static_assert(Side == -1 || Side == 1);
+
+  Model model;
+  FieldView<Real, Dim> state{};
+  BoundaryTableView<Dim> table{};
+  int boundary_index = 0;
+
+  POPS_HD Real operator()(const Index<Dim>& ghost_index) const {
+    typename Model::State interior{};
+    typename Model::State reference{};
+    typename Model::State ghost{};
+    Index<Dim> interior_index = ghost_index;
+    interior_index[Axis] = boundary_index;
+    for (int component = 0; component < Model::n_vars; ++component) {
+      interior[component] = state(interior_index, component);
+      reference[component] = table.fixed_value(2 * Axis + (Side > 0 ? 1 : 0), component);
+      if (!Kokkos::isfinite(interior[component]) || !Kokkos::isfinite(reference[component]))
+        return Real(1);
+    }
+    if (!model.characteristic_no_inflow(interior, reference, Axis, Side, ghost))
+      return Real(1);
+    for (int component = 0; component < Model::n_vars; ++component)
+      if (!Kokkos::isfinite(ghost[component]))
+        return Real(1);
+    for (int component = 0; component < Model::n_vars; ++component)
+      state(ghost_index, component) = ghost[component];
+    return Real(0);
+  }
+};
+
+template <int Dim>
+struct PublishBoundaryCandidate {
+  FieldView<const Real, Dim> candidate{};
+  FieldView<Real, Dim> state{};
+  int ncomp = 0;
+
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    for (int component = 0; component < ncomp; ++component)
+      state(index, component) = candidate(index, component);
+  }
+};
+
+template <int Dim>
+struct ValidateBoundaryCandidate {
+  FieldView<const Real, Dim> candidate{};
+  int ncomp = 0;
+
+  POPS_HD Real operator()(const Index<Dim>& index) const {
+    for (int component = 0; component < ncomp; ++component)
+      if (!Kokkos::isfinite(candidate(index, component)))
+        return Real(1);
+    return Real(0);
+  }
+};
+
 template <int Dim>
 HyperbolicComponentTransform<Dim> transform_from_semantic(VariableSemantic semantic) {
   semantic.template validate_for_dimension<Dim>();
@@ -428,6 +507,20 @@ class PreparedHyperbolicBoundary {
       return prepared.law == HyperbolicBoundaryLaw::CharacteristicNoInflow;
     });
   }
+
+  template <class Model>
+  void require_model_qualified_characteristic_provider() const {
+    if (!has_characteristic_no_inflow())
+      return;
+    if constexpr (!hyperbolic_boundary_detail::ExactCharacteristicNoInflowModel<Model, Dim>) {
+      throw std::logic_error(
+          "characteristic no-inflow requires the generated model's exact conservative ND "
+          "provider contract");
+    } else if (Model::n_vars != ncomp()) {
+      throw std::invalid_argument(
+          "characteristic no-inflow provider component layout differs from the boundary state");
+    }
+  }
   bool requires_fixed_state_conversion() const {
     return std::any_of(faces_.begin(), faces_.end(), [](const PreparedHyperbolicFace& prepared) {
       return prepared.law == HyperbolicBoundaryLaw::FixedState &&
@@ -477,27 +570,7 @@ class PreparedHyperbolicBoundary {
   template <class MemorySpace>
   PhysicalFillPreflight<MemorySpace> preflight_physical(MultiFab<Dim, MemorySpace>& state,
                                                         const Box<Dim>& domain) const {
-    if (requires_fixed_state_conversion())
-      throw std::logic_error(
-          "primitive fixed-state boundary reached execution before model conversion");
-    if (has_analytic_state())
-      throw std::logic_error(
-          "analytic hyperbolic boundary requires a requalified ND coordinate provider");
-    if (has_characteristic_no_inflow())
-      throw std::logic_error(
-          "characteristic no-inflow requires an explicit model-qualified ND provider");
-    if (domain.empty())
-      throw std::invalid_argument("prepared hyperbolic boundary domain must be non-empty");
-    if (state.ncomp() != ncomp())
-      throw std::invalid_argument(
-          "prepared hyperbolic boundary component count differs from the state");
-    for (std::size_t local = 0; local < state.local_size(); ++local)
-      if (!domain.contains(state.box(local)))
-        throw std::invalid_argument(
-            "prepared hyperbolic boundary state patch lies outside the physical domain");
-
-    validate_axes_<0>(domain, state.ghosts());
-    validate_patch_regions_<0>(state, domain);
+    validate_physical_contract_(state, domain, /*allow_characteristic=*/false);
     return PhysicalFillPreflight<MemorySpace>(this, &state, domain);
   }
 
@@ -534,6 +607,162 @@ class PreparedHyperbolicBoundary {
     fill_physical_preflighted(state, std::move(preflight));
   }
 
+  /// Execute the generated model's exact characteristic provider together with the generic
+  /// physical laws.  The complete candidate is materialized in Kokkos storage and validated
+  /// before any value is published back to ``state``.
+  template <class Model, class MemorySpace>
+  void fill_physical_model_qualified(MultiFab<Dim, MemorySpace>& state, const Box<Dim>& domain,
+                                     const Model&) const {
+    if (has_characteristic_no_inflow())
+      throw std::logic_error(
+          "characteristic no-inflow requires an explicit prepared ExecutionLane");
+    fill_physical(state, domain);
+  }
+
+  template <class Model, class MemorySpace>
+  void fill_physical_model_qualified(MultiFab<Dim, MemorySpace>& state, const Box<Dim>& domain,
+                                     const Model& model, const ExecutionLane& lane,
+                                     MultiFab<Dim, MemorySpace>& candidate) const {
+    fill_physical_model_qualified_(state, domain, model, lane, candidate);
+  }
+
+  template <class Model, class MemorySpace>
+  void fill_physical_model_qualified(MultiFab<Dim, MemorySpace>& state,
+                                     const Geometry<Dim>& geometry, const Model& model) const {
+    fill_physical_model_qualified(state, geometry.domain(), model);
+  }
+
+  template <class Model, class MemorySpace>
+  void fill_physical_model_qualified(MultiFab<Dim, MemorySpace>& state,
+                                     const Geometry<Dim>& geometry, const Model& model,
+                                     const ExecutionLane& lane,
+                                     MultiFab<Dim, MemorySpace>& candidate) const {
+    fill_physical_model_qualified(state, geometry.domain(), model, lane, candidate);
+  }
+
+ private:
+  template <class Model, class MemorySpace>
+  void fill_physical_model_qualified_(MultiFab<Dim, MemorySpace>& state, const Box<Dim>& domain,
+                                      const Model& model, const ExecutionLane& lane,
+                                      MultiFab<Dim, MemorySpace>& candidate) const {
+    long invalid_lane = 0;
+    try {
+      invalid_lane = lane.size() != static_cast<int>(state.rank_space().size()) ||
+                             lane.rank() != static_cast<int>(
+                                                state.rank_space().linear_rank(state.local_rank()))
+                         ? 1L
+                         : 0L;
+    } catch (...) {
+      invalid_lane = 1;
+    }
+    if (all_reduce_max(invalid_lane, lane.communicator()) != 0)
+      throw std::invalid_argument(
+          "characteristic no-inflow requires its exact prepared ExecutionLane");
+
+    std::exception_ptr provider_error;
+    try {
+      require_model_qualified_characteristic_provider<Model>();
+    } catch (...) {
+      provider_error = std::current_exception();
+    }
+    if (all_reduce_max(provider_error ? 1L : 0L, lane.communicator()) != 0) {
+      if (lane.size() == 1 && provider_error)
+        std::rethrow_exception(provider_error);
+      throw std::invalid_argument(
+          "characteristic no-inflow provider contract is invalid on at least one rank");
+    }
+
+    const long characteristic = has_characteristic_no_inflow() ? 1L : 0L;
+    const long minimum_characteristic = all_reduce_min(characteristic, lane.communicator());
+    const long maximum_characteristic = all_reduce_max(characteristic, lane.communicator());
+    if (minimum_characteristic != maximum_characteristic)
+      throw std::invalid_argument(
+          "characteristic no-inflow boundary selection differs between execution ranks");
+    if (!has_characteristic_no_inflow()) {
+      fill_physical(state, domain);
+      return;
+    }
+    if constexpr (!hyperbolic_boundary_detail::ExactCharacteristicNoInflowModel<Model, Dim>) {
+      throw std::logic_error(
+          "characteristic no-inflow requires the generated model's exact conservative ND "
+          "provider contract");
+    } else {
+      long invalid_contract = 0;
+      try {
+        validate_physical_contract_(state, domain, /*allow_characteristic=*/true);
+      } catch (...) {
+        invalid_contract = 1;
+      }
+      if (all_reduce_max(invalid_contract, lane.communicator()) != 0)
+        throw std::invalid_argument(
+            "characteristic no-inflow physical contract is invalid on at least one rank");
+
+      std::exception_ptr staging_error;
+      try {
+        if (&candidate == &state || candidate.layout() != state.layout() ||
+            candidate.distribution() != state.distribution() ||
+            candidate.local_rank() != state.local_rank() ||
+            candidate.local_size() != state.local_size() || candidate.ncomp() != state.ncomp() ||
+            candidate.ghosts() != state.ghosts())
+          throw std::invalid_argument(
+              "characteristic no-inflow candidate differs from its prepared state contract");
+        for (std::size_t local = 0; local < state.local_size(); ++local) {
+          if (candidate.global_index(local) != state.global_index(local) ||
+              candidate.fab(local).box() != state.fab(local).box() ||
+              candidate.fab(local).grown_box() != state.fab(local).grown_box())
+            throw std::invalid_argument(
+                "characteristic no-inflow candidate differs from local patch storage");
+          Kokkos::deep_copy(candidate.fab(local).storage(), state.fab(local).storage());
+        }
+        device_fence();
+      } catch (...) {
+        staging_error = std::current_exception();
+      }
+      if (all_reduce_max(staging_error ? 1L : 0L, lane.communicator()) != 0) {
+        if (lane.size() == 1 && staging_error)
+          std::rethrow_exception(staging_error);
+        throw std::runtime_error(
+            "characteristic no-inflow candidate staging failed on at least one rank");
+      }
+
+      Real failure = Real(0);
+      Real candidate_failure = Real(0);
+      std::exception_ptr materialization_error;
+      try {
+        fill_axes_<0>(candidate, domain);
+        failure = fill_characteristic_axes_<0>(candidate, domain, model);
+        for (std::size_t local = 0; local < candidate.local_size(); ++local)
+          candidate_failure =
+              std::max(candidate_failure,
+                       for_each_cell_reduce_max(
+                           candidate.fab(local).grown_box(),
+                           hyperbolic_boundary_detail::ValidateBoundaryCandidate<Dim>{
+                               std::as_const(candidate.fab(local)).view(), candidate.ncomp()}));
+        device_fence();
+      } catch (...) {
+        materialization_error = std::current_exception();
+      }
+      const long rejected =
+          materialization_error || failure != Real(0) || candidate_failure != Real(0) ? 1L : 0L;
+      const long collective_rejected = all_reduce_max(rejected, lane.communicator());
+      if (collective_rejected != 0) {
+        if (lane.size() == 1 && materialization_error)
+          std::rethrow_exception(materialization_error);
+        throw std::runtime_error(
+            "generated characteristic no-inflow provider rejected a non-finite or invalid state");
+      }
+
+      for (std::size_t local = 0; local < state.local_size(); ++local) {
+        const Fab<Dim, MemorySpace>& candidate_fab = candidate.fab(local);
+        for_each_cell(state.fab(local).grown_box(),
+                      hyperbolic_boundary_detail::PublishBoundaryCandidate<Dim>{
+                          candidate_fab.view(), state.fab(local).view(), state.ncomp()});
+      }
+      device_fence();
+    }
+  }
+
+ public:
   /// Apply post-Riemann physical face laws to one patch-local integrated flux field.  NoFlux is
   /// deliberately enforced here rather than by its extrapolated ghost trace: equal traces can
   /// still carry a non-zero advective flux.  All face regions are validated before the first
@@ -554,6 +783,33 @@ class PreparedHyperbolicBoundary {
   }
 
  private:
+  template <class MemorySpace>
+  void validate_physical_contract_(const MultiFab<Dim, MemorySpace>& state, const Box<Dim>& domain,
+                                   bool allow_characteristic) const {
+    if (requires_fixed_state_conversion())
+      throw std::logic_error(
+          "primitive fixed-state boundary reached execution before model conversion");
+    if (has_analytic_state())
+      throw std::logic_error(
+          "analytic hyperbolic boundary requires a requalified ND coordinate provider");
+    if (has_characteristic_no_inflow() && !allow_characteristic)
+      throw std::logic_error(
+          "characteristic no-inflow requires the generated model's exact conservative ND "
+          "provider contract");
+    if (domain.empty())
+      throw std::invalid_argument("prepared hyperbolic boundary domain must be non-empty");
+    if (state.ncomp() != ncomp())
+      throw std::invalid_argument(
+          "prepared hyperbolic boundary component count differs from the state");
+    for (std::size_t local = 0; local < state.local_size(); ++local)
+      if (!domain.contains(state.box(local)))
+        throw std::invalid_argument(
+            "prepared hyperbolic boundary state patch lies outside the physical domain");
+
+    validate_axes_<0>(domain, state.ghosts());
+    validate_patch_regions_<0>(state, domain, allow_characteristic);
+  }
+
   template <int Axis, int Side>
   static Box<Dim> boundary_face_region_(const Box<Dim>& cells) {
     static_assert(Axis >= 0 && Axis < Dim);
@@ -627,31 +883,71 @@ class PreparedHyperbolicBoundary {
   }
 
   template <int Axis, class MemorySpace>
-  void validate_patch_regions_(const MultiFab<Dim, MemorySpace>& state,
-                               const Box<Dim>& domain) const {
+  void validate_patch_regions_(const MultiFab<Dim, MemorySpace>& state, const Box<Dim>& domain,
+                               bool allow_characteristic) const {
     if (state.ghosts()[Axis] == 0) {
       if constexpr (Axis + 1 < Dim)
-        validate_patch_regions_<Axis + 1>(state, domain);
+        validate_patch_regions_<Axis + 1>(state, domain, allow_characteristic);
       return;
     }
     const HyperbolicBoundaryLaw low = faces_[static_cast<std::size_t>(2 * Axis)].law;
     const HyperbolicBoundaryLaw high = faces_[static_cast<std::size_t>(2 * Axis + 1)].law;
+    const auto executable = [allow_characteristic](HyperbolicBoundaryLaw law) {
+      return hyperbolic_boundary_detail::is_builtin_physical_law(law) ||
+             (allow_characteristic && law == HyperbolicBoundaryLaw::CharacteristicNoInflow);
+    };
     for (std::size_t local = 0; local < state.local_size(); ++local) {
       const Fab<Dim, MemorySpace>& fab = state.fab(local);
       const Box<Dim> valid = fab.box();
-      if (hyperbolic_boundary_detail::is_builtin_physical_law(low) &&
-          valid.lo[Axis] == domain.lo[Axis] &&
+      if (executable(low) && valid.lo[Axis] == domain.lo[Axis] &&
           !fab.grown_box().contains(physical_region_<Axis, -1>(valid, domain, state.ghosts())))
         throw std::invalid_argument(
             "prepared hyperbolic lower physical region exceeds the Fab ghost storage");
-      if (hyperbolic_boundary_detail::is_builtin_physical_law(high) &&
-          valid.hi[Axis] == domain.hi[Axis] &&
+      if (executable(high) && valid.hi[Axis] == domain.hi[Axis] &&
           !fab.grown_box().contains(physical_region_<Axis, 1>(valid, domain, state.ghosts())))
         throw std::invalid_argument(
             "prepared hyperbolic upper physical region exceeds the Fab ghost storage");
     }
     if constexpr (Axis + 1 < Dim)
-      validate_patch_regions_<Axis + 1>(state, domain);
+      validate_patch_regions_<Axis + 1>(state, domain, allow_characteristic);
+  }
+
+  template <int Axis, class Model, class MemorySpace>
+  Real fill_characteristic_axes_(MultiFab<Dim, MemorySpace>& state, const Box<Dim>& domain,
+                                 const Model& model) const {
+    Real failure = Real(0);
+    const auto table = table_view_();
+    if (state.ghosts()[Axis] > 0) {
+      for (std::size_t local = 0; local < state.local_size(); ++local) {
+        Fab<Dim, MemorySpace>& fab = state.fab(local);
+        const Box<Dim> valid = fab.box();
+        if (valid.lo[Axis] == domain.lo[Axis] &&
+            faces_[static_cast<std::size_t>(2 * Axis)].law ==
+                HyperbolicBoundaryLaw::CharacteristicNoInflow) {
+          const Box<Dim> region = physical_region_<Axis, -1>(valid, domain, state.ghosts());
+          failure = std::max(
+              failure,
+              for_each_cell_reduce_max(
+                  region,
+                  hyperbolic_boundary_detail::FillCharacteristicNoInflowFace<Axis, -1, Dim, Model>{
+                      model, fab.view(), table, domain.lo[Axis]}));
+        }
+        if (valid.hi[Axis] == domain.hi[Axis] &&
+            faces_[static_cast<std::size_t>(2 * Axis + 1)].law ==
+                HyperbolicBoundaryLaw::CharacteristicNoInflow) {
+          const Box<Dim> region = physical_region_<Axis, 1>(valid, domain, state.ghosts());
+          failure = std::max(
+              failure,
+              for_each_cell_reduce_max(
+                  region,
+                  hyperbolic_boundary_detail::FillCharacteristicNoInflowFace<Axis, 1, Dim, Model>{
+                      model, fab.view(), table, domain.hi[Axis]}));
+        }
+      }
+    }
+    if constexpr (Axis + 1 < Dim)
+      failure = std::max(failure, fill_characteristic_axes_<Axis + 1>(state, domain, model));
+    return failure;
   }
 
   template <int Axis, class MemorySpace>

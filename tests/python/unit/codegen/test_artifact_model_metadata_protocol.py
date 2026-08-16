@@ -13,7 +13,7 @@ class ExternalMetadataProvider:
             "schema_version": 3,
             "state_spaces": ("electrons",),
             "cons_names": ("density", "momentum"),
-            "cons_roles": ("Density", "MomentumX"),
+            "cons_roles": ("density", "momentum:0"),
             "n_vars": 2,
             "params": {},
             "provider_components": ("electric_field",),
@@ -42,7 +42,7 @@ def test_external_metadata_provider_is_consumed_without_concrete_class_dispatch(
     assert row.block_name == "plasma"
     assert row.state_space == "electrons"
     assert row.cons_names == ("density", "momentum")
-    assert row.cons_roles == ("Density", "MomentumX")
+    assert row.cons_roles == ("density", "momentum:0")
     assert row.native_dimension == 2
     assert row.capabilities == {"cpu": True, "amr": False}
     assert row.wave_speed_provider == "jacobian"

@@ -13,6 +13,7 @@ namespace {
 
 using namespace pops;
 using namespace pops::mesh::nd_proof;
+using pops::mesh::BoxHashBudget;
 using pops::mesh::Distribution;
 using pops::mesh::RankSpace;
 
@@ -49,7 +50,7 @@ TranslationSchedule<1> completion_schedule() {
       0,
       1,
       Index<1>{},
-      std::array<int, 1>{2},
+      Extent<1>{2},
       BoxHashBudget{64, 64, 64},
       TranslationScheduleBudget{64, 8, 256, 256, 256,
                                 LocalNeighborWorkBudget{64, 64, {64, 4096}, {4096, 4096}}}};

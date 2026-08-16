@@ -10,7 +10,14 @@ from .euler import FORWARD_EULER_TABLEAU, ForwardEuler
 from .imex import IMEX, IMEX_ARS222_TABLEAU, IMEX_EULER_TABLEAU
 from .multistep import AdamsBashforth, BDF
 from .predictor_corrector import PredictorCorrector
-from .rk import ButcherTableau, RK4, RK4_TABLEAU, RungeKutta, SSPRK2_TABLEAU
+from .rk import (
+    ButcherTableau,
+    RK4,
+    RK4_TABLEAU,
+    RungeKutta,
+    RungeKuttaRoute,
+    SSPRK2_TABLEAU,
+)
 from .ssprk import SSPRK2, SSPRK3, SSPRK3_TABLEAU
 from .strang import Lie, Strang
 
@@ -35,6 +42,7 @@ __all__ = [
     "RK4",
     "RK4_TABLEAU",
     "RungeKutta",
+    "RungeKuttaRoute",
     "SSPRK2",
     "SSPRK2_TABLEAU",
     "SSPRK3",

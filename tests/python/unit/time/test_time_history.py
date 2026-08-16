@@ -31,7 +31,7 @@ mirrors this exactly (FE step 0, AB2 thereafter), so the comparison is to machin
 
 (C) Absent-history rejection (spec test 38): a Program that reads P.history("missing.R", lag=1) and is
     stepped WITHOUT ever storing it -> sim.step surfaces a RuntimeError containing
-    "history 'missing.R' with lag=1 was requested but not initialized".
+    "ProgramContext history has not been initialized".
 """
 from tests.python.support.requirements import (
     default_cxx,
@@ -208,6 +208,44 @@ def test_ab2_macro_lowers(t):
         "AB2 exact weights 3/2, -1/2 on dt\n%s" % src
 
 
+def test_ab2_flux_budget_retains_current_and_lagged_basis(t):
+    """The lagged RHS is live at the AMR reflux boundary, not a numeric-only history read."""
+    from pops.codegen.program_emit_amr import _flux_expression_budgets
+
+    program = _ab2_program(t)
+    budgets = _flux_expression_budgets(program)
+    assert budgets == ((2, 1),), budgets
+
+
+def test_ab3_flux_budget_materializes_three_live_bases(t):
+    """AB3 retains both lags: 23/12, -16/12 and 5/12 share no disposable basis."""
+    from pops.codegen.program_emit_amr import _emit_flux_expression_budget, _flux_expression_budgets
+
+    program = _ab2_program(t, name="ab3", order=3)
+    assert _flux_expression_budgets(program) == ((3, 1),)
+    emitted = _emit_flux_expression_budget(program)
+    assert "pops_program_flux_rhs_basis_bound" in emitted
+    assert "UINT64_C(3)" in emitted and "UINT64_C(1)" in emitted
+    source = emit_cpp_program(program)
+    assert 'ctx.history("plasma.rate", 1)' in source
+    assert 'ctx.history("plasma.rate", 2)' in source
+
+
+def test_two_independent_history_rhs_keep_four_flux_bases(t):
+    """Two stored/read RHS values are not coalesced merely because they share one block."""
+    from pops.codegen.program_emit_amr import _flux_expression_budgets
+
+    program = t.Program("two_independent_history_rhs")
+    state = typed_state(program, "plasma")
+    first = program.rhs(state=state, terms=[DefaultSource()])
+    second = program.rhs(state=state, terms=[DefaultSource()])
+    for name, rhs in (("plasma.first", first), ("plasma.second", second)):
+        program.store_history(name, rhs, depth=1)
+        program.history(name, lag=1, space=state.space, block=state.block, state_ref=state.state_ref)
+    # current(first, second) + retained(first, second), with one exact dt-polynomial each.
+    assert _flux_expression_budgets(program) == ((4, 1),)
+
+
 def test_store_before_read_in_body(t):
     """The store is emitted BEFORE the lag-1 READ (the cold-start fill makes step 0 valid). The read is
     the history line bound to a MultiFab& (``pops::MultiFab& ... = ctx.history(...)``); the bare
@@ -302,6 +340,34 @@ def _offline_ab2(rho0, dt, nsteps):
     return rho
 
 
+def _materialize_system_block(sim, name, compiled_model, *, state_identity, compiled_program, engine):
+    """Register the Case state identity, then finalize the staged production package into the store."""
+    from tests.python.support.native_execution_context import compiled_problem_execution_context
+
+    context = compiled_problem_execution_context(compiled_program, target="system")
+    sim._s._prepare_boundary_execution_lane(
+        context.communicator.handle,
+        context.identity.token,
+    )
+    sim._s._install_block_state_route(name, state_identity)
+    sim.add_equation(
+        name,
+        compiled_model,
+        spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+        time=engine.Explicit(method="euler"),
+    )
+    if sim._pending_native_packages:
+        sim._s._finalize_native_packages()
+        sim._pending_native_packages = 0
+
+
+def _attach_installed_program(sim, compiled):
+    """Low-level install_program does not copy the compiled Program's authenticated step strategy."""
+    sim.install_program(compiled.so_path)
+    authored = compiled.program
+    sim._step_strategy = authored._step_strategy
+
+
 def _run_section_b(t):
     _require_native_toolchain("section B")
     try:
@@ -322,23 +388,29 @@ def _run_section_b(t):
     rate = model.rate("ab2_rate", flux=False, sources=("default",))
     block, state = state_refs(t.Program("refs"), "blk", model=model.module)
     P = lt.AdamsBashforth(block[state], rate=rate, order=2)
+    dt = 0.01
+    nsteps = 5
+    P.step_strategy(t.FixedDt(dt))
     compiled = compile_drivers.compile_problem(model=model, time=P)
 
     assert compiled.program_name == "AdamsBashforth2", "handle carries the program name"
 
     compiled_model = _passive_source_model("ab2_block").compile(backend="production")
-    sim.add_equation("blk", compiled_model,
-                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-                     time=engine.Explicit(method="euler"))
+    _materialize_system_block(
+        sim,
+        "blk",
+        compiled_model,
+        state_identity=block[state].qualified_id,
+        compiled_program=compiled,
+        engine=engine,
+    )
 
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho0 = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
     sim.set_state("blk", np.stack([rho0]))
 
-    sim.install_program(compiled.so_path)
-    dt = 0.01
-    nsteps = 5
+    _attach_installed_program(sim, compiled)
     for _ in range(nsteps):
         sim.step(dt)
     out = np.array(sim.get_state("blk"))[0]
@@ -379,6 +451,7 @@ def _run_section_c(t):
     # A Program that READS missing.R but NEVER stores it -> the runtime read must fail loud.
     program_model = _passive_source_model("miss_prog")
     P = t.Program("miss_step")
+    block, declaration = state_refs(P, "blk", model=program_model)
     U = typed_state(P, "blk", model=program_model)
     Rp = P.history(
         "missing.R", lag=1, space=U.space, block=U.block, state_ref=U.state_ref)
@@ -386,19 +459,25 @@ def _run_section_c(t):
     endpoint = typed_state(P, "blk", state_name="U", model=program_model).next
     P.commit(endpoint, P.value(
         "missing_history_delta", U + P.dt * (R - Rp), at=endpoint.point))
+    P.step_strategy(t.FixedDt(0.01))
 
     compiled = compile_drivers.compile_problem(model=program_model, time=P)
     compiled_model = _passive_source_model("miss_block").compile(backend="production")
-    sim.add_equation("blk", compiled_model,
-                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-                     time=engine.Explicit(method="euler"))
+    _materialize_system_block(
+        sim,
+        "blk",
+        compiled_model,
+        state_identity=block[declaration].qualified_id,
+        compiled_program=compiled,
+        engine=engine,
+    )
     sim.set_state("blk", np.stack([np.ones((n, n))]))
-    sim.install_program(compiled.so_path)
+    _attach_installed_program(sim, compiled)
     try:
         sim.step(0.01)
     except RuntimeError as exc:
         msg = str(exc)
-        assert "history 'missing.R' with lag=1 was requested but not initialized" in msg, \
+        assert "ProgramContext history has not been initialized" in msg, \
             "the uninitialized-history read must fail loud with the spec message; got: %s" % msg
         print("  absent-history read raised as expected: %s" % msg.splitlines()[0][:120])
         return True

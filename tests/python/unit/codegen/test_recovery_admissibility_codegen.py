@@ -2,8 +2,17 @@ from __future__ import annotations
 
 import pytest
 
+from pops.codegen.module_lowering import lower_and_validate
 from pops.physics import Model
 from tests.python.support.physics_roles import FRAME, X_AXIS, Y_AXIS
+
+
+def _lowered(model: Model):
+    """Resolve the public Model through its canonical Module/provider-pack route."""
+    emit_model, source_module = lower_and_validate(model, facade=model)
+    assert source_module is model.module
+    assert type(emit_model._auxiliary_provider_pack).__name__ == "ProviderPack"
+    return emit_model
 
 
 def _scalar_model(*, guarded: bool) -> Model:
@@ -26,13 +35,13 @@ def test_recovery_admissibility_is_emitted_and_hashed() -> None:
     guarded = _scalar_model(guarded=True)
     plain = _scalar_model(guarded=False)
 
-    generated = guarded._dsl._m.emit_cpp_brick(name="GuardedScalar")
+    generated = _lowered(guarded)._m.emit_cpp_brick(name="GuardedScalar")
     assert "bool recovery_admissible(const Prim& P, int* failing_component_)" in generated
     assert "const pops::Real q = P[0];" in generated
     assert "*failing_component_ = 0;" in generated
     assert "return false;" in generated
-    assert "recovery_admissible" not in plain._dsl._m.emit_cpp_brick(name="PlainScalar")
-    assert guarded._dsl._model_hash() != plain._dsl._model_hash()
+    assert "recovery_admissible" not in _lowered(plain)._m.emit_cpp_brick(name="PlainScalar")
+    assert _lowered(guarded)._model_hash() != _lowered(plain)._model_hash()
 
 
 def test_recovery_admissibility_rejects_ambiguous_authoring() -> None:

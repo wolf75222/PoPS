@@ -143,7 +143,16 @@ class Cartesian:
         if not isinstance(raw_axes, list):
             raise TypeError("Cartesian axes must be a canonical list")
         axes = tuple(CartesianAxis.from_dict(axis) for axis in raw_axes)
-        result = cls(data["dimension"]) if cls is Cartesian else cls()
+        if cls is Cartesian:
+            result = Cartesian(data["dimension"])
+        elif cls is Cartesian1D:
+            result = Cartesian1D()
+        elif cls is Cartesian2D:
+            result = Cartesian2D()
+        elif cls is Cartesian3D:
+            result = Cartesian3D()
+        else:
+            raise TypeError("%s is not a Cartesian frame specialization" % cls.__name__)
         if result.dimension != data["dimension"]:
             raise ValueError(
                 "%s data carries Cartesian dimension %r" % (cls.__name__, data["dimension"])
@@ -159,6 +168,10 @@ class Cartesian1D(Cartesian):
     def __init__(self) -> None:
         super().__init__(1)
 
+    @property
+    def axes(self) -> tuple[CartesianAxis]:
+        return (X_AXIS,)
+
 
 class Cartesian2D(Cartesian):
     """Public constructor for the rank-two specialization of :class:`Cartesian`."""
@@ -166,12 +179,20 @@ class Cartesian2D(Cartesian):
     def __init__(self) -> None:
         super().__init__(2)
 
+    @property
+    def axes(self) -> tuple[CartesianAxis, CartesianAxis]:
+        return (X_AXIS, Y_AXIS)
+
 
 class Cartesian3D(Cartesian):
     """Public constructor for the rank-three specialization of :class:`Cartesian`."""
 
     def __init__(self) -> None:
         super().__init__(3)
+
+    @property
+    def axes(self) -> tuple[CartesianAxis, CartesianAxis, CartesianAxis]:
+        return (X_AXIS, Y_AXIS, Z_AXIS)
 
 
 __all__ = [

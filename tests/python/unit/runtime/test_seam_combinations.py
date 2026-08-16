@@ -10,7 +10,7 @@ import pytest
 from pops.numerics.reconstruction.limiters import Minmod
 from pops.numerics.riemann import HLL, HLLC, Roe, Rusanov
 import pops.runtime._engine_descriptors as engine
-from pops.runtime._system import AmrSystem
+from pops.runtime._system import AmrSystem, AmrSystemConfig
 from tests.python.support.explicit_program import install_forward_euler_program
 
 
@@ -33,11 +33,22 @@ _FLUX_TYPES = {
 }
 
 
+def _amr_config(n: int, *, regrid_every: int) -> AmrSystemConfig:
+    config = AmrSystemConfig()
+    config.shape = (n, n)
+    config.lower = (0.0, 0.0)
+    config.upper = (1.0, 1.0)
+    config.periodicity = (True, True)
+    config.boxes = (((0, 0), (n, n)),)
+    config.regrid_every = regrid_every
+    return config
+
+
 def _model(transport: str) -> engine.Model:
     if transport == "exb":
         return engine.Model(
             state=engine.Scalar(),
-            transport=engine.ExB(B0=1.0),
+            transport=engine.ExB(),
             source=engine.NoSource(),
             elliptic=engine.BackgroundDensity(alpha=1.0, n0=1.0),
         )
@@ -78,7 +89,7 @@ def _seed_density(runtime: AmrSystem, name: str, n: int) -> None:
 @pytest.mark.parametrize(("transport", "flux"), _COMBINATIONS)
 def test_amr_prepared_package_route_advances(transport: str, flux: str | None) -> None:
     n = 32
-    runtime = AmrSystem(n=n, regrid_every=0, periodicity=(True, True))
+    runtime = AmrSystem(_amr_config(n, regrid_every=0))
     runtime.add_equation(
         "block",
         _model(transport),

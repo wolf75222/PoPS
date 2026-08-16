@@ -39,25 +39,86 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <functional>
 #include <limits>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 #include <pops/core/foundation/types.hpp>  // Real
 #include <pops/mesh/storage/multifab.hpp>  // MultiFab (history ring element)
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
-#include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams, kMaxRuntimeParams
-#include <pops/runtime/program/cache_manager.hpp>  // CacheManager (held-node scheduler cache)
-#include <pops/runtime/program/profiler.hpp>       // Profiler (per-node / per-brick timing)
+#include <pops/runtime/config/runtime_params.hpp>    // RuntimeParams, kMaxRuntimeParams
+#include <pops/runtime/program/cache_manager.hpp>    // CacheManager (held-node scheduler cache)
+#include <pops/runtime/program/module_metadata.hpp>  // frozen checkpoint-shape metadata
+#include <pops/runtime/program/profiler.hpp>         // Profiler (per-node / per-brick timing)
 
 namespace pops::runtime::program {
+
+enum class AmrProgramHistoryRemapSource : std::uint8_t {
+  RetainedChild = 1,
+  ParentDeferred = 2,
+  Removed = 3,
+};
+
+/// One canonical affected-ring decision prepared by the AMR lane before topology publication.
+struct AmrProgramHistoryRemapEntry {
+  std::string key;
+  std::string parent_key;
+  AmrProgramHistoryRemapSource source = AmrProgramHistoryRemapSource::Removed;
+
+  bool operator==(const AmrProgramHistoryRemapEntry&) const = default;
+};
+
+/// Native-prepared authority for the one accepted history-ring transition induced by a real AMR
+/// topology publication.  This is deliberately a value type: the artifact callback receives the
+/// exact operation chosen by the owning AMR lane, rather than consulting mutable regrid state.
+struct AmrProgramHistoryRemapDescriptor {
+  int parent_level = -1;
+  int child_level = -1;
+  bool child_published = false;
+  /// Geometry/ratio changed independently of a distribution-only ownership rebalance.  The
+  /// accepted callback uses this exact engine-prepared fact to choose the same source for both
+  /// numeric history slots and their FluxExpression provenance.
+  bool child_physical_layout_changed = false;
+  std::vector<AmrProgramHistoryRemapEntry> history_plan;
+  std::uint64_t prior_topology_epoch = 0;
+  std::uint64_t prior_materialization_generation = 0;
+  std::uint64_t published_topology_epoch = 0;
+  std::uint64_t published_materialization_generation = 0;
+  std::int64_t accepted_macro_step = -1;
+  std::int64_t temporal_numerator = 0;
+  std::int64_t temporal_denominator = 0;
+  bool integral_only = false;
+  std::string operation_identity;
+
+  bool operator==(const AmrProgramHistoryRemapDescriptor&) const = default;
+};
+
+/// Type-erased, already allocated image of one artifact context's accepted state.  Runtime
+/// transactions capture it before entering scientific code and invoke only the noexcept publication
+/// after the carrier and Program storage have been restored.
+class AcceptedProgramContextSnapshot {
+ public:
+  AcceptedProgramContextSnapshot() = default;
+  AcceptedProgramContextSnapshot(const AcceptedProgramContextSnapshot&) = delete;
+  AcceptedProgramContextSnapshot& operator=(const AcceptedProgramContextSnapshot&) = delete;
+  virtual ~AcceptedProgramContextSnapshot() = default;
+
+  virtual std::unique_ptr<AcceptedProgramContextSnapshot> prepare_restore() const = 0;
+  virtual void publish_restore() noexcept = 0;
+};
+
+using AcceptedProgramContextSnapshotFactory =
+    std::function<std::unique_ptr<AcceptedProgramContextSnapshot>()>;
 
 /// Multistep history ring buffers (ADC-406a), owned by the Program runtime state.
 ///
@@ -218,14 +279,21 @@ struct ProgramRuntimeState {
   /// closure lets the facade ask that persistent context to republish its level-qualified clocks and
   /// histories before committing each hierarchy transition. Uniform leaves it empty.
   std::function<void()> hierarchy_refresh_;
+  /// AMR-only, artifact-owned remap boundary. Unlike hierarchy_refresh_, this callback is reached
+  /// only after AmrSystem published a topology and atomically exchanged a prepared history manager.
+  /// Keeping it distinct prevents a generic hierarchy refresh from accepting stale history storage.
+  std::function<void(const AmrProgramHistoryRemapDescriptor&)> history_remap_accepted_;
   /// Artifact-owned accepted-boundary hooks used only by the strict AMR restart transaction.
   /// `restart_regrid_preflight_` validates every rank-local prerequisite before peers enter the
   /// scientific regrid; `restart_regrid_` then performs that tag/regrid pass;
-  /// `restart_resync_` force-imports the facade bytes after rollback, even when their restored
-  /// revision equals the context's last observed revision. Uniform leaves all three empty.
+  /// `restart_resync_` force-imports the facade bytes after either accepted restart publication or
+  /// rollback, even when their restored revision equals the context's last observed revision.
+  /// `accepted_context_snapshot_` contributes context-owned ledgers and clocks to every outer
+  /// accepted transaction. Uniform leaves all four empty.
   std::function<void()> restart_regrid_preflight_;
   std::function<void()> restart_regrid_;
   std::function<void()> restart_resync_;
+  AcceptedProgramContextSnapshotFactory accepted_context_snapshot_;
   /// Monotone witness incremented only by install_unverified_step. Dynamic artifact loaders use it to
   /// prove that one installer invocation actually replaced the whole-system Program step.
   std::uint64_t step_install_generation_ = 0;
@@ -317,6 +385,9 @@ struct ProgramRuntimeState {
   /// owner-affine/context-free validation. A missing artifact table leaves this empty, so direct
   /// policy mutation or handcrafted binding calls cannot bypass that proof.
   std::vector<std::pair<std::string, int>> history_replay_authorities_;
+  /// Complete AMR checkpoint shape exported by the frozen DSO.  Unlike the live history manager it
+  /// exists before Program prelude allocation and therefore bounds every configured future level.
+  ProgramCheckpointMetadata checkpoint_metadata_;
   /// True only after install_program has authenticated an artifact and its replay-authority table.
   /// Direct C++ install_program_step remains a low-level composition seam for ordinary runtime tests,
   /// but it is never authority to recompute omitted checkpoint history.
@@ -386,14 +457,17 @@ struct ProgramRuntimeState {
   struct ArtifactStepInstallSnapshot {
     std::function<void(double)> step;
     std::function<void()> hierarchy_refresh;
+    std::function<void(const AmrProgramHistoryRemapDescriptor&)> history_remap_accepted;
     std::function<void()> restart_regrid_preflight;
     std::function<void()> restart_regrid;
     std::function<void()> restart_resync;
+    AcceptedProgramContextSnapshotFactory accepted_context_snapshot;
     std::function<Real(Real)> dt_bound;
     std::uint64_t generation = 0;
     std::string installed_hash;
     std::vector<std::array<std::uint64_t, 4>> operator_authorities;
     std::vector<std::pair<std::string, int>> history_replay_authorities;
+    ProgramCheckpointMetadata checkpoint_metadata;
     std::vector<int> block_map;
     std::map<int, RuntimeParams> block_params;
     std::map<std::string, Real> diagnostics;
@@ -401,6 +475,118 @@ struct ProgramRuntimeState {
     HistoryManager<Dim> history;
     bool artifact_backed = false;
   };
+
+  /// Complete accepted-state rollback candidate. Static artifact closures and installation
+  /// authorities deliberately remain live; only state that an accepted attempt may mutate is
+  /// copied. The profiler candidate retains the live profiler lock from preparation to publication.
+  class PreparedProgramAcceptedRestore {
+   public:
+    PreparedProgramAcceptedRestore(const PreparedProgramAcceptedRestore&) = delete;
+    PreparedProgramAcceptedRestore& operator=(const PreparedProgramAcceptedRestore&) = delete;
+    PreparedProgramAcceptedRestore(PreparedProgramAcceptedRestore&&) noexcept = default;
+    PreparedProgramAcceptedRestore& operator=(PreparedProgramAcceptedRestore&&) noexcept = default;
+
+   private:
+    friend struct ProgramRuntimeState;
+
+    PreparedProgramAcceptedRestore(ProgramRuntimeState& owner, const ProgramRuntimeState& accepted)
+        : owner_(&owner),
+          cadence_window_dt_(accepted.cadence_window_dt_),
+          cadence_window_steps_(accepted.cadence_window_steps_),
+          cadence_window_start_time_(accepted.cadence_window_start_time_),
+          cadence_dispatch_active_(accepted.cadence_dispatch_active_),
+          cadence_clock_restore_pending_(accepted.cadence_clock_restore_pending_),
+          cadence_clock_restore_dt_(accepted.cadence_clock_restore_dt_),
+          cadence_clock_restore_steps_(accepted.cadence_clock_restore_steps_),
+          cadence_clock_restore_start_time_(accepted.cadence_clock_restore_start_time_),
+          cadence_clock_restore_last_dt_(accepted.cadence_clock_restore_last_dt_),
+          cadence_clock_restore_accepted_time_(accepted.cadence_clock_restore_accepted_time_),
+          cadence_clock_restore_macro_step_(accepted.cadence_clock_restore_macro_step_),
+          last_dt_(accepted.last_dt_),
+          diagnostics_(accepted.diagnostics_),
+          step_balance_terms_(accepted.step_balance_terms_),
+          automatic_balance_terms_(accepted.automatic_balance_terms_),
+          automatic_balance_due_(accepted.automatic_balance_due_),
+          balance_due_window_active_(accepted.balance_due_window_active_),
+          balance_due_target_step_(accepted.balance_due_target_step_),
+          balance_replay_active_(accepted.balance_replay_active_),
+          balance_step_completed_(accepted.balance_step_completed_),
+          balance_program_was_due_(accepted.balance_program_was_due_),
+          block_params_(accepted.block_params_),
+          cache_(accepted.cache_),
+          hist_(accepted.hist_),
+          profiler_restore_(owner.profiler_.prepare_restore(accepted.profiler_)) {}
+
+    ProgramRuntimeState* owner_ = nullptr;
+    double cadence_window_dt_ = 0.0;
+    int cadence_window_steps_ = 0;
+    double cadence_window_start_time_ = 0.0;
+    bool cadence_dispatch_active_ = false;
+    bool cadence_clock_restore_pending_ = false;
+    double cadence_clock_restore_dt_ = 0.0;
+    int cadence_clock_restore_steps_ = 0;
+    double cadence_clock_restore_start_time_ = 0.0;
+    double cadence_clock_restore_last_dt_ = 0.0;
+    double cadence_clock_restore_accepted_time_ = 0.0;
+    int cadence_clock_restore_macro_step_ = 0;
+    Real last_dt_ = Real(0);
+    std::map<std::string, Real> diagnostics_;
+    std::map<std::string, Real> step_balance_terms_;
+    std::map<AutomaticBalanceKey, Real> automatic_balance_terms_;
+    bool automatic_balance_due_ = false;
+    bool balance_due_window_active_ = false;
+    int balance_due_target_step_ = 0;
+    bool balance_replay_active_ = false;
+    bool balance_step_completed_ = false;
+    bool balance_program_was_due_ = false;
+    std::map<int, RuntimeParams> block_params_;
+    CacheManager<Dim> cache_;
+    HistoryManager<Dim> hist_;
+    Profiler::PreparedRestore profiler_restore_;
+  };
+
+  PreparedProgramAcceptedRestore prepare_accepted_restore(const ProgramRuntimeState& accepted) {
+    if (this == &accepted)
+      throw std::invalid_argument(
+          "Program accepted restore requires an independent accepted image");
+    return PreparedProgramAcceptedRestore(*this, accepted);
+  }
+
+  void publish_prepared_accepted_restore(PreparedProgramAcceptedRestore&& prepared) noexcept {
+    if (prepared.owner_ != this)
+      std::terminate();
+    static_assert(noexcept(diagnostics_.swap(prepared.diagnostics_)));
+    static_assert(noexcept(step_balance_terms_.swap(prepared.step_balance_terms_)));
+    static_assert(noexcept(automatic_balance_terms_.swap(prepared.automatic_balance_terms_)));
+    static_assert(noexcept(block_params_.swap(prepared.block_params_)));
+    static_assert(std::is_nothrow_swappable_v<CacheManager<Dim>>);
+    static_assert(std::is_nothrow_swappable_v<HistoryManager<Dim>>);
+    cadence_window_dt_ = prepared.cadence_window_dt_;
+    cadence_window_steps_ = prepared.cadence_window_steps_;
+    cadence_window_start_time_ = prepared.cadence_window_start_time_;
+    cadence_dispatch_active_ = prepared.cadence_dispatch_active_;
+    cadence_clock_restore_pending_ = prepared.cadence_clock_restore_pending_;
+    cadence_clock_restore_dt_ = prepared.cadence_clock_restore_dt_;
+    cadence_clock_restore_steps_ = prepared.cadence_clock_restore_steps_;
+    cadence_clock_restore_start_time_ = prepared.cadence_clock_restore_start_time_;
+    cadence_clock_restore_last_dt_ = prepared.cadence_clock_restore_last_dt_;
+    cadence_clock_restore_accepted_time_ = prepared.cadence_clock_restore_accepted_time_;
+    cadence_clock_restore_macro_step_ = prepared.cadence_clock_restore_macro_step_;
+    last_dt_ = prepared.last_dt_;
+    diagnostics_.swap(prepared.diagnostics_);
+    step_balance_terms_.swap(prepared.step_balance_terms_);
+    automatic_balance_terms_.swap(prepared.automatic_balance_terms_);
+    automatic_balance_due_ = prepared.automatic_balance_due_;
+    balance_due_window_active_ = prepared.balance_due_window_active_;
+    balance_due_target_step_ = prepared.balance_due_target_step_;
+    balance_replay_active_ = prepared.balance_replay_active_;
+    balance_step_completed_ = prepared.balance_step_completed_;
+    balance_program_was_due_ = prepared.balance_program_was_due_;
+    block_params_.swap(prepared.block_params_);
+    std::swap(cache_, prepared.cache_);
+    std::swap(hist_, prepared.hist_);
+    profiler_.publish_prepared_restore(std::move(prepared.profiler_restore_));
+  }
 
   const std::vector<int>& block_map() const noexcept { return block_map_; }
 
@@ -431,13 +617,16 @@ struct ProgramRuntimeState {
       throw std::overflow_error("Program step-install generation overflow");
     step_ = std::move(step);
     hierarchy_refresh_ = nullptr;
+    history_remap_accepted_ = nullptr;
     restart_regrid_preflight_ = nullptr;
     restart_regrid_ = nullptr;
     restart_resync_ = nullptr;
+    accepted_context_snapshot_ = nullptr;
     dt_bound_ = nullptr;
     installed_hash_.clear();
     operator_authorities_.clear();
     history_replay_authorities_.clear();
+    checkpoint_metadata_ = {};
     block_map_.clear();
     block_params_.clear();
     artifact_backed_ = false;
@@ -447,14 +636,17 @@ struct ProgramRuntimeState {
   ArtifactStepInstallSnapshot capture_artifact_step_install() const {
     return ArtifactStepInstallSnapshot{step_,
                                        hierarchy_refresh_,
+                                       history_remap_accepted_,
                                        restart_regrid_preflight_,
                                        restart_regrid_,
                                        restart_resync_,
+                                       accepted_context_snapshot_,
                                        dt_bound_,
                                        step_install_generation_,
                                        installed_hash_,
                                        operator_authorities_,
                                        history_replay_authorities_,
+                                       checkpoint_metadata_,
                                        block_map_,
                                        block_params_,
                                        diagnostics_,
@@ -477,14 +669,17 @@ struct ProgramRuntimeState {
   void rollback_artifact_step_install(ArtifactStepInstallSnapshot&& snapshot) noexcept {
     step_ = std::move(snapshot.step);
     hierarchy_refresh_ = std::move(snapshot.hierarchy_refresh);
+    history_remap_accepted_ = std::move(snapshot.history_remap_accepted);
     restart_regrid_preflight_ = std::move(snapshot.restart_regrid_preflight);
     restart_regrid_ = std::move(snapshot.restart_regrid);
     restart_resync_ = std::move(snapshot.restart_resync);
+    accepted_context_snapshot_ = std::move(snapshot.accepted_context_snapshot);
     dt_bound_ = std::move(snapshot.dt_bound);
     step_install_generation_ = snapshot.generation;
     installed_hash_ = std::move(snapshot.installed_hash);
     operator_authorities_ = std::move(snapshot.operator_authorities);
     history_replay_authorities_ = std::move(snapshot.history_replay_authorities);
+    checkpoint_metadata_ = std::move(snapshot.checkpoint_metadata);
     block_map_ = std::move(snapshot.block_map);
     block_params_ = std::move(snapshot.block_params);
     diagnostics_ = std::move(snapshot.diagnostics);
@@ -514,42 +709,74 @@ struct ProgramRuntimeState {
     hierarchy_refresh_ = std::move(refresh);
   }
 
+  /// Attach the exact post-publication history-remap callback emitted beside an AMR Program.
+  void install_history_remap_accepted(
+      std::function<void(const AmrProgramHistoryRemapDescriptor&)> refresh,
+      const std::string& runtime) {
+    if (!step_)
+      throw std::logic_error(
+          runtime + "::install_program_history_remap_accepted requires an installed Program");
+    if (!refresh)
+      throw std::invalid_argument(
+          runtime + "::install_program_history_remap_accepted requires a non-empty hook");
+    history_remap_accepted_ = std::move(refresh);
+  }
+
   /// Attach the restart-only callbacks emitted by the same authenticated AMR artifact.
   /// They participate in artifact-install rollback, so a failed DSO candidate cannot leave a
   /// callable stale context behind.
   void install_restart_hooks(std::function<void()> preflight, std::function<void()> regrid,
-                             std::function<void()> resync, const std::string& runtime) {
+                             std::function<void()> resync,
+                             AcceptedProgramContextSnapshotFactory accepted_context_snapshot,
+                             const std::string& runtime) {
     if (!step_)
       throw std::logic_error(runtime +
                              "::install_program_restart_hooks requires an installed Program");
-    if (!preflight || !regrid || !resync)
-      throw std::invalid_argument(runtime +
-                                  "::install_program_restart_hooks requires three non-empty hooks");
+    if (!preflight || !regrid || !resync || !accepted_context_snapshot)
+      throw std::invalid_argument(
+          runtime +
+          "::install_program_restart_hooks requires complete accepted-state "
+          "hooks");
     restart_regrid_preflight_ = std::move(preflight);
     restart_regrid_ = std::move(regrid);
     restart_resync_ = std::move(resync);
+    accepted_context_snapshot_ = std::move(accepted_context_snapshot);
+  }
+
+  std::unique_ptr<AcceptedProgramContextSnapshot> capture_accepted_context_snapshot(
+      const std::string& runtime) const {
+    if (!artifact_backed_)
+      return {};
+    if (!accepted_context_snapshot_)
+      throw std::logic_error(runtime + " artifact lacks its accepted context snapshot hook");
+    std::unique_ptr<AcceptedProgramContextSnapshot> snapshot = accepted_context_snapshot_();
+    if (!snapshot)
+      throw std::logic_error(runtime + " artifact returned an empty accepted context snapshot");
+    return snapshot;
   }
 
   void preflight_regrid_on_restart(const std::string& runtime) const {
     if (!artifact_backed_)
       throw std::logic_error(runtime +
                              " RegridOnRestart requires an authenticated artifact-backed Program");
-    if (!restart_regrid_preflight_ || !restart_regrid_ || !restart_resync_)
+    if (!restart_regrid_preflight_ || !restart_regrid_ || !restart_resync_ ||
+        !accepted_context_snapshot_)
       throw std::logic_error(runtime + " artifact lacks its restart preflight/regrid/resync hooks");
     restart_regrid_preflight_();
   }
 
   void regrid_on_restart(const std::string& runtime) const {
-    if (!artifact_backed_ || !restart_regrid_preflight_ || !restart_regrid_ || !restart_resync_)
+    if (!artifact_backed_ || !restart_regrid_preflight_ || !restart_regrid_ || !restart_resync_ ||
+        !accepted_context_snapshot_)
       throw std::logic_error(runtime + " artifact lacks its prepared restart regrid authority");
     restart_regrid_();
   }
 
-  void resync_after_restart_rollback(const std::string& runtime) const {
+  void resync_after_restart(const std::string& runtime) const {
     if (!artifact_backed_)
       return;
     if (!restart_resync_)
-      throw std::logic_error(runtime + " artifact lacks its restart rollback resync hook");
+      throw std::logic_error(runtime + " artifact lacks its restart resync hook");
     restart_resync_();
   }
 
@@ -564,6 +791,23 @@ struct ProgramRuntimeState {
       return;
     }
     hierarchy_refresh_();
+  }
+
+  /// Accept only the engine-owned prepared-history remap publication, never a generic refresh.
+  void accept_history_remap(const AmrProgramHistoryRemapDescriptor& descriptor,
+                            const std::string& runtime) const {
+    if (!history_remap_accepted_)
+      throw std::logic_error(runtime + " artifact lacks its accepted history-remap hook");
+    if (descriptor.parent_level < 0 || descriptor.child_level != descriptor.parent_level + 1 ||
+        descriptor.prior_topology_epoch == std::numeric_limits<std::uint64_t>::max() ||
+        descriptor.prior_materialization_generation == std::numeric_limits<std::uint64_t>::max() ||
+        descriptor.published_topology_epoch != descriptor.prior_topology_epoch + 1 ||
+        descriptor.published_materialization_generation !=
+            descriptor.prior_materialization_generation + 1 ||
+        descriptor.accepted_macro_step < 0 || descriptor.operation_identity.empty())
+      throw std::invalid_argument(runtime +
+                                  " received an unauthenticated history-remap descriptor");
+    history_remap_accepted_(descriptor);
   }
 
   bool authorizes_history_replay(const std::string& ring, int depth) const {

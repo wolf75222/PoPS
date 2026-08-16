@@ -12,22 +12,41 @@ import pytest
 
 pops = pytest.importorskip("pops")
 Model = pytest.importorskip("pops.physics._facade").Model
-from pops.codegen._compile_emit import model_hash  # noqa: E402
+from pops.codegen.module_lowering import lower_and_validate  # noqa: E402
+from pops.model import ProviderPack  # noqa: E402
 from typed_program_support import typed_state  # noqa: E402
 
 
-def _fd_model(fd_eps=None):
+def _lowered(model):
+    """Emit/hash only after the canonical Module binds its exact ProviderPack."""
+    emit_model, source_module = lower_and_validate(model, facade=model)
+    assert emit_model is model
+    assert source_module is model.module
+    assert type(emit_model._m._auxiliary_provider_pack) is ProviderPack
+    return emit_model
+
+
+def _emit_cpp_brick(model):
+    return _lowered(model)._m.emit_cpp_brick()
+
+
+def _canonical_hash(model):
+    return _lowered(model)._model_hash()
+
+
+def _fd_model(fd_eps=None, *, eig_max_iter=None, im_tol=None):
     m = Model("jacfd" if fd_eps is None else "jacfd_eps")
     q1, q2 = m.conservative_vars("q1", "q2")
     m.flux(x=[0.5 * q1 * q1, 0.5 * q2 * q2], y=[0.5 * q2 * q2, 0.5 * q1 * q1])
-    m.wave_speeds_from_jacobian(eig="fd", fd_eps=fd_eps)
+    m.wave_speeds_from_jacobian(
+        eig="fd", fd_eps=fd_eps, eig_max_iter=eig_max_iter, im_tol=im_tol)
     m.primitive_vars(q1, q2)
     m.conservative_from([q1, q2])
     return m
 
 
 def test_wave_speeds_default_fd_eps_emits_unit_scaled_column_step():
-    src = _fd_model()._m.emit_cpp_brick()
+    src = _emit_cpp_brick(_fd_model())
     # The default keeps the public relative factor, scales every column independently and preserves
     # a meaningful perturbation when a conservative component is exactly zero.
     assert ("pops::Real(1e-6) * std::fmax(std::fabs(U[k_]), pops::Real(1))"
@@ -41,19 +60,19 @@ def test_wave_speeds_default_fd_eps_emits_unit_scaled_column_step():
 def test_wave_speeds_fd_eps_override_changes_literal_and_hash():
     default = _fd_model()
     override = _fd_model(fd_eps=1e-4)
-    src_d = default._m.emit_cpp_brick()
-    src_o = override._m.emit_cpp_brick()
+    src_d = _emit_cpp_brick(default)
+    src_o = _emit_cpp_brick(override)
     assert "pops::Real(1e-06)" not in src_d  # the default is the verbatim 1e-6, not the repr form
     assert "pops::Real(0.0001)" in src_o, "the configured fd_eps replaces the emitted literal"
     assert src_d != src_o
     # The cache key MUST bust: fd_eps enters the ws_jac part of model_hash.
-    assert model_hash(default._m) != model_hash(override._m)
+    assert _canonical_hash(default) != _canonical_hash(override)
 
 
 def test_wave_speeds_default_fd_eps_hash_is_stable():
     # The central per-column algorithm version is deterministic. It invalidates artifacts from the
     # former U[0]-scaled forward-difference implementation; corrected models still share a cache key.
-    assert model_hash(_fd_model()._m) == model_hash(_fd_model()._m)
+    assert _canonical_hash(_fd_model()) == _canonical_hash(_fd_model())
 
 
 def test_wave_speeds_fd_eps_rejected_on_numeric_path():
@@ -107,16 +126,12 @@ def test_solve_local_nonlinear_fd_eps_rejected_out_of_domain():
 # --- ADC-645: eig_max_iter / im_tol cache-key parity (the fd_eps rule) ------------------------
 
 def test_eig_knobs_default_hash_stable_and_override_busts():
-    default_a = model_hash(_fd_model()._m)
+    default_a = _canonical_hash(_fd_model())
     # Setting eig_max_iter / im_tol busts the model hash (they are emitted into the kernels).
-    m_iter = _fd_model()
-    m_iter._m._ws_jacobian["eig_max_iter"] = 50  # authoring-equivalent override for the hash check
-    m_tol = _fd_model()
-    m_tol._m._ws_jacobian["im_tol"] = 1e-7
-    assert model_hash(m_iter._m) != default_a
-    assert model_hash(m_tol._m) != default_a
+    assert _canonical_hash(_fd_model(eig_max_iter=50)) != default_a
+    assert _canonical_hash(_fd_model(im_tol=1e-7)) != default_a
     # Two default models (knobs None) hash identically -- the pre-645 hash is unchanged.
-    assert model_hash(_fd_model()._m) == default_a
+    assert _canonical_hash(_fd_model()) == default_a
 
 
 def test_eig_knobs_validated_and_carried():

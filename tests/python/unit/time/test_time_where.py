@@ -12,19 +12,21 @@ scalar runtime branch ``P.branch``. The 0/1 mask is built per cell with ``P.cell
     mask whose ncomp is neither 1 nor a/b's ncomp rejected).
 
 (B) End-to-end parity (skips unless the full toolchain is present): a per-cell select
-    ``U <- where(U >= floor, U, 0.5*U)`` stepped once, compared to an offline numpy ``np.where`` doing
-    the IDENTICAL per-cell select -> bit-exact. The IC straddles the threshold so SOME cells take a and
-    SOME take b (non-vacuous). Self-skips without numpy / _pops / a compiler / Kokkos / install_program
-    (never faking the engine).
+    ``U <- where(U >= floor, U, 0.5*U)`` stepped once through the final public
+    ``Case -> resolve -> compile -> bind -> run`` lifecycle, compared to an offline numpy
+    ``np.where`` doing the IDENTICAL per-cell select -> bit-exact. The IC straddles the threshold so
+    SOME cells take a and SOME take b (non-vacuous). Self-skips without numpy / _pops / a compiler /
+    Kokkos (never faking the engine).
 """
+import pops
 from tests.python.support.requirements import require_native_or_skip
 from pops.codegen.program_codegen import emit_cpp_program
-from pops.codegen import _compile_drivers as compile_drivers
+from pops.time import FixedDt
+from tests.python.integration._final_field_program import (
+    resolve_periodic_field_program,
+    scalar_advection_model,
+)
 from typed_program_support import typed_state
-
-from pops.numerics.reconstruction import FirstOrder
-from pops.numerics.riemann import Rusanov
-from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 
 def _pops_time():
@@ -35,19 +37,26 @@ def _pops_time():
     return t
 
 
-def _clamp_program(t, *, name="where_clamp", floor=0.5):
+def _clamp_program(t, *, block_state=None, name="where_clamp", floor=0.5, dt=None):
     """U <- where(U >= floor, U, 0.5*U): keep U where it is at/above the floor, halve it below.
 
     Uses only linear_combine + cell_ge + where, so the Program lowers with NO model (solve_fields is
     inert / absent); the select is decided per cell entirely in C++."""
     P = t.Program(name)
-    U = typed_state(P, "blk")
+    temporal = None if block_state is None else P.state(block_state)
+    U = typed_state(P, "blk") if temporal is None else temporal.n
     half = P.value("half", 0.5 * U)        # the 'b' branch: 0.5 * U
     mask = P.cell_ge(U, floor, name="mask")          # 1 where U >= floor, else 0
     clamped = P.where(mask, U, half, name="clamped")  # per-cell: U if mask else 0.5*U
-    endpoint = typed_state(P, "blk", state_name="U").next
+    endpoint = (
+        typed_state(P, "blk", state_name="U").next
+        if temporal is None
+        else temporal.next
+    )
     result = P.value("clamped_next", 1 * clamped, at=endpoint.point)
     P.commit(endpoint, result)
+    if dt is not None:
+        P.step_strategy(FixedDt(dt))
     return P
 
 
@@ -88,11 +97,11 @@ def test_where_codegen(t):
     src = emit_cpp_program(P)
     for frag in ("ctx.scalar_scratch(",                   # persistent mask/output fields
                  "pops::for_each_cell",                      # the per-cell select kernel
-                 "fieldA(i, j, 0) >= 0.5",                   # exact threshold lowering
+                 "fieldA(index, 0) >= 0.5",                  # exact-rank threshold lowering
                  "? static_cast<pops::Real>(1) : static_cast<pops::Real>(0)",  # 0/1 mask
                  "for (int c = 0; c < ncomp_; ++c)",        # component-wise select
                  "(mask_ncomp_ == 1) ? 0 : c",              # shared vs per-component mask
-                 "? aA(i, j, c) : bA(i, j, c)"):            # the select ternary
+                 "? aA(index, c) : bA(index, c)"):           # the select ternary
         assert frag in src, "the generated select kernel must contain %r\n%s" % (frag, src)
 
 
@@ -179,60 +188,50 @@ def test_cell_compare_rejects_bad_cmp(t):
 def _run_section_b(t):
     try:
         import numpy as np
-
-        import pops.runtime._engine_descriptors as engine
     except Exception as exc:  # noqa: BLE001  -- numpy / _pops unavailable in this interpreter
         require_native_or_skip('-- (B) skipped: pops/numpy unavailable: %s --' % exc)
         return None
 
     n = 8
-    sim = System(n=n, L=1.0, periodicity=(True, True))
-    if not hasattr(sim, "install_program"):
-        require_native_or_skip('-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --')
-        return None
-
-    from pops.physics._facade import Model
-
-    # A minimal 1-variable model with NO Poisson coupling: solve_fields is inert and the select needs
-    # no fields. A complete compilable block (flux + primitive + eigenvalue).
-    def passive_model(name):
-        m = Model(name)
-        (rho,) = m.conservative_vars("rho")
-        m.primitive_vars(rho)
-        m.conservative_from([rho])
-        m.flux(x=[0.0 * rho], y=[0.0 * rho])
-        m.eigenvalues(x=[0.0 * rho], y=[0.0 * rho])
-        return m
-
     floor = 0.5
+    dt = 0.05
+    model = scalar_advection_model("where_prog")
     try:
-        compiled = compile_drivers.compile_problem(
-            model=passive_model("where_prog"),
-            time=_clamp_program(t, name="where_step", floor=floor))
+        resolved = resolve_periodic_field_program(
+            model,
+            lambda state, rate, field: _clamp_program(
+                t,
+                block_state=state,
+                name="where_step",
+                floor=floor,
+                dt=dt,
+            ),
+            name="where-runtime",
+            block_name="blk",
+            target="system",
+            n=n,
+        )
+        artifact = pops.compile(resolved)
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
-        require_native_or_skip('-- (B) skipped: compile_problem could not build the .so: %s --' % str(exc)[:160])
+        require_native_or_skip(
+            '-- (B) skipped: public compile could not build the artifact: %s --'
+            % str(exc)[:160]
+        )
         return None
 
-    assert compiled.program_name == "where_step", "handle carries the program name"
-
-    try:
-        compiled_model = passive_model("where_block").compile(backend="production")
-    except RuntimeError as exc:  # no compiler / no Kokkos visible
-        require_native_or_skip('-- (B) skipped: model compile could not build the .so: %s --' % str(exc)[:160])
-        return None
-    sim.add_equation("blk", compiled_model,
-                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-                     time=engine.Explicit(method="euler"))
+    artifact.verify()
+    assert artifact.program.program_name == "where_step", "artifact carries the program name"
     # An IC that STRADDLES the floor: a sine swinging through 0.5 so some cells are >= floor and some
     # are < floor (the select must genuinely vary per cell -- non-vacuous).
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho0 = 0.5 + 0.4 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
-    sim.set_state("blk", np.stack([rho0]))
+    initial = np.ascontiguousarray(np.stack([rho0]))
+    simulation = pops.bind(artifact, initial_state={"blk": initial})
 
-    sim.install_program(compiled.so_path)
-    sim.step(0.05)  # dt is irrelevant: the select is dt-free
-    out = np.array(sim.get_state("blk"))[0]
+    report = pops.run(simulation, t_end=dt, max_steps=1)
+    assert report.accepted_steps == 1, "the public where Program must accept exactly one step"
+    out = np.asarray(simulation.get_state("blk"), dtype=np.float64)[0]
 
     # OFFLINE per-cell select: out = where(rho0 >= floor, rho0, 0.5*rho0). The IDENTICAL select the
     # compiled kernel runs cell by cell.

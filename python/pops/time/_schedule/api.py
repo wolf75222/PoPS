@@ -46,6 +46,37 @@ from pops.time._schedule.protocol import (
 )
 
 
+_CACHE_ACTIONS = frozenset(
+    {
+        ScheduleAction.EFFECTIVE_DT,
+        ScheduleAction.STORE,
+        ScheduleAction.ACCUMULATE_DT,
+        ScheduleAction.RESTORE,
+    }
+)
+
+
+def schedule_lowering_cache_required(lowered: Any, *, where: str) -> bool:
+    """Derive cache authority from one exact native schedule lowering contract."""
+    if type(lowered) is not ScheduleLoweringIR:
+        raise TypeError(
+            "Schedule.native_schedule_ir() at %s must return an exact ScheduleLoweringIR, got %s"
+            % (where, type(lowered).__name__)
+        )
+    actions = lowered.off.before_due + lowered.off.after_due + lowered.off.off_cadence
+    return any(action in _CACHE_ACTIONS for action in actions)
+
+
+def native_schedule_cache_required(schedule: Any, *, where: str) -> bool:
+    """Derive cache authority from the exact lowering contract consumed by code generation."""
+    if not isinstance(schedule, Schedule):
+        raise TypeError(
+            "schedule at %s must implement the Schedule interface; got %s"
+            % (where, type(schedule).__name__)
+        )
+    return schedule_lowering_cache_required(schedule.native_schedule_ir(where=where), where=where)
+
+
 @stable_component_identity("pops://time/schedule/trigger")
 @dataclass(frozen=True, slots=True)
 class Trigger:
@@ -411,15 +442,7 @@ class OffPolicy:
         if type(plan) is not ScheduleOffIR:
             raise TypeError("OffPolicy.native_schedule_off() must return an exact ScheduleOffIR")
         actions = plan.before_due + plan.after_due + plan.off_cadence
-        cache_actions = frozenset(
-            {
-                ScheduleAction.EFFECTIVE_DT,
-                ScheduleAction.STORE,
-                ScheduleAction.ACCUMULATE_DT,
-                ScheduleAction.RESTORE,
-            }
-        )
-        return any(action in cache_actions for action in actions)
+        return any(action in _CACHE_ACTIONS for action in actions)
 
     def schedule_payload(self) -> dict[str, Any]:
         return _component_payload(self, frozenset())
@@ -553,12 +576,7 @@ class Schedule:
         return result
 
     def needs_cache(self) -> bool:
-        if self.off is None:
-            return False
-        result = self.off.needs_cache()
-        if type(result) is not bool:
-            raise TypeError("OffPolicy.needs_cache() must return an exact bool")
-        return result
+        return native_schedule_cache_required(self, where="Schedule.needs_cache()")
 
     def native_schedule_ir(self, *, where: str) -> ScheduleLoweringIR:
         """Return the exact native lowering contract implemented by this schedule."""

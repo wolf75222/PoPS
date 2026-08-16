@@ -13,6 +13,7 @@ _codegen_exprs, _live_prims, _prim_block, _jac_entries
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 import json
 from typing import Any
 
@@ -25,8 +26,7 @@ from pops.codegen.cpp_writer import (
 from pops._ir.visitors import _dependencies
 
 # ---------------------------------------------------------------------------
-# roles_for -- local copy; avoids importing pops.dsl at module level.
-# Logic is identical to dsl.roles_for / dsl.role_of / dsl.CANONICAL_ROLES.
+# roles_for -- lazy delegation; avoids importing physics at module import time.
 # ---------------------------------------------------------------------------
 _CANONICAL_ROLES = {
     "rho": "density", "n": "density", "density": "density",
@@ -46,12 +46,10 @@ def _role_of(name: Any) -> str:
 
 
 def _roles_for(names: Any, override: Any = None) -> list:
-    """Roles list parallel to names -- local copy of dsl.roles_for."""
-    if override is None:
-        return [_role_of(nm) for nm in names]
-    if len(override) != len(names):
-        raise ValueError("roles: %d roles for %d variables" % (len(override), len(names)))
-    return [(r if r is not None else _role_of(nm)) for nm, r in zip(names, override, strict=True)]
+    """Lower typed authoring roles through the one structured-token authority."""
+    from pops.physics.aux import roles_for
+
+    return list(roles_for(names, override))
 
 
 def _ranked_axes(model: Any) -> tuple[str, ...]:
@@ -62,7 +60,7 @@ def _ranked_axes(model: Any) -> tuple[str, ...]:
 def _axis_values(model: Any, values: Any, *, where: str) -> list:
     """Flatten one exact-ranked carrier in the physical-flux axis order."""
     axes = _ranked_axes(model)
-    if not isinstance(values, dict) or tuple(values) != axes:
+    if not isinstance(values, Mapping) or tuple(values) != axes:
         raise ValueError(
             "%s must cover the exact emitted axis set %s" % (where, axes)
         )

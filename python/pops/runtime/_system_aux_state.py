@@ -59,57 +59,9 @@ class _SystemAuxState(_System):
             exact.owner_qid, exact.space_kind, exact.space_name, exact.component,
         )
 
-    def set_disc_domain(self, domain: Any) -> Any:
-        """Materialise a typed disc transport domain.
-
-        The sole public input is :class:`pops.mesh.geometry.DiscDomain`, which carries the center,
-        radius, and typed transport mask as one validated object::
-
-            from pops.mesh.geometry import DiscDomain
-            from pops.mesh.masks import CutCell
-            sim.set_disc_domain(DiscDomain(center=(0.5, 0.5), radius=0.4, mode=CutCell()))
-
-        A string or a loose ``(cx, cy, radius, mode)`` tuple is rejected; it cannot bypass descriptor
-        validation or lose the cut-cell thresholds owned by the mask. The selected mask wires:
-
-        - 'none' (default): the mask is materialized (queryable via disc_mask()) but the transport
-          stays FULL Cartesian (assemble_rhs) -> step() BIT-IDENTICAL even with the disc set;
-        - 'staircase': conservative masked transport (assemble_rhs_masked, 0/1 face gate);
-        - 'cutcell': the current disc-specific embedded-boundary route (binary open faces between
-          active centres and a clamped approximate volume fraction). It requires the explicit
-          first-order reconstruction provider; PoPS does not claim smooth-boundary order 2 here.
-
-        The mode is honored under Lie AND Strang (cf. Split / Strang). R > 0; Cartesian only (the
-        polar one already bounds the ring by its radial walls -> explicit error)."""
-        from pops.runtime._lifecycle import guard_assembling
-
-        guard_assembling(self, "set_disc_domain")  # frozen once pops.bind completes (ADC-592)
-        from pops.mesh.geometry import DiscDomain
-        from pops.mesh.masks import lower_transport_mask, transport_mask_thresholds
-
-        if not isinstance(domain, DiscDomain):
-            raise TypeError(
-                "set_disc_domain requires a pops.mesh.geometry.DiscDomain descriptor, got %s"
-                % type(domain).__name__
-            )
-        cx, cy, radius, mode = domain.lower()
-        lower_transport_mask(domain.mode)
-        # ADC-615: forward the typed CutCell numeric thresholds (kappa_min / face_open_eps /
-        # cut_theta_min). 0.0 keeps the native default.
-        th = transport_mask_thresholds(domain.mode)
-        self._s.set_disc_domain(
-            cx,
-            cy,
-            radius,
-            mode,
-            kappa_min=th.get("kappa_min", 0.0),
-            face_open_eps=th.get("face_open_eps", 0.0),
-            cut_theta_min=th.get("cut_theta_min", 0.0),
-        )
-
     def set_geometry_mode(self, mode: Any) -> Any:
-        """Switch ONLY the disc transport mode ('none'|'staircase'|'cutcell') without (re)defining the
-        disc. A mode != 'none' requires a disc already set (set_disc_domain) -> error otherwise. Setting
+        """Switch ONLY the embedded-boundary transport mode ('none'|'staircase'|'cutcell') without
+        redefining the level set. A mode != 'none' requires an analytic level set already set. Setting
         back to 'none' restores the full Cartesian transport (bit-identical).
 
         ``mode`` must be a typed :class:`pops.mesh.masks.TransportMask`; strings are rejected."""
@@ -120,15 +72,9 @@ class _SystemAuxState(_System):
 
         self._s.set_geometry_mode(lower_transport_mask(mode))
 
-    def disc_mask(self) -> Any:
-        """0/1 cell-centered domain mask, array (ny, nx) (diagnostic / contract
-        verification). All 1.0 as long as set_disc_domain has not been called (subdomain = whole
-        domain, default path)."""
-        return self._s.disc_mask()
-
     def embedded_boundary_mask(self) -> Any:
         """Return the active-cell mask for any installed embedded LevelSet geometry."""
-        return self._s.disc_mask()
+        return self._s.embedded_boundary_mask()
 
     def set_primitive_state(self, name: Any, **prims: Any) -> Any:
         """Initialize a block from its PRIMITIVE variables, named (rho/u/v/p ...):

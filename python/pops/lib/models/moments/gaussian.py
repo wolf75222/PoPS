@@ -5,7 +5,6 @@ import math
 from typing import Any
 
 from pops.fields import FieldOutput, GradientOutput
-from pops.frames import Cartesian2D
 from pops.math import ddt, div, laplacian
 from pops.moments.closures import gaussian_closure
 from pops.moments.model_builder import (
@@ -14,7 +13,7 @@ from pops.moments.model_builder import (
     moment_transport_blocks,
 )
 from pops.moments.projection import RealizabilityProjection
-from pops.moments.sources import lorentz_sources
+from pops.moments.sources import MOMENT_VELOCITY_DIMENSION, lorentz_sources
 from pops.params import ParameterDeclaration, RuntimeParam as _RuntimeParam
 from pops.physics import Density, Model
 
@@ -59,10 +58,13 @@ def _author(
     if not isinstance(name, str) or not name:
         raise TypeError("Gaussian name must be a non-empty string")
 
-    selected_frame = Cartesian2D() if frame is None else frame
+    if frame is None:
+        raise TypeError("Gaussian moment models require an explicit two-axis Cartesian frame")
+    selected_frame = frame
     axes = getattr(selected_frame, "axes", None)
-    if not isinstance(axes, tuple) or len(axes) != 2:
-        raise TypeError("Gaussian frame must expose exactly two typed axes")
+    if (not isinstance(axes, tuple) or len(axes) != MOMENT_VELOCITY_DIMENSION
+            or tuple(getattr(axis, "name", None) for axis in axes) != ("x", "y")):
+        raise TypeError("Gaussian frame must expose exactly the Cartesian axes x and y")
     x_axis, y_axis = axes
     model = Model(name, frame=selected_frame)
     state = model.state(
@@ -115,10 +117,10 @@ def _author(
             on=state,
             value=lorentz_sources(
                 expressions.moments,
-                model.aux("electric_x"),
-                model.aux("electric_y"),
-                model.value(q_handle),
-                0.0,
+                electric_components=tuple(
+                    model.aux("electric_%s" % axis.name) for axis in axes),
+                q_over_m=model.value(q_handle),
+                magnetic_rotation=0.0,
             ),
         )
         sources.append(electric)
@@ -132,7 +134,10 @@ def _author(
 
 
 class Gaussian:
-    """Pre-implemented Gaussian-closure models returning canonical :class:`Model` values."""
+    """Explicit 2V/2D Gaussian-closure models returning canonical Model values."""
+
+    velocity_dimension = MOMENT_VELOCITY_DIMENSION
+    supported_spatial_dimensions = (MOMENT_VELOCITY_DIMENSION,)
 
     @staticmethod
     def transport(

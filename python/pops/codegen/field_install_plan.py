@@ -161,6 +161,23 @@ class ResolvedFieldInstallPlan:
             raise TypeError("resolved field native install data must be a dict")
         return data
 
+    def output_publication_data(self) -> dict[str, Any]:
+        """Return the opaque publication authenticated by the selected method provider."""
+        binding = prepared_field_lowering_binding_from_data(self.native_options["method_provider"])
+        route = binding.resolution.native_options.get("output_route")
+        if not isinstance(route, Mapping):
+            raise TypeError("resolved field lowering has no output publication route")
+        publication = native_plain_data(route.get("publication"))
+        if not isinstance(publication, dict):
+            raise TypeError("resolved field lowering has no exact output publication")
+        installed_route = self.native_install_data().get("output_route")
+        if (
+            not isinstance(installed_route, Mapping)
+            or native_plain_data(installed_route.get("publication")) != publication
+        ):
+            raise ValueError("resolved field output publication changed after lowering")
+        return publication
+
     def provider_parameter_handles(self, consumer: str) -> tuple[Any, ...]:
         """Return one provider-owned parameter pack for an opaque consumer identity."""
         if type(consumer) is not str or not consumer:

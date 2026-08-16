@@ -47,13 +47,19 @@ class SystemBlockStore {
   using PointResidual = std::function<void(const evaluation_point&, field_type&, field_type&)>;
   using PreparedPointResidual =
       std::function<void(const evaluation_point&, field_type&, field_type&, const boundary_type&)>;
-  using PointJvp =
-      std::function<void(const evaluation_point&, field_type&, const field_type&, field_type&)>;
+  using PreparedPointBoundaryResidual = std::function<void(
+      const evaluation_point&, field_type&, field_type&, const boundary_type&, const ExecutionLane&,
+      const runtime::program::PreparedScalarBoundarySession<Dim>&)>;
   using PreparedPointJvp = std::function<void(
-      const evaluation_point&, field_type&, const field_type&, field_type&, const boundary_type&)>;
+      const evaluation_point&, field_type&, const field_type&, field_type&, const boundary_type&,
+      const ExecutionLane&, const runtime::program::PreparedScalarBoundarySession<Dim>&)>;
+  using BoundaryFluxTransform = typename SystemBlockClosures<Dim>::BoundaryFluxTransform;
   using PointStatePreparation = std::function<void(const evaluation_point&, field_type&)>;
   using PreparedPointStatePreparation =
       std::function<void(const evaluation_point&, field_type&, const boundary_type&)>;
+  using PreparedPointStateTransport =
+      typename SystemBlockClosures<Dim>::PreparedPointStateTransport;
+  using ExternalGhostBoundary = typename SystemBlockClosures<Dim>::ExternalGhostBoundary;
 
   using EmbeddedResidualFamily = typename SystemBlockClosures<Dim>::EmbeddedResidualFamily;
 
@@ -68,18 +74,18 @@ class SystemBlockStore {
     int stride = 1;
     double gamma = 1.0;
     Residual rhs_into;
-    std::function<Real(const field_type&)> max_speed;
+    std::function<Real(const field_type&, const ExecutionLane&)> max_speed;
     ConstResidual add_poisson_rhs;
 
     VariableSet cons_vars;
     VariableSet prim_vars;
     CellConvert prim_to_cons;
     CellRecovery cons_to_prim;
-    std::function<void(const field_type&, Real&, Index<Dim>&)> hotspot;
     std::function<Real(const field_type&)> source_frequency;
+    std::optional<Real> parabolic_frequency;
     std::function<Real(const field_type&)> stability_dt;
-    std::function<void(field_type&)> project;
-    std::function<void(field_type&)> project_masked;
+    std::function<void(field_type&, const ExecutionLane&)> project;
+    std::function<void(field_type&, const ExecutionLane&)> project_masked;
     Residual rhs_flux_only;
     std::map<std::string, ConstResidual> named_poisson_rhs;
     Residual source_only;
@@ -91,14 +97,21 @@ class SystemBlockStore {
     PointResidual rhs_flux_only_without_prepared_interfaces;
     PointResidual rhs_core_at_point;
     PointResidual rhs_flux_only_core_at_point;
-    PointResidual boundary_residual_at_point;
-    PointJvp boundary_jvp_at_point;
     PreparedPointResidual rhs_core_at_point_prepared;
     PreparedPointResidual rhs_flux_only_core_at_point_prepared;
-    PreparedPointResidual boundary_residual_at_point_prepared;
+    PreparedPointBoundaryResidual boundary_full_at_point_prepared;
+    PreparedPointBoundaryResidual boundary_core_at_point_prepared;
+    PreparedPointBoundaryResidual boundary_flux_full_at_point_prepared;
+    PreparedPointBoundaryResidual boundary_flux_core_at_point_prepared;
+    PreparedPointBoundaryResidual boundary_residual_at_point_prepared;
     PreparedPointJvp boundary_jvp_at_point_prepared;
+    std::shared_ptr<BoundaryFluxTransform> external_boundary_flux;
+    std::shared_ptr<PreparedPointBoundaryResidual> external_field_boundary_residual;
+    std::shared_ptr<PreparedPointJvp> external_field_boundary_jvp;
     PointStatePreparation prepare_generated_state_at_point;
     PreparedPointStatePreparation prepare_generated_state_at_point_prepared;
+    PreparedPointStateTransport prepare_generated_state_with_transport_prepared;
+    std::shared_ptr<ExternalGhostBoundary> external_ghost_boundary;
     EmbeddedResidualFamily staircase_residuals;
     EmbeddedResidualFamily cutcell_residuals;
 
@@ -136,7 +149,8 @@ class SystemBlockStore {
   void install_interface_provider(InterfaceProvider provider) {
     if (interface_provider_)
       throw std::runtime_error("System shared-interface provider is already installed");
-    if (!provider.evaluate_rhs || !provider.evaluate_core || !provider.evaluation_count ||
+    if (provider.provider_identity.empty() || provider.collective_contract.empty() ||
+        !provider.evaluate_rhs || !provider.evaluate_core || !provider.evaluation_count ||
         !provider.has_interfaces || !provider.discard)
       throw std::invalid_argument(
           "System shared-interface provider must implement the complete ranked contract");

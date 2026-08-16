@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from pops.frames import Cartesian2D
 from pops.math import ddt, div
 from pops.moments.closures import HyQMOM15Closure
 from pops.moments.model_builder import (
@@ -12,7 +11,7 @@ from pops.moments.model_builder import (
     moment_names,
 )
 from pops.moments.projection import RealizabilityProjection
-from pops.moments.sources import lorentz_sources
+from pops.moments.sources import MOMENT_VELOCITY_DIMENSION, lorentz_sources
 from pops.params import ParameterDeclaration, RuntimeParam as _RuntimeParam
 from pops.physics import Density, Model
 
@@ -45,10 +44,16 @@ def _magnetic_matrix(indices: tuple[tuple[int, int], ...], omega_c: Any) -> tupl
 
 
 class HyQMOM15:
-    """Pre-implemented 15-moment physics, assembled from ordinary generic contracts."""
+    """Explicit 2V/2D 15-moment physics assembled from ordinary generic contracts.
+
+    HyQMOM15's ``(p, q)`` state is a two-velocity-dimensional specialization. It deliberately
+    advertises and validates that scope instead of masquerading as a 1D/3D spatial backend.
+    """
 
     order = _HYQMOM15_ORDER
     components = tuple(moment_names(_HYQMOM15_ORDER))
+    velocity_dimension = MOMENT_VELOCITY_DIMENSION
+    supported_spatial_dimensions = (MOMENT_VELOCITY_DIMENSION,)
 
     @staticmethod
     def vlasov_lorentz(
@@ -64,8 +69,8 @@ class HyQMOM15:
     ) -> Model:
         """Author transport, electric forcing and an implicit magnetic local operator.
 
-        The closure is evaluated once through ``LocalClosure`` on symbolic values.  The
-        The return value is the ordinary blackboard :class:`pops.physics.Model`.  Exact handles are
+        The closure is evaluated once through ``LocalClosure`` on symbolic values. The return
+        value is the ordinary blackboard :class:`pops.physics.Model`. Exact handles are
         available from its immutable family views (``model.states``, ``model.fluxes``,
         ``model.sources`` and ``model.operators``); no preset-specific result type or HyQMOM token
         enters the operator registry or native lowering.
@@ -78,10 +83,15 @@ class HyQMOM15:
         q_decl = _parameter(q_over_m, name="q_over_m", default=-1.0)
         omega_decl = _parameter(omega_c, name="omega_c", default=1.0)
 
-        selected_frame = Cartesian2D() if frame is None else frame
+        if frame is None:
+            raise TypeError(
+                "HyQMOM15.vlasov_lorentz requires an explicit two-axis Cartesian frame")
+        selected_frame = frame
         axes = getattr(selected_frame, "axes", None)
-        if not isinstance(axes, tuple) or len(axes) != 2:
-            raise TypeError("HyQMOM15.vlasov_lorentz frame must expose exactly two typed axes")
+        if (not isinstance(axes, tuple) or len(axes) != MOMENT_VELOCITY_DIMENSION
+                or tuple(getattr(axis, "name", None) for axis in axes) != ("x", "y")):
+            raise TypeError(
+                "HyQMOM15.vlasov_lorentz frame must expose exactly the Cartesian axes x and y")
         x_axis, y_axis = axes
         model = Model(name, frame=selected_frame)
         names = tuple(moment_names(_HYQMOM15_ORDER))
@@ -125,10 +135,10 @@ class HyQMOM15:
             on=state,
             value=lorentz_sources(
                 expressions.moments,
-                model.aux("grad_x"),
-                model.aux("grad_y"),
-                q_value,
-                0.0,
+                electric_components=tuple(
+                    model.aux("grad_%s" % axis.name) for axis in axes),
+                q_over_m=q_value,
+                magnetic_rotation=0.0,
             ),
         )
         indices = tuple(moment_indices(_HYQMOM15_ORDER))

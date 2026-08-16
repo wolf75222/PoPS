@@ -217,29 +217,58 @@ class Disc(Geometry):
 
 
 class HalfPlane(Geometry):
-    """A half-plane wall: a point on the plane + an outward normal."""
+    """A Cartesian half-space bounded by an exact-rank hyperplane.
 
-    def __init__(self, point: Any = (0.0, 0.0), normal: Any = (1.0, 0.0)) -> None:
-        self.point = _geometry_coordinates(point, where="HalfPlane(point=)")
-        self.normal = _geometry_coordinates(normal, where="HalfPlane(normal=)")
-        if len(self.point) != 2 or len(self.normal) != 2:
-            raise ValueError("HalfPlane point and normal must contain exactly two coordinates")
-        if self.normal == (0.0, 0.0):
+    ``point=None`` selects the origin and ``normal=None`` selects the first Cartesian axis after
+    the owning frame has supplied its rank. Explicit point and normal vectors must have the same
+    non-zero rank and must match that frame exactly.
+    """
+
+    def __init__(self, point: Any = None, normal: Any = None) -> None:
+        self.point = (
+            None if point is None else _geometry_coordinates(point, where="HalfPlane(point=)")
+        )
+        self.normal = (
+            None if normal is None else _geometry_coordinates(normal, where="HalfPlane(normal=)")
+        )
+        explicit_ranks = tuple(
+            len(values) for values in (self.point, self.normal) if values is not None
+        )
+        if any(rank == 0 for rank in explicit_ranks) or len(set(explicit_ranks)) > 1:
+            raise ValueError("HalfPlane point and normal must have the same non-zero dimension")
+        if self.normal is not None and not any(value != 0.0 for value in self.normal):
             raise ValueError("HalfPlane normal must be non-zero")
 
     def options(self) -> dict:
         return {"point": self.point, "normal": self.normal}
 
     def preview_extent(self) -> tuple[tuple[float, float], tuple[float, float]]:
-        return ((self.point[0] - 1.0, self.point[1] - 1.0),
-                (self.point[0] + 1.0, self.point[1] + 1.0))
+        point = self.point if self.point is not None else (0.0, 0.0)
+        first = point[0]
+        second = point[1] if len(point) > 1 else 0.0
+        return ((first - 1.0, second - 1.0), (first + 1.0, second + 1.0))
 
     def level_set(self, frame: Any) -> LevelSet:
-        """Bind this half-plane to ``frame``; the side opposite the normal is active."""
-        x_value, y_value = _planar_coordinates(frame, where="HalfPlane.level_set(frame)")
-        px, py = self.point
-        nx, ny = self.normal
-        return LevelSet((x_value - px) * nx + (y_value - py) * ny)
+        """Bind this half-space to ``frame``; the side opposite the normal is active."""
+        coordinate_values = _cartesian_coordinates(frame)
+        dimension = len(coordinate_values)
+        point = self.point if self.point is not None else (0.0,) * dimension
+        normal = self.normal if self.normal is not None else (1.0,) + (0.0,) * (dimension - 1)
+        if len(point) != dimension or len(normal) != dimension:
+            raise ValueError(
+                "HalfPlane point and normal rank must match the Cartesian frame rank %d"
+                % dimension
+            )
+        terms = tuple(
+            (coordinate - origin) * direction
+            for coordinate, origin, direction in zip(
+                coordinate_values, point, normal, strict=True
+            )
+        )
+        expression = terms[0]
+        for term in terms[1:]:
+            expression = expression + term
+        return LevelSet(expression)
 
 
 class LevelSet(Geometry):
@@ -423,58 +452,6 @@ def complement(geometry: Any) -> GeometryComposition:
     return GeometryComposition("complement", (_geometry(geometry, where="complement"),))
 
 
-class DiscDomain(_GeometryPreviewSurface, MeshDescriptor):
-    """A typed DISC TRANSPORT domain (Spec 5 sec.8.16): center + radius + transport mode.
-
-    ``mode`` must implement :class:`pops.mesh.masks.TransportMask`; strings are rejected at
-    construction. Inert: the runtime materialises the mask only after validation.
-    """
-
-    category = "disc_domain"
-
-    def __init__(self, center: Any = (0.0, 0.0), radius: Any = 0.5, mode: Any = None) -> None:
-        self.center = _geometry_coordinates(center, where="DiscDomain(center=)")
-        if len(self.center) != 2:
-            raise ValueError(
-                "DiscDomain: center must contain exactly two coordinates (got %d)"
-                % len(self.center))
-        self.radius = _geometry_scalar(radius, where="DiscDomain(radius=)")
-        if self.radius <= 0.0:
-            raise ValueError("DiscDomain: radius must be > 0 (got %r)" % (self.radius,))
-        # Default mode = the inert NoMask (full Cartesian transport; only the mask is materialised).
-        if mode is None:
-            from ..masks import NoMask  # local: avoid importing the class set into this namespace
-            mode = NoMask()
-        lower_transport_mask(mode)
-        self.mode = mode
-
-    def options(self) -> dict:
-        return {"center": self.center, "radius": self.radius, "mode": self.mode.name}
-
-    def level_set(self, frame: Any) -> LevelSet:
-        return Disc(center=self.center, radius=self.radius).level_set(frame)
-
-    def preview_extent(self) -> tuple[tuple[float, float], tuple[float, float]]:
-        margin = 1.25 * self.radius
-        return ((self.center[0] - margin, self.center[1] - margin),
-                (self.center[0] + margin, self.center[1] + margin))
-
-    def capabilities(self) -> Any:
-        return CapabilitySet({"transport_domain": "disc"})
-
-    def requirements(self) -> Any:
-        return self.mode.requirements()
-
-    def available(self, context: Any = None) -> Any:
-        """Defer to the chosen transport mode's explainable availability."""
-        return self.mode.available(context)
-
-    def lower(self, context: Any = None) -> Any:
-        """Lower to the native ``(cx, cy, R, mode_token)`` set_disc_domain arguments."""
-        cx, cy = self.center
-        return (cx, cy, self.radius, lower_transport_mask(self.mode))
-
-
 class EmbeddedBoundary(_GeometryPreviewSurface, MeshDescriptor):
     """An embedded boundary = geometry + transport metrics + an explicit boundary flux.
 
@@ -543,6 +520,5 @@ class EmbeddedBoundary(_GeometryPreviewSurface, MeshDescriptor):
 
 __all__ = [
     "Geometry", "GeometryComposition", "Disc", "NoWall", "HalfPlane", "LevelSet",
-    "DiscDomain",
     "EmbeddedBoundary", "complement", "difference", "intersection", "union",
 ]

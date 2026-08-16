@@ -242,7 +242,12 @@ chk(eh < 1e-10, f"robust == nu sur etat sain a 1e-10 ({eh:.2e})")
 print("== (7) lorentz_sources : table ordre 2 a la main, en flottants purs ==")
 Mf = {pq: float(k + 2) * (0.5 + 0.1 * k) for k, pq in enumerate(moment_indices(2))}
 qm, oc, ex, ey = 1.7, -0.6, 0.3, 0.9
-src = lorentz_sources(Mf, ex, ey, qm, oc)
+src = lorentz_sources(
+    Mf,
+    electric_components=(ex, ey),
+    q_over_m=qm,
+    magnetic_rotation=oc,
+)
 expected = [
     0.0,
     qm * ex * Mf[(0, 0)] + oc * Mf[(0, 1)],
@@ -253,7 +258,12 @@ expected = [
 ]
 e7 = max(abs(a - b) for a, b in zip(src, expected, strict=True))
 chk(e7 < 1e-14, f"6 termes == table manuelle (err {e7:.1e})")
-chk(len(lorentz_sources({pq: 1.0 for pq in moment_indices(4)}, ex, ey, qm, oc)) == 15,
+chk(len(lorentz_sources(
+    {pq: 1.0 for pq in moment_indices(4)},
+    electric_components=(ex, ey),
+    q_over_m=qm,
+    magnetic_rotation=oc,
+)) == 15,
     "ordre 4 : hierarchie fermee (15 termes, aucune cle hors variables transportees)")
 
 print("== (7b) maxwellian_moments / bgk_source : point fixe et gaussianisation ==")

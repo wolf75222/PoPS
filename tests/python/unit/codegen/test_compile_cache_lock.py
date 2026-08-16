@@ -70,6 +70,69 @@ def test_cache_staging_path_is_uniquely_reserved_in_the_destination_directory(tm
     assert second.is_file()
 
 
+def test_amr_cache_miss_projects_field_role_coefficients_only_for_identity(tmp_path, monkeypatch):
+    from pops.codegen import _artifact_identity as artifact_identity
+    from pops.codegen import _compile_drivers as drivers
+    from pops.identity import canonical_bytes
+
+    destination = str(tmp_path / "amr-field-roles.so")
+    roles = (
+        {
+            "kind": "rhs",
+            "field": "tests.electrostatic.slot",
+            "block": "material",
+            "binding_ordinal": 0,
+            "binding_identity": "tests.electrostatic.binding.0",
+            "provider_key": "electrostatic",
+            "coefficient": 0.1,
+        },
+    )
+    observed = {}
+
+    class Model:
+        _elliptic_fields = {}
+
+        @staticmethod
+        def _check_require_metadata(require_metadata, backend):
+            del require_metadata, backend
+
+    monkeypatch.setattr(drivers, "_native_kokkos_compiler", lambda cxx: cxx)
+    monkeypatch.setattr(drivers, "_abi_key_python", lambda include, cxx, std: "test-abi")
+    monkeypatch.setattr(drivers, "_identity_cache_so_path", lambda spec: destination)
+    monkeypatch.setattr(drivers, "_record_artifact_identity", lambda *args: None)
+
+    def fake_artifact_spec(model, **kwargs):
+        del model
+        observed["identity_name"] = kwargs["name"]
+        return object(), object()
+
+    def fake_compile_native(model, path, *args, native_field_roles, **kwargs):
+        del model, args, kwargs
+        observed["runtime_roles"] = native_field_roles
+        return path
+
+    monkeypatch.setattr(artifact_identity, "model_artifact_spec", fake_artifact_spec)
+    monkeypatch.setattr(drivers, "compile_native", fake_compile_native)
+    monkeypatch.setattr(drivers, "publish_staged_artifact", lambda *args, **kwargs: None)
+
+    assert drivers.compile_model(
+        Model(),
+        include="test-headers",
+        cxx="test-c++",
+        std="c++23",
+        target="amr_system",
+        name="field-package",
+        _native_field_roles=roles,
+    ) == destination
+
+    identity_roles = ({**roles[0], "coefficient": (0.1).hex()},)
+    assert observed["identity_name"] == "field-package#amr-field-roles:%s" % canonical_bytes(
+        identity_roles
+    ).hex()
+    assert observed["runtime_roles"][0]["coefficient"] == 0.1
+    assert type(observed["runtime_roles"][0]["coefficient"]) is float
+
+
 def test_failed_program_compile_leaves_no_partial_final_or_staging_binary(
     tmp_path, monkeypatch
 ):

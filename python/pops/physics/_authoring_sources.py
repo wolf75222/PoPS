@@ -26,6 +26,9 @@ else:
 class _SourceMixin(_HyperbolicModel):
     """Source, elliptic, named operators, projection and stability declarations."""
 
+    if TYPE_CHECKING:
+        def aux(self, name: Any) -> Any: ...
+
     def set_source(self, s: Any) -> None:
         self._source = [_wrap(e) for e in s]
 

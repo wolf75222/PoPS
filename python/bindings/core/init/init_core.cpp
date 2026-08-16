@@ -199,7 +199,9 @@ pops::CapabilityTarget parse_capability_target(const std::string& target, const 
 py::dict runtime_environment_to_dict(const pops::RuntimeEnvironmentReport& r) {
   py::dict d;
   d["dimension"] = r.dimension;
-  d["amr_refinement_ratio"] = r.amr_refinement_ratio;
+  d["amr_refinement_ratio"] = py::none();
+  d["amr_refinement_ratio_selection"] = r.amr_refinement_ratio_selection;
+  d["amr_refinement_ratio_rank"] = r.amr_refinement_ratio_rank;
   d["precision"] = r.precision;
   d["real_bytes"] = r.real_bytes;
   d["supports_single_precision"] = r.supports_single_precision;
@@ -315,7 +317,9 @@ py::dict module_capabilities_to_dict(const pops::ModuleCapabilities& c,
   d["supports_named_fields"] = c.supports_named_fields;
   d["supports_partial_imex_mask"] = c.supports_partial_imex_mask;
   d["dimension"] = env.dimension;
-  d["amr_refinement_ratio"] = env.amr_refinement_ratio;
+  d["amr_refinement_ratio"] = py::none();
+  d["amr_refinement_ratio_selection"] = env.amr_refinement_ratio_selection;
+  d["amr_refinement_ratio_rank"] = env.amr_refinement_ratio_rank;
   d["precision"] = env.precision;
   d["real_bytes"] = env.real_bytes;
   d["communicator"] = env.communicator;
@@ -801,7 +805,7 @@ void init_core(py::module_& m) {
       .def_property(
           "periodicity",
           [](const NativeSystemConfig& config) {
-            return ranked_periodicity_to_python(config.periodicity);
+            return ranked_periodicity_to_python<kNativeDimension>(config.periodicity);
           },
           [](NativeSystemConfig& config, const py::handle& value) {
             config.periodicity =
@@ -830,7 +834,6 @@ void init_core(py::module_& m) {
             data["transport"] = spec.transport.get();
             data["source"] = spec.source.get();
             data["elliptic"] = spec.elliptic.get();
-            data["B0"] = spec.B0.get();
             data["gamma"] = spec.gamma.get();
             data["cs2"] = spec.cs2.get();
             data["vacuum_floor"] = spec.vacuum_floor.get();
@@ -861,7 +864,6 @@ void init_core(py::module_& m) {
   bind_model_spec_property(model_spec, "transport", &ModelSpec::transport);
   bind_model_spec_property(model_spec, "source", &ModelSpec::source);
   bind_model_spec_property(model_spec, "elliptic", &ModelSpec::elliptic);
-  bind_model_spec_property(model_spec, "B0", &ModelSpec::B0);
   bind_model_spec_property(model_spec, "gamma", &ModelSpec::gamma);
   bind_model_spec_property(model_spec, "cs2", &ModelSpec::cs2);
   bind_model_spec_property(model_spec, "vacuum_floor", &ModelSpec::vacuum_floor);

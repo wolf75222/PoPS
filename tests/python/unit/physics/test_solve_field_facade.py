@@ -1,4 +1,5 @@
 """The final field path separates physics, numerics, and Case ownership."""
+
 from __future__ import annotations
 
 import pytest
@@ -19,14 +20,15 @@ from pops.fields.bcs import (
 from pops.frames import Cartesian2D
 from pops.math import ddt, div, laplacian
 from pops.physics import Model
+from pops.codegen._compile_emit import _native_amr_field_roles_identity
 from pops.problem import Case
 from pops.solvers.elliptic import GeometricMG
 
 
 def _final_field_assembly(*, gradient_sign: int = -1):
-    frame = Rectangle(
-        "electrostatic-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)
-    ).frame(Cartesian2D())
+    frame = Rectangle("electrostatic-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(
+        Cartesian2D()
+    )
     x_axis, y_axis = frame.axes
     model = Model("electrostatic", frame=frame)
     state = model.state("U", components=["charge"])
@@ -51,9 +53,7 @@ def _final_field_assembly(*, gradient_sign: int = -1):
     )
     discretization = FieldDiscretization(
         method=CellCenteredSecondOrder(),
-        boundaries=(
-            BoundaryCondition(AllPhysicalBoundaries(), Dirichlet(0.0)),
-        ),
+        boundaries=(BoundaryCondition(AllPhysicalBoundaries(), Dirichlet(0.0)),),
         solver=GeometricMG(),
     )
     case = Case("field-case")
@@ -84,7 +84,8 @@ def test_field_unknown_uses_typed_binding_not_a_read_time_operator_alias() -> No
     assert module.operator_binding(operator.unknown).registered_operator_name == operator.name
     assert operator.unknown.local_id not in module.operator_registry().aliases()
     row = next(
-        item for item in module.manifest().to_dict()["operator_bindings"]
+        item
+        for item in module.manifest().to_dict()["operator_bindings"]
         if item["subject_handle"]["kind"] == "field"
     )
     assert row["subject_handle"]["local_id"] == operator.unknown.local_id
@@ -93,9 +94,7 @@ def test_field_unknown_uses_typed_binding_not_a_read_time_operator_alias() -> No
 
 def test_homonymous_field_and_operator_are_order_independent() -> None:
     def build(*, inspect_before_operator):
-        frame = Rectangle("field-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(
-            Cartesian2D()
-        )
+        frame = Rectangle("field-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(Cartesian2D())
         model = Model("homonymous_field", frame=frame)
         state = model.state("U", components=("charge",))
         unknown = model.field("potential")
@@ -108,9 +107,7 @@ def test_homonymous_field_and_operator_are_order_independent() -> None:
         )
         return model, unknown, operator, before
 
-    inspected, inspected_unknown, inspected_operator, stale = build(
-        inspect_before_operator=True
-    )
+    inspected, inspected_unknown, inspected_operator, stale = build(inspect_before_operator=True)
     direct, direct_unknown, direct_operator, _ = build(inspect_before_operator=False)
 
     assert stale is not inspected.module
@@ -145,6 +142,32 @@ def test_case_field_rejects_duplicate_physical_operator_identity() -> None:
         case.field(operator, discretization)
 
 
+def test_amr_field_role_identity_projects_coefficients_without_changing_runtime_roles() -> None:
+    from pops.identity import canonical_bytes
+
+    roles = (
+        {
+            "kind": "rhs",
+            "field": "tests.electrostatic.slot",
+            "block": "material",
+            "binding_ordinal": 0,
+            "binding_identity": "tests.electrostatic.binding.0",
+            "provider_key": "electrostatic",
+            "coefficient": 0.1,
+        },
+    )
+
+    with pytest.raises(TypeError, match=r"float\.hex\(\)"):
+        canonical_bytes(roles)
+
+    identity_roles = _native_amr_field_roles_identity(roles)
+
+    assert roles[0]["coefficient"] == 0.1
+    assert type(roles[0]["coefficient"]) is float
+    assert identity_roles[0]["coefficient"] == (0.1).hex()
+    assert canonical_bytes(identity_roles)
+
+
 def test_gradient_output_sign_reaches_model_hash_and_both_native_loaders() -> None:
     _, negative, _, _, _ = _final_field_assembly(gradient_sign=-1)
     _, positive, _, _, _ = _final_field_assembly(gradient_sign=1)
@@ -153,11 +176,64 @@ def test_gradient_output_sign_reaches_model_hash_and_both_native_loaders() -> No
 
     assert negative_emit._m._elliptic_fields["electrostatic"]["gradient_sign"] == -1
     assert positive_emit._m._elliptic_fields["electrostatic"]["gradient_sign"] == 1
-    assert negative_emit._m._model_hash() != positive_emit._m._model_hash()
+    assert negative_emit._model_hash() != positive_emit._model_hash()
     for target in ("system", "amr_system"):
-        negative_loader = negative_emit._m.emit_cpp_native_loader(target=target)
-        positive_loader = positive_emit._m.emit_cpp_native_loader(target=target)
-        assert 'register_elliptic_field(name, "electrostatic", 5, 6, 7, -1);' \
-            in negative_loader
-        assert 'register_elliptic_field(name, "electrostatic", 5, 6, 7, 1);' \
-            in positive_loader
+        if target == "system":
+            negative_loader = negative_emit.__pops_native_loader_source__(target=target)
+            positive_loader = positive_emit.__pops_native_loader_source__(target=target)
+            assert 'package.elliptic_attachments.push_back({"electrostatic",' in negative_loader
+            assert '}, -1, std::move(named_elliptic_rhs_0)});' in negative_loader
+            assert '}, 1, std::move(named_elliptic_rhs_0)});' in positive_loader
+            continue
+
+        def roles(sign: int) -> tuple[dict[str, object], ...]:
+            components = ("potential", "electric_field_x", "electric_field_y")
+            return (
+                {
+                    "kind": "output",
+                    "field": "tests.electrostatic.slot",
+                    "block": "material",
+                    "output_keys": tuple(
+                        {
+                            "owner_qid": "tests/material",
+                            "space_kind": "field",
+                            "space_name": "potential",
+                            "component": component,
+                        }
+                        for component in components
+                    ),
+                    "gradient_sign": sign,
+                },
+                {
+                    "kind": "rhs",
+                    "field": "tests.electrostatic.slot",
+                    "block": "material",
+                    "binding_ordinal": 0,
+                    "binding_identity": "tests.electrostatic.binding.0",
+                    "provider_key": "electrostatic",
+                    "coefficient": 1.0,
+                },
+            )
+
+        negative_loader = negative_emit._m.emit_cpp_native_loader(
+            target=target, native_field_roles=roles(-1)
+        )
+        positive_loader = positive_emit._m.emit_cpp_native_loader(
+            target=target, native_field_roles=roles(1)
+        )
+        assert "attachment.gradient_sign = -1;" in negative_loader
+        assert "attachment.gradient_sign = 1;" in positive_loader
+        expected_output_keys = (
+            "attachment.output_keys = {"
+            'pops::runtime::system::AuxiliaryComponentKey{"tests/material", "field", '
+            '"potential", "potential"}, '
+            'pops::runtime::system::AuxiliaryComponentKey{"tests/material", "field", '
+            '"potential", "electric_field_x"}, '
+            'pops::runtime::system::AuxiliaryComponentKey{"tests/material", "field", '
+            '"potential", "electric_field_y"}};'
+        )
+        for loader in (negative_loader, positive_loader):
+            assert expected_output_keys in loader
+            assert 'attachment.field = "tests.electrostatic.slot";' in loader
+            assert 'attachment.binding_identity = "tests.electrostatic.binding.0";' in loader
+            assert "install_prepared_native_amr_package(std::move(package))" in loader

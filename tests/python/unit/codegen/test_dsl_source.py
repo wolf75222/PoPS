@@ -2,21 +2,44 @@
 
 emit_cpp_source() produit un struct C++ expose apply(U, a) cense reproduire une brique de source
 ECRITE A LA MAIN. Ce test : (1) construit le modele a 4 variables avec la source (q/m) rho E (forme
-electrostatique), aux = grad_x/grad_y ; (2) genere la brique GenForce ; (3) si un compilateur et les
-en-tetes pops sont presents, compile un programme qui inclut les vrais en-tetes pops et compare, sur des
-etats ET des aux deterministes, GenForce::apply a pops::PotentialForce{-1.0}::apply composante par
-composante. Le programme imprime l'ecart max, qu'on exige < 1e-12. Lance avec python3.
+electrostatique), aux = grad_x/grad_y ; (2) genere la brique GenForce via le Module canonique et
+son ProviderPack exact ; (3) si un compilateur et les en-tetes pops sont presents, compile un
+programme qui inclut les vrais en-tetes pops et compare, sur des etats ET des aux deterministes,
+GenForce::apply a pops::PotentialForce{-1.0}::apply composante par composante. Le programme imprime
+l'ecart max, qu'on exige < 1e-12. Lance avec python3.
 """
 import os
-import shutil
 import subprocess
 import tempfile
+from functools import cache
 
-from pops.physics._model import HyperbolicModel
-from tests.python.support.requirements import repo_include, require_native_or_skip
+from pops._native_selector import select_native_dimension, selected_native_dimension
+from pops.codegen.toolchain import (
+    loader_cxx_std,
+    native_compile_environment,
+    pops_loader_build_flags,
+)
+from pops.codegen.module_lowering import lower_and_validate
+from pops.model import ProviderPack
+from pops.physics._facade import Model
+from tests.python.support.requirements import (
+    default_cxx,
+    missing_compiler_requirement,
+    repo_include,
+    require_native_or_skip,
+)
 
 QOM = -1.0
 INCLUDE = repo_include()
+
+
+def _lowered(model):
+    """Emit only after the canonical Module resolves its exact provider packs."""
+    emit_model, source_module = lower_and_validate(model, facade=model)
+    assert emit_model is model
+    assert source_module is model.module
+    assert type(emit_model._m._auxiliary_provider_pack) is ProviderPack
+    return emit_model
 
 
 def build_force_model():
@@ -29,19 +52,23 @@ def build_force_model():
       S[3] = qom * (rho_u Ex + rho_v Ey)   (travail sur l'energie)
     Identique a pops::PotentialForce{qom} sur 4 variables.
     """
-    m = HyperbolicModel("force")
+    m = Model("force")
     rho, rho_u, rho_v, E = m.conservative_vars("rho", "rho_u", "rho_v", "E")
     zeros = [0.0 * value for value in (rho, rho_u, rho_v, E)]
-    m.set_flux(x=zeros, y=zeros)
+    m.flux(x=zeros, y=zeros)
     gx = m.aux("grad_x")
     gy = m.aux("grad_y")
-    m.set_source([
+    m.source([
         0,
         QOM * rho * (-gx),
         QOM * rho * (-gy),
         QOM * (rho_u * (-gx) + rho_v * (-gy)),
     ])
     return m
+
+
+def emit_source(model, *, name):
+    return _lowered(model)._m.emit_cpp_source(name=name)
 
 
 HARNESS = r"""
@@ -66,7 +93,8 @@ int main() {
   for (int k=0;k<ns;++k){
     pops::StateVec<4> u{}; for(int i=0;i<4;++i) u[i]=S[k][i];
     for (int j=0;j<ng;++j){
-      pops::Aux a{}; a.gradient<0>() = G[j][0]; a.gradient<1>() = G[j][1];
+      pops::ProviderValues<pops_generated::GenForce::n_aux> a{};
+      a[0] = G[j][0]; a[1] = G[j][1];
       auto sg = gen.apply(u, a);
       auto sr = ref.apply(u, a);
       for(int i=0;i<4;++i) upd(sg[i], sr[i]);
@@ -78,37 +106,105 @@ int main() {
 """
 
 
+@cache
+def _header_only_toolchain():
+    cxx = default_cxx()
+    reason = missing_compiler_requirement(INCLUDE)
+    if reason or cxx is None:
+        require_native_or_skip(reason or "compilateur C++ absent (CXX, c++, clang++)")
+        return None
+    try:
+        dimension = selected_native_dimension()
+        if dimension is None:
+            configured_dimension = os.environ.get("POPS_NATIVE_DIM")
+            if configured_dimension is None:
+                raise RuntimeError(
+                    "header-only source harness requires a selected native dimension or POPS_NATIVE_DIM"
+                )
+            if configured_dimension not in {"1", "2", "3"}:
+                raise RuntimeError(
+                    "header-only source harness requires canonical POPS_NATIVE_DIM text 1, 2, or 3"
+                )
+            dimension = int(configured_dimension)
+            select_native_dimension(dimension)
+        selected_cxx, compile_flags, link_flags = pops_loader_build_flags(cxx)
+    except (RuntimeError, ValueError) as exc:
+        require_native_or_skip(str(exc))
+        return None
+    return selected_cxx, loader_cxx_std(), tuple(compile_flags), tuple(link_flags)
+
+
+def _header_only_cxx():
+    toolchain = _header_only_toolchain()
+    return None if toolchain is None else toolchain[0]
+
+
+def _header_only_flags():
+    toolchain = _header_only_toolchain()
+    if toolchain is None:
+        return []
+    _cxx, standard, compile_flags, link_flags = toolchain
+    return [
+        "-std=" + standard,
+        "-O2",
+        "-I",
+        INCLUDE,
+        *compile_flags,
+        *link_flags,
+    ]
+
+
+def _header_only_compile_flags():
+    toolchain = _header_only_toolchain()
+    if toolchain is None:
+        return []
+    _cxx, standard, compile_flags, _link_flags = toolchain
+    return ["-std=" + standard, "-O2", "-I", INCLUDE, *compile_flags]
+
+
+def _header_only_link_flags():
+    toolchain = _header_only_toolchain()
+    return [] if toolchain is None else list(toolchain[3])
+
+
+def _compile_and_run(source, stem):
+    cxx = _header_only_cxx()
+    if cxx is None:
+        return None
+    with tempfile.TemporaryDirectory() as tmp:
+        cpp = os.path.join(tmp, stem + ".cpp")
+        exe = os.path.join(tmp, stem)
+        with open(cpp, "w") as f:
+            f.write(source)
+        subprocess.run(
+            [cxx, *_header_only_compile_flags(), cpp, "-o", exe, *_header_only_link_flags()],
+            check=True,
+            env=native_compile_environment(),
+        )
+        return subprocess.run(
+            [exe], capture_output=True, text=True, check=True,
+            env=native_compile_environment(),
+        ).stdout
+
+
 def main():
     m = build_force_model()
-    struct = m.emit_cpp_source(name="GenForce")
+    struct = emit_source(m, name="GenForce")
 
     # (1) forme de la brique (sans compilateur)
     assert "struct GenForce {" in struct
-    for token in ("apply(const pops::StateVec<4>&", "const pops::Aux& a",
-                  "const pops::Real grad_x = a.template flux_provider<1>();",
-                  "const pops::Real grad_y = a.template flux_provider<2>();",
+    for token in ("apply(const pops::StateVec<4>&", "const auto& a",
+        "const pops::Real grad_x = pops::provider_value<0>(a);",
+        "const pops::Real grad_y = pops::provider_value<1>(a);",
                   "pops::StateVec<4> S{};"):
         assert token in struct, "membre attendu absent : %s" % token
+    assert "static constexpr int n_aux = 2;" in struct
     print("OK  emit_cpp_source : struct genere (%d lignes)" % struct.count("\n"))
 
-    cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
-    if not cxx or not os.path.isdir(INCLUDE):
-        require_native_or_skip('skip  compilateur ou en-tetes pops absents -> verification sautee (%s)' % INCLUDE)
+    out = _compile_and_run(HARNESS % (struct, QOM), "source")
+    if out is None:
         print("test_dsl_source : OK (forme du struct seulement)")
         return
-
-    prog = HARNESS % (struct, QOM)
-    with tempfile.TemporaryDirectory() as tmp:
-        cpp = os.path.join(tmp, "source.cpp")
-        exe = os.path.join(tmp, "source")
-        with open(cpp, "w") as f:
-            f.write(prog)
-        # le coeur pops est header-only et propre en C++20 ; -I include suffit.
-        subprocess.run([
-            cxx, "-std=c++20", "-O2", "-DPOPS_NATIVE_DIM=2",
-            "-I", INCLUDE, cpp, "-o", exe,
-        ], check=True)
-        out = subprocess.run([exe], capture_output=True, text=True, check=True).stdout
 
     maxdiff = float(out.strip())
     assert maxdiff < 1e-12, "source generee != pops::PotentialForce (ecart max %.2e)" % maxdiff

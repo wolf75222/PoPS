@@ -7,6 +7,10 @@
 namespace pops {
 namespace {
 
+amr::InterfaceFluxLedgerBudget test_budget() {
+  return {16, 16, 2, "test-interface-budget"};
+}
+
 amr::InterfaceFluxFragmentKey fragment_key(
     amr::InterfaceFluxOrientation orientation = amr::InterfaceFluxOrientation::FineOutward) {
   return {"fluid-plasma.x-high",
@@ -15,6 +19,9 @@ amr::InterfaceFluxFragmentKey fragment_key(
           1,
           {1, 7, amr::Rational(1, 2), 0.125},
           "ssprk2.stage.0",
+          "test.program.graph@1",
+          "test.program.rate@1",
+          "test.program.application@1",
           {{1, 7, amr::Rational(0, 1), 0.0}, {1, 7, amr::Rational(1, 1), 0.25}},
           orientation};
 }
@@ -45,6 +52,15 @@ TEST(test_interface_flux_fragment_ledger, full_fragment_identity_keeps_every_qua
   distinct.stage_identity = "ssprk2.stage.1";
   identities.insert(distinct);
   distinct = base;
+  distinct.graph_identity = "test.program.graph@2";
+  identities.insert(distinct);
+  distinct = base;
+  distinct.rate_identity = "test.program.rate@2";
+  identities.insert(distinct);
+  distinct = base;
+  distinct.application_identity = "test.program.application@2";
+  identities.insert(distinct);
+  distinct = base;
   distinct.interval.end.phase = amr::Rational(3, 4);
   identities.insert(distinct);
   distinct = base;
@@ -57,12 +73,12 @@ TEST(test_interface_flux_fragment_ledger, full_fragment_identity_keeps_every_qua
   distinct.right_block = 3;
   identities.insert(distinct);
 
-  EXPECT_EQ(identities.size(), 10u);
+  EXPECT_EQ(identities.size(), 13u);
 }
 
 TEST(test_interface_flux_fragment_ledger,
      opposite_interface_consumers_receive_equal_and_opposite_fluxes) {
-  amr::TransactionalInterfaceFluxLedger<double> ledger(9);
+  amr::TransactionalInterfaceFluxLedger<double> ledger(9, test_budget());
   const auto coarse = fragment_key(amr::InterfaceFluxOrientation::CoarseOutward);
   const auto fine = fragment_key(amr::InterfaceFluxOrientation::FineOutward);
 
@@ -81,7 +97,7 @@ TEST(test_interface_flux_fragment_ledger,
 }
 
 TEST(test_interface_flux_fragment_ledger, ssprk2_stages_accumulate_with_exact_weights) {
-  amr::TransactionalInterfaceFluxLedger<double> ledger(9);
+  amr::TransactionalInterfaceFluxLedger<double> ledger(9, test_budget());
   auto stage_0 = fragment_key();
   stage_0.clock = {1, 7, amr::Rational(0, 1), 0.0};
   auto stage_1 = fragment_key();
@@ -99,7 +115,7 @@ TEST(test_interface_flux_fragment_ledger, ssprk2_stages_accumulate_with_exact_we
 }
 
 TEST(test_interface_flux_fragment_ledger, rollback_never_publishes_pending_fragments) {
-  amr::TransactionalInterfaceFluxLedger<double> ledger(9);
+  amr::TransactionalInterfaceFluxLedger<double> ledger(9, test_budget());
   ledger.begin();
   ledger.accumulate(fragment_key(), {amr::Rational(1, 2), 0.5, 0.25}, 2.0);
   EXPECT_TRUE(ledger.aggregate(scalar_axpy).empty());
@@ -119,7 +135,7 @@ TEST(test_interface_flux_fragment_ledger, rollback_never_publishes_pending_fragm
 }
 
 TEST(test_interface_flux_fragment_ledger, stale_topology_epoch_is_rejected_before_storage) {
-  amr::TransactionalInterfaceFluxLedger<double> ledger(9);
+  amr::TransactionalInterfaceFluxLedger<double> ledger(9, test_budget());
   auto stale = fragment_key();
   stale.topology_epoch = 8;
 
@@ -144,7 +160,7 @@ TEST(test_interface_flux_fragment_ledger, stale_topology_epoch_is_rejected_befor
 
 TEST(test_interface_flux_fragment_ledger,
      unresolved_program_weight_cannot_escape_the_attempt_transaction) {
-  amr::TransactionalInterfaceFluxLedger<double> ledger(9);
+  amr::TransactionalInterfaceFluxLedger<double> ledger(9, test_budget());
   ledger.begin();
   ledger.accumulate(fragment_key(), {amr::Rational(0, 1), 0.5, 0.25, false}, 4.0);
 
@@ -160,7 +176,7 @@ TEST(test_interface_flux_fragment_ledger,
 }
 
 TEST(test_interface_flux_fragment_ledger, nested_savepoint_cannot_resolve_an_outer_fragment) {
-  amr::TransactionalInterfaceFluxLedger<double> ledger(9);
+  amr::TransactionalInterfaceFluxLedger<double> ledger(9, test_budget());
   ledger.begin();
   ledger.accumulate(fragment_key(), {amr::Rational(0, 1), 0.5, 0.25, false}, 4.0);
   ledger.begin();
@@ -175,7 +191,7 @@ TEST(test_interface_flux_fragment_ledger, nested_savepoint_cannot_resolve_an_out
 
 TEST(test_interface_flux_fragment_ledger,
      duplicate_stage_clock_identity_is_rejected_before_publication) {
-  amr::TransactionalInterfaceFluxLedger<double> ledger(9);
+  amr::TransactionalInterfaceFluxLedger<double> ledger(9, test_budget());
   ledger.begin();
   ledger.accumulate(fragment_key(), {amr::Rational(1, 1), 0.5, 0.25}, 4.0);
   EXPECT_THROW(ledger.accumulate(fragment_key(), {amr::Rational(1, 1), 0.5, 0.25}, 4.0),
@@ -186,7 +202,7 @@ TEST(test_interface_flux_fragment_ledger,
 
 TEST(test_interface_flux_fragment_ledger,
      authoritative_substep_duration_is_not_reconstructed_from_physical_timestamps) {
-  amr::TransactionalInterfaceFluxLedger<double> ledger(9);
+  amr::TransactionalInterfaceFluxLedger<double> ledger(9, test_budget());
   auto key = fragment_key();
   key.interval.begin.physical_time = 0.1;
   key.interval.end.physical_time = 0.3;

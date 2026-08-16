@@ -162,11 +162,11 @@ def codesign_imported_extensions(
     for variant in variants:
         extension = variant.path
         if _has_valid_adhoc_signature(codesign, extension):
-            if sha256_file(extension) != variant.row["sha256"]:
-                raise CodesignError(
-                    "validly signed Dim=%d bytes disagree with variants.json"
-                    % variant.dimension
-                )
+            # Wheel assembly may rewrite Mach-O load commands and produce a new valid ad-hoc
+            # signature after the build-tree manifest was generated.  Preserve those verified
+            # bytes and authenticate their final digest below.  Release builds separately prove
+            # the retained wheel and installed copy byte-for-byte before reaching this helper, so
+            # this refresh cannot hide a mutation of a retained release artifact.
             continue
         _checked_codesign(
             (codesign, "--force", "--sign", "-", str(extension)),

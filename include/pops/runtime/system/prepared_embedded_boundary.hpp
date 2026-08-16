@@ -8,6 +8,7 @@
 #include <pops/mesh/topology/boundary_topology.hpp>
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/runtime/analytic/level_set.hpp>
+#include <pops/runtime/export.hpp>
 #include <pops/runtime/numerical_defaults.hpp>
 
 #include <cstdint>
@@ -26,9 +27,9 @@ enum class PreparedEmbeddedBoundaryMode : unsigned char {
   cut_cell = 2,
 };
 
-[[nodiscard]] PreparedEmbeddedBoundaryMode parse_prepared_embedded_boundary_mode(
-    std::string_view mode);
-[[nodiscard]] std::string_view prepared_embedded_boundary_mode_name(
+[[nodiscard]] POPS_EXPORT PreparedEmbeddedBoundaryMode
+parse_prepared_embedded_boundary_mode(std::string_view mode);
+[[nodiscard]] POPS_EXPORT std::string_view prepared_embedded_boundary_mode_name(
     PreparedEmbeddedBoundaryMode mode) noexcept;
 
 /// Deep-owning immutable geometry package for one compile-time spatial rank.

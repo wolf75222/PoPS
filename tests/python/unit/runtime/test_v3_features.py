@@ -27,13 +27,14 @@ import numpy as np
 import pops.runtime._engine_descriptors as engine
 from pops.runtime._engine_descriptors import Periodic
 from pops.math import sqrt
+from pops.physics import Density, Momentum
 from pops.physics._facade import Model
 from pops.physics.multispecies import CoupledSource
 from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
 from tests.python.support.explicit_program import (
     install_forward_euler_program,
-    install_ssprk2_program,
 )
+from tests.python.support.physics_roles import X_AXIS, Y_AXIS
 from tests.python.support.requirements import (
     missing_compiler_requirement,
     repo_include,
@@ -93,7 +94,7 @@ na = src.block("a").role("density")
 k = src.param("k", 1e-3)
 src.add_pair("a", "b", role="density", expr=k * na)
 sim.add_coupling(src.compile())
-install_ssprk2_program(sim, coupled_sources=True)
+install_forward_euler_program(sim, coupled_sources=True)
 dt = sim.step_cfl(0.4)
 chk(abs(dt - 0.4 / 500.0) < 1e-15, f"dt = cfl/mu = 8e-4 ({dt:.3e})")
 chk(
@@ -166,7 +167,8 @@ if missing:
 def iso3_dsl(name, hllc=False, jac=False):
     m = Model(name)
     rho, mx, my = m.conservative_vars(
-        "rho", "mx", "my", roles=["Density", "MomentumX", "MomentumY"]
+        "rho", "mx", "my",
+        roles=[Density(), Momentum(X_AXIS), Momentum(Y_AXIS)],
     )
     cs2 = 0.5
     u = m.primitive("u", mx / rho)

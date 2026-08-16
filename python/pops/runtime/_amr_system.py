@@ -1,7 +1,8 @@
 """AmrSystem : the refined runtime coupler (Spec-4 PR-F composed class).
 
 ``AmrSystem`` carries one or several blocks on an AMR hierarchy. Its lines are split into the
-``_amr_system_equation`` (add_equation + named-aux), ``_amr_system_io`` (private accepted-state
+``_amr_system_equation`` (add_equation), ``_amr_system_aux_state`` (owner-qualified
+``InputAux`` / ``DerivedAux`` routes), ``_amr_system_io`` (private accepted-state
 codec and restore transaction), ``_amr_system_program`` (compiled time-Program install / params / transaction)
 and ``_amr_system_install`` (the ``pops.bind`` install seam + field-solver / aux helpers)
 mixins; this module composes them and keeps the constructor plus coupling glue.
@@ -21,10 +22,12 @@ from pops.runtime._lifecycle import (
     _LifecycleMixin,
 )
 from pops.runtime._amr_system_equation import _AmrSystemEquation
+from pops.runtime._amr_system_aux_state import _AmrSystemAuxState
 from pops.runtime._amr_system_install import _AmrSystemInstall
 from pops.runtime._amr_system_io import _AmrSystemIO
 from pops.runtime._amr_system_program import _AmrSystemProgram
 from pops.runtime._profile import PerformanceSummary, Profile
+from pops.runtime._private_config_compat import private_constructor_config
 
 
 def _profile_payload(system: Any) -> Any:
@@ -68,7 +71,8 @@ class _AmrProfileSession:
 
 
 class AmrSystem(
-    _AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemProgram, _LifecycleMixin
+    _AmrSystemEquation, _AmrSystemAuxState, _AmrSystemInstall, _AmrSystemIO,
+    _AmrSystemProgram, _LifecycleMixin
 ):
     """Refined counterpart of System : one or SEVERAL blocks carried on an AMR hierarchy.
 
@@ -88,9 +92,9 @@ class AmrSystem(
 
     def __init__(self, config: Any = None, **cfg_kw: Any) -> None:
         if config is None:
-            config = AmrSystemConfig()
-            for k, v in cfg_kw.items():
-                setattr(config, k, v)
+            config = private_constructor_config(
+                AmrSystemConfig, cfg_kw, runtime="AmrSystem", adaptive=True
+            )
         # cf. System.__init__ : _AmrSystem(config) triggers the Kokkos init (lazy). set_threads
         # has no more effect after this point.
         _threading._first_system_built = True
@@ -109,11 +113,6 @@ class AmrSystem(
         # Regrid cadence (checkpoint/restart ADC-65) : a BIT-IDENTICAL resume requires regrid_every == 0
         # (otherwise the post-restart regrid would re-diverge the hierarchy). Memorized for the restart guard.
         self._regrid_every = int(config.regrid_every)
-        # ADC-291: block name -> {aux field name -> channel component}, filled by add_equation from a
-        # CompiledModel.aux_extra_names (component of the k-th name = AUX_NAMED_BASE + k). Drives
-        # set_aux_field(block, name, array). Empty for blocks without a named aux field. Mirror of
-        # System._aux_field_index.
-        self._aux_field_index = {}
         # RUNTIME FREEZE LIFECYCLE (ADC-592, parity with System): "assembling" until _finalize_bind
         # flips it to "bound" (the LAST act of _install_compiled). The Python flag enforces the freeze
         # even under a prebuilt .so with no native mark_bound; _bound_snapshot is the BoundSnapshot of
@@ -139,20 +138,17 @@ class AmrSystem(
     def step(self, dt: Any) -> None:
         """Advance one fixed step and synchronize exactly one temporal envelope."""
         from pops.runtime._native_step_target import native_step_target
-        from pops.runtime._step_strategy import run_control_payload, run_step_attempt
-        from pops.time import FixedDt
+        from pops.runtime._step_strategy import prepare_program_run
 
-        strategy = FixedDt(dt)
-        self._temporal_restart_state.begin_run(
-            run_control_payload(strategy),
+        prepared_run = prepare_program_run(self)
+        prepared_run.begin(
+            self._temporal_restart_state,
             time=self._s.time(),
             macro_step=self._s.macro_step(),
         )
-        run_step_attempt(
-            self,
+        prepared_run.run_step(
             native_step_target(self),
-            strategy,
-            t_end=float(self._s.time()) + strategy.dt,
+            t_end=float(self._s.time()) + float(dt),
         )
 
     def set_poisson(
@@ -165,8 +161,7 @@ class AmrSystem(
         """Configure AMR Poisson with a typed physical-boundary selector.
 
         ``bc`` accepts a typed native boundary descriptor; omission keeps automatic selection.
-        Embedded geometry is authored independently through :meth:`set_disc_domain` or the
-        exact-ranked analytic level-set route.
+        Embedded geometry is authored independently through the exact-ranked analytic level-set route.
         """
         from pops.runtime._system_install_lowering import _lower_bc
 
@@ -182,33 +177,26 @@ class AmrSystem(
 
     def run(self, t_end, *, max_steps, output_dir=None, controls=None):
         """Advance up to ``t_end``; RuntimeInstance alone publishes ConsumerGraph effects."""
-        from pops.runtime._step_strategy import (
-            prepare_step_controller,
-            resolve_run_strategy,
-            run_control_payload,
-            run_step_attempt,
-        )
+        from pops.runtime._step_strategy import prepare_program_run
         from pops.runtime._native_step_target import native_step_target
 
-        strategy = resolve_run_strategy(self)
-        control_payload = run_control_payload(strategy, controls)
-        prepare_step_controller(self, strategy, controls)
-        self._temporal_restart_state.begin_run(
-            control_payload, time=self._s.time(), macro_step=self._s.macro_step()
+        prepared_run = prepare_program_run(self, controls)
+        prepared_run.begin(
+            self._temporal_restart_state, time=self._s.time(), macro_step=self._s.macro_step()
         )
         from pops.runtime._run_manifest import begin_run
 
         begin_run(
             self,
             t_end=t_end,
-            step_transaction=control_payload,
+            step_transaction=prepared_run.control_payload,
             max_steps=max_steps,
             output_dir=output_dir,
         )
         step_target = native_step_target(self)
         steps = 0
         while self._s.time() < t_end and steps < max_steps:
-            run_step_attempt(self, step_target, strategy, t_end=float(t_end), controls=controls)
+            prepared_run.run_step(step_target, t_end=float(t_end))
             steps += 1
         return steps
 
@@ -281,49 +269,12 @@ class AmrSystem(
         return self._s.named_field_values(name)
 
     def add_coupling(self, coupling: Any) -> Any:
-        """Add a private compiled inter-species coupled-source engine record
-        on the SHARED AMR hierarchy (MULTI-BLOCK), refined counterpart of System.add_coupling. The source
-        is transported as bytecode and interpreted on the C++ side (AmrSystem.add_coupled_source; no
-        per-cell Python callback). The coupling frequency (CoupledSource.frequency) is honored:
-        constant -> dt bound dt <= cfl/mu; Expr -> PER-CELL frequency mu(U) evaluated on the COARSE grid at
-        each step_cfl (the freq_prog_* vectors are forwarded). Must be called BEFORE the first
-        step (the source is frozen then injected at the lazy build of the runtime engine)."""
+        """Reject coupling until one complete multi-block AMR provider owns its execution."""
         _guard_assembling(self, "add_coupling")  # frozen once pops.bind completes (ADC-592)
-        # Late import (the multispecies module imports this package: avoid the cycle).
-        from pops.physics.multispecies import CompiledCoupledSource
-        from pops.physics.coupling_presets import lower_named_coupling, coupling_operator_args
-
-        if isinstance(coupling, CompiledCoupledSource):
-            args = coupling_operator_args(
-                coupling,
-                getattr(coupling, "conserved_roles", ()),
-                getattr(coupling, "created_roles", ()),
-            )
-            self._s.add_coupling_operator(*args)
-            return
-        # Named preset (ADC-595): lower to the generic coupled source (bit-identical to System), so the
-        # AMR path gains the named couplings as typed operators too. ThermalExchange needs a per-block
-        # gamma; AmrSystem does not expose block_gamma, so a preset that requires it raises clearly.
-        preset = lower_named_coupling(coupling, self._amr_block_gamma)
-        if preset is None:
-            raise TypeError(
-                "AmrSystem.add_coupling expects a private named-coupling engine descriptor or "
-                "CompiledCoupledSource"
-            )
-        preset.source.verify_declared_contract(conserved=preset.conserved, created=preset.created)
-        args = coupling_operator_args(
-            preset.source.compile(), preset.conserved, preset.created, frequency=preset.frequency
-        )
-        self._s.add_coupling_operator(*args)
-
-    def _amr_block_gamma(self, name: Any) -> Any:
-        """Per-block adiabatic index for the ThermalExchange preset (ADC-595). AmrSystem does not expose
-        a block_gamma accessor, so a ThermalExchange on AMR raises a clear error pointing at the generic
-        private CompiledCoupledSource path with an explicit gamma."""
         raise NotImplementedError(
-            "AmrSystem: the ThermalExchange preset needs a per-block gamma, which AMR does not expose; "
-            "author the thermal exchange as a private CompiledCoupledSource with an explicit gamma "
-            "param, or use it on a uniform System."
+            "AMR coupling installation requires the atomic "
+            "PreparedMultiBlockAmrHierarchy<Dim> coupling provider; the exact single-block "
+            "AMR core publishes no coupled-source executor"
         )
 
     @property

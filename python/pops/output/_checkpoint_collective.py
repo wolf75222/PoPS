@@ -8,12 +8,18 @@ It never imports a Python MPI binding or executes a collective outside :mod:`pop
 from __future__ import annotations
 
 import os
+import json
+import math
+import stat
+import struct
+import sys
+import zipfile
 from io import BytesIO
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, BinaryIO, Protocol, cast
 
 from pops._native_collectives import (
     allgather_value,
@@ -51,9 +57,9 @@ class RootAttempt:
 class InMemoryCheckpoint(Mapping[str, Any]):
     """Closed, object-free NPZ payload used by every restart rank.
 
-    ``numpy.load`` is deliberately consumed while decoding the broadcast bytes.  Native engine
-    adapters therefore never reopen the shared checkpoint path and never retain a lazy ``NpzFile``
-    whose later access could perform rank-local filesystem I/O.
+    Every member is streamed through the bounded NPY reader while decoding the broadcast bytes.
+    Native engine adapters therefore never reopen the shared checkpoint path and never retain a
+    lazy ``NpzFile`` whose later access could perform rank-local filesystem I/O.
     """
 
     __slots__ = ("_arrays", "files")
@@ -72,27 +78,556 @@ class InMemoryCheckpoint(Mapping[str, Any]):
         return len(self._arrays)
 
 
-def decode_checkpoint_bytes(payload: Any) -> InMemoryCheckpoint:
-    """Decode exact NPZ bytes once into eager, immutable-by-contract arrays."""
+_CHECKPOINT_MAX_ARRAY_NDIM = 4  # component axis plus the compile-time native rank (1..3)
+_MAX_SIZE_TEXT = len(str(sys.maxsize))
+_NPY_HEADER_BUDGET = (
+    len("{'descr': '', 'fortran_order': False, 'shape': (), }")
+    + 32  # longest simple dtype spelling, including an exact Unicode/bytes item width
+    + _CHECKPOINT_MAX_ARRAY_NDIM * (_MAX_SIZE_TEXT + 3)
+    + 64  # NPY header alignment padding
+    + 16  # magic, version and header-length words
+)
+_RESTART_TOKEN_CHARACTERS = len("pops.restart.v1:sha256:") + 64
+
+
+@dataclass(frozen=True, slots=True)
+class _NpyMemberPlan:
+    name: str
+    info: Any
+    shape: tuple[int, ...]
+    fortran_order: bool
+    dtype: Any
+    header_bytes: int
+    data_bytes: int
+
+
+class _NpyHeaderReader(Protocol):
+    """Bounded NumPy header reader (the stubs omit ``max_header_size``)."""
+
+    def __call__(
+        self, stream: BinaryIO, *, max_header_size: int
+    ) -> tuple[tuple[int, ...], bool, object]: ...
+
+
+class _NpyArrayReader(Protocol):
+    def __call__(
+        self, stream: BinaryIO, *, allow_pickle: bool, max_header_size: int
+    ) -> object: ...
+
+
+def _checked_array_bytes(shape: Any, dtype: Any, *, name: str) -> int:
+    if type(shape) is not tuple or len(shape) > _CHECKPOINT_MAX_ARRAY_NDIM:
+        raise TypeError("checkpoint member %r exceeds the exact native array-rank bound" % name)
+    elements = 1
+    for extent in shape:
+        if isinstance(extent, bool) or not isinstance(extent, int) or extent < 0:
+            raise TypeError("checkpoint member %r has an invalid array extent" % name)
+        if extent > sys.maxsize or (extent and elements > sys.maxsize // extent):
+            raise OverflowError("checkpoint member %r array shape exceeds size_t" % name)
+        elements *= extent
+    itemsize = int(dtype.itemsize)
+    if itemsize < 0 or (itemsize and elements > sys.maxsize // itemsize):
+        raise OverflowError("checkpoint member %r byte count exceeds size_t" % name)
+    return elements * itemsize
+
+
+def _require_checkpoint_dtype(dtype: Any, *, name: str) -> None:
+    if (
+        dtype.hasobject
+        or dtype.fields is not None
+        or dtype.subdtype is not None
+        or dtype.itemsize <= 0
+        or dtype.kind not in "biufcSU"
+    ):
+        raise TypeError("checkpoint member %r must use one primitive, object-free dtype" % name)
+
+
+def _read_npy_header(archive: Any, info: Any, name: str) -> _NpyMemberPlan:
+    import numpy as np
+
+    with archive.open(info, "r") as member:
+        version = np.lib.format.read_magic(member)
+        bounded_member = cast(BinaryIO, member)
+        if version == (1, 0):
+            reader = cast(_NpyHeaderReader, np.lib.format.read_array_header_1_0)
+            shape, fortran_order, dtype = reader(
+                bounded_member, max_header_size=_NPY_HEADER_BUDGET
+            )
+        elif version == (2, 0):
+            reader = cast(_NpyHeaderReader, np.lib.format.read_array_header_2_0)
+            shape, fortran_order, dtype = reader(
+                bounded_member, max_header_size=_NPY_HEADER_BUDGET
+            )
+        else:
+            raise ValueError(
+                "checkpoint member %r uses unsupported NPY version %r" % (name, version)
+            )
+        header_bytes = int(member.tell())
+    if not isinstance(dtype, (str, type, np.dtype)):
+        raise TypeError("checkpoint member %r has an invalid NPY dtype descriptor" % name)
+    dtype = np.dtype(dtype)
+    _require_checkpoint_dtype(dtype, name=name)
+    if fortran_order:
+        raise ValueError(
+            "checkpoint member %r must use the canonical C-contiguous NPY layout" % name
+        )
+    data_bytes = _checked_array_bytes(tuple(shape), dtype, name=name)
+    if header_bytes > _NPY_HEADER_BUDGET or info.file_size != header_bytes + data_bytes:
+        raise ValueError(
+            "checkpoint member %r central-directory size differs from its NPY header" % name
+        )
+    return _NpyMemberPlan(
+        name,
+        info,
+        tuple(shape),
+        bool(fortran_order),
+        dtype,
+        header_bytes,
+        data_bytes,
+    )
+
+
+def _read_npy_array(archive: Any, plan: _NpyMemberPlan) -> Any:
+    import numpy as np
+
+    with archive.open(plan.info, "r") as member:
+        reader = cast(_NpyArrayReader, np.lib.format.read_array)
+        value = reader(
+            cast(BinaryIO, member), allow_pickle=False, max_header_size=_NPY_HEADER_BUDGET
+        )
+        if member.read(1):
+            raise ValueError("checkpoint member %r has trailing NPY bytes" % plan.name)
+    array = np.asarray(value)
+    if array.shape != plan.shape or array.dtype != plan.dtype:
+        raise ValueError("checkpoint member %r changed after bounded extraction" % plan.name)
+    array.setflags(write=False)
+    return array
+
+
+def _manifest_character_budget(names: tuple[str, ...]) -> int:
+    """Derive the largest canonical manifest text from its exact member set and ND schema."""
+    identity = {
+        "domain": "semantic",
+        "schema_version": sys.maxsize,
+        "algorithm": "sha256",
+        "hexdigest": "f" * 64,
+    }
+    evidence = {}
+    for name in names:
+        evidence[name] = {
+            "dtype": "<U" + "9" * _MAX_SIZE_TEXT,
+            "shape": [sys.maxsize] * _CHECKPOINT_MAX_ARRAY_NDIM,
+            "content_sha256": "f" * 64,
+        }
+    maximal = {
+        "schema_version": sys.maxsize,
+        "runtime_kind": "multi_layout_uniform",
+        "semantic_identity": identity,
+        "artifact_identity": dict(identity, domain="artifact"),
+        "bind_identity": dict(identity, domain="bind"),
+        "run_identity": dict(identity, domain="run"),
+        "clock": {"time": "-0x1.fffffffffffffp+1023", "macro_step": -sys.maxsize},
+        "arrays": evidence,
+        "restart_identity": dict(identity, domain="restart"),
+    }
+    return len(json.dumps(maximal, sort_keys=True, separators=(",", ":"), allow_nan=False))
+
+
+def _require_manifest_restart_identity(manifest: Mapping[str, Any], token: str) -> None:
+    from pops._generated_release_contract import CHECKPOINT_ENVELOPE_SCHEMA_VERSION
+    from pops.identity import Identity, make_identity
+
+    def identity(field: str, domain: str) -> Identity:
+        value = manifest[field]
+        if not isinstance(value, Mapping) or set(value) != {
+            "domain",
+            "schema_version",
+            "algorithm",
+            "hexdigest",
+        }:
+            raise TypeError("checkpoint %s has an invalid exact identity schema" % field)
+        digest = value["hexdigest"]
+        if (
+            value["domain"] != domain
+            or isinstance(value["schema_version"], bool)
+            or not isinstance(value["schema_version"], int)
+            or value["algorithm"] != "sha256"
+            or not isinstance(digest, str)
+            or len(digest) != 64
+            or digest != digest.lower()
+        ):
+            raise ValueError("checkpoint %s has an invalid exact identity" % field)
+        try:
+            raw_digest = bytes.fromhex(digest)
+        except ValueError:
+            raise ValueError("checkpoint %s identity digest is not hexadecimal" % field) from None
+        if raw_digest.hex() != digest:
+            raise ValueError("checkpoint %s identity digest is not canonical" % field)
+        return Identity(domain, value["schema_version"], "sha256", raw_digest)
+
+    expected_keys = {
+        "schema_version",
+        "runtime_kind",
+        "semantic_identity",
+        "artifact_identity",
+        "bind_identity",
+        "run_identity",
+        "clock",
+        "arrays",
+        "restart_identity",
+    }
+    if set(manifest) != expected_keys:
+        raise ValueError("checkpoint manifest has an invalid exact schema")
+    if (
+        isinstance(manifest["schema_version"], bool)
+        or manifest["schema_version"] != CHECKPOINT_ENVELOPE_SCHEMA_VERSION
+        or not isinstance(manifest["runtime_kind"], str)
+        or manifest["runtime_kind"] not in {"uniform", "amr", "multi_layout_uniform"}
+    ):
+        raise ValueError("checkpoint manifest version/runtime kind is unsupported")
+    clock = manifest["clock"]
+    if (
+        not isinstance(clock, Mapping)
+        or set(clock) != {"time", "macro_step"}
+        or not isinstance(clock["time"], str)
+        or isinstance(clock["macro_step"], bool)
+        or not isinstance(clock["macro_step"], int)
+    ):
+        raise TypeError("checkpoint manifest clock has an invalid exact schema")
+    try:
+        accepted_time = float.fromhex(clock["time"])
+    except ValueError:
+        raise ValueError("checkpoint manifest clock time is not canonical hexadecimal") from None
+    if not math.isfinite(accepted_time) or accepted_time.hex() != clock["time"]:
+        raise ValueError("checkpoint manifest clock time is not canonical finite binary64")
+    identity("semantic_identity", "semantic")
+    identity("artifact_identity", "artifact")
+    identity("bind_identity", "bind")
+    identity("run_identity", "run")
+    base = {key: manifest[key] for key in expected_keys - {"restart_identity"}}
+    expected = make_identity("restart", base)
+    recorded = identity("restart_identity", "restart")
+    if recorded.token != expected.token or token != expected.token:
+        raise ValueError("checkpoint manifest/restart identity is not authentic")
+
+
+def _checkpoint_directory_authority(payload: bytes) -> tuple[int, int, int]:
+    """Read the classic/ZIP64 EOCD bounds before ``ZipFile`` allocates directory rows."""
+    signature = b"PK\x05\x06"
+    search_start = max(0, len(payload) - (22 + 0xFFFF))
+    search_end = len(payload)
+    eocd = -1
+    record = None
+    while search_end > search_start:
+        candidate = payload.rfind(signature, search_start, search_end)
+        if candidate < 0:
+            break
+        if candidate + 22 <= len(payload):
+            candidate_record = struct.unpack_from("<4s4H2LH", payload, candidate)
+            if candidate + 22 + candidate_record[-1] == len(payload):
+                eocd = candidate
+                record = candidate_record
+                break
+        search_end = candidate
+    if record is None:
+        raise ValueError("checkpoint NPZ has no canonical end-of-directory record")
+    (
+        _,
+        disk,
+        directory_disk,
+        disk_members,
+        total_members,
+        directory_size,
+        directory_offset,
+        comment_size,
+    ) = record
+    if disk != 0 or directory_disk != 0 or disk_members != total_members or comment_size != 0:
+        raise ValueError("checkpoint NPZ must be one single-disk archive")
+    if total_members != 0xFFFF and directory_size != 0xFFFFFFFF and directory_offset != 0xFFFFFFFF:
+        if directory_offset + directory_size != eocd:
+            raise ValueError("checkpoint NPZ central-directory bounds are not canonical")
+        return int(total_members), int(directory_offset), int(directory_size)
+
+    locator = eocd - 20
+    if locator < 0 or payload[locator : locator + 4] != b"PK\x06\x07":
+        raise ValueError("checkpoint ZIP64 archive lacks its canonical locator")
+    _, zip64_disk, zip64_offset, disks = struct.unpack_from("<4sLQL", payload, locator)
+    if zip64_disk != 0 or disks != 1 or zip64_offset > locator - 56:
+        raise ValueError("checkpoint ZIP64 locator is invalid")
+    if payload[zip64_offset : zip64_offset + 4] != b"PK\x06\x06":
+        raise ValueError("checkpoint ZIP64 end-of-directory record is invalid")
+    (
+        _,
+        record_size,
+        _version_made,
+        _version_needed,
+        zip64_disk,
+        zip64_directory_disk,
+        zip64_disk_members,
+        zip64_total_members,
+        zip64_directory_size,
+        zip64_directory_offset,
+    ) = struct.unpack_from("<4sQ2H2L4Q", payload, zip64_offset)
+    if (
+        record_size < 44
+        or zip64_offset + 12 + record_size > locator
+        or zip64_disk != 0
+        or zip64_directory_disk != 0
+        or zip64_disk_members != zip64_total_members
+        or zip64_directory_offset + zip64_directory_size != zip64_offset
+    ):
+        raise ValueError("checkpoint ZIP64 end-of-directory authority is invalid")
+    return (
+        int(zip64_total_members),
+        int(zip64_directory_offset),
+        int(zip64_directory_size),
+    )
+
+
+def _checkpoint_central_directory_preflight(payload: bytes, budget: Any) -> int:
+    """Walk bounded central headers without constructing ``ZipInfo`` or member-name objects."""
+    members, directory_offset, directory_size = _checkpoint_directory_authority(payload)
+    if members <= 0 or members > budget.max_members:
+        raise ValueError("checkpoint NPZ member count exceeds its live resource budget")
+    directory_end = directory_offset + directory_size
+    if directory_offset < 0 or directory_end > len(payload):
+        raise ValueError("checkpoint NPZ central directory exceeds its byte envelope")
+    position = directory_offset
+    name_bytes = 0
+    for _index in range(members):
+        if position + 46 > directory_end or payload[position : position + 4] != b"PK\x01\x02":
+            raise ValueError("checkpoint NPZ central directory has an invalid member header")
+        flags = struct.unpack_from("<H", payload, position + 8)[0]
+        compression = struct.unpack_from("<H", payload, position + 10)[0]
+        filename_size, extra_size, comment_size, disk = struct.unpack_from(
+            "<4H", payload, position + 28
+        )
+        if (
+            flags & 1
+            or compression != zipfile.ZIP_DEFLATED
+            or filename_size <= 4
+            or extra_size > 28
+            or comment_size != 0
+            or disk != 0
+        ):
+            raise ValueError("checkpoint NPZ central directory has an invalid member contract")
+        name_bytes += int(filename_size)
+        if name_bytes > budget.max_manifest_characters + 4 * members:
+            raise ValueError("checkpoint NPZ member names exceed the live manifest resource budget")
+        position += 46 + int(filename_size) + int(extra_size)
+        if position > directory_end:
+            raise ValueError("checkpoint NPZ central member exceeds its directory envelope")
+    if position != directory_end:
+        raise ValueError("checkpoint NPZ central directory has trailing data")
+    return members
+
+
+def _checkpoint_zip_members(
+    payload: bytes, archive: Any, declared_members: int
+) -> tuple[tuple[str, ...], dict[str, Any]]:
+    infos = tuple(archive.infolist())
+    if not infos or len(infos) != declared_members or len(infos) > len(payload) // 46:
+        raise ValueError("checkpoint NPZ central directory has an invalid member count")
+    names = []
+    by_name = {}
+    total_compressed = 0
+    for info in infos:
+        filename = info.filename
+        if (
+            not isinstance(filename, str)
+            or not filename.endswith(".npy")
+            or not filename[:-4]
+            or "/" in filename
+            or "\\" in filename
+            or "\x00" in filename
+            or info.is_dir()
+            or info.flag_bits & 1
+            or info.compress_type != zipfile.ZIP_DEFLATED
+            or info.compress_size < 0
+            or info.file_size < 0
+        ):
+            raise ValueError("checkpoint NPZ contains an invalid array member")
+        name = filename[:-4]
+        if name in by_name:
+            raise ValueError("checkpoint NPZ contains duplicate array names")
+        if info.compress_size > len(payload):
+            raise ValueError("checkpoint NPZ member exceeds its sealed byte envelope")
+        total_compressed += int(info.compress_size)
+        if total_compressed > len(payload):
+            raise ValueError("checkpoint NPZ compressed members exceed its byte envelope")
+        names.append(name)
+        by_name[name] = info
+    return tuple(names), by_name
+
+
+def decode_checkpoint_bytes(
+    payload: Any, budget: Any, *, allow_reviewed_unsealed: bool = False
+) -> InMemoryCheckpoint:
+    """Preflight and stream one exact NPZ into bounded immutable arrays.
+
+    The caller must supply the exact resource authority installed from the live runtime. Central
+    directory sizes are rejected against it before any NPY header or manifest is materialized. The
+    sealed manifest then authenticates and may only narrow those live allocation bounds.
+    """
     if not isinstance(payload, bytes) or not payload:
         raise TypeError("restart payload must be non-empty exact bytes")
     import numpy as np
+    from pops._manifest_protocol import strict_json_loads
+    from ._checkpoint_contract import CheckpointResourceBudget, IDENTITY_KEY, MANIFEST_KEY
 
-    with np.load(BytesIO(payload), allow_pickle=False) as stored:
-        names = tuple(stored.files)
-        if len(names) != len(set(names)):
-            raise ValueError("checkpoint NPZ contains duplicate array names")
+    if type(budget) is not CheckpointResourceBudget:
+        raise TypeError("restart decode requires one exact live checkpoint resource budget")
+    if type(allow_reviewed_unsealed) is not bool:
+        raise TypeError("restart unsealed-review policy must be an exact bool")
+    if len(payload) > budget.max_archive_bytes:
+        raise ValueError("checkpoint NPZ archive exceeds its live resource budget")
+    declared_members = _checkpoint_central_directory_preflight(payload, budget)
+    try:
+        archive_context = zipfile.ZipFile(BytesIO(payload), "r")
+    except (OSError, zipfile.BadZipFile) as error:
+        raise ValueError("restart payload is not one exact NPZ archive") from error
+    with archive_context as archive:
+        names, infos = _checkpoint_zip_members(payload, archive, declared_members)
+        if len(names) > budget.max_members:
+            raise ValueError("checkpoint NPZ member count exceeds its live resource budget")
+        name_characters = 0
+        for name in names:
+            name_characters += len(name)
+            if name_characters > budget.max_manifest_characters:
+                raise ValueError(
+                    "checkpoint NPZ member names exceed the live manifest resource budget"
+                )
+        total_uncompressed = 0
+        for info in infos.values():
+            if info.file_size > budget.max_array_bytes + _NPY_HEADER_BUDGET:
+                raise ValueError("checkpoint NPZ member exceeds its live per-array resource budget")
+            total_uncompressed += int(info.file_size)
+            if total_uncompressed > budget.max_uncompressed_bytes:
+                raise ValueError(
+                    "checkpoint NPZ uncompressed members exceed the live resource budget"
+                )
+        reserved = {MANIFEST_KEY, IDENTITY_KEY}
+        present_reserved = reserved.intersection(names)
+        if present_reserved and present_reserved != reserved:
+            raise ValueError("checkpoint NPZ has a partial canonical envelope")
+
+        plans = {}
+        already_loaded = {}
+        if present_reserved:
+            payload_names = tuple(name for name in names if name not in reserved)
+            manifest_plan = _read_npy_header(archive, infos[MANIFEST_KEY], MANIFEST_KEY)
+            manifest_budget = _manifest_character_budget(payload_names)
+            if (
+                manifest_plan.shape != ()
+                or manifest_plan.dtype.kind != "U"
+                or manifest_plan.dtype.itemsize % 4
+                or manifest_plan.dtype.itemsize // 4 > manifest_budget
+                or manifest_plan.dtype.itemsize // 4 > budget.max_manifest_characters
+                or manifest_plan.data_bytes > budget.max_array_bytes
+            ):
+                raise ValueError("checkpoint manifest member exceeds its exact schema budget")
+            manifest_array = _read_npy_array(archive, manifest_plan)
+            manifest_text = str(manifest_array.item())
+            manifest = strict_json_loads(manifest_text, where="checkpoint manifest preflight")
+            if not isinstance(manifest, Mapping) or not isinstance(manifest.get("arrays"), Mapping):
+                raise TypeError("checkpoint manifest arrays must be an exact mapping")
+            if manifest.get("runtime_kind") != budget.runtime_kind:
+                raise ValueError(
+                    "checkpoint manifest runtime kind differs from its live resource authority"
+                )
+            evidence = manifest["arrays"]
+            if set(evidence) != set(payload_names):
+                raise ValueError("checkpoint NPZ keys differ from its exact manifest")
+
+            expected_data_bytes = 0
+            expected = {}
+            for name in payload_names:
+                row = evidence[name]
+                if not isinstance(row, Mapping) or set(row) != {
+                    "dtype",
+                    "shape",
+                    "content_sha256",
+                }:
+                    raise TypeError("checkpoint manifest array evidence has an invalid schema")
+                dtype_text = row["dtype"]
+                shape_data = row["shape"]
+                digest = row["content_sha256"]
+                if not isinstance(dtype_text, str) or not isinstance(shape_data, list):
+                    raise TypeError("checkpoint manifest dtype/shape evidence is invalid")
+                if (
+                    not isinstance(digest, str)
+                    or len(digest) != 64
+                    or any(character not in "0123456789abcdef" for character in digest)
+                ):
+                    raise ValueError("checkpoint manifest content digest is not canonical sha256")
+                dtype = np.dtype(dtype_text)
+                _require_checkpoint_dtype(dtype, name=name)
+                shape = tuple(shape_data)
+                data_bytes = _checked_array_bytes(shape, dtype, name=name)
+                expected_data_bytes += data_bytes
+                if (
+                    data_bytes > budget.max_array_bytes
+                    or expected_data_bytes > budget.max_uncompressed_bytes
+                ):
+                    raise ValueError("checkpoint manifest arrays exceed the live resource budget")
+                expected[name] = (shape, dtype, data_bytes)
+
+            identity_plan = _read_npy_header(archive, infos[IDENTITY_KEY], IDENTITY_KEY)
+            if (
+                identity_plan.shape != ()
+                or identity_plan.dtype.kind != "U"
+                or identity_plan.dtype.itemsize % 4
+                or identity_plan.dtype.itemsize // 4 != _RESTART_TOKEN_CHARACTERS
+            ):
+                raise TypeError("checkpoint restart identity member must be scalar Unicode")
+            identity_array = _read_npy_array(archive, identity_plan)
+            restart_token = str(identity_array.item())
+            if identity_plan.dtype.itemsize // 4 != len(restart_token):
+                raise ValueError("checkpoint restart identity member has non-canonical padding")
+            _require_manifest_restart_identity(manifest, restart_token)
+
+            aggregate_budget = (
+                manifest_plan.info.file_size
+                + identity_plan.info.file_size
+                + expected_data_bytes
+                + len(payload_names) * _NPY_HEADER_BUDGET
+            )
+            if total_uncompressed > min(aggregate_budget, budget.max_uncompressed_bytes):
+                raise ValueError(
+                    "checkpoint NPZ uncompressed members exceed the authenticated manifest budget"
+                )
+            for name in payload_names:
+                plan = _read_npy_header(archive, infos[name], name)
+                shape, dtype, data_bytes = expected[name]
+                if (
+                    plan.shape != shape
+                    or plan.dtype.str != dtype.str
+                    or plan.data_bytes != data_bytes
+                ):
+                    raise ValueError(
+                        "checkpoint member %r differs from its exact manifest shape/dtype" % name
+                    )
+                plans[name] = plan
+            plans[MANIFEST_KEY] = manifest_plan
+            plans[IDENTITY_KEY] = identity_plan
+            already_loaded[MANIFEST_KEY] = manifest_array
+            already_loaded[IDENTITY_KEY] = identity_array
+        else:
+            if not allow_reviewed_unsealed or not budget.authority.startswith(
+                "reviewed-checkpoint-archive-sha256:"
+            ):
+                raise ValueError(
+                    "unsealed historical checkpoint requires an exact reviewed migration authority"
+                )
+            for name in names:
+                plans[name] = _read_npy_header(archive, infos[name], name)
+
         arrays = {}
         for name in names:
-            if not isinstance(name, str) or not name:
-                raise ValueError("checkpoint NPZ contains an invalid array name")
-            value = np.asarray(stored[name])
-            if value.dtype.hasobject:
-                raise TypeError("checkpoint payload cannot contain object dtype")
-            copied = np.array(value, copy=True, order="C")
-            copied.setflags(write=False)
-            arrays[name] = copied
-    return InMemoryCheckpoint(arrays)
+            arrays[name] = already_loaded.get(name)
+            if arrays[name] is None:
+                arrays[name] = _read_npy_array(archive, plans[name])
+        return InMemoryCheckpoint(arrays)
 
 
 def checkpoint_topology(owner: Any) -> CheckpointTopology:
@@ -327,16 +862,54 @@ def root_effect(
     return result
 
 
+def _bounded_checkpoint_path_bytes(path: Path, max_bytes: int) -> bytes:
+    if not isinstance(path, Path) or isinstance(max_bytes, bool) or not isinstance(max_bytes, int):
+        raise TypeError("checkpoint bounded read requires an exact path and byte capacity")
+    if max_bytes <= 0:
+        raise ValueError("checkpoint bounded read requires a positive byte capacity")
+    size = path.stat().st_size
+    if size <= 0 or size > max_bytes:
+        raise ValueError("checkpoint archive size exceeds its live resource budget")
+    with path.open("rb") as stream:
+        payload = stream.read(size)
+        trailing = stream.read(1)
+    if len(payload) != size or trailing:
+        raise ValueError("checkpoint archive changed during its bounded read")
+    return payload
+
+
+def _bounded_checkpoint_stream_bytes(stream: Any, max_bytes: int) -> bytes:
+    """Read one already-authenticated file descriptor without an unbounded allocation."""
+    if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0:
+        raise TypeError("checkpoint bounded stream read requires a positive exact byte capacity")
+    read = getattr(stream, "read", None)
+    if not callable(read):
+        raise TypeError("checkpoint bounded stream read requires a binary stream")
+    payload = read(max_bytes)
+    if not isinstance(payload, bytes) or not payload:
+        raise TypeError("checkpoint bounded stream read returned no exact bytes")
+    trailing = read(1)
+    if not isinstance(trailing, bytes):
+        raise TypeError("checkpoint bounded stream read returned non-byte trailing data")
+    if trailing:
+        raise ValueError("checkpoint archive exceeds its live resource budget")
+    return payload
+
+
 def root_bytes(
     topology: CheckpointTopology,
     phase: str,
     producer: Callable[[], bytes],
+    *,
+    max_bytes: int,
 ) -> bytes:
     """Read bytes on rank zero and broadcast them directly through the native C++ transport."""
     if not isinstance(phase, str) or not phase:
         raise TypeError("checkpoint phase must be non-empty text")
     if not callable(producer):
         raise TypeError("checkpoint root byte producer must be callable")
+    if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0:
+        raise TypeError("checkpoint root byte broadcast requires a positive exact byte capacity")
     payload = b""
     failure = None
     if topology.rank == 0:
@@ -344,6 +917,8 @@ def root_bytes(
             payload = producer()
             if not isinstance(payload, bytes) or not payload:
                 raise TypeError("checkpoint root byte producer must return non-empty exact bytes")
+            if len(payload) > max_bytes:
+                raise ValueError("checkpoint root bytes exceed their live resource budget")
         except BaseException as error:
             if not topology.distributed:
                 raise
@@ -354,7 +929,25 @@ def root_bytes(
         record = _validated_error_record(failure, phase=phase)
         _raise_collective_failure(phase, ((0, record),))
     if topology.distributed:
+        declared_size = broadcast_value(
+            topology.communicator,
+            len(payload) if topology.rank == 0 else None,
+            root=0,
+        )
+        size_error = None
+        if (
+            isinstance(declared_size, bool)
+            or not isinstance(declared_size, int)
+            or declared_size <= 0
+            or declared_size > max_bytes
+        ):
+            size_error = ValueError("checkpoint broadcast size exceeds its live resource budget")
+        consensus(topology, "%s byte-budget preflight" % phase, error=size_error)
         payload = broadcast_bytes(topology.communicator, payload, root=0)
+        if len(payload) != declared_size:
+            raise ValueError("checkpoint broadcast bytes differ from their declared size")
+    if len(payload) > max_bytes:
+        raise ValueError("checkpoint broadcast bytes exceed their live resource budget")
     return payload
 
 
@@ -482,6 +1075,43 @@ def collective_checkpoint_capture(
     )
 
 
+def write_precreated_checkpoint_payload(descriptor: int, payload: Mapping[str, Any]) -> None:
+    """Write one NPZ payload through a retained transaction-created regular-file descriptor.
+
+    This is deliberately an internal capability seam: ``descriptor`` originates from the
+    private restart transaction's ``O_NOFOLLOW`` create, rather than from a later lexical
+    lookup of the checkpoint target.  It therefore preserves the authority of the precreated
+    inode for RuntimeInstance envelope capture.  Direct/public checkpoint writers keep their
+    independent temporary-file-and-rename publication protocol.
+    """
+    if type(descriptor) is not int or descriptor < 0:
+        raise TypeError("precreated checkpoint descriptor must be one open file descriptor")
+    if not isinstance(payload, Mapping):
+        raise TypeError("precreated checkpoint payload must be a mapping")
+    retained = os.fstat(descriptor)
+    if not stat.S_ISREG(retained.st_mode):
+        raise RuntimeError("precreated checkpoint descriptor is not a regular file")
+
+    import numpy as np
+
+    writable = os.dup(descriptor)
+    try:
+        with os.fdopen(writable, "wb", closefd=False) as stream:
+            stream.seek(0)
+            stream.truncate(0)
+            np.savez_compressed(stream, **payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+    finally:
+        os.close(writable)
+    current = os.fstat(descriptor)
+    if not stat.S_ISREG(current.st_mode) or (current.st_dev, current.st_ino) != (
+        retained.st_dev,
+        retained.st_ino,
+    ):
+        raise RuntimeError("precreated checkpoint descriptor changed during payload write")
+
+
 def _result_evidence(value: Any) -> Any:
     from pops.identity import Identity
 
@@ -524,38 +1154,64 @@ def restore_checkpoint_payload(
     hierarchy_mode: str = "restore_recorded_hierarchy",
     hierarchy_identity: str | None = None,
     phase_prefix: str = "native restart",
+    prepare_outer_state: Callable[[], Any] | None = None,
+    after_native_apply: Callable[[Any], Any] | None = None,
+    rollback_after_native_apply: Callable[[], Any] | None = None,
 ) -> Any:
     """Preflight and atomically apply one in-memory payload on the installed communicator.
 
     Every fallible preparation finishes with an all-rank consensus before the first native write.
     The accepted native snapshot remains rollback-capable through the apply and commit consensuses;
-    only the final, non-fallible release discards it.
+    only the final, non-fallible release discards it.  A RuntimeInstance may use the optional
+    callback triplet to capture and publish its coupled Python envelope inside that same boundary.
+    Direct-engine callers do not provide callbacks and retain their existing protocol exactly.
     """
     if not isinstance(phase_prefix, str) or not phase_prefix:
         raise TypeError("restart phase prefix must be non-empty text")
     topology = checkpoint_topology(owner)
+    outer_active = False
+    outer_protocol_error = None
+    try:
+        callbacks = (
+            prepare_outer_state,
+            after_native_apply,
+            rollback_after_native_apply,
+        )
+        present = tuple(callback is not None for callback in callbacks)
+        if any(present) and not all(present):
+            raise TypeError(
+                "restart outer-state publication requires prepare, apply, and rollback callbacks"
+            )
+        if all(present) and any(not callable(callback) for callback in callbacks):
+            raise TypeError("restart outer-state callbacks must be callable")
+        outer_active = all(present)
+    except BaseException as error:
+        outer_protocol_error = error
     policy = None
     selected_hierarchy_mode = None
     selected_hierarchy_identity = None
-    policy_error = None
-    try:
-        policy = require_restart_bit_identical(bit_identical, where="restart preparation policy")
-        selected_hierarchy_mode = require_restart_hierarchy_mode(
-            hierarchy_mode, where="restart preparation policy"
-        )
-        if selected_hierarchy_mode == "regrid_on_restart":
-            from pops.identity import Identity
-
-            selected = Identity.from_token(hierarchy_identity)
-            if selected.domain != "restart-hierarchy":
-                raise ValueError("restart preparation hierarchy identity has the wrong domain")
-            selected_hierarchy_identity = selected.token
-        elif hierarchy_identity is not None:
-            raise ValueError(
-                "restart preparation hierarchy identity is only valid with RegridOnRestart"
+    policy_error = outer_protocol_error
+    if policy_error is None:
+        try:
+            policy = require_restart_bit_identical(
+                bit_identical, where="restart preparation policy"
             )
-    except BaseException as error:
-        policy_error = error
+            selected_hierarchy_mode = require_restart_hierarchy_mode(
+                hierarchy_mode, where="restart preparation policy"
+            )
+            if selected_hierarchy_mode == "regrid_on_restart":
+                from pops.identity import Identity
+
+                selected = Identity.from_token(hierarchy_identity)
+                if selected.domain != "restart-hierarchy":
+                    raise ValueError("restart preparation hierarchy identity has the wrong domain")
+                selected_hierarchy_identity = selected.token
+            elif hierarchy_identity is not None:
+                raise ValueError(
+                    "restart preparation hierarchy identity is only valid with RegridOnRestart"
+                )
+        except BaseException as error:
+            policy_error = error
     policy_rows = consensus(
         topology,
         "%s policy" % phase_prefix,
@@ -564,6 +1220,7 @@ def restore_checkpoint_payload(
             "bit_identical": policy,
             "hierarchy_mode": selected_hierarchy_mode,
             "hierarchy_identity": selected_hierarchy_identity,
+            "outer_state": outer_active,
         },
     )
     if any(row["value"] != policy_rows[0]["value"] for row in policy_rows[1:]):
@@ -617,6 +1274,18 @@ def restore_checkpoint_payload(
     except BaseException as error:
         prepare_error = error
     consensus(topology, "%s preflight" % phase_prefix, error=prepare_error)
+
+    if outer_active:
+        outer_prepare_error = None
+        try:
+            cast(Callable[[], Any], prepare_outer_state)()
+        except BaseException as error:
+            outer_prepare_error = error
+        consensus(
+            topology,
+            "%s outer-state preparation" % phase_prefix,
+            error=outer_prepare_error,
+        )
 
     active = False
     begin_error = None
@@ -682,6 +1351,42 @@ def restore_checkpoint_payload(
         rollback_after(original, "apply")
         raise
 
+    def rollback_outer_after(original: BaseException, phase: str) -> None:
+        if not outer_active:
+            return
+        outer_error = None
+        try:
+            cast(Callable[[], Any], rollback_after_native_apply)()
+        except BaseException as error:
+            outer_error = error
+        try:
+            consensus(
+                topology,
+                "%s %s outer rollback" % (phase_prefix, phase),
+                error=outer_error,
+            )
+        except BaseException as cleanup:
+            add_note = getattr(original, "add_note", None)
+            if callable(add_note):
+                add_note("restart outer-state rollback also failed: %s" % cleanup)
+
+    if outer_active:
+        outer_error = None
+        try:
+            cast(Callable[[Any], Any], after_native_apply)(result)
+        except BaseException as error:
+            outer_error = error
+        try:
+            consensus(
+                topology,
+                "%s outer-state publication" % phase_prefix,
+                error=outer_error,
+            )
+        except BaseException as original:
+            rollback_outer_after(original, "outer-state publication")
+            rollback_after(original, "outer-state publication")
+            raise
+
     commit_error = None
     try:
         methods["_commit_checkpoint_restart"]()
@@ -690,18 +1395,14 @@ def restore_checkpoint_payload(
     try:
         consensus(topology, "%s commit" % phase_prefix, error=commit_error)
     except BaseException as original:
+        rollback_outer_after(original, "commit")
         rollback_after(original, "commit")
         raise
 
-    # Finalization only releases snapshots that every rank has already agreed to commit.  Providers
-    # must implement it as a no-throw release; the consensus turns a contract violation into one
-    # coherent failure instead of allowing a peer to enter the next operation silently.
-    finalize_error = None
-    try:
-        methods["_finalize_checkpoint_restart"]()
-    except BaseException as error:
-        finalize_error = error
-    consensus(topology, "%s finalize" % phase_prefix, error=finalize_error)
+    # Every fallible commit operation has reached collective agreement.  Providers implement this
+    # terminal phase only with no-throw native releases and plain ownership cleanup; there is no
+    # rollback-capable collective after snapshots are discarded.
+    methods["_finalize_checkpoint_restart"]()
     return result
 
 
@@ -748,7 +1449,15 @@ def restore_checkpoint_path(
         raise RuntimeError("%s target consensus lost its local path" % phase_prefix)
     if any(row["value"] != target_text for row in rows):
         raise ValueError("%s target differs across ranks" % phase_prefix)
-    payload = root_bytes(topology, "%s read" % phase_prefix, target.read_bytes)
+    from ._checkpoint_contract import require_checkpoint_resource_budget
+
+    archive_budget = require_checkpoint_resource_budget(executor).max_archive_bytes
+    payload = root_bytes(
+        topology,
+        "%s read" % phase_prefix,
+        lambda: _bounded_checkpoint_path_bytes(target, archive_budget),
+        max_bytes=archive_budget,
+    )
     if selected_hierarchy_mode == "regrid_on_restart":
         return restore_checkpoint_payload(
             owner,
@@ -785,4 +1494,5 @@ __all__ = [
     "root_bytes",
     "root_attempt",
     "root_value",
+    "write_precreated_checkpoint_payload",
 ]

@@ -86,11 +86,26 @@ def test_uniform_and_amr_share_one_level_plan_representation():
     forward = Provider("provider/down", frozenset(((adaptive.qualified_id, uniform.qualified_id),)))
     plan = builder.resolve(states=[state], fields=[field], blocks=[block], providers=[forward])
     by_id = {row.handle.qualified_id: row for row in plan.layouts}
-    assert [level.refinement for level in by_id[uniform.qualified_id].levels] == [1]
+    assert [level.refinement for level in by_id[uniform.qualified_id].levels] == [(1, 1)]
     assert by_id[uniform.qualified_id].transition_ratios == ()
-    assert by_id[adaptive.qualified_id].transition_ratios == (2,)
-    assert [level.refinement for level in by_id[adaptive.qualified_id].levels] == [1, 2]
+    assert by_id[adaptive.qualified_id].transition_ratios == ((2, 2),)
+    assert [level.refinement for level in by_id[adaptive.qualified_id].levels] == [
+        (1, 1), (2, 2)
+    ]
     assert type(by_id[uniform.qualified_id]) is type(by_id[adaptive.qualified_id])
+
+
+def test_normalized_layout_roundtrip_rejects_scalar_ratio_capability_metadata():
+    builder, _uniform, adaptive, state, field, block = _complete_builder(reverse=False)
+    provider = Provider("provider/down", frozenset(((adaptive.qualified_id, _uniform.qualified_id),)))
+    plan = builder.resolve(states=[state], fields=[field], blocks=[block], providers=[provider])
+    normalized = plan.normalized(adaptive)
+    data = normalized.to_data()
+
+    assert type(normalized).from_data(data).to_data() == data
+    data["capabilities"]["transition_ratios"] = [2]
+    with pytest.raises(TypeError, match="exact-ranked transition_ratios"):
+        type(normalized).from_data(data)
 
 
 def test_assignments_are_exact_and_lookup_is_kind_qualified():
@@ -283,7 +298,7 @@ def test_public_single_layout_normalization_returns_a_degenerate_plan():
     assert len(plan.layouts) == 1
     assert len(plan.mappings) == 0
     assert plan.layout_for(state) == plan.layouts[0].handle
-    assert [level.refinement for level in plan.layouts[0].levels] == [1]
+    assert [level.refinement for level in plan.layouts[0].levels] == [(1, 1)]
 
 
 def test_normalized_geometry_is_exact_detached_and_delegated_by_uniform_and_amr():

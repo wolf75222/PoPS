@@ -57,6 +57,7 @@ from pops.mesh._amr.transfer import (
     FACE_X_CENTERED,
     FACE_SPACE,
     FIELD_SPACE,
+    HIERARCHY_EXACT_RANK,
     InvalidateThenRebuild,
     MaterializationProvider,
     NODE_CENTERED,
@@ -64,6 +65,7 @@ from pops.mesh._amr.transfer import (
     PRIMITIVE_REPRESENTATION,
     PROLONGATION,
     RESTRICTION,
+    TEMPORAL_INTERPOLATION,
     Recompute,
     TransferCapabilities,
     TransferKey,
@@ -145,42 +147,6 @@ def _ranked_face_layout(dimension: int, ratios: tuple[int, ...]):
     for subject in subjects:
         builder.assign_state(subject, layout)
     return builder.resolve(states=subjects), layout, subjects
-
-
-class _RankGenericFaceKernel:
-    native_route = "tests_rank_generic_face"
-    order = 2
-    ghost_depth = (1,)
-    dimensions = (1, 2, 3)
-    refinement_ratios = (2, 3, 4)
-    conservative = True
-    temporal = False
-
-    def amr_transfer_kernel_data(self):
-        return {
-            "schema_version": 1,
-            "kernel_type": "amr_transfer_kernel",
-            "native_route": self.native_route,
-            "order": self.order,
-            "ghost_depth": self.ghost_depth,
-            "dimensions": self.dimensions,
-            "refinement_ratios": self.refinement_ratios,
-            "conservative": self.conservative,
-            "temporal": self.temporal,
-        }
-
-
-class _RankGenericFacePolicy:
-    policy_kind = "face"
-    prolongation = _RankGenericFaceKernel()
-
-    def amr_transfer_policy_data(self):
-        return {
-            "schema_version": 1,
-            "authority_type": "amr_transfer_policy",
-            "policy_kind": self.policy_kind,
-            "routes": {"prolongation": self.prolongation.amr_transfer_kernel_data()},
-        }
 
 
 def _key(operation=PROLONGATION, *, representation=CONSERVATIVE_REPRESENTATION):
@@ -367,7 +333,7 @@ def test_public_transfer_object_derives_all_state_routes_and_hides_internal_buil
     assert "AMRTransferBuilder" not in module.__all__
 
 
-def test_public_transfer_selects_minimum_route_from_resolved_weno_accuracy():
+def test_public_transfer_selects_real_fifth_order_route_for_weno():
     plan, _, state, _ = _layout()
     flux = Handle("F", kind="flux", owner=state.owner_path)
     method = FiniteVolume(
@@ -389,10 +355,19 @@ def test_public_transfer_selects_minimum_route_from_resolved_weno_accuracy():
         == "conservative_polynomial5_coarse_fine"
     assert coarse_fine.action.capabilities.order == 5
     assert coarse_fine.action.capabilities.ghost_depth == (3,)
+    assert coarse_fine.action.capabilities.dimensions == (1, 2, 3)
+    assert coarse_fine.action.capabilities.refinement_ratio_policy \
+        == HIERARCHY_EXACT_RANK
+    assert resolved.nesting_requirement.minimum_buffer == (3, 3)
+    assert resolved.nesting_requirement.minimum_lookahead == 4
 
 
 def test_builtin_policies_are_intrinsic_and_reject_duplicate_accuracy_knobs():
-    assert ConservativeLinear().order == 2
+    linear = ConservativeLinear()
+    assert linear.order == 2
+    assert linear.dimensions == (1, 2, 3)
+    assert linear.refinement_ratio_policy == HIERARCHY_EXACT_RANK
+    assert linear.refinement_ratios == ()
     with pytest.raises(TypeError):
         ConservativeLinear(order=3)
     with pytest.raises(TypeError):
@@ -404,53 +379,98 @@ def test_builtin_policies_are_intrinsic_and_reject_duplicate_accuracy_knobs():
 
 
 @pytest.mark.parametrize("dimension", (1, 2, 3))
-def test_rank_generic_face_transfer_iterates_axes_ghosts_and_level_ratios(
+def test_builtin_cell_transfers_resolve_exact_rank_with_ratio_three(
     dimension: int,
 ) -> None:
-    ratios = (2, 3)
-    plan, layout, subjects = _ranked_face_layout(dimension, ratios)
+    plan, layout, subjects = _ranked_face_layout(dimension, (3,))
     authored = AMRTransfer()
-    authored.face(subjects, _RankGenericFacePolicy(), layout=layout)
+    authored.state(subjects[0], StateTransfer(), layout=layout)
 
     resolved = authored.resolve(plan)
 
-    axis_names = plan.normalized(layout).geometry.axis_names
-    for subject, axis_name in zip(subjects, axis_names, strict=True):
-        entry = resolved.for_subject(subject, PROLONGATION)
-        assert entry.key.centering.name == "face_%s" % axis_name
-        assert len(entry.requirements) == len(ratios)
-        assert {
-            requirement.accuracy.refinement_ratio
-            for requirement in entry.requirements
-        } == {
-            tuple(ratio for _ in range(dimension)) for ratio in ratios
-        }
-        assert all(
-            requirement.accuracy.ghost_depth == tuple(1 for _ in range(dimension))
-            for requirement in entry.requirements
-        )
+    assert {entry.key.operation for entry in resolved.entries} == {
+        PROLONGATION, RESTRICTION, COARSE_FINE_FILL, TEMPORAL_INTERPOLATION,
+    }
+    for entry in resolved.entries:
+        capabilities = entry.action.capabilities
+        assert capabilities.dimensions == (1, 2, 3)
+        assert capabilities.refinement_ratio_policy == HIERARCHY_EXACT_RANK
+        assert capabilities.refinement_ratios == ()
+        assert entry.requirements[0].accuracy.refinement_ratio == (3,) * dimension
+        assert capabilities.conservative is (entry.key.operation != COARSE_FINE_FILL)
+        assert capabilities.temporal is (entry.key.operation == TEMPORAL_INTERPOLATION)
+    temporal = resolved.for_subject(subjects[0], TEMPORAL_INTERPOLATION)
+    assert temporal.action.route.options.to_data()["native_route"] \
+        == "linear_time_interpolation"
+    assert temporal.action.capabilities.ghost_depth == (0,)
     assert resolved.nesting_requirement.minimum_buffer == tuple(
         1 for _ in range(dimension)
     )
 
 
-def test_rank_generic_accuracy_preserves_anisotropic_ratio_without_dimension_switch() -> None:
-    accuracy = AMRTransfer._accuracy(
-        _RankGenericFaceKernel(), dimension=3, ratio=(2, 3, 4)
+def test_hierarchy_exact_rank_capability_resolves_anisotropic_ratio() -> None:
+    plan, layout, subjects = _ranked_face_layout(3, (3,))
+    key = _key()
+    capabilities = TransferCapabilities(
+        order=2,
+        ghost_depth=(1,),
+        dimensions=(1, 2, 3),
+        conservative=True,
+        refinement_ratios=(),
+        refinement_ratio_policy=HIERARCHY_EXACT_RANK,
+    )
+    provider = TransferProvider(
+        _handle("exact_rank_cell", "amr_transfer_provider"),
+        (TransferProviderRoute(
+            key, capabilities, CanonicalOptions({"native_route": "conservative_linear"}),
+        ),),
+    )
+    builder = AMRTransferBuilder(plan)
+    builder.register(provider)
+    builder.require(
+        subjects[0], key, layout=layout, provider=provider,
+        accuracy=AccuracyRequirement(
+            2, (1, 1, 1), 3, (2, 1, 3), conservative=True,
+        ),
     )
 
-    assert accuracy.refinement_ratio == (2, 3, 4)
-    assert accuracy.ghost_depth == (1, 1, 1)
+    entry = builder.resolve().for_subject(subjects[0], PROLONGATION)
+    assert entry.action.capabilities.refinement_ratio_policy == HIERARCHY_EXACT_RANK
+    assert entry.requirements[0].accuracy.refinement_ratio == (2, 1, 3)
 
 
-@pytest.mark.parametrize("dimension", (1, 3))
-def test_specialized_face_provider_refuses_rank_through_capabilities(dimension: int) -> None:
+@pytest.mark.parametrize("dimension", (1, 2, 3))
+def test_builtin_face_provider_resolves_coupled_exact_rank_route(dimension: int) -> None:
     plan, layout, subjects = _ranked_face_layout(dimension, (2,))
     authored = AMRTransfer()
     authored.face(subjects, FaceTransfer(), layout=layout)
 
-    with pytest.raises(ValueError, match="incompatible AMR transfer provider"):
-        authored.resolve(plan)
+    resolved = authored.resolve(plan)
+    assert len(resolved.entries) == dimension
+    assert {entry.action.route.options.to_data()["native_route"] for entry in resolved.entries} \
+        == {"divergence_preserving_face"}
+    assert {entry.action.capabilities.order for entry in resolved.entries} == {2}
+    assert {entry.action.capabilities.ghost_depth for entry in resolved.entries} == {(1,)}
+    assert all(entry.action.capabilities.conservative for entry in resolved.entries)
+    assert all(not entry.action.capabilities.temporal for entry in resolved.entries)
+    assert all(
+        entry.requirements[0].accuracy.refinement_ratio == (2,) * dimension
+        for entry in resolved.entries
+    )
+
+
+def test_builtin_node_provider_resolves_multilinear_exact_rank_route() -> None:
+    plan, layout, subjects = _ranked_face_layout(3, (3,))
+    authored = AMRTransfer()
+    authored.node(subjects[0], NodeTransfer(), layout=layout)
+
+    entry = authored.resolve(plan).for_subject(subjects[0], PROLONGATION)
+    assert entry.action.route.options.to_data()["native_route"] == "node_multilinear"
+    assert entry.action.capabilities.order == 2
+    assert entry.action.capabilities.ghost_depth == (0,)
+    assert entry.action.capabilities.dimensions == (1, 2, 3)
+    assert entry.requirements[0].accuracy.refinement_ratio == (3, 3, 3)
+    assert entry.action.capabilities.conservative is False
 
 
 def test_public_provider_identity_is_stable_under_declaration_reordering():

@@ -11,8 +11,7 @@ from pops._manifest_protocol import strict_json_loads
 from pops._generated_release_contract import (
     CHECKPOINT_ENVELOPE_SCHEMA_VERSION as CHECKPOINT_SCHEMA_VERSION,
 )
-MANIFEST_KEY = "pops_checkpoint_manifest"
-IDENTITY_KEY = "pops_restart_identity"
+from pops.output._checkpoint_contract import IDENTITY_KEY, MANIFEST_KEY
 
 
 def _payload_files(payload: Any) -> set[str]:
@@ -101,7 +100,7 @@ def _identity_from_json(value: Any) -> Identity:
 def _array_evidence(value: Any) -> dict[str, Any]:
     import numpy as np
 
-    array = np.ascontiguousarray(np.asarray(value))
+    array = np.asarray(value, order="C")
     if array.dtype.hasobject:
         raise TypeError("checkpoint payload cannot contain object dtype")
     header = canonical_bytes({

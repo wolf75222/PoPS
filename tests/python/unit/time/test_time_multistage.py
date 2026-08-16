@@ -33,7 +33,8 @@ from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 from pops.numerics.terms import DefaultSource, Flux
 import sys
-from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System, SystemConfig  # ADC-545 advanced runtime seam
+from pops.solvers.elliptic import CartesianCG
 
 
 def _skip(msg):
@@ -123,12 +124,22 @@ def _public_multistage_artifact(name, method):
 N = 24
 
 
+def _system_config(n: int) -> SystemConfig:
+    config = SystemConfig()
+    config.shape = (n, n)
+    config.lower = (0.0, 0.0)
+    config.upper = (1.0, 1.0)
+    config.periodicity = (True, True)
+    config.boxes = (((0, 0), (n, n)),)
+    return config
+
+
 def make_sim(method="euler"):
-    sim = System(n=N, L=1.0, periodicity=(True, True))
+    sim = System(_system_config(N))
     sim.add_equation("ions", transport_model(),
                   spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
                   time=engine.Explicit(method=method))
-    sim.set_poisson("charge_density", "geometric_mg")
+    sim.set_poisson("charge_density", CartesianCG())
     x = (np.arange(N) + 0.5) / N
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
@@ -205,7 +216,7 @@ def rk4_program():
     return P
 
 
-if not hasattr(System(n=8, L=1.0, periodicity=(True, True)), "install_program"):
+if not hasattr(System(_system_config(8)), "install_program"):
     _skip("_pops lacks the install_program binding (rebuild _pops)")
 
 dt = 2e-3

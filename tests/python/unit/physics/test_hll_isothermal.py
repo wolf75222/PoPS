@@ -30,9 +30,11 @@ import numpy as np
 
 import pops.runtime._engine_descriptors as engine
 from pops.math import sqrt
+from pops.physics import Density, Momentum
 from pops.physics._facade import Model
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 from tests.python.support.explicit_program import install_forward_euler_program
+from tests.python.support.physics_roles import X_AXIS, Y_AXIS
 from tests.python.support.requirements import (
     missing_compiler_requirement,
     repo_include,
@@ -104,7 +106,10 @@ def iso3(declare_p):
     """Isotherme magnetise 3-var (rho, mx, my). declare_p=True -> primitive 'p' declaree (wave_speeds
     emis, HLL dispo) ; False -> pas de 'p' (pas de wave_speeds, HLL doit etre rejete)."""
     m = Model("iso3_%s" % ("withp" if declare_p else "nop"))
-    rho, mx, my = m.conservative_vars("rho", "mx", "my", roles=["Density", "MomentumX", "MomentumY"])
+    rho, mx, my = m.conservative_vars(
+        "rho", "mx", "my",
+        roles=[Density(), Momentum(X_AXIS), Momentum(Y_AXIS)],
+    )
     cs2 = 0.5
     u = m.primitive("u", mx / rho)
     v = m.primitive("v", my / rho)

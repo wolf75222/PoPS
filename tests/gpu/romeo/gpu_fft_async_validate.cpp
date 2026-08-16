@@ -52,10 +52,11 @@ int main(int argc, char** argv) {
   Kokkos::initialize(argc, argv);
   int rc = 0;
   {
+    const pops::ExecutionLane lane = pops::ExecutionLane::world("pops.test.gpu-fft-async-validate");
     auto build = request();
     const pops::Real measure = build.geometry.spacing(0) * build.geometry.spacing(1);
     pops::PoissonFFTSolver<kDim> solver = pops::make_elliptic_solver<pops::PoissonFFTSolver<kDim>>(
-        std::move(build), pops::PoissonFFTFactory<kDim>{});
+        std::move(build), pops::PoissonFFTFactory<kDim>{lane}, lane);
     solver.install_nullspace(
         pops::constant_mean_zero_nullspace<kDim>("gpu-fft-constant", "gpu-test", measure),
         pops::PreparedVectorDistribution<kDim>::distributed());

@@ -15,6 +15,7 @@ _emit_roe_jacobian   -- m.roe_from_jacobian : d = |A| (UR-UL), A = dF/dU at Uavg
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from pops._dense_spectral import is_exact_block_triangular
@@ -49,7 +50,10 @@ def has_characteristic_no_inflow_provider(model: Any) -> bool:
         for row in jacobian[direction]
         for expression in row
     ]
-    return not bool(requirements(expressions).get("aux"))
+    required = requirements(expressions)
+    if not isinstance(required, Mapping):
+        raise TypeError("model auxiliary requirements must be a mapping")
+    return not bool(required.get("aux"))
 
 
 def _certified_roe_blocks(model: Any, jacobians: Any) -> Any:
@@ -343,8 +347,8 @@ def _emit_roe_provided(model: Any, nc: Any) -> list:
         out += ["    const pops::Real %s%s = %s;" % (side, p, _cpp_roe(e, side))
                 for p, e in model.prim_defs.items()]
         if has_aux:
-            out += ["    const pops::Real %s%s = %s.template flux_provider<%d>();"
-                    % (side, n, av, model._physical_flux_consumer_slot(n))
+            out += ["    const pops::Real %s%s = pops::provider_value<%d>(%s);"
+                    % (side, n, model._physical_flux_consumer_slot(n), av)
                     for n in provider_components]
     out.append("    State d{};")
     for ordinal, axis in enumerate(axes):
@@ -472,6 +476,10 @@ def _emit_roe_jacobian(model: Any, nc: Any, cse: Any) -> list:
         return out
     out.append("  // Prepared characteristic no-inflow: the same complete model Jacobian, oriented")
     out.append("  // by the physical-face normal. Sonic modes are neutral; no model-specific fallback.")
+    out.append("  static constexpr int characteristic_no_inflow_contract_version = 1;")
+    out.append("  static constexpr int characteristic_no_inflow_dimension = dimension;")
+    out.append("  static constexpr int characteristic_no_inflow_components = n_vars;")
+    out.append("  static constexpr bool characteristic_no_inflow_conservative = true;")
     out.append("  POPS_HD bool characteristic_no_inflow(const State& interior, ")
     out.append("      const State& reference, int dir, int outward_sign, State& ghost) const {")
     out += ["    const pops::Real %s = interior[%d];" % (c, i)

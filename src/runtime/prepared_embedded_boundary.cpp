@@ -3,6 +3,8 @@
 
 #include <pops/runtime/system/prepared_embedded_boundary.hpp>
 
+#include <pops/numerics/spatial/embedded_boundary/cut_geometry.hpp>
+
 #include <pops/core/identity/sha256.hpp>
 #include <pops/mesh/boundary/fill_boundary.hpp>
 #include <pops/mesh/execution/for_each.hpp>
@@ -305,17 +307,6 @@ struct MaterializeMaskKernel {
   }
 };
 
-POPS_HD inline Real cut_fraction_from_pair(Real center, Real neighbor, Real theta_min) {
-  if (neighbor < Real(0))
-    return Real(1);
-  Real theta = center / (center - neighbor);
-  if (theta < theta_min)
-    theta = theta_min;
-  if (theta > Real(1))
-    theta = Real(1);
-  return theta;
-}
-
 template <int Dim>
 struct MaterializeMetricKernel {
   FieldView<const Real, Dim> phi;
@@ -331,16 +322,19 @@ struct MaterializeMetricKernel {
       inverse_volume(index) = Real(0);
       return;
     }
-    Real volume_fraction = Real(1);
+    RealVector<Dim> lower_samples{};
+    RealVector<Dim> upper_samples{};
     for (int axis = 0; axis < Dim; ++axis) {
       Index<Dim> lower = index;
       Index<Dim> upper = index;
       --lower[axis];
       ++upper[axis];
-      const Real lower_fraction = cut_fraction_from_pair(center, phi(lower), cut_theta_min);
-      const Real upper_fraction = cut_fraction_from_pair(center, phi(upper), cut_theta_min);
-      volume_fraction *= Real(0.5) * (lower_fraction + upper_fraction);
+      lower_samples[axis] = phi(lower);
+      upper_samples[axis] = phi(upper);
     }
+    const Real volume_fraction = nd::cut_cell_fractions_from_samples<Dim>(
+                                     center, lower_samples, upper_samples, cut_theta_min)
+                                     .volume_fraction;
     kappa(index) = volume_fraction;
     const Real effective = volume_fraction > kappa_min ? volume_fraction : kappa_min;
     inverse_volume(index) = Real(1) / effective;

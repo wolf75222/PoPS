@@ -9,10 +9,13 @@
 // never touches it, so operators stay inlined and there is NO string lookup in any hot kernel.
 //
 #include <pops/runtime/dynamic/dynlib.hpp>
+#include <pops/runtime/program/cell_temporal_partition.hpp>
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -204,6 +207,144 @@ inline std::vector<ProgramHistoryReplayAuthority> read_program_history_replay_au
     authorities.push_back(std::move(authority));
   }
   return authorities;
+}
+
+/// Frozen checkpoint shape exported by an AMR Program before its install-time prelude allocates a
+/// level-qualified ring.  A negative component count means "the exact bound Program state width";
+/// the AMR loader resolves it once through the authenticated ProgramBlockMap before publication.
+struct ProgramCheckpointHistoryMetadata {
+  std::string name;
+  int program_owner = -1;
+  std::string state_identity;
+  std::string space_identity;
+  std::string clock_identity;
+  std::string interpolation_identity;
+  int depth = 0;
+  int components = -1;
+
+  friend bool operator==(const ProgramCheckpointHistoryMetadata&,
+                         const ProgramCheckpointHistoryMetadata&) = default;
+};
+
+struct ProgramCheckpointMetadata {
+  std::vector<ProgramCheckpointHistoryMetadata> histories;
+  std::vector<std::string> logical_clock_identities;
+  std::string temporal_provider_identity;
+  std::size_t temporal_cell_capacity = 0;
+  std::size_t temporal_cells_per_topology_cell = 0;
+
+  friend bool operator==(const ProgramCheckpointMetadata&,
+                         const ProgramCheckpointMetadata&) = default;
+};
+
+/// Read the mandatory, frozen POPSAND4 shape metadata.  Unlike selective-replay authority this
+/// family has no legacy-absence meaning: an AMR artifact without it cannot prove a pre-allocation
+/// checkpoint resource bound and is rejected before its installer runs.
+inline ProgramCheckpointMetadata read_program_checkpoint_metadata(pops::dynlib::handle dl_handle) {
+  if (!pops::dynlib::valid(dl_handle))
+    throw std::runtime_error("compiled Program checkpoint metadata requires a valid module handle");
+  using StringFn = const char* (*)(int);
+  using IntegerFn = int (*)(int);
+  const int history_count =
+      detail::require_module_count(dl_handle, "pops_program_checkpoint_history_count");
+  const StringFn history_name =
+      detail::require_module_symbol<StringFn>(dl_handle, "pops_program_checkpoint_history_name");
+  const IntegerFn history_owner =
+      detail::require_module_symbol<IntegerFn>(dl_handle, "pops_program_checkpoint_history_owner");
+  const StringFn history_state = detail::require_module_symbol<StringFn>(
+      dl_handle, "pops_program_checkpoint_history_state_identity");
+  const StringFn history_space = detail::require_module_symbol<StringFn>(
+      dl_handle, "pops_program_checkpoint_history_space_identity");
+  const StringFn history_clock = detail::require_module_symbol<StringFn>(
+      dl_handle, "pops_program_checkpoint_history_clock_identity");
+  const StringFn history_interpolation = detail::require_module_symbol<StringFn>(
+      dl_handle, "pops_program_checkpoint_history_interpolation_identity");
+  const IntegerFn history_depth =
+      detail::require_module_symbol<IntegerFn>(dl_handle, "pops_program_checkpoint_history_depth");
+  const IntegerFn history_components = detail::require_module_symbol<IntegerFn>(
+      dl_handle, "pops_program_checkpoint_history_components");
+
+  ProgramCheckpointMetadata metadata;
+  metadata.histories.reserve(static_cast<std::size_t>(history_count));
+  std::set<std::string> history_names;
+  for (int index = 0; index < history_count; ++index) {
+    ProgramCheckpointHistoryMetadata row;
+    row.name =
+        detail::require_module_string(history_name, "pops_program_checkpoint_history_name", index);
+    row.program_owner = history_owner(index);
+    row.state_identity = detail::require_module_string(
+        history_state, "pops_program_checkpoint_history_state_identity", index);
+    row.space_identity = detail::require_module_string(
+        history_space, "pops_program_checkpoint_history_space_identity", index);
+    row.clock_identity = detail::require_module_string(
+        history_clock, "pops_program_checkpoint_history_clock_identity", index);
+    row.interpolation_identity = detail::require_module_string(
+        history_interpolation, "pops_program_checkpoint_history_interpolation_identity", index);
+    row.depth = history_depth(index);
+    row.components = history_components(index);
+    if (row.program_owner < 0 || row.depth < 2 || row.components == 0 || row.components < -1)
+      throw std::runtime_error(
+          "compiled Program checkpoint history metadata has an invalid owner/depth/components");
+    if (!history_names.insert(row.name).second)
+      throw std::runtime_error(
+          "compiled Program checkpoint metadata contains a duplicate history identity");
+    metadata.histories.push_back(std::move(row));
+  }
+  std::sort(metadata.histories.begin(), metadata.histories.end(),
+            [](const auto& left, const auto& right) { return left.name < right.name; });
+
+  const int clock_count =
+      detail::require_module_count(dl_handle, "pops_program_checkpoint_logical_clock_count");
+  if (clock_count < 1)
+    throw std::runtime_error(
+        "compiled Program checkpoint metadata requires at least one logical clock");
+  const StringFn logical_clock = detail::require_module_symbol<StringFn>(
+      dl_handle, "pops_program_checkpoint_logical_clock_identity");
+  metadata.logical_clock_identities.reserve(static_cast<std::size_t>(clock_count));
+  std::set<std::string> logical_clocks;
+  for (int index = 0; index < clock_count; ++index) {
+    std::string identity = detail::require_module_string(
+        logical_clock, "pops_program_checkpoint_logical_clock_identity", index);
+    if (!logical_clocks.insert(identity).second)
+      throw std::runtime_error(
+          "compiled Program checkpoint metadata contains a duplicate logical clock");
+    metadata.logical_clock_identities.push_back(std::move(identity));
+  }
+  std::sort(metadata.logical_clock_identities.begin(), metadata.logical_clock_identities.end());
+
+  using TemporalProviderFn = const char* (*)();
+  using TemporalCellCapacityFn = std::uint64_t (*)();
+  const TemporalProviderFn temporal_provider = detail::require_module_symbol<TemporalProviderFn>(
+      dl_handle, "pops_program_checkpoint_temporal_provider_identity");
+  const TemporalCellCapacityFn temporal_cells =
+      detail::require_module_symbol<TemporalCellCapacityFn>(
+          dl_handle, "pops_program_checkpoint_temporal_cell_capacity");
+  const TemporalCellCapacityFn temporal_cells_per_topology_cell =
+      detail::require_module_symbol<TemporalCellCapacityFn>(
+          dl_handle, "pops_program_checkpoint_temporal_cells_per_topology_cell");
+  const char* provider = temporal_provider();
+  if (provider == nullptr || provider[0] == '\0')
+    throw std::runtime_error("compiled Program checkpoint temporal provider identity is empty");
+  metadata.temporal_provider_identity = provider;
+  const std::uint64_t cells = temporal_cells();
+  if constexpr (sizeof(std::size_t) < sizeof(std::uint64_t))
+    if (cells > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()))
+      throw std::overflow_error(
+          "compiled Program checkpoint temporal cell capacity exceeds size_t");
+  metadata.temporal_cell_capacity = static_cast<std::size_t>(cells);
+  const std::uint64_t cells_per_topology_cell = temporal_cells_per_topology_cell();
+  if constexpr (sizeof(std::size_t) < sizeof(std::uint64_t))
+    if (cells_per_topology_cell >
+        static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()))
+      throw std::overflow_error("compiled Program temporal topology multiplier exceeds size_t");
+  metadata.temporal_cells_per_topology_cell = static_cast<std::size_t>(cells_per_topology_cell);
+  const bool global = metadata.temporal_provider_identity == kGlobalTemporalPartitionProvider;
+  if ((global &&
+       (metadata.temporal_cell_capacity != 0 || metadata.temporal_cells_per_topology_cell != 0)) ||
+      (!global && metadata.temporal_cells_per_topology_cell == 0))
+    throw std::runtime_error(
+        "compiled Program temporal checkpoint metadata has an inconsistent shape family");
+  return metadata;
 }
 
 /// Read and authenticate the complete GeneratedModule metadata from an already-open problem module.

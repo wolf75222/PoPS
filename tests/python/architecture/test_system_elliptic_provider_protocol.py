@@ -38,7 +38,7 @@ def test_builtin_and_component_backends_share_one_ranked_protocol() -> None:
     for operation in (
         "field_type& rhs()",
         "field_type& candidate()",
-        "SolveReport solve(const field_type& warm_start)",
+        "SolveReport solve(const field_type& warm_start, const ExecutionLane& lane)",
         "std::string_view provider_identity()",
         "topology_report()",
     ):

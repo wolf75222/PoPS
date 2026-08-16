@@ -9,6 +9,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -18,6 +19,7 @@ using pops::BoundaryTopology;
 using pops::Box;
 using pops::CompiledFieldBoundaryKernel;
 using pops::Extent;
+using pops::ExecutionLane;
 using pops::FieldBoundaryExecutionContext;
 using pops::FieldBoundaryFailure;
 using pops::Geometry;
@@ -27,6 +29,7 @@ using pops::Index;
 using pops::PhysicalBoundaryConditions;
 using pops::PhysicalBoundaryFace;
 using pops::PhysicalBoundaryKind;
+using pops::PreparedFieldBoundaryContextSet;
 using pops::PreparedVectorDistribution;
 using pops::Real;
 using pops::RealVector;
@@ -38,6 +41,14 @@ using pops::elliptic::mg::GeometricMultigridOptions;
 using pops::mesh::BoxArray;
 using pops::mesh::Distribution;
 using pops::mesh::RankSpace;
+
+template <int Dim>
+struct DynamicBoundaryContextLifetime {
+  explicit DynamicBoundaryContextLifetime(std::size_t levels) : failures(levels) {}
+
+  std::vector<Real> parameters{Real(0.25)};
+  std::vector<FieldBoundaryFailure<Dim>> failures;
+};
 
 template <int Dim, class Value>
 auto filled(Value value) {
@@ -63,14 +74,8 @@ Index<Dim> index(int value) {
 }
 
 template <int Dim>
-pops::EllipticBuildRequest<Dim> request(int cells, BoxArray<Dim> boxes, bool periodic = false) {
-  const Box<Dim> domain{index<Dim>(0), index<Dim>(cells - 1)};
-  const Geometry<Dim> geometry = Geometry<Dim>::from_bounds(domain, RealVector<Dim>{}, [&] {
-    RealVector<Dim> upper{};
-    for (int axis = 0; axis < Dim; ++axis)
-      upper[axis] = Real(1);
-    return upper;
-  }());
+pops::EllipticBuildRequest<Dim> request(const Geometry<Dim>& geometry, BoxArray<Dim> boxes,
+                                        bool periodic = false) {
   Extent<Dim> rank_extent = extent<Dim>(1);
   rank_extent[0] = pops::n_ranks();
   Index<Dim> local_rank{};
@@ -100,6 +105,18 @@ pops::EllipticBuildRequest<Dim> request(int cells, BoxArray<Dim> boxes, bool per
 }
 
 template <int Dim>
+pops::EllipticBuildRequest<Dim> request(int cells, BoxArray<Dim> boxes, bool periodic = false) {
+  const Box<Dim> domain{index<Dim>(0), index<Dim>(cells - 1)};
+  const Geometry<Dim> geometry = Geometry<Dim>::from_bounds(domain, RealVector<Dim>{}, [&] {
+    RealVector<Dim> upper{};
+    for (int axis = 0; axis < Dim; ++axis)
+      upper[axis] = Real(1);
+    return upper;
+  }());
+  return request<Dim>(geometry, std::move(boxes), periodic);
+}
+
+template <int Dim>
 pops::EllipticBuildRequest<Dim> complete_request(int cells, bool periodic = false) {
   const Box<Dim> domain{index<Dim>(0), index<Dim>(cells - 1)};
   return request<Dim>(cells, BoxArray<Dim>{std::vector<Box<Dim>>{domain}}, periodic);
@@ -107,12 +124,13 @@ pops::EllipticBuildRequest<Dim> complete_request(int cells, bool periodic = fals
 
 template <int Dim>
 void expect_geometric_cycle() {
+  const ExecutionLane lane = ExecutionLane::world("tests.geometric-mg.cycle");
   GeometricMultigridOptions options;
   options.relative_tolerance = Real(1e-7);
   options.absolute_tolerance = Real(1e-10);
   options.maximum_cycles = 80;
   options.bottom_sweeps = 40;
-  GeometricMG<Dim> solver(complete_request<Dim>(8), options);
+  GeometricMG<Dim> solver(complete_request<Dim>(8), lane, options);
   solver.install_nullspace(FieldNullspacePlan<Dim>{},
                            PreparedVectorDistribution<Dim>::replicated());
   EXPECT_GE(solver.num_levels(), 2);
@@ -126,12 +144,13 @@ void expect_geometric_cycle() {
 
 template <int Dim>
 void expect_partial_composite_preparation() {
+  const ExecutionLane lane = ExecutionLane::world("tests.composite-fac.partial");
   auto coarse = complete_request<Dim>(8);
   const Box<Dim> fine_patch{index<Dim>(4), index<Dim>(11)};
   auto fine = request<Dim>(16, BoxArray<Dim>{std::vector<Box<Dim>>{fine_patch}});
   CompositeFacBuildRequest<Dim> hierarchy{{std::move(coarse), std::move(fine)},
                                           {RefinementRatio<Dim>{filled<Dim>(2)}}};
-  CompositeFacPoisson<Dim> solver(std::move(hierarchy));
+  CompositeFacPoisson<Dim> solver(std::move(hierarchy), lane);
   solver.install_nullspace(FieldNullspacePlan<Dim>{},
                            {PreparedVectorDistribution<Dim>::replicated(),
                             PreparedVectorDistribution<Dim>::replicated()});
@@ -146,12 +165,29 @@ void expect_partial_composite_preparation() {
 }
 
 template <int Dim>
+void expect_exact_rank_composite_ratio(const std::array<int, Dim>& components) {
+  const ExecutionLane lane = ExecutionLane::world("tests.composite-fac.ratio");
+  auto coarse = complete_request<Dim>(4);
+  Extent<Dim> ratio_extent{};
+  for (int axis = 0; axis < Dim; ++axis)
+    ratio_extent[axis] = components[static_cast<std::size_t>(axis)];
+  const Geometry<Dim> fine_geometry = coarse.geometry.refine(ratio_extent);
+  auto fine =
+      request<Dim>(fine_geometry, BoxArray<Dim>{std::vector<Box<Dim>>{fine_geometry.domain()}});
+  CompositeFacBuildRequest<Dim> hierarchy{{std::move(coarse), std::move(fine)},
+                                          {RefinementRatio<Dim>{components}}};
+  CompositeFacPoisson<Dim> solver(std::move(hierarchy), lane);
+  EXPECT_EQ(solver.n_levels(), 2);
+}
+
+template <int Dim>
 void expect_singular_authority_rejects_incompatible_rhs_and_applies_gauge() {
+  const ExecutionLane lane = ExecutionLane::world("tests.geometric-mg.nullspace");
   auto build = complete_request<Dim>(8, true);
   Real measure = Real(1);
   for (int axis = 0; axis < Dim; ++axis)
     measure *= build.geometry.spacing(axis);
-  GeometricMG<Dim> solver(std::move(build));
+  GeometricMG<Dim> solver(std::move(build), lane);
   solver.install_nullspace(
       pops::constant_mean_zero_nullspace<Dim>("periodic-nullspace", "unit-test", measure),
       PreparedVectorDistribution<Dim>::replicated());
@@ -170,6 +206,7 @@ void expect_singular_authority_rejects_incompatible_rhs_and_applies_gauge() {
 
 template <int Dim>
 void expect_composite_singular_authority_covers_the_complete_hierarchy() {
+  const ExecutionLane lane = ExecutionLane::world("tests.composite-fac.nullspace");
   auto coarse = complete_request<Dim>(8, true);
   const Box<Dim> fine_patch{index<Dim>(4), index<Dim>(11)};
   auto fine = request<Dim>(16, BoxArray<Dim>{std::vector<Box<Dim>>{fine_patch}}, true);
@@ -181,7 +218,7 @@ void expect_composite_singular_authority_covers_the_complete_hierarchy() {
   }
   CompositeFacBuildRequest<Dim> hierarchy{{std::move(coarse), std::move(fine)},
                                           {RefinementRatio<Dim>{filled<Dim>(2)}}};
-  CompositeFacPoisson<Dim> solver(std::move(hierarchy));
+  CompositeFacPoisson<Dim> solver(std::move(hierarchy), lane);
   FieldNullspacePlan<Dim> plan = pops::constant_mean_zero_nullspace<Dim>(
       "periodic-composite-nullspace", "unit-test", coarse_measure);
   plan.bases.front().cell_measure = {coarse_measure, fine_measure};
@@ -337,22 +374,26 @@ inline FieldNewtonOptions dynamic_newton_options() {
 
 template <int Dim>
 void expect_dynamic_geometric_newton() {
+  const ExecutionLane lane = ExecutionLane::world("tests.geometric-mg.dynamic");
   DynamicBoundaryProbe<Dim>::reset();
   GeometricMultigridOptions controls;
   controls.reaction = Real(50);
-  GeometricMG<Dim> solver(complete_request<Dim>(4), controls);
+  GeometricMG<Dim> solver(complete_request<Dim>(4), lane, controls);
   solver.install_nullspace(FieldNullspacePlan<Dim>{},
                            PreparedVectorDistribution<Dim>::replicated());
   solver.install_newton(dynamic_newton_options());
   solver.install_boundary_kernel(DynamicBoundaryProbe<Dim>::kernel());
-  std::vector<Real> parameters{Real(0.25)};
-  FieldBoundaryFailure<Dim> failure;
+  auto lifetime = std::make_shared<DynamicBoundaryContextLifetime<Dim>>(1);
   FieldBoundaryExecutionContext<Dim> context;
   context.point.level = 0;
-  context.parameters = &parameters;
+  context.parameters = &lifetime->parameters;
   context.parameter_count = 1;
-  context.failure = &failure;
-  solver.set_boundary_context(context);
+  context.failure = &lifetime->failures[0];
+  auto mutable_contexts = std::make_shared<PreparedFieldBoundaryContextSet<Dim>>(lifetime, 1);
+  mutable_contexts->bind(0, context);
+  std::shared_ptr<const PreparedFieldBoundaryContextSet<Dim>> contexts =
+      std::move(mutable_contexts);
+  solver.set_boundary_contexts(std::move(contexts));
   solver.phi().set_val(Real(0));
   solver.rhs().set_val(Real(1));
 
@@ -371,27 +412,31 @@ void expect_dynamic_geometric_newton() {
 
 template <int Dim>
 void expect_dynamic_composite_newton() {
+  const ExecutionLane lane = ExecutionLane::world("tests.composite-fac.dynamic");
   DynamicBoundaryProbe<Dim>::reset();
   auto coarse = complete_request<Dim>(4);
   const Box<Dim> fine_patch{index<Dim>(0), index<Dim>(3)};
   auto fine = request<Dim>(8, BoxArray<Dim>{std::vector<Box<Dim>>{fine_patch}});
   CompositeFacBuildRequest<Dim> hierarchy{{std::move(coarse), std::move(fine)},
                                           {RefinementRatio<Dim>{filled<Dim>(2)}}};
-  CompositeFacPoisson<Dim> solver(std::move(hierarchy), {}, Real(50));
+  CompositeFacPoisson<Dim> solver(std::move(hierarchy), lane, {}, Real(50));
   solver.install_nullspace(FieldNullspacePlan<Dim>{},
                            {PreparedVectorDistribution<Dim>::replicated(),
                             PreparedVectorDistribution<Dim>::replicated()});
   solver.install_newton(dynamic_newton_options());
   solver.install_boundary_kernel(DynamicBoundaryProbe<Dim>::kernel());
-  std::vector<Real> parameters{Real(0.25)};
-  std::array<FieldBoundaryFailure<Dim>, 2> failures{};
-  std::vector<FieldBoundaryExecutionContext<Dim>> contexts(2);
-  for (std::size_t level = 0; level < contexts.size(); ++level) {
-    contexts[level].point.level = static_cast<int>(level);
-    contexts[level].parameters = &parameters;
-    contexts[level].parameter_count = 1;
-    contexts[level].failure = &failures[level];
+  auto lifetime = std::make_shared<DynamicBoundaryContextLifetime<Dim>>(2);
+  auto mutable_contexts = std::make_shared<PreparedFieldBoundaryContextSet<Dim>>(lifetime, 2);
+  for (std::size_t level = 0; level < mutable_contexts->size(); ++level) {
+    FieldBoundaryExecutionContext<Dim> context;
+    context.point.level = static_cast<int>(level);
+    context.parameters = &lifetime->parameters;
+    context.parameter_count = 1;
+    context.failure = &lifetime->failures[level];
+    mutable_contexts->bind(level, context);
   }
+  std::shared_ptr<const PreparedFieldBoundaryContextSet<Dim>> contexts =
+      std::move(mutable_contexts);
   solver.set_boundary_contexts(std::move(contexts));
   for (int level = 0; level < 2; ++level) {
     solver.phi_level(level).set_val(Real(0));
@@ -426,6 +471,12 @@ TEST(test_geometric_mg_nd, partial_composite_hierarchies_prepare_in_exact_rank) 
   expect_partial_composite_preparation<3>();
 }
 
+TEST(test_geometric_mg_nd, composite_fac_accepts_ranked_and_partially_refined_axes) {
+  expect_exact_rank_composite_ratio<1>({3});
+  expect_exact_rank_composite_ratio<2>({3, 1});
+  expect_exact_rank_composite_ratio<3>({1, 2, 3});
+}
+
 TEST(test_geometric_mg_nd,
      explicit_nullspace_authority_rejects_incompatible_rhs_without_projection) {
   expect_singular_authority_rejects_incompatible_rhs_and_applies_gauge<1>();
@@ -454,10 +505,11 @@ TEST(test_geometric_mg_nd,
 }
 
 TEST(test_geometric_mg_nd, prepared_operator_contract_authenticates_the_exact_layout_budget) {
+  const ExecutionLane lane = ExecutionLane::world("tests.geometric-mg.contract");
   auto build = complete_request<2>(8);
   GeometricMultigridOptions options;
   const auto expected = GeometricMG<2>::expected_operator_contract(build, options);
-  GeometricMG<2> solver(std::move(build), options);
+  GeometricMG<2> solver(std::move(build), lane, options);
   EXPECT_EQ(solver.prepared_operator_contract().exact_fingerprint(), expected.exact_fingerprint());
 }
 

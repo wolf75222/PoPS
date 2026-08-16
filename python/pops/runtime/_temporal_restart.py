@@ -52,6 +52,22 @@ def _json_copy(value: Any, *, where: str) -> Any:
     return strict_json_loads(payload, where=where)
 
 
+def _run_binding(value: Any) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Validate a prepared-run payload before it can alter accepted temporal state.
+
+    A bare step-strategy manifest remains accepted for the AMR facade while it is migrated in its
+    own lot.  Prepared uniform runs additionally authenticate the exact installed schedule.
+    """
+    if isinstance(value, dict) and set(value) == {"strategy", "program_schedule"}:
+        strategy = validate_step_strategy_manifest(value["strategy"])
+        schedule = (
+            None if value["program_schedule"] is None
+            else _validate_program_schedule(value["program_schedule"])
+        )
+        return strategy, schedule
+    return validate_step_strategy_manifest(value), None
+
+
 def _positive_int(value: Any, *, where: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ValueError("%s must be a positive integer" % where)
@@ -467,14 +483,16 @@ class TemporalRestartState:
     def begin_run(self, strategy: dict[str, Any], *, time: Any, macro_step: Any) -> None:
         """Bind the controller for this run, enforcing the first post-restart attempt."""
         now, step = _clock(time, macro_step)
+        candidate, prepared_schedule = _run_binding(strategy)
+        if prepared_schedule != self.program_schedule and prepared_schedule is not None:
+            raise RuntimeError("prepared run schedule differs from the installed program schedule")
+        self._require_live_clock(now, step)
         if self.strategy is None and not self._restored_pending:
             self.time_hex = now
             self.macro_step = step
             (self.clock_cursors, self.schedule_cursors, self.synchronization_cursors,
              self.history_cursors, self.cache_cursors) = _boundary_cursors(
                  self.program_schedule, time_hex=now, macro_step=step)
-        self._require_live_clock(now, step)
-        candidate = validate_step_strategy_manifest(strategy)
         if self._restored_pending and candidate != self.strategy:
             raise RuntimeError(
                 "restart requires the checkpointed step strategy for the exact next attempt")

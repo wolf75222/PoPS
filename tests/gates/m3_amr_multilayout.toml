@@ -28,7 +28,7 @@ requirement = "ghost_plan"
 polarity = "positive"
 kind = "ctest"
 target = "test_amr_multiblock_regrid_union"
-test_regex = "^test_amr_multiblock_regrid_union\\.Runs$"
+test_regex = "^test_amr_multiblock_regrid_union\\.PublishesUnionOfDisjointTaggedSubjects$"
 
 [[check]]
 issue = "ADC-673"
@@ -99,16 +99,16 @@ issue = "ADC-675"
 requirement = "hierarchy_regrid"
 polarity = "positive"
 kind = "ctest"
-target = "test_amr_hierarchy"
-test_regex = "^test_amr_hierarchy\\.Runs$"
+target = "test_nd_amr_runtime"
+test_regex = "^test_nd_amr_runtime\\.anisotropic_regrid_publishes_one_authenticated_spatial_contract$"
 
 [[check]]
 issue = "ADC-675"
 requirement = "hierarchy_regrid"
 polarity = "refusal"
 kind = "ctest"
-target = "test_amr_hierarchy"
-test_regex = "^test_amr_hierarchy\\.FineLayoutValidationIsAtomic$"
+target = "test_nd_amr_runtime"
+test_regex = "^test_nd_amr_runtime\\.level_state_rejects_storage_from_another_patch_layout$"
 
 [[check]]
 issue = "ADC-676"
@@ -131,16 +131,16 @@ issue = "ADC-676"
 requirement = "transfer_bootstrap"
 polarity = "positive"
 kind = "ctest"
-target = "test_amr_transfer_properties"
-test_regex = "^test_amr_transfer_properties\\.AnalyticEveryLevelCacheEpochAndL0L1L2Rollback$"
+target = "test_nd_transfer"
+test_regex = "^test_nd_transfer\\.fifth_order_coarse_fine_reproduces_quartics_and_parent_averages_for_ratios_two_and_three$"
 
 [[check]]
 issue = "ADC-676"
 requirement = "transfer_bootstrap"
 polarity = "refusal"
 kind = "ctest"
-target = "test_amr_transfer_properties"
-test_regex = "^test_amr_transfer_properties\\.PreparedCarrierRejectsUnrepresentableExternalReach$"
+target = "test_nd_transfer"
+test_regex = "^test_nd_transfer\\.preparation_rejects_missing_stencils_components_aliases_and_regions$"
 
 [[check]]
 issue = "ADC-677"
@@ -148,7 +148,7 @@ requirement = "clocks_reflux"
 polarity = "positive"
 kind = "ctest"
 target = "test_program_reflux_ledger"
-test_regex = "^test_program_reflux_ledger\\.accepted_exact_ledger_is_the_unique_numerical_reflux_source$"
+test_regex = "^test_program_reflux_ledger\\.CanonicalMetricLedgerAndAcceptedCheckpointAreExactInOneTwoAndThreeDimensions$"
 
 [[check]]
 issue = "ADC-677"
@@ -156,7 +156,7 @@ requirement = "clocks_reflux"
 polarity = "refusal"
 kind = "ctest"
 target = "test_program_reflux_ledger"
-test_regex = "^test_program_reflux_ledger\\.non_integral_relation_requires_declared_remainder$"
+test_regex = "^test_program_reflux_ledger\\.InvalidCheckpointAndDuplicateFacesRejectBeforeMutation$"
 
 [[check]]
 issue = "ADC-677"
@@ -217,10 +217,10 @@ nodeid = "tests/python/unit/amr/test_external_amr_providers.py::test_external_ta
 [[check]]
 issue = "ADC-678"
 requirement = "accepted_state"
-polarity = "refusal"
+polarity = "positive"
 kind = "ctest"
-target = "test_amr_native_loader"
-test_regex = "^test_amr_native_loader\\.PreparedAmrProvidersExecuteExactTablesAndProvenance$"
+target = "test_amr_seed_no_refine"
+test_regex = "^test_amr_seed_no_refine\\.OneHierarchySweepAgesHysteresisOnceAndCheckpointRestoreIsTransactional$"
 
 [[check]]
 issue = "ADC-678"
@@ -228,7 +228,7 @@ requirement = "accepted_state"
 polarity = "positive"
 kind = "ctest"
 target = "test_amr_history_ring"
-test_regex = "^test_amr_history_ring\\.ThreeLevelProgramSynchronizesEachRecursiveCatchUp$"
+test_regex = "^test_amr_history_ring\\.RetainsAndInterpolatesExactRankedState$"
 
 [[check]]
 issue = "ADC-678"
@@ -236,7 +236,7 @@ requirement = "accepted_state"
 polarity = "positive"
 kind = "ctest"
 target = "test_amr_history_ring"
-test_regex = "^test_amr_history_ring\\.AcceptedStateRestartReconstructsReboundFluxAuthorityForNextAb2Step$"
+test_regex = "^test_amr_history_ring\\.FacadeTransactionRestoresAcceptedHistoryImage$"
 
 [[check]]
 issue = "ADC-678"
@@ -244,7 +244,7 @@ requirement = "accepted_state"
 polarity = "refusal"
 kind = "ctest"
 target = "test_amr_history_ring"
-test_regex = "^test_amr_history_ring\\.RejectedAb2RegridRestoresTopologyHistoryFluxAndStateExactly$"
+test_regex = "^test_amr_history_ring\\.RegisteredHistoryRejectsTopologyPublicationBeforeMutation$"
 
 [[check]]
 issue = "ADC-678"
@@ -285,15 +285,15 @@ requirement = "accepted_state"
 polarity = "positive"
 kind = "ctest"
 target = "test_mpi_amr_distributed_coarse"
-test_regex = "^test_mpi_amr_distributed_coarse_np2$"
+test_regex = "^test_mpi_amr_distributed_coarse_rank_parity$"
 
 [[check]]
 issue = "ADC-678"
 requirement = "accepted_state"
 polarity = "positive"
 kind = "ctest"
-target = "test_program_reflux_ledger"
-test_regex = "^test_program_reflux_ledger\\.accepted_checkpoint_state_round_trips_canonically$"
+target = "test_temporal_partition_restart"
+test_regex = "^test_temporal_partition_restart\\.AcceptedImageIsCanonicalInOneTwoAndThreeDimensions$"
 
 [[check]]
 issue = "ADC-678"

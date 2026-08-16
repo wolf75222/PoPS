@@ -1,379 +1,298 @@
-// ADC-636: N-level composite FAC (CompositeFacPoisson general path). Two properties:
-//
-//   (A) CROSS-CHECK (algebraic reduction). A 2-level, NON adjacent, MONO-RANK input solved through the
-//       GENERAL path (force_general_path_for_test) equals the legacy 2-level path bit-for-bit
-//       (array_equal on phi_coarse + phi_fine). This documents that the general driver reduces to the
-//       historical loop at L == 2 -- the shipping 2-level path stays the verbatim legacy body, so
-//       bit-identity there does not depend on this test, but the reduction is proven here.
-//
-//   (B) 3-LEVEL NESTED MMS. Manufactured u = sin(3 pi x) sin(3 pi y) on [0,1]^2, Dirichlet 0,
-//       f = Lap u = -18 pi^2 u. Hierarchy: coarse n x n, level-1 patch on the central half, level-2
-//       patch nested in the central quarter of level 1. We check:
-//         (i)  finiteness + FAC convergence (composite residual small);
-//         (ii) the deepest refinement IMPROVES accuracy: e(level 2) < e(level 1) < e(coarse-only)
-//              in the innermost region (the composite discretization is order 2, refined twice);
-//         (iii) C/F CONSERVATION to ulp at BOTH interfaces: the covered coarse cells equal the 2x2
-//              average of the child (average_down consistency), |cov - avg| at ulp, at the 0-1 AND the
-//              1-2 interfaces (two-way at every interface).
-//
-// Serial (Kokkos OFF); the coarse is mono-box replicated, the FAC mono-rank is validated here.
-
 #include <gtest/gtest.h>
 
+#include <pops/mesh/layout/distribution.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace.hpp>
 #include <pops/numerics/elliptic/mg/composite_fac_poisson.hpp>
-
-#include <pops/mesh/layout/box_array.hpp>
-#include <pops/mesh/layout/distribution_mapping.hpp>
-#include <pops/mesh/execution/for_each.hpp>
-#include <pops/mesh/geometry/geometry.hpp>
-#include <pops/mesh/storage/multifab.hpp>
-#include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 #include <pops/parallel/comm.hpp>
 
+#include <algorithm>
+#include <array>
 #include <cmath>
-#include <cstdio>
-#include <limits>
+#include <cstddef>
+#include <cstdint>
 #include <vector>
 
-using namespace pops;
-static constexpr double kPi = 3.14159265358979323846;
+namespace {
 
-static double u_exact(double x, double y) {
-  return std::sin(3.0 * kPi * x) * std::sin(3.0 * kPi * y);
-}
-static double f_rhs(double x, double y) {  // Lap u = -(9+9) pi^2 u
-  return -18.0 * kPi * kPi * u_exact(x, y);
+template <class Ranked, int Dim, class Value>
+Ranked filled(Value value) {
+  Ranked result{};
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = value;
+  return result;
 }
 
-// fill a MultiFab's valid cells with f_rhs at that level's geometry.
-static void fill_f(MultiFab& f, const Geometry& g) {
-  for (int li = 0; li < f.local_size(); ++li) {
-    Array4 a = f.fab(li).array();
-    const Box2D b = f.box(li);
-    for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-      for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-        a(i, j, 0) = f_rhs(g.x_cell(i), g.y_cell(j));
+template <int Dim>
+pops::EllipticBuildRequest<Dim> request(const pops::Geometry<Dim>& geometry,
+                                        pops::mesh::BoxArray<Dim> layout) {
+  const pops::mesh::RankSpace<Dim> ranks{pops::Index<Dim>{},
+                                         filled<pops::Extent<Dim>, Dim>(std::int64_t{1})};
+  const auto distribution = pops::mesh::Distribution<Dim>::replicated(layout, ranks);
+  std::array<pops::PhysicalBoundaryFace, static_cast<std::size_t>(2 * Dim)> faces{};
+  faces.fill({pops::PhysicalBoundaryKind::dirichlet, pops::Real(0)});
+  pops::RealVector<Dim> spacing{};
+  for (int axis = 0; axis < Dim; ++axis)
+    spacing[axis] = geometry.spacing(axis);
+  return {geometry,
+          std::move(layout),
+          distribution,
+          pops::Index<Dim>{},
+          pops::PhysicalBoundaryConditions<Dim>{pops::BoundaryTopology<Dim>::physical(), faces,
+                                                spacing},
+          pops::Extent<Dim>{},
+          filled<pops::Extent<Dim>, Dim>(std::int64_t{1}),
+          {distribution.box_count(), 0}};
+}
+
+template <int Dim>
+pops::Index<Dim> index_from_ordinal(const pops::Box<Dim>& box, std::size_t ordinal) {
+  pops::Index<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    const auto length = static_cast<std::size_t>(box.length(axis));
+    result[axis] = box.lo[axis] + static_cast<int>(ordinal % length);
+    ordinal /= length;
   }
+  return result;
 }
 
-// ------------------------------------------------------------------------------------------------
-// (A) cross-check: general path (2-level) == legacy path (array_equal).
-// ------------------------------------------------------------------------------------------------
-TEST(CompositeFacNlevelTest, general_two_level_equals_legacy) {
-  comm_init();
-  const int n = 32, r = 2;
-  Box2D dom = Box2D::from_extents(n, n);
-  Geometry geom_c{dom, 0.0, 1.0, 0.0, 1.0};
-  BoxArray ba_c = BoxArray::from_domain(dom, n);
-  BCRec bc;
-  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
-  const int Ic0 = n / 4, Ic1 = 3 * n / 4 - 1;
-  Box2D fine_box{{r * Ic0, r * Ic0}, {r * Ic1 + r - 1, r * Ic1 + r - 1}};
-  Geometry geom_f = geom_c.refine(r);
-
-  auto fill = [&](CompositeFacPoisson& fac) {
-    fill_f(fac.rhs_coarse(), geom_c);
-    fill_f(fac.rhs_fine(), geom_f);
-  };
-
-  CompositeFacPoisson legacy(geom_c, ba_c, bc, fine_box, r);
-  fill(legacy);
-  const Real r_legacy = legacy.solve(40, 80, 1e-10, 0.0);
-
-  CompositeFacPoisson general(geom_c, ba_c, bc, fine_box, r);
-  fill(general);
-  general.force_general_path_for_test(true);  // route the SAME input through the general driver
-  const Real r_general = general.solve(40, 80, 1e-10, 0.0);
-
-  EXPECT_EQ(r_legacy, r_general) << "general 2-level residual must equal the legacy residual";
-
-  // array_equal on both levels: the general driver reduces algebraically to the legacy loop.
-  double max_c = 0, max_f = 0;
-  {
-    const ConstArray4 A = legacy.phi_coarse().fab(0).const_array();
-    const ConstArray4 B = general.phi_coarse().fab(0).const_array();
-    const Box2D b = legacy.phi_coarse().box(0);
-    for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-      for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-        max_c = std::fmax(max_c, std::fabs(A(i, j, 0) - B(i, j, 0)));
+template <int Dim>
+std::size_t storage_ordinal(const pops::Box<Dim>& box, const pops::Index<Dim>& index) {
+  std::size_t result = 0;
+  std::size_t stride = 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    result += static_cast<std::size_t>(index[axis] - box.lo[axis]) * stride;
+    stride *= static_cast<std::size_t>(box.length(axis));
   }
-  {
-    const ConstArray4 A = legacy.phi_fine().fab(0).const_array();
-    const ConstArray4 B = general.phi_fine().fab(0).const_array();
-    const Box2D b = legacy.phi_fine().box(0);
-    for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-      for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-        max_f = std::fmax(max_f, std::fabs(A(i, j, 0) - B(i, j, 0)));
-  }
-  if (my_rank() == 0)
-    std::printf("  [cross-check] max|phi_c general-legacy|=%.3e max|phi_f|=%.3e\n", max_c, max_f);
-  EXPECT_EQ(max_c, 0.0) << "coarse potential: general == legacy bit-identical";
-  EXPECT_EQ(max_f, 0.0) << "fine potential: general == legacy bit-identical";
-  comm_finalize();
+  return result;
 }
 
-// A fully refined parent has neither uncovered coarse cells nor a C/F interface.  The composite
-// residual must nevertheless retain the finest-level forcing instead of declaring a zero residual.
-TEST(CompositeFacNlevelTest, fully_covered_parent_solves_finest_and_averages_down) {
-  comm_init();
-  const int n = 16, r = 2;
-  const Box2D coarse_domain = Box2D::from_extents(n, n);
-  const Geometry coarse_geometry{coarse_domain, 0.0, 1.0, 0.0, 1.0};
-  const BoxArray coarse_boxes = BoxArray::from_domain(coarse_domain, n);
-  BCRec bc;
-  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
+template <int Dim>
+void fill_mode(pops::MultiFab<Dim>& rhs, const pops::Geometry<Dim>& geometry) {
+  const pops::Real pi = std::acos(pops::Real(-1));
+  const pops::Real eigenvalue = static_cast<pops::Real>(Dim) * pi * pi;
+  auto& fab = rhs.fab(0);
+  auto host = fab.create_host_mirror();
+  for (std::size_t n = 0; n < static_cast<std::size_t>(fab.box().numPts()); ++n) {
+    const auto index = index_from_ordinal(fab.box(), n);
+    pops::Real exact = pops::Real(1);
+    for (int axis = 0; axis < Dim; ++axis)
+      exact *= std::sin(pi * geometry.cell_coordinate(axis, index[axis]));
+    host(storage_ordinal(fab.grown_box(), index)) = eigenvalue * exact;
+  }
+  fab.copy_from_host(host);
+}
 
-  const Geometry fine_geometry = coarse_geometry.refine(r);
-  const Box2D fine_domain = fine_geometry.domain;
-  CompositeFacPoisson fac(coarse_geometry, coarse_boxes, bc, fine_domain, r);
-  fill_f(fac.rhs_coarse(), coarse_geometry);
-  fill_f(fac.rhs_fine(), fine_geometry);
-
-  const Real residual = fac.solve(/*max_iters=*/100, /*fine_sweeps=*/100,
-                                  /*rel_tol=*/1e-10, /*abs_tol=*/0.0);
-  device_fence();
-
-  double max_fine = 0.0;
-  const ConstArray4 fine = fac.phi_fine().fab(0).const_array();
-  for (int j = fine_domain.lo[1]; j <= fine_domain.hi[1]; ++j)
-    for (int i = fine_domain.lo[0]; i <= fine_domain.hi[0]; ++i)
-      max_fine = std::fmax(max_fine, std::fabs(fine(i, j, 0)));
-
-  double avgdown_error = 0.0;
-  const ConstArray4 coarse = fac.phi_coarse().fab(0).const_array();
-  for (int j = coarse_domain.lo[1]; j <= coarse_domain.hi[1]; ++j)
-    for (int i = coarse_domain.lo[0]; i <= coarse_domain.hi[0]; ++i) {
-      const double fine_average =
-          0.25 * (fine(2 * i, 2 * j, 0) + fine(2 * i + 1, 2 * j, 0) + fine(2 * i, 2 * j + 1, 0) +
-                  fine(2 * i + 1, 2 * j + 1, 0));
-      avgdown_error = std::fmax(avgdown_error, std::fabs(coarse(i, j, 0) - fine_average));
+template <int Dim>
+double mode_error(const pops::MultiFab<Dim>& field, const pops::Geometry<Dim>& geometry,
+                  const pops::Box<Dim>& region) {
+  const pops::Real pi = std::acos(pops::Real(-1));
+  double error = 0;
+  for (std::size_t local = 0; local < field.local_size(); ++local) {
+    const auto overlap = field.box(local).intersect(region);
+    if (overlap.empty())
+      continue;
+    const auto& fab = field.fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    for (std::size_t n = 0; n < static_cast<std::size_t>(overlap.numPts()); ++n) {
+      const auto index = index_from_ordinal(overlap, n);
+      pops::Real exact = pops::Real(1);
+      for (int axis = 0; axis < Dim; ++axis)
+        exact *= std::sin(pi * geometry.cell_coordinate(axis, index[axis]));
+      error = std::max(
+          error,
+          std::abs(static_cast<double>(host(storage_ordinal(fab.grown_box(), index)) - exact)));
     }
-
-  EXPECT_TRUE(std::isfinite(residual));
-  EXPECT_LT(residual, 1e-6);
-  EXPECT_GT(all_reduce_max(max_fine), 1e-3);
-  EXPECT_LE(all_reduce_max(avgdown_error), 8.0 * std::numeric_limits<double>::epsilon());
-  comm_finalize();
+  }
+  return pops::all_reduce_max(error);
 }
 
-TEST(CompositeFacNlevelTest, failed_fully_refined_solve_does_not_publish_iterate) {
-  comm_init();
-  const int n = 16, r = 2;
-  const Box2D coarse_domain = Box2D::from_extents(n, n);
-  const Geometry coarse_geometry{coarse_domain, 0.0, 1.0, 0.0, 1.0};
-  const BoxArray coarse_boxes = BoxArray::from_domain(coarse_domain, n);
-  BCRec bc;
-  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
-
-  const Geometry fine_geometry = coarse_geometry.refine(r);
-  CompositeFacPoisson fac(coarse_geometry, coarse_boxes, bc, fine_geometry.domain, r);
-  fill_f(fac.rhs_coarse(), coarse_geometry);
-  fill_f(fac.rhs_fine(), fine_geometry);
-  fac.phi_coarse().set_val(Real(3));
-  fac.phi_fine().set_val(Real(-2));
-
-  const Real residual =
-      fac.solve(/*max_iters=*/1, /*fine_sweeps=*/0,
-                /*rel_tol=*/std::numeric_limits<Real>::min(), /*abs_tol=*/Real(0));
-  device_fence();
-
-  EXPECT_TRUE(std::isfinite(residual));
-  EXPECT_EQ(fac.last_solve_report().status, SolveStatus::kIterationLimit);
-  EXPECT_EQ(fac.last_solve_report().action, SolveAction::kRejectAttempt);
-  for (int li = 0; li < fac.phi_coarse().local_size(); ++li) {
-    const ConstArray4 phi = fac.phi_coarse().fab(li).const_array();
-    const Box2D box = fac.phi_coarse().box(li);
-    for (int j = box.lo[1]; j <= box.hi[1]; ++j)
-      for (int i = box.lo[0]; i <= box.hi[0]; ++i)
-        EXPECT_EQ(phi(i, j, 0), Real(3));
-  }
-  for (int li = 0; li < fac.phi_fine().local_size(); ++li) {
-    const ConstArray4 phi = fac.phi_fine().fab(li).const_array();
-    const Box2D box = fac.phi_fine().box(li);
-    for (int j = box.lo[1]; j <= box.hi[1]; ++j)
-      for (int i = box.lo[0]; i <= box.hi[0]; ++i)
-        EXPECT_EQ(phi(i, j, 0), Real(-2));
-  }
-  comm_finalize();
-}
-
-// ------------------------------------------------------------------------------------------------
-// (B) 3-level nested MMS: accuracy improves per refinement + C/F conservation to ulp.
-// ------------------------------------------------------------------------------------------------
-TEST(CompositeFacNlevelTest, three_level_nested_mms_order2_and_conservation) {
-  comm_init();
-  const int n = 48, r = 2;
-  Box2D dom = Box2D::from_extents(n, n);
-  Geometry geom_c{dom, 0.0, 1.0, 0.0, 1.0};
-  BoxArray ba_c = BoxArray::from_domain(dom, n);
-  BCRec bc;
-  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
-  const Geometry geom_1 = geom_c.refine(r);      // level 1: refined once
-  const Geometry geom_2 = geom_c.refine(r * r);  // level 2: refined twice
-
-  // level-1 patch = central half [n/4, 3n/4) in coarse -> fine box.
-  const int A0 = n / 4, A1 = 3 * n / 4 - 1;  // coarse footprint of level 1
-  Box2D box1{{r * A0, r * A0}, {r * A1 + r - 1, r * A1 + r - 1}};
-  // level-2 patch = central quarter of the coarse [3n/8, 5n/8) -> level-2 index space (refined x4).
-  const int B0 = 3 * n / 8, B1 = 5 * n / 8 - 1;  // coarse footprint of level 2
-  Box2D box2{{r * r * B0, r * r * B0}, {r * r * B1 + r * r - 1, r * r * B1 + r * r - 1}};
-
-  std::vector<BoxArray> level_boxes = {BoxArray(std::vector<Box2D>{box1}),
-                                       BoxArray(std::vector<Box2D>{box2})};
-  CompositeFacPoisson fac(geom_c, ba_c, bc, level_boxes, r);
-  ASSERT_EQ(fac.n_levels(), 3);
-
-  fill_f(fac.rhs_level(0), geom_c);
-  fill_f(fac.rhs_level(1), geom_1);
-  fill_f(fac.rhs_level(2), geom_2);
-
-  // coarse-only reference (a single coarse solve).
-  GeometricMG mg0(geom_c, ba_c, bc, {}, FieldDistribution::Replicated);
-  fill_f(mg0.rhs(), geom_c);
-  mg0.phi().set_val(0.0);
-  mg0.solve(1e-12, 100);
-  device_fence();
-
-  const Real rfac =
-      fac.solve(/*max_iters=*/60, /*fine_sweeps=*/100, /*rel_tol=*/1e-9, /*abs_tol=*/0.0);
-  device_fence();
-
-  // (i) finiteness + convergence.
-  EXPECT_TRUE(std::isfinite(rfac));
-  EXPECT_TRUE(rfac < 1e-2) << "3-level FAC converges (composite residual small): rfac=" << rfac;
-
-  // (ii) accuracy IMPROVES per level in the innermost region (level-2 footprint interior, guarded).
-  const int guard = 2;  // coarse cells of margin from the C-F border
-  const int gi0 = B0 + guard, gi1 = B1 - guard;
-  const ConstArray4 PC0 = mg0.phi().fab(0).const_array();
-  const ConstArray4 P1 = fac.phi_level(1).fab(0).const_array();
-  const ConstArray4 P2 = fac.phi_level(2).fab(0).const_array();
-  double e_coarse = 0, e_l1 = 0, e_l2 = 0;
-  for (int J = gi0; J <= gi1; ++J)
-    for (int I = gi0; I <= gi1; ++I) {
-      // sample at the level-2 cell centers covering coarse cell (I,J): 4x4 fine cells.
-      for (int tj = 0; tj < r * r; ++tj)
-        for (int ti = 0; ti < r * r; ++ti) {
-          const int i2 = r * r * I + ti, j2 = r * r * J + tj;
-          const double xf = geom_2.x_cell(i2), yf = geom_2.y_cell(j2);
-          const double ue = u_exact(xf, yf);
-          e_l2 = std::fmax(e_l2, std::fabs(P2(i2, j2, 0) - ue));
-          e_coarse =
-              std::fmax(e_coarse, std::fabs(detail::fac_bilerp_coarse(PC0, i2, j2, r * r) - ue));
-        }
-      // level-1 error sampled at the level-1 cells covering (I,J): 2x2 fine cells.
-      for (int tj = 0; tj < r; ++tj)
-        for (int ti = 0; ti < r; ++ti) {
-          const int i1 = r * I + ti, j1 = r * J + tj;
-          const double ue = u_exact(geom_1.x_cell(i1), geom_1.y_cell(j1));
-          e_l1 = std::fmax(e_l1, std::fabs(P1(i1, j1, 0) - ue));
-        }
+template <int Dim>
+double quadratic_point_error(const pops::MultiFab<Dim>& source,
+                             const pops::Geometry<Dim>& source_geometry,
+                             const pops::Geometry<Dim>& target_geometry,
+                             const pops::Box<Dim>& target_region, int ratio) {
+  const pops::Real pi = std::acos(pops::Real(-1));
+  const auto& fab = source.fab(0);
+  auto host = fab.create_host_mirror();
+  fab.copy_to_host(host);
+  double error = 0;
+  for (std::size_t n = 0; n < static_cast<std::size_t>(target_region.numPts()); ++n) {
+    const auto target = index_from_ordinal(target_region, n);
+    pops::Index<Dim> parent{};
+    pops::Real weights[Dim][3]{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      const int relative = target[axis] - target_geometry.domain().lo[axis];
+      const int parent_relative = relative / ratio;
+      const int child = relative - parent_relative * ratio;
+      parent[axis] = source_geometry.domain().lo[axis] + parent_relative;
+      const pops::Real s =
+          static_cast<pops::Real>(2 * child + 1 - ratio) / static_cast<pops::Real>(2 * ratio);
+      const pops::Real d = s * s;
+      weights[axis][0] = (d - s) / pops::Real(2);
+      weights[axis][1] = pops::Real(1) - d;
+      weights[axis][2] = (d + s) / pops::Real(2);
     }
-  e_coarse = all_reduce_max(e_coarse);
-  e_l1 = all_reduce_max(e_l1);
-  e_l2 = all_reduce_max(e_l2);
-  if (my_rank() == 0)
-    std::printf(
-        "  [3-level] e_coarse=%.3e e_level1=%.3e e_level2=%.3e (l1/l2=%.2f l2/coarse=%.2f) "
-        "rfac=%.2e\n",
-        e_coarse, e_l1, e_l2, e_l1 / std::fmax(e_l2, 1e-30), e_l2 / std::fmax(e_coarse, 1e-30),
-        rfac);
-  EXPECT_TRUE(std::isfinite(e_l1) && std::isfinite(e_l2) && std::isfinite(e_coarse));
-  // each refinement reduces the error; the deepest level is the most accurate.
-  EXPECT_TRUE(e_l1 < 0.7 * e_coarse)
-      << "(order 2) level 1 improves over coarse-only: e_l1=" << e_l1 << " e_coarse=" << e_coarse;
-  EXPECT_TRUE(e_l2 < 0.7 * e_l1) << "(order 2) level 2 improves over level 1: e_l2=" << e_l2
-                                 << " e_l1=" << e_l1;
-
-  // (iii) C/F CONSERVATION to ulp at BOTH interfaces (covered coarse = 2x2 average of the child).
-  auto avgdown_defect = [&](const MultiFab& parent, const MultiFab& child, const Box2D& foot) {
-    const ConstArray4 PP = parent.fab(0).const_array();
-    const ConstArray4 CF = child.fab(0).const_array();
-    double d = 0;
-    for (int J = foot.lo[1]; J <= foot.hi[1]; ++J)
-      for (int I = foot.lo[0]; I <= foot.hi[0]; ++I) {
-        const double avg = 0.25 * (CF(2 * I, 2 * J, 0) + CF(2 * I + 1, 2 * J, 0) +
-                                   CF(2 * I, 2 * J + 1, 0) + CF(2 * I + 1, 2 * J + 1, 0));
-        d = std::fmax(d, std::fabs(PP(I, J, 0) - avg));
+    pops::Real value = pops::Real(0);
+    constexpr int points = Dim == 1 ? 3 : Dim == 2 ? 9 : 27;
+    for (int ordinal = 0; ordinal < points; ++ordinal) {
+      int remainder = ordinal;
+      auto source_index = parent;
+      pops::Real weight = pops::Real(1);
+      for (int axis = 0; axis < Dim; ++axis) {
+        const int stencil = remainder % 3;
+        remainder /= 3;
+        source_index[axis] += stencil - 1;
+        weight *= weights[axis][stencil];
       }
-    return d;
-  };
-  // 0-1 interface: coarse covered = 2x2 average of level 1 over [A0,A1]^2.
-  const double d01 =
-      all_reduce_max(avgdown_defect(fac.phi_level(0), fac.phi_level(1), Box2D{{A0, A0}, {A1, A1}}));
-  // 1-2 interface: level-1 covered = 2x2 average of level 2 over the level-1 footprint of box2
-  // (level-1 index space: [2*B0, 2*B1+1]).
-  const double d12 =
-      all_reduce_max(avgdown_defect(fac.phi_level(1), fac.phi_level(2),
-                                    Box2D{{r * B0, r * B0}, {r * B1 + r - 1, r * B1 + r - 1}}));
-  if (my_rank() == 0)
-    std::printf("  [3-level] avgdown defect: 0-1=%.3e  1-2=%.3e (ulp conservation)\n", d01, d12);
-  EXPECT_TRUE(d01 < 1e-12) << "(conservation) 0-1 covered coarse = fine average to ulp: d01="
-                           << d01;
-  EXPECT_TRUE(d12 < 1e-12) << "(conservation) 1-2 covered level-1 = level-2 average to ulp: d12="
-                           << d12;
-
-  if (my_rank() == 0)
-    std::printf("OK test_composite_fac_nlevel\n");
-  comm_finalize();
+      if (weight != pops::Real(0))
+        value += weight * host(storage_ordinal(fab.grown_box(), source_index));
+    }
+    pops::Real exact = pops::Real(1);
+    for (int axis = 0; axis < Dim; ++axis)
+      exact *= std::sin(pi * target_geometry.cell_coordinate(axis, target[axis]));
+    error = std::max(error, std::abs(static_cast<double>(value - exact)));
+  }
+  return pops::all_reduce_max(error);
 }
 
-TEST(CompositeFacNlevelTest, three_level_periodic_full_tensor_mms_converges) {
-  comm_init();
-  const int n = 16, r = 2;
-  const Box2D domain = Box2D::from_extents(n, n);
-  const Geometry coarse_geometry{domain, 0.0, 1.0, 0.0, 1.0};
-  const BoxArray coarse_boxes = BoxArray::from_domain(domain, n);
-  BCRec periodic;
-  periodic.xlo = periodic.xhi = periodic.ylo = periodic.yhi = BCType::Periodic;
-
-  const int level1_lo = n / 4;
-  const int level1_hi = 3 * n / 4 - 1;
-  const Box2D level1_box{{r * level1_lo, r * level1_lo},
-                         {r * level1_hi + r - 1, r * level1_hi + r - 1}};
-  const int level2_lo = 3 * n / 8;
-  const int level2_hi = 5 * n / 8 - 1;
-  const Box2D level2_box{{r * r * level2_lo, r * r * level2_lo},
-                         {r * r * level2_hi + r * r - 1, r * r * level2_hi + r * r - 1}};
-  CompositeFacPoisson fac(coarse_geometry, coarse_boxes, periodic,
-                          std::vector<BoxArray>{BoxArray(std::vector<Box2D>{level1_box}),
-                                                BoxArray(std::vector<Box2D>{level2_box})},
-                          r);
-
-  constexpr Real eps_x = Real(1.2);
-  constexpr Real eps_y = Real(0.8);
-  constexpr Real a_xy = Real(0.2);
-  constexpr Real a_yx = Real(-0.2);
-  const Real wave = Real(2) * Real(kPi);
-  const auto exact = [wave](Real x, Real y) { return std::sin(wave * x) * std::sin(wave * y); };
-  for (int level = 0; level < fac.n_levels(); ++level) {
-    const Geometry& geometry = fac.geom_level(level);
-    fac.eps_level(level).set_val(eps_x);
-    fac.eps_y_level(level).set_val(eps_y);
-    fac.a_xy_level(level).set_val(a_xy);
-    fac.a_yx_level(level).set_val(a_yx);
-    MultiFab& rhs = fac.rhs_level(level);
-    for (int local = 0; local < rhs.local_size(); ++local) {
-      Array4 values = rhs.fab(local).array();
-      const Box2D valid = rhs.box(local);
-      for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
-        for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
-          values(i, j, 0) =
-              -(eps_x + eps_y) * wave * wave *
-              exact(static_cast<Real>(geometry.x_cell(i)), static_cast<Real>(geometry.y_cell(j)));
+template <int Dim>
+double average_down_defect(const pops::MultiFab<Dim>& parent_field,
+                           const pops::MultiFab<Dim>& child_field,
+                           const pops::Box<Dim>& child_footprint) {
+  const auto& parent_fab = parent_field.fab(0);
+  auto parent = parent_fab.create_host_mirror();
+  parent_fab.copy_to_host(parent);
+  const auto& child_fab = child_field.fab(0);
+  auto child = child_fab.create_host_mirror();
+  child_fab.copy_to_host(child);
+  const int child_count = 1 << Dim;
+  double defect = 0;
+  for (std::size_t n = 0; n < static_cast<std::size_t>(child_footprint.numPts()); ++n) {
+    const auto cell = index_from_ordinal(child_footprint, n);
+    double average = 0;
+    for (int child_ordinal = 0; child_ordinal < child_count; ++child_ordinal) {
+      pops::Index<Dim> fine_cell{};
+      for (int axis = 0; axis < Dim; ++axis)
+        fine_cell[axis] = 2 * cell[axis] + ((child_ordinal >> axis) & 1);
+      average += child(storage_ordinal(child_fab.grown_box(), fine_cell));
     }
+    average /= child_count;
+    defect =
+        std::max(defect, std::abs(parent(storage_ordinal(parent_fab.grown_box(), cell)) - average));
   }
-  fac.use_variable_coefficient(true);
-  fac.use_anisotropic_coefficient(true);
-  fac.use_cross_terms(true);
+  return pops::all_reduce_max(defect);
+}
 
-  const Real residual = fac.solve(/*max_iters=*/160, /*fine_sweeps=*/100, /*rel_tol=*/1e-9,
-                                  /*abs_tol=*/1e-12);
-  EXPECT_TRUE(std::isfinite(static_cast<double>(residual)));
-  EXPECT_TRUE(fac.last_solve_report().solved())
-      << "three-level periodic tensor FAC status=" << fac.last_solve_report().status_name()
-      << " residual=" << residual;
-  EXPECT_LT(residual, Real(1e-5));
-  comm_finalize();
+template <int Dim>
+void expect_three_level_coupling() {
+  constexpr int cells = 24;
+  const pops::Box<Dim> coarse_domain{pops::Index<Dim>{}, filled<pops::Index<Dim>, Dim>(cells - 1)};
+  const auto coarse = pops::Geometry<Dim>::from_bounds(
+      coarse_domain, pops::RealVector<Dim>{}, filled<pops::RealVector<Dim>, Dim>(pops::Real(1)));
+  const auto middle = coarse.refine(filled<pops::Extent<Dim>, Dim>(std::int64_t{2}));
+  const auto fine = middle.refine(filled<pops::Extent<Dim>, Dim>(std::int64_t{2}));
+  pops::Index<Dim> middle_lo{};
+  pops::Index<Dim> middle_hi{};
+  pops::Index<Dim> fine_lo{};
+  pops::Index<Dim> fine_hi{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    middle_lo[axis] = 12;
+    middle_hi[axis] = 35;
+    fine_lo[axis] = 36;
+    fine_hi[axis] = 59;
+  }
+  const pops::Box<Dim> middle_patch{middle_lo, middle_hi};
+  const pops::Box<Dim> fine_patch{fine_lo, fine_hi};
+  const pops::mesh::BoxArray<Dim> coarse_layout(std::vector<pops::Box<Dim>>{coarse_domain});
+  const pops::mesh::BoxArray<Dim> middle_layout(std::vector<pops::Box<Dim>>{middle_patch});
+  const pops::mesh::BoxArray<Dim> fine_layout(std::vector<pops::Box<Dim>>{fine_patch});
+  const auto ratio = pops::amr::RefinementRatio<Dim>{filled<std::array<int, Dim>, Dim>(2)};
+  pops::elliptic::mg::CompositeFacBuildRequest<Dim> hierarchy{
+      {request(coarse, coarse_layout), request(middle, middle_layout), request(fine, fine_layout)},
+      {ratio, ratio}};
+  const pops::ExecutionLane lane = pops::ExecutionLane::world("tests.fac.nlevel");
+  pops::elliptic::mg::GeometricMultigridOptions mg_controls;
+  mg_controls.relative_tolerance = pops::Real(1e-10);
+  mg_controls.maximum_cycles = 100;
+  pops::elliptic::mg::GeometricMG<Dim> coarse_solver(request(coarse, coarse_layout), lane,
+                                                     mg_controls);
+  coarse_solver.install_nullspace(pops::FieldNullspacePlan<Dim>{},
+                                  pops::PreparedVectorDistribution<Dim>::replicated());
+  fill_mode(coarse_solver.rhs(), coarse);
+  const pops::SolveReport coarse_report = coarse_solver.solve();
+  ASSERT_TRUE(coarse_report.solved()) << coarse_report.reason;
+
+  pops::CompositeFacOptions controls;
+  controls.max_iters = 80;
+  controls.fine_sweeps = 80;
+  controls.rel_tol = pops::Real(1e-9);
+  pops::elliptic::mg::CompositeFacPoisson<Dim> solver(std::move(hierarchy), lane, controls);
+  solver.install_nullspace(pops::FieldNullspacePlan<Dim>{},
+                           {pops::PreparedVectorDistribution<Dim>::replicated(),
+                            pops::PreparedVectorDistribution<Dim>::replicated(),
+                            pops::PreparedVectorDistribution<Dim>::replicated()});
+  fill_mode(solver.rhs_level(0), coarse);
+  fill_mode(solver.rhs_level(1), middle);
+  fill_mode(solver.rhs_level(2), fine);
+  const pops::SolveReport report = solver.solve();
+  ASSERT_TRUE(report.solved()) << report.reason;
+  EXPECT_EQ(solver.n_levels(), 3);
+  EXPECT_GT(pops::norm_inf(solver.phi_level(2)), pops::Real(0));
+
+  pops::Index<Dim> fine_inner_lo{};
+  pops::Index<Dim> fine_inner_hi{};
+  pops::Index<Dim> middle_footprint_lo{};
+  pops::Index<Dim> middle_footprint_hi{};
+  pops::Index<Dim> fine_footprint_lo{};
+  pops::Index<Dim> fine_footprint_hi{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    fine_inner_lo[axis] = 40;
+    fine_inner_hi[axis] = 55;
+    middle_footprint_lo[axis] = middle_patch.lo[axis] / 2;
+    middle_footprint_hi[axis] = middle_patch.hi[axis] / 2;
+    fine_footprint_lo[axis] = fine_patch.lo[axis] / 2;
+    fine_footprint_hi[axis] = fine_patch.hi[axis] / 2;
+  }
+  pops::elliptic::mg::CompositeFacBuildRequest<Dim> two_level_hierarchy{
+      {request(coarse, coarse_layout), request(middle, middle_layout)}, {ratio}};
+  pops::elliptic::mg::CompositeFacPoisson<Dim> two_level_solver(std::move(two_level_hierarchy),
+                                                                lane, controls);
+  two_level_solver.install_nullspace(pops::FieldNullspacePlan<Dim>{},
+                                     {pops::PreparedVectorDistribution<Dim>::replicated(),
+                                      pops::PreparedVectorDistribution<Dim>::replicated()});
+  fill_mode(two_level_solver.rhs_level(0), coarse);
+  fill_mode(two_level_solver.rhs_level(1), middle);
+  const pops::SolveReport two_level_report = two_level_solver.solve();
+  ASSERT_TRUE(two_level_report.solved()) << two_level_report.reason;
+
+  const pops::Box<Dim> fine_inner{fine_inner_lo, fine_inner_hi};
+  const double three_level_fine_error =
+      mode_error(solver.phi_level(2), fine, pops::Box<Dim>{fine_inner_lo, fine_inner_hi});
+  const double two_level_at_fine_error =
+      quadratic_point_error(two_level_solver.phi_level(1), middle, fine, fine_inner, 2);
+  const double coarse_at_fine_error =
+      quadratic_point_error(coarse_solver.phi(), coarse, fine, fine_inner, 4);
+  EXPECT_LT(three_level_fine_error, two_level_at_fine_error);
+  EXPECT_LT(two_level_at_fine_error, coarse_at_fine_error);
+
+  EXPECT_LT(average_down_defect(solver.phi_level(0), solver.phi_level(1),
+                                pops::Box<Dim>{middle_footprint_lo, middle_footprint_hi}),
+            1e-12)
+      << "level 0 must contain accepted level-1 child averages";
+  EXPECT_LT(average_down_defect(solver.phi_level(1), solver.phi_level(2),
+                                pops::Box<Dim>{fine_footprint_lo, fine_footprint_hi}),
+            1e-12)
+      << "level 1 must contain accepted level-2 child averages";
+}
+
+}  // namespace
+
+TEST(CompositeFacNlevelTest, arbitrary_depth_preserves_multilevel_coupling_in_exact_rank) {
+  pops::comm_init();
+  expect_three_level_coupling<1>();
+  expect_three_level_coupling<2>();
+  expect_three_level_coupling<3>();
+  pops::comm_finalize();
 }

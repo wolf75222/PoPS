@@ -20,32 +20,91 @@ l'invariant CENTRAL :
        et le test C++ MPI ; ce test bas niveau ne fabrique jamais une fausse autorite.
   T3 - my_rank / n_ranks exposes (0 / 1 en serie).
 """
-from pops.numerics.reconstruction.limiters import Minmod
+from functools import cache
 import os
 import tempfile
 
 import numpy as np
 import pytest
 
+import pops
 import pops.runtime._engine_descriptors as engine
+from pops.numerics.reconstruction.limiters import Minmod
 from pops.runtime._engine_descriptors import Periodic
-from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System, SystemConfig  # ADC-545 advanced runtime seam
+from tests.python.integration._final_field_program import (
+    density_advection_model,
+    forward_euler_program,
+    resolve_periodic_field_program,
+)
 from tests.python.support.explicit_program import install_forward_euler_program
+from tests.python.support.native_execution_context import artifact_execution_context
+from tests.python.support.requirements import (
+    default_cxx,
+    missing_native_compile_requirement,
+    repo_include,
+    require_native_or_skip,
+)
+
+
+_native_missing = missing_native_compile_requirement(repo_include(), default_cxx())
+if _native_missing:
+    require_native_or_skip("test_io_multirank: %s" % _native_missing)
+
+
+def _system_config_2d(n, *, length=1.0, periodicity=(True, True)):
+    config = SystemConfig()
+    config.shape = (n, n)
+    config.lower = (0.0, 0.0)
+    config.upper = (float(length), float(length))
+    config.periodicity = tuple(periodicity)
+    config.boxes = (((0, 0), (n, n)),)
+    return config
+
+
+@cache
+def _density_artifact(n):
+    model = density_advection_model("io-multirank-density-%d" % n, speed=0.0)
+    resolved = resolve_periodic_field_program(
+        model,
+        forward_euler_program,
+        name="io-multirank-%d" % n,
+        block_name="ions",
+        target="system",
+        n=n,
+        cxx=default_cxx(),
+        include=repo_include(),
+    )
+    artifact = pops.compile(resolved)
+    artifact.verify()
+    return artifact
 
 
 def _build(n=16):
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="xy")
     density = 1.0 + 0.4 * np.exp(-50.0 * ((X - 0.4) ** 2 + (Y - 0.5) ** 2))
-    sim = System(n=n, L=1.0, periodicity=(True, True))
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
-    sim.add_equation("ions",
-                  engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
-                            transport=engine.IsothermalFlux(),
-                            source=engine.PotentialForce(charge=1.0),
-                            elliptic=engine.BackgroundDensity(
-                                alpha=1.0, n0=float(density.mean()))),
-                  spatial=engine.Spatial(limiter=Minmod()), time=engine.Explicit())
+    artifact = _density_artifact(n)
+    context = artifact_execution_context(artifact)
+    sim = System(_system_config_2d(n))
+    # Install only the native lane.  Deliberately do not publish the Python ExecutionContext: T2
+    # proves that a direct low-level System cannot checkpoint without the final pops.bind authority.
+    sim._s._prepare_boundary_execution_lane(
+        context.communicator.handle,
+        context.identity.token,
+    )
+    (state_identity,) = artifact.plan.blocks[0].state_identities
+    sim._s._install_block_state_route("ions", state_identity)
+    sim.add_equation(
+        "ions",
+        artifact.blocks[0].model,
+        spatial=engine.Spatial(limiter=Minmod()),
+        time=engine.Explicit(),
+    )
+    if sim._pending_native_packages:
+        sim._s._finalize_native_packages()
+        sim._pending_native_packages = 0
+    sim.set_poisson(rhs="charge_density", solver="cartesian_cg", bc=Periodic())
     sim.set_density("ions", density.ravel())
     install_forward_euler_program(sim)
     return sim

@@ -490,8 +490,10 @@ class RectangleFrame:
         if data["schema_version"] != _SCHEMA_VERSION \
                 or data["frame_type"] != "rectangle_cartesian_2d":
             raise ValueError("RectangleFrame data uses an unsupported schema")
-        result = cls(Rectangle.from_dict(data["domain"]),
-                     Cartesian2D.from_dict(data["coordinates"]))
+        coordinates = Cartesian2D.from_dict(data["coordinates"])
+        if not isinstance(coordinates, Cartesian2D):
+            raise TypeError("RectangleFrame coordinates must be Cartesian2D")
+        result = cls(Rectangle.from_dict(data["domain"]), coordinates)
         if result.to_dict() != dict(data):
             raise ValueError("RectangleFrame data is not canonical")
         return result

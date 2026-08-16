@@ -189,7 +189,7 @@ class FieldNullspaceProvider {
   [[nodiscard]] virtual std::string expected_prepared_contract(
       const FieldNullspaceProviderRequest<Dim>& request) const = 0;
   [[nodiscard]] virtual PreparedFieldNullspace<Dim> prepare(
-      const FieldNullspaceProviderRequest<Dim>& request) const = 0;
+      const FieldNullspaceProviderRequest<Dim>& request, const ExecutionLane& lane) const = 0;
 };
 
 template <int Dim>

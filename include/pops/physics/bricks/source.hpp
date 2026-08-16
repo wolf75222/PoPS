@@ -6,9 +6,11 @@
 #include <pops/core/state/state.hpp>
 #include <pops/physics/composition/exact_brick_contract.hpp>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
+#include <utility>
 
 /// @file
 /// @brief Exact-ranked local source bricks S(U, aux).
@@ -52,6 +54,20 @@ struct MomentumComponents {
   POPS_HD constexpr int& operator[](int axis) { return values[axis]; }
   POPS_HD constexpr int operator[](int axis) const { return values[axis]; }
 };
+
+template <int I, int J, int K>
+consteval int levi_civita_3() {
+  static_assert(I >= 0 && I < 3 && J >= 0 && J < 3 && K >= 0 && K < 3,
+                "Levi-Civita indices are outside Cartesian 3-space");
+  if constexpr (I == J || I == K || J == K)
+    return 0;
+  constexpr std::array<int, 3> permutation{I, J, K};
+  int inversions = 0;
+  for (int left = 0; left < 3; ++left)
+    for (int right = left + 1; right < 3; ++right)
+      inversions += permutation[left] > permutation[right] ? 1 : 0;
+  return inversions % 2 == 0 ? 1 : -1;
+}
 
 static_assert(std::is_trivially_copyable_v<MomentumComponents<1>> &&
                   std::is_trivially_copyable_v<MomentumComponents<2>> &&
@@ -103,7 +119,8 @@ struct NoSource {
 ///
 /// Canonical states contain density, exactly `Dim` momentum components, and optionally energy.
 /// The host role binder may replace every canonical component index before device execution.
-template <int Dim, class GradientSlots = typename source_detail::DefaultGradientProviderSlots<Dim>::type>
+template <int Dim,
+          class GradientSlots = typename source_detail::DefaultGradientProviderSlots<Dim>::type>
 struct PotentialForceND {
   static_assert(Dim >= 1 && Dim <= 3, "PotentialForceND supports dimensions 1, 2, and 3");
   static constexpr int dimension = Dim;
@@ -144,7 +161,8 @@ struct PotentialForceND {
 };
 
 /// Gravitational force `rho (-grad phi)` on every momentum axis of `Dim`.
-template <int Dim, class GradientSlots = typename source_detail::DefaultGradientProviderSlots<Dim>::type>
+template <int Dim,
+          class GradientSlots = typename source_detail::DefaultGradientProviderSlots<Dim>::type>
 struct GravityForceND {
   static_assert(Dim >= 1 && Dim <= 3, "GravityForceND supports dimensions 1, 2, and 3");
   static constexpr int dimension = Dim;
@@ -183,43 +201,72 @@ struct GravityForceND {
   }
 };
 
-/// Explicit Lorentz force for an out-of-plane `B_z` field.
+/// Explicit Cartesian Lorentz force from the three-component magnetic provider vector.
 ///
-/// This capability needs the x-y plane. In 3D it rotates the x/y momenta and leaves z unchanged;
-/// in 2D the same algebra applies to Cartesian or to the local `(e_r, e_theta)` polar basis.
-template <int Dim, int MagneticComponent = 0>
+/// Every native momentum component is the exact projection of `q/m (momentum x B)` through the
+/// three-dimensional Levi-Civita tensor.  A 1D state therefore has the mathematically exact axial
+/// projection, a 2D state has both in-plane projections, and a 3D state has the full cross product.
+/// Geometry-specific basis transforms are deliberately outside this Cartesian brick.
+template <int Dim, class MagneticSlots = ProviderSlots<0, 1, 2>>
 struct MagneticLorentzForceND {
   static_assert(Dim >= 1 && Dim <= 3,
                 "MagneticLorentzForceND supports build dimensions 1, 2, and 3");
   static constexpr int dimension = Dim;
-  static constexpr bool planar_capability = Dim >= 2;
-  static_assert(MagneticComponent >= 0, "magnetic provider slot cannot be negative");
-  static constexpr int magnetic_component = MagneticComponent;
-  static constexpr int n_providers = magnetic_component + 1;
+  using magnetic_slots = MagneticSlots;
+  static_assert(magnetic_slots::count == 3,
+                "MagneticLorentzForceND requires all three Cartesian magnetic slots");
+  static constexpr int n_providers = magnetic_slots::required_count();
 
   Real qom = Real(1);
   source_detail::MomentumComponents<Dim> momentum_components{};
 
   [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
-    return {"pops.physics.source.magnetic-lorentz-force-nd", 2};
+    return {"pops.physics.source.magnetic-lorentz-force-nd", 3};
   }
   void serialize_exact_parameters(ExactContractBuilder& contract) const {
-    contract.scalar(std::int32_t{Dim}).scalar(qom).scalar(std::int32_t{magnetic_component});
+    contract.scalar(std::int32_t{Dim}).scalar(qom);
+    for (int axis = 0; axis < 3; ++axis)
+      contract.scalar(std::int32_t{magnetic_slots::values[static_cast<std::size_t>(axis)]});
     for (int axis = 0; axis < Dim; ++axis)
       contract.scalar(std::int32_t{momentum_components[axis]});
   }
 
   template <class State, class Providers>
   POPS_HD State apply(const State& state, const Providers& providers) const {
-    static_assert(Dim >= 2,
-                  "MagneticLorentzForceND requires an explicit two-axis planar capability");
     static_assert(State::size() >= Dim + 1,
                   "MagneticLorentzForceND requires one momentum component per spatial axis");
-    const Real rotation = qom * provider_value<magnetic_component>(providers);
     State source{};
-    source[momentum_components[0]] = rotation * state[momentum_components[1]];
-    source[momentum_components[1]] = -rotation * state[momentum_components[0]];
+    apply_impl(source, state, providers, std::make_index_sequence<Dim>{});
     return source;
+  }
+
+ private:
+  template <int Axis, class State, class Providers, std::size_t... VelocityAxis>
+  POPS_HD Real force_component(const State& state, const Providers& providers,
+                               std::index_sequence<VelocityAxis...>) const {
+    return (velocity_contribution<Axis, static_cast<int>(VelocityAxis)>(
+                state, providers, std::make_index_sequence<3>{}) +
+            ...);
+  }
+
+  template <int Axis, int VelocityAxis, class State, class Providers, std::size_t... MagneticAxis>
+  POPS_HD Real velocity_contribution(const State& state, const Providers& providers,
+                                     std::index_sequence<MagneticAxis...>) const {
+    return (
+        (qom *
+         Real(source_detail::levi_civita_3<Axis, VelocityAxis, static_cast<int>(MagneticAxis)>()) *
+         state[momentum_components[VelocityAxis]] *
+         provider_value<magnetic_slots::template slot<static_cast<int>(MagneticAxis)>()>(
+             providers)) +
+        ...);
+  }
+
+  template <class State, class Providers, std::size_t... Axis>
+  POPS_HD void apply_impl(State& source, const State& state, const Providers& providers,
+                          std::index_sequence<Axis...>) const {
+    ((source[momentum_components[Axis]] = force_component<static_cast<int>(Axis)>(
+          state, providers, std::make_index_sequence<Dim>{})),
+     ...);
   }
 };
 

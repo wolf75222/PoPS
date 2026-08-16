@@ -17,12 +17,27 @@ Invariants verifies :
     coefficients differents) leve une ValueError EXPLICITE ; un couplage par add_pair passe.
 (D) add_pair refuse block_a == block_b.
 """
+from pathlib import Path
+
 import numpy as np
 
-import pops.runtime._engine_descriptors as engine
+import pops
+from pops.codegen import Production
+from pops.layouts import Uniform
+from pops.lib.time import ForwardEuler
+from pops.math import ddt, div
+from pops.mesh import CartesianGrid, PeriodicAxes
+from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
+from pops.numerics.spatial import FiniteVolume
+from pops.physics import Density, Model
 from pops.physics.multispecies import CoupledSource
-from pops.runtime._system import System  # ADC-545 advanced runtime seam
-from tests.python.support.explicit_program import install_ssprk2_program
+from pops.time import FixedDt
+from tests.python.support.native_execution_context import artifact_execution_context
+from tests.python.support.physics_roles import FRAME, X_AXIS, Y_AXIS
+
+
+ROOT = Path(__file__).resolve().parents[4]
+_DENSITY_COMPONENTS = {}
 
 
 def chk(cond, msg, fails):
@@ -43,31 +58,110 @@ def build_exchange(k):
     return src.compile(backend="production", verify_conservation=True)
 
 
-def density_block(n0=1.0):
-    """Bloc scalaire transporte par E x B avec RHS elliptique nul.
+def system_config_2d(n):
+    """Return the complete exact-rank Cartesian authority for this uniform witness."""
+    from pops.runtime._system import SystemConfig
 
-    Le test isole l'echange conservatif. Un alpha nul evite qu'un etage partiel du splitting forme
-    temporairement une charge periodique non neutre avant la mise a jour du second bloc.
-    """
-    return engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0),
-                     source=engine.NoSource(), elliptic=engine.BackgroundDensity(alpha=0.0, n0=n0))
+    config = SystemConfig()
+    config.shape = (n, n)
+    config.lower = (0.0, 0.0)
+    config.upper = (1.0, 1.0)
+    config.periodicity = (True, True)
+    config.boxes = (((0, 0), (n, n)),)
+    config.coordinate_system = "pops://coordinates/cartesian-2d@1"
+    return config
+
+
+def density_component(n, block_name):
+    """Compile one fixture-unique passive density Module through the public Case lifecycle."""
+    cache_key = (n, block_name)
+    cached = _DENSITY_COMPONENTS.get(cache_key)
+    if cached is not None:
+        return cached
+
+    model = Model("coupled-source-conservation-density-%s" % block_name, frame=FRAME)
+    state = model.state("U", components=("density",), roles={"density": Density()})
+    (rho,) = state
+    flux = model.flux(
+        "inert-transport",
+        frame=FRAME,
+        state=state,
+        components={X_AXIS: (0.0 * rho,), Y_AXIS: (0.0 * rho,)},
+        waves={X_AXIS: (0.0 * rho,), Y_AXIS: (0.0 * rho,)},
+    )
+    rate = model.rate("inert-rate", equation=ddt(state) == -div(flux))
+
+    case = pops.Case("coupled-source-conservation-density-case-%s" % block_name)
+    block = case.block("density", model)
+    numerics = DiscretizationPlan()
+    numerics.rates.add(
+        rate,
+        FiniteVolume(
+            flux=flux,
+            variables=variables.Conservative(state),
+            reconstruction=reconstruction.FirstOrder(),
+            riemann=riemann.Rusanov(),
+        ),
+    )
+    case.numerics(numerics, block=block)
+    program = ForwardEuler(block[state], rate=rate)
+    program.step_strategy(FixedDt(0.01))
+    case.program(program)
+    layout = Uniform(
+        CartesianGrid(frame=FRAME, cells=(n, n), periodic=PeriodicAxes(FRAME.axes))
+    )
+    resolved = pops.resolve(
+        pops.validate(case),
+        layout=layout,
+        backend=Production(),
+        compile_options={"include": str(ROOT / "include")},
+    )
+    artifact = pops.compile(resolved)
+    artifact.verify()
+    component = artifact.blocks[0].model
+    _DENSITY_COMPONENTS[cache_key] = (component, artifact)
+    return component, artifact
+
+
+def install_runtime_lane(sim, components):
+    """Install this fixture's exact runtime authority before package materialization."""
+    context = artifact_execution_context(components[0][2])
+    sim._execution_context = context
+    sim._s._prepare_boundary_execution_lane(
+        context.communicator.handle,
+        context.identity.token,
+    )
+    for block_name, _component, artifact in components:
+        (state_identity,) = artifact.plan.blocks[0].state_identities
+        sim._s._install_block_state_route(block_name, state_identity)
+
+
+def finalize_provider_pack(sim):
+    """Materialize all staged PreparedSystemBlocks through their one sealed ProviderPack."""
+    if sim._pending_native_packages:
+        sim._s._finalize_native_packages()
+        sim._pending_native_packages = 0
 
 
 def make_system(n, na0, nb0):
-    sim = System(n=n, L=1.0, periodicity=(True, True))
-    sim.add_equation(
-        "alpha",
-        density_block(n0=na0),
-        spatial=engine.Spatial(none=True),
-        time=engine.Explicit(),
-    )
-    sim.add_equation(
-        "beta",
-        density_block(n0=nb0),
-        spatial=engine.Spatial(none=True),
-        time=engine.Explicit(),
-    )
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg")
+    from pops._native_selector import select_native_dimension
+
+    select_native_dimension(2)
+    from pops.runtime import _engine_descriptors as engine
+    from pops.runtime._system import System
+
+    components = [(name, *density_component(n, name)) for name in ("alpha", "beta")]
+    sim = System(system_config_2d(n))
+    install_runtime_lane(sim, components)
+    for name, component, _artifact in components:
+        sim.add_equation(
+            name,
+            component,
+            spatial=engine.Spatial(none=True),
+            time=engine.Explicit(),
+        )
+    finalize_provider_pack(sim)
+    sim.set_poisson(rhs="charge_density", solver="cartesian_cg")
     sim.set_density("alpha", np.full((n, n), na0))
     sim.set_density("beta", np.full((n, n), nb0))
     return sim
@@ -111,8 +205,10 @@ def main():
 
     # --- (B) bout en bout : masse n_a + n_b conservee, trajectoire == reference forward-Euler ---
     sim = make_system(n, na0, nb0)
+    from tests.python.support.explicit_program import install_forward_euler_program
+
     sim.add_coupling(compiled)
-    install_ssprk2_program(sim, coupled_sources=True)
+    install_forward_euler_program(sim, coupled_sources=True)
 
     na, nb = na0, nb0
     traj = []
@@ -190,10 +286,16 @@ def main():
     # --- (E) NAMED PRESETS lower to a declared coupling contract (ADC-595) ---
     from pops.physics.coupling_presets import (collision_preset, ionization_preset,
                                                thermal_exchange_preset)
+    from pops.physics.roles import StateSchema
+    fluid = StateSchema.resolve(
+        ("density", "momentum:0", "momentum:1", "energy"), dimension=2,
+        where="coupled-source conservation fluid")
+    density = StateSchema.resolve(("density",), dimension=2,
+                                  where="coupled-source conservation density")
     # Collision conserves momentum: its declared contract passes verify_declared_contract, and the
-    # add_pair legs make the momentum terms cancel structurally (momentum_x AND momentum_y).
-    col = collision_preset("a", "b", 0.7)
-    chk(col.conserved == ["momentum_x", "momentum_y"], "collision preset declares momentum conserved",
+    # add_pair legs make every resolved momentum-axis term cancel structurally.
+    col = collision_preset("a", "b", 0.7, a_schema=fluid, b_schema=fluid)
+    chk(col.conserved == ["momentum:0", "momentum:1"], "collision preset declares momentum conserved",
         fails)
     col_ok = True
     try:
@@ -206,14 +308,16 @@ def main():
     # never a source term), proving the contract is checked, not trusted.
     raised_bad_col = False
     try:
-        col.source.verify_declared_contract(conserved=["momentum_x", "momentum_y", "density"])
+        col.source.verify_declared_contract(conserved=["momentum:0", "momentum:1", "density"])
     except ValueError:
         raised_bad_col = True
     chk(raised_bad_col, "collision preset rejects a bogus extra conserved role (density)", fails)
 
     # Ionization legally NET-SOURCES density (an electron/ion pair is created): it is declared CREATED,
     # so the contract validator accepts the net source; declaring density CONSERVED must instead raise.
-    ion = ionization_preset("e", "i", "g", 1.7)
+    ion = ionization_preset(
+        "e", "i", "g", 1.7,
+        electron_schema=density, ion_schema=density, neutral_schema=density)
     chk(ion.created == ["density"] and ion.conserved == [],
         "ionization preset declares density created (net source)", fails)
     ion_ok = True
@@ -231,7 +335,8 @@ def main():
     chk(raised_ion, "ionization density-declared-conserved raises (it net-sources)", fails)
 
     # ThermalExchange conserves energy (add_pair on energy); its contract passes.
-    th = thermal_exchange_preset("a", "b", 0.3, 1.4, 1.6667)
+    th = thermal_exchange_preset(
+        "a", "b", 0.3, 1.4, 1.6667, a_schema=fluid, b_schema=fluid)
     th_ok = True
     try:
         th.source.verify_declared_contract(conserved=th.conserved, created=th.created)

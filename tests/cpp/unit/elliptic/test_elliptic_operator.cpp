@@ -80,15 +80,16 @@ TEST(test_elliptic_operator, fft_and_multigrid_invert_the_same_exact_ranked_oper
   const auto local_rank = fft_request.local_rank;
   const auto geometry = fft_request.geometry;
   const pops::Real measure = geometry.spacing(0) * geometry.spacing(1);
+  const pops::ExecutionLane lane = pops::ExecutionLane::world("tests.elliptic-operator");
 
   pops::PoissonFFTSolver<kDim> fft = pops::make_elliptic_solver<pops::PoissonFFTSolver<kDim>>(
-      std::move(fft_request), pops::PoissonFFTFactory<kDim>{});
+      std::move(fft_request), pops::PoissonFFTFactory<kDim>{lane}, lane);
   pops::elliptic::mg::GeometricMultigridOptions options;
   options.relative_tolerance = pops::Real(1e-11);
   options.absolute_tolerance = pops::Real(1e-13);
   options.maximum_cycles = 200;
   options.bottom_sweeps = 80;
-  pops::elliptic::mg::GeometricMG<kDim> mg(std::move(mg_request), options);
+  pops::elliptic::mg::GeometricMG<kDim> mg(std::move(mg_request), lane, options);
   fft.install_nullspace(
       pops::constant_mean_zero_nullspace<kDim>("fft-constant", "unit-test", measure),
       pops::PreparedVectorDistribution<kDim>::distributed());

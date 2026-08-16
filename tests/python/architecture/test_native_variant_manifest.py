@@ -6,6 +6,8 @@ import importlib.machinery
 import importlib.util
 import json
 from pathlib import Path
+import re
+import subprocess
 import sys
 from types import ModuleType
 import zipfile
@@ -17,6 +19,11 @@ ROOT = Path(__file__).resolve().parents[3]
 WRITER = ROOT / "scripts" / "write_native_variant_manifest.py"
 PROVER = ROOT / "scripts" / "prove_installed_wheel.py"
 PYTHON_CMAKE = ROOT / "python" / "CMakeLists.txt"
+TEST_MANIFEST = ROOT / "tests" / "test_manifest.toml"
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+PYTEST_CONFTEST = ROOT / "tests" / "python" / "conftest.py"
+SERIAL_PARENT_MPI_SMOKE = ROOT / "tests" / "cmake" / "run_serial_parent_mpi_target.cmake"
+HDF5_WITHOUT_MPI_SMOKE = ROOT / "tests" / "cmake" / "expect_hdf5_without_mpi_rejected.cmake"
 
 
 def _writer():
@@ -152,6 +159,249 @@ def test_cmake_authenticates_and_installs_the_exact_linked_leaf():
     assert '--dimension "${POPS_NATIVE_DIM}"' in source
     assert '--version "${PROJECT_VERSION}"' in source
     assert 'install(FILES "${POPS_PY_NATIVE_MANIFEST}" DESTINATION pops/_native)' in source
+
+
+def test_process_harness_accepts_only_an_authenticated_selected_nested_leaf(tmp_path):
+    source_python = tmp_path / "python"
+    native_root = source_python / "pops" / "_native"
+    selected = _extension(native_root, 3, b"authenticated Dim=3")
+    manifest = native_root / "variants.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "variants": [
+                    {
+                        "dimension": 3,
+                        "path": f"dim3/{selected.name}",
+                        "sha256": hashlib.sha256(selected.read_bytes()).hexdigest(),
+                        "version": "1.2.3",
+                        "abi_key": "abi-dim3",
+                        "has_mpi": False,
+                        "has_kokkos": True,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    root_residue = source_python / "pops" / (
+        "_pops" + importlib.machinery.EXTENSION_SUFFIXES[0]
+    )
+    root_residue.write_bytes(b"unauthenticated root residue")
+    script = """
+import importlib.util
+import os
+from pathlib import Path
+import sys
+
+conftest_path = Path(sys.argv[1])
+source_python = Path(sys.argv[2])
+selected = Path(sys.argv[3])
+spec = importlib.util.spec_from_file_location("variant_process_conftest", conftest_path)
+assert spec is not None and spec.loader is not None
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+module.SOURCE_PYTHON = source_python
+module._source_python_has_native_variant.cache_clear()
+
+assert module._source_python_has_native_variant(3)
+assert not module._source_python_has_native_variant(2)
+usable = module._process_pythonpath(str(source_python), native_dimension=3).split(os.pathsep)
+assert str(source_python) in usable
+
+selected.write_bytes(b"tampered selected leaf")
+module._source_python_has_native_variant.cache_clear()
+assert not module._source_python_has_native_variant(3)
+refused = module._process_pythonpath(str(source_python), native_dimension=3).split(os.pathsep)
+assert str(source_python) not in refused
+unselected = module._process_pythonpath(str(source_python), native_dimension=None).split(os.pathsep)
+assert str(source_python) not in unselected
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(PYTEST_CONFTEST), str(source_python), str(selected)],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert root_residue.is_file()
+
+
+def test_ci_consumes_only_the_authenticated_dim2_native_variant():
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+    conftest = PYTEST_CONFTEST.read_text(encoding="utf-8")
+
+    for retired_root_contract in (
+        "find build-kokkos-py/python/pops -maxdepth 1 -name '_pops*.so'",
+        "cp build-mpi/python/pops/_pops*.so",
+        "from pops import _pops",
+    ):
+        assert retired_root_contract not in workflow
+
+    for required_contract in (
+        "pops-module-dim2-",
+        "pops-module-openmp-dim2-",
+        "--exclude='_native/***'",
+        "scripts/verify_installed_native.py",
+        '--expect-dim "$POPS_NATIVE_DIM" --expect-serial',
+        "build-mpi/python/pops/_native/variants.json",
+        "build-mpi/python-package/pops/_native/variants.json",
+        "build-mpi/python-package/pops/_native/dim2/",
+        '--expect-dim "$POPS_NATIVE_DIM" --expect-mpi --expect-parallel-hdf5',
+        "_pops = select_native_dimension(2)",
+        "select_native_dimension(2); import runpy, sys",
+    ):
+        assert required_contract in workflow
+
+    native_jobs = (
+        ("gate-python-prewarm", "gate-python-build"),
+        ("gate-python-build", "gate-python"),
+        ("gate-python", "gate-python-compile-cache"),
+        ("gate-python-compile-cache", "gate-mpi-prewarm"),
+        ("gate-mpi-prewarm", "gate"),
+        ("mpi", "gate-openmp-prewarm"),
+        ("gate-openmp-prewarm", "kokkos-openmp"),
+        ("kokkos-openmp", None),
+    )
+    for job_name, next_job in native_jobs:
+        job = workflow.split(f"\n  {job_name}:\n", 1)[1]
+        if next_job is not None:
+            job = job.split(f"\n  {next_job}:\n", 1)[0]
+        assert 'POPS_NATIVE_DIM: "2"' in job, job_name
+
+    assert 'value = environment.get("POPS_NATIVE_DIM")' in conftest
+    assert 'select_native_dimension(native_dimension)' in conftest
+    assert 'select_native_dimension(int(sys.argv[1]))' in conftest
+    assert 'environment.get("POPS_NATIVE_DIM", "2")' not in conftest
+
+
+def test_ctest_smokes_and_python_suites_preserve_the_exact_native_dimension():
+    root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+    serial_smoke = SERIAL_PARENT_MPI_SMOKE.read_text(encoding="utf-8")
+    hdf5_smoke = HDF5_WITHOUT_MPI_SMOKE.read_text(encoding="utf-8")
+    python_cmake = PYTHON_CMAKE.read_text(encoding="utf-8")
+
+    for test_name in (
+        "test_serial_add_subdirectory_ignores_parent_mpi",
+        "test_hdf5_without_mpi_rejected",
+    ):
+        test_block = root_cmake.split(f"NAME {test_name}", 1)[1].split("add_test(", 1)[0]
+        assert '"-DPOPS_NATIVE_DIM=${POPS_NATIVE_DIM}"' in test_block
+
+    for smoke in (serial_smoke, hdf5_smoke):
+        assert (
+            "POPS_NATIVE_DIM" in smoke.split("foreach(_required", 1)[1].split("endforeach()", 1)[0]
+        )
+        assert '"-DPOPS_NATIVE_DIM=${POPS_NATIVE_DIM}"' in smoke
+
+    pytest_environment = python_cmake.split("set(_pops_py_test_env", 1)[1].split(
+        "function(pops_add_pytest_suite", 1
+    )[0]
+    assert '"POPS_NATIVE_DIM=${POPS_NATIVE_DIM}"' in pytest_environment
+
+
+def test_ctest_python_mpi_projection_matches_the_manifest_and_dim2_contract():
+    source = PYTHON_CMAKE.read_text(encoding="utf-8")
+    manifest = TEST_MANIFEST.read_text(encoding="utf-8")
+
+    def manifest_suite(name: str) -> str:
+        return manifest.split(f'name = "{name}"', 1)[1].split("\n[[python.suite]]", 1)[0]
+
+    def manifest_entrypoints(name: str) -> tuple[tuple[str, int], ...]:
+        return tuple(
+            (path, int(nproc))
+            for path, nproc in re.findall(
+                r'\{ path = "([^"]+)", nproc = (\d+) \}', manifest_suite(name)
+            )
+        )
+
+    def cmake_entrypoints(variable: str) -> tuple[str, ...]:
+        block = source.split(f"set({variable}", 1)[1].split(")", 1)[0]
+        return tuple(
+            re.findall(
+                r"^\s*(tests/python/integration/(?:io|mpi)/test_[^\s]+\.py)\s*$",
+                block,
+                flags=re.MULTILINE,
+            )
+        )
+
+    manifest_projection = (
+        *manifest_entrypoints("pops_python_integration_io"),
+        *manifest_entrypoints("pops_python_integration_mpi"),
+    )
+    cmake_projection = (
+        *cmake_entrypoints("_pops_py_io_mpi_entrypoints"),
+        *cmake_entrypoints("_pops_py_mpi_entrypoints"),
+    )
+    assert len(manifest_projection) == 9
+    assert all(nproc == 2 for _, nproc in manifest_projection)
+    assert cmake_projection == tuple(path for path, _ in manifest_projection)
+
+    orchestrator = re.search(
+        r"set\(_pops_py_rank_change_orchestrator\s+([^\s)]+)\)", source
+    )
+    assert orchestrator is not None
+    assert orchestrator.group(1) == (
+        "tests/python/integration/mpi/test_amr_rank_change_restart.py"
+    )
+    assert (
+        "if(POPS_NATIVE_DIM STREQUAL \"2\")" in source
+        and source.count("if(POPS_NATIVE_DIM STREQUAL \"2\")") == 1
+    )
+    assert "if(POPS_USE_MPI)" in source
+    test_environment = source.split("set(_pops_py_test_env", 1)[1].split(
+        "function(pops_add_pytest_suite", 1
+    )[0]
+    assert (
+        '"${CMAKE_CURRENT_BINARY_DIR}${_pops_py_path_sep}${CMAKE_CURRENT_SOURCE_DIR}'
+        '${_pops_py_path_sep}${CMAKE_SOURCE_DIR}"' in source
+    )
+    assert '"${_pops_py_path_sep}$ENV{PYTHONPATH}"' in source
+    for required_environment in (
+        '"PYTHONPATH=${_pops_py_test_pythonpath}"',
+        '"POPS_NATIVE_DIM=${POPS_NATIVE_DIM}"',
+        '"POPS_NATIVE_VARIANTS_ROOT=${CMAKE_CURRENT_BINARY_DIR}/pops/_native"',
+        '"POPS_INCLUDE=${CMAKE_SOURCE_DIR}/include"',
+        '"POPS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"',
+        '"POPS_TEST_SOURCE_DIR=${CMAKE_SOURCE_DIR}"',
+    ):
+        assert required_environment in test_environment
+    assert (
+        "COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2 ${MPIEXEC_PREFLAGS}"
+        in source
+    )
+    assert "${Python_EXECUTABLE} ${MPIEXEC_POSTFLAGS} -u -c" in source
+    assert (
+        "${Python_EXECUTABLE} ${MPIEXEC_POSTFLAGS} -u -c "
+        '"${_pops_py_mpi_bootstrap}"' in source
+    )
+    assert "from pops._native_selector import select_native_dimension" in source
+    assert "select_native_dimension(int(os.environ[\\\"POPS_NATIVE_DIM\\\"]))" in source
+    assert "runpy.run_path(sys.argv[1], run_name=\\\"__main__\\\")" in source
+    assert source.count("pops_add_mpi_pytest_entrypoint(\"") == 1
+    assert 'NAME "pops_python_mpi_${_pops_py_mpi_stem}_np2"' in source
+    assert "PROCESSORS 2" in source
+    assert source.count('ENVIRONMENT "${_pops_py_test_env};POPS_REQUIRE_MPI_TESTS=1"') == 2
+    assert 'WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"' in source
+    assert "TIMEOUT 900" in source
+    assert "LABELS \"integration;python;mpi;np2\"" in source
+
+    assert "${_pops_py_io_ignore_args}" in source
+    assert "${_pops_py_mpi_ignore_args}" in source
+    assert source.count('"--ignore=${CMAKE_SOURCE_DIR}/${_pops_py_mpi_entrypoint}"') == 2
+    assert '"--ignore=${CMAKE_SOURCE_DIR}/${_pops_py_rank_change_orchestrator}"' in source
+    assert source.count("pops_python_mpi_test_amr_rank_change_restart_orchestrator") == 2
+    assert "NAME pops_python_mpi_test_amr_rank_change_restart_orchestrator" in source
+    orchestrator_properties = source.split(
+        "set_tests_properties(pops_python_mpi_test_amr_rank_change_restart_orchestrator", 1
+    )[1].split("endif()", 1)[0]
+    assert "PROCESSORS 2" in orchestrator_properties
+    assert "${MPIEXEC_EXECUTABLE}" not in source.split(
+        "NAME pops_python_mpi_test_amr_rank_change_restart_orchestrator", 1
+    )[1].split("endif()", 1)[0]
 
 
 def test_wheel_proof_accepts_an_explicit_fat_set_and_rejects_a_hidden_subset(tmp_path):

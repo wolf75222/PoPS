@@ -56,7 +56,7 @@ try:
     from pops.frames import Cartesian2D
     from pops.math import ddt, div
     from pops.physics import Model
-    from pops.runtime._system import AmrSystem
+    from pops.runtime._system import AmrSystem, AmrSystemConfig
     from pops.time._history.persistence import Interval
     from tests.python.integration._final_field_program import compile_block_model
     from tests.python.support.typed_program import program_states
@@ -67,6 +67,19 @@ except Exception as exc:  # noqa: BLE001
 N = 16
 DT = 2.0e-3
 _C = 0.6  # linear source S(rho) = _C*rho: the ring is load-bearing (R changes every step)
+
+
+def _amr_config(n: int, *, regrid_every: int) -> AmrSystemConfig:
+    config = AmrSystemConfig()
+    config.shape = (n, n)
+    config.lower = (0.0, 0.0)
+    config.upper = (1.0, 1.0)
+    config.periodicity = (True, True)
+    config.boxes = (((0, 0), (n, n)),)
+    config.regrid_every = regrid_every
+    return config
+
+
 def _advance(sim, nsteps):
     return sim.run(
         t_end=float(sim.time()) + nsteps * DT,
@@ -178,7 +191,7 @@ def _complete_native_bind(amr, compiled, initials, *, regrid_every):
 
 
 def _build(program_factory, regrid_every):
-    amr = AmrSystem(n=N, L=1.0, regrid_every=regrid_every)
+    amr = AmrSystem(_amr_config(N, regrid_every=regrid_every))
     amr.set_temporal_relations([2], [1], ["integral_only"])
     if not hasattr(amr, "install_program") or not hasattr(amr, "history_names"):
         require_native_or_skip(
@@ -216,8 +229,14 @@ def _build(program_factory, regrid_every):
 
 
 def _rings(amr):
-    return {h: [np.asarray(amr.history_global(h, k), dtype=np.float64).ravel()
-                for k in range(int(amr.history_depth(h)))] for h in amr.history_names()}
+    return {
+        (h, int(level)): [
+            np.asarray(amr.history_global(h, level, k), dtype=np.float64).ravel()
+            for k in range(int(amr.history_depth(h)))
+        ]
+        for h in amr.history_names()
+        for level in amr.history_levels(h)
+    }
 
 
 def _rings_equal(first, second):
@@ -250,15 +269,18 @@ def _run_case(program_factory, nsteps, half, label, regrid_every):
         stored_info = {}
         for h in run.history_names():
             depth = int(d["history_depth_" + h])
-            slot_dts = np.asarray(
-                d["history_slot_dt_" + h], dtype=np.float64).reshape(-1)
-            expected_dts = np.full(depth, DT, dtype=np.float64)
-            if depth > 1:
-                expected_dts[1] = accepted_dt
-            assert np.array_equal(slot_dts, expected_dts), (
-                "AMR history slot_dt must remain the primary-clock macro dt "
-                "across every fine-level substep (got %r)" % slot_dts.tolist()
-            )
+            levels = [int(level) for level in d["history_levels_" + h]]
+            for level in levels:
+                slot_dts = np.asarray(
+                    d["history_slot_dt_%s_level_%d" % (h, level)], dtype=np.float64
+                ).reshape(-1)
+                expected_dts = np.full(depth, DT, dtype=np.float64)
+                if depth > 1:
+                    expected_dts[1] = accepted_dt
+                assert np.array_equal(slot_dts, expected_dts), (
+                    "AMR history slot_dt must remain the level-qualified macro dt "
+                    "(level=%d, got %r)" % (level, slot_dts.tolist())
+                )
             key = "history_stored_slots_" + h
             stored = [int(s) for s in d[key]] if key in d else list(range(depth))
             fp = "history_regrid_steps_" + h

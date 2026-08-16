@@ -21,10 +21,21 @@ import numpy as np
 
 import pops.runtime._engine_descriptors as engine
 from pops.runtime._engine_descriptors import Periodic
-from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System, SystemConfig  # ADC-545 advanced runtime seam
+from pops.solvers.elliptic import CartesianCG
 from tests.python.support.explicit_program import install_forward_euler_program
 
 fails = 0
+
+
+def _system_config(n: int) -> SystemConfig:
+    config = SystemConfig()
+    config.shape = (n, n)
+    config.lower = (0.0, 0.0)
+    config.upper = (1.0, 1.0)
+    config.periodicity = (True, True)
+    config.boxes = (((0, 0), (n, n)),)
+    return config
 
 
 def chk(cond, label):
@@ -40,8 +51,8 @@ def build(n=16):
     X, Y = np.meshgrid(x, x, indexing="xy")
     ions = 1.0 + 0.4 * np.exp(-50.0 * ((X - 0.4) ** 2 + (Y - 0.5) ** 2))
     slow = 1.0 + 0.3 * np.exp(-50.0 * ((X - 0.6) ** 2 + (Y - 0.5) ** 2))
-    sim = System(n=n, L=1.0, periodicity=(True, True))
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
+    sim = System(_system_config(n))
+    sim.set_poisson(rhs="charge_density", solver=CartesianCG(), bc=Periodic())
     sim.add_equation("ions",
                   engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
                             transport=engine.IsothermalFlux(),

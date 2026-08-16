@@ -57,6 +57,53 @@ def _reject_unpublished_newton_diagnostics(time: Any, *, where: str) -> None:
         )
 
 
+def _model_state_schema(model: Any, *, dimension: int) -> Any:
+    """Resolve the exact role schema carried by one installed model, before coupling lowering."""
+    from pops.physics.roles import StateSchema
+
+    roles = getattr(model, "cons_roles", None)
+    if roles is not None:
+        return StateSchema.resolve(roles, dimension=dimension, where="installed compiled model")
+    transport = getattr(model, "transport", None)
+    axes = tuple("momentum:%d" % axis for axis in range(dimension))
+    if transport == "exb":
+        roles = ("density",)
+    elif transport == "isothermal":
+        roles = ("density",) + axes
+    elif transport == "compressible":
+        roles = ("density",) + axes + ("energy",)
+    else:
+        raise TypeError("installed native model does not expose an exact StateSchema")
+    return StateSchema.resolve(roles, dimension=dimension, where="installed native model")
+
+
+def _model_coupling_contract(model: Any, *, dimension: int, adiabatic_index: Any = None) -> Any:
+    """Prepare coupling-visible model metadata before any native registry mutation."""
+    from pops.physics.roles import CouplingBlockContract
+
+    gamma = adiabatic_index
+    if gamma is None:
+        gamma = getattr(model, "gamma", None)
+    if gamma is None:
+        gamma = PHYSICAL_DEFAULT_GAMMA
+    gamma = native_real(gamma, where="installed model adiabatic_index")
+    return CouplingBlockContract(
+        _model_state_schema(model, dimension=dimension),
+        (("adiabatic_index", gamma),),
+    )
+
+
+def _candidate_coupling_contracts(owner: Any, name: Any, contract: Any) -> dict[str, Any]:
+    """Allocate a complete candidate registry before the native block installer can mutate."""
+    if not isinstance(name, str) or not name:
+        raise TypeError("installed block identity must be a non-empty string")
+    candidate = dict(getattr(owner, "_coupling_block_contracts", {}))
+    if name in candidate:
+        raise ValueError("installed block identity %r is already registered" % name)
+    candidate[name] = contract
+    return candidate
+
+
 class _SystemInstall(_System):
     """Equation/coupling installation methods of System."""
 
@@ -108,6 +155,10 @@ class _SystemInstall(_System):
         )
 
         if isinstance(model, ModelSpec):
+            contract = _model_coupling_contract(
+                model, dimension=len(tuple(self._s.spatial_shape()))
+            )
+            contract_candidate = _candidate_coupling_contracts(self, name, contract)
             rel_tol, abs_tol, fd_eps, damping, positivity_floor = native_block_scalars(
                 time, spatial, where="System.add_equation"
             )
@@ -133,6 +184,7 @@ class _SystemInstall(_System):
                 getattr(spatial, "wave_speed_cache", False),
                 **_weno_kwargs(spatial),
             )
+            self._coupling_block_contracts = contract_candidate
             return
 
         # The compiled-package ABI does not carry a per-block implicit mask. Reject it rather than
@@ -229,6 +281,10 @@ class _SystemInstall(_System):
             if weno_epsilon is None
             else native_real(weno_epsilon, where="System.add_equation.weno_epsilon")
         )
+        contract = _model_coupling_contract(
+            compiled, dimension=compiled.native_dimension, adiabatic_index=gamma
+        )
+        contract_candidate = _candidate_coupling_contracts(self, name, contract)
         if spatial.external_flux_id is not None:
             if "uniform" not in spatial.external_flux_supported_layouts:
                 raise ValueError(
@@ -237,7 +293,23 @@ class _SystemInstall(_System):
                 )
             if runtime_names:
                 raise ValueError(
-                    "add_equation: external Riemann ABI v2 does not transport model RuntimeParams"
+                    "add_equation: external Riemann ABI does not transport model RuntimeParams"
+                )
+            expected_provider_count = len(tuple(compiled.provider_components))
+            external_shape = (
+                spatial.external_flux_dimension,
+                spatial.external_flux_n_vars,
+                spatial.external_flux_provider_count,
+            )
+            compiled_shape = (
+                compiled.native_dimension,
+                compiled.n_vars,
+                expected_provider_count,
+            )
+            if external_shape != compiled_shape:
+                raise ValueError(
+                    "add_equation: external Riemann brick %r carries model shape %r, not %r"
+                    % (spatial.external_flux_id, external_shape, compiled_shape)
                 )
             if spatial.external_flux_model_identity != compiled.model_hash:
                 raise ValueError(
@@ -253,11 +325,27 @@ class _SystemInstall(_System):
                     "add_equation: external Riemann brick %r was built for a different native ABI"
                     % spatial.external_flux_id
                 )
-            self._s._install_external_riemann_block(
+            expected_system_abi_key = (
+                "pops.external-riemann.system/v7;receiver=prepared-native-package;"
+                "providers=qualified;dim=%s" % compiled.native_dimension
+            )
+            if (
+                spatial.external_flux_system_abi_version != 7
+                or spatial.external_flux_system_abi_key != expected_system_abi_key
+            ):
+                raise ValueError(
+                    "add_equation: external Riemann brick %r lacks the System v7 "
+                    "prepared-package ABI" % spatial.external_flux_id
+                )
+            self._s._register_external_riemann_package(
                 name,
                 spatial.external_flux_library_path,
                 spatial.external_flux_id,
                 spatial.external_flux_library_sha256,
+                spatial.external_flux_n_vars,
+                spatial.external_flux_provider_count,
+                spatial.external_flux_model_identity,
+                name,
                 spatial.limiter,
                 spatial.recon,
                 time.kind,
@@ -265,16 +353,16 @@ class _SystemInstall(_System):
                 nsub,
                 evolve,
                 nstride,
-                compiled.n_vars,
-                compiled.n_aux,
-                compiled.model_hash,
                 positivity_floor,
                 weno_epsilon,
             )
+            self._pending_native_packages += 1
         else:
             self._s._register_native_package(
                 name,
                 compiled.so_path,
+                compiled.model_hash,
+                str(compiled.binary_identity),
                 spatial.limiter,
                 spatial.flux,
                 spatial.recon,
@@ -287,6 +375,7 @@ class _SystemInstall(_System):
                 positivity_floor,
             )
             self._pending_native_packages += 1
+        self._coupling_block_contracts = contract_candidate
 
     def add_background(self, name: Any, model: Any, density: Any, spatial: Any = None) -> Any:
         """FROZEN species (not advanced): a fixed background that contributes to the system Poisson (and,
@@ -415,7 +504,17 @@ class _SystemInstall(_System):
             )
             self._s.add_coupling_operator(*args)
             return
-        preset = lower_named_coupling(coupling, self._s.block_gamma)
+
+        def contract_of(block: Any) -> Any:
+            try:
+                return self._coupling_block_contracts[block]
+            except (AttributeError, KeyError):
+                raise ValueError(
+                    "named coupling references block %r without an authenticated coupling contract"
+                    % block
+                ) from None
+
+        preset = lower_named_coupling(coupling, contract_of)
         if preset is None:
             raise TypeError(
                 "add_coupling expects a private named-coupling engine descriptor or "

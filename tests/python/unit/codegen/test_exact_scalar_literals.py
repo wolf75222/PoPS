@@ -245,7 +245,7 @@ def test_solver_controls_keep_exact_literals_until_codegen():
         "relaxation": relaxation
     }
     method_cpp = (
-        "pops::richardson_krylov_method("
+        "pops::richardson_krylov_method<pops::kNativeDimension>("
         "static_cast<pops::Real>((pops::Real(2) / pops::Real(3))))"
     )
     assert provider.emit_cpp(solve) == method_cpp

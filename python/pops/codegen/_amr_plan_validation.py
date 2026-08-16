@@ -308,62 +308,58 @@ def validate_amr_authorities(plan: Any) -> None:
                     supported_axis
                     and key["representation"]["qualified_id"] == expected_representation
                     and key["storage"]["qualified_id"] == expected_storage
-                    and requirement.key.operation in {
-                        PROLONGATION,
-                        RESTRICTION,
-                        COARSE_FINE_FILL,
-                        TEMPORAL_INTERPOLATION,
-                    }
+                    and (
+                        (axis_kind == "cell" and requirement.key.operation in {
+                            PROLONGATION,
+                            RESTRICTION,
+                            COARSE_FINE_FILL,
+                            TEMPORAL_INTERPOLATION,
+                        })
+                        or (axis_kind in {"face", "node"}
+                            and requirement.key.operation == PROLONGATION)
+                    )
                 )
-                if requirement.key.operation in {
-                    RESTRICTION,
-                    COARSE_FINE_FILL,
-                    TEMPORAL_INTERPOLATION,
-                } and axis_kind != "cell":
-                    supported_key = False
                 if axis_kind == "cell" and requirement.subject.block_ref is None:
                     supported_key = False
                 if requirement.subject.qualified_id not in initial_ids or not supported_key:
                     raise NotImplementedError(
-                        "native AMR bootstrap supports initialized dense conservative "
-                        "cell/oriented-face/node states"
+                        "native AMR bootstrap physical transfer key has no exact prepared provider"
                     )
-                prolong_contract = {
-                    "cell": (
-                        "conservative_linear",
-                        2,
-                        tuple(1 for _ in range(dimension)),
-                    ),
-                    "face": (
-                        "face_divergence_preserving",
-                        2,
-                        tuple(1 for _ in range(dimension)),
-                    ),
-                    "node": (
-                        "node_bilinear",
-                        2,
-                        tuple(1 for _ in range(dimension)),
-                    ),
-                }.get(axis_kind)
-                if requirement.key.operation == RESTRICTION:
+                if axis_kind == "face":
                     route_contract = (
-                        "volume_average",
-                        1,
-                        tuple(0 for _ in range(dimension)),
+                        "divergence_preserving_face",
+                        2,
+                        tuple(1 for _ in range(dimension)),
                     )
-                elif requirement.key.operation == COARSE_FINE_FILL:
-                    # Coarse/fine providers form an open capability family.  The resolved action
-                    # already proves that its exact route supports this requirement; the native
-                    # registry authenticates and prepares the named implementation at bind time.
-                    route_contract = None
-                elif requirement.key.operation == TEMPORAL_INTERPOLATION:
+                elif axis_kind == "node":
                     route_contract = (
-                        "linear_time_interpolation",
+                        "node_multilinear",
                         2,
                         tuple(0 for _ in range(dimension)),
                     )
                 else:
-                    route_contract = prolong_contract
+                    if requirement.key.operation == RESTRICTION:
+                        route_contract = (
+                            "volume_average",
+                            1,
+                            tuple(0 for _ in range(dimension)),
+                        )
+                    elif requirement.key.operation == COARSE_FINE_FILL:
+                        # Coarse/fine providers form an open capability family.  The resolved
+                        # action proves that its exact route supports this requirement.
+                        route_contract = None
+                    elif requirement.key.operation == TEMPORAL_INTERPOLATION:
+                        route_contract = (
+                            "linear_time_interpolation",
+                            2,
+                            tuple(0 for _ in range(dimension)),
+                        )
+                    else:
+                        route_contract = (
+                            "conservative_linear",
+                            2,
+                            tuple(1 for _ in range(dimension)),
+                        )
                 if native.materialization is not NativeAMRMaterializationKind.PHYSICAL:
                     raise NotImplementedError(
                         "native AMR physical requirements need a physical transfer descriptor"
@@ -373,12 +369,16 @@ def validate_amr_authorities(plan: Any) -> None:
                     raise NotImplementedError(
                         "native AMR physical descriptor omitted transfer capabilities"
                     )
+                if capabilities.temporal != (
+                    requirement.key.operation == TEMPORAL_INTERPOLATION
+                ):
+                    raise NotImplementedError(
+                        "native AMR transfer temporal capability disagrees with its operation"
+                    )
                 if requirement.key.operation == COARSE_FINE_FILL:
-                    if not native.native_route or not capabilities.conservative \
-                            or capabilities.temporal:
+                    if not native.native_route or capabilities.temporal:
                         raise NotImplementedError(
-                            "native AMR coarse/fine provider lacks conservative spatial "
-                            "capabilities")
+                            "native AMR coarse/fine provider lacks spatial capabilities")
                 elif route_contract is None \
                         or (
                             native.native_route,

@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from pops.model.operators import OPERATOR_KINDS
 from pops.time.operator_resolution import resolve_operator_handle
-from pops.time._schedule.api import Schedule
+from pops.time._schedule.api import Schedule, native_schedule_cache_required
 from pops.time._schedule.ir import ScheduleDueIR, ScheduleDueKind
 from pops.time.references import block_name
 from pops.time._program.value_validation import require_owned, require_top_level
@@ -135,7 +135,8 @@ class _ProgramCall(_ProgramBase):
                 if cond.clock != schedule.clock:
                     raise ValueError(
                         "schedule when(cond): predicate and schedule must use the same clock")
-        if schedule.needs_cache() and not capabilities.get("cacheable"):
+        where = "schedule on operator %r" % operator_name
+        if native_schedule_cache_required(schedule, where=where) and not capabilities.get("cacheable"):
             raise ValueError(
                 "operator %r is not cacheable; cannot use schedule %s -- every authoritative "
                 "provider for this operation must declare cacheable=True"

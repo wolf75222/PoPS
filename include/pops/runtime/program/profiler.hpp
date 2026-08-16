@@ -18,9 +18,11 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <exception>
 #include <map>
 #include <mutex>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -89,6 +91,58 @@ class Profiler {
     std::scoped_lock lock(mutex_, other.mutex_);
     move_from_unlocked_(std::move(other));
     return *this;
+  }
+
+  /// Fully allocated rollback image. The live profiler lock is acquired during preparation and
+  /// retained until publication/destruction, so publication cannot fail while replacing the exact
+  /// accepted counters and first-seen ordering.
+  class PreparedRestore {
+   public:
+    PreparedRestore(const PreparedRestore&) = delete;
+    PreparedRestore& operator=(const PreparedRestore&) = delete;
+    PreparedRestore(PreparedRestore&&) noexcept = default;
+    PreparedRestore& operator=(PreparedRestore&&) noexcept = default;
+
+   private:
+    friend class Profiler;
+
+    PreparedRestore(Profiler& owner, const Profiler& accepted)
+        : owner_(&owner), owner_lock_(owner.mutex_) {
+      std::lock_guard<std::mutex> accepted_lock(accepted.mutex_);
+      enabled_ = accepted.enabled_.load(std::memory_order_relaxed);
+      order_ = accepted.order_;
+      entries_ = accepted.entries_;
+      counter_order_ = accepted.counter_order_;
+      counters_ = accepted.counters_;
+    }
+
+    Profiler* owner_ = nullptr;
+    std::unique_lock<std::mutex> owner_lock_;
+    bool enabled_ = false;
+    std::vector<std::string> order_;
+    std::map<std::string, Entry> entries_;
+    std::vector<std::string> counter_order_;
+    std::map<std::string, std::int64_t> counters_;
+  };
+
+  PreparedRestore prepare_restore(const Profiler& accepted) {
+    if (this == &accepted)
+      throw std::invalid_argument("Profiler restore requires an independent accepted image");
+    return PreparedRestore(*this, accepted);
+  }
+
+  void publish_prepared_restore(PreparedRestore&& prepared) noexcept {
+    if (prepared.owner_ != this || !prepared.owner_lock_.owns_lock())
+      std::terminate();
+    static_assert(noexcept(order_.swap(prepared.order_)));
+    static_assert(noexcept(entries_.swap(prepared.entries_)));
+    static_assert(noexcept(counter_order_.swap(prepared.counter_order_)));
+    static_assert(noexcept(counters_.swap(prepared.counters_)));
+    enabled_.store(prepared.enabled_, std::memory_order_release);
+    order_.swap(prepared.order_);
+    entries_.swap(prepared.entries_);
+    counter_order_.swap(prepared.counter_order_);
+    counters_.swap(prepared.counters_);
   }
 
   void enable() {

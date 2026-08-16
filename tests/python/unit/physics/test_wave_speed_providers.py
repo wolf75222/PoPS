@@ -10,6 +10,7 @@ Pure authoring / descriptor level -- no .so compiled. The install guard is exerc
 detached CompiledModel carrying the same authenticated source-kind metadata as a public artifact;
 it never retains a hidden authoring model. Runs under pytest and as ``python tests/...``.
 """
+
 import pytest
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
@@ -20,11 +21,20 @@ from pops.codegen.loader import CompiledModel  # noqa: E402
 from pops.numerics.reconstruction import FirstOrder  # noqa: E402
 from pops.numerics.riemann import HLL, Rusanov  # noqa: E402
 from pops.numerics.riemann.waves import (  # noqa: E402
-    WaveSpeedProvider, ExplicitPair, FromJacobian, FromPressure, Einfeldt, Davis,
-    MaxWaveSpeed, provider_of)
+    WaveSpeedProvider,
+    ExplicitPair,
+    FromJacobian,
+    FromPressure,
+    Einfeldt,
+    Davis,
+    MaxWaveSpeed,
+    provider_of,
+)
+from pops.physics import Density, Momentum  # noqa: E402
 from pops.physics._facade import Model  # noqa: E402
 from pops.numerics.riemann.waves import check_hll_waves  # noqa: E402
 from pops.runtime.routes import check_wave_speed_provider  # noqa: E402
+from tests.python.support.physics_roles import X_AXIS, Y_AXIS  # noqa: E402
 
 
 def _model_pair():
@@ -46,8 +56,9 @@ def _model_jacobian():
 
 def _model_pressure():
     m = Model("press")
-    rho, mx, my = m.conservative_vars("rho", "m_x", "m_y",
-                                      roles=["Density", "MomentumX", "MomentumY"])
+    rho, mx, my = m.conservative_vars(
+        "rho", "m_x", "m_y", roles=[Density(), Momentum(X_AXIS), Momentum(Y_AXIS)]
+    )
     u = m.primitive("u", mx / rho)
     v = m.primitive("v", my / rho)
     p = m.primitive("p", 1.0 * rho)
@@ -61,13 +72,27 @@ def _compiled(*, wave_speeds=True, wave_speed_provider="explicit_pair", n_vars=2
     """A REAL detached CompiledModel (no .so) with authenticated provider metadata."""
     cons = ["w1", "w2", "w3"][:n_vars]
     c = CompiledModel(
-        so_path="/no/such/pops-ws-provider.so", backend="production",
-        cons_names=cons, cons_roles=["custom"] * n_vars, prim_names=[], n_vars=n_vars, gamma=1.4,
-        n_aux=3, params={}, caps={"cpu": True}, abi_key="SIG|c++|c++23", model_hash="mh",
-        cxx="c++", std="c++23", wave_speeds=wave_speeds, hllc=hllc,
+        so_path="/no/such/pops-ws-provider.so",
+        backend="production",
+        cons_names=cons,
+        cons_roles=["custom"] * n_vars,
+        prim_names=[],
+        n_vars=n_vars,
+        gamma=1.4,
+        n_aux=3,
+        params={},
+        caps={"cpu": True},
+        abi_key="SIG|c++|c++23",
+        model_hash="mh",
+        cxx="c++",
+        std="c++23",
+        wave_speeds=wave_speeds,
+        hllc=hllc,
         native_dimension=2,
         hllc_provider="fluid_roles_v1" if hllc else None,
-        wave_speed_provider=(wave_speed_provider if wave_speeds else None), target="system")
+        wave_speed_provider=(wave_speed_provider if wave_speeds else None),
+        target="system",
+    )
     return c
 
 
@@ -186,9 +211,7 @@ def test_guard_accepts_matching_provider():
 
 def test_guard_refuses_mismatched_provider():
     with pytest.raises(ValueError, match="actual wave-speed source is"):
-        check_hll_waves(
-            "explicit_pair", _compiled(wave_speed_provider="jacobian"), "add_equation"
-        )
+        check_hll_waves("explicit_pair", _compiled(wave_speed_provider="jacobian"), "add_equation")
 
 
 def test_guard_refuses_provider_when_model_emits_no_wave_speeds():
@@ -206,8 +229,10 @@ def test_check_wave_speed_provider_actual_kind_arg():
     # The low-level shared checker takes the caller-derived actual kind (routes.py import-free).
     with pytest.raises(ValueError, match="actual wave-speed source is"):
         check_wave_speed_provider(
-            "explicit_pair", _compiled(wave_speed_provider="jacobian"), "add_equation",
-            actual_provider="jacobian"
+            "explicit_pair",
+            _compiled(wave_speed_provider="jacobian"),
+            "add_equation",
+            actual_provider="jacobian",
         )
 
 
@@ -223,7 +248,8 @@ def test_no_silent_flux_swap_on_missing_wave_speeds():
     assert spatial.flux == "hll"  # the descriptor stays HLL, no silent swap
     with pytest.raises(ValueError, match="wave_speeds"):
         System(n=8, L=1.0, periodicity=(True, True))._validate_riemann_capability(
-            _compiled(wave_speeds=False), spatial)
+            _compiled(wave_speeds=False), spatial
+        )
 
 
 def test_external_flux_uses_its_declared_wave_speed_capability_not_its_name():
@@ -232,16 +258,29 @@ def test_external_flux_uses_its_declared_wave_speed_capability_not_its_name():
     authority = {
         "library_path": "/tmp/external-riemann.so",
         "library_sha256": "0" * 64,
-        "abi_version": 2,
-        "abi_key": "pops.external-riemann/v2;scalar=f64;index=i32;periodicity=xy",
+        "abi_version": 5,
+        "abi_key": (
+            "pops.external-riemann/v5;scalar=f64;index=i32;periodicity=nd;providers=qualified;dim=2"
+        ),
+        "system_abi_version": 7,
+        "system_abi_key": (
+            "pops.external-riemann.system/v7;receiver=prepared-native-package;"
+            "providers=qualified;dim=2"
+        ),
         "native_abi_key": "host-native-abi",
         "supported_layouts": ("uniform", "amr"),
         "model_identity": "compiled-model-hash",
+        "dimension": 2,
+        "n_vars": 1,
+        "provider_count": 0,
     }
 
     required = BrickDescriptor(
-        "acme.self_describing_flux", "external_cpp", category="riemann",
-        native_id="acme_flux", scheme="user",
+        "acme.self_describing_flux",
+        "external_cpp",
+        category="riemann",
+        native_id="acme_flux",
+        scheme="user",
         requirements={"capabilities": ["wave_speeds"]},
         options=authority,
     )
@@ -250,43 +289,65 @@ def test_external_flux_uses_its_declared_wave_speed_capability_not_its_name():
     assert spatial.riemann_capability_contract.requires("wave_speeds")
     with pytest.raises(ValueError, match="requires signed wave speeds"):
         System(n=8, L=1.0, periodicity=(True, True))._validate_riemann_capability(
-            _compiled(wave_speeds=False), spatial)
+            _compiled(wave_speeds=False), spatial
+        )
     System(n=8, L=1.0, periodicity=(True, True))._validate_riemann_capability(
-        _compiled(wave_speeds=True), spatial)
+        _compiled(wave_speeds=True), spatial
+    )
 
     # A misleading external id cannot activate the gate: only the explicit capability contract can.
     self_contained = BrickDescriptor(
-        "hll", "external_cpp", category="riemann",
-        native_id="acme_self_contained", scheme="user",
+        "hll",
+        "external_cpp",
+        category="riemann",
+        native_id="acme_self_contained",
+        scheme="user",
         options=authority,
     )
     System(n=8, L=1.0, periodicity=(True, True))._validate_riemann_capability(
-        _compiled(wave_speeds=False), engine.Spatial(flux=self_contained))
+        _compiled(wave_speeds=False), engine.Spatial(flux=self_contained)
+    )
 
 
 def test_external_flux_reuses_standard_model_predicates_without_a_route_name():
     from pops.descriptors import BrickDescriptor
 
     external = BrickDescriptor(
-        "acme.contact_resolving", "external_cpp", category="riemann",
-        native_id="acme_contact_flux", scheme="user",
+        "acme.contact_resolving",
+        "external_cpp",
+        category="riemann",
+        native_id="acme_contact_flux",
+        scheme="user",
         requirements={"capabilities": ["hllc_star_state"]},
         options={
             "library_path": "/tmp/external-riemann.so",
             "library_sha256": "0" * 64,
-            "abi_version": 2,
-            "abi_key": "pops.external-riemann/v2;scalar=f64;index=i32;periodicity=xy",
+            "abi_version": 5,
+            "abi_key": (
+                "pops.external-riemann/v5;scalar=f64;index=i32;periodicity=nd;"
+                "providers=qualified;dim=2"
+            ),
+            "system_abi_version": 7,
+            "system_abi_key": (
+                "pops.external-riemann.system/v7;receiver=prepared-native-package;"
+                "providers=qualified;dim=2"
+            ),
             "native_abi_key": "host-native-abi",
             "supported_layouts": ("uniform", "amr"),
             "model_identity": "compiled-model-hash",
+            "dimension": 2,
+            "n_vars": 1,
+            "provider_count": 0,
         },
     )
     spatial = engine.Spatial(flux=external)
     with pytest.raises(ValueError, match="hllc_star_state"):
         System(n=8, L=1.0, periodicity=(True, True))._validate_riemann_capability(
-            _compiled(hllc=False), spatial)
+            _compiled(hllc=False), spatial
+        )
     System(n=8, L=1.0, periodicity=(True, True))._validate_riemann_capability(
-        _compiled(hllc=True), spatial)
+        _compiled(hllc=True), spatial
+    )
 
 
 def test_riemann_availability_reports_only_capabilities_the_model_actually_lacks():
@@ -301,4 +362,5 @@ def test_riemann_availability_reports_only_capabilities_the_model_actually_lacks
 
 if __name__ == "__main__":
     import sys
+
     sys.exit(pytest.main([__file__, "-q", "-rs"]))

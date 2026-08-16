@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
+from typing import cast
 import json
+import math
+import struct
 
 from pops.identity import make_identity
 
 
-_SCHEMA = 5
+_SCHEMA = 7
 _GUARANTEE = "bit_identical_accepted_state"
 _CONTRACT_KEYS = {
     "schema_version",
@@ -22,6 +25,7 @@ _CONTRACT_KEYS = {
     "history_qualifications",
     "level_relations",
     "transfer_routes",
+    "field_providers",
 }
 _PREFLIGHT_KEYS = {
     "schema_version",
@@ -29,6 +33,7 @@ _PREFLIGHT_KEYS = {
     "program_state",
     "level_relations",
     "transfer_routes",
+    "field_providers",
 }
 
 
@@ -36,16 +41,62 @@ def _rows(values):
     return [list(map(str, row)) for row in values]
 
 
+def _field_provider_contract_rows(values):
+    """Retain immutable provider semantics, excluding live topology/materialization evidence."""
+    rows = _rows(values)
+    if any(len(row) < 14 or row[0] != "pops.amr.field-provider-checkpoint-manifest@1" for row in rows):
+        raise ValueError("native AMR field-provider manifest has an invalid row")
+    return [row[:6] + row[9:] for row in rows]
+
+
+def _valid_field_recompute_dt(dt, accepted_step):
+    """Accept the recorded dt, including only the honest initial accepted-point zero."""
+    return math.isfinite(dt) and dt >= 0.0 and (dt > 0.0 or accepted_step == 0)
+
+
 def restart_topology_image(sim):
     """Return the compact identity of one accepted AMR hierarchy."""
     levels = int(sim.n_levels())
-    boxes = [[int(value) for value in box] for box in sim.patch_boxes()]
-    owners = [[int(rank) for rank in sim.level_owner_ranks(level)] for level in range(levels)]
+    boxes = []
+    for position, row in enumerate(sim.patch_boxes()):
+        if type(row) is not tuple or len(row) != 3:
+            raise TypeError(
+                "native AMR patch_boxes row %d must be an exact (level, lower, upper) tuple"
+                % position
+            )
+        level, lower, upper = row
+        if type(level) is not int:
+            raise TypeError("native AMR patch-box level %d must be an exact integer" % position)
+        if type(lower) is not tuple or type(upper) is not tuple:
+            raise TypeError("native AMR patch-box bounds must be exact ranked tuples")
+        if len(lower) != len(upper) or not lower:
+            raise ValueError("native AMR patch-box bounds have mismatched rank")
+        if any(type(value) is not int for value in lower + upper):
+            raise TypeError("native AMR patch-box bounds must contain exact integers")
+        boxes.append([level, list(lower), list(upper)])
+    mode_provider = getattr(sim, "level_distribution_mode", None)
+    owner_provider = getattr(sim, "level_owner_ranks", None)
+    if not callable(mode_provider) or not callable(owner_provider):
+        raise TypeError("native AMR restart topology lacks exact distribution accessors")
+    modes = [mode_provider(level) for level in range(levels)]
+    if any(type(mode) is not str or mode not in {"replicated", "partitioned"} for mode in modes):
+        raise ValueError("native AMR restart topology has an invalid distribution mode")
+    owners = [
+        [int(rank) for rank in cast(Iterable[int], owner_provider(level))]
+        for level in range(levels)
+    ]
+    if any(
+        (mode == "replicated" and ranks) or (mode == "partitioned" and not ranks)
+        for mode, ranks in zip(modes, owners, strict=True)
+    ):
+        raise ValueError("native AMR restart topology has a mode/map mismatch")
     topology_identity = make_identity(
-        "restart-topology",
+        "restart-topology-v2",
         {
+            "distribution_topology_schema": 2,
             "active_levels": levels,
             "patch_boxes": boxes,
+            "level_distribution_modes": modes,
             "level_owner_ranks": owners,
         },
     ).token
@@ -98,6 +149,9 @@ def contract_for(sim):
         "history_qualifications": _rows(sim.program_accepted_state_manifest()),
         "level_relations": relations,
         "transfer_routes": _rows(sim.checkpoint_transfer_routes()),
+        "field_providers": _field_provider_contract_rows(
+            sim.field_provider_checkpoint_manifest()
+        ),
     }
 
 
@@ -177,10 +231,11 @@ def _validate_interface_ledger_against_live_hierarchy(sim, contract):
     levels = int(sim.n_levels())
     blocks = int(sim.n_blocks())
     for row in contract["interface_ledger"]["entries"]:
-        if len(row) != 28:
+        if len(row) != 31:
             raise ValueError("restart: restored AMR interface-flux audit has an invalid native row")
         coarse_level, fine_level = int(row[2]), int(row[3])
         left_block, right_block = int(row[21]), int(row[22])
+        graph_identity, rate_identity, application_identity = row[28:31]
         if (
             int(row[1]) != epoch
             or coarse_level < 0
@@ -191,6 +246,9 @@ def _validate_interface_ledger_against_live_hierarchy(sim, contract):
             or left_block >= blocks
             or right_block >= blocks
             or row[27] != "resolved"
+            or graph_identity != sim.installed_program_hash()
+            or not rate_identity
+            or not application_identity
         ):
             raise ValueError(
                 "restart: restored AMR interface-flux audit is outside the live hierarchy"
@@ -226,10 +284,15 @@ def validate_regridded_contract(sim, payload, receipt):
         "history_consensus_identity_after",
         "composite_integrals_before",
         "composite_integrals_after",
+        "field_manifest_identity_before",
+        "field_manifest_identity_after",
+        "field_manifest_before",
+        "field_manifest_after",
+        "field_recompute_witness",
     }
     if not isinstance(receipt, dict) or set(receipt) != required:
         raise TypeError("restart: RegridOnRestart receipt has an invalid exact schema")
-    if receipt["schema_version"] != 2 or type(receipt["changed"]) is not bool:
+    if receipt["schema_version"] != 3 or type(receipt["changed"]) is not bool:
         raise ValueError("restart: RegridOnRestart receipt version or changed flag is invalid")
     accepted_time = float(payload["t"])
     accepted_step = int(payload["macro_step"])
@@ -291,6 +354,91 @@ def validate_regridded_contract(sim, payload, receipt):
                 "restart: RegridOnRestart phase-local history consensus identity has the "
                 "wrong domain or schema version"
             )
+    for key in ("field_manifest_identity_before", "field_manifest_identity_after"):
+        identity = Identity.from_token(receipt[key])
+        if identity.domain != "restart-field-provider-manifest" or identity.schema_version != 1:
+            raise ValueError(
+                "restart: RegridOnRestart field-provider manifest witness has the wrong domain "
+                "or schema version"
+            )
+    before_field_manifest = receipt["field_manifest_before"]
+    after_field_manifest = receipt["field_manifest_after"]
+    if (
+        not isinstance(before_field_manifest, list)
+        or not isinstance(after_field_manifest, list)
+        or any(not isinstance(row, list) for row in before_field_manifest + after_field_manifest)
+    ):
+        raise TypeError("restart: RegridOnRestart field-provider manifest witness is invalid")
+    if _field_provider_contract_rows(before_field_manifest) != recorded["field_providers"]:
+        raise ValueError(
+            "restart: RegridOnRestart recorded field-provider semantics changed before regrid"
+        )
+    live_field_manifest = _rows(sim.field_provider_checkpoint_manifest())
+    if after_field_manifest != live_field_manifest:
+        raise ValueError(
+            "restart: RegridOnRestart transformed field-provider manifest differs from the live image"
+        )
+    for rows, topology in ((before_field_manifest, before), (after_field_manifest, after)):
+        if any(row[6] != str(topology["topology_epoch"]) or row[8] != "materialized" for row in rows):
+            raise ValueError(
+                "restart: RegridOnRestart field-provider witness has invalid topology or materialization"
+            )
+    expected_field_before = make_identity(
+        "restart-field-provider-manifest",
+        {"schema_version": 1, "providers": before_field_manifest},
+    ).token
+    expected_field_after = make_identity(
+        "restart-field-provider-manifest",
+        {"schema_version": 1, "providers": after_field_manifest},
+    ).token
+    if (
+        receipt["field_manifest_identity_before"] != expected_field_before
+        or receipt["field_manifest_identity_after"] != expected_field_after
+    ):
+        raise ValueError(
+            "restart: RegridOnRestart field-provider manifest witness differs from the recorded "
+            "or transformed image"
+        )
+    witness = receipt["field_recompute_witness"]
+    if not isinstance(witness, list) or any(
+        not isinstance(row, list) or len(row) != 16 for row in witness
+    ):
+        raise TypeError("restart: RegridOnRestart field recompute witness has an invalid schema")
+    slots = [str(row[1]) for row in transformed["field_providers"]]
+    if len({row[0] for row in witness}) != len(witness) or sorted(
+        row[0] for row in witness
+    ) != sorted(slots):
+        raise ValueError(
+            "restart: RegridOnRestart field recompute witness differs from the live provider order"
+        )
+    if any(row[5] != "solved" for row in witness):
+        raise ValueError("restart: RegridOnRestart field recompute did not publish a solved value")
+    manifest_by_slot = {row[1]: row for row in after_field_manifest}
+    accepted_time_bits = int.from_bytes(struct.pack("!d", accepted_time), "big")
+    for row in witness:
+        manifest = manifest_by_slot[row[0]]
+        try:
+            dt_bits = int(row[14])
+            time_bits = int(row[15])
+            dt = struct.unpack("!d", dt_bits.to_bytes(8, "big"))[0]
+        except (OverflowError, ValueError, struct.error):
+            raise ValueError(
+                "restart: RegridOnRestart field recompute point has invalid binary64 evidence"
+            ) from None
+        if (
+            row[1] != manifest[4]
+            or row[2] != manifest[3]
+            or row[3] != str(after["topology_epoch"])
+            or row[4] != manifest[7]
+            or row[6] != "pops.amr.restart-regrid.accepted"
+            or row[7] != str(accepted_step)
+            or row[8:14] != ["0", "0", "0", "0", "0", "1"]
+            or not _valid_field_recompute_dt(dt, accepted_step)
+            or time_bits != accepted_time_bits
+        ):
+            raise ValueError(
+                "restart: RegridOnRestart field recompute point differs from its accepted authority"
+            )
     expected_program_state = recorded["program_state"]
     if transformed["program_state"] != expected_program_state:
         raise ValueError("restart: RegridOnRestart changed the installed Program authority")
@@ -315,10 +463,62 @@ def validate_regridded_contract(sim, payload, receipt):
             raise ValueError(
                 "restart: RegridOnRestart produced a non-accepted or misqualified level clock"
             )
+    history_slots = {}
+    history_publication = {}
     for row in transformed["history_qualifications"]:
-        if len(row) != 8 or int(row[7]) != levels:
+        if len(row) != 13 or int(row[7]) != levels:
             raise ValueError(
                 "restart: RegridOnRestart did not requalify a history over all active levels"
+            )
+        depth = int(row[6])
+        level = int(row[8])
+        slot = int(row[9])
+        dt_bits = int(row[10])
+        initialized = int(row[11])
+        fill_count = int(row[12])
+        if (
+            depth < 2
+            or level < 0
+            or level >= levels
+            or slot < 0
+            or slot >= depth
+            or dt_bits < 0
+            or dt_bits >= 1 << 64
+            or initialized not in (0, 1)
+            or fill_count < 0
+            or fill_count > depth
+            or bool(initialized) != (fill_count > 0)
+        ):
+            raise ValueError(
+                "restart: RegridOnRestart produced invalid history-slot provenance"
+            )
+        outgoing_dt = struct.unpack("!d", dt_bits.to_bytes(8, "big"))[0]
+        if not math.isfinite(outgoing_dt) or (
+            fill_count == 0 and outgoing_dt != 0.0
+        ) or (fill_count > 0 and outgoing_dt <= 0.0):
+            raise ValueError(
+                "restart: RegridOnRestart produced invalid history-slot outgoing dt"
+            )
+        descriptor = tuple(row[:8])
+        publication_key = (descriptor, level)
+        publication = (initialized, fill_count)
+        if publication_key in history_publication and history_publication[publication_key] != publication:
+            raise ValueError(
+                "restart: RegridOnRestart produced inconsistent history publication metadata"
+            )
+        history_publication[publication_key] = publication
+        coordinates = history_slots.setdefault(descriptor, set())
+        if (level, slot) in coordinates:
+            raise ValueError(
+                "restart: RegridOnRestart duplicated history-slot provenance"
+            )
+        coordinates.add((level, slot))
+    for descriptor, coordinates in history_slots.items():
+        depth = int(descriptor[6])
+        expected = {(level, slot) for level in range(levels) for slot in range(depth)}
+        if coordinates != expected:
+            raise ValueError(
+                "restart: RegridOnRestart omitted history-slot provenance"
             )
     if (
         transformed["ledger"]["accepted_entries"]

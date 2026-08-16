@@ -18,8 +18,10 @@ template <int Dim>
 void expect_exact_local_copy() {
   const Box<Dim> domain = cube<Dim>(-2, 1);
   const BoxArray<Dim> source_layout(std::vector<Box<Dim>>{domain});
-  const BoxArray<Dim> destination_layout =
-      BoxArray<Dim>::from_domain(domain, axis_sizes<Dim>(2, 4));
+  Extent<Dim> max_grid_size{};
+  for (int axis = 0; axis < Dim; ++axis)
+    max_grid_size[axis] = axis == 0 ? 2 : 4;
+  const BoxArray<Dim> destination_layout = BoxArray<Dim>::from_domain(domain, max_grid_size);
   const auto ranks = one_rank_space<Dim>();
   const auto source_distribution = Distribution<Dim>::replicated(source_layout, ranks);
   const auto destination_distribution = Distribution<Dim>::replicated(destination_layout, ranks);
@@ -59,7 +61,7 @@ TEST(test_copy_schedule_cache, exact_redistribution_is_dimension_generic) {
 
 TEST(test_copy_schedule_cache, remote_copy_refuses_before_destination_mutation) {
   const Box<1> domain{Index<1>{0}, Index<1>{3}};
-  const BoxArray<1> layout = BoxArray<1>::from_domain(domain, std::array<int, 1>{2});
+  const BoxArray<1> layout = BoxArray<1>::from_domain(domain, Extent<1>{2});
   const RankSpace<1> ranks{Index<1>{0}, Extent<1>{2}};
   const auto source_distribution =
       Distribution<1>::partitioned(layout, ranks, std::vector<Index<1>>{Index<1>{0}, Index<1>{1}});

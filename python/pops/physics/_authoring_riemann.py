@@ -33,13 +33,14 @@ class _RiemannMixin(_HyperbolicModel):
 
     def enable_hllc(self) -> Any:
         """Emits the HLLC CAPABILITY (audit wave 3): ``contact_speed`` (Toro) + ``hllc_star_state``
-        GENERATED from the block's ROLES (Density / MomentumX[/Y[/Z]], Energy optional) and the
+        GENERATED from the block's typed roles (``density``, one ``momentum:<axis>`` per exact
+        Cartesian rank, and optional ``energy``) and the
         primitive 'p' -- the core's contact-resolving HLLC solver (C++ trait HasHLLCStructure)
         then becomes available for THIS model, EVEN outside 4-variable Euler (3-var isothermal,
         moments with passive scalars: any component without a particular role is advected
-        passively in the star state, Us[c] = fac*U[c]/rho). REQUIRES: roles Density/MomentumX/
-        momentum role of every ranked Cartesian axis + primitive 'p' (explicit error at emission
-        otherwise)."""
+        passively in the star state, Us[c] = fac*U[c]/rho). REQUIRES: ``density`` and the
+        ``momentum:<axis>`` role of every ranked Cartesian axis + primitive 'p'
+        (explicit error at emission otherwise)."""
         self._hllc = True
         return self
 
@@ -76,7 +77,8 @@ class _RiemannMixin(_HyperbolicModel):
         ROLES -- the core's Roe-like solver (C++ trait HasRoeDissipation, F = 1/2(FL+FR) - 1/2 d)
         becomes available for THIS model, EVEN outside 4-variable Euler:
 
-        - roles Density/MomentumX[/MomentumY[/MomentumZ]] + Energy: ideal-gas Roe algebra, exact
+        - typed ``density`` + exact-ranked ``momentum:<axis>`` + ``energy`` roles:
+          ideal-gas Roe algebra, exact
           TRANSCRIPTION of the canonical C++ path (sqrt(rho)-weighted averages, gamma-1 deduced from
           ``p/(E - 1/2 rho |v|^2)``, with the selected typed entropy policy on the acoustic waves);
         - the same ranked density/momentum roles WITHOUT Energy (isothermal / pseudo-pressure): same
@@ -182,7 +184,7 @@ class _RiemannMixin(_HyperbolicModel):
         matrix absolute value uses a scale-relative zero-mode projector for a singular real
         Jacobian; it likewise never substitutes Rusanov.
 
-        Unlike m.enable_roe (which needs fluid roles Density/MomentumX/MomentumY + primitive 'p'),
+        Unlike m.enable_roe (which needs typed density/exact-ranked momentum roles + primitive 'p'),
         this path needs NEITHER -- it is the GENERIC provider for a moment hierarchy (HyQMOM), making
         riemann='roe' available with no Euler-4-var assumption. The FULL n_vars x n_vars Jacobian is
         always eigendecomposed (as the reference flux_ROE does), not a block partition. Consequently

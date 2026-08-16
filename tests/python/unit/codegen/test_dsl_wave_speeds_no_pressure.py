@@ -39,8 +39,10 @@ import numpy as np
 
 import pops.runtime._engine_descriptors as engine
 from pops.codegen.toolchain import _default_cxx
+from pops.physics import Density, Momentum
 from pops.physics._facade import Model
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from tests.python.support.physics_roles import X_AXIS, Y_AXIS
 from tests.python.support.requirements import missing_native_compile_requirement, repo_include
 
 fails = 0
@@ -194,8 +196,10 @@ chk("wave_speeds" in msg,
 
 print("== (6) retro-compat : modele AVEC 'p' emet toujours wave_speeds ==")
 m_p = Model("withp")
-rho, mx, my = m_p.conservative_vars("rho", "m_x", "m_y",
-                                    roles=["Density", "MomentumX", "MomentumY"])
+rho, mx, my = m_p.conservative_vars(
+    "rho", "m_x", "m_y",
+    roles=[Density(), Momentum(X_AXIS), Momentum(Y_AXIS)],
+)
 u = m_p.primitive("u", mx / rho)
 v = m_p.primitive("v", my / rho)
 p = m_p.primitive("p", 1.0 * rho)  # isotherme theta = 1

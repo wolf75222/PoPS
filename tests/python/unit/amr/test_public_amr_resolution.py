@@ -166,7 +166,8 @@ def test_public_patch_layout_roundtrips_through_resolution_and_native_lowering(m
         row.buffer for row in authorities.hierarchy.plan.transitions
     )
     assert config.transition_lookaheads == tuple(
-        row.lookahead for row in authorities.hierarchy.plan.transitions
+        (row.lookahead,) * authorities.hierarchy.plan.dimension
+        for row in authorities.hierarchy.plan.transitions
     )
     assert not hasattr(config, "regrid_margin")
     assert not hasattr(config, "regrid_grow")
@@ -515,13 +516,14 @@ def test_final_amr_authorities_derive_discrete_context_and_nesting():
     from pops.mesh._amr import GradientAbove, GradientBelow
 
     target, layout, layout_plan, authorities = _resolved_target()
-    assert layout.capabilities().get("transition_ratios") == [2, 2]
+    assert layout.capabilities().get("transition_ratios") == [[2, 2], [2, 2]]
     assert authorities.hierarchy.plan.level_count == 3
     assert [row.ratio for row in authorities.hierarchy.plan.transitions] == [
         (2, 2),
         (2, 2),
     ]
-    assert all(row.buffer == (2, 2) for row in authorities.hierarchy.plan.transitions)
+    assert all(row.buffer == (3, 3) for row in authorities.hierarchy.plan.transitions)
+    assert all(row.lookahead == 4 for row in authorities.hierarchy.plan.transitions)
     assert authorities.transfer.layout_plan_id == layout_plan.qualified_id
 
     graph = authorities.tagging.graph.graph
@@ -634,6 +636,7 @@ def test_runtime_authority_installs_exact_temporal_relation_without_spatial_infe
     artifact = SimpleNamespace(
         blocks=(),
         plan=SimpleNamespace(blocks=(), field_plans={}),
+        resolved_dimension=2,
         layout_plan=SimpleNamespace(
             qualified_id=layout_identity,
             layouts=(SimpleNamespace(adaptive=True),),
@@ -828,7 +831,7 @@ def test_runtime_tagging_compiles_refine_and_coarsen_to_data_only_vm():
     assert provider.startswith("pops.bound-amr-tagging-program.v1:sha256:")
 
 
-def test_layout_preserves_heterogeneous_transitions_before_provider_refusal():
+def test_layout_preserves_heterogeneous_exact_rank_transitions():
     from pops.amr import AMRHierarchy
     from pops.layouts import AMR
     from pops.mesh.layout_plan import LayoutHandle, normalize_layout
@@ -851,10 +854,11 @@ def test_layout_preserves_heterogeneous_transitions_before_provider_refusal():
         heterogeneous,
         handle_resolver=pops.validate(target.authoring.case).resolve,
     )
-    assert normalized.transition_ratios == (2, 4)
-    assert tuple(level.refinement for level in normalized.levels) == (1, 2, 8)
-    with pytest.raises((ValueError, NotImplementedError), match="transition|provider|ratio"):
-        pops.resolve(pops.validate(target.authoring.case), layout=heterogeneous)
+    assert normalized.transition_ratios == ((2, 2), (4, 4))
+    assert tuple(level.refinement for level in normalized.levels) == (
+        (1, 1), (2, 2), (8, 8)
+    )
+    assert pops.resolve(pops.validate(target.authoring.case), layout=heterogeneous)
 
 
 def test_symbolic_gradient_indicator_cannot_escape_discrete_resolution():

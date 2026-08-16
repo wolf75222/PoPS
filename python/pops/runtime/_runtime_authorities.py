@@ -4,6 +4,7 @@ This seam is intentionally protocol-driven: layout selection stays in ``_runtime
 authorities describe the data the chosen engine must install.  A provider that cannot execute an
 authority rejects it here, before native blocks freeze their configuration.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
@@ -16,23 +17,37 @@ def _boundary_face_ordinal(value: Any, *, dimension: int, where: str) -> int:
         raise TypeError("%s must be one canonical BoundaryHandle identity" % where)
     orientation = value.get("orientation")
     if not isinstance(orientation, dict) or set(orientation) != {
-            "schema_version", "axis", "side", "outward_sign"}:
+        "schema_version",
+        "axis",
+        "side",
+        "outward_sign",
+    }:
         raise TypeError("%s has no canonical boundary orientation" % where)
     axis = orientation["axis"]
     side = orientation["side"]
     outward_sign = orientation["outward_sign"]
-    if isinstance(axis, bool) or not isinstance(axis, int) or axis not in range(dimension) \
-            or side not in {"lower", "upper"}:
+    if (
+        isinstance(axis, bool)
+        or not isinstance(axis, int)
+        or axis not in range(dimension)
+        or side not in {"lower", "upper"}
+    ):
         raise ValueError("%s is not one rank-%d Cartesian face" % (where, dimension))
     expected_sign = -1 if side == "lower" else 1
-    if isinstance(outward_sign, bool) or not isinstance(outward_sign, int) \
-            or outward_sign != expected_sign:
+    if (
+        isinstance(outward_sign, bool)
+        or not isinstance(outward_sign, int)
+        or outward_sign != expected_sign
+    ):
         raise ValueError("%s outward sign is inconsistent with its side" % where)
     return 2 * axis + (0 if side == "lower" else 1)
 
 
 def _periodic_identification_rows(
-    data: dict[str, Any], face_types: list[str], *, dimension: int,
+    data: dict[str, Any],
+    face_types: list[str],
+    *,
+    dimension: int,
 ) -> list[list[int]]:
     raw = data.get("periodic_identifications", [])
     if not isinstance(raw, list):
@@ -43,38 +58,57 @@ def _periodic_identification_rows(
     if dimension not in (1, 2, 3) or len(face_types) != 2 * dimension:
         raise ValueError("prepared face table must contain exactly 2*Dim rows")
     required = {
-        "source", "target", "source_face", "target_face", "permutation", "signs",
+        "source",
+        "target",
+        "source_face",
+        "target_face",
+        "permutation",
+        "signs",
     }
     for index, row in enumerate(raw):
         if not isinstance(row, dict) or set(row) != required:
             raise TypeError("prepared periodic identification rows must have exact v1 keys")
         source_face = row["source_face"]
         target_face = row["target_face"]
-        if isinstance(source_face, bool) or not isinstance(source_face, int) \
-                or isinstance(target_face, bool) or not isinstance(target_face, int) \
-                or source_face not in range(2 * dimension) \
-                or target_face not in range(2 * dimension) \
-                or source_face == target_face:
+        if (
+            isinstance(source_face, bool)
+            or not isinstance(source_face, int)
+            or isinstance(target_face, bool)
+            or not isinstance(target_face, int)
+            or source_face not in range(2 * dimension)
+            or target_face not in range(2 * dimension)
+            or source_face == target_face
+        ):
             raise ValueError(
                 "prepared periodic endpoints must be distinct rank-%d face ordinals" % dimension
             )
-        if _boundary_face_ordinal(
-                row["source"], dimension=dimension,
-                where="periodic[%d].source" % index) != source_face \
-                or _boundary_face_ordinal(
-                    row["target"], dimension=dimension,
-                    where="periodic[%d].target" % index) != target_face:
+        if (
+            _boundary_face_ordinal(
+                row["source"], dimension=dimension, where="periodic[%d].source" % index
+            )
+            != source_face
+            or _boundary_face_ordinal(
+                row["target"], dimension=dimension, where="periodic[%d].target" % index
+            )
+            != target_face
+        ):
             raise ValueError("prepared periodic face ordinals changed BoundaryHandle identity")
         permutation = row["permutation"]
         signs = row["signs"]
-        if not isinstance(permutation, list) or any(
-                isinstance(value, bool) or not isinstance(value, int)
-                for value in permutation) or sorted(permutation) != list(range(dimension)):
-            raise ValueError(
-                "prepared periodic permutation must be the exact ranked permutation")
-        if not isinstance(signs, list) or len(signs) != dimension \
-                or any(isinstance(value, bool) or not isinstance(value, int)
-                       or value not in (-1, 1) for value in signs):
+        if (
+            not isinstance(permutation, list)
+            or any(isinstance(value, bool) or not isinstance(value, int) for value in permutation)
+            or sorted(permutation) != list(range(dimension))
+        ):
+            raise ValueError("prepared periodic permutation must be the exact ranked permutation")
+        if (
+            not isinstance(signs, list)
+            or len(signs) != dimension
+            or any(
+                isinstance(value, bool) or not isinstance(value, int) or value not in (-1, 1)
+                for value in signs
+            )
+        ):
             raise ValueError("prepared periodic signs must contain one -1/+1 per source axis")
         source_axis = source_face // 2
         target_axis = target_face // 2
@@ -84,7 +118,8 @@ def _periodic_identification_rows(
         target_outward = -1 if target_face % 2 == 0 else 1
         if signs[source_axis] != -source_outward * target_outward:
             raise ValueError(
-                "prepared periodic normal sign does not map source interior to target exterior")
+                "prepared periodic normal sign does not map source interior to target exterior"
+            )
         endpoints = {source_face, target_face}
         if claimed & endpoints:
             raise ValueError("one prepared face belongs to multiple periodic identifications")
@@ -92,21 +127,26 @@ def _periodic_identification_rows(
         is_mapped = permutation != list(range(dimension)) or signs != [1] * dimension
         if is_mapped:
             mapped += 1
-            rows.append([
-                source_face, target_face,
-                *(int(value) for value in permutation),
-                *(int(value) for value in signs),
-            ])
+            rows.append(
+                [
+                    source_face,
+                    target_face,
+                    *(int(value) for value in permutation),
+                    *(int(value) for value in signs),
+                ]
+            )
     periodic_faces = {
         ordinal for ordinal, face_type in enumerate(face_types) if face_type == "periodic"
     }
     if not claimed.issubset(periodic_faces):
         raise ValueError(
-            "prepared periodic face types differ from explicit identification endpoints")
+            "prepared periodic face types differ from explicit identification endpoints"
+        )
     if mapped and len(rows) != 1:
         raise NotImplementedError(
             "mapped periodic topology currently requires one identification; "
-            "mixed periodic corners need a composed native scheduler")
+            "mixed periodic corners need a composed native scheduler"
+        )
     return rows
 
 
@@ -123,11 +163,30 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
     from pops.runtime._component_execution_context import component_execution_data
 
     execution_data = component_execution_data(install_plan.execution_context)
+    adaptive = {row.adaptive for row in artifact.layout_plan.layouts}
+    if adaptive == {True}:
+        prepare_execution_lane_arguments = (
+            install_plan.execution_context.communicator.handle,
+            execution_data,
+        )
+    elif adaptive == {False}:
+        prepare_execution_lane_arguments = (
+            install_plan.execution_context.communicator.handle,
+            install_plan.execution_context.identity.token,
+        )
+    else:
+        raise ValueError("runtime boundary installation requires one coherent layout capability")
+    prepare_execution_lane = getattr(native, "_prepare_boundary_execution_lane", None)
     component_installers = {
         "apply_region_batch": getattr(native, "_install_ghost_boundary_component", None),
         "transform_faces": getattr(native, "_install_boundary_flux_component", None),
-        "residual": getattr(native, "_install_field_boundary_residual_component", None),
-        "jvp": getattr(native, "_install_field_boundary_jvp_component", None),
+    }
+    field_pair_installer = getattr(native, "_install_field_boundary_component_pair", None)
+    component_preflights = {
+        "apply_region_batch": getattr(native, "_preflight_ghost_boundary_component", None),
+        "transform_faces": getattr(native, "_preflight_boundary_flux_component", None),
+        "residual": getattr(native, "_preflight_field_boundary_residual_component", None),
+        "jvp": getattr(native, "_preflight_field_boundary_jvp_component", None),
     }
     prepared = []
     state_routes: dict[str, str] = {}
@@ -137,7 +196,8 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
         state_identities = tuple(getattr(block, "state_identities", ()))
         if len(state_identities) != 1:
             raise TypeError(
-                "each installed native block requires one exact qualified state identity")
+                "each installed native block requires one exact qualified state identity"
+            )
         state_identity = state_identities[0]
         if not isinstance(state_identity, str) or not state_identity:
             raise TypeError("native block state identity must be a non-empty qualified id")
@@ -156,9 +216,12 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
         if not callable(protocol):
             raise TypeError("resolved boundary authority lacks runtime_boundary_data(params)")
         first, second = protocol(install_plan.params), protocol(install_plan.params)
-        if type(first) is not dict or first != second \
-                or first.get("schema_version") != 1 \
-                or first.get("authority_type") != "prepared_boundary_plan":
+        if (
+            type(first) is not dict
+            or first != second
+            or first.get("schema_version") != 1
+            or first.get("authority_type") != "prepared_boundary_plan"
+        ):
             raise TypeError(
                 "runtime_boundary_data(params) must return one deterministic prepared v1 plan"
             )
@@ -172,39 +235,59 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
             raise TypeError("compiled block lacks an authenticated positive n_vars")
         faces = first.get("faces")
         expected_faces = list(range(2 * dimension))
-        if not isinstance(faces, list) or len(faces) != 2 * dimension \
-                or [row.get("ordinal") for row in faces] != expected_faces:
+        if (
+            not isinstance(faces, list)
+            or len(faces) != 2 * dimension
+            or [row.get("ordinal") for row in faces] != expected_faces
+        ):
             raise ValueError(
                 "prepared boundary plan must contain canonical axis-major rows for dimension %d"
-                % dimension)
+                % dimension
+            )
         types = [row.get("type") for row in faces]
-        if any(value not in {
-                "periodic", "foextrap", "dirichlet", "no_flux", "slip_wall", "external",
-                "characteristic_no_inflow"}
-               for value in types):
-            raise NotImplementedError("prepared boundary plan selected an unavailable face producer")
+        if any(
+            value
+            not in {
+                "periodic",
+                "foextrap",
+                "dirichlet",
+                "no_flux",
+                "slip_wall",
+                "external",
+                "characteristic_no_inflow",
+            }
+            for value in types
+        ):
+            raise NotImplementedError(
+                "prepared boundary plan selected an unavailable face producer"
+            )
         if "characteristic_no_inflow" in types and not bool(
-                getattr(component, "has_characteristic_no_inflow", False)):
+            getattr(component, "has_characteristic_no_inflow", False)
+        ):
             raise NotImplementedError(
                 "characteristic no-inflow requires a compiled model prepared with "
                 "m.roe_from_jacobian(); no component-wise or Euler-specific fallback exists"
             )
         representations = [row.get("representation", "conservative") for row in faces]
         converter_identities = [row.get("converter") for row in faces]
-        for face, (face_type, representation, converter) in enumerate(zip(
-                types, representations, converter_identities, strict=True)):
+        for face, (face_type, representation, converter) in enumerate(
+            zip(types, representations, converter_identities, strict=True)
+        ):
             if representation == "conservative":
                 if converter is not None:
                     raise ValueError(
-                        "prepared conservative boundary face must not carry a converter")
+                        "prepared conservative boundary face must not carry a converter"
+                    )
             elif representation == "primitive":
                 if face_type != "dirichlet" or not isinstance(converter, str) or not converter:
                     raise ValueError(
                         "prepared primitive boundary face %d requires an exact fixed-state "
-                        "converter identity" % face)
+                        "converter identity" % face
+                    )
             else:
                 raise NotImplementedError(
-                    "prepared boundary selected unavailable representation %r" % representation)
+                    "prepared boundary selected unavailable representation %r" % representation
+                )
             if face_type == "characteristic_no_inflow" and representation != "conservative":
                 raise NotImplementedError(
                     "characteristic no-inflow requires a conservative reference state"
@@ -212,23 +295,30 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
         face_identities = [row.get("producer") for row in faces]
         if any(not isinstance(value, str) or not value for value in face_identities):
             raise TypeError(
-                "prepared boundary faces require non-empty owner-qualified producer identities")
+                "prepared boundary faces require non-empty owner-qualified producer identities"
+            )
         component_roles = getattr(component, "cons_roles", None)
-        if not isinstance(component_roles, (list, tuple)) \
-                or len(component_roles) != ncomp \
-                or any(not isinstance(role, str) or not role for role in component_roles):
+        if (
+            not isinstance(component_roles, (list, tuple))
+            or len(component_roles) != ncomp
+            or any(not isinstance(role, str) or not role for role in component_roles)
+        ):
             raise TypeError(
-                "compiled block must expose one authenticated physical role per component")
+                "compiled block must expose one authenticated physical role per component"
+            )
         values = []
         analytic_opcodes = []
         analytic_literals = []
         analytic_clocks = []
+        has_analytic_programs = False
         plan_clocks = set()
         for comp in range(ncomp):
             for row in faces:
                 row_values = row.get("values")
                 if not isinstance(row_values, list) or len(row_values) != ncomp:
-                    raise ValueError("prepared boundary face values must exactly cover every component")
+                    raise ValueError(
+                        "prepared boundary face values must exactly cover every component"
+                    )
                 values.append(float(row_values[comp]))
         for face, row in enumerate(faces):
             programs = row.get("analytic_programs", [])
@@ -241,6 +331,7 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
                 raise NotImplementedError(
                     "prepared analytic boundary programs require conservative fixed-state inflow"
                 )
+            has_analytic_programs = has_analytic_programs or bool(programs)
             if clock is not None and (not isinstance(clock, str) or not clock or not programs):
                 raise TypeError(
                     "prepared boundary analytic Clock must be non-empty text on an analytic face"
@@ -272,17 +363,25 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
                     )
                 analytic_opcodes.append(opcodes)
                 analytic_literals.append([float(value) for value in literals])
+        # The native ABI distinguishes absent analytic-boundary authority from a
+        # populated per-face table.  Do not manufacture empty rows for an
+        # entirely non-analytic plan: those rows would select the external
+        # analytic path although no face has an authenticated program.
+        if not has_analytic_programs:
+            analytic_opcodes = []
+            analytic_literals = []
+            analytic_clocks = []
         if len(plan_clocks) > 1:
             raise ValueError("prepared analytic boundary plan cannot mix several logical Clocks")
         boundary_state_identity = _canonical_qualified_id(
-            first.get("state"), where="prepared boundary state")
+            first.get("state"), where="prepared boundary state"
+        )
         if boundary_state_identity != state_identity:
             raise ValueError("prepared boundary state differs from its owning block route")
         required_depth = first.get("required_depth")
         if isinstance(required_depth, bool) or not isinstance(required_depth, int):
             raise TypeError("prepared boundary required_depth must be an exact integer")
-        periodic_identifications = _periodic_identification_rows(
-            first, types, dimension=dimension)
+        periodic_identifications = _periodic_identification_rows(first, types, dimension=dimension)
         base_arguments = (
             block.name,
             str(first.get("identity")),
@@ -303,7 +402,59 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
         component_rows = first.get("component_regions", [])
         if not isinstance(component_rows, list):
             raise TypeError("prepared boundary component_regions must be a list")
+        field_pairs: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
+        for row in component_rows:
+            if isinstance(row, dict) and row.get("operation") in {"residual", "jvp"}:
+                key = (
+                    str(row.get("producer_identity")),
+                    str(row.get("region", {}).get("region_identity")),
+                )
+                operation = row["operation"]
+                if operation in field_pairs.setdefault(key, {}):
+                    raise ValueError(
+                        "one FieldBoundaryClosure pair has a duplicate %s operation" % operation
+                    )
+                field_pairs[key][operation] = row
+        for key, pair in field_pairs.items():
+            if set(pair) != {"residual", "jvp"}:
+                raise ValueError(
+                    "FieldBoundaryClosure %r requires one exact residual/JVP pair" % (key,)
+                )
+            residual, jvp = pair["residual"], pair["jvp"]
+            exact = (
+                "component_id",
+                "component_manifest_identity",
+                "native_interface",
+                "interface_version",
+                "producer_identity",
+                "state_identity",
+                "ghost_identity",
+                "region",
+                "states",
+                "fields",
+                "parameters",
+                "rate",
+                "nonlinear_iterate",
+            )
+            changed = [name for name in exact if residual.get(name) != jvp.get(name)]
+            residual_outputs = residual.get("outputs")
+            jvp_outputs = jvp.get("outputs")
+            if (
+                changed
+                or residual.get("directions")
+                or jvp.get("directions") != [jvp.get("state_identity")]
+                or not isinstance(residual_outputs, list)
+                or len(residual_outputs) != 1
+                or not isinstance(jvp_outputs, list)
+                or len(jvp_outputs) != 1
+                or residual_outputs[0] == jvp_outputs[0]
+            ):
+                raise ValueError(
+                    "FieldBoundaryClosure residual/JVP pair changed its exact contract: %s"
+                    % sorted(changed)
+                )
         component_jobs = []
+        prepared_components: dict[int, Any] = {}
         for row in component_rows:
             if not isinstance(row, dict):
                 raise TypeError("prepared boundary component region must be a dict")
@@ -314,15 +465,17 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
                     "boundary Handle %s requires exact component %r; it is not installed"
                     % (row.get("target", {}).get("qualified_id"), component_id)
                 )
-            if installed.component_manifest.token != row.get(
-                    "component_manifest_identity"):
+            if installed.component_manifest.token != row.get("component_manifest_identity"):
                 raise ValueError(
                     "boundary Handle %s changed installed component manifest identity"
                     % row.get("target", {}).get("qualified_id")
                 )
             interface = row.get("native_interface")
-            if not isinstance(interface, dict) or interface != installed.interface.to_data() \
-                    or row.get("interface_version") != installed.interface.version:
+            if (
+                not isinstance(interface, dict)
+                or interface != installed.interface.to_data()
+                or row.get("interface_version") != installed.interface.version
+            ):
                 raise ValueError(
                     "boundary Handle %s changed installed interface identity/version"
                     % row.get("target", {}).get("qualified_id")
@@ -334,52 +487,100 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
                 raise TypeError("boundary component region descriptor must be a dict")
             parameters = row.get("parameters")
             if not isinstance(parameters, list) or any(
-                    not isinstance(value, dict)
-                    or set(value) != {"qualified_id", "value"}
-                    for value in parameters):
+                not isinstance(value, dict) or set(value) != {"qualified_id", "value"}
+                for value in parameters
+            ):
                 raise TypeError("boundary component parameter table is not canonical")
             operation = row.get("operation")
             if not isinstance(operation, str):
                 raise TypeError("prepared boundary component operation must be text")
             install_component = component_installers.get(operation)
-            if not callable(install_component):
+            if operation in {"residual", "jvp"}:
+                install_component = None
+            elif not callable(install_component):
                 raise NotImplementedError(
                     "the selected native provider cannot install typed boundary operation %r"
+                    % operation
+                )
+            preflight_component = component_preflights.get(operation)
+            if not callable(preflight_component):
+                raise NotImplementedError(
+                    "the selected native provider cannot preflight typed boundary operation %r"
                     % operation
                 )
             for table_name in ("states", "directions", "fields", "outputs"):
                 table = row.get(table_name)
                 if not isinstance(table, list) or any(
-                        not isinstance(identity, str) or not identity for identity in table):
+                    not isinstance(identity, str) or not identity for identity in table
+                ):
                     raise TypeError(
-                        "boundary component %s table must contain qualified identities"
-                        % table_name)
+                        "boundary component %s table must contain qualified identities" % table_name
+                    )
             if row.get("state_identity") != state_identity:
                 raise ValueError(
-                    "boundary component primary state differs from its owning block route")
+                    "boundary component primary state differs from its owning block route"
+                )
             required_states.update(row["states"])
             required_fields.update(row["fields"])
             if any(identity != state_identity for identity in row["directions"]):
                 raise NotImplementedError(
-                    "native boundary JVP directions must use the owning block state storage")
+                    "native boundary JVP directions must use the owning block state storage"
+                )
             if operation in {"residual", "jvp"} and len(row["outputs"]) != 1:
                 raise NotImplementedError(
-                    "native boundary residual/JVP currently requires one exact mutable output")
+                    "native boundary residual/JVP currently requires one exact mutable output"
+                )
             if operation == "transform_faces" and (
-                    len(row["outputs"]) != 1 or
-                    row["outputs"][0] != row["state_identity"] or row["directions"]):
+                len(row["outputs"]) != 1
+                or row["outputs"][0] != row["state_identity"]
+                or row["directions"]
+            ):
                 raise NotImplementedError(
                     "native post-Riemann boundary flux requires one exact state output and no "
-                    "JVP direction table")
-            component_jobs.append((
-                install_component,
-                block.name,
-                installed.native_handle,
-                row,
-                "",
-                "",
-                execution_data,
-            ))
+                    "JVP direction table"
+                )
+            if operation == "apply_region_batch" and (
+                row["directions"]
+                or len(row["outputs"]) != 1
+                or row["outputs"][0] != row["state_identity"]
+            ):
+                raise NotImplementedError(
+                    "native GhostBoundary requires one exact primary-state output and "
+                    "no JVP direction dependencies"
+                )
+            component_jobs.append(
+                (
+                    preflight_component,
+                    install_component,
+                    block.name,
+                    installed.native_handle,
+                    row,
+                    "",
+                    "",
+                    execution_data,
+                )
+            )
+            prepared_components[id(row)] = installed.native_handle
+        if field_pairs and not callable(field_pair_installer):
+            raise NotImplementedError(
+                "the selected native provider cannot install atomic FieldBoundary pairs"
+            )
+        for pair in field_pairs.values():
+            residual, jvp = pair["residual"], pair["jvp"]
+            component_jobs.append(
+                (
+                    None,
+                    field_pair_installer,
+                    block.name,
+                    prepared_components[id(residual)],
+                    residual,
+                    prepared_components[id(jvp)],
+                    jvp,
+                    "",
+                    "",
+                    execution_data,
+                )
+            )
         reports[block.name] = MappingProxyType(dict(first))
         prepared.append((base_arguments, tuple(component_jobs)))
 
@@ -387,7 +588,8 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
     if missing_states:
         raise ValueError(
             "boundary component state dependencies lack exact native block routes: %s"
-            % sorted(missing_states))
+            % sorted(missing_states)
+        )
     available_fields = {}
     for field_plan in install_plan.artifact.plan.field_plans.values():
         unknown = getattr(getattr(field_plan, "operator", None), "unknown", None)
@@ -395,7 +597,9 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
         options = getattr(field_plan, "native_options", None)
         slot = options.get("provider_slot") if isinstance(options, Mapping) else None
         if not isinstance(identity, str) or not identity or not isinstance(slot, str) or not slot:
-            raise TypeError("resolved field plan lacks exact output identity/provider storage route")
+            raise TypeError(
+                "resolved field plan lacks exact output identity/provider storage route"
+            )
         previous = available_fields.setdefault(identity, slot)
         if previous != slot:
             raise ValueError("one solved field identity has competing native provider routes")
@@ -403,7 +607,8 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
     if missing_fields:
         raise ValueError(
             "boundary component field dependencies lack exact solved-field routes: %s"
-            % sorted(missing_fields))
+            % sorted(missing_fields)
+        )
     # The exact solved-field -> provider-storage registry is shared by every prepared runtime
     # consumer.  Boundary components use a subset, while AMR tagging may consume another subset;
     # install the complete resolved table once instead of manufacturing a tagging-only route.
@@ -417,24 +622,54 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
     discard = getattr(native, "_discard_boundary_plans", None)
     if state_routes and not callable(install_state_route):
         raise NotImplementedError(
-            "the selected native provider cannot bind qualified block state storage")
+            "the selected native provider cannot bind qualified block state storage"
+        )
     if state_routes and not callable(discard):
         raise NotImplementedError(
-            "the selected native provider cannot roll back boundary authority installation")
+            "the selected native provider cannot roll back boundary authority installation"
+        )
+    if state_routes and not callable(prepare_execution_lane):
+        raise NotImplementedError(
+            "the selected native provider cannot prepare the RuntimeInstance boundary lane"
+        )
     try:
+        # Authenticate every external GhostBoundary descriptor and ABI table before the first
+        # state route or prepared boundary plan is published. Native package preparation remains
+        # inside the all-ranks transaction and restores the accepted pre-bind image on failure.
+        for _base_arguments, component_jobs in prepared:
+            for job in component_jobs:
+                preflight = job[0]
+                if preflight is not None:
+                    (
+                        _preflight,
+                        _installer,
+                        _block,
+                        component,
+                        row,
+                        parameters_json,
+                        target_json,
+                        context,
+                    ) = job
+                    cast(Callable[..., Any], preflight)(
+                        component, row, parameters_json, target_json, context
+                    )
+        if state_routes:
+            cast(Callable[..., Any], prepare_execution_lane)(*prepare_execution_lane_arguments)
         for state_identity, block_name in sorted(state_routes.items()):
             cast(Callable[..., Any], install_state_route)(block_name, state_identity)
         install_field_route = getattr(native, "_install_field_storage_route", None)
         if field_routes and not callable(install_field_route):
             raise NotImplementedError(
-                "the selected native provider cannot bind qualified boundary field storage")
+                "the selected native provider cannot bind qualified boundary field storage"
+            )
         for field_identity, provider_slot in field_routes:
             cast(Callable[..., Any], install_field_route)(field_identity, provider_slot)
         for base_arguments, component_jobs in prepared:
             cast(Callable[..., Any], install)(*base_arguments)
             for job in component_jobs:
-                installer, *arguments = job
-                cast(Callable[..., Any], installer)(*arguments)
+                _preflight, installer, *arguments = job
+                if installer is not None:
+                    cast(Callable[..., Any], installer)(*arguments)
     except BaseException:
         cast(Callable[..., Any], discard)()
         raise
@@ -453,12 +688,14 @@ def _canonical_qualified_id(value: Any, *, where: str) -> str:
 def _require_interface_component(install_plan: Any, binding: dict[str, Any]) -> Any:
     if not isinstance(binding, dict) or binding.get("operation") != "evaluate_faces":
         raise TypeError(
-            "shared conservative flux requires one typed evaluate_faces component binding")
+            "shared conservative flux requires one typed evaluate_faces component binding"
+        )
     component_id = binding.get("component_id")
     installed = install_plan.components.get(component_id)
     if installed is None:
         raise ValueError(
-            "shared interface requires exact component %r; it is not installed" % component_id)
+            "shared interface requires exact component %r; it is not installed" % component_id
+        )
     if installed.component_manifest.token != binding.get("component_manifest_identity"):
         raise ValueError("shared interface changed installed component manifest identity")
     interface = binding.get("native_interface")
@@ -467,9 +704,11 @@ def _require_interface_component(install_plan: Any, binding: dict[str, Any]) -> 
     # authenticated structure instead of Python container implementation details.
     from pops.identity import canonical_bytes
 
-    if not isinstance(interface, dict) or canonical_bytes(interface) != canonical_bytes(
-            installed.interface.to_data()) \
-            or binding.get("interface_version") != installed.interface.version:
+    if (
+        not isinstance(interface, dict)
+        or canonical_bytes(interface) != canonical_bytes(installed.interface.to_data())
+        or binding.get("interface_version") != installed.interface.version
+    ):
         raise ValueError("shared interface changed native interface identity/version")
     if installed.native_handle is None:
         raise ValueError("shared NumericalFlux component must be loaded before native installation")
@@ -485,10 +724,12 @@ def _materialized_shared_interface_levels(native: Any, hierarchy: Any) -> tuple[
     configured = hierarchy.level_count
     if type(materialized) is not int or materialized < 1:
         raise RuntimeError(
-            "native AMR shared-interface provider returned an invalid materialized level count")
+            "native AMR shared-interface provider returned an invalid materialized level count"
+        )
     if type(configured) is not int or configured < 1 or materialized > configured:
         raise RuntimeError(
-            "materialized AMR shared-interface levels exceed the resolved hierarchy capacity")
+            "materialized AMR shared-interface levels exceed the resolved hierarchy capacity"
+        )
     return tuple(range(materialized))
 
 
@@ -521,12 +762,14 @@ def _validate_shared_interface_implicit_execution_envelope(
         raise NotImplementedError(
             "shared NumericalFlux implicit JVP is currently host-memory-only; device or "
             "managed-memory execution is refused until its paired packing and residual "
-            "evaluation have a native portability proof")
+            "evaluation have a native portability proof"
+        )
     communicator = execution_data.get("communicator_identity")
     if communicator != "serial" or rank_count != 1:
         raise NotImplementedError(
             "shared NumericalFlux implicit JVP is currently serial-only; MPI execution is "
-            "refused until its pair admission and local packing have a collective deadlock proof")
+            "refused until its pair admission and local packing have a collective deadlock proof"
+        )
 
 
 def _validate_shared_interface_implicit_execution_before_install(
@@ -568,28 +811,27 @@ def _validate_refined_shared_interface_execution(
         raise TypeError("shared-interface dynamic_regrid must be an exact bool")
     if type(implicit_jacvec_pair) is not bool or type(complete_bind) is not bool:
         raise TypeError(
-            "shared-interface implicit-JVP and complete-bind contracts must be exact bools")
-    if implicit_jacvec_pair:
-        _validate_shared_interface_implicit_execution_envelope(
-            execution_data, rank_count
+            "shared-interface implicit-JVP and complete-bind contracts must be exact bools"
         )
+    if implicit_jacvec_pair:
+        _validate_shared_interface_implicit_execution_envelope(execution_data, rank_count)
     if implicit_jacvec_pair and complete_bind and levels != (0, 1):
         raise NotImplementedError(
             "shared NumericalFlux implicit JVP requires exactly materialized levels (L0, L1) "
-            "at bind")
+            "at bind"
+        )
     communicator = execution_data.get("communicator_identity")
     if communicator == "serial":
         if rank_count != 1:
             raise RuntimeError(
-                "serial shared-interface execution cannot run in a multi-rank native world")
+                "serial shared-interface execution cannot run in a multi-rank native world"
+            )
         return
     if communicator != "MPI_COMM_WORLD":
         raise TypeError("shared-interface execution requires serial or exact MPI_COMM_WORLD")
 
 
-def finalize_runtime_authorities(
-    engine: Any, install_plan: Any, *, complete: bool = False
-) -> None:
+def finalize_runtime_authorities(engine: Any, install_plan: Any, *, complete: bool = False) -> None:
     """Install authorities for the currently materialized native level prefix.
 
     Physical ghost plans are installed before block construction so generated closures capture them.
@@ -607,6 +849,7 @@ def finalize_runtime_authorities(
         raise RuntimeError("post-block authority finalization lost pre-build boundary reports")
     native = getattr(engine, "_s", None)
     install = getattr(native, "_install_interface_flux_component", None)
+    install_provider = getattr(native, "_install_interface_flux_provider", None)
     previous_reports = getattr(engine, "_interface_authorities", None)
     if previous_reports is None:
         previous_reports = {}
@@ -625,11 +868,13 @@ def finalize_runtime_authorities(
             interface = row["interface"]
             identity = _canonical_qualified_id(
                 interface.get("handle") if isinstance(interface, dict) else None,
-                where="shared interface")
+                where="shared interface",
+            )
             previous = rows.setdefault(identity, row)
             if previous != row:
                 raise ValueError(
-                    "shared interface %s has competing runtime declarations" % identity)
+                    "shared interface %s has competing runtime declarations" % identity
+                )
             owners.setdefault(identity, set()).add(block_name)
         endpoints = report.get("interface_endpoints", [])
         if not isinstance(endpoints, list):
@@ -643,19 +888,22 @@ def finalize_runtime_authorities(
             sides = endpoint["owned_sides"]
             if not isinstance(sides, list) or any(side not in {"left", "right"} for side in sides):
                 raise TypeError("prepared shared-interface endpoint sides are invalid")
-            table = endpoint_owners.setdefault(
-                identity, {"left": set(), "right": set()})
+            table = endpoint_owners.setdefault(identity, {"left": set(), "right": set()})
             for side in sides:
                 table[side].add(block_name)
     if not rows:
         if previous_reports:
             raise RuntimeError(
-                "shared-interface declarations disappeared between authority finalizations")
+                "shared-interface declarations disappeared between authority finalizations"
+            )
         engine._interface_authorities = MappingProxyType({})
         return
-    if not callable(install):
+    if not callable(install_provider):
         raise NotImplementedError(
-            "the selected native provider cannot install shared NumericalFlux components")
+            "shared NumericalFlux installation requires the atomic "
+            "PreparedMultiBlockAmrHierarchy<Dim> interface provider; the exact single-block "
+            "AMR core publishes no per-interface executor"
+        )
 
     block_layouts: dict[str, str] = {}
     for assignment in install_plan.artifact.layout_plan.assignments:
@@ -681,14 +929,13 @@ def finalize_runtime_authorities(
 
         hierarchy = install_plan.resolved_hierarchy.plan
         frozen = type(hierarchy.regrid) is FrozenHierarchy
-        dynamic_refined = (
-            type(hierarchy.regrid) is RegridSchedule and hierarchy.level_count >= 2
-        )
+        dynamic_refined = type(hierarchy.regrid) is RegridSchedule and hierarchy.level_count >= 2
         if not frozen and not dynamic_refined:
             raise NotImplementedError(
                 "shared interface runtime finalization supports any frozen materialized L0 "
                 "prefix; dynamic regrid requires at least two configured levels and the complete "
-                "prefix active at bind")
+                "prefix active at bind"
+            )
         levels = _materialized_shared_interface_levels(native, hierarchy)
         from pops._native_selector import selected_native_module
 
@@ -713,7 +960,8 @@ def finalize_runtime_authorities(
     jobs = []
     if set(previous_reports) - set(rows):
         raise RuntimeError(
-            "installed shared-interface authority has no current resolved declaration")
+            "installed shared-interface authority has no current resolved declaration"
+        )
     import hashlib
     import json
 
@@ -733,56 +981,70 @@ def finalize_runtime_authorities(
             if not isinstance(side, dict):
                 raise TypeError("shared interface %s endpoint is not canonical" % side_name)
             layout_id = _canonical_qualified_id(
-                side.get("layout"), where="shared interface %s layout" % side_name)
-            matches = endpoint_owners.get(
-                identity, {"left": set(), "right": set()})[side_name]
+                side.get("layout"), where="shared interface %s layout" % side_name
+            )
+            matches = endpoint_owners.get(identity, {"left": set(), "right": set()})[side_name]
             if len(matches) != 1:
                 raise ValueError(
                     "shared interface %s BoundaryHandle must identify exactly one native block"
-                    % side_name)
+                    % side_name
+                )
             endpoint = next(iter(matches))
             if block_layouts.get(endpoint) != layout_id:
                 raise ValueError(
                     "shared interface %s endpoint layout differs from native block assignment"
-                    % side_name)
+                    % side_name
+                )
             endpoints.append(endpoint)
         left, right = endpoints
         if owners[identity] != {left, right}:
             raise ValueError(
-                "shared interface %s runtime ownership differs from its endpoint plans" % identity)
+                "shared interface %s runtime ownership differs from its endpoint plans" % identity
+            )
         if block_layouts[left] != block_layouts[right]:
             raise NotImplementedError(
-                "native shared NumericalFlux requires co-located endpoint blocks in one layout")
+                "native shared NumericalFlux requires co-located endpoint blocks in one layout"
+            )
         try:
             left_index, right_index = block_indices[left], block_indices[right]
         except KeyError as error:
             raise ValueError(
-                "shared interface endpoint block %r was not materialized" % error.args[0]) from None
+                "shared interface endpoint block %r was not materialized" % error.args[0]
+            ) from None
         installed = _require_interface_component(install_plan, row["component"])
         component_id = row["component"]["component_id"]
         previous = previous_reports.get(identity)
         previous_levels: tuple[int, ...] = ()
         if previous is not None:
             if not isinstance(previous, Mapping) or set(previous) != {
-                    "left_block", "right_block", "levels", "component_id",
-                    "declaration_identity"}:
-                raise TypeError(
-                    "installed shared-interface authority report is not canonical")
-            if previous["left_block"] != left or previous["right_block"] != right \
-                    or previous["component_id"] != component_id \
-                    or previous["declaration_identity"] != declaration_identity:
+                "left_block",
+                "right_block",
+                "levels",
+                "component_id",
+                "declaration_identity",
+            }:
+                raise TypeError("installed shared-interface authority report is not canonical")
+            if (
+                previous["left_block"] != left
+                or previous["right_block"] != right
+                or previous["component_id"] != component_id
+                or previous["declaration_identity"] != declaration_identity
+            ):
                 raise RuntimeError(
-                    "shared-interface authority changed after level-zero installation")
+                    "shared-interface authority changed after level-zero installation"
+                )
             raw_levels = previous["levels"]
-            if type(raw_levels) is not tuple or any(
-                    type(level) is not int for level in raw_levels):
+            if type(raw_levels) is not tuple or any(type(level) is not int for level in raw_levels):
                 raise TypeError(
-                    "installed shared-interface levels must be one exact tuple of integers")
+                    "installed shared-interface levels must be one exact tuple of integers"
+                )
             previous_levels = raw_levels
-            if previous_levels != tuple(range(len(previous_levels))) \
-                    or any(level not in levels for level in previous_levels):
+            if previous_levels != tuple(range(len(previous_levels))) or any(
+                level not in levels for level in previous_levels
+            ):
                 raise RuntimeError(
-                    "installed shared-interface levels are not a prefix of materialized levels")
+                    "installed shared-interface levels are not a prefix of materialized levels"
+                )
         # Empty overrides are deliberate: LoadedComponent owns the authenticated
         # parameters/target JSON captured from the installed component manifest.
         # Boundary binding scalars travel independently in the typed invocation
@@ -792,45 +1054,65 @@ def finalize_runtime_authorities(
         for level in levels:
             if level in previous_levels:
                 continue
-            jobs.append((
-                left_index, right_index, level, installed.native_handle,
-                interface, row["component"], parameters_json, target_json,
-                execution_data,
-            ))
-        installed_reports[identity] = MappingProxyType({
-            "left_block": left,
-            "right_block": right,
-            "levels": levels,
-            "component_id": component_id,
-            "declaration_identity": declaration_identity,
-        })
+            jobs.append(
+                {
+                    "left_block": left_index,
+                    "right_block": right_index,
+                    "level": level,
+                    "component": installed.native_handle,
+                    "interface": interface,
+                    "binding": row["component"],
+                    "parameters_json": parameters_json,
+                    "target_json": target_json,
+                    "execution_context": execution_data,
+                }
+            )
+        installed_reports[identity] = MappingProxyType(
+            {
+                "left_block": left,
+                "right_block": right,
+                "levels": levels,
+                "component_id": component_id,
+                "declaration_identity": declaration_identity,
+            }
+        )
     discard = getattr(native, "_discard_interface_flux_components", None)
     checkpoint_provider = getattr(native, "_interface_flux_installation_checkpoint", None)
-    rollback_installations = getattr(
-        native, "_rollback_interface_flux_installations", None
-    )
-    transactional_prefix = callable(checkpoint_provider) and callable(
-        rollback_installations
-    )
-    if jobs and not transactional_prefix and not callable(discard):
+    rollback_installations = getattr(native, "_rollback_interface_flux_installations", None)
+    transactional_prefix = callable(checkpoint_provider) and callable(rollback_installations)
+    atomic_provider = callable(install_provider)
+    if jobs and not atomic_provider and not transactional_prefix and not callable(discard):
         raise NotImplementedError(
-            "the selected native provider cannot roll back shared interface installation")
+            "the selected native provider cannot roll back shared interface installation"
+        )
     accepted_size = None
-    if jobs and transactional_prefix:
+    if jobs and not atomic_provider and transactional_prefix:
         accepted_size = cast(Callable[[], Any], checkpoint_provider)()
         if type(accepted_size) is not int or accepted_size < 0:
-            raise RuntimeError(
-                "native shared-interface installation checkpoint is invalid"
-            )
+            raise RuntimeError("native shared-interface installation checkpoint is invalid")
     try:
-        for job in jobs:
-            cast(Callable[..., Any], install)(*job)
+        if jobs and atomic_provider:
+            cast(Callable[[list[dict[str, Any]]], Any], install_provider)(jobs)
+        else:
+            for job in jobs:
+                cast(Callable[..., Any], install)(
+                    job["left_block"],
+                    job["right_block"],
+                    job["level"],
+                    job["component"],
+                    job["interface"],
+                    job["binding"],
+                    job["parameters_json"],
+                    job["target_json"],
+                    job["execution_context"],
+                )
     except BaseException:
         try:
-            if accepted_size is None:
-                cast(Callable[..., Any], discard)()
-            else:
-                cast(Callable[[int], Any], rollback_installations)(accepted_size)
+            if not atomic_provider:
+                if accepted_size is None:
+                    cast(Callable[..., Any], discard)()
+                else:
+                    cast(Callable[[int], Any], rollback_installations)(accepted_size)
         finally:
             engine._interface_authorities = MappingProxyType(dict(previous_reports))
         raise
@@ -838,53 +1120,101 @@ def finalize_runtime_authorities(
 
 
 def _install_amr_provider_authorities(engine: Any, install_plan: Any) -> None:
-    """Install every AMR provider through its authority-carried runtime protocol."""
+    """Authenticate every intrinsic AMR provider before retaining its authority."""
 
     providers = install_plan.amr_providers
-    if not isinstance(providers, Mapping) \
-            or tuple(providers) != ("clustering", "tagger", "reflux"):
-        raise ValueError(
-            "adaptive runtime requires exact clustering, tagger and reflux providers")
-    native = getattr(engine, "_s", None)
+    if not isinstance(providers, Mapping) or tuple(providers) != ("clustering", "tagger", "reflux"):
+        raise ValueError("adaptive runtime requires exact clustering, tagger and reflux providers")
     from pops.amr.providers import prepare_amr_provider_installation
-    from pops.runtime._component_execution_context import component_execution_data
 
     layout_identity = install_plan.artifact.layout_plan.qualified_id
-    execution_data = component_execution_data(install_plan.execution_context)
-    jobs = []
     reports = {}
-    resolved_tagging = getattr(
-        getattr(install_plan, "bootstrap_plan", None), "tagging", None)
+    prepared_rows = {}
+    resolved_tagging = getattr(getattr(install_plan, "bootstrap_plan", None), "tagging", None)
     resolved_tagging_identity = getattr(resolved_tagging, "qualified_id", None)
     for role, frozen in providers.items():
         prepared = prepare_amr_provider_installation(
             role=role,
             frozen_binding=frozen,
             layout_identity=layout_identity,
-            components=install_plan.components,
-            native=native,
             resolved_tagging_identity=resolved_tagging_identity,
         )
-        if prepared.installer is not None:
-            jobs.append((
-                prepared.installer,
-                prepared.native_handle,
-                prepared.binding,
-                execution_data,
-            ))
+        prepared_rows[prepared.role] = prepared
         reports[prepared.role] = MappingProxyType(prepared.binding)
+    tagger = prepared_rows["tagger"]
+    installation = tagger.binding.get("runtime_installation")
+    if isinstance(installation, Mapping) and installation.get("protocol") == "external_component":
+        component_id = tagger.binding.get("component_id")
+        installed = install_plan.components.get(component_id)
+        if installed is None:
+            raise ValueError(
+                "AMR Tagger requires exact component %r; it is not installed" % component_id
+            )
+        if installed.component_manifest.token != tagger.binding.get("component_manifest_identity"):
+            raise ValueError("AMR Tagger changed installed component manifest identity")
+        from pops._frozen_data import thaw_data
+        from pops.identity import canonical_bytes
 
-    discard = getattr(native, "_discard_amr_provider_components", None)
-    if jobs and not callable(discard):
-        raise NotImplementedError(
-            "the selected native provider cannot roll back AMR provider installation")
-    try:
-        for installer, handle, binding, execution in jobs:
-            cast(Callable[..., Any], installer)(handle, binding, execution)
-    except BaseException:
-        cast(Callable[..., Any], discard)()
-        raise
+        interface = tagger.binding.get("native_interface")
+        if (
+            not isinstance(interface, Mapping)
+            or canonical_bytes(thaw_data(interface))
+            != canonical_bytes(thaw_data(installed.interface.to_data()))
+            or tagger.binding.get("interface_version") != installed.interface.version
+        ):
+            raise ValueError("AMR Tagger changed installed native interface identity/version")
+        if installed.native_handle is None:
+            raise ValueError("AMR Tagger component must be loaded before native installation")
+        native = getattr(engine, "_s", None)
+        install = getattr(native, "_install_amr_tagger_component", None)
+        if not callable(install):
+            raise NotImplementedError(
+                "the selected native AMR provider cannot install a Tagger component"
+            )
+        from pops.runtime._component_execution_context import component_execution_data
+        from pops.external.artifacts import _canonical_runtime_json
+
+        manifest_data = installed.runtime_contract.manifest_data
+        parameters_json = _canonical_runtime_json(manifest_data["parameters"])
+        target_json = _canonical_runtime_json(manifest_data["target"])
+
+        install(
+            installed.native_handle,
+            thaw_data(tagger.binding),
+            parameters_json,
+            target_json,
+            component_execution_data(install_plan.execution_context),
+        )
     engine._amr_provider_authorities = MappingProxyType(reports)
+
+
+def _shared_interface_declared(reports: Any) -> bool:
+    if not isinstance(reports, Mapping) or not reports:
+        return False
+    for report in reports.values():
+        if not isinstance(report, Mapping):
+            continue
+        bindings = report.get("interface_component_bindings") or []
+        endpoints = report.get("interface_endpoints") or []
+        if bindings or endpoints:
+            return True
+    return False
+
+
+def finalize_layout_runtime_authorities(engine: Any, authority_plan: Any) -> None:
+    """Finalize one child layout's shared-interface authority before freeze.
+
+    Empty declarations publish the empty report through ``finalize_runtime_authorities``.
+    Non-empty declarations must reach the native provider or fail closed; they must never
+    survive bind unfinalized.
+    """
+    if authority_plan is None:
+        if _shared_interface_declared(getattr(engine, "_boundary_authorities", None)):
+            raise RuntimeError(
+                "layout bind reached freeze with unfinalized shared-interface declarations"
+            )
+        return
+    finalize_runtime_authorities(engine, authority_plan)
 
 
 def install_runtime_authorities(engine: Any, install_plan: Any) -> None:
@@ -903,10 +1233,13 @@ def install_runtime_authorities(engine: Any, install_plan: Any) -> None:
     if not callable(protocol):
         raise TypeError("adaptive execution authority must implement runtime_execution_data()")
     first, second = protocol(), protocol()
-    if type(first) is not dict or first != second \
-            or set(first) != {"schema_version", "authority_type", "mode", "relations"} \
-            or first.get("schema_version") != 2 \
-            or first.get("authority_type") != "amr_execution":
+    if (
+        type(first) is not dict
+        or first != second
+        or set(first) != {"schema_version", "authority_type", "mode", "relations"}
+        or first.get("schema_version") != 2
+        or first.get("authority_type") != "amr_execution"
+    ):
         raise TypeError("AMR runtime_execution_data() must return one deterministic v2 dict")
     relations = first["relations"]
     if not isinstance(relations, list):
@@ -915,7 +1248,8 @@ def install_runtime_authorities(engine: Any, install_plan: Any) -> None:
         nlevels = len(install_plan.resolved_hierarchy.plan.transitions) + 1
         relations = [
             {
-                "parent_level": parent, "child_level": parent + 1,
+                "parent_level": parent,
+                "child_level": parent + 1,
                 "temporal_ratio": {"numerator": 1, "denominator": 1},
                 "remainder_policy": "integral_only",
             }
@@ -927,23 +1261,32 @@ def install_runtime_authorities(engine: Any, install_plan: Any) -> None:
     if len(relations) != expected:
         raise ValueError("AMR execution requires one temporal relation per hierarchy transition")
     for index, row in enumerate(relations):
-        if (not isinstance(row, dict) or set(row) != {
-                "parent_level", "child_level", "temporal_ratio", "remainder_policy"}):
+        if not isinstance(row, dict) or set(row) != {
+            "parent_level",
+            "child_level",
+            "temporal_ratio",
+            "remainder_policy",
+        }:
             raise ValueError("AMR execution temporal relation has incomplete keys")
         ratio = row["temporal_ratio"]
-        if (row["parent_level"] != index or row["child_level"] != index + 1
-                or not isinstance(ratio, dict)
-                or set(ratio) != {"numerator", "denominator"}
-                or isinstance(ratio["numerator"], bool)
-                or not isinstance(ratio["numerator"], int)
-                or isinstance(ratio["denominator"], bool)
-                or not isinstance(ratio["denominator"], int)
-                or ratio["denominator"] <= 0 or ratio["numerator"] < ratio["denominator"]
-                or row["remainder_policy"] not in {
-                    "integral_only", "explicit_final_substep"}):
+        if (
+            row["parent_level"] != index
+            or row["child_level"] != index + 1
+            or not isinstance(ratio, dict)
+            or set(ratio) != {"numerator", "denominator"}
+            or isinstance(ratio["numerator"], bool)
+            or not isinstance(ratio["numerator"], int)
+            or isinstance(ratio["denominator"], bool)
+            or not isinstance(ratio["denominator"], int)
+            or ratio["denominator"] <= 0
+            or ratio["numerator"] < ratio["denominator"]
+            or row["remainder_policy"] not in {"integral_only", "explicit_final_substep"}
+        ):
             raise ValueError("AMR execution temporal relation is not canonical")
-        if (ratio["numerator"] % ratio["denominator"] != 0
-                and row["remainder_policy"] == "integral_only"):
+        if (
+            ratio["numerator"] % ratio["denominator"] != 0
+            and row["remainder_policy"] == "integral_only"
+        ):
             raise ValueError("non-integral AMR temporal relation requires an explicit remainder")
     engine.set_temporal_relations(
         [int(row["temporal_ratio"]["numerator"]) for row in relations],
@@ -964,10 +1307,16 @@ def install_runtime_authorities(engine: Any, install_plan: Any) -> None:
         from pops.runtime._runtime_mesh_lowering import flow_bootstrap_tagging
 
         flow_bootstrap_tagging(
-            engine, install_plan.bootstrap_plan, install_plan.params,
+            engine,
+            install_plan.bootstrap_plan,
+            install_plan.params,
             clock_identity=install_plan.amr_providers["tagger"]["clock_identity"],
             field_plans=install_plan.artifact.plan.field_plans,
         )
 
 
-__all__ = ["finalize_runtime_authorities", "install_runtime_authorities"]
+__all__ = [
+    "finalize_layout_runtime_authorities",
+    "finalize_runtime_authorities",
+    "install_runtime_authorities",
+]

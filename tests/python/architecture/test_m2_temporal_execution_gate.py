@@ -1,4 +1,5 @@
 """Source-only integrity checks for the executable M2 temporal gate."""
+
 from __future__ import annotations
 
 import importlib.util
@@ -26,7 +27,7 @@ def _load_runner():
 def test_m2_manifest_references_only_real_mandatory_proofs():
     data, errors = _load_runner().validate_manifest(MANIFEST)
     assert not errors, "M2 gate matrix is incomplete:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 39
+    assert len(data["check"]) == 42
 
 
 def test_m2_final_gate_has_no_deferred_requirement():
@@ -34,8 +35,15 @@ def test_m2_final_gate_has_no_deferred_requirement():
     assert not errors
     assert data["deferred"] == []
     assert {row["issue"] for row in data["check"]} == {
-        "ADC-648", "ADC-661", "ADC-662", "ADC-663", "ADC-664", "ADC-665", "ADC-666",
-        "ADC-667", "ADC-668",
+        "ADC-648",
+        "ADC-661",
+        "ADC-662",
+        "ADC-663",
+        "ADC-664",
+        "ADC-665",
+        "ADC-666",
+        "ADC-667",
+        "ADC-668",
     }
 
 
@@ -44,11 +52,14 @@ def test_m2_fallible_solver_evaluations_use_exact_native_proofs():
     assert not errors
     checks = {
         (row["requirement"], row["polarity"]): (
-            row["target"], row.get("test_regex"),
+            row["target"],
+            row.get("test_regex"),
         )
         for row in data["check"]
-        if row["requirement"] in {
-            "fallible_nonlinear_evaluation", "fallible_linear_evaluation",
+        if row["requirement"]
+        in {
+            "fallible_nonlinear_evaluation",
+            "fallible_linear_evaluation",
         }
     }
     assert checks == {
@@ -123,8 +134,7 @@ def test_m2_adc667_history_and_migration_routes_use_exact_proofs():
     checks = {
         (row["target"], row["polarity"], row["nodeid"])
         for row in data["check"]
-        if row["issue"] == "ADC-667"
-        and row["requirement"] == "temporal_restart"
+        if row["issue"] == "ADC-667" and row["requirement"] == "temporal_restart"
     }
     assert checks == {
         (
@@ -217,9 +227,7 @@ def test_m2_restart_hierarchy_and_program_only_routes_use_real_exact_proofs():
         ),
     }
     temporal_routes = {
-        row["nodeid"]
-        for row in checks
-        if row["requirement"] == "program_only_temporal_routes"
+        row["nodeid"] for row in checks if row["requirement"] == "program_only_temporal_routes"
     }
     assert temporal_routes == {
         "tests/python/architecture/test_program_only_temporal_facades.py"
@@ -227,7 +235,9 @@ def test_m2_restart_hierarchy_and_program_only_routes_use_real_exact_proofs():
         "tests/python/architecture/test_program_only_temporal_facades.py"
         "::test_amr_temporal_facades_use_amr_runtime_only_as_the_spatial_engine",
         "tests/python/architecture/test_program_only_temporal_facades.py"
-        "::test_static_system_temporal_driver_is_test_only",
+        "::test_static_system_assembler_is_retired_from_the_final_runtime_surface",
         "tests/python/architecture/test_program_only_temporal_facades.py"
         "::test_nonlinear_amr_semantics_use_the_compiled_program_not_a_blocker",
+        "tests/python/architecture/test_program_only_temporal_facades.py"
+        "::test_ssprk_semantics_have_only_typed_python_program_authority",
     }

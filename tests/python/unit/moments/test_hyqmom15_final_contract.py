@@ -55,7 +55,7 @@ def _load_example():
 
 
 def test_hyqmom15_is_a_real_model_with_exact_generic_handles() -> None:
-    model = HyQMOM15.vlasov_lorentz(exact_speeds=False)
+    model = HyQMOM15.vlasov_lorentz(frame=Cartesian2D(), exact_speeds=False)
     assert type(model) is Model
     state = model.states["U"]
     flux = model.fluxes["transport"]
@@ -72,6 +72,18 @@ def test_hyqmom15_is_a_real_model_with_exact_generic_handles() -> None:
         electric_source.reg_name,
         implicit_source.registered_operator_name,
     }
+    assert HyQMOM15.velocity_dimension == 2
+    assert HyQMOM15.supported_spatial_dimensions == (2,)
+
+
+def test_hyqmom15_refuses_an_implicit_or_wrong_rank_spatial_frame() -> None:
+    with pytest.raises(TypeError, match="explicit two-axis Cartesian frame"):
+        HyQMOM15.vlasov_lorentz(exact_speeds=False)
+    from pops.frames import Cartesian1D, Cartesian3D
+
+    for frame in (Cartesian1D(), Cartesian3D()):
+        with pytest.raises(TypeError, match="exactly the Cartesian axes x and y"):
+            HyQMOM15.vlasov_lorentz(frame=frame, exact_speeds=False)
 
 
 def test_local_closure_is_model_agnostic_and_order_checked() -> None:
@@ -81,7 +93,7 @@ def test_local_closure_is_model_agnostic_and_order_checked() -> None:
 
     assert isinstance(zero_fifth_order, LocalClosure)
     model = HyQMOM15.vlasov_lorentz(
-        closure=zero_fifth_order, exact_speeds=False)
+        frame=Cartesian2D(), closure=zero_fifth_order, exact_speeds=False)
     assert type(model) is Model
     assert tuple(model.states["U"].components) == tuple(moment_names(4))
 
@@ -91,7 +103,7 @@ def test_local_closure_is_model_agnostic_and_order_checked() -> None:
 
     with pytest.raises(ValueError, match="declares order 2"):
         HyQMOM15.vlasov_lorentz(
-            closure=wrong_order, exact_speeds=False)
+            frame=Cartesian2D(), closure=wrong_order, exact_speeds=False)
 
 
 def test_hyqmom15_closure_matches_closure_s5_matlab_oracle() -> None:
@@ -178,6 +190,94 @@ def test_final_authoring_derives_field_storage_and_complete_generic_program() ->
     assert projection.kind == "projection"
 
 
+def test_final_authoring_resolves_rate_pack_after_potential_binding() -> None:
+    from pops.codegen.component_provider_packs import resolve_component_provider_packs
+
+    target = _load_example().build_authoring()
+    module = target.model.module
+    transport = module.operator_registry().get("transport")
+    assert any(
+        getattr(space, "kind", None) == "field" and space.name == "fields"
+        for space in transport.signature.inputs
+    )
+    assert not transport.requirements.get("aux")
+
+    packs = resolve_component_provider_packs(module)
+    pack = packs.by_operator["transport"]
+    claimed = ("phi", "grad_x", "grad_y")
+    assert [
+        (key.space_name, key.component)
+        for key in pack
+        if key.space_kind == "field"
+    ] == [
+        ("electrostatic_potential", component)
+        for component in claimed
+    ]
+    assert not any(
+        key.space_kind == "field"
+        and key.space_name == "fields"
+        and key.component in claimed
+        for key in packs.complete
+    )
+
+
+@pytest.mark.compiler
+@pytest.mark.kokkos
+@pytest.mark.native_loader
+def test_final_uniform_compile_bind_run_reaches_native_projection(tmp_path) -> None:
+    import os
+
+    import pops
+    from pops._native_selector import selected_native_dimension
+
+    if os.environ.get("POPS_NATIVE_DIM", "") != "2" and selected_native_dimension() != 2:
+        pytest.skip("HyQMOM15 public Uniform lifecycle is Dim2")
+
+    example = _load_example()
+    target, resolved, artifact = example.compile_final_case(
+        cells=4, inject_nonrealizable=True,
+    )
+    assert resolved.resolved_dimension == 2
+
+    simulation = example._bind_artifact(
+        artifact, initial_state=example.build_initial_state(cells=4),
+    )
+    before = example._snapshot(simulation)
+    with pytest.raises(RuntimeError, match="hyqmom15_realizability_density") as raised:
+        pops.run(
+            simulation,
+            t_end=example.DEFAULT_T_END,
+            max_steps=1,
+            output_dir=tmp_path / "rejected_nonrealizable",
+        )
+    assert "dimension-qualified projection provider" not in str(raised.value)
+    after = example._snapshot(simulation)
+    example._require_same_snapshot(
+        before, after, where="rejected non-realizable native projection",
+    )
+    assert target.realizability.is_hyqmom15_realizable(before.state)
+    assert not target.realizability.is_hyqmom15_realizable(-before.state)
+
+
+def test_final_uniform_case_resolves_cartesian_cg_field_provider() -> None:
+    import pops
+    from pops.layouts import Uniform
+    from pops.mesh import CartesianGrid, PeriodicAxes
+
+    example = _load_example()
+    target = example.build_authoring()
+    frame = target.model.frame
+    resolved = pops.resolve(
+        pops.validate(target.case),
+        layout=Uniform(CartesianGrid(
+            frame=frame,
+            cells=(4, 4),
+            periodic=PeriodicAxes(frame.axes),
+        )),
+    )
+    assert resolved.resolved_dimension == 2
+
+
 def test_particle_number_diagnostic_integrates_m00_and_rejects_drift() -> None:
     example = _load_example()
     target = example.build_authoring()
@@ -247,6 +347,8 @@ def test_hyqmom15_projection_checks_all_moments_and_refuses_to_manufacture_densi
 def test_final_example_uses_only_the_root_lifecycle_and_public_layout_home() -> None:
     source = EXAMPLE.read_text(encoding="utf-8")
     assert "from pops.layouts import Uniform" in source
+    assert "from pops.solvers.elliptic import CartesianCG" in source
+    assert "GeometricMG" not in source
     assert "pops.mesh.layouts" not in source
     assert "BindInputs" not in source
     assert "simulation.run(" not in source

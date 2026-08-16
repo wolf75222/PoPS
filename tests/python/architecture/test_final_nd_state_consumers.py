@@ -5,6 +5,12 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from tests.python.architecture.test_final_nd_amr_consumers import (
+    ROOTS as AMR_CONSUMER_ROOTS,
+    _semantic_closure as _amr_semantic_closure,
+    _source as _amr_semantic_source,
+)
+
 
 ROOT = Path(__file__).resolve().parents[3]
 HEADERS = {
@@ -19,6 +25,8 @@ HEADERS = {
 
 
 def _source(name: str) -> str:
+    if name == "amr":
+        return _amr_semantic_source(_amr_semantic_closure(AMR_CONSUMER_ROOTS["flux"]))
     return HEADERS[name].read_text(encoding="utf-8")
 
 
@@ -64,18 +72,31 @@ def test_cartesian_consumers_keep_dimension_and_axis_static() -> None:
         assert runtime_dimension_dispatch.search(_source(name)) is None
 
 
-def test_polar_and_embedded_boundary_are_explicit_2d_capabilities() -> None:
+def test_polar_is_explicitly_planar_but_embedded_boundary_uses_exact_rank() -> None:
     polar = _source("polar")
     embedded_boundary = _source("embedded_boundary")
 
     assert "PlanarPolarCoordinateMap" in polar
     assert "prepare_cartesian_operator<2" in polar
-    assert "PreparedEmbeddedBoundaryOperator2D" in embedded_boundary
-    assert "PreparedEmbeddedBoundaryMetric2D" in embedded_boundary
-    assert "FieldView<const Real, 2>" in embedded_boundary
-    assert "PreparedMaskedCartesianOperator<2" in embedded_boundary
+    assert "PreparedEmbeddedBoundaryOperator<" in embedded_boundary
+    assert "PreparedEmbeddedBoundaryMetric<" in embedded_boundary
+    assert "FieldView<const Real, Dim>" in embedded_boundary
+    assert "PreparedMaskedCartesianOperator<Dim" in embedded_boundary
+    assert "static_assert(Dim >= 1 && Dim <= 3)" in embedded_boundary
     assert "template <int Dim" not in polar
-    assert "template <int Dim" not in embedded_boundary
+    assert "template <int Dim" in embedded_boundary
+
+
+def test_retired_disc_and_fixed_face_authorities_cannot_return() -> None:
+    assert not (ROOT / "include/pops/numerics/spatial/embedded_boundary/domain.hpp").exists()
+    assert not (ROOT / "include/pops/numerics/elliptic/eb/cut_fraction.hpp").exists()
+    for root in (ROOT / "include", ROOT / "src", ROOT / "python"):
+        for path in root.rglob("*"):
+            if path.suffix not in {".hpp", ".cpp", ".py", ".pyi"}:
+                continue
+            source = path.read_text(encoding="utf-8")
+            assert "set_disc_domain" not in source, path
+            assert "disc_mask" not in source, path
 
 
 def test_amr_helpers_execute_only_authenticated_ranked_transfers() -> None:
@@ -83,5 +104,14 @@ def test_amr_helpers_execute_only_authenticated_ranked_transfers() -> None:
     assert "PreparedTransfer<Dim>" in amr
     assert "FieldView<const Real, Dim>" in amr
     assert "const Index<Dim>& index" in amr
-    assert "TransferProvider<" in amr
-    assert "ConservativeRestriction" not in amr  # selected by the provider factory, not decoded
+    assert "PreparedTransferKernel<Dim>" in amr
+    assert "prepare_linear_prolongation" in amr
+    assert "prepare_average_down" in amr
+    assert "prepare_fill_patch" in amr
+    for kind in (
+        "ConservativeRestriction",
+        "LinearProlongation",
+        "ConstantInjection",
+        "CoarseFineGhostInterpolation",
+    ):
+        assert kind in amr

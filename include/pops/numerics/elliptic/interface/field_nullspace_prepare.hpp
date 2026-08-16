@@ -4,7 +4,7 @@
 /// @brief Communicator-safe preparation of a provider-owned field nullspace.
 
 #include <pops/numerics/elliptic/interface/field_nullspace_provider.hpp>
-#include <pops/parallel/comm.hpp>
+#include <pops/parallel/execution_lane.hpp>
 
 #include <memory>
 #include <stdexcept>
@@ -25,7 +25,8 @@ namespace pops {
 template <int Dim>
 inline PreparedFieldNullspace<Dim> prepare_field_nullspace_collectively(
     const FieldNullspaceProviderRegistry<Dim>& registry,
-    const FieldNullspaceProviderSelection& selection, FieldNullspaceProviderRequest<Dim> request) {
+    const FieldNullspaceProviderSelection& selection, FieldNullspaceProviderRequest<Dim> request,
+    const ExecutionLane& lane) {
   request.options = selection.options;
   std::string operator_facts_contract;
   bool operator_facts_failed = false;
@@ -34,10 +35,10 @@ inline PreparedFieldNullspace<Dim> prepare_field_nullspace_collectively(
   } catch (...) {
     operator_facts_failed = true;
   }
-  if (all_reduce_max(operator_facts_failed ? 1L : 0L) != 0)
+  if (all_reduce_max(operator_facts_failed ? 1L : 0L, lane) != 0)
     throw std::runtime_error("field-nullspace operator facts are malformed on at least one rank");
   if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{"field-nullspace-operator-facts", operator_facts_contract}}))
+          {{"field-nullspace-operator-facts", operator_facts_contract}}, lane))
     throw std::runtime_error("field-nullspace operator facts differ across MPI ranks");
 
   std::shared_ptr<const FieldNullspaceProvider<Dim>> provider;
@@ -58,12 +59,13 @@ inline PreparedFieldNullspace<Dim> prepare_field_nullspace_collectively(
   } catch (...) {
     declaration_failed = true;
   }
-  if (all_reduce_max(declaration_failed ? 1L : 0L) != 0)
+  if (all_reduce_max(declaration_failed ? 1L : 0L, lane) != 0)
     throw std::runtime_error("field-nullspace provider declaration failed on at least one rank");
   if (!all_ranks_agree_exact_ordered_byte_pairs(
           {{"field-nullspace-provider", provider_contract},
            {"field-nullspace-support", support_contract},
-           {"field-nullspace-expected-contract", expected_contract}}))
+           {"field-nullspace-expected-contract", expected_contract}},
+          lane))
     throw std::runtime_error("field-nullspace provider declaration differs across MPI ranks");
   if (!support.accepted())
     throw std::runtime_error("field-nullspace provider rejected the exact prepared request: " +
@@ -76,19 +78,19 @@ inline PreparedFieldNullspace<Dim> prepare_field_nullspace_collectively(
   PreparedFieldNullspace<Dim> prepared;
   bool preparation_failed = false;
   try {
-    prepared = provider->prepare(request);
+    prepared = provider->prepare(request, lane);
   } catch (...) {
     preparation_failed = true;
   }
-  if (all_reduce_max(preparation_failed ? 1L : 0L) != 0)
+  if (all_reduce_max(preparation_failed ? 1L : 0L, lane) != 0)
     throw std::runtime_error("field-nullspace provider preparation failed on at least one rank");
   const bool mismatch = prepared.provider_identity != provider->identity() ||
                         prepared.provider_version != provider->interface_version() ||
                         prepared.exact_prepared_contract != expected_contract;
-  if (all_reduce_max(mismatch ? 1L : 0L) != 0)
+  if (all_reduce_max(mismatch ? 1L : 0L, lane) != 0)
     throw std::runtime_error("field-nullspace provider published an invalid prepared contract");
   if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{"field-nullspace-actual-contract", prepared.exact_prepared_contract}}))
+          {{"field-nullspace-actual-contract", prepared.exact_prepared_contract}}, lane))
     throw std::runtime_error("prepared field nullspace differs across MPI ranks");
   return prepared;
 }

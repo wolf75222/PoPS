@@ -488,7 +488,6 @@ set(POPS_CPP_STANDARD_TESTS
   test_composite_fac_variable_eps
   test_composite_fac_tensor
   test_amr_composite_poisson
-  test_cut_fraction
   test_polar_poisson_mms
   test_polar_tensor_elliptic_mms
   test_polar_schur_multibox
@@ -514,10 +513,9 @@ set(POPS_CPP_STANDARD_TESTS
   test_coupled_source
   test_coupling_operator_contract
   test_implicit_source_nd
+  test_generic_inversion_admissibility
   test_diffusion
   test_amr_spatial_parity
-  test_disc_domain_mask
-  test_eb_transport
   test_embedded_boundary_generic
   test_aux_halo
   test_aux_coupler_bz
@@ -553,6 +551,8 @@ endforeach()
 target_link_libraries(test_amr_tensor_fac_provider PRIVATE pops_runtime_amr)
 target_link_libraries(test_generated_amr_system_block PRIVATE pops_runtime_amr)
 target_link_libraries(test_multiblock_interface_scheduler PRIVATE pops_runtime_amr)
+target_link_libraries(test_amr_composite_poisson PRIVATE pops_runtime_amr)
+target_link_libraries(test_amr_spatial_parity PRIVATE pops_runtime_amr)
 target_link_libraries(test_prepared_embedded_boundary_nd PRIVATE pops_runtime_system)
 pops_cap_opt_for_kokkos_ram(test_multiblock_interface_scheduler)
 
@@ -599,6 +599,9 @@ pops_add_gtest_suite(NAME test_amr_potential SOURCES "${_src}" EXTRA_LIBS ${CMAK
 pops_test_source(_src test_amr_program_diffusion)
 pops_add_gtest_suite(NAME test_amr_program_diffusion SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
+pops_test_source(_src test_amr_program_embedded_boundary)
+pops_add_gtest_suite(NAME test_amr_program_embedded_boundary SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+
 pops_test_source(_src test_amr_program_positivity_floor)
 pops_add_gtest_suite(NAME test_amr_program_positivity_floor SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
@@ -620,9 +623,9 @@ pops_test_source(_src test_amr_riemann_native)
 pops_native_loader_definitions(_native_defs)
 pops_add_gtest_suite(NAME test_amr_riemann_native SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
 
-pops_test_source(_src test_amr_imex_native)
+pops_test_source(_src test_amr_synthetic_program_loader_transaction)
 pops_native_loader_definitions(_native_defs)
-pops_add_gtest_suite(NAME test_amr_imex_native SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
+pops_add_gtest_suite(NAME test_amr_synthetic_program_loader_transaction SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
 
 pops_test_source(_src test_amr_system_contract)
 pops_add_gtest_suite(NAME test_amr_system_contract SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
@@ -645,8 +648,8 @@ pops_add_gtest_suite(NAME test_amr_multiblock_coupled_source SOURCES "${_src}" E
 pops_test_source(_src test_amr_coupled_source_role_strict)
 pops_add_gtest_suite(NAME test_amr_coupled_source_role_strict SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
-pops_test_source(_src test_amr_multiblock_imex)
-pops_add_gtest_suite(NAME test_amr_multiblock_imex SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+pops_test_source(_src test_amr_multiblock_implicit_transaction)
+pops_add_gtest_suite(NAME test_amr_multiblock_implicit_transaction SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
 pops_test_source(_src test_amr_multiblock_regrid_union)
 pops_add_gtest_suite(NAME test_amr_multiblock_regrid_union SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
@@ -779,6 +782,9 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_prepared_embedded_boundary_nd 2)
   set(POPS_MPI_RANKS_test_amr_regrid_mpi_parity 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_amr_dynamic_active_depth 1 2 4)
+  set(POPS_MPI_RANKS_test_mpi_cell_temporal_program 2)
+  set(POPS_MPI_RANKS_test_mpi_cell_temporal_program_multibox 2)
+  set(POPS_MPI_RANKS_test_mpi_cell_temporal_program_collective_rollback 2)
   set(POPS_MPI_RANKS_test_mpi_cell_temporal_program_refusal 2)
   set(POPS_MPI_RANKS_test_mpi_system_solve_fields 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_system_fft 1 2 4)
@@ -797,6 +803,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_multiblock_interface_scheduler 2)
   set(POPS_MPI_RANKS_test_mpi_nd_translation_exchange 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_halo_exchange 1 2 4)
+  set(POPS_MPI_RANKS_test_mpi_auxiliary_ghost_fill 2 3)
   set(POPS_MPI_RANKS_test_mpi_prepared_amr_ghost_fill 3)
   set(POPS_MPI_RANKS_test_mpi_coupler_inject 4)
   set(POPS_MPI_RANKS_test_mpi_fft_distributed 4)
@@ -808,6 +815,11 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_pure_field_algebra_extreme_dot 2)
   set(POPS_MPI_RANKS_test_geometric_mg 2)
   set(POPS_MPI_RANKS_test_coupled_fieldsolve 2)
+  set(POPS_MPI_RANKS_test_amr_program_positivity_floor 2)
+  set(POPS_MPI_RANKS_test_amr_multiblock_coupled_source 2)
+  set(POPS_MPI_RANKS_test_program_context_contract 2)
+  set(POPS_MPI_RANKS_test_program_runtime 2)
+  set(POPS_MPI_RANKS_test_generated_amr_system_block 2)
   set(POPS_MPI_RANKS_test_fill_boundary_cache 1 2 4)
   set(POPS_MPI_RANKS_test_copy_schedule_cache 1 2 4)
   set(POPS_MPI_RANKS_test_world_communicator 1 2)
@@ -824,6 +836,9 @@ if(POPS_HAS_MPI)
     test_mpi_tensor_fac_provider_nd
     test_amr_regrid_mpi_parity
     test_mpi_amr_dynamic_active_depth
+    test_mpi_cell_temporal_program
+    test_mpi_cell_temporal_program_multibox
+    test_mpi_cell_temporal_program_collective_rollback
     test_mpi_cell_temporal_program_refusal
     test_mpi_system_solve_fields
     test_mpi_system_fft
@@ -842,6 +857,7 @@ if(POPS_HAS_MPI)
     test_mpi_multiblock_interface_scheduler
     test_mpi_nd_translation_exchange
     test_mpi_halo_exchange
+    test_mpi_auxiliary_ghost_fill
     test_mpi_prepared_amr_ghost_fill
     test_mpi_coupler_inject
     test_mpi_fft_distributed
@@ -873,6 +889,11 @@ if(POPS_HAS_MPI)
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_system pops_runtime_amr)
     elseif(_test STREQUAL "test_mpi_system_analytic_level_set")
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_system pops_runtime_amr)
+    elseif(_test STREQUAL "test_mpi_cell_temporal_program" OR
+           _test STREQUAL "test_mpi_cell_temporal_program_multibox" OR
+           _test STREQUAL "test_mpi_cell_temporal_program_collective_rollback" OR
+           _test STREQUAL "test_mpi_cell_temporal_program_refusal")
+      list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_amr)
     elseif(_test STREQUAL "test_mpi_multiblock_interface_scheduler")
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_amr)
     elseif(_test MATCHES "^test_mpi_system_" OR _test STREQUAL "test_mpi_coupled_source")
@@ -886,6 +907,10 @@ if(POPS_HAS_MPI)
     endif()
     if(_test STREQUAL "test_mpi_system_layout_transfer")
       pops_native_loader_definitions(_compile_definitions)
+    elseif(_test STREQUAL "test_mpi_cell_temporal_program_multibox")
+      list(APPEND _compile_definitions POPS_CELL_TEMPORAL_MULTIBOX_EVERY_AXIS_PROOF=1)
+    elseif(_test STREQUAL "test_mpi_cell_temporal_program_collective_rollback")
+      list(APPEND _compile_definitions POPS_CELL_TEMPORAL_COLLECTIVE_ROLLBACK_PROOF=1)
     endif()
     if(DEFINED POPS_MPI_RANK_PARITY_${_test})
       if(DEFINED POPS_MPI_RANKS_${_test})
@@ -937,10 +962,16 @@ if(POPS_HAS_MPI)
   # declared authoritatively as `mpi_variants` in tests/test_manifest.toml; the source-only
   # architecture gate compares this projection and these CMake registrations exactly.
   set(POPS_CPP_MPI_VARIANT_TESTS
+    test_prepared_embedded_boundary_nd
+    test_amr_program_positivity_floor
+    test_amr_multiblock_coupled_source
     test_krylov_workspace_reentrancy
     test_pure_field_algebra_extreme_dot
     test_geometric_mg
     test_coupled_fieldsolve
+    test_program_runtime
+    test_program_context_contract
+    test_generated_amr_system_block
     test_fill_boundary_cache
     test_copy_schedule_cache
     test_world_communicator
@@ -1004,6 +1035,21 @@ if(POPS_HAS_MPI)
           ${_test} ${_np}
           GTEST_FILTER
             "test_coupled_fieldsolve.named_solve_honors_every_qualified_stage_without_live_mutation")
+      elseif(_test STREQUAL "test_program_runtime")
+        pops_add_mpi_rank_test(
+          ${_test} ${_np}
+          GTEST_FILTER
+            "ProgramRuntime.PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTransactionally:ProgramRuntime.GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTransactional")
+      elseif(_test STREQUAL "test_program_context_contract")
+        pops_add_mpi_rank_test(
+          ${_test} ${_np}
+          GTEST_FILTER
+            "ProgramContextContract.PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection:ProgramContextContract.ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProviderInvocation")
+      elseif(_test STREQUAL "test_generated_amr_system_block")
+        pops_add_mpi_rank_test(
+          ${_test} ${_np}
+          GTEST_FILTER
+            "GeneratedAmrSystemBlock.DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance")
       else()
         pops_add_mpi_rank_test(${_test} ${_np})
       endif()
@@ -1011,6 +1057,15 @@ if(POPS_HAS_MPI)
   endforeach()
   set_tests_properties(test_coupled_fieldsolve_np2 PROPERTIES
     ENVIRONMENT "OMP_NUM_THREADS=1"
+    TIMEOUT 30)
+  set_tests_properties(test_amr_program_positivity_floor_np2 PROPERTIES
+    ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1"
+    TIMEOUT 30)
+  set_tests_properties(test_amr_multiblock_coupled_source_np2 PROPERTIES
+    ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1"
+    TIMEOUT 30)
+  set_tests_properties(test_program_runtime_np2 test_generated_amr_system_block_np2 PROPERTIES
+    ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1"
     TIMEOUT 30)
 endif()
 

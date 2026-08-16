@@ -135,7 +135,7 @@ class _ImmutableTransferPolicy:
     def amr_transfer_kernel_data(self) -> dict[str, Any]:
         required = (
             "native_route", "order", "ghost_depth", "dimensions",
-            "refinement_ratios", "conservative", "temporal",
+            "refinement_ratio_policy", "refinement_ratios", "conservative", "temporal",
         )
         return {
             "schema_version": 1,
@@ -183,8 +183,9 @@ class ConservativeLinear(_ImmutableTransferPolicy):
     native_route: ClassVar[str] = "conservative_linear"
     order: ClassVar[int] = 2
     ghost_depth: ClassVar[tuple[int, ...]] = (1,)
-    dimensions: ClassVar[tuple[int, ...]] = (2,)
-    refinement_ratios: ClassVar[tuple[int, ...]] = (2,)
+    dimensions: ClassVar[tuple[int, ...]] = (1, 2, 3)
+    refinement_ratio_policy: ClassVar[str] = "hierarchy_exact_rank"
+    refinement_ratios: ClassVar[tuple[int, ...]] = ()
     conservative: ClassVar[bool] = True
     temporal: ClassVar[bool] = False
 
@@ -194,78 +195,66 @@ class VolumeAverage(_ImmutableTransferPolicy):
     native_route: ClassVar[str] = "volume_average"
     order: ClassVar[int] = 1
     ghost_depth: ClassVar[tuple[int, ...]] = (0,)
-    dimensions: ClassVar[tuple[int, ...]] = (2,)
-    refinement_ratios: ClassVar[tuple[int, ...]] = (2,)
+    dimensions: ClassVar[tuple[int, ...]] = (1, 2, 3)
+    refinement_ratio_policy: ClassVar[str] = "hierarchy_exact_rank"
+    refinement_ratios: ClassVar[tuple[int, ...]] = ()
     conservative: ClassVar[bool] = True
     temporal: ClassVar[bool] = False
 
 
 @dataclass(frozen=True, slots=True)
-class _ConservativeCoarseFineSecondOrder(_ImmutableTransferPolicy):
+class _CoarseFineGhostSecondOrder(_ImmutableTransferPolicy):
+    """Prepared limited-linear cell ghost interpolation."""
+
     native_route: ClassVar[str] = "conservative_coarse_fine"
     order: ClassVar[int] = 2
-    ghost_depth: ClassVar[tuple[int, ...]] = (2,)
-    dimensions: ClassVar[tuple[int, ...]] = (2,)
-    refinement_ratios: ClassVar[tuple[int, ...]] = (2,)
-    conservative: ClassVar[bool] = True
+    ghost_depth: ClassVar[tuple[int, ...]] = (1,)
+    dimensions: ClassVar[tuple[int, ...]] = (1, 2, 3)
+    refinement_ratio_policy: ClassVar[str] = "hierarchy_exact_rank"
+    refinement_ratios: ClassVar[tuple[int, ...]] = ()
+    conservative: ClassVar[bool] = False
     temporal: ClassVar[bool] = False
 
 
 @dataclass(frozen=True, slots=True)
-class _ConservativeCoarseFineFifthOrder(_ImmutableTransferPolicy):
+class _CoarseFineGhostFifthOrder(_ImmutableTransferPolicy):
+    """Prepared quartic cell-average reconstruction for fifth-order fine ghosts."""
+
     native_route: ClassVar[str] = "conservative_polynomial5_coarse_fine"
     order: ClassVar[int] = 5
     ghost_depth: ClassVar[tuple[int, ...]] = (3,)
-    dimensions: ClassVar[tuple[int, ...]] = (2,)
-    refinement_ratios: ClassVar[tuple[int, ...]] = (2,)
-    conservative: ClassVar[bool] = True
+    dimensions: ClassVar[tuple[int, ...]] = (1, 2, 3)
+    refinement_ratio_policy: ClassVar[str] = "hierarchy_exact_rank"
+    refinement_ratios: ClassVar[tuple[int, ...]] = ()
+    conservative: ClassVar[bool] = False
     temporal: ClassVar[bool] = False
 
 
 @dataclass(frozen=True, slots=True)
-class ConservativeCoarseFine(_ImmutableTransferPolicy):
-    """Capability family selected from the resolved spatial order and halo."""
+class CoarseFineGhostInterpolation(_ImmutableTransferPolicy):
+    """Capability family selected from the resolved cell reconstruction accuracy.
+
+    Both routes are real prepared native kernels.  The fifth-order candidate is distinct from the
+    limited-linear provider and cannot silently downgrade when its radius-two parent stencil is
+    unavailable.
+    """
 
     def amr_transfer_kernel_candidates(self) -> tuple[Any, ...]:
-        return (
-            _ConservativeCoarseFineSecondOrder(),
-            _ConservativeCoarseFineFifthOrder(),
-        )
+        return (_CoarseFineGhostSecondOrder(), _CoarseFineGhostFifthOrder())
 
 
 @dataclass(frozen=True, slots=True)
 class LinearTimeInterpolation(_ImmutableTransferPolicy):
+    """Pointwise linear interpolation over one exact qualified parent clock window."""
+
     native_route: ClassVar[str] = "linear_time_interpolation"
     order: ClassVar[int] = 2
     ghost_depth: ClassVar[tuple[int, ...]] = (0,)
-    dimensions: ClassVar[tuple[int, ...]] = (2,)
-    refinement_ratios: ClassVar[tuple[int, ...]] = (2,)
+    dimensions: ClassVar[tuple[int, ...]] = (1, 2, 3)
+    refinement_ratio_policy: ClassVar[str] = "hierarchy_exact_rank"
+    refinement_ratios: ClassVar[tuple[int, ...]] = ()
     conservative: ClassVar[bool] = True
     temporal: ClassVar[bool] = True
-
-
-@dataclass(frozen=True, slots=True)
-class DivergencePreservingFace(_ImmutableTransferPolicy):
-    """Coupled normal-face vector prolongation; never an independent scalar interpolation."""
-
-    native_route: ClassVar[str] = "face_divergence_preserving"
-    order: ClassVar[int] = 2
-    ghost_depth: ClassVar[tuple[int, ...]] = (1,)
-    dimensions: ClassVar[tuple[int, ...]] = (2,)
-    refinement_ratios: ClassVar[tuple[int, ...]] = (2,)
-    conservative: ClassVar[bool] = True
-    temporal: ClassVar[bool] = False
-
-
-@dataclass(frozen=True, slots=True)
-class BilinearNode(_ImmutableTransferPolicy):
-    native_route: ClassVar[str] = "node_bilinear"
-    order: ClassVar[int] = 2
-    ghost_depth: ClassVar[tuple[int, ...]] = (1,)
-    dimensions: ClassVar[tuple[int, ...]] = (2,)
-    refinement_ratios: ClassVar[tuple[int, ...]] = (2,)
-    conservative: ClassVar[bool] = False
-    temporal: ClassVar[bool] = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -273,24 +262,54 @@ class StateTransfer(_ImmutableTransferPolicy):
     policy_kind: ClassVar[str] = "state"
     prolongation: ConservativeLinear = field(default_factory=ConservativeLinear)
     restriction: VolumeAverage = field(default_factory=VolumeAverage)
-    coarse_fine: ConservativeCoarseFine = field(default_factory=ConservativeCoarseFine)
-    time_interpolation: LinearTimeInterpolation = field(
-        default_factory=LinearTimeInterpolation
+    coarse_fine: CoarseFineGhostInterpolation = field(
+        default_factory=CoarseFineGhostInterpolation
     )
+    temporal: LinearTimeInterpolation = field(default_factory=LinearTimeInterpolation)
+
+
+@dataclass(frozen=True, slots=True)
+class DivergencePreservingFace(_ImmutableTransferPolicy):
+    """Coupled Cartesian face prolongation preserving area means and discrete divergence."""
+
+    native_route: ClassVar[str] = "divergence_preserving_face"
+    order: ClassVar[int] = 2
+    ghost_depth: ClassVar[tuple[int, ...]] = (1,)
+    dimensions: ClassVar[tuple[int, ...]] = (1, 2, 3)
+    refinement_ratio_policy: ClassVar[str] = "hierarchy_exact_rank"
+    refinement_ratios: ClassVar[tuple[int, ...]] = ()
+    conservative: ClassVar[bool] = True
+    temporal: ClassVar[bool] = False
 
 
 @dataclass(frozen=True, slots=True)
 class FaceTransfer(_ImmutableTransferPolicy):
+    """Transfer policy for one complete oriented Cartesian face vector."""
+
     policy_kind: ClassVar[str] = "face"
-    prolongation: DivergencePreservingFace = field(
-        default_factory=DivergencePreservingFace
-    )
+    prolongation: DivergencePreservingFace = field(default_factory=DivergencePreservingFace)
+
+
+@dataclass(frozen=True, slots=True)
+class NodeMultilinear(_ImmutableTransferPolicy):
+    """Tensor multilinear prolongation between exact-ranked Cartesian node grids."""
+
+    native_route: ClassVar[str] = "node_multilinear"
+    order: ClassVar[int] = 2
+    ghost_depth: ClassVar[tuple[int, ...]] = (0,)
+    dimensions: ClassVar[tuple[int, ...]] = (1, 2, 3)
+    refinement_ratio_policy: ClassVar[str] = "hierarchy_exact_rank"
+    refinement_ratios: ClassVar[tuple[int, ...]] = ()
+    conservative: ClassVar[bool] = False
+    temporal: ClassVar[bool] = False
 
 
 @dataclass(frozen=True, slots=True)
 class NodeTransfer(_ImmutableTransferPolicy):
+    """Transfer policy for primitive node-centered fields."""
+
     policy_kind: ClassVar[str] = "node"
-    prolongation: BilinearNode = field(default_factory=BilinearNode)
+    prolongation: NodeMultilinear = field(default_factory=NodeMultilinear)
 
 
 @dataclass(frozen=True, slots=True)
@@ -557,20 +576,20 @@ class BergerRigoutsos:
 
 
 __all__ = [
-    "ConservativeCoarseFine",
+    "CoarseFineGhostInterpolation",
     "ConservativeLinear",
-    "BilinearNode",
     "BergerRigoutsos",
     "DivergencePreservingFace",
     "EllipticRecompute",
     "FaceTransfer",
     "FluxRegisterReflux",
-    "LinearTimeInterpolation",
     "Knapsack",
     "MeasuredKnapsack",
+    "NodeMultilinear",
     "NodeTransfer",
     "PatchTopologyRebuild",
     "StateTransfer",
+    "LinearTimeInterpolation",
     "SpaceFillingCurve",
     "SymbolicTagger",
     "RoundRobin",

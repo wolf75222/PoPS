@@ -131,6 +131,7 @@ def _mpi_module(tmp_path, *, library_bytes=b"mpi-library", library_name="libmpi.
     }
     return SimpleNamespace(
         __has_mpi__=True,
+        __native_dimension__=2,
         __mpi_contract__=data,
         __native_loader_contract__=_native_loader_contract(),
     ), library
@@ -144,6 +145,7 @@ def test_every_runtime_loader_matches_host_mpi_seam(monkeypatch, tmp_path, has_m
     mpi_module, library = _mpi_module(tmp_path)
     module = mpi_module if has_mpi else SimpleNamespace(
         __has_mpi__=False,
+        __native_dimension__=2,
         __mpi_contract__=None,
         __native_loader_contract__=_native_loader_contract(),
     )

@@ -62,7 +62,6 @@ def _transfer_capabilities() -> TransferCapabilities:
         ghost_depth=(1,),
         dimensions=(2,),
         conservative=True,
-        refinement_ratios=(2,),
     )
 
 
@@ -118,12 +117,15 @@ class ThirdPartyPhysicalAction:
         return _descriptor(key, route=self.route)
 
 
-def _prepared_entry(action=ThirdPartyPhysicalAction()):
+DEFAULT_PHYSICAL_ACTION = ThirdPartyPhysicalAction()
+
+
+def _prepared_entry(action=DEFAULT_PHYSICAL_ACTION):
     state = Handle("U", kind="state", owner=OwnerPath.model("third-party-state"))
     builder = LayoutPlanBuilder(OWNER)
     layout = builder.layout("adaptive", final_amr_layout(cartesian_grid(n=8)))
     builder.assign_state(state, layout)
-    plan = builder.resolve(states=(state,))
+    builder.resolve(states=(state,))
     key = _key()
     requirement = TransferRequirement(
         state,

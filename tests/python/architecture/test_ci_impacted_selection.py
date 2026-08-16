@@ -10,7 +10,7 @@ Ground-truth edges asserted below were verified by reading the source:
 * ``python/pops/runtime/_bind_adapters.py`` is imported directly by the final typed bind gate;
 * ``python/pops/numerics/riemann/waves.py`` is imported by
   ``test_wave_speed_providers.py``;
-* the codegen cross-test helper: ``test_dsl_cse.py`` imports sibling ``test_dsl_brick.py``;
+* the codegen cross-test helper: ``test_dsl_cse.py`` imports sibling ``test_dsl_compose.py``;
 * the LAZY (function-scope) edge ``pops.codegen._phases`` ->
   ``pops.runtime._bind_adapters`` must be captured, so a ``_bind_adapters`` change
   reaches the orchestration-dependent tests.
@@ -101,11 +101,11 @@ def test_bind_adapters_change_selects_bind_adapters_test():
 # --------------------------------------------------------------------------- #
 # Cross-test edge closure (both directions)                                    #
 # --------------------------------------------------------------------------- #
-def test_cross_test_forward_pulls_shared_brick_helper():
-    """Selecting the CSE test pulls the sibling brick helper it imports."""
+def test_cross_test_forward_pulls_shared_compose_helper():
+    """Selecting the CSE test pulls the sibling compose helper it imports."""
     _, edges = cic.test_imports(REPO_ROOT)
     importer = "tests/python/unit/codegen/test_dsl_cse.py"
-    helper = "tests/python/unit/codegen/test_dsl_brick.py"
+    helper = "tests/python/unit/codegen/test_dsl_compose.py"
     assert edges.get(importer) == {helper}
     selected = {importer}
     cic._close_cross_test(selected, edges)
@@ -113,9 +113,9 @@ def test_cross_test_forward_pulls_shared_brick_helper():
 
 
 def test_cross_test_reverse_pulls_dependents_of_shared_helper():
-    """Selecting the brick helper pulls its remaining sibling dependent."""
+    """Selecting the compose helper pulls its remaining sibling dependent."""
     _, edges = cic.test_imports(REPO_ROOT)
-    selected = {"tests/python/unit/codegen/test_dsl_brick.py"}
+    selected = {"tests/python/unit/codegen/test_dsl_compose.py"}
     cic._close_cross_test(selected, edges)
     assert "tests/python/unit/codegen/test_dsl_cse.py" in selected
 
@@ -195,7 +195,7 @@ def test_plan_python_direct_test_edit_pulls_cross_test_family(tmp_path):
     assert outputs["python_mode"] == "subset"
     assert "direct-test" in outputs["python_why"]
     assert importer in selected
-    assert "tests/python/unit/codegen/test_dsl_brick.py" in selected
+    assert "tests/python/unit/codegen/test_dsl_compose.py" in selected
 
 
 def test_plan_python_nested_suite_test_is_in_the_selection_universe(tmp_path):
@@ -296,11 +296,17 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         if suite["mpi_variants"]
     }
     assert variant_targets == {
+        "test_amr_multiblock_coupled_source": (2,),
+        "test_amr_program_positivity_floor": (2,),
         "test_copy_schedule_cache": (1, 2, 4),
         "test_coupled_fieldsolve": (2,),
         "test_fill_boundary_cache": (1, 2, 4),
+        "test_generated_amr_system_block": (2,),
         "test_geometric_mg": (2,),
         "test_krylov_workspace_reentrancy": (2,),
+        "test_prepared_embedded_boundary_nd": (2,),
+        "test_program_context_contract": (2,),
+        "test_program_runtime": (2,),
         "test_pure_field_algebra_extreme_dot": (2,),
         "test_world_communicator": (1, 2),
     }
@@ -318,7 +324,7 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         for suite in all_suites
     )
     ctest_plan = sel.cpp_mpi_ctest_plan(manifest)
-    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 84
+    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 92
     assert ctest_plan["test_mpi_external_lifecycle_np1"] == 1
     assert ctest_plan["test_mpi_hdf5_collective_np2"] == 2
     assert ctest_plan["test_mpi_amr_compiled_parity_rank_parity"] == 4
@@ -962,7 +968,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "test \"${#compile_contracts[@]}\" -eq 3" in mpi_block
     assert "--verify-contracts" in mpi_block
     assert 'run_with_heartbeat "MPI Python module link" 14m' in mpi_block
-    assert 'run_with_heartbeat "MPI native test build" 8m' in mpi_block
+    assert 'run_with_heartbeat "MPI native test build" 14m' in mpi_block
     assert "mem_available=" in mpi_block
     assert "-DPOPS_BUILD_PYTHON=ON" in mpi_block
     assert "scripts/ci_select_tests.py cpp-label" in mpi_block
@@ -1006,8 +1012,12 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     # Python MPI and collective-HDF5 matrices in this same required job.  Keep
     # the outer watchdog aligned with that complete sequential contract.
     assert "timeout-minutes: 180" in mpi_block
+    assert "timeout-minutes: 50" in mpi_block
     assert "timeout-minutes: 35" in mpi_block
-    assert '/usr/bin/python3 -u "$mpi_test"' in mpi_block
+    assert "native_script_bootstrap=" in mpi_block
+    assert "select_native_dimension(2)" in mpi_block
+    assert '-u -c "$native_script_bootstrap" "$mpi_test"' in mpi_block
+    assert '/usr/bin/python3 -u "$mpi_test"' not in mpi_block
     assert "mpiexec -n \"$mpi_ranks\"" not in mpi_block
     assert "test_amr_clean_route_program_mpi.py" not in mpi_block
     assert "test_amr_history_mpi.py" not in mpi_block
@@ -1093,7 +1103,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         "            ccache_maxsize: 2G"
     ) in openmp_block
     assert openmp_block.count("if: matrix.kind == 'cpp'") == 6
-    assert openmp_block.count("if: matrix.kind == 'python'") == 6
+    assert openmp_block.count("if: matrix.kind == 'python'") == 7
     assert "CCACHE_MAXSIZE: ${{ matrix.ccache_maxsize }}" in openmp_block
     assert "uses: actions/cache/restore@v6" in openmp_block
     assert "uses: actions/cache/save@v6" in openmp_block
@@ -1162,7 +1172,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     )
     assert "name: Cache exact OpenMP Python module" in openmp_block
     assert "id: openmp-python-module-cache" in openmp_block
-    assert "pops-module-openmp-${{ runner.os }}" in openmp_block
+    assert "pops-module-openmp-dim2-${{ runner.os }}" in openmp_block
     assert "id: openmp-python" in openmp_block
     assert "steps.openmp-python.outputs.python-version" in openmp_block
     assert "hashFiles('include/**', 'src/**', 'python/bindings/**'" in openmp_block
@@ -1171,6 +1181,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         "\n      - name: Cache exact OpenMP Python module", 1
     )[1].split("\n      - name:", 1)[0]
     assert "restore-keys:" not in openmp_module_cache_block
+    assert "path: build-kokkos-py/python/pops" in openmp_module_cache_block
     assert (
         "if: matrix.kind == 'python' && "
         "steps.openmp-python-module-cache.outputs.cache-hit == 'true'"
@@ -1180,12 +1191,27 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         "steps.openmp-python-module-cache.outputs.cache-hit != 'true'"
     ) in openmp_block
     assert "rsync -aI --delete" in openmp_block
-    assert "exact OpenMP module cache hit but no _pops*.so present" in openmp_block
+    assert "--exclude='_native/***'" in openmp_block
+    assert "Exact authenticated OpenMP module cache hit; native rebuild skipped." in openmp_block
+    openmp_native_auth_block = openmp_block.split(
+        "\n      - name: Authenticate Dim=2 OpenMP Python native variant", 1
+    )[1].split("\n      - name:", 1)[0]
+    assert "if: matrix.kind == 'python'" in openmp_native_auth_block
+    assert "cache-hit" not in openmp_native_auth_block
+    assert "PYTHONPATH: ${{ github.workspace }}/build-kokkos-py/python" in openmp_native_auth_block
+    assert "python3 scripts/verify_installed_native.py" in openmp_native_auth_block
+    assert '--expect-dim "$POPS_NATIVE_DIM" --expect-serial' in openmp_native_auth_block
     assert openmp_block.index("Cache exact OpenMP Python module") < openmp_block.index(
         "Restore ccache (Kokkos OpenMP"
     )
     assert openmp_block.index("Build + install Kokkos (OpenMP)") < openmp_block.index(
         "Restore ccache (Kokkos OpenMP"
+    )
+    assert openmp_block.index("Reuse exact OpenMP module") < openmp_block.index(
+        "Authenticate Dim=2 OpenMP Python native variant"
+    )
+    assert openmp_block.index("Build module Python `pops`") < openmp_block.index(
+        "Authenticate Dim=2 OpenMP Python native variant"
     )
     assert (
         "matrix.kind != 'python' || "
@@ -1293,7 +1319,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "Save prewarm ccache" not in python_prewarm_block
     assert "CCACHE_CACHE_KEY" not in python_prewarm_block
     assert "timeout-minutes: 50" in python_shards_block
-    assert "shard: [0, 1, 2, 3, 4, 5]" in python_shards_block
+    assert "shard: [0, 1, 2, 3, 4, 5, 6]" in python_shards_block
     assert 'POPS_REQUIRE_NATIVE_TESTS: "1"' in python_shards_block
     assert "timeout-minutes: 30" in python_cache_block
     assert 'POPS_REQUIRE_NATIVE_TESTS: "1"' in python_cache_block

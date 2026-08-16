@@ -12,7 +12,7 @@ from pops.codegen._backends import lower_backend  # noqa: E402
 from pops.math import Integer, Real  # noqa: E402
 from pops.mesh import PolarMesh  # noqa: E402
 from pops.mesh._amr import Refine, RegridEvery  # noqa: E402
-from pops.mesh.geometry import Disc, DiscDomain, HalfPlane  # noqa: E402
+from pops.mesh.geometry import Disc, HalfPlane  # noqa: E402
 from pops.model import Handle, OwnerPath, ParamHandle  # noqa: E402
 from pops.numerics.reconstruction import (  # noqa: E402
     required_ghost_depth,
@@ -81,8 +81,6 @@ def test_matrix_is_closed_and_runtime_is_rejected_by_every_structural_use():
         (lambda p: Disc(center=(p, 0.0)), ParamUse.MESH_EXTENT),
         (lambda p: HalfPlane(point=(p, 0.0)), ParamUse.MESH_EXTENT),
         (lambda p: HalfPlane(normal=(p, 0.0)), ParamUse.MESH_EXTENT),
-        (lambda p: DiscDomain(radius=p), ParamUse.MESH_EXTENT),
-        (lambda p: DiscDomain(center=(p, 0.0)), ParamUse.MESH_EXTENT),
         (lambda p: HistoryInterval(p), ParamUse.SCHEDULE),
         (lambda p: Revolve(p), ParamUse.SHAPE),
         (lambda p: Dense().stored_slots(p), ParamUse.SHAPE),
@@ -131,9 +129,6 @@ def test_const_params_are_explicitly_unwrapped_at_structural_sites():
     )
     assert Disc(center=center, radius=ConstParam("disc_radius", 0.4)).options() == {
         "center": (0.25, 0.75), "radius": 0.4}
-    assert DiscDomain(
-        center=center, radius=ConstParam("domain_radius", 0.3)).lower() == (
-            0.25, 0.75, 0.3, "none")
     assert HalfPlane(
         point=center,
         normal=(ConstParam("normal_x", 1.0), ConstParam("normal_y", 0.0)),

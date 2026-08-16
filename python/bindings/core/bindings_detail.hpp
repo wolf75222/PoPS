@@ -228,7 +228,8 @@ py::tuple ranked_amr_patches_to_python(const std::vector<AmrPatch<Dim>>& patches
     py::tuple lower(Dim), upper(Dim);
     for (int axis = 0; axis < Dim; ++axis) {
       lower[axis] = patches[index].box.lo[axis];
-      upper[axis] = patches[index].box.hi[axis] + 1;
+      // AMR patch_boxes() owns the native Box<Dim> inclusive [lo, hi] contract.
+      upper[axis] = patches[index].box.hi[axis];
     }
     result[index] = py::make_tuple(patches[index].level, std::move(lower), std::move(upper));
   }
@@ -252,9 +253,23 @@ std::vector<AmrPatch<Dim>> ranked_amr_patches_from_python(const py::handle& valu
     const int level = py::cast<int>(row[0]);
     if (level < 0)
       throw py::value_error(std::string(owner) + " levels must be non-negative");
-    const py::tuple bounds = py::make_tuple(py::make_tuple(row[1], row[2]));
-    std::vector<Box<Dim>> boxes = ranked_boxes_from_python<Dim>(bounds, owner);
-    result.push_back(AmrPatch<Dim>{level, boxes.front()});
+    if (!PyTuple_CheckExact(row[1].ptr()) || !PyTuple_CheckExact(row[2].ptr()) ||
+        py::len(row[1]) != Dim || py::len(row[2]) != Dim)
+      throw py::type_error(std::string(owner) + " bounds must match the native dimension");
+    const py::tuple lower = py::reinterpret_borrow<py::tuple>(row[1]);
+    const py::tuple upper = py::reinterpret_borrow<py::tuple>(row[2]);
+    Index<Dim> lower_index;
+    Index<Dim> upper_index;
+    for (int axis = 0; axis < Dim; ++axis) {
+      if (!PyLong_CheckExact(lower[axis].ptr()) || PyBool_Check(lower[axis].ptr()) ||
+          !PyLong_CheckExact(upper[axis].ptr()) || PyBool_Check(upper[axis].ptr()))
+        throw py::type_error(std::string(owner) + " bounds must contain exact integers");
+      lower_index[axis] = py::cast<int>(lower[axis]);
+      upper_index[axis] = py::cast<int>(upper[axis]);
+      if (upper_index[axis] < lower_index[axis])
+        throw py::value_error(std::string(owner) + " contains an inverted box");
+    }
+    result.push_back(AmrPatch<Dim>{level, Box<Dim>{lower_index, upper_index}});
   }
   return result;
 }

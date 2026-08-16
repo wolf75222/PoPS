@@ -253,7 +253,9 @@ class LevelTransition:
         fine = _positive_int(self.fine_level, where="fine_level", minimum=1)
         if fine != coarse + 1:
             raise ValueError("LevelTransition fine_level must equal coarse_level + 1")
-        ratio = _axes(self.ratio, where="LevelTransition.ratio", minimum=2)
+        ratio = _axes(self.ratio, where="LevelTransition.ratio", minimum=1)
+        if not any(value > 1 for value in ratio):
+            raise ValueError("LevelTransition.ratio must refine at least one spatial axis")
         buffer = _axes(self.buffer, where="LevelTransition.buffer", minimum=0)
         if len(ratio) != len(buffer):
             raise ValueError("LevelTransition ratio and buffer dimensions must match")

@@ -7,6 +7,7 @@ from pops.identity import make_identity
 from pops.model.bind_schema import BindSchema
 from pops.problem._snapshot import AuthoringSnapshot
 from pops.time import Program
+from tests.python.support.block_instance_owner import make_testing_block_instance_owner
 from tests.python.support.resolved_amr_plan import resolved_amr_plan
 from tests.python.support.layout_plan import resolved_layout_contract
 
@@ -20,7 +21,7 @@ class CanonicalValue:
 
 
 class CompiledComponent:
-    def __init__(self, name, *, target):
+    def __init__(self, name, *, target, consumer_owner_qid="", declares_auxiliary_providers=False):
         self.name = name
         self.program = None
         self.program_name = name
@@ -34,6 +35,8 @@ class CompiledComponent:
         self.cxx = "clang++"
         self.std = "c++23"
         self.native_dimension = 2
+        self.consumer_owner_qid = consumer_owner_qid
+        self.declares_auxiliary_providers = declares_auxiliary_providers
         self.artifact_identity = make_identity("artifact", {"component": name})
 
     def inspect(self):
@@ -56,7 +59,7 @@ class CompiledComponent:
             "schema_version": 3,
             "state_spaces": ("U",),
             "cons_names": ("u",),
-            "cons_roles": ("VelocityX",),
+            "cons_roles": ("velocity:0",),
             "n_vars": 1,
             "params": {},
             "provider_components": (),
@@ -80,7 +83,15 @@ def artifact_fixture(*, target="system", block_names=("fluid",), bind_schema=Non
             tag_parameter=tag_parameter,
             name="typed-artifact",
         )
-        components = tuple(CompiledComponent(name, target=target) for name in block_names)
+        components = tuple(
+            CompiledComponent(
+                name,
+                target=target,
+                consumer_owner_qid=resolved.instance_owner_qid,
+                declares_auxiliary_providers=resolved.declares_auxiliary_providers,
+            )
+            for name, resolved in zip(block_names, plan.blocks, strict=True)
+        )
         blocks = tuple(
             CompiledBlockArtifact(name, component, resolved.spatial, resolved.state_spaces)
             for name, component, resolved in zip(
@@ -112,7 +123,8 @@ def artifact_fixture(*, target="system", block_names=("fluid",), bind_schema=Non
         blocks=tuple(
             ResolvedBlock(
                 name, model, block_spatial, "production", ("U",),
-                ("test::%s::state::U" % name,))
+                ("test::%s::state::U" % name,),
+                make_testing_block_instance_owner("typed-artifact", name, "source-" + name))
             for name, model, block_spatial in zip(
                 block_names, source_models, spatial, strict=True)
         ),
@@ -124,7 +136,15 @@ def artifact_fixture(*, target="system", block_names=("fluid",), bind_schema=Non
         capabilities={"cpu": True, "amr": target == "amr_system"},
         lowering_coverage=layout_coverage,
     )
-    components = tuple(CompiledComponent(name, target=target) for name in block_names)
+    components = tuple(
+        CompiledComponent(
+            name,
+            target=target,
+            consumer_owner_qid=resolved.instance_owner_qid,
+            declares_auxiliary_providers=resolved.declares_auxiliary_providers,
+        )
+        for name, resolved in zip(block_names, plan.blocks, strict=True)
+    )
     blocks = tuple(
         CompiledBlockArtifact(name, component, resolved.spatial, resolved.state_spaces)
         for name, component, resolved in zip(block_names, components, plan.blocks, strict=True)

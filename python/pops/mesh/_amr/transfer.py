@@ -37,6 +37,20 @@ def _policy_data(policy: Any, *, expected_kind: str, where: str) -> dict[str, An
     return data
 
 
+def _missing_native_capability(data: dict[str, Any], *, where: str) -> str | None:
+    availability = data.get("availability")
+    if availability is None:
+        return None
+    if not isinstance(availability, dict) or set(availability) != {
+            "status", "required_native_capability"}:
+        raise TypeError("%s returned an invalid availability contract" % where)
+    capability = availability.get("required_native_capability")
+    if availability.get("status") != "unavailable" \
+            or not isinstance(capability, str) or not capability:
+        raise TypeError("%s returned an invalid unavailable capability identity" % where)
+    return capability
+
+
 def _kernel_data(kernel: Any, *, where: str) -> dict[str, Any]:
     protocol = getattr(kernel, "amr_transfer_kernel_data", None)
     if not callable(protocol):
@@ -44,7 +58,8 @@ def _kernel_data(kernel: Any, *, where: str) -> dict[str, Any]:
     data = protocol()
     required = {
         "schema_version", "kernel_type", "native_route", "order", "ghost_depth",
-        "dimensions", "refinement_ratios", "conservative", "temporal",
+        "dimensions", "refinement_ratio_policy", "refinement_ratios", "conservative",
+        "temporal",
     }
     if not isinstance(data, dict) or set(data) != required \
             or data.get("kernel_type") != "amr_transfer_kernel":
@@ -137,7 +152,7 @@ class AMRTransfer:
         if self._frozen:
             raise RuntimeError("AMRTransfer is frozen")
         data = _policy_data(policy, expected_kind="state", where="AMRTransfer.state")
-        for route in ("prolongation", "restriction", "coarse_fine", "time_interpolation"):
+        for route in ("prolongation", "restriction", "coarse_fine", "temporal"):
             kernel = _kernel_family_data(
                 getattr(policy, route, None), where="AMRTransfer.state.%s" % route)
             if data.get("routes", {}).get(route) != kernel:
@@ -157,10 +172,11 @@ class AMRTransfer:
         if self._frozen:
             raise RuntimeError("AMRTransfer is frozen")
         data = _policy_data(policy, expected_kind="face", where="AMRTransfer.face")
-        kernel = _kernel_data(
-            getattr(policy, "prolongation", None), where="AMRTransfer.face.prolongation")
-        if data.get("routes", {}).get("prolongation") != kernel:
-            raise ValueError("AMRTransfer.face identity does not authenticate prolongation")
+        if _missing_native_capability(data, where="AMRTransfer.face") is None:
+            kernel = _kernel_data(
+                getattr(policy, "prolongation", None), where="AMRTransfer.face.prolongation")
+            if data.get("routes", {}).get("prolongation") != kernel:
+                raise ValueError("AMRTransfer.face identity does not authenticate prolongation")
         if isinstance(subjects, (str, bytes)):
             raise TypeError("AMRTransfer.face requires an ordered vector of face subjects")
         try:
@@ -181,10 +197,11 @@ class AMRTransfer:
         if self._frozen:
             raise RuntimeError("AMRTransfer is frozen")
         data = _policy_data(policy, expected_kind="node", where="AMRTransfer.node")
-        kernel = _kernel_data(
-            getattr(policy, "prolongation", None), where="AMRTransfer.node.prolongation")
-        if data.get("routes", {}).get("prolongation") != kernel:
-            raise ValueError("AMRTransfer.node identity does not authenticate prolongation")
+        if _missing_native_capability(data, where="AMRTransfer.node") is None:
+            kernel = _kernel_data(
+                getattr(policy, "prolongation", None), where="AMRTransfer.node.prolongation")
+            if data.get("routes", {}).get("prolongation") != kernel:
+                raise ValueError("AMRTransfer.node identity does not authenticate prolongation")
         if not isinstance(self._nodes, list):
             raise RuntimeError("AMRTransfer is frozen")
         self._nodes.append((
@@ -308,13 +325,15 @@ class AMRTransfer:
             raise ValueError("AMRTransfer requires an adaptive layout with level transitions")
         transition_ratios = tuple(
             _ranked_axis_values(
-                (ratio,),
+                ratio,
                 dimension=dimension,
                 where="AMR layout transition_ratios[%d]" % index,
-                minimum=2,
+                minimum=1,
             )
             for index, ratio in enumerate(normalized.transition_ratios)
         )
+        if any(not any(value > 1 for value in ratio) for ratio in transition_ratios):
+            raise ValueError("AMR layout transition ratios must refine at least one axis")
         ratios = tuple(dict.fromkeys(transition_ratios))
         return layout, dimension, normalized.geometry.axis_names, ratios
 
@@ -335,7 +354,7 @@ class AMRTransfer:
                 ratio,
                 dimension=dimension,
                 where="AMR transfer refinement_ratio",
-                minimum=2,
+                minimum=1,
             ),
             conservative=policy.conservative,
             temporal=temporal,
@@ -351,6 +370,7 @@ class AMRTransfer:
             conservative=policy.conservative,
             temporal=policy.temporal,
             refinement_ratios=policy.refinement_ratios,
+            refinement_ratio_policy=policy.refinement_ratio_policy,
         )
 
     @staticmethod
@@ -404,7 +424,7 @@ class AMRTransfer:
             ("prolongation", PROLONGATION),
             ("restriction", RESTRICTION),
             ("coarse_fine", COARSE_FINE_FILL),
-            ("time_interpolation", TEMPORAL_INTERPOLATION),
+            ("temporal", TEMPORAL_INTERPOLATION),
         )
         for subject, policy, layout in self._states:
             layout, dimension, _, ratios = self._layout_contract(
@@ -452,7 +472,9 @@ class AMRTransfer:
                             ghost_depth=required_ghost,
                             dimension=dimension,
                             refinement_ratio=ratio,
-                            conservative=True,
+                            # Ghost values never participate in a conserved cell average; the
+                            # accepted state is conserved by prolongation/restriction/reflux.
+                            conservative=False,
                             temporal=False,
                         )
                     else:
@@ -470,6 +492,13 @@ class AMRTransfer:
                         provider=provider,
                     )
         for subjects, policy, layout in self._faces:
+            missing = _missing_native_capability(
+                _policy_data(policy, expected_kind="face", where="AMRTransfer.face"),
+                where="AMRTransfer.face",
+            )
+            if missing is not None:
+                raise NotImplementedError(
+                    "AMRTransfer.face is unavailable: missing native capability %s" % missing)
             resolved_layout, dimension, axis_names, ratios = self._layout_contract(
                 layout_plan, subjects[0], layout
             )
@@ -501,7 +530,7 @@ class AMRTransfer:
                 for axis in range(dimension)
             )
             provider = TransferProvider(
-                provider_handle(subjects, "face_pair", "amr_transfer_provider"),
+                provider_handle(subjects, "oriented_face_vector", "amr_transfer_provider"),
                 tuple(
                     TransferProviderRoute(
                         key,
@@ -511,7 +540,7 @@ class AMRTransfer:
                     for key in keys
                 ),
                 CanonicalOptions({
-                    "paired_subjects": [subject.qualified_id for subject in subjects],
+                    "oriented_subjects": [subject.qualified_id for subject in subjects],
                 }),
             )
             resolver.register(provider)
@@ -527,6 +556,13 @@ class AMRTransfer:
                         provider=provider,
                     )
         for subject, policy, layout in self._nodes:
+            missing = _missing_native_capability(
+                _policy_data(policy, expected_kind="node", where="AMRTransfer.node"),
+                where="AMRTransfer.node",
+            )
+            if missing is not None:
+                raise NotImplementedError(
+                    "AMRTransfer.node is unavailable: missing native capability %s" % missing)
             resolved_layout, dimension, _, ratios = self._layout_contract(
                 layout_plan, subject, layout
             )
@@ -758,7 +794,11 @@ class AMRTransferBuilder:
                 if len(needed_ghost) == 1:
                     needed_ghost *= requirement.accuracy.dimension
 
-                def capability_surplus(candidate: Any) -> tuple[Any, ...]:
+                def capability_surplus(
+                    candidate: Any,
+                    requirement: TransferRequirement = requirement,
+                    needed_ghost: tuple[int, ...] = needed_ghost,
+                ) -> tuple[Any, ...]:
                     _, candidate_route = candidate
                     available = candidate_route.capabilities.ghost_depth
                     if len(available) == 1:

@@ -74,6 +74,54 @@ def _required_block_index(block_idx: Any, block: Any, where: str) -> int:
     return index
 
 
+def _value_owner_block(value: Any) -> Any:
+    """Return one declared block identity carried by ``value``, or None."""
+    block = getattr(value, "block", None)
+    if block is not None:
+        return block
+    state_ref = getattr(value, "state_ref", None)
+    return getattr(state_ref, "block_ref", None)
+
+
+def _unique_dataflow_owner_block(value: Any, *, where: str) -> Any:
+    """Return the single authenticated block on ``value``'s producer dataflow.
+
+    Top-level generated Cartesian ops may themselves be unqualified. Their owner is
+    the unique BlockHandle on the op or its producer SSA, never a default index.
+    """
+    seen: set[int] = set()
+    owners: list[Any] = []
+
+    def visit(node: Any) -> None:
+        ident = getattr(node, "id", None)
+        key = ident if isinstance(ident, int) else id(node)
+        if key in seen:
+            return
+        seen.add(key)
+        block = _value_owner_block(node)
+        if block is not None and block not in owners:
+            owners.append(block)
+        for item in getattr(node, "inputs", ()) or ():
+            visit(item)
+
+    visit(value)
+    if len(owners) == 1:
+        return owners[0]
+    if not owners:
+        raise ValueError(
+            "%s: generated Cartesian operator has no unique authenticated owner block"
+            % where)
+    raise ValueError(
+        "%s: generated Cartesian operator has conflicting owner blocks %s"
+        % (where, sorted(block_name(item) for item in owners)))
+
+
+def _cartesian_generated_owner_index(block_idx: Any, value: Any, *, where: str) -> int:
+    """Map a generated Cartesian op to its unique runtime owner index."""
+    return _required_block_index(
+        block_idx, _unique_dataflow_owner_block(value, where=where), where)
+
+
 def _canonical_metadata_int(value: Any, *, where: str) -> int:
     """Decode one graph-canonical integer without accepting an approximate numeric cast."""
     if isinstance(value, bool):
@@ -109,13 +157,24 @@ def _append_pointwise_solve_report(
 
     code = "%s_code_%d" % (stem, solve.id)
     report = "%s_report_%d" % (stem, solve.id)
+    lane = "%s_lane" % report
+    lines.append(
+        "const pops::ExecutionLane& %s = ctx.prepared_execution_lane();" % lane
+    )
     if active_mask is None:
-        reduction = "pops::reduce_max(%s, 0)" % status
+        reduction = "pops::all_reduce_max(pops::reduce_max_local(%s, 0), %s)" % (
+            status,
+            lane,
+        )
     else:
         if block is None:
             raise ValueError("pointwise masked solve reduction requires a runtime block index")
-        reduction = "ctx.pointwise_status_max(%d, %s, %s)" % (
-            block, status, active_mask)
+        reduction = "ctx.pointwise_status_max(%d, %s, %s, %s)" % (
+            block,
+            status,
+            active_mask,
+            lane,
+        )
     lines.append("const int %s = static_cast<int>(%s);" % (code, reduction))
     lines.append("pops::SolveReport %s;" % report)
     lines.append("if (%s == 0) %s.mark_solved();" % (code, report))
@@ -130,8 +189,9 @@ def _append_pointwise_solve_report(
         % (report, failure_action("invalid_evaluation")))
     outcome = "%s_outcome_%d" % (stem, solve.id)
     lines.append(
-        "pops::SolveOutcome %s = pops::SolveOutcome::collective_world(std::move(%s));"
-        % (outcome, report))
+        "pops::SolveOutcome %s = pops::SolveOutcome::collective_lane("
+        "std::move(%s), %s);" % (outcome, report, lane)
+    )
     _append_solve_report_guard(program, solve, outcome, lines, label=label)
 
 
@@ -145,8 +205,15 @@ def _append_local_nonlinear_report(
         if action_kind == "reject_attempt"
         else "pops::SolveAction::kFailRun"
     )
+    lane = "%s_lane" % report
     priority = "%s_priority" % report
-    lines.append("const int %s = static_cast<int>(pops::reduce_max(%s, 10));" % (priority, status))
+    lines.append(
+        "const pops::ExecutionLane& %s = ctx.prepared_execution_lane();" % lane
+    )
+    lines.append(
+        "const int %s = static_cast<int>(pops::all_reduce_max("
+        "pops::reduce_max_local(%s, 10), %s));" % (priority, status, lane)
+    )
     reduced = {
         "status": "%s_status" % report,
     }
@@ -166,7 +233,11 @@ def _append_local_nonlinear_report(
     for suffix, component, kind in fields:
         token = "%s_%s" % (report, suffix)
         reduced[suffix] = token
-        expression = "pops::reduce_max(%s, %d)" % (status, component)
+        expression = "pops::all_reduce_max(pops::reduce_max_local(%s, %d), %s)" % (
+            status,
+            component,
+            lane,
+        )
         if kind == "int":
             lines.append("const int %s = static_cast<int>(%s);" % (token, expression))
         else:
@@ -175,11 +246,12 @@ def _append_local_nonlinear_report(
     reported_failure = "%s_reported_failure" % report
     failed_count = "%s_failed_count" % report
     lines += [
-        "const pops::Real %s = pops::reduce_sum(%s, 9);" % (failed_count, status),
+        "const pops::Real %s = pops::all_reduce_sum("
+        "pops::reduce_sum_local(%s, 9), %s);" % (failed_count, status, lane),
         "pops::LocalNonlinearFailureLocation<pops::kNativeDimension> %s;" % location,
         "if (%s > pops::Real(0))" % failed_count,
-        "  %s = pops::collective_first_local_nonlinear_failure(%s, %s, 10, 8);"
-        % (location, status, priority),
+        "  %s = pops::collective_first_local_nonlinear_failure(%s, %s, 10, 8, %s);"
+        % (location, status, priority, lane),
         "if (%s > pops::Real(0) && (!%s.found || %s.priority != %s))"
         % (failed_count, location, location, priority),
         "  throw std::runtime_error("
@@ -210,8 +282,8 @@ def _append_local_nonlinear_report(
     if outcome == report:
         outcome = "%s_outcome" % report
     lines.append(
-        "pops::SolveOutcome %s = pops::SolveOutcome::collective_world(std::move(%s));"
-        % (outcome, report)
+        "pops::SolveOutcome %s = pops::SolveOutcome::collective_lane("
+        "std::move(%s), %s);" % (outcome, report, lane)
     )
     return outcome
 
@@ -520,8 +592,8 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>(ctx.scratch_state_like(ctx.state(%d)));"
             % (state_resource, bidx))
         prelude.append(
-            "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>(ctx.alloc_scalar_field(1, 0));"
-            % status_resource)
+            "auto* %s = &ctx.scalar_scratch(%d, 0, ctx.state(%d), 1, 0);"
+            % (status_resource, int(v.id), bidx))
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = *%s;" % (var[v.id], state_resource))
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = *%s;" % (status, status_resource))
         lines.append(
@@ -531,12 +603,14 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             node_model, v.attrs["transform"], var[state_in.id], var[v.id], status,
             active_mask, bidx,
             provider_plans=provider_plans,
-            consumer_qid=program_provider_consumer_qid(node_model, v.id),
+            consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block),
         )
         reduced = "transform_failed_%d" % v.id
         lines.append(
-            "const pops::Real %s = ctx.pointwise_status_max(%d, %s, %s);"
-            % (reduced, bidx, status, active_mask))
+            "const pops::Real %s = ctx.pointwise_status_max("
+            "%d, %s, %s, ctx.prepared_execution_lane());"
+            % (reduced, bidx, status, active_mask)
+        )
         lines.append("if (%s != pops::Real(0)) {" % reduced)
         lines.append(
             "  throw pops::runtime::program::StepAttemptRejected("
@@ -550,6 +624,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # `where` op selects on); no aux / model needed -- it reads component 0 of the input field.
         (field_in,) = v.inputs
         var[v.id] = "m%d" % v.id
+        if target == "system":
+            lines.append(
+                "ctx.require_cartesian_generated_operator(%d, %s);"
+                % (bidx, json.dumps("cell_compare")))
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%d, 0, %s, 1, 1);"
                      % (var[v.id], int(v.id), var[field_in.id]))
         lines += _emit_cell_compare_kernel(var[field_in.id], var[v.id], v.attrs["cmp"],
@@ -560,6 +638,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # ternary is decided per cell inside the kernel (NOT the scalar lazy ``branch`` op).
         mask_in, a_in, b_in = v.inputs
         var[v.id] = "w%d" % v.id
+        if target == "system":
+            lines.append(
+                "ctx.require_cartesian_generated_operator(%d, %s);"
+                % (bidx, json.dumps("where")))
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[a_in.id]))
         lines += _emit_where_kernel(var[mask_in.id], var[a_in.id], var[b_in.id], var[v.id])
@@ -663,10 +745,6 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                     "ctx.rhs_scratch(%d, %d, %s);"
                     % (flux_vars[axis], int(v.id), axis_index + 1, var[state_in.id])
                 )
-            lines.append(
-                "ctx.neg_div_named_flux_into(%s, {%s});"
-                % (var[v.id], ", ".join("&%s" % flux_vars[axis] for axis in axes))
-            )
             named_source_subslot = 1 + len(axes)
         plan_exprs = []
         if named_fluxes is not None:
@@ -676,15 +754,31 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         for source_name in named:
             plan_exprs.extend(_model_impl(node_model)._source_terms[source_name])
         consumer_qid = (
-            program_provider_consumer_qid(node_model, v.id) if plan_exprs else None
+            program_provider_consumer_qid(node_model, v.id, v.block)
+            if plan_exprs or named_fluxes is not None or named
+            else None
         )
         if named_fluxes is not None:
+            if consumer_qid is None:
+                raise ValueError(
+                    "named-flux kernel requires an explicit Program consumer qid"
+                )
             # The named-flux kernel and named sources below are one Program node:
             # their shared plan is the first-use union, not an operator plan.
             lines += _emit_flux_kernel(
                 node_model, named_fluxes, var[state_in.id], flux_vars, bidx,
                 provider_plans=provider_plans, consumer_qid=consumer_qid,
                 plan_exprs=plan_exprs,
+            )
+            lines.append(
+                "ctx.neg_div_named_flux_into(%d, %s, %s, {%s}, %d);"
+                % (
+                    bidx,
+                    var[state_in.id],
+                    var[v.id],
+                    ", ".join("&%s" % flux_vars[axis] for axis in axes),
+                    int(v.id),
+                )
             )
         for source_subslot, s in enumerate(named, start=named_source_subslot):
             # R += S_s(U, aux): assemble the named source into a scratch (same per-cell kernel as
@@ -693,6 +787,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             lines.append("pops::MultiFab<pops::kNativeDimension>& %s = "
                          "ctx.rhs_scratch(%d, %d, %s);"
                          % (ssrc, int(v.id), source_subslot, var[state_in.id]))
+            if consumer_qid is None:
+                raise ValueError(
+                    "named-source kernel requires an explicit Program consumer qid"
+                )
             lines += _emit_source_kernel(
                 node_model, s, var[state_in.id], ssrc, bidx,
                 provider_plans=provider_plans, consumer_qid=consumer_qid,
@@ -711,7 +809,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         lines += _emit_source_kernel(
             node_model, v.attrs["source"], var[state_in.id], var[v.id], bidx,
             provider_plans=provider_plans,
-            consumer_qid=program_provider_consumer_qid(node_model, v.id),
+            consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block),
         )
     elif v.op == "apply":
         state_in = v.inputs[0]  # apply inputs = (state[, fields]); the state is first
@@ -724,7 +822,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                      % (var[v.id], int(v.id), var[state_in.id]))
         lines += _emit_apply_kernel(node_model, v.attrs["linear_source"], var[state_in.id], var[v.id],
                                     bidx, provider_plans=provider_plans,
-                                    consumer_qid=program_provider_consumer_qid(node_model, v.id))
+                                    consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block))
     elif v.op == "solve_local_linear":
         rhs_in = v.inputs[0]  # solve inputs = (rhs_state, op_value[, fields]); rhs first
         var[v.id] = "u%d" % v.id
@@ -741,7 +839,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             node_model, v.attrs["linear_source"], v.attrs["a_coeff"],
             var[rhs_in.id], var[v.id], status, bidx,
             provider_plans=provider_plans,
-            consumer_qid=program_provider_consumer_qid(node_model, v.id),
+            consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block),
         )
         _append_pointwise_solve_report(
             program, v, status, lines, label="local_linear", stem="local_solve")
@@ -751,10 +849,6 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         guess_in = v.inputs[0]  # solve inputs = (initial_guess,)
         var[v.id] = "u%d" % v.id
         status = "ln_status_%d" % v.id
-        if target == "system":
-            lines.append(
-                "ctx.require_cartesian_generated_operator(%d, %s);"
-                % (bidx, json.dumps("solve_local_nonlinear")))
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[base.id]))
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%d, 1, %s, 11, 0);"
@@ -766,7 +860,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         lines += _emit_solve_local_nonlinear_kernel(
             node_model, v, var[guess_in.id], var[v.id], status, active_mask, bidx,
             provider_plans=provider_plans,
-            consumer_qid=program_provider_consumer_qid(node_model, v.id),
+            consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block),
         )
         report = "ln_report_%d" % v.id
         outcome = _append_local_nonlinear_report(program, v, status, report, lines)
@@ -806,14 +900,32 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # Step-body bare Laplacian (e.g. Lap phi^n for the condensed RHS). Inside an apply sub-block
         # this op is handled by _emit_matrix_free_operator; here it is the top-level path.
         o, i = v.inputs
+        if target == "system":
+            owner = _cartesian_generated_owner_index(
+                block_idx, v, where="preflight laplacian %r" % v.name)
+            lines.append(
+                "ctx.require_cartesian_generated_operator(%d, %s);"
+                % (owner, json.dumps("laplacian")))
         lines.append("ctx.laplacian(%s, %s);" % (_deref(var[o.id]), _deref(var[i.id])))
         var[v.id] = var[o.id]
     elif v.op == "gradient":
         o, p = v.inputs
+        if target == "system":
+            owner = _cartesian_generated_owner_index(
+                block_idx, v, where="preflight gradient %r" % v.name)
+            lines.append(
+                "ctx.require_cartesian_generated_operator(%d, %s);"
+                % (owner, json.dumps("gradient")))
         lines.append("ctx.gradient(%s, %s);" % (_deref(var[o.id]), _deref(var[p.id])))
         var[v.id] = var[o.id]
     elif v.op == "divergence":
         o, flux = v.inputs
+        if target == "system":
+            owner = _cartesian_generated_owner_index(
+                block_idx, v, where="preflight divergence %r" % v.name)
+            lines.append(
+                "ctx.require_cartesian_generated_operator(%d, %s);"
+                % (owner, json.dumps("divergence")))
         lines.append("ctx.divergence(%s, %s);"
                      % (_deref(var[o.id]), _deref(var[flux.id])))
         var[v.id] = var[o.id]
@@ -824,11 +936,17 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # th_dt*J) on a momentum subset -- no coupling/schur call. The thin dispatch lives in
         # program_emit_condensed to keep this router (and its budget) small; condensed_coeffs allocates
         # its persistent row-major tensor field there.
+        if target == "system" and v.op == "condensed_rhs":
+            lines.append(
+                "ctx.require_cartesian_generated_operator(%d, %s);"
+                % (bidx, json.dumps("condensed_rhs")))
         emit_condensed_op(
             v, var, node_model, lines, prelude,
             provider_plans=provider_plans,
-            consumer_qid=program_provider_consumer_qid(node_model, v.id),
-            program_block=bidx,
+            consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block),
+            program_block=_required_block_index(
+                block_idx, v.block, "condensed op %r" % v.name
+            ),
         )
     elif v.op == "matrix_free_operator":
         # Install-time: emit the apply lambda `apply_A{id}` into the prelude. Its persistent scratch
@@ -863,10 +981,11 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         else:
             var[v.id] = var[source.id]
     elif v.op == "reduce":
-        # A collective physical-domain reduction -> a C++ scalar.  Route every operation through
-        # ProgramContext with the exact Program block owner: the runtime then selects its prepared
-        # full-grid/staircase/cut-cell measure without the generated code knowing a geometry shape.
-        # All ranks execute the same context call, including ranks that own no box.
+        # A collective owner/block/layout/lane-authenticated raw active-domain algebra
+        # reduction -> a C++ scalar. Inactive cells are excluded; there is no kappa/volume
+        # weighting. Physical weighted integrals stay System services. Route every
+        # operation through ProgramContext with the exact Program block owner. All ranks
+        # execute the same context call, including ranks that own no box.
         var[v.id] = "s%d" % v.id
         kind = v.attrs["kind"]
         owner = _required_block_index(block_idx, v.block, "reduce value %r" % v.name)

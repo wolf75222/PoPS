@@ -87,7 +87,12 @@ def test_board_primitive_state_declares_one_typed_atomic_coordinate_system():
 
     hyp = model._dsl._m
     assert hyp.prim_state == ["rho", "u", "v", "p"]
-    assert hyp.prim_roles == ["Density", "VelocityX", "VelocityY", "Pressure"]
+    assert hyp.prim_roles == [
+        Density(),
+        Velocity(axis=X_AXIS),
+        Velocity(axis=Y_AXIS),
+        Pressure(),
+    ]
     assert tuple(repr(value) for value in hyp.cons_from) == tuple(
         repr(value) for value in inverse
     )
@@ -207,7 +212,7 @@ def test_scalar_conversion_is_identity():
         "tracer",
         engine.Model(
             state=engine.Scalar(),
-            transport=engine.ExB(B0=1.0),
+            transport=engine.ExB(),
             source=engine.NoSource(),
             elliptic=engine.ChargeDensity(charge=1.0),
         ),

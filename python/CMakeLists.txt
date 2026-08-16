@@ -196,40 +196,106 @@ foreach(pyf ${_pops_py_sources})
 endforeach()
 
 
-# Python tests are pytest suites under tests/python/**. CTest owns the environment
-# for the built package; pytest owns collection, parametrization, fixtures, and markers.
-set(_pops_py_path_sep ":")
-set(_pops_py_test_pythonpath
-    "${CMAKE_CURRENT_BINARY_DIR}${_pops_py_path_sep}${CMAKE_CURRENT_SOURCE_DIR}${_pops_py_path_sep}${CMAKE_SOURCE_DIR}")
-if(DEFINED ENV{PYTHONPATH} AND NOT "$ENV{PYTHONPATH}" STREQUAL "")
-  string(APPEND _pops_py_test_pythonpath "${_pops_py_path_sep}$ENV{PYTHONPATH}")
+# Python tests are pytest suites under tests/python/**.  The authoring/runtime
+# surface is native Dim2 only, so Dim1 and Dim3 intentionally register no
+# pops_python_* CTests.  CTest owns the environment; pytest owns collection,
+# parametrization, fixtures, and markers.
+if(POPS_NATIVE_DIM STREQUAL "2")
+  set(_pops_py_path_sep ":")
+  set(_pops_py_test_pythonpath
+      "${CMAKE_CURRENT_BINARY_DIR}${_pops_py_path_sep}${CMAKE_CURRENT_SOURCE_DIR}${_pops_py_path_sep}${CMAKE_SOURCE_DIR}")
+  if(DEFINED ENV{PYTHONPATH} AND NOT "$ENV{PYTHONPATH}" STREQUAL "")
+    string(APPEND _pops_py_test_pythonpath "${_pops_py_path_sep}$ENV{PYTHONPATH}")
+  endif()
+  set(_pops_py_test_env
+      "PYTHONPATH=${_pops_py_test_pythonpath}"
+      "POPS_NATIVE_DIM=${POPS_NATIVE_DIM}"
+      "POPS_NATIVE_VARIANTS_ROOT=${CMAKE_CURRENT_BINARY_DIR}/pops/_native"
+      "POPS_INCLUDE=${CMAKE_SOURCE_DIR}/include"
+      "POPS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
+      "POPS_TEST_SOURCE_DIR=${CMAKE_SOURCE_DIR}")
+
+  function(pops_add_pytest_suite name path labels)
+    add_test(NAME ${name}
+             COMMAND ${Python_EXECUTABLE} -m pytest ${CMAKE_SOURCE_DIR}/${path} -q ${ARGN})
+    set_tests_properties(${name} PROPERTIES
+      ENVIRONMENT "${_pops_py_test_env}"
+      LABELS "${labels}"
+      TIMEOUT 900)
+  endfunction()
+
+  set(_pops_py_io_mpi_entrypoints
+      tests/python/integration/io/test_hdf5_parallel.py)
+  set(_pops_py_mpi_entrypoints
+      tests/python/integration/mpi/test_amr_clean_route_program_mpi.py
+      tests/python/integration/mpi/test_amr_history_mpi.py
+      tests/python/integration/mpi/test_amr_nonlinear_collective_mpi.py
+      tests/python/integration/mpi/test_amr_regrid_on_restart_mpi.py
+      tests/python/integration/mpi/test_async_balance_cadence_mpi.py
+      tests/python/integration/mpi/test_external_amr_field_solver_mpi.py
+      tests/python/integration/mpi/test_scientific_output_mpi.py
+      tests/python/integration/mpi/test_uniform_history_checkpoint_mpi.py)
+  set(_pops_py_rank_change_orchestrator
+      tests/python/integration/mpi/test_amr_rank_change_restart.py)
+
+  set(_pops_py_io_ignore_args)
+  foreach(_pops_py_mpi_entrypoint IN LISTS _pops_py_io_mpi_entrypoints)
+    list(APPEND _pops_py_io_ignore_args
+         "--ignore=${CMAKE_SOURCE_DIR}/${_pops_py_mpi_entrypoint}")
+  endforeach()
+  set(_pops_py_mpi_ignore_args)
+  foreach(_pops_py_mpi_entrypoint IN LISTS _pops_py_mpi_entrypoints)
+    list(APPEND _pops_py_mpi_ignore_args
+         "--ignore=${CMAKE_SOURCE_DIR}/${_pops_py_mpi_entrypoint}")
+  endforeach()
+  list(APPEND _pops_py_mpi_ignore_args
+       "--ignore=${CMAKE_SOURCE_DIR}/${_pops_py_rank_change_orchestrator}")
+
+  pops_add_pytest_suite(pops_python_unit_descriptors tests/python/unit/descriptors "unit;python;descriptors;fast")
+  pops_add_pytest_suite(pops_python_unit_codegen tests/python/unit/codegen "unit;python;codegen;fast")
+  pops_add_pytest_suite(pops_python_unit_time tests/python/unit/time "unit;python;time;fast")
+  pops_add_pytest_suite(pops_python_unit_mesh tests/python/unit/mesh "unit;python;mesh;fast")
+  pops_add_pytest_suite(pops_python_unit_solvers tests/python/unit/solvers "unit;python;solvers;fast")
+  pops_add_pytest_suite(pops_python_unit_physics tests/python/unit/physics "unit;python;physics;fast")
+  pops_add_pytest_suite(pops_python_unit_runtime tests/python/unit/runtime "unit;python;runtime;fast")
+
+  pops_add_pytest_suite(pops_python_integration_bindings tests/python/integration/bindings "integration;python;bindings;medium")
+  pops_add_pytest_suite(pops_python_integration_runtime tests/python/integration/runtime "integration;python;runtime;medium")
+  pops_add_pytest_suite(pops_python_integration_amr tests/python/integration/amr "integration;python;amr;medium")
+  pops_add_pytest_suite(pops_python_integration_native_loader tests/python/integration/native_loader "integration;python;native_loader;compiler;medium")
+  pops_add_pytest_suite(pops_python_integration_io tests/python/integration/io "integration;python;io;hdf5;medium" ${_pops_py_io_ignore_args})
+  pops_add_pytest_suite(pops_python_integration_mpi tests/python/integration/mpi "integration;python;mpi;medium" ${_pops_py_mpi_ignore_args})
+
+  if(POPS_USE_MPI)
+    set(_pops_py_mpi_bootstrap
+        "import os, runpy, sys; from pops._native_selector import select_native_dimension; select_native_dimension(int(os.environ[\"POPS_NATIVE_DIM\"])); runpy.run_path(sys.argv[1], run_name=\"__main__\")")
+    function(pops_add_mpi_pytest_entrypoint path)
+      get_filename_component(_pops_py_mpi_stem "${path}" NAME_WE)
+      add_test(
+        NAME "pops_python_mpi_${_pops_py_mpi_stem}_np2"
+        COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2 ${MPIEXEC_PREFLAGS}
+                ${Python_EXECUTABLE} ${MPIEXEC_POSTFLAGS} -u -c "${_pops_py_mpi_bootstrap}"
+                "${CMAKE_SOURCE_DIR}/${path}")
+      set_tests_properties("pops_python_mpi_${_pops_py_mpi_stem}_np2" PROPERTIES
+        ENVIRONMENT "${_pops_py_test_env};POPS_REQUIRE_MPI_TESTS=1"
+        LABELS "integration;python;mpi;np2"
+        PROCESSORS 2
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        TIMEOUT 900)
+    endfunction()
+
+    foreach(_pops_py_mpi_entrypoint IN LISTS _pops_py_io_mpi_entrypoints _pops_py_mpi_entrypoints)
+      pops_add_mpi_pytest_entrypoint("${_pops_py_mpi_entrypoint}")
+    endforeach()
+
+    add_test(
+      NAME pops_python_mpi_test_amr_rank_change_restart_orchestrator
+      COMMAND ${Python_EXECUTABLE} -m pytest "${CMAKE_SOURCE_DIR}/${_pops_py_rank_change_orchestrator}" -q)
+    set_tests_properties(pops_python_mpi_test_amr_rank_change_restart_orchestrator PROPERTIES
+      ENVIRONMENT "${_pops_py_test_env};POPS_REQUIRE_MPI_TESTS=1"
+      LABELS "integration;python;mpi;orchestrator"
+      PROCESSORS 2
+      WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+      TIMEOUT 900)
+  endif()
 endif()
-set(_pops_py_test_env
-    "PYTHONPATH=${_pops_py_test_pythonpath}"
-    "POPS_INCLUDE=${CMAKE_SOURCE_DIR}/include"
-    "POPS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
-    "POPS_TEST_SOURCE_DIR=${CMAKE_SOURCE_DIR}")
-
-function(pops_add_pytest_suite name path labels)
-  add_test(NAME ${name}
-           COMMAND ${Python_EXECUTABLE} -m pytest ${CMAKE_SOURCE_DIR}/${path} -q)
-  set_tests_properties(${name} PROPERTIES
-    ENVIRONMENT "${_pops_py_test_env}"
-    LABELS "${labels}"
-    TIMEOUT 900)
-endfunction()
-
-pops_add_pytest_suite(pops_python_unit_descriptors tests/python/unit/descriptors "unit;python;descriptors;fast")
-pops_add_pytest_suite(pops_python_unit_codegen tests/python/unit/codegen "unit;python;codegen;fast")
-pops_add_pytest_suite(pops_python_unit_time tests/python/unit/time "unit;python;time;fast")
-pops_add_pytest_suite(pops_python_unit_mesh tests/python/unit/mesh "unit;python;mesh;fast")
-pops_add_pytest_suite(pops_python_unit_solvers tests/python/unit/solvers "unit;python;solvers;fast")
-pops_add_pytest_suite(pops_python_unit_physics tests/python/unit/physics "unit;python;physics;fast")
-pops_add_pytest_suite(pops_python_unit_runtime tests/python/unit/runtime "unit;python;runtime;fast")
-
-pops_add_pytest_suite(pops_python_integration_bindings tests/python/integration/bindings "integration;python;bindings;medium")
-pops_add_pytest_suite(pops_python_integration_runtime tests/python/integration/runtime "integration;python;runtime;medium")
-pops_add_pytest_suite(pops_python_integration_amr tests/python/integration/amr "integration;python;amr;medium")
-pops_add_pytest_suite(pops_python_integration_native_loader tests/python/integration/native_loader "integration;python;native_loader;compiler;medium")
-pops_add_pytest_suite(pops_python_integration_io tests/python/integration/io "integration;python;io;hdf5;medium")
-pops_add_pytest_suite(pops_python_integration_mpi tests/python/integration/mpi "integration;python;mpi;medium")

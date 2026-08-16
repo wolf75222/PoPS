@@ -235,6 +235,19 @@ Supported native routes include:
   `unavailable`: face-reconstruction kernels and AMR do not yet own persistent recovery warm starts,
   AMR regrid migration and checkpoint/restart do not persist such slots, and manual in-place Program
   writes, backend parity, and performance evidence do not yet share that authority.
+- Active staircase/cut-cell boundaries have a deliberately narrow pointwise contract: qualified
+  `local_transform` and local nonlinear solves visit active cells only, short-circuit the default
+  model source before any inactive-cell model/provider read, and preserve inactive accepted bits
+  through terminal recoverability/admissibility validation and transactional publication. Generated
+  reductions are raw owner/block/layout/lane-authenticated active-cell reductions without kappa or
+  volume weighting; weighted physical integrals remain System services. The same mask applies at
+  every AMR level, not only `nlev == 1`. Unmasked pointwise Cartesian operations (`where`/
+  `cell_compare`) and Cartesian stencil operators (`laplacian`, `gradient`, `divergence`,
+  condensed-RHS stencils, and matrix-free stencils) are unavailable and fail closed under the
+  active boundary. Exact owner-authenticated preflight rejects before the unsupported operation
+  evaluates; matrix-free preflight rejects before preparation or iteration enters Krylov. Persistent
+  scratch/resources may have been prepared earlier. This is a static contract statement, not
+  runtime qualification for serial, MPI, GPU, or performance.
 - Native reconstruction routes: first-order, MUSCL, WENO5/WENO5-Z.
 - Elliptic `CartesianCG` on a uniform 1D/2D/3D `System`, `GeometricMG`/FAC on AMR, and FFT on
   its separately qualified uniform periodic constant-coefficient route. `GeometricMG` is not an
@@ -243,17 +256,20 @@ Supported native routes include:
 - ProgramContext install on System, and AMR program install when compiled for `target="amr_system"`.
 - A native C++ `amr:cell_local_temporal_transport` route partially proves scientific consumption of
   the prepared cell-local executor. `Program.cell_local_time(...)` and generated
-  `AmrProgramContext` code wire the exact bounded route. On host/serial, one 2D block, one level, one
-  rank-owned box and one common rung, it calls the exact compiled AMR transport closure, advances the
-  real conservative state with forward Euler, and publishes the four time-integrated face fluxes per
-  cell only at the synchronization barrier. Its contract authenticates the model-owned spatial
-  parameters and selected limiter/Riemann route. Same-topology restart restores state and integer
-  clocks while invalidating the non-persisted last-interval diagnostic ledger until the next accepted
-  step. It currently accepts only built-in periodic/Foextrap transport boundaries; missing
-  identities, prepared physical-boundary plans, MPI/GPU execution, topology drift, multiple boxes or
-  levels and mixed rungs fail closed. It does not claim heterogeneous local times, coarse/fine
-  conservation, source integration, regrid/rank-change rematerialization, diagnostic-ledger
-  persistence or performance qualification.
+  `AmrProgramContext` code wire the exact bounded route. On an exact-rank host hierarchy it advances
+  independent multi-block, multi-level and MPI-owned multi-box state packs with forward Euler and
+  publishes one aggregated basis per route into the existing authoritative coarse/fine ledgers only
+  at the synchronization barrier. The authored finest-level rung is lifted through integral
+  power-of-two temporal relations to one homogeneous rung per level-group and one FE batch per
+  hierarchy window. Its contract authenticates the block map, model-owned spatial parameters,
+  selected limiter/Riemann routes, topology/materialization and exact execution lane. Same-rank
+  restart/regrid rematerializes topology-derived records and clocks while invalidating the
+  non-persisted last-interval diagnostic view until the next accepted step. It does not claim
+  heterogeneous per-cell rungs, global/interface block coupling, non-dyadic clocks, source/field
+  integration, physical or non-periodic boundaries, GPU default execution or memory spaces,
+  performance qualification, rank-change rematerialization or diagnostic-view persistence. The
+  physical-boundary and device envelopes are refused collectively on the exact lane during
+  preparation, before any prepared state or boundary stage is entered.
 - Generated local implicit-source Programs on synchronous two-level 2D AMR. `pops.lib.time.IMEX`
   lowers its local residual to the sole prepared `LocalNewton` service on every active level and
   consumes the returned `SolveOutcome`; it does not invoke a spatial-runtime time integrator. The
@@ -295,7 +311,7 @@ Supported native routes include:
   restored before the provider candidate can be consumed.
 - Runtime scientific output v1: typed `SERIAL`, `ROOT`, `COLLECTIVE` and `PER_RANK` publication on the
   exact modes advertised by NPZ, ParaView and HDF5, with native Uniform/AMR piece ownership.
-- Runtime accepted-state checkpoint v6 for Uniform and v8 for AMR. The single-file MPI route captures
+- Runtime accepted-state checkpoint v8 for Uniform and v11 for AMR. The single-file MPI route captures
   collectively only after every rank agrees on the exact gather-plan identity, agrees again on the
   sealed payload identity, and publishes once on rank 0 with atomic no-clobber semantics. The provider
   authority is resolved into the compiled plan, including the builtin v5 manual route. It persists
@@ -322,9 +338,9 @@ Explicit unsupported rows include:
 
 - `elliptic:fft_amr`: FFT requires a single uniform periodic mesh; AMR uses GeometricMG.
 - `checkpoint:parallel_hdf5`: parallel HDF5 is a scientific-output route, not a restartable checkpoint
-  encoding; `RuntimeInstance.checkpoint()` and the typed `Checkpoint` consumer use uniform v5 or AMR
-  v7 accepted-state payloads.
-- `checkpoint:amr_dynamic_regrid` is available through the strict v7 accepted-state route. The single
+  encoding; `RuntimeInstance.checkpoint()` and the typed `Checkpoint` consumer use uniform v8 or AMR
+  v11 accepted-state payloads.
+- `checkpoint:amr_dynamic_regrid` is available through the strict v11 accepted-state route. The single
   authenticated artifact carries one exact DistributionMapping and compiled-Program accepted image
   per native rank. `bit_identical=True` therefore requires the recorded rank count. With the default
   non-bit-identical guarantee, `RestoreRecordedHierarchy()` may rematerialize hierarchy ownership and
@@ -405,8 +421,8 @@ future validators:
   checkpoint rematerializer, invalidates audit reports qualified by the replaced topology epoch and
   republishes accepted Program state atomically. Stale, divergent, malformed and non-beneficial
   decisions do not mutate state; failures restore the complete accepted runtime/Program image.
-  Level-zero migration, custom communicators, materialized staggered bootstrap fields and cell-local
-  stage/flux-ledger rematerialization remain unavailable.
+  Level-zero migration, custom communicators, materialized staggered bootstrap fields and
+  rank-change cell-local record rematerialization remain unavailable.
 - `amr:transfer_contracts`: centering, representation, storage, operation, order and ghost depth
   must match an exact native transfer/materialization provider contract.
 - `parallel:mpi_world_communicator`: the native `RuntimeInstance` providers consume the exact
@@ -429,8 +445,8 @@ future validators:
   returned by a Kokkos finalize hook.
 - `program:hierarchy_scoped_solve`: a hierarchy-scoped `LinearProblem` requires an explicit
   matrix-free operator provider such as `CompositeTensorFAC()` and an executable Krylov solver. The
-  currently audited native tensor route is 2D; unsupported dimensions or hierarchy shapes fail
-  capability validation instead of selecting a named time preset.
+  full-tensor FAC authority is exact-rank in 1D, 2D and 3D; rank, hierarchy, coefficient and MPI
+  ownership mismatches fail capability validation before execution.
 
 ## Error Policy
 
@@ -451,8 +467,21 @@ artifact must carry the current authenticated manifest and required route facts;
 incompatible evidence is refused before bind. Historical artifacts may only be converted by an
 explicit offline migration tool that emits a complete current artifact. The one implemented
 checkpoint route accepts only the exact frozen Uniform-v2 schema through
-`pops.codegen.checkpoint_migration`: it requires a complete authenticated v5 authority and an
-exhaustive reviewed mapping, preserves no runtime alias, and publishes atomically only after current
-integrity and restart preflight succeed. Its supported envelope is same-grid/same-clock, Dense
-store-all history, with no field-provider slots, scheduled caches, or ConsumerGraph state; every
-other historical checkpoint remains a fail-closed refusal in the runtime.
+`pops.codegen.checkpoint_migration`: its schema-4 mapping requires a complete, separately
+authenticated v8 authority and an exhaustive reviewed mapping. The v2 artifact has no auxiliary
+authority; the authority supplies an empty POPSAUX2 image that the native specialization attests,
+and migration copies it byte-identically without fabricating it from v2. The mapping pins SHA-256
+digests of the exact auxiliary image bytes and binary registry-contract bytes. For the native
+dimension, the image is provider-/payload-empty only with zero persisted groups, components and
+providers, a nonempty opaque sealed registry contract, and `accepted_generation` in
+`[0, UINT64_MAX)`. It need not equal a freshly sealed bare-registry contract because real code
+generation may install zero-valued consumer plans; the real authority contract is 1312 bytes. The
+attestor alone does not prove target-registry compatibility: the full-image and raw-registry-
+contract SHA-256 pins, byte-identical copy and strict live target restart supply that exactness.
+Generation is preserved provenance, not rewritten; this AB2 fixture records `0`, structurally empty
+publication may produce a value greater than zero, and `UINT64_MAX` is refused as wrap poison. The
+route preserves no runtime alias and publishes atomically only after current integrity and restart
+preflight succeed. The `checkpoint_migration` member is reserved by the live Uniform resource budget in a fixed 16
+Ki-character envelope. Its supported envelope is same-grid/same-clock, Dense store-all history,
+with no field-provider slots, scheduled caches, or ConsumerGraph state; every other historical
+checkpoint remains a fail-closed refusal in the runtime.

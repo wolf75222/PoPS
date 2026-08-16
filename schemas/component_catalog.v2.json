@@ -560,7 +560,11 @@
           "wire_id": 0,
           "cpp_id": "kNone",
           "native_entry": "pops::NoSlope",
-          "requirements": [],
+          "requirements": [
+            "provider_pack",
+            "ComponentKeys grad_phi[0:Dim]",
+            "ComponentKeys B_x,B_y,B_z"
+          ],
           "limitations": [],
           "aliases": [],
         "metadata": {
@@ -760,16 +764,15 @@
           "token": "fft",
           "wire_id": 1,
           "cpp_id": "kFft",
-          "native_entry": "pops::PoissonFFTSolver<2>",
+          "native_entry": "pops::PoissonFFTSolver<Dim>",
           "requirements": [
-            "exact rank two",
+            "Cartesian native rank one / two / three",
             "periodic bc",
             "constant coefficient",
-            "power-of-two grid",
             "canonical ordered MPI slabs"
           ],
           "limitations": [
-            "rank one / rank three, walls, variable epsilon and non-power-of-two grids are rejected"
+            "walls, variable epsilon and non-canonical decompositions are rejected; non-radix-2 extents use the diagnosed direct-DFT path"
           ],
           "aliases": [],
           "metadata": {}
@@ -877,7 +880,7 @@
           "native_entry": "pops::AmrSystem",
           "requirements": [],
           "limitations": [
-            "refinement ratio 2 (kAmrRefRatio); fft field solver not wired"
+            "transition ratios are authenticated by the exact-rank hierarchy; FFT field solves are Uniform-only"
           ],
           "aliases": [],
           "metadata": {}
@@ -893,10 +896,11 @@
           "token": "exb",
           "wire_id": 0,
           "cpp_id": "kExb",
-          "native_entry": "pops::ExBVelocity",
+          "native_entry": "pops::CartesianExBDrift",
           "requirements": [],
           "limitations": [
-            "scalar (1 var); no fluid source"
+            "scalar (1 var); no fluid source",
+            "requires one explicit potential-gradient provider per native axis and three explicit Cartesian magnetic providers"
           ],
           "aliases": [],
           "metadata": {
@@ -906,10 +910,8 @@
               1
             ],
             "polar_ok": true,
-            "parameters": [
-              "B0"
-            ],
-            "summary": "scalar ExB drift advection, v = (-d_y phi, d_x phi) / B0"
+            "parameters": [],
+            "summary": "scalar Cartesian E x B drift, v_i = epsilon_ijk B_j d_k(phi) / |B|^2"
           }
         },
         {
@@ -1019,7 +1021,7 @@
           "native_entry": "pops::MagneticLorentzForce",
           "requirements": [
             "fluid transport (>= 3 vars)",
-            "aux B_z channel"
+            "aux Cartesian magnetic vector channel"
           ],
           "limitations": [
             "explicit regime (stiff regime -> condensed Schur stage)"
@@ -1030,7 +1032,7 @@
             "parameters": [
               "qom"
             ],
-            "summary": "q v x B_z magnetized Lorentz force (explicit regime)"
+            "summary": "q v x B Cartesian magnetized Lorentz force (explicit regime)"
           }
         },
         {
@@ -1040,7 +1042,7 @@
           "native_entry": "pops::CompositeSource<PotentialForce, MagneticLorentzForce>",
           "requirements": [
             "fluid transport (>= 3 vars)",
-            "aux B_z channel"
+            "aux Cartesian magnetic vector channel"
           ],
           "limitations": [],
           "aliases": [],

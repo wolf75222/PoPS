@@ -34,23 +34,13 @@ try:
     import numpy as np
 
     import pops
-    import pops.runtime._engine_descriptors as engine
-    from pops.codegen._compile_drivers import compile_problem
-    from pops.identity import make_identity
-    from pops.model.bind_schema import BindSchema
-    from pops.numerics.reconstruction import FirstOrder
-    from pops.numerics.riemann import Rusanov
-    from pops.runtime._bound_snapshot import BoundSnapshot
-    from pops.runtime._system import System
+    from pops.diagnostics import Balance, BalanceLedger
+    from pops.output import NPZ, ScientificOutput
     from pops.time._history.persistence import Interval
     from tests.python.integration._final_field_program import (
-        compile_block_model,
         passive_source_model,
+        resolve_periodic_field_program,
     )
-    from tests.python.support.native_execution_context import (
-        compiled_problem_execution_context,
-    )
-    from tests.python.support.typed_program import program_states
 except Exception as exc:  # noqa: BLE001
     require_native_or_skip(
         "test_uniform_selective_history_checkpoint cannot import pops/numpy: %s" % exc
@@ -76,49 +66,20 @@ DT_SEQUENCE = (
     2.0 / 256.0,
 )
 CHECKPOINT_STEP = 7
+GRID_ID = "uniform_selective_time_grid"
+TIME_GRID = [0.0]
+for _dt in DT_SEQUENCE:
+    TIME_GRID.append(TIME_GRID[-1] + _dt)
+TIME_GRID = tuple(TIME_GRID)
+_BALANCE_LEDGER = BalanceLedger("uniform-selective-replay")
+_BALANCE_ROUTE: dict[str, str] = {}
 
 
-def _program(model):
-    """Five-slot affine history plus a sparse Balance producer guarded during replay."""
-    from pops.diagnostics import BalanceLedger
-    from pops.output._balance_due_contract import (
-        BalanceDueConsumer,
-        BalanceDueContract,
-        BalanceDueRoute,
-    )
-
+def _program(state_instance, _rate, _field):
+    """Five-slot affine Balance Program whose omitted anchors are exactly replayable."""
     program = pops.Program("uniform_selective_state5")
-    _case, states = program_states(program, model, ("blk",))
-    state = states["blk"]
+    state = program.state(state_instance)
     program.keep_history(state, depth=4, checkpoint_policy=Interval(2))
-    total = program.sum(state.n)
-    ledger = BalanceLedger("uniform-selective-replay")
-    program.record_balance(
-        ledger,
-        storage_change=total,
-        outward_boundary_flux=0.0 * total,
-        sources=0.0 * total,
-        reflux=0.0 * total,
-        projection=0.0 * total,
-    )
-    route = ledger.route_identity(state.block)
-    balance_due_contract = BalanceDueContract(
-        make_identity("consumer-graph", {"test": "uniform-selective-replay"}),
-        (
-            BalanceDueRoute(
-                route,
-                (
-                    BalanceDueConsumer(
-                        make_identity(
-                            "consumer-manifest",
-                            {"test": "uniform-selective-replay"},
-                        ),
-                        pops.time.every(2, clock=program.clock),
-                    ),
-                ),
-            ),
-        ),
-    )
     next_state = program.value(
         "Un",
         state.n
@@ -126,9 +87,46 @@ def _program(model):
         + 0.0 * state.prev(4),
         at=state.next.point,
     )
+    increment = program.value(
+        "accepted_increment",
+        next_state - state.n,
+        at=state.next.point,
+    )
+    storage_change = program.sum(increment)
+    outward_boundary_flux = -program.sum(increment)
+    sources = program.sum(increment)
+    reflux = program.sum(increment)
+    projection = -2.0 * program.sum(increment)
+    program.record_balance(
+        _BALANCE_LEDGER,
+        storage_change=storage_change,
+        outward_boundary_flux=outward_boundary_flux,
+        sources=sources,
+        reflux=reflux,
+        projection=projection,
+    )
+    _BALANCE_ROUTE["token"] = _BALANCE_LEDGER.route_identity(state.block).token
     program.commit(state.next, next_state)
-    program.step_strategy(pops.time.FixedDt(DT_SEQUENCE[0]))
-    return program, balance_due_contract
+    program.step_strategy(pops.time.ExternalTimeGrid(GRID_ID))
+    return program
+
+
+def _balance_consumers(_case, block, _state, program):
+    schedule = pops.time.every(2, clock=program.clock)
+    return (
+        ScientificOutput(
+            format=NPZ(),
+            schedule=schedule,
+            diagnostics=(
+                Balance(
+                    _BALANCE_LEDGER,
+                    block=block,
+                    cadence=schedule,
+                ),
+            ),
+            target="balance_due",
+        ),
+    )
 
 
 def _initial_state():
@@ -137,57 +135,25 @@ def _initial_state():
     return 1.0 + 0.3 * np.sin(2.0 * np.pi * xx) * np.cos(2.0 * np.pi * yy)
 
 
-def _authorize_bound_runtime(sim, compiled):
-    """Complete the authenticated low-level bind used by this native integration fixture."""
-    component = compiled.program
-    authored = getattr(component, "program", component)
-    context = compiled_problem_execution_context(compiled, target="system")
-    sim._execution_context = context
-    sim._step_strategy = authored._step_strategy
-    sim._step_transaction_plan = authored.transaction_plan()
-    sim._temporal_restart_state.configure_program(
-        authored.temporal_manifest(),
-        time=sim.time(),
-        macro_step=sim.macro_step(),
+def _build(artifact, initial):
+    return pops.bind(
+        artifact,
+        initial_state={"blk": np.ascontiguousarray(np.stack([initial]))},
     )
-    snapshot = BoundSnapshot(
-        semantic_identity=compiled.semantic_identity,
-        artifact_identity=compiled.artifact_identity,
-        layout={"kind": "uniform"},
-        blocks=[{"name": "blk"}],
-        field_plans={},
-        step_transaction=sim._step_transaction_plan.to_data(),
-        params=[],
-        aux_evidence={},
-        initial_evidence={},
-        bind_schema_identity=make_identity("bind-schema", BindSchema().to_dict()),
-        execution_context=context.to_data(),
-    )
-    sim._finalize_bind(snapshot)
 
 
-def _build(compiled, compiled_block, initial):
-    sim = System(n=N, L=1.0, periodicity=(True, True))
-    sim.add_equation(
-        "blk",
-        compiled_block,
-        spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-        time=engine.Explicit(method="euler"),
+def _advance(sim, dts, *, output_dir):
+    start = int(sim.macro_step())
+    stop = start + len(dts)
+    assert tuple(dts) == DT_SEQUENCE[start:stop]
+    report = pops.run(
+        sim,
+        t_end=TIME_GRID[stop],
+        max_steps=len(dts),
+        output_dir=output_dir,
+        **{GRID_ID: TIME_GRID},
     )
-    sim.set_state("blk", np.stack([initial]))
-    sim.install_program(compiled.so_path)
-    persistence = getattr(getattr(compiled, "program", None), "_history_persistence", None)
-    assert persistence, "the compiled Program lost its authored history-persistence policy"
-    sim.set_history_persistence(
-        {name: policy for name, (_depth, policy) in persistence.items()}
-    )
-    _authorize_bound_runtime(sim, compiled)
-    return sim
-
-
-def _advance(sim, dts):
-    for dt in dts:
-        sim.step(dt)
+    assert report.accepted_steps == len(dts)
 
 
 def _state(sim):
@@ -214,46 +180,92 @@ def _assert_rings_equal(left, right):
             )
 
 
+def _assert_due_balance(sim):
+    token = _BALANCE_ROUTE.get("token")
+    assert token, "the public Balance consumer lost its exact Program ledger route"
+    terms = dict(sim._executor._s._accepted_balance_terms(token))
+    required = {
+        "storage_change",
+        "outward_boundary_flux",
+        "sources",
+        "reflux",
+        "projection",
+    }
+    assert set(terms) == required
+    change = terms["storage_change"]
+    assert change > 0.0, "the due Balance reduction must observe non-trivial growth"
+    assert terms == {
+        "storage_change": change,
+        "outward_boundary_flux": -change,
+        "sources": change,
+        "reflux": change,
+        "projection": -2.0 * change,
+    }
+    residual = (
+        terms["storage_change"]
+        + terms["outward_boundary_flux"]
+        - terms["sources"]
+        - terms["reflux"]
+        - terms["projection"]
+    )
+    assert residual == 0.0
+
+
 def test_uniform_interval_history_variable_dt_restart_is_bit_identical():
     model = passive_source_model(
         "uniform_selective_history_model", coefficient=COEFFICIENT
     )
-    program, balance_due_contract = _program(model)
-    compiled = compile_problem(
-        model=model,
-        time=program,
+    resolved = resolve_periodic_field_program(
+        model,
+        _program,
+        name="uniform-selective-history",
+        block_name="blk",
         target="system",
-        balance_due_contract=balance_due_contract,
+        n=N,
+        rate_name="source_rate",
+        cxx=default_cxx(),
+        include=repo_include(),
+        strict_restart=True,
+        consumer_factory=_balance_consumers,
     )
-    compiled_block = compile_block_model(model, target="system")
+    artifact = pops.compile(resolved)
+    artifact.verify()
     initial = _initial_state()
 
-    continuous = _build(compiled, compiled_block, initial)
-    _advance(continuous, DT_SEQUENCE[:CHECKPOINT_STEP])
-    continuous_state_at_checkpoint = _state(continuous)
-    continuous_rings_at_checkpoint = _rings(continuous)
-    continuous_time_at_checkpoint = continuous.time()
-    _advance(continuous, DT_SEQUENCE[CHECKPOINT_STEP:])
-    expected_state = _state(continuous)
-    expected_rings = _rings(continuous)
-
-    interrupted = _build(compiled, compiled_block, initial)
-    _advance(interrupted, DT_SEQUENCE[:CHECKPOINT_STEP])
-    assert interrupted._s.program_last_dt() == DT_SEQUENCE[CHECKPOINT_STEP - 1]
-    from pops.runtime._run_manifest import begin_run
-    from pops.runtime._step_strategy import run_control_payload
-
-    begin_run(
-        interrupted,
-        t_end=interrupted.time(),
-        step_transaction=run_control_payload(
-            pops.time.FixedDt(DT_SEQUENCE[CHECKPOINT_STEP - 1])
-        ),
-        max_steps=0,
-        output_dir=None,
-    )
-
     with tempfile.TemporaryDirectory() as tmp:
+        continuous = _build(artifact, initial)
+        _advance(
+            continuous,
+            DT_SEQUENCE[:2],
+            output_dir=os.path.join(tmp, "continuous-due"),
+        )
+        _assert_due_balance(continuous)
+        _advance(
+            continuous,
+            DT_SEQUENCE[2:CHECKPOINT_STEP],
+            output_dir=os.path.join(tmp, "continuous-checkpoint"),
+        )
+        continuous_state_at_checkpoint = _state(continuous)
+        continuous_rings_at_checkpoint = _rings(continuous)
+        continuous_time_at_checkpoint = continuous.time()
+        _advance(
+            continuous,
+            DT_SEQUENCE[CHECKPOINT_STEP:],
+            output_dir=os.path.join(tmp, "continuous-final"),
+        )
+        expected_state = _state(continuous)
+        expected_rings = _rings(continuous)
+
+        interrupted = _build(artifact, initial)
+        _advance(
+            interrupted,
+            DT_SEQUENCE[:CHECKPOINT_STEP],
+            output_dir=os.path.join(tmp, "interrupted"),
+        )
+        assert (
+            interrupted._executor._s.program_last_dt()
+            == DT_SEQUENCE[CHECKPOINT_STEP - 1]
+        )
         checkpoint = interrupted.checkpoint(os.path.join(tmp, "uniform-selective"))
         with np.load(checkpoint, allow_pickle=False) as payload:
             temporal = json.loads(str(payload["temporal_restart_state"]))
@@ -285,7 +297,7 @@ def test_uniform_interval_history_variable_dt_restart_is_bit_identical():
             )
             native_slot_dts = np.asarray(
                 [
-                    interrupted.history_slot_dt(history_name, slot)
+                    interrupted._executor.history_slot_dt(history_name, slot)
                     for slot in range(5)
                 ],
                 dtype=np.float64,
@@ -293,16 +305,19 @@ def test_uniform_interval_history_variable_dt_restart_is_bit_identical():
             assert np.array_equal(slot_dts, native_slot_dts)
             assert len(set(slot_dts.tolist())) > 1
 
-        restarted = _build(compiled, compiled_block, initial)
+        restarted = _build(artifact, initial)
         restarted.restart(checkpoint)
 
-        assert restarted._s.program_last_dt() == DT_SEQUENCE[CHECKPOINT_STEP - 1]
+        assert (
+            restarted._executor._s.program_last_dt()
+            == DT_SEQUENCE[CHECKPOINT_STEP - 1]
+        )
         assert restarted.macro_step() == CHECKPOINT_STEP
         assert restarted.time() == continuous_time_at_checkpoint
         assert np.array_equal(_state(restarted), continuous_state_at_checkpoint)
         _assert_rings_equal(continuous_rings_at_checkpoint, _rings(restarted))
 
-        report = restarted.last_restart_report()
+        report = restarted._executor.last_restart_report()
         assert report is not None
         assert len(report.histories) == 1
         assert report.histories[0]["storage_mode"] == "policy"
@@ -310,12 +325,16 @@ def test_uniform_interval_history_variable_dt_restart_is_bit_identical():
         assert report.histories[0]["stored_slots"] == 3
         assert report.histories[0]["recomputed_slots"] == 2
 
-        _advance(restarted, DT_SEQUENCE[CHECKPOINT_STEP:])
+        _advance(
+            restarted,
+            DT_SEQUENCE[CHECKPOINT_STEP:],
+            output_dir=os.path.join(tmp, "restarted-final"),
+        )
 
     assert restarted.macro_step() == len(DT_SEQUENCE)
     assert restarted.time() == continuous.time()
-    assert restarted._s.program_last_dt() == DT_SEQUENCE[-1]
-    assert continuous._s.program_last_dt() == DT_SEQUENCE[-1]
+    assert restarted._executor._s.program_last_dt() == DT_SEQUENCE[-1]
+    assert continuous._executor._s.program_last_dt() == DT_SEQUENCE[-1]
     assert np.array_equal(_state(restarted), expected_state)
     _assert_rings_equal(expected_rings, _rings(restarted))
 

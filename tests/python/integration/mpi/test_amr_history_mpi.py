@@ -10,6 +10,7 @@ hierarchy, restored into a fresh public ``RuntimeInstance``, and continued. A se
 straddles a regrid must expose ``dense_regrid_safety`` effective storage. Rings and global conservative
 state must match an uninterrupted run bit-for-bit under replicated and distributed coarse layouts.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
@@ -107,9 +108,7 @@ def _shared_temporary_directory() -> Iterator[Path]:
 
 def _model(name: str) -> tuple[Model, Any, Any, Any]:
     """One conservative scalar with zero transport and a load-bearing linear source."""
-    frame = Rectangle(
-        "%s-domain" % name, lower=(0.0, 0.0), upper=(1.0, 1.0)
-    ).frame(Cartesian2D())
+    frame = Rectangle("%s-domain" % name, lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(Cartesian2D())
     x_axis, y_axis = frame.axes
     model = Model(name, frame=frame)
     state = model.state("U", components=("rho",))
@@ -237,19 +236,20 @@ def _advance(runtime: Any, steps: int) -> Any:
     )
 
 
-def _rings(runtime: Any) -> dict[str, tuple[np.ndarray, ...]]:
+def _rings(runtime: Any) -> dict[tuple[str, int], tuple[np.ndarray, ...]]:
     return {
-        name: tuple(
-            np.asarray(runtime.history_global(name, slot), dtype=np.float64).copy()
+        (name, int(level)): tuple(
+            np.asarray(runtime.history_global(name, level, slot), dtype=np.float64).copy()
             for slot in range(runtime.history_depth(name))
         )
         for name in runtime.history_names()
+        for level in runtime.history_levels(name)
     }
 
 
 def _rings_equal(
-    first: dict[str, tuple[np.ndarray, ...]],
-    second: dict[str, tuple[np.ndarray, ...]],
+    first: dict[tuple[str, int], tuple[np.ndarray, ...]],
+    second: dict[tuple[str, int], tuple[np.ndarray, ...]],
 ) -> bool:
     return first.keys() == second.keys() and all(
         len(first[name]) == len(second[name])
@@ -273,12 +273,11 @@ def _ring_diff_summary(
         if len(first[name]) != len(second[name]):
             rows.append("%s:slots=%d/%d" % (name, len(first[name]), len(second[name])))
             continue
-        for slot, (left, right) in enumerate(
-            zip(first[name], second[name], strict=True)
-        ):
+        for slot, (left, right) in enumerate(zip(first[name], second[name], strict=True)):
             if not np.array_equal(left, right):
                 rows.append(
-                    "%s[%d]:max|d|=%.17g,left=[%.17g,%.17g],right=[%.17g,%.17g]" % (
+                    "%s[%d]:max|d|=%.17g,left=[%.17g,%.17g],right=[%.17g,%.17g]"
+                    % (
                         name,
                         slot,
                         float(np.max(np.abs(left - right))),
@@ -336,9 +335,7 @@ def _run_restart_case(
     # AMR exposes level-qualified global state; the unqualified state_global route is intentionally
     # rejected because it is ambiguous once several levels exist.  Level 0 is the deterministic
     # coarse state used for the restart parity witness.
-    reference = np.asarray(
-        continuous.block_level_state_global("blk", 0), dtype=np.float64
-    ).copy()
+    reference = np.asarray(continuous.block_level_state_global("blk", 0), dtype=np.float64).copy()
     continuous_regrid = continuous.amr.explain_regrid()
 
     interrupted = _bind(artifact)
@@ -353,31 +350,24 @@ def _run_restart_case(
             rank_count = int(payload["n_ranks"])
             level_count = int(payload["n_levels"])
             assert rank_count == int(_COMM.size)
-            assert "program_accepted_state" not in payload.files
-            assert not any(name.startswith("dmap_") and not name.startswith("dmap_rank_")
-                           for name in payload.files)
-            for rank in range(rank_count):
-                state_key = "program_accepted_state_rank_%d" % rank
-                assert state_key in payload.files
-                assert payload[state_key].dtype == np.dtype("uint8")
-                assert payload[state_key].ndim == 1
-                for level in range(level_count):
-                    dmap_key = "dmap_rank_%d_level_%d" % (rank, level)
-                    assert dmap_key in payload.files
-                    assert payload[dmap_key].dtype.kind in "iu"
-                    assert payload[dmap_key].ndim == 1
+            assert payload["program_accepted_state"].dtype == np.dtype("uint8")
+            assert payload["program_accepted_state"].ndim == 1
+            for level in range(level_count):
+                dmap_key = "dmap_%d" % level
+                assert dmap_key in payload.files
+                assert payload[dmap_key].dtype.kind in "iu"
+                assert payload[dmap_key].ndim == 1
             for raw_name in payload["history_names"]:
                 name = str(raw_name)
                 fp_key = "history_regrid_steps_" + name
                 history_storage[name] = {
-                    "requested": tuple(int(v) for v in payload[
-                        "history_requested_stored_slots_" + name]),
-                    "stored": tuple(int(v) for v in payload[
-                        "history_stored_slots_" + name]),
+                    "requested": tuple(
+                        int(v) for v in payload["history_requested_stored_slots_" + name]
+                    ),
+                    "stored": tuple(int(v) for v in payload["history_stored_slots_" + name]),
                     "mode": str(payload["history_storage_mode_" + name]),
                     "regrid_steps": (
-                        tuple(int(v) for v in payload[fp_key])
-                        if fp_key in payload.files else None
+                        tuple(int(v) for v in payload[fp_key]) if fp_key in payload.files else None
                     ),
                 }
         restored = _bind(artifact)
@@ -385,9 +375,7 @@ def _run_restart_case(
         restored_rings = _rings(restored)
         restored_regrid_at_half = restored.amr.explain_regrid()
         _advance(restored, nsteps - half)
-        result = np.asarray(
-            restored.block_level_state_global("blk", 0), dtype=np.float64
-        ).copy()
+        result = np.asarray(restored.block_level_state_global("blk", 0), dtype=np.float64).copy()
         restored_regrid = restored.amr.explain_regrid()
 
     return {
@@ -421,9 +409,7 @@ def _assert_public_restart(out: dict[str, Any], *, label: str) -> None:
         "%s fresh public restart restores every history slot bit-for-bit (%s)"
         % (
             label,
-            _ring_diff_summary(
-                out["continuous_rings_at_half"], out["restored_rings"]
-            ),
+            _ring_diff_summary(out["continuous_rings_at_half"], out["restored_rings"]),
         ),
     )
     chk(
@@ -451,26 +437,29 @@ def _assert_public_restart(out: dict[str, Any], *, label: str) -> None:
 
 def _assert_dense_regrid_safety(out: dict[str, Any], *, label: str) -> None:
     rows = out["history_storage"]
-    chk(bool(rows) and all(
-        row["mode"] == "dense_regrid_safety"
-        and len(row["requested"]) < len(row["stored"])
-        and row["regrid_steps"]
-        for row in rows.values()),
+    chk(
+        bool(rows)
+        and all(
+            row["mode"] == "dense_regrid_safety"
+            and len(row["requested"]) < len(row["stored"])
+            and row["regrid_steps"]
+            for row in rows.values()
+        ),
         "%s exposes selective intent, dense safety storage and its regrid schedule: %r"
-        % (label, rows))
+        % (label, rows),
+    )
 
 
 def _assert_distributed_equals_replicated(
     replicated: dict[str, Any], distributed: dict[str, Any], *, label: str
 ) -> None:
-    replicated_flag = all(allgather_value(
-        _COMM, not bool(replicated["coarse_is_distributed"])
-    ))
-    distributed_flag = all(allgather_value(
-        _COMM, bool(distributed["coarse_is_distributed"])
-    ))
+    replicated_flag = all(allgather_value(_COMM, not bool(replicated["coarse_is_distributed"])))
+    distributed_flag = all(allgather_value(_COMM, bool(distributed["coarse_is_distributed"])))
     chk(replicated_flag, "%s public replicated coarse layout is replicated on every rank" % label)
-    chk(distributed_flag, "%s public distributed coarse layout owns a strict subset per rank" % label)
+    chk(
+        distributed_flag,
+        "%s public distributed coarse layout owns a strict subset per rank" % label,
+    )
     chk(
         np.array_equal(replicated["result"], distributed["result"]),
         "%s distributed coarse == replicated coarse BIT-IDENTICALLY (max|d|=%.3e)"
@@ -547,8 +536,7 @@ def _run_all() -> int:
         function()
     if _COMM.rank == 0:
         print(
-            "\n%s test_amr_history_mpi (%d check failures)"
-            % ("FAIL" if _fails else "PASS", _fails)
+            "\n%s test_amr_history_mpi (%d check failures)" % ("FAIL" if _fails else "PASS", _fails)
         )
     return _fails
 

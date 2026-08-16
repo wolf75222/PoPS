@@ -6,7 +6,7 @@
 #include <gtest/gtest.h>
 
 #include <pops/numerics/fv/reconstruction.hpp>
-#include <pops/numerics/spatial/primitives/face_flux.hpp>
+#include <pops/numerics/spatial/nd/reconstruction.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -59,8 +59,21 @@ struct MissingPolicy {};
 /// Minimal conservative model used only to exercise the production face-state reconstruction
 /// protocol.  The qualification below never calls a limiter formula directly.
 struct ScalarReconstructionModel {
-  using State = StateVec<1>;
-  static constexpr int n_vars = 1;
+  using Schema = nd::ScalarStateSchema<1>;
+  using State = typename Schema::Conservative;
+  using Primitive = typename Schema::Primitive;
+  static constexpr int dimension = 1;
+  static constexpr int n_vars = Schema::nvars;
+
+  POPS_HD nd::StateConversion<Primitive> recover(const State& state) const {
+    return {state, nd::StateConversionStatus::Success};
+  }
+  POPS_HD nd::StateConversion<State> make_conservative(const Primitive& primitive) const {
+    return {primitive, nd::StateConversionStatus::Success};
+  }
+  POPS_HD nd::StateConversionStatus admissibility(const State&) const {
+    return nd::StateConversionStatus::Success;
+  }
 };
 
 struct PeriodicFaceStates {
@@ -76,23 +89,44 @@ int periodic_index(int index, int size) {
   return remainder < 0 ? remainder + size : remainder;
 }
 
+template <int Dim>
+Extent<Dim> uniform_extent(int value) {
+  Extent<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = value;
+  return result;
+}
+
+template <int Dim>
+std::size_t host_offset(const Box<Dim>& storage, const Index<Dim>& index, int component) {
+  std::int64_t linear = 0;
+  std::int64_t stride = 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    linear += static_cast<std::int64_t>(index[axis] - storage.lo[axis]) * stride;
+    stride *= storage.length(axis);
+  }
+  return static_cast<std::size_t>(component * storage.numPts() + linear);
+}
+
 template <class Limiter>
 PeriodicFaceStates reconstruct_periodic_faces(const std::vector<Real>& cell_averages) {
   const int size = static_cast<int>(cell_averages.size());
-  Fab2D values(Box2D::from_extents(size, 1), ScalarReconstructionModel::n_vars, Limiter::n_ghost);
+  Fab<1> values(Box<1>::from_extents(Extent<1>{size}), ScalarReconstructionModel::n_vars,
+                Extent<1>{Limiter::n_ghost});
+  auto host = values.create_host_mirror();
   for (int i = values.grown_box().lo[0]; i <= values.grown_box().hi[0]; ++i)
-    values(i, 0, 0) = cell_averages[periodic_index(i, size)];
+    host(host_offset(values.grown_box(), Index<1>{i}, 0)) = cell_averages[periodic_index(i, size)];
+  values.copy_from_host(host);
 
   const ScalarReconstructionModel model{};
   const Limiter limiter{};
+  const auto state = static_cast<const Fab<1>&>(values).view();
   PeriodicFaceStates result{std::vector<Real>(size), std::vector<Real>(size), true};
   for (int i = 0; i < size; ++i) {
-    const auto left =
-        reconstruct_recovered(model, values.const_array(), i, 0, 0, Real(-1), limiter, false);
-    const auto right =
-        reconstruct_recovered(model, values.const_array(), i, 0, 0, Real(1), limiter, false);
-    result.publication_permitted = result.publication_permitted && left.publication_permitted() &&
-                                   right.publication_permitted();
+    const auto left = nd::reconstruct_face_state<0, -1>(model, state, Index<1>{i}, limiter);
+    const auto right = nd::reconstruct_face_state<0, 1>(model, state, Index<1>{i}, limiter);
+    result.publication_permitted =
+        result.publication_permitted && left.succeeded() && right.succeeded();
     result.left[i] = left.value[0];
     result.right[i] = right.value[0];
   }
@@ -131,25 +165,27 @@ double interface_jump_budget(const PeriodicFaceStates& states) {
 /// A nonlinear conservative/primitive conversion makes the two reconstruction paths observably
 /// different while remaining exactly invertible for the positive test data.
 struct PrimitiveTestModel {
+  struct Schema {
+    using Conservative = StateVec<2>;
+    using Primitive = StateVec<2>;
+    static constexpr int nvars = 2;
+  };
   using State = StateVec<2>;
-  using Prim = StateVec<2>;
-using Providers = pops::ProviderValues<0>;
+  using Primitive = StateVec<2>;
+  static constexpr int dimension = 1;
   static constexpr int n_vars = 2;
   int* primitive_calls = nullptr;
 
-  POPS_HD State flux(const State& state, const auto&, int) const { return state; }
-  POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return Real(1); }
-POPS_HD State source(const State&, const Providers&) const { return State{}; }
-  POPS_HD Real elliptic_rhs(const State&) const { return Real(0); }
-
-  POPS_HD Prim to_primitive(const State& state) const {
+  POPS_HD nd::StateConversion<Primitive> recover(const State& state) const {
     if (primitive_calls != nullptr)
       ++*primitive_calls;
-    return Prim{state[0] * state[0], state[1]};
+    return {Primitive{state[0] * state[0], state[1]}, nd::StateConversionStatus::Success};
   }
-  POPS_HD State to_conservative(const Prim& primitive) const {
-    using std::sqrt;
-    return State{sqrt(primitive[0]), primitive[1]};
+  POPS_HD nd::StateConversion<State> make_conservative(const Primitive& primitive) const {
+    return {State{Kokkos::sqrt(primitive[0]), primitive[1]}, nd::StateConversionStatus::Success};
+  }
+  POPS_HD nd::StateConversionStatus admissibility(const State&) const {
+    return nd::StateConversionStatus::Success;
   }
 };
 
@@ -314,16 +350,19 @@ TEST(test_muscl_limiter_qualification,
 }
 
 TEST(test_weno_convergence, external_sampled_policy_controls_offsets_and_orientation) {
-  const Box2D valid = Box2D::from_extents(11, 1);
-  Fab2D values(valid, PrimitiveTestModel::n_vars, ExternalFourSamplePolicy::n_ghost);
+  const Box<1> valid = Box<1>::from_extents(Extent<1>{11});
+  Fab<1> values(valid, PrimitiveTestModel::n_vars, Extent<1>{ExternalFourSamplePolicy::n_ghost});
+  auto host = values.create_host_mirror();
   for (int i = values.grown_box().lo[0]; i <= values.grown_box().hi[0]; ++i) {
-    values(i, 0, 0) = Real(2) + Real(0.2) * Real(i);
-    values(i, 0, 1) = Real(1) + Real(0.1) * Real(i);
+    host(host_offset(values.grown_box(), Index<1>{i}, 0)) = Real(2) + Real(0.2) * Real(i);
+    host(host_offset(values.grown_box(), Index<1>{i}, 1)) = Real(1) + Real(0.1) * Real(i);
   }
+  values.copy_from_host(host);
 
   int primitive_calls = 0;
   const PrimitiveTestModel model{&primitive_calls};
   const ExternalFourSamplePolicy policy{};
+  const auto state = static_cast<const Fab<1>&>(values).view();
   const auto sample_x = [](int offset) { return Real(2) + Real(0.2) * Real(offset); };
   const auto sample_y = [](int offset) { return Real(1) + Real(0.1) * Real(offset); };
   const auto combine = [](auto&& sample) {
@@ -331,15 +370,19 @@ TEST(test_weno_convergence, external_sampled_policy_controls_offsets_and_orienta
            Real(10);
   };
 
-  const auto right = reconstruct(model, values.const_array(), 5, 0, 0, Real(1), policy, false);
-  EXPECT_DOUBLE_EQ(right[0], combine([&](int offset) { return sample_x(5 + offset); }));
-  EXPECT_DOUBLE_EQ(right[1], combine([&](int offset) { return sample_y(5 + offset); }));
+  const auto right = nd::reconstruct_face_state<0, 1>(model, state, Index<1>{5}, policy);
+  ASSERT_TRUE(right.succeeded());
+  EXPECT_DOUBLE_EQ(right.value[0], combine([&](int offset) { return sample_x(5 + offset); }));
+  EXPECT_DOUBLE_EQ(right.value[1], combine([&](int offset) { return sample_y(5 + offset); }));
 
-  const auto left = reconstruct(model, values.const_array(), 5, 0, 0, Real(-1), policy, false);
-  EXPECT_DOUBLE_EQ(left[0], combine([&](int offset) { return sample_x(5 - offset); }));
-  EXPECT_DOUBLE_EQ(left[1], combine([&](int offset) { return sample_y(5 - offset); }));
+  const auto left = nd::reconstruct_face_state<0, -1>(model, state, Index<1>{5}, policy);
+  ASSERT_TRUE(left.succeeded());
+  EXPECT_DOUBLE_EQ(left.value[0], combine([&](int offset) { return sample_x(5 - offset); }));
+  EXPECT_DOUBLE_EQ(left.value[1], combine([&](int offset) { return sample_y(5 - offset); }));
 
-  const auto primitive = reconstruct(model, values.const_array(), 5, 0, 0, Real(1), policy, true);
+  const auto primitive = nd::reconstruct_face_state<0, 1, nd::ReconstructionVariables::Primitive>(
+      model, state, Index<1>{5}, policy);
+  ASSERT_TRUE(primitive.succeeded());
   EXPECT_EQ(primitive_calls, ExternalFourSamplePolicy::stencil_max_offset -
                                  ExternalFourSamplePolicy::stencil_min_offset + 1)
       << "primitive states are converted once per declared offset, not once per component";
@@ -347,20 +390,26 @@ TEST(test_weno_convergence, external_sampled_policy_controls_offsets_and_orienta
     const Real conservative = sample_x(5 + offset);
     return conservative * conservative;
   });
-  EXPECT_NEAR(primitive[0], std::sqrt(primitive_component), Real(1e-14));
-  EXPECT_DOUBLE_EQ(primitive[1], combine([&](int offset) { return sample_y(5 + offset); }));
-  EXPECT_NE(primitive[0], right[0]);
+  EXPECT_NEAR(primitive.value[0], std::sqrt(primitive_component), Real(1e-14));
+  EXPECT_DOUBLE_EQ(primitive.value[1], combine([&](int offset) { return sample_y(5 + offset); }));
+  EXPECT_NE(primitive.value[0], right.value[0]);
 }
 
-TEST(test_weno_convergence, sampled_policy_ghost_requirement_is_checked_exactly) {
-  const Box2D domain = Box2D::from_extents(8, 8);
-  const BoxArray boxes = BoxArray::from_domain(domain, 8);
-  const DistributionMapping distribution(boxes.size(), n_ranks());
-  MultiFab insufficient(boxes, distribution, 1, ExternalFourSamplePolicy::n_ghost - 1);
-  EXPECT_THROW(detail::require_reconstruction_ghosts<ExternalFourSamplePolicy>(insufficient),
-               std::runtime_error);
-  MultiFab exact(boxes, distribution, 1, ExternalFourSamplePolicy::n_ghost);
-  EXPECT_NO_THROW(detail::require_reconstruction_ghosts<ExternalFourSamplePolicy>(exact));
+template <int Dim>
+void expect_sampled_policy_ghost_requirement() {
+  const Box<Dim> domain = Box<Dim>::from_extents(uniform_extent<Dim>(8));
+  Fab<Dim> insufficient(domain, 1, uniform_extent<Dim>(ExternalFourSamplePolicy::n_ghost - 1));
+  EXPECT_THROW(
+      nd::require_reconstruction_storage<ExternalFourSamplePolicy>(insufficient, domain, 1),
+      std::invalid_argument);
+  Fab<Dim> exact(domain, 1, uniform_extent<Dim>(ExternalFourSamplePolicy::n_ghost));
+  EXPECT_NO_THROW(nd::require_reconstruction_storage<ExternalFourSamplePolicy>(exact, domain, 1));
+}
+
+TEST(test_weno_convergence, sampled_policy_ghost_requirement_is_checked_exactly_in_1d_2d_3d) {
+  expect_sampled_policy_ghost_requirement<1>();
+  expect_sampled_policy_ghost_requirement<2>();
+  expect_sampled_policy_ghost_requirement<3>();
 }
 
 // Pipeline stateful : la pente d'ordre est mesuree PROGRESSIVEMENT (log2 du ratio d'erreurs

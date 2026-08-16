@@ -384,18 +384,11 @@ inline void finish_field_nullspace_preflight(FieldNullspacePreflightPayload<Dim>
                              "rank-divergent metadata");
 }
 
-template <int Dim>
-inline void finish_field_nullspace_preflight(FieldNullspacePreflightPayload<Dim>& payload,
-                                             FieldNullspaceCollectiveBoundary boundary) {
-  const ExecutionLane lane = ExecutionLane::world();
-  finish_field_nullspace_preflight(payload, boundary, lane);
-}
-
 template <int Dim, class FieldVector>
 inline void preflight_field_nullspace_fields(
     const FieldVector& fields, const FieldNullspacePlan<Dim>& plan,
     std::span<const PreparedVectorDistribution<Dim>> distributions, int first_level,
-    FieldNullspaceCollectiveBoundary boundary) {
+    FieldNullspaceCollectiveBoundary boundary, const ExecutionLane& lane) {
   FieldNullspacePreflightPayload<Dim> payload;
   payload.append_scalar(first_level);
   payload.append_plan(plan, first_level, distributions);
@@ -475,7 +468,7 @@ inline void preflight_field_nullspace_fields(
       }
     }
   }
-  finish_field_nullspace_preflight(payload, boundary);
+  finish_field_nullspace_preflight(payload, boundary, lane);
 
   if (!active)
     return;
@@ -487,13 +480,14 @@ inline void preflight_field_nullspace_fields(
     if (boundary == FieldNullspaceCollectiveBoundary::Compatibility ||
         boundary == FieldNullspaceCollectiveBoundary::Gauge)
       distribution.require_exact_values(*fields[level], validation_storage,
-                                        "field nullspace solved field");
+                                        "field nullspace solved field", lane);
     for (const FieldNullspaceBasis<Dim>& basis : plan.bases) {
       if (const MultiFab<Dim>* mask = basis.mask(resolved_level); mask != nullptr)
-        distribution.require_exact_values(*mask, validation_storage, "field nullspace basis mask");
+        distribution.require_exact_values(*mask, validation_storage, "field nullspace basis mask",
+                                          lane);
       if (const MultiFab<Dim>* coverage = basis.coverage_mask(resolved_level); coverage != nullptr)
         distribution.require_exact_values(*coverage, validation_storage,
-                                          "field nullspace coverage mask");
+                                          "field nullspace coverage mask", lane);
     }
   }
 }
@@ -506,7 +500,7 @@ inline void preflight_labelled_field_nullspace(
     const std::vector<std::shared_ptr<const MultiFab<Dim>>>& coverage,
     const std::vector<Real>& cell_measure,
     std::span<const PreparedVectorDistribution<Dim>> distributions, int field_component,
-    int first_level) {
+    int first_level, const ExecutionLane& lane) {
   FieldNullspacePreflightPayload<Dim> payload;
   payload.append_text(identity);
   payload.append_text(layout_identity);
@@ -581,16 +575,16 @@ inline void preflight_labelled_field_nullspace(
       payload.require(components[previous].label != component.label &&
                       components[previous].identity != component.identity);
   }
-  finish_field_nullspace_preflight(payload, FieldNullspaceCollectiveBoundary::Preparation);
+  finish_field_nullspace_preflight(payload, FieldNullspaceCollectiveBoundary::Preparation, lane);
   for (std::size_t level = 0; level < labels.size(); ++level) {
     const PreparedVectorDistribution<Dim>& distribution = distributions[level];
     std::vector<char, comm_allocator<char>> validation_storage(
         distribution.validation_scratch_byte_count(), char{0});
     distribution.require_exact_values(*labels[level], validation_storage,
-                                      "connected-component label field");
+                                      "connected-component label field", lane);
     if (!coverage.empty())
       distribution.require_exact_values(*coverage[level], validation_storage,
-                                        "connected-component coverage field");
+                                        "connected-component coverage field", lane);
   }
 }
 
@@ -715,16 +709,17 @@ inline std::size_t gauge_index(const FieldNullspacePlan<Dim>& plan, const std::s
 template <int Dim>
 inline void reduce_field_nullspace_values_inplace(
     std::vector<double>& values, const PreparedVectorDistribution<Dim>& distribution,
-    const char* quantity) {
+    const char* quantity, const ExecutionLane& lane) {
   std::vector<double> scratch(
       distribution.reduction_scratch_value_count(std::max(values.size(), std::size_t{1})), 0.0);
-  distribution.reduce_sum_values(values, scratch, quantity);
+  distribution.reduce_sum_values(values, scratch, quantity, lane);
 }
 
 template <int Dim>
 inline std::vector<double> reduce_field_nullspace_level_values(
     std::vector<std::vector<double>>& level_values,
-    std::span<const PreparedVectorDistribution<Dim>> distributions, const char* quantity) {
+    std::span<const PreparedVectorDistribution<Dim>> distributions, const char* quantity,
+    const ExecutionLane& lane) {
   if (level_values.size() != distributions.size())
     throw std::logic_error("field nullspace level-distribution contract is incoherent");
   if (level_values.empty())
@@ -733,7 +728,8 @@ inline std::vector<double> reduce_field_nullspace_level_values(
   for (std::size_t level = 0; level < level_values.size(); ++level) {
     if (level_values[level].size() != result.size())
       throw std::logic_error("field nullspace level reduction widths are incoherent");
-    reduce_field_nullspace_values_inplace(level_values[level], distributions[level], quantity);
+    reduce_field_nullspace_values_inplace(level_values[level], distributions[level], quantity,
+                                          lane);
     for (std::size_t value = 0; value < result.size(); ++value)
       result[value] += level_values[level][value];
   }
@@ -803,10 +799,11 @@ inline void solve_field_nullspace_gram(std::span<const double> factor, std::size
 template <int Dim>
 inline void validate_field_nullspace_basis(
     const std::vector<const MultiFab<Dim>*>& level_layouts, const FieldNullspacePlan<Dim>& plan,
-    std::span<const PreparedVectorDistribution<Dim>> distributions, int first_level = 0) {
+    std::span<const PreparedVectorDistribution<Dim>> distributions, const ExecutionLane& lane,
+    int first_level = 0) {
   detail::preflight_field_nullspace_fields(
       level_layouts, plan, distributions, first_level,
-      detail::FieldNullspaceCollectiveBoundary::BasisValidation);
+      detail::FieldNullspaceCollectiveBoundary::BasisValidation, lane);
   if (plan.empty())
     return;
   if (level_layouts.empty())
@@ -860,7 +857,7 @@ inline void validate_field_nullspace_basis(
     }
   }
   std::vector<double> gram = detail::reduce_field_nullspace_level_values(
-      level_grams, distributions, "field nullspace Gram matrix");
+      level_grams, distributions, "field nullspace Gram matrix", lane);
   detail::factor_field_nullspace_gram(gram, count, "field nullspace Gram matrix");
   std::vector<std::string> constrained;
   for (const auto& gauge : plan.gauges) {
@@ -879,9 +876,11 @@ inline void validate_field_nullspace_basis(
 template <int Dim>
 inline std::vector<double> require_field_nullspace_compatible(
     const std::vector<const MultiFab<Dim>*>& rhs_levels, const FieldNullspacePlan<Dim>& plan,
-    std::span<const PreparedVectorDistribution<Dim>> distributions, int first_level = 0) {
+    std::span<const PreparedVectorDistribution<Dim>> distributions, const ExecutionLane& lane,
+    int first_level = 0) {
   detail::preflight_field_nullspace_fields(rhs_levels, plan, distributions, first_level,
-                                           detail::FieldNullspaceCollectiveBoundary::Compatibility);
+                                           detail::FieldNullspaceCollectiveBoundary::Compatibility,
+                                           lane);
   if (plan.empty())
     return {};
   if (plan.identity.empty() || plan.layout_identity.empty())
@@ -924,7 +923,7 @@ inline std::vector<double> require_field_nullspace_compatible(
     }
   }
   const std::vector<double> moments = detail::reduce_field_nullspace_level_values(
-      level_moments, distributions, "field nullspace compatibility moments");
+      level_moments, distributions, "field nullspace compatibility moments", lane);
   for (std::size_t b = 0; b < plan.bases.size(); ++b) {
     if (!std::isfinite(moments[2 * b]) || !std::isfinite(moments[2 * b + 1]))
       throw FieldNullspaceInvalidEvaluation(
@@ -950,13 +949,12 @@ inline std::vector<double> require_field_nullspace_compatible(
 template <int Dim>
 inline std::vector<double> require_field_nullspace_compatible(
     const MultiFab<Dim>& rhs, const FieldNullspacePlan<Dim>& plan,
-    const PreparedVectorDistribution<Dim>& distribution =
-        PreparedVectorDistribution<Dim>::Distributed) {
+    const PreparedVectorDistribution<Dim>& distribution, const ExecutionLane& lane) {
   const std::array<PreparedVectorDistribution<Dim>, 1> distributions{distribution};
   return require_field_nullspace_compatible(
       std::vector<const MultiFab<Dim>*>{&rhs}, plan,
       std::span<const PreparedVectorDistribution<Dim>>{distributions.data(), distributions.size()},
-      0);
+      lane, 0);
 }
 
 /// Apply every declared gauge with one batched reduction per level distribution. The same dense
@@ -965,9 +963,9 @@ template <int Dim>
 inline void apply_field_gauge(const std::vector<MultiFab<Dim>*>& phi_levels,
                               const FieldNullspacePlan<Dim>& plan,
                               std::span<const PreparedVectorDistribution<Dim>> distributions,
-                              int first_level = 0) {
+                              const ExecutionLane& lane, int first_level = 0) {
   detail::preflight_field_nullspace_fields(phi_levels, plan, distributions, first_level,
-                                           detail::FieldNullspaceCollectiveBoundary::Gauge);
+                                           detail::FieldNullspaceCollectiveBoundary::Gauge, lane);
   if (plan.gauges.empty())
     return;
   if (plan.identity.empty() || plan.layout_identity.empty())
@@ -1051,7 +1049,7 @@ inline void apply_field_gauge(const std::vector<MultiFab<Dim>*>& phi_levels,
     }
   }
   const std::vector<double> reduced = detail::reduce_field_nullspace_level_values(
-      level_values, distributions, "field dense gauge system");
+      level_values, distributions, "field dense gauge system", lane);
   std::vector<double> coefficients(reduced.begin(), reduced.begin() + basis_count);
   std::vector<double> gram(reduced.begin() + basis_count, reduced.end());
   detail::factor_field_nullspace_gram(gram, basis_count, "field gauge Gram matrix");
@@ -1082,13 +1080,14 @@ inline void apply_field_gauge(const std::vector<MultiFab<Dim>*>& phi_levels,
 
 template <int Dim>
 inline void apply_field_gauge(MultiFab<Dim>& phi, const FieldNullspacePlan<Dim>& plan,
-                              const PreparedVectorDistribution<Dim>& distribution =
-                                  PreparedVectorDistribution<Dim>::Distributed) {
+                              const PreparedVectorDistribution<Dim>& distribution,
+                              const ExecutionLane& lane) {
   std::vector<MultiFab<Dim>*> levels{&phi};
   const std::array<PreparedVectorDistribution<Dim>, 1> distributions{distribution};
   apply_field_gauge(
       levels, plan,
-      std::span<const PreparedVectorDistribution<Dim>>{distributions.data(), distributions.size()});
+      std::span<const PreparedVectorDistribution<Dim>>{distributions.data(), distributions.size()},
+      lane);
 }
 
 template <int Dim>
@@ -1124,14 +1123,14 @@ inline FieldNullspacePlan<Dim> labelled_mean_zero_nullspace(
     std::vector<FieldConnectedComponent> components,
     std::vector<std::shared_ptr<const MultiFab<Dim>>> coverage, std::vector<Real> cell_measure,
     int field_component, std::span<const PreparedVectorDistribution<Dim>> distributions,
-    int first_level = 0) {
+    const ExecutionLane& lane, int first_level = 0) {
   std::sort(components.begin(), components.end(),
             [](const FieldConnectedComponent& left, const FieldConnectedComponent& right) {
               return left.label < right.label;
             });
   detail::preflight_labelled_field_nullspace(identity, layout_identity, labels, components,
                                              coverage, cell_measure, distributions, field_component,
-                                             first_level);
+                                             first_level, lane);
   if (identity.empty() || layout_identity.empty())
     throw std::invalid_argument(
         "labelled field nullspace requires non-empty plan and layout identities");
@@ -1207,7 +1206,7 @@ inline FieldNullspacePlan<Dim> labelled_mean_zero_nullspace(
     }
   }
   const std::vector<double> counts = detail::reduce_field_nullspace_level_values(
-      counts_by_level, distributions, "connected-component label counts");
+      counts_by_level, distributions, "connected-component label counts", lane);
   if (counts.back() != 0.0)
     throw std::runtime_error(
         "connected-component label fields contain invalid or undeclared positive labels");
@@ -1245,7 +1244,7 @@ inline FieldNullspacePlan<Dim> labelled_mean_zero_nullspace(
   FieldNullspacePlan<Dim> mask_validation = result;
   for (FieldNullspaceBasis<Dim>& basis : mask_validation.bases)
     basis.field_component = 0;
-  validate_field_nullspace_basis(layouts, mask_validation, distributions, first_level);
+  validate_field_nullspace_basis(layouts, mask_validation, distributions, lane, first_level);
   return result;
 }
 

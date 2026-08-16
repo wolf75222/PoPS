@@ -18,6 +18,7 @@
 #include <pops/numerics/nonlinear/newton_options.hpp>
 #include <pops/numerics/nonlinear/prepared_local_nonlinear.hpp>
 #include <pops/numerics/spatial/primitives/state_access.hpp>
+#include <pops/parallel/execution_lane.hpp>
 
 #include <algorithm>
 #include <concepts>
@@ -30,11 +31,6 @@
 #include <utility>
 
 namespace pops {
-
-template <class Stepper, class Coupler, class Block>
-concept ImplicitBlockStepper =
-    requires(const Stepper stepper, Coupler& coupler, Block& block, Real dt, int substep,
-             int count) { stepper(coupler, block, dt, substep, count); };
 
 template <class Model>
 concept PartiallyImplicitModel = requires(int component) {
@@ -370,36 +366,39 @@ struct LocalStatReasonForLocation {
 };
 
 template <int Dim, class MemorySpace>
-Real collective_max_component(const MultiFab<Dim, MemorySpace>& statistics, int component) {
+Real collective_max_component(const MultiFab<Dim, MemorySpace>& statistics, int component,
+                              const ExecutionLane& lane) {
   Real local = Real(0);
   for (std::size_t local_index = 0; local_index < statistics.local_size(); ++local_index)
     local =
         std::max(local, for_each_cell_reduce_max(
                             statistics.box(local_index),
                             LocalStatValue<Dim>{statistics.fab(local_index).view(), component}));
-  return static_cast<Real>(all_reduce_max(static_cast<double>(local)));
+  return static_cast<Real>(all_reduce_max(static_cast<double>(local), lane));
 }
 
 template <int Dim, class MemorySpace>
-double collective_sum_component(const MultiFab<Dim, MemorySpace>& statistics, int component) {
+double collective_sum_component(const MultiFab<Dim, MemorySpace>& statistics, int component,
+                                const ExecutionLane& lane) {
   Real local = Real(0);
   for (std::size_t local_index = 0; local_index < statistics.local_size(); ++local_index)
     local += for_each_cell_reduce_sum(
         statistics.box(local_index),
         LocalStatValue<Dim>{statistics.fab(local_index).view(), component});
-  return all_reduce_sum(static_cast<double>(local));
+  return all_reduce_sum(static_cast<double>(local), lane);
 }
 
 template <int Dim, class MemorySpace>
 Real collective_reason(const MultiFab<Dim, MemorySpace>& statistics, int status,
-                       const Index<Dim>& selected, int component, int required_high = -1) {
+                       const Index<Dim>& selected, int component, const ExecutionLane& lane,
+                       int required_high = -1) {
   Real local = Real(0);
   for (std::size_t local_index = 0; local_index < statistics.local_size(); ++local_index)
     local = std::max(local, for_each_cell_reduce_max(statistics.box(local_index),
                                                      LocalStatReasonForLocation<Dim>{
                                                          statistics.fab(local_index).view(), status,
                                                          selected, component, required_high}));
-  return static_cast<Real>(all_reduce_max(static_cast<double>(local)));
+  return static_cast<Real>(all_reduce_max(static_cast<double>(local), lane));
 }
 
 inline SolveAction implicit_failure_action(LocalNonlinearStatus status) {
@@ -421,8 +420,8 @@ inline SolveAction implicit_failure_action(LocalNonlinearStatus status) {
   return SolveAction::kFailRun;
 }
 
-NewtonReport staged_report(const NewtonReport* current, const SolveReport& solve,
-                           double failed_cells) {
+inline NewtonReport staged_report(const NewtonReport* current, const SolveReport& solve,
+                                  double failed_cells) {
   NewtonReport staged = current != nullptr ? *current : NewtonReport{};
   staged.enabled = true;
   staged.solve = solve;
@@ -480,19 +479,17 @@ struct ImplicitSourcePublication {
 template <class ProviderAt, int Dim, int Count>
 concept ImplicitProviderPatchBinding =
     Count == 0 || requires(const ProviderAt& provider_at, std::size_t local_patch) {
-      {
-        provider_at(local_patch)
-      } -> std::same_as<ProviderStorageView<Dim, Count>>;
+      { provider_at(local_patch) } -> std::same_as<ProviderStorageView<Dim, Count>>;
     };
 
 /// Prepare a local backward-Euler source solve without publishing its ranked candidate.
 template <int Dim, class Model, class MemorySpace, class ProviderAt>
   requires ImplicitProviderPatchBinding<ProviderAt, Dim, provider_count_for<Model, Dim>()>
 [[nodiscard]] SolveOutcome backward_euler_source(
-    const Model& model, const ProviderAt& provider_at,
-    MultiFab<Dim, MemorySpace>& state,
-    Real dt, const NewtonOptions& options, const ImplicitMask<Model::n_vars>& mask = {},
-    NewtonReport* diagnostics = nullptr, const MultiFab<Dim, MemorySpace>* active_cells = nullptr) {
+    const Model& model, const ProviderAt& provider_at, MultiFab<Dim, MemorySpace>& state, Real dt,
+    const NewtonOptions& options, const ExecutionLane& lane,
+    const ImplicitMask<Model::n_vars>& mask = {}, NewtonReport* diagnostics = nullptr,
+    const MultiFab<Dim, MemorySpace>* active_cells = nullptr) {
   validate_newton_options(options, "backward_euler_source");
   const auto layout_matches = [&](const MultiFab<Dim, MemorySpace>& other) {
     return state.layout() == other.layout() && state.distribution() == other.distribution() &&
@@ -504,7 +501,10 @@ template <int Dim, class Model, class MemorySpace, class ProviderAt>
   if (active_cells != nullptr && (active_cells->ncomp() != 1 || !layout_matches(*active_cells)))
     throw std::invalid_argument(
         "Implicit source active-cell mask must have one component and match the state layout");
-  mf_arith_detail::require_collective_identity(state, "backward_euler_source");
+  if (!lane.active() || state.rank_space().size() != static_cast<std::size_t>(lane.size()) ||
+      state.rank_space().linear_rank(state.local_rank()) != static_cast<std::size_t>(lane.rank()))
+    throw std::logic_error(
+        "backward_euler_source: ND rank space does not match its prepared execution lane");
 
   auto candidate = std::make_unique<MultiFab<Dim, MemorySpace>>(
       state.layout(), state.distribution(), state.local_rank(), state.ncomp(), state.ghosts());
@@ -532,28 +532,30 @@ template <int Dim, class Model, class MemorySpace, class ProviderAt>
                                           });
   }
 
-  const int status_priority = static_cast<int>(detail::collective_max_component(statistics, 12));
+  const int status_priority =
+      static_cast<int>(detail::collective_max_component(statistics, 12, lane));
   const LocalNonlinearStatus status = local_nonlinear_status_from_priority(status_priority);
   const int status_code = local_nonlinear_status_code(status);
-  const int iterations = static_cast<int>(detail::collective_max_component(statistics, 1));
-  const int evaluations = static_cast<int>(detail::collective_max_component(statistics, 2));
-  const Real reference_residual = detail::collective_max_component(statistics, 3);
-  const Real residual = detail::collective_max_component(statistics, 4);
-  const Real step = detail::collective_max_component(statistics, 5);
-  const Real condition = detail::collective_max_component(statistics, 6);
-  const int safeguard_steps = static_cast<int>(detail::collective_max_component(statistics, 7));
-  const double failed_cells = detail::collective_sum_component(statistics, 9);
+  const int iterations = static_cast<int>(detail::collective_max_component(statistics, 1, lane));
+  const int evaluations = static_cast<int>(detail::collective_max_component(statistics, 2, lane));
+  const Real reference_residual = detail::collective_max_component(statistics, 3, lane);
+  const Real residual = detail::collective_max_component(statistics, 4, lane);
+  const Real step = detail::collective_max_component(statistics, 5, lane);
+  const Real condition = detail::collective_max_component(statistics, 6, lane);
+  const int safeguard_steps =
+      static_cast<int>(detail::collective_max_component(statistics, 7, lane));
+  const double failed_cells = detail::collective_sum_component(statistics, 9, lane);
 
   LocalNonlinearFailureLocation<Dim> failure{};
   std::uint32_t reason_code = 0;
   if (failed_cells > 0) {
-    failure = collective_first_local_nonlinear_failure(statistics, status_priority, 12, 8);
+    failure = collective_first_local_nonlinear_failure(statistics, status_priority, 12, 8, lane);
     if (!failure.found || failure.priority != status_priority)
       throw std::runtime_error("implicit source collective status/location precedence mismatch");
-    const int reason_high =
-        static_cast<int>(detail::collective_reason(statistics, status_code, failure.index, 10));
+    const int reason_high = static_cast<int>(
+        detail::collective_reason(statistics, status_code, failure.index, 10, lane));
     const int reason_low = static_cast<int>(
-        detail::collective_reason(statistics, status_code, failure.index, 11, reason_high));
+        detail::collective_reason(statistics, status_code, failure.index, 11, lane, reason_high));
     reason_code =
         (static_cast<std::uint32_t>(reason_high) << 16) | static_cast<std::uint32_t>(reason_low);
   }
@@ -591,38 +593,16 @@ template <int Dim, class Model, class MemorySpace, class ProviderAt>
   using Publication = detail::ImplicitSourcePublication<Dim, MemorySpace>;
   auto publication =
       std::make_shared<Publication>(Publication{&state, std::move(candidate), diagnostics, staged});
-  return SolveOutcome::collective_world(std::move(solve),
-                                        SolveOutcome::PublicationHooks{
-                                            publication.get(),
-                                            &Publication::accept,
-                                            nullptr,
-                                            nullptr,
-                                            std::static_pointer_cast<void>(publication),
-                                            &Publication::validate_accept,
-                                            nullptr,
-                                        });
+  return SolveOutcome::collective_lane(std::move(solve), lane,
+                                       SolveOutcome::PublicationHooks{
+                                           publication.get(),
+                                           &Publication::accept,
+                                           nullptr,
+                                           nullptr,
+                                           std::static_pointer_cast<void>(publication),
+                                           &Publication::validate_accept,
+                                           nullptr,
+                                       });
 }
-
-inline SolveReport consume_implicit_source_fail_run(SolveOutcome& outcome) {
-  if (outcome.report().solved_value_available())
-    return outcome.consume(SolveConsumption::kAccept);
-  const std::string status = outcome.report().status_name();
-  const std::string reason = outcome.report().reason;
-  const SolveReport failed = outcome.consume(SolveConsumption::kFailRun);
-  throw std::runtime_error("Implicit source nonlinear solve failed: status=" + status +
-                           " reason=" + reason + " action=" + failed.action_name());
-}
-
-struct ImplicitSourceStepper {
-  NewtonOptions options{};
-
-  template <class Coupler, class Block>
-  void operator()(Coupler& coupler, Block& block, Real dt, int /*substep*/,
-                  int /*substep_count*/) const {
-    auto outcome = backward_euler_source(block.model, coupler.provider_values_for(block),
-                                         block.U(), dt, options);
-    (void)consume_implicit_source_fail_run(outcome);
-  }
-};
 
 }  // namespace pops

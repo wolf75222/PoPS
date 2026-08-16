@@ -1,4 +1,5 @@
 """Typed brick descriptors, factories, and the strict external-brick catalog."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -12,23 +13,52 @@ from pops._manifest_protocol import strict_json_loads
 BRICK_TYPES = ("native", "generated", "macro", "external_cpp")
 
 BRICK_MANIFEST_SCHEMA_VERSION = 3
-_EXTERNAL_RIEMANN_ABI_VERSION = 2
-_EXTERNAL_RIEMANN_ABI_KEY = b"pops.external-riemann/v2;scalar=f64;index=i32;periodicity=xy"
-_EXTERNAL_RIEMANN_ABI_SYMBOLS = frozenset({
-    "pops_external_riemann_abi_version",
-    "pops_external_riemann_abi_key",
-    "pops_brick_residual_v2",
-    "pops_brick_install_system_v2",
-    "pops_brick_install_amr_v2",
-    "pops_brick_model_identity",
-    "pops_brick_kokkos_backend",
-    "pops_brick_kokkos_version",
-})
+_EXTERNAL_RIEMANN_ABI_VERSION = 5
+_EXTERNAL_RIEMANN_ABI_KEY = (
+    "pops.external-riemann/v5;scalar=f64;index=i32;periodicity=nd;"
+    "providers=qualified;dim={dimension}"
+)
+_EXTERNAL_RIEMANN_SYSTEM_ABI_VERSION = 7
+_EXTERNAL_RIEMANN_SYSTEM_ABI_KEY = (
+    "pops.external-riemann.system/v7;receiver=prepared-native-package;"
+    "providers=qualified;dim={dimension}"
+)
+_EXTERNAL_RIEMANN_ABI_SYMBOLS = frozenset(
+    {
+        "pops_external_riemann_abi_version",
+        "pops_external_riemann_abi_key",
+        "pops_external_riemann_dimension",
+        "pops_brick_nvars",
+        "pops_brick_nproviders",
+        "pops_brick_residual_v5",
+        "pops_brick_install_amr_v5",
+        "pops_brick_model_identity",
+        "pops_brick_kokkos_backend",
+        "pops_brick_kokkos_version",
+        "pops_register_provider_routes_amr",
+    }
+)
+_EXTERNAL_RIEMANN_SYSTEM_ABI_SYMBOLS = frozenset(
+    {
+        "pops_external_riemann_system_abi_version",
+        "pops_external_riemann_system_abi_key",
+        "pops_brick_install_system_v7",
+        "pops_register_provider_routes_system_v7",
+    }
+)
 _BRICK_MANIFEST_TOP_KEYS = frozenset({"schema_version", "abi_key", "annotations", "bricks"})
 _BRICK_MANIFEST_TOP_REQUIRED = ("schema_version", "abi_key", "annotations", "bricks")
 _BRICK_MANIFEST_ENTRY_REQUIRED = (
-    "id", "category", "requirements", "capabilities", "native_id", "supported_layouts",
-    "supported_platforms", "params", "options", "exported_symbols",
+    "id",
+    "category",
+    "requirements",
+    "capabilities",
+    "native_id",
+    "supported_layouts",
+    "supported_platforms",
+    "params",
+    "options",
+    "exported_symbols",
 )
 _BRICK_MANIFEST_ENTRY_KEYS = frozenset(_BRICK_MANIFEST_ENTRY_REQUIRED)
 
@@ -93,13 +123,25 @@ class BrickDescriptor:
     hash). It is intentionally inert: it has no ``eval`` / ``compile`` / call.
     """
 
-    def __init__(self, name: str, brick_type: str, *, category: str = "brick",
-                 native_id: str = "", scheme: Any = None, requirements: Any = None,
-                 capabilities: Any = None, options: Any = None, available: bool = True,
-                 expression: Any = None, builder: Any = None) -> None:
+    def __init__(
+        self,
+        name: str,
+        brick_type: str,
+        *,
+        category: str = "brick",
+        native_id: str = "",
+        scheme: Any = None,
+        requirements: Any = None,
+        capabilities: Any = None,
+        options: Any = None,
+        available: bool = True,
+        expression: Any = None,
+        builder: Any = None,
+    ) -> None:
         if brick_type not in BRICK_TYPES:
-            raise ValueError("brick_type %r must be one of %s"
-                             % (brick_type, ", ".join(BRICK_TYPES)))
+            raise ValueError(
+                "brick_type %r must be one of %s" % (brick_type, ", ".join(BRICK_TYPES))
+            )
         self.name = str(name)
         self.brick_type = str(brick_type)
         self.category = str(category)
@@ -140,7 +182,8 @@ class BrickDescriptor:
             raise RuntimeError(
                 "brick descriptor %r [%s] is frozen (ADC-563): cannot set %r after the assembly was "
                 "frozen by pops.compile; author a fresh descriptor and recompile."
-                % (getattr(self, "name", "?"), getattr(self, "category", "brick"), key))
+                % (getattr(self, "name", "?"), getattr(self, "category", "brick"), key)
+            )
         object.__setattr__(self, key, value)
 
     def _key(self) -> tuple:
@@ -163,8 +206,7 @@ class BrickDescriptor:
         return hash(self._key())
 
     def __repr__(self) -> str:
-        return "BrickDescriptor(%r, %r, scheme=%r)" % (
-            self.name, self.brick_type, self.scheme)
+        return "BrickDescriptor(%r, %r, scheme=%r)" % (self.name, self.brick_type, self.scheme)
 
     # --- DescriptorProtocol surface (Spec 5 sec.6). The metadata stays carried by the
     # ``requirements`` / ``capabilities`` / ``options`` ATTRIBUTES above (this descriptor's
@@ -178,9 +220,13 @@ class BrickDescriptor:
         with an empty ``native_id`` (a catalogued-but-not-native brick) is left to the loud
         :meth:`validate` refusal upstream -- never a silent fallback.
         """
-        return LoweredDescriptor(name=self.name, category=self.category,
-                                 native_id=self.native_id or None, options=dict(self.options),
-                                 scheme=self.scheme)
+        return LoweredDescriptor(
+            name=self.name,
+            category=self.category,
+            native_id=self.native_id or None,
+            options=dict(self.options),
+            scheme=self.scheme,
+        )
 
     def available(self, context: Any = None) -> Availability:
         """The EXPLAINABLE availability status of this brick (ADC-625: the ONE availability route).
@@ -200,7 +246,8 @@ class BrickDescriptor:
             missing=["native_id"],
             alternatives=[
                 "choose a typed descriptor from its pops.lib catalog and inspect it with pops.inspect()"
-            ])
+            ],
+        )
 
     def inspect(self) -> dict:
         """A plain-dict view of the brick descriptor (Spec 5 sec.12.1).
@@ -208,10 +255,16 @@ class BrickDescriptor:
         ``available`` is derived from the ONE availability route (``available().ok``), so the
         inspect view never diverges from the explained status (ADC-625).
         """
-        return {"name": self.name, "category": self.category, "native_id": self.native_id,
-                "scheme": self.scheme, "options": dict(self.options),
-                "requirements": dict(self.requirements),
-                "capabilities": dict(self.capabilities), "available": self.available().ok}
+        return {
+            "name": self.name,
+            "category": self.category,
+            "native_id": self.native_id,
+            "scheme": self.scheme,
+            "options": dict(self.options),
+            "requirements": dict(self.requirements),
+            "capabilities": dict(self.capabilities),
+            "available": self.available().ok,
+        }
 
     def to_data(self) -> dict[str, Any]:
         """Exact inert identity data for any consumer implementing the descriptor protocol."""
@@ -239,26 +292,37 @@ class BrickDescriptor:
                 "requested %s:%s; available route: native %s descriptors with a non-empty "
                 "native_id; alternative: choose an available descriptor from "
                 "its pops.lib catalog and inspect it with pops.inspect()."
-                % (self.name, self.category, self.category, self.name, self.category))
+                % (self.name, self.category, self.category, self.name, self.category)
+            )
         return True
 
     def capability_matrix(self, context: Any = None) -> Any:
         """One-row ADC-549 capability matrix for this brick descriptor (metadata only)."""
         from pops._capabilities import CapabilityRouteMatrix, CapabilityRouteRow
+
         ok = self.available(context).ok
         status = "available" if ok else "unavailable"
         limitation = "" if ok else "catalogued descriptor has no native C++ symbol"
         error = ""
         if not ok:
-            error = ("unsupported route: requested %s:%s; available route: native %s "
-                     "descriptors with a non-empty native_id; alternative: choose an available "
-                     "typed descriptor from its pops.lib catalog and inspect it with pops.inspect()."
-                     % (self.category, self.name, self.category))
+            error = (
+                "unsupported route: requested %s:%s; available route: native %s "
+                "descriptors with a non-empty native_id; alternative: choose an available "
+                "typed descriptor from its pops.lib catalog and inspect it with pops.inspect()."
+                % (self.category, self.name, self.category)
+            )
         row = CapabilityRouteRow(
             "%s:%s" % (self.category, self.name),
-            layout="context", backend="native" if self.native_id else "none",
-            platform="context", mpi=None, gpu=None, status=status,
-            limitation=limitation, error_message=error, source="descriptor")
+            layout="context",
+            backend="native" if self.native_id else "none",
+            platform="context",
+            mpi=None,
+            gpu=None,
+            status=status,
+            limitation=limitation,
+            error_message=error,
+            source="descriptor",
+        )
         return CapabilityRouteMatrix(self.name, "context", [row])
 
 
@@ -268,8 +332,16 @@ class BrickDescriptor:
 # not under a numerics/fv namespace. Some catalogued bricks have no native type yet --
 # they are emitted with ``available=False`` and an EMPTY native_id rather than a
 # fabricated symbol.
-def _native(name: str, native_id: str, scheme: Any, *, category: str, caps: Any = None,
-            capabilities: Any = None, **options: Any) -> BrickDescriptor:
+def _native(
+    name: str,
+    native_id: str,
+    scheme: Any,
+    *,
+    category: str,
+    caps: Any = None,
+    capabilities: Any = None,
+    **options: Any,
+) -> BrickDescriptor:
     """A native-brick descriptor.
 
     ``caps`` lists the model capabilities the brick REQUIRES (folded into ``requirements``);
@@ -280,9 +352,16 @@ def _native(name: str, native_id: str, scheme: Any, *, category: str, caps: Any 
     none, so an unannotated brick is unchanged.
     """
     req = {"capabilities": list(caps)} if caps is not None else {}
-    return BrickDescriptor(name, "native", category=category, native_id=native_id,
-                           scheme=scheme, requirements=req, capabilities=capabilities,
-                           options=options or None)
+    return BrickDescriptor(
+        name,
+        "native",
+        category=category,
+        native_id=native_id,
+        scheme=scheme,
+        requirements=req,
+        capabilities=capabilities,
+        options=options or None,
+    )
 
 
 # --- external C++ bricks (Spec 3 section 21-22 / criterion 20) -------------
@@ -308,15 +387,18 @@ def _clear_external_catalog() -> None:
 def _split_csv(value: Any) -> list:
     """Split one canonical CSV string; the empty string denotes an explicit empty list."""
     if not isinstance(value, str):
-        raise ValueError("manifest CSV field (requirements / capabilities / supported_layouts / "
-                         "supported_platforms / params / options / exported_symbols) must be a CSV "
-                         "string; got %r" % (value,))
+        raise ValueError(
+            "manifest CSV field (requirements / capabilities / supported_layouts / "
+            "supported_platforms / params / options / exported_symbols) must be a CSV "
+            "string; got %r" % (value,)
+        )
     if not value:
         return []
     tokens = value.split(",")
     if any(not token or token != token.strip() for token in tokens):
-        raise ValueError("manifest CSV field must be canonical (no whitespace or empty tokens): %r"
-                         % value)
+        raise ValueError(
+            "manifest CSV field must be canonical (no whitespace or empty tokens): %r" % value
+        )
     if len(tokens) != len(set(tokens)):
         raise ValueError("manifest CSV field contains duplicate token(s): %r" % value)
     return tokens
@@ -349,25 +431,35 @@ def _parse_brick_manifest_document(manifest_json: Any) -> tuple:
             raise
         raise ValueError("external brick manifest is not valid JSON: %s" % err) from err
     if not isinstance(doc, dict):
-        raise ValueError("external brick manifest must be a JSON object with 'schema_version' and "
-                         "'bricks'; got %r" % (manifest_json,))
+        raise ValueError(
+            "external brick manifest must be a JSON object with 'schema_version' and "
+            "'bricks'; got %r" % (manifest_json,)
+        )
     unknown_top = sorted(set(doc) - _BRICK_MANIFEST_TOP_KEYS)
     if unknown_top:
-        raise ValueError("external brick manifest has unknown top-level field(s) %s; the strict schema "
-                         "allows only %s" % (unknown_top, sorted(_BRICK_MANIFEST_TOP_KEYS)))
+        raise ValueError(
+            "external brick manifest has unknown top-level field(s) %s; the strict schema "
+            "allows only %s" % (unknown_top, sorted(_BRICK_MANIFEST_TOP_KEYS))
+        )
     for field in _BRICK_MANIFEST_TOP_REQUIRED:
         if field not in doc:
-            remedy = ("; it predates the versioned schema -- migrate the manifest offline"
-                      if field == "schema_version" else "")
-            raise ValueError("external brick manifest is missing the required %r field%s"
-                             % (field, remedy))
+            remedy = (
+                "; it predates the versioned schema -- migrate the manifest offline"
+                if field == "schema_version"
+                else ""
+            )
+            raise ValueError(
+                "external brick manifest is missing the required %r field%s" % (field, remedy)
+            )
     version = doc["schema_version"]
     if isinstance(version, bool) or not isinstance(version, int):
         raise ValueError("external brick manifest 'schema_version' must be an integer")
     if version != BRICK_MANIFEST_SCHEMA_VERSION:
-        raise ValueError("external brick manifest 'schema_version' is %r, incompatible with the "
-                         "supported version %d; migrate or regenerate the brick library"
-                         % (version, BRICK_MANIFEST_SCHEMA_VERSION))
+        raise ValueError(
+            "external brick manifest 'schema_version' is %r, incompatible with the "
+            "supported version %d; migrate or regenerate the brick library"
+            % (version, BRICK_MANIFEST_SCHEMA_VERSION)
+        )
     abi_key = doc["abi_key"]
     if not isinstance(abi_key, str) or not abi_key:
         raise ValueError("external brick manifest 'abi_key' must be a non-empty string")
@@ -380,29 +472,40 @@ def _parse_brick_manifest_document(manifest_json: Any) -> tuple:
     seen_ids = set()
     seen_native_ids = set()
     csv_fields = {
-        "requirements", "capabilities", "supported_layouts", "supported_platforms", "params",
-        "options", "exported_symbols",
+        "requirements",
+        "capabilities",
+        "supported_layouts",
+        "supported_platforms",
+        "params",
+        "options",
+        "exported_symbols",
     }
     for entry in bricks:
         if not isinstance(entry, dict):
             raise ValueError("external brick manifest entry must be an object; got %r" % (entry,))
         unknown_entry = sorted(set(entry) - _BRICK_MANIFEST_ENTRY_KEYS)
         if unknown_entry:
-            raise ValueError("external brick manifest entry %r has unknown field(s) %s; the strict "
-                             "schema allows only %s"
-                             % (entry.get("id"), unknown_entry,
-                                list(_BRICK_MANIFEST_ENTRY_REQUIRED)))
+            raise ValueError(
+                "external brick manifest entry %r has unknown field(s) %s; the strict "
+                "schema allows only %s"
+                % (entry.get("id"), unknown_entry, list(_BRICK_MANIFEST_ENTRY_REQUIRED))
+            )
         for field in _BRICK_MANIFEST_ENTRY_REQUIRED:
             if field not in entry:
-                raise ValueError("external brick manifest entry %r is missing the required '%s' field"
-                                 % (entry.get("id"), field))
+                raise ValueError(
+                    "external brick manifest entry %r is missing the required '%s' field"
+                    % (entry.get("id"), field)
+                )
         for field in ("id", "category", "native_id"):
             if not isinstance(entry[field], str) or not entry[field]:
-                raise ValueError("external brick manifest entry field %r must be a non-empty string"
-                                 % field)
+                raise ValueError(
+                    "external brick manifest entry field %r must be a non-empty string" % field
+                )
         for field in csv_fields:
             if not isinstance(entry[field], str):
-                raise ValueError("external brick manifest entry field %r must be a CSV string" % field)
+                raise ValueError(
+                    "external brick manifest entry field %r must be a CSV string" % field
+                )
         brick_id = entry["id"]
         native_id = entry["native_id"]
         if brick_id in seen_ids:
@@ -411,18 +514,20 @@ def _parse_brick_manifest_document(manifest_json: Any) -> tuple:
             raise ValueError("external brick manifest contains duplicate native_id %r" % native_id)
         seen_ids.add(brick_id)
         seen_native_ids.add(native_id)
-        records.append({
-            "id": brick_id,
-            "category": entry["category"],
-            "requirements": _split_csv(entry["requirements"]),
-            "capabilities": _split_csv(entry["capabilities"]),
-            "native_id": native_id,
-            "supported_layouts": _split_csv(entry["supported_layouts"]),
-            "supported_platforms": _split_csv(entry["supported_platforms"]),
-            "params": _split_csv(entry["params"]),
-            "options": _split_csv(entry["options"]),
-            "exported_symbols": _split_csv(entry["exported_symbols"]),
-        })
+        records.append(
+            {
+                "id": brick_id,
+                "category": entry["category"],
+                "requirements": _split_csv(entry["requirements"]),
+                "capabilities": _split_csv(entry["capabilities"]),
+                "native_id": native_id,
+                "supported_layouts": _split_csv(entry["supported_layouts"]),
+                "supported_platforms": _split_csv(entry["supported_platforms"]),
+                "params": _split_csv(entry["params"]),
+                "options": _split_csv(entry["options"]),
+                "exported_symbols": _split_csv(entry["exported_symbols"]),
+            }
+        )
     return records, abi_key, annotations
 
 
@@ -441,18 +546,22 @@ def _register_manifest(manifest_json: Any) -> int:
     from copy import deepcopy
 
     records, abi_key, annotations = _parse_brick_manifest_document(manifest_json)
-    conflicts = [record["id"] for record in records
-                 if record["id"] in _EXTERNAL_BRICKS
-                 and (_EXTERNAL_BRICKS[record["id"]] != record
-                      or _EXTERNAL_BRICK_ORIGINS[record["id"]]
-                      != (abi_key, annotations))]
+    conflicts = [
+        record["id"]
+        for record in records
+        if record["id"] in _EXTERNAL_BRICKS
+        and (
+            _EXTERNAL_BRICKS[record["id"]] != record
+            or _EXTERNAL_BRICK_ORIGINS[record["id"]] != (abi_key, annotations)
+        )
+    ]
     if conflicts:
-        raise ValueError("external brick id collision has different metadata: %s"
-                         % ", ".join(sorted(conflicts)))
+        raise ValueError(
+            "external brick id collision has different metadata: %s" % ", ".join(sorted(conflicts))
+        )
     for record in records:
         _EXTERNAL_BRICKS.setdefault(record["id"], dict(record))
-        _EXTERNAL_BRICK_ORIGINS.setdefault(
-            record["id"], (abi_key, deepcopy(annotations)))
+        _EXTERNAL_BRICK_ORIGINS.setdefault(record["id"], (abi_key, deepcopy(annotations)))
     return len(records)
 
 
@@ -478,66 +587,149 @@ def load_cpp_library(path: Any) -> int:
     try:
         manifest_fn = handle.pops_brick_manifest
     except AttributeError as err:
-        raise ValueError("external brick library %r does not export pops_brick_manifest(); it "
-                         "is not an pops brick .so" % (path,)) from err
+        raise ValueError(
+            "external brick library %r does not export pops_brick_manifest(); it "
+            "is not an pops brick .so" % (path,)
+        ) from err
     manifest_fn.restype = ctypes.c_char_p
     raw = manifest_fn()
     if raw is None:
-        raise ValueError("external brick library %r: pops_brick_manifest() returned NULL"
-                         % (path,))
+        raise ValueError("external brick library %r: pops_brick_manifest() returned NULL" % (path,))
     manifest_json = raw.decode("utf-8")
     records, _abi_key, _annotations = _parse_brick_manifest_document(manifest_json)
     riemann_rows = [record for record in records if record["category"] == "riemann"]
     if riemann_rows:
+        system_v7_rows = []
         for record in riemann_rows:
-            missing = sorted(_EXTERNAL_RIEMANN_ABI_SYMBOLS - set(record["exported_symbols"]))
+            exported = set(record["exported_symbols"])
+            missing = sorted(_EXTERNAL_RIEMANN_ABI_SYMBOLS - exported)
             if missing:
                 raise ValueError(
                     "external Riemann brick %r uses a legacy/unversioned numerical ABI; its "
                     "manifest is missing %s. Rebuild it with the current "
-                    "POPS_DEFINE_EXTERNAL_RIEMANN_BRICK macro"
-                    % (record["id"], missing)
+                    "POPS_DEFINE_EXTERNAL_RIEMANN_BRICK macro" % (record["id"], missing)
                 )
+            declared_system = _EXTERNAL_RIEMANN_SYSTEM_ABI_SYMBOLS & exported
+            if declared_system and declared_system != _EXTERNAL_RIEMANN_SYSTEM_ABI_SYMBOLS:
+                raise ValueError(
+                    "external Riemann brick %r declares an incomplete System v7 ABI; missing %s"
+                    % (record["id"], sorted(_EXTERNAL_RIEMANN_SYSTEM_ABI_SYMBOLS - declared_system))
+                )
+            system_v7_rows.append(bool(declared_system))
+        if len(set(system_v7_rows)) != 1:
+            raise ValueError(
+                "external Riemann manifest mixes residual/AMR v5-only and System v7 brick contracts"
+            )
+        has_system_v7 = system_v7_rows[0]
         try:
             version_fn = handle.pops_external_riemann_abi_version
             key_fn = handle.pops_external_riemann_abi_key
-            getattr(handle, "pops_brick_residual_v2")
-            getattr(handle, "pops_brick_install_system_v2")
-            getattr(handle, "pops_brick_install_amr_v2")
+            dimension_fn = handle.pops_external_riemann_dimension
+            nvars_fn = handle.pops_brick_nvars
+            provider_count_fn = handle.pops_brick_nproviders
+            _ = (
+                handle.pops_brick_residual_v5,
+                handle.pops_brick_install_amr_v5,
+            )
             model_identity_fn = handle.pops_brick_model_identity
-            getattr(handle, "pops_brick_kokkos_backend")
-            getattr(handle, "pops_brick_kokkos_version")
+            _ = (handle.pops_brick_kokkos_backend, handle.pops_brick_kokkos_version)
         except AttributeError as err:
             raise ValueError(
-                "external Riemann brick library %r declares ABI v2 but does not export its exact "
-                "version/key/residual symbols" % (path,)
+                "external Riemann brick library %r does not export its exact residual/AMR v5 "
+                "version/key/symbol contract" % (path,)
             ) from err
         version_fn.restype = ctypes.c_int
         key_fn.restype = ctypes.c_char_p
+        dimension_fn.restype = ctypes.c_int
+        nvars_fn.restype = ctypes.c_int
+        provider_count_fn.restype = ctypes.c_int
         model_identity_fn.restype = ctypes.c_char_p
         version = version_fn()
         key = key_fn()
+        dimension = dimension_fn()
+        nvars = nvars_fn()
+        provider_count = provider_count_fn()
         model_identity_raw = model_identity_fn()
-        if version != _EXTERNAL_RIEMANN_ABI_VERSION or key != _EXTERNAL_RIEMANN_ABI_KEY:
+        expected_key = _EXTERNAL_RIEMANN_ABI_KEY.format(dimension=dimension).encode("ascii")
+        if version != _EXTERNAL_RIEMANN_ABI_VERSION or key != expected_key:
             raise ValueError(
                 "external Riemann brick library %r has incompatible numerical ABI version/key; "
                 "rebuild it with the current PoPS headers" % (path,)
             )
+        if dimension not in (1, 2, 3) or nvars < 1 or provider_count < 0:
+            raise ValueError(
+                "external Riemann brick library %r exports an invalid dimension/model/provider "
+                "contract" % (path,)
+            )
+        try:
+            _ = handle.pops_register_provider_routes_amr
+        except AttributeError as err:
+            raise ValueError(
+                "external Riemann brick library %r does not export its canonical AMR v5 "
+                "provider registrar" % (path,)
+            ) from err
+        system_key = None
+        if has_system_v7:
+            try:
+                system_version_fn = handle.pops_external_riemann_system_abi_version
+                system_key_fn = handle.pops_external_riemann_system_abi_key
+                _ = (
+                    handle.pops_brick_install_system_v7,
+                    handle.pops_register_provider_routes_system_v7,
+                )
+            except AttributeError as err:
+                raise ValueError(
+                    "external Riemann brick library %r declares but does not export its exact "
+                    "System v7 ABI" % (path,)
+                ) from err
+            system_version_fn.restype = ctypes.c_int
+            system_key_fn.restype = ctypes.c_char_p
+            system_version = system_version_fn()
+            system_key = system_key_fn()
+            expected_system_key = _EXTERNAL_RIEMANN_SYSTEM_ABI_KEY.format(
+                dimension=dimension
+            ).encode("ascii")
+            if (
+                system_version != _EXTERNAL_RIEMANN_SYSTEM_ABI_VERSION
+                or system_key != expected_system_key
+            ):
+                raise ValueError(
+                    "external Riemann brick library %r has incompatible System v7 "
+                    "registrar/installer ABI; rebuild it with the current PoPS headers" % (path,)
+                )
         if not model_identity_raw:
             raise ValueError(
-                "external Riemann brick library %r exports an empty model identity" % (path,))
+                "external Riemann brick library %r exports an empty model identity" % (path,)
+            )
         model_identity = model_identity_raw.decode("utf-8")
     else:
         model_identity = None
+        dimension = nvars = provider_count = None
+        key = system_key = None
+    identity = (
+        str(library),
+        digest,
+        handle,
+        model_identity,
+        dimension,
+        nvars,
+        provider_count,
+        None if key is None else key.decode("ascii"),
+        None if system_key is None else system_key.decode("ascii"),
+    )
+    library_conflicts = [
+        record["id"]
+        for record in records
+        if (previous := _EXTERNAL_BRICK_LIBRARIES.get(record["id"])) is not None
+        and previous[:2] != identity[:2]
+    ]
+    if library_conflicts:
+        raise ValueError(
+            "external brick id(s) %s already loaded from a different native library"
+            % ", ".join(sorted(library_conflicts))
+        )
     registered = _register_manifest(manifest_json)
     for record in records:
-        identity = (str(library), digest, handle, model_identity)
-        previous = _EXTERNAL_BRICK_LIBRARIES.get(record["id"])
-        if previous is not None and previous[:2] != identity[:2]:
-            raise ValueError(
-                "external brick id %r is already loaded from a different native library"
-                % record["id"]
-            )
         _EXTERNAL_BRICK_LIBRARIES.setdefault(record["id"], identity)
     return registered
 
@@ -554,26 +746,46 @@ def _external_descriptor(brick_id: Any, *, expect_category: Any = None) -> Brick
     if entry is None:
         raise LookupError(
             "external brick %r not loaded; call pops.lib.load_cpp_library(...) on the brick "
-            ".so first (loaded: %s)" % (brick_id, sorted(_EXTERNAL_BRICKS) or "none"))
+            ".so first (loaded: %s)" % (brick_id, sorted(_EXTERNAL_BRICKS) or "none")
+        )
     if expect_category is not None and entry["category"] != expect_category:
-        raise ValueError("external brick %r is registered as category %r, not %r"
-                         % (brick_id, entry["category"], expect_category))
+        raise ValueError(
+            "external brick %r is registered as category %r, not %r"
+            % (brick_id, entry["category"], expect_category)
+        )
     req = {"capabilities": list(entry["requirements"])} if entry["requirements"] else {}
     caps = {"provides": list(entry["capabilities"])} if entry["capabilities"] else {}
     runtime = _EXTERNAL_BRICK_LIBRARIES.get(entry["id"])
-    options = None if runtime is None or entry["category"] != "riemann" else {
-        "library_path": runtime[0],
-        "library_sha256": runtime[1],
-        "abi_version": _EXTERNAL_RIEMANN_ABI_VERSION,
-        "abi_key": _EXTERNAL_RIEMANN_ABI_KEY.decode("ascii"),
-        "native_abi_key": _EXTERNAL_BRICK_ORIGINS[entry["id"]][0],
-        "supported_layouts": tuple(entry["supported_layouts"]),
-        "model_identity": runtime[3],
-    }
-    return BrickDescriptor(entry["id"], "external_cpp", category=entry["category"],
-                           native_id=entry["native_id"], scheme="user",
-                           requirements=req or None, capabilities=caps or None,
-                           options=options)
+    options = (
+        None
+        if runtime is None or entry["category"] != "riemann"
+        else {
+            "library_path": runtime[0],
+            "library_sha256": runtime[1],
+            "abi_version": _EXTERNAL_RIEMANN_ABI_VERSION,
+            "abi_key": runtime[7],
+            "system_abi_version": (
+                _EXTERNAL_RIEMANN_SYSTEM_ABI_VERSION if runtime[8] is not None else None
+            ),
+            "system_abi_key": runtime[8],
+            "native_abi_key": _EXTERNAL_BRICK_ORIGINS[entry["id"]][0],
+            "supported_layouts": tuple(entry["supported_layouts"]),
+            "model_identity": runtime[3],
+            "dimension": runtime[4],
+            "n_vars": runtime[5],
+            "provider_count": runtime[6],
+        }
+    )
+    return BrickDescriptor(
+        entry["id"],
+        "external_cpp",
+        category=entry["category"],
+        native_id=entry["native_id"],
+        scheme="user",
+        requirements=req or None,
+        capabilities=caps or None,
+        options=options,
+    )
 
 
 def external(brick_id: Any) -> BrickDescriptor:

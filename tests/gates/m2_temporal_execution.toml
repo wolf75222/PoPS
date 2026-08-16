@@ -149,6 +149,25 @@ kind = "pytest"
 target = "solve"
 nodeid = "tests/python/integration/runtime/test_multiblock_implicit_phase.py::test_multiblock_implicit_fixture_refuses_route_or_phase_multiplicity_drift"
 
+# These are the temporal-composition proofs: the Program is authored in Python, compiled, then
+# executed on a refined AMR hierarchy.  C++ loader/transaction suites intentionally do not qualify
+# this requirement because their bodies are synthetic fixtures.
+[[check]]
+issue = "ADC-668"
+requirement = "native_multiblock_implicit_phase"
+polarity = "positive"
+kind = "pytest"
+target = "solve"
+nodeid = "tests/python/integration/amr/test_amr_newton_full.py::test_nonlinear_local_imex_executes_on_the_refined_amr_program"
+
+[[check]]
+issue = "ADC-668"
+requirement = "native_multiblock_implicit_phase"
+polarity = "refusal"
+kind = "pytest"
+target = "solve"
+nodeid = "tests/python/integration/amr/test_amr_newton_full.py::test_nonlinear_local_imex_failrun_rolls_back_refined_amr_attempt"
+
 [[check]]
 issue = "ADC-648"
 requirement = "refined_hierarchy_native_ordering"
@@ -203,7 +222,7 @@ requirement = "program_only_temporal_routes"
 polarity = "refusal"
 kind = "pytest"
 target = "architecture"
-nodeid = "tests/python/architecture/test_program_only_temporal_facades.py::test_static_system_temporal_driver_is_test_only"
+nodeid = "tests/python/architecture/test_program_only_temporal_facades.py::test_static_system_assembler_is_retired_from_the_final_runtime_surface"
 
 [[check]]
 issue = "ADC-668"
@@ -212,6 +231,14 @@ polarity = "positive"
 kind = "pytest"
 target = "architecture"
 nodeid = "tests/python/architecture/test_program_only_temporal_facades.py::test_nonlinear_amr_semantics_use_the_compiled_program_not_a_blocker"
+
+[[check]]
+issue = "ADC-668"
+requirement = "program_only_temporal_routes"
+polarity = "positive"
+kind = "pytest"
+target = "architecture"
+nodeid = "tests/python/architecture/test_program_only_temporal_facades.py::test_ssprk_semantics_have_only_typed_python_program_authority"
 
 [[check]]
 issue = "ADC-666"

@@ -10,22 +10,73 @@ from pops.params.use_sites import ParamUse, resolve_param_use
 
 from .._descriptor import MeshDescriptor
 from ._param_threshold import resolve_refine_threshold
-from . import bootstrap as _bootstrap, hierarchy as _hierarchy
-from . import hierarchy_regrid as _hierarchy_regrid, transfer as _transfer
-from . import hierarchy_resolution as _hierarchy_resolution
-from .bootstrap import *  # noqa: F403
-from .hierarchy import *  # noqa: F403
-from .hierarchy_regrid import *  # noqa: F403
-from .hierarchy_resolution import *  # noqa: F403
+from .bootstrap import (
+    AnalyticReprojection,
+    BootstrapAction,
+    BootstrapOrdering,
+    BootstrapPlan,
+    BootstrapSelection,
+    ConstraintProvider,
+    ProlongFromParent,
+    resolve_bootstrap,
+)
+from .hierarchy import (
+    CanonicalOptions,
+    ClusteringPolicy,
+    DerivedNestingRequirements,
+    FrozenHierarchy,
+    HierarchyPhaseError,
+    HierarchyPlan,
+    LevelTransition,
+    LoadBalancePolicy,
+    NestingRequirementSource,
+    PatchGenerationPolicy,
+    RegridSchedule,
+)
 from .hierarchy_native import *  # noqa: F403
-from .transfer import *  # noqa: F403
-from . import tagging_graph as _tagging_graph, tagging_resolution as _tagging_resolution
-from .tagging_graph import *  # noqa: F403
-from .tagging_resolution import *  # noqa: F403
+from .hierarchy_regrid import (
+    HierarchyLifecycleEvents,
+    RegridDueToken,
+    RegridRequest,
+    RegridTransactionDecision,
+    RegridTransactionGate,
+)
+from .hierarchy_resolution import (
+    HierarchyCapabilityError,
+    HierarchyProviderCapabilities,
+    HierarchyResolutionContext,
+    ResolvedHierarchy,
+    resolve_hierarchy,
+)
+from .tagging_graph import (
+    Above,
+    AllOf,
+    AnyOf,
+    Below,
+    ConflictPolicy,
+    DiscreteIndicatorContext,
+    EqualityPolicy,
+    GradientAbove,
+    GradientBelow,
+    Hysteresis,
+    MagnitudeAbove,
+    Not,
+    TagExpr,
+    TaggingGraph,
+)
+from .tagging_resolution import (
+    ResolvedTaggingGraph,
+    TagDecision,
+    TagNodeRegistration,
+    TagNodeRegistry,
+    TaggingState,
+    resolve_tagging_graph,
+)
+from .transfer import AMRTransfer, ResolvedAMRTransfer
 
-# ResolvedHierarchy transports an arbitrary positive level count. Only the refinement ratio is a
-# native kernel capability; no authoring-level constant may masquerade as a backend maximum.
-NATIVE_RATIOS = (2,)
+# ResolvedHierarchy transports the exact per-axis ratio selected by the hierarchy.  This token is
+# report metadata only; it must never be interpreted as a finite set of native ratios.
+NATIVE_RATIO_POLICY = "hierarchy_exact_rank"
 
 
 def _require_handle(reference: Any, where: str) -> Any:
@@ -400,9 +451,64 @@ class IgnoreAMRCriteria(MeshDescriptor):
 
 
 __all__ = [
-    "Refine", "TagUnion", "RegridEvery", "FrozenRegrid", "PatchClustering",
-    "ProperNesting", "BufferCells", "IgnoreAMRCriteria",
-    "NATIVE_RATIOS",
-] + _tagging_graph.__all__ + _tagging_resolution.__all__ \
-    + _hierarchy.__all__ + _hierarchy_regrid.__all__ + _hierarchy_resolution.__all__ \
-    + _transfer.__all__ + _bootstrap.__all__
+    "Refine",
+    "TagUnion",
+    "RegridEvery",
+    "FrozenRegrid",
+    "PatchClustering",
+    "ProperNesting",
+    "BufferCells",
+    "IgnoreAMRCriteria",
+    "NATIVE_RATIO_POLICY",
+    "Above",
+    "AllOf",
+    "AnyOf",
+    "Below",
+    "ConflictPolicy",
+    "DiscreteIndicatorContext",
+    "EqualityPolicy",
+    "GradientAbove",
+    "GradientBelow",
+    "Hysteresis",
+    "MagnitudeAbove",
+    "Not",
+    "TagExpr",
+    "TaggingGraph",
+    "ResolvedTaggingGraph",
+    "TagDecision",
+    "TagNodeRegistration",
+    "TagNodeRegistry",
+    "TaggingState",
+    "resolve_tagging_graph",
+    "CanonicalOptions",
+    "ClusteringPolicy",
+    "DerivedNestingRequirements",
+    "FrozenHierarchy",
+    "HierarchyPhaseError",
+    "HierarchyPlan",
+    "LevelTransition",
+    "LoadBalancePolicy",
+    "NestingRequirementSource",
+    "PatchGenerationPolicy",
+    "RegridSchedule",
+    "HierarchyLifecycleEvents",
+    "RegridDueToken",
+    "RegridRequest",
+    "RegridTransactionDecision",
+    "RegridTransactionGate",
+    "HierarchyCapabilityError",
+    "HierarchyProviderCapabilities",
+    "HierarchyResolutionContext",
+    "ResolvedHierarchy",
+    "resolve_hierarchy",
+    "AMRTransfer",
+    "ResolvedAMRTransfer",
+    "AnalyticReprojection",
+    "BootstrapAction",
+    "BootstrapOrdering",
+    "BootstrapPlan",
+    "BootstrapSelection",
+    "ConstraintProvider",
+    "ProlongFromParent",
+    "resolve_bootstrap",
+]

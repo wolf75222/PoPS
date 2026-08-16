@@ -17,10 +17,12 @@ using PolarFluid = CompositeModel<IsothermalFluxPolar, NoSource, BackgroundDensi
 
 static_assert(ExBVelocityPolar::dimension == 2);
 static_assert(ExBVelocityPolar::planar_polar_capability);
+static_assert(ExBVelocityPolar::n_providers == 2);
 static_assert(IsothermalFluxPolar::dimension == 2);
 static_assert(IsothermalFluxPolar::planar_polar_capability);
 static_assert(PolarFluid::dimension == 2);
-static_assert(PolarFluid::n_providers == 2);
+// This composite has no ExB transport or force brick: all three selected consumers are provider-free.
+static_assert(PolarFluid::n_providers == 0);
 
 }  // namespace
 

@@ -1,95 +1,259 @@
-// Injection d'aux multi-patch parent -> enfant DISTRIBUEE (coupler_inject_aux_mb,
-// chemin replicated_parent=false via parallel_copy), verifiee contre une fonction AFFINE :
-// l'interpolation conservative-lineaire doit etre exacte et independante du nombre de rangs.
-//
-// Au-dela de 2 niveaux, le parent (aux du niveau intermediaire) est multi-box REPARTI :
-// un patch enfant peut avoir son parent sur un AUTRE rang. Sans le FillPatch parallel_copy,
-// mf_find_box rendrait -1 et ces cellules resteraient a leur sentinelle (-12345). On verifie
-// que chaque cellule (valides + ghosts), entierement couverte par le parent, recoit la bonne
-// valeur affine au centre de l'enfant. A np=1 le chemin reste exerce (parallel_copy = copie
-// memoire). DIST == analytique a np=1/2/4 prouve l'invariance a la distribution.
-
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
-#include <pops/coupling/amr/amr_coupler_mp.hpp>  // detail::coupler_inject_aux_mb
-#include <pops/mesh/layout/box_array.hpp>
-#include <pops/mesh/layout/distribution_mapping.hpp>
-#include <pops/mesh/storage/multifab.hpp>
-#include <pops/mesh/layout/refinement.hpp>  // coarsen_index
+#include <pops/core/foundation/native_dimension.hpp>
+#include <pops/mesh/layout/refinement.hpp>
 #include <pops/parallel/comm.hpp>
+#include <pops/parallel/execution_lane.hpp>
+#include <pops/runtime/amr/prepared_amr_ghost_fill.hpp>
 
+#include <Kokkos_Core.hpp>
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
 #include <cstdio>
+#include <exception>
+#include <string>
+#include <utility>
 #include <vector>
 
-using namespace pops;
+namespace {
 
-static int pops_run_test_mpi_coupler_inject(int argc, char** argv) {
-  comm_init(&argc, &argv);
-  const int me = my_rank();
-  long fails = 0;
-
-  // f analytique sur la grille parente (niveau 1), exacte en double.
-  auto fval = [](int ci, int cj, int k) { return double(ci * 1000 + cj * 10 + k); };
-
-  // parent : niveau 1, 4 boites pavant [0,32)^2 (quadrants 16x16), reparti round-robin.
-  const Box2D coarse_domain = Box2D::from_extents(32, 32);
-  const Box2D fine_domain = coarse_domain.refine(2);
-  std::vector<Box2D> pb;
-  for (int qy = 0; qy < 2; ++qy)
-    for (int qx = 0; qx < 2; ++qx) {
-      const int x0 = 16 * qx, y0 = 16 * qy;
-      pb.push_back(Box2D{{x0, y0}, {x0 + 15, y0 + 15}});
-    }
-  BoxArray pba(pb);
-  DistributionMapping pdm(static_cast<int>(pb.size()), n_ranks());  // round-robin
-  MultiFab parent(pba, pdm, 3, 1);
-  for (int li = 0; li < parent.local_size(); ++li) {
-    Array4 a = parent.fab(li).array();
-    const Box2D g = parent.fab(li).grown_box();
-    for (int j = g.lo[1]; j <= g.hi[1]; ++j)
-      for (int i = g.lo[0]; i <= g.hi[0]; ++i)
-        for (int k = 0; k < 3; ++k)
-          a(i, j, k) = fval(i, j, k);
-  }
-
-  // enfant : niveau 2, 2 patchs interieurs (region niveau 1 [8,24)^2 -> niveau 2 [16,48)^2),
-  // reparti round-robin. Le grown footprint coarsen reste dans [0,32) -> couverture totale.
-  std::vector<Box2D> cb = {Box2D{{16, 16}, {31, 47}}, Box2D{{32, 16}, {47, 47}}};
-  BoxArray cba(cb);
-  DistributionMapping cdm(static_cast<int>(cb.size()), n_ranks());
-  MultiFab child(cba, cdm, 3, 1);
-  child.set_val(-12345.0);  // sentinelle : doit etre ecrasee partout (couverture totale)
-
-  detail::coupler_inject_aux_mb(parent, child, coarse_domain, fine_domain,
-                                /*replicated_parent=*/false, Periodicity{});
-
-  // verification locale contre l'analytique (coarsen du grown box).
-  for (int lc = 0; lc < child.local_size(); ++lc) {
-    const ConstArray4 c = child.fab(lc).const_array();
-    const Box2D g = child.fab(lc).grown_box();
-    for (int j = g.lo[1]; j <= g.hi[1]; ++j)
-      for (int i = g.lo[0]; i <= g.hi[0]; ++i) {
-        const int ci = coarsen_index(i, 2), cj = coarsen_index(j, 2);
-        const double ox = (i & 1) ? 0.25 : -0.25;
-        const double oy = (j & 1) ? 0.25 : -0.25;
-        for (int k = 0; k < 3; ++k)
-          if (c(i, j, k) != fval(ci, cj, k) + 1000.0 * ox + 10.0 * oy)
-            ++fails;
-      }
-  }
-
-  fails = all_reduce_sum(fails);
-  if (me == 0) {
-    std::printf("inject aux multi-patch distribue (np=%d) : %ld cellules fausses\n", n_ranks(),
-                fails);
-    std::printf(fails == 0 ? "OK test_mpi_coupler_inject\n" : "FAIL test_mpi_coupler_inject\n");
-  }
-  comm_finalize();
-  return fails == 0 ? 0 : 1;
+template <int Dim>
+pops::Extent<Dim> uniform_extent(std::int64_t value) {
+  pops::Extent<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = value;
+  return result;
 }
 
-TEST(test_mpi_coupler_inject, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_mpi_coupler_inject, "test_mpi_coupler_inject"),
-            0);
+template <int Dim>
+pops::Index<Dim> rank_coordinate(int rank) {
+  pops::Index<Dim> result{};
+  result[0] = rank;
+  return result;
+}
+
+template <int Dim>
+pops::Index<Dim> index_from_ordinal(const pops::Box<Dim>& box, std::size_t ordinal) {
+  pops::Index<Dim> index{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    const std::size_t length = static_cast<std::size_t>(box.length(axis));
+    index[axis] = box.lo[axis] + static_cast<int>(ordinal % length);
+    ordinal /= length;
+  }
+  return index;
+}
+
+template <int Dim>
+std::size_t field_offset(const pops::Box<Dim>& grown, const pops::Index<Dim>& index,
+                         int component) {
+  std::size_t cell = 0;
+  std::size_t stride = 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    cell += static_cast<std::size_t>(index[axis] - grown.lo[axis]) * stride;
+    stride *= static_cast<std::size_t>(grown.length(axis));
+  }
+  return static_cast<std::size_t>(component) * stride + cell;
+}
+
+template <int Dim>
+pops::Real parent_value(const pops::Index<Dim>& index, int component) {
+  pops::Real result = static_cast<pops::Real>(component * 10'000);
+  pops::Real scale = 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    result += scale * static_cast<pops::Real>(index[axis]);
+    scale *= pops::Real{97};
+  }
+  return result;
+}
+
+template <int Dim>
+pops::Real fine_affine_value(const pops::Index<Dim>& index, int component) {
+  pops::Real result = static_cast<pops::Real>(component * 10'000);
+  pops::Real scale = 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    const int parent = index[axis] / 2;
+    const int child = index[axis] % 2;
+    result += scale * (static_cast<pops::Real>(parent) +
+                       (child == 0 ? pops::Real{-0.25} : pops::Real{0.25}));
+    scale *= pops::Real{97};
+  }
+  return result;
+}
+
+template <int Dim>
+void fill_parent(pops::MultiFab<Dim>& field) {
+  for (std::size_t local = 0; local < field.local_size(); ++local) {
+    auto& fab = field.fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    for (int component = 0; component < field.ncomp(); ++component)
+      for (std::size_t ordinal = 0; ordinal < static_cast<std::size_t>(fab.box().numPts());
+           ++ordinal) {
+        const auto index = index_from_ordinal(fab.box(), ordinal);
+        host(field_offset(fab.grown_box(), index, component)) = parent_value(index, component);
+      }
+    fab.copy_from_host(host);
+  }
+}
+
+template <int Dim>
+void seed_child_valid(pops::MultiFab<Dim>& field, pops::Real sentinel) {
+  field.set_val(sentinel);
+  for (std::size_t local = 0; local < field.local_size(); ++local) {
+    auto& fab = field.fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    for (int component = 0; component < field.ncomp(); ++component)
+      for (std::size_t ordinal = 0; ordinal < static_cast<std::size_t>(fab.box().numPts());
+           ++ordinal) {
+        const auto index = index_from_ordinal(fab.box(), ordinal);
+        host(field_offset(fab.grown_box(), index, component)) = fine_affine_value(index, component);
+      }
+    fab.copy_from_host(host);
+  }
+}
+
+template <int Dim>
+std::pair<long, long> count_child_failures(const pops::MultiFab<Dim>& field, pops::Real sentinel) {
+  long failures = 0;
+  long populated_ghosts = 0;
+  for (std::size_t local = 0; local < field.local_size(); ++local) {
+    const auto& fab = field.fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    for (int component = 0; component < field.ncomp(); ++component)
+      for (std::size_t ordinal = 0; ordinal < static_cast<std::size_t>(fab.grown_box().numPts());
+           ++ordinal) {
+        const auto index = index_from_ordinal(fab.grown_box(), ordinal);
+        const pops::Real value = host(field_offset(fab.grown_box(), index, component));
+        if (value != fine_affine_value(index, component))
+          ++failures;
+        if (!fab.box().contains(index) && value != sentinel)
+          ++populated_ghosts;
+      }
+  }
+  return {failures, populated_ghosts};
+}
+
+template <int Dim>
+pops::runtime::amr::AmrGhostFillBudget ghost_budget(std::size_t coarse_boxes,
+                                                    std::size_t fine_boxes) {
+  const std::size_t pairs =
+      coarse_boxes * fine_boxes + coarse_boxes * coarse_boxes + fine_boxes * fine_boxes + 16;
+  return {pops::runtime::amr::CoarseFineGhostScheduleBudget{fine_boxes, 32 * fine_boxes, pairs,
+                                                            128 * fine_boxes, 32, 2'000'000,
+                                                            2'000'000, 2'000'000},
+          pops::HaloScheduleBudget{{fine_boxes, pairs},
+                                   fine_boxes * fine_boxes * 64,
+                                   fine_boxes * fine_boxes * 64 * static_cast<std::size_t>(2 * Dim),
+                                   64,
+                                   32,
+                                   2'000'000,
+                                   2'000'000,
+                                   2'000'000}};
+}
+
+template <int Dim>
+void prove_distributed_parent_injection(int rank_count, int rank) {
+  pops::Index<Dim> coarse_upper{};
+  for (int axis = 0; axis < Dim; ++axis)
+    coarse_upper[axis] = (axis == 0 ? rank_count * 16 : 32) - 1;
+  const pops::Box<Dim> coarse_domain{pops::Index<Dim>{}, coarse_upper};
+  const pops::Box<Dim> fine_domain = pops::refine(coarse_domain, 2);
+
+  auto coarse_grid = uniform_extent<Dim>(16);
+  coarse_grid[0] = 8;
+  const auto coarse_layout = pops::mesh::BoxArray<Dim>::from_domain(coarse_domain, coarse_grid);
+
+  pops::Index<Dim> fine_lower{};
+  pops::Index<Dim> fine_upper = fine_domain.hi;
+  fine_lower[0] = rank_count * 8;
+  fine_upper[0] = rank_count * 24 - 1;
+  for (int axis = 1; axis < Dim; ++axis) {
+    fine_lower[axis] = 16;
+    fine_upper[axis] = 47;
+  }
+  const pops::Box<Dim> covered_fine{fine_lower, fine_upper};
+  auto fine_grid = uniform_extent<Dim>(32);
+  fine_grid[0] = 8;
+  const auto fine_layout = pops::mesh::BoxArray<Dim>::from_domain(covered_fine, fine_grid);
+
+  auto rank_extent = uniform_extent<Dim>(1);
+  rank_extent[0] = rank_count;
+  const pops::mesh::RankSpace<Dim> rank_space{pops::Index<Dim>{}, rank_extent};
+  std::vector<pops::Index<Dim>> coarse_owners;
+  std::vector<pops::Index<Dim>> fine_owners;
+  for (std::size_t patch = 0; patch < coarse_layout.size(); ++patch)
+    coarse_owners.push_back(rank_coordinate<Dim>(static_cast<int>(patch % rank_count)));
+  for (std::size_t patch = 0; patch < fine_layout.size(); ++patch)
+    fine_owners.push_back(rank_coordinate<Dim>(static_cast<int>((patch + 1) % rank_count)));
+  const auto coarse_distribution = pops::mesh::Distribution<Dim>::partitioned(
+      coarse_layout, rank_space, std::move(coarse_owners));
+  const auto fine_distribution =
+      pops::mesh::Distribution<Dim>::partitioned(fine_layout, rank_space, std::move(fine_owners));
+  const auto local_rank = rank_coordinate<Dim>(rank);
+
+  pops::MultiFab<Dim> parent(coarse_layout, coarse_distribution, local_rank, 3,
+                             pops::Extent<Dim>{});
+  pops::MultiFab<Dim> child(fine_layout, fine_distribution, local_rank, 3, uniform_extent<Dim>(1));
+  fill_parent(parent);
+  constexpr pops::Real sentinel = pops::Real{-12345};
+  seed_child_valid(child, sentinel);
+
+  std::array<int, Dim> ratio_values{};
+  ratio_values.fill(2);
+  pops::runtime::amr::AmrGhostFillPreparation<Dim> request{};
+  request.fine_level = 1;
+  request.coarse_domain = coarse_domain;
+  request.fine_domain = fine_domain;
+  request.ratio = pops::amr::RefinementRatio<Dim>{ratio_values};
+  request.topology = pops::BoundaryTopology<Dim>::physical();
+  request.topology_generation = 17;
+  request.materialization_generation = 23;
+  request.field_identity = "pops.test.mpi-coupler-inject.aux";
+  request.budget = ghost_budget<Dim>(coarse_layout.size(), fine_layout.size());
+
+  auto lane = pops::ExecutionLane::duplicate_world_collectively(
+      "pops.test.mpi-coupler-inject.dim-" + std::to_string(Dim));
+  const auto injection = pops::runtime::amr::prepare_amr_ghost_fill(parent, child, request, lane);
+  if (rank_count > 1)
+    EXPECT_TRUE(injection.has_remote_parent_jobs());
+  pops::runtime::multiblock::BoundaryEvaluationPoint point{};
+  point.level = 1;
+  injection(child, point);
+
+  const auto [local_failures, local_populated_ghosts] = count_child_failures(child, sentinel);
+  EXPECT_EQ(pops::all_reduce_sum(local_failures, lane), 0L);
+  EXPECT_GT(pops::all_reduce_sum(local_populated_ghosts, lane), 0L);
+}
+
+int run_mpi_coupler_inject(int argc, char** argv) {
+  pops::comm_init(&argc, &argv);
+  int result = 0;
+  {
+    Kokkos::ScopeGuard kokkos(argc, argv);
+    try {
+      prove_distributed_parent_injection<pops::kNativeDimension>(pops::n_ranks(), pops::my_rank());
+    } catch (const std::exception& error) {
+      std::fprintf(stderr, "rank %d exact-rank MPI parent injection failed: %s\n", pops::my_rank(),
+                   error.what());
+      result = 1;
+    }
+    result = static_cast<int>(
+        pops::all_reduce_max(static_cast<long>(result || ::testing::Test::HasFailure())));
+    if (pops::my_rank() == 0 && result == 0)
+      std::printf("OK test_mpi_coupler_inject (np=%d dim=%d prepared parent transport)\n",
+                  pops::n_ranks(), pops::kNativeDimension);
+  }
+  pops::comm_finalize();
+  return result;
+}
+
+}  // namespace
+
+TEST(test_mpi_coupler_inject, NativeDimensionUsesPreparedMultiblockParentTransport) {
+  EXPECT_EQ(pops::test::RunTestBody(&run_mpi_coupler_inject, "test_mpi_coupler_inject"), 0);
 }

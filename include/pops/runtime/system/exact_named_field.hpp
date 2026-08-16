@@ -17,6 +17,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -45,8 +46,10 @@ class ExactNamedField final {
                   const mesh::BoxArray<Dim>& layout, const mesh::Distribution<Dim>& distribution,
                   Index<Dim> local_rank, BoundaryTopology<Dim> topology,
                   elliptic::nd::CartesianPoissonOptions<Dim> options, std::size_t block_count,
-                  std::vector<output_key_type> output_keys = {})
-      : identity_(std::move(identity)),
+                  const ExecutionLane& lane, std::vector<output_key_type> output_keys = {})
+      : lane_(&lane),
+        lane_borrow_(lane.borrow_immutably()),
+        identity_(std::move(identity)),
         output_block_(std::move(output_block)),
         output_(output),
         output_keys_(std::move(output_keys)),
@@ -57,7 +60,8 @@ class ExactNamedField final {
         candidate_outputs_(layout, distribution, local_rank,
                            static_cast<int>(output.component_count()), Extent<Dim>{}),
         solver_(std::make_unique<CartesianCgFieldSolverBackend<Dim>>(
-            geometry, layout, distribution, local_rank, std::move(topology), std::move(options))),
+            geometry, layout, distribution, local_rank, std::move(topology), std::move(options),
+            lane)),
         rhs_by_block_(block_count) {
     validate_();
   }
@@ -66,8 +70,11 @@ class ExactNamedField final {
                   runtime::field::NamedFieldOutput<Dim> output, const Geometry<Dim>& geometry,
                   const mesh::BoxArray<Dim>& layout, const mesh::Distribution<Dim>& distribution,
                   Index<Dim> local_rank, std::unique_ptr<solver_type> solver,
-                  std::size_t block_count, std::vector<output_key_type> output_keys = {})
-      : identity_(std::move(identity)),
+                  std::size_t block_count, const ExecutionLane& lane,
+                  std::vector<output_key_type> output_keys = {})
+      : lane_(&lane),
+        lane_borrow_(lane.borrow_immutably()),
+        identity_(std::move(identity)),
         output_block_(std::move(output_block)),
         output_(output),
         output_keys_(std::move(output_keys)),
@@ -154,23 +161,46 @@ class ExactNamedField final {
     if (prepared.provider_identity.empty() || prepared.provider_version == 0 ||
         prepared.exact_prepared_contract.empty())
       throw std::invalid_argument("named-field nullspace lacks an exact prepared authority");
-    solver_->install_nullspace(prepared.plan, std::move(distribution));
+    solver_->install_nullspace(std::move(prepared.plan), std::move(distribution));
     prepared_nullspace_ = std::move(prepared);
+  }
+
+  using rhs_image_type = std::vector<std::vector<PreparedRhs>>;
+
+  static void append_rhs(rhs_image_type& image, std::size_t block, rhs_type rhs, Real coefficient) {
+    if (block >= image.size())
+      throw std::out_of_range("named-field RHS block index is outside the prepared registry");
+    if (!rhs || !std::isfinite(static_cast<double>(coefficient)))
+      throw std::invalid_argument("named-field RHS provider or coefficient is invalid");
+    image[block].push_back({std::move(rhs), coefficient});
   }
 
   void add_rhs(std::size_t block, rhs_type rhs, Real coefficient) {
     if (active_)
       throw std::logic_error("cannot add a named-field RHS while a solve is active");
-    if (block >= rhs_by_block_.size())
-      throw std::out_of_range("named-field RHS block index is outside the prepared registry");
-    if (!rhs || !std::isfinite(static_cast<double>(coefficient)))
-      throw std::invalid_argument("named-field RHS provider or coefficient is invalid");
-    rhs_by_block_[block].push_back({std::move(rhs), coefficient});
+    append_rhs(rhs_by_block_, block, std::move(rhs), coefficient);
+  }
+
+  [[nodiscard]] rhs_image_type rhs_image() const {
+    if (active_)
+      throw std::logic_error("cannot snapshot a named-field RHS while a solve is active");
+    return rhs_by_block_;
+  }
+
+  void publish_rhs_image(rhs_image_type& candidate) noexcept {
+    static_assert(std::is_nothrow_swappable_v<rhs_image_type>);
+    if (active_ || candidate.size() != rhs_by_block_.size())
+      std::terminate();
+    rhs_by_block_.swap(candidate);
   }
 
   SolveReport solve_candidate(
       const std::vector<const field_type*>& states,
-      const FieldBoundaryExecutionContext<Dim>* boundary_context = nullptr) {
+      std::shared_ptr<const PreparedFieldBoundaryContextSet<Dim>> boundary_contexts,
+      const ExecutionLane& lane) {
+    if (all_reduce_max(&lane == lane_ ? 0L : 1L, *lane_) != 0)
+      throw std::invalid_argument(
+          "named elliptic field solve requires its prepared execution lane");
     std::exception_ptr preparation_error;
     try {
       if (active_)
@@ -191,18 +221,18 @@ class ExactNamedField final {
       if (!has_rhs)
         throw std::runtime_error("named elliptic field has no prepared RHS provider");
       if (has_boundary_kernel_) {
-        if (boundary_context == nullptr)
+        if (!boundary_contexts || boundary_contexts->size() != 1)
           throw std::logic_error(
               "named elliptic field dynamic boundary has no prepared execution context");
-        solver_->set_boundary_context(*boundary_context);
-      } else if (boundary_context != nullptr) {
+        solver_->set_boundary_contexts(boundary_contexts);
+      } else if (boundary_contexts) {
         throw std::logic_error(
             "named elliptic field received a boundary context without a compiled kernel");
       }
     } catch (...) {
       preparation_error = std::current_exception();
     }
-    collective_rethrow_(preparation_error, "named-field preparation failed collectively");
+    collective_rethrow_(preparation_error, "named-field preparation failed collectively", lane);
 
     active_ = true;
     candidate_ready_ = false;
@@ -223,15 +253,15 @@ class ExactNamedField final {
     } catch (...) {
       rhs_error = std::current_exception();
     }
-    if (all_reduce_max(rhs_error ? 1L : 0L) != 0) {
+    if (all_reduce_max(rhs_error ? 1L : 0L, lane) != 0) {
       clear_candidate_();
-      if (n_ranks() == 1 && rhs_error)
+      if (lane.size() == 1 && rhs_error)
         std::rethrow_exception(rhs_error);
       throw std::runtime_error("named-field RHS assembly failed collectively");
     }
 
     try {
-      SolveReport report = solver_->solve(accepted_);
+      SolveReport report = solver_->solve(accepted_, lane);
       if (!report.solved_value_available())
         return report;
 
@@ -282,10 +312,11 @@ class ExactNamedField final {
     candidate_outputs_.set_val(Real(0));
   }
 
-  static void collective_rethrow_(const std::exception_ptr& error, const char* message) {
-    if (all_reduce_max(error ? 1L : 0L) == 0)
+  static void collective_rethrow_(const std::exception_ptr& error, const char* message,
+                                  const ExecutionLane& lane) {
+    if (all_reduce_max(error ? 1L : 0L, lane) == 0)
       return;
-    if (n_ranks() == 1 && error)
+    if (lane.size() == 1 && error)
       std::rethrow_exception(error);
     throw std::runtime_error(message);
   }
@@ -336,6 +367,8 @@ class ExactNamedField final {
     candidate_topology_report_.clear();
   }
 
+  const ExecutionLane* lane_ = nullptr;
+  ExecutionLane::ImmutableBorrow lane_borrow_;
   std::string identity_;
   std::string output_block_;
   runtime::field::NamedFieldOutput<Dim> output_;

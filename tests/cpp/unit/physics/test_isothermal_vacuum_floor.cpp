@@ -1,4 +1,5 @@
-// ADC-77: quasi-vacuum velocity bound on IsothermalFlux (and the inherited IsothermalFluxPolar).
+// ADC-77: quasi-vacuum velocity bound on the planar Cartesian IsothermalFluxND<2> (and the
+// inherited IsothermalFluxPolar).
 // At ~52% of the diocotron rollup the background is evacuated (rho -> ~1e-9) and the Schur source
 // stage writes O(1) momentum onto those cells, so the raw u = m/rho explodes and collapses the CFL.
 // The model now computes u = m/max(rho, vacuum_floor) when vacuum_floor > 0, which bounds BOTH the
@@ -34,7 +35,7 @@ static StateVec<3> make_uvac() {
 // (1) plancher OFF : bit-identique au chemin brut 1/rho.
 TEST(test_isothermal_vacuum_floor, OffIsBitIdenticalToRaw) {
   const StateVec<3> uvac = make_uvac();
-  const IsothermalFlux off{kCs2, Real(0)};
+  const IsothermalFluxND<2> off{kCs2, Real(0)};
   const Real rho = uvac[0];
   const Real vx = uvac[1] / rho, vy = uvac[2] / rho;
   const auto p = off.to_primitive(uvac);
@@ -44,7 +45,7 @@ TEST(test_isothermal_vacuum_floor, OffIsBitIdenticalToRaw) {
   EXPECT_TRUE(off.flux(uvac, kProviders, 0)[1] == uvac[1] * vx + kCs2 * rho) << "off_flux_raw_x";
   // L'init agregat a un seul argument doit aussi etre OFF (vacuum_floor par defaut a 0) :
   // bit-identique.
-  const IsothermalFlux dflt{kCs2};
+  const IsothermalFluxND<2> dflt{kCs2};
   EXPECT_TRUE(dflt.max_wave_speed(uvac, kProviders, 0) == off.max_wave_speed(uvac, kProviders, 0))
       << "default_is_off";
 }
@@ -54,7 +55,7 @@ TEST(test_isothermal_vacuum_floor, OffIsBitIdenticalToRaw) {
 TEST(test_isothermal_vacuum_floor, OnBoundsVelocityBelowFloor) {
   const StateVec<3> uvac = make_uvac();
   const Real floor = Real(1e-3);
-  const IsothermalFlux on{kCs2, floor};
+  const IsothermalFluxND<2> on{kCs2, floor};
   const Real vx_b = uvac[1] / floor, vy_b = uvac[2] / floor;
   const auto p = on.to_primitive(uvac);
   EXPECT_TRUE(p[1] == vx_b && p[2] == vy_b) << "on_velocity_bounded";
@@ -70,8 +71,8 @@ TEST(test_isothermal_vacuum_floor, OnBoundsVelocityBelowFloor) {
 // (3) plancher ON mais rho >= plancher : inactif (identique a OFF).
 TEST(test_isothermal_vacuum_floor, OnInactiveAboveFloor) {
   const Real floor = Real(1e-3);
-  const IsothermalFlux on{kCs2, floor};
-  const IsothermalFlux off{kCs2, Real(0)};
+  const IsothermalFluxND<2> on{kCs2, floor};
+  const IsothermalFluxND<2> off{kCs2, Real(0)};
   StateVec<3> u{};
   u[0] = Real(2.0);
   u[1] = Real(0.6);
@@ -84,11 +85,11 @@ TEST(test_isothermal_vacuum_floor, OnInactiveAboveFloor) {
 // (4) source geometrique polaire : plafonnee au vide (finie), identique au-dessus du plancher.
 TEST(test_isothermal_vacuum_floor, PolarGeomSourceFlooredAtVacuum) {
   const StateVec<3> uvac = make_uvac();
-  const IsothermalFluxPolar on{IsothermalFlux{kCs2, Real(1e-3)}};
+  const IsothermalFluxPolar on{IsothermalFluxND<2>{kCs2, Real(1e-3)}};
   const StateVec<3> s = on.polar_geom_source(uvac, Real(1.5));
   EXPECT_TRUE(s[0] == Real(0) && std::isfinite(s[1]) && std::isfinite(s[2]))
       << "polar_geom_finite_at_vacuum";
-  const IsothermalFluxPolar off{IsothermalFlux{kCs2, Real(0)}};
+  const IsothermalFluxPolar off{IsothermalFluxND<2>{kCs2, Real(0)}};
   StateVec<3> u{};
   u[0] = Real(2.0);
   u[1] = Real(0.6);

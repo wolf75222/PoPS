@@ -20,6 +20,13 @@ project(PoPS
 # Shared, exhaustive API/ABI/SDK/test-only header contract. Both the source package install and the
 # SKBUILD wheel consume it; every installed category enters the native header signature.
 include(cmake/PopsPublicHeaders.cmake)
+pops_compute_header_signature(POPS_NATIVE_HEADER_SIGNATURE)
+string(LENGTH "${POPS_NATIVE_HEADER_SIGNATURE}" _pops_native_header_signature_length)
+if(NOT POPS_NATIVE_HEADER_SIGNATURE MATCHES "^[0-9a-f]+$"
+   OR NOT _pops_native_header_signature_length EQUAL 64)
+  message(FATAL_ERROR
+    "PoPS native header signature must match ^[0-9a-f]{64}$")
+endif()
 
 # One exact spatial rank is compiled into every PoPS native module and every generated artifact.
 # There is no runtime dimension switch and no fixed-rank padded representation.  The caller must
@@ -457,6 +464,7 @@ if(POPS_BUILD_TESTS)
       "-DPOPS_FIXTURE_SOURCE_DIR=${CMAKE_SOURCE_DIR}/tests/cmake/serial_parent_mpi_target"
       "-DPOPS_KOKKOS_FIXTURE_DIR=${CMAKE_SOURCE_DIR}/tests/cmake/mpi_abi_mismatch"
       "-DPOPS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}/serial-parent-mpi-smoke"
+      "-DPOPS_NATIVE_DIM=${POPS_NATIVE_DIM}"
       "-DPOPS_GENERATOR=${CMAKE_GENERATOR}"
       -P "${CMAKE_SOURCE_DIR}/tests/cmake/run_serial_parent_mpi_target.cmake")
   set_tests_properties(test_serial_add_subdirectory_ignores_parent_mpi PROPERTIES
@@ -620,6 +628,7 @@ if(POPS_INSTALL)
         COMMAND "${CMAKE_COMMAND}"
           "-DPOPS_SOURCE_DIR=${CMAKE_SOURCE_DIR}"
           "-DPOPS_REJECT_BUILD_DIR=${CMAKE_BINARY_DIR}/hdf5-without-mpi-rejected"
+          "-DPOPS_NATIVE_DIM=${POPS_NATIVE_DIM}"
           "-DPOPS_GENERATOR=${CMAKE_GENERATOR}"
           -P "${CMAKE_SOURCE_DIR}/tests/cmake/expect_hdf5_without_mpi_rejected.cmake")
       set_tests_properties(test_hdf5_without_mpi_rejected PROPERTIES

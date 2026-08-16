@@ -46,6 +46,13 @@ def test_artifact_manifest_round_trip_from_dict():
     assert rebuilt.supports_custom_communicator is False
 
 
+def test_artifact_manifest_keeps_an_exact_non_global_amr_ratio():
+    manifest = CompiledArtifactManifest(amr_refinement_ratio=3)
+
+    assert manifest.amr_refinement_ratio == 3
+    assert CompiledArtifactManifest.from_dict(manifest.to_dict()).amr_refinement_ratio == 3
+
+
 def test_artifact_manifest_refuses_unknown_or_missing_semantic_fields():
     encoded = _manifest().to_dict()
     unknown = copy.deepcopy(encoded)

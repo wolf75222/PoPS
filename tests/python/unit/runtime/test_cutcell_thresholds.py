@@ -1,13 +1,12 @@
 """ADC-615 embedded-boundary / cut-cell thresholds end to end.
 
-The typed pops.mesh.masks.CutCell(kappa_min, face_open_eps, cut_theta_min) lowers through
-set_disc_domain to the native EbThresholds, surfaced in the System effective-options report; the
+The typed pops.mesh.masks.CutCell(kappa_min, face_open_eps, cut_theta_min) lowers through a
+generic LevelSet to the native EbThresholds, surfaced in the System effective-options report; the
 same cut_theta_min feeds both the EB transport and the elliptic wall. Descriptor refuses
 out-of-domain values structurally. Kokkos-gated for the runtime tier; the descriptor tier is pure.
 """
 import pytest
 
-from pops.mesh.geometry import DiscDomain
 from pops.mesh.masks import CutCell, transport_mask_thresholds
 
 
@@ -72,9 +71,27 @@ def _sim():
     return sim
 
 
+def _install_half_space(sim, mask: CutCell) -> None:
+    from pops.analytic import coordinates
+    from pops.domain import CartesianDomain
+    from pops.mesh.geometry import LevelSet
+    from pops.runtime._analytic_expression_lowering import lower_analytic_components
+
+    frame = CartesianDomain("test-cutcell-thresholds", (0.0, 0.0), (1.0, 1.0)).frame()
+    level_set = LevelSet(coordinates(frame)[0] - 0.5)
+    ((opcodes, literals),) = lower_analytic_components(
+        (level_set.expression.to_data(),), frame_id=frame.canonical_id
+    )
+    thresholds = mask.thresholds()
+    sim._s._set_analytic_level_set(
+        list(opcodes), list(literals), mask.lower(),
+        thresholds["kappa_min"], thresholds["face_open_eps"], thresholds["cut_theta_min"],
+    )
+
+
 def test_default_eb_report_is_native_defaults():
     sim = _sim()
-    sim.set_disc_domain(DiscDomain(center=(0.5, 0.5), radius=0.3, mode=CutCell()))
+    _install_half_space(sim, CutCell())
     eb = sim.inspect().to_dict()["options"]["eb"]
     assert eb["enabled"] is True
     assert eb["geometry_mode"] == "cutcell"
@@ -85,25 +102,19 @@ def test_default_eb_report_is_native_defaults():
 
 def test_typed_cutcell_thresholds_reach_the_report():
     sim = _sim()
-    sim.set_disc_domain(DiscDomain(center=(0.5, 0.5), radius=0.3,
-                                   mode=CutCell(kappa_min=0.05, face_open_eps=1e-5,
-                                                cut_theta_min=5e-3)))
+    _install_half_space(sim, CutCell(kappa_min=0.05, face_open_eps=1e-5, cut_theta_min=5e-3))
     eb = sim.inspect().to_dict()["options"]["eb"]
     assert eb["kappa_min"] == pytest.approx(0.05)
     assert eb["face_open_eps"] == pytest.approx(1e-5)
     assert eb["cut_theta_min"] == pytest.approx(5e-3)
 
 
-def test_native_set_disc_domain_refuses_out_of_domain():
-    """Out-of-domain thresholds refuse BEFORE the native call: set_disc_domain carries no loose
-    threshold kwargs; the typed CutCell descriptor validates at construction, so the inline
-    route can never reach C++ with a bad value (validate-early by design)."""
+def test_level_set_thresholds_refuse_out_of_domain_before_native_lowering():
+    """Typed CutCell validation rejects invalid threshold data before any LevelSet lowering."""
     with pytest.raises(ValueError):
-        _sim().set_disc_domain(DiscDomain(center=(0.5, 0.5), radius=0.3,
-                                          mode=CutCell(kappa_min=2.0)))
+        CutCell(kappa_min=2.0)
     with pytest.raises(ValueError):
-        _sim().set_disc_domain(DiscDomain(center=(0.5, 0.5), radius=0.3,
-                                          mode=CutCell(cut_theta_min=-1.0)))
+        CutCell(cut_theta_min=-1.0)
 
 
 def main():
@@ -113,7 +124,7 @@ def main():
     test_transport_mask_thresholds_require_typed_mask()
     test_default_eb_report_is_native_defaults()
     test_typed_cutcell_thresholds_reach_the_report()
-    test_native_set_disc_domain_refuses_out_of_domain()
+    test_level_set_thresholds_refuse_out_of_domain_before_native_lowering()
     print("OK  ADC-615 cut-cell thresholds")
 
 

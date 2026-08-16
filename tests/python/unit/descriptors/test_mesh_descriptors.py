@@ -11,8 +11,19 @@ import pytest
 
 pops = pytest.importorskip("pops")
 
-from pops.mesh import CartesianGrid, PolarMesh, AuxHalo, PatchBox, BoxLayout  # noqa: E402
-from pops.layouts import Uniform  # noqa: E402
+from pops.mesh import (  # noqa: E402
+    CartesianGrid,
+    PolarMesh,
+    AuxHalo,
+    PatchBox,
+    BoxLayout,
+    NativeSpatialLayout,
+    normalize_layout_plan,
+)
+from pops.mesh._layout_plan_contracts import NormalizedLayout  # noqa: E402
+from pops.layouts import AMR, Uniform  # noqa: E402
+from pops.amr import AMRHierarchy  # noqa: E402
+from pops.domain import CartesianDomain  # noqa: E402
 from pops.mesh._amr import (  # noqa: E402
     Refine, TagUnion, RegridEvery, FrozenRegrid)
 from pops.mesh.geometry import Disc, EmbeddedBoundary  # noqa: E402
@@ -104,7 +115,54 @@ def test_amr_route_limits_are_explainable():
     assert deep.available().ok
     deep.validate()
     requested = final_amr_layout(m, ratio=3)
-    assert requested.capabilities().get("transition_ratios") == [3]
+    assert requested.capabilities().get("transition_ratios") == [[3, 3]]
+
+
+@pytest.mark.parametrize(
+    ("dimension", "authored_ratio", "expected"),
+    (
+        (1, 3, (3,)),
+        (1, (3,), (3,)),
+        (2, 3, (3, 3)),
+        (3, 3, (3, 3, 3)),
+        (2, (1, 3), (1, 3)),
+        (3, (2, 1, 3), (2, 1, 3)),
+    ),
+)
+def test_amr_ratio_authoring_becomes_one_exact_ranked_layout_identity(
+    dimension, authored_ratio, expected
+):
+    domain = CartesianDomain(
+        "ratio-%d" % dimension,
+        (0.0,) * dimension,
+        (1.0,) * dimension,
+    )
+    grid = CartesianGrid(frame=domain.frame(), cells=(4,) * dimension)
+    base = final_amr_layout(grid, max_levels=2, ratio=3)
+    layout = AMR(
+        grid=grid,
+        hierarchy=AMRHierarchy(max_levels=2, ratios=(authored_ratio,)),
+        tagging=base.tagging,
+        regrid=base.regrid,
+        transfer=base.transfer,
+        execution=base.execution,
+    )
+
+    plan = normalize_layout_plan(layout, owner=OwnerPath.case("ratio-%d" % dimension))
+    normalized, = plan.layouts
+
+    assert layout.capabilities().get("transition_ratios") == [list(expected)]
+    assert layout.options()["hierarchy"]["ratios"] == [list(expected)]
+    assert normalized.transition_ratios == (expected,)
+    assert tuple(level.refinement for level in normalized.levels) == (
+        (1,) * dimension,
+        expected,
+    )
+    assert normalized.to_data()["transition_ratios"] == [list(expected)]
+    assert NormalizedLayout.from_data(normalized.to_data()).to_data() == normalized.to_data()
+    native_data = normalized.native_spatial_layout.to_data()
+    assert native_data["decomposition"]["hierarchy"]["ratios"] == [list(expected)]
+    assert NativeSpatialLayout.from_data(native_data).to_data() == native_data
 
 
 def test_typed_refinement_criteria():

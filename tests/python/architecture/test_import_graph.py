@@ -84,6 +84,7 @@ NATIVE_SELECTOR_CONSUMERS = frozenset({
     "pops._paraview_python_bootstrap",
     "pops._platform_contracts",
     "pops.codegen._compiled_artifact",
+    "pops.codegen._checkpoint_migration_uniform_v2",
     "pops.external.artifacts",
     "pops.external.compiler",
     "pops.output._writers.hdf5",

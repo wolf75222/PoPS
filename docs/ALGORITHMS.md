@@ -26,7 +26,7 @@ Architecture (layers, dispatch seam, library/application boundary):
 - [7. Test-only multirate reference formulas](#7-test-only-multirate-reference-formulas)
 - [8. Parabolic term: diffusion as face flux](#8-parabolic-term-diffusion-as-face-flux)
 - [9. Elliptic: geometric multigrid](#9-elliptic-geometric-multigrid)
-- [10. Elliptic: spectral Poisson (FFT), single-rank and distributed](#10-elliptic-spectral-poisson-fft-single-rank-and-distributed)
+- [10. Elliptic: exact-ranked Cartesian discrete Poisson FFT](#10-elliptic-exact-ranked-cartesian-discrete-poisson-fft)
 - [11. Exact-ranked scalar GeometricMG](#11-exact-ranked-scalar-geometricmg)
 - [12. Full-tensor elliptic: matrix-free Krylov (BiCGStab)](#12-full-tensor-elliptic-matrix-free-krylov-bicgstab)
 - [13. Condensed implicit Program authoring](#13-condensed-implicit-program-authoring)
@@ -52,18 +52,19 @@ Architecture (layers, dispatch seam, library/application boundary):
 The core solves, on an adaptive Cartesian mesh (and, optionally, on a polar ring or an immersed disc
 subdomain), the generic form
 
-$$\partial_t U + \mathrm{div} F(U, \mathrm{aux}) = S(U, \mathrm{aux}) \qquad \text{(hyperbolique, par bloc)}$$
+$$\partial_t U + \mathrm{div} F(U, P) = S(U, P) \qquad \text{(hyperbolique, par bloc)}$$
 
 $$\mathrm{div}(\varepsilon\,\nabla \phi) - \kappa\,\phi = f(U) \qquad \text{(elliptique, partage)}$$
 
-The hyperbolic part `U` and the elliptic part `phi` couple at each step through the `aux` channel (base
-contract `(phi, grad_x, grad_y)`, extensible to `B_z`, `T_e`). A model is a composition
-`CompositeModel<Transport, Source, Elliptic>`; the coupling enters through the flux (`aux` read in `F`)
-or through the source (`aux` read in `S`), under the same spatial operator. The reconstruction, flux and
+The hyperbolic part `U` and field operators couple through an owner-qualified provider pack `P`.
+Every consumer declares exact `ComponentKey` dependencies and receives a compact local slot plan;
+the core reserves no physical `phi`, gradient, magnetic, or temperature indices. A model is a
+composition `CompositeModel<Transport, Source, Elliptic>`; the coupling enters through the flux or
+source provider plan under the same spatial operator. The reconstruction, flux and
 source bricks are reused across geometries (Cartesian, polar, cut-cell); only the metrics and the
 divergences change. The spatial discretization is finite volume (section 1); the time advance is a
 method of lines (section 4); the elliptic part is solved at each step (sections 9 to 13) and re-read by
-`aux`.
+accepted provider generation.
 
 
 ---
@@ -86,41 +87,36 @@ cell $i$ loses at its right face, cell $i+1$ gains at its left face. This is the
 property on which all of AMR depends (reflux corrects exactly these face fluxes). The core does not
 do the update itself: it assembles the residual of the method of lines
 
-$$R_{ij} = -\,\mathrm{div}\,\hat F + S = S_{ij}
-          - \frac{\hat F_{i+1/2,j} - \hat F_{i-1/2,j}}{\Delta x}
-          - \frac{\hat G_{i,j+1/2} - \hat G_{i,j-1/2}}{\Delta y},$$
+$$R_{\boldsymbol i} = -\,\mathrm{div}\,\hat F + S
+ = S_{\boldsymbol i} - \sum_{a=0}^{D-1}
+   \frac{\hat F^{(a)}_{\boldsymbol i+\frac12\boldsymbol e_a}
+        -\hat F^{(a)}_{\boldsymbol i-\frac12\boldsymbol e_a}}{\Delta x_a},$$
 
 and the time integrator applies $U^{n+1} = U^n + \Delta t\, R$ (Euler) or an SSPRK combination.
 The face flux $\hat F_{i+1/2}$ is evaluated from the reconstructed states on either side:
-$\hat F_{i+1/2} = \texttt{nflux}(\texttt{recon}_L, \texttt{aux}_i, \texttt{recon}_R, \texttt{aux}_{i+1}, \texttt{dir})$.
-The auxiliary `aux` (`phi`, `grad phi`) is not reconstructed (a smooth field coming from the elliptic): we
-take the cell value on each side. An optional parabolic term ($+\nu\,\mathrm{Lap}\,U$,
-guarded by the `DiffusiveModel` concept) is added, either as a 5-point centered difference in
+$\hat F^{(a)} = \texttt{nflux}(\texttt{recon}_L, P_L, \texttt{recon}_R, P_R, a)$.
+Cell-centered provider values are loaded from the consumer's compact plan on each side; they are not
+assigned a core physical meaning or a fixed global slot. An optional parabolic term
+($+\nu\,\mathrm{Lap}\,U$, guarded by the `DiffusiveModel` concept) is added with the exact-ranked
+centered stencil in
 `assemble_rhs`, or as a Fickian face flux $-\nu\,\nabla U$ in `compute_face_fluxes` (cf. section 8).
 
 ```
-function assemble_rhs(model, U, aux, geom, R, recon_prim):   # R = -div Fhat + S
-    dx, dy = geom.dx(), geom.dy()
+function assemble_rhs(model, U, providers, geom, R, recon_prim):
     for box li in U:                                          # seam for_each_cell : Kokkos (Serial / OpenMP / Cuda)
-        for each valid cell (i, j):
-            Ac  = load_aux(aux, i, j)                         # [phi, grad_x, grad_y, extra...]
-            # face x gauche (i-1/2) et droite (i+1/2)
-            Lxm = reconstruct(model, U, i-1, j, dir=0, sgn=+1, recon_prim)   # etat L de la face i-1/2
-            Rxm = reconstruct(model, U, i,   j, dir=0, sgn=-1, recon_prim)   # etat R de la face i-1/2
-            Lxp = reconstruct(model, U, i,   j, dir=0, sgn=+1, recon_prim)
-            Rxp = reconstruct(model, U, i+1, j, dir=0, sgn=-1, recon_prim)
-            left  = Trace(Lxm, bind_exact_providers(A(i-1,j)))
-            right = Trace(Rxm, bind_exact_providers(Ac))
-            face  = FaceContext(axis=0, normal=+x, face_measure=1)
-            Fxm = apply_face_measure(nflux(physical_flux, left, right, face).density, face)
-            Fxp = analogue at i+1/2
-            # faces y : idem dans la direction j
-            Fym, Fyp = (analogue avec dir=1)
-            S = model.source(load_state(U, i, j), Ac)
+        for each valid Index<Dim> index:
+            P = bind_provider_values(consumer_plan, providers, li, index)
+            for axis in [0, Dim):
+                left_state, right_state = reconstruct(U, index, axis, recon_prim)
+                left  = Trace(left_state,  provider_values_at(index - e_axis))
+                right = Trace(right_state, P)
+                face  = FaceContext(axis=axis, oriented_measure=metric.face(index, axis))
+                accumulate_divergence(nflux(physical_flux, left, right, face), face)
+            S = model.source(load_state(U, index), P)
             for c in 0 .. n_vars-1:
-                R(i,j,c) = S[c] - (Fxp[c]-Fxm[c])/dx - (Fyp[c]-Fym[c])/dy
+                R(index,c) = S[c] - accumulated_divergence[c]
             if DiffusiveModel(model):                          # if constexpr -> zero codegen sinon
-                R(i,j,c) += nu * (Lap_x U + Lap_y U)           # +nu Lap(U), 5 points centres
+                R(index,c) += nu * sum_axis(centered_second_difference(U, axis))
 ```
 
 **Code.** [`include/pops/numerics/spatial_operator.hpp`](../include/pops/numerics/spatial_operator.hpp):
@@ -671,8 +667,16 @@ must place both the transport and the typed implicit primitive explicitly; the s
 runtime does not infer that split. Validation:
 `test_imex_ap` (AP property on a stiff linear relaxation source),
 `test_ap_limit` (quantified AP limit, stiffness sweep over 8 decades at fixed `dt`),
-`test_implicit_source_nd` plus `test_amr_imex_native` (typed partial/transport composition), and
-`test_newton_robustness` plus `test_mpi_field_plan_consensus` (exact first-failure selection across
+`test_implicit_source_nd` (native implicit kernel),
+`test_amr_synthetic_program_loader_transaction` (synthetic source-built loader ABI/hash/budget and
+transaction artifact), and `test_amr_multiblock_implicit_transaction` (atomic two-block implicit
+solve/retry/commit and no hidden integrator) are C++ kernel/loader/transaction proofs. They do not
+qualify Program tableau or temporal composition. The Python-authored, compiled refined-AMR route is
+proved by
+`test_amr_newton_full.py::test_nonlinear_local_imex_executes_on_the_refined_amr_program` and
+`test_amr_newton_full.py::test_nonlinear_local_imex_failrun_rolls_back_refined_amr_attempt`
+(temporal composition and rollback). `test_newton_robustness` plus
+`test_mpi_field_plan_consensus` prove exact first-failure selection across
 large signed indices, including fatal-over-recoverable precedence between ranks).
 
 
@@ -1052,36 +1056,37 @@ engine; preparation must select another qualified provider.
 execution in 1D/2D/3D. `test_poisson_convergence` proves quantitative order two for the native
 specialization.
 
-## 10. Elliptic: exact-rank-two discrete Poisson FFT
+## 10. Elliptic: exact-ranked Cartesian discrete Poisson FFT
 
 **Intuition.** On a periodic constant-coefficient domain, the discrete Laplacian is diagonal
 in Fourier: one direct transform, one mode-by-mode division, one inverse transform solve
 Poisson exactly (to machine residual), without iteration. Much cheaper than multigrid when
 the elliptic dominates the run.
 
-**Formula / discretization.** The solver inverts the same 5-point Laplacian as `GeometricMG`,
-whose eigenvalue of mode $(k_x, k_y)$ is
+**Formula / discretization.** In native rank $d\in\{1,2,3\}$, the solver inverts the same Cartesian
+second-order Laplacian as `GeometricMG`. Its eigenvalue for mode $\mathbf{k}$ is
 
-$$\lambda(k_x, k_y) = \frac{2\cos(2\pi k_x / N_x) - 2}{\Delta x^2}
-                     + \frac{2\cos(2\pi k_y / N_y) - 2}{\Delta y^2}$$
+$$\lambda(\mathbf{k}) = \sum_{a=0}^{d-1}
+  \frac{2\cos(2\pi k_a/N_a)-2}{\Delta x_a^2}$$
 
 and not $-(k_x^2 + k_y^2)$ (the exact symbol of the discrete stencil, not of the continuous
 Laplacian). The resolution is $\hat\phi(k) = \hat f(k) / \lambda(k)$, with the mode $k = 0$ fixed to 0
 (gauge: $\phi$ of zero mean; the right-hand side must therefore be of zero mean, otherwise $\phi$ drifts).
 
 ```
-function solve():                                  # PoissonFFTSolver<2>, un slab/rang
+function solve():                                  # PoissonFFTSolver<Dim>, un slab/rang
     verifier la compatibilite du rhs avec le noyau constant
-    rho = aplatir -rhs sur la bande locale [0..Nx-1] x [y0..y0+nyl-1]
-    fft_.solve(rho -> phi_trial)                    # transposee MPI interne, symbole discret
+    rho = aplatir -rhs sur le slab local du dernier axe
+    fft_.solve(rho -> phi_trial)                    # transforms Kokkos/MPI, symbole discret ND
     remplir les halos periodiques de phi_trial
     r = rhs - (-lap_h phi_trial)                    # meme operateur que celui inverse
     publier phi_trial seulement si ||r|| est dans l'enveloppe d'arrondi authentifiee
 ```
 
 **Code.** [`numerics/elliptic/poisson_fft_solver.hpp`](../include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp):
-`PoissonFFTSolver<2>` is the single exact provider for serial and MPI execution: serial is simply
-the one-rank instance of the same ordered slab layout. It models the exact-ranked `EllipticSolver`
+`PoissonFFTSolver<Dim>` is the single exact provider for serial and MPI execution in native rank
+1, 2 or 3: serial is simply the one-rank instance of the same ordered last-axis slab layout. It
+models the exact-ranked `EllipticSolver`
 concept and owns its immutable build request, explicit constant-nullspace workspace, trial field and
 transactional publication. The residual reuses the canonical operator `poisson_residual` of
 [`poisson_operator.hpp`](../include/pops/numerics/elliptic/poisson/poisson_operator.hpp); the
@@ -1091,10 +1096,10 @@ The low-level transform core lives in `poisson_fft.hpp`.
 **Constraints / remarks.** The FFT requires periodic BCs and a constant coefficient: neither
 $\epsilon(x)$, nor an embedded mask, nor cross terms. The mode $k = 0$ must be fixed (right-hand side
 of zero mean), otherwise the solve returns `kIncompatibleRhs` and leaves the published solution
-unchanged. The concrete backend is intrinsically two-dimensional: rank one and rank three fail at
-the compile-time capability/provider boundary. It requires exactly one canonical ordered y-slab per
-communicator rank and both $N_x$ and $N_y$ divisible by `n_ranks()`. The public prepared route also
-requires power-of-two extents; it does not select the low-level direct DFT or another elliptic solver.
+unchanged. It requires exactly one canonical ordered slab of the final Cartesian axis per
+communicator rank and that final extent be divisible by `n_ranks()`. Power-of-two axes use the
+radix-2 Kokkos/MPI path; any other positive extent uses an explicit, diagnosed direct-DFT path that
+inverts the same authenticated discrete operator rather than substituting another elliptic solver.
 The raw continuous Fourier symbol remains an internal transform capability only: without a matching
 apply/residual operator it cannot be advertised as an `EllipticSolver` route.
 **Validation.** `test_poisson_fft` proves the concrete capability and transactional residual gate;
@@ -1355,7 +1360,17 @@ external same-machine benchmark against a pinned released binary, never in the c
 
 ---
 
-## 14. Embedded boundary: Shortley-Weller cut-cell
+## 14. Embedded boundary: exact-rank cut geometry
+
+The production authority is one `template<int Dim>` level-set pipeline for `Dim=1,2,3`.  It samples
+the signed analytic geometry on the grown Cartesian layout, materializes an active mask and a
+clamped retained-volume field, and decorates the same prepared metric/operator used without EB.
+There is no disc-specific native domain object, no x/y storage convention, and no separate EB
+runtime.  Geometry descriptors such as a sphere or plane only emit the signed level-set expression.
+
+The Shortley-Weller equations below are retained as the mathematical crossing reference.  The old
+fixed four-face/5-point implementation and its `DiscDomain` facade have been retired; production
+code stores `lower[Dim]`, `upper[Dim]`, and one diagonal and obtains them with a single axis loop.
 
 **Intuition.** A wall not aligned on the grid (circular conductor, diocotron ring edge)
 is not a staircase: the Shortley-Weller cut-cell corrects the 5-point stencil where the
@@ -1363,7 +1378,7 @@ disc level set cuts a face, so that the Dirichlet condition is imposed at the re
 of the interface and not at the nearest cell face. We recover order 2 where the
 0/1 staircase falls to order 1.
 
-**Formula / discretization.** The boundary is carried by the canonical disc level set
+**Formula / discretization (two-axis illustration).** A boundary may be illustrated by the disc level set
 $ls(x,y) = \mathrm{hypot}(x - c_x, y - c_y) - R$, negative inside. For an active cell
 $ls(x_c, y_c) < 0$, each cardinal face is cut at a linear fraction: if the neighbor is
 interior ($l_n < 0$) the face is full and the half-distance equals $h$; if the level set changes
@@ -1410,21 +1425,14 @@ function cut_distance(lc, ln, h):
     return clamp(th, 1e-3, 1) * h                # garde anti-division par 0
 ```
 
-**Code.** The cut geometry is centralized in
-[`include/pops/numerics/elliptic/eb/cut_fraction.hpp`](../include/pops/numerics/elliptic/eb/cut_fraction.hpp):
-`detail::cut_distance` (linear crossing of a face), `detail::cut_fraction` (the 4 half-distances
-+ apertures + volume fraction `kappa`), and `detail::shortley_weller` which returns the 5 weights
-`ShortleyWellerWeights{w_xm, w_xp, w_ym, w_yp, w_diag}`. The V-cycle
-[`include/pops/numerics/elliptic/mg/geometric_mg.hpp`](../include/pops/numerics/elliptic/mg/geometric_mg.hpp)
-writes them once per level into its `coef` field (5 components) at setup (host) then reads them
-on-device; it skips the conductor cells (`m(i,j) == 0`). It is the same `cut_fraction` that the
-EB transport consumes (section 15): aperture geometry bit-consistent between Poisson and transport.
-The cut-cell and mask geometry is a named generic level-set contract in
-[`include/pops/numerics/spatial/embedded_boundary/domain.hpp`](../include/pops/numerics/spatial/embedded_boundary/domain.hpp) (ADC-327):
-a domain exposes `POPS_HD Real level_set(x, y)` (negative inside) and is directly usable as the
-`LevelSet` argument of `cut_fraction` / `assemble_rhs_eb`. Built-ins are `DiscDomain` (circle) and
-`HalfPlaneDomain`; the `LevelSetDomain` concept in the same header is diagnostics-only (a `static_assert`
-on the built-ins), not a dispatch constraint.
+**Code.** Ranked crossings and Shortley-Weller coefficients live in
+[`include/pops/numerics/spatial/embedded_boundary/cut_geometry.hpp`](../include/pops/numerics/spatial/embedded_boundary/cut_geometry.hpp).
+Collective sampling and the `kappa` clamp are prepared in
+[`src/runtime/prepared_embedded_boundary.cpp`](../src/runtime/prepared_embedded_boundary.cpp); the
+transport composition is
+[`include/pops/numerics/spatial/embedded_boundary/operator.hpp`](../include/pops/numerics/spatial/embedded_boundary/operator.hpp).
+All fields are `MultiFab<Dim>`/`FieldView<Dim>` and execute through Kokkos.  The prepared hierarchy
+owns the same geometry image at every AMR level, including MPI halo and physical-boundary closure.
 
 **Constraints / remarks.** The clamp $\theta \ge 10^{-3}$ bounds $w_{\mathrm{diag}}$ (without it a
 grazing face would make the weight diverge and would break the diagonal dominance of the smoother). Compatible with
@@ -1434,7 +1442,12 @@ the anisotropic operator (the cut-cell weights compose with the $\varepsilon_x, 
 of the `average_down` out-of-bounds bug on a degenerate MG hierarchy). For the elliptic on an
 immersed disc, `test_poisson_disc` exercises the solver (convergence + improvement at resolution).
 
-## 15. Disc domain: mask, masked transport, cut-cell transport
+## 15. Generic level-set mask and EB transport
+
+The native runtime does not own a disc mode.  Python lowers any typed `LevelSet` (disc, sphere,
+plane, CSG, or user expression) to the same exact-rank analytic bytecode; System and AmrSystem then
+prepare `staircase` or `cutcell` geometry transactionally.  The following two-axis equations are an
+illustration of the ranked face/volume balance, not a second 2D implementation.
 
 **Intuition.** A disc transport subdomain (diocotron ring) imposes a circular boundary
 not aligned on the Cartesian grid. Three modes, from the simplest to the most precise:
@@ -1496,24 +1509,14 @@ function face_aperture(lc, ln):
     return cut_distance(lc, ln, h) / h            # voisin actif : ouverture lineaire (== mur elliptique)
 ```
 
-**Code.** `System::set_disc_domain(cx, cy, R, mode)` (#216,
-[`include/pops/runtime/system.hpp`](../include/pops/runtime/system.hpp), defined in
-[`src/runtime/system/system.cpp`](../src/runtime/system/system.cpp)) sets a `DiscDomain`
-([`include/pops/numerics/spatial/embedded_boundary/domain.hpp`](../include/pops/numerics/spatial/embedded_boundary/domain.hpp),
-`level_set`) and the transport mode; `set_geometry_mode(mode)` switches the mode alone; `disc_mask()`
-materializes the
-mask (all-active if no disc). The stepper routes each block: `assemble_rhs` (full),
-`assemble_rhs_masked`
-([`include/pops/numerics/spatial_operator.hpp`](../include/pops/numerics/spatial_operator.hpp), 0/1
-gate) or `assemble_rhs_eb`
-([`include/pops/numerics/spatial/embedded_boundary/operator.hpp`](../include/pops/numerics/spatial/embedded_boundary/operator.hpp),
-EB). The device kernels are named functors (`detail::EbFaceFluxXKernel`,
-`EbFaceFluxYKernel`, `EbAssembleRhsKernel`, and the adapter `detail::DiscLevelSet` which forwards
-`DiscDomain::level_set`) for cross-TU emission under nvcc; `eb_face_aperture` closes the face toward an
-inactive neighbor. The apertures and `kappa` come from
-[`include/pops/numerics/elliptic/eb/cut_fraction.hpp`](../include/pops/numerics/elliptic/eb/cut_fraction.hpp)
-(same geometry as the elliptic cut-cell of section 14); the reconstruction (`reconstruct<>`) and
-the numerical flux (`RusanovFlux`) are reused verbatim from the Cartesian operator.
+**Code.** `set_analytic_level_set` installs the ranked expression and `set_geometry_mode` selects the
+prepared policy. `embedded_boundary_mask` is the generic sidecar (all active when no geometry is
+installed).  `PreparedEmbeddedBoundaryOperator<Dim>` composes
+`PreparedMaskedCartesianOperator<Dim>` with `PreparedEmbeddedBoundaryMetric<Dim>`; reconstruction,
+Riemann fluxes, provider values, MPI transport and Kokkos execution are therefore the same
+authorities as the Cartesian route.  The operator currently advertises its centre-sampled binary
+face closure explicitly; retained-volume scaling is prepared and clamped.  It does not claim the
+retired continuous-aperture 2D path as a production capability.
 
 **Constraints / remarks.** Small-cell problem: the factor $1/\kappa$ amplifies the residual
 when $\kappa \to 0$ on the cut layer, which would make a fixed explicit step explode. Two stacked
@@ -1523,11 +1526,11 @@ $\kappa_{\mathrm{eff}} = \max(\kappa, \kappa_{\min})$, $\kappa_{\min} = 10^{-2}$
 the amplification to $1/\kappa_{\min} = 100$ (implicit volume merging, calibrated for a stable fixed step
 whatever the degree of cut). The clamp acts only on the denominator (volume), not on the fluxes:
 the global mass stays exact, at the cost of a slight local non-conservation on the most
-cut cells. Documented alternative (out of scope): the flux redistribution of AMReX-EB (exact local
-conservation, non-local stencil). The path is purely additive and opt-in: a run without an EB disc is
-bit-identical to the Cartesian. Validation: `test_disc_domain_mask` (mask bounds, all-active without a
-disc), `test_eb_transport` (EB cut-cell transport: conservation and smooth boundary). On the Python side:
-`test_disc_domain_mask`.
+cut cells. The path is opt-in: an all-active mask and unit retained volume are bit-identical to the
+Cartesian operator. Validation is carried by `test_embedded_boundary_generic` and
+`test_prepared_embedded_boundary_nd`, which instantiate the same algorithms in 1D, 2D and 3D,
+permute every active axis, check conservation/finite publication and rollback, and exercise prepared
+LevelSet halos. Python tests use the corresponding generic embedded-boundary names.
 
 ## 16. Polar geometry: transport and Poisson on a ring (r, theta)
 
@@ -1653,15 +1656,18 @@ direct-runtime refusal are covered by `test_layout_plan` and `test_polar_system`
 
 ---
 
-## 17. AMR: Program-owned subcycling + conservative reflux
+## 17. AMR: prepared subcycling and conservative-reflux primitives
 
 **Intuition.** Refine only where needed. A fine level (step $\Delta x_c / r$) covers a
 sub-region; to respect its CFL it does $r$ substeps of $\Delta t / r$ while the coarse does
 a single step of $\Delta t$. At the fine-coarse interface, the two levels compute different fluxes,
 which breaks discrete conservation. Reflux corrects the bordering coarse cell by the difference
-(time-integrated fine flux minus coarse flux). The normalized `ProgramGraph` is the sole authority
-for the parent/child clocks, stage points and catch-up order; `AmrRuntime` supplies hierarchy state,
-spatial evaluations, transfers and reflux primitives, but never chooses a time integrator.
+(time-integrated fine flux minus coarse flux). The normalized `ProgramGraph` is the intended sole
+authority for parent/child clocks, stage points and catch-up order; `AmrRuntime` supplies hierarchy
+state, spatial evaluations, transfers and reflux primitives, but never chooses a time integrator.
+The prepared primitives below are implemented and qualified independently. The production Program
+driver still refuses a hierarchy with more than one level, so this section is not evidence of an
+accepted end-to-end multi-level trajectory.
 
 **Formula / discretization.** Let a fine-coarse face in $x$ between the coarse cell $(I, J)$ and the
 fine patch. During the coarse step we have already advanced the coarse with its own face flux $F_c$ (over
@@ -1672,13 +1678,16 @@ $$U_c(I,J) \mathrel{-}= \frac{1}{\Delta x_c}\Big(\textstyle\sum_{s=1}^{r} \Delta
 
 with $\Delta t_f = \Delta t / r$ and $\bar F_f^{(s)}$ the fine flux averaged over the fine faces covering the
 coarse face. The transactional Program flux ledger stores both sides already integrated with the
-exact stage and time-step coefficients from the graph. The spatial refinement ratio is fixed at
-$r_x = 2$, hence the coarse footprint $I_0 = \mathrm{lo}/2$, $I_1 = (\mathrm{hi}-1)/2$ of an aligned
-fine patch (`PatchRange`). For the usual ratio-2 temporal relation, interpolation of the fine ghosts
-from the coarse is linear in time,
-$U^\star = (1-\alpha)\,U_c^{\mathrm{old}} + \alpha\,U_c^{\mathrm{new}}$ with $\alpha = s/2$,
-constant in space (piecewise injection). Other integral or explicitly remainder-bearing temporal
-relations are graph data rather than a hidden property of the spatial hierarchy.
+exact stage and time-step coefficients from the graph. For an exact-ranked spatial ratio
+$\mathbf r=(r_0,\ldots,r_{D-1})$, the parent footprint is computed axis by axis; an axis with
+$r_a=1$ is an identity axis. Temporal interpolation is qualified separately by its parent/child
+clock relation,
+$U^\star = (1-\alpha)\,U_c^{\mathrm{old}} + \alpha\,U_c^{\mathrm{new}}$.
+Integral or explicitly remainder-bearing relations are graph data rather than a hidden property of
+the spatial hierarchy.
+
+The following pseudocode is the target orchestration contract. It is deliberately not presented as
+the current implementation for a hierarchy with more than one level:
 
 ```
 function execute_amr_program(program_graph, hierarchy, macro_dt):
@@ -1699,19 +1708,24 @@ function execute_amr_program(program_graph, hierarchy, macro_dt):
 
 **Code.** `Program` is the authoring surface and its immutable `ProgramGraph` is the compiler/runtime
 temporal contract. [`AmrProgramContext`](../include/pops/runtime/program/amr_program_context.hpp)
-executes that graph transactionally over
-[`AmrRuntime`](../include/pops/runtime/amr/amr_runtime.hpp). The latter exposes spatial hierarchy
-state and prepared transfer/reflux services only. The umbrella
+executes its single-level route transactionally over
+[`AmrRuntime`](../include/pops/runtime/amr/amr_runtime.hpp) and fails closed before callbacks for a
+multi-level route. The latter exposes spatial hierarchy state and prepared transfer/reflux services
+only. The umbrella
 [`amr_reflux_mf.hpp`](../include/pops/numerics/time/amr/reflux/amr_reflux_mf.hpp) aggregates those
 spatial helpers; it is not an alternate stepper. Their named types live in
 [`amr_patch_range.hpp`](../include/pops/numerics/time/amr/levels/amr_patch_range.hpp):
 `PatchRange<Dim>` (the exact-ranked parent footprint of a fine patch). Reflux is represented by
 the transactional `FaceFluxLedger<Dim>` and metric reconciliation; prepared AMR ghost fill owns
-the corresponding coarse/fine coverage and interpolation. The inter-level transfers `average_down`
-(conservative average over the product of the per-axis refinement ratios),
-`interpolate` (piecewise-constant injection) and `parallel_copy` are in
-[`mesh/refinement.hpp`](../include/pops/mesh/layout/refinement.hpp). The per-cell fine ghost goes through
-`fill_cf_ghost_cell` (space + time interpolation), shared by the three variants `mf_fill_fine_ghosts_*`.
+the corresponding coarse/fine coverage and interpolation. `TransferProvider<Dim>` prepares the
+inter-level kernels: conservative average-down, MC-limited linear prolongation, explicit constant
+injection, and a distinct fifth-order coarse/fine reconstruction that integrates a quartic fitted to
+five parent-cell averages. During prepared block materialization, a WENO5 requirement selects this
+distinct fifth-order transfer and cannot silently fall back to the linear kernel. That statement is
+about the prepared transfer authority; it does not claim that the still-missing multi-level Program
+orchestrator has accepted a WENO5 trajectory. Every kernel uses the same exact-rank ratio and treats
+an axis of ratio one as an identity axis. Legacy `mesh/refinement.hpp` injection is not selected for
+that prepared high-order transfer.
 
 **Constraints / remarks.** Every level transition carries an explicit, possibly anisotropic,
 `RefinementRatio<Dim>` and validates alignment before transfer. The order of operations is critical:
@@ -1719,12 +1733,14 @@ coarse/fine fluxes must be captured at the graph-authored stage points; at each 
 precedes `average_down`; a rejected attempt publishes neither state nor flux. Validation:
 `test_refinement` (conservative average_down + interpolate), `test_amr_hierarchy` (coarse + nested
 fine + ghost interpolation), `test_nd_amr_consumers` (exact-ranked parent footprints and interfaces),
-`test_prepared_amr_ghost_fill` (coverage-aware coarse/fine ghost interpolation),
+`test_nd_transfer`, `test_amr_transfer_properties` and `test_prepared_amr_ghost_fill`
+(quantitative 1D/2D/3D transfer, parent-average conservation and coverage-aware order-two/order-five
+coarse/fine interpolation),
 `test_nd_flux_ledger` and `test_program_reflux_ledger` (exact Program coefficients and transactional
-ledger), `test_amr_program_diffusion` (diffusive flux crossing a coarse/fine interface),
-`test_amr_program_positivity_floor` (accepted refined trajectory through the Program),
-`test_amr_history_ring` (recursive clock/catch-up ordering and rollback), and `test_amr_diagnostics`
-(mass and drift velocity via the seam reducer).
+ledger), `test_amr_program_diffusion` (diffusive flux crossing a coarse/fine interface), and
+`test_amr_diagnostics` (mass and drift velocity via the seam reducer). `test_amr_history_ring`
+currently pins the honest three-level refusal and zero-mutation guarantee; it is not a positive
+multi-level advance proof.
 
 ## 18. Multi-patch AMR: coverage-aware reflux, MPI-distributed
 
@@ -2001,73 +2017,50 @@ bounce avoided if the MPI stack is CUDA-aware); a `device_fence()` separates the
 `test_mpi_fft_distributed` (FFT by bands), `test_mpi_redistribute`, `test_mpi_array_reduce`,
 `test_mpi_coupler_inject` (np=4, results bit-identical to np=1/2/4).
 
-## 21. Extensible aux channel
+## 21. Exact auxiliary provider graph
 
-**Intuition.** The hyperbolic-elliptic coupling goes through an `aux` channel with base contract
-`(phi, grad_x, grad_y)`, that is `kAuxBaseComps = 3` components. Some models need additional
-fields: an out-of-plane magnetic field `B_z` (Lorentz force), an electronic temperature
-`T_e` derived from `p/rho`. The channel is widened on demand, and stays bit-identical to the
-history when `n_aux = 3` (the extra components equal 0, never read).
+**Intuition.** Fields consumed by a flux, source, boundary, or field solve are identified by
+`ComponentKey(owner_qid, space_kind, space_name, component)`. The runtime assigns storage addresses
+only after all packages have registered their outputs and consumer requirements. Two components with
+the same short name but different owners or spaces therefore never alias.
 
-**Formula / discretization.** A model declares a static member `n_aux > 3`; the effective
-width read by the spatial operator and allocated by the runtime is
+**Formula / discretization.** For a consumer requiring $N$ scalar providers, resolution produces a
+dense local plan
 
-$$\mathrm{naux}(M) =
-  \begin{cases} M\text{::n}_\text{aux} & \text{si } M \text{ le declare}\\ 3 & \text{sinon}\end{cases}$$
+$$s \in [0,N) \longmapsto (g_s,c_s),$$
 
-evaluated at compile time by `aux_comps<M>()`. A magnetized brick sets `n_aux = 4`: `B_z` occupies
-component 3, a pure function of position sampled per level; `T_e` (component 4) is
-derived from a fluid block. A `CompositeModel<Hyp, Src, Ell>` propagates the maximal aux width of its
-three bricks to the system. Resolution records every required provider with its qualified field
-identity; binding authenticates the target artifact before the runtime allocates the required width.
+where $g_s$ is an exact storage group and $c_s$ a component in that group. The device kernel receives
+`ProviderValues<N>` through `ProviderStorageView<Dim,N>`; $N=0$ is a real empty pack and allocates no
+dummy component. Gradient components are declared in native-axis order, while magnetic or thermal
+quantities are ordinary physics-owned keys rather than reserved runtime slots.
 
-```
-function aux_comps<M>():                       # physical_model.hpp, constexpr
-    if requires { M::n_aux }: return M::n_aux   # ex. 4 si une brique lit B_z
-    else: return kAuxBaseComps                  # 3 : phi, grad_x, grad_y
+**Code.** [`exact_aux_registry.hpp`](../include/pops/runtime/system/exact_aux_registry.hpp) owns the
+provider DAG, contracts, generations and accepted/candidate publication.
+[`provider_storage_binding.hpp`](../include/pops/runtime/system/provider_storage_binding.hpp) binds
+each consumer slot to its resolved group address, and
+[`flux_interfaces.hpp`](../include/pops/numerics/fv/flux_interfaces.hpp) carries compact provider
+values into device-callable physics. Generated packages register routes before the global registry
+is sealed; native blocks are installed only after that seal.
 
-# installation interne du bloc natif authentifie : elargir avant de capturer l'adresse
-function add_compiled_model(sys, name, model, ...):  # dsl_block.hpp
-    sys.ensure_aux_width( aux_comps<Model>() )       # MultiFab aux >= naux comp (no-op si 3)
-    ctx = sys.grid_context()                         # ctx.aux pointe l'aux reel, large
-    install_block(...)                               # assemble_rhs lit load_aux<naux>
-```
-
-**Code.** [`core/physical_model.hpp`](../include/pops/core/model/physical_model.hpp):
-`aux_comps<M>()` (detects `M::n_aux` via `requires`, falls back to `kAuxBaseComps = 3`), lives in the
-contract header so that `CompositeModel` propagates `n_aux` without pulling in the numerics; the concept
-`PhysicalModel` enforces `M::Aux == pops::Aux`. The widening is anchored in
-`System::ensure_aux_width`, called by
-[`runtime/dsl_block.hpp`](../include/pops/runtime/builders/compiled/dsl_block.hpp) before
-`grid_context()`. The generated artifact is reached only through the private native installer:
-[`runtime/native_loader.hpp`](../include/pops/runtime/builders/compiled/native_loader.hpp) verifies
-its ABI key, generated route manifest and exact runtime-parameter cardinality before invoking its
-installer. External providers use the independently versioned request tables from
-[`runtime/component_loader.hpp`](../include/pops/runtime/dynamic/component_loader.hpp); their
-declared execution context and views are prepared once rather than reinterpreted as an untyped aux
-array.
-
-**Constraints / remarks.** The widening must precede the capture of the aux address (otherwise the
-closure would read a too-short aux). `B_z` being a function of position, it is sampled
-per level (exact at the coarse like `eps`, order 2 preserved). A base model (`n_aux` not declared)
-falls back to 3 -> allocation and results bit-identical to the history. **Validation.**
-`test_aux_extra` (a model declares `n_aux > 3`), `test_aux_composite` (a `CompositeModel` propagates
-the aux width of its bricks), `test_aux_coupler_bz` / `test_aux_system_bz` /
-`test_generated_amr_system_block` (B_z read and populated along exact-ranked system and AMR paths),
-`test_aux_te` (T_e derived from `p/rho`), `test_aux_single_source`
-(a single source generates all required `load_aux` accesses). Validated bit-identical on
-GH200 (B_z device single + multi-box, cf. GPU_RUNTIME_PORT.md).
+**Constraints / remarks.** Registration rejects duplicate producers, missing dependencies, cycles,
+contract or rank mismatches, and stale generations before mutation. Inputs and derived outputs are
+staged into candidates, halos and physical boundaries are filled through prepared exact-ranked
+transports, and publication is collective and transactional. A local provider failure on one MPI
+rank rejects the same candidate on every rank. **Validation.** `test_exact_aux_registry_nd` covers
+zero/N providers, multiple storage groups, permutations, transactions and 1D/2D/3D boundaries;
+`test_mpi_auxiliary_ghost_fill` covers remote peers and empty ranks; `test_aux_single_source` and the
+Python provider-pack suites cover physics/code-generation binding without physical slot names.
 
 ## 22. Runtime composition and multi-species system
 
 **Intuition.** Python composes what (one block per species: composite model + spatial scheme + temporal
 policy), C++ computes per cell. N species interact in the elliptic right-hand side
 (`f = sum_s q_s n_s`) and in the inter-species source, never in the flux: a block's flux only
-sees its own state and the shared aux.
+sees its own state and the exact provider values declared by that consumer.
 
 **Formula / discretization.** At each authored field stage, the Program solves the shared Poisson
 whose right-hand side is the co-located sum of the elliptic bricks of all selected blocks and
-populates the aux `(phi, grad phi)`. The same Program explicitly orders each transport, source,
+publishes its owner-qualified potential/gradient outputs. The same Program explicitly orders each transport, source,
 coupling and commit:
 
 $$f_{ij} = \sum_{b} \mathrm{elliptic\_rhs}_b(U^b_{ij}),\qquad
@@ -2079,6 +2072,13 @@ A model is assembled by `dispatch_model(spec, visitor)`: it builds the transport
 (`charge` / `background` / `gravity`), combines them into `CompositeModel<TR, Src, Ell>` and calls
 `visitor(model)`. The core names no scenario; a scenario is this composition, named on the
 `adc_cases` side.
+
+The `exb` route is `CartesianExBDrift`: a scalar Cartesian transport for native dimensions 1, 2
+and 3. It consumes one explicit potential-gradient provider per native axis plus the three
+Cartesian magnetic providers, and the single Levi-Civita kernel evaluates
+\(v_i = \epsilon_{ijk} B_j\,\partial_k\phi/|B|^2\). The exact-ranked gradient is embedded in
+Cartesian 3-space: 3-D consumes every component, 2-D can explicitly provide its normal field,
+and 1-D obtains the mathematical longitudinal projection without a separate branch.
 
 ```
 function dispatch_model(spec, visitor):              # model_factory.hpp
@@ -2294,9 +2294,10 @@ of this page. The goal is not to present a partial capability as complete.
   mono-box coarse level on one MPI rank. Its FAC backend supports equal tensor diagonals plus cross
   terms; unequal `eps_x`/`eps_y`, multilevel MPI and multi-block Program scope return an explicit
   capability failure. The Program solve/provider protocol itself is not tied to these limitations.
-- FFT rank/capability. The concrete `PoissonFFTSolver<2>` route supports serial and MPI ordered slabs
-  in exact dimension two only. Dimensions one and three, non-power-of-two public layouts and any
-  non-canonical decomposition fail closed; `CartesianCG` is the uniform exact-ranked alternative.
+- FFT layout/capability. `PoissonFFTSolver<Dim>` supports serial and MPI ordered slabs for Cartesian
+  native ranks 1, 2 and 3. Non-canonical decompositions fail closed; radix-2 extents use the fast
+  path and other extents use the diagnosed direct-DFT path. `CartesianCG` remains the uniform
+  non-periodic or variable-topology alternative.
 - Polar Poisson. `PolarPoissonSolver` (FFT in theta, Thomas in r, section 16) is mono-rank and
   mono-box. The polar tensor/Krylov path (polar Schur) lifts this limit on its perimeter.
 - Cut-cell and Hoffart fidelity. The cut-cell (sections 14, 15) is a numerical capability of the core; it

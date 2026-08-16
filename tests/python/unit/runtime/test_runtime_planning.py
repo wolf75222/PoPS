@@ -26,6 +26,7 @@ from pops.model import ComponentManifest, Handle, OwnerPath
 from pops.model.bind_schema import BindSchema
 from pops.problem._snapshot import AuthoringSnapshot
 from pops.time import Program
+from tests.python.support.block_instance_owner import make_testing_block_instance_owner
 from pops.runtime._runtime_plan_contracts import (
     FieldAccess,
     RuntimeCall,
@@ -159,6 +160,7 @@ def _artifact(
                 "production",
                 ("U",),
                 ("test::%s::state::U" % name,),
+                make_testing_block_instance_owner("runtime-planning", name, "source-" + name),
             )
             for name in names
         ),
@@ -170,7 +172,15 @@ def _artifact(
         capabilities={},
         lowering_coverage=LoweringCoverageReport(()),
     )
-    components = tuple(CompiledComponent(name, target="system") for name in names)
+    components = tuple(
+        CompiledComponent(
+            name,
+            target="system",
+            consumer_owner_qid=planned.instance_owner_qid,
+            declares_auxiliary_providers=planned.declares_auxiliary_providers,
+        )
+        for name, planned in zip(names, resolved.blocks, strict=True)
+    )
     for component in components:
         component.memory_spaces = memory_spaces
     blocks = tuple(

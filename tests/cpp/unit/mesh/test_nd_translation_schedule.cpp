@@ -13,6 +13,7 @@
 
 using namespace pops;
 using namespace pops::mesh::nd_proof;
+using pops::mesh::BoxHashBudget;
 using pops::mesh::Distribution;
 using pops::mesh::RankSpace;
 
@@ -234,9 +235,9 @@ TEST(test_nd_translation_schedule,
   const auto topology = PeriodicTopology<2>{};
   const auto budget = schedule_budget<2>();
   TranslationSchedule<2> sender(layout, distribution, domain, topology, Extent<2>{1, 1}, 3, 1, 2,
-                                sender_rank, {3, 1}, kHashBudget, budget);
+                                sender_rank, Extent<2>{3, 1}, kHashBudget, budget);
   TranslationSchedule<2> receiver(layout, distribution, domain, topology, Extent<2>{1, 1}, 3, 1, 2,
-                                  receiver_rank, {3, 1}, kHashBudget, budget);
+                                  receiver_rank, Extent<2>{3, 1}, kHashBudget, budget);
 
   ASSERT_EQ(sender.send_plan_count(), 1U);
   ASSERT_EQ(receiver.receive_plan_count(), 1U);
@@ -278,7 +279,7 @@ TEST(test_nd_translation_schedule, replicated_dim1_and_deep_dim3_periodic_replay
   fill_valid(line);
   TranslationSchedule<1> line_schedule(
       line_layout, line_distribution, line_domain, PeriodicTopology<1>::axis_translations({true}),
-      Extent<1>{1}, 2, 1, 1, Index<1>{-3}, {3}, kHashBudget, schedule_budget<1>());
+      Extent<1>{1}, 2, 1, 1, Index<1>{-3}, Extent<1>{3}, kHashBudget, schedule_budget<1>());
   EXPECT_FALSE(line_schedule.local_jobs().empty());
   EXPECT_EQ(line_schedule.send_plan_count(), 0U);
   EXPECT_EQ(line_schedule.receive_plan_count(), 0U);
@@ -292,8 +293,8 @@ TEST(test_nd_translation_schedule, replicated_dim1_and_deep_dim3_periodic_replay
   const auto volume_distribution = Distribution<3>::replicated(volume_layout, volume_ranks);
   TranslationSchedule<3> volume_schedule(volume_layout, volume_distribution, point,
                                          PeriodicTopology<3>::axis_translations({true, true, true}),
-                                         Extent<3>{2, 2, 2}, 1, 0, 1, Index<3>{1, -2, 7}, {1, 1, 1},
-                                         kHashBudget, schedule_budget<3>(256));
+                                         Extent<3>{2, 2, 2}, 1, 0, 1, Index<3>{1, -2, 7},
+                                         Extent<3>{1, 1, 1}, kHashBudget, schedule_budget<3>(256));
   ASSERT_EQ(volume_schedule.global_job_count(), 124U);
   ASSERT_EQ(volume_schedule.local_job_count(), 124U);
   EXPECT_EQ(volume_schedule.send_plan_count(), 0U);
@@ -316,7 +317,7 @@ TEST(test_nd_translation_schedule, peer_plans_sort_in_rank_space_order_and_budge
   const auto distribution =
       Distribution<1>::partitioned(layout, ranks, {Index<1>{2}, local, Index<1>{0}});
   TranslationSchedule<1> schedule(layout, distribution, domain, PeriodicTopology<1>{}, Extent<1>{1},
-                                  1, 0, 1, local, {1}, kHashBudget, schedule_budget<1>());
+                                  1, 0, 1, local, Extent<1>{1}, kHashBudget, schedule_budget<1>());
   ASSERT_EQ(schedule.send_plan_count(), 2U);
   ASSERT_EQ(schedule.receive_plan_count(), 2U);
   EXPECT_EQ(schedule.send_plans()[0].peer, (Index<1>{0}));
@@ -324,24 +325,24 @@ TEST(test_nd_translation_schedule, peer_plans_sort_in_rank_space_order_and_budge
   EXPECT_EQ(schedule.receive_plans()[0].peer, (Index<1>{0}));
   EXPECT_EQ(schedule.receive_plans()[1].peer, (Index<1>{2}));
   EXPECT_THROW((void)TranslationSchedule<1>(layout, distribution, domain, PeriodicTopology<1>{},
-                                            Extent<1>{1}, 1, 0, 1, local, {1}, kHashBudget,
+                                            Extent<1>{1}, 1, 0, 1, local, Extent<1>{1}, kHashBudget,
                                             schedule_budget<1>(32, 3)),
                std::length_error);
   EXPECT_THROW((void)TranslationSchedule<1>(layout, distribution, domain, PeriodicTopology<1>{},
-                                            Extent<1>{1}, 1, 0, 1, local, {1}, kHashBudget,
+                                            Extent<1>{1}, 1, 0, 1, local, Extent<1>{1}, kHashBudget,
                                             schedule_budget<1>(32, 8, 8, 1, 8)),
                std::length_error);
   EXPECT_THROW((void)TranslationSchedule<1>(layout, distribution, domain, PeriodicTopology<1>{},
-                                            Extent<1>{1}, 1, 0, 1, local, {1}, kHashBudget,
+                                            Extent<1>{1}, 1, 0, 1, local, Extent<1>{1}, kHashBudget,
                                             schedule_budget<1>(32, 8, 8, 8, 1)),
                std::length_error);
   const auto replicated = Distribution<1>::replicated(layout, ranks);
-  EXPECT_THROW(
-      (void)TranslationSchedule<1>(layout, replicated, domain, PeriodicTopology<1>{}, Extent<1>{1},
-                                   1, 0, 1, local, {1}, kHashBudget, schedule_budget<1>(32, 0, 1)),
-      std::length_error);
+  EXPECT_THROW((void)TranslationSchedule<1>(layout, replicated, domain, PeriodicTopology<1>{},
+                                            Extent<1>{1}, 1, 0, 1, local, Extent<1>{1}, kHashBudget,
+                                            schedule_budget<1>(32, 0, 1)),
+               std::length_error);
   EXPECT_THROW((void)TranslationSchedule<1>(layout, distribution, domain, PeriodicTopology<1>{},
-                                            Extent<1>{1}, 1, 0, 1, local, {1}, kHashBudget,
+                                            Extent<1>{1}, 1, 0, 1, local, Extent<1>{1}, kHashBudget,
                                             schedule_budget<1>(0)),
                std::length_error);
 }
@@ -353,9 +354,11 @@ TEST(test_nd_translation_schedule, identity_and_buffer_refusals_leave_caller_sto
   const RankSpace<1> ranks{Index<1>{0}, Extent<1>{2}};
   const auto distribution = Distribution<1>::partitioned(layout, ranks, {Index<1>{0}, Index<1>{1}});
   TranslationSchedule<1> sender(layout, distribution, domain, PeriodicTopology<1>{}, Extent<1>{1},
-                                2, 1, 1, Index<1>{0}, {1}, kHashBudget, schedule_budget<1>());
+                                2, 1, 1, Index<1>{0}, Extent<1>{1}, kHashBudget,
+                                schedule_budget<1>());
   TranslationSchedule<1> receiver(layout, distribution, domain, PeriodicTopology<1>{}, Extent<1>{1},
-                                  2, 1, 1, Index<1>{1}, {1}, kHashBudget, schedule_budget<1>());
+                                  2, 1, 1, Index<1>{1}, Extent<1>{1}, kHashBudget,
+                                  schedule_budget<1>());
   MultiFab<1> source(layout, distribution, Index<1>{0}, 2, Extent<1>{1});
   MultiFab<1> destination(layout, distribution, Index<1>{1}, 2, Extent<1>{1});
   fill_valid(source);
@@ -432,22 +435,22 @@ TEST(test_nd_translation_schedule, metadata_and_large_3d_element_overflow_fail_b
   const RankSpace<1> ranks{Index<1>{0}, Extent<1>{2}};
   const auto distribution = Distribution<1>::partitioned(layout, ranks, {Index<1>{0}, Index<1>{1}});
   const auto good = schedule_budget<1>();
-  EXPECT_THROW(
-      (void)TranslationSchedule<1>(layout, distribution, Box<1>{}, PeriodicTopology<1>{},
-                                   Extent<1>{1}, 1, 0, 1, Index<1>{0}, {1}, kHashBudget, good),
-      std::invalid_argument);
-  EXPECT_THROW(
-      (void)TranslationSchedule<1>(layout, distribution, domain, PeriodicTopology<1>{},
-                                   Extent<1>{-1}, 1, 0, 1, Index<1>{0}, {1}, kHashBudget, good),
-      std::invalid_argument);
-  EXPECT_THROW(
-      (void)TranslationSchedule<1>(layout, distribution, domain, PeriodicTopology<1>{},
-                                   Extent<1>{1}, 1, 1, 1, Index<1>{0}, {1}, kHashBudget, good),
-      std::invalid_argument);
-  EXPECT_THROW(
-      (void)TranslationSchedule<1>(layout, distribution, domain, PeriodicTopology<1>{},
-                                   Extent<1>{1}, 1, 0, 1, Index<1>{2}, {1}, kHashBudget, good),
-      std::invalid_argument);
+  EXPECT_THROW((void)TranslationSchedule<1>(layout, distribution, Box<1>{}, PeriodicTopology<1>{},
+                                            Extent<1>{1}, 1, 0, 1, Index<1>{0}, Extent<1>{1},
+                                            kHashBudget, good),
+               std::invalid_argument);
+  EXPECT_THROW((void)TranslationSchedule<1>(layout, distribution, domain, PeriodicTopology<1>{},
+                                            Extent<1>{-1}, 1, 0, 1, Index<1>{0}, Extent<1>{1},
+                                            kHashBudget, good),
+               std::invalid_argument);
+  EXPECT_THROW((void)TranslationSchedule<1>(layout, distribution, domain, PeriodicTopology<1>{},
+                                            Extent<1>{1}, 1, 1, 1, Index<1>{0}, Extent<1>{1},
+                                            kHashBudget, good),
+               std::invalid_argument);
+  EXPECT_THROW((void)TranslationSchedule<1>(layout, distribution, domain, PeriodicTopology<1>{},
+                                            Extent<1>{1}, 1, 0, 1, Index<1>{2}, Extent<1>{1},
+                                            kHashBudget, good),
+               std::invalid_argument);
   const Box<2> plane{Index<2>{0, 0}, Index<2>{1, 1}};
   const ProductionBoxArray<2> plane_layout(std::vector<Box<2>>{plane});
   const RankSpace<2> plane_ranks{Index<2>{0, 0}, Extent<2>{1, 1}};
@@ -455,8 +458,8 @@ TEST(test_nd_translation_schedule, metadata_and_large_3d_element_overflow_fail_b
   const PeriodicTopology<2> mapped{std::vector<PeriodicIdentification<2>>{PeriodicIdentification<2>{
       Face<2>{0, Side::lower}, Face<2>{1, Side::upper}, SignedPermutation<2>{{1, 0}, {1, -1}}}}};
   EXPECT_THROW((void)TranslationSchedule<2>(plane_layout, plane_distribution, plane, mapped,
-                                            Extent<2>{1, 1}, 1, 0, 1, Index<2>{0, 0}, {2, 2},
-                                            kHashBudget, schedule_budget<2>()),
+                                            Extent<2>{1, 1}, 1, 0, 1, Index<2>{0, 0},
+                                            Extent<2>{2, 2}, kHashBudget, schedule_budget<2>()),
                std::invalid_argument);
 
   constexpr int minimum = std::numeric_limits<int>::min();
@@ -472,14 +475,15 @@ TEST(test_nd_translation_schedule, metadata_and_large_3d_element_overflow_fail_b
       std::vector<Box<3>>{Box<3>{Index<3>{0, minimum, 0}, Index<3>{0, maximum, 1073741823}},
                           Box<3>{Index<3>{1, minimum, 0}, Index<3>{1, maximum, 1073741823}}});
   const auto execution_distribution = Distribution<3>::replicated(execution_layout, huge_ranks);
-  EXPECT_THROW((void)TranslationSchedule<3>(
-                   execution_layout, execution_distribution, execution_domain,
-                   PeriodicTopology<3>{}, Extent<3>{1, 0, 0}, 3, 0, 3, Index<3>{0, 0, 0},
-                   {maximum, maximum, maximum}, BoxHashBudget{64, 64, 64}, schedule_budget<3>(32)),
-               std::overflow_error);
+  EXPECT_THROW(
+      (void)TranslationSchedule<3>(execution_layout, execution_distribution, execution_domain,
+                                   PeriodicTopology<3>{}, Extent<3>{1, 0, 0}, 3, 0, 3,
+                                   Index<3>{0, 0, 0}, Extent<3>{maximum, maximum, maximum},
+                                   BoxHashBudget{64, 64, 64}, schedule_budget<3>(32)),
+      std::overflow_error);
   EXPECT_THROW((void)TranslationSchedule<3>(huge_layout, huge_distribution, huge_domain,
                                             PeriodicTopology<3>{}, Extent<3>{1, 0, 0}, 2, 0, 2,
-                                            Index<3>{0, 0, 0}, {maximum, maximum, maximum},
+                                            Index<3>{0, 0, 0}, Extent<3>{maximum, maximum, maximum},
                                             BoxHashBudget{64, 64, 64}, schedule_budget<3>(32)),
                std::overflow_error);
 }

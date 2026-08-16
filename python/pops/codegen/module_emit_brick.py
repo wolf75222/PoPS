@@ -223,29 +223,48 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
 
     cnames = ", ".join('"%s"' % c for c in model.cons_names)
     pnames = ", ".join('"%s"' % p for p in model.prim_state)
-    # Physical roles parallel to the names: the current compiled-artifact ABI requires one explicit
-    # role descriptor per component. ``Custom`` is a real, intentional descriptor for a component
-    # without a canonical physical role; an empty roles vector would be ambiguous legacy metadata.
-    # Keeping the vectors total also makes metadata validation independent of particular model
-    # families (moments, passive scalars, user-defined systems, ...).
-    def roles_init(roles: Any) -> Any:
+    # Roles parallel to the names: the compiled-artifact ABI requires one explicit semantic per
+    # component. Non-physical components additionally carry their exact label in VariableSet's
+    # parallel user_roles vector; collapsing q1/q2 onto two anonymous Custom values would make any
+    # role-qualified consumer ambiguous.
+    def roles_init(roles: Any) -> tuple[str, str | None]:
+        from pops.physics.roles import parse_role
+
         scalar = {
             "density": "Density", "energy": "Energy", "pressure": "Pressure",
             "temperature": "Temperature", "scalar": "Scalar", "custom": "Custom",
         }
 
-        def cpp_semantic(role: str) -> str:
-            if role in scalar:
-                return "pops::VariableSemantic::%s" % scalar[role]
-            family, separator, axis = role.partition(":")
-            if family in {"momentum", "velocity", "axial"} and separator == ":" and axis.isdecimal():
-                return "pops::VariableSemantic::%s(%s)" % (family, axis)
+        semantics = []
+        labels = []
+        any_user_label = False
+        for index, role in enumerate(roles):
+            parsed = parse_role(role, where="generated model role %d" % index)
+            if not parsed.physical:
+                semantics.append("pops::VariableSemantic::Custom")
+                label = "" if parsed.label is None else parsed.label
+                labels.append(label)
+                any_user_label = any_user_label or bool(label)
+                continue
+            if parsed.family in scalar:
+                semantics.append("pops::VariableSemantic::%s" % scalar[parsed.family])
+                labels.append("")
+                continue
+            if parsed.family in {"momentum", "velocity", "axial"}:
+                semantics.append(
+                    "pops::VariableSemantic::%s(%d)" % (parsed.family, parsed.axis)
+                )
+                labels.append("")
+                continue
             raise ValueError("generated model has unsupported structured variable role %r" % role)
 
-        return ", ".join(cpp_semantic(r) for r in roles)
+        user_roles = None
+        if any_user_label:
+            user_roles = ", ".join(json.dumps(label) for label in labels)
+        return ", ".join(semantics), user_roles
 
-    croles = roles_init(_roles_for(model.cons_names, model.cons_roles))
-    proles = roles_init(_roles_for(model.prim_state, model.prim_roles))
+    croles, cuser_roles = roles_init(_roles_for(model.cons_names, model.cons_roles))
+    proles, puser_roles = roles_init(_roles_for(model.prim_state, model.prim_roles))
     # P7-b : assign the runtime indices BEFORE any to_cpp() (a RuntimeParamRef raises otherwise).
     rt_member = model._runtime_params_member()
     S = [
@@ -336,6 +355,30 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         S.append("    }")
     S += ["    return F;", "  }", ""]
 
+    # Project the compile-time physical flux formula onto the runtime-axis contract expected by
+    # PhysicalModel/HyperbolicModel.  This is deliberately a recursive exact-rank traversal: every
+    # valid runtime axis enters the corresponding flux<Axis>() specialization, and no alternate
+    # runtime physics implementation exists.
+    S += [
+        "  template <int Axis = 0, class Providers>",
+        "  POPS_HD State flux_at_runtime_axis(const State& U, const Providers& a, int axis) const {",
+        "    if (axis == Axis)",
+        "      return flux<Axis>(U, a);",
+        "    if constexpr (Axis + 1 < dimension)",
+        "      return flux_at_runtime_axis<Axis + 1>(U, a, axis);",
+        "    State invalid{};",
+        "    for (int component = 0; component < State::size(); ++component)",
+        "      invalid[component] = std::numeric_limits<pops::Real>::quiet_NaN();",
+        "    return invalid;",
+        "  }",
+        "",
+        "  template <class Providers>",
+        "  POPS_HD State flux(const State& U, const Providers& a, int axis) const {",
+        "    return flux_at_runtime_axis(U, a, axis);",
+        "  }",
+        "",
+    ]
+
     # In finite-difference Jacobian mode max_wave_speed calls flux<Axis>(U, a), so the provider
     # parameter must be named even if no formula reads a provider directly.
     ws_jac: Any = model._ws_jacobian
@@ -417,6 +460,26 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         S.append("    const pops::Real alo_ = lo_ < 0 ? -lo_ : lo_;")
         S.append("    const pops::Real ahi_ = hi_ < 0 ? -hi_ : hi_;")
         S += ["    return alo_ > ahi_ ? alo_ : ahi_;", "  }", ""]
+
+    # Same exact-rank projection for the runtime CFL contract.  The recursive calls preserve the
+    # template-axis formulas above, including their provider reads and finite-difference paths.
+    S += [
+        "  template <int Axis = 0, class Providers>",
+        "  POPS_HD pops::Real max_wave_speed_at_runtime_axis(const State& U, const Providers& a, "
+        "int axis) const {",
+        "    if (axis == Axis)",
+        "      return max_wave_speed<Axis>(U, a);",
+        "    if constexpr (Axis + 1 < dimension)",
+        "      return max_wave_speed_at_runtime_axis<Axis + 1>(U, a, axis);",
+        "    return std::numeric_limits<pops::Real>::quiet_NaN();",
+        "  }",
+        "",
+        "  template <class Providers>",
+        "  POPS_HD pops::Real max_wave_speed(const State& U, const Providers& a, int axis) const {",
+        "    return max_wave_speed_at_runtime_axis(U, a, axis);",
+        "  }",
+        "",
+    ]
 
     # pressure : emitted IF a primitive 'p' (pressure) is declared (compressible convention) ;
     # required by the canonical HLLC / Roe fluxes (make_block : requires { m.pressure(s); }).
@@ -648,10 +711,15 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         "",
     ]
 
-    cons_set = "{pops::VariableKind::Conservative, {%s}, %d%s}" % (
-        cnames, nc, (", {%s}" % croles) if croles is not None else "")
-    prim_set = "{pops::VariableKind::Primitive, {%s}, %d%s}" % (
-        pnames, npr, (", {%s}" % proles) if proles is not None else "")
+    def variable_set(kind: str, names: str, size: int, roles: str,
+                     user_roles: str | None) -> str:
+        fields = ["pops::VariableKind::%s" % kind, "{%s}" % names, str(size), "{%s}" % roles]
+        if user_roles is not None:
+            fields.append("{%s}" % user_roles)
+        return "{%s}" % ", ".join(fields)
+
+    cons_set = variable_set("Conservative", cnames, nc, croles, cuser_roles)
+    prim_set = variable_set("Primitive", pnames, npr, proles, puser_roles)
     S.append('  static pops::VariableSet conservative_vars() { return %s; }' % cons_set)
     S.append('  static pops::VariableSet primitive_vars() { return %s; }' % prim_set)
     S += ["};", "}  // namespace %s" % namespace]

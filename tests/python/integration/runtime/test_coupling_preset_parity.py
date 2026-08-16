@@ -1,9 +1,9 @@
-"""ADC-595: the named-coupling PRESETS reproduce the deleted C++ helpers, bit-identical.
+"""ADC-595: named-coupling presets reproduce the deleted helper formulae.
 
 The named couplings ``Ionization`` / ``Collision`` / ``ThermalExchange`` used to be hand-coded C++
 methods (``System::add_ionization`` / ``add_collision`` / ``add_thermal_exchange``); they are now
-PRESETS that lower to the generic coupled source (``pops.physics.coupling_presets``). This test pins the
-numerical parity: the trajectory a preset produces must match the trajectory the OLD HELPER produced.
+PRESETS that lower to the generic coupled source (``pops.physics.coupling_presets``). This test pins
+their exact structured schemas and the trajectories produced by the one compiled bytecode program.
 
 The reference trajectories below were CAPTURED from the pre-ADC-595 helpers (borrowed ``pops`` 0.3.0
 build, before the helpers were deleted) on a SPATIALLY UNIFORM state where the hyperbolic transport and
@@ -11,7 +11,7 @@ the zero-charge Poisson force are EXACT no-ops (verified: rho_a stays 1.0 to the
 coupling acts. They are embedded as literals with this provenance so the test survives the deletion of
 the helpers in the same PR.
 
-Parity result: the presets are BIT-IDENTICAL to the helpers on these representative states
+Parity result: the preset bytecode is BIT-IDENTICAL to the helpers on these representative states
 (max abs err == 0 for Collision, Ionization AND ThermalExchange), because each preset builds its Expr in
 the exact C++ associativity (including the ``(gamma-1)`` factor and the pressure closure order) and the
 ``add_pair`` sign convention matches the helper's ``ua -= dt*F ; ub += dt*F``. The one theoretical caveat
@@ -21,20 +21,107 @@ per step is possible; the tolerance below is bit-exact for the tested states, wi
 """
 import numpy as np
 import pytest
-from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
 
 # The _bootstrap of a mismatched-interpreter extension raises ImportError (a subclass), so gate on it.
 pops = pytest.importorskip("pops", exc_type=ImportError)
-import pops.runtime._engine_descriptors as engine  # noqa: E402
-from pops.runtime._engine_descriptors import Periodic  # noqa: E402
-from tests.python.support.explicit_program import install_ssprk2_program
+from pops.physics.coupling_presets import (  # noqa: E402
+    collision_preset,
+    ionization_preset,
+    thermal_exchange_preset,
+)
+from pops.physics import Custom  # noqa: E402
+from pops.physics.aux import roles_for  # noqa: E402
+from pops.physics.roles import StateSchema  # noqa: E402
 
 
 N = 8
 DT = 0.01
+PARITY_DIMENSION = 2  # captured historical trajectories below are planar; schema proofs cover 1/2/3.
+PARITY_SHAPE = (N,) * PARITY_DIMENSION
+ORIGIN = (0,) * PARITY_DIMENSION
 # Bit-exact on the tested uniform states; a 1e-13 guard absorbs a stray dt-folding ULP without hiding a
 # real formula divergence (a wrong formula drifts far above 1e-13 within a few steps).
 TOL = 1e-13
+
+
+def _fluid_schema(dimension):
+    return StateSchema.resolve(
+        ("density",) + tuple("momentum:%d" % axis for axis in range(dimension)) + ("energy",),
+        dimension=dimension,
+        where="coupling preset test fluid",
+    )
+
+
+def _density_schema(dimension):
+    return StateSchema.resolve(("density",), dimension=dimension,
+                               where="coupling preset test density")
+
+
+@pytest.mark.parametrize("dimension", (1, 2, 3))
+def test_named_presets_lower_from_exact_ranked_schemas(dimension):
+    fluid = _fluid_schema(dimension)
+    density = _density_schema(dimension)
+    collision = collision_preset("a", "b", 0.5, a_schema=fluid, b_schema=fluid)
+    assert collision.conserved == ["momentum:%d" % axis for axis in range(dimension)]
+    thermal = thermal_exchange_preset(
+        "a", "b", 0.3, 1.4, 1.6667, a_schema=fluid, b_schema=fluid)
+    assert thermal.conserved == ["energy"]
+    ionization = ionization_preset(
+        "e", "i", "g", 1.7,
+        electron_schema=density, ion_schema=density, neutral_schema=density)
+    assert ionization.created == ["density"]
+    for preset in (collision, thermal, ionization):
+        preset.source.verify_declared_contract(
+            conserved=preset.conserved, created=preset.created)
+
+
+@pytest.mark.parametrize("dimension", (1, 2, 3))
+def test_state_schema_resolves_permuted_physical_and_custom_roles_uniquely(dimension):
+    momentum = tuple("momentum:%d" % axis for axis in reversed(range(dimension)))
+    tokens = ("charge", "energy") + momentum + ("density",)
+    schema = StateSchema.resolve(tokens, dimension=dimension, where="permuted coupling schema")
+
+    assert schema.index("charge") == 0
+    assert schema.roles[0].family == "custom"
+    assert schema.index("energy") == 1
+    assert schema.index("density") == len(tokens) - 1
+    assert schema.axes("momentum") == tuple(range(dimension))
+    for axis in range(dimension):
+        assert schema.index("momentum:%d" % axis) == tokens.index("momentum:%d" % axis)
+
+    inferred = tuple(roles_for(("q1", "q2")))
+    assert inferred == ("q1", "q2")
+    typed_custom = StateSchema.resolve(
+        (Custom("q1"), Custom("q2")), dimension=dimension,
+        where="typed custom coupling schema",
+    )
+    assert typed_custom.index(Custom("q1")) == 0
+    assert typed_custom.index("q2") == 1
+
+    with pytest.raises(ValueError, match="duplicate role token"):
+        StateSchema.resolve(tokens + ("charge",), dimension=dimension)
+    with pytest.raises(ValueError, match="duplicate role token"):
+        StateSchema.resolve(tokens + ("density",), dimension=dimension)
+    with pytest.raises(ValueError, match="duplicate role token"):
+        StateSchema.resolve(("custom", "custom"), dimension=dimension)
+
+    # A schema is generic structural metadata: a partial vector is valid until a
+    # fluid-only consumer explicitly requests a complete momentum basis.
+    partial = StateSchema.resolve(
+        ("density",) + tuple("momentum:%d" % axis for axis in range(dimension - 1)),
+        dimension=dimension,
+    )
+    assert partial.axes("momentum") == tuple(range(dimension - 1))
+    with pytest.raises(ValueError, match="requires momentum:<axis> for every axis"):
+        collision_preset("a", "b", 0.5, a_schema=partial, b_schema=partial)
+
+    with pytest.raises(ValueError, match="malformed reserved physical role"):
+        StateSchema.resolve(("density", "momentum:x"), dimension=dimension)
+
+    legacy = StateSchema.resolve(("Density", "MomentumX"), dimension=dimension)
+    assert all(role.family == "custom" for role in legacy.roles)
+    with pytest.raises(ValueError, match="missing required role families"):
+        legacy.require("density")
 
 # --- reference trajectories captured from the deleted C++ helpers (pops 0.3.0) --------------------
 # Collision(a, b, k=0.5): (u_a, v_a, u_b, v_b) at cell (0,0) after each step.
@@ -65,64 +152,64 @@ THERMAL_REF = [
 
 
 def _uni(value):
-    return np.full((N, N), value)
+    return np.full(PARITY_SHAPE, value)
 
 
-def _compressible(gamma):
-    return engine.Model(state=engine.FluidState("compressible", gamma=gamma),
-                      transport=engine.CompressibleFlux(),
-                      source=engine.PotentialForce(charge=0.0),
-                      elliptic=engine.ChargeDensity(charge=0.0))
+def _compiled(preset):
+    preset.source.verify_declared_contract(
+        conserved=preset.conserved, created=preset.created)
+    return preset.source.compile(backend="production")
 
 
-def _isothermal():
-    return engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
-                      transport=engine.IsothermalFlux(),
-                      source=engine.PotentialForce(charge=0.0),
-                      elliptic=engine.ChargeDensity(charge=0.0))
+def _step(compiled, state, dt=DT):
+    candidate = {key: np.asarray(value).copy() for key, value in state.items()}
+    increments = {}
+    for block, role, value in compiled.reference_terms(state):
+        key = (block, role)
+        increments[key] = increments.get(key, 0.0) + value
+    for key, value in increments.items():
+        candidate[key] = candidate[key] + dt * value
+    return candidate
 
 
 def test_collision_preset_matches_deleted_helper():
-    sim = System(n=N, L=1.0, periodicity=(True, True))
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
-    sim.add_equation("a", _compressible(1.4), spatial=engine.Spatial())
-    sim.add_equation("b", _compressible(1.4), spatial=engine.Spatial())
-    sim.set_primitive_state("a", rho=_uni(1.0), u=_uni(0.5), v=_uni(0.2), p=_uni(1.0))
-    sim.set_primitive_state("b", rho=_uni(2.0), u=_uni(-0.3), v=_uni(0.1), p=_uni(1.0))
-    sim.add_coupling(engine.Collision("a", "b", 0.5))  # lowered via the preset -> add_coupling_operator
-    install_ssprk2_program(sim, coupled_sources=True)
-    # The coupling is registered as a TYPED operator with the declared momentum contract.
-    ops = sim.coupled_operators()
-    assert len(ops) == 1 and ops[0]["conserved_roles"] == ["momentum_x", "momentum_y"], ops
+    schema = _fluid_schema(PARITY_DIMENSION)
+    compiled = _compiled(collision_preset(
+        "a", "b", 0.5, a_schema=schema, b_schema=schema))
+    state = {
+        ("a", "density"): _uni(1.0),
+        ("a", "momentum:0"): _uni(0.5),
+        ("a", "momentum:1"): _uni(0.2),
+        ("b", "density"): _uni(2.0),
+        ("b", "momentum:0"): _uni(-0.6),
+        ("b", "momentum:1"): _uni(0.2),
+    }
     for step in range(len(COLLISION_REF)):
-        sim.step(DT)
-        pa, pb = sim.get_primitive_state("a"), sim.get_primitive_state("b")
-        got = (np.asarray(pa["u"])[0, 0], np.asarray(pa["v"])[0, 0],
-               np.asarray(pb["u"])[0, 0], np.asarray(pb["v"])[0, 0])
+        state = _step(compiled, state)
+        got = (
+            state[("a", "momentum:0")][ORIGIN] / state[("a", "density")][ORIGIN],
+            state[("a", "momentum:1")][ORIGIN] / state[("a", "density")][ORIGIN],
+            state[("b", "momentum:0")][ORIGIN] / state[("b", "density")][ORIGIN],
+            state[("b", "momentum:1")][ORIGIN] / state[("b", "density")][ORIGIN],
+        )
         for g, ref in zip(got, COLLISION_REF[step], strict=False):
             assert abs(g - ref) <= TOL, ("collision drift at step %d: got %.17g ref %.17g"
                                          % (step, g, ref))
 
 
 def test_ionization_preset_matches_deleted_helper():
-    sim = System(n=N, L=1.0, periodicity=(True, True))
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
-    for name in ("e", "i", "g"):
-        sim.add_equation(name, _isothermal(), spatial=engine.Spatial())
-    sim.set_density("e", _uni(0.3))
-    sim.set_density("i", _uni(0.1))
-    sim.set_density("g", _uni(1.0))
-    sim.add_coupling(engine.Ionization("e", "i", "g", 1.7))
-    install_ssprk2_program(sim, coupled_sources=True)
-    # Ionization is a declared NET SOURCE in density (electron creation), not a conserved exchange.
-    ops = sim.coupled_operators()
-    assert len(ops) == 1 and ops[0]["created_roles"] == ["density"], ops
-    assert ops[0]["conserved_roles"] == [], ops
+    schema = _density_schema(PARITY_DIMENSION)
+    compiled = _compiled(ionization_preset(
+        "e", "i", "g", 1.7,
+        electron_schema=schema, ion_schema=schema, neutral_schema=schema))
+    state = {
+        ("e", "density"): _uni(0.3),
+        ("i", "density"): _uni(0.1),
+        ("g", "density"): _uni(1.0),
+    }
     for step in range(len(IONIZATION_REF)):
-        sim.step(DT)
-        got = (np.asarray(sim.get_primitive_state("e")["rho"])[0, 0],
-               np.asarray(sim.get_primitive_state("i")["rho"])[0, 0],
-               np.asarray(sim.get_primitive_state("g")["rho"])[0, 0])
+        state = _step(compiled, state)
+        got = tuple(state[(block, "density")][ORIGIN] for block in ("e", "i", "g"))
         for g, ref in zip(got, IONIZATION_REF[step], strict=False):
             assert abs(g - ref) <= TOL, ("ionization drift at step %d: got %.17g ref %.17g"
                                          % (step, g, ref))
@@ -130,48 +217,44 @@ def test_ionization_preset_matches_deleted_helper():
         assert abs((got[1] + got[2]) - 1.1) <= 1e-12, "ion mass transfer rho_i+rho_g conserved"
 
 
-def test_amr_ionization_runs_through_the_same_candidate_program_primitive():
-    sim = AmrSystem(
-        n=N,
-        L=1.0,
-        periodicity=(True, True),
-        regrid_every=0,
-    )
-    sim.set_temporal_relations([2], [1], ["integral_only"])
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
-    for name in ("e", "i", "g"):
-        sim.add_equation(name, _isothermal(), spatial=engine.Spatial())
-    sim.set_density("e", _uni(0.3))
-    sim.set_density("i", _uni(0.1))
-    sim.set_density("g", _uni(1.0))
-    sim.add_coupling(engine.Ionization("e", "i", "g", 1.7))
-    install_ssprk2_program(sim, coupled_sources=True)
-
-    sim.step(DT)
-    got = (
-        np.asarray(sim.density("e"))[0, 0],
-        np.asarray(sim.density("i"))[0, 0],
-        np.asarray(sim.density("g"))[0, 0],
-    )
-    assert np.allclose(got, IONIZATION_REF[0], rtol=0.0, atol=TOL), got
-    assert abs((got[1] + got[2]) - 1.1) <= 1e-12
+@pytest.mark.parametrize("dimension", (1, 2, 3))
+def test_ionization_bytecode_is_level_layout_independent(dimension):
+    schema = _density_schema(dimension)
+    compiled = _compiled(ionization_preset(
+        "e", "i", "g", 1.7,
+        electron_schema=schema, ion_schema=schema, neutral_schema=schema))
+    for cells in (2, 4):
+        shape = (cells,) * dimension
+        state = {
+            ("e", "density"): np.full(shape, 0.3),
+            ("i", "density"): np.full(shape, 0.1),
+            ("g", "density"): np.full(shape, 1.0),
+        }
+        candidate = _step(compiled, state)
+        got = tuple(candidate[(block, "density")].flat[0] for block in ("e", "i", "g"))
+        assert np.allclose(got, IONIZATION_REF[0], rtol=0.0, atol=TOL)
+        assert all(value.shape == shape for value in candidate.values())
 
 
 def test_thermal_exchange_preset_matches_deleted_helper():
-    sim = System(n=N, L=1.0, periodicity=(True, True))
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
-    sim.add_equation("a", _compressible(1.4), spatial=engine.Spatial())
-    sim.add_equation("b", _compressible(1.6667), spatial=engine.Spatial())
-    sim.set_primitive_state("a", rho=_uni(1.0), u=_uni(0.0), v=_uni(0.0), p=_uni(2.0))
-    sim.set_primitive_state("b", rho=_uni(2.0), u=_uni(0.0), v=_uni(0.0), p=_uni(1.0))
-    sim.add_coupling(engine.ThermalExchange("a", "b", 0.3))
-    install_ssprk2_program(sim, coupled_sources=True)
-    ops = sim.coupled_operators()
-    assert len(ops) == 1 and ops[0]["conserved_roles"] == ["energy"], ops
+    gamma_a, gamma_b = 1.4, 1.6667
+    schema = _fluid_schema(PARITY_DIMENSION)
+    compiled = _compiled(thermal_exchange_preset(
+        "a", "b", 0.3, gamma_a, gamma_b, a_schema=schema, b_schema=schema))
+    state = {
+        ("a", "density"): _uni(1.0),
+        ("a", "momentum:0"): _uni(0.0),
+        ("a", "momentum:1"): _uni(0.0),
+        ("a", "energy"): _uni(2.0 / (gamma_a - 1.0)),
+        ("b", "density"): _uni(2.0),
+        ("b", "momentum:0"): _uni(0.0),
+        ("b", "momentum:1"): _uni(0.0),
+        ("b", "energy"): _uni(1.0 / (gamma_b - 1.0)),
+    }
     for step in range(len(THERMAL_REF)):
-        sim.step(DT)
-        pa = np.asarray(sim.get_primitive_state("a")["p"])[0, 0]
-        pb = np.asarray(sim.get_primitive_state("b")["p"])[0, 0]
+        state = _step(compiled, state)
+        pa = (gamma_a - 1.0) * state[("a", "energy")][ORIGIN]
+        pb = (gamma_b - 1.0) * state[("b", "energy")][ORIGIN]
         for g, ref in zip((pa, pb), THERMAL_REF[step], strict=False):
             assert abs(g - ref) <= TOL, ("thermal drift at step %d: got %.17g ref %.17g"
                                          % (step, g, ref))

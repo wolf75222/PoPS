@@ -157,7 +157,8 @@ compatible threads.
 
 Le writer VTU generique sait encoder des snapshots cartesiens authentifies 1D, 2D ou 3D, avec les
 champs centres cellules dans `CellData` et les champs nodaux dans `PointData`/`PPointData`. La capture
-native PoPS et le backend Catalyst integre restent 2D et centres cellules. Catalyst accepte un seul
+native PoPS et le Blueprint Catalyst integre transportent les pieces uniformes et AMR centres cellules
+en 1D, 2D et 3D; un centering natif non pris en charge est refuse avant publication. Catalyst accepte un seul
 consumer/pipeline combine et un seul run par `RuntimeInstance`. Sa reservation globale n'est jamais
 relachee : un autre run Catalyst demande un nouveau processus. Plusieurs runtimes concurrents dans
 un meme processus ne sont pas supportes avec HDF5 asynchrone ou Catalyst. Le worker PoPS fournit

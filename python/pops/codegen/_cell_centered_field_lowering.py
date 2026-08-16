@@ -38,6 +38,7 @@ from pops.fields._prepared_field_solver_registry import PreparedFieldSolverFacts
 from pops.fields.discretization import CompositeHierarchySolve, LevelByLevelSolve
 from pops.fields.operator import FieldOperator, _field_targets_unknown
 from pops.fields.solve import ResolvedHierarchyPolicy
+from pops.identity import canonical_bytes
 from pops.math import principal_kinds
 
 
@@ -78,6 +79,78 @@ def _layout_dimension(layout: Any) -> int:
     if type(dimension) is not int or dimension not in (1, 2, 3):
         raise TypeError("cell-centred field layout has no exact Cartesian rank")
     return dimension
+
+
+def _validate_output_route(route: Any, *, where: str) -> None:
+    """Authenticate the complete provider-owned publication carried by this method."""
+    expected_route = {
+        "owner_identity",
+        "owner_block",
+        "key",
+        "components",
+        "component_keys",
+        "dimension",
+        "gradient_sign",
+        "publication",
+    }
+    if not isinstance(route, Mapping) or set(route) != expected_route:
+        raise ValueError("%s cell-centred output route has an invalid shape" % where)
+    owner_identity = route["owner_identity"]
+    owner_block = route["owner_block"]
+    field = route["key"]
+    components = route["components"]
+    keys = route["component_keys"]
+    dimension = route["dimension"]
+    sign = route["gradient_sign"]
+    if (
+        type(owner_identity) is not str
+        or not owner_identity
+        or type(owner_block) is not str
+        or not owner_block
+        or type(field) is not str
+        or not field
+        or type(dimension) is not int
+        or dimension not in (1, 2, 3)
+        or type(components) is not tuple
+        or len(components) not in (1, 1 + dimension)
+        or any(type(component) is not str or not component for component in components)
+        or type(keys) is not tuple
+        or len(keys) != len(components)
+        or type(sign) is not int
+        or sign not in (-1, 1)
+        or (len(components) == 1 and sign != 1)
+    ):
+        raise ValueError("%s cell-centred output route is incomplete" % where)
+    for component, key in zip(components, keys, strict=True):
+        if (
+            not isinstance(key, Mapping)
+            or set(key) != {"owner_qid", "space_kind", "space_name", "component"}
+            or key["owner_qid"] != owner_identity
+            or key["space_kind"] != "field"
+            or key["component"] != component
+            or any(type(value) is not str or not value for value in key.values())
+        ):
+            raise ValueError("%s cell-centred output route has an invalid ComponentKey" % where)
+    publication = route["publication"]
+    if not isinstance(publication, Mapping) or set(publication) != {
+        "schema_version",
+        "owner_identity",
+        "block",
+        "field",
+        "output_keys",
+        "gradient_sign",
+    }:
+        raise ValueError("%s cell-centred output publication has an invalid shape" % where)
+    if (
+        type(publication["schema_version"]) is not int
+        or publication["schema_version"] != 1
+        or publication["owner_identity"] != canonical_bytes(owner_identity).hex()
+        or publication["block"] != owner_block
+        or publication["field"] != field
+        or tuple(publication["output_keys"]) != keys
+        or publication["gradient_sign"] != sign
+    ):
+        raise ValueError("%s cell-centred output publication changed" % where)
 
 
 def _validate_outputs(request: PreparedFieldLoweringRequest) -> tuple[dict[str, Any], int]:
@@ -126,26 +199,41 @@ def _validate_outputs(request: PreparedFieldLoweringRequest) -> tuple[dict[str, 
     declaration = operator.unknown.declaration_ref
     if declaration is None:
         raise RuntimeError("resolved field output lost its FieldSpace declaration")
+    output_owner_qid = str(output_block.model_owner_path.canonical())
     # ``components`` remains the small human-facing report used by the field
     # authoring API.  Installation deliberately carries the complete key for
     # each value instead: an output may be homonymous with another block's
     # field and storage locations are allocated only by the global native
     # provider registry.
-    output_keys = tuple({
-        "owner_qid": output_block.canonical_identity(),
-        "space_kind": "field",
-        "space_name": declaration.local_id,
-        "component": component,
-    } for component in components)
-    return {
-        "owner_identity": output_block.canonical_identity(),
+    output_keys = tuple(
+        {
+            "owner_qid": output_owner_qid,
+            "space_kind": "field",
+            "space_name": declaration.local_id,
+            "component": component,
+        }
+        for component in components
+    )
+    publication = {
+        "schema_version": 1,
+        "owner_identity": canonical_bytes(output_owner_qid).hex(),
+        "block": output_block.local_id,
+        "field": operator.name,
+        "output_keys": output_keys,
+        "gradient_sign": gradient_sign,
+    }
+    route = {
+        "owner_identity": output_owner_qid,
         "owner_block": output_block.local_id,
         "key": operator.name,
         "components": components,
         "component_keys": output_keys,
         "dimension": dimension,
         "gradient_sign": gradient_sign,
-    }, gradient_sign
+        "publication": publication,
+    }
+    _validate_output_route(route, where="resolved")
+    return route, gradient_sign
 
 
 def _reaction(
@@ -565,6 +653,7 @@ def _validate_binding(binding: PreparedFieldLoweringBinding, where: str) -> None
         resolution.native_options["hierarchy_policy"]
     ):
         raise ValueError("%s cell-centred hierarchy facts changed" % where)
+    _validate_output_route(resolution.native_options["output_route"], where=where)
     topology_identity = resolution.solver_facts.layout.get("topology_identity")
     if resolution.nullspace_facts.topology_identity != topology_identity:
         raise ValueError("%s cell-centred topology authority changed" % where)
@@ -660,19 +749,22 @@ def _prepare_output(
     if context.target != binding.resolution.solver_facts.target:
         raise ValueError("cell-centred runtime target changed after field lowering")
     route = binding.resolution.native_options["output_route"]
-    block = route["owner_block"]
+    _validate_output_route(route, where="runtime")
+    publication = route["publication"]
+    block = publication["block"]
     models = context.resources.get("models")
     if not isinstance(models, Mapping):
         raise TypeError("cell-centred runtime requires a model registry resource")
     model = models.get(block)
     if model is None:
         raise ValueError("field output route names unknown block %r" % block)
+    if publication["field"] != operator.name:
+        raise ValueError("field output publication changed its operator identity")
     components = tuple(route["components"])
     keys = tuple(route.get("component_keys", ()))
     if len(keys) != len(components):
         raise ValueError(
-            "field output route %r has no exact ComponentKey for each output"
-            % operator.name
+            "field output route %r has no exact ComponentKey for each output" % operator.name
         )
     for component, key in zip(components, keys, strict=True):
         if (
@@ -687,17 +779,7 @@ def _prepare_output(
                 "field output route %r carries an invalid owner-qualified ComponentKey"
                 % operator.name
             )
-    gradient_sign = route.get("gradient_sign")
-    if type(gradient_sign) is not int or gradient_sign not in (-1, 1):
-        raise ValueError("field output route has no valid GradientOutput sign")
-    if len(keys) == 1 and gradient_sign != 1:
-        raise ValueError("field output route carries a sign without gradient components")
-    return {
-        "block": block,
-        "key": route["key"],
-        "output_keys": keys,
-        "gradient_sign": gradient_sign,
-    }
+    return publication
 
 
 def _install_output(
@@ -707,10 +789,13 @@ def _install_output(
 ) -> None:
     """Commit the provider-owned output payload after every input preflight succeeded."""
     del binding
-    output_keys = output_payload["output_keys"]
+    # ``prepare_output_payload`` has already frozen and exact-validated this ordered ComponentKey
+    # sequence.  Pybind deliberately accepts only ``list[dict[str, str]]`` here, so thaw no earlier
+    # than the native commit boundary and never hand its mutable carrier back to the authority.
+    output_keys: list[dict[str, str]] = [dict(key) for key in output_payload["output_keys"]]
     context.engine.register_elliptic_field(
         output_payload["block"],
-        output_payload["key"],
+        output_payload["field"],
         output_keys,
         output_payload["gradient_sign"],
     )

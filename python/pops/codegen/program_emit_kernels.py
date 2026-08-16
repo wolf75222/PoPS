@@ -220,10 +220,27 @@ class ProgramProviderPlans:
         return "\n".join(lines)
 
 
-def program_provider_consumer_qid(model: Any, value_id: Any) -> str:
-    """Return the stable Program-node qid; block names never enter this identity."""
+def program_provider_consumer_qid(model: Any, value_id: Any, block: Any = None) -> str:
+    """Return the stable Program-node consumer qid.
+
+    Display names never enter this identity.  A block-qualified node uses the official
+    Case-block instance owner; an unscoped node keeps the model-definition owner.
+    """
     if isinstance(value_id, bool) or not isinstance(value_id, int) or value_id < 0:
         raise ValueError("Program provider consumer value id must be a non-negative integer")
+    if block is not None:
+        instance = getattr(block, "instance_owner_path", None)
+        canonical = getattr(instance, "canonical", None)
+        if not callable(canonical):
+            raise ValueError(
+                "Program provider consumer block has no canonical instance_owner_path"
+            )
+        owner_qid = str(canonical())
+        if not owner_qid:
+            raise ValueError(
+                "Program provider consumer block instance_owner_path is empty"
+            )
+        return owner_qid + "/program/" + str(value_id)
     impl = _model_impl(model)
     owner = getattr(impl, "owner_path", None)
     canonical = getattr(owner, "canonical", None)
@@ -426,10 +443,22 @@ def _model_impl(model: Any) -> Any:
 
     The public physics board wraps the DSL facade as ``_dsl`` and the facade wraps its implementation
     as ``_m``.  Compiler-internal call sites may already carry either of the latter two objects.
+    ProviderPack identity stays on the Module/facade bind protocol; this only unwraps after the
+    exact pack has been attached to the formula carrier.
     """
 
     facade = getattr(model, "_dsl", model)
-    return getattr(facade, "_m", facade)
+    from pops.codegen.component_provider_packs import (
+        bind_emitter_provider_packs,
+        require_emitter_provider_carrier,
+    )
+
+    bind_emitter_provider_packs(facade)
+    impl = getattr(facade, "_m", facade)
+    if impl is not facade:
+        bind_emitter_provider_packs(impl)
+    require_emitter_provider_carrier(impl, where="Program model kernel")
+    return impl
 
 
 def _named_fluxes(v: Any) -> Any:

@@ -36,7 +36,7 @@ hierarchy::LevelLayout<Dim> make_level(int level, const Box<Dim>& domain,
 TEST(test_nd_hierarchy_plan, one_dimensional_nonzero_origin_and_ratio_are_exact) {
   const Box<1> coarse_domain{Index<1>{-3}, Index<1>{4}};
   const mesh::BoxArray<1> coarse_patches =
-      mesh::BoxArray<1>::from_domain(coarse_domain, std::array<int, 1>{4});
+      mesh::BoxArray<1>::from_domain(coarse_domain, Extent<1>{4});
   const mesh::RankSpace<1> ranks{Index<1>{-2}, Extent<1>{2}};
   const auto coarse = make_level<1>(0, coarse_domain, coarse_patches, ranks,
                                     {Index<1>{-2}, Index<1>{-1}}, pops::amr::RefinementRatio<1>{1});
@@ -58,7 +58,7 @@ TEST(test_nd_hierarchy_plan, one_dimensional_nonzero_origin_and_ratio_are_exact)
 TEST(test_nd_hierarchy_plan, anisotropic_two_and_three_dimensional_levels_are_validated) {
   const Box<2> plane_domain{Index<2>{-2, 4}, Index<2>{1, 7}};
   const mesh::BoxArray<2> plane_patches =
-      mesh::BoxArray<2>::from_domain(plane_domain, std::array<int, 2>{2, 2});
+      mesh::BoxArray<2>::from_domain(plane_domain, Extent<2>{2, 2});
   const mesh::RankSpace<2> plane_ranks{Index<2>{5, -2}, Extent<2>{2, 1}};
   const auto plane_coarse =
       make_level<2>(0, plane_domain, plane_patches, plane_ranks,
@@ -77,7 +77,7 @@ TEST(test_nd_hierarchy_plan, anisotropic_two_and_three_dimensional_levels_are_va
 
   const Box<3> volume_domain{Index<3>{-2, 3, -1}, Index<3>{1, 4, 1}};
   const mesh::BoxArray<3> volume_patches =
-      mesh::BoxArray<3>::from_domain(volume_domain, std::array<int, 3>{2, 2, 3});
+      mesh::BoxArray<3>::from_domain(volume_domain, Extent<3>{2, 2, 3});
   const mesh::RankSpace<3> volume_ranks{Index<3>{7, -3, 2}, Extent<3>{2, 1, 1}};
   const auto volume_coarse = make_level<3>(0, volume_domain, volume_patches, volume_ranks,
                                            {Index<3>{7, -3, 2}, Index<3>{8, -3, 2}},
@@ -188,7 +188,7 @@ TEST(test_nd_hierarchy_plan, sparse_parent_coverage_and_nonconsecutive_levels_fa
 
 TEST(test_nd_hierarchy_plan, exact_identity_tracks_order_ownership_and_replacement) {
   const Box<1> domain{Index<1>{-2}, Index<1>{1}};
-  const mesh::BoxArray<1> patches = mesh::BoxArray<1>::from_domain(domain, std::array<int, 1>{2});
+  const mesh::BoxArray<1> patches = mesh::BoxArray<1>::from_domain(domain, Extent<1>{2});
   const mesh::RankSpace<1> ranks{Index<1>{4}, Extent<1>{2}};
   const auto left_owned = make_level<1>(0, domain, patches, ranks, {Index<1>{4}, Index<1>{5}},
                                         pops::amr::RefinementRatio<1>{1});

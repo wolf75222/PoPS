@@ -8,7 +8,6 @@ from fractions import Fraction
 import numpy as np
 import pytest
 
-from pops.codegen._compile_emit import model_hash
 from pops._ir import ScalarLiteral, scalar_literal
 from pops.model.manifest import coupling_operator_manifest
 from pops.physics.coupling_presets import (
@@ -18,6 +17,7 @@ from pops.physics.coupling_presets import (
 )
 from pops.physics._facade import Model
 from pops.physics.multispecies import CoupledSource
+from pops.physics.roles import StateSchema
 from pops.physics._scalars import canonical_scalar_data, physics_scalar_cpp
 from pops.numerics.riemann import Harten, NoEntropyFix
 
@@ -114,12 +114,17 @@ def test_numerically_equal_domains_are_not_float_deduplicated():
 
 
 def test_thermal_preset_keeps_rate_gamma_and_half_exact():
+    schema = StateSchema.resolve(
+        ("density", "momentum:0", "energy"), dimension=1,
+        where="exact scalar thermal preset")
     preset = thermal_exchange_preset(
         "a",
         "b",
         Fraction(1, 7),
         Decimal("1.333333333333333333333333333333333333"),
         Fraction(5, 3),
+        a_schema=schema,
+        b_schema=schema,
     )
     compiled = preset.source.compile()
     assert compiled.consts == [
@@ -139,20 +144,22 @@ def test_wave_speed_knobs_emit_and_hash_exact_literals():
     ws = model._m._ws_jacobian
     assert ws["fd_eps"] == Fraction(1, 3)
     assert ws["im_tol"] == im_tol
+    model._model_hash()  # bind the canonical consumer ProviderPack before private source inspection
     source = model._m.emit_cpp_brick()
     assert "pops::Real(1) / pops::Real(3)" in source
     assert str(im_tol) in source
 
     same = _fd_model(Fraction(1, 3), im_tol)
     decimal_domain = _fd_model(Decimal("0.333333333333333333333333333333333333"), im_tol)
-    assert model_hash(model._m) == model_hash(same._m)
-    assert model_hash(model._m) != model_hash(decimal_domain._m)
+    assert model._model_hash() == same._model_hash()
+    assert model._model_hash() != decimal_domain._model_hash()
 
 
 def test_roe_entropy_fix_emits_and_hashes_exact_positive_literal():
     ratio = Fraction(1, 1_000_000)
     model = _entropy_fixed_roe_model(ratio)
     assert model._m._roe_jacobian["entropy_fix"] == ratio
+    model._model_hash()  # bind the canonical consumer ProviderPack before private source inspection
     source = model._m.emit_cpp_brick()
     assert "roe_entropy_fix_apply" in source
     assert "pops::Real(1) / pops::Real(1000000)" in source
@@ -162,11 +169,12 @@ def test_roe_entropy_fix_emits_and_hashes_exact_positive_literal():
     same = _entropy_fixed_roe_model(ratio)
     other_value = _entropy_fixed_roe_model(Fraction(2, 1_000_000))
     other_domain = _entropy_fixed_roe_model(Decimal("0.000001"))
-    assert model_hash(model._m) == model_hash(same._m)
-    assert model_hash(model._m) != model_hash(other_value._m)
-    assert model_hash(model._m) != model_hash(other_domain._m)
+    assert model._model_hash() == same._model_hash()
+    assert model._model_hash() != other_value._model_hash()
+    assert model._model_hash() != other_domain._model_hash()
 
     plain = _entropy_fixed_roe_model(None)
+    plain._model_hash()
     plain_source = plain._m.emit_cpp_brick()
     assert "roe_abs_apply" in plain_source
     assert "quiet_NaN" in plain_source
@@ -184,6 +192,7 @@ def test_gamma_and_native_lowering_helpers_preserve_exact_scalars():
     model = Model("exact_gamma")
     model.gamma(gamma)
     assert model._m.gamma == gamma
+    model._model_hash()
     assert str(gamma) in model._m._emit_metadata("ExactModel")
 
     algebraic = ScalarLiteral.algebraic(

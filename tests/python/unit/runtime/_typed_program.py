@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any
+from weakref import WeakKeyDictionary
 
 from pops.model import Module
 from pops.problem import Case
@@ -16,7 +17,88 @@ from pops.time import Program
 from tests.python.support.layout_plan import resolved_layout_contract
 
 
-_PROGRAM_CONTEXTS: dict[int, tuple[Case, Module, Any, dict[str, Any]]] = {}
+_PROGRAM_CONTEXTS: WeakKeyDictionary[Any, tuple[Case, Module, Any, dict[str, Any]]] = (
+    WeakKeyDictionary()
+)
+
+
+def _canonical_model_owner(owner: Any) -> Any:
+    from pops.model.ownership import OwnerPath
+
+    path = OwnerPath.coerce(owner)
+    return path.canonical() if path.is_authoring else path
+
+
+def _source_model_for_owner(owner: Any, *, program: Any = None) -> Module:
+    """Return the live Case Module whose canonical owner matches ``owner``.
+
+    Prefer the exact program-associated context.  Multiple live Modules that
+    collapse to the same canonical owner are rejected rather than chosen by
+    insertion order.
+    """
+    expected = _canonical_model_owner(owner)
+    if program is not None:
+        associated = _PROGRAM_CONTEXTS.get(program)
+        if associated is not None:
+            _case, module, _declaration, _fields = associated
+            observed = _canonical_model_owner(module.owner_path)
+            if observed == expected:
+                return module
+            raise ValueError(
+                "typed artifact fixture program context owner %s does not match queried owner %s"
+                % (observed, expected)
+            )
+        # CompiledProblem seals a detached Program.  It has no mutable authoring
+        # context of its own, so recover only one uniquely matching registered
+        # source Program; ambiguity remains a refusal, never insertion-order
+        # fallback.
+        digest_hook = getattr(program, "_ir_hash", None)
+        name = getattr(program, "name", None)
+        if callable(digest_hook):
+            digest = digest_hook()
+            hits: list[Module] = []
+            seen: set[int] = set()
+            for authoring, (_case, module, _declaration, _fields) in _PROGRAM_CONTEXTS.items():
+                if authoring is program:
+                    continue
+                if getattr(authoring, "name", None) != name:
+                    continue
+                if authoring._ir_hash() != digest:
+                    continue
+                if _canonical_model_owner(module.owner_path) != expected:
+                    continue
+                if id(module) in seen:
+                    continue
+                seen.add(id(module))
+                hits.append(module)
+            if len(hits) == 1:
+                return hits[0]
+            if len(hits) > 1:
+                raise ValueError(
+                    "typed artifact fixture has ambiguous Case models for owner %s"
+                    % expected
+                )
+        raise ValueError(
+            "typed artifact fixture has no registered Case model matching the supplied Program"
+        )
+    matches: list[Module] = []
+    seen_modules: set[int] = set()
+    for _case, module, _declaration, _fields in _PROGRAM_CONTEXTS.values():
+        if _canonical_model_owner(module.owner_path) != expected:
+            continue
+        if id(module) in seen_modules:
+            continue
+        seen_modules.add(id(module))
+        matches.append(module)
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise ValueError(
+            "typed artifact fixture has ambiguous Case models for owner %s" % expected
+        )
+    raise ValueError(
+        "typed artifact fixture has no Case model whose owner matches %s" % expected
+    )
 
 
 def module_of(model: Any) -> Module:
@@ -65,7 +147,7 @@ def typed_program_state(
     block, declaration = add_typed_block(case, module, block_name, state)
     program = Program(name)
     temporal = program.state(block[declaration])
-    _PROGRAM_CONTEXTS[id(program)] = (case, module, declaration, {})
+    _PROGRAM_CONTEXTS[program] = (case, module, declaration, {})
     return program, module, case, block, declaration, temporal
 
 
@@ -84,16 +166,18 @@ def typed_program_states(
     case = Case(name="%s_case" % name)
     program = Program(name)
     endpoints = {}
+    declaration = None
     for block_name, state in declarations:
         block, declaration = add_typed_block(case, module, block_name, state)
         endpoints[block_name] = program.state(block[declaration])
+    _PROGRAM_CONTEXTS[program] = (case, module, declaration, {})
     return program, module, case, endpoints
 
 
 def typed_field(program: Program, name: str = "potential") -> Any:
     """Build one genuine Case-owned callable FieldHandle for a runtime IR fixture."""
     try:
-        case, module, declaration, fields = _PROGRAM_CONTEXTS[id(program)]
+        case, module, declaration, fields = _PROGRAM_CONTEXTS[program]
     except KeyError as exc:
         raise ValueError("typed runtime field fixture requires typed_program_state") from exc
     existing = fields.get(name)
@@ -226,15 +310,16 @@ def typed_compiled_artifact(
     }
     case_owner = next(iter(block_refs.values())).owner_path.nodes[0].name
     schema_problem = Case(name=case_owner)
-    schema_modules = {}
+    source_models = {}
     for name in names:
         model = by_name[name]
+        source_models[name] = _source_model_for_owner(
+            block_refs[name].model_owner_path, program=program)
         model_owner = block_refs[name].model_owner_path.nodes[-1].name
         schema_module = Module(model_owner)
         for declaration in model.params.values():
             schema_module.param(declaration)
         schema_problem.block(name, schema_module)
-        schema_modules[name] = schema_module
     schema = BindSchema.from_problem(schema_problem)
 
     snapshot = AuthoringSnapshot({
@@ -260,8 +345,9 @@ def typed_compiled_artifact(
         time=program,
         blocks=tuple(
             ResolvedBlock(
-                name, schema_modules[name], resolved_spatial, backend, ("U",),
-                (state_identities[name],))
+                name, source_models[name], resolved_spatial, backend, ("U",),
+                (state_identities[name],),
+                block_refs[name])
             for name in names
         ),
         bind_schema=schema,
@@ -273,10 +359,13 @@ def typed_compiled_artifact(
         lowering_coverage=layout_coverage,
     )
     compiled.bind_schema = schema
+    owners = {block.name: block for block in plan.blocks}
     for name, model in by_name.items():
         model.bind_schema = schema
         if getattr(model, "definition_identity", None) is None:
-            model.definition_identity = model_compile_identity(schema_modules[name])
+            model.definition_identity = model_compile_identity(source_models[name])
+        model.consumer_owner_qid = owners[name].instance_owner_qid
+        model.declares_auxiliary_providers = owners[name].declares_auxiliary_providers
     return CompiledSimulationArtifact(
         plan=plan,
         program=compiled,

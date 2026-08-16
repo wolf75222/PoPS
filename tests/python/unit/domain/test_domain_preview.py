@@ -30,7 +30,7 @@ from pops.domain import DomainPreview, Rectangle, RectangleBoundaryNames, previe
 from pops.domain.preview import AnalyticPreviewValue, GeometryPreviewProvider
 from pops.frames import Cartesian2D
 from pops.boundary.embedded import ZeroFlux
-from pops.mesh.geometry import Disc, DiscDomain, EmbeddedBoundary, HalfPlane, LevelSet, NoWall
+from pops.mesh.geometry import Disc, EmbeddedBoundary, HalfPlane, LevelSet, NoWall
 from pops.mesh.masks import Staircase
 
 
@@ -158,16 +158,6 @@ def test_shapes_level_sets_and_csg_preview_without_a_separate_domain() -> None:
     assert all(preview.active_mask is not None for preview in previews)
     assert previews[0].active_mask is not None and previews[0].active_mask.all()
     assert all(preview.resolution == (31, 31) for preview in previews)
-
-
-def test_disc_transport_domain_uses_the_same_generic_preview_surface() -> None:
-    domain = DiscDomain(center=(2.0, -3.0), radius=0.5)
-
-    preview = domain.preview(resolution=21)
-
-    assert preview.geometry is domain
-    assert preview.active_mask is not None
-    assert preview.active_mask[10, 10]
 
 
 def test_embedded_boundary_uses_its_geometry_preview_contract() -> None:

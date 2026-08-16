@@ -1,7 +1,7 @@
-"""Named physical-model sources: m.source_term and m.linear_source (ADC-400, Phase 1).
+"""Internal codegen fixture for named physical-model sources (ADC-400, Phase 1).
 
-Pure Python (pops.dsl); no compilation. Covers the spec "Extension de pops.dsl.Model" tests 1-8
-plus the cache-key contract:
+Pure Python; no compilation. This private legacy builder is lowered through the canonical Module
+authority. It covers the named-source tests 1-8 plus the cache-key contract:
 
   - source_term / linear_source declaration + validation (dimensions, names, collisions);
   - linear_source coefficients must be linear in U (no conservative/primitive dependency);
@@ -17,12 +17,24 @@ Run with python3 (PYTHONPATH = built pops package).
 import numpy as np
 
 from pops._ir.expr import Var
+from pops.codegen.module_lowering import lower_and_validate
+from pops.model import ProviderPack
 from pops.physics._facade import Model
 
-# Golden hashes for the ADC-652 exact-literal model-hash schema. Named-source declarations must
-# not perturb the corresponding default-source/no-source identities inside this schema.
-GOLDEN_WITH_SOURCE = "19e82bbcb3f48791e7b0583ee92edb449a1bb0e8abf2c41bbd5a938f35fa7f5e"
-GOLDEN_NO_SOURCE = "dce7cdcec524a2abee4f8b314dd109af9edc00937215f4011ee49dd9b67819a1"
+# Golden hashes for the canonical Module-lowered model-hash schema.  The exact auxiliary
+# ProviderPack now participates in cache identity; named-source declarations must still preserve
+# equality between source() and source_term("default", ...) and inequality when formulas differ.
+GOLDEN_WITH_SOURCE = "268ae488896b60d9a7625914ed624823d0a40cf7ff2368b9ab3392a846d4473e"
+GOLDEN_NO_SOURCE = "e094513368a60cbf7b3e32bb2bb23e552ea0cc56301c94607fec2ba5937abf81"
+
+
+def canonical_hash(model):
+    """Capture cache identity only after Module-derived provider-pack binding."""
+    emit_model, source_module = lower_and_validate(model, facade=model)
+    assert emit_model is model
+    assert source_module is model.module
+    assert type(emit_model._m._auxiliary_provider_pack) is ProviderPack
+    return emit_model._model_hash()
 
 
 def build(with_source=True):
@@ -121,8 +133,8 @@ def test_source_backward_compat():
     # Existing m.source(...) stays stable inside the exact-literal hash schema, and check() passes.
     m = build(with_source=True)
     assert m.check()
-    assert m._model_hash() == GOLDEN_WITH_SOURCE, m._model_hash()
-    assert build(with_source=False)._model_hash() == GOLDEN_NO_SOURCE
+    assert canonical_hash(m) == GOLDEN_WITH_SOURCE, canonical_hash(m)
+    assert canonical_hash(build(with_source=False)) == GOLDEN_NO_SOURCE
     print("OK  7. m.source backward compatible (golden cache key preserved)")
 
 
@@ -146,7 +158,7 @@ def test_source_term_default_equiv_source():
     rho = Var("rho", "cons")
     gx, gy = Var("grad_x", "aux"), Var("grad_y", "aux")
     b.source_term("default", [0.0 * rho, -rho * gx, -rho * gy])
-    assert b._model_hash() == a._model_hash() == GOLDEN_WITH_SOURCE
+    assert canonical_hash(b) == canonical_hash(a) == GOLDEN_WITH_SOURCE
     print("OK  9. source_term('default', ...) == m.source(...) (same cache key)")
 
 
@@ -155,10 +167,10 @@ def test_hash_invalidation_named_source():
     m1.source_term("electric", [0.0 * V1["rho"], -V1["rho"] * V1["gx"], -V1["rho"] * V1["gy"]])
     m2, V2 = base_model()
     m2.source_term("electric", [0.0 * V2["rho"], -2.0 * V2["rho"] * V2["gx"], -V2["rho"] * V2["gy"]])
-    assert m1._model_hash() != m2._model_hash()
+    assert canonical_hash(m1) != canonical_hash(m2)
     # adding a named source changes the hash versus the same model without it
     m0, _ = base_model()
-    assert m0._model_hash() != m1._model_hash()
+    assert canonical_hash(m0) != canonical_hash(m1)
     print("OK  10. changing a source_term invalidates the cache")
 
 
@@ -171,7 +183,7 @@ def test_hash_invalidation_linear_source():
     m2.linear_source("lorentz", matrix=[[0.0, 0.0, 0.0],
                                         [0.0, 0.0, 2.0 * V2["bz"]],
                                         [0.0, -V2["bz"], 0.0]])
-    assert m1._model_hash() != m2._model_hash()
+    assert canonical_hash(m1) != canonical_hash(m2)
     print("OK  11. changing a linear_source matrix invalidates the cache")
 
 

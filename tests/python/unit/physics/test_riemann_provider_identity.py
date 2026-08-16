@@ -6,6 +6,7 @@ from fractions import Fraction
 import pytest
 
 from pops.codegen._compile_emit import model_hash
+from pops.codegen.component_provider_packs import resolve_component_provider_packs
 from pops.numerics.riemann import Harten, NoEntropyFix
 from pops.numerics.riemann.providers import (
     ENTROPY_HARTEN,
@@ -17,7 +18,9 @@ from pops.numerics.riemann.providers import (
     ROE_FLUX_JACOBIAN,
     authoring_provider_evidence,
 )
+from pops.physics import Custom, Density, Momentum
 from pops.physics._facade import Model
+from tests.python.support.physics_roles import X_AXIS, Y_AXIS
 
 
 def _fluid_model(name: str) -> Model:
@@ -26,7 +29,7 @@ def _fluid_model(name: str) -> Model:
         "rho",
         "mx",
         "my",
-        roles=["Density", "MomentumX", "MomentumY"],
+        roles=[Density(), Momentum(X_AXIS), Momentum(Y_AXIS)],
     )
     u = model.primitive("u", mx / rho)
     v = model.primitive("v", my / rho)
@@ -38,6 +41,9 @@ def _fluid_model(name: str) -> Model:
     model.eigenvalues(x=[u - 1, u, u + 1], y=[v - 1, v, v + 1])
     model.primitive_vars(rho, u, v)
     model.conservative_from([rho, rho * u, rho * v])
+    model.__pops_bind_component_provider_packs__(
+        resolve_component_provider_packs(model.module)
+    )
     return model
 
 
@@ -49,6 +55,49 @@ def _scalar_model(name: str) -> tuple[Model, object]:
     model.primitive_vars(q)
     model.conservative_from([q])
     return model, q
+
+
+def test_state_role_authoring_is_typed_and_lowers_once_to_exact_tokens() -> None:
+    rejected = Model("legacy_string_roles")
+    with pytest.raises(TypeError, match="typed ComponentRole"):
+        rejected.conservative_vars("rho", roles=["Density"])
+    assert rejected._m.cons_names == []
+    assert rejected._m.cons_roles is None
+
+    model = _fluid_model("exact_typed_roles")
+    assert [type(role).__name__ for role in model._m.cons_roles] == [
+        "Density",
+        "Momentum",
+        "Momentum",
+    ]
+    assert tuple(model.state_space().roles.values()) == (
+        "density",
+        "momentum:0",
+        "momentum:1",
+    )
+
+    custom = Model("exact_custom_roles")
+    custom.conservative_vars(
+        "first", "second", roles=[Custom("q1"), Custom("q2")]
+    )
+    assert tuple(custom.state_space().roles.values()) == ("q1", "q2")
+
+
+@pytest.mark.parametrize(
+    "label", ("custom", "density", "momentum:0", "q,1", "q\x00", " q")
+)
+def test_public_custom_role_refuses_ambiguous_or_unserializable_labels(label: str) -> None:
+    with pytest.raises(ValueError):
+        Custom(label)
+
+
+def test_custom_labels_do_not_satisfy_required_physical_metadata() -> None:
+    model = Model("custom_metadata")
+    model.conservative_vars("q1", "q2")
+    model._m.set_gamma(1.4)
+
+    with pytest.raises(ValueError, match="does not provide physical roles"):
+        model._m._check_require_metadata(True, "production")
 
 
 def test_hllc_and_role_roe_carry_exact_provider_and_typed_policy() -> None:

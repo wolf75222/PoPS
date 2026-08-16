@@ -237,9 +237,11 @@ def test_lib_models_lower_to_physics_without_runtime():
     """Installed-package gate: a provided model lowers to a pops.model/physics object whose manifest
     carries NO runtime/compiled fields (no .so path, no abi_key)."""
     from pops.lib.models import Gaussian, HyQMOM15
+    from pops.frames import Cartesian2D
 
-    for factory in (lambda: HyQMOM15.vlasov_poisson_magnetic(order=4),
-                    lambda: Gaussian.transport()):
+    for factory in (lambda: HyQMOM15.vlasov_poisson_magnetic(
+                        order=4, frame=Cartesian2D()),
+                    lambda: Gaussian.transport(frame=Cartesian2D())):
         model = factory()
         module = getattr(model, "module", model)
         # The lowered object is an authoring Module (typed operators), not a runtime handle.

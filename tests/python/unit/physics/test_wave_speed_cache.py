@@ -17,15 +17,14 @@ On verifie :
      silencieux : le cache ne s'applique qu'au flux HLL).
  (4) GARDE temps : wave_speed_cache=True avec un traitement IMEX -> erreur explicite (cable sur
      l'avance explicite seulement).
- (5) GARDE geometrie disque : wave_speed_cache=True avec un mode de transport disque (staircase /
-     cutcell, via set_disc_domain / set_geometry_mode) -> erreur explicite dans LES DEUX ORDRES
-     (cache puis disque, disque puis cache). Le cache n'est cable que sur l'avance cartesienne pleine.
+ (5) GARDE geometrie implicite : wave_speed_cache=True avec un LevelSet et un mode de transport
+     staircase/cutcell -> erreur explicite dans LES DEUX ORDRES. Le cache reste reserve au chemin
+     cartesien plein.
 
 Modele natif IsothermalFlux (expose wave_speeds) : aucun compilateur requis.
 """
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import HLL, Rusanov
-from pops.mesh.geometry import DiscDomain
 from pops.mesh.masks import CutCell, Staircase
 import sys
 
@@ -118,21 +117,35 @@ msg = err_msg(lambda: make_sim(cache=True, riemann=HLL(), time=IMEX()))
 chk("wave_speed_cache" in msg,
     f"IMEX + cache rejete ({msg[:60]}...)")
 
-print("== (5) garde geometrie disque : cache + transport staircase/cutcell -> erreur ==")
-# Le cache n'est cable que sur le residu cartesien PLEIN : un mode disque (set_disc_domain /
-# set_geometry_mode) emprunte les residus masked / EB qui l'ignorent -> rejet explicite, pas
-# d'ignore muet. On exerce les DEUX ordres (cache d'abord puis disque, et disque d'abord puis cache).
+print("== (5) garde geometrie implicite : cache + EB staircase/cutcell -> erreur ==")
+# A prepared analytic LevelSet routes through masked/EB residuals and must be rejected in both
+# authoring orders while the cache remains specific to the Cartesian residual.
 
 
-def make_disc_sim_then_mode():
-    sim = make_sim(cache=True)  # bloc cache (cartesien plein)
-    sim.set_disc_domain(
-        DiscDomain(center=(0.5, 0.5), radius=0.3, mode=Staircase()))
+def install_half_space(sim, mode):
+    from pops.analytic import coordinates
+    from pops.domain import CartesianDomain
+    from pops.mesh.geometry import LevelSet
+    from pops.runtime._analytic_expression_lowering import lower_analytic_components
+
+    frame = CartesianDomain("test-wave-speed-cache-eb", (0.0, 0.0), (1.0, 1.0)).frame()
+    level_set = LevelSet(coordinates(frame)[0] - 0.5)
+    ((opcodes, literals),) = lower_analytic_components(
+        (level_set.expression.to_data(),), frame_id=frame.canonical_id
+    )
+    sim._s._set_analytic_level_set(
+        list(opcodes), list(literals), mode, 0.0, 0.0, 0.0
+    )
+
+
+def make_level_set_sim_then_mode():
+    sim = make_sim(cache=True)  # cached Cartesian block
+    install_half_space(sim, Staircase().lower())
 
 
 def make_mode_then_cache():
     sim = System(n=N, L=1.0, periodicity=(True, True))
-    sim.set_disc_domain(DiscDomain(center=(0.5, 0.5), radius=0.3, mode=CutCell()))
+    install_half_space(sim, CutCell().lower())
     sim.add_equation("ions",
                      Model(state=FluidState("isothermal", cs2=CS2),
                            transport=IsothermalFlux(), source=NoSource(),
@@ -142,12 +155,12 @@ def make_mode_then_cache():
                      time=Explicit())
 
 
-msg = err_msg(make_disc_sim_then_mode)
+msg = err_msg(make_level_set_sim_then_mode)
 chk("wave_speed_cache" in msg and ("staircase" in msg or "disque" in msg),
-    f"cache puis set_disc_domain(staircase) rejete ({msg[:60]}...)")
+    f"cache puis LevelSet(staircase) rejete ({msg[:60]}...)")
 msg = err_msg(make_mode_then_cache)
 chk("wave_speed_cache" in msg and ("cutcell" in msg or "staircase" in msg),
-    f"set_disc_domain(cutcell) puis add_equation(cache) rejete ({msg[:60]}...)")
+    f"LevelSet(cutcell) puis add_equation(cache) rejete ({msg[:60]}...)")
 
 print("== (6) garde backend compile : cache + add_equation(modele .so) -> erreur ==")
 # Le cache n'est cable que sur le chemin natif compose de add_equation. Le package de production ne

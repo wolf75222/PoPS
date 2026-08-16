@@ -13,23 +13,30 @@ from pathlib import Path
 import tempfile
 from typing import Any
 
+from pops._checkpoint_migration_protocol import (
+    UNIFORM_V2_MIGRATION_PROTOCOL,
+    _checkpoint_migration_provenance_characters,
+    validate_checkpoint_migration_provenance,
+)
 from pops._generated_release_contract import UNIFORM_CHECKPOINT_PAYLOAD_VERSION
 from pops._manifest_protocol import strict_json_loads
 
 
-UNIFORM_V2_MIGRATION_SCHEMA_VERSION = 1
+UNIFORM_V2_MIGRATION_SCHEMA_VERSION = 4
 UNIFORM_V2_SOURCE_VERSION = 2
-UNIFORM_V2_MIGRATION_PROTOCOL = "pops.uniform-checkpoint-v2-offline-migration.v1"
 UNIFORM_V2_AUTHORITY_TRANSFERS = (
     "lifecycle_identities",
     "target_abi",
     "target_program",
+    "spatial_contract",
     "temporal_restart_state",
     "program_cadence",
     "history_fill_count",
     "history_persistence",
     "consumer_state",
     "embedded_boundary_contract",
+    "auxiliary_checkpoint",
+    "auxiliary_registry_contract",
 )
 
 
@@ -57,8 +64,21 @@ class UniformV2MigrationMapping:
 
     reviewed_mapping_id: str
     source_content_sha256: str
+    source_max_members: int
+    source_max_manifest_characters: int
+    source_max_array_bytes: int
+    source_max_uncompressed_bytes: int
+    source_max_archive_bytes: int
     source_abi_key: str
     source_program_hash: str
+    authority_content_sha256: str
+    authority_auxiliary_checkpoint_sha256: str
+    authority_auxiliary_registry_contract_sha256: str
+    authority_max_members: int
+    authority_max_manifest_characters: int
+    authority_max_array_bytes: int
+    authority_max_uncompressed_bytes: int
+    authority_max_archive_bytes: int
     authority_restart_identity: str
     target_semantic_identity: str
     target_artifact_identity: str
@@ -110,6 +130,8 @@ class _CurrentUniformAuthority:
     block_components: Mapping[str, tuple[str, ...]]
     histories: tuple[str, ...]
     spatial: Any
+    auxiliary_checkpoint: bytes
+    auxiliary_registry_contract: bytes
     time: float
     macro_step: int
     abi_key: str
@@ -142,6 +164,72 @@ def _float64_scalar(payload: Mapping[str, Any], key: str) -> float:
     if not math.isfinite(result):
         raise ValueError("%s must be finite" % key)
     return result
+
+
+def _uint8_vector(payload: Mapping[str, Any], key: str, *, minimum: int = 0) -> bytes:
+    import numpy as np
+
+    value = np.asarray(payload[key])
+    if value.dtype != np.dtype(np.uint8) or value.ndim != 1:
+        raise TypeError("%s must be an exact one-dimensional uint8 array" % key)
+    if value.size < minimum:
+        raise ValueError("%s must contain at least %d bytes" % (key, minimum))
+    return value.tobytes()
+
+
+def _attest_empty_auxiliary_checkpoint(payload: bytes, *, dimension: int) -> bytes:
+    """Require the selected native specialization to authenticate a provider-empty image.
+
+    This deliberately delegates POPSAUX2 interpretation to the native package.  Migration has no
+    serializer, decoder, or restore path for auxiliary state.  The opaque registry contract is
+    retained and pinned by the reviewed migration authority rather than compared with a target.
+    """
+    from pops._native_selector import selected_native_module
+
+    native = selected_native_module(required=True)
+    attest = getattr(native, "_attest_empty_uniform_auxiliary_checkpoint", None)
+    if not callable(attest):
+        raise RuntimeError(
+            "selected native module does not expose provider-empty auxiliary checkpoint attestation"
+        )
+    attestation = attest(payload)
+    required = {
+        "format",
+        "dimension",
+        "registry_contract",
+        "accepted_generation",
+        "groups",
+        "components",
+        "providers",
+        "empty",
+    }
+    if type(attestation) is not dict or set(attestation) != required:
+        raise RuntimeError(
+            "native provider-empty auxiliary checkpoint attestation has an invalid schema"
+        )
+    if (
+        attestation["format"] != "POPSAUX2"
+        or type(attestation["dimension"]) is not int
+        or attestation["dimension"] != dimension
+        or type(attestation["registry_contract"]) is not bytes
+        or not attestation["registry_contract"]
+        or any(
+            isinstance(attestation[name], bool)
+            or type(attestation[name]) is not int
+            or attestation[name] < 0
+            or (
+                attestation[name] >= (1 << 64) - 1
+                if name == "accepted_generation"
+                else attestation[name] != 0
+            )
+            for name in ("accepted_generation", "groups", "components", "providers")
+        )
+        or attestation["empty"] is not True
+    ):
+        raise ValueError(
+            "native provider-empty auxiliary checkpoint attestation differs from the exact authority"
+        )
+    return attestation["registry_contract"]
 
 
 def _bool_scalar(payload: Mapping[str, Any], key: str) -> bool:
@@ -208,6 +296,24 @@ def _float64_array(
     return value
 
 
+def _canonical_zero_float64_array(
+    payload: Mapping[str, Any],
+    key: str,
+    shape: tuple[int, ...],
+) -> Any:
+    """Accept only the wire-compatible field-free ``phi`` representation."""
+    import numpy as np
+
+    value = np.asarray(payload[key])
+    if value.dtype != np.dtype(np.float64) or value.shape != shape:
+        raise TypeError("%s must be a binary64 array with shape %r" % (key, shape))
+    if not value.flags.c_contiguous:
+        raise ValueError("%s must be C-contiguous canonical +0.0 binary64" % key)
+    if np.any(value.view(np.uint64) != 0):
+        raise ValueError("%s must contain only canonical +0.0 binary64" % key)
+    return value
+
+
 def _require_sha256(value: Any, *, where: str) -> str:
     if not isinstance(value, str) or len(value) != 64:
         raise TypeError("%s must be 64 lowercase hexadecimal characters" % where)
@@ -220,11 +326,35 @@ def _require_sha256(value: Any, *, where: str) -> str:
     return value
 
 
-def _decode_file(path: Path) -> tuple[bytes, Mapping[str, Any]]:
-    from pops.output._checkpoint_collective import decode_checkpoint_bytes
+def _mapping_resource_budget(mapping: UniformV2MigrationMapping, *, source: bool) -> Any:
+    from pops.runtime._checkpoint_resource_budget import (
+        _reviewed_archive_checkpoint_resource_budget,
+    )
 
-    raw = path.read_bytes()
-    return raw, decode_checkpoint_bytes(raw)
+    prefix = "source" if source else "authority"
+    return _reviewed_archive_checkpoint_resource_budget(
+        content_sha256=getattr(mapping, prefix + "_content_sha256"),
+        runtime_kind="uniform",
+        max_members=getattr(mapping, prefix + "_max_members"),
+        max_manifest_characters=getattr(mapping, prefix + "_max_manifest_characters"),
+        max_array_bytes=getattr(mapping, prefix + "_max_array_bytes"),
+        max_uncompressed_bytes=getattr(mapping, prefix + "_max_uncompressed_bytes"),
+        max_archive_bytes=getattr(mapping, prefix + "_max_archive_bytes"),
+    )
+
+
+def _decode_file(
+    path: Path, *, content_sha256: str, resource_budget: Any
+) -> tuple[bytes, Mapping[str, Any]]:
+    from pops.output._checkpoint_collective import (
+        _bounded_checkpoint_path_bytes,
+        decode_checkpoint_bytes,
+    )
+
+    raw = _bounded_checkpoint_path_bytes(path, resource_budget.max_archive_bytes)
+    if hashlib.sha256(raw).hexdigest() != content_sha256:
+        raise ValueError("reviewed checkpoint archive digest mismatch")
+    return raw, decode_checkpoint_bytes(raw, resource_budget)
 
 
 def _validate_legacy_v2(payload: Mapping[str, Any]) -> _LegacyUniformV2:
@@ -268,7 +398,7 @@ def _validate_legacy_v2(payload: Mapping[str, Any]) -> _LegacyUniformV2:
         _float64_array(payload, "state_" + block, (ncomp, nx, ny))
         block_components[block] = names
         expected.update({"ncomp_" + block, "names_" + block, "state_" + block})
-    _float64_array(payload, "phi", (nx, ny))
+    _canonical_zero_float64_array(payload, "phi", (nx, ny))
 
     history_depth: dict[str, int] = {}
     history_ncomp: dict[str, int] = {}
@@ -363,6 +493,13 @@ def _current_authority(payload: Mapping[str, Any]) -> _CurrentUniformAuthority:
     preflight_uniform_restart(payload)
     spatial = inspect_checkpoint_spatial_contract(payload)
     inspect_checkpoint_embedded_boundary_contract(payload)
+    auxiliary_checkpoint = _uint8_vector(payload, "auxiliary_checkpoint", minimum=8)
+    if not auxiliary_checkpoint.startswith(b"POPSAUX2"):
+        raise ValueError("Uniform v2 migration authority auxiliary checkpoint is not POPSAUX2")
+    auxiliary_registry_contract = _attest_empty_auxiliary_checkpoint(
+        auxiliary_checkpoint,
+        dimension=spatial.dimension,
+    )
     time = _float64_scalar(payload, "t")
     macro_step = _int_scalar(payload, "macro_step")
     abi = _text_scalar(payload, "abi_key")
@@ -388,6 +525,7 @@ def _current_authority(payload: Mapping[str, Any]) -> _CurrentUniformAuthority:
         "blocks",
         "phi",
         "field_provider_slots",
+        "auxiliary_checkpoint",
         "history_names",
         "cache_nodes",
         "cache_names",
@@ -407,7 +545,7 @@ def _current_authority(payload: Mapping[str, Any]) -> _CurrentUniformAuthority:
         _float64_array(payload, "state_" + block, (ncomp, *spatial.shape))
         block_components[block] = names
         expected.update({"ncomp_" + block, "names_" + block, "state_" + block})
-    _float64_array(payload, "phi", spatial.shape)
+    _canonical_zero_float64_array(payload, "phi", spatial.shape)
 
     for name in histories:
         depth = _int_scalar(payload, "history_depth_" + name, minimum=1)
@@ -439,6 +577,12 @@ def _current_authority(payload: Mapping[str, Any]) -> _CurrentUniformAuthority:
                 "history_slot_dt_" + name,
             }
         )
+        regrid_key = "history_regrid_steps_" + name
+        if regrid_key in payload:
+            raise ValueError(
+                "Uniform v2 migration authority Dense history %r carries a spurious replay schedule"
+                % name
+            )
         for slot in stored:
             key = "history_%s_%d" % (name, slot)
             _float64_array(payload, key, (ncomp, *spatial.shape))
@@ -507,6 +651,8 @@ def _current_authority(payload: Mapping[str, Any]) -> _CurrentUniformAuthority:
         block_components,
         histories,
         spatial,
+        auxiliary_checkpoint,
+        auxiliary_registry_contract,
         time,
         macro_step,
         abi,
@@ -521,8 +667,27 @@ def _mapping_data(mapping: UniformV2MigrationMapping) -> dict[str, Any]:
         "target_version": mapping.target_version,
         "reviewed_mapping_id": mapping.reviewed_mapping_id,
         "source_content_sha256": mapping.source_content_sha256,
+        "source_resource_limits": {
+            "max_members": mapping.source_max_members,
+            "max_manifest_characters": mapping.source_max_manifest_characters,
+            "max_array_bytes": mapping.source_max_array_bytes,
+            "max_uncompressed_bytes": mapping.source_max_uncompressed_bytes,
+            "max_archive_bytes": mapping.source_max_archive_bytes,
+        },
         "source_abi_key": mapping.source_abi_key,
         "source_program_hash": mapping.source_program_hash,
+        "authority_content_sha256": mapping.authority_content_sha256,
+        "authority_auxiliary_checkpoint_sha256": mapping.authority_auxiliary_checkpoint_sha256,
+        "authority_auxiliary_registry_contract_sha256": (
+            mapping.authority_auxiliary_registry_contract_sha256
+        ),
+        "authority_resource_limits": {
+            "max_members": mapping.authority_max_members,
+            "max_manifest_characters": mapping.authority_max_manifest_characters,
+            "max_array_bytes": mapping.authority_max_array_bytes,
+            "max_uncompressed_bytes": mapping.authority_max_uncompressed_bytes,
+            "max_archive_bytes": mapping.authority_max_archive_bytes,
+        },
         "authority_restart_identity": mapping.authority_restart_identity,
         "target_semantic_identity": mapping.target_semantic_identity,
         "target_artifact_identity": mapping.target_artifact_identity,
@@ -563,7 +728,22 @@ def _validate_mapping(mapping: UniformV2MigrationMapping) -> dict[str, Any]:
         raise ValueError("Uniform v2 migration mapping needs a reviewed_mapping_id")
     _require_sha256(mapping.source_content_sha256, where="mapping source_content_sha256")
     _require_sha256(mapping.source_program_hash, where="mapping source_program_hash")
+    _require_sha256(mapping.authority_content_sha256, where="mapping authority_content_sha256")
+    _require_sha256(
+        mapping.authority_auxiliary_checkpoint_sha256,
+        where="mapping authority_auxiliary_checkpoint_sha256",
+    )
+    _require_sha256(
+        mapping.authority_auxiliary_registry_contract_sha256,
+        where="mapping authority_auxiliary_registry_contract_sha256",
+    )
     _require_sha256(mapping.target_program_hash, where="mapping target_program_hash")
+    source_budget = _mapping_resource_budget(mapping, source=True)
+    authority_budget = _mapping_resource_budget(mapping, source=False)
+    if source_budget.max_array_bytes > source_budget.max_uncompressed_bytes or (
+        authority_budget.max_array_bytes > authority_budget.max_uncompressed_bytes
+    ):
+        raise ValueError("Uniform v2 migration resource caps have an invalid aggregate bound")
     text_fields = (
         mapping.source_abi_key,
         mapping.authority_restart_identity,
@@ -645,6 +825,20 @@ def _pin_authorities(
     )
     if observed != expected:
         raise ValueError("current authority or target lifecycle pins differ from the mapping")
+    if (
+        hashlib.sha256(authority.auxiliary_checkpoint).hexdigest()
+        != mapping.authority_auxiliary_checkpoint_sha256
+    ):
+        raise ValueError(
+            "current authority auxiliary checkpoint SHA-256 differs from the reviewed mapping"
+        )
+    if (
+        hashlib.sha256(authority.auxiliary_registry_contract).hexdigest()
+        != mapping.authority_auxiliary_registry_contract_sha256
+    ):
+        raise ValueError(
+            "current authority auxiliary registry contract differs from the reviewed mapping"
+        )
     if ((source.nx, source.ny), source.time, source.macro_step) != (
         authority.spatial.shape,
         authority.time,
@@ -757,6 +951,9 @@ def _migrate_payload(
                 target_values[target_index] = source_values[source_index]
             output["history_%s_%d" % (row.target, slot)] = target_values
 
+    if _uint8_vector(output, "auxiliary_checkpoint", minimum=8) != authority.auxiliary_checkpoint:
+        raise RuntimeError("migrated auxiliary checkpoint differs from its authenticated authority")
+
     mapping_identity = make_identity("uniform-v2-migration-map", mapping_data)
     output["checkpoint_migration"] = np.asarray(
         json.dumps(
@@ -770,6 +967,10 @@ def _migrate_payload(
             allow_nan=False,
         )
     )
+    _checkpoint_migration_provenance_characters(output)
+    provenance_identity = validate_checkpoint_migration_provenance(output)
+    if provenance_identity is None or provenance_identity.token != mapping_identity.token:
+        raise RuntimeError("emitted checkpoint migration provenance differs from its mapping")
     restart = _seal_checkpoint_payload_with_identities(
         output,
         runtime_kind="uniform",
@@ -792,6 +993,7 @@ def _encode(payload: Mapping[str, Any]) -> bytes:
 def _validate_migrated_bytes(
     raw: bytes,
     *,
+    resource_budget: Any,
     authority: _CurrentUniformAuthority,
     expected_restart: Any,
     expected_mapping_identity: Any,
@@ -812,7 +1014,7 @@ def _validate_migrated_bytes(
     from pops.runtime._temporal_restart import TemporalRestartState
     from pops.runtime._uniform_restart_preflight import preflight_uniform_restart
 
-    payload = decode_checkpoint_bytes(raw)
+    payload = decode_checkpoint_bytes(raw, resource_budget)
     _, restart = inspect_checkpoint_payload_integrity(payload, runtime_kind="uniform")
     if restart.token != expected_restart.token:
         raise RuntimeError("migrated checkpoint restart identity changed during encoding")
@@ -823,6 +1025,16 @@ def _validate_migrated_bytes(
         runtime_kind="migrated Uniform",
     )
     preflight_uniform_restart(payload)
+    _canonical_zero_float64_array(payload, "phi", authority.spatial.shape)
+    auxiliary_checkpoint = _uint8_vector(payload, "auxiliary_checkpoint", minimum=8)
+    if auxiliary_checkpoint != authority.auxiliary_checkpoint:
+        raise RuntimeError("migrated auxiliary checkpoint bytes differ from its authority")
+    registry_contract = _attest_empty_auxiliary_checkpoint(
+        auxiliary_checkpoint,
+        dimension=authority.spatial.dimension,
+    )
+    if registry_contract != authority.auxiliary_registry_contract:
+        raise RuntimeError("migrated auxiliary registry contract differs from its authority")
     cadence = ProgramCadenceCheckpointState(
         _int_scalar(payload, "program_cadence_substeps", minimum=1),
         _int_scalar(payload, "program_cadence_stride", minimum=1),
@@ -857,14 +1069,8 @@ def _validate_migrated_bytes(
             where="migrated consumer diagnostics",
         )
     )
-    provenance = strict_json_loads(
-        _text_scalar(payload, "checkpoint_migration"),
-        where="migrated checkpoint provenance",
-    )
-    if (
-        provenance.get("protocol") != UNIFORM_V2_MIGRATION_PROTOCOL
-        or provenance.get("mapping_identity") != expected_mapping_identity.token
-    ):
+    mapping_identity = validate_checkpoint_migration_provenance(payload)
+    if mapping_identity is None or mapping_identity.token != expected_mapping_identity.token:
         raise ValueError("migrated checkpoint provenance differs from its reviewed mapping")
 
 
@@ -884,9 +1090,12 @@ def migrate_uniform_v2_checkpoint(
 ) -> UniformV2MigrationReport:
     """Publish one current checkpoint from a true v2 artifact, entirely offline.
 
-    ``current_authority`` is a complete, authenticated v5 checkpoint captured from the exact
-    target runtime. The explicit mapping pins both artifacts and supplies every semantic
-    correspondence absent from v2. Runtime restart paths never call this function.
+    ``current_authority`` is a complete, authenticated v8 checkpoint captured from the exact
+    target runtime. The schema-4 mapping pins both artifact byte streams, their ABI/Program and
+    lifecycle identities, the empty natively attested POPSAUX2 image and binary registry-contract
+    SHA-256 values, and supplies every semantic correspondence absent from v2. The emitted
+    ``checkpoint_migration`` member remains inside the fixed 16 Ki-character envelope reserved by
+    the live Uniform resource budget. Runtime restart paths never call this function.
     """
     source_path = _path(source, where="legacy source")
     authority_path = _path(current_authority, where="current authority")
@@ -897,15 +1106,30 @@ def migrate_uniform_v2_checkpoint(
         raise FileExistsError("offline checkpoint migration refuses to replace its destination")
 
     mapping_data = _validate_mapping(mapping)
-    source_raw = source_path.read_bytes()
+    from pops.output._checkpoint_collective import (
+        _bounded_checkpoint_path_bytes,
+        decode_checkpoint_bytes,
+    )
+
+    source_budget = _mapping_resource_budget(mapping, source=True)
+    source_raw = _bounded_checkpoint_path_bytes(source_path, source_budget.max_archive_bytes)
     source_sha256 = hashlib.sha256(source_raw).hexdigest()
     if source_sha256 != mapping.source_content_sha256:
         raise ValueError("legacy source content SHA-256 differs from the reviewed mapping")
-    from pops.output._checkpoint_collective import decode_checkpoint_bytes
+    from pops.runtime._checkpoint_resource_budget import (
+        _producer_checkpoint_resource_budget,
+    )
 
-    source_payload = decode_checkpoint_bytes(source_raw)
+    source_payload = decode_checkpoint_bytes(
+        source_raw, source_budget, allow_reviewed_unsealed=True
+    )
     legacy = _validate_legacy_v2(source_payload)
-    _, authority_payload = _decode_file(authority_path)
+    authority_budget = _mapping_resource_budget(mapping, source=False)
+    _, authority_payload = _decode_file(
+        authority_path,
+        content_sha256=mapping.authority_content_sha256,
+        resource_budget=authority_budget,
+    )
     authority = _current_authority(authority_payload)
     _pin_authorities(legacy, authority, source_sha256, mapping)
     migrated, (restart, mapping_identity) = _migrate_payload(
@@ -914,9 +1138,15 @@ def migrate_uniform_v2_checkpoint(
         mapping,
         mapping_data,
     )
+    output_budget = _producer_checkpoint_resource_budget(
+        migrated,
+        runtime_kind="uniform",
+        authority=mapping_identity.token,
+    )
     output = _encode(migrated)
     _validate_migrated_bytes(
         output,
+        resource_budget=output_budget,
         authority=authority,
         expected_restart=restart,
         expected_mapping_identity=mapping_identity,
@@ -935,7 +1165,8 @@ def migrate_uniform_v2_checkpoint(
             stream.flush()
             os.fsync(stream.fileno())
         _validate_migrated_bytes(
-            temporary.read_bytes(),
+            _bounded_checkpoint_path_bytes(temporary, output_budget.max_archive_bytes),
+            resource_budget=output_budget,
             authority=authority,
             expected_restart=restart,
             expected_mapping_identity=mapping_identity,

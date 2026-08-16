@@ -7,6 +7,7 @@
 #include <pops/numerics/fv/numerical_flux.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/numerics/spatial/nd/face_field.hpp>
+#include <pops/numerics/spatial/primitives/state_access.hpp>
 
 #include <Kokkos_MathematicalFunctions.hpp>
 
@@ -195,6 +196,36 @@ POPS_HD void accumulate_cfl(const Model& model, const typename Model::State& sta
     accumulate_cfl<Axis + 1>(model, state, metric, cell, inverse_volume, inverse_dt, status);
 }
 
+/// Add the Forward-Euler Fickian spectral radius for one Cartesian axis.
+///
+/// For a Cartesian prepared metric, h_a = V / A_a.  The centred conservative divergence of
+/// F_a = -nu d_a U has the explicit stability restriction
+///     dt <= 1 / (2 nu sum_a h_a^-2).
+/// The averaged opposing areas make the metric representation symmetric while reducing exactly
+/// to that expression on every Cartesian cell.
+template <int Axis, int Dim, class Model>
+POPS_HD void accumulate_parabolic_cfl(const Model& model, const auto& metric,
+                                      const Index<Dim>& cell, Real inverse_volume, Real& inverse_dt,
+                                      FiniteVolumeStatus& status) {
+  if (status != FiniteVolumeStatus::Success)
+    return;
+  const Real lower_area = face_measure<Axis>(metric, cell, MetricFaceSide::Lower);
+  const Real upper_area = face_measure<Axis>(metric, cell, MetricFaceSide::Upper);
+  const Real inverse_spacing = Real(0.5) * (lower_area + upper_area) * inverse_volume;
+  if (!Kokkos::isfinite(lower_area) || !Kokkos::isfinite(upper_area) || lower_area < Real(0) ||
+      upper_area < Real(0) || !Kokkos::isfinite(inverse_spacing) || inverse_spacing < Real(0)) {
+    status = FiniteVolumeStatus::InvalidMetric;
+    return;
+  }
+  inverse_dt += Real(2) * model.diffusivity() * inverse_spacing * inverse_spacing;
+  if (!Kokkos::isfinite(inverse_dt)) {
+    status = FiniteVolumeStatus::InvalidWaveSpeed;
+    return;
+  }
+  if constexpr (Axis + 1 < Dim)
+    accumulate_parabolic_cfl<Axis + 1>(model, metric, cell, inverse_volume, inverse_dt, status);
+}
+
 template <int Axis, int Dim, int N, class T>
   requires std::same_as<std::remove_const_t<T>, Real>
 POPS_HD void accumulate_divergence(const FaceFieldView<T, Dim>& faces, const Index<Dim>& cell,
@@ -368,6 +399,69 @@ POPS_HD FiniteVolumeResult<StateVec<N>> conservative_residual(
 template <int Dim, class Model, class Metric>
   requires(Dim == Model::dimension && PreparedMetricProvider<Dim, Metric> &&
            ConservationLaw<Dim, Model>)
+/// Direct inverse-time frequency q = 2 nu sum_a h_a^-2 for an optional isotropic DiffusiveModel.
+/// Non-diffusive and zero-diffusivity models return zero; invalid geometry or diffusivity refuses.
+POPS_HD TimeStepResult cell_parabolic_frequency(const Model& model, const Metric& metric,
+                                                const Index<Dim>& cell) {
+  TimeStepResult result{};
+  if (!metric.identity().domain.contains(cell)) {
+    result.status = FiniteVolumeStatus::InvalidMetric;
+    return result;
+  }
+  if constexpr (!DiffusiveModel<Model>) {
+    result.value = Real(0);
+    result.status = FiniteVolumeStatus::Success;
+    return result;
+  } else {
+    if (Metric::capabilities().coordinate_map.kind != CoordinateMapKind::Cartesian) {
+      result.status = FiniteVolumeStatus::InvalidMetric;
+      return result;
+    }
+    const Real diffusivity = model.diffusivity();
+    if (!Kokkos::isfinite(diffusivity) || diffusivity < Real(0)) {
+      result.status = FiniteVolumeStatus::InvalidWaveSpeed;
+      return result;
+    }
+    const Real volume = metric.cell_measure(cell);
+    if (!Kokkos::isfinite(volume) || !(volume > Real(0))) {
+      result.status = FiniteVolumeStatus::InvalidMetric;
+      return result;
+    }
+    Real frequency = Real(0);
+    FiniteVolumeStatus status = FiniteVolumeStatus::Success;
+    finite_volume_detail::accumulate_parabolic_cfl<0>(model, metric, cell, Real(1) / volume,
+                                                      frequency, status);
+    result.status = status;
+    if (!result.succeeded())
+      return result;
+    result.value = frequency;
+    return result;
+  }
+}
+
+template <int Dim, class Model, class Metric>
+  requires(Dim == Model::dimension && PreparedMetricProvider<Dim, Metric> &&
+           ConservationLaw<Dim, Model>)
+/// Direct geometric time-step bound for an optional isotropic DiffusiveModel.
+/// A zero frequency is unconstrained; positive finite q returns 1/q.
+POPS_HD TimeStepResult cell_parabolic_time_step(const Model& model, const Metric& metric,
+                                                const Index<Dim>& cell) {
+  TimeStepResult result = cell_parabolic_frequency<Dim>(model, metric, cell);
+  if (!result.succeeded())
+    return result;
+  result.value =
+      result.value == Real(0) ? std::numeric_limits<Real>::infinity() : Real(1) / result.value;
+  return result;
+}
+
+template <int Dim, class Model, class Metric>
+  requires(Dim == Model::dimension && PreparedMetricProvider<Dim, Metric> &&
+           ConservationLaw<Dim, Model>)
+/// Combined hyperbolic-plus-parabolic inverse step bound for one cell.
+///
+/// A DiffusiveModel contributes 2 nu sum_a h_a^-2 in addition to the existing face-speed bound.
+/// `cell_time_step(..., courant)` therefore applies its supplied Courant factor to both explicit
+/// transport and Fickian terms; models without diffusivity preserve the prior arithmetic exactly.
 POPS_HD CellCflResult cell_cfl_bound(const Model& model, const typename Model::State& state,
                                      const Metric& metric, const Index<Dim>& cell) {
   CellCflResult result{};
@@ -388,6 +482,15 @@ POPS_HD CellCflResult cell_cfl_bound(const Model& model, const typename Model::S
   result.status = FiniteVolumeStatus::Success;
   finite_volume_detail::accumulate_cfl<0>(model, state, metric, cell, Real(1) / volume,
                                           result.inverse_dt, result.status);
+  if constexpr (DiffusiveModel<Model>) {
+    const TimeStepResult parabolic = cell_parabolic_frequency<Dim>(model, metric, cell);
+    if (!parabolic.succeeded())
+      result.status = parabolic.status;
+    else
+      result.inverse_dt += parabolic.value;
+  }
+  if (!Kokkos::isfinite(result.inverse_dt))
+    result.status = FiniteVolumeStatus::InvalidWaveSpeed;
   if (!result.succeeded())
     result.inverse_dt = Real(0);
   return result;

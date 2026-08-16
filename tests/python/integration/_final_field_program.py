@@ -41,18 +41,20 @@ from pops.math import ValueExpr
 from pops.layouts import AMR, Uniform
 from pops.lib.amr import EllipticRecompute, StateTransfer
 from pops.lib.initial import Constant
+from pops.lib.time import ForwardEuler
 from pops.math import ddt, div, laplacian
 from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
 from pops.params import RuntimeParam
-from pops.physics import Model
+from pops.physics import Density, Model
 from pops.projection import ConservativeCellAverage
-from pops.solvers.elliptic import GeometricMG
-from pops.time import every, on_start
+from pops.solvers.elliptic import CartesianCG, GeometricMG
+from pops.time import FixedDt, every, on_start
 
 
 ProgramFactory = Callable[[Any, Any, Any], Any]
+ConsumerFactory = Callable[[Any, Any, Any, Any], tuple[Any, ...]]
 
 
 def _frame(name: str) -> Any:
@@ -97,7 +99,7 @@ def passive_source_model(name: str, *, coefficient: float) -> Model:
     model = Model(name, frame=frame)
     state = model.state("U", components=("rho",))
     (rho,) = state
-    model.flux(
+    flux = model.flux(
         "transport",
         frame=frame,
         state=state,
@@ -105,8 +107,55 @@ def passive_source_model(name: str, *, coefficient: float) -> Model:
         waves={x_axis: (0.0 * rho,), y_axis: (0.0 * rho,)},
     )
     source = model.source("growth", on=state, value=(coefficient * rho,))
-    model.rate("source_rate", equation=ddt(state) == source)
+    model.rate("source_rate", equation=ddt(state) == -div(flux) + source)
     return model
+
+
+def density_advection_model(
+    name: str,
+    *,
+    speed: float = 1.0,
+    stability_speed: float | None = None,
+    stability_dt: float | None = None,
+    source_frequency: float | None = None,
+) -> Model:
+    """One public density component for low-level runtime/CFL fixture coverage."""
+    frame = _frame(name)
+    x_axis, y_axis = frame.axes
+    model = Model(name, frame=frame)
+    state = model.state(
+        "U",
+        components=("density",),
+        roles={"density": Density()},
+    )
+    (rho,) = state
+    flux = model.flux(
+        "transport",
+        frame=frame,
+        state=state,
+        components={x_axis: (speed * rho,), y_axis: (0.0 * rho,)},
+        waves={x_axis: (abs(speed) + 0.0 * rho,), y_axis: (0.0 * rho,)},
+    )
+    rhs = -div(flux)
+    if source_frequency is not None:
+        source = model.source("null_source", on=state, value=(0.0 * rho,))
+        rhs = rhs + source
+        # Stability traits still live on the single-state compiler facade; the board retains that
+        # exact lowering authority as ``_dsl`` until the traits become first-class board handles.
+        model._dsl.source_frequency(source_frequency + 0.0 * rho)
+    model.rate("explicit_rhs", equation=ddt(state) == rhs)
+    if stability_speed is not None:
+        model._dsl.stability_speed(stability_speed + 0.0 * rho)
+    if stability_dt is not None:
+        model._dsl.stability_dt(stability_dt + 0.0 * rho)
+    return model
+
+
+def forward_euler_program(state: Any, rate: Any, _field: Any) -> Any:
+    """Public one-rate Forward-Euler Program factory for artifact-backed fixtures."""
+    program = ForwardEuler(state, rate=rate)
+    program.step_strategy(FixedDt(0.01))
+    return program
 
 
 def scalar_advection_model(name: str) -> Model:
@@ -183,6 +232,7 @@ def resolve_periodic_field_program(
     block_name: str,
     target: str,
     n: int,
+    rate_name: str = "explicit_rhs",
     regrid_every: int = 2,
     field_solver: Any = None,
     initial_profile: Any = None,
@@ -190,6 +240,7 @@ def resolve_periodic_field_program(
     cxx: str | None = None,
     include: str | None = None,
     strict_restart: bool = False,
+    consumer_factory: ConsumerFactory | None = None,
     anchored_field: bool = False,
     patch_layout: PatchLayout | None = None,
     clustering: Any = None,
@@ -198,7 +249,7 @@ def resolve_periodic_field_program(
     if target not in {"system", "amr_system"}:
         raise ValueError("target must be 'system' or 'amr_system'")
     state = next(iter(model.states.values()))
-    rate = model.operators["explicit_rhs"]
+    rate = model.operators[rate_name]
     flux = model.fluxes["transport"]
     field_operator = model.field_operators.get("electrostatic")
 
@@ -216,6 +267,9 @@ def resolve_periodic_field_program(
         ),
     )
     case.numerics(numerics, block=block)
+    solver = field_solver
+    if solver is None:
+        solver = GeometricMG() if target == "amr_system" else CartesianCG()
     field_instance = None if field_operator is None else case.field(
         field_operator,
         FieldDiscretization(
@@ -226,7 +280,7 @@ def resolve_periodic_field_program(
                     Dirichlet(0.0) if anchored_field else Periodic(),
                 ),
             ),
-            solver=GeometricMG() if field_solver is None else field_solver,
+            solver=solver,
             nullspace=None if anchored_field else ConstantNullspace(),
             gauge=None if anchored_field else MeanValueGauge(0.0),
             hierarchy_policy=(
@@ -236,20 +290,26 @@ def resolve_periodic_field_program(
     )
     program = factory(state_instance, rate, field_instance)
     case.program(program)
+    consumers: list[Any] = []
     if strict_restart:
-        from pops.output import Checkpoint, ConsumerGraph
+        from pops.output import Checkpoint
 
-        case.consumers(
-            ConsumerGraph.from_consumers(
-                (
-                    Checkpoint(
-                        schedule=on_start(clock=program.clock),
-                        target="checkpoints/strict",
-                        bit_identical=True,
-                    ),
-                )
+        consumers.append(
+            Checkpoint(
+                schedule=on_start(clock=program.clock),
+                target="checkpoints/strict",
+                bit_identical=True,
             )
         )
+    if consumer_factory is not None:
+        extra_consumers = consumer_factory(case, block, state_instance, program)
+        if type(extra_consumers) is not tuple:
+            raise TypeError("consumer_factory must return an exact tuple")
+        consumers.extend(extra_consumers)
+    if consumers:
+        from pops.output import ConsumerGraph
+
+        case.consumers(ConsumerGraph.from_consumers(tuple(consumers)))
 
     if target == "system":
         grid_frame = _frame("%s-uniform-grid" % name)
@@ -326,12 +386,19 @@ def compiler_model(model: Model) -> Any:
     lowering = model.__pops_compiler_lowering__()
     if lowering.source_module is not model.module or lowering.facade is not model:
         raise ValueError("final Model compiler lowering changed its authenticated authority")
+    from pops.codegen.component_provider_packs import resolve_component_provider_packs
+
+    lowering.bind_component_provider_packs(
+        resolve_component_provider_packs(lowering.source_module)
+    )
     return lowering.emit_model
 
 
 __all__ = [
     "compile_block_model",
     "compiler_model",
+    "density_advection_model",
+    "forward_euler_program",
     "passive_field_model",
     "passive_source_model",
     "resolve_periodic_field_program",

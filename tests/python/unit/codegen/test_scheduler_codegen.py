@@ -11,8 +11,9 @@ named MultiFab):
   - `when(cond)` -> reuses the Program Bool predicate token as the due test
   - `ClockTick` / `AMRLevel` -> qualified logical-clock / hierarchy-level runtime domains
   - `recompute`  -> the body runs only when due, no else
-  - `hold`       -> store/restore the cached value (aux or named scratch) off-cadence
-  - `skip`       -> the op runs only when due; the value keeps its stale content (no else)
+  - `hold`       -> store/restore the cached value on Uniform; refused for AMR before emission
+  - `skip`       -> retained fields on frozen hierarchies only; scratch refuses until its stale
+                    value is prepared transactional state
   - `zero`       -> a `set_val(0)` else-branch
   - `accumulate_dt` -> `ctx.cache_accumulate_dt` off-cadence + `ctx.cache_effective_dt` on the due step
   - `error`      -> a `ctx.scheduler_error(...)` else-branch
@@ -25,6 +26,7 @@ unit-tested by tests/cpp/integration/runtime/test_cache_manager.cpp. Pure Python
 """
 from pops.codegen.program_codegen import _check_schedules_lowerable
 from pops.codegen.program_codegen import emit_cpp_program
+from pops.codegen._resolution import CapabilityResolutionError, _resolve_amr_program
 import pytest
 import sys
 from types import SimpleNamespace
@@ -40,7 +42,11 @@ try:
     from pops import time as adctime
     from pops.codegen.program_emit_schedule import _emit_schedule_wrap
     from pops.numerics.terms import DefaultSource, Flux
-    from typed_program_support import typed_state
+    from pops.runtime.amr_program_support import (
+        AMRProgramSupportContext,
+        amr_program_op_support,
+    )
+    from typed_program_support import typed_field, typed_state
 except Exception as exc:  # noqa: BLE001  -- _pops unavailable in this interpreter
     _skip("pops unavailable: %s" % exc)
 
@@ -97,6 +103,50 @@ def _emit_scratch(schedule):
     return emit_cpp_program(_scratch_program(schedule), model=None)
 
 
+def _amr_context(*, frozen=True, levels=1, rematerializer=True):
+    return AMRProgramSupportContext(
+        hierarchy_level_count=levels,
+        frozen_hierarchy=frozen,
+        shared_block_interfaces=False,
+        field_routes_validated=True,
+        topology_rematerializer_validated=rematerializer,
+    )
+
+
+def _field_program(schedule):
+    program = adctime.Program("sched_field")
+    state = typed_state(program, "ions")
+    field = typed_field(program, "potential")
+    field(state, schedule=schedule(program.clock))
+    return program
+
+
+def _nested_field_skip_program(kind):
+    program = adctime.Program("nested_%s_field_skip" % kind)
+    state = typed_state(program, "ions")
+    field = typed_field(program, "potential")
+
+    def scheduled_copy(builder, value):
+        field(value, schedule=_every(builder.clock, 5, adctime.Skip()))
+        return builder.value("%s_scheduled_state" % kind, 1 * value)
+
+    if kind == "branch":
+        program.branch(
+            program.norm2(state) > 0,
+            lambda builder: scheduled_copy(builder, state),
+            lambda builder: builder.value("branch_unscheduled_state", state),
+        )
+    elif kind == "loop":
+        program.while_(
+            state,
+            lambda builder, value: builder.norm2(value) > 0,
+            scheduled_copy,
+        )
+    else:
+        raise ValueError("unknown nested field Skip fixture %r" % kind)
+    return program
+
+
 # --- always / default byte-identity -----------------------------------------
 def test_always_body_identical_to_unscheduled():
     # the LOWERED body of always() equals the unscheduled body (no guard). The whole-file emit differs
@@ -107,6 +157,17 @@ def test_always_body_identical_to_unscheduled():
     assert plain == always
     assert "cache_should_update" not in _emit_field(
         lambda clock: adctime.Schedule(adctime.Always(adctime.AcceptedStep(clock))))
+    program = _scratch_program(lambda clock: adctime.Schedule(
+        adctime.Always(adctime.AcceptedStep(clock))))
+    assert amr_program_op_support(
+        program,
+        context=AMRProgramSupportContext(
+            hierarchy_level_count=1,
+            frozen_hierarchy=True,
+            shared_block_interfaces=False,
+            field_routes_validated=True,
+        ),
+    ) == {}
 
 
 def test_unscheduled_has_no_guard():
@@ -117,18 +178,30 @@ def test_unscheduled_has_no_guard():
 
 # --- every(N) cadence (kind) ------------------------------------------------
 def test_every_due_test_carries_period():
-    cpp = _emit_field(lambda clock: _every(clock, 7, adctime.Hold()))
-    assert "ctx.schedule_is_due(17, 7," in cpp
-    assert "ctx.schedule_decision(17, ctx.schedule_is_due(17, 7," in cpp
+    program = _scratch_program(lambda clock: _every(clock, 7, adctime.Zero()))
+    assert amr_program_op_support(program, context=_amr_context()) == {
+        "schedule_due": "green",
+        "schedule_zero": "green",
+    }
+    assert _resolve_amr_program("amr", program, context=_amr_context())["status"] == "proven"
+    cpp = emit_cpp_program(program, model=None, target="amr_system")
+    assert "ctx.schedule_is_due(" in cpp and ", 7," in cpp
+    assert "ctx.schedule_decision(" in cpp
     assert ", false))" in cpp
     assert "ScheduleDomainKind::kAcceptedStep" in cpp
 
 
 # --- on_start (kind) --------------------------------------------------------
 def test_on_start_lowers_to_domain_start():
-    cpp = _emit_field(lambda clock: _at_start(clock, adctime.Hold()))
+    program = _scratch_program(lambda clock: _at_start(clock, adctime.Error()))
+    assert amr_program_op_support(program, context=_amr_context()) == {
+        "schedule_due": "green",
+        "schedule_error": "green",
+    }
+    assert _resolve_amr_program("amr", program, context=_amr_context())["status"] == "proven"
+    cpp = emit_cpp_program(program, model=None, target="amr_system")
     assert "ctx.schedule_at_start(" in cpp
-    assert "ctx.schedule_decision(17, ctx.schedule_at_start(" in cpp
+    assert "ctx.schedule_decision(" in cpp
     assert ", false))" in cpp
     assert "ScheduleDomainKind::kAcceptedStep" in cpp
 
@@ -142,11 +215,16 @@ def test_when_reuses_program_predicate_token():
     cond = P.norm2(R) < 1e-6  # a Program Bool predicate emitted before the scheduled node
     R2 = P.rhs(state=U, terms=[Flux(), DefaultSource()])
     R2 = P._replace_value(
-        R2, attrs={**R2.attrs, "schedule": _when(P.clock, cond, adctime.Hold())})
+        R2, attrs={**R2.attrs, "schedule": _when(P.clock, cond, adctime.Zero())})
     endpoint = typed_state(P, "ions", state_name="U").next
     P.commit(endpoint, P.value("U1", U + dt * R2, at=endpoint.point))
-    _check_schedules_lowerable(P)  # a Program Bool when() lowers
-    cpp = emit_cpp_program(P, model=None)
+    assert amr_program_op_support(P, context=_amr_context()) == {
+        "schedule_due": "green",
+        "schedule_zero": "green",
+    }
+    assert _resolve_amr_program("amr", P, context=_amr_context())["status"] == "proven"
+    _check_schedules_lowerable(P, target="amr_system")  # a Program Bool when() lowers
+    cpp = emit_cpp_program(P, model=None, target="amr_system")
     assert "< 1e-06" in cpp                           # exact predicate threshold
     assert "ctx.cache_should_update" not in cpp       # when() is a predicate, not a period
 
@@ -160,7 +238,7 @@ def test_frozen_when_codegen_is_repeatable_and_keeps_tokens_emission_local():
     scheduled = P._replace_value(
         scheduled, attrs={
             **scheduled.attrs,
-            "schedule": _when(P.clock, condition, adctime.Hold()),
+            "schedule": _when(P.clock, condition, adctime.Zero()),
         })
     endpoint = typed_state(P, "ions", state_name="U").next
     P.commit(
@@ -180,7 +258,7 @@ def test_frozen_when_codegen_is_repeatable_and_keeps_tokens_emission_local():
 
 def test_when_over_python_callable_refuses():
     P = _scratch_program(
-        lambda clock: _when(clock, lambda: True, adctime.Hold()))
+        lambda clock: _when(clock, lambda: True, adctime.Zero()))
     try:
         _check_schedules_lowerable(P)
     except NotImplementedError as exc:
@@ -193,6 +271,15 @@ def test_when_over_python_callable_refuses():
 def test_clock_tick_domain_lowers_to_qualified_logical_tick():
     program = _scratch_program(lambda clock: adctime.Schedule(
         adctime.Always(adctime.ClockTick(clock))))
+    assert amr_program_op_support(
+        program,
+        context=AMRProgramSupportContext(
+            hierarchy_level_count=1,
+            frozen_hierarchy=True,
+            shared_block_interfaces=False,
+            field_routes_validated=True,
+        ),
+    ) == {"schedule_domain": "green"}
     _check_schedules_lowerable(program)
     cpp = emit_cpp_program(program, model=None)
     assert "ctx.schedule_domain_occurs(" in cpp
@@ -203,6 +290,15 @@ def test_clock_tick_domain_lowers_to_qualified_logical_tick():
 def test_amr_level_domain_requires_amr_target_and_lowers_there():
     program = _scratch_program(lambda clock: adctime.Schedule(
         adctime.Always(adctime.AMRLevel(clock, level=1))))
+    assert amr_program_op_support(
+        program,
+        context=AMRProgramSupportContext(
+            hierarchy_level_count=2,
+            frozen_hierarchy=True,
+            shared_block_interfaces=False,
+            field_routes_validated=True,
+        ),
+    ) == {"schedule_domain": "green"}
     _check_schedules_lowerable(program)
     try:
         emit_cpp_program(program, model=None, target="system")
@@ -213,6 +309,22 @@ def test_amr_level_domain_requires_amr_target_and_lowers_there():
     cpp = emit_cpp_program(program, model=None, target="amr_system")
     assert "ScheduleDomainKind::kAmrLevel" in cpp
     assert ", 1), false))" in cpp
+
+
+def test_amr_level_outside_resolved_hierarchy_refuses_before_artifact_creation():
+    program = _scratch_program(lambda clock: adctime.Schedule(
+        adctime.Always(adctime.AMRLevel(clock, level=1))))
+    with pytest.raises(CapabilityResolutionError, match=r"level 1 outside.*\[0, 1\)"):
+        _resolve_amr_program(
+            "amr",
+            program,
+            context=AMRProgramSupportContext(
+                hierarchy_level_count=1,
+                frozen_hierarchy=True,
+                shared_block_interfaces=False,
+                field_routes_validated=True,
+            ),
+        )
 
 
 def test_clock_tick_on_scratch_node_emits_guard_without_cache_cadence():
@@ -241,6 +353,26 @@ def test_stage_domain_refuses_a_different_node_stage_before_emission():
         raise AssertionError("a Stage schedule must authenticate the exact node StagePoint")
 
 
+def test_stage_domain_lowers_at_the_exact_node_stage():
+    clock = adctime.Clock("macro")
+    point = adctime.StagePoint("rhs", {"main": adctime.TimePoint(clock, 0.5)})
+    schedule = adctime.Schedule(adctime.Always(adctime.Stage(clock, point)))
+    value = SimpleNamespace(
+        id=19,
+        name="exact_stage",
+        op="solve_fields",
+        clock=clock,
+        point=point,
+        attrs={"schedule": schedule},
+    )
+    lines = ["ctx.solve_fields_from_state();"]
+    _emit_schedule_wrap(None, value, {}, lines, 0)
+    cpp = "\n".join(lines)
+    assert "ctx.schedule_domain_occurs(" in cpp
+    assert "ScheduleDomainKind::kStage" in cpp
+    assert "rhs" in cpp
+
+
 def test_amr_flux_weight_is_proved_before_artifact_creation():
     valid = emit_cpp_program(_scratch_program(lambda clock: adctime.Schedule(
         adctime.Always(adctime.AcceptedStep(clock)))),
@@ -266,6 +398,8 @@ def test_field_hold_refuses_raw_provider_storage_cache():
     assert "ctx.schedule_decision(17," in cpp and ", false))" in cpp
     assert "cache_store_aux" not in cpp
     assert "cache_restore_aux" not in cpp
+    with pytest.raises(ValueError, match=r"not cacheable; cannot use schedule Hold"):
+        _field_program(lambda clock: _every(clock, 10, adctime.Hold()))
 
 
 def test_field_zero_refuses_raw_provider_storage_mutation():
@@ -286,6 +420,67 @@ def test_field_skip_runs_only_when_due():
     assert "} else {" not in cpp.split("skip: stale aux off-cadence")[1].split("\n", 1)[0]
 
 
+def test_field_skip_requires_an_exact_dynamic_topology_rematerializer():
+    program = _field_program(lambda clock: _every(clock, 5, adctime.Skip()))
+    assert amr_program_op_support(program, context=_amr_context(frozen=True)) == {
+        "named_field_solve": "green",
+        "schedule_due": "green",
+        "schedule_field_skip": "green",
+    }
+    assert _resolve_amr_program(
+        "amr", program, context=_amr_context(frozen=True)
+    )["status"] == "proven"
+    assert amr_program_op_support(program, context=_amr_context(frozen=False)) == {
+        "named_field_solve": "green",
+        "schedule_due": "green",
+        "schedule_field_skip": "green",
+    }
+    assert _resolve_amr_program(
+        "amr", program, context=_amr_context(frozen=False)
+    )["status"] == "proven"
+    unsupported = _amr_context(frozen=False, rematerializer=False)
+    assert amr_program_op_support(program, context=unsupported) == {
+        "named_field_solve": "green",
+        "schedule_due": "green",
+        "schedule_field_skip": "pending:dynamic_hierarchy_provider_pack",
+    }
+    with pytest.raises(CapabilityResolutionError, match="dynamic_hierarchy_provider_pack"):
+        _resolve_amr_program("amr", program, context=unsupported)
+
+
+def test_field_skip_when_requires_an_initial_provider_pack():
+    program = adctime.Program("when_field_skip")
+    state = typed_state(program, "ions")
+    condition = program.norm2(state) > 0
+    field = typed_field(program, "potential")
+    field(state, schedule=_when(program.clock, condition, adctime.Skip()))
+    assert amr_program_op_support(program, context=_amr_context(frozen=True)) == {
+        "named_field_solve": "green",
+        "schedule_due": "green",
+        "schedule_field_skip_unprepared": "pending:initial_provider_pack",
+    }
+    with pytest.raises(CapabilityResolutionError, match="initial_provider_pack"):
+        _resolve_amr_program("amr", program, context=_amr_context(frozen=True))
+
+
+def _assert_nested_field_skip_is_unprepared(program):
+    assert amr_program_op_support(program, context=_amr_context(frozen=True)) == {
+        "named_field_solve": "green",
+        "schedule_due": "green",
+        "schedule_field_skip_unprepared": "pending:initial_provider_pack",
+    }
+    with pytest.raises(CapabilityResolutionError, match="initial_provider_pack"):
+        _resolve_amr_program("amr", program, context=_amr_context(frozen=True))
+
+
+def test_field_skip_in_lazy_branch_is_not_initially_reachable():
+    _assert_nested_field_skip_is_unprepared(_nested_field_skip_program("branch"))
+
+
+def test_field_skip_in_while_body_is_not_initially_reachable():
+    _assert_nested_field_skip_is_unprepared(_nested_field_skip_program("loop"))
+
+
 def test_field_error_emits_scheduler_error_else():
     cpp = _emit_field(lambda clock: _every(clock, 3, adctime.Error()))
     assert "ctx.scheduler_error(" in cpp
@@ -304,7 +499,13 @@ def test_field_recompute_runs_only_when_due():
 def test_scratch_hold_caches_named_scratch():
     # a held NON-solve_fields scratch now caches: the output decl is hoisted out of the guard, the
     # fill + cache_store_scratch run when due, cache_restore_scratch off-cadence.
-    cpp = _emit_scratch(lambda clock: _every(clock, 10, adctime.Hold()))
+    program = _scratch_program(lambda clock: _every(clock, 10, adctime.Hold()))
+    assert amr_program_op_support(program, context=_amr_context()) == {
+        "schedule_cache": "pending:checkpointed_hierarchy_cache",
+    }
+    with pytest.raises(CapabilityResolutionError, match="checkpointed_hierarchy_cache"):
+        _resolve_amr_program("amr", program, context=_amr_context())
+    cpp = emit_cpp_program(program, model=None)
     assert "ctx.cache_store_scratch(" in cpp
     assert "ctx.cache_restore_scratch(" in cpp
     # the output scratch is DECLARED before the guard (so both branches see it)
@@ -320,19 +521,37 @@ def test_scratch_zero_sets_the_scratch_to_zero():
 
 
 def test_scratch_accumulate_dt_uses_scratch_cache():
-    cpp = _emit_scratch(lambda clock: _every(clock, 7, adctime.AccumulateDt()))
+    program = _scratch_program(lambda clock: _every(clock, 7, adctime.AccumulateDt()))
+    assert amr_program_op_support(program, context=_amr_context()) == {
+        "schedule_cache": "pending:checkpointed_hierarchy_cache",
+    }
+    with pytest.raises(CapabilityResolutionError, match="checkpointed_hierarchy_cache"):
+        _resolve_amr_program("amr", program, context=_amr_context())
+    cpp = emit_cpp_program(program, model=None)
     assert "ctx.cache_effective_dt(" in cpp
     assert "ctx.cache_accumulate_dt(" in cpp
     assert "ctx.cache_store_scratch(" in cpp
     assert "ctx.cache_restore_scratch(" in cpp
 
 
-def test_scratch_decl_hoisted_for_skip():
-    # the scratch decl must be OUTSIDE the guard so the (stale) buffer stays in scope for downstream
-    cpp = _emit_scratch(lambda clock: _every(clock, 5, adctime.Skip()))
-    decl_idx = cpp.index("MultiFab<pops::kNativeDimension>& r")
-    guard_idx = cpp.index("if (ctx.schedule_decision(")
-    assert decl_idx < guard_idx
+def test_scratch_skip_refuses_unprepared_stale_state():
+    program = _scratch_program(lambda clock: _every(clock, 5, adctime.Skip()))
+    assert amr_program_op_support(
+        program,
+        context=AMRProgramSupportContext(
+            hierarchy_level_count=1,
+            frozen_hierarchy=True,
+            shared_block_interfaces=False,
+            field_routes_validated=True,
+        ),
+    ) == {
+        "schedule_due": "green",
+        "schedule_scratch_skip": "pending:prepared_scratch_state",
+    }
+    with pytest.raises(NotImplementedError, match="prepared accepted transactional state"):
+        _check_schedules_lowerable(program)
+    with pytest.raises(NotImplementedError, match="prepared accepted transactional state"):
+        _emit_scratch(lambda clock: _every(clock, 5, adctime.Skip()))
 
 
 # --- genuinely unlowerable: on_end (no end-of-run signal) -------------------

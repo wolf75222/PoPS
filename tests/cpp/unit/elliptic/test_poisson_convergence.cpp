@@ -153,7 +153,9 @@ Errors solve_case(int cells, bool periodic) {
   options.absolute_tolerance = pops::Real(1e-13);
   options.maximum_cycles = 120;
   options.bottom_sweeps = 60;
-  Solver solver(std::move(request), options);
+  const pops::ExecutionLane lane =
+      pops::ExecutionLane::world("tests.poisson-convergence.geometric-mg");
+  Solver solver(std::move(request), lane, options);
   install_nullspace(solver, periodic);
   fill_manufactured_rhs(solver.rhs(), solver.geom(), periodic);
   const double rhs_mean =

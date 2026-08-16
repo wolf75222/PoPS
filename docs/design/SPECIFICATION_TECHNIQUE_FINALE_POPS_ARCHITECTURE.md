@@ -156,14 +156,17 @@ clés suivantes :
 
 ```text
 schema_version, state_spaces, cons_names, n_vars,
-params, aux_names, n_aux, capabilities
+params, provider_components, n_aux, capabilities
 ```
 
 Cette projection est fail-closed : aucune lecture opportuniste d'attribut, aucun compte fabriqué et
 aucun fallback vers le premier modèle ne sont admis. `n_vars` égale exactement la taille de
-`cons_names`, `n_aux` couvre au moins tous les `aux_names`, les capacités associent des noms non vides
-à des booléens exacts, et la route `state_spaces` doit être identique à celle du bloc résolu. Le runtime
-natif livré exige ici exactement un espace d'état nommé par bloc. Cette interface sert aux rapports,
+`cons_names`, le compte de rapport `n_aux` couvre les `provider_components`, les capacités associent
+des noms non vides à des booléens exacts, et la route `state_spaces` doit être identique à celle du bloc résolu. Le runtime
+natif livré exige ici exactement un espace d'état nommé par bloc. `provider_components` et `n_aux`
+sont une projection de rapport du pack résolu; ils ne définissent ni noms physiques réservés ni
+adresses de stockage. Les `ComponentKey` et plans de consommateurs signés restent l'autorité. Cette
+interface sert aux rapports,
 au calcul mémoire et aux contrôles de bind ; elle ne réintroduit pas une autorité d'authoring.
 
 ### 3.3 Contrat natif obligatoire du module Program
@@ -176,8 +179,9 @@ absent ou un registre de routes différent refuse l'artefact avant l'appel de so
 module n'est jamais exécuté en sautant l'introspection.
 
 `System` et `AmrSystem` appliquent les mêmes contrôles de requirements sur toutes les plateformes :
-instances de blocs, solveur de champ et champs auxiliaires fournis. En AMR, `B_z` exige une donnée
-installée avant le `Program`; `T_e` est refusé tant qu'aucun provider AMR typé ne l'implémente. Aucun
+instances de blocs, solveur de champ et composants provider owner-qualified. System et AmrSystem
+enregistrent les mêmes `InputAux`, `DerivedAux` et sorties de champs dans un DAG exact; une dépendance
+absente ou stale est refusée avant le `Program`. Aucun
 canal auxiliaire absent n'est interprété comme zéro et aucune validation n'est reportée au premier pas.
 
 ## 4. Modèle de données Python

@@ -516,7 +516,22 @@ def _render_schema(catalog: dict[str, Any], digest: str, semantic_digest: str | 
         ("COMPONENT_EXTENSION_KINDS", "extension_kinds"),
     ):
         lines.append(f"{name} = {tuple(schema[source_name])!r}")
-    lines.extend(("", "__all__ = [name for name in globals() if name.startswith('COMPONENT_')]", ""))
+    lines.extend((
+        "",
+        "__all__ = [",
+        "    'COMPONENT_CATALOG_SCHEMA_VERSION',",
+        "    'COMPONENT_MANIFEST_SCHEMA_VERSION',",
+        "    'COMPONENT_CATALOG_SHA256',",
+        "    'COMPONENT_CATALOG_SEMANTIC_SHA256',",
+        "    'COMPONENT_INTERFACE_SPECS',",
+        "    'COMPONENT_MANIFEST_SEMANTIC_FIELDS',",
+        "    'COMPONENT_MANIFEST_TOP_LEVEL_FIELDS',",
+        "    'COMPONENT_TARGET_FIELDS',",
+        "    'COMPONENT_DIGEST_FIELDS',",
+        "    'COMPONENT_EXTENSION_KINDS',",
+        "]",
+        "",
+    ))
     return "\n".join(lines)
 
 

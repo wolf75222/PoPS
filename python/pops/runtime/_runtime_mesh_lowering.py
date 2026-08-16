@@ -114,12 +114,13 @@ def system_config_from_layout(native_layout: Any) -> Any:
     return cfg
 
 
-def install_uniform_embedded_boundary(sim: Any, normalized_layout: Any) -> None:
-    """Install one signed implicit geometry in the native analytic level-set provider.
+def install_embedded_boundary(sim: Any, normalized_layout: Any) -> None:
+    """Install one signed implicit geometry in the selected exact-rank native provider.
 
     Geometry authoring remains open through the small ``level_set(frame)`` protocol, but that
     protocol is resolved while building the LayoutPlan.  Bind consumes only its authenticated
-    canonical data and never calls a user provider.
+    canonical data and never calls a user provider.  Uniform ``System<Dim>`` and adaptive
+    ``AmrSystem<Dim>`` deliberately share this one lowering path.
     """
     projection = getattr(normalized_layout, "to_data", None)
     if not callable(projection):

@@ -176,9 +176,29 @@ class POPS_BRICK_LOCAL BrickRegistry {
           "BrickRegistry::register_brick: category and native_id must not be empty in schema v3");
     auto it = index_.find(entry.id);
     if (it == index_.end()) {
-      index_.emplace(entry.id, entries_.size());
-      entries_.push_back(entry);
-      ids_.push_back(entry.id);
+      // Build the complete three-container image before publication. Any allocation or entry-copy
+      // failure destroys only these candidates; the live index/list/id mirrors remain identical.
+      auto candidate_entries = entries_;
+      auto candidate_ids = ids_;
+      auto candidate_index = index_;
+      const std::size_t candidate_position = candidate_entries.size();
+      candidate_entries.push_back(entry);
+      candidate_ids.push_back(entry.id);
+      const auto [inserted, unique] = candidate_index.emplace(entry.id, candidate_position);
+      (void)inserted;
+      if (!unique)
+        throw std::logic_error(
+            "BrickRegistry::register_brick: candidate index unexpectedly contains brick id");
+      static_assert(noexcept(entries_.swap(candidate_entries)));
+      static_assert(noexcept(ids_.swap(candidate_ids)));
+      static_assert(noexcept(index_.swap(candidate_index)));
+      entries_.swap(candidate_entries);
+      ids_.swap(candidate_ids);
+      index_.swap(candidate_index);
+    } else if (it->second >= entries_.size() || it->second >= ids_.size() ||
+               ids_[it->second] != entry.id) {
+      throw std::logic_error(
+          "BrickRegistry::register_brick: live manifest index/list/id mirrors diverged");
     } else if (!same_entry(entries_[it->second], entry)) {
       throw std::runtime_error("BrickRegistry::register_brick: conflicting registration for id '" +
                                entry.id + "'");

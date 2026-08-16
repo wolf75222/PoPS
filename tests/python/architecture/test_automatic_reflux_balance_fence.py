@@ -2,14 +2,17 @@
 
 from pathlib import Path
 
+from tests.python.architecture.test_final_nd_amr_consumers import (
+    ROOTS as AMR_CONSUMER_ROOTS,
+    _semantic_closure as _amr_semantic_closure,
+    _source as _amr_semantic_source,
+)
+
 
 ROOT = Path(__file__).resolve().parents[3]
 LEDGER = ROOT / "include" / "pops" / "amr" / "reflux" / "face_flux_ledger.hpp"
 METRIC_REFLUX = LEDGER.with_name("metric_reflux.hpp")
 CHECKPOINT = ROOT / "include" / "pops" / "runtime" / "program" / "amr_program_checkpoint.hpp"
-SUBCYCLING = (
-    ROOT / "include" / "pops" / "numerics" / "time" / "amr" / "levels" / "amr_subcycling.hpp"
-)
 RETIRED_PROGRAM_REFLUX = ROOT / "include" / "pops" / "runtime" / "amr" / "amr_program_reflux.hpp"
 
 
@@ -63,7 +66,7 @@ def test_restart_and_collective_preflight_fail_closed_before_publication() -> No
 
 def test_metric_reconciliation_authenticates_the_complete_substep_window() -> None:
     metric = METRIC_REFLUX.read_text(encoding="utf-8")
-    transition = SUBCYCLING.read_text(encoding="utf-8")
+    transition = _amr_semantic_source(_amr_semantic_closure(AMR_CONSUMER_ROOTS["subcycling"]))
     assert "substeps do not form a contiguous exact clock partition" in metric
     assert "stage weights do not close one accepted substep" in metric
     assert "coarse and fine physical clocks do not cover the same window" in metric

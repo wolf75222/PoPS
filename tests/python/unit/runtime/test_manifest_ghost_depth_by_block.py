@@ -30,6 +30,7 @@ from pops.identity import make_identity  # noqa: E402
 from pops.model import Module  # noqa: E402
 from pops.model.bind_schema import BindSchema  # noqa: E402
 from tests.python.unit.runtime._typed_program import typed_program_states  # noqa: E402
+from tests.python.support.block_instance_owner import make_testing_block_instance_owner  # noqa: E402
 from tests.python.support.layout_plan import resolved_layout_contract  # noqa: E402
 
 
@@ -75,17 +76,6 @@ def _compiled(blocks, *, ghost_depth=2):
         for name, endpoint in endpoints.items()
     })
 
-    model = CompiledModel(
-        so_path="/nonexistent/ghost-depth.so", backend="production",
-        cons_names=("rho", "mx", "my"),
-        cons_roles=("Density", "MomentumX", "MomentumY"),
-        prim_names=("rho", "mx", "my"), n_vars=3, gamma=1.4, n_aux=0,
-        params={}, caps={}, abi_key="SIG|c++|c++23", model_hash="ghost-depth-model",
-        cxx="c++", std="c++23",
-        native_dimension=2,
-    )
-    model.artifact_identity = make_identity(
-        "artifact", {"fixture": "ghost-depth-model", "blocks": list(blocks)})
     schema = BindSchema.from_problem(problem)
     snapshot = problem.freeze()
     layout_plan, layout_coverage = resolved_layout_contract(
@@ -104,7 +94,8 @@ def _compiled(blocks, *, ghost_depth=2):
             ResolvedBlock(
                 name, {"model": "ghost-depth-model"},
                 None if ghost_depth is None else {"ghost_depth": ghost_depth},
-                "production", ("U",), ("test::%s::state::U" % name,))
+                "production", ("U",), ("test::%s::state::U" % name,),
+                make_testing_block_instance_owner("ghost-depth", name, "ghost-depth-model"))
             for name in blocks
         ),
         bind_schema=schema,
@@ -148,13 +139,29 @@ def _compiled(blocks, *, ghost_depth=2):
             return build_compiled_manifest(self.artifact)
 
     compiled_program = _CompiledProgram()
+    models = []
+    for resolved in plan.blocks:
+        model = CompiledModel(
+            so_path="/nonexistent/ghost-depth.so", backend="production",
+            cons_names=("rho", "mx", "my"),
+            cons_roles=("Density", "MomentumX", "MomentumY"),
+            prim_names=("rho", "mx", "my"), n_vars=3, gamma=1.4, n_aux=0,
+            params={}, caps={}, abi_key="SIG|c++|c++23", model_hash="ghost-depth-model",
+            cxx="c++", std="c++23",
+            native_dimension=2,
+            consumer_owner_qid=resolved.instance_owner_qid,
+            declares_auxiliary_providers=resolved.declares_auxiliary_providers,
+        )
+        model.artifact_identity = make_identity(
+            "artifact", {"fixture": "ghost-depth-model", "block": resolved.name})
+        models.append(model)
     artifact = CompiledSimulationArtifact(
         plan=plan,
         program=compiled_program,
         blocks=tuple(
             CompiledBlockArtifact(
                 resolved.name, model, resolved.spatial, resolved.state_spaces)
-            for resolved in plan.blocks),
+            for resolved, model in zip(plan.blocks, models, strict=True)),
     )
     compiled_program.artifact = artifact
     return artifact

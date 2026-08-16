@@ -56,23 +56,30 @@ namespace {
 constexpr int kTestDimension = kNativeDimension;
 using NativeSystem = System<kTestDimension>;
 using NativeSystemConfig = SystemConfig<kTestDimension>;
+static_assert(std::is_nothrow_destructible_v<NativeSystem>);
+static_assert(std::is_nothrow_move_constructible_v<NativeSystem>);
+static_assert(std::is_nothrow_move_assignable_v<NativeSystem>);
+static_assert(!std::is_copy_constructible_v<NativeSystem>);
+static_assert(!std::is_copy_assignable_v<NativeSystem>);
 using NativeProgramContext = runtime::program::ProgramContext<kTestDimension>;
 using NativeField = MultiFab<kTestDimension>;
 using NativeConstView = FieldView<const Real, kTestDimension>;
 using NativeBox = Box<kTestDimension>;
 
-static_assert(std::is_same_v<
-              decltype(std::declval<const runtime::program::ProgramContext<1>&>()
-                           .template provider_values_view<0>("", 0, 0)),
-              ProviderStorageView<1, 0>>);
-static_assert(std::is_same_v<
-              decltype(std::declval<const runtime::program::ProgramContext<2>&>()
-                           .template provider_values_view<0>("", 0, 0)),
-              ProviderStorageView<2, 0>>);
-static_assert(std::is_same_v<
-              decltype(std::declval<const runtime::program::ProgramContext<3>&>()
-                           .template provider_values_view<0>("", 0, 0)),
-              ProviderStorageView<3, 0>>);
+void install_execution_lane(NativeSystem& system, std::string identity) {
+  system.install_prepared_boundary_execution_lane(
+      std::make_shared<ExecutionLane>(ExecutionLane::world(std::move(identity))));
+}
+
+static_assert(std::is_same_v<decltype(std::declval<const runtime::program::ProgramContext<1>&>()
+                                          .template provider_values_view<0>("", 0, 0)),
+                             ProviderStorageView<1, 0>>);
+static_assert(std::is_same_v<decltype(std::declval<const runtime::program::ProgramContext<2>&>()
+                                          .template provider_values_view<0>("", 0, 0)),
+                             ProviderStorageView<2, 0>>);
+static_assert(std::is_same_v<decltype(std::declval<const runtime::program::ProgramContext<3>&>()
+                                          .template provider_values_view<0>("", 0, 0)),
+                             ProviderStorageView<3, 0>>);
 
 NativeSystemConfig native_config(std::int64_t cells, Real length = Real(1)) {
   NativeSystemConfig config;
@@ -160,7 +167,7 @@ void materialize_mean_free_density(const NativeField& state, NativeField& rhs) {
   }
 }
 
-void add_gas_block(NativeSystem& s, const std::string& name) {
+void add_gas_block(NativeSystem& s, const std::string& name, int* projection_calls = nullptr) {
   s.install_block_state_route(name, "test::state::" + name);
   const GasModel model = GasModel::prepare(Real(kGamma));
   PreparedSystemBlock<kTestDimension> prepared;
@@ -199,7 +206,16 @@ void add_gas_block(NativeSystem& s, const std::string& name) {
   prepared.closures.prepare_generated_state_at_point = [](const auto&, NativeField&) {};
   prepared.closures.prepare_generated_state_at_point_prepared = [](const auto&, NativeField&,
                                                                    const auto&) {};
-  prepared.maximum_speed = [](const NativeField&) { return Real(1); };
+  prepared.closures.prepare_generated_state_with_transport_prepared =
+      [](const auto&, NativeField&, const auto&, const ExecutionLane&, const auto&) {};
+  if (projection_calls != nullptr)
+    prepared.closures.project = [projection_calls](NativeField&, const ExecutionLane&) {
+      ++*projection_calls;
+    };
+  prepared.closures.external_ghost_boundary =
+      std::make_shared<SystemBlockClosures<kTestDimension>::ExternalGhostBoundary>(
+          [](const auto&, NativeField&, const auto&, const ExecutionLane&) {});
+  prepared.maximum_speed = [](const NativeField&, const ExecutionLane&) { return Real(1); };
   prepared.poisson_rhs = [](const NativeField& state, NativeField& rhs) {
     materialize_mean_free_density(state, rhs);
   };
@@ -254,9 +270,33 @@ std::vector<double> ic(int n) {
   return U;
 }
 
+TEST(ProgramContextContract, SystemMoveTransfersPreparedExecutionLane) {
+  ensure_kokkos();
+  NativeSystem source(native_config(4));
+  install_execution_lane(source, "pops.test.system-move");
+  NativeSystem moved(std::move(source));
+  EXPECT_EQ(moved.prepared_boundary_execution_lane().identity(), "pops.test.system-move");
+  EXPECT_THROW(static_cast<void>(source.prepared_boundary_execution_lane()), std::logic_error);
+
+  // solve_fields materializes ExactNamedField + cartesian_cg, both of which pin the destination
+  // lane with ExecutionLane::ImmutableBorrow. Assignment must destroy that Impl first.
+  NativeSystem assigned(native_config(4));
+  install_execution_lane(assigned, "pops.test.system-move.destination");
+  add_gas(assigned);
+  assigned.set_state("gas", ic(4));
+  (void)pops::consume_solve_outcome(assigned.solve_fields());
+  assigned = std::move(assigned);
+  EXPECT_EQ(assigned.prepared_boundary_execution_lane().identity(),
+            "pops.test.system-move.destination");
+  assigned = std::move(moved);
+  EXPECT_EQ(assigned.prepared_boundary_execution_lane().identity(), "pops.test.system-move");
+  EXPECT_THROW(static_cast<void>(moved.prepared_boundary_execution_lane()), std::logic_error);
+}
+
 TEST(ProgramContextContract, AnonymousRateIdentityIsRejectedBeforeTopologyLookup) {
   ensure_kokkos();
   NativeSystem sim(native_config(2));
+  install_execution_lane(sim, "pops.test.program-context.anonymous-rate");
   NativeProgramContext context(&sim);
   EXPECT_THROW((void)context.boundary_evaluation_point(-1), std::invalid_argument);
 }
@@ -264,6 +304,7 @@ TEST(ProgramContextContract, AnonymousRateIdentityIsRejectedBeforeTopologyLookup
 TEST(ProgramContextContract, ProviderFreeViewDoesNotRequireAPlanOrStorageCarrier) {
   ensure_kokkos();
   NativeSystem sim(native_config(2));
+  install_execution_lane(sim, "pops.test.program-context.provider-free-view");
   NativeProgramContext context(&sim);
 
   // This System has neither registered providers nor a program-block map.  Count zero therefore
@@ -274,10 +315,193 @@ TEST(ProgramContextContract, ProviderFreeViewDoesNotRequireAPlanOrStorageCarrier
   EXPECT_TRUE(providers.storage_components.empty());
 }
 
+TEST(ProgramContextContract, PreparedLinearSolveAcceptsDistinctCongruentWorkspaceLane) {
+  ensure_kokkos();
+  comm_init();
+  NativeSystem sim(native_config(4));
+  install_execution_lane(sim, "pops.test.program-context.prepared-linear-runtime");
+  add_gas(sim);
+  sim.set_state("gas", ic(4));
+  sim.set_program_block_map({0});
+  NativeProgramContext context(&sim);
+  context.begin_step(Real(1e-3));
+  context.set_stage_time(0, 1);
+
+  NativeField& prototype = context.state(0);
+  const KrylovFootprint<kTestDimension> footprint{prototype.ncomp(), prototype.ghosts(), false};
+  const PreparedKrylovMethod<kTestDimension> method = cg_krylov_method<kTestDimension>();
+  const OperatorFingerprint authority{UINT64_C(101), UINT64_C(102), UINT64_C(103), UINT64_C(104)};
+  const OperatorFingerprint resources{UINT64_C(105), UINT64_C(106), UINT64_C(107), UINT64_C(108)};
+  const OperatorEvaluationSnapshot snapshot =
+      context.operator_evaluation_snapshot(authority, prototype, resources);
+  PreparedAffineLinearProblem<kTestDimension> problem(
+      prototype,
+      PreparedAffineOperatorProvider<kTestDimension>::trusted_reentrant(
+          [](NativeField& out, const NativeField& in) {
+            detail::PreparedFieldAlgebra::copy(out, in);
+          },
+          [] { return std::size_t{0}; }),
+      PreparedLinearPreconditioner<kTestDimension>::identity(),
+      LinearOperatorProperties::symmetric_positive_definite(), footprint,
+      PreparedNullspacePolicy<kTestDimension>::nonsingular(), [snapshot] { return snapshot; });
+  const ExecutionCommunicator runtime_communicator = context.prepared_execution_communicator();
+  KrylovWorkspace<kTestDimension> workspace(
+      runtime_communicator, "pops.test.program-context.workspace",
+      "pops.test.program-context.workspace.positive", prototype, method, footprint);
+  KrylovWorkspace<kTestDimension> legacy_workspace(
+      runtime_communicator, "pops.test.program-context.workspace", prototype, method, footprint);
+  NativeField solution = context.scratch_state_like(prototype);
+  NativeField rhs = context.scratch_state_like(prototype);
+  solution.set_val(Real(0));
+  rhs.set_val(Real(1));
+  problem.prepare(snapshot);
+  workspace.bind(problem);
+  legacy_workspace.bind(problem);
+
+  const ExecutionLane& workspace_lane =
+      ::pops::detail::KrylovWorkspaceAccess::execution_lane(workspace);
+  EXPECT_NE(&workspace_lane, &context.prepared_execution_lane());
+  EXPECT_TRUE(workspace_lane.congruent_with(context.prepared_execution_lane()));
+  EXPECT_THROW((void)context.solve_prepared_linear(
+                   problem, legacy_workspace, solution, rhs,
+                   KrylovControls<kTestDimension>{method, Real(1e-12), Real(0), 4}),
+               std::invalid_argument);
+  SolveOutcome outcome = context.solve_prepared_linear(
+      problem, workspace, solution, rhs,
+      KrylovControls<kTestDimension>{method, Real(1e-12), Real(0), 4});
+  ASSERT_TRUE(outcome.report().solved_value_available()) << outcome.report().reason;
+  (void)outcome.consume(SolveConsumption::kAccept);
+  for (int component = 0; component < solution.ncomp(); ++component)
+    EXPECT_DOUBLE_EQ(context.sum_component(solution, component),
+                     context.sum_component(rhs, component));
+}
+
+TEST(ProgramContextContract,
+     PreparedLinearSolveRefusesRankDivergentSameSolveIdLevelOwnerSelection) {
+#ifndef POPS_HAS_MPI
+  GTEST_SKIP() << "rank-divergent prepared solve validation requires MPI";
+#else
+  ensure_kokkos();
+  comm_init();
+  if (n_ranks() < 2)
+    GTEST_SKIP() << "rank-divergent prepared solve validation requires at least two MPI ranks";
+
+  NativeSystem sim(native_config(4));
+  install_execution_lane(sim, "pops.test.program-context.prepared-linear-negative-runtime");
+  add_gas(sim);
+  sim.set_state("gas", ic(4));
+  sim.set_program_block_map({0});
+  NativeProgramContext context(&sim);
+  context.begin_step(Real(1e-3));
+  context.set_stage_time(0, 1);
+
+  NativeField& prototype = context.state(0);
+  const KrylovFootprint<kTestDimension> footprint{prototype.ncomp(), prototype.ghosts(), false};
+  const PreparedKrylovMethod<kTestDimension> method = cg_krylov_method<kTestDimension>();
+  const OperatorFingerprint authority{UINT64_C(111), UINT64_C(112), UINT64_C(113), UINT64_C(114)};
+  const OperatorFingerprint resources{UINT64_C(115), UINT64_C(116), UINT64_C(117), UINT64_C(118)};
+  const OperatorEvaluationSnapshot snapshot =
+      context.operator_evaluation_snapshot(authority, prototype, resources);
+  int apply_calls = 0;
+  PreparedAffineLinearProblem<kTestDimension> problem(
+      prototype,
+      PreparedAffineOperatorProvider<kTestDimension>::trusted_reentrant(
+          [&apply_calls](NativeField& out, const NativeField& in) {
+            ++apply_calls;
+            detail::PreparedFieldAlgebra::copy(out, in);
+          },
+          [] { return std::size_t{0}; }),
+      PreparedLinearPreconditioner<kTestDimension>::identity(),
+      LinearOperatorProperties::symmetric_positive_definite(), footprint,
+      PreparedNullspacePolicy<kTestDimension>::nonsingular(), [snapshot] { return snapshot; });
+  const ExecutionCommunicator runtime_communicator = context.prepared_execution_communicator();
+  KrylovWorkspace<kTestDimension> workspace_a(
+      runtime_communicator, "pops.test.program-context.workspace",
+      "pops.program.amr.krylov-workspace.77/level-owner-identity-0", prototype, method, footprint);
+  KrylovWorkspace<kTestDimension> workspace_b(
+      runtime_communicator, "pops.test.program-context.workspace",
+      "pops.program.amr.krylov-workspace.77/level-owner-identity-1", prototype, method, footprint);
+  problem.prepare(snapshot);
+  workspace_a.bind(problem);
+  workspace_b.bind(problem);
+  EXPECT_EQ(::pops::detail::KrylovWorkspaceAccess::execution_lane(workspace_a).identity(),
+            ::pops::detail::KrylovWorkspaceAccess::execution_lane(workspace_b).identity());
+  EXPECT_NE(::pops::detail::KrylovWorkspaceAccess::materialization_token(workspace_a),
+            ::pops::detail::KrylovWorkspaceAccess::materialization_token(workspace_b));
+
+  NativeField solution = context.scratch_state_like(prototype);
+  NativeField rhs = context.scratch_state_like(prototype);
+  solution.set_val(Real(0));
+  rhs.set_val(Real(1));
+  const int apply_calls_before_solve = apply_calls;
+  KrylovWorkspace<kTestDimension>& selected_workspace = my_rank() == 0 ? workspace_a : workspace_b;
+  bool refused = false;
+  try {
+    (void)context.solve_prepared_linear(
+        problem, selected_workspace, solution, rhs,
+        KrylovControls<kTestDimension>{method, Real(1e-12), Real(0), 4});
+  } catch (const std::invalid_argument& error) {
+    refused = true;
+    EXPECT_STREQ(error.what(),
+                 "Program prepared linear solve workspace lane contract differs across MPI ranks");
+  }
+  EXPECT_TRUE(refused);
+  EXPECT_EQ(apply_calls, apply_calls_before_solve)
+      << "the runtime-lane contract must reject before any selected private workspace solve";
+  EXPECT_EQ(all_reduce_min(refused ? 1L : 0L, context.prepared_execution_lane()), 1L);
+#endif
+}
+
+TEST(ProgramContextContract,
+     ApplyProjectionRefusesRankDivergentPreparedBlockRouteBeforeProviderInvocation) {
+#ifndef POPS_HAS_MPI
+  GTEST_SKIP() << "rank-divergent projection validation requires MPI";
+#else
+  ensure_kokkos();
+  comm_init();
+  if (n_ranks() < 2)
+    GTEST_SKIP() << "rank-divergent projection validation requires at least two MPI ranks";
+
+  NativeSystem sim(native_config(4));
+  install_execution_lane(sim, "pops.test.program-context.projection-route-negative-runtime");
+  int projection_calls = 0;
+  add_gas_block(sim, "left", &projection_calls);
+  add_gas_block(sim, "right", &projection_calls);
+  const int selected_block = my_rank() == 0 ? 0 : 1;
+  sim.set_program_block_map({selected_block});
+  NativeProgramContext context(&sim);
+
+  bool system_refused = false;
+  try {
+    sim.block_project(selected_block, sim.block_state(selected_block));
+  } catch (const std::runtime_error& error) {
+    system_refused = true;
+    EXPECT_STREQ(error.what(), "System projection block index differs across MPI ranks");
+  }
+  EXPECT_TRUE(system_refused);
+  EXPECT_EQ(projection_calls, 0)
+      << "the System seam must agree its block route before invoking a projection provider";
+
+  bool refused = false;
+  try {
+    context.apply_projection(0, context.state(0));
+  } catch (const std::runtime_error& error) {
+    refused = true;
+    EXPECT_STREQ(error.what(), "Program projection block differs across MPI ranks");
+  }
+  EXPECT_TRUE(refused);
+  EXPECT_EQ(projection_calls, 0)
+      << "the exact lane route must refuse before a projection provider is invoked";
+  EXPECT_EQ(all_reduce_min(system_refused ? 1L : 0L, context.prepared_execution_lane()), 1L);
+  EXPECT_EQ(all_reduce_min(refused ? 1L : 0L, context.prepared_execution_lane()), 1L);
+#endif
+}
+
 TEST(ProgramContextContract, ProjectionReportSurvivesScientificRollbackUntilConsumed) {
   ensure_kokkos();
   NativeSystemConfig cfg = native_config(2);
   NativeSystem sim(cfg);
+  install_execution_lane(sim, "pops.test.program-context.projection-report");
 
   sim.begin_step_projection_report();
   EXPECT_TRUE(sim.consume_step_projections().empty());
@@ -296,6 +520,7 @@ TEST(ProgramContextContract, AcceptedBalanceEvidenceIsCurrentAttemptExactAndFail
   ensure_kokkos();
   NativeSystemConfig cfg = native_config(2);
   NativeSystem sim(cfg);
+  install_execution_lane(sim, "pops.test.program-context.balance-evidence");
   NativeProgramContext context(&sim);
   const std::string route = "pops.balance-ledger-route.v1:sha256:" + std::string(64, '1');
   const std::array<std::pair<const char*, double>, 5> terms{{
@@ -386,6 +611,7 @@ TEST(ProgramContextContract, ForwardEulerViaContextMatchesReference) {
   const std::vector<double> U0 = ic(n);
 
   NativeSystem ref(cfg);
+  install_execution_lane(ref, "pops.test.program-context.forward-euler-reference");
   add_gas(ref);
   ref.set_state("gas", U0);
   (void)pops::consume_solve_outcome(ref.solve_fields());
@@ -396,6 +622,7 @@ TEST(ProgramContextContract, ForwardEulerViaContextMatchesReference) {
   }
 
   NativeSystem sim(cfg);
+  install_execution_lane(sim, "pops.test.program-context.forward-euler");
   add_gas(sim);
   sim.set_state("gas", U0);
   sim.set_program_block_map({0});
@@ -440,6 +667,7 @@ TEST(ProgramContextContract, CommitManySnapshotsSourcesThatAreAlsoTargets) {
   ensure_kokkos();
   NativeSystemConfig cfg = native_config(8);
   NativeSystem sim(cfg);
+  install_execution_lane(sim, "pops.test.program-context.simultaneous-field");
   add_gas_block(sim, "a");
   add_gas_block(sim, "b");
   sim.set_program_block_map({0, 1});
@@ -473,6 +701,7 @@ TEST(ProgramContextContract, GeneratedScratchIsPersistentExactAndNonAliasing) {
   ensure_kokkos();
   NativeSystemConfig cfg = native_config(8);
   NativeSystem sim(cfg);
+  install_execution_lane(sim, "pops.test.program-context.generated-scratch");
   add_gas(sim);
   sim.set_program_block_map({0});
   NativeProgramContext ctx(&sim);
@@ -511,6 +740,7 @@ TEST(ProgramContextContract,
   ensure_kokkos();
   NativeSystemConfig cfg = native_config(8);
   NativeSystem sim(cfg);
+  install_execution_lane(sim, "pops.test.program-context.named-field-workspace");
   add_gas_block(sim, "a");
   add_gas_block(sim, "b");
   sim.set_poisson("charge_density", "cartesian_cg");
@@ -641,6 +871,7 @@ TEST(ProgramContextContract, SsprkTwoStageViaContextMatchesReference) {
 
   // Reference SSPRK2 on the host via solve_fields + eval_rhs (a fresh solve per stage state).
   NativeSystem ref(cfg);
+  install_execution_lane(ref, "pops.test.program-context.ssprk-reference");
   add_gas(ref);
   ref.set_state("gas", U0);
   (void)pops::consume_solve_outcome(ref.solve_fields());
@@ -661,6 +892,7 @@ TEST(ProgramContextContract, SsprkTwoStageViaContextMatchesReference) {
   // NativeProgramContext SSPRK2: stage into scratch states via scratch_state_like / axpy / lincomb, with a
   // per-stage solve_fields_from_state before each RHS.
   NativeSystem sim(cfg);
+  install_execution_lane(sim, "pops.test.program-context.ssprk");
   add_gas(sim);
   sim.set_state("gas", U0);
   sim.set_program_block_map({0});
@@ -710,11 +942,13 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
   const std::vector<double> U0 = ic(n);
 
   NativeSystem sim(cfg);
+  install_execution_lane(sim, "pops.test.program-context.seam-surface");
   add_gas(sim);
   sim.set_state("gas", U0);
   sim.set_program_block_map({0});
   NativeProgramContext ctx(&sim);
   ctx.configure_primary_clock("clock.macro");
+  ctx.declare_clock_relation("clock.macro", "clock.fast", 2);
   ctx.begin_step(dt);
   ctx.set_stage_time(0, 1);
   {
@@ -724,6 +958,42 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
 
   const int b = 0;
   NativeField& U = ctx.state(b);
+
+  // Cartesian generated pointwise kernels receive no sparse mask, while their status reduction
+  // remains on the prepared lane. A foreign mask cannot silently change participating cells.
+  NativeField pointwise_status = ctx.alloc_scalar_field(1, 0);
+  pointwise_status.set_val(Real(0));
+  const NativeField* const active_cells = ctx.pointwise_active_mask(b, pointwise_status);
+  EXPECT_EQ(active_cells, nullptr);
+  EXPECT_EQ(
+      ctx.pointwise_status_max(b, pointwise_status, active_cells, ctx.prepared_execution_lane()),
+      Real(0));
+  pointwise_status.set_val(Real(2));
+  EXPECT_EQ(
+      ctx.pointwise_status_max(b, pointwise_status, active_cells, ctx.prepared_execution_lane()),
+      Real(2));
+  pointwise_status.set_val(Real(0));
+  const AllocationEventStats pointwise_allocations_before = allocation_event_stats();
+  const std::uint64_t pointwise_consensus_before = exact_consensus_dynamic_storage_calls();
+  for (int repeat = 0; repeat < 3; ++repeat) {
+    EXPECT_EQ(ctx.pointwise_active_mask(b, pointwise_status), nullptr);
+    EXPECT_EQ(
+        ctx.pointwise_status_max(b, pointwise_status, active_cells, ctx.prepared_execution_lane()),
+        Real(0));
+  }
+  const AllocationEventStats pointwise_allocations_after = allocation_event_stats();
+  const std::uint64_t pointwise_consensus_after = exact_consensus_dynamic_storage_calls();
+  EXPECT_EQ(pointwise_allocations_after, pointwise_allocations_before)
+      << "warmed Cartesian pointwise path must not allocate owning storage";
+  EXPECT_EQ(pointwise_consensus_after, pointwise_consensus_before)
+      << "warmed Cartesian pointwise path must not use dynamic exact consensus";
+  pointwise_status.set_val(std::numeric_limits<Real>::quiet_NaN());
+  EXPECT_EQ(
+      ctx.pointwise_status_max(b, pointwise_status, active_cells, ctx.prepared_execution_lane()),
+      Real(3));
+  EXPECT_THROW(ctx.pointwise_status_max(b, pointwise_status, &pointwise_status,
+                                        ctx.prepared_execution_lane()),
+               std::invalid_argument);
 
   // rhs_into == neg_div_flux_default_into + source_default_into (the split-then-sum identity, ADC-425).
   NativeField Rfull = ctx.rhs_scratch_like(U);
@@ -779,10 +1049,13 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
       << "an undeclared projection capability must fail loud";
 
   // history register/store/read/rotate through the context seam.
-  ctx.register_history("h", 1);
+  ctx.register_history("h", 2);
   NativeField hv = ctx.rhs_scratch_like(U);
   hv.set_val(Real(3));
   ctx.store_history("h", hv);
+  for (int slot = 0; slot < 3; ++slot)
+    EXPECT_EQ(sim.history_slot_dt("h", slot), dt)
+        << "first exact store cold-fills every history dt slot";
   {
     NativeField& r = ctx.history("h", 1);  // cold-start fill -> lag 1 == the stored value
     EXPECT_TRUE(r.ncomp() == U.ncomp()) << "owner-qualified history preserves the whole field";
@@ -795,7 +1068,28 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
   EXPECT_TRUE(scalar_history.ncomp() == 1) << "narrow history is a scalar NativeField";
   EXPECT_TRUE(std::fabs(ctx.sum_component(scalar_history, 0)) < 1e-12)
       << "owner-qualified zero-start history preserves its declared cold start";
-  ctx.rotate_histories();  // no throw
+  ctx.rotate_histories();
+  EXPECT_EQ(sim.history_fill_count("h"), 1);
+  for (int slot = 0; slot < 3; ++slot)
+    EXPECT_EQ(sim.history_slot_dt("h", slot), dt)
+        << "cold-filled history dt ledger rotates with its ring";
+
+  const double next_dt = 2.0 * dt;
+  ctx.begin_step(next_dt);
+  hv.set_val(Real(4));
+  ctx.store_history("h", hv);
+  EXPECT_EQ(sim.history_slot_dt("h", 0), next_dt);
+  EXPECT_EQ(sim.history_slot_dt("h", 1), dt);
+  EXPECT_EQ(sim.history_slot_dt("h", 2), dt);
+  NativeField interpolated = ctx.rhs_scratch_like(U);
+  ctx.interpolate_history_linear(interpolated, "h", 2, 0, "clock.macro", "clock.fast", -1, Real(0));
+  EXPECT_EQ(first_value(interpolated), Real(3.5));
+  ctx.rotate_histories();
+  EXPECT_EQ(sim.history_fill_count("h"), 2);
+  EXPECT_EQ(sim.history_slot_dt("h", 1), next_dt);
+  EXPECT_EQ(sim.history_slot_dt("h", 2), dt);
+  EXPECT_EQ(first_value(ctx.history("h", 1)), Real(4));
+  EXPECT_EQ(first_value(ctx.history("h", 2)), Real(3));
 
   // diagnostics: record_scalar -> program_diagnostic round-trip.
   ctx.record_scalar("mass", ctx.sum_component(U, 0));
@@ -820,6 +1114,7 @@ TEST(ProgramContextContract, LogicalSubcycleSnapshotsCarryExactChildWindowsAndRe
   ensure_kokkos();
   NativeSystemConfig cfg = native_config(8);
   NativeSystem sim(cfg);
+  install_execution_lane(sim, "pops.test.program-context.logical-subcycle");
   add_gas(sim);
   sim.set_program_block_map({0});
 
@@ -932,6 +1227,7 @@ TEST(ProgramContextContract, BlockResolutionRequiresACompleteExplicitMap) {
   ensure_kokkos();
   NativeSystemConfig cfg = native_config(8);
   NativeSystem sim(cfg);
+  install_execution_lane(sim, "pops.test.program-context.block-resolution");
   add_gas(sim);
   NativeProgramContext ctx(&sim);
   const std::vector<const NativeField*> stages{&sim.block_state(0)};

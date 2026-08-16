@@ -24,10 +24,12 @@
 
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
 #include <pops/runtime/system.hpp>
 
 #include <cmath>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -57,11 +59,44 @@ using NativeField = MultiFab<kTestDimension>;
 using NativeGasLaw = nd::IdealGasEuler<kTestDimension>;
 constexpr int kNcomp = NativeGasLaw::n_vars;  // density, one momentum per axis, total energy
 
+void install_execution_lane(NativeSystem& system, std::string identity) {
+  system.install_prepared_boundary_execution_lane(
+      std::make_shared<ExecutionLane>(ExecutionLane::world(std::move(identity))));
+}
+
+#if defined(POPS_HAS_KOKKOS)
+void ensure_kokkos() {
+  static std::unique_ptr<Kokkos::ScopeGuard> guard;
+  if (!Kokkos::is_initialized() && !Kokkos::is_finalized())
+    guard = std::make_unique<Kokkos::ScopeGuard>();
+}
+#endif
+
 void add_gas(NativeSystem& s) {
   s.install_block_state_route("gas", "test.checkpoint-history.gas.state@1");
   add_compiled_model(s, "gas", NativeGasLaw::prepare(kGamma), "minmod", "rusanov", "conservative",
                      "explicit", kGamma);
   s.set_poisson("charge_density", "cartesian_cg");
+}
+
+runtime::system::AuxiliaryComponentKey install_uniform_checkpoint_input(NativeSystem& system) {
+  using namespace runtime::system;
+  AuxiliaryStorageShape<kTestDimension> shape;
+  shape.spatial_rank = kTestDimension;
+  shape.value_components = 1;
+  for (int axis = 0; axis < kTestDimension; ++axis)
+    shape.halo[axis] = 1;
+  AuxiliaryComponentKey key{"test.uniform-checkpoint.owner", "auxiliary", "checkpoint-input",
+                            "value"};
+  AuxiliaryComponentContract contract{"cell-average", "cell", "unitless", "checkpoint", "scalar"};
+  system.install_prepared_auxiliary_provider(PreparedAuxiliaryProvider<kTestDimension>{
+      "test.uniform-checkpoint/input",
+      AuxiliaryProviderKind::input,
+      {AuxiliaryEvaluationEvent::initialization, AuxiliaryFreshness::once},
+      {{key, contract, shape}},
+      {}});
+  system.seal_auxiliary_providers();
+  return key;
 }
 
 // A distinct per-component, per-cell buffer so a slot mixup (wrong lag / wrong ncomp) is caught:
@@ -132,7 +167,7 @@ void deserialize(NativeSystem& s, const std::vector<SerializedHistory>& hist) {
 
 TEST(CheckpointHistory, RingRoundTripsBitEqualAcrossRestart) {
 #if defined(POPS_HAS_KOKKOS)
-  static Kokkos::ScopeGuard guard;
+  ensure_kokkos();
 #endif
   const int n = 8;
   int nn = 1;
@@ -147,6 +182,7 @@ TEST(CheckpointHistory, RingRoundTripsBitEqualAcrossRestart) {
   }
 
   NativeSystem src(cfg);
+  install_execution_lane(src, "pops.test.checkpoint-history.source");
   add_gas(src);
 
   // A cold-start broadcast is valid for multistep evaluation but does not make the copied slots
@@ -211,6 +247,7 @@ TEST(CheckpointHistory, RingRoundTripsBitEqualAcrossRestart) {
 
   // --- RESTART: a fresh System (same block) restores the rings -----------------------------------
   NativeSystem dst(cfg);
+  install_execution_lane(dst, "pops.test.checkpoint-history.destination");
   add_gas(dst);
   deserialize(dst, blob);
 
@@ -251,4 +288,46 @@ TEST(CheckpointHistory, RingRoundTripsBitEqualAcrossRestart) {
       << "no_phantom_coldstart_lag1_kept_A";
   EXPECT_TRUE(max_abs_diff(dst.history_global("rhs_prev", 2), A) < 1e-15)
       << "no_phantom_coldstart_lag2_kept_A";
+}
+
+TEST(CheckpointHistory,
+     UniformAuxiliaryCheckpointAuthenticatesGroupsKeysShapesAndRollsBackRejectedRestore) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  NativeSystemConfig config;
+  std::size_t cells = 1;
+  for (int axis = 0; axis < kTestDimension; ++axis) {
+    config.shape[axis] = 4;
+    config.lower[axis] = Real(0);
+    config.upper[axis] = Real(1);
+    config.periodicity[axis] = true;
+    cells *= static_cast<std::size_t>(config.shape[axis]);
+  }
+  NativeSystem origin(config);
+  install_execution_lane(origin, "pops.test.checkpoint-history.uniform-origin");
+  const auto input_key = install_uniform_checkpoint_input(origin);
+  origin.stage_auxiliary_input(input_key, std::vector<double>(cells, 3.25));
+  origin.refresh_auxiliary({"uniform-checkpoint", 4, 0, 0, 0, 0, 0,
+                            runtime::system::AuxiliaryEvaluationEvent::initialization});
+
+  const auto image = origin.capture_auxiliary_checkpoint_accepted_state();
+  ASSERT_EQ(image.groups.size(), 1U);
+  ASSERT_EQ(image.components.size(), 1U);
+  ASSERT_EQ(image.providers.size(), 1U);
+  EXPECT_EQ(image.components.front().key, input_key);
+  EXPECT_EQ(image.accepted_generation, 1U);
+  ASSERT_TRUE(image.providers.front().accepted_point.has_value());
+
+  NativeSystem restarted(config);
+  install_execution_lane(restarted, "pops.test.checkpoint-history.uniform-restarted");
+  (void)install_uniform_checkpoint_input(restarted);
+  EXPECT_NO_THROW(restarted.restore_auxiliary_checkpoint_accepted_state(image));
+  EXPECT_EQ(restarted.capture_auxiliary_checkpoint_accepted_state(), image);
+
+  auto rejected = image;
+  rejected.components.front().key.component = "different";
+  EXPECT_THROW(restarted.restore_auxiliary_checkpoint_accepted_state(rejected),
+               std::invalid_argument);
+  EXPECT_EQ(restarted.capture_auxiliary_checkpoint_accepted_state(), image);
 }

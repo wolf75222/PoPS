@@ -25,19 +25,50 @@ _MODEL_OWNER_SENSITIVE_OPS = frozenset(
 )
 
 
-def all_ops(program: Any) -> Any:
-    """Iterate every node recursively, including lazy branch and solver sub-regions."""
-    def walk(value: Any) -> Any:
-        yield value
-        for key in ("cond_block", "body_block", "apply_block", "residual_block",
-                    "true_block", "false_block"):
+_STRUCTURED_BLOCK_KEYS = (
+    "cond_block",
+    "body_block",
+    "apply_block",
+    "residual_block",
+    "true_block",
+    "false_block",
+)
+
+
+def all_ops_with_ancestry(program: Any) -> Any:
+    """Yield ``(node, ancestry)`` recursively with authenticated structured-region ownership."""
+    seen: set[int] = set()
+
+    def walk(value: Any, ancestry: tuple[tuple[int, str], ...]) -> Any:
+        value_id = getattr(value, "id", None)
+        region = getattr(value, "region", None)
+        if type(value_id) is not int or value_id < 0:
+            raise TypeError("Program node identity must be a non-negative exact integer")
+        if value_id in seen:
+            raise ValueError("Program node %d appears in multiple structured regions" % value_id)
+        if type(region) is not int or region < 0:
+            raise TypeError("Program node %d has an invalid structured region" % value_id)
+        if (region == 0) != (not ancestry):
+            raise ValueError(
+                "Program node %d structured ancestry disagrees with region %d"
+                % (value_id, region)
+            )
+        seen.add(value_id)
+        yield value, ancestry
+        for key in _STRUCTURED_BLOCK_KEYS:
             block = value.attrs.get(key)
             if isinstance(block, (list, tuple)):
                 for nested in block:
-                    yield from walk(nested)
+                    yield from walk(nested, ancestry + ((value_id, key),))
 
     for value in program._values:
-        yield from walk(value)
+        yield from walk(value, ())
+
+
+def all_ops(program: Any) -> Any:
+    """Iterate every node recursively, including lazy branch and solver sub-regions."""
+    for value, _ancestry in all_ops_with_ancestry(program):
+        yield value
 
 
 def check_model_owner_dispatch(program: Any, model: Any) -> None:
@@ -250,15 +281,40 @@ def check_schedules_lowerable(program: Any, *, target: str | None = None) -> Non
         schedule.validate_site(clock=value.clock, point=value.point,
                                where="schedule on node %r" % value.name)
         lowering = _lower_schedule_ir(value, schedule)
-        from pops.time._schedule.api import ScheduleTimeline
+        from pops.codegen.program_emit_kernels import _AUX_OUTPUT_OPS
+        from pops.time._schedule.api import (
+            ScheduleComment,
+            ScheduleTimeline,
+            schedule_lowering_cache_required,
+        )
         if target == "system" and lowering.domain.timeline is ScheduleTimeline.AMR_LEVEL:
             raise NotImplementedError(
                 "AMRLevel schedule on node %r requires target='amr_system'" % value.name)
-        if target == "amr_system" and schedule.needs_cache():
+        if (
+            value.op not in _AUX_OUTPUT_OPS
+            and lowering.off.comment is ScheduleComment.SKIP
+        ):
             raise NotImplementedError(
-                "scheduled AMR node %r requires a persistent hierarchy value cache; Hold and "
-                "AccumulateDt remain refused before artifact creation, while Skip/Zero/Error and "
-                "domain-only schedules execute on the AMR clock provider" % value.name)
+                "scheduled scratch node %r uses Skip, but its invocation scratch is cleared before "
+                "the cadence guard and is not prepared accepted transactional state; Skip refuses "
+                "before artifact creation" % value.name
+            )
+        if (
+            target == "amr_system"
+            and schedule_lowering_cache_required(
+                lowering, where="node %r (op '%s')" % (value.name, value.op)
+            )
+            and value.op not in _AUX_OUTPUT_OPS
+        ):
+            raise NotImplementedError(
+                "scheduled AMR scratch node %r requires a persistent hierarchy value cache; "
+                "scratch Hold and AccumulateDt remain refused before artifact creation, while "
+                "field Hold retains its typed ProviderPack" % value.name)
 
 
-__all__ = ["all_ops", "check_model_owner_dispatch", "check_schedules_lowerable"]
+__all__ = [
+    "all_ops",
+    "all_ops_with_ancestry",
+    "check_model_owner_dispatch",
+    "check_schedules_lowerable",
+]

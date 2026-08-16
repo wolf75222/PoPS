@@ -436,17 +436,16 @@ inline std::string exact_rank_ordered_budget_contract(
   const long local_level_count = static_cast<long>(budgets.size());
   if (all_reduce_min(local_level_count, communicator) !=
       all_reduce_max(local_level_count, communicator))
-    throw std::invalid_argument(
-        "prepared AMR tagging budget level count differs between ranks");
+    throw std::invalid_argument("prepared AMR tagging budget level count differs between ranks");
   const std::size_t ranks = static_cast<std::size_t>(communicator.size());
   constexpr std::size_t kFields = 8;
   std::vector<std::uint64_t> gathered;
   long allocation_failure = 0;
   try {
-    gathered.resize(checked_product(
-        checked_product(ranks, budgets.size(),
-                        "prepared AMR tagging rank-budget matrix exceeds size_t"),
-        kFields, "prepared AMR tagging rank-budget matrix exceeds size_t"));
+    gathered.resize(
+        checked_product(checked_product(ranks, budgets.size(),
+                                        "prepared AMR tagging rank-budget matrix exceeds size_t"),
+                        kFields, "prepared AMR tagging rank-budget matrix exceeds size_t"));
   } catch (...) {
     allocation_failure = 1;
   }
@@ -457,10 +456,9 @@ inline std::string exact_rank_ordered_budget_contract(
     for (std::size_t level = 0; level < budgets.size(); ++level) {
       const auto fields = budget_fields(budgets[level]);
       for (std::size_t field = 0; field < fields.size(); ++field) {
-        const std::uint64_t local =
-            static_cast<std::size_t>(communicator.rank()) == source
-                ? static_cast<std::uint64_t>(fields[field])
-                : std::uint64_t{0};
+        const std::uint64_t local = static_cast<std::size_t>(communicator.rank()) == source
+                                        ? static_cast<std::uint64_t>(fields[field])
+                                        : std::uint64_t{0};
         constexpr unsigned kChunkBits = 30;
         constexpr std::uint64_t kChunkMask = (std::uint64_t{1} << kChunkBits) - 1u;
         std::uint64_t exact = 0;
@@ -598,22 +596,32 @@ class PreparedTaggingExecutionPlan {
       throw std::runtime_error("prepared AMR tagging collective execution preflight failed");
 
     Level& level = levels_[level_index];
-    for (Patch& patch : level.patches) {
-      const tagging_detail::PreparedTaggingPatchKernel<Dim> kernel{
-          leaves_.data(),
-          stencils_.data(),
-          refine_ops_.data(),
-          refine_args_.data(),
-          coarsen_ops_.data(),
-          coarsen_args_.data(),
-          patch.leaf_fields.data(),
-          static_cast<std::int32_t>(refine_ops_.size()),
-          static_cast<std::int32_t>(coarsen_ops_.size()),
-          spacing,
-          tagging_detail::PreparedTaggingMaskView<Dim>{patch.scratch.data(), patch.box}};
-      for_each_cell(patch.box, kernel);
+    std::exception_ptr execution_error;
+    try {
+      for (Patch& patch : level.patches) {
+        const tagging_detail::PreparedTaggingPatchKernel<Dim> kernel{
+            leaves_.data(),
+            stencils_.data(),
+            refine_ops_.data(),
+            refine_args_.data(),
+            coarsen_ops_.data(),
+            coarsen_args_.data(),
+            patch.leaf_fields.data(),
+            static_cast<std::int32_t>(refine_ops_.size()),
+            static_cast<std::int32_t>(coarsen_ops_.size()),
+            spacing,
+            tagging_detail::PreparedTaggingMaskView<Dim>{patch.scratch.data(), patch.box}};
+        for_each_cell(patch.box, kernel);
+      }
+      device_fence();
+    } catch (...) {
+      execution_error = std::current_exception();
     }
-    device_fence();
+    if (all_reduce_max(execution_error ? 1L : 0L, communicator_) != 0) {
+      if (communicator_.size() == 1 && execution_error)
+        std::rethrow_exception(execution_error);
+      throw std::runtime_error("prepared AMR tagging kernel failed on another rank");
+    }
 
     long non_finite = 0;
     for (const Patch& patch : level.patches)

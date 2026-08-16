@@ -20,6 +20,7 @@ using pops::BoundaryTopology;
 using pops::Box;
 using pops::EllipticBuildRequest;
 using pops::Extent;
+using pops::ExecutionLane;
 using pops::Face;
 using pops::Geometry;
 using pops::Index;
@@ -88,7 +89,9 @@ CompositeFacPreparationBudget budget() {
 }
 
 template <int Dim>
-CompositeFacBuildRequest<Dim> make_request(CompositeFacPreparationBudget preparation = budget()) {
+CompositeFacBuildRequest<Dim> make_request_with_ratio(
+    const std::array<int, Dim>& ratio_components,
+    CompositeFacPreparationBudget preparation = budget()) {
   Index<Dim> coarse_upper{};
   coarse_upper[0] = 7;
   for (int axis = 1; axis < Dim; ++axis)
@@ -96,7 +99,9 @@ CompositeFacBuildRequest<Dim> make_request(CompositeFacPreparationBudget prepara
   const Box<Dim> coarse_domain{Index<Dim>{}, coarse_upper};
   const Geometry<Dim> coarse_geometry = Geometry<Dim>::from_bounds(
       coarse_domain, coordinates<Dim>(Real(0)), coordinates<Dim>(Real(1)));
-  const Extent<Dim> ratio_extent = integer_extent<Dim>(2);
+  Extent<Dim> ratio_extent{};
+  for (int axis = 0; axis < Dim; ++axis)
+    ratio_extent[axis] = ratio_components[static_cast<std::size_t>(axis)];
   const Geometry<Dim> fine_geometry = coarse_geometry.refine(ratio_extent);
 
   Index<Dim> coarse_left_upper = coarse_upper;
@@ -108,17 +113,17 @@ CompositeFacBuildRequest<Dim> make_request(CompositeFacPreparationBudget prepara
       Box<Dim>{coarse_right_lower, coarse_upper},
   });
 
-  Index<Dim> fine_first_lower{};
-  Index<Dim> fine_first_upper = fine_geometry.domain().hi;
-  fine_first_lower[0] = 4;
-  fine_first_upper[0] = 7;
-  Index<Dim> fine_second_lower{};
-  Index<Dim> fine_second_upper = fine_geometry.domain().hi;
-  fine_second_lower[0] = 8;
-  fine_second_upper[0] = 11;
+  Index<Dim> fine_first_parent_lower{};
+  Index<Dim> fine_first_parent_upper = coarse_upper;
+  fine_first_parent_lower[0] = 2;
+  fine_first_parent_upper[0] = 3;
+  Index<Dim> fine_second_parent_lower{};
+  Index<Dim> fine_second_parent_upper = coarse_upper;
+  fine_second_parent_lower[0] = 4;
+  fine_second_parent_upper[0] = 5;
   const BoxArray<Dim> fine_layout(std::vector<Box<Dim>>{
-      Box<Dim>{fine_first_lower, fine_first_upper},
-      Box<Dim>{fine_second_lower, fine_second_upper},
+      pops::refine(Box<Dim>{fine_first_parent_lower, fine_first_parent_upper}, ratio_extent),
+      pops::refine(Box<Dim>{fine_second_parent_lower, fine_second_parent_upper}, ratio_extent),
   });
 
   Extent<Dim> rank_extents = integer_extent<Dim>(1);
@@ -132,9 +137,6 @@ CompositeFacBuildRequest<Dim> make_request(CompositeFacPreparationBudget prepara
       Distribution<Dim>::partitioned(fine_layout, rank_space, fine_owners);
   const Index<Dim> local_rank = rank_coordinate<Dim>(pops::my_rank());
   const BoxArrayValidationBudget layout_budget{2, 1};
-  std::array<int, Dim> ratio_components{};
-  ratio_components.fill(2);
-
   EllipticBuildRequest<Dim> coarse{coarse_geometry,
                                    coarse_layout,
                                    coarse_distribution,
@@ -156,7 +158,14 @@ CompositeFacBuildRequest<Dim> make_request(CompositeFacPreparationBudget prepara
 }
 
 template <int Dim>
-Real maximum_constant_error(const MultiFab<Dim>& field) {
+CompositeFacBuildRequest<Dim> make_request(CompositeFacPreparationBudget preparation = budget()) {
+  std::array<int, Dim> ratio_components{};
+  ratio_components.fill(2);
+  return make_request_with_ratio<Dim>(ratio_components, preparation);
+}
+
+template <int Dim>
+Real maximum_constant_error(const MultiFab<Dim>& field, const ExecutionLane& lane) {
   Real local_error = Real(0);
   for (std::size_t local = 0; local < field.local_size(); ++local) {
     const auto& fab = field.fab(local);
@@ -181,11 +190,13 @@ Real maximum_constant_error(const MultiFab<Dim>& field) {
       local_error = std::max(local_error, std::abs(host(offset) - Real(1)));
     }
   }
-  return static_cast<Real>(pops::all_reduce_max(static_cast<double>(local_error)));
+  return static_cast<Real>(pops::all_reduce_max(static_cast<double>(local_error), lane));
 }
 
 template <int Dim>
 void expect_partitioned_fac() {
+  const ExecutionLane lane =
+      ExecutionLane::world("pops.test.composite-fac.partitioned:" + std::to_string(Dim));
   pops::CompositeFacOptions options;
   options.max_iters = 40;
   options.fine_sweeps = 4;
@@ -196,9 +207,9 @@ void expect_partitioned_fac() {
   options.coarse_cycles = 192;
   CompositeFacPoisson<Dim> solver(make_request<Dim>(), options, Real(1));
   EXPECT_TRUE(solver.owns_execution_lane());
-  EXPECT_EQ(pops::all_reduce_min(solver.has_remote_same_level_halo() ? 1L : 0L), 1L);
-  EXPECT_EQ(pops::all_reduce_min(solver.has_remote_parent_gather() ? 1L : 0L), 1L);
-  EXPECT_EQ(pops::all_reduce_min(solver.has_remote_fine_restriction() ? 1L : 0L), 1L);
+  EXPECT_EQ(pops::all_reduce_min(solver.has_remote_same_level_halo() ? 1L : 0L, lane), 1L);
+  EXPECT_EQ(pops::all_reduce_min(solver.has_remote_parent_gather() ? 1L : 0L, lane), 1L);
+  EXPECT_EQ(pops::all_reduce_min(solver.has_remote_fine_restriction() ? 1L : 0L, lane), 1L);
   for (int level = 0; level < solver.n_levels(); ++level) {
     solver.rhs_level(level).set_val(Real(1));
     solver.phi_level(level).set_val(Real(0));
@@ -207,13 +218,22 @@ void expect_partitioned_fac() {
   EXPECT_TRUE(report.solved()) << report.reason << " residual=" << report.residual_norm
                                << " reference=" << report.reference_residual_norm;
   EXPECT_LT(report.residual_norm, report.reference_residual_norm);
-  EXPECT_LT(maximum_constant_error(solver.phi_level(0)), Real(0.08));
-  EXPECT_LT(maximum_constant_error(solver.phi_level(1)), Real(0.08));
-  EXPECT_EQ(pops::all_reduce_min(static_cast<long>(report.iters)),
-            pops::all_reduce_max(static_cast<long>(report.iters)));
+  EXPECT_LT(maximum_constant_error(solver.phi_level(0), lane), Real(0.08));
+  EXPECT_LT(maximum_constant_error(solver.phi_level(1), lane), Real(0.08));
+  EXPECT_EQ(pops::all_reduce_min(static_cast<long>(report.iters), lane),
+            pops::all_reduce_max(static_cast<long>(report.iters), lane));
+}
+
+template <int Dim>
+void expect_exact_rank_ratio_prepares(const std::array<int, Dim>& ratio_components) {
+  const ExecutionLane lane =
+      ExecutionLane::world("pops.test.composite-fac.ratio:" + std::to_string(Dim));
+  CompositeFacPoisson<Dim> solver(make_request_with_ratio<Dim>(ratio_components), {}, Real(1));
+  EXPECT_EQ(solver.n_levels(), 2);
 }
 
 void expect_collective_budget_failure() {
+  const ExecutionLane lane = ExecutionLane::world("pops.test.composite-fac.budget");
   CompositeFacPreparationBudget preparation = budget();
   if (pops::my_rank() == 0)
     preparation.local_scratch_cells = 0;
@@ -226,9 +246,9 @@ void expect_collective_budget_failure() {
     rejected = true;
     message = error.what();
   }
-  EXPECT_EQ(pops::all_reduce_min(rejected ? 1L : 0L), 1L);
+  EXPECT_EQ(pops::all_reduce_min(rejected ? 1L : 0L, lane), 1L);
   EXPECT_TRUE(pops::all_ranks_agree_exact_ordered_byte_pairs(
-      {{std::string_view("partitioned-fac-budget-failure"), std::string_view(message)}}));
+      {{std::string_view("partitioned-fac-budget-failure"), std::string_view(message)}}, lane));
 }
 
 int run_partitioned_fac_matrix(int argc, char** argv) {
@@ -241,6 +261,9 @@ int run_partitioned_fac_matrix(int argc, char** argv) {
       expect_partitioned_fac<1>();
       expect_partitioned_fac<2>();
       expect_partitioned_fac<3>();
+      expect_exact_rank_ratio_prepares<1>({3});
+      expect_exact_rank_ratio_prepares<2>({3, 1});
+      expect_exact_rank_ratio_prepares<3>({1, 2, 3});
       expect_collective_budget_failure();
     }
     result = ::testing::Test::HasFailure() ? 1 : 0;

@@ -186,6 +186,30 @@ def _assert_public_patch_geometry(simulation):
     return boxes, physical_bounds
 
 
+def _assert_native_patch_box_binding_is_inclusive(simulation):
+    """Exercise the AMR-only Python/native [lo, hi] adapter through a live hierarchy."""
+    native = simulation._executor._s
+    full_fine_box = ((1, (0, 0), (31, 31)),)
+    native.rebuild_hierarchy(full_fine_box, (0,))
+    assert tuple(native.patch_boxes()) == full_fine_box
+
+    # The last cell is a valid singleton under the inclusive convention.
+    last_cell = ((1, (31, 31), (31, 31)),)
+    native.rebuild_hierarchy(last_cell, (0,))
+    assert tuple(native.patch_boxes()) == last_cell
+
+    # Re-import the native output verbatim: no half-open normalization is permitted.
+    native.rebuild_hierarchy(native.patch_boxes(), (0,))
+    assert tuple(native.patch_boxes()) == last_cell
+
+    with pytest.raises(TypeError, match="native dimension"):
+        native.rebuild_hierarchy(((1, (0,), (31, 31)),), (0,))
+    with pytest.raises(TypeError, match="exact integers"):
+        native.rebuild_hierarchy(((1, (0, 0), (31, True)),), (0,))
+    with pytest.raises(ValueError, match="inverted box"):
+        native.rebuild_hierarchy(((1, (31, 31), (30, 31)),), (0,))
+
+
 def test_public_amr_patch_boxes_are_parallel_to_physical_bounds_and_read_only(
     native_cxx,
     isolated_native_cache,
@@ -234,3 +258,5 @@ def test_public_amr_patch_boxes_are_parallel_to_physical_bounds_and_read_only(
                 dtype=np.float64,
             )
             np.testing.assert_array_equal(actual, expected)
+        if block_count == 1:
+            _assert_native_patch_box_binding_is_inclusive(simulation)

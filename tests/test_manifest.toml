@@ -34,10 +34,11 @@ labels = ["integration", "amr", "medium"]
 name = "test_amr_multiblock_coupled_source"
 sources = ["tests/cpp/integration/amr/test_amr_multiblock_coupled_source.cpp"]
 labels = ["integration", "amr", "medium"]
+mpi_variants = [2]
 
 [[cpp.suite]]
-name = "test_amr_multiblock_imex"
-sources = ["tests/cpp/integration/amr/test_amr_multiblock_imex.cpp"]
+name = "test_amr_multiblock_implicit_transaction"
+sources = ["tests/cpp/integration/amr/test_amr_multiblock_implicit_transaction.cpp"]
 labels = ["integration", "amr", "medium"]
 
 [[cpp.suite]]
@@ -66,9 +67,15 @@ sources = ["tests/cpp/integration/amr/test_amr_program_diffusion.cpp"]
 labels = ["integration", "amr", "medium"]
 
 [[cpp.suite]]
+name = "test_amr_program_embedded_boundary"
+sources = ["tests/cpp/integration/amr/test_amr_program_embedded_boundary.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
 name = "test_amr_program_positivity_floor"
 sources = ["tests/cpp/integration/amr/test_amr_program_positivity_floor.cpp"]
 labels = ["integration", "amr", "medium"]
+mpi_variants = [2]
 
 [[cpp.suite]]
 name = "test_amr_regrid_variable"
@@ -123,6 +130,24 @@ name = "test_mpi_amr_dynamic_active_depth"
 sources = ["tests/cpp/integration/mpi/test_mpi_amr_dynamic_active_depth.cpp"]
 labels = ["backend", "mpi", "medium"]
 mpi_nproc = [1, 2, 4]
+
+[[cpp.suite]]
+name = "test_mpi_cell_temporal_program"
+sources = ["tests/cpp/integration/mpi/test_mpi_cell_temporal_program.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [2]
+
+[[cpp.suite]]
+name = "test_mpi_cell_temporal_program_multibox"
+sources = ["tests/cpp/integration/mpi/test_mpi_cell_temporal_program.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [2]
+
+[[cpp.suite]]
+name = "test_mpi_cell_temporal_program_collective_rollback"
+sources = ["tests/cpp/integration/mpi/test_mpi_cell_temporal_program.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [2]
 
 [[cpp.suite]]
 name = "test_mpi_cell_temporal_program_refusal"
@@ -310,8 +335,8 @@ sources = ["tests/cpp/integration/native_loader/test_amr_compiled_model.cpp"]
 labels = ["integration", "codegen", "native_loader", "compiler", "medium"]
 
 [[cpp.suite]]
-name = "test_amr_imex_native"
-sources = ["tests/cpp/integration/native_loader/test_amr_imex_native.cpp"]
+name = "test_amr_synthetic_program_loader_transaction"
+sources = ["tests/cpp/integration/native_loader/test_amr_synthetic_program_loader_transaction.cpp"]
 labels = ["integration", "codegen", "native_loader", "compiler", "medium"]
 
 [[cpp.suite]]
@@ -433,6 +458,7 @@ labels = ["integration", "runtime", "medium"]
 name = "test_program_context_contract"
 sources = ["tests/cpp/unit/runtime/test_program_context_contract.cpp"]
 labels = ["unit", "runtime", "small"]
+mpi_variants = [2]
 
 [[cpp.suite]]
 name = "test_facade_routing"
@@ -453,6 +479,7 @@ labels = ["integration", "runtime", "medium"]
 name = "test_program_runtime"
 sources = ["tests/cpp/integration/runtime/test_program_runtime.cpp"]
 labels = ["integration", "runtime", "medium"]
+mpi_variants = [2]
 
 [[cpp.suite]]
 name = "test_route_ids"
@@ -525,11 +552,6 @@ name = "test_coupled_fieldsolve"
 sources = ["tests/cpp/unit/elliptic/test_coupled_fieldsolve.cpp"]
 labels = ["unit", "elliptic", "fast"]
 mpi_variants = [2]
-
-[[cpp.suite]]
-name = "test_cut_fraction"
-sources = ["tests/cpp/unit/elliptic/test_cut_fraction.cpp"]
-labels = ["unit", "elliptic", "fast"]
 
 [[cpp.suite]]
 name = "test_elliptic_composite_rhs"
@@ -792,6 +814,12 @@ labels = ["backend", "mpi", "medium"]
 mpi_nproc = [1, 2, 4]
 
 [[cpp.suite]]
+name = "test_mpi_auxiliary_ghost_fill"
+sources = ["tests/cpp/integration/mpi/test_mpi_auxiliary_ghost_fill.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [2, 3]
+
+[[cpp.suite]]
 name = "test_mpi_prepared_amr_ghost_fill"
 sources = ["tests/cpp/integration/mpi/test_mpi_prepared_amr_ghost_fill.cpp"]
 labels = ["backend", "mpi", "amr", "medium"]
@@ -928,6 +956,11 @@ sources = ["tests/cpp/unit/physics/test_coupled_source_stack_limit.cpp"]
 labels = ["unit", "physics", "fast"]
 
 [[cpp.suite]]
+name = "test_generic_inversion_admissibility"
+sources = ["tests/cpp/unit/physics/test_generic_inversion_admissibility.cpp"]
+labels = ["unit", "physics", "fast"]
+
+[[cpp.suite]]
 name = "test_isothermal_vacuum_floor"
 sources = ["tests/cpp/unit/physics/test_isothermal_vacuum_floor.cpp"]
 labels = ["unit", "physics", "fast"]
@@ -951,6 +984,7 @@ labels = ["unit", "runtime", "fast"]
 name = "test_generated_amr_system_block"
 sources = ["tests/cpp/unit/runtime/test_generated_amr_system_block.cpp"]
 labels = ["unit", "runtime", "fast"]
+mpi_variants = [2]
 
 [[cpp.suite]]
 name = "test_coupled_source"
@@ -963,20 +997,10 @@ sources = ["tests/cpp/unit/runtime/test_dense_eig.cpp"]
 labels = ["unit", "runtime", "fast"]
 
 [[cpp.suite]]
-name = "test_disc_domain_mask"
-sources = ["tests/cpp/unit/runtime/test_disc_domain_mask.cpp"]
-labels = ["unit", "runtime", "fast"]
-
-[[cpp.suite]]
 name = "test_prepared_embedded_boundary_nd"
 sources = ["tests/cpp/unit/runtime/test_prepared_embedded_boundary_nd.cpp"]
-labels = ["unit", "runtime", "mesh", "mpi", "fast", "nd"]
-mpi_nproc = [2]
-
-[[cpp.suite]]
-name = "test_eb_transport"
-sources = ["tests/cpp/unit/runtime/test_eb_transport.cpp"]
-labels = ["unit", "runtime", "fast"]
+labels = ["unit", "runtime", "mesh", "fast", "nd"]
+mpi_variants = [2]
 
 [[cpp.suite]]
 name = "test_embedded_boundary_generic"

@@ -4,8 +4,8 @@ The low-level ``pops.bind`` install seam of :class:`pops.runtime._amr_system.Amr
 ``_install_compiled`` (the native / compiled install orchestration) plus its resolved-field-plan
 and aux helpers (``_install_field_plan`` / ``_install_aux``). Split out of ``amr_system`` for the
 500-line cap; mixed into ``AmrSystem``
-via inheritance and operating on ``self._s`` (the native facade), ``self._aux_field_index`` and
-the other AmrSystem methods (``add_equation`` / ``set_density`` / ``set_poisson`` /
+via inheritance and operating on ``self._s`` (the native facade) and the other AmrSystem methods
+(``add_equation`` / ``set_density`` / ``set_poisson`` /
 ``_finish_program_install``).
 """
 
@@ -20,6 +20,55 @@ if TYPE_CHECKING:
     from pops.runtime._amr_system_contract import _AmrSystem
 else:
     _AmrSystem = object
+
+
+def _constant_analytic_program(
+    components: Any,
+    *,
+    native_binary64: Any,
+) -> tuple[list[list[str]], list[list[float]]]:
+    """Lower a uniform source to the canonical scalar postfix ABI."""
+    return (
+        [["constant"] for _ in components],
+        [
+            [native_binary64(value, where="AMR initial source.components[%d]" % index)]
+            for index, value in enumerate(components)
+        ],
+    )
+
+
+def _gaussian_analytic_program(
+    source: Any, *, native_binary64: Any, ranked_gaussian_center: Any
+) -> tuple[list[list[str]], list[list[float]]]:
+    """Lower the resolved Gaussian to the same canonical postfix ABI as all analytic data."""
+    center = ranked_gaussian_center(source, where="AMR Gaussian")
+    if not center:
+        raise ValueError("AMR Gaussian must have an exact native-rank centre")
+    inverse_width = native_binary64(source["inverse_width"], where="AMR Gaussian inverse_width")
+    if not inverse_width > 0.0:
+        raise ValueError("AMR Gaussian inverse_width must be strictly positive")
+    opcodes: list[str] = []
+    literals: list[float] = []
+    for axis, coordinate in enumerate(("x", "y", "z")[: len(center)]):
+        opcodes.extend((coordinate, "constant", "sub", coordinate, "constant", "sub", "mul"))
+        literals.extend((0.0, center[axis], 0.0, 0.0, center[axis], 0.0, 0.0))
+        if axis:
+            opcodes.append("add")
+            literals.append(0.0)
+    opcodes.extend(("constant", "mul", "neg", "exp", "constant", "mul", "constant", "add"))
+    literals.extend(
+        (
+            inverse_width,
+            0.0,
+            0.0,
+            0.0,
+            native_binary64(source["amplitude"], where="AMR Gaussian amplitude"),
+            0.0,
+            native_binary64(source["background"], where="AMR Gaussian background"),
+            0.0,
+        )
+    )
+    return [opcodes], [literals]
 
 
 class _PreparedAmrFieldSolverInstall:
@@ -37,7 +86,6 @@ class _PreparedAmrFieldSolverInstall:
             raise TypeError("native AMR field solver provider route must be non-empty")
         contract = binding.resolution.to_data()["native_contract"]
         routes = self.options["provider_pack"]
-        output = self.options["output_route"]
         hierarchy_policy = self.options["hierarchy_policy"]
         if not isinstance(hierarchy_policy, Mapping) or set(hierarchy_policy) != {
             "policy_id",
@@ -52,9 +100,7 @@ class _PreparedAmrFieldSolverInstall:
             self.slot,
             self.field_plan.identity.token,
             self.options["provider_identity_text"],
-            canonical_bytes(output["owner_identity"]).hex(),
-            output["owner_block"],
-            output["key"],
+            self.field_plan.output_publication_data(),
             [canonical_bytes(route["provider_identity"]).hex() for route in routes],
             [route["owner_block"] for route in routes],
             [route["key"] for route in routes],
@@ -131,10 +177,18 @@ class _PreparedAmrFieldSolverInstall:
             installed[1],
             component_bindings[0],
             component_bindings[1],
-            json.dumps(component_bindings[0]["parameters"], sort_keys=True,
-                       separators=(",", ":"), allow_nan=False),
-            json.dumps(component_bindings[1]["parameters"], sort_keys=True,
-                       separators=(",", ":"), allow_nan=False),
+            json.dumps(
+                component_bindings[0]["parameters"],
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ),
+            json.dumps(
+                component_bindings[1]["parameters"],
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ),
             self.install_plan.artifact.layout_plan.qualified_id,
             binding.facts.layout["topology_identity"],
             json.dumps(strict_field_data(boundary), sort_keys=True, separators=(",", ":")),
@@ -168,11 +222,20 @@ class _PreparedAmrFieldNullspaceInstall:
 class _AmrSystemInstall(_AmrSystem):
     """``pops.bind`` install seam for :class:`AmrSystem` (mixed in; operates on ``self``)."""
 
-    def _install_compiled(self, compiled: Any = None, *, instances: Any = None, params: Any = None,
-                          aux: Any = None, field_plans: Any = None,
-                          bind_schema: Any = None, initial_values: Any = (),
-                          bootstrap_plan: Any = None, amr_transfer: Any = None,
-                          install_plan: Any = None) -> Any:
+    def _install_compiled(
+        self,
+        compiled: Any = None,
+        *,
+        instances: Any = None,
+        params: Any = None,
+        aux: Any = None,
+        field_plans: Any = None,
+        bind_schema: Any = None,
+        initial_values: Any = (),
+        bootstrap_plan: Any = None,
+        amr_transfer: Any = None,
+        install_plan: Any = None,
+    ) -> Any:
         """INTERNAL low-level install seam on the AMR hierarchy (Spec 5 sec.11) -- signature parity
         with ``System._install_compiled``. NOT the public entry point: author the run with
         ``pops.bind(...)``, which dispatches System / AmrSystem and calls this seam.
@@ -182,9 +245,8 @@ class _AmrSystemInstall(_AmrSystem):
         clear actionable error), then lowers to the AMR layer:
 
           - NATIVE install (``compiled=None``): wires each InstallPlan ``CompiledModel`` with
-            ``add_equation``, installs each resolved field plan,
-            the aux inputs (``set_magnetic_field`` / ``set_aux_field``) and each instance's initial
-            density (``set_density``). This is the real AMR add path; a full run is Kokkos-gated.
+            ``add_equation``, installs each resolved field plan, stages exact
+            ``ComponentKey`` ``InputAux`` values, and registers each instance's initial density.
           - COMPILED install (a ``compiled`` handle carrying a time Program, epic ADC-511 / ADC-508 /
             ADC-634): the same wiring, then ``install_program(so_path)`` installs the compiled Program
             on the AMR hierarchy (the .so must export ``pops_install_program_amr``: compile it with
@@ -200,19 +262,21 @@ class _AmrSystemInstall(_AmrSystem):
         @param params canonical block-qualified runtime values resolved by BindSchema. Complete
             per-package vectors are fixed before native closures are built; Program-owned values
             route independently through ``set_program_params``.
-        @param aux dict {field_name: array}: "B_z" -> set_magnetic_field, "T_e" rejected (derived),
-            any other -> set_aux_field on the declaring block.
+        @param aux dict {ComponentKey: array}: declared ``InputAux`` values only.  Derived and
+            field-output components have no upload path.
         @param field_plans resolved compile-time field discretizations keyed by field name.
         """
         # RUNTIME FREEZE (ADC-592): a second install on an already-bound AMR engine is a re-composition
         # and is refused explicitly -- the compiled artifact is bound exactly once.
         from pops.runtime._lifecycle import guard_assembling
+
         guard_assembling(self, "_install_compiled")
         if install_plan is not None:
             from pops.runtime._bound_snapshot import _require_exact_install_inputs
 
             install_plan = _require_exact_install_inputs(
-                self, compiled, instances, field_plans, aux, params, install_plan)
+                self, compiled, instances, field_plans, aux, params, install_plan
+            )
             if bind_schema is not install_plan.artifact.bind_schema:
                 raise ValueError("AMR bind schema must be the exact value from the InstallPlan")
             if bootstrap_plan is not install_plan.bootstrap_plan:
@@ -232,8 +296,7 @@ class _AmrSystemInstall(_AmrSystem):
 
         # (0) EARLY VALIDATION (shared with System._install_compiled): reject a compiled install missing a
         # required declared argument BEFORE any native mutation. Inert (reads arguments() metadata).
-        validate_install_arguments(
-            self, compiled, instances, params, aux, field_plans=field_plans)
+        validate_install_arguments(self, compiled, instances, params, aux, field_plans=field_plans)
         if install_plan is not None:
             from pops.runtime._runtime_authorities import (
                 _validate_shared_interface_implicit_execution_before_install,
@@ -253,7 +316,8 @@ class _AmrSystemInstall(_AmrSystem):
                 raise TypeError(
                     "pops.bind: compiled handle has no .so_path (got %r); pass a compile_problem(...) "
                     "result (target='amr_system'), or compiled=None for a native AMR install (each "
-                    "instance carries its own native model)." % type(compiled).__name__)
+                    "instance carries its own native model)." % type(compiled).__name__
+                )
         # (1) RESOLVED FIELD PLANS first (parity with System: configure native solvers before
         # adding blocks and before install_program). Field identity, provider and hierarchy policy
         # were resolved at compile time; bind only materializes that immutable plan.
@@ -268,9 +332,10 @@ class _AmrSystemInstall(_AmrSystem):
         lowered_instances = {}
         for name, spec in instances.items():
             if not isinstance(spec, Mapping):
-                raise TypeError("pops.bind: instances[%r] must be a mapping "
-                                "(initial/spatial/time/model); got %r"
-                                % (name, type(spec).__name__))
+                raise TypeError(
+                    "pops.bind: instances[%r] must be a mapping "
+                    "(initial/spatial/time/model); got %r" % (name, type(spec).__name__)
+                )
             model = spec.get("model")
             if not isinstance(model, CompiledModel):
                 raise TypeError(
@@ -287,6 +352,7 @@ class _AmrSystemInstall(_AmrSystem):
             bind_schema = getattr(compiled, "bind_schema", None)
         if bind_schema is not None:
             from pops.runtime._install_param_routing import route_block_params
+
             per_block_params = route_block_params(resolved_models, bind_schema, params)
         elif params:
             raise ValueError(
@@ -297,17 +363,20 @@ class _AmrSystemInstall(_AmrSystem):
 
         for name, (model, spatial, time) in lowered_instances.items():
             self.add_equation(
-                name, model, spatial=spatial, time=time,
+                name,
+                model,
+                spatial=spatial,
+                time=time,
                 _bind_params=per_block_params.get(name, []),
             )
 
         for field_plan in field_plans.values():
             self._install_field_method_runtime(field_plan, resolved_models, params)
 
-        # (3) AUX fields: B_z -> set_magnetic_field; named -> set_aux_field. After the blocks exist
-        # (a named aux resolves against the block's declared aux table) and BEFORE install_program.
-        for field_name, field in aux.items():
-            self._install_aux(field_name, field)
+        # (3) Stage authenticated InputAux values only.  The native registry resolves each exact
+        # owner-qualified ComponentKey; there is no block/name or raw-component fallback.
+        for key, field in aux.items():
+            self._install_aux(key, field)
 
         # (4) INITIAL state: register every bootstrap authority before hierarchy materialization.
         # Cell arrays are staged on the native block descriptors here; this does not build the
@@ -320,47 +389,50 @@ class _AmrSystemInstall(_AmrSystem):
             )
         seen_initial = set()
         for subject_id, name, initial, space, centering, method, source in initial_rows:
+            if (
+                not isinstance(subject_id, str)
+                or not subject_id
+                or not isinstance(name, str)
+                or not name
+            ):
+                raise ValueError(
+                    "pops.bind: AMR initial state requires one qualified subject and block"
+                )
+            from pops.runtime._initial_source_lowering import validate_initial_source
+
+            route = validate_initial_source(source, where="AMR initial source")
+            self._s._bind_bootstrap_subject(subject_id, name, route)
             if method == "analytic":
                 from pops.runtime._initial_source_lowering import (
                     native_binary64,
                     ranked_gaussian_center,
-                    validate_initial_source,
                 )
 
-                route = validate_initial_source(source, where="AMR initial source")
                 if route == "constant_field":
-                    components = [
-                        native_binary64(
-                            value, where="AMR initial source.components[%d]" % index,
-                        )
-                        for index, value in enumerate(source["components"])
-                    ]
-                    self._s._register_analytic_constant(
-                        subject_id, name or "", space, centering, components
+                    opcodes, literals = _constant_analytic_program(
+                        source["components"],
+                        native_binary64=native_binary64,
                     )
                 elif route == "gaussian_field":
                     if space != "cell":
-                        raise ValueError(
-                            "pops.bind: gaussian_field requires one cell state"
-                        )
-                    self._s._register_analytic_gaussian(
-                        subject_id, name or "",
-                        ranked_gaussian_center(source, where="AMR Gaussian"),
-                        native_binary64(
-                            source["background"], where="AMR Gaussian background"),
-                        native_binary64(
-                            source["amplitude"], where="AMR Gaussian amplitude"),
-                        native_binary64(
-                            source["inverse_width"], where="AMR Gaussian inverse_width"),
+                        raise ValueError("pops.bind: gaussian_field requires one cell state")
+                    opcodes, literals = _gaussian_analytic_program(
+                        source,
+                        native_binary64=native_binary64,
+                        ranked_gaussian_center=ranked_gaussian_center,
                     )
                 elif route == "analytic_expression":
                     projection = source.get("projection", {})
-                    if space != "cell" or centering != "cell" \
-                            or not isinstance(projection, Mapping) \
-                            or projection.get("projection") != "conservative_cell_average":
+                    if (
+                        space != "cell"
+                        or centering != "cell"
+                        or not isinstance(projection, Mapping)
+                        or projection.get("projection") != "conservative_cell_average"
+                    ):
                         raise ValueError(
                             "pops.bind: analytic_expression requires the cell-centred "
-                            "ConservativeCellAverage projection")
+                            "ConservativeCellAverage projection"
+                        )
                     from pops.runtime._analytic_expression_lowering import (
                         lower_analytic_components,
                     )
@@ -370,18 +442,34 @@ class _AmrSystemInstall(_AmrSystem):
                         frame_id=source.get("frame_id"),
                         bindings=params,
                     )
-                    self._s._register_analytic_expression(
+                    self._s._stage_bootstrap_analytic_state(
                         subject_id,
-                        name or "",
+                        name,
                         space,
                         centering,
-                        [list(opcodes) for opcodes, _ in lowered],
-                        [list(literals) for _, literals in lowered],
+                        "conservative_cell_average",
+                        [list(component_opcodes) for component_opcodes, _ in lowered],
+                        [list(component_literals) for _, component_literals in lowered],
                     )
+                    continue
                 else:
                     raise NotImplementedError(
-                        "pops.bind: no native analytic provider for route %r" % route)
+                        "pops.bind: no native analytic provider for route %r" % route
+                    )
+                self._s._stage_bootstrap_analytic_state(
+                    subject_id,
+                    name,
+                    space,
+                    centering,
+                    "conservative_cell_average",
+                    opcodes,
+                    literals,
+                )
                 continue
+            if route != "bound_level_zero":
+                raise ValueError(
+                    "pops.bind: array initial state requires the bound_level_zero source route"
+                )
             if space == "cell":
                 if name not in instances:
                     raise ValueError("pops.bind: initial state targets unknown block %r" % name)
@@ -390,10 +478,7 @@ class _AmrSystemInstall(_AmrSystem):
                         "pops.bind: multiple initial physical states target block %r" % name
                     )
                 seen_initial.add(name)
-                self._s._bind_bootstrap_block_subject(subject_id, name)
-                self.set_conservative_state(name, initial)
-            elif space in {"face", "node"}:
-                self._s._register_bootstrap_array(subject_id, centering, initial)
+                self._s._stage_bootstrap_array(subject_id, name, space, centering, initial)
             else:
                 raise NotImplementedError(
                     "pops.bind: native bootstrap has no payload carrier for space %r" % space
@@ -417,6 +502,7 @@ class _AmrSystemInstall(_AmrSystem):
         # materialized parent owns its exact shared-face route before the next transition is tagged.
         if install_plan is not None:
             from pops.runtime._runtime_authorities import finalize_runtime_authorities
+
             finalize_runtime_authorities(self, install_plan)
 
         if bootstrap_plan is not None:
@@ -442,15 +528,28 @@ class _AmrSystemInstall(_AmrSystem):
         # and native lifecycle freeze.
         if install_plan is not None:
             from pops.runtime._runtime_authorities import finalize_runtime_authorities
+
             finalize_runtime_authorities(self, install_plan, complete=True)
+
+            from pops.runtime._checkpoint_resource_budget import (
+                install_amr_checkpoint_resource_budget,
+            )
+
+            install_amr_checkpoint_resource_budget(self, install_plan)
 
         # (7) FREEZE (ADC-592): the AMR composition is fully lowered -- build the BoundSnapshot manifest
         # of WHAT was bound (build_amr_snapshot, in _bound_snapshot), then _finalize_bind marks the
         # runtime 'bound' as the LAST act. If this route installed a whole-system Program, its
         # program/cache/ABI identity and transaction plan are retained alongside each block-model hash.
         from pops.runtime._bound_snapshot import build_amr_snapshot
+
         snapshot = build_amr_snapshot(
-            self, compiled, instances, field_plans, aux, params,
+            self,
+            compiled,
+            instances,
+            field_plans,
+            aux,
+            params,
             install_plan=install_plan,
         )
         self._finalize_bind(snapshot)  # freeze (ADC-592): _finalize_bind lives on _LifecycleMixin
@@ -463,35 +562,58 @@ class _AmrSystemInstall(_AmrSystem):
 
         if type(registry) is not ResolvedAMRTransfer:
             raise TypeError("pops.bind: amr_transfer must be an exact AMRTransfer")
-        face_vectors = set()
+        oriented_face_groups: dict[tuple[str, ...], int] = {}
         for entry in registry.entries:
             native = entry.native_materialization
+            # Bootstrap transfer routes own only physical state carriers.  Derived fields and
+            # caches retain their own materializers (for example ``elliptic_solve``) and have no
+            # native transfer capability to lower here.  Registering either as a state route
+            # would fabricate an order/halo pair and make the native exact-route guard reject
+            # its authentic field/cache key.
+            if native.materialization is not NativeAMRMaterializationKind.PHYSICAL:
+                continue
             provider_options = native.provider_identity.to_data().get("options", {})
-            paired = provider_options.get("paired_subjects")
-            if paired is not None:
-                pair = tuple(paired)
-                if len(pair) != 2 or any(not isinstance(value, str) for value in pair):
-                    raise ValueError("pops.bind: paired face provider has an invalid subject manifest")
-                face_vectors.add(pair)
             key = entry.key.to_data()
-            if native.materialization is NativeAMRMaterializationKind.PHYSICAL:
-                options = native.options.to_data()
-                capabilities = native.capabilities.transfer
-                if capabilities is None:
-                    raise ValueError(
-                        "pops.bind: physical AMR descriptor omitted transfer capabilities"
-                    )
-                order, ghost = capabilities.order, capabilities.ghost_depth
-            else:
-                options = native.options.to_data()
-                order, ghost = 1, (0,)
+            options = native.options.to_data()
+            capabilities = native.capabilities.transfer
+            if capabilities is None:
+                raise ValueError(
+                    "pops.bind: physical AMR descriptor omitted transfer capabilities"
+                )
+            order, ghost = capabilities.order, capabilities.ghost_depth
             dimensions = {row.accuracy.dimension for row in entry.requirements}
             if len(dimensions) != 1:
                 raise ValueError("pops.bind: one native transfer route cannot mix dimensions")
             dimension = next(iter(dimensions))
-            ratios = {
-                tuple(row.accuracy.refinement_ratio) for row in entry.requirements
-            }
+            oriented = provider_options.get("oriented_subjects")
+            if oriented is not None:
+                if isinstance(oriented, (str, bytes)):
+                    raise TypeError(
+                        "pops.bind: oriented face provider subjects must be an ordered sequence"
+                    )
+                group = tuple(oriented)
+                if (
+                    len(group) != dimension
+                    or len(set(group)) != dimension
+                    or any(not isinstance(value, str) or not value for value in group)
+                    or key["space"]["name"] != "face"
+                    or key["operation"]["name"] != "prolongation"
+                    or options.get("native_route") != "divergence_preserving_face"
+                ):
+                    raise ValueError(
+                        "pops.bind: oriented face provider requires exactly one ordered "
+                        "divergence-preserving subject per native axis"
+                    )
+                previous_dimension = oriented_face_groups.setdefault(group, dimension)
+                if previous_dimension != dimension:
+                    raise ValueError(
+                        "pops.bind: oriented face provider group mixes native dimensions"
+                    )
+            elif options.get("native_route") == "divergence_preserving_face":
+                raise ValueError(
+                    "pops.bind: divergence-preserving face provider omitted oriented_subjects"
+                )
+            ratios = {tuple(row.accuracy.refinement_ratio) for row in entry.requirements}
             if len(ratios) != 1 or len(next(iter(ratios))) != dimension:
                 raise ValueError(
                     "pops.bind: one native transfer route requires one exact-ranked ratio"
@@ -517,12 +639,13 @@ class _AmrSystemInstall(_AmrSystem):
                 ghost_depth,
                 next(iter(ratios)),
             )
-        for pair in sorted(face_vectors):
-            self._s._register_bootstrap_face_vector(pair)
+        for group in sorted(oriented_face_groups):
+            self._s._register_bootstrap_oriented_face_subjects(group)
 
     def _install_field_plan(self, field: Any, field_plan: Any, *, install_plan: Any = None) -> None:
         """Install the complete resolved AMR field route before native block loaders run."""
         from pops.codegen.field_install import ResolvedFieldInstallPlan
+
         if not isinstance(field_plan, ResolvedFieldInstallPlan):
             raise TypeError("install field_plans must contain ResolvedFieldInstallPlan values")
         if field_plan.name != field or field_plan.target != "amr_system":
@@ -536,17 +659,17 @@ class _AmrSystemInstall(_AmrSystem):
 
         binding = prepared_field_solver_binding_from_data(options["solver_provider"])
         provider = prepared_field_solver_provider_from_identity(binding.provider)
-        provider.install(
-            _PreparedAmrFieldSolverInstall(self._s, field_plan, install_plan), binding
-        )
+        provider.install(_PreparedAmrFieldSolverInstall(self._s, field_plan, install_plan), binding)
         slot = options["provider_slot"]
         faces = options["boundary_faces"]
         if faces is not None:
             self._s.set_field_boundary_plan(
-                slot, [face["type"] for face in faces],
+                slot,
+                [face["type"] for face in faces],
                 [face["alpha"] for face in faces],
                 [face["beta"] for face in faces],
-                [face["value"] for face in faces])
+                [face["value"] for face in faces],
+            )
         dependencies = options["boundary_dependencies"]
         self._s.set_field_boundary_dependencies(
             slot,
@@ -554,7 +677,8 @@ class _AmrSystemInstall(_AmrSystem):
             [row["component"] for row in dependencies["states"]],
             [row["owner_block"] for row in dependencies["fields"]],
             [row["output_key"] for row in dependencies["fields"]],
-            [row["component"] for row in dependencies["fields"]])
+            [row["component"] for row in dependencies["fields"]],
+        )
         self._install_field_nullspace(slot, field_plan)
         nonlinear = options.get("nonlinear")
         if nonlinear is not None:
@@ -572,28 +696,38 @@ class _AmrSystemInstall(_AmrSystem):
         provider = prepared_field_nullspace_provider_from_identity(binding.provider)
         provider.install(_PreparedAmrFieldNullspaceInstall(self._s, slot), binding)
 
-    def _install_field_boundary_parameters(self, field_plan: Any, params: Any, *,
-                                           compiled: Any) -> None:
+    def _install_field_boundary_parameters(
+        self, field_plan: Any, params: Any, *, compiled: Any
+    ) -> None:
         if not field_plan.native_options.get("boundary_kernel_required"):
             return
         if compiled is None:
             raise ValueError(
                 "dynamic AMR field boundaries require a compiled artifact that owns their "
-                "generated device launchers")
+                "generated device launchers"
+            )
         handles = field_plan.provider_parameter_handles("boundary-kernel")
         missing = [handle.qualified_id for handle in handles if handle not in params]
         if missing:
             raise ValueError(
-                "dynamic AMR field boundary parameter pack is incomplete: %s" %
-                ", ".join(missing))
+                "dynamic AMR field boundary parameter pack is incomplete: %s" % ", ".join(missing)
+            )
         from pops.solvers._numeric import native_float
-        values = [native_float(params[handle], where="dynamic AMR field boundary parameter %s" %
-                               handle.qualified_id) for handle in handles]
-        self._s.set_field_boundary_parameters(
-            field_plan.native_options["provider_slot"], values)
+
+        values = [
+            native_float(
+                params[handle],
+                where="dynamic AMR field boundary parameter %s" % handle.qualified_id,
+            )
+            for handle in handles
+        ]
+        self._s.set_field_boundary_parameters(field_plan.native_options["provider_slot"], values)
 
     def _install_field_method_runtime(
-        self, field_plan: Any, models: Any, params: Any,
+        self,
+        field_plan: Any,
+        models: Any,
+        params: Any,
     ) -> None:
         """Offer opaque target resources to the method provider's authenticated installer."""
         from pops.fields import PreparedFieldRuntimeInstallContext
@@ -608,23 +742,6 @@ class _AmrSystemInstall(_AmrSystem):
             params,
         )
 
-    def _install_aux(self, field_name: Any, field: Any) -> Any:
-        """Lower an aux entry on AMR: 'B_z' -> set_magnetic_field; 'T_e' rejected (derived); any
-        other name -> set_aux_field on the block that declares it. Mirror of System._install_aux."""
-        if field_name == "B_z":
-            self.set_magnetic_field(field)
-            return
-        if field_name == "T_e":
-            raise ValueError(
-                "pops.bind: aux 'T_e' is DERIVED from a fluid block, not a static aux "
-                "field; use set_electron_temperature_from(block).")
-        block = None
-        for blk, table in self._aux_field_index.items():
-            if field_name in table:
-                block = blk
-                break
-        if block is None:
-            raise ValueError(
-                "pops.bind: aux field %r is not declared by any installed instance; add the "
-                "instance with a model declaring m.aux_field(%r)." % (field_name, field_name))
-        self.set_aux_field(block, field_name, field)
+    def _install_aux(self, key: Any, field: Any) -> None:
+        """Stage one exact externally supplied ``InputAux`` component."""
+        self.stage_auxiliary_input(key, field)

@@ -1,5 +1,8 @@
 #include <gtest/gtest.h>
 
+#include "amr_tagging_test_authority.hpp"
+#include "explicit_amr_program.hpp"
+#include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace_provider.hpp>
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
@@ -11,6 +14,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -51,6 +55,58 @@ PreparedAmrSystemBlock<Dim> prepare_test_compiled_amr_system_block(
 
 #define add_compiled_model add_test_compiled_model
 #define prepare_compiled_amr_system_block prepare_test_compiled_amr_system_block
+
+namespace pops::runtime::program::detail {
+
+/// Test-only one-shot observer for the private accepted-remap callback.  It restores the real
+/// callback before delegating, so each observation remains within the production transaction and
+/// cannot alter a later regrid.
+template <int Dim>
+struct AmrProgramHistoryRemapCollectiveTestAccess {
+  using context_type = AmrProgramContext<Dim>;
+
+  struct Observation {
+    bool seen = false;
+    AmrProgramHistoryRemapDescriptor descriptor;
+  };
+
+  static void install_one_shot_observer(context_type& context, Observation& observation) {
+    auto& program = context.runtime_state();
+    const auto real_callback = program.history_remap_accepted_;
+    if (!real_callback)
+      throw std::logic_error("history-remap observer requires an installed real callback");
+    program.history_remap_accepted_ = [&context, real_callback, &observation](
+                                          const AmrProgramHistoryRemapDescriptor& descriptor) {
+      if (observation.seen)
+        throw std::logic_error("history-remap observer was invoked more than once");
+      observation.seen = true;
+      observation.descriptor = descriptor;
+      const auto callback = real_callback;
+      context.runtime_state().history_remap_accepted_ = callback;
+      callback(descriptor);
+    };
+  }
+
+  static int active_level(const context_type& context) noexcept { return context.active_level_; }
+
+  static bool has_pending_history(const context_type& context, std::string_view name, int level) {
+    return context.pending_history_remaps_.contains(context.history_key_(std::string(name), level));
+  }
+
+  static const auto& active_expression(const context_type& context,
+                                       const typename context_type::field_type& field) {
+    return context.active_flux_expressions_.at(&field);
+  }
+
+  static const typename context_type::field_type& history_slot(const context_type& context,
+                                                               std::string_view name, int level,
+                                                               int slot) {
+    const auto key = context.history_key_(std::string(name), level);
+    return context.runtime_state().hist_.histories.at(key).at(static_cast<std::size_t>(slot));
+  }
+};
+
+}  // namespace pops::runtime::program::detail
 
 namespace {
 
@@ -114,8 +170,31 @@ AdvectionModel<Dim> advection_model() {
 }
 
 template <int Dim>
-pops::runtime::system::AuxiliaryComponentKey install_field_output(
-    pops::AmrSystem<Dim>& system, const std::string& owner, const std::string& field) {
+struct DiffusiveAdvectionModel : AdvectionModel<Dim> {
+  pops::Real diffusivity_value = pops::Real(0);
+
+  static pops::PreparedProviderIdentity provider_identity() noexcept {
+    return {"test.generated-amr.diffusive-scalar-advection", 1};
+  }
+  void serialize_exact_parameters(pops::ExactContractBuilder& contract) const {
+    AdvectionModel<Dim>::serialize_exact_parameters(contract);
+    contract.scalar(diffusivity_value);
+  }
+  POPS_HD pops::Real diffusivity() const { return diffusivity_value; }
+};
+
+template <int Dim>
+DiffusiveAdvectionModel<Dim> diffusive_advection_model(pops::Real diffusivity) {
+  DiffusiveAdvectionModel<Dim> result;
+  result.law = pops::nd::ScalarAdvection<Dim>::prepare({});
+  result.diffusivity_value = diffusivity;
+  return result;
+}
+
+template <int Dim>
+pops::runtime::system::AuxiliaryComponentKey install_field_output(pops::AmrSystem<Dim>& system,
+                                                                  const std::string& owner,
+                                                                  const std::string& field) {
   using namespace pops::runtime::system;
   AuxiliaryStorageShape<Dim> shape;
   for (int axis = 0; axis < Dim; ++axis)
@@ -156,8 +235,8 @@ class TestFieldNullspaceProvider final : public pops::FieldNullspaceProvider<Dim
       const pops::FieldNullspaceProviderRequest<Dim>&) const override {
     return "tests.field-nullspace.prepared@1";
   }
-  pops::PreparedFieldNullspace<Dim> prepare(
-      const pops::FieldNullspaceProviderRequest<Dim>&) const override {
+  pops::PreparedFieldNullspace<Dim> prepare(const pops::FieldNullspaceProviderRequest<Dim>&,
+                                            const pops::ExecutionLane&) const override {
     throw std::logic_error("test provider is registry-only");
   }
 };
@@ -186,6 +265,40 @@ std::size_t cell_count(const pops::Extent<Dim>& shape) {
   for (int axis = 0; axis < Dim; ++axis)
     result *= static_cast<std::size_t>(shape[axis]);
   return result;
+}
+
+template <int Dim>
+void expect_history_preserved_on_current_coverage(const pops::AmrSystem<Dim>& system,
+                                                  const std::vector<double>& before,
+                                                  const std::vector<double>& after, int level) {
+  const auto* engine = system.engine();
+  ASSERT_NE(engine, nullptr);
+  const auto& layout = engine->hierarchy().layout(static_cast<std::size_t>(level));
+  const pops::Box<Dim>& domain = layout.domain();
+  ASSERT_EQ(after.size(), before.size());
+  std::vector<bool> covered(after.size(), false);
+  for (const pops::Box<Dim>& patch : layout.patches().boxes()) {
+    const std::size_t cells = static_cast<std::size_t>(patch.numPts());
+    for (std::size_t linear = 0; linear < cells; ++linear) {
+      pops::Index<Dim> index{};
+      std::size_t remaining = linear;
+      std::size_t offset = 0;
+      std::size_t stride = 1;
+      for (int axis = 0; axis < Dim; ++axis) {
+        const std::size_t extent = static_cast<std::size_t>(patch.length(axis));
+        index[axis] = patch.lo[axis] + static_cast<int>(remaining % extent);
+        remaining /= extent;
+        offset += static_cast<std::size_t>(index[axis] - domain.lo[axis]) * stride;
+        stride *= static_cast<std::size_t>(domain.length(axis));
+      }
+      ASSERT_LT(offset, covered.size());
+      covered[offset] = true;
+    }
+  }
+  ASSERT_NE(std::find(covered.begin(), covered.end(), true), covered.end());
+  for (std::size_t cell = 0; cell < covered.size(); ++cell)
+    if (covered[cell])
+      EXPECT_EQ(after[cell], before[cell]) << "covered child history cell=" << cell;
 }
 
 template <int Dim>
@@ -366,6 +479,7 @@ TEST(GeneratedAmrSystemBlock, PreparesOneExactNativePackageImage) {
   EXPECT_EQ(prepared.name, "tracer");
   EXPECT_EQ(prepared.ncomp, 1);
   EXPECT_EQ(prepared.provider_components, 0);
+  EXPECT_EQ(prepared.reconstruction_order, 2);
   EXPECT_EQ(prepared.substeps, 2);
   EXPECT_EQ(prepared.stride, 3);
   EXPECT_EQ(prepared.time_route, "explicit");
@@ -373,12 +487,16 @@ TEST(GeneratedAmrSystemBlock, PreparesOneExactNativePackageImage) {
   EXPECT_FALSE(prepared.collective_contract.empty());
   EXPECT_NE(prepared.provider_identity.find(".nd/" + std::to_string(Dim) + "/"), std::string::npos);
   EXPECT_FALSE(prepared.staircase_provider_identity.empty());
-  if constexpr (Dim == 2)
-    EXPECT_FALSE(prepared.cut_cell_provider_identity.empty());
-  else
-    EXPECT_TRUE(prepared.cut_cell_provider_identity.empty());
+  EXPECT_FALSE(prepared.cut_cell_provider_identity.empty());
   for (int axis = 0; axis < Dim; ++axis)
     EXPECT_EQ(prepared.ghosts[axis], 2);
+
+  const auto weno = pops::prepare_compiled_amr_system_block<Dim>(
+      "weno-tracer", advection_model<Dim>(), "weno5", "rusanov", "conservative", "explicit", 1.4, 1,
+      1, 0.0, static_cast<double>(pops::kWenoEpsilon), false, "tests.tracer/physical_flux");
+  EXPECT_EQ(weno.reconstruction_order, 5);
+  for (int axis = 0; axis < Dim; ++axis)
+    EXPECT_EQ(weno.ghosts[axis], 3);
 }
 
 TEST(GeneratedAmrSystemBlock, PackageContractAuthenticatesPhysicalModelParameters) {
@@ -459,8 +577,9 @@ TEST(GeneratedAmrSystemBlock, FacadeRetainsAndExecutesPreparedRootLevel) {
   constexpr int Dim = pops::kNativeDimension;
   pops::AmrSystemConfig<Dim> config;
   for (int axis = 0; axis < Dim; ++axis)
-    config.shape[axis] = 8;
+    config.shape[axis] = 16;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/facade-root-level");
   ASSERT_EQ(system.n_blocks(), 0);
 
   system.install_block_state_route("tracer", "state/tracer");
@@ -488,12 +607,29 @@ TEST(GeneratedAmrSystemBlock, FacadeRetainsAndExecutesPreparedRootLevel) {
   EXPECT_EQ(&system.prepared_amr_level_evaluation(0), &evaluation);
 }
 
+TEST(GeneratedAmrSystemBlock, VariableNamesReadAuthenticatedPreparedBlockMetadata) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 8;
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/variable-names");
+  system.install_block_state_route("tracer", "state/tracer");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+
+  EXPECT_EQ(system.variable_names("tracer", "conservative"), (std::vector<std::string>{"u"}));
+  EXPECT_EQ(system.variable_names("tracer", "primitive"), (std::vector<std::string>{"u"}));
+  EXPECT_THROW((void)system.variable_names("missing", "conservative"), std::runtime_error);
+  EXPECT_THROW((void)system.variable_names("tracer", "invalid"), std::invalid_argument);
+}
+
 TEST(GeneratedAmrSystemBlock, RegridRebuildsExactFineGhostProvidersAndInvalidatesLedger) {
   constexpr int Dim = pops::kNativeDimension;
   pops::AmrSystemConfig<Dim> config;
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/regrid-ghost-providers");
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
@@ -520,6 +656,7 @@ TEST(GeneratedAmrSystemBlock,
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/embedded-boundary-levels");
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
   EXPECT_THROW(
@@ -576,7 +713,7 @@ TEST(GeneratedAmrSystemBlock,
   EXPECT_NEAR(system.composite_reduce("tracer", "sum", 0, {0, 1}), initial_mass, 1.0e-12);
 }
 
-TEST(GeneratedAmrSystemBlock, CutCellCapabilityIsExactRankedAndFailsBeforeMutation) {
+TEST(GeneratedAmrSystemBlock, CutCellCapabilityExecutesAtExactRank) {
   constexpr int Dim = pops::kNativeDimension;
   pops::AmrSystemConfig<Dim> config;
   config.level_count = 1;
@@ -586,21 +723,34 @@ TEST(GeneratedAmrSystemBlock, CutCellCapabilityIsExactRankedAndFailsBeforeMutati
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/cut-cell-exact-rank");
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
-  if constexpr (Dim == 2) {
-    EXPECT_NO_THROW(
-        system.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.5, 0.0}, "cutcell"));
-    system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
-    EXPECT_EQ(system.effective_options_report().eb.geometry_mode, "cutcell");
-    EXPECT_NO_THROW((void)system.evaluate_prepared_amr_level(point<Dim>(0)));
-  } else {
-    EXPECT_THROW(
-        system.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.5, 0.0}, "cutcell"),
-        std::invalid_argument);
-    EXPECT_NO_THROW(
-        system.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.5, 0.0}, "staircase"));
-    EXPECT_EQ(system.effective_options_report().eb.geometry_mode, "staircase");
+  EXPECT_NO_THROW(
+      system.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.5, 0.0}, "cutcell"));
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  EXPECT_EQ(system.effective_options_report().eb.geometry_mode, "cutcell");
+  EXPECT_NO_THROW((void)system.evaluate_prepared_amr_level(point<Dim>(0)));
+}
+
+TEST(GeneratedAmrSystemBlock, DiffusiveEmbeddedRoutesRefuseWithoutFaceGeometry) {
+  constexpr int Dim = pops::kNativeDimension;
+  for (const std::string mode : {"staircase", "cutcell"}) {
+    pops::AmrSystemConfig<Dim> config;
+    config.level_count = 1;
+    config.transition_ratios.clear();
+    config.transition_buffers.clear();
+    config.transition_lookaheads.clear();
+    for (int axis = 0; axis < Dim; ++axis)
+      config.shape[axis] = 8;
+    pops::AmrSystem<Dim> system(config);
+    pops::test::install_amr_runtime_authority(
+        system, "tests.generated-amr/diffusive-embedded-refusal/" + mode);
+    system.install_block_state_route("diffusive", "state/diffusive");
+    pops::add_compiled_model<Dim>(system, "diffusive", diffusive_advection_model<Dim>(0.125));
+    system.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.5, 0.0}, mode);
+    system.set_conservative_state("diffusive", std::vector<double>(cell_count(config.shape), 1.0));
+    EXPECT_THROW((void)system.evaluate_prepared_amr_level(point<Dim>(0)), std::invalid_argument);
   }
 }
 
@@ -612,6 +762,8 @@ TEST(GeneratedAmrSystemBlock, EmbeddedBoundaryAuthoringRejectsDivergentMpiInputB
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system,
+                                            "tests.generated-amr/embedded-boundary-authoring");
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
 
@@ -630,6 +782,8 @@ TEST(GeneratedAmrSystemBlock, ProgramContextOwnsOneExactHierarchyTensorAuthority
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system,
+                                            "tests.generated-amr/hierarchy-tensor-authority");
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
@@ -644,43 +798,37 @@ TEST(GeneratedAmrSystemBlock, ProgramContextOwnsOneExactHierarchyTensorAuthority
     context->configure_hierarchy_tensor_solver(
         0, 1, std::string(pops::runtime::program::tensor_elliptic_detail::kCompositeTensorProvider),
         "test.generated-amr.tensor-plan",
-        std::string(
-            pops::runtime::program::tensor_elliptic_detail::kScalarTensorEllipticRank2Contract),
+        std::string(pops::runtime::program::tensor_elliptic_detail::kScalarTensorEllipticContract),
         slots, "pops.tensor-elliptic.solution", options);
   };
 
-  if constexpr (Dim == 2) {
-    ASSERT_NO_THROW(configure());
-    EXPECT_FALSE(context->uses_prepared_krylov_fallback());
-    pops::MultiFab<Dim>* first_solution = &context->hierarchy_solution();
-    ASSERT_NO_THROW(configure());
-    EXPECT_EQ(&context->hierarchy_solution(), first_solution);
+  ASSERT_NO_THROW(configure());
+  EXPECT_FALSE(context->uses_prepared_krylov_fallback());
+  pops::MultiFab<Dim>* first_solution = &context->hierarchy_solution();
+  ASSERT_NO_THROW(configure());
+  EXPECT_EQ(&context->hierarchy_solution(), first_solution);
 
-    context->for_each_program_resource_level([&](int) {
-      pops::MultiFab<Dim> fallback = context->rhs_scratch_like(context->state(0));
-      for (int row = 0; row < Dim; ++row)
-        for (int column = 0; column < Dim; ++column)
-          context
-              ->assembly_target(
-                  fallback,
-                  pops::runtime::program::tensor_elliptic_detail::coefficient_slot(row, column))
-              .set_val(row == column ? pops::Real(1) : pops::Real(0));
-      context->assembly_target(fallback, "pops.tensor-elliptic.rhs").set_val(pops::Real(0));
-      context->assembly_target(fallback, "pops.tensor-elliptic.flux").set_val(pops::Real(0));
-      context->stage_linear_initial_guess();
-      EXPECT_EQ(&context->assembly_source(fallback, "pops.tensor-elliptic.solution"),
-                &context->hierarchy_solution());
-      EXPECT_THROW((void)context->assembly_target(fallback, "undeclared"), std::invalid_argument);
-    });
+  context->for_each_program_resource_level([&](int) {
+    pops::MultiFab<Dim> fallback = context->rhs_scratch_like(context->state(0));
+    for (int row = 0; row < Dim; ++row)
+      for (int column = 0; column < Dim; ++column)
+        context
+            ->assembly_target(
+                fallback,
+                pops::runtime::program::tensor_elliptic_detail::coefficient_slot(row, column))
+            .set_val(row == column ? pops::Real(1) : pops::Real(0));
+    context->assembly_target(fallback, "pops.tensor-elliptic.rhs").set_val(pops::Real(0));
+    context->assembly_target(fallback, "pops.tensor-elliptic.flux").set_val(pops::Real(0));
+    context->stage_linear_initial_guess();
+    EXPECT_EQ(&context->assembly_source(fallback, "pops.tensor-elliptic.solution"),
+              &context->hierarchy_solution());
+    EXPECT_THROW((void)context->assembly_target(fallback, "undeclared"), std::invalid_argument);
+  });
 
-    pops::SolveOutcome outcome =
-        context->solve_hierarchy_tensor(0, 1, pops::Real(1.0e-8), pops::Real(0), 8);
-    ASSERT_TRUE(outcome.report().solved_value_available()) << outcome.report().reason;
-    EXPECT_TRUE(outcome.consume(pops::SolveConsumption::kAccept).solved());
-  } else {
-    EXPECT_ANY_THROW(configure());
-    EXPECT_THROW((void)context->uses_prepared_krylov_fallback(), std::logic_error);
-  }
+  pops::SolveOutcome outcome =
+      context->solve_hierarchy_tensor(0, 1, pops::Real(1.0e-8), pops::Real(0), 8);
+  ASSERT_TRUE(outcome.report().solved_value_available()) << outcome.report().reason;
+  EXPECT_TRUE(outcome.consume(pops::SolveConsumption::kAccept).solved());
 }
 
 TEST(GeneratedAmrSystemBlock, ProgramContextEvaluatesExactStageStateWithoutPublishingIt) {
@@ -689,6 +837,7 @@ TEST(GeneratedAmrSystemBlock, ProgramContextEvaluatesExactStageStateWithoutPubli
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/exact-stage-state");
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
@@ -716,12 +865,174 @@ TEST(GeneratedAmrSystemBlock, ProgramContextEvaluatesExactStageStateWithoutPubli
   EXPECT_EQ(system.prepared_amr_level_evaluation(0).point.stage, 7);
 }
 
+TEST(GeneratedAmrSystemBlock, RhsGroupPrevalidatesAndPublishesFullAndFluxRoundsAtomically) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 8;
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/rhs-group-atomic");
+  system.install_block_state_route("tracer", "state/tracer");
+  system.install_block_state_route("peer", "state/peer");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  pops::add_compiled_model<Dim>(system, "peer", advection_model<Dim>());
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  system.set_conservative_state("peer", std::vector<double>(cell_count(config.shape), 3.0));
+  (void)system.engine();
+  system.set_program_block_map({0, 1});
+
+  auto context = pops::runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("test-rhs-group-clock");
+  context->begin_step(0.01);
+  pops::MultiFab<Dim> stage = context->scratch_state_like(context->state(0));
+  stage.set_val(pops::Real(2));
+
+  pops::MultiFab<Dim> full = context->rhs_scratch_like(stage);
+  pops::MultiFab<Dim> grouped_full = context->rhs_scratch_like(stage);
+  context->rhs_into(0, stage, full, 11);
+  context->rhs_group(12, {{0, &stage, &grouped_full, 13, 0}});
+  EXPECT_EQ(pops::difference_sum_sq_all_local(full, grouped_full), pops::Real(0));
+
+  pops::MultiFab<Dim> flux = context->rhs_scratch_like(stage);
+  pops::MultiFab<Dim> grouped_flux = context->rhs_scratch_like(stage);
+  context->neg_div_flux_default_into(0, stage, flux, 14);
+  context->rhs_group(15, {{0, &stage, &grouped_flux, 16, 1}});
+  EXPECT_EQ(pops::difference_sum_sq_all_local(flux, grouped_flux), pops::Real(0));
+
+  pops::MultiFab<Dim> peer_stage = context->scratch_state_like(context->state(1));
+  peer_stage.set_val(pops::Real(4));
+  pops::MultiFab<Dim> peer_flux = context->rhs_scratch_like(peer_stage);
+  pops::MultiFab<Dim> grouped_first = context->rhs_scratch_like(stage);
+  pops::MultiFab<Dim> grouped_second = context->rhs_scratch_like(peer_stage);
+  context->neg_div_flux_default_into(1, peer_stage, peer_flux, 17);
+  context->rhs_group(
+      18, {{0, &stage, &grouped_first, 19, 0}, {1, &peer_stage, &grouped_second, 20, 1}});
+  EXPECT_EQ(pops::difference_sum_sq_all_local(full, grouped_first), pops::Real(0));
+  EXPECT_EQ(pops::difference_sum_sq_all_local(peer_flux, grouped_second), pops::Real(0));
+
+  const auto published_point = system.prepared_amr_level_evaluation(0).point;
+  const auto published_epoch = system.prepared_amr_level_evaluation(0).topology_epoch;
+  const auto published_generation =
+      system.prepared_amr_level_evaluation(0).materialization_generation;
+  ASSERT_NE(system.prepared_amr_level_evaluation_if_present(0), nullptr);
+
+  // The first request prepares successfully.  The second has a valid grouped request shape and a
+  // distinct runtime block, but its state cannot be staged into that block's exact live storage.
+  // It therefore fails after the first detached evaluation and must not publish either result.
+  pops::MultiFab<Dim> malformed_peer(peer_stage.layout(), peer_stage.distribution(),
+                                     peer_stage.local_rank(), 2, peer_stage.ghosts());
+  malformed_peer.set_val(pops::Real(5));
+  pops::MultiFab<Dim> malformed_output = context->rhs_scratch_like(malformed_peer);
+  pops::MultiFab<Dim> first_late_output = context->rhs_scratch_like(stage);
+  first_late_output.set_val(pops::Real(31));
+  malformed_output.set_val(pops::Real(37));
+  EXPECT_THROW(context->rhs_group(21, {{0, &stage, &first_late_output, 22, 0},
+                                       {1, &malformed_peer, &malformed_output, 23, 0}}),
+               std::exception);
+  EXPECT_EQ(pops::reduce_min_local(first_late_output), pops::Real(31));
+  EXPECT_EQ(pops::reduce_max_local(first_late_output), pops::Real(31));
+  EXPECT_EQ(pops::reduce_min_local(malformed_output), pops::Real(37));
+  EXPECT_EQ(pops::reduce_max_local(malformed_output), pops::Real(37));
+  const auto& published_after_failure = system.prepared_amr_level_evaluation(0);
+  EXPECT_EQ(published_after_failure.point.stage, published_point.stage);
+  EXPECT_EQ(published_after_failure.point.tick, published_point.tick);
+  EXPECT_EQ(published_after_failure.topology_epoch, published_epoch);
+  EXPECT_EQ(published_after_failure.materialization_generation, published_generation);
+  EXPECT_NE(system.prepared_amr_level_evaluation_if_present(0), nullptr);
+
+  // Exercise the same late-failure path while a real hierarchy attempt owns the active flux
+  // registry.  The successful two-block round makes reflux bases visible to the attempt; the
+  // following later failure must leave its sentinels and the successful published evaluation intact.
+  pops::MultiFab<Dim> active_first = context->rhs_scratch_like(stage);
+  pops::MultiFab<Dim> active_second = context->rhs_scratch_like(peer_stage);
+  pops::MultiFab<Dim> active_failure_first = context->rhs_scratch_like(stage);
+  pops::MultiFab<Dim> active_failure_second = context->rhs_scratch_like(malformed_peer);
+  context->install([](double) {}, context);
+  system.set_program_block_map({0, 1});
+  using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
+  system.install_prepared_amr_program_flux_expression_budget(
+      "tests.generated-amr/rhs-group-atomic@1", std::vector<FluxBudget>(2, FluxBudget{1, 1}), 0, 0);
+  context->advance_hierarchy(0.01, [&](double) {
+    context->rhs_group(
+        30, {{0, &stage, &active_first, 31, 0}, {1, &peer_stage, &active_second, 32, 1}});
+    active_failure_first.set_val(pops::Real(41));
+    active_failure_second.set_val(pops::Real(43));
+    EXPECT_THROW(context->rhs_group(33, {{0, &stage, &active_failure_first, 34, 0},
+                                         {1, &malformed_peer, &active_failure_second, 35, 0}}),
+                 std::exception);
+    EXPECT_EQ(pops::reduce_min_local(active_failure_first), pops::Real(41));
+    EXPECT_EQ(pops::reduce_max_local(active_failure_first), pops::Real(41));
+    EXPECT_EQ(pops::reduce_min_local(active_failure_second), pops::Real(43));
+    EXPECT_EQ(pops::reduce_max_local(active_failure_second), pops::Real(43));
+  });
+  EXPECT_EQ(system.prepared_amr_level_evaluation(0).point.stage, 31);
+  EXPECT_NE(system.prepared_amr_level_evaluation_if_present(0), nullptr);
+
+  pops::MultiFab<Dim> first_output = context->rhs_scratch_like(stage);
+  pops::MultiFab<Dim> second_output = context->rhs_scratch_like(stage);
+  first_output.set_val(pops::Real(11));
+  second_output.set_val(pops::Real(13));
+  // The second request maps to the already selected runtime block. The complete group must reject
+  // this before evaluating or publishing the first request's residual/flux metadata.
+  EXPECT_THROW(context->rhs_group(
+                   24, {{0, &stage, &first_output, 25, 0}, {0, &stage, &second_output, 26, 1}}),
+               std::exception);
+  EXPECT_EQ(pops::reduce_min_local(first_output), pops::Real(11));
+  EXPECT_EQ(pops::reduce_max_local(first_output), pops::Real(11));
+  EXPECT_EQ(pops::reduce_min_local(second_output), pops::Real(13));
+  EXPECT_EQ(pops::reduce_max_local(second_output), pops::Real(13));
+  EXPECT_EQ(system.prepared_amr_level_evaluation(0).point.stage, 31);
+
+  if (pops::n_ranks() > 1) {
+    pops::MultiFab<Dim> divergent_output = context->rhs_scratch_like(stage);
+    divergent_output.set_val(pops::Real(17));
+    // A rank-local rate identity is otherwise valid, but the collective request contract must
+    // reject the divergent group before either rank evaluates or publishes its output.
+    const int divergent_rate = pops::my_rank() == 0 ? 28 : 29;
+    EXPECT_THROW(context->rhs_group(27, {{0, &stage, &divergent_output, divergent_rate, 0}}),
+                 std::exception);
+    EXPECT_EQ(pops::reduce_min_local(divergent_output), pops::Real(17));
+    EXPECT_EQ(pops::reduce_max_local(divergent_output), pops::Real(17));
+    EXPECT_EQ(system.prepared_amr_level_evaluation(0).point.stage, 31);
+  }
+
+  // In a fresh active attempt, consume the peer block's one authenticated basis through the
+  // singular path. Both grouped detached evaluations then succeed; block zero's grouped basis
+  // succeeds, while block one's grouped basis exceeds its bound during flux-basis preparation.
+  // The detached registry must not be published, so block zero keeps no published evaluation and
+  // neither grouped output may leave its sentinel value.
+  pops::MultiFab<Dim> seeded_peer_flux = context->rhs_scratch_like(peer_stage);
+  pops::MultiFab<Dim> flux_failure_first = context->rhs_scratch_like(stage);
+  pops::MultiFab<Dim> flux_failure_second = context->rhs_scratch_like(peer_stage);
+  pops::MultiFab<Dim> flux_registry_recovery = context->rhs_scratch_like(stage);
+  context->advance_hierarchy(0.01, [&](double) {
+    context->rhs_into(1, peer_stage, seeded_peer_flux, 36);
+    flux_failure_first.set_val(pops::Real(47));
+    flux_failure_second.set_val(pops::Real(53));
+    EXPECT_THROW(context->rhs_group(37, {{0, &stage, &flux_failure_first, 38, 0},
+                                         {1, &peer_stage, &flux_failure_second, 39, 1}}),
+                 std::exception);
+    EXPECT_EQ(pops::reduce_min_local(flux_failure_first), pops::Real(47));
+    EXPECT_EQ(pops::reduce_max_local(flux_failure_first), pops::Real(47));
+    EXPECT_EQ(pops::reduce_min_local(flux_failure_second), pops::Real(53));
+    EXPECT_EQ(pops::reduce_max_local(flux_failure_second), pops::Real(53));
+    EXPECT_EQ(system.prepared_amr_level_evaluation_if_present(0), nullptr);
+    // If the failed detached registry had escaped, block zero would already have consumed its
+    // bound of one and this recovery basis would be refused before it could publish.
+    context->rhs_group(40, {{0, &stage, &flux_registry_recovery, 41, 0}});
+    EXPECT_EQ(pops::difference_sum_sq_all_local(full, flux_registry_recovery), pops::Real(0));
+    EXPECT_EQ(system.prepared_amr_level_evaluation(0).point.stage, 41);
+  });
+  EXPECT_EQ(system.prepared_amr_level_evaluation(0).point.stage, 41);
+}
+
 TEST(GeneratedAmrSystemBlock, RegistersOnlyExactRankedNullspaceProviders) {
   constexpr int Dim = pops::kNativeDimension;
   pops::AmrSystemConfig<Dim> config;
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/nullspace-registry");
   system.register_field_nullspace_provider(std::make_shared<TestFieldNullspaceProvider<Dim>>());
   EXPECT_THROW(
       system.register_field_nullspace_provider(std::make_shared<TestFieldNullspaceProvider<Dim>>()),
@@ -738,6 +1049,8 @@ TEST(GeneratedAmrSystemBlock, DefaultFieldPublishesOnlyAfterSolveOutcomeAcceptan
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system,
+                                            "tests.generated-amr/default-field-publication");
   system.set_poisson();
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
@@ -769,11 +1082,13 @@ TEST(GeneratedAmrSystemBlock, NamedFieldConsumesExactStageWithoutPublishingState
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/named-field-stage");
   const pops::AmrFieldHierarchyPolicyAuthority hierarchy{
       "pops.field-hierarchy.level-local", 1, {"pops.field-hierarchy.options.empty@1", {}}};
   system.set_field_solver_plan("field/tracer", "test.named-field-plan", "test.named-field",
-                               "test.aux-owner", "tracer", "phi", {"test.rhs"}, {"tracer"},
-                               {"charge"}, {1.0}, "geometric_mg", hierarchy,
+                               "test.aux-owner", "tracer", "phi",
+                               {{"test.aux-owner", "field", "phi", "potential"}}, 1, {"test.rhs"},
+                               {"tracer"}, {"charge"}, {1.0}, "geometric_mg", hierarchy,
                                pops::geometric_mg_amr_field_solver_options(
                                    pops::GeometricMgOptions{}, pops::CompositeFacOptions{}));
   system.install_block_state_route("tracer", "state/tracer");
@@ -781,7 +1096,7 @@ TEST(GeneratedAmrSystemBlock, NamedFieldConsumesExactStageWithoutPublishingState
   const auto output_key = install_field_output(system, "test.aux-owner", "phi");
   system.register_elliptic_field("tracer", "phi", {output_key}, 1);
   system.set_block_elliptic_field(
-      "tracer", "phi",
+      "tracer", "phi", "test.generated-amr.named-field.rhs.zero@1",
       [](const pops::MultiFab<Dim>&, pops::MultiFab<Dim>& rhs) { rhs.set_val(pops::Real(0)); });
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
   system.set_program_block_map({0});
@@ -803,17 +1118,20 @@ TEST(GeneratedAmrSystemBlock, NamedFieldConsumesExactStageWithoutPublishingState
 
 TEST(GeneratedAmrSystemBlock,
      DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance) {
+  pops::comm_init();
   constexpr int Dim = pops::kNativeDimension;
   RuntimeFieldBoundaryProbe<Dim>::reset();
   pops::AmrSystemConfig<Dim> config;
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/dynamic-field-boundary");
   const pops::AmrFieldHierarchyPolicyAuthority hierarchy{
       "pops.field-hierarchy.composite", 1, {"pops.field-hierarchy.options.empty@1", {}}};
   system.set_field_solver_plan("field/tracer", "test.dynamic-field-plan", "test.dynamic-field",
-                               "test.aux-owner", "tracer", "phi", {"test.rhs"}, {"tracer"},
-                               {"charge"}, {1.0}, "geometric_mg", hierarchy,
+                               "test.aux-owner", "tracer", "phi",
+                               {{"test.aux-owner", "field", "phi", "potential"}}, 1, {"test.rhs"},
+                               {"tracer"}, {"charge"}, {1.0}, "geometric_mg", hierarchy,
                                pops::geometric_mg_amr_field_solver_options(
                                    pops::GeometricMgOptions{}, pops::CompositeFacOptions{}));
   system.set_field_reaction("field/tracer", 50.0);
@@ -826,7 +1144,7 @@ TEST(GeneratedAmrSystemBlock,
   const auto output_key = install_field_output(system, "test.aux-owner", "phi");
   system.register_elliptic_field("tracer", "phi", {output_key}, 1);
   system.set_block_elliptic_field(
-      "tracer", "phi",
+      "tracer", "phi", "test.generated-amr.dynamic-field.rhs.one@1",
       [](const pops::MultiFab<Dim>&, pops::MultiFab<Dim>& rhs) { rhs.set_val(pops::Real(1)); });
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
   publish_centered_fine_level(system);
@@ -873,6 +1191,8 @@ TEST(GeneratedAmrSystemBlock, CompositeFieldInstallsCoverageAwareNullspaceOnEver
     config.periodicity[axis] = true;
   }
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system,
+                                            "tests.generated-amr/composite-field-nullspace");
   system.set_poisson();
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
@@ -898,21 +1218,138 @@ TEST(GeneratedAmrSystemBlock, CompositeFieldInstallsCoverageAwareNullspaceOnEver
             cell_count(fine_shape));
 }
 
+TEST(GeneratedAmrSystemBlock, BootstrapRecomputeHelmholtzAfterCreateLevel) {
+  constexpr int Dim = pops::kNativeDimension;
+  constexpr const char* state_route = "tests.generated-amr/bootstrap-helmholtz/state";
+  pops::AmrSystemConfig<Dim> config;
+  config.level_count = 2;
+  config.regrid_every = 0;
+  config.explicit_bootstrap = true;
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = 16;
+    config.periodicity[axis] = true;
+    config.coarse_max_grid[axis] = 8;
+    config.transition_buffers.front()[axis] = 1;
+    config.transition_lookaheads.front()[axis] = 1;
+  }
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system,
+                                            "tests.generated-amr/bootstrap-helmholtz-runtime");
+  const pops::AmrFieldHierarchyPolicyAuthority hierarchy{
+      "pops.field-hierarchy.composite", 1, {"pops.field-hierarchy.options.empty@1", {}}};
+  system.set_field_solver_plan("field/tracer", "test.bootstrap-helmholtz.plan",
+                               "test.bootstrap-helmholtz", "test.aux-owner", "tracer", "phi",
+                               {{"test.aux-owner", "field", "phi", "potential"}}, 1, {"test.rhs"},
+                               {"tracer"}, {"charge"}, {1.0}, "geometric_mg", hierarchy,
+                               pops::geometric_mg_amr_field_solver_options(
+                                   pops::GeometricMgOptions{}, pops::CompositeFacOptions{}));
+  system.set_field_reaction("field/tracer", 1.0);
+  system.install_block_state_route("tracer", state_route);
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  const auto output_key = install_field_output(system, "test.aux-owner", "phi");
+  system.register_elliptic_field("tracer", "phi", {output_key}, 1);
+  system.set_block_elliptic_field(
+      "tracer", "phi", "test.generated-amr.bootstrap-helmholtz.rhs.rho@1",
+      [](const pops::MultiFab<Dim>& state, pops::MultiFab<Dim>& rhs) {
+        for (std::size_t local = 0; local < state.local_size(); ++local) {
+          const auto input = state.fab(local).view();
+          const auto output = rhs.fab(local).view();
+          pops::for_each_cell(state.box(local), [=] POPS_HD(const pops::Index<Dim>& cell) {
+            output(cell, 0) = input(cell, 0);
+          });
+        }
+        Kokkos::fence();
+      });
+  pops::test::install_prepared_threshold_union(
+      system, {{"tracer", "u", 1.08, pops::test::PreparedThresholdRelation::Above, state_route}},
+      "tests.generated-amr/bootstrap-helmholtz/tagging@1");
+  system.bind_bootstrap_subject(state_route, "tracer", "bound_level_zero");
+  const std::size_t cells = cell_count(config.shape);
+  std::vector<double> initial(cells, 1.0);
+  for (std::size_t ordinal = 0; ordinal < cells; ++ordinal) {
+    pops::Index<Dim> index{};
+    std::size_t remaining = ordinal;
+    for (int axis = 0; axis < Dim; ++axis) {
+      index[axis] = static_cast<int>(remaining % 16);
+      remaining /= 16;
+    }
+    const double x = (static_cast<double>(index[0]) + 0.5) / 16.0;
+    const double y = (static_cast<double>(index[1]) + 0.5) / 16.0;
+    const double r2 = (x - 0.25) * (x - 0.25) + (y - 0.5) * (y - 0.5);
+    initial[ordinal] = 1.0 + 0.5 * std::exp(-140.0 * r2);
+  }
+  system.stage_bootstrap_array(state_route, "tracer", "cell", "cell", 1, config.shape, initial);
+  pops::Extent<Dim> prolongation_ghosts{};
+  pops::Extent<Dim> restriction_ghosts{};
+  for (int axis = 0; axis < Dim; ++axis)
+    prolongation_ghosts[axis] = 1;
+  system.register_bootstrap_transfer_route(
+      "tests.generated-amr/bootstrap-helmholtz/prolongation", {state_route},
+      "tests.generated-amr/bootstrap-helmholtz/conservative-linear@1", "cell", "cell",
+      "conservative", "dense", "prolongation", "conservative_linear", 2, prolongation_ghosts,
+      config.transition_ratios.front());
+  system.register_bootstrap_transfer_route(
+      "tests.generated-amr/bootstrap-helmholtz/restriction", {state_route},
+      "tests.generated-amr/bootstrap-helmholtz/volume-average@1", "cell", "cell", "conservative",
+      "dense", "restriction", "volume_average", 1, restriction_ghosts,
+      config.transition_ratios.front());
+
+  system.begin_bootstrap_plan();
+  system.set_program_block_map({0});
+  (void)system.materialize_bootstrap_action(state_route, "initialize_level_zero",
+                                            "bound_level_zero", 0);
+  (void)system.recompute_bootstrap_field(state_route, "field/tracer");
+  ASSERT_TRUE(system.bootstrap_next_level()) << "bootstrap did not create a refined level";
+  (void)system.materialize_bootstrap_action(state_route, "prolong_from_parent",
+                                            "conservative_linear", 1);
+  EXPECT_NO_THROW((void)system.recompute_bootstrap_field(state_route, "field/tracer"));
+  EXPECT_EQ(system.field_provider_levels("field/tracer"), 2);
+
+  auto context = pops::runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("test-clock");
+  context->begin_step(0.01);
+  pops::MultiFab<Dim> stage = context->scratch_state_like(context->state(0));
+  const pops::MultiFab<Dim>& live = context->state(0);
+  for (std::size_t local = 0; local < live.local_size(); ++local) {
+    const auto input = live.fab(local).view();
+    const auto output = stage.fab(local).view();
+    pops::for_each_cell(live.box(local), [=] POPS_HD(const pops::Index<Dim>& cell) {
+      output(cell, 0) = input(cell, 0);
+    });
+  }
+  Kokkos::fence();
+  auto evaluation = point<Dim>(0);
+  evaluation.dt = 0.01;
+  pops::SolveOutcome stepped =
+      context->solve_fields_from_state_at(evaluation, "field/tracer", 0, stage);
+  ASSERT_TRUE(stepped.report().solved_value_available())
+      << stepped.report().reason << " iters=" << stepped.report().iters
+      << " rel=" << stepped.report().rel_residual;
+  (void)pops::consume_solve_outcome(std::move(stepped));
+  system.commit_bootstrap_level();
+  EXPECT_EQ(system.field_provider_levels("field/tracer"), 2);
+  pops::SolveOutcome after_commit =
+      context->solve_fields_from_state_at(evaluation, "field/tracer", 0, stage);
+  ASSERT_TRUE(after_commit.report().solved_value_available())
+      << after_commit.report().reason << " iters=" << after_commit.report().iters
+      << " rel=" << after_commit.report().rel_residual
+      << " (post-commit first Program field_solve)";
+  (void)pops::consume_solve_outcome(std::move(after_commit));
+}
+
 TEST(GeneratedAmrSystemBlock, ProgramContextRefusesUnsynchronizedHierarchyBeforeMutation) {
   constexpr int Dim = pops::kNativeDimension;
   pops::AmrSystemConfig<Dim> config;
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/unsynchronized-hierarchy");
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
   publish_centered_fine_level(system);
   system.refresh_prepared_amr_levels();
-  system.set_program_block_map({0});
-
-  auto context = pops::runtime::program::make_program_execution_provider(&system);
-  context->configure_primary_clock("test-clock");
+  auto context = pops::test::install_forward_euler_program_context(system, false);
   EXPECT_THROW(
       context->advance_hierarchy(0.01, [&](double) { context->state(0).set_val(pops::Real(9)); }),
       std::runtime_error);
@@ -926,6 +1363,7 @@ TEST(GeneratedAmrSystemBlock, ProgramContextRetainsAndInterpolatesExactLevelHist
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/level-history");
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
@@ -947,13 +1385,26 @@ TEST(GeneratedAmrSystemBlock, ProgramContextRetainsAndInterpolatesExactLevelHist
   context->begin_step(0.4);
   sample.set_val(pops::Real(20));
   context->store_history("tracer.rate", sample, 0);
-  pops::MultiFab<Dim> interpolated = context->scratch_state_like(sample);
+  // Match the generated LinearInterpolation lowering: an authenticated retained history slot
+  // determines the owner of the persistent output scratch before interpolation mutates it.
+  pops::MultiFab<Dim>& retained = context->history("tracer.rate", 1, 0);
+  const auto* const retained_address = &retained;
+  EXPECT_EQ(pops::reduce_min_local(retained), pops::Real(10));
+  pops::MultiFab<Dim>& interpolated = context->scratch_state(940001, 0, retained);
   interpolated.set_val(pops::Real(-1));
   context->interpolate_history_linear(interpolated, "tracer.rate", 2, 0, "clock.macro",
                                       "clock.fast", -1, pops::Real(0));
 
   EXPECT_EQ(pops::reduce_min_local(interpolated), pops::Real(15));
   EXPECT_EQ(pops::reduce_max_local(interpolated), pops::Real(15));
+  // history() exposes a public ring element, so replacing slot zero must not invalidate a
+  // reference to lag one.  The retained object is used after the later store rather than merely
+  // comparing an address captured before it.
+  sample.set_val(pops::Real(30));
+  context->store_history("tracer.rate", sample, 0);
+  EXPECT_EQ(&context->history("tracer.rate", 1, 0), retained_address);
+  EXPECT_EQ(pops::reduce_min_local(retained), pops::Real(10));
+  EXPECT_EQ(pops::reduce_max_local(retained), pops::Real(10));
   EXPECT_THROW((void)context->schedule_decision(17, true, true), std::runtime_error);
 }
 
@@ -963,6 +1414,7 @@ TEST(GeneratedAmrSystemBlock, ProgramContextRefusesHistoryRegridBeforeTopologyMu
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/history-regrid-refusal");
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
@@ -995,12 +1447,374 @@ TEST(GeneratedAmrSystemBlock, ProgramContextRefusesHistoryRegridBeforeTopologyMu
   EXPECT_EQ(engine->hierarchy().num_levels(), 1u);
 }
 
+TEST(GeneratedAmrSystemBlock, PreparedHistoryRemapAcceptsPublishedReplacement) {
+  const auto exercise_deferred_ratio = [](std::int64_t temporal_numerator) {
+    constexpr int Dim = pops::kNativeDimension;
+    pops::AmrSystemConfig<Dim> config;
+    for (int axis = 0; axis < Dim; ++axis) {
+      config.shape[axis] = 32;
+      config.transition_buffers.front()[axis] = 0;
+      config.transition_lookaheads.front()[axis] = 0;
+    }
+    config.regrid_every = 0;
+    pops::AmrSystem<Dim> system(config);
+    pops::test::install_amr_runtime_authority(system,
+                                              "tests.generated-amr/history-remap-acceptance");
+    system.set_temporal_relations({temporal_numerator}, {1}, {"integral_only"});
+    system.install_block_state_route("tracer", "state/tracer");
+    pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+    system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+    pops::test::install_prepared_refine_coarsen_threshold(
+        system, {"tracer", "u", 0.5, pops::test::PreparedThresholdRelation::Above},
+        {"tracer", "u", 0.5, pops::test::PreparedThresholdRelation::Below},
+        "tests.generated-amr/history-remap-tagging@1");
+    ASSERT_NE(system.engine(), nullptr);
+    ASSERT_EQ(system.engine()->hierarchy().num_levels(), 2u);
+
+    auto context = pops::runtime::program::make_program_execution_provider(&system);
+    context->configure_primary_clock("clock.macro");
+    context->declare_clock_relation("clock.macro", "clock.level.1", temporal_numerator);
+    context->install(
+        [context](double dt) {
+          context->advance_hierarchy(dt, [&](double) {
+            auto& stage = context->state(0);
+            auto rhs = context->rhs_scratch_like(stage);
+            context->rhs_into(0, stage, rhs, 0);
+          });
+        },
+        context);
+    system.set_program_block_map({0});
+    using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
+    system.install_prepared_amr_program_flux_expression_budget(
+        "tests.generated-amr/history-remap@1", std::vector<FluxBudget>(1, FluxBudget{2, 1}), 0, 0);
+    context->for_each_program_resource_level([&](int) {
+      context->register_history("tracer.rate", 1, 1, 0, "tracer.U", "cell.conservative",
+                                "clock.macro", "dense.linear");
+    });
+    for (const double dt : {0.1, 0.2, 0.3}) {
+      context->advance_hierarchy(dt, [&](double) {
+        auto& stage = context->state(0);
+        auto sample = context->rhs_scratch_like(stage);
+        context->rhs_into(0, stage, sample, 0);
+        context->store_history("tracer.rate", sample, 0);
+        context->rotate_histories("clock.macro");
+      });
+    }
+    const auto retained_child_slot0 = system.history_global("tracer.rate", 1, 0);
+    const auto retained_child_slot1 = system.history_global("tracer.rate", 1, 1);
+    const double retained_child_dt0 = system.history_slot_dt("tracer.rate", 1, 0);
+    const double retained_child_dt1 = system.history_slot_dt("tracer.rate", 1, 1);
+    const auto full_boxes = system.patch_boxes();
+    std::vector<double> contracted(cell_count(config.shape), 0.25);
+    std::size_t center = 0;
+    std::size_t stride = 1;
+    for (int axis = 0; axis < Dim; ++axis) {
+      center += static_cast<std::size_t>(config.shape[axis] / 2) * stride;
+      stride *= static_cast<std::size_t>(config.shape[axis]);
+    }
+    contracted[center] = 1.0;
+    system.set_conservative_state("tracer", contracted);
+    system.execute_prepared_tagging(0);
+    using RemapObserver =
+        pops::runtime::program::detail::AmrProgramHistoryRemapCollectiveTestAccess<Dim>;
+    RemapObserver::Observation retained_observation;
+    RemapObserver::install_one_shot_observer(*context, retained_observation);
+    ASSERT_TRUE(system.regrid_from_prepared_tagging(0));
+    EXPECT_NE(system.patch_boxes(), full_boxes);
+    ASSERT_TRUE(retained_observation.seen);
+    EXPECT_TRUE(retained_observation.descriptor.child_published);
+    ASSERT_EQ(retained_observation.descriptor.history_plan.size(), 1u);
+    EXPECT_EQ(retained_observation.descriptor.history_plan.front().source,
+              pops::runtime::program::AmrProgramHistoryRemapSource::RetainedChild);
+    EXPECT_TRUE(retained_observation.descriptor.history_plan.front().parent_key.empty());
+    const auto retained_after_contraction =
+        pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(
+            system.program_accepted_state());
+    EXPECT_TRUE(retained_after_contraction.pending_history_remaps.empty());
+    expect_history_preserved_on_current_coverage(system, retained_child_slot0,
+                                                 system.history_global("tracer.rate", 1, 0), 1);
+    expect_history_preserved_on_current_coverage(system, retained_child_slot1,
+                                                 system.history_global("tracer.rate", 1, 1), 1);
+    EXPECT_EQ(system.history_slot_dt("tracer.rate", 1, 0), retained_child_dt0);
+    EXPECT_EQ(system.history_slot_dt("tracer.rate", 1, 1), retained_child_dt1);
+
+    // Capture nonempty interface provenance on the retained partial child before the genuine
+    // coverage expansion makes its parent samples the deferred source.
+    context->advance_hierarchy(0.3, [&](double) {
+      auto& stage = context->state(0);
+      auto sample = context->rhs_scratch_like(stage);
+      context->rhs_into(0, stage, sample, 0);
+      context->store_history("tracer.rate", sample, 0);
+      context->rotate_histories("clock.macro");
+    });
+
+    std::vector<double> expanded(cell_count(config.shape), 0.25);
+    expanded[center] = 1.0;
+    std::size_t axis_stride = 1;
+    for (int axis = 0; axis < Dim; ++axis) {
+      expanded[center - axis_stride] = 1.0;
+      expanded[center + axis_stride] = 1.0;
+      axis_stride *= static_cast<std::size_t>(config.shape[axis]);
+    }
+    system.set_conservative_state("tracer", expanded);
+    system.execute_prepared_tagging(0);
+    RemapObserver::Observation deferred_observation;
+    RemapObserver::install_one_shot_observer(*context, deferred_observation);
+    ASSERT_TRUE(system.regrid_from_prepared_tagging(0));
+    ASSERT_TRUE(deferred_observation.seen);
+    EXPECT_TRUE(deferred_observation.descriptor.child_published);
+    ASSERT_EQ(deferred_observation.descriptor.history_plan.size(), 1u);
+    EXPECT_EQ(deferred_observation.descriptor.history_plan.front().source,
+              pops::runtime::program::AmrProgramHistoryRemapSource::ParentDeferred);
+    EXPECT_FALSE(deferred_observation.descriptor.history_plan.front().parent_key.empty());
+    const auto pending_after_regrid =
+        pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(
+            system.program_accepted_state());
+    ASSERT_EQ(pending_after_regrid.pending_history_remaps.size(), 1u);
+    EXPECT_EQ(pending_after_regrid.pending_history_remaps.front().temporal_numerator,
+              temporal_numerator);
+    EXPECT_EQ(pending_after_regrid.pending_history_remaps.front().temporal_denominator, 1);
+    EXPECT_EQ(pending_after_regrid.pending_history_remaps.front().target_dt,
+              pending_after_regrid.pending_history_remaps.front().source_dt /
+                  static_cast<double>(temporal_numerator));
+    const auto pending_bytes = system.program_accepted_state();
+    EXPECT_NO_THROW(system.restore_checkpoint_accepted_state(pending_bytes));
+    EXPECT_EQ(system.program_accepted_state(), pending_bytes);
+    // Cursor-walk POPSAND4 to its pending section.  The history key also occurs in earlier slot
+    // payloads, so searching raw bytes would mutate the wrong record.
+    const std::string& pending_key = pending_after_regrid.pending_history_remaps.front().key;
+    std::size_t cursor = 8 + 8;  // magic, native dimension
+    const auto read_word = [&](std::size_t& position) {
+      std::uint64_t value = 0;
+      for (std::size_t byte = 0; byte < 8; ++byte)
+        value |= std::uint64_t{pending_bytes[position + byte]} << (8 * byte);
+      position += 8;
+      return value;
+    };
+    const auto skip_string = [&](std::size_t& position) { position += read_word(position); };
+    skip_string(cursor);               // spatial contract
+    cursor += 16;                      // topology, materialization generation
+    cursor += read_word(cursor) * 40;  // level clocks
+    for (std::size_t count = read_word(cursor); count > 0; --count) {
+      skip_string(cursor);
+      cursor += 8;
+    }
+    for (std::size_t count = read_word(cursor); count > 0; --count) {
+      skip_string(cursor);
+      cursor += 8;
+      for (int identity = 0; identity < 4; ++identity)
+        skip_string(cursor);
+      cursor += 16;
+    }
+    for (std::size_t count = read_word(cursor); count > 0; --count) {
+      skip_string(cursor);
+      cursor += 40;
+    }
+    const std::size_t pending_count_offset = cursor;
+    ASSERT_EQ(read_word(cursor), 1u);
+    const std::size_t record_offset = cursor;
+    const std::size_t pending_key_length = read_word(cursor);
+    const std::size_t key_offset = cursor;
+    ASSERT_EQ(pending_key_length, pending_key.size());
+    ASSERT_TRUE(std::equal(pending_key.begin(), pending_key.end(),
+                           pending_bytes.begin() + static_cast<std::ptrdiff_t>(key_offset)));
+    cursor += pending_key_length;
+    const std::size_t after_key = cursor;
+    ASSERT_LE(record_offset + 8 + pending_key_length + 96, pending_bytes.size());
+    const auto write_word = [](std::vector<std::uint8_t>& bytes, std::size_t offset,
+                               std::uint64_t value) {
+      ASSERT_LE(offset + 8, bytes.size());
+      for (std::size_t byte = 0; byte < 8; ++byte)
+        bytes[offset + byte] = static_cast<std::uint8_t>(value >> (8 * byte));
+    };
+    const auto refuse_and_retry = [&](std::string_view label, std::vector<std::uint8_t> corrupt,
+                                      std::string_view diagnostic_class) {
+      SCOPED_TRACE(label);
+      try {
+        system.restore_checkpoint_accepted_state(corrupt);
+        ADD_FAILURE() << "corrupt POPSAND4 accepted state was accepted";
+      } catch (const std::exception& exception) {
+        EXPECT_NE(std::string_view(exception.what()).find(diagnostic_class), std::string_view::npos)
+            << exception.what();
+      }
+      EXPECT_EQ(system.program_accepted_state(), pending_bytes);
+      EXPECT_NO_THROW(system.restore_checkpoint_accepted_state(pending_bytes));
+      EXPECT_EQ(system.program_accepted_state(), pending_bytes);
+    };
+    auto foreign_key = pending_bytes;
+    foreign_key[key_offset] ^= std::uint8_t{1};
+    refuse_and_retry("foreign-key", std::move(foreign_key), "pending history remap");
+    auto wrong_level = pending_bytes;
+    write_word(wrong_level, after_key + 8, 0);  // child level; parent remains zero
+    refuse_and_retry("wrong-child-level", std::move(wrong_level), "pending history remap");
+    auto int_max_parent = pending_bytes;
+    write_word(int_max_parent, after_key, std::numeric_limits<int>::max());
+    refuse_and_retry("int-max-parent", std::move(int_max_parent), "pending history remap");
+    auto stale_prior_topology = pending_bytes;
+    write_word(stale_prior_topology, after_key + 16, pending_after_regrid.topology_epoch);
+    refuse_and_retry("stale-prior-topology", std::move(stale_prior_topology),
+                     "pending history remap");
+    auto stale_prior_materialization = pending_bytes;
+    write_word(stale_prior_materialization, after_key + 24,
+               pending_after_regrid.materialization_generation);
+    refuse_and_retry("stale-prior-materialization", std::move(stale_prior_materialization),
+                     "pending history remap");
+    auto stale_generation = pending_bytes;
+    write_word(stale_generation, after_key + 40,
+               pending_after_regrid.materialization_generation + 1);
+    refuse_and_retry("stale-published-materialization", std::move(stale_generation),
+                     "pending history remap");
+    auto wrong_macro = pending_bytes;
+    write_word(wrong_macro, after_key + 48,
+               static_cast<std::uint64_t>(
+                   pending_after_regrid.pending_history_remaps.front().accepted_macro_step + 1));
+    refuse_and_retry("wrong-child-macro", std::move(wrong_macro), "pending history remap");
+    auto wrong_dt = pending_bytes;
+    write_word(wrong_dt, after_key + 72, 0);  // source_dt bit pattern
+    refuse_and_retry("wrong-source-dt", std::move(wrong_dt), "pending history remap");
+    auto amplified_count = pending_bytes;
+    write_word(amplified_count, pending_count_offset, std::numeric_limits<std::uint64_t>::max());
+    refuse_and_retry("amplified-pending-count", std::move(amplified_count),
+                     "invalid exact AMR Program checkpoint");
+    auto truncated_pending = pending_bytes;
+    truncated_pending.resize(after_key + 48);
+    refuse_and_retry("truncated-pending", std::move(truncated_pending),
+                     "invalid exact AMR Program checkpoint");
+    EXPECT_EQ(system.history_names(), (std::vector<std::string>{"tracer.rate"}));
+    for (const int level : {0, 1}) {
+      EXPECT_TRUE(system.history_initialized("tracer.rate", level));
+      EXPECT_EQ(system.history_fill_count("tracer.rate", level), 2);
+      EXPECT_GT(system.history_slot_dt("tracer.rate", level, 0), 0.0);
+      EXPECT_GT(system.history_slot_dt("tracer.rate", level, 1), 0.0);
+    }
+
+    // The next child store recycles slot 0 at a new current interval, distinct from source_dt/N.
+    // N=1 returns the exact parent lag; N=2 returns half-current/half-parent-old.  Reading it
+    // cannot consume the accepted marker.
+    constexpr double current_dt = 0.12;
+    ASSERT_NE(current_dt, pending_after_regrid.pending_history_remaps.front().target_dt);
+    bool observed_deferred_lag = false;
+    context->advance_hierarchy(current_dt, [&](double local_dt) {
+      const int level = RemapObserver::active_level(*context);
+      auto& stage = context->state(0);
+      auto sample = context->rhs_scratch_like(stage);
+      context->rhs_into(0, stage, sample, 0);
+      context->store_history("tracer.rate", sample, 0);
+      if (level == 1 && RemapObserver::has_pending_history(*context, "tracer.rate", level)) {
+        observed_deferred_lag = true;
+        EXPECT_EQ(local_dt, current_dt / static_cast<double>(temporal_numerator));
+        EXPECT_EQ(system.history_slot_dt("tracer.rate", 1, 0), local_dt);
+        const auto& raw_lag = RemapObserver::history_slot(*context, "tracer.rate", level, 1);
+        auto expected = context->rhs_scratch_like(sample);
+        if (temporal_numerator == 1)
+          pops::lincomb(expected, pops::Real(1), raw_lag, pops::Real(0), raw_lag);
+        else
+          pops::lincomb(expected, pops::Real(0.5), sample, pops::Real(0.5), raw_lag);
+        const auto& effective = context->history("tracer.rate", 1, 0);
+        EXPECT_EQ(pops::reduce_min_local(effective), pops::reduce_min_local(expected));
+        EXPECT_EQ(pops::reduce_max_local(effective), pops::reduce_max_local(expected));
+        const auto& expression = RemapObserver::active_expression(*context, effective);
+        ASSERT_EQ(expression.size(), temporal_numerator == 1 ? 1u : 2u);
+        for (const auto& [identity, term] : expression) {
+          (void)identity;
+          ASSERT_EQ(term.coefficient.size(), 1u);
+          ASSERT_TRUE(term.coefficient.contains(0));
+          EXPECT_EQ(term.coefficient.at(0), temporal_numerator == 1 ? pops::amr::Rational(1, 1)
+                                                                    : pops::amr::Rational(1, 2));
+          ASSERT_NE(term.basis, nullptr);
+          EXPECT_FALSE(term.basis->faces.empty());
+        }
+        const auto& repeated = context->history("tracer.rate", 1, 0);
+        EXPECT_EQ(pops::reduce_min_local(repeated), pops::reduce_min_local(expected));
+        EXPECT_EQ(pops::reduce_max_local(repeated), pops::reduce_max_local(expected));
+      }
+      context->rotate_histories("clock.macro");
+    });
+    EXPECT_TRUE(observed_deferred_lag);
+    EXPECT_EQ(pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(
+                  system.program_accepted_state())
+                  .pending_history_remaps.size(),
+              1u);
+    // Rotation consumes the *live* marker.  The accepted wire image is still the prior publication
+    // until the normal hierarchy-refresh capture below runs.
+    const auto stale_after_rotation =
+        pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(
+            system.program_accepted_state());
+    EXPECT_EQ(stale_after_rotation.pending_history_remaps.size(), 1u);
+    EXPECT_NO_THROW(context->with_program_resource_level(
+        1, [&] { (void)context->history("tracer.rate", 1, 0); }));
+    EXPECT_NO_THROW(system.step(0.15));
+    const auto published_after_rotation =
+        pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(
+            system.program_accepted_state());
+    EXPECT_TRUE(published_after_rotation.pending_history_remaps.empty());
+  };
+
+  exercise_deferred_ratio(1);
+  exercise_deferred_ratio(2);
+}
+
+TEST(GeneratedAmrSystemBlock, NoopPreparedRegridPreservesInitializedHistory) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 8;
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/history-remap-noop");
+  system.install_block_state_route("tracer", "state/tracer");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  pops::test::install_prepared_threshold_union(system, {{"tracer", "u", 2.0}},
+                                               "tests.generated-amr/history-remap-noop-tagging@1");
+  ASSERT_NE(system.engine(), nullptr);
+  ASSERT_EQ(system.engine()->hierarchy().num_levels(), 1u);
+
+  auto context = pops::runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("clock.macro");
+  context->install([](double) {}, context);
+  system.set_program_block_map({0});
+  using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
+  system.install_prepared_amr_program_flux_expression_budget(
+      "tests.generated-amr/history-remap-noop@1", std::vector<FluxBudget>(1, FluxBudget{1, 1}), 0,
+      0);
+  context->register_history("tracer.rate", 1, 1, 0, "tracer.U", "cell.conservative", "clock.macro",
+                            "dense.linear");
+  for (const double dt : {0.1, 0.2, 0.3}) {
+    context->begin_step(dt);
+    pops::MultiFab<Dim> sample = context->scratch_state_like(context->state(0));
+    sample.set_val(pops::Real(dt));
+    context->store_history("tracer.rate", sample, 0);
+    context->rotate_histories("clock.macro");
+  }
+  const std::uint64_t topology_before = system.engine()->topology_epoch();
+  const std::uint64_t materialization_before = system.engine()->materialization_generation();
+  const auto names_before = system.history_names();
+  const int fill_before = system.history_fill_count("tracer.rate", 0);
+  const double dt0_before = system.history_slot_dt("tracer.rate", 0, 0);
+  const double dt1_before = system.history_slot_dt("tracer.rate", 0, 1);
+  const auto slot0_before = system.history_global("tracer.rate", 0, 0);
+  const auto slot1_before = system.history_global("tracer.rate", 0, 1);
+
+  EXPECT_FALSE(system.regrid_from_prepared_tagging(0));
+  EXPECT_EQ(system.engine()->hierarchy().num_levels(), 1u);
+  EXPECT_EQ(system.engine()->topology_epoch(), topology_before);
+  EXPECT_EQ(system.engine()->materialization_generation(), materialization_before);
+  EXPECT_EQ(system.history_names(), names_before);
+  EXPECT_TRUE(system.history_initialized("tracer.rate", 0));
+  EXPECT_EQ(system.history_fill_count("tracer.rate", 0), fill_before);
+  EXPECT_EQ(system.history_slot_dt("tracer.rate", 0, 0), dt0_before);
+  EXPECT_EQ(system.history_slot_dt("tracer.rate", 0, 1), dt1_before);
+  EXPECT_EQ(system.history_global("tracer.rate", 0, 0), slot0_before);
+  EXPECT_EQ(system.history_global("tracer.rate", 0, 1), slot1_before);
+}
+
 TEST(GeneratedAmrSystemBlock, CflUsesFinestExactGeometryAndPreparedModelSpeed) {
   constexpr int Dim = pops::kNativeDimension;
   pops::AmrSystemConfig<Dim> config;
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/cfl-finest-geometry");
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>(), "minmod", "rusanov",
                                 "conservative", "explicit", 1.4, 2, 1);
@@ -1015,12 +1829,36 @@ TEST(GeneratedAmrSystemBlock, CflUsesFinestExactGeometryAndPreparedModelSpeed) {
   EXPECT_EQ(system.last_dt_bound(), "transport:tracer");
 }
 
+TEST(GeneratedAmrSystemBlock, DiffusiveCflUsesFinestParabolicGeometryAndReportsFrequency) {
+  constexpr int Dim = pops::kNativeDimension;
+  constexpr pops::Real diffusivity = pops::Real(0.125);
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 8;
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/diffusive-cfl");
+  system.install_block_state_route("diffusive", "state/diffusive");
+  pops::add_compiled_model<Dim>(system, "diffusive", diffusive_advection_model<Dim>(diffusivity),
+                                "minmod", "rusanov", "conservative", "explicit", 1.4, 2, 3);
+  system.set_conservative_state("diffusive", std::vector<double>(cell_count(config.shape), 1.0));
+  publish_centered_fine_level(system);
+  system.install_program_step([](double) {});
+
+  pops::Real inverse_dt = pops::Real(0);
+  for (int axis = 0; axis < Dim; ++axis)
+    inverse_dt += pops::Real(2) * diffusivity * pops::Real(16 * 16);
+  const double expected = 0.4 * 2.0 / (3.0 * static_cast<double>(inverse_dt));
+  EXPECT_NEAR(system.step_cfl(0.4, 1.0e-12), expected, 1.0e-12);
+  EXPECT_EQ(system.last_dt_bound(), "parabolic_frequency:diffusive");
+}
+
 TEST(GeneratedAmrSystemBlock, CflAuthenticatesRequestsAndBoundOrderBeforeCallbacks) {
   constexpr int Dim = pops::kNativeDimension;
   pops::AmrSystemConfig<Dim> config;
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/cfl-request-consensus");
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));

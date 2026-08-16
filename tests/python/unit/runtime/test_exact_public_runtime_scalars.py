@@ -8,18 +8,18 @@ import pytest
 
 import pops.runtime._engine_descriptors as engine
 from pops._ir import ScalarLiteral, scalar_to_native
+from pops.frames import X_AXIS, Y_AXIS
+from pops.physics import Energy, Momentum
 
 
 def test_root_model_bricks_retain_fraction_and_decimal_authoring_values():
     state = engine.FluidState.isothermal(
         cs2=Fraction(7, 10), vacuum_floor=Decimal("1e-40"))
-    transport = engine.ExB(B0=Fraction(5, 2))
     source = engine.PotentialForce(charge=Decimal("-1.0000000000000000000001"))
     elliptic = engine.BackgroundDensity(alpha=Fraction(1, 3), n0=Decimal("0.125"))
 
     assert state.cs2 == Fraction(7, 10) and isinstance(state.cs2, Fraction)
     assert state.vacuum_floor == Decimal("1e-40")
-    assert transport.B0 == Fraction(5, 2)
     assert source.charge == Decimal("-1.0000000000000000000001")
     assert elliptic.alpha == Fraction(1, 3)
     assert elliptic.n0 == Decimal("0.125")
@@ -52,11 +52,21 @@ def test_root_time_and_spatial_descriptors_retain_exact_real_controls():
     assert spatial.positivity_floor == Fraction(1, 10**20)
 
 
+def test_private_engine_imex_lowers_only_typed_exact_axis_roles():
+    imex = engine.IMEX(
+        implicit_roles=(Momentum(X_AXIS), Momentum(Y_AXIS), Energy()),
+    )
+
+    assert imex.implicit_roles == ["momentum:0", "momentum:1", "energy"]
+    for legacy in ("MomentumX", "momentum_x"):
+        with pytest.raises(TypeError, match="typed pops.physics roles"):
+            engine.IMEX(implicit_roles=(legacy,))
+
+
 @pytest.mark.parametrize(
     "factory",
     [
         lambda: engine.FluidState(gamma=True),
-        lambda: engine.ExB(B0=True),
         lambda: engine.Spatial(positivity_floor=True),
         lambda: engine.Spatial(wave_speed_cache=1),
         lambda: engine.Explicit(substeps=True),
@@ -75,7 +85,6 @@ def test_public_numeric_descriptors_refuse_bool_and_lossful_integer_coercions(fa
 @pytest.mark.parametrize("bad", [float("nan"), float("inf"), Decimal("NaN")])
 def test_public_runtime_real_controls_refuse_non_finite_values(bad):
     for factory in (
-        lambda: engine.ExB(B0=bad),
         lambda: engine.FluidState(cs2=bad),
         lambda: engine.IMEX(newton_rel_tol=bad),
         lambda: engine.Spatial(positivity_floor=bad),

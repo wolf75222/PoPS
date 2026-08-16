@@ -16,6 +16,7 @@
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
 #include <pops/parallel/comm.hpp>
+#include <pops/parallel/execution_lane.hpp>
 
 #include <algorithm>
 #include <array>
@@ -44,6 +45,10 @@ struct NoProviders {
 };
 
 inline constexpr NoProviders no_providers{};
+
+pops::ExecutionLane test_execution_lane() {
+  return pops::ExecutionLane::world("pops.test.newton-robustness");
+}
 
 template <class Ranked, class Value>
 Ranked filled_ranked(Value value) {
@@ -424,7 +429,8 @@ TEST_F(NewtonRobustnessTest, stiff_multivariable_relaxation_converges_to_backwar
   opts.rel_tol = 1e-12;
   opts.abs_tol = 1e-13;
   pops::NewtonReport rep;
-  auto outcome = pops::backward_euler_source(m, no_providers, U, kDt, opts, {}, &rep);
+  auto outcome =
+      pops::backward_euler_source(m, no_providers, U, kDt, opts, test_execution_lane(), {}, &rep);
   ASSERT_TRUE(outcome.report().solved_value_available());
   (void)outcome.consume(pops::SolveConsumption::kAccept);
   ASSERT_TRUE(rep.converged && rep.n_failed == 0)
@@ -457,7 +463,8 @@ TEST_F(NewtonRobustnessTest, damped_newton_converges_to_same_root_as_undamped) {
   opts.rel_tol = 1e-12;
   opts.abs_tol = 1e-13;
   pops::NewtonReport rep;
-  auto reference = pops::backward_euler_source(m, no_providers, U, kDt, opts, {}, &rep);
+  auto reference =
+      pops::backward_euler_source(m, no_providers, U, kDt, opts, test_execution_lane(), {}, &rep);
   ASSERT_TRUE(reference.report().solved_value_available());
   (void)reference.consume(pops::SolveConsumption::kAccept);
   ASSERT_TRUE(rep.converged && rep.n_failed == 0) << "racine de reference non convergee";
@@ -468,7 +475,8 @@ TEST_F(NewtonRobustnessTest, damped_newton_converges_to_same_root_as_undamped) {
   od.damping = 0.5;
   od.max_iters = 80;
   pops::NewtonReport repd;
-  auto damped = pops::backward_euler_source(m, no_providers, Ud, kDt, od, {}, &repd);
+  auto damped =
+      pops::backward_euler_source(m, no_providers, Ud, kDt, od, test_execution_lane(), {}, &repd);
   ASSERT_TRUE(damped.report().solved_value_available());
   (void)damped.consume(pops::SolveConsumption::kAccept);
 
@@ -496,7 +504,8 @@ TEST_F(NewtonRobustnessTest, invalid_evaluation_reports_cell_and_does_not_publis
   copy3(Un2, accepted);
   pops::NewtonOptions options;
   pops::NewtonReport repf;
-  auto outcome = pops::backward_euler_source(nm, no_providers, Un2, 0.1, options, {}, &repf);
+  auto outcome = pops::backward_euler_source(nm, no_providers, Un2, 0.1, options,
+                                             test_execution_lane(), {}, &repf);
   ASSERT_EQ(outcome.report().status, pops::SolveStatus::kInvalidEvaluation);
   EXPECT_EQ(max_difference3(Un2, accepted), 0.0)
       << "un candidat invalide a ete publie dans l'etat accepte";
@@ -530,8 +539,8 @@ TEST_F(NewtonRobustnessTest, iteration_limit_fails_closed_without_publishing) {
   options.abs_tol = 1e-15;
   pops::NewtonReport report;
 
-  auto outcome =
-      pops::backward_euler_source(model, no_providers, state, kDt, options, {}, &report);
+  auto outcome = pops::backward_euler_source(model, no_providers, state, kDt, options,
+                                             test_execution_lane(), {}, &report);
   EXPECT_EQ(outcome.report().status, pops::SolveStatus::kIterationLimit);
   EXPECT_EQ(max_difference3(state, accepted), 0.0) << "le dernier itere non converge a ete publie";
   const pops::SolveReport rejected = outcome.consume(pops::SolveConsumption::kRejectAttempt);
@@ -548,8 +557,8 @@ TEST_F(NewtonRobustnessTest, singular_jacobian_fails_closed_without_publishing) 
   pops::NewtonOptions options;
   pops::NewtonReport report;
 
-  auto outcome =
-      pops::backward_euler_source(model, no_providers, state, 0.125, options, {}, &report);
+  auto outcome = pops::backward_euler_source(model, no_providers, state, 0.125, options,
+                                             test_execution_lane(), {}, &report);
   EXPECT_EQ(outcome.report().status, pops::SolveStatus::kSingular);
   EXPECT_EQ(max_difference3(state, accepted), 0.0);
   (void)outcome.consume(pops::SolveConsumption::kFailRun);
@@ -572,8 +581,8 @@ TEST_F(NewtonRobustnessTest, prepared_invalid_failure_is_consumed_once_as_fail_r
   pops::NewtonOptions options;
   pops::NewtonReport diagnostics;
 
-  auto outcome =
-      pops::backward_euler_source(model, no_providers, state, 0.1, options, {}, &diagnostics);
+  auto outcome = pops::backward_euler_source(model, no_providers, state, 0.1, options,
+                                             test_execution_lane(), {}, &diagnostics);
   EXPECT_EQ(outcome.report().status, pops::SolveStatus::kInvalidEvaluation);
   EXPECT_THROW(outcome.consume(static_cast<pops::SolveConsumption>(255)), std::logic_error);
   EXPECT_EQ(max_difference3(state, accepted), 0.0);
@@ -612,8 +621,8 @@ TEST_F(NewtonRobustnessTest,
     copy3(accepted, state);
     FallibleSourceModel model{failure.status, reason};
 
-    auto outcome =
-        pops::backward_euler_source(model, no_providers, state, kDt, pops::NewtonOptions{});
+    auto outcome = pops::backward_euler_source(model, no_providers, state, kDt,
+                                               pops::NewtonOptions{}, test_execution_lane());
     EXPECT_EQ(outcome.report().status, pops::SolveStatus::kInvalidEvaluation);
     EXPECT_EQ(outcome.report().action, failure.action);
     EXPECT_NE(outcome.report().reason.find(failure.reason_fragment), std::string::npos);
@@ -640,7 +649,7 @@ TEST_F(NewtonRobustnessTest,
   rejected_model.reason = reason;
 
   auto rejected = pops::backward_euler_source(rejected_model, no_providers, rejected_state, kDt,
-                                              pops::NewtonOptions{});
+                                              pops::NewtonOptions{}, test_execution_lane());
   EXPECT_EQ(rejected.report().status, pops::SolveStatus::kInvalidEvaluation);
   EXPECT_EQ(rejected.report().action, pops::SolveAction::kRejectAttempt);
   EXPECT_NE(rejected.report().reason.find("evaluation_reject"), std::string::npos);
@@ -659,10 +668,10 @@ TEST_F(NewtonRobustnessTest,
   copy3(accepted, legacy_state);
   FallibleJacobianModel fallible_model;
   JacStiffModel legacy_model;
-  auto fallible =
-      pops::backward_euler_source(fallible_model, no_providers, fallible_state, kDt, options);
-  auto legacy =
-      pops::backward_euler_source(legacy_model, no_providers, legacy_state, kDt, options);
+  auto fallible = pops::backward_euler_source(fallible_model, no_providers, fallible_state, kDt,
+                                              options, test_execution_lane());
+  auto legacy = pops::backward_euler_source(legacy_model, no_providers, legacy_state, kDt, options,
+                                            test_execution_lane());
   ASSERT_TRUE(fallible.report().solved_value_available());
   ASSERT_TRUE(legacy.report().solved_value_available());
   (void)fallible.consume(pops::SolveConsumption::kAccept);
@@ -683,7 +692,8 @@ TEST_F(NewtonRobustnessTest, prepared_success_publishes_only_on_single_accept) {
   options.rel_tol = 1e-12;
   options.abs_tol = 1e-13;
 
-  auto outcome = pops::backward_euler_source(model, no_providers, state, kDt, options);
+  auto outcome =
+      pops::backward_euler_source(model, no_providers, state, kDt, options, test_execution_lane());
   ASSERT_TRUE(outcome.report().solved_value_available());
   EXPECT_EQ(max_difference3(state, accepted), 0.0) << "le candidat est visible avant consommation";
   EXPECT_THROW(outcome.consume(pops::SolveConsumption::kFailRun), std::logic_error);
@@ -702,8 +712,8 @@ TEST_F(NewtonRobustnessTest, publication_layout_failure_does_not_consume_the_out
   Field state = make_mf(*ba_, *dm_, 3);
   copy3(accepted, state);
 
-  auto outcome =
-      pops::backward_euler_source(model, no_providers, state, kDt, pops::NewtonOptions{});
+  auto outcome = pops::backward_euler_source(model, no_providers, state, kDt, pops::NewtonOptions{},
+                                             test_execution_lane());
   ASSERT_TRUE(outcome.report().solved_value_available());
 
   // A caller changing the destination structure between prepare and consume used to let lincomb
@@ -727,11 +737,13 @@ TEST_F(NewtonRobustnessTest, default_contract_converges_with_or_without_diagnost
   copy3(*U0_, Ub);
 
   pops::NewtonOptions odef;
-  auto without_report = pops::backward_euler_source(m, no_providers, Ua, kDt, odef);
+  auto without_report =
+      pops::backward_euler_source(m, no_providers, Ua, kDt, odef, test_execution_lane());
   ASSERT_TRUE(without_report.report().solved_value_available());
   (void)without_report.consume(pops::SolveConsumption::kAccept);
   pops::NewtonReport repo;
-  auto with_report = pops::backward_euler_source(m, no_providers, Ub, kDt, odef, {}, &repo);
+  auto with_report =
+      pops::backward_euler_source(m, no_providers, Ub, kDt, odef, test_execution_lane(), {}, &repo);
   ASSERT_TRUE(with_report.report().solved_value_available());
   (void)with_report.consume(pops::SolveConsumption::kAccept);
   EXPECT_TRUE(repo.converged);
@@ -757,7 +769,7 @@ TEST_F(NewtonRobustnessTest, analytic_jacobian_matches_finite_difference_root) {
   opts.abs_tol = 1e-13;
   pops::NewtonReport rep;
   auto finite_difference =
-      pops::backward_euler_source(m, no_providers, U, kDt, opts, {}, &rep);
+      pops::backward_euler_source(m, no_providers, U, kDt, opts, test_execution_lane(), {}, &rep);
   ASSERT_TRUE(finite_difference.report().solved_value_available());
   (void)finite_difference.consume(pops::SolveConsumption::kAccept);
   ASSERT_TRUE(rep.converged && rep.n_failed == 0) << "racine FD de reference non convergee";
@@ -766,8 +778,8 @@ TEST_F(NewtonRobustnessTest, analytic_jacobian_matches_finite_difference_root) {
   Field Uj = make_mf(*ba_, *dm_, 3);
   copy3(*U0_, Uj);
   pops::NewtonReport repj;
-  auto analytic =
-      pops::backward_euler_source(jm, no_providers, Uj, kDt, opts, {}, &repj);
+  auto analytic = pops::backward_euler_source(jm, no_providers, Uj, kDt, opts,
+                                              test_execution_lane(), {}, &repj);
   ASSERT_TRUE(analytic.report().solved_value_available());
   (void)analytic.consume(pops::SolveConsumption::kAccept);
 
@@ -1093,7 +1105,8 @@ TEST(LocalNonlinearCollective, SignedLargeIndicesPreservePriorityAndLexicographi
     pops::for_each_cell(statistics.box(local), FillFailureStatistics{statistics.fab(local).view(),
                                                                      recoverable, fatal, false});
 
-  auto location = pops::collective_first_local_nonlinear_failure(statistics, fatal, 10, 8);
+  auto location = pops::collective_first_local_nonlinear_failure(statistics, fatal, 10, 8,
+                                                                 test_execution_lane());
   ASSERT_TRUE(location.found);
   EXPECT_EQ(location.priority, fatal);
   EXPECT_EQ(location.index, positive);
@@ -1102,10 +1115,12 @@ TEST(LocalNonlinearCollective, SignedLargeIndicesPreservePriorityAndLexicographi
   for (std::size_t local = 0; local < statistics.local_size(); ++local)
     pops::for_each_cell(statistics.box(local), FillFailureStatistics{statistics.fab(local).view(),
                                                                      recoverable, fatal, true});
-  location = pops::collective_first_local_nonlinear_failure(statistics, fatal, 10, 8);
+  location = pops::collective_first_local_nonlinear_failure(statistics, fatal, 10, 8,
+                                                            test_execution_lane());
   ASSERT_TRUE(location.found);
   EXPECT_EQ(location.index, negative);
   EXPECT_EQ(location.component, 7);
-  EXPECT_THROW((void)pops::collective_first_local_nonlinear_failure(statistics, fatal + 1, 10, 8),
+  EXPECT_THROW((void)pops::collective_first_local_nonlinear_failure(statistics, fatal + 1, 10, 8,
+                                                                    test_execution_lane()),
                std::runtime_error);
 }

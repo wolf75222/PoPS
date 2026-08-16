@@ -22,11 +22,21 @@ documentation update:
        Decision 5), on native and compiled runtime blocks through one prepared graph; guards
        the "regrid is component-0 only" doc regression now that a selector exists.
 
-The test is pure Python: it only reads ``capabilities()`` and the backend table, so it
-needs the _pops extension to import but does not build or run any model.
+The test reads only ``capabilities()`` and the backend table.  It explicitly selects the native
+specialization requested by the test environment before importing runtime modules; it does not
+build or run a model.
 """
+import os
+
+from pops._native_selector import select_native_dimension
 from pops.codegen._compile import _BACKEND_CAPS
 from pops.runtime.doctor import capabilities
+
+
+_TEST_NATIVE_DIMENSION = os.environ.get("POPS_NATIVE_DIM")
+if _TEST_NATIVE_DIMENSION not in {"1", "2", "3"}:
+    raise RuntimeError("test_capabilities requires POPS_NATIVE_DIM=1, 2, or 3")
+select_native_dimension(int(_TEST_NATIVE_DIMENSION))
 
 EXPECTED_TOP_KEYS = {
     "dimension", "riemann", "time", "stability_policy", "poisson", "geometry", "schur",
@@ -100,7 +110,9 @@ def test_runtime_environment_and_precision_facts():
     assert precision["supports_mixed_precision"] is False
     env = caps["runtime_environment"]
     assert env["dimension"] == _pops.__native_dimension__
-    assert env["amr_refinement_ratio"] == 2
+    assert env["amr_refinement_ratio"] is None
+    assert env["amr_refinement_ratio_selection"] == "hierarchy_exact_rank"
+    assert env["amr_refinement_ratio_rank"] == _pops.__native_dimension__
     assert env["precision"] == "double"
     assert env["supports_custom_communicator"] is False
     assert env["communicator"] in ("serial", "MPI_COMM_WORLD", "unknown")

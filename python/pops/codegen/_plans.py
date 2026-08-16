@@ -15,6 +15,7 @@ from enum import Enum
 from fractions import Fraction
 from types import MappingProxyType
 from typing import Any, cast
+from urllib.parse import unquote
 
 from pops.identity import Identity, canonical_bytes, make_identity
 
@@ -155,6 +156,251 @@ def _evidence(value: Any, *, where: str) -> Any:
         % (where, type(value).__name__))
 
 
+def canonical_block_instance_owner(*, case: Any, block: Any, model_owner: Any) -> Any:
+    """Return the official canonical OwnerPath of one Case-block model instance."""
+    from pops.model.ownership import OwnerKind, OwnerPath
+    from pops.problem.handles import BlockHandle
+
+    if isinstance(block, BlockHandle):
+        return block.instance_owner_path.canonical()
+    if not isinstance(block, str) or not block:
+        raise TypeError("block instance identity requires a BlockHandle or non-empty block name")
+    if isinstance(case, str):
+        case_owner = OwnerPath.case(case)
+    else:
+        case_owner = OwnerPath.coerce(case)
+        if case_owner.kind is not OwnerKind.CASE:
+            raise ValueError("block instance identity requires a Case owner")
+        if case_owner.is_authoring:
+            case_owner = case_owner.canonical()
+    return case_owner.child(OwnerKind.BLOCK, block).instance_of(model_owner).canonical()
+
+
+def _owner_path_of(model: Any) -> Any:
+    """Return the canonical model-definition OwnerPath, or None when the model has none."""
+    from pops.model.ownership import OwnerKind, OwnerPath, UnresolvedOwnershipError
+
+    owner = getattr(model, "owner_path", None)
+    if owner is None:
+        owner = getattr(getattr(model, "_m", None), "owner_path", None)
+    if owner is None:
+        return None
+    try:
+        path = OwnerPath.coerce(owner)
+    except TypeError:
+        return None
+    if path.is_authoring:
+        try:
+            path = path.canonical()
+        except UnresolvedOwnershipError:
+            return None
+    if path.kind is not OwnerKind.MODEL_DEFINITION and not path.contains(OwnerKind.MODEL_DEFINITION):
+        return None
+    return path
+
+
+def _model_definition_owner(path: Any) -> Any:
+    """Return the model-definition suffix of a Case-block instance OwnerPath."""
+    from pops.model.ownership import OwnerKind, OwnerPath
+
+    start = next(
+        index for index, node in enumerate(path.nodes)
+        if node.kind is OwnerKind.MODEL_DEFINITION
+    )
+    return OwnerPath(
+        path.nodes[start:],
+        _definition_fingerprint=path.definition_fingerprint,
+    )
+
+
+def _canonical_owner_path_from_qid(qid: str) -> Any:
+    """Parse and authenticate the sole accepted string owner representation.
+
+    Resolved-plan records persist ``str(OwnerPath)`` rather than a live owner
+    object.  Accepting that representation is safe only when it parses back to
+    the exact canonical ``OwnerPath`` spelling; a display string, an authoring
+    capability, or a merely similar path must not become identity authority.
+    """
+    from pops.model.ownership import OwnerKind, OwnerPath, OwnerSegment
+
+    if not qid or "#authoring=" in qid:
+        raise ValueError("block instance owner qid must be a canonical OwnerPath string")
+    try:
+        nodes = []
+        fingerprint = None
+        for raw_segment in qid.split("/"):
+            kind_text, separator, encoded_name = raw_segment.partition(":")
+            if not separator or not kind_text or not encoded_name:
+                raise ValueError("owner qid segment is malformed")
+            kind = OwnerKind(kind_text)
+            if kind is OwnerKind.MODEL_DEFINITION:
+                encoded_name, marker, encoded_fingerprint = encoded_name.partition("@")
+                if not marker or not encoded_name or not encoded_fingerprint:
+                    raise ValueError("model-definition qid segment is malformed")
+                if fingerprint is not None:
+                    raise ValueError("owner qid contains multiple definition fingerprints")
+                fingerprint = unquote(encoded_fingerprint)
+            elif "@" in encoded_name:
+                raise ValueError("owner qid contains an unexpected fingerprint marker")
+            nodes.append((kind, unquote(encoded_name)))
+        path = OwnerPath(
+            tuple(OwnerSegment(kind, name) for kind, name in nodes),
+            _definition_fingerprint=fingerprint,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "block instance owner qid must be a canonical OwnerPath string"
+        ) from exc
+    if str(path) != qid:
+        raise ValueError("block instance owner qid must be a canonical OwnerPath string")
+    return path
+
+
+def authenticate_block_instance_owner(
+    value: Any,
+    *,
+    block_name: str | None = None,
+    model_owner: Any = None,
+    allow_unscoped: bool = False,
+) -> tuple[str, Any, Any]:
+    """Return ``(qid, instance_owner_data, model_owner_data)`` for one Case block."""
+    if value is None or value == "":
+        if allow_unscoped:
+            return "", None, None
+        raise ValueError(
+            "public resolved/compiled plans require a canonical Case-block instance owner"
+        )
+    from pops.model.ownership import OwnerKind, OwnerPath, UnresolvedOwnershipError
+    from pops.problem.handles import BlockHandle
+
+    if isinstance(value, BlockHandle):
+        path = value.instance_owner_path.canonical()
+    elif isinstance(value, OwnerPath):
+        path = value.canonical()
+    elif isinstance(value, str):
+        path = _canonical_owner_path_from_qid(value)
+    elif isinstance(value, Mapping):
+        path = OwnerPath.from_data(value)
+        if path.is_authoring:
+            raise UnresolvedOwnershipError(
+                "block instance owner must be canonical before compilation"
+            )
+    else:
+        raise TypeError(
+            "block instance owner must be a BlockHandle, OwnerPath, or OwnerPath.to_data()"
+        )
+    kinds = tuple(node.kind for node in path.nodes)
+    if OwnerKind.CASE not in kinds or OwnerKind.BLOCK not in kinds:
+        raise ValueError("block instance owner must be Case-block qualified")
+    if OwnerKind.MODEL_DEFINITION not in kinds:
+        raise ValueError("block instance owner must instantiate a model definition")
+    if path.is_authoring:
+        raise UnresolvedOwnershipError(
+            "block instance owner must be canonical before compilation"
+        )
+    block_nodes = [node for node in path.nodes if node.kind is OwnerKind.BLOCK]
+    if len(block_nodes) != 1:
+        raise ValueError("block instance owner must contain exactly one Case-block node")
+    if block_name is not None and block_nodes[0].name != block_name:
+        raise ValueError(
+            "block instance owner block node %r does not match resolved block name %r"
+            % (block_nodes[0].name, block_name)
+        )
+    instance_model = _model_definition_owner(path)
+    expected_model = model_owner
+    if expected_model is not None and not isinstance(expected_model, OwnerPath):
+        expected_model = _owner_path_of(expected_model)
+    if isinstance(expected_model, OwnerPath):
+        if expected_model.is_authoring:
+            expected_model = expected_model.canonical()
+        if instance_model != expected_model:
+            raise ValueError(
+                "block instance owner model definition %s does not match resolved model owner %s"
+                % (instance_model, expected_model)
+            )
+        model_data = expected_model.to_data()
+    else:
+        model_data = instance_model.to_data()
+    return str(path), path.to_data(), model_data
+
+
+def authenticate_block_instance_owner_qid(
+    value: Any, *, allow_unscoped: bool = False, block_name: str | None = None,
+    model_owner: Any = None,
+) -> str:
+    """Return one official Case-block instance qid, or empty on the internal unscoped path."""
+    qid, _owner, _model = authenticate_block_instance_owner(
+        value, block_name=block_name, model_owner=model_owner, allow_unscoped=allow_unscoped,
+    )
+    return qid
+
+
+def attest_precompiled_consumer_owner(
+    model: Any,
+    requested: Any,
+    *,
+    declare_auxiliary_providers: bool | None = None,
+) -> None:
+    """Refuse a precompiled binary whose baked consumer owner is not the requested instance."""
+    requested_qid = requested if isinstance(requested, str) and requested else (
+        authenticate_block_instance_owner_qid(requested, allow_unscoped=False)
+    )
+    if not isinstance(requested_qid, str) or not requested_qid:
+        raise ValueError(
+            "public compilation requires a canonical Case-block instance owner"
+        )
+    observed = getattr(model, "consumer_owner_qid", None)
+    if observed != requested_qid:
+        raise ValueError(
+            "precompiled model consumer owner %r was not baked for Case-block instance %r; "
+            "recompile the artifact for this owner"
+            % (observed, requested_qid)
+        )
+    if declare_auxiliary_providers is not None:
+        observed_declaration = getattr(model, "declares_auxiliary_providers", None)
+        if observed_declaration != bool(declare_auxiliary_providers):
+            raise ValueError(
+                "precompiled model provider-declaration role %r was not baked for plan role %r; "
+                "recompile the artifact for this owner"
+                % (observed_declaration, bool(declare_auxiliary_providers))
+            )
+
+
+def _provider_graph_evidence(model: Any) -> Any:
+    pack = getattr(model, "_auxiliary_provider_metadata", None)
+    if pack is None:
+        module = getattr(model, "module", None)
+        pack = getattr(module, "provider_pack", None) if module is not None else None
+        to_data = getattr(pack, "to_data", None)
+        if callable(to_data):
+            pack = to_data()
+    if pack is None:
+        return None
+    return _evidence(pack, where="declaration.providers")
+
+
+def provider_declaration_contract(block: Any) -> bytes:
+    """Return the authenticated model/provider contract used to pick one declarer."""
+    payload = {
+        "model_owner": getattr(block, "model_owner", None),
+        "model": _evidence(block.model, where="declaration.model"),
+        "providers": _provider_graph_evidence(block.model),
+    }
+    return canonical_bytes(payload)
+
+
+def assign_provider_declaration_roles(blocks: tuple[Any, ...]) -> None:
+    """Mark exactly one block per identical model/provider contract as the declarer."""
+    seen: dict[bytes, str] = {}
+    for block in blocks:
+        contract = provider_declaration_contract(block)
+        if contract not in seen:
+            seen[contract] = block.name
+            object.__setattr__(block, "declares_auxiliary_providers", True)
+        else:
+            object.__setattr__(block, "declares_auxiliary_providers", False)
+
+
 def _require_identity(value: Any, domain: str, *, where: str) -> Identity:
     if type(value) is not Identity:
         raise TypeError("%s must be an exact pops.identity.Identity" % where)
@@ -173,7 +419,11 @@ class ResolvedBlock:
     backend: str
     state_spaces: tuple[str, ...]
     state_identities: tuple[str, ...] = ()
+    instance_owner_qid: Any = ""
     numerics: Any = None
+    instance_owner: Any = field(init=False, default=None)
+    model_owner: Any = field(init=False, default=None)
+    declares_auxiliary_providers: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name:
@@ -195,6 +445,17 @@ class ResolvedBlock:
             raise TypeError(
                 "ResolvedBlock state_identities must uniquely qualify every state space")
         object.__setattr__(self, "state_identities", state_identities)
+        qid, owner_data, model_data = authenticate_block_instance_owner(
+            self.instance_owner_qid,
+            block_name=self.name,
+            model_owner=_owner_path_of(self.model),
+            allow_unscoped=True,
+        )
+        object.__setattr__(self, "instance_owner_qid", qid)
+        object.__setattr__(self, "instance_owner", owner_data)
+        object.__setattr__(self, "model_owner", model_data)
+        object.__setattr__(
+            self, "declares_auxiliary_providers", bool(self.declares_auxiliary_providers))
         _evidence(self.model, where="ResolvedBlock.model")
         object.__setattr__(self, "spatial", _deep_freeze(self.spatial))
         _evidence(self.spatial, where="ResolvedBlock.spatial")
@@ -293,6 +554,13 @@ class ResolvedSimulationPlan:
         names = [block.name for block in blocks]
         if len(set(names)) != len(names):
             raise ValueError("ResolvedSimulationPlan block names must be unique")
+        missing = [block.name for block in blocks if not block.instance_owner_qid]
+        if missing:
+            raise ValueError(
+                "ResolvedSimulationPlan blocks %s have no canonical Case-block instance owner"
+                % missing
+            )
+        assign_provider_declaration_roles(blocks)
         object.__setattr__(self, "blocks", blocks)
         object.__setattr__(self, "layout", _deep_freeze(self.layout))
         object.__setattr__(self, "time", _deep_freeze(self.time))
@@ -407,6 +675,10 @@ class ResolvedSimulationPlan:
                 "backend": block.backend,
                 "state_spaces": block.state_spaces,
                 "state_identities": block.state_identities,
+                "instance_owner_qid": block.instance_owner_qid,
+                "instance_owner": block.instance_owner,
+                "model_owner": block.model_owner,
+                "declares_auxiliary_providers": block.declares_auxiliary_providers,
                 "model": _evidence(block.model, where="plan.block.model"),
                 "spatial": _evidence(block.spatial, where="plan.block.spatial"),
                 "numerics": _evidence(block.numerics, where="plan.block.numerics"),
@@ -739,5 +1011,8 @@ def require_install_plan(value: Any) -> InstallPlan:
 
 __all__ = [
     "BindInputs", "InstallPlan", "ResolvedBlock", "ResolvedSimulationPlan",
+    "authenticate_block_instance_owner", "authenticate_block_instance_owner_qid",
+    "assign_provider_declaration_roles", "attest_precompiled_consumer_owner",
+    "canonical_block_instance_owner", "provider_declaration_contract",
     "require_install_plan",
 ]

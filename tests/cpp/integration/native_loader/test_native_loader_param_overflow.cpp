@@ -6,6 +6,7 @@
 #include "test_harness.hpp"
 
 #include <pops/runtime/config/route_ids.hpp>
+#include <pops/runtime/dynamic/authenticated_native_file.hpp>
 #include <pops/runtime/config/runtime_params.hpp>
 #include <pops/runtime/system.hpp>
 
@@ -32,8 +33,12 @@ std::string parameter_names(int count) {
 
 std::string stub_source() {
   const int count = kMaxRuntimeParams + 1;
-  return "extern \"C\" const char* pops_native_abi_key() { return \"" + System::abi_key() +
+  return "extern \"C\" const char* pops_native_abi_key() { return \"" +
+         System<kNativeDimension>::abi_key() +
          "\"; }\n"
+         "extern \"C\" const char* pops_compiled_model_identity() { return "
+         "\"0000000000000000000000000000000000000000000000000000000000000000\"; }\n"
+         "extern \"C\" int pops_native_system_package_abi_version() { return 3; }\n"
          "extern \"C\" const char* pops_compiled_route_manifest() { return \"" +
          route_registry_signature() +
          "\"; }\n"
@@ -63,18 +68,27 @@ static int pops_run_test_native_loader_param_overflow(int argc, char** argv) {
     return 1;
   }
 
-  SystemConfig config;
-  config.n = 8;
-  config.L = 1.0;
-  config.periodicity = {true, true};
-  System system(config);
+  SystemConfig<kNativeDimension> config;
+  for (int axis = 0; axis < kNativeDimension; ++axis) {
+    config.shape[axis] = 8;
+    config.lower[axis] = Real(0);
+    config.upper[axis] = Real(1);
+    config.periodicity[axis] = true;
+  }
+  System<kNativeDimension> system(config);
   std::vector<double> params(static_cast<std::size_t>(kMaxRuntimeParams + 1), 0.0);
+  const std::string binary_identity = dynlib::AuthenticatedNativeFile(library).binary_identity();
 
   bool threw = false;
   std::string message;
   try {
-    system.add_native_block("gas", library, "none", "rusanov", "conservative", "explicit", 1.4, 1,
-                            true, 1, params, 0.0);
+    // Package metadata is authenticated while staging, before the package can enter the
+    // finalize_native_packages transaction.  This artifact intentionally has no installer: an
+    // overflow must be rejected at that earlier public boundary.
+    system.register_native_package(
+        "gas", library, "0000000000000000000000000000000000000000000000000000000000000000",
+        binary_identity, "none", "rusanov", "conservative", "explicit", 1.4, 1, true, 1, params,
+        0.0);
   } catch (const std::exception& error) {
     threw = true;
     message = error.what();

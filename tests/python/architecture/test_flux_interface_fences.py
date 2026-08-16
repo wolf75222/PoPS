@@ -34,10 +34,18 @@ def test_spatial_operators_own_geometric_measure_exactly_once():
     assert "apply_face_measure" in combined
     assert ".density" not in combined
     assert "checked_density()" in combined
-    assert "evaluate_axis_flux<Axis>" in combined
-    assert "evaluate_numerical_flux_at" not in combined
+    assert "evaluate_numerical_flux_at" in combined
+    assert "evaluate_axis_flux<Axis>" not in combined
     assert "rf * F[" not in combined
     assert "alpha * F[" not in combined
+
+    cartesian = _behavior(ROOT / "include/pops/numerics/spatial/operators/cartesian_operator.hpp")
+    left_status = cartesian.index("traces.left_status != StateConversionStatus::Success")
+    right_status = cartesian.index("traces.right_status != StateConversionStatus::Success")
+    evaluation = cartesian.index("evaluate_numerical_flux_at")
+    measure = cartesian.index("apply_face_measure", evaluation)
+    assert left_status < evaluation < measure
+    assert right_status < evaluation < measure
 
 
 def test_bound_native_flux_pack_is_exact_and_does_not_store_global_aux():

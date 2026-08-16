@@ -10,6 +10,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops._generated_release_contract import (
+    AMR_CHECKPOINT_PAYLOAD_VERSION,
+    UNIFORM_CHECKPOINT_PAYLOAD_VERSION,
+)
 from pops.runtime import _threading
 from pops.runtime._threading import has_kokkos
 
@@ -18,6 +22,8 @@ from pops.runtime._threading import has_kokkos
 # table reads the same every run (and the test_capabilities contract keeps its ordered lists).
 _RIEMANN_ORDER = ("rusanov", "hll", "hllc", "roe")
 _LIMITER_ORDER = ("none", "minmod", "vanleer", "weno5", "mc", "superbee")
+
+
 def _ordered(tokens: Any, order: Any) -> Any:
     """Tokens kept in canonical ``order`` first, then any extras sorted (deterministic display)."""
     present = set(tokens)
@@ -252,6 +258,7 @@ def capabilities() -> Any:
     brick cannot silently desync this matrix from the introspectable one.
     """
     from pops._native_selector import selected_native_module
+
     selected_native_module(required=True)
     # Sec 12: derive the riemann / limiter / reconstruction / Poisson token lists from the descriptor
     # catalogs (the same source as the internal descriptor report) instead of hardcoding them, so a
@@ -267,17 +274,9 @@ def capabilities() -> Any:
     runtime_env = runtime_environment_report()
     poisson_system = [
         "%s (exact-ranked Cartesian Poisson; 1D/2D/3D)" % poisson_cg,
+        "%s (exact-ranked Cartesian Dim=1/2/3, periodic, constant eps, ordered MPI slabs)"
+        % poisson_fft,
     ]
-    if runtime_env["dimension"] == 2:
-        poisson_system.append(
-            "%s (exact Dim=2, periodic, n = 2^k, constant eps, ordered MPI slabs)"
-            % poisson_fft
-        )
-    else:
-        poisson_system.append(
-            "%s unavailable for Dim=%d (concrete backend is exact Dim=2)"
-            % (poisson_fft, runtime_env["dimension"])
-        )
     return {
         # Immutable rank selected by the loaded native artifact before runtime construction.
         "dimension": runtime_env["dimension"],
@@ -359,9 +358,8 @@ def capabilities() -> Any:
         "geometry": {
             "system_cartesian": "square n x n ; mono-box (multi-box = AmrSystem or MPI mono-box)",
             "amr": "hierarchy of levels (BoxArray per level, dynamic regrid) ; "
-            "refinement_ratio = 2 only (single native AMR invariant, centralized in "
-            "include/pops/amr/refinement_ratio.hpp ; a non-2 ratio is rejected at "
-            "hierarchy construction, not silently mis-coarsened)",
+            "transition ratios selected by the authenticated hierarchy (exact native-rank "
+            "values; no process-global AMR ratio is advertised)",
         },
         "schur": {
             "system_cartesian": "explicit Program.solve(LinearProblem(..., nullspace=None), "
@@ -390,9 +388,10 @@ def capabilities() -> Any:
                 "PER_RANK topology; collective HDF5 requires the native C++ parallel-HDF5 route"
             ),
             "checkpoint_restart": (
-                "strict accepted-state Uniform v6 / AMR v8, including multi-block, active "
+                "strict accepted-state Uniform v%d / AMR v%d, including multi-block, active "
                 "regridding, fields, histories, clocks, tagging hysteresis and consumer cursors; "
                 "exact MPI_COMM_WORLD captures collectively and publishes one rank-0 NPZ artifact"
+                % (UNIFORM_CHECKPOINT_PAYLOAD_VERSION, AMR_CHECKPOINT_PAYLOAD_VERSION)
             ),
         },
         "amr_layout": {

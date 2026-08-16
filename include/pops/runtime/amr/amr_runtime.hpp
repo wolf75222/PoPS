@@ -139,18 +139,70 @@ class AmrRuntime {
     return {hierarchy_, topology_epoch_, materialization_generation_, exact_spatial_contract_};
   }
 
-  void restore(const Snapshot& snapshot) {
+  /// Fully materialized rollback publication.  Snapshot authentication and every potentially
+  /// fallible hierarchy/string copy happen during preparation; publication only checks that the
+  /// live source is unchanged and moves the prepared value into place.
+  class PreparedRestorePublication {
+   public:
+    PreparedRestorePublication(const PreparedRestorePublication&) = delete;
+    PreparedRestorePublication& operator=(const PreparedRestorePublication&) = delete;
+    PreparedRestorePublication(PreparedRestorePublication&&) noexcept = default;
+    PreparedRestorePublication& operator=(PreparedRestorePublication&&) noexcept = default;
+
+    const hierarchy_type& hierarchy() const noexcept { return hierarchy_; }
+    std::string_view spatial_contract() const noexcept { return exact_spatial_contract_; }
+
+   private:
+    friend class AmrRuntime;
+
+    PreparedRestorePublication(hierarchy_type hierarchy, std::uint64_t source_topology_epoch,
+                               std::uint64_t source_materialization_generation,
+                               std::string source_spatial_contract, std::uint64_t topology_epoch,
+                               std::uint64_t materialization_generation,
+                               std::string exact_spatial_contract)
+        : hierarchy_(std::move(hierarchy)),
+          source_topology_epoch_(source_topology_epoch),
+          source_materialization_generation_(source_materialization_generation),
+          source_spatial_contract_(std::move(source_spatial_contract)),
+          topology_epoch_(topology_epoch),
+          materialization_generation_(materialization_generation),
+          exact_spatial_contract_(std::move(exact_spatial_contract)) {}
+
+    hierarchy_type hierarchy_;
+    std::uint64_t source_topology_epoch_ = 0;
+    std::uint64_t source_materialization_generation_ = 0;
+    std::string source_spatial_contract_;
+    std::uint64_t topology_epoch_ = 0;
+    std::uint64_t materialization_generation_ = 0;
+    std::string exact_spatial_contract_;
+  };
+
+  PreparedRestorePublication prepare_restore_publication(const Snapshot& snapshot) const {
     const std::string expected = detail::exact_runtime_spatial_contract(
         spatial_identity_, snapshot.hierarchy, snapshot.topology_epoch,
         snapshot.materialization_generation);
     if (expected != snapshot.exact_spatial_contract)
       throw std::invalid_argument("AMR runtime rollback snapshot is not authentic");
-    hierarchy_type restored_hierarchy(snapshot.hierarchy);
-    std::string restored_contract(snapshot.exact_spatial_contract);
-    hierarchy_ = std::move(restored_hierarchy);
-    topology_epoch_ = snapshot.topology_epoch;
-    materialization_generation_ = snapshot.materialization_generation;
-    exact_spatial_contract_.swap(restored_contract);
+    return PreparedRestorePublication(hierarchy_type(snapshot.hierarchy), topology_epoch_,
+                                      materialization_generation_, exact_spatial_contract_,
+                                      snapshot.topology_epoch, snapshot.materialization_generation,
+                                      snapshot.exact_spatial_contract);
+  }
+
+  void publish_prepared_restore(PreparedRestorePublication publication) {
+    if (publication.source_topology_epoch_ != topology_epoch_ ||
+        publication.source_materialization_generation_ != materialization_generation_ ||
+        publication.source_spatial_contract_ != exact_spatial_contract_)
+      throw std::invalid_argument("prepared AMR restore publication is stale");
+    static_assert(std::is_nothrow_move_assignable_v<hierarchy_type>);
+    hierarchy_ = std::move(publication.hierarchy_);
+    topology_epoch_ = publication.topology_epoch_;
+    materialization_generation_ = publication.materialization_generation_;
+    exact_spatial_contract_.swap(publication.exact_spatial_contract_);
+  }
+
+  void restore(const Snapshot& snapshot) {
+    publish_prepared_restore(prepare_restore_publication(snapshot));
   }
 
   ::pops::amr::regridding::PreparedRegrid<Dim> prepare_regrid(
@@ -164,30 +216,113 @@ class AmrRuntime {
         hierarchy_.layout(parent_level), ratio, std::move(clustered), *load_balance_, budget, lane);
   }
 
+  /// Fully materialized topology publication.  All hierarchy copies, generation checks and exact
+  /// contract allocation happen in `prepare_regrid_publication`; publishing this value is a
+  /// no-allocation move/swap cutover suitable for an outer multi-block collective transaction.
+  class PreparedRegridPublication {
+   public:
+    PreparedRegridPublication(const PreparedRegridPublication&) = delete;
+    PreparedRegridPublication& operator=(const PreparedRegridPublication&) = delete;
+    PreparedRegridPublication(PreparedRegridPublication&&) noexcept = default;
+    PreparedRegridPublication& operator=(PreparedRegridPublication&&) noexcept = default;
+
+    bool changes_topology() const noexcept { return changes_topology_; }
+    const hierarchy_type& hierarchy() const noexcept { return hierarchy_; }
+    std::string_view spatial_contract() const noexcept { return exact_spatial_contract_; }
+
+   private:
+    friend class AmrRuntime;
+
+    PreparedRegridPublication(hierarchy_type hierarchy, std::uint64_t source_topology_epoch,
+                              std::uint64_t source_materialization_generation,
+                              std::string source_spatial_contract, std::uint64_t topology_epoch,
+                              std::uint64_t materialization_generation,
+                              std::string exact_spatial_contract, bool changes_topology)
+        : hierarchy_(std::move(hierarchy)),
+          source_topology_epoch_(source_topology_epoch),
+          source_materialization_generation_(source_materialization_generation),
+          source_spatial_contract_(std::move(source_spatial_contract)),
+          topology_epoch_(topology_epoch),
+          materialization_generation_(materialization_generation),
+          exact_spatial_contract_(std::move(exact_spatial_contract)),
+          changes_topology_(changes_topology) {}
+
+    hierarchy_type hierarchy_;
+    std::uint64_t source_topology_epoch_ = 0;
+    std::uint64_t source_materialization_generation_ = 0;
+    std::string source_spatial_contract_;
+    std::uint64_t topology_epoch_ = 0;
+    std::uint64_t materialization_generation_ = 0;
+    std::string exact_spatial_contract_;
+    bool changes_topology_ = false;
+  };
+
+  PreparedRegridPublication prepare_regrid_publication(
+      std::size_t parent_level, const ::pops::amr::regridding::PreparedRegrid<Dim>& prepared,
+      std::optional<field_type> child_state) const {
+    if (parent_level >= hierarchy_.num_levels() ||
+        prepared.source_level() != hierarchy_.layout(parent_level).exact_identity())
+      throw std::invalid_argument("AMR runtime regrid source is stale for the live hierarchy");
+
+    bool changes = true;
+    hierarchy_type candidate(hierarchy_);
+    if (prepared.removes_fine_level()) {
+      if (child_state)
+        throw std::invalid_argument("an empty prepared regrid cannot publish child storage");
+      if (parent_level + 1 == hierarchy_.num_levels()) {
+        changes = false;
+      } else {
+        candidate = hierarchy_.truncated(parent_level);
+      }
+    } else {
+      if (!child_state || !prepared.fine_layout() || !prepared.ownership())
+        throw std::invalid_argument(
+            "a non-empty prepared regrid requires its authenticated ownership and child storage");
+      if (prepared.fine_layout()->level() != static_cast<int>(parent_level + 1) ||
+          prepared.fine_layout()->distribution() != prepared.ownership()->plan().distribution())
+        throw std::invalid_argument("prepared regrid child layout lost its ownership provenance");
+      level_type child(*prepared.fine_layout(), std::move(*child_state));
+      candidate = hierarchy_.with_level(std::move(child));
+    }
+
+    const std::uint64_t next_topology =
+        changes ? detail::next_generation(topology_epoch_, "AMR runtime topology epoch")
+                : topology_epoch_;
+    const std::uint64_t next_materialization =
+        changes ? detail::next_generation(materialization_generation_,
+                                          "AMR runtime materialization generation")
+                : materialization_generation_;
+    std::string next_contract =
+        changes ? detail::exact_runtime_spatial_contract(spatial_identity_, candidate,
+                                                         next_topology, next_materialization)
+                : exact_spatial_contract_;
+    return PreparedRegridPublication(
+        std::move(candidate), topology_epoch_, materialization_generation_, exact_spatial_contract_,
+        next_topology, next_materialization, std::move(next_contract), changes);
+  }
+
+  /// Publish a previously materialized regrid candidate.  Staleness is checked before the first
+  /// write; the remaining hierarchy move and contract swap are no-throw.
+  void publish_prepared_regrid(PreparedRegridPublication publication) {
+    if (publication.source_topology_epoch_ != topology_epoch_ ||
+        publication.source_materialization_generation_ != materialization_generation_ ||
+        publication.source_spatial_contract_ != exact_spatial_contract_)
+      throw std::invalid_argument("prepared AMR regrid publication is stale");
+    if (!publication.changes_topology_)
+      return;
+    static_assert(std::is_nothrow_move_assignable_v<hierarchy_type>);
+    hierarchy_ = std::move(publication.hierarchy_);
+    topology_epoch_ = publication.topology_epoch_;
+    materialization_generation_ = publication.materialization_generation_;
+    exact_spatial_contract_.swap(publication.exact_spatial_contract_);
+  }
+
   /// Publish a prepared child layout and transferred state, or remove every level above its parent.
   void publish_regrid(std::size_t parent_level,
                       ::pops::amr::regridding::PreparedRegrid<Dim> prepared,
                       std::optional<field_type> child_state) {
-    if (parent_level >= hierarchy_.num_levels() ||
-        prepared.source_level() != hierarchy_.layout(parent_level).exact_identity())
-      throw std::invalid_argument("AMR runtime regrid source is stale for the live hierarchy");
-    if (prepared.removes_fine_level()) {
-      if (child_state)
-        throw std::invalid_argument("an empty prepared regrid cannot publish child storage");
-      if (parent_level + 1 == hierarchy_.num_levels())
-        return;
-      commit_hierarchy_(hierarchy_.truncated(parent_level));
-      return;
-    }
-    if (!child_state || !prepared.fine_layout() || !prepared.ownership())
-      throw std::invalid_argument(
-          "a non-empty prepared regrid requires its authenticated ownership and child storage");
-    if (prepared.fine_layout()->level() != static_cast<int>(parent_level + 1) ||
-        prepared.fine_layout()->distribution() != prepared.ownership()->plan().distribution())
-      throw std::invalid_argument("prepared regrid child layout lost its ownership provenance");
-
-    level_type child(*prepared.fine_layout(), std::move(*child_state));
-    commit_hierarchy_(hierarchy_.with_level(std::move(child)));
+    publish_prepared_regrid(
+        prepare_regrid_publication(parent_level, prepared, std::move(child_state)));
   }
 
   PreparedRebalanceDecision<Dim> prepare_rebalance(
@@ -270,7 +405,9 @@ class AmrRuntime {
         break;
       case ::pops::amr::transfer::TransferKind::LinearProlongation:
       case ::pops::amr::transfer::TransferKind::CoarseFineGhostInterpolation:
+      case ::pops::amr::transfer::TransferKind::FifthOrderCoarseFineGhostInterpolation:
       case ::pops::amr::transfer::TransferKind::ConstantInjection:
+      case ::pops::amr::transfer::TransferKind::NodeMultilinearProlongation:
         if (source_level + 1 != destination_level)
           throw std::invalid_argument(
               "AMR interpolation must transfer from one parent to its child");
@@ -290,8 +427,22 @@ class AmrRuntime {
       const ::pops::amr::reflux::CoarseFaceRefluxKey<Dim>& key, std::string_view state_identity,
       const ::pops::amr::reflux::FaceRefinementMapping<Dim>& mapping,
       const ::pops::amr::reflux::MetricRefluxBudget& budget, Axpy&& axpy) const {
-    if (state_identity.empty() || key.owner != spatial_identity_ || key.state != state_identity ||
-        key.levels.coarse < 0 ||
+    return reconcile_reflux_for_owner(ledger, key, spatial_identity_, state_identity, mapping,
+                                      budget, std::forward<Axpy>(axpy));
+  }
+
+  /// Reconcile one block-qualified carrier on this runtime's canonical spatial hierarchy.
+  /// The ordinary overload retains the topology identity as owner; multi-block transactions name
+  /// the physical block explicitly while still authenticating the same adjacent live levels.
+  template <class Payload, class Axpy>
+  ::pops::amr::reflux::MetricFaceReflux<Payload> reconcile_reflux_for_owner(
+      const ::pops::amr::reflux::TransactionalFaceFluxLedger<Dim, Payload>& ledger,
+      const ::pops::amr::reflux::CoarseFaceRefluxKey<Dim>& key, std::string_view owner_identity,
+      std::string_view state_identity,
+      const ::pops::amr::reflux::FaceRefinementMapping<Dim>& mapping,
+      const ::pops::amr::reflux::MetricRefluxBudget& budget, Axpy&& axpy) const {
+    if (owner_identity.empty() || state_identity.empty() || key.owner != owner_identity ||
+        key.state != state_identity || key.levels.coarse < 0 ||
         static_cast<std::size_t>(key.levels.fine) >= hierarchy_.num_levels() ||
         key.levels.fine != key.levels.coarse + 1)
       throw std::invalid_argument(
