@@ -1,0 +1,7 @@
+refs/stash@{0}	308092550c9a689d893bf40e0f62a4af617f3c17	On agent/final-integration-clean: integration-safety: pre-grok projection duplicate plus krylov CMake filter
+refs/stash@{1}	aa9f93af0ac7168f76ab7544ccad214b79be03ad	On agent/final-integration-clean: codex-local-mpi-system-solve-fields-diagnostic
+refs/stash@{2}	ac05e2137bf3ac258b81c60c7b4b1e7520056621	On agent/final-integration-clean: codex-local-mpi-cartesian-poisson-diagnostic
+refs/stash@{3}	f0a5dd009f282e6082881de930ece1aef0b9822e	On agent/final-integration-clean: codex-local-mpi-tensor-fac-diagnostic
+refs/stash@{4}	b28a721ba90e9feda58c524e5d9dd6f62a6d1895	On agent/final-integration-clean: codex-local-mpi-composite-fac-diagnostic
+refs/stash@{5}	6d82362008d01b8b946aacbd7ef2e46a1d2c3bac	On agent/final-integration-clean: codex-local-mpi-translation-diagnostic
+refs/stash@{6}	6e6a527c2829376a579fc2e92ae542436227e483	On codex/adc735-final-system-runtime-20260804: codex-adc735-obsolete-native-specialization-draft

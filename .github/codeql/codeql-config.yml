@@ -1,5 +1,0 @@
-name: "pops CodeQL config"
-paths-ignore:
-  - ".kokkos-install/**"
-  - "build*/**"
-  - "**/_deps/**"
