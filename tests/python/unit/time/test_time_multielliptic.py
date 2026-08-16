@@ -222,8 +222,8 @@ def _block(m):
     m.primitive_vars(rho=rho, u=u, v=v)
     m.conservative_from([rho, rho * u, rho * v])
     cs = sqrt(cs2)
-    m.eigenvalues(x=[u - cs, u, u + cs], y=[v - cs, v, v + cs])
     m.flux(x=[mx, mx * u + p, my * u], y=[my, mx * v, my * v + p])
+    m.eigenvalues(x=[u - cs, u, u + cs], y=[v - cs, v, v + cs])
     m.elliptic_rhs(Q * rho)  # default Poisson coupling: f = q * rho
     return rho, mx, my
 
@@ -244,11 +244,11 @@ def named_model(name="me_named", scale=1.0, src_scale=1.0):
     phi2's OWN gradient (g2x/g2y, the named aux), multiplied by src_scale -- NOT the default grad."""
     m = Model(name)
     rho, mx, my = _block(m)
-    # The named field's output aux components -- declared as model aux_field slots so a source can read
+    # The named field's output aux components -- declared as model aux slots so a source can read
     # them and the runtime has a channel to write into.
-    g2x = m.aux_field("g2x")
-    g2y = m.aux_field("g2y")
-    m.aux_field(
+    g2x = m.aux("g2x")
+    g2y = m.aux("g2y")
+    m.aux(
         "phi2"
     )  # declare the named field's potential aux slot (written C++-side, not read in this IR)
     m.elliptic_field("phi2", rhs=(scale * Q) * rho, aux=["phi2", "g2x", "g2y"])
@@ -298,13 +298,15 @@ chk(
 )
 
 # The named brick + registration land in the native loader (production backend).
-loader = named_model("me_nam_loader")._m.emit_cpp_native_loader(target="system")
+loader_emit = named_model("me_nam_loader").__pops_compiler_lowering__().emit_model
+loader = loader_emit.__pops_native_loader_source__(target="system")
 chk("Ell_phi2" in loader, "the named elliptic RHS brick is emitted in the native loader")
 chk(
-    'register_elliptic_field(name, "phi2"' in loader, "the named field registers its aux components"
+    'package.elliptic_attachments.push_back({"phi2",' in loader,
+    "the named field registers its exact aux-component attachment",
 )
 chk(
-    "set_block_elliptic_field" in loader and "make_poisson_rhs" in loader,
+    "std::move(named_elliptic_rhs_" in loader and "make_poisson_rhs" in loader,
     "the named field attaches its RHS closure (make_poisson_rhs of the brick)",
 )
 
@@ -345,7 +347,9 @@ chk(
 # A named elliptic field on target='amr_system' lowers as one complete inert package: the callback
 # stages the block and every elliptic attachment, then the outer host transaction witnesses them
 # atomically before retaining the package lifetime.
-amr_loader = named_model("me_amr")._m.emit_cpp_native_loader(
+amr_emit = named_model("me_amr").__pops_compiler_lowering__().emit_model
+amr_emit._model_hash()
+amr_loader = amr_emit._m.emit_cpp_native_loader(
     target="amr_system",
     native_field_roles=(
         {

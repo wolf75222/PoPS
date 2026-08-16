@@ -20,6 +20,174 @@ from pops.model.provider_pack import (
 )
 
 
+EMITTER_CARRIER_ATTRS = (
+    "_component_provider_pack",
+    "_component_provider_metadata",
+    "_component_operator_provider_packs",
+    "_component_operator_provider_metadata",
+    "_component_flux_provider_pack",
+    "_component_flux_provider_metadata",
+    "_auxiliary_provider_pack",
+    "_auxiliary_provider_metadata",
+    "_auxiliary_provider_route_metadata",
+    "_component_operator_consumer_plans",
+    "_component_flux_consumer_plan",
+    "_auxiliary_provider_routes",
+)
+_EMITTER_PACK_ATTRS = frozenset({
+    "_component_provider_pack",
+    "_component_flux_provider_pack",
+    "_auxiliary_provider_pack",
+})
+_EMITTER_PACK_MAP_ATTRS = frozenset({"_component_operator_provider_packs"})
+_WITNESS_ATTR = "_pops_emitter_attachment_witness"
+_ATTACH_CAPABILITY = object()
+
+
+def _freeze_witness_value(value: Any) -> Any:
+    """Recursively seal one already-canonical witness member."""
+    if isinstance(value, Mapping):
+        return MappingProxyType({
+            _freeze_witness_value(key): _freeze_witness_value(item)
+            for key, item in value.items()
+        })
+    if isinstance(value, tuple):
+        return tuple(_freeze_witness_value(item) for item in value)
+    return value
+
+
+class _EmitterAttachmentWitness:
+    __slots__ = ("_snapshot", "_target")
+
+    def __init__(self, target: Any, snapshot: Mapping[str, Any], capability: object) -> None:
+        if capability is not _ATTACH_CAPABILITY:
+            raise TypeError("attachment witness is compiler-internal")
+        object.__setattr__(self, "_target", target)
+        object.__setattr__(self, "_snapshot", MappingProxyType({
+            name: _freeze_witness_value(value) for name, value in snapshot.items()
+        }))
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError("attachment witness is immutable")
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError("attachment witness is immutable")
+
+    def _authenticates(self, target: Any) -> bool:
+        return self._target is target
+
+    def snapshot(self) -> Mapping[str, Any]:
+        return self._snapshot
+
+
+def canonical_emitter_carrier_value(value: Any) -> Any:
+    """Project a carrier member to independent, exact immutable witness data."""
+    if type(value) is ProviderPack:
+        return canonical_emitter_carrier_value(value.to_data())
+    if type(value) is ComponentKey:
+        return (
+            "ComponentKey",
+            canonical_emitter_carrier_value(value.owner_qid),
+            canonical_emitter_carrier_value(value.space_kind),
+            canonical_emitter_carrier_value(value.space_name),
+            canonical_emitter_carrier_value(value.component),
+        )
+    # Typed auxiliary routes deliberately retain executable descriptors.  A witness must not retain
+    # those objects by reference: their exact data is the compiler-visible identity instead.
+    from pops.fields.aux import AuxiliaryBoundary, DerivedAux, InputAux, strict_field_data
+    from pops.model.provider_pack import ComponentContract
+
+    if type(value) in (AuxiliaryBoundary, ComponentContract):
+        return canonical_emitter_carrier_value(value.to_data())
+    if type(value) is InputAux:
+        return canonical_emitter_carrier_value({
+            "type": "InputAux",
+            "target": value.target.qualified_id,
+            "producer": value.producer_kind,
+            "restart": value.restart_policy,
+            "regrid": value.regrid_policy,
+            "boundary": value.boundary,
+        })
+    if type(value) is DerivedAux:
+        return canonical_emitter_carrier_value({
+            "type": "DerivedAux",
+            "target": value.target.qualified_id,
+            "producer": value.producer_kind,
+            "restart": value.restart_policy,
+            "regrid": value.regrid_policy,
+            "boundary": value.boundary,
+            "expression": strict_field_data(value.expression),
+        })
+    if isinstance(value, Mapping):
+        return {
+            canonical_emitter_carrier_value(key): canonical_emitter_carrier_value(item)
+            for key, item in value.items()
+        }
+    # Sealed JSON arrays become tuples; that storage-only change is still equal.
+    if isinstance(value, (list, tuple)):
+        return tuple(canonical_emitter_carrier_value(item) for item in value)
+    if value is None:
+        return ("none",)
+    if type(value) is bool:
+        return ("bool", value)
+    if type(value) is int:
+        return ("int", value)
+    if type(value) is float:
+        return ("float", value.hex())
+    if type(value) is str:
+        return ("str", value)
+    raise TypeError(
+        "unsupported typed emitter carrier witness leaf %s" % type(value).__name__
+    )
+
+
+def emitter_carrier_snapshot(target: Any) -> dict[str, Any]:
+    """Return canonical values of every carrier member plus typed routes."""
+    return {
+        name: canonical_emitter_carrier_value(getattr(target, name, None))
+        for name in EMITTER_CARRIER_ATTRS
+    }
+
+
+def require_emitter_provider_carrier(target: Any, *, where: str = "emitter") -> None:
+    """Refuse an absent, partial, or type-forged ProviderPack carrier."""
+    missing = [
+        name for name in EMITTER_CARRIER_ATTRS
+        if getattr(target, name, None) is None
+    ]
+    if missing:
+        raise ValueError(
+            "%s requires the complete exact ProviderPack carrier; missing %s; "
+            "compile through Module" % (where, ", ".join(missing))
+        )
+    for name in _EMITTER_PACK_ATTRS:
+        if type(getattr(target, name)) is not ProviderPack:
+            raise TypeError("%s %s must be an exact ProviderPack" % (where, name))
+    packs = target._component_operator_provider_packs
+    if not isinstance(packs, Mapping) or any(
+            type(item) is not ProviderPack for item in packs.values()):
+        raise TypeError(
+            "%s _component_operator_provider_packs must map names to exact ProviderPack values"
+            % where
+        )
+    witness = getattr(target, _WITNESS_ATTR, None)
+    if type(witness) is not _EmitterAttachmentWitness:
+        raise ValueError(
+            "%s requires an authenticated exact attachment witness; compile through Module"
+            % where
+        )
+    if not witness._authenticates(target):
+        raise ValueError("%s attachment witness belongs to a different emitter" % where)
+    try:
+        current = emitter_carrier_snapshot(target)
+    except (AttributeError, TypeError, ValueError) as error:
+        raise ValueError(
+            "%s carrier cannot be projected against its attachment witness" % where
+        ) from error
+    if dict(witness.snapshot()) != current:
+        raise ValueError("%s carrier does not match its exact attachment witness" % where)
+
+
 @dataclass(frozen=True, slots=True)
 class ComponentProviderPacks:
     """One immutable provider resolution for a canonical Module."""
@@ -103,34 +271,51 @@ class ComponentProviderPacks:
             "_auxiliary_provider_route_metadata": self.auxiliary_route_metadata,
             "_component_operator_consumer_plans": self.consumer_plans,
             "_component_flux_consumer_plan": self.physical_flux_plan,
+            "_auxiliary_provider_routes": self.auxiliary_routes,
         }
-
-        def canonical(value: Any) -> Any:
-            if isinstance(value, ProviderPack):
-                return canonical(value.to_data())
-            if isinstance(value, Mapping):
-                return {
-                    key: canonical(item)
-                    for key, item in value.items()
-                }
-            # Artifact sealing deliberately replaces mutable JSON arrays by tuples.  Treat that
-            # storage-only transition as the same logical metadata while retaining sequence order
-            # and recursively checking every value.  No other representation is coerced here:
-            # changed keys, rows, scalars, or ProviderPack contracts still conflict.
-            if isinstance(value, (list, tuple)):
-                return tuple(canonical(item) for item in value)
-            return value
 
         for name, value in values.items():
             previous = getattr(target, name, None)
-            if previous is not None and canonical(previous) != canonical(value):
+            if previous is None:
+                continue
+            if name in _EMITTER_PACK_ATTRS:
+                if type(previous) is not ProviderPack:
+                    raise TypeError(
+                        "compiler emitter %s must be an exact ProviderPack" % name
+                    )
+            elif name in _EMITTER_PACK_MAP_ATTRS:
+                if (
+                    not isinstance(previous, Mapping)
+                    or any(type(item) is not ProviderPack for item in previous.values())
+                ):
+                    raise TypeError(
+                        "compiler emitter %s must map names to exact ProviderPack values" % name
+                    )
+            if canonical_emitter_carrier_value(previous) != canonical_emitter_carrier_value(value):
                 raise ValueError(
                     "compiler emitter retained a conflicting component-provider pack"
                 )
+        for name, value in values.items():
             object.__setattr__(target, name, value)
-        # Expressions are compiler-only immutable trees, while JSON route metadata is the
-        # cross-DSO/report contract above.  Keep the former out of equality/serialization.
-        object.__setattr__(target, "_auxiliary_provider_routes", self.auxiliary_routes)
+        object.__setattr__(target, _WITNESS_ATTR, _EmitterAttachmentWitness(
+            target, emitter_carrier_snapshot(target), _ATTACH_CAPABILITY))
+
+
+def bind_emitter_provider_packs(target: Any) -> None:
+    """Bind the exact Module ProviderPack onto one compiler emitter.
+
+    Two carrier attributes are never treated as a bound pack.  When the target
+    exposes the compiler bind protocol and a ``Module`` authority, this resolves
+    one :class:`ComponentProviderPacks` and attaches it so every pack member and
+    typed route is conflict-checked.  Without that authority no pack is invented;
+    callers remain fail-closed.
+    """
+    bind = getattr(target, "__pops_bind_component_provider_packs__", None)
+    module = getattr(target, "module", None)
+    from pops.model import Module
+
+    if callable(bind) and isinstance(module, Module):
+        bind(resolve_component_provider_packs(module))
 
 
 def resolve_component_provider_packs(module: Any) -> ComponentProviderPacks:
@@ -376,8 +561,13 @@ def consumer_provider_plan(pack: Any) -> tuple[Mapping[str, Any], ...]:
 
 __all__ = [
     "ComponentProviderPacks",
+    "EMITTER_CARRIER_ATTRS",
     "auxiliary_component_slot",
+    "bind_emitter_provider_packs",
+    "canonical_emitter_carrier_value",
     "compact_auxiliary_provider_pack",
     "consumer_provider_plan",
+    "emitter_carrier_snapshot",
+    "require_emitter_provider_carrier",
     "resolve_component_provider_packs",
 ]

@@ -443,10 +443,22 @@ def _model_impl(model: Any) -> Any:
 
     The public physics board wraps the DSL facade as ``_dsl`` and the facade wraps its implementation
     as ``_m``.  Compiler-internal call sites may already carry either of the latter two objects.
+    ProviderPack identity stays on the Module/facade bind protocol; this only unwraps after the
+    exact pack has been attached to the formula carrier.
     """
 
     facade = getattr(model, "_dsl", model)
-    return getattr(facade, "_m", facade)
+    from pops.codegen.component_provider_packs import (
+        bind_emitter_provider_packs,
+        require_emitter_provider_carrier,
+    )
+
+    bind_emitter_provider_packs(facade)
+    impl = getattr(facade, "_m", facade)
+    if impl is not facade:
+        bind_emitter_provider_packs(impl)
+    require_emitter_provider_carrier(impl, where="Program model kernel")
+    return impl
 
 
 def _named_fluxes(v: Any) -> Any:

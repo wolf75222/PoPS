@@ -176,13 +176,14 @@ def test_gradient_output_sign_reaches_model_hash_and_both_native_loaders() -> No
 
     assert negative_emit._m._elliptic_fields["electrostatic"]["gradient_sign"] == -1
     assert positive_emit._m._elliptic_fields["electrostatic"]["gradient_sign"] == 1
-    assert negative_emit._m._model_hash() != positive_emit._m._model_hash()
+    assert negative_emit._model_hash() != positive_emit._model_hash()
     for target in ("system", "amr_system"):
         if target == "system":
-            negative_loader = negative_emit._m.emit_cpp_native_loader(target=target)
-            positive_loader = positive_emit._m.emit_cpp_native_loader(target=target)
-            assert 'register_elliptic_field(name, "electrostatic", 5, 6, 7, -1);' in negative_loader
-            assert 'register_elliptic_field(name, "electrostatic", 5, 6, 7, 1);' in positive_loader
+            negative_loader = negative_emit.__pops_native_loader_source__(target=target)
+            positive_loader = positive_emit.__pops_native_loader_source__(target=target)
+            assert 'package.elliptic_attachments.push_back({"electrostatic",' in negative_loader
+            assert '}, -1, std::move(named_elliptic_rhs_0)});' in negative_loader
+            assert '}, 1, std::move(named_elliptic_rhs_0)});' in positive_loader
             continue
 
         def roles(sign: int) -> tuple[dict[str, object], ...]:
@@ -222,7 +223,17 @@ def test_gradient_output_sign_reaches_model_hash_and_both_native_loaders() -> No
         )
         assert "attachment.gradient_sign = -1;" in negative_loader
         assert "attachment.gradient_sign = 1;" in positive_loader
+        expected_output_keys = (
+            "attachment.output_keys = {"
+            'pops::runtime::system::AuxiliaryComponentKey{"tests/material", "field", '
+            '"potential", "potential"}, '
+            'pops::runtime::system::AuxiliaryComponentKey{"tests/material", "field", '
+            '"potential", "electric_field_x"}, '
+            'pops::runtime::system::AuxiliaryComponentKey{"tests/material", "field", '
+            '"potential", "electric_field_y"}};'
+        )
         for loader in (negative_loader, positive_loader):
+            assert expected_output_keys in loader
             assert 'attachment.field = "tests.electrostatic.slot";' in loader
             assert 'attachment.binding_identity = "tests.electrostatic.binding.0";' in loader
             assert "install_prepared_native_amr_package(std::move(package))" in loader

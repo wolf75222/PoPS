@@ -382,11 +382,14 @@ def model_hash(model: Any, params: Any = None) -> str:
             parts.append("ws_jac_eig_max_iter=%d" % int(ws["eig_max_iter"]))
         if ws.get("im_tol") is not None:
             parts.append("ws_jac_im_tol=%s" % _scalar_token(ws["im_tol"]))
+    from pops.codegen.component_provider_packs import (
+        bind_emitter_provider_packs,
+        require_emitter_provider_carrier,
+    )
+
+    bind_emitter_provider_packs(m)
+    require_emitter_provider_carrier(m, where="model_hash")
     provider_metadata = getattr(m, "_auxiliary_provider_metadata", None)
-    if provider_metadata is None:
-        raise ValueError(
-            "model_hash requires the exact auxiliary ProviderPack; compile through Module"
-        )
     parts.append(
         "aux_provider_pack=%s"
         % json.dumps(provider_metadata, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
@@ -869,6 +872,13 @@ def emit_cpp_native_loader(
     )
 
     m = model
+    from pops.codegen.component_provider_packs import (
+        bind_emitter_provider_packs,
+        require_emitter_provider_carrier,
+    )
+
+    bind_emitter_provider_packs(m)
+    require_emitter_provider_carrier(m, where="emit_cpp_native_loader")
     if target not in ("system", "amr_system"):
         raise ValueError(
             "emit_cpp_native_loader: target 'system' | 'amr_system' (got %r)" % (target,)

@@ -67,13 +67,17 @@ def _custom_cs2_pressure(m, U):
 
 def test_pressure_formula_overrides_role_derived_hook():
     # role-derived default emits the primitive 'p' formula verbatim.
-    default = _euler()._dsl._m.emit_cpp_brick(name="EulerGen")
+    default_model = _euler()
+    default = default_model.__pops_compiler_lowering__().emit_model.__pops_native_loader_source__(
+        name="EulerGen")
     body0 = _pressure_body(default)
     assert "return p;" in body0
     assert "cs2" not in body0
 
     # the arbitrary cs2-based formula is codegen'd into the hook body instead.
-    override = _euler(custom_pressure=_custom_cs2_pressure)._dsl._m.emit_cpp_brick(name="EulerGen")
+    override_model = _euler(custom_pressure=_custom_cs2_pressure)
+    override = override_model.__pops_compiler_lowering__().emit_model.__pops_native_loader_source__(
+        name="EulerGen")
     body1 = _pressure_body(override)
     assert "ARBITRARY board formula" in override        # the override marker comment
     assert "const pops::Real cs2 = " in body1            # the custom scalar appears as a local
@@ -86,7 +90,9 @@ def test_pressure_override_changes_the_module_hash():
     # a distinct hook body must key a distinct compiled-brick cache entry...
     m0 = _euler()
     m1 = _euler(custom_pressure=_custom_cs2_pressure)
-    assert m0._dsl._m._model_hash() != m1._dsl._m._model_hash()
+    m0_emit = m0.__pops_compiler_lowering__().emit_model
+    m1_emit = m1.__pops_compiler_lowering__().emit_model
+    assert m0_emit._model_hash() != m1_emit._model_hash()
     # ...while a role-derived-only model records NO override (historical hash bit-identity).
     assert m0._dsl._m._riemann_hook_forms == {}
 
@@ -96,7 +102,8 @@ def test_descriptor_hooks_keep_the_role_derived_default():
     # overrides: the role-derived HLLC capability is emitted unchanged.
     m = _euler()
     assert m._dsl._m._riemann_hook_forms == {}            # no Expr recorded from the descriptors
-    cpp = m._dsl._m.emit_cpp_brick(name="EulerGen")
+    cpp = m.__pops_compiler_lowering__().emit_model.__pops_native_loader_source__(
+        name="EulerGen")
     assert "pops::Real contact_speed(const State& UL, const State& UR" in cpp
     assert "State hllc_star_state(const State& U" in cpp
 
@@ -120,7 +127,8 @@ def test_pressure_formula_referencing_a_missing_capability_raises():
     d.eigenvalues(x=[u, u, u, u], y=[v, v, v, v])
     m.riemann("hllc", pressure=rho + Var("B_z", "aux"))   # references an undeclared capability
     with pytest.raises(ValueError, match="undeclared quantity"):
-        d._m.emit_cpp_brick(name="EulerGen")
+        m.__pops_compiler_lowering__().emit_model.__pops_native_loader_source__(
+            name="EulerGen")
 
 
 def test_arbitrary_formula_for_a_two_state_hook_is_rejected():

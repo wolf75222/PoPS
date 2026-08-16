@@ -40,7 +40,7 @@ def test_named_field_only_runtime_param_uses_the_shared_bind_carrier() -> None:
         "named_rhs_scale"
     ]
 
-    loader = emitted._m.emit_cpp_native_loader(
+    loader = emitted.__pops_native_loader_source__(
         name="NamedFieldRuntimeParamGen", target="system")
     named_start = loader.index("struct NamedFieldRuntimeParamGenEll_potential {")
     named_end = loader.index("}  // namespace pops_generated", named_start)

@@ -8,7 +8,6 @@ from pops.codegen import Production
 from pops.codegen._compile_emit import _BACKEND_CAPS, compiled_capability_flags
 from pops.params import RuntimeParam
 from pops.physics._facade import Model
-from pops.physics._model import HyperbolicModel
 
 
 _AXES = ("x", "y", "z")
@@ -51,20 +50,20 @@ def _runtime_elliptic_model() -> Model:
     model.flux(x=[rho], y=[rho])
     model.eigenvalues(x=[rho], y=[rho])
     model.elliptic_rhs(scale * rho)
-    model.aux_field("psi")
+    model.aux("psi")
     model.elliptic_field("psi", rhs=scale * rho, aux=["psi"])
     return model
 
 
-def _ranked_scalar_model(dimension: int) -> HyperbolicModel:
+def _ranked_scalar_model(dimension: int) -> Model:
     """One authored model whose emitted C++ rank is exactly ``dimension``."""
-    model = HyperbolicModel("ranked_loader_%d" % dimension)
+    model = Model("ranked_loader_%d" % dimension)
     (state,) = model.conservative_vars("state")
     axes = _AXES[:dimension]
-    model.set_flux(**{axis: [(ordinal + 1) * state] for ordinal, axis in enumerate(axes)})
-    model.set_eigenvalues(**{axis: [ordinal + 1 + 0 * state] for ordinal, axis in enumerate(axes)})
-    model.set_primitive_state(state)
-    model.set_conservative_from([state])
+    model.flux(**{axis: [(ordinal + 1) * state] for ordinal, axis in enumerate(axes)})
+    model.eigenvalues(**{axis: [ordinal + 1 + 0 * state] for ordinal, axis in enumerate(axes)})
+    model.primitive_vars(state)
+    model.conservative_from([state])
     return model
 
 
@@ -146,7 +145,7 @@ def _assert_bound_elliptic_closures(loader: str) -> None:
 
 
 def test_uniform_loader_builds_elliptic_closures_before_moving_bound_model() -> None:
-    loader = _runtime_elliptic_model()._m.emit_cpp_native_loader(
+    loader = _runtime_elliptic_model().__pops_native_loader_source__(
         name="RuntimeEllipticGen", target="system"
     )
     _assert_bound_elliptic_closures(loader)
@@ -154,7 +153,9 @@ def test_uniform_loader_builds_elliptic_closures_before_moving_bound_model() -> 
 
 
 def test_amr_loader_builds_elliptic_closures_before_moving_bound_model() -> None:
-    loader = _runtime_elliptic_model()._m.emit_cpp_native_loader(
+    model = _runtime_elliptic_model()
+    model._model_hash()
+    loader = model._m.emit_cpp_native_loader(
         name="RuntimeEllipticGen",
         target="amr_system",
         native_field_roles=_runtime_elliptic_amr_roles(),
@@ -163,10 +164,16 @@ def test_amr_loader_builds_elliptic_closures_before_moving_bound_model() -> None
     _assert_exact_native_loader(loader, target="amr_system", dimension=2)
 
 
+def test_unbound_private_carrier_native_loader_is_fail_closed() -> None:
+    model = _ranked_scalar_model(2)
+    with pytest.raises(ValueError, match="complete exact ProviderPack carrier"):
+        model._m.emit_cpp_native_loader(name="UnboundRankedLoader", target="system")
+
+
 @pytest.mark.parametrize("dimension", (1, 2, 3))
 @pytest.mark.parametrize("target", ("system", "amr_system"))
 def test_generated_loader_retains_the_exact_authored_rank(dimension: int, target: str) -> None:
-    loader = _ranked_scalar_model(dimension).emit_cpp_native_loader(
+    loader = _ranked_scalar_model(dimension).__pops_native_loader_source__(
         name="RankedLoader%d" % dimension,
         target=target,
     )
