@@ -11785,6 +11785,21 @@ const typename AmrSystem<Dim>::PreparedLevelEvaluation&
 AmrSystem<Dim>::evaluate_prepared_amr_block_level_at(
     int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
     MultiFab<Dim>& state) {
+  prepare_prepared_amr_block_level_at(runtime_block, point, state);
+  const std::array<std::pair<int, int>, 1> targets{{{runtime_block, point.level}}};
+  validate_prepared_amr_block_level_batch(targets);
+  publish_prepared_amr_block_level_batch(targets);
+  return p_->prepared_hierarchy
+      ->block_evaluations[static_cast<std::size_t>(runtime_block)]
+                         [static_cast<std::size_t>(point.level)]
+      .value();
+}
+
+template <int Dim>
+const typename AmrSystem<Dim>::PreparedLevelEvaluation&
+AmrSystem<Dim>::prepare_prepared_amr_block_level_at(
+    int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
+    MultiFab<Dim>& state) {
   p_->ensure_engine();
   std::lock_guard execution_lock(p_->prepared_hierarchy->execution_mutex);
   if (runtime_block < 0 || static_cast<std::size_t>(runtime_block) >= p_->blocks.size())
@@ -11911,15 +11926,27 @@ AmrSystem<Dim>::evaluate_prepared_amr_block_level_at(
       std::rethrow_exception(evaluation_error);
     throw std::runtime_error("prepared AMR level evaluation failed collectively");
   }
-  std::swap(*published, *candidate);
-  p_->prepared_hierarchy
-      ->block_evaluation_published[static_cast<std::size_t>(runtime_block)][level_index] = true;
-  return *published;
+  return *candidate;
 }
 
 template <int Dim>
 const typename AmrSystem<Dim>::PreparedLevelEvaluation&
 AmrSystem<Dim>::evaluate_prepared_amr_block_level_flux_at(
+    int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
+    MultiFab<Dim>& state) {
+  prepare_prepared_amr_block_level_flux_at(runtime_block, point, state);
+  const std::array<std::pair<int, int>, 1> targets{{{runtime_block, point.level}}};
+  validate_prepared_amr_block_level_batch(targets);
+  publish_prepared_amr_block_level_batch(targets);
+  return p_->prepared_hierarchy
+      ->block_evaluations[static_cast<std::size_t>(runtime_block)]
+                         [static_cast<std::size_t>(point.level)]
+      .value();
+}
+
+template <int Dim>
+const typename AmrSystem<Dim>::PreparedLevelEvaluation&
+AmrSystem<Dim>::prepare_prepared_amr_block_level_flux_at(
     int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
     MultiFab<Dim>& state) {
   p_->ensure_engine();
@@ -11954,9 +11981,77 @@ AmrSystem<Dim>::evaluate_prepared_amr_block_level_flux_at(
       std::rethrow_exception(local_error);
     throw std::runtime_error("prepared AMR flux evaluation failed collectively");
   }
-  std::swap(*published, *candidate);
-  p_->prepared_hierarchy->block_evaluation_published[block][level] = true;
-  return *published;
+  return *candidate;
+}
+
+template <int Dim>
+void AmrSystem<Dim>::validate_prepared_amr_block_level_batch(
+    std::span<const std::pair<int, int>> targets) const {
+  p_->ensure_engine();
+  std::lock_guard execution_lock(p_->prepared_hierarchy->execution_mutex);
+  const ExecutionLane& lane = *p_->prepared_hierarchy->lane;
+  std::string exact_contract;
+  std::exception_ptr local_error;
+  try {
+    if (targets.empty())
+      throw std::invalid_argument("prepared AMR evaluation batch cannot be empty");
+    std::set<std::pair<int, int>> unique_targets;
+    ExactContractBuilder contract;
+    contract.text("pops.prepared-amr-evaluation-batch")
+        .scalar(std::uint32_t{1})
+        .scalar(static_cast<std::uint64_t>(targets.size()));
+    for (const auto& [runtime_block, level] : targets) {
+      if (runtime_block < 0 || static_cast<std::size_t>(runtime_block) >= p_->blocks.size() ||
+          level < 0 || static_cast<std::size_t>(level) >= p_->engine->hierarchy().num_levels() ||
+          !unique_targets.insert({runtime_block, level}).second)
+        throw std::invalid_argument(
+            "prepared AMR evaluation batch target is invalid or duplicated");
+      const std::size_t block_index = static_cast<std::size_t>(runtime_block);
+      const std::size_t level_index = static_cast<std::size_t>(level);
+      const auto& candidate =
+          p_->prepared_hierarchy->block_evaluation_candidates[block_index][level_index];
+      const auto& published = p_->prepared_hierarchy->block_evaluations[block_index][level_index];
+      if (!candidate || !published ||
+          !same_field_contract(candidate->residual, p_->block_state(block_index, level_index)) ||
+          !same_field_contract(published->residual, p_->block_state(block_index, level_index)) ||
+          candidate->topology_epoch != p_->prepared_hierarchy->topology_epoch ||
+          candidate->materialization_generation !=
+              p_->prepared_hierarchy->materialization_generation)
+        throw std::logic_error("prepared AMR evaluation batch workspace contract is unavailable");
+      contract.scalar(std::int32_t{runtime_block})
+          .scalar(std::int32_t{level})
+          .scalar(candidate->topology_epoch)
+          .scalar(candidate->materialization_generation)
+          .text(candidate->spatial_contract);
+    }
+    exact_contract = std::move(contract).release();
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("prepared AMR evaluation batch validation failed collectively");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("prepared-amr-evaluation-batch"), std::string_view(exact_contract)}},
+          lane))
+    throw std::invalid_argument("prepared AMR evaluation batch differs between execution ranks");
+}
+
+template <int Dim>
+void AmrSystem<Dim>::publish_prepared_amr_block_level_batch(
+    std::span<const std::pair<int, int>> targets) noexcept {
+  static_assert(std::is_nothrow_swappable_v<PreparedLevelEvaluation>);
+  for (const auto& [runtime_block, level] : targets) {
+    const std::size_t block_index = static_cast<std::size_t>(runtime_block);
+    const std::size_t level_index = static_cast<std::size_t>(level);
+    auto& candidate =
+        *p_->prepared_hierarchy->block_evaluation_candidates[block_index][level_index];
+    auto& published = *p_->prepared_hierarchy->block_evaluations[block_index][level_index];
+    std::swap(published, candidate);
+    p_->prepared_hierarchy->block_evaluation_published[block_index][level_index] = true;
+  }
 }
 
 template <int Dim>
@@ -12349,12 +12444,27 @@ const typename AmrSystem<Dim>::PreparedLevelEvaluation&
 AmrSystem<Dim>::evaluate_prepared_amr_block_level_at(
     int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
     MultiFab<Dim>& state, int parent_level, const MultiFab<Dim>* staged_parent) {
+  prepare_prepared_amr_block_level_at(runtime_block, point, state, parent_level, staged_parent);
+  const std::array<std::pair<int, int>, 1> targets{{{runtime_block, point.level}}};
+  validate_prepared_amr_block_level_batch(targets);
+  publish_prepared_amr_block_level_batch(targets);
+  return p_->prepared_hierarchy
+      ->block_evaluations[static_cast<std::size_t>(runtime_block)]
+                         [static_cast<std::size_t>(point.level)]
+      .value();
+}
+
+template <int Dim>
+const typename AmrSystem<Dim>::PreparedLevelEvaluation&
+AmrSystem<Dim>::prepare_prepared_amr_block_level_at(
+    int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
+    MultiFab<Dim>& state, int parent_level, const MultiFab<Dim>* staged_parent) {
   p_->ensure_engine();
   std::lock_guard execution_lock(p_->prepared_hierarchy->execution_mutex);
   if (point.level == 0) {
     if (parent_level != -1 || staged_parent != nullptr)
       throw std::invalid_argument("root AMR provider call cannot bind a staged parent");
-    return evaluate_prepared_amr_block_level_at(runtime_block, point, state);
+    return prepare_prepared_amr_block_level_at(runtime_block, point, state);
   }
   if (runtime_block < 0 || static_cast<std::size_t>(runtime_block) >= p_->blocks.size() ||
       parent_level < 0 ||
@@ -12371,7 +12481,7 @@ AmrSystem<Dim>::evaluate_prepared_amr_block_level_at(
       p_->prepared_hierarchy->block_stage_scratch[block][static_cast<std::size_t>(parent_level)]
           ->backup,
       [&]() -> const PreparedLevelEvaluation& {
-        return evaluate_prepared_amr_block_level_at(runtime_block, point, state);
+        return prepare_prepared_amr_block_level_at(runtime_block, point, state);
       });
 }
 
@@ -12380,12 +12490,28 @@ const typename AmrSystem<Dim>::PreparedLevelEvaluation&
 AmrSystem<Dim>::evaluate_prepared_amr_block_level_flux_at(
     int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
     MultiFab<Dim>& state, int parent_level, const MultiFab<Dim>* staged_parent) {
+  prepare_prepared_amr_block_level_flux_at(runtime_block, point, state, parent_level,
+                                           staged_parent);
+  const std::array<std::pair<int, int>, 1> targets{{{runtime_block, point.level}}};
+  validate_prepared_amr_block_level_batch(targets);
+  publish_prepared_amr_block_level_batch(targets);
+  return p_->prepared_hierarchy
+      ->block_evaluations[static_cast<std::size_t>(runtime_block)]
+                         [static_cast<std::size_t>(point.level)]
+      .value();
+}
+
+template <int Dim>
+const typename AmrSystem<Dim>::PreparedLevelEvaluation&
+AmrSystem<Dim>::prepare_prepared_amr_block_level_flux_at(
+    int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
+    MultiFab<Dim>& state, int parent_level, const MultiFab<Dim>* staged_parent) {
   p_->ensure_engine();
   std::lock_guard execution_lock(p_->prepared_hierarchy->execution_mutex);
   if (point.level == 0) {
     if (parent_level != -1 || staged_parent != nullptr)
       throw std::invalid_argument("root AMR flux call cannot bind a staged parent");
-    return evaluate_prepared_amr_block_level_flux_at(runtime_block, point, state);
+    return prepare_prepared_amr_block_level_flux_at(runtime_block, point, state);
   }
   if (runtime_block < 0 || static_cast<std::size_t>(runtime_block) >= p_->blocks.size() ||
       parent_level < 0 ||
@@ -12402,7 +12528,7 @@ AmrSystem<Dim>::evaluate_prepared_amr_block_level_flux_at(
       p_->prepared_hierarchy->block_stage_scratch[block][static_cast<std::size_t>(parent_level)]
           ->backup,
       [&]() -> const PreparedLevelEvaluation& {
-        return evaluate_prepared_amr_block_level_flux_at(runtime_block, point, state);
+        return prepare_prepared_amr_block_level_flux_at(runtime_block, point, state);
       });
 }
 
@@ -18846,6 +18972,16 @@ AmrSystem<kNativeDimension>::evaluate_prepared_amr_block_level_at(
 template const PreparedAmrLevelEvaluation<kNativeDimension>&
 AmrSystem<kNativeDimension>::evaluate_prepared_amr_block_level_flux_at(
     int, const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab<kNativeDimension>&);
+template const PreparedAmrLevelEvaluation<kNativeDimension>&
+AmrSystem<kNativeDimension>::prepare_prepared_amr_block_level_at(
+    int, const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab<kNativeDimension>&);
+template const PreparedAmrLevelEvaluation<kNativeDimension>&
+AmrSystem<kNativeDimension>::prepare_prepared_amr_block_level_flux_at(
+    int, const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab<kNativeDimension>&);
+template void AmrSystem<kNativeDimension>::validate_prepared_amr_block_level_batch(
+    std::span<const std::pair<int, int>>) const;
+template void AmrSystem<kNativeDimension>::publish_prepared_amr_block_level_batch(
+    std::span<const std::pair<int, int>>) noexcept;
 template bool AmrSystem<kNativeDimension>::requires_prepared_amr_block_boundary_session(int) const;
 template bool AmrSystem<kNativeDimension>::has_prepared_amr_block_boundary_linearization(int) const;
 template void AmrSystem<kNativeDimension>::prepared_amr_block_level_rhs_core_into_at(
@@ -18872,6 +19008,14 @@ AmrSystem<kNativeDimension>::evaluate_prepared_amr_block_level_at(
     const MultiFab<kNativeDimension>*);
 template const PreparedAmrLevelEvaluation<kNativeDimension>&
 AmrSystem<kNativeDimension>::evaluate_prepared_amr_block_level_flux_at(
+    int, const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab<kNativeDimension>&, int,
+    const MultiFab<kNativeDimension>*);
+template const PreparedAmrLevelEvaluation<kNativeDimension>&
+AmrSystem<kNativeDimension>::prepare_prepared_amr_block_level_at(
+    int, const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab<kNativeDimension>&, int,
+    const MultiFab<kNativeDimension>*);
+template const PreparedAmrLevelEvaluation<kNativeDimension>&
+AmrSystem<kNativeDimension>::prepare_prepared_amr_block_level_flux_at(
     int, const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab<kNativeDimension>&, int,
     const MultiFab<kNativeDimension>*);
 template void AmrSystem<kNativeDimension>::prepared_amr_block_level_source_into_at(

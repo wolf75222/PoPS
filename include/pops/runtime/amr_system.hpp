@@ -1344,6 +1344,26 @@ class AmrSystem {
   POPS_EXPORT const PreparedLevelEvaluation& evaluate_prepared_amr_block_level_flux_at(
       int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
       MultiFab<Dim>& state, int parent_level, const MultiFab<Dim>* staged_parent);
+  /// Friend-only transaction seam.  These evaluate into the hierarchy-owned candidate workspace
+  /// and deliberately leave the published evaluation ledger untouched.
+  POPS_EXPORT const PreparedLevelEvaluation& prepare_prepared_amr_block_level_at(
+      int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      MultiFab<Dim>& state);
+  POPS_EXPORT const PreparedLevelEvaluation& prepare_prepared_amr_block_level_flux_at(
+      int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      MultiFab<Dim>& state);
+  POPS_EXPORT const PreparedLevelEvaluation& prepare_prepared_amr_block_level_at(
+      int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      MultiFab<Dim>& state, int parent_level, const MultiFab<Dim>* staged_parent);
+  POPS_EXPORT const PreparedLevelEvaluation& prepare_prepared_amr_block_level_flux_at(
+      int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      MultiFab<Dim>& state, int parent_level, const MultiFab<Dim>* staged_parent);
+  /// The validation phase is collective and must complete before any caller publishes another
+  /// transaction member.  The companion publication only performs proven-noexcept swaps/stores.
+  POPS_EXPORT void validate_prepared_amr_block_level_batch(
+      std::span<const std::pair<int, int>> targets) const;
+  POPS_EXPORT void publish_prepared_amr_block_level_batch(
+      std::span<const std::pair<int, int>> targets) noexcept;
   POPS_EXPORT void prepared_amr_block_level_source_into_at(
       int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
       MultiFab<Dim>& state, MultiFab<Dim>& rhs, int parent_level,

@@ -777,6 +777,167 @@ TEST(GeneratedAmrSystemBlock, ProgramContextEvaluatesExactStageStateWithoutPubli
   EXPECT_EQ(system.prepared_amr_level_evaluation(0).point.stage, 7);
 }
 
+TEST(GeneratedAmrSystemBlock, RhsGroupPrevalidatesAndPublishesFullAndFluxRoundsAtomically) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 8;
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/rhs-group-atomic");
+  system.install_block_state_route("tracer", "state/tracer");
+  system.install_block_state_route("peer", "state/peer");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  pops::add_compiled_model<Dim>(system, "peer", advection_model<Dim>());
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  system.set_conservative_state("peer", std::vector<double>(cell_count(config.shape), 3.0));
+  (void)system.engine();
+  system.set_program_block_map({0, 1});
+
+  auto context = pops::runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("test-rhs-group-clock");
+  context->begin_step(0.01);
+  pops::MultiFab<Dim> stage = context->scratch_state_like(context->state(0));
+  stage.set_val(pops::Real(2));
+
+  pops::MultiFab<Dim> full = context->rhs_scratch_like(stage);
+  pops::MultiFab<Dim> grouped_full = context->rhs_scratch_like(stage);
+  context->rhs_into(0, stage, full, 11);
+  context->rhs_group(12, {{0, &stage, &grouped_full, 13, 0}});
+  EXPECT_EQ(pops::difference_sum_sq_all_local(full, grouped_full), pops::Real(0));
+
+  pops::MultiFab<Dim> flux = context->rhs_scratch_like(stage);
+  pops::MultiFab<Dim> grouped_flux = context->rhs_scratch_like(stage);
+  context->neg_div_flux_default_into(0, stage, flux, 14);
+  context->rhs_group(15, {{0, &stage, &grouped_flux, 16, 1}});
+  EXPECT_EQ(pops::difference_sum_sq_all_local(flux, grouped_flux), pops::Real(0));
+
+  pops::MultiFab<Dim> peer_stage = context->scratch_state_like(context->state(1));
+  peer_stage.set_val(pops::Real(4));
+  pops::MultiFab<Dim> peer_flux = context->rhs_scratch_like(peer_stage);
+  pops::MultiFab<Dim> grouped_first = context->rhs_scratch_like(stage);
+  pops::MultiFab<Dim> grouped_second = context->rhs_scratch_like(peer_stage);
+  context->neg_div_flux_default_into(1, peer_stage, peer_flux, 17);
+  context->rhs_group(
+      18, {{0, &stage, &grouped_first, 19, 0}, {1, &peer_stage, &grouped_second, 20, 1}});
+  EXPECT_EQ(pops::difference_sum_sq_all_local(full, grouped_first), pops::Real(0));
+  EXPECT_EQ(pops::difference_sum_sq_all_local(peer_flux, grouped_second), pops::Real(0));
+
+  const auto published_point = system.prepared_amr_level_evaluation(0).point;
+  const auto published_epoch = system.prepared_amr_level_evaluation(0).topology_epoch;
+  const auto published_generation =
+      system.prepared_amr_level_evaluation(0).materialization_generation;
+  ASSERT_NE(system.prepared_amr_level_evaluation_if_present(0), nullptr);
+
+  // The first request prepares successfully.  The second has a valid grouped request shape and a
+  // distinct runtime block, but its state cannot be staged into that block's exact live storage.
+  // It therefore fails after the first detached evaluation and must not publish either result.
+  pops::MultiFab<Dim> malformed_peer(peer_stage.layout(), peer_stage.distribution(),
+                                     peer_stage.local_rank(), 2, peer_stage.ghosts());
+  malformed_peer.set_val(pops::Real(5));
+  pops::MultiFab<Dim> malformed_output = context->rhs_scratch_like(malformed_peer);
+  pops::MultiFab<Dim> first_late_output = context->rhs_scratch_like(stage);
+  first_late_output.set_val(pops::Real(31));
+  malformed_output.set_val(pops::Real(37));
+  EXPECT_THROW(context->rhs_group(21, {{0, &stage, &first_late_output, 22, 0},
+                                       {1, &malformed_peer, &malformed_output, 23, 0}}),
+               std::exception);
+  EXPECT_EQ(pops::reduce_min_local(first_late_output), pops::Real(31));
+  EXPECT_EQ(pops::reduce_max_local(first_late_output), pops::Real(31));
+  EXPECT_EQ(pops::reduce_min_local(malformed_output), pops::Real(37));
+  EXPECT_EQ(pops::reduce_max_local(malformed_output), pops::Real(37));
+  const auto& published_after_failure = system.prepared_amr_level_evaluation(0);
+  EXPECT_EQ(published_after_failure.point.stage, published_point.stage);
+  EXPECT_EQ(published_after_failure.point.tick, published_point.tick);
+  EXPECT_EQ(published_after_failure.topology_epoch, published_epoch);
+  EXPECT_EQ(published_after_failure.materialization_generation, published_generation);
+  EXPECT_NE(system.prepared_amr_level_evaluation_if_present(0), nullptr);
+
+  // Exercise the same late-failure path while a real hierarchy attempt owns the active flux
+  // registry.  The successful two-block round makes reflux bases visible to the attempt; the
+  // following later failure must leave its sentinels and the successful published evaluation intact.
+  pops::MultiFab<Dim> active_first = context->rhs_scratch_like(stage);
+  pops::MultiFab<Dim> active_second = context->rhs_scratch_like(peer_stage);
+  pops::MultiFab<Dim> active_failure_first = context->rhs_scratch_like(stage);
+  pops::MultiFab<Dim> active_failure_second = context->rhs_scratch_like(malformed_peer);
+  context->install([](double) {}, context);
+  system.set_program_block_map({0, 1});
+  using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
+  system.install_prepared_amr_program_flux_expression_budget(
+      "tests.generated-amr/rhs-group-atomic@1", std::vector<FluxBudget>(2, FluxBudget{1, 1}), 0, 0);
+  context->advance_hierarchy(0.01, [&](double) {
+    context->rhs_group(
+        30, {{0, &stage, &active_first, 31, 0}, {1, &peer_stage, &active_second, 32, 1}});
+    active_failure_first.set_val(pops::Real(41));
+    active_failure_second.set_val(pops::Real(43));
+    EXPECT_THROW(context->rhs_group(33, {{0, &stage, &active_failure_first, 34, 0},
+                                         {1, &malformed_peer, &active_failure_second, 35, 0}}),
+                 std::exception);
+    EXPECT_EQ(pops::reduce_min_local(active_failure_first), pops::Real(41));
+    EXPECT_EQ(pops::reduce_max_local(active_failure_first), pops::Real(41));
+    EXPECT_EQ(pops::reduce_min_local(active_failure_second), pops::Real(43));
+    EXPECT_EQ(pops::reduce_max_local(active_failure_second), pops::Real(43));
+  });
+  EXPECT_EQ(system.prepared_amr_level_evaluation(0).point.stage, 31);
+  EXPECT_NE(system.prepared_amr_level_evaluation_if_present(0), nullptr);
+
+  pops::MultiFab<Dim> first_output = context->rhs_scratch_like(stage);
+  pops::MultiFab<Dim> second_output = context->rhs_scratch_like(stage);
+  first_output.set_val(pops::Real(11));
+  second_output.set_val(pops::Real(13));
+  // The second request maps to the already selected runtime block. The complete group must reject
+  // this before evaluating or publishing the first request's residual/flux metadata.
+  EXPECT_THROW(context->rhs_group(
+                   24, {{0, &stage, &first_output, 25, 0}, {0, &stage, &second_output, 26, 1}}),
+               std::exception);
+  EXPECT_EQ(pops::reduce_min_local(first_output), pops::Real(11));
+  EXPECT_EQ(pops::reduce_max_local(first_output), pops::Real(11));
+  EXPECT_EQ(pops::reduce_min_local(second_output), pops::Real(13));
+  EXPECT_EQ(pops::reduce_max_local(second_output), pops::Real(13));
+  EXPECT_EQ(system.prepared_amr_level_evaluation(0).point.stage, 31);
+
+  if (pops::n_ranks() > 1) {
+    pops::MultiFab<Dim> divergent_output = context->rhs_scratch_like(stage);
+    divergent_output.set_val(pops::Real(17));
+    // A rank-local rate identity is otherwise valid, but the collective request contract must
+    // reject the divergent group before either rank evaluates or publishes its output.
+    const int divergent_rate = pops::my_rank() == 0 ? 28 : 29;
+    EXPECT_THROW(context->rhs_group(27, {{0, &stage, &divergent_output, divergent_rate, 0}}),
+                 std::exception);
+    EXPECT_EQ(pops::reduce_min_local(divergent_output), pops::Real(17));
+    EXPECT_EQ(pops::reduce_max_local(divergent_output), pops::Real(17));
+    EXPECT_EQ(system.prepared_amr_level_evaluation(0).point.stage, 31);
+  }
+
+  // In a fresh active attempt, consume the peer block's one authenticated basis through the
+  // singular path. Both grouped detached evaluations then succeed; block zero's grouped basis
+  // succeeds, while block one's grouped basis exceeds its bound during flux-basis preparation.
+  // The detached registry must not be published, so block zero keeps no published evaluation and
+  // neither grouped output may leave its sentinel value.
+  pops::MultiFab<Dim> seeded_peer_flux = context->rhs_scratch_like(peer_stage);
+  pops::MultiFab<Dim> flux_failure_first = context->rhs_scratch_like(stage);
+  pops::MultiFab<Dim> flux_failure_second = context->rhs_scratch_like(peer_stage);
+  pops::MultiFab<Dim> flux_registry_recovery = context->rhs_scratch_like(stage);
+  context->advance_hierarchy(0.01, [&](double) {
+    context->rhs_into(1, peer_stage, seeded_peer_flux, 36);
+    flux_failure_first.set_val(pops::Real(47));
+    flux_failure_second.set_val(pops::Real(53));
+    EXPECT_THROW(context->rhs_group(37, {{0, &stage, &flux_failure_first, 38, 0},
+                                         {1, &peer_stage, &flux_failure_second, 39, 1}}),
+                 std::exception);
+    EXPECT_EQ(pops::reduce_min_local(flux_failure_first), pops::Real(47));
+    EXPECT_EQ(pops::reduce_max_local(flux_failure_first), pops::Real(47));
+    EXPECT_EQ(pops::reduce_min_local(flux_failure_second), pops::Real(53));
+    EXPECT_EQ(pops::reduce_max_local(flux_failure_second), pops::Real(53));
+    EXPECT_EQ(system.prepared_amr_level_evaluation_if_present(0), nullptr);
+    // If the failed detached registry had escaped, block zero would already have consumed its
+    // bound of one and this recovery basis would be refused before it could publish.
+    context->rhs_group(40, {{0, &stage, &flux_registry_recovery, 41, 0}});
+    EXPECT_EQ(pops::difference_sum_sq_all_local(full, flux_registry_recovery), pops::Real(0));
+    EXPECT_EQ(system.prepared_amr_level_evaluation(0).point.stage, 41);
+  });
+  EXPECT_EQ(system.prepared_amr_level_evaluation(0).point.stage, 41);
+}
+
 TEST(GeneratedAmrSystemBlock, RegistersOnlyExactRankedNullspaceProviders) {
   constexpr int Dim = pops::kNativeDimension;
   pops::AmrSystemConfig<Dim> config;

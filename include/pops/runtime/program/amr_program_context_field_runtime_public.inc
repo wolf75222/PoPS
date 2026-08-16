@@ -79,24 +79,228 @@ void rhs_into(int program_block, field_type& stage_state, field_type& rhs, int r
 }
 
 void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) const {
-  require_rate_identity_(group_id);
+  const ExecutionLane& lane = prepared_execution_lane();
+  std::vector<const RhsGroupRequest*> ordered;
+  std::vector<int> runtime_blocks;
+  std::vector<runtime::multiblock::BoundaryEvaluationPoint> points;
+  std::vector<std::pair<int, int>> evaluation_targets;
+  std::vector<const field_type*> staged_parents;
+  std::vector<const level_evaluation_type*> evaluations;
   std::vector<field_type> candidates;
-  candidates.reserve(requests.size());
-  for (const RhsGroupRequest& request : requests) {
-    if (request.state == nullptr || request.rhs == nullptr || request.rate_id < 0 ||
-        request.rate_id == group_id || request.flux_only != 0)
-      throw std::invalid_argument("AMR Program RHS group contains an unsupported request");
-    candidates.push_back(rhs_scratch_like(*request.rhs));
+  std::vector<field_type> backups;
+  std::string request_contract;
+  std::exception_ptr preparation_error;
+  try {
+    require_rate_identity_(group_id);
+    if (requests.size() == 0)
+      throw std::invalid_argument("AMR Program RHS group cannot be empty");
+    ordered.reserve(requests.size());
+    runtime_blocks.reserve(requests.size());
+    points.reserve(requests.size());
+    evaluation_targets.reserve(requests.size());
+    staged_parents.reserve(requests.size());
+    evaluations.assign(requests.size(), nullptr);
+    candidates.reserve(requests.size());
+    backups.reserve(requests.size());
+    std::set<int> unique_runtime_blocks;
+    std::set<int> unique_rates;
+    std::set<const field_type*> unique_outputs;
+    ExactContractBuilder exact;
+    exact.text("pops.amr-program.rhs-group")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{group_id})
+        .scalar(static_cast<std::uint64_t>(requests.size()));
+    for (const RhsGroupRequest& request : requests) {
+      require_rate_identity_(request.rate_id);
+      const int runtime_block = sys_block(request.block);
+      if (request.state == nullptr || request.rhs == nullptr || request.rate_id == group_id ||
+          (request.flux_only != 0 && request.flux_only != 1) ||
+          !unique_runtime_blocks.insert(runtime_block).second ||
+          !unique_rates.insert(request.rate_id).second ||
+          !unique_outputs.insert(request.rhs).second)
+        throw std::invalid_argument("AMR Program RHS group contains an unsupported request");
+      require_same_field_contract_(*request.state, *request.rhs, "AMR Program grouped residual");
+      ordered.push_back(&request);
+      runtime_blocks.push_back(runtime_block);
+      points.push_back(boundary_evaluation_point(request.rate_id));
+      evaluation_targets.emplace_back(runtime_block, points.back().level);
+      candidates.push_back(rhs_scratch_like(*request.rhs));
+      backups.push_back(rhs_scratch_like(*request.rhs));
+      exact.scalar(std::int32_t{runtime_block})
+          .scalar(std::int32_t{request.rate_id})
+          .scalar(std::uint32_t{static_cast<unsigned int>(request.flux_only)});
+    }
+    request_contract = std::move(exact).release();
+  } catch (...) {
+    preparation_error = std::current_exception();
   }
-  std::size_t index = 0;
-  for (const RhsGroupRequest& request : requests)
-    rhs_into(request.block, *request.state, candidates[index++], request.rate_id);
-  index = 0;
-  for (const RhsGroupRequest& request : requests) {
-    copy_valid_(candidates[index], *request.rhs);
-    copy_active_flux_expression_(candidates[index], *request.rhs);
-    clear_active_flux_expression_(candidates[index]);
-    ++index;
+  if (all_reduce_max(preparation_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && preparation_error)
+      std::rethrow_exception(preparation_error);
+    throw std::runtime_error("AMR Program RHS group preparation failed collectively");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("amr-program-rhs-group"), std::string_view(request_contract)}}, lane))
+    throw std::invalid_argument("AMR Program RHS group requests differ between execution ranks");
+
+  const long active = active_attempt_states_.empty() ? 0L : 1L;
+  if (all_reduce_min(active, lane) != all_reduce_max(active, lane))
+    throw std::logic_error("AMR Program RHS group activity differs between execution ranks");
+  std::exception_ptr parent_error;
+  try {
+    staged_parents.assign(ordered.size(), nullptr);
+    if (active != 0)
+      for (std::size_t index = 0; index < ordered.size(); ++index)
+        staged_parents[index] = staged_parent_for_block_(runtime_blocks[index]);
+  } catch (...) {
+    parent_error = std::current_exception();
+  }
+  if (all_reduce_max(parent_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && parent_error)
+      std::rethrow_exception(parent_error);
+    throw std::runtime_error("AMR Program RHS group parent preparation failed collectively");
+  }
+
+  for (std::size_t index = 0; index < ordered.size(); ++index) {
+    std::exception_ptr evaluation_error;
+    try {
+      const RhsGroupRequest& request = *ordered[index];
+      const auto& evaluation =
+          request.flux_only != 0
+              ? (active != 0 ? facade_->prepare_prepared_amr_block_level_flux_at(
+                                   runtime_blocks[index], points[index], *request.state,
+                                   active_level_ - 1, staged_parents[index])
+                             : facade_->prepare_prepared_amr_block_level_flux_at(
+                                   runtime_blocks[index], points[index], *request.state))
+              : (active != 0 ? facade_->prepare_prepared_amr_block_level_at(
+                                   runtime_blocks[index], points[index], *request.state,
+                                   active_level_ - 1, staged_parents[index])
+                             : facade_->prepare_prepared_amr_block_level_at(
+                                   runtime_blocks[index], points[index], *request.state));
+      evaluations[index] = &evaluation;
+      copy_valid_(evaluation.residual, candidates[index]);
+      device_fence();
+    } catch (...) {
+      evaluation_error = std::current_exception();
+    }
+    if (all_reduce_max(evaluation_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && evaluation_error)
+        std::rethrow_exception(evaluation_error);
+      throw std::runtime_error("AMR Program RHS group evaluation failed collectively");
+    }
+  }
+
+  FluxExpressionRegistry candidate_registry;
+  std::vector<std::size_t> candidate_counts;
+  std::uint64_t candidate_identity = 0;
+  if (active != 0) {
+    std::exception_ptr flux_preparation_error;
+    try {
+      candidate_registry = active_flux_expressions_;
+      candidate_counts = active_flux_basis_counts_;
+      candidate_identity = next_active_flux_basis_identity_;
+      const ::pops::amr::ClockWindow interval{
+          {active_level_, points.front().tick, current_interval_begin_phase_,
+           current_interval_start_time_},
+          {active_level_, points.front().tick, current_interval_end_phase_,
+           current_interval_start_time_ + current_dt_}};
+      for (std::size_t index = 0; index < ordered.size(); ++index) {
+        const RhsGroupRequest& request = *ordered[index];
+        prepare_active_flux_basis_impl_(
+            runtime_blocks[index], points[index], request.rate_id,
+            request.flux_only != 0 ? FluxBasisProvider::PreparedDefaultFlux
+                                   : FluxBasisProvider::PreparedResidual,
+            evaluations[index]->topology_epoch, evaluations[index]->materialization_generation,
+            *request.rhs, evaluations[index], nullptr, nullptr, interval, candidate_registry,
+            candidate_counts, candidate_identity);
+      }
+    } catch (...) {
+      flux_preparation_error = std::current_exception();
+    }
+    if (all_reduce_max(flux_preparation_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && flux_preparation_error)
+        std::rethrow_exception(flux_preparation_error);
+      throw std::runtime_error("AMR Program RHS group flux preparation failed collectively");
+    }
+  }
+
+  std::exception_ptr evaluation_publication_validation_error;
+  try {
+    facade_->validate_prepared_amr_block_level_batch(
+        std::span<const std::pair<int, int>>(evaluation_targets));
+  } catch (...) {
+    evaluation_publication_validation_error = std::current_exception();
+  }
+  if (all_reduce_max(evaluation_publication_validation_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && evaluation_publication_validation_error)
+      std::rethrow_exception(evaluation_publication_validation_error);
+    throw std::runtime_error(
+        "AMR Program RHS group prepared evaluation publication failed collectively");
+  }
+
+  std::exception_ptr backup_error;
+  try {
+    for (std::size_t index = 0; index < ordered.size(); ++index)
+      copy_valid_(*ordered[index]->rhs, backups[index]);
+    device_fence();
+  } catch (...) {
+    backup_error = std::current_exception();
+  }
+  if (all_reduce_max(backup_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && backup_error)
+      std::rethrow_exception(backup_error);
+    throw std::runtime_error("AMR Program RHS group output snapshot failed collectively");
+  }
+
+  // Profiling is permitted to allocate/throw.  Account for the completed candidate work before
+  // the no-throw publication boundary so a profiler failure cannot expose a partial commit.
+  std::exception_ptr kernel_count_error;
+  try {
+    count_kernel_(static_cast<std::int64_t>(ordered.size()));
+  } catch (...) {
+    kernel_count_error = std::current_exception();
+  }
+  if (all_reduce_max(kernel_count_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && kernel_count_error)
+      std::rethrow_exception(kernel_count_error);
+    throw std::runtime_error("AMR Program RHS group profiling failed collectively");
+  }
+
+  std::exception_ptr publication_error;
+  try {
+    for (std::size_t index = 0; index < ordered.size(); ++index)
+      copy_valid_(candidates[index], *ordered[index]->rhs);
+    device_fence();
+  } catch (...) {
+    publication_error = std::current_exception();
+  }
+  if (all_reduce_max(publication_error ? 1L : 0L, lane) != 0) {
+    std::exception_ptr rollback_error;
+    try {
+      for (std::size_t index = 0; index < ordered.size(); ++index)
+        copy_valid_(backups[index], *ordered[index]->rhs);
+      device_fence();
+    } catch (...) {
+      rollback_error = std::current_exception();
+    }
+    if (all_reduce_max(rollback_error ? 1L : 0L, lane) != 0)
+      throw std::runtime_error("AMR Program RHS group output rollback failed collectively");
+    if (lane.size() == 1 && publication_error)
+      std::rethrow_exception(publication_error);
+    throw std::runtime_error("AMR Program RHS group publication failed collectively");
+  }
+
+  if (active != 0) {
+    facade_->publish_prepared_amr_block_level_batch(
+        std::span<const std::pair<int, int>>(evaluation_targets));
+    static_assert(std::is_nothrow_swappable_v<FluxExpressionRegistry>);
+    static_assert(std::is_nothrow_swappable_v<std::vector<std::size_t>>);
+    active_flux_expressions_.swap(candidate_registry);
+    active_flux_basis_counts_.swap(candidate_counts);
+    next_active_flux_basis_identity_ = candidate_identity;
+  } else {
+    facade_->publish_prepared_amr_block_level_batch(
+        std::span<const std::pair<int, int>>(evaluation_targets));
   }
 }
 
