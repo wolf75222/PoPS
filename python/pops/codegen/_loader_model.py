@@ -37,7 +37,8 @@ class CompiledModel:
                  hllc_provider: Any = None, roe_provider: Any = None,
                  roe_entropy_policy: Any = None, roe_entropy_delta: Any = None,
                  consumer_owner_qid: Any = None,
-                 declares_auxiliary_providers: bool = True) -> None:
+                 declares_auxiliary_providers: bool = True,
+                 aux_extra_names: Any = None) -> None:
         from pops.numerics.riemann.providers import RiemannProviderEvidence
 
         riemann_evidence = RiemannProviderEvidence(
@@ -135,6 +136,10 @@ class CompiledModel:
             raise TypeError("CompiledModel consumer_owner_qid must be a string")
         self.consumer_owner_qid = consumer_owner_qid
         self.declares_auxiliary_providers = bool(declares_auxiliary_providers)
+        extra = [] if aux_extra_names is None else list(aux_extra_names)
+        if any(not isinstance(item, str) or not item for item in extra):
+            raise TypeError("CompiledModel aux_extra_names must be a sequence of non-empty names")
+        self.aux_extra_names = extra
 
     def _seal(self) -> None:
         """Freeze a public per-block artifact after orchestration attaches metadata."""
@@ -181,7 +186,9 @@ class CompiledModel:
             "cons_roles": tuple(self.cons_roles),
             "n_vars": self.n_vars,
             "params": dict(self.params),
-            "provider_components": tuple(self.provider_components),
+            "provider_components": tuple(dict.fromkeys(
+                [*self.provider_components, *self.aux_extra_names]
+            )),
             "n_aux": self.n_aux,
             "native_dimension": self.native_dimension,
             "capabilities": dict(self.caps),

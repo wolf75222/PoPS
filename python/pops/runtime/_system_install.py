@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from pops._bootstrap import ModelSpec
 from pops.runtime._lifecycle import guard_assembling as _guard_assembling
-from pops.runtime._numeric import native_block_scalars, native_real, positive_int
+from pops.runtime._numeric import native_real, positive_int
 from pops.runtime.defaults import (
     NEWTON_DEFAULT_ABS_TOL,
     NEWTON_DEFAULT_DAMPING,
@@ -155,37 +155,24 @@ class _SystemInstall(_System):
         )
 
         if isinstance(model, ModelSpec):
-            contract = _model_coupling_contract(
-                model, dimension=len(tuple(self._s.spatial_shape()))
-            )
-            contract_candidate = _candidate_coupling_contracts(self, name, contract)
-            rel_tol, abs_tol, fd_eps, damping, positivity_floor = native_block_scalars(
-                time, spatial, where="System.add_equation"
-            )
-            self._s.add_block(
+            from pops.runtime._modelspec_compile import compile_modelspec_package
+
+            if names is not None:
+                raise ValueError(
+                    "add_equation: names= is not supported for ModelSpec compilation; names and "
+                    "roles are immutable artifact metadata"
+                )
+            compiled = compile_modelspec_package(model, name=name, target="system")
+            return self.add_equation(
                 name,
-                model,
-                spatial.limiter,
-                spatial.flux,
-                spatial.recon,
-                time.kind,
-                nsub,
-                evolve,
-                nstride,
-                getattr(time, "implicit_vars", []),
-                getattr(time, "implicit_roles", []),
-                getattr(time, "newton_max_iters", NEWTON_DEFAULT_MAX_ITERS),
-                rel_tol,
-                abs_tol,
-                fd_eps,
-                getattr(time, "newton_diagnostics", False),
-                damping,
-                positivity_floor,
-                getattr(spatial, "wave_speed_cache", False),
-                **_weno_kwargs(spatial),
+                compiled,
+                spatial=spatial,
+                time=time,
+                substeps=substeps,
+                evolve=evolve,
+                stride=stride,
+                _bind_params=_bind_params,
             )
-            self._coupling_block_contracts = contract_candidate
-            return
 
         # The compiled-package ABI does not carry a per-block implicit mask. Reject it rather than
         # silently selecting a different treatment.

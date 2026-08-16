@@ -33,7 +33,7 @@ from pops.frames import Cartesian2D
 from pops.math import Const, ValueExpr, Var, ddt, div, laplacian
 from pops.numerics import DiscretizationPlan, FiniteVolume, reconstruction, riemann, variables
 from pops.physics import Density, Momentum
-from pops.solvers.elliptic import GeometricMG
+from pops.solvers.elliptic import CartesianCG
 from pops.solvers.nonlinear import LocalNewton
 from pops.time import CoupledImplicitEuler, Dense, FailRun, FixedDt, RejectAttempt
 
@@ -291,7 +291,7 @@ def build_authoring(*, output_mode: Any = None) -> MultiphysicsAuthoring:
     field_discretization = FieldDiscretization(
         method=CellCenteredSecondOrder(),
         boundaries=(BoundaryCondition(AllPhysicalBoundaries(), Periodic()),),
-        solver=GeometricMG(),
+        solver=CartesianCG(),
         nullspace=ConstantNullspace(),
         gauge=MeanValueGauge(0.0),
     )

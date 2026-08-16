@@ -13380,6 +13380,11 @@ void AmrSystem<Dim>::install_field_storage_route(const std::string& field_identi
 }
 
 template <int Dim>
+bool AmrSystem<Dim>::has_package_assembly_lane() const {
+  return p_->package_assembly_lane && p_->package_assembly_lane->active();
+}
+
+template <int Dim>
 void AmrSystem<Dim>::install_prepared_boundary_execution_context(
     std::shared_ptr<ExecutionLane> package_assembly_lane,
     std::shared_ptr<const component::PreparedExecutionContextV1> execution) {
@@ -19742,6 +19747,7 @@ template std::size_t AmrSystem<kNativeDimension>::apply_prepared_amr_program_can
     runtime::multiblock::InterfaceFluxFragmentPublication*);
 template void AmrSystem<kNativeDimension>::publish_prepared_amr_program_candidates(
     int, std::span<MultiFab<kNativeDimension>* const>);
+template bool AmrSystem<kNativeDimension>::has_package_assembly_lane() const;
 template void AmrSystem<kNativeDimension>::install_prepared_boundary_execution_context(
     std::shared_ptr<ExecutionLane>, std::shared_ptr<const component::PreparedExecutionContextV1>);
 template void AmrSystem<kNativeDimension>::stage_prepared_ghost_boundary_component(

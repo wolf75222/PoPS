@@ -52,6 +52,13 @@ def _amr_metadata_fixture():
     sentinel path makes explicit that this fixture is never installed or executed.
     """
     alpha = RuntimeParam("alpha", default=1.0)
+    resolved = resolved_amr_plan(
+        block_names=("ne",),
+        parameters=(alpha,),
+        tag_parameter="alpha",
+        cells=64,
+        name="amr-introspection-metadata",
+    )
     handle = CompiledModel(
         so_path="<metadata-only-amr-component>", backend="production",
         cons_names=["rho", "mx", "my"], cons_roles=["Density", "MomentumX", "MomentumY"],
@@ -60,15 +67,9 @@ def _amr_metadata_fixture():
         caps={"cpu": True, "amr": True, "mpi": True},
         abi_key=pops._pops.abi_key(), model_hash="h", cxx="c++",
         std="c++23", native_dimension=2, target="amr_system",
-        aux_extra_names=["B_z"])
+        aux_extra_names=["B_z"],
+        consumer_owner_qid=resolved.blocks[0].instance_owner_qid)
     handle.definition_identity = compiled_model_identity(model_hash="h")
-    resolved = resolved_amr_plan(
-        block_names=("ne",),
-        parameters=(alpha,),
-        tag_parameter="alpha",
-        cells=64,
-        name="amr-introspection-metadata",
-    )
     schema = resolved.bind_schema
     program = CompiledProgramStub(
         target="amr_system", block_names=("ne",), abi_key=handle.abi_key)

@@ -37,7 +37,6 @@ def run(n, L, vacuum_floor, rho_scale, nsteps, dt):
     """One short isothermal transport run; returns the conservative state (3, n, n)."""
     sim = System(n=n, L=L, periodicity=(False, False))
     sim.set_poisson(bc=Dirichlet())
-    sim.set_magnetic_field(np.ones((n, n)))
     sim.add_equation(
         "ions",
         model=engine.Model(

@@ -74,7 +74,7 @@ n = 16
 rho16 = gaussian(n)
 rho16_mean = float(rho16.mean())
 sim = System(n=n, L=1.0, periodicity=(True, True))
-sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
+sim.set_poisson(rhs="charge_density", solver="cartesian_cg", bc=Periodic())
 # This density-exchange fixture sources the potential from the conserved total-density contrast.
 # Both blocks therefore use the same elliptic sign while retaining their opposite force charges.
 sim.add_equation(

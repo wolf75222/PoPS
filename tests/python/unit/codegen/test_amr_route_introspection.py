@@ -48,6 +48,13 @@ def _amr_artifact(*, n_aux=2, mpi=True, runtime_param=True):
         resolved_params["alpha"] = RuntimeParam("alpha", default=1.0)
     resolved_params["gamma"] = ConstParam("gamma", 1.4)
     aux = ["B_z", "phi_bg"][:n_aux]
+    plan = resolved_amr_plan(
+        block_names=("block",),
+        parameters=tuple(resolved_params.values()),
+        tag_parameter="alpha" if runtime_param else None,
+        cells=64,
+        name="amr-route-introspection",
+    )
     component = CompiledModel(
         so_path="<stub-amr>", backend="production",
         cons_names=["rho", "mx", "my"],
@@ -58,13 +65,7 @@ def _amr_artifact(*, n_aux=2, mpi=True, runtime_param=True):
         model_hash="h", cxx="c++", std="c++23", target="amr_system",
         native_dimension=2,
         provider_components=aux, definition_identity=model_compile_identity(source),
-    )
-    plan = resolved_amr_plan(
-        block_names=("block",),
-        parameters=tuple(resolved_params.values()),
-        tag_parameter="alpha" if runtime_param else None,
-        cells=64,
-        name="amr-route-introspection",
+        consumer_owner_qid=plan.blocks[0].instance_owner_qid,
     )
     program = CompiledProgramStub(
         target="amr_system", block_names=("block",), abi_key=component.abi_key)

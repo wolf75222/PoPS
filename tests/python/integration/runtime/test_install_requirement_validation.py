@@ -91,7 +91,7 @@ def make_sim(block_model, with_bz):
     sim.add_equation("plasma", compile_block_model(block_model, target="system"),
                      spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
                      time=engine.Explicit(method="euler"))
-    sim.set_poisson("charge_density", "geometric_mg")
+    sim.set_poisson("charge_density", "cartesian_cg")
     if with_bz:
         sim.set_magnetic_field(3.0 * np.ones(N * N))
     x = (np.arange(N) + 0.5) / N

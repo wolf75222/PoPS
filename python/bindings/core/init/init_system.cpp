@@ -1271,6 +1271,17 @@ void bind_system_data(py::class_<System>& cls) {
             return to_ranked_state(s.state_global(name), s.n_vars(name), s.spatial_shape());
           },
           py::arg("name"))
+      .def(
+          "block_level_state_global",
+          [](const System& s, const std::string& name, int level) {
+            if (level != 0)
+              throw py::value_error(
+                  "uniform System only exposes level 0; AMR callers must use AmrSystem."
+                  "block_level_state_global(block, level)");
+            return to_ranked_state(s.state_global(name), s.n_vars(name), s.spatial_shape());
+          },
+          py::arg("name"), py::arg("level"),
+          "Level-0 alias of state_global for callers that share the AMR block/level read seam.")
       .def("potential_global",
            [](System& s) { return to_ranked_field(s.potential_global(), s.spatial_shape()); })
       .def(

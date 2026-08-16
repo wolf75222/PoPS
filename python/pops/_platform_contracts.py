@@ -404,14 +404,19 @@ def _abi_parts(value: Any) -> tuple[str | None, str | None]:
 
 
 def _require_abi(required: CapabilityProof, provided: CapabilityProof) -> None:
+    from pops.runtime._bind_validation import _abi_components
+
     expected = required.require("artifact.abi")
     actual = provided.require("runtime.abi")
-    expected_parts, actual_parts = _abi_parts(expected), _abi_parts(actual)
-    if expected_parts[0] != actual_parts[0] or (
-            expected_parts[1] is not None and actual_parts[1] is not None
-            and expected_parts[1] != actual_parts[1]):
+    expected_headers, expected_std = _abi_components(expected)
+    actual_headers, actual_std = _abi_components(actual)
+    if expected_headers and actual_headers and expected_headers != actual_headers:
         raise PlatformContractError(
             "ABI mismatch between artifact and runtime backend", field="abi",
+            expected=expected, actual=actual)
+    if expected_std and actual_std and expected_std != actual_std:
+        raise PlatformContractError(
+            "C++ standard mismatch between artifact and runtime backend", field="abi",
             expected=expected, actual=actual)
 
 

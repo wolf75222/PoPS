@@ -273,8 +273,8 @@ extern "C" pops::Real %s(%s*, pops::Real) {
     if target == "system":
         install = (
             """\
-extern "C" void pops_install_program(pops::System<pops::kNativeDimension>* system) {
-  auto context = pops::runtime::program::make_program_execution_provider(system);
+extern "C" void pops_install_program(pops::System<pops::kNativeDimension>* sys) {
+  auto context = pops::runtime::program::make_program_execution_provider(sys);
   context->configure_primary_clock("pops.test.clock.macro");
   context->install([context](double dt) {
     auto& ctx = *context;
@@ -288,8 +288,8 @@ extern "C" void pops_install_program(pops::System<pops::kNativeDimension>* syste
     else:
         install = (
             """\
-extern "C" void pops_install_program_amr(pops::AmrSystem<pops::kNativeDimension>* system) {
-  auto context = pops::runtime::program::make_program_execution_provider(system);
+extern "C" void pops_install_program_amr(pops::AmrSystem<pops::kNativeDimension>* sys) {
+  auto context = pops::runtime::program::make_program_execution_provider(sys);
   context->configure_primary_clock("pops.test.clock.macro");
   context->install([context](double macro_dt) {
     context->advance_hierarchy(macro_dt, [context](double dt) {

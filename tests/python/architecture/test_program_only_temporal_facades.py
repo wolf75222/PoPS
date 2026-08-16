@@ -550,9 +550,11 @@ def test_uniform_legacy_model_route_and_unpublished_newton_diagnostics_fail_befo
 
     assert "System::add_block(ModelSpec) was removed from the native core" in native
     assert "PreparedSystemBlock<Dim>" in native
+    assert "self._s.add_block(" not in python_add_equation
+    assert "compile_modelspec_package" in python_add_equation
     assert python_add_equation.index(
         "_reject_unpublished_newton_diagnostics(time"
-    ) < python_add_equation.index("native_block_scalars(")
+    ) < python_add_equation.index("compile_modelspec_package")
 
 
 def test_amr_runtime_and_builders_do_not_decode_a_second_time_method():

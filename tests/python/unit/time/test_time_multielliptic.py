@@ -6,7 +6,7 @@ the named callable field route could not lower its SECOND elliptic solve + own a
 wires the runtime on the production/system backend: a named field gets
 
   - its OWN RHS brick (a function of the conservative state, like m.elliptic_rhs),
-  - a DEDICATED native elliptic solver instance (GeometricMG/FFT, reused -- not reimplemented),
+  - a DEDICATED native elliptic solver instance (CartesianCG/FFT, reused -- not reimplemented),
   - its OWN aux output channel (the model's named aux_field slots, distinct from the shared phi/grad),
 
 and calling its exact ``FieldHandle`` with ``U`` lowers to ctx.solve_fields_from_state(field, block, U).
@@ -51,7 +51,7 @@ from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Periodic
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
 from pops.physics import Model as BoardModel
-from pops.solvers.elliptic import GeometricMG
+from pops.solvers.elliptic import CartesianCG
 from typed_program_support import codegen_field_plans, solve_field, typed_field, typed_state
 
 from pops.params import ConstParam
@@ -170,7 +170,7 @@ def _public_program_artifact(
         return FieldDiscretization(
             method=CellCenteredSecondOrder(),
             boundaries=(BoundaryCondition(AllPhysicalBoundaries(), Periodic()),),
-            solver=GeometricMG(),
+            solver=CartesianCG(),
             nullspace=ConstantNullspace(),
             gauge=MeanValueGauge(0.0),
         )

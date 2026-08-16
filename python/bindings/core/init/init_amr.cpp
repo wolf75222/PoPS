@@ -344,6 +344,8 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
       .def("_install_field_storage_route", &AmrSystem::install_field_storage_route,
            py::arg("field_identity"), py::arg("provider_slot"),
            "Bind one exact solved-field Handle to native provider storage.")
+      .def("has_package_assembly_lane", &AmrSystem::has_package_assembly_lane,
+           "True when the RuntimeInstance package-assembly lane is already staged.")
       .def(
           "_prepare_boundary_execution_lane",
           [](AmrSystem& system, const py::object& communicator_authority,

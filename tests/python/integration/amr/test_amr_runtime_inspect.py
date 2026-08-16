@@ -361,6 +361,14 @@ def test_compiled_artifact_exposes_its_layout_to_the_generic_inspector():
     from pops.codegen._compiled_artifact import CompiledBlockArtifact, CompiledSimulationArtifact
     from tests.python.support.resolved_amr_plan import resolved_amr_plan
 
+    from pops.codegen._compiled_model_identity import compiled_model_identity
+    from tests.python.support.layout_plan import cartesian_grid, final_amr_layout
+
+    resolved = resolved_amr_plan(
+        block_names=("ne",),
+        cells=64,
+        name="amr-runtime-inspect",
+    )
     cm = CompiledModel(
         so_path="<stub>",
         backend="production",
@@ -378,17 +386,9 @@ def test_compiled_artifact_exposes_its_layout_to_the_generic_inspector():
         std="23",
         native_dimension=2,
         target="amr_system",
+        consumer_owner_qid=resolved.blocks[0].instance_owner_qid,
     )
-    from pops.codegen._compiled_model_identity import compiled_model_identity
-
     cm.definition_identity = compiled_model_identity(model_hash="h")
-    from tests.python.support.layout_plan import cartesian_grid, final_amr_layout
-
-    resolved = resolved_amr_plan(
-        block_names=("ne",),
-        cells=64,
-        name="amr-runtime-inspect",
-    )
     program = CompiledProgramStub(target="amr_system", block_names=("ne",), abi_key=cm.abi_key)
     artifact = CompiledSimulationArtifact(
         plan=resolved,

@@ -504,6 +504,8 @@ class AmrSystem {
   POPS_EXPORT void install_prepared_boundary_execution_context(
       std::shared_ptr<ExecutionLane> package_assembly_lane,
       std::shared_ptr<const component::PreparedExecutionContextV1> execution);
+  /// True when the RuntimeInstance package-assembly lane is already staged and active.
+  POPS_EXPORT bool has_package_assembly_lane() const;
   POPS_EXPORT void stage_prepared_ghost_boundary_component(
       const std::string& block, std::shared_ptr<PreparedGhostBoundaryComponent> component);
   POPS_EXPORT void stage_prepared_boundary_flux_component(

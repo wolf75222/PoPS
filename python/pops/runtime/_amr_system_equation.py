@@ -97,8 +97,9 @@ class _AmrSystemEquation(_AmrSystem):
 
         Dispatch:
 
-        - a private ``ModelSpec`` -> the native ``AmrSystem::add_block`` ABI (bricks composed on
-          the hierarchy);
+        - a private ``ModelSpec`` compiles to one production ``Prepared*Block`` package, then
+          installs through the CompiledModel path; native ``AmrSystem::add_block(ModelSpec)`` stays
+          retired;
         - a CompiledModel(backend='production', target='amr_system') installs one complete inert
           package containing its prepared block and elliptic attachments, so the block runs the
           same AMR hierarchy as the native-brick ABI (conservative reflux, regrid), ZERO-COPY.
@@ -118,9 +119,9 @@ class _AmrSystemEquation(_AmrSystem):
 
         MULTIRATE CADENCE (stride) and PARTIAL IMEX MASK (implicit_vars / implicit_roles):
 
-        - private ``ModelSpec`` path: forwarded to ``AmrSystem::add_block``. Cadence remains part of
-          Program/CFL normalization; non-empty masks and non-default Newton requests fail closed
-          until the AMR target exposes their typed Program primitive;
+        - private ``ModelSpec`` path: compiled then installed as a production package. Cadence
+          remains part of Program/CFL normalization; non-empty masks and non-default Newton
+          requests fail closed until the AMR target exposes their typed Program primitive;
         - CompiledModel production path (.so): explicitly REJECTED (ValueError). The flat ABI of the
           package does not transport them; they would otherwise be taken at their defaults silently.
           A compiled multirate or partial-implicit route must express the operation in its typed
@@ -153,58 +154,17 @@ class _AmrSystemEquation(_AmrSystem):
         # Forward the complete authoring request to the native contract. Unsupported masks and
         # Newton controls are rejected there rather than retained by the spatial runtime.
         if isinstance(model, ModelSpec):
-            from pops.runtime._system_install import (
-                _candidate_coupling_contracts,
-                _model_coupling_contract,
-            )
+            from pops.runtime._modelspec_compile import compile_modelspec_package
 
-            contract = _model_coupling_contract(model, dimension=len(self._shape))
-            contract_candidate = _candidate_coupling_contracts(self, name, contract)
-            # The installed Program remains the sole time authority.
-            spatial_options: dict[str, bool | float] = {
-                "wave_speed_cache": bool(getattr(spatial, "wave_speed_cache", False)),
-            }
-            if getattr(spatial, "weno_epsilon", None) is not None:
-                spatial_options["weno_epsilon"] = native_real(
-                    spatial.weno_epsilon, where="AmrSystem.add_equation.weno_epsilon"
-                )
-            self._s.add_block(
+            compiled = compile_modelspec_package(model, name=name, target="amr_system")
+            return self.add_equation(
                 name,
-                model,
-                spatial.limiter,
-                spatial.flux,
-                spatial.recon,
-                time.kind,
-                nsub,
-                getattr(time, "stride", 1),
-                getattr(time, "implicit_vars", []),
-                getattr(time, "implicit_roles", []),
-                getattr(time, "newton_max_iters", NEWTON_DEFAULT_MAX_ITERS),
-                native_real(
-                    getattr(time, "newton_rel_tol", NEWTON_DEFAULT_REL_TOL),
-                    where="AmrSystem.add_equation.newton_rel_tol",
-                ),
-                native_real(
-                    getattr(time, "newton_abs_tol", NEWTON_DEFAULT_ABS_TOL),
-                    where="AmrSystem.add_equation.newton_abs_tol",
-                ),
-                native_real(
-                    getattr(time, "newton_fd_eps", NEWTON_DEFAULT_FD_EPS),
-                    where="AmrSystem.add_equation.newton_fd_eps",
-                ),
-                native_real(
-                    getattr(time, "newton_damping", NEWTON_DEFAULT_DAMPING),
-                    where="AmrSystem.add_equation.newton_damping",
-                ),
-                getattr(time, "newton_diagnostics", False),
-                native_real(
-                    getattr(spatial, "positivity_floor", 0.0),
-                    where="AmrSystem.add_equation.positivity_floor",
-                ),
-                **spatial_options,
+                compiled,
+                spatial=spatial,
+                time=time,
+                substeps=substeps,
+                _bind_params=_bind_params,
             )
-            self._coupling_block_contracts = contract_candidate
-            return
 
         if not isinstance(model, CompiledModel):
             raise TypeError(
@@ -269,6 +229,9 @@ class _AmrSystemEquation(_AmrSystem):
         from pops.codegen.abi import check_compiled_matches_module
 
         check_compiled_matches_module(getattr(compiled, "abi_key", ""))
+        from pops.runtime._amr_package_lane import ensure_amr_native_package_lane
+
+        ensure_amr_native_package_lane(self, compiled)
         gamma = native_real(
             compiled.gamma if compiled.gamma is not None else PHYSICAL_DEFAULT_GAMMA,
             where="AmrSystem.add_equation.gamma",
