@@ -565,19 +565,22 @@ class _AmrSystemInstall(_AmrSystem):
         oriented_face_groups: dict[tuple[str, ...], int] = {}
         for entry in registry.entries:
             native = entry.native_materialization
+            # Bootstrap transfer routes own only physical state carriers.  Derived fields and
+            # caches retain their own materializers (for example ``elliptic_solve``) and have no
+            # native transfer capability to lower here.  Registering either as a state route
+            # would fabricate an order/halo pair and make the native exact-route guard reject
+            # its authentic field/cache key.
+            if native.materialization is not NativeAMRMaterializationKind.PHYSICAL:
+                continue
             provider_options = native.provider_identity.to_data().get("options", {})
             key = entry.key.to_data()
-            if native.materialization is NativeAMRMaterializationKind.PHYSICAL:
-                options = native.options.to_data()
-                capabilities = native.capabilities.transfer
-                if capabilities is None:
-                    raise ValueError(
-                        "pops.bind: physical AMR descriptor omitted transfer capabilities"
-                    )
-                order, ghost = capabilities.order, capabilities.ghost_depth
-            else:
-                options = native.options.to_data()
-                order, ghost = 1, (0,)
+            options = native.options.to_data()
+            capabilities = native.capabilities.transfer
+            if capabilities is None:
+                raise ValueError(
+                    "pops.bind: physical AMR descriptor omitted transfer capabilities"
+                )
+            order, ghost = capabilities.order, capabilities.ghost_depth
             dimensions = {row.accuracy.dimension for row in entry.requirements}
             if len(dimensions) != 1:
                 raise ValueError("pops.bind: one native transfer route cannot mix dimensions")
