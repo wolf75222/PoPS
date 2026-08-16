@@ -183,6 +183,32 @@ def test_generated_loader_retains_the_exact_authored_rank(dimension: int, target
         assert "static constexpr int dimension = %d;" % other_dimension not in loader
 
 
+@pytest.mark.parametrize("target", ("system", "amr_system"))
+def test_explicit_program_stub_uses_ranked_runtime_facades(target: str) -> None:
+    from pops._native_selector import select_native_dimension
+
+    select_native_dimension(2)
+    from tests.python.support.explicit_program import _source
+
+    src = _source(
+        target=target,
+        block_names=("gas",),
+        projection_indices=(),
+        coupled_sources=False,
+        identity="deadbeef",
+    )
+    facade = (
+        "pops::AmrSystem<pops::kNativeDimension>"
+        if target == "amr_system"
+        else "pops::System<pops::kNativeDimension>"
+    )
+    assert "%s*" % facade in src
+    assert "pops::MultiFab<pops::kNativeDimension>&" in src
+    assert "pops::System*" not in src
+    assert "pops::AmrSystem*" not in src
+    assert "pops::MultiFab&" not in src
+
+
 def test_backend_capabilities_keep_feature_flags_and_route_tier() -> None:
     assert _BACKEND_CAPS["production"] == {
         "cpu": True,

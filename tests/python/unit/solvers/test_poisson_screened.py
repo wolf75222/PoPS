@@ -66,8 +66,9 @@ def test_screened_plan_carries_one_exact_qualified_scalar_and_refuses_fft() -> N
     plan = capture_field_plans(
         case,
         lambda value: value,
-        target="system",
-        layout=Uniform(cartesian_grid(n=16, periodic=False)),
+        target="amr_system",
+        layout=final_amr_layout(
+            cartesian_grid(n=16, periodic=False), max_levels=2, ratio=2),
     )["screened"]
 
     reaction = plan.native_options["reaction"]
@@ -132,8 +133,10 @@ def _constant_screened_plan(*, coefficient_kind: str, target: str, layout=None):
         case,
         lambda value: value,
         target=target,
-        layout=(Uniform(cartesian_grid(n=16, periodic=False))
-                if layout is None else layout),
+        layout=(
+            final_amr_layout(cartesian_grid(n=16, periodic=False), max_levels=2, ratio=2)
+            if layout is None else layout
+        ),
     )["screened"]
 
 
@@ -142,7 +145,7 @@ def test_screened_exact_constants_lower_without_a_fictitious_bind_slot(
     coefficient_kind: str,
 ) -> None:
     plan = _constant_screened_plan(
-        coefficient_kind=coefficient_kind, target="system")
+        coefficient_kind=coefficient_kind, target="amr_system")
     assert plan.native_options["reaction"] == {
         "schema_version": 1,
         "kind": "scalar_constant",
@@ -155,7 +158,6 @@ def test_screened_exact_constants_lower_without_a_fictitious_bind_slot(
 @pytest.mark.parametrize(
     ("target", "installer"),
     (
-        ("system", "system"),
         ("amr_system", "amr"),
     ),
 )
@@ -284,7 +286,10 @@ def _resolved_mms_case():
     bound_kappa = validated.resolve(kappa)
     resolved = pops.resolve(
         validated,
-        layout=Uniform(CartesianGrid(frame=frame, cells=(N, N))),
+        layout=final_amr_layout(
+            CartesianGrid(frame=frame, cells=(N, N), periodic=None),
+            max_levels=1,
+        ),
         backend=Production(),
         compile_options={"include": str(ROOT / "include")},
     )

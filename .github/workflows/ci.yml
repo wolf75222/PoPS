@@ -1773,8 +1773,10 @@ jobs:
           test -s build-mpi/mpi-ctest-groups.tsv
 
       - name: Configure + build (MPI + Kokkos Serial)
-        # Three sequential watchdogs total 38 minutes; retain bounded configure/verification margin.
-        timeout-minutes: 50
+        # Three sequential watchdogs: Python module link, native tests, M4 tests.
+        # Native test compile on a cold runner includes test_program_runtime (~6 min) plus
+        # remaining heavy AMR TUs; 14m stopped the graph at 98/119 on 0a18620d2.
+        timeout-minutes: 60
         # Flags : preset ci-mpi (source unique, cf. CMakePresets.json) ; Kokkos_ROOT vient de
         # $KOKKOS_PREFIX (env du job, install en cache). ccache auto-detecte.
         run: |
@@ -1840,7 +1842,7 @@ jobs:
           # its own worker under peak memory pressure.
           run_with_heartbeat "MPI Python module link" 14m \
             cmake --build --preset ci-mpi --parallel 1 --target _pops
-          run_with_heartbeat "MPI native test build" 14m \
+          run_with_heartbeat "MPI native test build" 28m \
             cmake --build --preset ci-mpi --parallel 4 --target "${mpi_targets[@]}"
           run_with_heartbeat "M4 native test build" 10m \
             cmake --build --preset ci-mpi --parallel 4 --target "${m4_targets[@]}"

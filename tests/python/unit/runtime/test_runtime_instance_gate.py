@@ -1717,6 +1717,9 @@ def test_uniform_runtime_instance_exposes_one_level_without_an_amr_provider():
     runtime = RuntimeInstance(plan, executor=_Executor(plan))
 
     assert runtime.n_levels() == 1
+    assert np.all(runtime.block_level_state_global("fluid", 0) == 1.0)
+    with pytest.raises(ValueError, match="level 0"):
+        runtime.block_level_state_global("fluid", 1)
 
 
 @pytest.mark.parametrize(

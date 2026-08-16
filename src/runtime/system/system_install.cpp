@@ -1837,6 +1837,7 @@ void System<Dim>::finalize_native_packages() {
   // registrar/installer thunks without reallocating or losing their DSO lifetimes.
   auto& packages = p_->pending_native_packages_;
   std::vector<std::size_t> package_order;
+  std::vector<std::string> exact_package_storage;
   std::vector<ExactOrderedBytePair> exact_packages;
   std::exception_ptr package_preparation_error;
   try {
@@ -1848,7 +1849,7 @@ void System<Dim>::finalize_native_packages() {
     std::sort(package_order.begin(), package_order.end(), [&](std::size_t left, std::size_t right) {
       return packages[left].identity < packages[right].identity;
     });
-    exact_packages.reserve(packages.size());
+    exact_package_storage.reserve(packages.size());
     for (const std::size_t index : package_order) {
       const auto& package = packages[index];
       ExactContractBuilder exact_package;
@@ -1878,8 +1879,11 @@ void System<Dim>::finalize_native_packages() {
       } else {
         throw std::logic_error("System native package kind is invalid");
       }
-      exact_packages.emplace_back("system-native-package", std::move(exact_package).release());
+      exact_package_storage.push_back(std::move(exact_package).release());
     }
+    exact_packages.reserve(exact_package_storage.size());
+    for (const auto& bytes : exact_package_storage)
+      exact_packages.emplace_back("system-native-package", bytes);
   } catch (...) {
     package_preparation_error = std::current_exception();
   }
@@ -1891,13 +1895,15 @@ void System<Dim>::finalize_native_packages() {
   if (!all_ranks_agree_exact_ordered_byte_pairs(exact_packages, lane))
     throw std::runtime_error("System staged native packages differ across MPI ranks");
 
+  std::vector<std::string> field_input_storage;
   std::vector<ExactOrderedBytePair> exact_field_inputs;
   std::exception_ptr field_input_error;
   try {
-    exact_field_inputs.emplace_back("system-field-plan-registry",
-                                    p_->field_plan_registry_contract());
-    exact_field_inputs.emplace_back("system-staged-native-field-outputs",
-                                    p_->staged_native_field_output_contract());
+    field_input_storage.reserve(2);
+    field_input_storage.push_back(p_->field_plan_registry_contract());
+    field_input_storage.push_back(p_->staged_native_field_output_contract());
+    exact_field_inputs.emplace_back("system-field-plan-registry", field_input_storage[0]);
+    exact_field_inputs.emplace_back("system-staged-native-field-outputs", field_input_storage[1]);
   } catch (...) {
     field_input_error = std::current_exception();
   }

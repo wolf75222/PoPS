@@ -1024,8 +1024,8 @@ def _emit_composite_tensor_fac(
     plan_identity = request.node.attrs["hierarchy_solver_identity"]
     operator_contract = "pops.operator.scalar-tensor-elliptic.exact-rank@3"
     assembly_slot_cpp = (
-        "[] { std::vector<std::string> slots; slots.reserve(static_cast<std::size_t>(Dim * Dim + 2)); "
-        "for (int row = 0; row < Dim; ++row) for (int column = 0; column < Dim; ++column) "
+        "[] { std::vector<std::string> slots; slots.reserve(static_cast<std::size_t>(pops::kNativeDimension * pops::kNativeDimension + 2)); "
+        "for (int row = 0; row < pops::kNativeDimension; ++row) for (int column = 0; column < pops::kNativeDimension; ++column) "
         "slots.push_back(pops::runtime::program::tensor_elliptic_detail::coefficient_slot(row, column)); "
         "slots.emplace_back(\"pops.tensor-elliptic.rhs\"); "
         "slots.emplace_back(\"pops.tensor-elliptic.flux\"); return slots; }()"

@@ -9728,8 +9728,6 @@ void AmrSystem<Dim>::install_auxiliary_consumer_plan(
     runtime::system::AuxiliaryConsumerProviderPlan<Dim> plan) {
   if (p_->native_package_phase != Impl::NativePackagePhase::registrar_local)
     require_amr_assembling(p_->lifecycle, "install_auxiliary_consumer_plan");
-  if (p_->auxiliary_registry.sealed())
-    throw std::logic_error("AMR auxiliary consumer plans must be installed before registry seal");
   p_->auxiliary_registry.add_consumer_plan(std::move(plan));
   p_->auxiliary_registry_consensus_verified = false;
 }
@@ -10822,11 +10820,7 @@ void AmrSystem<Dim>::add_native_block(const std::string& name, const std::string
     throw std::runtime_error(
         "AmrSystem native auxiliary registration failed on at least one MPI rank");
   }
-  try {
-    seal_auxiliary_providers();
-  } catch (...) {
-    throw;
-  }
+  seal_auxiliary_providers();
 
   std::exception_ptr installation_error;
   std::string installation_contract;
@@ -10996,11 +10990,7 @@ void AmrSystem<Dim>::register_external_riemann_package(
     throw std::runtime_error(
         "AMR external Riemann provider-route registration failed collectively");
   }
-  try {
-    seal_auxiliary_providers();
-  } catch (...) {
-    throw;
-  }
+  seal_auxiliary_providers();
 
   std::exception_ptr installation_error;
   std::string installation_contract;
@@ -16585,6 +16575,7 @@ POPS_EXPORT void AmrSystem<Dim>::install_program(const std::string& so_path) {
         "AmrSystem::install_program must run before the AMR runtime is materialized");
 
   using install_type = void (*)(AmrSystem<Dim>*);
+  using register_type = void (*)(AmrSystem<Dim>*);
   using dt_bound_type = Real (*)(AmrSystem<Dim>*, Real);
   using boundary_install_type = void (*)(AmrSystem<Dim>*);
   using flux_expression_flag_type = bool (*)();
@@ -16592,6 +16583,7 @@ POPS_EXPORT void AmrSystem<Dim>::install_program(const std::string& so_path) {
   using flux_expression_bound_type = std::uint64_t (*)(int);
   pops::dynlib::handle handle{};
   install_type install = nullptr;
+  register_type register_program_routes = nullptr;
   dt_bound_type dt_bound = nullptr;
   boundary_install_type install_boundaries = nullptr;
   bool program_has_dt_bound = false;
@@ -16648,6 +16640,8 @@ POPS_EXPORT void AmrSystem<Dim>::install_program(const std::string& so_path) {
       throw std::runtime_error(
           "AmrSystem::install_program: pops_install_program_amr is missing; compile the Program "
           "with target='amr_system'");
+    register_program_routes = reinterpret_cast<register_type>(
+        pops::dynlib::sym(handle, "pops_register_program_provider_routes_amr"));
 
     const auto metadata = runtime::program::read_module_metadata(handle);
     const std::vector<std::string> runtime_blocks = block_names();
@@ -16881,6 +16875,8 @@ POPS_EXPORT void AmrSystem<Dim>::install_program(const std::string& so_path) {
       seed_program_params(block, defaults);
     p_->program.operator_authorities_ = operator_authorities;
 
+    if (register_program_routes)
+      register_program_routes(this);
     p_->ensure_engine();
     install(this);
     p_->program.require_exact_artifact_step_install(*previous_install,

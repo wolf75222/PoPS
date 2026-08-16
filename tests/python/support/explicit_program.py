@@ -162,8 +162,9 @@ def _forward_euler_body(
     for block in range(block_count):
         declarations.extend(
             (
-                "      pops::MultiFab& state_%d = ctx.state(%d);" % (block, block),
-                "      pops::MultiFab& rhs_%d = "
+                "      pops::MultiFab<pops::kNativeDimension>& state_%d = ctx.state(%d);"
+                % (block, block),
+                "      pops::MultiFab<pops::kNativeDimension>& rhs_%d = "
                 "ctx.rhs_scratch(%d, 0, state_%d);" % (block, 1000 + block, block),
             )
         )
@@ -172,7 +173,7 @@ def _forward_euler_body(
         )
         combinations.extend(
             (
-                "      pops::MultiFab& next_%d = "
+                "      pops::MultiFab<pops::kNativeDimension>& next_%d = "
                 "ctx.scratch_state(%d, 0, state_%d);" % (block, 2000 + block, block),
                 "      ctx.lincomb(next_%d, pops::Real(1), state_%d, dt, rhs_%d, dt, "
                 "{{0, 1, 1}}, {{1, 1, 1}});" % (block, block, block),
@@ -231,6 +232,7 @@ def _source(
 #include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/runtime/program/program_context.hpp>
 #include <pops/runtime/program/amr_program_context.hpp>
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/core/foundation/types.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <cstdint>
@@ -262,12 +264,16 @@ extern "C" pops::Real %s(%s*, pops::Real) {
         if target == "amr_system"
         else "",
         "pops_program_dt_bound_amr" if target == "amr_system" else "pops_program_dt_bound",
-        "pops::AmrSystem" if target == "amr_system" else "pops::System",
+        (
+            "pops::AmrSystem<pops::kNativeDimension>"
+            if target == "amr_system"
+            else "pops::System<pops::kNativeDimension>"
+        ),
     )
     if target == "system":
         install = (
             """\
-extern "C" void pops_install_program(pops::System* system) {
+extern "C" void pops_install_program(pops::System<pops::kNativeDimension>* system) {
   auto context = pops::runtime::program::make_program_execution_provider(system);
   context->configure_primary_clock("pops.test.clock.macro");
   context->install([context](double dt) {
@@ -282,7 +288,7 @@ extern "C" void pops_install_program(pops::System* system) {
     else:
         install = (
             """\
-extern "C" void pops_install_program_amr(pops::AmrSystem* system) {
+extern "C" void pops_install_program_amr(pops::AmrSystem<pops::kNativeDimension>* system) {
   auto context = pops::runtime::program::make_program_execution_provider(system);
   context->configure_primary_clock("pops.test.clock.macro");
   context->install([context](double macro_dt) {

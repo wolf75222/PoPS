@@ -778,7 +778,15 @@ class RuntimeInstance:
         return self._executor.block_level_state(block, level)
 
     def block_level_state_global(self, block: str, level: int) -> Any:
-        return self._executor.block_level_state_global(block, level)
+        provider = getattr(self._executor, "block_level_state_global", None)
+        if callable(provider):
+            return provider(block, level)
+        if int(level) != 0:
+            raise ValueError(
+                "uniform runtime only exposes level 0; AMR callers must choose an "
+                "explicit level with block_level_state_global(block, level)"
+            )
+        return self.state_global(block)
 
     def field_provider_slots(self) -> tuple[str, ...]:
         return tuple(self._executor.field_provider_slots())

@@ -511,6 +511,23 @@ def _require_bounded_cell_local_program(program: Any, target: Any, hierarchy_bod
     return contract, tuple(routes)
 
 
+def _emit_amr_program_provider_register(provider_plan_install: str) -> str:
+    """Emit the Program consumer-plan registrar.
+
+    ``AmrSystem::install_program`` calls this before ``ensure_engine()`` materializes the
+    hierarchy. Native block install may already have sealed the auxiliary registry; consumer
+    plans are appended to that sealed image and re-resolved in place.
+    """
+    return (
+        'extern "C" void pops_register_program_provider_routes_amr('
+        "pops::AmrSystem<pops::kNativeDimension>* sys) {\n"
+        "  if (sys == nullptr)\n"
+        '    throw std::invalid_argument("program provider-route registrar received null AmrSystem");\n'
+        + (provider_plan_install + "\n" if provider_plan_install else "")
+        + "}\n"
+    )
+
+
 def _emit_amr_install(
     program: Any,
     target: Any,
@@ -548,6 +565,7 @@ def _emit_amr_install(
     if target != "amr_system":
         return ""
     flux_expression_budget = _emit_flux_expression_budget(program)
+    provider_register = _emit_amr_program_provider_register(provider_plan_install)
     if cell_local_time is not None:
         cell_local_contract, cell_local_routes = cell_local_time
         clock_identity = json.dumps(program.clock.qualified_id)
@@ -557,10 +575,9 @@ def _emit_amr_install(
         route_count = len(cell_local_routes)
         return (
             flux_expression_budget + "\n#include <pops/runtime/program/amr_program_context.hpp>\n"
-            'extern "C" void pops_install_program_amr('
+            + provider_register
+            + 'extern "C" void pops_install_program_amr('
             "pops::AmrSystem<pops::kNativeDimension>* sys) {\n"
-            + provider_plan_install
-            + ("\n" if provider_plan_install else "")
             + "  auto ctx_owner = pops::runtime::program::make_program_execution_provider(sys);\n"
             "  auto& ctx = *ctx_owner;\n"
             f"  ctx.configure_primary_clock({clock_identity});\n"
@@ -721,10 +738,9 @@ def _emit_amr_install(
         "// blocks by name and seeding the runtime params. The shared factory selects the provider and\n"
         "// the wrapper installs only the parent/child clock driver: the SAME\n"
         "// lowered body is recursively subcycled, temporally interpolated and conservatively synced.\n"
-        'extern "C" void pops_install_program_amr('
+        + provider_register
+        + 'extern "C" void pops_install_program_amr('
         "pops::AmrSystem<pops::kNativeDimension>* sys) {\n"
-        + provider_plan_install
-        + ("\n" if provider_plan_install else "")
         + "  auto ctx_owner = pops::runtime::program::make_program_execution_provider(sys);\n"
         "  auto& ctx = *ctx_owner;\n"
         + transform_guard
