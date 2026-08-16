@@ -63,6 +63,46 @@
 
 namespace pops::runtime::program {
 
+enum class AmrProgramHistoryRemapSource : std::uint8_t {
+  RetainedChild = 1,
+  ParentDeferred = 2,
+  Removed = 3,
+};
+
+/// One canonical affected-ring decision prepared by the AMR lane before topology publication.
+struct AmrProgramHistoryRemapEntry {
+  std::string key;
+  std::string parent_key;
+  AmrProgramHistoryRemapSource source = AmrProgramHistoryRemapSource::Removed;
+
+  bool operator==(const AmrProgramHistoryRemapEntry&) const = default;
+};
+
+/// Native-prepared authority for the one accepted history-ring transition induced by a real AMR
+/// topology publication.  This is deliberately a value type: the artifact callback receives the
+/// exact operation chosen by the owning AMR lane, rather than consulting mutable regrid state.
+struct AmrProgramHistoryRemapDescriptor {
+  int parent_level = -1;
+  int child_level = -1;
+  bool child_published = false;
+  /// Geometry/ratio changed independently of a distribution-only ownership rebalance.  The
+  /// accepted callback uses this exact engine-prepared fact to choose the same source for both
+  /// numeric history slots and their FluxExpression provenance.
+  bool child_physical_layout_changed = false;
+  std::vector<AmrProgramHistoryRemapEntry> history_plan;
+  std::uint64_t prior_topology_epoch = 0;
+  std::uint64_t prior_materialization_generation = 0;
+  std::uint64_t published_topology_epoch = 0;
+  std::uint64_t published_materialization_generation = 0;
+  std::int64_t accepted_macro_step = -1;
+  std::int64_t temporal_numerator = 0;
+  std::int64_t temporal_denominator = 0;
+  bool integral_only = false;
+  std::string operation_identity;
+
+  bool operator==(const AmrProgramHistoryRemapDescriptor&) const = default;
+};
+
 /// Type-erased, already allocated image of one artifact context's accepted state.  Runtime
 /// transactions capture it before entering scientific code and invoke only the noexcept publication
 /// after the carrier and Program storage have been restored.
@@ -242,14 +282,14 @@ struct ProgramRuntimeState {
   /// AMR-only, artifact-owned remap boundary. Unlike hierarchy_refresh_, this callback is reached
   /// only after AmrSystem published a topology and atomically exchanged a prepared history manager.
   /// Keeping it distinct prevents a generic hierarchy refresh from accepting stale history storage.
-  std::function<void()> history_remap_accepted_;
+  std::function<void(const AmrProgramHistoryRemapDescriptor&)> history_remap_accepted_;
   /// Artifact-owned accepted-boundary hooks used only by the strict AMR restart transaction.
   /// `restart_regrid_preflight_` validates every rank-local prerequisite before peers enter the
   /// scientific regrid; `restart_regrid_` then performs that tag/regrid pass;
-  /// `restart_resync_` force-imports the facade bytes after rollback, even when their restored
-  /// revision equals the context's last observed revision. `accepted_context_snapshot_` contributes
-  /// context-owned ledgers and clocks to every outer accepted transaction. Uniform leaves all four
-  /// empty.
+  /// `restart_resync_` force-imports the facade bytes after either accepted restart publication or
+  /// rollback, even when their restored revision equals the context's last observed revision.
+  /// `accepted_context_snapshot_` contributes context-owned ledgers and clocks to every outer
+  /// accepted transaction. Uniform leaves all four empty.
   std::function<void()> restart_regrid_preflight_;
   std::function<void()> restart_regrid_;
   std::function<void()> restart_resync_;
@@ -417,7 +457,7 @@ struct ProgramRuntimeState {
   struct ArtifactStepInstallSnapshot {
     std::function<void(double)> step;
     std::function<void()> hierarchy_refresh;
-    std::function<void()> history_remap_accepted;
+    std::function<void(const AmrProgramHistoryRemapDescriptor&)> history_remap_accepted;
     std::function<void()> restart_regrid_preflight;
     std::function<void()> restart_regrid;
     std::function<void()> restart_resync;
@@ -670,7 +710,9 @@ struct ProgramRuntimeState {
   }
 
   /// Attach the exact post-publication history-remap callback emitted beside an AMR Program.
-  void install_history_remap_accepted(std::function<void()> refresh, const std::string& runtime) {
+  void install_history_remap_accepted(
+      std::function<void(const AmrProgramHistoryRemapDescriptor&)> refresh,
+      const std::string& runtime) {
     if (!step_)
       throw std::logic_error(
           runtime + "::install_program_history_remap_accepted requires an installed Program");
@@ -730,11 +772,11 @@ struct ProgramRuntimeState {
     restart_regrid_();
   }
 
-  void resync_after_restart_rollback(const std::string& runtime) const {
+  void resync_after_restart(const std::string& runtime) const {
     if (!artifact_backed_)
       return;
     if (!restart_resync_)
-      throw std::logic_error(runtime + " artifact lacks its restart rollback resync hook");
+      throw std::logic_error(runtime + " artifact lacks its restart resync hook");
     restart_resync_();
   }
 
@@ -752,10 +794,20 @@ struct ProgramRuntimeState {
   }
 
   /// Accept only the engine-owned prepared-history remap publication, never a generic refresh.
-  void accept_history_remap(const std::string& runtime) const {
+  void accept_history_remap(const AmrProgramHistoryRemapDescriptor& descriptor,
+                            const std::string& runtime) const {
     if (!history_remap_accepted_)
       throw std::logic_error(runtime + " artifact lacks its accepted history-remap hook");
-    history_remap_accepted_();
+    if (descriptor.parent_level < 0 || descriptor.child_level != descriptor.parent_level + 1 ||
+        descriptor.prior_topology_epoch == std::numeric_limits<std::uint64_t>::max() ||
+        descriptor.prior_materialization_generation == std::numeric_limits<std::uint64_t>::max() ||
+        descriptor.published_topology_epoch != descriptor.prior_topology_epoch + 1 ||
+        descriptor.published_materialization_generation !=
+            descriptor.prior_materialization_generation + 1 ||
+        descriptor.accepted_macro_step < 0 || descriptor.operation_identity.empty())
+      throw std::invalid_argument(runtime +
+                                  " received an unauthenticated history-remap descriptor");
+    history_remap_accepted_(descriptor);
   }
 
   bool authorizes_history_replay(const std::string& ring, int depth) const {

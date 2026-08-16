@@ -37,19 +37,33 @@ template <int Dim>
 struct AmrProgramHistoryRemapCollectiveTestAccess {
   using context_type = AmrProgramContext<Dim>;
 
+  struct Observation {
+    bool seen = false;
+    bool parent_deferred = false;
+  };
+
   static void install_rank_zero_candidate_metadata_corruption(context_type& context,
-                                                              std::string history_name, int level) {
+                                                              std::string history_name, int level,
+                                                              Observation& observation) {
     auto& program = context.runtime_state();
-    program.history_remap_accepted_ = [&context, history_name = std::move(history_name),
-                                       level]() mutable {
-      if (my_rank() == 0) {
-        auto& histories = context.runtime_state().hist_;
-        const std::string key = context.history_key_(history_name, level);
-        histories.fill_count.at(key) = 0;
-        histories.initialized.at(key) = true;
-      }
-      context.refresh_accepted_hierarchy_state_after_remap_();
-    };
+    const auto real_callback = program.history_remap_accepted_;
+    program.history_remap_accepted_ =
+        [&context, history_name = std::move(history_name), level, real_callback,
+         &observation](const AmrProgramHistoryRemapDescriptor& descriptor) mutable {
+          observation.seen = true;
+          observation.parent_deferred = descriptor.child_published &&
+                                        descriptor.history_plan.size() == 1 &&
+                                        descriptor.history_plan.front().source ==
+                                            AmrProgramHistoryRemapSource::ParentDeferred &&
+                                        !descriptor.history_plan.front().parent_key.empty();
+          if (my_rank() == 0) {
+            auto& histories = context.runtime_state().hist_;
+            const std::string key = context.history_key_(history_name, level);
+            histories.fill_count.at(key) = 0;
+            histories.initialized.at(key) = true;
+          }
+          real_callback(descriptor);
+        };
   }
 };
 
@@ -134,8 +148,10 @@ int run_collective_history_remap_refusal() {
   constexpr int Dim = kNativeDimension;
   AmrSystemConfig<Dim> config;
   for (int axis = 0; axis < Dim; ++axis) {
-    config.shape[axis] = 8;
+    config.shape[axis] = 32;
     config.periodicity[axis] = true;
+    config.transition_buffers.front()[axis] = 0;
+    config.transition_lookaheads.front()[axis] = 0;
   }
   config.level_count = 2;
   config.regrid_every = 1;
@@ -158,11 +174,20 @@ int run_collective_history_remap_refusal() {
     state[static_cast<std::size_t>(EulerND<Dim>::density_component) * cells + cell] = 1.0;
     state[static_cast<std::size_t>(EulerND<Dim>::energy_component) * cells + cell] = 2.5;
   }
+  std::size_t center = 0;
+  std::size_t stride = 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    center += static_cast<std::size_t>(config.shape[axis] / 2) * stride;
+    stride *= static_cast<std::size_t>(config.shape[axis]);
+  }
   system.set_conservative_state("tracer", state);
-  test::install_prepared_threshold_union(system, {{"tracer", "rho", 0.5}},
-                                         "tests.history-remap-refusal/tagging@1");
+  test::install_prepared_refine_coarsen_threshold(
+      system, {"tracer", "rho", 0.5, test::PreparedThresholdRelation::Above},
+      {"tracer", "rho", 0.5, test::PreparedThresholdRelation::Below},
+      "tests.history-remap-refusal/tagging@1");
   if (system.engine() == nullptr || system.engine()->hierarchy().num_levels() != 2)
     return 1;
+  const auto full_boxes = system.patch_boxes();
 
   auto context =
       std::make_shared<runtime::program::AmrProgramContext<Dim>>(system.engine(), &system);
@@ -187,14 +212,23 @@ int run_collective_history_remap_refusal() {
         [&](int) { context->rotate_histories("tests.history-remap-refusal/clock@1"); });
   }
 
+  std::vector<double> contracted = state;
+  for (std::size_t cell = 0; cell < cells; ++cell)
+    contracted[static_cast<std::size_t>(EulerND<Dim>::density_component) * cells + cell] = 0.25;
+  contracted[static_cast<std::size_t>(EulerND<Dim>::density_component) * cells + center] = 1.0;
+  system.set_conservative_state("tracer", contracted);
+  system.execute_prepared_tagging(0);
+  if (!system.regrid_from_prepared_tagging(0))
+    return 1;
+  if (system.patch_boxes() == full_boxes)
+    return 1;
+
   auto* engine = system.engine();
   const ExecutionLane& lane = context->prepared_execution_lane();
   const std::uint64_t topology_before = engine->topology_epoch();
   const std::uint64_t materialization_before = engine->materialization_generation();
   const std::string spatial_before{engine->spatial_contract()};
   const auto patches_before = system.patch_boxes();
-  const auto state_before = system.block_level_state_global("tracer", 0);
-  const double mass_before = system.mass("tracer");
   const auto names_before = system.history_names();
   std::array<bool, 2> initialized_before{};
   std::array<int, 2> fill_before{};
@@ -212,8 +246,17 @@ int run_collective_history_remap_refusal() {
     }
   }
 
+  for (std::size_t cell = 0; cell < cells; ++cell)
+    state[static_cast<std::size_t>(EulerND<Dim>::density_component) * cells + cell] = 1.0;
+  system.set_conservative_state("tracer", state);
+  system.execute_prepared_tagging(0);
+  const auto state_before = system.block_level_state_global("tracer", 0);
+  const double mass_before = system.mass("tracer");
+  typename runtime::program::detail::AmrProgramHistoryRemapCollectiveTestAccess<Dim>::Observation
+      remap_observation;
   runtime::program::detail::AmrProgramHistoryRemapCollectiveTestAccess<
-      Dim>::install_rank_zero_candidate_metadata_corruption(*context, "tracer.rate", 0);
+      Dim>::install_rank_zero_candidate_metadata_corruption(*context, "tracer.rate", 0,
+                                                            remap_observation);
   bool refused = false;
   try {
     (void)system.regrid_from_prepared_tagging(0);
@@ -221,9 +264,11 @@ int run_collective_history_remap_refusal() {
     refused =
         std::string(error.what()) == "AMR Program hierarchy-state publication failed collectively";
   }
-  bool unchanged = engine->topology_epoch() == topology_before &&
-                   engine->materialization_generation() == materialization_before &&
-                   engine->spatial_contract() == spatial_before &&
+  const auto* restored_engine = system.engine();
+  bool unchanged = restored_engine != nullptr &&
+                   restored_engine->topology_epoch() == topology_before &&
+                   restored_engine->materialization_generation() == materialization_before &&
+                   restored_engine->spatial_contract() == spatial_before &&
                    system.patch_boxes() == patches_before &&
                    system.block_level_state_global("tracer", 0) == state_before &&
                    system.mass("tracer") == mass_before && system.history_names() == names_before;
@@ -241,10 +286,12 @@ int run_collective_history_remap_refusal() {
           system.history_global("tracer.rate", level, slot) ==
               history_before[static_cast<std::size_t>(level)][static_cast<std::size_t>(slot)];
   }
-  return all_reduce_sum(refused ? 1L : 0L, lane) == lane.size() &&
-                 all_reduce_sum(unchanged ? 1L : 0L, lane) == lane.size()
-             ? 0
-             : 1;
+  const bool saw_parent_deferred = remap_observation.seen && remap_observation.parent_deferred;
+  const long observed = all_reduce_sum(saw_parent_deferred ? 1L : 0L, lane);
+  const long refusals = all_reduce_sum(refused ? 1L : 0L, lane);
+  const long unchanged_ranks = all_reduce_sum(unchanged ? 1L : 0L, lane);
+  return observed == lane.size() && refusals == lane.size() && unchanged_ranks == lane.size() ? 0
+                                                                                              : 1;
 }
 
 int pops_run_test_mpi_cell_temporal_program_refusal(int argc, char** argv) {

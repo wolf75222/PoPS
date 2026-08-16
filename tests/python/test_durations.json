@@ -139,6 +139,7 @@
   "tests/python/unit/codegen/test_dsl_source.py": 1.2,
   "tests/python/unit/codegen/test_dsl_wave_speeds_jacobian.py": 160.0,
   "tests/python/unit/codegen/test_dsl_wave_speeds_no_pressure.py": 160.0,
+  "tests/python/unit/codegen/test_emitter_provider_pack_bind.py": 2.0,
   "tests/python/unit/codegen/test_exact_ranked_emitters.py": 0.5,
   "tests/python/unit/codegen/test_exact_scalar_literals.py": 2.0,
   "tests/python/unit/codegen/test_fail_closed_reports.py": 2.0,
@@ -425,7 +426,7 @@
     "unit_seconds": "per-file pytest wall time",
     "measured_source": "borrowed _pops.so locally plus GitHub Actions run 30190778708 per-test timings",
     "estimated_note": "Unmeasured files use conservative path/content tiers (1/2/5/30/60/120 s); compiler-gated files retain native-compile estimates. Refresh every estimated row from a full CI run gate-python timing artifact.",
-    "estimated_count": 252,
+    "estimated_count": 253,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_scalar_advection_final_example.py",
@@ -510,6 +511,7 @@
       "tests/python/unit/codegen/test_dsl_roe_from_jacobian.py",
       "tests/python/unit/codegen/test_dsl_wave_speeds_jacobian.py",
       "tests/python/unit/codegen/test_dsl_wave_speeds_no_pressure.py",
+      "tests/python/unit/codegen/test_emitter_provider_pack_bind.py",
       "tests/python/unit/codegen/test_exact_ranked_emitters.py",
       "tests/python/unit/codegen/test_exact_scalar_literals.py",
       "tests/python/unit/codegen/test_fail_closed_reports.py",
@@ -680,6 +682,6 @@
       "tests/python/unit/time/test_typed_provenance_guards.py",
       "tests/python/unit/time/test_typed_schedule.py"
     ],
-    "total_files": 421
+    "total_files": 422
   }
 }

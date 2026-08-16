@@ -251,6 +251,23 @@ TEST(CompositeFacPoissonTest, fine_patch_improves_accuracy_over_coarse_only) {
   expect_refined_accuracy<3>();
 }
 
+TEST(CompositeFacPoissonTest, resolved_candidate_keeps_relative_stop_on_the_forcing) {
+  auto fixture = composite_fixture<2>(24);
+  const pops::ExecutionLane lane =
+      pops::ExecutionLane::world("tests.composite-fac.resolved-candidate");
+  pops::elliptic::mg::CompositeFacPoisson<2> solver(std::move(fixture.hierarchy), lane);
+  install_nullspace(solver, 2);
+  fill_rhs(solver.rhs_level(0), fixture.coarse_geometry);
+  fill_rhs(solver.rhs_level(1), fixture.fine_geometry);
+  const pops::SolveReport first = solver.solve();
+  ASSERT_TRUE(first.solved()) << first.reason;
+  const pops::SolveReport again = solver.solve();
+  ASSERT_TRUE(again.solved()) << again.reason << " iters=" << again.iters
+                              << " rel=" << again.rel_residual;
+  EXPECT_EQ(again.reason, "composite_fac_initial_residual");
+  EXPECT_EQ(again.iters, 0);
+}
+
 TEST(CompositeFacPoissonTest, constant_reaction_matches_screened_mms_on_both_fac_paths) {
   for (const pops::Real reaction : {pops::Real(0), pops::Real(40)}) {
     const auto [report1, error1] = solve_composite<1>(24, reaction);

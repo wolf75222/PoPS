@@ -596,7 +596,7 @@ TEST(ProgramRuntime, ArtifactStepInstallRequiresOneNewStepAndRollsBackExactly) {
   EXPECT_TRUE(state.authorizes_history_replay("gas.previous", 3));
   EXPECT_NO_THROW(state.preflight_regrid_on_restart("test"));
   EXPECT_NO_THROW(state.regrid_on_restart("test"));
-  EXPECT_NO_THROW(state.resync_after_restart_rollback("test"));
+  EXPECT_NO_THROW(state.resync_after_restart("test"));
   EXPECT_EQ(restart_preflights, 1);
   EXPECT_EQ(restart_regrids, 1);
   EXPECT_EQ(restart_resyncs, 1);

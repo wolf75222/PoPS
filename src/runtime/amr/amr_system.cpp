@@ -1007,6 +1007,39 @@ bool layout_contains(const amr::hierarchy::LevelLayout<Dim>& layout, const Index
   return false;
 }
 
+/// Compare the physical fine-level coverage only.  Owners, rank-space, validation budget and patch
+/// decomposition are storage/validation facts, not a new coarse/fine interface.
+template <int Dim>
+bool same_physical_level_layout(const amr::hierarchy::LevelLayout<Dim>& left,
+                                const amr::hierarchy::LevelLayout<Dim>& right) {
+  if (left.level() != right.level() || left.domain() != right.domain() ||
+      left.ratio_from_parent() != right.ratio_from_parent())
+    return false;
+  const std::size_t cells = checked_cells(left.domain());
+  std::vector<char> left_coverage(cells, char{0});
+  std::vector<char> right_coverage(cells, char{0});
+  const auto mark = [&](const auto& layout, std::vector<char>& coverage) {
+    for (const Box<Dim>& patch : layout.patches().boxes())
+      for (std::size_t ordinal = 0; ordinal < checked_cells(patch); ++ordinal)
+        coverage[offset(unflatten(patch, ordinal), layout.domain())] = char{1};
+  };
+  mark(left, left_coverage);
+  mark(right, right_coverage);
+  return left_coverage == right_coverage;
+}
+
+template <int Dim>
+bool retained_image_covers_layout(const SparseFieldImage<Dim>& image,
+                                  const amr::hierarchy::LevelLayout<Dim>& layout) {
+  if (image.domain != layout.domain() || image.populated.size() != checked_cells(image.domain))
+    return false;
+  for (const Box<Dim>& patch : layout.patches().boxes())
+    for (std::size_t ordinal = 0; ordinal < checked_cells(patch); ++ordinal)
+      if (image.populated[offset(unflatten(patch, ordinal), image.domain)] == 0)
+        return false;
+  return true;
+}
+
 template <int Dim>
 std::vector<char> child_coverage_on_parent(
     const amr::hierarchy::LevelLayout<Dim>& parent,
@@ -3174,6 +3207,84 @@ struct AmrSystem<Dim>::Impl {
         return false;
       }
     }
+
+    std::string match_failure(const engine_type& live, const multiblock_type& live_blocks,
+                              std::string_view expected_package,
+                              std::string_view expected_embedded) const {
+      if (matches(live, live_blocks, expected_package, expected_embedded))
+        return {};
+      try {
+        if (!lane)
+          return "no-lane";
+        if (spatial_contract != live.spatial_contract())
+          return "spatial_contract";
+        if (package_contract != expected_package)
+          return "package_contract";
+        if (embedded_boundary_configuration_contract != expected_embedded)
+          return "embedded_boundary_configuration";
+        if (topology_epoch != live.topology_epoch())
+          return "topology_epoch graph=" + std::to_string(topology_epoch) +
+                 " live=" + std::to_string(live.topology_epoch());
+        if (materialization_generation != live.materialization_generation())
+          return "materialization_generation graph=" + std::to_string(materialization_generation) +
+                 " live=" + std::to_string(live.materialization_generation());
+        if (block_levels.size() != live_blocks.block_count())
+          return "block_count";
+        if (embedded_boundary.size() != live.hierarchy().num_levels() ||
+            active_coverage.size() != live.hierarchy().num_levels())
+          return "level_count";
+        for (std::size_t block = 0; block < block_levels.size(); ++block) {
+          for (std::size_t level = 0; level < live.hierarchy().num_levels(); ++level) {
+            if (!block_evaluations[block][level] || !block_evaluation_candidates[block][level] ||
+                !block_stage_scratch[block][level])
+              return "missing_block_evaluation";
+            if (!same_field_contract(block_evaluations[block][level]->residual,
+                                     live_blocks.state(block, level)) ||
+                !same_field_contract(block_evaluation_candidates[block][level]->residual,
+                                     live_blocks.state(block, level)))
+              return "block_evaluation_contract";
+            if (!field_storage_matches(live_blocks.state(block, level),
+                                       block_state_storage[block][level]))
+              return "block_state_storage";
+          }
+        }
+        for (std::size_t level = 0; level < live.hierarchy().num_levels(); ++level) {
+          if (!provider_storage[level])
+            return "provider_storage_null level=" + std::to_string(level);
+          if (provider_storage_identity[level].size() != provider_storage[level]->groups.size())
+            return "provider_storage_identity_count level=" + std::to_string(level);
+          for (const auto& [identity, storage] : provider_storage_identity[level]) {
+            const auto* group = provider_storage[level]->find(identity);
+            if (group == nullptr)
+              return "provider_storage_missing_group level=" + std::to_string(level);
+            if (!field_storage_matches(*group, storage))
+              return "provider_storage_pointer level=" + std::to_string(level);
+          }
+          if (!provider_candidate_storage[level])
+            return "provider_candidate_null level=" + std::to_string(level);
+          if (provider_candidate_storage_identity[level].size() !=
+              provider_candidate_storage[level]->groups.size())
+            return "provider_candidate_identity_count level=" + std::to_string(level);
+          for (const auto& [identity, storage] : provider_candidate_storage_identity[level]) {
+            const auto* group = provider_candidate_storage[level]->find(identity);
+            if (group == nullptr)
+              return "provider_candidate_missing_group level=" + std::to_string(level);
+            if (!field_storage_matches(*group, storage))
+              return "provider_candidate_pointer level=" + std::to_string(level);
+          }
+          const bool has_groups = !provider_candidate_storage[level]->groups.empty();
+          if (static_cast<bool>(provider_candidate_ghost_fills[level]) != has_groups)
+            return "provider_candidate_ghost_fill level=" + std::to_string(level) +
+                   " has_groups=" + (has_groups ? "1" : "0");
+          if (provider_candidate_physical_boundaries[level].has_value() != has_groups)
+            return "provider_candidate_physical_boundaries level=" + std::to_string(level) +
+                   " has_groups=" + (has_groups ? "1" : "0");
+        }
+        return "provider_or_auxiliary_storage";
+      } catch (...) {
+        return "match_exception";
+      }
+    }
   };
 
   using provider_snapshot_type = std::vector<auxiliary_groups_type>;
@@ -3272,7 +3383,7 @@ struct AmrSystem<Dim>::Impl {
   mutable std::vector<std::uint8_t> program_accepted_bytes;
   mutable std::uint64_t program_accepted_revision = 0;
   mutable bool program_accepted_bytes_runtime_owned = false;
-  /// Frozen, communicator-authenticated POPSAND3/source-authority resource ceiling.  Python reads
+  /// Frozen, communicator-authenticated POPSAND4/source-authority resource ceiling.  Python reads
   /// it while bind is still assembling; mark_bound recomputes the exact contract and refuses any
   /// intervening structural mutation before the lifecycle becomes immutable.
   mutable std::optional<std::pair<std::size_t, std::size_t>>
@@ -3726,7 +3837,11 @@ struct AmrSystem<Dim>::Impl {
 #endif
       if (!prepared_hierarchy->matches(*engine, *multiblock_hierarchy, prepared_package_contract(),
                                        embedded_boundary_configuration_contract))
-        throw std::logic_error("AMR prepared hierarchy lane is stale for the live engine");
+        throw std::logic_error("AMR prepared hierarchy lane is stale for the live engine (" +
+                               prepared_hierarchy->match_failure(
+                                   *engine, *multiblock_hierarchy, prepared_package_contract(),
+                                   embedded_boundary_configuration_contract) +
+                               ")");
       ExactContractBuilder exact;
       exact.text("pops.amr.prepared-engine-readiness")
           .scalar(std::uint32_t{1})
@@ -4565,7 +4680,8 @@ struct AmrSystem<Dim>::Impl {
     return BoundaryTopology<Dim>::axis_periodic(cfg.periodicity);
   }
 
-  static std::string exact_field_plan_contract(std::string_view slot, const FieldPlan& plan) {
+  static std::string exact_field_plan_contract(std::string_view slot, const FieldPlan& plan,
+                                               bool include_live_boundary_point = true) {
     ExactContractBuilder contract;
     contract.text("pops.amr.exact-ranked-field-plan")
         .scalar(std::uint32_t{5})
@@ -4635,26 +4751,30 @@ struct AmrSystem<Dim>::Impl {
             key.serialize_exact(item);
           });
     }
-    contract.presence(plan.use_prepared_level_rhs)
-        .presence(plan.boundary_kernel.has_value())
-        .presence(plan.boundary_point.has_value());
+    contract.presence(plan.use_prepared_level_rhs).presence(plan.boundary_kernel.has_value());
     if (plan.boundary_kernel)
       contract.text(plan.boundary_kernel->identity)
           .text(plan.boundary_kernel->residual_identity)
           .text(plan.boundary_kernel->jvp_identity)
           .presence(plan.boundary_kernel->observes_iteration);
-    if (plan.boundary_point)
-      contract.scalar(plan.boundary_point->time)
-          .scalar(plan.boundary_point->dt)
-          .scalar(std::int32_t{plan.boundary_point->clock_slot})
-          .scalar(std::int32_t{plan.boundary_point->partition_slot})
-          .scalar(std::int32_t{plan.boundary_point->stage_slot})
-          .scalar(std::int32_t{plan.boundary_point->level})
-          .scalar(plan.boundary_point->step)
-          .scalar(std::int32_t{plan.boundary_point->substep})
-          .scalar(std::int32_t{plan.boundary_point->iteration})
-          .scalar(plan.boundary_point->stage_fraction_numerator)
-          .scalar(plan.boundary_point->stage_fraction_denominator);
+    // Live evaluation points are written by set_field_logical_timepoint during Program
+    // steps. Static checkpoint provenance must not hash that clock or a 14-step source
+    // image cannot preflight against a freshly bound composition of the same install.
+    if (include_live_boundary_point) {
+      contract.presence(plan.boundary_point.has_value());
+      if (plan.boundary_point)
+        contract.scalar(plan.boundary_point->time)
+            .scalar(plan.boundary_point->dt)
+            .scalar(std::int32_t{plan.boundary_point->clock_slot})
+            .scalar(std::int32_t{plan.boundary_point->partition_slot})
+            .scalar(std::int32_t{plan.boundary_point->stage_slot})
+            .scalar(std::int32_t{plan.boundary_point->level})
+            .scalar(plan.boundary_point->step)
+            .scalar(std::int32_t{plan.boundary_point->substep})
+            .scalar(std::int32_t{plan.boundary_point->iteration})
+            .scalar(plan.boundary_point->stage_fraction_numerator)
+            .scalar(plan.boundary_point->stage_fraction_denominator);
+    }
     contract.presence(plan.newton.has_value());
     if (plan.newton)
       contract.scalar(plan.newton->tolerance)
@@ -7822,6 +7942,26 @@ struct AmrSystem<Dim>::Impl {
     }
   }
 
+  void requalify_restart_program_authority(
+      const runtime::program::AmrProgramAcceptedState<Dim>& state) const {
+    if (!restart_transaction)
+      throw std::logic_error(
+          "AMR Program restart authority requalification requires one active restart transaction");
+    if (!engine || !multiblock_hierarchy)
+      throw std::logic_error(
+          "AMR Program restart authority requalification requires a prepared hierarchy");
+    typename multiblock_type::RestartAuthority authority{
+        state.spatial_contract,
+        state.topology_epoch,
+        state.materialization_generation,
+    };
+    multiblock_hierarchy->requalify_restart_authority_collectively(authority);
+    // The accepted Program later authenticates the regenerated graph, block map, flux budget and
+    // coupling contracts.  If any part of that preparation fails, the enclosing AcceptedSnapshot
+    // restores the complete former engine/carrier/graph image collectively.
+    refresh_prepared_hierarchy();
+  }
+
   void publish_tagging_checkpoint() const {
     if (!prepared_hierarchy || !prepared_hierarchy->lane)
       throw std::logic_error("AMR tagging checkpoint requires its prepared hierarchy lane");
@@ -8057,8 +8197,9 @@ struct AmrSystem<Dim>::Impl {
 
   std::optional<runtime::program::HistoryManager<Dim>> prepare_regridded_program_histories(
       int parent_level, const amr::hierarchy::LevelLayout<Dim>& parent_layout,
-      const amr::hierarchy::LevelLayout<Dim>* fine_layout,
-      const PreparedHistoryHierarchyImages<Dim>& source_images) const {
+      const amr::hierarchy::LevelLayout<Dim>* fine_layout, bool child_physical_layout_changed,
+      const PreparedHistoryHierarchyImages<Dim>& source_images,
+      std::vector<runtime::program::AmrProgramHistoryRemapEntry>& remap_plan) const {
     using history_manager_type = runtime::program::HistoryManager<Dim>;
     const CommunicatorView communicator = prepared_hierarchy->lane->communicator();
     const long has_histories = program.hist_.histories.empty() ? 0L : 1L;
@@ -8079,6 +8220,7 @@ struct AmrSystem<Dim>::Impl {
     std::optional<history_manager_type> candidate;
     std::exception_ptr local_error;
     try {
+      remap_plan.clear();
       descriptors = history_descriptors();
       ExactContractBuilder exact;
       exact.text("pops.amr-program.history-regrid")
@@ -8086,6 +8228,7 @@ struct AmrSystem<Dim>::Impl {
           .scalar(std::int32_t{Dim})
           .scalar(parent_level)
           .scalar(fine_layout != nullptr)
+          .scalar(child_physical_layout_changed)
           .scalar(static_cast<std::uint64_t>(descriptors.size()));
       for (const auto& descriptor : descriptors)
         exact.text(descriptor.name)
@@ -8108,6 +8251,13 @@ struct AmrSystem<Dim>::Impl {
           removed.push_back(key);
       }
       for (const std::string& key : removed) {
+        const auto decoded = decode_exact_amr_history_key(key);
+        if (!decoded)
+          throw std::logic_error("AMR Program history regrid lost a qualified removed ring key");
+        // The direct child is reinserted below when it remains published.  Its final source must
+        // be RetainedChild or ParentDeferred, never an obsolete Removed decision.
+        if (fine_layout == nullptr || decoded->first != parent_level + 1)
+          remap_plan.push_back({key, {}, runtime::program::AmrProgramHistoryRemapSource::Removed});
         candidate->histories.erase(key);
         candidate->depth.erase(key);
         candidate->initialized.erase(key);
@@ -8134,6 +8284,43 @@ struct AmrSystem<Dim>::Impl {
           const bool retained_child = previous != nullptr;
           if (retained_child && previous->slots.size() != parent->second.size())
             throw std::logic_error("AMR Program history regrid changed the retained child depth");
+          // A same-geometry regrid may only redistribute owners.  Keep its qualified child
+          // history and provenance rather than treating storage movement as a temporal remap.
+          if (!child_physical_layout_changed && !retained_child)
+            throw std::logic_error(
+                "AMR Program unchanged physical child coverage lacks retained history");
+          const bool retained_coverage =
+              retained_child &&
+              std::all_of(previous->slots.begin(), previous->slots.end(), [&](const auto& slot) {
+                return retained_image_covers_layout(slot.image, *fine_layout);
+              });
+          if (!child_physical_layout_changed && !retained_coverage)
+            throw std::logic_error(
+                "AMR Program unchanged physical child coverage has an incomplete retained history");
+          // Coverage is authoritative per ring.  A changed patch decomposition may still be
+          // completely covered by retained data; only an incomplete/new coverage projects parent.
+          const auto source = retained_coverage
+                                  ? runtime::program::AmrProgramHistoryRemapSource::RetainedChild
+                                  : runtime::program::AmrProgramHistoryRemapSource::ParentDeferred;
+          const bool deferred_ab2 =
+              source == runtime::program::AmrProgramHistoryRemapSource::ParentDeferred &&
+              program.hist_.initialized.at(parent_key);
+          if (deferred_ab2) {
+            if (static_cast<std::size_t>(parent_level) >= temporal_relations.size())
+              throw std::logic_error("AMR Program deferred history remap lacks a clock relation");
+            const auto& relation = temporal_relations[static_cast<std::size_t>(parent_level)];
+            const auto ratio = relation.temporal_ratio();
+            if (parent->second.size() != 2 || program.hist_.depth.at(parent_key) != 2 ||
+                relation.parent_level() != parent_level || relation.child_level() != child_level ||
+                (ratio.numerator != 1 && ratio.numerator != 2) || ratio.denominator != 1 ||
+                relation.remainder_policy() != ::pops::amr::RemainderPolicy::IntegralOnly ||
+                program.hist_.store_pending.at(parent_key) ||
+                program.hist_.slot_dt.at(parent_key).size() != 2 ||
+                !(program.hist_.slot_dt.at(parent_key)[1] > Real(0)))
+              throw std::invalid_argument(
+                  "AMR Program deferred history remap supports initialized direct-child AB2 "
+                  "IntegralOnly 1:1 or 2:1 only");
+          }
           const int runtime_owner = program.hist_.owner.at(parent_key);
           if (runtime_owner < 0 || static_cast<std::size_t>(runtime_owner) >= blocks.size())
             throw std::logic_error(
@@ -8144,42 +8331,68 @@ struct AmrSystem<Dim>::Impl {
             throw std::logic_error("AMR Program history regrid retained stale child storage");
           ring->second.reserve(parent->second.size());
           candidate->depth.insert_or_assign(
-              child_key, retained_child ? previous->depth : program.hist_.depth.at(parent_key));
+              child_key, source == runtime::program::AmrProgramHistoryRemapSource::ParentDeferred
+                             ? program.hist_.depth.at(parent_key)
+                             : previous->depth);
           candidate->initialized.insert_or_assign(
-              child_key,
-              retained_child ? previous->initialized : program.hist_.initialized.at(parent_key));
+              child_key, source == runtime::program::AmrProgramHistoryRemapSource::ParentDeferred
+                             ? program.hist_.initialized.at(parent_key)
+                             : previous->initialized);
           candidate->fill_count.insert_or_assign(
-              child_key,
-              retained_child ? previous->fill_count : program.hist_.fill_count.at(parent_key));
+              child_key, source == runtime::program::AmrProgramHistoryRemapSource::ParentDeferred
+                             ? program.hist_.fill_count.at(parent_key)
+                             : previous->fill_count);
           candidate->store_pending.insert_or_assign(
-              child_key, retained_child ? previous->store_pending
-                                        : program.hist_.store_pending.at(parent_key));
+              child_key, source == runtime::program::AmrProgramHistoryRemapSource::ParentDeferred
+                             ? program.hist_.store_pending.at(parent_key)
+                             : previous->store_pending);
           candidate->owner.insert_or_assign(child_key, runtime_owner);
           candidate->state_identity.insert_or_assign(
-              child_key, retained_child ? previous->state_identity
-                                        : program.hist_.state_identity.at(parent_key));
+              child_key, source == runtime::program::AmrProgramHistoryRemapSource::ParentDeferred
+                             ? program.hist_.state_identity.at(parent_key)
+                             : previous->state_identity);
           candidate->space_identity.insert_or_assign(
-              child_key, retained_child ? previous->space_identity
-                                        : program.hist_.space_identity.at(parent_key));
+              child_key, source == runtime::program::AmrProgramHistoryRemapSource::ParentDeferred
+                             ? program.hist_.space_identity.at(parent_key)
+                             : previous->space_identity);
           candidate->clock_identity.insert_or_assign(
-              child_key, retained_child ? previous->clock_identity
-                                        : program.hist_.clock_identity.at(parent_key));
+              child_key, source == runtime::program::AmrProgramHistoryRemapSource::ParentDeferred
+                             ? program.hist_.clock_identity.at(parent_key)
+                             : previous->clock_identity);
           candidate->interpolation_identity.insert_or_assign(
-              child_key, retained_child ? previous->interpolation_identity
-                                        : program.hist_.interpolation_identity.at(parent_key));
+              child_key, source == runtime::program::AmrProgramHistoryRemapSource::ParentDeferred
+                             ? program.hist_.interpolation_identity.at(parent_key)
+                             : previous->interpolation_identity);
           candidate->slot_dt.insert_or_assign(
-              child_key, retained_child ? previous->slot_dt : program.hist_.slot_dt.at(parent_key));
+              child_key, source == runtime::program::AmrProgramHistoryRemapSource::ParentDeferred
+                             ? program.hist_.slot_dt.at(parent_key)
+                             : previous->slot_dt);
+          remap_plan.push_back(
+              {child_key,
+               source == runtime::program::AmrProgramHistoryRemapSource::ParentDeferred
+                   ? parent_key
+                   : std::string{},
+               source});
           const amr::transfer::TransferKind transfer_kind =
               regrid_transfer_kind(parent_level, static_cast<std::size_t>(runtime_owner));
           exact.text(parent_key)
               .text(child_key)
               .scalar(retained_child)
+              .scalar(child_physical_layout_changed)
               .scalar(static_cast<std::uint64_t>(parent->second.size()))
               .scalar(runtime_owner)
               .scalar(transfer_kind);
-          transfers.push_back({&parent->second, previous, &ring->second, transfer_kind});
+          transfers.push_back(
+              {&parent->second,
+               source == runtime::program::AmrProgramHistoryRemapSource::RetainedChild ? previous
+                                                                                       : nullptr,
+               &ring->second, transfer_kind});
         }
       }
+      std::sort(remap_plan.begin(), remap_plan.end(),
+                [](const auto& left, const auto& right) { return left.key < right.key; });
+      for (const auto& entry : remap_plan)
+        exact.text(entry.key).text(entry.parent_key).scalar(entry.source);
       transfer_contract = std::move(exact).release();
     } catch (...) {
       local_error = std::current_exception();
@@ -8201,10 +8414,10 @@ struct AmrSystem<Dim>::Impl {
 
     for (HistoryTransferPlan& transfer : transfers) {
       for (std::size_t slot = 0; slot < transfer.parent->size(); ++slot) {
-        const SparseFieldImage<Dim>* retained =
-            transfer.previous != nullptr ? &transfer.previous->slots[slot].image : nullptr;
         std::exception_ptr transfer_error;
         try {
+          const SparseFieldImage<Dim>* retained =
+              transfer.previous != nullptr ? &transfer.previous->slots[slot].image : nullptr;
           transfer.remapped->push_back(
               transfer_regridded_state((*transfer.parent)[slot], parent_layout, *fine_layout,
                                        retained, communicator, transfer.transfer_kind));
@@ -8759,17 +8972,62 @@ struct AmrSystem<Dim>::Impl {
     // publication.  Already-materialized solvers carry their old-layout allocation/InputAux budget;
     // layout-specific candidates are deliberately prepared again after publication.
     (void)facade->prepare_topology_field_order(rematerialization_reason, rematerialization_point);
+    bool child_physical_layout_changed = false;
+    std::exception_ptr physical_layout_error;
+    try {
+      child_physical_layout_changed = prepared->removes_fine_level();
+      if (!child_physical_layout_changed) {
+        child_physical_layout_changed =
+            live_child >= engine->hierarchy().num_levels() ||
+            !same_physical_level_layout(engine->hierarchy().layout(live_child),
+                                        *prepared->fine_layout());
+      }
+    } catch (...) {
+      physical_layout_error = std::current_exception();
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        physical_layout_error, &graph_lane,
+        "AMR physical child-layout comparison failed collectively");
     std::optional<runtime::program::HistoryManager<Dim>> remapped_histories;
+    std::vector<runtime::program::AmrProgramHistoryRemapEntry> history_remap_plan;
     std::exception_ptr history_remap_error;
     try {
       remapped_histories = prepare_regridded_program_histories(
           parent_level, parent_layout,
-          prepared->removes_fine_level() ? nullptr : &*prepared->fine_layout(), *history_sources);
+          prepared->removes_fine_level() ? nullptr : &*prepared->fine_layout(),
+          child_physical_layout_changed, *history_sources, history_remap_plan);
     } catch (...) {
       history_remap_error = std::current_exception();
     }
     runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
         history_remap_error, &graph_lane, "AMR Program history remap failed collectively");
+    std::optional<runtime::program::AmrProgramHistoryRemapDescriptor> history_remap_descriptor;
+    if (remapped_histories) {
+      runtime::program::AmrProgramHistoryRemapDescriptor descriptor;
+      descriptor.parent_level = parent_level;
+      descriptor.child_level = parent_level + 1;
+      descriptor.child_published = !prepared->removes_fine_level();
+      descriptor.child_physical_layout_changed = child_physical_layout_changed;
+      descriptor.history_plan = history_remap_plan;
+      descriptor.prior_topology_epoch = engine->topology_epoch();
+      descriptor.prior_materialization_generation = engine->materialization_generation();
+      descriptor.published_topology_epoch = runtime::amr::detail::next_generation(
+          descriptor.prior_topology_epoch, "AMR Program history remap topology epoch");
+      descriptor.published_materialization_generation = runtime::amr::detail::next_generation(
+          descriptor.prior_materialization_generation,
+          "AMR Program history remap materialization generation");
+      descriptor.accepted_macro_step = static_cast<std::int64_t>(macro_step);
+      if (static_cast<std::size_t>(parent_level) < temporal_relations.size()) {
+        const auto& relation = temporal_relations[static_cast<std::size_t>(parent_level)];
+        const auto ratio = relation.temporal_ratio();
+        descriptor.temporal_numerator = ratio.numerator;
+        descriptor.temporal_denominator = ratio.denominator;
+        descriptor.integral_only =
+            relation.remainder_policy() == ::pops::amr::RemainderPolicy::IntegralOnly;
+      }
+      descriptor.operation_identity = "pops.amr-program.history-remap.descriptor@1";
+      history_remap_descriptor.emplace(std::move(descriptor));
+    }
     std::vector<std::optional<field_type>> child_states;
     std::exception_ptr child_vector_error;
     try {
@@ -8842,6 +9100,13 @@ struct AmrSystem<Dim>::Impl {
                                          std::move(*prepared), std::move(child_states));
     const bool topology_changed = engine->topology_epoch() != prior_topology_epoch;
     const bool history_remap_swapped = topology_changed && remapped_histories.has_value();
+    if (history_remap_swapped &&
+        (!history_remap_descriptor ||
+         history_remap_descriptor->published_topology_epoch != engine->topology_epoch() ||
+         history_remap_descriptor->published_materialization_generation !=
+             engine->materialization_generation()))
+      throw std::logic_error(
+          "AMR Program history-remap publication differs from its prepared descriptor");
     if (history_remap_swapped) {
       static_assert(std::is_nothrow_swappable_v<runtime::program::HistoryManager<Dim>>);
       std::swap(program.hist_, *remapped_histories);
@@ -8862,8 +9127,9 @@ struct AmrSystem<Dim>::Impl {
       // State/history have their typed transfer.  Potential, FieldOutput and downstream auxiliary
       // values are derived ProviderPack state: invalidate, then republish on the new exact layout.
       invalidate_auxiliary_after_topology_regrid(rematerialization_reason);
-      (void)facade->rematerialize_fields_after_topology_change(rematerialization_reason,
-                                                               rematerialization_point);
+      if (!bootstrap_transaction)
+        (void)facade->rematerialize_fields_after_topology_change(rematerialization_reason,
+                                                                 rematerialization_point);
     } else {
       refresh_prepared_hierarchy();
     }
@@ -8879,7 +9145,8 @@ struct AmrSystem<Dim>::Impl {
     std::exception_ptr program_refresh_error;
     try {
       if (history_remap_swapped)
-        program.accept_history_remap("AmrSystem::regrid_from_prepared_tagging");
+        program.accept_history_remap(*history_remap_descriptor,
+                                     "AmrSystem::regrid_from_prepared_tagging");
       else
         program.refresh_hierarchy_state("AmrSystem::regrid_from_prepared_tagging");
     } catch (...) {
@@ -9396,6 +9663,17 @@ struct AmrSystem<Dim>::Impl {
         prepare_accepted_snapshot_collectively("accepted transaction");
     try {
       return std::forward<Function>(function)();
+    } catch (const std::exception& transaction_error) {
+      try {
+        snapshot->restore(*this);
+      } catch (const std::exception& rollback_error) {
+        // Preserve the operational cause when a later rollback-authentication failure would
+        // otherwise replace it.  The accepted image is still not published on either failure.
+        throw std::runtime_error(
+            "AmrSystem accepted transaction failed: " + std::string(transaction_error.what()) +
+            "; rollback also failed: " + rollback_error.what());
+      }
+      throw;
     } catch (...) {
       snapshot->restore(*this);
       throw;
@@ -9726,7 +10004,9 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::checkpoint_rank_local_carr
       throw std::logic_error("AMR rank-local carrier manifest has an empty auxiliary carrier");
     rows.push_back(
         {"pops.amr.rank-local-carrier-manifest@1", "auxiliary-registry", "", std::to_string(level),
-         std::string(p_->prepared_hierarchy->auxiliary_registries[level].collective_contract())});
+         prefixed_sha256(
+             "pops.amr.rank-local-carrier.auxiliary-registry.v1:sha256:",
+             p_->prepared_hierarchy->auxiliary_registries[level].collective_contract())});
     for (const auto& [identity, group] : groups->groups)
       append_rank_local_carrier_rows(rows, "auxiliary", identity, static_cast<int>(level), group);
   }
@@ -9871,6 +10151,29 @@ void AmrSystem<Dim>::restore_auxiliary_checkpoint_accepted_state_on_prepared_lan
     runtime::system::restore_auxiliary_checkpoint_state(state[level], candidate_registries[level],
                                                         lane);
 
+  std::vector<std::map<std::string, std::vector<const Real*>>> next_accepted_identity;
+  std::vector<std::map<std::string, std::vector<const Real*>>> next_candidate_identity;
+  std::exception_ptr identity_error;
+  try {
+    next_accepted_identity.reserve(state.size());
+    next_candidate_identity.reserve(state.size());
+    for (std::size_t level = 0; level < state.size(); ++level) {
+      std::map<std::string, std::vector<const Real*>> accepted_identity;
+      for (const auto& [identity, group] : accepted_candidates[level]->groups)
+        accepted_identity.emplace(identity, field_storage_identity(group));
+      next_accepted_identity.push_back(std::move(accepted_identity));
+      std::map<std::string, std::vector<const Real*>> candidate_identity;
+      for (const auto& [identity, group] : transaction_candidates[level]->groups)
+        candidate_identity.emplace(identity, field_storage_identity(group));
+      next_candidate_identity.push_back(std::move(candidate_identity));
+    }
+  } catch (...) {
+    identity_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      identity_error, &lane,
+      "AMR auxiliary checkpoint storage-identity preparation failed collectively");
+
   static_assert(std::is_nothrow_swappable_v<
                 typename decltype(p_->prepared_hierarchy->provider_storage)::value_type>);
   static_assert(noexcept(p_->prepared_hierarchy->auxiliary_registries.swap(candidate_registries)));
@@ -9878,6 +10181,9 @@ void AmrSystem<Dim>::restore_auxiliary_checkpoint_accepted_state_on_prepared_lan
   for (std::size_t level = 0; level < state.size(); ++level) {
     p_->prepared_hierarchy->provider_storage[level].swap(accepted_candidates[level]);
     p_->prepared_hierarchy->provider_candidate_storage[level].swap(transaction_candidates[level]);
+    p_->prepared_hierarchy->provider_storage_identity[level].swap(next_accepted_identity[level]);
+    p_->prepared_hierarchy->provider_candidate_storage_identity[level].swap(
+        next_candidate_identity[level]);
   }
   p_->prepared_hierarchy->auxiliary_registries.swap(candidate_registries);
   p_->dirty_auxiliary_providers.clear();
@@ -14058,7 +14364,8 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::field_provider_checkpoint_
         plan.provider_identity,
         plan.plan_identity,
         prefixed_sha256("pops.amr.field-provider-configuration.v1:sha256:",
-                        Impl::exact_field_plan_contract(slot, plan)),
+                        Impl::exact_field_plan_contract(slot, plan,
+                                                        /*include_live_boundary_point=*/false)),
         topology_epoch,
         materialization_generation,
         p_->engine && plan.materialized_for(*p_->engine) ? "materialized" : "unmaterialized",
@@ -14950,6 +15257,124 @@ std::size_t AmrSystem<Dim>::materialize_bootstrap_action(const std::string& subj
   require_collective_success(publication_error, "materialization publication");
   static_assert(noexcept(p_->bootstrap_materialized_actions.swap(candidate_materialized_actions)));
   p_->bootstrap_materialized_actions.swap(candidate_materialized_actions);
+  p_->discard_level_evaluations();
+  return materialized;
+}
+
+template <int Dim>
+std::size_t AmrSystem<Dim>::recompute_bootstrap_field(const std::string& subject_id,
+                                                      const std::string& provider_slot) {
+  if (!p_->bootstrap_transaction)
+    throw std::logic_error("AMR bootstrap field recompute requires an active transaction");
+  if (!p_->prepared_hierarchy || !p_->prepared_hierarchy->lane)
+    throw std::logic_error("AMR bootstrap field recompute lacks its prepared execution lane");
+  const ExecutionLane& lane = *p_->prepared_hierarchy->lane;
+
+  std::string slot;
+  runtime::multiblock::BoundaryEvaluationPoint point;
+  std::string request_contract;
+  std::exception_ptr local_error;
+  try {
+    if (subject_id.empty() || provider_slot.empty())
+      throw std::invalid_argument(
+          "AMR bootstrap field recompute requires one subject and provider slot");
+    if (p_->bootstrap_sources.empty())
+      throw std::invalid_argument(
+          "AMR bootstrap field recompute has no authenticated staged sources");
+    if (p_->engine->hierarchy().num_levels() == 0)
+      throw std::logic_error("AMR bootstrap field recompute has no live hierarchy");
+    const int live_levels = static_cast<int>(p_->engine->hierarchy().num_levels());
+    for (const auto& [source_id, source] : p_->bootstrap_sources) {
+      if (source.kind == Impl::BootstrapSourceKind::unstaged)
+        throw std::invalid_argument(
+            "AMR bootstrap field recompute has an unstaged conservative source");
+      for (int level = 0; level < live_levels; ++level)
+        if (!p_->bootstrap_materialized_actions.contains(std::make_pair(source_id, level)))
+          throw std::logic_error(
+              "AMR bootstrap field recompute requires every staged source on every live level");
+    }
+    slot = p_->resolve_field_slot(provider_slot);
+    const auto plan = p_->field_plans.find(slot);
+    if (plan == p_->field_plans.end())
+      throw std::invalid_argument(
+          "AMR bootstrap field recompute has no authenticated field provider slot");
+    if (!p_->field_solver_providers || !p_->field_solver_providers->find(plan->second.solver_route))
+      throw std::invalid_argument(
+          "AMR bootstrap field recompute requires an elliptic solver route");
+    const auto& routes = p_->boundary_registry.field_storage_routes();
+    const auto routed = routes.find(subject_id);
+    if (routed != routes.end() && routed->second != slot && routed->second != provider_slot)
+      throw std::invalid_argument(
+          "AMR bootstrap field recompute subject does not authenticate this provider slot");
+    // Same accepted point create_level authenticates before publication.  CompositeFAC is
+    // elliptic; last_dt_ is the honest t=0 value (0) and is not a time-implicit coefficient.
+    point.clock = "pops.amr.topology-rematerialization.accepted";
+    point.tick = p_->macro_step;
+    point.level = 0;
+    point.substep = 0;
+    point.stage = 0;
+    point.stage_fraction = {0, 1};
+    point.dt = static_cast<double>(p_->program.last_dt_);
+    point.physical_time = p_->accepted_time;
+    ExactContractBuilder contract;
+    contract.text("pops.amr.bootstrap-field-recompute")
+        .scalar(std::uint32_t{2})
+        .scalar(std::int32_t{Dim})
+        .text(subject_id)
+        .text(provider_slot)
+        .text(slot)
+        .text(plan->second.plan_identity)
+        .text(plan->second.provider_identity)
+        .text(plan->second.solver_route)
+        .scalar(std::int32_t{live_levels});
+    for (const auto& [source_id, source] : p_->bootstrap_sources)
+      contract.text(source_id).text(source.runtime_block);
+    contract.text(point.clock)
+        .scalar(point.tick)
+        .scalar(point.physical_time)
+        .scalar(point.dt)
+        .scalar(p_->engine->topology_epoch())
+        .scalar(p_->engine->materialization_generation());
+    request_contract = std::move(contract).release();
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      local_error, &lane, "AMR bootstrap field recompute request failed collectively");
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("amr-bootstrap-field-recompute"), request_contract}}, lane))
+    throw std::invalid_argument(
+        "AMR bootstrap field recompute request differs between prepared hierarchy ranks");
+
+  if (p_->active_topology_rematerialization_point)
+    throw std::logic_error("AMR bootstrap field recompute cannot nest inside rematerialization");
+  // create_level skips rematerialize because fine conservative state is still zero.  After
+  // every live level has been prolonged, reuse the topology-field authority: rebuild every
+  // prepared solver on the new layout, refresh dirty auxiliary, then CompositeFAC the whole
+  // hierarchy.  A second field on the same topology finds the witness already current.
+  if (p_->last_topology_rematerialization_epoch != p_->engine->topology_epoch() ||
+      p_->last_topology_rematerialization_generation != p_->engine->materialization_generation())
+    (void)rematerialize_fields_after_topology_change("bootstrap_regrid", point);
+
+  const auto& plan = p_->field_plans.at(slot);
+  if (!plan.materialized_for(*p_->engine) ||
+      plan.prepared_solver->level_count() !=
+          static_cast<int>(p_->engine->hierarchy().num_levels()) ||
+      plan.accepted_potential.size() != p_->engine->hierarchy().num_levels())
+    throw std::logic_error(
+        "AMR bootstrap field recompute solver does not match the live hierarchy");
+
+  std::size_t materialized = 0;
+  const auto& potentials = plan.accepted_potential;
+  if (potentials.empty())
+    throw std::logic_error("AMR bootstrap field recompute published no potential");
+  for (const auto& potential : potentials) {
+    if (!potential)
+      throw std::logic_error("AMR bootstrap field recompute published an incomplete potential");
+    materialized = checked_size_sum(
+        materialized, static_cast<std::size_t>(checked_layout_cells(potential->layout())),
+        "AMR bootstrap field recompute exceeds size_t");
+  }
   p_->discard_level_evaluations();
   return materialized;
 }
@@ -16137,7 +16562,8 @@ void AmrSystem<Dim>::install_program_hierarchy_refresh(std::function<void()> ref
 }
 
 template <int Dim>
-void AmrSystem<Dim>::install_program_history_remap_accepted(std::function<void()> refresh) {
+void AmrSystem<Dim>::install_program_history_remap_accepted(
+    std::function<void(const runtime::program::AmrProgramHistoryRemapDescriptor&)> refresh) {
   p_->require_no_native_package_callback("install_program_history_remap_accepted");
   p_->program.install_history_remap_accepted(std::move(refresh), "AmrSystem");
 }
@@ -17214,6 +17640,11 @@ void AmrSystem<Dim>::rebuild_hierarchy(const std::vector<AmrPatch<Dim>>& boxes,
   if (!p_->prepared_hierarchy || !p_->prepared_hierarchy->lane)
     throw std::logic_error("AMR hierarchy rebuild requires its prepared hierarchy lane");
   const ExecutionLane& lane = *p_->prepared_hierarchy->lane;
+  // The carrier contract is rooted in the durable package lane.  A rebuild may use the prepared
+  // lane for its outer collective validation, but recreating the carrier beneath that already
+  // duplicated lane would change the exact lane identity and make an otherwise authentic
+  // accepted snapshot impossible to restore.  Reuse the bootstrap root and component identity.
+  const ExecutionLane& package_lane = p_->require_package_assembly_lane();
   std::vector<std::vector<Box<Dim>>> level_boxes;
   std::vector<std::vector<int>> level_owners;
   std::string request_contract;
@@ -17338,12 +17769,132 @@ void AmrSystem<Dim>::rebuild_hierarchy(const std::vector<AmrPatch<Dim>>& boxes,
       }
       additional.push_back({p_->blocks[block].name, std::move(levels)});
     }
+    std::optional<runtime::program::HistoryManager<Dim>> provisional_histories;
+    std::exception_ptr provisional_history_error;
+    try {
+      const auto& source = p_->program.hist_;
+      if (!source.histories.empty()) {
+        struct Descriptor {
+          int owner = -1;
+          int depth = 0;
+          int components = 0;
+          std::string state;
+          std::string space;
+          std::string clock;
+          std::string interpolation;
+
+          bool operator==(const Descriptor&) const = default;
+        };
+        std::map<std::string, Descriptor> descriptors;
+        std::map<std::string, std::set<int>> levels_by_name;
+        const std::size_t source_levels = live_hierarchy.num_levels();
+        for (const auto& [key, ring] : source.histories) {
+          const auto decoded = decode_exact_amr_history_key(key);
+          if (!decoded || decoded->first < 0 ||
+              static_cast<std::size_t>(decoded->first) >= source_levels ||
+              key != exact_amr_history_key(decoded->second, decoded->first))
+            throw std::invalid_argument(
+                "AMR restart hierarchy rebuild has a malformed provisional history key");
+          const int depth = source.depth.at(key);
+          const int owner = source.owner.at(key);
+          const bool initialized = source.initialized.at(key);
+          const int fill_count = source.fill_count.at(key);
+          const bool pending = source.store_pending.at(key);
+          const auto& dts = source.slot_dt.at(key);
+          if (depth < 1 || ring.size() != static_cast<std::size_t>(depth) ||
+              dts.size() != ring.size() || initialized || fill_count != 0 || pending ||
+              !std::all_of(
+                  dts.begin(), dts.end(), [](Real dt) { return dt == Real(0); }) ||
+              owner < 0 || static_cast<std::size_t>(owner) >= p_->blocks.size() ||
+              source.state_identity.at(key).empty() || source.space_identity.at(key).empty() ||
+              source.clock_identity.at(key).empty() ||
+              source.interpolation_identity.at(key).empty() || ring.empty() ||
+              ring.front().ncomp() < 1)
+            throw std::runtime_error(
+                "AMR restart hierarchy rebuild cannot rematerialize retained history provenance");
+          for (const field_type& slot : ring)
+            if (slot.ncomp() != ring.front().ncomp())
+              throw std::runtime_error(
+                  "AMR restart hierarchy rebuild has inconsistent provisional history components");
+          const Descriptor descriptor{owner,
+                                      depth,
+                                      ring.front().ncomp(),
+                                      source.state_identity.at(key),
+                                      source.space_identity.at(key),
+                                      source.clock_identity.at(key),
+                                      source.interpolation_identity.at(key)};
+          auto [found, inserted] = descriptors.emplace(decoded->second, descriptor);
+          if (!inserted && found->second != descriptor)
+            throw std::runtime_error(
+                "AMR restart hierarchy rebuild has mixed provisional history descriptors");
+          if (!levels_by_name[decoded->second].insert(decoded->first).second)
+            throw std::runtime_error(
+                "AMR restart hierarchy rebuild has duplicate provisional history levels");
+        }
+        for (const auto& [name, descriptor] : descriptors) {
+          const auto levels = levels_by_name.find(name);
+          if (levels == levels_by_name.end() || levels->second.size() != source_levels)
+            throw std::runtime_error(
+                "AMR restart hierarchy rebuild has incomplete provisional history levels");
+          for (std::size_t level = 0; level < source_levels; ++level)
+            if (!levels->second.contains(static_cast<int>(level)))
+              throw std::runtime_error(
+                  "AMR restart hierarchy rebuild has incomplete provisional history levels");
+          (void)descriptor;
+        }
+        provisional_histories.emplace();
+        for (const auto& [name, descriptor] : descriptors) {
+          for (std::size_t level = 0; level < candidate_engine->hierarchy().num_levels(); ++level) {
+            const std::string key = exact_amr_history_key(name, static_cast<int>(level));
+            const field_type* prototype = nullptr;
+            if (descriptor.owner == 0) {
+              prototype = &candidate_engine->hierarchy().state(level);
+            } else {
+              const std::size_t additional_index = static_cast<std::size_t>(descriptor.owner - 1);
+              if (additional_index >= additional.size() ||
+                  level >= additional[additional_index].levels.size())
+                throw std::runtime_error(
+                    "AMR restart hierarchy rebuild has no authenticated owner carrier");
+              prototype = &additional[additional_index].levels[level];
+            }
+            std::vector<field_type> ring;
+            ring.reserve(static_cast<std::size_t>(descriptor.depth));
+            for (int slot = 0; slot < descriptor.depth; ++slot) {
+              field_type empty(prototype->layout(), prototype->distribution(),
+                               prototype->local_rank(), descriptor.components, prototype->ghosts());
+              empty.set_val(Real(0));
+              ring.push_back(std::move(empty));
+            }
+            provisional_histories->histories.emplace(key, std::move(ring));
+            provisional_histories->depth.emplace(key, descriptor.depth);
+            provisional_histories->initialized.emplace(key, false);
+            provisional_histories->fill_count.emplace(key, 0);
+            provisional_histories->store_pending.emplace(key, false);
+            provisional_histories->owner.emplace(key, descriptor.owner);
+            provisional_histories->state_identity.emplace(key, descriptor.state);
+            provisional_histories->space_identity.emplace(key, descriptor.space);
+            provisional_histories->clock_identity.emplace(key, descriptor.clock);
+            provisional_histories->interpolation_identity.emplace(key, descriptor.interpolation);
+            provisional_histories->slot_dt.emplace(
+                key, std::vector<Real>(static_cast<std::size_t>(descriptor.depth), Real(0)));
+          }
+        }
+      }
+    } catch (...) {
+      provisional_history_error = std::current_exception();
+    }
+    if (all_reduce_max(provisional_history_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && provisional_history_error)
+        std::rethrow_exception(provisional_history_error);
+      throw std::runtime_error(
+          "AMR restart hierarchy provisional histories failed validation collectively");
+    }
     std::optional<typename Impl::multiblock_type> multiblock_staged;
     std::exception_ptr carrier_preparation_error;
     try {
       multiblock_staged.emplace(Impl::multiblock_type::prepare_collectively(
-          lane, candidate_engine, p_->blocks.front().name, std::move(additional),
-          "pops.amr-system.multiblock/rebuild"));
+          package_lane, candidate_engine, p_->blocks.front().name, std::move(additional),
+          "pops.amr-system.multiblock"));
     } catch (...) {
       carrier_preparation_error = std::current_exception();
     }
@@ -17401,6 +17952,10 @@ void AmrSystem<Dim>::rebuild_hierarchy(const std::vector<AmrPatch<Dim>>& boxes,
     p_->prepared_hierarchy.swap(candidate_graph);
     p_->prepared_program_block_map.swap(block_map_candidate);
     p_->program_flux_expression_budget.swap(flux_budget_candidate);
+    if (provisional_histories) {
+      static_assert(std::is_nothrow_swappable_v<runtime::program::HistoryManager<Dim>>);
+      std::swap(p_->program.hist_, *provisional_histories);
+    }
     p_->pending_provider_restore.reset();
     p_->pending_provider_registry_restore.reset();
     for (auto& [slot, plan] : p_->field_plans) {
@@ -18254,11 +18809,14 @@ std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_cap
     const auto interface_production =
         p_->prepared_interface_flux_production_budget(configured_levels);
     std::size_t rhs_basis = 0;
+    std::size_t coefficient_terms = 0;
     std::size_t maximum_components = 1;
     std::size_t maximum_owner_identity = 1;
     for (std::size_t program_block = 0; program_block < expression.blocks.size(); ++program_block) {
       rhs_basis = checked_size_sum(rhs_basis, expression.blocks[program_block].rhs_basis_bound,
                                    "AMR face-ledger basis capacity exceeds size_t");
+      coefficient_terms =
+          std::max(coefficient_terms, expression.blocks[program_block].coefficient_term_bound);
       const std::size_t runtime_block =
           expression.program_block_map.canonical_indices.at(program_block);
       maximum_components = std::max(maximum_components,
@@ -18305,18 +18863,141 @@ std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_cap
         std::numeric_limits<std::uint64_t>::digits10 + 1;
     constexpr std::size_t signed_decimal_characters =
         std::numeric_limits<std::int64_t>::digits10 + 2;
+    constexpr std::size_t nonnegative_int_decimal_characters =
+        std::numeric_limits<int>::digits10 + 1;
     shape.face_fragment_counts[0] = face_fragments;
     shape.face_owner_characters = maximum_owner_identity;
     shape.face_state_characters =
         checked_size_sum(maximum_owner_identity, std::string_view("/state").size(),
                          "AMR face-ledger identity capacity exceeds size_t");
-    shape.face_stage_characters =
-        std::string_view("pops.program-flux-expression.v1/basis/").size() +
-        unsigned_decimal_characters + std::string_view("/dt-power/1/weight/").size() +
-        2 * signed_decimal_characters + std::string_view("/stage/").size() +
-        2 * signed_decimal_characters + 2;
+    // This is the exact grammar emitted by materialize_active_flux_expression_(). The provider
+    // range is closed by FluxBasisProvider; successful active allocations are numbered 1 through
+    // the frozen aggregate RHS-basis bound, while an inactive zero-bound image emits no basis.
+    const std::size_t maximum_basis_identity = rhs_basis == 0 ? 0 : rhs_basis;
+    const std::size_t basis_identity_characters = std::to_string(maximum_basis_identity).size();
+    // FluxBasisProvider is a closed POPSAND4 wire enum with its greatest emitted value NamedCell=3.
+    constexpr std::size_t provider_characters = std::string_view("3").size();
+    std::size_t face_stage_characters = 0;
+    const auto add_face_stage_characters = [&](std::size_t characters) {
+      face_stage_characters =
+          checked_size_sum(face_stage_characters, characters,
+                           "AMR face-ledger stage identity capacity exceeds size_t");
+    };
+    add_face_stage_characters(std::string_view("pops.program-flux-expression.v1/provider/").size());
+    add_face_stage_characters(provider_characters);
+    add_face_stage_characters(std::string_view("/rhs/").size());
+    add_face_stage_characters(nonnegative_int_decimal_characters);
+    add_face_stage_characters(std::string_view("/point-stage/").size());
+    add_face_stage_characters(nonnegative_int_decimal_characters);
+    add_face_stage_characters(std::string_view("/basis/").size());
+    add_face_stage_characters(basis_identity_characters);
+    add_face_stage_characters(std::string_view("/dt-power/1/weight/").size());
+    add_face_stage_characters(signed_decimal_characters);
+    add_face_stage_characters(1);  // slash between the exact rational numerator and denominator
+    add_face_stage_characters(signed_decimal_characters);
+    add_face_stage_characters(std::string_view("/stage/").size());
+    add_face_stage_characters(signed_decimal_characters);
+    add_face_stage_characters(
+        1);  // slash between the exact stage-fraction numerator and denominator
+    add_face_stage_characters(signed_decimal_characters);
+    shape.face_stage_characters = face_stage_characters;
     shape.face_payload_terms = checked_size_product(
         face_fragments, maximum_components, "AMR face-ledger payload capacity exceeds size_t");
+
+    // History-flux provenance uses the same frozen basis/face envelope as the accepted ledger.
+    // Count its actual POPSAND4 primitives, including every level-qualified ring key and every
+    // slot/term count; this is a capacity proof, not an opaque reserve.
+    std::size_t maximum_clock_identity = 1;
+    for (const std::string& identity : metadata.logical_clock_identities)
+      maximum_clock_identity = std::max(maximum_clock_identity, identity.size());
+    for (const auto& history : shape.histories)
+      maximum_clock_identity = std::max(maximum_clock_identity, history.clock_identity.size());
+    // History FluxBasis points are constructed only by boundary_evaluation_point(), whose graph,
+    // rate, and application identities are empty.  Interface-coupling identity capacity governs
+    // a different wire family and cannot be used as authority for these three point strings.
+    constexpr std::size_t history_flux_point_extra_identity_characters = 0;
+    // Writer::i32 is intentionally an eight-byte wire integer.  Keep the expression below in
+    // Writer primitives so a future wire-width change cannot leave an uncounted reserve.
+    const std::size_t history_flux_point = checked_size_sum(
+        checked_size_sum(4 * sizeof(std::uint64_t), maximum_clock_identity,
+                         "AMR history-flux point capacity exceeds size_t"),
+        checked_size_sum(8 * sizeof(std::uint64_t),
+                         checked_size_product(3, history_flux_point_extra_identity_characters,
+                                              "AMR history-flux point capacity exceeds size_t"),
+                         "AMR history-flux point capacity exceeds size_t"),
+        "AMR history-flux point capacity exceeds size_t");
+    const std::size_t history_flux_fixed_basis = checked_size_sum(
+        checked_size_sum(4 * sizeof(std::uint64_t), history_flux_point,
+                         "AMR history-flux basis capacity exceeds size_t"),
+        checked_size_sum(2 * runtime::program::checkpoint_detail::kEncodedClockBytes,
+                         sizeof(std::uint64_t), "AMR history-flux basis capacity exceeds size_t"),
+        "AMR history-flux basis capacity exceeds size_t");
+    const std::size_t history_flux_coefficient =
+        checked_size_product(coefficient_terms, sizeof(std::int64_t) * 3,
+                             "AMR history-flux coefficient capacity exceeds size_t");
+    const std::size_t history_flux_face = checked_size_sum(
+        3 * sizeof(std::uint64_t) + sizeof(double),
+        checked_size_sum(
+            checked_size_product(static_cast<std::size_t>(2 * Dim), sizeof(std::int64_t),
+                                 "AMR history-flux face capacity exceeds size_t"),
+            checked_size_product(maximum_components, sizeof(double),
+                                 "AMR history-flux payload capacity exceeds size_t"),
+            "AMR history-flux face capacity exceeds size_t"),
+        "AMR history-flux face capacity exceeds size_t");
+    const std::size_t history_flux_basis = checked_size_sum(
+        2 * sizeof(std::uint64_t),  // basis identity and coefficient count
+        checked_size_sum(
+            history_flux_fixed_basis,
+            checked_size_sum(history_flux_coefficient,
+                             checked_size_product(face_fragments, history_flux_face,
+                                                  "AMR history-flux face capacity exceeds size_t"),
+                             "AMR history-flux basis capacity exceeds size_t"),
+            "AMR history-flux basis capacity exceeds size_t"),
+        "AMR history-flux basis capacity exceeds size_t");
+    shape.history_flux_payload_bytes = sizeof(std::uint64_t);  // history-ring count
+    constexpr std::string_view history_key_prefix = "pops.amr.level-history.v1/";
+    for (const auto& history : shape.histories) {
+      const std::string history_length = std::to_string(history.name.size());
+      for (std::size_t level = 0; level < configured_levels; ++level) {
+        const std::string level_text = std::to_string(level);
+        const std::size_t key_characters =
+            checked_size_sum(checked_size_sum(history_key_prefix.size(), level_text.size(),
+                                              "AMR history-flux key capacity exceeds size_t"),
+                             checked_size_sum(1 + history_length.size(), 1 + history.name.size(),
+                                              "AMR history-flux key capacity exceeds size_t"),
+                             "AMR history-flux key capacity exceeds size_t");
+        const std::size_t ring_bytes = checked_size_sum(
+            checked_size_sum(sizeof(std::uint64_t), key_characters,
+                             "AMR history-flux key capacity exceeds size_t"),
+            sizeof(std::uint64_t), "AMR history-flux ring capacity exceeds size_t");
+        shape.history_flux_payload_bytes =
+            checked_size_sum(shape.history_flux_payload_bytes, ring_bytes,
+                             "AMR history-flux payload capacity exceeds size_t");
+        for (int slot = 0; slot < history.depth; ++slot) {
+          const std::size_t slot_bytes = checked_size_sum(
+              sizeof(std::uint64_t),
+              checked_size_product(rhs_basis, history_flux_basis,
+                                   "AMR history-flux basis capacity exceeds size_t"),
+              "AMR history-flux slot capacity exceeds size_t");
+          shape.history_flux_payload_bytes =
+              checked_size_sum(shape.history_flux_payload_bytes, slot_bytes,
+                               "AMR history-flux payload capacity exceeds size_t");
+        }
+      }
+    }
+    // One direct-child deferred AB2 remap can exist per logical ring and configured transition.
+    // Its key is the canonical level-qualified history key; derive its bounded characters from
+    // the same frozen descriptor rather than reserving opaque slack.
+    shape.pending_history_remap_count =
+        checked_size_product(shape.histories.size(), configured_levels - 1,
+                             "AMR pending history-remap capacity exceeds size_t");
+    for (const auto& history : shape.histories) {
+      const std::size_t key_characters = std::string_view("pops.amr.level-history.v1/").size() +
+                                         unsigned_decimal_characters + 1 +
+                                         unsigned_decimal_characters + 1 + history.name.size();
+      shape.pending_history_remap_key_characters =
+          std::max(shape.pending_history_remap_key_characters, key_characters);
+    }
 
     shape.interface_fragment_count = interface.max_fragments_per_window;
     shape.interface_identity_characters =
@@ -18465,6 +19146,12 @@ void AmrSystem<Dim>::restore_program_accepted_state(const std::vector<std::uint8
   if (!p_->prepared_hierarchy || !p_->prepared_hierarchy->lane)
     throw std::logic_error("AMR Program accepted-state restore requires its prepared lane");
   const ExecutionLane& lane = *p_->prepared_hierarchy->lane;
+  const std::string_view request_view(
+      state.empty() ? "" : reinterpret_cast<const char*>(state.data()), state.size());
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("pops.amr-program-checkpoint-request"), request_view}}, lane))
+    throw std::runtime_error(
+        "exact AMR Program accepted-state restore request differs between communicator ranks");
   std::optional<runtime::program::AmrProgramAcceptedState<Dim>> decoded;
   std::vector<std::uint8_t> candidate;
   std::exception_ptr local_error;
@@ -18475,9 +19162,20 @@ void AmrSystem<Dim>::restore_program_accepted_state(const std::vector<std::uint8
     const auto interface_budget = p_->accepted_state_interface_flux_ledger_budget();
     decoded.emplace(
         runtime::program::deserialize_amr_program_accepted_state<Dim>(state, &interface_budget));
+    std::vector<std::uint8_t> canonical_tagging;
+    if (p_->tagging_spec)
+      canonical_tagging = p_->tagging_state.encode(p_->tagging_spec->min_cycles,
+                                                   p_->tagging_spec->provider_identity);
+    if (!decoded->tagging_hysteresis_state.empty() &&
+        decoded->tagging_hysteresis_state != canonical_tagging)
+      throw std::invalid_argument(
+          "AMR Program accepted-state restore tagging hysteresis differs from live authority");
+    decoded->tagging_hysteresis_state.swap(canonical_tagging);
     runtime::program::require_live_amr_program_checkpoint(*decoded, *p_->engine);
     p_->require_accepted_state_authority_contracts(*decoded);
-    candidate = state;
+    candidate = runtime::program::serialize_amr_program_accepted_state(*decoded);
+    p_->require_program_checkpoint_capacity(candidate.size(),
+                                            "AMR Program accepted-state restore candidate");
   } catch (...) {
     local_error = std::current_exception();
   }
@@ -18486,8 +19184,8 @@ void AmrSystem<Dim>::restore_program_accepted_state(const std::vector<std::uint8
       std::rethrow_exception(local_error);
     throw std::runtime_error("AMR Program accepted-state restore failed collectively");
   }
-  const std::string_view candidate_view(reinterpret_cast<const char*>(candidate.data()),
-                                        candidate.size());
+  const std::string_view candidate_view(
+      candidate.empty() ? "" : reinterpret_cast<const char*>(candidate.data()), candidate.size());
   if (!all_ranks_agree_exact_ordered_byte_pairs(
           {{std::string_view("pops.amr-program-checkpoint"), candidate_view}}, lane))
     throw std::runtime_error("exact AMR Program checkpoint differs between communicator ranks");
@@ -18499,6 +19197,9 @@ void AmrSystem<Dim>::restore_program_accepted_state(const std::vector<std::uint8
 template <int Dim>
 void AmrSystem<Dim>::restore_checkpoint_accepted_state(const std::vector<std::uint8_t>& state) {
   p_->ensure_engine();
+  // restart authority requalification can replace prepared_hierarchy and its graph lane; the
+  // multiblock lane remains valid for this complete checkpoint transaction.
+  const ExecutionLane& lane = p_->multiblock_hierarchy->lane();
   std::optional<runtime::program::AmrProgramAcceptedState<Dim>> decoded;
   std::optional<runtime::amr::PersistentTaggingState<Dim>> decoded_tagging;
   std::optional<::pops::amr::InterfaceFluxLedgerBudget> interface_budget;
@@ -18509,6 +19210,29 @@ void AmrSystem<Dim>::restore_checkpoint_accepted_state(const std::vector<std::ui
     interface_budget.emplace(p_->accepted_state_interface_flux_ledger_budget());
     decoded.emplace(
         runtime::program::deserialize_amr_program_accepted_state<Dim>(state, &*interface_budget));
+  } catch (...) {
+    local_failure = 1;
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_failure, lane.communicator()) != 0) {
+    if (local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("AMR checkpoint tagging state failed validation on another MPI rank");
+  }
+  runtime::program::require_collective_amr_program_checkpoint_consensus(*decoded, lane);
+  const std::string_view encoded_state(reinterpret_cast<const char*>(state.data()), state.size());
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("pops.amr.checkpoint-accepted-state"), encoded_state}}, lane))
+    throw std::invalid_argument(
+        "AMR checkpoint accepted-state bytes differ between prepared ranks");
+
+  // Every rank reached the same decoded authority before a hierarchy requalification can enter
+  // its collective lane.  Keep all allocation/semantic checks after that collective boundary.
+  local_error = nullptr;
+  local_failure = 0;
+  try {
+    if (p_->restart_transaction)
+      p_->requalify_restart_program_authority(*decoded);
     runtime::program::require_live_amr_program_checkpoint(*decoded, *p_->engine);
     p_->require_accepted_state_authority_contracts(*decoded);
     if (p_->tagging_spec) {
@@ -18525,13 +19249,11 @@ void AmrSystem<Dim>::restore_checkpoint_accepted_state(const std::vector<std::ui
     local_failure = 1;
     local_error = std::current_exception();
   }
-  const ExecutionLane& lane = *p_->prepared_hierarchy->lane;
   if (all_reduce_max(local_failure, lane.communicator()) != 0) {
-    if (local_error)
+    if (lane.size() == 1 && local_error)
       std::rethrow_exception(local_error);
-    throw std::runtime_error("AMR checkpoint tagging state failed validation on another MPI rank");
+    throw std::runtime_error("AMR checkpoint post-requalification validation failed collectively");
   }
-  runtime::program::require_collective_amr_program_checkpoint_consensus(*decoded, lane);
   const long exhausted =
       p_->program_accepted_revision == std::numeric_limits<std::uint64_t>::max() ? 1L : 0L;
   if (all_reduce_max(exhausted, lane.communicator()) != 0)
@@ -18562,14 +19284,27 @@ void AmrSystem<Dim>::restore_checkpoint_accepted_state(const std::vector<std::ui
   p_->program_accepted_bytes_runtime_owned = false;
   p_->tagging_state = std::move(*decoded_tagging);
   ++p_->program_accepted_revision;
+  // The outer restart transaction has already requalified and published its live hierarchy before
+  // this accepted image becomes visible.  Now that both the native history rings and facade bytes
+  // are present, force the Program context to import their complete authenticated provenance.  A
+  // failure deliberately escapes to the outer transaction, whose AcceptedSnapshot restores the
+  // hierarchy, carriers, bytes, graph and context together.  Its *inner rollback* still performs
+  // no early resync while those authorities are in flight.
   std::exception_ptr resync_error;
   try {
-    p_->program.resync_after_restart_rollback("AmrSystem::restore_checkpoint_accepted_state");
+    p_->program.resync_after_restart("AmrSystem::restore_checkpoint_accepted_state");
   } catch (...) {
     resync_error = std::current_exception();
   }
   if (all_reduce_max(resync_error ? 1L : 0L, lane.communicator()) == 0)
     return;
+
+  if (p_->restart_transaction) {
+    if (lane.size() == 1 && resync_error)
+      std::rethrow_exception(resync_error);
+    throw std::runtime_error(
+        "AMR checkpoint accepted-state restart resynchronization failed collectively");
+  }
 
   p_->program_accepted_bytes.swap(previous_bytes);
   p_->program_accepted_bytes_runtime_owned = previous_runtime_owned;
@@ -18577,13 +19312,26 @@ void AmrSystem<Dim>::restore_checkpoint_accepted_state(const std::vector<std::ui
   p_->program_accepted_revision = previous_revision;
   std::exception_ptr rollback_resync_error;
   try {
-    p_->program.resync_after_restart_rollback(
-        "AmrSystem::restore_checkpoint_accepted_state rollback");
+    p_->program.resync_after_restart("AmrSystem::restore_checkpoint_accepted_state rollback");
   } catch (...) {
     rollback_resync_error = std::current_exception();
   }
-  if (all_reduce_max(rollback_resync_error ? 1L : 0L, lane.communicator()) != 0)
-    throw std::runtime_error("AMR checkpoint accepted-state rollback resynchronization failed");
+  if (all_reduce_max(rollback_resync_error ? 1L : 0L, lane.communicator()) != 0) {
+    const auto describe = [](const std::exception_ptr& error) {
+      if (!error)
+        return std::string("failure reported by another prepared-lane rank");
+      try {
+        std::rethrow_exception(error);
+      } catch (const std::exception& exception) {
+        return std::string(exception.what());
+      } catch (...) {
+        return std::string("non-standard exception");
+      }
+    };
+    throw std::runtime_error("AMR checkpoint accepted-state resynchronization failed: original: " +
+                             describe(resync_error) +
+                             "; rollback: " + describe(rollback_resync_error));
+  }
   if (lane.size() == 1 && resync_error)
     std::rethrow_exception(resync_error);
   throw std::runtime_error("AMR checkpoint accepted-state resynchronization failed collectively");
@@ -18601,13 +19349,35 @@ void AmrSystem<Dim>::materialize_program_restart_histories(const std::vector<std
     throw std::invalid_argument(
         "AMR Program restart history names, depths and component counts must align");
 
+  // This protocol invokes restart authority requalification before its final consensus, so it
+  // must retain the stable multiblock lane rather than a replaceable graph-lane reference.
+  const ExecutionLane& lane = p_->multiblock_hierarchy->lane();
+  std::exception_ptr decode_error;
+  std::optional<runtime::program::AmrProgramAcceptedState<Dim>> decoded_preflight;
+  try {
+    const auto interface_budget = p_->accepted_state_interface_flux_ledger_budget();
+    decoded_preflight.emplace(
+        runtime::program::deserialize_amr_program_accepted_state<Dim>(state, &interface_budget));
+  } catch (...) {
+    decode_error = std::current_exception();
+  }
+  if (all_reduce_max(decode_error ? 1L : 0L, lane.communicator()) != 0) {
+    if (lane.size() == 1 && decode_error)
+      std::rethrow_exception(decode_error);
+    throw std::runtime_error("AMR Program restart history decode failed collectively");
+  }
+  runtime::program::require_collective_amr_program_checkpoint_consensus(*decoded_preflight, lane);
+  const std::string_view encoded_state(reinterpret_cast<const char*>(state.data()), state.size());
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("pops.amr.restart-history-state"), encoded_state}}, lane))
+    throw std::invalid_argument("AMR Program restart history bytes differ between prepared ranks");
+
   runtime::program::HistoryManager<Dim> candidate;
   std::string contract;
   std::exception_ptr preparation_error;
   try {
-    const auto interface_budget = p_->accepted_state_interface_flux_ledger_budget();
-    const auto accepted =
-        runtime::program::deserialize_amr_program_accepted_state<Dim>(state, &interface_budget);
+    const auto& accepted = *decoded_preflight;
+    p_->requalify_restart_program_authority(accepted);
     runtime::program::require_live_amr_program_checkpoint(accepted, *p_->engine);
     p_->require_accepted_state_authority_contracts(accepted);
     if (accepted.histories.size() != names.size())
@@ -18673,7 +19443,6 @@ void AmrSystem<Dim>::materialize_program_restart_histories(const std::vector<std
   } catch (...) {
     preparation_error = std::current_exception();
   }
-  const ExecutionLane& lane = *p_->prepared_hierarchy->lane;
   if (all_reduce_max(preparation_error ? 1L : 0L, lane.communicator()) != 0) {
     if (lane.size() == 1 && preparation_error)
       std::rethrow_exception(preparation_error);
@@ -19285,6 +20054,8 @@ template std::size_t AmrSystem<kNativeDimension>::materialize_bootstrap_action(c
                                                                                const std::string&,
                                                                                const std::string&,
                                                                                int);
+template std::size_t AmrSystem<kNativeDimension>::recompute_bootstrap_field(const std::string&,
+                                                                            const std::string&);
 template void AmrSystem<kNativeDimension>::add_dt_bound(const std::string&,
                                                         std::function<double()>);
 template std::string AmrSystem<kNativeDimension>::last_dt_bound() const;
@@ -19311,7 +20082,7 @@ template void AmrSystem<kNativeDimension>::install_program(const std::string&);
 template void AmrSystem<kNativeDimension>::install_program_step(std::function<void(double)>);
 template void AmrSystem<kNativeDimension>::install_program_hierarchy_refresh(std::function<void()>);
 template void AmrSystem<kNativeDimension>::install_program_history_remap_accepted(
-    std::function<void()>);
+    std::function<void(const runtime::program::AmrProgramHistoryRemapDescriptor&)>);
 template void AmrSystem<kNativeDimension>::install_program_restart_hooks(
     std::function<void()>, std::function<void()>, std::function<void()>,
     runtime::program::AcceptedProgramContextSnapshotFactory);

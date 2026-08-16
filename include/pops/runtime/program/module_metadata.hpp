@@ -237,7 +237,7 @@ struct ProgramCheckpointMetadata {
                          const ProgramCheckpointMetadata&) = default;
 };
 
-/// Read the mandatory, frozen POPSAND3 shape metadata.  Unlike selective-replay authority this
+/// Read the mandatory, frozen POPSAND4 shape metadata.  Unlike selective-replay authority this
 /// family has no legacy-absence meaning: an AMR artifact without it cannot prove a pre-allocation
 /// checkpoint resource bound and is rejected before its installer runs.
 inline ProgramCheckpointMetadata read_program_checkpoint_metadata(pops::dynlib::handle dl_handle) {

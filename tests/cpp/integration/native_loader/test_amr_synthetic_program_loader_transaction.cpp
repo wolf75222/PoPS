@@ -29,6 +29,7 @@
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -231,7 +232,7 @@ extern "C" std::uint64_t pops_program_interface_coupling_identity_character_boun
   return UINT64_C(0);
 }
 extern "C" std::uint64_t pops_program_flux_rhs_basis_bound(int block) {
-  return block == 0 ? UINT64_C(1) : UINT64_C(0);
+  return block == 0 ? UINT64_C(10) : UINT64_C(0);
 }
 extern "C" std::uint64_t pops_program_flux_coefficient_term_bound(int block) {
   return block == 0 ? UINT64_C(1) : UINT64_C(0);
@@ -289,7 +290,18 @@ extern "C" void pops_install_program_amr(
           auto& explicit_rate = context->rhs_scratch(2000, 0, accepted);
           context->neg_div_flux_default_into(0, accepted, explicit_rate, 3000);
           context->lincomb(candidate, pops::Real(1), accepted, pops::Real(0), accepted);
-          context->axpy(candidate, pops::Real(level_dt), explicit_rate);
+          // Materialize ten independent, authenticated default-flux bases. The dyadic weights
+          // sum exactly to one, so this decimal-boundary capacity witness preserves the fixture's
+          // physical update while forcing identities 1 through 10 into the live expression.
+          for (int basis = 0; basis < 10; ++basis) {
+            auto& rate = basis == 0 ? explicit_rate
+                                    : context->rhs_scratch(2000 + basis, 0, accepted);
+            if (basis != 0)
+              context->neg_div_flux_default_into(0, accepted, rate, 3000 + basis);
+            const int exponent = basis == 9 ? 9 : basis + 1;
+            context->axpy(candidate, pops::Real(level_dt / static_cast<double>(1 << exponent)),
+                          rate);
+          }
           pops::SolveOutcome implicit = context->solve_source_default(
               0, candidate, pops::Real(level_dt), pops::NewtonOptions{});
           const pops::SolveReport solved = implicit.consume(pops::SolveConsumption::kAccept);
@@ -466,7 +478,7 @@ TEST(test_amr_synthetic_program_loader_transaction,
   ASSERT_EQ(budget.blocks.size(), 1u);
   ASSERT_EQ(budget.program_block_map.canonical_indices.size(), 1u);
   EXPECT_EQ(budget.program_block_map.canonical_indices[0], 0u);
-  EXPECT_EQ(budget.blocks[0].rhs_basis_bound, 1u);
+  EXPECT_EQ(budget.blocks[0].rhs_basis_bound, 10u);
   EXPECT_EQ(budget.blocks[0].coefficient_term_bound, 1u);
 
   const std::vector<double> coarse_before = continuous.block_level_state_global(kBlock, 0);
@@ -505,6 +517,20 @@ TEST(test_amr_synthetic_program_loader_transaction,
             max_departure_from_equilibrium(fine_interior_before));
   EXPECT_EQ(continuous.macro_step(), 1);
   EXPECT_DOUBLE_EQ(continuous.time(), dt);
+  const std::vector<std::uint8_t> accepted_bytes = continuous.program_accepted_state();
+  const auto accepted =
+      pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(accepted_bytes);
+  EXPECT_TRUE(std::any_of(accepted.accepted_face_flux.begin(), accepted.accepted_face_flux.end(),
+                          [](const auto& fragments) { return !fragments.empty(); }));
+  std::set<std::string> materialized_stages;
+  for (const auto& fragments : accepted.accepted_face_flux)
+    for (const auto& fragment : fragments)
+      materialized_stages.insert(fragment.key.stage);
+  EXPECT_EQ(materialized_stages.size(), 10u);
+  EXPECT_TRUE(std::any_of(
+      materialized_stages.begin(), materialized_stages.end(),
+      [](const std::string& stage) { return stage.find("/basis/10/") != std::string::npos; }));
+  EXPECT_LE(accepted_bytes.size(), continuous.checkpoint_program_state_capacity().first);
 
   continuous.step(dt);
   continuous.step(dt);

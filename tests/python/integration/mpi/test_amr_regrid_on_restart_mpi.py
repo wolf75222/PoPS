@@ -209,7 +209,7 @@ def _accepted_image(runtime, *, blocks=("tracer",)):
     return {
         "time": float(runtime.time()),
         "step": int(runtime.macro_step()),
-        "boxes": tuple(tuple(int(value) for value in box) for box in runtime.patch_boxes()),
+        "boxes": tuple(runtime.patch_boxes()),
         "owners": tuple(
             tuple(int(rank) for rank in native.level_owner_ranks(level)) for level in range(levels)
         ),
@@ -232,7 +232,7 @@ def _accepted_image(runtime, *, blocks=("tracer",)):
         "auxiliary_checkpoint": tuple(
             bytes(payload) for payload in native.capture_auxiliary_checkpoint_accepted_state()
         ),
-        "auxiliary_registry": str(native.auxiliary_registry_contract()),
+        "auxiliary_registry": bytes(native.auxiliary_registry_contract()),
         "dirty_auxiliary_providers": tuple(native.dirty_auxiliary_provider_identities()),
         "program_state": bytes(native.program_accepted_state()),
         "flux_ledger": tuple(tuple(map(str, row)) for row in native.program_flux_ledger_manifest()),

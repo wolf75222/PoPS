@@ -9,6 +9,9 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
         history_epoch_(owner.history_epoch_),
         history_generation_(owner.history_generation_),
         history_levels_(owner.history_levels_),
+        history_flux_expressions_(owner.history_flux_expressions_),
+        pending_history_remaps_(owner.pending_history_remaps_),
+        deferred_history_lag_scratches_(owner.deferred_history_lag_scratches_),
         accepted_temporal_partition_(owner.accepted_temporal_partition_),
         cell_temporal_configuration_(owner.cell_temporal_configuration_),
         accepted_flux_budget_contract_(owner.accepted_flux_budget_contract_),
@@ -27,6 +30,9 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
         history_epoch_(accepted.history_epoch_),
         history_generation_(accepted.history_generation_),
         history_levels_(accepted.history_levels_),
+        history_flux_expressions_(accepted.history_flux_expressions_),
+        pending_history_remaps_(accepted.pending_history_remaps_),
+        deferred_history_lag_scratches_(accepted.deferred_history_lag_scratches_),
         accepted_temporal_partition_(accepted.accepted_temporal_partition_),
         cell_temporal_configuration_(accepted.cell_temporal_configuration_),
         accepted_flux_budget_contract_(accepted.accepted_flux_budget_contract_),
@@ -44,6 +50,9 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
   void publish_restore() noexcept override {
     static_assert(std::is_nothrow_swappable_v<ClockScheduleState>);
     static_assert(std::is_nothrow_swappable_v<decltype(history_levels_)>);
+    static_assert(std::is_nothrow_swappable_v<decltype(history_flux_expressions_)>);
+    static_assert(std::is_nothrow_swappable_v<decltype(pending_history_remaps_)>);
+    static_assert(std::is_nothrow_swappable_v<decltype(deferred_history_lag_scratches_)>);
     static_assert(std::is_nothrow_swappable_v<decltype(accepted_temporal_partition_)>);
     static_assert(std::is_nothrow_swappable_v<decltype(cell_temporal_configuration_)>);
     static_assert(std::is_nothrow_swappable_v<decltype(accepted_flux_budget_contract_)>);
@@ -59,6 +68,9 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
     owner_->history_epoch_ = history_epoch_;
     owner_->history_generation_ = history_generation_;
     owner_->history_levels_.swap(history_levels_);
+    owner_->history_flux_expressions_.swap(history_flux_expressions_);
+    owner_->pending_history_remaps_.swap(pending_history_remaps_);
+    owner_->deferred_history_lag_scratches_.swap(deferred_history_lag_scratches_);
     owner_->scratches_.swap(discarded_scratches_);
     owner_->hierarchy_tensor_solver_.reset();
     owner_->hierarchy_tensor_topology_epoch_ = std::numeric_limits<std::uint64_t>::max();
@@ -92,6 +104,9 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
   std::uint64_t history_epoch_ = std::numeric_limits<std::uint64_t>::max();
   std::uint64_t history_generation_ = std::numeric_limits<std::uint64_t>::max();
   std::map<std::string, int> history_levels_;
+  std::map<std::string, std::vector<FluxExpression>> history_flux_expressions_;
+  std::map<std::string, AmrProgramPendingHistoryRemap> pending_history_remaps_;
+  std::map<std::string, field_type> deferred_history_lag_scratches_;
   CellTemporalPartitionAcceptedState accepted_temporal_partition_;
   std::optional<CellTemporalConfiguration> cell_temporal_configuration_;
   std::string accepted_flux_budget_contract_;

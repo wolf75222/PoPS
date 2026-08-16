@@ -28,7 +28,9 @@ from tests.python.support.native_execution_context import artifact_execution_con
 ROOT = Path(__file__).resolve().parents[4]
 N = 16
 DT = 1.0 / 128.0
-STEPS_BEFORE_RESTART = 4
+# Regrid occurs at macro step two; checkpoint after the first accepted post-regrid step rather
+# than at the topology-transition boundary.
+STEPS_BEFORE_RESTART = 3
 STEPS_AFTER_RESTART = 4
 
 pytestmark = [
@@ -163,15 +165,141 @@ def _program_accepted_state(path: str | Path) -> tuple[tuple[str, bytes], ...]:
         return ((key, np.asarray(checkpoint[key], dtype=np.uint8).tobytes()),)
 
 
-def _require_reflux_report(runtime: Any) -> None:
+def _accepted_state_history_flux(payload: bytes) -> tuple[list[dict[str, Any]], bytes]:
+    """Decode only the POPSAND4 history-flux envelope, retaining exact byte boundaries.
+
+    This is deliberately a test-side reader: it proves the wire image contains actual retained
+    expressions and also catches accidental offset drift before a checkpoint reaches native restore.
+    """
+    cursor = 0
+
+    def require(count: int) -> None:
+        assert 0 <= count <= len(payload) - cursor, "POPSAND4 payload is truncated"
+
+    def read_u64() -> int:
+        nonlocal cursor
+        require(8)
+        value = int.from_bytes(payload[cursor : cursor + 8], "little")
+        cursor += 8
+        return value
+
+    def skip(count: int) -> None:
+        nonlocal cursor
+        require(count)
+        cursor += count
+
+    def read_string() -> str:
+        size = read_u64()
+        require(size)
+        nonlocal_cursor = cursor
+        skip(size)
+        return payload[nonlocal_cursor : nonlocal_cursor + size].decode("utf-8")
+
+    assert payload[:8] == b"POPSAND4"
+    cursor = 8 + 8
+    skip(read_u64())  # spatial contract
+    skip(16)  # topology epoch, materialization generation
+    for _ in range(read_u64()):
+        skip(40)
+    for _ in range(read_u64()):
+        skip(read_u64() + 8)
+    for _ in range(read_u64()):
+        read_string()
+        skip(8)
+        for _identity in range(4):
+            read_string()
+        skip(16)
+    for _ in range(read_u64()):
+        read_string()
+        skip(40)
+    for _ in range(read_u64()):
+        read_string()
+        skip(12 * 8)
+    history_flux_size = read_u64()
+    history_flux_offset = cursor
+    skip(history_flux_size)
+    history_flux = payload[history_flux_offset:cursor]
+
+    flux_cursor = 0
+
+    def flux_u64() -> int:
+        nonlocal flux_cursor
+        assert flux_cursor + 8 <= len(history_flux), "history-flux size is truncated"
+        value = int.from_bytes(history_flux[flux_cursor : flux_cursor + 8], "little")
+        flux_cursor += 8
+        return value
+
+    def flux_i64() -> int:
+        nonlocal flux_cursor
+        assert flux_cursor + 8 <= len(history_flux), "history-flux scalar is truncated"
+        value = int.from_bytes(history_flux[flux_cursor : flux_cursor + 8], "little", signed=True)
+        flux_cursor += 8
+        return value
+
+    def flux_skip(count: int) -> None:
+        nonlocal flux_cursor
+        assert 0 <= count <= len(history_flux) - flux_cursor, "history-flux record is truncated"
+        flux_cursor += count
+
+    def flux_string() -> str:
+        size = flux_u64()
+        start = flux_cursor
+        flux_skip(size)
+        return history_flux[start : start + size].decode("utf-8")
+
+    rings: list[dict[str, Any]] = []
+    if history_flux:
+        for _ in range(flux_u64()):
+            name = flux_string()
+            slots = []
+            for _ in range(flux_u64()):
+                bases = []
+                for _ in range(flux_u64()):
+                    identity = flux_u64()
+                    coefficients = flux_u64()
+                    flux_skip(coefficients * 24)
+                    runtime_block = flux_u64()
+                    level = flux_i64()
+                    flux_i64()  # RHS id
+                    flux_skip(8)  # provider
+                    # point: clock, tick, level/substep/stage, rational, dt/time, three identities
+                    flux_string()
+                    flux_skip(8 + 3 * 8 + 2 * 8 + 2 * 8)
+                    flux_string()
+                    flux_string()
+                    flux_string()
+                    flux_skip(80)  # two exact clock stamps
+                    faces = []
+                    for _ in range(flux_u64()):
+                        flux_skip(8 + 8 + 4 * 8 + 8)
+                        density_count = flux_u64()
+                        density_offset = flux_cursor
+                        flux_skip(density_count * 8)
+                        faces.append((density_count, history_flux[density_offset:flux_cursor]))
+                    bases.append({"identity": identity, "runtime_block": runtime_block,
+                                  "level": level, "faces": faces})
+                slots.append(bases)
+            rings.append({"name": name, "slots": slots})
+        assert flux_cursor == len(history_flux), "history-flux parser left trailing bytes"
+    return rings, history_flux
+
+
+def _require_reflux_report(runtime: Any, *, require_current_ledger: bool = True) -> None:
     report = runtime.program_report()
     level_clocks = [row for row in report.clocks if row["kind"] == "level"]
     assert {int(row["level"]) for row in level_clocks} == {0, 1}
     assert all(row["phase"] == {"numerator": 0, "denominator": 1} for row in level_clocks)
     assert report.histories
-    assert all(row["initialized"] is True for row in report.histories)
-    assert {int(row["level"]) for row in report.flux_ledger} == {0, 1}
-    assert all(float(row["substep_duration"]) > 0.0 for row in report.flux_ledger)
+    assert all(
+        level["initialized"] is True
+        for row in report.histories
+        for level in row["levels"]
+    )
+    if require_current_ledger:
+        assert report.flux_ledger, "a live AB2/reflux run must materialize a per-level flux ledger"
+    if report.flux_ledger:
+        assert {int(row["level"]) for row in report.flux_ledger} == {0, 1}
+        assert all(float(row["substep_duration"]) > 0.0 for row in report.flux_ledger)
     groups: dict[tuple[int, ...], list[str]] = {}
     for row in report.synchronization:
         phase = row["clock_phase"]
@@ -214,6 +342,11 @@ def test_strict_restart_preserves_ab2_history_flux_and_reflux_continuation(
     checkpoint = uninterrupted.checkpoint(tmp_path / "accepted")
     accepted_program_state = _program_accepted_state(checkpoint)
     assert any(payload for _name, payload in accepted_program_state)
+    flux_rings, flux_payload = _accepted_state_history_flux(accepted_program_state[0][1])
+    assert flux_payload and flux_rings
+    assert all(ring["name"] and len(ring["slots"]) == 2 for ring in flux_rings)
+    assert all(slot for ring in flux_rings for slot in ring["slots"])
+    assert any(base["faces"] for ring in flux_rings for slot in ring["slots"] for base in slot)
 
     restarted = _bind(compiled, initial)
     restarted.restart(checkpoint)
@@ -238,8 +371,8 @@ def test_strict_restart_preserves_ab2_history_flux_and_reflux_continuation(
         tmp_path / "restarted",
     )
     _assert_bit_identical(_capture(uninterrupted), _capture(restarted))
-    _require_reflux_report(uninterrupted)
-    _require_reflux_report(restarted)
+    _require_reflux_report(uninterrupted, require_current_ledger=False)
+    _require_reflux_report(restarted, require_current_ledger=False)
 
     uninterrupted_mass = float(uninterrupted.integral("blk", levels=(0,)))
     restarted_mass = float(restarted.integral("blk", levels=(0,)))

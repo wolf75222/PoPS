@@ -86,6 +86,8 @@ void register_history(const std::string& name, int lag, int ncomp, int program_o
   manager.clock_identity[key] = clock_identity;
   manager.interpolation_identity[key] = interpolation_identity;
   manager.slot_dt[key] = std::vector<Real>(static_cast<std::size_t>(depth), Real(0));
+  history_flux_expressions_.emplace(key,
+                                    std::vector<FluxExpression>(static_cast<std::size_t>(depth)));
   history_levels_.emplace(key, active_level_);
   if (history_epoch_ == std::numeric_limits<std::uint64_t>::max()) {
     history_epoch_ = runtime_->topology_epoch();

@@ -418,6 +418,20 @@ TEST(test_amr_seed_no_refine,
   restored.restore_checkpoint_accepted_state(accepted);
   EXPECT_EQ(restored.program_accepted_state(), accepted);
 
+  auto omitted_tagging = decoded;
+  omitted_tagging.tagging_hysteresis_state.clear();
+  const std::vector<std::uint8_t> omission =
+      pops::runtime::program::serialize_amr_program_accepted_state(omitted_tagging);
+  const std::uint64_t revision_before_omission = restored.program_accepted_state_revision();
+  restored.restore_program_accepted_state(omission);
+  EXPECT_EQ(restored.program_accepted_state(), accepted);
+  EXPECT_EQ(restored.program_accepted_state_revision(), revision_before_omission + 1);
+
+  const std::uint64_t revision_before_echo = restored.program_accepted_state_revision();
+  restored.restore_program_accepted_state(accepted);
+  EXPECT_EQ(restored.program_accepted_state(), accepted);
+  EXPECT_EQ(restored.program_accepted_state_revision(), revision_before_echo + 1);
+
   auto corrupted = decoded;
   ASSERT_FALSE(corrupted.tagging_hysteresis_state.empty());
   corrupted.tagging_hysteresis_state.back() ^= std::uint8_t{0xff};
@@ -425,6 +439,12 @@ TEST(test_amr_seed_no_refine,
       pops::runtime::program::serialize_amr_program_accepted_state(corrupted);
   const auto before = restored.program_accepted_state();
   const std::uint64_t revision_before = restored.program_accepted_state_revision();
+  EXPECT_THROW(restored.restore_program_accepted_state(invalid), std::invalid_argument);
+  EXPECT_EQ(restored.program_accepted_state(), before);
+  EXPECT_EQ(restored.program_accepted_state_revision(), revision_before);
+  EXPECT_THROW(restored.restore_checkpoint_accepted_state(omission), std::invalid_argument);
+  EXPECT_EQ(restored.program_accepted_state(), before);
+  EXPECT_EQ(restored.program_accepted_state_revision(), revision_before);
   EXPECT_THROW(restored.restore_checkpoint_accepted_state(invalid), std::invalid_argument);
   EXPECT_EQ(restored.program_accepted_state(), before);
   EXPECT_EQ(restored.program_accepted_state_revision(), revision_before);

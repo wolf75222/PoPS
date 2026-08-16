@@ -92,10 +92,20 @@ void materialize_active_flux_expression_(std::size_t runtime_block,
                     return same_coarse_face(entry) && entry.key.stage == stage;
                   });
                 });
-        if (!exact_operator_pack)
+        if (!exact_operator_pack) {
+          std::string observed;
+          for (const auto& entry : entries)
+            if (same_coarse_face(entry)) {
+              if (!observed.empty())
+                observed += ", ";
+              observed += entry.key.stage;
+            }
           throw std::runtime_error(
               "AMR Program coarse/fine flux operator identities differ before face-flux "
-              "publication");
+              "publication: expected " +
+              std::to_string(stage_identities.size()) + " stage(s), observed " +
+              std::to_string(coarse_count) + " [" + observed + "]");
+        }
       }
     }
     if (!compared_face) {

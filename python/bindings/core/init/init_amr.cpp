@@ -787,7 +787,13 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
             return py::make_tuple(address.group, address.component);
           },
           py::arg("owner_qid"), py::arg("space_kind"), py::arg("space_name"), py::arg("component"))
-      .def("auxiliary_registry_contract", &AmrSystem::auxiliary_registry_contract)
+      .def(
+          "auxiliary_registry_contract",
+          [](const AmrSystem& s) {
+            const std::string contract = s.auxiliary_registry_contract();
+            return py::bytes(contract.data(), contract.size());
+          },
+          "Exact auxiliary-registry contract bytes for rollback comparison.")
       .def("capture_auxiliary_checkpoint_accepted_state",
            [](const AmrSystem& s) {
              py::list result;
@@ -834,7 +840,7 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
           },
           "Return the artifact-authenticated Program face/interface flux capacity.")
       .def("_checkpoint_program_state_capacity", &AmrSystem::checkpoint_program_state_capacity,
-           "Return the artifact-authenticated POPSAND3/source-authority byte capacities.")
+           "Return the artifact-authenticated POPSAND4/source-authority byte capacities.")
       .def(
           "restore_restart_auxiliary_checkpoint_accepted_state",
           [](AmrSystem& s, py::object payloads) {
@@ -900,6 +906,8 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
           py::arg("values"))
       .def("_materialize_bootstrap_action", &AmrSystem::materialize_bootstrap_action,
            py::arg("subject_id"), py::arg("action"), py::arg("action_route"), py::arg("level"))
+      .def("_recompute_bootstrap_field", &AmrSystem::recompute_bootstrap_field,
+           py::arg("subject_id"), py::arg("provider_slot"))
       .def("_synchronize_bootstrap_state", &AmrSystem::synchronize_bootstrap_state,
            py::arg("subject_id"), py::arg("fine_level"))
       .def("_begin_bootstrap_plan", &AmrSystem::begin_bootstrap_plan)
@@ -1114,8 +1122,8 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
       // Exact-ranked index-space footprints of the fine patches. Each item carries the level and
       // inclusive lower/upper Index<Dim> corners in that level's native axis order. SAME
       // source as n_patches() (the GLOBAL fine BoxArray) -> rank-independent, MPI-safe. Query between
-      // steps, zero cost on the hot path. The Python wrapper converts with the exact x/y bounds;
-      // cf. AmrSystem.patch_rectangles() on the facade side.
+      // steps, zero cost on the hot path. The Python wrapper converts with the exact physical
+      // bounds; cf. AmrSystem.patch_bounds() on the facade side.
       .def("patch_boxes",
            [](AmrSystem& s) { return ranked_amr_patches_to_python(s.patch_boxes()); })
       .def("spatial_shape",

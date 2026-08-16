@@ -266,9 +266,9 @@ class AmrProgramContext {
 #include <pops/runtime/program/amr_program_context_field_runtime_private.inc>
 #include <pops/runtime/program/amr_program_context_flux_expression_polynomial.inc>
 #include <pops/runtime/program/amr_program_context_cell_temporal_configuration.inc>
-#include <pops/runtime/program/amr_program_context_history_checkpoint_definitions.inc>
 #include <pops/runtime/program/amr_program_context_flux_basis_definitions.inc>
 #include <pops/runtime/program/amr_program_context_flux_expression_definitions.inc>
+#include <pops/runtime/program/amr_program_context_history_checkpoint_definitions.inc>
 #include <pops/runtime/program/amr_program_context_cell_temporal_level_runtime.inc>
 #include <pops/runtime/program/amr_program_context_field_runtime_definitions.inc>
 #include <pops/runtime/program/amr_program_context_flux_expression_services.inc>
@@ -285,7 +285,9 @@ class AmrProgramContext {
   friend struct detail::AmrProgramHistoryRemapCollectiveTestAccess;
 
   facade_type* facade_ = nullptr;
-  runtime_type* runtime_ = nullptr;
+  // A raw restart hierarchy rebuild may replace the facade-owned runtime object.  Rebind only at
+  // the accepted hierarchy-refresh boundary; attempt-local execution never observes a change.
+  mutable runtime_type* runtime_ = nullptr;
   mutable int active_level_ = 0;
   mutable double current_dt_ = 0.0;
   mutable double current_interval_start_time_ = 0.0;
@@ -323,6 +325,13 @@ class AmrProgramContext {
   mutable std::vector<multiblock_flux_ledger_type*> active_outgoing_flux_;
   mutable std::vector<std::string_view> active_block_identities_;
   mutable FluxExpressionRegistry active_flux_expressions_;
+  // Persistent, exact-ranked provenance for values retained by the numeric history rings.  The
+  // key is history_key_(name, level), hence this carrier never erases a level or rank boundary.
+  // Bases are immutable samples; a lag read clones and rebases them into the current attempt
+  // rather than retaining a pointer to a prior attempt's live registry.
+  mutable std::map<std::string, std::vector<FluxExpression>> history_flux_expressions_;
+  mutable std::map<std::string, AmrProgramPendingHistoryRemap> pending_history_remaps_;
+  mutable std::map<std::string, field_type> deferred_history_lag_scratches_;
   mutable std::vector<std::size_t> active_flux_basis_counts_;
   mutable std::uint64_t next_active_flux_basis_identity_ = 0;
   mutable std::vector<std::size_t> prepared_rhs_basis_bounds_;

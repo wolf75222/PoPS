@@ -213,7 +213,7 @@ def test_bound_aux_drives_public_projection_in_a_native_amr_step(
     floor = np.full((GRID_CELLS, GRID_CELLS), FLOOR_VALUE, dtype=np.float64)
     peer_floor = np.full((GRID_CELLS, GRID_CELLS), PEER_FLOOR_VALUE, dtype=np.float64)
     simulation = pops.bind(artifact, aux={"floor": floor, "peer_ceiling": peer_floor})
-    assert (simulation.nx(), simulation.ny()) == (GRID_CELLS, GRID_CELLS)
+    assert simulation.spatial_shape() == (GRID_CELLS, GRID_CELLS)
     level_count = simulation.n_levels()
     assert level_count == 2
     assert simulation.program_report().level_relations == [

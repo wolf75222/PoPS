@@ -212,8 +212,9 @@ void prepare_multiblock_subcycling_engine_() const {
   interface_flux_ledger_->publish_prepared_budget(*prepared_interface_budget);
 
   if (multiblock_subcycling_ != nullptr &&
-      multiblock_subcycling_epoch_ == runtime_->topology_epoch() &&
-      multiblock_subcycling_generation_ == runtime_->materialization_generation() &&
+      multiblock_subcycling_epoch_ == hierarchy.topology_runtime().topology_epoch() &&
+      multiblock_subcycling_generation_ ==
+          hierarchy.topology_runtime().materialization_generation() &&
       multiblock_subcycling_program_budget_contract_ == program_budget_contract)
     return;
 
@@ -283,8 +284,11 @@ void prepare_multiblock_subcycling_engine_() const {
   prepared_rhs_basis_bounds_ = std::move(rhs_basis_bounds);
   prepared_coefficient_term_bounds_ = std::move(coefficient_term_bounds);
   multiblock_subcycling_program_budget_contract_ = std::move(program_budget_contract);
-  multiblock_subcycling_epoch_ = runtime_->topology_epoch();
-  multiblock_subcycling_generation_ = runtime_->materialization_generation();
+  // This engine is prepared against the facade's rebuilt multi-block hierarchy.  Regrid and
+  // restart rematerialize that authority before the raw runtime's convenience view necessarily
+  // observes the new generation, so cache only against the exact authority used to size faces.
+  multiblock_subcycling_epoch_ = hierarchy.topology_runtime().topology_epoch();
+  multiblock_subcycling_generation_ = hierarchy.topology_runtime().materialization_generation();
 }
 
 template <class Body>

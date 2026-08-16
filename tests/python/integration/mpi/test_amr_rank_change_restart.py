@@ -143,7 +143,9 @@ def test_amr_checkpoint_restart_rematerializes_two_ranks_onto_one(
     tmp_path: Path,
 ) -> None:
     try:
-        from pops import _pops
+        from pops._native_selector import select_native_dimension
+
+        _pops = select_native_dimension(int(os.environ["POPS_NATIVE_DIM"]))
     except (ImportError, RuntimeError) as exc:
         require_mpi_or_skip(
             "AMR rank-change restart cannot import its native module: %s" % exc,
@@ -170,9 +172,6 @@ def test_amr_checkpoint_restart_rematerializes_two_ranks_onto_one(
     strict = tmp_path / "rank-change-strict.npz"
     evidence = tmp_path / "rank-change-evidence.npz"
     rematerialized = tmp_path / "rank-change-rematerialized.npz"
-    divergent_directory = tmp_path / "divergent-publication"
-    divergent_directory.mkdir()
-    divergent = divergent_directory / "rank-change-divergent.npz"
 
     capture_relaxed = _run_probe(
         launcher,
@@ -216,15 +215,16 @@ def test_amr_checkpoint_restart_rematerializes_two_ranks_onto_one(
     )
     assert "PASS bit_identical=True refuses AMR two-to-one restart atomically" in restart_strict
 
-    capture_divergent = _run_probe(
+    # Stay in the existing MPI-2 launcher and its bounded subprocess timeout.  This route can
+    # deliberately provide rank-local native bytes, which an archive-based restart cannot.
+    restore_negative = _run_probe(
         launcher,
         ranks=2,
-        mode="capture-divergent",
-        checkpoint=divergent,
+        mode="restore-negative",
+        checkpoint=tmp_path / "unused-restore-negative.npz",
         environment=environment,
     )
     assert (
-        "PASS divergent source tagging payload refuses collective publication atomically"
-        in capture_divergent
+        "PASS normalized Program and strict checkpoint AMR accepted-state restore gates are atomic"
+        in restore_negative
     )
-    assert not divergent.exists() and not tuple(divergent_directory.iterdir())

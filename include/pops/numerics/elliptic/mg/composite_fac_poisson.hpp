@@ -322,7 +322,16 @@ class CompositeFacPoisson {
     report.reference_residual_norm = reference;
     report.residual_norm = reference;
     report.rel_residual = reference > Real(0) ? Real(1) : Real(0);
-    const Real stop = std::max(options_.abs_tol, options_.rel_tol * reference);
+    // Re-solves start with ||R(0)|| already near the last stop. Scale rel_tol by
+    // the zero-iterate forcing (masked RHS) so the floor cannot fall below roundoff.
+    const Real forcing = composite_forcing_norm_();
+    if (!std::isfinite(static_cast<double>(forcing))) {
+      report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun,
+                         "composite_fac_non_finite_forcing");
+      last_report_ = report;
+      return last_report_;
+    }
+    const Real stop = std::max(options_.abs_tol, options_.rel_tol * std::max(reference, forcing));
     if (reference <= stop) {
       fill_all_ghosts_();
       report.mark_solved("composite_fac_initial_residual");
@@ -619,45 +628,82 @@ class CompositeFacPoisson {
 
       append_flux_mismatches_(parent, child, connection, child_local, footprint);
 
-      // Physical ghosts are supplied by the level boundary condition below.  Every remaining
-      // ghost is interpolated from a parent *valid* cell, so the parent one-cell halo supplies
-      // the complete linear stencil without using an extrapolated parent value as its center.
+      // Interior holes and same-level periodic images are subtracted first.  Periodic physical
+      // ghosts with no same-level source stay in `pending` and are interpolated from the parent
+      // after wrapping into the fine domain; Dirichlet physical ghosts stay out of this set.
       std::vector<Box<Dim>> pending{
           child.phi.fab(child_local).grown_box().intersect(child.geometry.domain())};
+      const Box<Dim> grown = child.phi.fab(child_local).grown_box();
+      for (const Box<Dim>& halo : fac_detail::subtract_box(grown, child.geometry.domain())) {
+        bool periodic_image = true;
+        for (int axis = 0; axis < Dim; ++axis) {
+          if (halo.hi[axis] < child.geometry.domain().lo[axis] ||
+              halo.lo[axis] > child.geometry.domain().hi[axis])
+            periodic_image = periodic_image && child.boundary.topology().is_periodic(
+                                                   Face<Dim>{axis, BoundarySide::lower});
+        }
+        if (periodic_image && !halo.empty())
+          pending.push_back(halo);
+      }
       for (const Box<Dim>& valid : child.phi.layout().boxes())
         fac_detail::subtract_from_regions(pending, valid);
       for (const HaloJob<Dim>& halo : child.halo_schedule.canonical_jobs())
         if (halo.destination_box == child_global)
           fac_detail::subtract_from_regions(pending, halo.destination_region);
 
+      const auto periodic_shift = [&](const Box<Dim>& region) {
+        Index<Dim> shift{};
+        for (int axis = 0; axis < Dim; ++axis) {
+          if (!child.boundary.topology().is_periodic(Face<Dim>{axis, BoundarySide::lower}))
+            continue;
+          const int length = static_cast<int>(child.geometry.domain().length(axis));
+          if (length <= 0)
+            continue;
+          if (region.hi[axis] < child.geometry.domain().lo[axis])
+            shift[axis] = length;
+          else if (region.lo[axis] > child.geometry.domain().hi[axis])
+            shift[axis] = -length;
+        }
+        return shift;
+      };
+      const auto negate = [](const Index<Dim>& value) {
+        Index<Dim> result{};
+        for (int axis = 0; axis < Dim; ++axis)
+          result[axis] = -value[axis];
+        return result;
+      };
       for (std::size_t parent_local = 0; parent_local < parent.phi.local_size(); ++parent_local) {
         const Box<Dim> parent_reach = refine(parent.phi.box(parent_local), ratio_value);
         std::vector<Box<Dim>> next;
         for (const Box<Dim>& region : pending) {
-          const Box<Dim> destination = region.intersect(parent_reach);
+          const Index<Dim> shift = periodic_shift(region);
+          const Box<Dim> wrapped = region.shift(shift);
+          const Box<Dim> matched = wrapped.intersect(parent_reach);
+          const Box<Dim> destination = matched.empty() ? Box<Dim>{} : matched.shift(negate(shift));
           if (!destination.empty()) {
             const auto source = static_cast<const field_type&>(parent.phi).fab(parent_local).view();
             connection.coarse_fine_phi.push_back({source, child.phi.fab(child_local).view(),
-                                                  destination, connection.ratio, mapping});
+                                                  destination, connection.ratio, mapping,
+                                                  child.geometry.domain()});
             const auto residual_source =
                 static_cast<const field_type&>(parent.residual_operator_view)
                     .fab(parent_local)
                     .view();
             connection.coarse_fine_residual_view.push_back(
                 {residual_source, child.residual_operator_view.fab(child_local).view(), destination,
-                 connection.ratio, mapping});
+                 connection.ratio, mapping, child.geometry.domain()});
             const auto direction_source =
                 static_cast<const field_type&>(parent.direction_operator_view)
                     .fab(parent_local)
                     .view();
             connection.coarse_fine_direction_view.push_back(
                 {direction_source, child.direction_operator_view.fab(child_local).view(),
-                 destination, connection.ratio, mapping});
+                 destination, connection.ratio, mapping, child.geometry.domain()});
             const auto correction_source =
                 static_cast<const field_type&>(parent.correction).fab(parent_local).view();
-            connection.coarse_fine_correction.push_back({correction_source,
-                                                         child.correction.fab(child_local).view(),
-                                                         destination, connection.ratio, mapping});
+            connection.coarse_fine_correction.push_back(
+                {correction_source, child.correction.fab(child_local).view(), destination,
+                 connection.ratio, mapping, child.geometry.domain()});
           }
           std::vector<Box<Dim>> remainder = fac_detail::subtract_box(region, destination);
           next.insert(next.end(), remainder.begin(), remainder.end());
@@ -691,6 +737,20 @@ class CompositeFacPoisson {
           ++interface.hi[axis];
           interface.lo[axis] = interface.hi[axis];
         }
+        Index<Dim> geometry_shift{};
+        const Box<Dim>& parent_domain = parent.geometry.domain();
+        if (parent.boundary.topology().is_periodic(Face<Dim>{axis, BoundarySide::lower})) {
+          const int length = static_cast<int>(parent_domain.length(axis));
+          if (length > 0 && interface.hi[axis] < parent_domain.lo[axis]) {
+            geometry_shift[axis] = -length;
+            interface.lo[axis] += length;
+            interface.hi[axis] += length;
+          } else if (length > 0 && interface.lo[axis] > parent_domain.hi[axis]) {
+            geometry_shift[axis] = length;
+            interface.lo[axis] -= length;
+            interface.hi[axis] -= length;
+          }
+        }
         for (std::size_t parent_local = 0; parent_local < parent.phi.local_size(); ++parent_local) {
           const Box<Dim> destination = parent.phi.box(parent_local).intersect(interface);
           if (destination.empty())
@@ -705,7 +765,7 @@ class CompositeFacPoisson {
                 static_cast<const field_type&>(parent_field).fab(parent_local).view(),
                 static_cast<const field_type&>(child_field).fab(child_local).view(),
                 residual.fab(parent_local).view(), covered, destination, connection.ratio, axis,
-                child_side, inverse_spacing_squared, fine_face_weight, sign});
+                child_side, inverse_spacing_squared, fine_face_weight, sign, geometry_shift});
           };
           append(parent.phi, child.phi, parent.residual, connection.flux_mismatch, Real(1));
           append(parent.residual_operator_view, child.residual_operator_view, parent.residual,
@@ -1105,6 +1165,13 @@ class CompositeFacPoisson {
     Real result = Real(0);
     for (const auto& level : levels_)
       result = std::max(result, norm_inf(level->residual));
+    return static_cast<Real>(all_reduce_max(static_cast<double>(result), *lane_));
+  }
+
+  Real composite_forcing_norm_() const {
+    Real result = Real(0);
+    for (const auto& level : levels_)
+      result = std::max(result, reduce_active_norm_inf_local(level->rhs, 0, &level->active));
     return static_cast<Real>(all_reduce_max(static_cast<double>(result), *lane_));
   }
 

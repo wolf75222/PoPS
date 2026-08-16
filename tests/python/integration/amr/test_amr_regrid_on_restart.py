@@ -106,7 +106,7 @@ def _resolved(native_cxx=None):
     field_operator = model.field_operator(
         "restart_screened_field",
         unknown=potential,
-        equation=(-laplacian(phi) + phi == rho),
+        equation=(-laplacian(phi) + 1.0 * phi == rho),
         outputs=(FieldOutput("restart_phi", potential),),
     )
     secondary_potential = model.field("restart_secondary_potential")
@@ -114,7 +114,7 @@ def _resolved(native_cxx=None):
     secondary_field_operator = model.field_operator(
         "restart_secondary_screened_field",
         unknown=secondary_potential,
-        equation=(-laplacian(secondary_phi) + secondary_phi == 2.0 * rho),
+        equation=(-laplacian(secondary_phi) + 1.0 * secondary_phi == 2.0 * rho),
         outputs=(FieldOutput("restart_secondary_phi", secondary_potential),),
     )
 
@@ -250,7 +250,7 @@ def _accepted_image(runtime):
     return {
         "time": float(runtime.time()),
         "step": int(runtime.macro_step()),
-        "boxes": tuple(tuple(int(value) for value in box) for box in runtime.patch_boxes()),
+        "boxes": tuple(runtime.patch_boxes()),
         "regrid_count": int(native.checkpoint_regrid_count()),
         "topology_epoch": int(native.checkpoint_topology_epoch()),
         "states": tuple(
@@ -261,6 +261,11 @@ def _accepted_image(runtime):
             for level in range(levels)
         ),
         "program_state": bytes(native.program_accepted_state()),
+        # The public manifest exposes the exact outgoing-dt bit patterns, fill counters and
+        # level/slot ownership independently of the opaque POPSAND4 image.
+        "history_manifest": tuple(
+            tuple(map(str, row)) for row in native.program_accepted_state_manifest()
+        ),
         "histories": histories,
         "fields": fields,
         "phi_provider_slot": str(native.checkpoint_phi_provider_slot()),
@@ -273,7 +278,7 @@ def _accepted_image(runtime):
         "auxiliary_checkpoint": tuple(
             bytes(payload) for payload in native.capture_auxiliary_checkpoint_accepted_state()
         ),
-        "auxiliary_registry": str(native.auxiliary_registry_contract()),
+        "auxiliary_registry": bytes(native.auxiliary_registry_contract()),
         "dirty_auxiliary_providers": tuple(native.dirty_auxiliary_provider_identities()),
         "run_identity": runtime.last_run_identity,
         "consumer_cursors": runtime.consumer_cursors.to_data(),
@@ -323,10 +328,11 @@ def _accepted_tagging_hysteresis(payload):
 
     def skip_string():
         nonlocal cursor
-        cursor += read_size()
+        size = read_size()
+        cursor += size
         assert cursor <= len(encoded), "accepted-state string is truncated"
 
-    assert encoded[:8] == b"POPSAND3"
+    assert encoded[:8] == b"POPSAND4"
     cursor = 8
     cursor += 8  # native dimension
     skip_string()  # exact spatial contract
@@ -350,6 +356,14 @@ def _accepted_tagging_hysteresis(payload):
     for _ in range(history_slot_count):
         skip_string()
         cursor += 5 * 8  # level, slot, outgoing dt, initialized, fill count
+    pending_count = read_size()
+    for _ in range(pending_count):
+        skip_string()
+        cursor += 12 * 8  # two encoded i32, four u64, three i64, two real, consumed
+    assert cursor <= len(encoded), "accepted-state pending history remaps are truncated"
+    history_flux_size = read_size()
+    cursor += history_flux_size
+    assert cursor <= len(encoded), "accepted-state history-flux payload is truncated"
     cursor += 8  # CellTemporalPartitionKind
     provider_size = read_size()
     cursor += provider_size

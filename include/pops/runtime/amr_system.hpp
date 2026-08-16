@@ -62,6 +62,10 @@
 /// transition ratios. An implicit/IMEX AMR composition
 /// without a typed Program primitive fails closed; there is no private Newton or time-step fallback.
 
+namespace pops::runtime::program {
+struct AmrProgramHistoryRemapDescriptor;
+}
+
 namespace pops {
 
 template <int Dim>
@@ -765,6 +769,16 @@ class AmrSystem {
   /// conservative transfer provider.  The active bootstrap snapshot owns rollback of every write.
   std::size_t materialize_bootstrap_action(const std::string& subject_id, const std::string& action,
                                            const std::string& action_route, int level);
+  /// Recompute one authenticated elliptic field during an active bootstrap transaction.
+  /// @p subject_id is the derived-field bootstrap subject; @p provider_slot is the exact
+  /// field-plan identity used by the generated Program. Every staged conservative source
+  /// must already be materialized on every live hierarchy level, and the slot must own an
+  /// elliptic solver route. After create_level the prepared solvers are discarded; this
+  /// seam rematerializes them on the complete prolonged hierarchy through the existing
+  /// topology-field authority before CompositeFAC runs. Publication stays on the prepared
+  /// hierarchy lane and is rolled back by the enclosing bootstrap snapshot.
+  std::size_t recompute_bootstrap_field(const std::string& subject_id,
+                                        const std::string& provider_slot);
   /// Restrict one already-materialized fine state onto its live parent during an explicit
   /// bootstrap transaction.  The subject must own the exact cell-conservative volume-average
   /// restriction authority for this ranked transition; publication is collective on the prepared
@@ -1021,7 +1035,7 @@ class AmrSystem {
   /// from the dense field/history arrays: it preserves exact level clocks, qualified history-slot
   /// identities and lagged effective-flux publications required for conservative multistep restart.
   POPS_EXPORT std::vector<std::uint8_t> program_accepted_state() const;
-  /// Artifact-authenticated upper bounds for the complete POPSAND3 image and its fixed-size
+  /// Artifact-authenticated upper bounds for the complete POPSAND4 image and its fixed-size
   /// source-rematerialization digest. The bound covers every configured hierarchy level, temporal
   /// execution, history slot, tagging cell and accepted flux publication.
   POPS_EXPORT std::pair<std::size_t, std::size_t> checkpoint_program_state_capacity() const;
@@ -1174,15 +1188,15 @@ class AmrSystem {
   /// Structured report of effective numerical, solver and physical options currently configured.
   EffectiveOptionsReport effective_options_report() const;
   int n_patches();  ///< number of current fine patches (of the shared hierarchy)
-  /// Index-space signatures of the current fine patches: one AmrPatch<Dim> (level, ilo, jlo, ihi, jhi) per
-  /// fine box, for ALL fine levels (level >= 1). INCLUSIVE corners in the index space of the
-  /// level (each base-axis count refined by the authenticated hierarchy transitions). SAME source
-  /// as n_patches()
-  /// (the GLOBAL fine
-  /// BoxArray, all boxes/all ranks -> rank-independent, MPI-safe, zero communication). It is a
-  /// QUERY (between steps): read-only of the already-stored boxes, NO hot-path cost. The
-  /// conversion to exact physical x/y bounds is done on the Python side. Forces the lazy
-  /// build (ensure_built) like n_patches()/mass()/density().
+  /// Index-space signatures of the current fine patches: one AmrPatch<Dim>
+  /// (level, inclusive lower/upper Index<Dim> corners) per fine box, for ALL
+  /// fine levels (level >= 1). Inclusive corners in the index space of the
+  /// level (each base-axis count refined by the authenticated hierarchy
+  /// transitions). SAME source as n_patches() (the GLOBAL fine BoxArray, all
+  /// boxes/all ranks -> rank-independent, MPI-safe, zero communication). It is a
+  /// QUERY (between steps): read-only of the already-stored boxes, NO hot-path
+  /// cost. The conversion to exact physical bounds is done on the Python side.
+  /// Forces the lazy build (ensure_built) like n_patches()/mass()/density().
   std::vector<AmrPatch<Dim>> patch_boxes();
   /// COARSE-level (base) box counts, MPI ownership diagnostic (ADC-319). coarse_local_boxes() = number
   /// of base boxes OWNED by this rank (level-0 MultiFab local_size()); coarse_total_boxes() = total base
@@ -1335,7 +1349,8 @@ class AmrSystem {
   friend class runtime::program::AmrProgramContext;
   /// Private DSO seam: only the generated AmrProgramContext may install the post-publication
   /// prepared-history remap boundary. It is intentionally absent from the public facade surface.
-  POPS_EXPORT void install_program_history_remap_accepted(std::function<void()> refresh);
+  POPS_EXPORT void install_program_history_remap_accepted(
+      std::function<void(const runtime::program::AmrProgramHistoryRemapDescriptor&)> refresh);
   std::vector<std::string> prepare_topology_field_order(
       std::string_view reason, const runtime::multiblock::BoundaryEvaluationPoint& accepted_point);
   std::vector<std::vector<std::string>> rematerialize_fields_after_topology_change(

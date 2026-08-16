@@ -161,7 +161,9 @@ void install(std::function<void(double)> step, std::shared_ptr<AmrProgramContext
     facade_->install_program_hierarchy_refresh(
         [owner = keep_alive]() { owner->refresh_accepted_hierarchy_state_(); });
   facade_->install_program_history_remap_accepted(
-      [owner = keep_alive]() { owner->refresh_accepted_hierarchy_state_after_remap_(); });
+      [owner = keep_alive](const AmrProgramHistoryRemapDescriptor& descriptor) {
+        owner->refresh_accepted_hierarchy_state_after_remap_(descriptor);
+      });
   facade_->install_program_restart_hooks(
       [owner = keep_alive]() { owner->preflight_restart_regrid_(); },
       [owner = keep_alive]() { owner->restart_regrid_(); },

@@ -129,11 +129,26 @@ struct QuadraticInterpolationTransfer {
   Box<Dim> destination{};
   ::pops::amr::RefinementRatio<Dim> ratio{};
   ::pops::amr::transfer::IndexMapping<Dim> mapping{};
+  Box<Dim> sample_domain{};
 
   POPS_HD void operator()(const Index<Dim>& fine_index) const {
     Index<Dim> parent{};
     Index<Dim> child{};
-    ::pops::amr::transfer::detail::fine_parent_and_child(fine_index, ratio, mapping, parent, child);
+    Index<Dim> sample = fine_index;
+    if (!sample_domain.empty()) {
+      for (int axis = 0; axis < Dim; ++axis) {
+        const int lo = sample_domain.lo[axis];
+        const int hi = sample_domain.hi[axis];
+        const int length = hi - lo + 1;
+        if (length <= 0)
+          continue;
+        while (sample[axis] < lo)
+          sample[axis] += length;
+        while (sample[axis] > hi)
+          sample[axis] -= length;
+      }
+    }
+    ::pops::amr::transfer::detail::fine_parent_and_child(sample, ratio, mapping, parent, child);
     Real weights[Dim][3]{};
     for (int axis = 0; axis < Dim; ++axis) {
       const Real s =
@@ -157,9 +172,31 @@ struct QuadraticInterpolationTransfer {
         weight *= weights[axis][stencil];
       }
       if (weight != Real(0))
-        value += weight * coarse(source_index, 0);
+        value += weight * coarse_sample_(source_index);
     }
     fine(fine_index, 0) = value;
+  }
+
+  // Quadratic C/F interpolation at a domain face needs the parent cell two
+  // interiors away.  A one-ghost parent allocation does not contain that
+  // sample; wrap through the valid interior so a periodic coarse level supplies
+  // the same value its halo would have carried with two ghosts.
+  POPS_HD Real coarse_sample_(Index<Dim> index) const {
+    for (int axis = 0; axis < Dim; ++axis) {
+      const int allocated_lo = coarse.origin[axis];
+      const int allocated_extent = static_cast<int>(coarse.extents[axis]);
+      if (index[axis] >= allocated_lo && index[axis] < allocated_lo + allocated_extent)
+        continue;
+      const int valid_lo = allocated_lo + 1;
+      const int valid_len = allocated_extent - 2;
+      if (valid_len <= 0)
+        continue;
+      int shifted = (index[axis] - valid_lo) % valid_len;
+      if (shifted < 0)
+        shifted += valid_len;
+      index[axis] = valid_lo + shifted;
+    }
+    return coarse(index, 0);
   }
 };
 
@@ -188,6 +225,7 @@ struct FluxMismatchTransfer {
   Real inverse_spacing_squared = Real(0);
   Real fine_face_weight = Real(0);
   Real sign = Real(1);
+  Index<Dim> geometry_shift{};
 
   POPS_HD void operator()(const Index<Dim>& coarse_index) const {
     if (covered(coarse_index, 0) >= Real(0.5))
@@ -197,9 +235,12 @@ struct FluxMismatchTransfer {
     parent_neighbor[normal_axis] -= child_side;
     const Real coarse_face = parent(coarse_index, 0) - parent(parent_neighbor, 0);
 
+    Index<Dim> geometry = coarse_index;
+    for (int axis = 0; axis < Dim; ++axis)
+      geometry[axis] += geometry_shift[axis];
     Index<Dim> fine_inner{};
     for (int axis = 0; axis < Dim; ++axis)
-      fine_inner[axis] = coarse_index[axis] * ratio[axis];
+      fine_inner[axis] = geometry[axis] * ratio[axis];
     fine_inner[normal_axis] += child_side < 0 ? ratio[normal_axis] : -1;
     Index<Dim> fine_ghost = fine_inner;
     fine_ghost[normal_axis] += child_side;

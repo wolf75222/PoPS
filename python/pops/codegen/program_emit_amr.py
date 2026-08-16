@@ -189,6 +189,14 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
                             expression = {(value.id, next_basis): {0: Fraction(1)}}
                             next_basis += 1
                             basis_count += 1
+                        elif value.op == "history":
+                            # A history read is a second live FluxExpression basis at the AMR
+                            # commit boundary.  It was authored in an earlier accepted step, but
+                            # native rehydration gives it a fresh attempt-local identity; budget
+                            # it alongside the current RHS rather than treating it as a zero.
+                            expression = environment.get(
+                                ("history_flux", value.attrs["history"]), {}
+                            )
                         elif value.op == "linear_combine":
                             expression, combine_maximum = _flux_expression_linear_combine(
                                 (
@@ -202,6 +210,8 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
                             maximum_terms = max(maximum_terms, combine_maximum)
                         elif value.op in alias_input and len(value.inputs) > alias_input[value.op]:
                             expression = environment.get(value.inputs[alias_input[value.op]].id, {})
+                        if value.op == "store_history":
+                            environment[("history_flux", value.attrs["history"])] = expression
                     environment[value.id] = expression
                     next_paths.append(
                         (environment, basis_count, note(expression, maximum_terms), next_basis)
@@ -211,11 +221,80 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
 
         paths = execute(program._values, paths)
         return (
-            max((basis_count for _, basis_count, _, _ in paths), default=0),
+            max(
+                (
+                    max(
+                        basis_count,
+                        max(
+                            (len(expression) for expression in environment.values()
+                             if isinstance(expression, dict)),
+                            default=0,
+                        ),
+                    )
+                    for environment, basis_count, _, _ in paths
+                ),
+                default=0,
+            ),
             max((maximum_terms for _, _, maximum_terms, _ in paths), default=0),
         )
 
-    return tuple(analyze(block) for block in ordered_blocks)
+    budgets = [analyze(block) for block in ordered_blocks]
+
+    # A retained flux history is materialized by native code in a later attempt, so it cannot be
+    # counted as an authored RHS occurrence in the single-step walk above.  Distinct live sources
+    # and retained lag samples coexist during rehydration, so both sides contribute to the finite
+    # aggregate bound.
+    def history_flux_blocks(
+        values: Any,
+        stores: dict[tuple[Any, str], Any],
+        reads: set[tuple[Any, str]],
+    ) -> None:
+        for value in values:
+            if value.op == "store_history" and value.inputs:
+                stores[(value.block, value.attrs["history"])] = value.inputs[0]
+            elif value.op == "history":
+                reads.add((value.block, value.attrs["history"]))
+            for key in (
+                "cond_block", "body_block", "apply_block", "residual_block", "true_block", "false_block"
+            ):
+                nested = value.attrs.get(key)
+                if isinstance(nested, (list, tuple)):
+                    history_flux_blocks(nested, stores, reads)
+
+    stored_histories: dict[tuple[Any, str], Any] = {}
+    read_histories: set[tuple[Any, str]] = set()
+    history_flux_blocks(program._values, stored_histories, read_histories)
+    for index, block in enumerate(ordered_blocks):
+        stored = {name: source for (candidate, name), source in stored_histories.items()
+                  if candidate == block}
+        read = {name for candidate, name in read_histories if candidate == block}
+        if stored.keys() & read:
+            bases, terms = budgets[index]
+            # The current RHS and its retained lag are independently authenticated at the AMR
+            # attempt boundary.  A source-only RHS still needs that pair: whether it contributes
+            # spatial faces is a runtime sample fact, not permission to erase the exact temporal
+            # basis bound from the frozen AB2 program.
+            retained = 0
+            live = 0
+            for name, source in stored.items():
+                if name not in read:
+                    continue
+                # The frozen persistence policy is the authoritative retained depth.  The
+                # source may be an aliased/combined expression, so count every distinct RHS
+                # ancestor conservatively before multiplying by the readable lag window.
+                def source_bases(value: Any, seen: set[int]) -> int:
+                    if value.id in seen:
+                        return 0
+                    seen.add(value.id)
+                    if value.op == "rhs":
+                        return 1
+                    return sum(source_bases(input_value, seen) for input_value in value.inputs)
+
+                source_count = max(1, source_bases(source, set()))
+                live += source_count
+                retained += source_count * int(program._histories[name])
+            budgets[index] = (max(bases, live, 1) + retained, max(terms, 1))
+    return tuple(budgets)
 
 
 def _emit_flux_expression_budget(program: Any) -> str:
@@ -253,7 +332,7 @@ def _emit_flux_expression_budget(program: Any) -> str:
 
 
 def _emit_checkpoint_shape_metadata(program: Any) -> str:
-    """Emit the frozen POPSAND3 shape before any native prelude allocation."""
+    """Emit the frozen POPSAND4 shape before any native prelude allocation."""
     block_idx = program._block_indices()
     temporal = program.temporal_manifest()
     history_manifest = {row["name"]: row for row in temporal["histories"]}

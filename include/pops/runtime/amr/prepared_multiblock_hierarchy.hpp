@@ -28,6 +28,11 @@
 #include <utility>
 #include <vector>
 
+namespace pops {
+template <int Dim>
+class AmrSystem;
+}
+
 namespace pops::runtime::amr {
 
 /// Prepared multi-block ownership around one canonical AMR topology.
@@ -52,6 +57,19 @@ class PreparedMultiBlockAmrHierarchy {
   using interface_publication_type = runtime::multiblock::InterfaceFluxFragmentPublication;
   using interface_installer_type = std::function<void(interface_scheduler_type&)>;
 
+ private:
+  // Only the owning AmrSystem may turn a decoded accepted Program state into a carrier
+  // requalification request.  Keep the archived bytes owned here: the requalification can cross
+  // collective preparation and must never borrow storage from a transient decode image.
+  struct RestartAuthority {
+    std::string spatial_contract;
+    std::uint64_t topology_epoch = 0;
+    std::uint64_t materialization_generation = 0;
+  };
+
+  friend class ::pops::AmrSystem<Dim>;
+
+ public:
   struct AdditionalBlock {
     std::string identity;
     std::vector<field_type> levels;
@@ -825,6 +843,39 @@ class PreparedMultiBlockAmrHierarchy {
       local_error = std::current_exception();
     }
     collectively_rethrow_(local_error, "prepared multi-block AMR restore failed collectively");
+    execute_prepared_restore(*prepared);
+    publish_prepared_restore(std::move(*prepared));
+  }
+
+  /// Requalify this retained physical carrier for one authenticated restart authority.
+  ///
+  /// The caller supplies bytes decoded from an accepted Program image, but those bytes are never
+  /// trusted as a description of topology.  We derive the spatial contract from the retained live
+  /// hierarchy and spatial identity under the requested generations, compare it byte-for-byte to
+  /// the accepted authority, then drive the normal PreparedRestore publication protocol.
+  void requalify_restart_authority_collectively(const RestartAuthority& authority) {
+    std::optional<PreparedRestore> prepared;
+    std::exception_ptr local_error;
+    try {
+      Snapshot candidate = snapshot();
+      candidate.primary.topology_epoch = authority.topology_epoch;
+      candidate.primary.materialization_generation = authority.materialization_generation;
+      candidate.primary.exact_spatial_contract = detail::exact_runtime_spatial_contract(
+          primary_->spatial_identity(), candidate.primary.hierarchy,
+          candidate.primary.topology_epoch, candidate.primary.materialization_generation);
+      if (candidate.primary.exact_spatial_contract != authority.spatial_contract)
+        throw std::invalid_argument(
+            "prepared multi-block AMR restart authority does not authenticate the rebuilt "
+            "hierarchy");
+      candidate.exact_collective_contract = exact_hierarchy_contract_(
+          candidate.primary.hierarchy, candidate.primary.exact_spatial_contract, primary_identity_,
+          candidate.additional, lane_contract_identity_);
+      prepared.emplace(prepare_restore(candidate));
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    collectively_rethrow_(
+        local_error, "prepared multi-block AMR restart authority preparation failed collectively");
     execute_prepared_restore(*prepared);
     publish_prepared_restore(std::move(*prepared));
   }

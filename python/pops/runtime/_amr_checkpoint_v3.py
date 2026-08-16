@@ -1308,6 +1308,11 @@ def apply_v3(owner, sim, prepared):
                 )
         sim.rebuild_hierarchy(prepared.boxes, target_owner_ranks)
 
+    # The recorded hierarchy is now live but its temporary rebuild epoch is not an authority for
+    # the accepted Program image.  Publish the checkpoint epoch before materializing or decoding
+    # any accepted-state carrier; the enclosing native restart transaction still owns rollback.
+    sim.restore_checkpoint_counters(prepared.regrid_count, prepared.topology_epoch)
+
     program_state = prepared.program_state
     if rank_topology_changed:
         if prepared.source_program_state:
@@ -1395,8 +1400,6 @@ def apply_v3(owner, sim, prepared):
     # exact accepted semantic state before exposing the runtime again.
     sim.restore_checkpoint_accepted_state(program_state)
     from pops.runtime._amr_checkpoint_contract import validate_restored_contract
-
-    sim.restore_checkpoint_counters(prepared.regrid_count, prepared.topology_epoch)
 
     # (8) Clock last: the next cadence decision is identical to the uninterrupted run.
     restore_program_cadence(

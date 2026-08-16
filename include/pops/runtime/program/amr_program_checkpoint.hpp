@@ -65,6 +65,29 @@ struct AmrProgramHistorySlotProvenance {
                          const AmrProgramHistorySlotProvenance&) = default;
 };
 
+/// One deferred, direct-child variable-step AB2 read.  It is accepted state, not an attempt-local
+/// scratch: a checkpoint immediately after regrid must reproduce the same first child lag.
+struct AmrProgramPendingHistoryRemap {
+  std::string key;
+  int parent_level = -1;
+  int child_level = -1;
+  std::uint64_t prior_topology_epoch = 0;
+  std::uint64_t prior_materialization_generation = 0;
+  std::uint64_t published_topology_epoch = 0;
+  std::uint64_t published_materialization_generation = 0;
+  std::int64_t accepted_macro_step = -1;
+  /// Exact IntegralOnly child steps per parent source interval.  This is wire authority, never
+  /// inferred from binary dt values.
+  std::int64_t temporal_numerator = 0;
+  std::int64_t temporal_denominator = 0;
+  double source_dt = 0.0;
+  double target_dt = 0.0;
+  bool consumed = false;
+
+  friend bool operator==(const AmrProgramPendingHistoryRemap&,
+                         const AmrProgramPendingHistoryRemap&) = default;
+};
+
 struct AmrProgramSynchronizationEvent {
   int parent_level = -1;
   int child_level = -1;
@@ -89,6 +112,11 @@ struct AmrProgramAcceptedState {
   std::map<std::string, std::int64_t> logical_clock_ticks;
   std::vector<AmrProgramHistoryDescriptor> histories;
   std::vector<AmrProgramHistorySlotProvenance> history_slots;
+  std::vector<AmrProgramPendingHistoryRemap> pending_history_remaps;
+  /// Opaque at the facade boundary but structured by AmrProgramContext: every level-qualified
+  /// history slot's exact FluxBasis samples and rational coefficients.  This deliberately lives
+  /// beside (not inside) the numerical history image, whose MPI rematerialization is independent.
+  std::vector<std::uint8_t> history_flux_payload;
   CellTemporalPartitionAcceptedState temporal_partition;
   std::vector<std::uint8_t> tagging_hysteresis_state;
   /// Exact prepared authorities which bounded and coupled the accepted face ledgers.
@@ -102,7 +130,7 @@ struct AmrProgramAcceptedState {
 
 namespace checkpoint_detail {
 
-inline constexpr std::array<std::uint8_t, 8> kMagic{'P', 'O', 'P', 'S', 'A', 'N', 'D', '3'};
+inline constexpr std::array<std::uint8_t, 8> kMagic{'P', 'O', 'P', 'S', 'A', 'N', 'D', '4'};
 
 class Writer {
  public:
@@ -145,7 +173,7 @@ class Writer {
 
 /// Allocation-free twin of Writer used by the artifact checkpoint-capacity preflight.  Keeping the
 /// primitive surface identical lets the binary encoder itself remain the only wire-schema
-/// authority: a field added to POPSAND3 changes both serialization and capacity accounting in the
+/// authority: a field added to POPSAND4 changes both serialization and capacity accounting in the
 /// same function.
 class CountingWriter {
  public:
@@ -286,6 +314,9 @@ inline constexpr std::size_t kMinHistorySlotBytes = 6 * kEncodedScalarBytes;
 inline constexpr std::size_t kMinTemporalPartitionRecordBytes = 4 * kEncodedScalarBytes;
 inline constexpr std::size_t kMinInterfaceFragmentBytes = 32 * kEncodedScalarBytes;
 inline constexpr std::size_t kMinSynchronizationEventBytes = 9 * kEncodedScalarBytes;
+// Pending remap: key length plus two i32 words (encoded as i64), four u64 words, three i64
+// words, two reals, and its consumed tag.  Keep this in wire units, not sizeof(int).
+inline constexpr std::size_t kMinPendingHistoryRemapBytes = 13 * kEncodedScalarBytes;
 
 template <int Dim>
 inline constexpr std::size_t kMinFaceFragmentBytes =
@@ -587,6 +618,83 @@ void validate_state(const AmrProgramAcceptedState<Dim>& state) {
   }
   if (slot_index != state.history_slots.size())
     throw std::invalid_argument("exact AMR Program checkpoint has foreign history-slot provenance");
+  std::string previous_pending;
+  for (const auto& pending : state.pending_history_remaps) {
+    constexpr std::string_view history_prefix = "pops.amr.level-history.v1/";
+    const auto parse_pending_key = [&]() -> std::pair<int, std::string_view> {
+      if (!std::string_view(pending.key).starts_with(history_prefix))
+        throw std::invalid_argument(
+            "exact AMR Program checkpoint pending history remap has a foreign key");
+      const std::string_view suffix = std::string_view(pending.key).substr(history_prefix.size());
+      const std::size_t slash = suffix.find('/');
+      const std::size_t colon = suffix.find(':', slash == std::string_view::npos ? 0 : slash);
+      if (slash == std::string_view::npos || colon == std::string_view::npos)
+        throw std::invalid_argument(
+            "exact AMR Program checkpoint pending history remap key is malformed");
+      const auto parse_decimal = [](std::string_view text) -> std::uint64_t {
+        if (text.empty())
+          throw std::invalid_argument(
+              "exact AMR Program checkpoint pending history remap key has an empty decimal field");
+        std::uint64_t result = 0;
+        for (const char character : text) {
+          if (character < '0' || character > '9' ||
+              result > (std::numeric_limits<std::uint64_t>::max() -
+                        static_cast<std::uint64_t>(character - '0')) /
+                           10)
+            throw std::invalid_argument(
+                "exact AMR Program checkpoint pending history remap key has an invalid decimal "
+                "field");
+          result = result * 10 + static_cast<std::uint64_t>(character - '0');
+        }
+        return result;
+      };
+      const std::uint64_t level = parse_decimal(suffix.substr(0, slash));
+      const std::uint64_t name_size = parse_decimal(suffix.substr(slash + 1, colon - slash - 1));
+      const std::string_view name = suffix.substr(colon + 1);
+      if (level > static_cast<std::uint64_t>(std::numeric_limits<int>::max()) ||
+          name_size != name.size())
+        throw std::invalid_argument(
+            "exact AMR Program checkpoint pending history remap key is not canonical");
+      return {static_cast<int>(level), name};
+    };
+    const auto [key_level, key_name] = parse_pending_key();
+    const auto history =
+        std::find_if(state.histories.begin(), state.histories.end(),
+                     [&](const AmrProgramHistoryDescriptor& row) { return row.name == key_name; });
+    const auto lag_slot = std::find_if(state.history_slots.begin(), state.history_slots.end(),
+                                       [&](const AmrProgramHistorySlotProvenance& slot) {
+                                         return slot.name == key_name &&
+                                                slot.level == pending.child_level && slot.slot == 1;
+                                       });
+    if (pending.key.empty() || (!previous_pending.empty() && previous_pending >= pending.key) ||
+        pending.parent_level < 0 || pending.parent_level == std::numeric_limits<int>::max() ||
+        pending.child_level != pending.parent_level + 1 ||
+        pending.child_level >= static_cast<int>(state.level_clocks.size()) || pending.consumed ||
+        key_level != pending.child_level || history == state.histories.end() ||
+        history->depth != 2 || lag_slot == state.history_slots.end() || !lag_slot->initialized ||
+        lag_slot->fill_count != 2 || lag_slot->outgoing_dt != pending.source_dt ||
+        pending.accepted_macro_step !=
+            state.level_clocks[static_cast<std::size_t>(pending.child_level)].macro_step ||
+        pending.prior_topology_epoch == std::numeric_limits<std::uint64_t>::max() ||
+        pending.prior_materialization_generation == std::numeric_limits<std::uint64_t>::max() ||
+        pending.prior_topology_epoch + 1 != pending.published_topology_epoch ||
+        pending.prior_materialization_generation + 1 !=
+            pending.published_materialization_generation ||
+        pending.published_topology_epoch != state.topology_epoch ||
+        pending.published_materialization_generation != state.materialization_generation ||
+        pending.accepted_macro_step < 0 || pending.temporal_denominator != 1 ||
+        (pending.temporal_numerator != 1 && pending.temporal_numerator != 2) ||
+        !std::isfinite(pending.source_dt) || !std::isfinite(pending.target_dt) ||
+        !(pending.source_dt > 0.0) || !(pending.target_dt > 0.0) ||
+        pending.target_dt != pending.source_dt / static_cast<double>(pending.temporal_numerator))
+      throw std::invalid_argument(
+          "exact AMR Program checkpoint has an invalid pending history remap");
+    previous_pending = pending.key;
+  }
+  if (!state.history_flux_payload.empty() &&
+      state.history_flux_payload.size() < sizeof(std::uint64_t))
+    throw std::invalid_argument(
+        "exact AMR Program checkpoint has a truncated history-flux payload");
 
   for (int axis = 0; axis < Dim; ++axis) {
     const auto validate_fragments = [&](const auto& fragments, std::string_view family) {
@@ -671,6 +779,23 @@ void write_state(Output& out, const AmrProgramAcceptedState<Dim>& state) {
     out.u64(slot.initialized ? 1U : 0U);
     out.i32(slot.fill_count);
   }
+  out.size(state.pending_history_remaps.size());
+  for (const auto& pending : state.pending_history_remaps) {
+    out.string(pending.key);
+    out.i32(pending.parent_level);
+    out.i32(pending.child_level);
+    out.u64(pending.prior_topology_epoch);
+    out.u64(pending.prior_materialization_generation);
+    out.u64(pending.published_topology_epoch);
+    out.u64(pending.published_materialization_generation);
+    out.i64(pending.accepted_macro_step);
+    out.i64(pending.temporal_numerator);
+    out.i64(pending.temporal_denominator);
+    out.real(pending.source_dt);
+    out.real(pending.target_dt);
+    out.u64(pending.consumed ? 1U : 0U);
+  }
+  out.bytes(state.history_flux_payload);
   write_temporal_partition(out, state.temporal_partition);
   out.bytes(state.tagging_hysteresis_state);
   out.string(state.flux_budget_contract);
@@ -738,7 +863,7 @@ std::size_t serialized_amr_program_accepted_state_size(const AmrProgramAcceptedS
   return out.count();
 }
 
-/// Artifact-derived maximum POPSAND3 shape.  It carries character and term counts only: computing a
+/// Artifact-derived maximum POPSAND4 shape.  It carries character and term counts only: computing a
 /// resource ceiling must never first allocate the potentially large scientific vectors it is meant
 /// to bound.
 template <int Dim>
@@ -750,6 +875,9 @@ struct AmrProgramAcceptedStateCapacity {
   std::string temporal_provider_identity;
   std::size_t temporal_cell_count = 0;
   std::size_t tagging_hysteresis_bytes = 0;
+  std::size_t history_flux_payload_bytes = 0;
+  std::size_t pending_history_remap_count = 0;
+  std::size_t pending_history_remap_key_characters = 0;
   std::size_t flux_budget_contract_characters = 0;
   std::size_t coupling_contract_characters = 0;
   std::array<std::size_t, Dim> face_fragment_counts{};
@@ -817,6 +945,18 @@ std::size_t serialized_amr_program_accepted_state_capacity(
       throw std::length_error("AMR Program checkpoint history name capacity exceeds size_t");
     out.repeated_bytes(count, checkpoint_detail::kMinHistorySlotBytes + history.name.size());
   }
+  out.size(capacity.pending_history_remap_count);
+  if (capacity.pending_history_remap_count != 0) {
+    if (capacity.pending_history_remap_key_characters == 0)
+      throw std::invalid_argument("AMR Program checkpoint capacity has empty pending-remap keys");
+    constexpr std::size_t fixed = 2 * checkpoint_detail::kEncodedScalarBytes +
+                                  4 * sizeof(std::uint64_t) + 3 * sizeof(std::int64_t) +
+                                  2 * sizeof(double) + sizeof(std::uint64_t);
+    out.repeated_bytes(capacity.pending_history_remap_count,
+                       checkpoint_detail::kEncodedScalarBytes +
+                           capacity.pending_history_remap_key_characters + fixed);
+  }
+  out.bytes_size(capacity.history_flux_payload_bytes);
   out.u64(0);
   out.string_size(capacity.temporal_provider_identity.size());
   out.u64(0);
@@ -915,6 +1055,26 @@ AmrProgramAcceptedState<Dim> deserialize_amr_program_accepted_state(
     slot.initialized = initialized != 0;
     slot.fill_count = in.i32();
   }
+  state.pending_history_remaps.resize(in.size(checkpoint_detail::kMinPendingHistoryRemapBytes));
+  for (auto& pending : state.pending_history_remaps) {
+    pending.key = in.string();
+    pending.parent_level = in.i32();
+    pending.child_level = in.i32();
+    pending.prior_topology_epoch = in.u64();
+    pending.prior_materialization_generation = in.u64();
+    pending.published_topology_epoch = in.u64();
+    pending.published_materialization_generation = in.u64();
+    pending.accepted_macro_step = in.i64();
+    pending.temporal_numerator = in.i64();
+    pending.temporal_denominator = in.i64();
+    pending.source_dt = in.real();
+    pending.target_dt = in.real();
+    const std::uint64_t consumed = in.u64();
+    if (consumed > 1U)
+      throw std::runtime_error("invalid exact AMR Program checkpoint: invalid pending history tag");
+    pending.consumed = consumed != 0;
+  }
+  state.history_flux_payload = in.bytes();
   state.temporal_partition = checkpoint_detail::read_temporal_partition(in);
   state.tagging_hysteresis_state = in.bytes();
   state.flux_budget_contract = in.string();

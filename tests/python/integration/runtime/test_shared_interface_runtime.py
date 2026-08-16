@@ -623,7 +623,7 @@ def _shared_interface_accepted_image(runtime):
     return {
         "time": float(runtime.time()),
         "step": int(runtime.macro_step()),
-        "boxes": tuple(tuple(int(value) for value in row) for row in runtime.patch_boxes()),
+        "boxes": tuple(runtime.patch_boxes()),
         "regrid_count": int(native.checkpoint_regrid_count()),
         "topology_epoch": int(native.checkpoint_topology_epoch()),
         "program_state": bytes(native.program_accepted_state()),
@@ -1266,17 +1266,21 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
     )
 
     assert runtime.n_levels() == 3
-    fine_boxes = tuple(row for row in runtime.patch_boxes() if int(row[0]) == 1)
+    fine_boxes = tuple(
+        (lower, upper)
+        for box_level, lower, upper in runtime.patch_boxes()
+        if int(box_level) == 1
+    )
     assert fine_boxes
     assert any(
-        int(row[1]) == 0 and int(row[2]) == 0 and int(row[4]) == 15
-        for row in fine_boxes
+        int(lower[0]) == 0 and int(lower[1]) == 0 and int(upper[1]) == 15
+        for lower, upper in fine_boxes
     )
     assert any(
-        int(row[3]) == 15 and int(row[2]) == 0 and int(row[4]) == 15
-        for row in fine_boxes
+        int(upper[0]) == 15 and int(lower[1]) == 0 and int(upper[1]) == 15
+        for lower, upper in fine_boxes
     )
-    assert not any(int(row[1]) <= 7 <= int(row[3]) for row in fine_boxes)
+    assert not any(int(lower[0]) <= 7 <= int(upper[0]) for lower, upper in fine_boxes)
     initial_left = runtime.integral("tracer")
     initial_right = runtime.integral("right")
     initial_integral = initial_left + initial_right
