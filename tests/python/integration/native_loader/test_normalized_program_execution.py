@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from fractions import Fraction
+import os
 from pathlib import Path
 from typing import Any
 
@@ -16,10 +17,12 @@ from pops.physics._facade import Model
 from pops.problem import Case
 from pops.solvers import DenseLU
 from pops.time import (
+    Clock,
     FailRun,
     LocalLinear,
     Program,
     ProgramGraph,
+    SampleAndHold,
     StagePoint,
     TimePoint,
 )
@@ -267,3 +270,206 @@ def test_manual_preset_ssprk2_and_imex_execute_through_same_program_graph_pipeli
         assert result.time == pytest.approx(dt, rel=0.0, abs=1.0e-15)
         assert result.macro_step == 1
         assert np.isfinite(result.state).all()
+
+
+_FAST_RATE = -0.5
+_SLOW_RATE = -0.25
+_HOLD_STRIDE = 4
+_HOLD_DT = 0.1
+_HOLD_CELLS = 4
+
+
+def _select_installed_native_dimension() -> int:
+    from pops._native_selector import select_native_dimension, selected_native_dimension
+
+    selected = selected_native_dimension()
+    if selected is not None:
+        return selected
+    configured = os.environ.get("POPS_NATIVE_DIM")
+    if configured in {"1", "2", "3"}:
+        return select_native_dimension(int(configured)).__native_dimension__
+    import json
+
+    import pops
+
+    manifest = Path(pops.__file__).resolve().parent / "_native" / "variants.json"
+    if not manifest.is_file():
+        require_native_or_skip(
+            "no installed native variant manifest", optional_skip=pytest.skip)
+        raise AssertionError("require_native_or_skip must not return")
+    rows = json.loads(manifest.read_text(encoding="utf-8")).get("variants", [])
+    dims = sorted({int(row["dimension"]) for row in rows})
+    if len(dims) != 1:
+        require_native_or_skip(
+            "need POPS_NATIVE_DIM or exactly one installed native variant",
+            optional_skip=pytest.skip,
+        )
+        raise AssertionError("require_native_or_skip must not return")
+    return select_native_dimension(dims[0]).__native_dimension__
+
+
+def _ranked_axes(dimension: int) -> tuple[str, ...]:
+    return ("x", "y", "z")[:dimension]
+
+
+def _decay_model(name: str, dimension: int) -> Any:
+    model = Model(name)
+    (rho,) = model.conservative_vars("rho")
+    model.primitive_vars(rho)
+    model.conservative_from([rho])
+    zero = [0.0 * rho]
+    model.flux(**{axis: zero for axis in _ranked_axes(dimension)})
+    model.eigenvalues(**{axis: zero for axis in _ranked_axes(dimension)})
+    return model
+
+
+def _state_handle(case: Any, block_name: str, model: Any) -> Any:
+    block = case.block(block_name, model)
+    declaration = next(
+        record for record in model.declaration_index().records() if record.kind == "state"
+    )
+    return block[declaration]
+
+
+def _hold_catchup_program(fast_handle: Any, slow_handle: Any, *, count: int) -> Program:
+    program = Program("two_species_hold_catchup")
+    fast = program.state(fast_handle)
+    slow = program.state(slow_handle)
+    child = Clock("fast", owner=program.owner_path)
+    child_state = program.state(fast_handle, clock=child)
+    fast_on_child = program.synchronize(
+        fast.n, at=TimePoint(child), relation=SampleAndHold(), name="fast_to_child")
+    program.synchronize(
+        slow.n, at=TimePoint(child), relation=SampleAndHold(), name="slow_held_on_fast")
+
+    def _fast_tick(builder, value):
+        return builder.value(
+            "fast_tick",
+            value + builder.dt * (_FAST_RATE * value),
+            at=child_state.next.point,
+        )
+
+    advanced = program.subcycle(
+        fast_on_child,
+        clock=child,
+        within=program.clock,
+        count=count,
+        body_fn=_fast_tick,
+        name="fast_ticks",
+    )
+    program.commit(
+        fast.next,
+        program.synchronize(
+            advanced, at=fast.next.point, relation=SampleAndHold(), name="fast_to_macro"),
+    )
+    program.commit(
+        slow.next,
+        program.value(
+            "slow_catchup",
+            slow.n + program.dt * (_SLOW_RATE * slow.n),
+            at=slow.next.point,
+        ),
+    )
+    return program
+
+
+def _uniform_system(dimension: int, compiled_fast: Any, compiled_slow: Any):
+    import pops.runtime._engine_descriptors as engine
+    from pops.numerics.reconstruction import FirstOrder
+    from pops.numerics.riemann import Rusanov
+    from pops.runtime._system import System
+
+    simulation = System(
+        shape=(_HOLD_CELLS,) * dimension,
+        lower=(0.0,) * dimension,
+        upper=(1.0,) * dimension,
+        periodicity=(True,) * dimension,
+    )
+    spatial = engine.Spatial(limiter=FirstOrder(), flux=Rusanov())
+    time = engine.Explicit(method="euler")
+    simulation._batch_native_packages = True
+    try:
+        simulation.add_equation("fast", compiled_fast, spatial=spatial, time=time)
+        simulation.add_equation("slow", compiled_slow, spatial=spatial, time=time)
+    finally:
+        simulation._batch_native_packages = False
+    simulation._commit_pending_native_packages()
+    return simulation
+
+
+def test_two_clock_hold_then_catchup_executes_on_uniform_system(tmp_path: Path) -> None:
+    """Prove frozen two-species hold-then-catch-up via Program clocks + subcycle + SampleAndHold."""
+    _require_native()
+    from pops.codegen._compile_drivers import compile_problem
+
+    dimension = _select_installed_native_dimension()
+    model = _decay_model("hold-catchup-model", dimension)
+    case = Case("hold-catchup-case")
+    fast_handle = _state_handle(case, "fast", model)
+    slow_handle = _state_handle(case, "slow", model)
+    program = _hold_catchup_program(fast_handle, slow_handle, count=_HOLD_STRIDE)
+
+    from pops.codegen.abi import module_header_signature
+    from pops.codegen.toolchain import pops_header_signature, pops_include
+
+    include = pops_include()
+    baked = module_header_signature()
+    if baked is not None and pops_header_signature(include) != baked:
+        require_native_or_skip(
+            "installed _pops header signature does not match pops_include(); "
+            "rebuild the native module against the current headers",
+            optional_skip=pytest.skip,
+        )
+    compiled = compile_problem(
+        so_path=str(tmp_path / "hold_catchup.so"),
+        model=model,
+        time=program,
+        include=include,
+        cxx=default_cxx(),
+        native_dimension=dimension,
+    )
+    compiled_fast = model.compile(
+        backend="production",
+        include=include,
+        cxx=default_cxx(),
+        consumer_owner_qid="hold-catchup-case/fast",
+    )
+    compiled_slow = model.compile(
+        backend="production",
+        include=include,
+        cxx=default_cxx(),
+        consumer_owner_qid="hold-catchup-case/slow",
+    )
+    initial = np.full((1,) + (_HOLD_CELLS,) * dimension, 2.0)
+    window = _HOLD_STRIDE * _HOLD_DT
+    expected_fast = initial * (1.0 + _FAST_RATE * _HOLD_DT) ** _HOLD_STRIDE
+    expected_slow = initial * (1.0 + _SLOW_RATE * window)
+    not_slow_subcycled = initial * (1.0 + _SLOW_RATE * _HOLD_DT) ** _HOLD_STRIDE
+
+    windowed = _uniform_system(dimension, compiled_fast, compiled_slow)
+    windowed.set_state("fast", initial)
+    windowed.set_state("slow", initial)
+    windowed.install_program(compiled.so_path)
+    windowed.step(window)
+    got_fast = np.asarray(windowed.get_state("fast"))
+    got_slow = np.asarray(windowed.get_state("slow"))
+    np.testing.assert_allclose(got_fast, expected_fast, rtol=0.0, atol=1.0e-13)
+    np.testing.assert_allclose(got_slow, expected_slow, rtol=0.0, atol=1.0e-13)
+    assert float(np.max(np.abs(got_slow - not_slow_subcycled))) > 1.0e-6
+    assert windowed.macro_step() == 1
+    assert windowed.time() == pytest.approx(window, rel=0.0, abs=1.0e-15)
+
+    held = _uniform_system(dimension, compiled_fast, compiled_slow)
+    held.set_state("fast", initial)
+    held.set_state("slow", initial)
+    held.set_program_cadence(1, _HOLD_STRIDE)
+    held.install_program(compiled.so_path)
+    for _ in range(_HOLD_STRIDE - 1):
+        held.step(_HOLD_DT)
+        np.testing.assert_allclose(np.asarray(held.get_state("fast")), initial, atol=0.0)
+        np.testing.assert_allclose(np.asarray(held.get_state("slow")), initial, atol=0.0)
+    held.step(_HOLD_DT)
+    np.testing.assert_allclose(np.asarray(held.get_state("fast")), expected_fast, rtol=0.0, atol=1.0e-13)
+    np.testing.assert_allclose(np.asarray(held.get_state("slow")), expected_slow, rtol=0.0, atol=1.0e-13)
+    assert held.macro_step() == _HOLD_STRIDE
+    assert held.time() == pytest.approx(window, rel=0.0, abs=1.0e-15)

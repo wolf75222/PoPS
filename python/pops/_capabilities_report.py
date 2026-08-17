@@ -810,7 +810,11 @@ def _support_rows(flags: Any, source: Any) -> list:
             platform="host",
             flags=flags,
             flag="supports_stride",
-            limitation="real cell stride is carried only by the production/native route",
+            limitation=(
+                "production ABI stores integer stride; hold-then-catch-up executes only via "
+                "Program clocks + subcycle + SampleAndHold on uniform System. "
+                "Explicit(stride=M) does not schedule. AMR compiled stride!=1 stays refused"
+            ),
             requested="strided cell access",
             available_route="backend='production'",
             alternative="compile with backend='production'",

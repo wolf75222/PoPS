@@ -5,7 +5,7 @@ from fractions import Fraction
 
 import pytest
 
-from typed_program_support import typed_state
+from typed_program_support import state_refs, typed_state
 
 from pops.time import Program, SampleAndHold
 from pops.numerics.terms import Flux
@@ -144,6 +144,62 @@ def test_clock_schedule_refuses_an_unrelated_cross_clock_without_an_execution_re
 
     with pytest.raises(ValueError, match="has no subcycle relation"):
         program.temporal_manifest()
+
+
+def _two_species_hold_catchup_program(*, count: int = 4) -> Program:
+    """Fast child clock + slow parent clock, SampleAndHold both ways, FE on each clock."""
+    program = Program("two_species_hold_catchup")
+    fast = typed_state(program, "fast", state_name="U")
+    slow = typed_state(program, "slow", state_name="U")
+    child = Clock("fast", owner=program.owner_path)
+    fast_on_child = program.synchronize(
+        fast.n, at=TimePoint(child), relation=SampleAndHold(), name="fast_to_child")
+    program.synchronize(
+        slow.n, at=TimePoint(child), relation=SampleAndHold(), name="slow_held_on_fast")
+    fast_block, fast_decl = state_refs(program, "fast", state_name="U")
+    child_state = program.state(fast_block[fast_decl], clock=child)
+
+    def _fast_tick(builder, value):
+        return builder.value(
+            "fast_tick", value + builder.dt * (-0.5 * value), at=child_state.next.point)
+
+    advanced = program.subcycle(
+        fast_on_child, clock=child, within=program.clock, count=count,
+        body_fn=_fast_tick, name="fast_ticks")
+    program.commit(
+        fast.next,
+        program.synchronize(
+            advanced, at=fast.next.point, relation=SampleAndHold(), name="fast_to_macro"))
+    program.commit(
+        slow.next,
+        program.value(
+            "slow_catchup", slow.n + program.dt * (-0.25 * slow.n), at=slow.next.point))
+    return program
+
+
+def test_two_species_cross_clock_read_without_synchronize_fails_closed():
+    program = Program("omit_sync")
+    slow = typed_state(program, "slow", state_name="U")
+    child = Clock("fast", owner=program.owner_path)
+    with pytest.raises(ValueError, match="explicit Program synchronization node"):
+        program.value("foreign", 1 * slow.n, at=TimePoint(child))
+    with pytest.raises(ValueError, match="synchronize it first"):
+        program.subcycle(
+            slow.n, clock=child, within=program.clock, count=2,
+            body_fn=lambda P, value: P.value("tick", 1 * value))
+
+
+def test_two_species_hold_catchup_lowers_to_native_clock_scopes():
+    program = _two_species_hold_catchup_program(count=4)
+    temporal = program.temporal_manifest()
+    assert {row["id"]: row["ticks_per_macro"] for row in temporal["clocks"]} == {
+        program.clock.qualified_id: 1,
+        next(row["id"] for row in temporal["clocks"] if row["id"] != program.clock.qualified_id): 4,
+    }
+    source = emit_cpp_program(program)
+    assert "ctx.subcycle_scope" in source
+    assert "synchronize_sample_and_hold" in source
+    assert "for (int i" in source and "< 4" in source
 
 
 def test_dt_dependent_values_and_commits_require_exact_output_points():
