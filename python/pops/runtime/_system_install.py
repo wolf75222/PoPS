@@ -57,6 +57,34 @@ def _reject_unpublished_newton_diagnostics(time: Any, *, where: str) -> None:
         )
 
 
+def _authored_modelspec_block_options(
+    name: Any, spec: Any, spatial: Any, time: Any, *, evolve: bool
+) -> dict[str, Any]:
+    """Capture ModelSpec inspect rows the compiled-package ABI does not retain."""
+    defaults = numerical_defaults_report()
+    physical = defaults["physical"]
+    newton = {
+        "max_iters": int(getattr(time, "newton_max_iters", NEWTON_DEFAULT_MAX_ITERS)),
+        "rel_tol": float(getattr(time, "newton_rel_tol", NEWTON_DEFAULT_REL_TOL)),
+        "abs_tol": float(getattr(time, "newton_abs_tol", NEWTON_DEFAULT_ABS_TOL)),
+        "fd_eps": float(getattr(time, "newton_fd_eps", NEWTON_DEFAULT_FD_EPS)),
+        "damping": float(getattr(time, "newton_damping", NEWTON_DEFAULT_DAMPING)),
+        "diagnostics": False,
+    }
+    return {
+        "name": name,
+        "transport": str(getattr(spec, "transport", "") or ""),
+        "time": str(getattr(time, "kind", "explicit") or "explicit"),
+        "evolve": evolve,
+        "newton": newton,
+        "positivity_floor": float(getattr(spatial, "positivity_floor", 0.0) or 0.0),
+        "physical": {
+            "cs2": float(getattr(spec, "cs2", physical["fluid_state_cs2"])),
+            "q": float(getattr(spec, "q", physical["charge_q"])),
+        },
+    }
+
+
 def _model_state_schema(model: Any, *, dimension: int) -> Any:
     """Resolve the exact role schema carried by one installed model, before coupling lowering."""
     from pops.physics.roles import StateSchema
@@ -118,6 +146,7 @@ class _SystemInstall(_System):
         evolve: bool = True,
         stride: Any = None,
         _bind_params: Any = None,
+        _from_modelspec: bool = False,
     ) -> Any:
         """Install a native model or one compiled production package.
 
@@ -163,6 +192,11 @@ class _SystemInstall(_System):
                     "roles are immutable artifact metadata"
                 )
             compiled = compile_modelspec_package(model, name=name, target="system")
+            records = dict(getattr(self, "_authored_block_options", {}))
+            records[name] = _authored_modelspec_block_options(
+                name, model, spatial, time, evolve=evolve
+            )
+            self._authored_block_options = records
             return self.add_equation(
                 name,
                 compiled,
@@ -172,6 +206,7 @@ class _SystemInstall(_System):
                 evolve=evolve,
                 stride=stride,
                 _bind_params=_bind_params,
+                _from_modelspec=True,
             )
 
         # The compiled-package ABI does not carry a per-block implicit mask. Reject it rather than
@@ -185,7 +220,7 @@ class _SystemInstall(_System):
             )
         # Same rules for the Newton options/diagnostics (IMEX): not carried by the .so ABI.
         # Non-default values would be ignored SILENTLY -> explicit rejection.
-        if (
+        if not _from_modelspec and (
             getattr(time, "newton_max_iters", NEWTON_DEFAULT_MAX_ITERS) != NEWTON_DEFAULT_MAX_ITERS
             or getattr(time, "newton_rel_tol", NEWTON_DEFAULT_REL_TOL) != NEWTON_DEFAULT_REL_TOL
             or getattr(time, "newton_abs_tol", NEWTON_DEFAULT_ABS_TOL) != NEWTON_DEFAULT_ABS_TOL

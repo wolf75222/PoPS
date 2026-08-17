@@ -194,7 +194,9 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
 
     def _commit_pending_native_packages(self) -> None:
         """Materialize staged CompiledModel packages once the low-level add_equation burst ends."""
-        if getattr(self, "_batch_native_packages", False) or not self._pending_native_packages:
+        if getattr(self, "_batch_native_packages", False) or not getattr(
+            self, "_pending_native_packages", 0
+        ):
             return
         from pops.runtime._amr_package_lane import ensure_system_native_package_lane
 
@@ -281,5 +283,8 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         # C++ setters are not yet frozen. The data / param / diagnostic passthrough is untouched.
         if attr in _FROZEN_STRUCTURAL and getattr(self, "_lifecycle", "assembling") != "assembling":
             raise _freeze_error(attr)
-        self._commit_pending_native_packages()
+        # Private names must raise AttributeError so getattr(self, "_x", default) works.
+        # Finalizing on every underscore lookup recurses through _pending_native_packages.
+        if not (isinstance(attr, str) and attr.startswith("_")):
+            self._commit_pending_native_packages()
         return getattr(self._s, attr)

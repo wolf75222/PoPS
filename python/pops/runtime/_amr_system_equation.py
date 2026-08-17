@@ -157,6 +157,11 @@ class _AmrSystemEquation(_AmrSystem):
             from pops.runtime._modelspec_compile import compile_modelspec_package
 
             compiled = compile_modelspec_package(model, name=name, target="amr_system")
+            elliptic = str(getattr(model, "elliptic", "") or "")
+            if elliptic in ("charge", "background", "gravity"):
+                slots = list(self._s.field_provider_slots())
+                if not slots:
+                    self.set_poisson()
             return self.add_equation(
                 name,
                 compiled,

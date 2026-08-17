@@ -16,8 +16,18 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from pops.codegen.program_emit_kernels import _has_runtime_param, _model_impl
+from pops.codegen.program_emit_kernels import _has_runtime_param
 from pops.codegen.program_models import ProgramModelGraph, model_for_node
+
+
+def _formula_carrier(model: Any) -> Any:
+    """Unwrap a board/facade to the formula carrier without requiring a Module ProviderPack.
+
+    Param routing only reads the assigned RuntimeParam table and coefficient expressions. Kernel
+    emission still authenticates the exact ProviderPack through ``program_emit_kernels``.
+    """
+    facade = getattr(model, "_dsl", model)
+    return getattr(facade, "_m", facade)
 
 
 _MODEL_PARAM_OPS = frozenset({
@@ -143,7 +153,7 @@ def program_param_entries(program: Any, model: Any) -> list:
         if v.op not in _MODEL_PARAM_OPS:
             continue
         emit_model = model_for_node(model, v)
-        impl = _model_impl(emit_model)
+        impl = _formula_carrier(emit_model)
         cache_key = id(impl)
         cached = model_params.get(cache_key)
         if cached is None:

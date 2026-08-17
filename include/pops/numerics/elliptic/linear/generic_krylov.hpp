@@ -9,6 +9,7 @@
 /// allocate scratch in an iteration, or publish an Arnoldi/preconditioned residual as scientific
 /// convergence.
 
+#include <pops/numerics/elliptic/linear/krylov_method_provider.hpp>
 #include <pops/numerics/elliptic/linear/krylov_workspace.hpp>
 #include <pops/numerics/elliptic/linear/scaled_field_algebra.hpp>
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>

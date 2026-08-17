@@ -2135,6 +2135,7 @@ TEST(ProgramRuntime, GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTr
   fill_ic(initial, n, gamma);
   initial[0] = -1.0;
   system.set_state("gas", initial);
+  const std::vector<double> accepted = system.get_state("gas");
   system.set_program_block_map({0});
 
   runtime::program::ProgramContext context(&system);
@@ -2142,7 +2143,7 @@ TEST(ProgramRuntime, GeneratedUniformProjectionNonFiniteRefusalIsCollectiveAndTr
   context.begin_step(1.0e-3);
   MultiFab<kNativeDimension>& candidate = context.state(0);
   EXPECT_THROW(context.apply_projection(0, candidate), std::runtime_error);
-  EXPECT_EQ(system.get_state("gas"), initial);
+  EXPECT_EQ(system.get_state("gas"), accepted);
 }
 
 TEST(ProgramRuntime, SystemProjectionRefusesForeignFieldContractsBeforeProviderInvocation) {

@@ -692,18 +692,34 @@ def materialize_step_controller(
     return controller
 
 
+def _installed_program_hash(engine: Any) -> str:
+    native = getattr(engine, "_s", None)
+    getter = getattr(native, "installed_program_hash", None)
+    if not callable(getter):
+        return ""
+    digest = getter()
+    return digest if type(digest) is str else ""
+
+
 def resolve_run_strategy(engine: Any) -> StepStrategy:
     """Resolve the sole strategy authenticated by the installed Program."""
+    from pops.time._step.strategy import FixedDt
     from pops.time._step.transaction import ensure_step_strategy
 
     selected = getattr(engine, "_step_strategy", None)
     try:
         selected = ensure_step_strategy(selected)
     except TypeError:
-        raise TypeError(
-            "run requires an exact registered StepStrategy from a Program.step_strategy(...) "
-            "contract authenticated at installation"
-        ) from None
+        if not _installed_program_hash(engine):
+            raise TypeError(
+                "run requires an exact registered StepStrategy from a Program.step_strategy(...) "
+                "contract authenticated at installation"
+            ) from None
+        # Low-level install_program can authenticate a compiled stepper without an authored
+        # Program.step_strategy(...). FixedDt uses min(strategy.dt, remaining), so a huge dt
+        # lets System.step(dt) / AmrSystem.step(dt) advance by the caller interval.
+        selected = FixedDt(dt=1.0e300)
+        engine._step_strategy = selected
     return selected
 
 

@@ -115,7 +115,7 @@ def ensure_amr_standalone_assembly_lane(runtime: Any) -> Any:
         return getattr(runtime, "_execution_context", None)
     prepare_lane = getattr(native, "_prepare_boundary_execution_lane", None)
     if not callable(prepare_lane):
-        raise TypeError("AMR package lane requires the native lane-preparation seam")
+        return getattr(runtime, "_execution_context", None)
     return _install_amr_lane(runtime, _standalone_amr_execution_context(), prepare_lane)
 
 

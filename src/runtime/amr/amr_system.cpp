@@ -4834,6 +4834,35 @@ struct AmrSystem<Dim>::Impl {
     throw std::out_of_range("AmrSystem has no exact field route '" + std::string(field) + "'");
   }
 
+  void ensure_default_field_plan() {
+    if (!default_field_slot.empty())
+      return;
+    FieldPlan plan;
+    plan.plan_identity = "pops.amr.default-field-plan";
+    plan.provider_identity = "pops.amr.default-field";
+    plan.output_owner_identity = "pops.amr.default-field";
+    plan.output_block = "amr";
+    plan.output_key = "fields_from_state";
+    plan.solver_route = "geometric_mg";
+    plan.hierarchy_policy = {
+        "pops.field-hierarchy.composite", 1, {"pops.field-hierarchy.options.empty@1", {}}};
+    plan.solver_options =
+        geometric_mg_amr_field_solver_options(GeometricMgOptions{}, CompositeFacOptions{});
+    (void)plan.solver_options.exact_contract();
+    plan.use_prepared_level_rhs = true;
+    default_field_slot = "pops.amr.default-field";
+    field_plans.emplace(default_field_slot, std::move(plan));
+  }
+
+  std::string require_default_field_slot() const {
+    if (!default_field_slot.empty())
+      return default_field_slot;
+    for (const auto& [slot, plan] : field_plans)
+      if (plan.output_key == "fields_from_state")
+        return slot;
+    throw std::logic_error("AmrSystem has no configured default exact field");
+  }
+
   static Extent<Dim> unit_ghosts() {
     Extent<Dim> result{};
     for (int axis = 0; axis < Dim; ++axis)
@@ -11195,6 +11224,8 @@ void AmrSystem<Dim>::install_prepared_native_amr_package(PreparedNativePackage p
   for (const auto& attachment : package.elliptic_attachments) {
     if (attachment.field.empty())
       throw std::invalid_argument("native AMR elliptic attachment requires a field identity");
+    if (attachment.field == "fields_from_state")
+      p_->ensure_default_field_plan();
     const std::string slot =
         attachment.field == "fields_from_state" && !p_->default_field_slot.empty()
             ? p_->default_field_slot
@@ -14069,6 +14100,8 @@ void AmrSystem<Dim>::set_block_elliptic_field(
     throw std::invalid_argument(
         "AmrSystem named elliptic RHS requires field/provider identities and a prepared closure");
   const typename Impl::BlockSpec& resolved_block = p_->block(block_name);
+  if (field == "fields_from_state")
+    p_->ensure_default_field_plan();
   const std::string slot = field == "fields_from_state" && !p_->default_field_slot.empty()
                                ? p_->default_field_slot
                                : p_->resolve_field_slot(field);
@@ -14789,22 +14822,19 @@ std::vector<double> AmrSystem<Dim>::level_potential(int level) {
 
 template <int Dim>
 std::vector<double> AmrSystem<Dim>::level_potential_global(int level) {
-  if (p_->default_field_slot.empty())
-    throw std::logic_error("AmrSystem has no configured default exact field");
-  return field_potential_level_global(p_->default_field_slot, level);
+  return field_potential_level_global(p_->require_default_field_slot(), level);
 }
 
 template <int Dim>
 void AmrSystem<Dim>::set_level_potential(int level, const std::vector<double>& phi) {
-  if (p_->default_field_slot.empty())
-    throw std::logic_error("AmrSystem has no configured default exact field");
-  set_field_potential_level(p_->default_field_slot, level, phi);
+  set_field_potential_level(p_->require_default_field_slot(), level, phi);
 }
 
 template <int Dim>
 std::vector<double> AmrSystem<Dim>::potential() {
+  const std::string slot = p_->require_default_field_slot();
   if (p_->default_field_slot.empty())
-    throw std::logic_error("AmrSystem has no configured default exact field");
+    p_->default_field_slot = slot;
   (void)consume_solve_outcome(solve_program_default_field(0));
   return field_potential_level_global(p_->default_field_slot, 0);
 }

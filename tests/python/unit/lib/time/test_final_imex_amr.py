@@ -150,6 +150,26 @@ def test_runtime_snapshot_compares_every_amr_level_by_exact_bits():
             return "program:test"
 
         @staticmethod
+        def program_accepted_state():
+            return b"two-level-accepted-state"
+
+        @staticmethod
+        def program_report():
+            empty = {"schema_version": 1, "rows": []}
+            return SimpleNamespace(
+                to_dict=lambda: {
+                    "cache": empty,
+                    "clocks": empty,
+                    "diagnostics": empty,
+                    "flux_ledger": empty,
+                    "histories": empty,
+                    "level_relations": empty,
+                    "synchronization": empty,
+                    "temporal": empty,
+                }
+            )
+
+        @staticmethod
         def time():
             return 0.125
 

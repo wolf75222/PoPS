@@ -1763,9 +1763,28 @@ PreparedAmrSystemBlock<Dim> prepare_compiled_amr_system_block(
       name, provider_consumer_qid, std::move(model), std::move(routes), gamma, substeps, stride});
 }
 
+/// Stage the same default block/state identity Python add_equation installs when pops.bind is
+/// skipped. Callers that already installed a unique route keep that identity.
+template <int Dim>
+void ensure_compiled_amr_state_route(AmrSystem<Dim>& system, const std::string& name) {
+  try {
+    system.install_block_state_route(name, "pops.runtime.package." + name + "/state");
+  } catch (const std::runtime_error& error) {
+    const std::string_view message = error.what();
+    if (message.find("unique") == std::string_view::npos &&
+        message.find("duplicate") == std::string_view::npos)
+      throw;
+  } catch (const std::logic_error& error) {
+    const std::string_view message = error.what();
+    if (message.find("must be installed before") == std::string_view::npos)
+      throw;
+  }
+}
+
 /// Publish one complete generated package through the facade's atomic exact-ranked seam.
 template <int Dim>
 void install_prepared_amr_block(AmrSystem<Dim>& system, PreparedAmrSystemBlock<Dim> prepared) {
+  ensure_compiled_amr_state_route(system, prepared.name);
   system.install_prepared_amr_block(std::move(prepared));
 }
 

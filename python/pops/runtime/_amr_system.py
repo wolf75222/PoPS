@@ -359,7 +359,9 @@ class AmrSystem(
         # frozen. The data / param / diagnostic passthrough is untouched.
         if attr in _FROZEN_STRUCTURAL and getattr(self, "_lifecycle", "assembling") != "assembling":
             raise _freeze_error(attr)
-        if attr not in _LANE_FREE_AMR_INSPECT:
+        if attr not in _LANE_FREE_AMR_INSPECT and not (
+            isinstance(attr, str) and attr.startswith("_")
+        ):
             from pops.runtime._amr_package_lane import ensure_amr_standalone_assembly_lane
 
             ensure_amr_standalone_assembly_lane(self)

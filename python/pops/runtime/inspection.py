@@ -305,11 +305,48 @@ def _diagnostics(sim: Any, options: Any) -> Any:
     return diagnostics
 
 
+def _public_topology(topology: Any) -> Any:
+    """Project ranked periodicity onto the 2-D inspect aliases the public report still uses."""
+    if not isinstance(topology, dict):
+        return topology
+    periodicity = topology.get("periodicity")
+    if not isinstance(periodicity, (list, tuple)) or not periodicity:
+        return topology
+    axes = ("periodic_x", "periodic_y", "periodic_z")
+    return {axes[index]: bool(periodicity[index]) for index in range(min(len(periodicity), 3))}
+
+
+def _merge_authored_block_options(report: Any, authored: Any) -> Any:
+    """Overlay ModelSpec-authored inspect rows the compiled-package ABI does not retain."""
+    if not isinstance(report, dict) or not isinstance(authored, dict) or not authored:
+        return report
+    blocks = list(report.get("blocks") or [])
+    merged = []
+    for block in blocks:
+        if not isinstance(block, dict):
+            merged.append(block)
+            continue
+        extra = authored.get(block.get("name"))
+        if isinstance(extra, dict):
+            row = dict(block)
+            row.update(extra)
+            merged.append(row)
+        else:
+            merged.append(block)
+    report["blocks"] = merged
+    return report
+
+
 def _options(sim: Any, runtime: Any) -> Any:
     report = _call(sim, "effective_options_report", None)
     if report:
         try:
-            return dict(report)
+            options = dict(report)
+            if "topology" in options:
+                options["topology"] = _public_topology(options["topology"])
+            return _merge_authored_block_options(
+                options, getattr(sim, "_authored_block_options", None)
+            )
         except Exception:
             pass
     return {

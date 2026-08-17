@@ -5,13 +5,17 @@
 
 #include <pops/core/model/physical_model.hpp>
 #include <pops/mesh/topology/boundary_topology.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/runtime/builders/compiled/generated_system_block.hpp>
 #include <pops/runtime/system.hpp>
 #include <pops/runtime/system/native_package_capability.hpp>
 
 #include <cmath>
 #include <concepts>
+#include <memory>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 
@@ -187,9 +191,41 @@ PreparedSystemBlock<Dim> prepare_compiled_system_block(
       system.prepared_block_periodicity(), std::move(provider_storage), std::move(provider_plan));
 }
 
+/// Stage the RuntimeInstance world lane Python bind installs when the C++ convenience path
+/// skipped it. Callers that already installed a lane keep that lane.
+template <int Dim>
+void ensure_compiled_system_execution_lane(System<Dim>& system, const std::string& name) {
+  try {
+    (void)system.prepared_boundary_execution_lane();
+  } catch (const std::logic_error&) {
+    system.install_prepared_boundary_execution_lane(std::make_shared<ExecutionLane>(
+        ExecutionLane::world("pops.runtime.package." + name + "/lane")));
+  }
+}
+
+/// Stage the same default block/state identity Python add_equation installs when pops.bind is
+/// skipped. Callers that already installed a unique route keep that identity.
+template <int Dim>
+void ensure_compiled_system_state_route(System<Dim>& system, const std::string& name) {
+  try {
+    system.install_block_state_route(name, "pops.runtime.package." + name + "/state");
+  } catch (const std::runtime_error& error) {
+    const std::string_view message = error.what();
+    if (message.find("unique") == std::string_view::npos &&
+        message.find("duplicate") == std::string_view::npos)
+      throw;
+  } catch (const std::logic_error& error) {
+    const std::string_view message = error.what();
+    if (message.find("must be installed before") == std::string_view::npos)
+      throw;
+  }
+}
+
 /// Publish one already prepared block through the facade's atomic structural seam.
 template <int Dim>
 void install_prepared_block(System<Dim>& system, PreparedSystemBlock<Dim> prepared) {
+  ensure_compiled_system_execution_lane(system, prepared.name);
+  ensure_compiled_system_state_route(system, prepared.name);
   system.install_prepared_block(std::move(prepared));
 }
 
@@ -220,6 +256,8 @@ void add_compiled_model(System<Dim>& system, const std::string& name, Model mode
                         const std::string& time = "explicit",
                         double gamma = static_cast<double>(kPhysicalDefaultGamma), int substeps = 1,
                         bool evolve = true, int stride = 1, double positivity_floor = 0.0) {
+  ensure_compiled_system_execution_lane(system, name);
+  ensure_compiled_system_state_route(system, name);
   install_prepared_block(
       system, prepare_compiled_system_block<Dim>(system, name, std::move(model), limiter, riemann,
                                                  reconstruction, time, gamma, substeps, evolve,

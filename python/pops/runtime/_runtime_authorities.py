@@ -654,7 +654,15 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
                         component, row, parameters_json, target_json, context
                     )
         if state_routes:
-            cast(Callable[..., Any], prepare_execution_lane)(*prepare_execution_lane_arguments)
+            has_lane = getattr(native, "has_package_assembly_lane", None)
+            if not (callable(has_lane) and has_lane()):
+                try:
+                    cast(Callable[..., Any], prepare_execution_lane)(
+                        *prepare_execution_lane_arguments
+                    )
+                except Exception as error:
+                    if "already installed" not in str(error):
+                        raise
         for state_identity, block_name in sorted(state_routes.items()):
             cast(Callable[..., Any], install_state_route)(block_name, state_identity)
         install_field_route = getattr(native, "_install_field_storage_route", None)

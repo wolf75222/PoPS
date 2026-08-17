@@ -38,16 +38,22 @@ def compile_modelspec_package(
     frame = Rectangle("modelspec-domain", (0.0, 0.0), (1.0, 1.0)).frame(Cartesian2D())
     x_axis, y_axis = frame.axes
     wrapper = Model("%s_modelspec" % name)
-    model = wrapper._m
     transport = str(spec.transport)
+    density = None
+    momentum_x = momentum_y = energy = None
     if transport == "exb":
-        (density,) = model.conservative_vars("n", roles=(Density(),))
-        model.set_flux(x=[0.0 * density], y=[0.0 * density])
-        model.set_eigenvalues(x=[0.0 * density], y=[0.0 * density])
-        model.set_primitive_state(density)
-        model.set_conservative_from([density])
+        (density,) = wrapper.conservative_vars("n", roles=(Density(),))
+        grad_x = wrapper.aux("grad_x")
+        grad_y = wrapper.aux("grad_y")
+        # Cartesian E×B with B=(0,0,1): v = (-d_y phi, d_x phi) / |B|^2.
+        # Eigenvalues stay density-scaled zeros so AMR BoundFluxProviders used by
+        # max_wave_speed do not require aux slots the composite pack does not forward.
+        wrapper.flux(x=[density * (-grad_y)], y=[density * grad_x])
+        wrapper.eigenvalues(x=[0.0 * density], y=[0.0 * density])
+        wrapper.primitive_vars(density)
+        wrapper.conservative_from([density])
     elif transport == "isothermal":
-        density, momentum_x, momentum_y = model.conservative_vars(
+        density, momentum_x, momentum_y = wrapper.conservative_vars(
             "rho",
             "mx",
             "my",
@@ -60,24 +66,24 @@ def compile_modelspec_package(
         cs2 = float(spec.cs2)
         floor = float(spec.vacuum_floor)
         denom = density if floor == 0.0 else maximum(density, floor)
-        u = model.primitive("u", momentum_x / denom)
-        v = model.primitive("v", momentum_y / denom)
-        pressure = model.primitive("p", cs2 * density)
-        model.set_flux(
+        u = wrapper.primitive("u", momentum_x / denom)
+        v = wrapper.primitive("v", momentum_y / denom)
+        pressure = wrapper.primitive("p", cs2 * density)
+        wrapper.flux(
             x=[momentum_x, momentum_x * u + pressure, momentum_x * v],
             y=[momentum_y, momentum_y * u, momentum_y * v + pressure],
         )
         sound = sqrt(pressure / density)
-        model.set_eigenvalues(x=[u - sound, u, u + sound], y=[v - sound, v, v + sound])
-        model.set_primitive_state(
+        wrapper.eigenvalues(x=[u - sound, u, u + sound], y=[v - sound, v, v + sound])
+        wrapper.primitive_vars(
             density,
             u,
             v,
             roles=(Density(), Velocity(axis=x_axis), Velocity(axis=y_axis)),
         )
-        model.set_conservative_from([density, density * u, density * v])
+        wrapper.conservative_from([density, density * u, density * v])
     elif transport == "compressible":
-        density, momentum_x, momentum_y, energy = model.conservative_vars(
+        density, momentum_x, momentum_y, energy = wrapper.conservative_vars(
             "rho",
             "mx",
             "my",
@@ -90,20 +96,20 @@ def compile_modelspec_package(
             ),
         )
         gamma = float(spec.gamma)
-        model.set_gamma(gamma)
-        u = model.primitive("u", momentum_x / density)
-        v = model.primitive("v", momentum_y / density)
-        pressure = model.primitive(
+        wrapper.gamma(gamma)
+        u = wrapper.primitive("u", momentum_x / density)
+        v = wrapper.primitive("v", momentum_y / density)
+        pressure = wrapper.primitive(
             "p", (gamma - 1.0) * (energy - 0.5 * density * (u * u + v * v))
         )
         enthalpy = (energy + pressure) / density
         sound = sqrt(gamma * pressure / density)
-        model.set_flux(
+        wrapper.flux(
             x=[momentum_x, momentum_x * u + pressure, momentum_x * v, density * enthalpy * u],
             y=[momentum_y, momentum_y * u, momentum_y * v + pressure, density * enthalpy * v],
         )
-        model.set_eigenvalues(x=[u - sound, u, u + sound], y=[v - sound, v, v + sound])
-        model.set_primitive_state(
+        wrapper.eigenvalues(x=[u - sound, u, u + sound], y=[v - sound, v, v + sound])
+        wrapper.primitive_vars(
             density,
             u,
             v,
@@ -115,7 +121,7 @@ def compile_modelspec_package(
                 Pressure(),
             ),
         )
-        model.set_conservative_from(
+        wrapper.conservative_from(
             [
                 density,
                 density * u,
@@ -129,9 +135,29 @@ def compile_modelspec_package(
             % transport
         )
 
+    elliptic = str(getattr(spec, "elliptic", "") or "")
+    if elliptic == "charge":
+        wrapper.elliptic_rhs(float(spec.q) * density)
+    elif elliptic == "background":
+        wrapper.elliptic_rhs(float(spec.alpha) * (density - float(spec.n0)))
+    elif elliptic == "gravity":
+        wrapper.elliptic_rhs(
+            float(spec.sign) * float(spec.four_pi_G) * (density - float(spec.rho0))
+        )
+    elif elliptic not in ("", "none"):
+        raise ValueError(
+            "ModelSpec elliptic %r cannot be compiled; expected charge, background, or gravity"
+            % elliptic
+        )
+
+    # Authored source(aux) emits provider_value<0> but the AMR generated source
+    # path currently materializes ProviderValues<0>. PotentialForce stays a
+    # native brick concern; the hyperbolic/elliptic package still compiles.
+
     if transport in ("isothermal", "compressible"):
         wrapper.enable_hllc()
         wrapper.enable_roe()
+    wrapper._invalidate_authoring_views()
 
     compiled = wrapper.compile(
         backend="production",
