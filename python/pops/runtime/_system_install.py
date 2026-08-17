@@ -401,6 +401,8 @@ class _SystemInstall(_System):
             )
             self._pending_native_packages += 1
         self._coupling_block_contracts = contract_candidate
+        if not getattr(self, "_batch_native_packages", False):
+            self._commit_pending_native_packages()
 
     def add_background(self, name: Any, model: Any, density: Any, spatial: Any = None) -> Any:
         """FROZEN species (not advanced): a fixed background that contributes to the system Poisson (and,

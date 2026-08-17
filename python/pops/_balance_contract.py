@@ -98,7 +98,8 @@ class BalanceLedger:
         if self.role is not None:
             from pops.physics.roles import native_role_token
 
-            data["role"] = native_role_token(self.role)
+            native_role_token(self.role)
+            data["role"] = type(self.role).__name__
         if self.component is not None:
             data["component"] = self.component
         if self.automatic_terms:

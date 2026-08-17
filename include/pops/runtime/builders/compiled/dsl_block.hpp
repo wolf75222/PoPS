@@ -199,7 +199,7 @@ void ensure_compiled_system_execution_lane(System<Dim>& system, const std::strin
     (void)system.prepared_boundary_execution_lane();
   } catch (const std::logic_error&) {
     system.install_prepared_boundary_execution_lane(std::make_shared<ExecutionLane>(
-        ExecutionLane::world("pops.runtime.package." + name + "/lane")));
+        ExecutionLane::duplicate_world_collectively("pops.runtime.package." + name + "/lane")));
   }
 }
 

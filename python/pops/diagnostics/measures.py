@@ -42,16 +42,17 @@ def _ref_name(value: Any) -> Any:
 
 
 def _role_name(value: Any) -> str | None:
-    """Return the canonical physical-role selector carried into native execution."""
+    """Return the public ComponentRole class name after validating its native token."""
     if value is None:
         return None
     from pops.physics.roles import native_role_token
     try:
-        return native_role_token(value)
+        native_role_token(value)
     except TypeError as exc:
         raise TypeError(
             "diagnostic role must be a typed pops.physics.roles.ComponentRole"
         ) from exc
+    return type(value).__name__
 
 
 def _operation(

@@ -57,8 +57,8 @@ static void ensure_kokkos() {
 #endif
 
 static void install_execution_lane(System<kNativeDimension>& system, std::string identity) {
-  system.install_prepared_boundary_execution_lane(
-      std::make_shared<ExecutionLane>(ExecutionLane::world(std::move(identity))));
+  system.install_prepared_boundary_execution_lane(std::make_shared<ExecutionLane>(
+      ExecutionLane::duplicate_world_collectively(std::move(identity))));
 }
 
 static constexpr int kGasComponents = kNativeDimension + 2;
