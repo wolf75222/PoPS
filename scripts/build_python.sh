@@ -230,6 +230,11 @@ else
   echo "note: scikit-build-core/pybind11 not in '$ENV_NAME'; using pip build isolation"
   echo "      (slower, unpinned build deps). Add 'scikit-build-core' to environment.yml + 'conda env update' to fix."
 fi
+NATIVE_VARIANT_SNAPSHOT="$(mktemp -d "${TMPDIR:-/tmp}/pops-native-variants.XXXXXX")"
+cleanup_native_snapshot() { rm -rf "$NATIVE_VARIANT_SNAPSHOT"; }
+trap cleanup_native_snapshot EXIT
+PYTHONPATH= PYTHONNOUSERSITE=1 \
+  python "$HERE/scripts/preserve_native_variants.py" snapshot --dest "$NATIVE_VARIANT_SNAPSHOT"
 echo "--- python -m pip ${pip_args[*]} ${EXTRA_PIP[*]} ---"
 python -m pip "${pip_args[@]}" "${EXTRA_PIP[@]}"
 if [[ -n "$WHEEL_DIR" ]]; then
@@ -247,6 +252,9 @@ if [[ -n "$WHEEL_DIR" ]]; then
     python "$HERE/scripts/prove_installed_wheel.py" \
       --wheel "${built_wheels[0]}" --expect-dim "$POPS_NATIVE_DIM"
 fi
+PYTHONPATH= PYTHONNOUSERSITE=1 \
+  python "$HERE/scripts/preserve_native_variants.py" restore --src "$NATIVE_VARIANT_SNAPSHOT" \
+    --expect-dim "$POPS_NATIVE_DIM"
 
 # --- diagnose ---------------------------------------------------------------------------------------
 # ADC-647: pip/scikit-build may rewrite the copied extension after the linker signed its build-tree

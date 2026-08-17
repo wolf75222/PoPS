@@ -73,7 +73,33 @@ void prove_ranked_cut_geometry() {
       EXPECT_DOUBLE_EQ(cut.lower[axis], pops::Real(1));
       EXPECT_DOUBLE_EQ(cut.upper[axis], axis == cut_axis ? pops::Real(0.5) : pops::Real(1));
     }
-    EXPECT_DOUBLE_EQ(cut.volume_fraction, pops::Real(0.75));
+    if constexpr (Dim < 3)
+      EXPECT_DOUBLE_EQ(cut.volume_fraction, pops::Real(0.75));
+    else {
+      EXPECT_GT(cut.volume_fraction, pops::Real(0));
+      EXPECT_LE(cut.volume_fraction, pops::Real(1));
+      EXPECT_DOUBLE_EQ(cut.volume_fraction, pops::Real(1));
+    }
+    for (int axis = 0; axis < Dim; ++axis) {
+      EXPECT_GE(cut.face_lower[axis], pops::Real(0));
+      EXPECT_LE(cut.face_lower[axis], pops::Real(1));
+      EXPECT_GE(cut.face_upper[axis], pops::Real(0));
+      EXPECT_LE(cut.face_upper[axis], pops::Real(1));
+      if constexpr (Dim < 3) {
+        if (axis == cut_axis) {
+          EXPECT_DOUBLE_EQ(cut.face_lower[axis], pops::Real(1));
+          EXPECT_DOUBLE_EQ(cut.face_upper[axis], pops::Real(0));
+        } else {
+          EXPECT_DOUBLE_EQ(cut.face_lower[axis], pops::Real(1));
+          EXPECT_DOUBLE_EQ(cut.face_upper[axis], pops::Real(1));
+        }
+      } else if (axis == cut_axis) {
+        EXPECT_DOUBLE_EQ(cut.face_lower[axis], pops::Real(1));
+      } else {
+        EXPECT_DOUBLE_EQ(cut.face_lower[axis], pops::Real(1));
+        EXPECT_DOUBLE_EQ(cut.face_upper[axis], pops::Real(1));
+      }
+    }
 
     const auto stencil = pops::nd::shortley_weller_stencil(cut, spacing);
     pops::Real expected_diagonal = pops::Real(0);
@@ -98,9 +124,119 @@ void prove_ranked_cut_geometry() {
 }
 
 TEST(PreparedEmbeddedBoundaryND, CutGeometryUsesOneAxisLoopInOneTwoAndThreeDimensions) {
+  static_assert(pops::nd::CutCellFractions<1>::dimension == 1);
+  static_assert(pops::nd::CutCellFractions<2>::dimension == 2);
+  static_assert(pops::nd::CutCellFractions<3>::dimension == 3);
   prove_ranked_cut_geometry<1>();
   prove_ranked_cut_geometry<2>();
   prove_ranked_cut_geometry<3>();
+}
+
+TEST(PreparedEmbeddedBoundaryND, Dim3VolumeIsPlaneReconstructionNotAxisProduct) {
+  pops::RealVector<3> lower_samples{-0.5, -0.5, -0.5};
+  pops::RealVector<3> upper_samples{0.3, 0.3, 0.3};
+  const auto cut = pops::nd::cut_cell_fractions_from_samples<3>(pops::Real(-0.1), lower_samples,
+                                                                upper_samples);
+  pops::Real product = pops::Real(1);
+  for (int axis = 0; axis < 3; ++axis) {
+    EXPECT_DOUBLE_EQ(cut.lower[axis], pops::Real(1));
+    EXPECT_DOUBLE_EQ(cut.upper[axis], pops::Real(0.25));
+    product *= pops::Real(0.5) * (cut.lower[axis] + cut.upper[axis]);
+    EXPECT_GE(cut.face_lower[axis], pops::Real(0));
+    EXPECT_LE(cut.face_lower[axis], pops::Real(1));
+    EXPECT_GE(cut.face_upper[axis], pops::Real(0));
+    EXPECT_LE(cut.face_upper[axis], pops::Real(1));
+    EXPECT_GT(cut.face_lower[axis], cut.face_upper[axis]);
+  }
+  EXPECT_NEAR(product, pops::Real(0.244140625), 1e-15);
+  EXPECT_GT(cut.volume_fraction, pops::Real(0));
+  EXPECT_LE(cut.volume_fraction, pops::Real(1));
+  EXPECT_NEAR(cut.volume_fraction, pops::Real(131) / pops::Real(192), 1e-12);
+  EXPECT_GT(std::abs(cut.volume_fraction - product), pops::Real(0.1));
+  EXPECT_NEAR(cut.face_lower[0], pops::Real(0.96875), 1e-12);
+  EXPECT_NEAR(cut.face_upper[0], pops::Real(0.28125), 1e-12);
+  EXPECT_NEAR(cut.face_lower[0], cut.face_lower[1], 1e-12);
+  EXPECT_NEAR(cut.face_lower[0], cut.face_lower[2], 1e-12);
+  EXPECT_NEAR(cut.face_upper[0], cut.face_upper[1], 1e-12);
+  EXPECT_NEAR(cut.face_upper[0], cut.face_upper[2], 1e-12);
+}
+
+TEST(PreparedEmbeddedBoundaryND, Dim12VolumeStaysAxisProductBitCompatible) {
+  pops::RealVector<1> lower1{-0.4};
+  pops::RealVector<1> upper1{0.2};
+  const auto cut1 =
+      pops::nd::cut_cell_fractions_from_samples<1>(pops::Real(-0.1), lower1, upper1);
+  EXPECT_DOUBLE_EQ(cut1.volume_fraction, pops::Real(0.5) * (cut1.lower[0] + cut1.upper[0]));
+  EXPECT_DOUBLE_EQ(cut1.face_lower[0], pops::Real(1));
+  EXPECT_DOUBLE_EQ(cut1.face_upper[0], pops::Real(0));
+
+  pops::RealVector<2> lower2{-0.4, -0.4};
+  pops::RealVector<2> upper2{0.2, -0.4};
+  const auto cut2 =
+      pops::nd::cut_cell_fractions_from_samples<2>(pops::Real(-0.1), lower2, upper2);
+  EXPECT_DOUBLE_EQ(cut2.volume_fraction, pops::Real(0.5) * (cut2.lower[0] + cut2.upper[0]) *
+                                             pops::Real(0.5) * (cut2.lower[1] + cut2.upper[1]));
+}
+
+TEST(PreparedEmbeddedBoundaryND, Dim3NonplanarSamplesUseCubeTriangulationNotSinglePlane) {
+  pops::RealVector<3> lower_samples{-0.8, -0.1, -0.9};
+  pops::RealVector<3> upper_samples{0.4, 0.6, 0.2};
+  const auto cut = pops::nd::cut_cell_fractions_from_samples<3>(pops::Real(-0.2), lower_samples,
+                                                                upper_samples);
+  pops::RealVector<3> gradient{};
+  pops::Real intercept = pops::Real(0);
+  pops::nd::cut_geometry_detail::linear_level_set_from_samples<3>(
+      pops::Real(-0.2), lower_samples, upper_samples, gradient, intercept);
+  pops::Real g[3]{gradient[0], gradient[1], gradient[2]};
+  const pops::Real plane =
+      pops::nd::cut_geometry_detail::unit_box_negative_halfspace<3>(g, intercept);
+  EXPECT_GT(cut.volume_fraction, pops::Real(0));
+  EXPECT_LE(cut.volume_fraction, pops::Real(1));
+  EXPECT_GT(std::abs(cut.volume_fraction - plane), pops::Real(1e-4));
+  for (int axis = 0; axis < 3; ++axis) {
+    EXPECT_GE(cut.face_lower[axis], pops::Real(0));
+    EXPECT_LE(cut.face_lower[axis], pops::Real(1));
+    EXPECT_GE(cut.face_upper[axis], pops::Real(0));
+    EXPECT_LE(cut.face_upper[axis], pops::Real(1));
+  }
+}
+
+TEST(PreparedEmbeddedBoundaryND, Dim3AxisAlignedPlaneHasConservativeFaceApertures) {
+  // Neighbour-centre samples of phi = z - 0.7. Volume of {z < 0.7} is 0.7, not the 1-D product 0.6.
+  pops::RealVector<3> lower_samples{-0.2, -0.2, -1.2};
+  pops::RealVector<3> upper_samples{-0.2, -0.2, 0.8};
+  const auto cut = pops::nd::cut_cell_fractions_from_samples<3>(pops::Real(-0.2), lower_samples,
+                                                                upper_samples);
+  const pops::Real product = pops::Real(0.5) * (cut.lower[2] + cut.upper[2]);
+  EXPECT_DOUBLE_EQ(cut.lower[2], pops::Real(1));
+  EXPECT_DOUBLE_EQ(cut.upper[2], pops::Real(0.2));
+  EXPECT_NEAR(product, pops::Real(0.6), 1e-15);
+  EXPECT_NEAR(cut.volume_fraction, pops::Real(0.7), 1e-12);
+  EXPECT_GT(cut.volume_fraction, pops::Real(0));
+  EXPECT_LE(cut.volume_fraction, pops::Real(1));
+  EXPECT_DOUBLE_EQ(cut.face_lower[2], pops::Real(1));
+  EXPECT_DOUBLE_EQ(cut.face_upper[2], pops::Real(0));
+  EXPECT_NEAR(cut.face_lower[0], pops::Real(0.7), 1e-12);
+  EXPECT_NEAR(cut.face_upper[0], pops::Real(0.7), 1e-12);
+  EXPECT_NEAR(cut.face_lower[1], pops::Real(0.7), 1e-12);
+  EXPECT_NEAR(cut.face_upper[1], pops::Real(0.7), 1e-12);
+}
+
+TEST(PreparedEmbeddedBoundaryND, ConservativeAmrRestrictProlongRefluxStayOnOneMetric) {
+  pops::nd::CutCellFractions<2> fine[4]{};
+  for (auto& child : fine) {
+    child.volume_fraction = pops::Real(0.5);
+    child.face_lower[0] = pops::Real(0.25);
+    child.face_upper[0] = pops::Real(0.75);
+  }
+  const auto coarse = pops::nd::restrict_cut_cell_fractions(fine, 4);
+  EXPECT_DOUBLE_EQ(coarse.volume_fraction, pops::Real(0.5));
+  EXPECT_DOUBLE_EQ(coarse.face_lower[0], pops::Real(0.25));
+  const auto injected = pops::nd::prolong_cut_cell_fractions(coarse);
+  EXPECT_DOUBLE_EQ(injected.volume_fraction, coarse.volume_fraction);
+  const pops::Real fine_faces[2] = {pops::Real(0.2), pops::Real(0.3)};
+  EXPECT_DOUBLE_EQ(pops::nd::reflux_cut_face_aperture(pops::Real(0.4), fine_faces, 2),
+                   pops::Real(0.1));
 }
 
 template <int Dim>

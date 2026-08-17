@@ -161,25 +161,37 @@ def test_implicit_pair_requires_exact_frozen_two_level_prefix_at_complete_bind()
             )
 
 
+def test_implicit_pair_accepts_execution_lane_mpi_world() -> None:
+    mpi = {
+        "communicator_identity": "MPI_COMM_WORLD",
+        "device_identity": "host",
+        "memory_space": 1,
+    }
+    _validate_refined_shared_interface_execution(
+        (0, 1), mpi, 1, implicit_jacvec_pair=True, complete_bind=True
+    )
+    _validate_refined_shared_interface_execution(
+        (0, 1), mpi, 2, implicit_jacvec_pair=True, complete_bind=True
+    )
+
+
+def test_implicit_pair_accepts_default_execution_space_gpu() -> None:
+    _validate_refined_shared_interface_execution(
+        (0, 1),
+        {
+            "communicator_identity": "serial",
+            "device_identity": "gpu",
+            "memory_space": 2,
+        },
+        1,
+        implicit_jacvec_pair=True,
+        complete_bind=True,
+    )
+
+
 @pytest.mark.parametrize(
     ("execution", "ranks"),
     [
-        (
-            {
-                "communicator_identity": "MPI_COMM_WORLD",
-                "device_identity": "host",
-                "memory_space": 1,
-            },
-            1,
-        ),
-        (
-            {
-                "communicator_identity": "MPI_COMM_WORLD",
-                "device_identity": "host",
-                "memory_space": 1,
-            },
-            2,
-        ),
         (
             {
                 "communicator_identity": "serial",
@@ -190,8 +202,8 @@ def test_implicit_pair_requires_exact_frozen_two_level_prefix_at_complete_bind()
         ),
     ],
 )
-def test_implicit_pair_refuses_mpi_before_native_interface_install(execution, ranks) -> None:
-    with pytest.raises(NotImplementedError, match="currently serial-only"):
+def test_implicit_pair_serial_cannot_run_in_a_multi_rank_world(execution, ranks) -> None:
+    with pytest.raises(RuntimeError, match="multi-rank native world"):
         _validate_refined_shared_interface_execution(
             (0, 1),
             execution,
@@ -206,20 +218,18 @@ def test_implicit_pair_refuses_mpi_before_native_interface_install(execution, ra
     [
         {
             "communicator_identity": "serial",
-            "device_identity": "gpu",
-            "memory_space": 2,
+            "device_identity": "cpu",
+            "memory_space": 3,
         },
         {
             "communicator_identity": "serial",
-            "device_identity": "cpu",
+            "device_identity": "gpu",
             "memory_space": 3,
         },
     ],
 )
-def test_implicit_pair_refuses_device_or_managed_memory_before_native_install(
-    execution,
-) -> None:
-    with pytest.raises(NotImplementedError, match="currently host-memory-only"):
+def test_implicit_pair_refuses_managed_or_additional_device_memory(execution) -> None:
+    with pytest.raises(NotImplementedError, match="DefaultExecutionSpace"):
         _validate_refined_shared_interface_execution(
             (0,),
             execution,

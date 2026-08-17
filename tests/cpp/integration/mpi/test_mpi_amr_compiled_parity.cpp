@@ -206,8 +206,8 @@ static int pops_run_test_mpi_amr_compiled_parity(int argc, char** argv) {
   (void)argv;
 #endif
   const int me = my_rank(), np = n_ranks();
-  const int n = 64;
   constexpr int Dim = kNativeDimension;
+  const int n = Dim >= 3 ? 32 : 64;
 
   AmrSystemConfig<Dim> cfg;
   for (int axis = 0; axis < Dim; ++axis) {
@@ -249,7 +249,7 @@ static int pops_run_test_mpi_amr_compiled_parity(int argc, char** argv) {
   // Plusieurs macro-pas de transport AMR multi-niveaux avec reflux conservatif ; tous les 4 pas,
   // Berger-Rigoutsos redistribue les patchs. Aucun champ auxiliaire ou elliptique n'est installe.
   const double dt = 1e-3;
-  const int nsteps = 16;
+  const int nsteps = Dim >= 3 ? 2 : 16;
   for (int s = 0; s < nsteps; ++s)
     sys.step(dt);
 

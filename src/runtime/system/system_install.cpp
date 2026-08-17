@@ -1831,6 +1831,8 @@ void System<Dim>::stage_native_package_(
 template <int Dim>
 void System<Dim>::finalize_native_packages() {
   require_assembling(p_->lifecycle_, "finalize_native_packages");
+  if (p_->pending_native_packages_.empty())
+    return;
   const ExecutionLane& lane = prepared_boundary_execution_lane();
   // Keep the package journal in its live owner until the final no-throw publication. A collective
   // rollback can then re-arm the revocable capabilities and retry the exact same authenticated

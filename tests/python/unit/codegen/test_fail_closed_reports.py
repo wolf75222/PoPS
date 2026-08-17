@@ -66,6 +66,17 @@ def test_amr_transfer_report_iterates_every_canonical_oriented_face_centering():
     assert "face_z" in transfer.limitation
 
 
+def test_amr_transition_envelope_reports_exact_rank_isotropic_defaults():
+    report = capability_reports.native_capability_report(
+        flags={"supports_mpi": False, "supports_gpu": False, "supports_amr": True},
+        source="test-manifest",
+    )
+    envelope = {row.feature: row for row in report.routes}["amr:transition_envelope"]
+    assert "(2,2,2)" in envelope.limitation
+    assert "anisotropic Dim-length ratios" in envelope.limitation
+    assert "2D isotropic ratio-(2,2)" not in envelope.limitation
+
+
 @pytest.mark.parametrize(
     ("supports_mpi", "expected"),
     ((False, "unavailable"), (True, "available")),
@@ -150,16 +161,32 @@ def test_mpi_world_route_reports_only_proved_native_availability(supports_mpi, e
     assert implicit_pair.status == "partial"
     assert implicit_pair.layout == "amr"
     assert implicit_pair.backend == "production"
-    assert implicit_pair.mpi is False
+    assert implicit_pair.mpi is supports_mpi
     assert implicit_pair.gpu is False
     assert "compiles, binds and runs GMRES" in implicit_pair.limitation
     assert "independent packed-vector carrier block" in implicit_pair.limitation
     assert "dynamic hierarchy mutation" in implicit_pair.limitation
+    assert "ExecutionLane communicator" in implicit_pair.limitation
+    assert "DefaultExecutionSpace" in implicit_pair.limitation
     assert implicit_pair.available_route == (
-        "generated host/serial GMRES solve with an authenticated two-sided shared-interface "
-        "JVP on a frozen two-level 2D AMR hierarchy"
+        "generated GMRES solve with an authenticated two-sided shared-interface "
+        "JVP on a frozen two-level Cartesian Dim-in-{1,2,3} AMR hierarchy via "
+        "level_rhs_jacvec_pair and the prepared ExecutionLane communicator"
     )
-    assert "additional interfaces, MPI or GPU" in implicit_pair.alternative
+    assert "mixed apply operators" in implicit_pair.alternative
+    field_coupled = routes["amr:field_coupled_rhs_jacvec"]
+    assert field_coupled.status == "available"
+    assert field_coupled.layout == "amr"
+    assert field_coupled.backend == "production"
+    assert field_coupled.mpi is False
+    assert field_coupled.gpu is False
+    assert "evaluate_with_field_state_at" in field_coupled.limitation
+    assert "point.level == active_level" in field_coupled.limitation
+    assert "cannot forge a coarse point" in field_coupled.limitation
+    assert field_coupled.available_route == (
+        "field_coupled rhs_jacvec on every AMR level via the level-qualified "
+        "tangent-field provider"
+    )
 
 
 def test_transport_boundary_routes_report_exact_supported_envelope_and_missing_kernels():
@@ -175,7 +202,9 @@ def test_transport_boundary_routes_report_exact_supported_envelope_and_missing_k
     assert prepared.backend == "production"
     assert prepared.mpi is True
     assert prepared.gpu is False
-    assert "one prepared 2D model-aware plan" in prepared.limitation
+    assert "one prepared Cartesian Dim-in-{1,2,3} model-aware plan" in prepared.limitation
+    assert "Geometry<Dim>::cell_center" in prepared.limitation
+    assert "origin/spacing" in prepared.limitation
     assert "typed-role slip wall" in prepared.limitation
     assert "typed no-flux faces" in prepared.limitation
     assert "before divergence/reflux" in prepared.limitation
@@ -187,6 +216,7 @@ def test_transport_boundary_routes_report_exact_supported_envelope_and_missing_k
     assert conversion.status == "partial"
     assert conversion.layout == "uniform|amr"
     assert conversion.backend == "production"
+    assert "Cartesian Dim-in-{1,2,3}" in conversion.limitation
     assert "to_conservative provider" in conversion.limitation
     assert "recovery" in conversion.limitation
 
@@ -196,30 +226,52 @@ def test_transport_boundary_routes_report_exact_supported_envelope_and_missing_k
     assert analytic.backend == "production"
     assert "analytic ScalarExpr" in analytic.limitation
     assert "exact logical Clock" in analytic.limitation
-    assert "state/field/input reads remain unavailable" in analytic.limitation
+    assert "Input slots 1..ncomp" in analytic.limitation
+    assert "to_conservative" in analytic.limitation
     assert "axis-permuted periodic coordinates" in analytic.limitation
+    assert "Geometry<Dim>::cell_center" in analytic.limitation
+    assert "x/y/z coordinates" in analytic.limitation
+    assert "origin/spacing" in analytic.limitation
+    assert "refuses rather than inventing zeros" in analytic.limitation
+    assert "setup-program discrete inputs" in analytic.limitation
 
     characteristic = routes["boundary:characteristic_no_inflow"]
     assert characteristic.status == "partial"
     assert characteristic.layout == "uniform|amr"
     assert characteristic.backend == "production"
-    assert characteristic.mpi is False and characteristic.gpu is False
+    assert characteristic.mpi is True
+    assert characteristic.gpu is False
+    assert "Cartesian Dim-in-{1,2,3}" in characteristic.limitation
     assert "m.roe_from_jacobian()" in characteristic.limitation
     assert "sonic subspace as neutral" in characteristic.limitation
     assert "rolls back ghosts" in characteristic.limitation
+    assert "ExecutionLane communicator" in characteristic.limitation
+    assert "same kernel" in characteristic.limitation
+    assert "DefaultExecutionSpace" in characteristic.limitation
+    assert "polar/embedded geometry remain unavailable" in characteristic.limitation
+    assert "PreparedMetricProvider metric ABI" in characteristic.limitation
+    assert "primitive/analytic references" in characteristic.limitation
+    assert "qualified MPI/GPU execution remain unavailable" not in characteristic.limitation
     post_riemann = routes["boundary:post_riemann_flux"]
     assert post_riemann.status == "partial"
     assert post_riemann.layout == "uniform|amr"
     assert post_riemann.backend == "production"
     assert "outward-normal face flux" in post_riemann.limitation
     assert "Riemann solve and divergence/reflux" in post_riemann.limitation
-    assert "2D Cartesian host-batch" in post_riemann.limitation
+    assert "Cartesian Dim-in-{1,2,3} host-batch" in post_riemann.limitation
     gpu_report = capability_reports.native_capability_report(
         flags={"supports_mpi": True, "supports_gpu": True, "supports_amr": True},
         source="test-gpu-manifest",
     )
-    gpu_post_riemann = {row.feature: row for row in gpu_report.routes}["boundary:post_riemann_flux"]
+    gpu_routes = {row.feature: row for row in gpu_report.routes}
+    gpu_post_riemann = gpu_routes["boundary:post_riemann_flux"]
     assert gpu_post_riemann.gpu is False
+    gpu_characteristic = gpu_routes["boundary:characteristic_no_inflow"]
+    assert gpu_characteristic.mpi is True
+    assert gpu_characteristic.gpu is True
+    gpu_jacvec = gpu_routes["amr:shared_interface_implicit_jacvec_pair"]
+    assert gpu_jacvec.mpi is True
+    assert gpu_jacvec.gpu is True
 
 
 def test_riemann_recovery_routes_distinguish_typed_rejection_from_missing_policy():

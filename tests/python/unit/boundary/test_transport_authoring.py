@@ -315,8 +315,14 @@ def test_analytic_inflow_fails_closed_for_primitive_per_point_conversion():
     )
     case.numerics(numerics, block=block)
 
-    with pytest.raises(NotImplementedError, match="analytic primitive inflow"):
-        case._resolved_numerics_for("tracer")
+    resolved = case._resolved_numerics_for("tracer")
+    authority = resolved.boundaries[0]
+    assert isinstance(authority, ResolvedTransportBoundarySet)
+    compiled = authority.compile_boundary_data()
+    inflow = next(face for face in compiled["faces"] if face["ordinal"] == 0)
+    assert inflow["representation"] == "primitive"
+    assert inflow["converter"]
+    assert inflow["type"] == "dirichlet"
 
 
 def test_analytic_inflow_fails_closed_for_discrete_setup_inputs():
@@ -362,6 +368,68 @@ def test_analytic_inflow_fails_closed_when_one_plan_mixes_logical_clocks():
 
     with pytest.raises(ValueError, match="plan cannot mix several logical Clocks"):
         case._resolved_numerics_for("tracer")
+
+
+def test_analytic_inflow_lowers_typed_z_on_cartesian_three_d():
+    from pops.analytic import z
+    from pops.domain import CartesianDomain
+    from pops.frames import Cartesian3D
+
+    domain = CartesianDomain("unit", (0.0, 0.0, 0.0), (1.0, 1.0, 1.0))
+    frame = domain.frame(Cartesian3D())
+    model = pops.Model("analytic-z-boundary", frame=frame)
+    state = model.state(
+        "U", components=("u",), representation=Conservative(), space=CellState(frame=frame)
+    )
+    (u,) = state
+    speed = model.param(RuntimeParam("speed", default=1.0))
+    speed_value = model.value(speed)
+    velocity = model.vector(
+        "velocity",
+        frame=frame,
+        components={frame.x: speed_value, frame.y: speed_value, frame.z: speed_value},
+    )
+    flux = model.flux(
+        "flux",
+        frame=frame,
+        state=state,
+        components={
+            frame.x: (speed_value * u,),
+            frame.y: (speed_value * u,),
+            frame.z: (speed_value * u,),
+        },
+        waves={
+            frame.x: (speed_value,),
+            frame.y: (speed_value,),
+            frame.z: (speed_value,),
+        },
+    )
+    rate = model.rate("rate", equation=ddt(state) == -div(flux))
+    method = FiniteVolume(
+        flux=flux,
+        variables=variables.Conservative(state),
+        reconstruction=reconstruction.MUSCL(limiters.VanLeer()),
+        riemann=riemann.ScalarUpwind(velocity=velocity),
+    )
+    numerics = DiscretizationPlan()
+    numerics.rates.add(rate, method)
+    case = pops.Case("analytic-z-boundary-case")
+    block = case.block("tracer", model=model)
+    conditions = {}
+    for boundary in frame.boundaries.all:
+        if boundary.axis == frame.z and boundary.side.value == "lower":
+            conditions[boundary] = Inflow(state=block[state], value=z(frame))
+        else:
+            conditions[boundary] = Outflow(state=block[state])
+    numerics.boundaries.add(TransportBoundarySet(conditions))
+    case.numerics(numerics, block=block)
+    authority = case._resolved_numerics_for("tracer").boundaries[0]
+    runtime = authority.runtime_boundary_data({})
+    assert len(runtime["faces"]) == 6
+    zlo = next(face for face in runtime["faces"] if face["ordinal"] == 4)
+    assert zlo["type"] == "dirichlet"
+    assert zlo["analytic_programs"][0]["opcodes"] == ["z"]
+    assert zlo["analytic_programs"][0]["literals"] == [0.0]
 
 
 def test_transport_set_rejects_incomplete_geometry_at_resolution():
@@ -478,12 +546,42 @@ def test_model_characteristic_no_inflow_lowers_one_exact_prepared_face():
     assert runtime["faces"][1]["type"] == "foextrap"
 
 
+def test_characteristic_no_inflow_refuses_non_cartesian_faces_without_metric_abi():
+    from pops.boundary import model_characteristic_no_inflow
+
+    frame, _, _, inlet_value, numerics, case, block, block_state = _authoring()
+    numerics.boundaries.add(TransportBoundarySet({
+        frame.boundaries.x_min: Inflow(
+            state=block_state,
+            value=inlet_value,
+            characteristic=model_characteristic_no_inflow(block_state),
+        ),
+        frame.boundaries.x_max: Outflow(state=block_state),
+        frame.boundaries.y_min: Inflow(state=block_state, value=inlet_value),
+        frame.boundaries.y_max: Outflow(state=block_state),
+    }))
+    case.numerics(numerics, block=block)
+    authority = case._resolved_numerics_for("tracer").boundaries[0]
+    condition = next(row for row in authority.conditions if row.condition_type == "inflow")
+
+    class PolarAxis:
+        index = 0
+        name = "r"
+
+    object.__setattr__(condition.geometry, "axis", PolarAxis())
+    with pytest.raises(
+        NotImplementedError,
+        match="polar and embedded geometry have no prepared metric ABI",
+    ):
+        authority._native_contract()
+
+
 def test_characteristic_no_inflow_rejects_forged_or_primitive_provider():
     from pops.boundary import model_characteristic_no_inflow
     from pops.model import Handle
     from pops.representations import Primitive
 
-    _, _, _, inlet_value, _, _, _, block_state = _authoring()
+    frame, _, _, inlet_value, _, _, _, block_state = _authoring()
     forged = Handle(
         "forged-characteristics",
         kind="boundary_eigenstructure",
@@ -496,6 +594,14 @@ def test_characteristic_no_inflow_rejects_forged_or_primitive_provider():
             state=block_state,
             value=inlet_value,
             representation=Primitive(),
+            characteristic=model_characteristic_no_inflow(block_state),
+        )
+    from pops.analytic import x
+
+    with pytest.raises(NotImplementedError, match="finite fixed conservative reference"):
+        Inflow(
+            state=block_state,
+            value=x(frame),
             characteristic=model_characteristic_no_inflow(block_state),
         )
 

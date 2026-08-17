@@ -271,17 +271,44 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
                        "native multigrid/FAC route; supports variable epsilon", "amr", "production",
                        "host", mpi, gpu),
       capability_route("elliptic:fft", "available",
+#ifdef POPS_HAS_FFTW
                        "exact Cartesian Dim in {1,2,3}, periodic, constant coefficient, canonical "
-                       "ordered MPI slabs; radix-2 fast path with diagnosed direct-DFT fallback",
+                       "ordered MPI slabs; FFTW3 production radix on locally complete axes, "
+                       "diagnosed direct-DFT fallback when FFTW cannot cover an extent; "
+                       "distributed last-axis slabs stay in-tree (no pencil FFT). FFT+AMR remains "
+                       "an explicit refusal",
+#else
+                       "exact Cartesian Dim in {1,2,3}, periodic, constant coefficient, canonical "
+                       "ordered MPI slabs; in-tree radix-2 fast path with diagnosed direct-DFT "
+                       "fallback because FFTW3 was not found in CONDA_PREFIX at configure. "
+                       "FFT+AMR remains an explicit refusal",
+#endif
                        "uniform", "production", "host", mpi, gpu),
       capability_route("elliptic:mg_fac_defaults", "partial",
                        "geometric MG/FAC defaults and debug diagnostics are still header-local; "
                        "central SolverDefaults/logger follow-up is required",
                        kLayoutRouteTokensCsv, "production", "host", mpi, gpu),
       capability_route("elliptic:fft_amr", "unavailable",
-                       "FFT requires a single uniform periodic mesh, not AMR", "amr", "none",
-                       "host", mpi, gpu, "solver=FFT() with layout=AMR", "GeometricMG() on AMR",
+                       "a global FFT Poisson over a sparse AMR hierarchy with covered cells is "
+                       "the wrong operator; PoissonFFTSolver is not a MultiFab GeometricMG/FAC "
+                       "bottom solver, so the coarsest uniform periodic level cannot host FFT "
+                       "without a new adapter. Keep GeometricMG/FAC on AMR",
+                       "amr", "none", "host", mpi, gpu, "solver=FFT() with layout=AMR",
+                       "GeometricMG() on AMR",
                        "use pops.solvers.elliptic.GeometricMG()"),
+      capability_route(
+          "eb:cartesian_cut_cell", "partial",
+          "PreparedEmbeddedBoundaryMetric<Dim> and cut_cell_fractions_from_samples<Dim> "
+          "instantiate for Cartesian Dim in {1,2,3}; Dim=1/2 volume stays the axis product of "
+          "independent 1-D crossings (bit-compatible); Dim=3 reconstructs eight unit-cube corners "
+          "from the same seven samples and measures {phi < 0} by marching tetrahedra, with "
+          "independent conservative face apertures from that cube triangulation. Uniform-ratio "
+          "AMR restrict/prolong/reflux of volume and apertures stay on this same "
+          "CutCellFractions<Dim> metric. Polar Poisson and Disc remain planar",
+          kLayoutRouteTokensCsv, "production", "host", mpi, gpu,
+          "true 3D cut-cell geometry with surface measure and conservative AMR quality",
+          "ranked Cartesian cut geometry (cube triangulation in 3D) on Uniform/AMR prepared EB",
+          "use the ranked cut-cell metric or a staircase mask"),
       capability_route("mesh:nd_storage_arithmetic", "available",
                        "one compile-time-ranked Index/Box/Fab/MultiFab arithmetic core; the "
                        "resolved artifact retains exactly one dimension in {1,2,3}",
@@ -332,13 +359,16 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
                        "AMR program install requires target='amr_system'", "amr", "production",
                        "host", mpi, gpu),
       capability_route(
-          "amr:shared_interface_implicit_jacvec_pair", "unavailable",
-          "the host/serial level_rhs_jacvec_pair primitive and resolve-evidence-gated compile "
-          "route exist, but no generated Program executes the implicit solve/matvec end to end",
-          "amr", "none", "host", false, false, "generated shared-interface implicit JVP solve",
-          "native host/serial pair primitive plus compile-only generated route",
-          "keep ADC-758 open and add an end-to-end generated bind/solve/matvec proof before "
-          "advertising a production route"),
+          "amr:shared_interface_implicit_jacvec_pair", "partial",
+          "the same level_rhs_jacvec_pair primitive on the prepared ExecutionLane communicator; "
+          "GPU uses the existing Kokkos DefaultExecutionSpace launch already used in serial; "
+          "dynamic hierarchy mutation, additional interfaces, and mixed apply operators remain "
+          "unavailable",
+          "amr", "production", "host", mpi, gpu,
+          "generated shared-interface implicit JVP solve",
+          "level_rhs_jacvec_pair plus the prepared ExecutionLane communicator",
+          "use the proved frozen two-level pair, or add proof for dynamic hierarchies or mixed "
+          "apply operators"),
       capability_route("output:scientific_v1", "available",
                        "typed SERIAL/ROOT/COLLECTIVE/PER_RANK publication; each format advertises "
                        "its exact supported modes",

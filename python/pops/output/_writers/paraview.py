@@ -28,8 +28,10 @@ from pops._geometry_contracts import (
 from pops.output._writers.common import (
     OutputPublicationReceipt,
     ReopenedOutput,
+    _FACE_CENTERINGS,
     _StagedOutputFile,
     _cleanup_staging_authority,
+    _face_array_axis,
     _series_selection_authority,
     authenticate_manifest,
     field_values_on_mask,
@@ -46,6 +48,7 @@ from pops.output.data import (
     EmbeddedBoundaryPayload,
     OutputRequest,
     OutputSnapshot,
+    _centering_shape,
     _field_family_identity,
     array_evidence,
 )
@@ -63,7 +66,10 @@ _VTK_TYPES = {
 
 _VTK_DUPLICATE_CELL = 1
 _VTK_REFINED_CELL = 8
+_VTK_VERTEX = 1
 _VTK_CELL = {1: (3, 2), 2: (9, 4), 3: (12, 8)}
+# Face-centered MAC locations are (Dim-1)-cells: vertices in 1D, lines in 2D, quads in 3D.
+_VTK_FACE = {1: (_VTK_VERTEX, 1), 2: (3, 2), 3: (9, 4)}
 _VTK_COMPRESSION_BLOCK_SIZE = 32768
 _VTK_FIELD_NAME = re.compile(r"[^A-Za-z0-9_.-]+")
 _VTK_RESERVED_ARRAY_NAMES = frozenset({
@@ -108,6 +114,29 @@ class ReopenedParaViewIndex:
         for path in self.paths:
             read_paraview(path)
         return self
+
+
+@dataclass(frozen=True, slots=True)
+class ReopenedParaViewMultiBlock:
+    """Authenticated VTK MultiBlock of honest Cartesian cell/face topologies."""
+
+    kind: str
+    manifest: dict[str, Any]
+    blocks: tuple[tuple[str, ReopenedOutput], ...]
+    output_identity: Identity
+    path: Path
+
+    def require_selection(self, request: OutputRequest) -> ReopenedParaViewMultiBlock:
+        recorded = self.manifest.get("snapshot", {}).get("selection")
+        if recorded != request.publication_data():
+            raise ValueError("reopened output selection differs from the requested selection")
+        return self
+
+    def block(self, name: str) -> ReopenedOutput:
+        matches = [item for item in self.blocks if item[0] == name]
+        if len(matches) != 1:
+            raise KeyError("ParaView MultiBlock has no unique topology %r" % name)
+        return matches[0][1]
 
 
 def _exception_text(error: BaseException) -> str:
@@ -425,6 +454,144 @@ def _cell_corner_offsets(dimension: int) -> tuple[tuple[int, ...], ...]:
     )
 
 
+def _face_corner_offsets(
+    dimension: int, array_axis: int,
+) -> tuple[tuple[int, ...], ...]:
+    """VTK-wound corners of one Cartesian face whose normal is ``array_axis``."""
+    if dimension not in _VTK_FACE:
+        raise ValueError("VTK faces require spatial rank 1, 2, or 3")
+    if array_axis not in range(dimension):
+        raise ValueError("face normal array axis is outside the spatial rank")
+    tangent_axes = tuple(axis for axis in range(dimension) if axis != array_axis)
+    tangent_rank = len(tangent_axes)
+    if tangent_rank == 0:
+        return ((0,) * dimension,)
+    corners = []
+    for ordinal in range(1 << tangent_rank):
+        gray = ordinal ^ (ordinal >> 1)
+        offset = [0] * dimension
+        for tangent_index, axis in enumerate(tangent_axes):
+            offset[axis] = (gray >> (tangent_rank - tangent_index - 1)) & 1
+        corners.append(tuple(offset))
+    return tuple(corners)
+
+
+def _staggered_face_mask(cell_mask: Any, array_axis: int) -> Any:
+    """Unique faces incident on a cell mask, without duplicating shared interfaces."""
+    import numpy as np
+
+    cells = np.asarray(cell_mask, dtype=np.bool_)
+    if array_axis not in range(cells.ndim):
+        raise ValueError("face normal array axis is outside the spatial rank")
+    face_shape = list(cells.shape)
+    face_shape[array_axis] += 1
+    faces = np.zeros(tuple(face_shape), dtype=np.bool_)
+    low = [slice(None)] * cells.ndim
+    high = [slice(None)] * cells.ndim
+    low[array_axis] = slice(0, cells.shape[array_axis])
+    high[array_axis] = slice(1, cells.shape[array_axis] + 1)
+    faces[tuple(low)] |= cells
+    faces[tuple(high)] |= cells
+    return faces
+
+
+def _face_point_mask(face_mask: Any, array_axis: int) -> Any:
+    """Vertices of a staggered face mask.  The normal axis is not dilated."""
+    import numpy as np
+
+    faces = np.asarray(face_mask, dtype=np.bool_)
+    if array_axis not in range(faces.ndim):
+        raise ValueError("face normal array axis is outside the spatial rank")
+    point_shape = [
+        extent + (0 if axis == array_axis else 1)
+        for axis, extent in enumerate(faces.shape)
+    ]
+    points = np.zeros(tuple(point_shape), dtype=np.bool_)
+    tangent_axes = tuple(axis for axis in range(faces.ndim) if axis != array_axis)
+    for corner in product((0, 1), repeat=len(tangent_axes)):
+        target = [slice(None)] * faces.ndim
+        target[array_axis] = slice(0, faces.shape[array_axis])
+        for offset, axis in zip(corner, tangent_axes, strict=True):
+            target[axis] = slice(offset, offset + faces.shape[axis])
+        points[tuple(target)] |= faces
+    return points
+
+
+_PRIMAL_CENTERINGS = frozenset({"cell", "node"})
+_FACE_CENTERING_ORDER = ("face_x", "face_y", "face_z")
+
+
+def _fields_for_topology(fields: Any, topology: str) -> tuple[Any, ...]:
+    """Return the fields that honestly live on one Cartesian topology."""
+
+    if topology == "cell":
+        return tuple(field for field in fields if field.centering in _PRIMAL_CENTERINGS)
+    if topology not in _FACE_CENTERINGS:
+        raise ValueError("Cartesian publication topology %r is not cell or a face axis" % topology)
+    return tuple(field for field in fields if field.centering == topology)
+
+
+def _publication_topologies(
+    fields: Any,
+    *,
+    embedded: bool,
+    spatial_rank: int,
+) -> tuple[str, ...]:
+    """Return the honest VTK topologies required by one Cartesian snapshot.
+
+    Cell and nodal fields share the primal LINE/QUAD/HEX mesh.  Each face axis is a
+    distinct VERTEX/LINE/QUAD mesh because staggered counts differ.  Mixed publications
+    therefore use sibling MultiBlock datasets rather than padding one CellData array.
+    An embedded-boundary sidecar describes primal cells, so a face-only selection still
+    emits a cell block for those arrays and never copies them onto the face mesh.
+    """
+    centerings = {field.centering for field in fields}
+    unknown = centerings - _PRIMAL_CENTERINGS - _FACE_CENTERINGS
+    if unknown:
+        raise NotImplementedError(
+            "Cartesian output proves cell-centered, nodal, and face-centered fields; "
+            "other centerings require a distinct topology: %s" % (tuple(sorted(unknown)),)
+        )
+    faces = tuple(name for name in _FACE_CENTERING_ORDER if name in centerings)
+    for face in faces:
+        _face_array_axis(spatial_rank, face)
+    primal = bool(centerings & _PRIMAL_CENTERINGS) or (embedded and bool(faces))
+    topologies = (("cell",) if primal else ()) + faces
+    if not topologies:
+        raise ValueError("Cartesian output has no cell, node, or face topology to publish")
+    return topologies
+
+
+def _resolved_face_centering(fields: Any) -> str | None:
+    """Return the single face centering of a homogeneous snapshot, or None for a primal mesh.
+
+    Mixed cell/face or multi-axis face selections are sibling MultiBlock topologies, not
+    one padded UnstructuredGrid.  Callers that need the full set use
+    :func:`_publication_topologies`.
+    """
+    centerings = {field.centering for field in fields}
+    faces = tuple(name for name in _FACE_CENTERING_ORDER if name in centerings)
+    if faces and (centerings & _PRIMAL_CENTERINGS or len(faces) > 1):
+        return None
+    return None if not faces else faces[0]
+
+
+def _topology_request(request: OutputRequest, fields: Any) -> OutputRequest | None:
+    """Build a subset request for one topology, or None when only geometry/EB remains."""
+
+    keys = tuple(field.key for field in fields)
+    if not keys:
+        return None
+    return OutputRequest(
+        request.consumer_id,
+        keys,
+        request.parallel_mode,
+        rank=request.rank,
+        size=request.size,
+        diagnostics=request.diagnostics,
+    )
+
+
 def _base64_size(byte_count: int) -> int:
     return ((byte_count + 2) // 3) * 4
 
@@ -574,6 +741,71 @@ def _vtu_schema(path: Path) -> dict[str, Any]:
     }
 
 
+def _unique_schema_arrays(rows: list[dict[str, Any]], *, where: str) -> list[dict[str, Any]]:
+    """Union VTK array declarations that share a name only when their schema matches."""
+
+    by_name: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        name = row["name"]
+        previous = by_name.get(name)
+        if previous is None:
+            by_name[name] = row
+            continue
+        if previous != row:
+            raise ValueError("ParaView MultiBlock %s array %r has conflicting schemas" % (where, name))
+    return list(by_name.values())
+
+
+def _schema_from_vtu_paths(
+    paths: tuple[Path, ...],
+    *,
+    block_names: tuple[str, ...],
+) -> dict[str, Any]:
+    if len(paths) != len(block_names):
+        raise ValueError("ParaView MultiBlock schema files disagree on topology count")
+    point_arrays: list[dict[str, Any]] = []
+    cell_arrays: list[dict[str, Any]] = []
+    points = None
+    for path in paths:
+        schema = _vtu_schema(path)
+        if points is None:
+            points = schema["points"]
+        elif points != schema["points"]:
+            raise ValueError("ParaView MultiBlock blocks disagree on their Points schema")
+        point_arrays.extend(schema["point_arrays"])
+        cell_arrays.extend(schema["cell_arrays"])
+    if points is None:
+        raise ValueError("ParaView MultiBlock has no topology blocks")
+    return {
+        "points": points,
+        "point_arrays": _unique_schema_arrays(point_arrays, where="PointData"),
+        "cell_arrays": _unique_schema_arrays(cell_arrays, where="CellData"),
+        "blocks": list(block_names),
+    }
+
+
+def _vtm_schema(path: Path) -> dict[str, Any]:
+    reopened = _read_vtm(path, verify_components=True)
+    return _schema_from_vtu_paths(
+        tuple(_component_path(path, row["file"]) for row in reopened.manifest["blocks"]),
+        block_names=tuple(row["name"] for row in reopened.manifest["blocks"]),
+    )
+
+
+def _publication_schema(
+    path: Path,
+    *,
+    companion_paths: tuple[Path, ...] = (),
+    block_names: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    root = ET.parse(path).getroot()
+    if root.tag == "VTKFile" and root.attrib.get("type") == "vtkMultiBlockDataSet":
+        if companion_paths:
+            return _schema_from_vtu_paths(companion_paths, block_names=block_names)
+        return _vtm_schema(path)
+    return _vtu_schema(path)
+
+
 def _stage_text_file(
     target: Path,
     document: str | bytes,
@@ -629,12 +861,16 @@ def _stage_portable_state(
 
     manifest_target = pvd.target.with_suffix(".view.json")
     script_target = manifest_target.with_suffix(".py")
-    presentation = _resolved_preset_data(schema, preset)
+    resolved = _resolved_preset_data(schema, preset)
+    presentation = {
+        key: value for key, value in resolved.items() if key != "color_association"
+    }
     documents = build_portable_paraview_state(
         pvd_file=pvd.target.name,
         pvd_identity=pvd.output_identity.token,
         presentation=presentation,
         cell_arrays=schema["cell_arrays"],
+        point_arrays=schema.get("point_arrays", ()),
         manifest_file=manifest_target.name,
         script_file=script_target.name,
     )
@@ -771,6 +1007,9 @@ def _read_pvd(path: Any, *, verify_components: bool = True) -> ReopenedParaViewI
             elif component.suffix == ".vtu":
                 reopened = read_paraview(component)
                 time_hex = reopened.manifest["snapshot"]["clock"]["time"]
+            elif component.suffix == ".vtm":
+                reopened = _read_vtm(component, verify_components=True)
+                time_hex = reopened.manifest["snapshot"]["clock"]["time"]
             else:
                 raise ValueError("ParaView PVD references an unsupported component")
             if reopened.output_identity.token != record["output_identity"]:
@@ -778,6 +1017,114 @@ def _read_pvd(path: Any, *, verify_components: bool = True) -> ReopenedParaViewI
             if time_hex != record["time_hex"]:
                 raise ValueError("ParaView PVD timestep differs from its component")
     return ReopenedParaViewIndex("pvd", manifest_data, paths, identity)
+
+
+def _read_vtm(path: Any, *, verify_components: bool = True) -> ReopenedParaViewMultiBlock:
+    index = Path(path)
+    root = ET.parse(index).getroot()
+    if root.tag != "VTKFile" or root.attrib.get("type") != "vtkMultiBlockDataSet":
+        raise ValueError("ParaView MultiBlock output is not a vtkMultiBlockDataSet")
+    manifest_data, identity = _read_index_attributes(root, "paraview-vtm")
+    if manifest_data.get("schema_version") != 1:
+        raise ValueError("ParaView MultiBlock manifest has an unsupported schema")
+    blocks = manifest_data.get("blocks")
+    if not isinstance(blocks, list) or not blocks:
+        raise ValueError("ParaView MultiBlock has no topology blocks")
+    xml_blocks = []
+    dataset = root.find("./vtkMultiBlockDataSet")
+    if dataset is None:
+        raise ValueError("ParaView MultiBlock has no vtkMultiBlockDataSet")
+    for node in dataset.findall("./DataSet"):
+        xml_blocks.append({
+            "index": node.attrib.get("index"),
+            "name": node.attrib.get("name"),
+            "file": node.attrib.get("file"),
+        })
+    expected_xml = [{
+        "index": str(index),
+        "name": row["name"],
+        "file": row["file"],
+    } for index, row in enumerate(blocks)]
+    if xml_blocks != expected_xml:
+        raise ValueError("ParaView MultiBlock datasets differ from its manifest")
+    names = [row["name"] for row in blocks]
+    if names != list(_publication_topologies_from_block_names(names)):
+        raise ValueError("ParaView MultiBlock topologies are not in canonical Cartesian order")
+    reopened_blocks = []
+    if verify_components:
+        for row in blocks:
+            component = _component_path(index, row["file"])
+            reopened = read_paraview(component)
+            if type(reopened) is not ReopenedOutput:
+                raise TypeError("ParaView MultiBlock component is not a VTU UnstructuredGrid")
+            if reopened.output_identity.token != row["output_identity"]:
+                raise ValueError("ParaView MultiBlock component identity mismatch")
+            geometry = next(iter(reopened.manifest["datasets"]["geometries"].values()))
+            if geometry.get("topology") != row["name"]:
+                raise ValueError(
+                    "ParaView MultiBlock component topology differs from its block name"
+                )
+            reopened_blocks.append((row["name"], reopened))
+    else:
+        reopened_blocks = [(row["name"], None) for row in blocks]  # type: ignore[list-item]
+    return ReopenedParaViewMultiBlock(
+        "vtm",
+        manifest_data,
+        tuple((name, block) for name, block in reopened_blocks if block is not None)
+        if verify_components else tuple(),
+        identity,
+        index,
+    )
+
+
+def _publication_topologies_from_block_names(names: list[str]) -> tuple[str, ...]:
+    allowed = ("cell",) + _FACE_CENTERING_ORDER
+    ordered = tuple(name for name in allowed if name in names)
+    if sorted(names) != sorted(ordered) or any(name not in allowed for name in names):
+        raise ValueError("ParaView MultiBlock names must be cell and/or rank-appropriate face axes")
+    return ordered
+
+
+def _stage_vtm_index(
+    target: Path,
+    snapshot: OutputSnapshot,
+    request: OutputRequest,
+    blocks: tuple[tuple[str, _StagedOutputFile], ...],
+) -> _StagedOutputFile:
+    payload = {
+        "schema_version": 1,
+        "snapshot": snapshot.to_data(request),
+        "blocks": [
+            {
+                "name": name,
+                "file": _relative_component(target.parent, staged.target),
+                "output_identity": staged.output_identity.token,
+            }
+            for name, staged in blocks
+        ],
+    }
+    encoded, token, identity = _index_attributes("paraview-vtm", payload)
+    datasets = "".join(
+        '<DataSet index="%d" name="%s" file="%s"/>' % (
+            index,
+            html.escape(name, quote=True),
+            html.escape(_relative_component(target.parent, staged.target), quote=True),
+        )
+        for index, (name, staged) in enumerate(blocks)
+    )
+    document = f'''<?xml version="1.0"?>
+<VTKFile type="vtkMultiBlockDataSet" version="1.0" byte_order="LittleEndian" header_type="UInt32" pops_manifest="{html.escape(encoded, quote=True)}" pops_identity="{html.escape(token, quote=True)}">
+  <vtkMultiBlockDataSet>{datasets}</vtkMultiBlockDataSet>
+</VTKFile>
+'''
+    return _stage_text_file(
+        target,
+        document,
+        format_name="paraview-vtu",
+        output_identity=identity,
+        selection_identity=request.publication_identity,
+        verify=lambda path: _read_vtm(path, verify_components=False),
+    )
 
 
 def _series_identity(
@@ -964,7 +1311,8 @@ if timesteps:
     scene.AnimationTime = timesteps[-1]
     reader.UpdatePipeline(time=timesteps[-1])
 display.SetRepresentationType(config["representation"])
-color = ("CELLS", config["color_by"])
+association = "POINTS" if config.get("color_association") == "POINTS" else "CELLS"
+color = (association, config["color_by"])
 if config["component"] is not None:
     color = color + (config["component"],)
 ColorBy(display, color)
@@ -998,16 +1346,25 @@ def _require_server_manager_state(root: ET.Element) -> None:
 def _resolved_preset_data(schema: dict[str, Any], preset: Any) -> dict[str, Any]:
     """Resolve and validate the presentation against the emitted scientific schema."""
 
-    scientific = [
+    scientific_cells = [
         row for row in schema["cell_arrays"]
         if row["name"] not in _VTK_RESERVED_ARRAY_NAMES
     ]
+    scientific_points = [
+        row for row in schema.get("point_arrays", [])
+        if row["name"] not in _VTK_RESERVED_ARRAY_NAMES
+    ]
+    scientific = scientific_cells + scientific_points
     if not scientific:
-        raise ValueError("ParaView state requires at least one scientific CellData array")
+        raise ValueError(
+            "ParaView state requires at least one scientific CellData or PointData array"
+        )
     color_name = scientific[0]["name"] if preset.color_by is None else preset.color_by
-    matches = [row for row in scientific if row["name"] == color_name]
-    if len(matches) != 1:
+    cell_matches = [row for row in scientific_cells if row["name"] == color_name]
+    point_matches = [row for row in scientific_points if row["name"] == color_name]
+    if len(cell_matches) + len(point_matches) != 1:
         raise ValueError("ParaViewPreset.color_by does not name one emitted field")
+    matches = cell_matches or point_matches
     if preset.component is not None \
             and preset.component not in matches[0]["component_names"]:
         raise ValueError("ParaViewPreset.component is not declared by the selected field")
@@ -1025,6 +1382,7 @@ def _resolved_preset_data(schema: dict[str, Any], preset: Any) -> dict[str, Any]
     return dict(
         preset.to_data(),
         color_by=color_name,
+        color_association="POINTS" if point_matches else "CELLS",
         threshold_active=bool(active),
     )
 
@@ -1129,6 +1487,7 @@ class _ParaViewWriterSession:
         self._series = _series_identity(
             snapshot, request, compression=writer._compression)
         self._vtu: _StagedOutputFile | None = None
+        self._companion_vtus: list[_StagedOutputFile] = []
         self._pvtu: _StagedOutputFile | None = None
         self._pvd: _StagedOutputFile | None = None
         self._portable_script: _StagedOutputFile | None = None
@@ -1158,7 +1517,7 @@ class _ParaViewWriterSession:
     def _files(self) -> tuple[_StagedOutputFile, ...]:
         return tuple(
             value for value in (
-                self._vtu, self._pvtu, self._pvd,
+                self._vtu, *self._companion_vtus, self._pvtu, self._pvd,
                 self._portable_script, self._portable_manifest, self._pvsm,
                 *self._relayed_vtus,
             )
@@ -1206,41 +1565,118 @@ class _ParaViewWriterSession:
         rows = self._gather({"rank": self._request.rank, "error": error})
         self._raise_failures(phase, rows)
 
+    @staticmethod
+    def _rank_row_parts(row: dict[str, Any]) -> tuple[dict[str, Any], ...]:
+        """Normalize one rank's relayed files: primary VTU/VTM plus sibling VTU leaves."""
+
+        parts = row.get("parts")
+        if parts is None:
+            target = Path(row["target"])
+            return ({
+                "name": target.name,
+                "suffix": target.suffix,
+                "target": row["target"],
+                "output_identity": row["output_identity"],
+                "byte_size": int(row["byte_size"]),
+            },)
+        if not isinstance(parts, list) or not parts:
+            raise ValueError("ParaView MPI relay rank has no MultiBlock parts")
+        normalized = []
+        for part in parts:
+            if not isinstance(part, dict):
+                raise ValueError("ParaView MPI relay part must be a mapping")
+            name = Path(str(part.get("name", ""))).name
+            suffix = str(part.get("suffix") or Path(name).suffix)
+            normalized.append({
+                "name": name,
+                "suffix": suffix,
+                "target": str(part.get("target", name)),
+                "output_identity": part["output_identity"],
+                "byte_size": int(part["byte_size"]),
+            })
+        return tuple(normalized)
+
+    def _local_artifact(
+        self,
+        staged: _StagedOutputFile,
+        companions: list[_StagedOutputFile],
+    ) -> dict[str, Any]:
+        files = (staged, *companions)
+        parts = [{
+            "name": item.target.name,
+            "suffix": item.target.suffix,
+            "target": str(item.target.expanduser().resolve()),
+            "output_identity": item.output_identity.token,
+            "byte_size": item.temporary.stat().st_size,
+        } for item in files]
+        return {
+            "rank": self._request.rank,
+            "target": str(staged.target.expanduser().resolve()),
+            "output_identity": staged.output_identity.token,
+            "schema": self._schema,
+            "selection_identity": self._request.publication_identity.token,
+            "byte_size": staged.temporary.stat().st_size,
+            "parts": parts,
+        }
+
+    def _local_relay_files(self, parts: tuple[dict[str, Any], ...]) -> tuple[_StagedOutputFile, ...]:
+        if self._vtu is None:
+            raise RuntimeError(
+                "ParaView MPI relay requires a staged local VTU or MultiBlock on every rank")
+        available = {item.target.name: item for item in (self._vtu, *self._companion_vtus)}
+        ordered = []
+        for part in parts:
+            item = available.get(part["name"])
+            if item is None:
+                raise RuntimeError(
+                    "ParaView MPI relay is missing staged local leaf %s" % part["name"])
+            ordered.append(item)
+        return tuple(ordered)
+
     def _relay_per_rank_vtus(self) -> None:
-        """Copy rank-local VTU bytes to rank zero in bounded collective chunks."""
+        """Copy rank-local VTU or MultiBlock (VTM + sibling VTU leaves) to rank zero."""
 
         if self._communicator is None or self._vtu is None:
-            raise RuntimeError("PVTU MPI relay requires one staged local VTU on every rank")
+            raise RuntimeError(
+                "ParaView MPI relay requires a staged local VTU or MultiBlock on every rank")
         chunk_bytes = self._writer._placement.chunk_bytes
-        maximum_size = max(int(row["byte_size"]) for row in self._rank_rows)
-        authorities: dict[int, Any] = {}
-        streams: dict[int, Any] = {}
-        root_targets: dict[int, Path] = {}
+        parts_by_rank = tuple(self._rank_row_parts(row) for row in self._rank_rows)
+        if len({len(parts) for parts in parts_by_rank}) != 1:
+            raise ValueError("ParaView MPI relay ranks disagree on MultiBlock leaf count")
+        local_parts = parts_by_rank[self._request.rank]
+        authorities: dict[tuple[int, int], Any] = {}
+        streams: dict[tuple[int, int], Any] = {}
+        root_targets: dict[tuple[int, int], Path] = {}
         root_error = None
         if self._request.rank == 0:
             try:
                 names = []
-                for row in self._rank_rows:
-                    name = Path(row["target"]).name
-                    if name in {"", ".", ".."} or Path(name).suffix != ".vtu":
-                        raise ValueError("PVTU relay rank target has an invalid VTU basename")
-                    names.append(name)
+                for parts in parts_by_rank:
+                    for part in parts:
+                        name = part["name"]
+                        if name in {"", ".", ".."} or part["suffix"] not in {".vtu", ".vtm"}:
+                            raise ValueError(
+                                "ParaView MPI relay rank target has an invalid basename")
+                        names.append(name)
                 if len(names) != len(set(names)):
                     raise ValueError("PVTU relay rank targets have colliding basenames")
-                for row, name in zip(self._rank_rows[1:], names[1:], strict=True):
+                for row, parts in zip(self._rank_rows[1:], parts_by_rank[1:], strict=True):
                     owner = int(row["rank"])
-                    target = self._target.parent / name
-                    authority = temporary_path(target)
-                    authorities[owner] = authority
-                    root_targets[owner] = target
-                    streams[owner] = os.fdopen(authority.duplicate(), "wb")
+                    for part_index, part in enumerate(parts):
+                        target = self._target.parent / part["name"]
+                        authority = temporary_path(target)
+                        key = (owner, part_index)
+                        authorities[key] = authority
+                        root_targets[key] = target
+                        streams[key] = os.fdopen(authority.duplicate(), "wb")
             except BaseException as error:
                 root_error = _exception_text(error)
         local_error = None
-        local_stream = None
+        local_streams: list[Any] = []
         try:
             try:
-                local_stream = self._vtu.temporary.open("rb")
+                local_files = self._local_relay_files(local_parts)
+                local_streams = [item.temporary.open("rb") for item in local_files]
             except BaseException as error:
                 local_error = _exception_text(error)
             preparation_rows = self._gather({
@@ -1251,42 +1687,48 @@ class _ParaViewWriterSession:
             relay_ready = not any(
                 row.get("error") is not None for row in preparation_rows)
             if relay_ready:
-                assert local_stream is not None
-                for offset in range(0, maximum_size, chunk_bytes):
-                    expected_local = max(0, min(
-                        chunk_bytes,
-                        int(self._rank_rows[self._request.rank]["byte_size"]) - offset,
-                    ))
-                    try:
-                        payload = local_stream.read(expected_local)
-                        if len(payload) != expected_local:
-                            raise OSError("rank-local VTU ended before its declared byte size")
-                    except BaseException as error:
-                        if local_error is None:
-                            local_error = _exception_text(error)
-                        payload = b""
-                    gathered = gather_bytes(self._communicator, payload, root=0)
-                    if self._request.rank == 0 and root_error is None:
-                        if gathered is None:
-                            root_error = "RuntimeError: PVTU relay root received no byte payloads"
-                            continue
+                if len(local_streams) != len(local_parts):
+                    raise RuntimeError("ParaView MPI relay opened a different local leaf count")
+                for part_index, local_stream in enumerate(local_streams):
+                    maximum_size = max(int(parts[part_index]["byte_size"]) for parts in parts_by_rank)
+                    for offset in range(0, maximum_size, chunk_bytes):
+                        expected_local = max(0, min(
+                            chunk_bytes,
+                            int(local_parts[part_index]["byte_size"]) - offset,
+                        ))
                         try:
-                            for owner in range(1, self._request.size):
-                                expected = max(0, min(
-                                    chunk_bytes,
-                                    int(self._rank_rows[owner]["byte_size"]) - offset,
-                                ))
-                                if len(gathered[owner]) != expected:
-                                    raise ValueError(
-                                        "PVTU relay rank %d chunk has %d bytes, expected %d"
-                                        % (owner, len(gathered[owner]), expected))
-                                streams[owner].write(gathered[owner])
+                            payload = local_stream.read(expected_local)
+                            if len(payload) != expected_local:
+                                raise OSError(
+                                    "rank-local VTU ended before its declared byte size")
                         except BaseException as error:
-                            root_error = _exception_text(error)
+                            if local_error is None:
+                                local_error = _exception_text(error)
+                            payload = b""
+                        gathered = gather_bytes(self._communicator, payload, root=0)
+                        if self._request.rank == 0 and root_error is None:
+                            if gathered is None:
+                                root_error = (
+                                    "RuntimeError: PVTU relay root received no byte payloads")
+                                continue
+                            try:
+                                for owner in range(1, self._request.size):
+                                    expected = max(0, min(
+                                        chunk_bytes,
+                                        int(parts_by_rank[owner][part_index]["byte_size"])
+                                        - offset,
+                                    ))
+                                    if len(gathered[owner]) != expected:
+                                        raise ValueError(
+                                            "PVTU relay rank %d chunk has %d bytes, expected %d"
+                                            % (owner, len(gathered[owner]), expected))
+                                    streams[(owner, part_index)].write(gathered[owner])
+                            except BaseException as error:
+                                root_error = _exception_text(error)
         except BaseException as error:
             local_error = local_error or _exception_text(error)
         finally:
-            if local_stream is not None:
+            for local_stream in local_streams:
                 try:
                     local_stream.close()
                 except BaseException as error:
@@ -1310,29 +1752,52 @@ class _ParaViewWriterSession:
                 try:
                     relayed = []
                     rewritten = [dict(self._rank_rows[0])]
-                    for row in self._rank_rows[1:]:
+                    for row, parts in zip(self._rank_rows[1:], parts_by_rank[1:], strict=True):
                         owner = int(row["rank"])
-                        authority = authorities[owner]
-                        target = root_targets[owner]
                         rank_request = replace(self._request, rank=owner)
-                        reopened = read_paraview(authority.path)
-                        if type(reopened) is not ReopenedOutput:
-                            raise TypeError(
-                                "relayed ParaView VTU reopened as a collection index")
-                        reopened.require_selection(rank_request)
-                        identity = Identity.from_token(row["output_identity"])
-                        if reopened.output_identity != identity:
-                            raise ValueError(
-                                "relayed VTU output identity differs from rank evidence")
-                        relayed.append(_StagedOutputFile(
-                            authority,
-                            target,
-                            format=self._writer.format,
-                            output_identity=identity,
-                            selection_identity=rank_request.publication_identity,
-                            verify=read_paraview,
+                        rewritten_parts = []
+                        primary_target = None
+                        for part_index, part in enumerate(parts):
+                            key = (owner, part_index)
+                            authority = authorities[key]
+                            target = root_targets[key]
+                            identity = Identity.from_token(part["output_identity"])
+                            if part["suffix"] == ".vtm":
+                                reopened = _read_vtm(authority.path, verify_components=False)
+                                reopened.require_selection(rank_request)
+                                if reopened.output_identity != identity:
+                                    raise ValueError(
+                                        "relayed VTM output identity differs from rank evidence")
+                                verify = lambda path: _read_vtm(path, verify_components=False)
+                            else:
+                                reopened = read_paraview(authority.path)
+                                if type(reopened) is not ReopenedOutput:
+                                    raise TypeError(
+                                        "relayed ParaView VTU reopened as a collection index")
+                                if part_index == 0:
+                                    reopened.require_selection(rank_request)
+                                if reopened.output_identity != identity:
+                                    raise ValueError(
+                                        "relayed VTU output identity differs from rank evidence")
+                                verify = read_paraview
+                            relayed.append(_StagedOutputFile(
+                                authority,
+                                target,
+                                format=self._writer.format,
+                                output_identity=identity,
+                                selection_identity=rank_request.publication_identity,
+                                verify=verify,
+                            ))
+                            rewritten_parts.append(dict(part, target=str(target.resolve())))
+                            if part_index == 0:
+                                primary_target = target
+                        if primary_target is None:
+                            raise RuntimeError("ParaView MPI relay rank has no primary leaf")
+                        rewritten.append(dict(
+                            row,
+                            target=str(primary_target.resolve()),
+                            parts=rewritten_parts,
                         ))
-                        rewritten.append(dict(row, target=str(target.resolve())))
                     self._relayed_vtus = relayed
                     self._rank_rows = tuple(rewritten)
                 except BaseException as error:
@@ -1369,38 +1834,41 @@ class _ParaViewWriterSession:
             or self._request.rank == 0
         if self._communicator is None:
             if active:
+                companions: list[_StagedOutputFile] = []
                 staged_vtu: _StagedOutputFile = self._writer._stage_file(
-                    self._snapshot, self._request, self._target)
+                    self._snapshot, self._request, self._target, companions=companions)
                 self._vtu = staged_vtu
-                self._schema = _vtu_schema(staged_vtu.temporary)
+                self._companion_vtus = companions
+                self._schema = _publication_schema(
+                    staged_vtu.temporary,
+                    companion_paths=tuple(item.temporary for item in companions),
+                    block_names=tuple(
+                        item.target.stem.rsplit("__", 1)[-1] for item in companions
+                    ),
+                )
             rows = ({
                 "rank": self._request.rank,
-                "artifact": None if self._vtu is None else {
-                    "rank": self._request.rank,
-                    "target": str(self._target.expanduser().resolve()),
-                    "output_identity": self._vtu.output_identity.token,
-                    "schema": self._schema,
-                    "selection_identity": self._request.publication_identity.token,
-                    "byte_size": self._vtu.temporary.stat().st_size,
-                },
+                "artifact": None if self._vtu is None else self._local_artifact(
+                    self._vtu, self._companion_vtus),
             },)
         else:
             error = None
             artifact = None
             try:
                 if active:
+                    companions = []
                     staged_vtu = self._writer._stage_file(
-                        self._snapshot, self._request, self._target)
+                        self._snapshot, self._request, self._target, companions=companions)
                     self._vtu = staged_vtu
-                    self._schema = _vtu_schema(staged_vtu.temporary)
-                    artifact = {
-                        "rank": self._request.rank,
-                        "target": str(self._target.expanduser().resolve()),
-                        "output_identity": staged_vtu.output_identity.token,
-                        "schema": self._schema,
-                        "selection_identity": self._request.publication_identity.token,
-                        "byte_size": staged_vtu.temporary.stat().st_size,
-                    }
+                    self._companion_vtus = companions
+                    self._schema = _publication_schema(
+                        staged_vtu.temporary,
+                        companion_paths=tuple(item.temporary for item in companions),
+                        block_names=tuple(
+                            item.target.stem.rsplit("__", 1)[-1] for item in companions
+                        ),
+                    )
+                    artifact = self._local_artifact(staged_vtu, companions)
             except BaseException as exc:
                 error = _exception_text(exc)
             rows = self._gather({
@@ -1414,18 +1882,21 @@ class _ParaViewWriterSession:
         if self._request.parallel_mode is ParallelMode.PER_RANK:
             from pops.output.formats import MpiRelayToRoot
 
+            mixed_vtm = any(
+                Path(row["target"]).suffix == ".vtm" for row in self._rank_rows
+            ) or (self._vtu is not None and self._vtu.target.suffix == ".vtm")
             if type(self._writer._placement) is MpiRelayToRoot:
                 self._relay_per_rank_vtus()
-
-            def stage_pvtu() -> None:
-                self._pvtu = _stage_pvtu(
-                    self._target.parent,
-                    self._snapshot,
-                    self._request,
-                    self._rank_rows,
-                    self._series,
-                )
-            self._root_phase("PVTU staging", stage_pvtu)
+            if not mixed_vtm:
+                def stage_pvtu() -> None:
+                    self._pvtu = _stage_pvtu(
+                        self._target.parent,
+                        self._snapshot,
+                        self._request,
+                        self._rank_rows,
+                        self._series,
+                    )
+                self._root_phase("PVTU staging", stage_pvtu)
         if self._writer._collection:
             def stage_pvd() -> None:
                 component = self._pvtu if self._pvtu is not None else self._vtu
@@ -1474,15 +1945,19 @@ class _ParaViewWriterSession:
             primary = self._pvsm or self._pvd or self._pvtu or self._vtu
             return None if primary is None else primary.publish()
         if self._communicator is None:
+            for staged in self._companion_vtus:
+                staged.publish()
             if self._vtu is not None:
                 self._vtu.publish()
         else:
             local_error = None
-            if self._vtu is not None:
-                try:
+            try:
+                for staged in self._companion_vtus:
+                    staged.publish()
+                if self._vtu is not None:
                     self._vtu.publish()
-                except BaseException as exc:
-                    local_error = _exception_text(exc)
+            except BaseException as exc:
+                local_error = _exception_text(exc)
             rows = self._gather({"rank": self._request.rank, "error": local_error})
             self._raise_failures("VTU publication", rows)
         if self._relayed_vtus or (
@@ -1678,34 +2153,24 @@ class ParaViewWriter:
         snapshot: OutputSnapshot,
         request: OutputRequest,
         target: Any,
+        *,
+        companions: list[_StagedOutputFile] | None = None,
     ) -> _StagedOutputFile:
         from pops.output._consumer_contracts import ParallelMode
-
-        import numpy as np
 
         target = Path(target)
         if target.suffix != self.extension:
             raise ValueError("ParaView target must end in .vtu")
         fields = snapshot.select(request)
-        families = _field_families(fields)
-        if self._state is not None and any(field.centering == "node" for field in fields):
-            raise NotImplementedError(
-                "ParaView PointData output currently requires state=None because PortableState "
-                "and MaterializedPVSM still authenticate CellData presentations only")
-        unsupported = sorted({
-            field.centering for field in fields
-            if field.centering not in {"cell", "node"}
-        })
-        if unsupported:
-            raise NotImplementedError(
-                "ParaView VTU will not reinterpret face-centered fields %s as cell or point "
-                "data; an explicit multi-topology face mesh is required"
-                % unsupported)
+        _field_families(fields)
         for field in fields:
+            complete = request.parallel_mode is not ParallelMode.PER_RANK
+            if complete and not field.pieces and field.centering in _FACE_CENTERINGS:
+                complete = False
             validate_field_pieces(
                 field,
                 snapshot.geometry(field.key),
-                complete=request.parallel_mode is not ParallelMode.PER_RANK,
+                complete=complete,
                 rank=(None if request.parallel_mode is ParallelMode.ROOT else request.rank),
                 size=request.size,
             )
@@ -1736,24 +2201,151 @@ class ParaViewWriter:
             raise ValueError(
                 "one ParaView VTU snapshot requires one common spatial rank 1, 2, or 3")
         dimension = next(iter(dimensions))
-        vtk_cell_type, points_per_cell = _VTK_CELL[dimension]
+        topologies = _publication_topologies(
+            fields, embedded=bool(sidecars), spatial_rank=dimension,
+        )
+        if any(
+            topology != "cell"
+            and geometry.coordinate_system == POLAR_ANNULUS_2D_COORDINATES
+            for topology in topologies
+            for geometry in geometries
+        ):
+            raise NotImplementedError(
+                "ParaView polar-annulus output remains 2D cell-centered; "
+                "face-centered polar fields require a distinct polar face topology"
+            )
+        if len(topologies) == 1:
+            topology = topologies[0]
+            return self._stage_unstructured_vtu(
+                snapshot,
+                request,
+                target,
+                fields=_fields_for_topology(fields, topology),
+                geometries=geometries,
+                sidecars=sidecars if topology == "cell" else {},
+                topology=topology,
+            )
+        return self._stage_multiblock(
+            snapshot,
+            request,
+            target,
+            fields=fields,
+            geometries=geometries,
+            sidecars=sidecars,
+            topologies=topologies,
+            companions=companions,
+        )
+
+    def _stage_multiblock(
+        self,
+        snapshot: OutputSnapshot,
+        request: OutputRequest,
+        target: Path,
+        *,
+        fields: Any,
+        geometries: Any,
+        sidecars: dict[Any, Any],
+        topologies: tuple[str, ...],
+        companions: list[_StagedOutputFile] | None,
+    ) -> _StagedOutputFile:
+        staged_blocks: list[tuple[str, _StagedOutputFile]] = []
+        try:
+            for topology in topologies:
+                block_fields = _fields_for_topology(fields, topology)
+                block_sidecars = sidecars if topology == "cell" else {}
+                block_target = target.with_name("%s__%s.vtu" % (target.stem, topology))
+                subset = _topology_request(request, block_fields)
+                staged = self._stage_unstructured_vtu(
+                    snapshot,
+                    subset if subset is not None else request,
+                    block_target,
+                    fields=block_fields,
+                    geometries=geometries,
+                    sidecars=block_sidecars,
+                    topology=topology,
+                    verify_selection=subset is not None,
+                )
+                staged_blocks.append((topology, staged))
+            vtm = _stage_vtm_index(
+                target.with_suffix(".vtm"),
+                snapshot,
+                request,
+                tuple(staged_blocks),
+            )
+        except BaseException:
+            for _name, staged in staged_blocks:
+                try:
+                    staged.discard()
+                except BaseException:
+                    pass
+            raise
+        if companions is not None:
+            companions.extend(staged for _name, staged in staged_blocks)
+        return vtm
+
+    def _stage_unstructured_vtu(
+        self,
+        snapshot: OutputSnapshot,
+        request: OutputRequest,
+        target: Any,
+        *,
+        fields: Any,
+        geometries: Any,
+        sidecars: dict[Any, Any],
+        topology: str,
+        verify_selection: bool = True,
+    ) -> _StagedOutputFile:
+        from pops.output._consumer_contracts import ParallelMode
+
+        import numpy as np
+
+        target = Path(target)
+        if target.suffix != self.extension:
+            raise ValueError("ParaView target must end in .vtu")
+        families = _field_families(fields)
+        face_centering = None if topology == "cell" else topology
+        if sidecars and face_centering is not None:
+            raise NotImplementedError(
+                "ParaView VTU will not attach cell-centered embedded-boundary sidecars to a "
+                "face mesh; that would silently recenter face locations onto primal cells"
+            )
+        dimension = geometries[0].spatial_rank
+        face_axis = (
+            None if face_centering is None
+            else _face_array_axis(dimension, face_centering)
+        )
+        if face_centering is None:
+            vtk_cell_type, points_per_cell = _VTK_CELL[dimension]
+            corner_offsets = _cell_corner_offsets(dimension)
+        else:
+            vtk_cell_type, points_per_cell = _VTK_FACE[dimension]
+            corner_offsets = _face_corner_offsets(dimension, face_axis)
         emission_masks = {}
         replication_masks = {}
         for geometry in geometries:
+            emission_shape = (
+                geometry.cell_shape if face_centering is None
+                else _centering_shape(geometry.cell_shape, face_centering)
+            )
             if request.parallel_mode is not ParallelMode.PER_RANK:
-                emission_masks[geometry.key] = geometry.valid_cells
+                emission_masks[geometry.key] = (
+                    geometry.valid_cells if face_centering is None
+                    else _staggered_face_mask(geometry.valid_cells, face_axis)
+                )
                 replication_masks[geometry.key] = np.zeros(
-                    geometry.cell_shape, dtype=np.bool_)
+                    emission_shape, dtype=np.bool_)
                 continue
             masks = []
             replicated_masks = []
             for field in fields:
                 if snapshot.geometry(field.key).key != geometry.key:
                     continue
-                mask = np.zeros(geometry.cell_shape, dtype=np.bool_)
-                replicated = np.zeros(geometry.cell_shape, dtype=np.bool_)
+                if face_centering is not None and field.centering == "node":
+                    continue
+                mask = np.zeros(emission_shape, dtype=np.bool_)
+                replicated = np.zeros(emission_shape, dtype=np.bool_)
                 for piece in field.pieces:
-                    if field.centering == "cell":
+                    if field.centering == "cell" or field.centering in _FACE_CENTERINGS:
                         spatial = _spatial_slices(piece.lower, piece.upper)
                     else:
                         box = geometry.boxes[piece.global_box_index]
@@ -1773,10 +2365,10 @@ class ParaViewWriter:
                 raise ValueError(
                     "PER_RANK ParaView fields disagree on replicated local geometry")
             emission_masks[geometry.key] = (
-                masks[0] if masks else np.zeros(geometry.cell_shape, dtype=np.bool_))
+                masks[0] if masks else np.zeros(emission_shape, dtype=np.bool_))
             replication_masks[geometry.key] = (
                 replicated_masks[0]
-                if replicated_masks else np.zeros(geometry.cell_shape, dtype=np.bool_)
+                if replicated_masks else np.zeros(emission_shape, dtype=np.bool_)
             )
         cell_counts = [
             int(np.count_nonzero(emission_masks[geometry.key]))
@@ -1785,7 +2377,11 @@ class ParaViewWriter:
         point_masks = {}
         point_counts = []
         for geometry in geometries:
-            used = _point_mask(emission_masks[geometry.key])
+            used = (
+                _point_mask(emission_masks[geometry.key])
+                if face_centering is None
+                else _face_point_mask(emission_masks[geometry.key], face_axis)
+            )
             point_masks[geometry.key] = used
             point_counts.append(int(np.count_nonzero(used)))
         n_cells = sum(cell_counts)
@@ -1816,7 +2412,7 @@ class ParaViewWriter:
             cell_connectivity = connectivity[
                 start * points_per_cell:cell * points_per_cell
             ].reshape((count, points_per_cell))
-            for corner_index, corner in enumerate(_cell_corner_offsets(dimension)):
+            for corner_index, corner in enumerate(corner_offsets):
                 vertex = tuple(
                     indices + offset
                     for indices, offset in zip(cell_indices, corner, strict=True))
@@ -1824,14 +2420,19 @@ class ParaViewWriter:
             point = point_end
             layout_ordinals[start:cell] = ordinal
             levels[start:cell] = geometry.level
-            covered[start:cell] = geometry.coverage[cell_indices]
-            ghost_types[start:cell] = covered[start:cell] * _VTK_REFINED_CELL
+            if face_centering is None:
+                covered[start:cell] = geometry.coverage[cell_indices]
+                ghost_types[start:cell] = covered[start:cell] * _VTK_REFINED_CELL
+                volumes[start:cell] = geometry.cell_volumes[cell_indices]
+            else:
+                covered[start:cell] = 0
+                ghost_types[start:cell] = 0
+                volumes[start:cell] = 0.0
             if request.parallel_mode is ParallelMode.PER_RANK and request.rank != 0:
                 ghost_types[start:cell] |= (
                     replication_masks[geometry.key][cell_indices].astype("u1")
                     * np.uint8(_VTK_DUPLICATE_CELL)
                 )
-            volumes[start:cell] = geometry.cell_volumes[cell_indices]
             geometry_ranges[geometry.key] = {
                 "cell": (start, cell),
                 "point": (point_end - point_count, point_end),
@@ -1849,18 +2450,20 @@ class ParaViewWriter:
             "types": np.full(n_cells, vtk_cell_type, dtype="u1"),
             "pops_layout": layout_ordinals,
             "pops_level": levels,
-            "pops_coverage": covered,
             "vtkGhostType": ghost_types,
-            "pops_cell_volume": volumes,
             "TimeValue": np.asarray(
                 [float.fromhex(snapshot.clock.time_hex)], dtype="<f8"),
         }
+        if face_centering is None:
+            arrays["pops_coverage"] = covered
+            arrays["pops_cell_volume"] = volumes
         datasets = {"fields": {}, "geometries": {}, "embedded_boundaries": {}}
         for ordinal, geometry in enumerate(geometries):
             ranges = geometry_ranges[geometry.key]
             datasets["geometries"]["%s#%d" % geometry.key] = {
                 "layout_ordinal": ordinal,
                 "spatial_rank": dimension,
+                "topology": "cell" if face_centering is None else face_centering,
                 "cell_range": list(ranges["cell"]),
                 "point_range": list(ranges["point"]),
             }
@@ -1872,7 +2475,7 @@ class ParaViewWriter:
             first = members[0]
             field_components[name] = first.component_names
             components = len(first.component_names)
-            association = "cell" if first.centering == "cell" else "point"
+            association = "point" if first.centering == "node" else "cell"
             tuple_count = n_cells if association == "cell" else n_points
             shape = (tuple_count, components) if components else (tuple_count,)
             combined = np.empty(shape, dtype=np.dtype(first.array_dtype))
@@ -1947,8 +2550,12 @@ class ParaViewWriter:
         temporary = temporary_path(target)
         point_type, point_data = encoded_arrays["Points"]
         cell_names = (
-            "pops_layout", "pops_level", "pops_coverage", "vtkGhostType",
-            "pops_cell_volume",
+            ("pops_layout", "pops_level", "vtkGhostType")
+            if face_centering is not None
+            else (
+                "pops_layout", "pops_level", "pops_coverage", "vtkGhostType",
+                "pops_cell_volume",
+            )
         ) + (EMBEDDED_BOUNDARY_ARRAY_NAMES if sidecars else ()) + tuple(cell_field_names)
 
         def data_arrays(names: Any) -> str:
@@ -2021,7 +2628,8 @@ class ParaViewWriter:
             reopened = read_paraview(temporary.path)
             if type(reopened) is not ReopenedOutput:
                 raise TypeError("staged ParaView VTU reopened as a collection index")
-            reopened.require_selection(request)
+            if verify_selection:
+                reopened.require_selection(request)
             return _StagedOutputFile(
                 temporary,
                 target,
@@ -2046,12 +2654,14 @@ class ParaViewWriter:
             raise
 
 
-def read_paraview(path: Any) -> ReopenedOutput | ReopenedParaViewIndex:
+def read_paraview(path: Any) -> ReopenedOutput | ReopenedParaViewIndex | ReopenedParaViewMultiBlock:
     root = ET.parse(path).getroot()
     if root.tag == "VTKFile" and root.attrib.get("type") == "PUnstructuredGrid":
         return _read_pvtu(path, verify_components=True)
     if root.tag == "VTKFile" and root.attrib.get("type") == "Collection":
         return _read_pvd(path, verify_components=True)
+    if root.tag == "VTKFile" and root.attrib.get("type") == "vtkMultiBlockDataSet":
+        return _read_vtm(path, verify_components=True)
     if root.tag != "VTKFile" or root.attrib.get("type") != "UnstructuredGrid":
         raise ValueError("ParaView output is not a VTK UnstructuredGrid")
     if root.attrib.get("byte_order") != "LittleEndian" \
@@ -2183,6 +2793,7 @@ def read_paraview_series(path: Any) -> ReopenedParaViewIndex:
 
 
 __all__ = [
-    "ParaViewWriter", "ReopenedParaViewIndex", "read_paraview",
+    "ParaViewWriter", "ReopenedParaViewIndex", "ReopenedParaViewMultiBlock",
+    "read_paraview",
     "read_paraview_parallel", "read_paraview_series",
 ]

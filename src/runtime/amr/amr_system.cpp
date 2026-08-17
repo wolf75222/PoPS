@@ -3048,6 +3048,17 @@ struct AmrSystem<Dim>::Impl {
 
   using NativeFieldPlanRegistryImage = std::map<std::string, NativeFieldPlanImage>;
 
+  void synchronize_field_rhs_block_count() {
+    for (auto& [slot, plan] : field_plans) {
+      (void)slot;
+      if (plan.rhs_by_block.empty())
+        continue;
+      if (plan.rhs_by_block.size() > blocks.size())
+        throw std::logic_error("AMR exact field RHS registry has more blocks than the system");
+      plan.rhs_by_block.resize(blocks.size());
+    }
+  }
+
   NativeFieldPlanRegistryImage snapshot_native_field_plan_image() const {
     NativeFieldPlanRegistryImage image;
     for (const auto& [slot, plan] : field_plans)
@@ -8508,13 +8519,30 @@ struct AmrSystem<Dim>::Impl {
           throw std::invalid_argument(
               "AMR limited-linear coarse/fine route cannot satisfy the block reconstruction "
               "order");
+        if (selected == amr::transfer::TransferKind::ConstantInjection &&
+            block.reconstruction_order > 1)
+          throw std::invalid_argument(
+              "AMR limited-linear coarse/fine route cannot share a parent-copy hierarchy");
         continue;
       }
       if (route->second.kernel == "conservative_polynomial5_coarse_fine") {
         if (block.reconstruction_order > 5)
           throw std::invalid_argument(
               "AMR fifth-order coarse/fine route cannot satisfy the block reconstruction order");
+        if (selected == amr::transfer::TransferKind::ConstantInjection)
+          throw std::invalid_argument(
+              "AMR fifth-order coarse/fine route cannot share a parent-copy hierarchy");
         selected = amr::transfer::TransferKind::FifthOrderCoarseFineGhostInterpolation;
+        continue;
+      }
+      if (route->second.kernel == "conservative_injection") {
+        if (block.reconstruction_order > 1)
+          throw std::invalid_argument(
+              "AMR parent-copy coarse/fine route cannot satisfy the block reconstruction order");
+        if (selected == amr::transfer::TransferKind::FifthOrderCoarseFineGhostInterpolation)
+          throw std::invalid_argument(
+              "AMR parent-copy coarse/fine cannot share a fifth-order hierarchy");
+        selected = amr::transfer::TransferKind::ConstantInjection;
         continue;
       }
       throw std::invalid_argument("AMR coarse/fine selected an unsupported native kernel");
@@ -9361,6 +9389,7 @@ struct AmrSystem<Dim>::Impl {
       if (prepared_blocks.size() != blocks.size())
         throw std::logic_error(
             "AmrSystem block registry differs from its prepared package registry");
+      synchronize_field_rhs_block_count();
       materialization_contract = initial_materialization_contract();
     } catch (...) {
       materialization_preflight_error = std::current_exception();
@@ -13406,7 +13435,7 @@ template <int Dim>
 void AmrSystem<Dim>::install_block_state_route(const std::string& name,
                                                const std::string& state_identity) {
   require_amr_assembling(p_->lifecycle, "install_block_state_route");
-  if (!p_->blocks.empty())
+  if (!p_->blocks.empty() || !p_->prepared_blocks.empty() || p_->engine || p_->prepared_hierarchy)
     throw std::logic_error("AmrSystem state routes must be installed before their block");
   p_->boundary_registry.install_state_route(name, state_identity);
 }
@@ -15773,6 +15802,13 @@ void AmrSystem<Dim>::register_bootstrap_transfer_route(
         if (order != 5 || lacks_stencil)
           throw std::invalid_argument(
               "AMR polynomial coarse/fine fill requires order five and three ranked ghosts");
+      } else if (kernel == "conservative_injection") {
+        bool lacks_stencil = false;
+        for (int axis = 0; axis < Dim; ++axis)
+          lacks_stencil = lacks_stencil || ghost_depth[axis] < 1;
+        if (order != 1 || lacks_stencil)
+          throw std::invalid_argument(
+              "AMR parent-copy coarse/fine fill requires order one and one ranked ghost");
       } else {
         throw std::invalid_argument("AMR coarse/fine kernel has no exact native provider");
       }

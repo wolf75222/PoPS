@@ -82,6 +82,12 @@ def test_face_flux_and_residual_share_one_axis_indexed_field() -> None:
     boundary = _source(CORE[5])
     assert "apply_physical_flux_conditions" in boundary
     assert "ZeroBoundaryFaceFlux" in boundary
+    assert "FillAnalyticFace" in boundary
+    assert "geometry.cell_center(ghost)" in boundary
+    assert "geometry_from_box_origin_spacing" in boundary
+    assert "analytic hyperbolic tables require a requalified ND coordinate provider" not in boundary
+    assert "analytic hyperbolic boundary requires a requalified ND coordinate provider" in boundary
+    assert "analytic ghost depth may not exceed the normal domain extent" in boundary
 
 
 def test_hllc_and_roe_are_axis_generic_euler_capabilities() -> None:

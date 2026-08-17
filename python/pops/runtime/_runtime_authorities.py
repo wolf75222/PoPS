@@ -327,9 +327,14 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
                 raise ValueError(
                     "prepared boundary analytic programs must be empty or cover every component"
                 )
-            if programs and (types[face] != "dirichlet" or representations[face] != "conservative"):
+            if programs and types[face] != "dirichlet":
                 raise NotImplementedError(
-                    "prepared analytic boundary programs require conservative fixed-state inflow"
+                    "prepared analytic boundary programs require fixed-state inflow"
+                )
+            if programs and representations[face] not in {"conservative", "primitive"}:
+                raise NotImplementedError(
+                    "prepared analytic boundary programs require conservative values or "
+                    "model primitive-to-conservative conversion"
                 )
             has_analytic_programs = has_analytic_programs or bool(programs)
             if clock is not None and (not isinstance(clock, str) or not clock or not programs):
@@ -764,20 +769,24 @@ def _validate_shared_interface_implicit_execution_envelope(
     """Authenticate the narrow native pair envelope without mutating runtime state."""
     if type(rank_count) is not int or rank_count < 1:
         raise RuntimeError("native shared-interface rank count must be a positive integer")
+    communicator = execution_data.get("communicator_identity")
+    if communicator not in ("serial", "MPI_COMM_WORLD"):
+        raise TypeError("shared-interface execution requires serial or exact MPI_COMM_WORLD")
+    if communicator == "serial" and rank_count != 1:
+        raise RuntimeError(
+            "serial shared-interface execution cannot run in a multi-rank native world"
+        )
     device = execution_data.get("device_identity")
     memory_space = execution_data.get("memory_space")
-    if device not in ("host", "cpu") or memory_space != 1:
-        raise NotImplementedError(
-            "shared NumericalFlux implicit JVP is currently host-memory-only; device or "
-            "managed-memory execution is refused until its paired packing and residual "
-            "evaluation have a native portability proof"
-        )
-    communicator = execution_data.get("communicator_identity")
-    if communicator != "serial" or rank_count != 1:
-        raise NotImplementedError(
-            "shared NumericalFlux implicit JVP is currently serial-only; MPI execution is "
-            "refused until its pair admission and local packing have a collective deadlock proof"
-        )
+    if device in ("host", "cpu") and memory_space == 1:
+        return
+    if device == "gpu" and memory_space == 2:
+        return
+    raise NotImplementedError(
+        "shared NumericalFlux implicit JVP uses the existing Kokkos DefaultExecutionSpace "
+        "host or device launch; managed-memory execution is refused because ExecutionLane "
+        "does not own a first-class UVM packing path"
+    )
 
 
 def _validate_shared_interface_implicit_execution_before_install(
@@ -788,8 +797,15 @@ def _validate_shared_interface_implicit_execution_before_install(
         return
     from pops.runtime._component_execution_context import component_execution_data
     from pops._native_selector import selected_native_module
+    import pops
 
-    _pops = selected_native_module(required=True)
+    _pops = selected_native_module(required=False)
+    if _pops is None:
+        _pops = getattr(pops, "_pops", None)
+    if _pops is None or not callable(getattr(_pops, "n_ranks", None)):
+        raise RuntimeError(
+            "no PoPS native dimension is selected; call pops.compile(resolved_plan) first"
+        )
     _validate_shared_interface_implicit_execution_envelope(
         component_execution_data(install_plan.execution_context),
         _pops.n_ranks(),

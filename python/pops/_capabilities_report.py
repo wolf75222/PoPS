@@ -390,10 +390,14 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             gpu=gpu,
             status="partial",
             limitation=(
-                "one prepared 2D model-aware plan serves Uniform/AMR native and compiled "
-                "transport boundaries; executable built-ins are periodic, extrapolation, "
-                "constant/RuntimeParam fixed state, conservative device-side analytic "
-                "(x,y,t,params) fixed state, model primitive-to-conservative fixed-state conversion, "
+                "one prepared Cartesian Dim-in-{1,2,3} model-aware plan serves Uniform/AMR native "
+                "and compiled transport boundaries; executable built-ins are periodic, "
+                "extrapolation, constant/RuntimeParam fixed state, conservative device-side "
+                "analytic ScalarExpr over RealVector<Dim> (including z) installed and filled "
+                "through Geometry<Dim>::cell_center on the prepared session (a domain box with "
+                "origin/spacing builds Geometry<Dim> once and reuses cell_center; a domain box "
+                "without origin/spacing refuses rather than inventing zeros), model primitive-to-conservative "
+                "fixed-state conversion, "
                 "typed-role slip wall, and typed no-flux faces that extrapolate ghosts then zero "
                 "the evaluated numerical flux before divergence/reflux; dynamic AMR regrid keeps internal "
                 "coarse-fine ghosts under the prepared transfer authority on MPI ranks, with "
@@ -407,18 +411,21 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             layout="uniform|amr",
             backend="production",
             platform="host",
-            mpi=False,
-            gpu=False,
+            mpi=mpi,
+            gpu=gpu,
             status="partial",
             limitation=(
-                "2D Cartesian conservative constant/RuntimeParam fixed-reference no-inflow uses "
-                "the exact compiled "
+                "Cartesian Dim-in-{1,2,3} conservative constant/RuntimeParam fixed-reference "
+                "no-inflow uses the exact compiled "
                 "flux-Jacobian provider emitted by m.roe_from_jacobian() (1..16 components); "
                 "the Kokkos kernel projects only outward-normal incoming modes, treats the "
                 "scale-relative sonic subspace as neutral, preflights the real spectrum "
-                "collectively, and rolls back ghosts on refusal; primitive/analytic references, "
-                "runtime/field-dependent eigenstructure, sonic-error policy, 3D, polar/embedded "
-                "geometry, and qualified MPI/GPU execution remain unavailable"
+                "collectively on the prepared ExecutionLane communicator, and rolls back ghosts "
+                "on refusal; MPI ranks execute that same kernel, and GPU uses the existing "
+                "Kokkos DefaultExecutionSpace launch already used in serial rather than a second "
+                "engine; primitive/analytic references, runtime/field-dependent eigenstructure, "
+                "sonic-error policy, and polar/embedded geometry remain unavailable until a "
+                "PreparedMetricProvider metric ABI exists"
             ),
             requested="characteristic no-inflow/outflow transport boundary",
             available_route=(
@@ -438,10 +445,10 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             gpu=gpu,
             status="partial",
             limitation=(
-                "2D fixed-state primitive inflow may use the exact compiled block-model "
-                "to_conservative provider; conservative-to-primitive recovery and arbitrary "
-                "representation converters remain unavailable, and conversion does not invent "
-                "a boundary admissibility projection"
+                "Cartesian Dim-in-{1,2,3} fixed-state primitive inflow may use the exact compiled "
+                "block-model to_conservative provider; conservative-to-primitive recovery and "
+                "arbitrary representation converters remain unavailable, and conversion does not "
+                "invent a boundary admissibility projection"
             ),
             source=source,
         ),
@@ -454,11 +461,17 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             gpu=gpu,
             status="partial",
             limitation=(
-                "2D conservative fixed-state inflow accepts data-only analytic ScalarExpr "
-                "programs over typed coordinates, one exact logical Clock, and bound parameters; "
-                "primitive per-point conversion and discrete state/field/input reads remain "
-                "unavailable, analytic ghost depth may not exceed the normal domain extent, and "
-                "axis-permuted periodic coordinates require a prepared coordinate map"
+                "Cartesian Dim-in-{1,2,3} fixed-state inflow accepts data-only analytic "
+                "ScalarExpr programs over typed x/y/z coordinates, one exact logical Clock, "
+                "bound parameters, and interior conservative state on Input slots 1..ncomp; "
+                "Geometry<Dim>::cell_center on the prepared session supplies the ranked physical "
+                "coordinates at install/fill, a domain box with origin/spacing builds that "
+                "Geometry once and reuses cell_center, a domain-box fill recovers the session "
+                "Geometry when the box matches, and a fill without origin/spacing or session "
+                "geometry refuses rather than inventing zeros; primitive analytic values use the "
+                "compiled model's to_conservative at each boundary point; setup-program discrete "
+                "inputs, Polar/EB metric ABI, analytic ghost depth above the normal domain "
+                "extent, and axis-permuted periodic coordinates remain refused"
             ),
             source=source,
         ),
@@ -473,10 +486,10 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             limitation=(
                 "one typed BoundaryFlux component transforms the already evaluated outward-normal "
                 "face flux between the Riemann solve and divergence/reflux through the same "
-                "prepared Uniform/AMR boundary plan; execution is currently a 2D Cartesian "
-                "host-batch route, the ordinary Uniform route materializes face fields when this "
-                "stage is selected, and no device-native or embedded/cut-cell metric ABI or "
-                "high-level TransportBoundarySet convenience exists yet"
+                "prepared Uniform/AMR boundary plan; execution is currently a Cartesian "
+                "Dim-in-{1,2,3} host-batch route, the ordinary Uniform route materializes face "
+                "fields when this stage is selected, and no device-native or embedded/cut-cell "
+                "metric ABI or high-level TransportBoundarySet convenience exists yet"
             ),
             requested="post-Riemann transport-boundary flux provider",
             available_route="PostRiemannFlux plus one qualified BoundaryFlux component",
@@ -651,20 +664,25 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
         _row(
             "amr:field_coupled_rhs_jacvec",
             layout="amr",
-            backend="none",
+            backend="production",
             platform="host",
-            mpi=mpi,
-            gpu=gpu,
-            status="unavailable",
+            mpi=False,
+            gpu=False,
+            status="available",
             limitation=(
-                "field-coupled rhs_jacvec has no level-qualified tangent-field provider ABI "
-                "for AMR level > 0"
+                "field_coupled rhs_jacvec uses evaluate_with_field_state_at with the "
+                "level-qualified BoundaryEvaluationPoint so every AMR level bundle installs the "
+                "same tangent-field provider with an explicit point.level == active_level index; "
+                "a fine caller cannot forge a coarse point and reuse level-0 data. CompositeFAC "
+                "tangent coupling across partially refined patches, additional field-to-field "
+                "providers, MPI and GPU remain unavailable"
             ),
             requested="field_coupled rhs_jacvec on AMR level > 0",
-            available_route="field_coupled rhs_jacvec on AMR level 0",
-            alternative=(
-                "use the level-0 route or implement a level-qualified tangent-field provider ABI"
+            available_route=(
+                "field_coupled rhs_jacvec on every AMR level via the level-qualified "
+                "tangent-field provider"
             ),
+            alternative="",
             source=source,
         ),
         _row(
@@ -672,23 +690,27 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             layout="amr",
             backend="production",
             platform="host",
-            mpi=False,
-            gpu=False,
+            mpi=mpi,
+            gpu=gpu,
             status="partial",
             limitation=(
                 "one generated Program compiles, binds and runs GMRES with the paired "
-                "level_rhs_jacvec_pair matvec on every level of an exactly two-level frozen 2D "
-                "AMR hierarchy in host/serial execution; the two interface participants may use "
-                "one independent packed-vector carrier block, but dynamic hierarchy mutation, "
-                "additional interfaces, mixed apply operators, MPI and GPU remain unavailable"
+                "level_rhs_jacvec_pair matvec on every level of an exactly two-level frozen "
+                "Cartesian Dim-in-{1,2,3} AMR hierarchy; MPI ranks execute that same pair on the "
+                "prepared ExecutionLane communicator, and GPU uses the existing Kokkos "
+                "DefaultExecutionSpace launch already used in serial rather than a second engine; "
+                "the two interface participants may use one independent packed-vector carrier block, but "
+                "dynamic hierarchy mutation, additional interfaces, and mixed apply operators "
+                "remain unavailable"
             ),
             available_route=(
-                "generated host/serial GMRES solve with an authenticated two-sided shared-interface "
-                "JVP on a frozen two-level 2D AMR hierarchy"
+                "generated GMRES solve with an authenticated two-sided shared-interface "
+                "JVP on a frozen two-level Cartesian Dim-in-{1,2,3} AMR hierarchy via "
+                "level_rhs_jacvec_pair and the prepared ExecutionLane communicator"
             ),
             alternative=(
-                "use the proved frozen two-level host/serial route, or add explicit execution "
-                "proof for dynamic hierarchies, additional interfaces, MPI or GPU"
+                "use the proved frozen two-level route, or add explicit execution "
+                "proof for dynamic hierarchies, additional interfaces, or mixed apply operators"
             ),
             source=source,
         ),
@@ -1036,13 +1058,45 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             source=source,
         ),
         _row(
+            "elliptic:cartesian_cg",
+            layout="uniform",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            limitation=(
+                "one compile-time CartesianPoissonSolver<Dim> product for Dim in {1,2,3}; "
+                "constant-coefficient cell-centred -laplacian with the ranked halo/BC contract; "
+                "no Poisson3D fork"
+            ),
+            source=source,
+        ),
+        _row(
             "elliptic:geometric_mg",
             layout="uniform|amr",
             backend="production",
             platform="host",
             mpi=mpi,
             gpu=gpu,
-            limitation="native multigrid route; supports variable epsilon",
+            limitation=(
+                "one compile-time GeometricMG<Dim> product for Cartesian Dim in {1,2,3}; "
+                "native V-cycle with variable epsilon; no MG3D fork"
+            ),
+            source=source,
+        ),
+        _row(
+            "elliptic:composite_fac",
+            layout="amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="partial",
+            limitation=(
+                "one compile-time CompositeFacPoisson<Dim> product for Cartesian Dim in {1,2,3}; "
+                "replicated MPI levels are accepted, distributed refined ownership remains "
+                "an explicit refusal; no FAC3D fork"
+            ),
             source=source,
         ),
         _row(
@@ -1052,9 +1106,16 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             platform="host",
             mpi=mpi,
             gpu=gpu,
+            status="partial",
             limitation=(
-                "exact Cartesian Dim in {1,2,3}, periodic, constant coefficient and canonical "
-                "ordered MPI slabs; radix-2 fast path with diagnosed direct-DFT fallback"
+                "one PoissonFFT<Dim> product for Cartesian Dim in {1,2,3}: every axis is "
+                "transformed and the discrete symbol is the sum of per-axis cosine eigenvalues, "
+                "with unique slabs on the final axis under MPI (no replicated Z); communicator "
+                "size must divide that axis or the plan refuses collectively. FFTW3 is the "
+                "production radix backend for locally complete axes when discovered in "
+                "CONDA_PREFIX; otherwise the in-tree radix-2 path is kept and non-covered extents "
+                "use the diagnosed direct-DFT fallback. Pencil decomposition is not closed. "
+                "FFT+AMR remains an explicit refusal"
             ),
             source=source,
         ),
@@ -1077,10 +1138,40 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             layout="amr",
             backend="none",
             status="unavailable",
-            limitation="FFT requires a single uniform periodic mesh, not AMR",
+            limitation=(
+                "a global FFT Poisson over a sparse AMR hierarchy with covered cells is the "
+                "wrong operator; PoissonFFTSolver is not a MultiFab GeometricMG/FAC bottom "
+                "solver, so the coarsest uniform periodic level cannot host FFT without a new "
+                "adapter. Keep GeometricMG/FAC on AMR"
+            ),
             requested="solver=FFT() with layout=AMR",
             available_route="GeometricMG() on AMR",
             alternative="use pops.solvers.elliptic.GeometricMG()",
+            source=source,
+        ),
+        _row(
+            "eb:cartesian_cut_cell",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="partial",
+            limitation=(
+                "PreparedEmbeddedBoundaryMetric<Dim> and cut_cell_fractions_from_samples<Dim> "
+                "instantiate for Cartesian Dim in {1,2,3}; Dim=1/2 volume stays the axis product "
+                "of independent 1-D crossings (bit-compatible); Dim=3 reconstructs eight "
+                "unit-cube corners from the same seven samples and measures {phi < 0} by marching "
+                "tetrahedra, with independent conservative face apertures from that cube "
+                "triangulation. Uniform-ratio AMR restrict/prolong/reflux of volume and "
+                "apertures stay on this same CutCellFractions metric. Polar Poisson and Disc "
+                "remain planar"
+            ),
+            requested="true 3D cut-cell geometry with surface measure and conservative AMR quality",
+            available_route=(
+                "ranked Cartesian cut geometry (cube triangulation in 3D) on Uniform/AMR prepared EB"
+            ),
+            alternative="use the ranked cut-cell metric or a staircase mask",
             source=source,
         ),
         _row(
@@ -1120,8 +1211,9 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             gpu=gpu,
             status="partial",
             limitation=(
-                "transitions are 2D isotropic ratio-(2,2); every transition must share "
-                "one isotropic buffer and one lookahead value"
+                "transitions are exact-rank isotropic defaults (2,), (2,2), or (2,2,2) and "
+                "accept anisotropic Dim-length ratios when the hierarchy provider allows them; "
+                "every transition must share one isotropic buffer and one lookahead value"
             ),
             source=source,
         ),

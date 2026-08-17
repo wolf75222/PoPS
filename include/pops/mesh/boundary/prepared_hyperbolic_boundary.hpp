@@ -25,6 +25,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -98,9 +99,10 @@ struct HyperbolicFaceContext {
   std::uint64_t boundary_identity = 0;
 };
 
-/// Host-side authored face metadata.  Analytic programs remain representable so installed tables
-/// are diagnosed precisely, but the canonical executor rejects them until the analytic coordinate
-/// provider exposes all `Dim` physical coordinates without a two-dimensional fallback.
+/// Host-side authored face metadata.  Conservative analytic ScalarExpr programs evaluate on device
+/// through the same `Geometry<Dim>::cell_center` already prepared on the fill session, including the
+/// `z` coordinate when Dim == 3.  A domain box with origin/spacing builds that Geometry once; a
+/// box without those coordinates is refused rather than inventing zeros.
 struct PreparedHyperbolicFace {
   HyperbolicBoundaryLaw law = HyperbolicBoundaryLaw::Periodic;
   std::string identity;
@@ -260,6 +262,169 @@ struct FillPhysicalFace {
   }
 };
 
+inline constexpr int kMaxAnalyticBoundaryComponents = 32;
+
+template <int Dim>
+bool origin_spacing_usable(const RealVector<Dim>& origin, const RealVector<Dim>& spacing) {
+  for (int axis = 0; axis < Dim; ++axis) {
+    if (!std::isfinite(origin[axis]) || !std::isfinite(spacing[axis]) || !(spacing[axis] > Real(0)))
+      return false;
+  }
+  return true;
+}
+
+template <int Dim>
+Geometry<Dim> geometry_from_box_origin_spacing(const Box<Dim>& domain,
+                                               const RealVector<Dim>& origin,
+                                               const RealVector<Dim>& spacing) {
+  if (domain.empty())
+    throw std::invalid_argument("prepared hyperbolic boundary domain must be non-empty");
+  if (!origin_spacing_usable(origin, spacing))
+    throw std::logic_error(
+        "analytic hyperbolic boundary requires a requalified ND coordinate provider");
+  RealVector<Dim> upper{};
+  for (int axis = 0; axis < Dim; ++axis)
+    upper[axis] = origin[axis] + spacing[axis] * static_cast<Real>(domain.length(axis));
+  return Geometry<Dim>::from_bounds(domain, origin, upper);
+}
+
+inline analytic::AnalyticProgram compile_boundary_analytic_program(
+    const std::vector<std::string>& opcodes, const std::vector<double>& literals, int dimension) {
+  if (opcodes.empty() || opcodes.size() != literals.size())
+    throw std::invalid_argument("analytic hyperbolic program has mismatched opcode/literal rows");
+  std::vector<analytic::AnalyticToken> tokens;
+  tokens.reserve(opcodes.size());
+  for (std::size_t index = 0; index < opcodes.size(); ++index) {
+    const analytic::AnalyticOp op = analytic::analytic_op_from_name(opcodes[index]);
+    const double raw = literals[index];
+    if (!std::isfinite(raw))
+      throw std::invalid_argument("analytic hyperbolic token literal must be finite");
+    if (op == analytic::AnalyticOp::Input &&
+        (raw < 0.0 || raw >= static_cast<double>(1 + kMaxAnalyticBoundaryComponents) ||
+         raw != std::floor(raw)))
+      throw std::invalid_argument("analytic hyperbolic Input slot is outside the typed boundary ABI");
+    tokens.push_back(analytic::AnalyticToken{op, static_cast<Real>(raw)});
+  }
+  analytic::AnalyticProgram program = analytic::compile_analytic_postfix(tokens);
+  if (program.result_type() != analytic::AnalyticValueType::Scalar)
+    throw std::invalid_argument("analytic hyperbolic program must produce one scalar value");
+  if (program.required_dimension() > dimension)
+    throw std::invalid_argument(
+        "analytic hyperbolic program requires a higher spatial rank than the prepared boundary");
+  return program;
+}
+
+template <class Model>
+concept ExactPrimitiveToConservativeModel =
+    requires(const Model& model, const typename Model::Prim& primitive) {
+      typename Model::State;
+      typename Model::Prim;
+      Model::n_vars;
+      { model.to_conservative(primitive) } -> std::same_as<typename Model::State>;
+    };
+
+template <int Axis, int Dim>
+struct ValidateAnalyticFace {
+  static_assert(Axis >= 0 && Axis < Dim);
+
+  FieldView<const Real, Dim> state{};
+  Geometry<Dim> geometry;
+  analytic::AnalyticProgramView programs[kMaxAnalyticBoundaryComponents]{};
+  Real time = Real(0);
+  int ncomp = 0;
+  int lo = 0;
+  int hi = -1;
+  int side = -1;
+
+  POPS_HD Real operator()(const Index<Dim>& ghost) const {
+    Real inputs[1 + kMaxAnalyticBoundaryComponents];
+    inputs[0] = time;
+    Index<Dim> interior = ghost;
+    interior[Axis] = side < 0 ? lo : hi;
+    const int input_count = 1 + ncomp;
+    for (int component = 0; component < ncomp; ++component)
+      inputs[1 + component] = state(interior, component);
+    for (int component = 0; component < ncomp; ++component) {
+      const analytic::AnalyticEvaluation evaluation = programs[component].eval_checked(
+          ghost, geometry, inputs, static_cast<std::uint8_t>(input_count));
+      if (!evaluation.valid || !Kokkos::isfinite(evaluation.value))
+        return Real(1);
+    }
+    return Real(0);
+  }
+};
+
+template <int Axis, int Dim>
+struct FillAnalyticFace {
+  static_assert(Axis >= 0 && Axis < Dim);
+
+  FieldView<Real, Dim> state{};
+  Geometry<Dim> geometry;
+  analytic::AnalyticProgramView programs[kMaxAnalyticBoundaryComponents]{};
+  Real time = Real(0);
+  int ncomp = 0;
+  int lo = 0;
+  int hi = -1;
+  int side = -1;
+
+  POPS_HD void operator()(const Index<Dim>& ghost) const {
+    Real inputs[1 + kMaxAnalyticBoundaryComponents];
+    inputs[0] = time;
+    Index<Dim> interior = ghost;
+    interior[Axis] = side < 0 ? lo : hi;
+    const int input_count = 1 + ncomp;
+    for (int component = 0; component < ncomp; ++component)
+      inputs[1 + component] = state(interior, component);
+    const RealVector<Dim> coordinates = geometry.cell_center(ghost);
+    for (int component = 0; component < ncomp; ++component) {
+      const analytic::AnalyticEvaluation evaluation = programs[component].eval_checked(
+          coordinates, inputs, static_cast<std::uint8_t>(input_count));
+      const Real prescribed = evaluation.valid ? evaluation.value : std::numeric_limits<Real>::quiet_NaN();
+      state(ghost, component) = Real(2) * prescribed - state(interior, component);
+    }
+  }
+};
+
+template <int Axis, int Dim, class Model>
+struct FillAnalyticPrimitiveFace {
+  static_assert(Axis >= 0 && Axis < Dim);
+
+  Model model;
+  FieldView<Real, Dim> state{};
+  Geometry<Dim> geometry;
+  analytic::AnalyticProgramView programs[kMaxAnalyticBoundaryComponents]{};
+  Real time = Real(0);
+  int ncomp = 0;
+  int lo = 0;
+  int hi = -1;
+  int side = -1;
+
+  POPS_HD Real operator()(const Index<Dim>& ghost) const {
+    Real inputs[1 + kMaxAnalyticBoundaryComponents];
+    inputs[0] = time;
+    Index<Dim> interior = ghost;
+    interior[Axis] = side < 0 ? lo : hi;
+    const int input_count = 1 + ncomp;
+    for (int component = 0; component < ncomp; ++component)
+      inputs[1 + component] = state(interior, component);
+    typename Model::Prim primitive{};
+    for (int component = 0; component < ncomp; ++component) {
+      const analytic::AnalyticEvaluation evaluation = programs[component].eval_checked(
+          ghost, geometry, inputs, static_cast<std::uint8_t>(input_count));
+      if (!evaluation.valid || !Kokkos::isfinite(evaluation.value))
+        return Real(1);
+      primitive[component] = evaluation.value;
+    }
+    const typename Model::State conservative = model.to_conservative(primitive);
+    for (int component = 0; component < ncomp; ++component) {
+      if (!Kokkos::isfinite(conservative[component]))
+        return Real(1);
+      state(ghost, component) = Real(2) * conservative[component] - state(interior, component);
+    }
+    return Real(0);
+  }
+};
+
 template <int Dim>
 struct ZeroBoundaryFaceFlux {
   FieldView<Real, Dim> flux{};
@@ -406,6 +571,8 @@ class PreparedHyperbolicBoundary {
         : owner_(std::exchange(other.owner_, nullptr)),
           state_(std::exchange(other.state_, nullptr)),
           domain_(other.domain_),
+          geometry_(other.geometry_),
+          time_(other.time_),
           ncomp_(other.ncomp_),
           ghosts_(other.ghosts_),
           local_size_(other.local_size_),
@@ -417,6 +584,8 @@ class PreparedHyperbolicBoundary {
         owner_ = std::exchange(other.owner_, nullptr);
         state_ = std::exchange(other.state_, nullptr);
         domain_ = other.domain_;
+        geometry_ = other.geometry_;
+        time_ = other.time_;
         ncomp_ = other.ncomp_;
         ghosts_ = other.ghosts_;
         local_size_ = other.local_size_;
@@ -431,10 +600,14 @@ class PreparedHyperbolicBoundary {
     friend class PreparedHyperbolicBoundary;
 
     PhysicalFillPreflight(const PreparedHyperbolicBoundary* owner,
-                          const MultiFab<Dim, MemorySpace>* state, Box<Dim> domain)
+                          const MultiFab<Dim, MemorySpace>* state, Box<Dim> domain,
+                          std::optional<Geometry<Dim>> geometry = std::nullopt,
+                          Real time = Real(0))
         : owner_(owner),
           state_(state),
           domain_(domain),
+          geometry_(std::move(geometry)),
+          time_(time),
           ncomp_(state->ncomp()),
           ghosts_(state->ghosts()),
           local_size_(state->local_size()),
@@ -445,6 +618,8 @@ class PreparedHyperbolicBoundary {
     const PreparedHyperbolicBoundary* owner_ = nullptr;
     const MultiFab<Dim, MemorySpace>* state_ = nullptr;
     Box<Dim> domain_{};
+    std::optional<Geometry<Dim>> geometry_{};
+    Real time_ = Real(0);
     int ncomp_ = 0;
     Extent<Dim> ghosts_{};
     std::size_t local_size_ = 0;
@@ -502,6 +677,17 @@ class PreparedHyperbolicBoundary {
       return !prepared.analytic_state.empty();
     });
   }
+  bool has_analytic_primitive() const {
+    return std::any_of(faces_.begin(), faces_.end(), [](const PreparedHyperbolicFace& prepared) {
+      return !prepared.analytic_state.empty() &&
+             prepared.authored_representation == HyperbolicStateRepresentation::Primitive;
+    });
+  }
+  PreparedHyperbolicBoundary with_prepared_geometry(const Geometry<Dim>& geometry) const {
+    PreparedHyperbolicBoundary copy(*this);
+    copy.prepared_geometry_ = geometry;
+    return copy;
+  }
   bool has_characteristic_no_inflow() const {
     return std::any_of(faces_.begin(), faces_.end(), [](const PreparedHyperbolicFace& prepared) {
       return prepared.law == HyperbolicBoundaryLaw::CharacteristicNoInflow;
@@ -525,7 +711,7 @@ class PreparedHyperbolicBoundary {
     return std::any_of(faces_.begin(), faces_.end(), [](const PreparedHyperbolicFace& prepared) {
       return prepared.law == HyperbolicBoundaryLaw::FixedState &&
              prepared.authored_representation == HyperbolicStateRepresentation::Primitive &&
-             !prepared.fixed_state_converted;
+             !prepared.fixed_state_converted && prepared.analytic_state.empty();
     });
   }
 
@@ -563,21 +749,48 @@ class PreparedHyperbolicBoundary {
       }
       prepared.fixed_state_converted = true;
     }
-    return PreparedHyperbolicBoundary(std::move(converted_faces), component_transforms_,
-                                      corner_policy_, explicit_periodic_identifications_);
+    auto converted = PreparedHyperbolicBoundary(std::move(converted_faces), component_transforms_,
+                                                corner_policy_, explicit_periodic_identifications_);
+    converted.prepared_geometry_ = prepared_geometry_;
+    return converted;
   }
 
   template <class MemorySpace>
   PhysicalFillPreflight<MemorySpace> preflight_physical(MultiFab<Dim, MemorySpace>& state,
-                                                        const Box<Dim>& domain) const {
-    validate_physical_contract_(state, domain, /*allow_characteristic=*/false);
-    return PhysicalFillPreflight<MemorySpace>(this, &state, domain);
+                                                        const Box<Dim>& domain,
+                                                        Real time = Real(0)) const {
+    const Geometry<Dim>* geometry = nullptr;
+    if (prepared_geometry_ && prepared_geometry_->domain() == domain)
+      geometry = &*prepared_geometry_;
+    validate_physical_contract_(state, domain, /*allow_characteristic=*/false, geometry);
+    return PhysicalFillPreflight<MemorySpace>(
+        this, &state, domain, geometry == nullptr ? std::nullopt : std::optional(*geometry), time);
   }
 
   template <class MemorySpace>
   PhysicalFillPreflight<MemorySpace> preflight_physical(MultiFab<Dim, MemorySpace>& state,
-                                                        const Geometry<Dim>& geometry) const {
-    return preflight_physical(state, geometry.domain());
+                                                        const Geometry<Dim>& geometry,
+                                                        Real time = Real(0)) const {
+    validate_physical_contract_(state, geometry.domain(), /*allow_characteristic=*/false,
+                                &geometry);
+    return PhysicalFillPreflight<MemorySpace>(this, &state, geometry.domain(), geometry, time);
+  }
+
+  template <class MemorySpace>
+  PhysicalFillPreflight<MemorySpace> preflight_physical(MultiFab<Dim, MemorySpace>& state,
+                                                        const Box<Dim>& domain,
+                                                        const RealVector<Dim>& origin,
+                                                        const RealVector<Dim>& spacing,
+                                                        Real time = Real(0)) const {
+    if (hyperbolic_boundary_detail::origin_spacing_usable(origin, spacing)) {
+      return preflight_physical(
+          state, hyperbolic_boundary_detail::geometry_from_box_origin_spacing(domain, origin, spacing),
+          time);
+    }
+    if (prepared_geometry_ && prepared_geometry_->domain() == domain)
+      return preflight_physical(state, *prepared_geometry_, time);
+    validate_physical_contract_(state, domain, /*allow_characteristic=*/false, nullptr);
+    return PhysicalFillPreflight<MemorySpace>(this, &state, domain, std::nullopt, time);
   }
 
   template <class MemorySpace>
@@ -591,19 +804,39 @@ class PreparedHyperbolicBoundary {
       throw std::logic_error(
           "prepared hyperbolic boundary received a foreign or stale physical preflight");
     preflight.owner_ = nullptr;
-    fill_axes_<0>(state, preflight.domain_);
+    fill_axes_<0>(state, preflight.domain_,
+                  preflight.geometry_ ? &*preflight.geometry_ : nullptr, preflight.time_);
     device_fence();
   }
 
   template <class MemorySpace>
-  void fill_physical(MultiFab<Dim, MemorySpace>& state, const Box<Dim>& domain) const {
-    auto preflight = preflight_physical(state, domain);
+  void fill_physical(MultiFab<Dim, MemorySpace>& state, const Box<Dim>& domain,
+                     Real time = Real(0)) const {
+    if (has_analytic_primitive())
+      throw std::logic_error(
+          "analytic primitive inflow requires the compiled model's to_conservative provider");
+    auto preflight = preflight_physical(state, domain, time);
     fill_physical_preflighted(state, std::move(preflight));
   }
 
   template <class MemorySpace>
-  void fill_physical(MultiFab<Dim, MemorySpace>& state, const Geometry<Dim>& geometry) const {
-    auto preflight = preflight_physical(state, geometry);
+  void fill_physical(MultiFab<Dim, MemorySpace>& state, const Geometry<Dim>& geometry,
+                     Real time = Real(0)) const {
+    if (has_analytic_primitive())
+      throw std::logic_error(
+          "analytic primitive inflow requires the compiled model's to_conservative provider");
+    auto preflight = preflight_physical(state, geometry, time);
+    fill_physical_preflighted(state, std::move(preflight));
+  }
+
+  template <class MemorySpace>
+  void fill_physical(MultiFab<Dim, MemorySpace>& state, const Box<Dim>& domain,
+                     const RealVector<Dim>& origin, const RealVector<Dim>& spacing,
+                     Real time = Real(0)) const {
+    if (has_analytic_primitive())
+      throw std::logic_error(
+          "analytic primitive inflow requires the compiled model's to_conservative provider");
+    auto preflight = preflight_physical(state, domain, origin, spacing, time);
     fill_physical_preflighted(state, std::move(preflight));
   }
 
@@ -612,39 +845,93 @@ class PreparedHyperbolicBoundary {
   /// before any value is published back to ``state``.
   template <class Model, class MemorySpace>
   void fill_physical_model_qualified(MultiFab<Dim, MemorySpace>& state, const Box<Dim>& domain,
-                                     const Model&) const {
+                                     const Model& model, Real time = Real(0)) const {
     if (has_characteristic_no_inflow())
       throw std::logic_error(
           "characteristic no-inflow requires an explicit prepared ExecutionLane");
-    fill_physical(state, domain);
+    if (has_analytic_primitive()) {
+      auto preflight = preflight_physical(state, domain, time);
+      fill_physical_preflighted_model_(state, std::move(preflight), model);
+      return;
+    }
+    fill_physical(state, domain, time);
   }
 
   template <class Model, class MemorySpace>
   void fill_physical_model_qualified(MultiFab<Dim, MemorySpace>& state, const Box<Dim>& domain,
                                      const Model& model, const ExecutionLane& lane,
-                                     MultiFab<Dim, MemorySpace>& candidate) const {
-    fill_physical_model_qualified_(state, domain, model, lane, candidate);
+                                     MultiFab<Dim, MemorySpace>& candidate,
+                                     Real time = Real(0)) const {
+    fill_physical_model_qualified_(state, domain, model, lane, candidate, nullptr, time);
   }
 
   template <class Model, class MemorySpace>
   void fill_physical_model_qualified(MultiFab<Dim, MemorySpace>& state,
-                                     const Geometry<Dim>& geometry, const Model& model) const {
-    fill_physical_model_qualified(state, geometry.domain(), model);
+                                     const Geometry<Dim>& geometry, const Model& model,
+                                     Real time = Real(0)) const {
+    if (has_characteristic_no_inflow())
+      throw std::logic_error(
+          "characteristic no-inflow requires an explicit prepared ExecutionLane");
+    if (has_analytic_primitive()) {
+      auto preflight = preflight_physical(state, geometry, time);
+      fill_physical_preflighted_model_(state, std::move(preflight), model);
+      return;
+    }
+    fill_physical(state, geometry, time);
   }
 
   template <class Model, class MemorySpace>
   void fill_physical_model_qualified(MultiFab<Dim, MemorySpace>& state,
                                      const Geometry<Dim>& geometry, const Model& model,
                                      const ExecutionLane& lane,
-                                     MultiFab<Dim, MemorySpace>& candidate) const {
-    fill_physical_model_qualified(state, geometry.domain(), model, lane, candidate);
+                                     MultiFab<Dim, MemorySpace>& candidate,
+                                     Real time = Real(0)) const {
+    fill_physical_model_qualified_(state, geometry.domain(), model, lane, candidate, &geometry,
+                                   time);
   }
 
  private:
   template <class Model, class MemorySpace>
+  void fill_physical_preflighted_model_(MultiFab<Dim, MemorySpace>& state,
+                                       PhysicalFillPreflight<MemorySpace>&& preflight,
+                                       const Model& model) const {
+    if (preflight.owner_ != this || preflight.state_ != &state ||
+        preflight.ncomp_ != state.ncomp() || preflight.ghosts_ != state.ghosts() ||
+        preflight.local_size_ != state.local_size() || preflight.layout_ != state.layout() ||
+        preflight.distribution_ != state.distribution() ||
+        preflight.local_rank_ != state.local_rank())
+      throw std::logic_error(
+          "prepared hyperbolic boundary received a foreign or stale physical preflight");
+    if (has_analytic_primitive()) {
+      if constexpr (!hyperbolic_boundary_detail::ExactPrimitiveToConservativeModel<Model>) {
+        throw std::logic_error(
+            "analytic primitive inflow requires the compiled model's to_conservative provider");
+      } else if (Model::n_vars != ncomp()) {
+        throw std::invalid_argument(
+            "analytic primitive inflow component layout differs from the boundary state");
+      }
+    }
+    preflight.owner_ = nullptr;
+    fill_axes_<0>(state, preflight.domain_,
+                  preflight.geometry_ ? &*preflight.geometry_ : nullptr, preflight.time_);
+    if (has_analytic_primitive()) {
+      if constexpr (hyperbolic_boundary_detail::ExactPrimitiveToConservativeModel<Model>) {
+        const Real failure = fill_analytic_primitive_axes_<0>(
+            state, preflight.domain_,
+            preflight.geometry_ ? &*preflight.geometry_ : nullptr, preflight.time_, model);
+        if (failure != Real(0))
+          throw std::runtime_error(
+              "analytic primitive inflow conversion produced a non-finite or invalid state");
+      }
+    }
+    device_fence();
+  }
+
+  template <class Model, class MemorySpace>
   void fill_physical_model_qualified_(MultiFab<Dim, MemorySpace>& state, const Box<Dim>& domain,
                                       const Model& model, const ExecutionLane& lane,
-                                      MultiFab<Dim, MemorySpace>& candidate) const {
+                                      MultiFab<Dim, MemorySpace>& candidate,
+                                      const Geometry<Dim>* geometry, Real time) const {
     long invalid_lane = 0;
     try {
       invalid_lane = lane.size() != static_cast<int>(state.rank_space().size()) ||
@@ -679,7 +966,15 @@ class PreparedHyperbolicBoundary {
       throw std::invalid_argument(
           "characteristic no-inflow boundary selection differs between execution ranks");
     if (!has_characteristic_no_inflow()) {
-      fill_physical(state, domain);
+      if (has_analytic_primitive()) {
+        auto preflight = geometry == nullptr ? preflight_physical(state, domain, time)
+                                             : preflight_physical(state, *geometry, time);
+        fill_physical_preflighted_model_(state, std::move(preflight), model);
+      } else if (geometry != nullptr) {
+        fill_physical(state, *geometry, time);
+      } else {
+        fill_physical(state, domain, time);
+      }
       return;
     }
     if constexpr (!hyperbolic_boundary_detail::ExactCharacteristicNoInflowModel<Model, Dim>) {
@@ -689,7 +984,7 @@ class PreparedHyperbolicBoundary {
     } else {
       long invalid_contract = 0;
       try {
-        validate_physical_contract_(state, domain, /*allow_characteristic=*/true);
+        validate_physical_contract_(state, domain, /*allow_characteristic=*/true, geometry);
       } catch (...) {
         invalid_contract = 1;
       }
@@ -729,8 +1024,20 @@ class PreparedHyperbolicBoundary {
       Real candidate_failure = Real(0);
       std::exception_ptr materialization_error;
       try {
-        fill_axes_<0>(candidate, domain);
-        failure = fill_characteristic_axes_<0>(candidate, domain, model);
+        fill_axes_<0>(candidate, domain, geometry, time);
+        if (has_analytic_primitive()) {
+          if constexpr (hyperbolic_boundary_detail::ExactPrimitiveToConservativeModel<Model>) {
+            if (Model::n_vars != ncomp())
+              throw std::invalid_argument(
+                  "analytic primitive inflow component layout differs from the boundary state");
+            failure = std::max(failure, fill_analytic_primitive_axes_<0>(candidate, domain, geometry,
+                                                                        time, model));
+          } else {
+            throw std::logic_error(
+                "analytic primitive inflow requires the compiled model's to_conservative provider");
+          }
+        }
+        failure = std::max(failure, fill_characteristic_axes_<0>(candidate, domain, model));
         for (std::size_t local = 0; local < candidate.local_size(); ++local)
           candidate_failure =
               std::max(candidate_failure,
@@ -785,13 +1092,27 @@ class PreparedHyperbolicBoundary {
  private:
   template <class MemorySpace>
   void validate_physical_contract_(const MultiFab<Dim, MemorySpace>& state, const Box<Dim>& domain,
-                                   bool allow_characteristic) const {
-    if (requires_fixed_state_conversion())
+                                   bool allow_characteristic,
+                                   const Geometry<Dim>* geometry) const {
+    if (requires_fixed_state_conversion() && !has_analytic_primitive())
       throw std::logic_error(
           "primitive fixed-state boundary reached execution before model conversion");
-    if (has_analytic_state())
+    if (has_analytic_state() && geometry == nullptr)
       throw std::logic_error(
           "analytic hyperbolic boundary requires a requalified ND coordinate provider");
+    if (has_analytic_state() && geometry != nullptr && !(geometry->domain() == domain))
+      throw std::invalid_argument(
+          "analytic hyperbolic geometry domain differs from the prepared fill domain");
+    if (has_analytic_state()) {
+      for (int axis = 0; axis < Dim; ++axis) {
+        if (!faces_[static_cast<std::size_t>(2 * axis)].analytic_state.empty() ||
+            !faces_[static_cast<std::size_t>(2 * axis + 1)].analytic_state.empty()) {
+          if (state.ghosts()[axis] > domain.length(axis))
+            throw std::invalid_argument(
+                "analytic ghost depth may not exceed the normal domain extent");
+        }
+      }
+    }
     if (has_characteristic_no_inflow() && !allow_characteristic)
       throw std::logic_error(
           "characteristic no-inflow requires the generated model's exact conservative ND "
@@ -866,12 +1187,14 @@ class PreparedHyperbolicBoundary {
     const HyperbolicBoundaryLaw high = faces_[static_cast<std::size_t>(2 * Axis + 1)].law;
     for (int component = 0; component < ncomp(); ++component) {
       for (std::int64_t offset = 1; offset <= ghosts[Axis]; ++offset) {
-        if (hyperbolic_boundary_detail::is_builtin_physical_law(low))
+        if (hyperbolic_boundary_detail::is_builtin_physical_law(low) &&
+            faces_[static_cast<std::size_t>(2 * Axis)].analytic_state.empty())
           hyperbolic_boundary_detail::validate_extension(
               detail::checked_box_index(static_cast<std::int64_t>(domain.lo[Axis]) - offset,
                                         "prepared hyperbolic lower halo index overflow"),
               domain.lo[Axis], domain.hi[Axis], Axis, low, high, table, component);
-        if (hyperbolic_boundary_detail::is_builtin_physical_law(high))
+        if (hyperbolic_boundary_detail::is_builtin_physical_law(high) &&
+            faces_[static_cast<std::size_t>(2 * Axis + 1)].analytic_state.empty())
           hyperbolic_boundary_detail::validate_extension(
               detail::checked_box_index(static_cast<std::int64_t>(domain.hi[Axis]) + offset,
                                         "prepared hyperbolic upper halo index overflow"),
@@ -890,20 +1213,21 @@ class PreparedHyperbolicBoundary {
         validate_patch_regions_<Axis + 1>(state, domain, allow_characteristic);
       return;
     }
-    const HyperbolicBoundaryLaw low = faces_[static_cast<std::size_t>(2 * Axis)].law;
-    const HyperbolicBoundaryLaw high = faces_[static_cast<std::size_t>(2 * Axis + 1)].law;
-    const auto executable = [allow_characteristic](HyperbolicBoundaryLaw law) {
-      return hyperbolic_boundary_detail::is_builtin_physical_law(law) ||
-             (allow_characteristic && law == HyperbolicBoundaryLaw::CharacteristicNoInflow);
+    const auto executable = [allow_characteristic](const PreparedHyperbolicFace& face) {
+      return hyperbolic_boundary_detail::is_builtin_physical_law(face.law) ||
+             !face.analytic_state.empty() ||
+             (allow_characteristic && face.law == HyperbolicBoundaryLaw::CharacteristicNoInflow);
     };
+    const auto& low_face = faces_[static_cast<std::size_t>(2 * Axis)];
+    const auto& high_face = faces_[static_cast<std::size_t>(2 * Axis + 1)];
     for (std::size_t local = 0; local < state.local_size(); ++local) {
       const Fab<Dim, MemorySpace>& fab = state.fab(local);
       const Box<Dim> valid = fab.box();
-      if (executable(low) && valid.lo[Axis] == domain.lo[Axis] &&
+      if (executable(low_face) && valid.lo[Axis] == domain.lo[Axis] &&
           !fab.grown_box().contains(physical_region_<Axis, -1>(valid, domain, state.ghosts())))
         throw std::invalid_argument(
             "prepared hyperbolic lower physical region exceeds the Fab ghost storage");
-      if (executable(high) && valid.hi[Axis] == domain.hi[Axis] &&
+      if (executable(high_face) && valid.hi[Axis] == domain.hi[Axis] &&
           !fab.grown_box().contains(physical_region_<Axis, 1>(valid, domain, state.ghosts())))
         throw std::invalid_argument(
             "prepared hyperbolic upper physical region exceeds the Fab ghost storage");
@@ -951,7 +1275,8 @@ class PreparedHyperbolicBoundary {
   }
 
   template <int Axis, class MemorySpace>
-  void fill_axes_(MultiFab<Dim, MemorySpace>& state, const Box<Dim>& domain) const {
+  void fill_axes_(MultiFab<Dim, MemorySpace>& state, const Box<Dim>& domain,
+                  const Geometry<Dim>* geometry, Real time) const {
     const HyperbolicBoundaryLaw low = faces_[static_cast<std::size_t>(2 * Axis)].law;
     const HyperbolicBoundaryLaw high = faces_[static_cast<std::size_t>(2 * Axis + 1)].law;
     const auto table = table_view_();
@@ -960,8 +1285,33 @@ class PreparedHyperbolicBoundary {
       for (std::size_t local = 0; local < state.local_size(); ++local) {
         Fab<Dim, MemorySpace>& fab = state.fab(local);
         const Box<Dim> valid = fab.box();
-        if (hyperbolic_boundary_detail::is_builtin_physical_law(low) &&
-            valid.lo[Axis] == domain.lo[Axis]) {
+        const auto& low_face = faces_[static_cast<std::size_t>(2 * Axis)];
+        const auto& high_face = faces_[static_cast<std::size_t>(2 * Axis + 1)];
+        if (valid.lo[Axis] == domain.lo[Axis] && !low_face.analytic_state.empty() &&
+            low_face.authored_representation != HyperbolicStateRepresentation::Primitive) {
+          if (geometry == nullptr)
+            throw std::logic_error(
+                "analytic hyperbolic boundary requires a requalified ND coordinate provider");
+          const Box<Dim> region = physical_region_<Axis, -1>(valid, domain, state.ghosts());
+          if (!fab.grown_box().contains(region))
+            throw std::logic_error(
+                "prepared hyperbolic lower physical region exceeds the Fab ghost storage");
+          hyperbolic_boundary_detail::ValidateAnalyticFace<Axis, Dim> validate{
+              std::as_const(fab).view(), *geometry};
+          hyperbolic_boundary_detail::FillAnalyticFace<Axis, Dim> fill{fab.view(), *geometry};
+          validate.ncomp = fill.ncomp = ncomp();
+          validate.time = fill.time = time;
+          validate.lo = fill.lo = domain.lo[Axis];
+          validate.hi = fill.hi = domain.hi[Axis];
+          validate.side = fill.side = -1;
+          for (int component = 0; component < ncomp(); ++component)
+            validate.programs[component] = fill.programs[component] =
+                low_face.analytic_state[static_cast<std::size_t>(component)].view();
+          if (for_each_cell_reduce_max(region, validate) != Real(0))
+            throw std::runtime_error("analytic hyperbolic boundary produced a non-finite value");
+          for_each_cell(region, fill);
+        } else if (hyperbolic_boundary_detail::is_builtin_physical_law(low) &&
+                   low_face.analytic_state.empty() && valid.lo[Axis] == domain.lo[Axis]) {
           const Box<Dim> region = physical_region_<Axis, -1>(valid, domain, state.ghosts());
           if (!fab.grown_box().contains(region))
             throw std::logic_error(
@@ -970,8 +1320,31 @@ class PreparedHyperbolicBoundary {
                         hyperbolic_boundary_detail::FillPhysicalFace<Axis, Dim>{
                             fab.view(), table, domain.lo[Axis], domain.hi[Axis], low, high});
         }
-        if (hyperbolic_boundary_detail::is_builtin_physical_law(high) &&
-            valid.hi[Axis] == domain.hi[Axis]) {
+        if (valid.hi[Axis] == domain.hi[Axis] && !high_face.analytic_state.empty() &&
+            high_face.authored_representation != HyperbolicStateRepresentation::Primitive) {
+          if (geometry == nullptr)
+            throw std::logic_error(
+                "analytic hyperbolic boundary requires a requalified ND coordinate provider");
+          const Box<Dim> region = physical_region_<Axis, 1>(valid, domain, state.ghosts());
+          if (!fab.grown_box().contains(region))
+            throw std::logic_error(
+                "prepared hyperbolic upper physical region exceeds the Fab ghost storage");
+          hyperbolic_boundary_detail::ValidateAnalyticFace<Axis, Dim> validate{
+              std::as_const(fab).view(), *geometry};
+          hyperbolic_boundary_detail::FillAnalyticFace<Axis, Dim> fill{fab.view(), *geometry};
+          validate.ncomp = fill.ncomp = ncomp();
+          validate.time = fill.time = time;
+          validate.lo = fill.lo = domain.lo[Axis];
+          validate.hi = fill.hi = domain.hi[Axis];
+          validate.side = fill.side = 1;
+          for (int component = 0; component < ncomp(); ++component)
+            validate.programs[component] = fill.programs[component] =
+                high_face.analytic_state[static_cast<std::size_t>(component)].view();
+          if (for_each_cell_reduce_max(region, validate) != Real(0))
+            throw std::runtime_error("analytic hyperbolic boundary produced a non-finite value");
+          for_each_cell(region, fill);
+        } else if (hyperbolic_boundary_detail::is_builtin_physical_law(high) &&
+                   high_face.analytic_state.empty() && valid.hi[Axis] == domain.hi[Axis]) {
           const Box<Dim> region = physical_region_<Axis, 1>(valid, domain, state.ghosts());
           if (!fab.grown_box().contains(region))
             throw std::logic_error(
@@ -983,7 +1356,61 @@ class PreparedHyperbolicBoundary {
       }
     }
     if constexpr (Axis + 1 < Dim)
-      fill_axes_<Axis + 1>(state, domain);
+      fill_axes_<Axis + 1>(state, domain, geometry, time);
+  }
+
+  template <int Axis, class Model, class MemorySpace>
+  Real fill_analytic_primitive_axes_(MultiFab<Dim, MemorySpace>& state, const Box<Dim>& domain,
+                                     const Geometry<Dim>* geometry, Real time,
+                                     const Model& model) const {
+    Real failure = Real(0);
+    if (state.ghosts()[Axis] > 0) {
+      if (geometry == nullptr)
+        throw std::logic_error(
+            "analytic hyperbolic boundary requires a requalified ND coordinate provider");
+      for (std::size_t local = 0; local < state.local_size(); ++local) {
+        Fab<Dim, MemorySpace>& fab = state.fab(local);
+        const Box<Dim> valid = fab.box();
+        const auto& low_face = faces_[static_cast<std::size_t>(2 * Axis)];
+        const auto& high_face = faces_[static_cast<std::size_t>(2 * Axis + 1)];
+        if (valid.lo[Axis] == domain.lo[Axis] && !low_face.analytic_state.empty() &&
+            low_face.authored_representation == HyperbolicStateRepresentation::Primitive) {
+          hyperbolic_boundary_detail::FillAnalyticPrimitiveFace<Axis, Dim, Model> fill{
+              model, fab.view(), *geometry};
+          fill.ncomp = ncomp();
+          fill.time = time;
+          fill.lo = domain.lo[Axis];
+          fill.hi = domain.hi[Axis];
+          fill.side = -1;
+          for (int component = 0; component < ncomp(); ++component)
+            fill.programs[component] =
+                low_face.analytic_state[static_cast<std::size_t>(component)].view();
+          failure = std::max(
+              failure, for_each_cell_reduce_max(
+                           physical_region_<Axis, -1>(valid, domain, state.ghosts()), fill));
+        }
+        if (valid.hi[Axis] == domain.hi[Axis] && !high_face.analytic_state.empty() &&
+            high_face.authored_representation == HyperbolicStateRepresentation::Primitive) {
+          hyperbolic_boundary_detail::FillAnalyticPrimitiveFace<Axis, Dim, Model> fill{
+              model, fab.view(), *geometry};
+          fill.ncomp = ncomp();
+          fill.time = time;
+          fill.lo = domain.lo[Axis];
+          fill.hi = domain.hi[Axis];
+          fill.side = 1;
+          for (int component = 0; component < ncomp(); ++component)
+            fill.programs[component] =
+                high_face.analytic_state[static_cast<std::size_t>(component)].view();
+          failure = std::max(
+              failure, for_each_cell_reduce_max(
+                           physical_region_<Axis, 1>(valid, domain, state.ghosts()), fill));
+        }
+      }
+    }
+    if constexpr (Axis + 1 < Dim)
+      failure = std::max(failure, fill_analytic_primitive_axes_<Axis + 1>(state, domain, geometry,
+                                                                         time, model));
+    return failure;
   }
 
   template <int Axis, int Side>
@@ -1043,9 +1470,22 @@ class PreparedHyperbolicBoundary {
       const auto& prepared = faces_[static_cast<std::size_t>(ordinal)];
       if (prepared.identity.empty() || prepared.identity_token == 0)
         throw std::invalid_argument("prepared hyperbolic faces require owner-qualified identities");
-      if (!prepared.analytic_state.empty() || !prepared.analytic_clock.empty())
+      if (!prepared.analytic_state.empty()) {
+        if (prepared.law != HyperbolicBoundaryLaw::FixedState)
+          throw std::invalid_argument("analytic hyperbolic programs require fixed-state inflow");
+        if (static_cast<int>(prepared.analytic_state.size()) != ncomp())
+          throw std::invalid_argument(
+              "analytic hyperbolic faces must provide one program per component");
+        if (std::any_of(prepared.analytic_state.begin(), prepared.analytic_state.end(),
+                        [](const analytic::AnalyticProgram& program) { return program.empty(); }))
+          throw std::invalid_argument("analytic hyperbolic programs must be non-empty");
+        if (prepared.law == HyperbolicBoundaryLaw::CharacteristicNoInflow)
+          throw std::invalid_argument(
+              "characteristic no-inflow cannot carry analytic programs");
+      } else if (!prepared.analytic_clock.empty()) {
         throw std::invalid_argument(
-            "analytic hyperbolic faces require a requalified ND coordinate provider");
+            "analytic hyperbolic Clock requires a compiled analytic program on that face");
+      }
       if (prepared.law == HyperbolicBoundaryLaw::FixedState ||
           prepared.law == HyperbolicBoundaryLaw::CharacteristicNoInflow) {
         if (prepared.fixed_state.size() != component_transforms_.size() ||
@@ -1061,7 +1501,8 @@ class PreparedHyperbolicBoundary {
           if (prepared.converter_identity.empty())
             throw std::invalid_argument(
                 "primitive fixed-state boundary requires one converter identity");
-        } else if (!prepared.converter_identity.empty() || !prepared.fixed_state_converted) {
+        } else if (!prepared.converter_identity.empty() ||
+                   (!prepared.fixed_state_converted && prepared.analytic_state.empty())) {
           throw std::invalid_argument(
               "conservative fixed-state boundary must not carry conversion metadata");
         }
@@ -1122,6 +1563,7 @@ class PreparedHyperbolicBoundary {
   bool explicit_periodic_identifications_ = false;
   Kokkos::View<Transform*, Kokkos::SharedSpace> device_transforms_;
   Kokkos::View<Real*, Kokkos::SharedSpace> device_fixed_values_;
+  std::optional<Geometry<Dim>> prepared_geometry_{};
 };
 
 /// Sole parser from installed Python/native tables into the typed boundary authority.
@@ -1149,10 +1591,19 @@ PreparedHyperbolicBoundary<Dim> prepare_hyperbolic_boundary(
        face_converter_identities.size() != static_cast<std::size_t>(2 * Dim)))
     throw std::invalid_argument(
         "prepared hyperbolic boundary conversion metadata must cover every oriented face");
-  if (!face_analytic_opcodes.empty() || !face_analytic_literals.empty() ||
-      !face_analytic_clocks.empty())
-    throw std::invalid_argument(
-        "analytic hyperbolic tables require a requalified ND coordinate provider");
+  const bool has_analytic = !face_analytic_opcodes.empty() || !face_analytic_literals.empty() ||
+                            !face_analytic_clocks.empty();
+  const std::size_t face_count = static_cast<std::size_t>(2 * Dim);
+  const std::size_t analytic_rows = face_count * component_roles.size();
+  if (has_analytic) {
+    if (face_analytic_opcodes.size() != analytic_rows ||
+        face_analytic_literals.size() != analytic_rows)
+      throw std::invalid_argument(
+          "analytic hyperbolic tables must provide one opcode/literal row per face and component");
+    if (!face_analytic_clocks.empty() && face_analytic_clocks.size() != face_count)
+      throw std::invalid_argument(
+          "analytic hyperbolic clocks must be empty or cover every oriented face");
+  }
 
   std::vector<HyperbolicComponentTransform<Dim>> transforms;
   transforms.reserve(component_roles.size());
@@ -1192,6 +1643,37 @@ PreparedHyperbolicBoundary<Dim> prepare_hyperbolic_boundary(
                                           static_cast<std::size_t>(ordinal)]));
       destination.fixed_state_converted =
           destination.authored_representation == HyperbolicStateRepresentation::Conservative;
+    }
+    if (has_analytic) {
+      destination.analytic_clock =
+          face_analytic_clocks.empty() ? std::string{}
+                                       : face_analytic_clocks[static_cast<std::size_t>(ordinal)];
+      std::vector<analytic::AnalyticProgram> programs;
+      programs.reserve(component_roles.size());
+      bool any_program = false;
+      for (std::size_t component = 0; component < component_roles.size(); ++component) {
+        const std::size_t row = static_cast<std::size_t>(ordinal) * component_roles.size() + component;
+        if (face_analytic_opcodes[row].empty()) {
+          if (!face_analytic_literals[row].empty())
+            throw std::invalid_argument(
+                "analytic hyperbolic empty opcode row cannot carry literals");
+          continue;
+        }
+        any_program = true;
+        programs.push_back(hyperbolic_boundary_detail::compile_boundary_analytic_program(
+            face_analytic_opcodes[row], face_analytic_literals[row], Dim));
+      }
+      if (any_program) {
+        if (programs.size() != component_roles.size())
+          throw std::invalid_argument(
+              "analytic hyperbolic faces must provide one program per component");
+        if (destination.law != HyperbolicBoundaryLaw::FixedState)
+          throw std::invalid_argument("analytic hyperbolic programs require fixed-state inflow");
+        destination.analytic_state = std::move(programs);
+      } else if (!destination.analytic_clock.empty()) {
+        throw std::invalid_argument(
+            "analytic hyperbolic Clock requires a compiled analytic program on that face");
+      }
     }
   }
   return PreparedHyperbolicBoundary<Dim>(std::move(faces), std::move(transforms),

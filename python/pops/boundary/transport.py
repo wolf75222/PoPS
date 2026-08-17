@@ -9,6 +9,7 @@ from typing import Any, ClassVar, cast
 
 from pops.analytic import ScalarExpr
 from pops.domain import DomainBoundary
+from pops.frames import CartesianAxis
 from pops._ir import Expr
 from pops._ir.expr import Const
 from pops._ir.visitors import _key
@@ -866,6 +867,7 @@ class ResolvedTransportBoundarySet:
             )
         face_rows: list[ResolvedTransportCondition | None] = [None] * (2 * dimension)
         analytic_plan_clocks: set[str] = set()
+        has_analytic = False
         depth = 0
         for condition in self.conditions:
             geometry = condition.geometry
@@ -877,6 +879,14 @@ class ResolvedTransportBoundarySet:
             dependencies = condition.provider.dependencies
             characteristic = dependencies.characteristic
             if characteristic.mode is not ClosureMode.NONE:
+                if (
+                    not isinstance(geometry.axis, CartesianAxis)
+                    or geometry.axis.name not in ("x", "y", "z")
+                ):
+                    raise NotImplementedError(
+                        "characteristic no-inflow requires Cartesian x/y/z faces; polar and "
+                        "embedded geometry have no prepared metric ABI"
+                    )
                 expected = model_characteristic_no_inflow(state)
                 exact_no_inflow = (
                     condition.condition_type == "inflow"
@@ -904,17 +914,19 @@ class ResolvedTransportBoundarySet:
                     )
                 analytic = all(isinstance(row, ScalarExpr) for row in condition.values)
                 if analytic:
+                    has_analytic = True
                     analytic_expressions = tuple(
                         cast(ScalarExpr, expression) for expression in condition.values
                     )
-                    if representation != "conservative":
+                    if representation not in {"conservative", "primitive"}:
                         raise NotImplementedError(
-                            "analytic primitive inflow is unavailable because model conversion "
-                            "must execute per boundary point; author conservative values instead"
+                            "analytic inflow requires conservative values or "
+                            "model_primitive_to_conservative(state)"
                         )
-                    if dependencies.states or dependencies.fields:
+                    if dependencies.fields:
                         raise NotImplementedError(
-                            "analytic inflow cannot read discrete state or field storage"
+                            "analytic inflow cannot read discrete field storage; interior "
+                            "conservative state is the typed Input-slot ABI"
                         )
                     clocks = {
                         clock.qualified_id
@@ -956,6 +968,16 @@ class ResolvedTransportBoundarySet:
             raise ValueError("native transport boundary has incomplete physical-face coverage")
         if len(analytic_plan_clocks) > 1:
             raise ValueError("one prepared analytic boundary plan cannot mix several logical Clocks")
+        if has_analytic:
+            for identification in getattr(self.plan.topology, "periodic", ()):
+                orientation = getattr(identification, "orientation", None)
+                permutation = getattr(orientation, "permutation", ())
+                signs = getattr(orientation, "signs", ())
+                dimension_axes = tuple(range(len(permutation)))
+                if permutation != dimension_axes or any(sign != 1 for sign in signs):
+                    raise NotImplementedError(
+                        "axis-permuted periodic coordinates require a prepared coordinate map"
+                    )
         return state, ncomp, tuple(row for row in face_rows if row is not None), depth, dimension
 
     @staticmethod
@@ -1050,9 +1072,8 @@ class ResolvedTransportBoundarySet:
 
         The built-in provider intentionally supports only data that can be executed without a
         Python callback: outflow, scalar expressions closed over BindSchema parameters, and
-        conservative analytic ``(coordinates, t, params)`` inflow programs. Discrete state/field reads
-        need a compiled boundary component and therefore fail here instead of being retained as
-        ignored metadata.
+        conservative or model-primitive analytic ``(coordinates, t, interior state, params)``
+        inflow programs. Setup-program discrete inputs still fail here; Polar/EB remain refused.
         """
         from pops.model._bind_expression import eval_expression_key
         from pops.mesh.boundaries import ClosureMode
