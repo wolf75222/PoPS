@@ -139,4 +139,16 @@ void replace_prepared_embedded_boundary_geometry_collectively(
     const MultiFab<Dim>& prototype, PreparedEmbeddedBoundaryMode mode,
     const EbThresholds& thresholds, std::uint64_t generation, const ExecutionLane& lane);
 
+/// Fill transport-state ghosts through the same Cartesian FV halo schedule used for phi.
+/// Partitioned remote jobs use @p lane; local-only layouts stay on the local replay path.
+template <int Dim>
+void fill_prepared_eb_transport_state_ghosts(MultiFab<Dim>& state,
+                                             const PreparedEmbeddedBoundaryGeometry<Dim>& embedded,
+                                             const ExecutionLane& lane);
+
+/// Fail-closed check that published active_mask ghosts still match `{phi < 0}` after the phi halo.
+template <int Dim>
+void require_prepared_eb_active_mask_matches_phi(
+    const PreparedEmbeddedBoundaryGeometry<Dim>& embedded, const ExecutionLane& lane);
+
 }  // namespace pops::runtime::system

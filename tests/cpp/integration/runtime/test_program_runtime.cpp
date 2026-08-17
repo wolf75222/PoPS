@@ -1553,8 +1553,10 @@ TEST(ProgramRuntime, PhysicalReductionsUsePreparedEmbeddedBoundaryMeasure) {
   runtime::program::ProgramContext staircase_context(&staircase);
   MultiFab<kNativeDimension>& staircase_field = staircase_context.state(0);
   const int staircase_inactive = static_cast<int>(cells) - staircase_active;
-  const Real staircase_raw_sum = Real(2 * staircase_active + 1000 * staircase_inactive);
-  const Real staircase_raw_dot = Real(4 * staircase_active + 1000000 * staircase_inactive);
+  const Real staircase_raw_sum =
+      Real(2) * Real(staircase_active) + Real(1000) * Real(staircase_inactive);
+  const Real staircase_raw_dot =
+      Real(4) * Real(staircase_active) + Real(1000000) * Real(staircase_inactive);
   const Real staircase_active_sum = Real(2 * staircase_active);
   const Real staircase_active_dot = Real(4 * staircase_active);
   // Ownerless ProgramContext overloads remain raw scratch-field algebra, including inactive
@@ -1634,8 +1636,10 @@ TEST(ProgramRuntime, PhysicalReductionsUsePreparedEmbeddedBoundaryMeasure) {
   runtime::program::ProgramContext cutcell_context(&cutcell);
   MultiFab<kNativeDimension>& cutcell_field = cutcell_context.state(0);
   const int cutcell_inactive = static_cast<int>(cells) - cutcell_active;
-  const Real cutcell_raw_sum = Real(2 * cutcell_active + 1000 * cutcell_inactive);
-  const Real cutcell_raw_dot = Real(4 * cutcell_active + 1000000 * cutcell_inactive);
+  const Real cutcell_raw_sum =
+      Real(2) * Real(cutcell_active) + Real(1000) * Real(cutcell_inactive);
+  const Real cutcell_raw_dot =
+      Real(4) * Real(cutcell_active) + Real(1000000) * Real(cutcell_inactive);
   const Real cutcell_active_sum = Real(2 * cutcell_active);
   const Real cutcell_active_dot = Real(4 * cutcell_active);
   const double cutcell_physical_sum = 2.0 * cutcell_kappa_sum;

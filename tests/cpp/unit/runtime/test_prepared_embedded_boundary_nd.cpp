@@ -3,8 +3,10 @@
 
 #include <gtest/gtest.h>
 
+#include <pops/amr/refinement_ratio.hpp>
 #include <pops/core/foundation/kokkos_env.hpp>
 #include <pops/mesh/execution/for_each.hpp>
+#include <pops/mesh/storage/fab.hpp>
 #include <pops/numerics/spatial/embedded_boundary/cut_geometry.hpp>
 #include <pops/runtime/system/prepared_embedded_boundary.hpp>
 
@@ -13,6 +15,7 @@
 #include <cstddef>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -237,6 +240,58 @@ TEST(PreparedEmbeddedBoundaryND, ConservativeAmrRestrictProlongRefluxStayOnOneMe
   const pops::Real fine_faces[2] = {pops::Real(0.2), pops::Real(0.3)};
   EXPECT_DOUBLE_EQ(pops::nd::reflux_cut_face_aperture(pops::Real(0.4), fine_faces, 2),
                    pops::Real(0.1));
+}
+
+template <int Dim>
+struct SampleFinePhi {
+  pops::FieldView<pops::Real, Dim> phi{};
+
+  POPS_HD void operator()(const pops::Index<Dim>& index) const {
+    phi(index) = (static_cast<pops::Real>(index[0]) + pops::Real(0.5)) / pops::Real(4) -
+                 pops::Real(0.5);
+  }
+};
+
+TEST(PreparedEmbeddedBoundaryND, CutCellFractionTransferIsInvokedOnUniformRatioBoundary) {
+  const pops::Box<2> fine_domain = pops::Box<2>::from_extents(filled_extent<2>(4));
+  const pops::Box<2> coarse_domain = pops::Box<2>::from_extents(filled_extent<2>(2));
+  pops::Fab<2> fine_phi(fine_domain, 1, filled_extent<2>(1));
+  pops::Fab<2> coarse_volume(coarse_domain, 1);
+  pops::Fab<2> fine_volume(fine_domain, 1);
+  pops::Fab<2> aperture_residual(coarse_domain, 1);
+  pops::for_each_cell(fine_phi.grown_box(), SampleFinePhi<2>{fine_phi.view()});
+
+  const pops::amr::RefinementRatio<2> ratio(2, 2);
+  pops::nd::apply_cut_cell_fraction_amr_transfer(
+      std::as_const(fine_phi).view(), coarse_volume.view(), fine_volume.view(),
+      aperture_residual.view(), coarse_domain, ratio);
+
+  pops::sync_host();
+  const pops::Index<2> coarse{};
+  pops::nd::CutCellFractions<2> children[4]{};
+  for (int child = 0; child < 4; ++child) {
+    pops::Index<2> fine{};
+    fine[0] = child % 2;
+    fine[1] = child / 2;
+    children[child] = pops::nd::cut_cell_fractions_from_phi_cell(std::as_const(fine_phi).view(),
+                                                                 fine);
+  }
+  const auto restricted = pops::nd::restrict_cut_cell_fractions(children, 4);
+  EXPECT_DOUBLE_EQ(std::as_const(coarse_volume).view()(coarse), restricted.volume_fraction);
+  const auto injected = pops::nd::prolong_cut_cell_fractions(restricted);
+  EXPECT_DOUBLE_EQ(std::as_const(fine_volume).view()(pops::Index<2>{}), injected.volume_fraction);
+  EXPECT_DOUBLE_EQ(std::as_const(fine_volume).view()(pops::Index<2>{1, 1}),
+                   injected.volume_fraction);
+
+  pops::Real covering[2]{};
+  int covering_count = 0;
+  for (int child = 0; child < 4; ++child) {
+    if ((child % 2) != 0)
+      continue;
+    covering[covering_count++] = children[child].face_lower[0];
+  }
+  EXPECT_DOUBLE_EQ(std::as_const(aperture_residual).view()(coarse),
+                   pops::nd::reflux_cut_face_aperture(restricted.face_lower[0], covering, 2));
 }
 
 template <int Dim>

@@ -6,7 +6,9 @@
 #include <pops/mesh/boundary/prepared_hyperbolic_boundary.hpp>
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>
+#include <pops/numerics/spatial/embedded_boundary/cut_geometry.hpp>
 #include <pops/numerics/spatial/embedded_boundary/operator.hpp>
+#include <pops/runtime/amr/bootstrap_transfer_builtins.hpp>
 #include <pops/numerics/spatial/operators/cartesian_operator.hpp>
 #include <pops/numerics/spatial/operators/masked_operator.hpp>
 #include <pops/runtime/amr/amr_runtime.hpp>
@@ -996,6 +998,18 @@ void materialize_cut_cell_patch(
       model, metric, reconstruction, numerical, positivity_floor, state, providers,
       embedded.active_mask().fab(local), faces, residual, face_candidate, face_statuses,
       residual_candidate, cell_statuses);
+}
+
+/// Generated AMR seam for the one uniform-ratio CutCellFractions restrict/prolong/reflux path.
+template <int Dim>
+void apply_generated_amr_cut_cell_fraction_transfer(
+    FieldView<const Real, Dim> fine_phi, FieldView<Real, Dim> coarse_volume,
+    FieldView<Real, Dim> fine_volume, FieldView<Real, Dim> coarse_aperture_residual,
+    const Box<Dim>& coarse_region, const amr::RefinementRatio<Dim>& ratio,
+    amr::transfer::IndexMapping<Dim> mapping = {}) {
+  nd::apply_cut_cell_fraction_amr_transfer(fine_phi, coarse_volume, fine_volume,
+                                           coarse_aperture_residual, coarse_region, ratio,
+                                           mapping);
 }
 
 template <int Dim, class Model, class Reconstruction, class Numerical,

@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <pops/numerics/spatial/embedded_boundary/cut_geometry.hpp>
 #include <pops/numerics/time/amr/reflux/amr_flux_helpers.hpp>
 
 #include <array>
@@ -78,6 +79,38 @@ template <int Dim, class MemorySpace>
     ::pops::amr::transfer::ComponentRange components = {}) {
   return ::pops::numerics::time::amr::prepare_average_down(runtime, fine_level, fine, parent,
                                                            parent_region, mapping, components);
+}
+
+/// Sibling of volume-average restriction: invoke CutCellFractions restrict on one uniform-ratio
+/// coarse region. This is not a second PreparedTransfer kind and not a second reflux engine.
+template <int Dim>
+void apply_cut_cell_fraction_restriction(
+    FieldView<const Real, Dim> fine_phi, FieldView<Real, Dim> coarse_volume,
+    const Box<Dim>& coarse_region, const ::pops::amr::RefinementRatio<Dim>& ratio,
+    ::pops::amr::transfer::IndexMapping<Dim> mapping = {},
+    Real theta_min = ::pops::kEbCutFractionFloor) {
+  nd::apply_cut_cell_fraction_restriction(fine_phi, coarse_volume, coarse_region, ratio, mapping,
+                                          theta_min);
+}
+
+template <int Dim>
+void apply_cut_cell_fraction_prolongation(
+    FieldView<const Real, Dim> coarse_volume, FieldView<Real, Dim> fine_volume,
+    const Box<Dim>& coarse_region, const ::pops::amr::RefinementRatio<Dim>& ratio,
+    ::pops::amr::transfer::IndexMapping<Dim> mapping = {}) {
+  nd::apply_cut_cell_fraction_prolongation(coarse_volume, fine_volume, coarse_region, ratio,
+                                           mapping);
+}
+
+template <int Dim>
+void apply_cut_cell_face_aperture_reflux(
+    FieldView<const Real, Dim> fine_phi, FieldView<Real, Dim> coarse_residual,
+    const Box<Dim>& coarse_region, int axis, bool upper,
+    const ::pops::amr::RefinementRatio<Dim>& ratio,
+    ::pops::amr::transfer::IndexMapping<Dim> mapping = {},
+    Real theta_min = ::pops::kEbCutFractionFloor) {
+  nd::apply_cut_cell_face_aperture_reflux(fine_phi, coarse_residual, coarse_region, axis, upper,
+                                          ratio, mapping, theta_min);
 }
 
 /// Prepare parent-to-child coarse/fine ghost interpolation.

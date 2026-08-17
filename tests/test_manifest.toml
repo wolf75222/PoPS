@@ -210,6 +210,12 @@ labels = ["backend", "mpi", "medium"]
 mpi_nproc = [1, 2, 4]
 
 [[cpp.suite]]
+name = "test_mpi_cutcell_multibox"
+sources = ["tests/cpp/integration/mpi/test_mpi_cutcell_multibox.cpp"]
+labels = ["backend", "mesh", "mpi", "nd", "medium"]
+mpi_nproc = [1, 2]
+
+[[cpp.suite]]
 name = "test_mpi_coupler_inject"
 sources = ["tests/cpp/integration/mpi/test_mpi_coupler_inject.cpp"]
 labels = ["backend", "mpi", "medium"]

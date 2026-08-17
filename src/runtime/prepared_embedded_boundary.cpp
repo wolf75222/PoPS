@@ -308,6 +308,17 @@ struct MaterializeMaskKernel {
 };
 
 template <int Dim>
+struct MaskPhiMismatchKernel {
+  FieldView<const Real, Dim> phi;
+  FieldView<const Real, Dim> mask;
+
+  POPS_HD Real operator()(const Index<Dim>& index) const {
+    const Real expected = phi(index) < Real(0) ? Real(1) : Real(0);
+    return expected == mask(index) ? Real(0) : Real(1);
+  }
+};
+
+template <int Dim>
 struct MaterializeMetricKernel {
   FieldView<const Real, Dim> phi;
   FieldView<Real, Dim> kappa;
@@ -545,6 +556,52 @@ void replace_prepared_embedded_boundary_geometry_collectively(
   destination = std::move(staged);
 }
 
+template <int Dim>
+void fill_prepared_eb_transport_state_ghosts(MultiFab<Dim>& state,
+                                             const PreparedEmbeddedBoundaryGeometry<Dim>& embedded,
+                                             const ExecutionLane& lane) {
+  if (!(state.layout() == embedded.phi().layout()) ||
+      !(state.distribution() == embedded.phi().distribution()) ||
+      !(state.local_rank() == embedded.phi().local_rank()))
+    throw std::invalid_argument("prepared EB transport state layout does not match geometry");
+  for (int axis = 0; axis < Dim; ++axis) {
+    if (state.ghosts()[axis] < 1)
+      throw std::invalid_argument("prepared EB transport state requires one ghost on every axis");
+  }
+
+  const HaloScheduleBudget budget =
+      exact_halo_budget(state, embedded.geometry(), embedded.topology());
+  const HaloLayoutCoverage coverage =
+      state.layout().tiles_exactly(embedded.geometry().domain(), budget.layout)
+          ? HaloLayoutCoverage::full_domain
+          : HaloLayoutCoverage::sparse_level;
+  const HaloSchedule<Dim> schedule = prepare_halo_schedule(
+      state, embedded.geometry().domain(), embedded.topology(), coverage, budget);
+  if (schedule.has_remote_jobs()) {
+    fill_boundary(state, schedule, lane,
+                  HaloExchangeContext{embedded.generation(), embedded.generation(),
+                                      ExecutionLane::halo_message_tag});
+  } else {
+    fill_boundary(state, schedule);
+  }
+}
+
+template <int Dim>
+void require_prepared_eb_active_mask_matches_phi(
+    const PreparedEmbeddedBoundaryGeometry<Dim>& embedded, const ExecutionLane& lane) {
+  Real local_mismatch = Real(0);
+  for (std::size_t local = 0; local < embedded.phi().local_size(); ++local) {
+    local_mismatch = Kokkos::fmax(
+        local_mismatch,
+        for_each_cell_reduce_max(embedded.phi().fab(local).grown_box(),
+                                 MaskPhiMismatchKernel<Dim>{embedded.phi().fab(local).view(),
+                                                            embedded.active_mask().fab(local).view()}));
+  }
+  if (all_reduce_max(static_cast<double>(local_mismatch), lane.communicator()) != 0.0)
+    throw std::invalid_argument(
+        "prepared EB active_mask ghosts do not match phi after the Cartesian halo");
+}
+
 template std::shared_ptr<const PreparedEmbeddedBoundaryGeometry<1>>
 prepare_embedded_boundary_geometry_collectively(const std::vector<std::string>&,
                                                 const std::vector<double>&, const Geometry<1>&,
@@ -576,5 +633,22 @@ template void replace_prepared_embedded_boundary_geometry_collectively(
     std::shared_ptr<const PreparedEmbeddedBoundaryGeometry<3>>&, const std::vector<std::string>&,
     const std::vector<double>&, const Geometry<3>&, const BoundaryTopology<3>&, const MultiFab<3>&,
     PreparedEmbeddedBoundaryMode, const EbThresholds&, std::uint64_t, const ExecutionLane&);
+
+template void fill_prepared_eb_transport_state_ghosts(MultiFab<1>&,
+                                                      const PreparedEmbeddedBoundaryGeometry<1>&,
+                                                      const ExecutionLane&);
+template void fill_prepared_eb_transport_state_ghosts(MultiFab<2>&,
+                                                      const PreparedEmbeddedBoundaryGeometry<2>&,
+                                                      const ExecutionLane&);
+template void fill_prepared_eb_transport_state_ghosts(MultiFab<3>&,
+                                                      const PreparedEmbeddedBoundaryGeometry<3>&,
+                                                      const ExecutionLane&);
+
+template void require_prepared_eb_active_mask_matches_phi(
+    const PreparedEmbeddedBoundaryGeometry<1>&, const ExecutionLane&);
+template void require_prepared_eb_active_mask_matches_phi(
+    const PreparedEmbeddedBoundaryGeometry<2>&, const ExecutionLane&);
+template void require_prepared_eb_active_mask_matches_phi(
+    const PreparedEmbeddedBoundaryGeometry<3>&, const ExecutionLane&);
 
 }  // namespace pops::runtime::system

@@ -791,6 +791,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_system_fft 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_system_analytic_level_set 2)
   set(POPS_MPI_RANKS_test_mpi_coupled_source 1 2 4)
+  set(POPS_MPI_RANKS_test_mpi_cutcell_multibox 1 2)
   set(POPS_MPI_RANKS_test_mpi_field_nullspace_preflight 2)
   set(POPS_MPI_RANKS_test_mpi_prepared_tagging_execution 2)
   set(POPS_MPI_RANKS_test_krylov_collective_contract 2)
@@ -846,6 +847,7 @@ if(POPS_HAS_MPI)
     test_mpi_system_fft
     test_mpi_system_analytic_level_set
     test_mpi_coupled_source
+    test_mpi_cutcell_multibox
     test_mpi_field_nullspace_preflight
     test_mpi_prepared_tagging_execution
     test_krylov_collective_contract
@@ -891,6 +893,8 @@ if(POPS_HAS_MPI)
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_system pops_runtime_amr)
     elseif(_test STREQUAL "test_mpi_system_analytic_level_set")
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_system pops_runtime_amr)
+    elseif(_test STREQUAL "test_mpi_cutcell_multibox")
+      list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_system)
     elseif(_test STREQUAL "test_mpi_cell_temporal_program" OR
            _test STREQUAL "test_mpi_cell_temporal_program_multibox" OR
            _test STREQUAL "test_mpi_cell_temporal_program_collective_rollback" OR

@@ -302,9 +302,12 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
           "instantiate for Cartesian Dim in {1,2,3}; Dim=1/2 volume stays the axis product of "
           "independent 1-D crossings (bit-compatible); Dim=3 reconstructs eight unit-cube corners "
           "from the same seven samples and measures {phi < 0} by marching tetrahedra, with "
-          "independent conservative face apertures from that cube triangulation. Uniform-ratio "
-          "AMR restrict/prolong/reflux of volume and apertures stay on this same "
-          "CutCellFractions<Dim> metric. Polar Poisson and Disc remain planar",
+          "independent conservative face apertures from that cube triangulation. Distributed "
+          "MultiFab assemble fills state ghosts through the Cartesian FV halo schedule and "
+          "checks active_mask against phi ghosts; inverse_volume_fraction stays valid-cell-only. "
+          "Uniform-ratio AMR restrict/prolong/reflux of volume and apertures is invoked on this "
+          "same CutCellFractions<Dim> metric. Face fluxes remain binary (binary_face_aperture). "
+          "Polar Poisson and Disc remain planar",
           kLayoutRouteTokensCsv, "production", "host", mpi, gpu,
           "true 3D cut-cell geometry with surface measure and conservative AMR quality",
           "ranked Cartesian cut geometry (cube triangulation in 3D) on Uniform/AMR prepared EB",

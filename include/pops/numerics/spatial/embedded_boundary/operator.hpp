@@ -5,6 +5,7 @@
 
 #include <pops/mesh/geometry/prepared_metric_provider.hpp>
 #include <pops/numerics/spatial/operators/masked_operator.hpp>
+#include <pops/parallel/execution_lane.hpp>
 
 #include <Kokkos_MathematicalFunctions.hpp>
 
@@ -14,6 +15,62 @@
 #include <utility>
 
 namespace pops::nd {
+
+/// Proof that partitioned state ghosts were filled through the Cartesian FV halo schedule.
+/// MultiFab assemble without this token refuses remote owners instead of using stale ghosts.
+struct PreparedEbPartitionHalo {
+  const ExecutionLane* lane = nullptr;
+};
+
+namespace embedded_operator_detail {
+
+template <int Dim, class MemorySpace>
+void require_prepared_eb_ghost_contract(const MultiFab<Dim, MemorySpace>& state,
+                                        const MultiFab<Dim, MemorySpace>& active_cells,
+                                        const MultiFab<Dim, MemorySpace>& inverse_volume_fraction) {
+  for (std::size_t local = 0; local < state.local_size(); ++local) {
+    const auto& state_ghosts = state.fab(local).ghosts();
+    const auto& mask_ghosts = active_cells.fab(local).ghosts();
+    const auto& inverse_ghosts = inverse_volume_fraction.fab(local).ghosts();
+    for (int axis = 0; axis < Dim; ++axis) {
+      if (state_ghosts[axis] < 1)
+        throw std::invalid_argument(
+            "prepared EB residual requires state ghosts on every axis");
+      if (mask_ghosts[axis] < 1)
+        throw std::invalid_argument(
+            "prepared EB residual requires active_mask ghosts on every axis");
+      if (inverse_ghosts[axis] != 0)
+        throw std::invalid_argument(
+            "prepared EB inverse_volume_fraction is valid-cell-only and must not advertise ghosts");
+    }
+  }
+}
+
+template <int Dim, class MemorySpace>
+bool prepared_eb_has_remote_box_owner(const MultiFab<Dim, MemorySpace>& field) {
+  if (field.distribution().replicated() || field.layout().empty())
+    return false;
+  const auto& local = field.local_rank();
+  for (std::size_t box = 0; box < field.layout().size(); ++box) {
+    if (!(field.distribution().owner(box) == local))
+      return true;
+  }
+  return false;
+}
+
+template <int Dim, class MemorySpace>
+void require_prepared_eb_assemble_authority(const MultiFab<Dim, MemorySpace>& state,
+                                            const MultiFab<Dim, MemorySpace>& active_cells,
+                                            const MultiFab<Dim, MemorySpace>& inverse_volume,
+                                            bool partition_halo_authorized) {
+  require_prepared_eb_ghost_contract(state, active_cells, inverse_volume);
+  if (!partition_halo_authorized && prepared_eb_has_remote_box_owner(state))
+    throw std::invalid_argument(
+        "prepared EB MultiFab assemble refuses partitioned ghosts without halo authority");
+}
+
+}  // namespace embedded_operator_detail
+
 
 template <int Dim>
 struct EmbeddedBoundaryCapabilities {
@@ -173,6 +230,53 @@ class PreparedEmbeddedBoundaryOperator {
                          BoundaryFaceOmission<Dim> omission = {}) const
     requires(flux_provider_count<Model> == 0)
   {
+    assemble_residual(state, active_cells, inverse_volume_fraction, residual, omission, false);
+  }
+
+  template <class MemorySpace>
+  void assemble_residual(const MultiFab<Dim, MemorySpace>& state,
+                         const MultiFab<Dim, MemorySpace>& active_cells,
+                         const MultiFab<Dim, MemorySpace>& inverse_volume_fraction,
+                         MultiFab<Dim, MemorySpace>& residual, BoundaryFaceOmission<Dim> omission,
+                         PreparedEbPartitionHalo) const
+    requires(flux_provider_count<Model> == 0)
+  {
+    assemble_residual(state, active_cells, inverse_volume_fraction, residual, omission, true);
+  }
+
+  template <class MemorySpace>
+  void assemble_residual(const MultiFab<Dim, MemorySpace>& state,
+                         const MultiFab<Dim, MemorySpace>& providers,
+                         const MultiFab<Dim, MemorySpace>& active_cells,
+                         const MultiFab<Dim, MemorySpace>& inverse_volume_fraction,
+                         MultiFab<Dim, MemorySpace>& residual,
+                         BoundaryFaceOmission<Dim> omission = {}) const {
+    assemble_residual(state, providers, active_cells, inverse_volume_fraction, residual, omission,
+                      false);
+  }
+
+  template <class MemorySpace>
+  void assemble_residual(const MultiFab<Dim, MemorySpace>& state,
+                         const MultiFab<Dim, MemorySpace>& providers,
+                         const MultiFab<Dim, MemorySpace>& active_cells,
+                         const MultiFab<Dim, MemorySpace>& inverse_volume_fraction,
+                         MultiFab<Dim, MemorySpace>& residual, BoundaryFaceOmission<Dim> omission,
+                         PreparedEbPartitionHalo) const {
+    assemble_residual(state, providers, active_cells, inverse_volume_fraction, residual, omission,
+                      true);
+  }
+
+ private:
+  template <class MemorySpace>
+  void assemble_residual(const MultiFab<Dim, MemorySpace>& state,
+                         const MultiFab<Dim, MemorySpace>& active_cells,
+                         const MultiFab<Dim, MemorySpace>& inverse_volume_fraction,
+                         MultiFab<Dim, MemorySpace>& residual, BoundaryFaceOmission<Dim> omission,
+                         bool partition_halo_authorized) const
+    requires(flux_provider_count<Model> == 0)
+  {
+    embedded_operator_detail::require_prepared_eb_assemble_authority(
+        state, active_cells, inverse_volume_fraction, partition_halo_authorized);
     masked_operator_detail::require_same_multifab_layout(
         state, active_cells, "prepared EB state and active-mask layouts differ");
     masked_operator_detail::require_same_multifab_layout(
@@ -185,7 +289,7 @@ class PreparedEmbeddedBoundaryOperator {
       throw std::invalid_argument("prepared EB MultiFab components differ or alias");
 
     MultiFab<Dim, MemorySpace> candidate(residual.layout(), residual.distribution(),
-                                       residual.local_rank(), Model::n_vars, residual.ghosts());
+                                         residual.local_rank(), Model::n_vars, residual.ghosts());
     for (std::size_t local = 0; local < state.local_size(); ++local)
       assemble_residual(state.fab(local), active_cells.fab(local),
                         inverse_volume_fraction.fab(local), candidate.fab(local), omission);
@@ -202,8 +306,10 @@ class PreparedEmbeddedBoundaryOperator {
                          const MultiFab<Dim, MemorySpace>& providers,
                          const MultiFab<Dim, MemorySpace>& active_cells,
                          const MultiFab<Dim, MemorySpace>& inverse_volume_fraction,
-                         MultiFab<Dim, MemorySpace>& residual,
-                         BoundaryFaceOmission<Dim> omission = {}) const {
+                         MultiFab<Dim, MemorySpace>& residual, BoundaryFaceOmission<Dim> omission,
+                         bool partition_halo_authorized) const {
+    embedded_operator_detail::require_prepared_eb_assemble_authority(
+        state, active_cells, inverse_volume_fraction, partition_halo_authorized);
     masked_operator_detail::require_same_multifab_layout(
         state, providers, "prepared EB state and provider layouts differ");
     masked_operator_detail::require_same_multifab_layout(
@@ -218,7 +324,7 @@ class PreparedEmbeddedBoundaryOperator {
       throw std::invalid_argument("prepared EB MultiFab components differ or alias");
 
     MultiFab<Dim, MemorySpace> candidate(residual.layout(), residual.distribution(),
-                                       residual.local_rank(), Model::n_vars, residual.ghosts());
+                                         residual.local_rank(), Model::n_vars, residual.ghosts());
     for (std::size_t local = 0; local < state.local_size(); ++local)
       assemble_residual(state.fab(local), providers.fab(local), active_cells.fab(local),
                         inverse_volume_fraction.fab(local), candidate.fab(local), omission);
@@ -230,7 +336,6 @@ class PreparedEmbeddedBoundaryOperator {
     device_fence();
   }
 
- private:
   Model model_;
   BaseMetric metric_;
   Reconstruction reconstruction_;
