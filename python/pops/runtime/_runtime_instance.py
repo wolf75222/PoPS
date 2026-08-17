@@ -769,7 +769,7 @@ class RuntimeInstance:
         )
 
     def patch_boxes(self) -> Any:
-        return self._executor.patch_boxes()
+        return list(self._executor.patch_boxes())
 
     def patch_bounds(self) -> Any:
         return self._executor.patch_bounds()
