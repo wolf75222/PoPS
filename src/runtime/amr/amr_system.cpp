@@ -3800,6 +3800,14 @@ struct AmrSystem<Dim>::Impl {
     return *package_assembly_lane;
   }
 
+  void require_inspectable_hierarchy() {
+    if (engine)
+      return;
+    if (blocks.empty())
+      throw std::runtime_error("AmrSystem : call add_block first");
+    ensure_engine();
+  }
+
   void require_no_native_package_callback(std::string_view operation) const {
     if (native_package_phase != NativePackagePhase::idle)
       throw std::logic_error("AMR native package callback cannot invoke '" +
@@ -13367,7 +13375,8 @@ template <int Dim>
 void AmrSystem<Dim>::install_block_state_route(const std::string& name,
                                                const std::string& state_identity) {
   require_amr_assembling(p_->lifecycle, "install_block_state_route");
-  if (!p_->blocks.empty())
+  if (std::any_of(p_->blocks.begin(), p_->blocks.end(),
+                  [&](const auto& block) { return block.name == name; }))
     throw std::logic_error("AmrSystem state routes must be installed before their block");
   p_->boundary_registry.install_state_route(name, state_identity);
 }
@@ -17298,7 +17307,7 @@ EffectiveOptionsReport AmrSystem<Dim>::effective_options_report() const {
 
 template <int Dim>
 int AmrSystem<Dim>::n_levels() {
-  p_->ensure_engine();
+  p_->require_inspectable_hierarchy();
   return static_cast<int>(p_->engine->hierarchy().num_levels());
 }
 
@@ -17338,14 +17347,14 @@ int AmrSystem<Dim>::block_n_vars(const std::string& name) {
 
 template <int Dim>
 int AmrSystem<Dim>::n_patches() {
-  p_->ensure_engine();
+  p_->require_inspectable_hierarchy();
   const auto& hierarchy = p_->engine->hierarchy();
   return static_cast<int>(hierarchy.layout(hierarchy.num_levels() - 1).patches().size());
 }
 
 template <int Dim>
 std::vector<AmrPatch<Dim>> AmrSystem<Dim>::patch_boxes() {
-  p_->ensure_engine();
+  p_->require_inspectable_hierarchy();
   std::vector<AmrPatch<Dim>> result;
   for (std::size_t level = 1; level < p_->engine->hierarchy().num_levels(); ++level)
     for (const Box<Dim>& box : p_->engine->hierarchy().layout(level).patches().boxes())
@@ -17355,7 +17364,7 @@ std::vector<AmrPatch<Dim>> AmrSystem<Dim>::patch_boxes() {
 
 template <int Dim>
 std::vector<AmrPatch<Dim>> AmrSystem<Dim>::output_geometry_boxes() {
-  p_->ensure_engine();
+  p_->require_inspectable_hierarchy();
   std::vector<AmrPatch<Dim>> result;
   for (std::size_t level = 0; level < p_->engine->hierarchy().num_levels(); ++level)
     for (const Box<Dim>& box : p_->engine->hierarchy().layout(level).patches().boxes())
@@ -17365,13 +17374,13 @@ std::vector<AmrPatch<Dim>> AmrSystem<Dim>::output_geometry_boxes() {
 
 template <int Dim>
 int AmrSystem<Dim>::coarse_local_boxes() {
-  p_->ensure_engine();
+  p_->require_inspectable_hierarchy();
   return static_cast<int>(p_->engine->hierarchy().state(0).local_size());
 }
 
 template <int Dim>
 int AmrSystem<Dim>::coarse_total_boxes() {
-  p_->ensure_engine();
+  p_->require_inspectable_hierarchy();
   return static_cast<int>(p_->engine->hierarchy().layout(0).patches().size());
 }
 

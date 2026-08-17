@@ -229,9 +229,13 @@ class _AmrSystemEquation(_AmrSystem):
         from pops.codegen.abi import check_compiled_matches_module
 
         check_compiled_matches_module(getattr(compiled, "abi_key", ""))
-        from pops.runtime._amr_package_lane import ensure_amr_native_package_lane
+        from pops.runtime._amr_package_lane import (
+            ensure_amr_native_package_lane,
+            ensure_native_block_state_route,
+        )
 
         ensure_amr_native_package_lane(self, compiled)
+        ensure_native_block_state_route(self, name, compiled)
         gamma = native_real(
             compiled.gamma if compiled.gamma is not None else PHYSICAL_DEFAULT_GAMMA,
             where="AmrSystem.add_equation.gamma",

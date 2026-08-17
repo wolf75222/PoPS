@@ -366,7 +366,7 @@ def test_builtin_emission_carries_the_native_dimension_through_tensor_slots(dime
     source = "\n".join(emission.configure)
     assert dimension in (1, 2, 3)
     assert "scalar-tensor-elliptic.exact-rank@3" in source
-    assert "Dim * Dim" in source
+    assert "kNativeDimension * pops::kNativeDimension" in source
     assert "coefficient.0.1" not in source
 
 

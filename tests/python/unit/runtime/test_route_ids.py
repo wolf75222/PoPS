@@ -60,7 +60,7 @@ def test_route_component_contract_is_immutable_and_classifies_metadata():
     manifest = route.component_manifest()
     assert manifest.parameters == ()
     capability_names = {row["name"] for row in manifest.capabilities}
-    assert capability_names == {"n_vars", "polar_ok"}
+    assert capability_names == {"n_vars_by_dimension", "polar_ok"}
     docs = manifest.extensions["pops://schemas/extensions/route-inspection"]["data"]
     assert docs["summary"].startswith("scalar Cartesian E x B drift")
     assert "summary" not in capability_names and "parameters" not in capability_names

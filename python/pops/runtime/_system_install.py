@@ -256,6 +256,9 @@ class _SystemInstall(_System):
                     % (len(bind_values), len(runtime_names))
                 )
         check_compiled_matches_module(getattr(compiled, "abi_key", ""))
+        from pops.runtime._amr_package_lane import ensure_native_block_state_route
+
+        ensure_native_block_state_route(self, name, compiled)
         gamma = compiled.gamma if compiled.gamma is not None else PHYSICAL_DEFAULT_GAMMA
         gamma = native_real(gamma, where="System.add_equation.gamma")
         positivity_floor = native_real(

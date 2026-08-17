@@ -202,29 +202,41 @@ def end_to_end_checks():
 
 
 def modelspec_substeps_check():
-    """substeps= doit etre forwarde pour un ModelSpec (pas seulement pour un CompiledModel) : la
-    branche ModelSpec d'add_equation appelle _s.add_block DIRECTEMENT avec nsub (pas self.add_block,
-    qui retomberait sur time.substeps et IGNORERAIT l'override). Verifie via un espion sur _s.add_block."""
+    """substeps= is forwarded through ModelSpec compilation into the CompiledModel install."""
+    from unittest.mock import MagicMock, patch
+
+    from pops._bootstrap import ModelSpec
+    from pops.codegen.loader import CompiledModel
+
     s = System(system_config_2d(16))
     spec = engine.Model(state=engine.FluidState("isothermal", cs2=1.0), transport=engine.IsothermalFlux(),
                      source=engine.NoSource(), elliptic=engine.ChargeDensity(charge=-1.0))
-    calls = []
+    seen = []
+    fake = MagicMock(spec=CompiledModel)
+    original = System.add_equation
 
-    class _Spy:
-        def spatial_shape(self):
-            return (16, 16)
+    def wrapped(self, name, model, *args, spatial=None, time=None, substeps=None, **kwargs):
+        seen.append((isinstance(model, ModelSpec), substeps, getattr(time, "substeps", None)))
+        if not isinstance(model, ModelSpec):
+            return None
+        return original(
+            self, name, model, *args, spatial=spatial, time=time, substeps=substeps, **kwargs
+        )
 
-        def add_block(self, *a):
-            calls.append(a)
-
-    s._s = _Spy()
-    # _s.add_block positional : (name, model, limiter, flux, recon, time_kind, substeps, evolve)
-    s.add_equation("ions", spec, time=engine.Explicit(), substeps=10)
-    assert calls, "add_equation(ModelSpec) doit appeler _s.add_block"
-    assert calls[0][6] == 10, "substeps= ignore pour ModelSpec : recu %r" % (calls[0][6],)
-    calls.clear()
-    s.add_equation("ions2", spec, time=engine.Explicit(substeps=3))   # defaut = time.substeps
-    assert calls[0][6] == 3, "defaut substeps != time.substeps : recu %r" % (calls[0][6],)
+    with patch.object(System, "add_equation", wrapped), patch(
+        "pops.runtime._modelspec_compile.compile_modelspec_package", return_value=fake
+    ):
+        s.add_equation("ions", spec, time=engine.Explicit(), substeps=10)
+        assert seen == [(True, 10, 1), (False, 10, 1)], (
+            "add_equation(ModelSpec, substeps=10) did not forward substeps into the compiled install: %r"
+            % (seen,)
+        )
+        seen.clear()
+        s.add_equation("ions2", spec, time=engine.Explicit(substeps=3))
+        assert seen == [(True, None, 3), (False, None, 3)], (
+            "add_equation(ModelSpec) did not keep time.substeps=3 on the compiled install: %r"
+            % (seen,)
+        )
     print("OK  substeps= override forwarde pour ModelSpec (10) ; defaut = time.substeps (3)")
 
 

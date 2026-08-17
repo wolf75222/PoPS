@@ -781,6 +781,7 @@ class GeometricMG {
     compute_residual_(level);
     Level& coarse = *levels_.at(level_index + 1);
     coarse.phi.set_val(Real(0));
+    coarse.rhs.set_val(Real(0));
     const CopyScheduleBudget restriction_budget =
         detail::exact_copy_budget(coarse.rhs.layout(), coarsen(level.residual.layout(), 2));
     average_down(level.residual, coarse.rhs, 2, restriction_budget);

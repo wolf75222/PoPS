@@ -271,6 +271,66 @@ TEST(GeometricMgTest, inhomogeneous_dirichlet_faces_recover_one_constant_solutio
   EXPECT_LT(maximum_difference_from(solver.phi(), pops::Real(1)), 2e-7);
 }
 
+pops::Real periodic_mode(const pops::Geometry<kDim>& geometry, const pops::Index<kDim>& index) {
+  const pops::Real two_pi = pops::Real(2) * std::acos(pops::Real(-1));
+  pops::Real result = pops::Real(1);
+  for (int axis = 0; axis < kDim; ++axis)
+    result *= std::sin(two_pi * geometry.cell_coordinate(axis, index[axis]));
+  return result;
+}
+
+void fill_periodic_mode(Solver& solver) {
+  const pops::Real two_pi = pops::Real(2) * std::acos(pops::Real(-1));
+  const pops::Real eigenvalue = static_cast<pops::Real>(kDim) * two_pi * two_pi;
+  for (std::size_t local = 0; local < solver.rhs().local_size(); ++local) {
+    auto& fab = solver.rhs().fab(local);
+    auto host = fab.create_host_mirror();
+    for (std::size_t ordinal = 0; ordinal < static_cast<std::size_t>(fab.box().numPts());
+         ++ordinal) {
+      const auto index = index_from_ordinal(fab.box(), ordinal);
+      host(storage_ordinal(fab.grown_box(), index)) =
+          eigenvalue * periodic_mode(solver.geom(), index);
+    }
+    fab.copy_from_host(host);
+  }
+}
+
+double maximum_periodic_mode_error(const Solver& solver) {
+  double result = 0;
+  for (std::size_t local = 0; local < solver.phi().local_size(); ++local) {
+    const auto& fab = solver.phi().fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    for (std::size_t ordinal = 0; ordinal < static_cast<std::size_t>(fab.box().numPts());
+         ++ordinal) {
+      const auto index = index_from_ordinal(fab.box(), ordinal);
+      result = std::max(result, std::abs(static_cast<double>(
+                                    host(storage_ordinal(fab.grown_box(), index)) -
+                                    periodic_mode(solver.geom(), index))));
+    }
+  }
+  return pops::all_reduce_max(result);
+}
+
+TEST(GeometricMgTest, manufactured_periodic_mode_converges_at_fac_coarse_tolerance) {
+  const pops::ExecutionLane lane = pops::ExecutionLane::world("tests.geometric-mg.periodic-mms");
+  pops::elliptic::mg::GeometricMultigridOptions options;
+  options.relative_tolerance = pops::kFACInitialCoarseRelTol;
+  options.absolute_tolerance = pops::kFACInitialCoarseAbsTol;
+  options.maximum_cycles = pops::kFACInitialCoarseMaxCycles;
+  Solver solver(request(16, true), lane, options);
+  install_nullspace(solver, true);
+  fill_periodic_mode(solver);
+  solver.phi().set_val(pops::Real(0));
+
+  const pops::SolveReport report = solver.solve();
+  ASSERT_TRUE(report.solved()) << report.reason << " rel=" << report.rel_residual
+                               << " iters=" << report.iters;
+  EXPECT_GT(report.iters, 0);
+  EXPECT_LT(report.rel_residual, pops::kFACInitialCoarseRelTol);
+  EXPECT_LT(maximum_periodic_mode_error(solver), 0.05);
+}
+
 TEST(GeometricMgTest, periodic_nullspace_rejects_incompatible_rhs_without_mutation) {
   const pops::ExecutionLane lane = pops::ExecutionLane::world("tests.geometric-mg.periodic");
   Solver solver(request(8, true), lane);

@@ -10,6 +10,25 @@ from __future__ import annotations
 from typing import Any
 
 
+def ensure_native_block_state_route(runtime: Any, name: str, compiled: Any) -> None:
+    """Install one block/state identity when the low-level add_equation path skipped pops.bind."""
+    native = getattr(runtime, "_s", runtime)
+    install = getattr(native, "_install_block_state_route", None)
+    if not callable(install):
+        return
+    owner = getattr(compiled, "consumer_owner_qid", None)
+    if not isinstance(owner, str) or not owner:
+        owner = "pops.runtime.package.%s" % name
+    identity = "%s/state" % owner
+    try:
+        install(name, identity)
+    except Exception as error:
+        message = str(error)
+        if "duplicate" in message or "unique" in message:
+            return
+        raise
+
+
 def ensure_amr_native_package_lane(runtime: Any, model: Any) -> Any:
     """Install the owned AMR package lane when the native engine does not already have one."""
     from pops._native_selector import selected_native_module

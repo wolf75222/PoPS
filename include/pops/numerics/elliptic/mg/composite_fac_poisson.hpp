@@ -355,8 +355,11 @@ class CompositeFacPoisson {
         report.iters = iteration;
         report.residual_norm = composite_residual_norm_();
         report.rel_residual = report.residual_norm / reference;
-        report.mark_failed(coarse_report.status, SolveAction::kFailRun,
-                           "composite_fac_coarse_correction_failed");
+        report.mark_failed(
+            coarse_report.status, SolveAction::kFailRun,
+            std::string("composite_fac_coarse_correction_failed:") + coarse_report.reason +
+                " rel=" + std::to_string(static_cast<double>(coarse_report.rel_residual)) +
+                " iters=" + std::to_string(coarse_report.iters));
         last_report_ = report;
         return last_report_;
       }
