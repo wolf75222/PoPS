@@ -13537,6 +13537,9 @@ template <int Dim>
 void AmrSystem<Dim>::install_block_state_route(const std::string& name,
                                                const std::string& state_identity) {
   require_amr_assembling(p_->lifecycle, "install_block_state_route");
+  if (!p_->blocks.empty())
+    throw std::logic_error(
+        "AmrSystem state routes must be installed before any compiled package");
   if (std::any_of(p_->blocks.begin(), p_->blocks.end(),
                   [&](const auto& block) { return block.name == name; }))
     throw std::logic_error("AmrSystem state routes must be installed before their block");

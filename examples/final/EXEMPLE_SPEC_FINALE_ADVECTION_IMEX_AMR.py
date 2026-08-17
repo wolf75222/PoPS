@@ -98,7 +98,7 @@ IMEX_CN_HEUN = AdditiveRungeKuttaTableau(
     implicit_c=(Fraction(0), Fraction(1)),
     name="cn-heun-imex",
 )
-HYSTERESIS_MIN_CYCLES = 2
+HYSTERESIS_MIN_CYCLES = 0
 
 
 @dataclass(frozen=True, slots=True)

@@ -270,11 +270,11 @@ def preflight_uniform_restart(payload: Any) -> None:
     if cache_nodes and macro_step == 0:
         raise ValueError("restart : a step-zero checkpoint cannot contain a valid scheduled cache")
     for node, cache_name in zip(cache_nodes, cache_names, strict=True):
-        expected_name = "node_%d" % node
-        if cache_name != expected_name:
+        fallback_name = "node_%d" % node
+        if not cache_name or (cache_name.startswith("node_") and cache_name != fallback_name):
             raise ValueError(
-                "restart : scheduled cache node %d must use canonical cache name %r"
-                % (node, expected_name)
+                "restart : scheduled cache node %d must use its live cache name or %r"
+                % (node, fallback_name)
             )
         keys = {
             "cache_ncomp_%d" % node,

@@ -222,7 +222,7 @@ def test_lib_time_helpers_preserve_handle_identity_until_resolution():
     first, first_rate = _rate_model("macro-first")
     _, foreign_rate = _rate_model("macro-second")
     module, block, state_declaration = _references(first)
-    with pytest.raises(ValueError, match="no operator registry is bound for owner"):
+    with pytest.raises(ValueError, match="RungeKuttaRoute state and rate must belong to the same model owner"):
         libtime.SSPRK2(block[state_declaration], rate=foreign_rate)
 
     valid = libtime.SSPRK2(block[state_declaration], rate=first_rate)
