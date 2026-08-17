@@ -413,8 +413,8 @@ class InterfaceAffineMapping:
             "handle": self.handle.canonical_identity(),
             "right_tangent_for_left": list(self.right_tangent_for_left),
             "right_tangent_sign": list(self.right_tangent_sign),
-            "right_tangent_offset": [float(value) for value in self.right_tangent_offset],
-            "right_normal_translation": float(self.right_normal_translation),
+            "right_tangent_offset": [float(value).hex() for value in self.right_tangent_offset],
+            "right_normal_translation": float(self.right_normal_translation).hex(),
         }
 
 

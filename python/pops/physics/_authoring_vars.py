@@ -126,6 +126,17 @@ class _VariablesMixin(_HyperbolicModel):
             for name in self._provider_components if name in used
         ]
 
+    def _projection_provider_locals_lines(self) -> Any:
+        """C++ locals read by the pointwise projection from its operator consumer pack."""
+        from pops._ir.visitors import _dependencies
+
+        used = _dependencies(self._proj or ())
+        return [
+            "    const pops::Real %s = pops::provider_value<%d>(a);"
+            % (name, self._consumer_provider_slot("projection", name))
+            for name in self._provider_components if name in used
+        ]
+
     def _flux_provider_locals_lines(self) -> Any:
         """C++ locals read from the exact physical-flux provider protocol.
 

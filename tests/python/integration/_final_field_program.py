@@ -377,9 +377,21 @@ def resolve_periodic_field_program(
     )
 
 
-def compile_block_model(model: Model, *, target: str) -> Any:
+def compile_block_model(model: Model, *, target: str, plan: Any = None) -> Any:
     """Compile a final board model through its explicit compiler-provider protocol."""
-    return compiler_model(model).compile(backend="production", target=target)
+    roles = None
+    if target == "amr_system" and plan is not None:
+        from pops.codegen._orchestration_compile import _resolved_native_amr_field_roles
+
+        by_block = _resolved_native_amr_field_roles(plan)
+        if len(by_block) != 1:
+            raise ValueError("compile_block_model expects one resolved AMR block")
+        roles = next(iter(by_block.values()))
+    return compiler_model(model).compile(
+        backend="production",
+        target=target,
+        _native_field_roles=roles,
+    )
 
 
 def compiler_model(model: Model) -> Any:

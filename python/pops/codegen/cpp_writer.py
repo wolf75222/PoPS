@@ -30,6 +30,18 @@ _CPP_KEYWORDS = frozenset({
     "while", "xor", "xor_eq",
 })
 
+# <cmath> / <algorithm> names that become `double(double)` overloads under ADL. An author
+# variable spelled `floor` otherwise compiles as `q - std::floor`.
+_CPP_MATH_SHADOWS = frozenset({
+    "abs", "acos", "acosh", "asin", "asinh", "atan", "atan2", "atanh", "cbrt", "ceil",
+    "copysign", "cos", "cosh", "erf", "erfc", "exp", "exp2", "expm1", "fabs", "fdim",
+    "floor", "fma", "fmax", "fmin", "fmod", "frexp", "hypot", "ilogb", "isfinite",
+    "isinf", "isnan", "isnormal", "ldexp", "lgamma", "llrint", "llround", "log", "log10",
+    "log1p", "log2", "logb", "lrint", "lround", "max", "min", "modf", "nan", "nearbyint",
+    "nextafter", "pow", "remainder", "rint", "round", "scalbln", "scalbn", "sin", "sinh",
+    "sqrt", "swap", "tan", "tanh", "tgamma", "trunc",
+})
+
 
 def _cpp_identifier(value: Any) -> str:
     """Return a valid, non-reserved ASCII C++ identifier for an author-facing name."""
@@ -43,7 +55,7 @@ def _cpp_identifier(value: Any) -> str:
     # Generated types live at namespace scope: every leading underscore is reserved there, while a
     # double underscore is reserved in any position. The collapse above also prevents e.g. a--b
     # from becoming the reserved spelling a__b.
-    if identifier in _CPP_KEYWORDS or identifier.startswith("_"):
+    if identifier in _CPP_KEYWORDS or identifier in _CPP_MATH_SHADOWS or identifier.startswith("_"):
         identifier = "pops_" + identifier.lstrip("_")
     return identifier
 
@@ -55,7 +67,7 @@ def _cpp_expand(e: Any, cse_map: Any, key_memo: Any = None) -> str:
     if isinstance(e, RuntimeParamRef):
         return e.to_cpp()  # params.get(<index>): reads the brick's RuntimeParams member
     if isinstance(e, Var):
-        return e.name
+        return _cpp_identifier(e.name)
     if isinstance(e, Neg):
         return "(-%s)" % _cpp_cse(e.a, cse_map, key_memo)
     if isinstance(e, Sqrt):
@@ -305,7 +317,7 @@ def _cpp_roe(e: Any, prefix: Any) -> str:
         if prefix is None:
             raise ValueError("m.roe_dissipation: variable '%s' outside left()/right() marker"
                              % e.name)
-        return prefix + e.name
+        return prefix + _cpp_identifier(e.name)
     if isinstance(e, Neg):
         return "(-%s)" % _cpp_roe(e.a, prefix)
     if isinstance(e, Sqrt):

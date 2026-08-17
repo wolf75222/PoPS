@@ -145,7 +145,8 @@ def emit_cpp_source(model: Any, name: Any = None, namespace: str = "pops_generat
     nc = model.n_vars
 
     def cons_locals() -> list:
-        return ["    const pops::Real %s = U[%d];" % (c, i) for i, c in enumerate(model.cons_names)]
+        return ["    const pops::Real %s = U[%d];" % (_cpp_identifier(c), i)
+                for i, c in enumerate(model.cons_names)]
 
     def prim_locals(live: Any = None) -> list:
         # FILTER on the live primitives (live) + OPT-IN hoist; without live, full output.
@@ -423,7 +424,8 @@ def emit_cpp_elliptic(model: Any, name: Any = None, namespace: str = "pops_gener
         "  template <class State>",
         "  POPS_HD pops::Real rhs(const State& U) const {",
     ]
-    out += ["    const pops::Real %s = U[%d];" % (c, i) for i, c in enumerate(model.cons_names)]
+    out += ["    const pops::Real %s = U[%d];" % (_cpp_identifier(c), i)
+            for i, c in enumerate(model.cons_names)]
     out += _prim_block(model, _live_prims(model, [model._elliptic]), hoist_reciprocals)
     tl, cpps = _codegen_exprs(model, [model._elliptic], cse)
     out += tl
@@ -470,7 +472,8 @@ def emit_cpp_elliptic_field(model: Any, field: Any, struct_name: Any, namespace:
         slot=field,
     )
     out += ["  POPS_HD pops::Real elliptic_rhs(const State& U) const {"]
-    out += ["    const pops::Real %s = U[%d];" % (c, i) for i, c in enumerate(model.cons_names)]
+    out += ["    const pops::Real %s = U[%d];" % (_cpp_identifier(c), i)
+            for i, c in enumerate(model.cons_names)]
     out += _prim_block(model, _live_prims(model, [spec["rhs"]]), hoist_reciprocals)
     tl, cpps = _codegen_exprs(model, [spec["rhs"]], cse)
     out += tl

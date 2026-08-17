@@ -279,7 +279,7 @@ def _amr_run(plan, model, u0, nsteps=NSTEPS, dt=DT):
             field_plans=plan.field_plans,
             problem_snapshot=plan.snapshot,
         )
-        block_cm = compile_block_model(model, target="amr_system")
+        block_cm = compile_block_model(model, target="amr_system", plan=plan)
     except RuntimeError as exc:
         return None, "compile (AMR): %s" % str(exc)[:140]
     try:
@@ -445,7 +445,7 @@ def _amr_run_cfl(plan, model, u0, nsteps=NSTEPS, cfl=0.4):
             field_plans=plan.field_plans,
             problem_snapshot=plan.snapshot,
         )
-        block_cm = compile_block_model(model, target="amr_system")
+        block_cm = compile_block_model(model, target="amr_system", plan=plan)
     except RuntimeError as exc:
         return None, "compile (AMR): %s" % str(exc)[:140]
     try:

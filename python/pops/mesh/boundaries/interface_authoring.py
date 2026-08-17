@@ -243,7 +243,17 @@ class ConservativeInterface:
             "right_normal_translation": float(self.right_normal_translation),
         }
 
-    canonical_identity = to_data
+    def canonical_identity(self) -> dict[str, Any]:
+        data = self.to_data()
+        data["right_normal_translation"] = float(self.right_normal_translation).hex()
+        transform = self.tangential_transform
+        if transform is not None:
+            payload = dict(transform.to_data())
+            payload["right_tangent_offset"] = [
+                float(value).hex() for value in transform.right_tangent_offset
+            ]
+            data["tangential_transform"] = payload
+        return data
 
     @property
     def canonical_key(self) -> str:

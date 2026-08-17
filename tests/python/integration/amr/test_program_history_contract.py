@@ -144,7 +144,7 @@ def _amr_run(u0):
         field_plans=plan.field_plans,
         problem_snapshot=plan.snapshot,
     )
-    block_cm = compile_block_model(model, target="amr_system")
+    block_cm = compile_block_model(model, target="amr_system", plan=plan)
     amr.add_equation("blk", block_cm,
                      spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
                      time=engine.Explicit(method="ssprk2"))

@@ -92,14 +92,29 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         )
 
     def cons_locals() -> list:
-        return ["    const pops::Real %s = U[%d];" % (c, i) for i, c in enumerate(model.cons_names)]
+        return ["    const pops::Real %s = U[%d];" % (_cpp_identifier(c), i)
+                for i, c in enumerate(model.cons_names)]
+
+    def named_real_locals(lines: list) -> list:
+        prefix = "    const pops::Real "
+        rewritten = []
+        for line in lines:
+            if not line.startswith(prefix) or " = " not in line:
+                rewritten.append(line)
+                continue
+            name, rest = line[len(prefix):].split(" = ", 1)
+            rewritten.append("%s%s = %s" % (prefix, _cpp_identifier(name), rest))
+        return rewritten
 
     def prim_locals(live: Any = None) -> list:
         # FILTER on the live primitives (live) + OPT-IN hoist; without live, full output.
         return _prim_block(model, live, hoist_reciprocals)
 
     def aux_locals() -> list:
-        return model._flux_provider_locals_lines()
+        return named_real_locals(model._flux_provider_locals_lines())
+
+    def projection_locals() -> list:
+        return named_real_locals(model._projection_provider_locals_lines())
 
     # Physical laws consume the exact provider-read protocol. The parameter remains generic so
     # the FV route may pass its exact model-qualified provider view without reconstructing a
@@ -625,7 +640,7 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
     # chaque macro-pas entier. SANS appel, rien d'emis -> aucun hook (chemin bit-identique).
     if model._proj is not None:
         S.append("  POPS_HD State project(const State& U, %s) const {" % aux_param)
-        S += cons_locals() + prim_locals() + aux_locals()
+        S += cons_locals() + prim_locals() + projection_locals()
         ptl, pcpps = _codegen_exprs(model, model._proj, cse)
         S += ptl
         S.append("    State Up{};")

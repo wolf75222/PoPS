@@ -131,7 +131,7 @@ struct CartesianExBDriftND {
   POPS_HD Real velocity(const Providers& providers) const {
     static_assert(Axis >= 0 && Axis < Dim, "Cartesian E x B axis is outside the spatial rank");
     const Real norm_squared = magnetic_field_squared(providers, std::make_index_sequence<3>{});
-    if (!Kokkos::isfinite(norm_squared) || !(norm_squared > Real(0)))
+    if (!nd::conservation_law_detail::finite(norm_squared) || !(norm_squared > Real(0)))
       return std::numeric_limits<Real>::quiet_NaN();
     return velocity_impl<Axis>(providers, std::make_index_sequence<3>{}) / norm_squared;
   }
@@ -172,12 +172,14 @@ struct CartesianExBDriftND {
   /// The scalar E×B state is already primitive.  These are the same exact ranked law contract
   /// used by generated Cartesian blocks; they contain no separate conversion algorithm.
   POPS_HD nd::StateConversion<Primitive> recover(const State& state) const {
-    return {state, Kokkos::isfinite(state[0]) ? nd::StateConversionStatus::Success
-                                              : nd::StateConversionStatus::NonFiniteState};
+    return {state, nd::conservation_law_detail::finite(state[0])
+                      ? nd::StateConversionStatus::Success
+                      : nd::StateConversionStatus::NonFiniteState};
   }
   POPS_HD nd::StateConversion<State> make_conservative(const Primitive& primitive) const {
-    return {primitive, Kokkos::isfinite(primitive[0]) ? nd::StateConversionStatus::Success
-                                                      : nd::StateConversionStatus::NonFiniteState};
+    return {primitive, nd::conservation_law_detail::finite(primitive[0])
+                          ? nd::StateConversionStatus::Success
+                          : nd::StateConversionStatus::NonFiniteState};
   }
   POPS_HD nd::StateConversionStatus admissibility(const State& state) const {
     return recover(state).status;

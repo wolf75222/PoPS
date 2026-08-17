@@ -8,6 +8,7 @@ already proved on uniform System (two-clock SampleAndHold).
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from math import floor, lcm
 from typing import Any, Mapping, Sequence
@@ -55,7 +56,7 @@ def _label(block: HoldCatchupBlock) -> str:
     return str(getattr(handle, "name", "block"))
 
 
-def _window(strides: Sequence[int]) -> int:
+def _window(strides: Iterable[int]) -> int:
     window = 1
     for stride in strides:
         window = lcm(window, int(stride))

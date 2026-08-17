@@ -46,6 +46,7 @@ def _write_component(root: Path) -> None:
     header.parent.mkdir(parents=True)
     header.write_text(
         r"""#pragma once
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>
 #include <pops/runtime/export.hpp>
 
@@ -73,7 +74,7 @@ inline const double* physical_step(const pops::PreparedProviderOptions& options)
   return item.first == "physical_step" ? std::get_if<double>(&item.second) : nullptr;
 }
 
-class Provider final : public pops::PreparedKrylovMethodProvider {
+class Provider final : public pops::PreparedKrylovMethodProvider<pops::kNativeDimension> {
  public:
   std::string_view identity() const noexcept override {
     return "vendor.one-step-krylov";
@@ -100,7 +101,7 @@ class Provider final : public pops::PreparedKrylovMethodProvider {
   }
 
   pops::KrylovMethodValidation validate_problem(
-      const pops::KrylovMethodProblemFacts& facts,
+      const pops::KrylovMethodProblemFacts<pops::kNativeDimension>& facts,
       const pops::PreparedProviderOptions&) const noexcept override {
     if (!facts.properties.valid() || facts.footprint.components < 1 ||
         facts.footprint.input_ghosts < 0 || facts.robust_payload_width == 0)
@@ -111,7 +112,7 @@ class Provider final : public pops::PreparedKrylovMethodProvider {
   }
 
   pops::KrylovWorkspaceRequirements workspace_requirements(
-      const pops::KrylovWorkspaceRequest& request,
+      const pops::KrylovWorkspaceRequest<pops::kNativeDimension>& request,
       const pops::PreparedProviderOptions&) const override {
     if (request.footprint.preconditioned)
       throw std::invalid_argument("one-step method is unpreconditioned");
@@ -123,7 +124,7 @@ class Provider final : public pops::PreparedKrylovMethodProvider {
   }
 
   pops::SolveReport solve(
-      pops::PreparedKrylovSolveContext& context,
+      pops::PreparedKrylovSolveContext<pops::kNativeDimension>& context,
       const pops::PreparedProviderOptions& options) const override {
     const auto call = solve_calls.fetch_add(1, std::memory_order_relaxed) + 1;
     context.state_word(0) = call;
@@ -138,9 +139,9 @@ class Provider final : public pops::PreparedKrylovMethodProvider {
   }
 };
 
-inline pops::PreparedKrylovMethod method(double step) {
+inline pops::PreparedKrylovMethod<pops::kNativeDimension> method(double step) {
   static const auto provider = std::make_shared<const Provider>();
-  return pops::PreparedKrylovMethod(
+  return pops::PreparedKrylovMethod<pops::kNativeDimension>(
       provider,
       pops::PreparedProviderOptions{
           "vendor.one-step-krylov.options@1", {{"physical_step", step}}});

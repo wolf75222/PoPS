@@ -22,6 +22,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -2341,13 +2342,17 @@ class PreparedAffineLinearProblem {
   template <class Operation>
   void run_collective_prepare_stage_(PrepareStage stage, Operation&& operation) {
     long local_failure = 0;
+    std::exception_ptr local_error;
     try {
       std::forward<Operation>(operation)();
     } catch (...) {
       local_failure = 1;
+      local_error = std::current_exception();
     }
     if (all_reduce_max(local_failure, preparation_lane_) == 0)
       return;
+    if (preparation_lane_.size() == 1 && local_error)
+      std::rethrow_exception(local_error);
     switch (stage) {
       case PrepareStage::kFreeze:
         throw std::logic_error("prepared resource freeze failed on at least one communicator rank");

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Callable
+from typing import Any, Mapping, cast
 
 
 def _record_block_time(engine: Any, name: str, time: Any) -> None:
@@ -53,7 +54,9 @@ def _engine_clock(engine: Any) -> tuple[float, int]:
         macro = getattr(native, "macro_step", None)
     if not callable(time) or not callable(macro):
         raise RuntimeError("cadence install requires time() and macro_step() on the engine")
-    return float(time()), int(macro())
+    clock = cast(Callable[[], Any], time)
+    step = cast(Callable[[], Any], macro)
+    return float(clock()), int(step())
 
 
 def _seal_amr_program_checkpoint(engine: Any) -> None:
@@ -200,7 +203,8 @@ def engine_min_cell_spacing(engine: Any, override: Any = None) -> float:
     if native is None:
         native = getattr(getattr(engine, "_s", None), "cfl_min_dx", None)
     if callable(native):
-        value = float(native())
+        spacing = cast(Callable[[], Any], native)
+        value = float(spacing())
         if value > 0.0:
             return value
     raise ValueError(

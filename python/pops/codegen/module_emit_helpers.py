@@ -20,6 +20,8 @@ from typing import Any
 from pops._cartesian_axes import canonical_axis_mapping
 from pops.codegen.cpp_writer import (
     _cse_emit,
+    _cpp_expand,
+    _cpp_identifier,
     _count_cons_denoms,
     _recip_rewrite,
 )
@@ -120,7 +122,7 @@ def _codegen_exprs(model: Any, exprs: Any, cse: Any, real: str = "pops::Real", i
     (H, c...) into ``cseK_`` locals ; otherwise inline each expression via to_cpp."""
     if cse:
         return _cse_emit(list(exprs), real, indent)
-    return [], [e.to_cpp() for e in exprs]
+    return [], [_cpp_expand(e, {}, None) for e in exprs]
 
 
 def _live_prims(model: Any, exprs: Any, seed: Any = ()) -> set:
@@ -148,15 +150,19 @@ def _prim_block(model: Any, live: Any = None, hoist: bool = False) -> list:
     products (OPT-IN, changes the rounding). Without @p hoist and with live=None, historical output."""
     items = [(p, e) for p, e in model.prim_defs.items() if live is None or p in live]
     if not hoist:
-        return ["    const pops::Real %s = %s;" % (p, e.to_cpp()) for p, e in items]
+        return ["    const pops::Real %s = %s;" % (_cpp_identifier(p), _cpp_expand(e, {}, None))
+                for p, e in items]
     cons_set = set(model.cons_names)
     counts = {}
     for _, e in items:
         _count_cons_denoms(e, cons_set, counts)
     inv = [n for n in model.cons_names if counts.get(n, 0) >= 2]  # stable cons order
     inv_set = set(inv)
-    lines = ["    const pops::Real inv_%s = pops::Real(1) / %s;" % (n, n) for n in inv]
-    lines += ["    const pops::Real %s = %s;" % (p, _recip_rewrite(e, inv_set).to_cpp())
+    lines = ["    const pops::Real inv_%s = pops::Real(1) / %s;" % (_cpp_identifier(n),
+                                                                   _cpp_identifier(n))
+             for n in inv]
+    lines += ["    const pops::Real %s = %s;" % (_cpp_identifier(p),
+                                                _cpp_expand(_recip_rewrite(e, inv_set), {}, None))
               for p, e in items]
     return lines
 

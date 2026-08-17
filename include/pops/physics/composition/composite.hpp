@@ -198,10 +198,32 @@ POPS_HD State invalid_state() {
   return result;
 }
 
+template <class Brick, int Dim>
+consteval int brick_provider_width() {
+  int width = provider_count_for<Brick, Dim>();
+  if constexpr (requires { Brick::n_flux_providers; }) {
+    if (static_cast<int>(Brick::n_flux_providers) > width)
+      width = static_cast<int>(Brick::n_flux_providers);
+  }
+  return width;
+}
+
+template <class Hyperbolic, class = void>
+struct FluxProviderRequirementAlias {};
+
+template <class Hyperbolic>
+struct FluxProviderRequirementAlias<
+    Hyperbolic, std::void_t<decltype(Hyperbolic::n_flux_providers),
+                            decltype(Hyperbolic::flux_provider_requirements)>> {
+  static constexpr int n_flux_providers = Hyperbolic::n_flux_providers;
+  static constexpr auto flux_provider_requirements = Hyperbolic::flux_provider_requirements;
+};
+
 }  // namespace composite_detail
 
 template <class Hyperbolic, class Source, class Elliptic>
-struct CompositeModel : composite_detail::ConservationLawAliases<Hyperbolic> {
+struct CompositeModel : composite_detail::ConservationLawAliases<Hyperbolic>,
+                        composite_detail::FluxProviderRequirementAlias<Hyperbolic> {
   static constexpr int dimension = composite_detail::hyperbolic_dimension<Hyperbolic>();
   static_assert(dimension >= 1 && dimension <= 3,
                 "CompositeModel hyperbolic rank must be 1, 2, or 3");

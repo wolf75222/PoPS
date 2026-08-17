@@ -8,7 +8,10 @@
 
 #include <pybind11/pybind11.h>
 
+#include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -172,6 +175,22 @@ inline runtime::multiblock::InterfaceTraceOperation interface_trace_operation(
   throw std::invalid_argument("native shared interface trace operation is not canonical");
 }
 
+inline double binary64_from_identity(const py::handle& value, const char* where) {
+  if (!PyUnicode_CheckExact(value.ptr()))
+    throw std::invalid_argument(std::string(where) + " must be canonical float.hex() text");
+  const std::string text = py::cast<std::string>(value);
+  std::size_t consumed = 0;
+  double result = 0.0;
+  try {
+    result = std::stod(text, &consumed);
+  } catch (const std::exception&) {
+    throw std::invalid_argument(std::string(where) + " is not canonical float.hex() text");
+  }
+  if (consumed != text.size() || !std::isfinite(result))
+    throw std::invalid_argument(std::string(where) + " is not canonical float.hex() text");
+  return result;
+}
+
 template <int Dim>
 inline runtime::multiblock::AxisAlignedInterface<Dim> interface_route_from_python(
     const py::dict& row, std::size_t left_block, std::size_t right_block, int level) {
@@ -201,19 +220,19 @@ inline runtime::multiblock::AxisAlignedInterface<Dim> interface_route_from_pytho
   const std::vector<int> tangent_permutation =
       py::cast<std::vector<int>>(mapping["right_tangent_for_left"]);
   const std::vector<int> tangent_sign = py::cast<std::vector<int>>(mapping["right_tangent_sign"]);
-  const std::vector<double> tangent_offset =
-      py::cast<std::vector<double>>(mapping["right_tangent_offset"]);
+  const py::list tangent_offset = py::cast<py::list>(mapping["right_tangent_offset"]);
   if (tangent_permutation.size() != static_cast<std::size_t>(Dim - 1) ||
       tangent_sign.size() != static_cast<std::size_t>(Dim - 1) ||
-      tangent_offset.size() != static_cast<std::size_t>(Dim - 1))
+      tangent_offset.size() != static_cast<py::ssize_t>(Dim - 1))
     throw std::invalid_argument(
         "native shared interface tangent transform does not match the exact dimension");
   for (int tangent = 0; tangent < Dim - 1; ++tangent) {
     route.tangential_transform.right_tangent_for_left[tangent] =
         tangent_permutation[static_cast<std::size_t>(tangent)];
     route.tangential_transform.sign[tangent] = tangent_sign[static_cast<std::size_t>(tangent)];
-    route.tangential_transform.offset[tangent] =
-        static_cast<Real>(tangent_offset[static_cast<std::size_t>(tangent)]);
+    route.tangential_transform.offset[tangent] = static_cast<Real>(binary64_from_identity(
+        tangent_offset[static_cast<py::ssize_t>(tangent)],
+        "native shared interface right_tangent_offset"));
   }
   route.right_component_for_left =
       py::cast<std::vector<int>>(permutation["right_component_for_left"]);
@@ -230,8 +249,8 @@ inline runtime::multiblock::AxisAlignedInterface<Dim> interface_route_from_pytho
   route.left_trace_required_depth = py::cast<int>(left["required_depth"]);
   route.right_trace_required_depth = py::cast<int>(right["required_depth"]);
   route.affine_mapping_identity = py::cast<std::string>(mapping_handle["qualified_id"]);
-  route.right_normal_translation =
-      static_cast<Real>(py::cast<double>(mapping["right_normal_translation"]));
+  route.right_normal_translation = static_cast<Real>(binary64_from_identity(
+      mapping["right_normal_translation"], "native shared interface right_normal_translation"));
   return route;
 }
 

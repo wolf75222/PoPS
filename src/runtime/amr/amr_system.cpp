@@ -11896,7 +11896,12 @@ void AmrSystem<Dim>::refresh_prepared_amr_levels() {
 
 template <int Dim>
 const MultiFab<Dim>& AmrSystem<Dim>::prepared_amr_block_state(int runtime_block, int level) const {
-  p_->ensure_engine();
+  // Rank-local Fab lookup. provider_values_view and other Program hot paths call this once per
+  // local patch; ensure_engine() would Allreduce on every invocation and deadlock when ranks own
+  // different patch counts. Collective materialization belongs to refresh_prepared_amr_levels().
+  if (!p_->engine)
+    throw std::logic_error(
+        "prepared AMR block state requires a collectively materialized hierarchy");
   if (runtime_block < 0 || static_cast<std::size_t>(runtime_block) >= p_->blocks.size())
     throw std::out_of_range("prepared AMR block state block is out of range");
   if (level < 0 || static_cast<std::size_t>(level) >= p_->engine->hierarchy().num_levels())

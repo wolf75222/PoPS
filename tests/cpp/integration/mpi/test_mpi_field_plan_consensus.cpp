@@ -1,6 +1,6 @@
 // Exact-rank MPI proof for simultaneous multi-block AMR field solves on supported seams.
 // System CartesianCG owns the uniform registry. Builtin partitioned 2-level composite FAC is
-// accepted at the provider supports seam; the mg path stays replicated-only. The two-block
+// accepted at the provider supports seam; the mg path now advertises distributed MPI. The two-block
 // sparse two-level hierarchy uses custom providers only.
 // nullptr Program entries borrow accepted block state; non-null entries are detached candidates;
 // publication remains private until SolveOutcome acceptance.
@@ -936,8 +936,8 @@ int run_multiblock_field_solve(int argc, char** argv) {
                                                             : "tests.mpi.amr-registry/rank-one@1"),
             "AmrSystem rejects a rank-divergent field-plan registry");
 
-    require(!pops::elliptic::mg::CompositeFacCapabilities{}.distributed_mpi,
-            "composite FAC capability contract does not advertise distributed MPI");
+    require(pops::elliptic::mg::CompositeFacCapabilities{}.distributed_mpi,
+            "composite FAC capability contract advertises distributed MPI");
     const pops::ExecutionLane fac_lane =
         pops::ExecutionLane::world("tests.mpi.multiblock-field/distributed-fac-preflight@1");
     const pops::PreparedProviderSupport fac_support = distributed_composite_fac_support(fac_lane);

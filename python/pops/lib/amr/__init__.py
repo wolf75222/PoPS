@@ -222,7 +222,7 @@ class _CoarseFineGhostSecondOrder(_ImmutableTransferPolicy):
 
     native_route: ClassVar[str] = "conservative_coarse_fine"
     order: ClassVar[int] = 2
-    ghost_depth: ClassVar[tuple[int, ...]] = (2,)
+    ghost_depth: ClassVar[tuple[int, ...]] = (1,)
     dimensions: ClassVar[tuple[int, ...]] = (1, 2, 3)
     refinement_ratio_policy: ClassVar[str] = "hierarchy_exact_rank"
     refinement_ratios: ClassVar[tuple[int, ...]] = ()

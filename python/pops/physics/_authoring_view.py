@@ -295,14 +295,16 @@ class _OperatorViewMixin(_HyperbolicModel):
                 )
             )
 
-        # Pointwise projection (projection: State -> State).
+        # Pointwise projection (projection: State[, Fields] -> State).
         if self._proj is not None:
+            rf = reads_fields(self._proj)
             reg.register(
                 _model.Operator(
                     "projection",
                     "projection",
-                    _model.Signature([state], state),
+                    _model.Signature([state, fields] if rf else [state], state),
                     capabilities={"local": True, "idempotent": True, "supports_device": True},
+                    requirements=self._aux_requirements(self._proj),
                     source=None,
                 )
             )

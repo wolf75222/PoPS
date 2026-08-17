@@ -2182,8 +2182,15 @@ void System<Dim>::finalize_native_packages() {
                   "System native elliptic attachment resolves to multiple field plans");
             selected = plan;
           }
-          if (selected == snapshot->field_plans.end())
+          if (selected == snapshot->field_plans.end()) {
+            // Convenience ChargeDensity packages emit an RHS-only fields_from_state
+            // attachment. The default Poisson already lives on the prepared block
+            // (poisson_rhs -> add_poisson_rhs). AMR stages ensure_default_field_plan();
+            // uniform System keeps that default field off the named-plan registry.
+            if (attachment.field == "fields_from_state" && attachment.outputs.empty())
+              continue;
             throw std::logic_error("System native elliptic attachment has no resolved field plan");
+          }
           const auto staged = snapshot->staged_native_field_outputs.find(selected->first);
           if (staged == snapshot->staged_native_field_outputs.end() ||
               staged->second.gradient_sign != attachment.gradient_sign ||

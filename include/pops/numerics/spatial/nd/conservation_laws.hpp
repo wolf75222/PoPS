@@ -10,7 +10,9 @@
 #include <pops/numerics/spatial/nd/state_schema.hpp>
 #include <pops/runtime/numerical_defaults.hpp>
 
+#ifdef POPS_HAS_KOKKOS
 #include <Kokkos_MathematicalFunctions.hpp>
+#endif
 
 #include <cmath>
 #include <concepts>
@@ -24,7 +26,19 @@ namespace pops::nd {
 namespace conservation_law_detail {
 
 POPS_HD inline bool finite(Real value) {
+#ifdef POPS_HAS_KOKKOS
   return Kokkos::isfinite(value);
+#else
+  return std::isfinite(value);
+#endif
+}
+
+POPS_HD inline Real sqrt_real(Real value) {
+#ifdef POPS_HAS_KOKKOS
+  return Kokkos::sqrt(value);
+#else
+  return std::sqrt(value);
+#endif
 }
 
 template <class State>
@@ -342,8 +356,9 @@ class IdealGasEuler {
       return std::numeric_limits<Real>::quiet_NaN();
     const Real velocity = primitive.value[Schema::template velocity<Axis>];
     const Real absolute_velocity = velocity < Real(0) ? -velocity : velocity;
-    return absolute_velocity + Kokkos::sqrt(gamma * primitive.value[Schema::pressure] /
-                                            primitive.value[Schema::density]);
+    return absolute_velocity +
+           conservation_law_detail::sqrt_real(gamma * primitive.value[Schema::pressure] /
+                                              primitive.value[Schema::density]);
   }
 
   template <int Axis>
@@ -356,7 +371,8 @@ class IdealGasEuler {
     }
     const Real velocity = primitive.value[Schema::template velocity<Axis>];
     const Real sound_speed =
-        Kokkos::sqrt(gamma * primitive.value[Schema::pressure] / primitive.value[Schema::density]);
+        conservation_law_detail::sqrt_real(gamma * primitive.value[Schema::pressure] /
+                                           primitive.value[Schema::density]);
     lower = velocity - sound_speed;
     upper = velocity + sound_speed;
   }
@@ -403,8 +419,8 @@ class IdealGasEuler {
     const Real density_right = right[Schema::density];
     const Real pressure_left = pressure(left);
     const Real pressure_right = pressure(right);
-    const Real root_left = Kokkos::sqrt(density_left);
-    const Real root_right = Kokkos::sqrt(density_right);
+    const Real root_left = conservation_law_detail::sqrt_real(density_left);
+    const Real root_right = conservation_law_detail::sqrt_real(density_right);
     const Real denominator = root_left + root_right;
     const Real roe_density = root_left * root_right;
     const Real enthalpy_left = (left[Schema::energy] + pressure_left) / density_left;
@@ -432,7 +448,7 @@ class IdealGasEuler {
     const Real gamma_minus_one =
         pressure_left / (left[Schema::energy] - Real(0.5) * density_left * left_speed_squared);
     const Real sound_squared = gamma_minus_one * (enthalpy - Real(0.5) * speed_squared);
-    const Real sound = Kokkos::sqrt(sound_squared);
+    const Real sound = conservation_law_detail::sqrt_real(sound_squared);
     const Real density_jump = density_right - density_left;
     const Real pressure_jump = pressure_right - pressure_left;
     const Real normal_jump = velocity_right[Axis] - velocity_left[Axis];
