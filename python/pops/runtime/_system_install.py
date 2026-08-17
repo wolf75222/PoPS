@@ -430,6 +430,8 @@ class _SystemInstall(_System):
             raise TypeError("_set_poisson_native requires one native boundary token")
         rhs = _resolve_route("poisson_rhs", rhs, context="set_poisson")
         solver = _resolve_route("field_solver", solver, context="set_poisson")
+        if str(solver) == "geometric_mg":
+            solver = _resolve_route("field_solver", "cartesian_cg", context="set_poisson")
         bc = _resolve_route("poisson_bc", bc, context="set_poisson")
         controls = _cartesian_cg_kwargs(rel_tol, max_iterations)
         if abs_tol is not None:

@@ -209,29 +209,6 @@ struct CopyKernel {
 };
 
 template <int Dim>
-struct EllipticityFailureKernel {
-  std::array<FieldView<const Real, Dim>, static_cast<std::size_t>(Dim * Dim)> coefficients{};
-
-  POPS_HD Real operator()(const Index<Dim>& cell) const {
-    constexpr Real infinity = std::numeric_limits<Real>::infinity();
-    for (int row = 0; row < Dim; ++row) {
-      const Real diagonal = coefficients[static_cast<std::size_t>(row * Dim + row)](cell);
-      Real off_diagonal = Real(0);
-      bool finite = diagonal == diagonal && diagonal != infinity && diagonal != -infinity;
-      for (int column = 0; column < Dim; ++column) {
-        const Real a = coefficients[static_cast<std::size_t>(row * Dim + column)](cell);
-        finite = finite && a == a && a != infinity && a != -infinity;
-        if (column != row)
-          off_diagonal += a < Real(0) ? -a : a;
-      }
-      if (!finite || !(diagonal > off_diagonal))
-        return Real(1);
-    }
-    return Real(0);
-  }
-};
-
-template <int Dim>
 struct ActiveAddKernel {
   FieldView<Real, Dim> destination{};
   FieldView<const Real, Dim> correction{};
@@ -274,9 +251,6 @@ struct ResidualKernel {
 /// One colour of a tensor-stencil Gauss-Seidel sweep.  A full tensor stencil couples diagonal
 /// neighbours, so two colours are insufficient: every axis-parity combination is its own colour.
 /// Updating one colour at a time keeps the in-place sweep race-free for Dim=1, 2, and 3.
-/// The cycle uses the same 2/3 damping as the scalar composite FAC Jacobi smoother so a long
-/// fine-sweep budget cannot amplify the high-frequency modes left by interpolated coarse/fine
-/// ghosts.
 template <int Dim>
 struct ColoredGaussSeidelKernel {
   FieldView<Real, Dim> iterate{};
@@ -1137,16 +1111,36 @@ class FullTensorCompositeFac {
     long local_invalid = 0;
     for (const auto& level : levels_)
       for (std::size_t local = 0; local < level->binding.solution->local_size(); ++local) {
-        std::array<FieldView<const Real, Dim>, static_cast<std::size_t>(Dim * Dim)> coefficients{};
+        using storage_type =
+            std::remove_cvref_t<decltype(level->binding.coefficients[0]->fab(local).storage())>;
+        std::array<storage_type, static_cast<std::size_t>(Dim * Dim)> coefficients{};
         for (std::size_t slot = 0; slot < coefficients.size(); ++slot)
-          coefficients[slot] =
-              std::as_const(*level->binding.coefficients[slot]).fab(local).view();
-        const Real patch_invalid = for_each_cell_reduce_max(
-            level->binding.solution->box(local),
-            detail::EllipticityFailureKernel<Dim>{coefficients});
-        if (patch_invalid > Real(0))
-          local_invalid = 1;
+          coefficients[slot] = level->binding.coefficients[slot]->fab(local).storage();
+        const std::size_t count = coefficients[0].extent(0);
+        long patch_invalid = 0;
+        Kokkos::parallel_reduce(
+            "pops_nd_tensor_ellipticity", Kokkos::RangePolicy<>(0, count),
+            KOKKOS_LAMBDA(const std::size_t index, long& invalid) {
+              constexpr Real infinity = std::numeric_limits<Real>::infinity();
+              for (int row = 0; row < Dim; ++row) {
+                const Real diagonal =
+                    coefficients[static_cast<std::size_t>(row * Dim + row)](index);
+                Real off_diagonal = Real(0);
+                bool finite = diagonal == diagonal && diagonal != infinity && diagonal != -infinity;
+                for (int column = 0; column < Dim; ++column) {
+                  const Real a = coefficients[static_cast<std::size_t>(row * Dim + column)](index);
+                  finite = finite && a == a && a != infinity && a != -infinity;
+                  if (column != row)
+                    off_diagonal += a < Real(0) ? -a : a;
+                }
+                if (!finite || !(diagonal > off_diagonal))
+                  invalid = 1;
+              }
+            },
+            Kokkos::Max<long>(patch_invalid));
+        local_invalid = std::max(local_invalid, patch_invalid);
       }
+    Kokkos::fence();
     return all_reduce_max(local_invalid, *lane_) == 0;
   }
 
@@ -1181,8 +1175,7 @@ class FullTensorCompositeFac {
                         detail::ColoredGaussSeidelKernel<Dim>{
                             iterate.fab(local).view(), std::as_const(rhs.fab(local)).view(),
                             std::as_const(level.covered.fab(local)).view(),
-                            stencil_(level, local, iterate), colour, Real(2) / Real(3),
-                            mask_covered});
+                            stencil_(level, local, iterate), colour, Real(1), mask_covered});
         Kokkos::fence();
       }
     }

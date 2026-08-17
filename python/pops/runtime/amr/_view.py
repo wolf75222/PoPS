@@ -123,7 +123,7 @@ class AmrRuntimeView:
             entry["cells"] += math.prod(
                 high - low + 1 for low, high in zip(lower, upper, strict=True)
             )
-            entry["boxes"].append((lower, upper))
+            entry["boxes"].append(lower + upper)
             entry["physical_bounds"].append(tuple(float(value) for value in physical))
         return [levels[k] for k in sorted(levels)]
 

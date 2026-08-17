@@ -120,6 +120,7 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         # carries no block/name-to-component table: callers use ComponentKey and
         # native code resolves its exact `{group, component}` address.
         self._pending_native_packages = 0
+        self._batch_native_packages = False
         self._step_strategy = None
         self._step_transaction_plan = None
         self._step_controller = None
@@ -191,6 +192,16 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
                 % type(profile).__name__)
         return _ProfileSession(self, profile)
 
+    def _commit_pending_native_packages(self) -> None:
+        """Materialize staged CompiledModel packages once the low-level add_equation burst ends."""
+        if getattr(self, "_batch_native_packages", False) or not self._pending_native_packages:
+            return
+        from pops.runtime._amr_package_lane import ensure_system_native_package_lane
+
+        ensure_system_native_package_lane(self)
+        self._s._finalize_native_packages()
+        self._pending_native_packages = 0
+
     def block_names(self) -> Any:
         """Names of the installed native blocks, in deterministic registry order.
 
@@ -198,11 +209,14 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         production package as well as direct native blocks. This is a low-level inspection surface;
         the compiled ``Program`` remains the time-integration authority.
         """
+        self._commit_pending_native_packages()
         return list(self._s.block_names())
 
     def inspect(self) -> Any:
         """Structured, array-free runtime inspection report (ADC-591)."""
         from pops.runtime.inspection import build_runtime_inspection
+
+        self._commit_pending_native_packages()
         return build_runtime_inspection(self, runtime="system")
 
     def program_report(self) -> Any:
@@ -267,4 +281,5 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         # C++ setters are not yet frozen. The data / param / diagnostic passthrough is untouched.
         if attr in _FROZEN_STRUCTURAL and getattr(self, "_lifecycle", "assembling") != "assembling":
             raise _freeze_error(attr)
+        self._commit_pending_native_packages()
         return getattr(self._s, attr)

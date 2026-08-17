@@ -434,39 +434,43 @@ class _SystemUnifiedInstall(_System):
             per_block_params = {}
 
         pending_initials = []
-        for name, (spec, model, spatial, time) in lowered_instances.items():
-            self.add_equation(
-                name,
-                model,
-                spatial=spatial,
-                time=time,
-                _bind_params=per_block_params.get(name, []),
-            )
-            initial = spec.get("initial")
-            source = None if initial_sources is None else initial_sources.get(name)
-            if initial is not None and source is not None:
-                raise ValueError("uniform block has competing initial_state and InitialCondition")
-            pending_initials.append((name, initial, source))
+        self._batch_native_packages = True
+        try:
+            for name, (spec, model, spatial, time) in lowered_instances.items():
+                self.add_equation(
+                    name,
+                    model,
+                    spatial=spatial,
+                    time=time,
+                    _bind_params=per_block_params.get(name, []),
+                )
+                initial = spec.get("initial")
+                source = None if initial_sources is None else initial_sources.get(name)
+                if initial is not None and source is not None:
+                    raise ValueError("uniform block has competing initial_state and InitialCondition")
+                pending_initials.append((name, initial, source))
 
-        # (2) Resolve the complete field-plan/provider image before native package finalization.
-        # Provider-owned output installers stage their exact routes while packages are pending;
-        # finalization materializes those outputs against the sealed detached auxiliary/block image,
-        # attaches package RHS closures, then runs prepared-boundary installers. No field backend is
-        # registered twice and no prepared boundary can observe a missing named field.
-        for field, field_plan in field_plans.items():
-            self._install_field_plan(field, field_plan, install_plan=install_plan)
+            # (2) Resolve the complete field-plan/provider image before native package finalization.
+            # Provider-owned output installers stage their exact routes while packages are pending;
+            # finalization materializes those outputs against the sealed detached auxiliary/block image,
+            # attaches package RHS closures, then runs prepared-boundary installers. No field backend is
+            # registered twice and no prepared boundary can observe a missing named field.
+            for field, field_plan in field_plans.items():
+                self._install_field_plan(field, field_plan, install_plan=install_plan)
 
-        # Boundary parameters and method-bound coefficients are part of the exact field plan consumed
-        # during backend construction, so install them while the plan remains unmaterialized.
-        for field_plan in field_plans.values():
-            self._install_field_boundary_parameters(field_plan, params, compiled=compiled)
+            # Boundary parameters and method-bound coefficients are part of the exact field plan consumed
+            # during backend construction, so install them while the plan remains unmaterialized.
+            for field_plan in field_plans.values():
+                self._install_field_boundary_parameters(field_plan, params, compiled=compiled)
 
-        for field_plan in field_plans.values():
-            self._install_field_method_runtime(field_plan, resolved_models, params)
+            for field_plan in field_plans.values():
+                self._install_field_method_runtime(field_plan, resolved_models, params)
 
-        if self._pending_native_packages:
-            self._s._finalize_native_packages()
-            self._pending_native_packages = 0
+            if self._pending_native_packages:
+                self._s._finalize_native_packages()
+                self._pending_native_packages = 0
+        finally:
+            self._batch_native_packages = False
 
         # (3) External InputAux values are staged only after the global registry has authenticated
         # their exact ComponentKeys.  A derived or field-output key is rejected natively.

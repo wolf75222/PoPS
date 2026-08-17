@@ -1479,10 +1479,21 @@ class RuntimeInstance:
         t_end: float,
         deadline: float | None = None,
         at_end: Any = False,
+        controls: Any = None,
     ) -> Any:
         """Execute one accepted controller step with one transaction per native attempt."""
         from pops._bootstrap import StepAttemptRejected
 
+        _ = controls
+        if not hasattr(prepared_run, "prepare_attempts"):
+            strategy = prepared_run
+            native._step_strategy = strategy
+            plan = getattr(native, "_step_transaction_plan", None)
+            if plan is not None and getattr(plan, "strategy", None) is None:
+                plan.strategy = strategy
+            from pops.runtime._step_strategy import prepare_program_run
+
+            prepared_run = prepare_program_run(native, controls)
         sequence = prepared_run.prepare_attempts(step_target, t_end=float(t_end))
         while True:
 

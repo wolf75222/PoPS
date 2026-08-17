@@ -29,6 +29,19 @@ from pops.runtime._amr_system_program import _AmrSystemProgram
 from pops.runtime._profile import PerformanceSummary, Profile
 from pops.runtime._private_config_compat import private_constructor_config
 
+_LANE_FREE_AMR_INSPECT = frozenset({
+    "block_names",
+    "coarse_local_boxes",
+    "coarse_total_boxes",
+    "has_package_assembly_lane",
+    "n_levels",
+    "n_patches",
+    "output_geometry_boxes",
+    "patch_bounds",
+    "patch_boxes",
+    "spatial_shape",
+})
+
 
 def _profile_payload(system: Any) -> Any:
     """Structured profiler payload when the native extension exposes it, else legacy text."""
@@ -346,4 +359,8 @@ class AmrSystem(
         # frozen. The data / param / diagnostic passthrough is untouched.
         if attr in _FROZEN_STRUCTURAL and getattr(self, "_lifecycle", "assembling") != "assembling":
             raise _freeze_error(attr)
+        if attr not in _LANE_FREE_AMR_INSPECT:
+            from pops.runtime._amr_package_lane import ensure_amr_standalone_assembly_lane
+
+            ensure_amr_standalone_assembly_lane(self)
         return getattr(self._s, attr)

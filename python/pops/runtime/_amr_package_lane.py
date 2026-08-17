@@ -26,6 +26,8 @@ def ensure_native_block_state_route(runtime: Any, name: str, compiled: Any) -> N
         message = str(error)
         if "duplicate" in message or "unique" in message:
             return
+        if "must be installed before" in message:
+            return
         raise
 
 
@@ -42,7 +44,6 @@ def ensure_amr_native_package_lane(runtime: Any, model: Any) -> Any:
     from pops.codegen.loader import CompiledModel
     from pops.codegen._native_mpi import native_mpi_communicator
     from pops.codegen.toolchain import loader_native_dimension
-    from pops.runtime._component_execution_context import component_execution_data
     from pops.runtime._platform_manifest import native_device_resource
     from pops.runtime._platform_manifest import native_runtime_backend
     from pops.runtime._platform_manifest import native_runtime_backend_for_route
@@ -103,6 +104,89 @@ def ensure_amr_native_package_lane(runtime: Any, model: Any) -> Any:
     else:
         raise ValueError("AMR package lane does not support communicator %r" % communicator_name)
     validate_launch(platform, context, ())
+    return _install_amr_lane(runtime, context, prepare_lane)
+
+
+def ensure_amr_standalone_assembly_lane(runtime: Any) -> Any:
+    """Install a serial/world AMR assembly lane before low-level assembling APIs run."""
+    native = getattr(runtime, "_s", runtime)
+    has_lane = getattr(native, "has_package_assembly_lane", None)
+    if callable(has_lane) and has_lane():
+        return getattr(runtime, "_execution_context", None)
+    prepare_lane = getattr(native, "_prepare_boundary_execution_lane", None)
+    if not callable(prepare_lane):
+        raise TypeError("AMR package lane requires the native lane-preparation seam")
+    return _install_amr_lane(runtime, _standalone_amr_execution_context(), prepare_lane)
+
+
+def _standalone_amr_execution_context() -> Any:
+    from pops._native_selector import selected_native_module
+    from pops._platform_contracts import ExecutionContext, ExecutionResource
+    from pops.codegen._native_mpi import native_mpi_communicator
+    from pops.runtime._platform_manifest import native_device_resource
+    from pops.runtime._platform_manifest import native_runtime_backend_for_route
+
+    module = selected_native_module(required=True)
+    communicator_name = native_mpi_communicator(module)
+    backend = native_runtime_backend_for_route("production", "amr_system", communicator_name)
+    if communicator_name == "MPI_COMM_WORLD":
+        from pops._native_collectives import require_world
+
+        world = require_world(module.mpi_world())
+        return ExecutionContext(
+            backend=backend,
+            communicator=ExecutionResource("communicator", "MPI_COMM_WORLD", handle=world),
+            datatype=ExecutionResource("datatype", "float64", handle=world.datatype_float64),
+            device=native_device_resource(backend),
+        )
+    if communicator_name == "serial":
+        return ExecutionContext(
+            backend=backend,
+            communicator=ExecutionResource("communicator", "serial"),
+            datatype=ExecutionResource("datatype", "float64"),
+            device=native_device_resource(backend),
+        )
+    raise ValueError("AMR package lane does not support communicator %r" % communicator_name)
+
+
+def _install_amr_lane(runtime: Any, context: Any, prepare_lane: Any) -> Any:
+    from pops.runtime._component_execution_context import component_execution_data
+
     runtime._execution_context = context
-    prepare_lane(context.communicator.handle, component_execution_data(context))
+    try:
+        prepare_lane(context.communicator.handle, component_execution_data(context))
+    except Exception as error:
+        if "already installed" in str(error):
+            return context
+        raise
     return context
+
+
+def ensure_system_native_package_lane(runtime: Any, compiled: Any = None) -> None:
+    """Install the Uniform RuntimeInstance lane when low-level add_equation skipped pops.bind."""
+    native = getattr(runtime, "_s", runtime)
+    prepare = getattr(native, "_prepare_boundary_execution_lane", None)
+    if not callable(prepare):
+        return
+    owner = getattr(compiled, "consumer_owner_qid", None)
+    if not isinstance(owner, str) or not owner:
+        owner = "pops.runtime.package.standalone"
+    from pops._native_selector import selected_native_module
+    from pops.codegen._native_mpi import native_mpi_communicator
+
+    module = selected_native_module(required=True)
+    communicator_name = native_mpi_communicator(module)
+    if communicator_name == "serial":
+        handle = None
+    elif communicator_name == "MPI_COMM_WORLD":
+        from pops._native_collectives import require_world
+
+        handle = require_world(module.mpi_world())
+    else:
+        raise ValueError("System package lane does not support communicator %r" % communicator_name)
+    try:
+        prepare(handle, owner)
+    except Exception as error:
+        if "already installed" in str(error):
+            return
+        raise

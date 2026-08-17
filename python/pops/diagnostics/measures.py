@@ -35,9 +35,9 @@ def _ref_name(value: Any) -> Any:
     """
     if value is None:
         return None
-    from pops.physics.roles import ComponentRole, native_role_token
+    from pops.physics.roles import ComponentRole
     if isinstance(value, ComponentRole):
-        return native_role_token(value)
+        return type(value).__name__
     return getattr(value, "name", None) or (value if isinstance(value, str) else repr(value))
 
 

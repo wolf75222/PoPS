@@ -101,7 +101,7 @@ def _install_state_transfer_routes(simulation, subject):
             operation,
             kernel,
             order,
-            ghost_depth * 2,
+            tuple(ghost_depth) * 2,
             (2, 2),
         )
     simulation._s._bind_bootstrap_subject(subject, "tracer", "bound_level_zero")

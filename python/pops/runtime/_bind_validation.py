@@ -477,18 +477,24 @@ def operator_required_aux(manifest: Any) -> Any:
     return sorted(required)
 
 
-def validate_operator_aux(manifest: Any, aux: Any, provided_field_outputs: Any = ()) -> Any:
+def validate_operator_aux(
+    manifest: Any, aux: Any, provided_field_outputs: Any = (), provided_named_aux: Any = None
+) -> Any:
     """Refuse an aux a lowered operator requires but the bind omits (ADC-537 gate a / G1).
 
     Unions the operator-required routes and refuses each identity neither
     supplied via ``pops.bind(aux={ComponentKey(...): ...})`` nor produced by a
     resolved field plan. Returns one line per missing required route."""
+    if provided_named_aux is not None:
+        if provided_field_outputs:
+            raise TypeError("validate_operator_aux accepts one provided-aux spelling")
+        provided_field_outputs = provided_named_aux
     lines = []
     supplied = set(aux or {}) | set(provided_field_outputs or ())
     for name in operator_required_aux(manifest):
         if name not in supplied:
             lines.append(
-                "auxiliary route %r is required by a lowered operator but was not supplied; pass "
+                "aux field %r is required by a lowered operator but was not supplied; pass "
                 "pops.bind(aux={ComponentKey(...): <array>})" % name
             )
     return lines
