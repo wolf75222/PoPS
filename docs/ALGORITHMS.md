@@ -8,8 +8,8 @@ compositions of generic bricks and live on the application side
 
 Each section follows the same plan: intuition (what it is for), formula and discretization (where it
 comes from), pseudocode (the algorithm), code (the file and the functions), constraints and remarks (the
-stability, the limits, the ctest test that covers it). All the file paths and test names cited exist in
-this repository.
+stability, the limits, the ctest test that covers it). File paths in **Code.** blocks are current.
+Historical test names that were renamed are called out in the validation remarks.
 
 Architecture (layers, dispatch seam, library/application boundary):
 [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -28,20 +28,20 @@ Architecture (layers, dispatch seam, library/application boundary):
 - [9. Elliptic: geometric multigrid](#9-elliptic-geometric-multigrid)
 - [10. Elliptic: exact-ranked Cartesian discrete Poisson FFT](#10-elliptic-exact-ranked-cartesian-discrete-poisson-fft)
 - [11. Exact-ranked scalar GeometricMG](#11-exact-ranked-scalar-geometricmg)
-- [12. Full-tensor elliptic: matrix-free Krylov (BiCGStab)](#12-full-tensor-elliptic-matrix-free-krylov-bicgstab)
+- [12. Generic prepared matrix-free Krylov](#12-generic-prepared-matrix-free-krylov)
 - [13. Condensed implicit Program authoring](#13-condensed-implicit-program-authoring)
-- [14. Embedded boundary: Shortley-Weller cut-cell](#14-embedded-boundary-shortley-weller-cut-cell)
-- [15. Disc domain: mask, masked transport, cut-cell transport](#15-disc-domain-mask-masked-transport-cut-cell-transport)
+- [14. Embedded boundary: exact-rank cut geometry](#14-embedded-boundary-exact-rank-cut-geometry)
+- [15. Generic level-set mask and EB transport](#15-generic-level-set-mask-and-eb-transport)
 - [16. Polar geometry: transport and Poisson on a ring (r, theta)](#16-polar-geometry-transport-and-poisson-on-a-ring-r-theta)
-- [17. AMR: Program-owned subcycling + conservative reflux](#17-amr-program-owned-subcycling--conservative-reflux)
+- [17. AMR: prepared subcycling and conservative-reflux primitives](#17-amr-prepared-subcycling-and-conservative-reflux-primitives)
 - [18. Multi-patch AMR: coverage-aware reflux, MPI-distributed](#18-multi-patch-amr-coverage-aware-reflux-mpi-distributed)
 - [19. Berger-Rigoutsos clustering and regrid](#19-berger-rigoutsos-clustering-and-regrid)
 - [20. Distributed mesh: global BoxArray, halos, load balancing](#20-distributed-mesh-global-boxarray-halos-load-balancing)
-- [21. Extensible aux channel](#21-extensible-aux-channel)
+- [21. Exact auxiliary provider graph](#21-exact-auxiliary-provider-graph)
 - [22. Runtime composition and multi-species system](#22-runtime-composition-and-multi-species-system)
 - [23. Symbolic DSL and authenticated native components](#23-symbolic-dsl-and-authenticated-native-components)
 - [24. The dispatch seam (Kokkos: Serial / OpenMP / Cuda / MPI)](#24-the-dispatch-seam-kokkos-serial--openmp--cuda--mpi)
-- [25. Capabilities to qualify (present but limited, or off master)](#25-capabilities-to-qualify-present-but-limited-or-off-master)
+- [25. Current capability envelope](#25-current-capability-envelope)
 - [Which scheme or solver when](#which-scheme-or-solver-when)
 - [References](#references)
 
@@ -49,12 +49,14 @@ Architecture (layers, dispatch seam, library/application boundary):
 
 ## Model equations
 
-The core solves, on an adaptive Cartesian mesh (and, optionally, on a polar ring or an immersed disc
-subdomain), the generic form
+The core solves, on an adaptive Cartesian mesh, the generic form
 
-$$\partial_t U + \mathrm{div} F(U, P) = S(U, P) \qquad \text{(hyperbolique, par bloc)}$$
+$$\partial_t U + \mathrm{div} F(U, P) = S(U, P) \qquad \text{(hyperbolic, per block)}$$
 
-$$\mathrm{div}(\varepsilon\,\nabla \phi) - \kappa\,\phi = f(U) \qquad \text{(elliptique, partage)}$$
+$$\mathrm{div}(\varepsilon\,\nabla \phi) - \kappa\,\phi = f(U) \qquad \text{(elliptic, shared)}$$
+
+Polar-ring and immersed-disc operators exist as standalone C++ numerical components. They are
+not a second `System<Dim>` runtime. Native production execution is Cartesian.
 
 The hyperbolic part `U` and field operators couple through an owner-qualified provider pack `P`.
 Every consumer declares exact `ComponentKey` dependencies and receives a compact local slot plan;
@@ -119,19 +121,16 @@ function assemble_rhs(model, U, providers, geom, R, recon_prim):
                 R(index,c) += nu * sum_axis(centered_second_difference(U, axis))
 ```
 
-**Code.** [`include/pops/numerics/spatial_operator.hpp`](../include/pops/numerics/spatial_operator.hpp):
-`assemble_rhs<Limiter, NumericalFlux>` computes directly $R = -\mathrm{div}\,\hat F + S$, going through
-the named device functor `detail::AssembleRhsKernel<Limiter, NumericalFlux, Model>` (functor
-rather than extended lambda: reliable device emission under nvcc from a generated native TU,
-installed through the private block-loader seam). `compute_face_fluxes<Limiter, NumericalFlux>` writes the face fluxes `Fx, Fy`
-(via `detail::FaceFluxXKernel` / `FaceFluxYKernel`) before the divergence: this is what the AMR reflux
-needs. Same `reconstruct` and same numerical flux as `assemble_rhs`, so
-$R = S - (\texttt{Fx}(i{+}1)-\texttt{Fx}(i))/\Delta x - (\texttt{Fy}(j{+}1)-\texttt{Fy}(j))/\Delta y$
-gives back exactly the residual. The loop goes through the `for_each_cell` seam. An opt-in variant
-`assemble_rhs_masked` (functor `AssembleRhsMaskedKernel`) restricts transport to an active
-subdomain: zero normal flux on the faces touching a masked cell (conservative FV wall), zero residual
-on the inactive cells. The global CFL step is read by `max_wave_speed_mf` (reduction over the local
-boxes then MPI `all_reduce_max`, otherwise each rank would pick a different `dt` and diverge).
+**Code.** [`include/pops/numerics/spatial_operator.hpp`](../include/pops/numerics/spatial_operator.hpp)
+is the ranked hyperbolic barrel. It includes the ND conservation/face/reconstruction headers and
+[`PreparedCartesianOperator`](../include/pops/numerics/spatial/operators/cartesian_operator.hpp).
+That operator materializes one `FaceField<Dim>` (`materialize_face_fluxes`) then assembles
+$R = -\mathrm{div}\,\hat F + S$ (`assemble_residual` /
+`assemble_residual_from_face_fluxes`). There is no production `assemble_rhs` template and no
+parallel `Fx`/`Fy` kernel pair. AMR reflux reads the same `FaceField`. Masked transport is
+[`PreparedMaskedCartesianOperator`](../include/pops/numerics/spatial/operators/masked_operator.hpp).
+The global CFL step is read by `max_wave_speed_mf` (reduction over the local boxes then MPI
+`all_reduce_max`, otherwise each rank would pick a different `dt` and diverge).
 
 `PhysicalFlux`, `NumericalFlux` and the spatial operator are distinct contracts. The numerical
 policy receives only two typed traces and a `FaceContext`; it cannot inspect a runtime model, mesh,
@@ -416,9 +415,9 @@ before any face flux; the value-only wrappers remain low-level compatibility hel
 step stays bounded by the CFL of section 1, `dt <= C dx / max|lambda|`. Limits and pitfalls:
 - `Minmod` is strictly TVD but falls back to local order 1 at extrema (it erases smooth peaks);
   for the Diocotron growth modes one prefers `VanLeer`, less dissipative at extrema.
-- `MC` uses $\operatorname{minmod}((a+b)/2,2a,2b)$ and is a less diffusive TVD compromise;
-  `Superbee` uses $\operatorname{maxmod}(\operatorname{minmod}(2a,b),
-  \operatorname{minmod}(a,2b))$ and is the most compressive builtin MUSCL limiter. Their
+- `MC` uses $\mathrm{minmod}((a+b)/2,2a,2b)$ and is a less diffusive TVD compromise;
+  `Superbee` uses $\mathrm{maxmod}(\mathrm{minmod}(2a,b),
+  \mathrm{minmod}(a,2b))$ and is the most compressive builtin MUSCL limiter. Their
   implementations avoid overflowing intermediate doubled slopes for finite inputs.
 - `weno5z` is smooth (no branch on the sign: the $\beta_k$ and $\tau_5$ are squares so
   always $\ge 0$, and only $|\beta_0-\beta_2|$ goes through a ternary), which makes it fully
@@ -653,7 +652,7 @@ and unsupported Jacobian capabilities remain distinct outcomes. Collective prior
 of status numbering, so a fatal cell or MPI-rank failure cannot be hidden by a recoverable rejection.
 Once that priority is known, the first failing location is selected by exact staged integer
 collectives (`min(j)`, then `min(i)`, then `min(component)` at that cell). Coordinates are never
-packed into a floating-point mantissa, so negative and large global `Box2D` indices keep the same
+packed into a floating-point mantissa, so negative and large global `Box<Dim>` indices keep the same
 diagnostic and MPI ordering on double- and single-precision builds. These extra collectives execute
 only on the failure path.
 There is no warning-only or unchecked publication policy.
@@ -1198,10 +1197,12 @@ non-symmetry may reduce preconditioner quality, but it does not change the solve
 **Code.** [`generic_krylov.hpp`](../include/pops/numerics/elliptic/linear/generic_krylov.hpp),
 [`prepared_affine_problem.hpp`](../include/pops/numerics/elliptic/linear/prepared_affine_problem.hpp),
 and [`krylov_workspace.hpp`](../include/pops/numerics/elliptic/linear/krylov_workspace.hpp).
-Validation is centralized in `test_generic_krylov`: all four methods, true-residual reporting,
-affine Dirichlet/Robin operators and preconditioners, nullspaces, snapshot invalidation, persistent
-allocation, full symmetric/non-symmetric tensors, the MG-stall contrast, and MPI variants at
-np=1/2/4.
+The catalog route `cartesian_cg` lowers to
+[`CartesianPoissonSolver<Dim>`](../include/pops/numerics/elliptic/nd/cartesian_poisson.hpp),
+not a C++ type named `CartesianCG`. Validation lives in
+`test_krylov_collective_contract` and `test_krylov_workspace_reentrancy` (methods,
+true-residual reporting, affine Dirichlet/Robin operators, nullspaces, persistent
+allocation, MPI variants).
 
 ## 13. Condensed implicit Program authoring
 
@@ -1439,11 +1440,9 @@ owns the same geometry image at every AMR level, including MPI halo and physical
 
 **Constraints / remarks.** The clamp $\theta \ge 10^{-3}$ bounds $w_{\mathrm{diag}}$ (without it a
 grazing face would make the weight diverge and would break the diagonal dominance of the smoother). Compatible with
-the anisotropic operator (the cut-cell weights compose with the $\varepsilon_x, \varepsilon_y$ coefficients). Validation: `test_cut_cell` (cut-cell vs staircase on a manufactured solution, order gain
-), `test_cut_cell_anisotropic` (cut-cell + anisotropic operator), `test_cut_cell_anisotropic_multibox`
-(multi-box single-rank), `test_mpi_cutcell_multibox` (multi-box distributed np=1/2/4; non-regression lock
-of the `average_down` out-of-bounds bug on a degenerate MG hierarchy). For the elliptic on an
-immersed disc, `test_poisson_disc` exercises the solver (convergence + improvement at resolution).
+the anisotropic operator (the cut-cell weights compose with the $\varepsilon_x, \varepsilon_y$ coefficients).
+Validation: `test_embedded_boundary_generic`, `test_prepared_embedded_boundary_nd`,
+`test_amr_program_embedded_boundary`, and `test_mpi_cutcell_multibox`.
 
 ## 15. Generic level-set mask and EB transport
 
@@ -1542,7 +1541,9 @@ of the ring (the "Cartesian ring edges" lock). An annular polar grid
 $r \in [r_{\min}, r_{\max}] \times \theta \in [0, 2\pi)$ aligns the geometry on the problem: theta is
 periodic, r is physical (walls), and the ring excludes $r = 0$ ($r_{\min} > 0$) so no
 coordinate singularity. Polar transport and Poisson reuse the same reconstruction, flux and source
-bricks as the Cartesian; only the metrics change.
+bricks as the Cartesian; only the metrics change. These operators are standalone C++
+components. They are not a `System<Dim>` coordinate-provider contract; native production
+execution remains Cartesian.
 
 **Formula / discretization (transport, conservative FV).** The polar divergence
 $\mathrm{div}\,F = \tfrac{1}{r}\partial_r(r F_r) + \tfrac{1}{r}\partial_\theta(F_\theta)$ is discretized
@@ -1647,14 +1648,12 @@ reads and publication use explicit `Fab<2>::HostMirror` copies, including non-ho
 RadialLine $\sim$ moderately growing iteration count (isotropic $\times 2$ per grid doubling,
 tensor $\times 2.4$); Jacobi grows in $1/h^2$ (sanity check / fallback). The cross term and the azimuthal
 coupling are not in the preconditioner (an honest limit, later refinement possible).
-Validation: `test_polar_transport_mms` / `test_polar_mms_vr` (polar transport MMS order 2),
-`test_polar_fluid_transport`, `test_polar_lorentz_source`, `test_polar_poisson_mms`
-(PolarPoissonSolver, radial order 2), `test_polar_tensor_elliptic_mms` (polar tensor operator),
-`test_time_divergence` (generic matrix-free `div(grad)` Program solve) and
-`test_mpi_polar_schur` (polar tensor solve multi-rank).
-`test_polar_system_step` keeps the standalone coupled field-solve + local-basis aux + SSPRK3
-transport + wall oracle without restoring the retired polar `System` engine. Python resolution and
-direct-runtime refusal are covered by `test_layout_plan` and `test_polar_system`.
+Validation: `test_polar_poisson_mms` (`PolarPoissonSolver`, radial order 2) and
+`test_polar_tensor_elliptic_mms` (polar tensor operator). Polar transport is the standalone
+`prepare_polar_operator` path in
+[`polar_operator.hpp`](../include/pops/numerics/spatial/operators/polar_operator.hpp); it is
+not a `System<Dim>` runtime. Python resolution refuses a polar native `System` before
+artifact creation.
 
 
 ---
@@ -1668,9 +1667,9 @@ which breaks discrete conservation. Reflux corrects the bordering coarse cell by
 (time-integrated fine flux minus coarse flux). The normalized `ProgramGraph` is the intended sole
 authority for parent/child clocks, stage points and catch-up order; `AmrRuntime` supplies hierarchy
 state, spatial evaluations, transfers and reflux primitives, but never chooses a time integrator.
-The prepared primitives below are implemented and qualified independently. The production Program
-driver still refuses a hierarchy with more than one level, so this section is not evidence of an
-accepted end-to-end multi-level trajectory.
+The prepared primitives below are implemented and qualified independently. Production
+`AmrSystem` / `AmrProgramContext` execute authored multi-level Programs (final IMEX-AMR
+example and the `AM-*` verification cases).
 
 **Formula / discretization.** Let a fine-coarse face in $x$ between the coarse cell $(I, J)$ and the
 fine patch. During the coarse step we have already advanced the coarse with its own face flux $F_c$ (over
@@ -1734,7 +1733,7 @@ that prepared high-order transfer.
 `RefinementRatio<Dim>` and validates alignment before transfer. The order of operations is critical:
 coarse/fine fluxes must be captured at the graph-authored stage points; at each catch-up, reflux
 precedes `average_down`; a rejected attempt publishes neither state nor flux. Validation:
-`test_refinement` (conservative average_down + interpolate), `test_amr_hierarchy` (coarse + nested
+`test_refinement` (conservative average_down + interpolate), `test_nd_amr_runtime` (coarse + nested
 fine + ghost interpolation), `test_nd_amr_consumers` (exact-ranked parent footprints and interfaces),
 `test_nd_transfer`, `test_amr_transfer_properties` and `test_prepared_amr_ghost_fill`
 (quantitative 1D/2D/3D transfer, parent-average conservation and coverage-aware order-two/order-five
@@ -1900,8 +1899,8 @@ coverage) relies on the dilation `grow_tags` (radius `n_buffer`) and must be gua
 otherwise the inter-level ghost-fill reads outside the parent coverage. The tagging predicate is agnostic
 of the physics; for a gradient criterion the caller fills the ghosts beforehand. The signature pushes the
 cuts toward the real geometric holes: a full block gives 1 box, two blocks separated by an empty
-band give 2 boxes. Validation: `test_cluster` (full block -> 1 box, two separated blocks -> 2 boxes,
-large block chopped by `max_box_size`), `test_regrid` (a fine level is created around the tagged region,
+band give 2 boxes. Validation: `test_nd_cluster` (full block -> 1 box, two separated blocks -> 2 boxes,
+large block chopped by `max_box_size`), `test_amr_regrid_variable` (a fine level is created around the tagged region,
 fine data interpolated from the coarse).
 
 **Export of the patch geometry.** The fine `BoxArray` resulting from the clustering is exposed to Python by
@@ -1950,7 +1949,7 @@ function from_domain(domain, m):                      # BoxArray::from_domain
     boxes = []
     for (ylo, yhi) in sy:        # y externe, x interne -> ordre deterministe (= indice global)
         for (xlo, xhi) in sx:
-            boxes.push( Box2D{{xlo, ylo}, {xhi, yhi}} )
+            boxes.push( Box<Dim>{{xlo, ylo}, {xhi, yhi}} )
     return BoxArray(boxes)
 
 function split_range(lo, hi, m):
@@ -2015,8 +2014,8 @@ all ranks: this is what makes the enumeration of the halo jobs deterministic, so
 without periodicity are not touched by `fill_boundary` (they are the physical BCs,
 `physical_bc.hpp`). The buffers live in unified memory and are passed as-is to MPI (host
 bounce avoided if the MPI stack is CUDA-aware); a `device_fence()` separates the pack from the `Isend`.
-**Validation.** `test_box_array`, `test_multifab`, `test_load_balance`; under MPI:
-`test_mpi_fillboundary` (halo exchange), `test_mpi_poisson` (distributed Poisson),
+**Validation.** `test_box_array`, `test_multifab`, `test_nd_load_balance`; under MPI:
+`test_fill_boundary` (halo exchange), `test_mpi_poisson` (distributed Poisson),
 `test_mpi_fft_distributed` (FFT by bands), `test_mpi_redistribute`, `test_mpi_array_reduce`,
 `test_mpi_coupler_inject` (np=4, results bit-identical to np=1/2/4).
 
@@ -2214,21 +2213,20 @@ device/MPI suites validate the named-functor kernels used by generated native bl
 ## 24. The dispatch seam (Kokkos: Serial / OpenMP / Cuda / MPI)
 
 **Intuition.** Not a numerical algorithm but the switch point that makes them all portable.
-`for_each_cell(box, f)` dispatches the loop over the cells of a `Box2D` to Kokkos, the only on-node
-backend; the execution space (Serial sequential, OpenMP multi-thread, Cuda/HIP GPU) is chosen AT
-THE INSTALLATION OF KOKKOS, not by an pops flag. The operators (assemble_rhs, V-cycle, couplers)
-never see the execution space and no CUDA kernel is hand-written. Detail in
-[ARCHITECTURE.md](ARCHITECTURE.md) section 4 (execution layer).
+`for_each_cell(box, f)` dispatches the loop over the cells of a `Box<Dim>` to Kokkos, the only
+on-node backend. The execution space (Serial, OpenMP, Cuda/HIP) is chosen at the installation of
+Kokkos, not by a PoPS flag. The operators (`assemble_residual`, V-cycle, couplers) never see the
+execution space and no CUDA kernel is hand-written. See the execution layer in
+[ARCHITECTURE.md](ARCHITECTURE.md).
 
-**Formula / discretization.** The functor `f(i, j)` is taken by value and captures only
-`Array4` handles (POD), never the `Fab` nor anything virtual: exactly the constraint of a device
-kernel. It always becomes `Kokkos::parallel_for(MDRangePolicy<Rank<2>, IndexType<int>>)` (signed
-indices for the ghost boxes with negative bounds), instantiated for the Kokkos execution space
-chosen at install (Serial, OpenMP or Cuda/HIP); no `#pragma omp` nor hand-written double loop
-is a production path. Bit-identity: `for_each_cell` has no
-inter-iteration dependency (each `f(i,j)` writes the single cell `(i,j)` and reads cells it does
-not write in the same call: red-black GS smoother, residual/restriction/prolongation write
-a distinct destination), so the result is independent of the order. The reductions carry a
+**Formula / discretization.** The functor is taken by value and captures only
+`Array4` / `FieldView` handles (POD), never the `Fab` nor anything virtual: exactly the constraint
+of a device kernel. `for_each_cell<Dim>(const Box<Dim>&, F)` becomes
+`Kokkos::parallel_for` over an `MDRangePolicy` of rank `Dim` (signed indices for ghost boxes
+with negative bounds). No `#pragma omp` nor hand-written double loop is a production path.
+Bit-identity: `for_each_cell` has no inter-iteration dependency (each invocation writes one
+cell and reads cells it does not write in the same call), so the result is independent of
+the order. The reductions carry a
 FP choice: the `Kokkos::Sum` sum re-associates the addition per tile (non-associative in IEEE754), so
 `sum` is deterministic/idempotent (same data, same Kokkos space -> same bits) but is NOT
 bit-identical to a hand-written lexicographic sum, and this holds for ALL spaces (Serial,
@@ -2240,18 +2238,18 @@ only if the default Kokkos execution space is the host space (`if constexpr`: on
 parallel_for whatever the size, otherwise a data race).
 
 ```
-function for_each_cell(box b, f):                    # for_each.hpp  (#error sans POPS_HAS_KOKKOS)
-    if DefaultExecSpace == DefaultHostExecSpace:     # if constexpr (espace Kokkos hote)
-        if (b.nx * b.ny) < foreach_serial_threshold():
-            for j in b: for i in b: f(i, j)          # petite boucle hote, INTERNE au chemin Kokkos
+function for_each_cell<Dim>(box b, f):               # for_each.hpp  (#error without POPS_HAS_KOKKOS)
+    if DefaultExecSpace == DefaultHostExecSpace:
+        if num_cells(b) < foreach_serial_threshold():
+            for index in b: f(index)                 # small host loop, INTERNAL to the Kokkos path
             return
-    Kokkos::parallel_for( MDRangePolicy<Rank<2>, IndexType<int>>(lo, hi+1), f )  # Serial/OpenMP/Cuda
+    Kokkos::parallel_for(MDRangePolicy<Rank<Dim>, IndexType<int>>(lo, hi+1), f)
 
-function for_each_cell_reduce_sum(b, f):             # Kokkos::Sum deterministe par tuile
-    Kokkos::parallel_reduce(..., acc += f(i,j), Sum<Real>)   # reassocie : non bit-id a une somme lexicographique
+function for_each_cell_reduce_sum(b, f):
+    Kokkos::parallel_reduce(..., acc += f(index), Sum<Real>)
 
-function sync_host():  device_fence()                # avant un acces hote (memoire unifiee)
-function sync_device(): pass                          # no-op sous SharedSpace (scaffolding)
+function sync_host():  device_fence()
+function sync_device(): pass
 ```
 
 **Code.** [`mesh/for_each.hpp`](../include/pops/mesh/execution/for_each.hpp): `for_each_cell` (`Kokkos::parallel_for`
@@ -2273,59 +2271,61 @@ under Kokkos (annotated `POPS_HD`, POD captured by value); capturing an object w
 breaks the device. The switch to the small host loop of the threshold is safe only under a host Kokkos space
 (the `if constexpr` evaporates on device, zero overhead, the GPU path strictly unchanged). GPU
 discipline: `device_fence()` (via `sync_host`) between a device kernel and a host loop on the same unified
-memory, otherwise a host-write / kernel race (cf. CHOICES.md). **Validation.** The seam is exercised
+memory, otherwise a host-write / kernel race. **Validation.** The seam is exercised
 transversally by the whole suite; specifically the MPI tests of section 20
-(`test_mpi_fillboundary`, `test_mpi_poisson`, `test_mpi_array_reduce`, np=1/2/4 bit-identical) and the
-GH200 device validations (GPU_RUNTIME_PORT.md) which confirm that the Kokkos Serial, OpenMP and
-Cuda spaces give the same results (up to the FP choice of the Kokkos sum, documented).
+(`test_fill_boundary`, `test_mpi_poisson`, `test_mpi_array_reduce`, np=1/2/4 bit-identical).
+Device campaigns on GH200 live in `tests/gpu/romeo/` and are out of CI; after a runtime or
+numerical cutover they do not replace a fresh hardware run.
 
 
 ---
 
-## 25. Capabilities to qualify (present but limited, or off master)
+## 25. Current capability envelope
 
-What exists with a restricted scope, or what is written/designed without being on `master` as of the date
-of this page. The goal is not to present a partial capability as complete.
+These routes exist with a restricted, guarded scope. Unsupported shapes raise a typed
+capability failure instead of falling back to another algorithm.
 
-- GaussPolicy restart/evolve. An experimental policy (re-imposing Gauss at each step, or keeping the
-  `phi` evolved by Schur) on a branch (PR #237); the associated experiment is discarded. Not on
-  `master`.
 - Condensed implicit Program on AMR. A hierarchy-scoped `LinearProblem` gathers coefficients, RHS and
   the authored initial guess on every level, then an executable Krylov solver with an explicit
   `CompositeTensorFAC` provider performs one composite solve before reconstruction on every level.
-  The current `AmrTensorElliptic` provider accepts nested ratio-2 hierarchies with a replicated
-  mono-box coarse level on one MPI rank. Its FAC backend supports equal tensor diagonals plus cross
-  terms; unequal `eps_x`/`eps_y`, multilevel MPI and multi-block Program scope return an explicit
-  capability failure. The Program solve/provider protocol itself is not tied to these limitations.
-- FFT layout/capability. `PoissonFFTSolver<Dim>` supports serial and MPI ordered slabs for Cartesian
-  native ranks 1, 2 and 3. Non-canonical decompositions fail closed; radix-2 extents use the fast
-  path and other extents use the diagnosed direct-DFT path. `CartesianCG` remains the uniform
-  non-periodic or variable-topology alternative.
+  `AmrTensorElliptic` advertises exact-rank, flat-Krylov, refined full-tensor FAC, partitioned-MPI,
+  and `full-tensor-nd@3` contracts. Unsupported option/request combinations still return a typed
+  capability failure. The Program solve/provider protocol itself is not tied to a single hierarchy
+  shape.
+- FFT. `PoissonFFTSolver<Dim>` supports serial and MPI ordered slabs for Cartesian native ranks
+  1, 2 and 3. Non-canonical decompositions fail closed; radix-2 extents use the fast path and other
+  extents use the diagnosed direct-DFT path. The catalog route `cartesian_cg` lowers to
+  `CartesianPoissonSolver<Dim>`. `GeometricMG` is the AMR MG/FAC route. Composite FAC lives in
+  both `numerics/elliptic/mg/composite_fac_poisson.hpp` (engine) and
+  `numerics/elliptic/amr/composite_fac_poisson.hpp` (partitioned-MPI wrapper).
 - Polar Poisson. `PolarPoissonSolver` (FFT in theta, Thomas in r, section 16) is mono-rank and
-  mono-box. The polar tensor/Krylov path (polar Schur) lifts this limit on its perimeter.
-- Cut-cell and Hoffart fidelity. The cut-cell (sections 14, 15) is a numerical capability of the core; it
-  is not presented as a proven correction of the growth rates of the Hoffart benchmark.
-- Energy under condensed implicit integration. The authored method in section 13 adjusts kinetic energy if an `Energy` role is
-  declared; the isothermal case does not use the energy equation.
+  mono-box. It is not a `System<Dim>` backend. The polar tensor/Krylov path lifts the mono-box
+  limit on its own perimeter.
+- Cut-cell. The Shortley-Weller and masked-transport operators (sections 14, 15) are numerical
+  capabilities of the core. They are not a proven correction of a named application benchmark.
+- Energy under condensed implicit integration. The authored method in section 13 adjusts kinetic
+  energy if an `Energy` role is declared; the isothermal case does not use the energy equation.
+- Polar and embedded-boundary native `System` runtimes are refused during resolution. Cartesian
+  `System<Dim>` / `AmrSystem<Dim>` remain the production storage authorities.
 
 ---
 
 ## Which scheme or solver when
 
-| Probleme | Choix | Pourquoi |
+| Problem | Choice | Why |
 |---|---|---|
-| general hyperbolic transport | Godunov finite volumes + Rusanov flux | robust, works for any equation (section 1, 2) |
+| general hyperbolic transport | Godunov finite volumes + Rusanov flux | works for any equation (section 1, 2) |
 | compressible Euler with shocks | primitive reconstruction + HLLC or Roe | resolves the contact, less diffusive than Rusanov (section 2, 3) |
 | smooth zones, high precision | WENO5-Z + SSPRK3 | order 5, low dissipation (section 3, 4) |
 | stiff source (Lorentz, relaxation) | local IMEX, or global Schur condensation | implicit, no exploding time step (section 5, 13) |
-| periodic Poisson, $n = 2^k$ | `poisson_fft_solver` | direct, $O(N \log N)$ (section 10) |
-| uniform constant-coefficient Cartesian Poisson | `CartesianCG` | exact-ranked 1D/2D/3D CG; static periodic/Dirichlet/Neumann BC (section 12) |
-| AMR constant-scalar Poisson / reaction | `GeometricMG` + FAC | genuine exact-ranked multigrid hierarchy, not an alias for uniform CG (section 9, 11) |
+| periodic Poisson, Cartesian 1/2/3 | `PoissonFFTSolver<Dim>` | direct, $O(N \log N)$; radix-2 or diagnosed DFT (section 10) |
+| uniform constant-coefficient Cartesian Poisson | `cartesian_cg` -> `CartesianPoissonSolver<Dim>` | exact-ranked 1D/2D/3D CG; static periodic/Dirichlet/Neumann BC (section 12) |
+| AMR constant-scalar Poisson / reaction | `GeometricMG` + FAC | exact-ranked multigrid hierarchy, not an alias for uniform CG (section 9, 11) |
 | full-tensor Cartesian operator | prepared GMRES or BiCGStab with an explicit provider | generic, no matrix assembly (section 12) |
 | full-tensor polar operator | dedicated metric-aware polar Krylov solver | polar measure and radial line preconditioner (section 16) |
 | localized feature (front, ring) | structured `pops.layouts.AMR` descriptor | adaptive refinement, conservative reflux (section 17 to 19) |
-| inter-species sources | `CoupledSource` bytecode as a typed `CouplingOperator` | declared conservation contract, validated at registration (section 22) |
-| non-rectangular domain | EB cut-cell (disc) or polar ring | curved boundary without staircase (section 14 to 16) |
+| inter-species sources | typed `CouplingOperator` | declared conservation contract, validated at registration (section 22) |
+| non-rectangular domain | EB cut-cell (disc) or polar ring operators | curved boundary without staircase; not a `System` runtime (section 14 to 16) |
 
 ## References
 

@@ -18,36 +18,45 @@
 
 ---
 
-PoPS is a compiled solver engine, not a Python numerical library and not a scenario repository.
-Python authors an inert, typed `pops.Case`: physics model, finite-volume descriptors,
-field problems, time program, outputs, and runtime parameters. The explicit typed pipeline is
-`validate(case) → resolve(validated, layout=...) → compile(resolved) → bind(artifact, ...)`.
-Compilation lowers the resolved assembly to generated or native C++; binding creates the runtime;
-`pops.run(sim, **run_controls)` advances it with C++/Kokkos/MPI kernels.
-Python never runs a per-cell loop.
-
-Named applications such as diocotron, Euler-Poisson, two-fluid, and validation setups live in
-[`adc_cases`](https://github.com/wolf75222/adc_cases). This repository owns the reusable solver core,
-the Python DSL that builds compiled artifacts, and the C++ runtime that executes them.
-
-At the mathematical level, a case usually couples conservative states `U` to one or more elliptic
-fields:
+PoPS is a compiled solver engine. Python authors an inert, typed `pops.Case`: physics
+model, finite-volume descriptors, field problems, time program, outputs, and runtime
+parameters. The public lifecycle is:
 
 ```
-dU/dt + div F(U, fields, aux) = S(U, fields, aux)
-D phi                         = f(U)
+validate(case) -> resolve(validated, layout=...) -> compile(resolved) -> bind(artifact, ...) -> run(sim, ...)
 ```
 
-Field outputs are exposed through owner-qualified, typed field handles. Each field operator declares
-its own output schema (scalar, vector, tensor, components and frame); consumers bind those handles
-without relying on reserved names such as `phi` or `grad_x`. Names remain optional metadata for the
-generated C++ path, never Python callbacks or runtime lookup authority.
+Compilation lowers the resolved assembly to generated or native C++. Binding creates the
+runtime. `pops.run` advances it with C++/Kokkos/MPI kernels. Python never runs a per-cell
+loop.
+
+Named applications such as diocotron, Euler-Poisson, two-fluid, and validation setups live
+in [`adc_cases`](https://github.com/wolf75222/adc_cases). This repository owns the reusable
+solver core, the Python DSL that builds compiled artifacts, and the C++ runtime that
+executes them. The repo-local scientific campaign lives under
+[`verification/`](verification/README.md).
+
+At the mathematical level, a case usually couples conservative states `U` to one or more
+elliptic fields through an owner-qualified provider pack `P`:
+
+```
+dU/dt + div F(U, P) = S(U, P)
+D psi               = f(U)
+```
+
+`P` is the compact slot plan resolved from declared `ComponentKey`s (`ProviderValues<N>`;
+`N = 0` if the model reads no field). `D` is the authored elliptic operator; `psi` is a
+typed field handle, not a reserved name such as `phi` or `grad_x`. Each field operator
+declares its own output schema (scalar, vector, tensor, components and frame). Names
+remain optional metadata for the generated C++ path, never Python callbacks or runtime
+lookup authority. A case without an elliptic solve is a real `P`-free hyperbolic block.
 
 ## Table of contents
 
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
 - [Usage](#usage)
+- [Verification](#verification)
 - [Documentation](#documentation)
 - [Versioning](#versioning)
 - [Contributing](#contributing)
@@ -57,13 +66,14 @@ generated C++ path, never Python callbacks or runtime lookup authority.
 
 - **C++20** compiler: AppleClang 16+, GCC 13+, Clang 17+ (`nvcc_wrapper` for the CUDA target).
 - **CMake >= 3.21**: the build is driven by presets ([CMakePresets.json](CMakePresets.json)).
-- **[Kokkos](https://kokkos.org) 4.4.01**: the exact promised release, with Serial and OpenMP
-  execution spaces. It is the only on-node backend and is required. No need to
-  pre-install it; if it is not found, CMake fetches and builds it (FetchContent).
-- **MPI** *(optional, `-DPOPS_USE_MPI=ON`: halos and distributed FFT)*, with
-  `MPI_THREAD_MULTIPLE` support for the native runtime.
-- **HDF5** parallel *(optional, `-DPOPS_USE_HDF5=ON`: DataWriter)*.
-- **Python 3.12 + numpy** *(optional, the `pops` bindings; conda env via `scripts/setup_env.sh`)*.
+- **[Kokkos](https://kokkos.org) 4.4.01**: the promised Serial and OpenMP release. It is the
+  only on-node backend and is required. CMake fetches and builds it when it is not already
+  found.
+- **MPI** *(optional, `-DPOPS_USE_MPI=ON`)*: halos and distributed FFT. The native runtime
+  needs `MPI_THREAD_MULTIPLE`.
+- **HDF5** parallel *(optional, `-DPOPS_USE_HDF5=ON`)*: DataWriter.
+- **Python 3.12 + numpy** *(optional)*: the `pops` bindings. The conda env is created by
+  `scripts/setup_env.sh`. `pixi.toml` is a lockfile alternative to `environment.yml`.
 
 ## Installation
 
@@ -72,19 +82,21 @@ Recommended path for the Python module:
 ```bash
 git clone https://github.com/wolf75222/PoPS.git && cd PoPS
 bash scripts/setup_env.sh      # conda env + toolchain
-bash scripts/build_python.sh --dim 2  # exact Dim=2 build + install, then pops.doctor()
+bash scripts/build_python.sh --dim 2  # exact Dim=2 build + install, then doctor()
 ```
 
 `scripts/setup_env.sh` creates the conda environment and pins the platform toolchain.
-`scripts/build_python.sh` builds and installs one explicit compile-time spatial specialization of
-`pops`, exports the discovery variables, and finishes with `pops.doctor()`. Pass `--dim 1`, `--dim 2`,
-or `--dim 3` (equivalently export `POPS_NATIVE_DIM`); there is no implicit dimensional fallback.
-Use `bash scripts/build_python.sh --dim 2 --mpi` for a distributed Dim=2 artifact; that strict route
-enables both MPI and its native parallel-HDF5 writer and fails if either backend is unavailable.
+`scripts/build_python.sh` builds and installs one compile-time spatial specialization of
+`pops`, exports the discovery variables, and finishes with
+`from pops.runtime.doctor import doctor; doctor()`. Pass `--dim 1`, `--dim 2`, or
+`--dim 3` (or export `POPS_NATIVE_DIM`). There is no implicit dimensional fallback.
+`bash scripts/build_python.sh --dim 2 --mpi` builds a distributed Dim=2 artifact and fails
+if MPI or its native parallel-HDF5 writer is unavailable.
+
+The CMake-native binding path is `cmake --preset python` (Serial module in `build-py`) or
+`cmake --preset python-parallel` (Kokkos from the conda env, `build-py-kokkos`).
 
 ### C++ core only
-
-The C++ core is built through CMake presets:
 
 ```bash
 cmake --preset serial
@@ -92,24 +104,24 @@ cmake --build --preset serial
 ctest --preset serial --output-on-failure
 ```
 
-The checked-in presets explicitly select `POPS_NATIVE_DIM=2`. To build another specialization,
-override it at configure time and use a dimension-specific build directory for the resulting
-artifact, for example `cmake -S . -B build-dim3 -G Ninja -DPOPS_NATIVE_DIM=3`.
+The checked-in presets select `POPS_NATIVE_DIM=2`. To build another specialization, override
+it at configure time and use a dimension-specific build directory, for example
+`cmake -S . -B build-dim3 -G Ninja -DPOPS_NATIVE_DIM=3`.
 
-The Ninja build already uses all available cores. Pin it to fewer jobs on a constrained machine
-with `cmake --build --preset serial -j<N>`. The serial test preset runs tests one at a time;
+The Ninja build already uses all available cores. Pin it with
+`cmake --build --preset serial -j<N>`. The serial test preset runs tests one at a time;
 parallelize with `ctest --preset serial -j<N>` when needed.
 
-Parallel presets are available when the required backend dependencies are visible:
+Parallel presets are available when the required backends are visible:
 
 ```bash
-cmake --preset parallel && cmake --build --preset parallel && ctest --preset parallel  # threaded, Kokkos OpenMP
-cmake --preset mpi      && cmake --build --preset mpi      && ctest --preset mpi        # distributed, MPI + parallel HDF5
+cmake --preset parallel && cmake --build --preset parallel && ctest --preset parallel  # Kokkos OpenMP
+cmake --preset mpi      && cmake --build --preset mpi      && ctest --preset mpi        # MPI + parallel HDF5
 ```
 
-Each preset writes into its own folder (`build`, `build-kokkos`, `build-mpi`). For an OpenMP build,
-set `OMP_NUM_THREADS` (and, where required by the Kokkos installation, `KOKKOS_NUM_THREADS`) before
-launching Python or use the scheduler's native CPU/thread controls.
+Each preset writes into its own folder (`build`, `build-kokkos`, `build-mpi`). For an OpenMP
+build, set `OMP_NUM_THREADS` (and `KOKKOS_NUM_THREADS` when the Kokkos install requires it)
+before launching Python, or use the scheduler's CPU/thread controls.
 
 ### Uninstall
 
@@ -136,7 +148,8 @@ The scenario itself lives outside this core repository:
 
 ### From a C++ project
 
-The C++ core is header-only for consumers and is consumed via `find_package(pops)` or FetchContent:
+The C++ core is header-only for consumers and is consumed via `find_package(pops)` or
+FetchContent:
 
 ```cmake
 include(FetchContent)
@@ -145,46 +158,77 @@ FetchContent_MakeAvailable(PoPS)   # PoPS tests are not built for the consumer
 target_link_libraries(my_app PRIVATE pops::pops)
 ```
 
-Define a type that satisfies the `PhysicalModel` concept and compose it with the C++ coupling and
-time machinery. This is the low-level engine path. Most users should author a typed Python `Case`
-and let PoPS generate and bind the corresponding C++ artifact.
+Define a type that satisfies the `PhysicalModel` concept and compose it with the C++
+coupling and time machinery. This is the low-level engine path. Most users should author a
+typed Python `Case` and let PoPS generate and bind the corresponding C++ artifact.
 
 ### From Python
 
-The public Python path is typed and compiled. Physics, numerics, boundaries, the explicit time
-`Program`, layout, consumers, and execution controls each have one authority. Final executable
-references are collected under [`examples/final`](examples/final); the complete scalar-advection
-case runs directly:
+The public Python path is typed and compiled. Physics, numerics, boundaries, the explicit
+time `Program`, layout, consumers, and execution controls each have one authority. Final
+executable references are collected under [`examples/final`](examples/final). The complete
+scalar-advection case runs directly:
 
 ```bash
 python examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py
 ```
 
-Its final lifecycle is exactly `Case -> validate -> resolve -> compile -> bind -> run`.
-`pops.bind` receives concrete value families directly (`params=`, `initial_state=`, `aux=`,
-`resources=`, `initial_values=`); users never construct an install plan or runtime engine. See the
-[complete source](examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py) for explicit
-SSPRK2 construction, qualified handles, AMR policies, outputs, diagnostics, and checkpointing.
-The same acceptance corpus also executes the
+The guaranteed public root surface is `Model`, `Program`, `Case`, `RunReport`,
+`RunStopReason`, `ExecutionContext`, `set_threads`, `validate`, `inspect`, `explain`,
+`resolve`, `compile`, `bind`, `run`, and `__version__`. Call `set_threads` before native
+Kokkos initialization. `inspect` / `explain` report authored objects, compiled artifacts,
+and bound runtimes. The exact SemVer contract is in [docs/VERSIONING.md](docs/VERSIONING.md).
+
+Its lifecycle is `Case -> validate -> resolve -> compile -> bind -> run`. `pops.bind`
+receives concrete value families (`params=`, `initial_state=`, `aux=`, `resources=`,
+`initial_values=`). Users never construct an install plan or runtime engine. See the
+[complete source](examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py) for
+SSPRK2 construction, qualified handles, AMR policies, outputs, diagnostics, and
+checkpointing. The same acceptance corpus also executes the
 [multiphysics](examples/final/EXEMPLE_SPEC_FINALE_MULTIPHYSIQUE_CORE.py),
 [IMEX-AMR](examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py), and
 [HyQMOM15](examples/final/EXEMPLE_SPEC_FINALE_15_MOMENTS_HYQMOM.py) cases.
 
+Shorter introductions live in [`docs/tuto`](docs/tuto/README.md).
+
+## Verification
+
+[`verification/`](verification/README.md) is the repo-local scientific campaign. It is not
+installed in the `pops` wheel. It is distinct from the fast-test catalogue
+(`tests/test_manifest.toml`) and the performance harness (`benchmarks/manifest.toml`).
+
+`verification/manifest.toml` is the source of truth (schema `pops.verification.manifest.v1`).
+Catalogued families include infrastructure (`PH`), transport (`TR`), Euler (`EU`), Poisson
+(`PO`), time (`TM`), Euler-Poisson (`CP`), AMR (`AM`), and robustness (`RB`). One native
+artifact compiles exactly one spatial dimension (`POPS_NATIVE_DIM` is `1`, `2`, or `3`).
+
+Validate the manifest and plan a suite without executing cases:
+
+```bash
+python scripts/check_verification_manifest.py
+python scripts/run_verification.py \
+  --suite pr \
+  --dimensions 1 \
+  --max-nodes 2 \
+  --output build/verification/plan
+```
+
+`--suite` is one of `pr`, `nightly`, `weekly`, `release`, `two_node`. `--max-nodes > 2` is
+refused. The planner writes `plan.json`; it does not compile, bind, or launch jobs.
+
 ## Documentation
 
-The documentation corpus describes the final public lifecycle and its current implementation:
-
-- [Architecture](docs/ARCHITECTURE.md): current technical map of the core.
+- [Architecture](docs/ARCHITECTURE.md): technical map of the core.
 - [Final technical specification](docs/design/SPECIFICATION_TECHNIQUE_FINALE_POPS_ARCHITECTURE.md):
   normative Python/C++ contract and acceptance matrix.
 - [Algorithms](docs/ALGORITHMS.md): numerical methods and implementation notes.
-- [Tutorials](docs/tuto/README.md): linear, executable introductions built with the public API.
+- [Tutorials](docs/tuto/README.md): linear introductions built with the public API.
+- [Verification](verification/README.md): scientific campaign layout, manifest, and case contract.
 - [Versioning](docs/VERSIONING.md): public API scope and release process.
 - [Documentation quality](docs/DOC_QUALITY.md): maintained corpus and conformance rules.
 - [Contributing](CONTRIBUTING.md): build, test, review, and PR workflow.
 - [Security](SECURITY.md): vulnerability reporting policy.
 - [Changelog](CHANGELOG.md): notable changes.
-- [Google documentation guide](docs/docguide/): vendored style and documentation guidance.
 
 ### Core layers
 
@@ -201,10 +245,9 @@ The documentation corpus describes the final public lifecycle and its current im
 ## Versioning
 
 PoPS follows [Semantic Versioning](https://semver.org). The public API under guarantee and
-the bump rules are declared in [docs/VERSIONING.md](docs/VERSIONING.md). Available versions and
-their change logs: the [Releases page](https://github.com/wolf75222/PoPS/releases) and
-[CHANGELOG.md](CHANGELOG.md). Version `1.0.0` establishes the stable public contract; subsequent
-compatibility and deprecation decisions follow those Semantic Versioning rules.
+the bump rules are declared in [docs/VERSIONING.md](docs/VERSIONING.md). Available versions
+and their change logs: the [Releases page](https://github.com/wolf75222/PoPS/releases) and
+[CHANGELOG.md](CHANGELOG.md). Version `1.0.0` establishes the stable public contract.
 
 ## Contributing
 
