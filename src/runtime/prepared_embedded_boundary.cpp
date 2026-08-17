@@ -323,6 +323,8 @@ struct MaterializeMetricKernel {
   FieldView<const Real, Dim> phi;
   FieldView<Real, Dim> kappa;
   FieldView<Real, Dim> inverse_volume;
+  FieldView<Real, Dim> face_lower;
+  FieldView<Real, Dim> face_upper;
   Real kappa_min = Real(0);
   Real cut_theta_min = Real(0);
 
@@ -331,6 +333,10 @@ struct MaterializeMetricKernel {
     if (!(center < Real(0))) {
       kappa(index) = Real(0);
       inverse_volume(index) = Real(0);
+      for (int axis = 0; axis < Dim; ++axis) {
+        face_lower(index, axis) = Real(0);
+        face_upper(index, axis) = Real(0);
+      }
       return;
     }
     RealVector<Dim> lower_samples{};
@@ -343,12 +349,16 @@ struct MaterializeMetricKernel {
       lower_samples[axis] = phi(lower);
       upper_samples[axis] = phi(upper);
     }
-    const Real volume_fraction = nd::cut_cell_fractions_from_samples<Dim>(
-                                     center, lower_samples, upper_samples, cut_theta_min)
-                                     .volume_fraction;
-    kappa(index) = volume_fraction;
-    const Real effective = volume_fraction > kappa_min ? volume_fraction : kappa_min;
+    const auto fractions = nd::cut_cell_fractions_from_samples<Dim>(
+        center, lower_samples, upper_samples, cut_theta_min);
+    kappa(index) = fractions.volume_fraction;
+    const Real effective =
+        fractions.volume_fraction > kappa_min ? fractions.volume_fraction : kappa_min;
     inverse_volume(index) = Real(1) / effective;
+    for (int axis = 0; axis < Dim; ++axis) {
+      face_lower(index, axis) = fractions.face_lower[axis];
+      face_upper(index, axis) = fractions.face_upper[axis];
+    }
   }
 };
 
@@ -364,6 +374,8 @@ struct MetricInvalidIndicator {
   FieldView<const Real, Dim> mask;
   FieldView<const Real, Dim> kappa;
   FieldView<const Real, Dim> inverse_volume;
+  FieldView<const Real, Dim> face_lower;
+  FieldView<const Real, Dim> face_upper;
 
   POPS_HD Real operator()(const Index<Dim>& index) const {
     const Real active = mask(index);
@@ -374,7 +386,18 @@ struct MetricInvalidIndicator {
                                   ? volume == Real(0) && inverse == Real(0)
                                   : volume > Real(0) && volume <= Real(1) && inverse >= Real(1) &&
                                         Kokkos::isfinite(volume) && Kokkos::isfinite(inverse);
-    return valid_active && valid_metric ? Real(0) : Real(1);
+    bool valid_apertures = true;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const Real lower = face_lower(index, axis);
+      const Real upper = face_upper(index, axis);
+      if (active == Real(0))
+        valid_apertures = valid_apertures && lower == Real(0) && upper == Real(0);
+      else
+        valid_apertures = valid_apertures && lower >= Real(0) && lower <= Real(1) &&
+                          upper >= Real(0) && upper <= Real(1) && Kokkos::isfinite(lower) &&
+                          Kokkos::isfinite(upper);
+    }
+    return valid_active && valid_metric && valid_apertures ? Real(0) : Real(1);
   }
 };
 
@@ -384,6 +407,8 @@ struct StagedFields {
   MultiFab<Dim> mask;
   MultiFab<Dim> kappa;
   MultiFab<Dim> inverse;
+  MultiFab<Dim> face_lower;
+  MultiFab<Dim> face_upper;
 };
 
 template <int Dim>
@@ -395,6 +420,10 @@ StagedFields<Dim> allocate_fields(const MultiFab<Dim>& prototype) {
           MultiFab<Dim>(prototype.layout(), prototype.distribution(), prototype.local_rank(), 1,
                         zero_ghosts<Dim>()),
           MultiFab<Dim>(prototype.layout(), prototype.distribution(), prototype.local_rank(), 1,
+                        zero_ghosts<Dim>()),
+          MultiFab<Dim>(prototype.layout(), prototype.distribution(), prototype.local_rank(), Dim,
+                        zero_ghosts<Dim>()),
+          MultiFab<Dim>(prototype.layout(), prototype.distribution(), prototype.local_rank(), Dim,
                         zero_ghosts<Dim>())};
 }
 
@@ -511,6 +540,8 @@ prepare_embedded_boundary_geometry_collectively(
     for_each_cell(fields.kappa.box(local),
                   MaterializeMetricKernel<Dim>{phi, fields.kappa.fab(local).view(),
                                                fields.inverse.fab(local).view(),
+                                               fields.face_lower.fab(local).view(),
+                                               fields.face_upper.fab(local).view(),
                                                thresholds.kappa_min, thresholds.cut_theta_min});
     local_active += for_each_cell_reduce_sum(
         fields.mask.box(local),
@@ -522,7 +553,11 @@ prepare_embedded_boundary_geometry_collectively(
                          MetricInvalidIndicator<Dim>{
                              static_cast<const MultiFab<Dim>&>(fields.mask).fab(local).view(),
                              static_cast<const MultiFab<Dim>&>(fields.kappa).fab(local).view(),
-                             static_cast<const MultiFab<Dim>&>(fields.inverse).fab(local).view()}));
+                             static_cast<const MultiFab<Dim>&>(fields.inverse).fab(local).view(),
+                             static_cast<const MultiFab<Dim>&>(fields.face_lower).fab(local).view(),
+                             static_cast<const MultiFab<Dim>&>(fields.face_upper)
+                                 .fab(local)
+                                 .view()}));
   }
   const double global_active = all_reduce_sum(static_cast<double>(local_active), communicator);
   const double global_invalid_metric =
@@ -539,7 +574,8 @@ prepare_embedded_boundary_geometry_collectively(
             new PreparedEmbeddedBoundaryGeometry<Dim>(
                 std::move(program), geometry, topology, mode, thresholds, generation,
                 semantic_digest, digest, std::move(fields.phi), std::move(fields.mask),
-                std::move(fields.kappa), std::move(fields.inverse)));
+                std::move(fields.kappa), std::move(fields.inverse), std::move(fields.face_lower),
+                std::move(fields.face_upper)));
       },
       communicator);
 }

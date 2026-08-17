@@ -48,7 +48,7 @@ TEST(test_spatial_provider_matrix, independent_axes_do_not_form_false_cross_prod
 }
 
 TEST(test_spatial_provider_matrix,
-     embedded_metric_residuals_do_not_claim_characteristic_or_linearization) {
+     embedded_metric_residuals_claim_characteristic_but_not_linearization) {
   constexpr auto provider = with_embedded_boundary_residuals(
       make_cartesian_spatial_provider(2, /*characteristic_no_inflow=*/true,
                                       /*boundary_linearization=*/true));
@@ -56,11 +56,13 @@ TEST(test_spatial_provider_matrix,
   for (const auto geometry :
        {SpatialProviderGeometry::Staircase, SpatialProviderGeometry::CutCell}) {
     EXPECT_TRUE(provider.supports({2, geometry, SpatialProviderOperation::Residual}));
+    EXPECT_TRUE(provider.supports({2, geometry, SpatialProviderOperation::CharacteristicNoInflow}));
     const auto characteristic = qualify_spatial_provider(
         provider, {2, geometry, SpatialProviderOperation::CharacteristicNoInflow});
     const auto linearization = qualify_spatial_provider(
         provider, {2, geometry, SpatialProviderOperation::BoundaryLinearization});
-    EXPECT_EQ(characteristic.refusal, SpatialProviderRefusal::UnsupportedOperation);
+    EXPECT_TRUE(characteristic.executable);
+    EXPECT_EQ(characteristic.refusal, SpatialProviderRefusal::None);
     EXPECT_EQ(linearization.refusal, SpatialProviderRefusal::UnsupportedOperation);
   }
 }

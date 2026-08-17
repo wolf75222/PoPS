@@ -134,6 +134,13 @@ struct SpatialProviderQualification {
                         SpatialProviderOperation::Residual);
     capabilities.enable(dimension, SpatialProviderGeometry::CutCell,
                         SpatialProviderOperation::Residual);
+    if (capabilities.supports({dimension, SpatialProviderGeometry::Cartesian,
+                               SpatialProviderOperation::CharacteristicNoInflow})) {
+      capabilities.enable(dimension, SpatialProviderGeometry::Staircase,
+                          SpatialProviderOperation::CharacteristicNoInflow);
+      capabilities.enable(dimension, SpatialProviderGeometry::CutCell,
+                          SpatialProviderOperation::CharacteristicNoInflow);
+    }
   }
   return capabilities;
 }

@@ -571,7 +571,7 @@ def test_characteristic_no_inflow_refuses_non_cartesian_faces_without_metric_abi
     object.__setattr__(condition.geometry, "axis", PolarAxis())
     with pytest.raises(
         NotImplementedError,
-        match="polar and embedded geometry have no prepared metric ABI",
+        match="polar geometry has no prepared metric ABI",
     ):
         authority._native_contract()
 

@@ -880,8 +880,8 @@ class ResolvedTransportBoundarySet:
             if characteristic.mode is not ClosureMode.NONE:
                 if getattr(geometry.axis, "name", None) not in ("x", "y", "z"):
                     raise NotImplementedError(
-                        "characteristic no-inflow requires Cartesian x/y/z faces; polar and "
-                        "embedded geometry have no prepared metric ABI"
+                        "characteristic no-inflow requires Cartesian x/y/z faces; polar "
+                        "geometry has no prepared metric ABI"
                     )
                 expected = model_characteristic_no_inflow(state)
                 exact_no_inflow = (

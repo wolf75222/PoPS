@@ -423,9 +423,10 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
                 "collectively on the prepared ExecutionLane communicator, and rolls back ghosts "
                 "on refusal; MPI ranks execute that same kernel, and GPU uses the existing "
                 "Kokkos DefaultExecutionSpace launch already used in serial rather than a second "
-                "engine; primitive/analytic references, runtime/field-dependent eigenstructure, "
-                "sonic-error policy, and polar/embedded geometry remain unavailable until a "
-                "PreparedMetricProvider metric ABI exists"
+                "engine; Cartesian cut-cell and staircase no-inflow use the same flux-Jacobian "
+                "incoming projector on the EB interface normal from independent face apertures; "
+                "primitive/analytic references, runtime/field-dependent eigenstructure, "
+                "sonic-error policy, and polar geometry remain unavailable"
             ),
             requested="characteristic no-inflow/outflow transport boundary",
             available_route=(
@@ -1172,7 +1173,8 @@ def _inventory_rows(flags: Any, source: Any) -> list:
                 "Cartesian FV halo schedule and checks active_mask against phi ghosts; "
                 "inverse_volume_fraction stays valid-cell-only. Uniform-ratio AMR "
                 "restrict/prolong/reflux of volume and apertures is invoked on this same "
-                "CutCellFractions metric. Face fluxes remain binary (binary_face_aperture). "
+                "CutCellFractions metric. Hyperbolic FV face fluxes scale by those independent "
+                "continuous face apertures (binary_face_aperture=false). "
                 "Polar Poisson and Disc remain planar"
             ),
             requested="true 3D cut-cell geometry with surface measure and conservative AMR quality",

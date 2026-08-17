@@ -6,6 +6,7 @@
 #include <pops/mesh/index/real_vector.hpp>
 #include <pops/core/state/variables.hpp>
 #include <pops/core/identity/prepared_provider.hpp>
+#include <pops/numerics/linalg/dense_eig.hpp>
 #include <pops/numerics/spatial/nd/state_schema.hpp>
 #include <pops/runtime/numerical_defaults.hpp>
 
@@ -124,7 +125,44 @@ class ScalarAdvection {
     lower = upper = velocity_[Axis];
   }
 
+  static constexpr int characteristic_no_inflow_contract_version = 1;
+  static constexpr int characteristic_no_inflow_dimension = Dim;
+  static constexpr int characteristic_no_inflow_components = n_vars;
+  static constexpr bool characteristic_no_inflow_conservative = true;
+
+  POPS_HD bool characteristic_no_inflow(const State& interior, const State& reference, int axis,
+                                        int outward_sign, State& ghost) const {
+    if (axis < 0 || axis >= Dim)
+      return false;
+    Real normal[3]{};
+    normal[axis] = Real(1);
+    return characteristic_no_inflow(interior, reference, normal, outward_sign, ghost);
+  }
+
+  POPS_HD bool characteristic_no_inflow(const State& interior, const State& reference,
+                                        const Real* normal, State& ghost) const {
+    return characteristic_no_inflow(interior, reference, normal, 1, ghost);
+  }
+
  private:
+  POPS_HD bool characteristic_no_inflow(const State& interior, const State& reference,
+                                        const Real* normal, int outward_sign, State& ghost) const {
+    if (normal == nullptr)
+      return false;
+    Real jacobian[1][1]{{Real(0)}};
+    for (int axis = 0; axis < Dim; ++axis) {
+      if (!conservation_law_detail::finite(normal[axis]))
+        return false;
+      jacobian[0][0] += normal[axis] * velocity_[axis];
+    }
+    Real jump[1]{interior[0] - reference[0]};
+    Real incoming[1]{};
+    if (!::pops::characteristic_incoming_apply(jacobian, jump, incoming, outward_sign))
+      return false;
+    ghost[0] = interior[0] - Real(2) * incoming[0];
+    return conservation_law_detail::finite(ghost[0]);
+  }
+
   POPS_HD explicit constexpr ScalarAdvection(RealVector<Dim> velocity) : velocity_(velocity) {}
 
   RealVector<Dim> velocity_{};

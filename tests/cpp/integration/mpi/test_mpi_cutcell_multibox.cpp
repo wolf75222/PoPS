@@ -17,6 +17,8 @@
 #include <pops/mesh/layout/rank_space.hpp>
 #include <pops/mesh/storage/fab.hpp>
 #include <pops/mesh/storage/multifab.hpp>
+#include <pops/mesh/boundary/prepared_hyperbolic_boundary.hpp>
+#include <pops/numerics/spatial/embedded_boundary/characteristic.hpp>
 #include <pops/numerics/spatial/embedded_boundary/cut_geometry.hpp>
 #include <pops/numerics/spatial/embedded_boundary/operator.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
@@ -30,6 +32,7 @@
 #include <cstdio>
 #include <exception>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -174,6 +177,7 @@ int run_mpi_cutcell_multibox(int argc, char** argv) {
       bool refused_without_authority = false;
       try {
         op.assemble_residual(state, prepared->active_mask(), prepared->inverse_volume_fraction(),
+                             prepared->face_aperture_lower(), prepared->face_aperture_upper(),
                              residual, omission);
       } catch (const std::invalid_argument& error) {
         refused_without_authority =
@@ -189,6 +193,7 @@ int run_mpi_cutcell_multibox(int argc, char** argv) {
       pops::runtime::system::fill_prepared_eb_transport_state_ghosts(state, *prepared, lane);
       pops::runtime::system::require_prepared_eb_active_mask_matches_phi(*prepared, lane);
       op.assemble_residual(state, prepared->active_mask(), prepared->inverse_volume_fraction(),
+                           prepared->face_aperture_lower(), prepared->face_aperture_upper(),
                            residual, omission, pops::nd::PreparedEbPartitionHalo{&lane});
 
       pops::Real local_balance = pops::Real(0);
@@ -203,7 +208,55 @@ int run_mpi_cutcell_multibox(int argc, char** argv) {
       const double global_balance = pops::all_reduce_sum(static_cast<double>(local_balance));
       EXPECT_NEAR(global_balance, 0.0, 2e-10);
 
+      pops::RealVector<kDim> char_velocity{};
+      char_velocity[0] = pops::Real(1);
+      if constexpr (kDim >= 2)
+        char_velocity[1] = pops::Real(-2);
+      const auto char_model = pops::nd::ScalarAdvection<kDim>::prepare(char_velocity);
+      typename std::remove_cvref_t<decltype(char_model)>::State reference{};
+      pops::MultiFab<kDim> exterior{layout, distribution, local_rank, 1, pops::Extent<kDim>{}};
+      pops::fill_prepared_embedded_characteristic_no_inflow(
+          char_model, state, prepared->phi(), prepared->active_mask(), reference, exterior);
+
       pops::sync_host();
+      int local_cut_checks = 0;
+      for (std::size_t local = 0; local < prepared->phi().local_size(); ++local) {
+        const auto box = prepared->phi().box(local);
+        const auto phi = prepared->phi().fab(local).view();
+        const auto mask = prepared->active_mask().fab(local).view();
+        const auto ghost = std::as_const(exterior.fab(local)).view();
+        for (int i0 = box.lo[0]; i0 <= box.hi[0]; ++i0) {
+          const int i1_lo = kDim > 1 ? box.lo[1] : 0;
+          const int i1_hi = kDim > 1 ? box.hi[1] : 0;
+          for (int i1 = i1_lo; i1 <= i1_hi; ++i1) {
+            const int i2_lo = kDim > 2 ? box.lo[2] : 0;
+            const int i2_hi = kDim > 2 ? box.hi[2] : 0;
+            for (int i2 = i2_lo; i2 <= i2_hi; ++i2) {
+              pops::Index<kDim> cell{};
+              cell[0] = i0;
+              if constexpr (kDim > 1)
+                cell[1] = i1;
+              if constexpr (kDim > 2)
+                cell[2] = i2;
+              if (mask(cell) < pops::Real(0.5))
+                continue;
+              const auto fractions = pops::nd::cut_cell_fractions_from_phi_cell(phi, cell);
+              pops::RealVector<kDim> normal{};
+              if (!pops::nd::cut_cell_interface_normal(fractions, normal))
+                continue;
+              typename std::remove_cvref_t<decltype(char_model)>::State interior{};
+              interior[0] = pops::Real(1);
+              typename std::remove_cvref_t<decltype(char_model)>::State expected{};
+              EXPECT_TRUE(pops::nd::apply_characteristic_no_inflow_on_normal<kDim>(
+                  char_model, interior, reference, normal, expected));
+              EXPECT_NEAR(ghost(cell), expected[0], 1e-12);
+              ++local_cut_checks;
+            }
+          }
+        }
+      }
+      EXPECT_GT(pops::all_reduce_sum(static_cast<long>(local_cut_checks)), 0L);
+
       for (std::size_t local = 0; local < prepared->active_mask().local_size(); ++local) {
         const auto mask = prepared->active_mask().fab(local).view();
         const auto phi = prepared->phi().fab(local).view();

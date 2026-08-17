@@ -9,8 +9,10 @@
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
+#include <pops/numerics/spatial/embedded_boundary/characteristic.hpp>
 #include <pops/numerics/spatial/nd/face_field.hpp>
 #include <pops/parallel/execution_lane.hpp>
+#include <pops/runtime/numerical_defaults.hpp>
 #include <pops/runtime/analytic/expression.hpp>
 
 #include <Kokkos_Core.hpp>
@@ -1679,6 +1681,29 @@ PreparedHyperbolicBoundary<Dim> prepare_hyperbolic_boundary(
   return PreparedHyperbolicBoundary<Dim>(std::move(faces), std::move(transforms),
                                          HyperbolicCornerPolicy::NotRequired,
                                          explicit_periodic_identifications);
+}
+
+/// Characteristic no-inflow on a cut-cell / staircase interface normal.
+///
+/// This is not a Cartesian ghost-face fill: the incoming projector uses the EB area-vector
+/// normal from independent face apertures, never a cell-centred axis alias of that cut.
+template <int Dim, class Model, class MemorySpace>
+void fill_prepared_embedded_characteristic_no_inflow(
+    const Model& model, const Fab<Dim, MemorySpace>& state, const Fab<Dim, MemorySpace>& phi,
+    const Fab<Dim, MemorySpace>& active, const typename Model::State& reference,
+    Fab<Dim, MemorySpace>& exterior, Real theta_min = kEbCutFractionFloor) {
+  ::pops::nd::fill_embedded_characteristic_no_inflow(model, state, phi, active, reference, exterior,
+                                                     theta_min);
+}
+
+template <int Dim, class Model, class MemorySpace>
+void fill_prepared_embedded_characteristic_no_inflow(
+    const Model& model, const MultiFab<Dim, MemorySpace>& state,
+    const MultiFab<Dim, MemorySpace>& phi, const MultiFab<Dim, MemorySpace>& active,
+    const typename Model::State& reference, MultiFab<Dim, MemorySpace>& exterior,
+    Real theta_min = kEbCutFractionFloor) {
+  ::pops::nd::fill_embedded_characteristic_no_inflow(model, state, phi, active, reference, exterior,
+                                                     theta_min);
 }
 
 }  // namespace pops

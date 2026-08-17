@@ -10,6 +10,8 @@
 #include <pops/mesh/layout/distribution.hpp>
 #include <pops/mesh/storage/field_view.hpp>
 #include <pops/mesh/storage/multifab.hpp>
+#include <pops/numerics/spatial/embedded_boundary/characteristic.hpp>
+#include <pops/numerics/spatial/embedded_boundary/cut_geometry.hpp>
 #include <pops/numerics/spatial/embedded_boundary/operator.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/numerics/spatial/operators/masked_operator.hpp>
@@ -18,6 +20,7 @@
 
 #include <cstddef>
 #include <limits>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -310,7 +313,7 @@ void prove_cut_cell_operator() {
   static_assert(decltype(embedded)::dimension == Dim);
   constexpr auto capabilities = decltype(embedded)::capabilities();
   static_assert(capabilities.centre_sampled_activity);
-  static_assert(capabilities.binary_face_aperture);
+  static_assert(!capabilities.binary_face_aperture);
   static_assert(capabilities.prepared_inverse_volume);
 
   for (int cut_axis = 0; cut_axis < Dim; ++cut_axis) {
@@ -382,6 +385,165 @@ TEST(EmbeddedBoundaryGeneric, CutCellUsesOneExactAlgorithmInOneTwoAndThreeDimens
   prove_cut_cell_operator<1>();
   prove_cut_cell_operator<2>();
   prove_cut_cell_operator<3>();
+}
+
+template <int Dim>
+struct FillPairState {
+  pops::FieldView<pops::Real, Dim> state{};
+
+  POPS_HD void operator()(const pops::Index<Dim>& cell) const {
+    state(cell) = cell[0] == 0 ? pops::Real(1) : pops::Real(0);
+  }
+};
+
+template <int Dim>
+struct FillContinuousApertures {
+  pops::FieldView<pops::Real, Dim> lower{};
+  pops::FieldView<pops::Real, Dim> upper{};
+  pops::Real shared = pops::Real(1);
+
+  POPS_HD void operator()(const pops::Index<Dim>& cell) const {
+    for (int axis = 0; axis < Dim; ++axis) {
+      lower(cell, axis) = pops::Real(1);
+      upper(cell, axis) = pops::Real(1);
+    }
+    if (cell[0] == 0)
+      upper(cell, 0) = shared;
+    if (cell[0] == 1)
+      lower(cell, 0) = shared;
+  }
+};
+
+template <int Dim>
+pops::Real assemble_shared_face_residual(pops::Real aperture) {
+  pops::Extent<Dim> cells{};
+  for (int axis = 0; axis < Dim; ++axis)
+    cells[axis] = axis == 0 ? 2 : 1;
+  const auto domain = pops::Box<Dim>::from_extents(cells);
+  const auto metric = pops::prepare_metric_provider(
+      domain, pops::CartesianCoordinateMap<Dim>::make(pops::RealVector<Dim>{},
+                                                      filled_real<Dim>(pops::Real(1))));
+  const pops::mesh::BoxArray<Dim> layout{std::vector<pops::Box<Dim>>{domain}};
+  const pops::mesh::RankSpace<Dim> ranks{pops::Index<Dim>{}, filled_extent<Dim>(1)};
+  const auto distribution = pops::mesh::Distribution<Dim>::replicated(layout, ranks);
+  const pops::Index<Dim> local{};
+  pops::MultiFab<Dim> state(layout, distribution, local, 1, filled_extent<Dim>(1));
+  pops::MultiFab<Dim> active(layout, distribution, local, 1, filled_extent<Dim>(1));
+  pops::MultiFab<Dim> inverse(layout, distribution, local, 1, pops::Extent<Dim>{});
+  pops::MultiFab<Dim> face_lower(layout, distribution, local, Dim, pops::Extent<Dim>{});
+  pops::MultiFab<Dim> face_upper(layout, distribution, local, Dim, pops::Extent<Dim>{});
+  pops::MultiFab<Dim> residual(layout, distribution, local, 1, pops::Extent<Dim>{});
+  pops::for_each_cell(state.fab(0).grown_box(), FillPairState<Dim>{state.fab(0).view()});
+  active.set_val(pops::Real(1));
+  inverse.set_val(pops::Real(1));
+  pops::for_each_cell(domain, FillContinuousApertures<Dim>{face_lower.fab(0).view(),
+                                                           face_upper.fab(0).view(), aperture});
+  pops::nd::BoundaryFaceOmission<Dim> omission{};
+  omission.domain = domain;
+  for (int axis = 0; axis < Dim; ++axis) {
+    omission.lower[axis] = true;
+    omission.upper[axis] = true;
+  }
+  pops::RealVector<Dim> advect{};
+  advect[0] = pops::Real(1);
+  const auto model = pops::nd::ScalarAdvection<Dim>::prepare(advect);
+  const auto embedded = pops::nd::prepare_embedded_boundary_operator(model, metric);
+  embedded.assemble_residual(state, active, inverse, face_lower, face_upper, residual, omission);
+  pops::Index<Dim> left{};
+  return std::as_const(residual.fab(0)).view()(left);
+}
+
+template <int Dim>
+void prove_continuous_aperture_scales_flux() {
+  const pops::Real full = assemble_shared_face_residual<Dim>(pops::Real(1));
+  const pops::Real half = assemble_shared_face_residual<Dim>(pops::Real(0.5));
+  const pops::Real closed = assemble_shared_face_residual<Dim>(pops::Real(0));
+  EXPECT_NE(full, pops::Real(0));
+  EXPECT_NEAR(closed, pops::Real(0), pops::Real(1e-12));
+  EXPECT_NEAR(half, pops::Real(0.5) * full, pops::Real(1e-12));
+}
+
+TEST(EmbeddedBoundaryGeneric, ContinuousFaceApertureScalesFluxInOneTwoAndThreeDimensions) {
+  prove_continuous_aperture_scales_flux<1>();
+  prove_continuous_aperture_scales_flux<2>();
+  prove_continuous_aperture_scales_flux<3>();
+}
+
+template <int Dim>
+struct FillDiagonalCutLevelSet {
+  pops::FieldView<pops::Real, Dim> phi{};
+  pops::FieldView<pops::Real, Dim> active{};
+
+  POPS_HD void operator()(const pops::Index<Dim>& cell) const {
+    bool cut = true;
+    bool lower_neighbour = true;
+    for (int axis = 0; axis < Dim; ++axis) {
+      cut = cut && cell[axis] == 0;
+      lower_neighbour = lower_neighbour && cell[axis] <= 0;
+    }
+    if (cut) {
+      phi(cell) = pops::Real(-0.1);
+      active(cell) = pops::Real(1);
+    } else if (lower_neighbour) {
+      phi(cell) = pops::Real(-1);
+      active(cell) = pops::Real(1);
+    } else {
+      phi(cell) = pops::Real(1);
+      active(cell) = pops::Real(0);
+    }
+  }
+};
+
+template <int Dim>
+void prove_characteristic_uses_interface_normal() {
+  ExactFixture<Dim> fixture(3);
+  auto phi = fixture.make_field(1, 1);
+  auto active = fixture.make_field(1, 1);
+  auto exterior = fixture.make_field(1, 0);
+  fixture.state.set_val(pops::Real(1));
+  pops::for_each_cell(phi.fab(0).grown_box(),
+                      FillDiagonalCutLevelSet<Dim>{phi.fab(0).view(), active.fab(0).view()});
+
+  pops::RealVector<Dim> velocity{};
+  velocity[0] = pops::Real(1);
+  if constexpr (Dim >= 2)
+    velocity[1] = pops::Real(-2);
+  const auto model = pops::nd::ScalarAdvection<Dim>::prepare(velocity);
+  typename std::remove_cvref_t<decltype(model)>::State reference{};
+  pops::nd::fill_embedded_characteristic_no_inflow(model, fixture.state.fab(0), phi.fab(0),
+                                                   active.fab(0), reference, exterior.fab(0));
+
+  const pops::Index<Dim> cut{};
+  const auto fractions = pops::nd::cut_cell_fractions_from_phi_cell(
+      std::as_const(phi.fab(0)).view(), cut);
+  pops::RealVector<Dim> normal{};
+  ASSERT_TRUE(pops::nd::cut_cell_interface_normal(fractions, normal));
+  if constexpr (Dim >= 2) {
+    EXPECT_GT(normal[0], pops::Real(0));
+    EXPECT_GT(normal[1], pops::Real(0));
+    EXPECT_NEAR(normal[0], normal[1], pops::Real(1e-12));
+  }
+
+  typename std::remove_cvref_t<decltype(model)>::State interior{};
+  interior[0] = pops::Real(1);
+  typename std::remove_cvref_t<decltype(model)>::State expected{};
+  ASSERT_TRUE(pops::nd::apply_characteristic_no_inflow_on_normal<Dim>(model, interior, reference,
+                                                                      normal, expected));
+  EXPECT_NEAR(std::as_const(exterior.fab(0)).view()(cut), expected[0], pops::Real(1e-12));
+
+  if constexpr (Dim >= 2) {
+    typename std::remove_cvref_t<decltype(model)>::State axis_alias{};
+    ASSERT_TRUE(model.characteristic_no_inflow(interior, reference, 0, 1, axis_alias));
+    EXPECT_NE(expected[0], axis_alias[0]);
+    EXPECT_NEAR(axis_alias[0], pops::Real(1), pops::Real(1e-12));
+    EXPECT_NEAR(expected[0], pops::Real(-1), pops::Real(1e-12));
+  }
+}
+
+TEST(EmbeddedBoundaryGeneric, CharacteristicNoInflowUsesInterfaceNormalInOneTwoAndThreeDimensions) {
+  prove_characteristic_uses_interface_normal<1>();
+  prove_characteristic_uses_interface_normal<2>();
+  prove_characteristic_uses_interface_normal<3>();
 }
 
 }  // namespace

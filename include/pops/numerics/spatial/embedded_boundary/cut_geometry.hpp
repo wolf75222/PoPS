@@ -12,6 +12,8 @@
 #include <pops/mesh/storage/field_view.hpp>
 #include <pops/runtime/numerical_defaults.hpp>
 
+#include <Kokkos_MathematicalFunctions.hpp>
+
 #include <stdexcept>
 
 namespace pops::nd {
@@ -525,6 +527,42 @@ POPS_HD CutCellFractions<Dim> restrict_cut_cell_fractions(const CutCellFractions
 template <int Dim>
 POPS_HD CutCellFractions<Dim> prolong_cut_cell_fractions(const CutCellFractions<Dim>& coarse) {
   return coarse;
+}
+
+/// Outward (fluid → solid) Cartesian area vector of the cut interface from independent face
+/// apertures.  This is the closed-surface remainder of the fluid region, not a cell-centred
+/// Cartesian face alias.
+template <int Dim>
+POPS_HD RealVector<Dim> cut_cell_interface_area_vector(const CutCellFractions<Dim>& fractions) {
+  RealVector<Dim> area{};
+  for (int axis = 0; axis < Dim; ++axis)
+    area[axis] = fractions.face_lower[axis] - fractions.face_upper[axis];
+  return area;
+}
+
+template <int Dim>
+POPS_HD Real cut_cell_interface_area(const CutCellFractions<Dim>& fractions) {
+  const auto area = cut_cell_interface_area_vector(fractions);
+  Real mag2 = Real(0);
+  for (int axis = 0; axis < Dim; ++axis)
+    mag2 += area[axis] * area[axis];
+  return Kokkos::sqrt(mag2);
+}
+
+/// Unit outward interface normal.  Returns false when the cell has no cut (area = 0).
+template <int Dim>
+POPS_HD bool cut_cell_interface_normal(const CutCellFractions<Dim>& fractions,
+                                       RealVector<Dim>& normal) {
+  const auto area = cut_cell_interface_area_vector(fractions);
+  Real mag2 = Real(0);
+  for (int axis = 0; axis < Dim; ++axis)
+    mag2 += area[axis] * area[axis];
+  if (!(mag2 > Real(0)) || !Kokkos::isfinite(mag2))
+    return false;
+  const Real inv = Real(1) / Kokkos::sqrt(mag2);
+  for (int axis = 0; axis < Dim; ++axis)
+    normal[axis] = area[axis] * inv;
+  return true;
 }
 
 /// Face reflux residual: sum of fine apertures covering one coarse face minus the coarse aperture.

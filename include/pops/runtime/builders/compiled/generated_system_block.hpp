@@ -452,10 +452,12 @@ void assemble_embedded_residual_with_plan(
     const runtime::system::AuxiliaryStorageGroups<Dim>* provider_storage,
     const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>* plan,
     const MultiFab<Dim>& active_cells, const MultiFab<Dim>& inverse_volume_fraction,
+    const MultiFab<Dim>& face_aperture_lower, const MultiFab<Dim>& face_aperture_upper,
     MultiFab<Dim>& residual, nd::BoundaryFaceOmission<Dim> omission) {
   constexpr int provider_count = flux_provider_count<Model>;
   if constexpr (provider_count == 0) {
-    embedded_operator.assemble_residual(state, active_cells, inverse_volume_fraction, residual,
+    embedded_operator.assemble_residual(state, active_cells, inverse_volume_fraction,
+                                        face_aperture_lower, face_aperture_upper, residual,
                                         omission);
   } else {
     MultiFab<Dim> candidate(residual.layout(), residual.distribution(), residual.local_rank(),
@@ -465,7 +467,8 @@ void assemble_embedded_residual_with_plan(
           state.fab(local),
           runtime::system::bind_provider_storage_view<Dim, provider_count>(plan, provider_storage,
                                                                            local),
-          active_cells.fab(local), inverse_volume_fraction.fab(local), candidate.fab(local),
+          active_cells.fab(local), inverse_volume_fraction.fab(local),
+          face_aperture_lower.fab(local), face_aperture_upper.fab(local), candidate.fab(local),
           omission);
     copy_valid(candidate, residual);
   }
@@ -491,7 +494,8 @@ EmbeddedResidualFamily<Dim> make_cut_cell_residual_family(
     prepare_state(state, nullptr);
     assemble_embedded_residual_with_plan<Dim, Model>(
         embedded_operator, state, provider_storage, provider_plan, embedded.active_mask(),
-        embedded.inverse_volume_fraction(), residual, omission);
+        embedded.inverse_volume_fraction(), embedded.face_aperture_lower(),
+        embedded.face_aperture_upper(), residual, omission);
   };
   return make_embedded_residual_family<Dim>(std::move(flux), std::move(source));
 }

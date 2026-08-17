@@ -546,6 +546,14 @@ struct CompositeModel : composite_detail::ConservationLawAliases<Hyperbolic> {
     return hyp.characteristic_no_inflow(interior, reference, axis, outward_sign, ghost);
   }
 
+  POPS_HD bool characteristic_no_inflow(const State& interior, const State& reference,
+                                        const Real* normal, State& ghost) const
+    requires requires(const Hyperbolic h, const State a, const State b, const Real* n,
+                      State& out) { h.characteristic_no_inflow(a, b, n, out); }
+  {
+    return hyp.characteristic_no_inflow(interior, reference, normal, ghost);
+  }
+
   POPS_HD State polar_geom_source(const State& state, Real radius) const
     requires(dimension == 2) && requires(const Hyperbolic h, const State value, Real r) {
       h.polar_geom_source(value, r);

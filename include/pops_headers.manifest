@@ -132,6 +132,7 @@ api pops/numerics/nonlinear/local_nonlinear_collective.hpp
 api pops/numerics/nonlinear/newton_options.hpp
 api pops/numerics/nonlinear/prepared_local_nonlinear.hpp
 api pops/numerics/nonlinear/prepared_variable_recovery.hpp
+sdk-support pops/numerics/spatial/embedded_boundary/characteristic.hpp
 sdk-support pops/numerics/spatial/embedded_boundary/cut_geometry.hpp
 sdk-support pops/numerics/spatial/embedded_boundary/operator.hpp
 api pops/numerics/spatial/nd/conservation_laws.hpp

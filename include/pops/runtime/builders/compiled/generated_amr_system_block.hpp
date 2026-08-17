@@ -303,6 +303,10 @@ void require_level_context(const runtime::amr::AmrRuntime<Dim, MemorySpace>& run
     require_embedded_field(context.embedded_boundary->volume_fraction(), 1, "volume fraction");
     require_embedded_field(context.embedded_boundary->inverse_volume_fraction(), 1,
                            "inverse volume fraction");
+    require_embedded_field(context.embedded_boundary->face_aperture_lower(), Dim,
+                           "face aperture lower");
+    require_embedded_field(context.embedded_boundary->face_aperture_upper(), Dim,
+                           "face aperture upper");
   }
 }
 
@@ -993,7 +997,9 @@ void materialize_cut_cell_patch(
     Fab<Dim, MemorySpace>& residual_candidate, Fab<Dim, MemorySpace>& cell_statuses) {
   const auto metric =
       nd::PreparedEmbeddedBoundaryMetric<Dim, std::remove_cvref_t<decltype(spatial.metric())>>::
-          prepare(spatial.metric(), embedded.inverse_volume_fraction().fab(local), state.box());
+          prepare(spatial.metric(), embedded.inverse_volume_fraction().fab(local),
+                  embedded.face_aperture_lower().fab(local),
+                  embedded.face_aperture_upper().fab(local), state.box());
   materialize_masked_patch<Dim, Variables>(
       model, metric, reconstruction, numerical, positivity_floor, state, providers,
       embedded.active_mask().fab(local), faces, residual, face_candidate, face_statuses,

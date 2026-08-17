@@ -313,12 +313,18 @@ void prove_staircase() {
   EXPECT_EQ(prepared->phi().layout(), fixture.layout);
   EXPECT_EQ(prepared->active_mask().ghosts(), filled_extent<Dim>(1));
   EXPECT_EQ(prepared->volume_fraction().ghosts(), pops::Extent<Dim>{});
+  EXPECT_EQ(prepared->face_aperture_lower().ncomp(), Dim);
+  EXPECT_EQ(prepared->face_aperture_upper().ncomp(), Dim);
+  EXPECT_EQ(prepared->face_aperture_lower().ghosts(), pops::Extent<Dim>{});
+  EXPECT_EQ(prepared->face_aperture_upper().ghosts(), pops::Extent<Dim>{});
 
   pops::sync_host();
   const auto phi = prepared->phi().fab(0).view();
   const auto mask = prepared->active_mask().fab(0).view();
   const auto kappa = prepared->volume_fraction().fab(0).view();
   const auto inverse = prepared->inverse_volume_fraction().fab(0).view();
+  const auto face_lower = prepared->face_aperture_lower().fab(0).view();
+  const auto face_upper = prepared->face_aperture_upper().fab(0).view();
   pops::Index<Dim> active{};
   pops::Index<Dim> inactive{};
   for (int axis = 0; axis < Dim; ++axis) {
@@ -333,6 +339,13 @@ void prove_staircase() {
   EXPECT_EQ(mask(inactive), pops::Real(0));
   EXPECT_EQ(kappa(inactive), pops::Real(0));
   EXPECT_EQ(inverse(inactive), pops::Real(0));
+  const auto expected_fractions = pops::nd::cut_cell_fractions_from_phi_cell(phi, active);
+  for (int axis = 0; axis < Dim; ++axis) {
+    EXPECT_DOUBLE_EQ(face_lower(active, axis), expected_fractions.face_lower[axis]);
+    EXPECT_DOUBLE_EQ(face_upper(active, axis), expected_fractions.face_upper[axis]);
+    EXPECT_DOUBLE_EQ(face_lower(inactive, axis), pops::Real(0));
+    EXPECT_DOUBLE_EQ(face_upper(inactive, axis), pops::Real(0));
+  }
 
   double active_count = 0.0;
   for (std::size_t local = 0; local < prepared->active_mask().local_size(); ++local)
@@ -353,6 +366,66 @@ TEST(PreparedEmbeddedBoundaryND, StaircaseIsExactInTwoDimensions) {
 }
 TEST(PreparedEmbeddedBoundaryND, StaircaseIsExactInThreeDimensions) {
   prove_staircase<3>();
+}
+
+template <int Dim>
+void prove_prepared_cut_cell_stores_continuous_apertures() {
+  auto world = pops::ExecutionLane::world("test/prepared-eb-serial-preflight");
+  if (world.size() != 1)
+    GTEST_SKIP() << "serial exact-rank fixture";
+  Fixture<Dim> fixture;
+  const auto prepared = pops::runtime::system::prepare_embedded_boundary_geometry_collectively(
+      {"x", "y", "add", "constant", "sub"}, {0.0, 0.0, 0.0, 0.4, 0.0}, fixture.geometry,
+      pops::BoundaryTopology<Dim>::physical(), fixture.prototype,
+      pops::runtime::system::PreparedEmbeddedBoundaryMode::cut_cell, pops::EbThresholds{}, 8,
+      fixture.lane);
+  ASSERT_TRUE(prepared);
+  pops::sync_host();
+  bool found_partial = false;
+  for (std::size_t local = 0; local < prepared->face_aperture_lower().local_size(); ++local) {
+    const auto box = prepared->face_aperture_lower().box(local);
+    const auto phi = prepared->phi().fab(local).view();
+    const auto lower = prepared->face_aperture_lower().fab(local).view();
+    const auto upper = prepared->face_aperture_upper().fab(local).view();
+    const auto mask = prepared->active_mask().fab(local).view();
+    for (int i0 = box.lo[0]; i0 <= box.hi[0]; ++i0) {
+      const int i1_lo = Dim > 1 ? box.lo[1] : 0;
+      const int i1_hi = Dim > 1 ? box.hi[1] : 0;
+      for (int i1 = i1_lo; i1 <= i1_hi; ++i1) {
+        const int i2_lo = Dim > 2 ? box.lo[2] : 0;
+        const int i2_hi = Dim > 2 ? box.hi[2] : 0;
+        for (int i2 = i2_lo; i2 <= i2_hi; ++i2) {
+          pops::Index<Dim> cell{};
+          cell[0] = i0;
+          if constexpr (Dim > 1)
+            cell[1] = i1;
+          if constexpr (Dim > 2)
+            cell[2] = i2;
+          if (mask(cell) < pops::Real(0.5))
+            continue;
+          const auto expected = pops::nd::cut_cell_fractions_from_phi_cell(phi, cell);
+          for (int axis = 0; axis < Dim; ++axis) {
+            EXPECT_NEAR(lower(cell, axis), expected.face_lower[axis], 1e-12);
+            EXPECT_NEAR(upper(cell, axis), expected.face_upper[axis], 1e-12);
+            if ((expected.face_lower[axis] > pops::Real(0) &&
+                 expected.face_lower[axis] < pops::Real(1)) ||
+                (expected.face_upper[axis] > pops::Real(0) &&
+                 expected.face_upper[axis] < pops::Real(1)))
+              found_partial = true;
+          }
+        }
+      }
+    }
+  }
+  if constexpr (Dim >= 2)
+    EXPECT_TRUE(found_partial);
+}
+
+TEST(PreparedEmbeddedBoundaryND, CutCellStoresContinuousAperturesInTwoDimensions) {
+  prove_prepared_cut_cell_stores_continuous_apertures<2>();
+}
+TEST(PreparedEmbeddedBoundaryND, CutCellStoresContinuousAperturesInThreeDimensions) {
+  prove_prepared_cut_cell_stores_continuous_apertures<3>();
 }
 
 template <int Dim>

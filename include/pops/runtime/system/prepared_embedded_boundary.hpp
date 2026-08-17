@@ -35,10 +35,11 @@ parse_prepared_embedded_boundary_mode(std::string_view mode);
 /// Deep-owning immutable geometry package for one compile-time spatial rank.
 ///
 /// The analytic program remains owned so `level_set()` always returns a valid device view. The
-/// four exact-ranked fields share one layout/distribution identity. `phi` and `active_mask` retain
-/// one ghost in every axis; `volume_fraction` and `inverse_volume_fraction` contain valid cells
-/// only. Inactive cells store zero in both metric fields. Active cells store raw kappa and
-/// `1/max(kappa,kappa_min)` respectively.
+/// six exact-ranked fields share one layout/distribution identity. `phi` and `active_mask` retain
+/// one ghost in every axis; `volume_fraction`, `inverse_volume_fraction`, and the two face-aperture
+/// fields contain valid cells only. Face apertures have one component per axis and store the
+/// independent `CutCellFractions` lower/upper areas. Inactive cells store zero in every metric
+/// field. Active cells store raw kappa, `1/max(kappa,kappa_min)`, and continuous face apertures.
 template <int Dim>
 class PreparedEmbeddedBoundaryGeometry final {
  public:
@@ -71,6 +72,12 @@ class PreparedEmbeddedBoundaryGeometry final {
   [[nodiscard]] const field_type& inverse_volume_fraction() const noexcept {
     return inverse_volume_fraction_;
   }
+  [[nodiscard]] const field_type& face_aperture_lower() const noexcept {
+    return face_aperture_lower_;
+  }
+  [[nodiscard]] const field_type& face_aperture_upper() const noexcept {
+    return face_aperture_upper_;
+  }
 
  private:
   PreparedEmbeddedBoundaryGeometry(analytic::AnalyticProgram program, Geometry<Dim> geometry,
@@ -78,7 +85,8 @@ class PreparedEmbeddedBoundaryGeometry final {
                                    PreparedEmbeddedBoundaryMode mode, EbThresholds thresholds,
                                    std::uint64_t generation, std::string semantic_digest,
                                    std::string digest, field_type phi, field_type active_mask,
-                                   field_type volume_fraction, field_type inverse_volume_fraction)
+                                   field_type volume_fraction, field_type inverse_volume_fraction,
+                                   field_type face_aperture_lower, field_type face_aperture_upper)
       : program_(std::move(program)),
         geometry_(geometry),
         topology_(topology),
@@ -90,7 +98,9 @@ class PreparedEmbeddedBoundaryGeometry final {
         phi_(std::move(phi)),
         active_mask_(std::move(active_mask)),
         volume_fraction_(std::move(volume_fraction)),
-        inverse_volume_fraction_(std::move(inverse_volume_fraction)) {}
+        inverse_volume_fraction_(std::move(inverse_volume_fraction)),
+        face_aperture_lower_(std::move(face_aperture_lower)),
+        face_aperture_upper_(std::move(face_aperture_upper)) {}
 
   analytic::AnalyticProgram program_;
   Geometry<Dim> geometry_;
@@ -104,6 +114,8 @@ class PreparedEmbeddedBoundaryGeometry final {
   field_type active_mask_;
   field_type volume_fraction_;
   field_type inverse_volume_fraction_;
+  field_type face_aperture_lower_;
+  field_type face_aperture_upper_;
 
   template <int Rank>
   friend std::shared_ptr<const PreparedEmbeddedBoundaryGeometry<Rank>>

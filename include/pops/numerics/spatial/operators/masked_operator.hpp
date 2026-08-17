@@ -65,6 +65,21 @@ struct MaterializeMaskedFaceFlux {
       return;
     }
 
+    FaceContext context{};
+    if (face.coordinate[Axis] == integrated_fluxes.cells.lo[Axis])
+      context = metric_face_context<Axis, MetricFaceSide::Lower>(metric, right_cell);
+    else
+      context = metric_face_context<Axis, MetricFaceSide::Upper>(metric, left_cell);
+    if (!Kokkos::isfinite(context.face_measure) || context.face_measure < Real(0) ||
+        !Kokkos::isfinite(context.cell_measure) || !(context.cell_measure > Real(0))) {
+      clear(face, FiniteVolumeStatus::InvalidMetric);
+      return;
+    }
+    if (!(context.face_measure > Real(0))) {
+      clear(face, FiniteVolumeStatus::Success);
+      return;
+    }
+
     auto traces = reconstruct_face_pair<Axis, Variables>(model, state, face, reconstruction);
     if (traces.left_status != StateConversionStatus::Success) {
       clear(face, finite_volume_detail::finite_volume_status(traces.left_status));
@@ -93,11 +108,6 @@ struct MaterializeMaskedFaceFlux {
       }
     }
 
-    FaceContext context{};
-    if (face.coordinate[Axis] == integrated_fluxes.cells.lo[Axis])
-      context = metric_face_context<Axis, MetricFaceSide::Lower>(metric, right_cell);
-    else
-      context = metric_face_context<Axis, MetricFaceSide::Upper>(metric, left_cell);
     const auto evaluation =
         evaluate_numerical_flux_at(numerical_flux, model, traces.left, providers, left_cell,
                                    traces.right, providers, right_cell, context);

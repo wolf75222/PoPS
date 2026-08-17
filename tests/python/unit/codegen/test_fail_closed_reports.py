@@ -248,8 +248,11 @@ def test_transport_boundary_routes_report_exact_supported_envelope_and_missing_k
     assert "ExecutionLane communicator" in characteristic.limitation
     assert "same kernel" in characteristic.limitation
     assert "DefaultExecutionSpace" in characteristic.limitation
-    assert "polar/embedded geometry remain unavailable" in characteristic.limitation
-    assert "PreparedMetricProvider metric ABI" in characteristic.limitation
+    assert "Cartesian cut-cell and staircase no-inflow" in characteristic.limitation
+    assert "EB interface normal" in characteristic.limitation
+    assert "polar geometry remain unavailable" in characteristic.limitation
+    assert "polar/embedded geometry remain unavailable" not in characteristic.limitation
+    assert "PreparedMetricProvider metric ABI" not in characteristic.limitation
     assert "primitive/analytic references" in characteristic.limitation
     assert "qualified MPI/GPU execution remain unavailable" not in characteristic.limitation
     post_riemann = routes["boundary:post_riemann_flux"]

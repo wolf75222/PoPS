@@ -306,7 +306,8 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
           "MultiFab assemble fills state ghosts through the Cartesian FV halo schedule and "
           "checks active_mask against phi ghosts; inverse_volume_fraction stays valid-cell-only. "
           "Uniform-ratio AMR restrict/prolong/reflux of volume and apertures is invoked on this "
-          "same CutCellFractions<Dim> metric. Face fluxes remain binary (binary_face_aperture). "
+          "same CutCellFractions<Dim> metric. Hyperbolic FV face fluxes scale by those "
+          "independent continuous face apertures (binary_face_aperture=false). "
           "Polar Poisson and Disc remain planar",
           kLayoutRouteTokensCsv, "production", "host", mpi, gpu,
           "true 3D cut-cell geometry with surface measure and conservative AMR quality",

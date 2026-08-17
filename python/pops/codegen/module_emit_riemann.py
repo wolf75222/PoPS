@@ -518,4 +518,40 @@ def _emit_roe_jacobian(model: Any, nc: Any, cse: Any) -> list:
         out.append("    ghost[%d] = interior[%d] - pops::Real(2) * incoming[%d];" % (i, i, i))
         out.append("    if (!std::isfinite(ghost[%d])) return false;" % i)
     out += ["    return true;", "  }", ""]
+    out.append("  // Same incoming projector on an arbitrary outward unit normal: A_n = n · A.")
+    out.append("  POPS_HD bool characteristic_no_inflow(const State& interior, ")
+    out.append("      const State& reference, const pops::Real* normal, State& ghost) const {")
+    out.append("    if (normal == nullptr) return false;")
+    out += ["    const pops::Real %s = interior[%d];" % (c, i)
+            for i, c in enumerate(model.cons_names)]
+    out += _prim_block(model, live)
+    out.append("    pops::Real A[%d][%d];" % (nc, nc))
+    out.append("    for (int i = 0; i < %d; ++i)" % nc)
+    out.append("      for (int j = 0; j < %d; ++j) A[i][j] = pops::Real(0);" % nc)
+    for ordinal, axis in enumerate(axes):
+        temporaries, expressions = _codegen_exprs(
+            model,
+            [jacobians[axis][i][j] for i in range(nc) for j in range(nc)],
+            cse,
+            indent="    ",
+        )
+        out += temporaries
+        for i in range(nc):
+            out += [
+                "    A[%d][%d] += normal[%d] * (%s);" % (i, j, ordinal, expressions[i * nc + j])
+                for j in range(nc)
+            ]
+    out.append("    pops::Real jump[%d], incoming[%d];" % (nc, nc))
+    out += ["    jump[%d] = interior[%d] - reference[%d];" % (i, i, i)
+            for i in range(nc)]
+    out.append(
+        "    if (!pops::characteristic_incoming_apply(A, jump, incoming, 1, "
+        "80, static_cast<pops::Real>(1e-13), static_cast<pops::Real>(%s), %d))"
+        % (im_tol_cpp, eig_max_iter_value)
+    )
+    out.append("      return false;")
+    for i in range(nc):
+        out.append("    ghost[%d] = interior[%d] - pops::Real(2) * incoming[%d];" % (i, i, i))
+        out.append("    if (!std::isfinite(ghost[%d])) return false;" % i)
+    out += ["    return true;", "  }", ""]
     return out
