@@ -310,6 +310,23 @@ def test_system_temporal_facades_dispatch_only_through_an_installed_program():
     assert "step_adaptive" not in SYSTEM_BINDING.read_text(encoding="utf-8")
 
 
+def test_python_step_adaptive_installs_a_program_not_a_native_fallback():
+    from pops.time import adaptive_strides, step_adaptive_program
+
+    assert adaptive_strides({"fast": 4.0, "slow": 1.0}) == {"fast": 1, "slow": 4}
+    assert callable(step_adaptive_program)
+    cadence = ROOT / "python/pops/runtime/_cadence_install.py"
+    source = cadence.read_text(encoding="utf-8")
+    assert "def install_step_adaptive" in source
+    assert "step_adaptive_program" in source
+    assert "SystemDriver" not in source
+    assert "SystemCoupler" not in source
+    for path in (PYTHON_SYSTEM_RUNTIME, PYTHON_AMR_RUNTIME):
+        text = path.read_text(encoding="utf-8")
+        assert "def install_step_adaptive" in text
+        assert "def step_adaptive" in text
+
+
 def test_python_system_temporal_facades_prepare_only_the_installed_program_run():
     for path in (PYTHON_SYSTEM_RUNTIME, PYTHON_AMR_RUNTIME):
         source = path.read_text(encoding="utf-8")

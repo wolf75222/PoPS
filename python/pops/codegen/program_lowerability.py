@@ -9,6 +9,7 @@ from pops.codegen.program_emit_kernels import ProgramValue
 _MODEL_OWNER_SENSITIVE_OPS = frozenset(
     {
         "rhs",
+        "implicit_source",
         "source",
         "apply",
         "local_transform",
@@ -172,14 +173,12 @@ def _check_amr_flux_weights(program: Any) -> None:
                     for source, coefficient in zip(
                         value.inputs, value.attrs["coeffs"], strict=True)
                 ])
-            elif value.op == "apply":
-                # ``apply`` is a local source-operator evaluation, not a transparent state
-                # transform.  Its native lowering writes a fresh scratch and deliberately does
-                # not copy the input state's effective-flux ledger.  In particular, an IMEX stage
-                # may apply a local relaxation operator to a predictor that contains explicit
-                # flux work; that ancestry must not be mistaken for a second conservative flux
-                # contribution.  The explicit RHS still reaches the commit through its authored
-                # tableau weight and remains proved independently below.
+            elif value.op in {"apply", "implicit_source", "source"}:
+                # ``apply`` / ``source`` / ``implicit_source`` write a fresh residual scratch and
+                # do not copy the input state's effective-flux ledger.  An IMEX stage may evaluate
+                # a masked source on a predictor that already contains explicit flux work; that
+                # ancestry must not be mistaken for a second conservative flux contribution.
+                # The explicit RHS still reaches the commit through its authored tableau weight.
                 current = frozenset()
             elif value.op == "branch":
                 # The scalar predicate selects an arm but contributes no physical flux to the

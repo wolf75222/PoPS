@@ -45,6 +45,9 @@ from pops.time._program.pass_api import (  # noqa: F401
     optimize,
 )
 from pops.time._program.api import Program
+from pops.time._program.hold_catchup import (  # noqa: F401
+    HoldCatchupBlock, adaptive_strides, hold_catchup_program, step_adaptive_program,
+)
 from pops.time.solve_outcome import (  # noqa: F401
     FailRun, FieldSolveOutcome, RejectAttempt, ResidualSolution, SOLVE_STATUSES, SolveAction,
     SolveOutcome,
@@ -105,4 +108,6 @@ __all__ = ["Program", "ProgramValue", "StageStateSet", "StencilAccess", "Residua
             "UnresolvedScheduleCondition",
             "always", "every", "every_dt", "when", "on_start", "on_end",
            "eliminate_dead_nodes", "eliminate_common_subexpressions",
-           "eliminate_redundant_field_solves", "optimize"]
+           "eliminate_redundant_field_solves", "optimize",
+           "HoldCatchupBlock", "adaptive_strides", "hold_catchup_program",
+           "step_adaptive_program"]

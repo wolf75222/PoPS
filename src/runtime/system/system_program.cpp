@@ -394,6 +394,13 @@ MultiFab<Dim>& System<Dim>::block_state(int block) {
 }
 
 template <int Dim>
+const MultiFab<Dim>& System<Dim>::block_state(int block) const {
+  if (block < 0 || block >= p_->blocks_.size())
+    throw std::out_of_range("System::block_state block index is out of range");
+  return p_->sp[static_cast<std::size_t>(block)].U;
+}
+
+template <int Dim>
 void System<Dim>::block_rhs_into(int block, MultiFab<Dim>& state, MultiFab<Dim>& residual) {
   if (block < 0 || block >= p_->blocks_.size())
     throw std::out_of_range("System::block_rhs_into block index is out of range");
@@ -1009,6 +1016,7 @@ template int System<kNativeDimension>::n_blocks() const;
 template std::size_t System<kNativeDimension>::apply_coupling_operators(
     Real, const std::vector<MultiFab<kNativeDimension>*>&);
 template MultiFab<kNativeDimension>& System<kNativeDimension>::block_state(int);
+template const MultiFab<kNativeDimension>& System<kNativeDimension>::block_state(int) const;
 template void System<kNativeDimension>::block_rhs_into(int, MultiFab<kNativeDimension>&,
                                                        MultiFab<kNativeDimension>&);
 template void System<kNativeDimension>::block_rhs_into_at(

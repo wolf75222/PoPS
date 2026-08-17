@@ -543,6 +543,8 @@ class Explicit:
                  density/charge, frozen until the next catch-up. step_cfl honors the cadence: the stable
                  step includes the stride factor (dt <= cfl*h*substeps / (stride*w)).
                  Production compiled models and native blocks both carry this cadence explicitly.
+                 ``add_equation`` / ``Case.block(time=Explicit(stride=M))`` lower it to the
+                 hold-then-catch-up Program; a user does not hand-author ``Program.subcycle``.
     method     : "ssprk2" (default, Shu-Osher 2-stage order 2) | "ssprk3" (3-stage order 3,
                  less dissipative, to pair with weno5) | "euler" (ForwardEuler, order 1: fidelity
                  to first-order references, validation only). Shortcut ssprk3=True.

@@ -87,6 +87,8 @@ PUBLIC = (
     "always", "every", "every_dt", "when", "on_start", "on_end",
     "eliminate_dead_nodes", "eliminate_common_subexpressions",
     "eliminate_redundant_field_solves", "optimize",
+    "HoldCatchupBlock", "adaptive_strides", "hold_catchup_program",
+    "step_adaptive_program",
 )
 
 

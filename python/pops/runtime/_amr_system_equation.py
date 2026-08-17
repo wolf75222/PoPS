@@ -119,13 +119,10 @@ class _AmrSystemEquation(_AmrSystem):
 
         MULTIRATE CADENCE (stride) and PARTIAL IMEX MASK (implicit_vars / implicit_roles):
 
-        - private ``ModelSpec`` path: compiled then installed as a production package. Cadence
-          remains part of Program/CFL normalization; non-empty masks and non-default Newton
-          requests fail closed until the AMR target exposes their typed Program primitive;
-        - CompiledModel production path (.so): explicitly REJECTED (ValueError). The flat ABI of the
-          package does not transport them; they would otherwise be taken at their defaults silently.
-          A compiled multirate or partial-implicit route must express the operation in its typed
-          Program and use a target that provides the corresponding primitive.
+        - stride is transported by ``add_native_block`` / ``pops_install_native_amr`` and executed
+          by the compiled hold-then-catch-up Program (clocks + subcycle + SampleAndHold);
+        - a non-empty implicit mask is consumed by the typed ``Program.implicit_source`` primitive
+          after ``add_equation`` records the descriptor; Newton options stay refused.
 
         @p spatial: private adapter lowered from ``pops.numerics.FiniteVolume(...)``.
         @p time: private engine policy lowered from an explicit ``pops.Program`` or a
@@ -198,27 +195,9 @@ class _AmrSystemEquation(_AmrSystem):
             flux=spatial.flux,
         )
 
-        # The package ABI transports NEITHER the
-        # multirate cadence (stride) NOR the partial IMEX mask (implicit_vars / implicit_roles):
-        # add_compiled_model(AmrSystem&) exposes them only DIRECTLY (C++ path). Passed through the
-        # loader, they would take their defaults silently.
-        # We REJECT them rather than ignore them (explicit route, same spirit as the rejection
-        # of stride/mask on the compiled backends of System.add_equation, cf. ~lines 886-955).
-        nstride = getattr(time, "stride", 1)
-        if nstride != 1 and spatial.external_flux_id is None:
-            raise ValueError(
-                "AmrSystem.add_equation: stride=%d not transported by the production AMR path "
-                "(the block would otherwise run at stride=1 silently). "
-                "Express the cadence in the compiled typed Program; the AMR spatial runtime has "
-                "no private cadence engine." % nstride
-            )
-        if getattr(time, "implicit_vars", []) or getattr(time, "implicit_roles", []):
-            raise ValueError(
-                "AmrSystem.add_equation: implicit_vars / implicit_roles (partial IMEX mask) not "
-                "transported by the production AMR package. Author the partial implicit operation "
-                "in a typed Program once the AMR target provides that primitive; the spatial "
-                "runtime has no private IMEX fallback."
-            )
+        nstride = positive_int(
+            getattr(time, "stride", 1), where="AmrSystem.add_equation.stride"
+        )
         # Newton options / diagnostics: same flat ABI -> neither the options nor the report transit
         # through the .so loader. Explicit rejection prevents silent substitution of the prepared
         # provider defaults, in parity with the stride/mask rejection above and System.add_equation.
@@ -362,8 +341,12 @@ class _AmrSystemEquation(_AmrSystem):
                 time.kind,
                 gamma,
                 nsub,
+                nstride,
                 bind_values,
                 positivity_floor,
                 **spatial_options,
             )
+        from pops.runtime._cadence_install import _record_block_time
+
+        _record_block_time(self, name, time)
         self._coupling_block_contracts = contract_candidate

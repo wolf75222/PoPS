@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
 """Pre-dispatch guards for a detached compiled-AMR package.
 
-This module is deliberately *not* an end-to-end native-loader test: the package metadata below is
-synthetic.  It verifies the Python contract that rejects values which the flat AMR package ABI
-cannot transport (multirate stride and a partial IMEX mask) before native loading.  Its supported
-default witness installs the exact RuntimeInstance lane and reaches the missing-library loader
-failure; actual compiled-package execution is covered by ``test_dsl_production_amr.py``.
+Stride and a partial IMEX mask now cross the Python add_equation guard. A detached package
+without a real ``.so`` still fails at the native loader. Newton options stay refused.
 """
 
 import sys
@@ -60,17 +57,16 @@ def _compiled_amr_metadata(*, so_path: str = "/nonexistent/pops-amr-guard.so") -
     [engine.IMEX(stride=5), engine.Explicit(stride=5)],
     ids=["imex", "explicit"],
 )
-def test_compiled_amr_guard_rejects_untransported_stride(time):
+def test_compiled_amr_stride_crosses_the_python_guard_and_reaches_the_loader(time, tmp_path):
+    missing = tmp_path / "missing-amr-stride.so"
     sim = _amr_system()
-    model = _compiled_amr_metadata()
+    model = _compiled_amr_metadata(so_path=str(missing))
     install_compiled_model_amr_test_lane(sim, model)
-    with pytest.raises(
-        ValueError,
-        match=r"stride=5 not transported by the production AMR path",
-    ):
-        sim.add_equation(
-            "gas", model, spatial=engine.Spatial(), time=time
-        )
+    with pytest.raises(RuntimeError) as excinfo:
+        sim.add_equation("gas", model, spatial=engine.Spatial(), time=time)
+    message = str(excinfo.value)
+    assert "not transported" not in message
+    assert str(missing) in message
 
 
 @pytest.mark.parametrize(
@@ -80,18 +76,17 @@ def test_compiled_amr_guard_rejects_untransported_stride(time):
         (engine.IMEX(implicit_roles=[Momentum(X_AXIS)]), "implicit_roles"),
     ],
 )
-def test_compiled_amr_guard_rejects_untransported_partial_imex_mask(time, selector):
+def test_compiled_amr_partial_imex_mask_crosses_the_python_guard(time, selector, tmp_path):
+    missing = tmp_path / "missing-amr-imex.so"
     sim = _amr_system()
-    model = _compiled_amr_metadata()
+    model = _compiled_amr_metadata(so_path=str(missing))
     install_compiled_model_amr_test_lane(sim, model)
-    with pytest.raises(
-        ValueError,
-        match=r"implicit_vars / implicit_roles .* not transported",
-    ) as excinfo:
-        sim.add_equation(
-            "gas", model, spatial=engine.Spatial(), time=time
-        )
-    assert selector in str(excinfo.value)
+    with pytest.raises(RuntimeError) as excinfo:
+        sim.add_equation("gas", model, spatial=engine.Spatial(), time=time)
+    message = str(excinfo.value)
+    assert "not transported" not in message
+    assert str(missing) in message
+    assert selector  # keep the parametrize identity in the test body
 
 
 @pytest.mark.parametrize("time", [engine.Explicit(), engine.IMEX()], ids=["explicit", "imex"])

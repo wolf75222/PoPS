@@ -33,6 +33,44 @@ else:
 _UNCHANGED = object()
 
 
+def _keep_components(
+    space: Any,
+    *,
+    implicit_vars: Any,
+    implicit_roles: Any,
+    complement: bool,
+) -> tuple[int, ...]:
+    names = tuple(getattr(space, "components", ()) or ())
+    if not names:
+        raise ValueError("implicit_source requires a StateSpace with components")
+    roles = dict(getattr(space, "roles", {}) or {})
+    keep: set[int] = set()
+    for name in implicit_vars or ():
+        if name not in names:
+            raise ValueError(
+                "implicit_vars %r is not a component of %s" % (name, list(names))
+            )
+        keep.add(names.index(name))
+    for role in implicit_roles or ():
+        token = str(getattr(role, "token", None) or role)
+        matched = []
+        for index, component in enumerate(names):
+            raw = roles.get(component)
+            raw_token = str(getattr(raw, "token", None) or raw) if raw is not None else ""
+            if token and token in (raw_token, component, str(raw)):
+                matched.append(index)
+        if not matched:
+            raise ValueError(
+                "implicit_roles %r matched no component of %s" % (role, list(names))
+            )
+        keep.update(matched)
+    if not implicit_vars and not implicit_roles:
+        keep = set(range(len(names)))
+    if complement:
+        keep = set(range(len(names))) - keep
+    return tuple(sorted(keep))
+
+
 class _ProgramCore(
     _ProgramClocks, _ProgramCall, _ProgramRhs, _ProgramConstants, _ProgramBase
 ):
@@ -468,6 +506,73 @@ class _ProgramCore(
         return self._new(
             "rhs", "source", inputs, attrs, name, state.block,
             space=rate_space_for(state.space), field_context=field_context)
+
+    def implicit_source(
+        self,
+        state: Any,
+        *,
+        implicit_vars: Any = (),
+        implicit_roles: Any = (),
+        name: Any = None,
+    ) -> Any:
+        """Default source residual with only the implicit components kept."""
+        return self._masked_source(
+            state,
+            implicit_vars=implicit_vars,
+            implicit_roles=implicit_roles,
+            complement=False,
+            name=name,
+        )
+
+    def explicit_source(
+        self,
+        state: Any,
+        *,
+        implicit_vars: Any = (),
+        implicit_roles: Any = (),
+        name: Any = None,
+    ) -> Any:
+        """Default source residual with implicit components zeroed."""
+        return self._masked_source(
+            state,
+            implicit_vars=implicit_vars,
+            implicit_roles=implicit_roles,
+            complement=True,
+            name=name,
+        )
+
+    def _masked_source(
+        self,
+        state: Any,
+        *,
+        implicit_vars: Any,
+        implicit_roles: Any,
+        complement: bool,
+        name: Any,
+    ) -> Any:
+        state = _resolve_handle(state)
+        if not (isinstance(state, ProgramValue) and state.vtype == "state"):
+            raise ValueError("implicit_source: a State value is required")
+        keep = _keep_components(
+            state.space,
+            implicit_vars=implicit_vars,
+            implicit_roles=implicit_roles,
+            complement=complement,
+        )
+        return self._new(
+            "rhs",
+            "implicit_source",
+            (state,),
+            {
+                "keep_components": keep,
+                "implicit_vars": tuple(implicit_vars or ()),
+                "implicit_roles": tuple(str(role) for role in (implicit_roles or ())),
+                "complement": bool(complement),
+            },
+            name,
+            state.block,
+            space=rate_space_for(state.space),
+        )
 
     def _check_operator_state(self, l_value: Any, state_value: Any, where: Any) -> Any:
         """Operator-first type check (Spec 2): a LocalLinearOperator L: U -> U may only act on a State

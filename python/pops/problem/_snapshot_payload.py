@@ -54,7 +54,11 @@ def problem_semantic_payload(problem: Any, *, layout: Any, time: Any) -> dict[st
             ),
         }
         if spec["time"] is not None:
-            row["time"] = program_semantic_data(spec["time"])
+            row["time"] = (
+                program_semantic_data(spec["time"])
+                if hasattr(spec["time"], "ir_nodes")
+                else _time_snapshot_value(spec["time"])
+            )
         blocks[name] = row
 
     resolved_fields = dict(problem._field_registry.resolved_items(problem.resolve))
@@ -204,6 +208,15 @@ def _time_snapshot_value(program: Any, *, artifact: bool = False) -> Any:
     """
     if program is None:
         return None
+    if hasattr(program, "kind") and hasattr(program, "stride") and not hasattr(program, "ir_nodes"):
+        return {
+            "type": "%s.%s" % (type(program).__module__, type(program).__qualname__),
+            "kind": str(getattr(program, "kind")),
+            "stride": int(program.stride),
+            "substeps": int(getattr(program, "substeps", 1)),
+            "implicit_vars": list(getattr(program, "implicit_vars", []) or []),
+            "implicit_roles": [str(role) for role in (getattr(program, "implicit_roles", []) or [])],
+        }
     serialize = getattr(program, "_serialize", None)
     if callable(serialize):
         ir_hash = getattr(program, "_ir_hash", None)

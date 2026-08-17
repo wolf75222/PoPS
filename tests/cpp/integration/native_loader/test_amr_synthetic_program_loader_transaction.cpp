@@ -195,7 +195,7 @@ extern "C" void pops_register_provider_routes_amr(
 }
 extern "C" void pops_install_native_amr(void* sys, const char* name, const char* limiter,
                                         const char* riemann, const char* recon, const char* time,
-                                        double gamma, int substeps, const double*, int,
+                                        double gamma, int substeps, int stride, const double*, int,
                                         double pos_floor, double weno_epsilon,
                                         bool wave_speed_cache) {
   pops::RealVector<pops::kNativeDimension> velocity{};
@@ -206,7 +206,7 @@ extern "C" void pops_install_native_amr(void* sys, const char* name, const char*
   auto* system = static_cast<pops::AmrSystem<pops::kNativeDimension>*>(sys);
   pops::PreparedNativeAmrPackage<pops::kNativeDimension> package;
   package.block = pops::prepare_compiled_amr_system_block<pops::kNativeDimension>(
-      name, std::move(model), limiter, riemann, recon, time, gamma, substeps, 1, pos_floor,
+      name, std::move(model), limiter, riemann, recon, time, gamma, substeps, stride, pos_floor,
       weno_epsilon, wave_speed_cache, "tests.synthetic-loader/providers/tracer");
   system->install_prepared_native_amr_package(std::move(package));
 }

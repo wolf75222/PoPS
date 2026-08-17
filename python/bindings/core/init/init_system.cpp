@@ -13,6 +13,8 @@
 
 #include <array>
 #include <cmath>
+#include <string>
+#include <vector>
 #include <exception>
 #include <initializer_list>
 #include <limits>
@@ -1241,6 +1243,19 @@ void bind_system_data(py::class_<System>& cls) {
       .def("time", &System::time)
       .def("n_species", &System::n_species)
       .def("block_names", &System::block_names)
+      .def("cfl_min_dx", &System::cfl_min_dx)
+      .def(
+          "block_max_speeds",
+          [](const System& system) {
+            const std::vector<std::string> names = system.block_names();
+            std::vector<double> speeds;
+            speeds.reserve(names.size());
+            for (int index = 0; index < static_cast<int>(names.size()); ++index)
+              speeds.push_back(static_cast<double>(
+                  system.block_max_speed(index, system.block_state(index))));
+            return speeds;
+          },
+          "Current per-block max wave speeds in registry order.")
       .def(
           "effective_options_report",
           [](const System& s) {

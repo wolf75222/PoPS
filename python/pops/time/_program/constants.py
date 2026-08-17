@@ -10,7 +10,9 @@ the assembled :class:`pops.time.Program` and the emission free functions in
 class _ProgramConstants:
     """Class-level constant tables shared across the Program authoring mixins."""
 
-    _RESIDUAL_LOCAL_OPS = frozenset({"state", "source", "apply", "linear_combine"})
+    _RESIDUAL_LOCAL_OPS = frozenset({
+        "state", "source", "implicit_source", "apply", "linear_combine",
+    })
 
     _OPERATOR_KINDS = frozenset({"scalar", "vector", "state"})
 
@@ -45,7 +47,8 @@ class _ProgramConstants:
     # identity); scalar_field /
     # state / history (scratch/state bindings other ops fill or alias); and the sub-block ops below.
     _REMOVABLE_OPS = frozenset({
-        "rhs", "source", "apply", "local_transform", "linear_combine", "linear_source", "solve_local_linear",
+        "rhs", "source", "implicit_source", "apply", "local_transform", "linear_combine",
+        "linear_source", "solve_local_linear",
         "cell_compare", "where", "reduce", "scalar_op", "compare",
     })
 
@@ -98,12 +101,14 @@ class _ProgramConstants:
     )
 
     _SCRATCH_OPS = frozenset({
-        "rhs", "source", "apply", "local_transform", "linear_combine", "linear_source", "solve_local_linear",
+        "rhs", "source", "implicit_source", "apply", "local_transform", "linear_combine",
+        "linear_source", "solve_local_linear",
         "solve_local_nonlinear", "solve_coupled_implicit", "cell_compare", "where", "coupled_rate",
     })
 
     _PERCELL_KERNEL_OPS = frozenset({
-        "rhs", "source", "apply", "linear_combine", "linear_source", "solve_local_linear",
+        "rhs", "source", "implicit_source", "apply", "linear_combine", "linear_source",
+        "solve_local_linear",
         "solve_local_nonlinear", "solve_coupled_implicit", "cell_compare", "where", "coupled_rate",
         "local_transform", "project", "fill_boundary",
     })

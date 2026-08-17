@@ -799,6 +799,15 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 plan_exprs=plan_exprs,
             )
             lines.append("ctx.axpy(%s, static_cast<pops::Real>(1), %s);" % (var[v.id], ssrc))
+    elif v.op == "implicit_source":
+        state_in = v.inputs[0]
+        var[v.id] = "r%d" % v.id
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, 0, %s);"
+                     % (var[v.id], int(v.id), var[state_in.id]))
+        lines.append("ctx.source_default_into(%d, %s, %s);"
+                     % (bidx, var[state_in.id], var[v.id]))
+        keep = ",".join(str(int(index)) for index in v.attrs["keep_components"])
+        lines.append("ctx.apply_source_mask(%s, {%s});" % (var[v.id], keep))
     elif v.op == "source":
         state_in = v.inputs[0]  # source inputs = (state[, fields]); the state is first
         var[v.id] = "r%d" % v.id

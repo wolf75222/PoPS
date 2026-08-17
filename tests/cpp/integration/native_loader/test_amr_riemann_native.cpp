@@ -290,7 +290,7 @@ extern "C" void pops_register_provider_routes_amr(
 }
 extern "C" void pops_install_native_amr(void* sys, const char* name, const char* limiter,
                                        const char* riemann, const char* recon, const char* time,
-                                       double gamma, int substeps, const double*, int,
+                                       double gamma, int substeps, int stride, const double*, int,
                                        double pos_floor, double weno_epsilon,
                                        bool wave_speed_cache) {
   auto* s = reinterpret_cast<pops::AmrSystem<pops_generated::Dim>*>(sys);
@@ -301,7 +301,7 @@ extern "C" void pops_install_native_amr(void* sys, const char* name, const char*
           {},
           pops::EulerND<pops_generated::Dim>{static_cast<pops::Real>(gamma)}, pops::NoSource{},
           pops::BackgroundDensity{pops::Real(0), pops::Real(0)}},
-      limiter, riemann, recon, time, gamma, substeps, 1, pos_floor, weno_epsilon,
+      limiter, riemann, recon, time, gamma, substeps, stride, pos_floor, weno_epsilon,
       wave_speed_cache, "tests.amr-riemann-native/physical-flux");
   s->install_prepared_native_amr_package(std::move(package));
 }

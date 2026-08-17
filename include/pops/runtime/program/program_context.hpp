@@ -15,6 +15,7 @@
 #include <pops/runtime/program/clock_schedule.hpp>
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
+#include <pops/runtime/program/source_mask.hpp>
 #include <pops/runtime/system.hpp>
 #include <pops/runtime/system/provider_storage_binding.hpp>
 
@@ -367,6 +368,12 @@ class ProgramContext {
   void source_default_into(int program_block, field_type& state_value, field_type& rhs) const {
     count_kernel_();
     system_->block_source_into(sys_block(program_block), state_value, rhs);
+  }
+
+  void apply_source_mask(field_type& rhs, std::initializer_list<int> keep) const {
+    pops::runtime::program::apply_component_keep_mask(
+        rhs, std::vector<int>(keep.begin(), keep.end()));
+    count_kernel_();
   }
 
   void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) const {

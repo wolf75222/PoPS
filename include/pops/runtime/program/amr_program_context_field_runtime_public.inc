@@ -336,6 +336,12 @@ void source_default_into(int program_block, field_type& stage_state, field_type&
   count_kernel_();
 }
 
+void apply_source_mask(field_type& rhs, std::initializer_list<int> keep) const {
+  pops::runtime::program::apply_component_keep_mask(
+      rhs, std::vector<int>(keep.begin(), keep.end()));
+  count_kernel_();
+}
+
 [[nodiscard]] SolveOutcome solve_source_default(int program_block, field_type& stage_state, Real dt,
                                                 const NewtonOptions& options) const {
   const int runtime_block = sys_block(program_block);

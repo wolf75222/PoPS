@@ -648,6 +648,7 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
     _POST_SYNC_FORBIDDEN_OPS = frozenset({
         "rhs",
         "source",
+        "implicit_source",
         "apply",
         "subcycle",
         "range",

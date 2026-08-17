@@ -23,6 +23,7 @@
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
 #include <pops/runtime/program/prepared_tensor_boundary_session.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
+#include <pops/runtime/program/source_mask.hpp>
 #include <pops/runtime/program/same_level_cell_temporal_provider.hpp>
 #include <pops/runtime/system/provider_storage_binding.hpp>
 

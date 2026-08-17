@@ -154,6 +154,7 @@ class Case:
         model: Any,
         *,
         states: Any = None,
+        time: Any = None,
     ) -> Any:
         """Declare one model instance and return its stable owner-qualified block handle.
 
@@ -162,7 +163,7 @@ class Case:
         temporal and consumer authorities are attached through their dedicated Case families.
         """
         self._guard_mutable("add a block")
-        return self._block_registry.add(name, model, states=states)
+        return self._block_registry.add(name, model, states=states, time=time)
 
     def field(self, operator: Any, discretization: Any) -> Any:
         """Register one field operator/discretization pair and return its case-owned handle."""

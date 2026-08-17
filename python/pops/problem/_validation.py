@@ -7,13 +7,24 @@ from typing import Any
 def account_block_plan_fields(report: Any, block_registry: Any) -> Any:
     """Reject block fields for which the resolved/install plan has no exact consumer."""
     for block_name, spec in block_registry.items():
-        if spec.get("time") is not None:
+        time = spec.get("time")
+        if time is not None and hasattr(time, "ir_nodes"):
             report = report.error(
                 "block", "unlowered_block_time",
                 "block %r declares a per-block time Program, but the resolved/install plans do "
                 "not carry it; refusing the historical runtime-default substitution" % block_name,
                 context={"block": block_name},
                 alternatives=("declare the whole-system Program with case.program(...)",))
+        elif time is not None and (
+            not hasattr(time, "kind") or not hasattr(time, "stride")
+        ):
+            report = report.error(
+                "block", "unlowered_block_time",
+                "block %r declares a per-block time value that is neither a cadence "
+                "descriptor nor a Program" % block_name,
+                context={"block": block_name},
+                alternatives=("pass time=Explicit(stride=M) or IMEX(stride=M)",),
+            )
         if spec.get("diagnostics"):
             report = report.error(
                 "block", "unlowered_block_diagnostics",

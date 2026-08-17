@@ -45,6 +45,7 @@ _ALLOWED_OPS = frozenset(
         "solve_fields",
         "solve_fields_from_blocks",
         "rhs",
+        "implicit_source",
         "linear_combine",
         "linear_source",
         "reduce",

@@ -10759,13 +10759,14 @@ void AmrSystem<Dim>::add_native_block(const std::string& name, const std::string
                                       const std::string& expected_binary_identity,
                                       const std::string& limiter, const std::string& riemann,
                                       const std::string& recon, const std::string& time,
-                                      double gamma, int substeps, const std::vector<double>& params,
-                                      double positivity_floor, double weno_epsilon,
-                                      bool wave_speed_cache) {
+                                      double gamma, int substeps, int stride,
+                                      const std::vector<double>& params, double positivity_floor,
+                                      double weno_epsilon, bool wave_speed_cache) {
   p_->require_no_native_package_callback("add_native_block");
   using register_auxiliary_type = void (*)(AmrSystem<Dim>*);
   using install_type = void (*)(void*, const char*, const char*, const char*, const char*,
-                                const char*, double, int, const double*, int, double, double, bool);
+                                const char*, double, int, int, const double*, int, double, double,
+                                bool);
 
   // Declared before every package-owned closure snapshot so it is destroyed after them on both
   // rollback and success paths.
@@ -10799,9 +10800,9 @@ void AmrSystem<Dim>::add_native_block(const std::string& name, const std::string
         expected_binary_identity.empty())
       throw std::invalid_argument(
           "AmrSystem native package requires complete block, model, and binary identities");
-    if (!std::isfinite(gamma) || !(gamma > 0.0) || substeps < 1)
+    if (!std::isfinite(gamma) || !(gamma > 0.0) || substeps < 1 || stride < 1)
       throw std::invalid_argument(
-          "AmrSystem native package requires finite positive gamma and substeps");
+          "AmrSystem native package requires finite positive gamma, substeps, and stride");
     if (!std::isfinite(positivity_floor) || positivity_floor < 0.0)
       throw std::invalid_argument(
           "AmrSystem native package positivity floor must be finite and non-negative");
@@ -10918,6 +10919,7 @@ void AmrSystem<Dim>::add_native_block(const std::string& name, const std::string
         .text(time)
         .scalar(gamma)
         .scalar(std::int32_t{substeps})
+        .scalar(std::int32_t{stride})
         .sequence(params)
         .scalar(positivity_floor)
         .scalar(weno_epsilon)
@@ -10999,7 +11001,7 @@ void AmrSystem<Dim>::add_native_block(const std::string& name, const std::string
     pops::dynlib::invoke_with_host_exception(
         [&] {
           install(static_cast<void*>(this), name.c_str(), limiter.c_str(), riemann.c_str(),
-                  recon.c_str(), time.c_str(), gamma, substeps,
+                  recon.c_str(), time.c_str(), gamma, substeps, stride,
                   params.empty() ? nullptr : params.data(), static_cast<int>(params.size()),
                   positivity_floor, weno_epsilon, wave_speed_cache);
         },
@@ -19901,8 +19903,9 @@ template void AmrSystem<kNativeDimension>::add_native_block(const std::string&, 
                                                             const std::string&, const std::string&,
                                                             const std::string&, const std::string&,
                                                             const std::string&, const std::string&,
-                                                            double, int, const std::vector<double>&,
-                                                            double, double, bool);
+                                                            double, int, int,
+                                                            const std::vector<double>&, double,
+                                                            double, bool);
 template void AmrSystem<kNativeDimension>::register_external_riemann_package(
     const std::string&, const std::string&, const std::string&, const std::string&, int, int,
     const std::string&, const std::string&, const std::string&, const std::string&,

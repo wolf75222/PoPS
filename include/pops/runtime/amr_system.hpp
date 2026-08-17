@@ -535,10 +535,11 @@ class AmrSystem {
   /// mutation rather than constructing a metadata-only or dimension-erased multi-block route.
   /// time accepts canonical Program-authoring tokens {explicit, euler, ssprk3, imex}; the spatial
   /// loader never executes one of those methods. In particular, ``imex`` requires a typed implicit
-  /// Program primitive and has no backward-Euler/Newton fallback. The multirate stride and partial
-  /// IMEX mask do not transit through the flat block-loader ABI: the Python facade rejects them
-  /// rather than ignoring them silently. They must be expressed by a compiled typed Program whose
-  /// target provides the corresponding primitive. recon "primitive" and flux "roe"/"hllc" are WIRED at parity (#113);
+  /// Program primitive and has no backward-Euler/Newton fallback. The flat loader now transports
+  /// per-block stride into ``prepare_compiled_amr_system_block``; hold-then-catch-up still executes
+  /// only through the compiled Program (clocks + subcycle + SampleAndHold). A partial IMEX mask is
+  /// consumed by the typed ``implicit_source`` Program primitive, not by this loader. recon
+  /// "primitive" and flux "roe"/"hllc" are WIRED at parity (#113);
   /// the Python facade applies a pressure guard for hllc/roe.
   /// The low-level loader contains a WENO5-Z stencil route and allocates its three-cell halo. The
   /// resolved Case route authenticates the matching order-five conservative coarse/fine provider;
@@ -556,7 +557,7 @@ class AmrSystem {
       const std::string& limiter = "minmod", const std::string& riemann = "rusanov",
       const std::string& recon = "conservative", const std::string& time = "explicit",
       double gamma = static_cast<double>(kPhysicalDefaultGamma), int substeps = 1,
-      const std::vector<double>& params = {}, double positivity_floor = 0.0,
+      int stride = 1, const std::vector<double>& params = {}, double positivity_floor = 0.0,
       double weno_epsilon = static_cast<double>(kWenoEpsilon), bool wave_speed_cache = false);
 
   /// Authenticate and install one exact-ranked external Riemann package through the ordinary

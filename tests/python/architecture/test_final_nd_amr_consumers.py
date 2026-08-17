@@ -149,6 +149,7 @@ PERMITTED_UPSTREAM_BOUNDARIES = frozenset(
         "pops/runtime/multiblock/evaluation_point.hpp",
         "pops/runtime/program/amr_program_checkpoint.hpp",
         "pops/runtime/program/clock_schedule.hpp",
+        "pops/runtime/program/source_mask.hpp",
         "pops/runtime/program/prepared_scalar_boundary_session.hpp",
         "pops/runtime/program/prepared_tensor_boundary_session.hpp",
         "pops/runtime/program/program_runtime_state.hpp",

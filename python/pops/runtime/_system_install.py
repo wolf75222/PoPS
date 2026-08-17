@@ -209,15 +209,6 @@ class _SystemInstall(_System):
                 _from_modelspec=True,
             )
 
-        # The compiled-package ABI does not carry a per-block implicit mask. Reject it rather than
-        # silently selecting a different treatment.
-        if getattr(time, "implicit_vars", []) or getattr(time, "implicit_roles", []):
-            raise ValueError(
-                "add_equation: implicit_vars / implicit_roles (per-block IMEX mask) are carried "
-                "only by a private native ModelSpec, available on the internal native "
-                "engine API (not part of the pops.bind surface). The compiled model (.so) does not "
-                "carry the mask."
-            )
         # Same rules for the Newton options/diagnostics (IMEX): not carried by the .so ABI.
         # Non-default values would be ignored SILENTLY -> explicit rejection.
         if not _from_modelspec and (
@@ -401,6 +392,9 @@ class _SystemInstall(_System):
             )
             self._pending_native_packages += 1
         self._coupling_block_contracts = contract_candidate
+        from pops.runtime._cadence_install import _record_block_time
+
+        _record_block_time(self, name, time)
         if not getattr(self, "_batch_native_packages", False):
             self._commit_pending_native_packages()
 

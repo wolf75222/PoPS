@@ -213,6 +213,28 @@ class AmrSystem(
             steps += 1
         return steps
 
+    def install_equation_cadence(self, handles: Any, **kwargs: Any) -> Any:
+        """Lower recorded ``add_equation(..., time=Explicit(stride=M))`` to a Program."""
+        from pops.runtime._cadence_install import install_equation_cadence
+
+        return install_equation_cadence(self, handles, **kwargs)
+
+    def install_step_adaptive(self, handles: Any, wave_speeds: Any, **kwargs: Any) -> Any:
+        """Install the oracle adaptive-stride Program and return it."""
+        from pops.runtime._cadence_install import install_step_adaptive
+
+        return install_step_adaptive(self, handles, wave_speeds, **kwargs)
+
+    def step_adaptive(
+        self, cfl: Any, *, wave_speeds: Any, min_cell_spacing: Any = None
+    ) -> Any:
+        """Advance one oracle macro-step through the installed Program."""
+        from pops.runtime._cadence_install import step_adaptive
+
+        return step_adaptive(
+            self, cfl, wave_speeds=wave_speeds, min_cell_spacing=min_cell_spacing
+        )
+
     def profile(self, profile: Any = None) -> Any:
         """Typed AMR / MPI profiling context manager (Spec 5 sec.12.5, criterion 43).
 

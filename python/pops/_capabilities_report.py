@@ -184,8 +184,8 @@ def _flag_error_message(feature: str) -> str:
         ),
         "supports_partial_imex_mask": (
             "partial IMEX mask",
-            "typed local implicit Program primitive where implemented",
-            "author an explicit typed Program; AMR currently has no implicit-source primitive",
+            "Program.implicit_source / explicit_source",
+            "author Explicit/IMEX(implicit_vars=...) or Program.implicit_source",
         ),
         "supports_custom_communicator": (
             "communicator != MPI_COMM_WORLD",
@@ -812,9 +812,8 @@ def _support_rows(flags: Any, source: Any) -> list:
             flags=flags,
             flag="supports_stride",
             limitation=(
-                "production ABI stores integer stride; hold-then-catch-up executes only via "
-                "Program clocks + subcycle + SampleAndHold on uniform System. "
-                "Explicit(stride=M) does not schedule. AMR compiled stride!=1 stays refused"
+                "production ABI stores stride; Explicit(stride=M) lowers to Program "
+                "hold-then-catch-up on uniform and AMR"
             ),
             requested="strided cell access",
             available_route="backend='production'",
@@ -840,11 +839,11 @@ def _support_rows(flags: Any, source: Any) -> list:
             platform="host",
             flags=flags,
             flag="supports_partial_imex_mask",
-            limitation="no executable C++ Program primitive backs a partial IMEX mask",
+            limitation="Program implicit_source applies source_default_into then apply_source_mask",
             requested="partial IMEX mask",
-            available_route="typed local implicit Program primitive where implemented",
+            available_route="Program.implicit_source / explicit_source",
             alternative=(
-                "author an explicit typed Program; AMR currently has no implicit-source primitive"
+                "author Explicit/IMEX(implicit_vars=...) or Program.implicit_source"
             ),
             source=source,
         ),

@@ -107,6 +107,8 @@ def resolve(
     if resolved_time is not None and type(resolved_time) is not Program:
         raise TypeError("pops.resolve time must be an exact pops.Program")
     if resolved_time is None:
+        resolved_time = _synthesize_block_cadence_program(problem)
+    if resolved_time is None:
         raise ValueError(
             "pops.resolve requires a whole-system Program for every Uniform or AMR layout"
         )
@@ -577,6 +579,50 @@ def _resolve_problem_model(model: Any) -> Any:
 
     require_compiler_lowering(model)
     return model
+
+
+def _synthesize_block_cadence_program(problem: Any) -> Any:
+    """Lower per-block Explicit/IMEX stride descriptors to one hold-then-catch-up Program."""
+    from pops.time import HoldCatchupBlock, hold_catchup_program
+
+    entries = []
+    saw_descriptor = False
+    for name, spec in problem._block_registry.items():
+        time = spec.get("time")
+        if time is not None and hasattr(time, "ir_nodes"):
+            raise ValueError(
+                "pops.resolve: block %r carries a per-block Program; declare the "
+                "whole-system Program with case.program(...)" % name
+            )
+        handle = _block_state_handle(problem, name, spec)
+        if time is not None and hasattr(time, "kind") and hasattr(time, "stride"):
+            saw_descriptor = True
+            entries.append(
+                HoldCatchupBlock(
+                    handle,
+                    stride=int(time.stride),
+                    implicit_vars=tuple(getattr(time, "implicit_vars", ()) or ()),
+                    implicit_roles=tuple(getattr(time, "implicit_roles", ()) or ()),
+                    kind=str(time.kind),
+                    name=name,
+                )
+            )
+        else:
+            entries.append(HoldCatchupBlock(handle, stride=1, name=name))
+    if not saw_descriptor:
+        return None
+    return hold_catchup_program(entries, name="%s_hold_catchup" % problem.name)
+
+
+def _block_state_handle(problem: Any, name: str, spec: Any) -> Any:
+    handle = problem._block_registry.handle(name)
+    states = spec["states"]
+    if len(states) != 1:
+        raise ValueError(
+            "block %r cadence lowering requires exactly one state; got %d"
+            % (name, len(states))
+        )
+    return handle[states[0]]
 
 
 __all__ = ["bind", "compile", "install", "resolve", "validate"]

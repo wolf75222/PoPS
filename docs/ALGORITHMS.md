@@ -817,12 +817,15 @@ $$m_b = \max\!\left(1,\left\lfloor\frac{w_{\max}}{w_b}\right\rfloor\right).$$
 
 Block $b$ advances once every $m_b$ macro-steps by the effective step
 $\Delta t^{\text{eff}}_b = m_b\,\Delta t$; aux is frozen on the macro-step (once-per-step coupling).
-This formula remains a tested numerical building block, but it is not yet lowered by
-`ProgramGraph`. Consequently, no production facade exposes adaptive multirate subcycling; it must
-first become an explicit Program composition. `System` and `AmrSystem` never fall back to this
-low-level scheduler.
-Consequently, `Substeps`, `Stride`, or a `TimePolicy` descriptor by itself has no
-production scheduling effect.
+This formula is lowered by `hold_catchup_program` / `step_adaptive_program`: the Program cadence
+owns the window `lcm(m_b)`, faster blocks subcycle `lcm/m_b` times, and a slow block catches up
+once with `m_b dt`. `System.install_step_adaptive` and `AmrSystem.install_step_adaptive` install
+that Program; `step_adaptive(cfl)` then advances the oracle macro-step
+`dt = cfl h_cell / w_max`. `System` and `AmrSystem` never fall back to the test-only
+`advance_subcycled` scheduler.
+`Explicit(stride=M)` and `IMEX(stride=M)` now schedule: `add_equation` / `Case.block(time=...)`
+record the descriptor and `install_equation_cadence` / `pops.resolve` emit the same
+hold-then-catch-up Program. A user does not hand-author `Program.subcycle`.
 
 ```
 function advance_subcycled(system, dt, macro_step, advance_block):

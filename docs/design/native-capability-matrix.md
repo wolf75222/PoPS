@@ -367,7 +367,7 @@ Explicit unsupported rows include:
   across interpolation. Accepted solution components retain the separate native composite
   conservation invariant. Fingerprint memory and collective-communication cost scales with all
   retained slots and active level-domain cells.
-- `supports_partial_imex_mask`: no native C++ path backs partial IMEX masks.
+- `supports_partial_imex_mask`: `Program.implicit_source` / `apply_source_mask` zeros non-selected source components on uniform and AMR.
 - `supports_mpi` and `supports_gpu` when the loaded module/artifact was not built with the corresponding native backend.
 - `runtime:explicit_gpu_context`: the final native `RuntimeInstance` providers are host/float64 and refuse a
   GPU Kokkos execution space before constructing `System`/`AmrSystem`; build-time availability is

@@ -1104,7 +1104,7 @@ def emit_cpp_native_loader(
             "POPS_LOADER_API void pops_install_native_amr(void* sys, const char* name,\n"
             "                                        const char* limiter, const char* riemann,\n"
             "                                        const char* recon, const char* time,\n"
-            "                                        double gamma, int substeps,\n"
+            "                                        double gamma, int substeps, int stride,\n"
             "                                        const double* params, int nparams,\n"
             "                                        double pos_floor, double weno_epsilon,\n"
             "                                        bool wave_speed_cache) {\n"
@@ -1116,7 +1116,7 @@ def emit_cpp_native_loader(
             + "  pops::PreparedNativeAmrPackage<pops::kNativeDimension> package;\n"
             "  package.block = pops::prepare_compiled_amr_system_block<pops::kNativeDimension>(\n"
             "      name, std::move(model), limiter, riemann, recon, time, gamma, substeps,\n"
-            "      /*stride=*/1, pos_floor, weno_epsilon, wave_speed_cache, %s);\n"
+            "      stride, pos_floor, weno_epsilon, wave_speed_cache, %s);\n"
             % json.dumps(_consumer_owner_qid(m, consumer_owner_qid) + "/physical_flux")
             + amr_elliptic_package_lines
             + "  s->install_prepared_native_amr_package(std::move(package));\n"

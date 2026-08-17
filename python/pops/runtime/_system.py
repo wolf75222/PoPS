@@ -91,8 +91,8 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
     Everything else (set_poisson, set_density, step, step_cfl, diagnostics,
     primitives eval_rhs/get_state/set_state) is forwarded to the compiled facade.
     Temporal operations require the whole-system Program installed by ``pops.bind``; there is no
-    native fallback. Adaptive multirate subcycling has no production facade until it is expressed
-    by a typed ``ProgramGraph`` composition.
+    native fallback. ``install_step_adaptive`` / ``step_adaptive`` install that Program from the
+    oracle stride map; they do not resurrect a private native stepper.
 
     GEOMETRY: ordinary Cartesian authoring is lowered from ``CartesianGrid`` to the private exact-
     ranked ``SystemConfig`` before this engine is constructed. The historical ``mesh=`` bypass and
@@ -203,6 +203,28 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         ensure_system_native_package_lane(self)
         self._s._finalize_native_packages()
         self._pending_native_packages = 0
+
+    def install_equation_cadence(self, handles: Any, **kwargs: Any) -> Any:
+        """Lower recorded ``add_equation(..., time=Explicit(stride=M))`` to a Program."""
+        from pops.runtime._cadence_install import install_equation_cadence
+
+        return install_equation_cadence(self, handles, **kwargs)
+
+    def install_step_adaptive(self, handles: Any, wave_speeds: Any, **kwargs: Any) -> Any:
+        """Install the oracle adaptive-stride Program and return it."""
+        from pops.runtime._cadence_install import install_step_adaptive
+
+        return install_step_adaptive(self, handles, wave_speeds, **kwargs)
+
+    def step_adaptive(
+        self, cfl: Any, *, wave_speeds: Any, min_cell_spacing: Any = None
+    ) -> Any:
+        """Advance one oracle macro-step through the installed Program."""
+        from pops.runtime._cadence_install import step_adaptive
+
+        return step_adaptive(
+            self, cfl, wave_speeds=wave_speeds, min_cell_spacing=min_cell_spacing
+        )
 
     def block_names(self) -> Any:
         """Names of the installed native blocks, in deterministic registry order.

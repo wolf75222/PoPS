@@ -539,7 +539,7 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
            py::arg("riemann") = "rusanov", py::arg("recon") = "conservative",
            py::arg("time") = "explicit",
            py::arg("gamma") = static_cast<double>(kPhysicalDefaultGamma), py::arg("substeps") = 1,
-           py::arg("params") = std::vector<double>{},
+           py::arg("stride") = 1, py::arg("params") = std::vector<double>{},
            // Zhang-Shu positivity floor (ADC-322): marshaled down the regenerated .so loader
            // (pops_install_native_amr). 0 (default) = inactive, bit-identical.
            py::arg("positivity_floor") = 0.0,

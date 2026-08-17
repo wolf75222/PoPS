@@ -926,6 +926,7 @@ class System {
   POPS_EXPORT int n_blocks() const;
   /// The conservative state MultiFab<Dim> of block @p b (zero-copy, non-owning reference).
   POPS_EXPORT MultiFab<Dim>& block_state(int b);
+  POPS_EXPORT const MultiFab<Dim>& block_state(int b) const;
   /// @name Compiled-Program NAME-based block binding (Spec 3 criterion 23, ADC-457)
   /// A compiled Program numbers its blocks in P.state declaration order (the .so's
   /// pops_program_block_name table); the System numbers its blocks in add_block / add_equation order

@@ -296,6 +296,7 @@ sdk-support pops/runtime/program/prepared_tensor_boundary_session.hpp
 sdk-support pops/runtime/program/same_level_cell_temporal_provider.hpp
 sdk-support pops/runtime/program/program_runtime_state.hpp
 sdk-support pops/runtime/program/residual_operator.hpp
+sdk-support pops/runtime/program/source_mask.hpp
 sdk-root pops/runtime/program/step_transaction.hpp
 abi pops/runtime/program/wire_ids.hpp
 api pops/runtime/runtime_environment.hpp

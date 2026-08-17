@@ -13,8 +13,8 @@
 /// cross-check its descriptor walk against the C++ truth and FAIL LOUD on a disagreement.
 ///
 /// HONESTY (non-negotiable, Spec 5 sec.13.12). A capability is reported TRUE only when a C++ path backs
-/// it. ``supports_partial_imex_mask`` is FALSE: descriptors may retain the metadata, but no executable
-/// Program primitive consumes it, so claiming support would be a lie. ``supports_gpu`` is TRUE only
+/// it. ``supports_partial_imex_mask`` is TRUE when ``Program.implicit_source`` /
+/// ``apply_source_mask`` zeros non-selected source components on uniform and AMR. ``supports_gpu`` is TRUE only
 /// under Kokkos AND a real device backend token (CUDA/HIP); a Kokkos-Serial / OpenMP CPU build reports FALSE. ``supports_stride`` is
 /// route-dependent (the installed production package carries a stride while the route-agnostic module
 /// report does not describe one), so the facts are queried per @p target.
@@ -61,7 +61,7 @@ struct ModuleCapabilities {
   bool supports_stride;        ///< the route carries a cell stride (production: yes; aot: no).
   bool supports_named_fields;  ///< named aux-field transport (named_aux, aux_field; always built).
   bool
-      supports_partial_imex_mask;  ///< partial IMEX mask -- FALSE: no C++ path backs it (do not lie).
+      supports_partial_imex_mask;  ///< partial IMEX mask -- TRUE: Program implicit_source runs it.
 };
 
 /// One native route/capability row in the structured report. ``status`` is one of
@@ -128,7 +128,7 @@ inline constexpr bool kHasMpi =
 ///   - ``supports_stride`` = true for the production package and false for the route-agnostic
 ///     ``kModule`` query;
 ///   - ``supports_named_fields`` = true (the named-aux transport exists, kAuxNamedBase / aux_field);
-///   - ``supports_partial_imex_mask`` = false (no executable Program primitive consumes it).
+///   - ``supports_partial_imex_mask`` = true (``apply_source_mask`` consumes the keep set).
 inline ModuleCapabilities module_capabilities(CapabilityTarget target = CapabilityTarget::kModule) {
   ModuleCapabilities caps{};
   caps.abi_version = kAbiVersion;
@@ -138,7 +138,7 @@ inline ModuleCapabilities module_capabilities(CapabilityTarget target = Capabili
   caps.supports_gpu = detail::kHasGpuBackend;
   caps.supports_stride = (target == CapabilityTarget::kProduction);
   caps.supports_named_fields = true;
-  caps.supports_partial_imex_mask = false;
+  caps.supports_partial_imex_mask = true;
   return caps;
 }
 
@@ -207,7 +207,7 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
                        "production", "gpu", mpi, gpu, "platform=GPU", "host CPU platform",
                        "use KokkosOpenMP/KokkosSerial or a CUDA/HIP build"),
       capability_route("supports_stride", status_from_bool(caps.supports_stride),
-                       "real cell stride is carried only by the production/native route",
+                       "production ABI stores stride; Explicit(stride=M) lowers to Program hold-then-catch-up",
                        kLayoutRouteTokensCsv, "production", "host", mpi, gpu, "strided cell access",
                        "backend='production'", "compile with backend='production'"),
       capability_route("supports_named_fields", status_from_bool(caps.supports_named_fields),
@@ -215,10 +215,10 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
                        mpi, gpu, "named aux fields", "native named-field transport"),
       capability_route(
           "supports_partial_imex_mask", status_from_bool(caps.supports_partial_imex_mask),
-          "no executable C++ Program primitive backs a partial IMEX mask", kLayoutRouteTokensCsv,
-          "production", "host", mpi, gpu, "partial IMEX mask",
-          "typed local implicit Program primitive where implemented",
-          "author an explicit typed Program; AMR currently has no implicit-source primitive"),
+          "Program implicit_source applies source_default_into then apply_source_mask",
+          kLayoutRouteTokensCsv, "production", "host", mpi, gpu, "partial IMEX mask",
+          "Program.implicit_source / explicit_source",
+          "author Explicit/IMEX(implicit_vars=...) or Program.implicit_source"),
       capability_route(
           "supports_custom_communicator", status_from_bool(env.supports_custom_communicator),
           "no C++ route accepts a caller-provided MPI_Comm", kLayoutRouteTokensCsv, "none", "mpi",
