@@ -207,6 +207,22 @@ class RegionTransferPlan {
   std::size_t receive_elements() const noexcept { return receive_elements_; }
   bool has_remote_jobs() const noexcept { return !send_.empty() || !receive_.empty(); }
 
+  static RegionTransferBudget budget_from_jobs(const std::vector<job_type>& jobs) {
+    std::size_t elements = 0;
+    for (const job_type& job : jobs) {
+      const std::int64_t cells = job.source_region.numPts();
+      if (cells <= 0)
+        continue;
+      if (elements > std::numeric_limits<std::size_t>::max() - static_cast<std::size_t>(cells))
+        throw std::overflow_error("partitioned AMR transfer budget overflow");
+      elements += static_cast<std::size_t>(cells);
+    }
+    const std::size_t peers = jobs.size() > std::numeric_limits<std::size_t>::max() / 2
+                                  ? std::numeric_limits<std::size_t>::max()
+                                  : jobs.size() * 2;
+    return {jobs.size(), peers, elements, elements, elements};
+  }
+
   std::string exact_contract(std::string_view identity) const {
     if (identity.empty())
       throw std::invalid_argument("partitioned AMR transfer identity is empty");

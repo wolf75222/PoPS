@@ -289,4 +289,122 @@ void require_ratio(const ::pops::amr::RefinementRatio<Dim>& ratio) {
     throw std::invalid_argument("composite FAC transition must refine at least one axis");
 }
 
+template <int Dim>
+struct WrapStagingKernel {
+  FieldView<Real, Dim> staging{};
+  Box<Dim> domain{};
+  Box<Dim> staging_box{};
+  bool periodic[Dim]{};
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    if (domain.contains(index))
+      return;
+    Index<Dim> wrapped = index;
+    bool shifted = false;
+    for (int axis = 0; axis < Dim; ++axis) {
+      if (!periodic[axis])
+        continue;
+      const int length = static_cast<int>(domain.length(axis));
+      if (length <= 0)
+        continue;
+      if (wrapped[axis] < domain.lo[axis]) {
+        wrapped[axis] += length;
+        shifted = true;
+      } else if (wrapped[axis] > domain.hi[axis]) {
+        wrapped[axis] -= length;
+        shifted = true;
+      }
+    }
+    if (shifted && domain.contains(wrapped) && staging_box.contains(wrapped))
+      staging(index, 0) = staging(wrapped, 0);
+  }
+};
+
+template <int Dim>
+struct AddKernel {
+  FieldView<Real, Dim> destination{};
+  FieldView<const Real, Dim> increment{};
+
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    destination(index, 0) += increment(index, 0);
+  }
+};
+
+template <int Dim>
+struct LinearInterpolationKernel {
+  FieldView<const Real, Dim> coarse{};
+  FieldView<Real, Dim> fine{};
+  Box<Dim> coarse_domain{};
+  Box<Dim> fine_domain{};
+  ::pops::amr::RefinementRatio<Dim> ratio{};
+  bool periodic[Dim]{};
+
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    Index<Dim> parent{};
+    Real offset[Dim]{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      const std::int64_t relative = static_cast<std::int64_t>(index[axis]) - fine_domain.lo[axis];
+      std::int64_t quotient = relative / ratio[axis];
+      if (relative % ratio[axis] < 0)
+        --quotient;
+      parent[axis] = static_cast<int>(static_cast<std::int64_t>(coarse_domain.lo[axis]) + quotient);
+      offset[axis] = (static_cast<Real>(relative) + Real(0.5)) / static_cast<Real>(ratio[axis]) -
+                     (static_cast<Real>(quotient) + Real(0.5));
+    }
+    Real value = coarse(parent, 0);
+    for (int axis = 0; axis < Dim; ++axis) {
+      Index<Dim> lower = parent;
+      Index<Dim> upper = parent;
+      --lower[axis];
+      ++upper[axis];
+      Real slope = Real(0);
+      if (periodic[axis] ||
+          (parent[axis] != coarse_domain.lo[axis] && parent[axis] != coarse_domain.hi[axis]))
+        slope = Real(0.5) * (coarse(upper, 0) - coarse(lower, 0));
+      else if (parent[axis] == coarse_domain.lo[axis])
+        slope = coarse(upper, 0) - coarse(parent, 0);
+      else
+        slope = coarse(parent, 0) - coarse(lower, 0);
+      value += offset[axis] * slope;
+    }
+    fine(index, 0) = value;
+  }
+};
+
+template <int Dim>
+struct RestrictionKernel {
+  FieldView<const Real, Dim> fine{};
+  FieldView<Real, Dim> coarse{};
+  Box<Dim> coarse_domain{};
+  Box<Dim> fine_domain{};
+  ::pops::amr::RefinementRatio<Dim> ratio{};
+  Real inverse_children = Real(1);
+
+  POPS_HD void operator()(const Index<Dim>& parent) const {
+    Index<Dim> base{};
+    for (int axis = 0; axis < Dim; ++axis)
+      base[axis] = static_cast<int>(
+          static_cast<std::int64_t>(fine_domain.lo[axis]) +
+          (static_cast<std::int64_t>(parent[axis]) - coarse_domain.lo[axis]) * ratio[axis]);
+    Real sum = Real(0);
+    Index<Dim> child{};
+    bool more = true;
+    while (more) {
+      Index<Dim> fine_index = base;
+      for (int axis = 0; axis < Dim; ++axis)
+        fine_index[axis] += child[axis];
+      sum += fine(fine_index, 0);
+      more = false;
+      for (int axis = 0; axis < Dim; ++axis) {
+        ++child[axis];
+        if (child[axis] < ratio[axis]) {
+          more = true;
+          break;
+        }
+        child[axis] = 0;
+      }
+    }
+    coarse(parent, 0) = sum * inverse_children;
+  }
+};
+
 }  // namespace pops::elliptic::mg::fac_detail

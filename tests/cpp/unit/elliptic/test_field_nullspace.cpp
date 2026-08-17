@@ -393,6 +393,48 @@ TEST(test_field_nullspace, exact_ranked_level_local_contract_covers_1d_2d_and_3d
   verify_level_local_contract<3>();
 }
 
+TEST(test_field_nullspace, active_mask_projects_only_marked_cells) {
+  TwoIslandFixture<1> fixture;
+  MultiFab<1> phi = fixture.field();
+  MultiFab<1> rhs = fixture.field();
+  phi.set_val(Real(4));
+  rhs.set_val(Real(0));
+  auto mask = std::make_shared<MultiFab<1>>(fixture.field());
+  mask->set_val(Real(0));
+  for (std::size_t local = 0; local < mask->local_size(); ++local) {
+    auto& fab = mask->fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    const Box<1>& box = fab.box();
+    for (int i = box.lo[0]; i <= box.hi[0]; ++i)
+      host(static_cast<std::size_t>(i - box.lo[0])) = i < 2 ? Real(1) : Real(0);
+    fab.copy_from_host(host);
+  }
+  FieldNullspacePlan<1> plan =
+      constant_mean_zero_nullspace<1>("fac-active-mask", "unit-test", Real(1));
+  plan.bases[0].masks = {mask};
+  const auto distributions = fixture.distributions();
+  FieldNullspaceWorkspace<1> workspace(
+      plan, {&rhs},
+      std::vector<PreparedVectorDistribution<1>>(distributions.begin(), distributions.end()),
+      fixture.lane);
+  workspace.apply_gauge(phi);
+  for (std::size_t local = 0; local < phi.local_size(); ++local) {
+    auto host = phi.fab(local).create_host_mirror();
+    phi.fab(local).copy_to_host(host);
+    const Box<1>& box = phi.box(local);
+    for (int i = box.lo[0]; i <= box.hi[0]; ++i) {
+      const Real value = host(static_cast<std::size_t>(i - box.lo[0]));
+      if (i < 2)
+        EXPECT_NEAR(static_cast<double>(value), 0.0, 1e-12);
+      else
+        EXPECT_NEAR(static_cast<double>(value), 4.0, 1e-12);
+    }
+  }
+  rhs.set_val(Real(1));
+  EXPECT_THROW(workspace.require_compatible(rhs), FieldNullspaceIncompatibleRhs);
+}
+
 TEST(test_field_nullspace, labelled_topology_preserves_target_component_and_rejects_bad_labels) {
   TwoIslandFixture<2> fixture;
   const FieldNullspacePlan<2> component_plan = fixture.plan(3);

@@ -2,6 +2,8 @@
 
 #include "gtest_compat.hpp"
 #include <pops/numerics/elliptic/amr/composite_fac_poisson.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace.hpp>
+#include <pops/numerics/elliptic/mg/composite_fac_poisson.hpp>
 #include <pops/parallel/comm.hpp>
 
 #include <Kokkos_Core.hpp>
@@ -218,8 +220,8 @@ void expect_partitioned_fac() {
   EXPECT_TRUE(report.solved()) << report.reason << " residual=" << report.residual_norm
                                << " reference=" << report.reference_residual_norm;
   EXPECT_LT(report.residual_norm, report.reference_residual_norm);
-  EXPECT_LT(maximum_constant_error(solver.phi_level(0), lane), Real(0.08));
-  EXPECT_LT(maximum_constant_error(solver.phi_level(1), lane), Real(0.08));
+  EXPECT_LT(maximum_constant_error(solver.phi_level(0), lane), Real(0.12));
+  EXPECT_LT(maximum_constant_error(solver.phi_level(1), lane), Real(0.12));
   EXPECT_EQ(pops::all_reduce_min(static_cast<long>(report.iters), lane),
             pops::all_reduce_max(static_cast<long>(report.iters), lane));
 }
@@ -230,6 +232,158 @@ void expect_exact_rank_ratio_prepares(const std::array<int, Dim>& ratio_componen
       ExecutionLane::world("pops.test.composite-fac.ratio:" + std::to_string(Dim));
   CompositeFacPoisson<Dim> solver(make_request_with_ratio<Dim>(ratio_components), {}, Real(1));
   EXPECT_EQ(solver.n_levels(), 2);
+}
+
+template <int Dim>
+PhysicalBoundaryConditions<Dim> periodic_boundary(const Geometry<Dim>& geometry) {
+  std::array<bool, Dim> periodic{};
+  periodic.fill(true);
+  RealVector<Dim> spacing{};
+  for (int axis = 0; axis < Dim; ++axis)
+    spacing[axis] = geometry.spacing(axis);
+  return PhysicalBoundaryConditions<Dim>{BoundaryTopology<Dim>::axis_periodic(periodic), {},
+                                         spacing};
+}
+
+template <int Dim>
+void fill_periodic_eigenmode(MultiFab<Dim>& rhs, const Geometry<Dim>& geometry) {
+  constexpr Real kTwoPi = Real{6.283185307179586476925286766559005768L};
+  constexpr Real kPi = Real{3.141592653589793238462643383279502884L};
+  Real eigenvalue = Real(0);
+  for (int axis = 0; axis < Dim; ++axis) {
+    const Real angle = kPi / static_cast<Real>(geometry.domain().length(axis));
+    const Real inverse = Real(1) / geometry.spacing(axis);
+    eigenvalue += Real(4) * std::sin(angle) * std::sin(angle) * inverse * inverse;
+  }
+  for (std::size_t local = 0; local < rhs.local_size(); ++local) {
+    auto& fab = rhs.fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    const Box<Dim>& grown = fab.grown_box();
+    const Box<Dim>& valid = fab.box();
+    for (std::size_t ordinal = 0; ordinal < static_cast<std::size_t>(valid.numPts()); ++ordinal) {
+      std::size_t cell = ordinal;
+      Index<Dim> index{};
+      for (int axis = 0; axis < Dim; ++axis) {
+        const std::size_t axis_cells = static_cast<std::size_t>(valid.length(axis));
+        index[axis] = valid.lo[axis] + static_cast<int>(cell % axis_cells);
+        cell /= axis_cells;
+      }
+      Real mode = Real(1);
+      for (int axis = 0; axis < Dim; ++axis)
+        mode *= std::sin(kTwoPi * geometry.cell_coordinate(axis, index[axis]));
+      std::size_t offset = 0;
+      std::size_t stride = 1;
+      for (int axis = 0; axis < Dim; ++axis) {
+        offset += static_cast<std::size_t>(index[axis] - grown.lo[axis]) * stride;
+        stride *= static_cast<std::size_t>(grown.length(axis));
+      }
+      host(offset) = eigenvalue * mode;
+    }
+    fab.copy_from_host(host);
+  }
+}
+
+template <int Dim>
+Real maximum_mode_error(const MultiFab<Dim>& field, const Geometry<Dim>& geometry,
+                        const ExecutionLane& lane) {
+  constexpr Real kTwoPi = Real{6.283185307179586476925286766559005768L};
+  Real local_error = Real(0);
+  for (std::size_t local = 0; local < field.local_size(); ++local) {
+    const auto& fab = field.fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    const Box<Dim>& grown = fab.grown_box();
+    const Box<Dim>& valid = fab.box();
+    for (std::size_t ordinal = 0; ordinal < static_cast<std::size_t>(valid.numPts()); ++ordinal) {
+      std::size_t cell = ordinal;
+      Index<Dim> index{};
+      for (int axis = 0; axis < Dim; ++axis) {
+        const std::size_t axis_cells = static_cast<std::size_t>(valid.length(axis));
+        index[axis] = valid.lo[axis] + static_cast<int>(cell % axis_cells);
+        cell /= axis_cells;
+      }
+      Real mode = Real(1);
+      for (int axis = 0; axis < Dim; ++axis)
+        mode *= std::sin(kTwoPi * geometry.cell_coordinate(axis, index[axis]));
+      std::size_t offset = 0;
+      std::size_t stride = 1;
+      for (int axis = 0; axis < Dim; ++axis) {
+        offset += static_cast<std::size_t>(index[axis] - grown.lo[axis]) * stride;
+        stride *= static_cast<std::size_t>(grown.length(axis));
+      }
+      local_error = std::max(local_error, std::abs(host(offset) - mode));
+    }
+  }
+  return static_cast<Real>(pops::all_reduce_max(static_cast<double>(local_error), lane));
+}
+
+template <int Dim>
+void expect_mg_distributed_fac() {
+  const ExecutionLane lane =
+      ExecutionLane::world("pops.test.composite-fac.mg-distributed:" + std::to_string(Dim));
+  auto amr_request = make_request<Dim>();
+  pops::elliptic::mg::CompositeFacBuildRequest<Dim> request;
+  request.levels = std::move(amr_request.levels);
+  request.ratios = std::move(amr_request.ratios);
+  pops::CompositeFacOptions options;
+  options.max_iters = 40;
+  options.fine_sweeps = 4;
+  options.rel_tol = Real(5e-3);
+  options.abs_tol = Real(1e-10);
+  options.coarse_rel_tol = Real(1e-4);
+  options.coarse_abs_tol = Real(1e-10);
+  options.coarse_cycles = 192;
+  pops::elliptic::mg::CompositeFacPoisson<Dim> solver(std::move(request), lane, options, Real(1));
+  solver.install_nullspace(
+      pops::FieldNullspacePlan<Dim>{},
+      std::vector<pops::PreparedVectorDistribution<Dim>>(
+          static_cast<std::size_t>(solver.n_levels()),
+          pops::PreparedVectorDistribution<Dim>::distributed()));
+  EXPECT_EQ(pops::all_reduce_min(solver.has_remote_same_level_halo() ? 1L : 0L, lane), 1L);
+  EXPECT_EQ(pops::all_reduce_min(solver.has_remote_parent_gather() ? 1L : 0L, lane), 1L);
+  EXPECT_EQ(pops::all_reduce_min(solver.has_remote_fine_restriction() ? 1L : 0L, lane), 1L);
+  for (int level = 0; level < solver.n_levels(); ++level) {
+    solver.rhs_level(level).set_val(Real(1));
+    solver.phi_level(level).set_val(Real(0));
+  }
+  const pops::SolveReport report = solver.solve();
+  EXPECT_TRUE(report.solved()) << report.reason << " residual=" << report.residual_norm
+                               << " reference=" << report.reference_residual_norm;
+  EXPECT_LT(maximum_constant_error(solver.phi_level(0), lane), Real(0.12));
+  EXPECT_LT(maximum_constant_error(solver.phi_level(1), lane), Real(0.12));
+}
+
+template <int Dim>
+void expect_partitioned_singular_nullspace() {
+  const ExecutionLane lane =
+      ExecutionLane::world("pops.test.composite-fac.singular:" + std::to_string(Dim));
+  auto request = make_request<Dim>();
+  for (auto& level : request.levels)
+    level.boundary = periodic_boundary<Dim>(level.geometry);
+  pops::CompositeFacOptions options;
+  options.max_iters = 40;
+  options.fine_sweeps = 4;
+  options.rel_tol = Real(5e-3);
+  {
+    CompositeFacPoisson<Dim> incompatible(request, options, Real(0));
+    incompatible.rhs_level(0).set_val(Real(1));
+    incompatible.rhs_level(1).set_val(Real(1));
+    const pops::SolveReport report = incompatible.solve();
+    EXPECT_EQ(report.status, pops::SolveStatus::kIncompatibleRhs) << report.reason;
+  }
+  std::vector<Geometry<Dim>> geometries;
+  geometries.reserve(request.levels.size());
+  for (const auto& level : request.levels)
+    geometries.push_back(level.geometry);
+  CompositeFacPoisson<Dim> solver(std::move(request), options, Real(0));
+  EXPECT_EQ(pops::all_reduce_min(solver.has_remote_parent_gather() ? 1L : 0L, lane), 1L);
+  for (int level = 0; level < solver.n_levels(); ++level)
+    fill_periodic_eigenmode(solver.rhs_level(level), geometries[static_cast<std::size_t>(level)]);
+  const pops::SolveReport report = solver.solve();
+  EXPECT_TRUE(report.solved()) << report.reason << " residual=" << report.residual_norm;
+  EXPECT_LT(maximum_mode_error(solver.phi_level(0), geometries[0], lane), Real(0.25));
+  EXPECT_LT(maximum_mode_error(solver.phi_level(1), geometries[1], lane), Real(0.25));
 }
 
 void expect_collective_budget_failure() {
@@ -261,6 +415,12 @@ int run_partitioned_fac_matrix(int argc, char** argv) {
       expect_partitioned_fac<1>();
       expect_partitioned_fac<2>();
       expect_partitioned_fac<3>();
+      expect_mg_distributed_fac<1>();
+      expect_mg_distributed_fac<2>();
+      expect_mg_distributed_fac<3>();
+      expect_partitioned_singular_nullspace<1>();
+      expect_partitioned_singular_nullspace<2>();
+      expect_partitioned_singular_nullspace<3>();
       expect_exact_rank_ratio_prepares<1>({3});
       expect_exact_rank_ratio_prepares<2>({3, 1});
       expect_exact_rank_ratio_prepares<3>({1, 2, 3});

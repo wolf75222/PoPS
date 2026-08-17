@@ -524,7 +524,7 @@ TEST(test_geometric_mg_nd, unsupported_operator_families_fail_closed_at_capabili
   constexpr auto fac = CompositeFacPoisson<3>::capabilities();
   EXPECT_TRUE(fac.partial_refinement);
   EXPECT_TRUE(fac.arbitrary_level_count);
-  EXPECT_FALSE(fac.distributed_mpi);
+  EXPECT_TRUE(fac.distributed_mpi);
   EXPECT_FALSE(fac.variable_diagonal);
   EXPECT_FALSE(fac.cross_tensor);
   EXPECT_FALSE(fac.embedded_boundary);

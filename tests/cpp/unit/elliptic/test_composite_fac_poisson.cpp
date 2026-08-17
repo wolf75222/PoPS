@@ -2,6 +2,7 @@
 
 #include <pops/mesh/layout/distribution.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace.hpp>
+#include <pops/numerics/elliptic/amr/composite_fac_poisson.hpp>
 #include <pops/numerics/elliptic/mg/composite_fac_poisson.hpp>
 #include <pops/parallel/comm.hpp>
 
@@ -300,6 +301,103 @@ TEST(CompositeFacPoissonTest, installed_options_strictly_control_iteration_outco
   EXPECT_LT(tuned_report.rel_residual, limited_report.rel_residual);
   EXPECT_LT(tuned_error, limited_error)
       << "the installed controls must produce a strictly better accepted field";
+}
+
+TEST(CompositeFacPoissonTest, partitioned_singular_nullspace_accepts_periodic_mean_zero) {
+  if (pops::n_ranks() != 1)
+    GTEST_SKIP() << "serial partitioned singular FAC uses a one-rank rank space";
+
+  constexpr int Dim = 2;
+  pops::Index<Dim> coarse_upper{};
+  coarse_upper[0] = 7;
+  coarse_upper[1] = 7;
+  const pops::Box<Dim> coarse_domain{pops::Index<Dim>{}, coarse_upper};
+  const pops::Geometry<Dim> coarse_geometry = pops::Geometry<Dim>::from_bounds(
+      coarse_domain, ranked<pops::RealVector<Dim>, Dim>(pops::Real(0)),
+      ranked<pops::RealVector<Dim>, Dim>(pops::Real(1)));
+  const pops::Extent<Dim> ratio = ranked<pops::Extent<Dim>, Dim>(std::int64_t{2});
+  const pops::Geometry<Dim> fine_geometry = coarse_geometry.refine(ratio);
+  const pops::mesh::BoxArray<Dim> coarse_layout(std::vector<pops::Box<Dim>>{coarse_domain});
+  const pops::mesh::BoxArray<Dim> fine_layout(std::vector<pops::Box<Dim>>{
+      pops::refine(pops::Box<Dim>{pops::Index<Dim>{2, 2}, pops::Index<Dim>{5, 5}}, ratio),
+  });
+  const pops::mesh::RankSpace<Dim> rank_space{pops::Index<Dim>{},
+                                              ranked<pops::Extent<Dim>, Dim>(std::int64_t{1})};
+  const pops::mesh::Distribution<Dim> coarse_distribution = pops::mesh::Distribution<Dim>::partitioned(
+      coarse_layout, rank_space, {pops::Index<Dim>{}});
+  const pops::mesh::Distribution<Dim> fine_distribution = pops::mesh::Distribution<Dim>::partitioned(
+      fine_layout, rank_space, {pops::Index<Dim>{}});
+  std::array<bool, Dim> periodic{};
+  periodic.fill(true);
+  pops::RealVector<Dim> coarse_spacing{};
+  pops::RealVector<Dim> fine_spacing{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    coarse_spacing[axis] = coarse_geometry.spacing(axis);
+    fine_spacing[axis] = fine_geometry.spacing(axis);
+  }
+  const pops::PhysicalBoundaryConditions<Dim> coarse_boundary{
+      pops::BoundaryTopology<Dim>::axis_periodic(periodic), {}, coarse_spacing};
+  const pops::PhysicalBoundaryConditions<Dim> fine_boundary{
+      pops::BoundaryTopology<Dim>::axis_periodic(periodic), {}, fine_spacing};
+  const pops::mesh::BoxArrayValidationBudget layout_budget{1, 0};
+  pops::elliptic::amr::CompositeFacPreparationBudget preparation;
+  preparation.levels = 2;
+  preparation.connections = 1;
+  preparation.parent_child_patch_pairs = 16;
+  preparation.interpolation_regions = 128;
+  preparation.local_scratch_cells = 16'384;
+  preparation.same_level_halo = {
+      pops::mesh::BoxArrayValidationBudget{16, 256}, 4096, 4096, 64, 16, 1'000'000, 1'000'000,
+      1'000'000};
+  preparation.parent_gather = {64, 16, 1'000'000, 1'000'000, 1'000'000};
+  preparation.fine_restriction = {64, 16, 1'000'000, 1'000'000, 1'000'000};
+  pops::elliptic::amr::CompositeFacBuildRequest<Dim> request{
+      {{coarse_geometry, coarse_layout, coarse_distribution, pops::Index<Dim>{}, coarse_boundary,
+        pops::Extent<Dim>{}, ranked<pops::Extent<Dim>, Dim>(std::int64_t{1}), layout_budget},
+       {fine_geometry, fine_layout, fine_distribution, pops::Index<Dim>{}, fine_boundary,
+        pops::Extent<Dim>{}, ranked<pops::Extent<Dim>, Dim>(std::int64_t{1}), layout_budget}},
+      {pops::amr::RefinementRatio<Dim>{{2, 2}}},
+      preparation};
+  pops::CompositeFacOptions options;
+  options.max_iters = 60;
+  options.fine_sweeps = 4;
+  options.rel_tol = pops::Real(5e-3);
+  options.coarse_cycles = 64;
+  {
+    pops::elliptic::amr::CompositeFacPoisson<Dim> incompatible(request, options, pops::Real(0));
+    incompatible.rhs_level(0).set_val(pops::Real(1));
+    incompatible.rhs_level(1).set_val(pops::Real(1));
+    const pops::SolveReport report = incompatible.solve();
+    EXPECT_EQ(report.status, pops::SolveStatus::kIncompatibleRhs) << report.reason;
+  }
+  pops::elliptic::amr::CompositeFacPoisson<Dim> solver(std::move(request), options, pops::Real(0));
+  const auto fill_mode = [](pops::MultiFab<Dim>& rhs, const pops::Geometry<Dim>& geometry) {
+    constexpr pops::Real kTwoPi = pops::Real{6.283185307179586476925286766559005768L};
+    constexpr pops::Real kPi = pops::Real{3.141592653589793238462643383279502884L};
+    pops::Real eigenvalue = pops::Real(0);
+    for (int axis = 0; axis < Dim; ++axis) {
+      const pops::Real angle = kPi / static_cast<pops::Real>(geometry.domain().length(axis));
+      const pops::Real inverse = pops::Real(1) / geometry.spacing(axis);
+      eigenvalue += pops::Real(4) * std::sin(angle) * std::sin(angle) * inverse * inverse;
+    }
+    for (std::size_t local = 0; local < rhs.local_size(); ++local) {
+      auto& fab = rhs.fab(local);
+      auto host = fab.create_host_mirror();
+      fab.copy_to_host(host);
+      for (std::size_t cell = 0; cell < static_cast<std::size_t>(fab.box().numPts()); ++cell) {
+        const auto index = index_from_ordinal<Dim>(fab.box(), cell);
+        pops::Real mode = pops::Real(1);
+        for (int axis = 0; axis < Dim; ++axis)
+          mode *= std::sin(kTwoPi * geometry.cell_coordinate(axis, index[axis]));
+        host(storage_ordinal(fab.grown_box(), index)) = eigenvalue * mode;
+      }
+      fab.copy_from_host(host);
+    }
+  };
+  fill_mode(solver.rhs_level(0), coarse_geometry);
+  fill_mode(solver.rhs_level(1), fine_geometry);
+  const pops::SolveReport report = solver.solve();
+  EXPECT_TRUE(report.solved()) << report.reason << " residual=" << report.residual_norm;
 }
 
 TEST(CompositeFacPoissonTest, nonfinite_composite_residual_fails_closed) {

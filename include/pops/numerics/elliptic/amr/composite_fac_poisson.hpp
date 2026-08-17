@@ -7,6 +7,7 @@
 #include <pops/core/foundation/types.hpp>
 #include <pops/core/identity/prepared_provider.hpp>
 #include <pops/mesh/boundary/fill_boundary.hpp>
+#include <pops/parallel/comm.hpp>
 #include <pops/mesh/boundary/halo_exchange.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/mesh/layout/refinement.hpp>
@@ -18,6 +19,7 @@
 #include <pops/numerics/elliptic/interface/elliptic_solver.hpp>
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
 #include <pops/numerics/elliptic/interface/field_nonlinear.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace_workspace.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
@@ -73,7 +75,7 @@ struct CompositeFacCapabilities {
   bool conservative_restriction = true;
   bool injection_prolongation = true;
   bool periodic_sparse_levels = false;
-  bool singular_nullspace = false;
+  bool singular_nullspace = true;
   bool variable_coefficient = false;
   bool embedded_boundary = false;
 
@@ -317,6 +319,116 @@ struct InjectionKernel {
 };
 
 template <int Dim>
+struct AddKernel {
+  FieldView<Real, Dim> destination{};
+  FieldView<const Real, Dim> increment{};
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    destination(index, 0) += increment(index, 0);
+  }
+};
+
+template <int Dim>
+struct LinearInterpolationKernel {
+  FieldView<const Real, Dim> coarse{};
+  FieldView<Real, Dim> fine{};
+  Box<Dim> coarse_domain{};
+  Box<Dim> fine_domain{};
+  ::pops::amr::RefinementRatio<Dim> ratio{};
+  bool periodic[Dim]{};
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    Index<Dim> parent{};
+    Real offset[Dim]{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      const std::int64_t relative = static_cast<std::int64_t>(index[axis]) - fine_domain.lo[axis];
+      std::int64_t quotient = relative / ratio[axis];
+      if (relative % ratio[axis] < 0)
+        --quotient;
+      parent[axis] = static_cast<int>(static_cast<std::int64_t>(coarse_domain.lo[axis]) + quotient);
+      offset[axis] = (static_cast<Real>(relative) + Real(0.5)) / static_cast<Real>(ratio[axis]) -
+                     (static_cast<Real>(quotient) + Real(0.5));
+    }
+    Real value = coarse(parent, 0);
+    for (int axis = 0; axis < Dim; ++axis) {
+      Index<Dim> lower = parent;
+      Index<Dim> upper = parent;
+      --lower[axis];
+      ++upper[axis];
+      Real slope = Real(0);
+      if (periodic[axis] ||
+          (parent[axis] != coarse_domain.lo[axis] && parent[axis] != coarse_domain.hi[axis]))
+        slope = Real(0.5) * (coarse(upper, 0) - coarse(lower, 0));
+      else if (parent[axis] == coarse_domain.lo[axis])
+        slope = coarse(upper, 0) - coarse(parent, 0);
+      else
+        slope = coarse(parent, 0) - coarse(lower, 0);
+      value += offset[axis] * slope;
+    }
+    fine(index, 0) = value;
+  }
+};
+
+template <int Dim>
+struct CopyByIndexKernel {
+  FieldView<const Real, Dim> source{};
+  FieldView<Real, Dim> destination{};
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    destination(index, 0) = source(index, 0);
+  }
+};
+
+template <int Dim>
+Index<Dim> index_from_ordinal(const Box<Dim>& box, std::size_t ordinal) {
+  Index<Dim> index{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    const std::size_t length = static_cast<std::size_t>(box.length(axis));
+    index[axis] = box.lo[axis] + static_cast<int>(ordinal % length);
+    ordinal /= length;
+  }
+  return index;
+}
+
+template <int Dim>
+std::size_t grown_offset(const Box<Dim>& grown, const Index<Dim>& index) {
+  std::size_t offset = 0;
+  std::size_t stride = 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    offset += static_cast<std::size_t>(index[axis] - grown.lo[axis]) * stride;
+    stride *= static_cast<std::size_t>(grown.length(axis));
+  }
+  return offset;
+}
+
+template <int Dim>
+struct WrapStagingKernel {
+  FieldView<Real, Dim> staging{};
+  Box<Dim> domain{};
+  Box<Dim> staging_box{};
+  bool periodic[Dim]{};
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    if (domain.contains(index))
+      return;
+    Index<Dim> wrapped = index;
+    bool shifted = false;
+    for (int axis = 0; axis < Dim; ++axis) {
+      if (!periodic[axis])
+        continue;
+      const int length = static_cast<int>(domain.length(axis));
+      if (length <= 0)
+        continue;
+      if (wrapped[axis] < domain.lo[axis]) {
+        wrapped[axis] += length;
+        shifted = true;
+      } else if (wrapped[axis] > domain.hi[axis]) {
+        wrapped[axis] -= length;
+        shifted = true;
+      }
+    }
+    if (shifted && domain.contains(wrapped) && staging_box.contains(wrapped))
+      staging(index, 0) = staging(wrapped, 0);
+  }
+};
+
+template <int Dim>
 struct RestrictionKernel {
   FieldView<const Real, Dim> fine{};
   FieldView<Real, Dim> coarse{};
@@ -468,7 +580,9 @@ class CompositeFacPoisson {
               {{std::string_view("pops-fac-parent-gather"),
                 std::string_view(connections_[connection]->gather_contract)},
                {std::string_view("pops-fac-fine-restriction"),
-                std::string_view(connections_[connection]->restriction_contract)}}))
+                std::string_view(connections_[connection]->restriction_contract)},
+               {std::string_view("pops-fac-flux-mismatch"),
+                std::string_view(connections_[connection]->flux_contract)}}))
         throw std::invalid_argument(
             "partitioned FAC coarse/fine transfer plan differs between MPI ranks");
     }
@@ -486,6 +600,7 @@ class CompositeFacPoisson {
         levels_[level]->halo_exchange.emplace(levels_[level]->halo_schedule, *lane_, context);
       }
     }
+    build_coarse_solver_(request.levels.front());
   }
 
   CompositeFacPoisson(const CompositeFacPoisson&) = delete;
@@ -609,6 +724,23 @@ class CompositeFacPoisson {
   SolveReport solve() {
     if (newton_workspace_ || boundary_kernel_)
       return solve_dynamic_();
+    try {
+      ensure_nullspace_();
+      if (nullspace_workspace_) {
+        nullspace_workspace_->require_compatible(nullspace_rhs_);
+        nullspace_workspace_->apply_gauge(nullspace_candidates_);
+      }
+    } catch (const FieldNullspaceIncompatibleRhs& error) {
+      SolveReport report;
+      report.mark_failed(SolveStatus::kIncompatibleRhs, SolveAction::kFailRun, error.what());
+      last_report_ = report;
+      return last_report_;
+    } catch (const FieldNullspaceInvalidEvaluation& error) {
+      SolveReport report;
+      report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun, error.what());
+      last_report_ = report;
+      return last_report_;
+    }
     compute_composite_residual_();
     const Real reference = composite_residual_norm_();
     SolveReport report;
@@ -633,12 +765,12 @@ class CompositeFacPoisson {
     const int pre = (options_.fine_sweeps + 1) / 2;
     const int post = options_.fine_sweeps / 2;
     for (int iteration = 0; iteration < options_.max_iters; ++iteration) {
-      for (std::size_t level = 1; level < levels_.size(); ++level)
+      for (std::size_t level = 0; level < levels_.size(); ++level)
         smooth_(level, levels_[level]->phi, levels_[level]->rhs, pre, true, false);
 
       compute_composite_residual_();
       restrict_residual_tower_();
-      const SolveReport coarse_report = solve_coarse_correction_();
+      const SolveReport coarse_report = apply_fac_correction_();
       report.evaluations += coarse_report.evaluations;
       if (!coarse_report.solved()) {
         report.iters = iteration;
@@ -653,21 +785,14 @@ class CompositeFacPoisson {
         return last_report_;
       }
       report.step_norm = global_norm_inf_(levels_.front()->correction);
-      if (levels_.size() > 2) {
-        for (std::size_t local = 0; local < levels_.front()->correction.local_size(); ++local)
-          for_each_cell(levels_.front()->correction.box(local),
-                        fac_detail::ScaleKernel<Dim>{
-                            levels_.front()->correction.fab(local).view(), Real(0.5)});
-        Kokkos::fence();
-      }
-      add_active_(*levels_.front(), levels_.front()->correction);
-      prolong_correction_tower_();
-      for (std::size_t level = 1; level < levels_.size(); ++level)
+      for (std::size_t level = 0; level < levels_.size(); ++level)
         smooth_(level, levels_[level]->phi, levels_[level]->rhs, post, true, false);
       if (levels_.size() > 2)
         smooth_(levels_.size() - 1, levels_.back()->phi, levels_.back()->rhs, options_.fine_sweeps,
                 true, false);
       average_solution_down_();
+      if (nullspace_workspace_)
+        nullspace_workspace_->apply_gauge(nullspace_candidates_);
 
       compute_composite_residual_();
       ++report.evaluations;
@@ -760,6 +885,8 @@ class CompositeFacPoisson {
       std::size_t fine_patch = 0;
       Fab<Dim, MemorySpace> parent_staging{};
       Fab<Dim, MemorySpace> restricted{};
+      Fab<Dim, MemorySpace> flux_increment{};
+      Fab<Dim, MemorySpace> covered_staging{};
       std::vector<Box<Dim>> ghost_regions{};
     };
 
@@ -770,8 +897,10 @@ class CompositeFacPoisson {
     std::vector<std::size_t> scratch_by_fine_patch{};
     std::unique_ptr<transport_type> gather{};
     std::unique_ptr<transport_type> restriction{};
+    std::unique_ptr<transport_type> flux{};
     std::string gather_contract{};
     std::string restriction_contract{};
+    std::string flux_contract{};
 
     static constexpr std::size_t no_scratch = std::numeric_limits<std::size_t>::max();
 
@@ -789,7 +918,7 @@ class CompositeFacPoisson {
           continue;
         const Box<Dim>& valid = child->phi.layout()[fine_patch];
         const Box<Dim> restricted_box = coarsen(valid, ratio_value);
-        const Box<Dim> staging = restricted_box.grow(2).intersect(parent->geometry.domain());
+        const Box<Dim> staging = restricted_box.grow(2);
         fac_detail::checked_add(local_cells, static_cast<std::size_t>(staging.numPts()),
                                 budget.local_scratch_cells,
                                 "partitioned FAC parent staging budget exceeded");
@@ -800,6 +929,12 @@ class CompositeFacPoisson {
         patch.fine_patch = fine_patch;
         patch.parent_staging = Fab<Dim, MemorySpace>(staging, 1, Extent<Dim>{});
         patch.restricted = Fab<Dim, MemorySpace>(restricted_box, 1, Extent<Dim>{});
+        patch.flux_increment = Fab<Dim, MemorySpace>(staging, 1, Extent<Dim>{});
+        patch.covered_staging = Fab<Dim, MemorySpace>(staging, 1, Extent<Dim>{});
+        patch.flux_increment.set_val(Real(0));
+        patch.covered_staging.set_val(Real(0));
+        for_each_cell(restricted_box,
+                      fac_detail::SetScalarKernel<Dim>{patch.covered_staging.view(), Real(1)});
         std::vector<Box<Dim>> pending{fac_detail::clipped_growth(valid, child->geometry.domain())};
         for (const Box<Dim>& peer : child->phi.layout().boxes())
           fac_detail::subtract_from(pending, peer);
@@ -875,20 +1010,30 @@ class CompositeFacPoisson {
           throw std::invalid_argument(
               "partitioned FAC parent layout does not cover a child restriction footprint");
       }
+      std::vector<transfer_job> flux_jobs;
+      flux_jobs.reserve(gather_jobs.size());
+      for (const transfer_job& job : gather_jobs)
+        flux_jobs.push_back(transfer_job{job.destination_patch, job.source_patch, job.destination_rank,
+                                         job.source_rank, job.destination_region, job.source_region});
       gather = std::make_unique<transport_type>(
           transfer_plan{parent->phi.rank_space(), parent->phi.local_rank(), 1,
                         std::move(gather_jobs), budget.parent_gather});
       restriction = std::make_unique<transport_type>(
           transfer_plan{parent->phi.rank_space(), parent->phi.local_rank(), 1,
                         std::move(restriction_jobs), budget.fine_restriction});
+      flux = std::make_unique<transport_type>(
+          transfer_plan{parent->phi.rank_space(), parent->phi.local_rank(), 1, std::move(flux_jobs),
+                        budget.parent_gather});
       gather_contract = gather->plan().exact_contract("parent-gather/" + std::to_string(ordinal));
       restriction_contract =
           restriction->plan().exact_contract("fine-restriction/" + std::to_string(ordinal));
+      flux_contract = flux->plan().exact_contract("flux-mismatch/" + std::to_string(ordinal));
     }
 
     void attach_lane(const ExecutionLane& lane) {
       gather->attach_lane(lane);
       restriction->attach_lane(lane);
+      flux->attach_lane(lane);
     }
 
     ScratchPatch& scratch_for(std::size_t fine_patch) {
@@ -906,6 +1051,20 @@ class CompositeFacPoisson {
         return scratch_for(job.destination_patch).parent_staging.view();
       };
       gather->execute(source_view, destination_view);
+      bool periodic[Dim]{};
+      for (int axis = 0; axis < Dim; ++axis)
+        periodic[axis] =
+            parent->boundary.topology().is_periodic(Face<Dim>{axis, BoundarySide::lower});
+      for (ScratchPatch& patch : scratch) {
+        fac_detail::WrapStagingKernel<Dim> kernel{patch.parent_staging.view(),
+                                                  parent->geometry.domain(),
+                                                  patch.parent_staging.box(),
+                                                  {}};
+        for (int axis = 0; axis < Dim; ++axis)
+          kernel.periodic[axis] = periodic[axis];
+        for_each_cell(patch.parent_staging.box(), kernel);
+      }
+      Kokkos::fence();
     }
 
     void interpolate_ghosts(field_type& destination) {
@@ -925,9 +1084,85 @@ class CompositeFacPoisson {
       for (ScratchPatch& patch : scratch) {
         const auto coarse = std::as_const(patch.parent_staging).view();
         auto fine = destination.fab_global(patch.fine_patch).view();
-        for_each_cell(destination.fab_global(patch.fine_patch).box(),
-                      fac_detail::InjectionKernel<Dim>{coarse, fine, parent->geometry.domain(),
-                                                       child->geometry.domain(), ratio});
+        fac_detail::LinearInterpolationKernel<Dim> kernel{
+            coarse, fine, parent->geometry.domain(), child->geometry.domain(), ratio, {}};
+        for (int axis = 0; axis < Dim; ++axis)
+          kernel.periodic[axis] =
+              parent->boundary.topology().is_periodic(Face<Dim>{axis, BoundarySide::lower});
+        for_each_cell(destination.fab_global(patch.fine_patch).box(), kernel);
+      }
+      Kokkos::fence();
+    }
+
+    void apply_flux_mismatch(const field_type& parent_phi, const field_type& child_phi,
+                             field_type& parent_residual, field_type& parent_scratch) {
+      gather_parent(parent_phi);
+      for (ScratchPatch& patch : scratch) {
+        patch.flux_increment.set_val(Real(0));
+        const Box<Dim> footprint = patch.restricted.box();
+        const auto parent_view = std::as_const(patch.parent_staging).view();
+        const auto fine_view = std::as_const(child_phi).fab_global(patch.fine_patch).view();
+        const auto covered = std::as_const(patch.covered_staging).view();
+        auto increment = patch.flux_increment.view();
+        for (int axis = 0; axis < Dim; ++axis) {
+          Real transverse = Real(1);
+          for (int transverse_axis = 0; transverse_axis < Dim; ++transverse_axis)
+            if (transverse_axis != axis)
+              transverse *= static_cast<Real>(ratio[transverse_axis]);
+          const Real fine_face_weight = static_cast<Real>(ratio[axis]) / transverse;
+          const Real inverse_spacing = Real(1) / parent->geometry.spacing(axis);
+          const Real inverse_spacing_squared = inverse_spacing * inverse_spacing;
+          for (const int child_side : {-1, 1}) {
+            Box<Dim> interface = footprint;
+            Index<Dim> geometry_shift{};
+            if (child_side < 0) {
+              --interface.lo[axis];
+              interface.hi[axis] = interface.lo[axis];
+            } else {
+              ++interface.hi[axis];
+              interface.lo[axis] = interface.hi[axis];
+            }
+            const Box<Dim>& parent_domain = parent->geometry.domain();
+            if (parent->boundary.topology().is_periodic(Face<Dim>{axis, BoundarySide::lower})) {
+              const int length = static_cast<int>(parent_domain.length(axis));
+              if (length > 0 && interface.hi[axis] < parent_domain.lo[axis]) {
+                geometry_shift[axis] = -length;
+                interface.lo[axis] += length;
+                interface.hi[axis] += length;
+              } else if (length > 0 && interface.lo[axis] > parent_domain.hi[axis]) {
+                geometry_shift[axis] = length;
+                interface.lo[axis] -= length;
+                interface.hi[axis] -= length;
+              }
+            }
+            const Box<Dim> destination = interface.intersect(patch.flux_increment.box());
+            if (destination.empty())
+              continue;
+            for_each_cell(destination, ::pops::elliptic::mg::fac_detail::FluxMismatchTransfer<Dim>{
+                                           parent_view, fine_view, increment, covered, destination,
+                                           ratio, axis, child_side, inverse_spacing_squared,
+                                           fine_face_weight, Real(1), geometry_shift});
+          }
+        }
+      }
+      Kokkos::fence();
+      parent_scratch.set_val(Real(0));
+      auto source_view = [this](const transfer_job& job) -> FieldView<const Real, Dim> {
+        return std::as_const(scratch_for(job.source_patch).flux_increment).view();
+      };
+      auto destination_view = [&parent_scratch](const transfer_job& job) -> FieldView<Real, Dim> {
+        return parent_scratch.fab_global(job.destination_patch).view();
+      };
+      flux->execute(source_view, destination_view);
+      for (std::size_t local = 0; local < parent_residual.local_size(); ++local) {
+        for_each_cell(parent_residual.box(local),
+                      fac_detail::AddKernel<Dim>{
+                          parent_residual.fab(local).view(),
+                          std::as_const(parent_scratch).fab(local).view()});
+        for_each_cell(parent_residual.box(local),
+                      fac_detail::MaskResidualKernel<Dim>{
+                          parent_residual.fab(local).view(),
+                          std::as_const(parent->covered).fab(local).view()});
       }
       Kokkos::fence();
     }
@@ -1000,10 +1235,7 @@ class CompositeFacPoisson {
           throw std::invalid_argument(
               "partitioned FAC fine patch is not aligned to its refinement ratio");
     }
-    if (fac_detail::singular(request.levels.front().boundary, reaction))
-      throw std::invalid_argument(
-          "partitioned FAC singular nullspaces are not a registered capability; use reaction>0 "
-          "or an anchoring physical boundary");
+    (void)reaction;
   }
 
   void build_levels_(const request_type& request) {
@@ -1055,8 +1287,8 @@ class CompositeFacPoisson {
       const field_type& parent_field =
           parent_override != nullptr
               ? *parent_override
-              : (&field == &level.correction ? levels_[level_index - 1]->correction
-                                             : levels_[level_index - 1]->phi);
+              : (homogeneous || &field == &level.correction ? levels_[level_index - 1]->correction
+                                                            : levels_[level_index - 1]->phi);
       connection.gather_parent(parent_field);
       connection.interpolate_ghosts(field);
     }
@@ -1084,10 +1316,18 @@ class CompositeFacPoisson {
     }
     for (int sweep = 0; sweep < sweeps; ++sweep) {
       fill_ghosts_(level_index, iterate, homogeneous);
+      const field_type* effective_rhs = &rhs;
+      if (level_index + 1 < levels_.size() && &iterate == &level.phi && &rhs == &level.rhs) {
+        ::pops::elliptic::mg::copy_scalar_valid(level.rhs, level.residual);
+        fill_ghosts_(level_index + 1, levels_[level_index + 1]->phi, false);
+        connections_[level_index]->apply_flux_mismatch(iterate, levels_[level_index + 1]->phi,
+                                                       level.residual, level.scratch);
+        effective_rhs = &level.residual;
+      }
       for (std::size_t local = 0; local < iterate.local_size(); ++local) {
         fac_detail::JacobiKernel<Dim> kernel{level.scratch.fab(local).view(),
                                              std::as_const(iterate).fab(local).view(),
-                                             rhs.fab(local).view(),
+                                             effective_rhs->fab(local).view(),
                                              std::as_const(level.covered).fab(local).view(),
                                              {},
                                              Real(1) / diagonal,
@@ -1118,6 +1358,10 @@ class CompositeFacPoisson {
   void compute_composite_residual_() {
     for (std::size_t level = 0; level < levels_.size(); ++level)
       compute_level_residual_(level);
+    for (std::size_t connection = 0; connection < connections_.size(); ++connection)
+      connections_[connection]->apply_flux_mismatch(
+          levels_[connection]->phi, levels_[connection + 1]->phi, levels_[connection]->residual,
+          levels_[connection]->scratch);
   }
 
   void restrict_residual_tower_() {
@@ -1126,26 +1370,116 @@ class CompositeFacPoisson {
                                              levels_[child - 1]->residual);
   }
 
-  SolveReport solve_coarse_correction_() {
-    Level& coarse = *levels_.front();
-    coarse.correction.set_val(Real(0));
-    const Real reference = global_norm_inf_(coarse.residual);
-    const Real stop = std::max(options_.coarse_abs_tol, options_.coarse_rel_tol * reference);
-    // Covered-mask local smoother: GeometricMG does not mask covered cells and
-    // fail-stops on partitioned multi-box coarse residuals.
-    for (int sweep = 0; sweep < options_.coarse_cycles; ++sweep) {
-      smooth_(0, coarse.correction, coarse.residual, 1, false, true);
-      if ((sweep + 1) % 8 == 0 || sweep + 1 == options_.coarse_cycles) {
-        fill_ghosts_(0, coarse.correction, true);
-        ::pops::elliptic::mg::poisson_residual_valid(coarse.correction, coarse.residual,
-                                                     coarse.geometry, coarse.scratch, reaction_);
-        if (global_norm_inf_(coarse.scratch) <= stop)
-          break;
-      }
+  void install_coarse_nullspace_(const mesh::Distribution<Dim>& distribution) {
+    const PreparedVectorDistribution<Dim> prepared = distribution.replicated()
+                                                         ? PreparedVectorDistribution<Dim>::replicated()
+                                                         : PreparedVectorDistribution<Dim>::distributed();
+    if (fac_detail::singular(levels_.front()->boundary, reaction_)) {
+      Real measure = Real(1);
+      for (int axis = 0; axis < Dim; ++axis)
+        measure *= levels_.front()->geometry.spacing(axis);
+      coarse_solver_->install_nullspace(
+          constant_mean_zero_nullspace<Dim>(
+              "pops.elliptic.amr.partitioned-composite-fac.coarse-nullspace",
+              "partitioned-fac-coarse-correction", measure),
+          prepared);
+      return;
     }
-    SolveReport report;
-    report.mark_solved("partitioned_fac_coarse_correction");
-    return report;
+    coarse_solver_->install_nullspace(FieldNullspacePlan<Dim>{}, prepared);
+  }
+
+  void build_coarse_solver_(const EllipticBuildRequest<Dim>& coarse_request) {
+    ::pops::elliptic::mg::GeometricMultigridOptions controls;
+    controls.relative_tolerance = options_.coarse_rel_tol;
+    controls.absolute_tolerance = options_.coarse_abs_tol;
+    controls.maximum_cycles = options_.coarse_cycles;
+    controls.reaction = reaction_;
+    if (coarse_request.boxes.size() > 2)
+      return;
+    EllipticBuildRequest<Dim> correction_request = coarse_request;
+    correction_request.boundary = ::pops::elliptic::mg::detail::boundary_for_geometry(
+        coarse_request.boundary, coarse_request.geometry, true);
+    coarse_solver_ = std::make_unique<::pops::elliptic::mg::GeometricMG<Dim, MemorySpace>>(
+        std::move(correction_request), *lane_, controls);
+    install_coarse_nullspace_(coarse_request.distribution);
+  }
+
+  void ensure_nullspace_() {
+    if (nullspace_workspace_ || !fac_detail::singular(levels_.front()->boundary, reaction_))
+      return;
+    FieldNullspacePlan<Dim> plan = constant_mean_zero_nullspace<Dim>(
+        "pops.elliptic.amr.partitioned-composite-fac.nullspace", "partitioned-fac-composite",
+        Real(1));
+    plan.bases[0].masks.clear();
+    plan.bases[0].cell_measure.clear();
+    std::vector<PreparedVectorDistribution<Dim>> distributions;
+    distributions.reserve(levels_.size());
+    for (const auto& level : levels_) {
+      auto mask = std::make_shared<MultiFab<Dim>>(level->active.layout(), level->active.distribution(),
+                                                 level->active.local_rank(), 1, Extent<Dim>{});
+      ::pops::elliptic::mg::copy_scalar_valid(level->active, *mask);
+      plan.bases[0].masks.emplace_back(std::move(mask));
+      Real measure = Real(1);
+      for (int axis = 0; axis < Dim; ++axis)
+        measure *= level->geometry.spacing(axis);
+      plan.bases[0].cell_measure.push_back(measure);
+      distributions.push_back(level->phi.distribution().replicated()
+                                  ? PreparedVectorDistribution<Dim>::replicated()
+                                  : PreparedVectorDistribution<Dim>::distributed());
+    }
+    std::vector<const MultiFab<Dim>*> rhs_layouts;
+    std::vector<MultiFab<Dim>*> candidates;
+    rhs_layouts.reserve(levels_.size());
+    candidates.reserve(levels_.size());
+    for (const auto& level : levels_) {
+      rhs_layouts.push_back(&level->rhs);
+      candidates.push_back(&level->phi);
+    }
+    nullspace_workspace_ = std::make_unique<FieldNullspaceWorkspace<Dim>>(
+        std::move(plan), rhs_layouts, std::move(distributions), *lane_);
+    nullspace_rhs_ = std::move(rhs_layouts);
+    nullspace_candidates_ = std::move(candidates);
+  }
+
+  void prolong_one_(std::size_t parent) {
+    Connection& connection = *connections_.at(parent);
+    connection.gather_parent(levels_[parent]->correction);
+    levels_[parent + 1]->correction.set_val(Real(0));
+    connection.prolong_valid(levels_[parent + 1]->correction);
+    add_active_(*levels_[parent + 1], levels_[parent + 1]->correction);
+  }
+
+  SolveReport apply_fac_correction_() {
+    SolveReport coarse_report;
+    if (coarse_solver_) {
+      coarse_solver_->phi().set_val(Real(0));
+      ::pops::elliptic::mg::copy_scalar_valid(levels_.front()->residual, coarse_solver_->rhs());
+      coarse_report = coarse_solver_->solve();
+      if (coarse_report.solved())
+        ::pops::elliptic::mg::copy_scalar_valid(coarse_solver_->phi(),
+                                                levels_.front()->correction);
+    } else {
+      Level& coarse = *levels_.front();
+      coarse.correction.set_val(Real(0));
+      const Real reference = global_norm_inf_(coarse.residual);
+      const Real stop = std::max(options_.coarse_abs_tol, options_.coarse_rel_tol * reference);
+      for (int sweep = 0; sweep < options_.coarse_cycles; ++sweep) {
+        smooth_(0, coarse.correction, coarse.residual, 1, false, true);
+        if ((sweep + 1) % 8 == 0 || sweep + 1 == options_.coarse_cycles) {
+          fill_ghosts_(0, coarse.correction, true);
+          ::pops::elliptic::mg::poisson_residual_valid(coarse.correction, coarse.residual,
+                                                       coarse.geometry, coarse.scratch, reaction_);
+          if (global_norm_inf_(coarse.scratch) <= stop)
+            break;
+        }
+      }
+      coarse_report.mark_solved("partitioned_fac_coarse_correction");
+    }
+    if (!coarse_report.solved())
+      return coarse_report;
+    add_active_(*levels_.front(), levels_.front()->correction);
+    prolong_correction_tower_();
+    return coarse_report;
   }
 
   static void add_active_(Level& level, const field_type& correction) {
@@ -1158,13 +1492,8 @@ class CompositeFacPoisson {
   }
 
   void prolong_correction_tower_() {
-    for (std::size_t parent = 0; parent < connections_.size(); ++parent) {
-      Connection& connection = *connections_[parent];
-      connection.gather_parent(levels_[parent]->correction);
-      levels_[parent + 1]->correction.set_val(Real(0));
-      connection.prolong_valid(levels_[parent + 1]->correction);
-      add_active_(*levels_[parent + 1], levels_[parent + 1]->correction);
-    }
+    for (std::size_t parent = 0; parent < connections_.size(); ++parent)
+      prolong_one_(parent);
   }
 
   void average_solution_down_() {
@@ -1432,6 +1761,7 @@ class CompositeFacPoisson {
   CompositeFacOptions options_{};
   Real reaction_ = Real(0);
   std::optional<ExecutionLane> lane_{};
+  std::unique_ptr<::pops::elliptic::mg::GeometricMG<Dim, MemorySpace>> coarse_solver_{};
   std::vector<std::unique_ptr<Level>> levels_{};
   std::vector<std::unique_ptr<Connection>> connections_{};
   std::string lane_identity_{};
