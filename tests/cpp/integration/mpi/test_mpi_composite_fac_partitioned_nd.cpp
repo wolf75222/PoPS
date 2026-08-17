@@ -405,6 +405,48 @@ void expect_collective_budget_failure() {
       {{std::string_view("partitioned-fac-budget-failure"), std::string_view(message)}}, lane));
 }
 
+template <int Dim>
+void install_unit_metric(CompositeFacPoisson<Dim>& solver, int level) {
+  const auto& phi = solver.phi_level(level);
+  MultiFab<Dim> active(phi.layout(), phi.distribution(), phi.local_rank(), 1, Extent<Dim>{});
+  MultiFab<Dim> inverse_volume(phi.layout(), phi.distribution(), phi.local_rank(), 1,
+                               Extent<Dim>{});
+  MultiFab<Dim> aperture_lower(phi.layout(), phi.distribution(), phi.local_rank(), Dim,
+                               Extent<Dim>{});
+  MultiFab<Dim> aperture_upper(phi.layout(), phi.distribution(), phi.local_rank(), Dim,
+                               Extent<Dim>{});
+  active.set_val(Real(1));
+  inverse_volume.set_val(Real(1));
+  aperture_lower.set_val(Real(1));
+  aperture_upper.set_val(Real(1));
+  solver.install_embedded_boundary(level, active, inverse_volume, aperture_lower, aperture_upper);
+}
+
+template <int Dim>
+void expect_partitioned_fac_embedded_boundary() {
+  const ExecutionLane lane =
+      ExecutionLane::world("pops.test.composite-fac.partitioned-eb:" + std::to_string(Dim));
+  pops::CompositeFacOptions options;
+  options.max_iters = 40;
+  options.fine_sweeps = 4;
+  options.rel_tol = Real(5e-3);
+  options.abs_tol = Real(1e-10);
+  options.coarse_rel_tol = Real(1e-4);
+  options.coarse_abs_tol = Real(1e-10);
+  options.coarse_cycles = 192;
+  CompositeFacPoisson<Dim> solver(make_request<Dim>(), options, Real(1));
+  EXPECT_EQ(pops::all_reduce_min(solver.has_remote_same_level_halo() ? 1L : 0L, lane), 1L);
+  for (int level = 0; level < solver.n_levels(); ++level) {
+    install_unit_metric(solver, level);
+    solver.rhs_level(level).set_val(Real(1));
+    solver.phi_level(level).set_val(Real(0));
+  }
+  const pops::SolveReport report = solver.solve();
+  EXPECT_TRUE(report.solved()) << report.reason << " residual=" << report.residual_norm;
+  EXPECT_LT(maximum_constant_error(solver.phi_level(0), lane), Real(0.12));
+  EXPECT_LT(maximum_constant_error(solver.phi_level(1), lane), Real(0.12));
+}
+
 int run_partitioned_fac_matrix(int argc, char** argv) {
   pops::comm_init(&argc, &argv);
   int result = 0;
@@ -415,6 +457,7 @@ int run_partitioned_fac_matrix(int argc, char** argv) {
       expect_partitioned_fac<1>();
       expect_partitioned_fac<2>();
       expect_partitioned_fac<3>();
+      expect_partitioned_fac_embedded_boundary<2>();
       expect_mg_distributed_fac<1>();
       expect_mg_distributed_fac<2>();
       expect_mg_distributed_fac<3>();

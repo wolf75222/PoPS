@@ -76,8 +76,8 @@ struct CompositeFacCapabilities {
   bool injection_prolongation = true;
   bool periodic_sparse_levels = false;
   bool singular_nullspace = true;
-  bool variable_coefficient = false;
-  bool embedded_boundary = false;
+  bool variable_coefficient = true;
+  bool embedded_boundary = true;
 
   constexpr bool operator==(const CompositeFacCapabilities&) const = default;
 };
@@ -721,6 +721,57 @@ class CompositeFacPoisson {
     nullspace_candidates_ = std::move(candidates);
   }
 
+  void install_coefficient(int level, const field_type& conductivity) {
+    Level& target = *levels_.at(static_cast<std::size_t>(level));
+    ::pops::elliptic::mg::WeightedPoissonFields<Dim, MemorySpace> probe;
+    probe.coefficient = &conductivity;
+    ::pops::elliptic::mg::validate_weighted_poisson_fields(target.phi, probe,
+                                                           "partitioned FAC coefficient");
+    if (!target.coefficient)
+      target.coefficient.emplace(target.phi.layout(), target.phi.distribution(),
+                                 target.phi.local_rank(), 1, fac_detail::unit_ghosts<Dim>());
+    ::pops::elliptic::mg::copy_scalar_valid(conductivity, *target.coefficient);
+    fill_coefficient_ghosts_(static_cast<std::size_t>(level));
+    if (level == 0 && coarse_solver_)
+      coarse_solver_->install_coefficient(*target.coefficient);
+  }
+
+  void install_embedded_boundary(int level, const field_type& active,
+                                 const field_type& inverse_volume,
+                                 const field_type& aperture_lower,
+                                 const field_type& aperture_upper) {
+    Level& target = *levels_.at(static_cast<std::size_t>(level));
+    ::pops::elliptic::mg::WeightedPoissonFields<Dim, MemorySpace> probe;
+    probe.inverse_volume = &inverse_volume;
+    probe.aperture_lower = &aperture_lower;
+    probe.aperture_upper = &aperture_upper;
+    probe.active = &active;
+    ::pops::elliptic::mg::validate_weighted_poisson_fields(
+        target.phi, probe, "partitioned FAC embedded boundary");
+    if (nullspace_workspace_)
+      throw std::logic_error(
+          "partitioned FAC embedded-boundary install requires the metric before nullspace "
+          "authority");
+    if (target.inverse_volume)
+      throw std::logic_error("partitioned FAC embedded-boundary authority is already installed");
+    ::pops::elliptic::mg::copy_scalar_valid(active, target.active);
+    target.inverse_volume.emplace(inverse_volume.layout(), inverse_volume.distribution(),
+                                  inverse_volume.local_rank(), 1, Extent<Dim>{});
+    ::pops::elliptic::mg::copy_scalar_valid(inverse_volume, *target.inverse_volume);
+    target.aperture_lower.emplace(aperture_lower.layout(), aperture_lower.distribution(),
+                                  aperture_lower.local_rank(), Dim, Extent<Dim>{});
+    target.aperture_upper.emplace(aperture_upper.layout(), aperture_upper.distribution(),
+                                  aperture_upper.local_rank(), Dim, Extent<Dim>{});
+    copy_vector_valid_(aperture_lower, *target.aperture_lower);
+    copy_vector_valid_(aperture_upper, *target.aperture_upper);
+    if (level == 0 && coarse_solver_) {
+      if (coarse_solver_->num_levels() > 1)
+        rebuild_coarse_solver_single_level_();
+      coarse_solver_->install_embedded_boundary(target.active, *target.inverse_volume,
+                                                *target.aperture_lower, *target.aperture_upper);
+    }
+  }
+
   SolveReport solve() {
     if (newton_workspace_ || boundary_kernel_)
       return solve_dynamic_();
@@ -831,9 +882,14 @@ class CompositeFacPoisson {
     field_type direction_operator_view;
     field_type covered;
     field_type active;
+    std::optional<field_type> coefficient{};
+    std::optional<field_type> inverse_volume{};
+    std::optional<field_type> aperture_lower{};
+    std::optional<field_type> aperture_upper{};
     HaloSchedule<Dim> halo_schedule;
     PreparedPhysicalBoundary<Dim> physical_boundary;
     PreparedPhysicalBoundary<Dim> homogeneous_physical_boundary;
+    PreparedPhysicalBoundary<Dim> coefficient_boundary;
     std::optional<HaloExchange<Dim, MemorySpace>> halo_exchange{};
 
     Level(const EllipticBuildRequest<Dim>& request, bool full_domain,
@@ -863,7 +919,11 @@ class CompositeFacPoisson {
           homogeneous_physical_boundary(
               prepare_physical_boundary(geometry.domain(), fac_detail::unit_ghosts<Dim>(),
                                         fac_detail::homogeneous_boundary(boundary, geometry),
-                                        fac_detail::exact_boundary_budget<Dim>())) {
+                                        fac_detail::exact_boundary_budget<Dim>())),
+          coefficient_boundary(prepare_physical_boundary(
+              geometry.domain(), fac_detail::unit_ghosts<Dim>(),
+              ::pops::elliptic::mg::detail::coefficient_boundary_for_geometry(boundary, geometry),
+              fac_detail::exact_boundary_budget<Dim>())) {
       phi.set_val(Real(0));
       rhs.set_val(Real(0));
       residual.set_val(Real(0));
@@ -1138,10 +1198,19 @@ class CompositeFacPoisson {
             const Box<Dim> destination = interface.intersect(patch.flux_increment.box());
             if (destination.empty())
               continue;
-            for_each_cell(destination, ::pops::elliptic::mg::fac_detail::FluxMismatchTransfer<Dim>{
-                                           parent_view, fine_view, increment, covered, destination,
-                                           ratio, axis, child_side, inverse_spacing_squared,
-                                           fine_face_weight, Real(1), geometry_shift});
+            ::pops::elliptic::mg::fac_detail::FluxMismatchTransfer<Dim> transfer{
+                parent_view, fine_view, increment, covered, destination, ratio, axis, child_side,
+                inverse_spacing_squared, fine_face_weight, Real(1), geometry_shift};
+            if (child->coefficient)
+              transfer.fine_coefficient =
+                  std::as_const(*child->coefficient).fab_global(patch.fine_patch).view();
+            if (child->aperture_lower)
+              transfer.fine_aperture_lower =
+                  std::as_const(*child->aperture_lower).fab_global(patch.fine_patch).view();
+            if (child->aperture_upper)
+              transfer.fine_aperture_upper =
+                  std::as_const(*child->aperture_upper).fab_global(patch.fine_patch).view();
+            for_each_cell(destination, transfer);
           }
         }
       }
@@ -1302,6 +1371,58 @@ class CompositeFacPoisson {
       fill_ghosts_(level, levels_[level]->phi, false);
   }
 
+  ::pops::elliptic::mg::WeightedPoissonFields<Dim, MemorySpace> weighted_fields_(
+      Level& level) const {
+    ::pops::elliptic::mg::WeightedPoissonFields<Dim, MemorySpace> fields;
+    if (level.coefficient)
+      fields.coefficient = &*level.coefficient;
+    if (level.inverse_volume)
+      fields.inverse_volume = &*level.inverse_volume;
+    if (level.aperture_lower)
+      fields.aperture_lower = &*level.aperture_lower;
+    if (level.aperture_upper)
+      fields.aperture_upper = &*level.aperture_upper;
+    if (level.inverse_volume)
+      fields.active = &level.active;
+    fields.covered = &level.covered;
+    return fields;
+  }
+
+  bool uses_weighted_operator_(const Level& level) const noexcept {
+    return level.coefficient.has_value() || level.inverse_volume.has_value();
+  }
+
+  void fill_coefficient_ghosts_(std::size_t level_index) {
+    Level& level = *levels_.at(level_index);
+    if (!level.coefficient)
+      return;
+    if (level.halo_exchange)
+      level.halo_exchange->execute(*level.coefficient, *lane_);
+    else
+      fill_boundary(*level.coefficient, level.halo_schedule);
+    for (std::size_t local = 0; local < level.coefficient->local_size(); ++local)
+      for_each_cell(level.coefficient->fab(local).grown_box(),
+                    ::pops::elliptic::mg::fac_detail::ExtrudeScalarValidToGhosts<Dim>{
+                        level.coefficient->fab(local).view(), level.coefficient->box(local)});
+    Kokkos::fence();
+    fill_physical_boundary(*level.coefficient, level.coefficient_boundary);
+  }
+
+  static void copy_vector_valid_(const field_type& source, field_type& destination) {
+    if (source.layout() != destination.layout() || source.ncomp() != destination.ncomp())
+      throw std::invalid_argument("partitioned FAC vector copy requires one exact layout");
+    for (std::size_t local = 0; local < source.local_size(); ++local) {
+      const auto in = source.fab(local).view();
+      const auto out = destination.fab(local).view();
+      const int components = source.ncomp();
+      for_each_cell(source.box(local), [=] POPS_HD(const Index<Dim>& cell) {
+        for (int component = 0; component < components; ++component)
+          out(cell, component) = in(cell, component);
+      });
+    }
+    Kokkos::fence();
+  }
+
   void smooth_(std::size_t level_index, field_type& iterate, const field_type& rhs, int sweeps,
                bool mask_covered, bool homogeneous) {
     if (sweeps <= 0)
@@ -1316,6 +1437,7 @@ class CompositeFacPoisson {
     }
     for (int sweep = 0; sweep < sweeps; ++sweep) {
       fill_ghosts_(level_index, iterate, homogeneous);
+      fill_coefficient_ghosts_(level_index);
       const field_type* effective_rhs = &rhs;
       if (level_index + 1 < levels_.size() && &iterate == &level.phi && &rhs == &level.rhs) {
         ::pops::elliptic::mg::copy_scalar_valid(level.rhs, level.residual);
@@ -1324,21 +1446,27 @@ class CompositeFacPoisson {
                                                        level.residual, level.scratch);
         effective_rhs = &level.residual;
       }
-      for (std::size_t local = 0; local < iterate.local_size(); ++local) {
-        fac_detail::JacobiKernel<Dim> kernel{level.scratch.fab(local).view(),
-                                             std::as_const(iterate).fab(local).view(),
-                                             effective_rhs->fab(local).view(),
-                                             std::as_const(level.covered).fab(local).view(),
-                                             {},
-                                             Real(1) / diagonal,
-                                             reaction_,
-                                             Real(2) / Real(3),
-                                             mask_covered};
-        for (int axis = 0; axis < Dim; ++axis)
-          kernel.inverse_spacing_squared[axis] = inverse_spacing_squared[axis];
-        for_each_cell(iterate.box(local), kernel);
+      if (uses_weighted_operator_(level) && &iterate == &level.phi) {
+        ::pops::elliptic::mg::damped_jacobi_weighted_update_valid(
+            iterate, *effective_rhs, level.geometry, level.scratch, Real(2) / Real(3), reaction_,
+            weighted_fields_(level));
+      } else {
+        for (std::size_t local = 0; local < iterate.local_size(); ++local) {
+          fac_detail::JacobiKernel<Dim> kernel{level.scratch.fab(local).view(),
+                                               std::as_const(iterate).fab(local).view(),
+                                               effective_rhs->fab(local).view(),
+                                               std::as_const(level.covered).fab(local).view(),
+                                               {},
+                                               Real(1) / diagonal,
+                                               reaction_,
+                                               Real(2) / Real(3),
+                                               mask_covered};
+          for (int axis = 0; axis < Dim; ++axis)
+            kernel.inverse_spacing_squared[axis] = inverse_spacing_squared[axis];
+          for_each_cell(iterate.box(local), kernel);
+        }
+        Kokkos::fence();
       }
-      Kokkos::fence();
       ::pops::elliptic::mg::copy_scalar_valid(level.scratch, iterate);
     }
   }
@@ -1346,6 +1474,13 @@ class CompositeFacPoisson {
   void compute_level_residual_(std::size_t level_index) {
     Level& level = *levels_[level_index];
     fill_ghosts_(level_index, level.phi, false);
+    fill_coefficient_ghosts_(level_index);
+    if (uses_weighted_operator_(level)) {
+      ::pops::elliptic::mg::weighted_poisson_residual_valid(
+          level.phi, level.rhs, level.geometry, level.residual, reaction_,
+          weighted_fields_(level));
+      return;
+    }
     ::pops::elliptic::mg::poisson_residual_valid(level.phi, level.rhs, level.geometry,
                                                  level.residual, reaction_);
     for (std::size_t local = 0; local < level.residual.local_size(); ++local)
@@ -1388,12 +1523,15 @@ class CompositeFacPoisson {
     coarse_solver_->install_nullspace(FieldNullspacePlan<Dim>{}, prepared);
   }
 
-  void build_coarse_solver_(const EllipticBuildRequest<Dim>& coarse_request) {
+  void build_coarse_solver_(const EllipticBuildRequest<Dim>& coarse_request,
+                            bool allow_coarsening = true) {
+    coarse_request_ = coarse_request;
     ::pops::elliptic::mg::GeometricMultigridOptions controls;
     controls.relative_tolerance = options_.coarse_rel_tol;
     controls.absolute_tolerance = options_.coarse_abs_tol;
     controls.maximum_cycles = options_.coarse_cycles;
     controls.reaction = reaction_;
+    controls.allow_coarsening = allow_coarsening;
     if (coarse_request.boxes.size() > 2)
       return;
     EllipticBuildRequest<Dim> correction_request = coarse_request;
@@ -1402,6 +1540,14 @@ class CompositeFacPoisson {
     coarse_solver_ = std::make_unique<::pops::elliptic::mg::GeometricMG<Dim, MemorySpace>>(
         std::move(correction_request), *lane_, controls);
     install_coarse_nullspace_(coarse_request.distribution);
+  }
+
+  void rebuild_coarse_solver_single_level_() {
+    if (!coarse_request_)
+      throw std::logic_error("partitioned FAC coarse request is not prepared");
+    build_coarse_solver_(*coarse_request_, false);
+    if (levels_.front()->coefficient)
+      coarse_solver_->install_coefficient(*levels_.front()->coefficient);
   }
 
   void ensure_nullspace_() {
@@ -1632,8 +1778,15 @@ class CompositeFacPoisson {
     for (std::size_t level_index = 0; level_index < levels_.size(); ++level_index) {
       Level& level = *levels_[level_index];
       fill_dynamic_residual_ghosts_(level_index, iteration);
-      ::pops::elliptic::mg::poisson_residual_valid(level.residual_operator_view, level.rhs,
-                                                   level.geometry, level.residual, reaction_);
+      fill_coefficient_ghosts_(level_index);
+      if (uses_weighted_operator_(level)) {
+        ::pops::elliptic::mg::weighted_poisson_residual_valid(
+            level.residual_operator_view, level.rhs, level.geometry, level.residual, reaction_,
+            weighted_fields_(level));
+      } else {
+        ::pops::elliptic::mg::poisson_residual_valid(level.residual_operator_view, level.rhs,
+                                                     level.geometry, level.residual, reaction_);
+      }
       if (boundary_kernel_) {
         auto context = boundary_context_at_(level_index, iteration);
         context.failure->reset();
@@ -1663,8 +1816,15 @@ class CompositeFacPoisson {
     for (std::size_t level_index = 0; level_index < levels_.size(); ++level_index) {
       Level& level = *levels_[level_index];
       fill_dynamic_jvp_ghosts_(level_index, iteration);
-      ::pops::elliptic::mg::apply_poisson_operator_valid(level.direction_operator_view,
-                                                         level.geometry, level.scratch, reaction_);
+      fill_coefficient_ghosts_(level_index);
+      if (uses_weighted_operator_(level)) {
+        ::pops::elliptic::mg::apply_weighted_poisson_operator_valid(
+            level.direction_operator_view, level.geometry, level.scratch, reaction_,
+            weighted_fields_(level));
+      } else {
+        ::pops::elliptic::mg::apply_poisson_operator_valid(
+            level.direction_operator_view, level.geometry, level.scratch, reaction_);
+      }
       if (boundary_kernel_) {
         auto context = boundary_context_at_(level_index, iteration);
         context.failure->reset();
@@ -1761,6 +1921,7 @@ class CompositeFacPoisson {
   CompositeFacOptions options_{};
   Real reaction_ = Real(0);
   std::optional<ExecutionLane> lane_{};
+  std::optional<EllipticBuildRequest<Dim>> coarse_request_{};
   std::unique_ptr<::pops::elliptic::mg::GeometricMG<Dim, MemorySpace>> coarse_solver_{};
   std::vector<std::unique_ptr<Level>> levels_{};
   std::vector<std::unique_ptr<Connection>> connections_{};

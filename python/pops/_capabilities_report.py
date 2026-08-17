@@ -1098,9 +1098,11 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             status="partial",
             limitation=(
                 "one compile-time CompositeFacPoisson<Dim> product for Cartesian Dim in {1,2,3}; "
-                "partitioned and mg-path distributed scalar FAC, n-level residual tower, and "
-                "singular mean-zero nullspace; variable coefficient, embedded boundary, tensor "
-                "singular nullspace, and periodic_sparse_levels remain refused; no FAC3D fork"
+                "partitioned and mg-path distributed scalar FAC, n-level residual tower, singular "
+                "mean-zero nullspace, cell-centered variable coefficient with harmonic faces, and "
+                "cut-cell FAC/MG residual when inverse-volume plus both apertures are installed; "
+                "tensor FAC applies the same mean-zero all-reduce gauge; periodic_sparse_levels "
+                "remain refused; no FAC3D fork"
             ),
             source=source,
         ),

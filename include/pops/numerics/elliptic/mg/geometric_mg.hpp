@@ -49,6 +49,7 @@ struct GeometricMultigridOptions {
   int coarse_cell_threshold = kMGDefaultCoarseThreshold;
   Real jacobi_relaxation = Real(2) / Real(3);
   Real reaction = Real(0);
+  bool allow_coarsening = true;
 
   bool operator==(const GeometricMultigridOptions&) const = default;
 };
@@ -56,9 +57,9 @@ struct GeometricMultigridOptions {
 struct GeometricMultigridCapabilities {
   bool scalar_constant_coefficient = true;
   bool scalar_reaction = true;
-  bool variable_diagonal = false;
+  bool variable_diagonal = true;
   bool cross_tensor = false;
-  bool embedded_boundary = false;
+  bool embedded_boundary = true;
 
   constexpr bool operator==(const GeometricMultigridCapabilities&) const = default;
 };
@@ -176,6 +177,24 @@ PhysicalBoundaryConditions<Dim> boundary_for_geometry(const PhysicalBoundaryCond
       PhysicalBoundaryFace law = source.at(face);
       if (homogeneous_values)
         law.value = Real(0);
+      faces[static_cast<std::size_t>(face.ordinal())] = law;
+    }
+  }
+  return PhysicalBoundaryConditions<Dim>{source.topology(), faces, spacing};
+}
+
+template <int Dim>
+PhysicalBoundaryConditions<Dim> coefficient_boundary_for_geometry(
+    const PhysicalBoundaryConditions<Dim>& source, const Geometry<Dim>& geometry) {
+  std::array<PhysicalBoundaryFace, static_cast<std::size_t>(2 * Dim)> faces{};
+  RealVector<Dim> spacing{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    spacing[axis] = geometry.spacing(axis);
+    for (const BoundarySide side : {BoundarySide::lower, BoundarySide::upper}) {
+      const Face<Dim> face{axis, side};
+      PhysicalBoundaryFace law = source.at(face);
+      if (!source.topology().is_periodic(face))
+        law = PhysicalBoundaryFace{PhysicalBoundaryKind::constant_extrapolation};
       faces[static_cast<std::size_t>(face.ordinal())] = law;
     }
   }
@@ -388,6 +407,59 @@ class GeometricMG {
     prepare_dynamic_view_();
   }
 
+  void install_coefficient(const field_type& conductivity) {
+    if (levels_.empty())
+      throw std::logic_error("geometric MG coefficient install requires a prepared hierarchy");
+    WeightedPoissonFields<Dim, MemorySpace> probe;
+    probe.coefficient = &conductivity;
+    validate_weighted_poisson_fields(levels_.front()->phi, probe, "geometric MG coefficient");
+    Level& fine = *levels_.front();
+    if (!fine.coefficient)
+      fine.coefficient.emplace(fine.phi.layout(), fine.phi.distribution(), fine.phi.local_rank(), 1,
+                               detail::unit_ghosts<Dim>());
+    copy_scalar_valid(conductivity, *fine.coefficient);
+    for (std::size_t level = 1; level < levels_.size(); ++level) {
+      Level& coarse = *levels_[level];
+      if (!coarse.coefficient)
+        coarse.coefficient.emplace(coarse.phi.layout(), coarse.phi.distribution(),
+                                   coarse.phi.local_rank(), 1, detail::unit_ghosts<Dim>());
+      const CopyScheduleBudget budget =
+          detail::exact_copy_budget(coarse.coefficient->layout(),
+                                    coarsen(levels_[level - 1]->coefficient->layout(), 2));
+      average_down(*levels_[level - 1]->coefficient, *coarse.coefficient, 2, budget);
+    }
+    for (auto& level : levels_)
+      fill_coefficient_ghosts_(*level);
+  }
+
+  void install_embedded_boundary(const field_type& active, const field_type& inverse_volume,
+                                 const field_type& aperture_lower,
+                                 const field_type& aperture_upper) {
+    if (levels_.size() != 1)
+      throw std::invalid_argument(
+          "geometric MG embedded boundary refuses metric restriction through V-cycle coarsening; "
+          "install on a single-level hierarchy or a FAC level with its own metric");
+    Level& fine = *levels_.front();
+    WeightedPoissonFields<Dim, MemorySpace> probe;
+    probe.inverse_volume = &inverse_volume;
+    probe.aperture_lower = &aperture_lower;
+    probe.aperture_upper = &aperture_upper;
+    probe.active = &active;
+    validate_weighted_poisson_fields(fine.phi, probe, "geometric MG embedded boundary");
+    if (fine.inverse_volume)
+      throw std::logic_error("geometric MG embedded-boundary authority is already installed");
+    copy_scalar_valid(active, fine.active);
+    fine.inverse_volume.emplace(inverse_volume.layout(), inverse_volume.distribution(),
+                                inverse_volume.local_rank(), 1, Extent<Dim>{});
+    copy_scalar_valid(inverse_volume, *fine.inverse_volume);
+    fine.aperture_lower.emplace(aperture_lower.layout(), aperture_lower.distribution(),
+                                aperture_lower.local_rank(), Dim, Extent<Dim>{});
+    fine.aperture_upper.emplace(aperture_upper.layout(), aperture_upper.distribution(),
+                                aperture_upper.local_rank(), Dim, Extent<Dim>{});
+    copy_vector_valid_(aperture_lower, *fine.aperture_lower);
+    copy_vector_valid_(aperture_upper, *fine.aperture_upper);
+  }
+
   void install_boundary_kernel(CompiledFieldBoundaryKernel<Dim> kernel) {
     if (boundary_kernel_)
       throw std::logic_error("geometric MG boundary kernel is already installed");
@@ -453,7 +525,8 @@ class GeometricMG {
     report.residual_norm = reference;
     report.rel_residual = reference > Real(0) ? Real(1) : Real(0);
     const Real stop =
-        std::max(options_.absolute_tolerance, options_.relative_tolerance * reference);
+        std::max(options_.absolute_tolerance,
+                 options_.relative_tolerance * std::max(reference, Real(1)));
     if (reference <= stop) {
       fill_ghosts_(fine);
       report.mark_solved("geometric_mg_initial_residual");
@@ -499,9 +572,14 @@ class GeometricMG {
     field_type scratch;
     field_type correction;
     field_type active;
+    std::optional<field_type> coefficient{};
+    std::optional<field_type> inverse_volume{};
+    std::optional<field_type> aperture_lower{};
+    std::optional<field_type> aperture_upper{};
     HaloSchedule<Dim> halo_schedule;
     PreparedPhysicalBoundary<Dim> physical_boundary;
     PreparedPhysicalBoundary<Dim> homogeneous_physical_boundary;
+    PreparedPhysicalBoundary<Dim> coefficient_boundary;
     std::unique_ptr<HaloExchange<Dim, MemorySpace>> exchange;
 
     Level(Geometry<Dim> level_geometry, mesh::BoxArray<Dim> layout,
@@ -525,7 +603,11 @@ class GeometricMG {
           homogeneous_physical_boundary(
               prepare_physical_boundary(geometry.domain(), detail::unit_ghosts<Dim>(),
                                         detail::boundary_for_geometry(boundary, geometry, true),
-                                        detail::exact_boundary_budget<Dim>())) {
+                                        detail::exact_boundary_budget<Dim>())),
+          coefficient_boundary(prepare_physical_boundary(
+              geometry.domain(), detail::unit_ghosts<Dim>(),
+              detail::coefficient_boundary_for_geometry(boundary, geometry),
+              detail::exact_boundary_budget<Dim>())) {
       active.set_val(Real(1));
       const bool remote = all_reduce_max(halo_schedule.has_remote_jobs() ? 1L : 0L, lane) != 0;
       if (remote) {
@@ -539,6 +621,8 @@ class GeometricMG {
 
   static bool coarsenable_(const Geometry<Dim>& geometry, const mesh::BoxArray<Dim>& layout,
                            const GeometricMultigridOptions& options) {
+    if (!options.allow_coarsening)
+      return false;
     const std::int64_t cells = geometry.domain().numPts();
     if (options.coarse_cell_threshold > 0 &&
         cells <= static_cast<std::int64_t>(options.coarse_cell_threshold))
@@ -637,7 +721,7 @@ class GeometricMG {
   void evaluate_dynamic_residual_(const field_type& iterate, field_type& output, int iteration) {
     Level& fine = *levels_.front();
     fill_residual_boundary_view_(iterate, iteration);
-    apply_poisson_operator_valid(*boundary_view_, fine.geometry, fine.scratch, options_.reaction);
+    apply_level_operator_(fine, *boundary_view_, fine.scratch);
     lincomb(output, Real(1), fine.rhs, Real(-1), fine.scratch);
     if (boundary_kernel_) {
       FieldBoundaryExecutionContext<Dim> context = boundary_context_at_(iteration);
@@ -654,7 +738,7 @@ class GeometricMG {
                                  field_type& output, int iteration) {
     Level& fine = *levels_.front();
     fill_jvp_boundary_view_(iterate, direction, iteration);
-    apply_poisson_operator_valid(*boundary_view_, fine.geometry, output, options_.reaction);
+    apply_level_operator_(fine, *boundary_view_, output);
     if (boundary_kernel_) {
       FieldBoundaryExecutionContext<Dim> context = boundary_context_at_(iteration);
       context.failure->reset();
@@ -756,18 +840,83 @@ class GeometricMG {
                            detail::unit_ghosts<Dim>());
   }
 
+  WeightedPoissonFields<Dim, MemorySpace> weighted_fields_(Level& level) const {
+    WeightedPoissonFields<Dim, MemorySpace> fields;
+    if (level.coefficient)
+      fields.coefficient = &*level.coefficient;
+    if (level.inverse_volume)
+      fields.inverse_volume = &*level.inverse_volume;
+    if (level.aperture_lower)
+      fields.aperture_lower = &*level.aperture_lower;
+    if (level.aperture_upper)
+      fields.aperture_upper = &*level.aperture_upper;
+    if (level.inverse_volume)
+      fields.active = &level.active;
+    return fields;
+  }
+
+  bool uses_weighted_operator_(const Level& level) const noexcept {
+    return level.coefficient.has_value() || level.inverse_volume.has_value();
+  }
+
+  void apply_level_operator_(Level& level, const field_type& input, field_type& output) {
+    if (!uses_weighted_operator_(level)) {
+      apply_poisson_operator_valid(input, level.geometry, output, options_.reaction);
+      return;
+    }
+    apply_weighted_poisson_operator_valid(input, level.geometry, output, options_.reaction,
+                                          weighted_fields_(level));
+  }
+
+  void fill_coefficient_ghosts_(Level& level) {
+    if (!level.coefficient)
+      return;
+    if (level.exchange)
+      level.exchange->execute(*level.coefficient, *lane_);
+    else
+      fill_boundary(*level.coefficient, level.halo_schedule);
+    fill_physical_boundary(*level.coefficient, level.coefficient_boundary);
+  }
+
+  static void copy_vector_valid_(const field_type& source, field_type& destination) {
+    if (source.layout() != destination.layout() || source.ncomp() != destination.ncomp())
+      throw std::invalid_argument("geometric MG vector copy requires one exact layout");
+    for (std::size_t local = 0; local < source.local_size(); ++local) {
+      const auto in = source.fab(local).view();
+      const auto out = destination.fab(local).view();
+      const int components = source.ncomp();
+      for_each_cell(source.box(local), [=] POPS_HD(const Index<Dim>& cell) {
+        for (int component = 0; component < components; ++component)
+          out(cell, component) = in(cell, component);
+      });
+    }
+    Kokkos::fence();
+  }
+
   void smooth_(Level& level, int sweeps) {
     for (int sweep = 0; sweep < sweeps; ++sweep) {
       fill_ghosts_(level);
-      damped_jacobi_update_valid(level.phi, level.rhs, level.geometry, level.scratch,
-                                 options_.jacobi_relaxation, options_.reaction);
+      fill_coefficient_ghosts_(level);
+      if (uses_weighted_operator_(level))
+        damped_jacobi_weighted_update_valid(level.phi, level.rhs, level.geometry, level.scratch,
+                                            options_.jacobi_relaxation, options_.reaction,
+                                            weighted_fields_(level));
+      else
+        damped_jacobi_update_valid(level.phi, level.rhs, level.geometry, level.scratch,
+                                   options_.jacobi_relaxation, options_.reaction);
       copy_scalar_valid(level.scratch, level.phi);
     }
   }
 
   void compute_residual_(Level& level) {
     fill_ghosts_(level);
-    poisson_residual_valid(level.phi, level.rhs, level.geometry, level.residual, options_.reaction);
+    fill_coefficient_ghosts_(level);
+    if (uses_weighted_operator_(level))
+      weighted_poisson_residual_valid(level.phi, level.rhs, level.geometry, level.residual,
+                                      options_.reaction, weighted_fields_(level));
+    else
+      poisson_residual_valid(level.phi, level.rhs, level.geometry, level.residual,
+                             options_.reaction);
   }
 
   void v_cycle_(std::size_t level_index) {

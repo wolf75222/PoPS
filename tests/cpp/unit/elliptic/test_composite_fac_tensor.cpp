@@ -215,3 +215,136 @@ TEST(test_composite_fac_tensor, tensor_boundary_point_refresh_is_collective_and_
   EXPECT_NO_THROW(session->refresh_point(retry));
   EXPECT_EQ(session->point(), retry);
 }
+
+pops::PhysicalBoundaryConditions<2> all_periodic(const pops::Geometry<2>& geometry) {
+  std::array<bool, 2> periodic{};
+  periodic.fill(true);
+  pops::RealVector<2> spacing{};
+  spacing[0] = geometry.spacing(0);
+  spacing[1] = geometry.spacing(1);
+  return {pops::BoundaryTopology<2>::axis_periodic(periodic), {}, spacing};
+}
+
+pops::runtime::program::HierarchyTensorSolverBuildRequest<2> periodic_request(int coarse_cells) {
+  using namespace pops;
+  using namespace pops::runtime::program;
+  const Box<2> coarse_domain{Index<2>{0, 0}, Index<2>{coarse_cells - 1, coarse_cells - 1}};
+  const Geometry<2> coarse_geometry =
+      Geometry<2>::from_bounds(coarse_domain, RealVector<2>{0, 0}, RealVector<2>{1, 1});
+  const mesh::BoxArray<2> coarse_layout(std::vector<Box<2>>{coarse_domain});
+  const mesh::RankSpace<2> rank_space{Index<2>{0, 0}, Extent<2>{1, 1}};
+  const auto coarse_distribution = mesh::Distribution<2>::replicated(coarse_layout, rank_space);
+  const Geometry<2> fine_geometry = coarse_geometry.refine(Extent<2>{2, 2});
+  const int fine_cells = 2 * coarse_cells;
+  const Box<2> patch{Index<2>{fine_cells / 4, fine_cells / 4},
+                     Index<2>{3 * fine_cells / 4 - 1, 3 * fine_cells / 4 - 1}};
+  const mesh::BoxArray<2> fine_layout(std::vector<Box<2>>{patch});
+  const auto fine_distribution = mesh::Distribution<2>::partitioned(
+      fine_layout, rank_space, std::vector<Index<2>>{Index<2>{0, 0}});
+  HierarchyTensorSolverBuildRequest<2> result;
+  result.block = 4;
+  result.components = 1;
+  result.levels = {{coarse_geometry, all_periodic(coarse_geometry), coarse_layout,
+                    coarse_distribution, Index<2>{0, 0}}};
+  result.levels.push_back({fine_geometry, all_periodic(fine_geometry), fine_layout,
+                           fine_distribution, Index<2>{0, 0}});
+  result.ratios = {amr::RefinementRatio<2>{std::array<int, 2>{2, 2}}};
+  result.plan_identity = "tests.full-tensor-composite-periodic-nullspace";
+  result.operator_contract_identity =
+      std::string(tensor_elliptic_detail::kScalarTensorEllipticContract);
+  result.assembly_field_slots = tensor_elliptic_detail::assembly_slots<2>();
+  result.solution_field_slot = "pops.tensor-elliptic.solution";
+  result.options = tensor_elliptic_detail::default_options();
+  result.options.values.emplace("fac.fine_sweeps", std::int64_t{32});
+  result.options.values.emplace("fac.coarse_cycles", std::int64_t{80});
+  result.options.values.emplace("fac.coarse_rel_tol", 1.0e-10);
+  return result;
+}
+
+void fill_periodic_mode(pops::MultiFab<2>& rhs, const pops::Geometry<2>& geometry) {
+  constexpr pops::Real kTwoPi = pops::Real{6.283185307179586476925286766559005768L};
+  constexpr pops::Real kPi = pops::Real{3.141592653589793238462643383279502884L};
+  pops::Real eigenvalue = pops::Real(0);
+  for (int axis = 0; axis < 2; ++axis) {
+    const pops::Real angle = kPi / static_cast<pops::Real>(geometry.domain().length(axis));
+    const pops::Real inverse = pops::Real(1) / geometry.spacing(axis);
+    eigenvalue += pops::Real(4) * std::sin(angle) * std::sin(angle) * inverse * inverse;
+  }
+  auto& fab = rhs.fab(0);
+  auto host = fab.create_host_mirror();
+  const auto box = fab.box();
+  for (int j = box.lo[1]; j <= box.hi[1]; ++j)
+    for (int i = box.lo[0]; i <= box.hi[0]; ++i) {
+      const pops::Real x = geometry.cell_coordinate(0, i);
+      const pops::Real y = geometry.cell_coordinate(1, j);
+      host(ordinal(fab.grown_box(), pops::Index<2>{i, j})) =
+          eigenvalue * std::sin(kTwoPi * x) * std::sin(kTwoPi * y);
+    }
+  fab.copy_from_host(host);
+}
+
+double solution_mean(const pops::MultiFab<2>& field, const pops::Geometry<2>& geometry) {
+  double sum = 0;
+  double measure = 0;
+  const auto& fab = field.fab(0);
+  auto host = fab.create_host_mirror();
+  fab.copy_to_host(host);
+  const auto box = fab.box();
+  const double cell = static_cast<double>(geometry.spacing(0) * geometry.spacing(1));
+  for (int j = box.lo[1]; j <= box.hi[1]; ++j)
+    for (int i = box.lo[0]; i <= box.hi[0]; ++i) {
+      sum += static_cast<double>(host(ordinal(fab.grown_box(), pops::Index<2>{i, j}))) * cell;
+      measure += cell;
+    }
+  return measure > 0 ? sum / measure : 0;
+}
+
+TEST(test_composite_fac_tensor, periodic_tensor_fac_applies_mean_zero_gauge) {
+  using namespace pops;
+  using namespace pops::runtime::program;
+  auto build = periodic_request(16);
+  std::vector<Geometry<2>> geometries;
+  for (const auto& level : build.levels)
+    geometries.push_back(level.geometry);
+  const ExecutionLane lane = ExecutionLane::world("tests.full-tensor-composite-periodic-nullspace");
+  const auto registry = make_default_hierarchy_tensor_solver_provider_registry<2>(lane);
+  {
+    auto incompatible = prepare_hierarchy_tensor_solver_collectively(
+        *registry, tensor_elliptic_detail::kCompositeTensorProvider, periodic_request(16), lane);
+    for (int level = 0; level < incompatible->level_count(); ++level) {
+      incompatible->assembly_target(tensor_elliptic_detail::coefficient_slot(0, 0), level)
+          .set_val(Real(1));
+      incompatible->assembly_target(tensor_elliptic_detail::coefficient_slot(1, 1), level)
+          .set_val(Real(1));
+      incompatible->assembly_target(tensor_elliptic_detail::coefficient_slot(0, 1), level)
+          .set_val(Real(0));
+      incompatible->assembly_target(tensor_elliptic_detail::coefficient_slot(1, 0), level)
+          .set_val(Real(0));
+      incompatible->assembly_target("pops.tensor-elliptic.rhs", level).set_val(Real(1));
+      incompatible->stage_initial_guess(level, nullptr);
+    }
+    auto outcome = solve_prepared_hierarchy_tensor_collectively(
+        *incompatible, {Real(1e-4), Real(1e-12), 40}, lane);
+    const SolveReport report = outcome.consume(SolveConsumption::kFailRun);
+    EXPECT_EQ(report.status, SolveStatus::kIncompatibleRhs) << report.reason;
+  }
+  auto solver = prepare_hierarchy_tensor_solver_collectively(
+      *registry, tensor_elliptic_detail::kCompositeTensorProvider, std::move(build), lane);
+  for (int level = 0; level < solver->level_count(); ++level) {
+    solver->assembly_target(tensor_elliptic_detail::coefficient_slot(0, 0), level).set_val(Real(1));
+    solver->assembly_target(tensor_elliptic_detail::coefficient_slot(1, 1), level).set_val(Real(1));
+    solver->assembly_target(tensor_elliptic_detail::coefficient_slot(0, 1), level).set_val(Real(0));
+    solver->assembly_target(tensor_elliptic_detail::coefficient_slot(1, 0), level).set_val(Real(0));
+    fill_periodic_mode(solver->assembly_target("pops.tensor-elliptic.rhs", level),
+                       geometries[static_cast<std::size_t>(level)]);
+    solver->stage_initial_guess(level, nullptr);
+  }
+  auto outcome =
+      solve_prepared_hierarchy_tensor_collectively(*solver, {Real(1e-4), Real(1e-12), 60}, lane);
+  const SolveReport report = outcome.consume(
+      outcome.report().solved_value_available() ? SolveConsumption::kAccept
+                                                : SolveConsumption::kFailRun);
+  EXPECT_TRUE(report.solved()) << report.reason << " residual=" << report.residual_norm;
+  EXPECT_NEAR(solution_mean(solver->solution(0), geometries[0]), 0.0, 1.0e-7);
+  EXPECT_NEAR(solution_mean(solver->solution(1), geometries[1]), 0.0, 1.0e-6);
+}

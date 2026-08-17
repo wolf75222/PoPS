@@ -273,9 +273,11 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
       capability_route(
           "elliptic:composite_fac", "partial",
           "one compile-time CompositeFacPoisson<Dim> product for Cartesian Dim in {1,2,3}; "
-          "partitioned and mg-path distributed scalar FAC, n-level residual tower, and singular "
-          "mean-zero nullspace; variable coefficient, embedded boundary, tensor singular "
-          "nullspace, and periodic_sparse_levels remain refused; no FAC3D fork",
+          "partitioned and mg-path distributed scalar FAC, n-level residual tower, singular "
+          "mean-zero nullspace, cell-centered variable coefficient with harmonic faces, and "
+          "cut-cell FAC/MG residual when inverse-volume plus both apertures are installed; "
+          "tensor FAC applies the same mean-zero all-reduce gauge; periodic_sparse_levels "
+          "remain refused; no FAC3D fork",
           "amr", "production", "host", mpi, gpu),
       capability_route("elliptic:fft", "available",
 #ifdef POPS_HAS_FFTW

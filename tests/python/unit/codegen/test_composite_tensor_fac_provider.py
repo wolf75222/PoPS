@@ -294,20 +294,19 @@ def test_krylov_descriptor_rejects_hierarchy_scope_before_codegen():
         program.solve(problem, solver=CG(max_iter=11, rel_tol=1.0e-6))
 
 
-def test_composite_provider_refuses_constant_nullspace_until_multilevel_gauge_is_wired():
+def test_composite_provider_emits_tensor_fac_when_constant_nullspace_is_wired():
     from test_hierarchy_scoped_solve_emit import _build
 
-    with pytest.raises(
-        NotImplementedError, match="does not support a singular nullspace"
-    ):
-        _build(
-            CompositeTensorFAC(),
-            nullspace=ConstantNullspace(),
-            gauge=MeanValueGauge(0),
-            properties=(
-                LinearOperatorProperties.symmetric_positive_definite_on_nullspace_complement()
-            ),
-        )
+    _program, source = _build(
+        CompositeTensorFAC(),
+        nullspace=ConstantNullspace(),
+        gauge=MeanValueGauge(0),
+        properties=(
+            LinearOperatorProperties.symmetric_positive_definite_on_nullspace_complement()
+        ),
+    )
+    assert "configure_hierarchy_tensor_solver" in source
+    assert "pops.hierarchy.composite-tensor-fac" in source
 
 
 def test_hierarchy_operator_is_provider_neutral_until_solver_selection():

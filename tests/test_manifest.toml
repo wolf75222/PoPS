@@ -545,6 +545,11 @@ sources = ["tests/cpp/unit/elliptic/test_geometric_mg_nd.cpp"]
 labels = ["unit", "elliptic", "amr", "fast", "nd"]
 
 [[cpp.suite]]
+name = "test_composite_fac_eb"
+sources = ["tests/cpp/unit/elliptic/test_composite_fac_eb.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
 name = "test_composite_fac_nlevel"
 sources = ["tests/cpp/unit/elliptic/test_composite_fac_nlevel.cpp"]
 labels = ["unit", "elliptic", "fast"]
@@ -557,6 +562,11 @@ labels = ["unit", "elliptic", "fast"]
 [[cpp.suite]]
 name = "test_composite_fac_tensor"
 sources = ["tests/cpp/unit/elliptic/test_composite_fac_tensor.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_composite_fac_variable_k"
+sources = ["tests/cpp/unit/elliptic/test_composite_fac_variable_k.cpp"]
 labels = ["unit", "elliptic", "fast"]
 
 [[cpp.suite]]

@@ -13,8 +13,11 @@
 #include <pops/mesh/layout/refinement.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/numerics/elliptic/amr/partitioned_region_transfer.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace_workspace.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp>
+#include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
 #include <pops/parallel/execution_lane.hpp>
 
 #include <Kokkos_Core.hpp>
@@ -216,6 +219,36 @@ struct ActiveAddKernel {
   POPS_HD void operator()(const Index<Dim>& index) const {
     if (active(index, 0) >= Real(0.5))
       destination(index, 0) += correction(index, 0);
+  }
+};
+
+template <int Dim>
+struct ActiveMomentKernel {
+  FieldView<const Real, Dim> values{};
+  FieldView<const Real, Dim> active{};
+  Real measure = Real(1);
+  POPS_HD Real operator()(const Index<Dim>& index) const {
+    return active(index, 0) >= Real(0.5) ? values(index, 0) * measure : Real(0);
+  }
+};
+
+template <int Dim>
+struct ActiveVolumeKernel {
+  FieldView<const Real, Dim> active{};
+  Real measure = Real(1);
+  POPS_HD Real operator()(const Index<Dim>& index) const {
+    return active(index, 0) >= Real(0.5) ? measure : Real(0);
+  }
+};
+
+template <int Dim>
+struct ActiveShiftKernel {
+  FieldView<Real, Dim> values{};
+  FieldView<const Real, Dim> active{};
+  Real shift = Real(0);
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    if (active(index, 0) >= Real(0.5))
+      values(index, 0) -= shift;
   }
 };
 
@@ -487,6 +520,21 @@ class FullTensorCompositeFac {
     for (std::size_t level = 0; level < levels_.size(); ++level)
       detail::copy_valid<Dim>(*levels_[level]->binding.solution,
                               *levels_[level]->binding.initial_guess);
+    try {
+      ensure_nullspace_();
+      if (nullspace_workspace_) {
+        nullspace_workspace_->require_compatible(nullspace_rhs_);
+        nullspace_workspace_->apply_gauge(nullspace_candidates_);
+      }
+    } catch (const FieldNullspaceIncompatibleRhs& error) {
+      SolveReport report;
+      report.mark_failed(SolveStatus::kIncompatibleRhs, SolveAction::kFailRun, error.what());
+      return report;
+    } catch (const FieldNullspaceInvalidEvaluation& error) {
+      SolveReport report;
+      report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun, error.what());
+      return report;
+    }
     fill_all_coefficient_ghosts_();
     if (!coefficients_are_elliptic_()) {
       SolveReport report;
@@ -532,6 +580,8 @@ class FullTensorCompositeFac {
         smooth_(level, *levels_[level]->binding.solution, *levels_[level]->binding.rhs, post, true,
                 false);
       average_solution_down_();
+      if (nullspace_workspace_)
+        nullspace_workspace_->apply_gauge(nullspace_candidates_);
 
       compute_composite_residual_();
       ++report.evaluations;
@@ -1213,6 +1263,8 @@ class FullTensorCompositeFac {
                                controls.coarse_relative_tolerance * reference);
     for (int sweep = 0; sweep < controls.coarse_cycles; ++sweep) {
       smooth_(0, coarse.correction, coarse.residual, 1, false, true);
+      if (nullspace_workspace_ && ((sweep + 1) % 8 == 0 || sweep + 1 == controls.coarse_cycles))
+        subtract_active_mean_(coarse, coarse.correction);
       if ((sweep + 1) % 8 == 0 || sweep + 1 == controls.coarse_cycles) {
         fill_solution_ghosts_(0, coarse.correction, true);
         for (std::size_t local = 0; local < coarse.correction.local_size(); ++local)
@@ -1258,6 +1310,84 @@ class FullTensorCompositeFac {
     return static_cast<Real>(all_reduce_max(static_cast<double>(norm_inf(field)), *lane_));
   }
 
+  bool singular_() const noexcept {
+    const PhysicalBoundaryConditions<Dim>& boundary = *levels_.front()->binding.boundary;
+    for (int axis = 0; axis < Dim; ++axis)
+      for (const BoundarySide side : {BoundarySide::lower, BoundarySide::upper}) {
+        const Face<Dim> face{axis, side};
+        if (boundary.topology().is_periodic(face))
+          continue;
+        const PhysicalBoundaryFace law = boundary.at(face);
+        if (law.kind == PhysicalBoundaryKind::dirichlet ||
+            (law.kind == PhysicalBoundaryKind::robin && law.alpha != Real(0)))
+          return false;
+      }
+    return true;
+  }
+
+  void subtract_active_mean_(const Level& level, field_type& field) const {
+    Real measure = Real(1);
+    for (int axis = 0; axis < Dim; ++axis)
+      measure *= level.binding.geometry->spacing(axis);
+    double local_sum = 0;
+    double local_volume = 0;
+    for (std::size_t local = 0; local < field.local_size(); ++local) {
+      const auto values = std::as_const(field).fab(local).view();
+      const auto active = std::as_const(level.active).fab(local).view();
+      local_sum += static_cast<double>(for_each_cell_reduce_sum(
+          field.box(local), detail::ActiveMomentKernel<Dim>{values, active, measure}));
+      local_volume += static_cast<double>(for_each_cell_reduce_sum(
+          field.box(local), detail::ActiveVolumeKernel<Dim>{active, measure}));
+    }
+    const double volume = all_reduce_sum(local_volume, *lane_);
+    if (!(volume > 0))
+      return;
+    const Real shift = static_cast<Real>(all_reduce_sum(local_sum, *lane_) / volume);
+    for (std::size_t local = 0; local < field.local_size(); ++local)
+      for_each_cell(field.box(local),
+                    detail::ActiveShiftKernel<Dim>{field.fab(local).view(),
+                                                   std::as_const(level.active).fab(local).view(),
+                                                   shift});
+    Kokkos::fence();
+  }
+
+  void ensure_nullspace_() {
+    if (nullspace_workspace_ || !singular_())
+      return;
+    FieldNullspacePlan<Dim> plan = constant_mean_zero_nullspace<Dim>(
+        "pops.runtime.amr.tensor-composite-fac.nullspace", "tensor-fac-composite", Real(1));
+    plan.bases[0].masks.clear();
+    plan.bases[0].cell_measure.clear();
+    std::vector<PreparedVectorDistribution<Dim>> distributions;
+    distributions.reserve(levels_.size());
+    for (const auto& level : levels_) {
+      auto mask = std::make_shared<MultiFab<Dim>>(level->active.layout(),
+                                                 level->active.distribution(),
+                                                 level->active.local_rank(), 1, Extent<Dim>{});
+      ::pops::elliptic::mg::copy_scalar_valid(level->active, *mask);
+      plan.bases[0].masks.emplace_back(std::move(mask));
+      Real measure = Real(1);
+      for (int axis = 0; axis < Dim; ++axis)
+        measure *= level->binding.geometry->spacing(axis);
+      plan.bases[0].cell_measure.push_back(measure);
+      distributions.push_back(level->binding.solution->distribution().replicated()
+                                  ? PreparedVectorDistribution<Dim>::replicated()
+                                  : PreparedVectorDistribution<Dim>::distributed());
+    }
+    std::vector<const MultiFab<Dim>*> rhs_layouts;
+    std::vector<MultiFab<Dim>*> candidates;
+    rhs_layouts.reserve(levels_.size());
+    candidates.reserve(levels_.size());
+    for (const auto& level : levels_) {
+      rhs_layouts.push_back(level->binding.rhs);
+      candidates.push_back(level->binding.solution);
+    }
+    nullspace_workspace_ = std::make_unique<FieldNullspaceWorkspace<Dim>>(
+        std::move(plan), rhs_layouts, std::move(distributions), *lane_);
+    nullspace_rhs_ = std::move(rhs_layouts);
+    nullspace_candidates_ = std::move(candidates);
+  }
+
   Real composite_residual_norm_() const {
     Real local = Real(0);
     for (const auto& level : levels_)
@@ -1274,6 +1404,9 @@ class FullTensorCompositeFac {
   std::vector<std::unique_ptr<Level>> levels_;
   std::vector<std::unique_ptr<Connection>> connections_;
   std::string exact_contract_{};
+  std::vector<const MultiFab<Dim>*> nullspace_rhs_{};
+  std::vector<MultiFab<Dim>*> nullspace_candidates_{};
+  std::unique_ptr<FieldNullspaceWorkspace<Dim>> nullspace_workspace_{};
 };
 
 }  // namespace pops::runtime::program::tensor_fac

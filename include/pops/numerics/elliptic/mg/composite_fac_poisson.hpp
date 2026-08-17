@@ -57,9 +57,9 @@ struct CompositeFacCapabilities {
   bool arbitrary_level_count = true;
   bool replicated_mpi = true;
   bool distributed_mpi = true;
-  bool variable_diagonal = false;
+  bool variable_diagonal = true;
   bool cross_tensor = false;
-  bool embedded_boundary = false;
+  bool embedded_boundary = true;
 
   constexpr bool operator==(const CompositeFacCapabilities&) const = default;
 };
@@ -307,6 +307,7 @@ class CompositeFacPoisson {
     if (singular_() != !plan.empty())
       throw std::invalid_argument(
           "composite FAC nullspace plan disagrees with the prepared operator kernel");
+    attach_composite_nullspace_support_(plan);
 
     std::vector<const MultiFab<Dim>*> rhs_layouts;
     std::vector<MultiFab<Dim>*> candidates;
@@ -324,6 +325,56 @@ class CompositeFacPoisson {
     nullspace_rhs_ = std::move(rhs_layouts);
     nullspace_candidates_ = std::move(candidates);
     nullspace_workspace_ = std::move(workspace);
+  }
+
+  void install_coefficient(int level, const field_type& conductivity) {
+    Level& target = *levels_.at(static_cast<std::size_t>(level));
+    WeightedPoissonFields<Dim, MemorySpace> probe;
+    probe.coefficient = &conductivity;
+    validate_weighted_poisson_fields(target.phi, probe, "composite FAC coefficient");
+    if (!target.coefficient)
+      target.coefficient.emplace(target.phi.layout(), target.phi.distribution(),
+                                 target.phi.local_rank(), 1, detail::unit_ghosts<Dim>());
+    copy_scalar_valid(conductivity, *target.coefficient);
+    fill_coefficient_ghosts_(static_cast<std::size_t>(level));
+    if (level == 0 && coarse_solver_)
+      coarse_solver_->install_coefficient(*target.coefficient);
+    rebuild_weighted_flux_mismatches_();
+  }
+
+  void install_embedded_boundary(int level, const field_type& active,
+                                 const field_type& inverse_volume,
+                                 const field_type& aperture_lower,
+                                 const field_type& aperture_upper) {
+    Level& target = *levels_.at(static_cast<std::size_t>(level));
+    WeightedPoissonFields<Dim, MemorySpace> probe;
+    probe.inverse_volume = &inverse_volume;
+    probe.aperture_lower = &aperture_lower;
+    probe.aperture_upper = &aperture_upper;
+    probe.active = &active;
+    validate_weighted_poisson_fields(target.phi, probe, "composite FAC embedded boundary");
+    if (nullspace_workspace_)
+      throw std::logic_error(
+          "composite FAC embedded-boundary install requires the metric before nullspace authority");
+    if (target.inverse_volume)
+      throw std::logic_error("composite FAC embedded-boundary authority is already installed");
+    copy_scalar_valid(active, target.active);
+    target.inverse_volume.emplace(inverse_volume.layout(), inverse_volume.distribution(),
+                                  inverse_volume.local_rank(), 1, Extent<Dim>{});
+    copy_scalar_valid(inverse_volume, *target.inverse_volume);
+    target.aperture_lower.emplace(aperture_lower.layout(), aperture_lower.distribution(),
+                                  aperture_lower.local_rank(), Dim, Extent<Dim>{});
+    target.aperture_upper.emplace(aperture_upper.layout(), aperture_upper.distribution(),
+                                  aperture_upper.local_rank(), Dim, Extent<Dim>{});
+    copy_vector_valid_(aperture_lower, *target.aperture_lower);
+    copy_vector_valid_(aperture_upper, *target.aperture_upper);
+    if (level == 0 && coarse_solver_) {
+      if (coarse_solver_->num_levels() > 1)
+        rebuild_coarse_solver_single_level_();
+      coarse_solver_->install_embedded_boundary(target.active, *target.inverse_volume,
+                                                *target.aperture_lower, *target.aperture_upper);
+    }
+    rebuild_weighted_flux_mismatches_();
   }
 
   SolveReport solve() {
@@ -449,9 +500,14 @@ class CompositeFacPoisson {
     field_type direction_operator_view;
     field_type covered;
     field_type active;
+    std::optional<field_type> coefficient{};
+    std::optional<field_type> inverse_volume{};
+    std::optional<field_type> aperture_lower{};
+    std::optional<field_type> aperture_upper{};
     HaloSchedule<Dim> halo_schedule;
     PreparedPhysicalBoundary<Dim> physical_boundary;
     PreparedPhysicalBoundary<Dim> homogeneous_physical_boundary;
+    PreparedPhysicalBoundary<Dim> coefficient_boundary;
     std::optional<HaloExchange<Dim, MemorySpace>> halo_exchange{};
 
     Level(const EllipticBuildRequest<Dim>& request, bool full_domain)
@@ -480,7 +536,11 @@ class CompositeFacPoisson {
           homogeneous_physical_boundary(
               prepare_physical_boundary(geometry.domain(), detail::unit_ghosts<Dim>(),
                                         detail::boundary_for_geometry(boundary, geometry, true),
-                                        detail::exact_boundary_budget<Dim>())) {
+                                        detail::exact_boundary_budget<Dim>())),
+          coefficient_boundary(prepare_physical_boundary(
+              geometry.domain(), detail::unit_ghosts<Dim>(),
+              detail::coefficient_boundary_for_geometry(boundary, geometry),
+              detail::exact_boundary_budget<Dim>())) {
       phi.set_val(Real(0));
       rhs.set_val(Real(0));
       residual.set_val(Real(0));
@@ -1102,11 +1162,33 @@ class CompositeFacPoisson {
                                   field_type& residual,
                                   std::vector<fac_detail::FluxMismatchTransfer<Dim>>& transfers,
                                   Real sign) {
-            transfers.push_back(fac_detail::FluxMismatchTransfer<Dim>{
+            fac_detail::FluxMismatchTransfer<Dim> transfer{
                 static_cast<const field_type&>(parent_field).fab(parent_local).view(),
                 static_cast<const field_type&>(child_field).fab(child_local).view(),
                 residual.fab(parent_local).view(), covered, destination, connection.ratio, axis,
-                child_side, inverse_spacing_squared, fine_face_weight, sign, geometry_shift});
+                child_side, inverse_spacing_squared, fine_face_weight, sign, geometry_shift};
+            if (parent.coefficient)
+              transfer.parent_coefficient =
+                  std::as_const(*parent.coefficient).fab(parent_local).view();
+            if (child.coefficient)
+              transfer.fine_coefficient =
+                  std::as_const(*child.coefficient).fab(child_local).view();
+            if (parent.aperture_lower)
+              transfer.parent_aperture_lower =
+                  std::as_const(*parent.aperture_lower).fab(parent_local).view();
+            if (parent.aperture_upper)
+              transfer.parent_aperture_upper =
+                  std::as_const(*parent.aperture_upper).fab(parent_local).view();
+            if (child.aperture_lower)
+              transfer.fine_aperture_lower =
+                  std::as_const(*child.aperture_lower).fab(child_local).view();
+            if (child.aperture_upper)
+              transfer.fine_aperture_upper =
+                  std::as_const(*child.aperture_upper).fab(child_local).view();
+            if (parent.inverse_volume)
+              transfer.parent_inverse_volume =
+                  std::as_const(*parent.inverse_volume).fab(parent_local).view();
+            transfers.push_back(transfer);
           };
           append(parent.phi, child.phi, parent.residual, connection.flux_mismatch, Real(1));
           append(parent.residual_operator_view, child.residual_operator_view, parent.residual,
@@ -1118,18 +1200,53 @@ class CompositeFacPoisson {
     }
   }
 
+  void rebuild_weighted_flux_mismatches_() {
+    for (Connection& connection : connections_) {
+      connection.flux_mismatch.clear();
+      connection.dynamic_flux_mismatch_residual.clear();
+      connection.dynamic_flux_mismatch_direction.clear();
+    }
+    for (std::size_t parent = 0; parent < connections_.size(); ++parent) {
+      Level& parent_level = *levels_[parent];
+      Level& child_level = *levels_[parent + 1];
+      Connection& connection = connections_[parent];
+      const Extent<Dim> ratio_value = detail::ratio_extent(connection.ratio);
+      for (std::size_t local = 0; local < child_level.phi.local_size(); ++local) {
+        const Box<Dim> footprint = coarsen(child_level.phi.box(local), ratio_value);
+        append_flux_mismatches_(parent_level, child_level, connection, local, footprint);
+      }
+    }
+  }
+
   void build_coarse_solver_(const EllipticBuildRequest<Dim>& coarse_request,
-                            const ExecutionLane& lane) {
+                            const ExecutionLane& lane, bool allow_coarsening = true) {
+    coarse_request_ = coarse_request;
     GeometricMultigridOptions controls;
     controls.relative_tolerance = options_.coarse_rel_tol;
     controls.absolute_tolerance = options_.coarse_abs_tol;
     controls.maximum_cycles = options_.coarse_cycles;
     controls.reaction = reaction_;
+    controls.allow_coarsening = allow_coarsening;
     EllipticBuildRequest<Dim> correction_request = coarse_request;
     correction_request.boundary =
         detail::boundary_for_geometry(coarse_request.boundary, coarse_request.geometry, true);
     coarse_solver_ = std::make_unique<GeometricMG<Dim, MemorySpace>>(std::move(correction_request),
                                                                      lane, controls);
+  }
+
+  void rebuild_coarse_solver_single_level_() {
+    if (!coarse_request_)
+      throw std::logic_error("composite FAC coarse request is not prepared");
+    build_coarse_solver_(*coarse_request_, *lane_, false);
+    if (levels_.front()->coefficient)
+      coarse_solver_->install_coefficient(*levels_.front()->coefficient);
+    if (nullspace_workspace_) {
+      const auto& distribution = levels_.front()->phi.distribution();
+      coarse_solver_->install_nullspace(
+          coarse_correction_plan_(nullspace_workspace_->plan()),
+          distribution.replicated() ? PreparedVectorDistribution<Dim>::replicated()
+                                    : PreparedVectorDistribution<Dim>::distributed());
+    }
   }
 
   void same_level_fill_(Level& level, field_type& field) {
@@ -1172,6 +1289,54 @@ class CompositeFacPoisson {
     fill_physical_boundary(level.correction, level.homogeneous_physical_boundary);
   }
 
+  WeightedPoissonFields<Dim, MemorySpace> weighted_fields_(Level& level) const {
+    WeightedPoissonFields<Dim, MemorySpace> fields;
+    if (level.coefficient)
+      fields.coefficient = &*level.coefficient;
+    if (level.inverse_volume)
+      fields.inverse_volume = &*level.inverse_volume;
+    if (level.aperture_lower)
+      fields.aperture_lower = &*level.aperture_lower;
+    if (level.aperture_upper)
+      fields.aperture_upper = &*level.aperture_upper;
+    if (level.inverse_volume)
+      fields.active = &level.active;
+    fields.covered = &level.covered;
+    return fields;
+  }
+
+  bool uses_weighted_operator_(const Level& level) const noexcept {
+    return level.coefficient.has_value() || level.inverse_volume.has_value();
+  }
+
+  void fill_coefficient_ghosts_(std::size_t level_index) {
+    Level& level = *levels_.at(level_index);
+    if (!level.coefficient)
+      return;
+    same_level_fill_(level, *level.coefficient);
+    for (std::size_t local = 0; local < level.coefficient->local_size(); ++local)
+      for_each_cell(level.coefficient->fab(local).grown_box(),
+                    fac_detail::ExtrudeScalarValidToGhosts<Dim>{
+                        level.coefficient->fab(local).view(), level.coefficient->box(local)});
+    Kokkos::fence();
+    fill_physical_boundary(*level.coefficient, level.coefficient_boundary);
+  }
+
+  static void copy_vector_valid_(const field_type& source, field_type& destination) {
+    if (source.layout() != destination.layout() || source.ncomp() != destination.ncomp())
+      throw std::invalid_argument("composite FAC vector copy requires one exact layout");
+    for (std::size_t local = 0; local < source.local_size(); ++local) {
+      const auto in = source.fab(local).view();
+      const auto out = destination.fab(local).view();
+      const int components = source.ncomp();
+      for_each_cell(source.box(local), [=] POPS_HD(const Index<Dim>& cell) {
+        for (int component = 0; component < components; ++component)
+          out(cell, component) = in(cell, component);
+      });
+    }
+    Kokkos::fence();
+  }
+
   void smooth_level_(std::size_t level_index, int sweeps) {
     Level& level = *levels_.at(level_index);
     Real inverse_spacing_squared[Dim]{};
@@ -1183,6 +1348,7 @@ class CompositeFacPoisson {
     }
     for (int sweep = 0; sweep < sweeps; ++sweep) {
       fill_level_ghosts_(level_index, level.phi, true);
+      fill_coefficient_ghosts_(level_index);
       const field_type* effective_rhs = &level.rhs;
       if (level_index + 1 < levels_.size()) {
         // An intermediate level is the coarse side of its child interface.  Its smoother must
@@ -1194,23 +1360,29 @@ class CompositeFacPoisson {
             level.phi, levels_[level_index + 1]->phi, level.residual, Real(1));
         effective_rhs = &level.residual;
       }
-      for (std::size_t local = 0; local < level.phi.local_size(); ++local) {
-        const auto phi_view = static_cast<const field_type&>(level.phi).fab(local).view();
-        const auto rhs_view = static_cast<const field_type&>(*effective_rhs).fab(local).view();
-        const auto covered_view = static_cast<const field_type&>(level.covered).fab(local).view();
-        fac_detail::MaskedJacobiKernel<Dim> kernel{level.scratch.fab(local).view(),
-                                                   phi_view,
-                                                   rhs_view,
-                                                   covered_view,
-                                                   {},
-                                                   Real(1) / diagonal,
-                                                   Real(2) / Real(3),
-                                                   reaction_};
-        for (int axis = 0; axis < Dim; ++axis)
-          kernel.inverse_spacing_squared[axis] = inverse_spacing_squared[axis];
-        for_each_cell(level.phi.box(local), kernel);
+      if (uses_weighted_operator_(level)) {
+        damped_jacobi_weighted_update_valid(level.phi, *effective_rhs, level.geometry, level.scratch,
+                                            Real(2) / Real(3), reaction_,
+                                            weighted_fields_(level));
+      } else {
+        for (std::size_t local = 0; local < level.phi.local_size(); ++local) {
+          const auto phi_view = static_cast<const field_type&>(level.phi).fab(local).view();
+          const auto rhs_view = static_cast<const field_type&>(*effective_rhs).fab(local).view();
+          const auto covered_view = static_cast<const field_type&>(level.covered).fab(local).view();
+          fac_detail::MaskedJacobiKernel<Dim> kernel{level.scratch.fab(local).view(),
+                                                     phi_view,
+                                                     rhs_view,
+                                                     covered_view,
+                                                     {},
+                                                     Real(1) / diagonal,
+                                                     Real(2) / Real(3),
+                                                     reaction_};
+          for (int axis = 0; axis < Dim; ++axis)
+            kernel.inverse_spacing_squared[axis] = inverse_spacing_squared[axis];
+          for_each_cell(level.phi.box(local), kernel);
+        }
+        Kokkos::fence();
       }
-      Kokkos::fence();
       copy_scalar_valid(level.scratch, level.phi);
     }
   }
@@ -1218,13 +1390,20 @@ class CompositeFacPoisson {
   void compute_level_residual_(std::size_t level_index) {
     Level& level = *levels_.at(level_index);
     fill_level_ghosts_(level_index, level.phi, true);
-    poisson_residual_valid(level.phi, level.rhs, level.geometry, level.residual, reaction_);
-    for (std::size_t local = 0; local < level.residual.local_size(); ++local) {
-      const auto covered_view = static_cast<const field_type&>(level.covered).fab(local).view();
-      for_each_cell(level.residual.box(local), fac_detail::MaskResidualKernel<Dim>{
-                                                   level.residual.fab(local).view(), covered_view});
+    fill_coefficient_ghosts_(level_index);
+    if (uses_weighted_operator_(level)) {
+      weighted_poisson_residual_valid(level.phi, level.rhs, level.geometry, level.residual,
+                                      reaction_, weighted_fields_(level));
+    } else {
+      poisson_residual_valid(level.phi, level.rhs, level.geometry, level.residual, reaction_);
+      for (std::size_t local = 0; local < level.residual.local_size(); ++local) {
+        const auto covered_view = static_cast<const field_type&>(level.covered).fab(local).view();
+        for_each_cell(level.residual.box(local),
+                      fac_detail::MaskResidualKernel<Dim>{level.residual.fab(local).view(),
+                                                          covered_view});
+      }
+      Kokkos::fence();
     }
-    Kokkos::fence();
   }
 
   void compute_composite_residual_() {
@@ -1300,6 +1479,25 @@ class CompositeFacPoisson {
       result.push_back(measure);
     }
     return result;
+  }
+
+  void attach_composite_nullspace_support_(FieldNullspacePlan<Dim>& plan) const {
+    if (plan.empty())
+      return;
+    const std::vector<Real> measures = level_cell_measures_();
+    std::vector<std::shared_ptr<const MultiFab<Dim>>> coverage;
+    coverage.reserve(levels_.size());
+    for (const auto& level : levels_) {
+      auto mask = std::make_shared<MultiFab<Dim>>(
+          level->active.layout(), level->active.distribution(), level->active.local_rank(), 1,
+          Extent<Dim>{});
+      copy_scalar_valid(level->active, *mask);
+      coverage.push_back(std::move(mask));
+    }
+    for (FieldNullspaceBasis<Dim>& basis : plan.bases) {
+      basis.coverage = coverage;
+      basis.cell_measure = measures;
+    }
   }
 
   void prepare_dynamic_views_() {
@@ -1423,8 +1621,14 @@ class CompositeFacPoisson {
     for (std::size_t level_index = 0; level_index < levels_.size(); ++level_index) {
       Level& level = *levels_[level_index];
       fill_dynamic_residual_ghosts_(level_index, iteration);
-      poisson_residual_valid(level.residual_operator_view, level.rhs, level.geometry,
-                             level.residual, reaction_);
+      fill_coefficient_ghosts_(level_index);
+      if (uses_weighted_operator_(level)) {
+        weighted_poisson_residual_valid(level.residual_operator_view, level.rhs, level.geometry,
+                                        level.residual, reaction_, weighted_fields_(level));
+      } else {
+        poisson_residual_valid(level.residual_operator_view, level.rhs, level.geometry,
+                               level.residual, reaction_);
+      }
       if (boundary_kernel_) {
         auto context = boundary_context_at_(level_index, iteration);
         context.failure->reset();
@@ -1459,8 +1663,14 @@ class CompositeFacPoisson {
     for (std::size_t level_index = 0; level_index < levels_.size(); ++level_index) {
       Level& level = *levels_[level_index];
       fill_dynamic_jvp_ghosts_(level_index, iteration);
-      apply_poisson_operator_valid(level.direction_operator_view, level.geometry, level.scratch,
-                                   reaction_);
+      fill_coefficient_ghosts_(level_index);
+      if (uses_weighted_operator_(level)) {
+        apply_weighted_poisson_operator_valid(level.direction_operator_view, level.geometry,
+                                              level.scratch, reaction_, weighted_fields_(level));
+      } else {
+        apply_poisson_operator_valid(level.direction_operator_view, level.geometry, level.scratch,
+                                     reaction_);
+      }
       if (boundary_kernel_) {
         auto context = boundary_context_at_(level_index, iteration);
         context.failure->reset();
@@ -1568,6 +1778,7 @@ class CompositeFacPoisson {
   Real reaction_ = Real(0);
   std::vector<std::unique_ptr<Level>> levels_{};
   std::vector<Connection> connections_{};
+  std::optional<EllipticBuildRequest<Dim>> coarse_request_{};
   std::unique_ptr<GeometricMG<Dim, MemorySpace>> coarse_solver_{};
   std::vector<const MultiFab<Dim>*> nullspace_rhs_{};
   std::vector<MultiFab<Dim>*> nullspace_candidates_{};

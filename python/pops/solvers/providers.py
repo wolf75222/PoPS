@@ -1073,8 +1073,6 @@ def _validate_composite_tensor_fac_use(
         raise ValueError("%s requires an authenticated square scalar domain" % where)
     if facts.components != 1:
         raise ValueError("%s component count %r is unsupported" % (where, facts.components))
-    if facts.singular_nullspace:
-        raise NotImplementedError("%s does not support a singular nullspace contract" % where)
     if facts.extensions:
         raise ValueError("%s received unsupported provider use facts" % where)
     operator_attrs = getattr(operator, "attrs", None)

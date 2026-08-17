@@ -483,9 +483,11 @@ set(POPS_CPP_STANDARD_TESTS
   test_elliptic_problem
   test_elliptic_composite_rhs
   test_composite_fac_adjacent
+  test_composite_fac_eb
   test_composite_fac_nlevel
   test_composite_fac_poisson
   test_composite_fac_variable_eps
+  test_composite_fac_variable_k
   test_composite_fac_tensor
   test_amr_composite_poisson
   test_polar_poisson_mms

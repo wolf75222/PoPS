@@ -400,6 +400,67 @@ TEST(CompositeFacPoissonTest, partitioned_singular_nullspace_accepts_periodic_me
   EXPECT_TRUE(report.solved()) << report.reason << " residual=" << report.residual_norm;
 }
 
+TEST(CompositeFacPoissonTest, mg_singular_nullspace_uses_composite_active_coverage) {
+  if (pops::n_ranks() != 1)
+    GTEST_SKIP() << "serial composite coverage uses a one-rank rank space";
+
+  constexpr int Dim = 2;
+  constexpr int cells = 8;
+  auto fixture = composite_fixture<Dim>(cells);
+  std::array<bool, Dim> periodic{};
+  periodic.fill(true);
+  for (auto& level : fixture.hierarchy.levels) {
+    pops::RealVector<Dim> spacing{};
+    for (int axis = 0; axis < Dim; ++axis)
+      spacing[axis] = level.geometry.spacing(axis);
+    level.boundary = pops::PhysicalBoundaryConditions<Dim>{
+        pops::BoundaryTopology<Dim>::axis_periodic(periodic), {}, spacing};
+  }
+  const pops::ExecutionLane lane =
+      pops::ExecutionLane::world("tests.composite-fac.mg-composite-coverage");
+  pops::elliptic::mg::CompositeFacPoisson<Dim> solver(std::move(fixture.hierarchy), lane);
+  solver.install_nullspace(
+      pops::constant_mean_zero_nullspace<Dim>("tests.mg-fac.composite", "unit", pops::Real(1)),
+      std::vector<pops::PreparedVectorDistribution<Dim>>(
+          2, pops::PreparedVectorDistribution<Dim>::replicated()));
+
+  const pops::Real fine_rhs = pops::Real(1);
+  const pops::Real covered_garbage = pops::Real(100);
+  const double fine_volume = static_cast<double>(fixture.fine_patch.numPts()) *
+                             static_cast<double>(fixture.fine_geometry.spacing(0)) *
+                             static_cast<double>(fixture.fine_geometry.spacing(1));
+  const double coarse_volume = static_cast<double>(fixture.coarse_geometry.domain().numPts()) *
+                               static_cast<double>(fixture.coarse_geometry.spacing(0)) *
+                               static_cast<double>(fixture.coarse_geometry.spacing(1));
+  const double covered_volume = static_cast<double>(fixture.coarse_region.numPts()) *
+                                static_cast<double>(fixture.coarse_geometry.spacing(0)) *
+                                static_cast<double>(fixture.coarse_geometry.spacing(1));
+  const double uncovered_volume = coarse_volume - covered_volume;
+  ASSERT_GT(uncovered_volume, 0.0);
+  const pops::Real uncovered_rhs =
+      pops::Real(-fine_volume * static_cast<double>(fine_rhs) / uncovered_volume);
+
+  auto fill = [](pops::MultiFab<Dim>& rhs, const pops::Box<Dim>& region, pops::Real inside,
+                 pops::Real outside) {
+    for (std::size_t local = 0; local < rhs.local_size(); ++local) {
+      auto& fab = rhs.fab(local);
+      auto host = fab.create_host_mirror();
+      for (std::size_t ordinal = 0; ordinal < static_cast<std::size_t>(fab.box().numPts());
+           ++ordinal) {
+        const auto index = index_from_ordinal<Dim>(fab.box(), ordinal);
+        host(storage_ordinal(fab.grown_box(), index)) =
+            region.contains(index) ? inside : outside;
+      }
+      fab.copy_from_host(host);
+    }
+  };
+  fill(solver.rhs_level(0), fixture.coarse_region, covered_garbage, uncovered_rhs);
+  fill(solver.rhs_level(1), fixture.fine_patch, fine_rhs, pops::Real(0));
+
+  const pops::SolveReport report = solver.solve();
+  EXPECT_NE(report.status, pops::SolveStatus::kIncompatibleRhs) << report.reason;
+}
+
 TEST(CompositeFacPoissonTest, nonfinite_composite_residual_fails_closed) {
   auto fixture = composite_fixture<2>(16);
   const pops::ExecutionLane lane = pops::ExecutionLane::world("tests.composite-fac.nonfinite");

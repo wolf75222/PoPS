@@ -20,6 +20,25 @@
 namespace pops::elliptic::mg::fac_detail {
 
 template <int Dim>
+struct ExtrudeScalarValidToGhosts {
+  FieldView<Real, Dim> field{};
+  Box<Dim> valid{};
+
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    if (valid.contains(index))
+      return;
+    Index<Dim> source = index;
+    for (int axis = 0; axis < Dim; ++axis) {
+      if (source[axis] < valid.lo[axis])
+        source[axis] = valid.lo[axis];
+      else if (source[axis] > valid.hi[axis])
+        source[axis] = valid.hi[axis];
+    }
+    field(index, 0) = field(source, 0);
+  }
+};
+
+template <int Dim>
 struct SetScalarKernel {
   FieldView<Real, Dim> values{};
   Real value = Real(0);
@@ -226,6 +245,28 @@ struct FluxMismatchTransfer {
   Real fine_face_weight = Real(0);
   Real sign = Real(1);
   Index<Dim> geometry_shift{};
+  FieldView<const Real, Dim> parent_coefficient{};
+  FieldView<const Real, Dim> fine_coefficient{};
+  FieldView<const Real, Dim> parent_aperture_lower{};
+  FieldView<const Real, Dim> parent_aperture_upper{};
+  FieldView<const Real, Dim> fine_aperture_lower{};
+  FieldView<const Real, Dim> fine_aperture_upper{};
+  FieldView<const Real, Dim> parent_inverse_volume{};
+
+  POPS_HD Real coefficient_or_one_(const FieldView<const Real, Dim>& field,
+                                   const Index<Dim>& index) const {
+    return field.data == nullptr ? Real(1) : field(index, 0);
+  }
+
+  POPS_HD Real aperture_or_one_(const FieldView<const Real, Dim>& field, const Index<Dim>& index,
+                                int axis) const {
+    return field.data == nullptr ? Real(1) : field(index, axis);
+  }
+
+  POPS_HD Real harmonic_(Real left, Real right) const {
+    const Real denominator = left + right;
+    return denominator != Real(0) ? Real(2) * left * right / denominator : Real(0);
+  }
 
   POPS_HD void operator()(const Index<Dim>& coarse_index) const {
     if (covered(coarse_index, 0) >= Real(0.5))
@@ -233,7 +274,17 @@ struct FluxMismatchTransfer {
 
     Index<Dim> parent_neighbor = coarse_index;
     parent_neighbor[normal_axis] -= child_side;
-    const Real coarse_face = parent(coarse_index, 0) - parent(parent_neighbor, 0);
+    const Real parent_k = coefficient_or_one_(parent_coefficient, coarse_index);
+    const Real neighbor_k = coefficient_or_one_(parent_coefficient, parent_neighbor);
+    const Real coarse_face_k = harmonic_(parent_k, neighbor_k);
+    const Real parent_aperture =
+        child_side < 0 ? aperture_or_one_(parent_aperture_lower, coarse_index, normal_axis)
+                       : aperture_or_one_(parent_aperture_upper, coarse_index, normal_axis);
+    const Real inv_vol = parent_inverse_volume.data == nullptr
+                             ? Real(1)
+                             : parent_inverse_volume(coarse_index, 0);
+    const Real coarse_face =
+        parent_aperture * coarse_face_k * (parent(coarse_index, 0) - parent(parent_neighbor, 0));
 
     Index<Dim> geometry = coarse_index;
     for (int axis = 0; axis < Dim; ++axis)
@@ -262,10 +313,17 @@ struct FluxMismatchTransfer {
         fine_face_inner[axis] += child;
         fine_face_ghost[axis] += child;
       }
-      fine_faces += fine(fine_face_ghost, 0) - fine(fine_face_inner, 0);
+      const Real inner_k = coefficient_or_one_(fine_coefficient, fine_face_inner);
+      const Real ghost_k = coefficient_or_one_(fine_coefficient, fine_face_ghost);
+      const Real fine_face_k = harmonic_(inner_k, ghost_k);
+      const Real fine_aperture =
+          child_side < 0 ? aperture_or_one_(fine_aperture_lower, fine_face_inner, normal_axis)
+                         : aperture_or_one_(fine_aperture_upper, fine_face_inner, normal_axis);
+      fine_faces +=
+          fine_aperture * fine_face_k * (fine(fine_face_ghost, 0) - fine(fine_face_inner, 0));
     }
-    residual(coarse_index, 0) +=
-        sign * inverse_spacing_squared * (coarse_face - fine_face_weight * fine_faces);
+    residual(coarse_index, 0) += sign * inv_vol * inverse_spacing_squared *
+                                 (coarse_face - fine_face_weight * fine_faces);
   }
 };
 

@@ -517,15 +517,15 @@ TEST(test_geometric_mg_nd, unsupported_operator_families_fail_closed_at_capabili
   constexpr auto mg = GeometricMG<3>::capabilities();
   EXPECT_TRUE(mg.scalar_constant_coefficient);
   EXPECT_TRUE(mg.scalar_reaction);
-  EXPECT_FALSE(mg.variable_diagonal);
+  EXPECT_TRUE(mg.variable_diagonal);
   EXPECT_FALSE(mg.cross_tensor);
-  EXPECT_FALSE(mg.embedded_boundary);
+  EXPECT_TRUE(mg.embedded_boundary);
 
   constexpr auto fac = CompositeFacPoisson<3>::capabilities();
   EXPECT_TRUE(fac.partial_refinement);
   EXPECT_TRUE(fac.arbitrary_level_count);
   EXPECT_TRUE(fac.distributed_mpi);
-  EXPECT_FALSE(fac.variable_diagonal);
+  EXPECT_TRUE(fac.variable_diagonal);
   EXPECT_FALSE(fac.cross_tensor);
-  EXPECT_FALSE(fac.embedded_boundary);
+  EXPECT_TRUE(fac.embedded_boundary);
 }
