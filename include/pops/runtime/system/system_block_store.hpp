@@ -7,6 +7,8 @@
 #include <pops/core/state/variables.hpp>
 #include <pops/mesh/boundary/prepared_hyperbolic_boundary.hpp>
 #include <pops/mesh/storage/multifab.hpp>
+#include <pops/numerics/elliptic/linear/solve_outcome.hpp>
+#include <pops/numerics/nonlinear/newton_options.hpp>
 #include <pops/numerics/nonlinear/prepared_variable_recovery.hpp>
 #include <pops/runtime/multiblock/evaluation_point.hpp>
 #include <pops/runtime/recovery/uniform_recovery_consumer.hpp>
@@ -72,6 +74,8 @@ class SystemBlockStore {
     int substeps = 1;
     bool evolve = true;
     int stride = 1;
+    NewtonOptions newton{};
+    bool newton_diagnostics = false;
     double gamma = 1.0;
     Residual rhs_into;
     std::function<Real(const field_type&, const ExecutionLane&)> max_speed;
@@ -90,6 +94,8 @@ class SystemBlockStore {
     std::map<std::string, ConstResidual> named_poisson_rhs;
     Residual source_only;
     Residual source_only_masked;
+    std::function<SolveOutcome(field_type&, Real, const NewtonOptions&, const ExecutionLane&)>
+        solve_implicit_source;
 
     PointResidual rhs_at_point;
     PointResidual rhs_flux_only_at_point;

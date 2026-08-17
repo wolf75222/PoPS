@@ -779,6 +779,8 @@ PreparedBlockInstallation<Dim, Implementation> prepare_block_installation(
   candidate.substeps = prepared.substeps;
   candidate.evolve = prepared.evolve;
   candidate.stride = prepared.stride;
+  candidate.newton = prepared.newton;
+  candidate.newton_diagnostics = prepared.newton_diagnostics;
   candidate.gamma = prepared.gamma;
   candidate.rhs_into = std::move(prepared.closures.rhs_into);
   candidate.max_speed = std::move(prepared.maximum_speed);
@@ -796,6 +798,7 @@ PreparedBlockInstallation<Dim, Implementation> prepare_block_installation(
   candidate.rhs_flux_only = std::move(prepared.closures.rhs_flux_only);
   candidate.source_only = std::move(prepared.closures.source_only);
   candidate.source_only_masked = std::move(prepared.closures.source_only_masked);
+  candidate.solve_implicit_source = std::move(prepared.closures.solve_implicit_source);
   candidate.staircase_residuals = std::move(prepared.closures.staircase);
   candidate.cutcell_residuals = std::move(prepared.closures.cut_cell);
   candidate.rhs_at_point = std::move(prepared.closures.rhs_at_point);
@@ -1711,11 +1714,13 @@ void System<Dim>::register_native_package(const std::string& name, const std::st
                                           const std::string& recon, const std::string& time,
                                           double gamma, int substeps, bool evolve, int stride,
                                           const std::vector<double>& params,
-                                          double positivity_floor) {
+                                          double positivity_floor, NewtonOptions newton,
+                                          bool newton_diagnostics) {
   require_assembling(p_->lifecycle_, "register_native_package");
   native_loader::register_native_package<Dim>(
       this, name, so_path, expected_model_identity, expected_binary_identity, limiter, riemann,
-      recon, time, gamma, substeps, evolve, stride, params, positivity_floor);
+      recon, time, gamma, substeps, evolve, stride, params, positivity_floor, newton,
+      newton_diagnostics);
 }
 
 template <int Dim>
@@ -2324,6 +2329,12 @@ void System<Dim>::finalize_native_packages() {
             .scalar(std::int32_t{block.substeps})
             .scalar(block.evolve)
             .scalar(std::int32_t{block.stride})
+            .scalar(std::int32_t{block.newton.max_iters})
+            .scalar(static_cast<double>(block.newton.rel_tol))
+            .scalar(static_cast<double>(block.newton.abs_tol))
+            .scalar(static_cast<double>(block.newton.fd_eps))
+            .scalar(static_cast<double>(block.newton.damping))
+            .scalar(block.newton_diagnostics)
             .presence(static_cast<bool>(block.boundary))
             .presence(hook.ghost_target && static_cast<bool>(*hook.ghost_target))
             .presence(hook.flux_target && static_cast<bool>(*hook.flux_target))
@@ -2817,7 +2828,7 @@ template std::string System<kNativeDimension>::last_dt_bound() const;
 template void System<kNativeDimension>::register_native_package(
     const std::string&, const std::string&, const std::string&, const std::string&,
     const std::string&, const std::string&, const std::string&, const std::string&, double, int,
-    bool, int, const std::vector<double>&, double);
+    bool, int, const std::vector<double>&, double, NewtonOptions, bool);
 template void System<kNativeDimension>::register_external_riemann_package(
     const std::string&, const std::string&, const std::string&, const std::string&, int, int,
     const std::string&, const std::string&, const std::string&, const std::string&,

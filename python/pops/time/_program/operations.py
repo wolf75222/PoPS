@@ -507,6 +507,25 @@ class _ProgramCore(
             "rhs", "source", inputs, attrs, name, state.block,
             space=rate_space_for(state.space), field_context=field_context)
 
+    def solve_implicit_source(self, state: Any, *, name: Any = None) -> Any:
+        """Prepared local backward-Euler source Newton on ``state``.
+
+        The compiled-package ABI owns the NewtonOptions. The generated kernel consumes the
+        SolveOutcome; diagnostics publish through the host newton_report when requested.
+        """
+        state = _resolve_handle(state)
+        if not (isinstance(state, ProgramValue) and state.vtype == "state"):
+            raise ValueError("solve_implicit_source: a State value is required")
+        return self._new(
+            "state",
+            "solve_implicit_source",
+            (state,),
+            {},
+            name,
+            state.block,
+            space=state.space,
+        )
+
     def implicit_source(
         self,
         state: Any,

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <pops/numerics/nonlinear/newton_options.hpp>
 #include <pops/runtime/config/route_ids.hpp>
 #include <pops/runtime/config/runtime_params.hpp>
 #include <pops/runtime/dynamic/abi_key.hpp>
@@ -85,12 +86,14 @@ void register_native_package(System<Dim>* system, const std::string& name,
                              const std::string& limiter, const std::string& riemann,
                              const std::string& recon, const std::string& time, double gamma,
                              int substeps, bool evolve, int stride,
-                             const std::vector<double>& params, double positivity_floor) {
+                             const std::vector<double>& params, double positivity_floor,
+                             NewtonOptions newton = {}, bool newton_diagnostics = false) {
   constexpr const char* context = "System::_install_native_block";
   if (substeps < 1)
     throw std::runtime_error(std::string(context) + ": substeps >= 1");
   if (stride < 1)
     throw std::runtime_error(std::string(context) + ": stride >= 1");
+  validate_newton_options(newton, context);
   if (recon != "conservative" && recon != "primitive")
     throw std::runtime_error(std::string(context) +
                              ": recon 'conservative' | 'primitive' required");
@@ -213,7 +216,8 @@ void register_native_package(System<Dim>* system, const std::string& name,
   };
 
   using install_fn = void (*)(void*, const char*, const char*, const char*, const char*,
-                              const char*, double, int, int, int, const double*, int, double);
+                              const char*, double, int, int, int, const double*, int, double, int,
+                              double, double, double, double, int);
   auto install = reinterpret_cast<install_fn>(pops::dynlib::sym(handle, "pops_install_native"));
   if (install == nullptr) {
     throw std::runtime_error(std::string(context) +
@@ -224,17 +228,20 @@ void register_native_package(System<Dim>* system, const std::string& name,
   // Capturing values (not caller pointers) also makes this thunk independent from Python storage.
   std::function<void()> thunk = [capability, block_capability, install, name, limiter, riemann,
                                  recon, time, gamma, substeps, evolve, stride, params,
-                                 positivity_floor] {
+                                 positivity_floor, newton, newton_diagnostics] {
     const double* data = params.empty() ? nullptr : params.data();
     install(static_cast<void*>(block_capability.get()), name.c_str(), limiter.c_str(),
             riemann.c_str(), recon.c_str(), time.c_str(), gamma, substeps, evolve ? 1 : 0, stride,
-            data, static_cast<int>(params.size()), positivity_floor);
+            data, static_cast<int>(params.size()), positivity_floor, newton.max_iters,
+            static_cast<double>(newton.rel_tol), static_cast<double>(newton.abs_tol),
+            static_cast<double>(newton.fd_eps), static_cast<double>(newton.damping),
+            newton_diagnostics ? 1 : 0);
     if (!capability->commit_called || !capability->committed)
       throw std::logic_error("native package installer did not commit one complete package");
   };
   ExactContractBuilder contract;
   contract.text("pops.system-native-package")
-      .scalar(std::uint32_t{2})
+      .scalar(std::uint32_t{3})
       .scalar(std::int32_t{Dim})
       .text(name)
       .text(expected_model_identity)
@@ -250,6 +257,12 @@ void register_native_package(System<Dim>* system, const std::string& name,
       .scalar(evolve)
       .scalar(std::int32_t{stride})
       .scalar(positivity_floor)
+      .scalar(std::int32_t{newton.max_iters})
+      .scalar(static_cast<double>(newton.rel_tol))
+      .scalar(static_cast<double>(newton.abs_tol))
+      .scalar(static_cast<double>(newton.fd_eps))
+      .scalar(static_cast<double>(newton.damping))
+      .scalar(newton_diagnostics)
       .sequence(params);
   system->stage_prepared_native_package(std::move(contract).release(), std::move(route_registrar),
                                         std::move(thunk), std::move(package_lifetime), capability);

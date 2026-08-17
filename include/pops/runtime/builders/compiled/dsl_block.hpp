@@ -91,7 +91,8 @@ PreparedSystemBlock<Dim> prepare_compiled_system_block_from_authority(
     bool evolve, int stride, double positivity_floor, Geometry<Dim> geometry,
     std::array<bool, Dim> periodicity,
     std::shared_ptr<const runtime::system::AuxiliaryStorageGroups<Dim>> provider_storage,
-    std::shared_ptr<const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>> provider_plan) {
+    std::shared_ptr<const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>> provider_plan,
+    NewtonOptions newton = {}, bool newton_diagnostics = false) {
   static_assert(Dim >= 1 && Dim <= 3);
   static_assert(
       requires { Model::dimension; },
@@ -110,6 +111,7 @@ PreparedSystemBlock<Dim> prepare_compiled_system_block_from_authority(
     throw std::invalid_argument("compiled System block gamma must be finite and positive");
   if (substeps < 1 || stride < 1)
     throw std::invalid_argument("compiled System block substeps and stride must be positive");
+  validate_newton_options(newton, "compiled System block");
 
   CompiledSystemBlockRoutes routes{limiter, riemann, reconstruction, time,
                                    static_cast<Real>(positivity_floor)};
@@ -137,6 +139,8 @@ PreparedSystemBlock<Dim> prepare_compiled_system_block_from_authority(
   prepared.substeps = substeps;
   prepared.evolve = evolve;
   prepared.stride = stride;
+  prepared.newton = newton;
+  prepared.newton_diagnostics = newton_diagnostics;
   if (prepared.provider_components == 0)
     prepared.provider_components = provider_count_for<Model, Dim>();
   return prepared;
@@ -156,7 +160,8 @@ PreparedSystemBlock<Dim> prepare_compiled_system_block(
     runtime::system::PreparedNativeBlockInstaller<Dim>& installer, const std::string& name,
     const std::string& provider_consumer_qid, Model model, const std::string& limiter,
     const std::string& riemann, const std::string& reconstruction, const std::string& time,
-    double gamma, int substeps, bool evolve, int stride, double positivity_floor = 0.0) {
+    double gamma, int substeps, bool evolve, int stride, double positivity_floor = 0.0,
+    NewtonOptions newton = {}, bool newton_diagnostics = false) {
   std::shared_ptr<const runtime::system::AuxiliaryStorageGroups<Dim>> provider_storage;
   std::shared_ptr<const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>> provider_plan;
   if constexpr (provider_count_for<Model, Dim>() > 0) {
@@ -168,7 +173,7 @@ PreparedSystemBlock<Dim> prepare_compiled_system_block(
   return compiled_system_detail::prepare_compiled_system_block_from_authority<Dim>(
       name, std::move(model), limiter, riemann, reconstruction, time, gamma, substeps, evolve,
       stride, positivity_floor, installer.geometry(), installer.periodicity(),
-      std::move(provider_storage), std::move(provider_plan));
+      std::move(provider_storage), std::move(provider_plan), newton, newton_diagnostics);
 }
 
 /// Prepare through the direct facade surface retained for in-process and test-owned Systems.
@@ -177,7 +182,8 @@ template <int Dim, class Model>
 PreparedSystemBlock<Dim> prepare_compiled_system_block(
     System<Dim>& system, const std::string& name, Model model, const std::string& limiter,
     const std::string& riemann, const std::string& reconstruction, const std::string& time,
-    double gamma, int substeps, bool evolve, int stride, double positivity_floor = 0.0) {
+    double gamma, int substeps, bool evolve, int stride, double positivity_floor = 0.0,
+    NewtonOptions newton = {}, bool newton_diagnostics = false) {
   std::shared_ptr<const runtime::system::AuxiliaryStorageGroups<Dim>> provider_storage;
   std::shared_ptr<const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>> provider_plan;
   if constexpr (provider_count_for<Model, Dim>() > 0) {
@@ -188,7 +194,8 @@ PreparedSystemBlock<Dim> prepare_compiled_system_block(
   return compiled_system_detail::prepare_compiled_system_block_from_authority<Dim>(
       name, std::move(model), limiter, riemann, reconstruction, time, gamma, substeps, evolve,
       stride, positivity_floor, system.prepared_block_geometry(),
-      system.prepared_block_periodicity(), std::move(provider_storage), std::move(provider_plan));
+      system.prepared_block_periodicity(), std::move(provider_storage), std::move(provider_plan),
+      newton, newton_diagnostics);
 }
 
 /// Stage the RuntimeInstance world lane Python bind installs when the C++ convenience path
@@ -238,12 +245,13 @@ void add_compiled_model(runtime::system::PreparedNativeBlockInstaller<Dim>& inst
                         const std::string& reconstruction = "conservative",
                         const std::string& time = "explicit",
                         double gamma = static_cast<double>(kPhysicalDefaultGamma), int substeps = 1,
-                        bool evolve = true, int stride = 1, double positivity_floor = 0.0) {
+                        bool evolve = true, int stride = 1, double positivity_floor = 0.0,
+                        NewtonOptions newton = {}, bool newton_diagnostics = false) {
   runtime::system::PreparedNativeSystemPackage<Dim> package;
   package.consumer_qid = provider_consumer_qid;
   package.block = prepare_compiled_system_block<Dim>(
       installer, name, provider_consumer_qid, std::move(model), limiter, riemann, reconstruction,
-      time, gamma, substeps, evolve, stride, positivity_floor);
+      time, gamma, substeps, evolve, stride, positivity_floor, newton, newton_diagnostics);
   installer.commit(std::move(package));
 }
 
@@ -255,13 +263,15 @@ void add_compiled_model(System<Dim>& system, const std::string& name, Model mode
                         const std::string& reconstruction = "conservative",
                         const std::string& time = "explicit",
                         double gamma = static_cast<double>(kPhysicalDefaultGamma), int substeps = 1,
-                        bool evolve = true, int stride = 1, double positivity_floor = 0.0) {
+                        bool evolve = true, int stride = 1, double positivity_floor = 0.0,
+                        NewtonOptions newton = {}, bool newton_diagnostics = false) {
   ensure_compiled_system_execution_lane(system, name);
   ensure_compiled_system_state_route(system, name);
   install_prepared_block(
       system, prepare_compiled_system_block<Dim>(system, name, std::move(model), limiter, riemann,
                                                  reconstruction, time, gamma, substeps, evolve,
-                                                 stride, positivity_floor));
+                                                 stride, positivity_floor, newton,
+                                                 newton_diagnostics));
 }
 
 }  // namespace pops

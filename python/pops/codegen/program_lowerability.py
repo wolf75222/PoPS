@@ -134,6 +134,7 @@ def _check_amr_flux_weights(program: Any) -> None:
     alias_first_input = frozenset({
         "synchronize", "solve_fields", "solve_fields_from_blocks", "store_history",
         "fill_boundary", "project", "local_transform", "solve_outcome", "acceptance_guard",
+        "solve_implicit_source",
     })
 
     def shifted(source: object | frozenset[int], coefficient: Any) -> object | frozenset[int]:

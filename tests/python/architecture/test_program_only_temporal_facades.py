@@ -546,8 +546,9 @@ def test_amr_spatial_runtime_does_not_carry_an_unexecuted_implicit_solve():
     assert "newton_report(" not in runtime
     assert "SourceNewtonReport" not in header
     assert "&AmrSystem::newton_report" not in binding
-    assert '"newton_report"' not in binding
     assert "s.newton_report(" not in binding
+    assert "last_newton_report" in header
+    assert '"newton_report"' in binding
 
     source = AMR_DSL_BLOCK.read_text(encoding="utf-8")
     assert "implicit_components" not in source
@@ -557,7 +558,7 @@ def test_amr_spatial_runtime_does_not_carry_an_unexecuted_implicit_solve():
     assert "resolve_implicit_components_compiled" not in source
 
 
-def test_uniform_legacy_model_route_and_unpublished_newton_diagnostics_fail_before_allocation():
+def test_uniform_legacy_model_route_is_retired_and_compiled_newton_crosses_the_abi():
     native = _function_body(
         SYSTEM_INSTALL.read_text(encoding="utf-8"),
         "void System<Dim>::add_block(",
@@ -569,9 +570,8 @@ def test_uniform_legacy_model_route_and_unpublished_newton_diagnostics_fail_befo
     assert "PreparedSystemBlock<Dim>" in native
     assert "self._s.add_block(" not in python_add_equation
     assert "compile_modelspec_package" in python_add_equation
-    assert python_add_equation.index(
-        "_reject_unpublished_newton_diagnostics(time"
-    ) < python_add_equation.index("compile_modelspec_package")
+    assert "_compiled_newton_kwargs(time)" in python_add_equation
+    assert "_reject_unpublished_newton_diagnostics" not in python_add_equation
 
 
 def test_amr_runtime_and_builders_do_not_decode_a_second_time_method():
@@ -669,9 +669,11 @@ def test_program_contexts_do_not_claim_implicit_temporal_primitives():
         for legacy_engine_primitive in (
             "coupled_source_step(",
             "backward_euler_source(",
-            "newton_report(",
+            "void newton_report(",
         ):
             assert legacy_engine_primitive not in source
+        assert "solve_source_default(" in source
+        assert "publish_newton_report(" in source
 
 
 def test_ranked_program_context_owns_candidate_state_coupling_not_a_live_state_step():

@@ -50,6 +50,7 @@
 #include <pops/runtime/system/auxiliary_ghost_fill.hpp>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstddef>
@@ -2435,6 +2436,8 @@ struct AmrSystem<Dim>::Impl {
     double gamma = static_cast<double>(kPhysicalDefaultGamma);
     int substeps = 1;
     int stride = 1;
+    NewtonOptions newton{};
+    bool newton_diagnostics = false;
     int required_ghost_depth = 1;
     int reconstruction_order = 1;
     Extent<Dim> ghosts{};
@@ -2969,6 +2972,10 @@ struct AmrSystem<Dim>::Impl {
     std::vector<runtime::system::AuxiliaryComponentKey> output_keys;
     std::vector<std::vector<PreparedFieldRhs>> rhs_by_block;
     bool use_prepared_level_rhs = false;
+    bool composite_mean_neutralize = false;
+    std::string composite_mean_block;
+    int composite_mean_component = 0;
+    Real composite_mean_eps = Real(0);
     double reaction = 0.0;
     bool has_reaction = false;
     std::string nullspace_provider_identity;
@@ -3391,6 +3398,7 @@ struct AmrSystem<Dim>::Impl {
   mutable int checkpoint_regrid_count_value = 0;
   mutable std::vector<int> last_replay_regrid_steps;
   std::string last_dt_reason;
+  NewtonReport last_newton_report{};
   mutable std::vector<std::uint8_t> program_accepted_bytes;
   mutable std::uint64_t program_accepted_revision = 0;
   mutable bool program_accepted_bytes_runtime_owned = false;
@@ -3796,6 +3804,88 @@ struct AmrSystem<Dim>::Impl {
   std::size_t block_index(const std::string& name) const {
     const BlockSpec& selected = block(name);
     return static_cast<std::size_t>(&selected - blocks.data());
+  }
+
+  void apply_composite_mean_neutralizing(
+      const FieldPlan& plan, std::vector<std::unique_ptr<field_type>>& rhs_levels) const {
+    if (!plan.composite_mean_neutralize)
+      return;
+    if (!engine || !prepared_hierarchy ||
+        prepared_hierarchy->active_coverage.size() != engine->hierarchy().num_levels())
+      throw std::logic_error("composite-mean neutralizing requires a prepared AMR hierarchy");
+    if (plan.composite_mean_block.empty() || plan.composite_mean_component < 0 ||
+        !std::isfinite(static_cast<double>(plan.composite_mean_eps)) ||
+        plan.composite_mean_eps == Real(0))
+      throw std::invalid_argument("composite-mean neutralizing is incomplete");
+    const std::size_t selected = block_index(plan.composite_mean_block);
+    if (plan.composite_mean_component >= blocks[selected].ncomp)
+      throw std::out_of_range("composite-mean neutralizing component is outside the block state");
+    using memory_space = typename AmrSystem<Dim>::memory_space;
+    std::vector<runtime::amr::CompositeLevelView<Dim, memory_space>> views;
+    views.reserve(engine->hierarchy().num_levels());
+    for (std::size_t level = 0; level < engine->hierarchy().num_levels(); ++level) {
+      const Box<Dim>& domain = engine->hierarchy().layout(level).domain();
+      const Geometry<Dim> geometry = Geometry<Dim>::from_bounds(domain, cfg.lower, cfg.upper);
+      std::array<Real, Dim> extent{};
+      for (int axis = 0; axis < Dim; ++axis)
+        extent[static_cast<std::size_t>(axis)] = geometry.spacing(axis);
+      const MultiFab<Dim>* relative = nullptr;
+      const auto& embedded = prepared_hierarchy->embedded_boundary[level];
+      if (embedded && embedded->mode() == runtime::system::PreparedEmbeddedBoundaryMode::staircase)
+        relative = &embedded->active_mask();
+      else if (embedded &&
+               embedded->mode() == runtime::system::PreparedEmbeddedBoundaryMode::cut_cell)
+        relative = &embedded->volume_fraction();
+      views.push_back({&block_state(selected, level), prepared_hierarchy->active_coverage[level].get(),
+                       extent, relative});
+    }
+    const runtime::amr::CompositeReductionResult mass = runtime::amr::composite_reduce<Dim, memory_space>(
+        views, plan.composite_mean_component, runtime::amr::CompositeReductionKind::Sum,
+        *prepared_hierarchy->lane);
+    if (!(mass.active_measure > Real(0)) || !std::isfinite(mass.active_measure) ||
+        !std::isfinite(mass.value))
+      throw std::runtime_error("composite-mean neutralizing lost a finite composite mass");
+    if (rhs_levels.size() != views.size())
+      throw std::logic_error("composite-mean neutralizing RHS levels do not match the hierarchy");
+    const Real mean = mass.value / mass.active_measure;
+    struct FmaShift {
+      FieldView<Real, Dim> values{};
+      Real a = Real(0);
+      Real b = Real(0);
+      POPS_HD void operator()(const Index<Dim>& index) const {
+        values(index, 0) = Kokkos::fma(a, b, values(index, 0));
+      }
+    };
+    auto add_fma = [&](Real a, Real b) {
+      for (auto& rhs : rhs_levels) {
+        if (!rhs || rhs->ncomp() != 1)
+          throw std::logic_error("composite-mean neutralizing requires a one-component field RHS");
+        for (std::size_t local = 0; local < rhs->local_size(); ++local)
+          for_each_cell(rhs->box(local), FmaShift{rhs->fab(local).view(), a, b});
+      }
+    };
+    // Authored charge is eps*M00.  Subtract eps*mean(M00) with one fused rounding so
+    // the cell values become O(|eps| |M00-mean|), not a cancellation of two O(|eps|) terms.
+    add_fma(-plan.composite_mean_eps, mean);
+    std::vector<runtime::amr::CompositeLevelView<Dim, memory_space>> rhs_views = views;
+    for (std::size_t level = 0; level < rhs_views.size(); ++level)
+      rhs_views[level].values = rhs_levels[level].get();
+    const runtime::amr::CompositeReductionResult leftover =
+        runtime::amr::composite_reduce<Dim, memory_space>(
+            rhs_views, 0, runtime::amr::CompositeReductionKind::Sum, *prepared_hierarchy->lane);
+    // |eps| * ulp(mean) * volume is ~2e-13 for |eps|=900.  That exceeds 128ε when
+    // |RHS|_1 < 1.  If the leftover is only that association residual, finish it in
+    // the same composite measure the nullspace check uses.  A brick that is not
+    // eps*M00 leaves a leftover above this bound and still fails the gate.
+    const Real consistency =
+        Real(256) * std::numeric_limits<Real>::epsilon() *
+        std::max(std::abs(plan.composite_mean_eps) *
+                     std::max(std::abs(mass.value), mass.active_measure),
+                 Real(1));
+    if (std::abs(leftover.value) <= consistency && leftover.active_measure > Real(0) &&
+        std::isfinite(leftover.value) && std::isfinite(leftover.active_measure))
+      add_fma(Real(1), -leftover.value / leftover.active_measure);
+    Kokkos::fence();
   }
 
   field_type& block_state(std::size_t block, std::size_t level) const {
@@ -4703,7 +4793,7 @@ struct AmrSystem<Dim>::Impl {
                                                bool include_live_boundary_point = true) {
     ExactContractBuilder contract;
     contract.text("pops.amr.exact-ranked-field-plan")
-        .scalar(std::uint32_t{5})
+        .scalar(std::uint32_t{6})
         .scalar(std::int32_t{Dim})
         .text(slot)
         .text(plan.plan_identity)
@@ -4770,7 +4860,13 @@ struct AmrSystem<Dim>::Impl {
             key.serialize_exact(item);
           });
     }
-    contract.presence(plan.use_prepared_level_rhs).presence(plan.boundary_kernel.has_value());
+    contract.presence(plan.use_prepared_level_rhs)
+        .presence(plan.composite_mean_neutralize)
+        .presence(plan.boundary_kernel.has_value());
+    if (plan.composite_mean_neutralize)
+      contract.text(plan.composite_mean_block)
+          .scalar(static_cast<std::int64_t>(plan.composite_mean_component))
+          .scalar(plan.composite_mean_eps);
     if (plan.boundary_kernel)
       contract.text(plan.boundary_kernel->identity)
           .text(plan.boundary_kernel->residual_identity)
@@ -6272,6 +6368,7 @@ struct AmrSystem<Dim>::Impl {
       }
       if (!has_rhs)
         throw std::runtime_error("AMR exact field has no prepared RHS provider");
+      apply_composite_mean_neutralizing(plan, detached_rhs);
       Kokkos::fence();
     } catch (...) {
       preparation_error = std::current_exception();
@@ -10761,12 +10858,13 @@ void AmrSystem<Dim>::add_native_block(const std::string& name, const std::string
                                       const std::string& recon, const std::string& time,
                                       double gamma, int substeps, int stride,
                                       const std::vector<double>& params, double positivity_floor,
-                                      double weno_epsilon, bool wave_speed_cache) {
+                                      double weno_epsilon, bool wave_speed_cache,
+                                      NewtonOptions newton, bool newton_diagnostics) {
   p_->require_no_native_package_callback("add_native_block");
   using register_auxiliary_type = void (*)(AmrSystem<Dim>*);
   using install_type = void (*)(void*, const char*, const char*, const char*, const char*,
                                 const char*, double, int, int, const double*, int, double, double,
-                                bool);
+                                bool, int, double, double, double, double, int);
 
   // Declared before every package-owned closure snapshot so it is destroyed after them on both
   // rollback and success paths.
@@ -10803,6 +10901,7 @@ void AmrSystem<Dim>::add_native_block(const std::string& name, const std::string
     if (!std::isfinite(gamma) || !(gamma > 0.0) || substeps < 1 || stride < 1)
       throw std::invalid_argument(
           "AmrSystem native package requires finite positive gamma, substeps, and stride");
+    validate_newton_options(newton, "AmrSystem native package");
     if (!std::isfinite(positivity_floor) || positivity_floor < 0.0)
       throw std::invalid_argument(
           "AmrSystem native package positivity floor must be finite and non-negative");
@@ -10862,6 +10961,18 @@ void AmrSystem<Dim>::add_native_block(const std::string& name, const std::string
     if (artifact_key != module_key)
       throw std::runtime_error(
           "AmrSystem::add_native_block: compiled package ABI differs from the native module");
+    const auto protocol_version = reinterpret_cast<int (*)()>(
+        pops::dynlib::sym(handle, runtime::system::kNativeSystemPackageAbiVersionSymbol));
+    if (protocol_version == nullptr)
+      throw std::runtime_error(std::string("AmrSystem::add_native_block: ") +
+                               runtime::system::kNativeSystemPackageAbiVersionSymbol +
+                               " is missing; rebuild the artifact");
+    if (pops::dynlib::invoke_with_host_exception(
+            [protocol_version] { return protocol_version(); },
+            runtime::system::kNativeSystemPackageAbiVersionSymbol) !=
+        runtime::system::kNativeSystemPackageAbiVersion)
+      throw std::runtime_error(
+          "AmrSystem::add_native_block: incompatible System native package protocol");
 
     const auto model_identity = reinterpret_cast<const char* (*)()>(
         pops::dynlib::sym(handle, "pops_compiled_model_identity"));
@@ -10924,6 +11035,12 @@ void AmrSystem<Dim>::add_native_block(const std::string& name, const std::string
         .scalar(positivity_floor)
         .scalar(weno_epsilon)
         .scalar(wave_speed_cache)
+        .scalar(std::int32_t{newton.max_iters})
+        .scalar(static_cast<double>(newton.rel_tol))
+        .scalar(static_cast<double>(newton.abs_tol))
+        .scalar(static_cast<double>(newton.fd_eps))
+        .scalar(static_cast<double>(newton.damping))
+        .scalar(newton_diagnostics)
         .text(expected_model_identity)
         .text(observed_model_identity)
         .text(expected_binary_identity)
@@ -11003,7 +11120,10 @@ void AmrSystem<Dim>::add_native_block(const std::string& name, const std::string
           install(static_cast<void*>(this), name.c_str(), limiter.c_str(), riemann.c_str(),
                   recon.c_str(), time.c_str(), gamma, substeps, stride,
                   params.empty() ? nullptr : params.data(), static_cast<int>(params.size()),
-                  positivity_floor, weno_epsilon, wave_speed_cache);
+                  positivity_floor, weno_epsilon, wave_speed_cache, newton.max_iters,
+                  static_cast<double>(newton.rel_tol), static_cast<double>(newton.abs_tol),
+                  static_cast<double>(newton.fd_eps), static_cast<double>(newton.damping),
+                  newton_diagnostics ? 1 : 0);
         },
         "pops_install_native_amr");
     if (p_->blocks.size() != blocks_snapshot.size() + 1 ||
@@ -11270,6 +11390,8 @@ void AmrSystem<Dim>::install_prepared_amr_block_candidate_(PreparedBlock prepare
     block.gamma = prepared.gamma;
     block.substeps = prepared.substeps;
     block.stride = prepared.stride;
+    block.newton = prepared.newton;
+    block.newton_diagnostics = prepared.newton_diagnostics;
     block.ghosts = prepared.ghosts;
     block.time = prepared.time_route;
     block.reconstruction_order = prepared.reconstruction_order;
@@ -12752,6 +12874,40 @@ SolveOutcome AmrSystem<Dim>::solve_prepared_amr_block_level_source_at(
 }
 
 template <int Dim>
+NewtonOptions AmrSystem<Dim>::block_newton_options(int runtime_block) const {
+  if (runtime_block < 0 || static_cast<std::size_t>(runtime_block) >= p_->blocks.size())
+    throw std::out_of_range("AMR Newton-options block index is out of range");
+  return p_->blocks[static_cast<std::size_t>(runtime_block)].newton;
+}
+
+template <int Dim>
+bool AmrSystem<Dim>::block_newton_diagnostics(int runtime_block) const {
+  if (runtime_block < 0 || static_cast<std::size_t>(runtime_block) >= p_->blocks.size())
+    throw std::out_of_range("AMR Newton-diagnostics block index is out of range");
+  return p_->blocks[static_cast<std::size_t>(runtime_block)].newton_diagnostics;
+}
+
+template <int Dim>
+void AmrSystem<Dim>::publish_newton_report(int runtime_block, const SolveReport& solve) {
+  if (!block_newton_diagnostics(runtime_block))
+    return;
+  NewtonReport report;
+  report.enabled = true;
+  report.converged = solve.solved();
+  report.max_residual = solve.residual_norm;
+  report.max_iters_used = static_cast<Real>(solve.iters);
+  report.n_failed = solve.solved() ? 0.0 : 1.0;
+  report.failure = solve.failure;
+  report.solve = solve;
+  p_->last_newton_report = report;
+}
+
+template <int Dim>
+const NewtonReport& AmrSystem<Dim>::last_newton_report() const {
+  return p_->last_newton_report;
+}
+
+template <int Dim>
 void AmrSystem<Dim>::prepare_generated_amr_level_state(
     const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab<Dim>& state) {
   prepare_generated_amr_block_level_state(0, point, state);
@@ -13967,6 +14123,21 @@ void AmrSystem<Dim>::set_field_reaction(const std::string& provider_slot, double
     throw std::logic_error("AMR field reaction cannot change after solver materialization");
   found->second.reaction = reaction;
   found->second.has_reaction = true;
+}
+
+template <int Dim>
+void AmrSystem<Dim>::set_field_composite_mean_neutralizing(const std::string& provider_slot,
+                                                           const std::string& block, int component,
+                                                           double eps) {
+  if (provider_slot.empty() || block.empty() || component < 0 || !std::isfinite(eps) || eps == 0.0)
+    throw std::invalid_argument("AMR composite-mean neutralizing requires a finite nonzero eps");
+  auto found = p_->field_plans.find(provider_slot);
+  if (found == p_->field_plans.end())
+    throw std::out_of_range("AMR composite-mean neutralizing names an unknown provider slot");
+  found->second.composite_mean_neutralize = true;
+  found->second.composite_mean_block = block;
+  found->second.composite_mean_component = component;
+  found->second.composite_mean_eps = static_cast<Real>(eps);
 }
 
 template <int Dim>
@@ -17488,6 +17659,7 @@ EffectiveOptionsReport AmrSystem<Dim>::effective_options_report() const {
     row.gamma = block.gamma;
     row.substeps = block.substeps;
     row.stride = block.stride;
+    row.newton = effective_newton_options(block.newton, block.newton_diagnostics);
     row.time = block.time;
     report.blocks.push_back(std::move(row));
   }
@@ -19910,7 +20082,7 @@ template void AmrSystem<kNativeDimension>::add_native_block(const std::string&, 
                                                             const std::string&, const std::string&,
                                                             double, int, int,
                                                             const std::vector<double>&, double,
-                                                            double, bool);
+                                                            double, bool, NewtonOptions, bool);
 template void AmrSystem<kNativeDimension>::register_external_riemann_package(
     const std::string&, const std::string&, const std::string&, const std::string&, int, int,
     const std::string&, const std::string&, const std::string&, const std::string&,
@@ -20037,6 +20209,10 @@ template void AmrSystem<kNativeDimension>::prepared_amr_block_level_source_into_
 template SolveOutcome AmrSystem<kNativeDimension>::solve_prepared_amr_block_level_source_at(
     int, const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab<kNativeDimension>&, Real,
     const NewtonOptions&);
+template NewtonOptions AmrSystem<kNativeDimension>::block_newton_options(int) const;
+template bool AmrSystem<kNativeDimension>::block_newton_diagnostics(int) const;
+template void AmrSystem<kNativeDimension>::publish_newton_report(int, const SolveReport&);
+template const NewtonReport& AmrSystem<kNativeDimension>::last_newton_report() const;
 template void AmrSystem<kNativeDimension>::prepare_generated_amr_block_level_state(
     int, const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab<kNativeDimension>&, int,
     const MultiFab<kNativeDimension>*);
@@ -20164,6 +20340,8 @@ template void AmrSystem<kNativeDimension>::set_field_solver_plan(
 template AmrFieldSolverConfiguration AmrSystem<kNativeDimension>::field_solver_configuration(
     const std::string&) const;
 template void AmrSystem<kNativeDimension>::set_field_reaction(const std::string&, double);
+template void AmrSystem<kNativeDimension>::set_field_composite_mean_neutralizing(
+    const std::string&, const std::string&, int, double);
 template void AmrSystem<kNativeDimension>::set_field_topology_authority(const std::string&,
                                                                         const std::string&,
                                                                         const std::string&,

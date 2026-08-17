@@ -9,6 +9,8 @@
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/spatial/nd/face_field.hpp>
+#include <pops/numerics/elliptic/linear/solve_outcome.hpp>
+#include <pops/numerics/nonlinear/newton_options.hpp>
 #include <pops/numerics/nonlinear/prepared_variable_recovery.hpp>
 #include <pops/runtime/multiblock/evaluation_point.hpp>
 #include <pops/runtime/recovery/uniform_recovery_consumer.hpp>
@@ -84,6 +86,10 @@ struct SystemBlockClosures {
   Residual rhs_flux_only;
   Residual source_only;
   Residual source_only_masked;
+  /// Prepared local backward-Euler source Newton. The generated package owns the residual;
+  /// install-time NewtonOptions are the authority consumed by the Program primitive.
+  std::function<SolveOutcome(field_type&, Real, const NewtonOptions&, const ExecutionLane&)>
+      solve_implicit_source;
 
   PointResidual rhs_at_point;
   PointResidual rhs_flux_only_at_point;
@@ -280,6 +286,8 @@ struct PreparedSystemBlock {
   int substeps = 1;
   bool evolve = true;
   int stride = 1;
+  NewtonOptions newton{};
+  bool newton_diagnostics = false;
 
   SystemBlockClosures<Dim> closures;
   std::function<Real(const field_type&, const ExecutionLane&)> maximum_speed;

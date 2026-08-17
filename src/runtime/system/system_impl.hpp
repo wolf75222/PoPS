@@ -168,6 +168,7 @@ struct System<Dim>::Impl {
   double t = 0.0;
   int macro_step_ = 0;
   std::string last_dt_reason_;
+  NewtonReport last_newton_report_{};
   std::string poisson_solver_ = "cartesian_cg";
   std::string poisson_bc_ = "auto";
   double poisson_abs_tol_ = 0.0;

@@ -9,6 +9,7 @@
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/numerics/fv/numerical_flux.hpp>
+#include <pops/numerics/time/integrators/implicit_stepper.hpp>
 #include <pops/numerics/fv/reconstruction.hpp>
 #include <pops/numerics/spatial/embedded_boundary/operator.hpp>
 #include <pops/numerics/spatial/operators/cartesian_operator.hpp>
@@ -908,6 +909,24 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
   };
   result.closures.source_only = source;
   result.closures.source_only_masked = source;
+  result.closures.solve_implicit_source =
+      [model, provider_storage_owner, provider_plan_owner, provider_storage, provider_plan](
+          MultiFab<Dim>& state, Real dt, const NewtonOptions& options, const ExecutionLane& lane) {
+        (void)provider_storage_owner;
+        (void)provider_plan_owner;
+        const auto provider_at = [provider_storage, provider_plan](std::size_t local) {
+          if constexpr (provider_count == 0)
+            return ProviderStorageView<Dim, 0>{};
+          else
+            return runtime::system::bind_provider_storage_view<Dim, provider_count>(
+                provider_plan, provider_storage, local);
+        };
+        if constexpr (generated_system_detail::GeneratedSourceModel<Dim, Model>) {
+          return backward_euler_source(model, provider_at, state, dt, options, lane);
+        } else {
+          return SolveOutcome::collective_lane(SolveReport::capability_failure(), lane);
+        }
+      };
   result.closures.staircase =
       make_embedded_residual_family<Dim>(std::move(staircase_flux), embedded_source);
   result.closures.cut_cell = make_cut_cell_residual_family<Dim, Variables>(

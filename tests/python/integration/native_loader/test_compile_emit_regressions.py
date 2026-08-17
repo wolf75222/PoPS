@@ -73,6 +73,8 @@ def _assert_exact_native_loader(loader: str, *, target: str, dimension: int) -> 
         target == "system"
     )
     assert "void* sys" in loader  # the stable C ABI is erased only at its boundary
+    assert "POPS_LOADER_API int pops_native_system_package_abi_version()" in loader
+    assert "return pops::runtime::system::kNativeSystemPackageAbiVersion;" in loader
 
     if target == "system":
         assert "using Installer = pops::runtime::system::PreparedNativeBlockInstaller<" in loader

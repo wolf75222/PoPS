@@ -148,7 +148,11 @@ class _FacadeCompileMixin(_FacadeModel):
             write_artifact_sidecar,
         )
         from pops.codegen.abi import _abi_key_python
-        from pops.codegen._compile_emit import compiled_capability_flags
+        from pops.codegen._compile_emit import (
+            NATIVE_SYSTEM_PACKAGE_ABI_EXPORT,
+            NATIVE_SYSTEM_PACKAGE_ABI_VERSION,
+            compiled_capability_flags,
+        )
         from pops.codegen.module_emit_riemann import has_characteristic_no_inflow_provider
         from pops.codegen.loader import CompiledModel
         from pops.codegen._compiled_model_identity import model_compile_identity
@@ -219,6 +223,8 @@ class _FacadeCompileMixin(_FacadeModel):
             "roe_entropy_delta": riemann_evidence.roe_entropy_delta or "none",
             "consumer_owner_qid": str(consumer_owner_qid or ""),
             "declares_auxiliary_providers": bool(declare_auxiliary_providers),
+            "native_system_package_abi_version": NATIVE_SYSTEM_PACKAGE_ABI_VERSION,
+            "native_system_package_abi_export": NATIVE_SYSTEM_PACKAGE_ABI_EXPORT,
         }
         if target == "amr_system":
             from pops.identity import canonical_bytes

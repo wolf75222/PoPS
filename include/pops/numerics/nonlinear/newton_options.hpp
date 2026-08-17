@@ -23,6 +23,34 @@ struct NewtonOptions {
   Real damping = kNewtonDefaultDamping;
 };
 
+inline NewtonOptions newton_options_from_abi(int max_iters, double rel_tol, double abs_tol,
+                                            double fd_eps, double damping) {
+  NewtonOptions options;
+  options.max_iters = max_iters;
+  options.rel_tol = static_cast<Real>(rel_tol);
+  options.abs_tol = static_cast<Real>(abs_tol);
+  options.fd_eps = static_cast<Real>(fd_eps);
+  options.damping = static_cast<Real>(damping);
+  return options;
+}
+
+inline EffectiveNewtonOptions effective_newton_options(const NewtonOptions& options,
+                                                      bool diagnostics) {
+  EffectiveNewtonOptions out;
+  out.max_iters = options.max_iters;
+  out.rel_tol = static_cast<double>(options.rel_tol);
+  out.abs_tol = static_cast<double>(options.abs_tol);
+  out.fd_eps = static_cast<double>(options.fd_eps);
+  out.damping = static_cast<double>(options.damping);
+  out.diagnostics = diagnostics;
+  out.non_default = options.max_iters != kNewtonDefaultMaxIters ||
+                    options.rel_tol != kNewtonDefaultRelTol ||
+                    options.abs_tol != kNewtonDefaultAbsTol ||
+                    options.fd_eps != kNewtonDefaultFdEps ||
+                    options.damping != kNewtonDefaultDamping || diagnostics;
+  return out;
+}
+
 inline void validate_newton_options(const NewtonOptions& options, const char* where) {
   const std::string prefix = std::string(where) + " : ";
   if (options.max_iters < 1)

@@ -109,7 +109,7 @@ std::string package_source() {
       return "0000000000000000000000000000000000000000000000000000000000000000";
     }
     extern "C" int pops_native_system_package_abi_version() {
-      return 3;
+      return pops::runtime::system::kNativeSystemPackageAbiVersion;
     }
     extern "C" const char* pops_compiled_route_manifest() {
       return pops::kRouteRegistrySignature;
@@ -191,12 +191,18 @@ std::string package_source() {
     extern "C" void pops_install_native(void* raw, const char* name, const char* limiter,
                                         const char* riemann, const char* recon, const char* time,
                                         double gamma, int substeps, int evolve, int stride,
-                                        const double*, int, double pos_floor) {
+                                        const double*, int, double pos_floor, int newton_max_iters,
+                                        double newton_rel_tol, double newton_abs_tol,
+                                        double newton_fd_eps, double newton_damping,
+                                        int newton_diagnostics) {
       auto* system =
           static_cast<pops::runtime::system::PreparedNativeBlockInstaller<pops::kNativeDimension>*>(
               raw);
+      const pops::NewtonOptions newton = pops::newton_options_from_abi(
+          newton_max_iters, newton_rel_tol, newton_abs_tol, newton_fd_eps, newton_damping);
       pops::add_compiled_model(*system, name, "scalar", NamedAuxModel{}, limiter, riemann, recon,
-                               time, gamma, substeps, evolve != 0, stride, pos_floor);
+                               time, gamma, substeps, evolve != 0, stride, pos_floor, newton,
+                               newton_diagnostics != 0);
     }
   )CPP";
 }

@@ -1,7 +1,6 @@
 """AmrSystem equation mixin (Spec-4 PR-F).
 
-``add_equation`` (the AMR backend dispatcher) plus the module-level guard
-``_reject_newton_amr_compiled`` used only by this path. Mixed in via inheritance; operates on
+``add_equation`` (the AMR backend dispatcher). Mixed in via inheritance; operates on
 ``self._s``.
 """
 
@@ -31,30 +30,16 @@ else:
     _AmrSystem = object
 
 
-def _reject_newton_amr_compiled(label: Any, time: Any) -> Any:
-    """Reject Newton metadata absent from the compiled AMR package ABI.
-
-    The AMR spatial runtime never turns this descriptor into an implicit step. A typed Program
-    primitive must own the local solve, its options and its report. The flat ``.so`` block-loader ABI
-    transports neither these options nor ``newton_diagnostics``; accepting them here would silently
-    replace the authored values with defaults before the Program is installed.
-    """
-    if (
-        getattr(time, "newton_max_iters", NEWTON_DEFAULT_MAX_ITERS) != NEWTON_DEFAULT_MAX_ITERS
-        or getattr(time, "newton_rel_tol", NEWTON_DEFAULT_REL_TOL) != NEWTON_DEFAULT_REL_TOL
-        or getattr(time, "newton_abs_tol", NEWTON_DEFAULT_ABS_TOL) != NEWTON_DEFAULT_ABS_TOL
-        or getattr(time, "newton_fd_eps", NEWTON_DEFAULT_FD_EPS) != NEWTON_DEFAULT_FD_EPS
-        or getattr(time, "newton_damping", NEWTON_DEFAULT_DAMPING) != NEWTON_DEFAULT_DAMPING
-        or getattr(time, "newton_diagnostics", False)
-    ):
-        raise ValueError(
-            "%s : the Newton options/diagnostics (newton_max_iters/rel_tol/abs_tol/fd_eps/damping/"
-            "diagnostics) are not transported by the AMR production package; "
-            "the AMR target does not yet provide the typed local nonlinear/Newton Program "
-            "primitive that could consume them. Keep the AMR Program explicit, use a typed "
-            "LocalLinear solve for a linear implicit operator, or use the uniform System "
-            "source-Newton route. The AMR spatial runtime has no private Newton fallback." % label
-        )
+def _compiled_newton_kwargs(time: Any) -> dict[str, Any]:
+    """Marshal authored time-policy Newton controls onto the compiled AMR package ABI."""
+    return {
+        "newton_max_iters": int(getattr(time, "newton_max_iters", NEWTON_DEFAULT_MAX_ITERS)),
+        "newton_rel_tol": float(getattr(time, "newton_rel_tol", NEWTON_DEFAULT_REL_TOL)),
+        "newton_abs_tol": float(getattr(time, "newton_abs_tol", NEWTON_DEFAULT_ABS_TOL)),
+        "newton_fd_eps": float(getattr(time, "newton_fd_eps", NEWTON_DEFAULT_FD_EPS)),
+        "newton_damping": float(getattr(time, "newton_damping", NEWTON_DEFAULT_DAMPING)),
+        "newton_diagnostics": bool(getattr(time, "newton_diagnostics", False)),
+    }
 
 
 class _AmrSystemEquation(_AmrSystem):
@@ -107,9 +92,8 @@ class _AmrSystemEquation(_AmrSystem):
         The ``time`` value carried by a block is immutable Program-authoring metadata, not an
         executable method in the AMR spatial runtime. The compiled ``pops.Program`` installed after
         all blocks is the only time authority. Explicit Programs own their RK stages and reflux
-        weights. The ``IMEX`` token alone remains authoring metadata; a request for an implicit mask,
-        Newton controls, or diagnostics fails closed until a typed implicit Program primitive exists.
-        It never reaches a private backward-Euler/Newton engine.
+        weights. Newton options cross ``pops_install_native_amr`` and are consumed by the Program
+        ``solve_implicit_source`` primitive.
         ``recon="primitive"`` and fluxes ``roe`` / ``hllc`` use the same compiled spatial dispatch as
         the native-brick branch. The low-level dispatch also contains the WENO5-Z stencil and its three-cell
         halo, but the resolved Case route accepts it only when the owner-qualified coarse/fine
@@ -122,7 +106,7 @@ class _AmrSystemEquation(_AmrSystem):
         - stride is transported by ``add_native_block`` / ``pops_install_native_amr`` and executed
           by the compiled hold-then-catch-up Program (clocks + subcycle + SampleAndHold);
         - a non-empty implicit mask is consumed by the typed ``Program.implicit_source`` primitive
-          after ``add_equation`` records the descriptor; Newton options stay refused.
+          after ``add_equation`` records the descriptor; Newton options ride the same ABI as stride.
 
         @p spatial: private adapter lowered from ``pops.numerics.FiniteVolume(...)``.
         @p time: private engine policy lowered from an explicit ``pops.Program`` or a
@@ -198,10 +182,7 @@ class _AmrSystemEquation(_AmrSystem):
         nstride = positive_int(
             getattr(time, "stride", 1), where="AmrSystem.add_equation.stride"
         )
-        # Newton options / diagnostics: same flat ABI -> neither the options nor the report transit
-        # through the .so loader. Explicit rejection prevents silent substitution of the prepared
-        # provider defaults, in parity with the stride/mask rejection above and System.add_equation.
-        _reject_newton_amr_compiled("AmrSystem.add_equation", time)
+        newton_kwargs = _compiled_newton_kwargs(time)
         # positivity_floor (ADC-322): the regenerated .so loader carries the Zhang-Shu floor in
         # the complete prepared package, so it is threaded through instead of rejected. 0
         # (default) = inactive, bit-identical. The native package seam validates floor >= 0 and
@@ -345,6 +326,7 @@ class _AmrSystemEquation(_AmrSystem):
                 bind_values,
                 positivity_floor,
                 **spatial_options,
+                **newton_kwargs,
             )
         from pops.runtime._cadence_install import _record_block_time
 

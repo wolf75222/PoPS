@@ -92,6 +92,7 @@ class _ProgramConstants:
     _STATE_BARRIER_OPS = frozenset({
         "project", "fill_boundary", "store_history",
         "solve_fields", "solve_fields_from_blocks", "solve_coupled_implicit",
+        "solve_implicit_source",
     })
 
     _OPTIMIZE_PASSES = (
@@ -103,7 +104,8 @@ class _ProgramConstants:
     _SCRATCH_OPS = frozenset({
         "rhs", "source", "implicit_source", "apply", "local_transform", "linear_combine",
         "linear_source", "solve_local_linear",
-        "solve_local_nonlinear", "solve_coupled_implicit", "cell_compare", "where", "coupled_rate",
+        "solve_local_nonlinear", "solve_coupled_implicit", "solve_implicit_source",
+        "cell_compare", "where", "coupled_rate",
     })
 
     _PERCELL_KERNEL_OPS = frozenset({
@@ -114,6 +116,7 @@ class _ProgramConstants:
     })
     _HEAVY_KERNEL_OPS = frozenset({
         "solve_fields", "solve_fields_from_blocks", "solve_linear", "solve_coupled_implicit",
+        "solve_implicit_source",
     })
 
     # GPU heuristic thresholds (Spec 3 s28 detectors, ADC-465). A warning report, never a hard error:

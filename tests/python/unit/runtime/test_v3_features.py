@@ -128,9 +128,10 @@ amr_program_only.add_equation(
     spatial=engine.Spatial(limiter=Minmod()),
     time=engine.Explicit(),
 )
+report = amr_program_only.newton_report()
 chk(
-    not hasattr(amr_program_only, "newton_report"),
-    "le runtime spatial AMR n'expose aucun faux rapport Newton",
+    report["enabled"] is False,
+    "Explicit AMR package publishes no Newton report until solve_implicit_source runs",
 )
 
 # --- (C) set_conservative_state multi-blocs ------------------------------------------

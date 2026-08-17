@@ -880,6 +880,8 @@ struct PreparedAmrSystemBlock {
   int reconstruction_order = 1;
   int substeps = 1;
   int stride = 1;
+  NewtonOptions newton{};
+  bool newton_diagnostics = false;
   std::string time_route;
   LevelMaterializer materialize_level;
   std::function<void(const double*, double*)> primitive_to_conservative;
@@ -1064,11 +1066,13 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
   result.reconstruction_order = Reconstruction::formal_order;
   result.substeps = request.substeps;
   result.stride = request.stride;
+  result.newton = request.newton;
+  result.newton_diagnostics = request.newton_diagnostics;
   result.time_route = request.routes.time;
 
   ExactContractBuilder package_contract;
   package_contract.text("pops.prepared-generated-amr-system-block")
-      .scalar(std::uint32_t{5})
+      .scalar(std::uint32_t{6})
       .scalar(std::int32_t{Dim})
       .text(name)
       .text(provider_identity)
@@ -1082,6 +1086,12 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
       .scalar(request.gamma)
       .scalar(std::int32_t{request.substeps})
       .scalar(std::int32_t{request.stride})
+      .scalar(std::int32_t{request.newton.max_iters})
+      .scalar(static_cast<double>(request.newton.rel_tol))
+      .scalar(static_cast<double>(request.newton.abs_tol))
+      .scalar(static_cast<double>(request.newton.fd_eps))
+      .scalar(static_cast<double>(request.newton.damping))
+      .scalar(request.newton_diagnostics)
       .text(request.routes.time)
       .bytes(model_contract)
       .scalar(static_cast<double>(request.routes.positivity_floor))
@@ -1712,6 +1722,8 @@ struct CompiledAmrSystemBlockPreparation {
   double gamma = 1.0;
   int substeps = 1;
   int stride = 1;
+  NewtonOptions newton{};
+  bool newton_diagnostics = false;
 };
 
 namespace compiled_amr_detail {
@@ -1747,7 +1759,8 @@ PreparedAmrSystemBlock<Dim> prepare_compiled_amr_system_block(
     const std::string& reconstruction, const std::string& time, double gamma, int substeps,
     int stride, double positivity_floor = 0.0,
     double weno_epsilon = static_cast<double>(kWenoEpsilon), bool wave_speed_cache = false,
-    const std::string& provider_consumer_qid = {}) {
+    const std::string& provider_consumer_qid = {}, NewtonOptions newton = {},
+    bool newton_diagnostics = false) {
   static_assert(Dim >= 1 && Dim <= 3);
   static_assert(
       requires { Model::dimension; },
@@ -1768,6 +1781,7 @@ PreparedAmrSystemBlock<Dim> prepare_compiled_amr_system_block(
     throw std::invalid_argument("compiled AMR block gamma must be finite and positive");
   if (substeps < 1 || stride < 1)
     throw std::invalid_argument("compiled AMR block substeps and stride must be positive");
+  validate_newton_options(newton, "compiled AMR block");
   if (positivity_floor > 0.0 && Model::conservative_vars().index_of(VariableRole::Density) < 0)
     throw std::invalid_argument("compiled AMR positivity requires a conservative Density variable");
 
@@ -1780,7 +1794,8 @@ PreparedAmrSystemBlock<Dim> prepare_compiled_amr_system_block(
                                       wave_speed_cache};
   compiled_amr_detail::validate_routes(routes);
   return prepare_generated_amr_system_block(CompiledAmrSystemBlockPreparation<Dim, Model>{
-      name, provider_consumer_qid, std::move(model), std::move(routes), gamma, substeps, stride});
+      name, provider_consumer_qid, std::move(model), std::move(routes), gamma, substeps, stride,
+      newton, newton_diagnostics});
 }
 
 /// Stage the same default block/state identity Python add_equation installs when pops.bind is

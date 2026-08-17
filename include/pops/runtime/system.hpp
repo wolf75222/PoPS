@@ -328,7 +328,7 @@ class System {
       const std::string& recon = "conservative", const std::string& time = "explicit",
       double gamma = static_cast<double>(kPhysicalDefaultGamma), int substeps = 1,
       bool evolve = true, int stride = 1, const std::vector<double>& params = {},
-      double positivity_floor = 0.0);
+      double positivity_floor = 0.0, NewtonOptions newton = {}, bool newton_diagnostics = false);
 
   /// Authenticate and stage one exact-ranked external Riemann package. The external DSO owns the
   /// prepared model and numerical flux type; its handle is retained by the ordinary native-package
@@ -1022,6 +1022,14 @@ class System {
   /// POPS_EXPORT: resolved by the generated problem.so across the
   /// dlopen boundary, like block_neg_div_flux_into.
   POPS_EXPORT void block_source_into(int b, MultiFab<Dim>& U, MultiFab<Dim>& R);
+  /// Prepared local backward-Euler source Newton for compiled block @p b. The install ABI is the
+  /// authority for @p options when the Program asks for the block's stored controls.
+  POPS_EXPORT SolveOutcome solve_block_source(int b, MultiFab<Dim>& U, Real dt,
+                                              const NewtonOptions& options);
+  [[nodiscard]] POPS_EXPORT NewtonOptions block_newton_options(int b) const;
+  [[nodiscard]] bool block_newton_diagnostics(int b) const;
+  POPS_EXPORT void publish_newton_report(int b, const SolveReport& solve);
+  [[nodiscard]] const NewtonReport& last_newton_report() const;
   /// Preflight one unqualified Cartesian generated Program operator.  Such kernels cannot evaluate
   /// inactive cells before zeroing their outputs, so an active embedded boundary is rejected before
   /// mutation.  Only unqualified Cartesian kernels use this seam; local_transform and

@@ -591,14 +591,35 @@ void bind_system_assembly(py::class_<System>& cls) {
            py::arg("values"))
       // Private package-install seam. The resolved parameter vector is injected before native
       // closures are built; no mutable per-block parameter side channel exists.
-      .def("_register_native_package", &System::register_native_package, py::arg("name"),
-           py::arg("so_path"), py::arg("expected_model_identity"),
-           py::arg("expected_binary_identity"), py::arg("limiter") = "minmod",
-           py::arg("riemann") = "rusanov", py::arg("recon") = "conservative",
-           py::arg("time") = "explicit",
-           py::arg("gamma") = static_cast<double>(kPhysicalDefaultGamma), py::arg("substeps") = 1,
-           py::arg("evolve") = true, py::arg("stride") = 1,
-           py::arg("params") = std::vector<double>{}, py::arg("positivity_floor") = 0.0)
+      .def(
+          "_register_native_package",
+          [](System& system, const std::string& name, const std::string& so_path,
+             const std::string& expected_model_identity, const std::string& expected_binary_identity,
+             const std::string& limiter, const std::string& riemann, const std::string& recon,
+             const std::string& time, double gamma, int substeps, bool evolve, int stride,
+             const std::vector<double>& params, double positivity_floor, int newton_max_iters,
+             double newton_rel_tol, double newton_abs_tol, double newton_fd_eps,
+             double newton_damping, bool newton_diagnostics) {
+            NewtonOptions newton = newton_options_from_abi(
+                newton_max_iters, newton_rel_tol, newton_abs_tol, newton_fd_eps, newton_damping);
+            system.register_native_package(name, so_path, expected_model_identity,
+                                           expected_binary_identity, limiter, riemann, recon, time,
+                                           gamma, substeps, evolve, stride, params,
+                                           positivity_floor, newton, newton_diagnostics);
+          },
+          py::arg("name"), py::arg("so_path"), py::arg("expected_model_identity"),
+          py::arg("expected_binary_identity"), py::arg("limiter") = "minmod",
+          py::arg("riemann") = "rusanov", py::arg("recon") = "conservative",
+          py::arg("time") = "explicit",
+          py::arg("gamma") = static_cast<double>(kPhysicalDefaultGamma), py::arg("substeps") = 1,
+          py::arg("evolve") = true, py::arg("stride") = 1,
+          py::arg("params") = std::vector<double>{}, py::arg("positivity_floor") = 0.0,
+          py::arg("newton_max_iters") = kNewtonDefaultMaxIters,
+          py::arg("newton_rel_tol") = static_cast<double>(kNewtonDefaultRelTol),
+          py::arg("newton_abs_tol") = static_cast<double>(kNewtonDefaultAbsTol),
+          py::arg("newton_fd_eps") = static_cast<double>(kNewtonDefaultFdEps),
+          py::arg("newton_damping") = static_cast<double>(kNewtonDefaultDamping),
+          py::arg("newton_diagnostics") = false)
       .def("_register_external_riemann_package", &System::register_external_riemann_package,
            py::arg("name"), py::arg("so_path"), py::arg("brick_id"), py::arg("expected_sha256"),
            py::arg("expected_nvars"), py::arg("expected_provider_count"),
@@ -627,6 +648,22 @@ void bind_system_program(py::class_<System>& cls) {
       // Const getters (default 1/1 with no program); there was no Python-visible getter before.
       .def("program_substeps", &System::program_substeps)
       .def("program_stride", &System::program_stride)
+      .def(
+          "newton_report",
+          [](const System& system) {
+            const NewtonReport& report = system.last_newton_report();
+            py::dict out;
+            out["enabled"] = report.enabled;
+            out["converged"] = report.converged;
+            out["max_residual"] = static_cast<double>(report.max_residual);
+            out["max_iters_used"] = static_cast<double>(report.max_iters_used);
+            out["n_failed"] = report.n_failed;
+            out["iterations"] = report.solve.iters;
+            out["residual"] = static_cast<double>(report.solve.residual_norm);
+            out["relative_residual"] = static_cast<double>(report.solve.rel_residual);
+            return out;
+          },
+          "Last published compiled-package Newton report (empty until diagnostics run).")
       // Exact partially accumulated GLOBAL stride window. These are persistence seams, not an
       // alternative time controller: checkpoint captures both scalars and restart restores them
       // immediately before set_clock so adaptive-dt catch-up is bit-identical.

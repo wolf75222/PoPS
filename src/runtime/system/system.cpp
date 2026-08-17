@@ -488,6 +488,7 @@ EffectiveOptionsReport System<Dim>::effective_options_report() const {
     row.ncomp = block.ncomp;
     row.substeps = block.substeps;
     row.stride = block.stride;
+    row.newton = effective_newton_options(block.newton, block.newton_diagnostics);
     row.evolve = block.evolve;
     row.gamma = block.gamma;
     row.conservative_vars = block.cons_vars.names;

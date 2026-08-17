@@ -75,6 +75,7 @@ _KNOWN_DETERMINISTIC_OPS = frozenset(
         "branch",
         "synchronize",
         "solve_local_nonlinear",
+        "solve_implicit_source",
     }
 )
 

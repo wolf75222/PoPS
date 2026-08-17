@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Pre-dispatch guards for a detached compiled-AMR package.
 
-Stride and a partial IMEX mask now cross the Python add_equation guard. A detached package
-without a real ``.so`` still fails at the native loader. Newton options stay refused.
+Stride, a partial IMEX mask, and Newton options now cross the Python add_equation guard. A
+detached package without a real ``.so`` still fails at the native loader.
 """
 
 import sys
@@ -87,6 +87,24 @@ def test_compiled_amr_partial_imex_mask_crosses_the_python_guard(time, selector,
     assert "not transported" not in message
     assert str(missing) in message
     assert selector  # keep the parametrize identity in the test body
+
+
+def test_compiled_amr_newton_options_cross_the_python_guard_and_reach_the_loader(tmp_path):
+    missing = tmp_path / "missing-amr-newton.so"
+    sim = _amr_system()
+    model = _compiled_amr_metadata(so_path=str(missing))
+    install_compiled_model_amr_test_lane(sim, model)
+    with pytest.raises(RuntimeError) as excinfo:
+        sim.add_equation(
+            "gas",
+            model,
+            spatial=engine.Spatial(),
+            time=engine.IMEX(newton_max_iters=4, newton_diagnostics=True),
+        )
+    message = str(excinfo.value)
+    assert "not transported" not in message
+    assert "Newton" not in message
+    assert str(missing) in message
 
 
 @pytest.mark.parametrize("time", [engine.Explicit(), engine.IMEX()], ids=["explicit", "imex"])

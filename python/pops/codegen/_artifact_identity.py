@@ -14,7 +14,11 @@ def model_artifact_spec(
     from pops.codegen.cache import (
         _dsl_optflags, _platform_cache_key, _precision_cache_key, _registry_cache_key,
     )
-    from pops.codegen._compile_emit import model_hash
+    from pops.codegen._compile_emit import (
+        NATIVE_SYSTEM_PACKAGE_ABI_EXPORT,
+        NATIVE_SYSTEM_PACKAGE_ABI_VERSION,
+        model_hash,
+    )
     from pops.codegen.toolchain import _native_feature_key
     from pops.identity import artifact_spec_identity, make_identity
 
@@ -37,6 +41,10 @@ def model_artifact_spec(
             "emitted_name": str(name or ""),
             "consumer_owner_qid": str(consumer_owner_qid or ""),
             "declares_auxiliary_providers": bool(declare_auxiliary_providers),
+            # Host add_native_block looks up this exact export.  Changing the
+            # emitted loader surface without this component reuses a stale .so.
+            "native_system_package_abi_version": NATIVE_SYSTEM_PACKAGE_ABI_VERSION,
+            "native_system_package_abi_export": NATIVE_SYSTEM_PACKAGE_ABI_EXPORT,
         },
         flags=[_platform_cache_key(), *_dsl_optflags(),
                "hoist_reciprocals=%d" % bool(hoist_reciprocals)],

@@ -260,6 +260,7 @@ std::string loader_source() {
   // clang-format off
   return R"CPP(
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
+#include <pops/runtime/system/native_package_capability.hpp>
 #include <pops/runtime/config/route_ids.hpp>
 #include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/physics/bricks/bricks.hpp>
@@ -274,6 +275,9 @@ using ProdModel =
 // LITTERAL preprocesseur (PAS abi_key_string() : une inline serait interposee, ELF/RTLD_GLOBAL,
 // vers la copie du module deja charge -> cle du module renvoyee -> garde d'ABI tautologique).
 extern "C" const char* pops_native_abi_key() { return POPS_ABI_KEY_LITERAL; }
+extern "C" int pops_native_system_package_abi_version() {
+  return pops::runtime::system::kNativeSystemPackageAbiVersion;
+}
 extern "C" const char* pops_compiled_model_identity() {
   return "1111111111111111111111111111111111111111111111111111111111111111";
 }
@@ -292,8 +296,13 @@ extern "C" void pops_install_native_amr(void* sys, const char* name, const char*
                                        const char* riemann, const char* recon, const char* time,
                                        double gamma, int substeps, int stride, const double*, int,
                                        double pos_floor, double weno_epsilon,
-                                       bool wave_speed_cache) {
+                                       bool wave_speed_cache, int newton_max_iters,
+                                       double newton_rel_tol, double newton_abs_tol,
+                                       double newton_fd_eps, double newton_damping,
+                                       int newton_diagnostics) {
   auto* s = reinterpret_cast<pops::AmrSystem<pops_generated::Dim>*>(sys);
+  const pops::NewtonOptions newton = pops::newton_options_from_abi(
+      newton_max_iters, newton_rel_tol, newton_abs_tol, newton_fd_eps, newton_damping);
   pops::PreparedNativeAmrPackage<pops_generated::Dim> package;
   package.block = pops::prepare_compiled_amr_system_block<pops_generated::Dim>(
       name,
@@ -302,7 +311,8 @@ extern "C" void pops_install_native_amr(void* sys, const char* name, const char*
           pops::EulerND<pops_generated::Dim>{static_cast<pops::Real>(gamma)}, pops::NoSource{},
           pops::BackgroundDensity{pops::Real(0), pops::Real(0)}},
       limiter, riemann, recon, time, gamma, substeps, stride, pos_floor, weno_epsilon,
-      wave_speed_cache, "tests.amr-riemann-native/physical-flux");
+      wave_speed_cache, "tests.amr-riemann-native/physical-flux", newton,
+      newton_diagnostics != 0);
   s->install_prepared_native_amr_package(std::move(package));
 }
 )CPP";

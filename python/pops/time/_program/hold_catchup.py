@@ -84,12 +84,14 @@ def _advance(program: Any, state: Any, block: HoldCatchupBlock, *, at: Any) -> A
             state + dt * flux + dt * explicit,
             at=at,
         )
-        implicit = program.implicit_source(
-            mid,
-            implicit_vars=block.implicit_vars,
-            implicit_roles=block.implicit_roles,
-        )
-        return mid + dt * implicit
+        if block.implicit_vars or block.implicit_roles:
+            implicit = program.implicit_source(
+                mid,
+                implicit_vars=block.implicit_vars,
+                implicit_roles=block.implicit_roles,
+            )
+            return mid + dt * implicit
+        return program.solve_implicit_source(mid)
     return state + dt * program._rhs_primitive(state=state, flux=True, sources=["default"])
 
 

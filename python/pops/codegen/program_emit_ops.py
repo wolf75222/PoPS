@@ -808,6 +808,24 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                      % (bidx, var[state_in.id], var[v.id]))
         keep = ",".join(str(int(index)) for index in v.attrs["keep_components"])
         lines.append("ctx.apply_source_mask(%s, {%s});" % (var[v.id], keep))
+    elif v.op == "solve_implicit_source":
+        state_in = v.inputs[0]
+        var[v.id] = "u%d" % v.id
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
+                     % (var[v.id], int(v.id), var[state_in.id]))
+        lines.append(
+            "ctx.lincomb(%s, static_cast<pops::Real>(1), %s, static_cast<pops::Real>(0), %s);"
+            % (var[v.id], var[state_in.id], var[state_in.id]))
+        outcome = "implicit_source_outcome_%d" % v.id
+        report = "implicit_source_report_%d" % v.id
+        lines.append(
+            "pops::SolveOutcome %s = ctx.solve_source_default(%d, %s, static_cast<pops::Real>(dt), "
+            "ctx.block_newton_options(%d));"
+            % (outcome, bidx, var[v.id], bidx))
+        lines.append(
+            "const pops::SolveReport %s = pops::consume_solve_outcome(std::move(%s));"
+            % (report, outcome))
+        lines.append("ctx.publish_newton_report(%d, %s);" % (bidx, report))
     elif v.op == "source":
         state_in = v.inputs[0]  # source inputs = (state[, fields]); the state is first
         var[v.id] = "r%d" % v.id

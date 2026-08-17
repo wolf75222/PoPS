@@ -114,6 +114,7 @@ std::string loader_source() {
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
+#include <pops/runtime/system/native_package_capability.hpp>
 #include <pops/runtime/config/route_ids.hpp>
 #include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/runtime/program/amr_program_context.hpp>
@@ -182,6 +183,9 @@ struct RelaxingAdvection {
 using Model = RelaxingAdvection<pops::kNativeDimension>;
 }
 extern "C" const char* pops_native_abi_key() { return POPS_ABI_KEY_LITERAL; }
+extern "C" int pops_native_system_package_abi_version() {
+  return pops::runtime::system::kNativeSystemPackageAbiVersion;
+}
 extern "C" const char* pops_compiled_model_identity() {
   return "2222222222222222222222222222222222222222222222222222222222222222";
 }
@@ -197,17 +201,23 @@ extern "C" void pops_install_native_amr(void* sys, const char* name, const char*
                                         const char* riemann, const char* recon, const char* time,
                                         double gamma, int substeps, int stride, const double*, int,
                                         double pos_floor, double weno_epsilon,
-                                        bool wave_speed_cache) {
+                                        bool wave_speed_cache, int newton_max_iters,
+                                        double newton_rel_tol, double newton_abs_tol,
+                                        double newton_fd_eps, double newton_damping,
+                                        int newton_diagnostics) {
   pops::RealVector<pops::kNativeDimension> velocity{};
   for (int axis = 0; axis < pops::kNativeDimension; ++axis)
     velocity[axis] = pops::Real(0.2) / pops::Real(axis + 1);
   pops_generated::Model model{
       pops::nd::ScalarAdvection<pops::kNativeDimension>::prepare(velocity), pops::Real(80)};
   auto* system = static_cast<pops::AmrSystem<pops::kNativeDimension>*>(sys);
+  const pops::NewtonOptions newton = pops::newton_options_from_abi(
+      newton_max_iters, newton_rel_tol, newton_abs_tol, newton_fd_eps, newton_damping);
   pops::PreparedNativeAmrPackage<pops::kNativeDimension> package;
   package.block = pops::prepare_compiled_amr_system_block<pops::kNativeDimension>(
       name, std::move(model), limiter, riemann, recon, time, gamma, substeps, stride, pos_floor,
-      weno_epsilon, wave_speed_cache, "tests.synthetic-loader/providers/tracer");
+      weno_epsilon, wave_speed_cache, "tests.synthetic-loader/providers/tracer", newton,
+      newton_diagnostics != 0);
   system->install_prepared_native_amr_package(std::move(package));
 }
 

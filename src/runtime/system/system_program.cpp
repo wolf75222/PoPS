@@ -775,6 +775,53 @@ void System<Dim>::block_source_into(int block, MultiFab<Dim>& state, MultiFab<Di
 }
 
 template <int Dim>
+SolveOutcome System<Dim>::solve_block_source(int block, MultiFab<Dim>& state, Real dt,
+                                             const NewtonOptions& options) {
+  if (block < 0 || block >= p_->blocks_.size())
+    throw std::out_of_range("System implicit-source block index is out of range");
+  typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
+  if (!selected.solve_implicit_source)
+    throw std::runtime_error("System block '" + selected.name +
+                             "' lacks a prepared implicit-source Newton provider");
+  validate_newton_options(options, "System::solve_block_source");
+  return selected.solve_implicit_source(state, dt, options, prepared_boundary_execution_lane());
+}
+
+template <int Dim>
+NewtonOptions System<Dim>::block_newton_options(int block) const {
+  if (block < 0 || block >= p_->blocks_.size())
+    throw std::out_of_range("System Newton-options block index is out of range");
+  return p_->sp[static_cast<std::size_t>(block)].newton;
+}
+
+template <int Dim>
+bool System<Dim>::block_newton_diagnostics(int block) const {
+  if (block < 0 || block >= p_->blocks_.size())
+    throw std::out_of_range("System Newton-diagnostics block index is out of range");
+  return p_->sp[static_cast<std::size_t>(block)].newton_diagnostics;
+}
+
+template <int Dim>
+void System<Dim>::publish_newton_report(int block, const SolveReport& solve) {
+  if (!block_newton_diagnostics(block))
+    return;
+  NewtonReport report;
+  report.enabled = true;
+  report.converged = solve.solved();
+  report.max_residual = solve.residual_norm;
+  report.max_iters_used = static_cast<Real>(solve.iters);
+  report.n_failed = solve.solved() ? 0.0 : 1.0;
+  report.failure = solve.failure;
+  report.solve = solve;
+  p_->last_newton_report_ = report;
+}
+
+template <int Dim>
+const NewtonReport& System<Dim>::last_newton_report() const {
+  return p_->last_newton_report_;
+}
+
+template <int Dim>
 void System<Dim>::require_cartesian_generated_operator(int block,
                                                        const std::string& operation) const {
   if (block < 0 || block >= p_->blocks_.size())
@@ -1058,6 +1105,12 @@ template void System<kNativeDimension>::block_neg_div_flux_into_at(
     MultiFab<kNativeDimension>&);
 template void System<kNativeDimension>::block_source_into(int, MultiFab<kNativeDimension>&,
                                                           MultiFab<kNativeDimension>&);
+template SolveOutcome System<kNativeDimension>::solve_block_source(int, MultiFab<kNativeDimension>&,
+                                                                   Real, const NewtonOptions&);
+template NewtonOptions System<kNativeDimension>::block_newton_options(int) const;
+template bool System<kNativeDimension>::block_newton_diagnostics(int) const;
+template void System<kNativeDimension>::publish_newton_report(int, const SolveReport&);
+template const NewtonReport& System<kNativeDimension>::last_newton_report() const;
 template void System<kNativeDimension>::require_cartesian_generated_operator(
     int, const std::string&) const;
 template Real System<kNativeDimension>::block_max_speed(int,

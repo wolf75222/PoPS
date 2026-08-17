@@ -15,6 +15,11 @@ _BACKEND_CAPS = {
     "production": {"cpu": True, "mpi": True, "amr": True, "gpu": False, "tier": "production"},
 }
 
+# Must match pops::runtime::system::kNativeSystemPackageAbiVersion.  Host
+# add_native_block looks up NATIVE_SYSTEM_PACKAGE_ABI_EXPORT on every package.
+NATIVE_SYSTEM_PACKAGE_ABI_VERSION = 4
+NATIVE_SYSTEM_PACKAGE_ABI_EXPORT = "pops_native_system_package_abi_version"
+
 
 def compiled_capability_flags(backend: str) -> dict[str, bool]:
     """Project backend report metadata onto the bool-only compiled-model ABI contract."""
@@ -915,7 +920,10 @@ def emit_cpp_native_loader(
     head += (
         "#include <pops/runtime/builders/compiled/dsl_block.hpp>\n"
         if target == "system"
-        else "#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>\n"
+        else (
+            "#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>\n"
+            "#include <pops/runtime/system/native_package_capability.hpp>\n"
+        )
     )
     key = (
         "#if defined(_WIN32)\n"
@@ -930,12 +938,11 @@ def emit_cpp_native_loader(
         '  return "%s";\n'
         "}\n" % model_identity
     )
-    if target == "system":
-        key += (
-            "POPS_LOADER_API int pops_native_system_package_abi_version() {\n"
-            "  return pops::runtime::system::kNativeSystemPackageAbiVersion;\n"
-            "}\n"
-        )
+    key += (
+        "POPS_LOADER_API int %s() {\n"
+        "  return pops::runtime::system::kNativeSystemPackageAbiVersion;\n"
+        "}\n" % NATIVE_SYSTEM_PACKAGE_ABI_EXPORT
+    )
     # Construct every elliptic RHS closure while ``model`` still owns the runtime parameters bound
     # from BindSchema.  The default field must capture the generated CompositeModel: its Ell brick
     # intentionally exposes only rhs(State), while CompositeModel supplies State + elliptic_rhs.
@@ -1080,7 +1087,10 @@ def emit_cpp_native_loader(
             "                                    const char* riemann, const char* recon,\n"
             "                                    const char* time, double gamma, int substeps,\n"
             "                                    int evolve, int stride, const double* params,\n"
-            "                                    int nparams, double pos_floor) {\n"
+            "                                    int nparams, double pos_floor, int newton_max_iters,\n"
+            "                                    double newton_rel_tol, double newton_abs_tol,\n"
+            "                                    double newton_fd_eps, double newton_damping,\n"
+            "                                    int newton_diagnostics) {\n"
             "  using Installer = pops::runtime::system::PreparedNativeBlockInstaller<pops::kNativeDimension>;\n"
             "  auto* s = static_cast<Installer*>(sys);\n"
             "  auto model = pops::compiled_model::bind_runtime_params(\n"
@@ -1090,8 +1100,11 @@ def emit_cpp_native_loader(
             "  package.consumer_qid = "
             + json.dumps(_consumer_owner_qid(m, consumer_owner_qid) + "/physical_flux")
             + ";\n"
+            "  const pops::NewtonOptions newton = pops::newton_options_from_abi(\n"
+            "      newton_max_iters, newton_rel_tol, newton_abs_tol, newton_fd_eps, newton_damping);\n"
             "  package.block = pops::prepare_compiled_system_block<pops::kNativeDimension>(*s, name, package.consumer_qid, std::move(model),\n"
-            "      limiter, riemann, recon, time, gamma, substeps, evolve != 0, stride, pos_floor);\n"
+            "      limiter, riemann, recon, time, gamma, substeps, evolve != 0, stride, pos_floor,\n"
+            "      newton, newton_diagnostics != 0);\n"
             + system_elliptic_package_lines
             + "  s->commit(std::move(package));\n"
             "}\n"
@@ -1107,16 +1120,22 @@ def emit_cpp_native_loader(
             "                                        double gamma, int substeps, int stride,\n"
             "                                        const double* params, int nparams,\n"
             "                                        double pos_floor, double weno_epsilon,\n"
-            "                                        bool wave_speed_cache) {\n"
+            "                                        bool wave_speed_cache, int newton_max_iters,\n"
+            "                                        double newton_rel_tol, double newton_abs_tol,\n"
+            "                                        double newton_fd_eps, double newton_damping,\n"
+            "                                        int newton_diagnostics) {\n"
             "  using NativeAmrSystem = pops::AmrSystem<pops::kNativeDimension>;\n"
             "  auto* s = reinterpret_cast<NativeAmrSystem*>(sys);\n"
             "  auto model = pops::compiled_model::bind_runtime_params(\n"
             "      pops_generated::ProdModel{}, params, nparams);\n"
             + amr_elliptic_prepare_lines
             + "  pops::PreparedNativeAmrPackage<pops::kNativeDimension> package;\n"
+            "  const pops::NewtonOptions newton = pops::newton_options_from_abi(\n"
+            "      newton_max_iters, newton_rel_tol, newton_abs_tol, newton_fd_eps, newton_damping);\n"
             "  package.block = pops::prepare_compiled_amr_system_block<pops::kNativeDimension>(\n"
             "      name, std::move(model), limiter, riemann, recon, time, gamma, substeps,\n"
-            "      stride, pos_floor, weno_epsilon, wave_speed_cache, %s);\n"
+            "      stride, pos_floor, weno_epsilon, wave_speed_cache, %s, newton,\n"
+            "      newton_diagnostics != 0);\n"
             % json.dumps(_consumer_owner_qid(m, consumer_owner_qid) + "/physical_flux")
             + amr_elliptic_package_lines
             + "  s->install_prepared_native_amr_package(std::move(package));\n"

@@ -49,12 +49,16 @@ else:
     _System = object
 
 
-def _reject_unpublished_newton_diagnostics(time: Any, *, where: str) -> None:
-    if getattr(time, "newton_diagnostics", False):
-        raise ValueError(
-            f"{where}: newton_diagnostics=True is unavailable on the Program-only System "
-            "runtime because no typed implicit Program consumer publishes that report"
-        )
+def _compiled_newton_kwargs(time: Any) -> dict[str, Any]:
+    """Marshal authored time-policy Newton controls onto the compiled-package ABI."""
+    return {
+        "newton_max_iters": int(getattr(time, "newton_max_iters", NEWTON_DEFAULT_MAX_ITERS)),
+        "newton_rel_tol": float(getattr(time, "newton_rel_tol", NEWTON_DEFAULT_REL_TOL)),
+        "newton_abs_tol": float(getattr(time, "newton_abs_tol", NEWTON_DEFAULT_ABS_TOL)),
+        "newton_fd_eps": float(getattr(time, "newton_fd_eps", NEWTON_DEFAULT_FD_EPS)),
+        "newton_damping": float(getattr(time, "newton_damping", NEWTON_DEFAULT_DAMPING)),
+        "newton_diagnostics": bool(getattr(time, "newton_diagnostics", False)),
+    }
 
 
 def _authored_modelspec_block_options(
@@ -63,20 +67,11 @@ def _authored_modelspec_block_options(
     """Capture ModelSpec inspect rows the compiled-package ABI does not retain."""
     defaults = numerical_defaults_report()
     physical = defaults["physical"]
-    newton = {
-        "max_iters": int(getattr(time, "newton_max_iters", NEWTON_DEFAULT_MAX_ITERS)),
-        "rel_tol": float(getattr(time, "newton_rel_tol", NEWTON_DEFAULT_REL_TOL)),
-        "abs_tol": float(getattr(time, "newton_abs_tol", NEWTON_DEFAULT_ABS_TOL)),
-        "fd_eps": float(getattr(time, "newton_fd_eps", NEWTON_DEFAULT_FD_EPS)),
-        "damping": float(getattr(time, "newton_damping", NEWTON_DEFAULT_DAMPING)),
-        "diagnostics": False,
-    }
     return {
         "name": name,
         "transport": str(getattr(spec, "transport", "") or ""),
         "time": str(getattr(time, "kind", "explicit") or "explicit"),
         "evolve": evolve,
-        "newton": newton,
         "positivity_floor": float(getattr(spatial, "positivity_floor", 0.0) or 0.0),
         "physical": {
             "cs2": float(getattr(spec, "cs2", physical["fluid_state_cs2"])),
@@ -173,7 +168,8 @@ class _SystemInstall(_System):
 
         spatial = spatial if spatial is not None else Spatial()
         time = time if time is not None else Explicit()
-        _reject_unpublished_newton_diagnostics(time, where="System.add_equation")
+        # Newton options/diagnostics cross the compiled-package ABI and are consumed by the
+        # Program ``solve_implicit_source`` primitive. Diagnostics publish last_newton_report.
         nsub = positive_int(
             substeps if substeps is not None else getattr(time, "substeps", 1),
             where="System.add_equation.substeps",
@@ -207,23 +203,6 @@ class _SystemInstall(_System):
                 stride=stride,
                 _bind_params=_bind_params,
                 _from_modelspec=True,
-            )
-
-        # Same rules for the Newton options/diagnostics (IMEX): not carried by the .so ABI.
-        # Non-default values would be ignored SILENTLY -> explicit rejection.
-        if not _from_modelspec and (
-            getattr(time, "newton_max_iters", NEWTON_DEFAULT_MAX_ITERS) != NEWTON_DEFAULT_MAX_ITERS
-            or getattr(time, "newton_rel_tol", NEWTON_DEFAULT_REL_TOL) != NEWTON_DEFAULT_REL_TOL
-            or getattr(time, "newton_abs_tol", NEWTON_DEFAULT_ABS_TOL) != NEWTON_DEFAULT_ABS_TOL
-            or getattr(time, "newton_fd_eps", NEWTON_DEFAULT_FD_EPS) != NEWTON_DEFAULT_FD_EPS
-            or getattr(time, "newton_diagnostics", False)
-            or getattr(time, "newton_damping", NEWTON_DEFAULT_DAMPING) != NEWTON_DEFAULT_DAMPING
-        ):
-            raise ValueError(
-                "add_equation: the Newton options (newton_max_iters/rel_tol/abs_tol/fd_eps/"
-                "diagnostics/damping) are carried only by a composed native model "
-                "(ModelSpec), available on the internal native engine API (not part of the "
-                "pops.bind surface). The compiled model (.so) ABI does not carry them."
             )
 
         if not isinstance(model, CompiledModel):
@@ -389,6 +368,7 @@ class _SystemInstall(_System):
                 nstride,
                 bind_values,
                 positivity_floor,
+                **_compiled_newton_kwargs(time),
             )
             self._pending_native_packages += 1
         self._coupling_block_contracts = contract_candidate

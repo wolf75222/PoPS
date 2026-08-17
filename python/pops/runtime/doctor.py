@@ -326,12 +326,10 @@ def capabilities() -> Any:
                 "(no AMR spatial-runtime fallback)",
                 "Program factories Lie|Strang + hierarchy-scoped Program.solve",
             ],
-            "newton_options": "options (max_iters/tol/fd_eps/damping) : System route "
-            "or typed Program solve; AMR rejects non-default block options and "
-            "diagnostics until its typed implicit primitive exists (.so block "
-            "loaders: explicit rejection) ; "
-            "analytic jacobian via m.source_jacobian ; newton_diagnostics/"
-            "newton_report requires the executing typed solve",
+            "newton_options": "options (max_iters/tol/fd_eps/damping) : compiled-package "
+            "ABI + Program solve_implicit_source; newton_diagnostics publishes "
+            "newton_report from the consumed SolveOutcome ; "
+            "analytic jacobian via m.source_jacobian",
         },
         "stability_policy": {
             "system": [

@@ -370,6 +370,20 @@ class ProgramContext {
     system_->block_source_into(sys_block(program_block), state_value, rhs);
   }
 
+  [[nodiscard]] NewtonOptions block_newton_options(int program_block) const {
+    return system_->block_newton_options(sys_block(program_block));
+  }
+
+  [[nodiscard]] SolveOutcome solve_source_default(int program_block, field_type& stage_state,
+                                                  Real dt, const NewtonOptions& options) const {
+    count_kernel_();
+    return system_->solve_block_source(sys_block(program_block), stage_state, dt, options);
+  }
+
+  void publish_newton_report(int program_block, const SolveReport& solve) const {
+    system_->publish_newton_report(sys_block(program_block), solve);
+  }
+
   void apply_source_mask(field_type& rhs, std::initializer_list<int> keep) const {
     pops::runtime::program::apply_component_keep_mask(
         rhs, std::vector<int>(keep.begin(), keep.end()));

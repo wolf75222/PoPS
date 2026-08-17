@@ -443,6 +443,10 @@ class AmrSystem {
   [[nodiscard]] POPS_EXPORT SolveOutcome solve_prepared_amr_block_level_source_at(
       int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
       MultiFab<Dim>& state, Real dt, const NewtonOptions& options);
+  [[nodiscard]] POPS_EXPORT NewtonOptions block_newton_options(int runtime_block) const;
+  [[nodiscard]] bool block_newton_diagnostics(int runtime_block) const;
+  POPS_EXPORT void publish_newton_report(int runtime_block, const SolveReport& solve);
+  [[nodiscard]] const NewtonReport& last_newton_report() const;
   POPS_EXPORT const PreparedLevelEvaluation& prepared_amr_level_evaluation(int level) const;
   POPS_EXPORT const PreparedLevelEvaluation* prepared_amr_level_evaluation_if_present(
       int level) const noexcept;
@@ -558,7 +562,8 @@ class AmrSystem {
       const std::string& recon = "conservative", const std::string& time = "explicit",
       double gamma = static_cast<double>(kPhysicalDefaultGamma), int substeps = 1,
       int stride = 1, const std::vector<double>& params = {}, double positivity_floor = 0.0,
-      double weno_epsilon = static_cast<double>(kWenoEpsilon), bool wave_speed_cache = false);
+      double weno_epsilon = static_cast<double>(kWenoEpsilon), bool wave_speed_cache = false,
+      NewtonOptions newton = {}, bool newton_diagnostics = false);
 
   /// Authenticate and install one exact-ranked external Riemann package through the ordinary
   /// prepared AMR block path. Both canonical System/AMR provider hooks are mandatory, including
@@ -695,6 +700,10 @@ class AmrSystem {
   AmrFieldSolverConfiguration field_solver_configuration(const std::string& provider_slot) const;
   /// Install the resolved scalar reaction coefficient of one named screened field.
   void set_field_reaction(const std::string& provider_slot, double reaction);
+  /// Evaluate neutralizing as ``eps * composite_mean(block[component])`` with the same
+  /// active-coverage reduction as the nullspace check.  The authored RHS must be ``eps * M00``.
+  void set_field_composite_mean_neutralizing(const std::string& provider_slot,
+                                             const std::string& block, int component, double eps);
   void set_field_topology_authority(const std::string& provider_slot,
                                     const std::string& provider_kind, const std::string& provenance,
                                     const std::string& topology_digest);

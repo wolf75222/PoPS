@@ -112,17 +112,16 @@ def test_system_inspect_reports_effective_block_and_solver_options():
     assert block["positivity_floor"] == pytest.approx(1e-12)
 
 
-def test_system_rejects_unpublished_newton_diagnostics():
+def test_system_accepts_compiled_newton_diagnostics():
     sim = System(n=8, L=1.0, periodicity=(True, True))
-    with pytest.raises(
-        ValueError,
-        match="no typed implicit Program consumer publishes that report",
-    ):
-        sim.add_equation(
-            "ion",
-            _isothermal_model(),
-            time=engine.IMEX(newton_diagnostics=True),
-        )
+    sim.add_equation(
+        "ion",
+        _isothermal_model(),
+        time=engine.IMEX(newton_diagnostics=True, newton_max_iters=4),
+    )
+    block = sim.inspect().to_dict()["options"]["blocks"][0]
+    assert block["newton"]["diagnostics"] is True
+    assert block["newton"]["max_iters"] == 4
 
 
 def test_invalid_newton_values_are_rejected():

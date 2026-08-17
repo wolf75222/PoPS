@@ -342,6 +342,10 @@ void apply_source_mask(field_type& rhs, std::initializer_list<int> keep) const {
   count_kernel_();
 }
 
+[[nodiscard]] NewtonOptions block_newton_options(int program_block) const {
+  return facade_->block_newton_options(sys_block(program_block));
+}
+
 [[nodiscard]] SolveOutcome solve_source_default(int program_block, field_type& stage_state, Real dt,
                                                 const NewtonOptions& options) const {
   const int runtime_block = sys_block(program_block);
@@ -354,6 +358,10 @@ void apply_source_mask(field_type& rhs, std::initializer_list<int> keep) const {
                                    active_level_ - 1, staged_parent_for_block_(runtime_block));
   count_kernel_();
   return outcome;
+}
+
+void publish_newton_report(int program_block, const SolveReport& solve) const {
+  facade_->publish_newton_report(sys_block(program_block), solve);
 }
 
 void require_cartesian_generated_operator(int program_block, const std::string& operation) const {
