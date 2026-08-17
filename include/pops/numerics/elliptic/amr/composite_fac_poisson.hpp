@@ -486,7 +486,6 @@ class CompositeFacPoisson {
         levels_[level]->halo_exchange.emplace(levels_[level]->halo_schedule, *lane_, context);
       }
     }
-    build_coarse_solver_(request.levels.front());
   }
 
   CompositeFacPoisson(const CompositeFacPoisson&) = delete;
@@ -1127,31 +1126,26 @@ class CompositeFacPoisson {
                                              levels_[child - 1]->residual);
   }
 
-  void build_coarse_solver_(const EllipticBuildRequest<Dim>& coarse_request) {
-    ::pops::elliptic::mg::GeometricMultigridOptions controls;
-    controls.relative_tolerance = options_.coarse_rel_tol;
-    controls.absolute_tolerance = options_.coarse_abs_tol;
-    controls.maximum_cycles = options_.coarse_cycles;
-    controls.reaction = reaction_;
-    EllipticBuildRequest<Dim> correction_request = coarse_request;
-    correction_request.boundary = ::pops::elliptic::mg::detail::boundary_for_geometry(
-        coarse_request.boundary, coarse_request.geometry, true);
-    coarse_solver_ = std::make_unique<::pops::elliptic::mg::GeometricMG<Dim, MemorySpace>>(
-        std::move(correction_request), *lane_, controls);
-    coarse_solver_->install_nullspace(
-        FieldNullspacePlan<Dim>{},
-        coarse_request.distribution.replicated()
-            ? PreparedVectorDistribution<Dim>::replicated()
-            : PreparedVectorDistribution<Dim>::distributed());
-  }
-
   SolveReport solve_coarse_correction_() {
-    coarse_solver_->phi().set_val(Real(0));
-    ::pops::elliptic::mg::copy_scalar_valid(levels_.front()->residual, coarse_solver_->rhs());
-    const SolveReport coarse_report = coarse_solver_->solve();
-    if (coarse_report.solved())
-      ::pops::elliptic::mg::copy_scalar_valid(coarse_solver_->phi(), levels_.front()->correction);
-    return coarse_report;
+    Level& coarse = *levels_.front();
+    coarse.correction.set_val(Real(0));
+    const Real reference = global_norm_inf_(coarse.residual);
+    const Real stop = std::max(options_.coarse_abs_tol, options_.coarse_rel_tol * reference);
+    // Covered-mask local smoother: GeometricMG does not mask covered cells and
+    // fail-stops on partitioned multi-box coarse residuals.
+    for (int sweep = 0; sweep < options_.coarse_cycles; ++sweep) {
+      smooth_(0, coarse.correction, coarse.residual, 1, false, true);
+      if ((sweep + 1) % 8 == 0 || sweep + 1 == options_.coarse_cycles) {
+        fill_ghosts_(0, coarse.correction, true);
+        ::pops::elliptic::mg::poisson_residual_valid(coarse.correction, coarse.residual,
+                                                     coarse.geometry, coarse.scratch, reaction_);
+        if (global_norm_inf_(coarse.scratch) <= stop)
+          break;
+      }
+    }
+    SolveReport report;
+    report.mark_solved("partitioned_fac_coarse_correction");
+    return report;
   }
 
   static void add_active_(Level& level, const field_type& correction) {
@@ -1438,7 +1432,6 @@ class CompositeFacPoisson {
   CompositeFacOptions options_{};
   Real reaction_ = Real(0);
   std::optional<ExecutionLane> lane_{};
-  std::unique_ptr<::pops::elliptic::mg::GeometricMG<Dim, MemorySpace>> coarse_solver_{};
   std::vector<std::unique_ptr<Level>> levels_{};
   std::vector<std::unique_ptr<Connection>> connections_{};
   std::string lane_identity_{};

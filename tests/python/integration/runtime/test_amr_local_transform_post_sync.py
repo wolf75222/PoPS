@@ -149,7 +149,7 @@ def test_amr_after_synchronization_applies_transform_on_a_refined_hierarchy(
     assert simulation.n_levels() == 2
     report = pops.run(simulation, t_end=DT, max_steps=1)
     assert report.accepted_steps == 1
-    actual = np.asarray(simulation.state_global("field"), dtype=np.float64).reshape(
-        (1, CELLS, CELLS)
-    )
+    actual = np.asarray(
+        simulation.block_level_state_global("field", 0), dtype=np.float64
+    ).reshape((1, CELLS, CELLS))
     np.testing.assert_array_equal(actual, np.full((1, CELLS, CELLS), 3.0, dtype=np.float64))

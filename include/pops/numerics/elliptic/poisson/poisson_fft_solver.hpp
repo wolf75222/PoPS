@@ -480,12 +480,15 @@ class PoissonFFTSolver {
     if (ranks > 1 && request.distribution.replicated())
       throw std::invalid_argument(
           "distributed Poisson FFT slabs require unique owners (no replicated final axis)");
-    for (int axis = 0; axis < Dim; ++axis) {
-      const std::int64_t expected_extent = axis == Dim - 1 ? static_cast<std::int64_t>(ranks) : 1;
-      if (request.distribution.rank_space().extent()[axis] != expected_extent)
-        throw std::invalid_argument(
-            "Poisson FFT rank space must be unique slabs along the final Cartesian axis");
-    }
+    // Boxes must be unique last-axis slabs. The process rank space may be any
+    // 1-D embedding of the same communicator (System uses the first axis).
+    int process_axes = 0;
+    for (int axis = 0; axis < Dim; ++axis)
+      if (request.distribution.rank_space().extent()[axis] != 1)
+        ++process_axes;
+    if (ranks > 1 && process_axes != 1)
+      throw std::invalid_argument(
+          "Poisson FFT rank space must be a one-dimensional process grid");
 
     fft_solver_detail::validate_periodic_boundary(request.geometry, request.boundary);
     for (int axis = 0; axis < Dim; ++axis)

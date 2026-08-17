@@ -295,10 +295,11 @@ def test_transfer_registry_accepts_an_external_policy_protocol():
         prolongation = built_in.prolongation
         restriction = built_in.restriction
         coarse_fine = built_in.coarse_fine
+        temporal = built_in.temporal
 
         def amr_transfer_policy_data(self):
             routes = {}
-            for name in ("prolongation", "restriction", "coarse_fine"):
+            for name in ("prolongation", "restriction", "coarse_fine", "temporal"):
                 kernel = getattr(self, name)
                 candidates = getattr(kernel, "amr_transfer_kernel_candidates", None)
                 routes[name] = (

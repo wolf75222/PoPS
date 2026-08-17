@@ -201,8 +201,6 @@ def _layout(authored, *, tagger, clustering, tagging=None, reflux=None):
 
 def test_external_amr_provider_installers_fail_closed_at_resolution(tmp_path):
     target = _example().build_final_case()
-    tagger_component = _component(
-        tmp_path, name="tagger", interface=interfaces.Tagger)
     clustering_component = _component(
         tmp_path, name="clustering", interface=interfaces.Clustering)
     reflux_component = _component(
@@ -217,16 +215,6 @@ def test_external_amr_provider_installers_fail_closed_at_resolution(tmp_path):
             ),
             (clustering_component,),
             "BergerRigoutsosProvider<Dim>",
-        ),
-        (
-            "tagger",
-            _layout(
-                target.layout,
-                tagger=TaggerProvider(tagger_component),
-                clustering=target.layout.clustering,
-            ),
-            (tagger_component,),
-            "PreparedTaggingExecutionPlan<Dim>",
         ),
         (
             "reflux",

@@ -119,8 +119,21 @@ def test_unknown_is_missing_proof_and_3d_is_representable_then_refused():
         dimension=3, extents=(8, 8, 8), strides=(64, 8, 1),
         ghosts=((0, 0), (0, 0), (0, 0)))
     assert three_d.dimension == 3
+    # Authoring manifests may prove 1/2/3. A 2-D-only launch pair still refuses 3-D views.
+    two_d = _proof((1, 2))
+    platform = replace(
+        _platform(),
+        capabilities=dict(_platform().capabilities, supported_dimensions=two_d),
+    )
+    context = replace(
+        _context(),
+        backend=replace(
+            _context().backend,
+            capabilities=dict(_context().backend.capabilities, supported_dimensions=two_d),
+        ),
+    )
     with pytest.raises(PlatformContractError, match="unsupported dimension=3"):
-        launch_checked(_platform(), _context(), [three_d], lambda *_: None)
+        launch_checked(platform, context, [three_d], lambda *_: None)
 
 
 def test_platform_support_set_is_distinct_from_layout_resolved_dimension():
