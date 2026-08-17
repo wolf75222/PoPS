@@ -336,7 +336,8 @@ Supported native routes include:
 
 Explicit unsupported rows include:
 
-- `elliptic:fft_amr`: FFT requires a single uniform periodic mesh; AMR uses GeometricMG.
+- `elliptic:fft_amr`: a global FFT Poisson over a sparse AMR hierarchy stays refused.
+  GeometricMG/FAC may host PoissonFFT on the coarsest uniform periodic level only.
 - `checkpoint:parallel_hdf5`: parallel HDF5 is a scientific-output route, not a restartable checkpoint
   encoding; `RuntimeInstance.checkpoint()` and the typed `Checkpoint` consumer use uniform v8 or AMR
   v11 accepted-state payloads.

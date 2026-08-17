@@ -1147,9 +1147,11 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             status="unavailable",
             limitation=(
                 "a global FFT Poisson over a sparse AMR hierarchy with covered cells is the "
-                "wrong operator; PoissonFFTSolver is not a MultiFab GeometricMG/FAC bottom "
-                "solver, so the coarsest uniform periodic level cannot host FFT without a new "
-                "adapter. Keep GeometricMG/FAC on AMR"
+                "wrong operator and stays refused (solver=FFT() on layout=AMR). The coarsest "
+                "uniform periodic GeometricMG/FAC level may host PoissonFFT when it is one "
+                "periodic box, canonical last-axis slabs, or a replicated uniform coarse "
+                "rewritten onto those slabs; variable-k, EB, reaction, and non-slab multi-box "
+                "coarse levels keep Jacobi/MG"
             ),
             requested="solver=FFT() with layout=AMR",
             available_route="GeometricMG() on AMR",

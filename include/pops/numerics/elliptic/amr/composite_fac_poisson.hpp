@@ -601,6 +601,7 @@ class CompositeFacPoisson {
       }
     }
     build_coarse_solver_(request.levels.front());
+    try_prepare_fft_coarse_();
   }
 
   CompositeFacPoisson(const CompositeFacPoisson&) = delete;
@@ -615,6 +616,11 @@ class CompositeFacPoisson {
 
   std::string_view exact_prepared_contract() const noexcept { return exact_contract_; }
   int n_levels() const noexcept { return static_cast<int>(levels_.size()); }
+  bool fft_coarse_prepared() const noexcept { return static_cast<bool>(fft_coarse_); }
+  bool used_fft_coarse() const noexcept { return used_fft_coarse_; }
+  ::pops::elliptic::PoissonFftBottomKind fft_coarse_kind() const noexcept {
+    return fft_coarse_ ? fft_coarse_->kind() : ::pops::elliptic::PoissonFftBottomKind::none;
+  }
   int maximum_iterations() const noexcept {
     if (newton_workspace_)
       return newton_workspace_->options().max_iterations;
@@ -734,6 +740,10 @@ class CompositeFacPoisson {
     fill_coefficient_ghosts_(static_cast<std::size_t>(level));
     if (level == 0 && coarse_solver_)
       coarse_solver_->install_coefficient(*target.coefficient);
+    if (level == 0) {
+      fft_coarse_.reset();
+      used_fft_coarse_ = false;
+    }
   }
 
   void install_embedded_boundary(int level, const field_type& active,
@@ -770,6 +780,10 @@ class CompositeFacPoisson {
       coarse_solver_->install_embedded_boundary(target.active, *target.inverse_volume,
                                                 *target.aperture_lower, *target.aperture_upper);
     }
+    if (level == 0) {
+      fft_coarse_.reset();
+      used_fft_coarse_ = false;
+    }
   }
 
   SolveReport solve() {
@@ -781,6 +795,7 @@ class CompositeFacPoisson {
         nullspace_workspace_->require_compatible(nullspace_rhs_);
         nullspace_workspace_->apply_gauge(nullspace_candidates_);
       }
+      used_fft_coarse_ = false;
     } catch (const FieldNullspaceIncompatibleRhs& error) {
       SolveReport report;
       report.mark_failed(SolveStatus::kIncompatibleRhs, SolveAction::kFailRun, error.what());
@@ -1548,6 +1563,25 @@ class CompositeFacPoisson {
     build_coarse_solver_(*coarse_request_, false);
     if (levels_.front()->coefficient)
       coarse_solver_->install_coefficient(*levels_.front()->coefficient);
+    try_prepare_fft_coarse_();
+  }
+
+  void try_prepare_fft_coarse_() {
+    fft_coarse_.reset();
+    used_fft_coarse_ = false;
+    if (!coarse_request_ || !lane_)
+      return;
+    const Level& coarse = *levels_.front();
+    EllipticBuildRequest<Dim> request = *coarse_request_;
+    request.boundary = ::pops::elliptic::mg::detail::boundary_for_geometry(
+        request.boundary, request.geometry, true);
+    request.rhs_ghosts = {};
+    request.phi_ghosts = fac_detail::unit_ghosts<Dim>();
+    request.layout_budget =
+        ::pops::elliptic::mg::detail::exact_layout_budget(request.boxes);
+    fft_coarse_ = ::pops::elliptic::PoissonFftMultiFabAdapter<Dim>::try_make(
+        request, *lane_, reaction_, coarse.coefficient.has_value(),
+        coarse.inverse_volume.has_value());
   }
 
   void ensure_nullspace_() {
@@ -1597,7 +1631,12 @@ class CompositeFacPoisson {
 
   SolveReport apply_fac_correction_() {
     SolveReport coarse_report;
-    if (coarse_solver_) {
+    if (fft_coarse_) {
+      coarse_report = fft_coarse_->apply(levels_.front()->residual, levels_.front()->correction);
+      used_fft_coarse_ = true;
+      if (coarse_report.solved())
+        fill_ghosts_(0, levels_.front()->correction, true);
+    } else if (coarse_solver_) {
       coarse_solver_->phi().set_val(Real(0));
       ::pops::elliptic::mg::copy_scalar_valid(levels_.front()->residual, coarse_solver_->rhs());
       coarse_report = coarse_solver_->solve();
@@ -1923,6 +1962,8 @@ class CompositeFacPoisson {
   std::optional<ExecutionLane> lane_{};
   std::optional<EllipticBuildRequest<Dim>> coarse_request_{};
   std::unique_ptr<::pops::elliptic::mg::GeometricMG<Dim, MemorySpace>> coarse_solver_{};
+  std::unique_ptr<::pops::elliptic::PoissonFftMultiFabAdapter<Dim>> fft_coarse_{};
+  bool used_fft_coarse_ = false;
   std::vector<std::unique_ptr<Level>> levels_{};
   std::vector<std::unique_ptr<Connection>> connections_{};
   std::string lane_identity_{};

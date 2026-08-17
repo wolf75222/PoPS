@@ -484,6 +484,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_elliptic_composite_rhs
   test_composite_fac_adjacent
   test_composite_fac_eb
+  test_composite_fac_fft_coarse
   test_composite_fac_nlevel
   test_composite_fac_poisson
   test_composite_fac_variable_eps
@@ -780,6 +781,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_amr_rebalance_migration 2 4)
   set(POPS_MPI_RANKS_test_mpi_composite_fac 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_composite_fac_partitioned_nd 2)
+  set(POPS_MPI_RANKS_test_mpi_composite_fac_fft_coarse 2)
   set(POPS_MPI_RANKS_test_mpi_composite_fac_replicated_coarse 2)
   set(POPS_MPI_RANKS_test_mpi_tensor_fac_provider_nd 2)
   set(POPS_MPI_RANKS_test_prepared_embedded_boundary_nd 2)
@@ -837,6 +839,7 @@ if(POPS_HAS_MPI)
     test_mpi_amr_rebalance_migration
     test_mpi_composite_fac
     test_mpi_composite_fac_partitioned_nd
+    test_mpi_composite_fac_fft_coarse
     test_mpi_composite_fac_replicated_coarse
     test_mpi_tensor_fac_provider_nd
     test_amr_regrid_mpi_parity

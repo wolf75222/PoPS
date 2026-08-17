@@ -15,6 +15,7 @@
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace_workspace.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
+#include <pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp>
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
 #include <pops/runtime/numerical_defaults.hpp>
 
@@ -330,6 +331,7 @@ class GeometricMG {
       throw std::invalid_argument(
           "geometric MG prepared lane or operator differs across communicator ranks");
     build_hierarchy_(request, lane);
+    try_prepare_fft_bottom_();
   }
 
   GeometricMG(const Geometry<Dim>& geometry, const mesh::BoxArray<Dim>& layout,
@@ -368,6 +370,11 @@ class GeometricMG {
     return prepared_operator_contract_;
   }
   int num_levels() const noexcept { return static_cast<int>(levels_.size()); }
+  bool fft_coarse_prepared() const noexcept { return static_cast<bool>(fft_bottom_); }
+  bool used_fft_coarse() const noexcept { return used_fft_coarse_; }
+  ::pops::elliptic::PoissonFftBottomKind fft_coarse_kind() const noexcept {
+    return fft_bottom_ ? fft_bottom_->kind() : ::pops::elliptic::PoissonFftBottomKind::none;
+  }
   int maximum_iterations() const noexcept {
     if (newton_workspace_)
       return newton_workspace_->options().max_iterations;
@@ -430,6 +437,8 @@ class GeometricMG {
     }
     for (auto& level : levels_)
       fill_coefficient_ghosts_(*level);
+    fft_bottom_.reset();
+    used_fft_coarse_ = false;
   }
 
   void install_embedded_boundary(const field_type& active, const field_type& inverse_volume,
@@ -458,6 +467,8 @@ class GeometricMG {
                                 aperture_upper.local_rank(), Dim, Extent<Dim>{});
     copy_vector_valid_(aperture_lower, *fine.aperture_lower);
     copy_vector_valid_(aperture_upper, *fine.aperture_upper);
+    fft_bottom_.reset();
+    used_fft_coarse_ = false;
   }
 
   void install_boundary_kernel(CompiledFieldBoundaryKernel<Dim> kernel) {
@@ -507,6 +518,9 @@ class GeometricMG {
       return last_report_;
     }
     nullspace_workspace_->apply_gauge(fine.phi);
+    used_fft_coarse_ = false;
+    fft_bottom_attempted_ = false;
+    fft_bottom_report_ = {};
 
     if (newton_workspace_ || boundary_kernel_)
       return solve_dynamic_(fine);
@@ -536,6 +550,12 @@ class GeometricMG {
 
     for (int cycle = 0; cycle < options_.maximum_cycles; ++cycle) {
       v_cycle_(0);
+      if (fft_bottom_attempted_ && !fft_bottom_report_.solved()) {
+        report.mark_failed(fft_bottom_report_.status, SolveAction::kFailRun,
+                           std::string("geometric_mg_fft_bottom:") + fft_bottom_report_.reason);
+        last_report_ = report;
+        return last_report_;
+      }
       nullspace_workspace_->apply_gauge(fine.phi);
       compute_residual_(fine);
       ++report.evaluations;
@@ -666,6 +686,30 @@ class GeometricMG {
           Geometry<Dim>::from_bounds(coarse_domain, level_geometry.lower(), level_geometry.upper());
       ++generation;
     }
+  }
+
+  EllipticBuildRequest<Dim> fft_request_from_level_(const Level& level) const {
+    return EllipticBuildRequest<Dim>{
+        level.geometry,
+        level.phi.layout(),
+        level.phi.distribution(),
+        level.phi.local_rank(),
+        level.boundary,
+        Extent<Dim>{},
+        detail::unit_ghosts<Dim>(),
+        detail::exact_layout_budget(level.phi.layout()),
+    };
+  }
+
+  void try_prepare_fft_bottom_() {
+    fft_bottom_.reset();
+    used_fft_coarse_ = false;
+    fft_bottom_attempted_ = false;
+    fft_bottom_report_ = {};
+    if (levels_.empty() || uses_weighted_operator_(*levels_.back()) || options_.reaction != Real(0))
+      return;
+    fft_bottom_ = ::pops::elliptic::PoissonFftMultiFabAdapter<Dim>::try_make(
+        fft_request_from_level_(*levels_.back()), *lane_, options_.reaction, false, false);
   }
 
   void fill_ghosts_(Level& level) {
@@ -922,6 +966,14 @@ class GeometricMG {
   void v_cycle_(std::size_t level_index) {
     Level& level = *levels_.at(level_index);
     if (level_index + 1 == levels_.size()) {
+      if (fft_bottom_) {
+        fft_bottom_report_ = fft_bottom_->apply(level.rhs, level.phi);
+        fft_bottom_attempted_ = true;
+        used_fft_coarse_ = true;
+        if (fft_bottom_report_.solved())
+          fill_ghosts_(level);
+        return;
+      }
       smooth_(level, options_.bottom_sweeps);
       return;
     }
@@ -965,6 +1017,10 @@ class GeometricMG {
   std::vector<field_type*> dynamic_candidate_view_{};
   EllipticOperatorContract prepared_operator_contract_{};
   SolveReport last_report_{};
+  std::unique_ptr<::pops::elliptic::PoissonFftMultiFabAdapter<Dim>> fft_bottom_{};
+  SolveReport fft_bottom_report_{};
+  bool used_fft_coarse_ = false;
+  bool fft_bottom_attempted_ = false;
 };
 
 static_assert(EllipticSolver<GeometricMG<1>>);

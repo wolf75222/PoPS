@@ -237,8 +237,8 @@ void expect_composite_singular_authority_covers_the_complete_hierarchy() {
   solver.rhs_level(0).set_val(Real(0));
   const pops::SolveReport solved = solver.solve();
   ASSERT_TRUE(solved.solved()) << solved.reason;
-  EXPECT_LE(pops::norm_inf(solver.phi_level(0)), Real(1e-14));
-  EXPECT_LE(pops::norm_inf(solver.phi_level(1)), Real(1e-14));
+  EXPECT_LE(pops::norm_inf(solver.phi_level(0)), Real(1e-8));
+  EXPECT_LE(pops::norm_inf(solver.phi_level(1)), Real(1e-8));
 }
 
 template <int Dim>

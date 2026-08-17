@@ -200,6 +200,7 @@ class CompositeFacPoisson {
     for (Connection& connection : connections_)
       connection.attach_lane(*lane_);
     build_coarse_solver_(request.levels.front(), *lane_);
+    try_prepare_fft_coarse_();
     exact_prepared_contract_ = detail::fac_build_contract(request, options_, reaction_, lane);
   }
 
@@ -224,6 +225,11 @@ class CompositeFacPoisson {
 
   std::string_view exact_prepared_contract() const noexcept { return exact_prepared_contract_; }
   int n_levels() const noexcept { return static_cast<int>(levels_.size()); }
+  bool fft_coarse_prepared() const noexcept { return static_cast<bool>(fft_coarse_); }
+  bool used_fft_coarse() const noexcept { return used_fft_coarse_; }
+  ::pops::elliptic::PoissonFftBottomKind fft_coarse_kind() const noexcept {
+    return fft_coarse_ ? fft_coarse_->kind() : ::pops::elliptic::PoissonFftBottomKind::none;
+  }
   int maximum_iterations() const noexcept {
     if (newton_workspace_)
       return newton_workspace_->options().max_iterations;
@@ -339,6 +345,10 @@ class CompositeFacPoisson {
     fill_coefficient_ghosts_(static_cast<std::size_t>(level));
     if (level == 0 && coarse_solver_)
       coarse_solver_->install_coefficient(*target.coefficient);
+    if (level == 0) {
+      fft_coarse_.reset();
+      used_fft_coarse_ = false;
+    }
     rebuild_weighted_flux_mismatches_();
   }
 
@@ -374,6 +384,10 @@ class CompositeFacPoisson {
       coarse_solver_->install_embedded_boundary(target.active, *target.inverse_volume,
                                                 *target.aperture_lower, *target.aperture_upper);
     }
+    if (level == 0) {
+      fft_coarse_.reset();
+      used_fft_coarse_ = false;
+    }
     rebuild_weighted_flux_mismatches_();
   }
 
@@ -394,6 +408,7 @@ class CompositeFacPoisson {
       return last_report_;
     }
     nullspace_workspace_->apply_gauge(nullspace_candidates_);
+    used_fft_coarse_ = false;
 
     if (newton_workspace_ || boundary_kernel_)
       return solve_dynamic_();
@@ -436,9 +451,19 @@ class CompositeFacPoisson {
 
       compute_composite_residual_();
       restrict_residual_tower_();
-      coarse_solver_->phi().set_val(Real(0));
-      copy_scalar_valid(levels_.front()->residual, coarse_solver_->rhs());
-      const SolveReport coarse_report = coarse_solver_->solve();
+      SolveReport coarse_report;
+      if (fft_coarse_) {
+        coarse_report = fft_coarse_->apply(levels_.front()->residual, levels_.front()->correction);
+        used_fft_coarse_ = true;
+        if (coarse_report.solved())
+          fill_correction_ghosts_(0);
+      } else {
+        coarse_solver_->phi().set_val(Real(0));
+        copy_scalar_valid(levels_.front()->residual, coarse_solver_->rhs());
+        coarse_report = coarse_solver_->solve();
+        if (coarse_report.solved())
+          copy_scalar_valid(coarse_solver_->phi(), levels_.front()->correction);
+      }
       report.evaluations += coarse_report.evaluations;
       if (!coarse_report.solved()) {
         report.iters = iteration;
@@ -453,7 +478,6 @@ class CompositeFacPoisson {
         return last_report_;
       }
 
-      copy_scalar_valid(coarse_solver_->phi(), levels_.front()->correction);
       report.step_norm = global_norm_inf_(levels_.front()->correction);
       add_uncovered_(*levels_.front(), levels_.front()->correction);
       prolong_correction_tower_();
@@ -1247,6 +1271,24 @@ class CompositeFacPoisson {
           distribution.replicated() ? PreparedVectorDistribution<Dim>::replicated()
                                     : PreparedVectorDistribution<Dim>::distributed());
     }
+    try_prepare_fft_coarse_();
+  }
+
+  void try_prepare_fft_coarse_() {
+    fft_coarse_.reset();
+    used_fft_coarse_ = false;
+    if (!coarse_request_ || lane_ == nullptr)
+      return;
+    const Level& coarse = *levels_.front();
+    EllipticBuildRequest<Dim> request = *coarse_request_;
+    request.boundary =
+        detail::boundary_for_geometry(request.boundary, request.geometry, true);
+    request.rhs_ghosts = {};
+    request.phi_ghosts = detail::unit_ghosts<Dim>();
+    request.layout_budget = detail::exact_layout_budget(request.boxes);
+    fft_coarse_ = ::pops::elliptic::PoissonFftMultiFabAdapter<Dim>::try_make(
+        request, *lane_, reaction_, coarse.coefficient.has_value(),
+        coarse.inverse_volume.has_value());
   }
 
   void same_level_fill_(Level& level, field_type& field) {
@@ -1780,6 +1822,8 @@ class CompositeFacPoisson {
   std::vector<Connection> connections_{};
   std::optional<EllipticBuildRequest<Dim>> coarse_request_{};
   std::unique_ptr<GeometricMG<Dim, MemorySpace>> coarse_solver_{};
+  std::unique_ptr<::pops::elliptic::PoissonFftMultiFabAdapter<Dim>> fft_coarse_{};
+  bool used_fft_coarse_ = false;
   std::vector<const MultiFab<Dim>*> nullspace_rhs_{};
   std::vector<MultiFab<Dim>*> nullspace_candidates_{};
   std::unique_ptr<FieldNullspaceWorkspace<Dim>> nullspace_workspace_{};

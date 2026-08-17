@@ -192,6 +192,12 @@ labels = ["backend", "elliptic", "amr", "mpi", "nd", "medium"]
 mpi_nproc = [2]
 
 [[cpp.suite]]
+name = "test_mpi_composite_fac_fft_coarse"
+sources = ["tests/cpp/integration/mpi/test_mpi_composite_fac_fft_coarse.cpp"]
+labels = ["backend", "elliptic", "amr", "mpi", "nd", "medium"]
+mpi_nproc = [2]
+
+[[cpp.suite]]
 name = "test_mpi_composite_fac_replicated_coarse"
 sources = ["tests/cpp/integration/mpi/test_mpi_composite_fac_replicated_coarse.cpp"]
 labels = ["backend", "elliptic", "amr", "mpi", "nd", "medium"]
@@ -547,6 +553,11 @@ labels = ["unit", "elliptic", "amr", "fast", "nd"]
 [[cpp.suite]]
 name = "test_composite_fac_eb"
 sources = ["tests/cpp/unit/elliptic/test_composite_fac_eb.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_composite_fac_fft_coarse"
+sources = ["tests/cpp/unit/elliptic/test_composite_fac_fft_coarse.cpp"]
 labels = ["unit", "elliptic", "fast"]
 
 [[cpp.suite]]
