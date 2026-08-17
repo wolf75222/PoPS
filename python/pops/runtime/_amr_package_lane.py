@@ -12,7 +12,7 @@ from typing import Any
 
 def ensure_amr_native_package_lane(runtime: Any, model: Any) -> Any:
     """Install the owned AMR package lane when the native engine does not already have one."""
-    from pops import _pops
+    from pops._native_selector import selected_native_module
     from pops._platform_contracts import (
         ExecutionContext,
         ExecutionResource,
@@ -45,6 +45,7 @@ def ensure_amr_native_package_lane(runtime: Any, model: Any) -> Any:
     if not callable(prepare_lane):
         raise TypeError("AMR package lane requires the native lane-preparation seam")
 
+    _pops = selected_native_module(required=True)
     communicator = native_mpi_communicator(_pops)
     backend = native_runtime_backend_for_route("production", "amr_system", communicator)
     platform = artifact_platform_manifest(

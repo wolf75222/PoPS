@@ -88,6 +88,7 @@ NATIVE_SELECTOR_CONSUMERS = frozenset({
     "pops.external.artifacts",
     "pops.external.compiler",
     "pops.output._writers.hdf5",
+    "pops.runtime._amr_package_lane",
     "pops.runtime._platform_manifest",
     "pops.runtime._runtime_authorities",
     "pops.runtime._threading",

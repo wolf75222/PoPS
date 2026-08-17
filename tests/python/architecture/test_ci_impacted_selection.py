@@ -968,7 +968,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "test \"${#compile_contracts[@]}\" -eq 3" in mpi_block
     assert "--verify-contracts" in mpi_block
     assert 'run_with_heartbeat "MPI Python module link" 14m' in mpi_block
-    assert 'run_with_heartbeat "MPI native test build" 14m' in mpi_block
+    assert 'run_with_heartbeat "MPI native test build" 28m' in mpi_block
     assert "mem_available=" in mpi_block
     assert "-DPOPS_BUILD_PYTHON=ON" in mpi_block
     assert "scripts/ci_select_tests.py cpp-label" in mpi_block
@@ -1012,7 +1012,6 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     # Python MPI and collective-HDF5 matrices in this same required job.  Keep
     # the outer watchdog aligned with that complete sequential contract.
     assert "timeout-minutes: 180" in mpi_block
-    assert "timeout-minutes: 50" in mpi_block
     assert "timeout-minutes: 35" in mpi_block
     assert "native_script_bootstrap=" in mpi_block
     assert "select_native_dimension(2)" in mpi_block

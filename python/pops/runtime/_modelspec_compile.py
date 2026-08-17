@@ -23,7 +23,7 @@ def compile_modelspec_package(
     from pops.domain import Rectangle
     from pops.frames import Cartesian2D
     from pops.math import maximum, sqrt
-    from pops.physics import Density, Energy, Momentum
+    from pops.physics import Density, Energy, Momentum, Pressure, Velocity
     from pops.physics._facade import Model
 
     if not isinstance(spec, ModelSpec):
@@ -37,13 +37,15 @@ def compile_modelspec_package(
 
     frame = Rectangle("modelspec-domain", (0.0, 0.0), (1.0, 1.0)).frame(Cartesian2D())
     x_axis, y_axis = frame.axes
-    wrapper = Model("%s_modelspec" % name, frame=frame)
+    wrapper = Model("%s_modelspec" % name)
     model = wrapper._m
     transport = str(spec.transport)
     if transport == "exb":
         (density,) = model.conservative_vars("n", roles=(Density(),))
         model.set_flux(x=[0.0 * density], y=[0.0 * density])
         model.set_eigenvalues(x=[0.0 * density], y=[0.0 * density])
+        model.set_primitive_state(density)
+        model.set_conservative_from([density])
     elif transport == "isothermal":
         density, momentum_x, momentum_y = model.conservative_vars(
             "rho",
@@ -56,17 +58,24 @@ def compile_modelspec_package(
             ),
         )
         cs2 = float(spec.cs2)
-        pressure = cs2 * density
         floor = float(spec.vacuum_floor)
         denom = density if floor == 0.0 else maximum(density, floor)
-        u = momentum_x / denom
-        v = momentum_y / denom
+        u = model.primitive("u", momentum_x / denom)
+        v = model.primitive("v", momentum_y / denom)
+        pressure = model.primitive("p", cs2 * density)
         model.set_flux(
             x=[momentum_x, momentum_x * u + pressure, momentum_x * v],
             y=[momentum_y, momentum_y * u, momentum_y * v + pressure],
         )
         sound = sqrt(pressure / density)
         model.set_eigenvalues(x=[u - sound, u, u + sound], y=[v - sound, v, v + sound])
+        model.set_primitive_state(
+            density,
+            u,
+            v,
+            roles=(Density(), Velocity(axis=x_axis), Velocity(axis=y_axis)),
+        )
+        model.set_conservative_from([density, density * u, density * v])
     elif transport == "compressible":
         density, momentum_x, momentum_y, energy = model.conservative_vars(
             "rho",
@@ -82,9 +91,11 @@ def compile_modelspec_package(
         )
         gamma = float(spec.gamma)
         model.set_gamma(gamma)
-        u = momentum_x / density
-        v = momentum_y / density
-        pressure = (gamma - 1.0) * (energy - 0.5 * density * (u * u + v * v))
+        u = model.primitive("u", momentum_x / density)
+        v = model.primitive("v", momentum_y / density)
+        pressure = model.primitive(
+            "p", (gamma - 1.0) * (energy - 0.5 * density * (u * u + v * v))
+        )
         enthalpy = (energy + pressure) / density
         sound = sqrt(gamma * pressure / density)
         model.set_flux(
@@ -92,7 +103,18 @@ def compile_modelspec_package(
             y=[momentum_y, momentum_y * u, momentum_y * v + pressure, density * enthalpy * v],
         )
         model.set_eigenvalues(x=[u - sound, u, u + sound], y=[v - sound, v, v + sound])
-        model.set_primitive_state(density, u, v, pressure)
+        model.set_primitive_state(
+            density,
+            u,
+            v,
+            pressure,
+            roles=(
+                Density(),
+                Velocity(axis=x_axis),
+                Velocity(axis=y_axis),
+                Pressure(),
+            ),
+        )
         model.set_conservative_from(
             [
                 density,
@@ -106,6 +128,10 @@ def compile_modelspec_package(
             "ModelSpec transport %r cannot be compiled; expected exb, isothermal, or compressible"
             % transport
         )
+
+    if transport in ("isothermal", "compressible"):
+        wrapper.enable_hllc()
+        wrapper.enable_roe()
 
     compiled = wrapper.compile(
         backend="production",
