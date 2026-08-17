@@ -1,6 +1,7 @@
 // Exact-rank MPI proof for simultaneous multi-block AMR field solves on supported seams.
-// System CartesianCG owns the uniform registry. Builtin composite FAC is proven only on a
-// replicated coarse. The two-block sparse two-level hierarchy uses custom providers only.
+// System CartesianCG owns the uniform registry. Builtin partitioned 2-level composite FAC is
+// accepted at the provider supports seam; the mg path stays replicated-only. The two-block
+// sparse two-level hierarchy uses custom providers only.
 // nullptr Program entries borrow accepted block state; non-null entries are detached candidates;
 // publication remains private until SolveOutcome acceptance.
 
@@ -58,8 +59,6 @@ constexpr std::string_view kSystemRegistryDivergence =
     "System: ordered resolved field plans differ across MPI ranks";
 constexpr std::string_view kAmrRegistryDivergence =
     "AmrSystem initial materialization contract differs between RuntimeInstance ranks";
-constexpr std::string_view kDistributedFacReason =
-    "composite FAC distributed inter-level transfers are unavailable";
 constexpr std::string_view kEllipticFactoryConstructionRefusal =
     "elliptic factory construction failed on at least one rank";
 constexpr std::string_view kEllipticFactoryInspectionRefusal =
@@ -831,6 +830,7 @@ pops::PreparedProviderSupport distributed_composite_fac_support(const pops::Exec
   ratio.fill(2);
   request.hierarchy.ratios.emplace_back(ratio);
   request.mode = pops::runtime::amr::ExactFieldHierarchyMode::composite;
+  request.reaction = pops::Real(1);
   request.provider_options = pops::geometric_mg_amr_field_solver_options(
       pops::GeometricMgOptions{}, pops::CompositeFacOptions{});
   request.use_contract = "tests.mpi.multiblock-field/distributed-fac-preflight@1";
@@ -941,9 +941,8 @@ int run_multiblock_field_solve(int argc, char** argv) {
     const pops::ExecutionLane fac_lane =
         pops::ExecutionLane::world("tests.mpi.multiblock-field/distributed-fac-preflight@1");
     const pops::PreparedProviderSupport fac_support = distributed_composite_fac_support(fac_lane);
-    require(fac_support.well_formed() && !fac_support.accepted() && fac_support.code == 4 &&
-                fac_support.reason == kDistributedFacReason,
-            "distributed composite FAC is refused at the provider supports seam");
+    require(fac_support.well_formed() && fac_support.accepted(),
+            "partitioned 2-level composite FAC is accepted at the provider supports seam");
 
     {
       pops::AmrSystem<Dim> system(replicated_coarse_config());

@@ -192,6 +192,12 @@ labels = ["backend", "elliptic", "amr", "mpi", "nd", "medium"]
 mpi_nproc = [2]
 
 [[cpp.suite]]
+name = "test_mpi_composite_fac_replicated_coarse"
+sources = ["tests/cpp/integration/mpi/test_mpi_composite_fac_replicated_coarse.cpp"]
+labels = ["backend", "elliptic", "amr", "mpi", "nd", "medium"]
+mpi_nproc = [2]
+
+[[cpp.suite]]
 name = "test_mpi_tensor_fac_provider_nd"
 sources = ["tests/cpp/integration/mpi/test_mpi_tensor_fac_provider_nd.cpp"]
 labels = ["backend", "elliptic", "amr", "mpi", "nd", "medium"]

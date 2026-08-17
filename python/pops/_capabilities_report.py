@@ -1094,8 +1094,9 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             status="partial",
             limitation=(
                 "one compile-time CompositeFacPoisson<Dim> product for Cartesian Dim in {1,2,3}; "
-                "replicated MPI levels are accepted, distributed refined ownership remains "
-                "an explicit refusal; no FAC3D fork"
+                "partitioned 2-level scalar FAC and tensor replicated-coarse/partitioned-fine "
+                "exist; the mg path stays replicated-only; >2-level, singular nullspace, and "
+                "dynamic boundary remain limited; no FAC3D fork"
             ),
             source=source,
         ),

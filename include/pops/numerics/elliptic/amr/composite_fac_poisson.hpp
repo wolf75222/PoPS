@@ -455,19 +455,8 @@ class CompositeFacPoisson {
     if (all_reduce_max(local_error ? 1L : 0L) != 0) {
       if (n_ranks() == 1 && local_error)
         std::rethrow_exception(local_error);
-      std::string detail =
-          "partitioned FAC metadata, budget, or reusable allocation failed collectively";
-      if (local_error) {
-        try {
-          std::rethrow_exception(local_error);
-        } catch (const std::exception& error) {
-          detail.append(": ");
-          detail.append(error.what());
-        } catch (...) {
-          detail.append(": unknown local exception");
-        }
-      }
-      throw std::runtime_error(detail);
+      throw std::runtime_error(
+          "partitioned FAC metadata, budget, or reusable allocation failed collectively");
     }
     if (!all_ranks_agree_exact_ordered_byte_pairs(
             {{std::string_view("pops-partitioned-composite-fac"),

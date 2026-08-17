@@ -14,9 +14,9 @@
 //   (2) PARITE AU NB DE RANGS : le CTest rank-parity relance ce MEME binaire en np=1/2/4 et compare
 //       exactement la signature canonique de l'etat et du layout. np=1 est l'oracle mono-rang.
 //
-// Ce test ne pretend pas qualifier un FAC composite distribue. Une preflight directe du provider
-// builtin verifie au contraire qu'une requete composite partitionnee, valide en mono-rang, est
-// refusee en MPI avec le diagnostic exact publie par le provider, sans registre ni fallback cache.
+// Ce test ne pretend pas qualifier le solve FAC 3-niveaux. Une preflight directe du provider
+// builtin verifie qu'une requete composite partitionnee a 2 niveaux est acceptee en MPI, sans
+// registre ni fallback cache. Le ctor partitioned refuse encore le nullspace singulier.
 //
 // Independant du backend : vert sous Kokkos Serial (CI, CPU) ET sous Kokkos Cuda (ROMEO GH200,
 // multi-GPU). Sous Cuda, for_each_cell ne fence pas (async) : density()/mass() de l'AmrSystem font
@@ -94,9 +94,6 @@ using Model = CompositeModel<EulerND<Dim>, NoSource, NoElliptic>;
 constexpr double kGamma = 1.4;
 constexpr const char* kStateRoute = "tests.mpi-amr-compiled-parity/gas/state@1";
 constexpr const char* kConsumerQid = "tests.mpi-amr-compiled-parity/gas/physical-flux@1";
-constexpr std::string_view kDistributedFacReason =
-    "composite FAC distributed inter-level transfers are unavailable";
-
 template <int Dim>
 Model<Dim> transport_model() {
   return Model<Dim>{{}, EulerND<Dim>::prepare(Real(kGamma)), NoSource{}, NoElliptic{}};
@@ -179,6 +176,7 @@ PreparedProviderSupport distributed_composite_fac_support(const ExecutionLane& l
   ratio.fill(2);
   request.hierarchy.ratios.emplace_back(ratio);
   request.mode = runtime::amr::ExactFieldHierarchyMode::composite;
+  request.reaction = Real(1);
   request.provider_options =
       geometric_mg_amr_field_solver_options(GeometricMgOptions{}, CompositeFacOptions{});
   request.use_contract = "tests.mpi-amr-compiled-parity/distributed-fac-preflight@1";
@@ -218,15 +216,12 @@ static int pops_run_test_mpi_amr_compiled_parity(int argc, char** argv) {
   const std::vector<double> initial_state = transport_state<Dim>(rho);
   cfg.regrid_every = 4;  // re-raffinement periodique : exerce le regrid distribue plusieurs fois
 
-  // Preflight directe du provider exact-rank : la meme requete partitionnee est valide en serie,
-  // puis refusee avant tout build en MPI. Aucun registre de providers ne peut choisir un fallback.
+  // Preflight directe du provider exact-rank : une requete partitionnee 2-niveaux avec reaction>0
+  // est acceptee a tout np. Aucun registre de providers ne peut choisir un fallback.
   const ExecutionLane fac_lane =
       ExecutionLane::world("tests.mpi-amr-compiled-parity/distributed-fac-preflight@1");
   const PreparedProviderSupport fac_support = distributed_composite_fac_support<Dim>(fac_lane);
-  const bool fac_support_matches_contract =
-      fac_support.well_formed() && (np == 1 ? fac_support.accepted()
-                                            : (!fac_support.accepted() && fac_support.code == 4 &&
-                                               fac_support.reason == kDistributedFacReason));
+  const bool fac_support_matches_contract = fac_support.well_formed() && fac_support.accepted();
   const long fac_preflight_failed = all_reduce_max(fac_support_matches_contract ? 0L : 1L);
 
   // Modele Euler pur COMPILE branche sur la hierarchie AMR. Le transport recoit des identites
@@ -353,9 +348,11 @@ static int pops_run_test_mpi_amr_compiled_parity(int argc, char** argv) {
 
     if (fac_preflight_failed != 0) {
       std::printf(
-          "FAIL preflight FAC distribuee: np1 doit accepter; np>1 doit refuser code=4, "
-          "raison=%.*s\n",
-          static_cast<int>(kDistributedFacReason.size()), kDistributedFacReason.data());
+          "FAIL preflight FAC partitionnee: une requete 2-niveaux valide doit etre acceptee "
+          "(accepted=%d code=%u reason=%.*s)\n",
+          fac_support.accepted() ? 1 : 0, static_cast<unsigned int>(fac_support.code),
+          static_cast<int>(fac_support.reason.size()),
+          fac_support.reason.empty() ? "" : fac_support.reason.data());
       ++fails;
     }
     if (!(dens.size() == nn)) {

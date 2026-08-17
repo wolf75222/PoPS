@@ -116,6 +116,7 @@ set(POPS_CPP_TEST_SOURCE_test_mpi_array_reduce "tests/cpp/integration/mpi/test_m
 set(POPS_CPP_TEST_SOURCE_test_mpi_cartesian_poisson_nd "tests/cpp/integration/mpi/test_mpi_cartesian_poisson_nd.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_composite_fac "tests/cpp/integration/mpi/test_mpi_composite_fac.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_composite_fac_partitioned_nd "tests/cpp/integration/mpi/test_mpi_composite_fac_partitioned_nd.cpp")
+set(POPS_CPP_TEST_SOURCE_test_mpi_composite_fac_replicated_coarse "tests/cpp/integration/mpi/test_mpi_composite_fac_replicated_coarse.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_tensor_fac_provider_nd "tests/cpp/integration/mpi/test_mpi_tensor_fac_provider_nd.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_coupled_source "tests/cpp/integration/mpi/test_mpi_coupled_source.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_coupler_inject "tests/cpp/integration/mpi/test_mpi_coupler_inject.cpp")
