@@ -4095,7 +4095,7 @@ struct AmrSystem<Dim>::Impl {
           plan.nullspace_provider_identity.empty() ? default_nullspace_options
                                                    : plan.nullspace_options};
       const auto nullspace = field_nullspace_providers->resolve(selection.provider_identity);
-      if (!plan.rhs_by_block.empty() && plan.rhs_by_block.size() != blocks.size())
+      if (!plan.rhs_by_block.empty() && plan.rhs_by_block.size() > blocks.size())
         throw std::logic_error("AMR initial exact field RHS registry has the wrong block count");
       for (std::size_t block = 0; block < plan.rhs_by_block.size(); ++block) {
         for (const PreparedFieldRhs& rhs : plan.rhs_by_block[block]) {
@@ -5981,6 +5981,72 @@ struct AmrSystem<Dim>::Impl {
     return {std::move(context_storage), std::move(contexts)};
   }
 
+  void remap_field_boundary_states_collectively(DetachedFieldBoundaryContexts& detached,
+                                                const ExecutionLane& lane) {
+    const long present = detached.storage && detached.views ? 1L : 0L;
+    if (all_reduce_min(present, lane) != all_reduce_max(present, lane))
+      throw std::runtime_error(
+          "AMR dynamic boundary remap presence differs between MPI ranks");
+    if (present == 0 || lane.size() <= 1)
+      return;
+    long invalid = 0;
+    try {
+      if (!engine)
+        throw std::logic_error("AMR dynamic boundary remap has no live hierarchy engine");
+      if (detached.storage->size() != engine->hierarchy().num_levels() ||
+          detached.views->size() != detached.storage->size())
+        throw std::logic_error("AMR dynamic boundary remap level count is stale");
+      for (const auto& context : *detached.storage) {
+        if (context.states.size() != context.state_identities.size() ||
+            context.states.size() != context.state_distributions.size())
+          throw std::logic_error("AMR dynamic boundary remap state tables are incomplete");
+      }
+    } catch (...) {
+      invalid = 1;
+    }
+    if (all_reduce_max(invalid, lane) != 0)
+      throw std::runtime_error("AMR dynamic boundary remap authority is invalid collectively");
+
+    for (std::size_t level = 0; level < detached.storage->size(); ++level) {
+      PreparedBoundaryContext& context = detached.storage->at(level);
+      const Box<Dim>& domain = engine->hierarchy().layout(level).domain();
+      for (std::size_t dependency = 0; dependency < context.states.size(); ++dependency) {
+        const field_type* state = context.states[dependency];
+        const long needs_remap =
+            state != nullptr && !state->distribution().replicated() ? 1L : 0L;
+        if (all_reduce_min(needs_remap, lane) != all_reduce_max(needs_remap, lane))
+          throw std::runtime_error(
+              "AMR dynamic boundary remap decision differs between MPI ranks");
+        if (needs_remap == 0)
+          continue;
+        auto remapped = std::make_unique<field_type>(
+            state->layout(),
+            mesh::Distribution<Dim>::replicated(state->layout(), state->rank_space()),
+            state->local_rank(), state->ncomp(), state->ghosts());
+        remapped->set_val(Real(0));
+        const auto values =
+            gather_field(*state, domain, state->ncomp(),
+                         context.state_identities[dependency] + "/replicated-boundary", lane);
+        std::exception_ptr write_error;
+        try {
+          write_field(*remapped, domain, values, state->ncomp());
+          context.detached.push_back({state, nullptr, std::move(remapped), nullptr});
+          context.states[dependency] = context.detached.back().image.get();
+          context.state_distributions[dependency] = FieldDistribution::Replicated;
+        } catch (...) {
+          write_error = std::current_exception();
+        }
+        if (all_reduce_max(write_error ? 1L : 0L, lane) != 0) {
+          if (lane.size() == 1 && write_error)
+            std::rethrow_exception(write_error);
+          throw std::runtime_error(
+              "AMR dynamic boundary remapped state write failed collectively");
+        }
+      }
+      detached.views->bind(level, context.view());
+    }
+  }
+
   void restore_field_boundary_binding_collectively(FieldPlan& plan, const ExecutionLane& lane,
                                                    std::string_view phase) {
     const bool retained_prior = plan.prior_boundary_context_storage || plan.prior_boundary_contexts;
@@ -6215,6 +6281,20 @@ struct AmrSystem<Dim>::Impl {
         std::rethrow_exception(preparation_error);
       throw std::runtime_error(
           "AMR exact field RHS and boundary preparation failed collectively before solve");
+    }
+
+    std::exception_ptr remap_error;
+    try {
+      remap_field_boundary_states_collectively(detached_boundary_contexts, lane);
+      remap_field_boundary_states_collectively(detached_initial_boundary_contexts, lane);
+    } catch (...) {
+      remap_error = std::current_exception();
+    }
+    if (all_reduce_max(remap_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && remap_error)
+        std::rethrow_exception(remap_error);
+      throw std::runtime_error(
+          "AMR exact field boundary state remap failed collectively before solve");
     }
 
     std::exception_ptr staging_error;
