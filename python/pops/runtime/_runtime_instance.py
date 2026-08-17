@@ -791,6 +791,21 @@ class RuntimeInstance:
     def field_provider_slots(self) -> tuple[str, ...]:
         return tuple(self._executor.field_provider_slots())
 
+    def set_field_composite_mean_neutralizing(
+        self,
+        slot: str,
+        block: str,
+        component: int,
+        eps: float,
+    ) -> None:
+        """Evaluate neutralizing as ``eps * composite_mean(block[component])``."""
+        setter = getattr(self._executor, "set_field_composite_mean_neutralizing", None)
+        if not callable(setter):
+            raise NotImplementedError(
+                "this runtime does not expose composite-mean neutralizing"
+            )
+        setter(slot, block, int(component), float(eps))
+
     def field_provider_levels(self, slot: str) -> int:
         return int(self._executor.field_provider_levels(slot))
 

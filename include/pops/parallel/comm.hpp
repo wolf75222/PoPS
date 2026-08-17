@@ -66,14 +66,17 @@ inline std::uint64_t exact_consensus_dynamic_storage_calls() noexcept {
 }
 
 #ifdef POPS_HAS_MPI
-inline MPI_Datatype mpi_real_datatype() {
-  if constexpr (std::is_same_v<Real, double>)
+template <class Scalar>
+inline MPI_Datatype mpi_real_datatype_for() {
+  if constexpr (std::is_same_v<Scalar, double>)
     return MPI_DOUBLE;
-  else if constexpr (std::is_same_v<Real, float>)
+  else if constexpr (std::is_same_v<Scalar, float>)
     return MPI_FLOAT;
   else
-    static_assert(!sizeof(Real), "pops::Real must be float or double for MPI reductions");
+    static_assert(!sizeof(Scalar), "pops::Real must be float or double for MPI reductions");
 }
+
+inline MPI_Datatype mpi_real_datatype() { return mpi_real_datatype_for<Real>(); }
 #endif
 
 #ifdef POPS_HAS_MPI
