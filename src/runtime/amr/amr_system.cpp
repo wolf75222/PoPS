@@ -5150,7 +5150,18 @@ struct AmrSystem<Dim>::Impl {
         return;
       if (lane.size() == 1 && local_error)
         std::rethrow_exception(local_error);
-      throw std::runtime_error("AMR exact field " + std::string(phase) + " failed collectively");
+      std::string detail = "AMR exact field " + std::string(phase) + " failed collectively";
+      if (local_error) {
+        try {
+          std::rethrow_exception(local_error);
+        } catch (const std::exception& error) {
+          detail.append(": ");
+          detail.append(error.what());
+        } catch (...) {
+          detail.append(": unknown local exception");
+        }
+      }
+      throw std::runtime_error(detail);
     };
 
     std::exception_ptr local_error;
@@ -6473,8 +6484,19 @@ struct AmrSystem<Dim>::Impl {
       rollback_active_field_candidate_collectively(lane, "candidate publication failure rollback");
       if (lane.size() == 1 && candidate_error)
         std::rethrow_exception(candidate_error);
-      throw std::runtime_error(
-          "AMR exact field candidate publication failed collectively before outcome creation");
+      std::string detail =
+          "AMR exact field candidate publication failed collectively before outcome creation";
+      if (candidate_error) {
+        try {
+          std::rethrow_exception(candidate_error);
+        } catch (const std::exception& error) {
+          detail.append(": ");
+          detail.append(error.what());
+        } catch (...) {
+          detail.append(": unknown local exception");
+        }
+      }
+      throw std::runtime_error(detail);
     }
     plan.candidate_ready = true;
     return report;
@@ -14327,7 +14349,18 @@ SolveOutcome AmrSystem<Dim>::solve_program_field_from_blocks_on_prepared_lane(
       std::rethrow_exception(rollback_error);
     if (lane.size() == 1 && local_error)
       std::rethrow_exception(local_error);
-    throw std::runtime_error("AMR exact field solve failed on at least one MPI rank");
+    std::string detail = "AMR exact field solve failed on at least one MPI rank";
+    if (local_error) {
+      try {
+        std::rethrow_exception(local_error);
+      } catch (const std::exception& error) {
+        detail.append(": ");
+        detail.append(error.what());
+      } catch (...) {
+        detail.append(": unknown local exception");
+      }
+    }
+    throw std::runtime_error(detail);
   }
   return p_->make_field_outcome(std::move(report));
 }

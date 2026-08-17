@@ -1,4 +1,5 @@
 #include <pops/core/foundation/native_dimension.hpp>
+#include <pops/numerics/elliptic/amr/composite_fac_poisson.hpp>
 #include <pops/runtime/amr/exact_field_solver_provider.hpp>
 #include <pops/runtime/amr/field_solver_options.hpp>
 
@@ -29,6 +30,42 @@ Value option(const PreparedProviderOptions& options, std::string_view name) {
     throw std::invalid_argument("geometric MG option '" + std::string(name) +
                                 "' is missing or has the wrong type");
   return std::get<Value>(found->second);
+}
+
+template <int Dim>
+elliptic::amr::CompositeFacBuildRequest<Dim> make_partitioned_fac_request(
+    const elliptic::mg::CompositeFacBuildRequest<Dim>& hierarchy) {
+  elliptic::amr::CompositeFacBuildRequest<Dim> request;
+  request.levels = hierarchy.levels;
+  request.ratios = hierarchy.ratios;
+  request.budget.levels = std::max<std::size_t>(hierarchy.levels.size(), 1);
+  request.budget.connections = hierarchy.ratios.size();
+  request.budget.parent_child_patch_pairs = 1'000'000;
+  request.budget.interpolation_regions = 1'000'000;
+  request.budget.local_scratch_cells = 10'000'000;
+  request.budget.same_level_halo = ::pops::HaloScheduleBudget{
+      ::pops::mesh::BoxArrayValidationBudget{1024, 1'000'000},
+      1'000'000,
+      2'000'000,
+      1024,
+      1024,
+      10'000'000,
+      10'000'000,
+      10'000'000};
+  request.budget.parent_gather = {1'000'000, 1024, 10'000'000, 10'000'000, 10'000'000};
+  request.budget.fine_restriction = {1'000'000, 1024, 10'000'000, 10'000'000, 10'000'000};
+  return request;
+}
+
+template <int Dim>
+bool hierarchy_needs_partitioned_fac(const elliptic::mg::CompositeFacBuildRequest<Dim>& hierarchy,
+                                     const ExecutionLane& lane) {
+  if (lane.size() <= 1)
+    return false;
+  for (const auto& level : hierarchy.levels)
+    if (!level.distribution.replicated())
+      return true;
+  return false;
 }
 
 template <int Dim>
@@ -75,8 +112,13 @@ class BuiltinExactAmrFieldSolver final : public ExactAmrFieldSolver<Dim, MemoryS
         mode_(request.mode),
         options_(options) {
     if (mode_ == ExactFieldHierarchyMode::composite) {
-      composite_ = std::make_unique<elliptic::mg::CompositeFacPoisson<Dim, MemorySpace>>(
-          request.hierarchy, lane, options_.fac, request.reaction);
+      if (hierarchy_needs_partitioned_fac(request.hierarchy, lane)) {
+        partitioned_ = std::make_unique<elliptic::amr::CompositeFacPoisson<Dim, MemorySpace>>(
+            make_partitioned_fac_request(request.hierarchy), options_.fac, request.reaction);
+      } else {
+        composite_ = std::make_unique<elliptic::mg::CompositeFacPoisson<Dim, MemorySpace>>(
+            request.hierarchy, lane, options_.fac, request.reaction);
+      }
       return;
     }
     local_.reserve(request.hierarchy.levels.size());
@@ -90,23 +132,37 @@ class BuiltinExactAmrFieldSolver final : public ExactAmrFieldSolver<Dim, MemoryS
 
   std::string_view provider_identity() const noexcept override { return "geometric_mg"; }
   std::string_view exact_prepared_contract() const noexcept override { return contract_; }
-  bool couples_hierarchy_levels() const noexcept override { return static_cast<bool>(composite_); }
+  bool couples_hierarchy_levels() const noexcept override {
+    return static_cast<bool>(composite_) || static_cast<bool>(partitioned_);
+  }
   int level_count() const noexcept override {
+    if (partitioned_)
+      return partitioned_->n_levels();
     return composite_ ? composite_->n_levels() : static_cast<int>(local_.size());
   }
   field_type& rhs_level(int level) override {
+    if (partitioned_)
+      return partitioned_->rhs_level(level);
     return composite_ ? composite_->rhs_level(level)
                       : local_.at(static_cast<std::size_t>(level))->rhs();
   }
   field_type& candidate_level(int level) override {
+    if (partitioned_)
+      return partitioned_->phi_level(level);
     return composite_ ? composite_->phi_level(level)
                       : local_.at(static_cast<std::size_t>(level))->phi();
   }
   const field_type& candidate_level(int level) const override {
+    if (partitioned_)
+      return partitioned_->phi_level(level);
     return composite_ ? composite_->phi_level(level)
                       : local_.at(static_cast<std::size_t>(level))->phi();
   }
   void install_newton(FieldNewtonOptions options) override {
+    if (partitioned_) {
+      partitioned_->install_newton(options);
+      return;
+    }
     if (composite_) {
       composite_->install_newton(options);
       return;
@@ -115,6 +171,10 @@ class BuiltinExactAmrFieldSolver final : public ExactAmrFieldSolver<Dim, MemoryS
       solver->install_newton(options);
   }
   void install_boundary_kernel(CompiledFieldBoundaryKernel<Dim> kernel) override {
+    if (partitioned_) {
+      partitioned_->install_boundary_kernel(std::move(kernel));
+      return;
+    }
     if (composite_) {
       composite_->install_boundary_kernel(std::move(kernel));
       return;
@@ -127,6 +187,10 @@ class BuiltinExactAmrFieldSolver final : public ExactAmrFieldSolver<Dim, MemoryS
     if (!contexts || contexts->size() != static_cast<std::size_t>(level_count()))
       throw std::invalid_argument(
           "exact AMR field solver requires one boundary context per live level");
+    if (partitioned_) {
+      partitioned_->set_boundary_contexts(std::move(contexts));
+      return;
+    }
     if (composite_) {
       composite_->set_boundary_contexts(std::move(contexts));
       return;
@@ -147,7 +211,9 @@ class BuiltinExactAmrFieldSolver final : public ExactAmrFieldSolver<Dim, MemoryS
       throw std::invalid_argument(
           "exact AMR field nullspace authority requires one distribution per level");
 
-    if (composite_) {
+    if (partitioned_) {
+      partitioned_->install_nullspace(std::move(prepared.plan), std::move(level_distributions));
+    } else if (composite_) {
       composite_->install_nullspace(std::move(prepared.plan), std::move(level_distributions));
     } else {
       std::vector<FieldNullspacePlan<Dim>> plans;
@@ -161,6 +227,8 @@ class BuiltinExactAmrFieldSolver final : public ExactAmrFieldSolver<Dim, MemoryS
     nullspace_contract_ = std::move(prepared.exact_prepared_contract);
   }
   int maximum_iterations() const noexcept override {
+    if (partitioned_)
+      return partitioned_->maximum_iterations();
     if (composite_)
       return composite_->maximum_iterations();
     int result = 0;
@@ -173,6 +241,8 @@ class BuiltinExactAmrFieldSolver final : public ExactAmrFieldSolver<Dim, MemoryS
       throw std::invalid_argument("exact AMR field solve requires its prepared execution lane");
     if (nullspace_contract_.empty())
       throw std::logic_error("exact AMR field solve has no prepared nullspace authority");
+    if (partitioned_)
+      return partitioned_->solve();
     if (composite_)
       return composite_->solve();
     SolveReport result;
@@ -222,6 +292,7 @@ class BuiltinExactAmrFieldSolver final : public ExactAmrFieldSolver<Dim, MemoryS
   BuiltinOptions options_{};
   std::vector<std::unique_ptr<elliptic::mg::GeometricMG<Dim, MemorySpace>>> local_{};
   std::unique_ptr<elliptic::mg::CompositeFacPoisson<Dim, MemorySpace>> composite_{};
+  std::unique_ptr<elliptic::amr::CompositeFacPoisson<Dim, MemorySpace>> partitioned_{};
 };
 
 template <int Dim, class MemorySpace>
@@ -238,6 +309,7 @@ class BuiltinExactAmrFieldSolverProvider final
   PreparedProviderSupport supports(const request_type& request,
                                    const ExecutionLane& lane) const noexcept override {
     try {
+      (void)lane;
       const BuiltinOptions decoded = decode_options<Dim>(request.provider_options);
       (void)decoded;
       if (request.hierarchy.levels.empty() ||
@@ -250,11 +322,6 @@ class BuiltinExactAmrFieldSolverProvider final
           if (!level.boxes.tiles_exactly(level.geometry.domain(), level.layout_budget))
             return PreparedProviderSupport::reject(
                 3, "level-local geometric MG requires a complete uniform level");
-      } else if (lane.size() > 1) {
-        for (const auto& level : request.hierarchy.levels)
-          if (!level.distribution.replicated())
-            return PreparedProviderSupport::reject(
-                4, "composite FAC distributed inter-level transfers are unavailable");
       }
       return PreparedProviderSupport::accept();
     } catch (const std::exception& error) {
