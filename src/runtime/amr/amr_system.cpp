@@ -4578,7 +4578,7 @@ struct AmrSystem<Dim>::Impl {
   }
 
   void require_program_checkpoint_capacity(std::size_t bytes, std::string_view operation) const {
-    if (!program.artifact_backed_)
+    if (!program.artifact_backed_ || program.checkpoint_metadata_.logical_clock_identities.empty())
       return;
     if (!checkpoint_program_state_capacity_value)
       throw std::logic_error(std::string(operation) +
