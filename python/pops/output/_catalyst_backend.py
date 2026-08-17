@@ -39,16 +39,25 @@ from pops.output.observers import (
 from pops.output._writers.paraview import (
     _cell_corner_offsets,
     _embedded_values_on_mask,
+    _face_corner_offsets,
     _field_display_names,
     _field_families,
+    _fields_for_topology,
+    _physical_point_coordinates,
+    _publication_topologies,
 )
-from pops.output._writers.common import validate_field_pieces
+from pops.output._writers.common import (
+    _FACE_CENTERINGS,
+    _face_array_axis,
+    validate_field_pieces,
+)
 
 
 _BLUEPRINT_INDEX_AXES = ("i", "j", "k")
 _BLUEPRINT_COORDINATE_AXES = ("x", "y", "z")
 _BLUEPRINT_SPACING_AXES = ("dx", "dy", "dz")
 _BLUEPRINT_CELL_SHAPES = {1: "line", 2: "quad", 3: "hex"}
+_BLUEPRINT_FACE_SHAPES = {1: "point", 2: "line", 3: "quad"}
 _CARTESIAN_COORDINATES = {
     1: CARTESIAN_1D_COORDINATES,
     2: CARTESIAN_2D_COORDINATES,
@@ -217,6 +226,100 @@ def _add_blueprint_topology(
     )
 
 
+def _cartesian_face_arrays(
+    geometry: LevelGeometry,
+    lower: tuple[int, ...],
+    upper: tuple[int, ...],
+    array_axis: int,
+    *,
+    empty: bool,
+) -> tuple[Any, Any, int]:
+    """VTK-wound VERTEX/LINE/QUAD connectivity for one Cartesian face box."""
+
+    import numpy as np
+
+    dimension = geometry.spatial_rank
+    cell_shape = tuple(hi - lo for lo, hi in zip(lower, upper, strict=True))
+    face_shape = list(cell_shape)
+    face_shape[array_axis] += 1
+    n_faces = int(np.prod(face_shape))
+    if empty:
+        return (
+            np.empty((0, 3), dtype=np.float64),
+            np.empty(0, dtype=np.int64),
+            0,
+        )
+    point_shape = tuple(
+        extent + (0 if axis == array_axis else 1)
+        for axis, extent in enumerate(face_shape)
+    )
+    logical = np.indices(point_shape, dtype=np.int64)
+    for axis, lo in enumerate(lower):
+        logical[axis] += lo
+    points = _physical_point_coordinates(
+        geometry,
+        tuple(logical[axis].reshape(-1) for axis in range(dimension)),
+    )
+    point_ids = np.arange(int(np.prod(point_shape)), dtype=np.int64).reshape(point_shape)
+    face_indices = np.indices(tuple(face_shape), dtype=np.int64)
+    connectivity = np.stack(
+        tuple(
+            point_ids[tuple(
+                face_indices[axis] + corner[axis]
+                for axis in range(dimension)
+            )]
+            for corner in _face_corner_offsets(dimension, array_axis)
+        ),
+        axis=-1,
+    )
+    return points, np.ascontiguousarray(connectivity).reshape(-1), n_faces
+
+
+def _add_blueprint_face_topology(
+    root: Any,
+    base: str,
+    geometry: LevelGeometry,
+    lower: tuple[int, ...],
+    upper: tuple[int, ...],
+    coordset: str,
+    topology: str,
+    face_centering: str,
+    *,
+    empty: bool,
+) -> int:
+    """Publish one Blueprint unstructured face mesh matching the Cartesian VTU face path."""
+
+    import numpy as np
+
+    dimension = geometry.spatial_rank
+    if geometry.coordinate_system == POLAR_ANNULUS_2D_COORDINATES:
+        if dimension != 2:
+            raise ValueError("polar-annulus coordinates require spatial rank two")
+    elif geometry.coordinate_system != _CARTESIAN_COORDINATES[dimension]:
+        raise NotImplementedError(
+            "Catalyst face topologies prove Cartesian ranks 1/2/3 and 2D polar-annulus"
+        )
+    points, connectivity, n_faces = _cartesian_face_arrays(
+        geometry,
+        lower,
+        upper,
+        _face_array_axis(dimension, face_centering),
+        empty=empty,
+    )
+    coordset_base = base + "/coordsets/%s" % coordset
+    topology_base = base + "/topologies/%s" % topology
+    root[coordset_base + "/type"] = "explicit"
+    for axis in range(dimension):
+        root[coordset_base + "/values/" + _BLUEPRINT_COORDINATE_AXES[axis]] = (
+            np.ascontiguousarray(points[:, axis])
+        )
+    root[topology_base + "/type"] = "unstructured"
+    root[topology_base + "/coordset"] = coordset
+    root[topology_base + "/elements/shape"] = _BLUEPRINT_FACE_SHAPES[dimension]
+    root[topology_base + "/elements/connectivity"] = connectivity
+    return n_faces
+
+
 class CatalystPythonProvider:
     """Structural provider that owns the optional real Catalyst/Conduit Python modules."""
 
@@ -357,6 +460,9 @@ class CatalystPythonProvider:
                 "MPI_COMM_WORLD observer lane"
             )
         catalyst, conduit = self._modules()
+        from pops.output._live_window import reject_unsafe_live_render_window
+
+        reject_unsafe_live_render_window(path)
         return _CatalystPythonSession(
             catalyst,
             conduit,
@@ -609,11 +715,37 @@ class _CatalystPythonSession:
         )
         if not fields:
             raise ValueError("Catalyst selected geometry has no field payload")
-        if any(field.centering != "cell" for field in fields):
+        if any(field.centering not in {"cell", "node"} | _FACE_CENTERINGS for field in fields):
             raise NotImplementedError(
-                "Catalyst Python provider currently proves cell-centered fields only"
+                "Catalyst Python provider proves cell-centered, nodal, and Cartesian "
+                "face-centered fields; other centerings require a distinct topology"
             )
+        sidecar = frame.snapshot.embedded_boundary(
+            geometry.layout_identity, geometry.level,
+        )
+        topologies = _publication_topologies(
+            fields, embedded=sidecar is not None, spatial_rank=geometry.spatial_rank,
+        )
+        if (
+            any(topology != "cell" for topology in topologies)
+            and geometry.coordinate_system == POLAR_ANNULUS_2D_COORDINATES
+            and geometry.spatial_rank != 2
+        ):
+            raise ValueError("polar-annulus coordinates require spatial rank two")
         return fields
+
+    @staticmethod
+    def _geometry_topologies(
+        frame: ObserverFrame,
+        geometry: LevelGeometry,
+        fields: tuple[FieldPayload, ...],
+    ) -> tuple[str, ...]:
+        sidecar = frame.snapshot.embedded_boundary(
+            geometry.layout_identity, geometry.level,
+        )
+        return _publication_topologies(
+            fields, embedded=sidecar is not None, spatial_rank=geometry.spatial_rank,
+        )
 
     def _add_domain(
         self,
@@ -626,23 +758,42 @@ class _CatalystPythonSession:
         domain_id: int,
         domain_name: str,
         display_names: Mapping[str, str],
+        *,
+        publication_topology: str,
+        fields: tuple[FieldPayload, ...],
     ) -> None:
         import numpy as np
 
+        face_centering = None if publication_topology == "cell" else publication_topology
+        fields = _fields_for_topology(fields, publication_topology)
         lower, upper = _box_bounds(geometry, box_index)
         base = "catalyst/channels/%s/data/%s" % (self._channel, domain_name)
         coordset = "coords_%06d" % partition_index
         topology = "mesh_%06d" % partition_index
-        _add_blueprint_topology(
-            root,
-            base,
-            geometry,
-            lower,
-            upper,
-            coordset,
-            topology,
-            empty=False,
-        )
+        n_faces = None
+        if face_centering is None:
+            _add_blueprint_topology(
+                root,
+                base,
+                geometry,
+                lower,
+                upper,
+                coordset,
+                topology,
+                empty=False,
+            )
+        else:
+            n_faces = _add_blueprint_face_topology(
+                root,
+                base,
+                geometry,
+                lower,
+                upper,
+                coordset,
+                topology,
+                face_centering,
+                empty=False,
+            )
         root[base + "/state/level"] = geometry.level
         root[base + "/state/level_id"] = geometry.level
         root[base + "/state/domain_id"] = domain_id
@@ -651,16 +802,20 @@ class _CatalystPythonSession:
 
         field_slot = 0
 
-        def cell_field(
+        def mesh_field(
             field_name: str,
             values: Any,
             component_names: tuple[str, ...] = (),
+            *,
+            association: str = "element",
         ) -> str:
             nonlocal field_slot
+            if association not in {"element", "vertex"}:
+                raise ValueError("Catalyst field association must be element or vertex")
             internal_name = "array_%06d_partition_%06d" % (field_slot, partition_index)
             field_slot += 1
             prefix = base + "/fields/" + internal_name
-            root[prefix + "/association"] = "element"
+            root[prefix + "/association"] = association
             root[prefix + "/topology"] = topology
             root[prefix + "/display_name"] = field_name
             if len(component_names) > 1:
@@ -672,30 +827,42 @@ class _CatalystPythonSession:
                 root[prefix + "/values"] = np.ascontiguousarray(values).reshape(-1)
             return internal_name
 
-        spatial = _spatial_slices(lower, upper)
-        coverage = geometry.coverage[spatial].astype(np.uint8, copy=False)
-        cell_field(
-            "pops_layout",
-            np.full(coverage.shape, layout_ordinal, dtype=np.int32),
-        )
-        cell_field(
-            "pops_level",
-            np.full(coverage.shape, geometry.level, dtype=np.int32),
-        )
-        cell_field("pops_coverage", coverage)
-        # VTK_REFINED_CELL=8; this hides covered coarse cells in ParaView without deleting their
-        # scientific values from the live Blueprint domain.
-        ghost_field = cell_field("vtkGhostType", coverage * np.uint8(8))
-        root[base + "/state/metadata/vtk_fields/%s/attribute_type" % ghost_field] = "Ghosts"
-        cell_field("pops_cell_volume", geometry.cell_volumes[spatial])
-        sidecar = frame.snapshot.embedded_boundary(geometry.layout_identity, geometry.level)
-        if sidecar is not None:
-            for name in EMBEDDED_BOUNDARY_ARRAY_NAMES:
-                piece = _embedded_piece_for_box(sidecar, name, box_index)
-                cell_field(name, piece.values[0])
+        if face_centering is None:
+            spatial = _spatial_slices(lower, upper)
+            coverage = geometry.coverage[spatial].astype(np.uint8, copy=False)
+            mesh_field(
+                "pops_layout",
+                np.full(coverage.shape, layout_ordinal, dtype=np.int32),
+            )
+            mesh_field(
+                "pops_level",
+                np.full(coverage.shape, geometry.level, dtype=np.int32),
+            )
+            mesh_field("pops_coverage", coverage)
+            # VTK_REFINED_CELL=8; this hides covered coarse cells in ParaView without deleting their
+            # scientific values from the live Blueprint domain.
+            ghost_field = mesh_field("vtkGhostType", coverage * np.uint8(8))
+            root[base + "/state/metadata/vtk_fields/%s/attribute_type" % ghost_field] = "Ghosts"
+            mesh_field("pops_cell_volume", geometry.cell_volumes[spatial])
+            sidecar = frame.snapshot.embedded_boundary(geometry.layout_identity, geometry.level)
+            if sidecar is not None:
+                for name in EMBEDDED_BOUNDARY_ARRAY_NAMES:
+                    piece = _embedded_piece_for_box(sidecar, name, box_index)
+                    mesh_field(name, piece.values[0])
+        else:
+            mesh_field(
+                "pops_layout",
+                np.full(n_faces, layout_ordinal, dtype=np.int32),
+            )
+            mesh_field(
+                "pops_level",
+                np.full(n_faces, geometry.level, dtype=np.int32),
+            )
+            ghost_field = mesh_field("vtkGhostType", np.zeros(n_faces, dtype=np.uint8))
+            root[base + "/state/metadata/vtk_fields/%s/attribute_type" % ghost_field] = "Ghosts"
 
         names: set[str] = set()
-        for field in self._geometry_fields(frame, geometry):
+        for field in fields:
             piece = _piece_for_box(field, box_index)
             family = _field_family_identity(field.key).token
             field_name = display_names.get(family)
@@ -704,12 +871,17 @@ class _CatalystPythonSession:
             if field_name in names:
                 raise ValueError("Catalyst field name collision: %s" % field_name)
             names.add(field_name)
+            association = "vertex" if field.centering == "node" else "element"
             if len(field.component_names) > 1:
-                cell_field(field_name, piece.values, field.component_names)
+                mesh_field(
+                    field_name, piece.values, field.component_names, association=association,
+                )
             elif field.component_names:
-                cell_field(field_name, piece.values[0])
+                mesh_field(
+                    field_name, piece.values[0], association=association,
+                )
             else:
-                cell_field(field_name, piece.values)
+                mesh_field(field_name, piece.values, association=association)
 
     def _add_empty_domain(
         self,
@@ -720,24 +892,42 @@ class _CatalystPythonSession:
         domain_id: int,
         domain_name: str,
         display_names: Mapping[str, str],
+        *,
+        publication_topology: str,
+        fields: tuple[FieldPayload, ...],
     ) -> None:
         """Publish one schema-complete zero-cell block for a box owned by another MPI rank."""
         import numpy as np
 
+        face_centering = None if publication_topology == "cell" else publication_topology
+        fields = _fields_for_topology(fields, publication_topology)
         lower, upper = _box_bounds(geometry, box_index)
         base = "catalyst/channels/%s/data/%s" % (self._channel, domain_name)
         coordset = "coords_%06d" % box_index
         topology = "mesh_%06d" % box_index
-        _add_blueprint_topology(
-            root,
-            base,
-            geometry,
-            lower,
-            upper,
-            coordset,
-            topology,
-            empty=True,
-        )
+        if face_centering is None:
+            _add_blueprint_topology(
+                root,
+                base,
+                geometry,
+                lower,
+                upper,
+                coordset,
+                topology,
+                empty=True,
+            )
+        else:
+            _add_blueprint_face_topology(
+                root,
+                base,
+                geometry,
+                lower,
+                upper,
+                coordset,
+                topology,
+                face_centering,
+                empty=True,
+            )
         root[base + "/state/level"] = geometry.level
         root[base + "/state/level_id"] = geometry.level
         root[base + "/state/domain_id"] = domain_id
@@ -746,16 +936,20 @@ class _CatalystPythonSession:
 
         field_slot = 0
 
-        def empty_cell_field(
+        def empty_mesh_field(
             field_name: str,
             dtype: Any,
             component_names: tuple[str, ...] = (),
+            *,
+            association: str = "element",
         ) -> str:
             nonlocal field_slot
+            if association not in {"element", "vertex"}:
+                raise ValueError("Catalyst field association must be element or vertex")
             internal_name = "array_%06d_partition_%06d" % (field_slot, box_index)
             field_slot += 1
             prefix = base + "/fields/" + internal_name
-            root[prefix + "/association"] = "element"
+            root[prefix + "/association"] = association
             root[prefix + "/topology"] = topology
             root[prefix + "/display_name"] = field_name
             if len(component_names) > 1:
@@ -765,19 +959,21 @@ class _CatalystPythonSession:
                 root[prefix + "/values"] = np.empty(0, dtype=dtype)
             return internal_name
 
-        empty_cell_field("pops_layout", np.int32)
-        empty_cell_field("pops_level", np.int32)
-        empty_cell_field("pops_coverage", np.uint8)
-        ghost_field = empty_cell_field("vtkGhostType", np.uint8)
+        empty_mesh_field("pops_layout", np.int32)
+        empty_mesh_field("pops_level", np.int32)
+        if face_centering is None:
+            empty_mesh_field("pops_coverage", np.uint8)
+        ghost_field = empty_mesh_field("vtkGhostType", np.uint8)
         root[base + "/state/metadata/vtk_fields/%s/attribute_type" % ghost_field] = "Ghosts"
-        empty_cell_field("pops_cell_volume", np.float64)
-        sidecar = frame.snapshot.embedded_boundary(geometry.layout_identity, geometry.level)
-        if sidecar is not None:
-            for name in EMBEDDED_BOUNDARY_ARRAY_NAMES:
-                empty_cell_field(name, np.float64)
+        if face_centering is None:
+            empty_mesh_field("pops_cell_volume", np.float64)
+            sidecar = frame.snapshot.embedded_boundary(geometry.layout_identity, geometry.level)
+            if sidecar is not None:
+                for name in EMBEDDED_BOUNDARY_ARRAY_NAMES:
+                    empty_mesh_field(name, np.float64)
 
         names: set[str] = set()
-        for field in self._geometry_fields(frame, geometry):
+        for field in fields:
             family = _field_family_identity(field.key).token
             field_name = display_names.get(family)
             if field_name is None:
@@ -785,10 +981,11 @@ class _CatalystPythonSession:
             if field_name in names:
                 raise ValueError("Catalyst field name collision: %s" % field_name)
             names.add(field_name)
-            empty_cell_field(
+            empty_mesh_field(
                 field_name,
                 np.dtype(field.dtype),
                 field.component_names,
+                association=("vertex" if field.centering == "node" else "element"),
             )
 
     def _prepare_execute_node(self, frame: ObserverFrame) -> Any:
@@ -827,10 +1024,13 @@ class _CatalystPythonSession:
             fetch("catalyst/channels/%s/data" % self._channel)
         selected_fields = frame.snapshot.select(frame.request)
         for field in selected_fields:
+            complete = frame.request.parallel_mode is ParallelMode.SERIAL
+            if complete and not field.pieces and field.centering in _FACE_CENTERINGS:
+                complete = False
             validate_field_pieces(
                 field,
                 frame.snapshot.geometry(field.key),
-                complete=frame.request.parallel_mode is ParallelMode.SERIAL,
+                complete=complete,
                 rank=frame.request.rank,
                 size=frame.request.size,
             )
@@ -877,49 +1077,81 @@ class _CatalystPythonSession:
         for layout_ordinal, geometry in enumerate(geometries):
             block_name = _block_name(geometry)
             fields = self._geometry_fields(frame, geometry)
-            local_boxes = {piece.global_box_index for field in fields for piece in field.pieces}
-            if any(
-                {piece.global_box_index for piece in field.pieces} != local_boxes
-                for field in fields
+            topologies = self._geometry_topologies(frame, geometry, fields)
+            sidecar = frame.snapshot.embedded_boundary(geometry.layout_identity, geometry.level)
+            primal_fields = _fields_for_topology(fields, "cell")
+            primal_boxes = {
+                piece.global_box_index for field in primal_fields for piece in field.pieces
+            }
+            if primal_fields and any(
+                {piece.global_box_index for piece in field.pieces} != primal_boxes
+                for field in primal_fields
             ):
                 raise ValueError("Catalyst fields disagree on the local geometry-box ownership set")
-            sidecar = frame.snapshot.embedded_boundary(geometry.layout_identity, geometry.level)
-            if sidecar is not None and any(
-                {piece.global_box_index for piece in sidecar.pieces(name)} != local_boxes
+            if sidecar is not None and primal_fields and any(
+                {piece.global_box_index for piece in sidecar.pieces(name)} != primal_boxes
                 for name in EMBEDDED_BOUNDARY_ARRAY_NAMES
             ):
                 raise ValueError(
                     "Catalyst embedded-boundary ownership differs from physical fields"
                 )
             for box_index in range(len(geometry.boxes)):
-                # ParaView's multimesh protocol defines every data child as one Blueprint mesh.
-                # A global AMR box is that indivisible block; its qualified name stays unique and
-                # stable across ranks; non-owning ranks publish its schema-complete zero-cell peer.
-                domain_name = "%s_box_%06d" % (block_name, box_index)
-                populated_blocks.append(domain_name)
-                if box_index in local_boxes:
-                    self._add_domain(
-                        node,
-                        frame,
-                        geometry,
-                        layout_ordinal,
-                        box_index,
-                        box_index,
-                        domain_id,
-                        domain_name,
-                        display_names,
+                for publication_topology in topologies:
+                    suffix = (
+                        "" if len(topologies) == 1
+                        else "_%s" % publication_topology
                     )
-                else:
-                    self._add_empty_domain(
-                        node,
-                        frame,
-                        geometry,
-                        box_index,
-                        domain_id,
-                        domain_name,
-                        display_names,
-                    )
-                domain_id += 1
+                    domain_name = "%s_box_%06d%s" % (block_name, box_index, suffix)
+                    populated_blocks.append(domain_name)
+                    topology_fields = _fields_for_topology(fields, publication_topology)
+                    local_boxes = {
+                        piece.global_box_index
+                        for field in topology_fields
+                        for piece in field.pieces
+                    }
+                    if (
+                        publication_topology == "cell"
+                        and sidecar is not None
+                        and not topology_fields
+                    ):
+                        local_boxes = {
+                            piece.global_box_index
+                            for piece in sidecar.pieces(EMBEDDED_BOUNDARY_ARRAY_NAMES[0])
+                        }
+                    if topology_fields and any(
+                        {piece.global_box_index for piece in field.pieces} != local_boxes
+                        for field in topology_fields
+                    ):
+                        raise ValueError(
+                            "Catalyst fields disagree on the local geometry-box ownership set"
+                        )
+                    if box_index in local_boxes:
+                        self._add_domain(
+                            node,
+                            frame,
+                            geometry,
+                            layout_ordinal,
+                            box_index,
+                            box_index,
+                            domain_id,
+                            domain_name,
+                            display_names,
+                            publication_topology=publication_topology,
+                            fields=fields,
+                        )
+                    else:
+                        self._add_empty_domain(
+                            node,
+                            frame,
+                            geometry,
+                            box_index,
+                            domain_id,
+                            domain_name,
+                            display_names,
+                            publication_topology=publication_topology,
+                            fields=fields,
+                        )
+                    domain_id += 1
 
         blueprint = getattr(self._conduit, "blueprint", None)
         mesh = getattr(blueprint, "mesh", None)

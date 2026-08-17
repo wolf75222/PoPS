@@ -2207,13 +2207,11 @@ class ParaViewWriter:
         if any(
             topology != "cell"
             and geometry.coordinate_system == POLAR_ANNULUS_2D_COORDINATES
+            and geometry.spatial_rank != 2
             for topology in topologies
             for geometry in geometries
         ):
-            raise NotImplementedError(
-                "ParaView polar-annulus output remains 2D cell-centered; "
-                "face-centered polar fields require a distinct polar face topology"
-            )
+            raise ValueError("polar-annulus coordinates require spatial rank two")
         if len(topologies) == 1:
             topology = topologies[0]
             return self._stage_unstructured_vtu(

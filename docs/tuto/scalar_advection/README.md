@@ -68,6 +68,7 @@ Les autres scripts traitent chacun un point precis :
 | Checkpoint et restart AMR bit-identique | [`13_openmp_amr_restart.py`](13_openmp_amr_restart.py) |
 | Sorties MPI PVD/PVTU et Catalyst collectif | [`14_mpi_amr_outputs.py`](14_mpi_amr_outputs.py) |
 | Convergence vers la solution analytique | [`15_openmp_convergence.py`](15_openmp_convergence.py) |
+| Uniforme cartesienne 3D (`--dim 3`) | [`16_openmp_cartesian3d_ssprk2.py`](16_openmp_cartesian3d_ssprk2.py) |
 
 Les scripts OpenMP appellent `pops.set_threads(7)` avant l'initialisation native. Les scripts MPI
 fixent un thread par rang, construisent

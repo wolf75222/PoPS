@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -26,6 +27,7 @@ from pops.output.data import (
     OutputRequest,
     OutputSnapshot,
     _NATIVE_GEOMETRY_ARRAYS,
+    _centering_shape,
 )
 from pops.output.observers import (
     Catalyst,
@@ -172,11 +174,7 @@ def _frame(
         coordinate_system=coordinate_system,
         **geometry_kwargs,
     )
-    spatial_shape = (
-        cell_shape
-        if centering == "cell"
-        else tuple(extent + 1 for extent in cell_shape)
-    )
+    spatial_shape = _centering_shape(cell_shape, centering)
     piece = ArrayPiece(
         (0,) * dimension,
         spatial_shape,
@@ -231,6 +229,52 @@ def _frame(
     )
     request = OutputRequest(
         "live-temperature", (key,), mode, rank=0, size=(1 if mode is ParallelMode.SERIAL else 2)
+    )
+    return ObserverFrame(snapshot, request)
+
+
+def _with_extra_field(base: ObserverFrame, name: str, centering: str) -> ObserverFrame:
+    geometry = base.snapshot.geometries[0]
+    template = base.snapshot.fields[0]
+    dimension = geometry.spatial_rank
+    spatial_shape = _centering_shape(geometry.cell_shape, centering)
+    key = FieldKey(
+        Handle(
+            name,
+            kind="state",
+            owner=template.key.reference.owner_path,
+        ),
+        template.key.component_manifest_identity,
+        template.key.layout_identity,
+        0,
+        "accepted",
+    )
+    field = FieldPayload(
+        key,
+        centering,
+        template.units,
+        (name,),
+        spatial_shape,
+        (
+            ArrayPiece(
+                (0,) * dimension,
+                spatial_shape,
+                np.arange(1, 1 + np.prod(spatial_shape), dtype=np.float64).reshape(
+                    (1,) + spatial_shape
+                ),
+                0,
+                0,
+                False,
+            ),
+        ),
+    )
+    snapshot = replace(base.snapshot, fields=base.snapshot.fields + (field,))
+    request = OutputRequest(
+        base.request.consumer_id,
+        tuple(item.key for item in snapshot.fields),
+        base.request.parallel_mode,
+        rank=base.request.rank,
+        size=base.request.size,
     )
     return ObserverFrame(snapshot, request)
 
@@ -1224,21 +1268,476 @@ def test_bounded_dispatcher_reports_exhausted_frame_as_skipped():
     assert session.calls == 2
 
 
-@pytest.mark.parametrize("cell_shape", ((3,), (2, 2), (2, 1, 3)))
-def test_serial_catalyst_rejects_unproved_centering_in_every_spatial_rank(
+@pytest.mark.parametrize(
+    ("cell_shape", "origin", "spacing", "expected_dims", "n_points"),
+    (
+        ((3,), (1.0,), (0.25,), {"i": 4}, 4),
+        ((2, 3), (1.0, 2.0), (0.25, 0.5), {"i": 4, "j": 3}, 12),
+        (
+            (2, 1, 3),
+            (1.0, 2.0, 3.0),
+            (0.25, 0.5, 0.75),
+            {"i": 4, "j": 2, "k": 3},
+            24,
+        ),
+    ),
+    ids=("line", "quad", "hex"),
+)
+def test_catalyst_nodal_blueprint_is_vertex_data_in_every_spatial_rank(
     tmp_path: Path,
     cell_shape: tuple[int, ...],
+    origin: tuple[float, ...],
+    spacing: tuple[float, ...],
+    expected_dims: dict[str, int],
+    n_points: int,
 ):
-    pipeline = tmp_path / "pipeline.py"
-    pipeline.write_text("# injected Catalyst pipeline\n")
+    pipeline = tmp_path / ("nodal_rank_%d_pipeline.py" % len(cell_shape))
+    pipeline.write_text("# dimension-generic Catalyst nodal topology\n")
+    catalyst_module = _CatalystModule()
+    session = Catalyst(
+        pipeline=str(pipeline),
+        provider=CatalystPythonProvider(
+            catalyst_module=catalyst_module,
+            conduit_module=_ConduitModule(),
+        ),
+    ).open_session(_serial_context())
+    frame = _frame(
+        cell_shape=cell_shape,
+        origin=origin,
+        spacing=spacing,
+        centering="node",
+    )
+
+    session.initialize(ObserverRun(frame.snapshot.provenance.run_identity))
+    session.execute(frame)
+    session.finalize()
+
+    paths = catalyst_module.operations[1][1].values
+    temperature = next(
+        path.removesuffix("/display_name")
+        for path, value in paths.items()
+        if path.endswith("/display_name") and value == "temperature"
+    )
+    assert paths[temperature + "/association"] == "vertex"
+    assert np.array_equal(
+        paths[temperature + "/values"],
+        np.arange(1, n_points + 1, dtype=np.float64),
+    )
+    layout = next(
+        path.removesuffix("/display_name")
+        for path, value in paths.items()
+        if path.endswith("/display_name") and value == "pops_layout"
+    )
+    assert paths[layout + "/association"] == "element"
+    coordset = next(
+        path.removesuffix("/type")
+        for path, value in paths.items()
+        if "/coordsets/" in path and path.endswith("/type") and value == "uniform"
+    )
+    assert {
+        path.rsplit("/", 1)[-1]: value
+        for path, value in paths.items()
+        if path.startswith(coordset + "/dims/")
+    } == expected_dims
+
+
+@pytest.mark.parametrize(
+    ("cell_shape", "blueprint_shape", "n_faces", "n_points"),
+    (
+        ((3,), "point", 4, 4),
+        ((2, 2), "line", 6, 9),
+        ((2, 1, 2), "quad", 6, 18),
+    ),
+    ids=("vertex-1d", "line-2d", "quad-3d"),
+)
+def test_catalyst_face_x_blueprint_matches_vtu_face_mesh(
+    tmp_path: Path,
+    cell_shape: tuple[int, ...],
+    blueprint_shape: str,
+    n_faces: int,
+    n_points: int,
+):
+    pipeline = tmp_path / ("face_rank_%d_pipeline.py" % len(cell_shape))
+    pipeline.write_text("# dimension-generic Catalyst face topology\n")
+    catalyst_module = _CatalystModule()
+    session = Catalyst(
+        pipeline=str(pipeline),
+        provider=CatalystPythonProvider(
+            catalyst_module=catalyst_module,
+            conduit_module=_ConduitModule(),
+        ),
+    ).open_session(_serial_context())
+    frame = _frame(centering="face_x", cell_shape=cell_shape)
+    session.initialize(ObserverRun(frame.snapshot.provenance.run_identity))
+    session.execute(frame)
+    session.finalize()
+
+    paths = catalyst_module.operations[1][1].values
+    assert next(
+        value for path, value in paths.items()
+        if "/topologies/" in path and path.endswith("/type")
+    ) == "unstructured"
+    assert next(
+        value for path, value in paths.items()
+        if path.endswith("/elements/shape")
+    ) == blueprint_shape
+    temperature = next(
+        path.removesuffix("/display_name")
+        for path, value in paths.items()
+        if path.endswith("/display_name") and value == "temperature"
+    )
+    assert paths[temperature + "/association"] == "element"
+    assert np.array_equal(
+        paths[temperature + "/values"],
+        np.arange(1, n_faces + 1, dtype=np.float64),
+    )
+    assert "pops_cell_volume" not in {
+        value for path, value in paths.items() if path.endswith("/display_name")
+    }
+    x = next(
+        value
+        for path, value in paths.items()
+        if "/coordsets/" in path and path.endswith("/values/x")
+    )
+    assert x.shape == (n_points,)
+
+
+def test_catalyst_face_x_two_dimensional_connectivity_matches_vtu_lines(tmp_path: Path):
+    pipeline = tmp_path / "face_x_2d.py"
+    pipeline.write_text("# Catalyst face_x lines\n")
+    catalyst_module = _CatalystModule()
+    session = Catalyst(
+        pipeline=str(pipeline),
+        provider=CatalystPythonProvider(
+            catalyst_module=catalyst_module,
+            conduit_module=_ConduitModule(),
+        ),
+    ).open_session(_serial_context())
+    frame = _frame(centering="face_x", cell_shape=(2, 2))
+    session.initialize(ObserverRun(frame.snapshot.provenance.run_identity))
+    session.execute(frame)
+    session.finalize()
+
+    paths = catalyst_module.operations[1][1].values
+    connectivity = next(
+        value for path, value in paths.items() if path.endswith("/elements/connectivity")
+    )
+    assert np.array_equal(connectivity, [0, 3, 1, 4, 2, 5, 3, 6, 4, 7, 5, 8])
+    assert next(
+        value for path, value in paths.items() if path.endswith("/elements/shape")
+    ) == "line"
+
+
+def test_catalyst_face_y_and_face_z_use_axis_indexed_face_meshes(tmp_path: Path):
+    pipeline = tmp_path / "face_axes.py"
+    pipeline.write_text("# Catalyst face_y / face_z\n")
+    cases = (
+        ("face_y", (2, 3), "line", 9),
+        ("face_z", (2, 1, 2), "quad", 6),
+    )
+    for centering, cell_shape, blueprint_shape, n_faces in cases:
+        catalyst_module = _CatalystModule()
+        session = Catalyst(
+            pipeline=str(pipeline),
+            provider=CatalystPythonProvider(
+                catalyst_module=catalyst_module,
+                conduit_module=_ConduitModule(),
+            ),
+        ).open_session(_serial_context())
+        frame = _frame(centering=centering, cell_shape=cell_shape)
+        session.initialize(ObserverRun(frame.snapshot.provenance.run_identity))
+        session.execute(frame)
+        session.finalize()
+        paths = catalyst_module.operations[1][1].values
+        temperature = next(
+            path.removesuffix("/display_name")
+            for path, value in paths.items()
+            if path.endswith("/display_name") and value == "temperature"
+        )
+        assert paths[temperature + "/association"] == "element"
+        assert paths[temperature + "/values"].shape == (n_faces,)
+        assert next(
+            value for path, value in paths.items() if path.endswith("/elements/shape")
+        ) == blueprint_shape
+
+
+def test_collective_catalyst_publishes_schema_complete_face_empty_peer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    pipeline = tmp_path / "face_empty_rank_pipeline.py"
+    pipeline.write_text("# Cartesian face collective zero-cell peer\n")
+    catalyst_module = _CatalystModule()
+    provider = CatalystPythonProvider(
+        catalyst_module=catalyst_module,
+        conduit_module=_FetchTrackingConduitModule(),
+    )
+    execution_context, worker_lane, _agreements = _collective_context(monkeypatch)
+    session = Catalyst(
+        pipeline=str(pipeline),
+        provider=provider,
+    ).open_runtime_session(
+        {"worker_communicator": worker_lane},
+        execution_context,
+    )
+    frame = _without_local_pieces(
+        _frame(mode=ParallelMode.COLLECTIVE, centering="face_x", cell_shape=(2, 2))
+    )
+
+    session.initialize(ObserverRun(frame.snapshot.provenance.run_identity))
+    session.execute(frame)
+    session.finalize()
+
+    paths = catalyst_module.operations[1][1].values
+    assert next(
+        value for path, value in paths.items()
+        if path.endswith("/topologies/mesh_000000/elements/shape")
+    ) == "line"
+    empty_geometry = [
+        value for path, value in paths.items()
+        if path.endswith(("/values/x", "/values/y", "/elements/connectivity"))
+    ]
+    assert len(empty_geometry) == 3
+    assert all(array.size == 0 for array in empty_geometry)
+
+
+def test_catalyst_publishes_mixed_face_axes_as_sibling_meshes(tmp_path: Path):
+    pipeline = tmp_path / "mixed_faces.py"
+    pipeline.write_text("# mixed face axes become sibling Catalyst meshes\n")
+    catalyst_module = _CatalystModule()
+    session = Catalyst(
+        pipeline=str(pipeline),
+        provider=CatalystPythonProvider(
+            catalyst_module=catalyst_module,
+            conduit_module=_ConduitModule(),
+        ),
+    ).open_session(_serial_context())
+    frame = _with_extra_field(_frame(centering="face_x"), "face_y_phi", "face_y")
+    session.initialize(ObserverRun(frame.snapshot.provenance.run_identity))
+    session.execute(frame)
+    session.finalize()
+
+    paths = catalyst_module.operations[1][1].values
+    domains = sorted({
+        path.split("/data/")[1].split("/")[0]
+        for path in paths
+        if "/data/" in path
+    })
+    assert len(domains) == 2
+    assert domains[0].endswith("_face_x")
+    assert domains[1].endswith("_face_y")
+    names = {
+        value for path, value in paths.items() if path.endswith("/display_name")
+    }
+    assert "temperature" in names
+    assert "face_y_phi" in names
+
+
+def test_catalyst_publishes_mixed_cell_and_face_fields_as_sibling_meshes(tmp_path: Path):
+    pipeline = tmp_path / "mixed_cell_face.py"
+    pipeline.write_text("# cell+face become sibling Catalyst meshes\n")
+    catalyst_module = _CatalystModule()
+    session = Catalyst(
+        pipeline=str(pipeline),
+        provider=CatalystPythonProvider(
+            catalyst_module=catalyst_module,
+            conduit_module=_ConduitModule(),
+        ),
+    ).open_session(_serial_context())
+    frame = _with_extra_field(_frame(centering="cell"), "face_phi", "face_x")
+    session.initialize(ObserverRun(frame.snapshot.provenance.run_identity))
+    session.execute(frame)
+    session.finalize()
+
+    paths = catalyst_module.operations[1][1].values
+    domains = sorted({
+        path.split("/data/")[1].split("/")[0]
+        for path in paths
+        if "/data/" in path
+    })
+    assert len(domains) == 2
+    assert domains[0].endswith("_cell")
+    assert domains[1].endswith("_face_x")
+    cell_volume = [
+        path for path, value in paths.items()
+        if path.endswith("/display_name") and value == "pops_cell_volume"
+    ]
+    assert len(cell_volume) == 1
+    assert "_cell/" in cell_volume[0] or cell_volume[0].split("/data/")[1].startswith(
+        domains[0]
+    )
+
+
+def test_catalyst_keeps_eb_sidecars_on_the_cell_mesh(tmp_path: Path):
+    pipeline = tmp_path / "faces_eb.py"
+    pipeline.write_text("# EB stays on the cell Catalyst mesh\n")
+    catalyst_module = _CatalystModule()
+    session = Catalyst(
+        pipeline=str(pipeline),
+        provider=CatalystPythonProvider(
+            catalyst_module=catalyst_module,
+            conduit_module=_ConduitModule(),
+        ),
+    ).open_session(_serial_context())
+    frame = _with_extra_field(_frame(centering="cell", embedded=True), "face_phi", "face_x")
+    session.initialize(ObserverRun(frame.snapshot.provenance.run_identity))
+    session.execute(frame)
+    session.finalize()
+
+    paths = catalyst_module.operations[1][1].values
+    active = [
+        path for path, value in paths.items()
+        if path.endswith("/display_name") and value == "pops_active"
+    ]
+    face_field = [
+        path for path, value in paths.items()
+        if path.endswith("/display_name") and value == "face_phi"
+    ]
+    assert len(active) == 1
+    assert len(face_field) == 1
+    assert "_cell" in active[0]
+    assert "_face_x" in face_field[0]
+    assert "_face_x" not in active[0]
+
+
+def test_catalyst_empty_face_peer_stays_schema_complete_when_mixed(tmp_path: Path):
+    pipeline = tmp_path / "mixed_empty.py"
+    pipeline.write_text("# missing face pieces stay schema-complete\n")
+    catalyst_module = _CatalystModule()
+    session = Catalyst(
+        pipeline=str(pipeline),
+        provider=CatalystPythonProvider(
+            catalyst_module=catalyst_module,
+            conduit_module=_ConduitModule(),
+        ),
+    ).open_session(_serial_context())
+    mixed = _with_extra_field(_frame(centering="cell"), "face_phi", "face_x")
+    cell_field = next(field for field in mixed.snapshot.fields if field.centering == "cell")
+    face_only = next(field for field in mixed.snapshot.fields if field.centering == "face_x")
+    empty_face = FieldPayload(
+        face_only.key,
+        face_only.centering,
+        face_only.units,
+        face_only.component_names,
+        face_only.global_shape,
+        (),
+        dtype=face_only.array_dtype,
+    )
+    frame = ObserverFrame(
+        replace(mixed.snapshot, fields=(cell_field, empty_face)),
+        mixed.request,
+    )
+    session.initialize(ObserverRun(frame.snapshot.provenance.run_identity))
+    session.execute(frame)
+    session.finalize()
+
+    paths = catalyst_module.operations[1][1].values
+    face_connectivity = next(
+        value for path, value in paths.items()
+        if "_face_x/" in path and path.endswith("/elements/connectivity")
+    )
+    assert face_connectivity.size == 0
+    assert any(
+        path.endswith("/display_name") and value == "face_phi"
+        for path, value in paths.items()
+    )
+
+
+def test_catalyst_data_pipeline_without_renderview_opens_on_the_worker(tmp_path: Path):
+    pipeline = tmp_path / "data_only.py"
+    pipeline.write_text("# Catalyst data path has no RenderView\n")
+    session = Catalyst(
+        pipeline=str(pipeline),
+        provider=CatalystPythonProvider(
+            catalyst_module=_CatalystModule(),
+            conduit_module=_ConduitModule(),
+        ),
+    ).open_session(_serial_context())
+    frame = _frame()
+    session.initialize(ObserverRun(frame.snapshot.provenance.run_identity))
+    session.execute(frame)
+    session.finalize()
+
+
+def test_catalyst_renderview_pipeline_fails_closed_without_offscreen(tmp_path: Path, monkeypatch):
+    from pops.output._live_window import live_paraview_window_capability
+
+    monkeypatch.delenv("VTK_DEFAULT_RENDER_WINDOW_OFFSCREEN", raising=False)
+    monkeypatch.setattr("pops.output._live_window.ctypes.util.find_library", lambda _name: None)
+    pipeline = tmp_path / "cocoa_window.py"
+    pipeline.write_text('view = CreateView("RenderView")\n')
+    with pytest.raises(RuntimeError, match="cannot create a ParaView RenderView|off-screen"):
+        Catalyst(
+            pipeline=str(pipeline),
+            provider=CatalystPythonProvider(
+                catalyst_module=_CatalystModule(),
+                conduit_module=_ConduitModule(),
+            ),
+        ).open_session(_serial_context())
+    monkeypatch.setenv("VTK_DEFAULT_RENDER_WINDOW_OFFSCREEN", "1")
+    capability = live_paraview_window_capability(requested=True)
+    assert capability["window"] is False
+    assert capability["offscreen"] == "vtk-offscreen-env"
+
+
+def test_catalyst_polar_face_x_publishes_unstructured_lines(tmp_path: Path):
+    pipeline = tmp_path / "polar_face.py"
+    pipeline.write_text("# polar 2D face topology\n")
+    catalyst_module = _CatalystModule()
+    session = Catalyst(
+        pipeline=str(pipeline),
+        provider=CatalystPythonProvider(
+            catalyst_module=catalyst_module,
+            conduit_module=_ConduitModule(),
+        ),
+    ).open_session(_serial_context())
+    frame = _frame(
+        centering="face_x",
+        cell_shape=(2, 2),
+        coordinate_system=POLAR_ANNULUS_2D_COORDINATES,
+    )
+    session.initialize(ObserverRun(frame.snapshot.provenance.run_identity))
+    session.execute(frame)
+    session.finalize()
+    paths = catalyst_module.operations[1][1].values
+    assert next(
+        value for path, value in paths.items()
+        if path.endswith("/elements/shape")
+    ) == "line"
+    x = next(
+        value
+        for path, value in paths.items()
+        if "/coordsets/" in path and path.endswith("/values/x")
+    )
+    y = next(
+        value
+        for path, value in paths.items()
+        if "/coordsets/" in path and path.endswith("/values/y")
+    )
+    assert x.shape == y.shape == (9,)
+
+
+def test_serial_catalyst_rejects_polar_annulus_outside_spatial_rank_two(tmp_path: Path):
+    pipeline = tmp_path / "polar_1d.py"
+    pipeline.write_text("# polar rank refusal\n")
     provider = CatalystPythonProvider(
         catalyst_module=_CatalystModule(), conduit_module=_ConduitModule()
     )
     session = Catalyst(pipeline=str(pipeline), provider=provider).open_session(_serial_context())
-    frame = _frame(centering="node", cell_shape=cell_shape)
-    session.initialize(ObserverRun(frame.snapshot.provenance.run_identity))
-    with pytest.raises(NotImplementedError, match="cell-centered"):
-        session.execute(frame)
+    frame = _frame(cell_shape=(3,), origin=(1.0,), spacing=(0.5,))
+    polar_geometry = replace(
+        frame.snapshot.geometries[0],
+        coordinate_system=POLAR_ANNULUS_2D_COORDINATES,
+        cell_measure="pops://cell-measures/polar-annulus-area@1",
+        axis_names=("r",),
+    )
+    polar_frame = ObserverFrame(
+        replace(frame.snapshot, geometries=(polar_geometry,)),
+        frame.request,
+    )
+    session.initialize(ObserverRun(polar_frame.snapshot.provenance.run_identity))
+    with pytest.raises(ValueError, match="spatial rank two"):
+        session.execute(polar_frame)
     session.finalize()
 
 
