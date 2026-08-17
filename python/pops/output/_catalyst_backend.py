@@ -850,6 +850,8 @@ class _CatalystPythonSession:
                     piece = _embedded_piece_for_box(sidecar, name, box_index)
                     mesh_field(name, piece.values[0])
         else:
+            if n_faces is None:
+                raise ValueError("face Catalyst topology did not publish a face count")
             mesh_field(
                 "pops_layout",
                 np.full(n_faces, layout_ordinal, dtype=np.int32),

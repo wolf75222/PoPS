@@ -101,7 +101,7 @@ class ReopenedParaViewIndex:
         return _pvd_time_values(self.manifest.get("entries", ()))
 
     @property
-    def latest(self) -> ReopenedOutput | ReopenedParaViewIndex:
+    def latest(self) -> ReopenedOutput | ReopenedParaViewIndex | ReopenedParaViewMultiBlock:
         """Reopen the latest authenticated member of a PVD collection."""
         if self.kind != "pvd":
             raise RuntimeError("only a ParaView PVD index has a latest sample")

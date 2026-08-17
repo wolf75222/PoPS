@@ -82,6 +82,14 @@ class RectangleBoundaryNames:
     y_min: str = "y_min"
     y_max: str = "y_max"
 
+    @property
+    def z_min(self) -> str:
+        return "z_min"
+
+    @property
+    def z_max(self) -> str:
+        return "z_max"
+
     def __post_init__(self) -> None:
         for field in ("x_min", "x_max", "y_min", "y_max"):
             object.__setattr__(self, field, _name(

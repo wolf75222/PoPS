@@ -2171,6 +2171,8 @@ def validate_field_pieces(
                         piece.lower, piece.upper, box_lower, nodal_upper, strict=True)):
                 raise ValueError("nodal field piece lies outside its indexed geometry box")
         else:
+            if face_axis is None:
+                raise ValueError("face field validation is missing its array axis")
             face_upper = _staggered_upper(box_upper, face_axis)
             if any(
                     piece_lo < box_lo or piece_hi > box_hi

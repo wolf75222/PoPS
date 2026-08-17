@@ -97,7 +97,8 @@ private:
 /// receives that level's matching field and prepared active-cell mask (null when Cartesian).
 template <class Visitor>
 void for_each_owner_active_level_(int program_block, const field_type& left,
-                                  const field_type* right, Visitor&& visitor) const {
+                                  const field_type* right, Visitor&& visitor,
+                                  bool cover_all_scratch_levels = false) const {
   refresh_resources_();
   const int runtime_block = sys_block(program_block);
   const int levels = nlev();
@@ -228,8 +229,12 @@ void for_each_owner_active_level_(int program_block, const field_type& left,
   // (the generated body walks for_each_program_resource_level).  Reducing the
   // same SSA id across leftover sibling-level scratches would mix stale values
   // from the previous level iteration into the current guard or CFL scalar.
+  // pointwise_status_max is the exception: it must see every sibling scratch of
+  // the same SSA id so an active invalid on any live level is fail-closed.
   const auto covers_level = [&](const Identity& identity, int level) {
-    if (identity.family == Family::Scratch || identity.family == Family::Direct)
+    if (identity.family == Family::Scratch)
+      return cover_all_scratch_levels || level == identity.direct_level;
+    if (identity.family == Family::Direct)
       return level == identity.direct_level;
     return true;
   };

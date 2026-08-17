@@ -13,6 +13,8 @@
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/numerics/elliptic/amr/partitioned_region_transfer.hpp>
 #include <pops/numerics/elliptic/interface/amr_field_newton_krylov.hpp>
+#include <pops/numerics/elliptic/mg/composite_fac_nlevel.hpp>
+#include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 #include <pops/numerics/elliptic/interface/elliptic_solver.hpp>
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
 #include <pops/numerics/elliptic/interface/field_nonlinear.hpp>
@@ -233,6 +235,13 @@ struct SetScalarKernel {
   FieldView<Real, Dim> values{};
   Real value = Real(0);
   POPS_HD void operator()(const Index<Dim>& index) const { values(index, 0) = value; }
+};
+
+template <int Dim>
+struct ScaleKernel {
+  FieldView<Real, Dim> values{};
+  Real factor = Real(1);
+  POPS_HD void operator()(const Index<Dim>& index) const { values(index, 0) *= factor; }
 };
 
 template <int Dim>
@@ -488,6 +497,7 @@ class CompositeFacPoisson {
         levels_[level]->halo_exchange.emplace(levels_[level]->halo_schedule, *lane_, context);
       }
     }
+    build_coarse_solver_(request.levels.front());
   }
 
   CompositeFacPoisson(const CompositeFacPoisson&) = delete;
@@ -640,12 +650,35 @@ class CompositeFacPoisson {
 
       compute_composite_residual_();
       restrict_residual_tower_();
-      solve_coarse_correction_();
+      const SolveReport coarse_report = solve_coarse_correction_();
+      report.evaluations += coarse_report.evaluations;
+      if (!coarse_report.solved()) {
+        report.iters = iteration;
+        report.residual_norm = composite_residual_norm_();
+        report.rel_residual = report.residual_norm / reference;
+        report.mark_failed(
+            coarse_report.status, SolveAction::kFailRun,
+            std::string("partitioned_fac_coarse_correction_failed:") + coarse_report.reason +
+                " rel=" + std::to_string(static_cast<double>(coarse_report.rel_residual)) +
+                " iters=" + std::to_string(coarse_report.iters));
+        last_report_ = report;
+        return last_report_;
+      }
       report.step_norm = global_norm_inf_(levels_.front()->correction);
+      if (levels_.size() > 2) {
+        for (std::size_t local = 0; local < levels_.front()->correction.local_size(); ++local)
+          for_each_cell(levels_.front()->correction.box(local),
+                        fac_detail::ScaleKernel<Dim>{
+                            levels_.front()->correction.fab(local).view(), Real(0.5)});
+        Kokkos::fence();
+      }
       add_active_(*levels_.front(), levels_.front()->correction);
       prolong_correction_tower_();
       for (std::size_t level = 1; level < levels_.size(); ++level)
         smooth_(level, levels_[level]->phi, levels_[level]->rhs, post, true, false);
+      if (levels_.size() > 2)
+        smooth_(levels_.size() - 1, levels_.back()->phi, levels_.back()->rhs, options_.fine_sweeps,
+                true, false);
       average_solution_down_();
 
       compute_composite_residual_();
@@ -767,9 +800,8 @@ class CompositeFacPoisson {
         if (!child->phi.contains_local(fine_patch))
           continue;
         const Box<Dim>& valid = child->phi.layout()[fine_patch];
-        const Box<Dim> staging =
-            coarsen(fac_detail::clipped_growth(valid, child->geometry.domain()), ratio_value);
         const Box<Dim> restricted_box = coarsen(valid, ratio_value);
+        const Box<Dim> staging = restricted_box.grow(2).intersect(parent->geometry.domain());
         fac_detail::checked_add(local_cells, static_cast<std::size_t>(staging.numPts()),
                                 budget.local_scratch_cells,
                                 "partitioned FAC parent staging budget exceeded");
@@ -819,9 +851,8 @@ class CompositeFacPoisson {
       };
       for (std::size_t fine_patch = 0; fine_patch < child->phi.layout().size(); ++fine_patch) {
         const Box<Dim>& valid = child->phi.layout()[fine_patch];
-        const Box<Dim> staging =
-            coarsen(fac_detail::clipped_growth(valid, child->geometry.domain()), ratio_value);
         const Box<Dim> footprint = coarsen(valid, ratio_value);
+        const Box<Dim> staging = footprint.grow(2).intersect(parent->geometry.domain());
         mesh::ExactCellCount gather_coverage;
         mesh::ExactCellCount restriction_coverage;
         for (std::size_t parent_patch = 0; parent_patch < parent->phi.layout().size();
@@ -890,13 +921,14 @@ class CompositeFacPoisson {
     }
 
     void interpolate_ghosts(field_type& destination) {
+      const ::pops::amr::transfer::IndexMapping<Dim> mapping{parent->geometry.domain().lo,
+                                                            child->geometry.domain().lo};
       for (ScratchPatch& patch : scratch) {
         const auto coarse = std::as_const(patch.parent_staging).view();
         auto fine = destination.fab_global(patch.fine_patch).view();
         for (const Box<Dim>& region : patch.ghost_regions)
-          for_each_cell(region,
-                        fac_detail::InjectionKernel<Dim>{coarse, fine, parent->geometry.domain(),
-                                                         child->geometry.domain(), ratio});
+          for_each_cell(region, ::pops::elliptic::mg::fac_detail::QuadraticInterpolationTransfer<Dim>{
+                                    coarse, fine, region, ratio, mapping, child->geometry.domain()});
       }
       Kokkos::fence();
     }
@@ -1106,21 +1138,31 @@ class CompositeFacPoisson {
                                              levels_[child - 1]->residual);
   }
 
-  void solve_coarse_correction_() {
-    Level& coarse = *levels_.front();
-    coarse.correction.set_val(Real(0));
-    const Real reference = global_norm_inf_(coarse.residual);
-    const Real stop = std::max(options_.coarse_abs_tol, options_.coarse_rel_tol * reference);
-    for (int sweep = 0; sweep < options_.coarse_cycles; ++sweep) {
-      smooth_(0, coarse.correction, coarse.residual, 1, false, true);
-      if ((sweep + 1) % 8 == 0 || sweep + 1 == options_.coarse_cycles) {
-        fill_ghosts_(0, coarse.correction, true);
-        ::pops::elliptic::mg::poisson_residual_valid(coarse.correction, coarse.residual,
-                                                     coarse.geometry, coarse.scratch, reaction_);
-        if (global_norm_inf_(coarse.scratch) <= stop)
-          break;
-      }
-    }
+  void build_coarse_solver_(const EllipticBuildRequest<Dim>& coarse_request) {
+    ::pops::elliptic::mg::GeometricMultigridOptions controls;
+    controls.relative_tolerance = options_.coarse_rel_tol;
+    controls.absolute_tolerance = options_.coarse_abs_tol;
+    controls.maximum_cycles = options_.coarse_cycles;
+    controls.reaction = reaction_;
+    EllipticBuildRequest<Dim> correction_request = coarse_request;
+    correction_request.boundary = ::pops::elliptic::mg::detail::boundary_for_geometry(
+        coarse_request.boundary, coarse_request.geometry, true);
+    coarse_solver_ = std::make_unique<::pops::elliptic::mg::GeometricMG<Dim, MemorySpace>>(
+        std::move(correction_request), *lane_, controls);
+    coarse_solver_->install_nullspace(
+        FieldNullspacePlan<Dim>{},
+        coarse_request.distribution.replicated()
+            ? PreparedVectorDistribution<Dim>::replicated()
+            : PreparedVectorDistribution<Dim>::distributed());
+  }
+
+  SolveReport solve_coarse_correction_() {
+    coarse_solver_->phi().set_val(Real(0));
+    ::pops::elliptic::mg::copy_scalar_valid(levels_.front()->residual, coarse_solver_->rhs());
+    const SolveReport coarse_report = coarse_solver_->solve();
+    if (coarse_report.solved())
+      ::pops::elliptic::mg::copy_scalar_valid(coarse_solver_->phi(), levels_.front()->correction);
+    return coarse_report;
   }
 
   static void add_active_(Level& level, const field_type& correction) {
@@ -1407,6 +1449,7 @@ class CompositeFacPoisson {
   CompositeFacOptions options_{};
   Real reaction_ = Real(0);
   std::optional<ExecutionLane> lane_{};
+  std::unique_ptr<::pops::elliptic::mg::GeometricMG<Dim, MemorySpace>> coarse_solver_{};
   std::vector<std::unique_ptr<Level>> levels_{};
   std::vector<std::unique_ptr<Connection>> connections_{};
   std::string lane_identity_{};

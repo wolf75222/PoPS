@@ -312,7 +312,8 @@ Real pointwise_status_max(int program_block, const field_type& status,
           local.has_active = local.has_active || part.has_active;
           local.has_invalid = local.has_invalid || part.has_invalid;
           local.maximum = std::max(local.maximum, part.maximum);
-        });
+        },
+        true);
   } catch (...) {
     local_error = std::current_exception();
   }
