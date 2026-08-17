@@ -388,6 +388,7 @@ field_type& history_slot_(const std::string& name, int lag, bool zero_start, int
   if (!manager.initialized.at(key)) {
     if (!zero_start)
       throw std::runtime_error("AMR Program history has not been initialized");
+    result.set_val(Real(0));
   }
   if (lag == 1 && pending_history_remaps_.contains(key))
     return deferred_history_lag_(key, found->second);

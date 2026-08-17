@@ -17,11 +17,16 @@
 #include <cmath>
 #include <cstddef>
 #include <stdexcept>
+#include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
 namespace pops::nd {
+
+inline std::string hyperbolic_publication_refusal(const char* what, Real failure) {
+  return std::string(what) + " status=" + std::to_string(static_cast<int>(failure));
+}
 
 /// Per-field storage for allocation-free prepared Cartesian face and divergence evaluation.
 /// One generated level/block owns one instance and serializes its use with the surrounding
@@ -379,7 +384,9 @@ class PreparedCartesianOperator {
         state, cartesian_operator_detail::ProviderFreeStorage<Dim>{}, candidate, statuses);
     const Real failure = cartesian_operator_detail::maximum_face_status<0>(statuses);
     if (failure != static_cast<Real>(FiniteVolumeStatus::Success))
-      throw std::runtime_error("prepared ND hyperbolic face evaluation refused publication");
+      throw std::runtime_error(
+          hyperbolic_publication_refusal(
+              "prepared ND hyperbolic face evaluation refused publication", failure));
 
     cartesian_operator_detail::copy_face_axes<0>(candidate, output, n_vars);
     device_fence();
@@ -416,7 +423,9 @@ class PreparedCartesianOperator {
         state, providers.view(), candidate, statuses);
     const Real failure = cartesian_operator_detail::maximum_face_status<0>(statuses);
     if (failure != static_cast<Real>(FiniteVolumeStatus::Success))
-      throw std::runtime_error("prepared ND hyperbolic face evaluation refused publication");
+      throw std::runtime_error(
+          hyperbolic_publication_refusal(
+              "prepared ND hyperbolic face evaluation refused publication", failure));
 
     cartesian_operator_detail::copy_face_axes<0>(candidate, output, n_vars);
     device_fence();
@@ -457,7 +466,9 @@ class PreparedCartesianOperator {
         state, providers, candidate, statuses);
     const Real failure = cartesian_operator_detail::maximum_face_status<0>(statuses);
     if (failure != static_cast<Real>(FiniteVolumeStatus::Success))
-      throw std::runtime_error("prepared ND hyperbolic face evaluation refused publication");
+      throw std::runtime_error(
+          hyperbolic_publication_refusal(
+              "prepared ND hyperbolic face evaluation refused publication", failure));
 
     cartesian_operator_detail::copy_face_axes<0>(candidate, output, n_vars);
     device_fence();
@@ -504,7 +515,9 @@ class PreparedCartesianOperator {
         cells, cartesian_operator_detail::FieldStatusMaximum<Dim>{
                    static_cast<const Fab<Dim, MemorySpace>&>(cell_statuses).view()});
     if (cell_failure != static_cast<Real>(FiniteVolumeStatus::Success))
-      throw std::runtime_error("prepared ND hyperbolic residual refused publication");
+      throw std::runtime_error(
+          hyperbolic_publication_refusal(
+              "prepared ND hyperbolic residual refused publication", cell_failure));
 
     for_each_cell(cells, cartesian_operator_detail::CopyCellField<Dim>{
                              static_cast<const Fab<Dim, MemorySpace>&>(candidate).view(),
@@ -527,7 +540,9 @@ class PreparedCartesianOperator {
         face_statuses);
     const Real face_failure = cartesian_operator_detail::maximum_face_status<0>(face_statuses);
     if (face_failure != static_cast<Real>(FiniteVolumeStatus::Success))
-      throw std::runtime_error("prepared ND hyperbolic face evaluation refused publication");
+      throw std::runtime_error(
+          hyperbolic_publication_refusal(
+              "prepared ND hyperbolic face evaluation refused publication", face_failure));
     assemble_residual_from_face_fluxes(integrated_fluxes, residual);
   }
 

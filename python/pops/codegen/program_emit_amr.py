@@ -535,6 +535,7 @@ def _emit_amr_install(
     body: Any,
     hierarchy_bodies: Any = None,
     provider_plan_install: str = "",
+    post_synchronization: Any = None,
 ) -> str:
     """C++ source of the AMR install entry the .so exports (epic ADC-511 / ADC-508, Spec 6).
 
@@ -596,6 +597,8 @@ def _emit_amr_install(
     def walk(values: Any) -> Any:
         for value in values:
             yield value
+            if value.op == "post_synchronization":
+                continue
             for key in (
                 "cond_block",
                 "body_block",
@@ -607,6 +610,33 @@ def _emit_amr_install(
                 nested = value.attrs.get(key)
                 if isinstance(nested, (list, tuple)):
                     yield from walk(nested)
+
+    post_sync_src = post_synchronization if post_synchronization else ""
+    post_sync_field = (
+        "    std::function<void(double)> post_synchronization;\n" if post_sync_src else ""
+    )
+    post_sync_initializer = (
+        "      , [=](double dt) {\n"
+        "        auto& ctx = *ctx_owner;\n"
+        "        ctx.begin_step(dt);\n"
+        "        ctx.set_stage_time(1, 1);\n"
+        + post_sync_src
+        + "\n"
+        "      }\n"
+        if post_sync_src
+        else ""
+    )
+    post_sync_driver = (
+        "    const int _nlev_post = ctx.program_resource_topology().levels;\n"
+        "    for (int _k = 0; _k < _nlev_post; ++_k) {\n"
+        "      ctx.with_program_resource_level(_k, [&]() {\n"
+        "        _level_programs->at(static_cast<std::size_t>(_k))"
+        ".post_synchronization(dt);\n"
+        "      });\n"
+        "    }\n"
+        if post_sync_src
+        else ""
+    )
 
     transform_guard = ""
     transform_refresh_guard = ""
@@ -622,12 +652,13 @@ def _emit_amr_install(
         )
         transform_refresh_guard = "    _require_local_transform_level_contract();\n"
     if hierarchy_bodies is None:
-        phase_fields = "    std::function<void(double)> step;\n"
+        phase_fields = "    std::function<void(double)> step;\n" + post_sync_field
         phase_initializers = (
             "      [=](double dt) {\n"
             "        auto& ctx = *ctx_owner;\n"
             "        (void)dt;\n" + body + "\n"
             "      }\n"
+            + post_sync_initializer
         )
         installed_driver = (
             "    auto _advance_level = [&](double level_dt) {\n"
@@ -635,6 +666,7 @@ def _emit_amr_install(
             "      _level_programs->at(static_cast<std::size_t>(ctx.level())).step(level_dt);\n"
             "    };\n"
             "    ctx.advance_hierarchy(dt, _advance_level);\n"
+            + post_sync_driver
         )
     else:
         gather, solve, publish = hierarchy_bodies
@@ -643,6 +675,7 @@ def _emit_amr_install(
             "    std::function<void(double)> gather;\n"
             "    std::function<void(double)> solve;\n"
             "    std::function<void(double)> publish;\n"
+            + post_sync_field
         )
         phase_initializers = (
             "      [=](double dt) {\n"
@@ -661,10 +694,15 @@ def _emit_amr_install(
             "        auto& ctx = *ctx_owner;\n"
             "        (void)dt;\n" + publish + "\n"
             "      }\n"
+            + post_sync_initializer
         )
         installed_driver = (
             "    auto _advance_hierarchy = [&](double hierarchy_dt) {\n"
             "      _refresh_level_programs();\n"
+            "      // The subcycling engine invokes this body once per level. The candidate tower\n"
+            "      // is complete before the root callback, so gather/solve/publish run there once.\n"
+            "      if (ctx.level() != 0)\n"
+            "        return;\n"
             "      const int _nlev = ctx.program_resource_topology().levels;\n"
             "      if (ctx.uses_prepared_krylov_fallback()) {\n"
             "        for (int _k = 0; _k < _nlev; ++_k) {\n"
@@ -691,6 +729,7 @@ def _emit_amr_install(
             "      }\n"
             "    };\n"
             "    ctx.advance_synchronized_hierarchy(dt, _advance_hierarchy);\n"
+            + post_sync_driver
         )
 
     # Every generated prelude allocation is layout-bound. Materialize one complete closure bundle

@@ -23,6 +23,7 @@ template <int Dim>
 struct PackedCartesianTensorCoefficients {
   static_assert(Dim >= 1 && Dim <= 3,
                 "PackedCartesianTensorCoefficients supports dimensions 1, 2, and 3");
+  static constexpr int dimension = Dim;
 
   FieldView<const Real, Dim> field{};
 
@@ -36,6 +37,7 @@ template <int Dim>
 struct SplitCartesianTensorCoefficients {
   static_assert(Dim >= 1 && Dim <= 3,
                 "SplitCartesianTensorCoefficients supports dimensions 1, 2, and 3");
+  static constexpr int dimension = Dim;
 
   std::array<FieldView<const Real, Dim>, static_cast<std::size_t>(Dim* Dim)> fields{};
 
@@ -58,6 +60,7 @@ POPS_HD inline Real harmonic_tensor_face_average(Real left, Real right) {
 template <int Dim, CartesianTensorDivergenceSign Sign, class Coefficients>
 struct CartesianTensorOperator {
   static_assert(Dim >= 1 && Dim <= 3, "CartesianTensorOperator supports dimensions 1, 2, and 3");
+  static constexpr int dimension = Dim;
 
   FieldView<const Real, Dim> phi{};
   Coefficients coefficients{};

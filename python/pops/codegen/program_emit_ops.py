@@ -314,7 +314,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     # is off (record early-returns), changes no numerics; ops emitting no statement (pure inline
     # token: cfl / compare) are skipped by the len guard below. _start marks this op's first line.
     _profile_start = len(lines)
-    if v.op == "state":
+    if v.op == "post_synchronization":
+        var[v.id] = "/* post_synchronization */"
+    elif v.op == "state":
         var[v.id] = "u%d" % v.id
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.state(%d);" % (var[v.id], bidx))
     elif v.op == "synchronize":
@@ -947,6 +949,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             program_block=_required_block_index(
                 block_idx, v.block, "condensed op %r" % v.name
             ),
+            target=target,
         )
     elif v.op == "matrix_free_operator":
         # Install-time: emit the apply lambda `apply_A{id}` into the prelude. Its persistent scratch

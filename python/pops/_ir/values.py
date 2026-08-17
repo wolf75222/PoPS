@@ -37,6 +37,9 @@ _EIG_FIELDS = {
     "max_im": "max_im",  # plus grande |Im(lambda)| -> temoin de VP complexes (0 = spectre reel)
     "lmin": "lmin",      # plus petite partie reelle du spectre
     "lmax": "lmax",      # plus grande partie reelle du spectre
+    # Gershgorin lower bound when QR does not converge.  Unlike ``lmin``, the
+    # generated kernel stays finite so a local_transform can repair the cell.
+    "lmin_bound": "lmin",
 }
 
 # Predicats REEL/COMPLEXE d'pops::EigBounds (ADC-276) exposes comme une valeur DSL 1.0/0.0 (ADC-362) :
@@ -144,7 +147,7 @@ class EigWitness(Expr):
         ev = np.linalg.eigvals(M)  # (..., k) complexe
         if self.field == "max_im":
             out = np.max(np.abs(ev.imag), axis=-1)  # pyright: ignore[reportAttributeAccessIssue]
-        elif self.field == "lmin":
+        elif self.field in ("lmin", "lmin_bound"):
             out = np.min(ev.real, axis=-1)  # pyright: ignore[reportAttributeAccessIssue]
         elif self.field == "lmax":
             out = np.max(ev.real, axis=-1)  # pyright: ignore[reportAttributeAccessIssue]

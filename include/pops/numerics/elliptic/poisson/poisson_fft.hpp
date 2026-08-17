@@ -5,8 +5,13 @@
 ///
 /// A single `PoissonFFT<Dim>` plan owns the same execution trace for Dim=1,2,3:
 /// batched device transforms over every locally complete axis, a distributed transform over the
-/// final slab axis, a discrete Cartesian symbol, then the reverse trace. Radix-2 extents use FFT
-/// stages; other extents use the explicitly diagnosed direct-DFT path.
+/// final slab axis, a discrete Cartesian symbol that is the sum of one cosine eigenvalue per axis,
+/// then the reverse trace. Dim=3 is that same product over X, Y and Z; it is not a 2-D FFT with a
+/// replicated Z loop. When FFTW3 was discovered in CONDA_PREFIX (or POPS_FFTW_ROOT) at configure,
+/// locally complete axes use that production radix backend for every positive extent. Otherwise the
+/// in-tree radix-2 stages remain, and other extents use the explicitly diagnosed direct-DFT path.
+/// The distributed stage is slab-on-the-final-axis, not a closed pencil-decomposed production 3-D
+/// MPI FFT. FFT+AMR stays refused.
 /// No rank materializes another rank's slab and MPI sees only pinned staging buffers.
 
 #include <pops/diagnostics/fallback_diagnostics.hpp>
@@ -32,6 +37,10 @@
 #include <string_view>
 #include <utility>
 
+#ifdef POPS_HAS_FFTW
+#include <fftw3.h>
+#endif
+
 #ifdef POPS_HAS_MPI
 #include <mpi.h>
 #endif
@@ -49,6 +58,23 @@ inline std::size_t poisson_fft_direct_dft_fallback_count() {
 }
 inline void record_poisson_fft_direct_dft_fallback() {
   record_fallback(FallbackCounter::kFftDirectDft);
+}
+
+inline constexpr bool poisson_fft_fftw_configured() noexcept {
+#ifdef POPS_HAS_FFTW
+  return true;
+#else
+  return false;
+#endif
+}
+
+inline const char* poisson_fft_fftw_absence_reason() noexcept {
+#ifdef POPS_HAS_FFTW
+  return "";
+#else
+  return "FFTW3 was not found in CONDA_PREFIX or POPS_FFTW_ROOT at configure; "
+         "PoissonFFT uses the in-tree radix-2 / diagnosed direct-DFT backend";
+#endif
 }
 
 /// Bounded diagnostics used by MPI tests to prove that a rank-local allocation or device-stage
@@ -71,6 +97,7 @@ template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::m
 class PoissonFFT {
  public:
   static_assert(Dim >= 1 && Dim <= 3);
+  static constexpr int dimension = Dim;
   using int_array = std::array<int, Dim>;
   using real_array = std::array<double, Dim>;
   using complex_type = Kokkos::complex<double>;
@@ -108,7 +135,8 @@ class PoissonFFT {
       }
       if (cells_[Dim - 1] % ranks_ != 0)
         throw std::invalid_argument(
-            "PoissonFFT final Cartesian extent must divide communicator size");
+            "PoissonFFT communicator size must divide the final Cartesian axis "
+            "(unique slabs, no replicated Z)");
       local_last_ = cells_[Dim - 1] / ranks_;
       local_count_ = checked_product_(transverse_, static_cast<std::size_t>(local_last_));
       if (local_count_ >
@@ -172,10 +200,20 @@ class PoissonFFT {
   [[nodiscard]] std::size_t local_cell_count() const noexcept { return local_count_; }
   [[nodiscard]] const ExecutionLane& lane() const noexcept { return *lane_; }
   [[nodiscard]] bool uses_direct_dft_fallback() const noexcept {
+    if (poisson_fft_fftw_configured()) {
+      if (ranks_ == 1)
+        return false;
+      return !is_pow2(cells_[Dim - 1]);
+    }
     for (const int extent : cells_)
       if (!is_pow2(extent))
         return true;
     return false;
+  }
+  [[nodiscard]] bool uses_fftw_backend() const noexcept {
+    if (!poisson_fft_fftw_configured())
+      return false;
+    return ranks_ == 1 || Dim > 1;
   }
 
   /// Solve lap_h phi = rhs.  Both views are local final-axis slabs and remain device-resident.
@@ -233,7 +271,58 @@ class PoissonFFT {
     }
   }
 
+  bool try_local_fftw_axis_(int axis, bool inverse) {
+#ifdef POPS_HAS_FFTW
+    const int extent = cells_[axis];
+    if (extent <= 1)
+      return extent == 1;
+    Kokkos::fence();
+    auto host = Kokkos::create_mirror_view(values_);
+    Kokkos::deep_copy(host, values_);
+    int shape[3]{};
+    for (int lower = 0; lower < Dim - 1; ++lower)
+      shape[lower] = cells_[lower];
+    shape[Dim - 1] = local_last_;
+    fftw_iodim dims{};
+    fftw_iodim howmany[3]{};
+    int howmany_rank = 0;
+    int stride = 1;
+    for (int current = 0; current < Dim; ++current) {
+      if (current == axis) {
+        dims.n = shape[current];
+        dims.is = dims.os = stride;
+      } else {
+        howmany[howmany_rank].n = shape[current];
+        howmany[howmany_rank].is = howmany[howmany_rank].os = stride;
+        ++howmany_rank;
+      }
+      stride *= shape[current];
+    }
+    fftw_complex* data = reinterpret_cast<fftw_complex*>(host.data());
+    const int sign = inverse ? FFTW_BACKWARD : FFTW_FORWARD;
+    fftw_plan plan = fftw_plan_guru_dft(1, &dims, howmany_rank, howmany_rank == 0 ? nullptr : howmany,
+                                        data, data, sign, FFTW_ESTIMATE);
+    if (plan == nullptr)
+      return false;
+    fftw_execute(plan);
+    fftw_destroy_plan(plan);
+    if (inverse) {
+      const double scale = 1.0 / static_cast<double>(extent);
+      for (std::size_t ordinal = 0; ordinal < local_count_; ++ordinal)
+        host(ordinal) *= scale;
+    }
+    Kokkos::deep_copy(values_, host);
+    return true;
+#else
+    (void)axis;
+    (void)inverse;
+    return false;
+#endif
+  }
+
   void local_dft_axis_(int axis, bool inverse) {
+    if (try_local_fftw_axis_(axis, inverse))
+      return;
     if (is_pow2(cells_[axis])) {
       local_radix2_axis_(axis, inverse);
       return;
@@ -327,6 +416,10 @@ class PoissonFFT {
   }
 
   void distributed_last_dft_(bool inverse) {
+    if (ranks_ == 1) {
+      local_dft_axis_(Dim - 1, inverse);
+      return;
+    }
     if (is_pow2(cells_[Dim - 1])) {
       distributed_last_radix2_(inverse);
       return;
@@ -573,7 +666,7 @@ class PoissonFFT {
     const std::size_t transverse = transverse_;
     const int local_last = local_last_;
     const int rank = rank_;
-    const bool last_axis_radix2 = is_pow2(cells_[Dim - 1]);
+    const bool last_axis_bit_reversed = ranks_ > 1 && is_pow2(cells_[Dim - 1]);
     Kokkos::parallel_for(
         "pops_poisson_fft_symbol", Kokkos::RangePolicy<>(0, local_count_),
         KOKKOS_LAMBDA(std::size_t ordinal) {
@@ -587,7 +680,7 @@ class PoissonFFT {
           }
           const int stored_frequency = rank * local_last + static_cast<int>(ordinal / transverse);
           const int frequency =
-              last_axis_radix2 ? reverse_bits_(stored_frequency, cells[Dim - 1]) : stored_frequency;
+              last_axis_bit_reversed ? reverse_bits_(stored_frequency, cells[Dim - 1]) : stored_frequency;
           lambda += (2.0 * Kokkos::cos(2.0 * std::numbers::pi * frequency / cells[Dim - 1]) - 2.0) /
                     (spacing[Dim - 1] * spacing[Dim - 1]);
           values[ordinal] =

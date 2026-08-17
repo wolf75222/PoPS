@@ -37,7 +37,8 @@ from pops.codegen.program_emit_model_kernels import _linear_source_rows, _provid
 
 
 def emit_condensed_op(v: Any, var: Any, model: Any, lines: Any, prelude: Any, *,
-                      provider_plans: Any, consumer_qid: str, program_block: int) -> None:
+                      provider_plans: Any, consumer_qid: str, program_block: int,
+                      target: str = "system") -> None:
     """Dispatch a condensed_coeffs / condensed_rhs / condensed_reconstruct / condensed_energy op to its
     inline emitter (ADC-637), keeping program_emit_ops.py a thin router. Records the op's C++ token in
     @p var and appends its kernel to @p lines (the coefficient bundle also allocates one persistent
@@ -66,6 +67,21 @@ def emit_condensed_op(v: Any, var: Any, model: Any, lines: Any, prelude: Any, *,
         # Dirichlet transport side would differ (the brick forces Foextrap on the coefficients); lifting
         # that needs a ctx coefficient-BC seam, batched with the brick retirement (header change).
         lines.append("ctx.fill_boundary(*%s);" % tensor)
+        if target == "amr_system":
+            lines.append("if (!ctx.uses_prepared_krylov_fallback()) {")
+            for row in range(dimension):
+                for column in range(dimension):
+                    dest = "cond%d_fac_coeff_%d_%d" % (v.id, row, column)
+                    identity = "pops.tensor-elliptic.coefficient.%d.%d" % (row, column)
+                    lines.append(
+                        "  pops::MultiFab<pops::kNativeDimension>& %s = "
+                        "ctx.assembly_target(*%s, %s);"
+                        % (dest, tensor, json.dumps(identity)))
+                    lines.append(
+                        "  ctx.copy_grown_component_span(%s, 0, *%s, %d, 1);"
+                        % (dest, tensor, row * dimension + column))
+                    lines.append("  ctx.fill_boundary(%s);" % dest)
+            lines.append("}")
     elif v.op == "condensed_rhs":
         out_in, phi_in, state_in = v.inputs
         lines += _emit_condensed_rhs_kernel(
@@ -206,8 +222,7 @@ def _emit_condensed_coeffs_kernel(
     th_dt_cpp = _coeff_cpp(th_dt)
     tensor_write = "cond%s_tensorW" % uid
     body = [
-        "pops::MultiFab<pops::kNativeDimension>& %s = "
-        'ctx.assembly_target(%s, "pops.tensor-elliptic.coefficients");'
+        "pops::MultiFab<pops::kNativeDimension>& %s = %s;"
         % (tensor_write, tensor),
         "for (int li = 0; li < %s.local_size(); ++li) {" % tensor_write,
         "  const pops::FieldView<pops::Real, pops::kNativeDimension> tensorA = "
@@ -277,10 +292,10 @@ def _emit_condensed_rhs_kernel(uid: Any, model: Any, jblock_op: Any, subset: Any
     dimension = len(subset)
     body = [
         "pops::MultiFab<pops::kNativeDimension>& %s = "
-        "ctx.scalar_scratch(%d, 0, %s, 1, 0);" % (lap, uid, rhs),
+        "ctx.scalar_scratch(%d, 0, %s, 1, 0);" % (lap, uid, _deref(phi_n_var)),
         "ctx.laplacian(%s, %s);" % (lap, _deref(phi_n_var)),
         "pops::MultiFab<pops::kNativeDimension>& %s = "
-        "ctx.scalar_scratch(%d, 1, %s, 1, 0);" % (negl, uid, rhs),
+        "ctx.scalar_scratch(%d, 1, %s, 1, 0);" % (negl, uid, _deref(phi_n_var)),
         "for (int li = 0; li < %s.local_size(); ++li) {" % negl,
         "  const pops::FieldView<pops::Real, pops::kNativeDimension> nlA = "
         "%s.fab(li).view();" % negl,
@@ -292,7 +307,7 @@ def _emit_condensed_rhs_kernel(uid: Any, model: Any, jblock_op: Any, subset: Any
         "  });",
         "}",
         "pops::MultiFab<pops::kNativeDimension>& %s = "
-        "ctx.scalar_scratch(%d, 2, %s, %d, 1);" % (fx, uid, rhs, dimension),
+        "ctx.scalar_scratch(%d, 2, %s, %d, 1);" % (fx, uid, _deref(phi_n_var), dimension),
         "pops::MultiFab<pops::kNativeDimension>& %s = "
         'ctx.assembly_target(%s, "pops.tensor-elliptic.flux");'
         % (flux_write, fx),

@@ -33,6 +33,42 @@ void copy_component_span(field_type& destination, int destination_component,
   count_kernel_();
 }
 
+void copy_grown_component_span(field_type& destination, int destination_component,
+                               const field_type& source, int source_component,
+                               int component_count) const {
+  if (component_count <= 0 || destination_component < 0 || source_component < 0 ||
+      destination_component > destination.ncomp() - component_count ||
+      source_component > source.ncomp() - component_count)
+    throw std::invalid_argument("AMR Program grown component-span copy has an invalid range");
+  require_same_layout_(destination, source, "AMR Program grown component-span copy");
+  if (destination.ghosts() != source.ghosts())
+    throw std::invalid_argument("AMR Program grown component-span copy ghosts differ");
+  for (std::size_t local = 0; local < destination.local_size(); ++local) {
+    if (destination.global_index(local) != source.global_index(local) ||
+        destination.fab(local).grown_box() != source.fab(local).grown_box())
+      throw std::logic_error(
+          "AMR Program grown component-span copy found inconsistent local ownership");
+  }
+  if (&destination == &source && destination_component == source_component)
+    return;
+  const bool copy_backward = &destination == &source && destination_component > source_component &&
+                             destination_component < source_component + component_count;
+  for (std::size_t local = 0; local < destination.local_size(); ++local) {
+    const FieldView<Real, Dim> output = destination.fab(local).view();
+    const FieldView<const Real, Dim> input = std::as_const(source).fab(local).view();
+    for_each_cell(destination.fab(local).grown_box(), [=] POPS_HD(const Index<Dim>& cell) {
+      if (copy_backward) {
+        for (int offset = component_count; offset-- > 0;)
+          output(cell, destination_component + offset) = input(cell, source_component + offset);
+      } else {
+        for (int offset = 0; offset < component_count; ++offset)
+          output(cell, destination_component + offset) = input(cell, source_component + offset);
+      }
+    });
+  }
+  count_kernel_();
+}
+
 /// Register one level-qualified exact-ranked history ring.  The generated AMR installer invokes
 /// this while constructing each level bundle, so one authored history maps to one immutable
 /// layout contract per active level instead of a 2-D or owner-erased global buffer.
@@ -46,7 +82,8 @@ void register_history(const std::string& name, int lag, int ncomp, int program_o
         "AMR Program history requires complete owner/state/space/clock identities");
   const int runtime_owner = sys_block(program_owner);
   refresh_resources_();
-  const field_type& prototype = state(program_owner);
+  const field_type& prototype =
+      facade_->prepared_amr_block_state(runtime_owner, active_level_);
   const int components = ncomp < 0 ? prototype.ncomp() : ncomp;
   if (components < 1)
     throw std::invalid_argument("AMR Program history component count must be positive");

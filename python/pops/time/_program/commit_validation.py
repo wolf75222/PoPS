@@ -30,7 +30,8 @@ def validate_commit_many(program: Any, mapping: Any) -> list[tuple[Any, Any]]:
                 % (block,))
         if state.prog is not program:
             raise ValueError("commit_many: the State for %r belongs to a different Program" % block)
-        require_top_level(program, state, "commit_many")
+        if not getattr(program, "_post_sync_recording", False):
+            require_top_level(program, state, "commit_many")
         if state.clock != endpoint.clock:
             raise ValueError(
                 "commit_many: endpoint for block %r uses clock %r but value %r uses clock %r; "
@@ -46,7 +47,12 @@ def validate_commit_many(program: Any, mapping: Any) -> list[tuple[Any, Any]]:
             raise ValueError(
                 "commit_many: endpoint for block %r cannot receive a value owned by block %r"
                 % (block_name(block), block_name(state.block)))
-        if endpoint.state in program._commits:
+        committed = (
+            program._post_sync_commits
+            if getattr(program, "_post_sync_recording", False)
+            else program._commits
+        )
+        if endpoint.state in committed:
             raise ValueError("state %s committed more than once" % endpoint.state.qualified_id)
         validated.append((endpoint.state, state))
     return validated

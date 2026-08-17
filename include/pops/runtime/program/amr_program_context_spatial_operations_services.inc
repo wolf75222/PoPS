@@ -31,9 +31,7 @@ std::optional<int> authenticated_runtime_block_for_state_target_(const field_typ
     throw std::logic_error("AMR Program state target has no complete authenticated block map");
   std::optional<int> match;
   for (int runtime_block = 0; runtime_block < n_blocks(); ++runtime_block) {
-    const field_type* candidate = nullptr;
-    if (!active_attempt_states_.empty())
-      candidate = active_attempt_states_.at(static_cast<std::size_t>(runtime_block));
+    const field_type* candidate = live_attempt_state_(runtime_block, active_level_);
     const field_type* accepted = &facade_->prepared_amr_block_state(runtime_block, active_level_);
     if (&target != candidate && &target != accepted)
       continue;

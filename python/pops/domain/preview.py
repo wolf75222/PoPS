@@ -17,12 +17,14 @@ from typing import Any, Protocol
 import numpy as np
 from numpy.typing import NDArray
 
-from pops.frames import Cartesian2D
+from pops.frames import Cartesian, Cartesian1D, Cartesian2D, Cartesian3D
 from pops.identity import make_identity
 
 
 FloatArray = NDArray[np.float64]
 BoolArray = NDArray[np.bool_]
+_AXIS_NAMES = ("x", "y", "z")
+_RANKED_CARTESIAN = (Cartesian1D, Cartesian2D, Cartesian3D)
 
 
 class AnalyticPreviewValue(Protocol):
@@ -60,6 +62,14 @@ class PreviewBoundaryNames(Protocol):
     def y_max(self) -> str:
         raise NotImplementedError
 
+    @property
+    def z_min(self) -> str:
+        raise NotImplementedError
+
+    @property
+    def z_max(self) -> str:
+        raise NotImplementedError
+
 
 class PreviewDomainProvider(Protocol):
     """Minimal bounded-domain protocol consumed by sampling and rendering."""
@@ -69,11 +79,11 @@ class PreviewDomainProvider(Protocol):
         raise NotImplementedError
 
     @property
-    def lower(self) -> tuple[float, float]:
+    def lower(self) -> tuple[float, ...]:
         raise NotImplementedError
 
     @property
-    def upper(self) -> tuple[float, float]:
+    def upper(self) -> tuple[float, ...]:
         raise NotImplementedError
 
     @property
@@ -81,12 +91,12 @@ class PreviewDomainProvider(Protocol):
         raise NotImplementedError
 
     @property
-    def lengths(self) -> tuple[float, float]:
+    def lengths(self) -> tuple[float, ...]:
         """Return positive Cartesian lengths."""
 
         raise NotImplementedError
 
-    def frame(self, coordinates: Cartesian2D) -> Any:
+    def frame(self, coordinates: Cartesian) -> Any:
         """Bind the domain to a typed Cartesian frame."""
 
 
@@ -96,6 +106,8 @@ class _DefaultBoundaryNames:
     x_max: str = "x_max"
     y_min: str = "y_min"
     y_max: str = "y_max"
+    z_min: str = "z_min"
+    z_max: str = "z_max"
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,23 +115,27 @@ class _GeometryPreviewDomain:
     """Presentation-only bounded window owned by an implicit geometry preview."""
 
     name: str
-    lower: tuple[float, float]
-    upper: tuple[float, float]
+    lower: tuple[float, ...]
+    upper: tuple[float, ...]
     frame_id: str | None
     boundary_names: _DefaultBoundaryNames = _DefaultBoundaryNames()
 
     @property
-    def lengths(self) -> tuple[float, float]:
-        return (self.upper[0] - self.lower[0], self.upper[1] - self.lower[1])
+    def lengths(self) -> tuple[float, ...]:
+        return tuple(high - low for low, high in zip(self.lower, self.upper, strict=True))
 
-    def frame(self, coordinates: Cartesian2D) -> _GeometryPreviewFrame:
+    def frame(self, coordinates: Cartesian) -> _GeometryPreviewFrame:
+        if not isinstance(coordinates, Cartesian):
+            raise TypeError("geometry preview frame requires Cartesian")
+        if coordinates.dimension != len(self.lower):
+            raise ValueError("geometry preview coordinate and domain ranks differ")
         return _GeometryPreviewFrame(self, coordinates)
 
 
 @dataclass(frozen=True, slots=True)
 class _GeometryPreviewFrame:
     domain: _GeometryPreviewDomain
-    coordinates: Cartesian2D
+    coordinates: Cartesian
 
     @property
     def axes(self) -> Any:
@@ -134,16 +150,20 @@ class _GeometryPreviewFrame:
         return self.coordinates.y
 
     @property
-    def lower(self) -> tuple[float, float]:
+    def z(self) -> Any:
+        return self.coordinates.z
+
+    @property
+    def lower(self) -> tuple[float, ...]:
         return self.domain.lower
 
     @property
-    def upper(self) -> tuple[float, float]:
+    def upper(self) -> tuple[float, ...]:
         return self.domain.upper
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "frame_type": "geometry_preview_cartesian_2d",
+            "frame_type": "geometry_preview_cartesian",
             "lower_binary64": [value.hex() for value in self.lower],
             "upper_binary64": [value.hex() for value in self.upper],
             "coordinates": self.coordinates.to_dict(),
@@ -156,28 +176,47 @@ class _GeometryPreviewFrame:
         return make_identity("geometry-preview-frame", self.to_dict(), schema_version=1).token
 
 
-def _checked_resolution(value: Any) -> tuple[int, int]:
-    if isinstance(value, int) and not isinstance(value, bool):
-        values = (value, value)
-    elif not isinstance(value, (str, bytes)) and isinstance(value, Sequence) \
-            and len(value) == 2:
+def _preview_rank(lower: Any) -> int:
+    if isinstance(lower, (str, bytes)) or not isinstance(lower, Sequence):
+        raise TypeError("preview domain lower must be a coordinate sequence")
+    rank = len(tuple(lower))
+    if rank not in (1, 2, 3):
+        raise ValueError("preview domain rank must be 1, 2, or 3")
+    return rank
+
+
+def _checked_resolution(value: Any, rank: int) -> tuple[int, ...]:
+    if value is None:
+        size = 24 if rank == 3 else 256
+        values = (size,) * rank
+    elif isinstance(value, int) and not isinstance(value, bool):
+        values = (value,) * rank
+    elif not isinstance(value, (str, bytes)) and isinstance(value, Sequence):
+        if len(value) != rank:
+            raise TypeError(
+                "preview resolution must be an integer or a sequence of %d integers" % rank
+            )
         values = tuple(value)
     else:
-        raise TypeError("preview resolution must be an integer or a pair of integers")
+        raise TypeError("preview resolution must be an integer or a sequence of integers")
     if any(not isinstance(item, int) or isinstance(item, bool) for item in values):
         raise TypeError("preview resolution entries must be integers, never bool")
     if any(item < 2 for item in values):
         raise ValueError("preview resolution entries must be >= 2")
-    return (values[0], values[1])
+    return values
 
 
-def _checked_extent(value: Any) -> tuple[tuple[float, float], tuple[float, float]]:
+def _checked_extent(value: Any) -> tuple[tuple[float, ...], tuple[float, ...]]:
     if isinstance(value, (str, bytes)) or not isinstance(value, Sequence) or len(value) != 2:
-        raise TypeError("preview extent must contain lower and upper two-dimensional points")
-    points: list[tuple[float, float]] = []
+        raise TypeError("preview extent must contain lower and upper points")
+    points: list[tuple[float, ...]] = []
     for point_index, point in enumerate(value):
-        if isinstance(point, (str, bytes)) or not isinstance(point, Sequence) or len(point) != 2:
-            raise TypeError("preview extent point %d must contain two coordinates" % point_index)
+        if isinstance(point, (str, bytes)) or not isinstance(point, Sequence) \
+                or len(point) not in (1, 2, 3):
+            raise TypeError(
+                "preview extent point %d must contain one, two, or three coordinates"
+                % point_index
+            )
         coordinates = []
         for coordinate in point:
             if isinstance(coordinate, bool) or not isinstance(coordinate, (int, float)):
@@ -186,29 +225,48 @@ def _checked_extent(value: Any) -> tuple[tuple[float, float], tuple[float, float
             if not np.isfinite(converted):
                 raise ValueError("preview extent coordinates must be finite")
             coordinates.append(converted)
-        points.append((coordinates[0], coordinates[1]))
+        points.append(tuple(coordinates))
     lower, upper = points
+    if len(lower) != len(upper):
+        raise ValueError("preview extent lower and upper must have one common rank")
     if any(high <= low for low, high in zip(lower, upper, strict=True)):
         raise ValueError("preview extent upper coordinates must exceed lower coordinates")
     return lower, upper
 
 
-def _validate_preview_domain(domain: Any) -> None:
+def _validate_preview_domain(domain: Any) -> int:
     name = getattr(domain, "name", None)
     if not isinstance(name, str) or not name:
         raise TypeError("DomainPreview.domain must expose a non-empty name")
     lower, upper = _checked_extent((getattr(domain, "lower", None),
                                     getattr(domain, "upper", None)))
+    rank = len(lower)
     lengths = getattr(domain, "lengths", None)
-    expected_lengths = (upper[0] - lower[0], upper[1] - lower[1])
+    expected_lengths = tuple(high - low for low, high in zip(lower, upper, strict=True))
     if not isinstance(lengths, Sequence) or tuple(lengths) != expected_lengths:
         raise TypeError("DomainPreview.domain lengths must match its lower and upper bounds")
     labels = getattr(domain, "boundary_names", None)
-    if any(not isinstance(getattr(labels, face, None), str) or not getattr(labels, face)
-           for face in ("x_min", "x_max", "y_min", "y_max")):
-        raise TypeError("DomainPreview.domain must expose four non-empty boundary labels")
+    for name in _AXIS_NAMES[:rank]:
+        for suffix in ("min", "max"):
+            face = "%s_%s" % (name, suffix)
+            label = getattr(labels, face, None)
+            if not isinstance(label, str) or not label:
+                raise TypeError(
+                    "DomainPreview.domain must expose non-empty boundary labels for every axis"
+                )
     if not callable(getattr(domain, "frame", None)):
-        raise TypeError("DomainPreview.domain must implement frame(Cartesian2D)")
+        raise TypeError("DomainPreview.domain must implement frame(Cartesian)")
+    return rank
+
+
+def _bind_preview_frame(domain: Any, rank: int) -> Any:
+    owned = getattr(domain, "coordinates", None)
+    if isinstance(owned, Cartesian):
+        try:
+            return domain.frame(owned)
+        except TypeError:
+            return domain.frame()
+    return domain.frame(_RANKED_CARTESIAN[rank - 1]())
 
 
 def _readonly_float_array(value: Any, *, ndim: int, where: str) -> FloatArray:
@@ -221,12 +279,27 @@ def _readonly_float_array(value: Any, *, ndim: int, where: str) -> FloatArray:
     return result
 
 
-def _readonly_bool_array(value: Any, *, shape: tuple[int, int], where: str) -> BoolArray:
+def _readonly_bool_array(value: Any, *, shape: tuple[int, ...], where: str) -> BoolArray:
     result = np.array(value, dtype=np.bool_, order="C", copy=True)
     if result.shape != shape:
         raise ValueError("%s has shape %r instead of %r" % (where, result.shape, shape))
     result.setflags(write=False)
     return result
+
+
+def _sample_grids(
+    x_values: FloatArray,
+    y_values: FloatArray | None,
+    z_values: FloatArray | None,
+    rank: int,
+) -> tuple[FloatArray, FloatArray | None, FloatArray | None]:
+    if rank == 1:
+        return x_values, None, None
+    if rank == 2:
+        xx, yy = np.meshgrid(x_values, y_values, indexing="xy")
+        return xx, yy, None
+    zz, yy, xx = np.meshgrid(z_values, y_values, x_values, indexing="ij")
+    return xx, yy, zz
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -236,25 +309,45 @@ class DomainPreview:
     domain: PreviewDomainProvider
     geometry: GeometryPreviewProvider | None
     x: FloatArray
-    y: FloatArray
+    y: FloatArray | None = None
     level_set_values: FloatArray | None = None
     active_mask: BoolArray | None = None
     field: AnalyticPreviewValue | None = None
     field_values: NDArray[Any] | None = None
     field_kind: str | None = None
+    z: FloatArray | None = None
 
     def __post_init__(self) -> None:
-        _validate_preview_domain(self.domain)
+        rank = _validate_preview_domain(self.domain)
         if self.geometry is not None and not callable(getattr(self.geometry, "level_set", None)):
             raise TypeError("DomainPreview.geometry must implement level_set(frame)")
         x_values = _readonly_float_array(self.x, ndim=1, where="DomainPreview.x")
-        y_values = _readonly_float_array(self.y, ndim=1, where="DomainPreview.y")
-        if x_values.size < 2 or y_values.size < 2:
+        y_values = None
+        z_values = None
+        if rank == 1:
+            if self.y is not None or self.z is not None:
+                raise ValueError("DomainPreview y and z must be None for rank 1")
+            expected_shape: tuple[int, ...] = (x_values.size,)
+        elif rank == 2:
+            if self.y is None:
+                raise ValueError("DomainPreview.y is required for rank 2")
+            if self.z is not None:
+                raise ValueError("DomainPreview.z must be None for rank 2")
+            y_values = _readonly_float_array(self.y, ndim=1, where="DomainPreview.y")
+            expected_shape = (y_values.size, x_values.size)
+        else:
+            if self.y is None or self.z is None:
+                raise ValueError("DomainPreview.y and DomainPreview.z are required for rank 3")
+            y_values = _readonly_float_array(self.y, ndim=1, where="DomainPreview.y")
+            z_values = _readonly_float_array(self.z, ndim=1, where="DomainPreview.z")
+            expected_shape = (z_values.size, y_values.size, x_values.size)
+        axes = {"x": x_values, "y": y_values, "z": z_values}
+        if any(axes[name].size < 2 for name in _AXIS_NAMES[:rank]):
             raise ValueError("DomainPreview axes must each contain at least two samples")
         object.__setattr__(self, "x", x_values)
         object.__setattr__(self, "y", y_values)
+        object.__setattr__(self, "z", z_values)
 
-        expected_shape = (y_values.size, x_values.size)
         if (self.level_set_values is None) != (self.active_mask is None):
             raise ValueError(
                 "DomainPreview level-set values and active mask must be present together"
@@ -266,7 +359,7 @@ class DomainPreview:
             if self.level_set_values is None:
                 raise ValueError("DomainPreview geometry requires sampled level-set values")
             level_set_values = _readonly_float_array(
-                self.level_set_values, ndim=2, where="DomainPreview.level_set_values")
+                self.level_set_values, ndim=rank, where="DomainPreview.level_set_values")
             if level_set_values.shape != expected_shape:
                 raise ValueError(
                     "DomainPreview.level_set_values has shape %r instead of %r"
@@ -296,7 +389,7 @@ class DomainPreview:
                 self.field_values, shape=expected_shape, where="DomainPreview.field_values")
         else:
             field_values = _readonly_float_array(
-                self.field_values, ndim=2, where="DomainPreview.field_values")
+                self.field_values, ndim=rank, where="DomainPreview.field_values")
             if field_values.shape != expected_shape:
                 raise ValueError(
                     "DomainPreview.field_values has shape %r instead of %r"
@@ -306,10 +399,15 @@ class DomainPreview:
         object.__setattr__(self, "field_kind", field_kind)
 
     @property
-    def resolution(self) -> tuple[int, int]:
-        """Return the sample count in Cartesian ``(x, y)`` order."""
+    def dimension(self) -> int:
+        return _preview_rank(self.domain.lower)
 
-        return (int(self.x.size), int(self.y.size))
+    @property
+    def resolution(self) -> tuple[int, ...]:
+        """Return the sample count in Cartesian ``(x, y, z)`` order."""
+
+        axes = {"x": self.x, "y": self.y, "z": self.z}
+        return tuple(int(axes[name].size) for name in _AXIS_NAMES[:self.dimension])
 
     def show(self, *, path: str | PathLike[str] | None = None) -> Path | None:
         """Show interactively, or save when ``path`` is provided.
@@ -337,30 +435,36 @@ def preview_domain(
     *,
     geometry: GeometryPreviewProvider | None = None,
     field: AnalyticPreviewValue | None = None,
-    resolution: int | tuple[int, int] = (256, 256),
+    resolution: int | Sequence[int] | None = None,
 ) -> DomainPreview:
     """Sample analytic data over ``domain`` through canonical expression contracts."""
 
-    _validate_preview_domain(domain)
+    rank = _validate_preview_domain(domain)
     if geometry is not None and not callable(getattr(geometry, "level_set", None)):
         raise TypeError("domain preview geometry must implement level_set(frame)")
     if field is not None:
         _expression_kind(field, where="domain preview field")
-    nx, ny = _checked_resolution(resolution)
-    x_values = np.linspace(domain.lower[0], domain.upper[0], nx, dtype=np.float64)
-    y_values = np.linspace(domain.lower[1], domain.upper[1], ny, dtype=np.float64)
+    sizes = _checked_resolution(resolution, rank)
+    axis_samples = {
+        name: np.linspace(
+            domain.lower[index], domain.upper[index], sizes[index], dtype=np.float64)
+        for index, name in enumerate(_AXIS_NAMES[:rank])
+    }
+    x_values = axis_samples["x"]
+    y_values = axis_samples.get("y")
+    z_values = axis_samples.get("z")
     if geometry is None and field is None:
-        return DomainPreview(domain, None, x_values, y_values)
+        return DomainPreview(domain, None, x_values, y_values, z=z_values)
 
-    frame = domain.frame(Cartesian2D())
-    xx, yy = np.meshgrid(x_values, y_values, indexing="xy")
+    frame = _bind_preview_frame(domain, rank)
+    sample_x, sample_y, sample_z = _sample_grids(x_values, y_values, z_values, rank)
     level_set_values = None
     active_mask = None
     if geometry is not None:
         level_set = geometry.level_set(frame)
         expression = getattr(level_set, "expression", None)
         level_set_values, level_set_kind = _sample_expression(
-            expression, frame_id=frame.canonical_id, x=xx, y=yy,
+            expression, frame_id=frame.canonical_id, x=sample_x, y=sample_y, z=sample_z,
             where="geometry level set")
         if level_set_kind != "scalar":
             raise TypeError("geometry level set must be scalar, never a predicate")
@@ -369,10 +473,11 @@ def preview_domain(
     field_values = None
     if field is not None:
         field_values, _ = _sample_expression(
-            field, frame_id=frame.canonical_id, x=xx, y=yy, where="analytic field")
+            field, frame_id=frame.canonical_id, x=sample_x, y=sample_y, z=sample_z,
+            where="analytic field")
     return DomainPreview(
         domain, geometry, x_values, y_values, level_set_values, active_mask,
-        field, field_values,
+        field, field_values, z=z_values,
     )
 
 
@@ -380,7 +485,7 @@ def preview_geometry(
     geometry: GeometryPreviewProvider,
     *,
     extent: Any = None,
-    resolution: int | tuple[int, int] = (256, 256),
+    resolution: int | Sequence[int] | None = None,
 ) -> DomainPreview:
     """Preview any implicit-geometry provider in its own bounded presentation window."""
 
@@ -406,13 +511,14 @@ def _sample_expression(
     *,
     frame_id: str,
     x: FloatArray,
-    y: FloatArray,
+    y: FloatArray | None = None,
+    z: FloatArray | None = None,
     where: str,
 ) -> tuple[NDArray[Any], str]:
     expression_data = _expression_data(expression, where=where)
     expression_kind = expression_data["expression_type"]
     values, valid = _evaluate_node(
-        expression_data["root"], frame_id=frame_id, x=x, y=y)
+        expression_data["root"], frame_id=frame_id, x=x, y=y, z=z)
     dtype = np.bool_ if expression_kind == "predicate" else np.float64
     sampled = np.asarray(values, dtype=dtype)
     validity = np.asarray(valid, dtype=np.bool_)
@@ -455,7 +561,7 @@ def _expression_kind(expression: Any, *, where: str) -> str:
     return str(_expression_data(expression, where=where)["expression_type"])
 
 
-def _constant_grid(value: float, shape: tuple[int, int]) -> tuple[FloatArray, BoolArray]:
+def _constant_grid(value: float, shape: tuple[int, ...]) -> tuple[FloatArray, BoolArray]:
     values = np.full(shape, value, dtype=np.float64)
     return values, np.ones(shape, dtype=np.bool_)
 
@@ -465,7 +571,8 @@ def _evaluate_node(
     *,
     frame_id: str,
     x: FloatArray,
-    y: FloatArray,
+    y: FloatArray | None = None,
+    z: FloatArray | None = None,
 ) -> tuple[NDArray[Any], BoolArray]:
     """Vectorized counterpart of the native analytic evaluator for presentation sampling."""
 
@@ -478,9 +585,10 @@ def _evaluate_node(
         if node["frame_id"] != frame_id:
             raise ValueError("geometry preview expression belongs to another frame")
         direction = node["axis"]["direction"]
-        if direction not in {"x", "y"}:
-            raise ValueError("geometry preview supports only Cartesian x/y coordinates")
-        values = x if direction == "x" else y
+        available = {"x": x, "y": y, "z": z}
+        if direction not in available or available[direction] is None:
+            raise ValueError("geometry preview does not expose a %s coordinate" % direction)
+        values = available[direction]
         return values, np.isfinite(values)
     if kind == "scalar" and op == "parameter":
         raise TypeError("geometry preview cannot sample unresolved analytic parameters")
@@ -488,7 +596,7 @@ def _evaluate_node(
         raise TypeError("geometry preview cannot sample runtime analytic inputs")
 
     arguments = [
-        _evaluate_node(argument, frame_id=frame_id, x=x, y=y)
+        _evaluate_node(argument, frame_id=frame_id, x=x, y=y, z=z)
         for argument in node["arguments"]
     ]
     values = [argument[0] for argument in arguments]
@@ -562,22 +670,78 @@ def _checked_output_path(value: str | PathLike[str]) -> Path:
     return result
 
 
-def _show_matplotlib(
-    preview: DomainPreview,
-    *,
-    path: str | PathLike[str] | None,
-) -> Path | None:
-    output_path = None if path is None else _checked_output_path(path)
+def _finish_matplotlib_figure(plt: Any, figure: Any, output_path: Path | None) -> Path | None:
+    figure.tight_layout()
+    if output_path is None:
+        try:
+            plt.show()
+        finally:
+            plt.close(figure)
+        return None
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        plt = import_module("matplotlib.pyplot")
-        ListedColormap = import_module("matplotlib.colors").ListedColormap
-        RectanglePatch = import_module("matplotlib.patches").Rectangle
-    except ModuleNotFoundError:
-        raise ModuleNotFoundError(
-            "DomainPreview.show requires Matplotlib; "
-            "install it with 'python -m pip install matplotlib'"
-        ) from None
+        figure.savefig(output_path, bbox_inches="tight")
+    finally:
+        plt.close(figure)
+    return output_path
 
+
+def _show_matplotlib_1d(preview: DomainPreview, plt: Any, output_path: Path | None) -> Path | None:
+    domain = preview.domain
+    figure, axes = plt.subplots(figsize=(7.0, 3.2))
+    axes.set_facecolor("#f7f8fa")
+    if preview.field_values is not None:
+        if preview.field_kind == "predicate":
+            axes.fill_between(
+                preview.x,
+                0.0,
+                preview.field_values.astype(np.float64),
+                color="#4c9bd3",
+                alpha=0.85,
+                step="mid",
+            )
+        else:
+            axes.plot(preview.x, preview.field_values, color="#16618f", linewidth=1.8)
+    elif preview.active_mask is not None:
+        axes.fill_between(
+            preview.x,
+            0.0,
+            preview.active_mask.astype(np.float64),
+            color="#b9dcf5",
+            alpha=0.9,
+            step="mid",
+        )
+    else:
+        axes.plot(
+            preview.x,
+            np.zeros(preview.x.shape, dtype=np.float64),
+            color="#20252b",
+            linewidth=2.4,
+            solid_capstyle="butt",
+        )
+        axes.set_yticks([])
+    labels = domain.boundary_names
+    y_min, y_max = axes.get_ylim()
+    y_mid = 0.5 * (y_min + y_max)
+    x_offset = 0.025 * domain.lengths[0]
+    axes.text(domain.lower[0] - x_offset, y_mid, labels.x_min,
+              ha="right", va="center", rotation=90, clip_on=False)
+    axes.text(domain.upper[0] + x_offset, y_mid, labels.x_max,
+              ha="left", va="center", rotation=90, clip_on=False)
+    axes.set_xlim(domain.lower[0], domain.upper[0])
+    axes.set_xlabel("x")
+    axes.set_title(domain.name)
+    axes.grid(color="#d7dce1", linewidth=0.5, alpha=0.6)
+    return _finish_matplotlib_figure(plt, figure, output_path)
+
+
+def _show_matplotlib_2d(
+    preview: DomainPreview,
+    plt: Any,
+    ListedColormap: Any,
+    RectanglePatch: Any,
+    output_path: Path | None,
+) -> Path | None:
     domain = preview.domain
     width, height = domain.lengths
     figure_width = 7.0
@@ -655,20 +819,91 @@ def _show_matplotlib(
     axes.set_ylabel("y")
     axes.set_title(domain.name)
     axes.grid(color="#d7dce1", linewidth=0.5, alpha=0.6)
-    figure.tight_layout()
+    return _finish_matplotlib_figure(plt, figure, output_path)
 
-    if output_path is None:
-        try:
-            plt.show()
-        finally:
-            plt.close(figure)
-        return None
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+def _box_edges(
+    lower: tuple[float, ...], upper: tuple[float, ...]
+) -> tuple[tuple[tuple[float, float], tuple[float, float], tuple[float, float]], ...]:
+    x0, y0, z0 = lower
+    x1, y1, z1 = upper
+    return (
+        ((x0, x1), (y0, y0), (z0, z0)),
+        ((x0, x1), (y1, y1), (z0, z0)),
+        ((x0, x1), (y0, y0), (z1, z1)),
+        ((x0, x1), (y1, y1), (z1, z1)),
+        ((x0, x0), (y0, y1), (z0, z0)),
+        ((x1, x1), (y0, y1), (z0, z0)),
+        ((x0, x0), (y0, y1), (z1, z1)),
+        ((x1, x1), (y0, y1), (z1, z1)),
+        ((x0, x0), (y0, y0), (z0, z1)),
+        ((x1, x1), (y0, y0), (z0, z1)),
+        ((x0, x0), (y1, y1), (z0, z1)),
+        ((x1, x1), (y1, y1), (z0, z1)),
+    )
+
+
+def _show_matplotlib_3d(preview: DomainPreview, plt: Any, output_path: Path | None) -> Path | None:
+    import_module("mpl_toolkits.mplot3d")
+    domain = preview.domain
+    figure = plt.figure(figsize=(7.0, 6.0))
+    axes = figure.add_subplot(111, projection="3d")
+    axes.set_facecolor("#f7f8fa")
+    for xs, ys, zs in _box_edges(domain.lower, domain.upper):
+        axes.plot(xs, ys, zs, color="#20252b", linewidth=1.6)
+    values = preview.field_values
+    if values is None and preview.active_mask is not None:
+        values = preview.active_mask.astype(np.float64)
+    if values is not None and preview.y is not None and preview.z is not None:
+        if preview.field_kind == "predicate":
+            values = values.astype(np.float64)
+        iz = int(preview.z.size) // 2
+        iy = int(preview.y.size) // 2
+        ix = int(preview.x.size) // 2
+        xx, yy = np.meshgrid(preview.x, preview.y, indexing="xy")
+        axes.contourf(
+            xx, yy, values[iz], zdir="z", offset=float(preview.z[iz]),
+            cmap="viridis", alpha=0.7)
+        xx, zz = np.meshgrid(preview.x, preview.z, indexing="xy")
+        axes.contourf(
+            xx, values[:, iy, :], zz, zdir="y", offset=float(preview.y[iy]),
+            cmap="viridis", alpha=0.7)
+        yy, zz = np.meshgrid(preview.y, preview.z, indexing="xy")
+        axes.contourf(
+            values[:, :, ix], yy, zz, zdir="x", offset=float(preview.x[ix]),
+            cmap="viridis", alpha=0.7)
+    axes.set_xlim(domain.lower[0], domain.upper[0])
+    axes.set_ylim(domain.lower[1], domain.upper[1])
+    axes.set_zlim(domain.lower[2], domain.upper[2])
+    axes.set_xlabel("x")
+    axes.set_ylabel("y")
+    axes.set_zlabel("z")
+    axes.set_title(domain.name)
+    return _finish_matplotlib_figure(plt, figure, output_path)
+
+
+def _show_matplotlib(
+    preview: DomainPreview,
+    *,
+    path: str | PathLike[str] | None,
+) -> Path | None:
+    output_path = None if path is None else _checked_output_path(path)
     try:
-        figure.savefig(output_path, bbox_inches="tight")
-    finally:
-        plt.close(figure)
-    return output_path
+        plt = import_module("matplotlib.pyplot")
+        ListedColormap = import_module("matplotlib.colors").ListedColormap
+        RectanglePatch = import_module("matplotlib.patches").Rectangle
+    except ModuleNotFoundError:
+        raise ModuleNotFoundError(
+            "DomainPreview.show requires Matplotlib; "
+            "install it with 'python -m pip install matplotlib'"
+        ) from None
+
+    rank = preview.dimension
+    if rank == 1:
+        return _show_matplotlib_1d(preview, plt, output_path)
+    if rank == 2:
+        return _show_matplotlib_2d(preview, plt, ListedColormap, RectanglePatch, output_path)
+    return _show_matplotlib_3d(preview, plt, output_path)
 
 
 __all__ = [

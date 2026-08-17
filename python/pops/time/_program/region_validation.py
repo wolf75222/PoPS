@@ -86,6 +86,11 @@ def validate_program_regions(program: Any) -> None:
             require_region(
                 program, attrs["residual"], regions["residual_block"],
                 "solve_local_nonlinear residual")
+        elif value.op == "post_synchronization":
+            post_sync_region = regions["body_block"]
+            for state in getattr(program, "_post_sync_commits", {}).values():
+                require_region(
+                    program, state, post_sync_region, "after_synchronization commit")
     for state in program._commits.values():
         require_top_level(program, state, "Program.validate commit")
     if program._dt_bound is not None:

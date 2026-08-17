@@ -308,7 +308,7 @@ int sys_block(int program_block) const {
 field_type& state(int program_block) const {
   refresh_resources_();
   const int runtime_block = sys_block(program_block);
-  if (!active_attempt_states_.empty())
-    return *active_attempt_states_.at(static_cast<std::size_t>(runtime_block));
+  if (field_type* attempt = live_attempt_state_(runtime_block, active_level_))
+    return *attempt;
   return facade_->prepared_amr_block_state(runtime_block, active_level_);
 }

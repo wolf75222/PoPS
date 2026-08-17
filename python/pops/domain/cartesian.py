@@ -8,13 +8,18 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import math
-from typing import Any
+from os import PathLike
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from pops.frames import Cartesian, CartesianAxis
 from pops.identity import make_identity
 from pops.identity.semantic import semantic_value
 
 from .rectangle import BoundaryPair, BoundarySide, DomainBoundary, DomainTag
+
+if TYPE_CHECKING:
+    from .preview import AnalyticPreviewValue, DomainPreview, GeometryPreviewProvider
 
 
 _SCHEMA_VERSION = 1
@@ -75,6 +80,35 @@ class CartesianBoundaryNames:
             raise ValueError("Cartesian boundary names must be unique")
         object.__setattr__(self, "pairs", tuple(normalized))
 
+    def _named_pair(self, index: int, axis: str) -> tuple[str, str]:
+        if index >= len(self.pairs):
+            raise AttributeError("CartesianBoundaryNames has no %s axis" % axis)
+        return self.pairs[index]
+
+    @property
+    def x_min(self) -> str:
+        return self.pairs[0][0]
+
+    @property
+    def x_max(self) -> str:
+        return self.pairs[0][1]
+
+    @property
+    def y_min(self) -> str:
+        return self._named_pair(1, "y")[0]
+
+    @property
+    def y_max(self) -> str:
+        return self._named_pair(1, "y")[1]
+
+    @property
+    def z_min(self) -> str:
+        return self._named_pair(2, "z")[0]
+
+    @property
+    def z_max(self) -> str:
+        return self._named_pair(2, "z")[1]
+
     @classmethod
     def defaults(cls, dimension: int) -> CartesianBoundaryNames:
         if dimension not in (1, 2, 3):
@@ -114,9 +148,39 @@ class CartesianBoundaries:
         if len({boundary.domain_geometry_id for boundary in boundaries}) != 1:
             raise ValueError("Cartesian boundaries must belong to one domain geometry")
 
+    def _face(self, index: int, *, lower: bool, axis: str) -> DomainBoundary:
+        if index >= len(self.pairs):
+            raise AttributeError("CartesianBoundaries has no %s axis" % axis)
+        pair = self.pairs[index]
+        return pair.lower if lower else pair.upper
+
     @property
     def all(self) -> tuple[DomainBoundary, ...]:
         return tuple(boundary for pair in self.pairs for boundary in (pair.lower, pair.upper))
+
+    @property
+    def x_min(self) -> DomainBoundary:
+        return self._face(0, lower=True, axis="x")
+
+    @property
+    def x_max(self) -> DomainBoundary:
+        return self._face(0, lower=False, axis="x")
+
+    @property
+    def y_min(self) -> DomainBoundary:
+        return self._face(1, lower=True, axis="y")
+
+    @property
+    def y_max(self) -> DomainBoundary:
+        return self._face(1, lower=False, axis="y")
+
+    @property
+    def z_min(self) -> DomainBoundary:
+        return self._face(2, lower=True, axis="z")
+
+    @property
+    def z_max(self) -> DomainBoundary:
+        return self._face(2, lower=False, axis="z")
 
     def pair(self, axis: CartesianAxis) -> BoundaryPair:
         if not isinstance(axis, CartesianAxis):
@@ -245,8 +309,40 @@ class CartesianDomain:
             self.name, self.lower, self.upper, self.boundary_names, tags
         )
 
-    def frame(self) -> CartesianDomainFrame:
-        return CartesianDomainFrame(self, self.coordinates)
+    def frame(self, coordinates: Any = None) -> CartesianDomainFrame:
+        selected = self.coordinates if coordinates is None else coordinates
+        if not isinstance(selected, Cartesian):
+            raise TypeError(
+                "CartesianDomain.frame requires Cartesian, never a string or runtime route"
+            )
+        return CartesianDomainFrame(self, selected)
+
+    def preview(
+        self,
+        *,
+        geometry: GeometryPreviewProvider | None = None,
+        field: AnalyticPreviewValue | None = None,
+        resolution: int | Sequence[int] | None = None,
+    ) -> DomainPreview:
+        """Sample this domain with optional analytic-field and implicit-geometry overlays."""
+
+        from .preview import preview_domain
+
+        return preview_domain(
+            self, geometry=geometry, field=field, resolution=resolution)
+
+    def show(
+        self,
+        *,
+        geometry: GeometryPreviewProvider | None = None,
+        field: AnalyticPreviewValue | None = None,
+        resolution: int | Sequence[int] | None = None,
+        path: str | PathLike[str] | None = None,
+    ) -> Path | None:
+        """Show this domain interactively, or save it when ``path`` is provided."""
+
+        return self.preview(
+            geometry=geometry, field=field, resolution=resolution).show(path=path)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -371,3 +467,8 @@ __all__ = [
     "CartesianDomain",
     "CartesianDomainFrame",
 ]
+
+
+# The annotations are public and must resolve under typing.get_type_hints(). Importing after the
+# Cartesian definitions avoids a cycle while keeping the preview layer independent from mesh.
+from .preview import AnalyticPreviewValue, DomainPreview, GeometryPreviewProvider  # noqa: E402

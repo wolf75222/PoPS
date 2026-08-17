@@ -229,9 +229,7 @@ void commit_many(std::initializer_list<std::pair<field_type*, const field_type*>
     try {
       expression_candidate = active_flux_expressions_;
       for (std::size_t candidate = 0; candidate < targets.size(); ++candidate) {
-        const bool detached_group_candidate =
-            std::find(active_attempt_states_.begin(), active_attempt_states_.end(),
-                      targets[candidate]) != active_attempt_states_.end();
+        const bool detached_group_candidate = is_live_attempt_candidate_(targets[candidate]);
         const bool prepared_scratch =
             std::any_of(scratches_.begin(), scratches_.end(),
                         [&](const auto& entry) { return &entry.second == targets[candidate]; });

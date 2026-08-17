@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstddef>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -47,7 +48,7 @@ pops::EllipticBuildRequest<kRegressionDim> fft_request(int cells) {
                        pops::Index<kRegressionDim>{cells - 1, (rank + 1) * local_y - 1});
   Layout layout(std::move(slabs));
   const RankSpace rank_space{pops::Index<kRegressionDim>{0, 0},
-                             pops::Extent<kRegressionDim>{ranks, 1}};
+                             pops::Extent<kRegressionDim>{1, ranks}};
   std::vector<pops::Index<kRegressionDim>> owners;
   owners.reserve(static_cast<std::size_t>(ranks));
   for (int rank = 0; rank < ranks; ++rank)
@@ -155,20 +156,34 @@ void expect_device_cartesian_fft() {
   const pops::ExecutionLane lane =
       pops::ExecutionLane::world("tests.poisson-fft.device:" + std::to_string(Dim));
   pops::PoissonFFT<Dim> fft(cells, lengths, lane, "pops.unit.nd-device-fft");
+  static_assert(pops::PoissonFFT<Dim>::dimension == Dim);
   typename pops::PoissonFFT<Dim>::device_view rhs("fft_nd_rhs", fft.local_cell_count());
   typename pops::PoissonFFT<Dim>::device_view phi("fft_nd_phi", fft.local_cell_count());
   auto host_rhs = Kokkos::create_mirror_view(rhs);
+  const auto& extents = fft.cells();
+  // Product of first sines on every axis. A 2-D FFT plus replicated Z loop cannot invert this
+  // Dim=3 mode: the discrete symbol must accumulate one cosine eigenvalue per transformed axis.
   for (std::size_t ordinal = 0; ordinal < fft.local_cell_count(); ++ordinal) {
-    const int x = static_cast<int>(ordinal % kExtent);
-    host_rhs[ordinal] = typename pops::PoissonFFT<Dim>::complex_type(
-        std::sin(pops::Real(2) * kPi * (x + pops::Real(0.5)) / kExtent), 0.0);
+    pops::Real value = pops::Real(1);
+    std::size_t cursor = ordinal;
+    for (int axis = 0; axis < Dim - 1; ++axis) {
+      const int coordinate = static_cast<int>(cursor % static_cast<std::size_t>(extents[axis]));
+      cursor /= static_cast<std::size_t>(extents[axis]);
+      value *= std::sin(pops::Real(2) * kPi * (coordinate + pops::Real(0.5)) / extents[axis]);
+    }
+    const int last = fft.local_last_begin() + static_cast<int>(cursor);
+    value *= std::sin(pops::Real(2) * kPi * (last + pops::Real(0.5)) / extents[Dim - 1]);
+    host_rhs[ordinal] = typename pops::PoissonFFT<Dim>::complex_type(value, 0.0);
   }
   Kokkos::deep_copy(rhs, host_rhs);
   fft.solve(rhs, phi);
   auto host_phi = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, phi);
-  const pops::Real h = pops::Real(1) / kExtent;
-  const pops::Real lambda =
-      (pops::Real(2) * std::cos(pops::Real(2) * kPi / kExtent) - pops::Real(2)) / (h * h);
+  pops::Real lambda = pops::Real(0);
+  for (int axis = 0; axis < Dim; ++axis) {
+    const pops::Real h = static_cast<pops::Real>(lengths[axis]) / extents[axis];
+    lambda += (pops::Real(2) * std::cos(pops::Real(2) * kPi / extents[axis]) - pops::Real(2)) /
+              (h * h);
+  }
   for (std::size_t ordinal = 0; ordinal < fft.local_cell_count(); ++ordinal)
     EXPECT_NEAR(host_phi[ordinal].real(), host_rhs[ordinal].real() / lambda, 1e-11);
 }
@@ -224,7 +239,10 @@ void expect_cartesian_solver() {
   auto rhs = solver.rhs().fab(0).view();
   const auto solver_geometry = solver.geom();
   pops::for_each_cell(solver.rhs().box(0), [=](const pops::CellIndex<Dim>& cell) {
-    rhs(cell, 0) = Kokkos::sin(pops::Real(2) * kPi * solver_geometry.cell_coordinate(0, cell[0]));
+    pops::Real value = pops::Real(1);
+    for (int axis = 0; axis < Dim; ++axis)
+      value *= Kokkos::sin(pops::Real(2) * kPi * solver_geometry.cell_coordinate(axis, cell[axis]));
+    rhs(cell, 0) = value;
   });
   const pops::SolveReport report = solver.solve();
   EXPECT_TRUE(report.solved()) << report.reason;
@@ -235,6 +253,9 @@ void expect_cartesian_solver() {
 
 TEST(test_poisson_fft, capability_is_cartesian_nd_and_spectral_fails_closed) {
   const pops::ExecutionLane lane = pops::ExecutionLane::world("tests.poisson-fft.capabilities");
+  static_assert(pops::PoissonFFT<1>::dimension == 1);
+  static_assert(pops::PoissonFFT<2>::dimension == 2);
+  static_assert(pops::PoissonFFT<3>::dimension == 3);
   static_assert(pops::PoissonFFTCapabilities<1>::available);
   static_assert(pops::PoissonFFTCapabilities<2>::available);
   static_assert(pops::PoissonFFTCapabilities<3>::available);
@@ -251,10 +272,24 @@ TEST(test_poisson_fft, capability_is_cartesian_nd_and_spectral_fails_closed) {
       std::invalid_argument);
 }
 
+TEST(test_poisson_fft, fftw_backend_is_fail_closed_when_undiscovered) {
+  if (pops::poisson_fft_fftw_configured()) {
+    EXPECT_STREQ(pops::poisson_fft_fftw_absence_reason(), "");
+    const pops::ExecutionLane lane = pops::ExecutionLane::world("tests.poisson-fft.fftw");
+    pops::PoissonFFT<1> fft({6}, {1.0}, lane, "pops.unit.fftw-extent");
+    EXPECT_TRUE(fft.uses_fftw_backend());
+    EXPECT_FALSE(fft.uses_direct_dft_fallback());
+  } else {
+    EXPECT_FALSE(std::string_view(pops::poisson_fft_fftw_absence_reason()).empty());
+  }
+}
+
 TEST(test_poisson_fft, device_engine_executes_same_cartesian_trace_in_one_and_three_dimensions) {
-  if (pops::n_ranks() != 1)
-    GTEST_SKIP() << "MPI target qualifies the pairwise phases";
+  constexpr int kExtent = 8;
+  if (kExtent % pops::n_ranks() != 0)
+    GTEST_SKIP() << "PoissonFFT final-axis slabs require the extent to divide communicator size";
   expect_device_cartesian_fft<1>();
+  expect_device_cartesian_fft<2>();
   expect_device_cartesian_fft<3>();
 }
 
@@ -279,7 +314,10 @@ TEST(test_poisson_fft, radix_last_axis_has_no_direct_dft_fallback_but_nonpow2_is
   execute(8);
   EXPECT_EQ(pops::poisson_fft_direct_dft_fallback_count(), 0u);
   execute(6);
-  EXPECT_GT(pops::poisson_fft_direct_dft_fallback_count(), 0u);
+  if (pops::poisson_fft_fftw_configured())
+    EXPECT_EQ(pops::poisson_fft_direct_dft_fallback_count(), 0u);
+  else
+    EXPECT_GT(pops::poisson_fft_direct_dft_fallback_count(), 0u);
 }
 
 TEST(test_poisson_fft, rejects_invalid_cartesian_workspace_before_lane_materialization) {
@@ -295,7 +333,10 @@ TEST(test_poisson_fft, device_dft_rejects_nonzero_mean_then_solves_exactly) {
   pops::PoissonFFT<2> slow_probe({kFallbackCells, kFallbackCells}, {1.0, 1.0}, lane,
                                  "tests.poisson-fft.slow-probe");
   pops::PoissonFFT<2> fast_probe({32, 32}, {1.0, 1.0}, lane, "tests.poisson-fft.fast-probe");
-  EXPECT_TRUE(slow_probe.uses_direct_dft_fallback());
+  if (pops::poisson_fft_fftw_configured())
+    EXPECT_FALSE(slow_probe.uses_direct_dft_fallback());
+  else
+    EXPECT_TRUE(slow_probe.uses_direct_dft_fallback());
   EXPECT_FALSE(fast_probe.uses_direct_dft_fallback());
 
   pops::PoissonFFTSolver<kRegressionDim> solver = make_fft_solver(kFallbackCells, lane);

@@ -200,7 +200,9 @@ def _eig_witness_helpers(pairs: Any, indent: str = "  ") -> Any:
             sets = " ".join("M[%d][%d] = m%d;" % (r, c, r * k + c) for c in range(k))
             L.append("%s  %s" % (indent, sets))
         L.append("%s  const pops::EigBounds bounds = pops::real_eig_minmax(M);" % indent)
-        if is_pred:
+        if field == "lmin_bound":
+            L.append("%s  return bounds.lmin;" % indent)
+        elif is_pred:
             # predicat verrouille sur converged (un repli Gershgorin -> false -> 0.0, jamais reel) ;
             # real_status conserve en plus NaN pour qu'un kernel physique distingue une panne QR.
             L.append("%s  return pops::Real(bounds.%s(im_tol));"

@@ -31,6 +31,7 @@ enum class CartesianBoundaryKind : unsigned char { periodic, dirichlet, neumann,
 template <int Dim>
 struct CartesianPoissonOptions {
   static_assert(Dim >= 1 && Dim <= 3, "CartesianPoissonOptions supports dimensions 1, 2, and 3");
+  static constexpr int dimension = Dim;
 
   std::array<CartesianBoundaryKind, 2 * Dim> boundaries{};
   std::array<Real, 2 * Dim> boundary_alpha{};
@@ -222,6 +223,9 @@ class CartesianPoissonSolver {
   struct DeferCollectivePreparation {};
 
  public:
+  static_assert(Dim >= 1 && Dim <= 3, "CartesianPoissonSolver supports dimensions 1, 2, and 3");
+  static constexpr int dimension = Dim;
+
   using field_type = MultiFab<Dim>;
 
   CartesianPoissonSolver(const Geometry<Dim>& geometry, const mesh::BoxArray<Dim>& layout,

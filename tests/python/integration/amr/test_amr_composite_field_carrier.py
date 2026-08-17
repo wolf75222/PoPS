@@ -204,6 +204,52 @@ def test_partial_fac_overrides_do_not_inherit_or_replace_geometric_mg_options() 
     })
 
 
+def test_default_composite_fac_solves_a_refined_periodic_mode(
+    isolated_native_cache, native_cxx, kokkos_root, tmp_path,
+) -> None:
+    del isolated_native_cache, native_cxx, kokkos_root
+    from pops.analytic import sin, x, y
+    from pops.lib.initial import Analytic
+
+    model = scalar_advection_field_model("default-fac-periodic-mode-model")
+    frame = model.frame
+    resolved = resolve_periodic_field_program(
+        model,
+        _field_program,
+        name="default-fac-periodic-mode",
+        block_name="plasma",
+        target="amr_system",
+        n=16,
+        regrid_every=1,
+        field_solver=GeometricMG(fac=CompositeFAC()),
+        initial_profile=Analytic(
+            frame=frame,
+            components=(
+                1.0
+                + 0.25 * sin(2.0 * math.pi * x(frame)) * sin(2.0 * math.pi * y(frame)),
+            ),
+        ),
+        refine_threshold=1.2,
+    )
+    artifact = pops.compile(resolved)
+    simulation = pops.bind(
+        artifact,
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
+    report = pops.run(
+        simulation,
+        t_end=_DT,
+        max_steps=1,
+        output_dir=tmp_path / "default-fac-periodic-mode",
+    )
+    assert report.accepted_steps == 1
+    assert simulation.n_levels() == 2
+    slot, = simulation.field_provider_slots()
+    assert simulation.field_provider_levels(slot) == 2
+    provider, = simulation.inspect().to_dict()["instance"]["field_providers"]
+    _assert_options(_option_family(provider["solver_configuration"], "fac."), _FAC_DEFAULTS)
+
+
 def test_fac_overrides_propagate_through_a_refined_final_root_lifecycle(
     isolated_native_cache, native_cxx, kokkos_root, monkeypatch, tmp_path,
 ) -> None:

@@ -272,7 +272,7 @@ def _emit_cpp_program_impl(
     from pops.codegen.program_emit_kernels import ProgramProviderPlans
 
     provider_plans = ProgramProviderPlans()
-    prelude, body, operator_authorities = _emit_body(
+    prelude, body, post_synchronization, operator_authorities = _emit_body(
         program,
         authority,
         target=target,
@@ -285,7 +285,7 @@ def _emit_cpp_program_impl(
     # (true iff a bound was set) and one target-qualified entry accepting the authenticated runtime
     # facade. The entry obtains its provider from the shared factory; codegen never selects a concrete
     # context. Without a bound, the function returns a +inf sentinel and remains unreachable.
-    has_dt_bound, dt_bound_body = _emit_dt_bound(program, authority)
+    has_dt_bound, dt_bound_body, dt_bound_value = _emit_dt_bound(program, authority)
     from pops.codegen.program_emit_field_boundaries import emit_field_boundaries
 
     field_boundaries = emit_field_boundaries(program, authority, field_plans or {}, target)
@@ -297,7 +297,7 @@ def _emit_cpp_program_impl(
         history_replay_authorities=_emit_history_replay_authorities(program),
         operator_authorities=_emit_operator_authorities(operator_authorities),
         has_dt_bound=has_dt_bound,
-        dt_bound=_emit_dt_bound_entry(target, dt_bound_body),
+        dt_bound=_emit_dt_bound_entry(target, dt_bound_body, dt_bound_value),
         module_metadata=_emit_module_metadata(program, authority),
         program_params=_emit_program_params(program, authority),
         field_boundaries=field_boundaries,
@@ -325,6 +325,7 @@ def _emit_cpp_program_impl(
             if target == "amr_system"
             else None,
             provider_plans.cpp_install(target),
+            post_synchronization,
         ),
     )
 
@@ -415,7 +416,7 @@ def _emit_system_install(target: str, prelude: str, body: str, provider_plan_ins
     )
 
 
-def _emit_dt_bound_entry(target: str, body: str) -> str:
+def _emit_dt_bound_entry(target: str, body: str, value_name: str | None = None) -> str:
     """Emit one allocation-free facade-typed dt-bound ABI."""
     if target == "amr_system":
         symbol = "pops_program_dt_bound_amr"
@@ -423,13 +424,27 @@ def _emit_dt_bound_entry(target: str, body: str) -> str:
     else:
         symbol = "pops_program_dt_bound"
         facade = "pops::System<pops::kNativeDimension>"
-    return (
+    header = (
         f'extern "C" pops::Real {symbol}({facade}* sys, pops::Real cfl) {{\n'
         "  auto ctx = pops::runtime::program::make_program_execution_view(sys);\n"
         "  (void)ctx; (void)cfl;\n"
-        f"{body}\n"
-        "}\n"
     )
+    if not value_name:
+        return header + f"{body}\n}}\n"
+    if target == "amr_system":
+        return (
+            header
+            + "  pops::Real pops_program_dt_bound_result = "
+            "std::numeric_limits<pops::Real>::infinity();\n"
+            "  ctx.for_each_program_resource_level([&](int) {\n"
+            f"{body}\n"
+            f"    pops_program_dt_bound_result = std::min("
+            f"pops_program_dt_bound_result, {value_name});\n"
+            "  });\n"
+            "  return pops_program_dt_bound_result;\n"
+            "}\n"
+        )
+    return header + f"{body}\n  return {value_name};\n}}\n"
 
 
 def _emit_operator_authorities(authorities: tuple[tuple[int, ...], ...]) -> str:
@@ -484,15 +499,17 @@ def _emit_block_names(program: Any) -> str:
 
 
 def _emit_dt_bound(program: Any, model: Any = None) -> tuple:
-    """Lower the optional dt bound (spec s18 / ADC-417) to ``(has_dt_bound, body)``: the bool literal
-    pops_program_has_dt_bound returns and the C++ body of pops_program_dt_bound. No bound -> ("false",
-    a +inf return that is never reached). The bound is a READ-ONLY scalar sub-program: it reuses the
-    same per-op lowering (state -> ctx.state(idx), reductions, cfl/hmin/max_wave_speed, scalar_op) and
-    returns the final scalar. ADC-426: a multi-block dt bound may read several blocks' states (e.g.
-    the min over blocks of cfl*hmin/max_wave_speed), so each op resolves its OWN block index / base.
-    No commit lives in a dt bound (empty committed_ids)."""
+    """Lower the optional dt bound (spec s18 / ADC-417) to ``(has, body, value)``.
+
+    ``has`` is the bool literal ``pops_program_has_dt_bound`` returns. ``body`` is the
+    allocation-free scalar evaluation. ``value`` names the computed bound, or ``None``
+    when the function only returns the +inf sentinel. On ``amr_system`` the entry
+    evaluates that scalar on every live level and keeps the minimum. ADC-426: a
+    multi-block dt bound may read several blocks' states, so each op resolves its
+    own block index. No commit lives in a dt bound (empty committed_ids).
+    """
     if program._dt_bound is None:
-        return "false", "    return std::numeric_limits<pops::Real>::infinity();"
+        return "false", "    return std::numeric_limits<pops::Real>::infinity();", None
     sub, result = program._dt_bound
     block_idx = program._block_indices()
     bases = {}
@@ -503,9 +520,10 @@ def _emit_dt_bound(program: Any, model: Any = None) -> tuple:
     lines = []
     for v in sub:
         _emit_op(program, v, bases.get(v.block), frozenset(), var, model, lines, None, block_idx)
-    lines.append("return %s;" % var[result.id])
+    value_name = "pops_program_dt_bound_value"
+    lines.append("const pops::Real %s = %s;" % (value_name, var[result.id]))
     body = "\n".join("    " + ln for ln in lines)
-    return "true", body
+    return "true", body, value_name
 
 
 def _check_lowerable(
@@ -526,7 +544,7 @@ def _check_lowerable(
     declared by ``T.state`` is rejected (an unknown-block commit cannot route to an index)."""
     _check_model_owner_dispatch(program, model)
     blocks = program._block_indices()
-    for state_ref in program._commits:
+    for state_ref in list(program._commits) + list(getattr(program, "_post_sync_commits", {})):
         block = state_ref.block_ref
         if block not in blocks:
             raise ValueError(
@@ -596,7 +614,7 @@ def _check_op_lowerable(program: Any, v: Any, model: Any, field_plans: Any) -> N
         # aliases that block's rate scratch). Lowerable iff its producing coupled_rate is (checked
         # when that node is walked); nothing to validate here.
         return
-    if v.op in ("while", "range", "branch"):  # recursively validate structured regions
+    if v.op in ("while", "range", "branch", "post_synchronization"):
         keys = ("true_block", "false_block") if v.op == "branch" else ("cond_block", "body_block")
         for key in keys:
             for w in v.attrs.get(key, []):

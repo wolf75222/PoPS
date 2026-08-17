@@ -164,6 +164,13 @@ chk("return true;" in src_dec, "Program with a bound: has_dt_bound() returns tru
 chk("ctx.hmin()" in src_dec, "dt_bound lowers P.hmin() -> ctx.hmin()")
 chk("ctx.max_wave_speed(0, " in src_dec, "dt_bound lowers P.max_wave_speed -> ctx.max_wave_speed(0, .)")
 chk("cfl" in src_dec.split("pops_program_dt_bound", 1)[1], "the cfl argument is used in the bound body")
+src_amr = emit_cpp_program(
+    P_dec, field_plans=codegen_field_plans(P_dec), target="amr_system")
+amr_bound = src_amr.split("pops_program_dt_bound_amr", 1)[1]
+chk("for_each_program_resource_level" in amr_bound,
+    "AMR dt_bound evaluates the authored scalar on every live level")
+chk("std::min" in amr_bound,
+    "AMR dt_bound keeps the most restrictive live-level value")
 
 # (A3) P.set_dt_bound(builder) (the non-decorator form) records the same way; a different bound -> a
 # different IR hash (the bound is part of the IR identity / cache key).

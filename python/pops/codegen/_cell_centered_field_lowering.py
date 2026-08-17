@@ -1,7 +1,8 @@
-"""Prepared lowering for the native 2-D cell-centred elliptic implementation.
+"""Prepared lowering for the native ranked cell-centred elliptic implementation.
 
-All Cartesian, scalar-operator and System/AMR decisions live here, behind the same open provider
-interface available to third parties.  ``field_install`` never branches on these semantics.
+The compiled native specialization has Dim in {1,2,3}.  All Cartesian, scalar-operator and
+System/AMR decisions live here, behind the same open provider interface available to third
+parties.  ``field_install`` never branches on these semantics.
 """
 
 from __future__ import annotations

@@ -45,6 +45,7 @@ from ._writers.npz import NPZWriter, read_npz
 from ._writers.paraview import (
     ParaViewWriter,
     ReopenedParaViewIndex,
+    ReopenedParaViewMultiBlock,
     read_paraview,
     read_paraview_parallel,
     read_paraview_series,
@@ -68,7 +69,7 @@ __all__ = [
     "LevelGeometry", "OutputClock",
     "OutputProvenance", "OutputRequest", "OutputSnapshot", "BalanceTerms",
     "composite_integrals", "HDF5Writer", "NPZWriter", "ParaViewWriter",
-    "ReopenedParaViewIndex",
+    "ReopenedParaViewIndex", "ReopenedParaViewMultiBlock",
     "ScientificWriter", "WriterSession", "OutputPublicationReceipt",
     "ScientificSeriesCatalog", "FileSeriesCatalog",
     "ReopenedOutput", "ReopenedSeries", "SeriesSample",

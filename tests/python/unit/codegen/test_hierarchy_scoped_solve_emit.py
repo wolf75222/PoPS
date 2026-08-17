@@ -313,15 +313,18 @@ def test_refined_hierarchy_uses_one_direct_solve_and_flat_path_executes_apply():
     configure = amr.index("ctx.configure_hierarchy_tensor_solver(")
     flat_phase = amr.index("ctx.solve_prepared_linear(")
     direct_phase = amr.index("ctx.solve_hierarchy_tensor(")
-    branch = amr.index("if (ctx.uses_prepared_krylov_fallback())")
     hierarchy_advance = amr.index("auto _advance_hierarchy")
+    branch = amr.index("if (ctx.uses_prepared_krylov_fallback())", hierarchy_advance)
     refresh = amr.index("_refresh_level_programs();", hierarchy_advance)
+    assert "if (ctx.level() != 0)" in amr[hierarchy_advance:branch]
     gather_call = amr.index(".gather(hierarchy_dt)", branch)
     direct_call = amr.index("_level_programs->front().solve(hierarchy_dt)", gather_call)
     publish_call = amr.index(".publish(hierarchy_dt)", direct_call)
     synchronized = amr.index("ctx.advance_synchronized_hierarchy", publish_call)
     assert configure < flat_phase < direct_phase < branch
     assert hierarchy_advance < refresh < branch < gather_call < direct_call < publish_call < synchronized
+    assert "pops.tensor-elliptic.coefficient.0.0" in source
+    assert "pops.tensor-elliptic.coefficients" not in source
 
     assert amr.count("ctx.solve_prepared_linear(") == 1
     assert amr.count("ctx.solve_hierarchy_tensor(") == 1
@@ -384,6 +387,9 @@ def test_resolved_interface_pair_proof_reaches_every_hierarchy_phase():
 
     amr = source.split('extern "C" void pops_install_program_amr', 1)[1]
     assert source.count("ctx.rhs_jacvec_pair_into_at(") == 1
+    assert "pops::kNativeDimension" in source
+    assert "static_assert(pops::kNativeDimension == 2)" not in source
+    assert "Box2D" not in source
     gather = amr.index(".gather(hierarchy_dt)")
     solve = amr.index("_level_programs->front().solve(hierarchy_dt)", gather)
     publish = amr.index(".publish(hierarchy_dt)", solve)
@@ -436,7 +442,9 @@ def test_refined_solution_publishes_atomically_before_synchronized_advance():
     """Lock the complete refined-stage ordering without a wall-clock or legacy oracle."""
     _, source = _build(CompositeTensorFAC(max_iter=13, rel_tol=4.0e-8))
     amr = source.split('extern "C" void pops_install_program_amr', 1)[1]
-    branch = amr.index("if (ctx.uses_prepared_krylov_fallback())")
+    hierarchy_advance = amr.index("auto _advance_hierarchy")
+    branch = amr.index("if (ctx.uses_prepared_krylov_fallback())", hierarchy_advance)
+    assert "if (ctx.level() != 0)" in amr[hierarchy_advance:branch]
     gather = amr.index(".gather(hierarchy_dt)", branch)
     solve = amr.index("_level_programs->front().solve(hierarchy_dt)", gather)
     publish = amr.index(".publish(hierarchy_dt)", solve)

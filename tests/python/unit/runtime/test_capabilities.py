@@ -131,6 +131,16 @@ def test_regrid_prepared_graph_contract_advertised():
         "prepared not/any/all bytecode; no scalar threshold fallback"
 
 
+def test_geometry_advertises_ranked_rectangular_cells():
+    geometry = capabilities()["geometry"]["system_cartesian"]
+    assert "ranked n cells" in geometry
+    assert "rectangular allowed" in geometry
+    assert "square n x n" not in geometry
+    amr = capabilities()["geometry"]["amr"]
+    assert "exact native-rank" in amr
+    assert "process-global AMR ratio" in amr
+
+
 if __name__ == "__main__":
     test_top_level_keys_present()
     test_riemann_surface_matches_dispatch()
@@ -139,5 +149,6 @@ if __name__ == "__main__":
     test_dimension_matches_selected_native_specialization()
     test_runtime_environment_and_precision_facts()
     test_regrid_prepared_graph_contract_advertised()
+    test_geometry_advertises_ranked_rectangular_cells()
     print("test_capabilities : OK (top keys, riemann surface, backends_dsl, polar retirement, "
           "native dimension and prepared regrid graph)")

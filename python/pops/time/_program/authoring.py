@@ -645,6 +645,97 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
         if left.field_context != right.field_context:
             raise ValueError("branch: both arms must return the same field context")
 
+    _POST_SYNC_FORBIDDEN_OPS = frozenset({
+        "rhs",
+        "source",
+        "apply",
+        "subcycle",
+        "range",
+        "while",
+        "solve_fields",
+        "solve_fields_from_blocks",
+        "solve_local_linear",
+        "solve_local_nonlinear",
+        "solve_coupled_implicit",
+        "solve_linear",
+        "condensed_coeffs",
+        "condensed_rhs",
+        "condensed_reconstruct",
+        "condensed_energy",
+        "laplacian",
+        "gradient",
+        "divergence",
+        "apply_laplacian_coeff",
+        "store_history",
+        "post_synchronization",
+        "matrix_free_operator",
+        "coupled_rate",
+    })
+
+    @atomic_authoring
+    def after_synchronization(self, body_fn: Any, *, name: Any = None) -> Any:
+        """Run ``body_fn(P)`` once per AMR level after reflux and average-down.
+
+        The callback is a build-time authoring body.  It must return ``None`` and may be
+        declared at most once, at the top level.  Unqualified ``local_transform`` remains
+        illegal on a refined hierarchy; this phase is the only legal place for it.
+        """
+        if not callable(body_fn):
+            raise TypeError(
+                "after_synchronization expects a callable body_fn(P); got %r" % (body_fn,)
+            )
+        if self._recording:
+            raise ValueError("after_synchronization must be authored at the top level")
+        if any(value.op == "post_synchronization" for value in self._values):
+            raise ValueError("after_synchronization may be declared at most once")
+        if self._cell_local_time is not None:
+            raise ValueError(
+                "Program.cell_local_time cannot combine with after_synchronization"
+            )
+        body_block, result = self._record_post_sync(body_fn)
+        if result is not None:
+            raise ValueError("after_synchronization body_fn must return None")
+        body_region = self._region_for_block(body_block)
+        for value in self._post_sync_ops(body_block):
+            if value.op in self._POST_SYNC_FORBIDDEN_OPS:
+                raise ValueError(
+                    "after_synchronization forbids flux, elliptic, and transport operators"
+                )
+        return self._new(
+            "unit",
+            "post_synchronization",
+            (),
+            {"body_block": body_block, "body_region": body_region},
+            name,
+            None,
+        )
+
+    @staticmethod
+    def _post_sync_ops(values: Any) -> Any:
+        for value in values:
+            yield value
+            for key in (
+                "cond_block",
+                "body_block",
+                "true_block",
+                "false_block",
+            ):
+                nested = value.attrs.get(key)
+                if isinstance(nested, (list, tuple)):
+                    yield from _ProgramAuthoring._post_sync_ops(nested)
+
+    def _record_post_sync(self, fn: Any) -> Any:
+        sub = []
+        self._region_for_block(sub)
+        self._recording.append(sub)
+        self._post_sync_recording = True
+        try:
+            result = fn(self)
+        finally:
+            self._post_sync_recording = False
+            self._recording.pop()
+        return sub, result
+
     def _record_branch_arm(self, fn: Any) -> Any:
         sub = []
         self._recording.append(sub)

@@ -191,6 +191,20 @@ class ConservativeLinear(_ImmutableTransferPolicy):
 
 
 @dataclass(frozen=True, slots=True)
+class ConservativeInjection(_ImmutableTransferPolicy):
+    """First-order parent copy; fine children inherit the parent cell exactly."""
+
+    native_route: ClassVar[str] = "conservative_injection"
+    order: ClassVar[int] = 1
+    ghost_depth: ClassVar[tuple[int, ...]] = (0,)
+    dimensions: ClassVar[tuple[int, ...]] = (1, 2, 3)
+    refinement_ratio_policy: ClassVar[str] = "hierarchy_exact_rank"
+    refinement_ratios: ClassVar[tuple[int, ...]] = ()
+    conservative: ClassVar[bool] = True
+    temporal: ClassVar[bool] = False
+
+
+@dataclass(frozen=True, slots=True)
 class VolumeAverage(_ImmutableTransferPolicy):
     native_route: ClassVar[str] = "volume_average"
     order: ClassVar[int] = 1
@@ -208,7 +222,7 @@ class _CoarseFineGhostSecondOrder(_ImmutableTransferPolicy):
 
     native_route: ClassVar[str] = "conservative_coarse_fine"
     order: ClassVar[int] = 2
-    ghost_depth: ClassVar[tuple[int, ...]] = (1,)
+    ghost_depth: ClassVar[tuple[int, ...]] = (2,)
     dimensions: ClassVar[tuple[int, ...]] = (1, 2, 3)
     refinement_ratio_policy: ClassVar[str] = "hierarchy_exact_rank"
     refinement_ratios: ClassVar[tuple[int, ...]] = ()
@@ -227,6 +241,20 @@ class _CoarseFineGhostFifthOrder(_ImmutableTransferPolicy):
     refinement_ratio_policy: ClassVar[str] = "hierarchy_exact_rank"
     refinement_ratios: ClassVar[tuple[int, ...]] = ()
     conservative: ClassVar[bool] = False
+    temporal: ClassVar[bool] = False
+
+
+@dataclass(frozen=True, slots=True)
+class CoarseFineInjection(_ImmutableTransferPolicy):
+    """Parent-copy coarse/fine ghosts; fine halo cells inherit the parent exactly."""
+
+    native_route: ClassVar[str] = "conservative_injection"
+    order: ClassVar[int] = 1
+    ghost_depth: ClassVar[tuple[int, ...]] = (1,)
+    dimensions: ClassVar[tuple[int, ...]] = (1, 2, 3)
+    refinement_ratio_policy: ClassVar[str] = "hierarchy_exact_rank"
+    refinement_ratios: ClassVar[tuple[int, ...]] = ()
+    conservative: ClassVar[bool] = True
     temporal: ClassVar[bool] = False
 
 
@@ -260,9 +288,11 @@ class LinearTimeInterpolation(_ImmutableTransferPolicy):
 @dataclass(frozen=True, slots=True)
 class StateTransfer(_ImmutableTransferPolicy):
     policy_kind: ClassVar[str] = "state"
-    prolongation: ConservativeLinear = field(default_factory=ConservativeLinear)
+    prolongation: ConservativeLinear | ConservativeInjection = field(
+        default_factory=ConservativeLinear
+    )
     restriction: VolumeAverage = field(default_factory=VolumeAverage)
-    coarse_fine: CoarseFineGhostInterpolation = field(
+    coarse_fine: CoarseFineGhostInterpolation | CoarseFineInjection = field(
         default_factory=CoarseFineGhostInterpolation
     )
     temporal: LinearTimeInterpolation = field(default_factory=LinearTimeInterpolation)
@@ -577,6 +607,8 @@ class BergerRigoutsos:
 
 __all__ = [
     "CoarseFineGhostInterpolation",
+    "CoarseFineInjection",
+    "ConservativeInjection",
     "ConservativeLinear",
     "BergerRigoutsos",
     "DivergencePreservingFace",

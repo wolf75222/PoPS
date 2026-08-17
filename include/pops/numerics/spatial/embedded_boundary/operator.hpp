@@ -27,12 +27,15 @@ struct EmbeddedBoundaryCapabilities {
 /// Metric decoration for one prepared cut-cell patch.
 ///
 /// Face closure belongs to `PreparedMaskedCartesianOperator`; this provider changes only the cell
-/// measure by the immutable inverse-volume fraction.  It therefore cannot introduce another face
-/// index convention or raw-storage contract.
+/// measure by the immutable inverse-volume fraction produced by `cut_cell_fractions_from_samples`.
+/// Dim=3 volume is the ranked cube-triangulation of that same sampled level set, not a second
+/// metric library. Polar/Disc stay planar. This type cannot introduce another face index
+/// convention or raw-storage contract.
 template <int Dim, class BaseMetric>
   requires PreparedMetricProvider<Dim, BaseMetric>
 class PreparedEmbeddedBoundaryMetric {
  public:
+  static constexpr int dimension = Dim;
   static constexpr int logical_dimension = Dim;
   static constexpr int embedding_dimension = BaseMetric::embedding_dimension;
   using PhysicalPoint = typename BaseMetric::PhysicalPoint;

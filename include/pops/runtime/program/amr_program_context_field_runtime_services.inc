@@ -1,3 +1,32 @@
+field_type* live_attempt_state_(int runtime_block, int level) const {
+  if (runtime_block < 0 || level < 0)
+    return nullptr;
+  if (multiblock_subcycling_ != nullptr && multiblock_subcycling_->has_attempt_candidates())
+    return &multiblock_subcycling_->attempt_state(static_cast<std::size_t>(runtime_block),
+                                                  static_cast<std::size_t>(level));
+  if (!active_attempt_states_.empty() && level == active_level_)
+    return active_attempt_states_.at(static_cast<std::size_t>(runtime_block));
+  return nullptr;
+}
+
+bool is_live_attempt_candidate_(const field_type* field) const {
+  if (field == nullptr)
+    return false;
+  if (multiblock_subcycling_ != nullptr && multiblock_subcycling_->has_attempt_candidates()) {
+    const int blocks = n_blocks();
+    const int levels = nlev();
+    for (int block = 0; block < blocks; ++block)
+      for (int level = 0; level < levels; ++level)
+        if (live_attempt_state_(block, level) == field)
+          return true;
+    return false;
+  }
+  if (active_attempt_states_.empty())
+    return false;
+  return std::find(active_attempt_states_.begin(), active_attempt_states_.end(), field) !=
+         active_attempt_states_.end();
+}
+
 void require_history_free_for_topology_change_(std::string_view operation) const {
   if (!history_levels_.empty())
     throw std::runtime_error(
@@ -396,9 +425,7 @@ int scratch_prototype_owner_(const field_type& prototype) const {
     owner = candidate;
   };
   for (int runtime_block = 0; runtime_block < n_blocks(); ++runtime_block) {
-    const field_type* active = nullptr;
-    if (!active_attempt_states_.empty())
-      active = active_attempt_states_.at(static_cast<std::size_t>(runtime_block));
+    const field_type* const active = live_attempt_state_(runtime_block, active_level_);
     const field_type* const accepted =
         &facade_->prepared_amr_block_state(runtime_block, active_level_);
     if (&prototype == active || &prototype == accepted)

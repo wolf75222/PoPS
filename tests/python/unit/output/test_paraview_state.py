@@ -239,6 +239,41 @@ def test_portable_recipe_validates_field_component_and_local_names():
         )
 
 
+def test_portable_recipe_colors_nodal_point_data_without_breaking_celldata():
+    identity = make_identity("paraview-pvd", {"series": "nodal"}).token
+    point_arrays = [
+        {
+            "name": "phi",
+            "type": "Float64",
+            "components": 1,
+            "component_names": [],
+        }
+    ]
+    documents = build_portable_paraview_state(
+        pvd_file="solution.pvd",
+        pvd_identity=identity,
+        presentation=_presentation(color_by="phi", component=None),
+        cell_arrays=_arrays(),
+        point_arrays=point_arrays,
+        manifest_file="solution.view.json",
+        script_file="solution.view.py",
+    )
+    manifest = json.loads(documents.manifest)
+    assert manifest["payload"]["point_arrays"] == point_arrays
+    assert b'if config["color_by"] in point_names:' in documents.script
+    assert b'association = "POINTS"' in documents.script
+    cell_only = build_portable_paraview_state(
+        pvd_file="solution.pvd",
+        pvd_identity=identity,
+        presentation=_presentation(),
+        cell_arrays=_arrays(),
+        manifest_file="solution.view.json",
+        script_file="solution.view.py",
+    )
+    assert b'association = "CELLS"' in cell_only.script
+    assert "point_arrays" not in json.loads(cell_only.manifest)["payload"]
+
+
 def _fake_pvpython(path: Path) -> Path:
     path.write_text(
         """#!/usr/bin/env python3

@@ -256,7 +256,7 @@ std::int64_t checked_layout_cell_count(const mesh::BoxArray<Dim>& layout) {
 template <int Dim, class MemorySpace>
 struct PreparedAnalyticMaterialization {
   MultiFab<Dim, MemorySpace>* values = nullptr;
-  Geometry<Dim> geometry{};
+  Geometry<Dim> geometry;
   const std::vector<AnalyticProgram>* programs = nullptr;
   bool invalid_target = true;
   std::int64_t materialized_values = 0;

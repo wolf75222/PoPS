@@ -163,6 +163,7 @@ std::array<double, Dim> fft_lengths(const Geometry<Dim>& geometry) {
 template <int Dim>
 class PoissonFFTSolver {
  public:
+  static_assert(Dim >= 1 && Dim <= 3, "PoissonFFTSolver supports dimensions 1, 2, and 3");
   static constexpr int dimension = Dim;
   using field_type = MultiFab<Dim>;
   using request_type = EllipticBuildRequest<Dim>;
@@ -477,7 +478,14 @@ class PoissonFFTSolver {
     if (request.boxes.size() != static_cast<std::size_t>(ranks))
       throw std::invalid_argument("Poisson FFT requires exactly one slab per communicator rank");
     if (ranks > 1 && request.distribution.replicated())
-      throw std::invalid_argument("distributed Poisson FFT slabs require unique owners");
+      throw std::invalid_argument(
+          "distributed Poisson FFT slabs require unique owners (no replicated final axis)");
+    for (int axis = 0; axis < Dim; ++axis) {
+      const std::int64_t expected_extent = axis == Dim - 1 ? static_cast<std::int64_t>(ranks) : 1;
+      if (request.distribution.rank_space().extent()[axis] != expected_extent)
+        throw std::invalid_argument(
+            "Poisson FFT rank space must be unique slabs along the final Cartesian axis");
+    }
 
     fft_solver_detail::validate_periodic_boundary(request.geometry, request.boundary);
     for (int axis = 0; axis < Dim; ++axis)
@@ -491,7 +499,9 @@ class PoissonFFTSolver {
       if (extent <= 0 || extent > std::numeric_limits<int>::max())
         throw std::invalid_argument("Poisson FFT extent exceeds Cartesian index range");
       if (axis == Dim - 1 && extent % ranks != 0)
-        throw std::invalid_argument("Poisson FFT final slab axis must divide communicator size");
+        throw std::invalid_argument(
+            "Poisson FFT communicator size must divide the final Cartesian axis "
+            "(unique slabs, no replicated Z)");
       const std::size_t local_extent =
           static_cast<std::size_t>(axis == Dim - 1 ? extent / ranks : extent);
       local_elements = fft_solver_detail::checked_multiply(
@@ -509,7 +519,8 @@ class PoissonFFTSolver {
       expected.lo[axis] = domain.lo[axis] + rank * local_last;
       expected.hi[axis] = expected.lo[axis] + local_last - 1;
       if (request.boxes[static_cast<std::size_t>(rank)] != expected)
-        throw std::invalid_argument("Poisson FFT layout is not the canonical ordered slab layout");
+        throw std::invalid_argument(
+            "Poisson FFT layout is not the canonical ordered unique-slab layout");
       if (!request.distribution.replicated() &&
           request.distribution.owner(static_cast<std::size_t>(rank)) !=
               request.distribution.rank_space().coordinate(static_cast<std::size_t>(rank)))

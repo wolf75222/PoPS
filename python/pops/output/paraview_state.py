@@ -38,6 +38,7 @@ _MANIFEST_KEYS = frozenset({
     "schema_version", "kind", "identity", "payload_sha256", "script_sha256", "payload",
 })
 _PAYLOAD_KEYS = frozenset({"pvd", "presentation", "cell_arrays", "script"})
+_PAYLOAD_KEYS_WITH_POINTS = _PAYLOAD_KEYS | {"point_arrays"}
 
 
 def _text(value: Any, where: str) -> str:
@@ -125,48 +126,72 @@ def _presentation(value: Any) -> dict[str, Any]:
     return result
 
 
-def _cell_arrays(value: Any, presentation: Mapping[str, Any]) -> list[dict[str, Any]]:
+def _data_arrays(value: Any, *, where: str) -> list[dict[str, Any]]:
     if isinstance(value, (str, bytes, bytearray)) or not isinstance(value, Sequence):
-        raise TypeError("portable ParaView cell_arrays must be a sequence")
+        raise TypeError("%s must be a sequence" % where)
     result = []
     for index, row in enumerate(value):
-        where = "portable cell_arrays[%d]" % index
+        item_where = "%s[%d]" % (where, index)
         if not isinstance(row, Mapping) or set(row) != _ARRAY_KEYS:
-            raise TypeError("%s must contain exactly %s" % (where, sorted(_ARRAY_KEYS)))
-        name = _text(row["name"], where + " name")
-        vtk_type = _text(row["type"], where + " type")
+            raise TypeError("%s must contain exactly %s" % (item_where, sorted(_ARRAY_KEYS)))
+        name = _text(row["name"], item_where + " name")
+        vtk_type = _text(row["type"], item_where + " type")
         components = row["components"]
         if isinstance(components, bool) or type(components) is not int or components < 1:
-            raise TypeError("%s components must be an integer >= 1" % where)
+            raise TypeError("%s components must be an integer >= 1" % item_where)
         raw_names = row["component_names"]
         if isinstance(raw_names, (str, bytes, bytearray)) \
                 or not isinstance(raw_names, Sequence):
-            raise TypeError("%s component_names must be a sequence" % where)
+            raise TypeError("%s component_names must be a sequence" % item_where)
         component_names = [
-            _text(item, "%s component_names[%d]" % (where, item_index))
+            _text(item, "%s component_names[%d]" % (item_where, item_index))
             for item_index, item in enumerate(raw_names)
         ]
         if component_names and len(component_names) != components:
             raise ValueError(
-                "%s component_names must be empty or name every component" % where)
+                "%s component_names must be empty or name every component" % item_where)
         if len(component_names) != len(set(component_names)):
-            raise ValueError("%s component_names contains duplicates" % where)
+            raise ValueError("%s component_names contains duplicates" % item_where)
         result.append({
             "name": name,
             "type": vtk_type,
             "components": components,
             "component_names": component_names,
         })
-    if not result:
-        raise ValueError("portable ParaView state requires at least one CellData array")
     names = [row["name"] for row in result]
     if len(names) != len(set(names)):
-        raise ValueError("portable ParaView CellData array names must be unique")
-    selected = [row for row in result if row["name"] == presentation["color_by"]]
-    if len(selected) != 1:
-        raise ValueError("portable presentation color_by does not name one CellData array")
+        raise ValueError("%s names must be unique" % where)
+    return result
+
+
+def _cell_arrays(
+    value: Any,
+    presentation: Mapping[str, Any],
+    point_arrays: Sequence[Mapping[str, Any]] = (),
+) -> list[dict[str, Any]]:
+    result = _data_arrays(value, where="portable cell_arrays")
+    points = list(point_arrays)
+    if not result and not points:
+        raise ValueError(
+            "portable ParaView state requires at least one CellData or PointData array"
+        )
+    cell_names = {row["name"] for row in result}
+    point_names = {row["name"] for row in points}
+    overlap = cell_names & point_names
+    if overlap:
+        raise ValueError(
+            "portable ParaView array names must not appear as both CellData and PointData: %s"
+            % sorted(overlap)
+        )
+    selected_cells = [row for row in result if row["name"] == presentation["color_by"]]
+    selected_points = [row for row in points if row["name"] == presentation["color_by"]]
+    if len(selected_cells) + len(selected_points) != 1:
+        raise ValueError(
+            "portable presentation color_by does not name one CellData or PointData array"
+        )
+    selected = selected_cells[0] if selected_cells else selected_points[0]
     component = presentation["component"]
-    if component is not None and component not in selected[0]["component_names"]:
+    if component is not None and component not in selected["component_names"]:
         raise ValueError(
             "portable presentation component is not declared by the selected array")
     active = [row for row in result if row["name"] == "pops_active"]
@@ -339,7 +364,15 @@ def main():
         scene.AnimationTime = timesteps[-1]
         reader.UpdatePipeline(time=timesteps[-1])
     display.SetRepresentationType(config["representation"])
-    color = ("CELLS", config["color_by"])
+    cell_names = {{row["name"] for row in payload.get("cell_arrays", [])}}
+    point_names = {{row["name"] for row in payload.get("point_arrays", [])}}
+    if config["color_by"] in point_names:
+        association = "POINTS"
+    elif config["color_by"] in cell_names:
+        association = "CELLS"
+    else:
+        raise RuntimeError("portable presentation color_by is not in the authenticated arrays")
+    color = (association, config["color_by"])
     if config["component"] is not None:
         color = color + (config["component"],)
     ColorBy(display, color)
@@ -372,6 +405,7 @@ def build_portable_paraview_state(
     cell_arrays: Sequence[Mapping[str, Any]],
     manifest_file: str,
     script_file: str,
+    point_arrays: Sequence[Mapping[str, Any]] = (),
 ) -> PortableStateDocuments:
     """Build canonical recipe/script bytes without touching the filesystem or importing ParaView."""
 
@@ -384,7 +418,9 @@ def build_portable_paraview_state(
     checked_identity = _identity_token(
         pvd_identity, domain="paraview-pvd", where="portable pvd_identity")
     checked_presentation = _presentation(presentation)
-    checked_arrays = _cell_arrays(cell_arrays, checked_presentation)
+    checked_points = _data_arrays(point_arrays, where="portable point_arrays")
+    checked_arrays = _cell_arrays(
+        cell_arrays, checked_presentation, point_arrays=checked_points)
     active = [row for row in checked_arrays if row["name"] == "pops_active"]
     threshold_active = bool(active)
     if threshold_active and (
@@ -408,6 +444,8 @@ def build_portable_paraview_state(
         "cell_arrays": checked_arrays,
         "script": {"file": checked_script},
     }
+    if checked_points:
+        payload["point_arrays"] = checked_points
     identity = make_identity("paraview-portable-state", payload)
     payload_sha256 = _sha256(_json_bytes(payload))
     script = _render_script(
@@ -478,6 +516,7 @@ def write_portable_paraview_state(
     presentation: Mapping[str, Any],
     cell_arrays: Sequence[Mapping[str, Any]],
     target: os.PathLike[str] | str | None = None,
+    point_arrays: Sequence[Mapping[str, Any]] = (),
 ) -> PortableStateBundle:
     """Write a canonical recipe and script next to an already-published PVD."""
 
@@ -499,6 +538,7 @@ def write_portable_paraview_state(
         pvd_identity=identity,
         presentation=presentation,
         cell_arrays=cell_arrays,
+        point_arrays=point_arrays,
         manifest_file=manifest.name,
         script_file=script.name,
     )
@@ -523,7 +563,9 @@ def read_portable_paraview_state(
     if _json_bytes(dict(decoded)) != raw:
         raise ValueError("portable ParaView state JSON is not canonical")
     payload = decoded["payload"]
-    if not isinstance(payload, Mapping) or set(payload) != _PAYLOAD_KEYS:
+    if not isinstance(payload, Mapping) or set(payload) not in {
+        _PAYLOAD_KEYS, _PAYLOAD_KEYS_WITH_POINTS,
+    }:
         raise ValueError("portable ParaView state has an unsupported payload schema")
     pvd_row, script_row = payload["pvd"], payload["script"]
     if not isinstance(pvd_row, Mapping) or set(pvd_row) != {"file", "identity"}:
@@ -535,6 +577,7 @@ def read_portable_paraview_state(
         pvd_identity=pvd_row["identity"],
         presentation=payload["presentation"],
         cell_arrays=payload["cell_arrays"],
+        point_arrays=payload.get("point_arrays", ()),
         manifest_file=manifest_path.name,
         script_file=script_row["file"],
     )

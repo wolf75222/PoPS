@@ -358,6 +358,52 @@ def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
         assert preflight_indices[0] < native.events.index("discard") < preflight_indices[1]
 
 
+def test_boundary_lane_prepare_is_skipped_when_the_package_lane_is_already_installed():
+    class Native:
+        def __init__(self):
+            self.events = []
+            self.state_routes = []
+
+        def has_package_assembly_lane(self):
+            return True
+
+        def _prepare_boundary_execution_lane(self, *_args):
+            self.events.append("boundary-lane")
+
+        def _install_block_state_route(self, block, identity):
+            self.events.append("state-route")
+            self.state_routes.append((block, identity))
+
+        def _install_boundary_plan(self, *_args):
+            self.events.append("boundary-plan")
+
+        def _discard_boundary_plans(self):
+            self.events.append("discard")
+
+    class BoundaryBlock:
+        name = "block"
+        state_identities = ("case::block::state",)
+        boundaries = ()
+
+    native = Native()
+    engine = SimpleNamespace(_s=native)
+    artifact = SimpleNamespace(
+        resolved_dimension=2,
+        blocks=(SimpleNamespace(name="block", model=SimpleNamespace(n_vars=1, cons_roles=("Scalar",))),),
+        plan=SimpleNamespace(blocks=(BoundaryBlock(),), field_plans={}),
+        layout_plan=SimpleNamespace(layouts=(SimpleNamespace(adaptive=True),)),
+    )
+    install_plan = SimpleNamespace(
+        artifact=artifact,
+        params={},
+        components={},
+        execution_context=_execution_context(),
+    )
+    _install_boundary_authorities(engine, install_plan)
+    assert native.events == ["state-route"]
+    assert native.state_routes == [("block", "case::block::state")]
+
+
 @pytest.mark.parametrize(
     ("target_axis", "target_face", "permutation", "signs", "face_types"),
     (

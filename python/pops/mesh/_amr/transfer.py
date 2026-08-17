@@ -122,10 +122,22 @@ def _ranked_axis_values(
 
 
 def _oriented_face_centerings(axis_names: tuple[str, ...]) -> tuple[Any, ...]:
-    return tuple(
-        BuiltinTransferAxis("centering", "face_%s" % axis_name)
-        for axis_name in axis_names
-    )
+    """Map layout axis names onto the first-class face_x/face_y/face_z transfer axes.
+
+    Dim=3 therefore keeps ``face_z``; unknown axis names fail closed instead of inventing a
+    silent extra centering.
+    """
+    by_name = {axis.name: axis for axis in ORIENTED_FACE_CENTERINGS}
+    centerings = []
+    for axis_name in axis_names:
+        centering = by_name.get("face_%s" % axis_name)
+        if centering is None:
+            raise ValueError(
+                "oriented face transfer requires a first-class face_x/face_y/face_z centering "
+                "for layout axis %r" % axis_name
+            )
+        centerings.append(centering)
+    return tuple(centerings)
 
 
 class AMRTransfer:

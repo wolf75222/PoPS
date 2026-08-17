@@ -102,13 +102,14 @@ field_type& hierarchy_solution() const {
   return solver.solution(active_level_);
 }
 field_type& linear_solution(field_type& fallback) const {
-  require_same_layout_(fallback, state(0), "AMR Program linear solution");
   if (!hierarchy_tensor_selection_)
     return fallback;
   hierarchy_tensor_solver_type& solver = configured_hierarchy_tensor_solver_();
-  return solver.execution_path() == HierarchyTensorSolverExecutionPath::DirectProvider
-             ? solver.solution(active_level_)
-             : fallback;
+  if (solver.execution_path() != HierarchyTensorSolverExecutionPath::DirectProvider)
+    return fallback;
+  field_type& solution = solver.solution(active_level_);
+  require_same_layout_(fallback, solution, "AMR Program linear solution");
+  return solution;
 }
 void stage_linear_initial_guess() const {
   hierarchy_tensor_solver_type& solver = configured_hierarchy_tensor_solver_();

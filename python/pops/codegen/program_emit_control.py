@@ -176,7 +176,8 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
                provider_plans: Any = None) -> tuple:
     """Generate the C++ of the install function in TWO phases (each list indented uniformly by the
     template). Assumes `_check_lowerable` has passed. @p model supplies the symbolic coefficients of
-    the Phase-4b source / apply / solve_local_linear ops. Returns ``(prelude, body)``:
+    the Phase-4b source / apply / solve_local_linear ops. Returns
+    ``(prelude, body, post_synchronization, authorities)``:
 
       - ``prelude``: INSTALL-TIME C++ (before ``ctx.install``) -- persistent scratch fields (held
         via ``std::shared_ptr`` so they outlive the install call and are reused across every step
@@ -281,7 +282,7 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
                 group, block_idx, var, lines, next_group_identity)
             next_group_identity += 1
         v = values[index]
-        if v.id in rhs_grouped:
+        if v.id in rhs_grouped or v.op == "post_synchronization":
             index += 1
             continue
         base = bases.get(v.block)  # the block-state value of THIS op's block (None: a scalar op)
@@ -304,11 +305,80 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     # reads lag k as the value k stores ago. Only emitted when the Program uses histories.
     if any(row["clock"] == program.clock.qualified_id for row in temporal["histories"]):
         lines.append("ctx.rotate_histories(%s);" % json.dumps(program.clock.qualified_id))
+    post_sync_lines = _emit_post_synchronization_phase(
+        program,
+        model,
+        var,
+        prelude,
+        block_idx,
+        bases,
+        target=target,
+        field_plans=field_plans,
+        has_shared_interface_implicit_jacvec=has_shared_interface_implicit_jacvec,
+    )
     prelude_src = "\n".join("  " + ln for ln in prelude)
     body_src = "\n".join("    " + ln for ln in lines)
+    post_sync_src = "\n".join("        " + ln for ln in post_sync_lines)
     authorities = tuple(dict.fromkeys(
         var.get(("compiled_program_operator_authorities",), ())))
-    return prelude_src, body_src, authorities
+    return prelude_src, body_src, post_sync_src, authorities
+
+def _emit_post_synchronization_phase(
+    program: Any,
+    model: Any,
+    var: Any,
+    prelude: Any,
+    block_idx: Any,
+    bases: Any,
+    *,
+    target: Any,
+    field_plans: Any,
+    has_shared_interface_implicit_jacvec: bool,
+) -> list:
+    """Emit the isolated post-reflux Program phase.  It never rotates histories."""
+    from pops.codegen.program_emit_ops import _emit_op
+
+    nodes = [value for value in program._values if value.op == "post_synchronization"]
+    if not nodes:
+        return []
+    if len(nodes) != 1:
+        raise ValueError("after_synchronization may be declared at most once")
+    if target != "amr_system":
+        raise ValueError("after_synchronization requires target='amr_system'")
+    node = nodes[0]
+    lines = []
+    for block, base in bases.items():
+        index = block_idx[block]
+        token = "u%d" % base.id
+        var[base.id] = token
+        lines.append(
+            "pops::MultiFab<pops::kNativeDimension>& %s = ctx.state(%d);"
+            % (token, index)
+        )
+    committed_ids = frozenset()
+    for value in node.attrs.get("body_block") or ():
+        _emit_op(
+            program,
+            value,
+            bases.get(value.block),
+            committed_ids,
+            var,
+            model,
+            lines,
+            prelude,
+            block_idx,
+            target=target,
+            field_plans=field_plans,
+            has_shared_interface_implicit_jacvec=has_shared_interface_implicit_jacvec,
+        )
+    commit_pairs = []
+    for state_ref, committed in getattr(program, "_post_sync_commits", {}).items():
+        base = bases[state_ref.block_ref]
+        commit_pairs.append("{&%s, &%s}" % (var[base.id], var[committed.id]))
+    if commit_pairs:
+        lines.append("ctx.commit_many({%s});" % ", ".join(commit_pairs))
+    return lines
+
 
 def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
                                field_plans: Any = None, *,

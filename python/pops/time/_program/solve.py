@@ -390,7 +390,8 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
                 "commit: cross-block write: endpoint for block %r cannot receive a value owned "
                 "by block %r" % (block_name(endpoint.block), block_name(state.block))
             )
-        require_top_level(self, state, "commit")
+        if not getattr(self, "_post_sync_recording", False):
+            require_top_level(self, state, "commit")
         if state.clock != endpoint.clock:
             raise ValueError(
                 "commit: endpoint clock %r cannot receive value %r on clock %r; "
@@ -421,7 +422,8 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
             raise TypeError("_commit_state: a State (or scalar_field) ProgramValue is required")
         if state.prog is not self:
             raise ValueError("_commit_state: the State value belongs to a different Program")
-        require_top_level(self, state, "_commit_state")
+        if not getattr(self, "_post_sync_recording", False):
+            require_top_level(self, state, "_commit_state")
         if state.block != block:
             raise ValueError(
                 "_commit_state: block %r cannot receive a value owned by block %r"
@@ -439,6 +441,14 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
         require_compatible_spaces(
             self._state_spaces[state_ref], state.space, "_commit_state", typed_pair=True
         )
+        if getattr(self, "_post_sync_recording", False):
+            if state_ref in self._post_sync_commits:
+                raise ValueError(
+                    "state %s committed more than once in after_synchronization"
+                    % state_ref.qualified_id
+                )
+            self._post_sync_commits[state_ref] = state
+            return
         if state_ref in self._commits:
             raise ValueError("state %s committed more than once" % state_ref.qualified_id)
         self._commits[state_ref] = state
@@ -497,6 +507,16 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
         Every endpoint/value owner and block is checked before ``_commits`` changes.
         """
         self._guard_mutable("commit a state group")
-        self._commits.update(validate_commit_many(self, mapping))
+        validated = validate_commit_many(self, mapping)
+        if getattr(self, "_post_sync_recording", False):
+            for state_ref, _state in validated:
+                if state_ref in self._post_sync_commits:
+                    raise ValueError(
+                        "state %s committed more than once in after_synchronization"
+                        % state_ref.qualified_id
+                    )
+            self._post_sync_commits.update(validated)
+            return
+        self._commits.update(validated)
 
     # --- inspection / debug (Spec 3 section 33): show the lowering ---

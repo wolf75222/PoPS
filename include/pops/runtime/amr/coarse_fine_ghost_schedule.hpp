@@ -371,14 +371,25 @@ class CoarseFineGhostSchedule {
             staging, coarse_fine_ghost_detail::required_parent_stencil(
                          destination.destination, ratio_, coarse_domain_, fine_domain_,
                          destination.periodic_source_from_destination, parent_stencil_radius_));
-      if (!staging.empty())
-        for (int axis = 0; axis < Dim; ++axis)
-          if (topology_.is_physical(Face<Dim>{axis, BoundarySide::lower}) &&
-              (staging.lo[axis] < coarse_domain_.lo[axis] ||
-               staging.hi[axis] > coarse_domain_.hi[axis]))
+      if (!staging.empty()) {
+        for (int axis = 0; axis < Dim; ++axis) {
+          const bool crosses_lower = topology_.is_physical(Face<Dim>{axis, BoundarySide::lower}) &&
+                                     staging.lo[axis] < coarse_domain_.lo[axis];
+          const bool crosses_upper = topology_.is_physical(Face<Dim>{axis, BoundarySide::upper}) &&
+                                     staging.hi[axis] > coarse_domain_.hi[axis];
+          // Radius-1 limited-linear interpolation already uses one-sided slopes on a physical
+          // parent face.  A wider stencil cannot silently shrink; that needs an explicit
+          // boundary-aware provider.
+          if ((crosses_lower || crosses_upper) && parent_stencil_radius_ > 1)
             throw std::invalid_argument(
                 "coarse/fine interpolation stencil crosses a physical parent face; "
                 "use a boundary-aware transfer provider");
+          if (crosses_lower)
+            staging.lo[axis] = coarse_domain_.lo[axis];
+          if (crosses_upper)
+            staging.hi[axis] = coarse_domain_.hi[axis];
+        }
+      }
       patch_plans_.push_back(patch_plan_type{fine_patch, staging, std::move(destinations)});
     }
   }

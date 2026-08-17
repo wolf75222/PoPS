@@ -65,7 +65,7 @@ class PublicationReceipt:
             raise ValueError("PublicationReceipt contains duplicate rank artifacts")
         ranks = tuple(rank for rank, _ in normalized)
         if self.parallel_mode is ParallelMode.PER_RANK:
-            if len(ranks) < 2 or ranks != tuple(range(len(ranks))):
+            if not ranks or ranks != tuple(range(len(ranks))):
                 raise ValueError(
                     "PER_RANK receipt must aggregate one artifact for every contiguous rank")
         elif normalized != [(0, self.artifact_id)]:

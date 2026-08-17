@@ -162,3 +162,26 @@ def test_legacy_core_tests_are_replaced_by_ranked_coverage() -> None:
         "tests/cpp/unit/mesh/test_nd_tag_mask.cpp",
     ):
         assert (ROOT / relative).is_file(), relative
+
+
+def test_python_amr_product_is_not_hardcoded_2d() -> None:
+    forbidden = (
+        "2D isotropic ratio-(2,2)",
+        "square n x n",
+        "static_assert(Dim == 2",
+    )
+    roots = (
+        ROOT / "python" / "pops" / "amr",
+        ROOT / "python" / "pops" / "mesh" / "_amr",
+        ROOT / "include" / "pops" / "amr",
+    )
+    offenders = []
+    for root in roots:
+        for path in root.rglob("*"):
+            if path.suffix not in {".py", ".hpp", ".h", ".inc"}:
+                continue
+            text = path.read_text(encoding="utf-8")
+            for token in forbidden:
+                if token in text:
+                    offenders.append((str(path.relative_to(ROOT)), token))
+    assert not offenders, offenders

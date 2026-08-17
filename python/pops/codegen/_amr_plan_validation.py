@@ -354,6 +354,12 @@ def validate_amr_authorities(plan: Any) -> None:
                             2,
                             tuple(0 for _ in range(dimension)),
                         )
+                    elif native.native_route == "conservative_injection":
+                        route_contract = (
+                            "conservative_injection",
+                            1,
+                            tuple(0 for _ in range(dimension)),
+                        )
                     else:
                         route_contract = (
                             "conservative_linear",

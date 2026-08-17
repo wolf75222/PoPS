@@ -356,7 +356,8 @@ def capabilities() -> Any:
             "amr": ["%s only ; rhs charge_density|composite" % poisson_mg],
         },
         "geometry": {
-            "system_cartesian": "square n x n ; mono-box (multi-box = AmrSystem or MPI mono-box)",
+            "system_cartesian": "ranked n cells (1D/2D/3D, rectangular allowed) ; "
+            "mono-box (multi-box = AmrSystem or MPI mono-box)",
             "amr": "hierarchy of levels (BoxArray per level, dynamic regrid) ; "
             "transition ratios selected by the authenticated hierarchy (exact native-rank "
             "values; no process-global AMR ratio is advertised)",

@@ -236,12 +236,33 @@ def _uses_local_transform(program: Any) -> bool:
 
     A flat AMR level can run the prepared pointwise transform directly.  On a refined hierarchy,
     however, executing it before the reflux/synchronization boundary would give the transform a
-    different semantic position than the uniform route.  The resolved hierarchy context is the
-    authority for that distinction, so reject before artifact creation rather than advertising a
-    late runtime guard as support.
+    different semantic position than the uniform route.  Transforms authored inside
+    ``after_synchronization`` run after reflux and are therefore legal.  The resolved hierarchy
+    context is the authority for that distinction, so reject before artifact creation rather than
+    advertising a late runtime guard as support.
     """
-    nodes = program.ir_nodes(recursive=True)
-    return any(isinstance(node, Mapping) and node.get("op") == "local_transform" for node in nodes)
+
+    def walk(values: Any) -> bool:
+        for value in values:
+            if getattr(value, "op", None) == "local_transform":
+                return True
+            if getattr(value, "op", None) == "post_synchronization":
+                continue
+            attrs = getattr(value, "attrs", {})
+            for key in (
+                "cond_block",
+                "body_block",
+                "apply_block",
+                "residual_block",
+                "true_block",
+                "false_block",
+            ):
+                block = attrs.get(key)
+                if isinstance(block, (list, tuple)) and walk(block):
+                    return True
+        return False
+
+    return walk(getattr(program, "_values", ()))
 
 
 def _layout_name(layout: Any) -> str:

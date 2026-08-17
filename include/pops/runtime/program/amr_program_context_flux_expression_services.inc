@@ -306,9 +306,8 @@ void rehydrate_history_flux_expression_(const std::string& key, int lag,
         FluxExpressionRegistry candidate = active_flux_expressions_;
         auto [rebound, identity] = rehydrated_history_flux_expression_(
             key, lag, active_flux_expressions_, next_active_flux_basis_identity_);
-        if (rebound.empty())
-          throw std::logic_error("AMR Program history flux rehydration lost its expression");
-        candidate[&destination] = std::move(rebound);
+        if (!rebound.empty())
+          candidate[&destination] = std::move(rebound);
         return std::pair<FluxExpressionRegistry, std::uint64_t>{std::move(candidate), identity};
       },
       "AMR Program history flux-expression rehydration failed collectively");

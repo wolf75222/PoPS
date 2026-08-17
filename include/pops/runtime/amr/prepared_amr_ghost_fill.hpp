@@ -354,7 +354,9 @@ class PreparedAmrGhostFill {
       if (preparation.interpolation_kind !=
               ::pops::amr::transfer::TransferKind::CoarseFineGhostInterpolation &&
           preparation.interpolation_kind !=
-              ::pops::amr::transfer::TransferKind::FifthOrderCoarseFineGhostInterpolation)
+              ::pops::amr::transfer::TransferKind::FifthOrderCoarseFineGhostInterpolation &&
+          preparation.interpolation_kind !=
+              ::pops::amr::transfer::TransferKind::ConstantInjection)
         throw std::invalid_argument(
             "prepared AMR ghost fill requires an authenticated coarse/fine interpolation kind");
       coarse_fine.emplace(coarse_field, fine_field, preparation.coarse_domain,

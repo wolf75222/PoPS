@@ -3050,5 +3050,15 @@ def test_per_rank_publication_receipt_is_one_deterministic_rank_set():
     )
     assert receipt.rank_artifacts == rows
     assert receipt.to_data()["parallel_mode"] == "per_rank"
+    single = ((0, "artifact-r0"),)
+    one_rank = PublicationReceipt(
+        effect,
+        payload,
+        "test-per-rank-one",
+        _identity("scientific-output-artifact-set", {"rows": single}).token,
+        ParallelMode.PER_RANK,
+        single,
+    )
+    assert one_rank.rank_artifacts == single
     with pytest.raises(ValueError, match="every contiguous rank"):
         replace(receipt, rank_artifacts=((0, "artifact-r0"), (2, "artifact-r2")))

@@ -4013,6 +4013,11 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
                 )
             return 0, False
         matches = [index for index, candidate in enumerate(roles) if candidate == role]
+        if len(matches) != 1 and isinstance(role, str):
+            # Diagnostic execution historically stored the ComponentRole class
+            # name ("Density"); block schemas store the native token ("density").
+            lowered = role.lower()
+            matches = [index for index, candidate in enumerate(roles) if candidate == lowered]
         if len(matches) != 1:
             raise ValueError(
                 "diagnostic role %r must select exactly one conservative component; "

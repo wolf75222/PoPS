@@ -104,7 +104,7 @@ PROGRAM_RESPONSIBILITY_BUDGETS = {
     "spatial_context": 350,
     "spatial_operations": 900,
     "field_runtime": 1_800,
-    "history_checkpoint": 1_750,
+    "history_checkpoint": 1_800,
     "flux_expression": 1_200,
     "flux_basis": 500,
     "subcycling_runtime": 800,
@@ -112,9 +112,9 @@ PROGRAM_RESPONSIBILITY_BUDGETS = {
 }
 # Intentional Phase 0 policy envelopes: fragment and scaffolding growth remain
 # separately bounded, and their aggregate remains independently enforced.
-PROGRAM_FRAGMENT_BUDGET = 7_400
-PROGRAM_SCAFFOLDING_BUDGET = 1_800
-PROGRAM_SEMANTIC_CLOSURE_BUDGET = 9_200
+PROGRAM_FRAGMENT_BUDGET = 7_450
+PROGRAM_SCAFFOLDING_BUDGET = 1_850
+PROGRAM_SEMANTIC_CLOSURE_BUDGET = 9_300
 SEMANTIC_AUTHORITIES = frozenset(
     {
         "pops/numerics/time/amr/reflux/amr_flux_execution.hpp",

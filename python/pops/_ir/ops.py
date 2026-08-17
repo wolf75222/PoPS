@@ -10,7 +10,7 @@ SQRT NAME CLASH RESOLUTION
 
 Flux-DSL free functions
   sqrt, abs_, sign,
-  eig_max_im, eig_lmin, eig_lmax, eig_all_real,
+  eig_max_im, eig_lmin, eig_lmin_bound, eig_lmax, eig_all_real,
   left, right.
 
 Board free functions
@@ -71,6 +71,15 @@ def eig_lmin(rows: Any) -> Any:
     """Plus petite PARTIE REELLE du spectre de la matrice dense @p rows (cf. eig_max_im), via
     ``pops::real_eig_minmax`` -- valeur scalaire DSL (extreme de borne de vitesse / spectre reel)."""
     return EigWitness(rows, "lmin")
+
+
+def eig_lmin_bound(rows: Any) -> Any:
+    """Smallest real-part bound that stays finite when native QR does not converge.
+
+    Converged blocks match :func:`eig_lmin`.  A Gershgorin fallback returns that
+    enclosure instead of NaN, so a generated local_transform can still repair the cell.
+    """
+    return EigWitness(rows, "lmin_bound")
 
 
 def eig_lmax(rows: Any) -> Any:

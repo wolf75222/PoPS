@@ -85,6 +85,7 @@ dependencies:
   - mpi=1.0=mpich        # conda MPI implementation selector: prevent a transitive Open MPI solve
   - "hdf5=1.14.3=mpi_mpich_*"  # native parallel HDF5 writer, linked to the same MPICH family
   - llvm-openmp          # libomp + headers: standalone OpenMP (deprecated) + -fopenmp runtime
+  - fftw                 # optional PoissonFFT production radix backend (discovered from CONDA_PREFIX)
 
   # --- Optional: uncomment as needed ---
   # - cxx-compiler            # conda C++ toolchain: clang (osx-arm64) / gcc 14.2 (linux), both

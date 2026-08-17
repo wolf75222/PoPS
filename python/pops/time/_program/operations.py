@@ -151,6 +151,9 @@ class _ProgramCore(
                     for block, committed in tuple(self._commits.items()):
                         if committed.id == current.id:
                             self._commits[block] = replacement
+                    for block, committed in tuple(getattr(self, "_post_sync_commits", {}).items()):
+                        if committed.id == current.id:
+                            self._post_sync_commits[block] = replacement
                     if self._dt_bound is not None and self._dt_bound[1].id == current.id:
                         self._dt_bound = (self._dt_bound[0], replacement)
                     return replacement

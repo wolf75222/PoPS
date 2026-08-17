@@ -692,7 +692,8 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             (
                 tensor_boundary,
                 "ctx_owner->prepare_tensor_boundary_session(%d, *session_%s, "
-                "*session_%s, lane)" % (tensor_block_idx, acc_sp, tensor_point),
+                "*session_%s, ctx_owner->prepared_execution_lane())"
+                % (tensor_block_idx, acc_sp, tensor_point),
             )
         )
         var[("operator_tensor_point", apply_id)] = tensor_point
@@ -707,7 +708,8 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         session_dynamic.append(
             (name,
              "ctx_owner->prepare_block_boundary_session(%d, *session_%s, "
-             "*session_%s, lane)" % (block_idx, prototype, preparation_point)))
+             "*session_%s, ctx_owner->prepared_execution_lane())"
+             % (block_idx, prototype, preparation_point)))
         boundary_sessions[block_idx] = name
     stencil_ops = {"laplacian", "gradient", "divergence"}
     if target != "amr_system":
@@ -723,7 +725,8 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         stencil_boundary = "operator_mesh_boundary_session%d" % apply_id
         session_dynamic.append(
             (stencil_boundary,
-             "ctx_owner->prepare_mesh_boundary_session(*session_%s, lane)" % acc_sp))
+             "ctx_owner->prepare_mesh_boundary_session("
+             "*session_%s, ctx_owner->prepared_execution_lane())" % acc_sp))
     var[("operator_prepare_refresh", apply_id)] = tuple(prepare_refresh)
     # 2) The lambda body: the laplacian / gradient ops + the result write into `out`.
     body = ["const pops::Real dt = *%s;" % apply_dt]
@@ -885,6 +888,9 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             body.append("  pops::PureFieldAlgebra::lincomb(*%s, pops::Real(1), *%s, jh, %s);"
                         % (up, uk, in_arg))
             if w.attrs["field_coupled"]:
+                # ``block_idx`` is the program block, not the AMR level.  The captured
+                # BoundaryEvaluationPoint carries ``point.level == active_level_`` so every
+                # level bundle uses the same tangent-field provider with an explicit index.
                 body.append("  ctx.evaluate_with_field_state_at("
                             "*%s, %s, %d, *%s, *%s, [&]() {"
                             % (point, field_slot, block_idx, up, uk))

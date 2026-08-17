@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from pops._geometry_contracts import cartesian_geometry_contract
-from pops.domain import Rectangle
+from pops.domain import CartesianDomain, Rectangle
 from pops.frames import Cartesian2D
 from pops.layouts import Uniform
 from pops.mesh import CartesianGrid, NormalizedGeometry, PolarMesh, normalize_layout_plan
@@ -173,6 +173,56 @@ def test_runtime_output_uses_exact_rectangular_cartesian_geometry():
     assert result.spacing == (1.0, 2.0)
     assert result.cell_shape == (3, 4)
     np.testing.assert_array_equal(result.cell_volumes, np.full((3, 4), 2.0))
+
+
+@pytest.mark.parametrize(
+    (
+        "lower", "upper", "cells", "expected_shape", "expected_spacing", "expected_volume",
+        "coordinate_system", "cell_measure", "axis_names",
+    ),
+    (
+        (
+            (-2.0,), (3.0,), (5,),
+            (5,), (1.0,), 1.0,
+            "pops://coordinates/cartesian-1d@1",
+            "pops://cell-measures/cartesian-length@1",
+            ("x",),
+        ),
+        (
+            (1.0, -2.0), (5.0, 4.0), (4, 3),
+            (3, 4), (1.0, 2.0), 2.0,
+            "pops://coordinates/cartesian-2d@1",
+            "pops://cell-measures/cartesian-area@1",
+            ("x", "y"),
+        ),
+        (
+            (0.0, -1.0, 2.0), (1.0, 1.0, 5.0), (4, 6, 8),
+            (8, 6, 4), (0.25, 1.0 / 3.0, 0.375), 0.03125,
+            "pops://coordinates/cartesian-3d@1",
+            "pops://cell-measures/cartesian-volume@1",
+            ("x", "y", "z"),
+        ),
+    ),
+)
+def test_runtime_output_uses_ranked_cartesian_domain_geometry(
+    lower, upper, cells, expected_shape, expected_spacing, expected_volume,
+    coordinate_system, cell_measure, axis_names,
+):
+    frame = CartesianDomain("ranked", lower, upper).frame()
+    result = _geometry(
+        Uniform(CartesianGrid(frame=frame, cells=cells)),
+        _Engine(shape=cells),
+    )
+
+    assert result.origin == lower
+    assert result.coordinate_system == coordinate_system
+    assert result.cell_measure == cell_measure
+    assert result.axis_names == axis_names
+    assert result.spacing == expected_spacing
+    assert result.cell_shape == expected_shape
+    np.testing.assert_array_equal(
+        result.cell_volumes, np.full(expected_shape, expected_volume)
+    )
 
 
 def test_runtime_output_geometry_is_deduplicated_and_invalidated_by_topology_epoch():

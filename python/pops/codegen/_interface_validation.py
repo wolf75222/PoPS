@@ -117,8 +117,11 @@ def _validate_shared_interface_jacvec_pairs(
 
     One matrix-free apply owns one packed Krylov vector.  Its two rhs_jacvec nodes consume
     disjoint component spans in apply-block order, but perturb both endpoint states before one
-    atomic shared-flux evaluation.  Anything that cannot establish that exact shape is rejected at
-    resolve rather than degrading to two one-sided derivatives.
+    atomic shared-flux evaluation.  The generated ``level_rhs_jacvec_pair`` path is Cartesian
+    Dim-in-{1,2,3} through ``pops::kNativeDimension``; the envelope is a frozen two-level
+    hierarchy on the prepared ExecutionLane communicator, and GPU uses the existing Kokkos
+    DefaultExecutionSpace only.  Anything that cannot establish that exact shape
+    is rejected at resolve rather than degrading to two one-sided derivatives.
     """
     participants = frozenset(neighbours)
     all_jacvec = [

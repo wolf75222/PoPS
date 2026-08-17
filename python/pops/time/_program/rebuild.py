@@ -86,6 +86,7 @@ def rebuild_program(
     out._step_strategy = getattr(self, "_step_strategy", None)
     out._cadence = getattr(self, "_cadence", None)
     out._cell_local_time = getattr(self, "_cell_local_time", None)
+    out._post_sync_recording = False
     out._transaction_stores = tuple(getattr(self, "_transaction_stores", ()))
     out._acceptance_guards = tuple(getattr(self, "_acceptance_guards", ()))
     if project_states and (self._dt_bound is not None or out._acceptance_guards):
@@ -379,6 +380,11 @@ def rebuild_program(
     out._commits = {
         reference_of(state_ref): idmap[rep(value).id]
         for state_ref, value in self._commits.items()
+        if state_keep(state_ref)
+    }
+    out._post_sync_commits = {
+        reference_of(state_ref): idmap[rep(value).id]
+        for state_ref, value in getattr(self, "_post_sync_commits", {}).items()
         if state_keep(state_ref)
     }
     active_regions = {value.region for value in idmap.values()}

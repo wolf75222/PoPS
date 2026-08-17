@@ -46,8 +46,12 @@ TEST(test_fallback_diagnostics, counters_and_report_track_triggered_fallbacks) {
     PoissonFFT<2>::device_view phi("fallback_fft_phi", solver.local_cell_count());
     Kokkos::deep_copy(rhs, PoissonFFT<2>::complex_type(0.0, 0.0));
     solver.solve(rhs, phi);
-    EXPECT_GT(poisson_fft_direct_dft_fallback_count(), 0u)
-        << "direct DFT fallback increments counter";
+    if (poisson_fft_fftw_configured())
+      EXPECT_EQ(poisson_fft_direct_dft_fallback_count(), 0u)
+          << "FFTW covers non-power-of-two local extents without the O(n^2) fallback";
+    else
+      EXPECT_GT(poisson_fft_direct_dft_fallback_count(), 0u)
+          << "direct DFT fallback increments counter";
   }
 
   {
@@ -78,8 +82,10 @@ TEST(test_fallback_diagnostics, counters_and_report_track_triggered_fallbacks) {
   const FallbackDiagnosticEntry* eig = find_entry(report, "linalg.dense_eig.gershgorin");
   ASSERT_NE(fft, nullptr);
   ASSERT_NE(eig, nullptr);
-  EXPECT_TRUE(fft->count > 0 && fft->policy == "allowed_with_counter")
-      << "FFT fallback report carries count and policy";
+  EXPECT_TRUE(fft->policy == "allowed_with_counter")
+      << "FFT fallback report carries policy";
+  if (!poisson_fft_fftw_configured())
+    EXPECT_GT(fft->count, 0u) << "FFT fallback report carries count";
   EXPECT_TRUE(eig->count > 0 && eig->semantics_changed)
       << "Gershgorin report carries count and semantic impact";
 

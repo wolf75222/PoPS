@@ -55,6 +55,7 @@ class _ProgramConstants:
     # the allow-list above (hence live); listed here only to drive the sub-block reference walk.
     _SUBBLOCK_OPS = frozenset({
         "while", "branch", "range", "subcycle", "matrix_free_operator", "solve_local_nonlinear",
+        "post_synchronization",
     })
 
     # Ops PROVEN PURE for common-subexpression elimination (Spec 3 s28, ADC-465): each allocates a

@@ -57,6 +57,7 @@ _ALLOWED_OPS = frozenset(
         "range",
         "subcycle",
         "branch",
+        "post_synchronization",
         "synchronize",
         "acceptance_guard",
         "matrix_free_operator",
@@ -90,7 +91,7 @@ _ALLOWED_OPS = frozenset(
     }
 )
 
-_PROFILE_SKIP_OPS = frozenset({"state", "history", "hmin", "cfl"})
+_PROFILE_SKIP_OPS = frozenset({"state", "history", "hmin", "cfl", "post_synchronization"})
 
 _AUX_OUTPUT_OPS = frozenset({"solve_fields", "solve_fields_from_blocks"})
 

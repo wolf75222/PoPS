@@ -137,6 +137,10 @@ class Program(
         # Optional bounded AMR cell-local execution authority.  It is explicit, immutable after
         # authoring and serialized into the Program hash; codegen never infers this route from dt.
         self._cell_local_time = None
+        # Optional post-reflux AMR phase.  Commits authored inside after_synchronization live here
+        # so the main step can still commit the same state exactly once before synchronization.
+        self._post_sync_commits = {}
+        self._post_sync_recording = False
         self._transaction_stores = ALL_PROVISIONAL_STORES
         self._acceptance_guards = ()
         # ADC-563 freeze: a Program is MUTABLE while authored and FROZEN by pops.compile. After
@@ -273,6 +277,10 @@ class Program(
         self._guard_mutable("set cell-local time contract")
         if self._cell_local_time is not None:
             raise ValueError("Program.cell_local_time may be declared only once")
+        if any(value.op == "post_synchronization" for value in self._values):
+            raise ValueError(
+                "Program.cell_local_time cannot combine with after_synchronization"
+            )
         from pops.time._program.cell_local_time import CellLocalTimeContract
 
         self._cell_local_time = CellLocalTimeContract(tick_denominator=tick_denominator, rung=rung)

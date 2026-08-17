@@ -273,6 +273,11 @@ void expect_exact_ranked_newton() {
 }  // namespace
 
 TEST(test_cartesian_poisson_nd, manufactured_modes_solve_in_exact_rank_one_two_and_three) {
+  static_assert(CartesianPoissonOptions<1>::dimension == 1);
+  static_assert(CartesianPoissonOptions<2>::dimension == 2);
+  static_assert(CartesianPoissonOptions<3>::dimension == 3);
+  static_assert(CartesianPoissonSolver<1>::dimension == 1);
+  static_assert(CartesianPoissonSolver<3>::dimension == 3);
   expect_all_boundaries<1>();
   expect_all_boundaries<2>();
   expect_all_boundaries<3>();

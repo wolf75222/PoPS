@@ -186,7 +186,7 @@ def require_communicator(communicator: Any, *, allow_world: bool = True) -> Any:
     if type(communicator) is world_type:
         if not allow_world:
             raise TypeError("worker MPI requires a duplicated observer communicator lane")
-        if communicator.identity != _WORLD_IDENTITY:
+        if communicator.identity == "serial" or communicator.identity != _WORLD_IDENTITY:
             raise ValueError("native world communicator has an invalid identity")
     elif lane_type is None or type(communicator) is not lane_type:
         raise TypeError(

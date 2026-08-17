@@ -180,6 +180,20 @@ class PreparedMultiBlockAmrSubcyclingEngine {
     return accepted_ledgers_.at(block).at(parent_level);
   }
 
+  /// The private `[block][level]` candidate tower is complete before the first level-group
+  /// callback. Hierarchy-scoped Program gathers must read this tower by `active_level_`, not the
+  /// current group's candidate pack: that pack is one level, while the gather walks every level.
+  bool has_attempt_candidates() const noexcept { return attempt_candidates_ != nullptr; }
+
+  field_type& attempt_state(std::size_t block, std::size_t level) const {
+    if (attempt_candidates_ == nullptr)
+      throw std::logic_error(
+          "multi-block AMR attempt state is only available during an active advance");
+    if (block >= attempt_candidates_->size() || level >= (*attempt_candidates_)[block].size())
+      throw std::out_of_range("multi-block AMR attempt state is outside the candidate tower");
+    return (*attempt_candidates_)[block][level];
+  }
+
   /// Four-argument advance keeps a no-op staging path so generic callers retain their
   /// existing collective sequence.
   template <class Advance, class Reflux, class Validate>
@@ -232,6 +246,18 @@ class PreparedMultiBlockAmrSubcyclingEngine {
     }
 
     bool publication_started = false;
+    struct AttemptTowerBind {
+      std::vector<std::vector<field_type>>*& slot;
+      explicit AttemptTowerBind(std::vector<std::vector<field_type>>*& slot,
+                                std::vector<std::vector<field_type>>& tower)
+          : slot(slot) {
+        slot = &tower;
+      }
+      ~AttemptTowerBind() { slot = nullptr; }
+      AttemptTowerBind(const AttemptTowerBind&) = delete;
+      AttemptTowerBind& operator=(const AttemptTowerBind&) = delete;
+    };
+    const AttemptTowerBind attempt_tower(attempt_candidates_, candidates);
     try {
       std::vector<const field_type*> no_parent;
       std::vector<ledger_type*> no_incoming_flux;
@@ -645,6 +671,7 @@ class PreparedMultiBlockAmrSubcyclingEngine {
   LedgerMatrix accepted_ledgers_;
   std::uint64_t next_attempt_ = 0;
   std::uint64_t last_accepted_attempt_ = 0;
+  std::vector<std::vector<field_type>>* attempt_candidates_ = nullptr;
 };
 
 }  // namespace pops::numerics::time::amr

@@ -55,6 +55,8 @@ from pops.mesh._amr.transfer import (
     DENSE_STORAGE,
     DERIVED_FIELD,
     FACE_X_CENTERED,
+    FACE_Y_CENTERED,
+    FACE_Z_CENTERED,
     FACE_SPACE,
     FIELD_SPACE,
     HIERARCHY_EXACT_RANK,
@@ -71,9 +73,12 @@ from pops.mesh._amr.transfer import (
     TransferKey,
     TransferProvider,
     TransferProviderRoute,
+    _oriented_face_centerings,
 )
 from tests.python.support.layout_plan import cartesian_grid, final_amr_layout
 from pops.lib.amr import (
+    CoarseFineInjection,
+    ConservativeInjection,
     ConservativeLinear,
     EllipticRecompute,
     FaceTransfer,
@@ -368,14 +373,65 @@ def test_builtin_policies_are_intrinsic_and_reject_duplicate_accuracy_knobs():
     assert linear.dimensions == (1, 2, 3)
     assert linear.refinement_ratio_policy == HIERARCHY_EXACT_RANK
     assert linear.refinement_ratios == ()
+    injection = ConservativeInjection()
+    assert injection.order == 1
+    assert injection.ghost_depth == (0,)
+    assert injection.native_route == "conservative_injection"
+    assert injection.conservative is True
     with pytest.raises(TypeError):
         ConservativeLinear(order=3)
+    with pytest.raises(TypeError):
+        ConservativeInjection(order=2)
     with pytest.raises(TypeError):
         StateTransfer(dimension=2)
     with pytest.raises(TypeError):
         FaceTransfer(ghost_depth=(2,))
     with pytest.raises(TypeError):
         NodeTransfer(conservative=True)
+
+
+def test_conservative_injection_prolongation_resolves_parent_copy() -> None:
+    plan, layout, subjects = _ranked_face_layout(2, (2,))
+    authored = AMRTransfer()
+    authored.state(
+        subjects[0],
+        StateTransfer(prolongation=ConservativeInjection()),
+        layout=layout,
+    )
+    resolved = authored.resolve(plan)
+    prolongation = resolved.for_subject(subjects[0], PROLONGATION)
+    assert prolongation.action.route.options.to_data()["native_route"] == (
+        "conservative_injection"
+    )
+    assert prolongation.action.capabilities.order == 1
+    assert prolongation.action.capabilities.ghost_depth == (0,)
+    assert prolongation.action.capabilities.conservative is True
+    assert (
+        prolongation.action.route.options.to_data()["native_route"],
+        prolongation.action.capabilities.order,
+        prolongation.action.capabilities.ghost_depth,
+    ) == ("conservative_injection", 1, (0,))
+
+
+def test_coarse_fine_injection_resolves_parent_copy_ghosts() -> None:
+    plan, layout, subjects = _ranked_face_layout(2, (2,))
+    authored = AMRTransfer()
+    authored.state(
+        subjects[0],
+        StateTransfer(
+            prolongation=ConservativeInjection(),
+            coarse_fine=CoarseFineInjection(),
+        ),
+        layout=layout,
+    )
+    resolved = authored.resolve(plan)
+    coarse_fine = resolved.for_subject(subjects[0], COARSE_FINE_FILL)
+    assert coarse_fine.action.route.options.to_data()["native_route"] == (
+        "conservative_injection"
+    )
+    assert coarse_fine.action.capabilities.order == 1
+    assert coarse_fine.action.capabilities.ghost_depth == (1,)
+    assert coarse_fine.action.capabilities.conservative is True
 
 
 @pytest.mark.parametrize("dimension", (1, 2, 3))
@@ -457,6 +513,22 @@ def test_builtin_face_provider_resolves_coupled_exact_rank_route(dimension: int)
         entry.requirements[0].accuracy.refinement_ratio == (2,) * dimension
         for entry in resolved.entries
     )
+    expected_centerings = (FACE_X_CENTERED, FACE_Y_CENTERED, FACE_Z_CENTERED)[:dimension]
+    assert {entry.key.centering for entry in resolved.entries} == set(expected_centerings)
+    if dimension == 3:
+        assert FACE_Z_CENTERED in expected_centerings
+        assert any(entry.key.centering == FACE_Z_CENTERED for entry in resolved.entries)
+
+
+def test_oriented_face_centerings_keep_face_z_first_class() -> None:
+    assert _oriented_face_centerings(("x", "y", "z")) == (
+        FACE_X_CENTERED,
+        FACE_Y_CENTERED,
+        FACE_Z_CENTERED,
+    )
+    assert _oriented_face_centerings(("x",)) == (FACE_X_CENTERED,)
+    with pytest.raises(ValueError, match="face_x/face_y/face_z"):
+        _oriented_face_centerings(("r", "theta"))
 
 
 def test_builtin_node_provider_resolves_multilinear_exact_rank_route() -> None:

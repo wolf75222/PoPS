@@ -144,11 +144,12 @@ class _ProgramSerialization(_ProgramBase):
                 _ProgramSerialization._serialize_node(
                     node, include_provenance=include_provenance) for node in attrs["body_block"]]
             attrs["cond"], attrs["body"] = attrs["cond"].id, attrs["body"].id
-        elif value.op in ("range", "subcycle"):
+        elif value.op in ("range", "subcycle", "post_synchronization"):
             attrs["body_block"] = [
                 _ProgramSerialization._serialize_node(
                     node, include_provenance=include_provenance) for node in attrs["body_block"]]
-            attrs["body"] = attrs["body"].id
+            if value.op != "post_synchronization":
+                attrs["body"] = attrs["body"].id
         elif value.op == "branch":
             for arm in ("true", "false"):
                 attrs[arm + "_block"] = [
@@ -210,6 +211,17 @@ class _ProgramSerialization(_ProgramBase):
             "block_order": [handle_data(block) for block in sorted(
                 order, key=lambda block: order[block])],
         }
+        post_sync_commits = getattr(self, "_post_sync_commits", {})
+        if post_sync_commits:
+            result["post_synchronization_commits"] = [
+                {
+                    "state": handle_data(state_ref),
+                    "block": handle_data(state_ref.block_ref),
+                    "value": value.id,
+                }
+                for state_ref, value in sorted(
+                    post_sync_commits.items(), key=lambda item: item[0].qualified_id)
+            ]
         transaction = self.transaction_plan()
         if transaction is not None:
             result["step_transaction"] = transaction.to_data()

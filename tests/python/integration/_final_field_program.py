@@ -244,6 +244,7 @@ def resolve_periodic_field_program(
     anchored_field: bool = False,
     patch_layout: PatchLayout | None = None,
     clustering: Any = None,
+    refine_threshold: float = 0.5,
 ) -> Any:
     """Return the exact public resolved plan consumed by one native integration compile."""
     if target not in {"system", "amr_system"}:
@@ -330,7 +331,7 @@ def resolve_periodic_field_program(
             )
         )
         threshold = case.param(
-            RuntimeParam("%s_refine_threshold" % name, default=0.5)
+            RuntimeParam("%s_refine_threshold" % name, default=refine_threshold)
         )
         transfer = AMRTransfer()
         transfer.state(state_instance, StateTransfer())

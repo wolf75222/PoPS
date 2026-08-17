@@ -33,9 +33,7 @@ void apply_coupling_operators(std::string_view graph_identity, std::string_view 
                                    facade_->prepared_amr_block_state(runtime_block, active_level_),
                                    "AMR Program coupling candidate");
       if (!active_attempt_states_.empty()) {
-        const bool detached_group_candidate =
-            std::find(active_attempt_states_.begin(), active_attempt_states_.end(),
-                      candidate.state) != active_attempt_states_.end();
+        const bool detached_group_candidate = is_live_attempt_candidate_(candidate.state);
         const bool prepared_scratch =
             std::any_of(scratches_.begin(), scratches_.end(),
                         [&](const auto& entry) { return &entry.second == candidate.state; });
@@ -128,11 +126,8 @@ void for_each_owner_active_level_(int program_block, const field_type& left,
     for (int level = 0; level < levels; ++level) {
       if (&seed == &facade_->prepared_amr_block_state(runtime_block, level))
         identity.family = Family::State;
-    }
-    if (!active_attempt_states_.empty()) {
-      const field_type* const attempt =
-          active_attempt_states_.at(static_cast<std::size_t>(runtime_block));
-      if (attempt != nullptr && &seed == attempt)
+      if (const field_type* attempt = live_attempt_state_(runtime_block, level);
+          attempt != nullptr && &seed == attempt)
         identity.family = Family::State;
     }
     for (const auto& [key, scratch] : scratches_) {
@@ -146,6 +141,7 @@ void for_each_owner_active_level_(int program_block, const field_type& left,
                                " aliases multiple AMR Program field identities");
       identity.family = Family::Scratch;
       identity.scratch_kind = static_cast<int>(std::get<0>(key));
+      identity.direct_level = std::get<1>(key);
       identity.scratch_owner = std::get<2>(key);
       identity.scratch_value_id = std::get<3>(key);
       identity.scratch_subslot = std::get<4>(key);
@@ -189,13 +185,9 @@ void for_each_owner_active_level_(int program_block, const field_type& left,
     const field_type& accepted = facade_->prepared_amr_block_state(runtime_block, level);
     const field_type* current = nullptr;
     if (identity.family == Family::State) {
-      if (!active_attempt_states_.empty() && level == active_level_) {
-        current = active_attempt_states_.at(static_cast<std::size_t>(runtime_block));
-        if (current == nullptr)
-          throw std::logic_error(std::string(role) + " attempt state is null");
-      } else {
+      current = live_attempt_state_(runtime_block, level);
+      if (current == nullptr)
         current = &accepted;
-      }
     } else if (identity.family == Family::Scratch) {
       for (const auto& [key, scratch] : scratches_) {
         if (static_cast<int>(std::get<0>(key)) == identity.scratch_kind &&
@@ -231,7 +223,21 @@ void for_each_owner_active_level_(int program_block, const field_type& left,
   const std::optional<Identity> right_identity =
       right == nullptr ? std::nullopt
                        : std::optional<Identity>(classify(*right, "AMR Program reduction"));
+  // State and history reductions cover every live level.  A Program scratch or a
+  // layout-authenticated direct field is produced on one active_level_ at a time
+  // (the generated body walks for_each_program_resource_level).  Reducing the
+  // same SSA id across leftover sibling-level scratches would mix stale values
+  // from the previous level iteration into the current guard or CFL scalar.
+  const auto covers_level = [&](const Identity& identity, int level) {
+    if (identity.family == Family::Scratch || identity.family == Family::Direct)
+      return level == identity.direct_level;
+    return true;
+  };
   for (int level = 0; level < levels; ++level) {
+    if (!covers_level(left_identity, level))
+      continue;
+    if (right_identity && !covers_level(*right_identity, level))
+      continue;
     const field_type& accepted = facade_->prepared_amr_block_state(runtime_block, level);
     const field_type& left_field = resolve(left, left_identity, level, "AMR Program reduction");
     const field_type* right_field = nullptr;

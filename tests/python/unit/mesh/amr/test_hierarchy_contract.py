@@ -346,6 +346,22 @@ def test_provider_refuses_anisotropy_3d_and_three_levels_with_capability_evidenc
     assert dimension.value.evidence["requested_dimension"] == 3
 
 
+@pytest.mark.parametrize(
+    ("dimension", "ratio"),
+    ((1, (2,)), (2, (2, 2)), (3, (2, 2, 2))),
+)
+def test_hierarchy_resolves_exact_rank_isotropic_defaults(dimension, ratio) -> None:
+    transitions = (LevelTransition(0, 1, ratio, ratio, 2),)
+    plan = _plan(transitions=transitions, nesting=_nesting(dimension))
+    resolved = resolve_hierarchy(
+        plan,
+        _provider(dimensions=(1, 2, 3), levels=2),
+        _context(plan.regrid.schedule.clock),
+    )
+    assert resolved.plan.dimension == dimension
+    assert resolved.plan.transitions[0].ratio == ratio
+
+
 def test_nesting_and_dynamic_provider_requirements_fail_before_artifact() -> None:
     inadequate = _plan(
         transitions=(

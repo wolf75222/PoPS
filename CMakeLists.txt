@@ -424,6 +424,49 @@ if(POPS_USE_HDF5)
     "Parallel HDF5 found (${HDF5_VERSION}) : enabling native collective DataWriter")
 endif()
 
+# FFTW3 is an optional production radix backend for PoissonFFT<Dim>. Discovery is fail-closed on
+# CONDA_PREFIX / POPS_FFTW_ROOT / FFTW_ROOT only: a Homebrew or other host FFTW is not an accidental
+# dependency. When the header is absent, the in-tree radix-2 + diagnosed direct-DFT path remains.
+set(POPS_HAS_FFTW OFF)
+set(_pops_fftw_root "")
+if(DEFINED ENV{POPS_FFTW_ROOT} AND EXISTS "$ENV{POPS_FFTW_ROOT}/include/fftw3.h")
+  set(_pops_fftw_root "$ENV{POPS_FFTW_ROOT}")
+elseif(DEFINED FFTW_ROOT AND EXISTS "${FFTW_ROOT}/include/fftw3.h")
+  set(_pops_fftw_root "${FFTW_ROOT}")
+elseif(DEFINED ENV{CONDA_PREFIX} AND EXISTS "$ENV{CONDA_PREFIX}/include/fftw3.h")
+  set(_pops_fftw_root "$ENV{CONDA_PREFIX}")
+else()
+  foreach(_pops_prefix IN LISTS CMAKE_PREFIX_PATH)
+    if(EXISTS "${_pops_prefix}/include/fftw3.h")
+      set(_pops_fftw_root "${_pops_prefix}")
+      break()
+    endif()
+  endforeach()
+endif()
+if(_pops_fftw_root)
+  find_library(FFTW3_LIBRARY
+    NAMES fftw3
+    HINTS "${_pops_fftw_root}/lib" "${_pops_fftw_root}/lib64"
+    NO_DEFAULT_PATH)
+  if(FFTW3_LIBRARY)
+    target_include_directories(pops INTERFACE "${_pops_fftw_root}/include")
+    target_link_libraries(pops INTERFACE "${FFTW3_LIBRARY}")
+    target_compile_definitions(pops INTERFACE POPS_HAS_FFTW)
+    set(POPS_HAS_FFTW ON)
+    message(STATUS
+      "FFTW3 found (${_pops_fftw_root}) : PoissonFFT local-axis production radix backend")
+  else()
+    message(STATUS
+      "FFTW3 header at ${_pops_fftw_root}/include/fftw3.h but libfftw3 was not found; "
+      "PoissonFFT keeps the in-tree radix-2 + diagnosed direct-DFT backend")
+  endif()
+else()
+  message(STATUS
+    "FFTW3 not found in CONDA_PREFIX/POPS_FFTW_ROOT/FFTW_ROOT; "
+    "PoissonFFT keeps the in-tree radix-2 + diagnosed direct-DFT backend "
+    "(host/system FFTW is ignored)")
+endif()
+
 # One concrete MPI ABI identity for exported C++ consumers and runtime-compiled components. A
 # parent project may already own an unrelated MPI::MPI_CXX target; only PoPS' explicit feature state
 # authorizes consuming it or exporting POPS_MPI_ABI.
