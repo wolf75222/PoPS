@@ -636,7 +636,7 @@ class PreparedAmrGhostFill {
           if (post_code == MPI_SUCCESS)
             post_code =
                 MPI_Irecv(peer.host_receive.data(), static_cast<int>(peer.receive->elements),
-                          MPI_DOUBLE, peer.mpi_rank, ExecutionLane::parallel_copy_message_tag,
+                          pops::mpi_real_datatype(), peer.mpi_rank, ExecutionLane::parallel_copy_message_tag,
                           lane->native_handle(), &receive_requests[receive_index]);
           ++receive_index;
         }
@@ -649,7 +649,7 @@ class PreparedAmrGhostFill {
         if (peer.send != nullptr) {
           if (post_code == MPI_SUCCESS)
             post_code =
-                MPI_Isend(peer.host_send.data(), static_cast<int>(peer.send->elements), MPI_DOUBLE,
+                MPI_Isend(peer.host_send.data(), static_cast<int>(peer.send->elements), pops::mpi_real_datatype(),
                           peer.mpi_rank, ExecutionLane::parallel_copy_message_tag,
                           lane->native_handle(), &send_requests[send_index]);
           ++send_index;
@@ -667,7 +667,7 @@ class PreparedAmrGhostFill {
           if (peer.receive != nullptr) {
             int count = MPI_UNDEFINED;
             const MPI_Status& received = receive_statuses[status++];
-            if (MPI_Get_count(&received, MPI_DOUBLE, &count) != MPI_SUCCESS ||
+            if (MPI_Get_count(&received, pops::mpi_real_datatype(), &count) != MPI_SUCCESS ||
                 received.MPI_SOURCE != peer.mpi_rank ||
                 received.MPI_TAG != ExecutionLane::parallel_copy_message_tag ||
                 count != static_cast<int>(peer.receive->elements)) {

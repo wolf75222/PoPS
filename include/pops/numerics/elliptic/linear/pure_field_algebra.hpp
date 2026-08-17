@@ -72,8 +72,8 @@ struct ExactValueMismatchKernel {
   FieldView<const Real, Dim> left, right;
   int component;
   POPS_HD Real operator()(const Index<Dim>& index) const {
-    const std::uint64_t left_bits = Kokkos::bit_cast<std::uint64_t>(left(index, component));
-    const std::uint64_t right_bits = Kokkos::bit_cast<std::uint64_t>(right(index, component));
+    const RealBits left_bits = Kokkos::bit_cast<RealBits>(left(index, component));
+    const RealBits right_bits = Kokkos::bit_cast<RealBits>(right(index, component));
     return left_bits == right_bits ? Real(0) : Real(1);
   }
 };
@@ -130,7 +130,7 @@ Real local_max_abs(const MultiFab<Dim>& field) {
 
 template <int Dim>
 bool local_exact_values_equal(const MultiFab<Dim>& left, const MultiFab<Dim>& right) {
-  static_assert(sizeof(Real) == sizeof(std::uint64_t));
+  static_assert(sizeof(Real) == sizeof(RealBits));
   if (left.layout() != right.layout() || left.distribution() != right.distribution() ||
       left.local_rank() != right.local_rank() || left.ncomp() != right.ncomp() ||
       left.local_size() != right.local_size())

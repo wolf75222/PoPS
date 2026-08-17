@@ -549,6 +549,11 @@ set(POPS_CPP_STANDARD_TESTS
 foreach(_test IN LISTS POPS_CPP_STANDARD_TESTS)
   pops_add_test(${_test})
 endforeach()
+
+# Header-only binary32 Poisson residual. Must not link double-compiled runtime objects.
+pops_test_source(_src test_float32_poisson_residual)
+pops_add_gtest_suite(NAME test_float32_poisson_residual SOURCES "${_src}"
+  COMPILE_DEFINITIONS POPS_REAL_TYPE=float)
 # The generic hierarchy tensor-provider contract is owned by AmrSystem at runtime.  Keep the test in
 # the standard inventory, but link the AMR facade implementation that supplies its provider registry.
 target_link_libraries(test_amr_tensor_fac_provider PRIVATE pops_runtime_amr)

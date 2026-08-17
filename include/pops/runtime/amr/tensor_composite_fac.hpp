@@ -935,7 +935,7 @@ class FullTensorCompositeFac {
 #ifdef POPS_HAS_MPI
         if (lane->size() > 1) {
           const int code = MPI_Bcast(patch.broadcast_buffer.data(),
-                                     static_cast<int>(patch.broadcast_buffer.size()), MPI_DOUBLE,
+                                     static_cast<int>(patch.broadcast_buffer.size()), pops::mpi_real_datatype(),
                                      root, lane->native_handle());
           if (all_reduce_max(code == MPI_SUCCESS ? 0L : 1L, *lane) != 0)
             throw std::runtime_error(

@@ -82,6 +82,7 @@ set(POPS_CPP_TEST_SOURCE_test_fallback_diagnostics "tests/cpp/unit/numerics/test
 set(POPS_CPP_TEST_SOURCE_test_copy_schedule_cache "tests/cpp/unit/mesh/test_copy_schedule_cache.cpp")
 set(POPS_CPP_TEST_SOURCE_test_fill_boundary "tests/cpp/unit/mesh/test_fill_boundary.cpp")
 set(POPS_CPP_TEST_SOURCE_test_fill_boundary_cache "tests/cpp/unit/mesh/test_fill_boundary_cache.cpp")
+set(POPS_CPP_TEST_SOURCE_test_float32_poisson_residual "tests/cpp/unit/elliptic/test_float32_poisson_residual.cpp")
 set(POPS_CPP_TEST_SOURCE_test_prepared_hyperbolic_boundary "tests/cpp/unit/mesh/test_prepared_hyperbolic_boundary.cpp")
 set(POPS_CPP_TEST_SOURCE_test_prepared_embedded_boundary_nd "tests/cpp/unit/runtime/test_prepared_embedded_boundary_nd.cpp")
 set(POPS_CPP_TEST_SOURCE_test_prepared_stream_executor "tests/cpp/unit/runtime/test_prepared_stream_executor.cpp")

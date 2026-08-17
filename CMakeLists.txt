@@ -43,6 +43,13 @@ endif()
 set_property(CACHE POPS_NATIVE_DIM PROPERTY STRINGS 1 2 3)
 message(STATUS "PoPS native spatial specialization: Dim=${POPS_NATIVE_DIM}")
 
+set(POPS_REAL_TYPE "double" CACHE STRING "C++ type backing pops::Real (double or float)")
+set_property(CACHE POPS_REAL_TYPE PROPERTY STRINGS double float)
+if(NOT POPS_REAL_TYPE STREQUAL "double" AND NOT POPS_REAL_TYPE STREQUAL "float")
+  message(FATAL_ERROR "POPS_REAL_TYPE must be double or float")
+endif()
+message(STATUS "PoPS Real specialization: ${POPS_REAL_TYPE}")
+
 # Backends par VARIABLE D'ENVIRONNEMENT (pattern WarpX/pyAMReX) : permet `POPS_USE_KOKKOS=ON
 # Kokkos_ROOT=$CONDA_PREFIX pip install .` sans toucher aux flags CMake (pip ne propage pas de
 # -D, mais propage l'environnement ; <Pkg>_ROOT est lu nativement par find_package). La graine
@@ -161,6 +168,9 @@ target_include_directories(pops INTERFACE
 )
 target_compile_features(pops INTERFACE cxx_std_${POPS_CXX_STD})
 target_compile_definitions(pops INTERFACE POPS_NATIVE_DIM=${POPS_NATIVE_DIM})
+if(NOT POPS_REAL_TYPE STREQUAL "double")
+  target_compile_definitions(pops INTERFACE POPS_REAL_TYPE=${POPS_REAL_TYPE})
+endif()
 
 # Hints libomp pour AppleClang (qui ne trouve pas libomp seul). Sous Kokkos-only il reste UN
 # consommateur : une install Kokkos batie avec Kokkos_ENABLE_OPENMP propage

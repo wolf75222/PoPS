@@ -1301,8 +1301,10 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             platform="host",
             status="unavailable",
             limitation=(
-                "PrecisionPolicy is representable, but the native providers currently "
-                "instantiate pops::Real as binary64 only"
+                "PrecisionPolicy is representable, but the installed Python ABI still "
+                "instantiates pops::Real as binary64 only; a compile-time "
+                "POPS_REAL_TYPE=float / --float32 C++ specialization exists, and mixed "
+                "precision is not shipped"
             ),
             requested="precision=single or precision=mixed",
             available_route="precision=double",

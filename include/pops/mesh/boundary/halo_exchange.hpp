@@ -177,7 +177,7 @@ class HaloExchange {
       }
       receive_requests_.push_back(MPI_REQUEST_NULL);
       receive_post_code = MPI_Irecv(
-          peer.host_receive.data(), static_cast<int>(peer.receive_plan->elements), MPI_DOUBLE,
+          peer.host_receive.data(), static_cast<int>(peer.receive_plan->elements), mpi_real_datatype(),
           peer.mpi_rank, context_.tag, lane_->native_handle(), &receive_requests_.back());
       if (receive_post_code != MPI_SUCCESS)
         receive_requests_.pop_back();
@@ -200,7 +200,7 @@ class HaloExchange {
       }
       send_requests_.push_back(MPI_REQUEST_NULL);
       send_post_code =
-          MPI_Isend(peer.host_send.data(), static_cast<int>(peer.send_plan->elements), MPI_DOUBLE,
+          MPI_Isend(peer.host_send.data(), static_cast<int>(peer.send_plan->elements), mpi_real_datatype(),
                     peer.mpi_rank, context_.tag, lane_->native_handle(), &send_requests_.back());
       if (send_post_code != MPI_SUCCESS)
         send_requests_.pop_back();
@@ -681,7 +681,7 @@ class HaloExchange {
         continue;
       const MPI_Status& status = receive_statuses_[status_index++];
       int count = MPI_UNDEFINED;
-      const int count_code = MPI_Get_count(&status, MPI_DOUBLE, &count);
+      const int count_code = MPI_Get_count(&status, mpi_real_datatype(), &count);
       if (count_code != MPI_SUCCESS || count == MPI_UNDEFINED ||
           status.MPI_SOURCE != peer.mpi_rank || status.MPI_TAG != context_.tag ||
           count != static_cast<int>(peer.receive_plan->elements))

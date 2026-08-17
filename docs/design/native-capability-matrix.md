@@ -439,7 +439,9 @@ future validators:
   can execute on an authenticated `MPI_IDENT`/`MPI_CONGRUENT` lane, but admission must still compare
   that lane with the process-world-indexed field ownership. Subgroups and reordered communicators
   are refused before kernel launch.
-- `precision:single_or_mixed`: `pops::Real` is `double`; single or mixed precision is unavailable.
+- `precision:single_or_mixed`: the installed Python ABI still instantiates `pops::Real` as
+  binary64. A compile-time `POPS_REAL_TYPE=float` / `--float32` C++ specialization exists; mixed
+  precision and a second native Python leaf are not shipped, so the route stays unavailable.
 - `runtime:kokkos_lifecycle`: `runtime_environment_report()` exposes whether PoPS will lazily
   initialize Kokkos, has initialized it, or is attached to an externally initialized runtime.
 - `runtime:allocator_lifetime`: Kokkos builds use a process-lifetime managed arena whose blocks are

@@ -17,32 +17,70 @@
 
 namespace pops {
 
-// Newton / IMEX source solve. These defaults are the converged double-precision contract: every
-// candidate must satisfy the mixed residual tolerance before it may be published.
-static_assert(std::is_same_v<Real, double>,
-              "implicit Newton defaults require double precision; define a precision-aware "
-              "tolerance contract before changing pops::Real");
+// Newton / IMEX source solve. Binary64 values are the historical contract; binary32 uses
+// working-precision tolerances so a --float32 build does not inherit unrepresentable defaults.
+namespace numerical_defaults_detail {
+template <class T>
+struct PrecisionDefaults;
+
+template <>
+struct PrecisionDefaults<double> {
+  static constexpr double newton_rel_tol = 1e-10;
+  static constexpr double newton_abs_tol = 1e-12;
+  static constexpr double newton_fd_eps = 1e-7;
+  static constexpr double newton_finite_abs_limit = 1e300;
+  static constexpr double krylov_rel_tol = 1e-10;
+  static constexpr double krylov_breakdown_tiny = 1e-300;
+  static constexpr double cg_rel_tol = 1e-10;
+  static constexpr double mg_rel_tol = 1e-8;
+  static constexpr double fac_rel_tol = 1e-9;
+  static constexpr double fac_initial_coarse_rel_tol = 1e-12;
+};
+
+template <>
+struct PrecisionDefaults<float> {
+  static constexpr float newton_rel_tol = 1e-5f;
+  static constexpr float newton_abs_tol = 1e-6f;
+  static constexpr float newton_fd_eps = 1e-3f;
+  static constexpr float newton_finite_abs_limit = 1e30f;
+  static constexpr float krylov_rel_tol = 1e-5f;
+  static constexpr float krylov_breakdown_tiny = 1e-30f;
+  static constexpr float cg_rel_tol = 1e-5f;
+  static constexpr float mg_rel_tol = 1e-4f;
+  static constexpr float fac_rel_tol = 1e-4f;
+  static constexpr float fac_initial_coarse_rel_tol = 1e-5f;
+};
+}  // namespace numerical_defaults_detail
+
 inline constexpr int kNewtonDefaultMaxIters = 25;
-inline constexpr Real kNewtonDefaultRelTol = Real(1e-10);
-inline constexpr Real kNewtonDefaultAbsTol = Real(1e-12);
-inline constexpr Real kNewtonDefaultFdEps = Real(1e-7);
+inline constexpr Real kNewtonDefaultRelTol =
+    numerical_defaults_detail::PrecisionDefaults<Real>::newton_rel_tol;
+inline constexpr Real kNewtonDefaultAbsTol =
+    numerical_defaults_detail::PrecisionDefaults<Real>::newton_abs_tol;
+inline constexpr Real kNewtonDefaultFdEps =
+    numerical_defaults_detail::PrecisionDefaults<Real>::newton_fd_eps;
 inline constexpr Real kNewtonDefaultDamping = Real(1);
-inline constexpr Real kNewtonFiniteAbsLimit = Real(1e300);
+inline constexpr Real kNewtonFiniteAbsLimit =
+    numerical_defaults_detail::PrecisionDefaults<Real>::newton_finite_abs_limit;
 
 // Krylov family defaults.
-inline constexpr Real kKrylovDefaultRelTol = Real(1e-10);
+inline constexpr Real kKrylovDefaultRelTol =
+    numerical_defaults_detail::PrecisionDefaults<Real>::krylov_rel_tol;
 inline constexpr int kPolarTensorKrylovDefaultMaxIters = 400;
 inline constexpr int kSchurKrylovPolarMaxIters = 600;
-inline constexpr Real kKrylovBreakdownTiny = Real(1e-300);
+inline constexpr Real kKrylovBreakdownTiny =
+    numerical_defaults_detail::PrecisionDefaults<Real>::krylov_breakdown_tiny;
 
 // Exact-ranked constant-coefficient Cartesian conjugate-gradient defaults. These belong to the
 // uniform System backend and are intentionally distinct from geometric multigrid V-cycle knobs.
-inline constexpr Real kCartesianCGDefaultRelTol = Real(1e-10);
+inline constexpr Real kCartesianCGDefaultRelTol =
+    numerical_defaults_detail::PrecisionDefaults<Real>::cg_rel_tol;
 inline constexpr Real kCartesianCGDefaultAbsTol = Real(0);
 inline constexpr int kCartesianCGDefaultMaxIterations = 2000;
 
 // Geometric multigrid defaults.
-inline constexpr Real kMGDefaultRelTol = Real(1e-8);
+inline constexpr Real kMGDefaultRelTol =
+    numerical_defaults_detail::PrecisionDefaults<Real>::mg_rel_tol;
 inline constexpr int kMGDefaultMaxCycles = 50;
 inline constexpr Real kMGDefaultAbsTol = Real(0);
 inline constexpr int kMGDefaultMinCoarse = 2;
@@ -58,9 +96,11 @@ inline constexpr int kMGDefaultCoarseThreshold = 0;
 // Composite FAC defaults.
 inline constexpr int kFACDefaultMaxIters = 30;
 inline constexpr int kFACDefaultFineSweeps = 400;
-inline constexpr Real kFACDefaultRelTol = Real(1e-9);
+inline constexpr Real kFACDefaultRelTol =
+    numerical_defaults_detail::PrecisionDefaults<Real>::fac_rel_tol;
 inline constexpr Real kFACDefaultAbsTol = Real(0);
-inline constexpr Real kFACInitialCoarseRelTol = Real(1e-12);
+inline constexpr Real kFACInitialCoarseRelTol =
+    numerical_defaults_detail::PrecisionDefaults<Real>::fac_initial_coarse_rel_tol;
 inline constexpr Real kFACInitialCoarseAbsTol = Real(0);
 inline constexpr int kFACInitialCoarseMaxCycles = 100;
 

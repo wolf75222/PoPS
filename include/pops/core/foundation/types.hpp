@@ -4,8 +4,9 @@
 /// @brief Base scalar types and the POPS_HD macro (host+device portability). Minimal foundation
 ///        with no external dependency; the switch to pde_core::Real waits for the distributed mesh.
 ///
-/// `Real`: centralized double alias. All numerical computation uses it; do not write `double`
-/// directly in the physics layer or the kernels.
+/// `Real`: centralized scalar. Default binary64; a `--float32` / `-DPOPS_REAL_TYPE=float` build
+/// selects binary32. All numerical computation uses it; do not write `double` directly in the
+/// physics layer or the kernels.
 ///
 /// `POPS_HD`: annotation for functions called inside Kokkos kernels on host AND device.
 /// - Kokkos: KOKKOS_FUNCTION (portable Cuda/HIP/SYCL/CPU, without manual CUDA syntax).
@@ -25,9 +26,21 @@
 #define POPS_HD
 #endif
 
+#include <cstdint>
+#include <type_traits>
+
+#if !defined(POPS_REAL_TYPE)
+#define POPS_REAL_TYPE double
+#endif
+
 namespace pops {
 
-using Real = double;
+using Real = POPS_REAL_TYPE;
+static_assert(std::is_same_v<Real, double> || std::is_same_v<Real, float>,
+              "pops::Real must be binary64 or binary32");
+inline constexpr bool kRealIsBinary64 = std::is_same_v<Real, double>;
+using RealBits = std::conditional_t<kRealIsBinary64, std::uint64_t, std::uint32_t>;
+static_assert(sizeof(Real) == sizeof(RealBits));
 
 /// Speed FLOOR for the CFL step policies (audit 2026-06, explicit constant instead of the
 /// scattered literal 1e-30): w = max(reduced_speed, kCflSpeedFloor) avoids the division by zero
@@ -36,7 +49,7 @@ using Real = double;
 /// behavior assumed (such a step transports nothing); diagnose it via last_dt_bound() ==
 /// "degenerate" on the System side. Shared by System::step_cfl and low-level adaptive/AMR CFL
 /// policies.
-inline constexpr Real kCflSpeedFloor = Real(1e-30);
+inline constexpr Real kCflSpeedFloor = kRealIsBinary64 ? Real(1e-30) : Real(1e-15);
 
 /// Speed FLOOR for the AMR drift / wave-speed reductions (ADC-643, single source of the scattered
 /// 1e-12): the seed and post-reduction clamp of amr_max_drift_speed / AmrCouplerMP::max_drift_speed /

@@ -19,6 +19,7 @@
 #   bash scripts/build_python.sh --dim 2 --clean    # drop the scikit-build wheel cache first
 #   bash scripts/build_python.sh --dim 2 --fresh    # --clean + ccache -C: a true COLD compile
 #   bash scripts/build_python.sh --dim 3 --mpi      # MPI + native parallel-HDF5, exactly Dim=3
+#   bash scripts/build_python.sh --dim 2 --float32  # compile-time pops::Real = float (not the default ABI)
 #   bash scripts/build_python.sh --dim 2 --wheel-dir /tmp/wheels
 #                                           # build, retain, then install that exact wheel
 #   POPS_HEAVY_MODULE_TU_POOL=4 bash scripts/build_python.sh --dim 2  # pin the pool
@@ -35,6 +36,7 @@ source "$HERE/scripts/conda_runtime.sh"
 DO_CLEAN=0
 DO_FRESH=0
 WITH_MPI=0
+WITH_FLOAT32=0
 WHEEL_DIR=""
 CALLER_NATIVE_DIM="${POPS_NATIVE_DIM-}"
 CLI_NATIVE_DIM=""
@@ -44,6 +46,7 @@ while [[ $# -gt 0 ]]; do
     --clean) DO_CLEAN=1 ;;
     --fresh) DO_CLEAN=1; DO_FRESH=1 ;;
     --mpi)   WITH_MPI=1 ;;
+    --float32) WITH_FLOAT32=1 ;;
     --dim)
       shift
       [[ $# -gt 0 ]] || { echo "--dim requires 1, 2, or 3" >&2; exit 2; }
@@ -55,10 +58,10 @@ while [[ $# -gt 0 ]]; do
       WHEEL_DIR="$1"
       ;;
     -h|--help)
-      sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'
       exit 0 ;;
     --) shift; EXTRA_PIP=("$@"); break ;;
-    *) echo "unknown argument: $1 (use --dim N | --clean | --fresh | --mpi | --wheel-dir DIR | --help, or -- <pip args>)" >&2
+    *) echo "unknown argument: $1 (use --dim N | --clean | --fresh | --mpi | --float32 | --wheel-dir DIR | --help, or -- <pip args>)" >&2
        exit 2 ;;
   esac
   shift
@@ -206,6 +209,12 @@ else
     -C cmake.define.POPS_USE_MPI=OFF
     -C cmake.define.POPS_USE_HDF5=OFF
   )
+fi
+if [[ $WITH_FLOAT32 -eq 1 ]]; then
+  cmake_settings+=(
+    -C cmake.define.POPS_REAL_TYPE=float
+  )
+  echo "Real specialization: float (binary32); Python ABI remains unclosed"
 fi
 if [[ -n "$WHEEL_DIR" ]]; then
   mkdir -p "$WHEEL_DIR"

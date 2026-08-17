@@ -346,8 +346,10 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
                        "MPI_COMM_WORLD or serial",
                        "use ExecutionContext.mpi_world() or a serial context"),
       capability_route("precision:single_or_mixed", "unavailable",
-                       "PrecisionPolicy is representable, but the native providers currently "
-                       "instantiate pops::Real as binary64 only",
+                       "PrecisionPolicy is representable, but the installed Python ABI still "
+                       "instantiates pops::Real as binary64 only; a compile-time "
+                       "POPS_REAL_TYPE=float / --float32 C++ specialization exists, and mixed "
+                       "precision is not shipped",
                        kLayoutRouteTokensCsv, "none", "host", mpi, gpu,
                        "precision=single or precision=mixed", "precision=double",
                        "use double precision or implement a non-binary64 native provider"),

@@ -25,6 +25,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -865,13 +866,25 @@ class ObserverMpiLane {
 inline void barrier(const ExecutionLane& lane) {
   barrier(lane.communicator());
 }
-inline double all_reduce_sum(double value, const ExecutionLane& lane) {
+inline Real all_reduce_sum(Real value, const ExecutionLane& lane) {
   return all_reduce_sum(value, lane.communicator());
 }
-inline double all_reduce_max(double value, const ExecutionLane& lane) {
+inline Real all_reduce_max(Real value, const ExecutionLane& lane) {
   return all_reduce_max(value, lane.communicator());
 }
-inline double all_reduce_min(double value, const ExecutionLane& lane) {
+inline Real all_reduce_min(Real value, const ExecutionLane& lane) {
+  return all_reduce_min(value, lane.communicator());
+}
+template <class T, std::enable_if_t<detail::kControlDouble<T>, int> = 0>
+inline double all_reduce_sum(T value, const ExecutionLane& lane) {
+  return all_reduce_sum(value, lane.communicator());
+}
+template <class T, std::enable_if_t<detail::kControlDouble<T>, int> = 0>
+inline double all_reduce_max(T value, const ExecutionLane& lane) {
+  return all_reduce_max(value, lane.communicator());
+}
+template <class T, std::enable_if_t<detail::kControlDouble<T>, int> = 0>
+inline double all_reduce_min(T value, const ExecutionLane& lane) {
   return all_reduce_min(value, lane.communicator());
 }
 inline long all_reduce_sum(long value, const ExecutionLane& lane) {
@@ -883,16 +896,32 @@ inline long all_reduce_max(long value, const ExecutionLane& lane) {
 inline long all_reduce_min(long value, const ExecutionLane& lane) {
   return all_reduce_min(value, lane.communicator());
 }
-inline void all_reduce_sum_inplace(double* buffer, int count, const ExecutionLane& lane) {
+inline void all_reduce_sum_inplace(Real* buffer, int count, const ExecutionLane& lane) {
   all_reduce_sum_inplace(buffer, count, lane.communicator());
 }
-inline void all_reduce_sum_inplace(double* buffer, std::size_t count, const ExecutionLane& lane) {
+inline void all_reduce_sum_inplace(Real* buffer, std::size_t count, const ExecutionLane& lane) {
   all_reduce_sum_inplace(buffer, count, lane.communicator());
 }
-inline void all_reduce_max_inplace(double* buffer, int count, const ExecutionLane& lane) {
+template <class T, std::enable_if_t<detail::kControlDouble<T>, int> = 0>
+inline void all_reduce_sum_inplace(T* buffer, int count, const ExecutionLane& lane) {
+  all_reduce_sum_inplace(buffer, count, lane.communicator());
+}
+template <class T, std::enable_if_t<detail::kControlDouble<T>, int> = 0>
+inline void all_reduce_sum_inplace(T* buffer, std::size_t count, const ExecutionLane& lane) {
+  all_reduce_sum_inplace(buffer, count, lane.communicator());
+}
+inline void all_reduce_max_inplace(Real* buffer, int count, const ExecutionLane& lane) {
   all_reduce_max_inplace(buffer, count, lane.communicator());
 }
-inline void all_reduce_max_inplace(double* buffer, std::size_t count, const ExecutionLane& lane) {
+inline void all_reduce_max_inplace(Real* buffer, std::size_t count, const ExecutionLane& lane) {
+  all_reduce_max_inplace(buffer, count, lane.communicator());
+}
+template <class T, std::enable_if_t<detail::kControlDouble<T>, int> = 0>
+inline void all_reduce_max_inplace(T* buffer, int count, const ExecutionLane& lane) {
+  all_reduce_max_inplace(buffer, count, lane.communicator());
+}
+template <class T, std::enable_if_t<detail::kControlDouble<T>, int> = 0>
+inline void all_reduce_max_inplace(T* buffer, std::size_t count, const ExecutionLane& lane) {
   all_reduce_max_inplace(buffer, count, lane.communicator());
 }
 inline void all_reduce_or_inplace(char* buffer, std::size_t count, const ExecutionLane& lane) {

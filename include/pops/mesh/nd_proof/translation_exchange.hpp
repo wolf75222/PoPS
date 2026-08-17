@@ -147,7 +147,7 @@ class TranslationExchange {
         }
         MPI_Request request = MPI_REQUEST_NULL;
         receive_post_code =
-            MPI_Irecv(peer.host_receive.data(), static_cast<int>(peer.receive_elements), MPI_DOUBLE,
+            MPI_Irecv(peer.host_receive.data(), static_cast<int>(peer.receive_elements), pops::mpi_real_datatype(),
                       peer.mpi_rank, context_.tag, lane_->native_handle(), &request);
         if (receive_post_code == MPI_SUCCESS)
           receive_requests_.push_back(request);
@@ -169,7 +169,7 @@ class TranslationExchange {
         }
         MPI_Request request = MPI_REQUEST_NULL;
         send_post_code =
-            MPI_Isend(peer.host_send.data(), static_cast<int>(peer.send_elements), MPI_DOUBLE,
+            MPI_Isend(peer.host_send.data(), static_cast<int>(peer.send_elements), pops::mpi_real_datatype(),
                       peer.mpi_rank, context_.tag, lane_->native_handle(), &request);
         if (send_post_code == MPI_SUCCESS)
           send_requests_.push_back(request);

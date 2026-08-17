@@ -5,7 +5,7 @@
 ///
 /// Layer: `include/pops/parallel`.
 /// Role: expose my_rank()/n_ranks() and a fixed set of global reductions (sum/min/max on
-/// double, long and uint64, in-place sum/max on a double array, in-place OR on a marker array)
+/// Real, long and uint64, in-place sum/max on a Real array, in-place OR on a marker array)
 /// behind a single facade. Without POPS_HAS_MPI everything compiles to a serial identity.  A few
 /// performance-critical native algorithms use MPI directly; the process contract below therefore
 /// requires full MPI thread support rather than pretending that a header-local lock can serialize
@@ -26,6 +26,8 @@
 #include <mpi.h>
 #endif
 
+#include <pops/core/foundation/types.hpp>
+
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
@@ -39,6 +41,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -51,6 +54,9 @@ inline std::atomic<std::uint64_t>& exact_consensus_dynamic_storage_counter() noe
   return value;
 }
 
+template <class T>
+inline constexpr bool kControlDouble = std::is_same_v<T, double> && !std::is_same_v<Real, double>;
+
 }  // namespace detail
 
 /// Diagnostic count of calls to the exact-consensus helper that materializes dynamic vectors.
@@ -58,6 +64,17 @@ inline std::atomic<std::uint64_t>& exact_consensus_dynamic_storage_counter() noe
 inline std::uint64_t exact_consensus_dynamic_storage_calls() noexcept {
   return detail::exact_consensus_dynamic_storage_counter().load(std::memory_order_relaxed);
 }
+
+#ifdef POPS_HAS_MPI
+inline MPI_Datatype mpi_real_datatype() {
+  if constexpr (std::is_same_v<Real, double>)
+    return MPI_DOUBLE;
+  else if constexpr (std::is_same_v<Real, float>)
+    return MPI_FLOAT;
+  else
+    static_assert(!sizeof(Real), "pops::Real must be float or double for MPI reductions");
+}
+#endif
 
 #ifdef POPS_HAS_MPI
 
@@ -207,21 +224,21 @@ inline void barrier() {
     detail::require_mpi_success(MPI_Barrier(MPI_COMM_WORLD), "MPI_Barrier");
 }
 
-inline double all_reduce_sum(double x) {
+inline Real all_reduce_sum(Real x) {
   if (!detail::comm_active_unlocked())
     return x;
-  double r = x;
-  detail::require_mpi_success(MPI_Allreduce(&x, &r, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD),
-                              "MPI_Allreduce(double sum)");
+  Real r = x;
+  detail::require_mpi_success(MPI_Allreduce(&x, &r, 1, mpi_real_datatype(), MPI_SUM, MPI_COMM_WORLD),
+                              "MPI_Allreduce(Real sum)");
   return r;
 }
 
-inline double all_reduce_max(double x) {
+inline Real all_reduce_max(Real x) {
   if (!detail::comm_active_unlocked())
     return x;
-  double r = x;
-  detail::require_mpi_success(MPI_Allreduce(&x, &r, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD),
-                              "MPI_Allreduce(double max)");
+  Real r = x;
+  detail::require_mpi_success(MPI_Allreduce(&x, &r, 1, mpi_real_datatype(), MPI_MAX, MPI_COMM_WORLD),
+                              "MPI_Allreduce(Real max)");
   return r;
 }
 
@@ -240,29 +257,29 @@ inline std::uint64_t all_reduce_max(std::uint64_t x) {
 // (System::add_dt_bound): the host callback is evaluated PER RANK, the global min guarantees a dt
 // IDENTICAL on all ranks (otherwise the collectives of the step -- Krylov, fill_boundary --
 // would diverge -> deadlock). In serial: identity.
-inline double all_reduce_min(double x) {
+inline Real all_reduce_min(Real x) {
   if (!detail::comm_active_unlocked())
     return x;
-  double r = x;
-  detail::require_mpi_success(MPI_Allreduce(&x, &r, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD),
-                              "MPI_Allreduce(double min)");
+  Real r = x;
+  detail::require_mpi_success(MPI_Allreduce(&x, &r, 1, mpi_real_datatype(), MPI_MIN, MPI_COMM_WORLD),
+                              "MPI_Allreduce(Real min)");
   return r;
 }
 
 // Element-by-element sum of an array, in place, on all ranks. Base brick of the
 // distributed multi-patch AMR reflux: each rank fills the contributions of
 // its local patches (0 elsewhere), all-reduce -> each rank has the complete register.
-inline void all_reduce_sum_inplace(double* buf, int n) {
+inline void all_reduce_sum_inplace(Real* buf, int n) {
   if (!detail::comm_active_unlocked() || n <= 0)
     return;
   detail::require_mpi_success(
-      MPI_Allreduce(MPI_IN_PLACE, buf, n, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD),
-      "MPI_Allreduce(double inplace sum)");
+      MPI_Allreduce(MPI_IN_PLACE, buf, n, mpi_real_datatype(), MPI_SUM, MPI_COMM_WORLD),
+      "MPI_Allreduce(Real inplace sum)");
 }
 
 // MPI collectives accept an int element count.  Chunk larger native containers instead of
 // narrowing their size or imposing an artificial INT_MAX limit on generic runtime buffers.
-inline void all_reduce_sum_inplace(double* buf, std::size_t n) {
+inline void all_reduce_sum_inplace(Real* buf, std::size_t n) {
   constexpr std::size_t max_chunk = static_cast<std::size_t>(std::numeric_limits<int>::max());
   while (n != 0) {
     const int chunk = static_cast<int>(std::min(n, max_chunk));
@@ -274,15 +291,15 @@ inline void all_reduce_sum_inplace(double* buf, std::size_t n) {
 
 /// Element-by-element maximum of an array, in place, on all ranks.  This batches related scalar
 /// convergence witnesses into one collective without changing their individual MPI_MAX semantics.
-inline void all_reduce_max_inplace(double* buf, int n) {
+inline void all_reduce_max_inplace(Real* buf, int n) {
   if (!detail::comm_active_unlocked() || n <= 0)
     return;
   detail::require_mpi_success(
-      MPI_Allreduce(MPI_IN_PLACE, buf, n, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD),
-      "MPI_Allreduce(double inplace max)");
+      MPI_Allreduce(MPI_IN_PLACE, buf, n, mpi_real_datatype(), MPI_MAX, MPI_COMM_WORLD),
+      "MPI_Allreduce(Real inplace max)");
 }
 
-inline void all_reduce_max_inplace(double* buf, std::size_t n) {
+inline void all_reduce_max_inplace(Real* buf, std::size_t n) {
   constexpr std::size_t max_chunk = static_cast<std::size_t>(std::numeric_limits<int>::max());
   while (n != 0) {
     const int chunk = static_cast<int>(std::min(n, max_chunk));
@@ -427,16 +444,16 @@ inline int n_ranks() {
   return 1;
 }
 inline void barrier() {}
-inline double all_reduce_sum(double x) {
+inline Real all_reduce_sum(Real x) {
   return x;
 }
-inline double all_reduce_max(double x) {
+inline Real all_reduce_max(Real x) {
   return x;
 }
 inline std::uint64_t all_reduce_max(std::uint64_t x) {
   return x;
 }
-inline double all_reduce_min(double x) {
+inline Real all_reduce_min(Real x) {
   return x;
 }
 inline long all_reduce_sum(long x) {
@@ -448,10 +465,10 @@ inline long all_reduce_max(long x) {
 inline long all_reduce_min(long x) {
   return x;
 }
-inline void all_reduce_sum_inplace(double*, int) {}                  // serial: identity
-inline void all_reduce_sum_inplace(double*, std::size_t) {}          // serial: identity
-inline void all_reduce_max_inplace(double*, int) {}                  // serial: identity
-inline void all_reduce_max_inplace(double*, std::size_t) {}          // serial: identity
+inline void all_reduce_sum_inplace(Real*, int) {}                    // serial: identity
+inline void all_reduce_sum_inplace(Real*, std::size_t) {}            // serial: identity
+inline void all_reduce_max_inplace(Real*, int) {}                    // serial: identity
+inline void all_reduce_max_inplace(Real*, std::size_t) {}            // serial: identity
 inline void all_reduce_or_inplace(char*, std::size_t) {}             // serial: identity
 inline void all_reduce_min_inplace(char*, std::size_t) {}            // serial: identity
 inline void all_reduce_max_inplace(char*, std::size_t) {}            // serial: identity
@@ -533,14 +550,14 @@ inline void barrier(const CommunicatorView& communicator) {
 #endif
 }
 
-inline double all_reduce_sum(double value, const CommunicatorView& communicator) {
+inline Real all_reduce_sum(Real value, const CommunicatorView& communicator) {
 #ifdef POPS_HAS_MPI
   if (!communicator.active())
     return value;
-  double result = value;
+  Real result = value;
   detail::require_mpi_success(
-      MPI_Allreduce(&value, &result, 1, MPI_DOUBLE, MPI_SUM, communicator.native_handle()),
-      "MPI_Allreduce(double sum, execution communicator)");
+      MPI_Allreduce(&value, &result, 1, mpi_real_datatype(), MPI_SUM, communicator.native_handle()),
+      "MPI_Allreduce(Real sum, execution communicator)");
   return result;
 #else
   (void)communicator;
@@ -548,14 +565,14 @@ inline double all_reduce_sum(double value, const CommunicatorView& communicator)
 #endif
 }
 
-inline double all_reduce_max(double value, const CommunicatorView& communicator) {
+inline Real all_reduce_max(Real value, const CommunicatorView& communicator) {
 #ifdef POPS_HAS_MPI
   if (!communicator.active())
     return value;
-  double result = value;
+  Real result = value;
   detail::require_mpi_success(
-      MPI_Allreduce(&value, &result, 1, MPI_DOUBLE, MPI_MAX, communicator.native_handle()),
-      "MPI_Allreduce(double max, execution communicator)");
+      MPI_Allreduce(&value, &result, 1, mpi_real_datatype(), MPI_MAX, communicator.native_handle()),
+      "MPI_Allreduce(Real max, execution communicator)");
   return result;
 #else
   (void)communicator;
@@ -578,14 +595,14 @@ inline std::uint64_t all_reduce_max(std::uint64_t value, const CommunicatorView&
 #endif
 }
 
-inline double all_reduce_min(double value, const CommunicatorView& communicator) {
+inline Real all_reduce_min(Real value, const CommunicatorView& communicator) {
 #ifdef POPS_HAS_MPI
   if (!communicator.active())
     return value;
-  double result = value;
+  Real result = value;
   detail::require_mpi_success(
-      MPI_Allreduce(&value, &result, 1, MPI_DOUBLE, MPI_MIN, communicator.native_handle()),
-      "MPI_Allreduce(double min, execution communicator)");
+      MPI_Allreduce(&value, &result, 1, mpi_real_datatype(), MPI_MIN, communicator.native_handle()),
+      "MPI_Allreduce(Real min, execution communicator)");
   return result;
 #else
   (void)communicator;
@@ -638,8 +655,106 @@ inline long all_reduce_min(long value, const CommunicatorView& communicator) {
 #endif
 }
 
-inline void all_reduce_sum_inplace(double* buffer, int count,
+inline void all_reduce_sum_inplace(Real* buffer, int count,
                                    const CommunicatorView& communicator) {
+#ifdef POPS_HAS_MPI
+  if (communicator.active() && count > 0)
+    detail::require_mpi_success(MPI_Allreduce(MPI_IN_PLACE, buffer, count, mpi_real_datatype(),
+                                              MPI_SUM, communicator.native_handle()),
+                                "MPI_Allreduce(Real inplace sum, execution communicator)");
+#else
+  (void)buffer;
+  (void)count;
+  (void)communicator;
+#endif
+}
+
+inline void all_reduce_sum_inplace(Real* buffer, std::size_t count,
+                                   const CommunicatorView& communicator) {
+  constexpr std::size_t max_chunk = static_cast<std::size_t>(std::numeric_limits<int>::max());
+  while (count != 0) {
+    const int chunk = static_cast<int>(std::min(count, max_chunk));
+    all_reduce_sum_inplace(buffer, chunk, communicator);
+    buffer += chunk;
+    count -= static_cast<std::size_t>(chunk);
+  }
+}
+
+inline void all_reduce_max_inplace(Real* buffer, int count,
+                                   const CommunicatorView& communicator) {
+#ifdef POPS_HAS_MPI
+  if (communicator.active() && count > 0)
+    detail::require_mpi_success(MPI_Allreduce(MPI_IN_PLACE, buffer, count, mpi_real_datatype(),
+                                              MPI_MAX, communicator.native_handle()),
+                                "MPI_Allreduce(Real inplace max, execution communicator)");
+#else
+  (void)buffer;
+  (void)count;
+  (void)communicator;
+#endif
+}
+
+inline void all_reduce_max_inplace(Real* buffer, std::size_t count,
+                                   const CommunicatorView& communicator) {
+  constexpr std::size_t max_chunk = static_cast<std::size_t>(std::numeric_limits<int>::max());
+  while (count != 0) {
+    const int chunk = static_cast<int>(std::min(count, max_chunk));
+    all_reduce_max_inplace(buffer, chunk, communicator);
+    buffer += chunk;
+    count -= static_cast<std::size_t>(chunk);
+  }
+}
+
+template <class T, std::enable_if_t<detail::kControlDouble<T>, int> = 0>
+inline double all_reduce_sum(T value, const CommunicatorView& communicator) {
+#ifdef POPS_HAS_MPI
+  if (!communicator.active())
+    return value;
+  double result = value;
+  detail::require_mpi_success(
+      MPI_Allreduce(&value, &result, 1, MPI_DOUBLE, MPI_SUM, communicator.native_handle()),
+      "MPI_Allreduce(double sum, execution communicator)");
+  return result;
+#else
+  (void)communicator;
+  return value;
+#endif
+}
+
+template <class T, std::enable_if_t<detail::kControlDouble<T>, int> = 0>
+inline double all_reduce_max(T value, const CommunicatorView& communicator) {
+#ifdef POPS_HAS_MPI
+  if (!communicator.active())
+    return value;
+  double result = value;
+  detail::require_mpi_success(
+      MPI_Allreduce(&value, &result, 1, MPI_DOUBLE, MPI_MAX, communicator.native_handle()),
+      "MPI_Allreduce(double max, execution communicator)");
+  return result;
+#else
+  (void)communicator;
+  return value;
+#endif
+}
+
+template <class T, std::enable_if_t<detail::kControlDouble<T>, int> = 0>
+inline double all_reduce_min(T value, const CommunicatorView& communicator) {
+#ifdef POPS_HAS_MPI
+  if (!communicator.active())
+    return value;
+  double result = value;
+  detail::require_mpi_success(
+      MPI_Allreduce(&value, &result, 1, MPI_DOUBLE, MPI_MIN, communicator.native_handle()),
+      "MPI_Allreduce(double min, execution communicator)");
+  return result;
+#else
+  (void)communicator;
+  return value;
+#endif
+}
+
+template <class T, std::enable_if_t<detail::kControlDouble<T>, int> = 0>
+inline void all_reduce_sum_inplace(T* buffer, int count, const CommunicatorView& communicator) {
 #ifdef POPS_HAS_MPI
   if (communicator.active() && count > 0)
     detail::require_mpi_success(MPI_Allreduce(MPI_IN_PLACE, buffer, count, MPI_DOUBLE, MPI_SUM,
@@ -652,7 +767,8 @@ inline void all_reduce_sum_inplace(double* buffer, int count,
 #endif
 }
 
-inline void all_reduce_sum_inplace(double* buffer, std::size_t count,
+template <class T, std::enable_if_t<detail::kControlDouble<T>, int> = 0>
+inline void all_reduce_sum_inplace(T* buffer, std::size_t count,
                                    const CommunicatorView& communicator) {
   constexpr std::size_t max_chunk = static_cast<std::size_t>(std::numeric_limits<int>::max());
   while (count != 0) {
@@ -663,8 +779,8 @@ inline void all_reduce_sum_inplace(double* buffer, std::size_t count,
   }
 }
 
-inline void all_reduce_max_inplace(double* buffer, int count,
-                                   const CommunicatorView& communicator) {
+template <class T, std::enable_if_t<detail::kControlDouble<T>, int> = 0>
+inline void all_reduce_max_inplace(T* buffer, int count, const CommunicatorView& communicator) {
 #ifdef POPS_HAS_MPI
   if (communicator.active() && count > 0)
     detail::require_mpi_success(MPI_Allreduce(MPI_IN_PLACE, buffer, count, MPI_DOUBLE, MPI_MAX,
@@ -677,7 +793,8 @@ inline void all_reduce_max_inplace(double* buffer, int count,
 #endif
 }
 
-inline void all_reduce_max_inplace(double* buffer, std::size_t count,
+template <class T, std::enable_if_t<detail::kControlDouble<T>, int> = 0>
+inline void all_reduce_max_inplace(T* buffer, std::size_t count,
                                    const CommunicatorView& communicator) {
   constexpr std::size_t max_chunk = static_cast<std::size_t>(std::numeric_limits<int>::max());
   while (count != 0) {

@@ -223,11 +223,11 @@ void require_exact_replicated_field_values_prevalidated(const MultiFab<Dim>& fie
               const int component = static_cast<int>(source / plane);
               const std::size_t cell = source - static_cast<std::size_t>(component) * plane;
               const Index<Dim> index = field_replica_index(box, cell);
-              const std::uint64_t bits = Kokkos::bit_cast<std::uint64_t>(values(index, component));
+              const RealBits bits = Kokkos::bit_cast<RealBits>(values(index, component));
               const std::size_t destination = (destination_begin + offset) * sizeof(Real);
               for (std::size_t byte = 0; byte < sizeof(Real); ++byte)
                 local_bytes[destination + byte] =
-                    static_cast<char>((bits >> (byte * 8u)) & std::uint64_t{0xff});
+                    static_cast<char>((bits >> (byte * 8u)) & RealBits{0xff});
             });
       }
       box_begin = box_end;

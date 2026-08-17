@@ -682,7 +682,7 @@ class RegionTransport {
       if (peer.receive != nullptr) {
         if (code == MPI_SUCCESS)
           code = MPI_Irecv(peer.host_receive.data(), static_cast<int>(peer.receive->elements),
-                           MPI_DOUBLE, peer.mpi_rank, ExecutionLane::parallel_copy_message_tag,
+                           pops::mpi_real_datatype(), peer.mpi_rank, ExecutionLane::parallel_copy_message_tag,
                            lane_->native_handle(), &storage_->receive_requests[receive_index]);
         ++receive_index;
       }
@@ -694,7 +694,7 @@ class RegionTransport {
     for (PeerStorage& peer : storage_->peers)
       if (peer.send != nullptr) {
         if (code == MPI_SUCCESS)
-          code = MPI_Isend(peer.host_send.data(), static_cast<int>(peer.send->elements), MPI_DOUBLE,
+          code = MPI_Isend(peer.host_send.data(), static_cast<int>(peer.send->elements), pops::mpi_real_datatype(),
                            peer.mpi_rank, ExecutionLane::parallel_copy_message_tag,
                            lane_->native_handle(), &storage_->send_requests[send_index]);
         ++send_index;
@@ -717,7 +717,7 @@ class RegionTransport {
         if (peer.receive != nullptr) {
           int count = MPI_UNDEFINED;
           const MPI_Status& status = storage_->receive_statuses[status_index++];
-          if (MPI_Get_count(&status, MPI_DOUBLE, &count) != MPI_SUCCESS ||
+          if (MPI_Get_count(&status, pops::mpi_real_datatype(), &count) != MPI_SUCCESS ||
               status.MPI_SOURCE != peer.mpi_rank ||
               status.MPI_TAG != ExecutionLane::parallel_copy_message_tag ||
               count != static_cast<int>(peer.receive->elements)) {

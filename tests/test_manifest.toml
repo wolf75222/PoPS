@@ -546,6 +546,11 @@ sources = ["tests/cpp/unit/elliptic/test_cartesian_poisson_nd.cpp"]
 labels = ["unit", "elliptic", "fast", "nd"]
 
 [[cpp.suite]]
+name = "test_float32_poisson_residual"
+sources = ["tests/cpp/unit/elliptic/test_float32_poisson_residual.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
 name = "test_geometric_mg_nd"
 sources = ["tests/cpp/unit/elliptic/test_geometric_mg_nd.cpp"]
 labels = ["unit", "elliptic", "amr", "fast", "nd"]
