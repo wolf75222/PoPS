@@ -544,7 +544,7 @@ class PreparedMultiBlockAmrSubcyclingEngine {
         ::pops::amr::ClockStamp parent_target = target;
         parent_target.level = static_cast<int>(parent_level);
         for (std::size_t local = 0; local < staged.back().local_size(); ++local) {
-          const auto prepared = prepare_linear_time_interpolation(
+          const auto prepared = ::pops::numerics::time::amr::prepare_linear_time_interpolation(
               hierarchy_->topology_runtime(), parent_level,
               std::as_const(older[block].fab(local)).view(),
               std::as_const(candidates[block][parent_level].fab(local)).view(),

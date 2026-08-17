@@ -94,7 +94,7 @@ def install_hold_catchup(
     target: str | None = None,
 ) -> Any:
     """Compile and install one hold-then-catch-up Program on ``engine``."""
-    from pops.codegen._compile_drivers import compile_problem
+    from pops.codegen._program_shared_library import compile_authored_program
     from pops.runtime._system import AmrSystem
     from pops.time import hold_catchup_program
 
@@ -102,7 +102,7 @@ def install_hold_catchup(
     resolved_target = target
     if resolved_target is None:
         resolved_target = "amr_system" if isinstance(engine, AmrSystem) else "system"
-    compiled = compile_problem(
+    compiled = compile_authored_program(
         so_path=str(so_path),
         model=model,
         time=program,
@@ -164,7 +164,7 @@ def install_step_adaptive(
     target: str | None = None,
 ) -> Any:
     """Install the oracle adaptive-stride Program (not a private native stepper)."""
-    from pops.codegen._compile_drivers import compile_problem
+    from pops.codegen._program_shared_library import compile_authored_program
     from pops.runtime._system import AmrSystem
     from pops.time import adaptive_strides, step_adaptive_program
 
@@ -173,7 +173,7 @@ def install_step_adaptive(
     resolved_target = target
     if resolved_target is None:
         resolved_target = "amr_system" if isinstance(engine, AmrSystem) else "system"
-    compiled = compile_problem(
+    compiled = compile_authored_program(
         so_path=str(so_path),
         model=model,
         time=program,

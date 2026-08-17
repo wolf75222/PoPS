@@ -207,8 +207,9 @@ template <int Dim, class MemorySpace>
   return detail::prepare_collectively(
       lane,
       [&] {
-        return prepare_node_multilinear(runtime, parent_level, parent_nodes, child_nodes,
-                                        child_node_region, mapping, components);
+        return ::pops::numerics::time::amr::prepare_node_multilinear(
+            runtime, parent_level, parent_nodes, child_nodes, child_node_region, mapping,
+            components);
       },
       [&](ExactContractBuilder& contract) {
         contract.text("pops.amr.node-multilinear-transfer").scalar(std::uint32_t{1});
@@ -256,9 +257,9 @@ prepare_linear_time_interpolation_collectively(
   return detail::prepare_collectively(
       lane,
       [&] {
-        return prepare_linear_time_interpolation(runtime, parent_level, older, newer, candidate,
-                                                 destination_region, older_state, newer_state,
-                                                 target_state, components);
+        return ::pops::numerics::time::amr::prepare_linear_time_interpolation(
+            runtime, parent_level, older, newer, candidate, destination_region, older_state,
+            newer_state, target_state, components);
       },
       [&](ExactContractBuilder& contract) {
         contract.text("pops.amr.linear-time-interpolation").scalar(std::uint32_t{1});
