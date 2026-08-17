@@ -24,6 +24,24 @@ from .speeds import ExactSpeeds
 from .projection import RealizabilityProjection
 
 
+class CompositeMean:
+    """Neutralizing background equal to the live composite mean of M00.
+
+    The authored elliptic RHS is ``eps * M00``.  The AMR field host then subtracts
+    ``eps * composite_mean(M00)`` using the same active-coverage reduction as the
+    nullspace compatibility check.  That is the neutralizing term, not a projection
+    of an arbitrary assembled RHS.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "CompositeMean()"
+
+    def __eq__(self, other: object) -> bool:
+        return type(other) is CompositeMean
+
+
 def _order(value: Any) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 2:
         raise ValueError("MomentModel order must be an int >= 2 (got %r)" % (value,))
@@ -175,6 +193,7 @@ class MomentModel:
         self._extra_sources: Any = None  # an advanced pre-built (m, M) -> list
         # Recorded Poisson coupling (applied to the built model):
         self._poisson: Any = None        # (phi, eps, optional uniform background)
+        self._composite_mean_background = False
 
     # --- chainable recorders -----------------------------------------------
     def add_poisson_coupling(
@@ -187,16 +206,26 @@ class MomentModel:
         """Record a Poisson coupling with an optional explicit uniform background.
 
         The elliptic RHS is ``eps * M00`` when ``background`` is omitted and
-        ``eps * (M00 - background)`` otherwise.  The background is a typed physical
-        coefficient (literal, ``ConstParam`` or ``RuntimeParam``); it is never inferred or
-        silently projected by the field solver.
+        ``eps * (M00 - background)`` otherwise.  ``background`` is a typed physical
+        coefficient (literal, ``ConstParam`` or ``RuntimeParam``) or
+        :class:`CompositeMean`.  A frozen coefficient is never inferred.  CompositeMean
+        is evaluated from the live composite mass with the same coverage as the
+        nullspace check; the field solver does not project an arbitrary RHS.
         """
+        if isinstance(background, CompositeMean):
+            self._composite_mean_background = True
+            background_declaration = None
+        else:
+            self._composite_mean_background = False
+            background_declaration = (
+                None if background is None else _coefficient(
+                    background, name="Poisson background"
+                )
+            )
         self._poisson = (
             _identifier(phi, name="Poisson field"),
             _coefficient(eps, name="eps"),
-            None if background is None else _coefficient(
-                background, name="Poisson background"
-            ),
+            background_declaration,
         )
         return self
 
@@ -304,6 +333,9 @@ class MomentModel:
             exact_speeds=self._exact_speeds, robust=self._robust,
             sources=self._sources_cb(registered), roe=self._roe,
             eps_m00=self._proj.eps_m00, eps_cov=self._proj.eps_cov,
+            floor_density=self._proj.floor_density,
+            repair_moment_matrix=self._proj.repair_moment_matrix,
+            matrix_repair_max_density=self._proj.matrix_repair_max_density,
             frame=frame)
         if self._poisson is not None:
             self._apply_poisson(m, registered)

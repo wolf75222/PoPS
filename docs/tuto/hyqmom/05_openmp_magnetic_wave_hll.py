@@ -24,7 +24,7 @@ from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Periodic
 from pops.frames import Cartesian2D
 from pops.linalg.norms import L2
 from pops.mesh import CartesianGrid, PeriodicAxes
-from pops.moments import CartesianVelocityMoments, HyQMOM15Closure
+from pops.moments import CartesianVelocityMoments, HyQMOM15Closure, HyQMOM15Relaxation
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
 from pops.output import ConsoleMonitor, ConsumerGraph
@@ -50,7 +50,7 @@ DEBYE_LENGTH = 1.0 / OMEGA_P
 CFL = 0.5
 MONITOR_EVERY = 100
 ENABLE_MONITOR = True
-T_END = 1.0
+T_END = float(os.environ.get("POPS_T_END", "1.0"))
 MAX_STEPS = 200_000_000
 
 HERE = Path(__file__).resolve().parent
@@ -69,7 +69,7 @@ hierarchy = CartesianVelocityMoments(
     exact_speeds=True,
 )
 hierarchy.add_poisson_coupling(phi="phi", eps=-(OMEGA_P * OMEGA_P), background=1.0)
-hierarchy.add_vlasov_electric_source("grad_x", "grad_y", q_over_m=1.0)
+hierarchy.add_vlasov_electric_source(("grad_x", "grad_y"), q_over_m=1.0)
 hierarchy.add_magnetic_source(omega_c=OMEGA_C)
 model = hierarchy.build("hyqmom15_magnetic_wave", frame=frame)
 
@@ -77,6 +77,7 @@ state = model.states["U"]
 physical_flux = model.fluxes["transport"]
 explicit_rate = model.operators["transport"]
 poisson = model.field_operators["fields"]
+relaxation = HyQMOM15Relaxation().declare(model, state)
 
 finite_volume = FiniteVolume(
     flux=physical_flux,
@@ -108,6 +109,15 @@ electric_field = plasma_field(moments.n).consume(action=FailRun())
 rhs = explicit_rate(moments.n, electric_field)
 candidate = program.value("euler_candidate", moments.n + program.dt * rhs, at=moments.next.point)
 program.commit(moments.next, candidate)
+
+def _relax(program_body):
+    synced = program_body.value(
+        "synced_candidate", 1.0 * moments.n, at=moments.next.point)
+    relaxed = program_body.transform(
+        synced, transform=relaxation, name="relaxed_candidate")
+    program_body.commit(moments.next, relaxed)
+
+program.after_synchronization(_relax)
 _, marker_state = add_static_refinement_marker(case, frame, program)
 program.set_dt_bound(
     lambda P, cfl: (

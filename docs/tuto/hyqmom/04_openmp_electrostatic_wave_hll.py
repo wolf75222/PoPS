@@ -31,7 +31,12 @@ from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Periodic
 from pops.frames import Cartesian2D
 from pops.linalg.norms import L2
 from pops.mesh import CartesianGrid, PeriodicAxes
-from pops.moments import CartesianVelocityMoments, HyQMOM15Closure
+from pops.moments import (
+    CartesianVelocityMoments,
+    CompositeMean,
+    HyQMOM15Closure,
+    RealizabilityProjection,
+)
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
 from pops.output import ConsoleMonitor, ConsumerGraph
@@ -39,7 +44,7 @@ from pops.physics import Density
 from pops.runtime_environment import runtime_environment_report
 from pops.solvers.elliptic import GeometricMG
 from pops.solvers.options import CompositeFAC
-from pops.time import AdaptiveCFL, FailRun, every
+from pops.time import AdaptiveCFL, BlockProjection, FailRun, every
 
 
 CELLS = BASE_CELLS
@@ -56,8 +61,8 @@ DEBYE_LENGTH = 1.0 / OMEGA_P
 CFL = 0.5
 MONITOR_EVERY = 100
 ENABLE_MONITOR = True
-T_END = 1.0
-MAX_STEPS = 200_000_000
+T_END = float(os.environ.get("POPS_T_END", "1.0"))
+MAX_STEPS = int(os.environ.get("POPS_MAX_STEPS", "200000000"))
 
 HERE = Path(__file__).resolve().parent
 RESULT_FILE = HERE / "results" / "04_openmp_electrostatic_wave_hll.npz"
@@ -74,8 +79,20 @@ hierarchy = CartesianVelocityMoments(
     robust=False,
     exact_speeds=True,
 )
-hierarchy.add_poisson_coupling(phi="phi", eps=-(OMEGA_P * OMEGA_P), background=1.0)
-hierarchy.add_vlasov_electric_source("grad_x", "grad_y", q_over_m=1.0)
+# Preserve M00.  Do not manufacture density: that shifts the composite
+# neutralizing mean and trips the 128ε nullspace gate.
+hierarchy.set_realizability(RealizabilityProjection(robust=True, floor_density=False))
+hierarchy.add_numerics(robust=False)
+# exact_speeds emits im_tol=1.2e-4 and eig_max_iter=400.  After one step,
+# 7 LDL-valid coarse cells fail native QR at 100 iterations on the x-axis
+# while NumPy |Im| is ~1e-12; 400 iterations certify max_im~1e-11.  Do
+# not raise im_tol and do not manufacture density.
+hierarchy.add_poisson_coupling(
+    phi="phi",
+    eps=-(OMEGA_P * OMEGA_P),
+    background=CompositeMean(),
+)
+hierarchy.add_vlasov_electric_source(("grad_x", "grad_y"), q_over_m=1.0)
 model = hierarchy.build("hyqmom15_electrostatic_wave", frame=frame)
 
 state = model.states["U"]
@@ -113,6 +130,16 @@ electric_field = plasma_field(moments.n).consume(action=FailRun())
 rhs = explicit_rate(moments.n, electric_field)
 candidate = program.value("euler_candidate", moments.n + program.dt * rhs, at=moments.next.point)
 program.commit(moments.next, candidate)
+
+def _project(program_body):
+    # Relaxation15 after reflux publishes InvalidWaveSpeed earlier.
+    # The legal post-sync repair is the idempotent LDL projector.
+    synced = program_body.value(
+        "synced_candidate", 1.0 * moments.n, at=moments.next.point)
+    projected = program_body.project(synced, projection=BlockProjection())
+    program_body.commit(moments.next, projected)
+
+program.after_synchronization(_project)
 _, marker_state = add_static_refinement_marker(case, frame, program)
 program.set_dt_bound(
     lambda P, cfl: (
@@ -210,11 +237,22 @@ X, Y = np.meshgrid(x, y, indexing="ij")
 phase = KX * X + KY * Y
 initial_state = base[:, None, None] + EPSILON * eigenvector[:, None, None] * np.sin(phase)[None, :, :]
 
-layout = build_layout(case, grid, program, plasma_state, marker_state)
+layout = build_layout(
+    case, grid, program, plasma_state, marker_state,
+    # Parent-copy IC keeps the composite density on the neutralizing mean.
+    # Parent-copy C-F ghosts keep the 15x15 x-Jacobian real after reflux.
+    inject_plasma=True, inject_ghosts=True, regrid="frozen",
+)
 validated = pops.validate(case)
 resolved = pops.resolve(validated, layout=layout)
 artifact = pops.compile(resolved)
 simulation, world, rank = bind_hybrid(artifact, plasma_state, initial_state)
+# Live composite mean of M00, same coverage as the 128ε nullspace check.
+# Not a silent RHS projection: the authored charge is eps*M00.
+(field_slot,) = tuple(simulation.field_provider_slots())
+simulation.set_field_composite_mean_neutralizing(
+    field_slot, "plasma", 0, -(OMEGA_P * OMEGA_P),
+)
 
 prepare_output_root(OUTPUT_ROOT, world, rank)
 start = time.perf_counter()

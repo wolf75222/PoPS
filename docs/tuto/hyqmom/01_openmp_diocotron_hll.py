@@ -42,7 +42,7 @@ from pops.physics import Density
 from pops.runtime_environment import runtime_environment_report
 from pops.solvers.elliptic import GeometricMG
 from pops.solvers.options import CompositeFAC
-from pops.time import AdaptiveCFL, FailRun, every
+from pops.time import AdaptiveCFL, BlockProjection, FailRun, every
 
 
 # Parametres du cas diocotron de l'archive MATLAB.
@@ -95,18 +95,23 @@ hierarchy = CartesianVelocityMoments(
     robust=True,
     exact_speeds=False,
 )
+# Legal idempotent LDL projector.  Do not manufacture density: that
+# shifts the composite neutralizing mean and trips the 128ε nullspace gate.
+hierarchy.set_realizability(RealizabilityProjection(robust=True, floor_density=False))
 hierarchy.add_poisson_coupling(
     phi="phi",
     eps=-(OMEGA_P * OMEGA_P),
     background=RuntimeParam("neutralizing_density"),
 )
-hierarchy.add_vlasov_electric_source("grad_x", "grad_y", q_over_m=1.0)
+hierarchy.add_vlasov_electric_source(("grad_x", "grad_y"), q_over_m=1.0)
 hierarchy.add_magnetic_source(omega_c=OMEGA_C)
 model = hierarchy.build("hyqmom15_diocotron", frame=frame)
 # Le spectre HyQMOM contient des racines multiples. Sur le Jacobien dense 15 x 15,
 # l'algorithme QR natif peut produire une partie imaginaire d'arrondi bien que le
 # spectre physique soit reel. La tolerance ne change ni HLL ni le Jacobien utilise.
-model.wave_speeds_from_jacobian(im_tol=1.0e-5)
+# Native QR on the 15x15 x-Jacobian can need 400 Francis iterations on an
+# LDL-valid Maxwellian cell (measured |Im|~1e-11).  Do not raise im_tol.
+model.wave_speeds_from_jacobian(im_tol=1.0e-5, eig_max_iter=400)
 
 state = model.states["U"]
 physical_flux = model.fluxes["transport"]
@@ -121,6 +126,7 @@ finite_volume = FiniteVolume(
     variables=variables.Conservative(state),
     reconstruction=reconstruction.FirstOrder(),
     riemann=riemann.HLL(waves=riemann.waves.FromJacobian()),
+    positivity_floor=RHO_MIN,
 )
 numerics = DiscretizationPlan()
 numerics.rates.add(explicit_rate, finite_volume)
@@ -154,12 +160,15 @@ candidate = program.value(
     moments.n + program.dt * rhs,
     at=moments.next.point,
 )
-candidate = RealizabilityProjection().guard_hyqmom15_candidate(
-    program,
-    candidate,
-    terminal_action=FailRun(),
-)
 program.commit(moments.next, candidate)
+
+def _relax(program_body):
+    synced = program_body.value(
+        "synced_candidate", 1.0 * moments.n, at=moments.next.point)
+    projected = program_body.project(synced, projection=BlockProjection())
+    program_body.commit(moments.next, projected)
+
+program.after_synchronization(_relax)
 _, marker_state = add_static_refinement_marker(case, frame, program)
 
 # La premiere borne est la CFL hyperbolique native. Cette seconde expression reproduit
@@ -244,7 +253,10 @@ initial_state[14] = rho * (velocity_y**4 + 6.0 * velocity_y**2 + 3.0)
 
 
 # 7. Cycle public final : validate -> resolve -> compile -> bind -> run.
-layout = build_layout(case, grid, program, plasma_state, marker_state)
+layout = build_layout(
+    case, grid, program, plasma_state, marker_state,
+    inject_plasma=True, inject_ghosts=True, regrid="frozen",
+)
 validated = pops.validate(case)
 neutralizing_density = validated.resolve(neutralizing_density)
 resolved = pops.resolve(validated, layout=layout)

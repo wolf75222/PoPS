@@ -14,6 +14,8 @@ from typing import Any
 from pops.descriptors import Descriptor
 from pops.descriptors_report import CapabilitySet
 from pops._ir.ops import abs_ as _abs, sign as _sign, sqrt as _sqrt
+from pops._ir.ops import maximum as _ieee_max
+from pops._ir.ops import minimum as _ieee_min
 
 
 _HYQMOM15_INDICES = tuple(
@@ -29,6 +31,24 @@ def _maximum(left: Any, right: Any) -> Any:
 
 def _minimum(left: Any, right: Any) -> Any:
     return ((left + right) - _abs(left - right)) / 2.0
+
+
+def _unit_interval(value: Any) -> Any:
+    """Clamp to ``[0, 1]``.  A NaN indicator becomes 0 (IEEE ``fmax``)."""
+
+    return _ieee_min(_ieee_max(value, 0.0), 1.0)
+
+
+def _finite_unit(value: Any) -> Any:
+    """Return 1 when ``value`` is finite and 0 when it is NaN or infinite."""
+
+    return _unit_interval(value - value + 1.0)
+
+
+def _bounded(value: Any) -> Any:
+    """Replace NaN/Inf with a finite sentinel so an eager blend cannot poison a cell."""
+
+    return _ieee_min(_ieee_max(value, -1.0e200), 1.0e200)
 
 
 def _positive_indicator(value: Any, threshold: float) -> Any:
@@ -78,12 +98,17 @@ def _positive_definite_indicator(
 
 
 def _gaussian_moments(
-    moments: dict[tuple[int, int], Any], *, eps_m00: float, eps_cov: float,
+    moments: dict[tuple[int, int], Any],
+    *,
+    eps_m00: float,
+    eps_cov: float,
+    floor_density: bool = False,
 ) -> dict[tuple[int, int], Any]:
     """Return order-four raw moments of a positive bivariate Gaussian."""
 
     rho = moments[(0, 0)]
     safe_rho = _maximum(rho, eps_m00)
+    out_rho = safe_rho if floor_density else rho
     ux = moments[(1, 0)] / safe_rho
     uy = moments[(0, 1)] / safe_rho
     scaled_tolerance = eps_cov / safe_rho
@@ -100,30 +125,30 @@ def _gaussian_moments(
     cxy = _minimum(_maximum(cxy_raw, -correlation_limit), correlation_limit)
 
     return {
-        (0, 0): rho,
-        (1, 0): rho * ux,
-        (0, 1): rho * uy,
-        (2, 0): rho * (ux * ux + cxx),
-        (1, 1): rho * (ux * uy + cxy),
-        (0, 2): rho * (uy * uy + cyy),
-        (3, 0): rho * (ux * ux * ux + 3.0 * ux * cxx),
-        (2, 1): rho * (
+        (0, 0): out_rho,
+        (1, 0): out_rho * ux,
+        (0, 1): out_rho * uy,
+        (2, 0): out_rho * (ux * ux + cxx),
+        (1, 1): out_rho * (ux * uy + cxy),
+        (0, 2): out_rho * (uy * uy + cyy),
+        (3, 0): out_rho * (ux * ux * ux + 3.0 * ux * cxx),
+        (2, 1): out_rho * (
             ux * ux * uy + uy * cxx + 2.0 * ux * cxy
         ),
-        (1, 2): rho * (
+        (1, 2): out_rho * (
             ux * uy * uy + ux * cyy + 2.0 * uy * cxy
         ),
-        (0, 3): rho * (uy * uy * uy + 3.0 * uy * cyy),
-        (4, 0): rho * (
+        (0, 3): out_rho * (uy * uy * uy + 3.0 * uy * cyy),
+        (4, 0): out_rho * (
             ux * ux * ux * ux + 6.0 * ux * ux * cxx + 3.0 * cxx * cxx
         ),
-        (3, 1): rho * (
+        (3, 1): out_rho * (
             ux * ux * ux * uy
             + 3.0 * ux * uy * cxx
             + 3.0 * ux * ux * cxy
             + 3.0 * cxx * cxy
         ),
-        (2, 2): rho * (
+        (2, 2): out_rho * (
             ux * ux * uy * uy
             + ux * ux * cyy
             + uy * uy * cxx
@@ -131,13 +156,13 @@ def _gaussian_moments(
             + cxx * cyy
             + 2.0 * cxy * cxy
         ),
-        (1, 3): rho * (
+        (1, 3): out_rho * (
             ux * uy * uy * uy
             + 3.0 * ux * uy * cyy
             + 3.0 * uy * uy * cxy
             + 3.0 * cyy * cxy
         ),
-        (0, 4): rho * (
+        (0, 4): out_rho * (
             uy * uy * uy * uy + 6.0 * uy * uy * cyy + 3.0 * cyy * cyy
         ),
     }
@@ -154,7 +179,15 @@ class RealizabilityProjection(Descriptor):
 
     category = "realizability"
 
-    def __init__(self, eps_m00: Any = 1e-12, eps_cov: Any = 1e-12, robust: bool = True) -> None:
+    def __init__(
+        self,
+        eps_m00: Any = 1e-12,
+        eps_cov: Any = 1e-12,
+        robust: bool = True,
+        floor_density: bool = False,
+        repair_moment_matrix: bool = True,
+        matrix_repair_max_density: Any = None,
+    ) -> None:
         self.eps_m00 = float(eps_m00)
         self.eps_cov = float(eps_cov)
         if not math.isfinite(self.eps_m00) or self.eps_m00 <= 0.0:
@@ -162,6 +195,15 @@ class RealizabilityProjection(Descriptor):
         if not math.isfinite(self.eps_cov) or self.eps_cov <= 0.0:
             raise ValueError("eps_cov must be finite and > 0")
         self.robust = bool(robust)
+        self.floor_density = bool(floor_density)
+        self.repair_moment_matrix = bool(repair_moment_matrix)
+        if matrix_repair_max_density is None:
+            self.matrix_repair_max_density = None
+        else:
+            self.matrix_repair_max_density = float(matrix_repair_max_density)
+            if (not math.isfinite(self.matrix_repair_max_density)
+                    or self.matrix_repair_max_density <= 0.0):
+                raise ValueError("matrix_repair_max_density must be finite and > 0")
 
     @classmethod
     def none(cls) -> Any:
@@ -169,7 +211,14 @@ class RealizabilityProjection(Descriptor):
         return cls(robust=False)
 
     def options(self) -> dict:
-        return {"eps_m00": self.eps_m00, "eps_cov": self.eps_cov, "robust": self.robust}
+        return {
+            "eps_m00": self.eps_m00,
+            "eps_cov": self.eps_cov,
+            "robust": self.robust,
+            "floor_density": self.floor_density,
+            "repair_moment_matrix": self.repair_moment_matrix,
+            "matrix_repair_max_density": self.matrix_repair_max_density,
+        }
 
     def capabilities(self) -> Any:
         return CapabilitySet({"guard_level": "smooth" if self.robust else "bare"})
@@ -181,8 +230,9 @@ class RealizabilityProjection(Descriptor):
 
         A state whose complete degree-two moment matrix is strictly positive definite is returned
         unchanged.  A positive-density invalid state is replaced by the raw moments of a genuine
-        bivariate Gaussian.  Non-positive density is deliberately not manufactured: it remains
-        invalid so the enclosing ``ProjectAndRecheck`` guard reaches its explicit terminal action.
+        bivariate Gaussian.  Non-positive density is deliberately not manufactured unless
+        ``floor_density`` is set: it remains invalid so the enclosing ``ProjectAndRecheck`` guard
+        reaches its explicit terminal action.
         """
 
         if set(moments) != set(_HYQMOM15_INDICES):
@@ -192,16 +242,49 @@ class RealizabilityProjection(Descriptor):
         ordered = {index: moments[index] for index in _HYQMOM15_INDICES}
         if not self.robust:
             return tuple(ordered[index] for index in _HYQMOM15_INDICES)
-        matrix_ok = _positive_definite_indicator(
-            _moment_matrix(ordered), eps_m00=self.eps_m00, eps_cov=self.eps_cov,
-        )
-        density_ok = _positive_indicator(ordered[(0, 0)], self.eps_m00)
+        density_ok = _unit_interval(_positive_indicator(ordered[(0, 0)], self.eps_m00))
         gaussian = _gaussian_moments(
-            ordered, eps_m00=self.eps_m00, eps_cov=self.eps_cov,
+            ordered,
+            eps_m00=self.eps_m00,
+            eps_cov=self.eps_cov,
+            floor_density=self.floor_density,
         )
-        repair = density_ok * (1.0 - matrix_ok)
+        if self.repair_moment_matrix:
+            if self.matrix_repair_max_density is None:
+                matrix_ok = _unit_interval(_positive_definite_indicator(
+                    _moment_matrix(ordered), eps_m00=self.eps_m00, eps_cov=self.eps_cov,
+                ))
+                repair = _unit_interval(density_ok * (1.0 - matrix_ok))
+            else:
+                # Near-vacuum cells can be LDL-realizable and still have a
+                # complex HyQMOM flux Jacobian.  Snap them to the Gaussian
+                # with the same density; leave the jet untouched.
+                below_cap = _unit_interval(
+                    1.0 - _positive_indicator(
+                        ordered[(0, 0)], self.matrix_repair_max_density,
+                    )
+                )
+                repair = _unit_interval(density_ok * below_cap)
+            if self.floor_density:
+                repair = _unit_interval(_ieee_max(repair, 1.0 - density_ok))
+        elif self.floor_density:
+            repair = _unit_interval(1.0 - density_ok)
+        else:
+            repair = 0.0
+        all_finite = 1.0
+        for index in _HYQMOM15_INDICES:
+            all_finite = all_finite * _finite_unit(ordered[index])
+        all_finite = _unit_interval(all_finite)
+        fallback = _gaussian_moments(
+            {index: (1.0 if index == (0, 0) else 0.0) for index in _HYQMOM15_INDICES},
+            eps_m00=self.eps_m00,
+            eps_cov=self.eps_cov,
+        )
         return tuple(
-            ordered[index] + repair * (gaussian[index] - ordered[index])
+            all_finite * _bounded(
+                ordered[index]
+                + repair * (_bounded(gaussian[index]) - ordered[index])
+            ) + (1.0 - all_finite) * fallback[index]
             for index in _HYQMOM15_INDICES
         )
 
@@ -272,13 +355,27 @@ class RealizabilityProjection(Descriptor):
             return result
         valid = self.hyqmom15_realizability_mask(state)
         finite = np.isfinite(state).all(axis=0)
-        repair = finite & (state[0] > self.eps_m00) & ~valid
+        vacuum = finite & (state[0] <= self.eps_m00)
+        if self.repair_moment_matrix:
+            if self.matrix_repair_max_density is None:
+                repair = finite & (state[0] > self.eps_m00) & ~valid
+            else:
+                repair = (
+                    finite
+                    & (state[0] > self.eps_m00)
+                    & (state[0] <= self.matrix_repair_max_density)
+                )
+            if self.floor_density:
+                repair = repair | vacuum
+        else:
+            repair = vacuum if self.floor_density else np.zeros_like(valid)
         if not np.any(repair):
             return result
 
         moment = dict(zip(_HYQMOM15_INDICES, state, strict=True))
         rho = moment[(0, 0)]
         safe_rho = np.maximum(rho, self.eps_m00)
+        out_rho = safe_rho if self.floor_density else rho
         ux = moment[(1, 0)] / safe_rho
         uy = moment[(0, 1)] / safe_rho
         scaled_tolerance = self.eps_cov / safe_rho
@@ -289,30 +386,30 @@ class RealizabilityProjection(Descriptor):
         correlation_limit = 0.5 * np.sqrt(cxx * cyy)
         cxy = np.minimum(np.maximum(cxy_raw, -correlation_limit), correlation_limit)
         gaussian = {
-            (0, 0): rho,
-            (1, 0): rho * ux,
-            (0, 1): rho * uy,
-            (2, 0): rho * (ux * ux + cxx),
-            (1, 1): rho * (ux * uy + cxy),
-            (0, 2): rho * (uy * uy + cyy),
-            (3, 0): rho * (ux**3 + 3.0 * ux * cxx),
-            (2, 1): rho * (ux * ux * uy + uy * cxx + 2.0 * ux * cxy),
-            (1, 2): rho * (ux * uy * uy + ux * cyy + 2.0 * uy * cxy),
-            (0, 3): rho * (uy**3 + 3.0 * uy * cyy),
-            (4, 0): rho * (ux**4 + 6.0 * ux * ux * cxx + 3.0 * cxx * cxx),
-            (3, 1): rho * (
+            (0, 0): out_rho,
+            (1, 0): out_rho * ux,
+            (0, 1): out_rho * uy,
+            (2, 0): out_rho * (ux * ux + cxx),
+            (1, 1): out_rho * (ux * uy + cxy),
+            (0, 2): out_rho * (uy * uy + cyy),
+            (3, 0): out_rho * (ux**3 + 3.0 * ux * cxx),
+            (2, 1): out_rho * (ux * ux * uy + uy * cxx + 2.0 * ux * cxy),
+            (1, 2): out_rho * (ux * uy * uy + ux * cyy + 2.0 * uy * cxy),
+            (0, 3): out_rho * (uy**3 + 3.0 * uy * cyy),
+            (4, 0): out_rho * (ux**4 + 6.0 * ux * ux * cxx + 3.0 * cxx * cxx),
+            (3, 1): out_rho * (
                 ux**3 * uy + 3.0 * ux * uy * cxx
                 + 3.0 * ux * ux * cxy + 3.0 * cxx * cxy
             ),
-            (2, 2): rho * (
+            (2, 2): out_rho * (
                 ux * ux * uy * uy + ux * ux * cyy + uy * uy * cxx
                 + 4.0 * ux * uy * cxy + cxx * cyy + 2.0 * cxy * cxy
             ),
-            (1, 3): rho * (
+            (1, 3): out_rho * (
                 ux * uy**3 + 3.0 * ux * uy * cyy
                 + 3.0 * uy * uy * cxy + 3.0 * cyy * cxy
             ),
-            (0, 4): rho * (uy**4 + 6.0 * uy * uy * cyy + 3.0 * cyy * cyy),
+            (0, 4): out_rho * (uy**4 + 6.0 * uy * uy * cyy + 3.0 * cyy * cyy),
         }
         for component, index in enumerate(_HYQMOM15_INDICES):
             result[component] = np.where(repair, gaussian[index], result[component])
@@ -393,8 +490,12 @@ class RealizabilityProjection(Descriptor):
         )
 
     def __repr__(self) -> str:
-        return ("RealizabilityProjection(eps_m00=%g, eps_cov=%g, robust=%r)"
-                % (self.eps_m00, self.eps_cov, self.robust))
+        return (
+            "RealizabilityProjection(eps_m00=%g, eps_cov=%g, robust=%r, "
+            "floor_density=%r, repair_moment_matrix=%r, matrix_repair_max_density=%r)"
+            % (self.eps_m00, self.eps_cov, self.robust, self.floor_density,
+               self.repair_moment_matrix, self.matrix_repair_max_density)
+        )
 
 
 class RealizableSet(Descriptor):

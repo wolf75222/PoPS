@@ -10,6 +10,7 @@ import pytest
 
 from pops.lib.models.moments import HyQMOM15
 from pops.moments import (
+    CartesianVelocityMoments,
     HyQMOM15Closure,
     LocalClosure,
     RealizabilityProjection,
@@ -343,6 +344,88 @@ def test_hyqmom15_projection_checks_all_moments_and_refuses_to_manufacture_densi
     assert np.array_equal(
         projection.project_hyqmom15_array(negative_density), negative_density)
 
+    from pops.moments.projection import _HYQMOM15_INDICES
+
+    floored = RealizabilityProjection(floor_density=True)
+    repaired_density = np.array(
+        [float(expression.eval({})) for expression in
+         floored.hyqmom15_projection_expressions(
+             dict(zip(_HYQMOM15_INDICES, (-1.0 if index == (0, 0) else 0.0
+                                          for index in _HYQMOM15_INDICES)))
+         )],
+        dtype=np.float64,
+    )
+    assert np.isfinite(repaired_density).all()
+    assert repaired_density[0] == pytest.approx(floored.eps_m00)
+    assert floored.is_hyqmom15_realizable(repaired_density)
+
+    vacuum_only = RealizabilityProjection(
+        floor_density=True, repair_moment_matrix=False,
+    )
+    invalid_fourth = {
+        index: (1.0 if index == (0, 0) else 0.0) for index in _HYQMOM15_INDICES
+    }
+    invalid_fourth[(4, 0)] = -1.0
+    kept = np.array(
+        [float(expression.eval({})) for expression in
+         vacuum_only.hyqmom15_projection_expressions(invalid_fourth)],
+        dtype=np.float64,
+    )
+    assert kept[0] == pytest.approx(1.0)
+    assert kept[list(_HYQMOM15_INDICES).index((4, 0))] == pytest.approx(-1.0)
+    vacuum = {
+        index: 0.0 for index in _HYQMOM15_INDICES
+    }
+    lifted = np.array(
+        [float(expression.eval({})) for expression in
+         vacuum_only.hyqmom15_projection_expressions(vacuum)],
+        dtype=np.float64,
+    )
+    assert lifted[0] == pytest.approx(vacuum_only.eps_m00)
+    assert np.isfinite(lifted).all()
+    assert np.array_equal(vacuum_only.project_hyqmom15_array(lifted), lifted)
+
+
+def test_hyqmom15_emitted_projection_stays_finite_when_ldl_overflows() -> None:
+    from pops.moments.projection import _HYQMOM15_INDICES
+
+    projection = RealizabilityProjection()
+    moments = {index: 0.0 for index in _HYQMOM15_INDICES}
+    moments[(0, 0)] = 1.0
+    moments[(2, 0)] = 1.0
+    moments[(0, 2)] = 1.0
+    moments[(2, 2)] = 1.0
+    moments[(0, 4)] = 3.0
+    moments[(4, 0)] = 1.0e200
+    values = np.array(
+        [float(expression.eval({})) for expression in
+         projection.hyqmom15_projection_expressions(moments)],
+        dtype=np.float64,
+    )
+    assert np.isfinite(values).all()
+    assert values[0] == pytest.approx(1.0)
+    assert projection.is_hyqmom15_realizable(values)
+
+
+def test_hyqmom15_emitted_projection_repairs_a_non_finite_cell() -> None:
+    from pops._ir.expr import Var
+    from pops.moments.projection import _HYQMOM15_INDICES
+
+    projection = RealizabilityProjection()
+    moments = {index: 0.0 for index in _HYQMOM15_INDICES}
+    moments[(0, 0)] = 1.0
+    moments[(2, 0)] = 1.0
+    moments[(0, 2)] = 1.0
+    moments[(4, 0)] = Var("M40", "cons")
+    values = np.array(
+        [float(expression.eval({"M40": float("nan")})) for expression in
+         projection.hyqmom15_projection_expressions(moments)],
+        dtype=np.float64,
+    )
+    assert np.isfinite(values).all()
+    assert values[0] == pytest.approx(1.0)
+    assert projection.is_hyqmom15_realizable(values)
+
 
 def test_final_example_uses_only_the_root_lifecycle_and_public_layout_home() -> None:
     source = EXAMPLE.read_text(encoding="utf-8")
@@ -358,6 +441,17 @@ def test_final_example_uses_only_the_root_lifecycle_and_public_layout_home() -> 
         "pops.validate(", "pops.resolve(", "pops.compile(", "pops.bind(", "pops.run(",
     ):
         assert call in source
+
+
+def test_exact_speeds_hyqmom15_keeps_measured_qr_iteration_cap() -> None:
+    """15x15 x-Jacobian of an LDL-valid Maxwellian can need 400 Francis iterations."""
+
+    model = CartesianVelocityMoments(
+        4, closure=HyQMOM15Closure(), exact_speeds=True, robust=False,
+    ).build("exact_speeds_qr_cap", frame=Cartesian2D())
+    wave_speeds = model._dsl._m._ws_jacobian
+    assert wave_speeds["im_tol"] == pytest.approx(1.2e-4)
+    assert wave_speeds["eig_max_iter"] == 400
 
 
 def test_magnetic_wave_selects_the_matlab_complex_spectrum_order() -> None:

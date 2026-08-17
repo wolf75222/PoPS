@@ -34,7 +34,7 @@ X_MAX = 0.5
 Y_MIN = -0.5
 Y_MAX = 0.5
 CFL = 0.5
-T_END = 1.0
+T_END = float(os.environ.get("POPS_T_END", "1.0"))
 MAX_STEPS = 20_000_000
 
 RHO_LEFT = 1.0
@@ -82,8 +82,16 @@ program = pops.Program("ForwardEuler-HyQMOM15-shock-tube")
 moments = program.state(plasma_state)
 rhs = explicit_rate(moments.n)
 candidate = program.value("euler_candidate", moments.n + program.dt * rhs, at=moments.next.point)
-candidate = program.transform(candidate, transform=relaxation, name="relaxed_candidate")
 program.commit(moments.next, candidate)
+
+def _relax(program_body):
+    synced = program_body.value(
+        "synced_candidate", 1.0 * moments.n, at=moments.next.point)
+    relaxed = program_body.transform(
+        synced, transform=relaxation, name="relaxed_candidate")
+    program_body.commit(moments.next, relaxed)
+
+program.after_synchronization(_relax)
 program.step_strategy(AdaptiveCFL(cfl=CFL))
 _, marker_state = add_static_refinement_marker(case, frame, program)
 case.program(program)

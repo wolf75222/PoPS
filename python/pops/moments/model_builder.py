@@ -171,7 +171,9 @@ def moment_flux_expressions(author: Any, variables: Any, order: Any, closure: An
 def build_moment_model(name: Any, order: Any, closure: Any, blocks: Any = None,
                        exact_speeds: bool = True, robust: bool = False, eps_m00: Any = 1e-12,
                        eps_cov: Any = 1e-12, sources: Any = None, roe: bool = False,
-                       frame: Any = None) -> Any:
+                       frame: Any = None, floor_density: bool = False,
+                       repair_moment_matrix: bool = True,
+                       matrix_repair_max_density: Any = None) -> Any:
     """2D moment model with an arbitrary closure: flux and intermediates GENERATED.
 
     @p order: max order of the transported moments (order=2 -> 6 variables, order=4 -> 15).
@@ -219,13 +221,16 @@ def build_moment_model(name: Any, order: Any, closure: Any, blocks: Any = None,
     expressions = moment_flux_expressions(
         m, tuple(state), order, closure,
         robust=robust, eps_m00=eps_m00, eps_cov=eps_cov)
-    if robust and order == 4:
+    if order == 4:
         from pops.moments.projection import RealizabilityProjection
         m.projection(
             RealizabilityProjection(
                 eps_m00=eps_m00,
                 eps_cov=eps_cov,
                 robust=True,
+                floor_density=floor_density,
+                repair_moment_matrix=repair_moment_matrix,
+                matrix_repair_max_density=matrix_repair_max_density,
             ).hyqmom15_projection_expressions(expressions.moments)
         )
     flux = m.flux(
@@ -236,7 +241,16 @@ def build_moment_model(name: Any, order: Any, closure: Any, blocks: Any = None,
     )
 
     if exact_speeds:
-        m.wave_speeds_from_jacobian(blocks=blocks)
+        # HyQMOM (and other high-order moment closures) have repeated flux-Jacobian
+        # roots. Native QR then reports an O(eps^(1/m)) imaginary part on a physically
+        # real spectrum; the strict 64-eps floor treats that as complex and the HLL
+        # face kernel refuses publication. kEigImagTol (1e-5) covers 3-fold roots;
+        # a 15-moment Maxwellian has 4-fold thermal roots, so use the documented
+        # eps^(1/4) ~ 1.2e-4 floor. The same 15x15 x-Jacobian can also exhaust the
+        # native 100-iteration Francis cap while NumPy still sees |Im|~1e-12; 400
+        # iterations recover a certified real spectrum (max_im~1e-11). This does
+        # not change the Jacobian or the HLL flux, only the real-spectrum gate.
+        m.wave_speeds_from_jacobian(blocks=blocks, im_tol=1.2e-4, eig_max_iter=400)
     if roe:
         m.roe_from_jacobian()
     rhs = -div(flux)

@@ -23,6 +23,7 @@ def model_artifact_spec(
     from pops.identity import artifact_spec_identity, make_identity
 
     digest = str(model_hash(model))
+    wave_speeds = getattr(model, "_ws_jacobian", {}) or {}
     semantic = make_identity(
         "semantic", {"kind": "model", "model_digest": digest})
     spec = artifact_spec_identity(
@@ -45,6 +46,11 @@ def model_artifact_spec(
             # emitted loader surface without this component reuses a stale .so.
             "native_system_package_abi_version": NATIVE_SYSTEM_PACKAGE_ABI_VERSION,
             "native_system_package_abi_export": NATIVE_SYSTEM_PACKAGE_ABI_EXPORT,
+            "eig_max_iter": wave_speeds.get("eig_max_iter"),
+            "im_tol": (
+                None if wave_speeds.get("im_tol") is None
+                else float(wave_speeds["im_tol"]).hex()
+            ),
         },
         flags=[_platform_cache_key(), *_dsl_optflags(),
                "hoist_reciprocals=%d" % bool(hoist_reciprocals)],

@@ -225,6 +225,13 @@ class _FacadeCompileMixin(_FacadeModel):
             "declares_auxiliary_providers": bool(declare_auxiliary_providers),
             "native_system_package_abi_version": NATIVE_SYSTEM_PACKAGE_ABI_VERSION,
             "native_system_package_abi_export": NATIVE_SYSTEM_PACKAGE_ABI_EXPORT,
+            # Francis QR knobs change the emitted kernel.  Omitting them reuses a
+            # 100-iteration .so that refuses LDL-real 15x15 Maxwellian faces.
+            "eig_max_iter": (getattr(m, "_ws_jacobian", {}) or {}).get("eig_max_iter"),
+            "im_tol": (
+                None if (getattr(m, "_ws_jacobian", {}) or {}).get("im_tol") is None
+                else float((getattr(m, "_ws_jacobian", {}) or {})["im_tol"]).hex()
+            ),
         }
         if target == "amr_system":
             from pops.identity import canonical_bytes

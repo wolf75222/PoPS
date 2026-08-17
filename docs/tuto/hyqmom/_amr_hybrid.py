@@ -28,7 +28,7 @@ from pops.amr import (
 )
 from pops.initial import InitialCondition
 from pops.layouts import AMR
-from pops.lib.amr import StateTransfer
+from pops.lib.amr import CoarseFineInjection, ConservativeInjection, StateTransfer
 from pops.lib.initial import BindArray, Gaussian
 from pops.math import ValueExpr, ddt, div
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
@@ -117,12 +117,28 @@ def add_static_refinement_marker(
     return marker_block, marker
 
 
+def _resolve_regrid(regrid: Any, program: Any) -> AMRRegrid:
+    """Static markers freeze the initial hierarchy; 05 keeps the every-5 canary."""
+    if regrid is None:
+        return AMRRegrid(schedule=every(5, clock=program.clock))
+    if regrid == "frozen":
+        return AMRRegrid.frozen()
+    if type(regrid) is not AMRRegrid:
+        raise TypeError("build_layout.regrid must be AMRRegrid or 'frozen'")
+    return regrid
+
+
 def build_layout(
     case: Any,
     grid: Any,
     program: Any,
     plasma_state: Any,
     marker_state: Any,
+    *,
+    inject_plasma: bool = False,
+    inject_ghosts: bool = False,
+    refine_threshold: float = 0.15,
+    regrid: Any = None,
 ) -> AMR:
     """Construit deux niveaux 16x16 -> 32x32 avec patches distribues."""
     case.initials.add(InitialCondition(
@@ -132,7 +148,7 @@ def build_layout(
     ))
     threshold = case.param(RuntimeParam(
         "hyqmom_amr_marker_refine",
-        default=0.15,
+        default=refine_threshold,
     ))
     tagging = AMRTagging(
         rules=(
@@ -143,13 +159,22 @@ def build_layout(
         conflict_policy=ConflictPolicy.REFINE_WINS,
     )
     transfer = AMRTransfer()
-    transfer.state(plasma_state, StateTransfer())
-    transfer.state(marker_state, StateTransfer())
+    transfer_kwargs = {}
+    if inject_plasma:
+        transfer_kwargs["prolongation"] = ConservativeInjection()
+    if inject_ghosts:
+        transfer_kwargs["coarse_fine"] = CoarseFineInjection()
+    plasma_transfer = StateTransfer(**transfer_kwargs)
+    transfer.state(plasma_state, plasma_transfer)
+    marker_transfer = StateTransfer()
+    if inject_ghosts:
+        marker_transfer = StateTransfer(coarse_fine=CoarseFineInjection())
+    transfer.state(marker_state, marker_transfer)
     return AMR(
         grid=grid,
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
         tagging=tagging,
-        regrid=AMRRegrid(schedule=every(5, clock=program.clock)),
+        regrid=_resolve_regrid(regrid, program),
         transfer=transfer,
         execution=AMRExecution.synchronous(),
         patch_layout=PatchLayout(

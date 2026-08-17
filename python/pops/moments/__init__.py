@@ -25,7 +25,7 @@ from .closures import (gaussian_closure, closure, Closure, LocalClosure,
                        apply_local_closure, HyQMOM15Closure)
 
 # --- facade API (thin wrappers over the generator) -------------------------
-from .hierarchy import CartesianVelocityMoments, MomentModel, MomentHierarchy
+from .hierarchy import CartesianVelocityMoments, CompositeMean, MomentModel, MomentHierarchy
 from .ordering import MomentOrdering
 from .basis import MomentBasis, RawMomentBasis
 from .transforms import CenteredTransform, StandardizedTransform
@@ -49,6 +49,7 @@ __all__ = [
     "moment_flux_expressions",
     # facade API
     "CartesianVelocityMoments",
+    "CompositeMean",
     "MomentModel",
     "MomentHierarchy",
     "MomentOrdering",

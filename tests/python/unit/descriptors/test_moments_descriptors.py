@@ -183,6 +183,15 @@ def test_gaussian_exact_speeds_use_the_generic_moment_partition():
     assert "pops::real_spectrum(roe_block_" in source
 
 
+def test_hyqmom15_exact_speeds_use_the_native_imaginary_tolerance():
+    from pops.moments import CartesianVelocityMoments, HyQMOM15Closure
+
+    model = CartesianVelocityMoments(
+        4, closure=HyQMOM15Closure(), exact_speeds=True,
+    ).build("hyqmom_im_tol_contract", frame=Cartesian2D())
+    assert model._dsl._m._ws_jacobian["im_tol"] == 1.2e-4
+
+
 def test_hierarchy_snapshot_exposes_inspectable_descriptors():
     # The MomentHierarchy snapshot carries the speeds / projection descriptors; they remain
     # inspectable route choosers even when reached through the snapshot.
@@ -194,6 +203,15 @@ def test_hierarchy_snapshot_exposes_inspectable_descriptors():
     assert snapshot.speeds.options()["kind"] == moments.ExactSpeeds.ROE_DISSIPATION
     assert isinstance(snapshot.projection, Descriptor)
     assert snapshot.projection.capabilities().to_dict()["guard_level"] == "bare"
+
+
+def test_composite_mean_poisson_background_authors_density_only():
+    specification = (moments.CartesianVelocityMoments(order=2)
+                     .add_poisson_coupling(eps=-4.0, background=moments.CompositeMean()))
+    assert specification._composite_mean_background is True
+    model = specification.build("composite_mean_poisson", frame=Cartesian2D())
+    assert "neutralizing" not in model.params
+    assert tuple(model.field_operators) == ("fields",)
 
 
 def test_moment_coefficients_preserve_typed_storage_and_numeric_values():

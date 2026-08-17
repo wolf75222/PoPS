@@ -13,8 +13,8 @@ from typing import Any
 
 from pops._ir.expr import Expr
 from pops._ir.ops import abs_ as _abs
-from pops._ir.ops import eig_real_status as _eig_real_status
-from pops._ir.ops import eig_lmin as _eig_lmin
+from pops._ir.ops import eig_all_real as _eig_all_real
+from pops._ir.ops import eig_lmin_bound as _eig_lmin_bound
 from pops._ir.ops import maximum as _maximum
 from pops._ir.ops import minimum as _minimum
 from pops._ir.ops import sqrt as _sqrt
@@ -46,12 +46,15 @@ def _pow(value: Any, exponent: int) -> Any:
     return result
 
 
-def _central_moments(moments: dict[tuple[int, int], Any]) -> tuple[Any, Any, Any, dict]:
+def _central_moments(
+    moments: dict[tuple[int, int], Any], floor: Any,
+) -> tuple[Any, Any, Any, dict]:
     rho = moments[(0, 0)]
-    velocity_x = moments[(1, 0)] / rho
-    velocity_y = moments[(0, 1)] / rho
+    safe_rho = _maximum(rho, floor)
+    velocity_x = moments[(1, 0)] / safe_rho
+    velocity_y = moments[(0, 1)] / safe_rho
     normalized = {
-        index: (1.0 if index == (0, 0) else value / rho)
+        index: (1.0 if index == (0, 0) else value / safe_rho)
         for index, value in moments.items()
     }
     central: dict[tuple[int, int], Any] = {
@@ -78,9 +81,11 @@ def _central_moments(moments: dict[tuple[int, int], Any]) -> tuple[Any, Any, Any
     return rho, velocity_x, velocity_y, central
 
 
-def _standardized(central: dict[tuple[int, int], Any]) -> tuple[Any, Any, dict]:
-    scale_x = _sqrt(central[(2, 0)])
-    scale_y = _sqrt(central[(0, 2)])
+def _standardized(
+    central: dict[tuple[int, int], Any], floor: Any,
+) -> tuple[Any, Any, dict]:
+    scale_x = _sqrt(_maximum(central[(2, 0)], floor))
+    scale_y = _sqrt(_maximum(central[(0, 2)], floor))
     result: dict[tuple[int, int], Any] = {
         (2, 0): 1.0,
         (0, 2): 1.0,
@@ -92,7 +97,13 @@ def _standardized(central: dict[tuple[int, int], Any]) -> tuple[Any, Any, dict]:
     return scale_x, scale_y, result
 
 
-def _p2p2(values: dict[tuple[int, int], Any]) -> tuple[tuple[Any, ...], ...]:
+def _signed_floor(value: Any, floor: Any) -> Any:
+    """Keep the sign of ``value`` while rejecting a vanishing eager denominator."""
+
+    return _select(_abs(value) < floor, _select(value >= 0.0, floor, -floor), value)
+
+
+def _p2p2(values: dict[tuple[int, int], Any], floor: Any) -> tuple[tuple[Any, ...], ...]:
     """Exact symbolic transcription of ``p2p2_2D.m`` with one eager-safe denominator."""
 
     a03 = values[(0, 3)]
@@ -124,7 +135,7 @@ def _p2p2(values: dict[tuple[int, int], Any]) -> tuple[tuple[Any, ...], ...]:
     t21 = a11 * t10
     t22 = a22 * t7
     t23 = a31 * t7
-    denominator = t7 - 1.0
+    denominator = _signed_floor(t7 - 1.0, floor)
     inverse = 1.0 / denominator
     t33 = a22 + t12 + t13 - t3 - t5 + t7 - 1.0 - t22
     t34 = a11 + t2 + t4 - a13 + t20 - t8 - t11 - t19
@@ -255,8 +266,8 @@ class HyQMOM15Relaxation(Descriptor):
             raise TypeError("HyQMOM15Relaxation variables must be symbolic PoPS expressions")
 
         moments = dict(zip(_INDICES, supplied, strict=True))
-        rho, velocity_x, velocity_y, central = _central_moments(moments)
-        scale_x, scale_y, s = _standardized(central)
+        rho, velocity_x, velocity_y, central = _central_moments(moments, self.small)
+        scale_x, scale_y, s = _standardized(central, self.small)
 
         # Large third standardized moments retain their Hankel margin while being capped.
         third_limit = 4.0 + self.mach / 2.0
@@ -332,14 +343,14 @@ class HyQMOM15Relaxation(Descriptor):
         )
         s[(0, 4)] = _select(correlation_repair, common_s4, s[(0, 4)])
 
-        real_x = _eig_real_status(
+        real_x = _eig_all_real(
             _transverse_jacobian(
                 s[(0, 3)], s[(0, 4)], s[(1, 1)], s[(1, 2)],
                 s[(1, 3)], s[(2, 1)], s[(2, 2)],
             ),
             im_tol=self.spectral_tolerance,
         )
-        real_y = _eig_real_status(
+        real_y = _eig_all_real(
             _transverse_jacobian(
                 s[(3, 0)], s[(4, 0)], s[(1, 1)], s[(2, 1)],
                 s[(3, 1)], s[(1, 2)], s[(2, 2)],
@@ -355,7 +366,7 @@ class HyQMOM15Relaxation(Descriptor):
         collision = self._collision(preprocessed)
         needs_collision = (
             (1.0 - correlation_repair)
-            * (_eig_lmin(_p2p2(preprocessed)) <= self.eigenvalue_cutoff)
+            * (_eig_lmin_bound(_p2p2(preprocessed, self.small)) <= self.eigenvalue_cutoff)
         )
         s = dict(preprocessed)
         s.update({
@@ -384,7 +395,7 @@ class HyQMOM15Relaxation(Descriptor):
         crossing_s3 = _sqrt(_abs(s30 * s03)) * _select(
             s30 > 0.0, 1.0, _select(s30 < 0.0, -1.0, 0.0),
         )
-        crossing_s4 = _sqrt(s40 * s04)
+        crossing_s4 = _sqrt(_abs(s40 * s04))
         crossing_s4 = _select(
             crossing_s4 - crossing_s3 * crossing_s3 - 1.0 < small,
             crossing_s3 * crossing_s3 + 1.0 + small,
@@ -442,7 +453,7 @@ class HyQMOM15Relaxation(Descriptor):
             repair_s12, target[(1, 1)] * target[(0, 3)], target[(1, 2)],
         )
 
-        target_matrix = _p2p2(target)
+        target_matrix = _p2p2(target, small)
         target_invalid = _either(
             target_matrix[0][0] * target_matrix[1][1]
             - target_matrix[0][1] * target_matrix[1][0] < 0.0,
@@ -455,7 +466,7 @@ class HyQMOM15Relaxation(Descriptor):
         crossing_repair_s3 = _sqrt(_abs(s03 * s30)) * _select(
             s30 > 0.0, 1.0, _select(s30 < 0.0, -1.0, 0.0),
         )
-        crossing_repair_s4 = _sqrt(s40 * s04)
+        crossing_repair_s4 = _sqrt(_abs(s40 * s04))
         crossing_repair_s4 = _select(
             crossing_repair_s4 - crossing_repair_s3 * crossing_repair_s3 - 1.0 < small,
             crossing_repair_s3 * crossing_repair_s3 + 1.0 + small,
@@ -478,8 +489,10 @@ class HyQMOM15Relaxation(Descriptor):
             for index in target
         }
 
-        denominator_plus = 3.0 * target[(1, 1)] / 16.0 + 3.0 / 16.0
-        denominator_minus = 3.0 * target[(1, 1)] / 16.0 - 3.0 / 16.0
+        denominator_plus = _signed_floor(
+            3.0 * target[(1, 1)] / 16.0 + 3.0 / 16.0, small)
+        denominator_minus = _signed_floor(
+            3.0 * target[(1, 1)] / 16.0 - 3.0 / 16.0, small)
         a03, a04 = target[(0, 3)], target[(0, 4)]
         a11, a12, a13 = target[(1, 1)], target[(1, 2)], target[(1, 3)]
         a21 = target[(2, 1)]
@@ -526,8 +539,10 @@ class HyQMOM15Relaxation(Descriptor):
             )
         variables = tuple(state)
         moments = dict(zip(_INDICES, variables, strict=True))
-        rho, _, _, central = _central_moments(moments)
-        valid_if = (rho > 0.0) * (central[(2, 0)] > 0.0) * (central[(0, 2)] > 0.0)
+        # First-order HLL and conservative AMR mixing can undershoot density or
+        # leave the covariance cone.  The map floors density and standardization
+        # scales; a non-finite or largely negative density stays non-repairable.
+        valid_if = moments[(0, 0)] > -self.small
         return model.local_transform(
             name, self.expressions(variables), on=state, valid_if=valid_if)
 
