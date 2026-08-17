@@ -9,7 +9,6 @@ from typing import Any, ClassVar, cast
 
 from pops.analytic import ScalarExpr
 from pops.domain import DomainBoundary
-from pops.frames import CartesianAxis
 from pops._ir import Expr
 from pops._ir.expr import Const
 from pops._ir.visitors import _key
@@ -879,10 +878,7 @@ class ResolvedTransportBoundarySet:
             dependencies = condition.provider.dependencies
             characteristic = dependencies.characteristic
             if characteristic.mode is not ClosureMode.NONE:
-                if (
-                    not isinstance(geometry.axis, CartesianAxis)
-                    or geometry.axis.name not in ("x", "y", "z")
-                ):
+                if getattr(geometry.axis, "name", None) not in ("x", "y", "z"):
                     raise NotImplementedError(
                         "characteristic no-inflow requires Cartesian x/y/z faces; polar and "
                         "embedded geometry have no prepared metric ABI"

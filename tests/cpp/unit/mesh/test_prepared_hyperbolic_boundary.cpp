@@ -352,7 +352,8 @@ TEST(test_prepared_hyperbolic_boundary, analytic_ghost_depth_cannot_exceed_norma
   EXPECT_THROW(boundary.fill_physical(state, geometry), std::invalid_argument);
 }
 
-TEST(test_prepared_hyperbolic_boundary, analytic_table_shape_mismatch_is_refused) {
+TEST(test_prepared_hyperbolic_boundary,
+     analytic_boundary_without_nd_coordinate_provider_is_refused) {
   EXPECT_THROW((void)prepare_hyperbolic_boundary<2>(
                    std::vector<std::string>(4, "foextrap"), std::vector<double>(4, 0.0),
                    identities<2>(), {"Scalar"}, false, {}, {}, {{"literal"}}, {{1.0}}, {""}),

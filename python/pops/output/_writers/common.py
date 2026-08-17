@@ -2051,6 +2051,29 @@ def piece_payload(
     return arrays, datasets, evidence
 
 
+_FACE_CENTERINGS = frozenset({"face_x", "face_y", "face_z"})
+_FACE_GEOMETRY_AXIS = {"face_x": 0, "face_y": 1, "face_z": 2}
+
+
+def _face_array_axis(dimension: int, centering: str) -> int:
+    """Return the dense-array axis whose extent is staggered for a face centering."""
+    if centering not in _FACE_GEOMETRY_AXIS:
+        raise ValueError("centering %r is not a face centering" % centering)
+    geometry_axis = _FACE_GEOMETRY_AXIS[centering]
+    if geometry_axis >= dimension:
+        raise ValueError(
+            "field centering %r is not defined for spatial rank %d"
+            % (centering, dimension)
+        )
+    return dimension - 1 - geometry_axis
+
+
+def _staggered_upper(upper: tuple[int, ...], array_axis: int) -> tuple[int, ...]:
+    result = list(upper)
+    result[array_axis] += 1
+    return tuple(result)
+
+
 def field_values_on_mask(field: Any, mask: Any, *, require_piece_subset: bool) -> Any:
     """Return values in row-major mask order from exact sparse pieces.
 
@@ -2097,7 +2120,7 @@ def validate_field_pieces(
     rank: int | None = None,
     size: int | None = None,
 ) -> None:
-    """Prove exact cell boxes or an exact nodal union for a rank-1/2/3 geometry."""
+    """Prove exact cell boxes, an exact nodal union, or an exact unique face union."""
     import math
     import numpy as np
 
@@ -2106,12 +2129,13 @@ def validate_field_pieces(
     dimension = len(geometry.cell_shape)
     if len(field.global_shape) != dimension:
         raise ValueError("field and geometry spatial ranks differ")
-    if field.centering not in {"cell", "node"}:
+    if field.centering not in {"cell", "node"} | _FACE_CENTERINGS:
         raise NotImplementedError(
-            "exact piece validation for %s fields requires a distinct face topology"
+            "exact piece validation for %s fields requires a distinct topology"
             % field.centering)
     expected_mask = None
     actual_mask = None
+    face_axis = None
     if field.centering == "node":
         expected_mask = np.zeros(field.global_shape, dtype=np.bool_)
         actual_mask = np.zeros(field.global_shape, dtype=np.bool_)
@@ -2120,6 +2144,15 @@ def validate_field_pieces(
             nodal_upper = tuple(value + 1 for value in upper)
             expected_mask[tuple(
                 slice(lo, hi) for lo, hi in zip(lower, nodal_upper, strict=True))] = True
+    elif field.centering in _FACE_CENTERINGS:
+        face_axis = _face_array_axis(dimension, field.centering)
+        expected_mask = np.zeros(field.global_shape, dtype=np.bool_)
+        actual_mask = np.zeros(field.global_shape, dtype=np.bool_)
+        for box in boxes:
+            lower, upper = box[:dimension], box[dimension:]
+            face_upper = _staggered_upper(upper, face_axis)
+            expected_mask[tuple(
+                slice(lo, hi) for lo, hi in zip(lower, face_upper, strict=True))] = True
     for piece in pieces:
         if len(piece.lower) != dimension:
             raise ValueError("field piece and geometry spatial ranks differ")
@@ -2130,13 +2163,20 @@ def validate_field_pieces(
         if field.centering == "cell":
             if piece.lower + piece.upper != box:
                 raise ValueError("field piece differs from its indexed exact geometry box")
-        else:
+        elif field.centering == "node":
             nodal_upper = tuple(value + 1 for value in box_upper)
             if any(
                     piece_lo < box_lo or piece_hi > box_hi
                     for piece_lo, piece_hi, box_lo, box_hi in zip(
                         piece.lower, piece.upper, box_lower, nodal_upper, strict=True)):
                 raise ValueError("nodal field piece lies outside its indexed geometry box")
+        else:
+            face_upper = _staggered_upper(box_upper, face_axis)
+            if any(
+                    piece_lo < box_lo or piece_hi > box_hi
+                    for piece_lo, piece_hi, box_lo, box_hi in zip(
+                        piece.lower, piece.upper, box_lower, face_upper, strict=True)):
+                raise ValueError("face field piece lies outside its indexed geometry box")
         if rank is not None and piece.owner_rank != rank:
             raise ValueError("field piece owner_rank differs from its publication rank")
         if size is not None and piece.owner_rank >= size:
@@ -2147,7 +2187,8 @@ def validate_field_pieces(
             spatial = tuple(
                 slice(lo, hi) for lo, hi in zip(piece.lower, piece.upper, strict=True))
             if np.any(actual_mask[spatial]):
-                raise ValueError("nodal field pieces overlap")
+                raise ValueError("%s field pieces overlap" % (
+                    "nodal" if field.centering == "node" else "face"))
             actual_mask[spatial] = True
     if field.centering == "cell":
         if complete:
@@ -2165,11 +2206,14 @@ def validate_field_pieces(
                 raise ValueError("field pieces do not authenticate every exact geometry box")
         return
     if actual_mask is None or expected_mask is None:
-        raise RuntimeError("nodal validation masks were not initialized")
+        raise RuntimeError("staggered validation masks were not initialized")
+    kind = "nodal" if field.centering == "node" else "face"
     if np.any(actual_mask & ~expected_mask):
-        raise ValueError("nodal field pieces extend outside the represented geometry")
+        raise ValueError("%s field pieces extend outside the represented geometry" % kind)
     if complete and not np.array_equal(actual_mask, expected_mask):
-        raise ValueError("nodal field pieces do not exactly cover the represented geometry points")
+        raise ValueError(
+            "%s field pieces do not exactly cover the represented geometry locations" % kind
+        )
 
 
 def selected_geometries(

@@ -1558,6 +1558,12 @@ inline PopsConstFieldViewV1 writer_field_view(
     result.extents[axis] = static_cast<std::size_t>(values.shape(value_axis));
     result.axis_strides[axis] = values.strides(value_axis) / item;
   }
+  for (int axis = kNativeDimension; axis < 3; ++axis) {
+    result.extents[axis] = 1;
+    result.axis_strides[axis] = 0;
+    result.ghost_lower[axis] = 0;
+    result.ghost_upper[axis] = 0;
+  }
   result.component_count = components;
   result.component_stride = spatial_offset == 1 ? values.strides(0) / item : 1;
   result.centering = POPS_FIELD_CENTERING_CELL_V1;
