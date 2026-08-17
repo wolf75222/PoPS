@@ -2308,8 +2308,8 @@ class ParaViewWriter:
                 "face mesh; that would silently recenter face locations onto primal cells"
             )
         dimension = geometries[0].spatial_rank
-        face_axis = (
-            None if face_centering is None
+        face_normal = (
+            0 if face_centering is None
             else _face_array_axis(dimension, face_centering)
         )
         if face_centering is None:
@@ -2317,7 +2317,7 @@ class ParaViewWriter:
             corner_offsets = _cell_corner_offsets(dimension)
         else:
             vtk_cell_type, points_per_cell = _VTK_FACE[dimension]
-            corner_offsets = _face_corner_offsets(dimension, face_axis)
+            corner_offsets = _face_corner_offsets(dimension, face_normal)
         emission_masks = {}
         replication_masks = {}
         for geometry in geometries:
@@ -2328,7 +2328,7 @@ class ParaViewWriter:
             if request.parallel_mode is not ParallelMode.PER_RANK:
                 emission_masks[geometry.key] = (
                     geometry.valid_cells if face_centering is None
-                    else _staggered_face_mask(geometry.valid_cells, face_axis)
+                    else _staggered_face_mask(geometry.valid_cells, face_normal)
                 )
                 replication_masks[geometry.key] = np.zeros(
                     emission_shape, dtype=np.bool_)
@@ -2378,7 +2378,7 @@ class ParaViewWriter:
             used = (
                 _point_mask(emission_masks[geometry.key])
                 if face_centering is None
-                else _face_point_mask(emission_masks[geometry.key], face_axis)
+                else _face_point_mask(emission_masks[geometry.key], face_normal)
             )
             point_masks[geometry.key] = used
             point_counts.append(int(np.count_nonzero(used)))

@@ -60,6 +60,7 @@
   "tests/python/integration/native_loader/test_prepared_preconditioner_component.py": 120.0,
   "tests/python/integration/native_loader/test_ssprk3_production.py": 155.7,
   "tests/python/integration/native_loader/test_uniform_restart_missing_history.py": 30.0,
+  "tests/python/integration/runtime/test_amr_local_transform_post_sync.py": 30.0,
   "tests/python/integration/runtime/test_axial_slip_wall_pipeline.py": 120.0,
   "tests/python/integration/runtime/test_coupling_preset_parity.py": 0.5,
   "tests/python/integration/runtime/test_diocotron_analytic_initial.py": 120.0,
@@ -200,7 +201,9 @@
   "tests/python/unit/descriptors/test_solvers_descriptors.py": 0.5,
   "tests/python/unit/descriptors/test_validation_report.py": 0.5,
   "tests/python/unit/domain/test_cartesian_domain_grid.py": 60.0,
+  "tests/python/unit/domain/test_cartesian3d_tuto.py": 2.0,
   "tests/python/unit/domain/test_domain_preview.py": 1.1,
+  "tests/python/unit/domain/test_domain_preview_nd.py": 2.0,
   "tests/python/unit/fields/test_external_field_solver_provider.py": 1.0,
   "tests/python/unit/fields/test_field_context_contract.py": 1.0,
   "tests/python/unit/fields/test_field_discretization_contract.py": 1.0,
@@ -283,6 +286,7 @@
   "tests/python/unit/reporting/test_report_tree.py": 1.0,
   "tests/python/unit/runtime/test_amr_bind_lowering.py": 1.0,
   "tests/python/unit/runtime/test_amr_checkpoint_contract.py": 1.0,
+  "tests/python/unit/runtime/test_amr_refinement_ratio_rank.py": 1.0,
   "tests/python/unit/runtime/test_amr_tagging_lowering.py": 1.0,
   "tests/python/unit/runtime/test_analytic_expression_lowering.py": 2.0,
   "tests/python/unit/runtime/test_auxiliary_component_routes.py": 1.0,
@@ -378,6 +382,7 @@
   "tests/python/unit/time/test_method_tableaux.py": 1.0,
   "tests/python/unit/time/test_multirate_history_contract.py": 1.0,
   "tests/python/unit/time/test_operator_handle_resolution.py": 1.0,
+  "tests/python/unit/time/test_post_synchronization.py": 2.0,
   "tests/python/unit/time/test_program_authoring_atomicity.py": 1.0,
   "tests/python/unit/time/test_program_cadence.py": 1.0,
   "tests/python/unit/time/test_program_deep_freeze.py": 1.0,
@@ -426,7 +431,7 @@
     "unit_seconds": "per-file pytest wall time",
     "measured_source": "borrowed _pops.so locally plus GitHub Actions run 30190778708 per-test timings",
     "estimated_note": "Unmeasured files use conservative path/content tiers (1/2/5/30/60/120 s); compiler-gated files retain native-compile estimates. Refresh every estimated row from a full CI run gate-python timing artifact.",
-    "estimated_count": 253,
+    "estimated_count": 258,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_scalar_advection_final_example.py",
@@ -466,6 +471,7 @@
       "tests/python/integration/native_loader/test_prepared_preconditioner_component.py",
       "tests/python/integration/native_loader/test_ssprk3_production.py",
       "tests/python/integration/native_loader/test_uniform_restart_missing_history.py",
+      "tests/python/integration/runtime/test_amr_local_transform_post_sync.py",
       "tests/python/integration/runtime/test_axial_slip_wall_pipeline.py",
       "tests/python/integration/runtime/test_diocotron_analytic_initial.py",
       "tests/python/integration/runtime/test_dsl_runtime_params.py",
@@ -550,6 +556,8 @@
       "tests/python/unit/codegen/test_validated_or_absent.py",
       "tests/python/unit/codegen/test_wave_speed_provider_manifest.py",
       "tests/python/unit/domain/test_cartesian_domain_grid.py",
+      "tests/python/unit/domain/test_cartesian3d_tuto.py",
+      "tests/python/unit/domain/test_domain_preview_nd.py",
       "tests/python/unit/fields/test_external_field_solver_provider.py",
       "tests/python/unit/fields/test_field_context_contract.py",
       "tests/python/unit/fields/test_field_discretization_contract.py",
@@ -614,6 +622,7 @@
       "tests/python/unit/reporting/test_report_tree.py",
       "tests/python/unit/runtime/test_amr_bind_lowering.py",
       "tests/python/unit/runtime/test_amr_checkpoint_contract.py",
+      "tests/python/unit/runtime/test_amr_refinement_ratio_rank.py",
       "tests/python/unit/runtime/test_amr_tagging_lowering.py",
       "tests/python/unit/runtime/test_analytic_expression_lowering.py",
       "tests/python/unit/runtime/test_auxiliary_component_routes.py",
@@ -664,6 +673,7 @@
       "tests/python/unit/time/test_method_tableaux.py",
       "tests/python/unit/time/test_multirate_history_contract.py",
       "tests/python/unit/time/test_operator_handle_resolution.py",
+      "tests/python/unit/time/test_post_synchronization.py",
       "tests/python/unit/time/test_program_authoring_atomicity.py",
       "tests/python/unit/time/test_program_cadence.py",
       "tests/python/unit/time/test_program_deep_freeze.py",
@@ -682,6 +692,6 @@
       "tests/python/unit/time/test_typed_provenance_guards.py",
       "tests/python/unit/time/test_typed_schedule.py"
     ],
-    "total_files": 422
+    "total_files": 427
   }
 }
