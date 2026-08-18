@@ -164,6 +164,21 @@ def load_visual_series(run_dir: str | Path, figure_id: str) -> dict[str, Any]:
         payload["data_kind"] = bundle.data_kind
         payload["verdict"] = bundle.verdict
         return payload
+    kind = payload.get("kind") or figure_id
+    if kind == "backend_parity":
+        if not payload.get("backends") or payload.get("values") is None:
+            raise VisualsError(f"empty visual_data backends: {figure_id}")
+        return payload
+    if kind == "performance_breakdown":
+        if not payload.get("stages") or payload.get("seconds") is None:
+            raise VisualsError(f"empty visual_data stages: {figure_id}")
+        return payload
+    if kind == "amr_boxes":
+        if not payload.get("boxes"):
+            raise VisualsError(f"empty visual_data boxes: {figure_id}")
+        return payload
+    if kind == "report_figure" and payload.get("panels"):
+        return payload
     if not _series_nonempty(payload.get("series")):
         raise VisualsError(f"empty visual_data series: {figure_id}")
     payload = dict(payload)

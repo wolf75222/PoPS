@@ -28,5 +28,7 @@ def test_am01_storyboard_uses_accepted_events(tmp_path: Path):
     storyboard = run / "analysis" / "storyboards" / "storyboard.svg"
     assert storyboard.is_file()
     text = storyboard.read_text(encoding="utf-8")
-    assert "initial" in text
-    assert "0123456789abcdef0123456789abcdef01234567" in text
+    assert "before_entry" in text
+    assert "periodic_crossing" in text
+    assert "fixture:" in text
+    assert "DETERMINISTIC FIXTURE" in text

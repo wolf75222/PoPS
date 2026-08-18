@@ -1,8 +1,0 @@
-{
-  "case_id": "AM-01",
-  "run_id": "fixture-2d-release",
-  "verdict": "pass",
-  "data_kind": "deterministic_fixture",
-  "label": "DETERMINISTIC FIXTURE \u2014 not a PoPS campaign result",
-  "title": "Wave crossing a static coarse-fine interface"
-}

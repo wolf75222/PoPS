@@ -8,7 +8,7 @@ from typing import Any
 from jsonschema import Draft202012Validator
 
 from verification.pops_verify.visualization.catalog import iter_catalog
-from verification.pops_verify.visualization.plots import file_sha256
+from verification.pops_verify.visualization.plots import PUBLICATION_FORMATS, file_sha256
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCHEMA_PATH = REPO_ROOT / "schemas" / "verification_visuals.v1.json"
@@ -50,6 +50,18 @@ def check_visual_manifest(run_dir: str | Path, *, suite: str = "pr") -> dict[str
             raise VisualsGateError(f"{item['figure_id']} is missing units")
         if not item.get("source_files"):
             raise VisualsGateError(f"{item['figure_id']} is missing source data")
+        if item.get("role") == "publication":
+            have_outputs = set(item.get("outputs") or {})
+            have_hashes = set(item.get("output_hashes") or {})
+            required = set(PUBLICATION_FORMATS)
+            if have_outputs != required:
+                raise VisualsGateError(
+                    f"{item['figure_id']} publication figure is missing required formats"
+                )
+            if have_hashes != required:
+                raise VisualsGateError(
+                    f"{item['figure_id']} publication figure is missing required hashes"
+                )
         for source in item["source_files"]:
             if not (root / source).is_file():
                 raise VisualsGateError(f"missing visual_data: {source}")

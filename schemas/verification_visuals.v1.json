@@ -285,7 +285,8 @@
         "proves",
         "does_not_prove",
         "quantitative_companion",
-        "pr"
+        "pr",
+        "verdict"
       ],
       "properties": {
         "case_id": {
@@ -401,6 +402,9 @@
         },
         "pr": {
           "type": "boolean"
+        },
+        "verdict": {
+          "$ref": "#/$defs/verdict"
         }
       }
     },

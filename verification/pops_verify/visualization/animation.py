@@ -50,7 +50,10 @@ def write_animation_frames(
         if note:
             figure.text(0.01, 0.01, note, fontsize=8)
         path = frames_dir / f"frame_{index:06d}.png"
-        figure.savefig(path, metadata={"Creator": "pops.verification.visuals.v1", "Date": None})
+        figure.savefig(
+            path,
+            metadata={"Creator": "pops.verification.visuals.v1", "Date": None},
+        )
         plt.close(figure)
         written.append(path)
     return written

@@ -1,8 +1,0 @@
-{
-  "case_id": "EU-02",
-  "run_id": "fixture-2d",
-  "verdict": "pass",
-  "data_kind": "deterministic_fixture",
-  "label": "DETERMINISTIC FIXTURE \u2014 not a PoPS campaign result",
-  "title": "Advected isentropic vortex"
-}

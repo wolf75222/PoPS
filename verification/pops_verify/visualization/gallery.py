@@ -5,7 +5,13 @@ from pathlib import Path
 import json
 from typing import Any, Iterable
 
-from verification.pops_verify.visualization.plots import render_prepared
+from verification.pops_verify.visualization.plots import (
+    FIXTURE_LABEL,
+    prepare_heatmap,
+    prepare_not_run,
+    qualify_fixture_caption,
+    render_prepared,
+)
 
 DASHBOARDS = (
     "orders_heatmap",
@@ -30,157 +36,204 @@ def _load_summary(output_dir: Path) -> dict[str, Any]:
 
 def _na_text(summary: dict[str, Any], key: str) -> str:
     reasons = summary.get("not_applicable_reason") or {}
-    return reasons.get(key) or reasons.get(f"{key}.*") or "not applicable"
+    return reasons.get(key) or reasons.get(f"{key}.*") or "not-run: topic not present"
 
 
-def _placeholder(title: str, message: str) -> dict[str, Any]:
-    return {
-        "kind": "reference_profile",
-        "figure_id": title,
-        "scale": "linear",
-        "xlabel": "status",
-        "ylabel": "value",
-        "series": [{"name": message, "x": [0.0, 1.0], "y": [0.0, 0.0], "style": "exact"}],
-        "title": f"{title}: {message}",
-    }
+def _topic_values(topic: dict[str, Any] | None) -> dict[str, float]:
+    if not isinstance(topic, dict):
+        return {}
+    collected: dict[str, float] = {}
+    for key, value in topic.items():
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            collected[key] = 1.0 if value else 0.0
+        elif isinstance(value, (int, float)):
+            collected[key] = float(value)
+    return collected
 
 
-def _orders_prepared(summary: dict[str, Any]) -> dict[str, Any]:
-    orders = summary.get("orders") or []
+def _heatmap(name: str, rows: list[str], columns: list[str], values: list[list[float]], title: str) -> dict[str, Any]:
+    return prepare_heatmap(
+        {
+            "kind": name if name in {"orders_heatmap", "component_coverage"} else "orders_heatmap",
+            "figure_id": name,
+            "rows": rows,
+            "columns": columns,
+            "values": values,
+            "units": {"x": "column", "y": "row", "field": name},
+            "title": title,
+            "verdict": "pass",
+        }
+    )
+
+
+def _orders(summary: dict[str, Any], *, temporal: bool) -> tuple[dict[str, Any], str]:
+    name = "temporal_dashboard" if temporal else "orders_heatmap"
+    orders = []
+    for item in summary.get("orders") or []:
+        if item.get("observed_order") is None:
+            continue
+        kind = str(item.get("kind") or "spatial")
+        if temporal and kind != "temporal":
+            continue
+        if not temporal and kind == "temporal":
+            continue
+        orders.append(item)
     if not orders:
-        return _placeholder("orders_heatmap", _na_text(summary, "orders"))
-    labels = [
-        f"{item['case_id']} {item['variable']} {item['observed_order']}"
-        for item in orders
-        if item.get("observed_order") is not None
-    ]
-    return {
-        "kind": "spatial_convergence",
-        "figure_id": "orders_heatmap",
-        "scale": "loglog",
-        "xlabel": "case index",
-        "ylabel": "observed order",
-        "series": [
-            {
-                "name": f"{item['case_id']} {item['variable']}",
-                "x": [index + 1, index + 2],
-                "y": [
-                    float(item["observed_order"]),
-                    float(item["observed_order"]),
-                ],
-                "style": "numerical",
-            }
-            for index, item in enumerate(orders)
-            if item.get("observed_order") is not None
-        ],
-        "reference_slopes": [],
-        "title": "Observed orders: " + "; ".join(labels),
-    }
+        reason = (
+            "no temporal orders in this report"
+            if temporal
+            else _na_text(summary, "orders")
+        )
+        return prepare_not_run(name, reason), "not-run"
+    cases: list[str] = []
+    kinds: list[str] = []
+    lookup: dict[tuple[str, str], float] = {}
+    labels = []
+    for item in orders:
+        case_id = str(item["case_id"])
+        kind = str(item.get("kind") or "spatial")
+        variable = str(item.get("variable") or "scalar")
+        order = float(item["observed_order"])
+        row = f"{case_id} {variable}"
+        if row not in cases:
+            cases.append(row)
+        if kind not in kinds:
+            kinds.append(kind)
+        lookup[(row, kind)] = order
+        labels.append(f"{case_id} {variable} {order}")
+    values = [[lookup.get((row, kind), float("nan")) for kind in kinds] for row in cases]
+    title = ("Temporal orders: " if temporal else "Observed orders: ") + "; ".join(labels)
+    prepared = _heatmap(name, cases, kinds, values, title)
+    prepared["figure_id"] = name
+    prepared["kind"] = "orders_heatmap"
+    return prepared, "pass"
 
 
-def _failures_prepared(summary: dict[str, Any]) -> dict[str, Any]:
+def _failures(summary: dict[str, Any]) -> tuple[dict[str, Any], str]:
     failures = summary.get("failures") or []
     if not failures:
-        return _placeholder("failure_map", "none")
-    return {
-        "kind": "reference_profile",
-        "figure_id": "failure_map",
-        "scale": "linear",
-        "xlabel": "failure index",
-        "ylabel": "count",
-        "series": [
-            {
-                "name": item["case_id"],
-                "x": [index, index + 1],
-                "y": [1.0, 1.0],
-                "style": "numerical",
-            }
-            for index, item in enumerate(failures)
-        ],
-        "title": "Failure map",
-    }
+        return prepare_not_run("failure_map", "no failures recorded"), "not-run"
+    rows = [str(item["case_id"]) for item in failures]
+    prepared = _heatmap(
+        "failure_map",
+        rows,
+        ["failed"],
+        [[1.0] for _ in rows],
+        "Failure map: " + ", ".join(rows),
+    )
+    prepared["figure_id"] = "failure_map"
+    prepared["kind"] = "orders_heatmap"
+    return prepared, "pass"
 
 
-def _topic_prepared(name: str, summary: dict[str, Any], topic: dict[str, Any] | None) -> dict[str, Any]:
-    if topic is None or all(value is None for value in topic.values()):
-        return _placeholder(name, _na_text(summary, name.split("_")[0] if name != "backend_parity" else "parallel_invariance"))
-    xs = []
-    ys = []
-    labels = []
-    for index, (key, value) in enumerate(topic.items(), start=1):
-        if isinstance(value, bool):
-            xs.append(float(index))
-            ys.append(1.0 if value else 0.0)
-            labels.append(key)
-        elif isinstance(value, (int, float)):
-            xs.append(float(index))
-            ys.append(float(value))
-            labels.append(key)
-    if not xs:
-        return _placeholder(name, _na_text(summary, name))
-    return {
-        "kind": "reference_profile",
-        "figure_id": name,
-        "scale": "linear",
-        "xlabel": "metric",
-        "ylabel": "value",
-        "series": [
-            {"name": label, "x": [x, x + 0.25], "y": [y, y], "style": "numerical"}
-            for label, x, y in zip(labels, xs, ys, strict=True)
-        ],
-        "title": name,
-    }
+def _topic_dashboard(
+    name: str,
+    summary: dict[str, Any],
+    topic: dict[str, Any] | None,
+    reason_key: str,
+) -> tuple[dict[str, Any], str]:
+    values = _topic_values(topic)
+    if not values:
+        return prepare_not_run(name, _na_text(summary, reason_key)), "not-run"
+    keys = list(values)
+    prepared = _heatmap(
+        name,
+        [name],
+        keys,
+        [[values[key] for key in keys]],
+        f"{name}: " + ", ".join(keys),
+    )
+    prepared["figure_id"] = name
+    prepared["kind"] = "orders_heatmap"
+    return prepared, "pass"
+
+
+def _coverage(summary: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    components = list((summary.get("coverage") or {}).get("components") or [])
+    if not components:
+        return prepare_not_run("component_coverage", "coverage.components missing"), "not-run"
+    prepared = _heatmap(
+        "component_coverage",
+        ["coverage"],
+        components,
+        [[1.0] * len(components)],
+        "Component coverage: " + ",".join(components),
+    )
+    prepared["figure_id"] = "component_coverage"
+    prepared["kind"] = "component_coverage"
+    return prepared, "pass"
+
+
+def _combine_status(statuses: dict[str, str]) -> str:
+    if any(value == "fail" for value in statuses.values()):
+        return "fail"
+    if any(value == "not-run" for value in statuses.values()):
+        return "not-run"
+    if statuses and all(value == "pass" for value in statuses.values()):
+        return "pass"
+    return "not-run"
 
 
 def render_release_gallery(
     output_dir: str | Path,
     *,
     formats: Iterable[str] = ("svg", "png", "pdf"),
-    caption: str | None = "campaign dashboard",
+    caption: str | None = None,
 ) -> dict[str, str]:
     root = Path(output_dir)
     summary = _load_summary(root)
-    sha = summary.get("repository_sha")
+    sha = summary.get("repository_sha") or "fixture:unspecified"
+    caption_text = qualify_fixture_caption(caption or FIXTURE_LABEL)
     gallery_dir = root / "analysis" / "figures" / "publication"
-    mapping: dict[str, dict[str, Any]] = {
-        "orders_heatmap": _orders_prepared(summary),
-        "failure_map": _failures_prepared(summary),
-        "amr_degradation": _topic_prepared("amr_degradation", summary, summary.get("amr")),
-        "component_coverage": _placeholder(
-            "component_coverage",
-            ",".join(summary["coverage"]["components"]),
+    mapping: dict[str, tuple[dict[str, Any], str]] = {
+        "orders_heatmap": _orders(summary, temporal=False),
+        "failure_map": _failures(summary),
+        "amr_degradation": _topic_dashboard(
+            "amr_degradation", summary, summary.get("amr"), "amr"
         ),
-        "backend_parity": _topic_prepared(
-            "backend_parity", summary, summary.get("parallel_invariance")
+        "component_coverage": _coverage(summary),
+        "backend_parity": _topic_dashboard(
+            "backend_parity", summary, summary.get("parallel_invariance"), "parallel_invariance"
         ),
-        "conservation_dashboard": _placeholder(
-            "conservation_dashboard", _na_text(summary, "coupling")
+        "conservation_dashboard": _topic_dashboard(
+            "conservation_dashboard", summary, summary.get("coupling"), "coupling"
         ),
-        "poisson_dashboard": _topic_prepared("poisson_dashboard", summary, summary.get("poisson")),
-        "temporal_dashboard": _orders_prepared(summary),
-        "amr_dashboard": _topic_prepared("amr_dashboard", summary, summary.get("amr")),
-        "performance_dashboard": _placeholder(
-            "performance_dashboard", _na_text(summary, "performance")
+        "poisson_dashboard": _topic_dashboard(
+            "poisson_dashboard", summary, summary.get("poisson"), "poisson"
+        ),
+        "temporal_dashboard": _orders(summary, temporal=True),
+        "amr_dashboard": _topic_dashboard(
+            "amr_dashboard", summary, summary.get("amr"), "amr"
+        ),
+        "performance_dashboard": _topic_dashboard(
+            "performance_dashboard", summary, summary.get("performance"), "performance"
         ),
     }
-    mapping["temporal_dashboard"]["figure_id"] = "temporal_dashboard"
     outputs: dict[str, str] = {}
+    status: dict[str, str] = {}
     for name in DASHBOARDS:
-        prepared = mapping[name]
+        prepared, dash_status = mapping[name]
         rendered = render_prepared(
             prepared,
             gallery_dir,
             formats=formats,
-            caption=caption,
+            caption=caption_text,
             provenance_sha=sha,
         )
         outputs[name] = rendered.get("svg") or next(iter(rendered.values()))
+        status[name] = dash_status
+    status["verdict"] = _combine_status({key: status[key] for key in DASHBOARDS})
+    status_path = root / "analysis" / "gallery_status.json"
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    status_path.write_text(json.dumps(status, indent=2) + "\n", encoding="utf-8")
     report_path = root / "REPORT.md"
     if report_path.is_file():
         block = ["", "## Visual gallery", ""]
         for name, path in outputs.items():
             rel = Path(path).resolve().relative_to(root.resolve())
-            block.append(f"- `{name}`: `{rel}`")
+            block.append(f"- `{name}`: `{rel}` ({status[name]})")
         report_path.write_text(
             report_path.read_text(encoding="utf-8") + "\n".join(block) + "\n",
             encoding="utf-8",

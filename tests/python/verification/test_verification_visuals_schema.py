@@ -135,6 +135,7 @@ PLAN_SECTION_40_2_MANIFEST = {
             "does_not_prove": "Temporal order.",
             "quantitative_companion": "spatial_convergence",
             "pr": True,
+            "verdict": "pass",
         }
     ],
     "dimensions": {

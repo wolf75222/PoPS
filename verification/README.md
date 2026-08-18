@@ -183,7 +183,14 @@ python scripts/render_verification_visuals.py \
   --run build/verification/<case-id>/<run-id> \
   --formats png,pdf,svg \
   --strict
+python scripts/render_verification_visuals.py \
+  --examples build/verification/phase8-fixtures \
+  --formats png,pdf,svg
 ```
+
+Generated fixture plots belong under gitignored `build/verification/`. Do not
+commit PNG/PDF/SVG duplicates. Every fixture figure is labeled
+`DETERMINISTIC FIXTURE` and uses a `fixture:` provenance SHA.
 
 ## Helpers
 

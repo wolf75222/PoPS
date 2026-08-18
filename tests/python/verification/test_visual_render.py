@@ -9,7 +9,6 @@ from jsonschema import Draft202012Validator
 
 from verification.pops_verify.visualization.fixtures import write_fixture_run
 from verification.pops_verify.visualization.render import render_run
-from verification.pops_verify.visualization.data import VisualsError
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCHEMA_PATH = REPO_ROOT / "schemas" / "verification_visuals.v1.json"
@@ -65,16 +64,25 @@ def test_render_identical_fixture_twice_is_stable(tmp_path: Path):
     render_run(second, suite="pr", formats=("svg",))
     left = json.loads((first / "analysis" / "visual_manifest.json").read_text())
     right = json.loads((second / "analysis" / "visual_manifest.json").read_text())
-    left_hashes = {item["figure_id"]: item["output_hashes"] for item in left["figures"]}
-    right_hashes = {item["figure_id"]: item["output_hashes"] for item in right["figures"]}
+    left_hashes = {
+        item["figure_id"]: item["output_hashes"].get("svg") for item in left["figures"]
+    }
+    right_hashes = {
+        item["figure_id"]: item["output_hashes"].get("svg") for item in right["figures"]
+    }
     assert left_hashes == right_hashes
+    assert all(digest for digest in left_hashes.values())
 
 
 def test_render_refuses_missing_source_data(tmp_path: Path):
     run = write_fixture_run(tmp_path, "TR-01", dimension=1)
     (run / "analysis" / "visual_data" / "spatial_convergence.json").unlink()
-    with pytest.raises(VisualsError, match="visual_data"):
-        render_run(run, suite="pr", formats=("svg",))
+    render_run(run, suite="pr", formats=("svg",))
+    manifest = json.loads((run / "analysis" / "visual_manifest.json").read_text())
+    assert manifest["verdict"] != "pass"
+    ids = {item["figure_id"] for item in manifest["figures"]}
+    assert "spatial_convergence" not in ids
+    assert not list((run / "analysis").rglob("spatial_convergence.svg"))
 
 
 def test_not_run_writes_manifest_without_fake_curves(tmp_path: Path):

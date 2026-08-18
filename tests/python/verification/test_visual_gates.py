@@ -24,6 +24,19 @@ def test_rendered_pr_manifest_passes_quality_gate(tmp_path: Path):
     check_visual_manifest(run, suite="pr")
 
 
+def test_publication_figure_missing_format_fails_gate(tmp_path: Path):
+    run = write_fixture_run(tmp_path, "TR-01", dimension=1)
+    render_run(run, suite="pr", formats=("svg", "png", "pdf"))
+    manifest_path = run / "analysis" / "visual_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    publication = next(item for item in manifest["figures"] if item["role"] == "publication")
+    publication["outputs"].pop("pdf", None)
+    publication["output_hashes"].pop("pdf", None)
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    with pytest.raises(VisualsGateError, match="required formats|required hashes"):
+        check_visual_manifest(run, suite="pr")
+
+
 def test_hero_without_quantitative_companion_fails(tmp_path: Path):
     run = write_fixture_run(tmp_path, "TR-01", dimension=1)
     render_run(run, suite="pr", formats=("svg",))

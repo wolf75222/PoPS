@@ -44,7 +44,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--formats", default="png,pdf,svg")
     parser.add_argument("--suite", default="pr", choices=["pr", "nightly", "weekly", "release", "two_node"])
     parser.add_argument("--strict", action="store_true", default=True)
-    parser.add_argument("--examples", type=Path, help="Write labeled TR-01/PO-01 fixture plots here.")
+    parser.add_argument(
+        "--examples",
+        type=Path,
+        help="Write labeled fixture plots under this gitignored directory (use build/verification/).",
+    )
     parser.add_argument("--gallery", type=Path, help="Campaign report directory for §40.7 dashboards.")
     args = parser.parse_args(argv)
     formats = _parse_formats(args.formats)

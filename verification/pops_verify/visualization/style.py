@@ -23,6 +23,9 @@ _RC: dict[str, Any] = {
 
 
 def configure_matplotlib() -> Any:
+    import os
+
+    os.environ.setdefault("SOURCE_DATE_EPOCH", "0")
     import matplotlib
 
     matplotlib.use("Agg", force=True)

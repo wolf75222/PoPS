@@ -1,6 +1,7 @@
 """Static storyboards from accepted-state frames (plan §40.1, §40.4.3)."""
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from verification.pops_verify.visualization.data import VisualsError
@@ -39,5 +40,15 @@ def render_storyboard(
     if note:
         figure.text(0.01, 0.01, note, fontsize=8)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    figure.savefig(output_path, metadata={"Creator": "pops.verification.visuals.v1", "Date": None})
+    suffix = Path(output_path).suffix.lstrip(".").lower()
+    if suffix == "pdf":
+        metadata = {
+            "Creator": "pops.verification.visuals.v1",
+            "Producer": "pops.verification.visuals.v1",
+            "CreationDate": None,
+            "ModDate": None,
+        }
+    else:
+        metadata = {"Creator": "pops.verification.visuals.v1", "Date": None}
+    figure.savefig(output_path, metadata=metadata)
     plt.close(figure)
