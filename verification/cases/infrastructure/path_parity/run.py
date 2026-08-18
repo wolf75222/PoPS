@@ -14,10 +14,6 @@ from verification.pops_verify.case_authoring import load_sibling_module
 from verification.pops_verify.reference_errors import reference_errors
 
 _exact = load_sibling_module(Path(__file__).with_name("exact.py"))
-_TR01_RUN = (
-    Path(__file__).resolve().parents[2] / "transport" / "advection_sine" / "run.py"
-)
-_tr01 = load_sibling_module(_TR01_RUN)
 
 HYBRID_NATIVE_CPP_REFUSAL = "public hybrid/native C++ authoring not active"
 
@@ -46,8 +42,10 @@ def max_path_difference(n_cells: int = _exact.DEFAULT_N_CELLS, t=0.0) -> float:
 
 
 def public_dsl_case(n_cells: int = _exact.DEFAULT_N_CELLS):
-    """Return the public TR-01 Case. That Case is the DSL path."""
-    return _tr01.build_case(n_cells)
+    """Return the shared 1-d TR-01 Case. That Case is the DSL path."""
+    from verification.pops_verify.tr01_runtime import build_case
+
+    return build_case(n_cells)
 
 
 def refuse_hybrid_native_cpp() -> str:

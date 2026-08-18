@@ -82,7 +82,7 @@ def test_dtype_contract():
     assert np.all(np.isfinite(f32))
     assert np.all(np.isfinite(f64))
     centers = exact.cell_centers(N_CELLS)
-    np.testing.assert_array_equal(f64, tr01.exact_sine_1d(centers, T))
+    np.testing.assert_array_equal(f64, tr01.exact_sine(centers, T))
     assert exact.fields_are_finite(f32, f64)
 
 

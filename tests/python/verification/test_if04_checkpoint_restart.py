@@ -12,14 +12,12 @@ from jsonschema import Draft202012Validator
 from verification.pops_verify.case_authoring import load_sibling_module
 from verification.pops_verify.reference_errors import reference_errors
 from verification.pops_verify.report import ARTIFACTS
+from verification.pops_verify.tr01_runtime import build_case
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CASE_DIR = REPO_ROOT / "verification" / "cases" / "infrastructure" / "checkpoint_restart"
 TR01_EXACT = (
     REPO_ROOT / "verification" / "cases" / "transport" / "advection_sine" / "exact.py"
-)
-TR01_RUN = (
-    REPO_ROOT / "verification" / "cases" / "transport" / "advection_sine" / "run.py"
 )
 SCHEMA_PATH = REPO_ROOT / "schemas" / "verification_report.v1.json"
 CASE_MODULES = ("exact.py", "run.py", "analyze.py")
@@ -78,7 +76,7 @@ def test_exact_loads_tr01_via_load_sibling_module():
     centers = exact.cell_centers(exact.N_CELLS)
     np.testing.assert_array_equal(
         exact.manufactured_q(centers, exact.T),
-        tr01.exact_sine_1d(centers, exact.T),
+        tr01.exact_sine(centers, exact.T),
     )
 
 
@@ -125,8 +123,7 @@ def test_write_if04_report_writes_four_schema_valid_artifacts(tmp_path: Path):
 
 def test_checkpoint_consumer_installs_on_tr01_case():
     run = _load_case_module("run")
-    tr01 = load_sibling_module(TR01_RUN)
-    case = run.install_checkpoint_consumer(tr01.build_case(8))
+    case = run.install_checkpoint_consumer(build_case(8))
     assert case.options()["has_consumers"] is True
     assert run.refuse_native_restore() == RESTORE_MISSING
 

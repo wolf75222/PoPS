@@ -76,11 +76,11 @@ def test_exact_loads_tr01_via_load_sibling_module():
     x1d, _ = tr01.uniform_cell_centers(N_CELLS)
     np.testing.assert_array_equal(
         exact.exact_sine(x1d, T, a=AX, k=KX),
-        tr01.exact_sine_1d(x1d, T, a=AX, k=KX),
+        tr01.exact_sine(x1d, T, a=AX, k=KX),
     )
     x, y = np.meshgrid(x1d, x1d, indexing="ij")
-    sx = (tr01.exact_sine_1d(x, T, a=AX, k=KX) - tr01.Q0) / tr01.EPS
-    sy = (tr01.exact_sine_1d(y, T, a=AY, k=KY) - tr01.Q0) / tr01.EPS
+    sx = (tr01.exact_sine(x, T, a=AX, k=KX) - tr01.Q0) / tr01.EPS
+    sy = (tr01.exact_sine(y, T, a=AY, k=KY) - tr01.Q0) / tr01.EPS
     np.testing.assert_array_equal(
         exact.exact_product(x, y, T, kx=KX, ky=KY, ax=AX, ay=AY),
         tr01.Q0 + tr01.EPS * sx * sy,

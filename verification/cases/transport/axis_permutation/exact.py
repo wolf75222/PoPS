@@ -17,7 +17,7 @@ _TR01_EXACT = (
 )
 _tr01 = load_sibling_module(_TR01_EXACT)
 
-exact_sine = _tr01.exact_sine_1d
+exact_sine = _tr01.exact_sine
 uniform_cell_centers = _tr01.uniform_cell_centers
 Q0 = _tr01.Q0
 EPS = _tr01.EPS

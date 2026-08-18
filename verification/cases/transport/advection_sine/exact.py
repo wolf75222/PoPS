@@ -1,6 +1,7 @@
-"""Manufactured 3-d oblique periodic advection sine (plan TR-01 / Annexe A.1).
+"""Manufactured advection sine for TR-01 and 1-d siblings.
 
-Canonical data: a = (1, 1, 1), k = (1, 2, 3), T = 1 on the unit cube.
+Canonical 3-d data: a = (1, 1, 1), k = (1, 2, 3), T = 1 on the unit cube
+via ``exact_sine_3d``. Shared 1-d sibling samples keep ``exact_sine(x, t)``.
 Does not import pops or read a PoPS output.
 """
 from __future__ import annotations
@@ -60,7 +61,17 @@ def cell_bounds(n_cells: int):
     return lo, hi
 
 
-def exact_sine(
+def exact_sine(x, t, *, q0=Q0, eps=EPS, a=1.0, k=1.0) -> np.ndarray:
+    """1-d q(x, t) = q0 + ε sin(2π k (x − a t)) on periodic [0, 1].
+
+    Shared by AM / IF / TM siblings. Not the canonical TR-01 3-d case.
+    """
+    points = np.asarray(x, dtype=np.float64)
+    departure = np.mod(points - float(a) * float(t), 1.0)
+    return float(q0) + float(eps) * np.sin(2.0 * np.pi * float(k) * departure)
+
+
+def exact_sine_3d(
     x,
     y,
     z,
@@ -71,7 +82,7 @@ def exact_sine(
     a=A,
     k=K,
 ) -> np.ndarray:
-    """Return q(x, y, z, t) = q0 + ε sin(2π k · (x − a t)) on periodic [0, 1]³."""
+    """Canonical q(x, y, z, t) = q0 + ε sin(2π k · (x − a t)) on [0, 1]³."""
     xx = np.asarray(x, dtype=np.float64)
     yy = np.asarray(y, dtype=np.float64)
     zz = np.asarray(z, dtype=np.float64)
@@ -84,10 +95,3 @@ def exact_sine(
         + kz * (zz - az * time)
     )
     return float(q0) + float(eps) * np.sin(2.0 * np.pi * phase)
-
-
-def exact_sine_1d(x, t, *, q0=Q0, eps=EPS, a=1.0, k=1.0) -> np.ndarray:
-    """1-d line sample of a translated sine. Not the TR-01 3-d case."""
-    points = np.asarray(x, dtype=np.float64)
-    departure = np.mod(points - float(a) * float(t), 1.0)
-    return float(q0) + float(eps) * np.sin(2.0 * np.pi * float(k) * departure)

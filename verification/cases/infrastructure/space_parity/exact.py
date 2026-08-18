@@ -21,7 +21,7 @@ _TR01_EXACT = (
 )
 _tr01 = load_sibling_module(_TR01_EXACT)
 
-exact_sine = _tr01.exact_sine_1d
+exact_sine = _tr01.exact_sine
 
 EXECUTION_SPACES = ("KokkosSerial", "KokkosOpenMP")
 SPACE_THREADS = {"KokkosSerial": 1, "KokkosOpenMP": 8}

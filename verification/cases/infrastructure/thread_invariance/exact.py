@@ -18,7 +18,7 @@ _TR01_EXACT = (
 )
 _tr01 = load_sibling_module(_TR01_EXACT)
 
-exact_sine = _tr01.exact_sine_1d
+exact_sine = _tr01.exact_sine
 
 THREAD_COUNTS = (1, 2, 4, 8)
 DEFAULT_N_CELLS = 32

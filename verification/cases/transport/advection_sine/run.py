@@ -243,7 +243,7 @@ def _oracle_cell_averages(n_cells: int, t: float) -> np.ndarray:
     lo, hi = _exact.cell_bounds(n_cells)
 
     def _u(x, y, z, time):
-        return _exact.exact_sine(x, y, z, time)
+        return _exact.exact_sine_3d(x, y, z, time)
 
     return analytic_cell_averages(_u, lo, hi, t)
 

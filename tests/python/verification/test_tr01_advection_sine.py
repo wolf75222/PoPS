@@ -76,17 +76,37 @@ def test_canonical_3d_data_matches_annexe_a():
     assert float(exact.T_END) == 1.0
     assert tuple(exact.RESOLUTIONS) == RESOLUTIONS
     xx, yy, zz, volumes = exact.uniform_cell_mesh(8)
-    q0 = exact.exact_sine(xx, yy, zz, 0.0)
-    q1 = exact.exact_sine(xx, yy, zz, 1.0)
+    q0 = exact.exact_sine_3d(xx, yy, zz, 0.0)
+    q1 = exact.exact_sine_3d(xx, yy, zz, 1.0)
     np.testing.assert_allclose(q0, q1, atol=1.0e-12)
     assert volumes.shape == (8, 8, 8)
     assert xx.shape == (8, 8, 8)
 
 
+def test_shared_1d_exact_sine_accepts_centers_and_time():
+    exact = _load_case_module("exact")
+    centers, volumes = exact.uniform_cell_centers(16)
+    q0 = exact.exact_sine(centers, 0.0)
+    q1 = exact.exact_sine(centers, 1.0, a=1.0, k=1.0)
+    np.testing.assert_allclose(q0, q1, atol=1.0e-12)
+    assert q0.shape == (16,)
+    assert volumes.shape == (16,)
+
+
+def test_tr01_runtime_stays_dedicated_1d():
+    text = (REPO_ROOT / "verification" / "pops_verify" / "tr01_runtime.py").read_text(
+        encoding="utf-8"
+    )
+    assert "_require_native_dim3" not in text
+    assert "(count, count, count)" not in text
+    assert "exact_sine(" in text
+    assert "(authored.n_cells,)" in text or "(count,)" in text
+
+
 def test_reference_errors_of_exact_vs_exact_are_zero():
     exact = _load_case_module("exact")
     xx, yy, zz, volumes = exact.uniform_cell_mesh(8)
-    field = exact.exact_sine(xx, yy, zz, 0.0)
+    field = exact.exact_sine_3d(xx, yy, zz, 0.0)
     errors = reference_errors(field, field, volumes)
     assert errors.l1 == 0.0
     assert errors.l2 == 0.0
@@ -98,7 +118,7 @@ def test_cell_average_oracle_is_finite_on_the_cube():
     lo, hi = exact.cell_bounds(8)
 
     def _u(x, y, z, time):
-        return exact.exact_sine(x, y, z, time)
+        return exact.exact_sine_3d(x, y, z, time)
 
     averages = analytic_cell_averages(_u, lo, hi, 0.0)
     assert averages.shape == (8, 8, 8)

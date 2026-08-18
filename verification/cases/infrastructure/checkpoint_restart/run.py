@@ -130,12 +130,14 @@ def run_native(n_cells: int = _exact.N_CELLS, t=_exact.T, path=None):
     )
     from verification.pops_verify.reference_errors import reference_errors
 
+    from verification.pops_verify.tr01_runtime import author
+
     tr01 = load_sibling_module(_TR01_RUN)
     missing = tr01._native_unavailable_reason()
     if missing:
         raise NativeUnavailable(missing)
-    authored_c = tr01._author(int(n_cells))
-    authored_r = tr01._author(int(n_cells))
+    authored_c = author(int(n_cells))
+    authored_r = author(int(n_cells))
     work = _local_work_dir()
     install_checkpoint_consumer(authored_r.case, target="checkpoints/restart")
     layout = uniform_periodic_layout(authored_c.frame, (authored_c.n_cells,))

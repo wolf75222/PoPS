@@ -19,7 +19,7 @@ _TR01_EXACT = (
 )
 _tr01 = load_sibling_module(_TR01_EXACT)
 
-exact_sine = _tr01.exact_sine_1d
+exact_sine = _tr01.exact_sine
 
 CADENCES = (1, 2, 10)
 T = 0.25
