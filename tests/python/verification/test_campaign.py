@@ -53,3 +53,49 @@ def test_resolve_artifact_dim_cli_overrides_env():
     assert resolve_artifact_dim(cli_value=2, environ={"POPS_NATIVE_DIM": "1"}) == 2
     assert resolve_artifact_dim(cli_value=None, environ={"POPS_NATIVE_DIM": "1"}) == 1
     assert resolve_artifact_dim(cli_value=None, environ={}) is None
+
+
+RICH_IF01 = {
+    "id": "IF-01",
+    "native_dimensions": [1],
+    "execution_spaces": ["KokkosSerial"],
+    "mpi_modes": ["on"],
+    "evidence_status": "required",
+    "requires": ["mpi"],
+    "resources": {
+        "pr": {
+            "nodes": 1,
+            "mpi_ranks": 2,
+            "omp_threads": 1,
+            "resolutions": [32, 64],
+        }
+    },
+}
+
+
+def test_expand_jobs_parameterizes_suite_space_mpi_resources_and_evidence():
+    from verification.pops_verify.campaign import CampaignRequest
+
+    jobs = expand_jobs(
+        [RICH_IF01],
+        [1],
+        artifact_dim=None,
+        suite="pr",
+        execution_space="KokkosSerial",
+        mpi_mode="on",
+    )
+    assert len(jobs) == 1
+    job = jobs[0]
+    assert job.case_id == "IF-01"
+    assert job.pops_native_dim == 1
+    assert job.suite == "pr"
+    assert job.execution_space == "KokkosSerial"
+    assert job.mpi_mode == "on"
+    assert job.min_resolution == 32
+    assert job.evidence_status == "required"
+    assert job.resources.nodes == 1
+    assert job.resources.mpi_ranks == 2
+    assert job.resources.resolutions == (32, 64)
+    request = CampaignRequest.from_job(job)
+    assert request.mpi_mode == "on"
+    assert request.min_resolution == 32

@@ -142,7 +142,9 @@ def test_valid_pr_plan_has_dummy_case(tmp_path: Path):
         "TM-07",
     }
     assert result.stdout.strip() == f"planned {len(ids)} cases"
-    assert {"case_id": "PH-00", "pops_native_dim": 1} in plan["jobs"]
+    assert any(
+        job["case_id"] == "PH-00" and job["pops_native_dim"] == 1 for job in plan["jobs"]
+    )
 
 
 def test_valid_pr_plan_includes_tr01_only_for_dimension_3(tmp_path: Path):
@@ -161,7 +163,9 @@ def test_valid_pr_plan_includes_tr01_only_for_dimension_3(tmp_path: Path):
     plan = json.loads((output / "plan.json").read_text(encoding="utf-8"))
     ids = [case["id"] for case in plan["cases"]]
     assert "TR-01" in ids
-    assert {"case_id": "TR-01", "pops_native_dim": 3} in plan["jobs"]
+    assert any(
+        job["case_id"] == "TR-01" and job["pops_native_dim"] == 3 for job in plan["jobs"]
+    )
 
 
 def test_invalid_suite_exits_one(tmp_path: Path):
@@ -233,7 +237,8 @@ def test_selects_cases_matching_suite_and_dimensions(tmp_path: Path):
     assert result.stdout.strip() == "planned 1 cases"
     plan = json.loads((output / "plan.json").read_text(encoding="utf-8"))
     assert [case["id"] for case in plan["cases"]] == ["CP-02"]
-    assert plan["jobs"] == [{"case_id": "CP-02", "pops_native_dim": 1}]
+    assert [job["case_id"] for job in plan["jobs"]] == ["CP-02"]
+    assert plan["jobs"][0]["pops_native_dim"] == 1
 
     miss = tmp_path / "miss"
     missed = _run(
@@ -255,9 +260,106 @@ def test_selects_cases_matching_suite_and_dimensions(tmp_path: Path):
     assert missed_plan["jobs"] == []
 
 
-def test_execute_writes_results_and_keeps_plan(tmp_path: Path):
+def _manifest_header() -> str:
+    return """\
+schema = "pops.verification.manifest.v1"
+repository = "wolf75222/PoPS"
+max_nodes = 2
+
+[current_capabilities]
+exact_native_dimension = true
+cartesian_system_runtime = true
+polar_system_runtime = false
+amr_total_levels_baseline = 3
+amr_refinement_ratios_baseline = [2, 2]
+hdf5_requires_mpi = true
+"""
+
+
+def _write_case_manifest(
+    tmp_path: Path,
+    *,
+    case_id: str,
+    run_py: str,
+    evidence_status: str = "required",
+    requires: list[str] | None = None,
+    mpi_modes: str = '["off"]',
+    execution_spaces: str = '["KokkosSerial"]',
+    extra_cases: str = "",
+) -> tuple[Path, Path]:
+    case_dir = tmp_path / "cases" / case_id
+    case_dir.mkdir(parents=True)
+    (case_dir / "run.py").write_text(run_py, encoding="utf-8")
+    req = requires if requires is not None else []
+    req_lit = "[" + ", ".join(f'"{item}"' for item in req) + "]"
     manifest = tmp_path / "manifest.toml"
-    manifest.write_text(PLAN_SECTION_5_EXAMPLE, encoding="utf-8")
+    manifest.write_text(
+        _manifest_header()
+        + f"""
+[[case]]
+id = "{case_id}"
+path = "{case_dir / "run.py"}"
+name = "fixture {case_id}"
+verification_kind = "infrastructure"
+evidence_status = "{evidence_status}"
+physics = []
+oracle = "fixture"
+native_dimensions = [1]
+execution_spaces = {execution_spaces}
+mpi_modes = {mpi_modes}
+suites = ["pr"]
+requires = {req_lit}
+
+[case.resources.pr]
+nodes = 1
+mpi_ranks = 1
+omp_threads = 1
+resolutions = [32, 64]
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+finite = true
+"""
+        + extra_cases,
+        encoding="utf-8",
+    )
+    return manifest, case_dir
+
+
+def _write_authenticated_leaf(tmp_path: Path, *, dimension: int = 1, has_mpi: bool = False) -> Path:
+    import hashlib
+    import importlib.machinery
+
+    suffix = importlib.machinery.EXTENSION_SUFFIXES[0]
+    root = tmp_path / "native"
+    leaf = root / f"dim{dimension}" / f"_pops{suffix}"
+    leaf.parent.mkdir(parents=True, exist_ok=True)
+    payload = b"fake-exact-rank-leaf"
+    leaf.write_bytes(payload)
+    row = {
+        "dimension": dimension,
+        "path": f"dim{dimension}/_pops{suffix}",
+        "sha256": hashlib.sha256(payload).hexdigest(),
+        "version": "1.0.0",
+        "abi_key": "abi-test",
+        "has_mpi": has_mpi,
+        "has_kokkos": True,
+    }
+    (root / "variants.json").write_text(
+        json.dumps({"schema_version": 1, "variants": [row]}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return root
+
+
+def test_execute_without_authenticated_artifact_is_refused(tmp_path: Path):
+    manifest, _case_dir = _write_case_manifest(
+        tmp_path,
+        case_id="IF-08",
+        run_py="def run_native(request=None, n_cells=None):\n    return None\n",
+    )
     output = tmp_path / "out"
     result = _run(
         "--suite",
@@ -272,15 +374,306 @@ def test_execute_writes_results_and_keeps_plan(tmp_path: Path):
         str(manifest),
         "--execute",
     )
-    assert result.returncode in (0, 1), result.stderr
-    assert (output / "plan.json").is_file()
-    assert (output / "results.json").is_file()
+    assert result.returncode == 1
+    combined = f"{result.stderr}\n{result.stdout}".lower()
+    assert "authenticat" in combined or "exact-rank" in combined or "variant" in combined
+    assert not (output / "results.json").exists() or (
+        json.loads((output / "results.json").read_text(encoding="utf-8"))
+        and all(row.get("status") != "pass" for row in json.loads((output / "results.json").read_text(encoding="utf-8")))
+    )
+
+
+def test_plan_without_native_still_writes_plan(tmp_path: Path):
+    manifest, _case_dir = _write_case_manifest(
+        tmp_path,
+        case_id="IF-08",
+        run_py="def run_native(request=None, n_cells=None):\n    return None\n",
+    )
+    output = tmp_path / "out"
+    result = _run(
+        "--suite",
+        "pr",
+        "--dimensions",
+        "1",
+        "--max-nodes",
+        "2",
+        "--output",
+        str(output),
+        "--manifest",
+        str(manifest),
+    )
+    assert result.returncode == 0, result.stderr
+    plan = json.loads((output / "plan.json").read_text(encoding="utf-8"))
+    assert plan["jobs"][0]["case_id"] == "IF-08"
+    assert plan["jobs"][0]["pops_native_dim"] == 1
+    assert not (output / "results.json").exists()
+
+
+def test_execute_passes_manifest_parameters_to_run_native(tmp_path: Path):
+    manifest, case_dir = _write_case_manifest(
+        tmp_path,
+        case_id="IF-08",
+        run_py="""
+from pathlib import Path
+import json
+
+def run_native(request=None, n_cells=None):
+    Path(__file__).with_name("called.json").write_text(
+        json.dumps({
+            "has_request": request is not None,
+            "n_cells": n_cells,
+            "mpi_mode": getattr(request, "mpi_mode", None),
+            "suite": getattr(request, "suite", None),
+            "execution_space": getattr(request, "execution_space", None),
+        }),
+        encoding="utf-8",
+    )
+    return None
+""",
+    )
+    leaf = _write_authenticated_leaf(tmp_path)
+    output = tmp_path / "out"
+    result = _run(
+        "--suite",
+        "pr",
+        "--dimensions",
+        "1",
+        "--max-nodes",
+        "2",
+        "--output",
+        str(output),
+        "--manifest",
+        str(manifest),
+        "--execute",
+        env={"POPS_NATIVE_DIM": "1", "POPS_NATIVE_VARIANTS_ROOT": str(leaf)},
+    )
+    assert result.returncode == 0, result.stderr
+    called = json.loads((case_dir / "called.json").read_text(encoding="utf-8"))
+    assert called["has_request"] is True
+    assert called["n_cells"] == 32
+    assert called["suite"] == "pr"
+    assert called["execution_space"] == "KokkosSerial"
     rows = json.loads((output / "results.json").read_text(encoding="utf-8"))
-    assert rows
-    assert rows[0]["case_id"] == "CP-02"
-    assert rows[0]["status"] in {"ok", "skipped", "failed", "no_run_native"}
-    assert "planned 1 cases" in result.stdout
-    assert "executed" in result.stdout
+    assert rows[0]["status"] == "pass"
+
+
+def test_execute_required_native_unavailable_is_fail(tmp_path: Path):
+    manifest, _case_dir = _write_case_manifest(
+        tmp_path,
+        case_id="IF-08",
+        run_py="""
+class NativeUnavailable(RuntimeError):
+    pass
+
+def run_native(request=None, n_cells=None):
+    raise NativeUnavailable("kokkos missing")
+""",
+    )
+    leaf = _write_authenticated_leaf(tmp_path)
+    output = tmp_path / "out"
+    result = _run(
+        "--suite",
+        "pr",
+        "--dimensions",
+        "1",
+        "--max-nodes",
+        "2",
+        "--output",
+        str(output),
+        "--manifest",
+        str(manifest),
+        "--execute",
+        env={"POPS_NATIVE_DIM": "1", "POPS_NATIVE_VARIANTS_ROOT": str(leaf)},
+    )
+    assert result.returncode == 1
+    rows = json.loads((output / "results.json").read_text(encoding="utf-8"))
+    assert rows[0]["status"] == "fail"
+    assert rows[0]["status"] not in {"skipped", "ok", "no_run_native"}
+
+
+def test_execute_required_missing_runner_is_fail(tmp_path: Path):
+    manifest, _case_dir = _write_case_manifest(
+        tmp_path,
+        case_id="IF-08",
+        run_py="VALUE = 1\n",
+    )
+    leaf = _write_authenticated_leaf(tmp_path)
+    output = tmp_path / "out"
+    result = _run(
+        "--suite",
+        "pr",
+        "--dimensions",
+        "1",
+        "--max-nodes",
+        "2",
+        "--output",
+        str(output),
+        "--manifest",
+        str(manifest),
+        "--execute",
+        env={"POPS_NATIVE_DIM": "1", "POPS_NATIVE_VARIANTS_ROOT": str(leaf)},
+    )
+    assert result.returncode == 1
+    rows = json.loads((output / "results.json").read_text(encoding="utf-8"))
+    assert rows[0]["status"] == "fail"
+
+
+def test_execute_capability_gated_unavailable_is_not_supported(tmp_path: Path):
+    manifest, _case_dir = _write_case_manifest(
+        tmp_path,
+        case_id="GE-01",
+        evidence_status="capability-gated",
+        requires=["polar_system_runtime"],
+        run_py="""
+class NativeUnavailable(RuntimeError):
+    pass
+
+def run_native(request=None, n_cells=None):
+    raise NativeUnavailable("polar runtime is absent")
+""",
+    )
+    leaf = _write_authenticated_leaf(tmp_path)
+    output = tmp_path / "out"
+    result = _run(
+        "--suite",
+        "pr",
+        "--dimensions",
+        "1",
+        "--max-nodes",
+        "2",
+        "--output",
+        str(output),
+        "--manifest",
+        str(manifest),
+        "--execute",
+        env={"POPS_NATIVE_DIM": "1", "POPS_NATIVE_VARIANTS_ROOT": str(leaf)},
+    )
+    assert result.returncode == 0, result.stderr
+    rows = json.loads((output / "results.json").read_text(encoding="utf-8"))
+    assert rows[0]["status"] == "not-supported"
+
+
+def test_execute_writes_schema_valid_job_artifacts_and_report(tmp_path: Path):
+    from jsonschema import Draft202012Validator
+
+    manifest, _case_dir = _write_case_manifest(
+        tmp_path,
+        case_id="IF-08",
+        run_py="def run_native(request=None, n_cells=None):\n    return None\n",
+    )
+    leaf = _write_authenticated_leaf(tmp_path)
+    output = tmp_path / "out"
+    result = _run(
+        "--suite",
+        "pr",
+        "--dimensions",
+        "1",
+        "--max-nodes",
+        "2",
+        "--output",
+        str(output),
+        "--manifest",
+        str(manifest),
+        "--execute",
+        env={"POPS_NATIVE_DIM": "1", "POPS_NATIVE_VARIANTS_ROOT": str(leaf)},
+    )
+    assert result.returncode == 0, result.stderr
+    job_dir = output / "IF-08" / "dim1-KokkosSerial-off"
+    for name in ("resolved_case.json", "metrics.json", "provenance.json"):
+        assert (job_dir / name).is_file(), name
+    metrics = json.loads((job_dir / "metrics.json").read_text(encoding="utf-8"))
+    provenance = json.loads((job_dir / "provenance.json").read_text(encoding="utf-8"))
+    summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
+    Draft202012Validator(
+        json.loads((REPO_ROOT / "schemas" / "verification_metrics.v1.json").read_text())
+    ).validate(metrics)
+    Draft202012Validator(
+        json.loads((REPO_ROOT / "schemas" / "verification_provenance.v1.json").read_text()),
+        format_checker=Draft202012Validator.FORMAT_CHECKER,
+    ).validate(provenance)
+    Draft202012Validator(
+        json.loads((REPO_ROOT / "schemas" / "verification_report.v1.json").read_text())
+    ).validate(summary)
+    rows = json.loads((output / "results.json").read_text(encoding="utf-8"))
+    assert rows[0]["status"] in {"pass", "fail", "not-supported", "not-run"}
+
+
+def test_cases_and_mpi_mode_and_execution_space_filters(tmp_path: Path):
+    extra = """
+[[case]]
+id = "IF-01"
+path = "verification/cases/infrastructure/mpi_invariance/run.py"
+name = "MPI decomposition invariance"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = ["transport"]
+oracle = "fixture"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["on"]
+suites = ["pr"]
+requires = ["mpi"]
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+finite = true
+"""
+    manifest, _case_dir = _write_case_manifest(
+        tmp_path,
+        case_id="IF-08",
+        run_py="def run_native(request=None, n_cells=None):\n    return None\n",
+        extra_cases=extra,
+    )
+    output = tmp_path / "out"
+    filtered = _run(
+        "--suite",
+        "pr",
+        "--dimensions",
+        "1",
+        "--max-nodes",
+        "2",
+        "--output",
+        str(output),
+        "--manifest",
+        str(manifest),
+        "--cases",
+        "IF-08",
+        "--mpi-mode",
+        "off",
+        "--execution-space",
+        "KokkosSerial",
+    )
+    assert filtered.returncode == 0, filtered.stderr
+    plan = json.loads((output / "plan.json").read_text(encoding="utf-8"))
+    assert [job["case_id"] for job in plan["jobs"]] == ["IF-08"]
+    assert plan["jobs"][0]["mpi_mode"] == "off"
+    assert plan["jobs"][0]["execution_space"] == "KokkosSerial"
+
+    miss = tmp_path / "miss"
+    skipped = _run(
+        "--suite",
+        "pr",
+        "--dimensions",
+        "1",
+        "--max-nodes",
+        "2",
+        "--output",
+        str(miss),
+        "--manifest",
+        str(manifest),
+        "--cases",
+        "IF-08",
+        "--mpi-mode",
+        "on",
+    )
+    assert skipped.returncode == 0, skipped.stderr
+    missed = json.loads((miss / "plan.json").read_text(encoding="utf-8"))
+    assert missed["jobs"] == []
 
 
 def test_plan_emits_one_job_per_requested_native_dimension(tmp_path: Path):
@@ -301,9 +694,9 @@ def test_plan_emits_one_job_per_requested_native_dimension(tmp_path: Path):
     )
     assert result.returncode == 0, result.stderr
     plan = json.loads((output / "plan.json").read_text(encoding="utf-8"))
-    assert plan["jobs"] == [
-        {"case_id": "CP-02", "pops_native_dim": 1},
-        {"case_id": "CP-02", "pops_native_dim": 2},
+    assert [(job["case_id"], job["pops_native_dim"]) for job in plan["jobs"]] == [
+        ("CP-02", 1),
+        ("CP-02", 2),
     ]
 
 
@@ -326,7 +719,9 @@ def test_pops_native_dim_env_matching_request_emits_one_job(tmp_path: Path):
     )
     assert result.returncode == 0, result.stderr
     plan = json.loads((output / "plan.json").read_text(encoding="utf-8"))
-    assert plan["jobs"] == [{"case_id": "CP-02", "pops_native_dim": 1}]
+    assert [(job["case_id"], job["pops_native_dim"]) for job in plan["jobs"]] == [
+        ("CP-02", 1)
+    ]
 
 
 def test_pops_native_dim_cli_overrides_env_for_matching_request(tmp_path: Path):
@@ -350,7 +745,9 @@ def test_pops_native_dim_cli_overrides_env_for_matching_request(tmp_path: Path):
     )
     assert result.returncode == 0, result.stderr
     plan = json.loads((output / "plan.json").read_text(encoding="utf-8"))
-    assert plan["jobs"] == [{"case_id": "CP-02", "pops_native_dim": 1}]
+    assert [(job["case_id"], job["pops_native_dim"]) for job in plan["jobs"]] == [
+        ("CP-02", 1)
+    ]
 
 
 def test_artifact_dim_mismatch_exits_one_without_plan(tmp_path: Path):

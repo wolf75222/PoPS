@@ -107,21 +107,19 @@ def attach_case_diagnostics(case, block, program, *, every_n: int = 1):
 def bind_public(artifact, **kwargs: Any):
     """Bind through the public pipeline.
 
-    When the compiled artifact proves ``MPI_COMM_WORLD``, the official
-    ``ExecutionContext.mpi_world`` communicator is used. Otherwise bind is
-    serial. Python never launches ranks.
+    ``mpi_mode="on"`` requires ``ExecutionContext.mpi_world`` and refuses a
+    serial fallback. ``mpi_mode="off"`` (default) binds serially and does not
+    probe MPI. Python never launches ranks.
     """
-    try:
+    mpi_mode = kwargs.pop("mpi_mode", "off")
+    if mpi_mode == "on":
         context = pops.ExecutionContext.mpi_world(artifact)
-    except Exception:
-        context = None
-    if context is None:
-        return pops.bind(artifact, **kwargs)
-    resources = dict(kwargs.get("resources") or {})
-    resources["execution_context"] = context
-    bind_kwargs = dict(kwargs)
-    bind_kwargs["resources"] = resources
-    return pops.bind(artifact, **bind_kwargs)
+        resources = dict(kwargs.get("resources") or {})
+        resources["execution_context"] = context
+        bind_kwargs = dict(kwargs)
+        bind_kwargs["resources"] = resources
+        return pops.bind(artifact, **bind_kwargs)
+    return pops.bind(artifact, **kwargs)
 
 
 def resolve_case(case, *, layout, include: Path | None = None):

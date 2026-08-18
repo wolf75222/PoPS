@@ -1202,9 +1202,9 @@ physics = ["transport"]
 oracle = "tr01_sine_mpi_decompositions"
 native_dimensions = [1]
 execution_spaces = ["KokkosSerial"]
-mpi_modes = ["off"]
+mpi_modes = ["off", "on"]
 suites = ["pr"]
-requires = []
+requires = ["mpi"]
 
 [case.resources.pr]
 nodes = 1
@@ -1797,7 +1797,7 @@ native_dimensions = [1]
 execution_spaces = ["KokkosSerial"]
 mpi_modes = ["off"]
 suites = ["pr"]
-requires = []
+requires = ["exact_native_dimension"]
 
 [case.resources.pr]
 nodes = 1
