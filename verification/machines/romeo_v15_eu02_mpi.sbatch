@@ -22,8 +22,8 @@ export POPS_EU02_SPACE=KokkosSerial
 export POPS_EU02_MPI=on
 pops_eu02_select_kokkos KokkosSerial
 pops_eu02_load_mpi_hdf5
-pops_eu02_maybe_build mpi
 export FI_PROVIDER=tcp
+pops_eu02_maybe_build mpi
 BUILD="$POPS_EU02_ROOT/build-dim2-mpi"
 export POPS_NATIVE_DIM=2
 export POPS_NATIVE_VARIANTS_ROOT="$BUILD/python/pops/_native"
