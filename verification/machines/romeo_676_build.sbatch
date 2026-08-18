@@ -46,10 +46,18 @@ if [ "$MPI" = "on" ]; then
   EXPECT_BACKEND=(--expect-mpi --expect-parallel-hdf5)
   pops676_load_mpi_hdf5
   CMAKE_MPI_FLAGS=(
+    -DMPI_CXX_COMPILER="$(command -v mpicxx)"
+    -DMPI_C_COMPILER="$(command -v mpicc)"
     -DMPI_CXX_HEADER_DIR="${MPI_HOME}/include"
     -DMPI_CXX_INCLUDE_DIRS="${MPI_HOME}/include"
     -DMPI_C_INCLUDE_DIRS="${MPI_HOME}/include"
+    -DMPI_CXX_LIBRARIES="${MPI_HOME}/lib/libmpi.so"
+    -DMPI_C_LIBRARIES="${MPI_HOME}/lib/libmpi.so"
   )
+  if [ ! -f "${MPI_HOME}/lib/libmpi.so" ]; then
+    echo "ERROR: shared libmpi.so missing under ${MPI_HOME}/lib" >&2
+    exit 1
+  fi
 fi
 
 ROOT="$POPS676_SRC"
@@ -61,8 +69,8 @@ NPROC="${SLURM_CPUS_PER_TASK:-8}"
 echo "host=$(hostname) dim=$DIM kind=$KIND cxx=$CXX kokkos=$POPS_KOKKOS_ROOT"
 echo "build=$BUILD python=$POPS_PYTHON sha=$(git -C "$ROOT" rev-parse HEAD)"
 
-if [ "$MPI" = "on" ] && [ -f "$BUILD/CMakeCache.txt" ] && [ ! -f "$BUILD/python/pops/_native/variants.json" ]; then
-  rm -f "$BUILD/CMakeCache.txt"
+if [ "$MPI" = "on" ] && [ ! -f "$BUILD/python/pops/_native/variants.json" ]; then
+  rm -rf "$BUILD"
 fi
 cmake -S "$ROOT" -B "$BUILD" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \

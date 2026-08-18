@@ -79,6 +79,9 @@ def test_romeo_676_mpi_build_passes_concrete_mpi_include() -> None:
     assert "MPI_CXX_INCLUDE_DIRS" in build
     assert "MPI_CXX_HEADER_DIR" in build
     assert "MPI_C_INCLUDE_DIRS" in build
+    assert "MPI_CXX_LIBRARIES" in build
+    assert "MPI_C_LIBRARIES" in build
+    assert "libmpi.so" in build
 
 
 def test_romeo_676_serial_gate_runs_if08_then_eu01() -> None:
