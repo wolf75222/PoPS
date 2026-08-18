@@ -40,7 +40,7 @@ def _source_without_run_native(text: str) -> str:
     return "".join(line for index, line in enumerate(lines, start=1) if index not in skip)
 
 
-def test_wavevector_is_not_axis_aligned():
+def test_utility_oracle_oblique_wavevector():
     exact = _load_case_module("exact")
     kx, ky = exact.K_INTEGER
     assert kx != 0
@@ -52,7 +52,7 @@ def test_wavevector_is_not_axis_aligned():
     assert abs(wave[0]) != abs(wave[1])
 
 
-def test_poisson_identity_ik_dot_E_equals_source():
+def test_utility_oracle_oblique_poisson():
     exact = _load_case_module("exact")
     amplitudes = exact.complex_mode_amplitudes()
     wave = exact.physical_wavevector()
@@ -95,10 +95,6 @@ def test_write_cp04_report_writes_four_artifacts_and_schema(tmp_path: Path):
     assert loaded["native_dimensions"] == [2]
     assert loaded["orders"] == []
     assert loaded["not_applicable_reason"]["orders"]
-    assert loaded["coupling"]["sign_ok"] is True
-    np.testing.assert_allclose(loaded["poisson"]["residual_l2"], 0.0)
-    np.testing.assert_allclose(loaded["poisson"]["potential_error"], 0.0)
-    np.testing.assert_allclose(loaded["poisson"]["field_error"], 0.0)
 
 
 def test_case_modules_use_load_sibling_module():
@@ -124,3 +120,87 @@ def test_no_pops_run_outside_run_native():
             assert "pops.run" not in _source_without_run_native(text)
         else:
             assert "pops.run" not in text
+
+
+def test_run_native_accepts_campaign_request():
+    import inspect
+    from verification.pops_verify.campaign import CampaignRequest, CampaignResources
+
+    run = _load_case_module("run")
+    assert "request" in inspect.signature(run.run_native).parameters
+    request = CampaignRequest(
+        case_id="CP-04",
+        pops_native_dim=2,
+        suite="pr",
+        execution_space="KokkosSerial",
+        mpi_mode="off",
+        min_resolution=8,
+        resources=CampaignResources(resolutions=(8,)),
+        evidence_status="required",
+    )
+    try:
+        result = run.run_native(request=request)
+    except run.NativeUnavailable:
+        return
+    assert isinstance(result, dict)
+    assert "resolution" in result
+    assert "result" in result
+
+
+def test_report_fails_closed_without_native_output(tmp_path: Path):
+    analyze = _load_case_module("analyze")
+    written = analyze.write_cp04_report(tmp_path)
+    assert written == ARTIFACTS
+    loaded = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
+    _validator().validate(loaded)
+    assert loaded["coverage"]["cases_passed"] == 0
+    assert (
+        loaded["coverage"]["cases_failed"] + loaded["coverage"]["cases_not_supported"]
+        >= 1
+    )
+    reasons = " ".join(item["reason"] for item in loaded["failures"])
+    notes = " ".join(loaded["coverage"].get("not_tested") or [])
+    blob = (reasons + " " + notes).lower()
+    assert (
+        "native" in blob
+        or "kokkos" in blob
+        or "supported" in blob
+        or "required" in blob
+        or "not " in blob
+        or "no " in blob
+    )
+
+
+def test_analyze_native_requires_native_field():
+    analyze = _load_case_module("analyze")
+    try:
+        analyze.analyze_native({})
+    except (ValueError, TypeError, KeyError):
+        return
+    raise AssertionError("analyze_native must refuse an empty mapping")
+
+
+def test_analyze_native_computes_field_errors():
+    analyze = _load_case_module("analyze")
+    result = analyze.analyze_native(
+        {
+            "field": np.array([1.0, 2.0, 3.0], dtype=np.float64),
+            "oracle": np.array([1.0, 2.0, 2.5], dtype=np.float64),
+            "volumes": np.array([1.0, 1.0, 1.0], dtype=np.float64),
+        }
+    )
+    assert result["linf"] == 0.5
+    assert result["l1"] > 0.0
+    assert result["l2"] > 0.0
+
+
+def test_write_report_stays_fail_closed_with_native_mapping(tmp_path: Path):
+    analyze = _load_case_module("analyze")
+    written = analyze.write_cp04_report(
+        tmp_path,
+        native={"field": np.array([1.0, 2.0], dtype=np.float64)},
+    )
+    assert written == ARTIFACTS
+    loaded = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
+    _validator().validate(loaded)
+    assert loaded["coverage"]["cases_passed"] == 0

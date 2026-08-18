@@ -107,6 +107,10 @@ def _identity_artifact(tmp_path: Path, *, dimension: int = 1):
     return root, identity
 
 
+def _pin_installed_leaf(monkeypatch, root: Path) -> None:
+    monkeypatch.setenv("POPS_NATIVE_VARIANTS_ROOT", str(root))
+
+
 def _emit_tr02_job(job_dir: Path, identity, *, n_cells: int = 16, coupling=None):
     from verification.pops_verify.evidence_contract import emit_job_directory
 
@@ -161,10 +165,11 @@ def _emit_tr02_job(job_dir: Path, identity, *, n_cells: int = 16, coupling=None)
     return job_dir
 
 
-def test_emit_job_directory_writes_required_evidence_files(tmp_path: Path):
+def test_emit_job_directory_writes_required_evidence_files(tmp_path: Path, monkeypatch):
     from verification.pops_verify.evidence_contract import REQUIRED_JOB_FILES
 
-    _root, identity = _identity_artifact(tmp_path)
+    root, identity = _identity_artifact(tmp_path)
+    _pin_installed_leaf(monkeypatch, root)
     job_dir = tmp_path / "job"
     _emit_tr02_job(job_dir, identity)
     missing = [name for name in REQUIRED_JOB_FILES if not (job_dir / name).is_file()]
@@ -176,7 +181,7 @@ def test_emit_job_directory_writes_required_evidence_files(tmp_path: Path):
         assert key in provenance
 
 
-def test_runner_execute_emits_evidence_and_splits_run_fields(tmp_path: Path):
+def test_runner_execute_emits_evidence_and_splits_run_fields(tmp_path: Path, monkeypatch):
     from verification.pops_verify.evidence_contract import REQUIRED_JOB_FILES
     from verification.pops_verify.native_evidence import emission_from_payload, run_fields_from_payload
 
@@ -208,7 +213,8 @@ def test_runner_execute_emits_evidence_and_splits_run_fields(tmp_path: Path):
         "    }\n",
         encoding="utf-8",
     )
-    _root, identity = _identity_artifact(tmp_path)
+    root, identity = _identity_artifact(tmp_path)
+    _pin_installed_leaf(monkeypatch, root)
     runner = _load_runner()
     output = tmp_path / "out"
     job = CampaignJob(
@@ -271,14 +277,15 @@ def test_runner_invoke_success_is_not_scientific_cases_passed(tmp_path: Path):
     assert summary["coverage"]["cases_passed"] == 0
 
 
-def test_dirty_or_fake_evidence_is_refused(tmp_path: Path):
+def test_dirty_or_fake_evidence_is_refused(tmp_path: Path, monkeypatch):
     from verification.pops_verify.evidence_bundle import EvidenceBundle, EvidenceError
     from verification.pops_verify.native_evidence import NativeSeries, NativeSeriesError
 
     with pytest.raises((TypeError, NativeSeriesError, EvidenceError)):
         NativeSeries("TR-02", [])
 
-    _root, identity = _identity_artifact(tmp_path)
+    root, identity = _identity_artifact(tmp_path)
+    _pin_installed_leaf(monkeypatch, root)
     job_dir = tmp_path / "job"
     _emit_tr02_job(job_dir, identity)
     result_path = job_dir / "result.npy"
@@ -287,12 +294,13 @@ def test_dirty_or_fake_evidence_is_refused(tmp_path: Path):
         EvidenceBundle(job_dir)
 
 
-def test_cp_coupling_extension_slot(tmp_path: Path):
+def test_cp_coupling_extension_slot(tmp_path: Path, monkeypatch):
     from verification.pops_verify.evidence_bundle import EvidenceBundle
     from verification.pops_verify.evidence_contract import EXTENSION_SLOTS
 
     assert EXTENSION_SLOTS["coupling"] == "coupling.json"
-    _root, identity = _identity_artifact(tmp_path)
+    root, identity = _identity_artifact(tmp_path)
+    _pin_installed_leaf(monkeypatch, root)
     job_dir = tmp_path / "job"
     coupling = {"phase_error": None, "sign_ok": None, "energy_drift": 1.0e-12}
     _emit_tr02_job(job_dir, identity, coupling=coupling)

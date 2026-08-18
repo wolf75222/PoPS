@@ -1,12 +1,8 @@
-"""CP-05 driver: eigenvector identity, time advance, campaign report."""
+"""CP-05 analysis from native fields; fail-closed without Kokkos output."""
 from __future__ import annotations
 
-import math
-import subprocess
 import sys
 from pathlib import Path
-
-import numpy as np
 
 _CASE_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -14,149 +10,57 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from verification.pops_verify.case_authoring import load_sibling_module
-from verification.pops_verify.reference_errors import reference_errors
+from verification.pops_verify.native_evidence import (
+    fail_closed_report,
+    native_diagnostics,
+    native_report_sections,
+    order_rows,
+)
 from verification.pops_verify.report import write_verification_report
 
 _exact = load_sibling_module(_CASE_DIR / "exact.py")
-system_matrix = _exact.system_matrix
-eigenvalue = _exact.eigenvalue
-right_eigenvector = _exact.right_eigenvector
-exact_state = _exact.exact_state
-advance_fourier = _exact.advance_fourier
-uniform_cell_centers = _exact.uniform_cell_centers
-MODES = _exact.MODES
-EPS = _exact.EPS
-CANONICAL_K = _exact.CANONICAL_K
-BACKGROUND = _exact.BACKGROUND
-
-N_CELLS = 32
-ADVANCE_TIME = 0.125
 CASE_ID = "CP-05"
-NULL_AMR = {
-    "order_retained": None,
-    "invariants_ok": None,
-    "interface_error": None,
-    "bulk_error": None,
-}
-NULL_POISSON = {
-    "potential_error": None,
-    "field_error": None,
-    "residual_l2": None,
-}
-NULL_COUPLING = {
-    "phase_error": None,
-    "sign_ok": None,
-    "energy_drift": None,
-}
-NULL_PARALLEL = {
-    "ranks_ok": None,
-    "threads_ok": None,
-    "gpu_ok": None,
-}
-NULL_PERFORMANCE = {
-    "one_node": None,
-    "two_node": None,
-}
-NOT_APPLICABLE = {
-    "orders": "2x2 eigenmode identity, not a resolution series",
-    "amr.*": "AMR not run for CP-05 in-memory path",
-    "poisson.*": "Poisson not run for CP-05 in-memory path",
-    "coupling.*": "native coupling not run for CP-05 in-memory path",
-    "parallel_invariance.*": "parallel invariance not run for CP-05",
-    "performance.one_node": "performance not measured for CP-05 in-memory path",
-    "performance.two_node": "performance not measured for CP-05 in-memory path",
-}
-ARTIFACTS = {
-    "report_md": "REPORT.md",
-    "summary_json": "summary.json",
-    "coverage_csv": "coverage.csv",
-    "failures_csv": "failures.csv",
-}
+NATIVE_DIMS = [1]
+SUITE = "pr"
+COMPONENT = "euler_poisson"
+BLOCKER = ('CP-05 acoustic 2x2 toy is not the required multifluid eigenmode+Poisson generator')
 
 
-def _repository_sha() -> str:
-    completed = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=_REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
+def analyze_native(native):
+    """Compute phase/frequency/field/energy/order from native arrays only."""
+    return native_diagnostics(native)
+
+
+def write_cp05_report(output_dir, *, native=None, request=None) -> dict:
+    """Write artifacts. Required cases fail; never not-supported unless gated."""
+    orders = []
+    poisson = None
+    coupling = None
+    extra_reasons = None
+    reason = BLOCKER
+    if native is not None:
+        diagnostics = analyze_native(native)
+        orders = order_rows(CASE_ID, diagnostics)
+        sections = native_report_sections(diagnostics)
+        poisson = sections["poisson"]
+        coupling = sections["coupling"]
+        extra_reasons = sections["extra_reasons"]
+        reason = (
+            "native diagnostics computed from supplied arrays; Kokkos campaign "
+            "is not authenticated in this isolated stream"
+        )
+    return write_verification_report(
+        fail_closed_report(
+            case_id=CASE_ID,
+            component=COMPONENT,
+            native_dims=list(NATIVE_DIMS),
+            reason=reason,
+            suite=SUITE,
+            request=request,
+            orders=orders,
+            poisson=poisson,
+            coupling=coupling,
+            extra_reasons=extra_reasons,
+        ),
+        output_dir,
     )
-    sha = completed.stdout.strip()
-    return sha if completed.returncode == 0 and sha else "unknown"
-
-
-def _assert_eigenvector_identity() -> None:
-    matrix = system_matrix(CANONICAL_K)
-    for mode in MODES:
-        lam = eigenvalue(mode, CANONICAL_K)
-        vector = right_eigenvector(mode, CANONICAL_K)
-        residual = matrix @ vector - lam * vector
-        if not np.all(np.isfinite(residual)) or np.max(np.abs(residual)) > 1.0e-12:
-            raise ValueError(f"eigenvector residual for mode {mode!r} is {residual}")
-
-
-def _assert_time_advance() -> None:
-    centers, volumes = uniform_cell_centers(N_CELLS)
-    background = np.asarray(BACKGROUND, dtype=np.float64)
-    for mode in MODES:
-        lam = eigenvalue(mode, CANONICAL_K)
-        vector = right_eigenvector(mode, CANONICAL_K)
-        evolved = exact_state(
-            centers, ADVANCE_TIME, mode=mode, k=CANONICAL_K, eps=EPS
-        )
-        phase = np.exp(1.0j * CANONICAL_K * centers + lam * ADVANCE_TIME)
-        expected = background[:, None] + float(EPS) * np.real(
-            vector[:, None] * phase[None, :]
-        )
-        if np.max(np.abs(evolved - expected)) > 1.0e-12:
-            raise ValueError(f"time-advance mismatch for mode {mode!r}")
-        hat_t = advance_fourier(float(EPS) * vector, ADVANCE_TIME, k=CANONICAL_K)
-        expected_hat = float(EPS) * vector * np.exp(lam * ADVANCE_TIME)
-        if np.max(np.abs(hat_t - expected_hat)) > 1.0e-12:
-            raise ValueError(f"Fourier time-advance mismatch for mode {mode!r}")
-        density = np.asarray(evolved[0], dtype=np.float64)
-        errors = reference_errors(density, density, volumes)
-        if errors.linf != 0.0 or not (
-            math.isfinite(errors.l1)
-            and math.isfinite(errors.l2)
-            and math.isfinite(errors.linf)
-        ):
-            raise ValueError("exact-vs-exact density L∞ must be 0")
-
-
-def _summary() -> dict:
-    _assert_eigenvector_identity()
-    _assert_time_advance()
-    return {
-        "schema": "pops.verification.report.v1",
-        "repository": "wolf75222/PoPS",
-        "repository_sha": _repository_sha(),
-        "suite": "nightly",
-        "max_nodes": 2,
-        "native_dimensions": [1],
-        "execution_spaces": ["KokkosSerial"],
-        "coverage": {
-            "components": ["euler_poisson"],
-            "cases_planned": 1,
-            "cases_run": 1,
-            "cases_passed": 1,
-            "cases_failed": 0,
-            "cases_not_supported": 0,
-            "not_tested": [],
-        },
-        "failures": [],
-        "orders": [],
-        "amr": dict(NULL_AMR),
-        "poisson": dict(NULL_POISSON),
-        "coupling": dict(NULL_COUPLING),
-        "parallel_invariance": dict(NULL_PARALLEL),
-        "performance": dict(NULL_PERFORMANCE),
-        "not_applicable_reason": dict(NOT_APPLICABLE),
-        "artifacts": dict(ARTIFACTS),
-    }
-
-
-def write_cp05_report(output_dir) -> dict:
-    """Check the 2×2 eigenpairs / time advance and write the four Task 20 artifacts."""
-    return write_verification_report(_summary(), output_dir)

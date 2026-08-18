@@ -68,7 +68,7 @@ def test_exact_documents_ssprk_stage_counts_via_load_sibling_module():
     assert exact.stage_count("SSPRK3") == 3
 
 
-def test_required_field_solves_equals_stage_count():
+def test_utility_documented_field_solves_are_not_scientific_evidence():
     exact = _load_case_module("exact")
     assert exact.required_field_solves(exact.SSPRK2_STAGES) == 2
     assert exact.required_field_solves(exact.SSPRK3_STAGES) == 3
@@ -76,7 +76,7 @@ def test_required_field_solves_equals_stage_count():
     assert exact.required_field_solves(3) == 3
 
 
-def test_ssprk2_requires_two_field_solves_per_step():
+def test_utility_ssprk2_stage_count_is_not_scientific_evidence():
     run = _load_case_module("run")
     text = (CASE_DIR / "run.py").read_text(encoding="utf-8")
     assert "load_sibling_module" in text
@@ -84,12 +84,12 @@ def test_ssprk2_requires_two_field_solves_per_step():
     assert run.field_solves_per_step("SSPRK2") == 2
 
 
-def test_ssprk3_requires_three_field_solves_per_step():
+def test_utility_ssprk3_stage_count_is_not_scientific_evidence():
     run = _load_case_module("run")
     assert run.field_solves_per_step("SSPRK3") == 3
 
 
-def test_frozen_field_is_negative_control_one_solve_per_step():
+def test_utility_frozen_field_count_is_not_scientific_evidence():
     exact = _load_case_module("exact")
     run = _load_case_module("run")
     assert exact.FROZEN_FIELD_SOLVES_PER_STEP == 1
@@ -142,7 +142,7 @@ def test_modules_do_not_hardcode_pops_run_except_run_native():
 
 
 @pytest.mark.compiler
-def test_run_native_returns_finite_field_or_skips():
+def test_compiler_run_native_returns_field_when_kokkos_present():
     run = _load_case_module("run")
     missing = missing_compiler_requirement()
     try:
@@ -154,3 +154,87 @@ def test_run_native_returns_finite_field_or_skips():
     assert field.shape == (2, 16)
     assert np.isfinite(field).all()
     assert np.all(field[0] > 0.0)
+
+
+def test_run_native_accepts_campaign_request():
+    import inspect
+    from verification.pops_verify.campaign import CampaignRequest, CampaignResources
+
+    run = _load_case_module("run")
+    assert "request" in inspect.signature(run.run_native).parameters
+    request = CampaignRequest(
+        case_id="TM-07",
+        pops_native_dim=1,
+        suite="pr",
+        execution_space="KokkosSerial",
+        mpi_mode="off",
+        min_resolution=8,
+        resources=CampaignResources(resolutions=(8,)),
+        evidence_status="required",
+    )
+    try:
+        result = run.run_native(request=request)
+    except run.NativeUnavailable:
+        return
+    assert isinstance(result, dict)
+    assert "resolution" in result
+    assert "result" in result
+
+
+def test_report_fails_closed_without_native_output(tmp_path: Path):
+    analyze = _load_case_module("analyze")
+    written = analyze.write_tm07_report(tmp_path)
+    assert written == ARTIFACTS
+    loaded = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
+    _validator().validate(loaded)
+    assert loaded["coverage"]["cases_passed"] == 0
+    assert (
+        loaded["coverage"]["cases_failed"] + loaded["coverage"]["cases_not_supported"]
+        >= 1
+    )
+    reasons = " ".join(item["reason"] for item in loaded["failures"])
+    notes = " ".join(loaded["coverage"].get("not_tested") or [])
+    blob = (reasons + " " + notes).lower()
+    assert (
+        "native" in blob
+        or "kokkos" in blob
+        or "supported" in blob
+        or "required" in blob
+        or "not " in blob
+        or "no " in blob
+    )
+
+
+def test_analyze_native_requires_native_field():
+    analyze = _load_case_module("analyze")
+    try:
+        analyze.analyze_native({})
+    except (ValueError, TypeError, KeyError):
+        return
+    raise AssertionError("analyze_native must refuse an empty mapping")
+
+
+def test_analyze_native_computes_field_errors():
+    analyze = _load_case_module("analyze")
+    result = analyze.analyze_native(
+        {
+            "field": np.array([1.0, 2.0, 3.0], dtype=np.float64),
+            "oracle": np.array([1.0, 2.0, 2.5], dtype=np.float64),
+            "volumes": np.array([1.0, 1.0, 1.0], dtype=np.float64),
+        }
+    )
+    assert result["linf"] == 0.5
+    assert result["l1"] > 0.0
+    assert result["l2"] > 0.0
+
+
+def test_write_report_stays_fail_closed_with_native_mapping(tmp_path: Path):
+    analyze = _load_case_module("analyze")
+    written = analyze.write_tm07_report(
+        tmp_path,
+        native={"field": np.array([1.0, 2.0], dtype=np.float64)},
+    )
+    assert written == ARTIFACTS
+    loaded = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
+    _validator().validate(loaded)
+    assert loaded["coverage"]["cases_passed"] == 0

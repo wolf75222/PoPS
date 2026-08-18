@@ -13,6 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
+from verification.pops_verify.native_evidence import apply_campaign_request, require_bind_request
 from verification.pops_verify.case_authoring import load_sibling_module
 
 N_CELLS = 32
@@ -133,16 +134,22 @@ def resolve_plan(n_cells: int = N_CELLS):
     return resolve_case(case, layout=layout)
 
 
-def run_native(n_cells: int = N_CELLS, t_end: float = 0.05):
+def run_native(n_cells: int = N_CELLS, t_end: float = 0.05, *, request=None):
     """Optional native path. Raises NativeUnavailable without a compiler.
 
     A full native coupled MMS campaign is optional in this worktree. ICs and
     manufactured sources stay available from ``exact.py``.
     """
+    n_cells = apply_campaign_request(
+        n_cells, request, case_id='CP-01', allowed_dims=(1,), unavailable=NativeUnavailable
+    )
     from tests.python.support.requirements import missing_compiler_requirement, repo_include
 
     del n_cells, t_end
     missing = missing_compiler_requirement(repo_include())
     if missing:
         raise NativeUnavailable(missing)
-    raise NativeUnavailable("optional native CP-01 run not executed in this worktree")
+    raise NativeUnavailable(
+        "CP-01 manufactured hyperbolic sources are not on the public Case; "
+        "no silent exact-vs-exact pass"
+    )

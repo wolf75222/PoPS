@@ -32,7 +32,9 @@ from tests.python.support.requirements import (
     missing_native_compile_requirement,
     repo_include,
 )
+from verification.pops_verify.native_evidence import apply_campaign_request, maybe_campaign_payload, require_bind_request
 from verification.pops_verify.case_authoring import (
+    bind_public,
     load_sibling_module,
     resolve_case,
     uniform_periodic_layout,
@@ -179,8 +181,13 @@ def _native_unavailable_reason() -> str | None:
     return missing_native_compile_requirement(repo_include(), default_cxx())
 
 
-def run_native(dt, t_end=None, *, eps: float = DEFAULT_EPS, n_cells: int = N_CELLS):
+def run_native(dt=None, t_end=None, *, eps: float = DEFAULT_EPS, n_cells: int = N_CELLS, request=None):
     """Compile, bind, and run the Case. Raises NativeUnavailable without a compiler."""
+    n_cells = apply_campaign_request(
+        n_cells, request, case_id='TM-05', allowed_dims=(1,), unavailable=NativeUnavailable
+    )
+    if dt is None:
+        dt = float(globals().get('DT', 0.1))
     missing = _native_unavailable_reason()
     if missing:
         raise NativeUnavailable(missing)
@@ -190,7 +197,18 @@ def run_native(dt, t_end=None, *, eps: float = DEFAULT_EPS, n_cells: int = N_CEL
     plan = resolve_case(authored.case, layout=layout)
     artifact = pops.compile(plan)
     initial = np.full((1, authored.n_cells), float(_exact.Y0), dtype=np.float64)
-    simulation = pops.bind(artifact, initial_values={authored.instance: initial})
+    simulation = bind_public(artifact, initial_values={authored.instance: initial}, mpi_mode=require_bind_request(request, NativeUnavailable, 'TM-05'))
     pops.run(simulation, t_end=horizon, max_steps=MAX_STEPS)
     field = np.asarray(simulation.state_global("tracer"), dtype=np.float64)
-    return np.ravel(field)
+    field = np.ravel(field)
+    if request is not None:
+        return maybe_campaign_payload(
+            request,
+            field,
+            n_cells=n_cells,
+            t_end=horizon,
+            time_program='IMEX',
+            cfl=0.0,
+            dimension=1,
+        )
+    return field

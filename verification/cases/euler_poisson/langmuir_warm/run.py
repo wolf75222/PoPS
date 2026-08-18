@@ -11,7 +11,8 @@ from typing import Any
 
 import numpy as np
 
-from verification.pops_verify.case_authoring import load_sibling_module
+from verification.pops_verify.native_evidence import apply_campaign_request, maybe_campaign_payload, require_bind_request
+from verification.pops_verify.case_authoring import bind_public, load_sibling_module
 
 _CASE_DIR = Path(__file__).resolve().parent
 _EXACT = load_sibling_module(_CASE_DIR / "exact.py")
@@ -206,7 +207,7 @@ def _native_unavailable_reason() -> str | None:
     return missing_native_compile_requirement(repo_include(), default_cxx())
 
 
-def _bind_native(n_cells: int = N_CELLS, *, cycles: int = 1):
+def _bind_native(n_cells: int = N_CELLS, *, cycles: int = 1, request=None):
     import pops
 
     from verification.pops_verify.case_authoring import (
@@ -224,19 +225,36 @@ def _bind_native(n_cells: int = N_CELLS, *, cycles: int = 1):
     initial = np.ascontiguousarray(
         initial_conserved(authored.n_cells, cycles=cycles), dtype=np.float64
     )
-    simulation = pops.bind(artifact, initial_values={authored.instance: initial})
+    simulation = bind_public(
+        artifact,
+        initial_values={authored.instance: initial},
+        mpi_mode=require_bind_request(request, NativeUnavailable, "CP-03"),
+    )
     return authored, simulation
 
 
-def run_native(n_cells: int = N_CELLS, t_end: float = 0.05, *, cycles: int = 1):
+def run_native(n_cells: int = N_CELLS, t_end: float = 0.05, *, cycles: int = 1, request=None):
     """Compile, bind, and run the warm Langmuir case."""
+    n_cells = apply_campaign_request(
+        n_cells, request, case_id='CP-03', allowed_dims=(1,), unavailable=NativeUnavailable
+    )
     import pops
 
-    authored, simulation = _bind_native(n_cells, cycles=cycles)
+    authored, simulation = _bind_native(n_cells, cycles=cycles, request=request)
     pops.run(simulation, t_end=float(t_end), max_steps=MAX_STEPS)
     field = np.asarray(simulation.state_global("electrons"), dtype=np.float64)
-    return np.reshape(field, (2, authored.n_cells))
-
+    field = np.reshape(field, (2, authored.n_cells))
+    if request is not None:
+        return maybe_campaign_payload(
+            request,
+            field,
+            n_cells=n_cells,
+            t_end=t_end,
+            time_program='SSPRK2',
+            cfl=0.4,
+            dimension=1,
+        )
+    return field
 
 def run_native_series(times, n_cells: int = N_CELLS, *, cycles: int = 1):
     """Advance one bound run through increasing ``times`` and return (2, n) snapshots.

@@ -11,6 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
+from verification.pops_verify.native_evidence import apply_campaign_request, require_bind_request
 from verification.pops_verify.case_authoring import load_sibling_module
 
 _CASE_DIR = Path(__file__).resolve().parent
@@ -144,16 +145,21 @@ def resolve_plan(n_cells: int = N_CELLS):
     return resolve_case(case, layout=layout)
 
 
-def run_native(n_cells: int = N_CELLS, t_end: float = 0.05):
+def run_native(n_cells: int = N_CELLS, t_end: float = 0.05, *, request=None):
     """Optional native path. Raises NativeUnavailable without a compiler.
 
     A full native 2-d oblique Langmuir campaign is optional in this worktree.
     ICs and the closed Poisson pack stay available from ``exact.py``.
     """
+    n_cells = apply_campaign_request(
+        n_cells, request, case_id='CP-04', allowed_dims=(2,), unavailable=NativeUnavailable
+    )
     from tests.python.support.requirements import missing_compiler_requirement, repo_include
 
     del n_cells, t_end
     missing = missing_compiler_requirement(repo_include())
     if missing:
         raise NativeUnavailable(missing)
-    raise NativeUnavailable("optional native CP-04 run not executed in this worktree")
+    raise NativeUnavailable(
+        "CP-04 2-d Euler-Poisson field coupling is not on the public Case"
+    )

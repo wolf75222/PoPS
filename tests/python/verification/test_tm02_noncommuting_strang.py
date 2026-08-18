@@ -83,7 +83,7 @@ def test_operators_do_not_commute():
     assert exact.operators_commute() is False
 
 
-def test_lie_observed_order_is_one():
+def test_utility_matrix_lie_order_is_not_scientific_evidence():
     run = _load_case_module("run")
     text = (CASE_DIR / "run.py").read_text(encoding="utf-8")
     assert "load_sibling_module" in text
@@ -96,7 +96,7 @@ def test_lie_observed_order_is_one():
     np.testing.assert_allclose(orders, np.ones(orders.shape), atol=0.05)
 
 
-def test_strang_observed_order_is_two():
+def test_utility_matrix_strang_order_is_not_scientific_evidence():
     run = _load_case_module("run")
     dts = np.asarray(DT_SERIES, dtype=np.float64)
     errors = np.asarray(run.error_series(run.strang_step, dts), dtype=np.float64)
@@ -118,20 +118,9 @@ def test_write_tm02_report_writes_four_schema_valid_artifacts(tmp_path: Path):
     loaded = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
     _validator().validate(loaded)
     assert loaded["schema"] == "pops.verification.report.v1"
-    assert loaded["orders"]
-    assert all(row["kind"] == "temporal" for row in loaded["orders"])
-    by_variable = {}
-    for row in loaded["orders"]:
-        by_variable.setdefault(row["variable"], []).append(row)
-    assert set(by_variable) == {"lie", "strang"}
-    lie_orders = [row["observed_order"] for row in by_variable["lie"]]
-    strang_orders = [row["observed_order"] for row in by_variable["strang"]]
-    assert lie_orders
-    assert strang_orders
-    assert all(row["threshold"] == LIE_THRESHOLD for row in by_variable["lie"])
-    assert all(row["threshold"] == STRANG_THRESHOLD for row in by_variable["strang"])
-    np.testing.assert_allclose(lie_orders, np.ones(len(lie_orders)), atol=0.05)
-    np.testing.assert_allclose(strang_orders, np.full(len(strang_orders), 2.0), atol=0.05)
+    assert loaded["coverage"]["cases_passed"] == 0
+    assert loaded["orders"] == []
+    assert loaded["not_applicable_reason"]["orders"]
 
 
 def test_build_case_and_resolve_plan_without_native():
@@ -175,7 +164,7 @@ def test_modules_do_not_hardcode_pops_run_except_run_native():
 
 
 @pytest.mark.compiler
-def test_run_native_returns_finite_field_or_skips():
+def test_compiler_run_native_returns_field_when_kokkos_present():
     run = _load_case_module("run")
     missing = missing_compiler_requirement()
     try:
@@ -188,3 +177,102 @@ def test_run_native_returns_finite_field_or_skips():
         pytest.skip(str(exc))
     assert field.size == 2 * 16
     assert np.isfinite(field).all()
+
+
+def test_run_native_accepts_campaign_request():
+    import inspect
+    from verification.pops_verify.campaign import CampaignRequest, CampaignResources
+
+    run = _load_case_module("run")
+    assert "request" in inspect.signature(run.run_native).parameters
+    request = CampaignRequest(
+        case_id="TM-02",
+        pops_native_dim=1,
+        suite="pr",
+        execution_space="KokkosSerial",
+        mpi_mode="off",
+        min_resolution=8,
+        resources=CampaignResources(resolutions=(8,)),
+        evidence_status="required",
+    )
+    try:
+        result = run.run_native(request=request)
+    except run.NativeUnavailable:
+        return
+    assert isinstance(result, dict)
+    assert "resolution" in result
+    assert "result" in result
+
+
+def test_report_fails_closed_without_native_output(tmp_path: Path):
+    analyze = _load_case_module("analyze")
+    written = analyze.write_tm02_report(tmp_path)
+    assert written == ARTIFACTS
+    loaded = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
+    _validator().validate(loaded)
+    assert loaded["coverage"]["cases_passed"] == 0
+    assert (
+        loaded["coverage"]["cases_failed"] + loaded["coverage"]["cases_not_supported"]
+        >= 1
+    )
+    reasons = " ".join(item["reason"] for item in loaded["failures"])
+    notes = " ".join(loaded["coverage"].get("not_tested") or [])
+    blob = (reasons + " " + notes).lower()
+    assert (
+        "native" in blob
+        or "kokkos" in blob
+        or "supported" in blob
+        or "required" in blob
+        or "not " in blob
+        or "no " in blob
+    )
+
+
+def test_analyze_native_requires_native_field():
+    analyze = _load_case_module("analyze")
+    try:
+        analyze.analyze_native({})
+    except (ValueError, TypeError, KeyError):
+        return
+    raise AssertionError("analyze_native must refuse an empty mapping")
+
+
+def test_analyze_native_computes_field_errors():
+    analyze = _load_case_module("analyze")
+    result = analyze.analyze_native(
+        {
+            "field": np.array([1.0, 2.0, 3.0], dtype=np.float64),
+            "oracle": np.array([1.0, 2.0, 2.5], dtype=np.float64),
+            "volumes": np.array([1.0, 1.0, 1.0], dtype=np.float64),
+        }
+    )
+    assert result["linf"] == 0.5
+    assert result["l1"] > 0.0
+    assert result["l2"] > 0.0
+
+
+def test_write_report_stays_fail_closed_with_native_mapping(tmp_path: Path):
+    analyze = _load_case_module("analyze")
+    written = analyze.write_tm02_report(
+        tmp_path,
+        native={"field": np.array([1.0, 2.0], dtype=np.float64)},
+    )
+    assert written == ARTIFACTS
+    loaded = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
+    _validator().validate(loaded)
+    assert loaded["coverage"]["cases_passed"] == 0
+
+
+def test_analyze_native_computes_orders_from_native_series():
+    analyze = _load_case_module("analyze")
+    dts = (0.1, 0.05, 0.025)
+    lie = (0.1, 0.05, 0.025)
+    strang = (0.1, 0.025, 0.00625)
+    result = analyze.analyze_native(
+        {
+            "lie": {"linf": lie, "dts": dts},
+            "strang": {"linf": strang, "dts": dts},
+        }
+    )
+    np.testing.assert_allclose(result["lie_orders"], observed_order(lie, dts))
+    np.testing.assert_allclose(result["strang_orders"], observed_order(strang, dts))

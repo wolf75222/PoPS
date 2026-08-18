@@ -23,6 +23,7 @@ from pops.math import laplacian, unknown
 from pops.physics import Model
 from pops.problem import Case
 from pops.solvers.elliptic import FFT
+from verification.pops_verify.native_evidence import apply_campaign_request, require_bind_request
 from verification.pops_verify.case_authoring import load_sibling_module
 
 _CASE_DIR = Path(__file__).resolve().parent
@@ -105,12 +106,17 @@ def resolve_plan(n_cells: int = N_CELLS):
     )
 
 
-def run_native(n_cells: int = N_CELLS, t_end: float = 0.0):
+def run_native(n_cells: int = N_CELLS, t_end: float = 0.0, *, request=None):
     """Optional native path. Raises NativeUnavailable without a compiler."""
+    n_cells = apply_campaign_request(
+        n_cells, request, case_id='CP-09', allowed_dims=(1,), unavailable=NativeUnavailable
+    )
     from tests.python.support.requirements import missing_compiler_requirement, repo_include
 
     del n_cells, t_end
     missing = missing_compiler_requirement(repo_include())
     if missing:
         raise NativeUnavailable(missing)
-    raise NativeUnavailable("optional native CP-09 run not executed in this worktree")
+    raise NativeUnavailable(
+        "CP-09 screened Helmholtz has no public whole-system Program; not-supported"
+    )

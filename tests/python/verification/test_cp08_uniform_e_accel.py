@@ -140,7 +140,7 @@ def test_resolve_plan_returns_without_authoring_pending():
 
 
 @pytest.mark.compiler
-def test_run_native_returns_finite_conserved_or_skips():
+def test_compiler_run_native_returns_field_when_kokkos_present():
     from tests.python.support.requirements import missing_compiler_requirement
 
     run = _load("run")
@@ -154,3 +154,99 @@ def test_run_native_returns_finite_conserved_or_skips():
     assert field.shape == (3, 16)
     assert np.isfinite(field).all()
     assert np.all(field[0] > 0.0)
+
+
+def test_run_native_accepts_campaign_request():
+    import inspect
+    from verification.pops_verify.campaign import CampaignRequest, CampaignResources
+
+    run = _load("run")
+    assert "request" in inspect.signature(run.run_native).parameters
+    request = CampaignRequest(
+        case_id="CP-08",
+        pops_native_dim=1,
+        suite="pr",
+        execution_space="KokkosSerial",
+        mpi_mode="off",
+        min_resolution=8,
+        resources=CampaignResources(resolutions=(8,)),
+        evidence_status="required",
+    )
+    try:
+        result = run.run_native(request=request)
+    except run.NativeUnavailable:
+        return
+    assert isinstance(result, dict)
+    assert "resolution" in result
+    assert "result" in result
+
+
+def test_report_fails_closed_without_native_output(tmp_path: Path):
+    analyze = _load("analyze")
+    written = analyze.write_cp08_report(tmp_path)
+    assert written == ARTIFACTS
+    loaded = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
+    _validator().validate(loaded)
+    assert loaded["coverage"]["cases_passed"] == 0
+    assert (
+        loaded["coverage"]["cases_failed"] + loaded["coverage"]["cases_not_supported"]
+        >= 1
+    )
+    reasons = " ".join(item["reason"] for item in loaded["failures"])
+    notes = " ".join(loaded["coverage"].get("not_tested") or [])
+    blob = (reasons + " " + notes).lower()
+    assert (
+        "native" in blob
+        or "kokkos" in blob
+        or "supported" in blob
+        or "required" in blob
+        or "not " in blob
+        or "no " in blob
+    )
+
+
+def test_analyze_native_requires_native_field():
+    analyze = _load("analyze")
+    try:
+        analyze.analyze_native({})
+    except (ValueError, TypeError, KeyError):
+        return
+    raise AssertionError("analyze_native must refuse an empty mapping")
+
+
+def test_analyze_native_computes_field_errors():
+    analyze = _load("analyze")
+    result = analyze.analyze_native(
+        {
+            "field": np.array([1.0, 2.0, 3.0], dtype=np.float64),
+            "oracle": np.array([1.0, 2.0, 2.5], dtype=np.float64),
+            "volumes": np.array([1.0, 1.0, 1.0], dtype=np.float64),
+        }
+    )
+    assert result["linf"] == 0.5
+    assert result["l1"] > 0.0
+    assert result["l2"] > 0.0
+
+
+def test_write_report_stays_fail_closed_with_native_mapping(tmp_path: Path):
+    analyze = _load("analyze")
+    written = analyze.write_cp08_report(
+        tmp_path,
+        native={"field": np.array([1.0, 2.0], dtype=np.float64)},
+    )
+    assert written == ARTIFACTS
+    loaded = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
+    _validator().validate(loaded)
+    assert loaded["coverage"]["cases_passed"] == 0
+
+
+def test_analyze_native_computes_energy_drift():
+    analyze = _load("analyze")
+    result = analyze.analyze_native(
+        {
+            "field": np.array([1.0, 1.0], dtype=np.float64),
+            "energy": 1.05,
+            "energy_ref": 1.0,
+        }
+    )
+    np.testing.assert_allclose(result["energy_drift"], 0.05)

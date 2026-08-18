@@ -32,6 +32,7 @@ from tests.python.support.requirements import (
     missing_native_compile_requirement,
     repo_include,
 )
+from verification.pops_verify.native_evidence import apply_campaign_request, maybe_campaign_payload, require_bind_request
 from verification.pops_verify.case_authoring import (
     attach_case_diagnostics,
     bind_public,
@@ -39,7 +40,6 @@ from verification.pops_verify.case_authoring import (
     resolve_case,
     uniform_periodic_layout,
 )
-from verification.pops_verify.convergence import observed_order
 from verification.pops_verify.reference_errors import reference_errors
 
 _CASE_DIR = Path(__file__).resolve().parent
@@ -258,14 +258,20 @@ def _native_unavailable_reason() -> str | None:
 
 
 def run_native(
-    dt,
+    dt=None,
     t_end=_exact.T_END,
     *,
     n_cells: int = N_CELLS,
     method: str = "strang",
     reconstruction_kind: str = "first_order",
+    request=None,
 ):
     """Compile, bind, and run official Strang/Lie. Raises NativeUnavailable without a compiler."""
+    n_cells = apply_campaign_request(
+        n_cells, request, case_id='TM-02', allowed_dims=(1,), unavailable=NativeUnavailable
+    )
+    if dt is None:
+        dt = float(globals().get('DT', 0.1))
     missing = _native_unavailable_reason()
     if missing:
         raise NativeUnavailable(missing)
@@ -275,12 +281,21 @@ def run_native(
     layout = uniform_periodic_layout(authored.frame, (authored.n_cells,))
     plan = resolve_case(authored.case, layout=layout)
     artifact = pops.compile(plan)
-    simulation = bind_public(
-        artifact, initial_values={authored.instance: _uniform_initial(authored.n_cells)}
-    )
+    simulation = bind_public(artifact, initial_values={authored.instance: _uniform_initial(authored.n_cells)}, mpi_mode=require_bind_request(request, NativeUnavailable, 'TM-02'))
     pops.run(simulation, t_end=float(t_end), max_steps=MAX_STEPS)
     field = np.asarray(simulation.state_global("oscillator"), dtype=np.float64)
-    return np.reshape(field, (2, authored.n_cells))
+    field = np.reshape(field, (2, authored.n_cells))
+    if request is not None:
+        return maybe_campaign_payload(
+            request,
+            field,
+            n_cells=n_cells,
+            t_end=t_end,
+            time_program="Strang" if str(method) == "strang" else "Lie",
+            cfl=0.0,
+            dimension=1,
+        )
+    return field
 
 
 def run_order_campaign(
@@ -301,12 +316,10 @@ def run_order_campaign(
         field = run_native(step, t_end=t_end, n_cells=n_cells, method=method)
         err = reference_errors(field[0], oracle, volumes)
         errors.append(float(err.linf))
-    orders = observed_order(errors, steps)
     return {
         "method": method,
         "n_cells": int(n_cells),
         "t_end": float(t_end),
         "dts": steps,
         "linf": tuple(errors),
-        "orders": tuple(float(value) for value in orders),
     }

@@ -11,7 +11,8 @@ from typing import Any
 
 import numpy as np
 
-from verification.pops_verify.case_authoring import load_sibling_module
+from verification.pops_verify.native_evidence import apply_campaign_request, maybe_campaign_payload, require_bind_request
+from verification.pops_verify.case_authoring import bind_public, load_sibling_module
 
 _CASE_DIR = Path(__file__).resolve().parent
 N_CELLS = 32
@@ -169,8 +170,11 @@ def _native_unavailable_reason() -> str | None:
     return missing_native_compile_requirement(repo_include(), default_cxx())
 
 
-def run_native(n_cells: int = N_CELLS, t_end: float = 1.0, *, delta: float = 0.0):
+def run_native(n_cells: int = N_CELLS, t_end: float = 1.0, *, delta: float = 0.0, request=None):
     """Compile, bind the cancelled charge, and return the solved potential."""
+    n_cells = apply_campaign_request(
+        n_cells, request, case_id='CP-12', allowed_dims=(1,), unavailable=NativeUnavailable
+    )
     import pops
 
     from verification.pops_verify.case_authoring import resolve_case, uniform_periodic_layout
@@ -184,10 +188,21 @@ def run_native(n_cells: int = N_CELLS, t_end: float = 1.0, *, delta: float = 0.0
     artifact = pops.compile(plan)
     sample = build_oracle(authored.n_cells, delta=delta)
     initial = np.ascontiguousarray(sample["rhs"][np.newaxis, :], dtype=np.float64)
-    simulation = pops.bind(artifact, initial_values={authored.instance: initial})
+    simulation = bind_public(artifact, initial_values={authored.instance: initial}, mpi_mode=require_bind_request(request, NativeUnavailable, 'CP-12'))
     pops.run(simulation, t_end=float(t_end), max_steps=MAX_STEPS)
     slots = tuple(simulation.field_provider_slots())
     if not slots:
         raise NativeUnavailable("native runtime exposed no field-provider slot")
     phi = np.asarray(simulation.field_potential_global(slots[0]), dtype=np.float64)
-    return np.ravel(phi)[: authored.n_cells]
+    field = np.ravel(phi)[: authored.n_cells]
+    if request is not None:
+        return maybe_campaign_payload(
+            request,
+            field,
+            n_cells=n_cells,
+            t_end=t_end,
+            time_program='ForwardEuler',
+            cfl=0.0,
+            dimension=1,
+        )
+    return field

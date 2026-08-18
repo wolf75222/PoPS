@@ -11,6 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
+from verification.pops_verify.native_evidence import apply_campaign_request, require_bind_request
 from verification.pops_verify.case_authoring import load_sibling_module
 
 _CASE_DIR = Path(__file__).resolve().parent
@@ -145,16 +146,21 @@ def resolve_plan(n_cells: int = N_CELLS):
     return resolve_case(case, layout=layout)
 
 
-def run_native(n_cells: int = N_CELLS, t_end: float = 1.0):
+def run_native(n_cells: int = N_CELLS, t_end: float = 1.0, *, request=None):
     """Optional native path. Raises NativeUnavailable without a compiler.
 
     A full native diocotron campaign is optional in this worktree. The
     toy growth oracle stays available from ``exact.py``.
     """
+    n_cells = apply_campaign_request(
+        n_cells, request, case_id='CP-11', allowed_dims=(2,), unavailable=NativeUnavailable
+    )
     from tests.python.support.requirements import missing_compiler_requirement, repo_include
 
     del n_cells, t_end
     missing = missing_compiler_requirement(repo_include())
     if missing:
         raise NativeUnavailable(missing)
-    raise NativeUnavailable("optional native CP-11 run not executed in this worktree")
+    raise NativeUnavailable(
+        "CP-11 ExB diocotron growth is not on the public 2-d Euler Case; not-supported"
+    )
