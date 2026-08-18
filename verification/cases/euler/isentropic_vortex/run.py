@@ -333,6 +333,7 @@ def run_native(
     import pops
 
     from verification.pops_verify.case_authoring import (
+        bind_public,
         resolve_case,
         uniform_periodic_layout,
     )
@@ -357,7 +358,12 @@ def run_native(
     plan = resolve_case(authored.case, layout=layout)
     artifact = pops.compile(plan)
     initial = pack_conserved(initial_conserved(authored.n_cells, u_inf=u_inf, v_inf=v_inf))
-    simulation = pops.bind(artifact, initial_values={authored.instance: initial})
+    mpi_mode = getattr(request, "mpi_mode", "off") if request is not None else "off"
+    simulation = bind_public(
+        artifact,
+        initial_values={authored.instance: initial},
+        mpi_mode=mpi_mode,
+    )
     snapshots: dict[str, np.ndarray] = {}
     times = []
     if dump_times:

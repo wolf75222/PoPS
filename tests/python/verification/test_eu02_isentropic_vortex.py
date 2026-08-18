@@ -94,6 +94,7 @@ def test_no_pops_run_outside_run_native():
         text = (CASE_DIR / name).read_text(encoding="utf-8")
         if name == "run.py":
             assert "pops.run" not in _source_without_run_native(text)
+            assert "bind_public" in text
         else:
             assert "pops.run" not in text
         assert "from exact import" not in text
