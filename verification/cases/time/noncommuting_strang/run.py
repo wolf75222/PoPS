@@ -32,7 +32,7 @@ from tests.python.support.requirements import (
     missing_native_compile_requirement,
     repo_include,
 )
-from verification.pops_verify.native_evidence import apply_campaign_request, maybe_campaign_payload, require_bind_request
+from verification.pops_verify.native_evidence import NULL_COUPLING, apply_campaign_request, maybe_campaign_payload, require_bind_request
 from verification.pops_verify.case_authoring import (
     attach_case_diagnostics,
     bind_public,
@@ -289,6 +289,9 @@ def run_native(
         return maybe_campaign_payload(
             request,
             field,
+            artifact=artifact,
+            simulation=simulation,
+            coupling=dict(NULL_COUPLING),
             n_cells=n_cells,
             t_end=t_end,
             time_program="Strang" if str(method) == "strang" else "Lie",

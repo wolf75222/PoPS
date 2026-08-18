@@ -69,6 +69,16 @@ def native_world_rank(*, required: bool = False) -> int | None:
         return None
 
 
+def is_native_writer_rank() -> bool:
+    """Serial rank 0 may write. An MPI singleton world must not write a ledger."""
+    if native_has_mpi():
+        size = native_world_size(required=False)
+        if size is None or int(size) < 2:
+            return False
+    rank = native_world_rank(required=False)
+    return (0 if rank is None else int(rank)) == 0
+
+
 def require_native_world_size(expected: int) -> int:
     size = native_world_size(required=True)
     if size != int(expected):

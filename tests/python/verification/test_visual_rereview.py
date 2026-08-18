@@ -26,7 +26,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 SCHEMA_PATH = REPO_ROOT / "schemas" / "verification_visuals.v1.json"
 ISOSURFACE_FAMILIES = frozenset({"TR", "EU", "PO", "AM", "CP", "RB", "GE", "IF"})
 
-matplotlib = pytest.importorskip("matplotlib")
+import matplotlib
 matplotlib.use("Agg", force=True)
 
 

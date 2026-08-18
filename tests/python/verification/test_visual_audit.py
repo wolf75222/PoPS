@@ -18,7 +18,7 @@ from verification.pops_verify.visualization.render import render_run
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FIXTURE_SHA_PREFIX = "fixture:"
 
-matplotlib = pytest.importorskip("matplotlib")
+import matplotlib
 matplotlib.use("Agg", force=True)
 
 

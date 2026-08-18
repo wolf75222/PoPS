@@ -18,7 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = REPO_ROOT / "scripts" / "render_verification_visuals.py"
 DEFAULT_EVENTS = ["initial", "mid", "final"]
 
-matplotlib = pytest.importorskip("matplotlib")
+import matplotlib
 matplotlib.use("Agg", force=True)
 
 

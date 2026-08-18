@@ -12,7 +12,7 @@ from typing import Any
 
 import numpy as np
 
-from verification.pops_verify.native_evidence import apply_campaign_request, maybe_campaign_payload, require_bind_request
+from verification.pops_verify.native_evidence import NULL_COUPLING, apply_campaign_request, maybe_campaign_payload, require_bind_request
 from verification.pops_verify.case_authoring import bind_public, load_sibling_module
 
 _CASE_DIR = Path(__file__).resolve().parent
@@ -266,6 +266,9 @@ def run_native(n_cells: int = N_CELLS, t_end: float = 0.05, *, profile: str = "c
         return maybe_campaign_payload(
             request,
             field,
+            artifact=artifact,
+            simulation=simulation,
+            coupling=dict(NULL_COUPLING),
             n_cells=n_cells,
             t_end=t_end,
             time_program='SSPRK2',

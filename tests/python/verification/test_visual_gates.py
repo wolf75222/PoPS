@@ -14,7 +14,7 @@ from verification.pops_verify.visualization.gates import (
 )
 from verification.pops_verify.visualization.render import render_run
 
-matplotlib = pytest.importorskip("matplotlib")
+import matplotlib
 matplotlib.use("Agg", force=True)
 
 

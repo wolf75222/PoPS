@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 
 from verification.pops_verify.case_authoring import load_sibling_module
+from verification.pops_verify.native_evidence import campaign_run_fields
 
 _exact = load_sibling_module(Path(__file__).with_name("exact.py"))
 _v15 = load_sibling_module(Path(__file__).resolve().parents[1] / "_v15.py")
@@ -216,8 +217,13 @@ def run_native(n_cells: int = _exact.N_CELLS, t=_exact.T, path=None, request=Non
     }
     if request is None:
         return payload
-    fields = _v15.campaign_run_fields(
-        request, n_cells=n_cells, t_end=t_end, comparison=payload["comparison_artifacts"]
+    fields = campaign_run_fields(
+        request=request,
+        n_cells=n_cells,
+        t_end=t_end,
+        time_program="SSPRK2",
+        cfl=0.45,
+        comparison=payload["comparison_artifacts"],
     )
     fields.update(payload)
     return fields

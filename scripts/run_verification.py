@@ -63,6 +63,7 @@ from verification.pops_verify.native_evidence import (  # noqa: E402
     report_from_native_series,
     run_fields_from_payload,
 )
+from verification.pops_verify.visualization.live import write_live_run_visuals  # noqa: E402
 from verification.pops_verify.provenance import (  # noqa: E402
     ProvenanceError,
     RUN_FIELDS,
@@ -187,13 +188,9 @@ def campaign_writer_rank() -> int:
 
 def is_campaign_writer_rank() -> bool:
     """Serial rank 0 may write. An MPI singleton world must not write a ledger."""
-    from verification.pops_verify.mpi_world import native_has_mpi, native_world_size
+    from verification.pops_verify.mpi_world import is_native_writer_rank
 
-    if native_has_mpi():
-        size = native_world_size(required=False)
-        if size is None or int(size) < 2:
-            return False
-    return campaign_writer_rank() == 0
+    return is_native_writer_rank()
 
 
 def provenance_nodes(job: CampaignJob) -> int:
@@ -638,21 +635,50 @@ def execute_jobs(
             job, case, request, record, artifact, run_fields=first_fields
         )
         if record["status"] == "pass" and series_jobs and is_campaign_writer_rank():
+            analysis = None
             try:
                 write_series_json(job_dir, job.case_id, series_jobs)
                 EvidenceBundle(job_dir)
-                analysis = report_from_native_series(
-                    job.case_id,
+                try:
+                    analysis = report_from_native_series(
+                        job.case_id,
+                        job_dir,
+                        native_dimensions=[job.pops_native_dim],
+                        components=["verification"],
+                    )
+                    record["scientific_pass"] = (
+                        int((analysis.get("coverage") or {}).get("cases_passed") or 0)
+                        >= 1
+                    )
+                except (EvidenceError, EvidenceContractError, VerificationRunnerError) as exc:
+                    record["scientific_pass"] = False
+                    record["reason"] = record.get("reason") or str(exc)
+                write_live_run_visuals(
                     job_dir,
-                    native_dimensions=[job.pops_native_dim],
-                    components=["verification"],
-                )
-                record["scientific_pass"] = (
-                    int((analysis.get("coverage") or {}).get("cases_passed") or 0) >= 1
+                    case_id=job.case_id,
+                    run_id=job_dir.name,
+                    scientific=True,
+                    verdict="pass" if record.get("scientific_pass") else "fail",
+                    analysis=analysis,
                 )
             except (EvidenceError, EvidenceContractError, VerificationRunnerError) as exc:
                 record["scientific_pass"] = False
                 record["reason"] = record.get("reason") or str(exc)
+                write_live_run_visuals(
+                    job_dir,
+                    case_id=job.case_id,
+                    run_id=job_dir.name,
+                    scientific=False,
+                    verdict="fail",
+                )
+        elif is_campaign_writer_rank():
+            write_live_run_visuals(
+                job_dir,
+                case_id=job.case_id,
+                run_id=job_dir.name,
+                scientific=False,
+                verdict="not-run" if record["status"] == "pass" else record["status"],
+            )
         results.append(record)
     if is_campaign_writer_rank():
         output.mkdir(parents=True, exist_ok=True)

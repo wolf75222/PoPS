@@ -149,48 +149,6 @@ def native_has_parallel_hdf5() -> bool:
     return getattr(module, "__has_parallel_hdf5__", False) is True
 
 
-def campaign_run_fields(
-    request,
-    *,
-    n_cells: int,
-    t_end: float,
-    comparison: dict[str, Any] | None = None,
-    **overrides: Any,
-) -> dict[str, Any]:
-    """Return RUN_FIELDS plus comparison artifacts. Does not invent MPI ranks."""
-    mpi_on = request is not None and getattr(request, "mpi_mode", "off") == "on"
-    space = getattr(request, "execution_space", None) or "KokkosSerial"
-    resources = getattr(request, "resources", None)
-    ranks = int(getattr(resources, "mpi_ranks", None) or 1)
-    threads = int(getattr(resources, "omp_threads", None) or 1)
-    count = int(n_cells)
-    fields: dict[str, Any] = {
-        "compiler": os.environ.get("CXX", "c++"),
-        "build_type": "native-dsl",
-        "precision": "float64",
-        "kokkos_execution_space": space,
-        "mpi_enabled": mpi_on,
-        "mpi_library": "none" if not mpi_on else (os.environ.get("POPS_MPI_LIBRARY") or "unknown"),
-        "mpi_thread_level_requested": "none" if not mpi_on else "MPI_THREAD_SINGLE",
-        "mpi_thread_level_provided": "none" if not mpi_on else "MPI_THREAD_SINGLE",
-        "hdf5_collective_enabled": False,
-        "mpi_ranks": ranks if mpi_on else 1,
-        "omp_threads_per_rank": threads,
-        "gpus": 0,
-        "resolution": [count],
-        "block_size": [count],
-        "amr_total_levels": 1,
-        "refinement_ratio": 2,
-        "subcycling": False,
-        "time_program": "SSPRK2",
-        "cfl": 0.45,
-        "final_time": float(t_end),
-        "comparison_artifacts": comparison or {"kind": "none", "paths": []},
-    }
-    fields.update(overrides)
-    return fields
-
-
 def is_hdf5_file(path: Path) -> bool:
     """Return True when the file starts with the HDF5 signature."""
     try:

@@ -145,7 +145,7 @@ def _native_unavailable_reason() -> str | None:
 
 def run_native(dt=None, t_end=1.0, *, n_cells: int = N_CELLS, request=None):
     """Compile, bind, and run the Case. Raises NativeUnavailable without a compiler."""
-    from verification.pops_verify.native_evidence import maybe_campaign_payload
+    from verification.pops_verify.native_evidence import NULL_COUPLING, maybe_campaign_payload
 
     if request is not None and int(request.pops_native_dim) != 1:
         raise NativeUnavailable(
@@ -180,6 +180,7 @@ def run_native(dt=None, t_end=1.0, *, n_cells: int = N_CELLS, request=None):
         field,
         artifact=artifact,
         simulation=simulation,
+        coupling=dict(NULL_COUPLING),
         n_cells=authored.n_cells,
         t_end=t_end,
         time_program="SSPRK2",

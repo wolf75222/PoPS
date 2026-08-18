@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from verification.pops_verify.case_authoring import load_sibling_module
+from verification.pops_verify.native_evidence import campaign_run_fields
 from verification.pops_verify.reference_errors import reference_errors
 
 _exact = load_sibling_module(Path(__file__).with_name("exact.py"))
@@ -145,10 +146,12 @@ def run_native(n_cells: int = 32, t_end: float = 0.25, request=None):
     for left, right in combinations(counts, 2):
         errors = reference_errors(fields[left], fields[right], volumes)
         pairwise[f"{left}-{right}"] = float(errors.linf)
-    return _v15.campaign_run_fields(
-        request,
+    return campaign_run_fields(
+        request=request,
         n_cells=n_cells,
         t_end=t_end,
+        time_program="SSPRK2",
+        cfl=0.45,
         comparison={
             "kind": "openmp_threads",
             "backend": backend,

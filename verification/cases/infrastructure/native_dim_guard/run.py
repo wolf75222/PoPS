@@ -12,6 +12,7 @@ from pathlib import Path
 
 from verification.pops_verify.campaign import expand_jobs, resolve_artifact_dim
 from verification.pops_verify.case_authoring import load_sibling_module
+from verification.pops_verify.native_evidence import campaign_run_fields
 
 _v15 = load_sibling_module(Path(__file__).resolve().parents[1] / "_v15.py")
 
@@ -120,35 +121,16 @@ def run_doctor():
 
 
 def _dim2_campaign_fields(n_cells: int, t_end: float, ge03, request=None) -> dict:
-    """Honest GE-03 run facts for campaign provenance. No invented CFL."""
-    count = int(n_cells)
-    mpi_on = request is not None and getattr(request, "mpi_mode", "off") == "on"
-    space = getattr(request, "execution_space", None) or "KokkosSerial"
-    ranks = getattr(getattr(request, "resources", None), "mpi_ranks", None) or 1
-    threads = getattr(getattr(request, "resources", None), "omp_threads", None) or 1
-    return {
-        "compiler": os.environ.get("CXX", "c++"),
-        "build_type": "native-dsl",
-        "precision": "float64",
-        "kokkos_execution_space": space,
-        "mpi_enabled": mpi_on,
-        "mpi_library": "none" if not mpi_on else "unknown",
-        "mpi_thread_level_requested": "none" if not mpi_on else "unknown",
-        "mpi_thread_level_provided": "none" if not mpi_on else "unknown",
-        "hdf5_collective_enabled": False,
-        "mpi_ranks": int(ranks),
-        "omp_threads_per_rank": int(threads),
-        "gpus": 0,
-        "resolution": [count, count],
-        "block_size": [count, count],
-        "amr_total_levels": 1,
-        "refinement_ratio": 2,
-        "subcycling": False,
-        "time_program": "SSPRK2",
-        "cfl": float(ge03.CFL),
-        "final_time": float(t_end),
-        "comparison_artifacts": {"kind": "native_dim_guard", "required_dim": 2},
-    }
+    """Honest GE-03 run facts via the shared helper. No invented CFL."""
+    return campaign_run_fields(
+        request=request,
+        n_cells=int(n_cells),
+        t_end=float(t_end),
+        time_program="SSPRK2",
+        cfl=float(ge03.CFL),
+        dimension=2,
+        comparison={"kind": "native_dim_guard", "required_dim": 2},
+    )
 
 
 def run_native(n_cells: int = 8, t_end: float = 0.01, request=None):
@@ -165,10 +147,13 @@ def run_native(n_cells: int = 8, t_end: float = 0.01, request=None):
         required = int(request.pops_native_dim)
         if required == _exact.MATCHING_DIM:
             run_native_dim1(n_cells, t_end=t_end)
-            return _v15.campaign_run_fields(
-                request,
+            return campaign_run_fields(
+                request=request,
                 n_cells=n_cells,
                 t_end=t_end,
+                time_program="SSPRK2",
+                cfl=0.45,
+                dimension=1,
                 comparison={"kind": "native_dim_guard", "required_dim": 1},
                 resolution=[int(n_cells)],
             )

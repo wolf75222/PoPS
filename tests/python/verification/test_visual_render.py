@@ -13,7 +13,7 @@ from verification.pops_verify.visualization.render import render_run
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCHEMA_PATH = REPO_ROOT / "schemas" / "verification_visuals.v1.json"
 
-matplotlib = pytest.importorskip("matplotlib")
+import matplotlib
 matplotlib.use("Agg", force=True)
 
 

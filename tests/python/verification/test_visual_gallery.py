@@ -10,7 +10,7 @@ from test_verification_report_schema import LOCAL_PR_SUMMARY
 from verification.pops_verify.report import write_verification_report
 from verification.pops_verify.visualization.gallery import render_release_gallery
 
-matplotlib = pytest.importorskip("matplotlib")
+import matplotlib
 matplotlib.use("Agg", force=True)
 
 

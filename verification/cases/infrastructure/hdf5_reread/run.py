@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 
 from verification.pops_verify.case_authoring import load_sibling_module
+from verification.pops_verify.native_evidence import campaign_run_fields
 
 _exact = load_sibling_module(Path(__file__).with_name("exact.py"))
 _v15 = load_sibling_module(Path(__file__).resolve().parents[1] / "_v15.py")
@@ -79,10 +80,12 @@ def authenticated_hdf5_collective(path=None) -> bool:
 def campaign_hdf5_fields(request, path) -> dict:
     """Campaign provenance with a collective flag from the authenticated native path."""
     _v15.refuse_invalid_mode(request)
-    return _v15.campaign_run_fields(
-        request,
+    return campaign_run_fields(
+        request=request,
         n_cells=int(getattr(request, "min_resolution", None) or _exact.N_CELLS),
         t_end=0.1,
+        time_program="SSPRK2",
+        cfl=0.45,
         comparison={"kind": "hdf5_reread", "path": str(path), "hdf5": True},
         hdf5_collective_enabled=authenticated_hdf5_collective(path),
     )
@@ -164,10 +167,12 @@ def run_native(n_cells: int = _exact.N_CELLS, t_end: float = 0.1, request=None):
     }
     if request is None:
         return payload
-    fields = _v15.campaign_run_fields(
-        request,
+    fields = campaign_run_fields(
+        request=request,
         n_cells=n_cells,
         t_end=t_end,
+        time_program="SSPRK2",
+        cfl=0.45,
         comparison=payload["comparison_artifacts"],
         hdf5_collective_enabled=authenticated_hdf5_collective(blobs[-1]),
     )

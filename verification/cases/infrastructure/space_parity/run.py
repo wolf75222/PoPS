@@ -14,6 +14,7 @@ import numpy as np
 
 from verification.pops_verify.campaign import resolve_artifact_dim
 from verification.pops_verify.case_authoring import load_sibling_module
+from verification.pops_verify.native_evidence import campaign_run_fields
 from verification.pops_verify.reference_errors import reference_errors
 
 _CASE_DIR = Path(__file__).resolve().parent
@@ -115,10 +116,12 @@ def run_native(
             os.environ["OMP_NUM_THREADS"] = previous
     shaped = np.reshape(np.asarray(field, dtype=np.float64), (-1,))
     if request is not None:
-        return _v15.campaign_run_fields(
-            request,
+        return campaign_run_fields(
+            request=request,
             n_cells=n_cells,
             t_end=t_end,
+            time_program="SSPRK2",
+            cfl=0.45,
             comparison={"kind": "execution_space", "space": space},
         )
     return shaped

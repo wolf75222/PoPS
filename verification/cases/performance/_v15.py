@@ -102,7 +102,32 @@ def _resolution(request) -> int | None:
     return None
 
 
-def _output_path(request, case_id: str) -> Path:
+def _is_native_writer() -> bool:
+    from verification.pops_verify.mpi_world import is_native_writer_rank
+
+    return is_native_writer_rank()
+
+
+def _refuse_singleton_mpi_success(request) -> None:
+    mpi_on = request is not None and getattr(request, "mpi_mode", "off") == "on"
+    if not mpi_on:
+        return
+    from verification.pops_verify.mpi_world import native_has_mpi, native_world_size
+
+    if not native_has_mpi():
+        raise OfficialBenchmarkUnavailable(
+            "mpi_mode=on requires an authenticated native MPI communicator"
+        )
+    size = native_world_size(required=False)
+    if size is None or int(size) < 2:
+        raise OfficialBenchmarkUnavailable(
+            "singleton MPI world cannot write official PF output as MPI success"
+        )
+
+
+def _output_path(request, case_id: str) -> Path | None:
+    if not _is_native_writer():
+        return None
     if request is not None and getattr(request, "output_dir", None) is not None:
         out_dir = Path(request.output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -152,6 +177,16 @@ def run_official_for_request(case_id: str, request=None) -> dict:
         raise OfficialBenchmarkUnavailable(
             f"{case_id!r} is not in {OFFICIAL_MANIFEST} (have {known})"
         )
+    _require_request(request)
+    _refuse_singleton_mpi_success(request)
+    if not _is_native_writer():
+        return {
+            "case_id": case_id,
+            "manifest": str(OFFICIAL_MANIFEST),
+            "output": None,
+            "records": [],
+            "writer": False,
+        }
     injected = _injected_executable()
     exe = injected if injected is not None else Path(DEFAULT_EXECUTABLE)
     if not exe.is_file():
@@ -160,7 +195,6 @@ def run_official_for_request(case_id: str, request=None) -> dict:
             "(cmake -S benchmarks -B build/benchmarks && cmake --build "
             "build/benchmarks --target pops_benchmark)"
         )
-    _require_request(request)
     warmups = int(getattr(request, "warmups", MIN_WARMUPS) or MIN_WARMUPS) if request else MIN_WARMUPS
     samples = (
         int(

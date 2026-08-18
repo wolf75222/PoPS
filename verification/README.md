@@ -25,7 +25,7 @@ verification/
 ├── PoPS_VERIFICATION_VALIDATION_BENCHMARK_PLAN_MONOREPO_v1.3.md
 ├── __init__.py               # repo-local package marker; not in the wheel
 ├── manifest.toml             # scientific campaign source of truth
-├── cases/                    # PH, TR, EU, PO, TM, CP, AM, RB
+├── cases/                    # PH, TR, EU, PO, TM, CP, AM, RB, IF, PF
 ├── machines/                 # leftover ROMEO helpers; not the campaign runner
 └── pops_verify/              # private post-process helpers
 ```
@@ -40,9 +40,13 @@ verification/
 | `cell_averages.py` | Analytic cell averages of an external oracle on Cartesian cells |
 | `conservation.py` | Discrete conservation residual from an already-reduced balance |
 | `convergence.py` | Observed order from a resolution series of already-computed errors |
+| `evidence_bundle.py` | Authenticate an on-disk EvidenceBundle against the installed leaf |
+| `evidence_contract.py` | Emit job directories, series.json, and digest-pinned artifacts |
 | `interface_error.py` | Coarse-fine interface-band errors from an already-sampled field |
 | `leaf_reference_errors.py` | AMR leaf-only oracle norms |
+| `mpi_world.py` | Native communicator size/rank; singleton MPI cannot write |
 | `native_diagnostics.py` | Attach public `pops.diagnostics` reductions to a `ConsumerGraph` |
+| `native_evidence.py` | Shared campaign_run_fields / maybe_campaign_payload helper |
 | `official_benchmark.py` | Invoke `benchmarks/manifest.toml` (`arith_halo`, `scalar_mg`) |
 | `phase.py` | Phase and frequency diagnostics from an already-sampled probe |
 | `provenance.py` | Build and validate a per-run `pops.verification.provenance.v1` document |
@@ -150,14 +154,30 @@ Generated fields, snapshots, and figures go to
 `build/verification/<case-id>/<run-id>/`. Do not store full fields under
 `verification/`.
 
-Campaign artifacts, when rendered, are:
+With `--execute`, the runner writes an on-disk EvidenceBundle per job:
+
+- `n{res:03d}/` job directories (`result.npy`, `program.bin`, `native_artifact.json`,
+  producer manifest, optional `dt` / pair / `coupling.json`)
+- `series.json` for the case+config resolution series
+- `metrics.json` / `provenance.json`
+- after EvidenceBundle analysis: truthful `status.json` and
+  `analysis/visual_data/` from the authenticated bundle only
+
+Campaign rollup artifacts, when rendered, are:
 
 - `REPORT.md`
 - `summary.json`
 - `coverage.csv`
 - `failures.csv`
 
-The runner today writes only `plan.json`.
+`summary.coverage.cases_passed` counts EvidenceBundle scientific analysis
+passes, not mere `run_native` invoke success. Non-scientific invoke stays
+`not-run`/`fail` and cannot render as a live campaign.
+
+Phase 8 tests require Matplotlib (`pip install .[viz]` or the CI `matplotlib`
+install). They do not `importorskip` silently. The CI Python shard duration
+budget overage (~21 s over 35 min) is a pre-existing catalog tightness and
+is not fixed by weakening shard selectors.
 
 ## Schemas
 
@@ -174,8 +194,9 @@ Five versioned contracts live under `schemas/`:
 An incompatible change requires a new schema version.
 
 `jsonschema` is a test/dev extra (`[project.optional-dependencies] test`). It
-is not part of the `pops` wheel. Matplotlib is an optional `viz` extra used
-only by `scripts/render_verification_visuals.py`.
+is not part of the `pops` wheel. Matplotlib is the `viz` extra required by
+Phase 8 tests and `scripts/render_verification_visuals.py`. Install it where
+those tests run; do not skip them when Matplotlib is missing.
 
 ```bash
 python scripts/check_verification_visuals.py

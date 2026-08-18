@@ -204,6 +204,7 @@ def campaign_run_fields(
     time_program: str,
     cfl: float,
     dimension: int = 1,
+    comparison: dict[str, Any] | None = None,
     **overrides: Any,
 ) -> dict[str, Any]:
     """Truthful campaign facts from the request and environment. No invented MPI/build."""
@@ -235,6 +236,8 @@ def campaign_run_fields(
         "cfl": float(cfl),
         "final_time": float(t_end),
     }
+    if comparison is not None:
+        fields["comparison_artifacts"] = comparison
     fields.update(overrides)
     return fields
 
@@ -358,9 +361,11 @@ def maybe_campaign_payload(
     if request is None:
         return field
     artifact = fields_kwargs.get("artifact")
+    coupling = fields_kwargs.get("coupling")
     for key in (
         "artifact",
         "simulation",
+        "coupling",
         "identity",
         "program_digest",
         "resolved_case_digest",
@@ -374,6 +379,8 @@ def maybe_campaign_payload(
     payload["result"] = field
     if artifact is not None:
         payload["program_bytes"] = program_bytes_from_artifact(artifact)
+    if coupling is not None:
+        payload["coupling"] = coupling
     step = dt if dt is not None else None
     if step is not None:
         payload["dt"] = float(step)

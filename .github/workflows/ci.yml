@@ -1280,7 +1280,7 @@ jobs:
         run: |
           # The full gate exercises the serial HDF5 writer used by the final examples. h5py remains
           # an optional user dependency; CI installs that capability explicitly instead of skipping.
-          pip install --upgrade pip numpy pytest h5py jsonschema
+          pip install --upgrade pip numpy pytest h5py jsonschema matplotlib
           export PYTHONPATH="$PWD/build-kokkos-py/python:$PWD"
           # PoPS est Kokkos-only : les tests DSL qui compilent un loader/.so production ou son ABI
           # incluent les en-tetes pops (-> for_each, #error sans Kokkos). Ils lisent le Kokkos a utiliser

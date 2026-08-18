@@ -216,52 +216,37 @@ def analytic_placements_are_not_mpi_proof() -> bool:
 
 
 def campaign_run_fields(n_cells: int, t_end: float, request) -> dict[str, object]:
-    """Honest IF-01 campaign facts. MPI ranks come from the native communicator."""
+    """Honest IF-01 facts via shared helper. MPI ranks from the native communicator."""
+    from verification.pops_verify.native_evidence import campaign_run_fields as shared_fields
+
     _v15.refuse_invalid_mode(request)
-    count = int(n_cells)
     mpi_on = request is not None and getattr(request, "mpi_mode", "off") == "on"
-    space = getattr(request, "execution_space", None) or "KokkosSerial"
+    overrides: dict[str, object] = {}
     if mpi_on:
         ranks = discovered_mpi_ranks()
         if ranks < 2:
             raise NativeUnavailable(
                 f"IF-01 mpi_mode=on discovered {ranks} rank(s); no serial fallback"
             )
-        library = os.environ.get("POPS_MPI_LIBRARY") or "unknown"
-        thread = "MPI_THREAD_SINGLE"
-    else:
-        ranks = 1
-        library = "none"
-        thread = "none"
-    return {
-        "compiler": os.environ.get("CXX", "c++"),
-        "build_type": "native-dsl",
-        "precision": "float64",
-        "kokkos_execution_space": space,
-        "mpi_enabled": mpi_on,
-        "mpi_library": library,
-        "mpi_thread_level_requested": thread,
-        "mpi_thread_level_provided": thread,
-        "hdf5_collective_enabled": _hdf5_collective_enabled() if mpi_on else False,
-        "mpi_ranks": int(ranks),
-        "omp_threads_per_rank": int(
-            getattr(getattr(request, "resources", None), "omp_threads", None) or 1
-        ),
-        "gpus": 0,
-        "resolution": [count],
-        "block_size": [count],
-        "amr_total_levels": 1,
-        "refinement_ratio": 2,
-        "subcycling": False,
-        "time_program": "SSPRK2",
-        "cfl": float(CFL),
-        "final_time": float(t_end),
-        "comparison_artifacts": {
+        overrides["mpi_ranks"] = int(ranks)
+        overrides["hdf5_collective_enabled"] = _hdf5_collective_enabled()
+        library = os.environ.get("POPS_MPI_LIBRARY")
+        if library:
+            overrides["mpi_library"] = library
+    return shared_fields(
+        request=request,
+        n_cells=int(n_cells),
+        t_end=float(t_end),
+        time_program="SSPRK2",
+        cfl=float(CFL),
+        dimension=1,
+        comparison={
             "kind": "mpi_decomposition",
             "placements": list(_exact.PLACEMENTS),
             "note": "analytic placements are not MPI proof",
         },
-    }
+        **overrides,
+    )
 
 
 def run_native(n_cells: int = _exact.DEFAULT_N_CELLS, t_end: float = 0.25, request=None):

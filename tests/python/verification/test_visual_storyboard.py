@@ -8,7 +8,7 @@ import pytest
 from verification.pops_verify.visualization.fixtures import write_fixture_run
 from verification.pops_verify.visualization.render import render_run
 
-matplotlib = pytest.importorskip("matplotlib")
+import matplotlib
 matplotlib.use("Agg", force=True)
 
 
