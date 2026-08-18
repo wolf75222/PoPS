@@ -750,11 +750,6 @@ def _write_visual_data(output_dir: Path, campaign: dict, claim: dict, extras: di
         "title": "EU-02 vorticity and convergence",
         "panels": [
             {
-                "type": "field",
-                "name": "vorticity",
-                "field": _tolist(vorticity),
-            },
-            {
                 "type": "convergence",
                 "name": "Linf",
                 "x": spacings,

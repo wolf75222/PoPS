@@ -17,6 +17,7 @@ import argparse
 import dataclasses
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -149,6 +150,8 @@ def _run_one(
 ):
     artifact = _artifact()
     job_dir = output / (job_name or f"n{int(n_cells):03d}")
+    if job_dir.exists():
+        shutil.rmtree(job_dir)
     leaf_job = dataclasses.replace(job, min_resolution=int(n_cells))
     request = CampaignRequest.from_job(leaf_job, output_dir=job_dir)
     kwargs = {

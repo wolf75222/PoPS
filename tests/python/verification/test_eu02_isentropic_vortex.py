@@ -428,7 +428,12 @@ def test_finest_visual_job_dir_and_phase8_payloads(tmp_path: Path):
     finest = series / "n128"
     assert (finest / "status.json").is_file()
     assert (finest / "program.json").is_file()
-    assert (finest / "analysis" / "visual_data" / "report_figure.json").is_file()
+    report_figure = json.loads(
+        (finest / "analysis" / "visual_data" / "report_figure.json").read_text(encoding="utf-8")
+    )
+    assert report_figure["panels"]
+    for panel in report_figure["panels"]:
+        assert "x" in panel and "y" in panel
     assert (report_dir / "REPORT.md").is_file()
 
 
