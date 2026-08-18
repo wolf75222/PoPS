@@ -44,6 +44,7 @@ from verification.pops_verify.case_authoring import (
 )
 from verification.pops_verify.cell_averages import analytic_cell_averages
 from verification.pops_verify.conservation import conservation_tolerance
+from verification.pops_verify.native_evidence import program_bytes_from_artifact
 from verification.pops_verify.provenance import collect_provenance, write_provenance
 from verification.pops_verify.reference_errors import reference_errors
 
@@ -1116,6 +1117,8 @@ def _execute(config: Tr01Config, *, request=None, output_dir: Path | None = None
     payload.update(
         {
             "field": field,
+            "result": field,
+            "program_bytes": program_bytes_from_artifact(artifact),
             "oracle": oracle,
             "coordinates": _exact.uniform_cell_mesh_nd(config.mesh_cells, config.dim)[0],
             "volumes": volumes,

@@ -836,3 +836,40 @@ def test_mpi_campaign_invoke_is_not_tr01_acceptance():
     assert "non-scientific" in validate or "not TR-01 acceptance" in validate
     assert 'results[0].get("status") != "pass"' in validate
     assert "mpi_mode" in validate
+
+
+def test_tr01_oracle_producer_matches_canonical_3d_cell_averages():
+    from verification.pops_verify.oracle_producers import PRODUCERS, CASE_SOURCES, produce_oracle
+
+    exact = _load_case_module("exact")
+    n_cells = 8
+    t_end = 1.0
+    lo, hi = exact.cell_bounds_nd(n_cells, 3)
+
+    def _u(*args):
+        *coords, time = args
+        return exact.exact_sine_nd(coords, time, a=exact.A, k=exact.K)
+
+    expected = analytic_cell_averages(_u, lo, hi, t_end)
+    resolved = {
+        "job": {
+            "case_id": "TR-01",
+            "pops_native_dim": 3,
+            "min_resolution": n_cells,
+            "execution_space": "KokkosSerial",
+            "mpi_mode": "off",
+        },
+        "case": {"id": "TR-01"},
+    }
+    produced = produce_oracle("TR-01", resolved, expected, {"final_time": t_end})
+    assert PRODUCERS["TR-01"] is not None
+    assert CASE_SOURCES["TR-01"] == ("transport", "advection_sine")
+    assert produced.shape == (n_cells, n_cells, n_cells)
+    assert np.allclose(produced, expected, atol=1.0e-14)
+
+
+def test_execute_payload_exposes_evidence_emission_keys():
+    text = (CASE_DIR / "run.py").read_text(encoding="utf-8")
+    assert "program_bytes_from_artifact" in text
+    assert '"result": field' in text
+    assert '"program_bytes": program_bytes_from_artifact(artifact)' in text

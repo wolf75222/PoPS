@@ -185,7 +185,30 @@ def _oracle_tm01(resolved, result, provenance):
     return _averages_1d(lambda x: exact.exact_sine(x, _time(provenance)), n_cells)
 
 
+def _oracle_tr01(resolved, result, provenance):
+    exact = _exact("transport", "advection_sine")
+    field = np.asarray(result)
+    n_cells = _n_cells(result, resolved)
+    dim = int(field.ndim)
+    if dim not in (1, 2, 3):
+        raise OracleProducerError("TR-01 result rank must be 1, 2, or 3")
+    job = resolved.get("job") if isinstance(resolved.get("job"), Mapping) else {}
+    declared = job.get("pops_native_dim")
+    if declared is not None and int(declared) != dim:
+        raise OracleProducerError("TR-01 result rank does not match pops_native_dim")
+    velocity = tuple(float(value) for value in exact.A[:dim])
+    wave = tuple(float(value) for value in exact.K[:dim])
+    lo, hi = exact.cell_bounds_nd(n_cells, dim)
+
+    def _u(*args):
+        *coords, time = args
+        return exact.exact_sine_nd(coords, time, a=velocity, k=wave)
+
+    return analytic_cell_averages(_u, lo, hi, _time(provenance))
+
+
 PRODUCERS: dict[str, Callable[..., Any]] = {
+    "TR-01": _oracle_tr01,
     "TR-02": _oracle_tr02,
     "TR-06": _oracle_tr06,
     "TR-07": _oracle_tr07,
@@ -200,6 +223,7 @@ PRODUCERS: dict[str, Callable[..., Any]] = {
 }
 
 CASE_SOURCES = {
+    "TR-01": ("transport", "advection_sine"),
     "TR-02": ("transport", "gaussian_pulse"),
     "TR-06": ("transport", "axis_permutation"),
     "TR-07": ("transport", "discontinuous_slot"),
