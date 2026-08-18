@@ -39,7 +39,13 @@ pops676_load_mpi_hdf5() {
   spack load "/${POPS676_MPICH_HASH}"
   spack load "/${POPS676_HDF5_HASH}"
   export POPS_MPI_LIBRARY=MPICH
+  export MPI_HOME
+  MPI_HOME="$(spack location -i "/${POPS676_MPICH_HASH}")"
   export HDF5_ROOT="${HDF5_ROOT:-$(spack location -i "/${POPS676_HDF5_HASH}" 2>/dev/null || true)}"
+  if [ ! -f "${MPI_HOME}/include/mpi.h" ]; then
+    echo "ERROR: mpi.h missing under ${MPI_HOME}/include" >&2
+    exit 1
+  fi
   if command -v mpicxx >/dev/null 2>&1; then
     export CC=mpicc CXX=mpicxx
     export OMPI_CC="${CC}" OMPI_CXX="${CXX}"

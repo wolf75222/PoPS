@@ -71,6 +71,16 @@ def test_romeo_676_build_keeps_serial_and_mpi_artifacts_distinct() -> None:
     assert "#SBATCH --ntasks=1" in text
 
 
+def test_romeo_676_mpi_build_passes_concrete_mpi_include() -> None:
+    env = ENV.read_text(encoding="utf-8")
+    build = BUILD.read_text(encoding="utf-8")
+    assert "MPI_HOME" in env
+    assert "include/mpi.h" in env
+    assert "MPI_CXX_INCLUDE_DIRS" in build
+    assert "MPI_CXX_HEADER_DIR" in build
+    assert "MPI_C_INCLUDE_DIRS" in build
+
+
 def test_romeo_676_serial_gate_runs_if08_then_eu01() -> None:
     text = SERIAL.read_text(encoding="utf-8")
     assert "run_verification.py" in text

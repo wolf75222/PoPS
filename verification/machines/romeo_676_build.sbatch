@@ -38,12 +38,18 @@ KIND=serial
 CMAKE_MPI=OFF
 CMAKE_HDF5=OFF
 EXPECT_BACKEND=(--expect-serial)
+CMAKE_MPI_FLAGS=()
 if [ "$MPI" = "on" ]; then
   KIND=mpi
   CMAKE_MPI=ON
   CMAKE_HDF5=ON
   EXPECT_BACKEND=(--expect-mpi --expect-parallel-hdf5)
   pops676_load_mpi_hdf5
+  CMAKE_MPI_FLAGS=(
+    -DMPI_CXX_HEADER_DIR="${MPI_HOME}/include"
+    -DMPI_CXX_INCLUDE_DIRS="${MPI_HOME}/include"
+    -DMPI_C_INCLUDE_DIRS="${MPI_HOME}/include"
+  )
 fi
 
 ROOT="$POPS676_SRC"
@@ -55,6 +61,9 @@ NPROC="${SLURM_CPUS_PER_TASK:-8}"
 echo "host=$(hostname) dim=$DIM kind=$KIND cxx=$CXX kokkos=$POPS_KOKKOS_ROOT"
 echo "build=$BUILD python=$POPS_PYTHON sha=$(git -C "$ROOT" rev-parse HEAD)"
 
+if [ "$MPI" = "on" ] && [ -f "$BUILD/CMakeCache.txt" ] && [ ! -f "$BUILD/python/pops/_native/variants.json" ]; then
+  rm -f "$BUILD/CMakeCache.txt"
+fi
 cmake -S "$ROOT" -B "$BUILD" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_C_COMPILER="${CC}" \
@@ -68,7 +77,8 @@ cmake -S "$ROOT" -B "$BUILD" -G Ninja \
   -DPOPS_USE_HDF5="$CMAKE_HDF5" \
   -DKokkos_ROOT="$POPS_KOKKOS_ROOT" \
   -DPython_EXECUTABLE="$POPS_PYTHON" \
-  -DPython3_EXECUTABLE="$POPS_PYTHON"
+  -DPython3_EXECUTABLE="$POPS_PYTHON" \
+  "${CMAKE_MPI_FLAGS[@]}"
 cmake --build "$BUILD" -j "$NPROC"
 echo BUILD_OK
 
