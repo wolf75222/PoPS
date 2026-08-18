@@ -1,9 +1,11 @@
 """2-d periodic Euler isentropic-vortex authoring and native run.
 
-Initial conditions come from ``exact_vortex(..., t=0)``. ``build_case`` /
-``resolve_plan`` author a public 2-d periodic Euler Case (Rusanov, MUSCL/VanLeer,
-SSPRK2). ``run_native`` compiles, binds, and advances the Case. 1-d is not
-applicable. Does not call ROMEO.
+Initial conditions are analytic cell averages of conserved fields.
+``build_case`` / ``resolve_plan`` author a public 2-d periodic Euler Case
+(Rusanov, MUSCL/VanLeer, SSPRK2). ``run_native`` compiles, binds, and
+advances the Case. A ``CampaignRequest`` returns EvidenceBundle emission
+keys with a packed ``(4, n, n)`` conserved result. 1-d is not applicable.
+Does not call ROMEO.
 """
 from __future__ import annotations
 
@@ -22,6 +24,9 @@ N_CELLS = 32
 CFL = 0.4
 MAX_STEPS = 100_000
 COMPONENT_ORDER = ("rho", "rho_u", "rho_v", "E")
+PRIMITIVE_ORDER = ("rho", "u", "v", "p")
+T_END_CANONICAL = 1.0
+SPATIAL_DT_COEF = 0.16
 
 
 class NativeUnavailable(RuntimeError):
@@ -29,13 +34,25 @@ class NativeUnavailable(RuntimeError):
 
 
 class _Authoring:
-    __slots__ = ("case", "instance", "frame", "n_cells")
+    __slots__ = ("case", "instance", "frame", "n_cells", "time_program", "cfl", "dt")
 
-    def __init__(self, case: Any, instance: Any, frame: Any, n_cells: int) -> None:
+    def __init__(
+        self,
+        case: Any,
+        instance: Any,
+        frame: Any,
+        n_cells: int,
+        time_program: str,
+        cfl: float,
+        dt: float | None,
+    ) -> None:
         self.case = case
         self.instance = instance
         self.frame = frame
         self.n_cells = n_cells
+        self.time_program = time_program
+        self.cfl = cfl
+        self.dt = dt
 
 
 def cell_centers(n_cells: int = N_CELLS):
@@ -48,56 +65,61 @@ def cell_centers(n_cells: int = N_CELLS):
     return x, y, width
 
 
-def initial_primitives(n_cells: int = N_CELLS, *, u_inf=1.0, v_inf=0.0):
-    """Primitive IC at t=0. Each field has shape (n, n)."""
-    x, y, _ = cell_centers(n_cells)
-    return _exact.exact_vortex(x, y, 0.0, u_inf=u_inf, v_inf=v_inf)
-
-
-def primitives_to_conserved(primitives) -> dict:
-    """Convert primitive (rho, u, v, p) to conserved (rho, rho u, rho v, E)."""
-    rho = np.asarray(primitives["rho"], dtype=np.float64)
-    velocity_x = np.asarray(primitives["u"], dtype=np.float64)
-    velocity_y = np.asarray(primitives["v"], dtype=np.float64)
-    pressure = np.asarray(primitives["p"], dtype=np.float64)
-    energy = pressure / (GAMMA - 1.0) + 0.5 * rho * (
-        velocity_x * velocity_x + velocity_y * velocity_y
-    )
-    return {
-        "rho": rho,
-        "rho_u": rho * velocity_x,
-        "rho_v": rho * velocity_y,
-        "E": energy,
-    }
-
-
-def initial_conserved(n_cells: int = N_CELLS, *, u_inf=1.0, v_inf=0.0):
-    """Conserved IC from cell averages of ``exact_vortex(..., t=0)``."""
-    from verification.pops_verify.cell_averages import analytic_cell_averages
-
+def cell_bounds(n_cells: int = N_CELLS):
+    """Lower/upper corners of every cell, shape (n, n, 2)."""
     count = int(n_cells)
-    length = float(_exact.PERIOD)
-    width = length / count
+    width = float(_exact.PERIOD) / count
     axis_lo = np.arange(count, dtype=np.float64) * width
     axis_hi = axis_lo + width
     x_lo, y_lo = np.meshgrid(axis_lo, axis_lo, indexing="xy")
     x_hi, y_hi = np.meshgrid(axis_hi, axis_hi, indexing="xy")
-    lo = np.stack((x_lo, y_lo), axis=-1)
-    hi = np.stack((x_hi, y_hi), axis=-1)
+    return np.stack((x_lo, y_lo), axis=-1), np.stack((x_hi, y_hi), axis=-1), width
+
+
+def _average_scalar(fn, n_cells: int):
+    from verification.pops_verify.cell_averages import analytic_cell_averages
+
+    lo, hi, _ = cell_bounds(n_cells)
+    return analytic_cell_averages(fn, lo, hi)
+
+
+def average_primitives(n_cells: int, t: float = 0.0, *, u_inf=1.0, v_inf=0.0):
+    """Analytic cell averages of primitive fields (rho, u, v, p)."""
 
     def _component(name):
         def _fn(x, y):
-            return _exact.exact_vortex(x, y, 0.0, u_inf=u_inf, v_inf=v_inf)[name]
+            return _exact.exact_vortex(x, y, t, u_inf=u_inf, v_inf=v_inf)[name]
 
-        return analytic_cell_averages(_fn, lo, hi)
+        return _average_scalar(_fn, n_cells)
 
-    primitives = {
-        "rho": _component("rho"),
-        "u": _component("u"),
-        "v": _component("v"),
-        "p": _component("p"),
-    }
-    return primitives_to_conserved(primitives)
+    return {name: _component(name) for name in PRIMITIVE_ORDER}
+
+
+def average_conserved(n_cells: int, t: float = 0.0, *, u_inf=1.0, v_inf=0.0):
+    """Analytic cell averages of conserved fields (rho, rho u, rho v, E)."""
+
+    def _component(name):
+        def _fn(x, y):
+            return _exact.exact_conserved(x, y, t, u_inf=u_inf, v_inf=v_inf)[name]
+
+        return _average_scalar(_fn, n_cells)
+
+    return {name: _component(name) for name in COMPONENT_ORDER}
+
+
+def initial_primitives(n_cells: int = N_CELLS, *, u_inf=1.0, v_inf=0.0):
+    """Primitive cell averages at t=0. Each field has shape (n, n)."""
+    return average_primitives(n_cells, 0.0, u_inf=u_inf, v_inf=v_inf)
+
+
+def primitives_to_conserved(primitives) -> dict:
+    """Convert primitive (rho, u, v, p) to conserved (rho, rho u, rho v, E)."""
+    return _exact.primitives_to_conserved(primitives)
+
+
+def initial_conserved(n_cells: int = N_CELLS, *, u_inf=1.0, v_inf=0.0):
+    """Conserved IC: analytic cell averages of conserved fields at t=0."""
+    return average_conserved(n_cells, 0.0, u_inf=u_inf, v_inf=v_inf)
 
 
 def pack_conserved(conserved) -> np.ndarray:
@@ -137,6 +159,12 @@ def conserved_to_primitives(conserved) -> dict:
     return {"rho": rho, "u": velocity_x, "v": velocity_y, "p": pressure}
 
 
+def spatial_fixed_dt(n_cells: int) -> float:
+    """Isolated spatial step: Δt ∝ h² (§9.4)."""
+    width = float(_exact.PERIOD) / float(n_cells)
+    return float(SPATIAL_DT_COEF) * width * width
+
+
 def _box_frame():
     from pops.domain import Rectangle
     from pops.frames import Cartesian2D
@@ -145,7 +173,12 @@ def _box_frame():
     return Rectangle("eu02-box", (0.0, 0.0), (length, length)).frame(Cartesian2D())
 
 
-def _author(n_cells: int = N_CELLS) -> _Authoring:
+def _author(
+    n_cells: int = N_CELLS,
+    *,
+    dt: float | None = None,
+    family: str = "global",
+) -> _Authoring:
     import pops
     import pops.lib.time as libtime
     from pops.initial import InitialCondition
@@ -156,7 +189,7 @@ def _author(n_cells: int = N_CELLS) -> _Authoring:
     from pops.numerics.spatial import FiniteVolume
     from pops.physics import Density, Energy, Momentum
     from pops.projection import ConservativeCellAverage
-    from pops.time import AdaptiveCFL
+    from pops.time import AdaptiveCFL, FixedDt
 
     count = int(n_cells)
     frame = _box_frame()
@@ -218,7 +251,18 @@ def _author(n_cells: int = N_CELLS) -> _Authoring:
     )
     case.numerics(numerics, block=block)
     program = libtime.SSPRK2(instance, rate=rate)
-    program.step_strategy(AdaptiveCFL(cfl=CFL))
+    step_dt = None if dt is None else float(dt)
+    if family == "spatial" and step_dt is None:
+        step_dt = spatial_fixed_dt(count)
+    if step_dt is not None:
+        program.step_strategy(FixedDt(dt=step_dt))
+        time_program = "SSPRK2+FixedDt"
+        width = float(_exact.PERIOD) / float(count)
+        cfl_value = float(step_dt / width)
+    else:
+        program.step_strategy(AdaptiveCFL(cfl=CFL))
+        time_program = "SSPRK2+AdaptiveCFL"
+        cfl_value = float(CFL)
     case.program(program)
     case.initials.add(
         InitialCondition(
@@ -227,7 +271,15 @@ def _author(n_cells: int = N_CELLS) -> _Authoring:
             projection=ConservativeCellAverage(),
         )
     )
-    return _Authoring(case=case, instance=instance, frame=frame, n_cells=count)
+    return _Authoring(
+        case=case,
+        instance=instance,
+        frame=frame,
+        n_cells=count,
+        time_program=time_program,
+        cfl=cfl_value,
+        dt=step_dt,
+    )
 
 
 def build_case(n_cells: int = N_CELLS):
@@ -263,13 +315,21 @@ def _native_unavailable_reason() -> str | None:
 
 def run_native(
     n_cells: int = N_CELLS,
-    t_end: float = 0.05,
+    t_end: float = T_END_CANONICAL,
     *,
     u_inf=1.0,
     v_inf=0.0,
     request=None,
+    dt: float | None = None,
+    family: str = "global",
+    dump_times=None,
 ):
-    """Compile, bind, and run the 2-d vortex. Raises NativeUnavailable without Kokkos."""
+    """Compile, bind, and run the 2-d vortex. Raises NativeUnavailable without Kokkos.
+
+    ``family`` is recorded only. Constant-CFL AdaptiveCFL is ``global``.
+    Isolated spatial uses ``family='spatial'`` (Δt ∝ h²). Temporal uses
+    ``family='temporal'`` plus an explicit ``dt``.
+    """
     import pops
 
     from verification.pops_verify.case_authoring import (
@@ -290,23 +350,55 @@ def run_native(
     missing = _native_unavailable_reason()
     if missing:
         raise NativeUnavailable(missing)
-    authored = _author(n_cells)
+    if family == "temporal" and dt is None:
+        raise NativeUnavailable("temporal EU-02 requires an explicit FixedDt")
+    authored = _author(n_cells, dt=dt, family=family)
     layout = uniform_periodic_layout(authored.frame, (authored.n_cells, authored.n_cells))
     plan = resolve_case(authored.case, layout=layout)
     artifact = pops.compile(plan)
     initial = pack_conserved(initial_conserved(authored.n_cells, u_inf=u_inf, v_inf=v_inf))
     simulation = pops.bind(artifact, initial_values={authored.instance: initial})
-    pops.run(simulation, t_end=float(t_end), max_steps=MAX_STEPS)
-    field = np.asarray(simulation.state_global("gas"), dtype=np.float64)
-    conserved = unpack_conserved(field, authored.n_cells)
+    snapshots: dict[str, np.ndarray] = {}
+    times = []
+    if dump_times:
+        times = sorted({float(value) for value in dump_times})
+        if float(t_end) not in times:
+            times.append(float(t_end))
+        times.sort()
+    else:
+        times = [float(t_end)]
+    last = None
+    for instant in times:
+        pops.run(simulation, t_end=float(instant), max_steps=MAX_STEPS)
+        field = np.asarray(simulation.state_global("gas"), dtype=np.float64)
+        last = unpack_conserved(field, authored.n_cells)
+        snapshots[f"{instant:.6g}"] = pack_conserved(last)
+    if last is None:
+        raise NativeUnavailable("native run produced no conserved field")
+    packed = pack_conserved(last)
+    output_dir = getattr(request, "output_dir", None) if request is not None else None
+    if output_dir is not None and dump_times:
+        root = Path(output_dir)
+        root.mkdir(parents=True, exist_ok=True)
+        np.savez(
+            root / "snapshots.npz",
+            times=np.asarray(times, dtype=np.float64),
+            **{f"t_{index}": snapshots[f"{instant:.6g}"] for index, instant in enumerate(times)},
+        )
+    if request is None:
+        return last
+    extra: dict[str, Any] = {}
+    if authored.dt is not None:
+        extra["dt"] = float(authored.dt)
     return maybe_campaign_payload(
         request,
-        conserved,
+        packed,
         artifact=artifact,
         simulation=simulation,
         n_cells=authored.n_cells,
         t_end=t_end,
-        time_program="SSPRK2",
-        cfl=CFL,
+        time_program=authored.time_program,
+        cfl=authored.cfl,
         dimension=2,
+        **extra,
     )

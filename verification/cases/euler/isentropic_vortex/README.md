@@ -1,24 +1,25 @@
 # EU-02 — Isentropic vortex (2-d)
 
-Classic isentropic vortex on a periodic box. The exact solution at time \(t\)
-is the initial vortex translated by the free-stream velocity \((u_\infty,v_\infty)\).
-1-d is not applicable. Native compile is optional.
+Classic Yee/Sandham/Djomehri isentropic vortex on a periodic box. The exact
+solution at time \(t\) is the initial vortex translated by
+\((u_\infty,v_\infty)\). 1-d is not applicable.
 
 | Field | Content |
 |---|---|
 | Identifier | `EU-02` |
 | `verification_kind` | `code-verification` |
 | `evidence_status` | `required` |
-| Equations | 2-d gamma-law Euler, primitives \(W=(\rho,u,v,p)\). Conserved \((\rho,\rho u,\rho v,E)\). No sources. \(\gamma=1.4\). |
-| Oracle | Yee/Sandham/Djomehri isentropic vortex: background \((\rho_\infty,u_\infty,v_\infty,p_\infty)\) plus isentropic perturbation. Exact at \(t\) is translation by \((u_\infty,v_\infty)\). `exact.py` does not read PoPS output. |
-| Domain and boundaries | 2-d periodic box \([0,10]^2\). 1-d is not applicable. |
-| Parameters | \(\rho_\infty=1\), \(p_\infty=1\), \((u_\infty,v_\infty)=(1,0)\) canonical, \(\beta=5\), centre \((5,5)\). Dimensionless. |
-| Native dimensions | `POPS_NATIVE_DIM=2`. In-memory path does not load a native artifact. |
-| Required capabilities | Cartesian 2-d, uniform, periodic, KokkosSerial, MPI off. HLLC/Rusanov + MUSCL when a native series exists. |
-| Configurations | Single resolution \(n=32^2\) for the in-memory report. Authored scheme: Rusanov, MUSCL/VanLeer, SSPRK2, AdaptiveCFL. |
-| Diagnostics | Task 2 volume-weighted L1/L2/L∞ on density of exact vs exact. Density/pressure positivity. Translation by \((1,0)\). Entropy function \(p/\rho^\gamma\) constant. |
-| Thresholds | Exact-vs-exact L∞ = 0. No spatial-order gate on the in-memory path. |
-| Proves | Isentropic-vortex oracle (positivity; exact translation by \((u_\infty,v_\infty)\); \(p/\rho^\gamma\) invariant); report renderer. |
-| Does not prove | Observed spatial/temporal order, AMR, Poisson, coupling, MPI, HLLC vs Rusanov parity, 1-d reduction. |
-| Resources | `pr.nodes = 1`. `two_node.nodes = [1, 2]`. No ranks, GPUs, or wall-time claim. |
-| Provenance | Campaign `repository_sha` is `git rev-parse HEAD`. Native compiler/Kokkos/MPI/Slurm not recorded on the in-memory path. |
+| Equations | 2-d gamma-law Euler. Primitives \(W=(\rho,u,v,p)\). Conserved \(U=(\rho,\rho u,\rho v,E)\). No sources. \(\gamma=1.4\). Sign: \(E=p/(\gamma-1)+\tfrac12\rho(u^2+v^2)\). Vorticity \(\omega=\partial_x v-\partial_y u\). |
+| Oracle | Independent `exact.py`. Primitive and conserved oracles are analytic Gauss–Legendre cell averages of the translated vortex. Point samples are not cell averages. `exact.py` does not read PoPS output. |
+| Domain and boundaries | Periodic box \([0,10]^2\). 1-d is not applicable. 3-d is extended, not claimed here. |
+| Parameters | \(\rho_\infty=1\), \(p_\infty=1\), canonical \((u_\infty,v_\infty)=(1,0)\), \(\beta=5\), centre \((5,5)\). Dimensionless. |
+| Native dimensions | `POPS_NATIVE_DIM=2`. |
+| Required capabilities | Cartesian 2-d, uniform, periodic, KokkosSerial, MPI off. Rusanov + MUSCL/VanLeer + SSPRK2. |
+| Configurations | `canonical` global: AdaptiveCFL \(C=0.4\), \(t=1\), \(n=16,32,64,128\). Isolated spatial: FixedDt \(\Delta t=0.16 h^2\). Temporal: FixedDt at \(n=64\). OpenMP/MPI: n=16 smokes only. |
+| Diagnostics | L1/L2/L∞ on \(\rho,u,v,p\) vs primitive cell averages; conserved norms vs conserved cell averages; vortex-centre / phase; vorticity max; radial symmetry; mass / momentum / energy conservation. |
+| Thresholds | §9.3: last two L∞ intervals above \(10^{-14}\) must be \(\ge 1.8\). Threshold is never lowered. Finite-only is not acceptance. |
+| Proves | Native 2-d periodic Euler advection of a smooth isentropic vortex against cell-average oracles; conservation residuals of the public pipeline; centre tracking. |
+| Does not prove | AMR (static or dynamic), 3-d, HLLC vs Rusanov, isolated spatial unless `family=spatial`, temporal order unless `family=temporal`, MPI/OpenMP invariance from a smoke. |
+| Resources | `pr.nodes = 1`. `two_node.nodes = [1, 2]`. ROMEO ≤ 2 nodes. |
+| Provenance | Campaign `repository_sha` is `git rev-parse HEAD`. Outputs under `build/verification/`. |
+| Typical failures | Point-sample IC vs cell-average oracle (false first-order); constant-CFL labelled spatial; exact-vs-exact L∞=0; injected orders. |

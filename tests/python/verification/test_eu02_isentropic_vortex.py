@@ -176,3 +176,107 @@ def test_run_native_accepts_fail_closed_campaign_request():
     missing = [key for key in RUN_FIELDS if key not in result]
     assert missing == []
     assert "result" in result
+    packed = np.asarray(result["result"], dtype=np.float64)
+    assert packed.shape == (4, 16, 16)
+    assert np.isfinite(packed).all()
+
+
+def test_analytic_center_and_vorticity_peak():
+    exact = _load("exact")
+    x, y = _cell_mesh(exact, 48)
+    center = exact.analytic_center(0.5, u_inf=1.0, v_inf=0.0)
+    np.testing.assert_allclose(center[0], 5.5, atol=1.0e-12)
+    np.testing.assert_allclose(center[1], 5.0, atol=1.0e-12)
+    vorticity = exact.exact_vorticity(x, y, 0.5, u_inf=1.0, v_inf=0.0)
+    index = np.unravel_index(int(np.argmax(vorticity)), vorticity.shape)
+    assert abs(float(x[index]) - center[0]) < 0.25
+    assert abs(float(y[index]) - center[1]) < 0.25
+
+
+def test_initial_conserved_averages_energy_not_converted_primitives():
+    run = _load("run")
+    exact = _load("exact")
+    n_cells = 16
+    conserved = run.average_conserved(n_cells, 0.0)
+    primitives = run.average_primitives(n_cells, 0.0)
+    converted = run.primitives_to_conserved(primitives)
+    np.testing.assert_allclose(conserved["rho"], primitives["rho"])
+    assert not np.allclose(conserved["E"], converted["E"])
+    x, y, _ = run.cell_centers(n_cells)
+    points = exact.exact_vortex(x, y, 0.0)["rho"]
+    assert not np.allclose(conserved["rho"], points)
+
+
+def test_evaluate_order_claim_refuses_cfl_as_spatial():
+    analyze = _load("analyze")
+    run = _load("run")
+    fields = {n: run.pack_conserved(run.initial_conserved(n)) for n in (16, 32, 64, 128)}
+    with pytest.raises(analyze.NativeSeriesError, match="global"):
+        analyze.evaluate_order_claim(
+            {
+                "source": "native",
+                "family": "spatial",
+                "dt_scaling": "cfl",
+                "resolutions": (16, 32, 64, 128),
+                "fields": fields,
+                "t_end": 0.0,
+            }
+        )
+
+
+def test_evaluate_order_claim_three_resolutions_is_smoke():
+    analyze = _load("analyze")
+    run = _load("run")
+    fields = {n: run.pack_conserved(run.initial_conserved(n)) for n in (16, 32, 64)}
+    claim = analyze.evaluate_order_claim(
+        {
+            "source": "native",
+            "family": "global",
+            "dt_scaling": "cfl",
+            "resolutions": (16, 32, 64),
+            "fields": fields,
+            "t_end": 0.0,
+        }
+    )
+    assert claim["verdict"] == "smoke"
+    assert claim["order_pass"] is False
+    assert claim["orders"] == []
+
+
+def test_oracle_producer_matches_conserved_shape():
+    from verification.pops_verify.oracle_producers import produce_oracle
+
+    result = np.zeros((4, 8, 8), dtype=np.float64)
+    oracle = produce_oracle(
+        "EU-02",
+        {"job": {"min_resolution": 8}},
+        result,
+        {"final_time": 0.0},
+    )
+    assert oracle.shape == (4, 8, 8)
+    assert np.all(oracle[0] > 0.0)
+
+
+def test_vortex_center_from_exact_density():
+    analyze = _load("analyze")
+    exact = _load("exact")
+    run = _load("run")
+    n_cells = 32
+    x, y, _ = run.cell_centers(n_cells)
+    t = 0.25
+    density = exact.exact_vortex(x, y, t)["rho"]
+    analytic = exact.analytic_center(t)
+    numerical = analyze.vortex_center_from_density(density, n_cells, expected=analytic)
+    error = analyze.center_error(numerical, analytic)
+    assert error["distance"] < 0.2
+
+
+def test_conservation_zero_for_identical_states():
+    analyze = _load("analyze")
+    run = _load("run")
+    conserved = run.initial_conserved(16)
+    integrals = analyze.conservation_integrals(conserved, 16)
+    drifts = analyze.conservation_drifts(integrals, integrals, n_updates=1)
+    assert drifts["ok"]["mass"]
+    assert drifts["ok"]["energy"]
+    assert drifts["relative"]["mass"] == 0.0

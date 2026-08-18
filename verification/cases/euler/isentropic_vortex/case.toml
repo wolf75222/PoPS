@@ -5,18 +5,20 @@ name = "Euler isentropic vortex"
 verification_kind = "code-verification"
 evidence_status = "required"
 physics = ["euler"]
-oracle = "isentropic_vortex"
+oracle = "translated_isentropic_vortex"
 native_dimensions = [2]
 execution_spaces = ["KokkosSerial", "KokkosOpenMP"]
 mpi_modes = ["off"]
-suites = ["pr"]
-requires = []
+suites = ["pr", "nightly", "release"]
+requires = ["public_case_pipeline", "cartesian_layout"]
 
 [resources.pr]
 nodes = 1
+resolutions = [16, 32, 64, 128]
 
 [resources.two_node]
 nodes = [1, 2]
 
 [acceptance]
+spatial_order_min = 1.8
 finite = true

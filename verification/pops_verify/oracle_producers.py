@@ -114,17 +114,35 @@ def _oracle_eu02(resolved, result, provenance):
     exact = _exact("euler", "isentropic_vortex")
     n_cells = _n_cells(result, resolved)
     t = _time(provenance)
-    length = float(getattr(exact, "PERIOD", 1.0))
-    rho = _averages_2d(
-        lambda x, y: exact.exact_vortex(x, y, t, u_inf=1.0, v_inf=0.0)["rho"],
-        n_cells,
-        length,
-        indexing="xy",
-    )
-    field = np.asarray(result)
-    if field.shape == rho.shape:
-        return rho
-    raise OracleProducerError("EU-02 oracle expects a density array")
+    length = float(getattr(exact, "PERIOD", 10.0))
+    field = np.asarray(result, dtype=np.float64)
+
+    def _component(name):
+        def _fn(x, y):
+            if hasattr(exact, "exact_conserved"):
+                return exact.exact_conserved(x, y, t, u_inf=1.0, v_inf=0.0)[name]
+            primitives = exact.exact_vortex(x, y, t, u_inf=1.0, v_inf=0.0)
+            if name == "rho":
+                return primitives["rho"]
+            if name == "rho_u":
+                return primitives["rho"] * primitives["u"]
+            if name == "rho_v":
+                return primitives["rho"] * primitives["v"]
+            energy = primitives["p"] / (1.4 - 1.0) + 0.5 * primitives["rho"] * (
+                primitives["u"] ** 2 + primitives["v"] ** 2
+            )
+            return energy
+
+        return _averages_2d(_fn, n_cells, length, indexing="xy")
+
+    if field.ndim == 2 and field.shape == (n_cells, n_cells):
+        return _component("rho")
+    if field.shape == (4, n_cells, n_cells):
+        return np.stack(
+            [_component("rho"), _component("rho_u"), _component("rho_v"), _component("E")],
+            axis=0,
+        )
+    raise OracleProducerError("EU-02 oracle expects density (n,n) or conserved (4,n,n)")
 
 
 def _oracle_eu04(resolved, result, provenance):

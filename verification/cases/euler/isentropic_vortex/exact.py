@@ -31,6 +31,11 @@ def minimum_image(delta, period: float = PERIOD):
     return np.mod(np.asarray(delta, dtype=np.float64) + 0.5 * width, width) - 0.5 * width
 
 
+def wrap_periodic(value, period: float = PERIOD):
+    """Wrap a coordinate onto [0, period)."""
+    return np.mod(np.asarray(value, dtype=np.float64), float(period))
+
+
 def entropy_function(rho, p, *, gamma: float = GAMMA):
     """Isentropic invariant p / rho^gamma."""
     density = np.asarray(rho, dtype=np.float64)
@@ -38,15 +43,26 @@ def entropy_function(rho, p, *, gamma: float = GAMMA):
     return pressure / np.power(density, float(gamma))
 
 
-def exact_vortex(x, y, t, *, u_inf: float = U_INF, v_inf: float = V_INF):
-    """Primitive fields (rho, u, v, p) of the translated isentropic vortex."""
+def analytic_center(t, *, u_inf: float = U_INF, v_inf: float = V_INF):
+    """Periodic analytic vortex centre after advection by (u_inf, v_inf)."""
+    return (
+        float(wrap_periodic(X0 + float(u_inf) * float(t))),
+        float(wrap_periodic(Y0 + float(v_inf) * float(t))),
+    )
+
+
+def _vortex_displacement(x, y, t, *, u_inf: float, v_inf: float):
     samples_x = np.asarray(x, dtype=np.float64)
     samples_y = np.asarray(y, dtype=np.float64)
-    center_x = X0 + float(u_inf) * float(t)
-    center_y = Y0 + float(v_inf) * float(t)
+    center_x, center_y = analytic_center(t, u_inf=u_inf, v_inf=v_inf)
     dx = minimum_image(samples_x - center_x)
     dy = minimum_image(samples_y - center_y)
-    radius_sq = dx * dx + dy * dy
+    return dx, dy, dx * dx + dy * dy
+
+
+def exact_vortex(x, y, t, *, u_inf: float = U_INF, v_inf: float = V_INF):
+    """Primitive fields (rho, u, v, p) of the translated isentropic vortex."""
+    dx, dy, radius_sq = _vortex_displacement(x, y, t, u_inf=u_inf, v_inf=v_inf)
     gaussian = np.exp(0.5 * (1.0 - radius_sq))
     du = -BETA * dy / (2.0 * math.pi) * gaussian
     dv = BETA * dx / (2.0 * math.pi) * gaussian
@@ -68,3 +84,32 @@ def exact_vortex(x, y, t, *, u_inf: float = U_INF, v_inf: float = V_INF):
         "v": float(v_inf) + dv,
         "p": pressure,
     }
+
+
+def primitives_to_conserved(primitives) -> dict:
+    """Pointwise primitive-to-conserved conversion. Not a cell average."""
+    rho = np.asarray(primitives["rho"], dtype=np.float64)
+    velocity_x = np.asarray(primitives["u"], dtype=np.float64)
+    velocity_y = np.asarray(primitives["v"], dtype=np.float64)
+    pressure = np.asarray(primitives["p"], dtype=np.float64)
+    energy = pressure / (GAMMA - 1.0) + 0.5 * rho * (
+        velocity_x * velocity_x + velocity_y * velocity_y
+    )
+    return {
+        "rho": rho,
+        "rho_u": rho * velocity_x,
+        "rho_v": rho * velocity_y,
+        "E": energy,
+    }
+
+
+def exact_conserved(x, y, t, *, u_inf: float = U_INF, v_inf: float = V_INF):
+    """Pointwise conserved fields of the translated isentropic vortex."""
+    return primitives_to_conserved(exact_vortex(x, y, t, u_inf=u_inf, v_inf=v_inf))
+
+
+def exact_vorticity(x, y, t, *, u_inf: float = U_INF, v_inf: float = V_INF):
+    """Analytic vorticity ω = ∂v/∂x − ∂u/∂y of the Yee vortex."""
+    _dx, _dy, radius_sq = _vortex_displacement(x, y, t, u_inf=u_inf, v_inf=v_inf)
+    gaussian = np.exp(0.5 * (1.0 - radius_sq))
+    return (BETA / (2.0 * math.pi)) * gaussian * (2.0 - radius_sq)
