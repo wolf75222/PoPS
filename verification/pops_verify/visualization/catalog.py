@@ -156,7 +156,7 @@ _DIMS: dict[str, tuple[DimCode, DimCode, DimCode]] = {
     "PO-06": ("R", "R", "R"),
     "PO-07": ("R", "R", "R"),
     "CP-01": ("R", "R", "E"),
-    "CP-02": ("R", "R", "E"),
+    "CP-02": ("R", "E", "E"),
     "CP-03": ("R", "E", "E"),
     "CP-04": ("N/A", "R", "R"),
     "CP-05": ("R", "E", "E"),
@@ -231,6 +231,16 @@ _NA_REASONS: dict[str, dict[str, str]] = {
     "TR-04": {"1d": "Face-edge-corner crossing is not defined in one dimension."},
     "EU-02": {"1d": "The isentropic vortex is intrinsically multidimensional."},
     "EU-05": {"1d": "The Gresho vortex is intrinsically multidimensional."},
+    "CP-02": {
+        "2d": (
+            "v1.5 selected package is the 1-d cold Langmuir wave; "
+            "2-d is extended and not-run."
+        ),
+        "3d": (
+            "v1.5 selected package is the 1-d cold Langmuir wave; "
+            "3-d is extended and not-run."
+        ),
+    },
     "CP-04": {"1d": "An oblique electrostatic wave requires at least two dimensions."},
     "CP-06": {"3d": "Three-dimensional ion-acoustic execution is N/A by default."},
     "CP-10": {"3d": "Three-dimensional Jeans execution is N/A by default."},
@@ -378,7 +388,7 @@ _ANIM: dict[str, tuple[AnimCode, AnimCode, AnimCode]] = {
     "PO-06": ("optional", "optional", "optional"),
     "PO-07": ("none", "none", "none"),
     "CP-01": ("optional", "optional", "optional"),
-    "CP-02": ("required", "required", "optional"),
+    "CP-02": ("required", "optional", "optional"),
     "CP-03": ("optional", "optional", "optional"),
     "CP-04": ("none", "optional", "optional"),
     "CP-05": ("optional", "optional", "optional"),
@@ -688,6 +698,8 @@ def visual_contract_for(case_id: str) -> dict:
             block["required"] = list(entry.artifacts[axis])
         else:
             block["required_when_executed"] = list(entry.artifacts[axis])
+            if axis in entry.na_reasons:
+                block["justification"] = entry.na_reasons[axis]
         dimensions[axis] = block
     return {
         "schema": "pops.verification.visuals.v1",

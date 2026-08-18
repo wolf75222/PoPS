@@ -193,7 +193,9 @@ def _dimension_block(
         else:
             blocks[axis] = {
                 "status": status,
-                "justification": f"{axis} was not the executed dimension of this run.",
+                "justification": entry.na_reasons.get(
+                    axis, f"{axis} was not the executed dimension of this run."
+                ),
                 "artifacts": [],
             }
     return blocks

@@ -76,6 +76,52 @@ def test_order2_data_can_pass_order2_reference():
     assert derive_figure_verdict(payload) == "pass"
 
 
+def test_figure_verdict_uses_linf_finest_pairs_not_mean_slope():
+    payload = {
+        "kind": "spatial_convergence",
+        "units": {"x": "1/h", "y": "error"},
+        "series": [
+            {
+                "name": "L2",
+                "x": [16, 32, 64, 128],
+                "y": [4.80e-7, 9.91e-8, 1.30e-8, 1.65e-9],
+                "unit": "1",
+            },
+            {
+                "name": "Linf",
+                "x": [16, 32, 64, 128],
+                "y": [6.676e-7, 1.396e-7, 1.831e-8, 2.336e-9],
+                "unit": "1",
+            },
+        ],
+        "reference_slopes": [{"name": "order 2", "order": 2.0, "anchor": [16, 1.0e-3]}],
+    }
+    assert derive_figure_verdict(payload) == "pass"
+
+
+def test_linf_last_two_pairs_below_threshold_fail_even_if_mean_is_two():
+    payload = {
+        "kind": "spatial_convergence",
+        "units": {"x": "1/h", "y": "error"},
+        "series": [
+            {
+                "name": "L2",
+                "x": [16, 32, 64, 128],
+                "y": [1.6e-2, 4.0e-3, 2.0e-3, 1.0e-3],
+                "unit": "1",
+            },
+            {
+                "name": "Linf",
+                "x": [16, 32, 64, 128],
+                "y": [1.6e-2, 4.0e-3, 2.0e-3, 1.4e-3],
+                "unit": "1",
+            },
+        ],
+        "reference_slopes": [{"order": 2, "anchor": [16, 1.6e-2]}],
+    }
+    assert derive_figure_verdict(payload) == "fail"
+
+
 def test_rendered_convergence_verdict_matches_data(tmp_path: Path):
     run = write_fixture_run(tmp_path, "TR-01", dimension=1)
     visual = json.loads(

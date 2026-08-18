@@ -126,7 +126,7 @@ EXPECTED_DIMS = {
     "PO-06": ("R", "R", "R"),
     "PO-07": ("R", "R", "R"),
     "CP-01": ("R", "R", "E"),
-    "CP-02": ("R", "R", "E"),
+    "CP-02": ("R", "E", "E"),
     "CP-03": ("R", "E", "E"),
     "CP-04": ("N/A", "R", "R"),
     "CP-05": ("R", "E", "E"),
@@ -294,3 +294,17 @@ def test_every_catalog_contract_is_schema_valid():
     validator = Draft202012Validator(json.loads(schema_path.read_text(encoding="utf-8")))
     for case_id in SCIENTIFIC_CASE_IDS:
         validator.validate(visual_contract_for(case_id))
+
+
+def test_cp02_2d_is_extended_not_run_with_v15_justification():
+    contract = visual_contract_for("CP-02")
+    assert contract["dimensions"]["1d"]["status"] == "required"
+    assert contract["dimensions"]["2d"]["status"] == "extended"
+    assert contract["dimensions"]["3d"]["status"] == "extended"
+    assert "exact_field" not in contract["required"]
+    justification = contract["dimensions"]["2d"]["justification"]
+    assert justification
+    assert "1-d" in justification or "1D" in justification
+    assert "v1.5" in justification or "selected" in justification
+    entry = catalog_entry("CP-02")
+    assert entry.animation[1] != "required"

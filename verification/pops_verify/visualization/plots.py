@@ -14,7 +14,8 @@ from verification.pops_verify.visualization.style import (
 
 EXACT_STYLE = {"color": "#222222", "linestyle": "-", "linewidth": 2.0}
 NUMERICAL_MARKERS = ("o", "s", "D", "^", "v")
-ORDER_TOLERANCE = 0.35
+FIGURE_ORDER_THRESHOLD = 1.8
+ROUNDING_FLOOR = 1.0e-14
 PUBLICATION_FORMATS = ("svg", "png", "pdf")
 FIXTURE_LABEL = "DETERMINISTIC FIXTURE — not a PoPS campaign result"
 
@@ -38,21 +39,49 @@ def observed_order(x_values: list[float], y_values: list[float]) -> float:
     return sum(orders) / len(orders)
 
 
+def _series_spacings(x_values: list[float]) -> list[float]:
+    xs = [float(value) for value in x_values]
+    if len(xs) >= 2 and all(xs[index] > xs[index + 1] for index in range(len(xs) - 1)):
+        return xs
+    return [1.0 / value for value in xs]
+
+
+def _interval_orders(errors: list[float], spacings: list[float]) -> list[float]:
+    orders: list[float] = []
+    for left, right in zip(range(len(errors) - 1), range(1, len(errors)), strict=True):
+        e0, e1 = float(errors[left]), float(errors[right])
+        h0, h1 = float(spacings[left]), float(spacings[right])
+        if e0 <= 0.0 or e1 <= 0.0 or h0 <= 0.0 or h1 <= 0.0 or h0 == h1:
+            raise VisualsError("cannot observe order from non-positive values")
+        orders.append(math.log(e0 / e1) / math.log(h0 / h1))
+    return orders
+
+
 def derive_figure_verdict(payload: dict[str, Any]) -> str:
     kind = payload.get("kind")
     if kind in {"spatial_convergence", "temporal_convergence", "coarse_fine_error"}:
-        slopes = payload.get("reference_slopes") or []
-        if not slopes:
-            return "pass"
-        claimed = float(slopes[0]["order"])
         series = payload.get("series") or []
         if not series:
             raise VisualsError("empty visual_data series")
-        chosen = next((item for item in series if item.get("name") == "L2"), series[0])
-        observed = observed_order(list(chosen["x"]), list(chosen["y"]))
-        if abs(observed - claimed) > ORDER_TOLERANCE:
+        names = {"Linf", "L∞", "linf"}
+        chosen = next((item for item in series if item.get("name") in names), None)
+        if chosen is None:
+            chosen = next((item for item in series if item.get("name") == "L2"), series[0])
+        errors = [float(value) for value in chosen["y"]]
+        spacings = _series_spacings(list(chosen["x"]))
+        orders = _interval_orders(errors, spacings)
+        usable = {index for index, error in enumerate(errors) if error > ROUNDING_FLOOR}
+        interval_ids = [
+            index
+            for index in range(len(orders))
+            if index in usable and (index + 1) in usable
+        ]
+        if len(interval_ids) < 2:
             return "fail"
-        return "pass"
+        gated = [orders[index] for index in interval_ids[-2:]]
+        if all(value >= FIGURE_ORDER_THRESHOLD for value in gated):
+            return "pass"
+        return "fail"
     return "pass"
 
 
