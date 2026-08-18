@@ -636,9 +636,10 @@ def execute_jobs(
         )
         if record["status"] == "pass" and series_jobs and is_campaign_writer_rank():
             analysis = None
+            bundle = None
             try:
                 write_series_json(job_dir, job.case_id, series_jobs)
-                EvidenceBundle(job_dir)
+                bundle = EvidenceBundle(job_dir)
                 try:
                     analysis = report_from_native_series(
                         job.case_id,
@@ -653,13 +654,15 @@ def execute_jobs(
                 except (EvidenceError, EvidenceContractError, VerificationRunnerError) as exc:
                     record["scientific_pass"] = False
                     record["reason"] = record.get("reason") or str(exc)
+                scientific_pass = record.get("scientific_pass") is True
                 write_live_run_visuals(
                     job_dir,
                     case_id=job.case_id,
                     run_id=job_dir.name,
-                    scientific=True,
-                    verdict="pass" if record.get("scientific_pass") else "fail",
+                    scientific_pass=scientific_pass,
+                    verdict="pass" if scientific_pass else "fail",
                     analysis=analysis,
+                    bundle=bundle,
                 )
             except (EvidenceError, EvidenceContractError, VerificationRunnerError) as exc:
                 record["scientific_pass"] = False
@@ -668,16 +671,17 @@ def execute_jobs(
                     job_dir,
                     case_id=job.case_id,
                     run_id=job_dir.name,
-                    scientific=False,
+                    scientific_pass=False,
                     verdict="fail",
+                    bundle=bundle,
                 )
         elif is_campaign_writer_rank():
             write_live_run_visuals(
                 job_dir,
                 case_id=job.case_id,
                 run_id=job_dir.name,
-                scientific=False,
-                verdict="not-run" if record["status"] == "pass" else record["status"],
+                scientific_pass=False,
+                verdict="not-run" if record["status"] == "pass" else "fail",
             )
         results.append(record)
     if is_campaign_writer_rank():

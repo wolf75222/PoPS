@@ -10,6 +10,8 @@ import numpy as np
 
 from verification.pops_verify.evidence_bundle import EvidenceBundle, EvidenceError
 
+ALLOWED_VERDICTS = frozenset({"pass", "fail", "not-run"})
+
 
 def write_run_status(
     run_dir: Path,
@@ -17,39 +19,34 @@ def write_run_status(
     case_id: str,
     run_id: str,
     verdict: str,
-    scientific: bool,
+    scientific_pass: bool,
 ) -> None:
-    """Write schema-facing status.json. Live campaign only when scientific."""
+    """Write status.json. scientific/live equal scientific_pass, never bundle auth."""
+    if verdict not in ALLOWED_VERDICTS:
+        raise EvidenceError(f"illegal status verdict {verdict!r}")
+    if scientific_pass and verdict != "pass":
+        raise EvidenceError("scientific_pass requires verdict pass")
+    if verdict == "pass" and not scientific_pass:
+        raise EvidenceError("verdict pass requires scientific_pass")
     run_dir.mkdir(parents=True, exist_ok=True)
+    passed = bool(scientific_pass)
     payload = {
         "case_id": case_id,
         "run_id": run_id,
         "verdict": verdict,
-        "data_kind": "campaign" if scientific else "campaign",
-        "scientific": bool(scientific),
+        "data_kind": "campaign",
+        "scientific": passed,
+        "live": passed,
     }
-    if not scientific:
-        payload["verdict"] = verdict if verdict in {"not-run", "fail"} else "not-run"
-        payload["live"] = False
-    else:
-        payload["live"] = True
     (run_dir / "status.json").write_text(
         json.dumps(payload, indent=2) + "\n", encoding="utf-8"
     )
 
 
-def _result_series(run_dir: Path) -> tuple[list[float], list[float]]:
-    bundle = EvidenceBundle(run_dir)
-    job_names = []
-    series_file = run_dir / "series.json"
-    if series_file.is_file():
-        series = json.loads(series_file.read_text(encoding="utf-8"))
-        job_names = [str(name) for name in series.get("jobs") or []]
-    if not job_names and bundle.records:
-        job_names = [str(record.get("job") or "n016") for record in bundle.records]
-    if not job_names:
-        raise EvidenceError("no EvidenceBundle jobs for live visual_data")
-    result = np.load(run_dir / job_names[-1] / "result.npy")
+def _result_series(bundle: EvidenceBundle) -> tuple[list[float], list[float]]:
+    if not bundle.records:
+        raise EvidenceError("no EvidenceBundle records for live visual_data")
+    result = bundle.records[-1]["result"]
     y = [float(value) for value in np.ravel(np.asarray(result, dtype=np.float64))]
     x = [float(index) for index in range(len(y))]
     return x, y
@@ -115,12 +112,15 @@ def _pin_identity_files(run_dir: Path) -> None:
 
 def write_live_visual_data(
     run_dir: Path,
+    bundle: EvidenceBundle,
     *,
     case_id: str,
     analysis: dict[str, Any] | None = None,
 ) -> None:
-    """Emit visual_data from authenticated bundle results. Never invent oracles."""
-    x, y = _result_series(run_dir)
+    """Emit visual_data from authenticated bundle records. Never reread disk arrays."""
+    if not isinstance(bundle, EvidenceBundle):
+        raise EvidenceError("live visual_data requires an authenticated EvidenceBundle")
+    x, y = _result_series(bundle)
     visual_dir = run_dir / "analysis" / "visual_data"
     visual_dir.mkdir(parents=True, exist_ok=True)
     profile = {
@@ -159,19 +159,20 @@ def write_live_run_visuals(
     *,
     case_id: str,
     run_id: str,
-    scientific: bool,
+    scientific_pass: bool,
     verdict: str,
     analysis: dict[str, Any] | None = None,
+    bundle: EvidenceBundle | None = None,
 ) -> None:
-    """Status plus visual_data. Live campaign visuals require a real bundle."""
+    """Status plus optional visual_data. Bundle auth is not a scientific pass."""
     write_run_status(
         run_dir,
         case_id=case_id,
         run_id=run_id,
         verdict=verdict,
-        scientific=scientific,
+        scientific_pass=scientific_pass,
     )
-    if not scientific:
+    if bundle is None:
         return
     _pin_identity_files(run_dir)
-    write_live_visual_data(run_dir, case_id=case_id, analysis=analysis)
+    write_live_visual_data(run_dir, bundle, case_id=case_id, analysis=analysis)
