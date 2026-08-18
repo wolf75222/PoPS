@@ -15,7 +15,9 @@ spack load /3s3hqzq >/dev/null 2>&1 || true
 
 # The sourced CPU env exports KOKKOS_CPU_ROOT=$HOME/kokkos-x64. Override it.
 unset KOKKOS_CPU_ROOT
-export POPS_KOKKOS_ROOT=/scratch_p/rmdraux/kokkos-x64-pic
+export POPS_KOKKOS_ROOT_OPENMP=/scratch_p/rmdraux/kokkos-x64-pic
+export POPS_KOKKOS_ROOT_SERIAL=/scratch_p/rmdraux/kokkos-x64-pic-serial
+export POPS_KOKKOS_ROOT="${POPS_KOKKOS_ROOT:-$POPS_KOKKOS_ROOT_SERIAL}"
 export CMAKE_PREFIX_PATH="${POPS_KOKKOS_ROOT}${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
 export POPS_INCLUDE="$POPS676_SRC/include"
 
@@ -70,14 +72,24 @@ pops676_pythonpath() {
   export PYTHONPATH="$POPS_PYDEPS:${build}/python:${POPS676_SRC}/python:${POPS676_SRC}${PYTHONPATH:+:$PYTHONPATH}"
 }
 
+pops676_select_kokkos() {
+  local space="${1:-${POPS676_SPACE:-KokkosSerial}}"
+  if [ "$space" = "KokkosOpenMP" ]; then
+    export POPS_KOKKOS_ROOT="$POPS_KOKKOS_ROOT_OPENMP"
+  else
+    export POPS_KOKKOS_ROOT="$POPS_KOKKOS_ROOT_SERIAL"
+  fi
+  export CMAKE_PREFIX_PATH="${POPS_KOKKOS_ROOT}${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
+}
+
 pops676_require_pic_kokkos() {
   local lib="$POPS_KOKKOS_ROOT/lib64/libkokkoscore.a"
   if [ ! -f "$lib" ]; then
-    echo "ERROR: PIC Kokkos missing: $lib" >&2
+    echo "ERROR: PIC Kokkos missing: $lib (Serial proof needs kokkos-x64-pic-serial)" >&2
     exit 1
   fi
   case "$POPS_KOKKOS_ROOT" in
-    */kokkos-x64-pic) ;;
+    */kokkos-x64-pic|*/kokkos-x64-pic-serial|*/kokkos-x64-pic-openmp) ;;
     *)
       echo "ERROR: refusing non-PIC Kokkos root $POPS_KOKKOS_ROOT" >&2
       exit 1

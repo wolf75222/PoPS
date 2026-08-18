@@ -282,6 +282,8 @@ def test_dispatch_selects_1d_2d_and_canonical_3d():
     assert three.wave == (1.0, 2.0, 3.0)
     assert three.t_end == 1.0
     assert three.label == "canonical"
+    assert three.reconstruction == "weno5z"
+    assert three.family == "global"
 
 
 def test_dispatch_refuses_config_dim_mismatch():
@@ -290,6 +292,42 @@ def test_dispatch_refuses_config_dim_mismatch():
         run.resolve_config(_request(dim=1), config_id="canonical")
     with pytest.raises(run.NativeUnavailable, match="POPS_NATIVE_DIM"):
         run.require_exact_rank(_request(dim=2), launched_dim=3)
+
+
+def test_order_campaign_defaults_to_weno5z_not_vanleer():
+    run = _load_case_module("run")
+    text = (CASE_DIR / "run.py").read_text(encoding="utf-8")
+    assert "WENO5Z" in text or "WENO5()" in text
+    canonical = run.resolve_config(_request(dim=3))
+    assert canonical.reconstruction == "weno5z"
+    vanleer = run.resolve_config_id("tvd_vanleer", n_cells=16)
+    assert vanleer.reconstruction == "vanleer"
+    assert vanleer.family == "tvd"
+    assert vanleer.label != "canonical"
+    assert "limiters.VanLeer()" in text
+
+
+def test_constant_cfl_cannot_be_labeled_spatial():
+    analyze = _load_case_module("analyze")
+    with pytest.raises(analyze.NativeSeriesError, match="spatial|CFL|global"):
+        analyze.evaluate_order_claim(
+            {
+                "source": "native",
+                "family": "spatial",
+                "dt_scaling": "cfl",
+                "resolutions": RESOLUTIONS,
+                "fields": {n: np.ones((n,)) for n in RESOLUTIONS},
+                "oracles": {n: np.ones((n,)) for n in RESOLUTIONS},
+                "volumes": {n: np.full((n,), 1.0 / n) for n in RESOLUTIONS},
+            }
+        )
+
+
+def test_temporal_campaign_api_is_fixed_grid_dt_halving():
+    run = _load_case_module("run")
+    signature = inspect.signature(run.run_temporal_campaign)
+    assert "dts" in signature.parameters
+    assert "n_cells" in signature.parameters
 
 
 def test_truthful_run_fields_follow_request_space_and_mpi():
@@ -334,6 +372,8 @@ def test_analyze_refuses_absent_and_short_native_series():
             "source": "native",
             "dimension": 3,
             "label": "canonical",
+            "family": "global",
+            "dt_scaling": "cfl",
             "resolutions": (16, 32),
             "spacings": (1.0 / 16.0, 1.0 / 32.0),
             "l1": (1.0e-2, 3.0e-3),
@@ -381,6 +421,9 @@ def test_analyze_truthful_orders_from_native_shaped_fields(tmp_path: Path):
         "case_id": "TR-01",
         "dimension": 3,
         "label": "canonical",
+        "family": "global",
+        "reconstruction": "weno5z",
+        "dt_scaling": "cfl",
         "velocity": (1.0, 1.0, 1.0),
         "wave": (1.0, 2.0, 3.0),
         "t_end": 1.0,
@@ -502,3 +545,138 @@ def test_tr01_romeo_script_keeps_lexical_variants_root():
     assert '"$BUILD/python/pops/_native"' in sbatch
     assert "readlink" not in sbatch
     assert "realpath" not in sbatch
+
+
+def test_manifest_names_weno5z_and_keeps_1p8_gate():
+    text = (
+        Path(__file__).resolve().parents[3] / "verification" / "manifest.toml"
+    ).read_text(encoding="utf-8")
+    block = text.split("id = \"TR-01\"", 1)[1].split("[[case]]", 1)[0]
+    assert "weno5z" in block.lower() or "weno5-z" in block.lower()
+    assert "1.8" in block
+    assert "vanleer" in block.lower() or "tvd" in block.lower()
+
+
+def test_live_provenance_reads_native_world_and_kokkos(monkeypatch):
+    run = _load_case_module("run")
+    monkeypatch.setattr(
+        "verification.pops_verify.mpi_world.native_world_size",
+        lambda required=False: 2,
+    )
+    monkeypatch.setattr(
+        run,
+        "_live_runtime_facts",
+        lambda: {
+            "kokkos_backend": "OpenMP",
+            "kokkos_concurrency": 4,
+            "kokkos_initialized": True,
+        },
+    )
+    fields = run.campaign_run_fields(
+        _request(dim=1, space="KokkosOpenMP", mpi="on"),
+        run.resolve_config(_request(dim=1)),
+        n_cells=16,
+        t_end=1.0,
+    )
+    assert fields["mpi_ranks"] == 2
+    assert fields["omp_threads_per_rank"] == 4
+    assert fields["kokkos_execution_space"] == "KokkosOpenMP"
+
+
+def test_serial_request_refuses_openmp_default_space(monkeypatch):
+    run = _load_case_module("run")
+    monkeypatch.setattr(
+        run,
+        "_live_runtime_facts",
+        lambda: {
+            "kokkos_backend": "OpenMP",
+            "kokkos_concurrency": 1,
+            "kokkos_initialized": True,
+        },
+    )
+    with pytest.raises(run.NativeUnavailable, match="OpenMP|Serial|not-run"):
+        run.require_live_execution_space(_request(dim=3, space="KokkosSerial"))
+
+
+def test_openmp_sbatch_forces_more_than_one_thread():
+    sbatch = (
+        REPO_ROOT / "verification" / "machines" / "romeo_676_tr01_run.sbatch"
+    ).read_text(encoding="utf-8")
+    assert "OMP_NUM_THREADS=4" in sbatch
+    assert "OMP_NUM_THREADS:-4" not in sbatch
+    assert "POPS_THREADS=4" in sbatch
+
+
+def test_order_failure_writes_failures_entries(tmp_path: Path):
+    analyze = _load_case_module("analyze")
+    campaign = {
+        "source": "native",
+        "case_id": "TR-01",
+        "dimension": 1,
+        "label": "restriction_1d",
+        "family": "global",
+        "reconstruction": "weno5z",
+        "dt_scaling": "cfl",
+        "resolutions": RESOLUTIONS,
+        "fields": {n: np.ones((n,)) + 0.1 / n for n in RESOLUTIONS},
+        "oracles": {n: np.ones((n,)) for n in RESOLUTIONS},
+        "volumes": {n: np.full((n,), 1.0 / n) for n in RESOLUTIONS},
+    }
+    analyze.write_native_campaign_report(tmp_path, campaign)
+    summary = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
+    _validator().validate(summary)
+    assert summary["coverage"]["cases_failed"] == 1
+    assert summary["failures"]
+    assert summary["failures"][0]["case_id"] == "TR-01"
+    assert "1.8" in summary["failures"][0]["reason"] or "order" in summary["failures"][0]["reason"]
+    failures_csv = (tmp_path / "failures.csv").read_text(encoding="utf-8")
+    assert "TR-01" in failures_csv
+    assert failures_csv.strip() != "case_id,reason,metrics_ref,provenance_ref"
+
+
+def test_amr_variants_are_public_or_required_failures():
+    run = _load_case_module("run")
+    text = (CASE_DIR / "run.py").read_text(encoding="utf-8")
+    assert "AMR is executable, not a silent skip" not in text
+    for layout in ("A-S0", "A-S2", "A-DP", "A-DT"):
+        config = next(
+            row for row in run.variant_catalog(dim=1) if row.layout == layout
+        )
+        status = run.variant_status(config)
+        assert status["status"] in {"authoring_ok", "required_failure"}
+        if status["status"] == "required_failure":
+            assert status["blocker"]
+            assert "executable" not in status["blocker"].lower()
+
+
+def test_fourier_phase_uses_mode_k_not_ravel():
+    exact = _load_case_module("exact")
+    run = _load_case_module("run")
+    xx, yy, zz, volumes = exact.uniform_cell_mesh(16)
+    field = exact.exact_sine_3d(xx, yy, zz, 0.1)
+    oracle = exact.exact_sine_3d(xx, yy, zz, 0.0)
+    coeff_num = run.fourier_mode_coefficient(
+        field, (xx, yy, zz), volumes, exact.K
+    )
+    coeff_ref = run.fourier_mode_coefficient(
+        oracle, (xx, yy, zz), volumes, exact.K
+    )
+    phase = float(np.angle(coeff_num / coeff_ref))
+    expected = -2.0 * np.pi * float(sum(exact.K)) * 0.1
+    expected = (expected + np.pi) % (2.0 * np.pi) - np.pi
+    assert phase == pytest.approx(expected, abs=0.15)
+    source = inspect.getsource(run.field_diagnostics)
+    assert "ravel()" not in source
+    assert "fourier_mode_coefficient" in source
+
+
+def test_fourier_phase_respects_zyx_axis_layout():
+    exact = _load_case_module("exact")
+    run = _load_case_module("run")
+    xx, yy, zz, volumes = exact.uniform_cell_mesh(12)
+    field = exact.Q0 + exact.EPS * np.sin(2.0 * np.pi * zz)
+    coeff_z = run.fourier_mode_coefficient(field, (xx, yy, zz), volumes, (0.0, 0.0, 1.0))
+    coeff_x = run.fourier_mode_coefficient(field, (xx, yy, zz), volumes, (1.0, 0.0, 0.0))
+    assert abs(coeff_z) > 5.0 * abs(coeff_x)
+    amp = 2.0 * abs(coeff_z)
+    assert amp == pytest.approx(exact.EPS, rel=0.15)

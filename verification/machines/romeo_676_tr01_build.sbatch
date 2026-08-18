@@ -11,16 +11,16 @@
 #SBATCH --output=/scratch_p/rmdraux/pops-676/logs/%x.%j.out
 #SBATCH --error=/scratch_p/rmdraux/pops-676/logs/%x.%j.err
 
-# Isolated Serial or MPI TR-01 leaf. Dim 1/2/3. No exclusive node. no GPU.
+# Isolated Serial, OpenMP, or MPI TR-01 leaf. Dim 1/2/3. No exclusive node. no GPU.
 echo "starting job=${SLURM_JOB_ID:-local} host=$(hostname)"
 set -eo pipefail
 # shellcheck source=/dev/null
 source /scratch_p/rmdraux/pops-676/src/verification/machines/romeo_676_env.sh
 set -eo pipefail
-pops676_require_pic_kokkos
 
 DIM="${POPS676_DIM:?set POPS676_DIM to 1, 2, or 3}"
 MPI="${POPS676_MPI:-off}"
+SPACE="${POPS676_SPACE:-KokkosSerial}"
 case "$DIM" in
   1|2|3) ;;
   *) echo "ERROR: POPS676_DIM must be 1, 2, or 3" >&2; exit 1 ;;
@@ -29,6 +29,14 @@ case "$MPI" in
   off|on) ;;
   *) echo "ERROR: POPS676_MPI must be off or on" >&2; exit 1 ;;
 esac
+case "$SPACE" in
+  KokkosSerial|KokkosOpenMP) ;;
+  *) echo "ERROR: POPS676_SPACE must be KokkosSerial or KokkosOpenMP" >&2; exit 1 ;;
+esac
+if [ "$MPI" = "on" ] && [ "$SPACE" != "KokkosSerial" ]; then
+  echo "ERROR: MPI TR-01 leaf is Serial-space only" >&2
+  exit 1
+fi
 
 KIND=serial
 CMAKE_MPI=OFF
@@ -37,6 +45,8 @@ EXPECT_BACKEND=(--expect-serial)
 CMAKE_MPI_FLAGS=()
 CMAKE_C="${CC:-cc}"
 CMAKE_CXX="${CXX:-c++}"
+pops676_select_kokkos "$SPACE"
+pops676_require_pic_kokkos
 if [ "$MPI" = "on" ]; then
   KIND=mpi
   CMAKE_MPI=ON
@@ -60,6 +70,8 @@ if [ "$MPI" = "on" ]; then
     -DMPI_CXX_LIBRARIES="${MPI_HOME}/lib/libmpi.so"
     -DMPI_C_LIBRARIES="${MPI_HOME}/lib/libmpi.so"
   )
+elif [ "$SPACE" = "KokkosOpenMP" ]; then
+  KIND=openmp
 fi
 
 ROOT="$POPS676_SRC"

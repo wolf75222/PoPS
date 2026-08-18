@@ -103,6 +103,13 @@ def evaluate_order_claim(campaign: dict) -> dict[str, Any]:
     ]
     if missing:
         raise NativeSeriesError("native series absent")
+    family = str(campaign.get("family") or "")
+    dt_scaling = str(campaign.get("dt_scaling") or "")
+    if family == "spatial" and dt_scaling == "cfl":
+        raise NativeSeriesError(
+            "constant-CFL series is global, not isolated spatial; "
+            "refuse spatial + CFL as an order claim"
+        )
     l1: list[float] = []
     l2: list[float] = []
     linf: list[float] = []
@@ -125,9 +132,19 @@ def evaluate_order_claim(campaign: dict) -> dict[str, Any]:
         raise NativeSeriesError(
             "refusing exact-vs-exact or non-positive native errors as an order pass"
         )
-    spacings = tuple(1.0 / float(n) for n in resolutions)
+    if family == "temporal":
+        spacings = tuple(float(value) for value in (campaign.get("dts") or campaign.get("spacings") or ()))
+        if len(spacings) != len(resolutions):
+            raise NativeSeriesError("temporal series requires dts matching the native fields")
+    else:
+        spacings = tuple(1.0 / float(n) for n in resolutions)
     orders = [float(value) for value in observed_order(linf, spacings)]
     order_pass = all(value >= ORDER_THRESHOLD for value in orders)
+    reason = None
+    if not order_pass:
+        reason = (
+            f"observed L∞ orders {orders} below spatial_order_min {ORDER_THRESHOLD}"
+        )
     return {
         "verdict": "pass" if order_pass else "fail",
         "order_pass": order_pass,
@@ -136,7 +153,8 @@ def evaluate_order_claim(campaign: dict) -> dict[str, Any]:
         "l2": tuple(l2),
         "linf": tuple(linf),
         "spacings": spacings,
-        "reason": None if order_pass else "observed order below threshold",
+        "family": family or "global",
+        "reason": reason,
     }
 
 
@@ -149,9 +167,10 @@ def _summary(
     cases_run: int,
     cases_passed: int,
     cases_failed: int,
+    failures: list | None = None,
 ) -> dict:
     reasons = {
-        "amr.*": "AMR layouts are executable variants; leaf-only order is not claimed here",
+        "amr.*": "AMR variants are authoring_ok or required_failure; leaf order is not claimed here",
         "poisson.*": "Poisson not run in TR-01",
         "coupling.*": "coupling not run in TR-01",
         "parallel_invariance.*": "parallel invariance is IF-01",
@@ -177,7 +196,7 @@ def _summary(
             "cases_not_supported": 0,
             "not_tested": [],
         },
-        "failures": [],
+        "failures": list(failures or []),
         "orders": list(orders),
         "amr": dict(NULL_AMR),
         "poisson": dict(NULL_POISSON),
@@ -232,9 +251,18 @@ def _write_visual_data(output_dir: Path, campaign: dict, claim: dict) -> None:
     visual_dir = output_dir / "visual_data"
     visual_dir.mkdir(parents=True, exist_ok=True)
     resolutions = [int(n) for n in campaign["resolutions"]]
+    family = str(campaign.get("family") or "global")
+    figure_kind = {
+        "temporal": "temporal_convergence",
+        "spatial": "spatial_convergence",
+        "global": "global_convergence",
+    }.get(family, "global_convergence")
     convergence = {
         "figure_id": "spatial_convergence",
-        "kind": "spatial_convergence",
+        "kind": figure_kind,
+        "family": family,
+        "reconstruction": campaign.get("reconstruction"),
+        "dt_scaling": campaign.get("dt_scaling"),
         "case_id": CASE_ID,
         "dimension": int(campaign.get("dimension") or 3),
         "label": campaign.get("label"),
@@ -302,8 +330,14 @@ def _write_visual_data(output_dir: Path, campaign: dict, claim: dict) -> None:
                 "figure_id": "spatial_convergence",
                 "kind": "spatial_convergence",
                 "data_file": "visual_data/spatial_convergence.json",
-                "proves": "L1/L2/Linf vs h from native cell-average errors",
-                "does_not_prove": "temporal order or AMR leaf retention",
+                "proves": (
+                    "temporal L1/L2/Linf vs dt at fixed grid"
+                    if family == "temporal"
+                    else "L1/L2/Linf vs h at constant CFL (global, not isolated spatial)"
+                    if family != "spatial"
+                    else "L1/L2/Linf vs h with dt ∝ h² (isolated spatial)"
+                ),
+                "does_not_prove": "AMR leaf retention or a different family",
             },
             {
                 "figure_id": "reference_comparison",
@@ -412,16 +446,29 @@ def _write_metrics(output_dir: Path, campaign: dict, claim: dict) -> None:
 def write_native_campaign_report(output_dir, campaign: dict) -> dict:
     """Write report, metrics, and Phase 8 visual_data from a native campaign."""
     claim = evaluate_order_claim(campaign)
+    family = str(campaign.get("family") or claim.get("family") or "global")
+    kind = family if family in {"spatial", "temporal", "global"} else "global"
     orders = [
         {
             "case_id": CASE_ID,
-            "kind": "spatial",
+            "kind": kind,
             "variable": "q",
             "observed_order": float(value),
             "threshold": ORDER_THRESHOLD,
         }
         for value in claim["orders"]
     ]
+    failures = []
+    if claim["verdict"] == "fail":
+        failures = [
+            {
+                "case_id": CASE_ID,
+                "reason": claim.get("reason")
+                or f"observed order below spatial_order_min {ORDER_THRESHOLD}",
+                "metrics_ref": "metrics.json",
+                "provenance_ref": "provenance.json",
+            }
+        ]
     output = Path(output_dir)
     written = write_verification_report(
         _summary(
@@ -432,6 +479,7 @@ def write_native_campaign_report(output_dir, campaign: dict) -> dict:
             cases_run=1,
             cases_passed=1 if claim["order_pass"] else 0,
             cases_failed=0 if claim["order_pass"] else 1,
+            failures=failures,
         ),
         output,
     )

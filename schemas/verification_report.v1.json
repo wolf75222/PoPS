@@ -202,7 +202,7 @@
           "$ref": "#/$defs/non_empty_string"
         },
         "kind": {
-          "enum": ["spatial", "temporal"]
+          "enum": ["spatial", "temporal", "global"]
         },
         "variable": {
           "$ref": "#/$defs/non_empty_string"

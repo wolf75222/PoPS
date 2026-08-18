@@ -1,8 +1,10 @@
 """TR-01 public sine advection: 1-d/2-d restrictions and canonical 3-d.
 
 Canonical 3-d (§9.2): a = (1, 1, 1), k = (1, 2, 3), T = 1 on [0, 1]^3.
-Lower-rank jobs use the natural restriction and are never labeled canonical.
-``pops.run`` lives in ``run_native`` / ``run_order_campaign`` only.
+The order campaign uses public WENO5-Z. VanLeer is a separately labeled TVD
+variant and is not the order-2 acceptance proof. Constant-CFL series are
+global, never isolated spatial. ``pops.run`` lives in ``run_native``,
+``run_order_campaign``, and ``run_temporal_campaign`` only.
 """
 from __future__ import annotations
 
@@ -13,12 +15,12 @@ from typing import Any
 
 import numpy as np
 import pops
-from pops.analytic import sin, x as analytic_x, y as analytic_y, z as analytic_z
+from pops.analytic import sin, where, x as analytic_x, y as analytic_y, z as analytic_z
 from pops.domain import CartesianDomain
 from pops.frames import Cartesian1D, Cartesian2D, Cartesian3D
 from pops.initial import InitialCondition
 from pops.lib.initial import Analytic
-from pops.lib.time import SSPRK2
+from pops.lib.time import RK4, SSPRK2, SSPRK3
 from pops.math import ddt, div
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.reconstruction import limiters
@@ -42,7 +44,6 @@ from verification.pops_verify.case_authoring import (
 )
 from verification.pops_verify.cell_averages import analytic_cell_averages
 from verification.pops_verify.conservation import conservation_tolerance
-from verification.pops_verify.phase import phase_error
 from verification.pops_verify.provenance import collect_provenance, write_provenance
 from verification.pops_verify.reference_errors import reference_errors
 
@@ -83,6 +84,9 @@ class Tr01Config:
         "dt",
         "family",
         "label",
+        "reconstruction",
+        "time_program",
+        "dt_scaling",
     )
 
     def __init__(
@@ -95,8 +99,11 @@ class Tr01Config:
         layout: str = "U-C",
         block_size: int | None = None,
         dt: float | None = None,
-        family: str = "spatial",
+        family: str = "global",
         label: str = "variant",
+        reconstruction: str = "weno5z",
+        time_program: str = "SSPRK2",
+        dt_scaling: str = "cfl",
     ) -> None:
         if dim not in (1, 2, 3):
             raise ValueError("dim must be 1, 2, or 3")
@@ -106,6 +113,12 @@ class Tr01Config:
             raise ValueError("n_cells and periods must be positive")
         if layout not in LAYOUTS:
             raise ValueError(f"unknown layout {layout!r}")
+        if reconstruction not in {"weno5z", "vanleer"}:
+            raise ValueError(f"unknown reconstruction {reconstruction!r}")
+        if time_program not in {"SSPRK2", "SSPRK3", "RK4"}:
+            raise ValueError(f"unknown time_program {time_program!r}")
+        if dt_scaling not in {"cfl", "h2", "fixed"}:
+            raise ValueError(f"unknown dt_scaling {dt_scaling!r}")
         self.dim = int(dim)
         self.velocity = tuple(float(value) for value in velocity)
         self.wave = tuple(float(value) for value in wave)
@@ -116,6 +129,14 @@ class Tr01Config:
         self.dt = None if dt is None else float(dt)
         self.family = str(family)
         self.label = str(label)
+        self.reconstruction = str(reconstruction)
+        self.time_program = str(time_program)
+        self.dt_scaling = str(dt_scaling)
+
+    def replace(self, **kwargs) -> Tr01Config:
+        values = {name: getattr(self, name) for name in self.__slots__}
+        values.update(kwargs)
+        return Tr01Config(**values)
 
     @property
     def t_end(self) -> float:
@@ -127,9 +148,18 @@ class Tr01Config:
 
     @property
     def cfl(self) -> float | None:
-        if self.dt is not None:
+        if self.dt is not None or self.dt_scaling != "cfl":
             return None
         return _exact.directional_cfl(self.velocity)
+
+    @property
+    def step_dt(self) -> float | None:
+        if self.dt is not None:
+            return float(self.dt)
+        if self.dt_scaling == "h2" or self.family == "spatial":
+            width = 1.0 / float(self.mesh_cells)
+            return 4.0 * width * width
+        return None
 
     @property
     def config_id(self) -> str:
@@ -138,9 +168,10 @@ class Tr01Config:
         vel = "x".join(f"{value:g}" for value in self.velocity)
         block = f"_b{self.block_size}" if self.block_size else ""
         time = f"_dt{self.dt:g}" if self.dt is not None else ""
+        scheme = "" if self.reconstruction == "weno5z" else f"_{self.reconstruction}"
         return (
             f"d{self.dim}_{self.family}_{self.layout}_n{self.n_cells}"
-            f"_p{self.periods}_a{vel}{block}{time}"
+            f"_p{self.periods}_a{vel}{block}{time}{scheme}"
         )
 
 
@@ -201,6 +232,28 @@ def _sine_initial(frame, wave):
     return Analytic(frame=frame, components=(profile,))
 
 
+def _half_marker(frame):
+    """Static spatial indicator: 1 on the first-axis half-domain."""
+    return Analytic(
+        frame=frame,
+        components=(where(analytic_x(frame) > 0.5, 1.0, 0.0),),
+    )
+
+
+def _reconstruction_brick(name: str):
+    if name == "vanleer":
+        return reconstruction.MUSCL(limiters.VanLeer())
+    return reconstruction.WENO5Z()
+
+
+def _make_program(name: str, instance, rate):
+    if name == "RK4":
+        return RK4(instance, rate=rate)
+    if name == "SSPRK3":
+        return SSPRK3(instance, rate=rate)
+    return SSPRK2(instance, rate=rate)
+
+
 def _scalar_transport(name, frame, velocity):
     model = pops.Model(name, frame=frame)
     state = model.state(
@@ -229,14 +282,14 @@ def _scalar_transport(name, frame, velocity):
     return model, state, flux, rate, vector
 
 
-def _add_fv(case, block, state, flux, rate, velocity):
+def _add_fv(case, block, state, flux, rate, velocity, reconstruction_name: str):
     numerics = DiscretizationPlan()
     numerics.rates.add(
         rate,
         FiniteVolume(
             flux=flux,
             variables=variables.Conservative(state),
-            reconstruction=reconstruction.MUSCL(limiters.VanLeer()),
+            reconstruction=_reconstruction_brick(reconstruction_name),
             riemann=riemann.ScalarUpwind(velocity=velocity),
         ),
     )
@@ -252,10 +305,36 @@ def author(config: Tr01Config) -> _Authoring:
     case = pops.Case(f"tr01_{config.config_id}")
     tracer = case.block("tracer", model=model, states=(state,))
     instance = tracer[state]
-    _add_fv(case, tracer, state, flux, rate, velocity)
-    program = SSPRK2(instance, rate=rate)
-    if config.dt is not None:
-        program.step_strategy(FixedDt(dt=float(config.dt)))
+    _add_fv(case, tracer, state, flux, rate, velocity, config.reconstruction)
+    marker_instance = None
+    if config.layout in {"A-S0", "A-S2"}:
+        zeros = tuple(0.0 for _ in config.velocity)
+        marker_model, marker_state, marker_flux, marker_rate, marker_velocity = (
+            _scalar_transport(f"tr01_{config.config_id}_m", frame, zeros)
+        )
+        marker = case.block("marker", model=marker_model, states=(marker_state,))
+        marker_instance = marker[marker_state]
+        _add_fv(
+            case,
+            marker,
+            marker_state,
+            marker_flux,
+            marker_rate,
+            marker_velocity,
+            "vanleer",
+        )
+    program = _make_program(config.time_program, instance, rate)
+    if marker_instance is not None:
+        marker_time = program.state(marker_instance)
+        marker_hold = program.value(
+            "marker_hold",
+            marker_time.n,
+            at=marker_time.next.point,
+        )
+        program.commit(marker_time.next, marker_hold)
+    step_dt = config.step_dt
+    if step_dt is not None:
+        program.step_strategy(FixedDt(dt=float(step_dt)))
     else:
         program.step_strategy(AdaptiveCFL(cfl=float(config.cfl)))
     case.program(program)
@@ -267,9 +346,18 @@ def author(config: Tr01Config) -> _Authoring:
             projection=ConservativeCellAverage(),
         )
     )
+    if marker_instance is not None:
+        case.initials.add(
+            InitialCondition(
+                state=marker_instance,
+                value=_half_marker(frame),
+                projection=ConservativeCellAverage(),
+            )
+        )
     return _Authoring(
         case=case,
         instance=instance,
+        marker_instance=marker_instance,
         block=tracer,
         frame=frame,
         config=config,
@@ -282,10 +370,15 @@ def _cells(config: Tr01Config) -> tuple[int, ...]:
 
 
 def layout_for(authored: _Authoring):
-    """Return the public Uniform or AMR layout. AMR is executable, not a silent skip."""
+    """Return the public Uniform or AMR layout, or raise a precise blocker."""
     config = authored.config
     if config.layout in UNIFORM_LAYOUTS:
         return uniform_periodic_layout(authored.frame, _cells(config))
+    if config.layout == "A-DP":
+        raise AuthoringPending(
+            "A-DP requires an independently advected marker with scheduled regrid; "
+            "TR-01 public SSPRK2/RK4 advances one tracer state and AM-01 hold is static"
+        )
 
     from pops.amr import (
         AMRClockRelation,
@@ -311,7 +404,22 @@ def layout_for(authored: _Authoring):
 
     transfer = AMRTransfer()
     transfer.state(authored.instance, StateTransfer())
-    if config.layout == "A-DT":
+    buffer_cells = 3 if config.reconstruction == "weno5z" else 2
+    if config.layout in {"A-S0", "A-S2"}:
+        if authored.marker_instance is None:
+            raise AuthoringPending(
+                f"{config.layout}: static marker block was not authored"
+            )
+        transfer.state(authored.marker_instance, StateTransfer())
+        threshold = authored.case.param(
+            RuntimeParam("tr01_refine_marker", default=0.5)
+        )
+        rules = (
+            Tag(ValueExpr(authored.marker_instance) > authored.case.value(threshold)),
+            Buffer(cells=buffer_cells),
+        )
+        regrid = AMRRegrid.frozen()
+    elif config.layout == "A-DT":
         refine = authored.case.param(
             RuntimeParam("tr01_refine_q", default=float(_exact.Q0) + 0.3 * _exact.EPS)
         )
@@ -321,13 +429,11 @@ def layout_for(authored: _Authoring):
         rules = (
             Tag(ValueExpr(authored.instance) > authored.case.value(refine)),
             Coarsen(ValueExpr(authored.instance) < authored.case.value(coarsen)),
-            Buffer(cells=2),
+            Buffer(cells=buffer_cells),
         )
         regrid = AMRRegrid(schedule=every(2, clock=authored.program.clock))
     else:
-        raise AuthoringPending(
-            f"{config.config_id}: marker-driven AMR authoring is not claimed as leaf science"
-        )
+        raise AuthoringPending(f"{config.layout}: unknown AMR layout")
     execution = (
         AMRExecution.subcycled((AMRClockRelation(0, 1, 2),))
         if config.layout == "A-S2"
@@ -364,6 +470,8 @@ def _canonical_3d(n_cells: int) -> Tr01Config:
         velocity=tuple(float(v) for v in _exact.A),
         wave=tuple(float(v) for v in _exact.K),
         n_cells=int(n_cells),
+        family="global",
+        reconstruction="weno5z",
         label="canonical",
     )
 
@@ -379,6 +487,8 @@ def resolve_config_id(config_id: str, n_cells: int = 16) -> Tr01Config:
             velocity=(1.0,),
             wave=(1.0,),
             n_cells=count,
+            family="global",
+            reconstruction="weno5z",
             label="restriction_1d",
         )
     if config_id == "restriction_2d":
@@ -387,7 +497,19 @@ def resolve_config_id(config_id: str, n_cells: int = 16) -> Tr01Config:
             velocity=(1.0, 1.0),
             wave=(1.0, 2.0),
             n_cells=count,
+            family="global",
+            reconstruction="weno5z",
             label="restriction_2d",
+        )
+    if config_id == "tvd_vanleer":
+        return Tr01Config(
+            dim=1,
+            velocity=(1.0,),
+            wave=(1.0,),
+            n_cells=count,
+            family="tvd",
+            reconstruction="vanleer",
+            label="tvd_vanleer",
         )
     raise NativeUnavailable(f"unknown TR-01 config_id {config_id!r}")
 
@@ -496,7 +618,7 @@ def variant_catalog(*, dim: int | None = None) -> tuple[Tr01Config, ...]:
                     velocity=(speed,),
                     wave=(1.0,),
                     n_cells=n_cells,
-                    family="spatial",
+                    family="global",
                     label="restriction_1d" if speed == 1.0 else "variant",
                 )
         for periods in (2, 4):
@@ -549,7 +671,7 @@ def variant_catalog(*, dim: int | None = None) -> tuple[Tr01Config, ...]:
                     velocity=velocity,
                     wave=(1.0, 2.0),
                     n_cells=n_cells,
-                    family="spatial",
+                    family="global",
                     label=label,
                 )
         for periods in (2, 4):
@@ -607,7 +729,7 @@ def variant_catalog(*, dim: int | None = None) -> tuple[Tr01Config, ...]:
                     velocity=velocity,
                     wave=wave3,
                     n_cells=n_cells,
-                    family="spatial",
+                    family="global",
                 )
         for n_cells in (16, 32, 64, 128):
             _add(
@@ -616,7 +738,7 @@ def variant_catalog(*, dim: int | None = None) -> tuple[Tr01Config, ...]:
                 velocity=(1.0, 1.0, 1.0),
                 wave=wave3,
                 n_cells=n_cells,
-                family="spatial",
+                family="global",
                 label="canonical",
             )
         for periods in (2, 4):
@@ -662,19 +784,110 @@ def variant_catalog(*, dim: int | None = None) -> tuple[Tr01Config, ...]:
     return tuple(row for row in rows if dim is None or row.dim == dim)
 
 
+def variant_status(config: Tr01Config) -> dict[str, Any]:
+    """Public AMR/uniform status. Never claim an unauthored layout is executable."""
+    if config.layout == "A-DP":
+        return {
+            "status": "required_failure",
+            "blocker": (
+                "A-DP requires an independently advected marker with scheduled regrid; "
+                "TR-01 public SSPRK2/RK4 advances one tracer state and AM-01 hold is static"
+            ),
+        }
+    try:
+        resolve_plan_for(config)
+    except AuthoringPending as exc:
+        return {"status": "required_failure", "blocker": str(exc)}
+    except Exception as exc:
+        return {
+            "status": "required_failure",
+            "blocker": f"{config.layout} resolve failed: {type(exc).__name__}: {exc}",
+        }
+    return {"status": "authoring_ok", "blocker": None}
+
+
+def _live_runtime_facts() -> dict[str, Any]:
+    try:
+        from pops.runtime_environment import runtime_environment_report
+
+        return dict(runtime_environment_report())
+    except Exception:
+        return {
+            "kokkos_backend": "unknown",
+            "kokkos_concurrency": 0,
+            "kokkos_initialized": False,
+        }
+
+
+def _space_from_backend(backend: str, requested: str) -> str:
+    token = str(backend)
+    if token in {"OpenMP", "KokkosOpenMP"}:
+        return "KokkosOpenMP"
+    if token in {"Serial", "KokkosSerial"}:
+        return "KokkosSerial"
+    if token in {"Cuda", "KokkosCuda"}:
+        return "KokkosCuda"
+    return requested
+
+
+def require_live_execution_space(request) -> str:
+    """Refuse a Serial claim on an OpenMP default space. Unknown is not Serial proof."""
+    facts = _live_runtime_facts()
+    backend = str(facts.get("kokkos_backend") or "unknown")
+    requested = str(request.execution_space)
+    if requested == "KokkosSerial" and backend in {
+        "OpenMP",
+        "KokkosOpenMP",
+        "Cuda",
+        "KokkosCuda",
+    }:
+        raise NativeUnavailable(
+            f"KokkosSerial requested but live backend is {backend}; Serial not-run"
+        )
+    if requested == "KokkosOpenMP" and backend not in {
+        "OpenMP",
+        "KokkosOpenMP",
+        "unknown",
+    }:
+        raise NativeUnavailable(
+            f"KokkosOpenMP requested but live backend is {backend}"
+        )
+    return requested
+
+
 def campaign_run_fields(request, config: Tr01Config, n_cells: int, t_end: float) -> dict[str, Any]:
-    """Request facts only. Serial is not recorded as OpenMP; MPI is not invented."""
+    """Live ranks/threads/space when the native world is present. No manifest defaults."""
+    from verification.pops_verify.mpi_world import native_world_size
+
     count = int(n_cells)
     dim = int(config.dim)
     mpi_on = request.mpi_mode == "on"
+    facts = _live_runtime_facts()
+    live_ranks = native_world_size(required=False)
+    if live_ranks is not None:
+        mpi_ranks = int(live_ranks)
+    elif mpi_on:
+        mpi_ranks = int(request.resources.mpi_ranks)
+    else:
+        mpi_ranks = 1
+    concurrency = int(facts.get("kokkos_concurrency") or 0)
+    if concurrency > 0:
+        threads = concurrency
+    else:
+        threads = int(request.resources.omp_threads)
+    recorded_space = _space_from_backend(
+        str(facts.get("kokkos_backend") or "unknown"),
+        request.execution_space,
+    )
+    step_dt = config.step_dt
     cfl = config.cfl
-    if cfl is None and config.dt is not None:
-        cfl = float(config.dt) * float(config.mesh_cells)
+    if cfl is None and step_dt is not None:
+        cfl = float(step_dt) * float(config.mesh_cells)
     return {
         "compiler": default_cxx() or os.environ.get("CXX", "c++"),
         "build_type": os.environ.get("CMAKE_BUILD_TYPE", "Release"),
         "precision": "float64",
-        "kokkos_execution_space": request.execution_space,
+        "kokkos_execution_space": recorded_space,
         "mpi_enabled": mpi_on,
         "mpi_library": (
             (os.environ.get("POPS_MPI_LIBRARY") or "mpich") if mpi_on else "none"
@@ -682,15 +895,15 @@ def campaign_run_fields(request, config: Tr01Config, n_cells: int, t_end: float)
         "mpi_thread_level_requested": "MPI_THREAD_SINGLE" if mpi_on else "none",
         "mpi_thread_level_provided": "MPI_THREAD_SINGLE" if mpi_on else "none",
         "hdf5_collective_enabled": False,
-        "mpi_ranks": int(request.resources.mpi_ranks) if mpi_on else 1,
-        "omp_threads_per_rank": int(request.resources.omp_threads),
+        "mpi_ranks": mpi_ranks,
+        "omp_threads_per_rank": threads,
         "gpus": 0,
         "resolution": [count] * dim,
         "block_size": [int(config.block_size or count)] * dim,
         "amr_total_levels": 2 if config.layout in AMR_LAYOUTS else 1,
         "refinement_ratio": 2,
         "subcycling": config.layout == "A-S2",
-        "time_program": "SSPRK2",
+        "time_program": config.time_program,
         "cfl": float(cfl if cfl is not None else 0.0),
         "final_time": float(t_end),
     }
@@ -723,17 +936,35 @@ def _oracle_cell_averages(config: Tr01Config, t: float) -> np.ndarray:
     return analytic_cell_averages(_u, lo, hi, t)
 
 
+def fourier_mode_coefficient(field, coords, volumes, wave) -> complex:
+    """Complex Fourier coefficient of ``field`` on mode ``wave`` using cell volumes."""
+    arrays = [np.asarray(axis, dtype=np.float64) for axis in coords]
+    weights = np.asarray(volumes, dtype=np.float64)
+    values = np.asarray(field, dtype=np.float64)
+    if len(arrays) != len(wave):
+        raise ValueError("coords and wave must have the same rank")
+    phase = np.zeros(values.shape, dtype=np.float64)
+    for axis, mode in zip(arrays, wave, strict=True):
+        phase = phase + float(mode) * np.asarray(axis, dtype=np.float64)
+    kernel = np.exp(-2.0j * np.pi * phase)
+    total = float(np.sum(weights))
+    if total <= 0.0:
+        raise ValueError("volumes must be positive")
+    return complex(np.sum(values * kernel * weights) / total)
+
+
 def field_diagnostics(field, oracle, volumes, *, config: Tr01Config) -> dict[str, Any]:
-    """Norms, phase, amplitude, and mass from native field vs cell-average oracle."""
+    """Norms, Fourier phase/amplitude on k, and mass from native vs oracle."""
     errors = reference_errors(field, oracle, volumes)
-    residual = np.asarray(field, dtype=np.float64) - float(_exact.Q0)
-    reference = np.asarray(oracle, dtype=np.float64) - float(_exact.Q0)
-    amp_num = 0.5 * (float(np.max(field)) - float(np.min(field)))
-    amplitude_loss = 1.0 - amp_num / float(_exact.EPS)
-    try:
-        phase = float(phase_error(residual.ravel(), reference.ravel()))
-    except ValueError:
+    coords, _ = _exact.uniform_cell_mesh_nd(config.mesh_cells, config.dim)
+    coeff_num = fourier_mode_coefficient(field, coords, volumes, config.wave)
+    coeff_ref = fourier_mode_coefficient(oracle, coords, volumes, config.wave)
+    if abs(coeff_ref) == 0.0:
         phase = None
+    else:
+        phase = float(np.angle(coeff_num / coeff_ref))
+    amp_num = 2.0 * abs(coeff_num)
+    amplitude_loss = 1.0 - amp_num / float(_exact.EPS)
     integral = float(np.sum(np.asarray(field) * np.asarray(volumes)))
     volume = float(np.sum(volumes))
     mass_error = integral - float(_exact.Q0) * volume
@@ -822,6 +1053,7 @@ def _execute(config: Tr01Config, *, request=None, output_dir: Path | None = None
         raise NativeUnavailable(missing)
     if request is not None:
         require_exact_rank(request)
+        require_live_execution_space(request)
         if request.pops_native_dim != config.dim:
             raise NativeUnavailable("request dim does not match resolved config")
     elif config.dim != REQUIRED_NATIVE_DIM:
@@ -831,10 +1063,10 @@ def _execute(config: Tr01Config, *, request=None, output_dir: Path | None = None
         )
     else:
         _require_native_dim3()
-    if config.layout in AMR_LAYOUTS and config.layout != "A-DT":
-        raise AuthoringPending(
-            f"{config.layout} is catalogued but not claimed as leaf-only science here"
-        )
+    if config.layout in AMR_LAYOUTS:
+        status = variant_status(config)
+        if status["status"] != "authoring_ok":
+            raise AuthoringPending(status["blocker"])
     authored = author(config)
     plan = resolve_case(authored.case, layout=layout_for(authored))
     if getattr(plan, "resolved_dimension", None) != config.dim:
@@ -913,18 +1145,7 @@ def run_native(
     if request is not None:
         config = resolve_config(request, config_id=config_id)
         if n_cells is not None:
-            config = Tr01Config(
-                dim=config.dim,
-                velocity=config.velocity,
-                wave=config.wave,
-                n_cells=int(n_cells),
-                periods=config.periods,
-                layout=config.layout,
-                block_size=config.block_size,
-                dt=config.dt,
-                family=config.family,
-                label=config.label,
-            )
+            config = config.replace(n_cells=int(n_cells))
         if t_end is not None and abs(float(t_end) - config.t_end) > 1.0e-15:
             raise NativeUnavailable("t_end override would silently replace the config period")
         return _execute(config, request=request, output_dir=output_dir or request.output_dir)
@@ -991,18 +1212,7 @@ def run_order_campaign(
     l2 = []
     linf = []
     for n_cells in steps:
-        config = Tr01Config(
-            dim=base.dim,
-            velocity=base.velocity,
-            wave=base.wave,
-            n_cells=int(n_cells),
-            periods=base.periods,
-            layout=base.layout,
-            block_size=base.block_size,
-            dt=base.dt,
-            family=base.family,
-            label=base.label,
-        )
+        config = base.replace(n_cells=int(n_cells))
         payload = _execute(config, request=request, output_dir=output_dir)
         fields[n_cells] = payload["field"]
         oracles[n_cells] = payload["oracle"]
@@ -1017,11 +1227,89 @@ def run_order_campaign(
         "pops_native_dim": base.dim,
         "dimension": base.dim,
         "label": base.label,
+        "family": base.family,
+        "reconstruction": base.reconstruction,
+        "time_program": base.time_program,
+        "dt_scaling": base.dt_scaling,
         "velocity": tuple(base.velocity),
         "wave": tuple(base.wave),
         "t_end": float(base.t_end),
         "resolutions": steps,
         "spacings": tuple(1.0 / float(n) for n in steps),
+        "l1": tuple(l1),
+        "l2": tuple(l2),
+        "linf": tuple(linf),
+        "threshold": ORDER_THRESHOLD,
+        "fields": fields,
+        "oracles": oracles,
+        "volumes": volumes,
+        "diagnostics": diagnostics,
+    }
+
+
+def run_temporal_campaign(
+    dts,
+    *,
+    n_cells: int = 64,
+    output_dir: Path | None = None,
+    request=None,
+    config_id: str | None = None,
+) -> dict:
+    """§9.4 fixed-grid temporal series: dt, dt/2, dt/4, dt/8 (dt/16 optional)."""
+    steps = tuple(float(value) for value in dts)
+    if len(steps) < 4:
+        raise ValueError("TR-01 temporal campaign requires at least four dt values")
+    if any(value <= 0.0 for value in steps):
+        raise ValueError("dts must be positive")
+    count = int(n_cells)
+    if request is not None:
+        base = resolve_config(request, config_id=config_id)
+    else:
+        _require_native_dim3()
+        base = _canonical_3d(count)
+    fields = {}
+    oracles = {}
+    volumes = {}
+    diagnostics = {}
+    l1 = []
+    l2 = []
+    linf = []
+    factors = []
+    for index, dt in enumerate(steps):
+        factor = 2**index
+        factors.append(factor)
+        config = base.replace(
+            n_cells=count,
+            dt=float(dt),
+            family="temporal",
+            dt_scaling="fixed",
+            reconstruction=base.reconstruction,
+        )
+        payload = _execute(config, request=request, output_dir=output_dir)
+        fields[factor] = payload["field"]
+        oracles[factor] = payload["oracle"]
+        volumes[factor] = payload["volumes"]
+        diagnostics[factor] = payload["diagnostics"]
+        l1.append(float(payload["diagnostics"]["l1"]))
+        l2.append(float(payload["diagnostics"]["l2"]))
+        linf.append(float(payload["diagnostics"]["linf"]))
+    return {
+        "source": "native",
+        "case_id": "TR-01",
+        "pops_native_dim": base.dim,
+        "dimension": base.dim,
+        "label": base.label,
+        "family": "temporal",
+        "reconstruction": base.reconstruction,
+        "time_program": base.time_program,
+        "dt_scaling": "fixed",
+        "velocity": tuple(base.velocity),
+        "wave": tuple(base.wave),
+        "t_end": float(base.t_end),
+        "n_cells": count,
+        "dts": steps,
+        "resolutions": tuple(factors),
+        "spacings": steps,
         "l1": tuple(l1),
         "l2": tuple(l2),
         "linf": tuple(linf),

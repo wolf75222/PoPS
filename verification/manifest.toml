@@ -42,11 +42,14 @@ finite = true
 [[case]]
 id = "TR-01"
 path = "verification/cases/transport/advection_sine/run.py"
-name = "Periodic sine advection (1-d/2-d/canonical 3-d)"
+name = "Periodic sine advection (WENO5-Z order campaign; VanLeer TVD variant)"
 verification_kind = "code-verification"
 evidence_status = "required"
 physics = ["scalar_advection"]
 oracle = "translated_oblique_sine"
+# Order campaign scheme: public WENO5-Z (pops.numerics.reconstruction.WENO5Z).
+# VanLeer/MUSCL is a separately labeled TVD variant, not the 1.8 order-2 proof.
+# Constant-CFL is global; isolated spatial uses dt∝h². Threshold unchanged.
 native_dimensions = [1, 2, 3]
 execution_spaces = ["KokkosSerial", "KokkosOpenMP"]
 mpi_modes = ["off", "on"]

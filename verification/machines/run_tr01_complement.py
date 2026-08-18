@@ -58,9 +58,53 @@ def main() -> int:
         default=None,
         help="comma-separated n, default 16 or 16,32,64,128",
     )
+    parser.add_argument("--temporal", action="store_true")
+    parser.add_argument(
+        "--dts",
+        default="0.02,0.01,0.005,0.0025",
+        help="comma-separated dt, dt/2, dt/4, dt/8 for §9.4",
+    )
+    parser.add_argument("--n-cells", type=int, default=64)
     args = parser.parse_args()
     from verification.pops_verify.campaign import CampaignRequest, CampaignResources
 
+    if args.temporal:
+        dts = tuple(float(item) for item in args.dts.split(",") if item)
+        request = CampaignRequest(
+            case_id="TR-01",
+            pops_native_dim=args.dim,
+            suite="pr",
+            execution_space=os.environ.get("POPS_TR01_SPACE", "KokkosSerial"),
+            mpi_mode=os.environ.get("POPS_TR01_MPI", "off"),
+            min_resolution=int(args.n_cells),
+            resources=CampaignResources(
+                nodes=1,
+                mpi_ranks=int(os.environ.get("SLURM_NTASKS", "1")),
+                omp_threads=int(os.environ.get("OMP_NUM_THREADS", "1")),
+                resolutions=(int(args.n_cells),),
+            ),
+            evidence_status="required",
+            output_dir=Path(args.out) / f"dim{args.dim}",
+        )
+        run = _load(RUN, "tr01_run")
+        analyze = _load(ANALYZE, "tr01_analyze")
+        output = Path(request.output_dir)
+        output.mkdir(parents=True, exist_ok=True)
+        campaign = run.run_temporal_campaign(
+            dts,
+            n_cells=int(args.n_cells),
+            request=request,
+            config_id=args.config_id,
+            output_dir=output,
+        )
+        analyze.write_native_campaign_report(output, campaign)
+        claim = analyze.evaluate_order_claim(campaign)
+        print(
+            f"temporal dim={args.dim} n={args.n_cells} dts={list(dts)} "
+            f"verdict={claim['verdict']} orders={claim['orders']}",
+            flush=True,
+        )
+        return 0 if claim["order_pass"] else 1
     if args.resolutions:
         resolutions = tuple(int(item) for item in args.resolutions.split(",") if item)
     elif args.smoke:
@@ -108,6 +152,9 @@ def main() -> int:
         claim = analyze.evaluate_order_claim(
             {
                 "source": "native",
+                "family": "global",
+                "dt_scaling": "cfl",
+                "reconstruction": "weno5z",
                 "resolutions": resolutions,
                 "fields": fields,
                 "oracles": oracles,

@@ -32,7 +32,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--gate", required=True)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--dim", required=True, type=int)
-    parser.add_argument("--stage", required=True, choices=("smoke", "pair", "series"))
+    parser.add_argument("--stage", required=True, choices=("smoke", "pair", "series", "temporal"))
     parser.add_argument("--space", required=True)
     parser.add_argument("--mpi-mode", required=True, choices=("off", "on"))
     args = parser.parse_args(argv)
@@ -41,7 +41,7 @@ def main(argv: list[str] | None = None) -> int:
     output = args.output
     sha = _git_sha(repo)
     native_root = output / "native" / f"dim{args.dim}"
-    if args.stage == "series":
+    if args.stage in {"series", "temporal"}:
         summary = json.loads((native_root / "summary.json").read_text(encoding="utf-8"))
         metrics = json.loads((native_root / "metrics.json").read_text(encoding="utf-8"))
         visual = json.loads((native_root / "visual_manifest.json").read_text(encoding="utf-8"))
@@ -53,10 +53,29 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit(f"{args.gate}: visual_manifest case_id {visual.get('case_id')}")
         if not summary.get("orders"):
             raise SystemExit(f"{args.gate}: series produced no orders")
+        expected_kind = "temporal" if args.stage == "temporal" else "global"
+        kinds = {row.get("kind") for row in summary["orders"]}
+        if expected_kind not in kinds:
+            raise SystemExit(
+                f"{args.gate}: expected order kind {expected_kind}, got {kinds}"
+            )
+        if "spatial" in kinds and args.stage != "series":
+            raise SystemExit(f"{args.gate}: constant-CFL/temporal must not be labeled spatial")
+        if args.stage == "series" and kinds != {"global"}:
+            raise SystemExit(
+                f"{args.gate}: four-resolution CFL series must be labeled global, got {kinds}"
+            )
+        if summary["coverage"]["cases_failed"] and not summary.get("failures"):
+            raise SystemExit(
+                f"{args.gate}: order gate failed but failures[] is empty"
+            )
+        failures_csv = (native_root / "failures.csv").read_text(encoding="utf-8")
+        if summary["coverage"]["cases_failed"] and "TR-01" not in failures_csv:
+            raise SystemExit(f"{args.gate}: failures.csv missing TR-01")
         print(
-            f"{args.gate} series sha={sha} dim={args.dim} "
+            f"{args.gate} {args.stage} sha={sha} dim={args.dim} "
             f"orders={[row.get('observed_order') for row in summary['orders']]} "
-            f"passed={summary['coverage']['cases_passed']}"
+            f"kind={sorted(kinds)} passed={summary['coverage']['cases_passed']}"
         )
         return 0
 
@@ -89,8 +108,34 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit(f"{args.gate}: provenance dim mismatch")
         if args.mpi_mode == "off" and provenance.get("mpi_enabled"):
             raise SystemExit(f"{args.gate}: serial smoke recorded mpi_enabled")
-        if args.space == "KokkosSerial" and provenance.get("kokkos_execution_space") != "KokkosSerial":
-            raise SystemExit(f"{args.gate}: serial smoke recorded {provenance.get('kokkos_execution_space')}")
+        live_ranks = provenance.get("mpi_ranks")
+        live_threads = provenance.get("omp_threads_per_rank")
+        if args.mpi_mode == "on" and live_ranks != 2:
+            raise SystemExit(
+                f"{args.gate}: mpi_ranks={live_ranks} is not the native world size 2"
+            )
+        if args.mpi_mode == "off" and live_ranks not in {1, None}:
+            raise SystemExit(f"{args.gate}: serial smoke recorded mpi_ranks={live_ranks}")
+        if args.space == "KokkosSerial":
+            if provenance.get("kokkos_execution_space") != "KokkosSerial":
+                raise SystemExit(
+                    f"{args.gate}: Serial request recorded "
+                    f"{provenance.get('kokkos_execution_space')}; Serial not-run"
+                )
+            if live_threads not in {1, None}:
+                raise SystemExit(
+                    f"{args.gate}: Serial smoke recorded omp_threads_per_rank={live_threads}"
+                )
+        if args.space == "KokkosOpenMP":
+            if provenance.get("kokkos_execution_space") != "KokkosOpenMP":
+                raise SystemExit(
+                    f"{args.gate}: OpenMP smoke recorded "
+                    f"{provenance.get('kokkos_execution_space')}"
+                )
+            if not isinstance(live_threads, int) or live_threads <= 1:
+                raise SystemExit(
+                    f"{args.gate}: OpenMP smoke recorded omp_threads_per_rank={live_threads}"
+                )
     print(
         f"{args.gate} {args.stage} sha={sha} dim={args.dim} "
         f"label={smoke.get('label')} linf={smoke.get('linf')}"
