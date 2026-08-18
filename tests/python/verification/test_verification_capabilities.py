@@ -155,3 +155,76 @@ def test_catalog_digest_is_not_placeholder(tmp_path: Path):
     )
     assert artifact.component_catalog_digest == contract()["component_catalog_sha256"]
     assert artifact.component_catalog_digest != placeholder
+
+
+def test_authenticate_asks_doctor_for_requested_dimension(tmp_path: Path, monkeypatch):
+    from verification.pops_verify import capabilities as cap
+
+    seen: list[int | None] = []
+    monkeypatch.setattr(cap, "_try_doctor", lambda dimension=None: seen.append(dimension) or True)
+    artifact = cap.authenticate_installed_artifact(
+        dimension=2, variants_root=_write_leaf(tmp_path, dimension=2)
+    )
+    assert seen == [2]
+    assert artifact.doctor_ok is True
+
+
+def test_try_doctor_uses_runtime_doctor_after_selecting_dimension(monkeypatch):
+    import sys
+    import types
+
+    from verification.pops_verify import capabilities as cap
+
+    pops_mod = types.ModuleType("pops")
+    selector = types.ModuleType("pops._native_selector")
+    runtime = types.ModuleType("pops.runtime")
+    runtime_doctor = types.ModuleType("pops.runtime.doctor")
+    selected: dict[str, object] = {"module": None}
+
+    def select_native_dimension(dimension):
+        selected["module"] = object()
+        selected["dim"] = dimension
+        return selected["module"]
+
+    def selected_native_module(*, required=False):
+        return selected["module"]
+
+    def doctor(*, verbose=False):
+        assert selected["module"] is not None
+        assert verbose is False
+        return {"interpreteur": (True, "ok"), "numpy": (True, "1.26")}
+
+    selector.select_native_dimension = select_native_dimension
+    selector.selected_native_module = selected_native_module
+    runtime.doctor = runtime_doctor
+    runtime_doctor.doctor = doctor
+    monkeypatch.setitem(sys.modules, "pops", pops_mod)
+    monkeypatch.setitem(sys.modules, "pops._native_selector", selector)
+    monkeypatch.setitem(sys.modules, "pops.runtime", runtime)
+    monkeypatch.setitem(sys.modules, "pops.runtime.doctor", runtime_doctor)
+
+    assert cap._try_doctor(2) is True
+    assert selected["dim"] == 2
+
+
+def test_try_doctor_records_false_when_runtime_check_fails(monkeypatch):
+    import sys
+    import types
+
+    from verification.pops_verify import capabilities as cap
+
+    pops_mod = types.ModuleType("pops")
+    selector = types.ModuleType("pops._native_selector")
+    runtime = types.ModuleType("pops.runtime")
+    runtime_doctor = types.ModuleType("pops.runtime.doctor")
+
+    selector.select_native_dimension = lambda dimension: object()
+    selector.selected_native_module = lambda *, required=False: object()
+    runtime.doctor = runtime_doctor
+    runtime_doctor.doctor = lambda *, verbose=False: {"include": (False, "missing")}
+    monkeypatch.setitem(sys.modules, "pops", pops_mod)
+    monkeypatch.setitem(sys.modules, "pops._native_selector", selector)
+    monkeypatch.setitem(sys.modules, "pops.runtime", runtime)
+    monkeypatch.setitem(sys.modules, "pops.runtime.doctor", runtime_doctor)
+
+    assert cap._try_doctor(1) is False

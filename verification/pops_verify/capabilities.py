@@ -2,7 +2,8 @@
 
 Planning does not require a native artifact. Execution does: the selected
 dimension must have a variants.json row whose on-disk bytes match the digest.
-This module does not dlopen the leaf.
+Leaf-byte authentication does not dlopen the extension. A live ``doctor_ok``
+probe may select the requested dimension so ``pops.runtime.doctor`` can run.
 """
 from __future__ import annotations
 
@@ -74,11 +75,23 @@ def _doctor_report_ok(report: Any) -> bool:
     return report.get("ok") is True
 
 
-def _try_doctor() -> bool:
+def _try_doctor(dimension: int | None = None) -> bool:
     try:
         import pops
+        from pops._native_selector import select_native_dimension, selected_native_module
 
-        report = pops.doctor(verbose=False)
+        if selected_native_module(required=False) is None:
+            chosen = dimension
+            env_dim = os.environ.get("POPS_NATIVE_DIM")
+            if chosen not in (1, 2, 3) and env_dim in {"1", "2", "3"}:
+                chosen = int(env_dim)
+            if chosen in (1, 2, 3):
+                select_native_dimension(chosen)
+        doctor = pops.doctor if hasattr(pops, "doctor") else None
+        if doctor is None:
+            from pops.runtime.doctor import doctor as doctor
+
+        report = doctor(verbose=False)
     except Exception:
         return False
     return _doctor_report_ok(report)
@@ -155,9 +168,11 @@ def authenticate_installed_artifact(
 ) -> AuthenticatedArtifact:
     """Return the authenticated exact-rank leaf for ``dimension``.
 
-    Reads ``variants.json`` and re-hashes the leaf. Does not load the
-    extension. ``doctor_ok`` may be injected; otherwise ``pops.doctor`` is
-    attempted and a missing doctor is recorded as false.
+    Reads ``variants.json`` and re-hashes the leaf. Byte authentication
+    does not load the extension. ``doctor_ok`` may be injected; otherwise
+    the live doctor is run after selecting ``dimension`` (``pops.doctor``
+    if exported, else ``pops.runtime.doctor``). A missing or failing
+    doctor is recorded as false.
     """
     if dimension not in (1, 2, 3):
         raise CapabilityError("dimension must be 1, 2, or 3")
@@ -198,7 +213,7 @@ def authenticate_installed_artifact(
     digest = sha256_file(leaf)
     if digest != row["sha256"]:
         raise CapabilityError(f"native variant bytes differ from variants.json: {leaf}")
-    resolved_doctor = _try_doctor() if doctor_ok is None else bool(doctor_ok)
+    resolved_doctor = _try_doctor(dimension) if doctor_ok is None else bool(doctor_ok)
     return AuthenticatedArtifact(
         dimension=dimension,
         path=leaf,
