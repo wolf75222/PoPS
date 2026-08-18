@@ -1,5 +1,7 @@
 # Verification
 
+**Plan (v1.3):** [PoPS_VERIFICATION_VALIDATION_BENCHMARK_PLAN_MONOREPO_v1.3.md](PoPS_VERIFICATION_VALIDATION_BENCHMARK_PLAN_MONOREPO_v1.3.md)
+
 ## What this tree is
 
 This directory is the repo-local scientific campaign. It is not installed in the
@@ -20,6 +22,7 @@ to `benchmarks/manifest.toml`; this tree does not invent a second harness.
 ```text
 verification/
 ├── README.md                 # this file
+├── PoPS_VERIFICATION_VALIDATION_BENCHMARK_PLAN_MONOREPO_v1.3.md
 ├── __init__.py               # repo-local package marker; not in the wheel
 ├── manifest.toml             # scientific campaign source of truth
 ├── cases/                    # PH, TR, EU, PO, TM, CP, AM, RB
