@@ -1216,3 +1216,101 @@ def test_payload_evidence_keys_stripped_and_can_emit_tm01_job(tmp_path: Path):
         components=["time"],
     )
     assert summary["coverage"]["cases_passed"] == 0
+
+
+def test_emit_and_load_reject_dirty_or_head_mismatched_producers(tmp_path, monkeypatch):
+    from verification.pops_verify import evidence_contract as ec
+    from verification.pops_verify import oracle_producers as op
+    from verification.pops_verify.oracle_producers import OracleProducerError
+
+    def boom(case_id):
+        raise OracleProducerError("dirty producer files: ['verification/pops_verify/cell_averages.py']")
+
+    monkeypatch.setattr(op, "verify_committed_producers", boom)
+    if hasattr(ec, "verify_committed_producers"):
+        monkeypatch.setattr(ec, "verify_committed_producers", boom)
+    with pytest.raises((EvidenceError, OracleProducerError, Exception), match="dirty|producer"):
+        _emit_series(tmp_path / "emit")
+
+    monkeypatch.undo()
+    series_dir, _root = _emit_series(tmp_path / "load")
+    live = op.hash_producer_files("TR-02")
+    dirty = json.loads(json.dumps(live))
+    key = "verification/pops_verify/cell_averages.py"
+    dirty[key]["sha256"] = "a" * 64
+    path = series_dir / "n016" / "producer_manifest.json"
+    path.write_text(json.dumps(dirty, indent=2) + "\n", encoding="utf-8")
+    (series_dir / "n016" / "producer_manifest.sha256").write_text(
+        hashlib.sha256(path.read_bytes()).hexdigest() + "\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(op, "hash_producer_files", lambda case_id: dirty)
+    with pytest.raises(EvidenceError, match="HEAD|dirty|producer"):
+        EvidenceBundle(series_dir)
+    source = (
+        REPO_ROOT / "verification" / "pops_verify" / "native_evidence.py"
+    ).read_text(encoding="utf-8")
+    assert "verify_committed_producers(" not in source
+
+
+def test_program_so_path_rejects_symlink_and_leaf_alias(tmp_path: Path):
+    from verification.pops_verify.native_evidence import NativeSeriesError, read_stable_program_file
+
+    real = tmp_path / "prog.so"
+    real.write_bytes(b"compiled-program-image")
+    link = tmp_path / "prog-link.so"
+    link.symlink_to(real)
+    with pytest.raises((EvidenceError, NativeSeriesError), match="symlink|so_path"):
+        read_stable_program_file(link)
+    leaf_root = _write_leaf(tmp_path / "leaf")
+    identity = authenticate_installed_artifact(
+        dimension=1, variants_root=leaf_root, doctor_ok=False
+    )
+    with pytest.raises((EvidenceError, NativeSeriesError), match="leaf|distinct"):
+        read_stable_program_file(identity.path, installed_leaf=identity.path)
+    data = read_stable_program_file(real, installed_leaf=identity.path)
+    assert data == b"compiled-program-image"
+
+
+def test_program_digest_must_not_equal_leaf_digest(tmp_path: Path):
+    leaf_payload = b"fake-exact-rank-leaf-smooth"
+    series_dir, root = _emit_series(tmp_path)
+    job = series_dir / "n016"
+    identity = authenticate_installed_artifact(
+        dimension=1, variants_root=root, doctor_ok=False
+    )
+    (job / "program.bin").write_bytes(leaf_payload)
+    (job / "program.sha256").write_text(identity.sha256 + "\n", encoding="utf-8")
+    with pytest.raises(EvidenceError, match="program digest must not equal leaf"):
+        EvidenceBundle(series_dir)
+
+
+def test_tr06_pair_program_must_not_equal_leaf_digest(tmp_path: Path):
+    root = _write_leaf(tmp_path, dimension=2)
+    identity = authenticate_installed_artifact(
+        dimension=2, variants_root=root, doctor_ok=False
+    )
+    exact = _load(REPO_ROOT / "verification" / "cases" / "transport" / "axis_permutation", "exact")
+    n = 8
+    width = float(exact.PERIOD) / n
+    axis_lo = np.arange(n, dtype=np.float64) * width
+    axis_hi = axis_lo + width
+    x_lo, y_lo = np.meshgrid(axis_lo, axis_lo, indexing="ij")
+    x_hi, y_hi = np.meshgrid(axis_hi, axis_hi, indexing="ij")
+    lo = np.stack((x_lo, y_lo), axis=-1)
+    hi = np.stack((x_hi, y_hi), axis=-1)
+    original = analytic_cell_averages(lambda x, y: exact.exact_product(x, y, 1.0), lo, hi)
+    paired = analytic_cell_averages(lambda x, y: exact.exact_product(y, x, 1.0), lo, hi)
+    job = tmp_path / "job"
+    _emit_job(
+        job,
+        root,
+        case_id="TR-06",
+        n_cells=8,
+        dimension=2,
+        result=original,
+        pair_result=paired,
+        program_bytes=b"program-A",
+        pair_program_bytes=identity.path.read_bytes(),
+    )
+    with pytest.raises(EvidenceError, match="pair program digest must not equal leaf"):
+        EvidenceBundle(job)

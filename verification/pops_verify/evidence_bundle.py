@@ -31,9 +31,9 @@ from verification.pops_verify.evidence_contract import (
 )
 from verification.pops_verify.oracle_producers import (
     OracleProducerError,
-    hash_producer_files,
     produce_oracle,
     produce_paired_oracle,
+    verify_committed_producers,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -290,6 +290,7 @@ def _analyze_tr06_pair(
     provenance: Mapping[str, Any],
     result: np.ndarray,
     program_digest: str,
+    leaf_sha256: str,
 ) -> tuple[np.ndarray, str, str, float]:
     for name in REQUIRED_PAIR_FILES:
         _pinned_under(job_dir, name, label=name)
@@ -305,6 +306,8 @@ def _analyze_tr06_pair(
     )
     if pair_program_digest == program_digest:
         raise EvidenceError("TR-06 pair program identity must be distinct")
+    if pair_program_digest == leaf_sha256:
+        raise EvidenceError("pair program digest must not equal leaf digest")
     pair_result = _load_numeric_npy(job_dir / "pair_result.npy", label="pair result")
     if pair_result.shape != result.shape:
         raise EvidenceError("TR-06 pair result shape mismatch")
@@ -356,18 +359,43 @@ def _load_job(job_dir: Path, *, expected_case_id: str | None = None) -> dict[str
         label="producer manifest",
     )
     stored_producers = _load_json(job_dir / "producer_manifest.json", label="producer")
-    live_producers = hash_producer_files(case_id)
+    try:
+        live_producers = verify_committed_producers(case_id)
+    except OracleProducerError as exc:
+        raise EvidenceError(str(exc)) from exc
     required = {
         "verification/pops_verify/cell_averages.py",
         "verification/pops_verify/oracle_producers.py",
     }
     if required - set(stored_producers):
         raise EvidenceError("producer manifest missing oracle-affecting sources")
-    if stored_producers != live_producers:
-        raise EvidenceError("oracle producer files do not match the manifest")
+    if set(stored_producers) != set(live_producers):
+        raise EvidenceError("producer manifest keys do not match HEAD producers")
+    for rel, live_row in live_producers.items():
+        stored_row = stored_producers.get(rel)
+        if not isinstance(stored_row, Mapping):
+            raise EvidenceError(f"producer manifest missing {rel}")
+        stored_sha = str(stored_row.get("sha256") or "")
+        stored_head = str(stored_row.get("head_sha256") or "")
+        stored_blob = str(stored_row.get("git_blob") or "")
+        live_sha = str(live_row.get("sha256") or "")
+        live_head = str(live_row.get("head_sha256") or "")
+        live_blob = str(live_row.get("git_blob") or "")
+        if (
+            stored_sha != stored_head
+            or stored_sha != live_sha
+            or stored_head != live_head
+            or live_sha != live_head
+            or stored_blob != live_blob
+        ):
+            raise EvidenceError(f"producer {rel} does not match HEAD")
+    identity_doc = _load_json(job_dir / "native_artifact.json", label="native artifact")
+    documented_leaf = str(identity_doc.get("sha256") or "")
     program_digest = _require_digest(
         job_dir / "program.bin", job_dir / "program.sha256", label="program"
     )
+    if program_digest == documented_leaf:
+        raise EvidenceError("program digest must not equal leaf digest")
     result_digest = _require_digest(
         job_dir / "result.npy", job_dir / "result.sha256", label="result"
     )
@@ -384,13 +412,17 @@ def _load_job(job_dir: Path, *, expected_case_id: str | None = None) -> dict[str
             provenance=provenance,
             result=result,
             program_digest=program_digest,
+            leaf_sha256=documented_leaf,
         )
     try:
         oracle = produce_oracle(case_id, resolved, result, provenance)
     except OracleProducerError as exc:
         raise EvidenceError(str(exc)) from exc
-    identity_doc = _load_json(job_dir / "native_artifact.json", label="native artifact")
     authenticated, leaf_digest = _authenticate_installed_leaf(identity_doc, dimension)
+    if program_digest == leaf_digest:
+        raise EvidenceError("program digest must not equal leaf digest")
+    if pair_program_digest and pair_program_digest == leaf_digest:
+        raise EvidenceError("pair program digest must not equal leaf digest")
     if authenticated.dimension != dimension:
         raise EvidenceError("authenticated leaf dimension mismatch")
     if str(provenance.get("native_header_signature")) != authenticated.native_header_signature:

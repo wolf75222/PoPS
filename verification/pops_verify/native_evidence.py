@@ -6,15 +6,19 @@ only after ``EvidenceBundle`` loads a completed runner job directory.
 from __future__ import annotations
 
 import os
+import stat
 import subprocess
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from verification.pops_verify.capabilities import (
+    authenticate_installed_artifact,
+    resolve_variants_root,
+)
 from verification.pops_verify.convergence import observed_order
 from verification.pops_verify.evidence_bundle import EvidenceBundle, EvidenceError
 from verification.pops_verify.metrics import collect_metrics
-from verification.pops_verify.oracle_producers import OracleProducerError, verify_committed_producers
 from verification.pops_verify.provenance import RUN_FIELDS, collect_provenance
 from verification.pops_verify.report import ARTIFACTS
 
@@ -188,6 +192,71 @@ def campaign_run_fields(
     return fields
 
 
+def _installed_leaf_paths() -> list[Path]:
+    try:
+        root = resolve_variants_root(None)
+    except Exception:
+        return []
+    leaves: list[Path] = []
+    for dim in (1, 2, 3):
+        try:
+            authenticated = authenticate_installed_artifact(
+                dimension=dim,
+                variants_root=root,
+                doctor_ok=False,
+            )
+            leaves.append(Path(authenticated.path).resolve())
+        except Exception:
+            continue
+    return leaves
+
+
+def read_stable_program_file(
+    path: str | Path,
+    *,
+    installed_leaf: str | Path | None = None,
+) -> bytes:
+    """lstat, reject symlink ``so_path``, pin inode/size, require leaf-distinct path."""
+    target = Path(path)
+    try:
+        before = target.lstat()
+    except OSError as exc:
+        raise NativeSeriesError(PROGRAM_BYTES_BLOCKER) from exc
+    if stat.S_ISLNK(before.st_mode):
+        raise NativeSeriesError("symlinked so_path is not accepted")
+    if not stat.S_ISREG(before.st_mode):
+        raise NativeSeriesError(PROGRAM_BYTES_BLOCKER)
+    resolved = target.resolve()
+    try:
+        resolved_info = resolved.lstat()
+    except OSError as exc:
+        raise NativeSeriesError(PROGRAM_BYTES_BLOCKER) from exc
+    if stat.S_ISLNK(resolved_info.st_mode) or not stat.S_ISREG(resolved_info.st_mode):
+        raise NativeSeriesError("symlinked so_path is not accepted")
+    leaves = (
+        [Path(installed_leaf).resolve()]
+        if installed_leaf is not None
+        else _installed_leaf_paths()
+    )
+    if resolved in leaves:
+        raise NativeSeriesError("so_path must be distinct from the installed exact-rank leaf")
+    pin = (resolved_info.st_dev, resolved_info.st_ino, resolved_info.st_size)
+    if (before.st_dev, before.st_ino, before.st_size) != pin:
+        raise NativeSeriesError("so_path resolve is not the lstat'd file")
+    data = resolved.read_bytes()
+    try:
+        after = resolved.lstat()
+    except OSError as exc:
+        raise NativeSeriesError(PROGRAM_BYTES_BLOCKER) from exc
+    if (after.st_dev, after.st_ino, after.st_size) != pin:
+        raise NativeSeriesError("so_path changed during read")
+    if stat.S_ISLNK(after.st_mode):
+        raise NativeSeriesError("symlinked so_path is not accepted")
+    if not data:
+        raise NativeSeriesError(PROGRAM_BYTES_BLOCKER)
+    return data
+
+
 def program_bytes_from_artifact(artifact: Any) -> bytes:
     """Read compiled program bytes from the public artifact ``so_path``."""
     try:
@@ -197,12 +266,7 @@ def program_bytes_from_artifact(artifact: Any) -> bytes:
     if type(artifact) is not CompiledSimulationArtifact:
         raise NativeSeriesError(PROGRAM_BYTES_BLOCKER)
     path = Path(str(getattr(artifact, "so_path", "") or ""))
-    if not path.is_file():
-        raise NativeSeriesError(PROGRAM_BYTES_BLOCKER)
-    data = path.read_bytes()
-    if not data:
-        raise NativeSeriesError(PROGRAM_BYTES_BLOCKER)
-    return data
+    return read_stable_program_file(path)
 
 
 def run_fields_from_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -507,16 +571,6 @@ def report_from_native_series(
                 extra_reasons=extra_reasons,
             )
         orders = list(orders) + list(pair_orders)
-    try:
-        verify_committed_producers(case_id)
-    except OracleProducerError as exc:
-        return fail_closed_summary(
-            case_id,
-            str(exc),
-            native_dimensions=native_dimensions,
-            components=components,
-            extra_reasons=extra_reasons,
-        )
     return passed_summary(
         case_id,
         native_dimensions=native_dimensions,

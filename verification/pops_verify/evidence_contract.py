@@ -52,7 +52,10 @@ import numpy as np
 
 from verification.pops_verify.capabilities import sha256_file
 from verification.pops_verify.metrics import write_metrics
-from verification.pops_verify.oracle_producers import hash_producer_files
+from verification.pops_verify.oracle_producers import (
+    OracleProducerError,
+    verify_committed_producers,
+)
 from verification.pops_verify.provenance import write_provenance
 
 REQUIRED_JOB_FILES = (
@@ -140,6 +143,18 @@ def emit_job_directory(
         raise EvidenceContractError(f"native_artifact missing {sorted(missing)}")
     if not isinstance(program_bytes, (bytes, bytearray)):
         raise EvidenceContractError("program_bytes must be file bytes")
+    case_id = ""
+    job = resolved_case.get("job") if isinstance(resolved_case.get("job"), Mapping) else {}
+    if isinstance(job, Mapping):
+        case_id = str(job.get("case_id") or "")
+    if not case_id:
+        case = resolved_case.get("case")
+        if isinstance(case, Mapping):
+            case_id = str(case.get("id") or "")
+    try:
+        producers = verify_committed_producers(case_id)
+    except OracleProducerError as exc:
+        raise EvidenceContractError(str(exc)) from exc
     root = Path(job_dir)
     root.mkdir(parents=True, exist_ok=True)
     resolved_path = root / "resolved_case.json"
@@ -161,17 +176,9 @@ def emit_job_directory(
     if "variants_root" in native_artifact:
         artifact_doc["variants_root"] = str(native_artifact["variants_root"])
     artifact_path.write_text(json.dumps(artifact_doc, indent=2) + "\n", encoding="utf-8")
-    case_id = ""
-    job = resolved_case.get("job") if isinstance(resolved_case.get("job"), Mapping) else {}
-    if isinstance(job, Mapping):
-        case_id = str(job.get("case_id") or "")
-    if not case_id:
-        case = resolved_case.get("case")
-        if isinstance(case, Mapping):
-            case_id = str(case.get("id") or "")
     manifest_path = root / "producer_manifest.json"
     manifest_path.write_text(
-        json.dumps(hash_producer_files(case_id), indent=2) + "\n",
+        json.dumps(producers, indent=2) + "\n",
         encoding="utf-8",
     )
     write_digest_file(root / "producer_manifest.sha256", sha256_file(manifest_path))
