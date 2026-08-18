@@ -209,6 +209,20 @@
         }
       }
     },
+    "storyboard_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key_events"],
+      "properties": {
+        "key_events": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/non_empty_string"
+          }
+        }
+      }
+    },
     "acceptance": {
       "type": "object",
       "additionalProperties": false,
@@ -443,6 +457,16 @@
             },
             {
               "$ref": "#/$defs/animation_contract"
+            }
+          ]
+        },
+        "storyboard": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/storyboard_contract"
             }
           ]
         },

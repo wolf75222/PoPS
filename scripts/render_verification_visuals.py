@@ -74,7 +74,7 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("one of --run, --examples, or --gallery is required")
         render_run(args.run, suite=args.suite, formats=formats, strict=args.strict)
         return 0
-    except VisualsError as exc:
+    except (VisualsError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 

@@ -15,6 +15,7 @@ from typing import Any
 from verification.pops_verify.metrics import write_metrics
 from verification.pops_verify.provenance import write_provenance
 from verification.pops_verify.visualization.catalog import catalog_entry, visual_contract_for
+from verification.pops_verify.visualization.data import VisualsError
 
 FIXTURE_LABEL = "DETERMINISTIC FIXTURE — not a PoPS campaign result"
 FIXTURE_SHA = "fixture:pops-visuals-v1"
@@ -338,10 +339,12 @@ def _pulse(center: float) -> dict[str, Any]:
 
 
 def _storyboard_payload(case_id: str) -> dict[str, Any]:
-    animation = visual_contract_for(case_id).get("animation")
-    if not isinstance(animation, dict) or not animation.get("key_events"):
-        raise ValueError(f"{case_id} storyboard requires visual_contract_for key_events")
-    events = tuple(animation["key_events"])
+    contract = visual_contract_for(case_id)
+    storyboard = contract.get("storyboard") if isinstance(contract.get("storyboard"), dict) else {}
+    animation = contract.get("animation") if isinstance(contract.get("animation"), dict) else {}
+    events = tuple(storyboard.get("key_events") or animation.get("key_events") or ())
+    if not events:
+        raise VisualsError(f"{case_id} storyboard requires visual_contract_for key_events")
     frames = []
     for index, event in enumerate(events):
         time = index / max(len(events) - 1, 1)

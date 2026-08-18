@@ -636,7 +636,16 @@ def visual_contract_for(case_id: str) -> dict:
             required.extend(entry.artifacts[axis])
     required = list(dict.fromkeys(required))
     animation = None
-    if any(flag == "required" for flag in entry.animation) or entry.storyboard_required:
+    am01_events = [
+        "before_entry",
+        "entry",
+        "inside_fine",
+        "exit",
+        "periodic_crossing",
+        "final",
+    ]
+    default_events = ["initial", "mid", "final"]
+    if any(flag == "required" for flag in entry.animation):
         animation = {
             "id": f"{case_id.lower().replace('-', '_')}_canonical",
             "master": "mp4",
@@ -644,7 +653,7 @@ def visual_contract_for(case_id: str) -> dict:
             "frames": "accepted_states",
             "color_limits": "global",
             "overlays": ["time", "leaf_cells"],
-            "key_events": ["initial", "mid", "final"],
+            "key_events": list(am01_events if case_id == "AM-01" else default_events),
         }
         if case_id == "AM-01":
             animation = {
@@ -659,15 +668,17 @@ def visual_contract_for(case_id: str) -> dict:
                     "time",
                     "leaf_cells",
                 ],
-                "key_events": [
-                    "before_entry",
-                    "entry",
-                    "inside_fine",
-                    "exit",
-                    "periodic_crossing",
-                    "final",
-                ],
+                "key_events": list(am01_events),
             }
+    storyboard = None
+    if entry.storyboard_required:
+        if case_id == "AM-01":
+            events = list(am01_events)
+        elif animation and animation.get("key_events"):
+            events = list(animation["key_events"])
+        else:
+            events = list(default_events)
+        storyboard = {"key_events": events}
     dimensions = {}
     for axis, code in zip(("1d", "2d", "3d"), entry.dimension_codes, strict=True):
         block: dict = {"status": _status(code)}
@@ -683,6 +694,7 @@ def visual_contract_for(case_id: str) -> dict:
         "required": required,
         "optional": optional,
         "animation": animation,
+        "storyboard": storyboard,
         "acceptance": {
             "require_source_data": True,
             "require_manifest": True,
