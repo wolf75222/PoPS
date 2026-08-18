@@ -76,14 +76,30 @@ def test_romeo_676_mpi_build_passes_concrete_mpi_include() -> None:
     build = BUILD.read_text(encoding="utf-8")
     assert "MPI_HOME" in env
     assert "include/mpi.h" in env
-    assert "mpicxx -show" in build
-    assert "mpicc -show" in build
+    assert "${MPI_HOME}/bin/mpicc" in env or '"$MPI_HOME/bin/mpicc"' in env
+    assert "${MPI_HOME}/bin/mpicxx" in env or '"$MPI_HOME/bin/mpicxx"' in env
+    assert "${MPI_HOME}/bin/mpicc" in build or '"$MPI_HOME/bin/mpicc"' in build
+    assert "${MPI_HOME}/bin/mpicxx" in build or '"$MPI_HOME/bin/mpicxx"' in build
     assert "MPI_CXX_COMPILER" in build
     assert "MPI_C_COMPILER" in build
+    assert "MPI_CXX_INCLUDE_DIRS" in build
+    assert "MPI_CXX_LIBRARIES" in build
     assert "libmpi.so" in env or "libmpi.so" in build
     assert "HYDRA_LAUNCHER" in env
     assert "FI_PROVIDER=tcp" in build
     assert "write_native_variant_manifest.py" in build
+
+
+def test_romeo_676_mpi_path_unsets_openmpi_wrapper_vars_and_rejects_mixed_prefix() -> None:
+    env = ENV.read_text(encoding="utf-8")
+    build = BUILD.read_text(encoding="utf-8")
+    assert "unset OMPI_CC" in env
+    assert "unset OMPI_CXX" in env
+    assert "export OMPI_CC=" not in env
+    assert "export OMPI_CXX=" not in env
+    assert "mixed-prefix" in env or "mixed prefix" in env
+    assert "command -v mpicc" not in build
+    assert "command -v mpicxx" not in build
 
 
 def test_romeo_676_serial_gate_runs_if08_then_eu01() -> None:
@@ -108,6 +124,10 @@ def test_romeo_676_mpi_gate_launches_if01_with_srun_two_ranks() -> None:
     assert "romeo_676_validate.py" in text
     assert "run_verification.py" in text
     assert "FI_PROVIDER=tcp" in text
+    assert "srun" in text and "romeo_676_validate.py" in text
+    run_at = text.index("run_verification.py")
+    validate_at = text.rindex("romeo_676_validate.py")
+    assert "srun" in text[run_at:validate_at]
     assert "#SBATCH --ntasks=2" in text
     nodes = [
         line for line in text.splitlines() if line.startswith("#SBATCH --nodes=")

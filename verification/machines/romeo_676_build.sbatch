@@ -51,12 +51,22 @@ if [ "$MPI" = "on" ]; then
   # fails OFI getinfo; do not export this for the later srun gates.
   export FI_PROVIDER=tcp
   # FindMPI leaves include/lib identity empty when the wrapper is already
-  # CMAKE_CXX_COMPILER. Interrogate mpicc/mpicxx and compile with gcc/g++.
-  CMAKE_C="$(mpicc -show | awk '{print $1}')"
-  CMAKE_CXX="$(mpicxx -show | awk '{print $1}')"
+  # CMAKE_CXX_COMPILER. Use the MPI_HOME prefix wrappers and compile with gcc/g++.
+  MPICC="${MPI_HOME}/bin/mpicc"
+  MPICXX="${MPI_HOME}/bin/mpicxx"
+  if [ ! -x "$MPICC" ] || [ ! -x "$MPICXX" ]; then
+    echo "ERROR: mpicc/mpicxx missing under ${MPI_HOME}/bin" >&2
+    exit 1
+  fi
+  CMAKE_C="$("$MPICC" -show | awk '{print $1}')"
+  CMAKE_CXX="$("$MPICXX" -show | awk '{print $1}')"
   CMAKE_MPI_FLAGS=(
-    -DMPI_CXX_COMPILER="$(command -v mpicxx)"
-    -DMPI_C_COMPILER="$(command -v mpicc)"
+    -DMPI_CXX_COMPILER="$MPICXX"
+    -DMPI_C_COMPILER="$MPICC"
+    -DMPI_CXX_INCLUDE_DIRS="${MPI_HOME}/include"
+    -DMPI_C_INCLUDE_PATH="${MPI_HOME}/include"
+    -DMPI_CXX_LIBRARIES="${MPI_HOME}/lib/libmpi.so"
+    -DMPI_C_LIBRARIES="${MPI_HOME}/lib/libmpi.so"
   )
   if [ ! -f "${MPI_HOME}/include/mpi.h" ] || [ ! -f "${MPI_HOME}/lib/libmpi.so" ]; then
     echo "ERROR: MPICH include/libmpi.so missing under ${MPI_HOME}" >&2

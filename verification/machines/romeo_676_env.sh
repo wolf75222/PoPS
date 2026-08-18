@@ -46,10 +46,21 @@ pops676_load_mpi_hdf5() {
     echo "ERROR: mpi.h missing under ${MPI_HOME}/include" >&2
     exit 1
   fi
-  if command -v mpicxx >/dev/null 2>&1; then
-    export CC=mpicc CXX=mpicxx
-    export OMPI_CC="${CC}" OMPI_CXX="${CXX}"
+  if [ ! -x "${MPI_HOME}/bin/mpicc" ] || [ ! -x "${MPI_HOME}/bin/mpicxx" ]; then
+    echo "ERROR: mpicc/mpicxx missing under ${MPI_HOME}/bin" >&2
+    exit 1
   fi
+  export PATH="${MPI_HOME}/bin:${PATH}"
+  resolved_cc="$(command -v mpicc)"
+  resolved_cxx="$(command -v mpicxx)"
+  if [ "$resolved_cc" != "${MPI_HOME}/bin/mpicc" ] || [ "$resolved_cxx" != "${MPI_HOME}/bin/mpicxx" ]; then
+    echo "ERROR: mixed-prefix MPI wrappers: mpicc=${resolved_cc} mpicxx=${resolved_cxx} (expected ${MPI_HOME}/bin)" >&2
+    exit 1
+  fi
+  export CC="${MPI_HOME}/bin/mpicc"
+  export CXX="${MPI_HOME}/bin/mpicxx"
+  unset OMPI_CC
+  unset OMPI_CXX
   export HYDRA_LAUNCHER="${HYDRA_LAUNCHER:-fork}"
   export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 }
