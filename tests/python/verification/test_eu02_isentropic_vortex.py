@@ -509,3 +509,47 @@ def test_compare_smokes_records_truthful_leaves_ranks_threads():
     assert report["serial_vs_mpi"]["bit_identical"] is False
     assert "linf" in report["serial_vs_mpi"]
     assert "l2" in report["serial_vs_openmp"]
+
+
+def test_compare_smokes_from_dirs_does_not_require_one_installed_leaf(tmp_path: Path):
+    analyze = _load("analyze")
+    field = np.ones((4, 4, 4), dtype=np.float64)
+
+    def write_smoke(root: Path, leaf: str, ranks: int, threads: int, space: str, mpi_on: bool, values):
+        job = root / "n016"
+        job.mkdir(parents=True)
+        np.save(job / "result.npy", values)
+        (job / "provenance.json").write_text(
+            json.dumps(
+                {
+                    "kokkos_execution_space": space,
+                    "mpi_enabled": mpi_on,
+                    "mpi_ranks": ranks,
+                    "omp_threads_per_rank": threads,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (job / "native_artifact.json").write_text(
+            json.dumps({"sha256": leaf, "path": str(root / "leaf.so"), "dimension": 2}) + "\n",
+            encoding="utf-8",
+        )
+        (job / "resolved_case.json").write_text(
+            json.dumps({"job": {"resources": {"mpi_ranks": ranks, "omp_threads": threads}}}) + "\n",
+            encoding="utf-8",
+        )
+        (root / "series.json").write_text(
+            json.dumps({"case_id": "EU-02", "jobs": ["n016"]}) + "\n",
+            encoding="utf-8",
+        )
+
+    write_smoke(tmp_path / "serial", "leaf-serial", 1, 1, "KokkosSerial", False, field)
+    write_smoke(tmp_path / "openmp", "leaf-openmp", 1, 4, "KokkosOpenMP", False, field)
+    write_smoke(tmp_path / "mpi", "leaf-mpi", 2, 1, "KokkosSerial", True, field + 1.0e-12)
+    report = analyze.compare_smokes_from_dirs(tmp_path / "serial", tmp_path / "openmp", tmp_path / "mpi")
+    assert report["serial"]["leaf"] == "leaf-serial"
+    assert report["openmp"]["threads"] == 4
+    assert report["mpi"]["ranks"] == 2
+    assert report["serial_vs_openmp"]["bit_identical"] is True
+    assert report["serial_vs_mpi"]["bit_identical"] is False

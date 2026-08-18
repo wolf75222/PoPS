@@ -1036,20 +1036,26 @@ def compare_smokes(serial: Mapping, openmp: Mapping, mpi: Mapping) -> dict[str, 
 
 
 def compare_smokes_from_dirs(serial_dir, openmp_dir, mpi_dir) -> dict[str, Any]:
-    """Load n=16 smoke EvidenceBundles and compare fields plus truthful identity."""
-    from verification.pops_verify.evidence_bundle import EvidenceBundle
+    """Load n=16 smoke job files. Does not re-auth one installed leaf across backends."""
+
+    def _job_root(path: Path) -> Path:
+        series = path / "series.json"
+        if series.is_file():
+            names = json.loads(series.read_text(encoding="utf-8")).get("jobs") or []
+            if names:
+                return path / names[0]
+        return path
 
     def _load(path) -> dict[str, Any]:
-        bundle = EvidenceBundle(path)
-        record = bundle.records[0]
-        provenance = record["provenance"]
-        native = record.get("native_artifact") or {}
-        resolved = record.get("resolved_case") or {}
+        root = _job_root(Path(path))
+        provenance = json.loads((root / "provenance.json").read_text(encoding="utf-8"))
+        native = json.loads((root / "native_artifact.json").read_text(encoding="utf-8"))
+        resolved = json.loads((root / "resolved_case.json").read_text(encoding="utf-8"))
         job = resolved.get("job") if isinstance(resolved.get("job"), Mapping) else {}
         resources = job.get("resources") if isinstance(job.get("resources"), Mapping) else {}
         return {
             "label": str(provenance.get("kokkos_execution_space") or ""),
-            "field": np.asarray(record["result"], dtype=np.float64),
+            "field": np.asarray(np.load(root / "result.npy"), dtype=np.float64),
             "leaf": str(native.get("sha256") or provenance.get("native_variant_manifest_digest") or ""),
             "ranks": int(provenance.get("mpi_ranks") or resources.get("mpi_ranks") or 1),
             "threads": int(
