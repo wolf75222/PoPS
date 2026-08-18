@@ -199,6 +199,61 @@ PRODUCERS: dict[str, Callable[..., Any]] = {
     "TM-01": _oracle_tm01,
 }
 
+CASE_SOURCES = {
+    "TR-02": ("transport", "gaussian_pulse"),
+    "TR-06": ("transport", "axis_permutation"),
+    "TR-07": ("transport", "discontinuous_slot"),
+    "EU-01": ("euler", "linear_waves"),
+    "EU-02": ("euler", "isentropic_vortex"),
+    "EU-04": ("euler", "standing_acoustic"),
+    "EU-05": ("euler", "gresho"),
+    "EU-06": ("euler", "uniform_flow"),
+    "PO-01": ("poisson", "periodic_trig"),
+    "PO-03": ("poisson", "neumann_nullspace"),
+    "TM-01": ("time", "pure_temporal"),
+}
+
+
+def _oracle_tr06_pair(resolved, result, provenance):
+    exact = _exact("transport", "axis_permutation")
+    n_cells = _n_cells(result, resolved)
+    t = _time(provenance)
+    return _averages_2d(lambda x, y: exact.exact_product(y, x, t), n_cells)
+
+
+def producer_source_files(case_id: str) -> list[Path]:
+    files = [Path(__file__).resolve()]
+    spec = CASE_SOURCES.get(str(case_id))
+    if spec is not None:
+        files.append((CASES / spec[0] / spec[1] / "exact.py").resolve())
+    return files
+
+
+def hash_producer_files(case_id: str) -> dict[str, str]:
+    from verification.pops_verify.capabilities import sha256_file
+
+    manifest: dict[str, str] = {}
+    for path in producer_source_files(case_id):
+        manifest[str(path.relative_to(REPO_ROOT))] = sha256_file(path)
+    return manifest
+
+
+def produce_paired_oracle(
+    case_id: str,
+    resolved: Mapping[str, Any],
+    result: Any,
+    provenance: Mapping[str, Any],
+) -> np.ndarray:
+    if str(case_id) != "TR-06":
+        raise OracleProducerError(f"no paired oracle producer for {case_id}")
+    oracle = np.ascontiguousarray(
+        np.asarray(_oracle_tr06_pair(resolved, result, provenance), dtype=np.float64)
+    )
+    field = np.asarray(result, dtype=np.float64)
+    if oracle.shape != field.shape:
+        raise OracleProducerError("paired oracle shape does not match pair result")
+    return oracle
+
 
 def produce_oracle(
     case_id: str,

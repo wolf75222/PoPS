@@ -1,14 +1,18 @@
 """Load a completed runner job or series directory as the only trust root.
 
-The constructor performs every check. A hand-built dataclass, in-memory
-mapping, or missing leaf path is never accepted.
+The constructor performs every check against the installed leaf authority.
+A hand-built dataclass, private variants root, symlink, or in-memory
+mapping is never accepted.
 """
 from __future__ import annotations
 
 import json
+import re
+import stat
 import subprocess
 from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import numpy as np
@@ -16,6 +20,7 @@ from jsonschema import Draft202012Validator
 
 from verification.pops_verify.capabilities import (
     authenticate_installed_artifact,
+    resolve_variants_root,
     sha256_file,
 )
 from verification.pops_verify.evidence_contract import (
@@ -24,15 +29,57 @@ from verification.pops_verify.evidence_contract import (
     REQUIRED_PAIR_FILES,
     read_digest_file,
 )
-from verification.pops_verify.oracle_producers import OracleProducerError, produce_oracle
+from verification.pops_verify.oracle_producers import (
+    OracleProducerError,
+    hash_producer_files,
+    produce_oracle,
+    produce_paired_oracle,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_METRICS = REPO_ROOT / "schemas" / "verification_metrics.v1.json"
 SCHEMA_PROVENANCE = REPO_ROOT / "schemas" / "verification_provenance.v1.json"
+SAFE_JOB_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+MAX_RESULT_NDIM = 3
+MAX_RESULT_ELEMS = 4_000_000
+JOB_PINNED_FILES = (
+    "resolved_case.json",
+    "resolved_case.sha256",
+    "provenance.json",
+    "metrics.json",
+    "result.npy",
+    "result.sha256",
+    "program.bin",
+    "program.sha256",
+    "native_artifact.json",
+    "producer_manifest.json",
+)
 
 
 class EvidenceError(ValueError):
     """Raised when on-disk evidence cannot be authenticated."""
+
+
+def sample_spacing(
+    case_id: str,
+    provenance: Mapping[str, Any],
+    resolved: Mapping[str, Any],
+    result: Any,
+) -> float:
+    """Return Δx, or TM-01 Δt from the trusted resolved job — never 1/N."""
+    if str(case_id) == "TM-01":
+        job = resolved.get("job") if isinstance(resolved.get("job"), Mapping) else {}
+        if job.get("dt") is None:
+            raise EvidenceError("TM-01 requires dt in resolved job")
+        dt = float(job["dt"])
+        if not np.isfinite(dt) or dt <= 0.0:
+            raise EvidenceError("TM-01 dt must be a positive finite value")
+        n_cells = int(job.get("min_resolution") or (provenance.get("resolution") or [64])[0])
+        if n_cells != 64:
+            raise EvidenceError("TM-01 uses fixed N=64")
+        return dt
+    resolution = provenance.get("resolution") or [int(np.asarray(result).shape[-1])]
+    return 1.0 / float(resolution[0])
 
 
 def _hex64(value: Any) -> bool:
@@ -43,22 +90,6 @@ def _hex64(value: Any) -> bool:
     except ValueError:
         return False
     return True
-
-
-def _require_files(job_dir: Path, names: tuple[str, ...], *, label: str) -> None:
-    missing = [name for name in names if not (job_dir / name).is_file()]
-    if missing:
-        raise EvidenceError(f"missing {label}: {missing}")
-
-
-def _require_digest(path: Path, digest_path: Path, *, label: str) -> str:
-    if not path.is_file():
-        raise EvidenceError(f"missing {label} path")
-    digest = read_digest_file(digest_path)
-    actual = sha256_file(path)
-    if digest != actual:
-        raise EvidenceError(f"{label} digest mismatch")
-    return actual
 
 
 def _repository_sha(repo: Path = REPO_ROOT) -> str:
@@ -75,6 +106,19 @@ def _repository_sha(repo: Path = REPO_ROOT) -> str:
     return sha
 
 
+def _repository_dirty(repo: Path = REPO_ROOT) -> bool:
+    completed = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise EvidenceError("cannot read repository status")
+    return bool(completed.stdout.strip())
+
+
 def _validate_schema(document: Mapping[str, Any], schema_path: Path, *, label: str) -> None:
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     Draft202012Validator.check_schema(schema)
@@ -83,14 +127,123 @@ def _validate_schema(document: Mapping[str, Any], schema_path: Path, *, label: s
     ).validate(document)
 
 
-def _load_json(path: Path) -> dict[str, Any]:
+def _reject_symlink(path: Path, *, label: str) -> None:
     try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        info = path.lstat()
+    except OSError as exc:
+        raise EvidenceError(f"missing {label} path") from exc
+    if stat.S_ISLNK(info.st_mode):
+        raise EvidenceError(f"symlinked {label} is not accepted")
+
+
+def _safe_read_bytes(path: Path, *, label: str) -> bytes:
+    _reject_symlink(path, label=label)
+    before = path.lstat()
+    data = path.read_bytes()
+    after = path.lstat()
+    if (before.st_dev, before.st_ino, before.st_size) != (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+    ):
+        raise EvidenceError(f"{label} changed during read")
+    if stat.S_ISLNK(after.st_mode):
+        raise EvidenceError(f"symlinked {label} is not accepted")
+    return data
+
+
+def _safe_sha256(path: Path, *, label: str) -> str:
+    import hashlib
+
+    digest = hashlib.sha256(_safe_read_bytes(path, label=label)).hexdigest()
+    return digest
+
+
+def _pinned_under(root: Path, name: str, *, label: str) -> Path:
+    if Path(name).name != name or "/" in name or "\\" in name or name in {".", ".."}:
+        raise EvidenceError(f"{label} escapes job root")
+    path = root / name
+    _reject_symlink(path, label=label)
+    resolved = path.resolve()
+    root_resolved = root.resolve()
+    try:
+        resolved.relative_to(root_resolved)
+    except ValueError as exc:
+        raise EvidenceError(f"{label} escapes job root") from exc
+    return path
+
+
+def _safe_job_name(name: Any) -> str:
+    if not isinstance(name, str) or not SAFE_JOB_NAME.fullmatch(name):
+        raise EvidenceError("job name must be one safe relative component")
+    if name.startswith(".") or ".." in name:
+        raise EvidenceError("job name escape")
+    return name
+
+
+def _resolve_job_dir(series_root: Path, name: str) -> Path:
+    safe = _safe_job_name(name)
+    _reject_symlink(series_root, label="series")
+    job_dir = series_root / safe
+    _reject_symlink(job_dir, label="job")
+    resolved = job_dir.resolve()
+    root_resolved = series_root.resolve()
+    if resolved.parent != root_resolved:
+        raise EvidenceError("job name escape")
+    if not job_dir.is_dir():
+        raise EvidenceError(f"missing job directory: {safe}")
+    return job_dir
+
+
+def _load_json(path: Path, *, label: str) -> dict[str, Any]:
+    raw = _safe_read_bytes(path, label=label)
+    try:
+        document = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
         raise EvidenceError(f"cannot read {path.name}") from exc
     if not isinstance(document, dict):
         raise EvidenceError(f"{path.name} must be a JSON object")
     return document
+
+
+def _require_digest(path: Path, digest_path: Path, *, label: str) -> str:
+    digest = read_digest_file(digest_path)
+    actual = _safe_sha256(path, label=label)
+    if digest != actual:
+        raise EvidenceError(f"{label} digest mismatch")
+    return actual
+
+
+def _load_numeric_npy(path: Path, *, label: str) -> np.ndarray:
+    _reject_symlink(path, label=label)
+    before = path.lstat()
+    try:
+        with path.open("rb") as handle:
+            loaded = np.load(handle, allow_pickle=False)
+    except (ValueError, OSError) as exc:
+        raise EvidenceError(f"{label} pickle/dtype/shape is not accepted") from exc
+    after = path.lstat()
+    if (before.st_dev, before.st_ino, before.st_size) != (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+    ):
+        raise EvidenceError(f"{label} changed during read")
+    if not isinstance(loaded, np.ndarray):
+        raise EvidenceError(f"{label} must be a numeric ndarray")
+    if loaded.ndim == 0 or loaded.ndim > MAX_RESULT_NDIM:
+        raise EvidenceError(f"{label} shape is not accepted")
+    if loaded.size > MAX_RESULT_ELEMS:
+        raise EvidenceError(f"{label} shape is not accepted")
+    if loaded.size == 0:
+        raise EvidenceError(f"{label} shape is not accepted")
+    if not np.issubdtype(loaded.dtype, np.number) or np.issubdtype(loaded.dtype, np.complexfloating):
+        raise EvidenceError(f"{label} dtype is not accepted")
+    array = np.ascontiguousarray(loaded, dtype=np.float64)
+    if not np.all(np.isfinite(array)):
+        raise EvidenceError(f"{label} contains non-finite values")
+    array.flags.writeable = False
+    return array
 
 
 def _job_identity(resolved: Mapping[str, Any]) -> tuple[str, int, str, str]:
@@ -114,19 +267,89 @@ def _job_identity(resolved: Mapping[str, Any]) -> tuple[str, int, str, str]:
     return case_id, int(dimension), space, mpi_mode
 
 
-def _load_job(job_dir: Path) -> dict[str, Any]:
-    _require_files(job_dir, REQUIRED_JOB_FILES, label="job files")
-    resolved = _load_json(job_dir / "resolved_case.json")
-    resolved_digest = _require_digest(
-        job_dir / "resolved_case.json",
-        job_dir / "resolved_case.sha256",
-        label="resolved",
+def _authenticate_installed_leaf(identity_doc: Mapping[str, Any], dimension: int):
+    documented = str(identity_doc.get("sha256") or "")
+    if not _hex64(documented):
+        raise EvidenceError("native artifact leaf digest mismatch")
+    raw_path = Path(str(identity_doc.get("path") or ""))
+    if not raw_path.is_file():
+        raise EvidenceError(f"native variant path is absent: {raw_path}")
+    _reject_symlink(raw_path, label="leaf")
+    try:
+        installed_root = resolve_variants_root(None)
+        authenticated = authenticate_installed_artifact(
+            dimension=dimension,
+            variants_root=installed_root,
+            doctor_ok=False,
+        )
+    except Exception as exc:
+        raise EvidenceError(f"installed leaf authentication failed: {exc}") from exc
+    leaf = raw_path.resolve()
+    installed = Path(authenticated.path).resolve()
+    if leaf != installed:
+        raise EvidenceError("native_artifact.path is not the installed leaf")
+    live = sha256_file(installed)
+    if live != authenticated.sha256 or live != documented:
+        raise EvidenceError("live leaf digest mismatch")
+    return authenticated, live
+
+
+def _analyze_tr06_pair(
+    job_dir: Path,
+    *,
+    case_id: str,
+    resolved: Mapping[str, Any],
+    provenance: Mapping[str, Any],
+    result: np.ndarray,
+    program_digest: str,
+) -> tuple[np.ndarray, str, str, float]:
+    for name in REQUIRED_PAIR_FILES:
+        _pinned_under(job_dir, name, label=name)
+    pair_digest = _require_digest(
+        job_dir / "pair_result.npy",
+        job_dir / "pair_result.sha256",
+        label="pair result",
     )
-    provenance = _load_json(job_dir / "provenance.json")
-    metrics = _load_json(job_dir / "metrics.json")
+    pair_program_digest = _require_digest(
+        job_dir / "pair_program.bin",
+        job_dir / "pair_program.sha256",
+        label="pair program",
+    )
+    if pair_program_digest == program_digest:
+        raise EvidenceError("TR-06 pair program identity must be distinct")
+    pair_result = _load_numeric_npy(job_dir / "pair_result.npy", label="pair result")
+    if pair_result.shape != result.shape:
+        raise EvidenceError("TR-06 pair result shape mismatch")
+    try:
+        pair_oracle = produce_paired_oracle(case_id, resolved, pair_result, provenance)
+    except OracleProducerError as exc:
+        raise EvidenceError(str(exc)) from exc
+    pair_linf = float(np.max(np.abs(pair_result - pair_oracle)))
+    bound = 10.0 * (float(np.max(np.abs(pair_oracle))) + 1.0)
+    if not np.isfinite(pair_linf) or pair_linf > bound:
+        raise EvidenceError("TR-06 pair result does not match the independent paired oracle")
+    return pair_result, pair_digest, pair_program_digest, pair_linf
+
+
+def _load_job(job_dir: Path, *, expected_case_id: str | None = None) -> dict[str, Any]:
+    _reject_symlink(job_dir, label="job")
+    for name in JOB_PINNED_FILES:
+        _pinned_under(job_dir, name, label=name)
+    missing = [name for name in REQUIRED_JOB_FILES if not (job_dir / name).is_file()]
+    if missing:
+        raise EvidenceError(f"missing job files: {missing}")
+    resolved_path = job_dir / "resolved_case.json"
+    resolved = _load_json(resolved_path, label="resolved")
+    resolved_digest = _require_digest(
+        resolved_path, job_dir / "resolved_case.sha256", label="resolved"
+    )
+    provenance = _load_json(job_dir / "provenance.json", label="provenance")
+    metrics = _load_json(job_dir / "metrics.json", label="metrics")
     _validate_schema(provenance, SCHEMA_PROVENANCE, label="provenance")
     _validate_schema(metrics, SCHEMA_METRICS, label="metrics")
     case_id, dimension, space, mpi_mode = _job_identity(resolved)
+    if expected_case_id is not None and case_id != expected_case_id:
+        raise EvidenceError("copied record case_id does not match series")
     if str(provenance.get("case_id")) != case_id:
         raise EvidenceError("provenance case_id does not match resolved case")
     if int(provenance.get("pops_native_dim") or 0) != dimension:
@@ -135,46 +358,42 @@ def _load_job(job_dir: Path) -> dict[str, Any]:
         raise EvidenceError("provenance dimension does not match resolved case")
     if str(provenance.get("kokkos_execution_space")) != space:
         raise EvidenceError("provenance execution space does not match resolved case")
-    mpi_enabled = bool(provenance.get("mpi_enabled"))
-    if mpi_enabled != (mpi_mode == "on"):
+    if bool(provenance.get("mpi_enabled")) != (mpi_mode == "on"):
         raise EvidenceError("provenance MPI does not match resolved case")
     if str(provenance.get("repository_sha")) != _repository_sha():
         raise EvidenceError("repository SHA mismatch")
+    stored_producers = _load_json(job_dir / "producer_manifest.json", label="producer")
+    live_producers = hash_producer_files(case_id)
+    if stored_producers != live_producers:
+        raise EvidenceError("oracle producer files do not match the manifest")
+    if _repository_dirty() and stored_producers != live_producers:
+        raise EvidenceError("dirty checkout")
     program_digest = _require_digest(
-        job_dir / "program.bin",
-        job_dir / "program.sha256",
-        label="program",
+        job_dir / "program.bin", job_dir / "program.sha256", label="program"
     )
     result_digest = _require_digest(
-        job_dir / "result.npy",
-        job_dir / "result.sha256",
-        label="result",
+        job_dir / "result.npy", job_dir / "result.sha256", label="result"
     )
-    result = np.ascontiguousarray(np.load(job_dir / "result.npy"), dtype=np.float64)
-    identity_doc = _load_json(job_dir / "native_artifact.json")
-    leaf = Path(str(identity_doc.get("path") or ""))
-    if not leaf.is_file():
-        raise EvidenceError(f"native variant path is absent: {leaf}")
-    leaf_digest = sha256_file(leaf)
-    documented = str(identity_doc.get("sha256") or "")
-    if not _hex64(documented) or leaf_digest != documented:
-        raise EvidenceError("native artifact leaf digest mismatch")
-    artifact_dim = identity_doc.get("dimension")
-    if artifact_dim != dimension:
-        raise EvidenceError("native artifact dimension does not match resolved case")
-    variants_root = Path(str(identity_doc.get("variants_root") or ""))
-    try:
-        authenticated = authenticate_installed_artifact(
-            dimension=int(artifact_dim),
-            variants_root=variants_root,
-            doctor_ok=False,
+    result = _load_numeric_npy(job_dir / "result.npy", label="result")
+    pair_result = None
+    pair_digest = ""
+    pair_program_digest = ""
+    pair_linf = None
+    if case_id == "TR-06":
+        pair_result, pair_digest, pair_program_digest, pair_linf = _analyze_tr06_pair(
+            job_dir,
+            case_id=case_id,
+            resolved=resolved,
+            provenance=provenance,
+            result=result,
+            program_digest=program_digest,
         )
-    except Exception as exc:
-        raise EvidenceError(f"leaf authentication failed: {exc}") from exc
-    if sha256_file(authenticated.path) != leaf_digest:
-        raise EvidenceError("rehashed leaf does not match native_artifact identity")
-    if authenticated.sha256 != documented:
-        raise EvidenceError("authenticated leaf digest mismatch")
+    try:
+        oracle = produce_oracle(case_id, resolved, result, provenance)
+    except OracleProducerError as exc:
+        raise EvidenceError(str(exc)) from exc
+    identity_doc = _load_json(job_dir / "native_artifact.json", label="native artifact")
+    authenticated, leaf_digest = _authenticate_installed_leaf(identity_doc, dimension)
     if authenticated.dimension != dimension:
         raise EvidenceError("authenticated leaf dimension mismatch")
     if str(provenance.get("native_header_signature")) != authenticated.native_header_signature:
@@ -186,30 +405,7 @@ def _load_job(job_dir: Path) -> dict[str, Any]:
         != authenticated.native_variant_manifest_digest
     ):
         raise EvidenceError("variant manifest digest mismatch")
-    pair_result = None
-    pair_digest = ""
-    if case_id == "TR-06":
-        _require_files(job_dir, REQUIRED_PAIR_FILES, label="pair")
-        pair_digest = _require_digest(
-            job_dir / "pair_result.npy",
-            job_dir / "pair_result.sha256",
-            label="pair result",
-        )
-        _require_digest(
-            job_dir / "pair_program.bin",
-            job_dir / "pair_program.sha256",
-            label="pair program",
-        )
-        pair_result = np.ascontiguousarray(
-            np.load(job_dir / "pair_result.npy"), dtype=np.float64
-        )
-    try:
-        oracle = produce_oracle(case_id, resolved, result, provenance)
-    except OracleProducerError as exc:
-        raise EvidenceError(str(exc)) from exc
-    resolution = provenance.get("resolution") or [result.shape[-1]]
-    n_cells = int(resolution[0]) if resolution else int(result.shape[-1])
-    spacing = 1.0 / float(n_cells)
+    spacing = sample_spacing(case_id, provenance, resolved, result)
     linf = float(np.max(np.abs(result - oracle)))
     record = {
         "case_id": case_id,
@@ -224,30 +420,34 @@ def _load_job(job_dir: Path) -> dict[str, Any]:
         "resolved_case_digest": resolved_digest,
         "pair_result": pair_result,
         "pair_result_digest": pair_digest,
-        "provenance": provenance,
-        "metrics": metrics,
-        "resolved_case": resolved,
+        "pair_program_digest": pair_program_digest,
+        "derived_linf": linf,
+        "derived_pair_linf": pair_linf,
+        "provenance": MappingProxyType(dict(provenance)),
+        "metrics": MappingProxyType(dict(metrics)),
+        "resolved_case": MappingProxyType(dict(resolved)),
     }
     coupling_path = job_dir / EXTENSION_SLOTS["coupling"]
     if coupling_path.is_file():
-        record["coupling_digest"] = sha256_file(coupling_path)
-    mask_path = job_dir / EXTENSION_SLOTS["amr_mask"]
-    if mask_path.is_file():
-        record["amr_mask_digest"] = sha256_file(mask_path)
-    record["derived_linf"] = linf
-    return record
+        _pinned_under(job_dir, EXTENSION_SLOTS["coupling"], label="coupling")
+        record["coupling_digest"] = _safe_sha256(coupling_path, label="coupling")
+    mask_name = EXTENSION_SLOTS["amr_mask"]
+    if (job_dir / mask_name).is_file():
+        _pinned_under(job_dir, mask_name, label="amr_mask")
+        record["amr_mask_digest"] = _safe_sha256(job_dir / mask_name, label="amr_mask")
+    return dict(record)
 
 
 class EvidenceBundle:
-    """Validated series or job directory. Constructor performs all checks."""
+    """Validated series directory. Constructor performs all checks."""
 
     __slots__ = (
-        "path",
-        "case_id",
-        "records",
-        "derived_linf",
-        "derived_spacings",
-        "_trusted",
+        "_path",
+        "_case_id",
+        "_records",
+        "_derived_linf",
+        "_derived_spacings",
+        "_derived_pair_linf",
     )
 
     def __new__(cls, path=None, *args, **kwargs):
@@ -261,37 +461,36 @@ class EvidenceBundle:
         root = Path(path)
         if not root.is_dir():
             raise EvidenceError(f"missing evidence path: {root}")
+        _reject_symlink(root, label="series")
         series_file = root / "series.json"
         if series_file.is_file():
-            series = _load_json(series_file)
+            _reject_symlink(series_file, label="series.json")
+            series = _load_json(series_file, label="series")
             case_id = str(series.get("case_id") or "")
             jobs = series.get("jobs")
             if not case_id or not isinstance(jobs, list) or not jobs:
                 raise EvidenceError("series.json missing case_id/jobs")
             records = []
             for name in jobs:
-                job_dir = root / str(name)
-                if not job_dir.is_dir():
-                    raise EvidenceError(f"missing job directory: {name}")
-                record = _load_job(job_dir)
+                record = _load_job(_resolve_job_dir(root, name), expected_case_id=case_id)
                 if record["case_id"] != case_id:
                     raise EvidenceError("copied record case_id does not match series")
-                records.append(record)
+                records.append(MappingProxyType(record))
         else:
-            records = [_load_job(root)]
-            case_id = str(records[0]["case_id"])
+            loaded = _load_job(root)
+            case_id = str(loaded["case_id"])
+            records = [MappingProxyType(loaded)]
         first = records[0]
         for record in records[1:]:
             if record["case_id"] != case_id:
                 raise EvidenceError("series mixes case_id values")
             if record["leaf_sha256"] != first["leaf_sha256"]:
                 raise EvidenceError("series mixes native leaf identities")
-            space = record["provenance"].get("kokkos_execution_space")
-            if space != first["provenance"].get("kokkos_execution_space"):
-                raise EvidenceError("series mixes execution spaces")
-            if record["provenance"].get("mpi_enabled") != first["provenance"].get(
-                "mpi_enabled"
+            if record["provenance"].get("kokkos_execution_space") != first["provenance"].get(
+                "kokkos_execution_space"
             ):
+                raise EvidenceError("series mixes execution spaces")
+            if record["provenance"].get("mpi_enabled") != first["provenance"].get("mpi_enabled"):
                 raise EvidenceError("series mixes MPI modes")
             if record["provenance"].get("pops_native_dim") != first["provenance"].get(
                 "pops_native_dim"
@@ -301,9 +500,50 @@ class EvidenceBundle:
                 "repository_sha"
             ):
                 raise EvidenceError("series mixes repository SHA")
-        self.path = root
-        self.case_id = case_id
-        self.records = tuple(records)
-        self.derived_linf = tuple(float(item["derived_linf"]) for item in records)
-        self.derived_spacings = tuple(float(item["sample_spacing"]) for item in records)
-        self._trusted = True
+        object.__setattr__(self, "_path", root)
+        object.__setattr__(self, "_case_id", case_id)
+        object.__setattr__(self, "_records", tuple(records))
+        object.__setattr__(
+            self, "_derived_linf", tuple(float(item["derived_linf"]) for item in records)
+        )
+        object.__setattr__(
+            self,
+            "_derived_spacings",
+            tuple(float(item["sample_spacing"]) for item in records),
+        )
+        object.__setattr__(
+            self,
+            "_derived_pair_linf",
+            tuple(
+                float(item["derived_pair_linf"])
+                for item in records
+                if item.get("derived_pair_linf") is not None
+            ),
+        )
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise EvidenceError("EvidenceBundle state is immutable")
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    @property
+    def case_id(self) -> str:
+        return self._case_id
+
+    @property
+    def records(self) -> tuple[Mapping[str, Any], ...]:
+        return self._records
+
+    @property
+    def derived_linf(self) -> tuple[float, ...]:
+        return self._derived_linf
+
+    @property
+    def derived_spacings(self) -> tuple[float, ...]:
+        return self._derived_spacings
+
+    @property
+    def derived_pair_linf(self) -> tuple[float, ...]:
+        return self._derived_pair_linf

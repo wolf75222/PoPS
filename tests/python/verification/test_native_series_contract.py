@@ -273,6 +273,7 @@ def test_contract_lists_required_job_files_and_parent_patch():
         "program.bin",
         "program.sha256",
         "native_artifact.json",
+        "producer_manifest.json",
     ):
         assert name in REQUIRED_JOB_FILES
     assert "result.npy" in PARENT_INTEGRATION_PATCH
@@ -529,13 +530,10 @@ def test_tr06_job_without_pair_files_is_rejected(tmp_path: Path):
         EvidenceBundle(job)
 
 
-def test_valid_bundle_reloads_after_restart(tmp_path: Path):
+def test_private_variants_root_cannot_authenticate(tmp_path: Path):
     series_dir, _root = _emit_series(tmp_path)
-    first = EvidenceBundle(series_dir)
-    assert first.case_id == "TR-02"
-    restarted = EvidenceBundle(Path(str(series_dir)))
-    assert restarted.case_id == first.case_id
-    np.testing.assert_allclose(restarted.derived_linf, first.derived_linf)
+    with pytest.raises(EvidenceError, match="leaf|installed|variants"):
+        EvidenceBundle(series_dir)
     summary = report_from_native_series(
         "TR-02",
         series_dir,
@@ -543,26 +541,165 @@ def test_valid_bundle_reloads_after_restart(tmp_path: Path):
         components=["transport"],
         threshold=1.8,
     )
-    assert summary["coverage"]["cases_passed"] == 1
-    assert summary["coverage"]["cases_failed"] == 0
-    _report_validator().validate(summary)
+    assert summary["coverage"]["cases_passed"] == 0
 
 
-def test_below_threshold_bundle_cannot_pass(tmp_path: Path):
+def test_report_never_accepts_prebuilt_bundle(tmp_path: Path):
+    series_dir, _root = _emit_series(tmp_path)
+    forged = object.__new__(EvidenceBundle)
+    try:
+        object.__setattr__(forged, "_trusted", True)
+        object.__setattr__(forged, "case_id", "TR-02")
+        object.__setattr__(forged, "derived_linf", (0.01, 0.0025, 0.000625))
+        object.__setattr__(forged, "derived_spacings", (1 / 16, 1 / 32, 1 / 64))
+    except Exception:
+        pass
+    summary = report_from_native_series(
+        "TR-02",
+        forged,
+        native_dimensions=[1],
+        components=["transport"],
+        threshold=1.8,
+    )
+    assert summary["coverage"]["cases_passed"] == 0
+    assert "_trusted" not in getattr(EvidenceBundle, "__slots__", ())
+    source = (
+        REPO_ROOT / "verification" / "pops_verify" / "native_evidence.py"
+    ).read_text(encoding="utf-8")
+    assert "_trusted" not in source
+    with pytest.raises((EvidenceError, AttributeError, TypeError)):
+        EvidenceBundle(series_dir).derived_linf = (0.0, 0.0)
+
+
+def test_series_job_name_rejects_escape_and_absolute(tmp_path: Path):
+    series_dir, _root = _emit_series(tmp_path)
+    (series_dir / "series.json").write_text(
+        json.dumps({"case_id": "TR-02", "jobs": ["../n016"]}) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(EvidenceError, match="job name|relative|escape"):
+        EvidenceBundle(series_dir)
+    (series_dir / "series.json").write_text(
+        json.dumps({"case_id": "TR-02", "jobs": [str(series_dir / "n016")]}) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(EvidenceError, match="job name|relative|escape"):
+        EvidenceBundle(series_dir)
+
+
+def test_symlinked_series_job_or_result_is_rejected(tmp_path: Path):
+    series_dir, _root = _emit_series(tmp_path)
+    target = tmp_path / "outside_result.npy"
+    np.save(target, np.ones(16))
+    result = series_dir / "n016" / "result.npy"
+    result.unlink()
+    result.symlink_to(target)
+    with pytest.raises(EvidenceError, match="symlink"):
+        EvidenceBundle(series_dir)
+
+
+def test_pickle_and_unbounded_npy_are_rejected(tmp_path: Path):
+    series_dir, _root = _emit_series(tmp_path)
+    path = series_dir / "n016" / "result.npy"
+    np.save(path, np.array([{"forged": True}], dtype=object))
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    (series_dir / "n016" / "result.sha256").write_text(digest + "\n", encoding="utf-8")
+    with pytest.raises(EvidenceError, match="pickle|dtype|shape|result"):
+        EvidenceBundle(series_dir)
+    source = (
+        REPO_ROOT / "verification" / "pops_verify" / "evidence_bundle.py"
+    ).read_text(encoding="utf-8")
+    assert "allow_pickle=False" in source
+
+
+def test_tm01_spacing_is_actual_dt_not_one_over_n():
+    from verification.pops_verify import evidence_bundle as eb
+
+    spacing = getattr(eb, "sample_spacing", None)
+    assert spacing is not None
+    exact = _load(REPO_ROOT / "verification" / "cases" / "time" / "pure_temporal", "exact")
+    resolved = {"job": {"case_id": "TM-01", "dt": exact.DT, "min_resolution": 64}}
+    provenance = {"resolution": [64], "cfl": float(exact.DT) * 64.0, "final_time": 0.01}
+    assert spacing("TM-01", provenance, resolved, np.zeros(64)) == pytest.approx(exact.DT)
+    assert spacing("TM-01", provenance, resolved, np.zeros(64)) != pytest.approx(1.0 / 64.0)
+    dts = []
+    for dt in exact.DT_SERIES:
+        dts.append(
+            spacing(
+                "TM-01",
+                provenance,
+                {"job": {"case_id": "TM-01", "dt": dt, "min_resolution": 64}},
+                np.zeros(64),
+            )
+        )
+    assert dts == list(exact.DT_SERIES)
+    assert len(set(np.round(dts, 16))) == len(exact.DT_SERIES)
+
+
+def test_tr06_pair_must_be_distinct_and_analyzed(tmp_path: Path):
+    root = _write_leaf(tmp_path, dimension=2)
+    job = tmp_path / "job"
+    field = np.ones((8, 8))
+    _emit_job(
+        job,
+        root,
+        case_id="TR-06",
+        n_cells=8,
+        dimension=2,
+        result=field,
+        pair_result=np.full((8, 8), 2.0),
+        program_bytes=b"program-bytes",
+        pair_program_bytes=b"program-bytes",
+    )
+    with pytest.raises(EvidenceError, match="pair"):
+        EvidenceBundle(job)
+    _emit_job(
+        tmp_path / "garbage",
+        root,
+        case_id="TR-06",
+        n_cells=8,
+        dimension=2,
+        result=field,
+        pair_result=np.full((8, 8), 99.0),
+        program_bytes=b"program-A",
+        pair_program_bytes=b"program-B",
+    )
+    with pytest.raises(EvidenceError, match="pair|oracle|permutation"):
+        EvidenceBundle(tmp_path / "garbage")
+
+
+def test_positive_fixture_never_passes_on_private_leaf(tmp_path: Path):
+    from verification.pops_verify.capabilities import CapabilityError, resolve_variants_root
+
+    series_dir, _root = _emit_series(tmp_path)
+    summary = report_from_native_series(
+        "TR-02",
+        series_dir,
+        native_dimensions=[1],
+        components=["transport"],
+    )
+    assert summary["coverage"]["cases_passed"] == 0
+    try:
+        resolve_variants_root(None)
+    except CapabilityError:
+        return
+    # Installed leaf may exist; a private-root series still cannot pass.
+    assert summary["coverage"]["cases_failed"] == 1
+
+
+def test_below_threshold_path_cannot_pass(tmp_path: Path):
     series_dir, _root = _emit_series(
         tmp_path,
         shifts={16: 0.08, 32: 0.03, 64: 0.011},
     )
     summary = report_from_native_series(
         "TR-02",
-        EvidenceBundle(series_dir),
+        series_dir,
         native_dimensions=[1],
         components=["transport"],
         threshold=1.8,
     )
     assert summary["coverage"]["cases_passed"] == 0
-    reasons = " ".join(item["reason"] for item in summary["failures"])
-    assert "threshold" in reasons.lower()
 
 
 def test_blocked_writers_reject_every_series(tmp_path: Path):
@@ -740,13 +877,14 @@ def test_metrics_and_provenance_from_untyped_dict_fail_closed():
 
 def test_typed_metrics_and_provenance_are_schema_valid(tmp_path: Path):
     series_dir, _root = _emit_series(tmp_path)
-    bundle = EvidenceBundle(series_dir)
     metrics = collect_metrics("TR-02", reason="no authenticated native series")
     Draft202012Validator(json.loads(SCHEMA_METRICS.read_text())).validate(metrics)
-    typed_metrics = metrics_from_native_series("TR-02", bundle)
-    Draft202012Validator(json.loads(SCHEMA_METRICS.read_text())).validate(typed_metrics)
-    provenance = provenance_from_native_series("TR-02", bundle)
-    Draft202012Validator(json.loads(SCHEMA_PROVENANCE.read_text())).validate(provenance)
+    with pytest.raises(NativeSeriesError):
+        metrics_from_native_series("TR-02", series_dir)
+    with pytest.raises(NativeSeriesError):
+        provenance_from_native_series("TR-02", {"result": [1.0]})
+    with pytest.raises(NativeSeriesError):
+        metrics_from_native_series("TR-02", object.__new__(EvidenceBundle))
 
 
 def _assert_1d_averages(run_fn, exact_fn, n_cells=32, length=1.0):

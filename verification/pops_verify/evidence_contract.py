@@ -23,9 +23,12 @@ Exact patch for ``_write_job_artifacts`` (and ``execute_jobs`` after a truthful
    - ``result``: ``numpy`` array from the payload (not a caller oracle);
    - ``program_bytes``: the compiled program image or serialized plan bytes
      already in the runner process — never ``repr(artifact)``;
-   - ``native_artifact``: a JSON mapping ``{path, sha256, dimension,
-     variants_root}`` copied from the parent-authenticated leaf (the runner
-     already holds ``AuthenticatedArtifact``; serialize those four fields only);
+   - ``native_artifact``: a JSON mapping ``{path, sha256, dimension}``
+     copied from the parent-authenticated leaf. ``variants_root`` may be
+     written for diagnostics but is **not** trusted; the loader pins
+     ``resolve_variants_root(None)`` and requires ``path`` to be that
+     installed leaf.
+   - ``producer_manifest.json``: SHA-256 of the case oracle producer files.
    - ``pair_result`` / ``pair_program_bytes`` when the payload has
      ``pair_result`` (TR-06).
 3. Write ``series.json`` at the case campaign directory listing each job
@@ -47,6 +50,7 @@ import numpy as np
 
 from verification.pops_verify.capabilities import sha256_file
 from verification.pops_verify.metrics import write_metrics
+from verification.pops_verify.oracle_producers import hash_producer_files
 from verification.pops_verify.provenance import write_provenance
 
 REQUIRED_JOB_FILES = (
@@ -59,6 +63,7 @@ REQUIRED_JOB_FILES = (
     "program.bin",
     "program.sha256",
     "native_artifact.json",
+    "producer_manifest.json",
 )
 
 REQUIRED_PAIR_FILES = (
@@ -126,7 +131,7 @@ def emit_job_directory(
         )
     if not isinstance(native_artifact, Mapping):
         raise EvidenceContractError("native_artifact must be a mapping")
-    required = {"path", "sha256", "dimension", "variants_root"}
+    required = {"path", "sha256", "dimension"}
     missing = required - set(native_artifact)
     if missing:
         raise EvidenceContractError(f"native_artifact missing {sorted(missing)}")
@@ -145,17 +150,25 @@ def emit_job_directory(
     _write_hashed_array(root / "result.npy", result, "result.sha256")
     _write_hashed_bytes(root / "program.bin", bytes(program_bytes), "program.sha256")
     artifact_path = root / "native_artifact.json"
-    artifact_path.write_text(
-        json.dumps(
-            {
-                "path": str(native_artifact["path"]),
-                "sha256": str(native_artifact["sha256"]),
-                "dimension": int(native_artifact["dimension"]),
-                "variants_root": str(native_artifact["variants_root"]),
-            },
-            indent=2,
-        )
-        + "\n",
+    artifact_doc = {
+        "path": str(native_artifact["path"]),
+        "sha256": str(native_artifact["sha256"]),
+        "dimension": int(native_artifact["dimension"]),
+    }
+    if "variants_root" in native_artifact:
+        artifact_doc["variants_root"] = str(native_artifact["variants_root"])
+    artifact_path.write_text(json.dumps(artifact_doc, indent=2) + "\n", encoding="utf-8")
+    case_id = ""
+    job = resolved_case.get("job") if isinstance(resolved_case.get("job"), Mapping) else {}
+    if isinstance(job, Mapping):
+        case_id = str(job.get("case_id") or "")
+    if not case_id:
+        case = resolved_case.get("case")
+        if isinstance(case, Mapping):
+            case_id = str(case.get("id") or "")
+    manifest_path = root / "producer_manifest.json"
+    manifest_path.write_text(
+        json.dumps(hash_producer_files(case_id), indent=2) + "\n",
         encoding="utf-8",
     )
     if pair_result is not None:

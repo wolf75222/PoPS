@@ -336,8 +336,8 @@ def passed_summary(
 
 
 def _as_bundle(evidence: Any) -> EvidenceBundle | None:
-    if isinstance(evidence, EvidenceBundle) and getattr(evidence, "_trusted", False) is True:
-        return evidence
+    if isinstance(evidence, EvidenceBundle):
+        return None
     if isinstance(evidence, (str, Path)):
         try:
             return EvidenceBundle(evidence)
@@ -348,7 +348,7 @@ def _as_bundle(evidence: Any) -> EvidenceBundle | None:
 
 def report_from_native_series(
     case_id: str,
-    native_series: EvidenceBundle | str | Path | None,
+    native_series: str | Path | None,
     *,
     native_dimensions: list[int],
     components: list[str],
@@ -415,6 +415,41 @@ def report_from_native_series(
             components=components,
             extra_reasons=extra_reasons,
         )
+    if case_id == "TR-06":
+        if len(bundle.derived_pair_linf) < 2:
+            return fail_closed_summary(
+                case_id,
+                "TR-06 pair result was not analyzed",
+                native_dimensions=native_dimensions,
+                components=components,
+                extra_reasons=extra_reasons,
+            )
+        try:
+            pair_orders = orders_from_native_errors(
+                case_id,
+                bundle.derived_pair_linf,
+                bundle.derived_spacings,
+                kind=kind,
+                variable=f"{variable}_pair",
+                threshold=threshold,
+            )
+        except ValueError:
+            return fail_closed_summary(
+                case_id,
+                "TR-06 pair permutation discrepancy is not an order series",
+                native_dimensions=native_dimensions,
+                components=components,
+                extra_reasons=extra_reasons,
+            )
+        if any(float(row["observed_order"]) < float(threshold) for row in pair_orders):
+            return fail_closed_summary(
+                case_id,
+                "TR-06 pair observed order below threshold",
+                native_dimensions=native_dimensions,
+                components=components,
+                extra_reasons=extra_reasons,
+            )
+        orders = list(orders) + list(pair_orders)
     return passed_summary(
         case_id,
         native_dimensions=native_dimensions,
