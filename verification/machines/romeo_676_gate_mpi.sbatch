@@ -67,7 +67,8 @@ srun "${SRUN_ARGS[@]}" \
   --execute \
   --output "$OUT"
 
-"$POPS_PYTHON" "$POPS676_SRC/verification/machines/romeo_676_validate.py" \
+srun "${SRUN_ARGS[@]}" \
+  "$POPS_PYTHON" "$POPS676_SRC/verification/machines/romeo_676_validate.py" \
   --gate "$GATE" \
   --output "$OUT" \
   --case "$CASE" \

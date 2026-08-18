@@ -165,26 +165,21 @@ def invoke_run_native(runner, request: CampaignRequest):
 
 
 def campaign_writer_rank() -> int:
-    for key in ("POPS_CAMPAIGN_RANK", "SLURM_PROCID", "OMPI_COMM_WORLD_RANK", "PMI_RANK"):
-        raw = os.environ.get(key)
-        if raw is not None and str(raw).strip() != "":
-            return int(raw)
-    try:
-        from pops._native_selector import selected_native_module
+    """Native communicator rank only. Launcher env is never a writer identity."""
+    from verification.pops_verify.mpi_world import native_world_rank
 
-        module = selected_native_module(required=False)
-        world = getattr(module, "mpi_world", None) if module is not None else None
-        if callable(world):
-            comm = world()
-            rank = getattr(comm, "rank", None)
-            if rank is not None:
-                return int(rank)
-    except Exception:
-        return 0
-    return 0
+    rank = native_world_rank(required=False)
+    return 0 if rank is None else int(rank)
 
 
 def is_campaign_writer_rank() -> bool:
+    """Serial rank 0 may write. An MPI singleton world must not write a ledger."""
+    from verification.pops_verify.mpi_world import native_has_mpi, native_world_size
+
+    if native_has_mpi():
+        size = native_world_size(required=False)
+        if size is None or int(size) < 2:
+            return False
     return campaign_writer_rank() == 0
 
 

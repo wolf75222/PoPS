@@ -203,37 +203,78 @@ def test_if01_request_returns_run_fields(monkeypatch):
     assert serial_fields["cfl"] == run.CFL
     assert serial_fields["time_program"] == "SSPRK2"
 
+    mpi = CampaignRequest.from_job(
+        CampaignJob(case_id="IF-01", pops_native_dim=1, mpi_mode="on", min_resolution=16)
+    )
+    monkeypatch.setenv("SLURM_NTASKS", "2")
+    monkeypatch.setenv("OMPI_COMM_WORLD_SIZE", "2")
+    monkeypatch.setenv("PMI_SIZE", "2")
+    with pytest.raises(run.NativeUnavailable, match="native|communicator|unavailable"):
+        run.campaign_run_fields(16, 0.25, mpi)
+
+
+def _patch_native_world(monkeypatch, *, size: int | None, rank: int = 0, has_mpi: bool = True):
+    import sys
+    import types
+
+    selector = types.ModuleType("pops._native_selector")
+    if size is None:
+        selector.selected_native_module = lambda *, required=False: None
+    else:
+
+        class _Module:
+            __has_mpi__ = has_mpi
+
+            def n_ranks(self):
+                return size
+
+            def my_rank(self):
+                return rank
+
+        selector.selected_native_module = lambda *, required=False: _Module()
+    monkeypatch.setitem(sys.modules, "pops._native_selector", selector)
+
+
+def test_if01_mpi_on_refuses_launcher_env_without_native_world(monkeypatch):
+    """Rejected job 695285: SLURM_NTASKS=2 without a native communicator."""
+    run = _load_case_module("run")
+    _patch_native_world(monkeypatch, size=None)
+    monkeypatch.setenv("SLURM_NTASKS", "2")
+    monkeypatch.setenv("OMPI_COMM_WORLD_SIZE", "2")
+    monkeypatch.setenv("PMI_SIZE", "2")
+    mpi = CampaignRequest.from_job(
+        CampaignJob(case_id="IF-01", pops_native_dim=1, mpi_mode="on", min_resolution=16)
+    )
+    with pytest.raises(run.NativeUnavailable, match="native|communicator|unavailable"):
+        run.discovered_mpi_ranks()
+    with pytest.raises(run.NativeUnavailable, match="native|communicator|unavailable"):
+        run.campaign_run_fields(16, 0.25, mpi)
+
+
+def test_if01_mpi_on_refuses_native_singleton_despite_slurm(monkeypatch):
+    """Rejected job 695285: two singleton MPI worlds under SLURM_NTASKS=2."""
+    run = _load_case_module("run")
+    _patch_native_world(monkeypatch, size=1, rank=0)
+    monkeypatch.setenv("SLURM_NTASKS", "2")
     monkeypatch.setenv("OMPI_COMM_WORLD_SIZE", "2")
     mpi = CampaignRequest.from_job(
         CampaignJob(case_id="IF-01", pops_native_dim=1, mpi_mode="on", min_resolution=16)
     )
-    mpi_fields = run.campaign_run_fields(16, 0.25, mpi)
-    assert mpi_fields["mpi_enabled"] is True
-    assert mpi_fields["mpi_ranks"] == 2
-    assert mpi_fields["mpi_library"] != "none"
-
-    monkeypatch.setenv("OMPI_COMM_WORLD_SIZE", "1")
-    with pytest.raises(run.NativeUnavailable, match="serial fallback"):
+    assert run.discovered_mpi_ranks() == 1
+    with pytest.raises(run.NativeUnavailable, match="serial fallback|1 rank"):
         run.campaign_run_fields(16, 0.25, mpi)
 
 
-def test_discovered_mpi_ranks_prefer_native_world_over_launcher(monkeypatch):
-    import sys
-    import types
-
+def test_if01_mpi_on_records_native_world_size_two(monkeypatch):
     run = _load_case_module("run")
-
-    class _Module:
-        def n_ranks(self):
-            return 1
-
-    selector = types.ModuleType("pops._native_selector")
-    selector.selected_native_module = lambda *, required=False: _Module()
-    monkeypatch.setitem(sys.modules, "pops._native_selector", selector)
-    monkeypatch.setenv("SLURM_NTASKS", "2")
-    monkeypatch.setenv("OMPI_COMM_WORLD_SIZE", "2")
-    monkeypatch.setenv("PMI_SIZE", "2")
-    assert run.discovered_mpi_ranks() == 1
+    _patch_native_world(monkeypatch, size=2, rank=0)
+    monkeypatch.setenv("SLURM_NTASKS", "1")
+    mpi = CampaignRequest.from_job(
+        CampaignJob(case_id="IF-01", pops_native_dim=1, mpi_mode="on", min_resolution=16)
+    )
+    fields = run.campaign_run_fields(16, 0.25, mpi)
+    assert fields["mpi_enabled"] is True
+    assert fields["mpi_ranks"] == 2
 
 
 def test_modules_do_not_hardcode_pops_run_except_run_native():

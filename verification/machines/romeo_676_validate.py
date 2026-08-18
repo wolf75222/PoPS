@@ -5,13 +5,12 @@ import argparse
 from pathlib import Path
 import hashlib
 import json
-import os
 import subprocess
-import sys
 
 from jsonschema import Draft202012Validator
 
 from verification.pops_verify.capabilities import authenticate_installed_artifact
+from verification.pops_verify.mpi_world import NativeWorldError, require_native_world_size
 
 
 def _sha256(path: Path) -> str:
@@ -116,10 +115,13 @@ def main(argv: list[str] | None = None) -> int:
             )
         if provenance.get("hdf5_collective_enabled") is not True:
             raise SystemExit(f"{args.gate}: provenance hdf5_collective_enabled is not true")
-        if int(os.environ.get("SLURM_NTASKS", "0") or 0) != 2:
-            print(
-                f"{args.gate}: warning SLURM_NTASKS={os.environ.get('SLURM_NTASKS')}",
-                file=sys.stderr,
+        try:
+            live_ranks = require_native_world_size(args.expect_ranks)
+        except NativeWorldError as exc:
+            raise SystemExit(f"{args.gate}: {exc}") from exc
+        if live_ranks != 2:
+            raise SystemExit(
+                f"{args.gate}: native world size {live_ranks} != 2"
             )
 
     print(

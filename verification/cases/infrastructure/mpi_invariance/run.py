@@ -183,25 +183,18 @@ def _native_unavailable_reason() -> str | None:
 
 
 def discovered_mpi_ranks() -> int:
-    """Return the live MPI world size, else the launcher size. Does not spawn ranks."""
-    try:
-        from pops._native_selector import selected_native_module
+    """Return the authenticated native communicator size. Does not spawn ranks.
 
-        module = selected_native_module(required=False)
-        if module is not None and callable(getattr(module, "n_ranks", None)):
-            return int(module.n_ranks())
-    except Exception:
-        pass
-    for key in (
-        "POPS_CAMPAIGN_RANKS",
-        "OMPI_COMM_WORLD_SIZE",
-        "PMI_SIZE",
-        "SLURM_NTASKS",
-    ):
-        raw = os.environ.get(key)
-        if raw is not None and str(raw).strip() != "":
-            return int(raw)
-    return 1
+    Launcher variables (OMPI/PMI/SLURM/POPS_CAMPAIGN_RANKS) are never a
+    substitute for ``n_ranks()``. Missing, throwing, or unselected native
+    worlds raise ``NativeUnavailable``.
+    """
+    from verification.pops_verify.mpi_world import NativeWorldError, native_world_size
+
+    try:
+        return int(native_world_size(required=True))
+    except NativeWorldError as exc:
+        raise NativeUnavailable(str(exc)) from exc
 
 
 def _hdf5_collective_enabled() -> bool:
@@ -217,7 +210,7 @@ def _hdf5_collective_enabled() -> bool:
 
 
 def campaign_run_fields(n_cells: int, t_end: float, request) -> dict[str, object]:
-    """Honest IF-01 campaign facts. MPI ranks come from the launcher, not a guess."""
+    """Honest IF-01 campaign facts. MPI ranks come from the native communicator."""
     count = int(n_cells)
     mpi_on = request is not None and getattr(request, "mpi_mode", "off") == "on"
     space = getattr(request, "execution_space", None) or "KokkosSerial"

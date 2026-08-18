@@ -995,9 +995,13 @@ def test_execute_writes_honest_provenance_from_returned_run_fields(tmp_path: Pat
     assert provenance["kokkos_execution_space"] == "KokkosSerial"
 
 
-def test_execute_writes_artifacts_only_on_rank_zero(tmp_path: Path):
+def test_execute_writes_artifacts_only_on_native_rank_zero(tmp_path: Path, monkeypatch):
+    """Launcher rank env must not suppress a serial ledger or invent an MPI writer."""
+    from verification.pops_verify.campaign import CampaignJob
+    from verification.pops_verify.capabilities import AuthenticatedArtifact
+
     fields = _honest_run_fields(n_cells=32)
-    manifest, _case_dir = _write_case_manifest(
+    _manifest, case_dir = _write_case_manifest(
         tmp_path,
         case_id="IF-08",
         run_py=(
@@ -1005,29 +1009,35 @@ def test_execute_writes_artifacts_only_on_rank_zero(tmp_path: Path):
             f"    return {fields!r}\n"
         ),
     )
-    leaf = _write_authenticated_leaf(tmp_path)
+    monkeypatch.setenv("POPS_CAMPAIGN_RANK", "0")
+    monkeypatch.setenv("SLURM_PROCID", "0")
+    _patch_runner_native(monkeypatch, size=2, rank=1, has_mpi=True)
+    runner = _load_runner()
     output = tmp_path / "out"
-    result = _run(
-        "--suite",
-        "pr",
-        "--dimensions",
-        "1",
-        "--max-nodes",
-        "2",
-        "--output",
-        str(output),
-        "--manifest",
-        str(manifest),
-        "--execute",
-        env={
-            "POPS_NATIVE_DIM": "1",
-            "POPS_NATIVE_VARIANTS_ROOT": str(leaf),
-            "POPS_CAMPAIGN_RANK": "1",
-        },
+    job = CampaignJob(case_id="IF-08", pops_native_dim=1, min_resolution=32, mpi_mode="on")
+    artifact = AuthenticatedArtifact(
+        dimension=1,
+        path=case_dir / "run.py",
+        sha256="0" * 64,
+        version="1.0.0",
+        abi_key="test",
+        has_mpi=True,
+        has_kokkos=True,
+        hdf5_collective=True,
+        doctor_ok=True,
+        native_variant_manifest_digest="0" * 64,
+        native_header_signature="0" * 64,
+        component_catalog_digest="0" * 64,
     )
-    assert result.returncode == 0, result.stderr
+    runner.execute_jobs(
+        [job],
+        [{"id": "IF-08", "path": str(case_dir / "run.py"), "requires": []}],
+        output,
+        artifact=artifact,
+        manifest={"current_capabilities": {}},
+    )
     assert not (output / "results.json").exists()
-    assert not (output / "IF-08" / "dim1-KokkosSerial-off" / "resolved_case.json").exists()
+    assert not (output / "IF-08" / "dim1-KokkosSerial-on" / "resolved_case.json").exists()
     assert not (output / "summary.json").exists()
 
 
@@ -1179,3 +1189,49 @@ finite = true
     rows = json.loads((output / "results.json").read_text(encoding="utf-8"))
     assert rows[0]["case_id"] == "IF-08"
     assert "run.py" in rows[0].get("path", "")
+
+
+def _patch_runner_native(monkeypatch, *, size: int | None, rank: int = 0, has_mpi: bool = True):
+    import sys
+    import types
+
+    selector = types.ModuleType("pops._native_selector")
+    if size is None:
+        selector.selected_native_module = lambda *, required=False: None
+    else:
+
+        class _Module:
+            __has_mpi__ = has_mpi
+
+            def n_ranks(self):
+                return size
+
+            def my_rank(self):
+                return rank
+
+        selector.selected_native_module = lambda *, required=False: _Module()
+    monkeypatch.setitem(sys.modules, "pops._native_selector", selector)
+
+
+def test_campaign_writer_rank_ignores_slurm_for_native_mpi_singleton(monkeypatch):
+    """Rejected job 695285: two singleton worlds must not write a rank-0 ledger."""
+    monkeypatch.setenv("SLURM_PROCID", "0")
+    monkeypatch.setenv("OMPI_COMM_WORLD_RANK", "0")
+    monkeypatch.setenv("PMI_RANK", "0")
+    _patch_runner_native(monkeypatch, size=1, rank=0, has_mpi=True)
+    runner = _load_runner()
+    assert runner.campaign_writer_rank() == 0
+    assert runner.is_campaign_writer_rank() is False
+
+
+def test_campaign_writer_rank_requires_native_rank_zero_of_two(monkeypatch):
+    monkeypatch.setenv("SLURM_PROCID", "1")
+    _patch_runner_native(monkeypatch, size=2, rank=0, has_mpi=True)
+    runner = _load_runner()
+    assert runner.campaign_writer_rank() == 0
+    assert runner.is_campaign_writer_rank() is True
+    _patch_runner_native(monkeypatch, size=2, rank=1, has_mpi=True)
+    runner = _load_runner()
+    monkeypatch.setenv("SLURM_PROCID", "0")
+    assert runner.campaign_writer_rank() == 1
+    assert runner.is_campaign_writer_rank() is False
