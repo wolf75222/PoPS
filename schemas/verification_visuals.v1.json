@@ -1,0 +1,550 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PoPS verification visuals v1",
+  "description": "JSON Schema for Phase 8 visual contracts (pops.verification.visuals.v1) and per-run visual manifests (pops.verification.visual_manifest.v1). Plan §40.2, §40.9, §40.11. An incompatible evolution requires a new schema version.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/visual_contract"
+    },
+    {
+      "$ref": "#/$defs/visual_manifest"
+    }
+  ],
+  "$defs": {
+    "non_empty_string": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sha_or_digest": {
+      "type": "string",
+      "minLength": 1
+    },
+    "figure_kind": {
+      "enum": [
+        "reference_comparison",
+        "spatial_convergence",
+        "temporal_convergence",
+        "field_snapshot",
+        "signed_error_field",
+        "absolute_error_field",
+        "invariants_vs_time",
+        "phase_amplitude",
+        "frequency_spectrum",
+        "symmetry_metric",
+        "amr_patch_map",
+        "coarse_fine_error",
+        "backend_parity",
+        "performance_breakdown",
+        "storyboard",
+        "animation",
+        "hero_figure",
+        "reference_profile",
+        "signed_error_profile",
+        "exact_field",
+        "numerical_field",
+        "linecuts",
+        "linecut",
+        "slice_xy",
+        "slice_xz",
+        "slice_yz",
+        "isosurface",
+        "amr_boxes",
+        "report_figure",
+        "orders_heatmap",
+        "amr_degradation",
+        "component_coverage",
+        "conservation_dashboard",
+        "poisson_dashboard",
+        "temporal_dashboard",
+        "amr_dashboard",
+        "performance_dashboard",
+        "failure_map"
+      ]
+    },
+    "figure_role": {
+      "enum": ["diagnostic", "publication", "hero", "storyboard", "animation"]
+    },
+    "data_kind": {
+      "enum": ["deterministic_fixture", "campaign"]
+    },
+    "verdict": {
+      "enum": ["pass", "fail", "not-supported", "not-run"]
+    },
+    "suite": {
+      "enum": ["pr", "nightly", "weekly", "release", "two_node"]
+    },
+    "dimension_status": {
+      "enum": ["required", "extended", "not_applicable"]
+    },
+    "renderer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["script", "version"],
+      "properties": {
+        "script": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "version": {
+          "$ref": "#/$defs/non_empty_string"
+        }
+      }
+    },
+    "units_map": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/non_empty_string"
+      }
+    },
+    "dimension_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/dimension_status"
+        },
+        "required": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/figure_kind"
+          }
+        },
+        "required_when_executed": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/figure_kind"
+          }
+        },
+        "justification": {
+          "type": ["string", "null"]
+        }
+      },
+      "if": {
+        "properties": {
+          "status": {
+            "const": "not_applicable"
+          }
+        },
+        "required": ["status"]
+      },
+      "then": {
+        "required": ["justification"],
+        "properties": {
+          "justification": {
+            "$ref": "#/$defs/non_empty_string"
+          }
+        }
+      }
+    },
+    "dimension_manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "justification", "artifacts"],
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/dimension_status"
+        },
+        "justification": {
+          "type": ["string", "null"]
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/non_empty_string"
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "status": {
+            "const": "not_applicable"
+          }
+        },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "justification": {
+            "$ref": "#/$defs/non_empty_string"
+          }
+        }
+      }
+    },
+    "animation_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "master", "preview", "frames", "color_limits"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "master": {
+          "const": "mp4"
+        },
+        "preview": {
+          "const": "gif"
+        },
+        "frames": {
+          "const": "accepted_states"
+        },
+        "color_limits": {
+          "const": "global"
+        },
+        "overlays": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/non_empty_string"
+          }
+        },
+        "key_events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/non_empty_string"
+          }
+        }
+      }
+    },
+    "acceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "require_source_data",
+        "require_manifest",
+        "require_fixed_animation_scale",
+        "require_storyboard_for_animation",
+        "forbid_missing_units"
+      ],
+      "properties": {
+        "require_source_data": {
+          "type": "boolean"
+        },
+        "require_manifest": {
+          "type": "boolean"
+        },
+        "require_fixed_animation_scale": {
+          "type": "boolean"
+        },
+        "require_storyboard_for_animation": {
+          "type": "boolean"
+        },
+        "forbid_missing_units": {
+          "type": "boolean"
+        }
+      }
+    },
+    "report_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "require_quantitative_companion",
+        "require_source_data",
+        "require_same_run_identity"
+      ],
+      "properties": {
+        "require_quantitative_companion": {
+          "type": "boolean"
+        },
+        "require_source_data": {
+          "type": "boolean"
+        },
+        "require_same_run_identity": {
+          "type": "boolean"
+        }
+      }
+    },
+    "figure_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_id",
+        "run_id",
+        "figure_id",
+        "kind",
+        "role",
+        "source_files",
+        "variables",
+        "units",
+        "transform",
+        "color_range",
+        "resolutions",
+        "amr_levels",
+        "times",
+        "step_numbers",
+        "repository_sha",
+        "resolved_case_digest",
+        "program_digest",
+        "native_artifact_digest",
+        "renderer",
+        "output_hashes",
+        "outputs",
+        "proves",
+        "does_not_prove",
+        "quantitative_companion",
+        "pr"
+      ],
+      "properties": {
+        "case_id": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "run_id": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "figure_id": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "kind": {
+          "$ref": "#/$defs/figure_kind"
+        },
+        "role": {
+          "$ref": "#/$defs/figure_role"
+        },
+        "source_files": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/non_empty_string"
+          }
+        },
+        "variables": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/non_empty_string"
+          }
+        },
+        "units": {
+          "$ref": "#/$defs/units_map"
+        },
+        "transform": {
+          "type": ["string", "null"]
+        },
+        "color_range": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "items": {
+                "type": "number"
+              }
+            }
+          ]
+        },
+        "resolutions": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "amr_levels": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "times": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        },
+        "step_numbers": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "repository_sha": {
+          "$ref": "#/$defs/sha_or_digest"
+        },
+        "resolved_case_digest": {
+          "$ref": "#/$defs/sha_or_digest"
+        },
+        "program_digest": {
+          "$ref": "#/$defs/sha_or_digest"
+        },
+        "native_artifact_digest": {
+          "$ref": "#/$defs/sha_or_digest"
+        },
+        "renderer": {
+          "$ref": "#/$defs/renderer"
+        },
+        "output_hashes": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "$ref": "#/$defs/non_empty_string"
+          }
+        },
+        "outputs": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "$ref": "#/$defs/non_empty_string"
+          }
+        },
+        "proves": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "does_not_prove": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "quantitative_companion": {
+          "type": ["string", "null"]
+        },
+        "pr": {
+          "type": "boolean"
+        }
+      }
+    },
+    "visual_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "required",
+        "optional",
+        "animation",
+        "acceptance",
+        "dimensions",
+        "report"
+      ],
+      "properties": {
+        "schema": {
+          "const": "pops.verification.visuals.v1"
+        },
+        "required": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/figure_kind"
+          }
+        },
+        "optional": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/figure_kind"
+          }
+        },
+        "animation": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/animation_contract"
+            }
+          ]
+        },
+        "acceptance": {
+          "$ref": "#/$defs/acceptance"
+        },
+        "dimensions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["1d", "2d", "3d"],
+          "properties": {
+            "1d": {
+              "$ref": "#/$defs/dimension_contract"
+            },
+            "2d": {
+              "$ref": "#/$defs/dimension_contract"
+            },
+            "3d": {
+              "$ref": "#/$defs/dimension_contract"
+            }
+          }
+        },
+        "report": {
+          "$ref": "#/$defs/report_contract"
+        }
+      }
+    },
+    "visual_manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "case_id",
+        "run_id",
+        "data_kind",
+        "suite",
+        "verdict",
+        "repository_sha",
+        "figures",
+        "dimensions",
+        "proves",
+        "does_not_prove"
+      ],
+      "properties": {
+        "schema": {
+          "const": "pops.verification.visual_manifest.v1"
+        },
+        "case_id": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "run_id": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "data_kind": {
+          "$ref": "#/$defs/data_kind"
+        },
+        "suite": {
+          "$ref": "#/$defs/suite"
+        },
+        "verdict": {
+          "$ref": "#/$defs/verdict"
+        },
+        "repository_sha": {
+          "$ref": "#/$defs/sha_or_digest"
+        },
+        "resolved_case_digest": {
+          "$ref": "#/$defs/sha_or_digest"
+        },
+        "program_digest": {
+          "$ref": "#/$defs/sha_or_digest"
+        },
+        "native_artifact_digest": {
+          "$ref": "#/$defs/sha_or_digest"
+        },
+        "renderer": {
+          "$ref": "#/$defs/renderer"
+        },
+        "figures": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/figure_entry"
+          }
+        },
+        "dimensions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["1d", "2d", "3d"],
+          "properties": {
+            "1d": {
+              "$ref": "#/$defs/dimension_manifest"
+            },
+            "2d": {
+              "$ref": "#/$defs/dimension_manifest"
+            },
+            "3d": {
+              "$ref": "#/$defs/dimension_manifest"
+            }
+          }
+        },
+        "proves": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "does_not_prove": {
+          "$ref": "#/$defs/non_empty_string"
+        }
+      }
+    }
+  }
+}

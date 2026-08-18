@@ -38,6 +38,7 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["jsonschema"]
+viz = ["matplotlib"]
 
 [tool.scikit-build]
 minimum-version = "0.10"

@@ -1,0 +1,266 @@
+{
+  "schema": "pops.verification.visual_manifest.v1",
+  "case_id": "RB-01",
+  "run_id": "fixture-1d",
+  "data_kind": "deterministic_fixture",
+  "suite": "pr",
+  "verdict": "pass",
+  "repository_sha": "0123456789abcdef0123456789abcdef01234567",
+  "resolved_case_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "program_digest": "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "native_artifact_digest": "2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "renderer": {
+    "script": "scripts/render_verification_visuals.py",
+    "version": "pops.verification.visuals.v1"
+  },
+  "figures": [
+    {
+      "case_id": "RB-01",
+      "run_id": "fixture-1d",
+      "figure_id": "reference_profile",
+      "kind": "reference_profile",
+      "role": "publication",
+      "source_files": [
+        "analysis/visual_data/reference_profile.json"
+      ],
+      "variables": [
+        "scalar"
+      ],
+      "units": {
+        "x": "x / L",
+        "y": "scalar"
+      },
+      "transform": "none",
+      "color_range": null,
+      "resolutions": [
+        16,
+        32,
+        64,
+        128
+      ],
+      "amr_levels": [
+        0
+      ],
+      "times": [
+        1.0
+      ],
+      "step_numbers": [
+        0
+      ],
+      "repository_sha": "0123456789abcdef0123456789abcdef01234567",
+      "resolved_case_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "program_digest": "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "native_artifact_digest": "2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "renderer": {
+        "script": "scripts/render_verification_visuals.py",
+        "version": "pops.verification.visuals.v1"
+      },
+      "output_hashes": {
+        "svg": "sha256:a85e50e1b750bd3332ba854aacfa1881f6e0eb94fff764d2475fca26628d772e",
+        "png": "sha256:65b1a9b9abb41f73748f94a868a1e53527cfd205a74d184cc0520cd50a5914aa",
+        "pdf": "sha256:69bba99911ca7070683be40d2983bb846f10089d8e7aa35b9f421fb9b5a38beb"
+      },
+      "outputs": {
+        "svg": "analysis/figures/publication/reference_profile.svg",
+        "png": "analysis/figures/publication/reference_profile.png",
+        "pdf": "analysis/figures/publication/reference_profile.pdf"
+      },
+      "proves": "reference_profile reconstructed from versioned visual_data.",
+      "does_not_prove": "This fixture is not a live PoPS campaign result.",
+      "quantitative_companion": "report_figure",
+      "pr": true
+    },
+    {
+      "case_id": "RB-01",
+      "run_id": "fixture-1d",
+      "figure_id": "signed_error_profile",
+      "kind": "signed_error_profile",
+      "role": "publication",
+      "source_files": [
+        "analysis/visual_data/signed_error_profile.json"
+      ],
+      "variables": [
+        "scalar"
+      ],
+      "units": {
+        "x": "x / L",
+        "y": "scalar"
+      },
+      "transform": "none",
+      "color_range": null,
+      "resolutions": [
+        16,
+        32,
+        64,
+        128
+      ],
+      "amr_levels": [
+        0
+      ],
+      "times": [
+        1.0
+      ],
+      "step_numbers": [
+        0
+      ],
+      "repository_sha": "0123456789abcdef0123456789abcdef01234567",
+      "resolved_case_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "program_digest": "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "native_artifact_digest": "2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "renderer": {
+        "script": "scripts/render_verification_visuals.py",
+        "version": "pops.verification.visuals.v1"
+      },
+      "output_hashes": {
+        "svg": "sha256:7ac605da442eb6766587b3f254dc6cd9c3c779532ddea0fab3abeeed245555fe",
+        "png": "sha256:88140fe4e3bdcc59bdfaa3afaef6a8bb71fa664b0639ca17cf1ba57c832798fb",
+        "pdf": "sha256:b3d4323346f8ce792610526dc2e840f777d845d50389ae2aeba0b193a2c8a102"
+      },
+      "outputs": {
+        "svg": "analysis/figures/publication/signed_error_profile.svg",
+        "png": "analysis/figures/publication/signed_error_profile.png",
+        "pdf": "analysis/figures/publication/signed_error_profile.pdf"
+      },
+      "proves": "signed_error_profile reconstructed from versioned visual_data.",
+      "does_not_prove": "This fixture is not a live PoPS campaign result.",
+      "quantitative_companion": "report_figure",
+      "pr": true
+    },
+    {
+      "case_id": "RB-01",
+      "run_id": "fixture-1d",
+      "figure_id": "spatial_convergence",
+      "kind": "spatial_convergence",
+      "role": "publication",
+      "source_files": [
+        "analysis/visual_data/spatial_convergence.json"
+      ],
+      "variables": [
+        "scalar"
+      ],
+      "units": {
+        "x": "1/h",
+        "y": "L2 error"
+      },
+      "transform": "loglog",
+      "color_range": null,
+      "resolutions": [
+        16,
+        32,
+        64,
+        128
+      ],
+      "amr_levels": [
+        0
+      ],
+      "times": [
+        1.0
+      ],
+      "step_numbers": [
+        0
+      ],
+      "repository_sha": "0123456789abcdef0123456789abcdef01234567",
+      "resolved_case_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "program_digest": "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "native_artifact_digest": "2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "renderer": {
+        "script": "scripts/render_verification_visuals.py",
+        "version": "pops.verification.visuals.v1"
+      },
+      "output_hashes": {
+        "svg": "sha256:1f5aa66210cbeccbaeefee1e84204edcbdf2d409abc42d2d6dd882ec007c957b",
+        "png": "sha256:c52e3e3d341e04139054a0a60a0cb2b5e7d100431cfb44f2b1f062f47df99731",
+        "pdf": "sha256:1e27e8222657e914ef13fa2c587a06f2e12e46f2007363d27413aa7951362796"
+      },
+      "outputs": {
+        "svg": "analysis/figures/publication/spatial_convergence.svg",
+        "png": "analysis/figures/publication/spatial_convergence.png",
+        "pdf": "analysis/figures/publication/spatial_convergence.pdf"
+      },
+      "proves": "spatial_convergence reconstructed from versioned visual_data.",
+      "does_not_prove": "This fixture is not a live PoPS campaign result.",
+      "quantitative_companion": "spatial_convergence",
+      "pr": true
+    },
+    {
+      "case_id": "RB-01",
+      "run_id": "fixture-1d",
+      "figure_id": "report_figure",
+      "kind": "report_figure",
+      "role": "publication",
+      "source_files": [
+        "analysis/visual_data/report_figure.json"
+      ],
+      "variables": [
+        "scalar"
+      ],
+      "units": {
+        "x": "1/h",
+        "y": "L2 error"
+      },
+      "transform": "none",
+      "color_range": null,
+      "resolutions": [
+        16,
+        32,
+        64,
+        128
+      ],
+      "amr_levels": [
+        0
+      ],
+      "times": [
+        1.0
+      ],
+      "step_numbers": [
+        0
+      ],
+      "repository_sha": "0123456789abcdef0123456789abcdef01234567",
+      "resolved_case_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "program_digest": "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "native_artifact_digest": "2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "renderer": {
+        "script": "scripts/render_verification_visuals.py",
+        "version": "pops.verification.visuals.v1"
+      },
+      "output_hashes": {
+        "svg": "sha256:1f5aa66210cbeccbaeefee1e84204edcbdf2d409abc42d2d6dd882ec007c957b",
+        "png": "sha256:c52e3e3d341e04139054a0a60a0cb2b5e7d100431cfb44f2b1f062f47df99731",
+        "pdf": "sha256:b85fdbd572b208526dc151780fbec509b443c3bed14074f86983369c6ba08e4c"
+      },
+      "outputs": {
+        "svg": "analysis/figures/publication/report_figure.svg",
+        "png": "analysis/figures/publication/report_figure.png",
+        "pdf": "analysis/figures/publication/report_figure.pdf"
+      },
+      "proves": "report_figure reconstructed from versioned visual_data.",
+      "does_not_prove": "This fixture is not a live PoPS campaign result.",
+      "quantitative_companion": "report_figure",
+      "pr": true
+    }
+  ],
+  "dimensions": {
+    "1d": {
+      "status": "required",
+      "justification": null,
+      "artifacts": [
+        "reference_profile",
+        "signed_error_profile",
+        "spatial_convergence",
+        "report_figure"
+      ]
+    },
+    "2d": {
+      "status": "required",
+      "justification": "2d was not the executed dimension of this run.",
+      "artifacts": []
+    },
+    "3d": {
+      "status": "required",
+      "justification": "3d was not the executed dimension of this run.",
+      "artifacts": []
+    }
+  },
+  "proves": "Figures reconstruct from versioned fixture visual_data.",
+  "does_not_prove": "This fixture is not a live PoPS campaign result."
+}

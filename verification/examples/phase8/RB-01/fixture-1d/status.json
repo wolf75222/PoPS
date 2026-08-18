@@ -1,0 +1,8 @@
+{
+  "case_id": "RB-01",
+  "run_id": "fixture-1d",
+  "verdict": "pass",
+  "data_kind": "deterministic_fixture",
+  "label": "DETERMINISTIC FIXTURE \u2014 not a PoPS campaign result",
+  "title": "Sod with AMR interface crossing"
+}

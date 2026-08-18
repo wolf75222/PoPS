@@ -1,0 +1,609 @@
+{
+  "schema": "pops.verification.visual_manifest.v1",
+  "case_id": "TR-01",
+  "run_id": "fixture-2d-release",
+  "data_kind": "deterministic_fixture",
+  "suite": "release",
+  "verdict": "pass",
+  "repository_sha": "0123456789abcdef0123456789abcdef01234567",
+  "resolved_case_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "program_digest": "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "native_artifact_digest": "2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "renderer": {
+    "script": "scripts/render_verification_visuals.py",
+    "version": "pops.verification.visuals.v1"
+  },
+  "figures": [
+    {
+      "case_id": "TR-01",
+      "run_id": "fixture-2d-release",
+      "figure_id": "exact_field",
+      "kind": "exact_field",
+      "role": "diagnostic",
+      "source_files": [
+        "analysis/visual_data/exact_field.json"
+      ],
+      "variables": [
+        "scalar"
+      ],
+      "units": {
+        "x": "x / L",
+        "y": "y / L",
+        "field": "exact_field"
+      },
+      "transform": "none",
+      "color_range": null,
+      "resolutions": [
+        16,
+        32,
+        64,
+        128
+      ],
+      "amr_levels": [
+        0
+      ],
+      "times": [
+        1.0
+      ],
+      "step_numbers": [
+        0
+      ],
+      "repository_sha": "0123456789abcdef0123456789abcdef01234567",
+      "resolved_case_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "program_digest": "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "native_artifact_digest": "2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "renderer": {
+        "script": "scripts/render_verification_visuals.py",
+        "version": "pops.verification.visuals.v1"
+      },
+      "output_hashes": {
+        "svg": "sha256:ec27b8258fa4884592eccbeab12462764a033c334c2b3af82d706afd018107e5",
+        "png": "sha256:7d0fc64cdbf7882ac67d24db36edb7871839dc7d3a56e4756a42f3a64e8d2d9b",
+        "pdf": "sha256:428dae39fddf7bc233365761f026225ef4cad9f30a8e8988f178d723bba54776"
+      },
+      "outputs": {
+        "svg": "analysis/figures/diagnostic/exact_field.svg",
+        "png": "analysis/figures/diagnostic/exact_field.png",
+        "pdf": "analysis/figures/diagnostic/exact_field.pdf"
+      },
+      "proves": "exact_field reconstructed from versioned visual_data.",
+      "does_not_prove": "This fixture is not a live PoPS campaign result.",
+      "quantitative_companion": "report_figure",
+      "pr": false
+    },
+    {
+      "case_id": "TR-01",
+      "run_id": "fixture-2d-release",
+      "figure_id": "numerical_field",
+      "kind": "numerical_field",
+      "role": "diagnostic",
+      "source_files": [
+        "analysis/visual_data/numerical_field.json"
+      ],
+      "variables": [
+        "scalar"
+      ],
+      "units": {
+        "x": "x / L",
+        "y": "y / L",
+        "field": "numerical_field"
+      },
+      "transform": "none",
+      "color_range": null,
+      "resolutions": [
+        16,
+        32,
+        64,
+        128
+      ],
+      "amr_levels": [
+        0
+      ],
+      "times": [
+        1.0
+      ],
+      "step_numbers": [
+        0
+      ],
+      "repository_sha": "0123456789abcdef0123456789abcdef01234567",
+      "resolved_case_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "program_digest": "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "native_artifact_digest": "2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "renderer": {
+        "script": "scripts/render_verification_visuals.py",
+        "version": "pops.verification.visuals.v1"
+      },
+      "output_hashes": {
+        "svg": "sha256:44c6250304136b65c0cdfe01ecb5a09d9c798fe80c2bffd3f20a212ec2d05bee",
+        "png": "sha256:0c07517daf185d2ab241fb6d29d07d9db0e4692728e8c0093407e158297ffabd",
+        "pdf": "sha256:a1ff21bd790adee393e1befd4a5db1dcff91f8d12f82cdebb0f7681d120c268b"
+      },
+      "outputs": {
+        "svg": "analysis/figures/diagnostic/numerical_field.svg",
+        "png": "analysis/figures/diagnostic/numerical_field.png",
+        "pdf": "analysis/figures/diagnostic/numerical_field.pdf"
+      },
+      "proves": "numerical_field reconstructed from versioned visual_data.",
+      "does_not_prove": "This fixture is not a live PoPS campaign result.",
+      "quantitative_companion": "report_figure",
+      "pr": false
+    },
+    {
+      "case_id": "TR-01",
+      "run_id": "fixture-2d-release",
+      "figure_id": "signed_error_field",
+      "kind": "signed_error_field",
+      "role": "diagnostic",
+      "source_files": [
+        "analysis/visual_data/signed_error_field.json"
+      ],
+      "variables": [
+        "scalar"
+      ],
+      "units": {
+        "x": "x / L",
+        "y": "y / L",
+        "field": "signed_error_field"
+      },
+      "transform": "none",
+      "color_range": null,
+      "resolutions": [
+        16,
+        32,
+        64,
+        128
+      ],
+      "amr_levels": [
+        0
+      ],
+      "times": [
+        1.0
+      ],
+      "step_numbers": [
+        0
+      ],
+      "repository_sha": "0123456789abcdef0123456789abcdef01234567",
+      "resolved_case_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "program_digest": "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "native_artifact_digest": "2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "renderer": {
+        "script": "scripts/render_verification_visuals.py",
+        "version": "pops.verification.visuals.v1"
+      },
+      "output_hashes": {
+        "svg": "sha256:7a1347d13c615a2f43973511457b036e24c8303196985da4785c329adbe3e8bd",
+        "png": "sha256:38e81ae4d6b8cd1d6b24ba20754f9e3e8a793bc419bd15c30ddb7c79ea5f38b4",
+        "pdf": "sha256:66b3ca72c4e3fba91ee267c72bc1f8201b9cfbcd4a3b65c6fc2bdaba33f784f4"
+      },
+      "outputs": {
+        "svg": "analysis/figures/diagnostic/signed_error_field.svg",
+        "png": "analysis/figures/diagnostic/signed_error_field.png",
+        "pdf": "analysis/figures/diagnostic/signed_error_field.pdf"
+      },
+      "proves": "signed_error_field reconstructed from versioned visual_data.",
+      "does_not_prove": "This fixture is not a live PoPS campaign result.",
+      "quantitative_companion": "report_figure",
+      "pr": false
+    },
+    {
+      "case_id": "TR-01",
+      "run_id": "fixture-2d-release",
+      "figure_id": "linecuts",
+      "kind": "linecuts",
+      "role": "diagnostic",
+      "source_files": [
+        "analysis/visual_data/linecuts.json"
+      ],
+      "variables": [
+        "scalar"
+      ],
+      "units": {
+        "x": "x / L",
+        "y": "scalar"
+      },
+      "transform": "none",
+      "color_range": null,
+      "resolutions": [
+        16,
+        32,
+        64,
+        128
+      ],
+      "amr_levels": [
+        0
+      ],
+      "times": [
+        1.0
+      ],
+      "step_numbers": [
+        0
+      ],
+      "repository_sha": "0123456789abcdef0123456789abcdef01234567",
+      "resolved_case_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "program_digest": "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "native_artifact_digest": "2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "renderer": {
+        "script": "scripts/render_verification_visuals.py",
+        "version": "pops.verification.visuals.v1"
+      },
+      "output_hashes": {
+        "svg": "sha256:b2b73f9853581138617d9166dc904f475e048888bc1f9c210c048a7e85cd34af",
+        "png": "sha256:2c5396ec57cdd903a1dd2f0d40dca709b5d8802889a28d5ddbcc6528a268de10",
+        "pdf": "sha256:c49e7de9d600e62e7e814901a53189776c617fa093ae96f81f432f4c049a3fc6"
+      },
+      "outputs": {
+        "svg": "analysis/figures/diagnostic/linecuts.svg",
+        "png": "analysis/figures/diagnostic/linecuts.png",
+        "pdf": "analysis/figures/diagnostic/linecuts.pdf"
+      },
+      "proves": "linecuts reconstructed from versioned visual_data.",
+      "does_not_prove": "This fixture is not a live PoPS campaign result.",
+      "quantitative_companion": "report_figure",
+      "pr": false
+    },
+    {
+      "case_id": "TR-01",
+      "run_id": "fixture-2d-release",
+      "figure_id": "report_figure",
+      "kind": "report_figure",
+      "role": "publication",
+      "source_files": [
+        "analysis/visual_data/report_figure.json"
+      ],
+      "variables": [
+        "scalar"
+      ],
+      "units": {
+        "x": "1/h",
+        "y": "L2 error"
+      },
+      "transform": "none",
+      "color_range": null,
+      "resolutions": [
+        16,
+        32,
+        64,
+        128
+      ],
+      "amr_levels": [
+        0
+      ],
+      "times": [
+        1.0
+      ],
+      "step_numbers": [
+        0
+      ],
+      "repository_sha": "0123456789abcdef0123456789abcdef01234567",
+      "resolved_case_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "program_digest": "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "native_artifact_digest": "2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "renderer": {
+        "script": "scripts/render_verification_visuals.py",
+        "version": "pops.verification.visuals.v1"
+      },
+      "output_hashes": {
+        "svg": "sha256:1f5aa66210cbeccbaeefee1e84204edcbdf2d409abc42d2d6dd882ec007c957b",
+        "png": "sha256:c52e3e3d341e04139054a0a60a0cb2b5e7d100431cfb44f2b1f062f47df99731",
+        "pdf": "sha256:82e5910c974ccf3640c8b5a57a87f0ef61ddb9d1089fa768415959b5e0acb26a"
+      },
+      "outputs": {
+        "svg": "analysis/figures/publication/report_figure.svg",
+        "png": "analysis/figures/publication/report_figure.png",
+        "pdf": "analysis/figures/publication/report_figure.pdf"
+      },
+      "proves": "report_figure reconstructed from versioned visual_data.",
+      "does_not_prove": "This fixture is not a live PoPS campaign result.",
+      "quantitative_companion": "report_figure",
+      "pr": true
+    },
+    {
+      "case_id": "TR-01",
+      "run_id": "fixture-2d-release",
+      "figure_id": "invariants_vs_time",
+      "kind": "invariants_vs_time",
+      "role": "diagnostic",
+      "source_files": [
+        "analysis/visual_data/invariants_vs_time.json"
+      ],
+      "variables": [
+        "scalar"
+      ],
+      "units": {
+        "x": "t / T",
+        "y": "invariants_vs_time"
+      },
+      "transform": "none",
+      "color_range": null,
+      "resolutions": [
+        16,
+        32,
+        64,
+        128
+      ],
+      "amr_levels": [
+        0
+      ],
+      "times": [
+        1.0
+      ],
+      "step_numbers": [
+        0
+      ],
+      "repository_sha": "0123456789abcdef0123456789abcdef01234567",
+      "resolved_case_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "program_digest": "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "native_artifact_digest": "2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "renderer": {
+        "script": "scripts/render_verification_visuals.py",
+        "version": "pops.verification.visuals.v1"
+      },
+      "output_hashes": {
+        "svg": "sha256:0783134e261d89de2e8a6d06764cb2e19f783c33dd04c306fc2c2080ee35aa6a",
+        "png": "sha256:b4a2a1ac31f328cb6305e8dc1368633f94536476e2c9f832b8983dbb09d01343",
+        "pdf": "sha256:7f74ec921e2aa01d61cfa8ec52c27d717944b89361b26c2fa34a7e6b4b996f04"
+      },
+      "outputs": {
+        "svg": "analysis/figures/diagnostic/invariants_vs_time.svg",
+        "png": "analysis/figures/diagnostic/invariants_vs_time.png",
+        "pdf": "analysis/figures/diagnostic/invariants_vs_time.pdf"
+      },
+      "proves": "invariants_vs_time reconstructed from versioned visual_data.",
+      "does_not_prove": "This fixture is not a live PoPS campaign result.",
+      "quantitative_companion": "report_figure",
+      "pr": false
+    },
+    {
+      "case_id": "TR-01",
+      "run_id": "fixture-2d-release",
+      "figure_id": "phase_amplitude",
+      "kind": "phase_amplitude",
+      "role": "diagnostic",
+      "source_files": [
+        "analysis/visual_data/phase_amplitude.json"
+      ],
+      "variables": [
+        "scalar"
+      ],
+      "units": {
+        "x": "t / T",
+        "y": "phase_amplitude"
+      },
+      "transform": "none",
+      "color_range": null,
+      "resolutions": [
+        16,
+        32,
+        64,
+        128
+      ],
+      "amr_levels": [
+        0
+      ],
+      "times": [
+        1.0
+      ],
+      "step_numbers": [
+        0
+      ],
+      "repository_sha": "0123456789abcdef0123456789abcdef01234567",
+      "resolved_case_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "program_digest": "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "native_artifact_digest": "2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "renderer": {
+        "script": "scripts/render_verification_visuals.py",
+        "version": "pops.verification.visuals.v1"
+      },
+      "output_hashes": {
+        "svg": "sha256:2feccf6d391538c8923e34af6246416ed5aa80c508e522859ce254344af0b9b6",
+        "png": "sha256:954f5b454066df2eb900733bd39ac1c4ee06c53ce61db536dd7ace72547c212d",
+        "pdf": "sha256:bdb1e946de8a030ca089d0309156c740b7425713b231b7bd30dee7278d5d1cc7"
+      },
+      "outputs": {
+        "svg": "analysis/figures/diagnostic/phase_amplitude.svg",
+        "png": "analysis/figures/diagnostic/phase_amplitude.png",
+        "pdf": "analysis/figures/diagnostic/phase_amplitude.pdf"
+      },
+      "proves": "phase_amplitude reconstructed from versioned visual_data.",
+      "does_not_prove": "This fixture is not a live PoPS campaign result.",
+      "quantitative_companion": "report_figure",
+      "pr": false
+    },
+    {
+      "case_id": "TR-01",
+      "run_id": "fixture-2d-release",
+      "figure_id": "amr_patch_map",
+      "kind": "amr_patch_map",
+      "role": "diagnostic",
+      "source_files": [
+        "analysis/visual_data/amr_patch_map.json"
+      ],
+      "variables": [
+        "scalar"
+      ],
+      "units": {
+        "x": "x / L",
+        "y": "y / L",
+        "field": "amr_patch_map"
+      },
+      "transform": "none",
+      "color_range": null,
+      "resolutions": [
+        16,
+        32,
+        64,
+        128
+      ],
+      "amr_levels": [
+        0
+      ],
+      "times": [
+        1.0
+      ],
+      "step_numbers": [
+        0
+      ],
+      "repository_sha": "0123456789abcdef0123456789abcdef01234567",
+      "resolved_case_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "program_digest": "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "native_artifact_digest": "2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "renderer": {
+        "script": "scripts/render_verification_visuals.py",
+        "version": "pops.verification.visuals.v1"
+      },
+      "output_hashes": {
+        "svg": "sha256:ad56bd9a8d125c619f150962f0799964510d87d447182197eb350bb1788f1e19",
+        "png": "sha256:8e38c35f9e10ac74d049e980fcc714c8b1d247292178b42bff2962ebf9a3351b",
+        "pdf": "sha256:0da7e58dfa15220c385a6e1aa41816fed4bebc59fc3029b7872b8e32fdda41a0"
+      },
+      "outputs": {
+        "svg": "analysis/figures/diagnostic/amr_patch_map.svg",
+        "png": "analysis/figures/diagnostic/amr_patch_map.png",
+        "pdf": "analysis/figures/diagnostic/amr_patch_map.pdf"
+      },
+      "proves": "amr_patch_map reconstructed from versioned visual_data.",
+      "does_not_prove": "This fixture is not a live PoPS campaign result.",
+      "quantitative_companion": "report_figure",
+      "pr": false
+    },
+    {
+      "case_id": "TR-01",
+      "run_id": "fixture-2d-release",
+      "figure_id": "storyboard",
+      "kind": "storyboard",
+      "role": "storyboard",
+      "source_files": [
+        "analysis/visual_data/storyboard.json"
+      ],
+      "variables": [
+        "scalar"
+      ],
+      "units": {
+        "x": "x / L",
+        "y": "scalar"
+      },
+      "transform": "none",
+      "color_range": null,
+      "resolutions": [
+        16,
+        32,
+        64,
+        128
+      ],
+      "amr_levels": [
+        0
+      ],
+      "times": [
+        1.0
+      ],
+      "step_numbers": [
+        0
+      ],
+      "repository_sha": "0123456789abcdef0123456789abcdef01234567",
+      "resolved_case_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "program_digest": "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "native_artifact_digest": "2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "renderer": {
+        "script": "scripts/render_verification_visuals.py",
+        "version": "pops.verification.visuals.v1"
+      },
+      "output_hashes": {
+        "svg": "sha256:0e8aba395a6c3086ff021d0e43318d8d3f8ff4383627ff360355bf8cdce058ef",
+        "png": "sha256:528eac24ccc99fd3f41db38f2b34aae0c85f390e798589d52eb9cc53f53550c6",
+        "pdf": "sha256:840ed7857b9e5b53cf7947a700d13e2f1759cb96792bdac6d883d213c344d3e7"
+      },
+      "outputs": {
+        "svg": "analysis/storyboards/storyboard.svg",
+        "png": "analysis/storyboards/storyboard.png",
+        "pdf": "analysis/storyboards/storyboard.pdf"
+      },
+      "proves": "storyboard reconstructed from versioned visual_data.",
+      "does_not_prove": "This fixture is not a live PoPS campaign result.",
+      "quantitative_companion": "report_figure",
+      "pr": false
+    },
+    {
+      "case_id": "TR-01",
+      "run_id": "fixture-2d-release",
+      "figure_id": "animation",
+      "kind": "animation",
+      "role": "animation",
+      "source_files": [
+        "analysis/visual_data/animation.json"
+      ],
+      "variables": [
+        "scalar"
+      ],
+      "units": {
+        "x": "x / L",
+        "y": "y / L",
+        "field": "scalar"
+      },
+      "transform": "none",
+      "color_range": null,
+      "resolutions": [
+        16,
+        32,
+        64,
+        128
+      ],
+      "amr_levels": [
+        0
+      ],
+      "times": [
+        1.0
+      ],
+      "step_numbers": [
+        0
+      ],
+      "repository_sha": "0123456789abcdef0123456789abcdef01234567",
+      "resolved_case_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "program_digest": "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "native_artifact_digest": "2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "renderer": {
+        "script": "scripts/render_verification_visuals.py",
+        "version": "pops.verification.visuals.v1"
+      },
+      "output_hashes": {
+        "png": "sha256:6b2d19f7d5f728f6712e5c850b47b075023760109c5a3cc4f823c85313846873"
+      },
+      "outputs": {
+        "png": "analysis/animations/frames/tr_01_canonical/frame_000000.png"
+      },
+      "proves": "animation reconstructed from versioned visual_data.",
+      "does_not_prove": "This fixture is not a live PoPS campaign result.",
+      "quantitative_companion": "report_figure",
+      "pr": false
+    }
+  ],
+  "dimensions": {
+    "1d": {
+      "status": "required",
+      "justification": "1d was not the executed dimension of this run.",
+      "artifacts": []
+    },
+    "2d": {
+      "status": "required",
+      "justification": null,
+      "artifacts": [
+        "exact_field",
+        "numerical_field",
+        "signed_error_field",
+        "linecuts",
+        "report_figure",
+        "invariants_vs_time",
+        "phase_amplitude",
+        "amr_patch_map",
+        "storyboard",
+        "animation"
+      ]
+    },
+    "3d": {
+      "status": "required",
+      "justification": "3d was not the executed dimension of this run.",
+      "artifacts": []
+    }
+  },
+  "proves": "Figures reconstruct from versioned fixture visual_data.",
+  "does_not_prove": "This fixture is not a live PoPS campaign result."
+}

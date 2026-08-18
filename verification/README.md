@@ -49,6 +49,7 @@ verification/
 | `reference_errors.py` | Volume-weighted errors of a numerical field against an external oracle |
 | `report.py` | Campaign Markdown/CSV/JSON renderer from an already-built summary |
 | `symmetry.py` | Symmetry diagnostics from an already-sampled field |
+| `visualization/` | Phase 8 figures, visual manifests, and completeness gates |
 
 ## Manifest
 
@@ -160,7 +161,7 @@ The runner today writes only `plan.json`.
 
 ## Schemas
 
-Four versioned contracts live under `schemas/`:
+Five versioned contracts live under `schemas/`:
 
 | File | Instance |
 |---|---|
@@ -168,11 +169,21 @@ Four versioned contracts live under `schemas/`:
 | `schemas/verification_metrics.v1.json` | per-run `pops.verification.metrics.v1` |
 | `schemas/verification_provenance.v1.json` | per-run `pops.verification.provenance.v1` |
 | `schemas/verification_report.v1.json` | campaign `pops.verification.report.v1` |
+| `schemas/verification_visuals.v1.json` | Phase 8 visual contracts and `visual_manifest.json` |
 
 An incompatible change requires a new schema version.
 
 `jsonschema` is a test/dev extra (`[project.optional-dependencies] test`). It
-is not part of the `pops` wheel.
+is not part of the `pops` wheel. Matplotlib is an optional `viz` extra used
+only by `scripts/render_verification_visuals.py`.
+
+```bash
+python scripts/check_verification_visuals.py
+python scripts/render_verification_visuals.py \
+  --run build/verification/<case-id>/<run-id> \
+  --formats png,pdf,svg \
+  --strict
+```
 
 ## Helpers
 

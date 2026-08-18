@@ -1,0 +1,73 @@
+{
+  "schema": "pops.verification.report.v1",
+  "repository": "wolf75222/PoPS",
+  "repository_sha": "0123456789abcdef0123456789abcdef01234567",
+  "suite": "pr",
+  "max_nodes": 2,
+  "native_dimensions": [
+    1
+  ],
+  "execution_spaces": [
+    "KokkosSerial"
+  ],
+  "coverage": {
+    "components": [
+      "euler"
+    ],
+    "cases_planned": 1,
+    "cases_run": 1,
+    "cases_passed": 1,
+    "cases_failed": 0,
+    "cases_not_supported": 0,
+    "not_tested": []
+  },
+  "failures": [],
+  "orders": [
+    {
+      "case_id": "CP-02",
+      "kind": "spatial",
+      "variable": "density",
+      "observed_order": 1.95,
+      "threshold": 1.8
+    }
+  ],
+  "amr": {
+    "order_retained": null,
+    "invariants_ok": null,
+    "interface_error": null,
+    "bulk_error": null
+  },
+  "poisson": {
+    "potential_error": null,
+    "field_error": null,
+    "residual_l2": null
+  },
+  "coupling": {
+    "phase_error": null,
+    "sign_ok": null,
+    "energy_drift": null
+  },
+  "parallel_invariance": {
+    "ranks_ok": null,
+    "threads_ok": null,
+    "gpu_ok": null
+  },
+  "performance": {
+    "one_node": null,
+    "two_node": null
+  },
+  "not_applicable_reason": {
+    "amr.*": "AMR not run in local pr",
+    "poisson.*": "Poisson campaign not run in local pr",
+    "coupling.*": "coupling not run in local pr",
+    "parallel_invariance.*": "parallel invariance not run in local pr",
+    "performance.one_node": "performance not measured in local pr",
+    "performance.two_node": "performance not measured in local pr"
+  },
+  "artifacts": {
+    "report_md": "REPORT.md",
+    "summary_json": "summary.json",
+    "coverage_csv": "coverage.csv",
+    "failures_csv": "failures.csv"
+  }
+}

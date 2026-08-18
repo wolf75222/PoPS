@@ -1,0 +1,73 @@
+{
+  "figure_id": "backend_parity",
+  "kind": "backend_parity",
+  "data_kind": "deterministic_fixture",
+  "verdict": "pass",
+  "units": {
+    "x": "1/h",
+    "y": "L2 error"
+  },
+  "variables": [
+    "scalar"
+  ],
+  "series": [
+    {
+      "name": "L1",
+      "x": [
+        16,
+        32,
+        64,
+        128
+      ],
+      "y": [
+        0.032,
+        0.016,
+        0.008,
+        0.004
+      ],
+      "unit": "1"
+    },
+    {
+      "name": "L2",
+      "x": [
+        16,
+        32,
+        64,
+        128
+      ],
+      "y": [
+        0.016,
+        0.008,
+        0.004,
+        0.002
+      ],
+      "unit": "1"
+    },
+    {
+      "name": "Linf",
+      "x": [
+        16,
+        32,
+        64,
+        128
+      ],
+      "y": [
+        0.048,
+        0.024,
+        0.012,
+        0.006
+      ],
+      "unit": "1"
+    }
+  ],
+  "reference_slopes": [
+    {
+      "order": 2,
+      "anchor": [
+        16,
+        0.016
+      ]
+    }
+  ],
+  "title": "spatial_convergence (fixture)"
+}

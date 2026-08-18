@@ -1,0 +1,8 @@
+{
+  "case_id": "TR-01",
+  "run_id": "fixture-2d-release",
+  "verdict": "pass",
+  "data_kind": "deterministic_fixture",
+  "label": "DETERMINISTIC FIXTURE \u2014 not a PoPS campaign result",
+  "title": "Periodic sinusoidal advection"
+}
