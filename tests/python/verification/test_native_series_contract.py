@@ -1,4 +1,4 @@
-"""RED contract: private NativeSeries factory, digest evidence, cell averages."""
+"""EvidenceBundle trust root: on-disk job directories, not in-memory hashes."""
 from __future__ import annotations
 
 import ast
@@ -14,8 +14,19 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from verification.pops_verify.campaign import CampaignJob, CampaignRequest
-from verification.pops_verify.capabilities import authenticate_installed_artifact
+from verification.pops_verify.capabilities import (
+    AuthenticatedArtifact,
+    authenticate_installed_artifact,
+    sha256_file,
+)
 from verification.pops_verify.cell_averages import analytic_cell_averages
+from verification.pops_verify.evidence_bundle import EvidenceBundle, EvidenceError
+from verification.pops_verify.evidence_contract import (
+    EXTENSION_SLOTS,
+    PARENT_INTEGRATION_PATCH,
+    REQUIRED_JOB_FILES,
+    emit_job_directory,
+)
 from verification.pops_verify.metrics import collect_metrics
 from verification.pops_verify import native_evidence as ne
 from verification.pops_verify.native_evidence import (
@@ -28,7 +39,7 @@ from verification.pops_verify.native_evidence import (
     provenance_from_native_series,
     report_from_native_series,
 )
-from verification.pops_verify.provenance import RUN_FIELDS
+from verification.pops_verify.provenance import RUN_FIELDS, collect_provenance
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCHEMA_METRICS = REPO_ROOT / "schemas" / "verification_metrics.v1.json"
@@ -75,59 +86,165 @@ def _write_leaf(tmp_path: Path, *, dimension: int = 1) -> Path:
     return root
 
 
-def _identity(tmp_path: Path, *, dimension: int = 1):
-    return authenticate_installed_artifact(
-        dimension=dimension,
-        variants_root=_write_leaf(tmp_path, dimension=dimension),
-        doctor_ok=False,
-    )
-
-
 def _request(case_id="TR-02", dim=1, n=16):
     return CampaignRequest.from_job(
         CampaignJob(case_id=case_id, pops_native_dim=dim, min_resolution=n)
     )
 
 
-def _authenticated_record(
-    tmp_path: Path,
-    *,
-    case_id="TR-02",
-    result=None,
-    oracle=None,
-    n_cells=16,
-    spacing=None,
-    pair=None,
-    t_end=1.0,
-    time_program="SSPRK2",
-    cfl=0.4,
-    dimension=1,
-):
-    field = np.ones(n_cells, dtype=np.float64) if result is None else np.asarray(result)
-    ref = np.zeros_like(field) if oracle is None else np.asarray(oracle)
-    return maybe_campaign_payload(
-        _request(case_id, dimension, n_cells),
-        field,
-        identity=_identity(tmp_path, dimension=dimension),
-        case_id=case_id,
-        oracle=ref,
-        program_digest="a" * 64,
-        resolved_case_digest="b" * 64,
+def _run_fields(*, n_cells=16, t_end=1.0, space="KokkosSerial", mpi_on=False, dim=1):
+    return campaign_run_fields(
+        request=CampaignRequest.from_job(
+            CampaignJob(
+                case_id="TR-02",
+                pops_native_dim=dim,
+                min_resolution=n_cells,
+                execution_space=space,
+                mpi_mode="on" if mpi_on else "off",
+            )
+        ),
         n_cells=n_cells,
         t_end=t_end,
-        time_program=time_program,
-        cfl=cfl,
-        dimension=dimension,
-        sample_spacing=spacing if spacing is not None else 1.0 / float(n_cells),
-        pair=pair,
+        time_program="SSPRK2",
+        cfl=0.4,
+        dimension=dim,
     )
 
 
-def test_record_schema_documents_immutable_fields():
+def _tr02_oracle(n_cells: int, t_end: float = 1.0):
+    exact = _load(REPO_ROOT / "verification" / "cases" / "transport" / "gaussian_pulse", "exact")
+    width = 1.0 / int(n_cells)
+    lo = np.arange(n_cells, dtype=np.float64) * width
+    hi = lo + width
+    return analytic_cell_averages(lambda x: exact.exact_gaussian(x, t_end), lo, hi)
+
+
+def _emit_job(
+    job_dir: Path,
+    variants_root: Path,
+    *,
+    case_id="TR-02",
+    n_cells=16,
+    t_end=1.0,
+    result=None,
+    dimension=1,
+    space="KokkosSerial",
+    mpi_mode="off",
+    repository_sha=None,
+    pair_result=None,
+    program_bytes=b"program-bytes",
+    pair_program_bytes=b"pair-program-bytes",
+):
+    identity = authenticate_installed_artifact(
+        dimension=dimension,
+        variants_root=variants_root,
+        doctor_ok=False,
+    )
+    field = (
+        np.asarray(result, dtype=np.float64)
+        if result is not None
+        else np.ones(n_cells, dtype=np.float64)
+    )
+    resolved = {
+        "case": {"id": case_id},
+        "job": {
+            "case_id": case_id,
+            "pops_native_dim": dimension,
+            "suite": "pr",
+            "execution_space": space,
+            "mpi_mode": mpi_mode,
+            "min_resolution": n_cells,
+            "evidence_status": "required",
+            "resources": {
+                "nodes": 1,
+                "mpi_ranks": 1,
+                "omp_threads": 1,
+                "resolutions": [n_cells],
+            },
+        },
+        "status": "pass",
+        "reason": None,
+    }
+    fields = _run_fields(
+        n_cells=n_cells,
+        t_end=t_end,
+        space=space,
+        mpi_on=mpi_mode == "on",
+        dim=dimension,
+    )
+    provenance = collect_provenance(
+        case_id,
+        pops_native_dim=dimension,
+        dimension=dimension,
+        nodes=1,
+        pops_version="test",
+        doctor_ok=False,
+        component_catalog_digest=identity.component_catalog_digest,
+        native_header_signature=identity.native_header_signature,
+        native_variant_manifest_digest=identity.native_variant_manifest_digest,
+        **fields,
+    )
+    if repository_sha is not None:
+        provenance["repository_sha"] = repository_sha
+    metrics = collect_metrics(case_id, reason="contract fixture")
+    emit_job_directory(
+        job_dir,
+        resolved_case=resolved,
+        provenance=provenance,
+        metrics=metrics,
+        result=field,
+        program_bytes=program_bytes,
+        native_artifact={
+            "path": str(identity.path),
+            "sha256": identity.sha256,
+            "dimension": identity.dimension,
+            "variants_root": str(variants_root),
+        },
+        pair_result=pair_result,
+        pair_program_bytes=pair_program_bytes if pair_result is not None else None,
+    )
+    return job_dir
+
+
+def _emit_series(
+    tmp_path: Path,
+    *,
+    case_id="TR-02",
+    shifts=None,
+    n_cells_list=(16, 32, 64),
+    t_end=1.0,
+    variants_root=None,
+):
+    root = variants_root or _write_leaf(tmp_path)
+    series_dir = tmp_path / "series"
+    jobs = []
+    for n_cells in n_cells_list:
+        job_name = f"n{n_cells:03d}"
+        jobs.append(job_name)
+        if shifts is None:
+            h = 1.0 / float(n_cells)
+            result = _tr02_oracle(n_cells, t_end) + 0.25 * h * h
+        else:
+            result = _tr02_oracle(n_cells, t_end) + float(shifts[n_cells])
+        _emit_job(
+            series_dir / job_name,
+            root,
+            case_id=case_id,
+            n_cells=n_cells,
+            t_end=t_end,
+            result=result,
+        )
+    (series_dir / "series.json").write_text(
+        json.dumps({"case_id": case_id, "jobs": jobs}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return series_dir, root
+
+
+def test_record_schema_documents_immutable_fields_and_extension_slots():
     required = {
         "case_id",
         "result_digest",
-        "evidence_digest",
         "sample_spacing",
         "leaf_sha256",
         "native_header_signature",
@@ -140,6 +257,28 @@ def test_record_schema_documents_immutable_fields():
     assert required <= set(schema)
     assert "native_seal" not in schema
     assert "compile_identity" not in schema
+    assert "coupling_digest" in schema
+    assert "amr_mask_digest" in schema
+    assert set(EXTENSION_SLOTS) >= {"coupling", "amr_mask"}
+
+
+def test_contract_lists_required_job_files_and_parent_patch():
+    for name in (
+        "resolved_case.json",
+        "resolved_case.sha256",
+        "provenance.json",
+        "metrics.json",
+        "result.npy",
+        "result.sha256",
+        "program.bin",
+        "program.sha256",
+        "native_artifact.json",
+    ):
+        assert name in REQUIRED_JOB_FILES
+    assert "result.npy" in PARENT_INTEGRATION_PATCH
+    assert "program.bin" in PARENT_INTEGRATION_PATCH
+    assert "native_artifact.json" in PARENT_INTEGRATION_PATCH
+    assert "scripts/run_verification.py" in PARENT_INTEGRATION_PATCH
 
 
 def test_arbitrary_dict_series_cannot_pass():
@@ -163,96 +302,260 @@ def test_empty_mapping_cannot_pass():
     assert summary["coverage"]["cases_passed"] == 0
 
 
-def test_direct_nativeseries_constructor_cannot_pass():
-    with pytest.raises(NativeSeriesError, match="cannot be constructed"):
-        NativeSeries(case_id="TR-02", records=())
-    assert not hasattr(NativeSeries, "from_campaign_runs")
-
-
-def test_object_artifact_simulation_cannot_seal(tmp_path: Path):
-    with pytest.raises(NativeSeriesError, match="artifact|identity|Authenticated"):
-        maybe_campaign_payload(
-            _request(),
-            np.ones(16),
-            artifact=object(),
-            simulation=object(),
-            n_cells=16,
-            t_end=1.0,
-            time_program="SSPRK2",
-            cfl=0.4,
-        )
-
-
-def test_mutated_result_fails_revalidation(tmp_path: Path):
-    record = _authenticated_record(tmp_path)
-    record["result"] = np.asarray(record["result"]) * 2.0
-    with pytest.raises(NativeSeriesError, match="digest|result"):
-        ne.verify_campaign_run(record)
+def test_in_memory_sequence_cannot_pass():
     summary = report_from_native_series(
         "TR-02",
-        [record],
+        [{"result": np.ones(16), "result_digest": "a" * 64}],
         native_dimensions=[1],
         components=["transport"],
-    )
-    assert summary["coverage"]["cases_passed"] == 0
-
-
-def test_reused_evidence_digest_cannot_pass(tmp_path: Path):
-    first = _authenticated_record(tmp_path, result=np.ones(16), oracle=np.zeros(16))
-    second = _authenticated_record(
-        tmp_path / "b", result=np.full(16, 2.0), oracle=np.zeros(16)
-    )
-    second["evidence_digest"] = first["evidence_digest"]
-    with pytest.raises(NativeSeriesError):
-        ne.verify_campaign_run(second)
-    summary = report_from_native_series(
-        "TR-02",
-        [second],
-        native_dimensions=[1],
-        components=["transport"],
-    )
-    assert summary["coverage"]["cases_passed"] == 0
-
-
-def test_caller_trusted_error_fn_is_not_a_public_api():
-    source = (
-        REPO_ROOT / "verification" / "pops_verify" / "native_evidence.py"
-    ).read_text(encoding="utf-8")
-    assert "error_fn" not in source
-    assert "_SEAL_KEY" not in source
-    assert "_REGISTERED_BINDS" not in source
-    assert "hmac" not in source
-
-
-def test_cross_case_record_reuse_cannot_pass(tmp_path: Path):
-    record = _authenticated_record(tmp_path, case_id="TR-02")
-    summary = report_from_native_series(
-        "EU-01",
-        [record],
-        native_dimensions=[1],
-        components=["euler"],
     )
     assert summary["coverage"]["cases_passed"] == 0
     assert summary["coverage"]["cases_failed"] == 1
 
 
-def test_below_threshold_typed_series_cannot_pass(tmp_path: Path):
-    records = []
-    for n_cells, shift in ((16, 0.08), (32, 0.03), (64, 0.011)):
-        oracle = np.zeros(n_cells)
-        result = np.full(n_cells, shift)
-        records.append(
-            _authenticated_record(
-                tmp_path / str(n_cells),
-                result=result,
-                oracle=oracle,
-                n_cells=n_cells,
-                spacing=1.0 / n_cells,
-            )
-        )
+def test_direct_nativeseries_constructor_cannot_pass():
+    with pytest.raises(NativeSeriesError, match="cannot be constructed"):
+        NativeSeries(case_id="TR-02", records=())
+    assert not hasattr(NativeSeries, "from_campaign_runs")
+    assert not hasattr(ne, "_series_from_records")
+
+
+def test_run_native_payload_is_raw_and_cannot_pass():
+    field = np.ones(16, dtype=np.float64)
+    payload = maybe_campaign_payload(
+        _request(),
+        field,
+        artifact=object(),
+        simulation=object(),
+        n_cells=16,
+        t_end=1.0,
+        time_program="SSPRK2",
+        cfl=0.4,
+    )
+    assert not isinstance(payload, NativeSeries)
+    assert "evidence_digest" not in payload
+    assert "leaf_sha256" not in payload
+    np.testing.assert_array_equal(payload["result"], field)
     summary = report_from_native_series(
         "TR-02",
-        records,
+        [payload],
+        native_dimensions=[1],
+        components=["transport"],
+    )
+    assert summary["coverage"]["cases_passed"] == 0
+
+
+def test_caller_oracle_and_error_fn_are_rejected():
+    with pytest.raises(NativeSeriesError, match="oracle"):
+        maybe_campaign_payload(
+            _request(),
+            np.ones(16),
+            oracle=np.zeros(16),
+            n_cells=16,
+            t_end=1.0,
+            time_program="SSPRK2",
+            cfl=0.4,
+        )
+    with pytest.raises(NativeSeriesError, match="error_fn"):
+        maybe_campaign_payload(
+            _request(),
+            np.ones(16),
+            error_fn=lambda *_: 0.0,
+            n_cells=16,
+            t_end=1.0,
+            time_program="SSPRK2",
+            cfl=0.4,
+        )
+    source = (
+        REPO_ROOT / "verification" / "pops_verify" / "native_evidence.py"
+    ).read_text(encoding="utf-8")
+    assert "error_fn" not in source or "caller oracle/error_fn" in source
+    assert "_SEAL_KEY" not in source
+    assert "_REGISTERED_BINDS" not in source
+    assert "hmac" not in source
+    assert "_standin_identity" not in source
+    assert "repr(artifact" not in source
+
+
+def test_hand_built_authenticated_artifact_is_never_accepted(tmp_path: Path):
+    artifact = AuthenticatedArtifact(
+        dimension=1,
+        path=tmp_path / "missing-leaf",
+        sha256="a" * 64,
+        version="1.0.0",
+        abi_key="abi",
+        has_mpi=False,
+        has_kokkos=True,
+        hdf5_collective=False,
+        doctor_ok=False,
+        native_variant_manifest_digest="b" * 64,
+        native_header_signature="c" * 64,
+        component_catalog_digest="d" * 64,
+    )
+    with pytest.raises(EvidenceError, match="path|artifact|directory"):
+        EvidenceBundle(artifact)
+    summary = report_from_native_series(
+        "TR-02",
+        artifact,
+        native_dimensions=[1],
+        components=["transport"],
+    )
+    assert summary["coverage"]["cases_passed"] == 0
+    forged = object.__new__(EvidenceBundle)
+    summary = report_from_native_series(
+        "TR-02",
+        forged,
+        native_dimensions=[1],
+        components=["transport"],
+    )
+    assert summary["coverage"]["cases_passed"] == 0
+
+
+def test_missing_leaf_path_is_rejected(tmp_path: Path):
+    series_dir, root = _emit_series(tmp_path)
+    leaf = next(root.rglob("_pops*"))
+    leaf.unlink()
+    with pytest.raises(EvidenceError, match="leaf|absent|missing"):
+        EvidenceBundle(series_dir)
+    summary = report_from_native_series(
+        "TR-02",
+        series_dir,
+        native_dimensions=[1],
+        components=["transport"],
+    )
+    assert summary["coverage"]["cases_passed"] == 0
+
+
+def test_forged_result_digest_is_rejected(tmp_path: Path):
+    series_dir, _root = _emit_series(tmp_path)
+    digest = series_dir / "n016" / "result.sha256"
+    digest.write_text("0" * 64 + "\n", encoding="utf-8")
+    with pytest.raises(EvidenceError, match="result"):
+        EvidenceBundle(series_dir)
+
+
+def test_modified_result_bytes_are_rejected(tmp_path: Path):
+    series_dir, _root = _emit_series(tmp_path)
+    path = series_dir / "n016" / "result.npy"
+    array = np.load(path)
+    np.save(path, array * 2.0)
+    with pytest.raises(EvidenceError, match="result"):
+        EvidenceBundle(series_dir)
+
+
+def test_forged_native_artifact_digest_is_rejected(tmp_path: Path):
+    series_dir, _root = _emit_series(tmp_path)
+    path = series_dir / "n016" / "native_artifact.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["sha256"] = "0" * 64
+    path.write_text(json.dumps(document) + "\n", encoding="utf-8")
+    with pytest.raises(EvidenceError, match="leaf|digest|artifact"):
+        EvidenceBundle(series_dir)
+
+
+def test_wrong_repository_sha_is_rejected(tmp_path: Path):
+    root = _write_leaf(tmp_path)
+    job = tmp_path / "series" / "n016"
+    _emit_job(job, root, repository_sha="deadbeef" * 8)
+    (tmp_path / "series" / "series.json").write_text(
+        json.dumps({"case_id": "TR-02", "jobs": ["n016"]}) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(EvidenceError, match="repository"):
+        EvidenceBundle(tmp_path / "series")
+
+
+def test_wrong_case_and_dimension_are_rejected(tmp_path: Path):
+    series_dir, root = _emit_series(tmp_path, case_id="TR-02")
+    summary = report_from_native_series(
+        "EU-01",
+        series_dir,
+        native_dimensions=[1],
+        components=["euler"],
+    )
+    assert summary["coverage"]["cases_passed"] == 0
+    job = series_dir / "n016"
+    resolved = json.loads((job / "resolved_case.json").read_text(encoding="utf-8"))
+    resolved["job"]["pops_native_dim"] = 2
+    (job / "resolved_case.json").write_text(json.dumps(resolved) + "\n", encoding="utf-8")
+    (job / "resolved_case.sha256").write_text(
+        sha256_file(job / "resolved_case.json") + "\n", encoding="utf-8"
+    )
+    with pytest.raises(EvidenceError, match="dimension|dim"):
+        EvidenceBundle(series_dir)
+
+
+def test_copied_record_cannot_change_case(tmp_path: Path):
+    series_dir, _root = _emit_series(tmp_path, case_id="TR-02")
+    document = json.loads((series_dir / "series.json").read_text(encoding="utf-8"))
+    document["case_id"] = "EU-01"
+    (series_dir / "series.json").write_text(json.dumps(document) + "\n", encoding="utf-8")
+    with pytest.raises(EvidenceError, match="case"):
+        EvidenceBundle(series_dir)
+
+
+def test_absent_oracle_producer_is_rejected(tmp_path: Path):
+    series_dir, _root = _emit_series(tmp_path, case_id="XX-99")
+    with pytest.raises(EvidenceError, match="oracle producer"):
+        EvidenceBundle(series_dir)
+
+
+def test_fake_program_and_resolved_bytes_are_rejected(tmp_path: Path):
+    series_dir, _root = _emit_series(tmp_path)
+    (series_dir / "n016" / "program.bin").write_bytes(b"forged-program")
+    with pytest.raises(EvidenceError, match="program"):
+        EvidenceBundle(series_dir)
+    series_dir, _root = _emit_series(tmp_path / "b")
+    resolved = series_dir / "n016" / "resolved_case.json"
+    document = json.loads(resolved.read_text(encoding="utf-8"))
+    document["job"]["suite"] = "forged"
+    resolved.write_text(json.dumps(document) + "\n", encoding="utf-8")
+    with pytest.raises(EvidenceError, match="resolved"):
+        EvidenceBundle(series_dir)
+
+
+def test_tr06_job_without_pair_files_is_rejected(tmp_path: Path):
+    root = _write_leaf(tmp_path, dimension=2)
+    job = tmp_path / "job"
+    _emit_job(
+        job,
+        root,
+        case_id="TR-06",
+        n_cells=8,
+        dimension=2,
+        result=np.ones((8, 8)),
+    )
+    with pytest.raises(EvidenceError, match="pair"):
+        EvidenceBundle(job)
+
+
+def test_valid_bundle_reloads_after_restart(tmp_path: Path):
+    series_dir, _root = _emit_series(tmp_path)
+    first = EvidenceBundle(series_dir)
+    assert first.case_id == "TR-02"
+    restarted = EvidenceBundle(Path(str(series_dir)))
+    assert restarted.case_id == first.case_id
+    np.testing.assert_allclose(restarted.derived_linf, first.derived_linf)
+    summary = report_from_native_series(
+        "TR-02",
+        series_dir,
+        native_dimensions=[1],
+        components=["transport"],
+        threshold=1.8,
+    )
+    assert summary["coverage"]["cases_passed"] == 1
+    assert summary["coverage"]["cases_failed"] == 0
+    _report_validator().validate(summary)
+
+
+def test_below_threshold_bundle_cannot_pass(tmp_path: Path):
+    series_dir, _root = _emit_series(
+        tmp_path,
+        shifts={16: 0.08, 32: 0.03, 64: 0.011},
+    )
+    summary = report_from_native_series(
+        "TR-02",
+        EvidenceBundle(series_dir),
         native_dimensions=[1],
         components=["transport"],
         threshold=1.8,
@@ -260,75 +563,6 @@ def test_below_threshold_typed_series_cannot_pass(tmp_path: Path):
     assert summary["coverage"]["cases_passed"] == 0
     reasons = " ".join(item["reason"] for item in summary["failures"])
     assert "threshold" in reasons.lower()
-
-
-def test_persisted_record_revalidates_after_module_reload(tmp_path: Path):
-    record = _authenticated_record(tmp_path)
-    payload = {
-        key: record[key]
-        for key in getattr(ne, "RECORD_SCHEMA", ())
-        if key in record and key not in {"result", "oracle", "pair_result"}
-    }
-    payload["result"] = np.asarray(record["result"]).tolist()
-    payload["oracle"] = np.asarray(record["oracle"]).tolist()
-    blob = tmp_path / "record.json"
-    blob.write_text(json.dumps(payload), encoding="utf-8")
-    restored = json.loads(blob.read_text(encoding="utf-8"))
-    restored["result"] = np.asarray(restored["result"], dtype=np.float64)
-    restored["oracle"] = np.asarray(restored["oracle"], dtype=np.float64)
-    ne.verify_campaign_run(restored)
-    source = (
-        REPO_ROOT / "verification" / "pops_verify" / "native_evidence.py"
-    ).read_text(encoding="utf-8")
-    assert "_REGISTERED_BINDS" not in source
-    assert "hmac" not in source
-
-
-def test_tr06_pair_requires_both_authenticated_results(tmp_path: Path):
-    original = np.ones((8, 8))
-    permuted = np.full((8, 8), 2.0)
-    identity = _identity(tmp_path, dimension=2)
-    incomplete = maybe_campaign_payload(
-        _request("TR-06", 2, 8),
-        original,
-        identity=identity,
-        case_id="TR-06",
-        oracle=np.zeros((8, 8)),
-        program_digest="a" * 64,
-        resolved_case_digest="b" * 64,
-        n_cells=8,
-        t_end=1.0,
-        time_program="SSPRK2",
-        cfl=0.4,
-        dimension=2,
-        sample_spacing=1.0 / 8.0,
-    )
-    with pytest.raises(NativeSeriesError, match="pair"):
-        ne.verify_campaign_run(incomplete)
-    paired = maybe_campaign_payload(
-        _request("TR-06", 2, 8),
-        original,
-        identity=identity,
-        case_id="TR-06",
-        oracle=np.zeros((8, 8)),
-        program_digest="a" * 64,
-        resolved_case_digest="b" * 64,
-        n_cells=8,
-        t_end=1.0,
-        time_program="SSPRK2",
-        cfl=0.4,
-        dimension=2,
-        sample_spacing=1.0 / 8.0,
-        pair={
-            "result": permuted,
-            "identity": identity,
-            "program_digest": "c" * 64,
-            "resolved_case_digest": "d" * 64,
-        },
-    )
-    ne.verify_campaign_run(paired)
-    assert paired["pair_result_digest"] != paired["result_digest"]
-    assert paired["pair_program_digest"] == "c" * 64
 
 
 def test_blocked_writers_reject_every_series(tmp_path: Path):
@@ -505,24 +739,13 @@ def test_metrics_and_provenance_from_untyped_dict_fail_closed():
 
 
 def test_typed_metrics_and_provenance_are_schema_valid(tmp_path: Path):
-    records = [
-        _authenticated_record(
-            tmp_path,
-            result=np.full(16, 0.01),
-            oracle=np.zeros(16),
-        )
-    ]
+    series_dir, _root = _emit_series(tmp_path)
+    bundle = EvidenceBundle(series_dir)
     metrics = collect_metrics("TR-02", reason="no authenticated native series")
     Draft202012Validator(json.loads(SCHEMA_METRICS.read_text())).validate(metrics)
-    typed_metrics = metrics_from_native_series("TR-02", records)
+    typed_metrics = metrics_from_native_series("TR-02", bundle)
     Draft202012Validator(json.loads(SCHEMA_METRICS.read_text())).validate(typed_metrics)
-    provenance = provenance_from_native_series(
-        "TR-02",
-        records,
-        component_catalog_digest="0" * 64,
-        native_header_signature="1" * 64,
-        native_variant_manifest_digest="2" * 64,
-    )
+    provenance = provenance_from_native_series("TR-02", bundle)
     Draft202012Validator(json.loads(SCHEMA_PROVENANCE.read_text())).validate(provenance)
 
 
