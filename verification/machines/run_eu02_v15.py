@@ -56,9 +56,10 @@ TEMPORAL_N = 128
 TEMPORAL_FINER_N = 256
 TEMPORAL_DTS = (0.008, 0.004, 0.002, 0.001)
 TEMPORAL_T_END = 0.32
-DUMP_N = 128
+DUMP_N = 256
 DUMP_TIMES = (0.0, 0.25, 0.5, 0.75, 1.0)
-ACCEPTANCE_RESOLUTIONS = (16, 32, 64, 128)
+ACCEPTANCE_RESOLUTIONS = (16, 32, 64, 128, 256)
+TVD_FAIL_CONTROL_RESOLUTIONS = (16, 32, 64, 128)
 
 
 def _artifact(dimension: int = 2):
@@ -323,7 +324,7 @@ def stage_temporal(output: Path, space: str, mpi: str) -> int:
 
 
 def stage_spatial(output: Path, space: str, mpi: str) -> int:
-    resolutions = (16, 32, 64, 128)
+    resolutions = ACCEPTANCE_RESOLUTIONS
     job = _job(space, mpi, 16, resolutions=resolutions)
     names = []
     for n_cells in resolutions:
@@ -377,7 +378,7 @@ def stage_dump(output: Path, space: str, mpi: str) -> int:
 
 
 def stage_tvd(output: Path, space: str, mpi: str) -> int:
-    resolutions = ACCEPTANCE_RESOLUTIONS
+    resolutions = TVD_FAIL_CONTROL_RESOLUTIONS
     job = _job(space, mpi, 16, resolutions=resolutions)
     names = []
     for n_cells in resolutions:

@@ -553,3 +553,101 @@ def test_compare_smokes_from_dirs_does_not_require_one_installed_leaf(tmp_path: 
     assert report["mpi"]["ranks"] == 2
     assert report["serial_vs_openmp"]["bit_identical"] is True
     assert report["serial_vs_mpi"]["bit_identical"] is False
+
+
+def test_acceptance_resolutions_include_n256():
+    run = _load("run")
+    from verification.machines.run_eu02_v15 import ACCEPTANCE_RESOLUTIONS
+
+    assert run.ACCEPTANCE_RESOLUTIONS == (16, 32, 64, 128, 256)
+    assert ACCEPTANCE_RESOLUTIONS == (16, 32, 64, 128, 256)
+    manifest = (REPO_ROOT / "verification" / "manifest.toml").read_text(encoding="utf-8")
+    case_echo = (CASE_DIR / "case.toml").read_text(encoding="utf-8")
+    block = manifest.split('id = "EU-02"', 1)[1].split("[[case]]", 1)[0]
+    assert "256" in block
+    assert "256" in case_echo
+
+
+def test_five_resolution_gate_keeps_32_64_and_gates_finest_two():
+    analyze = _load("analyze")
+    spacings = tuple(10.0 / float(n) for n in (16, 32, 64, 128, 256))
+    linf = (4.0e-2, 1.1e-2, 6.0e-3, 6.7e-4, 1.0e-4)
+    claim = analyze._claim_from_recorded_errors(
+        l1=linf,
+        l2=linf,
+        linf=linf,
+        spacings=spacings,
+        family="global",
+    )
+    assert len(claim["orders"]) == 4
+    assert claim["orders"][1] < 1.8
+    assert claim["gated_orders"] == pytest.approx(claim["orders"][-2:], abs=1.0e-12)
+    assert claim["order_pass"] is True
+    low_fine = (4.0e-2, 1.1e-2, 6.0e-3, 6.7e-4, 4.0e-4)
+    failed = analyze._claim_from_recorded_errors(
+        l1=low_fine,
+        l2=low_fine,
+        linf=low_fine,
+        spacings=spacings,
+        family="spatial",
+    )
+    assert failed["orders"][1] < 1.8
+    assert failed["gated_orders"] == pytest.approx(failed["orders"][-2:], abs=1.0e-12)
+    assert failed["order_pass"] is False
+    assert failed["verdict"] == "fail"
+
+
+def test_spatial_cfl_is_dt_over_h_per_mesh():
+    run = _load("run")
+    for n_cells in (16, 32, 64, 128, 256):
+        authored = run._author(n_cells, family="spatial")
+        width = 10.0 / float(n_cells)
+        assert authored.dt == pytest.approx(run.spatial_fixed_dt(n_cells))
+        assert authored.cfl == pytest.approx(authored.dt / width)
+        assert authored.cfl != pytest.approx(0.4)
+
+
+def test_readme_documents_weno5z_n256_and_temporal_isolation():
+    text = (CASE_DIR / "README.md").read_text(encoding="utf-8").lower()
+    assert "weno5-z" in text or "weno5z" in text
+    assert "256" in text
+    assert "isolat" in text
+    assert "vanleer" in text or "tvd" in text
+
+
+def test_published_plot_index_drops_stale_names(tmp_path: Path):
+    plot = load_sibling_module(CASE_DIR / "plot_eu02.py")
+    assert plot.is_published_plot("triptych_rho_n256_t1.png") is True
+    assert plot.is_published_plot("triptych_rho_t1.png") is False
+    assert plot.is_published_plot("radial_cuts_t1.png") is False
+    assert plot.is_published_plot("spatial-probe-n256.png") is False
+    dest = tmp_path / "plots"
+    dest.mkdir()
+    stale = dest / "triptych_rho_t1.png"
+    stale.write_bytes(b"stale")
+    (dest / "spatial-probe-n256.png").write_bytes(b"probe")
+    kept = dest / "triptych_rho_n256_t1.png"
+    kept.write_bytes(b"real")
+    published = plot.publish_plot_index(
+        dest,
+        ["triptych_rho_t1.png", str(kept), str(dest / "spatial-probe-n256.png")],
+        sha="deadbeef",
+        leaf="leaf",
+    )
+    assert stale.exists() is False
+    assert (dest / "spatial-probe-n256.png").exists() is False
+    names = [Path(path).name for path in published["plots"]]
+    assert names == ["triptych_rho_n256_t1.png"]
+
+
+def test_finest_visual_job_dir_prefers_n256_and_ignores_spatial_probe(tmp_path: Path):
+    analyze = _load("analyze")
+    series = tmp_path / "series"
+    for name in ("n016", "n128", "n256", "spatial-probe-n256"):
+        (series / name).mkdir(parents=True)
+    (series / "series.json").write_text(
+        json.dumps({"case_id": "EU-02", "jobs": ["n016", "n128", "n256", "spatial-probe-n256"]})
+        + "\n",
+        encoding="utf-8",
+    )
+    assert analyze.finest_visual_job_dir(series) == series / "n256"

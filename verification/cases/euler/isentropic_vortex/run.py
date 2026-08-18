@@ -29,6 +29,8 @@ T_END_CANONICAL = 1.0
 SPATIAL_DT_COEF = 0.16
 ACCEPTANCE_RECONSTRUCTION = "weno5z"
 TVD_FAIL_CONTROL_RECONSTRUCTION = "vanleer"
+ACCEPTANCE_RESOLUTIONS = (16, 32, 64, 128, 256)
+TVD_FAIL_CONTROL_RESOLUTIONS = (16, 32, 64, 128)
 
 
 class NativeUnavailable(RuntimeError):
@@ -198,6 +200,12 @@ def spatial_fixed_dt(n_cells: int) -> float:
     return float(SPATIAL_DT_COEF) * width * width
 
 
+def spatial_cfl(n_cells: int) -> float:
+    """Per-mesh spatial CFL = Δt / h. Never the global AdaptiveCFL constant."""
+    width = float(_exact.PERIOD) / float(n_cells)
+    return spatial_fixed_dt(n_cells) / width
+
+
 def _box_frame():
     from pops.domain import Rectangle
     from pops.frames import Cartesian2D
@@ -291,7 +299,9 @@ def _author(
         program.step_strategy(FixedDt(dt=step_dt))
         time_program = "SSPRK2+FixedDt"
         width = float(_exact.PERIOD) / float(count)
-        cfl_value = float(step_dt / width)
+        cfl_value = (
+            spatial_cfl(count) if family == "spatial" else float(step_dt / width)
+        )
     else:
         program.step_strategy(AdaptiveCFL(cfl=CFL))
         time_program = "SSPRK2+AdaptiveCFL"

@@ -14,7 +14,7 @@ requires = ["public_case_pipeline", "cartesian_layout"]
 
 [resources.pr]
 nodes = 1
-resolutions = [16, 32, 64, 128]
+resolutions = [16, 32, 64, 128, 256]
 
 [resources.two_node]
 nodes = [1, 2]

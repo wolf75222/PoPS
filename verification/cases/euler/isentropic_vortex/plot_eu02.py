@@ -7,6 +7,7 @@ campaign dump. Shared colour scales, units, SHA, and leaf captions.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -21,6 +22,70 @@ TRAJECTORY_XLABEL = "t"
 def artifact_stem(kind: str, n_cells: int, t: float) -> str:
     """Resolution- and time-suffixed plot name so n64 t=1 cannot overwrite n128."""
     return f"{kind}_n{int(n_cells):03d}_t{float(t):g}"
+
+
+_UNSUFFIXED_TIME = re.compile(
+    r"^(?:triptych_[A-Za-z]+|radial_cuts|velocity_quiver)_t[\d.]+(?:\.\w+)?$"
+)
+_ALWAYS_PUBLISHED = frozenset(
+    {
+        "hero_rho.png",
+        "invariants.png",
+        "convergence.png",
+        "contact_sheet_rho.png",
+        "vortex_center_trajectory.png",
+        "eu02_advection.gif",
+        "index.json",
+        "INDEX.md",
+    }
+)
+
+
+def is_published_plot(name: str) -> bool:
+    """Accept suffixed campaign plots; refuse unsuffixed leftovers and probes."""
+    filename = Path(name).name
+    if "spatial-probe" in filename or filename.startswith("spatial-probe"):
+        return False
+    if filename in _ALWAYS_PUBLISHED:
+        return True
+    if filename.startswith("gif_frame_"):
+        return True
+    if _UNSUFFIXED_TIME.match(filename):
+        return False
+    if "_n" in filename and "_t" in filename and filename.endswith(".png"):
+        return True
+    return False
+
+
+def publish_plot_index(dest, written, *, sha: str, leaf: str) -> dict:
+    """Write index.json / INDEX.md and delete stale unsuffixed or probe files."""
+    root = Path(dest)
+    root.mkdir(parents=True, exist_ok=True)
+    for child in list(root.iterdir()):
+        if child.is_file() and not is_published_plot(child.name):
+            child.unlink()
+    kept = []
+    for path in written:
+        target = Path(path)
+        if is_published_plot(target.name) and target.is_file():
+            kept.append(str(target))
+    index = {
+        "case_id": "EU-02",
+        "data_kind": "campaign",
+        "repository_sha": sha,
+        "leaf_sha256": leaf,
+        "plots": kept,
+        "label": "campaign result",
+    }
+    (root / "index.json").write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
+    (root / "INDEX.md").write_text(
+        "# EU-02 real plots\n\n"
+        + f"SHA `{sha}` leaf `{leaf}`\n\n"
+        + "\n".join(f"- `{Path(path).name}`" for path in kept)
+        + "\n",
+        encoding="utf-8",
+    )
+    return index
 
 
 def _sha() -> str:
@@ -324,23 +389,9 @@ def plot_bundle(series_dir: str | Path, build_dir: str | Path | None = None) -> 
         except Exception as exc:
             (dest / "gif_error.txt").write_text(f"{type(exc).__name__}: {exc}\n")
 
-    index = {
-        "case_id": "EU-02",
-        "data_kind": "campaign",
-        "repository_sha": sha,
-        "leaf_sha256": leaf,
-        "series": str(series),
-        "plots": written,
-        "label": "campaign result",
-    }
+    index = publish_plot_index(dest, written, sha=sha, leaf=leaf)
+    index["series"] = str(series)
     (dest / "index.json").write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
-    (dest / "INDEX.md").write_text(
-        "# EU-02 real plots\n\n"
-        + f"SHA `{sha}` leaf `{leaf}`\n\n"
-        + "\n".join(f"- `{Path(path).name}`" for path in written)
-        + "\n",
-        encoding="utf-8",
-    )
     return index
 
 

@@ -389,6 +389,8 @@ def finest_visual_job_dir(series_dir) -> Path:
         names = [child.name for child in series.iterdir() if child.is_dir()]
     numbered = []
     for name in names:
+        if "probe" in name.lower():
+            continue
         if len(name) >= 2 and name[0] == "n" and name[1:].isdigit():
             numbered.append((int(name[1:]), name))
     if numbered:
