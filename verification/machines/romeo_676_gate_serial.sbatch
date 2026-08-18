@@ -12,9 +12,10 @@
 #SBATCH --error=/scratch_p/rmdraux/pops-676/logs/%x.%j.err
 
 # R1: Dim2 Serial IF-08. R2: Dim1 Serial EU-01. No exclusive node. no GPU.
-set -euo pipefail
+set -eo pipefail
 # shellcheck source=/dev/null
 source /scratch_p/rmdraux/pops-676/src/verification/machines/romeo_676_env.sh
+set -eo pipefail
 pops676_require_pic_kokkos
 
 GATE="${POPS676_GATE:?set POPS676_GATE to R1 or R2}"

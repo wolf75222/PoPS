@@ -12,9 +12,11 @@
 #SBATCH --error=/scratch_p/rmdraux/pops-676/logs/%x.%j.err
 
 # Isolated Serial or MPI+collective-HDF5 build. No exclusive node. no GPU.
-set -euo pipefail
+echo "starting job=${SLURM_JOB_ID:-local} host=$(hostname)"
+set -eo pipefail
 # shellcheck source=/dev/null
 source /scratch_p/rmdraux/pops-676/src/verification/machines/romeo_676_env.sh
+set -eo pipefail
 pops676_require_pic_kokkos
 
 DIM="${POPS676_DIM:?set POPS676_DIM to 1 or 2}"

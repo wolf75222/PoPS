@@ -27,6 +27,15 @@ def test_romeo_676_scripts_exist_and_are_syntactically_valid() -> None:
         assert completed.returncode == 0, f"{path}: {completed.stderr}"
 
 
+def test_romeo_676_jobs_do_not_enable_nounset_before_sourcing_env() -> None:
+    for path in (BUILD, SERIAL, MPI):
+        text = path.read_text(encoding="utf-8")
+        source_at = text.index("romeo_676_env.sh")
+        prefix = text[:source_at]
+        assert "set -u" not in prefix
+        assert "set -euo" not in prefix
+
+
 def test_romeo_676_jobs_stay_inside_authorized_romeo_bounds() -> None:
     for path in (BUILD, SERIAL, MPI):
         text = path.read_text(encoding="utf-8")

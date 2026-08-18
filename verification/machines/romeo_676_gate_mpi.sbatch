@@ -14,9 +14,10 @@
 # R3: Dim1 MPI IF-01, 2 ranks on one node or two nodes via srun.
 # Override with: sbatch --nodes=2 --ntasks=2 --ntasks-per-node=1
 # No exclusive node. no GPU.
-set -euo pipefail
+set -eo pipefail
 # shellcheck source=/dev/null
 source /scratch_p/rmdraux/pops-676/src/verification/machines/romeo_676_env.sh
+set -eo pipefail
 pops676_require_pic_kokkos
 pops676_load_mpi_hdf5
 

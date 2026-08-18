@@ -6,9 +6,10 @@ POPS676_ROOT="${POPS676_ROOT:-/scratch_p/rmdraux/pops-676}"
 POPS676_SRC="${POPS676_SRC:-$POPS676_ROOT/src}"
 export POPS676_ROOT POPS676_SRC
 
-set +e
+set +eu
 # shellcheck source=/dev/null
 source /scratch_p/rmdraux/pops-validate/env_x64cpu.sh
+set +u
 set -e
 spack load /3s3hqzq >/dev/null 2>&1 || true
 
