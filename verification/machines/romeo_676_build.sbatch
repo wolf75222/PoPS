@@ -70,7 +70,7 @@ NPROC="${SLURM_CPUS_PER_TASK:-8}"
 echo "host=$(hostname) dim=$DIM kind=$KIND cmake_cxx=$CMAKE_CXX kokkos=$POPS_KOKKOS_ROOT"
 echo "build=$BUILD python=$POPS_PYTHON sha=$(git -C "$ROOT" rev-parse HEAD)"
 
-if [ "$MPI" = "on" ] && [ ! -f "$BUILD/python/pops/_native/variants.json" ]; then
+if [ "$MPI" = "on" ] && [ ! -f "$BUILD/build.ninja" ]; then
   rm -rf "$BUILD"
 fi
 cmake -S "$ROOT" -B "$BUILD" -G Ninja \
@@ -91,6 +91,17 @@ cmake -S "$ROOT" -B "$BUILD" -G Ninja \
 cmake --build "$BUILD" -j "$NPROC"
 echo BUILD_OK
 
+if [ ! -f "$BUILD/python/pops/_native/variants.json" ]; then
+  leaf="$BUILD/python/pops/_native/dim${DIM}/_pops$(
+    "$POPS_PYTHON" -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))"
+  )"
+  echo "retrying native variant authentication for $leaf"
+  "$POPS_PYTHON" "$ROOT/scripts/write_native_variant_manifest.py" \
+    --extension "$leaf" \
+    --manifest "$BUILD/python/pops/_native/variants.json" \
+    --dimension "$DIM" \
+    --version 1.0.0
+fi
 test -f "$BUILD/python/pops/_native/variants.json"
 "$POPS_PYTHON" "$ROOT/scripts/verify_installed_native.py" \
   --expect-dim "$DIM" \
