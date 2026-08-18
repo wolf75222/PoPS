@@ -625,6 +625,23 @@ def test_execute_writes_schema_valid_job_artifacts_and_report(tmp_path: Path):
     assert rows[0]["status"] in {"pass", "fail", "not-supported", "not-run"}
 
 
+def test_provenance_nodes_prefers_slurm_job_num_nodes(monkeypatch):
+    from verification.pops_verify.campaign import CampaignJob, CampaignResources
+
+    runner = _load_runner()
+    job = CampaignJob(
+        case_id="IF-01",
+        pops_native_dim=1,
+        resources=CampaignResources(nodes=1, mpi_ranks=2),
+    )
+    monkeypatch.delenv("SLURM_JOB_NUM_NODES", raising=False)
+    assert runner.provenance_nodes(job) == 1
+    monkeypatch.setenv("SLURM_JOB_NUM_NODES", "2")
+    assert runner.provenance_nodes(job) == 2
+    monkeypatch.setenv("SLURM_JOB_NUM_NODES", "3")
+    assert runner.provenance_nodes(job) == 1
+
+
 def test_cases_and_mpi_mode_and_execution_space_filters(tmp_path: Path):
     extra = """
 [[case]]
@@ -857,6 +874,10 @@ def test_real_if01_and_if08_run_native_accept_campaign_request():
         (
             REPO_ROOT / "verification/cases/infrastructure/native_dim_guard/run.py",
             "IF-08",
+        ),
+        (
+            REPO_ROOT / "verification/cases/euler/linear_waves/run.py",
+            "EU-01",
         ),
     )
     for path, case_id in cases:

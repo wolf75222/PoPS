@@ -11,6 +11,8 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from tests.python.support.requirements import missing_compiler_requirement
+from verification.pops_verify.campaign import CampaignJob, CampaignRequest
+from verification.pops_verify.provenance import RUN_FIELDS
 from verification.pops_verify.report import ARTIFACTS
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -115,3 +117,23 @@ def test_run_native_returns_finite_conserved_or_skips():
     assert array.shape == (3, 16)
     assert np.isfinite(array).all()
     assert np.all(array[0] > 0.0)
+
+
+def test_eu01_request_returns_run_fields():
+    """A campaign request must return provenance fields, not a raw array."""
+    import inspect
+
+    run = _load_case_module("run")
+    assert "request" in inspect.signature(run.run_native).parameters
+    request = CampaignRequest.from_job(
+        CampaignJob(case_id="EU-01", pops_native_dim=1, min_resolution=16)
+    )
+    fields = run.campaign_run_fields(16, 0.05, request)
+    missing = [key for key in RUN_FIELDS if key not in fields]
+    assert missing == []
+    assert fields["mpi_enabled"] is False
+    assert fields["mpi_ranks"] == 1
+    assert fields["resolution"] == [16]
+    assert fields["cfl"] == run.CFL
+    assert fields["final_time"] == 0.05
+    assert fields["time_program"] == "SSPRK2"

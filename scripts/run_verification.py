@@ -188,6 +188,19 @@ def is_campaign_writer_rank() -> bool:
     return campaign_writer_rank() == 0
 
 
+def provenance_nodes(job: CampaignJob) -> int:
+    """Prefer the scheduled Slurm node count when it is 1 or 2."""
+    raw = os.environ.get("SLURM_JOB_NUM_NODES")
+    if raw is not None and str(raw).strip() != "":
+        try:
+            value = int(raw)
+        except ValueError:
+            return job.resources.nodes
+        if value in (1, 2):
+            return value
+    return job.resources.nodes
+
+
 def validate_case_id(case_id: str) -> str:
     if not isinstance(case_id, str) or not _CASE_ID_RE.fullmatch(case_id):
         raise VerificationRunnerError(f"unsafe case id {case_id!r}")
@@ -284,7 +297,7 @@ def _write_job_artifacts(
             job.case_id,
             pops_native_dim=job.pops_native_dim,
             dimension=job.pops_native_dim,
-            nodes=job.resources.nodes,
+            nodes=provenance_nodes(job),
             pops_version=pops_version,
             doctor_ok=artifact.doctor_ok,
             component_catalog_digest=artifact.component_catalog_digest,

@@ -10,7 +10,9 @@ import numpy as np
 import pytest
 from jsonschema import Draft202012Validator
 
+from verification.pops_verify.campaign import CampaignJob, CampaignRequest
 from verification.pops_verify.case_authoring import load_sibling_module
+from verification.pops_verify.provenance import RUN_FIELDS
 from verification.pops_verify.reference_errors import reference_errors
 from verification.pops_verify.report import ARTIFACTS
 
@@ -180,6 +182,39 @@ def test_run_native_is_public_pipeline_without_rank_launcher():
         pytest.skip(str(exc))
     assert field.shape == (16,)
     assert np.isfinite(field).all()
+
+
+def test_if01_request_returns_run_fields(monkeypatch):
+    """A campaign request must return provenance fields, including honest MPI ranks."""
+    import inspect
+
+    run = _load_case_module("run")
+    assert "request" in inspect.signature(run.run_native).parameters
+    serial = CampaignRequest.from_job(
+        CampaignJob(case_id="IF-01", pops_native_dim=1, mpi_mode="off", min_resolution=16)
+    )
+    serial_fields = run.campaign_run_fields(16, 0.25, serial)
+    missing = [key for key in RUN_FIELDS if key not in serial_fields]
+    assert missing == []
+    assert serial_fields["mpi_enabled"] is False
+    assert serial_fields["mpi_ranks"] == 1
+    assert serial_fields["mpi_library"] == "none"
+    assert serial_fields["resolution"] == [16]
+    assert serial_fields["cfl"] == run.CFL
+    assert serial_fields["time_program"] == "SSPRK2"
+
+    monkeypatch.setenv("OMPI_COMM_WORLD_SIZE", "2")
+    mpi = CampaignRequest.from_job(
+        CampaignJob(case_id="IF-01", pops_native_dim=1, mpi_mode="on", min_resolution=16)
+    )
+    mpi_fields = run.campaign_run_fields(16, 0.25, mpi)
+    assert mpi_fields["mpi_enabled"] is True
+    assert mpi_fields["mpi_ranks"] == 2
+    assert mpi_fields["mpi_library"] != "none"
+
+    monkeypatch.setenv("OMPI_COMM_WORLD_SIZE", "1")
+    with pytest.raises(run.NativeUnavailable, match="serial fallback"):
+        run.campaign_run_fields(16, 0.25, mpi)
 
 
 def test_modules_do_not_hardcode_pops_run_except_run_native():

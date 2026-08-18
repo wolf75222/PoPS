@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.util
 import math
+import os
 from pathlib import Path
 from typing import Any
 
@@ -179,7 +180,37 @@ def _native_unavailable_reason() -> str | None:
     return missing_native_compile_requirement(repo_include(), default_cxx())
 
 
-def run_native(n_cells: int = N_CELLS, t_end: float = 0.05, *, mode="entropy"):
+def campaign_run_fields(n_cells: int, t_end: float, request) -> dict[str, object]:
+    """Honest 1-d Serial campaign facts. Does not invent MPI or order."""
+    count = int(n_cells)
+    space = getattr(request, "execution_space", None) or "KokkosSerial"
+    return {
+        "compiler": os.environ.get("CXX", "c++"),
+        "build_type": "native-dsl",
+        "precision": "float64",
+        "kokkos_execution_space": space,
+        "mpi_enabled": False,
+        "mpi_library": "none",
+        "mpi_thread_level_requested": "none",
+        "mpi_thread_level_provided": "none",
+        "hdf5_collective_enabled": False,
+        "mpi_ranks": 1,
+        "omp_threads_per_rank": int(
+            getattr(getattr(request, "resources", None), "omp_threads", None) or 1
+        ),
+        "gpus": 0,
+        "resolution": [count],
+        "block_size": [count],
+        "amr_total_levels": 1,
+        "refinement_ratio": 2,
+        "subcycling": False,
+        "time_program": "SSPRK2",
+        "cfl": float(CFL),
+        "final_time": float(t_end),
+    }
+
+
+def run_native(n_cells: int = N_CELLS, t_end: float = 0.05, *, mode="entropy", request=None):
     """Compile, bind, and run the 1-d linear wave. Raises NativeUnavailable without Kokkos."""
     import pops
 
@@ -188,6 +219,8 @@ def run_native(n_cells: int = N_CELLS, t_end: float = 0.05, *, mode="entropy"):
         uniform_periodic_layout,
     )
 
+    if request is not None and request.min_resolution is not None:
+        n_cells = int(request.min_resolution)
     missing = _native_unavailable_reason()
     if missing:
         raise NativeUnavailable(missing)
@@ -202,4 +235,6 @@ def run_native(n_cells: int = N_CELLS, t_end: float = 0.05, *, mode="entropy"):
     simulation = pops.bind(artifact, initial_values={authored.instance: initial})
     pops.run(simulation, t_end=float(t_end), max_steps=MAX_STEPS)
     field = np.asarray(simulation.state_global("gas"), dtype=np.float64)
+    if request is not None:
+        return campaign_run_fields(authored.n_cells, t_end, request)
     return np.reshape(field, (3, authored.n_cells))

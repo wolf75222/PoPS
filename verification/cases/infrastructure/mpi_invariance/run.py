@@ -9,6 +9,7 @@ Launch this same entry under the campaign MPI launcher for a multi-rank run.
 from __future__ import annotations
 
 from itertools import combinations
+import os
 from pathlib import Path
 from typing import Any
 
@@ -181,6 +182,75 @@ def _native_unavailable_reason() -> str | None:
     return missing_native_compile_requirement(repo_include(), default_cxx())
 
 
+def discovered_mpi_ranks() -> int:
+    """Return the launcher world size. Does not spawn ranks."""
+    for key in (
+        "POPS_CAMPAIGN_RANKS",
+        "OMPI_COMM_WORLD_SIZE",
+        "PMI_SIZE",
+        "SLURM_NTASKS",
+    ):
+        raw = os.environ.get(key)
+        if raw is not None and str(raw).strip() != "":
+            return int(raw)
+    return 1
+
+
+def _hdf5_collective_enabled() -> bool:
+    try:
+        from pops._native_selector import selected_native_module
+
+        module = selected_native_module(required=False)
+    except Exception:
+        return False
+    if module is None:
+        return False
+    return getattr(module, "__has_parallel_hdf5__", False) is True
+
+
+def campaign_run_fields(n_cells: int, t_end: float, request) -> dict[str, object]:
+    """Honest IF-01 campaign facts. MPI ranks come from the launcher, not a guess."""
+    count = int(n_cells)
+    mpi_on = request is not None and getattr(request, "mpi_mode", "off") == "on"
+    space = getattr(request, "execution_space", None) or "KokkosSerial"
+    if mpi_on:
+        ranks = discovered_mpi_ranks()
+        if ranks < 2:
+            raise NativeUnavailable(
+                f"IF-01 mpi_mode=on discovered {ranks} rank(s); no serial fallback"
+            )
+        library = os.environ.get("POPS_MPI_LIBRARY") or "unknown"
+        thread = "MPI_THREAD_SINGLE"
+    else:
+        ranks = 1
+        library = "none"
+        thread = "none"
+    return {
+        "compiler": os.environ.get("CXX", "c++"),
+        "build_type": "native-dsl",
+        "precision": "float64",
+        "kokkos_execution_space": space,
+        "mpi_enabled": mpi_on,
+        "mpi_library": library,
+        "mpi_thread_level_requested": thread,
+        "mpi_thread_level_provided": thread,
+        "hdf5_collective_enabled": _hdf5_collective_enabled() if mpi_on else False,
+        "mpi_ranks": int(ranks),
+        "omp_threads_per_rank": int(
+            getattr(getattr(request, "resources", None), "omp_threads", None) or 1
+        ),
+        "gpus": 0,
+        "resolution": [count],
+        "block_size": [count],
+        "amr_total_levels": 1,
+        "refinement_ratio": 2,
+        "subcycling": False,
+        "time_program": "SSPRK2",
+        "cfl": float(CFL),
+        "final_time": float(t_end),
+    }
+
+
 def run_native(n_cells: int = _exact.DEFAULT_N_CELLS, t_end: float = 0.25, request=None):
     """Compile, bind, and run Uniform under the native communicator.
 
@@ -206,4 +276,6 @@ def run_native(n_cells: int = _exact.DEFAULT_N_CELLS, t_end: float = 0.25, reque
     simulation = bind_public(artifact, mpi_mode=mpi_mode)
     pops.run(simulation, t_end=float(t_end), max_steps=MAX_STEPS)
     field = np.asarray(simulation.state_global("tracer"), dtype=np.float64)
+    if request is not None:
+        return campaign_run_fields(authored.n_cells, t_end, request)
     return np.ravel(field)
