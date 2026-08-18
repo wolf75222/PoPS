@@ -50,9 +50,6 @@ pops676_load_mpi_hdf5() {
     export CC=mpicc CXX=mpicxx
     export OMPI_CC="${CC}" OMPI_CXX="${CXX}"
   fi
-  # POST_BUILD dlopens the MPI leaf outside srun. Avoid libfabric/verbs and
-  # Hydra waits that freeze write_native_variant_manifest.py.
-  export FI_PROVIDER="${FI_PROVIDER:-tcp;unix}"
   export HYDRA_LAUNCHER="${HYDRA_LAUNCHER:-fork}"
   export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 }

@@ -47,6 +47,9 @@ if [ "$MPI" = "on" ]; then
   CMAKE_HDF5=ON
   EXPECT_BACKEND=(--expect-mpi --expect-parallel-hdf5)
   pops676_load_mpi_hdf5
+  # POST_BUILD dlopens the MPI leaf outside srun. Site FI_PROVIDER=shm
+  # fails OFI getinfo; do not export this for the later srun gates.
+  export FI_PROVIDER=tcp
   # FindMPI leaves include/lib identity empty when the wrapper is already
   # CMAKE_CXX_COMPILER. Interrogate mpicc/mpicxx and compile with gcc/g++.
   CMAKE_C="$(mpicc -show | awk '{print $1}')"

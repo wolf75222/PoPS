@@ -81,8 +81,8 @@ def test_romeo_676_mpi_build_passes_concrete_mpi_include() -> None:
     assert "MPI_CXX_COMPILER" in build
     assert "MPI_C_COMPILER" in build
     assert "libmpi.so" in env or "libmpi.so" in build
-    assert "FI_PROVIDER" in env
     assert "HYDRA_LAUNCHER" in env
+    assert "FI_PROVIDER=tcp" in build
     assert "write_native_variant_manifest.py" in build
 
 
