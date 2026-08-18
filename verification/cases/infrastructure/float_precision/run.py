@@ -50,7 +50,7 @@ def run_native(n_cells: int = _exact.DEFAULT_N_CELLS, t_end=_exact.T, request=No
     """Refuse a native float32 Case. Keep the in-memory f32/f64 sine."""
     from pops.runtime_environment import RuntimeCapabilityError, validate_precision
 
-    _v15.refuse_invalid_mode(request)
+    _v15.bind_campaign(request, NativeUnavailable)
     del n_cells, t_end
     try:
         validate_precision("float32", where="IF-09")

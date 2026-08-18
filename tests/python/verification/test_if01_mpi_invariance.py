@@ -258,6 +258,8 @@ def test_if01_mpi_on_refuses_native_singleton_despite_slurm(monkeypatch):
     _patch_native_world(monkeypatch, size=1, rank=0)
     monkeypatch.setenv("SLURM_NTASKS", "2")
     monkeypatch.setenv("OMPI_COMM_WORLD_SIZE", "2")
+    monkeypatch.setenv("SLURM_NTASKS", "2")
+    monkeypatch.setenv("PMI_SIZE", "2")
     mpi = CampaignRequest.from_job(
         CampaignJob(case_id="IF-01", pops_native_dim=1, mpi_mode="on", min_resolution=16)
     )

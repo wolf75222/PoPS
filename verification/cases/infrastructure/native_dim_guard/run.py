@@ -158,7 +158,7 @@ def run_native(n_cells: int = 8, t_end: float = 0.01, request=None):
     IF-08 unit tests still exercise ``require_native_dim(2)``. A campaign
     request returns provenance fields after the native path succeeds.
     """
-    _v15.refuse_invalid_mode(request)
+    _v15.bind_campaign(request, NativeUnavailable)
     if request is not None:
         if request.min_resolution is not None:
             n_cells = int(request.min_resolution)

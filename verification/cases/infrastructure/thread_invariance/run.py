@@ -98,8 +98,11 @@ def run_native_threads(
 
 
 def run_native(n_cells: int = 32, t_end: float = 0.25, request=None):
-    """Bind Kokkos OpenMP from CampaignRequest. environment-only OMP is not OpenMP proof."""
-    _v15.refuse_invalid_mode(request)
+    """Bind an authenticated Kokkos OpenMP leaf and compare native thread counts.
+
+    Environment-only ``OMP_NUM_THREADS`` on a Serial leaf is not OpenMP proof.
+    """
+    _v15.bind_campaign(request, NativeUnavailable)
     if request is not None and request.min_resolution is not None:
         n_cells = int(request.min_resolution)
     if request is None or request.execution_space != "KokkosOpenMP":
@@ -107,25 +110,50 @@ def run_native(n_cells: int = 32, t_end: float = 0.25, request=None):
             "IF-02 requires CampaignRequest with execution_space=KokkosOpenMP; "
             "OMP_NUM_THREADS alone is not OpenMP proof"
         )
-    threads = int(getattr(request.resources, "omp_threads", None) or 1)
-    previous = os.environ.get("OMP_NUM_THREADS")
-    os.environ["OMP_NUM_THREADS"] = str(threads)
     try:
-        field = np.asarray(
-            _tr01_run().run_native(n_cells, t_end=t_end), dtype=np.float64
-        )
-    except Exception as exc:
-        _reraise_native_unavailable(exc)
+        backend = _v15.require_kokkos_openmp()
+    except RuntimeError as exc:
         raise NativeUnavailable(str(exc)) from exc
+    requested = int(getattr(request.resources, "omp_threads", None) or 4)
+    counts = tuple(sorted({1, max(1, requested)}))
+    if len(counts) == 1:
+        counts = (1, max(2, requested))
+    fields = {}
+    previous = os.environ.get("OMP_NUM_THREADS")
+    try:
+        for n_threads in counts:
+            os.environ["OMP_NUM_THREADS"] = str(n_threads)
+            try:
+                import pops
+
+                if hasattr(pops, "set_threads"):
+                    pops.set_threads(n_threads)
+            except Exception:
+                pass
+            try:
+                field = np.asarray(
+                    _tr01_run().run_native(n_cells, t_end=t_end), dtype=np.float64
+                )
+            except Exception as exc:
+                _reraise_native_unavailable(exc)
+                raise NativeUnavailable(str(exc)) from exc
+            fields[n_threads] = np.ravel(field)
     finally:
         _restore_env("OMP_NUM_THREADS", previous)
+    volumes = _exact.cell_volumes(n_cells)
+    pairwise = {}
+    for left, right in combinations(counts, 2):
+        errors = reference_errors(fields[left], fields[right], volumes)
+        pairwise[f"{left}-{right}"] = float(errors.linf)
     return _v15.campaign_run_fields(
         request,
         n_cells=n_cells,
         t_end=t_end,
         comparison={
             "kind": "openmp_threads",
-            "threads": threads,
-            "field_shape": list(np.ravel(field).shape),
+            "backend": backend,
+            "threads": list(counts),
+            "pairwise_linf": pairwise,
         },
+        kokkos_execution_space="KokkosOpenMP",
     )

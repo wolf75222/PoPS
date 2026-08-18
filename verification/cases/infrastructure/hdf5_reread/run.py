@@ -71,6 +71,23 @@ def npz_round_trip_is_not_hdf5() -> bool:
     return True
 
 
+def authenticated_hdf5_collective(path=None) -> bool:
+    """Native parallel-HDF5 capability and an actual HDF5 path. Never request.mpi_mode."""
+    return _v15.authenticated_hdf5_collective(path)
+
+
+def campaign_hdf5_fields(request, path) -> dict:
+    """Campaign provenance with a collective flag from the authenticated native path."""
+    _v15.refuse_invalid_mode(request)
+    return _v15.campaign_run_fields(
+        request,
+        n_cells=int(getattr(request, "min_resolution", None) or _exact.N_CELLS),
+        t_end=0.1,
+        comparison={"kind": "hdf5_reread", "path": str(path), "hdf5": True},
+        hdf5_collective_enabled=authenticated_hdf5_collective(path),
+    )
+
+
 def public_state_handles(case) -> tuple:
     """Return public state Handles. ``Case.blocks()`` exposes only BlockHandles."""
     blocks = case.blocks()
@@ -93,11 +110,14 @@ def run_native(n_cells: int = _exact.N_CELLS, t_end: float = 0.1, request=None):
 
     from verification.pops_verify.tr01_runtime import advance, prepare
 
-    _v15.refuse_invalid_mode(request)
+    _v15.bind_campaign(request, NativeUnavailable)
     if request is not None and request.min_resolution is not None:
         n_cells = int(request.min_resolution)
-    mpi_on = request is not None and request.mpi_mode == "on"
-    hdf5_mode = ParallelMode.COLLECTIVE if mpi_on else ParallelMode.SERIAL
+    hdf5_mode = (
+        ParallelMode.COLLECTIVE
+        if _v15.native_has_parallel_hdf5()
+        else ParallelMode.SERIAL
+    )
     work = Path(tempfile.mkdtemp(prefix="if10-", dir="/tmp" if Path("/tmp").is_dir() else None))
 
     def _attach(authored) -> None:
@@ -149,7 +169,7 @@ def run_native(n_cells: int = _exact.N_CELLS, t_end: float = 0.1, request=None):
         n_cells=n_cells,
         t_end=t_end,
         comparison=payload["comparison_artifacts"],
-        hdf5_collective_enabled=mpi_on,
+        hdf5_collective_enabled=authenticated_hdf5_collective(blobs[-1]),
     )
     fields.update(payload)
     return fields

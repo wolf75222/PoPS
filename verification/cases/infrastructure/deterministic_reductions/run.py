@@ -161,7 +161,7 @@ def run_native(n_cells: int = _exact.N_CELLS, t_end: float = 0.25, request=None)
     """Run twice through official diagnostics. Bitwise field identity is the switch."""
     import pops
 
-    _v15.refuse_invalid_mode(request)
+    _v15.bind_campaign(request, NativeUnavailable)
     if request is not None and request.min_resolution is not None:
         n_cells = int(request.min_resolution)
     missing = _native_unavailable_reason()

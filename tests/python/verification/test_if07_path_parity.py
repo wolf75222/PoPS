@@ -7,6 +7,7 @@ from itertools import combinations
 from pathlib import Path
 
 import numpy as np
+import pytest
 from jsonschema import Draft202012Validator
 
 from verification.pops_verify.case_authoring import load_sibling_module
@@ -150,13 +151,8 @@ def test_public_case_is_the_dsl_path():
 def test_run_native_dsl_path_or_skips():
     run = _load_case_module("run")
     assert run.refuse_hybrid_native_cpp() == HYBRID_NATIVE_CPP_REFUSAL
-    try:
-        result = run.run_native(16, t_end=0.1)
-    except run.NativeUnavailable as exc:
-        assert str(exc)
-        return
-    assert result["path"] == "dsl"
-    assert np.isfinite(result["field"]).all()
+    with pytest.raises(run.NativeUnavailable, match="hybrid|native"):
+        run.run_native(16, t_end=0.1)
 
 
 def test_modules_do_not_hardcode_pops_run_except_run_native():

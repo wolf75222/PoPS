@@ -135,7 +135,7 @@ def run_native(n_cells: int = _exact.N_CELLS, t=_exact.T, path=None, request=Non
     """
     import pops
 
-    _v15.refuse_invalid_mode(request)
+    _v15.bind_campaign(request, NativeUnavailable)
     if request is not None and request.min_resolution is not None:
         n_cells = int(request.min_resolution)
 

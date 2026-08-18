@@ -126,7 +126,7 @@ def run_native(n_cells: int = _exact.DEFAULT_N_CELLS, t_end=_exact.T, request=No
 
     from verification.pops_verify.tr01_runtime import advance, prepare
 
-    _v15.refuse_invalid_mode(request)
+    _v15.bind_campaign(request, NativeUnavailable)
     if request is not None and request.min_resolution is not None:
         n_cells = int(request.min_resolution)
     work = Path(tempfile.mkdtemp(prefix="if05-", dir="/tmp" if Path("/tmp").is_dir() else None))

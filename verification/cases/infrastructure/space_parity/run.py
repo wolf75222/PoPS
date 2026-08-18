@@ -85,12 +85,17 @@ def run_native(
     request=None,
 ):
     """Run TR-01 under the requested Kokkos space. GPU is refused fail-closed."""
-    _v15.refuse_invalid_mode(request)
+    _v15.bind_campaign(request, NativeUnavailable)
     if request is not None:
         space = request.execution_space
         if request.min_resolution is not None:
             n_cells = int(request.min_resolution)
     _require_dim1(artifact_dim=artifact_dim, environ=environ)
+    if space == "KokkosOpenMP":
+        try:
+            _v15.require_kokkos_openmp()
+        except RuntimeError as exc:
+            raise NativeUnavailable(str(exc)) from exc
     threads = space_threads(space)
     previous = os.environ.get("OMP_NUM_THREADS")
     os.environ.setdefault("POPS_NATIVE_DIM", str(_exact.REQUIRED_NATIVE_DIM))
