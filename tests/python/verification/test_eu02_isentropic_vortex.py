@@ -620,21 +620,25 @@ def test_published_plot_index_drops_stale_names(tmp_path: Path):
     assert plot.is_published_plot("triptych_rho_n256_t1.png") is True
     assert plot.is_published_plot("triptych_rho_t1.png") is False
     assert plot.is_published_plot("radial_cuts_t1.png") is False
+    assert plot.is_published_plot("radial_cuts_n128_t1.png") is False
     assert plot.is_published_plot("spatial-probe-n256.png") is False
     dest = tmp_path / "plots"
     dest.mkdir()
     stale = dest / "triptych_rho_t1.png"
     stale.write_bytes(b"stale")
+    leftover = dest / "radial_cuts_n128_t1.png"
+    leftover.write_bytes(b"old")
     (dest / "spatial-probe-n256.png").write_bytes(b"probe")
     kept = dest / "triptych_rho_n256_t1.png"
     kept.write_bytes(b"real")
     published = plot.publish_plot_index(
         dest,
-        ["triptych_rho_t1.png", str(kept), str(dest / "spatial-probe-n256.png")],
+        ["triptych_rho_t1.png", str(leftover), str(kept), str(dest / "spatial-probe-n256.png")],
         sha="deadbeef",
         leaf="leaf",
     )
     assert stale.exists() is False
+    assert leftover.exists() is False
     assert (dest / "spatial-probe-n256.png").exists() is False
     names = [Path(path).name for path in published["plots"]]
     assert names == ["triptych_rho_n256_t1.png"]
@@ -651,3 +655,28 @@ def test_finest_visual_job_dir_prefers_n256_and_ignores_spatial_probe(tmp_path: 
         encoding="utf-8",
     )
     assert analyze.finest_visual_job_dir(series) == series / "n256"
+
+
+def test_phase8_keeps_finest_job_provenance(tmp_path: Path):
+    analyze = _load("analyze")
+    series = tmp_path / "series"
+    finest = series / "n256"
+    finest.mkdir(parents=True)
+    (series / "n016").mkdir()
+    (finest / "provenance.json").write_text(
+        json.dumps({"cfl": 0.00625, "resolution": [256, 256], "marker": "finest"}) + "\n",
+        encoding="utf-8",
+    )
+    (series / "n016" / "provenance.json").write_text(
+        json.dumps({"cfl": 0.1, "resolution": [16, 16], "marker": "coarse"}) + "\n",
+        encoding="utf-8",
+    )
+    analyze._write_status_and_program(
+        finest,
+        {"bundle_path": str(series), "resolutions": [16, 32, 64, 128, 256]},
+        {"order_pass": True, "verdict": "pass"},
+    )
+    loaded = json.loads((finest / "provenance.json").read_text(encoding="utf-8"))
+    assert loaded["marker"] == "finest"
+    assert loaded["cfl"] == 0.00625
+    assert loaded["resolution"] == [256, 256]

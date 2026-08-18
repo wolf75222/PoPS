@@ -800,7 +800,9 @@ def _write_status_and_program(output_dir: Path, campaign: dict, claim: dict) -> 
             digest = finest.read_text(encoding="utf-8").strip()
             provenance_src = finest.parent / "provenance.json"
         dest = output / "provenance.json"
-        if provenance_src is None or not provenance_src.is_file() or provenance_src.resolve() == dest.resolve():
+        if dest.is_file():
+            provenance_src = None
+        elif provenance_src is None or not provenance_src.is_file() or provenance_src.resolve() == dest.resolve():
             for child in sorted(Path(bundle_path).rglob("provenance.json")):
                 if child.resolve() != dest.resolve():
                     provenance_src = child
@@ -809,6 +811,7 @@ def _write_status_and_program(output_dir: Path, campaign: dict, claim: dict) -> 
             provenance_src is not None
             and provenance_src.is_file()
             and provenance_src.resolve() != dest.resolve()
+            and not dest.is_file()
         ):
             shutil.copy2(provenance_src, dest)
     (output / "program.json").write_text(

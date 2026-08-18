@@ -52,7 +52,7 @@ def is_published_plot(name: str) -> bool:
         return True
     if _UNSUFFIXED_TIME.match(filename):
         return False
-    if "_n" in filename and "_t" in filename and filename.endswith(".png"):
+    if "_n256_" in filename and "_t" in filename and filename.endswith(".png"):
         return True
     return False
 
