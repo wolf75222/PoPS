@@ -39,23 +39,24 @@ CMAKE_MPI=OFF
 CMAKE_HDF5=OFF
 EXPECT_BACKEND=(--expect-serial)
 CMAKE_MPI_FLAGS=()
+CMAKE_C="${CC:-cc}"
+CMAKE_CXX="${CXX:-c++}"
 if [ "$MPI" = "on" ]; then
   KIND=mpi
   CMAKE_MPI=ON
   CMAKE_HDF5=ON
   EXPECT_BACKEND=(--expect-mpi --expect-parallel-hdf5)
   pops676_load_mpi_hdf5
+  # FindMPI leaves include/lib identity empty when the wrapper is already
+  # CMAKE_CXX_COMPILER. Interrogate mpicc/mpicxx and compile with gcc/g++.
+  CMAKE_C="$(mpicc -show | awk '{print $1}')"
+  CMAKE_CXX="$(mpicxx -show | awk '{print $1}')"
   CMAKE_MPI_FLAGS=(
     -DMPI_CXX_COMPILER="$(command -v mpicxx)"
     -DMPI_C_COMPILER="$(command -v mpicc)"
-    -DMPI_CXX_HEADER_DIR="${MPI_HOME}/include"
-    -DMPI_CXX_INCLUDE_DIRS="${MPI_HOME}/include"
-    -DMPI_C_INCLUDE_DIRS="${MPI_HOME}/include"
-    -DMPI_CXX_LIBRARIES="${MPI_HOME}/lib/libmpi.so"
-    -DMPI_C_LIBRARIES="${MPI_HOME}/lib/libmpi.so"
   )
-  if [ ! -f "${MPI_HOME}/lib/libmpi.so" ]; then
-    echo "ERROR: shared libmpi.so missing under ${MPI_HOME}/lib" >&2
+  if [ ! -f "${MPI_HOME}/include/mpi.h" ] || [ ! -f "${MPI_HOME}/lib/libmpi.so" ]; then
+    echo "ERROR: MPICH include/libmpi.so missing under ${MPI_HOME}" >&2
     exit 1
   fi
 fi
@@ -66,7 +67,7 @@ export POPS_NATIVE_DIM="$DIM"
 pops676_pythonpath "$BUILD"
 NPROC="${SLURM_CPUS_PER_TASK:-8}"
 
-echo "host=$(hostname) dim=$DIM kind=$KIND cxx=$CXX kokkos=$POPS_KOKKOS_ROOT"
+echo "host=$(hostname) dim=$DIM kind=$KIND cmake_cxx=$CMAKE_CXX kokkos=$POPS_KOKKOS_ROOT"
 echo "build=$BUILD python=$POPS_PYTHON sha=$(git -C "$ROOT" rev-parse HEAD)"
 
 if [ "$MPI" = "on" ] && [ ! -f "$BUILD/python/pops/_native/variants.json" ]; then
@@ -74,8 +75,8 @@ if [ "$MPI" = "on" ] && [ ! -f "$BUILD/python/pops/_native/variants.json" ]; the
 fi
 cmake -S "$ROOT" -B "$BUILD" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_C_COMPILER="${CC}" \
-  -DCMAKE_CXX_COMPILER="${CXX}" \
+  -DCMAKE_C_COMPILER="${CMAKE_C}" \
+  -DCMAKE_CXX_COMPILER="${CMAKE_CXX}" \
   -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
   -DPOPS_NATIVE_DIM="$DIM" \
   -DPOPS_BUILD_PYTHON=ON \

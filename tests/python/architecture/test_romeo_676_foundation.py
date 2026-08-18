@@ -76,12 +76,11 @@ def test_romeo_676_mpi_build_passes_concrete_mpi_include() -> None:
     build = BUILD.read_text(encoding="utf-8")
     assert "MPI_HOME" in env
     assert "include/mpi.h" in env
-    assert "MPI_CXX_INCLUDE_DIRS" in build
-    assert "MPI_CXX_HEADER_DIR" in build
-    assert "MPI_C_INCLUDE_DIRS" in build
-    assert "MPI_CXX_LIBRARIES" in build
-    assert "MPI_C_LIBRARIES" in build
-    assert "libmpi.so" in build
+    assert "mpicxx -show" in build
+    assert "mpicc -show" in build
+    assert "MPI_CXX_COMPILER" in build
+    assert "MPI_C_COMPILER" in build
+    assert "libmpi.so" in env or "libmpi.so" in build
 
 
 def test_romeo_676_serial_gate_runs_if08_then_eu01() -> None:
