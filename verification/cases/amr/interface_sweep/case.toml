@@ -1,0 +1,24 @@
+# Local echo of intended verification/manifest.toml [[case]] AM-08.
+# Orchestrator owns the scientific manifest; this file is not registered.
+id = "AM-08"
+path = "verification/cases/amr/interface_sweep/run.py"
+name = "interface placement sweep"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["amr", "transport"]
+oracle = "interface_placement_envelope"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+observed_order_min = 1.8
+envelope_finite = true

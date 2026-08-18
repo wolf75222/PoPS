@@ -1,0 +1,26 @@
+# Local echo of PF-07. Optional run_native wraps AM-02 / AM-03 / AM-05.
+# Not catalogued in verification/manifest.toml (orchestrator).
+id = "PF-07"
+path = "verification/cases/performance/regrid_cluster/run.py"
+name = "regrid / clustering stand-in"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = []
+oracle = "tr02_pulse_contiguous_cluster"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = ["TR-02"]
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+min_patch_width = 4
+tag_threshold = 0.1
+patch_count_le_raw_tags = true
+tagged_cells_covered = true

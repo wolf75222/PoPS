@@ -1,0 +1,25 @@
+# Local echo of IF-01. Not catalogued in verification/manifest.toml (orchestrator).
+# Native MPI comparison is refused: no public multi-rank Uniform/MPI layout.
+id = "IF-01"
+path = "verification/cases/infrastructure/mpi_invariance/run.py"
+name = "MPI decomposition invariance"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = ["transport"]
+oracle = "tr01_sine_mpi_decompositions"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+field_to_field_linf = 0.0
+placements = ["one_block", "two_block", "1x4", "4x1"]
+splits = [0.25, 0.5, 0.75]

@@ -1,0 +1,27 @@
+# Local echo of PF-12. Optional run_native refuses without a 15-comp Case.
+# Not catalogued in verification/manifest.toml (orchestrator).
+id = "PF-12"
+path = "verification/cases/performance/hyqmom15/run.py"
+name = "HyQMOM15 large-moment state stand-in"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = []
+oracle = "wide_saxpy_identity"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+n_components = 15
+bytes_per_cell = 120
+euler_components = 5
+euler_bytes_per_cell = 40
+saxpy_linf = 0.0

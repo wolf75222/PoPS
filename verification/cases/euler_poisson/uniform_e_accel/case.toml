@@ -1,0 +1,24 @@
+# Local echo of CP-08. Orchestrator owns verification/manifest.toml.
+id = "CP-08"
+path = "verification/cases/euler_poisson/uniform_e_accel/run.py"
+name = "uniform-E acceleration"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["euler_poisson"]
+oracle = "uniform_e_accel"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+finite = true
+linear_velocity = true
+opposite_charge_sign = true

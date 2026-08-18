@@ -1,0 +1,25 @@
+# Local echo of IF-08. Not catalogued in verification/manifest.toml (orchestrator).
+id = "IF-08"
+path = "verification/cases/infrastructure/native_dim_guard/run.py"
+name = "exact native-dim specialization"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = ["transport"]
+oracle = "tr01_native_dim_guard"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+mismatch_refused = true
+matching_emits = "TR-01"
+requested_mismatch = [2]
+artifact_dim = 1

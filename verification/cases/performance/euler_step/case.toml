@@ -1,0 +1,23 @@
+# Local echo of PF-04. Not catalogued in verification/manifest.toml (orchestrator).
+id = "PF-04"
+path = "verification/cases/performance/euler_step/run.py"
+name = "Euler Rusanov / Lax-Friedrichs step"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = ["euler"]
+oracle = "uniform_free_stream"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+free_stream_atol = 1.0e-15
+scheme = "rusanov"

@@ -1,0 +1,23 @@
+# Local echo of AM-07. Not catalogued in verification/manifest.toml (orchestrator).
+id = "AM-07"
+path = "verification/cases/amr/vs_uniform_fine/run.py"
+name = "AMR vs uniform fine"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["amr", "transport"]
+oracle = "manufactured_e_h2"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+fine_region_matches_uniform_h2 = true
+observed_order_min = 1.8

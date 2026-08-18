@@ -1,0 +1,25 @@
+# Local echo of RB-07. Orchestrator owns verification/manifest.toml.
+id = "RB-07"
+path = "verification/cases/robustness/liska_implosion/run.py"
+name = "Liska–Wendroff implosion"
+verification_kind = "robustness"
+evidence_status = "required"
+physics = ["euler"]
+oracle = "implosion_ic_symmetry"
+native_dimensions = [2]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+finite = true
+positivity = true
+leftover_residual = 0.0
+diagonal = 0.15

@@ -1,0 +1,26 @@
+# Local echo of CP-11. Orchestrator owns verification/manifest.toml.
+id = "CP-11"
+path = "verification/cases/euler_poisson/diocotron/run.py"
+name = "linear diocotron mode"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["euler_poisson"]
+oracle = "toy_diocotron_growth"
+native_dimensions = [2]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+finite = true
+mode = 2
+growth_rate = 0.1
+amplitude = "eps exp(gamma t)"
+orders_reason = "linear growth / not a published reproduction"

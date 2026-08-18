@@ -1,0 +1,24 @@
+# Local echo of PF-02. Not catalogued in verification/manifest.toml (orchestrator).
+id = "PF-02"
+path = "verification/cases/performance/scalar_mg/run.py"
+name = "scalar MG residual stand-in"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = ["poisson"]
+oracle = "po01_trig_fd_residual"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+residual_decreases = true
+n_vcycles = 4
+fd_truncation = true

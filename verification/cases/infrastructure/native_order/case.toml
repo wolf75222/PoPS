@@ -1,0 +1,24 @@
+# Local echo of NO-01. Not catalogued in verification/manifest.toml (orchestrator).
+id = "NO-01"
+path = "verification/cases/infrastructure/native_order/run.py"
+name = "Native order campaign helper"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = []
+oracle = "manufactured_l2_h2"
+native_dimensions = [1, 2]
+execution_spaces = ["KokkosSerial", "KokkosOpenMP"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+observed_order_min = 1.8
+resolutions = [16, 32, 64, 128]
+jobs = ["Serial-Dim1", "Serial-Dim2", "OpenMP-Dim1", "OpenMP-Dim2"]

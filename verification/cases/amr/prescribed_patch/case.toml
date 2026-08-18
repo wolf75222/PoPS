@@ -1,0 +1,24 @@
+# Local echo of AM-02. Not catalogued in verification/manifest.toml (orchestrator).
+id = "AM-02"
+path = "verification/cases/amr/prescribed_patch/run.py"
+name = "prescribed moving patch"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["amr", "advection"]
+oracle = "prescribed_barycenter"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = ["TR-02"]
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+stress_cycles = 256
+exact_mass_drift = 0
+regrid_jump_order = 2

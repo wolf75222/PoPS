@@ -1,0 +1,24 @@
+# Local echo of CP-09. Orchestrator owns verification/manifest.toml.
+id = "CP-09"
+path = "verification/cases/euler_poisson/debye_screen/run.py"
+name = "linearized Debye screen"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["euler_poisson"]
+oracle = "debye_screen"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+finite = true
+helmholtz_identity = true
+poisson_limit = true

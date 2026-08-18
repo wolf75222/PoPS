@@ -1,0 +1,23 @@
+# Local echo of PF-03. Not catalogued in verification/manifest.toml (orchestrator).
+id = "PF-03"
+path = "verification/cases/performance/advection_rhs/run.py"
+name = "Advection FV RHS / periodic halo"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = []
+oracle = "analytic_translation_rhs"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+halo_linf = 0.0
+halo_width = 1

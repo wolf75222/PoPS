@@ -1,0 +1,24 @@
+# Local echo of CP-04. Orchestrator owns verification/manifest.toml.
+id = "CP-04"
+path = "verification/cases/euler_poisson/oblique_wave/run.py"
+name = "Oblique electrostatic eigenmode"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["continuity", "momentum", "poisson", "electrostatic_source"]
+oracle = "linear_eigenmode_and_closed_form"
+native_dimensions = [2]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+finite = true
+wavevector = [1, 2]
+omega_pe = 1.0

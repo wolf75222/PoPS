@@ -1,0 +1,27 @@
+# Local echo of TM-02. Not catalogued in verification/manifest.toml (orchestrator).
+id = "TM-02"
+path = "verification/cases/time/noncommuting_strang/run.py"
+name = "noncommuting Strang"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["time"]
+oracle = "noncommuting_ab_split"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[resources.pr]
+nodes = 1
+dt_series = [0.1, 0.05, 0.025, 0.0125]
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+lie_observed_order_min = 0.8
+strang_observed_order_min = 1.8
+a1 = 1.0
+a2 = 3.0
+nu = 1.0

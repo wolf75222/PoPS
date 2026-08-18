@@ -1,0 +1,23 @@
+# Local echo of intended verification/manifest.toml [[case]] PO-04.
+# Orchestrator owns the scientific manifest; this file is not registered.
+id = "PO-04"
+path = "verification/cases/poisson/huang_greengard/run.py"
+name = "Huang–Greengard multi-blob Poisson (1-d)"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["poisson"]
+oracle = "huang_greengard"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+min_order = 1.8

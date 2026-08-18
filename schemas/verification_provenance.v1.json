@@ -1,0 +1,195 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PoPS verification provenance v1",
+  "description": "JSON Schema for a per-run pops.verification.provenance.v1 object. The monorepo SHA is the unique source revision. Extra digests authenticate generated catalog, public headers, and the exact-rank native leaf actually loaded. An incompatible evolution requires a new schema version.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "case_id",
+    "repository",
+    "repository_sha",
+    "repository_dirty",
+    "pops_version",
+    "component_catalog_digest",
+    "native_header_signature",
+    "native_variant_manifest_digest",
+    "doctor_ok",
+    "date_utc",
+    "compiler",
+    "build_type",
+    "precision",
+    "pops_native_dim",
+    "kokkos_execution_space",
+    "mpi_enabled",
+    "mpi_library",
+    "mpi_thread_level_requested",
+    "mpi_thread_level_provided",
+    "hdf5_collective_enabled",
+    "nodes",
+    "mpi_ranks",
+    "omp_threads_per_rank",
+    "gpus",
+    "hostname",
+    "slurm_job_id",
+    "dimension",
+    "resolution",
+    "block_size",
+    "amr_total_levels",
+    "refinement_ratio",
+    "subcycling",
+    "time_program",
+    "cfl",
+    "final_time"
+  ],
+  "properties": {
+    "schema": {
+      "const": "pops.verification.provenance.v1"
+    },
+    "case_id": {
+      "type": "string"
+    },
+    "repository": {
+      "const": "wolf75222/PoPS"
+    },
+    "repository_sha": {
+      "$ref": "#/$defs/non_empty_string"
+    },
+    "repository_dirty": {
+      "type": "boolean"
+    },
+    "pops_version": {
+      "type": "string"
+    },
+    "component_catalog_digest": {
+      "$ref": "#/$defs/non_empty_string"
+    },
+    "native_header_signature": {
+      "$ref": "#/$defs/non_empty_string"
+    },
+    "native_variant_manifest_digest": {
+      "$ref": "#/$defs/non_empty_string"
+    },
+    "doctor_ok": {
+      "type": "boolean"
+    },
+    "date_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "compiler": {
+      "type": "string"
+    },
+    "build_type": {
+      "type": "string"
+    },
+    "precision": {
+      "description": "Arithmetic precision of the run, e.g. float64.",
+      "type": "string"
+    },
+    "pops_native_dim": {
+      "$ref": "#/$defs/spatial_dimension"
+    },
+    "kokkos_execution_space": {
+      "type": "string"
+    },
+    "mpi_enabled": {
+      "type": "boolean"
+    },
+    "mpi_library": {
+      "type": "string"
+    },
+    "mpi_thread_level_requested": {
+      "type": "string"
+    },
+    "mpi_thread_level_provided": {
+      "type": "string"
+    },
+    "hdf5_collective_enabled": {
+      "type": "boolean"
+    },
+    "nodes": {
+      "description": "Campaigns are limited to two nodes; the runner later refuses nodes > 2.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2
+    },
+    "mpi_ranks": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "omp_threads_per_rank": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "gpus": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "hostname": {
+      "type": "string"
+    },
+    "slurm_job_id": {
+      "description": "Local runs may use a non-Slurm placeholder string; the field is still required.",
+      "type": "string"
+    },
+    "dimension": {
+      "$ref": "#/$defs/spatial_dimension"
+    },
+    "resolution": {
+      "$ref": "#/$defs/positive_integer_vector"
+    },
+    "block_size": {
+      "$ref": "#/$defs/positive_integer_vector"
+    },
+    "amr_total_levels": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "refinement_ratio": {
+      "type": "integer",
+      "minimum": 2
+    },
+    "subcycling": {
+      "type": "boolean"
+    },
+    "time_program": {
+      "type": "string"
+    },
+    "cfl": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "final_time": {
+      "type": "number",
+      "minimum": 0
+    },
+    "doctor_report": {
+      "description": "Optional archived doctor report. Does not replace doctor_ok.",
+      "type": "object"
+    },
+    "device_inventory": {
+      "description": "Optional archived device inventory. Does not replace gpus or hostname.",
+      "type": ["array", "object"]
+    }
+  },
+  "$defs": {
+    "non_empty_string": {
+      "type": "string",
+      "minLength": 1
+    },
+    "spatial_dimension": {
+      "type": "integer",
+      "enum": [1, 2, 3]
+    },
+    "positive_integer_vector": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      }
+    }
+  }
+}

@@ -1,0 +1,23 @@
+# Local echo of TR-05. Not catalogued in verification/manifest.toml (orchestrator).
+id = "TR-05"
+path = "verification/cases/transport/block_shift/run.py"
+name = "translated block faces"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["advection"]
+oracle = "translated_block_faces"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+decomposition_linf = 0.0
+interfaces = [0.25, 0.2578125, 0.375]

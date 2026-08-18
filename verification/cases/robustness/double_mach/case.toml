@@ -1,0 +1,25 @@
+# Local echo of RB-08. Orchestrator owns verification/manifest.toml.
+id = "RB-08"
+path = "verification/cases/robustness/double_mach/run.py"
+name = "Double Mach reflection"
+verification_kind = "robustness"
+evidence_status = "required"
+physics = ["euler"]
+oracle = "rankine_hugoniot_geometry"
+native_dimensions = [2]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+finite = true
+positivity = true
+mach = 10.0
+shock_angle_deg = 30.0

@@ -1,0 +1,23 @@
+# Local echo of intended verification/manifest.toml [[case]] PO-02.
+# Orchestrator owns the scientific manifest; this file is not registered.
+id = "PO-02"
+path = "verification/cases/poisson/dirichlet_mms/run.py"
+name = "Dirichlet MMS Poisson (2-d)"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["poisson"]
+oracle = "dirichlet_mms"
+native_dimensions = [2]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+min_order = 1.8

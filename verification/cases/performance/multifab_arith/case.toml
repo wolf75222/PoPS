@@ -1,0 +1,24 @@
+# Local echo of PF-01. Not catalogued in verification/manifest.toml (orchestrator).
+id = "PF-01"
+path = "verification/cases/performance/multifab_arith/run.py"
+name = "MultiFab arithmetic / periodic halo"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = []
+oracle = "periodic_halo_identity"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+halo_linf = 0.0
+saxpy_linf = 0.0
+halo_width = 2

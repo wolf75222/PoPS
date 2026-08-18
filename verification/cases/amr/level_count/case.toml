@@ -1,0 +1,24 @@
+# Local echo of AM-06. Not catalogued in verification/manifest.toml (orchestrator).
+id = "AM-06"
+path = "verification/cases/amr/level_count/run.py"
+name = "AMR level count"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["amr"]
+oracle = "level_count"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+supported_levels = 3
+accepted_level_counts = [1, 2, 3]
+refused_level_count = 4

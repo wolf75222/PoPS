@@ -1,0 +1,26 @@
+# Local echo of AM-03. Not catalogued in verification/manifest.toml (orchestrator).
+id = "AM-03"
+path = "verification/cases/amr/tagging/run.py"
+name = "gradient / second-diff tagging"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["amr", "advection"]
+oracle = "tr02_gaussian_tag_mask"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = ["TR-02"]
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+theta = 0.02
+theta2 = 0.002
+buffer_widths = [1, 2, 4]
+buffer_2_halo_cells = 4
+hysteresis_static_stable = true

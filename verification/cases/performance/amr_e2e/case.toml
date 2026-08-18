@@ -1,0 +1,26 @@
+# Local echo of PF-11. Optional run_native wraps short AM-01 / AM-02.
+# Not catalogued in verification/manifest.toml (orchestrator).
+id = "PF-11"
+path = "verification/cases/performance/amr_e2e/run.py"
+name = "dynamic AMR e2e"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = ["amr"]
+oracle = "rebuild_cadence"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+n_warmup = 2
+n_steps = 50
+regrid_every = 8
+rebuilds = "n_steps / regrid_every"

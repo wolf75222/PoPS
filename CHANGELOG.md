@@ -16,6 +16,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ## [Unreleased]
 
+### Added
+
+- Repo-local scientific verification campaign: `verification/manifest.toml` (91
+  cases), Draft 2020-12 schemas, `scripts/check_verification_manifest.py`, and
+  `scripts/run_verification.py` (plan, optional `--execute`). Cases author the
+  public `Case` → `validate` → `resolve` → `compile` → `bind` → `pops.run`
+  pipeline. MPI uses `ExecutionContext.mpi_world`; time splits use
+  `pops.lib.time.Strang`/`Lie`; state reductions use `pops.diagnostics`; PF-01/02
+  delegate to `benchmarks/manifest.toml` (`arith_halo`, `scalar_mg`). `jsonschema`
+  is a test/dev extra only.
+
 ### Changed
 
 - Native `RuntimeInstance` installation now authenticates each single-layout halo against its exact

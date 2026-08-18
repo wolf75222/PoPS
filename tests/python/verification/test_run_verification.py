@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -66,13 +67,18 @@ charge_conservation = true
 """
 
 
-def _run(*args: str) -> subprocess.CompletedProcess[str]:
+def _run(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    run_env = os.environ.copy()
+    run_env.pop("POPS_NATIVE_DIM", None)
+    if env:
+        run_env.update(env)
     return subprocess.run(
         [sys.executable, str(SCRIPT), *args],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
         check=False,
+        env=run_env,
     )
 
 
@@ -94,7 +100,7 @@ def test_max_nodes_three_exits_one_and_does_not_write_plan(tmp_path: Path):
     assert not output.exists()
 
 
-def test_valid_pr_plan_has_empty_cases(tmp_path: Path):
+def test_valid_pr_plan_has_dummy_case(tmp_path: Path):
     output = tmp_path / "out"
     result = _run(
         "--suite",
@@ -107,7 +113,6 @@ def test_valid_pr_plan_has_empty_cases(tmp_path: Path):
         str(output),
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "planned 0 cases"
     plan_path = output / "plan.json"
     assert plan_path.is_file()
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
@@ -115,7 +120,29 @@ def test_valid_pr_plan_has_empty_cases(tmp_path: Path):
     assert plan["dimensions"] == [1]
     assert plan["max_nodes"] == 2
     assert Path(plan["manifest"]) == MANIFEST.resolve()
-    assert plan["cases"] == []
+    ids = [case["id"] for case in plan["cases"]]
+    assert "PH-00" in ids
+    assert set(ids) >= {
+        "PH-00",
+        "TR-01",
+        "TR-02",
+        "PO-01",
+        "PO-02",
+        "PO-03",
+        "PO-07",
+        "EU-01",
+        "EU-03",
+        "TM-01",
+        "CP-01",
+        "CP-02",
+        "CP-03",
+        "CP-07",
+        "CP-08",
+        "CP-12",
+        "TM-07",
+    }
+    assert result.stdout.strip() == f"planned {len(ids)} cases"
+    assert {"case_id": "PH-00", "pops_native_dim": 1} in plan["jobs"]
 
 
 def test_invalid_suite_exits_one(tmp_path: Path):
@@ -187,6 +214,7 @@ def test_selects_cases_matching_suite_and_dimensions(tmp_path: Path):
     assert result.stdout.strip() == "planned 1 cases"
     plan = json.loads((output / "plan.json").read_text(encoding="utf-8"))
     assert [case["id"] for case in plan["cases"]] == ["CP-02"]
+    assert plan["jobs"] == [{"case_id": "CP-02", "pops_native_dim": 1}]
 
     miss = tmp_path / "miss"
     missed = _run(
@@ -205,3 +233,126 @@ def test_selects_cases_matching_suite_and_dimensions(tmp_path: Path):
     assert missed.stdout.strip() == "planned 0 cases"
     missed_plan = json.loads((miss / "plan.json").read_text(encoding="utf-8"))
     assert missed_plan["cases"] == []
+    assert missed_plan["jobs"] == []
+
+
+def test_execute_writes_results_and_keeps_plan(tmp_path: Path):
+    manifest = tmp_path / "manifest.toml"
+    manifest.write_text(PLAN_SECTION_5_EXAMPLE, encoding="utf-8")
+    output = tmp_path / "out"
+    result = _run(
+        "--suite",
+        "pr",
+        "--dimensions",
+        "1",
+        "--max-nodes",
+        "2",
+        "--output",
+        str(output),
+        "--manifest",
+        str(manifest),
+        "--execute",
+    )
+    assert result.returncode in (0, 1), result.stderr
+    assert (output / "plan.json").is_file()
+    assert (output / "results.json").is_file()
+    rows = json.loads((output / "results.json").read_text(encoding="utf-8"))
+    assert rows
+    assert rows[0]["case_id"] == "CP-02"
+    assert rows[0]["status"] in {"ok", "skipped", "failed", "no_run_native"}
+    assert "planned 1 cases" in result.stdout
+    assert "executed" in result.stdout
+
+
+def test_plan_emits_one_job_per_requested_native_dimension(tmp_path: Path):
+    manifest = tmp_path / "manifest.toml"
+    manifest.write_text(PLAN_SECTION_5_EXAMPLE, encoding="utf-8")
+    output = tmp_path / "out"
+    result = _run(
+        "--suite",
+        "pr",
+        "--dimensions",
+        "1,2",
+        "--max-nodes",
+        "2",
+        "--output",
+        str(output),
+        "--manifest",
+        str(manifest),
+    )
+    assert result.returncode == 0, result.stderr
+    plan = json.loads((output / "plan.json").read_text(encoding="utf-8"))
+    assert plan["jobs"] == [
+        {"case_id": "CP-02", "pops_native_dim": 1},
+        {"case_id": "CP-02", "pops_native_dim": 2},
+    ]
+
+
+def test_pops_native_dim_env_matching_request_emits_one_job(tmp_path: Path):
+    manifest = tmp_path / "manifest.toml"
+    manifest.write_text(PLAN_SECTION_5_EXAMPLE, encoding="utf-8")
+    output = tmp_path / "out"
+    result = _run(
+        "--suite",
+        "pr",
+        "--dimensions",
+        "1",
+        "--max-nodes",
+        "2",
+        "--output",
+        str(output),
+        "--manifest",
+        str(manifest),
+        env={"POPS_NATIVE_DIM": "1"},
+    )
+    assert result.returncode == 0, result.stderr
+    plan = json.loads((output / "plan.json").read_text(encoding="utf-8"))
+    assert plan["jobs"] == [{"case_id": "CP-02", "pops_native_dim": 1}]
+
+
+def test_pops_native_dim_cli_overrides_env_for_matching_request(tmp_path: Path):
+    manifest = tmp_path / "manifest.toml"
+    manifest.write_text(PLAN_SECTION_5_EXAMPLE, encoding="utf-8")
+    output = tmp_path / "out"
+    result = _run(
+        "--suite",
+        "pr",
+        "--dimensions",
+        "1",
+        "--max-nodes",
+        "2",
+        "--output",
+        str(output),
+        "--manifest",
+        str(manifest),
+        "--pops-native-dim",
+        "1",
+        env={"POPS_NATIVE_DIM": "2"},
+    )
+    assert result.returncode == 0, result.stderr
+    plan = json.loads((output / "plan.json").read_text(encoding="utf-8"))
+    assert plan["jobs"] == [{"case_id": "CP-02", "pops_native_dim": 1}]
+
+
+def test_artifact_dim_mismatch_exits_one_without_plan(tmp_path: Path):
+    manifest = tmp_path / "manifest.toml"
+    manifest.write_text(PLAN_SECTION_5_EXAMPLE, encoding="utf-8")
+    output = tmp_path / "out"
+    result = _run(
+        "--suite",
+        "pr",
+        "--dimensions",
+        "1,2",
+        "--max-nodes",
+        "2",
+        "--output",
+        str(output),
+        "--manifest",
+        str(manifest),
+        env={"POPS_NATIVE_DIM": "1"},
+    )
+    assert result.returncode == 1
+    combined = f"{result.stderr}\n{result.stdout}"
+    assert "POPS_NATIVE_DIM" in combined
+    assert "fallback" in combined.lower()
+    assert not (output / "plan.json").exists()

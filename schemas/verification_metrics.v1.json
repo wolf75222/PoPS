@@ -1,0 +1,343 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PoPS verification metrics v1",
+  "description": "JSON Schema for a per-run pops.verification.metrics.v1 object. The same fields are always present. A non-applicable quantity is null and must have a justification in not_applicable_reason. An incompatible evolution requires a new schema version.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "case_id",
+    "errors",
+    "conservation",
+    "poisson",
+    "extrema",
+    "symmetry",
+    "amr",
+    "not_applicable_reason",
+    "timings_seconds"
+  ],
+  "properties": {
+    "schema": {
+      "const": "pops.verification.metrics.v1"
+    },
+    "case_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "errors": {
+      "$ref": "#/$defs/errors"
+    },
+    "conservation": {
+      "$ref": "#/$defs/conservation"
+    },
+    "poisson": {
+      "$ref": "#/$defs/poisson"
+    },
+    "extrema": {
+      "$ref": "#/$defs/extrema"
+    },
+    "symmetry": {
+      "$ref": "#/$defs/symmetry"
+    },
+    "amr": {
+      "$ref": "#/$defs/amr"
+    },
+    "not_applicable_reason": {
+      "$ref": "#/$defs/not_applicable_reason"
+    },
+    "timings_seconds": {
+      "$ref": "#/$defs/timings_seconds"
+    },
+    "time_series": {
+      "description": "Optional associated time series. Does not replace the required summaries.",
+      "type": ["object", "array"]
+    },
+    "csv_files": {
+      "description": "Optional associated CSV paths. Does not replace the required summaries.",
+      "oneOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      ]
+    }
+  },
+  "if": {
+    "description": "No-Poisson shape: residual, Gauss defect, and electrostatic energy are all null.",
+    "properties": {
+      "poisson": {
+        "properties": {
+          "residual_l2": {
+            "type": "null"
+          },
+          "gauss_defect_l2": {
+            "type": "null"
+          }
+        },
+        "required": ["residual_l2", "gauss_defect_l2"]
+      },
+      "conservation": {
+        "properties": {
+          "electrostatic_energy": {
+            "properties": {
+              "initial": {
+                "type": "null"
+              },
+              "final": {
+                "type": "null"
+              },
+              "max_relative_drift": {
+                "type": "null"
+              }
+            },
+            "required": ["initial", "final", "max_relative_drift"]
+          }
+        },
+        "required": ["electrostatic_energy"]
+      }
+    },
+    "required": ["poisson", "conservation"]
+  },
+  "then": {
+    "description": "Without Poisson, timings_seconds.poisson is 0, not null.",
+    "properties": {
+      "timings_seconds": {
+        "properties": {
+          "poisson": {
+            "const": 0
+          }
+        },
+        "required": ["poisson"]
+      }
+    },
+    "required": ["timings_seconds"]
+  },
+  "$defs": {
+    "number_or_null": {
+      "type": ["number", "null"]
+    },
+    "non_negative_number_or_null": {
+      "type": ["number", "null"],
+      "minimum": 0
+    },
+    "non_negative_integer_or_null": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "number_array_or_null": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "number"
+      }
+    },
+    "variable_errors": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["l1", "l2", "linf", "observed_order"],
+      "properties": {
+        "l1": {
+          "$ref": "#/$defs/number_or_null"
+        },
+        "l2": {
+          "$ref": "#/$defs/number_or_null"
+        },
+        "linf": {
+          "$ref": "#/$defs/number_or_null"
+        },
+        "observed_order": {
+          "$ref": "#/$defs/number_or_null"
+        }
+      }
+    },
+    "errors": {
+      "description": "Map of variable name to L1/L2/Linf norms and observed order. Variable names are case-specific.",
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/variable_errors"
+      }
+    },
+    "scalar_conservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["initial", "final", "max_relative_drift"],
+      "properties": {
+        "initial": {
+          "$ref": "#/$defs/number_or_null"
+        },
+        "final": {
+          "$ref": "#/$defs/number_or_null"
+        },
+        "max_relative_drift": {
+          "$ref": "#/$defs/number_or_null"
+        }
+      }
+    },
+    "momentum_conservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["initial", "final", "max_relative_drift"],
+      "properties": {
+        "initial": {
+          "$ref": "#/$defs/number_array_or_null"
+        },
+        "final": {
+          "$ref": "#/$defs/number_array_or_null"
+        },
+        "max_relative_drift": {
+          "$ref": "#/$defs/number_or_null"
+        }
+      }
+    },
+    "charge_conservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["initial", "final", "max_absolute_drift"],
+      "properties": {
+        "initial": {
+          "$ref": "#/$defs/number_or_null"
+        },
+        "final": {
+          "$ref": "#/$defs/number_or_null"
+        },
+        "max_absolute_drift": {
+          "$ref": "#/$defs/number_or_null"
+        }
+      }
+    },
+    "conservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mass_total",
+        "momentum_total",
+        "energy_total",
+        "charge_total",
+        "electrostatic_energy"
+      ],
+      "properties": {
+        "mass_total": {
+          "$ref": "#/$defs/scalar_conservation"
+        },
+        "momentum_total": {
+          "$ref": "#/$defs/momentum_conservation"
+        },
+        "energy_total": {
+          "$ref": "#/$defs/scalar_conservation"
+        },
+        "charge_total": {
+          "$ref": "#/$defs/charge_conservation"
+        },
+        "electrostatic_energy": {
+          "$ref": "#/$defs/scalar_conservation"
+        }
+      }
+    },
+    "poisson": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["residual_l2", "gauss_defect_l2"],
+      "properties": {
+        "residual_l2": {
+          "$ref": "#/$defs/number_or_null"
+        },
+        "gauss_defect_l2": {
+          "$ref": "#/$defs/number_or_null"
+        }
+      }
+    },
+    "extrema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rho_min", "p_min"],
+      "properties": {
+        "rho_min": {
+          "$ref": "#/$defs/number_or_null"
+        },
+        "p_min": {
+          "$ref": "#/$defs/number_or_null"
+        }
+      }
+    },
+    "symmetry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["error"],
+      "properties": {
+        "error": {
+          "$ref": "#/$defs/number_or_null"
+        }
+      }
+    },
+    "amr": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "interface_error",
+        "bulk_error",
+        "leaf_cells",
+        "patch_count",
+        "regrid_count"
+      ],
+      "properties": {
+        "interface_error": {
+          "$ref": "#/$defs/number_or_null"
+        },
+        "bulk_error": {
+          "$ref": "#/$defs/number_or_null"
+        },
+        "leaf_cells": {
+          "$ref": "#/$defs/non_negative_integer_or_null"
+        },
+        "patch_count": {
+          "$ref": "#/$defs/non_negative_integer_or_null"
+        },
+        "regrid_count": {
+          "$ref": "#/$defs/non_negative_integer_or_null"
+        }
+      }
+    },
+    "timings_seconds": {
+      "description": "Without Poisson, poisson time is 0 (not null). Residual, Gauss defect, and electrostatic energy are then null with reasons.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ghost_fill", "poisson", "reflux"],
+      "properties": {
+        "ghost_fill": {
+          "$ref": "#/$defs/non_negative_number_or_null"
+        },
+        "poisson": {
+          "$ref": "#/$defs/non_negative_number_or_null"
+        },
+        "reflux": {
+          "$ref": "#/$defs/non_negative_number_or_null"
+        }
+      }
+    },
+    "not_applicable_reason": {
+      "description": "Dotted field paths (single-segment * wildcards allowed) mapped to non-empty justification strings. Every null metric must have a matching reason; that cross-field rule is enforced in tests because wildcard keys are not expressible portably in JSON Schema.",
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^([A-Za-z_][A-Za-z0-9_]*|\\*)(\\.(?:[A-Za-z_][A-Za-z0-9_]*|\\*))*$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}

@@ -1,0 +1,366 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PoPS verification report v1",
+  "description": "JSON Schema for a campaign pops.verification.report.v1 summary.json object. Measured values stay in the document. A first-page topic that was not run is null and must have a justification in not_applicable_reason. An incompatible evolution requires a new schema version.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "repository",
+    "repository_sha",
+    "suite",
+    "max_nodes",
+    "native_dimensions",
+    "execution_spaces",
+    "coverage",
+    "failures",
+    "orders",
+    "amr",
+    "poisson",
+    "coupling",
+    "parallel_invariance",
+    "performance",
+    "not_applicable_reason",
+    "artifacts"
+  ],
+  "properties": {
+    "schema": {
+      "const": "pops.verification.report.v1"
+    },
+    "repository": {
+      "const": "wolf75222/PoPS"
+    },
+    "repository_sha": {
+      "$ref": "#/$defs/non_empty_string"
+    },
+    "suite": {
+      "enum": ["pr", "nightly", "weekly", "release", "two_node"]
+    },
+    "max_nodes": {
+      "description": "Campaigns are limited to two nodes; the runner later refuses nodes > 2.",
+      "type": "integer",
+      "const": 2
+    },
+    "native_dimensions": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "integer",
+        "enum": [1, 2, 3]
+      }
+    },
+    "execution_spaces": {
+      "description": "Closed catalog. A non-empty unique subset is valid; not every token is required.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": ["KokkosSerial", "KokkosOpenMP", "KokkosCuda"]
+      }
+    },
+    "coverage": {
+      "$ref": "#/$defs/coverage"
+    },
+    "failures": {
+      "description": "Empty when nothing failed. Refs may be empty only if justified; prefer non-empty paths.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/failure"
+      }
+    },
+    "orders": {
+      "description": "Empty only when no order campaign ran; then not_applicable_reason.orders is required.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/order"
+      }
+    },
+    "amr": {
+      "$ref": "#/$defs/amr"
+    },
+    "poisson": {
+      "$ref": "#/$defs/poisson"
+    },
+    "coupling": {
+      "$ref": "#/$defs/coupling"
+    },
+    "parallel_invariance": {
+      "$ref": "#/$defs/parallel_invariance"
+    },
+    "performance": {
+      "$ref": "#/$defs/performance"
+    },
+    "not_applicable_reason": {
+      "$ref": "#/$defs/not_applicable_reason"
+    },
+    "artifacts": {
+      "$ref": "#/$defs/artifacts"
+    }
+  },
+  "if": {
+    "description": "No order campaign: orders is empty.",
+    "properties": {
+      "orders": {
+        "maxItems": 0
+      }
+    },
+    "required": ["orders"]
+  },
+  "then": {
+    "description": "An empty orders array requires not_applicable_reason.orders.",
+    "properties": {
+      "not_applicable_reason": {
+        "required": ["orders"]
+      }
+    },
+    "required": ["not_applicable_reason"]
+  },
+  "$defs": {
+    "non_empty_string": {
+      "type": "string",
+      "minLength": 1
+    },
+    "non_negative_integer": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "number_or_null": {
+      "type": ["number", "null"]
+    },
+    "boolean_or_null": {
+      "type": ["boolean", "null"]
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "components",
+        "cases_planned",
+        "cases_run",
+        "cases_passed",
+        "cases_failed",
+        "cases_not_supported",
+        "not_tested"
+      ],
+      "properties": {
+        "components": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "cases_planned": {
+          "$ref": "#/$defs/non_negative_integer"
+        },
+        "cases_run": {
+          "$ref": "#/$defs/non_negative_integer"
+        },
+        "cases_passed": {
+          "$ref": "#/$defs/non_negative_integer"
+        },
+        "cases_failed": {
+          "$ref": "#/$defs/non_negative_integer"
+        },
+        "cases_not_supported": {
+          "$ref": "#/$defs/non_negative_integer"
+        },
+        "not_tested": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["case_id", "reason", "metrics_ref", "provenance_ref"],
+      "properties": {
+        "case_id": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "reason": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "metrics_ref": {
+          "type": "string"
+        },
+        "provenance_ref": {
+          "type": "string"
+        }
+      }
+    },
+    "order": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["case_id", "kind", "variable", "observed_order", "threshold"],
+      "properties": {
+        "case_id": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "kind": {
+          "enum": ["spatial", "temporal"]
+        },
+        "variable": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "observed_order": {
+          "$ref": "#/$defs/number_or_null"
+        },
+        "threshold": {
+          "$ref": "#/$defs/number_or_null"
+        }
+      }
+    },
+    "amr": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "order_retained",
+        "invariants_ok",
+        "interface_error",
+        "bulk_error"
+      ],
+      "properties": {
+        "order_retained": {
+          "$ref": "#/$defs/boolean_or_null"
+        },
+        "invariants_ok": {
+          "$ref": "#/$defs/boolean_or_null"
+        },
+        "interface_error": {
+          "$ref": "#/$defs/number_or_null"
+        },
+        "bulk_error": {
+          "$ref": "#/$defs/number_or_null"
+        }
+      }
+    },
+    "poisson": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["potential_error", "field_error", "residual_l2"],
+      "properties": {
+        "potential_error": {
+          "$ref": "#/$defs/number_or_null"
+        },
+        "field_error": {
+          "$ref": "#/$defs/number_or_null"
+        },
+        "residual_l2": {
+          "$ref": "#/$defs/number_or_null"
+        }
+      }
+    },
+    "coupling": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["phase_error", "sign_ok", "energy_drift"],
+      "properties": {
+        "phase_error": {
+          "$ref": "#/$defs/number_or_null"
+        },
+        "sign_ok": {
+          "$ref": "#/$defs/boolean_or_null"
+        },
+        "energy_drift": {
+          "$ref": "#/$defs/number_or_null"
+        }
+      }
+    },
+    "parallel_invariance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ranks_ok", "threads_ok", "gpu_ok"],
+      "properties": {
+        "ranks_ok": {
+          "$ref": "#/$defs/boolean_or_null"
+        },
+        "threads_ok": {
+          "$ref": "#/$defs/boolean_or_null"
+        },
+        "gpu_ok": {
+          "$ref": "#/$defs/boolean_or_null"
+        }
+      }
+    },
+    "performance_node": {
+      "description": "Measured node performance. Extra numeric or string fields are allowed.",
+      "type": "object",
+      "required": ["cells_per_second", "notes"],
+      "properties": {
+        "cells_per_second": {
+          "$ref": "#/$defs/number_or_null"
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    },
+    "performance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["one_node", "two_node"],
+      "properties": {
+        "one_node": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/performance_node"
+            }
+          ]
+        },
+        "two_node": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/performance_node"
+            }
+          ]
+        }
+      }
+    },
+    "not_applicable_reason": {
+      "description": "Dotted field paths (single-segment * wildcards allowed) mapped to non-empty justification strings. Every null first-page field must have a matching reason; that cross-field rule is enforced in tests because wildcard keys are not expressible portably in JSON Schema. An empty orders array requires the key orders.",
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^([A-Za-z_][A-Za-z0-9_]*|\\*)(\\.(?:[A-Za-z_][A-Za-z0-9_]*|\\*))*$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "artifacts": {
+      "description": "Paths relative to the campaign output root. Extra path strings are allowed for later CSVs and plots.",
+      "type": "object",
+      "required": ["report_md", "summary_json", "coverage_csv", "failures_csv"],
+      "additionalProperties": {
+        "$ref": "#/$defs/non_empty_string"
+      },
+      "properties": {
+        "report_md": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "summary_json": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "coverage_csv": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "failures_csv": {
+          "$ref": "#/$defs/non_empty_string"
+        }
+      }
+    }
+  }
+}

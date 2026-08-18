@@ -1,0 +1,27 @@
+# Local echo of IF-06. Not catalogued in verification/manifest.toml (orchestrator).
+id = "IF-06"
+path = "verification/cases/infrastructure/deterministic_reductions/run.py"
+name = "deterministic reductions"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = []
+oracle = "exact_representable_geometric_sum"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = ["deterministic_reduction_switch"]
+
+[reductions]
+branch = "capability-gated"
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+bitwise_identity = true
+reductions = ["sequential", "pairwise", "blocked"]
+block_size = 8

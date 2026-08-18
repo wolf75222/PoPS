@@ -1,0 +1,26 @@
+# Local echo of TM-04. Not catalogued in verification/manifest.toml (orchestrator).
+id = "TM-04"
+path = "verification/cases/time/larmor/run.py"
+name = "Larmor / magnetized oscillator"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["time"]
+oracle = "larmor"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+exact_speed_conserved = true
+period_return = true
+implicit_midpoint_speed_atol = 1.0e-12
+explicit_euler_speed_grows = true
+omega_c = 1.0

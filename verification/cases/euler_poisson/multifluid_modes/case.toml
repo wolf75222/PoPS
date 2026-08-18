@@ -1,0 +1,25 @@
+# Local echo of CP-05. Orchestrator owns verification/manifest.toml.
+id = "CP-05"
+path = "verification/cases/euler_poisson/multifluid_modes/run.py"
+name = "multifluid eigenmode generator"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["euler_poisson"]
+oracle = "linear_eigenmode_generator"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+matrix = "2x2 toy M(k)"
+eigenvalues = ["+i c k", "-i c k"]
+wave_speed = 1.0
+reference = "U = Ubar + eps Re(r exp(ikx + lambda t))"

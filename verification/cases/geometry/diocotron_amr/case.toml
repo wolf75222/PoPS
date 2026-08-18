@@ -1,0 +1,28 @@
+# Local echo of GE-06. Not catalogued in verification/manifest.toml (orchestrator).
+id = "GE-06"
+path = "verification/cases/geometry/diocotron_amr/run.py"
+name = "Cartesian diocotron AMR companion"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["geometry", "amr"]
+oracle = "cp11_ring_tag_envelope"
+native_dimensions = [2]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = ["CP-11"]
+# Uniform Dim2 Euler–Poisson smoke. Public AM-01/AM-11 tagging is 1-d;
+# the two-level |n-n_bg| envelope stays the in-memory oracle. Polar refused.
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+theta = 0.5
+buffer_cells = 2
+unused_mode = 3
+unused_mode_fft = 0.0
+tagged_covers_ring = true

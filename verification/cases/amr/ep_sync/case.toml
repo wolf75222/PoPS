@@ -1,0 +1,23 @@
+# Local echo of AM-11. Not catalogued in verification/manifest.toml (orchestrator).
+id = "AM-11"
+path = "verification/cases/amr/ep_sync/run.py"
+name = "Euler-Poisson AMR sync"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["amr", "euler_poisson"]
+oracle = "leaf_only_charge"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+leaf_only_charge = true
+covered_parent_not_double_counted = true

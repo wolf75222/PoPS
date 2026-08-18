@@ -1,0 +1,24 @@
+# Local echo of PF-08. Optional run_native wraps AM-09.
+# Not catalogued in verification/manifest.toml (orchestrator).
+id = "PF-08"
+path = "verification/cases/performance/reflux_sync/run.py"
+name = "reflux / AMR sync stand-in"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = ["amr"]
+oracle = "reflux_conservation_residual"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+closed_residual = 0.0
+open_residual_nonzero = true

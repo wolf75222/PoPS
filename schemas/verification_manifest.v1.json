@@ -1,0 +1,286 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PoPS verification manifest v1",
+  "description": "JSON Schema for the parsed verification/manifest.toml object. TOML comments are not part of the instance. An incompatible evolution requires a new schema version.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "repository",
+    "max_nodes",
+    "current_capabilities"
+  ],
+  "properties": {
+    "schema": {
+      "const": "pops.verification.manifest.v1"
+    },
+    "repository": {
+      "const": "wolf75222/PoPS"
+    },
+    "max_nodes": {
+      "description": "Campaigns are limited to two nodes; the runner later refuses nodes > 2.",
+      "type": "integer",
+      "const": 2
+    },
+    "current_capabilities": {
+      "$ref": "#/$defs/current_capabilities"
+    },
+    "case": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/case"
+      }
+    }
+  },
+  "$defs": {
+    "current_capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "exact_native_dimension",
+        "cartesian_system_runtime",
+        "polar_system_runtime",
+        "amr_total_levels_baseline",
+        "amr_refinement_ratios_baseline",
+        "hdf5_requires_mpi"
+      ],
+      "properties": {
+        "exact_native_dimension": {
+          "type": "boolean"
+        },
+        "cartesian_system_runtime": {
+          "type": "boolean"
+        },
+        "polar_system_runtime": {
+          "type": "boolean"
+        },
+        "amr_total_levels_baseline": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "amr_refinement_ratios_baseline": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 2
+          }
+        },
+        "hdf5_requires_mpi": {
+          "type": "boolean"
+        }
+      }
+    },
+    "case": {
+      "type": "object",
+      "required": [
+        "id",
+        "path",
+        "name",
+        "verification_kind",
+        "evidence_status",
+        "physics",
+        "oracle",
+        "native_dimensions",
+        "execution_spaces",
+        "mpi_modes",
+        "suites",
+        "requires",
+        "resources",
+        "acceptance"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "verification_kind": {
+          "enum": [
+            "code-verification",
+            "solution-verification",
+            "physical-validation",
+            "robustness",
+            "infrastructure"
+          ]
+        },
+        "evidence_status": {
+          "enum": [
+            "required",
+            "capability-gated",
+            "reproduction-candidate",
+            "established-reproduction"
+          ]
+        },
+        "physics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "oracle": {
+          "type": "string"
+        },
+        "native_dimensions": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "enum": [1, 2, 3]
+          }
+        },
+        "execution_spaces": {
+          "description": "Closed catalog. A non-empty subset is valid; not every token is required.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "enum": ["KokkosSerial", "KokkosOpenMP", "KokkosCuda"]
+          }
+        },
+        "mpi_modes": {
+          "description": "Closed catalog. A non-empty subset is valid; not every token is required.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "enum": ["off", "on"]
+          }
+        },
+        "suites": {
+          "description": "Closed catalog. A non-empty subset is valid; not every token is required.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "enum": ["pr", "nightly", "weekly", "release", "two_node"]
+          }
+        },
+        "requires": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "resources": {
+          "$ref": "#/$defs/resources"
+        },
+        "acceptance": {
+          "$ref": "#/$defs/acceptance"
+        }
+      }
+    },
+    "resource_nodes": {
+      "description": "Any nodes field in resources is at most 2 (integer or every array item).",
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2
+          }
+        }
+      ]
+    },
+    "resources": {
+      "type": "object",
+      "properties": {
+        "pr": {
+          "$ref": "#/$defs/pr_resources"
+        },
+        "two_node": {
+          "$ref": "#/$defs/two_node_resources"
+        }
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "nodes": {
+            "$ref": "#/$defs/resource_nodes"
+          }
+        }
+      }
+    },
+    "pr_resources": {
+      "type": "object",
+      "properties": {
+        "nodes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2
+        },
+        "mpi_ranks": {
+          "type": "integer"
+        },
+        "omp_threads": {
+          "type": "integer"
+        },
+        "resolutions": {
+          "description": "A convergence set with only two points is later refused by the runner; the schema allows one or more points.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "integer"
+          }
+        }
+      }
+    },
+    "two_node_resources": {
+      "type": "object",
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2
+          }
+        },
+        "mpi_ranks_per_node": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "gpus_per_node": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "max_wall_seconds": {
+          "type": "integer"
+        }
+      }
+    },
+    "acceptance": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "spatial_order_min": {
+          "type": "number"
+        },
+        "temporal_order_min": {
+          "type": "number"
+        },
+        "poisson_relative_residual_max": {
+          "type": "number"
+        },
+        "finite": {
+          "type": "boolean"
+        },
+        "charge_conservation": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

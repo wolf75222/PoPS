@@ -1,0 +1,24 @@
+# Local echo of RB-02. Orchestrator owns verification/manifest.toml.
+id = "RB-02"
+path = "verification/cases/robustness/double_rarefaction/run.py"
+name = "Double rarefaction / near-vacuum"
+verification_kind = "robustness"
+evidence_status = "required"
+physics = ["euler"]
+oracle = "exact_riemann"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+finite = true
+positivity = true
+star_below_sides = true

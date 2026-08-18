@@ -1,0 +1,25 @@
+# Local echo of CP-06. Orchestrator owns verification/manifest.toml.
+id = "CP-06"
+path = "verification/cases/euler_poisson/ion_acoustic/run.py"
+name = "ion-acoustic eigenmode"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["euler_poisson"]
+oracle = "ion_acoustic_dispersion"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+dispersion = "omega^2 = k^2 c_s^2 / (1 + k^2 lambda_D^2)"
+matrix = "2x2 M(k) on (delta n_i, delta u_i)"
+eigenvalue = "-i omega"
+reference = "U = Ubar + eps Re(r exp(ikx - i omega t))"

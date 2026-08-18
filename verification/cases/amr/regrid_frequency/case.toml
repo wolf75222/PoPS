@@ -1,0 +1,26 @@
+# Local echo of AM-05. Not catalogued in verification/manifest.toml (orchestrator).
+id = "AM-05"
+path = "verification/cases/amr/regrid_frequency/run.py"
+name = "regrid frequency sweep"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["amr", "advection"]
+oracle = "tr02_regrid_frequency"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = ["TR-02"]
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+k_values = [1, 2, 4, 8, 16]
+n_steps = 16
+rebuilds = "N/k"
+interval_leftover = 0
+field_leftover_slope = 0

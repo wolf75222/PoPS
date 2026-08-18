@@ -1,0 +1,28 @@
+# Local echo of GE-01. Not catalogued in verification/manifest.toml (orchestrator).
+id = "GE-01"
+path = "verification/cases/geometry/polar_poisson/run.py"
+name = "polar manufactured Poisson"
+verification_kind = "code-verification"
+evidence_status = "capability-gated"
+physics = ["poisson"]
+oracle = "polar_harmonic_r_m_cos_m_theta"
+native_dimensions = [2]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = ["polar_system_runtime"]
+
+[polar]
+branch = "capability-gated"
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+laplacian_linf = 0.0
+r_min = 0.2
+mode = 2
+polar_runtime = "refused"

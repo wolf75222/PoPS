@@ -1,0 +1,29 @@
+# Local echo of GE-02. Not catalogued in verification/manifest.toml (orchestrator).
+id = "GE-02"
+path = "verification/cases/geometry/solid_rotation/run.py"
+name = "solid-body scalar rotation"
+verification_kind = "code-verification"
+evidence_status = "capability-gated"
+physics = ["advection"]
+oracle = "solid_body_gaussian_rotation"
+native_dimensions = [2]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = ["polar_system_runtime"]
+
+[polar]
+branch = "capability-gated"
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+return_error = 0.0
+period = 1.0
+omega = 6.283185307179586
+start_peak = [0.5, 0.0]
+quarter_turn_peak = [0.0, 0.5]

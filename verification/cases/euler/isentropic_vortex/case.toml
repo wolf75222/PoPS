@@ -1,0 +1,22 @@
+# Local echo of EU-02. Orchestrator owns verification/manifest.toml.
+id = "EU-02"
+path = "verification/cases/euler/isentropic_vortex/run.py"
+name = "Euler isentropic vortex"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["euler"]
+oracle = "isentropic_vortex"
+native_dimensions = [2]
+execution_spaces = ["KokkosSerial", "KokkosOpenMP"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+finite = true

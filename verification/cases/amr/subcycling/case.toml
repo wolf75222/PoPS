@@ -1,0 +1,24 @@
+# Local echo of AM-04. Not catalogued in verification/manifest.toml (orchestrator).
+id = "AM-04"
+path = "verification/cases/amr/subcycling/run.py"
+name = "AMR subcycling"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["amr", "time"]
+oracle = "subcycling_fine_dt"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+ratios = [1, 2, 4]
+ratio_2_fine_steps = 2
+observed_order_min = 1.8

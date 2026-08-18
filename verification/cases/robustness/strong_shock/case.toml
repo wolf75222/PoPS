@@ -1,0 +1,25 @@
+# Local echo of RB-03. Orchestrator owns verification/manifest.toml.
+id = "RB-03"
+path = "verification/cases/robustness/strong_shock/run.py"
+name = "Strong shock"
+verification_kind = "robustness"
+evidence_status = "required"
+physics = ["euler"]
+oracle = "exact_riemann"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+finite = true
+positivity = true
+star_over_right = 1000.0
+right_going_shock = true

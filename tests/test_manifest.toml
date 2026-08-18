@@ -1327,3 +1327,8 @@ labels = ["unit", "python", "time", "fast"]
 name = "pops_python_architecture"
 path = "tests/python/architecture"
 labels = ["quality", "python", "architecture", "fast"]
+
+[[python.suite]]
+name = "pops_python_verification"
+path = "tests/python/verification"
+labels = ["unit", "python", "verification", "fast"]

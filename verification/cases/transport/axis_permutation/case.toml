@@ -1,0 +1,28 @@
+# Local echo of TR-06. Not catalogued in verification/manifest.toml (orchestrator).
+id = "TR-06"
+path = "verification/cases/transport/axis_permutation/run.py"
+name = "axis permutation / reflection"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["transport"]
+oracle = "tr01_sine_axis_permutation"
+native_dimensions = [2]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+permutation_linf = 0.0
+reflection_linf = 0.0
+t = 0.125
+kx = 1.0
+ky = 2.0
+ax = 1.0
+ay = 0.5

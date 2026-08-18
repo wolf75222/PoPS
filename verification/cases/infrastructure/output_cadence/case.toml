@@ -1,0 +1,28 @@
+# Local echo of IF-05. Not catalogued in verification/manifest.toml (orchestrator).
+id = "IF-05"
+path = "verification/cases/infrastructure/output_cadence/run.py"
+name = "output-cadence invariance"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = ["transport"]
+oracle = "tr01_sine_output_cadences"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = ["output_cadence_consumer"]
+
+[output_cadence]
+branch = "capability-gated"
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+field_to_field_linf = 0.0
+cadences = [1, 2, 10]
+t = 0.25
+leftover_dump_linf = 0.25

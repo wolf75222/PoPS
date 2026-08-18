@@ -1,0 +1,24 @@
+# Local echo of TM-08. Not catalogued in verification/manifest.toml (orchestrator).
+id = "TM-08"
+path = "verification/cases/time/reversible_strang/run.py"
+name = "reversible Strang"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["time", "transport"]
+oracle = "reversible_strang"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+return_error = 0.0
+t = 0.25
+velocity = 1.0

@@ -1,0 +1,28 @@
+# Local echo of IF-07. Not catalogued in verification/manifest.toml (orchestrator).
+id = "IF-07"
+path = "verification/cases/infrastructure/path_parity/run.py"
+name = "native / DSL / hybrid parity"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = ["transport"]
+oracle = "tr01_sine_path_labels"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = ["hybrid_native_cpp_authoring"]
+
+[paths]
+dsl = "public Case"
+native = "capability-gated"
+hybrid = "capability-gated"
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+field_to_field_linf = 0.0
+paths = ["native", "dsl", "hybrid"]

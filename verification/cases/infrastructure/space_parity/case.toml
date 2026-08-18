@@ -1,0 +1,23 @@
+# Local echo of IF-03. Not catalogued in verification/manifest.toml (orchestrator).
+id = "IF-03"
+path = "verification/cases/infrastructure/space_parity/run.py"
+name = "Kokkos Serial vs OpenMP parity"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = ["transport"]
+oracle = "tr01_sine_space_parity"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial", "KokkosOpenMP"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+field_to_field_linf = 0.0
+spaces = ["KokkosSerial", "KokkosOpenMP"]

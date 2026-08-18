@@ -1,0 +1,2287 @@
+# Scientific campaign source of truth for the monorepo.
+# Distinct from tests/test_manifest.toml and benchmarks/manifest.toml;
+# do not duplicate those authorities (plan §2.1–2.2, §36).
+
+schema = "pops.verification.manifest.v1"
+repository = "wolf75222/PoPS"
+max_nodes = 2
+
+[current_capabilities]
+exact_native_dimension = true
+cartesian_system_runtime = true
+polar_system_runtime = false
+amr_total_levels_baseline = 3
+amr_refinement_ratios_baseline = [2, 2]
+hdf5_requires_mpi = true
+
+# Phase 0 dummy plus Phase 1 oracles (uniform 1-d first increment).
+
+[[case]]
+id = "PH-00"
+path = "verification/cases/infrastructure/dummy_analytic/run.py"
+name = "Phase 0 dummy analytic cosine"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = []
+oracle = "manufactured_cosine"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+finite = true
+
+[[case]]
+id = "TR-01"
+path = "verification/cases/transport/advection_sine/run.py"
+name = "Periodic sine advection"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["scalar_advection"]
+oracle = "translated_sine"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr", "nightly", "release"]
+requires = ["public_case_pipeline", "cartesian_layout"]
+
+[case.resources.pr]
+nodes = 1
+resolutions = [16, 32, 64, 128]
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+spatial_order_min = 1.8
+finite = true
+
+[[case]]
+id = "TR-02"
+path = "verification/cases/transport/gaussian_pulse/run.py"
+name = "Transported Gaussian pulse"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["scalar_advection"]
+oracle = "translated_gaussian"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr", "nightly", "release"]
+requires = ["public_case_pipeline", "cartesian_layout"]
+
+[case.resources.pr]
+nodes = 1
+resolutions = [16, 32, 64, 128]
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+finite = true
+
+[[case]]
+id = "PO-01"
+path = "verification/cases/poisson/periodic_trig/run.py"
+name = "Periodic trigonometric Poisson"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["poisson"]
+oracle = "trigonometric_potential"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr", "nightly", "release"]
+requires = ["public_case_pipeline", "cartesian_layout"]
+
+[case.resources.pr]
+nodes = 1
+resolutions = [16, 32, 64, 128]
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+spatial_order_min = 1.8
+finite = true
+
+[[case]]
+id = "EU-01"
+path = "verification/cases/euler/linear_waves/run.py"
+name = "Euler linear eigenmodes"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["euler"]
+oracle = "linear_eigenmode"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr", "nightly", "release"]
+requires = ["public_case_pipeline", "cartesian_layout"]
+
+[case.resources.pr]
+nodes = 1
+resolutions = [16, 32, 64, 128]
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+spatial_order_min = 1.8
+finite = true
+
+[[case]]
+id = "PO-02"
+path = "verification/cases/poisson/dirichlet_mms/run.py"
+name = "Poisson Dirichlet MMS"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["poisson"]
+oracle = "dirichlet_mms"
+native_dimensions = [1, 2]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr", "nightly", "release"]
+requires = ["public_case_pipeline", "cartesian_layout"]
+
+[case.resources.pr]
+nodes = 1
+resolutions = [16, 32, 64, 128]
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+spatial_order_min = 1.8
+finite = true
+
+[[case]]
+id = "PO-03"
+path = "verification/cases/poisson/neumann_nullspace/run.py"
+name = "Poisson Neumann nullspace"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["poisson"]
+oracle = "neumann_mean_free"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr", "nightly", "release"]
+requires = ["public_case_pipeline", "cartesian_layout"]
+
+[case.resources.pr]
+nodes = 1
+resolutions = [16, 32, 64, 128]
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+finite = true
+
+[[case]]
+id = "PO-07"
+path = "verification/cases/poisson/elliptic_tolerance/run.py"
+name = "Elliptic tolerance sweep"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["poisson"]
+oracle = "trigonometric_potential"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr", "nightly", "release"]
+requires = ["public_case_pipeline"]
+
+[case.resources.pr]
+nodes = 1
+resolutions = [16, 32, 64, 128]
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+finite = true
+
+[[case]]
+id = "EU-02"
+path = "verification/cases/euler/isentropic_vortex/run.py"
+name = "Isentropic vortex"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["euler"]
+oracle = "translated_isentropic_vortex"
+native_dimensions = [2]
+execution_spaces = ["KokkosSerial", "KokkosOpenMP"]
+mpi_modes = ["off"]
+suites = ["pr", "nightly", "release"]
+requires = ["public_case_pipeline", "cartesian_layout"]
+
+[case.resources.pr]
+nodes = 1
+resolutions = [16, 32, 64, 128]
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+spatial_order_min = 1.8
+finite = true
+
+[[case]]
+id = "EU-03"
+path = "verification/cases/euler/mms/run.py"
+name = "Euler manufactured solution"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["euler"]
+oracle = "euler_mms"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr", "nightly", "release"]
+requires = ["public_case_pipeline", "cartesian_layout"]
+
+[case.resources.pr]
+nodes = 1
+resolutions = [16, 32, 64, 128]
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+spatial_order_min = 1.8
+finite = true
+
+[[case]]
+id = "TM-01"
+path = "verification/cases/time/pure_temporal/run.py"
+name = "Pure temporal order"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["scalar_advection"]
+oracle = "translated_sine"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr", "nightly", "release"]
+requires = ["public_case_pipeline"]
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+temporal_order_min = 1.8
+finite = true
+
+[[case]]
+id = "CP-01"
+path = "verification/cases/euler_poisson/mms/run.py"
+name = "Euler-Poisson MMS"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["euler", "poisson"]
+oracle = "euler_poisson_mms"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr", "nightly", "release"]
+requires = ["public_case_pipeline"]
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+finite = true
+
+[[case]]
+id = "CP-02"
+path = "verification/cases/euler_poisson/langmuir_cold/run.py"
+name = "Cold Langmuir wave"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["euler", "poisson"]
+oracle = "cold_langmuir"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr", "nightly", "release"]
+requires = ["public_case_pipeline"]
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+finite = true
+
+[[case]]
+id = "CP-03"
+path = "verification/cases/euler_poisson/langmuir_warm/run.py"
+name = "Warm Langmuir dispersion"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["euler", "poisson"]
+oracle = "warm_langmuir_dispersion"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr", "nightly", "release"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+finite = true
+
+[[case]]
+id = "CP-07"
+path = "verification/cases/euler_poisson/pressure_balance/run.py"
+name = "Pressure-field equilibrium"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["euler", "poisson"]
+oracle = "isothermal_balance"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr", "nightly", "release"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+finite = true
+
+[[case]]
+id = "CP-08"
+path = "verification/cases/euler_poisson/uniform_e_accel/run.py"
+name = "Uniform-E acceleration"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["euler"]
+oracle = "uniform_e_accel"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr", "nightly", "release"]
+requires = ["public_case_pipeline"]
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+finite = true
+
+[[case]]
+id = "CP-12"
+path = "verification/cases/euler_poisson/charge_cancel/run.py"
+name = "Multi-species charge cancellation"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["poisson"]
+oracle = "neutral_pair"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr", "nightly", "release"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+finite = true
+
+[[case]]
+id = "TM-07"
+path = "verification/cases/time/rk_field_stages/run.py"
+name = "RK field update every stage"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["poisson"]
+oracle = "stage_count"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr", "nightly", "release"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+finite = true
+
+[[case]]
+id = "AM-10"
+path = "verification/cases/amr/composite_poisson/run.py"
+name = "composite Poisson two-level residual"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["amr", "poisson"]
+oracle = "periodic_trig"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+levels = 2
+leaf_only_residual = true
+
+[[case]]
+id = "AM-11"
+path = "verification/cases/amr/ep_sync/run.py"
+name = "Euler-Poisson AMR sync"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["amr", "euler_poisson"]
+oracle = "leaf_only_charge"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+leaf_only_charge = true
+covered_parent_not_double_counted = true
+
+[[case]]
+id = "AM-08"
+path = "verification/cases/amr/interface_sweep/run.py"
+name = "interface placement sweep"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["amr", "transport"]
+oracle = "interface_placement_envelope"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+observed_order_min = 1.8
+envelope_finite = true
+
+[[case]]
+id = "AM-06"
+path = "verification/cases/amr/level_count/run.py"
+name = "AMR level count"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["amr"]
+oracle = "level_count"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+supported_levels = 3
+accepted_level_counts = [1, 2, 3]
+refused_level_count = 4
+
+[[case]]
+id = "AM-02"
+path = "verification/cases/amr/prescribed_patch/run.py"
+name = "prescribed moving patch"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["amr", "advection"]
+oracle = "prescribed_barycenter"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = ["TR-02"]
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+stress_cycles = 256
+exact_mass_drift = 0
+regrid_jump_order = 2
+
+[[case]]
+id = "AM-09"
+path = "verification/cases/amr/reflux/run.py"
+name = "AMR reflux conservation"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["amr"]
+oracle = "reflux_conservation_residual"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+closed_residual = 0.0
+open_residual_nonzero = true
+
+[[case]]
+id = "AM-01"
+path = "verification/cases/amr/static_cf_wave/run.py"
+name = "static coarse-fine wave"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["amr", "transport"]
+oracle = "tr01_sine_static_cf"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+interface_error_defined = true
+ratio_is_observation = true
+
+[[case]]
+id = "AM-04"
+path = "verification/cases/amr/subcycling/run.py"
+name = "AMR subcycling"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["amr", "time"]
+oracle = "subcycling_fine_dt"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+ratios = [1, 2, 4]
+ratio_2_fine_steps = 2
+observed_order_min = 1.8
+
+[[case]]
+id = "AM-07"
+path = "verification/cases/amr/vs_uniform_fine/run.py"
+name = "AMR vs uniform fine"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["amr", "transport"]
+oracle = "manufactured_e_h2"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+fine_region_matches_uniform_h2 = true
+observed_order_min = 1.8
+
+[[case]]
+id = "CP-05"
+path = "verification/cases/euler_poisson/multifluid_modes/run.py"
+name = "multifluid eigenmode generator"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["euler_poisson"]
+oracle = "linear_eigenmode_generator"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+matrix = "2x2 toy M(k)"
+eigenvalues = ["+i c k", "-i c k"]
+wave_speed = 1.0
+reference = "U = Ubar + eps Re(r exp(ikx + lambda t))"
+
+[[case]]
+id = "PO-06"
+path = "verification/cases/poisson/cf_gradient/run.py"
+name = "CF gradient placement (1-d)"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["poisson"]
+oracle = "periodic_trig"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly", "weekly", "release"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+min_order = 1.8
+placements = ["max_phi", "zero", "max_abs_dphi", "max_abs_d2phi"]
+
+[[case]]
+id = "RB-05"
+path = "verification/cases/robustness/sedov/run.py"
+name = "Sedov off-center"
+verification_kind = "robustness"
+evidence_status = "required"
+physics = ["euler"]
+oracle = "sedov_self_similar"
+native_dimensions = [2]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+time_exponent_2d = 0.4
+constant_polar_anisotropy = 0.0
+
+[[case]]
+id = "RB-01"
+path = "verification/cases/robustness/sod/run.py"
+name = "Sod shock tube"
+verification_kind = "robustness"
+evidence_status = "required"
+physics = ["euler"]
+oracle = "exact_riemann"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+finite = true
+positivity = true
+
+[[case]]
+id = "TM-03"
+path = "verification/cases/time/collision_relax/run.py"
+name = "exact collision relaxation"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["time"]
+oracle = "collision_relax"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+barycenter_constant = true
+exponential = true
+
+[[case]]
+id = "TM-02"
+path = "verification/cases/time/noncommuting_strang/run.py"
+name = "noncommuting Strang"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["time"]
+oracle = "noncommuting_ab_split"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+dt_series = [0.1, 0.05, 0.025, 0.0125]
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+lie_observed_order_min = 0.8
+strang_observed_order_min = 1.8
+a1 = 1.0
+a2 = 3.0
+nu = 1.0
+
+[[case]]
+id = "TM-08"
+path = "verification/cases/time/reversible_strang/run.py"
+name = "reversible Strang"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["time", "transport"]
+oracle = "reversible_strang"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+return_error = 0.0
+t = 0.25
+velocity = 1.0
+
+[[case]]
+id = "TR-04"
+path = "verification/cases/transport/block_crossings/run.py"
+name = "face/edge/corner crossing"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["advection"]
+oracle = "translated_gaussian"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+placements = ["face", "edge", "corner"]
+face = 0.5
+n_blocks = 2
+field_to_field_linf = 0.0
+
+[[case]]
+id = "TR-05"
+path = "verification/cases/transport/block_shift/run.py"
+name = "translated block faces"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["advection"]
+oracle = "translated_block_faces"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+decomposition_linf = 0.0
+interfaces = [0.25, 0.2578125, 0.375]
+
+[[case]]
+id = "AM-12"
+path = "verification/cases/amr/patch_symmetry/run.py"
+name = "patch-shape / reflection symmetry"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["amr", "transport"]
+oracle = "tr01_sine_reflected_cf"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+reflected_mask_is_spatial_reverse = true
+e_cf_invariant_under_reflection = true
+
+[[case]]
+id = "AM-05"
+path = "verification/cases/amr/regrid_frequency/run.py"
+name = "regrid frequency sweep"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["amr", "advection"]
+oracle = "tr02_regrid_frequency"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = ["TR-02"]
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+k_values = [1, 2, 4, 8, 16]
+n_steps = 16
+rebuilds = "N/k"
+interval_leftover = 0
+field_leftover_slope = 0
+
+[[case]]
+id = "AM-03"
+path = "verification/cases/amr/tagging/run.py"
+name = "gradient / second-diff tagging"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["amr", "advection"]
+oracle = "tr02_gaussian_tag_mask"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = ["TR-02"]
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+theta = 0.02
+theta2 = 0.002
+buffer_widths = [1, 2, 4]
+buffer_2_halo_cells = 4
+hysteresis_static_stable = true
+
+[[case]]
+id = "EU-05"
+path = "verification/cases/euler/gresho/run.py"
+name = "Euler Gresho vortex"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["euler"]
+oracle = "stationary_gresho"
+native_dimensions = [2]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+finite = true
+
+[[case]]
+id = "EU-04"
+path = "verification/cases/euler/standing_acoustic/run.py"
+name = "Euler standing acoustic wave"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["euler"]
+oracle = "standing_acoustic"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+finite = true
+
+[[case]]
+id = "EU-06"
+path = "verification/cases/euler/uniform_flow/run.py"
+name = "Euler exact uniform-flow preservation"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["euler"]
+oracle = "uniform_free_stream"
+native_dimensions = [2]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+leftover_linf_equals_bump = true
+orders_reason = "machine-zero free-stream"
+
+[[case]]
+id = "CP-09"
+path = "verification/cases/euler_poisson/debye_screen/run.py"
+name = "linearized Debye screen"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["euler_poisson"]
+oracle = "debye_screen"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+finite = true
+helmholtz_identity = true
+poisson_limit = true
+
+[[case]]
+id = "CP-06"
+path = "verification/cases/euler_poisson/ion_acoustic/run.py"
+name = "ion-acoustic eigenmode"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["euler_poisson"]
+oracle = "ion_acoustic_dispersion"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+dispersion = "omega^2 = k^2 c_s^2 / (1 + k^2 lambda_D^2)"
+matrix = "2x2 M(k) on (delta n_i, delta u_i)"
+eigenvalue = "-i omega"
+reference = "U = Ubar + eps Re(r exp(ikx - i omega t))"
+
+[[case]]
+id = "CP-10"
+path = "verification/cases/euler_poisson/jeans/run.py"
+name = "Jeans stable / unstable"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["euler_poisson"]
+oracle = "jeans_dispersion"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+dispersion = "omega^2 = c_s^2 k^2 - 4 pi G rho0"
+c_s = 1.0
+four_pi_G_rho0 = 1.0
+k_J = 1.0
+k_stable = 2.0
+k_unstable = 0.5
+growth = "exp(gamma t)"
+gravity = "attractive"
+
+[[case]]
+id = "CP-04"
+path = "verification/cases/euler_poisson/oblique_wave/run.py"
+name = "Oblique electrostatic eigenmode"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["continuity", "momentum", "poisson", "electrostatic_source"]
+oracle = "linear_eigenmode_and_closed_form"
+native_dimensions = [2]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+finite = true
+wavevector = [1, 2]
+omega_pe = 1.0
+
+[[case]]
+id = "GE-03"
+path = "verification/cases/geometry/radial_acoustic/run.py"
+name = "radial acoustic in Cartesian"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["euler"]
+oracle = "radial_acoustic_bessel"
+native_dimensions = [2]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+angular_std = 0.0
+omega_equals_c_k = true
+
+[[case]]
+id = "IF-04"
+path = "verification/cases/infrastructure/checkpoint_restart/run.py"
+name = "checkpoint / restart identity"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = []
+oracle = "json_checkpoint_identity"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+round_trip_linf = 0.0
+t_preserved = true
+
+[[case]]
+id = "IF-01"
+path = "verification/cases/infrastructure/mpi_invariance/run.py"
+name = "MPI decomposition invariance"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = ["transport"]
+oracle = "tr01_sine_mpi_decompositions"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+field_to_field_linf = 0.0
+placements = ["one_block", "two_block", "1x4", "4x1"]
+splits = [0.25, 0.5, 0.75]
+
+[[case]]
+id = "PF-01"
+path = "verification/cases/performance/multifab_arith/run.py"
+name = "official arith_halo (benchmarks/manifest.toml)"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = []
+oracle = "periodic_halo_identity"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+halo_linf = 0.0
+saxpy_linf = 0.0
+halo_width = 2
+
+[[case]]
+id = "PO-05"
+path = "verification/cases/poisson/fft_vs_gmg/run.py"
+name = "FFT vs GMG cross-oracle (1-d)"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["poisson"]
+oracle = "periodic_trig"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+spectral_atol = 1e-12
+
+[[case]]
+id = "PO-04"
+path = "verification/cases/poisson/huang_greengard/run.py"
+name = "Huang\u2013Greengard multi-blob Poisson (1-d)"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["poisson"]
+oracle = "huang_greengard"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+min_order = 1.8
+
+[[case]]
+id = "RB-02"
+path = "verification/cases/robustness/double_rarefaction/run.py"
+name = "Double rarefaction / near-vacuum"
+verification_kind = "robustness"
+evidence_status = "required"
+physics = ["euler"]
+oracle = "exact_riemann"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+finite = true
+positivity = true
+star_below_sides = true
+
+[[case]]
+id = "RB-06"
+path = "verification/cases/robustness/noh/run.py"
+name = "Noh planar"
+verification_kind = "robustness"
+evidence_status = "required"
+physics = ["euler"]
+oracle = "noh_self_similar"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+finite = true
+positivity = true
+post_shock_density = 4.0
+shock_speed = 0.3333333333333333
+
+[[case]]
+id = "RB-04"
+path = "verification/cases/robustness/shu_osher/run.py"
+name = "Shu-Osher"
+verification_kind = "robustness"
+evidence_status = "required"
+physics = ["euler"]
+oracle = "shu_osher_ic"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+finite = true
+positivity = true
+sine_amplitude = 0.2
+
+[[case]]
+id = "RB-03"
+path = "verification/cases/robustness/strong_shock/run.py"
+name = "Strong shock"
+verification_kind = "robustness"
+evidence_status = "required"
+physics = ["euler"]
+oracle = "exact_riemann"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+finite = true
+positivity = true
+star_over_right = 1000.0
+right_going_shock = true
+
+[[case]]
+id = "TM-05"
+path = "verification/cases/time/ap_limit/run.py"
+name = "asymptotic-preserving limit"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["time"]
+oracle = "ap_limit"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+dt = 0.1
+eps_sweep = [1.0, 0.1, 0.01, 0.001, 0.0001]
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+implicit_bound = 1.0
+explicit_diverges = true
+reduced_limit = 0.0
+dt = 0.1
+
+[[case]]
+id = "TM-04"
+path = "verification/cases/time/larmor/run.py"
+name = "Larmor / magnetized oscillator"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["time"]
+oracle = "larmor"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+exact_speed_conserved = true
+period_return = true
+implicit_midpoint_speed_atol = 1e-12
+explicit_euler_speed_grows = true
+omega_c = 1.0
+
+[[case]]
+id = "TM-06"
+path = "verification/cases/time/multirate/run.py"
+name = "multirate species substeps"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["time"]
+oracle = "two_rate_linear_decay"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+dt = 0.25
+ratios = [1, 2, 4, 8]
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+lambda_f = 8.0
+lambda_s = 1.0
+r1_matches_single_rate = true
+fast_error_decreases_with_r = true
+
+[[case]]
+id = "TR-06"
+path = "verification/cases/transport/axis_permutation/run.py"
+name = "axis permutation / reflection"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["transport"]
+oracle = "tr01_sine_axis_permutation"
+native_dimensions = [2]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+permutation_linf = 0.0
+reflection_linf = 0.0
+t = 0.125
+kx = 1.0
+ky = 2.0
+ax = 1.0
+ay = 0.5
+
+[[case]]
+id = "TR-07"
+path = "verification/cases/transport/discontinuous_slot/run.py"
+name = "discontinuous slot"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["advection"]
+oracle = "translated_slot"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+exact_tv = 2.0
+overshoot_on_1_1 = true
+orders = []
+
+[[case]]
+id = "TR-03"
+path = "verification/cases/transport/single_vortex/run.py"
+name = "reversible SingleVortex"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["advection"]
+oracle = "reversible_single_vortex"
+native_dimensions = [2]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+return_error = 0.0
+period = 1.0
+centre = [0.5, 0.75]
+
+[[case]]
+id = "CP-11"
+path = "verification/cases/euler_poisson/diocotron/run.py"
+name = "linear diocotron mode"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["euler_poisson"]
+oracle = "toy_diocotron_growth"
+native_dimensions = [2]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+finite = true
+mode = 2
+growth_rate = 0.1
+amplitude = "eps exp(gamma t)"
+orders_reason = "linear growth / not a published reproduction"
+
+[[case]]
+id = "GE-04"
+path = "verification/cases/geometry/cartesian_polar_oracle/run.py"
+name = "Cartesian vs polar same radial oracle"
+verification_kind = "code-verification"
+evidence_status = "capability-gated"
+physics = ["geometry"]
+oracle = "radial_gaussian_ring"
+native_dimensions = [2]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = ["polar_system_runtime"]
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+peak_radius = 0.5
+field_to_field_linf_max = 0.05
+n_cells = 32
+
+[[case]]
+id = "GE-06"
+path = "verification/cases/geometry/diocotron_amr/run.py"
+name = "Cartesian diocotron AMR companion"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["geometry", "amr"]
+oracle = "cp11_ring_tag_envelope"
+native_dimensions = [2]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = ["CP-11"]
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+theta = 0.5
+buffer_cells = 2
+unused_mode = 3
+unused_mode_fft = 0.0
+tagged_covers_ring = true
+
+[[case]]
+id = "GE-05"
+path = "verification/cases/geometry/polar_axis/run.py"
+name = "polar axis regularity / volume conservation"
+verification_kind = "code-verification"
+evidence_status = "capability-gated"
+physics = ["geometry"]
+oracle = "polar_cell_volume"
+native_dimensions = [2]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = ["polar_system_runtime"]
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+annulus_volume = "pi*(r_out^2-r_in^2)"
+constant_state_integral = "equals annulus area"
+axis_regular_volume = "0.5*(dr)^2*dtheta"
+
+[[case]]
+id = "GE-01"
+path = "verification/cases/geometry/polar_poisson/run.py"
+name = "polar manufactured Poisson"
+verification_kind = "code-verification"
+evidence_status = "capability-gated"
+physics = ["poisson"]
+oracle = "polar_harmonic_r_m_cos_m_theta"
+native_dimensions = [2]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+laplacian_linf = 0.0
+r_min = 0.2
+mode = 2
+polar_runtime = "refused"
+
+[[case]]
+id = "GE-02"
+path = "verification/cases/geometry/solid_rotation/run.py"
+name = "solid-body scalar rotation"
+verification_kind = "code-verification"
+evidence_status = "capability-gated"
+physics = ["advection"]
+oracle = "solid_body_gaussian_rotation"
+native_dimensions = [2]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+return_error = 0.0
+period = 1.0
+omega = 6.283185307179586
+start_peak = [0.5, 0.0]
+quarter_turn_peak = [0.0, 0.5]
+
+[[case]]
+id = "IF-06"
+path = "verification/cases/infrastructure/deterministic_reductions/run.py"
+name = "deterministic reductions"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = []
+oracle = "exact_representable_geometric_sum"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+bitwise_identity = true
+reductions = ["sequential", "pairwise", "blocked"]
+block_size = 8
+
+[[case]]
+id = "IF-09"
+path = "verification/cases/infrastructure/float_precision/run.py"
+name = "float32 vs float64 plateau"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = ["transport"]
+oracle = "tr01_sine_float32_float64"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+linf_bound = 1e-06
+dtypes = ["float32", "float64"]
+fields_finite = true
+
+[[case]]
+id = "IF-10"
+path = "verification/cases/infrastructure/hdf5_reread/run.py"
+name = "HDF5-shaped npz round-trip"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = []
+oracle = "npz_hdf5_shaped_identity"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+round_trip_linf = 0.0
+component_order_preserved = true
+owner = "rank0"
+components = ["q"]
+
+[[case]]
+id = "IF-08"
+path = "verification/cases/infrastructure/native_dim_guard/run.py"
+name = "exact native-dim specialization"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = ["transport"]
+oracle = "tr01_native_dim_guard"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+mismatch_refused = true
+matching_emits = "TR-01"
+requested_mismatch = [2]
+artifact_dim = 1
+
+[[case]]
+id = "NO-01"
+path = "verification/cases/infrastructure/native_order/run.py"
+name = "Native order campaign helper"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = []
+oracle = "manufactured_l2_h2"
+native_dimensions = [1, 2]
+execution_spaces = ["KokkosSerial", "KokkosOpenMP"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+observed_order_min = 1.8
+resolutions = [16, 32, 64, 128]
+jobs = ["Serial-Dim1", "Serial-Dim2", "OpenMP-Dim1", "OpenMP-Dim2"]
+
+[[case]]
+id = "IF-05"
+path = "verification/cases/infrastructure/output_cadence/run.py"
+name = "output-cadence invariance"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = ["transport"]
+oracle = "tr01_sine_output_cadences"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+field_to_field_linf = 0.0
+cadences = [1, 2, 10]
+t = 0.25
+leftover_dump_linf = 0.25
+
+[[case]]
+id = "IF-07"
+path = "verification/cases/infrastructure/path_parity/run.py"
+name = "native / DSL / hybrid parity"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = ["transport"]
+oracle = "tr01_sine_path_labels"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+field_to_field_linf = 0.0
+paths = ["native", "dsl", "hybrid"]
+
+[[case]]
+id = "IF-03"
+path = "verification/cases/infrastructure/space_parity/run.py"
+name = "Kokkos Serial vs OpenMP parity"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = ["transport"]
+oracle = "tr01_sine_space_parity"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial", "KokkosOpenMP"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+field_to_field_linf = 0.0
+spaces = ["KokkosSerial", "KokkosOpenMP"]
+
+[[case]]
+id = "IF-02"
+path = "verification/cases/infrastructure/thread_invariance/run.py"
+name = "OpenMP thread-count invariance"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = ["transport"]
+oracle = "tr01_sine_thread_counts"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+field_to_field_linf = 0.0
+thread_counts = [1, 2, 4, 8]
+
+[[case]]
+id = "PF-03"
+path = "verification/cases/performance/advection_rhs/run.py"
+name = "Advection FV RHS / periodic halo"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = []
+oracle = "analytic_translation_rhs"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+halo_linf = 0.0
+halo_width = 1
+
+[[case]]
+id = "PF-11"
+path = "verification/cases/performance/amr_e2e/run.py"
+name = "dynamic AMR e2e"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = ["amr"]
+oracle = "rebuild_cadence"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+n_warmup = 2
+n_steps = 50
+regrid_every = 8
+rebuilds = "n_steps / regrid_every"
+
+[[case]]
+id = "PF-10"
+path = "verification/cases/performance/checkpoint_io/run.py"
+name = "checkpoint / HDF5 stand-in"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = []
+oracle = "npz_checkpoint_identity"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+round_trip_linf = 0.0
+no_output_writes = false
+
+[[case]]
+id = "PF-05"
+path = "verification/cases/performance/composite_poisson/run.py"
+name = "composite AMR Poisson stand-in"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = ["amr", "poisson"]
+oracle = "periodic_trig"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+levels = 2
+leaf_only_residual = true
+
+[[case]]
+id = "PF-06"
+path = "verification/cases/performance/ep_step/run.py"
+name = "Euler-Poisson step stand-in"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = []
+oracle = "ep_pipeline_segment_sum"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+n_segments = 7
+segment_times_positive = true
+total_equals_sum = true
+
+[[case]]
+id = "PF-04"
+path = "verification/cases/performance/euler_step/run.py"
+name = "Euler Rusanov / Lax-Friedrichs step"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = ["euler"]
+oracle = "uniform_free_stream"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+free_stream_atol = 1e-15
+scheme = "rusanov"
+
+[[case]]
+id = "PF-12"
+path = "verification/cases/performance/hyqmom15/run.py"
+name = "HyQMOM15 large-moment state stand-in"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = []
+oracle = "wide_saxpy_identity"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+n_components = 15
+bytes_per_cell = 120
+euler_components = 5
+euler_bytes_per_cell = 40
+saxpy_linf = 0.0
+
+[[case]]
+id = "PF-09"
+path = "verification/cases/performance/load_balance/run.py"
+name = "Load-balance stand-in"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = []
+oracle = "rank_cell_occupancy"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+n_cells = 64
+n_ranks = 4
+hotspot_rank0 = 40
+uniform_cv = 0.0
+hotspot_max_gt_mean = true
+
+[[case]]
+id = "PF-08"
+path = "verification/cases/performance/reflux_sync/run.py"
+name = "reflux / AMR sync stand-in"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = ["amr"]
+oracle = "reflux_conservation_residual"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+closed_residual = 0.0
+open_residual_nonzero = true
+
+[[case]]
+id = "PF-07"
+path = "verification/cases/performance/regrid_cluster/run.py"
+name = "regrid / clustering stand-in"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = []
+oracle = "tr02_pulse_contiguous_cluster"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = ["TR-02"]
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+min_patch_width = 4
+tag_threshold = 0.1
+patch_count_le_raw_tags = true
+tagged_cells_covered = true
+
+[[case]]
+id = "PF-02"
+path = "verification/cases/performance/scalar_mg/run.py"
+name = "official scalar_mg (benchmarks/manifest.toml)"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = ["poisson"]
+oracle = "po01_trig_fd_residual"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+residual_decreases = true
+n_vcycles = 4
+fd_truncation = true
+
+[[case]]
+id = "RB-09"
+path = "verification/cases/robustness/blast_waves/run.py"
+name = "Woodward-Colella blast waves"
+verification_kind = "robustness"
+evidence_status = "required"
+physics = ["euler"]
+oracle = "blast_waves_ic"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+finite = true
+positivity = true
+
+[[case]]
+id = "RB-08"
+path = "verification/cases/robustness/double_mach/run.py"
+name = "Double Mach reflection"
+verification_kind = "robustness"
+evidence_status = "required"
+physics = ["euler"]
+oracle = "rankine_hugoniot_geometry"
+native_dimensions = [2]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+finite = true
+positivity = true
+mach = 10.0
+shock_angle_deg = 30.0
+
+[[case]]
+id = "RB-07"
+path = "verification/cases/robustness/liska_implosion/run.py"
+name = "Liska\u2013Wendroff implosion"
+verification_kind = "robustness"
+evidence_status = "required"
+physics = ["euler"]
+oracle = "implosion_ic_symmetry"
+native_dimensions = [2]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+finite = true
+positivity = true
+leftover_residual = 0.0
+diagonal = 0.15

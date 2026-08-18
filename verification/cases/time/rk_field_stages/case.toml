@@ -1,0 +1,24 @@
+# Local echo of TM-07. Not catalogued in verification/manifest.toml (orchestrator).
+id = "TM-07"
+path = "verification/cases/time/rk_field_stages/run.py"
+name = "field update every RK stage"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["time", "poisson"]
+oracle = "rk_stage_field_solves"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+ssprk2_field_solves = 2
+ssprk3_field_solves = 3
+frozen_field_solves = 1

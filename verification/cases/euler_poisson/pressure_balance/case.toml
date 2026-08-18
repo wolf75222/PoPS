@@ -1,0 +1,23 @@
+# Local echo of CP-07. Orchestrator owns verification/manifest.toml.
+id = "CP-07"
+path = "verification/cases/euler_poisson/pressure_balance/run.py"
+name = "Pressure-field equilibrium"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["continuity", "momentum", "poisson", "electrostatic_source"]
+oracle = "isothermal_pressure_balance"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+finite = true
+charge_conservation = true

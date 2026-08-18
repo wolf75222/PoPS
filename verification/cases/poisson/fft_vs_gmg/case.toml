@@ -1,0 +1,24 @@
+# Local echo of intended verification/manifest.toml [[case]] PO-05.
+# Orchestrator owns the scientific manifest; this file is not registered.
+id = "PO-05"
+path = "verification/cases/poisson/fft_vs_gmg/run.py"
+name = "FFT vs GMG cross-oracle (1-d)"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["poisson"]
+oracle = "periodic_trig"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+spectral_atol = 1e-12
+# Discrete -Δ residual of analytic φ is FD truncation and is not a gate.

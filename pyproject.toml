@@ -36,6 +36,9 @@ dependencies = [
   "numpy>=1.24",  # required by pops.dsl (host evaluator); the package import is lazy without it
 ]
 
+[project.optional-dependencies]
+test = ["jsonschema"]
+
 [tool.scikit-build]
 minimum-version = "0.10"
 cmake.version = ">=3.21"

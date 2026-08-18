@@ -1,0 +1,22 @@
+# Local echo of EU-04. Orchestrator owns verification/manifest.toml.
+id = "EU-04"
+path = "verification/cases/euler/standing_acoustic/run.py"
+name = "Euler standing acoustic wave"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["euler"]
+oracle = "standing_acoustic"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+finite = true

@@ -1,0 +1,23 @@
+# Local echo of IF-04. Not catalogued in verification/manifest.toml (orchestrator).
+id = "IF-04"
+path = "verification/cases/infrastructure/checkpoint_restart/run.py"
+name = "checkpoint / restart identity"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = []
+oracle = "json_checkpoint_identity"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+round_trip_linf = 0.0
+t_preserved = true

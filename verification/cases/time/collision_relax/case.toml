@@ -1,0 +1,23 @@
+# Local echo of TM-03. Not catalogued in verification/manifest.toml (orchestrator).
+id = "TM-03"
+path = "verification/cases/time/collision_relax/run.py"
+name = "exact collision relaxation"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["time"]
+oracle = "collision_relax"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+barycenter_constant = true
+exponential = true

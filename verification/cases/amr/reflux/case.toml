@@ -1,0 +1,23 @@
+# Local echo of AM-09. Not catalogued in verification/manifest.toml (orchestrator).
+id = "AM-09"
+path = "verification/cases/amr/reflux/run.py"
+name = "AMR reflux conservation"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["amr"]
+oracle = "reflux_conservation_residual"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+closed_residual = 0.0
+open_residual_nonzero = true

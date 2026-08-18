@@ -1,0 +1,23 @@
+# Local echo of AM-12. Not catalogued in verification/manifest.toml (orchestrator).
+id = "AM-12"
+path = "verification/cases/amr/patch_symmetry/run.py"
+name = "patch-shape / reflection symmetry"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["amr", "transport"]
+oracle = "tr01_sine_reflected_cf"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+reflected_mask_is_spatial_reverse = true
+e_cf_invariant_under_reflection = true

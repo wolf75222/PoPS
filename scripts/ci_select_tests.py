@@ -114,7 +114,20 @@ CPP_PATH_AREAS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
     (("scripts/gen_solver_kernel.py",), ("codegen", "elliptic")),
 )
 
+# Phase 0 verification unit surface. These paths select the ``verification`` Python
+# label and have zero C++ impact -- they must not fail-safe the native gate to ALL.
+VERIFICATION_SELECTOR_PREFIXES = ("verification/",)
+VERIFICATION_SELECTOR_FILES = (
+    "schemas/verification_manifest.v1.json",
+    "schemas/verification_metrics.v1.json",
+    "schemas/verification_provenance.v1.json",
+    "schemas/verification_report.v1.json",
+    "scripts/run_verification.py",
+    "scripts/check_verification_manifest.py",
+)
+
 PYTHON_PATH_AREAS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+    ((VERIFICATION_SELECTOR_PREFIXES + VERIFICATION_SELECTOR_FILES), ("verification",)),
     (("python/pops/_report.py", "python/pops/_inspect.py"), ("reporting",)),
     (("python/pops/boundary/",), ("boundary", "mesh", "numerics")),
     (("python/pops/domain/",), ("domain", "mesh", "problem")),
@@ -199,6 +212,7 @@ CPP_ZERO_IMPACT_PREFIXES = (
     "tutorials/",
     "tests/python/",
     "python/pops/",  # non-codegen pops python; codegen is handled before this prefix is tested
+    *VERIFICATION_SELECTOR_PREFIXES,
 )
 CPP_ZERO_IMPACT_FILES = {
     "README.md",
@@ -206,6 +220,7 @@ CPP_ZERO_IMPACT_FILES = {
     "CHANGELOG.md",
     "SECURITY.md",
     ".gitignore",
+    *VERIFICATION_SELECTOR_FILES,
 }
 
 CPP_SMOKE_TARGETS = (
@@ -1203,8 +1218,9 @@ def classify_cpp_impact(
       open to ``all``;
     * ``tests/cpp/**`` ``.cpp`` -> ``test-target`` (that one suite, when it is a serial target);
     * ``python/pops/codegen/**`` -> ``codegen-labels`` (the native_loader / compiled-model group);
-    * other ``python/pops/**``, ``docs/**``, ``tutorials/**``, ``tests/python/**``, top-level
-      docs/CHANGELOG -> ``none`` (zero C++ impact);
+    * other ``python/pops/**``, ``docs/**``, ``tutorials/**``, ``tests/python/**``,
+      ``verification/**``, verification schemas/scripts, top-level docs/CHANGELOG ->
+      ``none`` (zero C++ impact);
     * everything else (cmake, workflows, scripts, CMakeLists, ``*.cmake``, the manifest) ->
       ``all`` (unmapped build input, fail-safe).
     """

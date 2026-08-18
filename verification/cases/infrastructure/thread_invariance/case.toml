@@ -1,0 +1,24 @@
+# Local echo of IF-02. Not catalogued in verification/manifest.toml (orchestrator).
+# Optional run_native_threads wraps TR-01. Live Kokkos OpenMP sweep is ROMEO-only.
+id = "IF-02"
+path = "verification/cases/infrastructure/thread_invariance/run.py"
+name = "OpenMP thread-count invariance"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = ["transport"]
+oracle = "tr01_sine_thread_counts"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+field_to_field_linf = 0.0
+thread_counts = [1, 2, 4, 8]

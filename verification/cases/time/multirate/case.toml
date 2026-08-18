@@ -1,0 +1,27 @@
+# Local echo of TM-06. Not catalogued in verification/manifest.toml (orchestrator).
+id = "TM-06"
+path = "verification/cases/time/multirate/run.py"
+name = "multirate species substeps"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["time"]
+oracle = "two_rate_linear_decay"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[resources.pr]
+nodes = 1
+dt = 0.25
+ratios = [1, 2, 4, 8]
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+lambda_f = 8.0
+lambda_s = 1.0
+r1_matches_single_rate = true
+fast_error_decreases_with_r = true

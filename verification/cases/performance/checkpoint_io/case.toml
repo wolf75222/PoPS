@@ -1,0 +1,24 @@
+# Local echo of PF-10. Optional run_native wraps IF-04 / TR-01.
+# Not catalogued in verification/manifest.toml (orchestrator).
+id = "PF-10"
+path = "verification/cases/performance/checkpoint_io/run.py"
+name = "checkpoint / HDF5 stand-in"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = []
+oracle = "npz_checkpoint_identity"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+round_trip_linf = 0.0
+no_output_writes = false

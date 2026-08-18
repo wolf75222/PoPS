@@ -168,6 +168,39 @@ def _run_plan_python(tmp_path, changed_lines):
     return outputs, selected
 
 
+def _run_plan_cpp(tmp_path, changed_lines):
+    sel = _load("ci_select_tests")
+    changed = tmp_path / "changed.txt"
+    changed.write_text("".join(f"{c}\n" for c in changed_lines), encoding="utf-8")
+    out = tmp_path / "gh_out.txt"
+
+    class Args:
+        pass
+
+    args = Args()
+    args.changed_files = str(changed)
+    args.github_output = str(out)
+    args.explain_file = None
+    args.force_all = False
+    sel.plan_cpp(args)
+    outputs = {}
+    for line in out.read_text().splitlines():
+        key, _, value = line.partition("=")
+        outputs[key] = value
+    return outputs
+
+
+VERIFICATION_SELECTOR_PATHS = (
+    "verification/manifest.toml",
+    "schemas/verification_manifest.v1.json",
+    "schemas/verification_metrics.v1.json",
+    "schemas/verification_provenance.v1.json",
+    "schemas/verification_report.v1.json",
+    "scripts/run_verification.py",
+    "scripts/check_verification_manifest.py",
+)
+
+
 def test_plan_python_leaf_change_is_a_strict_subset_with_smoke(tmp_path):
     """A leaf pops change selects a strict subset that includes the smoke tests."""
     outputs, selected = _run_plan_python(
@@ -257,6 +290,57 @@ def test_plan_python_new_pops_file_fails_safe_to_all(tmp_path):
     )
     assert outputs["python_mode"] == "all"
     assert "off-graph-pops-file" in outputs["python_why"]
+
+
+def test_verification_suite_is_catalogued_in_the_manifest():
+    """Phase 0 unit tests live in a dedicated fast verification suite, not a campaign."""
+    sel = _load("ci_select_tests")
+    suites = {
+        suite["name"]: suite
+        for suite in sel.load_manifest().get("python", {}).get("suite", [])
+    }
+    suite = suites["pops_python_verification"]
+    assert suite["path"] == "tests/python/verification"
+    assert set(suite["labels"]) == {"unit", "python", "verification", "fast"}
+
+
+def test_verification_paths_select_label_and_are_not_python_broad():
+    """Verification inputs map to the verification label without forcing the whole suite."""
+    sel = _load("ci_select_tests")
+    for path in VERIFICATION_SELECTOR_PATHS:
+        assert path not in sel.PYTHON_BROAD_FILES
+        assert not sel.startswith_any(path, sel.PYTHON_BROAD_PREFIXES)
+        assert "verification" in sel.areas_for(path, sel.PYTHON_PATH_AREAS)
+
+
+def test_verification_paths_have_zero_cpp_impact():
+    """The same verification inputs must not fail-safe C++ selection to ALL."""
+    sel = _load("ci_select_tests")
+    for path in VERIFICATION_SELECTOR_PATHS:
+        assert path in sel.CPP_ZERO_IMPACT_FILES or sel.startswith_any(
+            path, sel.CPP_ZERO_IMPACT_PREFIXES
+        )
+
+
+@pytest.mark.parametrize(
+    "changed",
+    (
+        "verification/manifest.toml",
+        "schemas/verification_manifest.v1.json",
+        "scripts/run_verification.py",
+    ),
+)
+def test_plan_verification_change_selects_unit_tests_and_not_cpp_all(
+    tmp_path, changed
+):
+    """A verification manifest, schema, or planner edit selects the unit suite, not C++ ALL."""
+    py_outputs, selected = _run_plan_python(tmp_path, [changed])
+    assert py_outputs["python_mode"] == "subset"
+    assert any(path.startswith("tests/python/verification/") for path in selected)
+    assert int(py_outputs["python_count"]) < int(py_outputs["python_total"])
+
+    cpp_outputs = _run_plan_cpp(tmp_path, [changed])
+    assert cpp_outputs["cpp_mode"] != "all"
 
 
 def test_manifest_cpp_suites_exclude_mpi_only_targets():
@@ -844,6 +928,8 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         "\n            python:\n", 1)[0]
     python_filter = filter_text.split("            python:\n", 1)[1].split(
         "\n            python_arch:\n", 1)[0]
+    python_arch_filter = filter_text.split("            python_arch:\n", 1)[1].split(
+        "\n            mpi:\n", 1)[0]
     for cpp_control in (
         "tests/cpp/test_sources.cmake",
         "tests/cpp/build_durations.json",
@@ -862,6 +948,13 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         "tests/python/test_durations.json",
         "tests/test_manifest.toml",
         "pyproject.toml",
+        "verification/**",
+        "schemas/verification_manifest.v1.json",
+        "schemas/verification_metrics.v1.json",
+        "schemas/verification_provenance.v1.json",
+        "schemas/verification_report.v1.json",
+        "scripts/run_verification.py",
+        "scripts/check_verification_manifest.py",
         "scripts/ci_select_tests.py",
         "scripts/ci_shard_binpack.py",
         "scripts/ci_import_closure.py",
@@ -871,6 +964,19 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         ".github/workflows/ci.yml",
     ):
         assert python_control in python_filter
+    for verification_python in (
+        "verification/**",
+        "schemas/verification_manifest.v1.json",
+        "schemas/verification_metrics.v1.json",
+        "schemas/verification_provenance.v1.json",
+        "schemas/verification_report.v1.json",
+        "scripts/run_verification.py",
+        "scripts/check_verification_manifest.py",
+    ):
+        assert verification_python not in cpp_filter
+        assert verification_python in python_filter
+    assert "schemas/**" in python_arch_filter
+    assert "python3 scripts/run_verification.py" not in workflow
 
     cpp_prewarm_block = workflow.split("\n  gate-cpp-prewarm:\n", 1)[1].split(
         "\n  # GATE C++", 1)[0]

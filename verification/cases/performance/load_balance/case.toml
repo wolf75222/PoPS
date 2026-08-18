@@ -1,0 +1,27 @@
+# Local echo of PF-09. Optional run_native refuses without a public balancer.
+# Not catalogued in verification/manifest.toml (orchestrator).
+id = "PF-09"
+path = "verification/cases/performance/load_balance/run.py"
+name = "Load-balance stand-in"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = []
+oracle = "rank_cell_occupancy"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+n_cells = 64
+n_ranks = 4
+hotspot_rank0 = 40
+uniform_cv = 0.0
+hotspot_max_gt_mean = true

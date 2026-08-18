@@ -1,0 +1,27 @@
+# Local echo of IF-09. Not catalogued in verification/manifest.toml (orchestrator).
+id = "IF-09"
+path = "verification/cases/infrastructure/float_precision/run.py"
+name = "float32 vs float64 plateau"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = ["transport"]
+oracle = "tr01_sine_float32_float64"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = ["float32_case_authoring"]
+
+[precision]
+branch = "capability-gated"
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+linf_bound = 1.0e-6
+dtypes = ["float32", "float64"]
+fields_finite = true

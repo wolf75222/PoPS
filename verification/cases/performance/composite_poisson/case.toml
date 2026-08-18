@@ -1,0 +1,23 @@
+# Local echo of PF-05. Not catalogued in verification/manifest.toml (orchestrator).
+id = "PF-05"
+path = "verification/cases/performance/composite_poisson/run.py"
+name = "composite AMR Poisson stand-in"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = ["amr", "poisson"]
+oracle = "periodic_trig"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+levels = 2
+leaf_only_residual = true

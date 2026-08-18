@@ -1,0 +1,23 @@
+# Local echo of GE-03. Not catalogued in verification/manifest.toml (orchestrator).
+id = "GE-03"
+path = "verification/cases/geometry/radial_acoustic/run.py"
+name = "radial acoustic in Cartesian"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["euler"]
+oracle = "radial_acoustic_bessel"
+native_dimensions = [2]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+angular_std = 0.0
+omega_equals_c_k = true

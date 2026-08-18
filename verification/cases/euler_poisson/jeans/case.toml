@@ -1,0 +1,29 @@
+# Local echo of CP-10. Orchestrator owns verification/manifest.toml.
+id = "CP-10"
+path = "verification/cases/euler_poisson/jeans/run.py"
+name = "Jeans stable / unstable"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["euler_poisson"]
+oracle = "jeans_dispersion"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+dispersion = "omega^2 = c_s^2 k^2 - 4 pi G rho0"
+c_s = 1.0
+four_pi_G_rho0 = 1.0
+k_J = 1.0
+k_stable = 2.0
+k_unstable = 0.5
+growth = "exp(gamma t)"
+gravity = "attractive"

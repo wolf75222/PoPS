@@ -61,6 +61,9 @@ dependencies:
                          # of the ACTIVE interpreter (python -m pybind11 --cmakedir); the FetchContent
                          # fallback v2.13.6 is only an out-of-env safety net.
 
+  # --- Test / verification schema (dev; keep aligned with pixi.toml) ---
+  - jsonschema           # Draft 2020-12 validation for schemas/verification_manifest.v1.json
+
   # --- Local parallel backends (CPU): POPS_USE_KOKKOS / POPS_USE_MPI / POPS_USE_OPENMP ---
   # NOTE (verified on the conda-forge feedstock, reconfirm at install time): the conda-forge `kokkos`
   # package is typically built with the Serial backend ONLY (no OpenMP; the CUDA variant is a separate

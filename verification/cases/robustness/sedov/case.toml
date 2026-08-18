@@ -1,0 +1,23 @@
+# Local echo of RB-05. Not catalogued in verification/manifest.toml (orchestrator).
+id = "RB-05"
+path = "verification/cases/robustness/sedov/run.py"
+name = "Sedov off-center"
+verification_kind = "robustness"
+evidence_status = "required"
+physics = ["euler"]
+oracle = "sedov_self_similar"
+native_dimensions = [2]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+time_exponent_2d = 0.4
+constant_polar_anisotropy = 0.0

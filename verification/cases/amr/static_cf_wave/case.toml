@@ -1,0 +1,23 @@
+# Local echo of AM-01. Not catalogued in verification/manifest.toml (orchestrator).
+id = "AM-01"
+path = "verification/cases/amr/static_cf_wave/run.py"
+name = "static coarse-fine wave"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["amr", "transport"]
+oracle = "tr01_sine_static_cf"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+interface_error_defined = true
+ratio_is_observation = true

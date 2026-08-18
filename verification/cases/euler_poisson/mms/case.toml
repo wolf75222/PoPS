@@ -1,0 +1,22 @@
+# Local echo of CP-01. Orchestrator owns verification/manifest.toml.
+id = "CP-01"
+path = "verification/cases/euler_poisson/mms/run.py"
+name = "Euler-Poisson manufactured solution"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["euler", "poisson"]
+oracle = "euler_poisson_mms"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+finite = true

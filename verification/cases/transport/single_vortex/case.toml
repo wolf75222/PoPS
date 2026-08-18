@@ -1,0 +1,24 @@
+# Local echo of TR-03. Not catalogued in verification/manifest.toml (orchestrator).
+id = "TR-03"
+path = "verification/cases/transport/single_vortex/run.py"
+name = "reversible SingleVortex"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["advection"]
+oracle = "reversible_single_vortex"
+native_dimensions = [2]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+return_error = 0.0
+period = 1.0
+centre = [0.5, 0.75]

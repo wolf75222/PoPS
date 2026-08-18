@@ -30,6 +30,7 @@ cmake = ">=3.27"
 ninja = "*"
 ccache = "*"
 numpy = ">=1.24"
+jsonschema = "*"    # Draft 2020-12 validation for schemas/verification_manifest.v1.json (dev/test)
 pybind11 = ">=2.13"
 kokkos = "*"        # Serial-only sur conda-forge ; multi-thread reel : pixi run kokkos-openmp
 mpich = "4.1.2.*"   # aligne sur le MPICH embarque par ParaView 6.1.1

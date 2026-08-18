@@ -1,0 +1,23 @@
+# Local echo of EU-06. Orchestrator owns verification/manifest.toml.
+id = "EU-06"
+path = "verification/cases/euler/uniform_flow/run.py"
+name = "Euler exact uniform-flow preservation"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["euler"]
+oracle = "uniform_free_stream"
+native_dimensions = [2]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+leftover_linf_equals_bump = true
+orders_reason = "machine-zero free-stream"

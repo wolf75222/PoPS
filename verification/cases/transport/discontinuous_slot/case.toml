@@ -1,0 +1,24 @@
+# Local echo of TR-07. Not catalogued in verification/manifest.toml (orchestrator).
+id = "TR-07"
+path = "verification/cases/transport/discontinuous_slot/run.py"
+name = "discontinuous slot"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["advection"]
+oracle = "translated_slot"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+exact_tv = 2.0
+overshoot_on_1_1 = true
+orders = []

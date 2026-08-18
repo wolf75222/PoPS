@@ -1,0 +1,25 @@
+# Local echo of TM-01. Not catalogued in verification/manifest.toml (orchestrator).
+id = "TM-01"
+path = "verification/cases/time/pure_temporal/run.py"
+name = "pure temporal order"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["transport", "time"]
+oracle = "tr01_sine"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly"]
+requires = []
+
+[resources.pr]
+nodes = 1
+n_cells = 64
+dt_series = [0.0078125, 0.00390625, 0.001953125, 0.0009765625]
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+observed_order_min = 1.8
+integrator = "SSPRK2"

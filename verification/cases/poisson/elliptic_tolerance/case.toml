@@ -1,0 +1,24 @@
+# Local echo of intended verification/manifest.toml [[case]] PO-07.
+# Orchestrator owns the scientific manifest; this file is not registered.
+id = "PO-07"
+path = "verification/cases/poisson/elliptic_tolerance/run.py"
+name = "Elliptic tolerance sweep (1-d)"
+verification_kind = "code-verification"
+evidence_status = "required"
+physics = ["poisson"]
+oracle = "elliptic_tolerance"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["nightly", "weekly", "release"]
+requires = []
+
+[resources.pr]
+nodes = 1
+
+[resources.two_node]
+nodes = [1, 2]
+
+[acceptance]
+min_order = 1.8
+tolerances = [1e-6, 1e-8, 1e-10, 1e-12]
