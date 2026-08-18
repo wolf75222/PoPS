@@ -541,6 +541,7 @@
   "tests/python/verification/test_tr05_block_shift.py": 1.0,
   "tests/python/verification/test_tr06_axis_permutation.py": 1.0,
   "tests/python/verification/test_tr07_discontinuous_slot.py": 1.0,
+  "tests/python/verification/test_v15_cp02_integration.py": 1.0,
   "tests/python/verification/test_v15_if_campaign.py": 1.0,
   "tests/python/verification/test_v15_parent_integration.py": 1.0,
   "tests/python/verification/test_v15_pf_official.py": 1.0,
@@ -565,7 +566,7 @@
     "unit_seconds": "per-file pytest wall time",
     "measured_source": "borrowed _pops.so locally plus GitHub Actions run 30190778708 per-test timings",
     "estimated_note": "Unmeasured files use conservative path/content tiers (1/2/5/30/60/120 s); compiler-gated files retain native-compile estimates. Refresh every estimated row from a full CI run gate-python timing artifact.",
-    "estimated_count": 392,
+    "estimated_count": 393,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_scalar_advection_final_example.py",
@@ -940,6 +941,7 @@
       "tests/python/verification/test_tr05_block_shift.py",
       "tests/python/verification/test_tr06_axis_permutation.py",
       "tests/python/verification/test_tr07_discontinuous_slot.py",
+      "tests/python/verification/test_v15_cp02_integration.py",
       "tests/python/verification/test_v15_if_campaign.py",
       "tests/python/verification/test_v15_parent_integration.py",
       "tests/python/verification/test_v15_pf_official.py",
@@ -960,6 +962,6 @@
       "tests/python/verification/test_visual_rereview.py",
       "tests/python/verification/test_visual_storyboard.py"
     ],
-    "total_files": 561
+    "total_files": 562
   }
 }
