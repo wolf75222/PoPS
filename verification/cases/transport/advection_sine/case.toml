@@ -1,14 +1,14 @@
-# Local echo of TR-01. Catalogued in verification/manifest.toml (orchestrator).
+# Local echo of TR-01. Catalogued in verification/manifest.toml.
 id = "TR-01"
 path = "verification/cases/transport/advection_sine/run.py"
-name = "3-d oblique periodic sine advection"
+name = "Periodic sine advection (1-d/2-d/canonical 3-d)"
 verification_kind = "code-verification"
 evidence_status = "required"
 physics = ["transport"]
 oracle = "translated_oblique_sine"
-native_dimensions = [3]
-execution_spaces = ["KokkosSerial"]
-mpi_modes = ["off"]
+native_dimensions = [1, 2, 3]
+execution_spaces = ["KokkosSerial", "KokkosOpenMP"]
+mpi_modes = ["off", "on"]
 suites = ["nightly"]
 requires = []
 
@@ -21,4 +21,3 @@ nodes = [1, 2]
 
 [acceptance]
 observed_order_min = 1.8
-

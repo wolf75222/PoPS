@@ -1,36 +1,33 @@
-# TR-01 — 3-d oblique periodic advection sine
+# TR-01 — Periodic advection sine (1-d / 2-d / canonical 3-d)
 
-Annexe A.1 and §35.1 `01_advection_sine_oblique_3d`. The Case is Cartesian
-3-d only. A 1-d or 2-d run is not this case.
+Annexe A.1, §9.2, and §35.1 `01_advection_sine_oblique_3d`. One case
+authority dispatches 1-d and 2-d restrictions plus the canonical 3-d cube.
+A 1-d or 2-d run is never labeled canonical 3-d.
 
 | Field | Content |
 |---|---|
 | Identifier | `TR-01` |
 | `verification_kind` | `code-verification` |
 | `evidence_status` | `required` |
-| Equations | \(\partial_t q + \mathbf a\cdot\nabla q = 0\) with \(\mathbf a=(1,1,1)\). |
-| Oracle | \(q(\mathbf x,t)=q_0+\varepsilon\sin(2\pi\mathbf k\cdot(\mathbf x-\mathbf a t))\) with \(q_0=1\), \(\varepsilon=10^{-2}\), \(\mathbf k=(1,2,3)\). Cell averages via 4-point Gauss–Legendre. `exact.py` does not read PoPS output. |
-| Domain and boundaries | Periodic unit cube \([0,1]^3\). `POPS_NATIVE_DIM=3` required. |
-| Parameters | \(T=1\) (one period). Resolutions \(N=16,32,64,128\). |
-| Native dimensions | `POPS_NATIVE_DIM=3` only. No 1-d/2-d fallback. |
-| Required capabilities | Cartesian uniform periodic cube. KokkosSerial. MUSCL/VanLeer + ScalarUpwind, SSPRK2. Public `pops.diagnostics` on the ConsumerGraph. |
-| Configurations | Uniform \(N^3\) cells. Adaptive CFL \(0.15\) so \(\lvert\mathbf a\rvert_1\Delta t/\Delta x=0.45\). Formal spatial order 2. No AMR. |
-| Diagnostics | Volume-weighted L1/L2/L∞ vs cell-averaged exact. Observed spatial order on four resolutions. Native Integral/Norm/MinMax/ConservationCheck. Per-run `provenance.json`. |
-| Thresholds | Observed order \(\ge 1.8\). |
-| Proves | 3-d oblique periodic translation on a Dim-3 native artifact. |
-| Does not prove | The catalog Case in `run.py` is the 3-d cube only. |
-| Resources | Local Dim-3 series. |
-| Provenance | `pops.verification.provenance.v1` written next to the native output. |
-
-Plan §11 obligatory variants live in `complement.py` and are launched with
-`POPS_NATIVE_DIM` matching the variant rank:
+| Equations | \(\partial_t q + \mathbf a\cdot\nabla q = 0\). |
+| Canonical 3-d | \(q=1+10^{-2}\sin(2\pi(x+2y+3z))\), \(\mathbf a=(1,1,1)\), \(T=1\) on \([0,1]^3\). |
+| 1-d / 2-d | Natural restriction of the same formula to the present coordinates. |
+| Oracle | Translation \(q(\mathbf x-\mathbf a t,0)\). Cell averages via 4-point Gauss–Legendre. `exact.py` does not read PoPS output. |
+| Domain | Periodic unit interval / square / cube. Exact-rank leaf required. No silent dim fallback. |
+| Parameters | \(T=1\) (one period) for the default configs. Order series \(N=16,32,64,128\). |
+| Native dimensions | `POPS_NATIVE_DIM` ∈ {1,2,3} matching the request. Shared 1-d IF/AM runtime stays in `tr01_runtime.py` and does not call 3-d. |
+| Required capabilities | Cartesian uniform periodic. KokkosSerial / OpenMP / MPI as requested. MUSCL/VanLeer + ScalarUpwind, SSPRK2. |
+| Configurations | Canonical 3-d; 1-d ±a; 2-d x/y/diagonal/(1,0.37); 3-d axes/diagonal/oblique; U-C, U-F, A-S0, A-S2, A-DP, A-DT; blocks 8/16/32/64; periods 1/2/4. AMR variants are executable or `not-supported`; they are not a silent uniform substitute. |
+| Diagnostics | Volume-weighted L1/L2/L∞ vs cell-averaged exact; phase; amplitude; \(\int q\,dV\); observed spatial order only from ≥4 native resolutions. |
+| Thresholds | Observed order \(\ge 1.8\) for an announced order-2 uniform series. A 16/32 smoke is never an order pass. |
+| Proves | Exact-rank periodic translation on the requested dimension and config, when a native series exists. |
+| Does not prove | Exact-vs-exact, injected \(h^2\), finite-only, or order from fewer than four native resolutions. |
+| Resources | ROMEO x64cpu, ≤2 nodes, no GPU in this step. 3-d \(n\ge256\) is not launched here. |
+| Provenance | `pops.verification.provenance.v1` with truthful RUN_FIELDS from the CampaignRequest. |
+| Visuals | Phase 8 `visual_data/` from native results only; no committed fixtures. |
 
 ```
-POPS_NATIVE_DIM=1 python verification/machines/run_tr01_complement.py --dim 1
+POPS_NATIVE_DIM=3 python scripts/run_verification.py --suite pr --dimensions 3 \
+  --max-nodes 1 --pops-native-dim 3 --cases TR-01 --mpi-mode off \
+  --execution-space KokkosSerial --execute --output build/verification/tr01
 ```
-
-That catalog covers 1-d ±a, 2-d four velocities, 3-d axes / diagonal /
-oblique, `U-C` / `U-F` / `A-S0` / `A-S2` / `A-DP` / `A-DT`, block sizes,
-1/2/4 periods, axis permutations, and L1/L2/L∞, phase, amplitude, mass,
-spectrum, argmax, \(E_{cf}\)/\(E_{bulk}\). Multi-rank MPI remains IF-01
-(`mpi_world` on an MPI leaf). Evidence: `build/verification/tr01-complement/`.

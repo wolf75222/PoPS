@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Run the TR-01 complement catalog on one exact-rank native leaf."""
+"""Run one exact-rank TR-01 configuration. Does not invent order from smoke."""
 from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import os
 import sys
 from pathlib import Path
@@ -29,9 +30,7 @@ sys.path.insert(0, str(ROOT))
 if _INSTALLED_NATIVE is not None and not os.environ.get("POPS_NATIVE_VARIANTS_ROOT"):
     os.environ["POPS_NATIVE_VARIANTS_ROOT"] = str(_INSTALLED_NATIVE)
 
-COMPLEMENT = (
-    ROOT / "verification" / "cases" / "transport" / "advection_sine" / "complement.py"
-)
+RUN = ROOT / "verification" / "cases" / "transport" / "advection_sine" / "run.py"
 ANALYZE = ROOT / "verification" / "cases" / "transport" / "advection_sine" / "analyze.py"
 
 
@@ -50,26 +49,103 @@ def main() -> int:
     parser.add_argument(
         "--out",
         type=Path,
-        default=ROOT / "build" / "verification" / "tr01-complement",
+        default=ROOT / "build" / "verification" / "TR-01",
     )
     parser.add_argument("--smoke", action="store_true")
-    args = parser.parse_args()
-    complement = _load(COMPLEMENT, "tr01_complement")
-    analyze = _load(ANALYZE, "tr01_analyze")
-    output = Path(args.out) / f"dim{args.dim}"
-    payload = complement.run_campaign(
-        dim=args.dim, output_dir=output, smoke=args.smoke
+    parser.add_argument("--config-id", default=None)
+    parser.add_argument(
+        "--resolutions",
+        default=None,
+        help="comma-separated n, default 16 or 16,32,64,128",
     )
-    writer = getattr(analyze, "write_complement_markdown", None)
-    if writer is not None:
-        writer(output, payload)
-    summary = payload["summary"]
+    args = parser.parse_args()
+    from verification.pops_verify.campaign import CampaignRequest, CampaignResources
+
+    if args.resolutions:
+        resolutions = tuple(int(item) for item in args.resolutions.split(",") if item)
+    elif args.smoke:
+        resolutions = (16,)
+    else:
+        resolutions = (16, 32, 64, 128)
+    request = CampaignRequest(
+        case_id="TR-01",
+        pops_native_dim=args.dim,
+        suite="pr",
+        execution_space=os.environ.get("POPS_TR01_SPACE", "KokkosSerial"),
+        mpi_mode=os.environ.get("POPS_TR01_MPI", "off"),
+        min_resolution=resolutions[0],
+        resources=CampaignResources(
+            nodes=1,
+            mpi_ranks=int(os.environ.get("SLURM_NTASKS", "1")),
+            omp_threads=int(os.environ.get("OMP_NUM_THREADS", "1")),
+            resolutions=resolutions,
+        ),
+        evidence_status="required",
+        output_dir=Path(args.out) / f"dim{args.dim}",
+    )
+    run = _load(RUN, "tr01_run")
+    analyze = _load(ANALYZE, "tr01_analyze")
+    output = Path(request.output_dir)
+    output.mkdir(parents=True, exist_ok=True)
+    if len(resolutions) < 4:
+        fields = {}
+        oracles = {}
+        volumes = {}
+        linfs = []
+        label = None
+        for n_cells in resolutions:
+            payload = run.run_native(
+                n_cells,
+                request=request,
+                config_id=args.config_id,
+                output_dir=output,
+            )
+            fields[n_cells] = payload["field"]
+            oracles[n_cells] = payload["oracle"]
+            volumes[n_cells] = payload["volumes"]
+            linfs.append(payload["diagnostics"]["linf"])
+            label = payload.get("label")
+        claim = analyze.evaluate_order_claim(
+            {
+                "source": "native",
+                "resolutions": resolutions,
+                "fields": fields,
+                "oracles": oracles,
+                "volumes": volumes,
+            }
+        )
+        (output / "smoke.json").write_text(
+            json.dumps(
+                {
+                    "dim": args.dim,
+                    "label": label,
+                    "verdict": claim["verdict"],
+                    "order_pass": claim["order_pass"],
+                    "resolutions": list(resolutions),
+                    "linf": linfs,
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        print(
+            f"partial dim={args.dim} label={label} "
+            f"verdict={claim['verdict']} n={list(resolutions)} linf={linfs}",
+            flush=True,
+        )
+        return 0
+    campaign = run.run_order_campaign(
+        resolutions, request=request, config_id=args.config_id, output_dir=output
+    )
+    analyze.write_native_campaign_report(output, campaign)
+    claim = analyze.evaluate_order_claim(campaign)
     print(
-        f"done dim={args.dim} ok={summary['n_ok']}/{summary['n_planned']} "
-        f"order_ge_1.8={summary['spatial_pairs_ge_1_8']}/{summary['spatial_pairs']}",
+        f"series dim={args.dim} label={campaign.get('label')} "
+        f"verdict={claim['verdict']} orders={claim['orders']}",
         flush=True,
     )
-    return 0 if summary["n_failed"] == 0 else 1
+    return 0 if claim["order_pass"] else 1
 
 
 if __name__ == "__main__":
