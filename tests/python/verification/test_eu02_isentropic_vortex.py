@@ -225,6 +225,34 @@ def test_evaluate_order_claim_refuses_cfl_as_spatial():
         )
 
 
+def test_evaluate_order_claim_refuses_collapsed_spatial_mesh():
+    analyze = _load("analyze")
+    run = _load("run")
+    field = run.pack_conserved(run.initial_conserved(16))
+    with pytest.raises(analyze.NativeSeriesError, match="distinct meshes"):
+        analyze.evaluate_order_claim(
+            {
+                "source": "native",
+                "family": "spatial",
+                "dt_scaling": "h2",
+                "resolutions": (16, 16, 16, 16),
+                "fields": {16: field},
+                "t_end": 1.0,
+            }
+        )
+
+
+def test_spatial_driver_request_uses_leaf_resolution():
+    from verification.machines.run_eu02_v15 import _job
+    from verification.pops_verify.campaign import CampaignRequest
+    import dataclasses
+
+    job = _job("KokkosSerial", "off", 16, resolutions=(16, 32, 64, 128))
+    leaf = dataclasses.replace(job, min_resolution=128)
+    request = CampaignRequest.from_job(leaf)
+    assert request.min_resolution == 128
+
+
 def test_evaluate_order_claim_temporal_uses_dts_not_collapsed_n():
     analyze = _load("analyze")
     run = _load("run")

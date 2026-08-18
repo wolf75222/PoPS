@@ -309,6 +309,11 @@ def evaluate_order_claim(campaign: dict) -> dict[str, Any]:
         spacings = tuple(float(_exact.PERIOD) / float(n) for n in resolutions)
         if family != "spatial":
             family = "global"
+        if family == "spatial" and len(set(resolutions)) < 4:
+            raise NativeSeriesError(
+                "isolated spatial series requires four distinct meshes; "
+                "refusing a collapsed-n series as a spatial order claim"
+            )
     l1: list[float] = []
     l2: list[float] = []
     linf: list[float] = []

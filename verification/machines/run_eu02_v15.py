@@ -12,6 +12,7 @@ Stages:
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
 import sys
@@ -131,7 +132,8 @@ def _emit(job, request, payload, artifact, job_dir: Path, case: dict):
 def _run_one(job, n_cells: int, output: Path, *, dt=None, family="global", dump_times=None, t_end=None):
     artifact = _artifact()
     job_dir = output / f"n{int(n_cells):03d}"
-    request = CampaignRequest.from_job(job, output_dir=job_dir)
+    leaf_job = dataclasses.replace(job, min_resolution=int(n_cells))
+    request = CampaignRequest.from_job(leaf_job, output_dir=job_dir)
     kwargs = {
         "request": request,
         "n_cells": n_cells,
@@ -145,7 +147,7 @@ def _run_one(job, n_cells: int, output: Path, *, dt=None, family="global", dump_
         kwargs["t_end"] = float(t_end)
     payload = RUN.run_native(**kwargs)
     case = {"id": "EU-02", "path": "verification/cases/euler/isentropic_vortex/run.py"}
-    _emit(job, request, payload, artifact, job_dir, case)
+    _emit(leaf_job, request, payload, artifact, job_dir, case)
     return job_dir, payload
 
 
