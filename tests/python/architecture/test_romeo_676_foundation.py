@@ -105,6 +105,7 @@ def test_romeo_676_mpi_gate_launches_if01_with_srun_two_ranks() -> None:
     assert "--ntasks=2" in text
     assert "romeo_676_validate.py" in text
     assert "run_verification.py" in text
+    assert "FI_PROVIDER=tcp" in text
     assert "#SBATCH --ntasks=2" in text
     nodes = [
         line for line in text.splitlines() if line.startswith("#SBATCH --nodes=")

@@ -20,6 +20,9 @@ source /scratch_p/rmdraux/pops-676/src/verification/machines/romeo_676_env.sh
 set -eo pipefail
 pops676_require_pic_kokkos
 pops676_load_mpi_hdf5
+# verify_installed_native and the campaign both dlopen the MPI leaf.
+# Site FI_PROVIDER=shm fails OFI getinfo on this MPICH 4.2.3 stack.
+export FI_PROVIDER=tcp
 
 GATE="${POPS676_GATE:-R3_1N}"
 case "$GATE" in
