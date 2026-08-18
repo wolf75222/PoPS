@@ -52,9 +52,26 @@ def cell_centers(n_cells: int = N_CELLS):
 
 
 def initial_primitives(n_cells: int = N_CELLS, *, mode="entropy", eps=1e-6, k=2.0 * math.pi):
-    """Primitive IC W(x,0) = exact_mode(..., t=0). Shape (3, n)."""
-    centers, _ = cell_centers(n_cells)
-    return _exact_module().exact_mode(centers, 0.0, mode=mode, eps=eps, k=k)
+    """Cell-average primitive IC of ``exact_mode(..., t=0)``. Shape (3, n)."""
+    from verification.pops_verify.cell_averages import analytic_cell_averages
+
+    count = int(n_cells)
+    width = 1.0 / count
+    lo = np.arange(count, dtype=np.float64) * width
+    hi = lo + width
+    exact = _exact_module()
+
+    def _component(index):
+        def _fn(x):
+            samples = np.asarray(x, dtype=np.float64)
+            mode_field = exact.exact_mode(
+                samples.reshape(-1), 0.0, mode=mode, eps=eps, k=k
+            )
+            return mode_field[index].reshape(samples.shape)
+
+        return analytic_cell_averages(_fn, lo, hi)
+
+    return np.stack((_component(0), _component(1), _component(2)))
 
 
 def primitives_to_conserved(primitives) -> np.ndarray:

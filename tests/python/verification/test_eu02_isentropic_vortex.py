@@ -113,13 +113,9 @@ def test_pack_unpack_conserved_round_trip():
     assert np.all(primitives["p"] > 0.0)
 
 
-def test_analyze_series_orders_come_from_supplied_errors(tmp_path: Path):
+def test_analyze_series_pass_shape_is_removed():
     analyze = _load("analyze")
-    resolutions = (16, 32, 64)
-    errors = [0.08, 0.03, 0.011]
-    analyze.analyze_series(errors, resolutions, tmp_path)
-    loaded = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
-    assert loaded["coverage"]["cases_passed"] == 0
+    assert not hasattr(analyze, "analyze_series")
 
 
 @pytest.mark.compiler

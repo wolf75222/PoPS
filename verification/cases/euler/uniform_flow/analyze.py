@@ -17,7 +17,6 @@ def write_eu06_report(output_dir, native_series=None) -> dict:
             native_dimensions=[2],
             components=["euler"],
             extra_reasons=extra,
-            allow_empty_orders=True,
         ),
         output_dir,
     )

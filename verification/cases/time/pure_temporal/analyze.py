@@ -24,14 +24,3 @@ def write_tm01_report(output_dir, native_series=None, **_unused) -> dict:
     )
 
 
-def analyze_series(errors, resolutions, output_dir) -> dict:
-    """Write a report from a caller-supplied native temporal error series."""
-    return write_tm01_report(
-        output_dir,
-        native_series={
-            "linf": list(errors),
-            "spacings": list(resolutions),
-            "kind": "temporal",
-            "variable": "q",
-        },
-    )

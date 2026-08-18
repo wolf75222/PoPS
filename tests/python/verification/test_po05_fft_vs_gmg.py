@@ -128,8 +128,8 @@ def test_write_po05_report_writes_four_schema_valid_artifacts(tmp_path: Path):
     from verification.pops_verify.native_evidence import REDUCED_NOT_SUPPORTED
 
     assert loaded["coverage"]["cases_passed"] == 0
-    assert loaded["coverage"]["cases_failed"] == 0
-    assert loaded["coverage"]["cases_not_supported"] == 1
+    assert loaded["coverage"]["cases_failed"] == 1
+    assert loaded["coverage"]["cases_not_supported"] == 0
     assert loaded["not_applicable_reason"]["orders"] == REDUCED_NOT_SUPPORTED["PO-05"]
 
 

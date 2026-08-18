@@ -35,9 +35,31 @@ def cell_centers(n_cells: int = N_CELLS):
 
 
 def initial_primitives(n_cells: int = N_CELLS):
-    """Primitive IC at t=0. Each field has shape (n, n)."""
-    x, y, _ = cell_centers(n_cells)
-    return _exact.exact_gresho(x, y, 0.0)
+    """Cell-average primitive IC at t=0. Each field has shape (n, n)."""
+    from verification.pops_verify.cell_averages import analytic_cell_averages
+
+    count = int(n_cells)
+    length = float(_exact.PERIOD)
+    width = length / count
+    axis_lo = np.arange(count, dtype=np.float64) * width
+    axis_hi = axis_lo + width
+    x_lo, y_lo = np.meshgrid(axis_lo, axis_lo, indexing="xy")
+    x_hi, y_hi = np.meshgrid(axis_hi, axis_hi, indexing="xy")
+    lo = np.stack((x_lo, y_lo), axis=-1)
+    hi = np.stack((x_hi, y_hi), axis=-1)
+
+    def _component(name):
+        def _fn(x, y):
+            return _exact.exact_gresho(x, y, 0.0)[name]
+
+        return analytic_cell_averages(_fn, lo, hi)
+
+    return {
+        "rho": _component("rho"),
+        "u": _component("u"),
+        "v": _component("v"),
+        "p": _component("p"),
+    }
 
 
 def primitives_to_conserved(primitives) -> dict:

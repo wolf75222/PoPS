@@ -165,8 +165,16 @@ def resolve_plan(n_cells: int = _exact.DEFAULT_N_CELLS):
 
 
 def _initial_field(n_cells: int) -> np.ndarray:
-    centers, _volumes = _exact.cell_centers(n_cells)
-    return np.ascontiguousarray(_exact.exact_slot(centers, 0.0), dtype=np.float64)
+    from verification.pops_verify.cell_averages import analytic_cell_averages
+
+    centers, volumes = _exact.cell_centers(n_cells)
+    width = float(volumes[0])
+    lo = centers - 0.5 * width
+    hi = centers + 0.5 * width
+    return np.ascontiguousarray(
+        analytic_cell_averages(lambda x: _exact.exact_slot(x, 0.0), lo, hi),
+        dtype=np.float64,
+    )
 
 
 def run_native(n_cells: int = _exact.DEFAULT_N_CELLS, t_end: float = 1.0, *, request=None):

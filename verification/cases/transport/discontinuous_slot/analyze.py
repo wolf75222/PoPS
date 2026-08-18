@@ -16,7 +16,6 @@ def write_tr07_report(output_dir, native_series=None) -> dict:
             native_dimensions=[1],
             components=["transport"],
             extra_reasons={"orders": "discontinuous / limiter, not order-2"},
-            allow_empty_orders=True,
         ),
         output_dir,
     )

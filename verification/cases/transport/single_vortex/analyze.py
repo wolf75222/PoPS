@@ -20,7 +20,6 @@ def write_tr03_report(output_dir, native_series=None) -> dict:
                 if native_series is not None
                 else "no native result series",
             },
-            allow_empty_orders=True,
         ),
         output_dir,
     )

@@ -32,9 +32,23 @@ def cell_centers(n_cells: int = N_CELLS):
 
 
 def initial_primitives(n_cells: int = N_CELLS):
-    """Primitive IC W(x,0). Shape (3, n)."""
-    centers, _ = cell_centers(n_cells)
-    return _EXACT.primitives_1d(centers, 0.0)
+    """Cell-average primitive IC W(x,0). Shape (3, n)."""
+    from verification.pops_verify.cell_averages import analytic_cell_averages
+
+    count = int(n_cells)
+    width = 1.0 / count
+    lo = np.arange(count, dtype=np.float64) * width
+    hi = lo + width
+
+    def _component(index):
+        def _fn(x):
+            samples = np.asarray(x, dtype=np.float64)
+            field = _EXACT.primitives_1d(samples.reshape(-1), 0.0)
+            return np.asarray(field[index]).reshape(samples.shape)
+
+        return analytic_cell_averages(_fn, lo, hi)
+
+    return np.stack((_component(0), _component(1), _component(2)))
 
 
 def initial_conserved(n_cells: int = N_CELLS):

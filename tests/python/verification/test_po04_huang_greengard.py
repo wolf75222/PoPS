@@ -235,8 +235,8 @@ def test_written_po04_summary_validates_against_report_schema(tmp_path: Path):
     from verification.pops_verify.native_evidence import REDUCED_NOT_SUPPORTED
 
     assert loaded["coverage"]["cases_passed"] == 0
-    assert loaded["coverage"]["cases_failed"] == 0
-    assert loaded["coverage"]["cases_not_supported"] == 1
+    assert loaded["coverage"]["cases_failed"] == 1
+    assert loaded["coverage"]["cases_not_supported"] == 0
     assert loaded["not_applicable_reason"]["orders"] == REDUCED_NOT_SUPPORTED["PO-04"]
     assert loaded["poisson"]["potential_error"] is None
 

@@ -21,7 +21,6 @@ def write_tr06_report(output_dir, native_series=None) -> dict:
                     "campaign"
                 )
             },
-            allow_empty_orders=True,
         ),
         output_dir,
     )

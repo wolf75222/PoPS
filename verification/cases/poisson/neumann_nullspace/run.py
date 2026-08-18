@@ -71,9 +71,14 @@ def incompatible_rhs_observation(
 
 
 def build_rhs_and_oracle(n_cells: int):
-    """Return in-memory cell-center RHS and exact φ, E on a uniform 1-d grid."""
+    """Return cell-average RHS and pointwise oracle φ, E on a uniform 1-d grid."""
+    from verification.pops_verify.cell_averages import analytic_cell_averages
+
     centers, volumes = _exact.uniform_cell_grid(n_cells)
-    rhs = _exact.rhs_exact(centers)
+    width = float(volumes[0])
+    lo = centers - 0.5 * width
+    hi = centers + 0.5 * width
+    rhs = analytic_cell_averages(_exact.rhs_exact, lo, hi)
     require_compatible_rhs(rhs, volumes)
     return {
         "x": centers,

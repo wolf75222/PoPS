@@ -179,12 +179,21 @@ def resolve_plan(n_cells: int = _exact.N_CELLS):
 
 
 def _initial_field(n_cells: int, *, swapped: bool = False) -> np.ndarray:
-    x, y, _volumes, _axis = _exact.uniform_grid_2d(n_cells)
-    if swapped:
-        field = _exact.exact_product(y, x, 0.0)
-    else:
-        field = _exact.exact_product(x, y, 0.0)
-    return np.ascontiguousarray(field, dtype=np.float64)
+    from verification.pops_verify.cell_averages import analytic_cell_averages
+
+    count = int(n_cells)
+    width = float(_exact.PERIOD) / count
+    axis_lo = np.arange(count, dtype=np.float64) * width
+    axis_hi = axis_lo + width
+    x_lo, y_lo = np.meshgrid(axis_lo, axis_lo, indexing="ij")
+    x_hi, y_hi = np.meshgrid(axis_hi, axis_hi, indexing="ij")
+    lo = np.stack((x_lo, y_lo), axis=-1)
+    hi = np.stack((x_hi, y_hi), axis=-1)
+
+    def field(x, y):
+        return _exact.exact_product(y, x, 0.0) if swapped else _exact.exact_product(x, y, 0.0)
+
+    return np.ascontiguousarray(analytic_cell_averages(field, lo, hi), dtype=np.float64)
 
 
 def run_native(n_cells: int = _exact.N_CELLS, t_end: float = _exact.T, *, request=None):
@@ -235,7 +244,6 @@ def run_native(n_cells: int = _exact.N_CELLS, t_end: float = _exact.T, *, reques
         np.asarray(simulation.state_global("tracer"), dtype=np.float64),
         (authored.n_cells, authored.n_cells),
     )
-    result: Any = field
     if request is not None:
         swapped = _author(n_cells, swapped=True)
         plan_p = resolve_case(
@@ -257,12 +265,29 @@ def run_native(n_cells: int = _exact.N_CELLS, t_end: float = _exact.T, *, reques
             np.asarray(simulation_p.state_global("tracer"), dtype=np.float64),
             (swapped.n_cells, swapped.n_cells),
         )
-        result = {"original": field, "permuted": field_p}
+        return maybe_campaign_payload(
+            request,
+            field,
+            artifact=artifact,
+            simulation=simulation,
+            case_id="TR-06",
+            pair={
+                "result": field_p,
+                "artifact": artifact_p,
+                "simulation": simulation_p,
+            },
+            n_cells=authored.n_cells,
+            t_end=t_end,
+            time_program="SSPRK2",
+            cfl=CFL,
+            dimension=2,
+        )
     return maybe_campaign_payload(
         request,
-        result,
+        field,
         artifact=artifact,
         simulation=simulation,
+        case_id="TR-06",
         n_cells=authored.n_cells,
         t_end=t_end,
         time_program="SSPRK2",

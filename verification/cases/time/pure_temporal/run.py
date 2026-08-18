@@ -124,6 +124,18 @@ def resolve_plan(dt, *, n_cells: int = N_CELLS):
     return resolve_case(authored.case, layout=layout)
 
 
+def _initial_field(n_cells: int = N_CELLS) -> np.ndarray:
+    from verification.pops_verify.cell_averages import analytic_cell_averages
+
+    centers, volumes = _exact.uniform_cell_centers(n_cells)
+    width = float(volumes[0])
+    lo = centers - 0.5 * width
+    hi = centers + 0.5 * width
+    return np.ascontiguousarray(
+        analytic_cell_averages(lambda x: _exact.exact_sine(x, 0.0), lo, hi)
+    )
+
+
 def _native_unavailable_reason() -> str | None:
     missing = missing_compiler_requirement()
     if missing:
@@ -156,9 +168,8 @@ def run_native(dt=None, t_end=1.0, *, n_cells: int = N_CELLS, request=None):
     layout = uniform_periodic_layout(authored.frame, (authored.n_cells,))
     plan = resolve_case(authored.case, layout=layout)
     artifact = pops.compile(plan)
-    centers, _ = _exact.uniform_cell_centers(authored.n_cells)
     initial = np.ascontiguousarray(
-        _exact.exact_sine(centers, 0.0)[np.newaxis, :],
+        _initial_field(authored.n_cells)[np.newaxis, :],
         dtype=np.float64,
     )
     simulation = pops.bind(artifact, initial_values={authored.instance: initial})
