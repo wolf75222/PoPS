@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import csv
 import json
+import shutil
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -294,19 +296,30 @@ def evaluate_order_claim(campaign: dict) -> dict[str, Any]:
     u_inf = float(campaign.get("u_inf") or 1.0)
     v_inf = float(campaign.get("v_inf") or 0.0)
     variable = str(campaign.get("variable") or "rho")
+    runs = list(campaign.get("runs") or [])
+    if family == "temporal":
+        if not runs:
+            raise NativeSeriesError("temporal series requires dts matching the native fields")
+        samples = [(int(run["n_cells"]), run["field"]) for run in runs]
+        spacings = tuple(float(run["dt"]) for run in runs)
+        if any(not np.isfinite(value) or value <= 0.0 for value in spacings):
+            raise NativeSeriesError("temporal series requires positive finite dts")
+    else:
+        samples = [(int(n_cells), fields[n_cells]) for n_cells in resolutions]
+        spacings = tuple(float(_exact.PERIOD) / float(n) for n in resolutions)
+        if family != "spatial":
+            family = "global"
     l1: list[float] = []
     l2: list[float] = []
     linf: list[float] = []
-    for n_cells in resolutions:
-        errors = primitive_errors(
-            fields[n_cells], n_cells, t_end, u_inf=u_inf, v_inf=v_inf
-        )
+    for n_cells, packed in samples:
+        errors = primitive_errors(packed, n_cells, t_end, u_inf=u_inf, v_inf=v_inf)
         if variable not in errors:
             raise NativeSeriesError(f"unknown primitive variable {variable}")
         l1.append(float(errors[variable].l1))
         l2.append(float(errors[variable].l2))
         linf.append(float(errors[variable].linf))
-    if len(resolutions) < 4:
+    if len(samples) < 4:
         return {
             "verdict": "smoke",
             "order_pass": False,
@@ -322,17 +335,6 @@ def evaluate_order_claim(campaign: dict) -> dict[str, Any]:
         raise NativeSeriesError(
             "refusing exact-vs-exact or non-positive native errors as an order pass"
         )
-    if family == "temporal":
-        spacings = tuple(
-            float(value) for value in (campaign.get("dts") or campaign.get("spacings") or ())
-        )
-        if len(spacings) != len(resolutions):
-            raise NativeSeriesError("temporal series requires dts matching the native fields")
-    elif family == "spatial":
-        spacings = tuple(float(_exact.PERIOD) / float(n) for n in resolutions)
-    else:
-        spacings = tuple(float(_exact.PERIOD) / float(n) for n in resolutions)
-        family = "global"
     return _claim_from_recorded_errors(
         l1=l1, l2=l2, linf=linf, spacings=spacings, family=family
     )
@@ -394,38 +396,63 @@ def campaign_from_evidence(series_dir) -> dict[str, Any]:
     bundle = EvidenceBundle(series_dir)
     if bundle.case_id != CASE_ID:
         raise NativeSeriesError(f"EvidenceBundle case_id {bundle.case_id} is not EU-02")
-    fields = {}
-    resolutions = []
-    times = []
+    runs = []
     for record in bundle.records:
         result = np.asarray(record["result"], dtype=np.float64)
         n_cells = int(result.shape[-1])
-        fields[n_cells] = result
-        resolutions.append(n_cells)
-        times.append(float(record["provenance"].get("final_time") or _run.T_END_CANONICAL))
-    order = np.argsort(resolutions)
-    resolutions = [resolutions[index] for index in order]
+        resolved = record.get("resolved_case") or {}
+        job = resolved.get("job") if isinstance(resolved.get("job"), Mapping) else {}
+        width = float(_exact.PERIOD) / float(n_cells)
+        dt = job.get("dt")
+        if dt is None:
+            cfl = record["provenance"].get("cfl")
+            dt = float(cfl) * width if cfl not in (None, "") else None
+        runs.append(
+            {
+                "n_cells": n_cells,
+                "field": result,
+                "dt": float(dt) if dt is not None else None,
+                "t": float(record["provenance"].get("final_time") or _run.T_END_CANONICAL),
+            }
+        )
+    family_file = Path(series_dir) / "family.json"
+    declared = {}
+    if family_file.is_file():
+        declared = json.loads(family_file.read_text(encoding="utf-8"))
+    times = [run["t"] for run in runs]
+    n_cells_set = {run["n_cells"] for run in runs}
     first = bundle.records[0]
     family = "global"
     dt_scaling = "cfl"
     time_program = str(first["provenance"].get("time_program") or "")
-    if "FixedDt" in time_program and len({round(t, 12) for t in times}) == 1:
-        dts = [float(record["provenance"].get("cfl", 0.0)) * (float(_exact.PERIOD) / float(resolutions[index])) for index, record in enumerate(bundle.records)]
-        if len(set(resolutions)) == 1:
+    if str(declared.get("family") or "") in {"temporal", "spatial", "global"}:
+        family = str(declared["family"])
+        dt_scaling = "fixed" if family == "temporal" else ("h2" if family == "spatial" else "cfl")
+    elif "FixedDt" in time_program and len({round(t, 12) for t in times}) == 1:
+        dts = [run["dt"] for run in runs]
+        if len(n_cells_set) == 1 and all(value is not None for value in dts):
             family = "temporal"
             dt_scaling = "fixed"
-        elif all(
-            abs(dts[index] / dts[0] - (resolutions[0] / resolutions[index]) ** 2) < 0.15
+        elif all(value not in (None, 0.0) for value in dts) and all(
+            abs(dts[index] / dts[0] - (runs[0]["n_cells"] / runs[index]["n_cells"]) ** 2) < 0.15
             for index in range(len(dts))
         ):
             family = "spatial"
             dt_scaling = "h2"
+    if family == "temporal":
+        runs.sort(key=lambda run: float(run["dt"]))
+    else:
+        runs.sort(key=lambda run: int(run["n_cells"]))
+    resolutions = [int(run["n_cells"]) for run in runs]
+    fields = {int(run["n_cells"]): run["field"] for run in runs}
     return {
         "source": "native",
         "family": family,
         "dt_scaling": dt_scaling,
         "resolutions": resolutions,
         "fields": fields,
+        "runs": runs,
+        "dts": [run["dt"] for run in runs],
         "t_end": float(times[0]) if times else _run.T_END_CANONICAL,
         "u_inf": 1.0,
         "v_inf": 0.0,
@@ -707,19 +734,35 @@ def _write_status_and_program(output_dir: Path, campaign: dict, claim: dict) -> 
     )
     bundle_path = campaign.get("bundle_path")
     digest = ""
+    provenance_src = None
     if bundle_path:
         finest = Path(bundle_path) / f"n{int(campaign['resolutions'][-1]):03d}" / "program.sha256"
         if finest.is_file():
             digest = finest.read_text(encoding="utf-8").strip()
+            provenance_src = finest.parent / "provenance.json"
+        if provenance_src is None or not provenance_src.is_file():
+            for child in Path(bundle_path).rglob("provenance.json"):
+                provenance_src = child
+                break
+        if provenance_src is not None and provenance_src.is_file():
+            shutil.copy2(provenance_src, output / "provenance.json")
     (output / "program.json").write_text(
         json.dumps({"sha256": digest or "absent", "source": "program.bin"}, indent=2) + "\n",
         encoding="utf-8",
     )
 
 
-def _write_metrics(output_dir: Path, campaign: dict, claim: dict, extras: dict) -> None:
+def _finest_sample(campaign: dict) -> tuple[int, Any]:
+    runs = list(campaign.get("runs") or [])
+    if campaign.get("family") == "temporal" and runs:
+        finest = min(runs, key=lambda run: float(run["dt"]))
+        return int(finest["n_cells"]), finest["field"]
     finest = int(campaign["resolutions"][-1])
-    packed = campaign["fields"][finest]
+    return finest, campaign["fields"][finest]
+
+
+def _write_metrics(output_dir: Path, campaign: dict, claim: dict, extras: dict) -> None:
+    finest, packed = _finest_sample(campaign)
     primitives = _run.conserved_to_primitives(packed)
     primitive = extras.get("primitive_errors") or primitive_errors(
         packed, finest, float(campaign["t_end"])
@@ -918,11 +961,11 @@ def write_native_campaign_report(output_dir, campaign: dict, extras: dict | None
                 "provenance_ref": "provenance.json",
             }
         ]
-    finest = int(campaign["resolutions"][-1])
+    finest, packed = _finest_sample(campaign)
     if "conservation" not in extras:
         extras.update(
             diagnose_resolution(
-                campaign["fields"][finest],
+                packed,
                 finest,
                 float(campaign["t_end"]),
                 u_inf=float(campaign.get("u_inf") or 1.0),

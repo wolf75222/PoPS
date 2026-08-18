@@ -224,6 +224,36 @@ def test_evaluate_order_claim_refuses_cfl_as_spatial():
         )
 
 
+def test_evaluate_order_claim_temporal_uses_dts_not_collapsed_n():
+    analyze = _load("analyze")
+    run = _load("run")
+    base = run.pack_conserved(run.initial_conserved(16))
+    dts = (0.08, 0.04, 0.02, 0.01)
+    amps = (8.0e-3, 2.0e-3, 5.0e-4, 1.25e-4)
+    runs = []
+    for dt, amp in zip(dts, amps, strict=True):
+        field = np.array(base, copy=True)
+        field[0] += amp
+        runs.append({"n_cells": 16, "field": field, "dt": dt})
+    claim = analyze.evaluate_order_claim(
+        {
+            "source": "native",
+            "family": "temporal",
+            "dt_scaling": "fixed",
+            "resolutions": (16, 16, 16, 16),
+            "fields": {16: runs[-1]["field"]},
+            "runs": runs,
+            "dts": dts,
+            "t_end": 0.0,
+        }
+    )
+    assert claim["family"] == "temporal"
+    assert claim["verdict"] in {"pass", "fail"}
+    assert len(claim["orders"]) == 3
+    assert claim["spacings"] == dts
+    assert len(set(claim["linf"])) == 4
+
+
 def test_evaluate_order_claim_three_resolutions_is_smoke():
     analyze = _load("analyze")
     run = _load("run")
