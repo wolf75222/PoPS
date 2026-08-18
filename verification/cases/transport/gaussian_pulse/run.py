@@ -111,21 +111,27 @@ def resolve_plan(n_cells: int):
 
 def _initial_field(n_cells: int) -> np.ndarray:
     exact = _exact_module()
-    width = 1.0 / int(n_cells)
-    centers = (np.arange(int(n_cells), dtype=np.float64) + 0.5) * width
-    return np.ascontiguousarray(exact.exact_gaussian(centers, 0.0, a=ADVECTION_SPEED))
+    from verification.pops_verify.cell_averages import analytic_cell_averages
+
+    count = int(n_cells)
+    width = 1.0 / count
+    lo = np.arange(count, dtype=np.float64) * width
+    hi = lo + width
+    return np.ascontiguousarray(
+        analytic_cell_averages(lambda x: exact.exact_gaussian(x, 0.0, a=ADVECTION_SPEED), lo, hi)
+    )
 
 
 def run_native(n_cells=32, t_end=1.0, *, request=None):
     """Compile, bind, and run the 1-d Case when a C++ toolchain is present."""
-    from tests.python.support.requirements import (
+    from verification.pops_verify.native_toolchain import (
         default_cxx,
         missing_compiler_requirement,
         missing_native_compile_requirement,
         repo_include,
     )
     from verification.pops_verify.native_evidence import (
-        campaign_run_fields,
+        maybe_campaign_payload,
         resolution_from_request,
     )
 
@@ -154,15 +160,14 @@ def run_native(n_cells=32, t_end=1.0, *, request=None):
     field = np.ravel(np.asarray(simulation.state_global("gas"), dtype=np.float64))[
         : authored.n_cells
     ]
-    if request is None:
-        return field
-    payload = campaign_run_fields(
-        request=request,
+    return maybe_campaign_payload(
+        request,
+        field,
+        artifact=artifact,
+        simulation=simulation,
         n_cells=authored.n_cells,
         t_end=t_end,
         time_program="SSPRK2",
         cfl=CFL,
         dimension=1,
     )
-    payload["result"] = field
-    return payload

@@ -1,7 +1,7 @@
 """Public 1-d homogeneous-Neumann Poisson authoring for PO-03.
 
-Does not compile, bind, or launch a solver. Native elliptic execution is not
-implemented in this worktree (no private solver).
+``build_case``, ``resolve_plan``, and ``run_native`` share
+``author_periodic_poisson``. Native execution is optional and requires Kokkos.
 """
 from __future__ import annotations
 
@@ -10,22 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-import pops
-from pops.domain import CartesianDomain
-from pops.fields import (
-    CellCenteredSecondOrder,
-    ConstantNullspace,
-    FieldDiscretization,
-    FieldOutput,
-    GradientOutput,
-    MeanValueGauge,
-)
-from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Neumann
-from pops.frames import Cartesian1D
-from pops.math import laplacian
-from pops.physics import Model
 from pops.problem import Case
-from pops.solvers.elliptic import GeometricMG
 from verification.pops_verify.case_authoring import load_sibling_module
 
 _CASE_DIR = Path(__file__).resolve().parent
@@ -99,65 +84,38 @@ def build_rhs_and_oracle(n_cells: int):
     }
 
 
+def _poisson_kwargs(n_cells: int) -> dict:
+    from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Neumann
+    from pops.solvers.elliptic import CartesianCG
+
+    return {
+        "case_name": "po03-neumann-nullspace",
+        "model_name": "po03_neumann_nullspace",
+        "domain_name": "po03-domain",
+        "solver": CartesianCG(),
+        "n_cells": n_cells,
+        "boundaries": (BoundaryCondition(AllPhysicalBoundaries(), Neumann(0.0)),),
+    }
+
+
 def build_case(n_cells: int) -> Case:
-    """Author a 1-d Neumann Poisson Case: -laplacian(phi) == rhs, GeometricMG."""
-    del n_cells
-    frame = CartesianDomain("po03-domain", (0.0,), (1.0,)).frame(Cartesian1D())
-    model = Model("po03_neumann_nullspace", frame=frame)
-    state = model.state("U", components=["rhs"])
-    (rhs,) = state
-    potential = model.field("potential")
-    operator = model.field_operator(
-        "poisson",
-        unknown=potential,
-        equation=(-laplacian(potential) == rhs),
-        outputs=(
-            FieldOutput("potential", potential),
-            GradientOutput("electric_field", potential, sign=-1),
-        ),
-    )
-    case = Case("po03-neumann-nullspace")
-    case.block("electrostatic", model)
-    case.field(
-        operator,
-        FieldDiscretization(
-            method=CellCenteredSecondOrder(),
-            boundaries=(BoundaryCondition(AllPhysicalBoundaries(), Neumann(0.0)),),
-            solver=GeometricMG(),
-            nullspace=ConstantNullspace(),
-            gauge=MeanValueGauge(0.0),
-        ),
-    )
-    return case
+    """Author the same 1-d Neumann Poisson Case used by resolve and run_native."""
+    from verification.pops_verify.elliptic_stationary import author_periodic_poisson
+
+    return author_periodic_poisson(**_poisson_kwargs(n_cells))[0]
 
 
 def resolve_plan(n_cells: int):
-    """Validate the public Case. Full resolve is pending a whole-system Program.
-
-    ``pops.validate`` succeeds. ``pops.resolve`` requires a whole-system Program
-    for Uniform layouts. This case does not invent a hyperbolic stepper or a
-    private elliptic solver, so resolve stays documented as AuthoringPending.
-    """
-    from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Neumann
-    from pops.solvers.elliptic import GeometricMG
+    """Validate and resolve the unified Case. Does not compile or call pops.run."""
     from verification.pops_verify.case_authoring import resolve_case, uniform_open_layout
     from verification.pops_verify.elliptic_stationary import author_periodic_poisson
 
-    case, _instance, frame, count = author_periodic_poisson(
-        case_name="po03-neumann-nullspace",
-        model_name="po03_neumann_nullspace",
-        domain_name="po03-domain",
-        solver=GeometricMG(),
-        n_cells=n_cells,
-        boundaries=(BoundaryCondition(AllPhysicalBoundaries(), Neumann(0.0)),),
-    )
+    case, _instance, frame, count = author_periodic_poisson(**_poisson_kwargs(n_cells))
     return resolve_case(case, layout=uniform_open_layout(frame, (count,)))
 
 
 def run_native(n_cells: int = 16, t_end: float = 1.0, *, request=None):
     """Compile, bind a compatible RHS, and return the solved potential."""
-    from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Neumann
-    from pops.solvers.elliptic import GeometricMG
     from verification.pops_verify.elliptic_stationary import run_periodic_poisson_native
     from verification.pops_verify.native_evidence import (
         maybe_campaign_payload,
@@ -172,21 +130,18 @@ def run_native(n_cells: int = 16, t_end: float = 1.0, *, request=None):
     n_cells = resolution_from_request(request, n_cells)
     sample = build_rhs_and_oracle(n_cells)
     try:
-        phi = run_periodic_poisson_native(
-            case_name="po03-neumann-nullspace",
-            model_name="po03_neumann_nullspace",
-            domain_name="po03-domain",
-            solver=GeometricMG(),
-            n_cells=n_cells,
+        phi, artifact, simulation = run_periodic_poisson_native(
+            **_poisson_kwargs(n_cells),
             rhs=sample["rhs"],
             t_end=t_end,
-            boundaries=(BoundaryCondition(AllPhysicalBoundaries(), Neumann(0.0)),),
         )
     except RuntimeError as exc:
         raise NativeUnavailable(str(exc)) from exc
     return maybe_campaign_payload(
         request,
         phi,
+        artifact=artifact,
+        simulation=simulation,
         n_cells=n_cells,
         t_end=t_end,
         time_program="ForwardEuler",

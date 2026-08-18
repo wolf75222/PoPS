@@ -99,7 +99,7 @@ def _box_frame():
     return CartesianDomain("tr06-box", (0.0, 0.0), (1.0, 1.0)).frame(Cartesian2D())
 
 
-def _author(n_cells: int) -> _Authoring:
+def _author(n_cells: int, *, swapped: bool = False) -> _Authoring:
     import pops
     import pops.lib.time as libtime
     from pops.initial import InitialCondition
@@ -117,8 +117,8 @@ def _author(n_cells: int) -> _Authoring:
     model = pops.Model("tr06-axis-permutation", frame=frame)
     state = model.state("U", components=("q",))
     (q,) = state
-    speed_x = float(_exact.AX)
-    speed_y = float(_exact.AY)
+    speed_x = float(_exact.AY if swapped else _exact.AX)
+    speed_y = float(_exact.AX if swapped else _exact.AY)
     velocity = model.vector(
         "a", frame=frame, components={x_axis: speed_x, y_axis: speed_y}
     )
@@ -140,7 +140,7 @@ def _author(n_cells: int) -> _Authoring:
             riemann=riemann.ScalarUpwind(velocity=velocity),
         ),
     )
-    case = pops.Case("tr06-axis-permutation")
+    case = pops.Case("tr06-axis-permutation-swapped" if swapped else "tr06-axis-permutation")
     tracer = case.block("tracer", model, states=(state,))
     instance = tracer[state]
     case.numerics(numerics, block=tracer)
@@ -178,19 +178,20 @@ def resolve_plan(n_cells: int = _exact.N_CELLS):
     )
 
 
-def _initial_field(n_cells: int) -> np.ndarray:
+def _initial_field(n_cells: int, *, swapped: bool = False) -> np.ndarray:
     x, y, _volumes, _axis = _exact.uniform_grid_2d(n_cells)
-    return np.ascontiguousarray(
-        _exact.exact_product(x, y, 0.0),
-        dtype=np.float64,
-    )
+    if swapped:
+        field = _exact.exact_product(y, x, 0.0)
+    else:
+        field = _exact.exact_product(x, y, 0.0)
+    return np.ascontiguousarray(field, dtype=np.float64)
 
 
 def run_native(n_cells: int = _exact.N_CELLS, t_end: float = _exact.T, *, request=None):
     """Compile, bind, and run the 2-d product-sine Case."""
     import pops
 
-    from tests.python.support.requirements import (
+    from verification.pops_verify.native_toolchain import (
         default_cxx,
         missing_compiler_requirement,
         missing_native_compile_requirement,
@@ -234,9 +235,34 @@ def run_native(n_cells: int = _exact.N_CELLS, t_end: float = _exact.T, *, reques
         np.asarray(simulation.state_global("tracer"), dtype=np.float64),
         (authored.n_cells, authored.n_cells),
     )
+    result: Any = field
+    if request is not None:
+        swapped = _author(n_cells, swapped=True)
+        plan_p = resolve_case(
+            swapped.case,
+            layout=uniform_periodic_layout(
+                swapped.frame, (swapped.n_cells, swapped.n_cells)
+            ),
+        )
+        artifact_p = pops.compile(plan_p)
+        initial_p = np.ascontiguousarray(
+            _initial_field(swapped.n_cells, swapped=True)[np.newaxis, :, :],
+            dtype=np.float64,
+        )
+        simulation_p = pops.bind(
+            artifact_p, initial_values={swapped.instance: initial_p}
+        )
+        pops.run(simulation_p, t_end=float(t_end), max_steps=MAX_STEPS)
+        field_p = np.reshape(
+            np.asarray(simulation_p.state_global("tracer"), dtype=np.float64),
+            (swapped.n_cells, swapped.n_cells),
+        )
+        result = {"original": field, "permuted": field_p}
     return maybe_campaign_payload(
         request,
-        field,
+        result,
+        artifact=artifact,
+        simulation=simulation,
         n_cells=authored.n_cells,
         t_end=t_end,
         time_program="SSPRK2",

@@ -104,8 +104,7 @@ def run_native(n_cells: int = 16, t_end: float = 1.0, *, request=None):
             f"PO-02 requires pops_native_dim=2 (got {request.pops_native_dim}); "
             "no fallback"
         )
-    n_cells = resolution_from_request(request, n_cells)
     del n_cells, t_end
-    raise NativeUnavailable(
-        "public non-homogeneous Dirichlet data is not attached to the Case"
-    )
+    from verification.pops_verify.native_evidence import BLOCKED_REQUIRED
+
+    raise NativeUnavailable(BLOCKED_REQUIRED["PO-02"])

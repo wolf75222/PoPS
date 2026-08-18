@@ -116,19 +116,12 @@ def resolve_plan(n_cells: int = N_CELLS):
 
 def run_native(n_cells: int = N_CELLS, t_end: float = 1.0, *, request=None):
     """Refuse a fake swirl. Public time-dependent incompressible velocity is missing."""
-    from tests.python.support.requirements import missing_compiler_requirement, repo_include
-    from verification.pops_verify.native_evidence import resolution_from_request
+    from verification.pops_verify.native_evidence import BLOCKED_REQUIRED
 
+    del n_cells, t_end
     if request is not None and int(request.pops_native_dim) != 2:
         raise NativeUnavailable(
             f"TR-03 requires pops_native_dim=2 (got {request.pops_native_dim}); "
             "no fallback"
         )
-    n_cells = resolution_from_request(request, n_cells)
-    del n_cells, t_end
-    missing = missing_compiler_requirement(repo_include())
-    if missing:
-        raise NativeUnavailable(missing)
-    raise NativeUnavailable(
-        "public time-dependent incompressible swirl velocity is not supported"
-    )
+    raise NativeUnavailable(BLOCKED_REQUIRED["TR-03"])

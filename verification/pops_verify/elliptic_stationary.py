@@ -1,60 +1,42 @@
-"""Attach a public stationary Program so elliptic Cases can resolve.
+"""Author a public stationary Program so elliptic Cases can resolve.
 
-Isolated helper for PO-01-style field solves. The hyperbolic rate is a
-zero-flux holder; it is not a private elliptic solver.
+One function, ``author_periodic_poisson``, is the sole authoring path used by
+``build_case``, ``resolve_plan``, and native execution. The hyperbolic rate is
+a zero-flux holder; it is not a private elliptic solver.
 """
 from __future__ import annotations
 
 from typing import Any
 
 import pops
+from pops.domain import CartesianDomain
+from pops.fields import (
+    CellCenteredSecondOrder,
+    ConstantNullspace,
+    FieldDiscretization,
+    FieldOutput,
+    GradientOutput,
+    MeanValueGauge,
+)
+from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Periodic
+from pops.frames import Cartesian1D
 from pops.initial import InitialCondition
 from pops.lib.initial import BindArray
 from pops.lib.time import ForwardEuler
-from pops.math import ddt, div
+from pops.math import ddt, div, laplacian
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
+from pops.physics import Model
+from pops.problem import Case
 from pops.projection import ConservativeCellAverage
 from pops.time import FixedDt
 
-
-def attach_stationary_program(case: Any, model: Any, state: Any, field: Any) -> Any:
-    """Add a zero-flux holder Program that hosts ``field`` and return the instance."""
-    frame = model.frame
-    axes = tuple(frame.axes)
-    waves = {axis: (0.0 * state[0],) for axis in axes}
-    flux = model.flux(
-        "stationary",
-        frame=frame,
-        state=state,
-        components={axis: (0.0 * state[0],) for axis in axes},
-        waves=waves,
-    )
-    rate = model.rate("hold", equation=ddt(state) == -div(flux))
-    block = case.block("electrostatic", model, states=(state,))
-    instance = block[state]
-    numerics = DiscretizationPlan()
-    numerics.rates.add(
-        rate,
-        FiniteVolume(
-            flux=flux,
-            variables=variables.Conservative(state),
-            reconstruction=reconstruction.FirstOrder(),
-            riemann=riemann.Rusanov(),
-        ),
-    )
-    case.numerics(numerics, block=block)
-    program = ForwardEuler(instance, rate=rate, fields=field)
-    program.step_strategy(FixedDt(1.0))
-    case.program(program)
-    case.initials.add(
-        InitialCondition(
-            state=instance,
-            value=BindArray(),
-            projection=ConservativeCellAverage(),
-        )
-    )
-    return instance
+from verification.pops_verify.case_authoring import (
+    resolve_case,
+    uniform_open_layout,
+    uniform_periodic_layout,
+)
+from verification.pops_verify.native_toolchain import native_unavailable_reason
 
 
 def author_periodic_poisson(
@@ -69,27 +51,21 @@ def author_periodic_poisson(
     boundaries=None,
     nullspace=True,
 ):
-    """Author a 1-d Poisson Case with PO-01 block/numerics/field/program order."""
-    from pops.domain import CartesianDomain
-    from pops.fields import (
-        CellCenteredSecondOrder,
-        ConstantNullspace,
-        FieldDiscretization,
-        FieldOutput,
-        GradientOutput,
-        MeanValueGauge,
-    )
-    from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Periodic
-    from pops.frames import Cartesian1D
-    from pops.math import laplacian
-    from pops.physics import Model
-    from pops.problem import Case
-
+    """Author a 1-d Poisson Case with block/numerics/field/program order."""
     count = int(n_cells)
     frame = CartesianDomain(domain_name, lower, upper).frame(Cartesian1D())
     model = Model(model_name, frame=frame)
     state = model.state("U", components=["rhs"])
     (rhs,) = state
+    axes = tuple(frame.axes)
+    flux = model.flux(
+        "stationary",
+        frame=frame,
+        state=state,
+        components={axis: (0.0 * rhs,) for axis in axes},
+        waves={axis: (0.0 * rhs,) for axis in axes},
+    )
+    rate = model.rate("hold", equation=ddt(state) == -div(flux))
     potential = model.field("potential")
     operator = model.field_operator(
         "poisson",
@@ -103,15 +79,6 @@ def author_periodic_poisson(
     case = Case(case_name)
     block = case.block("electrostatic", model, states=(state,))
     instance = block[state]
-    axes = tuple(frame.axes)
-    flux = model.flux(
-        "stationary",
-        frame=frame,
-        state=state,
-        components={axis: (0.0 * rhs,) for axis in axes},
-        waves={axis: (0.0 * rhs,) for axis in axes},
-    )
-    rate = model.rate("hold", equation=ddt(state) == -div(flux))
     numerics = DiscretizationPlan()
     numerics.rates.add(
         rate,
@@ -163,24 +130,9 @@ def run_periodic_poisson_native(
     """Compile, bind RHS, and return the solved 1-d potential."""
     import numpy as np
 
-    from tests.python.support.requirements import (
-        default_cxx,
-        missing_compiler_requirement,
-        missing_native_compile_requirement,
-        repo_include,
-    )
-    from verification.pops_verify.case_authoring import (
-        resolve_case,
-        uniform_open_layout,
-        uniform_periodic_layout,
-    )
-
-    missing = missing_compiler_requirement()
+    missing = native_unavailable_reason()
     if missing:
         raise RuntimeError(missing)
-    native = missing_native_compile_requirement(repo_include(), default_cxx())
-    if native:
-        raise RuntimeError(native)
     case, instance, frame, count = author_periodic_poisson(
         case_name=case_name,
         model_name=model_name,
@@ -208,4 +160,4 @@ def run_periodic_poisson_native(
     phi = np.ravel(
         np.asarray(simulation.field_potential_global(slots[0]), dtype=np.float64)
     )[:count]
-    return phi
+    return phi, artifact, simulation

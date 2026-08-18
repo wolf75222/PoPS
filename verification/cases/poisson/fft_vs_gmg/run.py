@@ -1,8 +1,7 @@
-"""Public 1-d periodic Poisson authoring for PO-05.
+"""Public 1-d Poisson authoring for PO-05.
 
-Does not compile, bind, or launch a solver. Native elliptic execution is not
-implemented in this worktree (no private solver). The FFT vs GMG comparison
-is the in-memory spectral solve versus the discrete -Δ residual stub.
+Uniform FFT and GeometricMG (CartesianCG on uniform Systems) are reduced
+substitutes. Campaign ``run_native(request=)`` refuses the FFT-vs-GMG ID.
 """
 from __future__ import annotations
 
@@ -10,22 +9,8 @@ from pathlib import Path
 
 import numpy as np
 
-import pops
-from pops.domain import CartesianDomain
-from pops.fields import (
-    CellCenteredSecondOrder,
-    ConstantNullspace,
-    FieldDiscretization,
-    FieldOutput,
-    GradientOutput,
-    MeanValueGauge,
-)
-from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Periodic
-from pops.frames import Cartesian1D
-from pops.math import laplacian
-from pops.physics import Model
 from pops.problem import Case
-from pops.solvers.elliptic import FFT, GeometricMG
+from pops.solvers.elliptic import GeometricMG
 from verification.pops_verify.case_authoring import load_sibling_module
 from verification.pops_verify.reference_errors import reference_errors
 
@@ -79,117 +64,54 @@ def spectral_cross_oracle(n_cells: int = N_CELLS):
     return sample
 
 
+def _poisson_kwargs(n_cells: int, *, solver=None, case_name: str = "po05-fft-vs-gmg") -> dict:
+    from pops.solvers.elliptic import FFT
+
+    return {
+        "case_name": case_name,
+        "model_name": "po05_fft_vs_gmg",
+        "domain_name": "po05-domain",
+        "solver": FFT() if solver is None else solver,
+        "n_cells": n_cells,
+    }
+
+
 def build_case(n_cells: int = N_CELLS) -> Case:
-    """Author a 1-d periodic Poisson Case: -laplacian(phi) == rhs, FFT."""
-    del n_cells
-    return _build_case("po05-fft-vs-gmg", "po05_fft_vs_gmg", FFT())
+    """Author the same FFT Case used by resolve_plan."""
+    from verification.pops_verify.elliptic_stationary import author_periodic_poisson
+
+    return author_periodic_poisson(**_poisson_kwargs(n_cells))[0]
 
 
 def build_gmg_case(n_cells: int = N_CELLS) -> Case:
-    """Author the same Case with GeometricMG (public API counterpart)."""
-    del n_cells
-    return _build_case("po05-fft-vs-gmg-gmg", "po05_fft_vs_gmg", GeometricMG())
+    """Author the GeometricMG counterpart (lowers to CartesianCG on uniform)."""
+    from verification.pops_verify.elliptic_stationary import author_periodic_poisson
 
-
-def _build_case(case_name: str, model_name: str, solver) -> Case:
-    frame = CartesianDomain("po05-domain", (0.0,), (1.0,)).frame(Cartesian1D())
-    model = Model(model_name, frame=frame)
-    state = model.state("U", components=["rhs"])
-    (rhs,) = state
-    potential = model.field("potential")
-    operator = model.field_operator(
-        "poisson",
-        unknown=potential,
-        equation=(-laplacian(potential) == rhs),
-        outputs=(
-            FieldOutput("potential", potential),
-            GradientOutput("electric_field", potential, sign=-1),
-        ),
-    )
-    case = Case(case_name)
-    case.block("electrostatic", model)
-    case.field(
-        operator,
-        FieldDiscretization(
-            method=CellCenteredSecondOrder(),
-            boundaries=(BoundaryCondition(AllPhysicalBoundaries(), Periodic()),),
-            solver=solver,
-            nullspace=ConstantNullspace(),
-            gauge=MeanValueGauge(0.0),
-        ),
-    )
-    return case
+    return author_periodic_poisson(
+        **_poisson_kwargs(n_cells, solver=GeometricMG(), case_name="po05-fft-vs-gmg-gmg")
+    )[0]
 
 
 def resolve_plan(n_cells: int = N_CELLS):
-    """Validate the public Cases. Full resolve is pending a whole-system Program.
-
-    ``pops.validate`` succeeds for both the FFT and GeometricMG Cases.
-    ``pops.resolve`` requires a whole-system Program for Uniform layouts.
-    This case does not invent a hyperbolic stepper or a private elliptic
-    solver, so resolve stays documented as AuthoringPending.
-    """
-    from pops.solvers.elliptic import FFT
+    """Validate and resolve the unified FFT Case. Does not compile or call pops.run."""
     from verification.pops_verify.case_authoring import (
         resolve_case,
         uniform_periodic_layout,
     )
     from verification.pops_verify.elliptic_stationary import author_periodic_poisson
 
-    case, _instance, frame, count = author_periodic_poisson(
-        case_name="po05-fft-vs-gmg",
-        model_name="po05_fft_vs_gmg",
-        domain_name="po05-domain",
-        solver=FFT(),
-        n_cells=n_cells,
-    )
+    case, _instance, frame, count = author_periodic_poisson(**_poisson_kwargs(n_cells))
     return resolve_case(case, layout=uniform_periodic_layout(frame, (count,)))
 
 
 def run_native(n_cells: int = N_CELLS, t_end: float = 1.0, *, request=None):
-    """Run uniform FFT and GeometricMG. GMG on a uniform System is CartesianCG."""
-    from pops.solvers.elliptic import FFT, GeometricMG
-    from verification.pops_verify.elliptic_stationary import run_periodic_poisson_native
-    from verification.pops_verify.native_evidence import (
-        maybe_campaign_payload,
-        resolution_from_request,
-    )
+    """Refuse FFT-vs-GMG. Uniform GeometricMG is CartesianCG, not the PO-05 ID."""
+    from verification.pops_verify.native_evidence import REDUCED_NOT_SUPPORTED
 
+    del n_cells, t_end
     if request is not None and int(request.pops_native_dim) != 1:
         raise NativeUnavailable(
             f"PO-05 requires pops_native_dim=1 (got {request.pops_native_dim}); "
             "no fallback"
         )
-    n_cells = resolution_from_request(request, n_cells)
-    sample = build_rhs_and_oracle(n_cells)
-    try:
-        phi_fft = run_periodic_poisson_native(
-            case_name="po05-fft-vs-gmg",
-            model_name="po05_fft_vs_gmg",
-            domain_name="po05-domain",
-            solver=FFT(),
-            n_cells=n_cells,
-            rhs=sample["rhs"],
-            t_end=t_end,
-        )
-        phi_gmg = run_periodic_poisson_native(
-            case_name="po05-fft-vs-gmg-gmg",
-            model_name="po05_fft_vs_gmg",
-            domain_name="po05-domain",
-            solver=GeometricMG(),
-            n_cells=n_cells,
-            rhs=sample["rhs"],
-            t_end=t_end,
-        )
-    except RuntimeError as exc:
-        raise NativeUnavailable(str(exc)) from exc
-    pair = {"fft": phi_fft, "gmg": phi_gmg}
-    return maybe_campaign_payload(
-        request,
-        pair,
-        n_cells=n_cells,
-        t_end=t_end,
-        time_program="ForwardEuler",
-        cfl=1.0,
-        dimension=1,
-    )
+    raise NativeUnavailable(REDUCED_NOT_SUPPORTED["PO-05"])

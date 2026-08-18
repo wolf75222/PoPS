@@ -72,10 +72,32 @@ def primitives_to_conserved(primitives) -> dict:
 
 
 def initial_conserved(n_cells: int = N_CELLS, *, u_inf=1.0, v_inf=0.0):
-    """Conserved IC from ``exact_vortex(..., t=0)``."""
-    return primitives_to_conserved(
-        initial_primitives(n_cells, u_inf=u_inf, v_inf=v_inf)
-    )
+    """Conserved IC from cell averages of ``exact_vortex(..., t=0)``."""
+    from verification.pops_verify.cell_averages import analytic_cell_averages
+
+    count = int(n_cells)
+    length = float(_exact.PERIOD)
+    width = length / count
+    axis_lo = np.arange(count, dtype=np.float64) * width
+    axis_hi = axis_lo + width
+    x_lo, y_lo = np.meshgrid(axis_lo, axis_lo, indexing="xy")
+    x_hi, y_hi = np.meshgrid(axis_hi, axis_hi, indexing="xy")
+    lo = np.stack((x_lo, y_lo), axis=-1)
+    hi = np.stack((x_hi, y_hi), axis=-1)
+
+    def _component(name):
+        def _fn(x, y):
+            return _exact.exact_vortex(x, y, 0.0, u_inf=u_inf, v_inf=v_inf)[name]
+
+        return analytic_cell_averages(_fn, lo, hi)
+
+    primitives = {
+        "rho": _component("rho"),
+        "u": _component("u"),
+        "v": _component("v"),
+        "p": _component("p"),
+    }
+    return primitives_to_conserved(primitives)
 
 
 def pack_conserved(conserved) -> np.ndarray:
@@ -226,7 +248,7 @@ def resolve_plan(n_cells: int = N_CELLS):
 
 
 def _native_unavailable_reason() -> str | None:
-    from tests.python.support.requirements import (
+    from verification.pops_verify.native_toolchain import (
         default_cxx,
         missing_compiler_requirement,
         missing_native_compile_requirement,
@@ -280,6 +302,8 @@ def run_native(
     return maybe_campaign_payload(
         request,
         conserved,
+        artifact=artifact,
+        simulation=simulation,
         n_cells=authored.n_cells,
         t_end=t_end,
         time_program="SSPRK2",

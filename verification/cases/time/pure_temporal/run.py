@@ -23,7 +23,7 @@ from pops.projection import ConservativeCellAverage
 from pops.representations import Conservative
 from pops.spaces import CellState
 from pops.time import FixedDt
-from tests.python.support.requirements import (
+from verification.pops_verify.native_toolchain import (
     default_cxx,
     missing_compiler_requirement,
     missing_native_compile_requirement,
@@ -133,17 +133,20 @@ def _native_unavailable_reason() -> str | None:
 
 def run_native(dt=None, t_end=1.0, *, n_cells: int = N_CELLS, request=None):
     """Compile, bind, and run the Case. Raises NativeUnavailable without a compiler."""
-    from verification.pops_verify.native_evidence import (
-        maybe_campaign_payload,
-        resolution_from_request,
-    )
+    from verification.pops_verify.native_evidence import maybe_campaign_payload
 
     if request is not None and int(request.pops_native_dim) != 1:
         raise NativeUnavailable(
             f"TM-01 requires pops_native_dim=1 (got {request.pops_native_dim}); "
             "no fallback"
         )
-    n_cells = resolution_from_request(request, n_cells)
+    if request is not None and request.min_resolution is not None:
+        if int(request.min_resolution) != N_CELLS:
+            raise NativeUnavailable(
+                f"TM-01 uses fixed N={N_CELLS}; refusing grid override "
+                f"min_resolution={request.min_resolution}"
+            )
+    n_cells = N_CELLS
     if dt is None:
         dt = DT
     missing = _native_unavailable_reason()
@@ -164,6 +167,8 @@ def run_native(dt=None, t_end=1.0, *, n_cells: int = N_CELLS, request=None):
     return maybe_campaign_payload(
         request,
         field,
+        artifact=artifact,
+        simulation=simulation,
         n_cells=authored.n_cells,
         t_end=t_end,
         time_program="SSPRK2",

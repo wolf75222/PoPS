@@ -221,7 +221,7 @@ def run_native(n_cells: int = N_CELLS, t_end: float = 0.05, *, request=None):
     """Compile, bind, and run the 2-d uniform flow when a compiler is present."""
     import pops
 
-    from tests.python.support.requirements import (
+    from verification.pops_verify.native_toolchain import (
         default_cxx,
         missing_compiler_requirement,
         missing_native_compile_requirement,
@@ -275,6 +275,8 @@ def run_native(n_cells: int = N_CELLS, t_end: float = 0.05, *, request=None):
     return maybe_campaign_payload(
         request,
         field,
+        artifact=artifact,
+        simulation=simulation,
         n_cells=authored.n_cells,
         t_end=t_end,
         time_program="SSPRK2",

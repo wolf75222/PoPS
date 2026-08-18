@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import importlib.util
 import math
-import os
 from pathlib import Path
 from typing import Any
 
@@ -167,47 +166,15 @@ def resolve_plan(n_cells: int = N_CELLS):
 
 
 def _native_unavailable_reason() -> str | None:
-    from tests.python.support.requirements import (
-        default_cxx,
-        missing_compiler_requirement,
-        missing_native_compile_requirement,
-        repo_include,
-    )
+    from verification.pops_verify.native_toolchain import native_unavailable_reason
 
-    missing = missing_compiler_requirement()
-    if missing:
-        return missing
-    return missing_native_compile_requirement(repo_include(), default_cxx())
+    return native_unavailable_reason()
 
 
-def campaign_run_fields(n_cells: int, t_end: float, request) -> dict[str, object]:
-    """Honest 1-d Serial campaign facts. Does not invent MPI or order."""
-    count = int(n_cells)
-    space = getattr(request, "execution_space", None) or "KokkosSerial"
-    return {
-        "compiler": os.environ.get("CXX", "c++"),
-        "build_type": "native-dsl",
-        "precision": "float64",
-        "kokkos_execution_space": space,
-        "mpi_enabled": False,
-        "mpi_library": "none",
-        "mpi_thread_level_requested": "none",
-        "mpi_thread_level_provided": "none",
-        "hdf5_collective_enabled": False,
-        "mpi_ranks": 1,
-        "omp_threads_per_rank": int(
-            getattr(getattr(request, "resources", None), "omp_threads", None) or 1
-        ),
-        "gpus": 0,
-        "resolution": [count],
-        "block_size": [count],
-        "amr_total_levels": 1,
-        "refinement_ratio": 2,
-        "subcycling": False,
-        "time_program": "SSPRK2",
-        "cfl": float(CFL),
-        "final_time": float(t_end),
-    }
+from verification.pops_verify.native_evidence import (
+    campaign_run_fields,
+    maybe_campaign_payload,
+)
 
 
 def run_native(n_cells: int = N_CELLS, t_end: float = 0.05, *, mode="entropy", request=None):
@@ -243,8 +210,14 @@ def run_native(n_cells: int = N_CELLS, t_end: float = 0.05, *, mode="entropy", r
         np.asarray(simulation.state_global("gas"), dtype=np.float64),
         (3, authored.n_cells),
     )
-    if request is None:
-        return field
-    payload = campaign_run_fields(authored.n_cells, t_end, request)
-    payload["result"] = field
-    return payload
+    return maybe_campaign_payload(
+        request,
+        field,
+        artifact=artifact,
+        simulation=simulation,
+        n_cells=authored.n_cells,
+        t_end=t_end,
+        time_program="SSPRK2",
+        cfl=CFL,
+        dimension=1,
+    )

@@ -34,7 +34,7 @@ from pops.problem import Case
 from pops.projection import ConservativeCellAverage
 from pops.solvers.elliptic import FFT
 from pops.time import FixedDt
-from tests.python.support.requirements import (
+from verification.pops_verify.native_toolchain import (
     default_cxx,
     missing_compiler_requirement,
     missing_native_compile_requirement,
@@ -74,14 +74,19 @@ def _exact_module():
 
 
 def build_rhs_and_oracle(n_cells: int):
-    """Return in-memory cell-center RHS and exact φ, E on a uniform 1-d grid."""
+    """Return cell-average RHS and pointwise oracle φ, E on a uniform 1-d grid."""
+    from verification.pops_verify.cell_averages import analytic_cell_averages
+
     exact = _exact_module()
     centers, volumes = exact.uniform_cell_grid(n_cells)
+    width = float(volumes[0])
+    lo = centers - 0.5 * width
+    hi = centers + 0.5 * width
     return {
         "x": centers,
         "volumes": volumes,
         "phi": exact.phi_exact(centers),
-        "rhs": exact.rhs_exact(centers),
+        "rhs": analytic_cell_averages(exact.rhs_exact, lo, hi),
         "e": exact.e_exact(centers),
     }
 
@@ -200,6 +205,8 @@ def run_native(n_cells: int = 16, t_end: float = 1.0, *, request=None):
     return maybe_campaign_payload(
         request,
         phi,
+        artifact=artifact,
+        simulation=simulation,
         n_cells=authored.n_cells,
         t_end=t_end,
         time_program="ForwardEuler",

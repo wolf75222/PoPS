@@ -1,28 +1,13 @@
-"""Public 1-d periodic Poisson authoring for PO-07.
+"""Public 1-d Poisson authoring for PO-07.
 
-Does not compile, bind, or launch a solver. Native elliptic execution is not
-implemented in this worktree (no private solver).
+A single public FFT solve is a reduced substitute. Campaign
+``run_native(request=)`` refuses the tolerance-sweep ID.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
-import pops
-from pops.domain import CartesianDomain
-from pops.fields import (
-    CellCenteredSecondOrder,
-    ConstantNullspace,
-    FieldDiscretization,
-    FieldOutput,
-    GradientOutput,
-    MeanValueGauge,
-)
-from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Periodic
-from pops.frames import Cartesian1D
-from pops.math import laplacian
-from pops.physics import Model
 from pops.problem import Case
-from pops.solvers.elliptic import FFT
 from verification.pops_verify.case_authoring import load_sibling_module
 
 _CASE_DIR = Path(__file__).resolve().parent
@@ -53,8 +38,8 @@ def build_rhs_and_oracle(n_cells: int):
     }
 
 
-def manufactured_solve(n_cells: int, tol):
-    """Return the in-memory combined-error model at one (n, tol) pair."""
+def _in_memory_tolerance_model(n_cells: int, tol):
+    """Quarantined in-memory error model. Not a native PO-07 pass path."""
     exact = _exact_module()
     sample = build_rhs_and_oracle(n_cells)
     sample["tol"] = float(tol)
@@ -64,96 +49,45 @@ def manufactured_solve(n_cells: int, tol):
     return sample
 
 
+def _poisson_kwargs(n_cells: int) -> dict:
+    from pops.solvers.elliptic import FFT
+
+    return {
+        "case_name": "po07-elliptic-tolerance",
+        "model_name": "po07_elliptic_tolerance",
+        "domain_name": "po07-domain",
+        "solver": FFT(),
+        "n_cells": n_cells,
+    }
+
+
 def build_case(n_cells: int) -> Case:
-    """Author a 1-d periodic Poisson Case: -laplacian(phi) == rhs, FFT, periodic."""
-    del n_cells
-    frame = CartesianDomain("po07-domain", (0.0,), (1.0,)).frame(Cartesian1D())
-    model = Model("po07_elliptic_tolerance", frame=frame)
-    state = model.state("U", components=["rhs"])
-    (rhs,) = state
-    potential = model.field("potential")
-    operator = model.field_operator(
-        "poisson",
-        unknown=potential,
-        equation=(-laplacian(potential) == rhs),
-        outputs=(
-            FieldOutput("potential", potential),
-            GradientOutput("electric_field", potential, sign=-1),
-        ),
-    )
-    case = Case("po07-elliptic-tolerance")
-    case.block("electrostatic", model)
-    case.field(
-        operator,
-        FieldDiscretization(
-            method=CellCenteredSecondOrder(),
-            boundaries=(BoundaryCondition(AllPhysicalBoundaries(), Periodic()),),
-            solver=FFT(),
-            nullspace=ConstantNullspace(),
-            gauge=MeanValueGauge(0.0),
-        ),
-    )
-    return case
+    """Author the same Case used by resolve_plan. FFT is not a tolerance sweep."""
+    from verification.pops_verify.elliptic_stationary import author_periodic_poisson
+
+    return author_periodic_poisson(**_poisson_kwargs(n_cells))[0]
 
 
 def resolve_plan(n_cells: int):
-    """Validate the public Case. Full resolve is pending a whole-system Program.
-
-    ``pops.validate`` succeeds. ``pops.resolve`` requires a whole-system Program
-    for Uniform layouts. This case does not invent a hyperbolic stepper or a
-    private elliptic solver, so resolve stays documented as AuthoringPending.
-    """
-    from pops.solvers.elliptic import FFT
+    """Validate and resolve the unified Case. Does not compile or call pops.run."""
     from verification.pops_verify.case_authoring import (
         resolve_case,
         uniform_periodic_layout,
     )
     from verification.pops_verify.elliptic_stationary import author_periodic_poisson
 
-    case, _instance, frame, count = author_periodic_poisson(
-        case_name="po07-elliptic-tolerance",
-        model_name="po07_elliptic_tolerance",
-        domain_name="po07-domain",
-        solver=FFT(),
-        n_cells=n_cells,
-    )
+    case, _instance, frame, count = author_periodic_poisson(**_poisson_kwargs(n_cells))
     return resolve_case(case, layout=uniform_periodic_layout(frame, (count,)))
 
 
 def run_native(n_cells: int = 16, t_end: float = 1.0, *, request=None):
-    """One public FFT solve. A tolerance sweep is not supported on public FFT."""
-    from pops.solvers.elliptic import FFT
-    from verification.pops_verify.elliptic_stationary import run_periodic_poisson_native
-    from verification.pops_verify.native_evidence import (
-        maybe_campaign_payload,
-        resolution_from_request,
-    )
+    """Refuse the normative PO-07 sweep. Public FFT has no tolerance control."""
+    from verification.pops_verify.native_evidence import REDUCED_NOT_SUPPORTED
 
+    del n_cells, t_end
     if request is not None and int(request.pops_native_dim) != 1:
         raise NativeUnavailable(
             f"PO-07 requires pops_native_dim=1 (got {request.pops_native_dim}); "
             "no fallback"
         )
-    n_cells = resolution_from_request(request, n_cells)
-    sample = build_rhs_and_oracle(n_cells)
-    try:
-        phi = run_periodic_poisson_native(
-            case_name="po07-elliptic-tolerance",
-            model_name="po07_elliptic_tolerance",
-            domain_name="po07-domain",
-            solver=FFT(),
-            n_cells=n_cells,
-            rhs=sample["rhs"],
-            t_end=t_end,
-        )
-    except RuntimeError as exc:
-        raise NativeUnavailable(str(exc)) from exc
-    return maybe_campaign_payload(
-        request,
-        phi,
-        n_cells=n_cells,
-        t_end=t_end,
-        time_program="ForwardEuler",
-        cfl=1.0,
-        dimension=1,
-    )
+    raise NativeUnavailable(REDUCED_NOT_SUPPORTED["PO-07"])

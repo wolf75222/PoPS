@@ -134,17 +134,12 @@ def resolve_plan(n_cells: int = N_CELLS):
 
 def run_native(n_cells: int = N_CELLS, t_end: float = 0.05, *, request=None):
     """Refuse a fake MMS curve. Public source injection is not attached."""
-    from tests.python.support.requirements import missing_compiler_requirement, repo_include
-    from verification.pops_verify.native_evidence import resolution_from_request
+    from verification.pops_verify.native_evidence import BLOCKED_REQUIRED
 
+    del n_cells, t_end
     if request is not None and int(request.pops_native_dim) != 1:
         raise NativeUnavailable(
             f"EU-03 requires pops_native_dim=1 (got {request.pops_native_dim}); "
             "no fallback"
         )
-    n_cells = resolution_from_request(request, n_cells)
-    del n_cells, t_end
-    missing = missing_compiler_requirement(repo_include())
-    if missing:
-        raise NativeUnavailable(missing)
-    raise NativeUnavailable("public MMS source injection is not supported")
+    raise NativeUnavailable(BLOCKED_REQUIRED["EU-03"])
