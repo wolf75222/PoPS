@@ -18,6 +18,19 @@ Annexe A.1 and §35.1 `01_advection_sine_oblique_3d`. The Case is Cartesian
 | Diagnostics | Volume-weighted L1/L2/L∞ vs cell-averaged exact. Observed spatial order on four resolutions. Native Integral/Norm/MinMax/ConservationCheck. Per-run `provenance.json`. |
 | Thresholds | Observed order \(\ge 1.8\). |
 | Proves | 3-d oblique periodic translation on a Dim-3 native artifact. |
-| Does not prove | AMR (AM-01), block-face crossings (TR-04), MPI (IF-01). |
+| Does not prove | The catalog Case in `run.py` is the 3-d cube only. |
 | Resources | Local Dim-3 series. |
 | Provenance | `pops.verification.provenance.v1` written next to the native output. |
+
+Plan §11 obligatory variants live in `complement.py` and are launched with
+`POPS_NATIVE_DIM` matching the variant rank:
+
+```
+POPS_NATIVE_DIM=1 python verification/machines/run_tr01_complement.py --dim 1
+```
+
+That catalog covers 1-d ±a, 2-d four velocities, 3-d axes / diagonal /
+oblique, `U-C` / `U-F` / `A-S0` / `A-S2` / `A-DP` / `A-DT`, block sizes,
+1/2/4 periods, axis permutations, and L1/L2/L∞, phase, amplitude, mass,
+spectrum, argmax, \(E_{cf}\)/\(E_{bulk}\). Multi-rank MPI remains IF-01
+(`mpi_world` on an MPI leaf). Evidence: `build/verification/tr01-complement/`.

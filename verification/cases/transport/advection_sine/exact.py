@@ -95,3 +95,71 @@ def exact_sine_3d(
         + kz * (zz - az * time)
     )
     return float(q0) + float(eps) * np.sin(2.0 * np.pi * phase)
+
+
+def default_wave(dim: int) -> tuple[float, ...]:
+    """Non-degenerate wave for rank ``dim``: (1,), (1,2), or (1,2,3)."""
+    rank = int(dim)
+    if rank == 1:
+        return (1.0,)
+    if rank == 2:
+        return (1.0, 2.0)
+    if rank == 3:
+        return (1.0, 2.0, 3.0)
+    raise ValueError("dim must be 1, 2, or 3")
+
+
+def directional_cfl(velocity, *, base=0.45) -> float:
+    """CFL so AdaptiveCFL's per-axis max wave keeps |a|_1 dt/dx = base."""
+    magnitudes = [abs(float(component)) for component in velocity]
+    max_wave = max(magnitudes) if any(magnitudes) else 1.0
+    one_norm = sum(magnitudes) if any(magnitudes) else 1.0
+    return float(base) * max_wave / one_norm
+
+
+def exact_sine_nd(coords, t, *, q0=Q0, eps=EPS, a, k) -> np.ndarray:
+    """q = q0 + ε sin(2π k · (x − a t)) on periodic [0, 1]^d."""
+    time = float(t)
+    phase = 0.0
+    for point, speed, wave in zip(coords, a, k, strict=True):
+        phase = phase + float(wave) * (
+            np.asarray(point, dtype=np.float64) - float(speed) * time
+        )
+    return float(q0) + float(eps) * np.sin(2.0 * np.pi * phase)
+
+
+def uniform_cell_mesh_nd(n_cells: int, dim: int):
+    """Return ``(coords, volumes)`` with native axis order (z, y, x)."""
+    count = int(n_cells)
+    rank = int(dim)
+    if count <= 0 or rank not in (1, 2, 3):
+        raise ValueError("n_cells must be positive and dim in {1, 2, 3}")
+    width = 1.0 / float(count)
+    line = (np.arange(count, dtype=np.float64) + 0.5) * width
+    if rank == 1:
+        return (line,), np.full(count, width, dtype=np.float64)
+    if rank == 2:
+        yy, xx = np.meshgrid(line, line, indexing="ij")
+        return (xx, yy), np.full(xx.shape, width**2, dtype=np.float64)
+    zz, yy, xx = np.meshgrid(line, line, line, indexing="ij")
+    return (xx, yy, zz), np.full(xx.shape, width**3, dtype=np.float64)
+
+
+def cell_bounds_nd(n_cells: int, dim: int):
+    """Return cell ``(lo, hi)`` with last axis the physical (x[, y[, z]])."""
+    count = int(n_cells)
+    rank = int(dim)
+    if count <= 0 or rank not in (1, 2, 3):
+        raise ValueError("n_cells must be positive and dim in {1, 2, 3}")
+    width = 1.0 / float(count)
+    edges = np.arange(count, dtype=np.float64) * width
+    if rank == 1:
+        lo = edges[:, None]
+        return lo, lo + width
+    if rank == 2:
+        iy, ix = np.meshgrid(edges, edges, indexing="ij")
+        lo = np.stack((ix, iy), axis=-1)
+        return lo, lo + width
+    iz, iy, ix = np.meshgrid(edges, edges, edges, indexing="ij")
+    lo = np.stack((ix, iy, iz), axis=-1)
+    return lo, lo + width
