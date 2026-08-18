@@ -225,8 +225,25 @@ def _oracle_tr01(resolved, result, provenance):
     return analytic_cell_averages(_u, lo, hi, _time(provenance))
 
 
+def _oracle_cp02(resolved, result, provenance):
+    exact = _exact("euler_poisson", "langmuir_cold")
+    n_cells = _n_cells(result, resolved)
+    time = _time(provenance)
+    density = _averages_1d(lambda x: exact.n_e(x, time), n_cells)
+    field = np.asarray(result, dtype=np.float64)
+    if field.shape == density.shape:
+        return density
+    if field.shape == (2, n_cells):
+        momentum = _averages_1d(
+            lambda x: exact.n_e(x, time) * exact.u_e(x, time), n_cells
+        )
+        return np.stack((density, momentum), axis=0)
+    raise OracleProducerError("CP-02 oracle expects density or conserved (2, n)")
+
+
 PRODUCERS: dict[str, Callable[..., Any]] = {
     "TR-01": _oracle_tr01,
+    "CP-02": _oracle_cp02,
     "TR-02": _oracle_tr02,
     "TR-06": _oracle_tr06,
     "TR-07": _oracle_tr07,
@@ -242,6 +259,7 @@ PRODUCERS: dict[str, Callable[..., Any]] = {
 
 CASE_SOURCES = {
     "TR-01": ("transport", "advection_sine"),
+    "CP-02": ("euler_poisson", "langmuir_cold"),
     "TR-02": ("transport", "gaussian_pulse"),
     "TR-06": ("transport", "axis_permutation"),
     "TR-07": ("transport", "discontinuous_slot"),
