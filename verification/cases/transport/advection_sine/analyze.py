@@ -25,6 +25,8 @@ _exact = load_sibling_module(_CASE_DIR / "exact.py")
 
 CASE_ID = "TR-01"
 ORDER_THRESHOLD = 1.8
+ROUNDING_FLOOR = 1.0e-14
+SIMULATION_SHA_KEY = "simulation_sha"
 ARTIFACTS = {
     "report_md": "REPORT.md",
     "summary_json": "summary.json",
@@ -123,6 +125,7 @@ def evaluate_order_claim(campaign: dict) -> dict[str, Any]:
             "verdict": "smoke",
             "order_pass": False,
             "orders": [],
+            "gated_orders": [],
             "l1": tuple(l1),
             "l2": tuple(l2),
             "linf": tuple(linf),
@@ -138,22 +141,67 @@ def evaluate_order_claim(campaign: dict) -> dict[str, Any]:
             raise NativeSeriesError("temporal series requires dts matching the native fields")
     else:
         spacings = tuple(1.0 / float(n) for n in resolutions)
+    return _claim_from_recorded_errors(
+        l1=l1,
+        l2=l2,
+        linf=linf,
+        spacings=spacings,
+        family=family or "global",
+    )
+
+
+def _claim_from_recorded_errors(
+    *,
+    l1,
+    l2,
+    linf,
+    spacings,
+    family: str = "global",
+) -> dict[str, Any]:
+    """§9.3: keep every interval as evidence; gate 1.8 on the last two usable L∞ pairs."""
     orders = [float(value) for value in observed_order(linf, spacings)]
-    order_pass = all(value >= ORDER_THRESHOLD for value in orders)
+    usable = [index for index, error in enumerate(linf) if float(error) > ROUNDING_FLOOR]
+    usable_set = set(usable)
+    interval_ids = [
+        index
+        for index in range(len(orders))
+        if index in usable_set and (index + 1) in usable_set
+    ]
+    if len(interval_ids) < 2:
+        return {
+            "verdict": "fail",
+            "order_pass": False,
+            "orders": orders,
+            "gated_orders": [],
+            "l1": tuple(float(value) for value in l1),
+            "l2": tuple(float(value) for value in l2),
+            "linf": tuple(float(value) for value in linf),
+            "spacings": tuple(float(value) for value in spacings),
+            "family": family,
+            "reason": (
+                "insufficient finest L∞ intervals above rounding floor "
+                f"{ROUNDING_FLOOR} to apply spatial_order_min {ORDER_THRESHOLD}"
+            ),
+        }
+    gated_ids = interval_ids[-2:]
+    gated = [orders[index] for index in gated_ids]
+    order_pass = all(value >= ORDER_THRESHOLD for value in gated)
     reason = None
     if not order_pass:
         reason = (
-            f"observed L∞ orders {orders} below spatial_order_min {ORDER_THRESHOLD}"
+            f"observed L∞ gated orders {gated} (last two intervals above rounding) "
+            f"below spatial_order_min {ORDER_THRESHOLD}; all intervals {orders}"
         )
     return {
         "verdict": "pass" if order_pass else "fail",
         "order_pass": order_pass,
         "orders": orders,
-        "l1": tuple(l1),
-        "l2": tuple(l2),
-        "linf": tuple(linf),
-        "spacings": spacings,
-        "family": family or "global",
+        "gated_orders": gated,
+        "l1": tuple(float(value) for value in l1),
+        "l2": tuple(float(value) for value in l2),
+        "linf": tuple(float(value) for value in linf),
+        "spacings": tuple(float(value) for value in spacings),
+        "family": family,
         "reason": reason,
     }
 
@@ -168,6 +216,7 @@ def _summary(
     cases_passed: int,
     cases_failed: int,
     failures: list | None = None,
+    repository_sha: str | None = None,
 ) -> dict:
     reasons = {
         "amr.*": "AMR variants are authoring_ok or required_failure; leaf order is not claimed here",
@@ -182,7 +231,7 @@ def _summary(
     return {
         "schema": "pops.verification.report.v1",
         "repository": "wolf75222/PoPS",
-        "repository_sha": _repository_sha(),
+        "repository_sha": repository_sha or _repository_sha(),
         "suite": "pr",
         "max_nodes": 2,
         "native_dimensions": list(dimensions),
@@ -485,4 +534,109 @@ def write_native_campaign_report(output_dir, campaign: dict) -> dict:
     )
     _write_metrics(output, campaign, claim)
     _write_visual_data(output, campaign, claim)
+    return written
+
+
+def rewrite_report_from_recorded(
+    output_dir,
+    *,
+    simulation_sha: str | None = None,
+) -> dict:
+    """Re-apply §9.3 to recorded native errors without rewriting numerical arrays."""
+    output = Path(output_dir)
+    recorded_path = output / "visual_data" / "spatial_convergence.json"
+    if not recorded_path.is_file():
+        raise NativeSeriesError(f"recorded series absent: {recorded_path}")
+    recorded = json.loads(recorded_path.read_text(encoding="utf-8"))
+    provenance_path = output / "provenance.json"
+    if simulation_sha is None and provenance_path.is_file():
+        provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+        simulation_sha = provenance.get("repository_sha")
+    if not simulation_sha:
+        raise NativeSeriesError("simulation_sha required to rewrite a recorded report")
+    family = str(recorded.get("family") or "global")
+    spacings = recorded.get("spacings") or [
+        1.0 / float(n) for n in recorded["resolutions"]
+    ]
+    claim = _claim_from_recorded_errors(
+        l1=recorded["l1"],
+        l2=recorded["l2"],
+        linf=recorded["linf"],
+        spacings=spacings,
+        family=family,
+    )
+    recorded_orders = [float(value) for value in recorded["orders"]]
+    if any(
+        abs(left - right) > 1.0e-12
+        for left, right in zip(claim["orders"], recorded_orders, strict=True)
+    ):
+        raise NativeSeriesError(
+            "recorded L∞ orders must stay unchanged; "
+            f"recomputed {claim['orders']} != {recorded_orders}"
+        )
+    claim["orders"] = recorded_orders
+    existing_summary = {}
+    summary_path = output / "summary.json"
+    if summary_path.is_file():
+        existing_summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    kind = family if family in {"spatial", "temporal", "global"} else "global"
+    orders = [
+        {
+            "case_id": CASE_ID,
+            "kind": kind,
+            "variable": "q",
+            "observed_order": float(value),
+            "threshold": ORDER_THRESHOLD,
+        }
+        for value in recorded["orders"]
+    ]
+    failures = []
+    if claim["verdict"] == "fail":
+        failures = [
+            {
+                "case_id": CASE_ID,
+                "reason": claim.get("reason")
+                or f"observed order below spatial_order_min {ORDER_THRESHOLD}",
+                "metrics_ref": "metrics.json",
+                "provenance_ref": "provenance.json",
+            }
+        ]
+    written = write_verification_report(
+        _summary(
+            orders=orders,
+            order_reason=claim.get("reason"),
+            dimensions=list(
+                existing_summary.get("native_dimensions")
+                or [int(recorded.get("dimension") or 3)]
+            ),
+            spaces=list(existing_summary.get("execution_spaces") or ["KokkosSerial"]),
+            cases_run=1,
+            cases_passed=1 if claim["order_pass"] else 0,
+            cases_failed=0 if claim["order_pass"] else 1,
+            failures=failures,
+            repository_sha=str(simulation_sha),
+        ),
+        output,
+    )
+    analyzer_sha = _repository_sha()
+    report_path = output / "REPORT.md"
+    extra = (
+        "\n## Analyzer\n"
+        f"simulation_sha: {simulation_sha}\n"
+        f"analyzer_sha: {analyzer_sha}\n"
+        f"§9.3 gate: last two L∞ intervals above rounding {ROUNDING_FLOOR}; "
+        f"gated_orders={claim['gated_orders']}; threshold={ORDER_THRESHOLD} "
+        "(never lowered). Numerical l1/l2/linf/orders arrays were not rewritten.\n"
+    )
+    report_path.write_text(
+        report_path.read_text(encoding="utf-8") + extra, encoding="utf-8"
+    )
+    manifest_path = output / "visual_manifest.json"
+    if manifest_path.is_file():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["repository_sha"] = str(simulation_sha)
+        manifest["analyzer_sha"] = analyzer_sha
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+        )
     return written

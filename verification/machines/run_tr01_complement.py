@@ -61,15 +61,19 @@ def main() -> int:
     parser.add_argument("--temporal", action="store_true")
     parser.add_argument(
         "--dts",
-        default="0.02,0.01,0.005,0.0025",
-        help="comma-separated dt, dt/2, dt/4, dt/8 for §9.4",
+        default=None,
+        help="comma-separated dt; default CFL≤0.45 (dt≤0.005 at N=64)",
     )
     parser.add_argument("--n-cells", type=int, default=64)
     args = parser.parse_args()
     from verification.pops_verify.campaign import CampaignRequest, CampaignResources
 
     if args.temporal:
-        dts = tuple(float(item) for item in args.dts.split(",") if item)
+        run = _load(RUN, "tr01_run")
+        if args.dts:
+            dts = tuple(float(item) for item in args.dts.split(",") if item)
+        else:
+            dts = run.default_temporal_dts(n_cells=int(args.n_cells))
         request = CampaignRequest(
             case_id="TR-01",
             pops_native_dim=args.dim,
@@ -86,7 +90,6 @@ def main() -> int:
             evidence_status="required",
             output_dir=Path(args.out) / f"dim{args.dim}",
         )
-        run = _load(RUN, "tr01_run")
         analyze = _load(ANALYZE, "tr01_analyze")
         output = Path(request.output_dir)
         output.mkdir(parents=True, exist_ok=True)

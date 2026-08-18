@@ -16,14 +16,15 @@ A 1-d or 2-d run is never labeled canonical 3-d.
 | Domain | Periodic unit interval / square / cube. Exact-rank leaf required. No silent dim fallback. |
 | Parameters | \(T=1\) (one period) for the default configs. Order series \(N=16,32,64,128\). |
 | Native dimensions | `POPS_NATIVE_DIM` ∈ {1,2,3} matching the request. Shared 1-d IF/AM runtime stays in `tr01_runtime.py` and does not call 3-d. |
-| Required capabilities | Cartesian uniform periodic. KokkosSerial / OpenMP / MPI as requested. MUSCL/VanLeer + ScalarUpwind, SSPRK2. |
-| Configurations | Canonical 3-d; 1-d ±a; 2-d x/y/diagonal/(1,0.37); 3-d axes/diagonal/oblique; U-C, U-F, A-S0, A-S2, A-DP, A-DT; blocks 8/16/32/64; periods 1/2/4. AMR variants are executable or `not-supported`; they are not a silent uniform substitute. |
-| Diagnostics | Volume-weighted L1/L2/L∞ vs cell-averaged exact; phase; amplitude; \(\int q\,dV\); observed spatial order only from ≥4 native resolutions. |
-| Thresholds | Observed order \(\ge 1.8\) for an announced order-2 uniform series. A 16/32 smoke is never an order pass. |
-| Proves | Exact-rank periodic translation on the requested dimension and config, when a native series exists. |
-| Does not prove | Exact-vs-exact, injected \(h^2\), finite-only, or order from fewer than four native resolutions. |
+| Required capabilities | Cartesian uniform periodic. KokkosSerial / OpenMP / MPI as requested. **WENO5-Z** + ScalarUpwind + SSPRK2 is the order campaign. VanLeer/MUSCL is a separately labeled **TVD** variant and is not the 1.8 acceptance proof. |
+| Configurations | Canonical 3-d; 1-d ±a; 2-d x/y/diagonal/(1,0.37); 3-d axes/diagonal/oblique; U-C, U-F, A-S0, A-S2, A-DP, A-DT; blocks 8/16/32/64; periods 1/2/4. A-S0 / A-S2 / A-DT are `authoring_ok`. **A-DP is `required_failure`** (no independently advected marker in the one-state SSPRK2/RK4 program). AMR is not a silent uniform substitute. |
+| Diagnostics | Volume-weighted L1/L2/L∞ vs cell-averaged exact; phase; amplitude; \(\int q\,dV\); observed order only from ≥4 native resolutions. |
+| Thresholds | §9.3: keep all four resolutions as evidence; gate observed L∞ order \(\ge 1.8\) on the last two intervals (three finest grids) still above the rounding floor. Never lower 1.8. A 16/32 smoke is never an order pass. |
+| Labels | Constant-CFL four-resolution series is **global**, never isolated spatial. Fixed-grid dt series is **temporal**. Isolated spatial (`dt ∝ h²`) is a separate API. Future temporal defaults start at CFL \(\le 0.45\) (e.g. \(dt\le 0.005\) at \(N=64\)). |
+| Proves | Exact-rank periodic translation on the requested dimension and config, when a native series exists and the §9.3 gate passes. |
+| Does not prove | Exact-vs-exact, injected \(h^2\), finite-only, order from fewer than four native resolutions, VanLeer TVD as the 1.8 proof, A-DP, or MPI campaign-invoke as TR-01 acceptance. |
 | Resources | ROMEO x64cpu, ≤2 nodes, no GPU in this step. 3-d \(n\ge256\) is not launched here. |
-| Provenance | `pops.verification.provenance.v1` with truthful RUN_FIELDS from the CampaignRequest. |
+| Provenance | `pops.verification.provenance.v1` with truthful RUN_FIELDS from the CampaignRequest. Simulation SHA is the native-run commit; analyzer SHA is recorded separately on rewrite. |
 | Visuals | Phase 8 `visual_data/` from native results only; no committed fixtures. |
 
 ```

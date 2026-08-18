@@ -680,3 +680,159 @@ def test_fourier_phase_respects_zyx_axis_layout():
     assert abs(coeff_z) > 5.0 * abs(coeff_x)
     amp = 2.0 * abs(coeff_z)
     assert amp == pytest.approx(exact.EPS, rel=0.15)
+
+
+def _offset_campaign(linf_targets, resolutions=RESOLUTIONS):
+    return {
+        "source": "native",
+        "case_id": "TR-01",
+        "dimension": 1,
+        "label": "restriction_1d",
+        "family": "global",
+        "reconstruction": "weno5z",
+        "dt_scaling": "cfl",
+        "resolutions": resolutions,
+        "fields": {
+            n: np.ones((n,)) + float(err) for n, err in zip(resolutions, linf_targets)
+        },
+        "oracles": {n: np.ones((n,)) for n in resolutions},
+        "volumes": {n: np.full((n,), 1.0 / n) for n in resolutions},
+    }
+
+
+def test_section_93_gates_last_two_linf_intervals_not_first_pair():
+    analyze = _load_case_module("analyze")
+    hs = [1.0 / n for n in RESOLUTIONS]
+    e128 = 1.0e-5
+    e64 = e128 * 2.0**2
+    e32 = e64 * 2.0**2
+    e16 = e32 * 2.0**1.2
+    claim = analyze.evaluate_order_claim(_offset_campaign((e16, e32, e64, e128)))
+    assert len(claim["orders"]) == 3
+    assert claim["orders"][0] == pytest.approx(1.2, abs=0.05)
+    assert claim["orders"][1] == pytest.approx(2.0, abs=0.05)
+    assert claim["orders"][2] == pytest.approx(2.0, abs=0.05)
+    assert claim["gated_orders"] == pytest.approx(claim["orders"][-2:], abs=1.0e-12)
+    assert all(value >= 1.8 for value in claim["gated_orders"])
+    assert claim["order_pass"] is True
+    assert claim["verdict"] == "pass"
+    assert analyze.ORDER_THRESHOLD == 1.8
+
+
+def test_section_93_insufficient_points_above_rounding_is_not_a_pass():
+    analyze = _load_case_module("analyze")
+    floor = float(analyze.ROUNDING_FLOOR)
+    hs = [1.0 / n for n in RESOLUTIONS]
+    e32 = 4.0e-6
+    e16 = e32 * 4.0
+    claim = analyze.evaluate_order_claim(
+        _offset_campaign((e16, e32, 0.5 * floor, 0.25 * floor))
+    )
+    assert claim["order_pass"] is False
+    assert claim["verdict"] != "pass"
+    assert len(claim["orders"]) == 3
+    assert "rounding" in (claim.get("reason") or "").lower() or "insufficient" in (
+        claim.get("reason") or ""
+    ).lower()
+
+
+def test_section_93_rounding_floor_excludes_finest_interval_from_gate():
+    analyze = _load_case_module("analyze")
+    floor = float(analyze.ROUNDING_FLOOR)
+    e64 = 8.0e-6
+    e32 = e64 * 4.0
+    e16 = e32 * 4.0
+    claim = analyze.evaluate_order_claim(
+        _offset_campaign((e16, e32, e64, 0.5 * floor))
+    )
+    assert len(claim["orders"]) == 3
+    assert claim["orders"][-1] > 10.0
+    assert all(value < 10.0 for value in claim["gated_orders"])
+    assert 0.5 * floor <= analyze.ROUNDING_FLOOR
+
+
+def test_temporal_defaults_start_at_or_below_cfl_0p45():
+    run = _load_case_module("run")
+    dts = run.default_temporal_dts(n_cells=64)
+    assert len(dts) >= 4
+    assert dts[0] * 64.0 <= 0.45 + 1.0e-15
+    assert dts[0] <= 0.005 + 1.0e-15
+    complement = (
+        REPO_ROOT / "verification" / "machines" / "run_tr01_complement.py"
+    ).read_text(encoding="utf-8")
+    assert "0.02,0.01,0.005,0.0025" not in complement
+
+
+def test_readme_names_weno5z_and_honest_amr():
+    text = (CASE_DIR / "README.md").read_text(encoding="utf-8")
+    lowered = text.lower()
+    assert "weno5" in lowered
+    assert "global" in lowered
+    assert "temporal" in lowered
+    assert "vanleer" in lowered or "tvd" in lowered
+    assert "required_failure" in lowered
+    assert "a-dp" in lowered
+    assert "executable or `not-supported`" not in lowered
+
+
+def test_rewrite_recorded_series_applies_section_93_without_changing_errors(
+    tmp_path: Path,
+):
+    analyze = _load_case_module("analyze")
+    native = tmp_path / "native" / "dim2"
+    visual = native / "visual_data"
+    visual.mkdir(parents=True)
+    recorded = {
+        "figure_id": "spatial_convergence",
+        "kind": "global_convergence",
+        "family": "global",
+        "reconstruction": "weno5z",
+        "dt_scaling": "cfl",
+        "case_id": "TR-01",
+        "dimension": 2,
+        "label": "restriction_2d",
+        "resolutions": [16, 32, 64, 128],
+        "spacings": [0.0625, 0.03125, 0.015625, 0.0078125],
+        "l1": [0.001171547179446765, 0.00034569535626769615, 8.748140132104021e-05, 2.1935256005427414e-05],
+        "l2": [0.0013170748072939054, 0.00038356400568024477, 9.719993217656374e-05, 2.436770164412127e-05],
+        "linf": [0.001863137988670438, 0.0005414885002317238, 0.0001374552488071501, 3.446106715632169e-05],
+        "orders": [1.7827319235627486, 1.977968701136284, 1.9959227147128649],
+        "threshold": 1.8,
+    }
+    (visual / "spatial_convergence.json").write_text(
+        json.dumps(recorded, indent=2) + "\n", encoding="utf-8"
+    )
+    (native / "provenance.json").write_text(
+        json.dumps({"repository_sha": "f4088ada88628e4f89c6ec72ce0473cf106b48cc"}, indent=2)
+        + "\n",
+        encoding="utf-8",
+    )
+    analyze.rewrite_report_from_recorded(
+        native,
+        simulation_sha="f4088ada88628e4f89c6ec72ce0473cf106b48cc",
+    )
+    after = json.loads((visual / "spatial_convergence.json").read_text(encoding="utf-8"))
+    assert after["linf"] == recorded["linf"]
+    assert after["l1"] == recorded["l1"]
+    assert after["l2"] == recorded["l2"]
+    assert after["orders"] == recorded["orders"]
+    summary = json.loads((native / "summary.json").read_text(encoding="utf-8"))
+    _validator().validate(summary)
+    assert summary["repository_sha"] == "f4088ada88628e4f89c6ec72ce0473cf106b48cc"
+    assert summary["coverage"]["cases_passed"] == 1
+    assert summary["coverage"]["cases_failed"] == 0
+    assert summary["failures"] == []
+    failures_csv = (native / "failures.csv").read_text(encoding="utf-8")
+    assert failures_csv.strip() == "case_id,reason,metrics_ref,provenance_ref"
+    report = (native / "REPORT.md").read_text(encoding="utf-8")
+    assert "f4088ada88628e4f89c6ec72ce0473cf106b48cc" in report
+    assert "analyzer" in report.lower() or "§9.3" in report or "9.3" in report
+
+
+def test_mpi_campaign_invoke_is_not_tr01_acceptance():
+    validate = (
+        REPO_ROOT / "verification" / "machines" / "romeo_676_tr01_validate.py"
+    ).read_text(encoding="utf-8")
+    assert "non-scientific" in validate or "not TR-01 acceptance" in validate
+    assert 'results[0].get("status") != "pass"' in validate
+    assert "mpi_mode" in validate

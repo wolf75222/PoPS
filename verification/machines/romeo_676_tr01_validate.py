@@ -88,6 +88,18 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(f"{args.gate}: dim {args.dim} must not be labeled canonical 3-d")
     if args.stage == "smoke" and (output / "campaign" / "results.json").is_file():
         results = json.loads((output / "campaign" / "results.json").read_text(encoding="utf-8"))
+        if args.mpi_mode == "on":
+            # MPI campaign invoke is smoke/non-scientific; not TR-01 acceptance.
+            # A runner-foundation pass or fail here must not become the TR-01 gate.
+            print(
+                f"{args.gate} mpi campaign invoke is smoke/non-scientific; "
+                f"not TR-01 acceptance (status={results[0].get('status') if results else None})"
+            )
+            print(
+                f"{args.gate} {args.stage} sha={sha} dim={args.dim} "
+                f"label={smoke.get('label')} linf={smoke.get('linf')}"
+            )
+            return 0
         if len(results) != 1 or results[0].get("status") != "pass":
             raise SystemExit(f"{args.gate}: campaign smoke did not pass: {results}")
         job_dir = (

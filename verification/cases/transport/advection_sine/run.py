@@ -1247,6 +1247,15 @@ def run_order_campaign(
     }
 
 
+def default_temporal_dts(n_cells: int = 64, *, cfl_max: float = 0.45) -> tuple[float, ...]:
+    """Future temporal defaults start at CFL ≤ 0.45 (dt ≤ 0.005 at N=64)."""
+    count = int(n_cells)
+    if count <= 0:
+        raise ValueError("n_cells must be positive")
+    dt0 = min(0.005, float(cfl_max) / float(count))
+    return tuple(dt0 / (2**index) for index in range(4))
+
+
 def run_temporal_campaign(
     dts,
     *,
