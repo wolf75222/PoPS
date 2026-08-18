@@ -13,6 +13,8 @@ from pathlib import Path
 from verification.pops_verify.campaign import expand_jobs, resolve_artifact_dim
 from verification.pops_verify.case_authoring import load_sibling_module
 
+_v15 = load_sibling_module(Path(__file__).resolve().parents[1] / "_v15.py")
+
 _CASE_DIR = Path(__file__).resolve().parent
 _exact = load_sibling_module(_CASE_DIR / "exact.py")
 _GE03_RUN = (
@@ -145,6 +147,7 @@ def _dim2_campaign_fields(n_cells: int, t_end: float, ge03, request=None) -> dic
         "time_program": "SSPRK2",
         "cfl": float(ge03.CFL),
         "final_time": float(t_end),
+        "comparison_artifacts": {"kind": "native_dim_guard", "required_dim": 2},
     }
 
 
@@ -155,12 +158,20 @@ def run_native(n_cells: int = 8, t_end: float = 0.01, request=None):
     IF-08 unit tests still exercise ``require_native_dim(2)``. A campaign
     request returns provenance fields after the native path succeeds.
     """
+    _v15.refuse_invalid_mode(request)
     if request is not None:
         if request.min_resolution is not None:
             n_cells = int(request.min_resolution)
         required = int(request.pops_native_dim)
         if required == _exact.MATCHING_DIM:
-            return run_native_dim1(n_cells, t_end=t_end)
+            run_native_dim1(n_cells, t_end=t_end)
+            return _v15.campaign_run_fields(
+                request,
+                n_cells=n_cells,
+                t_end=t_end,
+                comparison={"kind": "native_dim_guard", "required_dim": 1},
+                resolution=[int(n_cells)],
+            )
         if required != _exact.DIM2_REQUIRED:
             raise NativeUnavailable(
                 f"IF-08 has no campaign path for pops_native_dim={required}"

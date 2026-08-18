@@ -14,6 +14,7 @@ from verification.pops_verify.case_authoring import load_sibling_module
 from verification.pops_verify.reference_errors import reference_errors
 
 _exact = load_sibling_module(Path(__file__).with_name("exact.py"))
+_v15 = load_sibling_module(Path(__file__).resolve().parents[1] / "_v15.py")
 
 HYBRID_NATIVE_CPP_REFUSAL = "public hybrid/native C++ authoring not active"
 
@@ -53,7 +54,7 @@ def refuse_hybrid_native_cpp() -> str:
     return HYBRID_NATIVE_CPP_REFUSAL
 
 
-def run_native(n_cells: int = _exact.DEFAULT_N_CELLS, t_end=0.25):
+def run_native(n_cells: int = _exact.DEFAULT_N_CELLS, t_end=0.25, request=None):
     """Run the public TR-01 Case. That compile is the DSL path.
 
     Hybrid / native C++ as a second stack stays refused via
@@ -61,6 +62,9 @@ def run_native(n_cells: int = _exact.DEFAULT_N_CELLS, t_end=0.25):
     """
     from verification.pops_verify.tr01_runtime import advance, prepare
 
+    _v15.refuse_invalid_mode(request)
+    if request is not None and request.min_resolution is not None:
+        n_cells = int(request.min_resolution)
     try:
         prepared = prepare(int(n_cells))
         field = advance(prepared, float(t_end))
@@ -68,4 +72,19 @@ def run_native(n_cells: int = _exact.DEFAULT_N_CELLS, t_end=0.25):
         if exc.__class__.__name__ == "NativeUnavailable":
             raise NativeUnavailable(str(exc)) from exc
         raise NativeUnavailable(f"IF-07 DSL path failed: {exc}") from exc
-    return {"path": "dsl", "field": field}
+    payload = {
+        "path": "dsl",
+        "field": field,
+        "comparison_artifacts": {
+            "kind": "path_parity",
+            "paths": ["dsl"],
+            "hybrid_native_cpp": refuse_hybrid_native_cpp(),
+        },
+    }
+    if request is None:
+        return payload
+    fields = _v15.campaign_run_fields(
+        request, n_cells=n_cells, t_end=t_end, comparison=payload["comparison_artifacts"]
+    )
+    fields.update(payload)
+    return fields

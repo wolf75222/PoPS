@@ -18,6 +18,7 @@ from verification.pops_verify.reference_errors import reference_errors
 
 _CASE_DIR = Path(__file__).resolve().parent
 _exact = load_sibling_module(_CASE_DIR / "exact.py")
+_v15 = load_sibling_module(Path(__file__).resolve().parents[1] / "_v15.py")
 _TR01_RUN = (
     Path(__file__).resolve().parents[2] / "transport" / "advection_sine" / "run.py"
 )
@@ -81,8 +82,14 @@ def run_native(
     space: str = "KokkosSerial",
     artifact_dim: int | None = None,
     environ: Mapping[str, str] | None = None,
+    request=None,
 ):
-    """Run TR-01 under one Kokkos space label. GPU is refused."""
+    """Run TR-01 under the requested Kokkos space. GPU is refused fail-closed."""
+    _v15.refuse_invalid_mode(request)
+    if request is not None:
+        space = request.execution_space
+        if request.min_resolution is not None:
+            n_cells = int(request.min_resolution)
     _require_dim1(artifact_dim=artifact_dim, environ=environ)
     threads = space_threads(space)
     previous = os.environ.get("OMP_NUM_THREADS")
@@ -101,7 +108,15 @@ def run_native(
             os.environ.pop("OMP_NUM_THREADS", None)
         else:
             os.environ["OMP_NUM_THREADS"] = previous
-    return np.reshape(np.asarray(field, dtype=np.float64), (-1,))
+    shaped = np.reshape(np.asarray(field, dtype=np.float64), (-1,))
+    if request is not None:
+        return _v15.campaign_run_fields(
+            request,
+            n_cells=n_cells,
+            t_end=t_end,
+            comparison={"kind": "execution_space", "space": space},
+        )
+    return shaped
 
 
 def run_native_spaces(

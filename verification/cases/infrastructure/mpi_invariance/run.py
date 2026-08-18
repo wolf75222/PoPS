@@ -25,6 +25,7 @@ from verification.pops_verify.case_authoring import (
 from verification.pops_verify.reference_errors import reference_errors
 
 _exact = load_sibling_module(Path(__file__).with_name("exact.py"))
+_v15 = load_sibling_module(Path(__file__).resolve().parents[1] / "_v15.py")
 _TR01_RUN = (
     Path(__file__).resolve().parents[2] / "transport" / "advection_sine" / "run.py"
 )
@@ -209,8 +210,14 @@ def _hdf5_collective_enabled() -> bool:
     return getattr(module, "__has_parallel_hdf5__", False) is True
 
 
+def analytic_placements_are_not_mpi_proof() -> bool:
+    """Exact-field identity across placements is not an MPI invariance result."""
+    return True
+
+
 def campaign_run_fields(n_cells: int, t_end: float, request) -> dict[str, object]:
     """Honest IF-01 campaign facts. MPI ranks come from the native communicator."""
+    _v15.refuse_invalid_mode(request)
     count = int(n_cells)
     mpi_on = request is not None and getattr(request, "mpi_mode", "off") == "on"
     space = getattr(request, "execution_space", None) or "KokkosSerial"
@@ -249,6 +256,11 @@ def campaign_run_fields(n_cells: int, t_end: float, request) -> dict[str, object
         "time_program": "SSPRK2",
         "cfl": float(CFL),
         "final_time": float(t_end),
+        "comparison_artifacts": {
+            "kind": "mpi_decomposition",
+            "placements": list(_exact.PLACEMENTS),
+            "note": "analytic placements are not MPI proof",
+        },
     }
 
 
@@ -261,6 +273,7 @@ def run_native(n_cells: int = _exact.DEFAULT_N_CELLS, t_end: float = 0.25, reque
     """
     import pops
 
+    _v15.refuse_invalid_mode(request)
     if request is not None:
         if request.min_resolution is not None:
             n_cells = int(request.min_resolution)

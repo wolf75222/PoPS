@@ -16,6 +16,7 @@ import numpy as np
 from verification.pops_verify.case_authoring import load_sibling_module
 
 _exact = load_sibling_module(Path(__file__).with_name("exact.py"))
+_v15 = load_sibling_module(Path(__file__).resolve().parents[1] / "_v15.py")
 _TR01_RUN = (
     Path(__file__).resolve().parents[2] / "transport" / "advection_sine" / "run.py"
 )
@@ -65,6 +66,11 @@ def refuse_native_reread() -> str:
     return REREAD_MISSING
 
 
+def npz_round_trip_is_not_hdf5() -> bool:
+    """In-memory npz dump/load is not an HDF5 reread."""
+    return True
+
+
 def public_state_handles(case) -> tuple:
     """Return public state Handles. ``Case.blocks()`` exposes only BlockHandles."""
     blocks = case.blocks()
@@ -75,20 +81,23 @@ def public_state_handles(case) -> tuple:
     return ()
 
 
-def run_native(n_cells: int = _exact.N_CELLS, t_end: float = 0.1):
-    """Write TR-01 through public NPZ ScientificOutput and reread with read_npz.
+def run_native(n_cells: int = _exact.N_CELLS, t_end: float = 0.1, request=None):
+    """Write TR-01 through public HDF5 ScientificOutput and reread with read_hdf5.
 
-    HDF5 is attempted when the writer completes; otherwise NPZ is the
-    public reread. Staging uses ``/tmp`` (GPFS rejects renameat2).
+    NPZ is not HDF5. Collective HDF5 requires MPI. Staging uses ``/tmp``.
     """
     import tempfile
 
-    from pops.output import ConsumerGraph, NPZ, ScientificOutput
-    from pops.output import read_npz
+    from pops.output import ConsumerGraph, HDF5, ParallelMode, ScientificOutput, read_hdf5
     from pops.time import on_end
 
     from verification.pops_verify.tr01_runtime import advance, prepare
 
+    _v15.refuse_invalid_mode(request)
+    if request is not None and request.min_resolution is not None:
+        n_cells = int(request.min_resolution)
+    mpi_on = request is not None and request.mpi_mode == "on"
+    hdf5_mode = ParallelMode.COLLECTIVE if mpi_on else ParallelMode.SERIAL
     work = Path(tempfile.mkdtemp(prefix="if10-", dir="/tmp" if Path("/tmp").is_dir() else None))
 
     def _attach(authored) -> None:
@@ -97,7 +106,7 @@ def run_native(n_cells: int = _exact.N_CELLS, t_end: float = 0.1):
             ConsumerGraph.from_consumers(
                 (
                     ScientificOutput(
-                        format=NPZ(),
+                        format=HDF5(mode=hdf5_mode),
                         schedule=on_end(clock=clock),
                         fields=(authored.instance,),
                         target="state/tracer",
@@ -109,18 +118,38 @@ def run_native(n_cells: int = _exact.N_CELLS, t_end: float = 0.1):
     try:
         prepared = prepare(int(n_cells), attach=_attach)
         field = advance(prepared, float(t_end), output_dir=work)
-        blobs = sorted(work.rglob("*.npz"))
+        npz_blobs = sorted(work.rglob("*.npz"))
+        if npz_blobs:
+            raise NativeUnavailable("IF-10 NPZ is not HDF5")
+        blobs = sorted(work.rglob("*.h5")) + sorted(work.rglob("*.hdf5"))
         if not blobs:
-            raise NativeUnavailable("IF-10 NPZ writer produced no file")
-        reopened = read_npz(blobs[-1])
+            raise NativeUnavailable("IF-10 produced no HDF5 file")
+        _v15.refuse_npz_as_hdf5(blobs[-1])
+        reopened = read_hdf5(blobs[-1])
     except NativeUnavailable:
         raise
     except Exception as exc:
         if exc.__class__.__name__ == "NativeUnavailable":
             raise NativeUnavailable(str(exc)) from exc
-        raise NativeUnavailable(f"IF-10 NPZ reread failed: {exc}") from exc
-    return {
+        raise NativeUnavailable(f"IF-10 HDF5 reread failed: {exc}") from exc
+    payload = {
         "field": field,
         "path": str(blobs[-1]),
         "reopened": reopened,
+        "comparison_artifacts": {
+            "kind": "hdf5_reread",
+            "path": str(blobs[-1]),
+            "hdf5": True,
+        },
     }
+    if request is None:
+        return payload
+    fields = _v15.campaign_run_fields(
+        request,
+        n_cells=n_cells,
+        t_end=t_end,
+        comparison=payload["comparison_artifacts"],
+        hdf5_collective_enabled=mpi_on,
+    )
+    fields.update(payload)
+    return fields

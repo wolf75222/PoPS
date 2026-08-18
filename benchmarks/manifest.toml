@@ -13,8 +13,8 @@ mpi_barrier = "before_and_after"
 rank_aggregation = "max"
 numerical_validation = "outside_timed_region"
 absolute_time_thresholds = false
-default_warmups = 2
-default_repetitions = 7
+default_warmups = 5
+default_repetitions = 10
 
 [[case]]
 id = "arith_halo"

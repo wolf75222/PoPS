@@ -14,6 +14,7 @@ import numpy as np
 from verification.pops_verify.case_authoring import load_sibling_module
 
 _exact = load_sibling_module(Path(__file__).with_name("exact.py"))
+_v15 = load_sibling_module(Path(__file__).resolve().parents[1] / "_v15.py")
 _TR01_RUN = (
     Path(__file__).resolve().parents[2] / "transport" / "advection_sine" / "run.py"
 )
@@ -49,11 +50,19 @@ def expected_n_steps(n_cells, t_end, *, cfl, speed) -> int:
 
 
 
-def run_native(*args, **kwargs):
-    """PF timed work belongs to benchmarks/manifest.toml, not a sibling wrap."""
-    from verification.pops_verify.official_benchmark import refuse_unofficial_pf
+def official_authority() -> dict:
+    """PF-03 is absent from benchmarks/manifest.toml."""
+    return _v15.official_authority("PF-03")
 
-    raise NativeUnavailable(refuse_unofficial_pf('PF-03'))
+
+def run_native(*args, request=None, **kwargs):
+    """PF timed work belongs to benchmarks/manifest.toml, not a sibling wrap."""
+    from verification.pops_verify.official_benchmark import OfficialBenchmarkUnavailable
+
+    try:
+        return _v15.run_mapped_or_refuse("PF-03", request)
+    except OfficialBenchmarkUnavailable as exc:
+        raise NativeUnavailable(str(exc)) from exc
 
 
 

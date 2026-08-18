@@ -22,6 +22,7 @@ from verification.pops_verify.case_authoring import (
 from verification.pops_verify.reference_errors import reference_errors
 
 _exact = load_sibling_module(Path(__file__).with_name("exact.py"))
+_v15 = load_sibling_module(Path(__file__).resolve().parents[1] / "_v15.py")
 
 A = 1.0
 CFL = 0.45
@@ -156,10 +157,13 @@ def _native_unavailable_reason() -> str | None:
     return missing_native_compile_requirement(repo_include(), default_cxx())
 
 
-def run_native(n_cells: int = _exact.N_CELLS, t_end: float = 0.25):
+def run_native(n_cells: int = _exact.N_CELLS, t_end: float = 0.25, request=None):
     """Run twice through official diagnostics. Bitwise field identity is the switch."""
     import pops
 
+    _v15.refuse_invalid_mode(request)
+    if request is not None and request.min_resolution is not None:
+        n_cells = int(request.min_resolution)
     missing = _native_unavailable_reason()
     if missing:
         raise NativeUnavailable(missing)
@@ -171,7 +175,8 @@ def run_native(n_cells: int = _exact.N_CELLS, t_end: float = 0.25):
             layout=uniform_periodic_layout(authored.frame, (authored.n_cells,)),
         )
         artifact = pops.compile(plan)
-        simulation = bind_public(artifact)
+        mpi_mode = request.mpi_mode if request is not None else "off"
+        simulation = bind_public(artifact, mpi_mode=mpi_mode)
         pops.run(simulation, t_end=float(t_end), max_steps=MAX_STEPS)
         field = np.ravel(
             np.asarray(simulation.state_global("tracer"), dtype=np.float64)
@@ -187,10 +192,18 @@ def run_native(n_cells: int = _exact.N_CELLS, t_end: float = 0.25):
         raise NativeUnavailable(f"IF-06 official diagnostics run failed: {exc}") from exc
     volumes = _exact.cell_volumes(n_cells)
     errors = reference_errors(second, first, volumes)
-    return {
+    payload = {
         "first": first,
         "second": second,
         "linf": float(errors.linf),
         "l2": float(errors.l2),
         "diagnostics": "pops.diagnostics",
+        "comparison_artifacts": {"kind": "deterministic_reductions", "linf": float(errors.linf)},
     }
+    if request is None:
+        return payload
+    fields = _v15.campaign_run_fields(
+        request, n_cells=n_cells, t_end=t_end, comparison=payload["comparison_artifacts"]
+    )
+    fields.update(payload)
+    return fields

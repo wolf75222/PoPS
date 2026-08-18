@@ -139,9 +139,10 @@ void run_scalar_mg_case(const BenchmarkConfig& config, const RuntimeMetadata& me
     if (measured)
       measured_iterations.push_back(report.iters);
   };
-  const std::vector<double> samples =
-      run_repeated(config.warmups, config.repetitions, prepare, run, observe);
 
+  // validate_before_timing: manufactured residual/error must pass before samples are recorded.
+  prepare();
+  run();
   device_fence();
   barrier();
   const double max_error = maximum_solution_error(solver);
@@ -155,6 +156,11 @@ void run_scalar_mg_case(const BenchmarkConfig& config, const RuntimeMetadata& me
   const double discretization_limit = 64.0 * static_cast<double>(kDim) * dx * dx;
   const bool passed = report.solved() && std::isfinite(residual) && residual <= residual_limit &&
                       std::isfinite(max_error) && max_error <= discretization_limit;
+  if (!passed)
+    throw std::runtime_error("scalar multigrid numerical validation failed");
+
+  const std::vector<double> samples =
+      run_repeated(config.warmups, config.repetitions, prepare, run, observe);
 
   std::vector<double> iteration_values;
   iteration_values.reserve(measured_iterations.size());
@@ -186,9 +192,6 @@ void run_scalar_mg_case(const BenchmarkConfig& config, const RuntimeMetadata& me
   writer.write(record_prefix(metadata, "scalar_mg", "geometric_multigrid", "cold_repeated") +
                ",\"parameters\":" + parameters_json(config, solver) + ",\"timing\":" + timing +
                ",\"iterations\":" + iterations.str() + ",\"validation\":" + validation.str() + '}');
-
-  if (!passed)
-    throw std::runtime_error("scalar multigrid numerical validation failed");
 }
 
 }  // namespace pops::bench

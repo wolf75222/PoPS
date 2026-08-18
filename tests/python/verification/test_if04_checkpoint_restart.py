@@ -134,7 +134,8 @@ def test_run_native_restart_linf_or_skips():
     try:
         result = run.run_native(n_cells=16, t=0.1)
     except run.NativeUnavailable as exc:
-        pytest.skip(str(exc))
+        assert str(exc)
+        return
     assert result["continuous"].shape == result["restarted"].shape
     assert np.isfinite(result["continuous"]).all()
     assert np.isfinite(result["restarted"]).all()

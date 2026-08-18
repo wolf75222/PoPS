@@ -15,6 +15,7 @@ from verification.pops_verify.case_authoring import load_sibling_module
 from verification.pops_verify.reference_errors import reference_errors
 
 _exact = load_sibling_module(Path(__file__).with_name("exact.py"))
+_v15 = load_sibling_module(Path(__file__).resolve().parents[1] / "_v15.py")
 _TR01_RUN = (
     Path(__file__).resolve().parents[2] / "transport" / "advection_sine" / "run.py"
 )
@@ -96,6 +97,35 @@ def run_native_threads(
     return pairwise
 
 
-def run_native(n_cells: int = 32, t_end: float = 0.25):
-    """Optional native thread sweep over the canonical 1 / 2 / 4 / 8 labels."""
-    return run_native_threads(_exact.THREAD_COUNTS, n_cells=n_cells, t_end=t_end)
+def run_native(n_cells: int = 32, t_end: float = 0.25, request=None):
+    """Bind Kokkos OpenMP from CampaignRequest. environment-only OMP is not OpenMP proof."""
+    _v15.refuse_invalid_mode(request)
+    if request is not None and request.min_resolution is not None:
+        n_cells = int(request.min_resolution)
+    if request is None or request.execution_space != "KokkosOpenMP":
+        raise NativeUnavailable(
+            "IF-02 requires CampaignRequest with execution_space=KokkosOpenMP; "
+            "OMP_NUM_THREADS alone is not OpenMP proof"
+        )
+    threads = int(getattr(request.resources, "omp_threads", None) or 1)
+    previous = os.environ.get("OMP_NUM_THREADS")
+    os.environ["OMP_NUM_THREADS"] = str(threads)
+    try:
+        field = np.asarray(
+            _tr01_run().run_native(n_cells, t_end=t_end), dtype=np.float64
+        )
+    except Exception as exc:
+        _reraise_native_unavailable(exc)
+        raise NativeUnavailable(str(exc)) from exc
+    finally:
+        _restore_env("OMP_NUM_THREADS", previous)
+    return _v15.campaign_run_fields(
+        request,
+        n_cells=n_cells,
+        t_end=t_end,
+        comparison={
+            "kind": "openmp_threads",
+            "threads": threads,
+            "field_shape": list(np.ravel(field).shape),
+        },
+    )

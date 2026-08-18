@@ -18,6 +18,7 @@ _CASE_DIR = Path(__file__).resolve().parent
 _AM10_RUN = _CASE_DIR.parents[1] / "amr" / "composite_poisson" / "run.py"
 
 _exact = load_sibling_module(_CASE_DIR / "exact.py")
+_v15 = load_sibling_module(Path(__file__).resolve().parents[1] / "_v15.py")
 _am10 = load_sibling_module(_AM10_RUN)
 
 
@@ -47,9 +48,17 @@ def leaf_residual_errors(sample=None, **kwargs):
 
 
 
-def run_native(*args, **kwargs):
-    """PF timed work belongs to benchmarks/manifest.toml, not a sibling wrap."""
-    from verification.pops_verify.official_benchmark import refuse_unofficial_pf
+def official_authority() -> dict:
+    """PF-05 is absent from benchmarks/manifest.toml."""
+    return _v15.official_authority("PF-05")
 
-    raise NativeUnavailable(refuse_unofficial_pf('PF-05'))
+
+def run_native(*args, request=None, **kwargs):
+    """PF timed work belongs to benchmarks/manifest.toml, not a sibling wrap."""
+    from verification.pops_verify.official_benchmark import OfficialBenchmarkUnavailable
+
+    try:
+        return _v15.run_mapped_or_refuse("PF-05", request)
+    except OfficialBenchmarkUnavailable as exc:
+        raise NativeUnavailable(str(exc)) from exc
 

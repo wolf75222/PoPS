@@ -19,8 +19,8 @@ namespace pops::bench {
 struct BenchmarkConfig {
   std::string case_id = "all";
   std::string output_path;
-  int warmups = 2;
-  int repetitions = 7;
+  int warmups = 5;
+  int repetitions = 10;
   int arith_n = 128;
   int arith_tile = 128;
   int arith_components = 4;

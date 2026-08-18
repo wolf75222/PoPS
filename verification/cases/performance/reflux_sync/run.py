@@ -15,6 +15,7 @@ from verification.pops_verify.case_authoring import load_sibling_module
 from verification.pops_verify.conservation import conservation_residual
 
 _exact = load_sibling_module(Path(__file__).with_name("exact.py"))
+_v15 = load_sibling_module(Path(__file__).resolve().parents[1] / "_v15.py")
 _AM09_RUN = Path(__file__).resolve().parents[2] / "amr" / "reflux" / "run.py"
 
 
@@ -64,9 +65,17 @@ def refuse_public_reflux() -> str:
 
 
 
-def run_native(*args, **kwargs):
-    """PF timed work belongs to benchmarks/manifest.toml, not a sibling wrap."""
-    from verification.pops_verify.official_benchmark import refuse_unofficial_pf
+def official_authority() -> dict:
+    """PF-08 is absent from benchmarks/manifest.toml."""
+    return _v15.official_authority("PF-08")
 
-    raise NativeUnavailable(refuse_unofficial_pf('PF-08'))
+
+def run_native(*args, request=None, **kwargs):
+    """PF timed work belongs to benchmarks/manifest.toml, not a sibling wrap."""
+    from verification.pops_verify.official_benchmark import OfficialBenchmarkUnavailable
+
+    try:
+        return _v15.run_mapped_or_refuse("PF-08", request)
+    except OfficialBenchmarkUnavailable as exc:
+        raise NativeUnavailable(str(exc)) from exc
 

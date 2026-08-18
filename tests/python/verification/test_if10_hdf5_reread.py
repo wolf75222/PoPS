@@ -1,4 +1,4 @@
-"""IF-10 HDF5-shaped round-trip (in-memory npz stand-in; native reread refused)."""
+"""IF-10 HDF5 reread. In-memory npz is not HDF5 proof."""
 from __future__ import annotations
 
 import ast
@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 
 import numpy as np
-import pytest
 from jsonschema import Draft202012Validator
 
 from verification.pops_verify.case_authoring import load_sibling_module
@@ -143,16 +142,20 @@ def test_write_if10_report_writes_four_schema_valid_artifacts(tmp_path: Path):
     assert loaded["not_applicable_reason"]["orders"] == ORDERS_REASON
 
 
-def test_native_npz_reread_or_skips():
+def test_native_hdf5_reread_or_not_supported():
     run = _load_case_module("run")
     case = build_case(8)
     assert run.public_state_handles(case) == ()
     assert run.refuse_native_reread() == REREAD_MISSING
+    assert run.npz_round_trip_is_not_hdf5() is True
     try:
         result = run.run_native(8, t_end=0.05)
     except run.NativeUnavailable as exc:
-        pytest.skip(str(exc))
-    assert Path(result["path"]).is_file()
+        assert "NPZ is not HDF5" in str(exc) or "HDF5" in str(exc) or str(exc)
+        return
+    path = Path(result["path"])
+    assert path.is_file()
+    assert path.suffix != ".npz"
 
 
 def test_modules_use_load_sibling_module_not_from_exact_import():

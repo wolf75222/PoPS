@@ -15,6 +15,7 @@ import numpy as np
 from verification.pops_verify.case_authoring import load_sibling_module
 
 _exact = load_sibling_module(Path(__file__).with_name("exact.py"))
+_v15 = load_sibling_module(Path(__file__).resolve().parents[1] / "_v15.py")
 _TR01_RUN = (
     Path(__file__).resolve().parents[2] / "transport" / "advection_sine" / "run.py"
 )
@@ -87,6 +88,16 @@ def refuse_native_restore() -> str:
     return RESTORE_MISSING
 
 
+def json_round_trip_is_not_restart_proof() -> bool:
+    """A manufactured JSON dump is not a RuntimeInstance restart."""
+    return True
+
+
+def restart_semantic_fields() -> tuple[str, ...]:
+    """Fields a real continuous-vs-restart compare must expose."""
+    return ("continuous", "restarted", "linf", "checkpoint_time", "final_time")
+
+
 def install_checkpoint_consumer(case, target: str = "checkpoints/restart"):
     """Install a public Checkpoint consumer. Does not compile or run."""
     from pops.output import ConsumerGraph
@@ -114,7 +125,7 @@ def install_checkpoint_consumer(case, target: str = "checkpoints/restart"):
     return case
 
 
-def run_native(n_cells: int = _exact.N_CELLS, t=_exact.T, path=None):
+def run_native(n_cells: int = _exact.N_CELLS, t=_exact.T, path=None, request=None):
     """TR-01 continuous vs checkpoint/restart via public RuntimeInstance APIs.
 
     Installs ``Checkpoint``, compiles, runs to ``t/2``, ``checkpoint(path)``,
@@ -124,7 +135,12 @@ def run_native(n_cells: int = _exact.N_CELLS, t=_exact.T, path=None):
     """
     import pops
 
+    _v15.refuse_invalid_mode(request)
+    if request is not None and request.min_resolution is not None:
+        n_cells = int(request.min_resolution)
+
     from verification.pops_verify.case_authoring import (
+        bind_public,
         resolve_case,
         uniform_periodic_layout,
     )
@@ -157,22 +173,23 @@ def run_native(n_cells: int = _exact.N_CELLS, t=_exact.T, path=None):
     t_end = float(t)
     half = 0.5 * t_end
     snapshot = Path(path) if path is not None else work / "accepted"
+    mpi_mode = request.mpi_mode if request is not None else "off"
     try:
-        continuous = pops.bind(
-            artifact_c, initial_values={authored_c.instance: initial}
+        continuous = bind_public(
+            artifact_c, mpi_mode=mpi_mode, initial_values={authored_c.instance: initial}
         )
         pops.run(continuous, t_end=t_end, max_steps=tr01.MAX_STEPS, output_dir=work)
         field_c = np.ravel(
             np.asarray(continuous.state_global("tracer"), dtype=np.float64)
         )
 
-        interrupted = pops.bind(
-            artifact_r, initial_values={authored_r.instance: initial}
+        interrupted = bind_public(
+            artifact_r, mpi_mode=mpi_mode, initial_values={authored_r.instance: initial}
         )
         pops.run(interrupted, t_end=half, max_steps=tr01.MAX_STEPS, output_dir=work)
         ckpt = interrupted.checkpoint(snapshot)
-        restarted = pops.bind(
-            artifact_r, initial_values={authored_r.instance: initial}
+        restarted = bind_public(
+            artifact_r, mpi_mode=mpi_mode, initial_values={authored_r.instance: initial}
         )
         restarted.restart(ckpt)
         pops.run(restarted, t_end=t_end, max_steps=tr01.MAX_STEPS, output_dir=work)
@@ -184,9 +201,23 @@ def run_native(n_cells: int = _exact.N_CELLS, t=_exact.T, path=None):
     except Exception as exc:
         raise NativeUnavailable(f"IF-04 public restart failed: {exc}") from exc
     errors = reference_errors(field_r, field_c, volumes)
-    return {
+    payload = {
         "continuous": field_c,
         "restarted": field_r,
         "linf": float(errors.linf),
         "l2": float(errors.l2),
+        "checkpoint_time": half,
+        "final_time": t_end,
+        "comparison_artifacts": {
+            "kind": "checkpoint_restart",
+            "checkpoint": str(ckpt),
+            "linf": float(errors.linf),
+        },
     }
+    if request is None:
+        return payload
+    fields = _v15.campaign_run_fields(
+        request, n_cells=n_cells, t_end=t_end, comparison=payload["comparison_artifacts"]
+    )
+    fields.update(payload)
+    return fields

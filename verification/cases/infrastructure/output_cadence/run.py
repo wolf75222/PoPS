@@ -19,6 +19,7 @@ from verification.pops_verify.case_authoring import load_sibling_module
 from verification.pops_verify.reference_errors import reference_errors
 
 _exact = load_sibling_module(Path(__file__).with_name("exact.py"))
+_v15 = load_sibling_module(Path(__file__).resolve().parents[1] / "_v15.py")
 
 MUTATION_AMPLITUDE = 0.25
 OUTPUT_CADENCE_REFUSAL = "public output-cadence consumer attach not active"
@@ -111,7 +112,7 @@ def refuse_output_cadence_consumer() -> str:
     return OUTPUT_CADENCE_REFUSAL
 
 
-def run_native(n_cells: int = _exact.DEFAULT_N_CELLS, t_end=_exact.T):
+def run_native(n_cells: int = _exact.DEFAULT_N_CELLS, t_end=_exact.T, request=None):
     """Compare TR-01 with no dumps vs NPZ dump every step.
 
     Uses ``_author.instance`` (public StateHandle) and ``ScientificOutput``.
@@ -125,6 +126,9 @@ def run_native(n_cells: int = _exact.DEFAULT_N_CELLS, t_end=_exact.T):
 
     from verification.pops_verify.tr01_runtime import advance, prepare
 
+    _v15.refuse_invalid_mode(request)
+    if request is not None and request.min_resolution is not None:
+        n_cells = int(request.min_resolution)
     work = Path(tempfile.mkdtemp(prefix="if05-", dir="/tmp" if Path("/tmp").is_dir() else None))
     try:
         plain = prepare(int(n_cells))
@@ -153,10 +157,22 @@ def run_native(n_cells: int = _exact.DEFAULT_N_CELLS, t_end=_exact.T):
         raise NativeUnavailable(f"IF-05 cadence compare failed: {exc}") from exc
     volumes = _exact.cell_volumes(n_cells)
     errors = reference_errors(field_on, field_off, volumes)
-    return {
+    payload = {
         "off": field_off,
         "on": field_on,
         "linf": float(errors.linf),
         "l2": float(errors.l2),
         "dumps": list(work.rglob("*.npz")),
+        "comparison_artifacts": {
+            "kind": "output_cadence",
+            "dumps": [str(path) for path in work.rglob("*.npz")],
+            "linf": float(errors.linf),
+        },
     }
+    if request is None:
+        return payload
+    fields = _v15.campaign_run_fields(
+        request, n_cells=n_cells, t_end=t_end, comparison=payload["comparison_artifacts"]
+    )
+    fields.update(payload)
+    return fields

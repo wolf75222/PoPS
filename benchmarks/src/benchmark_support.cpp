@@ -149,10 +149,10 @@ BenchmarkConfig parse_config(int argc, char** argv) {
 
   if (config.case_id != "all" && config.case_id != "arith_halo" && config.case_id != "scalar_mg")
     throw std::invalid_argument("--case must be all, arith_halo, or scalar_mg");
-  if (config.warmups < 0)
-    throw std::invalid_argument("--warmups must be nonnegative");
-  if (config.repetitions < 3)
-    throw std::invalid_argument("--repetitions must be at least 3 for robust statistics");
+  if (config.warmups < 5)
+    throw std::invalid_argument("--warmups must be at least 5");
+  if (config.repetitions < 10)
+    throw std::invalid_argument("--repetitions must be at least 10");
   if (config.arith_n < 1 || config.arith_tile < 1 || config.arith_components < 1)
     throw std::invalid_argument("arith dimensions, tile, and component count must be positive");
   if (config.mg_n < 4 || config.mg_tile < 1 || config.mg_max_cycles < 1)
@@ -167,8 +167,8 @@ BenchmarkConfig parse_config(int argc, char** argv) {
 void print_help(std::ostream& out) {
   out << "PoPS benchmark harness\n"
       << "  --case all|arith_halo|scalar_mg\n"
-      << "  --warmups N                 discarded warmups (ABBA blocks for arith_halo)\n"
-      << "  --repetitions N              samples (ABBA blocks for arith_halo), N >= 3\n"
+      << "  --warmups N                 discarded warmups (ABBA blocks for arith_halo), N >= 5\n"
+      << "  --repetitions N              samples (ABBA blocks for arith_halo), N >= 10\n"
       << "  --arith-n N                  uniform extent per arithmetic/halo axis\n"
       << "  --arith-tile N               maximum patch extent per arithmetic/halo axis\n"
       << "  --arith-components N         MultiFab component count\n"

@@ -176,12 +176,8 @@ void run_arith_halo_case(const BenchmarkConfig& config, const RuntimeMetadata& m
   };
   auto observe = [](bool) {};
 
-  const PairedSamples samples = run_paired_abba(
-      config.warmups, config.repetitions, [&] { reset(saxpy_field); }, run_saxpy, observe,
-      [&] { reset(lincomb_field); }, run_lincomb, observe);
-
-  // Numerical validation is intentionally outside every timed interval. Re-run both variants from
-  // the same seed and inspect valid cells plus the one-cell periodic halo.
+  // validate_before_timing: numerical check is outside every timed interval and precedes
+  // recording. Fail closed before warmup/sample clocks start.
   reset(saxpy_field);
   run_saxpy();
   reset(lincomb_field);
@@ -229,6 +225,12 @@ void run_arith_halo_case(const BenchmarkConfig& config, const RuntimeMetadata& m
       64.0 * static_cast<double>(std::numeric_limits<Real>::epsilon()) * scale_value;
   const bool passed = !nonfinite_detected && error_a <= tolerance && error_b <= tolerance &&
                       difference <= tolerance;
+  if (!passed)
+    throw std::runtime_error("arith_halo numerical validation failed");
+
+  const PairedSamples samples = run_paired_abba(
+      config.warmups, config.repetitions, [&] { reset(saxpy_field); }, run_saxpy, observe,
+      [&] { reset(lincomb_field); }, run_lincomb, observe);
 
   const std::string parameters = parameters_json(config, boxes, domain);
   const std::string validation =
@@ -259,9 +261,6 @@ void run_arith_halo_case(const BenchmarkConfig& config, const RuntimeMetadata& m
                "\"ordering\":\"ABBA\",\"performance_threshold\":null,"
                "\"statistics\":" +
                stats_json(samples.a_over_b) + "},\"validation\":" + validation + '}');
-
-  if (!passed)
-    throw std::runtime_error("arith_halo numerical validation failed");
 }
 
 }  // namespace pops::bench
