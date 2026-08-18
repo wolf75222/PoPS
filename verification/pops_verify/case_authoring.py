@@ -112,6 +112,8 @@ def bind_public(artifact, **kwargs: Any):
     probe MPI. Python never launches ranks.
     """
     mpi_mode = kwargs.pop("mpi_mode", "off")
+    if mpi_mode not in ("on", "off"):
+        raise ValueError(f"mpi_mode must be exactly 'on' or 'off', got {mpi_mode!r}")
     if mpi_mode == "on":
         context = pops.ExecutionContext.mpi_world(artifact)
         resources = dict(kwargs.get("resources") or {})

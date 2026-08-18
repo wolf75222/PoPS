@@ -82,3 +82,76 @@ def test_authenticate_refuses_absent_manifest(tmp_path: Path):
 
     with pytest.raises(CapabilityError):
         authenticate_installed_artifact(dimension=1, variants_root=tmp_path / "missing")
+
+
+def test_exact_native_dimension_compares_artifact_to_job(tmp_path: Path):
+    from verification.pops_verify.campaign import CampaignJob
+    from verification.pops_verify.capabilities import (
+        authenticate_installed_artifact,
+        missing_requirements,
+    )
+
+    root = _write_leaf(tmp_path, dimension=2)
+    artifact = authenticate_installed_artifact(
+        dimension=2, variants_root=root, doctor_ok=False
+    )
+    case = {"id": "IF-08", "requires": ["exact_native_dimension"]}
+    mismatched = CampaignJob(case_id="IF-08", pops_native_dim=1)
+    assert "exact_native_dimension" in missing_requirements(
+        case, artifact, job=mismatched
+    )
+    matched = CampaignJob(case_id="IF-08", pops_native_dim=2)
+    assert "exact_native_dimension" not in missing_requirements(
+        case, artifact, job=matched
+    )
+
+
+def test_mpi_requirement_applies_only_when_job_mpi_mode_is_on(tmp_path: Path):
+    from verification.pops_verify.campaign import CampaignJob
+    from verification.pops_verify.capabilities import (
+        authenticate_installed_artifact,
+        missing_requirements,
+    )
+
+    root = _write_leaf(tmp_path, dimension=1, has_mpi=False)
+    artifact = authenticate_installed_artifact(
+        dimension=1, variants_root=root, doctor_ok=False
+    )
+    case = {"id": "IF-01", "requires": ["mpi"]}
+    off_job = CampaignJob(case_id="IF-01", pops_native_dim=1, mpi_mode="off")
+    on_job = CampaignJob(case_id="IF-01", pops_native_dim=1, mpi_mode="on")
+    assert "mpi" not in missing_requirements(case, artifact, job=off_job)
+    assert "mpi" in missing_requirements(case, artifact, job=on_job)
+
+
+def test_header_signature_is_installed_header_not_placeholder(tmp_path: Path):
+    from pops.codegen.toolchain import pops_header_signature, pops_include
+
+    from verification.pops_verify.capabilities import authenticate_installed_artifact
+
+    placeholder = hashlib.sha256(
+        b"pops.verification.native_header_signature-unavailable"
+    ).hexdigest()
+    root = _write_leaf(tmp_path, dimension=1)
+    artifact = authenticate_installed_artifact(
+        dimension=1, variants_root=root, doctor_ok=False
+    )
+    expected = pops_header_signature(pops_include())
+    assert artifact.native_header_signature == expected
+    assert artifact.native_header_signature != placeholder
+
+
+def test_catalog_digest_is_not_placeholder(tmp_path: Path):
+    from pops.release import contract
+
+    from verification.pops_verify.capabilities import authenticate_installed_artifact
+
+    placeholder = hashlib.sha256(
+        b"pops.verification.catalog-unavailable"
+    ).hexdigest()
+    root = _write_leaf(tmp_path, dimension=1)
+    artifact = authenticate_installed_artifact(
+        dimension=1, variants_root=root, doctor_ok=False
+    )
+    assert artifact.component_catalog_digest == contract()["component_catalog_sha256"]
+    assert artifact.component_catalog_digest != placeholder

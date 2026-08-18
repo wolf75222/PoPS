@@ -116,8 +116,22 @@ def run_doctor():
         raise NativeUnavailable(f"pops.doctor unavailable: {exc}") from exc
 
 
-def run_native(n_cells: int = 8, t_end: float = 0.01):
-    """Run the Dim2 case only after the artifact dim matches."""
+def run_native(n_cells: int = 8, t_end: float = 0.01, request=None):
+    """Campaign entry: dim-1 jobs run TR-01; dim-2 jobs run the GE-03 path.
+
+    Without ``request``, keep the historical Dim2 refuse path so existing
+    IF-08 unit tests still exercise ``require_native_dim(2)``.
+    """
+    if request is not None:
+        if request.min_resolution is not None:
+            n_cells = int(request.min_resolution)
+        required = int(request.pops_native_dim)
+        if required == _exact.MATCHING_DIM:
+            return run_native_dim1(n_cells, t_end=t_end)
+        if required != _exact.DIM2_REQUIRED:
+            raise NativeUnavailable(
+                f"IF-08 has no campaign path for pops_native_dim={required}"
+            )
     require_native_dim(_exact.DIM2_REQUIRED)
     ge03 = load_sibling_module(_GE03_RUN)
     try:

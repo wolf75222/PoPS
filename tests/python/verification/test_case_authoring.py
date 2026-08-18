@@ -64,3 +64,11 @@ def test_bind_public_serial_bind_when_mpi_is_off(monkeypatch):
     monkeypatch.setattr(authoring.pops, "bind", lambda artifact, **kwargs: "serial-bound")
 
     assert authoring.bind_public(object(), mpi_mode="off") == "serial-bound"
+
+
+@pytest.mark.parametrize("mpi_mode", ["ON", "Off", True, False, "serial", None])
+def test_bind_public_rejects_unknown_mpi_mode(mpi_mode):
+    import verification.pops_verify.case_authoring as authoring
+
+    with pytest.raises((TypeError, ValueError), match="mpi_mode"):
+        authoring.bind_public(object(), mpi_mode=mpi_mode)

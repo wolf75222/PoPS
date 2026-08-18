@@ -84,26 +84,16 @@ def _try_doctor() -> bool:
     return _doctor_report_ok(report)
 
 
-_HEADER_SIGNATURE: str | None = None
-
-
 def _header_signature() -> str:
-    global _HEADER_SIGNATURE
-    if _HEADER_SIGNATURE is not None:
-        return _HEADER_SIGNATURE
     try:
-        from pops.codegen import abi
+        from pops.codegen.toolchain import pops_header_signature, pops_include
 
-        signature = abi.module_header_signature()
-        if isinstance(signature, str) and signature:
-            _HEADER_SIGNATURE = signature
-            return signature
-    except Exception:
-        pass
-    _HEADER_SIGNATURE = hashlib.sha256(
-        b"pops.verification.native_header_signature-unavailable"
-    ).hexdigest()
-    return _HEADER_SIGNATURE
+        signature = pops_header_signature(pops_include())
+    except Exception as exc:
+        raise CapabilityError(f"installed-header signature unavailable: {exc}") from exc
+    if not isinstance(signature, str) or not signature:
+        raise CapabilityError("installed-header signature unavailable")
+    return signature
 
 
 def _catalog_digest() -> str:
@@ -111,11 +101,11 @@ def _catalog_digest() -> str:
         from pops.release import contract
 
         digest = contract()["component_catalog_sha256"]
-        if isinstance(digest, str) and digest:
-            return digest
-    except Exception:
-        pass
-    return hashlib.sha256(b"pops.verification.catalog-unavailable").hexdigest()
+    except Exception as exc:
+        raise CapabilityError(f"component catalog digest unavailable: {exc}") from exc
+    if not isinstance(digest, str) or not digest:
+        raise CapabilityError("component catalog digest unavailable")
+    return digest
 
 
 def _hdf5_collective(has_mpi: bool) -> bool:
@@ -229,6 +219,8 @@ def missing_requirements(
     case: Mapping[str, Any],
     artifact: AuthenticatedArtifact,
     current_capabilities: Mapping[str, Any] | None = None,
+    *,
+    job: Any = None,
 ) -> list[str]:
     """Return installed-capability tokens the case requires but the artifact lacks."""
     current = current_capabilities or {}
@@ -236,12 +228,17 @@ def missing_requirements(
     for token in case.get("requires") or []:
         if token not in _KNOWN_REQUIREMENTS:
             continue
-        if token == "mpi" and not artifact.has_mpi:
-            missing.append(token)
+        if token == "mpi":
+            if job is not None and getattr(job, "mpi_mode", None) != "on":
+                continue
+            if not artifact.has_mpi:
+                missing.append(token)
         elif token in {"hdf5", "hdf5_collective"} and not artifact.hdf5_collective:
             missing.append(token)
         elif token == "polar_system_runtime" and current.get("polar_system_runtime") is not True:
             missing.append(token)
-        elif token == "exact_native_dimension" and artifact.dimension not in (1, 2, 3):
-            missing.append(token)
+        elif token == "exact_native_dimension":
+            required = getattr(job, "pops_native_dim", None) if job is not None else None
+            if required is None or artifact.dimension != required:
+                missing.append(token)
     return missing

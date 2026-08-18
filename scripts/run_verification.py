@@ -13,6 +13,8 @@ from __future__ import annotations
 import argparse
 import inspect
 import json
+import os
+import re
 from pathlib import Path
 import sys
 import traceback
@@ -51,17 +53,15 @@ from verification.pops_verify.capabilities import (  # noqa: E402
 from verification.pops_verify.case_authoring import load_sibling_module  # noqa: E402
 from verification.pops_verify.metrics import collect_metrics, write_metrics  # noqa: E402
 from verification.pops_verify.provenance import (  # noqa: E402
+    ProvenanceError,
+    RUN_FIELDS,
     collect_provenance,
     write_provenance,
 )
 from verification.pops_verify.report import write_verification_report  # noqa: E402
 
 ALLOWED_SUITES = ("pr", "nightly", "weekly", "release", "two_node")
-_SPACE_TO_PROVENANCE = {
-    "KokkosSerial": "Serial",
-    "KokkosOpenMP": "OpenMP",
-    "KokkosCuda": "Cuda",
-}
+_CASE_ID_RE = re.compile(r"[A-Z0-9-]+")
 
 
 class VerificationRunnerError(RuntimeError):
@@ -137,6 +137,8 @@ def select_cases(
 
 
 def write_plan(output: Path, plan: dict) -> None:
+    if not is_campaign_writer_rank():
+        return
     output.mkdir(parents=True, exist_ok=True)
     (output / "plan.json").write_text(
         json.dumps(plan, indent=2) + "\n",
@@ -145,28 +147,102 @@ def write_plan(output: Path, plan: dict) -> None:
 
 
 def invoke_run_native(runner, request: CampaignRequest):
-    """Pass campaign parameters; refuse a parameterless call."""
+    """Pass the full campaign request; refuse signatures that drop it."""
     signature = inspect.signature(runner)
     params = signature.parameters
     accepts_var_kw = any(
         item.kind is inspect.Parameter.VAR_KEYWORD for item in params.values()
     )
-    kwargs: dict[str, object] = {}
-    if "request" in params or accepts_var_kw:
-        kwargs["request"] = request
+    if "request" not in params and not accepts_var_kw:
+        raise VerificationRunnerError(
+            "run_native must accept request=CampaignRequest; "
+            "n_cells-only signatures drop campaign fields"
+        )
+    kwargs: dict[str, object] = {"request": request}
     if request.min_resolution is not None and ("n_cells" in params or accepts_var_kw):
         kwargs["n_cells"] = request.min_resolution
-    if not kwargs:
-        raise VerificationRunnerError(
-            "run_native is parameterless; campaign request was not accepted"
-        )
     return runner(**kwargs)
 
 
+def campaign_writer_rank() -> int:
+    for key in ("POPS_CAMPAIGN_RANK", "SLURM_PROCID", "OMPI_COMM_WORLD_RANK", "PMI_RANK"):
+        raw = os.environ.get(key)
+        if raw is not None and str(raw).strip() != "":
+            return int(raw)
+    try:
+        from pops._native_selector import selected_native_module
+
+        module = selected_native_module(required=False)
+        world = getattr(module, "mpi_world", None) if module is not None else None
+        if callable(world):
+            comm = world()
+            rank = getattr(comm, "rank", None)
+            if rank is not None:
+                return int(rank)
+    except Exception:
+        return 0
+    return 0
+
+
+def is_campaign_writer_rank() -> bool:
+    return campaign_writer_rank() == 0
+
+
+def validate_case_id(case_id: str) -> str:
+    if not isinstance(case_id, str) or not _CASE_ID_RE.fullmatch(case_id):
+        raise VerificationRunnerError(f"unsafe case id {case_id!r}")
+    return case_id
+
+
+def resolve_case_module_path(raw: str | Path, *, repo_root: Path = REPO_ROOT) -> Path:
+    path = Path(raw)
+    if path.is_absolute():
+        return path.resolve()
+    resolved = (repo_root / path).resolve()
+    root = repo_root.resolve()
+    if os.path.commonpath([str(root), str(resolved)]) != str(root):
+        raise VerificationRunnerError(f"case path escapes repository: {raw}")
+    return resolved
+
+
 def _job_dir(output: Path, job: CampaignJob) -> Path:
-    return output / job.case_id / (
-        f"dim{job.pops_native_dim}-{job.execution_space}-{job.mpi_mode}"
-    )
+    validate_case_id(job.case_id)
+    job_dir = (
+        output / job.case_id / f"dim{job.pops_native_dim}-{job.execution_space}-{job.mpi_mode}"
+    ).resolve()
+    output_root = output.resolve()
+    if os.path.commonpath([str(output_root), str(job_dir)]) != str(output_root):
+        raise VerificationRunnerError(f"job path escapes output for case id {job.case_id!r}")
+    return job_dir
+
+
+def _honest_run_fields(
+    job: CampaignJob,
+    artifact: AuthenticatedArtifact,
+    run_result: object,
+) -> dict[str, object]:
+    """Request and discovered facts only. Missing schema-required fields fail."""
+    fields: dict[str, object] = {
+        "kokkos_execution_space": job.execution_space,
+        "mpi_enabled": job.mpi_mode == "on",
+        "hdf5_collective_enabled": artifact.hdf5_collective,
+        "mpi_ranks": job.resources.mpi_ranks,
+        "omp_threads_per_rank": job.resources.omp_threads,
+    }
+    if job.mpi_mode == "off":
+        fields["mpi_library"] = "none"
+        fields["mpi_thread_level_requested"] = "none"
+        fields["mpi_thread_level_provided"] = "none"
+    if job.min_resolution is not None:
+        fields["resolution"] = [job.min_resolution] * job.pops_native_dim
+    if isinstance(run_result, dict):
+        for key in RUN_FIELDS:
+            if key in run_result:
+                fields[key] = run_result[key]
+    missing = [key for key in RUN_FIELDS if key not in fields]
+    if missing:
+        raise VerificationRunnerError(f"unknown provenance field: {missing[0]}")
+    return fields
 
 
 def _write_job_artifacts(
@@ -175,7 +251,11 @@ def _write_job_artifacts(
     request: CampaignRequest,
     record: dict,
     artifact: AuthenticatedArtifact,
+    *,
+    run_fields: dict[str, object] | None = None,
 ) -> None:
+    if not is_campaign_writer_rank():
+        return
     output_dir = request.output_dir
     if output_dir is None:
         return
@@ -193,49 +273,31 @@ def _write_job_artifacts(
     reason = str(record.get("reason") or "runner foundation records no scientific field yet")
     metrics = collect_metrics(job.case_id, reason=reason)
     write_metrics(output_dir / "metrics.json", metrics)
-    resolution = [job.min_resolution or 1] * job.pops_native_dim
+    record["metrics_ref"] = f"{job.case_id}/{output_dir.name}/metrics.json"
+    if run_fields is None:
+        return
     try:
         import pops
 
         pops_version = str(pops.__version__)
-    except Exception:
-        pops_version = "unknown"
-    provenance = collect_provenance(
-        job.case_id,
-        pops_native_dim=job.pops_native_dim,
-        dimension=job.pops_native_dim,
-        nodes=min(max(job.resources.nodes, 1), 2),
-        pops_version=pops_version,
-        doctor_ok=artifact.doctor_ok,
-        component_catalog_digest=artifact.component_catalog_digest,
-        native_header_signature=artifact.native_header_signature,
-        native_variant_manifest_digest=artifact.native_variant_manifest_digest,
-        compiler="unknown",
-        build_type="unknown",
-        precision="float64",
-        kokkos_execution_space=_SPACE_TO_PROVENANCE.get(
-            job.execution_space, job.execution_space
-        ),
-        mpi_enabled=job.mpi_mode == "on",
-        mpi_library="none" if job.mpi_mode == "off" else "MPI",
-        mpi_thread_level_requested="MPI_THREAD_SINGLE",
-        mpi_thread_level_provided="MPI_THREAD_SINGLE",
-        hdf5_collective_enabled=artifact.hdf5_collective,
-        mpi_ranks=max(job.resources.mpi_ranks, 1),
-        omp_threads_per_rank=max(job.resources.omp_threads, 1),
-        gpus=0,
-        resolution=resolution,
-        block_size=resolution,
-        amr_total_levels=1,
-        refinement_ratio=2,
-        subcycling=False,
-        time_program="unspecified",
-        cfl=0.4,
-        final_time=0.0,
-    )
-    write_provenance(output_dir / "provenance.json", provenance)
-    record["metrics_ref"] = f"{job.case_id}/{output_dir.name}/metrics.json"
-    record["provenance_ref"] = f"{job.case_id}/{output_dir.name}/provenance.json"
+        provenance = collect_provenance(
+            job.case_id,
+            pops_native_dim=job.pops_native_dim,
+            dimension=job.pops_native_dim,
+            nodes=job.resources.nodes,
+            pops_version=pops_version,
+            doctor_ok=artifact.doctor_ok,
+            component_catalog_digest=artifact.component_catalog_digest,
+            native_header_signature=artifact.native_header_signature,
+            native_variant_manifest_digest=artifact.native_variant_manifest_digest,
+            **run_fields,
+        )
+        write_provenance(output_dir / "provenance.json", provenance)
+        record["provenance_ref"] = f"{job.case_id}/{output_dir.name}/provenance.json"
+    except (ProvenanceError, VerificationRunnerError) as exc:
+        if record.get("status") == "pass":
+            record["status"] = "fail"
+            record["reason"] = str(exc)
 
 
 def _write_campaign_report(
@@ -343,12 +405,11 @@ def execute_jobs(
     manifest: dict,
 ) -> list[dict]:
     """Run each planned job's public ``run_native`` with campaign parameters."""
-    import os
-
     by_id = {case["id"]: case for case in cases}
     current = manifest.get("current_capabilities") or {}
     results: list[dict] = []
     for job in jobs:
+        validate_case_id(job.case_id)
         case = by_id.get(job.case_id)
         job_dir = _job_dir(output, job)
         request = CampaignRequest.from_job(job, output_dir=job_dir)
@@ -360,14 +421,15 @@ def execute_jobs(
             "mpi_mode": job.mpi_mode,
             "status": "not-run",
         }
+        run_result: object = None
         if case is None:
             record["status"] = "fail"
             record["reason"] = "missing case"
             _write_job_artifacts(job, None, request, record, artifact)
             results.append(record)
             continue
-        record["path"] = str(Path(case["path"]))
-        missing = missing_requirements(case, artifact, current)
+        record["path"] = str(resolve_case_module_path(case["path"]))
+        missing = missing_requirements(case, artifact, current, job=job)
         if missing:
             reason = "missing installed capabilities: " + ", ".join(missing)
             record["reason"] = reason
@@ -380,13 +442,13 @@ def execute_jobs(
         env_dim = os.environ.get("POPS_NATIVE_DIM")
         os.environ["POPS_NATIVE_DIM"] = str(job.pops_native_dim)
         try:
-            module = load_sibling_module(Path(case["path"]))
+            module = load_sibling_module(resolve_case_module_path(case["path"]))
             runner = getattr(module, "run_native", None)
             if not callable(runner):
                 record["status"] = "fail"
                 record["reason"] = "missing run_native"
             else:
-                invoke_run_native(runner, request)
+                run_result = invoke_run_native(runner, request)
                 record["status"] = "pass"
         except VerificationRunnerError as exc:
             record["status"] = "fail"
@@ -411,14 +473,27 @@ def execute_jobs(
         if record["status"] not in ALLOWED_STATUSES:
             record["status"] = "fail"
             record["reason"] = f"illegal status {record['status']!r}"
-        _write_job_artifacts(job, case, request, record, artifact)
+        run_fields = None
+        if record["status"] == "pass":
+            try:
+                run_fields = _honest_run_fields(job, artifact, run_result)
+            except VerificationRunnerError as exc:
+                record["status"] = "fail"
+                record["reason"] = str(exc)
+                run_fields = None
+        _write_job_artifacts(
+            job, case, request, record, artifact, run_fields=run_fields
+        )
         results.append(record)
-    output.mkdir(parents=True, exist_ok=True)
-    (output / "results.json").write_text(
-        json.dumps(results, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    _write_campaign_report(output, suite=jobs[0].suite if jobs else "pr", jobs=jobs, results=results)
+    if is_campaign_writer_rank():
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "results.json").write_text(
+            json.dumps(results, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        _write_campaign_report(
+            output, suite=jobs[0].suite if jobs else "pr", jobs=jobs, results=results
+        )
     return results
 
 
@@ -473,6 +548,8 @@ def main(argv: list[str] | None = None) -> int:
             execution_space=args.execution_space,
             mpi_mode=args.mpi_mode,
         )
+        for job in jobs:
+            validate_case_id(job.case_id)
         write_plan(
             args.output,
             {

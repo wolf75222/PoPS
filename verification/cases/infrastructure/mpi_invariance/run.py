@@ -181,14 +181,21 @@ def _native_unavailable_reason() -> str | None:
     return missing_native_compile_requirement(repo_include(), default_cxx())
 
 
-def run_native(n_cells: int = _exact.DEFAULT_N_CELLS, t_end: float = 0.25):
+def run_native(n_cells: int = _exact.DEFAULT_N_CELLS, t_end: float = 0.25, request=None):
     """Compile, bind, and run Uniform under the native communicator.
 
     Multi-rank invariance is obtained by launching this same function under
-    MPI. This process does not spawn ranks.
+    MPI. This process does not spawn ranks. ``request.mpi_mode`` is forwarded
+    to ``bind_public``; omitted ``request`` binds serially.
     """
     import pops
 
+    if request is not None:
+        if request.min_resolution is not None:
+            n_cells = int(request.min_resolution)
+        mpi_mode = request.mpi_mode
+    else:
+        mpi_mode = "off"
     missing = _native_unavailable_reason()
     if missing:
         raise NativeUnavailable(missing)
@@ -196,7 +203,7 @@ def run_native(n_cells: int = _exact.DEFAULT_N_CELLS, t_end: float = 0.25):
     layout = uniform_periodic_layout(authored.frame, (authored.n_cells,))
     plan = resolve_case(authored.case, layout=layout)
     artifact = pops.compile(plan)
-    simulation = bind_public(artifact)
+    simulation = bind_public(artifact, mpi_mode=mpi_mode)
     pops.run(simulation, t_end=float(t_end), max_steps=MAX_STEPS)
     field = np.asarray(simulation.state_global("tracer"), dtype=np.float64)
     return np.ravel(field)

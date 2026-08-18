@@ -428,7 +428,19 @@ def run_native(request=None, n_cells=None):
         }),
         encoding="utf-8",
     )
-    return None
+    return {
+        "compiler": "not-compiled",
+        "build_type": "not-compiled",
+        "precision": "not-compiled",
+        "block_size": [n_cells or 32],
+        "amr_total_levels": 1,
+        "refinement_ratio": 2,
+        "subcycling": False,
+        "time_program": "fixture",
+        "cfl": 0.45,
+        "final_time": 0.25,
+        "gpus": 0,
+    }
 """,
     )
     leaf = _write_authenticated_leaf(tmp_path)
@@ -559,7 +571,22 @@ def test_execute_writes_schema_valid_job_artifacts_and_report(tmp_path: Path):
     manifest, _case_dir = _write_case_manifest(
         tmp_path,
         case_id="IF-08",
-        run_py="def run_native(request=None, n_cells=None):\n    return None\n",
+        run_py=(
+            "def run_native(request=None, n_cells=None):\n"
+            "    return {\n"
+            '        "compiler": "not-compiled",\n'
+            '        "build_type": "not-compiled",\n'
+            '        "precision": "not-compiled",\n'
+            '        "block_size": [n_cells or 32],\n'
+            '        "amr_total_levels": 1,\n'
+            '        "refinement_ratio": 2,\n'
+            '        "subcycling": False,\n'
+            '        "time_program": "fixture",\n'
+            '        "cfl": 0.45,\n'
+            '        "final_time": 0.25,\n'
+            '        "gpus": 0,\n'
+            "    }\n"
+        ),
     )
     leaf = _write_authenticated_leaf(tmp_path)
     output = tmp_path / "out"
@@ -772,3 +799,362 @@ def test_artifact_dim_mismatch_exits_one_without_plan(tmp_path: Path):
     assert "POPS_NATIVE_DIM" in combined
     assert "fallback" in combined.lower()
     assert not (output / "plan.json").exists()
+
+
+def _load_runner():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("run_verification_under_test", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    assert spec is not None and spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def _honest_run_fields(*, n_cells: int = 32) -> dict:
+    return {
+        "compiler": "not-compiled",
+        "build_type": "not-compiled",
+        "precision": "not-compiled",
+        "block_size": [n_cells],
+        "amr_total_levels": 1,
+        "refinement_ratio": 2,
+        "subcycling": False,
+        "time_program": "fixture",
+        "cfl": 0.45,
+        "final_time": 0.25,
+        "gpus": 0,
+    }
+
+
+def test_invoke_refuses_n_cells_only_signature():
+    from verification.pops_verify.campaign import CampaignJob, CampaignRequest
+
+    runner = _load_runner()
+
+    def run_native(n_cells=8, t_end=0.01):
+        return n_cells
+
+    request = CampaignRequest.from_job(
+        CampaignJob(case_id="IF-08", pops_native_dim=1, min_resolution=32)
+    )
+    with pytest.raises(runner.VerificationRunnerError, match="request"):
+        runner.invoke_run_native(run_native, request)
+
+
+def test_real_if01_and_if08_run_native_accept_campaign_request():
+    import inspect
+
+    from verification.pops_verify.campaign import CampaignJob, CampaignRequest
+    from verification.pops_verify.case_authoring import load_sibling_module
+
+    runner = _load_runner()
+    cases = (
+        (
+            REPO_ROOT / "verification/cases/infrastructure/mpi_invariance/run.py",
+            "IF-01",
+        ),
+        (
+            REPO_ROOT / "verification/cases/infrastructure/native_dim_guard/run.py",
+            "IF-08",
+        ),
+    )
+    for path, case_id in cases:
+        module = load_sibling_module(path)
+        assert "request" in inspect.signature(module.run_native).parameters, path
+        request = CampaignRequest.from_job(
+            CampaignJob(case_id=case_id, pops_native_dim=1, min_resolution=16)
+        )
+        try:
+            runner.invoke_run_native(module.run_native, request)
+        except TypeError as exc:
+            raise AssertionError(f"{case_id} rejected CampaignRequest: {exc}") from exc
+        except Exception as exc:
+            assert exc.__class__.__name__ == "NativeUnavailable", (
+                f"{case_id} raised {exc.__class__.__name__}: {exc}"
+            )
+
+
+def test_if08_run_native_with_dim1_request_dispatches_dim1(monkeypatch):
+    from verification.pops_verify.campaign import CampaignJob, CampaignRequest
+    from verification.pops_verify.case_authoring import load_sibling_module
+
+    run = load_sibling_module(
+        REPO_ROOT / "verification/cases/infrastructure/native_dim_guard/run.py"
+    )
+    monkeypatch.setenv("POPS_NATIVE_DIM", "1")
+    request = CampaignRequest.from_job(CampaignJob(case_id="IF-08", pops_native_dim=1))
+    with pytest.raises(run.NativeUnavailable) as exc_info:
+        run.run_native(request=request)
+    assert "required dim 2" not in str(exc_info.value)
+
+
+def test_if01_run_native_forwards_request_mpi_mode():
+    source = (
+        REPO_ROOT / "verification/cases/infrastructure/mpi_invariance/run.py"
+    ).read_text(encoding="utf-8")
+    assert "request" in source
+    assert "mpi_mode=request.mpi_mode" in source or (
+        "bind_public(" in source and "request.mpi_mode" in source
+    )
+
+
+def test_execute_refuses_invented_provenance_when_run_facts_unknown(tmp_path: Path):
+    manifest, _case_dir = _write_case_manifest(
+        tmp_path,
+        case_id="IF-08",
+        run_py="def run_native(request=None, n_cells=None):\n    return None\n",
+    )
+    leaf = _write_authenticated_leaf(tmp_path)
+    output = tmp_path / "out"
+    result = _run(
+        "--suite",
+        "pr",
+        "--dimensions",
+        "1",
+        "--max-nodes",
+        "2",
+        "--output",
+        str(output),
+        "--manifest",
+        str(manifest),
+        "--execute",
+        env={"POPS_NATIVE_DIM": "1", "POPS_NATIVE_VARIANTS_ROOT": str(leaf)},
+    )
+    job_dir = output / "IF-08" / "dim1-KokkosSerial-off"
+    assert result.returncode == 1
+    rows = json.loads((output / "results.json").read_text(encoding="utf-8"))
+    assert rows[0]["status"] == "fail"
+    reason = (rows[0].get("reason") or "").lower()
+    assert "provenance" in reason or "unknown" in reason
+    if (job_dir / "provenance.json").is_file():
+        provenance = json.loads((job_dir / "provenance.json").read_text(encoding="utf-8"))
+        raise AssertionError(f"invented provenance was written: {provenance}")
+
+
+def test_execute_writes_honest_provenance_from_returned_run_fields(tmp_path: Path):
+    from jsonschema import Draft202012Validator
+
+    fields = _honest_run_fields(n_cells=32)
+    manifest, _case_dir = _write_case_manifest(
+        tmp_path,
+        case_id="IF-08",
+        run_py=(
+            "def run_native(request=None, n_cells=None):\n"
+            f"    return {fields!r}\n"
+        ),
+    )
+    leaf = _write_authenticated_leaf(tmp_path)
+    output = tmp_path / "out"
+    result = _run(
+        "--suite",
+        "pr",
+        "--dimensions",
+        "1",
+        "--max-nodes",
+        "2",
+        "--output",
+        str(output),
+        "--manifest",
+        str(manifest),
+        "--execute",
+        env={"POPS_NATIVE_DIM": "1", "POPS_NATIVE_VARIANTS_ROOT": str(leaf)},
+    )
+    assert result.returncode == 0, result.stderr
+    job_dir = output / "IF-08" / "dim1-KokkosSerial-off"
+    provenance = json.loads((job_dir / "provenance.json").read_text(encoding="utf-8"))
+    Draft202012Validator(
+        json.loads((REPO_ROOT / "schemas" / "verification_provenance.v1.json").read_text()),
+        format_checker=Draft202012Validator.FORMAT_CHECKER,
+    ).validate(provenance)
+    assert provenance["cfl"] == 0.45
+    assert provenance["compiler"] == "not-compiled"
+    assert provenance["precision"] == "not-compiled"
+    assert provenance["final_time"] == 0.25
+    assert provenance["kokkos_execution_space"] == "KokkosSerial"
+
+
+def test_execute_writes_artifacts_only_on_rank_zero(tmp_path: Path):
+    fields = _honest_run_fields(n_cells=32)
+    manifest, _case_dir = _write_case_manifest(
+        tmp_path,
+        case_id="IF-08",
+        run_py=(
+            "def run_native(request=None, n_cells=None):\n"
+            f"    return {fields!r}\n"
+        ),
+    )
+    leaf = _write_authenticated_leaf(tmp_path)
+    output = tmp_path / "out"
+    result = _run(
+        "--suite",
+        "pr",
+        "--dimensions",
+        "1",
+        "--max-nodes",
+        "2",
+        "--output",
+        str(output),
+        "--manifest",
+        str(manifest),
+        "--execute",
+        env={
+            "POPS_NATIVE_DIM": "1",
+            "POPS_NATIVE_VARIANTS_ROOT": str(leaf),
+            "POPS_CAMPAIGN_RANK": "1",
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    assert not (output / "results.json").exists()
+    assert not (output / "IF-08" / "dim1-KokkosSerial-off" / "resolved_case.json").exists()
+    assert not (output / "summary.json").exists()
+
+
+def test_execute_rejects_path_escaping_case_id(tmp_path: Path):
+    case_dir = tmp_path / "cases" / "safe"
+    case_dir.mkdir(parents=True)
+    (case_dir / "run.py").write_text(
+        "def run_native(request=None, n_cells=None):\n    return None\n",
+        encoding="utf-8",
+    )
+    manifest = tmp_path / "manifest.toml"
+    manifest.write_text(
+        _manifest_header()
+        + f"""
+[[case]]
+id = "../ESC-01"
+path = "{case_dir / "run.py"}"
+name = "escaped case"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = []
+oracle = "fixture"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+mpi_ranks = 1
+omp_threads = 1
+resolutions = [32]
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+finite = true
+""",
+        encoding="utf-8",
+    )
+    leaf = _write_authenticated_leaf(tmp_path)
+    output = tmp_path / "out"
+    result = _run(
+        "--suite",
+        "pr",
+        "--dimensions",
+        "1",
+        "--max-nodes",
+        "2",
+        "--output",
+        str(output),
+        "--manifest",
+        str(manifest),
+        "--execute",
+        env={"POPS_NATIVE_DIM": "1", "POPS_NATIVE_VARIANTS_ROOT": str(leaf)},
+    )
+    assert result.returncode == 1
+    combined = f"{result.stderr}\n{result.stdout}".lower()
+    assert "case" in combined or "path" in combined or "unsafe" in combined
+    assert not (tmp_path / "ESC-01").exists()
+    escaped = list(tmp_path.glob("**/provenance.json"))
+    assert escaped == []
+
+
+def test_case_module_path_resolves_against_repo_root(tmp_path: Path):
+    runner = _load_runner()
+    relative = "verification/cases/infrastructure/native_dim_guard/run.py"
+    resolved = runner.resolve_case_module_path(relative)
+    assert resolved == (REPO_ROOT / relative).resolve()
+    monkeypatch_cwd = tmp_path
+    import os
+
+    previous = os.getcwd()
+    os.chdir(monkeypatch_cwd)
+    try:
+        again = runner.resolve_case_module_path(relative)
+    finally:
+        os.chdir(previous)
+    assert again == (REPO_ROOT / relative).resolve()
+
+
+def test_execute_resolves_relative_case_path_from_foreign_cwd(tmp_path: Path):
+    manifest = tmp_path / "manifest.toml"
+    manifest.write_text(
+        _manifest_header()
+        + """
+[[case]]
+id = "IF-08"
+path = "verification/cases/infrastructure/native_dim_guard/run.py"
+name = "exact native-dim specialization"
+verification_kind = "infrastructure"
+evidence_status = "required"
+physics = ["transport"]
+oracle = "fixture"
+native_dimensions = [1]
+execution_spaces = ["KokkosSerial"]
+mpi_modes = ["off"]
+suites = ["pr"]
+requires = []
+
+[case.resources.pr]
+nodes = 1
+mpi_ranks = 1
+omp_threads = 1
+resolutions = [16]
+
+[case.resources.two_node]
+nodes = [1, 2]
+
+[case.acceptance]
+finite = true
+""",
+        encoding="utf-8",
+    )
+    leaf = _write_authenticated_leaf(tmp_path)
+    output = tmp_path / "out"
+    env = os.environ.copy()
+    env.pop("POPS_NATIVE_DIM", None)
+    env["POPS_NATIVE_DIM"] = "1"
+    env["POPS_NATIVE_VARIANTS_ROOT"] = str(leaf)
+    env["PYTHONPATH"] = f"{REPO_ROOT / 'python'}{os.pathsep}{REPO_ROOT}"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--suite",
+            "pr",
+            "--dimensions",
+            "1",
+            "--max-nodes",
+            "2",
+            "--output",
+            str(output),
+            "--manifest",
+            str(manifest),
+            "--execute",
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    combined = f"{result.stderr}\n{result.stdout}"
+    assert "No such file" not in combined
+    assert "cannot load" not in combined.lower()
+    rows = json.loads((output / "results.json").read_text(encoding="utf-8"))
+    assert rows[0]["case_id"] == "IF-08"
+    assert "run.py" in rows[0].get("path", "")
