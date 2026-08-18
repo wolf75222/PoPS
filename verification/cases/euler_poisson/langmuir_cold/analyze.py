@@ -43,6 +43,21 @@ BLOCKER = (
 )
 
 
+def final_campaign_job(series_dir) -> Path:
+    """Last job named in series.json, including temporal ``dt*`` names."""
+    root = Path(series_dir)
+    series_file = root / "series.json"
+    if not series_file.is_file():
+        raise EvidenceError("series.json is required to resolve the final campaign job")
+    jobs = list(json.loads(series_file.read_text(encoding="utf-8")).get("jobs") or [])
+    if not jobs:
+        raise EvidenceError("series.json jobs is empty")
+    job = root / str(jobs[-1])
+    if not job.is_dir():
+        raise EvidenceError(f"final series job {jobs[-1]!r} is missing")
+    return job
+
+
 def analyze_native(native):
     """Compute phase/frequency/field/energy/order from native arrays only."""
     return native_diagnostics(native)
@@ -476,19 +491,11 @@ def _campaign_from_bundle(bundle: EvidenceBundle) -> dict[str, Any]:
     claim["family"] = family
     claim["kind"] = family if family in {"temporal", "spatial"} else "global"
     coupling = {}
-    series_jobs = []
-    series_file = bundle.path / "series.json"
-    if series_file.is_file():
-        series_jobs = list(json.loads(series_file.read_text(encoding="utf-8")).get("jobs") or [])
     coupling_candidates = []
-    if series_jobs:
-        coupling_candidates.append(bundle.path / str(series_jobs[-1]) / "coupling.json")
-    coupling_candidates.extend(
-        [
-            bundle.path / f"n{resolutions[-1]}" / "coupling.json",
-            bundle.path / f"n{resolutions[min(2, len(resolutions) - 1)]}" / "coupling.json",
-        ]
-    )
+    try:
+        coupling_candidates.append(final_campaign_job(bundle.path) / "coupling.json")
+    except EvidenceError:
+        pass
     for coupling_path in coupling_candidates:
         if coupling_path.is_file():
             coupling = json.loads(coupling_path.read_text(encoding="utf-8"))
@@ -905,7 +912,7 @@ def write_cp02_report(
             verdict="pass" if passed else "fail",
             scientific_pass=passed,
         )
-        finest = bundle.path / f"n{campaign['resolutions'][-1]}"
+        finest = final_campaign_job(bundle.path)
         for name in ("resolved_case.json", "native_artifact.json"):
             source = finest / name
             if source.is_file():
