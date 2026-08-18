@@ -908,6 +908,8 @@ if(POPS_HAS_MPI)
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_system pops_runtime_amr)
     elseif(_test STREQUAL "test_mpi_cutcell_multibox")
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_system)
+    elseif(_test STREQUAL "test_mpi_generated_weno_halo")
+      list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_system)
     elseif(_test STREQUAL "test_mpi_cell_temporal_program" OR
            _test STREQUAL "test_mpi_cell_temporal_program_multibox" OR
            _test STREQUAL "test_mpi_cell_temporal_program_collective_rollback" OR
