@@ -133,6 +133,12 @@ def prepare_field(payload: dict[str, Any]) -> dict[str, Any]:
     if peak == 0.0:
         peak = 1.0
     signed = payload.get("kind") in {"signed_error_field"}
+    limits = payload.get("color_limits") or payload.get("color_range")
+    if isinstance(limits, list) and len(limits) == 2:
+        vmin, vmax = float(limits[0]), float(limits[1])
+    else:
+        vmin = -peak if signed else min(values)
+        vmax = peak if signed else max(values)
     return {
         "kind": payload.get("kind", "field_snapshot"),
         "figure_id": payload.get("figure_id", "field"),
@@ -140,8 +146,8 @@ def prepare_field(payload: dict[str, Any]) -> dict[str, Any]:
         "y": list(payload.get("y") or []),
         "field": field,
         "cmap": "RdBu_r" if signed else "viridis",
-        "vmin": -peak if signed else min(values),
-        "vmax": peak if signed else max(values),
+        "vmin": vmin,
+        "vmax": vmax,
         "center": 0.0 if signed else None,
         "xlabel": (payload.get("units") or {}).get("x") or "x",
         "ylabel": (payload.get("units") or {}).get("y") or "y",

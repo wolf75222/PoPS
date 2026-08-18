@@ -75,6 +75,12 @@ def check_visual_manifest(run_dir: str | Path, *, suite: str = "pr") -> dict[str
         if item.get("kind") == "hero_figure" and item.get("quantitative_companion") not in ids:
             if item.get("quantitative_companion") is None:
                 raise VisualsGateError("hero figure is missing a quantitative companion")
+    by_id = {item["figure_id"]: item for item in manifest.get("figures") or []}
+    if "exact_field" in by_id and "numerical_field" in by_id:
+        if by_id["exact_field"].get("color_range") != by_id["numerical_field"].get("color_range"):
+            raise VisualsGateError(
+                "exact_field and numerical_field color_range/colorbar mismatch"
+            )
     if any(item.get("kind") == "animation" for item in figures):
         if not any(item.get("kind") == "storyboard" for item in manifest["figures"]):
             if suite == "release":

@@ -520,6 +520,7 @@ def _artifacts_for(case_id: str, axis: str, code: DimCode) -> tuple[str, ...]:
             kinds.insert(0, "signed_error_field")
         else:
             kinds[0:0] = ["slice_xy", "slice_xz", "slice_yz"]
+            kinds.append("isosurface")
         if case_id in {"IF-04", "IF-10"}:
             kinds.append("storyboard")
         return _unique(kinds)
@@ -567,6 +568,8 @@ def _artifacts_for(case_id: str, axis: str, code: DimCode) -> tuple[str, ...]:
         kinds.append("spatial_convergence")
     if axis == "3d" and family in {"TR", "EU", "PO", "AM", "RB"}:
         kinds.append("amr_boxes")
+    if axis == "3d" and family in {"TR", "EU", "PO", "AM", "CP", "RB", "GE"}:
+        kinds.append("isosurface")
     anim = _ANIM[case_id][{"1d": 0, "2d": 1, "3d": 2}[axis]]
     if anim == "required" or case_id in _STORYBOARD_REQUIRED:
         kinds.append("storyboard")
@@ -633,7 +636,7 @@ def visual_contract_for(case_id: str) -> dict:
             required.extend(entry.artifacts[axis])
     required = list(dict.fromkeys(required))
     animation = None
-    if any(flag == "required" for flag in entry.animation):
+    if any(flag == "required" for flag in entry.animation) or entry.storyboard_required:
         animation = {
             "id": f"{case_id.lower().replace('-', '_')}_canonical",
             "master": "mp4",

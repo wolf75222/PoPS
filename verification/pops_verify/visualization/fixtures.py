@@ -18,14 +18,6 @@ from verification.pops_verify.visualization.catalog import catalog_entry, visual
 
 FIXTURE_LABEL = "DETERMINISTIC FIXTURE — not a PoPS campaign result"
 FIXTURE_SHA = "fixture:pops-visuals-v1"
-AM01_EVENTS = (
-    "before_entry",
-    "entry",
-    "inside_fine",
-    "exit",
-    "periodic_crossing",
-    "final",
-)
 
 _PROVENANCE = {
     "schema": "pops.verification.provenance.v1",
@@ -161,6 +153,8 @@ def _convergence_payload(figure_id: str, kind: str) -> dict[str, Any]:
             {"name": "Linf", "x": xs, "y": _order2_errors(0.048), "unit": "1"},
         ],
         "reference_slopes": [{"order": 2, "anchor": [16, 0.016]}],
+        "times": [1.0],
+        "step_numbers": [100],
         "title": f"{kind} (fixture)",
     }
 
@@ -199,6 +193,8 @@ def _profile_payload(figure_id: str, kind: str) -> dict[str, Any]:
         "units": {"x": "x / L", "y": ylabel},
         "variables": ["scalar"],
         "series": series,
+        "times": [1.0],
+        "step_numbers": [100],
         "title": f"{kind} (fixture)",
     }
 
@@ -237,6 +233,8 @@ def _time_payload(figure_id: str, kind: str) -> dict[str, Any]:
         "units": {"x": "t / T" if kind != "frequency_spectrum" else "mode", "y": ylabel},
         "variables": [kind],
         "series": series,
+        "times": list(times) if kind != "frequency_spectrum" else [1.0],
+        "step_numbers": [100],
         "title": f"{kind} (fixture)",
     }
 
@@ -278,6 +276,8 @@ def _field_payload(kind: str, field, xs, ys) -> dict[str, Any]:
         "x": xs,
         "y": ys,
         "field": field,
+        "times": [1.0],
+        "step_numbers": [100],
         "title": f"{kind} (fixture)",
     }
 
@@ -321,6 +321,8 @@ def _slice_from_volume(kind: str, xs: list[float], volume: list[list[list[float]
         "y": xs,
         "field": field,
         "plane": kind[-2:],
+        "times": [1.0],
+        "step_numbers": [100],
         "title": f"{kind} (fixture)",
     }
 
@@ -336,9 +338,10 @@ def _pulse(center: float) -> dict[str, Any]:
 
 
 def _storyboard_payload(case_id: str) -> dict[str, Any]:
-    events = AM01_EVENTS
-    if case_id == "AM-01":
-        events = tuple(visual_contract_for(case_id)["animation"]["key_events"])
+    animation = visual_contract_for(case_id).get("animation")
+    if not isinstance(animation, dict) or not animation.get("key_events"):
+        raise ValueError(f"{case_id} storyboard requires visual_contract_for key_events")
+    events = tuple(animation["key_events"])
     frames = []
     for index, event in enumerate(events):
         time = index / max(len(events) - 1, 1)
@@ -514,7 +517,18 @@ def _payload_for(kind: str, *, case_id: str, dimension: int) -> dict[str, Any] |
             "title": "AMR boxes (fixture)",
         }
     if kind == "isosurface":
-        return None
+        return {
+            "figure_id": kind,
+            "kind": kind,
+            "data_kind": "deterministic_fixture",
+            "units": {"x": "x / L", "y": "y / L", "z": "z / L", "field": "scalar"},
+            "engine": None,
+            "verdict": "not-supported",
+            "reason": "ParaView/HDF5 isosurface engine is not available",
+            "times": [1.0],
+            "step_numbers": [100],
+            "title": "isosurface (not-supported fixture)",
+        }
     if kind in {
         "exact_field",
         "numerical_field",
@@ -553,6 +567,20 @@ def _payload_for(kind: str, *, case_id: str, dimension: int) -> dict[str, Any] |
     return None
 
 
+def _stamp_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    if "times" not in payload:
+        if payload.get("frames"):
+            payload["times"] = [float(frame["time"]) for frame in payload["frames"]]
+        else:
+            payload["times"] = [1.0]
+    if "step_numbers" not in payload:
+        if payload.get("frames"):
+            payload["step_numbers"] = [int(frame["step"]) for frame in payload["frames"]]
+        else:
+            payload["step_numbers"] = [100]
+    return payload
+
+
 def write_fixture_run(
     output_root: str | Path,
     case_id: str,
@@ -578,6 +606,30 @@ def write_fixture_run(
     write_metrics(run_dir / "metrics.json", metrics)
     write_provenance(run_dir / "provenance.json", provenance)
     _write_json(
+        run_dir / "resolved_case.json",
+        {
+            "case_id": case_id,
+            "dimension": dimension,
+            "data_kind": "deterministic_fixture",
+            "label": FIXTURE_LABEL,
+        },
+    )
+    _write_json(
+        run_dir / "program.json",
+        {
+            "label": FIXTURE_LABEL,
+            "time_program": provenance["time_program"],
+            "cfl": provenance["cfl"],
+        },
+    )
+    _write_json(
+        run_dir / "native_artifact.json",
+        {
+            "label": FIXTURE_LABEL,
+            "note": "fixture run has no compiled native leaf",
+        },
+    )
+    _write_json(
         run_dir / "status.json",
         {
             "case_id": case_id,
@@ -590,9 +642,22 @@ def write_fixture_run(
     )
     axis = {1: "1d", 2: "2d", 3: "3d"}[dimension]
     visual_dir = run_dir / "analysis" / "visual_data"
+    written: dict[str, dict[str, Any]] = {}
     if verdict in {"pass", "fail"}:
         for kind in entry.artifacts[axis]:
             payload = _payload_for(kind, case_id=case_id, dimension=dimension)
             if payload is not None:
-                _write_json(visual_dir / f"{kind}.json", payload)
+                written[kind] = _stamp_payload(payload)
+        if "exact_field" in written and "numerical_field" in written:
+            values = [
+                float(value)
+                for kind in ("exact_field", "numerical_field")
+                for row in written[kind]["field"]
+                for value in row
+            ]
+            limits = [min(values), max(values)]
+            written["exact_field"]["color_limits"] = limits
+            written["numerical_field"]["color_limits"] = limits
+        for kind, payload in written.items():
+            _write_json(visual_dir / f"{kind}.json", payload)
     return run_dir

@@ -3,15 +3,23 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+import re
 from typing import Any, Iterable
+
+from jsonschema import Draft202012Validator
 
 from verification.pops_verify.visualization.plots import (
     FIXTURE_LABEL,
+    file_sha256,
     prepare_heatmap,
     prepare_not_run,
     qualify_fixture_caption,
     render_prepared,
 )
+from verification.pops_verify.visualization.style import RENDERER_SCRIPT, RENDERER_VERSION
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+SCHEMA_PATH = REPO_ROOT / "schemas" / "verification_visuals.v1.json"
 
 DASHBOARDS = (
     "orders_heatmap",
@@ -166,6 +174,38 @@ def _coverage(summary: dict[str, Any]) -> tuple[dict[str, Any], str]:
     return prepared, "pass"
 
 
+def _replace_gallery_section(text: str, block: str) -> str:
+    marker = "## Visual gallery"
+    body = block.strip() + "\n"
+    if marker not in text:
+        return text.rstrip() + "\n\n" + body
+    head, rest = text.split(marker, 1)
+    parts = re.split(r"^## ", rest, maxsplit=1, flags=re.M)
+    remainder = f"## {parts[1]}" if len(parts) > 1 else ""
+    return head.rstrip() + "\n\n" + body + remainder
+
+
+def _gallery_digests(root: Path) -> dict[str, str]:
+    summary = root / "summary.json"
+    if not summary.is_file():
+        raise FileNotFoundError(summary)
+    program = root / "program.json"
+    native = root / "native_artifact.json"
+    return {
+        "resolved_case_digest": file_sha256(summary),
+        "program_digest": (
+            file_sha256(program)
+            if program.is_file()
+            else "not-run: program.json absent from gallery directory"
+        ),
+        "native_artifact_digest": (
+            file_sha256(native)
+            if native.is_file()
+            else "not-run: native_artifact.json absent from gallery directory"
+        ),
+    }
+
+
 def _combine_status(statuses: dict[str, str]) -> str:
     if any(value == "fail" for value in statuses.values()):
         return "fail"
@@ -228,14 +268,98 @@ def render_release_gallery(
     status_path = root / "analysis" / "gallery_status.json"
     status_path.parent.mkdir(parents=True, exist_ok=True)
     status_path.write_text(json.dumps(status, indent=2) + "\n", encoding="utf-8")
+    data_kind = (
+        "deterministic_fixture"
+        if str(sha).startswith("fixture:")
+        else "campaign"
+    )
+    digests = _gallery_digests(root)
+    figures = []
+    for name in DASHBOARDS:
+        path = Path(outputs[name])
+        rel = str(path.resolve().relative_to(root.resolve()))
+        fmt = path.suffix.lstrip(".")
+        figures.append(
+            {
+                "case_id": "campaign-gallery",
+                "run_id": str(summary.get("suite") or "gallery"),
+                "figure_id": name,
+                "kind": name,
+                "role": "publication",
+                "source_files": ["summary.json"],
+                "variables": [name],
+                "units": {"x": "column", "y": "row"},
+                "transform": None,
+                "color_range": None,
+                "resolutions": [],
+                "amr_levels": [],
+                "times": [],
+                "step_numbers": [],
+                "repository_sha": sha,
+                "resolved_case_digest": digests["resolved_case_digest"],
+                "program_digest": digests["program_digest"],
+                "native_artifact_digest": digests["native_artifact_digest"],
+                "renderer": {"script": RENDERER_SCRIPT, "version": RENDERER_VERSION},
+                "output_hashes": {fmt: file_sha256(path)},
+                "outputs": {fmt: rel},
+                "proves": f"{name} reconstructed from the campaign summary.",
+                "does_not_prove": (
+                    "This fixture is not a live PoPS campaign result."
+                    if data_kind == "deterministic_fixture"
+                    else "The dashboard does not invent values missing from summary.json."
+                ),
+                "quantitative_companion": None,
+                "pr": False,
+                "verdict": status[name],
+            }
+        )
+    manifest = {
+        "schema": "pops.verification.visual_manifest.v1",
+        "case_id": "campaign-gallery",
+        "run_id": str(summary.get("suite") or "gallery"),
+        "data_kind": data_kind,
+        "suite": summary.get("suite") if summary.get("suite") in {"pr", "nightly", "weekly", "release", "two_node"} else "pr",
+        "verdict": status["verdict"],
+        "repository_sha": sha,
+        "resolved_case_digest": digests["resolved_case_digest"],
+        "program_digest": digests["program_digest"],
+        "native_artifact_digest": digests["native_artifact_digest"],
+        "renderer": {"script": RENDERER_SCRIPT, "version": RENDERER_VERSION},
+        "figures": figures,
+        "dimensions": {
+            "1d": {
+                "status": "not_applicable",
+                "justification": "Gallery is a campaign-level dashboard, not a 1-d run.",
+                "artifacts": [],
+            },
+            "2d": {
+                "status": "not_applicable",
+                "justification": "Gallery is a campaign-level dashboard, not a 2-d run.",
+                "artifacts": [],
+            },
+            "3d": {
+                "status": "not_applicable",
+                "justification": "Gallery is a campaign-level dashboard, not a 3-d run.",
+                "artifacts": [],
+            },
+        },
+        "proves": "Gallery dashboards reconstruct from summary.json without invented series.",
+        "does_not_prove": "Missing topics are not-run and are not live campaign science.",
+    }
+    Draft202012Validator(json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))).validate(
+        manifest
+    )
+    (root / "analysis" / "visual_manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+    )
     report_path = root / "REPORT.md"
     if report_path.is_file():
-        block = ["", "## Visual gallery", ""]
+        lines = ["## Visual gallery", ""]
         for name, path in outputs.items():
             rel = Path(path).resolve().relative_to(root.resolve())
-            block.append(f"- `{name}`: `{rel}` ({status[name]})")
+            lines.append(f"- `{name}`: `{rel}` ({status[name]})")
         report_path.write_text(
-            report_path.read_text(encoding="utf-8") + "\n".join(block) + "\n",
+            _replace_gallery_section(report_path.read_text(encoding="utf-8"), "\n".join(lines)),
             encoding="utf-8",
         )
     return outputs

@@ -26,6 +26,7 @@ from verification.pops_verify.visualization.plots import (
     prepare_backend_parity,
     prepare_convergence,
     prepare_field,
+    prepare_not_run,
     prepare_performance_breakdown,
     prepare_profile,
     prepare_signed_error_profile,
@@ -81,6 +82,13 @@ def _prepare(payload: dict[str, Any]) -> dict[str, Any]:
         return prepare_performance_breakdown(payload)
     if kind == "amr_boxes":
         return prepare_amr_boxes(payload)
+    if kind == "isosurface":
+        prepared = prepare_not_run(
+            "isosurface",
+            payload.get("reason") or "ParaView/HDF5 isosurface engine is not available",
+        )
+        prepared["verdict"] = payload.get("verdict") or "not-supported"
+        return prepared
     if kind == "report_figure":
         return {
             "kind": "report_figure",
@@ -202,6 +210,88 @@ def _caption_and_sha(bundle) -> tuple[str, str]:
     return bundle.data_kind_label, bundle.provenance["repository_sha"]
 
 
+def _identity_digests(run_dir: Path) -> dict[str, str]:
+    mapping = {
+        "resolved_case_digest": run_dir / "resolved_case.json",
+        "program_digest": run_dir / "program.json",
+        "native_artifact_digest": run_dir / "native_artifact.json",
+    }
+    digests: dict[str, str] = {}
+    for key, path in mapping.items():
+        if not path.is_file():
+            raise VisualsError(
+                f"missing {path.name}; refuse to remap unrelated provenance hashes "
+                f"onto {key}"
+            )
+        digests[key] = file_sha256(path)
+    return digests
+
+
+def _resolutions(payload: dict[str, Any], provenance: dict[str, Any], kind: str) -> list[int]:
+    if kind in {"spatial_convergence", "temporal_convergence", "coarse_fine_error"}:
+        series = payload.get("series") or []
+        if series and series[0].get("x"):
+            return [int(value) for value in series[0]["x"]]
+    raw = provenance.get("resolution")
+    if not raw:
+        raise VisualsError("provenance is missing resolution")
+    return [int(value) for value in raw]
+
+
+def _amr_levels(payload: dict[str, Any], provenance: dict[str, Any]) -> list[int]:
+    if payload.get("amr_levels") is not None:
+        return [int(value) for value in payload["amr_levels"]]
+    total = provenance.get("amr_total_levels")
+    if total is None:
+        raise VisualsError("provenance is missing amr_total_levels")
+    return list(range(int(total)))
+
+
+def _times(payload: dict[str, Any], provenance: dict[str, Any]) -> list[float]:
+    if payload.get("times") is not None:
+        return [float(value) for value in payload["times"]]
+    frames = payload.get("frames")
+    if isinstance(frames, list) and frames:
+        return [float(frame["time"]) for frame in frames]
+    if provenance.get("final_time") is not None:
+        return [float(provenance["final_time"])]
+    raise VisualsError("missing times in visual_data and provenance.final_time")
+
+
+def _steps(payload: dict[str, Any]) -> list[int]:
+    if payload.get("step_numbers") is not None:
+        return [int(value) for value in payload["step_numbers"]]
+    frames = payload.get("frames")
+    if isinstance(frames, list) and frames and all("step" in frame for frame in frames):
+        return [int(frame["step"]) for frame in frames]
+    raise VisualsError("missing step_numbers in visual_data")
+
+
+def _color_range(prepared: dict[str, Any] | None, payload: dict[str, Any]) -> list[float] | None:
+    if prepared is not None and prepared.get("vmin") is not None and prepared.get("vmax") is not None:
+        return [float(prepared["vmin"]), float(prepared["vmax"])]
+    limits = payload.get("color_limits") or payload.get("color_range")
+    if isinstance(limits, list) and len(limits) == 2:
+        return [float(limits[0]), float(limits[1])]
+    return None
+
+
+def _shared_field_limits(root: Path, kinds: tuple[str, ...]) -> list[float] | None:
+    if "exact_field" not in kinds or "numerical_field" not in kinds:
+        return None
+    values: list[float] = []
+    for kind in ("exact_field", "numerical_field"):
+        try:
+            payload = load_visual_series(root, kind)
+        except VisualsError:
+            return None
+        for row in payload.get("field") or []:
+            values.extend(float(value) for value in row)
+    if not values:
+        return None
+    return [min(values), max(values)]
+
+
 def _figure_entry(
     *,
     bundle,
@@ -215,6 +305,10 @@ def _figure_entry(
     times: list[float],
     steps: list[int],
     transform: str,
+    resolutions: list[int],
+    amr_levels: list[int],
+    color_range: list[float] | None,
+    digests: dict[str, str],
 ) -> dict[str, Any]:
     rel_outputs = {
         fmt: str(Path(path).resolve().relative_to(run_dir.resolve()))
@@ -237,15 +331,15 @@ def _figure_entry(
         "variables": ["scalar"],
         "units": units,
         "transform": transform,
-        "color_range": None,
-        "resolutions": [16, 32, 64, 128],
-        "amr_levels": [0],
+        "color_range": color_range,
+        "resolutions": resolutions,
+        "amr_levels": amr_levels,
         "times": times,
         "step_numbers": steps,
         "repository_sha": sha,
-        "resolved_case_digest": bundle.provenance["component_catalog_digest"],
-        "program_digest": bundle.provenance["native_header_signature"],
-        "native_artifact_digest": bundle.provenance["native_variant_manifest_digest"],
+        "resolved_case_digest": digests["resolved_case_digest"],
+        "program_digest": digests["program_digest"],
+        "native_artifact_digest": digests["native_artifact_digest"],
         "renderer": {"script": RENDERER_SCRIPT, "version": RENDERER_VERSION},
         "output_hashes": hashes,
         "outputs": rel_outputs,
@@ -297,13 +391,33 @@ def render_run(
     rendered: list[str] = []
     omitted: list[str] = []
     caption, sha = _caption_and_sha(bundle)
+    digests = _identity_digests(root)
+    selected = _selected_kinds(bundle.case_id, dimension, suite)
+    shared_limits = _shared_field_limits(root, selected)
     if bundle.verdict in {"pass", "fail"}:
-        for kind in _selected_kinds(bundle.case_id, dimension, suite):
+        for kind in selected:
             try:
                 payload = load_visual_series(root, kind)
             except VisualsError:
-                omitted.append(kind)
-                continue
+                if kind == "isosurface":
+                    payload = {
+                        "kind": "isosurface",
+                        "figure_id": "isosurface",
+                        "units": {"x": "x / L", "y": "y / L", "z": "z / L"},
+                        "reason": "missing isosurface visual_data; engine not-run",
+                        "times": [float(bundle.provenance["final_time"])],
+                        "step_numbers": [0],
+                        "verdict": "not-supported",
+                    }
+                    dest = root / "analysis" / "visual_data" / "isosurface.json"
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    dest.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+                else:
+                    omitted.append(kind)
+                    continue
+            if kind in {"exact_field", "numerical_field"} and shared_limits is not None:
+                payload = dict(payload)
+                payload["color_limits"] = shared_limits
             role = _role(kind)
             write_formats = (
                 PUBLICATION_FORMATS if role == "publication" else static_formats
@@ -315,12 +429,13 @@ def render_run(
                     path = out_dir / f"{kind}.{fmt}"
                     render_storyboard(payload, path, caption=caption, provenance_sha=sha)
                     outputs[fmt] = str(path)
-                times = [float(frame["time"]) for frame in payload["frames"]]
-                steps = [int(frame.get("step") or 0) for frame in payload["frames"]]
+                times = _times(payload, bundle.provenance)
+                steps = _steps(payload)
                 figure_verdict = "pass"
                 sources = [f"analysis/visual_data/{kind}.json"]
                 units = payload.get("units") or {"x": "x / L", "y": "scalar"}
                 transform = "none"
+                prepared = None
             elif kind == "animation":
                 anim_id = visual_contract_for(bundle.case_id)["animation"]
                 name = anim_id["id"] if isinstance(anim_id, dict) else "canonical"
@@ -347,10 +462,11 @@ def render_run(
                     except VisualsError:
                         if strict and suite == "release":
                             figure_verdict = "not-supported"
-                times = [float(frame["time"]) for frame in payload["frames"]]
-                steps = [int(frame.get("step") or 0) for frame in payload["frames"]]
+                times = _times(payload, bundle.provenance)
+                steps = _steps(payload)
                 units = payload.get("units") or {"x": "x / L", "y": "y / L"}
                 transform = "none"
+                prepared = None
             else:
                 prepared = _prepare(payload)
                 role_dir = (
@@ -369,8 +485,8 @@ def render_run(
                     provenance_sha=sha,
                 )
                 figure_verdict = prepared.get("verdict") or derive_figure_verdict(payload)
-                times = list(payload.get("times") or [1.0])
-                steps = list(payload.get("step_numbers") or [0])
+                times = _times(payload, bundle.provenance)
+                steps = _steps(payload)
                 sources = [f"analysis/visual_data/{kind}.json"]
                 units = payload.get("units") or {"x": "1", "y": "1"}
                 transform = _transform(kind, prepared)
@@ -391,6 +507,10 @@ def render_run(
                     times=times,
                     steps=steps,
                     transform=transform,
+                    resolutions=_resolutions(payload, bundle.provenance, kind),
+                    amr_levels=_amr_levels(payload, bundle.provenance),
+                    color_range=_color_range(prepared, payload),
+                    digests=digests,
                 )
             )
             rendered.append(kind)
@@ -419,9 +539,9 @@ def render_run(
         "repository_sha": sha
         if bundle.data_kind == "deterministic_fixture"
         else bundle.provenance["repository_sha"],
-        "resolved_case_digest": bundle.provenance["component_catalog_digest"],
-        "program_digest": bundle.provenance["native_header_signature"],
-        "native_artifact_digest": bundle.provenance["native_variant_manifest_digest"],
+        "resolved_case_digest": digests["resolved_case_digest"],
+        "program_digest": digests["program_digest"],
+        "native_artifact_digest": digests["native_artifact_digest"],
         "renderer": {"script": RENDERER_SCRIPT, "version": RENDERER_VERSION},
         "figures": figures,
         "dimensions": _dimension_block(entry, axis, rendered, omitted, run_verdict),

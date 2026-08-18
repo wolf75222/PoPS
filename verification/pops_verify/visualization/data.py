@@ -179,6 +179,8 @@ def load_visual_series(run_dir: str | Path, figure_id: str) -> dict[str, Any]:
         return payload
     if kind == "report_figure" and payload.get("panels"):
         return payload
+    if kind == "isosurface":
+        return payload
     if not _series_nonempty(payload.get("series")):
         raise VisualsError(f"empty visual_data series: {figure_id}")
     payload = dict(payload)
