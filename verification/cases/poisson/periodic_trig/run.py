@@ -167,8 +167,19 @@ def _native_unavailable_reason() -> str | None:
     return missing_native_compile_requirement(repo_include(), default_cxx())
 
 
-def run_native(n_cells: int, t_end: float = 1.0):
+def run_native(n_cells: int = 16, t_end: float = 1.0, *, request=None):
     """Compile, bind the manufactured RHS, and return the solved potential."""
+    from verification.pops_verify.native_evidence import (
+        maybe_campaign_payload,
+        resolution_from_request,
+    )
+
+    if request is not None and int(request.pops_native_dim) != 1:
+        raise NativeUnavailable(
+            f"PO-01 requires pops_native_dim=1 (got {request.pops_native_dim}); "
+            "no fallback"
+        )
+    n_cells = resolution_from_request(request, n_cells)
     missing = _native_unavailable_reason()
     if missing:
         raise NativeUnavailable(missing)
@@ -183,5 +194,15 @@ def run_native(n_cells: int, t_end: float = 1.0):
     slots = tuple(simulation.field_provider_slots())
     if not slots:
         raise NativeUnavailable("native runtime exposed no field-provider slot")
-    phi = np.asarray(simulation.field_potential_global(slots[0]), dtype=np.float64)
-    return np.ravel(phi)[: authored.n_cells]
+    phi = np.ravel(
+        np.asarray(simulation.field_potential_global(slots[0]), dtype=np.float64)
+    )[: authored.n_cells]
+    return maybe_campaign_payload(
+        request,
+        phi,
+        n_cells=authored.n_cells,
+        t_end=t_end,
+        time_program="ForwardEuler",
+        cfl=1.0,
+        dimension=1,
+    )

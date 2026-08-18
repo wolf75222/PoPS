@@ -219,6 +219,11 @@ def run_native(n_cells: int = N_CELLS, t_end: float = 0.05, *, mode="entropy", r
         uniform_periodic_layout,
     )
 
+    if request is not None and int(request.pops_native_dim) != 1:
+        raise NativeUnavailable(
+            f"EU-01 requires pops_native_dim=1 (got {request.pops_native_dim}); "
+            "no fallback"
+        )
     if request is not None and request.min_resolution is not None:
         n_cells = int(request.min_resolution)
     missing = _native_unavailable_reason()
@@ -234,7 +239,12 @@ def run_native(n_cells: int = N_CELLS, t_end: float = 0.05, *, mode="entropy", r
     )
     simulation = pops.bind(artifact, initial_values={authored.instance: initial})
     pops.run(simulation, t_end=float(t_end), max_steps=MAX_STEPS)
-    field = np.asarray(simulation.state_global("gas"), dtype=np.float64)
-    if request is not None:
-        return campaign_run_fields(authored.n_cells, t_end, request)
-    return np.reshape(field, (3, authored.n_cells))
+    field = np.reshape(
+        np.asarray(simulation.state_global("gas"), dtype=np.float64),
+        (3, authored.n_cells),
+    )
+    if request is None:
+        return field
+    payload = campaign_run_fields(authored.n_cells, t_end, request)
+    payload["result"] = field
+    return payload

@@ -37,6 +37,10 @@ class AuthoringPending(RuntimeError):
     """Raised only if public elliptic validate/resolve cannot be completed."""
 
 
+class NativeUnavailable(RuntimeError):
+    """Raised when a native PO-05 run cannot start honestly."""
+
+
 def _exact_module():
     return load_sibling_module(_CASE_DIR / "exact.py")
 
@@ -125,9 +129,67 @@ def resolve_plan(n_cells: int = N_CELLS):
     This case does not invent a hyperbolic stepper or a private elliptic
     solver, so resolve stays documented as AuthoringPending.
     """
-    pops.validate(build_case(n_cells))
-    pops.validate(build_gmg_case(n_cells))
-    raise AuthoringPending(
-        "PO-05 Cases validate; resolve needs a whole-system Program "
-        "(no invented time stepper or private elliptic solver)"
+    from pops.solvers.elliptic import FFT
+    from verification.pops_verify.case_authoring import (
+        resolve_case,
+        uniform_periodic_layout,
+    )
+    from verification.pops_verify.elliptic_stationary import author_periodic_poisson
+
+    case, _instance, frame, count = author_periodic_poisson(
+        case_name="po05-fft-vs-gmg",
+        model_name="po05_fft_vs_gmg",
+        domain_name="po05-domain",
+        solver=FFT(),
+        n_cells=n_cells,
+    )
+    return resolve_case(case, layout=uniform_periodic_layout(frame, (count,)))
+
+
+def run_native(n_cells: int = N_CELLS, t_end: float = 1.0, *, request=None):
+    """Run uniform FFT and GeometricMG. GMG on a uniform System is CartesianCG."""
+    from pops.solvers.elliptic import FFT, GeometricMG
+    from verification.pops_verify.elliptic_stationary import run_periodic_poisson_native
+    from verification.pops_verify.native_evidence import (
+        maybe_campaign_payload,
+        resolution_from_request,
+    )
+
+    if request is not None and int(request.pops_native_dim) != 1:
+        raise NativeUnavailable(
+            f"PO-05 requires pops_native_dim=1 (got {request.pops_native_dim}); "
+            "no fallback"
+        )
+    n_cells = resolution_from_request(request, n_cells)
+    sample = build_rhs_and_oracle(n_cells)
+    try:
+        phi_fft = run_periodic_poisson_native(
+            case_name="po05-fft-vs-gmg",
+            model_name="po05_fft_vs_gmg",
+            domain_name="po05-domain",
+            solver=FFT(),
+            n_cells=n_cells,
+            rhs=sample["rhs"],
+            t_end=t_end,
+        )
+        phi_gmg = run_periodic_poisson_native(
+            case_name="po05-fft-vs-gmg-gmg",
+            model_name="po05_fft_vs_gmg",
+            domain_name="po05-domain",
+            solver=GeometricMG(),
+            n_cells=n_cells,
+            rhs=sample["rhs"],
+            t_end=t_end,
+        )
+    except RuntimeError as exc:
+        raise NativeUnavailable(str(exc)) from exc
+    pair = {"fft": phi_fft, "gmg": phi_gmg}
+    return maybe_campaign_payload(
+        request,
+        pair,
+        n_cells=n_cells,
+        t_end=t_end,
+        time_program="ForwardEuler",
+        cfl=1.0,
+        dimension=1,
     )

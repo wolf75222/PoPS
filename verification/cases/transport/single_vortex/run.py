@@ -114,16 +114,21 @@ def resolve_plan(n_cells: int = N_CELLS):
     return resolve_case(case, layout=layout)
 
 
-def run_native(n_cells: int = N_CELLS, t_end: float = 1.0):
-    """Optional native path. Raises NativeUnavailable without a compiler.
-
-    A full native 2-d swirl campaign is optional in this worktree. The
-    manufactured velocity and return oracle stay available from exact.py.
-    """
+def run_native(n_cells: int = N_CELLS, t_end: float = 1.0, *, request=None):
+    """Refuse a fake swirl. Public time-dependent incompressible velocity is missing."""
     from tests.python.support.requirements import missing_compiler_requirement, repo_include
+    from verification.pops_verify.native_evidence import resolution_from_request
 
+    if request is not None and int(request.pops_native_dim) != 2:
+        raise NativeUnavailable(
+            f"TR-03 requires pops_native_dim=2 (got {request.pops_native_dim}); "
+            "no fallback"
+        )
+    n_cells = resolution_from_request(request, n_cells)
     del n_cells, t_end
     missing = missing_compiler_requirement(repo_include())
     if missing:
         raise NativeUnavailable(missing)
-    raise NativeUnavailable("optional native TR-03 run not executed in this worktree")
+    raise NativeUnavailable(
+        "public time-dependent incompressible swirl velocity is not supported"
+    )

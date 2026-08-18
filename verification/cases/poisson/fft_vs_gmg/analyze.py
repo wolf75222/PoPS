@@ -1,131 +1,28 @@
-"""PO-05 driver: spectral vs analytic φ, discrete residual, report."""
+"""PO-05 fail-closed native report."""
 from __future__ import annotations
 
-import math
-import subprocess
-import sys
-from pathlib import Path
-
-_CASE_DIR = Path(__file__).resolve().parent
-_REPO_ROOT = Path(__file__).resolve().parents[4]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
-
-from verification.pops_verify.case_authoring import load_sibling_module
-from verification.pops_verify.reference_errors import reference_errors
+from verification.pops_verify.native_evidence import report_from_native_series
 from verification.pops_verify.report import write_verification_report
 
-_exact = load_sibling_module(_CASE_DIR / "exact.py")
-_run = load_sibling_module(_CASE_DIR / "run.py")
-e_exact = _exact.e_exact
-spectral_cross_oracle = _run.spectral_cross_oracle
-
-N_CELLS = 32
-NULL_AMR = {
-    "order_retained": None,
-    "invariants_ok": None,
-    "interface_error": None,
-    "bulk_error": None,
-}
-NULL_COUPLING = {
-    "phase_error": None,
-    "sign_ok": None,
-    "energy_drift": None,
-}
-NULL_PARALLEL = {
-    "ranks_ok": None,
-    "threads_ok": None,
-    "gpu_ok": None,
-}
-NULL_PERFORMANCE = {
-    "one_node": None,
-    "two_node": None,
-}
-NOT_APPLICABLE = {
-    "orders": (
-        "spectral FFT recovery of analytic φ; discrete GMG residual is "
-        "FD truncation and is not an order gate"
-    ),
-    "amr.*": "AMR not run in PO-05 FFT vs GMG cross-oracle",
-    "coupling.*": "coupling not run in PO-05",
-    "parallel_invariance.*": "parallel invariance not run in PO-05",
-    "performance.one_node": "performance not measured in PO-05",
-    "performance.two_node": "performance not measured in PO-05",
-}
-ARTIFACTS = {
-    "report_md": "REPORT.md",
-    "summary_json": "summary.json",
-    "coverage_csv": "coverage.csv",
-    "failures_csv": "failures.csv",
-}
+CASE_ID = "PO-05"
 
 
-def _repository_sha() -> str:
-    completed = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=_REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
+def write_po05_report(output_dir, native_series=None) -> dict:
+    """Write artifacts from a native FFT/GMG pair, or fail closed."""
+    return write_verification_report(
+        report_from_native_series(
+            CASE_ID,
+            native_series,
+            native_dimensions=[1],
+            components=["poisson"],
+            variable="potential",
+            extra_reasons={
+                "orders": (
+                    "uniform GeometricMG lowers to CartesianCG; not a "
+                    "composite AMR MG comparison"
+                )
+            },
+            allow_empty_orders=True,
+        ),
+        output_dir,
     )
-    sha = completed.stdout.strip()
-    return sha if completed.returncode == 0 and sha else "unknown"
-
-
-def _cross_oracle():
-    """Spectral φ vs analytic φ (mean-free) plus the discrete -Δ residual."""
-    sample = spectral_cross_oracle(N_CELLS)
-    field = reference_errors(
-        e_exact(sample["x"]), e_exact(sample["x"]), sample["volumes"]
-    )
-    potential = sample["potential_error"]
-    residual = sample["residual_error"]
-    if not (
-        math.isfinite(potential.l1)
-        and math.isfinite(potential.l2)
-        and math.isfinite(potential.linf)
-        and math.isfinite(field.linf)
-        and math.isfinite(residual.l2)
-    ):
-        raise ValueError("non-finite PO-05 diagnostics")
-    return potential, field, residual
-
-
-def _summary() -> dict:
-    potential, field, residual = _cross_oracle()
-    return {
-        "schema": "pops.verification.report.v1",
-        "repository": "wolf75222/PoPS",
-        "repository_sha": _repository_sha(),
-        "suite": "pr",
-        "max_nodes": 2,
-        "native_dimensions": [1],
-        "execution_spaces": ["KokkosSerial"],
-        "coverage": {
-            "components": ["poisson"],
-            "cases_planned": 1,
-            "cases_run": 1,
-            "cases_passed": 1,
-            "cases_failed": 0,
-            "cases_not_supported": 0,
-            "not_tested": [],
-        },
-        "failures": [],
-        "orders": [],
-        "amr": dict(NULL_AMR),
-        "poisson": {
-            "potential_error": float(potential.linf),
-            "field_error": float(field.linf),
-            "residual_l2": float(residual.l2),
-        },
-        "coupling": dict(NULL_COUPLING),
-        "parallel_invariance": dict(NULL_PARALLEL),
-        "performance": dict(NULL_PERFORMANCE),
-        "not_applicable_reason": dict(NOT_APPLICABLE),
-        "artifacts": dict(ARTIFACTS),
-    }
-
-
-def write_po05_report(output_dir) -> dict:
-    """Reduce the FFT vs GMG cross-oracle and write the four Task 20 artifacts."""
-    return write_verification_report(_summary(), output_dir)

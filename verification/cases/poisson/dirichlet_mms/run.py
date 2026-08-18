@@ -31,6 +31,10 @@ class AuthoringPending(RuntimeError):
     """Raised only if public elliptic validate/resolve cannot be completed."""
 
 
+class NativeUnavailable(RuntimeError):
+    """Raised when a native PO-02 run cannot start honestly."""
+
+
 def build_rhs_and_oracle(n_cells: int):
     """Return in-memory cell-center RHS and exact φ, E on a uniform 2-d grid."""
     x, y, volumes = _EXACT.uniform_cell_grid(n_cells)
@@ -88,4 +92,20 @@ def resolve_plan(n_cells: int):
     raise AuthoringPending(
         "PO-02 Case validates; resolve needs a whole-system Program "
         "(no invented time stepper or private elliptic solver)"
+    )
+
+
+def run_native(n_cells: int = 16, t_end: float = 1.0, *, request=None):
+    """Refuse a fake Dirichlet curve. Non-homogeneous boundary data is not attached."""
+    from verification.pops_verify.native_evidence import resolution_from_request
+
+    if request is not None and int(request.pops_native_dim) != 2:
+        raise NativeUnavailable(
+            f"PO-02 requires pops_native_dim=2 (got {request.pops_native_dim}); "
+            "no fallback"
+        )
+    n_cells = resolution_from_request(request, n_cells)
+    del n_cells, t_end
+    raise NativeUnavailable(
+        "public non-homogeneous Dirichlet data is not attached to the Case"
     )

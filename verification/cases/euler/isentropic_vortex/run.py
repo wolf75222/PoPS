@@ -239,7 +239,14 @@ def _native_unavailable_reason() -> str | None:
     return missing_native_compile_requirement(repo_include(), default_cxx())
 
 
-def run_native(n_cells: int = N_CELLS, t_end: float = 0.05, *, u_inf=1.0, v_inf=0.0):
+def run_native(
+    n_cells: int = N_CELLS,
+    t_end: float = 0.05,
+    *,
+    u_inf=1.0,
+    v_inf=0.0,
+    request=None,
+):
     """Compile, bind, and run the 2-d vortex. Raises NativeUnavailable without Kokkos."""
     import pops
 
@@ -247,7 +254,17 @@ def run_native(n_cells: int = N_CELLS, t_end: float = 0.05, *, u_inf=1.0, v_inf=
         resolve_case,
         uniform_periodic_layout,
     )
+    from verification.pops_verify.native_evidence import (
+        maybe_campaign_payload,
+        resolution_from_request,
+    )
 
+    if request is not None and int(request.pops_native_dim) != 2:
+        raise NativeUnavailable(
+            f"EU-02 requires pops_native_dim=2 (got {request.pops_native_dim}); "
+            "no fallback"
+        )
+    n_cells = resolution_from_request(request, n_cells)
     missing = _native_unavailable_reason()
     if missing:
         raise NativeUnavailable(missing)
@@ -259,4 +276,13 @@ def run_native(n_cells: int = N_CELLS, t_end: float = 0.05, *, u_inf=1.0, v_inf=
     simulation = pops.bind(artifact, initial_values={authored.instance: initial})
     pops.run(simulation, t_end=float(t_end), max_steps=MAX_STEPS)
     field = np.asarray(simulation.state_global("gas"), dtype=np.float64)
-    return unpack_conserved(field, authored.n_cells)
+    conserved = unpack_conserved(field, authored.n_cells)
+    return maybe_campaign_payload(
+        request,
+        conserved,
+        n_cells=authored.n_cells,
+        t_end=t_end,
+        time_program="SSPRK2",
+        cfl=CFL,
+        dimension=2,
+    )

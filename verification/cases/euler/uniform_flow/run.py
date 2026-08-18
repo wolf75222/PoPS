@@ -105,8 +105,17 @@ def _box_frame():
     return Rectangle("eu06-box", (0.0, 0.0), (length, length)).frame(Cartesian2D())
 
 
-def build_case(n_cells: int = N_CELLS):
-    """Author a 2-d periodic gamma-law Euler Case. Does not compile or run."""
+class _Authoring:
+    __slots__ = ("case", "instance", "frame", "n_cells")
+
+    def __init__(self, case, instance, frame, n_cells: int) -> None:
+        self.case = case
+        self.instance = instance
+        self.frame = frame
+        self.n_cells = n_cells
+
+
+def _author(n_cells: int = N_CELLS) -> _Authoring:
     import pops
     import pops.lib.time as libtime
     from pops.initial import InitialCondition
@@ -119,7 +128,7 @@ def build_case(n_cells: int = N_CELLS):
     from pops.projection import ConservativeCellAverage
     from pops.time import AdaptiveCFL
 
-    del n_cells
+    count = int(n_cells)
     frame = _box_frame()
     x_axis, y_axis = frame.axes
     model = pops.Model("eu06-euler", frame=frame)
@@ -188,7 +197,12 @@ def build_case(n_cells: int = N_CELLS):
             projection=ConservativeCellAverage(),
         )
     )
-    return case
+    return _Authoring(case=case, instance=instance, frame=frame, n_cells=count)
+
+
+def build_case(n_cells: int = N_CELLS):
+    """Author a 2-d periodic gamma-law Euler Case. Does not compile or run."""
+    return _author(n_cells).case
 
 
 def resolve_plan(n_cells: int = N_CELLS):
@@ -198,22 +212,72 @@ def resolve_plan(n_cells: int = N_CELLS):
         uniform_periodic_layout,
     )
 
-    count = int(n_cells)
-    case = build_case(count)
-    layout = uniform_periodic_layout(_box_frame(), (count, count))
-    return resolve_case(case, layout=layout)
+    authored = _author(n_cells)
+    layout = uniform_periodic_layout(authored.frame, (authored.n_cells, authored.n_cells))
+    return resolve_case(authored.case, layout=layout)
 
 
-def run_native(n_cells: int = N_CELLS, t_end: float = 0.05):
-    """Optional native path. Raises NativeUnavailable without a compiler.
+def run_native(n_cells: int = N_CELLS, t_end: float = 0.05, *, request=None):
+    """Compile, bind, and run the 2-d uniform flow when a compiler is present."""
+    import pops
 
-    A full native free-stream campaign is optional in this worktree. ICs
-    stay available from ``initial_primitives`` / ``exact_primitives``.
-    """
-    from tests.python.support.requirements import missing_compiler_requirement, repo_include
+    from tests.python.support.requirements import (
+        default_cxx,
+        missing_compiler_requirement,
+        missing_native_compile_requirement,
+        repo_include,
+    )
+    from verification.pops_verify.case_authoring import (
+        resolve_case,
+        uniform_periodic_layout,
+    )
+    from verification.pops_verify.native_evidence import (
+        maybe_campaign_payload,
+        resolution_from_request,
+    )
 
-    del n_cells, t_end
+    if request is not None and int(request.pops_native_dim) != 2:
+        raise NativeUnavailable(
+            f"EU-06 requires pops_native_dim=2 (got {request.pops_native_dim}); "
+            "no fallback"
+        )
+    n_cells = resolution_from_request(request, n_cells)
     missing = missing_compiler_requirement(repo_include())
     if missing:
         raise NativeUnavailable(missing)
-    raise NativeUnavailable("optional native EU-06 run not executed in this worktree")
+    native = missing_native_compile_requirement(repo_include(), default_cxx())
+    if native:
+        raise NativeUnavailable(native)
+    authored = _author(n_cells)
+    layout = uniform_periodic_layout(
+        authored.frame, (authored.n_cells, authored.n_cells)
+    )
+    plan = resolve_case(authored.case, layout=layout)
+    artifact = pops.compile(plan)
+    primitives = initial_primitives(authored.n_cells)
+    conserved = {
+        "rho": np.asarray(primitives["rho"], dtype=np.float64),
+        "u": np.asarray(primitives["u"], dtype=np.float64),
+        "v": np.asarray(primitives["v"], dtype=np.float64),
+        "p": np.asarray(primitives["p"], dtype=np.float64),
+    }
+    rho = conserved["rho"]
+    energy = conserved["p"] / (GAMMA - 1.0) + 0.5 * rho * (
+        conserved["u"] ** 2 + conserved["v"] ** 2
+    )
+    initial = np.ascontiguousarray(
+        np.stack([rho, rho * conserved["u"], rho * conserved["v"], energy]),
+        dtype=np.float64,
+    )
+    simulation = pops.bind(artifact, initial_values={authored.instance: initial})
+    pops.run(simulation, t_end=float(t_end), max_steps=100_000)
+    field = np.asarray(simulation.state_global("gas"), dtype=np.float64)
+    return maybe_campaign_payload(
+        request,
+        field,
+        n_cells=authored.n_cells,
+        t_end=t_end,
+        time_program="SSPRK2",
+        cfl=0.4,
+        dimension=2,
+    )

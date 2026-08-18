@@ -42,6 +42,10 @@ class AuthoringPending(RuntimeError):
     """Raised only if public elliptic validate/resolve cannot be completed."""
 
 
+class NativeUnavailable(RuntimeError):
+    """Raised when a native PO-03 run cannot start honestly."""
+
+
 class IncompatibleRhs(ValueError):
     """Homogeneous Neumann Poisson requires a mean-free right-hand side."""
 
@@ -134,8 +138,58 @@ def resolve_plan(n_cells: int):
     for Uniform layouts. This case does not invent a hyperbolic stepper or a
     private elliptic solver, so resolve stays documented as AuthoringPending.
     """
-    pops.validate(build_case(n_cells))
-    raise AuthoringPending(
-        "PO-03 Case validates; resolve needs a whole-system Program "
-        "(no invented time stepper or private elliptic solver)"
+    from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Neumann
+    from pops.solvers.elliptic import GeometricMG
+    from verification.pops_verify.case_authoring import resolve_case, uniform_open_layout
+    from verification.pops_verify.elliptic_stationary import author_periodic_poisson
+
+    case, _instance, frame, count = author_periodic_poisson(
+        case_name="po03-neumann-nullspace",
+        model_name="po03_neumann_nullspace",
+        domain_name="po03-domain",
+        solver=GeometricMG(),
+        n_cells=n_cells,
+        boundaries=(BoundaryCondition(AllPhysicalBoundaries(), Neumann(0.0)),),
+    )
+    return resolve_case(case, layout=uniform_open_layout(frame, (count,)))
+
+
+def run_native(n_cells: int = 16, t_end: float = 1.0, *, request=None):
+    """Compile, bind a compatible RHS, and return the solved potential."""
+    from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Neumann
+    from pops.solvers.elliptic import GeometricMG
+    from verification.pops_verify.elliptic_stationary import run_periodic_poisson_native
+    from verification.pops_verify.native_evidence import (
+        maybe_campaign_payload,
+        resolution_from_request,
+    )
+
+    if request is not None and int(request.pops_native_dim) != 1:
+        raise NativeUnavailable(
+            f"PO-03 requires pops_native_dim=1 (got {request.pops_native_dim}); "
+            "no fallback"
+        )
+    n_cells = resolution_from_request(request, n_cells)
+    sample = build_rhs_and_oracle(n_cells)
+    try:
+        phi = run_periodic_poisson_native(
+            case_name="po03-neumann-nullspace",
+            model_name="po03_neumann_nullspace",
+            domain_name="po03-domain",
+            solver=GeometricMG(),
+            n_cells=n_cells,
+            rhs=sample["rhs"],
+            t_end=t_end,
+            boundaries=(BoundaryCondition(AllPhysicalBoundaries(), Neumann(0.0)),),
+        )
+    except RuntimeError as exc:
+        raise NativeUnavailable(str(exc)) from exc
+    return maybe_campaign_payload(
+        request,
+        phi,
+        n_cells=n_cells,
+        t_end=t_end,
+        time_program="ForwardEuler",
+        cfl=1.0,
+        dimension=1,
     )

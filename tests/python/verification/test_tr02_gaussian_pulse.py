@@ -1,8 +1,9 @@
-"""TR-02 Gaussian pulse (in-memory translation oracle; optional native)."""
+"""TR-02 Gaussian pulse: oracle utilities plus fail-closed native evidence."""
 from __future__ import annotations
 
 import ast
 import importlib.util
+import inspect
 import json
 import sys
 from pathlib import Path
@@ -11,6 +12,9 @@ import numpy as np
 import pytest
 from jsonschema import Draft202012Validator
 
+from verification.pops_verify.campaign import CampaignJob, CampaignRequest
+from verification.pops_verify.convergence import observed_order
+from verification.pops_verify.provenance import RUN_FIELDS
 from verification.pops_verify.reference_errors import reference_errors
 from verification.pops_verify.report import ARTIFACTS
 
@@ -96,6 +100,12 @@ def test_pulse_mass_of_exact_field_is_independent_of_t():
     assert masses[0] == pytest.approx(masses[2], rel=1.0e-10, abs=1.0e-12)
 
 
+def test_observed_order_utility_recovers_quadratic_spacing():
+    spacings = np.asarray([1.0 / 16.0, 1.0 / 32.0, 1.0 / 64.0, 1.0 / 128.0])
+    orders = observed_order(spacings**2, spacings)
+    np.testing.assert_allclose(orders, np.full(orders.shape, 2.0))
+
+
 def test_resolve_plan_succeeds_without_native():
     run = _load_case_module("run")
     native_was_loaded = "pops._pops" in sys.modules
@@ -104,15 +114,53 @@ def test_resolve_plan_succeeds_without_native():
     assert ("pops._pops" in sys.modules) is native_was_loaded
 
 
-def test_write_tr02_report_writes_four_artifacts_and_schema(tmp_path: Path):
+def test_report_cannot_pass_without_native_series(tmp_path: Path):
     analyze = _load_case_module("analyze")
     written = analyze.write_tr02_report(tmp_path)
     assert written == ARTIFACTS
-    for name in ARTIFACTS.values():
-        assert (tmp_path / name).is_file()
     loaded = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
     _validator().validate(loaded)
-    assert loaded["schema"] == "pops.verification.report.v1"
+    assert loaded["coverage"]["cases_passed"] == 0
+    assert loaded["coverage"]["cases_failed"] == 1
+    assert loaded["orders"] == []
+    reasons = " ".join(item["reason"] for item in loaded["failures"]).lower()
+    assert "native" in reasons
+
+
+def test_report_orders_come_from_supplied_native_series(tmp_path: Path):
+    analyze = _load_case_module("analyze")
+    spacings = [1.0 / 16.0, 1.0 / 32.0, 1.0 / 64.0]
+    linf = [0.08, 0.03, 0.011]
+    analyze.write_tr02_report(
+        tmp_path,
+        native_series={"linf": linf, "spacings": spacings, "variable": "q"},
+    )
+    loaded = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
+    _validator().validate(loaded)
+    assert loaded["coverage"]["cases_passed"] == 1
+    expected = [float(value) for value in observed_order(linf, spacings)]
+    observed = [row["observed_order"] for row in loaded["orders"]]
+    np.testing.assert_allclose(observed, expected)
+    assert not np.allclose(observed, np.full(len(observed), 2.0))
+
+
+def test_run_native_accepts_fail_closed_campaign_request():
+    run = _load_case_module("run")
+    assert "request" in inspect.signature(run.run_native).parameters
+    request = CampaignRequest.from_job(
+        CampaignJob(case_id="TR-02", pops_native_dim=1, min_resolution=16)
+    )
+    try:
+        result = run.run_native(request=request)
+    except run.NativeUnavailable:
+        return
+    assert isinstance(result, dict)
+    missing = [key for key in RUN_FIELDS if key not in result]
+    assert missing == []
+    assert "result" in result
+    field = np.asarray(result["result"], dtype=np.float64)
+    assert field.shape == (16,)
+    assert np.isfinite(field).all()
 
 
 def test_modules_do_not_hardcode_pops_run_outside_run_native():
@@ -121,3 +169,4 @@ def test_modules_do_not_hardcode_pops_run_outside_run_native():
         assert _pops_run_calls_outside_run_native(source) == []
         if name != "run.py":
             assert "pops.run(" not in source
+        assert "from exact import" not in source

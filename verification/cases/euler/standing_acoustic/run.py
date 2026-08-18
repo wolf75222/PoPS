@@ -49,8 +49,8 @@ def _line_frame():
     return CartesianDomain("eu04-line", lower=(0.0,), upper=(1.0,)).frame(Cartesian1D())
 
 
-def build_case(n_cells: int = N_CELLS):
-    """Author a 1-d gamma-law Euler Case. Does not compile or run."""
+def _author(n_cells: int = N_CELLS):
+    """Author a 1-d reflecting Euler Case and return (case, instance, frame, n)."""
     import pops
     import pops.lib.time as libtime
     from pops.initial import InitialCondition
@@ -63,7 +63,7 @@ def build_case(n_cells: int = N_CELLS):
     from pops.projection import ConservativeCellAverage
     from pops.time import AdaptiveCFL
 
-    del n_cells
+    count = int(n_cells)
     frame = _line_frame()
     (x_axis,) = frame.axes
     model = pops.Model("eu04-euler", frame=frame)
@@ -108,6 +108,13 @@ def build_case(n_cells: int = N_CELLS):
         ),
     )
     case.numerics(numerics, block=block)
+    from pops.boundary import SlipWall, TransportBoundarySet
+
+    numerics.boundaries.add(
+        TransportBoundarySet(
+            {boundary: SlipWall(state=instance) for boundary in frame.boundaries.all}
+        )
+    )
     program = libtime.SSPRK2(instance, rate=rate)
     program.step_strategy(AdaptiveCFL(cfl=0.4))
     case.program(program)
@@ -118,31 +125,71 @@ def build_case(n_cells: int = N_CELLS):
             projection=ConservativeCellAverage(),
         )
     )
-    return case
+    return case, instance, frame, count
+
+
+def build_case(n_cells: int = N_CELLS):
+    """Author a 1-d gamma-law Euler Case. Does not compile or run."""
+    return _author(n_cells)[0]
 
 
 def resolve_plan(n_cells: int = N_CELLS):
     """Validate and resolve the authored Case. Does not compile or run."""
     from verification.pops_verify.case_authoring import (
         resolve_case,
-        uniform_periodic_layout,
+        uniform_open_layout,
     )
 
-    case = build_case(n_cells)
-    layout = uniform_periodic_layout(_line_frame(), (int(n_cells),))
+    case, _instance, frame, count = _author(n_cells)
+    layout = uniform_open_layout(frame, (count,))
     return resolve_case(case, layout=layout)
 
 
-def run_native(n_cells: int = N_CELLS, t_end: float = 2.0):
-    """Optional native path. Raises NativeUnavailable without a compiler.
+def run_native(n_cells: int = N_CELLS, t_end: float = 2.0, *, request=None):
+    """Compile, bind, and run the reflecting cavity when a compiler is present."""
+    import pops
 
-    A full native standing-wave campaign is optional in this worktree. ICs
-    and the closed reflecting-wall oracle stay available from ``exact.py``.
-    """
-    from tests.python.support.requirements import missing_compiler_requirement, repo_include
+    from tests.python.support.requirements import (
+        default_cxx,
+        missing_compiler_requirement,
+        missing_native_compile_requirement,
+        repo_include,
+    )
+    from verification.pops_verify.case_authoring import (
+        resolve_case,
+        uniform_open_layout,
+    )
+    from verification.pops_verify.native_evidence import (
+        maybe_campaign_payload,
+        resolution_from_request,
+    )
 
-    del n_cells, t_end
+    if request is not None and int(request.pops_native_dim) != 1:
+        raise NativeUnavailable(
+            f"EU-04 requires pops_native_dim=1 (got {request.pops_native_dim}); "
+            "no fallback"
+        )
+    n_cells = resolution_from_request(request, n_cells)
     missing = missing_compiler_requirement(repo_include())
     if missing:
         raise NativeUnavailable(missing)
-    raise NativeUnavailable("optional native EU-04 run not executed in this worktree")
+    native = missing_native_compile_requirement(repo_include(), default_cxx())
+    if native:
+        raise NativeUnavailable(native)
+    case, instance, frame, count = _author(n_cells)
+    layout = uniform_open_layout(frame, (count,))
+    plan = resolve_case(case, layout=layout)
+    artifact = pops.compile(plan)
+    initial = np.ascontiguousarray(initial_conserved(count), dtype=np.float64)
+    simulation = pops.bind(artifact, initial_values={instance: initial})
+    pops.run(simulation, t_end=float(t_end), max_steps=100_000)
+    field = np.asarray(simulation.state_global("gas"), dtype=np.float64)
+    return maybe_campaign_payload(
+        request,
+        field,
+        n_cells=count,
+        t_end=t_end,
+        time_program="SSPRK2",
+        cfl=0.4,
+        dimension=1,
+    )

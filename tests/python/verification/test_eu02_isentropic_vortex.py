@@ -12,6 +12,10 @@ from jsonschema import Draft202012Validator
 from tests.python.support.requirements import missing_compiler_requirement
 from verification.pops_verify.case_authoring import load_sibling_module
 from verification.pops_verify.report import ARTIFACTS
+import inspect
+from verification.pops_verify.campaign import CampaignJob, CampaignRequest
+from verification.pops_verify.convergence import observed_order
+from verification.pops_verify.provenance import RUN_FIELDS
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CASE_DIR = REPO_ROOT / "verification" / "cases" / "euler" / "isentropic_vortex"
@@ -79,7 +83,10 @@ def test_write_eu02_report_writes_four_artifacts_and_schema(tmp_path: Path):
     assert loaded["schema"] == "pops.verification.report.v1"
     assert loaded["native_dimensions"] == [2]
     assert loaded["orders"] == []
-    assert loaded["not_applicable_reason"]["orders"]
+    assert loaded["coverage"]["cases_passed"] == 0
+    assert loaded["coverage"]["cases_failed"] == 1
+    reasons = " ".join(item["reason"] for item in loaded["failures"]).lower()
+    assert "native" in reasons
 
 
 def test_no_pops_run_outside_run_native():
@@ -106,19 +113,20 @@ def test_pack_unpack_conserved_round_trip():
     assert np.all(primitives["p"] > 0.0)
 
 
-def test_analyze_series_writes_positive_orders(tmp_path: Path):
+def test_analyze_series_orders_come_from_supplied_errors(tmp_path: Path):
+    from verification.pops_verify.convergence import observed_order
     analyze = _load("analyze")
     exact = _load("exact")
     period = float(exact.PERIOD)
     resolutions = (16, 32, 64)
-    errors = [(period / float(n)) ** 2 for n in resolutions]
+    errors = [0.08, 0.03, 0.011]
     analyze.analyze_series(errors, resolutions, tmp_path)
     loaded = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
-    assert loaded["native_dimensions"] == [2]
-    assert len(loaded["orders"]) == 2
-    for item in loaded["orders"]:
-        assert item["observed_order"] == pytest.approx(2.0)
-        assert item["variable"] == "rho"
+    spacings = [period / float(n) for n in resolutions]
+    expected = [float(v) for v in observed_order(errors, spacings)]
+    observed = [row["observed_order"] for row in loaded["orders"]]
+    np.testing.assert_allclose(observed, expected)
+    assert not np.allclose(observed, np.full(len(observed), 2.0))
 
 
 @pytest.mark.compiler
@@ -150,3 +158,35 @@ def _source_without_run_native(text: str) -> str:
             last = getattr(node, "end_lineno", node.lineno)
             skip.update(range(node.lineno, last + 1))
     return "".join(line for index, line in enumerate(lines, start=1) if index not in skip)
+
+def test_report_orders_come_from_supplied_native_series(tmp_path: Path):
+    analyze = _load("analyze")
+    spacings = [1.0 / 16.0, 1.0 / 32.0, 1.0 / 64.0]
+    linf = [0.08, 0.03, 0.011]
+    analyze.write_eu02_report(
+        tmp_path,
+        native_series={"linf": linf, "spacings": spacings},
+    )
+    loaded = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
+    _validator().validate(loaded)
+    assert loaded["coverage"]["cases_passed"] == 1
+    expected = [float(value) for value in observed_order(linf, spacings)]
+    observed = [row["observed_order"] for row in loaded["orders"]]
+    np.testing.assert_allclose(observed, expected)
+    assert not np.allclose(observed, np.full(len(observed), 2.0))
+
+
+def test_run_native_accepts_fail_closed_campaign_request():
+    run = _load("run")
+    assert "request" in inspect.signature(run.run_native).parameters
+    request = CampaignRequest.from_job(
+        CampaignJob(case_id="EU-02", pops_native_dim=2, min_resolution=16)
+    )
+    try:
+        result = run.run_native(request=request)
+    except run.NativeUnavailable:
+        return
+    assert isinstance(result, dict)
+    missing = [key for key in RUN_FIELDS if key not in result]
+    assert missing == []
+    assert "result" in result

@@ -13,6 +13,9 @@ from tests.python.support.requirements import missing_compiler_requirement
 from verification.pops_verify.case_authoring import load_sibling_module
 from verification.pops_verify.convergence import observed_order
 from verification.pops_verify.report import ARTIFACTS
+import inspect
+from verification.pops_verify.campaign import CampaignJob, CampaignRequest
+from verification.pops_verify.provenance import RUN_FIELDS
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CASE_DIR = REPO_ROOT / "verification" / "cases" / "time" / "pure_temporal"
@@ -89,20 +92,10 @@ def test_exact_sine_translation_is_periodic_identity_on_fine_grid():
     )
 
 
-def test_manufactured_rk2_dt_series_observed_order_is_two(tmp_path: Path):
+def test_observed_order_utility_recovers_quadratic_dt():
     dts = np.asarray(DT_SERIES, dtype=np.float64)
-    errors = dts**2
-    orders = observed_order(errors, dts)
+    orders = observed_order(dts**2, dts)
     np.testing.assert_allclose(orders, np.full(orders.shape, 2.0))
-
-    analyze = _load_case_module("analyze")
-    analyze.analyze_series(errors, dts, tmp_path)
-    loaded = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
-    kinds = [row["kind"] for row in loaded["orders"]]
-    observed = [row["observed_order"] for row in loaded["orders"]]
-    assert kinds
-    assert set(kinds) == {"temporal"}
-    np.testing.assert_allclose(observed, np.full(len(observed), 2.0))
 
 
 def test_build_case_and_resolve_plan_without_native():
@@ -122,10 +115,11 @@ def test_write_tm01_report_writes_four_schema_valid_artifacts(tmp_path: Path):
     loaded = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
     _validator().validate(loaded)
     assert loaded["schema"] == "pops.verification.report.v1"
-    assert loaded["orders"]
-    assert all(row["kind"] == "temporal" for row in loaded["orders"])
-    observed = [row["observed_order"] for row in loaded["orders"]]
-    np.testing.assert_allclose(observed, np.full(len(observed), 2.0))
+    assert loaded["orders"] == []
+    assert loaded["coverage"]["cases_passed"] == 0
+    assert loaded["coverage"]["cases_failed"] == 1
+    reasons = " ".join(item["reason"] for item in loaded["failures"]).lower()
+    assert "native" in reasons
 
 
 def test_modules_do_not_hardcode_pops_run_except_run_native():
@@ -152,3 +146,35 @@ def test_run_native_returns_finite_field_or_skips():
         pytest.skip(str(exc))
     assert field.size == N_CELLS
     assert np.isfinite(field).all()
+
+def test_report_orders_come_from_supplied_native_series(tmp_path: Path):
+    analyze = _load_case_module("analyze")
+    spacings = [1.0 / 16.0, 1.0 / 32.0, 1.0 / 64.0]
+    linf = [0.08, 0.03, 0.011]
+    analyze.write_tm01_report(
+        tmp_path,
+        native_series={"linf": linf, "spacings": spacings},
+    )
+    loaded = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
+    _validator().validate(loaded)
+    assert loaded["coverage"]["cases_passed"] == 1
+    expected = [float(value) for value in observed_order(linf, spacings)]
+    observed = [row["observed_order"] for row in loaded["orders"]]
+    np.testing.assert_allclose(observed, expected)
+    assert not np.allclose(observed, np.full(len(observed), 2.0))
+
+
+def test_run_native_accepts_fail_closed_campaign_request():
+    run = _load_case_module("run")
+    assert "request" in inspect.signature(run.run_native).parameters
+    request = CampaignRequest.from_job(
+        CampaignJob(case_id="TM-01", pops_native_dim=1, min_resolution=16)
+    )
+    try:
+        result = run.run_native(request=request)
+    except run.NativeUnavailable:
+        return
+    assert isinstance(result, dict)
+    missing = [key for key in RUN_FIELDS if key not in result]
+    assert missing == []
+    assert "result" in result

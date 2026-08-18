@@ -132,16 +132,19 @@ def resolve_plan(n_cells: int = N_CELLS):
     return resolve_case(case, layout=layout)
 
 
-def run_native(n_cells: int = N_CELLS, t_end: float = 0.05):
-    """Optional native path. Raises NativeUnavailable without a compiler.
-
-    A full native MMS campaign is optional in this worktree. ICs and
-    manufactured sources stay available from ``exact.py``.
-    """
+def run_native(n_cells: int = N_CELLS, t_end: float = 0.05, *, request=None):
+    """Refuse a fake MMS curve. Public source injection is not attached."""
     from tests.python.support.requirements import missing_compiler_requirement, repo_include
+    from verification.pops_verify.native_evidence import resolution_from_request
 
+    if request is not None and int(request.pops_native_dim) != 1:
+        raise NativeUnavailable(
+            f"EU-03 requires pops_native_dim=1 (got {request.pops_native_dim}); "
+            "no fallback"
+        )
+    n_cells = resolution_from_request(request, n_cells)
     del n_cells, t_end
     missing = missing_compiler_requirement(repo_include())
     if missing:
         raise NativeUnavailable(missing)
-    raise NativeUnavailable("optional native EU-03 run not executed in this worktree")
+    raise NativeUnavailable("public MMS source injection is not supported")

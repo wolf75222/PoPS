@@ -11,6 +11,9 @@ from jsonschema import Draft202012Validator
 from verification.pops_verify.case_authoring import load_sibling_module
 from verification.pops_verify.convergence import observed_order
 from verification.pops_verify.report import ARTIFACTS
+import inspect
+from verification.pops_verify.campaign import CampaignJob, CampaignRequest
+from verification.pops_verify.provenance import RUN_FIELDS
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CASE_DIR = REPO_ROOT / "verification" / "cases" / "poisson" / "elliptic_tolerance"
@@ -190,6 +193,10 @@ def test_written_po07_summary_validates_against_report_schema(tmp_path: Path):
     loaded = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
     _validator().validate(loaded)
     assert loaded["schema"] == "pops.verification.report.v1"
+    assert loaded["coverage"]["cases_passed"] == 0
+    assert loaded["coverage"]["cases_failed"] == 1
+    reasons = " ".join(item["reason"] for item in loaded["failures"]).lower()
+    assert "native" in reasons
 
 
 def test_case_modules_do_not_mention_pops_run_outside_run_native():
@@ -197,3 +204,35 @@ def test_case_modules_do_not_mention_pops_run_outside_run_native():
         text = (CASE_DIR / name).read_text(encoding="utf-8")
         assert _pops_run_call_outside_run_native(text) is False
         assert "pops.run(" not in text or "def run_native" in text
+
+def test_report_orders_come_from_supplied_native_series(tmp_path: Path):
+    analyze = _load_case_module("analyze")
+    spacings = [1.0 / 16.0, 1.0 / 32.0, 1.0 / 64.0]
+    linf = [0.08, 0.03, 0.011]
+    analyze.write_po07_report(
+        tmp_path,
+        native_series={"linf": linf, "spacings": spacings},
+    )
+    loaded = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
+    _validator().validate(loaded)
+    assert loaded["coverage"]["cases_passed"] == 1
+    expected = [float(value) for value in observed_order(linf, spacings)]
+    observed = [row["observed_order"] for row in loaded["orders"]]
+    np.testing.assert_allclose(observed, expected)
+    assert not np.allclose(observed, np.full(len(observed), 2.0))
+
+
+def test_run_native_accepts_fail_closed_campaign_request():
+    run = _load_case_module("run")
+    assert "request" in inspect.signature(run.run_native).parameters
+    request = CampaignRequest.from_job(
+        CampaignJob(case_id="PO-07", pops_native_dim=1, min_resolution=16)
+    )
+    try:
+        result = run.run_native(request=request)
+    except run.NativeUnavailable:
+        return
+    assert isinstance(result, dict)
+    missing = [key for key in RUN_FIELDS if key not in result]
+    assert missing == []
+    assert "result" in result

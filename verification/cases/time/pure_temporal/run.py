@@ -40,6 +40,7 @@ _exact = load_sibling_module(_CASE_DIR / "exact.py")
 
 A = 1.0
 N_CELLS = 64
+DT = float(_exact.DT)
 MAX_STEPS = 100_000
 
 
@@ -130,8 +131,21 @@ def _native_unavailable_reason() -> str | None:
     return missing_native_compile_requirement(repo_include(), default_cxx())
 
 
-def run_native(dt, t_end=1.0, *, n_cells: int = N_CELLS):
+def run_native(dt=None, t_end=1.0, *, n_cells: int = N_CELLS, request=None):
     """Compile, bind, and run the Case. Raises NativeUnavailable without a compiler."""
+    from verification.pops_verify.native_evidence import (
+        maybe_campaign_payload,
+        resolution_from_request,
+    )
+
+    if request is not None and int(request.pops_native_dim) != 1:
+        raise NativeUnavailable(
+            f"TM-01 requires pops_native_dim=1 (got {request.pops_native_dim}); "
+            "no fallback"
+        )
+    n_cells = resolution_from_request(request, n_cells)
+    if dt is None:
+        dt = DT
     missing = _native_unavailable_reason()
     if missing:
         raise NativeUnavailable(missing)
@@ -146,5 +160,13 @@ def run_native(dt, t_end=1.0, *, n_cells: int = N_CELLS):
     )
     simulation = pops.bind(artifact, initial_values={authored.instance: initial})
     pops.run(simulation, t_end=float(t_end), max_steps=MAX_STEPS)
-    field = np.asarray(simulation.state_global("tracer"), dtype=np.float64)
-    return np.ravel(field)
+    field = np.ravel(np.asarray(simulation.state_global("tracer"), dtype=np.float64))
+    return maybe_campaign_payload(
+        request,
+        field,
+        n_cells=authored.n_cells,
+        t_end=t_end,
+        time_program="SSPRK2",
+        cfl=float(authored.dt) * float(authored.n_cells),
+        dimension=1,
+    )

@@ -116,7 +116,7 @@ def _initial_field(n_cells: int) -> np.ndarray:
     return np.ascontiguousarray(exact.exact_gaussian(centers, 0.0, a=ADVECTION_SPEED))
 
 
-def run_native(n_cells, t_end=1.0):
+def run_native(n_cells=32, t_end=1.0, *, request=None):
     """Compile, bind, and run the 1-d Case when a C++ toolchain is present."""
     from tests.python.support.requirements import (
         default_cxx,
@@ -124,7 +124,17 @@ def run_native(n_cells, t_end=1.0):
         missing_native_compile_requirement,
         repo_include,
     )
+    from verification.pops_verify.native_evidence import (
+        campaign_run_fields,
+        resolution_from_request,
+    )
 
+    if request is not None and int(request.pops_native_dim) != 1:
+        raise NativeUnavailable(
+            f"TR-02 requires pops_native_dim=1 (got {request.pops_native_dim}); "
+            "no fallback"
+        )
+    n_cells = resolution_from_request(request, n_cells)
     missing = missing_compiler_requirement(REPO_ROOT / "include")
     if missing:
         raise NativeUnavailable(missing)
@@ -141,5 +151,18 @@ def run_native(n_cells, t_end=1.0):
     )
     simulation = pops.bind(artifact, initial_values={authored.instance: initial})
     pops.run(simulation, t_end=float(t_end))
-    field = np.asarray(simulation.state_global("gas"), dtype=np.float64)
-    return np.ravel(field)[: authored.n_cells]
+    field = np.ravel(np.asarray(simulation.state_global("gas"), dtype=np.float64))[
+        : authored.n_cells
+    ]
+    if request is None:
+        return field
+    payload = campaign_run_fields(
+        request=request,
+        n_cells=authored.n_cells,
+        t_end=t_end,
+        time_program="SSPRK2",
+        cfl=CFL,
+        dimension=1,
+    )
+    payload["result"] = field
+    return payload
