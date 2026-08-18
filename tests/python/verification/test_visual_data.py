@@ -54,14 +54,10 @@ def _campaign_run(tmp_path: Path) -> Path:
     return run
 
 
-def test_load_campaign_bundle_requires_schema_valid_metrics_and_provenance(tmp_path):
+def test_load_campaign_bundle_requires_evidence_bundle(tmp_path):
     run = _campaign_run(tmp_path)
-    bundle = load_run_bundle(run)
-    assert bundle.data_kind == "campaign"
-    assert bundle.verdict == "pass"
-    assert bundle.metrics["schema"] == "pops.verification.metrics.v1"
-    assert bundle.provenance["schema"] == "pops.verification.provenance.v1"
-    assert bundle.provenance["repository_sha"]
+    with pytest.raises(VisualsError, match="EvidenceBundle"):
+        load_run_bundle(run)
 
 
 def test_missing_metrics_fails_closed(tmp_path):
@@ -73,6 +69,15 @@ def test_missing_metrics_fails_closed(tmp_path):
 
 def test_missing_visual_series_fails_closed(tmp_path):
     run = _campaign_run(tmp_path)
+    _write_json(
+        run / "status.json",
+        {
+            "verdict": "pass",
+            "case_id": "TR-01",
+            "run_id": "fixture-run",
+            "data_kind": "deterministic_fixture",
+        },
+    )
     with pytest.raises(VisualsError, match="visual_data"):
         load_visual_series(run, "signed_error_field")
 
@@ -84,11 +89,20 @@ def test_empty_series_fails_closed(tmp_path):
         {
             "figure_id": "spatial_convergence",
             "kind": "spatial_convergence",
-            "data_kind": "campaign",
+            "data_kind": "deterministic_fixture",
             "verdict": "pass",
             "units": {"x": "1/h", "y": "L2 error"},
             "variables": ["scalar"],
             "series": [{"name": "L2", "x": [], "y": [], "unit": "1"}],
+        },
+    )
+    _write_json(
+        run / "status.json",
+        {
+            "verdict": "pass",
+            "case_id": "TR-01",
+            "run_id": "fixture-run",
+            "data_kind": "deterministic_fixture",
         },
     )
     with pytest.raises(VisualsError, match="empty"):
@@ -103,7 +117,12 @@ def test_not_run_verdict_is_preserved(tmp_path):
     )
     _write_json(
         run / "status.json",
-        {"verdict": "not-run", "case_id": "TR-01", "run_id": "campaign-run"},
+        {
+            "verdict": "not-run",
+            "case_id": "TR-01",
+            "run_id": "fixture-run",
+            "data_kind": "deterministic_fixture",
+        },
     )
     bundle = load_run_bundle(run)
     assert bundle.verdict == "not-run"
@@ -128,12 +147,16 @@ def test_fixture_bundle_must_be_labeled(tmp_path):
     assert "FIXTURE" in bundle.data_kind_label.upper()
 
 
-def test_campaign_label_cannot_be_spoofed_by_fixture_series(tmp_path):
+def test_fixture_series_cannot_claim_campaign(tmp_path):
     run = _campaign_run(tmp_path)
-    payload = json.loads(
-        (run / "analysis" / "visual_data" / "spatial_convergence.json").read_text()
+    _write_json(
+        run / "status.json",
+        {
+            "verdict": "pass",
+            "case_id": "TR-01",
+            "run_id": "fixture-run",
+            "data_kind": "deterministic_fixture",
+        },
     )
-    payload["data_kind"] = "deterministic_fixture"
-    _write_json(run / "analysis" / "visual_data" / "spatial_convergence.json", payload)
     with pytest.raises(VisualsError, match="data_kind"):
         load_visual_series(run, "spatial_convergence")

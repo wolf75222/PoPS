@@ -84,6 +84,19 @@ def load_run_bundle(run_dir: str | Path) -> RunBundle:
     if not isinstance(case_id, str) or not case_id:
         raise VisualsError("case_id missing from status/metrics")
     label = FIXTURE_LABEL if data_kind == "deterministic_fixture" else CAMPAIGN_LABEL
+    if data_kind == "campaign":
+        try:
+            from verification.pops_verify.evidence_bundle import EvidenceBundle, EvidenceError
+
+            EvidenceBundle(root)
+        except EvidenceError as exc:
+            raise VisualsError(
+                f"campaign visuals require a schema-valid EvidenceBundle: {exc}"
+            ) from exc
+        except Exception as exc:
+            raise VisualsError(
+                f"campaign visuals require EvidenceBundle/visual_data: {exc}"
+            ) from exc
     return RunBundle(
         run_dir=root,
         case_id=case_id,
