@@ -485,3 +485,20 @@ def test_no_helper_contamination():
         / "exact.py"
     ).read_text(encoding="utf-8")
     assert 'native_dimensions": [1]' in if_exact or "native_dimensions\": [MATCHING_DIM]" in if_exact
+
+
+def test_tr01_romeo_script_keeps_lexical_variants_root():
+    """ROMEO /scratch_p is a symlink to /gpfs/scratch. Resolving the leaf
+    publishes a second spelling and the selector refuses two manifests.
+    """
+    complement = (
+        REPO_ROOT / "verification" / "machines" / "run_tr01_complement.py"
+    ).read_text(encoding="utf-8")
+    sbatch = (
+        REPO_ROOT / "verification" / "machines" / "romeo_676_tr01_run.sbatch"
+    ).read_text(encoding="utf-8")
+    assert "Path(item).resolve()" not in complement
+    assert "POPS_NATIVE_VARIANTS_ROOT" in sbatch
+    assert '"$BUILD/python/pops/_native"' in sbatch
+    assert "readlink" not in sbatch
+    assert "realpath" not in sbatch

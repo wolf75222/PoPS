@@ -18,7 +18,7 @@ def _installed_native_root() -> Path | None:
     except ImportError:
         return None
     for item in getattr(pops, "__path__", ()):
-        candidate = Path(item).resolve() / "_native"
+        candidate = Path(item).absolute() / "_native"
         if (candidate / "variants.json").is_file():
             return candidate
     return None

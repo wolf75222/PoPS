@@ -61,6 +61,8 @@ BUILD="$POPS676_ROOT/build-dim${DIM}-${KIND}"
 export POPS_NATIVE_DIM="$DIM"
 export POPS_TR01_SPACE="$SPACE"
 export POPS_TR01_MPI="$MPI"
+# Lexical path only. Dereferencing the scratch symlink publishes a second prefix.
+export POPS_NATIVE_VARIANTS_ROOT="$BUILD/python/pops/_native"
 if [ "$SPACE" = "KokkosOpenMP" ]; then
   export OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}"
 else
