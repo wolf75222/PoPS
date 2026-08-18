@@ -47,6 +47,7 @@
   "tests/python/integration/native_loader/test_amr_production_stride_reject.py": 152.5,
   "tests/python/integration/native_loader/test_compile_emit_regressions.py": 150.0,
   "tests/python/integration/native_loader/test_compile_module_trace.py": 120.0,
+  "tests/python/integration/native_loader/test_compiled_newton.py": 30.0,
   "tests/python/integration/native_loader/test_dsl_production.py": 157.6,
   "tests/python/integration/native_loader/test_dsl_production_amr.py": 393.5,
   "tests/python/integration/native_loader/test_equation_cadence.py": 60.0,
@@ -482,6 +483,7 @@
   "tests/python/verification/test_if09_float_precision.py": 1.0,
   "tests/python/verification/test_if10_hdf5_reread.py": 1.0,
   "tests/python/verification/test_interface_error.py": 1.0,
+  "tests/python/verification/test_langmuir_sweep.py": 1.0,
   "tests/python/verification/test_leaf_reference_errors.py": 1.0,
   "tests/python/verification/test_metrics.py": 1.0,
   "tests/python/verification/test_native_diagnostics.py": 1.0,
@@ -545,7 +547,7 @@
     "unit_seconds": "per-file pytest wall time",
     "measured_source": "borrowed _pops.so locally plus GitHub Actions run 30190778708 per-test timings",
     "estimated_note": "Unmeasured files use conservative path/content tiers (1/2/5/30/60/120 s); compiler-gated files retain native-compile estimates. Refresh every estimated row from a full CI run gate-python timing artifact.",
-    "estimated_count": 372,
+    "estimated_count": 374,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_scalar_advection_final_example.py",
@@ -574,6 +576,7 @@
       "tests/python/integration/native_loader/test_amr_production_stride_reject.py",
       "tests/python/integration/native_loader/test_compile_emit_regressions.py",
       "tests/python/integration/native_loader/test_compile_module_trace.py",
+      "tests/python/integration/native_loader/test_compiled_newton.py",
       "tests/python/integration/native_loader/test_dsl_production.py",
       "tests/python/integration/native_loader/test_equation_cadence.py",
       "tests/python/integration/native_loader/test_external_component_package.py",
@@ -861,6 +864,7 @@
       "tests/python/verification/test_if09_float_precision.py",
       "tests/python/verification/test_if10_hdf5_reread.py",
       "tests/python/verification/test_interface_error.py",
+      "tests/python/verification/test_langmuir_sweep.py",
       "tests/python/verification/test_leaf_reference_errors.py",
       "tests/python/verification/test_metrics.py",
       "tests/python/verification/test_native_diagnostics.py",
@@ -920,6 +924,6 @@
       "tests/python/verification/test_verification_provenance_schema.py",
       "tests/python/verification/test_verification_report_schema.py"
     ],
-    "total_files": 541
+    "total_files": 543
   }
 }

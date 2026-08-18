@@ -150,6 +150,59 @@ def test_run_doctor_wraps_pops_doctor():
     assert report
 
 
+def test_manifest_if08_is_selectable_at_dim2_serial():
+    """The Dim2 Serial campaign job must be able to expand IF-08, not plan zero jobs."""
+    import tomllib
+
+    from verification.pops_verify.campaign import expand_jobs
+
+    manifest = tomllib.loads(
+        (REPO_ROOT / "verification" / "manifest.toml").read_text(encoding="utf-8")
+    )
+    case = next(item for item in manifest["case"] if item["id"] == "IF-08")
+    assert 2 in case["native_dimensions"]
+    jobs = expand_jobs(
+        [case],
+        [2],
+        artifact_dim=2,
+        suite="pr",
+        execution_space="KokkosSerial",
+        mpi_mode="off",
+    )
+    assert [job.case_id for job in jobs] == ["IF-08"]
+    assert jobs[0].pops_native_dim == 2
+    assert jobs[0].execution_space == "KokkosSerial"
+    assert jobs[0].mpi_mode == "off"
+
+
+def test_if08_dim2_request_returns_run_fields(monkeypatch):
+    """A successful Dim2 campaign path must return provenance fields, not a raw array."""
+    from verification.pops_verify.campaign import CampaignJob, CampaignRequest
+    from verification.pops_verify.provenance import RUN_FIELDS
+
+    run = _load_case_module("run")
+    monkeypatch.setenv("POPS_NATIVE_DIM", "2")
+
+    class _Ge03:
+        CFL = 0.4
+
+        @staticmethod
+        def run_native(n_cells=8, t_end=0.01):
+            return [n_cells, t_end]
+
+    monkeypatch.setattr(run, "load_sibling_module", lambda path: _Ge03())
+    request = CampaignRequest.from_job(
+        CampaignJob(case_id="IF-08", pops_native_dim=2, min_resolution=8)
+    )
+    result = run.run_native(request=request)
+    assert isinstance(result, dict)
+    missing = [key for key in RUN_FIELDS if key not in result]
+    assert missing == []
+    assert result["cfl"] == _Ge03.CFL
+    assert result["final_time"] == 0.01
+    assert result["resolution"] == [8, 8]
+
+
 def test_dim2_case_under_dim1_raises_before_fake_or_native_run(monkeypatch):
     exact = _load_case_module("exact")
     run = _load_case_module("run")

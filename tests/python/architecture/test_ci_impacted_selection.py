@@ -976,7 +976,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         assert verification_python not in cpp_filter
         assert verification_python in python_filter
     assert "schemas/**" in python_arch_filter
-    assert "python3 scripts/run_verification.py" not in workflow
+    assert "python3 scripts/run_verification.py" not in filter_text
 
     cpp_prewarm_block = workflow.split("\n  gate-cpp-prewarm:\n", 1)[1].split(
         "\n  # GATE C++", 1)[0]
@@ -1575,3 +1575,78 @@ def test_ci_control_plane_inputs_force_full_functional_selection():
     assert "scripts/ci_include_graph.py" in selector.CPP_BROAD_FILES
     assert "tests/python/test_durations.json" in selector.PYTHON_BROAD_FILES
     assert "scripts/ci_import_closure.py" in selector.PYTHON_BROAD_FILES
+
+
+def _workflow_job(workflow: str, name: str, next_name: str) -> str:
+    return workflow.split(f"\n  {name}:\n", 1)[1].split(f"\n  {next_name}:\n", 1)[0]
+
+
+def test_ci_python_jobs_install_jsonschema_and_put_repo_root_on_pythonpath():
+    """Verification units import jsonschema and the verification package at repo root."""
+    workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    architecture_block = _workflow_job(
+        workflow, "gate-python-architecture", "gate-python-prewarm"
+    )
+    python_shards_block = _workflow_job(
+        workflow, "gate-python", "gate-python-compile-cache"
+    )
+    architecture_pip = architecture_block.split("pip install", 1)[1].split("\n", 1)[0]
+    shard_pip = python_shards_block.split("pip install", 1)[1].split("\n", 1)[0]
+    assert "jsonschema" in architecture_pip or ".[test]" in architecture_pip
+    assert "jsonschema" in shard_pip or ".[test]" in shard_pip
+    assert (
+        "PYTHONPATH: ${{ github.workspace }}/python:${{ github.workspace }}"
+        in architecture_block
+    )
+    assert 'export PYTHONPATH="$PWD/build-kokkos-py/python:$PWD"' in python_shards_block
+
+
+def test_ci_has_non_sharded_dim2_serial_if08_campaign_job():
+    """A dedicated native job reuses the Dim2 Serial artifact and runs IF-08 only."""
+    workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert "\n  gate-python-verification:\n" in workflow
+    verification_block = _workflow_job(
+        workflow, "gate-python-verification", "gate-mpi-prewarm"
+    )
+    python_shards_block = _workflow_job(
+        workflow, "gate-python", "gate-python-compile-cache"
+    )
+    gate_block = workflow.split("\n  gate:\n", 1)[1].split("\n  mpi:\n", 1)[0]
+
+    assert "strategy:" not in verification_block
+    assert "matrix:" not in verification_block
+    assert "shard:" not in verification_block
+    assert "needs: [changes, set-mode, gate-python-build]" in verification_block
+    assert "if: needs.set-mode.outputs.python_required == 'true'" in verification_block
+    assert "uses: ./.github/actions/setup-kokkos" in verification_block
+    assert "actions/download-artifact@v8" in verification_block
+    assert "name: gate-python-build-kokkos-py" in verification_block
+    assert "path: build-kokkos-py/python" in verification_block
+    assert "python3 scripts/verify_installed_native.py" in verification_block
+    assert '--expect-dim "$POPS_NATIVE_DIM" --expect-serial' in verification_block
+    assert 'POPS_NATIVE_DIM: "2"' in verification_block
+    assert 'PYTHONNOUSERSITE: "1"' in verification_block or "PYTHONNOUSERSITE=1" in verification_block
+    assert "jsonschema" in verification_block
+    assert (
+        "PYTHONPATH: ${{ github.workspace }}/build-kokkos-py/python:${{ github.workspace }}"
+        in verification_block
+        or 'PYTHONPATH="$PWD/build-kokkos-py/python:$PWD"' in verification_block
+    )
+    assert "python3 scripts/run_verification.py" in verification_block
+    assert "python3 scripts/run_verification.py" not in python_shards_block
+    assert "--cases IF-08" in verification_block
+    assert "--pops-native-dim 2" in verification_block
+    assert "--dimensions 2" in verification_block
+    assert "--mpi-mode off" in verification_block
+    assert "--execution-space KokkosSerial" in verification_block
+    assert "--execute" in verification_block
+    assert "--suite pr" in verification_block
+    assert "plan.json" in verification_block
+    assert "results.json" in verification_block
+    assert "metrics.json" in verification_block
+    assert "provenance.json" in verification_block
+    assert "summary.json" in verification_block
+    assert "actions/upload-artifact@v7" in verification_block
+    assert "gate-python-verification" in gate_block
+    assert "--gate gate-python-verification" in gate_block
+    assert "needs.set-mode.outputs.python_required" in gate_block

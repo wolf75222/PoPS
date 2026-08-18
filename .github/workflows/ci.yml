@@ -731,11 +731,12 @@ jobs:
 
       - name: Spec 4 architecture tests
         env:
-          PYTHONPATH: ${{ github.workspace }}/python
+          PYTHONPATH: ${{ github.workspace }}/python:${{ github.workspace }}
         run: |
           # numpy: a hard dependency of the package that pyright must RESOLVE now that the
           # ADC-628 include list covers all of python/pops (the tests themselves stay source-only).
-          pip install --upgrade pip pytest pyright numpy
+          # jsonschema is the verification test extra used by architecture/workflow contracts.
+          pip install --upgrade pip pytest pyright numpy jsonschema
           python3 -m pytest tests/python/architecture -q
 
       - name: M2 temporal gate manifest
@@ -1279,8 +1280,8 @@ jobs:
         run: |
           # The full gate exercises the serial HDF5 writer used by the final examples. h5py remains
           # an optional user dependency; CI installs that capability explicitly instead of skipping.
-          pip install --upgrade pip numpy pytest h5py
-          export PYTHONPATH="$PWD/build-kokkos-py/python"
+          pip install --upgrade pip numpy pytest h5py jsonschema
+          export PYTHONPATH="$PWD/build-kokkos-py/python:$PWD"
           # PoPS est Kokkos-only : les tests DSL qui compilent un loader/.so production ou son ABI
           # incluent les en-tetes pops (-> for_each, #error sans Kokkos). Ils lisent le Kokkos a utiliser
           # via Kokkos_ROOT / POPS_KOKKOS_ROOT : on pointe le MEME Kokkos Serial que le module _pops.
@@ -1484,6 +1485,137 @@ jobs:
         if: always()
         run: ccache -s
 
+  # GATE PYTHON VERIFICATION: dedicated non-sharded Dim2 Serial IF-08 campaign.
+  # Reuses the authenticated gate-python-build artifact. Does not run the full PR suite.
+  gate-python-verification:
+    name: ubuntu-latest / Kokkos Serial (Python) IF-08 campaign
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [changes, set-mode, gate-python-build]
+    if: needs.set-mode.outputs.python_required == 'true'
+
+    env:
+      POPS_NATIVE_DIM: "2"
+      CCACHE_DIR: ${{ github.workspace }}/.ccache-py
+      CCACHE_MAXSIZE: 2G
+      KOKKOS_PREFIX: ${{ github.workspace }}/.kokkos-install
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_SLOPPINESS: locale
+      POPS_REQUIRE_NATIVE_TESTS: "1"
+      PYTHONNOUSERSITE: "1"
+      VERIFICATION_OUTPUT: ${{ github.workspace }}/build/verification
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - id: kokkos
+        uses: ./.github/actions/setup-kokkos
+        with:
+          extra-apt: mold
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Download Python module artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: gate-python-build-kokkos-py
+          path: build-kokkos-py/python
+
+      - name: Verify Python module artifact
+        run: |
+          test -d build-kokkos-py/python/pops
+          PYTHONPATH="$PWD/build-kokkos-py/python:$PWD" PYTHONNOUSERSITE=1 \
+            python3 scripts/verify_installed_native.py \
+              --expect-dim "$POPS_NATIVE_DIM" --expect-serial
+
+      - name: Cache ccache (Python verification campaign)
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-python-verification-${{ github.ref }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-python-verification-${{ github.ref }}-
+            ccache-${{ runner.os }}-python-verification-refs/heads/master-
+            ccache-${{ runner.os }}-python-build-${{ github.ref }}-
+            ccache-${{ runner.os }}-python-build-refs/heads/master-
+            ccache-${{ runner.os }}-python-
+
+      - name: Run Dim2 Serial IF-08 campaign
+        env:
+          PYTHONPATH: ${{ github.workspace }}/build-kokkos-py/python:${{ github.workspace }}
+        run: |
+          pip install --upgrade pip numpy jsonschema
+          export PYTHONPATH="$PWD/build-kokkos-py/python:$PWD"
+          export PYTHONNOUSERSITE=1
+          export Kokkos_ROOT="${KOKKOS_PREFIX}" POPS_KOKKOS_ROOT="${KOKKOS_PREFIX}"
+          python3 scripts/run_verification.py \
+            --suite pr \
+            --dimensions 2 \
+            --max-nodes 1 \
+            --pops-native-dim 2 \
+            --cases IF-08 \
+            --mpi-mode off \
+            --execution-space KokkosSerial \
+            --execute \
+            --output "$VERIFICATION_OUTPUT"
+
+      - name: Validate IF-08 campaign artifacts
+        env:
+          PYTHONPATH: ${{ github.workspace }}/build-kokkos-py/python:${{ github.workspace }}
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          from jsonschema import Draft202012Validator
+
+          root = Path("build/verification")
+          plan = json.loads((root / "plan.json").read_text(encoding="utf-8"))
+          jobs = plan.get("jobs") or []
+          if not jobs:
+              raise SystemExit("IF-08 campaign planned zero jobs")
+          if jobs[0].get("case_id") != "IF-08" or jobs[0].get("pops_native_dim") != 2:
+              raise SystemExit(f"unexpected planned job: {jobs[0]}")
+          results = json.loads((root / "results.json").read_text(encoding="utf-8"))
+          if not results or results[0].get("status") != "pass":
+              raise SystemExit(f"IF-08 campaign did not pass: {results}")
+          job_dir = root / "IF-08" / "dim2-KokkosSerial-off"
+          for name, schema in (
+              ("metrics.json", "schemas/verification_metrics.v1.json"),
+              ("provenance.json", "schemas/verification_provenance.v1.json"),
+          ):
+              document = json.loads((job_dir / name).read_text(encoding="utf-8"))
+              Draft202012Validator(json.loads(Path(schema).read_text(encoding="utf-8"))).validate(document)
+          report = json.loads((root / "summary.json").read_text(encoding="utf-8"))
+          Draft202012Validator(
+              json.loads(Path("schemas/verification_report.v1.json").read_text(encoding="utf-8"))
+          ).validate(report)
+          PY
+
+      - name: Upload IF-08 campaign artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: gate-python-verification-if08
+          path: |
+            build/verification/plan.json
+            build/verification/results.json
+            build/verification/summary.json
+            build/verification/REPORT.md
+            build/verification/IF-08/**/metrics.json
+            build/verification/IF-08/**/provenance.json
+            build/verification/IF-08/**/resolved_case.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: ccache stats (Python verification)
+        if: always()
+        run: ccache -s
+
   # PREWARM MPI NATIF. Le prewarm Serial ci-dessus ne peut pas produire de hits ccache fiables pour
   # une compilation MPI/HDF5 : les definitions, include paths et commandes C++ different. Ces trois
   # lanes configurent donc le graphe ci-mpi exact et compilent uniquement sa partition disjointe
@@ -1621,7 +1753,7 @@ jobs:
   gate:
     name: gate (agregation requise)
     runs-on: ubuntu-latest
-    needs: [changes, set-mode, gate-cpp, gate-python-architecture, gate-python-build, gate-python, gate-python-compile-cache, mpi, kokkos-openmp]
+    needs: [changes, set-mode, gate-cpp, gate-python-architecture, gate-python-build, gate-python, gate-python-compile-cache, gate-python-verification, mpi, kokkos-openmp]
     if: always()
     steps:
       - uses: actions/checkout@v7
@@ -1629,7 +1761,7 @@ jobs:
           fetch-depth: 1
       - name: Verdict
         run: |
-          echo "changes=${{ needs.changes.result }} set-mode=${{ needs.set-mode.result }} gate-cpp=${{ needs.gate-cpp.result }} gate-python-architecture=${{ needs.gate-python-architecture.result }} gate-python-build=${{ needs.gate-python-build.result }} gate-python=${{ needs.gate-python.result }} gate-python-compile-cache=${{ needs.gate-python-compile-cache.result }} mpi=${{ needs.mpi.result }} kokkos-openmp=${{ needs.kokkos-openmp.result }}"
+          echo "changes=${{ needs.changes.result }} set-mode=${{ needs.set-mode.result }} gate-cpp=${{ needs.gate-cpp.result }} gate-python-architecture=${{ needs.gate-python-architecture.result }} gate-python-build=${{ needs.gate-python-build.result }} gate-python=${{ needs.gate-python.result }} gate-python-compile-cache=${{ needs.gate-python-compile-cache.result }} gate-python-verification=${{ needs.gate-python-verification.result }} mpi=${{ needs.mpi.result }} kokkos-openmp=${{ needs.kokkos-openmp.result }}"
           python3 scripts/ci_route_mode.py check \
             --gate changes "${{ needs.changes.result }}" true \
             --gate set-mode "${{ needs.set-mode.result }}" true \
@@ -1643,6 +1775,9 @@ jobs:
               "${{ needs.set-mode.outputs.python_required }}" \
             --gate gate-python-compile-cache \
               "${{ needs.gate-python-compile-cache.result }}" \
+              "${{ needs.set-mode.outputs.python_required }}" \
+            --gate gate-python-verification \
+              "${{ needs.gate-python-verification.result }}" \
               "${{ needs.set-mode.outputs.python_required }}" \
             --gate mpi "${{ needs.mpi.result }}" \
               "${{ needs.set-mode.outputs.mpi_required }}" \

@@ -7,6 +7,7 @@ Reuses expand_jobs / resolve_artifact_dim. Optional ``run_doctor`` wraps
 from __future__ import annotations
 
 from collections.abc import Mapping
+import os
 from pathlib import Path
 
 from verification.pops_verify.campaign import expand_jobs, resolve_artifact_dim
@@ -116,11 +117,43 @@ def run_doctor():
         raise NativeUnavailable(f"pops.doctor unavailable: {exc}") from exc
 
 
+def _dim2_campaign_fields(n_cells: int, t_end: float, ge03, request=None) -> dict:
+    """Honest GE-03 run facts for campaign provenance. No invented CFL."""
+    count = int(n_cells)
+    mpi_on = request is not None and getattr(request, "mpi_mode", "off") == "on"
+    space = getattr(request, "execution_space", None) or "KokkosSerial"
+    ranks = getattr(getattr(request, "resources", None), "mpi_ranks", None) or 1
+    threads = getattr(getattr(request, "resources", None), "omp_threads", None) or 1
+    return {
+        "compiler": os.environ.get("CXX", "c++"),
+        "build_type": "native-dsl",
+        "precision": "float64",
+        "kokkos_execution_space": space,
+        "mpi_enabled": mpi_on,
+        "mpi_library": "none" if not mpi_on else "unknown",
+        "mpi_thread_level_requested": "none" if not mpi_on else "unknown",
+        "mpi_thread_level_provided": "none" if not mpi_on else "unknown",
+        "hdf5_collective_enabled": False,
+        "mpi_ranks": int(ranks),
+        "omp_threads_per_rank": int(threads),
+        "gpus": 0,
+        "resolution": [count, count],
+        "block_size": [count, count],
+        "amr_total_levels": 1,
+        "refinement_ratio": 2,
+        "subcycling": False,
+        "time_program": "SSPRK2",
+        "cfl": float(ge03.CFL),
+        "final_time": float(t_end),
+    }
+
+
 def run_native(n_cells: int = 8, t_end: float = 0.01, request=None):
     """Campaign entry: dim-1 jobs run TR-01; dim-2 jobs run the GE-03 path.
 
     Without ``request``, keep the historical Dim2 refuse path so existing
-    IF-08 unit tests still exercise ``require_native_dim(2)``.
+    IF-08 unit tests still exercise ``require_native_dim(2)``. A campaign
+    request returns provenance fields after the native path succeeds.
     """
     if request is not None:
         if request.min_resolution is not None:
@@ -135,13 +168,16 @@ def run_native(n_cells: int = 8, t_end: float = 0.01, request=None):
     require_native_dim(_exact.DIM2_REQUIRED)
     ge03 = load_sibling_module(_GE03_RUN)
     try:
-        return ge03.run_native(n_cells, t_end=t_end)
+        field = ge03.run_native(n_cells, t_end=t_end)
     except NativeUnavailable:
         raise
     except Exception as exc:
         if exc.__class__.__name__ == "NativeUnavailable":
             raise NativeUnavailable(str(exc)) from exc
         raise
+    if request is not None:
+        return _dim2_campaign_fields(n_cells, t_end, ge03, request)
+    return field
 
 
 def present_dim1_case(
