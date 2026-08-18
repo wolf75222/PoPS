@@ -53,6 +53,7 @@ JOB_PINNED_FILES = (
     "program.sha256",
     "native_artifact.json",
     "producer_manifest.json",
+    "producer_manifest.sha256",
 )
 
 
@@ -104,19 +105,6 @@ def _repository_sha(repo: Path = REPO_ROOT) -> str:
     if completed.returncode != 0 or not sha:
         raise EvidenceError("cannot read repository SHA")
     return sha
-
-
-def _repository_dirty(repo: Path = REPO_ROOT) -> bool:
-    completed = subprocess.run(
-        ["git", "status", "--porcelain"],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if completed.returncode != 0:
-        raise EvidenceError("cannot read repository status")
-    return bool(completed.stdout.strip())
 
 
 def _validate_schema(document: Mapping[str, Any], schema_path: Path, *, label: str) -> None:
@@ -362,12 +350,21 @@ def _load_job(job_dir: Path, *, expected_case_id: str | None = None) -> dict[str
         raise EvidenceError("provenance MPI does not match resolved case")
     if str(provenance.get("repository_sha")) != _repository_sha():
         raise EvidenceError("repository SHA mismatch")
+    _require_digest(
+        job_dir / "producer_manifest.json",
+        job_dir / "producer_manifest.sha256",
+        label="producer manifest",
+    )
     stored_producers = _load_json(job_dir / "producer_manifest.json", label="producer")
     live_producers = hash_producer_files(case_id)
+    required = {
+        "verification/pops_verify/cell_averages.py",
+        "verification/pops_verify/oracle_producers.py",
+    }
+    if required - set(stored_producers):
+        raise EvidenceError("producer manifest missing oracle-affecting sources")
     if stored_producers != live_producers:
         raise EvidenceError("oracle producer files do not match the manifest")
-    if _repository_dirty() and stored_producers != live_producers:
-        raise EvidenceError("dirty checkout")
     program_digest = _require_digest(
         job_dir / "program.bin", job_dir / "program.sha256", label="program"
     )

@@ -274,6 +274,7 @@ def test_contract_lists_required_job_files_and_parent_patch():
         "program.sha256",
         "native_artifact.json",
         "producer_manifest.json",
+        "producer_manifest.sha256",
     ):
         assert name in REQUIRED_JOB_FILES
     assert "result.npy" in PARENT_INTEGRATION_PATCH
@@ -321,25 +322,29 @@ def test_direct_nativeseries_constructor_cannot_pass():
     assert not hasattr(ne, "_series_from_records")
 
 
-def test_run_native_payload_is_raw_and_cannot_pass():
-    field = np.ones(16, dtype=np.float64)
-    payload = maybe_campaign_payload(
-        _request(),
-        field,
-        artifact=object(),
-        simulation=object(),
-        n_cells=16,
-        t_end=1.0,
-        time_program="SSPRK2",
-        cfl=0.4,
-    )
-    assert not isinstance(payload, NativeSeries)
-    assert "evidence_digest" not in payload
-    assert "leaf_sha256" not in payload
-    np.testing.assert_array_equal(payload["result"], field)
+def test_object_artifact_is_program_bytes_blocker():
+    with pytest.raises(NativeSeriesError, match="program bytes|so_path|CompiledSimulationArtifact"):
+        maybe_campaign_payload(
+            _request(),
+            np.ones(16),
+            artifact=object(),
+            simulation=object(),
+            n_cells=16,
+            t_end=1.0,
+            time_program="SSPRK2",
+            cfl=0.4,
+        )
+    source = (
+        REPO_ROOT / "verification" / "pops_verify" / "native_evidence.py"
+    ).read_text(encoding="utf-8")
+    assert "repr(artifact" not in source
+    assert "_standin" not in source
+
+
+def test_in_memory_payload_cannot_pass():
     summary = report_from_native_series(
         "TR-02",
-        [payload],
+        [{"result": np.ones(16), "program_bytes": b"x"}],
         native_dimensions=[1],
         components=["transport"],
     )
@@ -1043,5 +1048,171 @@ def test_threshold_below_min_cannot_pass_even_with_typed_empty_series():
         native_dimensions=[1],
         components=["transport"],
         threshold=1.8,
+    )
+    assert summary["coverage"]["cases_passed"] == 0
+
+
+def test_producer_sources_include_cell_averages_helpers_and_git_blobs():
+    from verification.pops_verify import oracle_producers as op
+
+    files = {str(path.relative_to(REPO_ROOT)) for path in op.producer_source_files("TR-02")}
+    assert "verification/pops_verify/cell_averages.py" in files
+    assert "verification/pops_verify/oracle_producers.py" in files
+    assert "verification/cases/transport/gaussian_pulse/exact.py" in files
+    tm01 = {str(path.relative_to(REPO_ROOT)) for path in op.producer_source_files("TM-01")}
+    assert "verification/cases/transport/advection_sine/exact.py" in tm01
+    tr06 = {str(path.relative_to(REPO_ROOT)) for path in op.producer_source_files("TR-06")}
+    assert "verification/cases/transport/advection_sine/exact.py" in tr06
+    manifest = op.hash_producer_files("TR-02")
+    cell = manifest["verification/pops_verify/cell_averages.py"]
+    assert isinstance(cell, dict)
+    assert "git_blob" in cell
+    assert "head_sha256" in cell
+    assert "sha256" in cell
+    verify = getattr(op, "verify_committed_producers", None)
+    assert verify is not None
+    assert hasattr(op, "dirty_producer_paths")
+
+
+def test_rewritten_producer_manifest_cannot_pass(tmp_path: Path):
+    series_dir, _root = _emit_series(tmp_path)
+    path = series_dir / "n016" / "producer_manifest.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["forged"] = True
+    path.write_text(json.dumps(document) + "\n", encoding="utf-8")
+    with pytest.raises(EvidenceError, match="producer|manifest"):
+        EvidenceBundle(series_dir)
+
+
+def test_rewritten_cell_averages_manifest_cannot_pass(tmp_path: Path):
+    series_dir, _root = _emit_series(tmp_path)
+    path = series_dir / "n016" / "producer_manifest.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    key = "verification/pops_verify/cell_averages.py"
+    assert key in document
+    if isinstance(document[key], dict):
+        document[key]["sha256"] = "0" * 64
+    else:
+        document[key] = "0" * 64
+    path.write_text(json.dumps(document) + "\n", encoding="utf-8")
+    sidecar = series_dir / "n016" / "producer_manifest.sha256"
+    if sidecar.is_file():
+        sidecar.write_text(hashlib.sha256(path.read_bytes()).hexdigest() + "\n")
+    with pytest.raises(EvidenceError, match="producer|cell_averages|manifest"):
+        EvidenceBundle(series_dir)
+
+
+def test_dirty_cell_averages_cannot_pass_scientific_analysis(monkeypatch):
+    from verification.pops_verify import oracle_producers as op
+
+    def dirty(_case_id):
+        return ["verification/pops_verify/cell_averages.py"]
+
+    monkeypatch.setattr(op, "dirty_producer_paths", dirty)
+    with pytest.raises(Exception, match="cell_averages|dirty|producer"):
+        op.verify_committed_producers("TR-02")
+    summary = report_from_native_series(
+        "TR-02",
+        None,
+        native_dimensions=[1],
+        components=["transport"],
+    )
+    assert summary["coverage"]["cases_passed"] == 0
+    reasons = " ".join(item["reason"] for item in summary["failures"])
+    assert "producer" in reasons.lower() or "cell_averages" in reasons.lower() or "oracle" in reasons.lower() or "native" in reasons.lower()
+    source = (
+        REPO_ROOT / "verification" / "pops_verify" / "evidence_bundle.py"
+    ).read_text(encoding="utf-8")
+    assert "_repository_dirty() and" not in source
+
+
+def test_payload_evidence_keys_stripped_and_can_emit_tm01_job(tmp_path: Path):
+    from verification.pops_verify.native_evidence import (
+        emission_from_payload,
+        run_fields_from_payload,
+    )
+    from verification.pops_verify.capabilities import sha256_file
+
+    program = tmp_path / "compiled.so"
+    program.write_bytes(b"compiled-program-image")
+    exact = _load(REPO_ROOT / "verification" / "cases" / "time" / "pure_temporal", "exact")
+    payload = {
+        **campaign_run_fields(
+            request=_request("TM-01", 1, 64),
+            n_cells=64,
+            t_end=0.01,
+            time_program="SSPRK2",
+            cfl=float(exact.DT) * 64.0,
+            dimension=1,
+        ),
+        "case_id": "TM-01",
+        "result": np.zeros(64, dtype=np.float64),
+        "program_bytes": program.read_bytes(),
+        "dt": float(exact.DT),
+    }
+    fields = run_fields_from_payload(payload)
+    assert "program_bytes" not in fields
+    assert "result" not in fields
+    assert "dt" not in fields
+    missing = [key for key in RUN_FIELDS if key not in fields]
+    assert missing == []
+    extra = emission_from_payload(payload)
+    assert extra["program_bytes"] == program.read_bytes()
+    assert extra["dt"] == pytest.approx(exact.DT)
+    identity = authenticate_installed_artifact(
+        dimension=1, variants_root=_write_leaf(tmp_path), doctor_ok=False
+    )
+    job_dir = tmp_path / "tm01-job"
+    emit_job_directory(
+        job_dir,
+        resolved_case={
+            "case": {"id": "TM-01"},
+            "job": {
+                "case_id": "TM-01",
+                "pops_native_dim": 1,
+                "suite": "pr",
+                "execution_space": "KokkosSerial",
+                "mpi_mode": "off",
+                "min_resolution": 64,
+                "dt": extra["dt"],
+                "evidence_status": "required",
+                "resources": {
+                    "nodes": 1,
+                    "mpi_ranks": 1,
+                    "omp_threads": 1,
+                    "resolutions": [64],
+                },
+            },
+        },
+        provenance=collect_provenance(
+            "TM-01",
+            pops_native_dim=1,
+            dimension=1,
+            nodes=1,
+            pops_version="test",
+            doctor_ok=False,
+            component_catalog_digest=identity.component_catalog_digest,
+            native_header_signature=identity.native_header_signature,
+            native_variant_manifest_digest=identity.native_variant_manifest_digest,
+            **fields,
+        ),
+        metrics=collect_metrics("TM-01", reason="contract fixture"),
+        result=extra["result"],
+        program_bytes=extra["program_bytes"],
+        native_artifact={
+            "path": str(identity.path),
+            "sha256": identity.sha256,
+            "dimension": 1,
+        },
+    )
+    resolved = json.loads((job_dir / "resolved_case.json").read_text(encoding="utf-8"))
+    assert resolved["job"]["dt"] == pytest.approx(exact.DT)
+    assert (job_dir / "program.bin").read_bytes() == program.read_bytes()
+    assert sha256_file(job_dir / "program.bin") != hashlib.sha256(repr(object()).encode()).hexdigest()
+    summary = report_from_native_series(
+        "TM-01",
+        job_dir,
+        native_dimensions=[1],
+        components=["time"],
     )
     assert summary["coverage"]["cases_passed"] == 0

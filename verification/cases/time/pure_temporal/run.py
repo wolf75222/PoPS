@@ -185,4 +185,5 @@ def run_native(dt=None, t_end=1.0, *, n_cells: int = N_CELLS, request=None):
         time_program="SSPRK2",
         cfl=float(authored.dt) * float(authored.n_cells),
         dimension=1,
+        dt=float(authored.dt),
     )

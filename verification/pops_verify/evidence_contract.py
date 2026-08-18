@@ -21,8 +21,10 @@ Exact patch for ``_write_job_artifacts`` (and ``execute_jobs`` after a truthful
    ``result.sha256``, ``program.bin``, ``program.sha256``,
    ``native_artifact.json``, and ``resolved_case.sha256``:
    - ``result``: ``numpy`` array from the payload (not a caller oracle);
-   - ``program_bytes``: the compiled program image or serialized plan bytes
-     already in the runner process — never ``repr(artifact)``;
+   - ``program_bytes``: bytes of ``CompiledSimulationArtifact.so_path``
+     from the raw ``run_native`` payload (never ``repr(artifact)``).
+     Extra binary/result keys must be stripped before ``collect_provenance``.
+   - TM-01: copy ``payload["dt"]`` into ``resolved_case["job"]["dt"]``.
    - ``native_artifact``: a JSON mapping ``{path, sha256, dimension}``
      copied from the parent-authenticated leaf. ``variants_root`` may be
      written for diagnostics but is **not** trusted; the loader pins
@@ -64,6 +66,7 @@ REQUIRED_JOB_FILES = (
     "program.sha256",
     "native_artifact.json",
     "producer_manifest.json",
+    "producer_manifest.sha256",
 )
 
 REQUIRED_PAIR_FILES = (
@@ -171,6 +174,7 @@ def emit_job_directory(
         json.dumps(hash_producer_files(case_id), indent=2) + "\n",
         encoding="utf-8",
     )
+    write_digest_file(root / "producer_manifest.sha256", sha256_file(manifest_path))
     if pair_result is not None:
         if pair_program_bytes is None:
             raise EvidenceContractError("pair_program_bytes required with pair_result")

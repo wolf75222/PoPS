@@ -222,19 +222,109 @@ def _oracle_tr06_pair(resolved, result, provenance):
 
 
 def producer_source_files(case_id: str) -> list[Path]:
-    files = [Path(__file__).resolve()]
+    files = [
+        Path(__file__).resolve(),
+        (REPO_ROOT / "verification" / "pops_verify" / "cell_averages.py").resolve(),
+        (REPO_ROOT / "verification" / "pops_verify" / "case_authoring.py").resolve(),
+    ]
     spec = CASE_SOURCES.get(str(case_id))
     if spec is not None:
-        files.append((CASES / spec[0] / spec[1] / "exact.py").resolve())
-    return files
+        exact = (CASES / spec[0] / spec[1] / "exact.py").resolve()
+        files.append(exact)
+        text = exact.read_text(encoding="utf-8")
+        if "advection_sine" in text:
+            files.append((CASES / "transport" / "advection_sine" / "exact.py").resolve())
+    unique: list[Path] = []
+    seen: set[Path] = set()
+    for path in files:
+        if path not in seen:
+            seen.add(path)
+            unique.append(path)
+    return unique
 
 
-def hash_producer_files(case_id: str) -> dict[str, str]:
+def _git_blob(rel: str) -> str:
+    import subprocess
+
+    completed = subprocess.run(
+        ["git", "rev-parse", f"HEAD:{rel}"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    blob = completed.stdout.strip()
+    if completed.returncode != 0 or not blob:
+        raise OracleProducerError(f"no committed git blob for {rel}")
+    return blob
+
+
+def _git_head_sha256(rel: str) -> str:
+    import hashlib
+    import subprocess
+
+    completed = subprocess.run(
+        ["git", "show", f"HEAD:{rel}"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise OracleProducerError(f"cannot read committed blob for {rel}")
+    return hashlib.sha256(completed.stdout).hexdigest()
+
+
+def _git_path_dirty(rel: str) -> bool:
+    import subprocess
+
+    completed = subprocess.run(
+        ["git", "status", "--porcelain", "--", rel],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise OracleProducerError(f"cannot read git status for {rel}")
+    return bool(completed.stdout.strip())
+
+
+def dirty_producer_paths(case_id: str) -> list[str]:
     from verification.pops_verify.capabilities import sha256_file
 
-    manifest: dict[str, str] = {}
+    dirty: list[str] = []
     for path in producer_source_files(case_id):
-        manifest[str(path.relative_to(REPO_ROOT))] = sha256_file(path)
+        rel = str(path.relative_to(REPO_ROOT))
+        if _git_path_dirty(rel) or sha256_file(path) != _git_head_sha256(rel):
+            dirty.append(rel)
+    return dirty
+
+
+def hash_producer_files(case_id: str) -> dict[str, dict[str, str]]:
+    from verification.pops_verify.capabilities import sha256_file
+
+    manifest: dict[str, dict[str, str]] = {}
+    for path in producer_source_files(case_id):
+        rel = str(path.relative_to(REPO_ROOT))
+        manifest[rel] = {
+            "sha256": sha256_file(path),
+            "git_blob": _git_blob(rel),
+            "head_sha256": _git_head_sha256(rel),
+        }
+    return manifest
+
+
+def verify_committed_producers(case_id: str) -> dict[str, dict[str, str]]:
+    """Fail if any oracle-affecting source is dirty or differs from HEAD."""
+    dirty = dirty_producer_paths(case_id)
+    if dirty:
+        raise OracleProducerError(f"dirty producer files: {dirty}")
+    manifest = hash_producer_files(case_id)
+    for rel, row in manifest.items():
+        if row["sha256"] != row["head_sha256"]:
+            raise OracleProducerError(f"producer differs from HEAD: {rel}")
+        if row["git_blob"] != _git_blob(rel):
+            raise OracleProducerError(f"producer git blob mismatch: {rel}")
     return manifest
 
 

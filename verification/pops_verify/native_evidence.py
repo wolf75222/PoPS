@@ -14,8 +14,22 @@ from typing import Any
 from verification.pops_verify.convergence import observed_order
 from verification.pops_verify.evidence_bundle import EvidenceBundle, EvidenceError
 from verification.pops_verify.metrics import collect_metrics
+from verification.pops_verify.oracle_producers import OracleProducerError, verify_committed_producers
 from verification.pops_verify.provenance import RUN_FIELDS, collect_provenance
 from verification.pops_verify.report import ARTIFACTS
+
+PROGRAM_BYTES_BLOCKER = (
+    "public CompiledSimulationArtifact.so_path program bytes are required; "
+    "object stand-ins are not accepted"
+)
+EVIDENCE_PAYLOAD_KEYS = (
+    "result",
+    "pair_result",
+    "program_bytes",
+    "pair_program_bytes",
+    "dt",
+    "case_id",
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MISSING_NATIVE_SERIES = "no native result series"
@@ -174,6 +188,42 @@ def campaign_run_fields(
     return fields
 
 
+def program_bytes_from_artifact(artifact: Any) -> bytes:
+    """Read compiled program bytes from the public artifact ``so_path``."""
+    try:
+        from pops.codegen._compiled_artifact import CompiledSimulationArtifact
+    except Exception as exc:
+        raise NativeSeriesError(PROGRAM_BYTES_BLOCKER) from exc
+    if type(artifact) is not CompiledSimulationArtifact:
+        raise NativeSeriesError(PROGRAM_BYTES_BLOCKER)
+    path = Path(str(getattr(artifact, "so_path", "") or ""))
+    if not path.is_file():
+        raise NativeSeriesError(PROGRAM_BYTES_BLOCKER)
+    data = path.read_bytes()
+    if not data:
+        raise NativeSeriesError(PROGRAM_BYTES_BLOCKER)
+    return data
+
+
+def run_fields_from_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy RUN_FIELDS only. Binary/result keys are never provenance."""
+    return {key: payload[key] for key in RUN_FIELDS if key in payload}
+
+
+def emission_from_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Keys handed to ``emit_job_directory``, never to ``collect_provenance``."""
+    extra: dict[str, Any] = {
+        "result": payload["result"],
+        "program_bytes": payload["program_bytes"],
+    }
+    if "pair_result" in payload:
+        extra["pair_result"] = payload["pair_result"]
+        extra["pair_program_bytes"] = payload["pair_program_bytes"]
+    if "dt" in payload:
+        extra["dt"] = float(payload["dt"])
+    return extra
+
+
 def maybe_campaign_payload(
     request,
     field,
@@ -181,6 +231,7 @@ def maybe_campaign_payload(
     oracle=None,
     error_fn=None,
     pair=None,
+    dt=None,
     **fields_kwargs,
 ):
     """Return ``field`` unless a campaign request is present; then raw RUN_FIELDS.
@@ -193,6 +244,7 @@ def maybe_campaign_payload(
         raise NativeSeriesError("caller oracle/error_fn is not accepted")
     if request is None:
         return field
+    artifact = fields_kwargs.get("artifact")
     for key in (
         "artifact",
         "simulation",
@@ -201,16 +253,21 @@ def maybe_campaign_payload(
         "resolved_case_digest",
         "case_id",
         "sample_spacing",
+        "dt",
     ):
         fields_kwargs.pop(key, None)
     payload = campaign_run_fields(request=request, **fields_kwargs)
     payload["case_id"] = getattr(request, "case_id", None)
     payload["result"] = field
+    payload["program_bytes"] = program_bytes_from_artifact(artifact)
+    step = dt if dt is not None else None
+    if step is not None:
+        payload["dt"] = float(step)
     if pair is not None:
-        if isinstance(pair, Mapping) and "result" in pair:
-            payload["pair_result"] = pair["result"]
-        else:
-            payload["pair_result"] = pair
+        if not isinstance(pair, Mapping) or "result" not in pair:
+            raise NativeSeriesError("pair requires a result mapping")
+        payload["pair_result"] = pair["result"]
+        payload["pair_program_bytes"] = program_bytes_from_artifact(pair.get("artifact"))
     return payload
 
 
@@ -450,6 +507,16 @@ def report_from_native_series(
                 extra_reasons=extra_reasons,
             )
         orders = list(orders) + list(pair_orders)
+    try:
+        verify_committed_producers(case_id)
+    except OracleProducerError as exc:
+        return fail_closed_summary(
+            case_id,
+            str(exc),
+            native_dimensions=native_dimensions,
+            components=components,
+            extra_reasons=extra_reasons,
+        )
     return passed_summary(
         case_id,
         native_dimensions=native_dimensions,
