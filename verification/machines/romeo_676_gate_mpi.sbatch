@@ -20,9 +20,6 @@ source /scratch_p/rmdraux/pops-676/src/verification/machines/romeo_676_env.sh
 set -eo pipefail
 pops676_require_pic_kokkos
 pops676_load_mpi_hdf5
-# verify_installed_native and the campaign both dlopen the MPI leaf.
-# Site FI_PROVIDER=shm fails OFI getinfo on this MPICH 4.2.3 stack.
-export FI_PROVIDER=tcp
 
 GATE="${POPS676_GATE:-R3_1N}"
 case "$GATE" in
@@ -40,7 +37,6 @@ mkdir -p "$OUT"
 SUITE=pr
 MAX_NODES=1
 if [ "$GATE" = "R3_2N" ]; then
-  SUITE=two_node
   MAX_NODES=2
 fi
 
@@ -48,10 +44,13 @@ echo "host=$(hostname) gate=$GATE nodes=${SLURM_JOB_NUM_NODES:-1} ntasks=${SLURM
 echo "sha=$(git -C "$POPS676_SRC" rev-parse HEAD) build=$BUILD"
 test -f "$BUILD/python/pops/_native/variants.json"
 
-"$POPS_PYTHON" "$POPS676_SRC/scripts/verify_installed_native.py" \
+# Singleton verify cannot use site FI_PROVIDER=shm (OFI getinfo fails).
+FI_PROVIDER=tcp "$POPS_PYTHON" "$POPS676_SRC/scripts/verify_installed_native.py" \
   --expect-dim "$DIM" --expect-mpi --expect-parallel-hdf5 --json
 
-SRUN_ARGS=(--ntasks=2 --cpu-bind=cores)
+# Join one PMI world. Do not inherit the singleton tcp fabric.
+unset FI_PROVIDER
+SRUN_ARGS=(--mpi=pmi2 --ntasks=2 --cpu-bind=cores)
 if [ "$GATE" = "R3_2N" ]; then
   SRUN_ARGS+=(--ntasks-per-node=1)
 fi

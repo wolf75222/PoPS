@@ -183,7 +183,15 @@ def _native_unavailable_reason() -> str | None:
 
 
 def discovered_mpi_ranks() -> int:
-    """Return the launcher world size. Does not spawn ranks."""
+    """Return the live MPI world size, else the launcher size. Does not spawn ranks."""
+    try:
+        from pops._native_selector import selected_native_module
+
+        module = selected_native_module(required=False)
+        if module is not None and callable(getattr(module, "n_ranks", None)):
+            return int(module.n_ranks())
+    except Exception:
+        pass
     for key in (
         "POPS_CAMPAIGN_RANKS",
         "OMPI_COMM_WORLD_SIZE",

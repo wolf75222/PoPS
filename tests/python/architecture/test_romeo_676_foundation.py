@@ -100,6 +100,8 @@ def test_romeo_676_serial_gate_runs_if08_then_eu01() -> None:
 def test_romeo_676_mpi_gate_launches_if01_with_srun_two_ranks() -> None:
     text = MPI.read_text(encoding="utf-8")
     assert "srun" in text
+    assert "--mpi=pmi2" in text
+    assert "--suite two_node" not in text
     assert "IF-01" in text
     assert "--mpi-mode on" in text
     assert "--ntasks=2" in text

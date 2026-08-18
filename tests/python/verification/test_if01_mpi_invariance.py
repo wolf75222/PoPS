@@ -217,6 +217,25 @@ def test_if01_request_returns_run_fields(monkeypatch):
         run.campaign_run_fields(16, 0.25, mpi)
 
 
+def test_discovered_mpi_ranks_prefer_native_world_over_launcher(monkeypatch):
+    import sys
+    import types
+
+    run = _load_case_module("run")
+
+    class _Module:
+        def n_ranks(self):
+            return 1
+
+    selector = types.ModuleType("pops._native_selector")
+    selector.selected_native_module = lambda *, required=False: _Module()
+    monkeypatch.setitem(sys.modules, "pops._native_selector", selector)
+    monkeypatch.setenv("SLURM_NTASKS", "2")
+    monkeypatch.setenv("OMPI_COMM_WORLD_SIZE", "2")
+    monkeypatch.setenv("PMI_SIZE", "2")
+    assert run.discovered_mpi_ranks() == 1
+
+
 def test_modules_do_not_hardcode_pops_run_except_run_native():
     for name in CASE_MODULES:
         text = (CASE_DIR / name).read_text(encoding="utf-8")
