@@ -1,4 +1,4 @@
-"""TR-01 norms, observed order, and campaign report writer."""
+"""TR-01 3-d oblique sine: norms, observed order, provenance, report."""
 from __future__ import annotations
 
 import subprocess
@@ -11,13 +11,13 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from verification.pops_verify.case_authoring import load_sibling_module
+from verification.pops_verify.cell_averages import analytic_cell_averages
 from verification.pops_verify.convergence import observed_order
-
-_exact = load_sibling_module(_CASE_DIR / "exact.py")
-exact_sine = _exact.exact_sine
-uniform_cell_centers = _exact.uniform_cell_centers
 from verification.pops_verify.reference_errors import reference_errors
 from verification.pops_verify.report import write_verification_report
+
+_exact = load_sibling_module(_CASE_DIR / "exact.py")
+_run = load_sibling_module(_CASE_DIR / "run.py")
 
 CASE_ID = "TR-01"
 ORDER_THRESHOLD = 1.8
@@ -53,10 +53,10 @@ ARTIFACTS = {
     "failures_csv": "failures.csv",
 }
 NOT_RUN_REASONS = {
-    "amr.*": "AMR not run in TR-01 in-memory path",
+    "amr.*": "AMR is AM-01; TR-01 is uniform 3-d",
     "poisson.*": "Poisson not run in TR-01",
     "coupling.*": "coupling not run in TR-01",
-    "parallel_invariance.*": "parallel invariance not run in TR-01",
+    "parallel_invariance.*": "parallel invariance is IF-01",
     "performance.one_node": "performance not measured in TR-01",
     "performance.two_node": "performance not measured in TR-01",
 }
@@ -84,7 +84,7 @@ def _summary(*, orders: list, order_reason: str | None) -> dict:
         "repository_sha": _repository_sha(),
         "suite": "pr",
         "max_nodes": 2,
-        "native_dimensions": [1],
+        "native_dimensions": [3],
         "execution_spaces": ["KokkosSerial"],
         "coverage": {
             "components": ["transport"],
@@ -108,7 +108,7 @@ def _summary(*, orders: list, order_reason: str | None) -> dict:
 
 
 def analyze_series(errors, resolutions, output_dir) -> dict:
-    """Write a campaign report from an already-computed error series."""
+    """Write a campaign report from an already-computed 3-d error series."""
     error_series = list(errors)
     spacing_series = list(resolutions)
     if len(error_series) < 2:
@@ -133,11 +133,21 @@ def analyze_series(errors, resolutions, output_dir) -> dict:
     )
 
 
-def write_tr01_report(output_dir, *, n_cells=32) -> dict:
-    """Compare exact_sine(x, 0) to itself and write the four Task 20 artifacts."""
-    centers, volumes = uniform_cell_centers(n_cells)
-    field = exact_sine(centers, 0.0)
-    errors = reference_errors(field, field, volumes)
+def write_tr01_report(output_dir, *, n_cells=16) -> dict:
+    """Exact-vs-exact 3-d cell averages, then the four report artifacts."""
+    lo, hi = _exact.cell_bounds(n_cells)
+
+    def _u(x, y, z, time):
+        return _exact.exact_sine(x, y, z, time)
+
+    oracle = analytic_cell_averages(_u, lo, hi, 0.0)
+    _, _, _, volumes = _exact.uniform_cell_mesh(n_cells)
+    errors = reference_errors(oracle, oracle, volumes)
     if errors.linf != 0.0:
         raise ValueError("in-memory exact vs exact Linf must be 0")
     return analyze_series([errors.linf], [1.0 / float(n_cells)], output_dir)
+
+
+def write_native_campaign_report(output_dir, campaign: dict) -> dict:
+    """Write the report from a live Dim-3 ``run_order_campaign`` result."""
+    return analyze_series(campaign["linf"], campaign["spacings"], output_dir)

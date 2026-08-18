@@ -21,7 +21,7 @@ _TR01_EXACT = (
     Path(__file__).resolve().parents[2] / "transport" / "advection_sine" / "exact.py"
 )
 _tr01 = load_sibling_module(_TR01_EXACT)
-exact_sine = _tr01.exact_sine
+exact_sine = _tr01.exact_sine_1d
 
 
 def reflect_x(x) -> np.ndarray:

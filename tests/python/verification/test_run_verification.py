@@ -122,9 +122,9 @@ def test_valid_pr_plan_has_dummy_case(tmp_path: Path):
     assert Path(plan["manifest"]) == MANIFEST.resolve()
     ids = [case["id"] for case in plan["cases"]]
     assert "PH-00" in ids
+    assert "TR-01" not in ids
     assert set(ids) >= {
         "PH-00",
-        "TR-01",
         "TR-02",
         "PO-01",
         "PO-02",
@@ -143,6 +143,25 @@ def test_valid_pr_plan_has_dummy_case(tmp_path: Path):
     }
     assert result.stdout.strip() == f"planned {len(ids)} cases"
     assert {"case_id": "PH-00", "pops_native_dim": 1} in plan["jobs"]
+
+
+def test_valid_pr_plan_includes_tr01_only_for_dimension_3(tmp_path: Path):
+    output = tmp_path / "out3"
+    result = _run(
+        "--suite",
+        "pr",
+        "--dimensions",
+        "3",
+        "--max-nodes",
+        "2",
+        "--output",
+        str(output),
+    )
+    assert result.returncode == 0, result.stderr
+    plan = json.loads((output / "plan.json").read_text(encoding="utf-8"))
+    ids = [case["id"] for case in plan["cases"]]
+    assert "TR-01" in ids
+    assert {"case_id": "TR-01", "pops_native_dim": 3} in plan["jobs"]
 
 
 def test_invalid_suite_exits_one(tmp_path: Path):

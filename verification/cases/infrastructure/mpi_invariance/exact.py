@@ -19,7 +19,7 @@ _TR01_EXACT = (
 )
 _tr01 = load_sibling_module(_TR01_EXACT)
 
-exact_sine = _tr01.exact_sine
+exact_sine = _tr01.exact_sine_1d
 
 PLACEMENTS = ("one_block", "two_block", "1x4", "4x1")
 ONE_BLOCK_EDGES = (0.0, 1.0)

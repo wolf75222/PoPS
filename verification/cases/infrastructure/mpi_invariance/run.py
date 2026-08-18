@@ -77,7 +77,7 @@ def _sine_initial(frame):
     from pops.analytic import sin, x as analytic_x
     from pops.lib.initial import Analytic
 
-    wave = 2.0 * math.pi * float(_exact._tr01.K)
+    wave = 2.0 * math.pi * float(_exact._tr01.KX)
     return Analytic(
         frame=frame,
         components=(

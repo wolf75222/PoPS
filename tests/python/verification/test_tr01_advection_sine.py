@@ -1,4 +1,4 @@
-"""TR-01 1-d periodic advection sine (Phase 1 first scientific case)."""
+"""TR-01 3-d oblique periodic advection sine (Annexe A.1 / §35.1)."""
 from __future__ import annotations
 
 import ast
@@ -11,6 +11,7 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from tests.python.support.requirements import missing_compiler_requirement
+from verification.pops_verify.cell_averages import analytic_cell_averages
 from verification.pops_verify.convergence import observed_order
 from verification.pops_verify.reference_errors import reference_errors
 from verification.pops_verify.report import ARTIFACTS
@@ -36,12 +37,6 @@ def _validator() -> Draft202012Validator:
     schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
     Draft202012Validator.check_schema(schema)
     return Draft202012Validator(schema)
-
-
-def _cell_centers(n_cells: int = 32):
-    count = int(n_cells)
-    width = 1.0 / count
-    return (np.arange(count, dtype=np.float64) + 0.5) * width, np.full(count, width)
 
 
 def _pops_run_call_owners(source: str) -> list[str]:
@@ -73,23 +68,41 @@ def _pops_run_call_owners(source: str) -> list[str]:
     return owners
 
 
-def test_exact_sine_translation_is_periodic_identity():
+def test_canonical_3d_data_matches_annexe_a():
     exact = _load_case_module("exact")
-    x, _ = _cell_centers(32)
-    np.testing.assert_allclose(
-        exact.exact_sine(x, 1.0, a=1.0, k=1.0),
-        exact.exact_sine(x, 0.0),
-    )
+    assert exact.REQUIRED_NATIVE_DIM == 3
+    assert tuple(exact.A) == (1.0, 1.0, 1.0)
+    assert tuple(exact.K) == (1.0, 2.0, 3.0)
+    assert float(exact.T_END) == 1.0
+    assert tuple(exact.RESOLUTIONS) == RESOLUTIONS
+    xx, yy, zz, volumes = exact.uniform_cell_mesh(8)
+    q0 = exact.exact_sine(xx, yy, zz, 0.0)
+    q1 = exact.exact_sine(xx, yy, zz, 1.0)
+    np.testing.assert_allclose(q0, q1, atol=1.0e-12)
+    assert volumes.shape == (8, 8, 8)
+    assert xx.shape == (8, 8, 8)
 
 
 def test_reference_errors_of_exact_vs_exact_are_zero():
     exact = _load_case_module("exact")
-    x, volumes = _cell_centers(32)
-    field = exact.exact_sine(x, 0.0)
+    xx, yy, zz, volumes = exact.uniform_cell_mesh(8)
+    field = exact.exact_sine(xx, yy, zz, 0.0)
     errors = reference_errors(field, field, volumes)
     assert errors.l1 == 0.0
     assert errors.l2 == 0.0
     assert errors.linf == 0.0
+
+
+def test_cell_average_oracle_is_finite_on_the_cube():
+    exact = _load_case_module("exact")
+    lo, hi = exact.cell_bounds(8)
+
+    def _u(x, y, z, time):
+        return exact.exact_sine(x, y, z, time)
+
+    averages = analytic_cell_averages(_u, lo, hi, 0.0)
+    assert averages.shape == (8, 8, 8)
+    assert np.isfinite(averages).all()
 
 
 def test_manufactured_second_order_series_observed_order_is_two(tmp_path: Path):
@@ -105,14 +118,32 @@ def test_manufactured_second_order_series_observed_order_is_two(tmp_path: Path):
     observed = [row["observed_order"] for row in loaded["orders"]]
     assert observed
     np.testing.assert_allclose(observed, np.full(len(observed), 2.0))
+    assert loaded["native_dimensions"] == [3]
 
 
-def test_build_case_and_resolve_plan_without_native():
+def test_build_case_and_resolve_plan_are_dimension_3():
     run = _load_case_module("run")
-    case = run.build_case(16)
-    plan = run.resolve_plan(16)
+    case = run.build_case(8)
+    plan = run.resolve_plan(8)
     assert case is not None
-    assert getattr(plan, "resolved_dimension", None) == 1
+    assert getattr(plan, "resolved_dimension", None) == 3
+    text = (CASE_DIR / "run.py").read_text(encoding="utf-8")
+    assert "Cartesian3D" in text
+    assert "POPS_NATIVE_DIM=3" in text or "REQUIRED_NATIVE_DIM" in text
+    assert "Cartesian1D" not in text
+
+
+def test_run_native_refuses_missing_or_non_three_dim(monkeypatch):
+    run = _load_case_module("run")
+    monkeypatch.delenv("POPS_NATIVE_DIM", raising=False)
+    with pytest.raises(run.NativeUnavailable, match="POPS_NATIVE_DIM=3"):
+        run._require_native_dim3()
+    monkeypatch.setenv("POPS_NATIVE_DIM", "1")
+    with pytest.raises(run.NativeUnavailable, match="no 1-d/2-d fallback"):
+        run._require_native_dim3()
+    monkeypatch.setenv("POPS_NATIVE_DIM", "2")
+    with pytest.raises(run.NativeUnavailable, match="no 1-d/2-d fallback"):
+        run._require_native_dim3()
 
 
 def test_write_tr01_report_writes_four_schema_valid_artifacts(tmp_path: Path):
@@ -124,6 +155,7 @@ def test_write_tr01_report_writes_four_schema_valid_artifacts(tmp_path: Path):
     loaded = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
     _validator().validate(loaded)
     assert loaded["schema"] == "pops.verification.report.v1"
+    assert loaded["native_dimensions"] == [3]
 
 
 def test_modules_do_not_hardcode_pops_run_except_run_native():
@@ -132,21 +164,36 @@ def test_modules_do_not_hardcode_pops_run_except_run_native():
         owners = _pops_run_call_owners(text)
         if name == "run.py":
             assert owners
-            assert set(owners) == {"run_native"}
+            assert set(owners) <= {"run_native", "run_order_campaign"}
         else:
             assert owners == []
             assert "pops.run(" not in text
 
 
 @pytest.mark.compiler
-def test_run_native_returns_finite_field_or_skips():
+def test_run_native_dim3_returns_cube_or_skips(tmp_path: Path):
     run = _load_case_module("run")
     missing = missing_compiler_requirement()
     try:
-        field = np.asarray(run.run_native(16, t_end=0.05), dtype=np.float64)
+        field = np.asarray(
+            run.run_native(8, t_end=0.05, output_dir=tmp_path), dtype=np.float64
+        )
     except run.NativeUnavailable as exc:
         if missing:
             pytest.skip(missing)
         pytest.skip(str(exc))
-    assert field.size > 0
+    assert field.shape == (8, 8, 8)
     assert np.isfinite(field).all()
+    assert (tmp_path / "provenance.json").is_file()
+    document = json.loads((tmp_path / "provenance.json").read_text(encoding="utf-8"))
+    assert document["schema"] == "pops.verification.provenance.v1"
+    assert document["pops_native_dim"] == 3
+    assert document["dimension"] == 3
+    assert document["resolution"] == [8, 8, 8]
+
+
+@pytest.mark.compiler
+def test_order_campaign_requires_four_resolutions():
+    run = _load_case_module("run")
+    with pytest.raises(ValueError, match="four resolutions"):
+        run.run_order_campaign((16, 32, 64))

@@ -42,12 +42,12 @@ finite = true
 [[case]]
 id = "TR-01"
 path = "verification/cases/transport/advection_sine/run.py"
-name = "Periodic sine advection"
+name = "3-d oblique periodic sine advection"
 verification_kind = "code-verification"
 evidence_status = "required"
 physics = ["scalar_advection"]
-oracle = "translated_sine"
-native_dimensions = [1]
+oracle = "translated_oblique_sine"
+native_dimensions = [3]
 execution_spaces = ["KokkosSerial"]
 mpi_modes = ["off"]
 suites = ["pr", "nightly", "release"]

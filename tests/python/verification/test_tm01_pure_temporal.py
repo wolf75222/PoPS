@@ -75,7 +75,7 @@ def test_exact_loads_tr01_via_load_sibling_module():
     centers, _ = tr01.uniform_cell_centers(N_CELLS)
     np.testing.assert_array_equal(
         exact.exact_sine(centers, 0.25),
-        tr01.exact_sine(centers, 0.25),
+        tr01.exact_sine_1d(centers, 0.25),
     )
 
 

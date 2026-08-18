@@ -13,7 +13,7 @@ _TR01_EXACT = (
 )
 _tr01 = load_sibling_module(_TR01_EXACT)
 
-exact_sine = _tr01.exact_sine
+exact_sine = _tr01.exact_sine_1d
 uniform_cell_centers = _tr01.uniform_cell_centers
 
 N_CELLS = 64

@@ -1,12 +1,12 @@
-# Local echo of TR-01. Not catalogued in verification/manifest.toml (orchestrator).
+# Local echo of TR-01. Catalogued in verification/manifest.toml (orchestrator).
 id = "TR-01"
 path = "verification/cases/transport/advection_sine/run.py"
-name = "1-d periodic advection sine"
+name = "3-d oblique periodic sine advection"
 verification_kind = "code-verification"
 evidence_status = "required"
 physics = ["transport"]
-oracle = "manufactured_sine"
-native_dimensions = [1]
+oracle = "translated_oblique_sine"
+native_dimensions = [3]
 execution_spaces = ["KokkosSerial"]
 mpi_modes = ["off"]
 suites = ["nightly"]
@@ -14,9 +14,11 @@ requires = []
 
 [resources.pr]
 nodes = 1
+resolutions = [16, 32, 64, 128]
 
 [resources.two_node]
 nodes = [1, 2]
 
 [acceptance]
 observed_order_min = 1.8
+

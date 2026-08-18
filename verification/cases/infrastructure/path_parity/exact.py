@@ -18,7 +18,7 @@ _TR01_EXACT = (
 )
 _tr01 = load_sibling_module(_TR01_EXACT)
 
-exact_sine = _tr01.exact_sine
+exact_sine = _tr01.exact_sine_1d
 
 PATHS = ("native", "dsl", "hybrid")
 DEFAULT_N_CELLS = 32

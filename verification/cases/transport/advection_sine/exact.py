@@ -1,5 +1,6 @@
-"""Manufactured 1-d periodic advection sine.
+"""Manufactured 3-d oblique periodic advection sine (plan TR-01 / Annexe A.1).
 
+Canonical data: a = (1, 1, 1), k = (1, 2, 3), T = 1 on the unit cube.
 Does not import pops or read a PoPS output.
 """
 from __future__ import annotations
@@ -8,32 +9,85 @@ import numpy as np
 
 Q0 = 1.0
 EPS = 1.0e-2
-A = 1.0
-K = 1.0
+AX = 1.0
+AY = 1.0
+AZ = 1.0
+A = (AX, AY, AZ)
+KX = 1.0
+KY = 2.0
+KZ = 3.0
+K = (KX, KY, KZ)
+T_END = 1.0
+RESOLUTIONS = (16, 32, 64, 128)
+REQUIRED_NATIVE_DIM = 3
 
 
 def uniform_cell_centers(n_cells: int):
-    """Return cell centers and widths on the periodic unit interval."""
+    """1-d unit-interval centers. Not the TR-01 3-d mesh."""
     count = int(n_cells)
-    width = 1.0 / count
+    width = 1.0 / float(count)
     centers = (np.arange(count, dtype=np.float64) + 0.5) * width
     volumes = np.full(count, width, dtype=np.float64)
     return centers, volumes
 
 
-def exact_sine(x, t, *, q0=Q0, eps=EPS, a=A, k=K) -> np.ndarray:
-    """Return q(x, t) = q0 + eps sin(2π k (x - a t)) on periodic [0, 1]."""
+def uniform_cell_mesh(n_cells: int):
+    """Return (x, y, z, volumes) on a uniform periodic unit cube.
+
+    Centers are shaped ``(n, n, n)`` with axis order ``(z, y, x)`` to match
+    the native ``state_global`` packing ``(ncomp, nz, ny, nx)``.
+    """
+    count = int(n_cells)
+    if count <= 0:
+        raise ValueError("n_cells must be positive")
+    width = 1.0 / float(count)
+    line = (np.arange(count, dtype=np.float64) + 0.5) * width
+    zz, yy, xx = np.meshgrid(line, line, line, indexing="ij")
+    volumes = np.full(xx.shape, width**3, dtype=np.float64)
+    return xx, yy, zz, volumes
+
+
+def cell_bounds(n_cells: int):
+    """Return cell ``(lo, hi)`` arrays of shape ``(n, n, n, 3)`` in (x, y, z)."""
+    count = int(n_cells)
+    if count <= 0:
+        raise ValueError("n_cells must be positive")
+    width = 1.0 / float(count)
+    edges = np.arange(count, dtype=np.float64) * width
+    iz, iy, ix = np.meshgrid(edges, edges, edges, indexing="ij")
+    lo = np.stack((ix, iy, iz), axis=-1)
+    hi = lo + width
+    return lo, hi
+
+
+def exact_sine(
+    x,
+    y,
+    z,
+    t,
+    *,
+    q0=Q0,
+    eps=EPS,
+    a=A,
+    k=K,
+) -> np.ndarray:
+    """Return q(x, y, z, t) = q0 + ε sin(2π k · (x − a t)) on periodic [0, 1]³."""
+    xx = np.asarray(x, dtype=np.float64)
+    yy = np.asarray(y, dtype=np.float64)
+    zz = np.asarray(z, dtype=np.float64)
+    ax, ay, az = (float(value) for value in a)
+    kx, ky, kz = (float(value) for value in k)
+    time = float(t)
+    phase = (
+        kx * (xx - ax * time)
+        + ky * (yy - ay * time)
+        + kz * (zz - az * time)
+    )
+    return float(q0) + float(eps) * np.sin(2.0 * np.pi * phase)
+
+
+def exact_sine_1d(x, t, *, q0=Q0, eps=EPS, a=1.0, k=1.0) -> np.ndarray:
+    """1-d line sample of a translated sine. Not the TR-01 3-d case."""
     points = np.asarray(x, dtype=np.float64)
     departure = np.mod(points - float(a) * float(t), 1.0)
     return float(q0) + float(eps) * np.sin(2.0 * np.pi * float(k) * departure)
-
-
-def exact_sine_nd(coords, t, a, k, *, q0=Q0, eps=EPS) -> np.ndarray:
-    """Optional n-d manufactured translation of the same sine."""
-    axes = [np.asarray(axis, dtype=np.float64) for axis in coords]
-    speeds = np.broadcast_to(np.asarray(a, dtype=np.float64), (len(axes),))
-    waves = np.broadcast_to(np.asarray(k, dtype=np.float64), (len(axes),))
-    phase = np.zeros(np.broadcast_shapes(*[axis.shape for axis in axes]), dtype=np.float64)
-    for axis, speed, wave in zip(axes, speeds, waves, strict=True):
-        phase = phase + float(wave) * np.mod(axis - float(speed) * float(t), 1.0)
-    return float(q0) + float(eps) * np.sin(2.0 * np.pi * phase)

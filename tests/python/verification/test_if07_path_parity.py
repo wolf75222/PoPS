@@ -77,7 +77,7 @@ def test_exact_loads_tr01_via_load_sibling_module():
     centers = exact.cell_centers(N_CELLS)
     np.testing.assert_array_equal(
         exact.exact_sine(centers, T),
-        tr01.exact_sine(centers, T),
+        tr01.exact_sine_1d(centers, T),
     )
 
 
@@ -145,7 +145,7 @@ def test_public_case_is_the_dsl_path():
     run = _load_case_module("run")
     case = run.public_dsl_case(N_CELLS)
     assert isinstance(case, pops.Case)
-    assert case.name == "tr01_advection_sine"
+    assert case.name == "tr01_advection_sine_oblique_3d"
 
 
 def test_run_native_dsl_path_or_skips():

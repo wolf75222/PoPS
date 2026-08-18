@@ -94,7 +94,7 @@ def test_exact_loads_tr01_via_load_sibling_module():
     centers = exact.cell_centers(exact.N_CELLS)
     np.testing.assert_array_equal(
         exact.manufactured_q(centers),
-        tr01.exact_sine(centers, 0.0),
+        tr01.exact_sine_1d(centers, 0.0),
     )
 
 
