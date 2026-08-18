@@ -2,12 +2,14 @@
 """EU-02 v1.5 driver: official CampaignRequest / EvidenceBundle path.
 
 Stages:
-  series   — scripts/run_verification.py Serial/OpenMP four-resolution global
-  temporal — FixedDt n=64, dt, dt/2, dt/4, dt/8
-  spatial  — FixedDt Δt ∝ h² at 16/32/64/128
-  smoke    — single n=16 CampaignRequest
-  dump     — finest global run with accepted-state snapshots
-  analyze  — EvidenceBundle → report / metrics / visual_data
+  series   — official WENO5-Z four-resolution global (acceptance)
+  temporal — WENO FixedDt at n=128 (or 256) only when isolated
+  spatial  — WENO FixedDt dt ∝ h² at 16/32/64/128
+  tvd      — labeled VanLeer fail control at 16/32/64/128 (no n=256)
+  smoke    — n=16 t=0.25 CampaignRequest
+  dump     — finest (n=128) global snapshots
+  parity   — Serial vs OpenMP4 vs MPI2 bit/norm compare
+  analyze  — EvidenceBundle → report / Phase 8 visuals in finest job
 """
 from __future__ import annotations
 
@@ -49,9 +51,13 @@ RUN = load_sibling_module(
 ANALYZE = load_sibling_module(
     ROOT / "verification" / "cases" / "euler" / "isentropic_vortex" / "analyze.py"
 )
-TEMPORAL_DTS = (0.04, 0.02, 0.01, 0.005)
+TEMPORAL_N = 128
+TEMPORAL_FINER_N = 256
+TEMPORAL_DTS = (0.008, 0.004, 0.002, 0.001)
 TEMPORAL_T_END = 0.32
+DUMP_N = 128
 DUMP_TIMES = (0.0, 0.25, 0.5, 0.75, 1.0)
+ACCEPTANCE_RESOLUTIONS = (16, 32, 64, 128)
 
 
 def _artifact(dimension: int = 2):
@@ -129,15 +135,27 @@ def _emit(job, request, payload, artifact, job_dir: Path, case: dict):
     )
 
 
-def _run_one(job, n_cells: int, output: Path, *, dt=None, family="global", dump_times=None, t_end=None):
+def _run_one(
+    job,
+    n_cells: int,
+    output: Path,
+    *,
+    dt=None,
+    family="global",
+    dump_times=None,
+    t_end=None,
+    reconstruction="weno5z",
+    job_name=None,
+):
     artifact = _artifact()
-    job_dir = output / f"n{int(n_cells):03d}"
+    job_dir = output / (job_name or f"n{int(n_cells):03d}")
     leaf_job = dataclasses.replace(job, min_resolution=int(n_cells))
     request = CampaignRequest.from_job(leaf_job, output_dir=job_dir)
     kwargs = {
         "request": request,
         "n_cells": n_cells,
         "family": family,
+        "reconstruction": reconstruction,
     }
     if dt is not None:
         kwargs["dt"] = float(dt)
@@ -173,38 +191,131 @@ def stage_series(output: Path, space: str, mpi: str) -> int:
         mpi,
         "--execute",
     ]
-    return int(verification_main(argv))
+    status = int(verification_main(argv))
+    try:
+        series = resolve_series_dir(output, space, mpi)
+        (series / "family.json").write_text(
+            json.dumps(
+                {
+                    "family": "global",
+                    "dt_scaling": "cfl",
+                    "reconstruction": "weno5z",
+                    "reconstruction_role": "acceptance",
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+    except SystemExit:
+        pass
+    return status
+
+
+def _spatial_linf_at(space: str, mpi: str, n_cells: int, sibling: Path) -> float | None:
+    spatial_root = sibling.parent / f"EU02_D2_{space}_{mpi}_spatial"
+    try:
+        series = resolve_series_dir(spatial_root, space, mpi)
+        campaign = ANALYZE.campaign_from_evidence(series)
+        packed = campaign["fields"][int(n_cells)]
+        errors = ANALYZE.primitive_errors(packed, int(n_cells), float(campaign["t_end"]))
+        return float(errors["rho"].linf)
+    except Exception:
+        return None
+
+
+def _dt_job_name(dt: float) -> str:
+    return f"dt{dt:g}".replace(".", "p")
+
+
+def _temporal_prefix(n_cells: int) -> str:
+    return f"n{int(n_cells):03d}-"
+
+
+def _run_temporal_dt(output: Path, space: str, mpi: str, n_cells: int, dt: float) -> str:
+    name = f"{_temporal_prefix(n_cells)}{_dt_job_name(float(dt))}"
+    job = _job(space, mpi, n_cells, resolutions=(n_cells, n_cells, n_cells, n_cells))
+    _run_one(
+        job,
+        n_cells,
+        output,
+        dt=float(dt),
+        family="temporal",
+        t_end=TEMPORAL_T_END,
+        reconstruction="weno5z",
+        job_name=name,
+    )
+    return name
+
+
+def _coarsest_dt_linf(output: Path, name: str, n_cells: int) -> float:
+    packed = np.load(output / name / "result.npy")
+    return float(ANALYZE.primitive_errors(packed, n_cells, TEMPORAL_T_END)["rho"].linf)
+
+
+def _probe_spatial_linf(output: Path, space: str, mpi: str, n_cells: int) -> float:
+    known = _spatial_linf_at(space, mpi, n_cells, output)
+    if known is not None:
+        return known
+    name = f"spatial-probe-n{int(n_cells):03d}"
+    job = _job(space, mpi, n_cells, resolutions=(n_cells,))
+    _run_one(
+        job,
+        n_cells,
+        output,
+        family="spatial",
+        dt=RUN.spatial_fixed_dt(n_cells),
+        t_end=TEMPORAL_T_END,
+        reconstruction="weno5z",
+        job_name=name,
+    )
+    packed = np.load(output / name / "result.npy")
+    return float(ANALYZE.primitive_errors(packed, n_cells, TEMPORAL_T_END)["rho"].linf)
 
 
 def stage_temporal(output: Path, space: str, mpi: str) -> int:
-    job = _job(space, mpi, 64, resolutions=(64, 64, 64, 64))
-    names = []
-    for dt in TEMPORAL_DTS:
-        name = f"dt{dt:g}".replace(".", "p")
-        job_dir = output / name
-        request = CampaignRequest.from_job(job, output_dir=job_dir)
-        payload = RUN.run_native(
-            request=request,
-            n_cells=64,
-            t_end=TEMPORAL_T_END,
-            dt=float(dt),
-            family="temporal",
+    chosen_n = None
+    spatial_linf = None
+    claim_names: list[str] = []
+    extra_names: list[str] = []
+    for n_cells in (TEMPORAL_N, TEMPORAL_FINER_N):
+        spatial_linf = _probe_spatial_linf(output, space, mpi, n_cells)
+        coarsest = float(TEMPORAL_DTS[0])
+        first = _run_temporal_dt(output, space, mpi, n_cells, coarsest)
+        extra_names.append(first)
+        coarsest_err = _coarsest_dt_linf(output, first, n_cells)
+        if ANALYZE.temporal_is_isolated(spatial_linf, coarsest_err):
+            chosen_n = n_cells
+            claim_names = [first]
+            for dt in TEMPORAL_DTS[1:]:
+                claim_names.append(_run_temporal_dt(output, space, mpi, n_cells, float(dt)))
+            break
+    family = {
+        "family": "temporal",
+        "t_end": TEMPORAL_T_END,
+        "reconstruction": "weno5z",
+        "reconstruction_role": "acceptance",
+        "spatial_linf": spatial_linf,
+        "isolated": chosen_n is not None,
+    }
+    if chosen_n is None:
+        write_series_json(output, "EU-02", extra_names)
+        family.update(
+            {
+                "dts": [float(TEMPORAL_DTS[0])],
+                "n_cells": TEMPORAL_FINER_N,
+                "reason": "spatial L∞ not 10× below coarsest-dt error; temporal not claimed",
+            }
         )
-        artifact = _artifact()
-        _emit(
-            job,
-            request,
-            payload,
-            artifact,
-            job_dir,
-            {"id": "EU-02", "path": "verification/cases/euler/isentropic_vortex/run.py"},
+        (output / "family.json").write_text(json.dumps(family, indent=2) + "\n")
+        return 0
+    if chosen_n == TEMPORAL_N:
+        finer_check = _run_temporal_dt(
+            output, space, mpi, TEMPORAL_FINER_N, float(TEMPORAL_DTS[-1])
         )
-        names.append(name)
-    write_series_json(output, "EU-02", names)
-    (output / "family.json").write_text(
-        json.dumps({"family": "temporal", "dts": list(TEMPORAL_DTS), "t_end": TEMPORAL_T_END}, indent=2)
-        + "\n"
-    )
+        family["finer_grid_check"] = finer_check
+    write_series_json(output, "EU-02", claim_names)
+    family.update({"dts": list(TEMPORAL_DTS), "n_cells": chosen_n})
+    (output / "family.json").write_text(json.dumps(family, indent=2) + "\n")
     return 0
 
 
@@ -223,7 +334,18 @@ def stage_spatial(output: Path, space: str, mpi: str) -> int:
         )
         names.append(f"n{int(n_cells):03d}")
     write_series_json(output, "EU-02", names)
-    (output / "family.json").write_text(json.dumps({"family": "spatial", "dt_scaling": "h2"}, indent=2) + "\n")
+    (output / "family.json").write_text(
+        json.dumps(
+            {
+                "family": "spatial",
+                "dt_scaling": "h2",
+                "reconstruction": "weno5z",
+                "reconstruction_role": "acceptance",
+            },
+            indent=2,
+        )
+        + "\n"
+    )
     return 0
 
 
@@ -237,9 +359,59 @@ def stage_smoke(output: Path, space: str, mpi: str) -> int:
 
 
 def stage_dump(output: Path, space: str, mpi: str) -> int:
-    job = _job(space, mpi, 64, resolutions=(64,))
-    _run_one(job, 64, output, family="global", t_end=1.0, dump_times=DUMP_TIMES)
-    write_series_json(output, "EU-02", ["n064"])
+    job = _job(space, mpi, DUMP_N, resolutions=(DUMP_N,))
+    _run_one(
+        job,
+        DUMP_N,
+        output,
+        family="global",
+        t_end=1.0,
+        dump_times=DUMP_TIMES,
+        reconstruction="weno5z",
+    )
+    write_series_json(output, "EU-02", [f"n{DUMP_N:03d}"])
+    return 0
+
+
+def stage_tvd(output: Path, space: str, mpi: str) -> int:
+    resolutions = ACCEPTANCE_RESOLUTIONS
+    job = _job(space, mpi, 16, resolutions=resolutions)
+    names = []
+    for n_cells in resolutions:
+        _run_one(
+            job,
+            n_cells,
+            output,
+            family="global",
+            t_end=1.0,
+            reconstruction="vanleer",
+        )
+        names.append(f"n{int(n_cells):03d}")
+    write_series_json(output, "EU-02", names)
+    (output / "family.json").write_text(
+        json.dumps(
+            {
+                "family": "global",
+                "reconstruction": "vanleer",
+                "reconstruction_role": "tvd_fail_control",
+                "dt_scaling": "cfl",
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+    return 0
+
+
+def stage_parity(output: Path, space: str, mpi: str) -> int:
+    del space, mpi
+    root = output.parent
+    serial = Path(os.environ.get("POPS_EU02_SERIAL_SMOKE", root / "EU02_D2_KokkosSerial_off_smoke"))
+    openmp = Path(os.environ.get("POPS_EU02_OPENMP_SMOKE", root / "EU02_D2_KokkosOpenMP_off_smoke"))
+    mpi_dir = Path(os.environ.get("POPS_EU02_MPI_SMOKE", root / "EU02_D2_KokkosSerial_on_smoke"))
+    report = ANALYZE.compare_smokes_from_dirs(serial, openmp, mpi_dir)
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "parity.json").write_text(json.dumps(report, indent=2) + "\n")
     return 0
 
 
@@ -282,13 +454,22 @@ def stage_analyze(output: Path, space: str, mpi: str) -> int:
     snap = series / f"n{finest:03d}" / "snapshots.npz"
     if snap.is_file():
         extras.update(_trajectory_from_snapshots(snap, finest))
-    ANALYZE.write_native_campaign_report(output, campaign, extras)
+    try:
+        ANALYZE.write_native_campaign_report(output, campaign, extras)
+    except ANALYZE.NativeSeriesError as exc:
+        (output / "order_claim_error.txt").write_text(f"{exc}\n")
+        ANALYZE.write_eu02_report(output)
+        return 0
+    visual_job = ANALYZE.finest_visual_job_dir(series)
     try:
         from verification.pops_verify.visualization.render import render_run
 
-        render_run(output, suite="release", formats=("svg", "png", "pdf", "gif"))
+        render_run(visual_job, suite="release", formats=("svg", "png", "pdf", "gif"))
     except Exception as exc:
-        (output / "visual_render_error.txt").write_text(f"{type(exc).__name__}: {exc}\n")
+        (visual_job / "visual_render_error.txt").write_text(f"{type(exc).__name__}: {exc}\n")
+        (output / "visual_render_error.txt").write_text(
+            f"{type(exc).__name__}: {exc}\njob={visual_job}\n"
+        )
     return 0
 
 
@@ -405,8 +586,10 @@ def main() -> int:
         "series": stage_series,
         "temporal": stage_temporal,
         "spatial": stage_spatial,
+        "tvd": stage_tvd,
         "smoke": stage_smoke,
         "dump": stage_dump,
+        "parity": stage_parity,
         "analyze": stage_analyze,
     }
     return stages[args.stage](args.output, args.space, args.mpi)

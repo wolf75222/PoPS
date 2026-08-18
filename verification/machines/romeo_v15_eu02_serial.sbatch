@@ -2,7 +2,7 @@
 #SBATCH --account=r250127
 #SBATCH --constraint=x64cpu
 #SBATCH --partition=short
-#SBATCH --time=02:30:00
+#SBATCH --time=04:00:00
 #SBATCH --mem=32G
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -11,7 +11,7 @@
 #SBATCH --output=/scratch_p/rmdraux/pops-v15-eu02/logs/%x.%j.out
 #SBATCH --error=/scratch_p/rmdraux/pops-v15-eu02/logs/%x.%j.err
 
-# Isolated Serial leaf + global/temporal/spatial/dump/analyze. One node.
+# Isolated Serial leaf + WENO global/spatial/dump/tvd/smoke/temporal/analyze.
 echo "starting job=${SLURM_JOB_ID:-local} host=$(hostname)"
 set -eo pipefail
 # shellcheck source=/dev/null
@@ -32,7 +32,8 @@ export POPS_THREADS=1
 pops_eu02_pythonpath "$BUILD"
 
 DRIVER="$POPS_EU02_SRC/verification/machines/run_eu02_v15.py"
-for STAGE in series temporal spatial dump; do
+# Spatial before temporal so isolation can use a real WENO L∞.
+for STAGE in series spatial dump tvd smoke temporal; do
   OUT="$POPS_EU02_ROOT/evidence/EU02_D2_KokkosSerial_off_${STAGE}"
   mkdir -p "$OUT"
   echo "=== STAGE $STAGE ==="
@@ -42,13 +43,13 @@ done
 # Official runner writes EvidenceBundle under EU-02/dim2-KokkosSerial-off.
 ANALYZE_OUT="$POPS_EU02_ROOT/evidence/EU02_D2_KokkosSerial_off_series"
 SERIES="$ANALYZE_OUT/EU-02/dim2-KokkosSerial-off"
-DUMP_SNAP="$POPS_EU02_ROOT/evidence/EU02_D2_KokkosSerial_off_dump/n064/snapshots.npz"
+DUMP_SNAP="$POPS_EU02_ROOT/evidence/EU02_D2_KokkosSerial_off_dump/n128/snapshots.npz"
 if [ -f "$DUMP_SNAP" ]; then
-  mkdir -p "$SERIES/n064"
-  cp -f "$DUMP_SNAP" "$SERIES/n064/snapshots.npz"
+  mkdir -p "$SERIES/n128"
+  cp -f "$DUMP_SNAP" "$SERIES/n128/snapshots.npz"
 fi
 "$POPS_PYTHON" "$DRIVER" --stage analyze --space KokkosSerial --mpi off --output "$ANALYZE_OUT"
-for EXTRA in temporal spatial; do
+for EXTRA in spatial temporal tvd; do
   echo "=== ANALYZE $EXTRA ==="
   "$POPS_PYTHON" "$DRIVER" --stage analyze --space KokkosSerial --mpi off \
     --output "$POPS_EU02_ROOT/evidence/EU02_D2_KokkosSerial_off_${EXTRA}"

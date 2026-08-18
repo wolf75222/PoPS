@@ -2,10 +2,10 @@
 
 Initial conditions are analytic cell averages of conserved fields.
 ``build_case`` / ``resolve_plan`` author a public 2-d periodic Euler Case
-(Rusanov, MUSCL/VanLeer, SSPRK2). ``run_native`` compiles, binds, and
-advances the Case. A ``CampaignRequest`` returns EvidenceBundle emission
-keys with a packed ``(4, n, n)`` conserved result. 1-d is not applicable.
-Does not call ROMEO.
+(Rusanov, WENO5-Z, SSPRK2). VanLeer is a separately labeled TVD fail
+control. ``run_native`` compiles, binds, and advances the Case. A
+``CampaignRequest`` returns EvidenceBundle emission keys with a packed
+``(4, n, n)`` conserved result. 1-d is not applicable. Does not call ROMEO.
 """
 from __future__ import annotations
 
@@ -27,6 +27,8 @@ COMPONENT_ORDER = ("rho", "rho_u", "rho_v", "E")
 PRIMITIVE_ORDER = ("rho", "u", "v", "p")
 T_END_CANONICAL = 1.0
 SPATIAL_DT_COEF = 0.16
+ACCEPTANCE_RECONSTRUCTION = "weno5z"
+TVD_FAIL_CONTROL_RECONSTRUCTION = "vanleer"
 
 
 class NativeUnavailable(RuntimeError):
@@ -34,7 +36,16 @@ class NativeUnavailable(RuntimeError):
 
 
 class _Authoring:
-    __slots__ = ("case", "instance", "frame", "n_cells", "time_program", "cfl", "dt")
+    __slots__ = (
+        "case",
+        "instance",
+        "frame",
+        "n_cells",
+        "time_program",
+        "cfl",
+        "dt",
+        "reconstruction",
+    )
 
     def __init__(
         self,
@@ -45,6 +56,7 @@ class _Authoring:
         time_program: str,
         cfl: float,
         dt: float | None,
+        reconstruction: str,
     ) -> None:
         self.case = case
         self.instance = instance
@@ -53,6 +65,27 @@ class _Authoring:
         self.time_program = time_program
         self.cfl = cfl
         self.dt = dt
+        self.reconstruction = reconstruction
+
+
+def reconstruction_role(name: str) -> str:
+    """Acceptance is public WENO5-Z; VanLeer is a labeled TVD fail control."""
+    if name == TVD_FAIL_CONTROL_RECONSTRUCTION:
+        return "tvd_fail_control"
+    if name == ACCEPTANCE_RECONSTRUCTION:
+        return "acceptance"
+    raise ValueError(f"unknown reconstruction {name!r}")
+
+
+def _reconstruction_brick(name: str):
+    from pops.numerics import reconstruction
+    from pops.numerics.reconstruction import limiters
+
+    if name == TVD_FAIL_CONTROL_RECONSTRUCTION:
+        return reconstruction.MUSCL(limiter=limiters.VanLeer())
+    if name != ACCEPTANCE_RECONSTRUCTION:
+        raise ValueError(f"unknown reconstruction {name!r}")
+    return reconstruction.WENO5Z()
 
 
 def cell_centers(n_cells: int = N_CELLS):
@@ -178,14 +211,14 @@ def _author(
     *,
     dt: float | None = None,
     family: str = "global",
+    reconstruction: str = ACCEPTANCE_RECONSTRUCTION,
 ) -> _Authoring:
     import pops
     import pops.lib.time as libtime
     from pops.initial import InitialCondition
     from pops.lib.initial import BindArray
     from pops.math import ddt, div, sqrt
-    from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
-    from pops.numerics.reconstruction import limiters
+    from pops.numerics import DiscretizationPlan, riemann, variables
     from pops.numerics.spatial import FiniteVolume
     from pops.physics import Density, Energy, Momentum
     from pops.projection import ConservativeCellAverage
@@ -245,7 +278,7 @@ def _author(
         FiniteVolume(
             flux=flux,
             variables=variables.Conservative(state),
-            reconstruction=reconstruction.MUSCL(limiter=limiters.VanLeer()),
+            reconstruction=_reconstruction_brick(reconstruction),
             riemann=riemann.Rusanov(),
         ),
     )
@@ -279,6 +312,7 @@ def _author(
         time_program=time_program,
         cfl=cfl_value,
         dt=step_dt,
+        reconstruction=reconstruction,
     )
 
 
@@ -323,12 +357,14 @@ def run_native(
     dt: float | None = None,
     family: str = "global",
     dump_times=None,
+    reconstruction: str = ACCEPTANCE_RECONSTRUCTION,
 ):
     """Compile, bind, and run the 2-d vortex. Raises NativeUnavailable without Kokkos.
 
     ``family`` is recorded only. Constant-CFL AdaptiveCFL is ``global``.
     Isolated spatial uses ``family='spatial'`` (Δt ∝ h²). Temporal uses
-    ``family='temporal'`` plus an explicit ``dt``.
+    ``family='temporal'`` plus an explicit ``dt``. Default reconstruction is
+    public WENO5-Z; VanLeer is a labeled TVD fail control.
     """
     import pops
 
@@ -353,7 +389,7 @@ def run_native(
         raise NativeUnavailable(missing)
     if family == "temporal" and dt is None:
         raise NativeUnavailable("temporal EU-02 requires an explicit FixedDt")
-    authored = _author(n_cells, dt=dt, family=family)
+    authored = _author(n_cells, dt=dt, family=family, reconstruction=reconstruction)
     layout = uniform_periodic_layout(authored.frame, (authored.n_cells, authored.n_cells))
     plan = resolve_case(authored.case, layout=layout)
     artifact = pops.compile(plan)

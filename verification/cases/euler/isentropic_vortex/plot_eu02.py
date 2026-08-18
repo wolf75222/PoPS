@@ -14,6 +14,13 @@ import numpy as np
 
 _CASE_DIR = Path(__file__).resolve().parent
 _REPO = Path(__file__).resolve().parents[4]
+TRAJECTORY_EQUAL_ASPECT = False
+TRAJECTORY_XLABEL = "t"
+
+
+def artifact_stem(kind: str, n_cells: int, t: float) -> str:
+    """Resolution- and time-suffixed plot name so n64 t=1 cannot overwrite n128."""
+    return f"{kind}_n{int(n_cells):03d}_t{float(t):g}"
 
 
 def _sha() -> str:
@@ -119,9 +126,10 @@ def plot_bundle(series_dir: str | Path, build_dir: str | Path | None = None) -> 
             axis.set_xlabel("x")
             axis.set_ylabel("y")
             axis.set_title(title)
-        _save(figure, dest / f"triptych_{name}_t{t_end:g}.png", caption)
+        path = dest / f"{artifact_stem(f'triptych_{name}', finest, t_end)}.png"
+        _save(figure, path, caption)
         plt.close(figure)
-        written.append(str(dest / f"triptych_{name}_t{t_end:g}.png"))
+        written.append(str(path))
 
     figure, axes = plt.subplots(figsize=(6.2, 5.4), constrained_layout=True)
     skip = max(1, finest // 16)
@@ -145,9 +153,10 @@ def plot_bundle(series_dir: str | Path, build_dir: str | Path | None = None) -> 
     axes.set_xlabel("x")
     axes.set_ylabel("y")
     axes.set_title("velocity quiver / streamlines")
-    _save(figure, dest / f"velocity_quiver_t{t_end:g}.png", caption)
+    quiver_path = dest / f"{artifact_stem('velocity_quiver', finest, t_end)}.png"
+    _save(figure, quiver_path, caption)
     plt.close(figure)
-    written.append(str(dest / f"velocity_quiver_t{t_end:g}.png"))
+    written.append(str(quiver_path))
 
     figure, axes = plt.subplots(figsize=(6.2, 5.4), constrained_layout=True)
     mesh = axes.contourf(
@@ -195,9 +204,10 @@ def plot_bundle(series_dir: str | Path, build_dir: str | Path | None = None) -> 
         axis.set_xlabel("r")
         axis.set_ylabel(title)
         axis.legend(fontsize=7)
-    _save(figure, dest / f"radial_cuts_t{t_end:g}.png", caption)
+    radial_path = dest / f"{artifact_stem('radial_cuts', finest, t_end)}.png"
+    _save(figure, radial_path, caption)
     plt.close(figure)
-    written.append(str(dest / f"radial_cuts_t{t_end:g}.png"))
+    written.append(str(radial_path))
 
     if len(campaign["resolutions"]) >= 4:
         claim = analyze.evaluate_order_claim(campaign)
@@ -273,18 +283,22 @@ def plot_bundle(series_dir: str | Path, build_dir: str | Path | None = None) -> 
                     axis.set_xlabel("x")
                     axis.set_ylabel("y")
                     axis.set_title(title)
-                _save(trip, dest / f"triptych_{name}_t{instant:g}.png", caption)
+                snap_path = dest / f"{artifact_stem(f'triptych_{name}', n_snap, instant)}.png"
+                _save(trip, snap_path, caption)
                 plt.close(trip)
-                written.append(str(dest / f"triptych_{name}_t{instant:g}.png"))
+                written.append(str(snap_path))
         _save(figure, dest / "contact_sheet_rho.png", caption)
         plt.close(figure)
         written.append(str(dest / "contact_sheet_rho.png"))
-        figure, axes = plt.subplots(figsize=(5.4, 5.0), constrained_layout=True)
-        axes.plot(ax_c, ay_c, "k-", label="analytic centre")
-        axes.plot(nx_c, ny_c, "o", label="numerical centre")
-        axes.set_aspect("equal")
-        axes.set_xlabel("x_c")
-        axes.set_ylabel("y_c")
+        figure, axes = plt.subplots(figsize=(6.4, 4.2), constrained_layout=True)
+        axes.plot(times, ax_c, "k-", label="analytic x_c(t)")
+        axes.plot(times, nx_c, "o", label="numerical x_c(t)")
+        axes.plot(times, ay_c, "k--", label="analytic y_c(t)")
+        axes.plot(times, ny_c, "s", label="numerical y_c(t)")
+        if TRAJECTORY_EQUAL_ASPECT:
+            axes.set_aspect("equal")
+        axes.set_xlabel(TRAJECTORY_XLABEL)
+        axes.set_ylabel("x_c, y_c")
         axes.legend()
         _save(figure, dest / "vortex_center_trajectory.png", caption)
         plt.close(figure)

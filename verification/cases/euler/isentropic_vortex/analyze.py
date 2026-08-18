@@ -28,6 +28,7 @@ _run = load_sibling_module(_CASE_DIR / "run.py")
 CASE_ID = "EU-02"
 ORDER_THRESHOLD = 1.8
 ROUNDING_FLOOR = 1.0e-14
+TEMPORAL_ISOLATION_FACTOR = 10.0
 PRIMITIVE_VARS = ("rho", "u", "v", "p")
 CONSERVED_VARS = ("rho", "rho_u", "rho_v", "E")
 NULL_AMR = {
@@ -340,9 +341,62 @@ def evaluate_order_claim(campaign: dict) -> dict[str, Any]:
         raise NativeSeriesError(
             "refusing exact-vs-exact or non-positive native errors as an order pass"
         )
+    if family == "temporal":
+        spatial_linf = campaign.get("spatial_linf")
+        if spatial_linf is None:
+            raise NativeSeriesError(
+                "temporal series requires spatial_linf to prove isolation"
+            )
+        coarsest_dt = max(spacings)
+        coarsest_error = float(linf[spacings.index(coarsest_dt)])
+        if not temporal_is_isolated(spatial_linf, coarsest_error):
+            raise NativeSeriesError(
+                "temporal series is not isolated: spatial L∞ "
+                f"{float(spatial_linf)} is not "
+                f"{TEMPORAL_ISOLATION_FACTOR:g}× below coarsest-dt L∞ "
+                f"{coarsest_error}"
+            )
     return _claim_from_recorded_errors(
         l1=l1, l2=l2, linf=linf, spacings=spacings, family=family
     )
+
+
+def temporal_is_isolated(
+    spatial_linf,
+    coarsest_dt_linf,
+    factor: float = TEMPORAL_ISOLATION_FACTOR,
+) -> bool:
+    """True when spatial L∞ sits at least ``factor`` below coarsest-dt error."""
+    spatial = float(spatial_linf)
+    coarsest = float(coarsest_dt_linf)
+    scale = float(factor)
+    if not np.isfinite(spatial) or not np.isfinite(coarsest) or coarsest <= 0.0:
+        return False
+    if spatial < 0.0 or scale <= 0.0:
+        return False
+    return spatial * scale <= coarsest
+
+
+def finest_visual_job_dir(series_dir) -> Path:
+    """Return the largest ``nXXX`` EvidenceBundle job under a series root."""
+    series = Path(series_dir)
+    names: list[str] = []
+    series_file = series / "series.json"
+    if series_file.is_file():
+        document = json.loads(series_file.read_text(encoding="utf-8"))
+        names = [str(name) for name in (document.get("jobs") or [])]
+    if not names:
+        names = [child.name for child in series.iterdir() if child.is_dir()]
+    numbered = []
+    for name in names:
+        if len(name) >= 2 and name[0] == "n" and name[1:].isdigit():
+            numbered.append((int(name[1:]), name))
+    if numbered:
+        numbered.sort()
+        return series / numbered[-1][1]
+    if names:
+        return series / names[-1]
+    raise NativeSeriesError(f"no EvidenceBundle job under {series}")
 
 
 def _claim_from_recorded_errors(*, l1, l2, linf, spacings, family: str = "global"):
@@ -467,6 +521,9 @@ def campaign_from_evidence(series_dir) -> dict[str, Any]:
         "bundle_path": str(Path(series_dir).resolve()),
         "repository_sha": first["provenance"].get("repository_sha") or _repository_sha(),
         "provenance": dict(first["provenance"]),
+        "spatial_linf": declared.get("spatial_linf"),
+        "reconstruction": declared.get("reconstruction") or "weno5z",
+        "reconstruction_role": declared.get("reconstruction_role") or "acceptance",
     }
 
 
@@ -945,6 +1002,71 @@ def diagnose_resolution(conserved, n_cells, t, *, u_inf=1.0, v_inf=0.0, n_update
     }
 
 
+def compare_smokes(serial: Mapping, openmp: Mapping, mpi: Mapping) -> dict[str, Any]:
+    """Compare Serial / OpenMP / MPI smokes without rewriting leaves or ranks."""
+
+    def _identity(record: Mapping) -> dict[str, Any]:
+        return {
+            "label": str(record.get("label") or ""),
+            "leaf": str(record.get("leaf") or ""),
+            "ranks": int(record["ranks"]),
+            "threads": int(record["threads"]),
+            "space": str(record.get("space") or ""),
+            "mpi_mode": str(record.get("mpi_mode") or ""),
+        }
+
+    def _pair(left: Mapping, right: Mapping) -> dict[str, Any]:
+        a = np.asarray(left["field"], dtype=np.float64)
+        b = np.asarray(right["field"], dtype=np.float64)
+        if a.shape != b.shape:
+            raise NativeSeriesError(
+                f"smoke field shapes {a.shape} and {b.shape} cannot be compared"
+            )
+        delta = a - b
+        return {
+            "bit_identical": bool(np.array_equal(a, b)),
+            "l1": float(np.mean(np.abs(delta))),
+            "l2": float(np.sqrt(np.mean(delta * delta))),
+            "linf": float(np.max(np.abs(delta))),
+        }
+
+    return {
+        "serial": _identity(serial),
+        "openmp": _identity(openmp),
+        "mpi": _identity(mpi),
+        "serial_vs_openmp": _pair(serial, openmp),
+        "serial_vs_mpi": _pair(serial, mpi),
+        "openmp_vs_mpi": _pair(openmp, mpi),
+    }
+
+
+def compare_smokes_from_dirs(serial_dir, openmp_dir, mpi_dir) -> dict[str, Any]:
+    """Load n=16 smoke EvidenceBundles and compare fields plus truthful identity."""
+    from verification.pops_verify.evidence_bundle import EvidenceBundle
+
+    def _load(path) -> dict[str, Any]:
+        bundle = EvidenceBundle(path)
+        record = bundle.records[0]
+        provenance = record["provenance"]
+        native = record.get("native_artifact") or {}
+        resolved = record.get("resolved_case") or {}
+        job = resolved.get("job") if isinstance(resolved.get("job"), Mapping) else {}
+        resources = job.get("resources") if isinstance(job.get("resources"), Mapping) else {}
+        return {
+            "label": str(provenance.get("kokkos_execution_space") or ""),
+            "field": np.asarray(record["result"], dtype=np.float64),
+            "leaf": str(native.get("sha256") or provenance.get("native_variant_manifest_digest") or ""),
+            "ranks": int(provenance.get("mpi_ranks") or resources.get("mpi_ranks") or 1),
+            "threads": int(
+                provenance.get("omp_threads_per_rank") or resources.get("omp_threads") or 1
+            ),
+            "space": str(provenance.get("kokkos_execution_space") or ""),
+            "mpi_mode": "on" if provenance.get("mpi_enabled") else "off",
+        }
+
+    return compare_smokes(_load(serial_dir), _load(openmp_dir), _load(mpi_dir))
+
+
 def write_native_campaign_report(output_dir, campaign: dict, extras: dict | None = None) -> dict:
     """Write report, metrics, and Phase 8 visual_data from a native campaign."""
     extras = dict(extras or {})
@@ -985,6 +1107,11 @@ def write_native_campaign_report(output_dir, campaign: dict, extras: dict | None
         )
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
+    payload_dir = output
+    bundle_path = campaign.get("bundle_path")
+    if bundle_path:
+        payload_dir = finest_visual_job_dir(bundle_path)
+        payload_dir.mkdir(parents=True, exist_ok=True)
     written = write_verification_report(
         _summary(
             orders=orders,
@@ -999,16 +1126,21 @@ def write_native_campaign_report(output_dir, campaign: dict, extras: dict | None
         ),
         output,
     )
-    _write_metrics(output, campaign, claim, extras)
-    _write_visual_data(output, campaign, claim, extras)
-    _write_status_and_program(output, campaign, claim)
+    _write_metrics(payload_dir, campaign, claim, extras)
+    _write_visual_data(payload_dir, campaign, claim, extras)
+    _write_status_and_program(payload_dir, campaign, claim)
     report_path = output / "REPORT.md"
+    symmetry = extras.get("symmetry") or {}
     extra = (
         "\n## Claims\n"
         f"family: {family} (constant-CFL AdaptiveCFL is global, never isolated spatial)\n"
+        f"reconstruction: {campaign.get('reconstruction') or 'weno5z'} "
+        f"({campaign.get('reconstruction_role') or 'acceptance'})\n"
         f"gated_orders: {claim.get('gated_orders')}\n"
         f"threshold: {ORDER_THRESHOLD} (never lowered)\n"
         f"centre error: {(extras.get('center') or {}).get('error')}\n"
+        f"radial_anisotropy: {symmetry.get('radial_anisotropy')}\n"
+        f"xy_symmetry: {symmetry.get('xy_symmetry')}\n"
         f"conservation relative: {(extras.get('conservation') or {}).get('relative')}\n"
         "Proves: native 2-d Euler vortex vs analytic cell-average oracles when the series exists.\n"
         "Does not prove: AMR, 3-d, isolated spatial unless family=spatial, temporal unless family=temporal.\n"

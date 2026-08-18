@@ -274,6 +274,7 @@ def test_evaluate_order_claim_temporal_uses_dts_not_collapsed_n():
             "runs": runs,
             "dts": dts,
             "t_end": 0.0,
+            "spatial_linf": 1.0e-10,
         }
     )
     assert claim["family"] == "temporal"
@@ -339,3 +340,167 @@ def test_conservation_zero_for_identical_states():
     assert drifts["ok"]["mass"]
     assert drifts["ok"]["energy"]
     assert drifts["relative"]["mass"] == 0.0
+
+
+def test_acceptance_reconstruction_is_public_weno5z():
+    run = _load("run")
+    assert run.ACCEPTANCE_RECONSTRUCTION == "weno5z"
+    assert run.reconstruction_role("weno5z") == "acceptance"
+    assert run.reconstruction_role("vanleer") == "tvd_fail_control"
+    authored = run._author(8)
+    assert authored.reconstruction == "weno5z"
+    vanleer = run._author(8, reconstruction="vanleer")
+    assert vanleer.reconstruction == "vanleer"
+    weno = run._reconstruction_brick("weno5z")
+    vanleer = run._reconstruction_brick("vanleer")
+    assert weno.scheme == "weno5" and weno.name == "weno5z"
+    assert vanleer.scheme == "vanleer"
+
+
+def test_plot_artifact_stem_suffixes_resolution_and_time():
+    plot = load_sibling_module(CASE_DIR / "plot_eu02.py")
+    fine = plot.artifact_stem("triptych_rho", 128, 1.0)
+    coarse = plot.artifact_stem("triptych_rho", 64, 1.0)
+    assert fine == "triptych_rho_n128_t1"
+    assert coarse == "triptych_rho_n064_t1"
+    assert fine != coarse
+    assert plot.TRAJECTORY_EQUAL_ASPECT is False
+    assert plot.TRAJECTORY_XLABEL == "t"
+
+
+def test_report_lists_radial_anisotropy_and_xy_symmetry_separately(tmp_path: Path):
+    analyze = _load("analyze")
+    run = _load("run")
+    fields = {}
+    for n_cells, amp in zip((16, 32, 64, 128), (8.0e-3, 2.0e-3, 5.0e-4, 1.25e-4)):
+        field = np.array(run.pack_conserved(run.initial_conserved(n_cells)), copy=True)
+        field[0] += amp
+        fields[n_cells] = field
+    extras = analyze.diagnose_resolution(fields[16], 16, 0.0)
+    assert "radial_anisotropy" in extras["symmetry"]
+    assert "xy_symmetry" in extras["symmetry"]
+    analyze.write_native_campaign_report(
+        tmp_path,
+        {
+            "source": "native",
+            "family": "global",
+            "dt_scaling": "cfl",
+            "resolutions": (16, 32, 64, 128),
+            "fields": fields,
+            "t_end": 0.0,
+        },
+        extras,
+    )
+    text = (tmp_path / "REPORT.md").read_text(encoding="utf-8")
+    assert "radial_anisotropy" in text
+    assert "xy_symmetry" in text
+
+
+def test_finest_visual_job_dir_and_phase8_payloads(tmp_path: Path):
+    analyze = _load("analyze")
+    run = _load("run")
+    series = tmp_path / "series"
+    (series / "n016").mkdir(parents=True)
+    (series / "n128").mkdir()
+    (series / "series.json").write_text(
+        json.dumps({"case_id": "EU-02", "jobs": ["n016", "n128"]}) + "\n",
+        encoding="utf-8",
+    )
+    assert analyze.finest_visual_job_dir(series) == series / "n128"
+    fields = {}
+    for n_cells, amp in zip((16, 32, 64, 128), (8.0e-3, 2.0e-3, 5.0e-4, 1.25e-4)):
+        field = np.array(run.pack_conserved(run.initial_conserved(n_cells)), copy=True)
+        field[0] += amp
+        fields[n_cells] = field
+    report_dir = tmp_path / "report"
+    analyze.write_native_campaign_report(
+        report_dir,
+        {
+            "source": "native",
+            "family": "global",
+            "dt_scaling": "cfl",
+            "resolutions": (16, 32, 64, 128),
+            "fields": fields,
+            "t_end": 0.0,
+            "bundle_path": str(series),
+        },
+    )
+    finest = series / "n128"
+    assert (finest / "status.json").is_file()
+    assert (finest / "program.json").is_file()
+    assert (finest / "analysis" / "visual_data" / "report_figure.json").is_file()
+    assert (report_dir / "REPORT.md").is_file()
+
+
+def test_temporal_isolation_requires_spatial_linf_ten_times_below_coarsest_dt():
+    analyze = _load("analyze")
+    assert analyze.temporal_is_isolated(1.0e-5, 2.0e-4) is True
+    assert analyze.temporal_is_isolated(1.0e-4, 2.0e-4) is False
+    run = _load("run")
+    base = run.pack_conserved(run.initial_conserved(16))
+    dts = (0.08, 0.04, 0.02, 0.01)
+    amps = (8.0e-3, 2.0e-3, 5.0e-4, 1.25e-4)
+    runs = []
+    for dt, amp in zip(dts, amps, strict=True):
+        field = np.array(base, copy=True)
+        field[0] += amp
+        runs.append({"n_cells": 16, "field": field, "dt": dt})
+    with pytest.raises(analyze.NativeSeriesError, match="isolat"):
+        analyze.evaluate_order_claim(
+            {
+                "source": "native",
+                "family": "temporal",
+                "dt_scaling": "fixed",
+                "resolutions": (16, 16, 16, 16),
+                "fields": {16: runs[-1]["field"]},
+                "runs": runs,
+                "dts": dts,
+                "t_end": 1.0,
+                "spatial_linf": 0.2,
+            }
+        )
+
+
+def test_compare_smokes_records_truthful_leaves_ranks_threads():
+    analyze = _load("analyze")
+    field = np.ones((4, 4, 4), dtype=np.float64)
+    shifted = field + 1.0e-12
+    report = analyze.compare_smokes(
+        {
+            "label": "serial",
+            "field": field,
+            "leaf": "serial-leaf",
+            "ranks": 1,
+            "threads": 1,
+            "space": "KokkosSerial",
+            "mpi_mode": "off",
+        },
+        {
+            "label": "openmp",
+            "field": field,
+            "leaf": "openmp-leaf",
+            "ranks": 1,
+            "threads": 4,
+            "space": "KokkosOpenMP",
+            "mpi_mode": "off",
+        },
+        {
+            "label": "mpi",
+            "field": shifted,
+            "leaf": "mpi-leaf",
+            "ranks": 2,
+            "threads": 1,
+            "space": "KokkosSerial",
+            "mpi_mode": "on",
+        },
+    )
+    assert report["serial"]["ranks"] == 1
+    assert report["openmp"]["threads"] == 4
+    assert report["mpi"]["ranks"] == 2
+    assert report["serial"]["leaf"] == "serial-leaf"
+    assert report["mpi"]["leaf"] == "mpi-leaf"
+    assert report["serial"]["leaf"] != report["openmp"]["leaf"]
+    assert report["serial_vs_openmp"]["bit_identical"] is True
+    assert report["serial_vs_mpi"]["bit_identical"] is False
+    assert "linf" in report["serial_vs_mpi"]
+    assert "l2" in report["serial_vs_openmp"]

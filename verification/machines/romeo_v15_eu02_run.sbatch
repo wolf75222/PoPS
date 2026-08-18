@@ -11,7 +11,7 @@
 #SBATCH --output=/scratch_p/rmdraux/pops-v15-eu02/logs/%x.%j.out
 #SBATCH --error=/scratch_p/rmdraux/pops-v15-eu02/logs/%x.%j.err
 
-# EU-02 v1.5 campaign. STAGE=series|temporal|spatial|smoke|dump|analyze
+# EU-02 v1.5 campaign. STAGE=series|temporal|spatial|tvd|smoke|dump|parity|analyze
 set -eo pipefail
 # shellcheck source=/dev/null
 source /scratch_p/rmdraux/pops-v15-eu02/src/verification/machines/romeo_v15_eu02_env.sh
@@ -22,7 +22,7 @@ SPACE="${POPS_EU02_SPACE:-KokkosSerial}"
 MPI="${POPS_EU02_MPI:-off}"
 DIM=2
 case "$STAGE" in
-  series|temporal|spatial|smoke|dump|analyze) ;;
+  series|temporal|spatial|tvd|smoke|dump|parity|analyze) ;;
   *) echo "ERROR: unknown stage $STAGE" >&2; exit 1 ;;
 esac
 

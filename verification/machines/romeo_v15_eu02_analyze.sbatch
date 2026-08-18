@@ -33,12 +33,12 @@ pops_eu02_pythonpath "$BUILD"
 DRIVER="$POPS_EU02_SRC/verification/machines/run_eu02_v15.py"
 ANALYZE_OUT="$POPS_EU02_ROOT/evidence/EU02_D2_KokkosSerial_off_series"
 SERIES="$ANALYZE_OUT/EU-02/dim2-KokkosSerial-off"
-DUMP_SNAP="$POPS_EU02_ROOT/evidence/EU02_D2_KokkosSerial_off_dump/n064/snapshots.npz"
+DUMP_SNAP="$POPS_EU02_ROOT/evidence/EU02_D2_KokkosSerial_off_dump/n128/snapshots.npz"
 if [ -f "$DUMP_SNAP" ]; then
-  mkdir -p "$SERIES/n064"
-  cp -f "$DUMP_SNAP" "$SERIES/n064/snapshots.npz"
+  mkdir -p "$SERIES/n128"
+  cp -f "$DUMP_SNAP" "$SERIES/n128/snapshots.npz"
 fi
-for STAGE in series temporal spatial; do
+for STAGE in series temporal spatial tvd; do
   echo "=== ANALYZE $STAGE ==="
   "$POPS_PYTHON" "$DRIVER" --stage analyze --space KokkosSerial --mpi off \
     --output "$POPS_EU02_ROOT/evidence/EU02_D2_KokkosSerial_off_${STAGE}"
