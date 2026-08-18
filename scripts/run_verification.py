@@ -51,7 +51,18 @@ from verification.pops_verify.capabilities import (  # noqa: E402
     missing_requirements,
 )
 from verification.pops_verify.case_authoring import load_sibling_module  # noqa: E402
+from verification.pops_verify.evidence_bundle import EvidenceBundle, EvidenceError  # noqa: E402
+from verification.pops_verify.evidence_contract import (  # noqa: E402
+    EvidenceContractError,
+    emit_job_directory,
+    write_series_json,
+)
 from verification.pops_verify.metrics import collect_metrics, write_metrics  # noqa: E402
+from verification.pops_verify.native_evidence import (  # noqa: E402
+    emission_from_payload,
+    report_from_native_series,
+    run_fields_from_payload,
+)
 from verification.pops_verify.provenance import (  # noqa: E402
     ProvenanceError,
     RUN_FIELDS,
@@ -59,6 +70,8 @@ from verification.pops_verify.provenance import (  # noqa: E402
     write_provenance,
 )
 from verification.pops_verify.report import write_verification_report  # noqa: E402
+
+_SAFE_SERIES_JOB = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 ALLOWED_SUITES = ("pr", "nightly", "weekly", "release", "two_node")
 _CASE_ID_RE = re.compile(r"[A-Z0-9-]+")
@@ -224,6 +237,112 @@ def _job_dir(output: Path, job: CampaignJob) -> Path:
     return job_dir
 
 
+def _series_job_name(n_cells: int) -> str:
+    name = f"n{int(n_cells):03d}"
+    if not _SAFE_SERIES_JOB.fullmatch(name) or ".." in name:
+        raise VerificationRunnerError(f"unsafe series job name {name!r}")
+    return name
+
+
+def _job_resolutions(job: CampaignJob) -> list[int | None]:
+    values = [int(item) for item in (job.resources.resolutions or ())]
+    if values:
+        return values
+    if job.min_resolution is not None:
+        return [int(job.min_resolution)]
+    return [None]
+
+
+def _leaf_identity(artifact: AuthenticatedArtifact) -> dict[str, object]:
+    return {
+        "path": str(artifact.path),
+        "sha256": artifact.sha256,
+        "dimension": int(artifact.dimension),
+    }
+
+
+def _split_run_payload(run_result: object) -> tuple[dict[str, object], dict[str, object] | None]:
+    """Separate RUN_FIELDS from EvidenceBundle emission keys."""
+    if not isinstance(run_result, dict):
+        return {}, None
+    fields = run_fields_from_payload(run_result)
+    if "result" not in run_result or "program_bytes" not in run_result:
+        return fields, None
+    try:
+        return fields, emission_from_payload(run_result)
+    except (KeyError, TypeError, ValueError):
+        return fields, None
+
+
+def _request_for_resolution(
+    job: CampaignJob,
+    output_dir: Path,
+    n_cells: int | None,
+) -> CampaignRequest:
+    return CampaignRequest(
+        case_id=job.case_id,
+        pops_native_dim=job.pops_native_dim,
+        suite=job.suite,
+        execution_space=job.execution_space,
+        mpi_mode=job.mpi_mode,
+        min_resolution=n_cells,
+        resources=job.resources,
+        evidence_status=job.evidence_status,
+        output_dir=output_dir,
+    )
+
+
+def _emit_resolution_directory(
+    job: CampaignJob,
+    case: dict | None,
+    request: CampaignRequest,
+    record: dict,
+    artifact: AuthenticatedArtifact,
+    *,
+    run_fields: dict[str, object],
+    emission: dict[str, object],
+    job_dir: Path,
+) -> None:
+    if not is_campaign_writer_rank():
+        return
+    import pops
+
+    resolved = {
+        "case": case,
+        "job": job_to_dict(job),
+        "status": record.get("status"),
+        "reason": record.get("reason"),
+    }
+    resolved["job"]["min_resolution"] = request.min_resolution
+    if emission.get("dt") is not None:
+        resolved["job"]["dt"] = float(emission["dt"])
+    provenance = collect_provenance(
+        job.case_id,
+        pops_native_dim=job.pops_native_dim,
+        dimension=job.pops_native_dim,
+        nodes=provenance_nodes(job),
+        pops_version=str(pops.__version__),
+        doctor_ok=artifact.doctor_ok,
+        component_catalog_digest=artifact.component_catalog_digest,
+        native_header_signature=artifact.native_header_signature,
+        native_variant_manifest_digest=artifact.native_variant_manifest_digest,
+        **run_fields,
+    )
+    reason = str(record.get("reason") or "runner foundation records no scientific field yet")
+    emit_job_directory(
+        job_dir,
+        resolved_case=resolved,
+        provenance=provenance,
+        metrics=collect_metrics(job.case_id, reason=reason),
+        result=emission["result"],
+        program_bytes=emission["program_bytes"],
+        native_artifact=_leaf_identity(artifact),
+        pair_result=emission.get("pair_result"),
+        pair_program_bytes=emission.get("pair_program_bytes"),
+        coupling=emission.get("coupling"),
+    )
+
+
 def _honest_run_fields(
     job: CampaignJob,
     artifact: AuthenticatedArtifact,
@@ -325,7 +444,7 @@ def _write_campaign_report(
     ).stdout.strip()
     if not sha:
         raise VerificationRunnerError("cannot read repository SHA")
-    passed = sum(1 for row in results if row.get("status") == "pass")
+    passed = sum(1 for row in results if row.get("scientific_pass") is True)
     failed = sum(1 for row in results if row.get("status") == "fail")
     not_supported = sum(1 for row in results if row.get("status") == "not-supported")
     ran = sum(
@@ -449,6 +568,8 @@ def execute_jobs(
             continue
         env_dim = os.environ.get("POPS_NATIVE_DIM")
         os.environ["POPS_NATIVE_DIM"] = str(job.pops_native_dim)
+        series_jobs: list[str] = []
+        first_fields: dict[str, object] | None = None
         try:
             module = load_sibling_module(resolve_case_module_path(case["path"]))
             runner = getattr(module, "run_native", None)
@@ -456,8 +577,40 @@ def execute_jobs(
                 record["status"] = "fail"
                 record["reason"] = "missing run_native"
             else:
-                run_result = invoke_run_native(runner, request)
                 record["status"] = "pass"
+                run_result = invoke_run_native(runner, request)
+                payload_fields, emission = _split_run_payload(run_result)
+                first_fields = _honest_run_fields(job, artifact, payload_fields)
+                if emission is not None:
+                    for n_cells in _job_resolutions(job):
+                        name = (
+                            _series_job_name(n_cells) if n_cells is not None else "n000"
+                        )
+                        resolution_dir = job_dir / name
+                        resolution_request = _request_for_resolution(
+                            job, resolution_dir, n_cells
+                        )
+                        if n_cells != request.min_resolution:
+                            run_result = invoke_run_native(runner, resolution_request)
+                            payload_fields, emission = _split_run_payload(run_result)
+                            if emission is None:
+                                continue
+                            run_fields = _honest_run_fields(
+                                job, artifact, payload_fields
+                            )
+                        else:
+                            run_fields = first_fields
+                        _emit_resolution_directory(
+                            job,
+                            case,
+                            resolution_request,
+                            record,
+                            artifact,
+                            run_fields=run_fields,
+                            emission=emission,
+                            job_dir=resolution_dir,
+                        )
+                        series_jobs.append(name)
         except VerificationRunnerError as exc:
             record["status"] = "fail"
             record["reason"] = str(exc)
@@ -481,17 +634,25 @@ def execute_jobs(
         if record["status"] not in ALLOWED_STATUSES:
             record["status"] = "fail"
             record["reason"] = f"illegal status {record['status']!r}"
-        run_fields = None
-        if record["status"] == "pass":
-            try:
-                run_fields = _honest_run_fields(job, artifact, run_result)
-            except VerificationRunnerError as exc:
-                record["status"] = "fail"
-                record["reason"] = str(exc)
-                run_fields = None
         _write_job_artifacts(
-            job, case, request, record, artifact, run_fields=run_fields
+            job, case, request, record, artifact, run_fields=first_fields
         )
+        if record["status"] == "pass" and series_jobs and is_campaign_writer_rank():
+            try:
+                write_series_json(job_dir, job.case_id, series_jobs)
+                EvidenceBundle(job_dir)
+                analysis = report_from_native_series(
+                    job.case_id,
+                    job_dir,
+                    native_dimensions=[job.pops_native_dim],
+                    components=["verification"],
+                )
+                record["scientific_pass"] = (
+                    int((analysis.get("coverage") or {}).get("cases_passed") or 0) >= 1
+                )
+            except (EvidenceError, EvidenceContractError, VerificationRunnerError) as exc:
+                record["scientific_pass"] = False
+                record["reason"] = record.get("reason") or str(exc)
         results.append(record)
     if is_campaign_writer_rank():
         output.mkdir(parents=True, exist_ok=True)

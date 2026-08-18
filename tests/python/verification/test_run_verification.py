@@ -122,7 +122,7 @@ def test_valid_pr_plan_has_dummy_case(tmp_path: Path):
     assert Path(plan["manifest"]) == MANIFEST.resolve()
     ids = [case["id"] for case in plan["cases"]]
     assert "PH-00" in ids
-    assert "TR-01" not in ids
+    assert "TR-01" in ids
     assert set(ids) >= {
         "PH-00",
         "TR-02",

@@ -44,6 +44,7 @@ Do not invent compile-repr stand-ins or in-memory digest seals to skip this.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -85,10 +86,34 @@ EXTENSION_SLOTS = {
 }
 
 PARENT_INTEGRATION_PATCH = __doc__
+SAFE_JOB_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
 class EvidenceContractError(ValueError):
     """Raised when a job directory cannot be written honestly."""
+
+
+def write_series_json(series_dir: str | Path, case_id: str, jobs: list[str]) -> Path:
+    """Write a path-safe series.json. Does not mint scientific pass."""
+    if not case_id:
+        raise EvidenceContractError("series.json requires case_id")
+    names: list[str] = []
+    for name in jobs:
+        if not isinstance(name, str) or not SAFE_JOB_NAME.fullmatch(name):
+            raise EvidenceContractError(f"unsafe series job name {name!r}")
+        if name.startswith(".") or ".." in name or "/" in name or "\\" in name:
+            raise EvidenceContractError(f"series job name escapes {name!r}")
+        names.append(name)
+    if not names:
+        raise EvidenceContractError("series.json requires jobs")
+    root = Path(series_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / "series.json"
+    path.write_text(
+        json.dumps({"case_id": str(case_id), "jobs": names}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return path
 
 
 def write_digest_file(path: Path, digest: str) -> None:
