@@ -58,6 +58,17 @@ def plot_bundle(series_dir: str | Path, build_dir: str | Path | None = None) -> 
 
     exact, run, analyze = _load_siblings()
     series = Path(series_dir)
+    if not (series / "series.json").is_file():
+        matches = [path.parent for path in series.rglob("series.json")]
+        if len(matches) == 1:
+            series = matches[0]
+        else:
+            for space_name in ("KokkosSerial", "KokkosOpenMP"):
+                for mpi_mode in ("off", "on"):
+                    candidate = series / "EU-02" / f"dim2-{space_name}-{mpi_mode}"
+                    if (candidate / "series.json").is_file():
+                        series = candidate
+                        break
     bundle = EvidenceBundle(series)
     sha = _sha()
     leaf = str(bundle.records[0]["leaf_sha256"])[:12]
@@ -138,6 +149,33 @@ def plot_bundle(series_dir: str | Path, build_dir: str | Path | None = None) -> 
     plt.close(figure)
     written.append(str(dest / f"velocity_quiver_t{t_end:g}.png"))
 
+    figure, axes = plt.subplots(figsize=(6.2, 5.4), constrained_layout=True)
+    mesh = axes.contourf(
+        x, y, primitives["rho"], levels=24, cmap="viridis", vmin=rho_lim[0], vmax=rho_lim[1]
+    )
+    figure.colorbar(mesh, ax=axes, label="rho")
+    axes.set_aspect("equal")
+    axes.set_xlabel("x")
+    axes.set_ylabel("y")
+    axes.set_title("hero numerical density")
+    _save(figure, dest / "hero_rho.png", caption)
+    plt.close(figure)
+    written.append(str(dest / "hero_rho.png"))
+
+    diagnosis = analyze.diagnose_resolution(packed, finest, t_end)
+    relative = (diagnosis.get("conservation") or {}).get("relative") or {}
+    if relative:
+        figure, axes = plt.subplots(figsize=(6.4, 3.8), constrained_layout=True)
+        names = [str(key) for key in relative]
+        values = [abs(float(relative[key])) for key in names]
+        axes.bar(names, values)
+        axes.set_yscale("log")
+        axes.set_ylabel("|relative conservation drift|")
+        axes.set_title("EU-02 invariants at t_end")
+        _save(figure, dest / "invariants.png", caption)
+        plt.close(figure)
+        written.append(str(dest / "invariants.png"))
+
     center = exact.analytic_center(t_end)
     dx = exact.minimum_image(x - center[0])
     dy = exact.minimum_image(y - center[1])
@@ -183,25 +221,61 @@ def plot_bundle(series_dir: str | Path, build_dir: str | Path | None = None) -> 
         for child in series.rglob("snapshots.npz"):
             snap = child
             break
+        else:
+            snap = Path()
     if snap.is_file():
         data = np.load(snap)
         times = [float(v) for v in data["times"]]
+        packed0 = np.asarray(data["t_0"], dtype=np.float64)
+        n_snap = int(packed0.shape[-1])
+        xs, ys, _ = run.cell_centers(n_snap)
         ax_c, ay_c, nx_c, ny_c = [], [], [], []
         figure, axes = plt.subplots(1, len(times), figsize=(3.2 * len(times), 3.4), constrained_layout=True)
         if len(times) == 1:
             axes = [axes]
         for index, instant in enumerate(times):
-            packed_t = data[f"t_{index}"]
+            packed_t = np.asarray(data[f"t_{index}"], dtype=np.float64)
             prim = run.conserved_to_primitives(packed_t)
-            axes[index].contourf(x, y, prim["rho"], levels=16, cmap="viridis", vmin=rho_lim[0], vmax=rho_lim[1])
+            oracle_t = run.average_primitives(n_snap, instant)
+            vort_t = analyze.vorticity_from_velocity(prim["u"], prim["v"], exact.PERIOD / n_snap)
+            vort_exact_t = exact.exact_vorticity(xs, ys, instant)
+            axes[index].contourf(xs, ys, prim["rho"], levels=16, cmap="viridis", vmin=rho_lim[0], vmax=rho_lim[1])
             axes[index].set_aspect("equal")
             axes[index].set_title(f"t={instant:g}")
             analytic = exact.analytic_center(instant)
-            numerical = analyze.vortex_center_from_density(prim["rho"], finest, expected=analytic)
+            numerical = analyze.vortex_center_from_density(prim["rho"], n_snap, expected=analytic)
             ax_c.append(analytic[0])
             ay_c.append(analytic[1])
             nx_c.append(numerical[0])
             ny_c.append(numerical[1])
+            snap_fields = {
+                "rho": (oracle_t["rho"], prim["rho"], rho_lim, "rho"),
+                "p": (oracle_t["p"], prim["p"], p_lim, "p"),
+                "vorticity": (vort_exact_t, vort_t, [-w_peak, w_peak], "vorticity"),
+            }
+            for name, (exact_f, num_f, limits, unit) in snap_fields.items():
+                trip, tax = plt.subplots(1, 3, figsize=(12.6, 3.8), constrained_layout=True)
+                for axis, field, title, cmap in zip(
+                    tax,
+                    (exact_f, num_f, num_f - exact_f),
+                    (f"exact {name}", f"numerical {name}", f"signed error {name}"),
+                    ("viridis", "viridis", "RdBu_r"),
+                    strict=True,
+                ):
+                    if title.startswith("signed"):
+                        peak = float(max(abs(field).max(), 1.0e-16))
+                        vmin, vmax = -peak, peak
+                    else:
+                        vmin, vmax = limits
+                    mesh = axis.contourf(xs, ys, field, levels=24, cmap=cmap, vmin=vmin, vmax=vmax)
+                    trip.colorbar(mesh, ax=axis, label=unit)
+                    axis.set_aspect("equal")
+                    axis.set_xlabel("x")
+                    axis.set_ylabel("y")
+                    axis.set_title(title)
+                _save(trip, dest / f"triptych_{name}_t{instant:g}.png", caption)
+                plt.close(trip)
+                written.append(str(dest / f"triptych_{name}_t{instant:g}.png"))
         _save(figure, dest / "contact_sheet_rho.png", caption)
         plt.close(figure)
         written.append(str(dest / "contact_sheet_rho.png"))
@@ -220,10 +294,10 @@ def plot_bundle(series_dir: str | Path, build_dir: str | Path | None = None) -> 
 
             frames = []
             for index, instant in enumerate(times):
-                packed_t = data[f"t_{index}"]
+                packed_t = np.asarray(data[f"t_{index}"], dtype=np.float64)
                 prim = run.conserved_to_primitives(packed_t)
                 fig, ax = plt.subplots(figsize=(4.2, 4.0), constrained_layout=True)
-                ax.contourf(x, y, prim["rho"], levels=16, cmap="viridis", vmin=rho_lim[0], vmax=rho_lim[1])
+                ax.contourf(xs, ys, prim["rho"], levels=16, cmap="viridis", vmin=rho_lim[0], vmax=rho_lim[1])
                 ax.set_aspect("equal")
                 ax.set_title(f"t={instant:g}")
                 fig.text(0.01, 0.01, caption, fontsize=7)

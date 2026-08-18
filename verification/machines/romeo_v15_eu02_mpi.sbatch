@@ -20,10 +20,9 @@ set -eo pipefail
 export POPS_EU02_DIM=2
 export POPS_EU02_SPACE=KokkosSerial
 export POPS_EU02_MPI=on
-bash "$POPS_EU02_SRC/verification/machines/romeo_v15_eu02_build.sbatch"
-
 pops_eu02_select_kokkos KokkosSerial
 pops_eu02_load_mpi_hdf5
+pops_eu02_maybe_build mpi
 export FI_PROVIDER=tcp
 BUILD="$POPS_EU02_ROOT/build-dim2-mpi"
 export POPS_NATIVE_DIM=2

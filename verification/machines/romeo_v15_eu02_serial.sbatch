@@ -21,9 +21,9 @@ set -eo pipefail
 export POPS_EU02_DIM=2
 export POPS_EU02_SPACE=KokkosSerial
 export POPS_EU02_MPI=off
-bash "$POPS_EU02_SRC/verification/machines/romeo_v15_eu02_build.sbatch"
-
 pops_eu02_select_kokkos KokkosSerial
+pops_eu02_maybe_build serial
+
 BUILD="$POPS_EU02_ROOT/build-dim2-serial"
 export POPS_NATIVE_DIM=2
 export POPS_NATIVE_VARIANTS_ROOT="$BUILD/python/pops/_native"
@@ -39,13 +39,24 @@ for STAGE in series temporal spatial dump; do
   "$POPS_PYTHON" "$DRIVER" --stage "$STAGE" --space KokkosSerial --mpi off --output "$OUT"
 done
 
-# Analyze the official four-resolution global series; overlays dump snapshots if present.
+# Official runner writes EvidenceBundle under EU-02/dim2-KokkosSerial-off.
 ANALYZE_OUT="$POPS_EU02_ROOT/evidence/EU02_D2_KokkosSerial_off_series"
-if [ -f "$POPS_EU02_ROOT/evidence/EU02_D2_KokkosSerial_off_dump/n064/snapshots.npz" ]; then
-  cp -f "$POPS_EU02_ROOT/evidence/EU02_D2_KokkosSerial_off_dump/n064/snapshots.npz" \
-    "$ANALYZE_OUT/n064/snapshots.npz" 2>/dev/null || true
+SERIES="$ANALYZE_OUT/EU-02/dim2-KokkosSerial-off"
+DUMP_SNAP="$POPS_EU02_ROOT/evidence/EU02_D2_KokkosSerial_off_dump/n064/snapshots.npz"
+if [ -f "$DUMP_SNAP" ]; then
+  mkdir -p "$SERIES/n064"
+  cp -f "$DUMP_SNAP" "$SERIES/n064/snapshots.npz"
 fi
 "$POPS_PYTHON" "$DRIVER" --stage analyze --space KokkosSerial --mpi off --output "$ANALYZE_OUT"
+for EXTRA in temporal spatial; do
+  echo "=== ANALYZE $EXTRA ==="
+  "$POPS_PYTHON" "$DRIVER" --stage analyze --space KokkosSerial --mpi off \
+    --output "$POPS_EU02_ROOT/evidence/EU02_D2_KokkosSerial_off_${EXTRA}"
+done
+PLOT_SERIES="$SERIES"
+if [ ! -f "$PLOT_SERIES/series.json" ]; then
+  PLOT_SERIES="$ANALYZE_OUT"
+fi
 "$POPS_PYTHON" "$POPS_EU02_SRC/verification/cases/euler/isentropic_vortex/plot_eu02.py" \
-  "$ANALYZE_OUT" "$POPS_EU02_ROOT/build/verification/EU-02/real_plots" || true
+  "$PLOT_SERIES" "$POPS_EU02_ROOT/build/verification/EU-02/real_plots"
 echo SERIAL_CAMPAIGN_DONE

@@ -20,9 +20,9 @@ set -eo pipefail
 export POPS_EU02_DIM=2
 export POPS_EU02_SPACE=KokkosOpenMP
 export POPS_EU02_MPI=off
-bash "$POPS_EU02_SRC/verification/machines/romeo_v15_eu02_build.sbatch"
-
 pops_eu02_select_kokkos KokkosOpenMP
+pops_eu02_maybe_build openmp
+
 BUILD="$POPS_EU02_ROOT/build-dim2-openmp"
 export POPS_NATIVE_DIM=2
 export POPS_NATIVE_VARIANTS_ROOT="$BUILD/python/pops/_native"

@@ -241,8 +241,29 @@ def stage_dump(output: Path, space: str, mpi: str) -> int:
     return 0
 
 
+def resolve_series_dir(output: Path, space: str | None = None, mpi: str | None = None) -> Path:
+    """Official runner writes series.json under EU-02/dimN-space-mpi."""
+    root = Path(output)
+    if (root / "series.json").is_file():
+        return root
+    if space and mpi:
+        official = root / "EU-02" / f"dim2-{space}-{mpi}"
+        if (official / "series.json").is_file():
+            return official
+    for space_name in ("KokkosSerial", "KokkosOpenMP"):
+        for mpi_mode in ("off", "on"):
+            candidate = root / "EU-02" / f"dim2-{space_name}-{mpi_mode}"
+            if (candidate / "series.json").is_file():
+                return candidate
+    matches = [path.parent for path in root.rglob("series.json")]
+    if len(matches) == 1:
+        return matches[0]
+    raise SystemExit(f"missing series.json under {root}")
+
+
 def stage_analyze(output: Path, space: str, mpi: str) -> int:
-    series = output
+    series = resolve_series_dir(output, space, mpi)
+    (output / "resolved_series.txt").write_text(str(series) + "\n", encoding="utf-8")
     if not (series / "series.json").is_file():
         raise SystemExit(f"missing series.json under {series}")
     ANALYZE.write_eu02_report(output, native_series=series)
