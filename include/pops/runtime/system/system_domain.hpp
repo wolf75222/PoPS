@@ -18,6 +18,7 @@
 #include <memory>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 namespace pops::runtime::system {
 
@@ -49,7 +50,7 @@ struct SystemDomain {
       : cfg(validated_config_(config)),
         dom(cfg.index_domain()),
         geom(Geometry<Dim>::from_bounds(dom, cfg.lower, cfg.upper)),
-        ba(cfg.materialized_boxes()),
+        ba(distributed_last_axis_boxes_(cfg)),
         rank_space(process_rank_space_()),
         load_balance(prepare_authority_(cfg)),
         dm(prepare_distribution_(*load_balance, ba, rank_space)),
@@ -76,6 +77,33 @@ struct SystemDomain {
       throw std::invalid_argument(
           "System Cartesian core requires the exact ranked Cartesian coordinate provider");
     return config;
+  }
+
+  static layout_type distributed_last_axis_boxes_(const SystemConfig<Dim>& config) {
+    auto boxes = config.materialized_boxes();
+    const int ranks = n_ranks();
+    const Box<Dim> domain = config.index_domain();
+    // A public Uniform layout is a single domain box.  PoissonFFT and the C++
+    // MPI System FFT gate require one unique last-axis slab per rank; they
+    // refuse a hidden remap at the factory.  Materialize that exact
+    // decomposition here so bind does not keep a rank-0 mono-box.
+    if (ranks <= 1 || boxes.size() != 1 || boxes.front() != domain)
+      return layout_type(std::move(boxes));
+    const int axis = Dim - 1;
+    const int extent = domain.length(axis);
+    if (extent < ranks || extent % ranks != 0)
+      throw std::invalid_argument(
+          "distributed System layout requires communicator size to divide the last Cartesian axis");
+    const int local = extent / ranks;
+    std::vector<Box<Dim>> slabs;
+    slabs.reserve(static_cast<std::size_t>(ranks));
+    for (int rank = 0; rank < ranks; ++rank) {
+      Box<Dim> slab = domain;
+      slab.lo[axis] = domain.lo[axis] + rank * local;
+      slab.hi[axis] = slab.lo[axis] + local - 1;
+      slabs.push_back(slab);
+    }
+    return layout_type(std::move(slabs));
   }
 
   static rank_space_type process_rank_space_() {

@@ -86,7 +86,7 @@ class CartesianCgFieldSolverBackend final : public ExactFieldSolverBackend<Dim> 
       local_error = std::current_exception();
     }
     if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
-      if (lane.size() == 1 && local_error)
+      if ( local_error)
         std::rethrow_exception(local_error);
       throw std::runtime_error("Cartesian field solver local preparation failed collectively");
     }
@@ -98,7 +98,7 @@ class CartesianCgFieldSolverBackend final : public ExactFieldSolverBackend<Dim> 
     }
     if (all_reduce_max(collective_error ? 1L : 0L, lane) != 0) {
       prepared.reset();
-      if (lane.size() == 1 && collective_error)
+      if ( collective_error)
         std::rethrow_exception(collective_error);
       throw std::runtime_error("Cartesian field solver preparation failed collectively");
     }
@@ -196,7 +196,7 @@ class PoissonFftFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
     }
     if (all_reduce_max(allocation_error ? 1L : 0L, lane) != 0) {
       ::operator delete(storage);
-      if (lane.size() == 1 && allocation_error)
+      if ( allocation_error)
         std::rethrow_exception(allocation_error);
       throw std::runtime_error("FFT field solver backend allocation failed collectively");
     }
@@ -212,7 +212,7 @@ class PoissonFftFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
     }
     if (all_reduce_max(construction_error ? 1L : 0L, lane) != 0) {
       delete result;
-      if (lane.size() == 1 && construction_error)
+      if ( construction_error)
         std::rethrow_exception(construction_error);
       throw std::runtime_error("FFT field solver construction failed collectively");
     }
@@ -313,7 +313,7 @@ class ComponentFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
       local_error = std::current_exception();
     }
     if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
-      if (lane.size() == 1 && local_error)
+      if ( local_error)
         std::rethrow_exception(local_error);
       throw std::runtime_error("component field backend local preparation failed collectively");
     }
@@ -325,7 +325,7 @@ class ComponentFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
     }
     if (all_reduce_max(collective_error ? 1L : 0L, lane) != 0) {
       prepared.reset();
-      if (lane.size() == 1 && collective_error)
+      if ( collective_error)
         std::rethrow_exception(collective_error);
       throw std::runtime_error("component field backend preparation failed collectively");
     }
@@ -379,7 +379,7 @@ class ComponentFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
     }
     if (all_reduce_max(allocation_error ? 1L : 0L, lane) != 0) {
       ::operator delete(storage);
-      if (lane.size() == 1 && allocation_error)
+      if ( allocation_error)
         std::rethrow_exception(allocation_error);
       throw std::runtime_error("component field halo allocation failed collectively");
     }
@@ -396,7 +396,7 @@ class ComponentFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
     }
     if (all_reduce_max(construction_error ? 1L : 0L, lane) != 0) {
       delete prepared_exchange;
-      if (lane.size() == 1 && construction_error)
+      if ( construction_error)
         std::rethrow_exception(construction_error);
       throw std::runtime_error("component field halo preparation failed collectively");
     }

@@ -182,7 +182,7 @@ void collective_boundary_provider_phase(const ExecutionLane& lane, std::string_v
   const long ordinary = kind == ExceptionKind::ordinary ? 1L : 0L;
   const long rejected = kind == ExceptionKind::step_rejected ? 1L : 0L;
   if (all_reduce_max(ordinary, lane) != 0) {
-    if (lane.size() == 1 && local_error)
+    if (local_error)
       std::rethrow_exception(local_error);
     throw std::runtime_error(std::string(failure_message));
   }

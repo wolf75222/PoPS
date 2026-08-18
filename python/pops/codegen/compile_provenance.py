@@ -194,6 +194,51 @@ def verify_cached_artifact(
     return binary, artifact
 
 
+def load_or_publish_cached_artifact(
+    so_path: Any,
+    compile_to_path: Any,
+    *,
+    semantic_identity: Any,
+    spec_identity: Any,
+) -> tuple[str, Any, Any]:
+    """Load or publish one content-addressed native artifact under the MPI cache lock.
+
+    Compiler writes target a private staging file.  The destination path is replaced only after
+    the binary and sidecar are authenticated, so concurrent MPI ranks cannot hash a torn ``.so``
+    or overwrite a sealed facade identity.  ``compile_to_path(staging_path)`` must write a complete
+    binary at ``staging_path`` or return another same-directory path it wrote.
+    """
+    from pops.codegen.cache import _artifact_cache_lock, _artifact_cache_staging_path, _record_artifact_identity
+
+    destination = os.path.abspath(os.fspath(so_path))
+    with _artifact_cache_lock(destination):
+        if os.path.isfile(destination):
+            binary, artifact = verify_cached_artifact(
+                destination, semantic_identity=semantic_identity, spec_identity=spec_identity
+            )
+            return destination, binary, artifact
+        staging = _artifact_cache_staging_path(destination)
+        try:
+            written = compile_to_path(staging)
+            source = staging if written is None else os.path.abspath(os.fspath(written))
+            if os.path.dirname(source) != os.path.dirname(destination):
+                raise ValueError("cached artifact compilation must stay in the destination directory")
+            binary, artifact = publish_staged_artifact(
+                source,
+                destination,
+                semantic_identity=semantic_identity,
+                spec_identity=spec_identity,
+            )
+            _record_artifact_identity(destination, spec_identity)
+            return destination, binary, artifact
+        finally:
+            for leftover in (staging, artifact_sidecar_path(staging)):
+                try:
+                    os.remove(leftover)
+                except FileNotFoundError:
+                    pass
+
+
 def build_debug_banner(program: Any, model: Any, *, program_hash: Any, abi_key: Any,
                        cache_key: Any, cflags: Any, lflags: Any, cxx: Any, std: Any,
                        command: Any, registry: Any) -> str:

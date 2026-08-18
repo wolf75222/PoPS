@@ -8,6 +8,7 @@
 #include <pops/mesh/boundary/fill_boundary.hpp>
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/runtime/builders/compiled/native_loader.hpp>
+#include <pops/runtime/native_package_finalize.hpp>
 #include <pops/runtime/named_field_output.hpp>
 #include <pops/runtime/program/external_riemann_brick.hpp>
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
@@ -432,7 +433,7 @@ struct ExternalBoundaryDependencyStorage {
       preflight_error = std::current_exception();
     }
     if (all_reduce_max(preflight_error ? 1L : 0L, lane) != 0) {
-      if (lane.size() == 1 && preflight_error)
+      if ( preflight_error)
         std::rethrow_exception(preflight_error);
       throw std::runtime_error("prepared System boundary dependency preflight failed collectively");
     }
@@ -457,7 +458,7 @@ struct ExternalBoundaryDependencyStorage {
       copy_error = std::current_exception();
     }
     if (all_reduce_max(copy_error ? 1L : 0L, lane) != 0) {
-      if (lane.size() == 1 && copy_error)
+      if ( copy_error)
         std::rethrow_exception(copy_error);
       throw std::runtime_error("prepared System boundary dependency copy failed collectively");
     }
@@ -900,7 +901,7 @@ void System<Dim>::install_prepared_boundary_execution_lane(std::shared_ptr<Execu
   // ``lane`` owns a duplicated communicator.  Converge every local installation check before
   // moving it into System so all temporary holders either survive or release collectively.
   if (all_reduce_max(local_error ? 1L : 0L, *lane) != 0) {
-    if (lane->size() == 1 && local_error)
+    if (local_error)
       std::rethrow_exception(local_error);
     throw std::runtime_error("prepared System boundary lane installation failed collectively");
   }
@@ -1582,7 +1583,7 @@ void System<Dim>::register_elliptic_field(
         request_error = std::current_exception();
       }
       if (all_reduce_max(request_error ? 1L : 0L, lane) != 0) {
-        if (lane.size() == 1 && request_error)
+        if ( request_error)
           std::rethrow_exception(request_error);
         throw std::runtime_error("FFT field solver request allocation failed collectively");
       }
@@ -1895,7 +1896,7 @@ void System<Dim>::finalize_native_packages() {
     package_preparation_error = std::current_exception();
   }
   if (all_reduce_max(package_preparation_error ? 1L : 0L, lane) != 0) {
-    if (lane.size() == 1 && package_preparation_error)
+    if ( package_preparation_error)
       std::rethrow_exception(package_preparation_error);
     throw std::runtime_error("System native package identity preparation failed collectively");
   }
@@ -1915,7 +1916,7 @@ void System<Dim>::finalize_native_packages() {
     field_input_error = std::current_exception();
   }
   if (all_reduce_max(field_input_error ? 1L : 0L, lane) != 0) {
-    if (lane.size() == 1 && field_input_error)
+    if ( field_input_error)
       std::rethrow_exception(field_input_error);
     throw std::runtime_error("System native field input witness preparation failed collectively");
   }
@@ -1932,7 +1933,7 @@ void System<Dim>::finalize_native_packages() {
     publication_prepare_error = std::current_exception();
   }
   if (all_reduce_max(publication_prepare_error ? 1L : 0L, lane) != 0) {
-    if (lane.size() == 1 && publication_prepare_error)
+    if ( publication_prepare_error)
       std::rethrow_exception(publication_prepare_error);
     throw std::runtime_error("System native package publication storage failed collectively");
   }
@@ -1946,7 +1947,7 @@ void System<Dim>::finalize_native_packages() {
     snapshot_error = std::current_exception();
   }
   if (all_reduce_max(snapshot_error ? 1L : 0L, lane) != 0) {
-    if (lane.size() == 1 && snapshot_error)
+    if ( snapshot_error)
       std::rethrow_exception(snapshot_error);
     throw std::runtime_error("System native package rollback snapshot failed collectively");
   }
@@ -1973,7 +1974,7 @@ void System<Dim>::finalize_native_packages() {
         local_error = std::current_exception();
       }
       if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
-        if (lane.size() == 1 && local_error)
+        if ( local_error)
           std::rethrow_exception(local_error);
         throw std::runtime_error("System native package route registrar failed collectively: " +
                                  package.identity);
@@ -2004,7 +2005,7 @@ void System<Dim>::finalize_native_packages() {
       registry_prepare_error = std::current_exception();
     }
     if (all_reduce_max(registry_prepare_error ? 1L : 0L, lane) != 0) {
-      if (lane.size() == 1 && registry_prepare_error)
+      if ( registry_prepare_error)
         std::rethrow_exception(registry_prepare_error);
       throw std::runtime_error(
           "System detached auxiliary registry preparation failed collectively");
@@ -2032,7 +2033,7 @@ void System<Dim>::finalize_native_packages() {
       candidate_snapshot_error = std::current_exception();
     }
     if (all_reduce_max(candidate_snapshot_error ? 1L : 0L, lane) != 0) {
-      if (lane.size() == 1 && candidate_snapshot_error)
+      if ( candidate_snapshot_error)
         std::rethrow_exception(candidate_snapshot_error);
       throw std::runtime_error(
           "System native package detached image preparation failed collectively");
@@ -2060,7 +2061,7 @@ void System<Dim>::finalize_native_packages() {
       }
       package.capability->revoke();
       if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
-        if (lane.size() == 1 && local_error)
+        if ( local_error)
           std::rethrow_exception(local_error);
         throw std::runtime_error("System native package installer failed collectively: " +
                                  package.identity);
@@ -2085,7 +2086,7 @@ void System<Dim>::finalize_native_packages() {
       committed_witness_error = std::current_exception();
     }
     if (all_reduce_max(committed_witness_error ? 1L : 0L, lane) != 0) {
-      if (lane.size() == 1 && committed_witness_error)
+      if ( committed_witness_error)
         std::rethrow_exception(committed_witness_error);
       throw std::runtime_error(
           "System committed native package witness preparation failed collectively");
@@ -2118,7 +2119,7 @@ void System<Dim>::finalize_native_packages() {
         block_error = std::current_exception();
       }
       if (all_reduce_max(block_error ? 1L : 0L, lane) != 0) {
-        if (lane.size() == 1 && block_error)
+        if ( block_error)
           std::rethrow_exception(block_error);
         throw std::runtime_error("System native block preparation failed collectively: " +
                                  package.identity);
@@ -2142,7 +2143,7 @@ void System<Dim>::finalize_native_packages() {
         field_output_error = std::current_exception();
       }
       if (all_reduce_max(field_output_error ? 1L : 0L, lane) != 0) {
-        if (lane.size() == 1 && field_output_error)
+        if ( field_output_error)
           std::rethrow_exception(field_output_error);
         throw std::runtime_error("System native field output failed collectively: " + slot);
       }
@@ -2158,7 +2159,7 @@ void System<Dim>::finalize_native_packages() {
       expected_field_error = std::current_exception();
     }
     if (all_reduce_max(expected_field_error ? 1L : 0L, lane) != 0) {
-      if (lane.size() == 1 && expected_field_error)
+      if ( expected_field_error)
         std::rethrow_exception(expected_field_error);
       throw std::runtime_error("System exact field attachment preparation failed collectively");
     }
@@ -2211,7 +2212,7 @@ void System<Dim>::finalize_native_packages() {
           field_error = std::current_exception();
         }
         if (all_reduce_max(field_error ? 1L : 0L, lane) != 0) {
-          if (lane.size() == 1 && field_error)
+          if ( field_error)
             std::rethrow_exception(field_error);
           throw std::runtime_error("System native elliptic attachment failed collectively: " +
                                    attachment.rhs_identity);
@@ -2239,7 +2240,7 @@ void System<Dim>::finalize_native_packages() {
         boundary_error = std::current_exception();
       }
       if (all_reduce_max(boundary_error ? 1L : 0L, lane) != 0) {
-        if (lane.size() == 1 && boundary_error)
+        if ( boundary_error)
           std::rethrow_exception(boundary_error);
         throw std::runtime_error("System prepared boundary installer failed collectively: " +
                                  package.identity);
@@ -2307,7 +2308,7 @@ void System<Dim>::finalize_native_packages() {
       boundary_witness_error = std::current_exception();
     }
     if (all_reduce_max(boundary_witness_error ? 1L : 0L, lane) != 0) {
-      if (lane.size() == 1 && boundary_witness_error)
+      if ( boundary_witness_error)
         std::rethrow_exception(boundary_witness_error);
       throw std::runtime_error("System prepared boundary hook witness failed collectively");
     }
@@ -2366,7 +2367,7 @@ void System<Dim>::finalize_native_packages() {
       materialized_error = std::current_exception();
     }
     if (all_reduce_max(materialized_error ? 1L : 0L, lane) != 0) {
-      if (lane.size() == 1 && materialized_error)
+      if ( materialized_error)
         std::rethrow_exception(materialized_error);
       throw std::runtime_error(
           "System materialized native candidate witness preparation failed collectively");
@@ -2398,9 +2399,7 @@ void System<Dim>::finalize_native_packages() {
     for (auto& package : packages)
       if (package.kind == NativePackageKind::generic && package.capability)
         package.capability->reset_for_retry();
-    if (lane.size() == 1 && failure)
-      std::rethrow_exception(failure);
-    throw std::runtime_error("System native package finalization rolled back collectively");
+    rethrow_native_package_finalize_failure(failure);
   }
 
   // All fallible work and exact-lane witnesses are complete. Publication is swaps/moves of already
@@ -2569,7 +2568,7 @@ void System<Dim>::add_coupled_source_prepared_(const CoupledSourceProgram& descr
     local_error = std::current_exception();
   }
   if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
-    if (lane.size() == 1 && local_error)
+    if ( local_error)
       std::rethrow_exception(local_error);
     throw std::runtime_error("System coupled-source preparation failed collectively");
   }
@@ -2763,7 +2762,7 @@ void System<Dim>::install_prepared_coupling_operator(
     local_error = std::current_exception();
   }
   if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
-    if (lane.size() == 1 && local_error)
+    if ( local_error)
       std::rethrow_exception(local_error);
     throw std::runtime_error("prepared System coupling installation failed collectively");
   }

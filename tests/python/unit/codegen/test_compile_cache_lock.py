@@ -133,6 +133,94 @@ def test_amr_cache_miss_projects_field_role_coefficients_only_for_identity(tmp_p
     assert type(observed["runtime_roles"][0]["coefficient"]) is float
 
 
+def _publish_cached_worker(destination, payload, semantic_token, spec_token, result_path,
+                           entered_compile, release_compile):
+    from pops.codegen.compile_provenance import load_or_publish_cached_artifact
+    from pops.identity import Identity
+
+    def compile_to(staging_path):
+        entered_compile.set()
+        release_compile.wait(10)
+        Path(staging_path).write_bytes(payload)
+        return staging_path
+
+    _so_path, binary, _artifact = load_or_publish_cached_artifact(
+        destination,
+        compile_to,
+        semantic_identity=Identity.from_token(semantic_token),
+        spec_identity=Identity.from_token(spec_token),
+    )
+    Path(result_path).write_text(binary.token + "\n", encoding="utf-8")
+
+
+def test_load_or_publish_cached_artifact_serializes_mpi_style_publication(tmp_path):
+    from pops.identity import make_identity
+
+    destination = str(tmp_path / "facade-model.so")
+    semantic = make_identity("semantic", {"name": "facade-cache"})
+    spec = make_identity("artifact-spec", {"name": "facade-cache-spec"})
+    context = multiprocessing.get_context("spawn")
+    first_entered, first_release = context.Event(), context.Event()
+    second_entered, second_release = context.Event(), context.Event()
+    first_result = tmp_path / "first.token"
+    second_result = tmp_path / "second.token"
+    first = context.Process(
+        target=_publish_cached_worker,
+        args=(destination, b"rank-0-binary", semantic.token, spec.token, str(first_result),
+              first_entered, first_release),
+    )
+    second = context.Process(
+        target=_publish_cached_worker,
+        args=(destination, b"rank-1-overwrite", semantic.token, spec.token, str(second_result),
+              second_entered, second_release),
+    )
+    try:
+        first.start()
+        assert first_entered.wait(5)
+        second.start()
+        assert not second_entered.wait(0.2)
+        assert not Path(destination).is_file()
+        first_release.set()
+        first.join(5)
+        assert first.exitcode == 0
+        assert Path(destination).read_bytes() == b"rank-0-binary"
+        assert not second_entered.wait(0.2)
+        second_release.set()
+        second.join(5)
+        assert second.exitcode == 0
+        assert Path(destination).read_bytes() == b"rank-0-binary"
+        assert first_result.read_text(encoding="utf-8") == second_result.read_text(encoding="utf-8")
+    finally:
+        first_release.set()
+        second_release.set()
+        for process in (first, second):
+            if process.is_alive():
+                process.terminate()
+            process.join(5)
+
+
+def test_last_axis_slab_boxes_match_fft_canonical_layout():
+    from pops.runtime._runtime_mesh_lowering import last_axis_slab_boxes
+
+    assert last_axis_slab_boxes((16,), 1) == (((0,), (16,)),)
+    assert last_axis_slab_boxes((16,), 2) == (((0,), (8,)), ((8,), (16,)))
+    assert last_axis_slab_boxes((8, 16), 2) == (((0, 0), (8, 8)), ((0, 8), (8, 16)))
+    with pytest.raises(ValueError, match="divide the last Cartesian axis"):
+        last_axis_slab_boxes((16,), 3)
+
+
+def test_facade_model_compile_uses_locked_cache_publication():
+    source = (
+        Path(__file__).resolve().parents[4]
+        / "python"
+        / "pops"
+        / "physics"
+        / "_facade_compile.py"
+    ).read_text(encoding="utf-8")
+    assert "load_or_publish_cached_artifact" in source
+    assert "os.path.isfile(so_path)" not in source
+
+
 def test_failed_program_compile_leaves_no_partial_final_or_staging_binary(
     tmp_path, monkeypatch
 ):

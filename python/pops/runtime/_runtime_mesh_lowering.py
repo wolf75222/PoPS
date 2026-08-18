@@ -15,6 +15,33 @@ from pops._geometry_contracts import cartesian_geometry_contract
 from pops.runtime._amr_bind_lowering import amr_config_from_layout
 
 
+def last_axis_slab_boxes(shape: Any, ranks: Any) -> tuple[tuple[tuple[int, ...], tuple[int, ...]], ...]:
+    """Return exclusive last-axis slabs, one per communicator rank.
+
+    ``PoissonFFTSolver`` and the MPI System FFT gate require this exact tiling.
+    A single domain box is valid only for one rank.
+    """
+    if not isinstance(shape, tuple) or not shape or any(type(extent) is not int or extent < 1 for extent in shape):
+        raise TypeError("last-axis slabs require a positive ranked shape")
+    count = int(ranks)
+    if count < 1:
+        raise ValueError("last-axis slabs require at least one rank")
+    last = shape[-1]
+    if last % count != 0:
+        raise ValueError(
+            "distributed System layout requires communicator size to divide the last Cartesian axis"
+        )
+    local = last // count
+    boxes = []
+    for rank in range(count):
+        lower = [0] * len(shape)
+        upper = list(shape)
+        lower[-1] = rank * local
+        upper[-1] = (rank + 1) * local
+        boxes.append((tuple(lower), tuple(upper)))
+    return tuple(boxes)
+
+
 def _uniform_system_values(
     native_layout: Any,
 ) -> tuple[
@@ -97,13 +124,16 @@ def _uniform_system_values(
     )
 
 
-def system_config_from_layout(native_layout: Any) -> Any:
+def system_config_from_layout(native_layout: Any, *, mpi_ranks: Any = 1) -> Any:
     """Build the native uniform config from an authenticated layout descriptor."""
     from pops._bootstrap import SystemConfig
 
     shape, lower, upper, periodicity, boxes, coordinate_system = _uniform_system_values(
         native_layout
     )
+    ranks = int(mpi_ranks)
+    if ranks > 1 and len(boxes) == 1 and boxes[0] == ((0,) * len(shape), shape):
+        boxes = last_axis_slab_boxes(shape, ranks)
     cfg = SystemConfig()
     cfg.shape = shape
     cfg.lower = lower

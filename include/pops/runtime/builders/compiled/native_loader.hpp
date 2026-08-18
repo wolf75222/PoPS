@@ -112,9 +112,13 @@ void register_native_package(System<Dim>* system, const std::string& name,
                                 ": expected compiled binary identity token is invalid");
   // Keep the authenticated platform image alive until the loader has opened those exact bytes.
   auto authenticated_file = std::make_shared<dynlib::AuthenticatedNativeFile>(so_path);
-  if (authenticated_file->binary_identity() != expected_binary_identity)
+  const std::string observed_binary_identity = authenticated_file->binary_identity();
+  if (observed_binary_identity != expected_binary_identity)
     throw std::runtime_error(std::string(context) +
-                             ": compiled binary differs from the authenticated facade artifact");
+                             ": compiled binary differs from the authenticated facade artifact"
+                             " (path='" +
+                             so_path + "', observed=" + observed_binary_identity +
+                             ", expected=" + expected_binary_identity + ")");
 
 #if defined(_WIN32)
   pops::dynlib::handle handle = pops::dynlib::open_private_image(authenticated_file->load_path());

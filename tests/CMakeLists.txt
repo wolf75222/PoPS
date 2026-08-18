@@ -432,6 +432,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_residual_operator
   test_capability_report
   test_canonical_identity
+  test_native_package_finalize_inner_exception
   test_box
   test_box_array
   test_multifab
@@ -819,6 +820,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_coupler_inject 4)
   set(POPS_MPI_RANKS_test_mpi_fft_distributed 4)
   set(POPS_MPI_RANKS_test_mpi_flux_failure_collective 2)
+  set(POPS_MPI_RANKS_test_mpi_generated_weno_halo 1 2)
   set(POPS_MPI_RANKS_test_mpi_poisson 4)
   set(POPS_MPI_RANKS_test_mpi_redistribute 4)
   set(POPS_MPI_RANKS_test_mpi_smoke 4)
@@ -876,6 +878,7 @@ if(POPS_HAS_MPI)
     test_mpi_coupler_inject
     test_mpi_fft_distributed
     test_mpi_flux_failure_collective
+    test_mpi_generated_weno_halo
     test_mpi_poisson
     test_mpi_redistribute
     test_mpi_smoke

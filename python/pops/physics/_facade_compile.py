@@ -126,8 +126,6 @@ class _FacadeCompileMixin(_FacadeModel):
 
         Returns a CompiledModel carrying so_path, backend, target, names/roles/gamma/n_aux/params,
         caps, abi_key, model_hash, cxx, std."""
-        import os
-
         # Lazy codegen import (keeps pops.physics codegen-free at module load; Spec-4 rule):
         from pops.codegen.toolchain import (
             loader_cxx_std,
@@ -144,7 +142,7 @@ class _FacadeCompileMixin(_FacadeModel):
             _registry_cache_key,
         )
         from pops.codegen.compile_provenance import (
-            verify_cached_artifact,
+            load_or_publish_cached_artifact,
             write_artifact_sidecar,
         )
         from pops.codegen.abi import _abi_key_python
@@ -261,31 +259,33 @@ class _FacadeCompileMixin(_FacadeModel):
         # would otherwise use the hash WITHOUT params (the Model facade adds the Param). HIT -> we skip the
         # compilation. Explicit so_path -> forced path, always recompiles (strict backward-compat).
         cache_requested = so_path is None
+        compile_kwargs = dict(
+            include=include,
+            backend=backend,
+            name=name,
+            cxx=cxx,
+            std=std,
+            require_metadata=require_metadata,
+            target=target,
+            hoist_reciprocals=hoist_reciprocals,
+            model_identity=model_hash,
+            _native_field_roles=(normalized_field_roles if target == "amr_system" else None),
+            consumer_owner_qid=consumer_owner_qid,
+            declare_auxiliary_providers=declare_auxiliary_providers,
+        )
         if cache_requested:
+            # Params-included cache path.  HyperbolicModel.compile would otherwise address a
+            # different spec and write the shared .so in place; MPI ranks must serialize
+            # publication the same way compile_problem already does.
             so_path = _identity_cache_so_path(spec_identity)
-
-        if cache_requested and os.path.isfile(so_path):
-            binary_identity, final_artifact_identity = verify_cached_artifact(
-                so_path, semantic_identity=semantic_identity, spec_identity=spec_identity
-            )
-            out_path = so_path
-        else:
-            # The loader emits the target-specific fixed ABI entry point.
-            out_path = m.compile(
+            out_path, binary_identity, final_artifact_identity = load_or_publish_cached_artifact(
                 so_path,
-                include,
-                backend=backend,
-                name=name,
-                cxx=cxx,
-                std=std,
-                require_metadata=require_metadata,
-                target=target,
-                hoist_reciprocals=hoist_reciprocals,
-                model_identity=model_hash,
-                _native_field_roles=(normalized_field_roles if target == "amr_system" else None),
-                consumer_owner_qid=consumer_owner_qid,
-                declare_auxiliary_providers=declare_auxiliary_providers,
+                lambda staging: m.compile(staging, **compile_kwargs),
+                semantic_identity=semantic_identity,
+                spec_identity=spec_identity,
             )
+        else:
+            out_path = m.compile(so_path, **compile_kwargs)
             binary_identity, final_artifact_identity = write_artifact_sidecar(
                 out_path, semantic_identity=semantic_identity, spec_identity=spec_identity
             )

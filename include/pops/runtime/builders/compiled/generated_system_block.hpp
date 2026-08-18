@@ -639,6 +639,27 @@ void add_poisson_rhs(const Model& model, const MultiFab<Dim>& state, MultiFab<Di
   }
 }
 
+template <int Dim>
+void fill_generated_state_boundary(MultiFab<Dim>& state, const HaloSchedule<Dim>& schedule,
+                                   ExecutionLane* lane) {
+  // Match GhostTransport::materialize: remote jobs use HaloExchange on an owning lane;
+  // a purely local schedule keeps the 2-arg fill. Consensus is collective so ranks cannot
+  // split between local replay and MPI transport.
+  if (lane == nullptr) {
+    fill_boundary(state, schedule);
+    return;
+  }
+  const bool distributed = all_reduce_max(schedule.has_remote_jobs() ? 1L : 0L, *lane) != 0;
+  if (distributed) {
+    HaloExchangeContext context{};
+    context.context_generation = 1;
+    context.schedule_generation = 1;
+    fill_boundary(state, schedule, *lane, context);
+    return;
+  }
+  fill_boundary(state, schedule);
+}
+
 template <int Dim, class Model, class Reconstruction, class Numerical,
           nd::ReconstructionVariables Variables, class Request>
 PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction reconstruction,
@@ -671,9 +692,14 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
   const auto* const provider_plan = provider_plan_owner.get();
   const Geometry<Dim> geometry = request.geometry;
   const BoundaryTopology<Dim> topology = request.topology;
+  std::shared_ptr<ExecutionLane> default_halo_lane;
+  if (n_ranks() > 1) {
+    default_halo_lane = std::make_shared<ExecutionLane>(
+        ExecutionLane::duplicate_world_collectively("pops.generated.cartesian.nd/default-halo"));
+  }
 
   auto prepare_state = [model, provider_storage_owner, provider_plan_owner, provider_storage,
-                        provider_plan, geometry, topology, ghosts](
+                        provider_plan, geometry, topology, ghosts, default_halo_lane](
                            MultiFab<Dim>& state, const PreparedHyperbolicBoundary<Dim>* boundary) {
     if (boundary != nullptr) {
       boundary->template require_model_qualified_characteristic_provider<Model>();
@@ -683,7 +709,7 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
     const auto state_schedule = HaloSchedule<Dim>(
         state.layout(), state.distribution(), state.local_rank(), geometry.domain(), ghosts,
         topology, state.ncomp(), halo_budget(state, geometry.domain(), topology, ghosts));
-    fill_boundary(state, state_schedule);
+    fill_generated_state_boundary(state, state_schedule, default_halo_lane.get());
     if (provider_storage != nullptr) {
       runtime::system::require_pointwise_provider_groups<Dim, provider_count>(
           state, provider_storage, provider_plan, "generated flux providers");

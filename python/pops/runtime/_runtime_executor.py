@@ -293,7 +293,15 @@ class _UniformNativeProvider(RuntimeExecutorProvider):
         from pops.runtime._system import System
 
         normalized_layout, = plan.artifact.layout_plan.layouts
-        config = system_config_from_layout(normalized_layout.native_spatial_layout)
+        from pops._native_selector import selected_native_module
+
+        native = selected_native_module(required=False)
+        mpi_ranks = 1
+        if native is not None and callable(getattr(native, "n_ranks", None)):
+            mpi_ranks = int(native.n_ranks())
+        config = system_config_from_layout(
+            normalized_layout.native_spatial_layout, mpi_ranks=mpi_ranks
+        )
         engine = System(config)
         from pops.runtime._checkpoint_spatial import install_checkpoint_spatial_contract
 
