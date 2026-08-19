@@ -74,8 +74,8 @@ std::shared_ptr<const component::PreparedExecutionContextV1> prepared_execution(
 
 ProdModel make_model() {
   // alpha=0 : elliptic_rhs nul -> phi=0, parite stricte.
-  return ProdModel{
-      {}, NativeEuler{static_cast<Real>(kGamma)}, NoSource{}, BackgroundDensity{Real(0), Real(0)}};
+  return ProdModel{{}, NativeEuler{static_cast<Real>(kGamma)}, NoSource{},
+                   BackgroundDensity{Real(0), Real(0)}};
 }
 
 template <int Dim>

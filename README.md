@@ -198,9 +198,11 @@ installed in the `pops` wheel. It is distinct from the fast-test catalogue
 (`tests/test_manifest.toml`) and the performance harness (`benchmarks/manifest.toml`).
 
 `verification/manifest.toml` is the source of truth (schema `pops.verification.manifest.v1`).
-Catalogued families include infrastructure (`PH`), transport (`TR`), Euler (`EU`), Poisson
-(`PO`), time (`TM`), Euler-Poisson (`CP`), AMR (`AM`), and robustness (`RB`). One native
-artifact compiles exactly one spatial dimension (`POPS_NATIVE_DIM` is `1`, `2`, or `3`).
+Catalogued families include infrastructure (`PH`, `IF`, `NO`), transport (`TR`), Euler
+(`EU`), Poisson (`PO`), time (`TM`), Euler-Poisson (`CP`), AMR (`AM`), geometry (`GE`),
+robustness (`RB`), and performance (`PF`). Polar geometry cases are capability-gated.
+One native artifact compiles exactly one spatial dimension (`POPS_NATIVE_DIM` is `1`,
+`2`, or `3`).
 
 Validate the manifest and plan a suite without executing cases:
 

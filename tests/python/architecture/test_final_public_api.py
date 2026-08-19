@@ -297,6 +297,7 @@ def test_runtime_instance_has_only_the_explicit_read_and_restart_surface() -> No
         "restart",
         "restore_consumer_recovery",
         "retry_consumer_finalizers",
+        "set_field_composite_mean_neutralizing",
         "state_global",
         "time",
     }

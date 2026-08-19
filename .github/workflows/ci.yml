@@ -1140,11 +1140,11 @@ jobs:
         # SHARD_TOTAL=strategy.job-total. ADC-623: files are packed by MEASURED DURATION
         # (scripts/ci_shard_binpack.py, greedy LPT over tests/python/test_durations.json), not by a
         # modulo of the file list, so the slowest shard -- the gate critical path -- is minimized.
-        # 7 shards: the measured 417-file universe packs to a 32.2-minute maximum test load, leaving
+        # 8 shards: the measured Python universe packs to a 31-minute maximum test load, leaving
         # setup and runner variance inside the unchanged 50-minute watchdog. To rebalance,
         # change the COUNT here only (job names stay "... shard N"; the required `gate` aggregates
         # them via a single matrix entry in its `needs`).
-        shard: [0, 1, 2, 3, 4, 5, 6]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
 
     env:
       POPS_NATIVE_DIM: "2"

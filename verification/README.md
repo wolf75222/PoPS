@@ -12,10 +12,12 @@ from the performance harness (`benchmarks/manifest.toml`). Those three manifests
 keep separate authority; do not copy resolutions, oracles, or thresholds between
 them.
 
-`verification/manifest.toml` catalogues the scientific cases (PH, TR, EU, PO,
-TM, CP, AM, GE, RB, IF, PF). Native `pops.run` is compiler/Kokkos-gated. One
+`verification/manifest.toml` catalogues the 91 scientific cases (PH, TR, EU, PO,
+TM, CP, AM, GE, RB, IF, PF, NO). Native `pops.run` is compiler/Kokkos-gated. One
 native artifact compiles exactly one spatial dimension. Timed PF work delegates
 to `benchmarks/manifest.toml`; this tree does not invent a second harness.
+PH-00 and NO-01 are in-memory helpers without `run_native`. `--execute` fail-closes
+a required job that lacks that entry point; the PR native gate runs IF-08 only.
 
 ## Layout
 
@@ -25,7 +27,7 @@ verification/
 ├── PoPS_VERIFICATION_VALIDATION_BENCHMARK_PLAN_MONOREPO_v1.3.md
 ├── __init__.py               # repo-local package marker; not in the wheel
 ├── manifest.toml             # scientific campaign source of truth
-├── cases/                    # PH, TR, EU, PO, TM, CP, AM, RB, IF, PF
+├── cases/                    # PH, TR, EU, PO, TM, CP, AM, GE, RB, IF, PF, NO
 ├── machines/                 # leftover ROMEO helpers; not the campaign runner
 └── pops_verify/              # private post-process helpers
 ```
@@ -76,7 +78,8 @@ bind, run cases, or launch jobs.
 
 `scripts/run_verification.py` validates the manifest, expands selected cases
 into single-dimension jobs, and writes `plan.json` under `--output`. With
-`--execute` it calls each job's public `run_native` in-process. It does not
+`--execute` it calls each job's public `run_native` in-process. A required job
+without `run_native`, or with `scientific_pass: false`, exits 1. It does not
 spawn MPI ranks: launch the same script under `srun`/`mpiexec` when the
 artifact proves `MPI_COMM_WORLD`.
 

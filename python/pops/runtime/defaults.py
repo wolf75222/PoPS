@@ -68,6 +68,7 @@ _CONSTANT_CLASSIFICATION: dict = {
     "kPhysicalDefaultFourPiG": "public_knob",
     "kPhysicalDefaultGravityRho0": "public_knob",
     "kCflSpeedFloor": "public_knob",
+    "kRealIsBinary64": "diagnostic_only",
     "kMaxRuntimeParams": "hard_limit",
 }
 

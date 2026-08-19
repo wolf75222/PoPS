@@ -99,3 +99,28 @@ def test_expand_jobs_parameterizes_suite_space_mpi_resources_and_evidence():
     request = CampaignRequest.from_job(job)
     assert request.mpi_mode == "on"
     assert request.min_resolution == 32
+
+
+IN_MEMORY_HELPERS = frozenset({"PH-00", "NO-01"})
+
+
+def test_catalogued_cases_expose_run_native_except_in_memory_helpers():
+    """Required and capability-gated cases have run_native; PH-00/NO-01 stay in-memory."""
+    import tomllib
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[3]
+    manifest = tomllib.loads((repo / "verification" / "manifest.toml").read_text(encoding="utf-8"))
+    missing: list[str] = []
+    unexpected_helpers: list[str] = []
+    for case in manifest["case"]:
+        source = (repo / case["path"]).read_text(encoding="utf-8")
+        has_runner = "def run_native" in source
+        if case["id"] in IN_MEMORY_HELPERS:
+            if has_runner:
+                unexpected_helpers.append(case["id"])
+            continue
+        if not has_runner:
+            missing.append(case["id"])
+    assert unexpected_helpers == []
+    assert missing == []

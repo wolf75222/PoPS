@@ -530,6 +530,41 @@ def test_execute_required_missing_runner_is_fail(tmp_path: Path):
     assert rows[0]["status"] == "fail"
 
 
+def test_execute_false_scientific_pass_exits_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    runner = _load_runner()
+    monkeypatch.setattr(
+        runner,
+        "execute_jobs",
+        lambda *args, **kwargs: [
+            {"status": "pass", "scientific_pass": False, "case_id": "IF-08"}
+        ],
+    )
+    manifest, _case_dir = _write_case_manifest(
+        tmp_path,
+        case_id="IF-08",
+        run_py="def run_native(request=None, n_cells=None):\n    return {}\n",
+    )
+    leaf = _write_authenticated_leaf(tmp_path)
+    monkeypatch.setenv("POPS_NATIVE_DIM", "1")
+    monkeypatch.setenv("POPS_NATIVE_VARIANTS_ROOT", str(leaf))
+    code = runner.main(
+        [
+            "--suite",
+            "pr",
+            "--dimensions",
+            "1",
+            "--max-nodes",
+            "2",
+            "--output",
+            str(tmp_path / "out"),
+            "--manifest",
+            str(manifest),
+            "--execute",
+        ]
+    )
+    assert code == 1
+
+
 def test_execute_capability_gated_unavailable_is_not_supported(tmp_path: Path):
     manifest, _case_dir = _write_case_manifest(
         tmp_path,

@@ -852,6 +852,12 @@ labels = ["backend", "mpi", "medium"]
 mpi_nproc = [1, 2, 4]
 
 [[cpp.suite]]
+name = "test_mpi_generated_weno_halo"
+sources = ["tests/cpp/integration/mpi/test_mpi_generated_weno_halo.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [1, 2]
+
+[[cpp.suite]]
 name = "test_mpi_auxiliary_ghost_fill"
 sources = ["tests/cpp/integration/mpi/test_mpi_auxiliary_ghost_fill.cpp"]
 labels = ["backend", "mpi", "medium"]
@@ -902,6 +908,11 @@ labels = ["unit", "numerics", "fast"]
 name = "test_implicit_source_nd"
 sources = ["tests/cpp/unit/numerics/test_implicit_source_nd.cpp"]
 labels = ["unit", "numerics", "fast"]
+
+[[cpp.suite]]
+name = "test_native_package_finalize_inner_exception"
+sources = ["tests/cpp/unit/runtime/test_native_package_finalize_inner_exception.cpp"]
+labels = ["unit", "runtime", "fast"]
 
 [[cpp.suite]]
 name = "test_numerical_defaults"

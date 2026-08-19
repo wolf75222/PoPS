@@ -253,6 +253,7 @@ sdk-support pops/runtime/multiblock/interface_flux_scheduler.hpp
 sdk-support pops/runtime/multiblock/prepared_interface_flux_component.hpp
 sdk-support pops/runtime/named_field_output.hpp
 sdk-support pops/runtime/named_field_publication.hpp
+sdk-support pops/runtime/native_package_finalize.hpp
 api pops/runtime/numerical_defaults.hpp
 sdk-support pops/runtime/output/hdf5_collective.hpp
 sdk-support pops/runtime/output_piece.hpp

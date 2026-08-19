@@ -120,14 +120,69 @@ def _load_static_report() -> dict:
 
 _CONSTEXPR_VALUE_RE = re.compile(
     r"inline\s+constexpr\s+(?:Real|int|double|float|bool|std::size_t|size_t|unsigned)\s+"
-    r"(k[A-Za-z0-9_]+)\s*=\s*(.+?);")
+    r"(k[A-Za-z0-9_]+)\s*=\s*(.+?);",
+    re.DOTALL,
+)
+_PRECISION_DOUBLE_RE = re.compile(
+    r"static\s+constexpr\s+double\s+([A-Za-z0-9_]+)\s*=\s*([^;]+);"
+)
+_PRECISION_ALIAS_RE = re.compile(
+    r"numerical_defaults_detail::PrecisionDefaults<Real>::([A-Za-z0-9_]+)"
+)
+
+
+def _join_header_declarations(text: str) -> str:
+    """Join `inline constexpr` declarations that put the RHS on the next line."""
+    lines = []
+    pending = ""
+    for raw in text.splitlines():
+        stripped = raw.strip()
+        if pending:
+            pending = pending + " " + stripped
+            if ";" in stripped:
+                lines.append(pending)
+                pending = ""
+            continue
+        if (
+            stripped.startswith("inline constexpr")
+            and "=" in stripped
+            and ";" not in stripped
+        ):
+            pending = stripped
+            continue
+        lines.append(stripped)
+    if pending:
+        lines.append(pending)
+    return "\n".join(lines)
+
+
+def _scan_precision_double_defaults() -> dict:
+    text = (_ROOT / "include/pops/runtime/numerical_defaults.hpp").read_text()
+    start = text.find("struct PrecisionDefaults<double>")
+    end = text.find("struct PrecisionDefaults<float>")
+    if start < 0 or end < 0:
+        return {}
+    return {
+        name: _parse_cpp_value(rhs)
+        for name, rhs in _PRECISION_DOUBLE_RE.findall(text[start:end])
+    }
 
 
 def _parse_cpp_value(rhs: str):
-    rhs = rhs.strip()
+    rhs = rhs.strip().rstrip(";")
     m = re.fullmatch(r"Real\((.*)\)", rhs)
     if m:
         rhs = m.group(1).strip()
+    alias = _PRECISION_ALIAS_RE.fullmatch(rhs)
+    if alias:
+        defaults = _scan_precision_double_defaults()
+        return defaults.get(alias.group(1))
+    ternary = re.fullmatch(
+        r"kRealIsBinary64\s*\?\s*(.+?)\s*:\s*(.+)",
+        rhs,
+    )
+    if ternary:
+        return _parse_cpp_value(ternary.group(1))
     if rhs in ("true", "false"):
         return rhs == "true"
     try:
@@ -143,13 +198,9 @@ def _parse_cpp_value(rhs: str):
 def _scan_constant_values() -> dict:
     values = {}
     for rel in _SCANNED_HEADERS:
-        for line in (_ROOT / rel).read_text().splitlines():
-            stripped = line.strip()
-            if stripped.startswith("//") or stripped.startswith("*"):
-                continue
-            m = _CONSTEXPR_VALUE_RE.search(line)
-            if m:
-                values[m.group(1)] = _parse_cpp_value(m.group(2))
+        joined = _join_header_declarations((_ROOT / rel).read_text())
+        for match in _CONSTEXPR_VALUE_RE.finditer(joined):
+            values[match.group(1)] = _parse_cpp_value(match.group(2))
     return values
 
 

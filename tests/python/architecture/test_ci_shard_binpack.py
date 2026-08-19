@@ -87,7 +87,7 @@ def test_full_manifest_pack_stays_within_python_shard_test_budget():
     excluded = set(binpack.EXCLUDED_FROM_SHARDS)
     shards = binpack.assign_shards(
         [path for path in universe if path not in excluded],
-        shard_total=7,
+        shard_total=8,
         durations=durations,
     )
     binpack.verify_partition(universe, shards)

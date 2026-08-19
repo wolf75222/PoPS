@@ -44,7 +44,7 @@ Scanned headers: `include/pops/runtime/numerical_defaults.hpp`,
 | kFFTZeroMeanGauge                     | true    | internal_default | fixed gauge |
 | kFFTDirectDftFallback                 | true    | diagnostic_only  | counter in report |
 | kEbCutFractionFloor                   | 1e-3    | public_knob      | CutCell(cut_theta_min=) |
-| kWenoEpsilon                          | 1e-40   | internal_default | fixed WENO floor |
+| kWenoEpsilon                          | 1e-40   | public_knob      | WENO5(epsilon=) |
 | kEbFaceOpenEps                        | 1e-6    | public_knob      | CutCell(face_open_eps=) |
 | kEbKappaMin                           | 1e-2    | public_knob      | CutCell(kappa_min=) |
 | kAmrDefaultMaxLevels                  | 2       | internal_default | native AMR envelope |
@@ -53,5 +53,6 @@ Scanned headers: `include/pops/runtime/numerical_defaults.hpp`,
 | kAdaptiveNoEvolvingBlockSentinel      | 1e30    | diagnostic_only  | degenerate-dt sentinel |
 | kPhysicalDefault* (B0, gamma, ...)    | various | public_knob      | model / brick physical knobs |
 | kPhysicalDefaultNativeIsothermalCs2   | 1       | internal_default | raw brick default |
-| kCflSpeedFloor                        | 1e-30   | internal_default | CFL speed floor |
+| kCflSpeedFloor                        | 1e-30   | public_knob      | System/AmrSystem.step_cfl(speed_floor=) |
+| kRealIsBinary64                       | true if Real is double | diagnostic_only | compile-time Real width, not a knob |
 | kMaxRuntimeParams                     | 32      | hard_limit       | fixed device carrier cap |

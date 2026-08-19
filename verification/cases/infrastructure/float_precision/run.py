@@ -48,12 +48,16 @@ def refuse_float32_case_authoring() -> str:
 
 def run_native(n_cells: int = _exact.DEFAULT_N_CELLS, t_end=_exact.T, request=None):
     """Refuse a native float32 Case. Keep the in-memory f32/f64 sine."""
-    from pops.runtime_environment import RuntimeCapabilityError, validate_precision
-
     _v15.bind_campaign(request, NativeUnavailable)
     del n_cells, t_end
     try:
+        from pops.runtime_environment import validate_precision
+
         validate_precision("float32", where="IF-09")
-    except RuntimeCapabilityError as exc:
+    except NativeUnavailable:
+        raise
+    except Exception as exc:
+        # The public float32 refusal can construct a capability report that
+        # touches a poisoned native selector. Authoring stays refused.
         raise NativeUnavailable(refuse_float32_case_authoring()) from exc
     raise NativeUnavailable(refuse_float32_case_authoring())

@@ -234,6 +234,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 - ADC-644 Wire three previously silent knobs end to end: the GeometricMG preconditioner V-cycle-shape options (n_vcycles, pre/post/bottom sweeps, min_coarse) on P.solve_linear (unknown kwargs and the iterative tolerance/max_cycles now refuse loud instead of being swallowed); DirectSmallGrid(threshold) as a native total-cell coarsening ceiling (coarse_threshold) on set_poisson, distinct from the per-axis min_coarse; and vacuum_floor on the compiled CompositeModel isothermal transport brick. Every knob at its default is bit-identical (attrs omitted, native goldens unchanged).
 
 ### Fixed
+- Classify `kRealIsBinary64` as a diagnostic native constant, keep composite-mean neutralizing
+  on the documented `RuntimeInstance` surface, and fail a verification `--execute` campaign when
+  a job's scientific evidence is false even if the runner status stayed `pass`.
+- Pack the Python gate across eight duration shards so the measured load stays inside the
+  50-minute watchdog, register the generated WENO halo and native-package finalize C++
+  suites (98 MPI launches), classify `native_package_finalize.hpp` as sdk-support, and
+  fail-close provenance `date_utc` plus IF-09 float32 authoring without a live native
+  selector.
 - Finalize MPI ownership for AMR global state, potential, provider, auxiliary, history, staggered and
   composite-reduction views; serialize content-addressed artifact publication across ranks; and give
   genuinely cold CI builds bounded watchdogs large enough to preserve their caches and complete.

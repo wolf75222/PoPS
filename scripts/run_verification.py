@@ -779,7 +779,11 @@ def main(argv: list[str] | None = None) -> int:
                 artifact=artifact,
                 manifest=instance,
             )
-            failed = sum(1 for row in results if row.get("status") == "fail")
+            failed = sum(
+                1
+                for row in results
+                if row.get("status") == "fail" or row.get("scientific_pass") is False
+            )
             print(f"planned {len(cases)} cases")
             print(f"executed {len(results)} jobs ({failed} failed)")
             return 1 if failed else 0

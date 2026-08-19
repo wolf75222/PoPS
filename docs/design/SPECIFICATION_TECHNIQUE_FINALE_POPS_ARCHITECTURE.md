@@ -1307,7 +1307,8 @@ Une application ne construit donc ni moteur, ni config native, ni plan d'install
 `RuntimeInstance` ne publie ni moteur natif, ni sélecteur de moteur par layout/bloc, ni `InstallPlan` ou
 `RuntimePlan`, et n'effectue aucune délégation générique d'attribut. Sa surface explicite se limite aux
 identités et rapports, aux lectures d'état, clock, layout, champs et histories, à la réduction native
-`integral(block, component=0, levels=...)`, à la vue de rapports AMR, au rapport du programme, ainsi
+`integral(block, component=0, levels=...)`, au réglage `set_field_composite_mean_neutralizing`,
+à la vue de rapports AMR, au rapport du programme, ainsi
 qu'à `checkpoint` et `restart`. `integral` applique la mesure cartésienne résolue en Uniform et délègue
 le masque composite pondéré au provider AMR ; elle ne recopie jamais l'état pour sommer en Python.
 Elle ne retourne jamais le `System` ou
