@@ -20,6 +20,7 @@ from pops.numerics.spatial import FiniteVolume
 from pops.numerics.variables import Conservative
 from pops.params import RuntimeParam
 from pops.physics._facade import Model
+from pops.physics._freeze import _deep_freeze
 from pops.runtime._bricks_scheme import Spatial
 from pops.runtime.routes import (
     LIMITER_MINMOD,
@@ -232,6 +233,53 @@ def test_plan_owned_system_loader_seals_one_spatial_specialization_and_abi_token
     assert "velocity[0] = pops::Real(1);" in loader
     assert "velocity[1] = pops::Real(2);" in loader
     assert "pops_compiled_nparams() {\n  return 0;" in loader
+
+
+def test_canonical_affine_scalar_recognizer_accepts_the_frozen_board_rate_carrier() -> None:
+    model = _ranked_scalar_model(3)
+    carrier = model._m
+    carrier._rate_operators["advection_rate"] = {
+        "flux": True,
+        "sources": [],
+        "fluxes": None,
+    }
+    for name in (
+        "_flux",
+        "_eig",
+        "prim_defs",
+        "_recovery_admissibility",
+        "_rate_operators",
+    ):
+        object.__setattr__(carrier, name, _deep_freeze(getattr(carrier, name)))
+    object.__setattr__(carrier, "prim_state", _deep_freeze(carrier.prim_state))
+    object.__setattr__(carrier, "cons_from", _deep_freeze(carrier.cons_from))
+
+    assert _canonical_affine_scalar_advection(
+        carrier,
+        target="system",
+        sealed_routes=("vanleer", "rusanov", "conservative"),
+    ) == (("pops::Real(1)", "pops::Real(2)", "pops::Real(3)"), "state")
+
+
+@pytest.mark.parametrize(
+    "rate",
+    (
+        {"flux": True, "sources": ["forcing"], "fluxes": None},
+        {"flux": True, "sources": [], "fluxes": ["transport"]},
+        {"flux": False, "sources": [], "fluxes": None},
+    ),
+    ids=("source", "named_flux", "no_flux"),
+)
+def test_canonical_affine_scalar_recognizer_rejects_nondefault_rate_carriers(
+    rate: dict[str, object],
+) -> None:
+    model = _ranked_scalar_model(2)
+    model._m._rate_operators["advance"] = rate
+    assert _canonical_affine_scalar_advection(
+        model._m,
+        target="system",
+        sealed_routes=("vanleer", "rusanov", "conservative"),
+    ) is None
 
 
 @pytest.mark.parametrize(

@@ -327,12 +327,16 @@ def _canonical_affine_scalar_advection(
     if target != "system" or sealed_routes != ("vanleer", "rusanov", "conservative"):
         return None
     axes = ("x", "y", "z")
-    dimension = len(getattr(model, "_flux", {}))
-    if dimension not in (1, 2, 3) or tuple(getattr(model, "_flux", ())) != axes[:dimension]:
+    flux_table = getattr(model, "_flux", None)
+    if not isinstance(flux_table, Mapping):
         return None
-    if getattr(model, "cons_names", None) is None or len(model.cons_names) != 1:
+    dimension = len(flux_table)
+    if dimension not in (1, 2, 3) or tuple(flux_table) != axes[:dimension]:
         return None
-    scalar_name = model.cons_names[0]
+    cons_names = getattr(model, "cons_names", None)
+    if type(cons_names) not in (list, tuple) or len(cons_names) != 1:
+        return None
+    scalar_name = cons_names[0]
     if type(scalar_name) is not str or not scalar_name:
         return None
 
@@ -376,22 +380,36 @@ def _canonical_affine_scalar_advection(
             )
         return False
 
+    def exact_sequence(value: Any) -> bool:
+        return type(value) in (list, tuple)
+
+    def empty_container(value: Any) -> bool:
+        return value is None or (
+            (isinstance(value, Mapping) or exact_sequence(value)) and len(value) == 0
+        )
+
     # This factory deliberately has identity primitive/conservative conversions only.  Reject any
     # authored recovery formula or admissibility condition instead of guessing its equivalence.
     cons_from = getattr(model, "cons_from", None)
+    prim_defs = getattr(model, "prim_defs", None)
+    prim_state = getattr(model, "prim_state", None)
+    recovery_admissibility = getattr(model, "_recovery_admissibility", None)
     if (
-        getattr(model, "prim_defs", None) != {}
-        or getattr(model, "prim_state", None) != [scalar_name]
-        or type(cons_from) is not list
+        not isinstance(prim_defs, Mapping)
+        or len(prim_defs) != 0
+        or not exact_sequence(prim_state)
+        or tuple(prim_state) != (scalar_name,)
+        or not exact_sequence(cons_from)
         or len(cons_from) != 1
         or not is_state(cons_from[0])
-        or getattr(model, "_recovery_admissibility", None) != {}
+        or not isinstance(recovery_admissibility, Mapping)
+        or len(recovery_admissibility) != 0
     ):
         return None
 
     # Nothing outside the conservative hyperbolic flux may be silently dropped by the reduced
     # physical model: no ordinary/named providers, sources, local maps, elliptic contribution,
-    # stability override, Riemann extension, or rate/diffusion-like operator.
+    # stability override, Riemann extension, or noncanonical rate/diffusion-like operator.
     rejected = (
         getattr(model, "_provider_components", None),
         getattr(model, "_flux_terms", None),
@@ -407,11 +425,31 @@ def _canonical_affine_scalar_advection(
         getattr(model, "_proj", None),
         getattr(model, "_src_jac", None),
         getattr(model, "_riemann_hook_forms", None),
-        getattr(model, "_rate_operators", None),
         getattr(model, "_ws_jacobian", None),
     )
-    if any(value not in (None, {}, [], ()) for value in rejected):
+    if any(not empty_container(value) for value in rejected):
         return None
+
+    # The board's ordinary ``rate(ddt(q) == -div(F))`` declaration records this exact carrier.
+    # It does not add physics beyond the conservative flux already checked above.  Frozen models
+    # use mapping proxies and tuples, while direct authoring models use dicts and lists; accept
+    # only those two structurally identical representations and reject every named/source split.
+    rate_operators = getattr(model, "_rate_operators", None)
+    if not isinstance(rate_operators, Mapping):
+        return None
+    for name, rate in rate_operators.items():
+        if type(name) is not str or not name or not isinstance(rate, Mapping):
+            return None
+        if set(rate) != {"flux", "sources", "fluxes"}:
+            return None
+        sources = rate["sources"]
+        if (
+            rate["flux"] is not True
+            or not exact_sequence(sources)
+            or len(sources) != 0
+            or rate["fluxes"] is not None
+        ):
+            return None
     if getattr(model, "_hllc", False) or getattr(model, "_roe", False):
         return None
     if getattr(model, "_roe_rows", None) is not None or getattr(model, "gamma", None) is not None:
@@ -421,8 +459,8 @@ def _canonical_affine_scalar_advection(
 
     velocities: list[tuple[float, str]] = []
     for axis in axes[:dimension]:
-        expressions = model._flux[axis]
-        if type(expressions) is not list or len(expressions) != 1:
+        expressions = flux_table[axis]
+        if not exact_sequence(expressions) or len(expressions) != 1:
             return None
         flux = expressions[0]
         if type(flux) is not Mul or not is_state(flux.b):
@@ -435,19 +473,19 @@ def _canonical_affine_scalar_advection(
     explicit_speeds = getattr(model, "_wave_speeds", None)
     eigenvalues = getattr(model, "_eig", None)
     if explicit_speeds is not None:
-        if tuple(explicit_speeds) != axes[:dimension]:
+        if not isinstance(explicit_speeds, Mapping) or tuple(explicit_speeds) != axes[:dimension]:
             return None
         for axis, (velocity, _) in zip(axes[:dimension], velocities, strict=True):
             pair = explicit_speeds[axis]
-            if type(pair) is not tuple or len(pair) != 2 or not all(
+            if not exact_sequence(pair) or len(pair) != 2 or not all(
                 speed_matches(value, velocity) for value in pair
             ):
                 return None
-    if tuple(eigenvalues) != axes[:dimension]:
+    if not isinstance(eigenvalues, Mapping) or tuple(eigenvalues) != axes[:dimension]:
         return None
     for axis, (velocity, _) in zip(axes[:dimension], velocities, strict=True):
         values = eigenvalues[axis]
-        if type(values) is not list or len(values) != 1 or not speed_matches(values[0], velocity):
+        if not exact_sequence(values) or len(values) != 1 or not speed_matches(values[0], velocity):
             return None
     return tuple(cpp for _, cpp in velocities), scalar_name
 
