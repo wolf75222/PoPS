@@ -23,6 +23,7 @@ from typing import Any
 
 CASE_DIRECTORY = Path(__file__).resolve().parent
 MATRIX_PATH = CASE_DIRECTORY / "matrix.v1.json"
+CANONICAL_MATRIX_SHA256 = "cd9e25b08796eb71fa243dd76bbe7b9b634510f900c314e2d882e62427b7eb83"
 REPOSITORY_ROOT = CASE_DIRECTORY.parents[3]
 BUILD_SCRIPT = REPOSITORY_ROOT / "scripts" / "build_python.sh"
 MATRIX_SOURCE_AUTHORITY_SCHEMA = "pops.sine-wave.matrix-source-authority.v1"
@@ -210,6 +211,10 @@ if len(rows) != 2 or any(
 def _read_matrix(path: Path) -> dict[str, Any]:
     if path.is_symlink() or not path.is_file():
         raise ValueError("matrix must be one regular file: %s" % path)
+    if _sha256(path) != CANONICAL_MATRIX_SHA256:
+        raise ValueError(
+            "matrix differs from the exact canonical 37-case scientific inventory: %s" % path
+        )
     raw = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict) or set(raw) != {
         "schema_version",

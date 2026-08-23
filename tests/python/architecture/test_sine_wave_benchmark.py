@@ -942,6 +942,17 @@ def test_matrix_locks_the_exact_inventory_and_controlled_comparisons():
         scope["_validate_matrix"](malformed)
 
 
+def test_matrix_source_is_hash_sealed_before_validation(tmp_path):
+    scope = runpy.run_path(str(MATRIX_DRIVER), run_name="sine_wave_matrix_hash_contract")
+    canonical = MATRIX.read_bytes()
+    assert hashlib.sha256(canonical).hexdigest() == scope["CANONICAL_MATRIX_SHA256"]
+
+    changed = tmp_path / MATRIX.name
+    changed.write_bytes(canonical + b"\n")
+    with pytest.raises(ValueError, match="exact canonical 37-case scientific inventory"):
+        scope["_read_matrix"](changed)
+
+
 def test_crossing_witness_requires_native_boxes_and_a_timeline_interval():
     scope = runpy.run_path(str(CASE / "generate_data.py"))
     arguments = scope["_arguments"]

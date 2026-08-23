@@ -156,6 +156,9 @@ répertoire de cas déjà présent avant de commencer; chaque sortie est vérifi
 contre les témoins déclarés avant de continuer. Elle reconstruit elle-même les
 cinq variantes nécessaires (Dim1, Dim2, Dim3 non-MPI, puis Dim2+MPI et Dim3+MPI), car une
 seule extension native ne peut qualifier simultanément ces dimensions et ABI.
+Le SHA-256 exact de `matrix.v1.json` est scellé dans le driver : modifier une
+résolution, un nombre de cycles/snapshots, une taille de bloc, un rang ou une
+topologie MPI est refusé avant toute réservation de sortie ou exécution.
 La campagne impose `OMP_NUM_THREADS=2`, `KOKKOS_NUM_THREADS=2` et
 `OMP_PROC_BIND=false`; backend et concurrence réellement chargés restent dans
 la provenance de chaque paire.
