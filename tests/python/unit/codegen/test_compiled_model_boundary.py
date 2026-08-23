@@ -143,6 +143,35 @@ def test_compile_result_cannot_claim_pre_attached_manifest_authority():
         _compile(source)
 
 
+def test_compile_result_must_attest_the_resolved_system_routes():
+    from pops.numerics.reconstruction.limiters import VanLeer
+    from pops.numerics.riemann import Rusanov
+    from pops.numerics.variables import Conservative
+    from pops.runtime._bricks_scheme import Spatial
+
+    source = _SourceModel()
+    spatial = Spatial(limiter=VanLeer(), flux=Rusanov(), recon=Conservative())
+
+    def compile_with_routes(*, backend, target, **kwargs):
+        compiled = _compiled(target=target, identity=model_compile_identity(source))
+        compiled._sealed_system_routes = ("vanleer", "rusanov", "conservative")
+        return compiled
+
+    source.compile = compile_with_routes
+    compiled = compile_install_model(
+        "fluid", source, "production", "system", {}, sealed_system_routes=spatial
+    )
+    assert compiled._sealed_system_routes == ("vanleer", "rusanov", "conservative")
+
+    source.compile = lambda **kwargs: _compiled(
+        identity=model_compile_identity(source)
+    )
+    with pytest.raises(ValueError, match="exact resolved spatial routes"):
+        compile_install_model(
+            "fluid", source, "production", "system", {}, sealed_system_routes=spatial
+        )
+
+
 def test_subclass_slot_cannot_hide_an_authoring_builder():
     class HiddenLoader(CompiledModel):
         __slots__ = ("hidden",)

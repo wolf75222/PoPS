@@ -57,6 +57,7 @@ class _FacadeCompileMixin(_FacadeModel):
         name: Any = None,
         target: str = "system",
         hoist_reciprocals: bool = False,
+        sealed_system_routes: Any = None,
         consumer_owner_qid: Any = None,
         declare_auxiliary_providers: bool = True,
     ) -> str:
@@ -69,6 +70,7 @@ class _FacadeCompileMixin(_FacadeModel):
             target=target,
             hoist_reciprocals=hoist_reciprocals,
             model_identity=self._model_hash(),
+            sealed_system_routes=sealed_system_routes,
             consumer_owner_qid=consumer_owner_qid,
             declare_auxiliary_providers=declare_auxiliary_providers,
         )
@@ -95,6 +97,7 @@ class _FacadeCompileMixin(_FacadeModel):
         require_metadata: bool = False,
         hoist_reciprocals: bool = False,
         _native_field_roles: Any = None,
+        _sealed_system_routes: Any = None,
         consumer_owner_qid: Any = None,
         declare_auxiliary_providers: bool = True,
     ) -> Any:
@@ -166,10 +169,18 @@ class _FacadeCompileMixin(_FacadeModel):
         from pops.codegen._compile_emit import (
             _native_amr_field_roles_identity,
             _normalize_native_amr_field_roles,
+            _normalize_sealed_system_routes,
         )
 
         normalized_field_roles = (
             _normalize_native_amr_field_roles(_native_field_roles) if target == "amr_system" else ()
+        )
+        if target != "system" and _sealed_system_routes is not None:
+            raise ValueError("sealed System routes cannot be compiled for AMR")
+        normalized_sealed_routes = (
+            _normalize_sealed_system_routes(_sealed_system_routes)
+            if target == "system"
+            else None
         )
 
         m = self._m
@@ -221,6 +232,11 @@ class _FacadeCompileMixin(_FacadeModel):
             "roe_entropy_delta": riemann_evidence.roe_entropy_delta or "none",
             "consumer_owner_qid": str(consumer_owner_qid or ""),
             "declares_auxiliary_providers": bool(declare_auxiliary_providers),
+            "sealed_system_routes": (
+                None
+                if normalized_sealed_routes is None
+                else normalized_sealed_routes
+            ),
             "native_system_package_abi_version": NATIVE_SYSTEM_PACKAGE_ABI_VERSION,
             "native_system_package_abi_export": NATIVE_SYSTEM_PACKAGE_ABI_EXPORT,
             # Francis QR knobs change the emitted kernel.  Omitting them reuses a
@@ -279,6 +295,7 @@ class _FacadeCompileMixin(_FacadeModel):
                     hoist_reciprocals=hoist_reciprocals,
                     model_identity=model_hash,
                     _native_field_roles=(normalized_field_roles if target == "amr_system" else None),
+                    _sealed_system_routes=_sealed_system_routes,
                     consumer_owner_qid=consumer_owner_qid,
                     declare_auxiliary_providers=declare_auxiliary_providers,
                 )
@@ -303,6 +320,7 @@ class _FacadeCompileMixin(_FacadeModel):
                 hoist_reciprocals=hoist_reciprocals,
                 model_identity=model_hash,
                 _native_field_roles=(normalized_field_roles if target == "amr_system" else None),
+                _sealed_system_routes=_sealed_system_routes,
                 consumer_owner_qid=consumer_owner_qid,
                 declare_auxiliary_providers=declare_auxiliary_providers,
             )
@@ -349,6 +367,11 @@ class _FacadeCompileMixin(_FacadeModel):
         cm.artifact_spec_identity = spec_identity
         cm.binary_identity = binary_identity
         cm.artifact_identity = final_artifact_identity
+        cm._sealed_system_routes = (
+            None
+            if normalized_sealed_routes is None
+            else normalized_sealed_routes
+        )
         if target == "amr_system":
             cm._native_field_roles = normalized_field_roles
         # Exact ABI order of only the RuntimeParamRef nodes actually read by emitted formulas.

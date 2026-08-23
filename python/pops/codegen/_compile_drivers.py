@@ -62,6 +62,7 @@ def compile_native(
     hoist_reciprocals: Any = False,
     model_identity: Any = None,
     native_field_roles: Any = None,
+    sealed_system_routes: Any = None,
     consumer_owner_qid: Any = None,
     declare_auxiliary_providers: bool = True,
 ) -> Any:
@@ -85,6 +86,7 @@ def compile_native(
         hoist_reciprocals=hoist_reciprocals,
         model_identity=(model_hash(model) if model_identity is None else model_identity),
         native_field_roles=native_field_roles,
+        sealed_system_routes=sealed_system_routes,
         consumer_owner_qid=consumer_owner_qid,
         declare_auxiliary_providers=declare_auxiliary_providers,
     )
@@ -164,6 +166,7 @@ def compile_model(
     hoist_reciprocals: Any = False,
     model_identity: Any = None,
     _native_field_roles: Any = None,
+    _sealed_system_routes: Any = None,
     consumer_owner_qid: Any = None,
     declare_auxiliary_providers: bool = True,
 ) -> Any:
@@ -184,10 +187,18 @@ def compile_model(
         raise ValueError("compile: target 'system' | 'amr_system' (received %r)" % (target,))
     if target == "system" and _native_field_roles is not None:
         raise ValueError("resolved AMR field roles cannot be compiled for System")
-    from pops.codegen._compile_emit import _normalize_native_amr_field_roles
+    if target != "system" and _sealed_system_routes is not None:
+        raise ValueError("sealed System routes cannot be compiled for AMR")
+    from pops.codegen._compile_emit import (
+        _normalize_native_amr_field_roles,
+        _normalize_sealed_system_routes,
+    )
 
     normalized_field_roles = (
         _normalize_native_amr_field_roles(_native_field_roles) if target == "amr_system" else ()
+    )
+    normalized_sealed_routes = (
+        _normalize_sealed_system_routes(_sealed_system_routes) if target == "system" else None
     )
     if (
         target == "amr_system"
@@ -229,6 +240,7 @@ def compile_model(
         hoist_reciprocals=hoist_reciprocals,
         consumer_owner_qid=consumer_owner_qid,
         declare_auxiliary_providers=declare_auxiliary_providers,
+        sealed_system_routes=normalized_sealed_routes,
     )
 
     def _compile_and_authenticate(path: Any, destination: Any = None) -> Any:
@@ -243,6 +255,7 @@ def compile_model(
             hoist_reciprocals=hoist_reciprocals,
             model_identity=model_identity,
             native_field_roles=(normalized_field_roles if target == "amr_system" else None),
+            sealed_system_routes=(normalized_sealed_routes if target == "system" else None),
             consumer_owner_qid=consumer_owner_qid,
             declare_auxiliary_providers=declare_auxiliary_providers,
         )

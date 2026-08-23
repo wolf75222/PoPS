@@ -160,6 +160,157 @@ def _normalize_native_amr_field_roles(value: Any) -> tuple[dict[str, Any], ...]:
     return tuple(result)
 
 
+def _normalize_sealed_system_routes(value: Any) -> tuple[str, str, str] | None:
+    """Authenticate the catalogue routes baked into one plan-owned System package.
+
+    Direct ``Model.compile`` deliberately passes ``None`` and retains the generic package
+    preparer.  Only ``pops.compile(plan)`` owns an exact :class:`Spatial` selection that can be
+    frozen into a single C++ specialization.  Accepting strings or merely route-shaped objects
+    here would let an untrusted token choose a C++ type, so accept only the catalog singletons.
+    """
+    if value is None:
+        return None
+    from pops.runtime._bricks_scheme import Spatial
+    from pops.runtime.routes import (
+        LIMITER_MC,
+        LIMITER_MINMOD,
+        LIMITER_NONE,
+        LIMITER_SUPERBEE,
+        LIMITER_VANLEER,
+        LIMITER_WENO5,
+        RECON_CONSERVATIVE,
+        RECON_PRIMITIVE,
+        RIEMANN_HLL,
+        RIEMANN_HLLC,
+        RIEMANN_ROE,
+        RIEMANN_ROE_HLL_RUSANOV_RECOVERY,
+        RIEMANN_RUSANOV,
+        Route,
+    )
+
+    if type(value) is tuple:
+        if len(value) != 3 or any(type(route) is not str for route in value):
+            raise TypeError("sealed System route tokens require one exact three-string tuple")
+        limiter, riemann, reconstruction = value
+        allowed_tokens = (
+            {str(route) for route in (
+                LIMITER_NONE, LIMITER_MINMOD, LIMITER_VANLEER, LIMITER_WENO5, LIMITER_MC,
+                LIMITER_SUPERBEE,
+            )},
+            {str(route) for route in (
+                RIEMANN_RUSANOV, RIEMANN_HLL, RIEMANN_HLLC, RIEMANN_ROE,
+                RIEMANN_ROE_HLL_RUSANOV_RECOVERY,
+            )} | {"user"},
+            {str(RECON_CONSERVATIVE), str(RECON_PRIMITIVE)},
+        )
+        if any(
+            token not in allowed
+            for token, allowed in zip(
+                (limiter, riemann, reconstruction), allowed_tokens, strict=True
+            )
+        ):
+            raise ValueError("sealed System route tuple contains a non-catalogue token")
+        return value
+
+    if type(value) is Spatial:
+        spatial = value
+    else:
+        from pops.numerics.spatial import FiniteVolume
+
+        if type(value) is not FiniteVolume:
+            raise TypeError(
+                "sealed System routes require exact Spatial or FiniteVolume"
+            )
+        runtime_spatial = value.runtime_spatial
+        first = runtime_spatial()
+        second = runtime_spatial()
+        if type(first) is not Spatial or type(second) is not Spatial:
+            raise TypeError("finite-volume runtime_spatial() must return exact private Spatial")
+        if any(
+            left != right
+            for left, right in zip(
+                (first.limiter, first.flux, first.recon),
+                (second.limiter, second.flux, second.recon),
+                strict=True,
+            )
+        ):
+            raise ValueError("finite-volume runtime_spatial() must deterministically lower routes")
+        spatial = first
+    routes = (spatial.limiter, spatial.flux, spatial.recon)
+    expected = (
+        ("limiter", (LIMITER_NONE, LIMITER_MINMOD, LIMITER_VANLEER, LIMITER_WENO5, LIMITER_MC,
+                     LIMITER_SUPERBEE)),
+        ("riemann", (RIEMANN_RUSANOV, RIEMANN_HLL, RIEMANN_HLLC, RIEMANN_ROE,
+                      RIEMANN_ROE_HLL_RUSANOV_RECOVERY)),
+        ("recon", (RECON_CONSERVATIVE, RECON_PRIMITIVE)),
+    )
+    for route, (family, catalog) in zip(routes, expected, strict=True):
+        if family == "riemann" and route == "user":
+            if (
+                type(route) is not str
+                or not isinstance(spatial.external_flux_id, str)
+                or not spatial.external_flux_id
+            ):
+                raise ValueError("sealed external System Riemann route lacks authenticated authority")
+            continue
+        if type(route) is not Route or route.family != family or not any(
+            route is candidate for candidate in catalog
+        ):
+            raise ValueError(
+                "sealed System %s route must be one exact builtin catalogue route" % family
+            )
+    return tuple(str(route) for route in routes)
+
+
+def _sealed_system_cpp_routes(
+    value: tuple[str, str, str],
+) -> tuple[str, str, str, str, str, str] | None:
+    """Return C++ type expressions and authenticated wire tokens for one sealed route triple."""
+    from pops.runtime.routes import (
+        LIMITER_MC,
+        LIMITER_MINMOD,
+        LIMITER_NONE,
+        LIMITER_SUPERBEE, LIMITER_VANLEER, LIMITER_WENO5, RECON_CONSERVATIVE,
+        RECON_PRIMITIVE, RIEMANN_HLL, RIEMANN_HLLC, RIEMANN_ROE,
+        RIEMANN_ROE_HLL_RUSANOV_RECOVERY, RIEMANN_RUSANOV,
+    )
+
+    limiter, riemann, reconstruction = value
+    if riemann == "user":
+        # An authenticated external Riemann package owns its ABI-specific preparation.  Do not
+        # guess a builtin C++ type from its wire token; retain the established generic boundary.
+        return None
+    limiter_cpp = {
+        str(LIMITER_NONE): "pops::NoSlope{}",
+        str(LIMITER_MINMOD): "pops::Minmod{}",
+        str(LIMITER_VANLEER): "pops::VanLeer{}",
+        str(LIMITER_WENO5): "pops::configured_reconstruction<pops::Weno5>()",
+        str(LIMITER_MC): "pops::MC{}",
+        str(LIMITER_SUPERBEE): "pops::Superbee{}",
+    }[limiter]
+    riemann_cpp = {
+        str(RIEMANN_RUSANOV): "pops::RusanovFlux{}",
+        str(RIEMANN_HLL): "pops::HLLFlux{}",
+        str(RIEMANN_HLLC): "pops::HLLCFlux{}",
+        str(RIEMANN_ROE): "pops::RoeFlux{}",
+        str(RIEMANN_ROE_HLL_RUSANOV_RECOVERY): (
+            "pops::RoeHllRusanovRecoveryPolicy{}"
+        ),
+    }[riemann]
+    variables_cpp = {
+        str(RECON_CONSERVATIVE): "pops::nd::ReconstructionVariables::Conservative",
+        str(RECON_PRIMITIVE): "pops::nd::ReconstructionVariables::Primitive",
+    }[reconstruction]
+    return (
+        limiter_cpp,
+        riemann_cpp,
+        variables_cpp,
+        json.dumps(str(limiter)),
+        json.dumps(str(riemann)),
+        json.dumps(str(reconstruction)),
+    )
+
+
 def _native_amr_field_roles_identity(
     normalized_field_roles: tuple[dict[str, Any], ...],
 ) -> tuple[dict[str, Any], ...]:
@@ -857,6 +1008,7 @@ def emit_cpp_native_loader(
     hoist_reciprocals: Any = False,
     model_identity: Any = None,
     native_field_roles: Any = None,
+    sealed_system_routes: Any = None,
     consumer_owner_qid: Any = None,
     declare_auxiliary_providers: bool = True,
 ) -> str:
@@ -890,6 +1042,9 @@ def emit_cpp_native_loader(
         )
     if target == "system" and native_field_roles is not None:
         raise ValueError("resolved AMR field roles cannot be emitted into a System package")
+    if target != "system" and sealed_system_routes is not None:
+        raise ValueError("sealed System routes cannot be emitted into an AMR package")
+    normalized_sealed_routes = _normalize_sealed_system_routes(sealed_system_routes)
     nv, bricks, composite = _emit_bricks(m, name, hoist_reciprocals=hoist_reciprocals)
     model_identity = str(model_identity if model_identity is not None else model_hash(m))
     if len(model_identity) != 64 or any(ch not in "0123456789abcdef" for ch in model_identity):
@@ -1150,13 +1305,40 @@ def emit_cpp_native_loader(
     )
     package_preparer = ""
     if target == "system":
+        if normalized_sealed_routes is None:
+            preparer_call = "return pops::prepare_generated_system_block(std::move(request));"
+        else:
+            cpp_routes = _sealed_system_cpp_routes(normalized_sealed_routes)
+            if cpp_routes is None:
+                preparer_call = "return pops::prepare_generated_system_block(std::move(request));"
+            else:
+                (
+                    limiter_cpp,
+                    riemann_cpp,
+                    variables_cpp,
+                    limiter_token,
+                    riemann_token,
+                    reconstruction_token,
+                ) = cpp_routes
+                preparer_call = (
+                    "return pops::prepare_generated_system_block_exact<%s>(\n"
+                    "      std::move(request), %s, %s, %s, %s, %s);"
+                    % (
+                        variables_cpp,
+                        limiter_cpp,
+                        riemann_cpp,
+                        limiter_token,
+                        riemann_token,
+                        reconstruction_token,
+                    )
+                )
         package_preparer = (
             "\nnamespace pops_generated {\n"
             "static_assert(ProdModel::dimension == pops::kNativeDimension,\n"
             '              "generated model rank differs from the selected native artifact");\n'
             "inline pops::PreparedSystemBlock<pops::kNativeDimension> prepare_exact_system_block(\n"
             "    pops::CompiledSystemBlockPreparation<pops::kNativeDimension, ProdModel> request) {\n"
-            "  return pops::prepare_generated_system_block(std::move(request));\n"
+            "  " + preparer_call + "\n"
             "}\n"
             "}  // namespace pops_generated\n"
         )

@@ -93,6 +93,7 @@ def compile_install_models(plan: Any, options: Any) -> dict[str, Any]:
             compile_options,
             state_spaces=block.state_spaces,
             native_field_roles=(roles[block.name] if plan.target == "amr_system" else None),
+            sealed_system_routes=(block.spatial if plan.target == "system" else None),
             consumer_owner_qid=block.instance_owner_qid,
             declare_auxiliary_providers=block.declares_auxiliary_providers,
         )
@@ -119,6 +120,7 @@ def compile_install_model(
     *,
     state_spaces: Any = ("U",),
     native_field_roles: Any = None,
+    sealed_system_routes: Any = None,
     consumer_owner_qid: Any = None,
     declare_auxiliary_providers: bool = True,
 ) -> Any:
@@ -129,8 +131,16 @@ def compile_install_model(
     if target == "system":
         if native_field_roles is not None:
             raise ValueError("resolved AMR field roles cannot be compiled for System")
+        if sealed_system_routes is None:
+            expected_sealed_route_tokens = None
+        else:
+            from pops.codegen._compile_emit import _normalize_sealed_system_routes
+
+            expected_sealed_route_tokens = _normalize_sealed_system_routes(sealed_system_routes)
         expected_roles: tuple[dict[str, Any], ...] = ()
     elif target == "amr_system":
+        if sealed_system_routes is not None:
+            raise ValueError("resolved System routes cannot be compiled for AMR")
         if native_field_roles is None:
             raise ValueError("resolved AMR blocks require an exact per-block field-role contract")
         from pops.codegen._compile_emit import _normalize_native_amr_field_roles
@@ -147,6 +157,17 @@ def compile_install_model(
             raise ValueError("resolved compiled model state-space route disagrees with its plan")
         if model.target != target or model.backend != backend:
             raise ValueError("resolved compiled model route disagrees with its plan")
+        if target == "system" and expected_sealed_route_tokens is not None:
+            # A mutable Python attribute cannot attest a type-specialized generated TU, and the
+            # opaque sidecar identity intentionally does not expose its route preimage.  A
+            # generic package remains valid because it selects the same resolved ABI tokens at
+            # installation; reject only a package that claims an unprovable specialization.
+            observed_sealed_routes = getattr(model, "_sealed_system_routes", None)
+            if observed_sealed_routes is not None:
+                raise ValueError(
+                    "precompiled System block claims a sealed route that cannot be attested; "
+                    "recompile from its source model"
+                )
         if target == "amr_system":
             observed_roles = getattr(model, "_native_field_roles", None)
             if (
@@ -187,12 +208,17 @@ def compile_install_model(
         backend=backend,
         target=target,
         _native_field_roles=(expected_roles if target == "amr_system" else None),
+        _sealed_system_routes=(sealed_system_routes if target == "system" else None),
         consumer_owner_qid=consumer_owner_qid,
         declare_auxiliary_providers=declare_auxiliary_providers,
         **compile_options,
     )
     if type(compiled) is not CompiledModel:
         raise TypeError("resolved block compiler must return exact CompiledModel")
+    if target == "system" and getattr(compiled, "_sealed_system_routes", None) != (
+        expected_sealed_route_tokens
+    ):
+        raise ValueError("compiled System block did not attest the exact resolved spatial routes")
     if target == "amr_system":
         observed_roles = getattr(compiled, "_native_field_roles", None)
         if (

@@ -5,9 +5,26 @@ from __future__ import annotations
 import pytest
 
 from pops.codegen import Production
-from pops.codegen._compile_emit import _BACKEND_CAPS, compiled_capability_flags
+from pops.codegen._artifact_identity import model_artifact_spec
+from pops.codegen._compile_emit import (
+    _BACKEND_CAPS,
+    _normalize_sealed_system_routes,
+    compiled_capability_flags,
+)
+from pops.model import Handle, OwnerPath
+from pops.numerics.reconstruction import MUSCL
+from pops.numerics.reconstruction.limiters import Minmod, VanLeer
+from pops.numerics.riemann import Rusanov, ScalarUpwind
+from pops.numerics.spatial import FiniteVolume
+from pops.numerics.variables import Conservative
 from pops.params import RuntimeParam
 from pops.physics._facade import Model
+from pops.runtime._bricks_scheme import Spatial
+from pops.runtime.routes import (
+    LIMITER_MINMOD,
+    RECON_CONSERVATIVE,
+    RIEMANN_RUSANOV,
+)
 
 
 _AXES = ("x", "y", "z")
@@ -183,6 +200,106 @@ def test_generated_loader_retains_the_exact_authored_rank(dimension: int, target
     _assert_exact_native_loader(loader, target=target, dimension=dimension)
     for other_dimension in {1, 2, 3} - {dimension}:
         assert "static constexpr int dimension = %d;" % other_dimension not in loader
+
+
+def _system_package_preparer(loader: str) -> str:
+    start = loader.index("inline pops::PreparedSystemBlock<pops::kNativeDimension>")
+    end = loader.index("}  // namespace pops_generated", start)
+    return loader[start:end]
+
+
+def test_plan_owned_system_loader_seals_one_spatial_specialization_and_abi_tokens() -> None:
+    spatial = Spatial(limiter=VanLeer(), flux=Rusanov(), recon=Conservative())
+    loader = _ranked_scalar_model(2).__pops_native_loader_source__(
+        name="SealedVanLeerRusanov",
+        target="system",
+        sealed_system_routes=spatial,
+    )
+    preparer = _system_package_preparer(loader)
+
+    assert _normalize_sealed_system_routes(spatial) == ("vanleer", "rusanov", "conservative")
+    assert _normalize_sealed_system_routes(
+        ("vanleer", "rusanov", "conservative")
+    ) == ("vanleer", "rusanov", "conservative")
+    with pytest.raises(ValueError, match="non-catalogue token"):
+        _normalize_sealed_system_routes(("vanleer", "invented", "conservative"))
+    assert "pops::prepare_generated_system_block_exact<" in preparer
+    assert "pops::nd::ReconstructionVariables::Conservative" in preparer
+    assert "pops::VanLeer{}" in preparer
+    assert "pops::RusanovFlux{}" in preparer
+    assert '"vanleer", "rusanov", "conservative"' in preparer
+    assert "prepare_generated_system_block(std::move(request))" not in preparer
+    assert "select_reconstruction" not in preparer
+    assert "select_riemann" not in preparer
+    assert "switch (" not in preparer
+
+
+def test_direct_model_loader_remains_generic_when_no_plan_route_is_supplied() -> None:
+    preparer = _system_package_preparer(
+        _ranked_scalar_model(2).__pops_native_loader_source__(
+            name="GenericDirectLoader", target="system"
+        )
+    )
+    assert "pops::prepare_generated_system_block(std::move(request))" in preparer
+    assert "pops::prepare_generated_system_block_exact<" not in preparer
+
+
+def test_route_specialized_artifact_identity_changes_with_the_sealed_route(monkeypatch) -> None:
+    from pops.codegen import cache, toolchain
+
+    monkeypatch.setattr(cache, "_dsl_optflags", lambda: ())
+    monkeypatch.setattr(cache, "_platform_cache_key", lambda: "test-platform")
+    monkeypatch.setattr(cache, "_precision_cache_key", lambda: "f64")
+    monkeypatch.setattr(cache, "_registry_cache_key", lambda: "test-registry")
+    monkeypatch.setattr(toolchain, "_native_feature_key", lambda: "test-features")
+    model = _ranked_scalar_model(2)
+    model.__pops_native_loader_source__(name="IdentityRouteCarrier", target="system")
+    common = {
+        "backend": "production",
+        "target": "system",
+        "name": "IdentityRouteCarrier",
+        "compiler": "c++",
+        "standard": "c++23",
+        "abi_key": "test-abi",
+        "hoist_reciprocals": False,
+    }
+    _, minmod = model_artifact_spec(
+        model._m,
+        **common,
+        sealed_system_routes=("minmod", "rusanov", "conservative"),
+    )
+    _, vanleer = model_artifact_spec(
+        model._m,
+        **common,
+        sealed_system_routes=("vanleer", "rusanov", "conservative"),
+    )
+    assert minmod != vanleer
+    assert _normalize_sealed_system_routes(
+        Spatial(limiter=Minmod(), flux=Rusanov(), recon=Conservative())
+    ) == (
+        str(LIMITER_MINMOD),
+        str(RIEMANN_RUSANOV),
+        str(RECON_CONSERVATIVE),
+    )
+
+
+def test_sealed_routes_accept_the_real_finite_volume_scalar_upwind_lowering() -> None:
+    owner = OwnerPath.model("sealed-system-route-test")
+    state = Handle("U", kind="state", owner=owner)
+    method = FiniteVolume(
+        flux=Handle("F", kind="flux", owner=owner),
+        variables=Conservative(state),
+        reconstruction=MUSCL(VanLeer()),
+        riemann=ScalarUpwind(velocity=Handle("a", kind="vector", owner=owner)),
+    )
+    assert _normalize_sealed_system_routes(method) == ("vanleer", "rusanov", "conservative")
+
+    class ForgedSpatialProtocol:
+        def runtime_spatial(self):
+            return Spatial(limiter=VanLeer(), flux=Rusanov(), recon=Conservative())
+
+    with pytest.raises(TypeError, match="exact Spatial or FiniteVolume"):
+        _normalize_sealed_system_routes(ForgedSpatialProtocol())
 
 
 @pytest.mark.parametrize("target", ("system", "amr_system"))

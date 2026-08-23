@@ -154,6 +154,7 @@ class _CodegenMixin(_HyperbolicModel):
         hoist_reciprocals: bool = False,
         model_identity: Any = None,
         native_field_roles: Any = None,
+        sealed_system_routes: Any = None,
         consumer_owner_qid: Any = None,
         declare_auxiliary_providers: bool = True,
     ) -> Any:
@@ -165,6 +166,7 @@ class _CodegenMixin(_HyperbolicModel):
             hoist_reciprocals=hoist_reciprocals,
             model_identity=model_identity,
             native_field_roles=native_field_roles,
+            sealed_system_routes=sealed_system_routes,
             consumer_owner_qid=consumer_owner_qid,
             declare_auxiliary_providers=declare_auxiliary_providers,
         )
@@ -179,6 +181,7 @@ class _CodegenMixin(_HyperbolicModel):
         target: str = "system",
         hoist_reciprocals: bool = False,
         _native_field_roles: Any = None,
+        _sealed_system_routes: Any = None,
         consumer_owner_qid: Any = None,
         declare_auxiliary_providers: bool = True,
     ) -> Any:
@@ -193,6 +196,7 @@ class _CodegenMixin(_HyperbolicModel):
             target=target,
             hoist_reciprocals=hoist_reciprocals,
             native_field_roles=_native_field_roles,
+            sealed_system_routes=_sealed_system_routes,
             consumer_owner_qid=consumer_owner_qid,
             declare_auxiliary_providers=declare_auxiliary_providers,
         )
@@ -235,6 +239,7 @@ class _CodegenMixin(_HyperbolicModel):
         hoist_reciprocals: bool = False,
         model_identity: Any = None,
         _native_field_roles: Any = None,
+        _sealed_system_routes: Any = None,
         consumer_owner_qid: Any = None,
         declare_auxiliary_providers: bool = True,
     ) -> Any:
@@ -252,6 +257,7 @@ class _CodegenMixin(_HyperbolicModel):
             hoist_reciprocals=hoist_reciprocals,
             model_identity=model_identity,
             _native_field_roles=_native_field_roles,
+            _sealed_system_routes=_sealed_system_routes,
             consumer_owner_qid=consumer_owner_qid,
             declare_auxiliary_providers=declare_auxiliary_providers,
         )

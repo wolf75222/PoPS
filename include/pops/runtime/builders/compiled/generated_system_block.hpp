@@ -32,6 +32,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 
@@ -1196,6 +1197,44 @@ auto prepare_generated_system_block(Request request) -> PreparedSystemBlock<Requ
           std::move(request));
   }
   throw std::logic_error("generated reconstruction route escaped its exhaustive selector");
+}
+
+/// Build the one route-specialized operator sealed into a generated package.
+///
+/// Unlike ``prepare_generated_system_block``, this entry point does not enumerate the numerical
+/// catalogue.  The generated translation unit supplies one typed reconstruction/flux pair and
+/// retains the three ABI route tokens only to reject a host/package mismatch before any operator
+/// is materialized.
+template <nd::ReconstructionVariables Variables, class Request, class Reconstruction, class Numerical>
+auto prepare_generated_system_block_exact(Request request, Reconstruction reconstruction,
+                                          Numerical numerical, std::string_view limiter,
+                                          std::string_view riemann,
+                                          std::string_view reconstruction_variables)
+    -> PreparedSystemBlock<Request::dimension> {
+  constexpr int Dim = Request::dimension;
+  using Model = std::remove_cvref_t<decltype(request.model)>;
+  using ExactReconstruction = std::remove_cvref_t<Reconstruction>;
+  using ExactNumerical = std::remove_cvref_t<Numerical>;
+  static_assert(Model::dimension == Dim,
+                "generated System request and physical model have different ranks");
+  static_assert(!std::is_same_v<ExactNumerical, HLLFlux> ||
+                    detail::wave_speeds_all_axes<Model>(),
+                "sealed HLL System route requires signed wave speeds on every physical axis");
+  static_assert(!std::is_same_v<ExactNumerical, HLLCFlux> || HasHLLCStructure<Model>,
+                "sealed HLLC System route requires the HLLC model capability");
+  static_assert(!std::is_same_v<ExactNumerical, RoeFlux> || HasRoeDissipation<Model>,
+                "sealed Roe System route requires the Roe-dissipation model capability");
+  static_assert(!std::is_same_v<ExactNumerical, RoeHllRusanovRecoveryPolicy> ||
+                    (HasRoeDissipation<Model> &&
+                     detail::wave_speeds_all_axes<Model>()),
+                "sealed Roe/HLL/Rusanov recovery requires Roe dissipation and signed wave speeds");
+  if (request.routes.limiter != limiter || request.routes.riemann != riemann ||
+      request.routes.reconstruction != reconstruction_variables)
+    throw std::invalid_argument(
+        "compiled System block route tokens differ from its sealed generated specialization");
+  return generated_system_detail::materialize_block<Dim, Model, ExactReconstruction, ExactNumerical,
+                                                    Variables>(std::move(request), reconstruction,
+                                                               numerical);
 }
 
 }  // namespace pops

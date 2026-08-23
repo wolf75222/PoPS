@@ -249,8 +249,20 @@ class CompiledModel:
         from pops.runtime._engine_descriptors import Explicit, Spatial
         from pops.runtime._runtime_mesh_lowering import system_config_from_layout
         from pops.runtime._system import System  # advanced seam (ADC-545: off the public surface)
-        from pops.numerics.reconstruction.limiters import Minmod
-        from pops.numerics.riemann import Rusanov
+        sealed_routes = getattr(self, "_sealed_system_routes", None)
+        if sealed_routes is None:
+            sealed_routes = ("minmod", "rusanov", "conservative")
+        if (
+            not isinstance(sealed_routes, tuple)
+            or len(sealed_routes) != 3
+            or any(type(route) is not str for route in sealed_routes)
+        ):
+            raise ValueError("CompiledModel.check_runtime requires sealed data-only route tokens")
+        limiter_token, riemann_token, reconstruction_token = sealed_routes
+        from pops.numerics.reconstruction import FirstOrder, WENO5
+        from pops.numerics.reconstruction.limiters import MC, Minmod, Superbee, VanLeer
+        from pops.numerics.riemann import HLL, HLLC, Roe, Rusanov
+        from pops.numerics.variables import Conservative, Primitive
         from pops.physics.roles import StateSchema
         if layout is None:
             raise ValueError(
@@ -272,11 +284,34 @@ class CompiledModel:
                 "CompiledModel.check_runtime layout dimension %d differs from model dimension %d"
                 % (native_layout.dimension, schema.dimension)
             )
+        limiter = {
+            "none": FirstOrder,
+            "minmod": Minmod,
+            "vanleer": VanLeer,
+            "weno5": WENO5,
+            "mc": MC,
+            "superbee": Superbee,
+        }.get(limiter_token)
+        riemann = {
+            "rusanov": Rusanov,
+            "hll": HLL,
+            "hllc": HLLC,
+            "roe": Roe,
+        }.get(riemann_token)
+        reconstruction = {
+            "conservative": Conservative,
+            "primitive": Primitive,
+        }.get(reconstruction_token)
+        if limiter is None or riemann is None or reconstruction is None:
+            raise ValueError(
+                "CompiledModel.check_runtime cannot reconstruct the sealed System route %r"
+                % (sealed_routes,)
+            )
         shape = native_layout.shape
         sim = System(config=system_config_from_layout(native_layout))
         sim.set_poisson()
         sim.add_equation("check", model=self,
-                         spatial=Spatial(limiter=Minmod(), flux=Rusanov()),
+                         spatial=Spatial(limiter=limiter(), flux=riemann(), recon=reconstruction()),
                          time=Explicit())
         coordinates = np.indices(shape, dtype=float)
         radius_squared = sum(

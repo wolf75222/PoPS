@@ -8,7 +8,7 @@ from typing import Any
 def model_artifact_spec(
     model: Any, *, backend: str, target: str, name: Any, compiler: str, standard: str,
     abi_key: str, hoist_reciprocals: bool, consumer_owner_qid: Any = None,
-    declare_auxiliary_providers: bool = True,
+    declare_auxiliary_providers: bool = True, sealed_system_routes: Any = None,
 ) -> tuple[Any, Any]:
     """Return semantic and artifact-spec identities for one formula model."""
     from pops.codegen.cache import (
@@ -42,6 +42,11 @@ def model_artifact_spec(
             "emitted_name": str(name or ""),
             "consumer_owner_qid": str(consumer_owner_qid or ""),
             "declares_auxiliary_providers": bool(declare_auxiliary_providers),
+            "sealed_system_routes": (
+                None
+                if sealed_system_routes is None
+                else tuple(str(route) for route in sealed_system_routes)
+            ),
             # Host add_native_block looks up this exact export.  Changing the
             # emitted loader surface without this component reuses a stale .so.
             "native_system_package_abi_version": NATIVE_SYSTEM_PACKAGE_ABI_VERSION,
