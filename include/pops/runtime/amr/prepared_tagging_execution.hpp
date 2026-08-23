@@ -625,10 +625,11 @@ class PreparedTaggingExecutionPlan {
       throw std::runtime_error(
           "prepared AMR tagging collective budget authentication failed on another rank");
     }
-    if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{std::string_view("prepared-tagging"),
-              std::string_view(candidate->collective_contract_)}},
-            communicator))
+    const ExactOrderedBytePair tagging_collective_pair{
+        std::string_view("prepared-tagging"), std::string_view(candidate->collective_contract_)};
+    const std::span<const ExactOrderedBytePair> tagging_collective_pairs{
+        &tagging_collective_pair, 1};
+    if (!all_ranks_agree_exact_ordered_byte_pairs(tagging_collective_pairs, communicator))
       throw std::invalid_argument(
           "prepared AMR tagging program, fields, topology, or budgets differ between ranks");
     candidate->prepared_ = true;
