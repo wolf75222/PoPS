@@ -211,6 +211,11 @@ class PublicPythonHarnessTests(unittest.TestCase):
             self.assertIn("-DPOPS_USE_HDF5=OFF", wrapper)
             self.assertNotIn('-DPOPS_USE_HDF5="${MPI_ENABLED}"', wrapper)
 
+    def test_romeo_benchmark_builds_do_not_configure_the_test_tree(self) -> None:
+        for name in ("x64cpu.sbatch", "armgpu.sbatch"):
+            wrapper = (HARNESS / "slurm" / name).read_text(encoding="utf-8")
+            self.assertEqual(wrapper.count("-DPOPS_BUILD_TESTS=OFF"), 1)
+
     def test_romeo_tree_verification_cannot_create_untracked_bytecode(self) -> None:
         """The verifier must not mutate the authenticated extracted source tree."""
         invocation = (
