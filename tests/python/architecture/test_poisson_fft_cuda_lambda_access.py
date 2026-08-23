@@ -19,6 +19,9 @@ COMPOSITE_FAC_HEADER = ROOT / "include/pops/numerics/elliptic/mg/composite_fac_p
 PARTITIONED_COMPOSITE_FAC_HEADER = (
     ROOT / "include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp"
 )
+PARTITIONED_REGION_TRANSFER_HEADER = (
+    ROOT / "include/pops/numerics/elliptic/amr/partitioned_region_transfer.hpp"
+)
 SYSTEM_INSTALL_SOURCE = ROOT / "src/runtime/system/system_install.cpp"
 
 CUDA_LAUNCH_HELPERS = (
@@ -134,6 +137,16 @@ def test_multifab_and_multigrid_device_functors_replace_private_parents() -> Non
         "  static void copy_vector_valid_",
     )
     assert "::pops::elliptic::mg::detail::CopyComponentsKernel<" in partitioned_copy
+
+
+def test_partitioned_region_transport_cuda_kernel_types_are_public_but_state_is_private() -> None:
+    source = PARTITIONED_REGION_TRANSFER_HEADER.read_text()
+    transport = _braced_definition(source, "class RegionTransport")
+
+    assert _access_at_offset(transport, transport.index("struct PeerStorage")) == "private"
+    for kernel_type in ("KernelJob", "PackKernel", "UnpackKernel"):
+        assert _access_at_offset(transport, transport.index(f"struct {kernel_type}")) == "public"
+    assert _access_at_offset(transport, transport.index("KernelJob lower_")) == "private"
 
 
 def test_fft_solver_named_device_functors_replace_local_for_each_lambdas() -> None:

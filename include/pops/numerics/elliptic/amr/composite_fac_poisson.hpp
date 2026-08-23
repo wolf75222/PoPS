@@ -36,6 +36,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -570,19 +571,26 @@ class CompositeFacPoisson {
       throw std::runtime_error(
           "partitioned FAC metadata, budget, or reusable allocation failed collectively");
     }
-    if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{std::string_view("pops-partitioned-composite-fac"),
-              std::string_view(exact_contract_)}}))
+    const std::array<ExactOrderedBytePair, 1> fac_contract_pairs{
+        ExactOrderedBytePair{std::string_view("pops-partitioned-composite-fac"),
+                             std::string_view(exact_contract_)}};
+    const std::span<const ExactOrderedBytePair> fac_contract_pair_span{fac_contract_pairs};
+    if (!all_ranks_agree_exact_ordered_byte_pairs(fac_contract_pair_span,
+                                                   world_communicator_view()))
       throw std::invalid_argument(
           "partitioned FAC exact hierarchy contract differs between MPI ranks");
     for (std::size_t connection = 0; connection < connections_.size(); ++connection) {
-      if (!all_ranks_agree_exact_ordered_byte_pairs(
-              {{std::string_view("pops-fac-parent-gather"),
-                std::string_view(connections_[connection]->gather_contract)},
-               {std::string_view("pops-fac-fine-restriction"),
-                std::string_view(connections_[connection]->restriction_contract)},
-               {std::string_view("pops-fac-flux-mismatch"),
-                std::string_view(connections_[connection]->flux_contract)}}))
+      const std::array<ExactOrderedBytePair, 3> connection_contract_pairs{
+          ExactOrderedBytePair{std::string_view("pops-fac-parent-gather"),
+                               std::string_view(connections_[connection]->gather_contract)},
+          ExactOrderedBytePair{std::string_view("pops-fac-fine-restriction"),
+                               std::string_view(connections_[connection]->restriction_contract)},
+          ExactOrderedBytePair{std::string_view("pops-fac-flux-mismatch"),
+                               std::string_view(connections_[connection]->flux_contract)}};
+      const std::span<const ExactOrderedBytePair> connection_contract_pair_span{
+          connection_contract_pairs};
+      if (!all_ranks_agree_exact_ordered_byte_pairs(connection_contract_pair_span,
+                                                     world_communicator_view()))
         throw std::invalid_argument(
             "partitioned FAC coarse/fine transfer plan differs between MPI ranks");
     }

@@ -384,6 +384,9 @@ class RegionTransport {
     pinned_buffer_type host_receive{};
   };
 
+ public:
+  // NVCC-generated Kokkos stubs must name these kernel types.  Transport state and all helpers
+  // remain private below.
   struct KernelJob {
     int source_lower[Dim]{};
     int destination_lower[Dim]{};
@@ -430,6 +433,7 @@ class RegionTransport {
     }
   };
 
+ private:
   KernelJob lower_(const job_type& job) const {
     const std::size_t execution_max =
         static_cast<std::size_t>(std::numeric_limits<execution_index_type>::max());
