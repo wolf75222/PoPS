@@ -633,6 +633,86 @@ def _native_kokkos_compiler(cxx: Any) -> Any:
     return _default_cxx(None)
 
 
+def _is_nvcc_wrapper(compiler: Any) -> bool:
+    return os.path.basename(os.fspath(compiler or "")) == "nvcc_wrapper"
+
+
+_KOKKOS_CUDA_ARCHITECTURES = {
+    "KOKKOS_ARCH_KEPLER30": "30",
+    "KOKKOS_ARCH_KEPLER32": "32",
+    "KOKKOS_ARCH_KEPLER35": "35",
+    "KOKKOS_ARCH_KEPLER37": "37",
+    "KOKKOS_ARCH_MAXWELL50": "50",
+    "KOKKOS_ARCH_MAXWELL52": "52",
+    "KOKKOS_ARCH_MAXWELL53": "53",
+    "KOKKOS_ARCH_PASCAL60": "60",
+    "KOKKOS_ARCH_PASCAL61": "61",
+    "KOKKOS_ARCH_VOLTA70": "70",
+    "KOKKOS_ARCH_VOLTA72": "72",
+    "KOKKOS_ARCH_TURING75": "75",
+    "KOKKOS_ARCH_AMPERE80": "80",
+    "KOKKOS_ARCH_AMPERE86": "86",
+    "KOKKOS_ARCH_AMPERE87": "87",
+    "KOKKOS_ARCH_ADA89": "89",
+    "KOKKOS_ARCH_HOPPER90": "90",
+    "KOKKOS_ARCH_BLACKWELL100": "100",
+    "KOKKOS_ARCH_BLACKWELL103": "103",
+    "KOKKOS_ARCH_BLACKWELL120": "120",
+    "KOKKOS_ARCH_BLACKWELL121": "121",
+}
+
+
+def _authenticated_kokkos_cuda_compile_flags(compiler: Any) -> list[str]:
+    """Replay CUDA flags from the hash-authenticated Kokkos configuration header."""
+    if not _is_nvcc_wrapper(compiler):
+        return []
+    import re
+
+    contract = _native_kokkos_contract()
+    selected = _native_kokkos_selection()
+    if contract is None or selected is None:
+        raise RuntimeError("nvcc_wrapper requires one authenticated Kokkos development contract")
+    config_paths = tuple(
+        os.path.join(include, "KokkosCore_config.h")
+        for include in selected[1]
+        if os.path.isfile(os.path.join(include, "KokkosCore_config.h"))
+    )
+    if len(config_paths) != 1:
+        raise RuntimeError("authenticated Kokkos selection has no unique KokkosCore_config.h")
+    config_path = config_paths[0]
+    expected = dict(zip(contract["header_paths"], contract["header_sha256"], strict=True))
+    config_hash = next(
+        value
+        for path, value in expected.items()
+        if os.path.basename(path) == "KokkosCore_config.h"
+    )
+    if _file_sha256(config_path) != config_hash:
+        raise RuntimeError("authenticated KokkosCore_config.h changed before CUDA loader compilation")
+    with open(config_path, encoding="utf-8") as source:
+        config = source.read()
+
+    def defined(macro: str) -> bool:
+        return re.search(r"^\s*#\s*define\s+%s(?:\s|$)" % re.escape(macro), config, re.MULTILINE) is not None
+
+    architectures = [macro for macro in _KOKKOS_CUDA_ARCHITECTURES if defined(macro)]
+    if len(architectures) > 1:
+        raise RuntimeError(
+            "authenticated Kokkos CUDA configuration defines multiple specific architectures: %s"
+            % ", ".join(architectures)
+        )
+    cuda_lambda = defined("KOKKOS_ENABLE_CUDA_LAMBDA")
+    if cuda_lambda and not architectures:
+        raise RuntimeError(
+            "authenticated Kokkos CUDA lambda configuration has no specific CUDA architecture"
+        )
+    flags = []
+    if cuda_lambda:
+        flags.extend(("-extended-lambda", "-Wext-lambda-captures-this"))
+    if architectures:
+        flags.append("-arch=sm_%s" % _KOKKOS_CUDA_ARCHITECTURES[architectures[0]])
+    return flags
+
+
 def native_loader_include_flags(compiler: Any, flags: Any) -> list[Any]:
     """Normalize split include options for Kokkos ``nvcc_wrapper`` only.
 
@@ -642,7 +722,7 @@ def native_loader_include_flags(compiler: Any, flags: Any) -> list[Any]:
     Conventional host compilers retain their historical split ``-I``, ``directory`` arguments.
     """
     result = list(flags)
-    if os.path.basename(os.fspath(compiler or "")) != "nvcc_wrapper":
+    if not _is_nvcc_wrapper(compiler):
         return result
     joined: list[Any] = []
     index = 0
@@ -742,6 +822,7 @@ def pops_loader_build_flags(cxx: Any = None) -> tuple:
     mpi_cflags, mpi_lflags = native_mpi_build_flags(module)
     cflags = ["-DPOPS_NATIVE_DIM=%d" % loader_native_dimension(),
               *loader_cflags, *cflags, *mpi_cflags]
+    cflags.extend(_authenticated_kokkos_cuda_compile_flags(cc))
     cflags = native_loader_include_flags(cc, cflags)
     lflags = [*lflags, *mpi_lflags]
     if sys.platform == "darwin":

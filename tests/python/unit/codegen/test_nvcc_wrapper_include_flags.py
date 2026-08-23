@@ -33,7 +33,16 @@ def test_compile_native_nvcc_wrapper_joins_kokkos_mpi_and_sdk_includes(monkeypat
         "pops_loader_build_flags",
         lambda cxx: (
             "/opt/kokkos/bin/nvcc_wrapper",
-            ["-DPOPS_HAS_KOKKOS", "-I", "/kokkos/include", "-I", "/mpi/include"],
+            [
+                "-DPOPS_HAS_KOKKOS",
+                "-I",
+                "/kokkos/include",
+                "-I",
+                "/mpi/include",
+                "-extended-lambda",
+                "-Wext-lambda-captures-this",
+                "-arch=sm_90",
+            ],
             ["-ldl", "-pthread"],
         ),
     )
@@ -61,6 +70,8 @@ def test_compile_native_nvcc_wrapper_joins_kokkos_mpi_and_sdk_includes(monkeypat
     assert "-I" not in command
     assert command.index("-I/kokkos/include") < command.index("-I/mpi/include")
     assert command.index("-I/mpi/include") < command.index("-I/pops/include")
+    assert command.index("-extended-lambda") < command.index("-arch=sm_90")
+    assert command.index("-arch=sm_90") < command.index("-I/pops/include")
     output_index = command.index("-o")
     assert command[output_index - 1].endswith("model_native.cpp")
     assert command[output_index + 1] == str(output)

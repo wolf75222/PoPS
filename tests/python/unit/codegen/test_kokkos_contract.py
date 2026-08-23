@@ -93,3 +93,61 @@ def test_kokkos_contract_fails_closed_when_header_changes(monkeypatch, tmp_path)
 
     with pytest.raises(RuntimeError, match="changed in place"):
         toolchain._native_kokkos_selection()
+
+
+def test_authenticated_cuda_hopper_configuration_replays_exact_nvcc_flags(monkeypatch, tmp_path):
+    from pops.codegen import toolchain
+
+    module = _module(
+        tmp_path / "hopper",
+        config=b"#define KOKKOS_ENABLE_CUDA_LAMBDA\n#define KOKKOS_ARCH_HOPPER\n"
+        b"#define KOKKOS_ARCH_HOPPER90\n",
+    )
+    _clear_overrides(monkeypatch)
+    monkeypatch.setattr(toolchain, "_pops_module", lambda: module)
+
+    assert toolchain._authenticated_kokkos_cuda_compile_flags("/opt/kokkos/bin/nvcc_wrapper") == [
+        "-extended-lambda",
+        "-Wext-lambda-captures-this",
+        "-arch=sm_90",
+    ]
+
+
+def test_authenticated_cuda_architecture_mapping_and_host_exclusion(monkeypatch, tmp_path):
+    from pops.codegen import toolchain
+
+    module = _module(
+        tmp_path / "ampere",
+        config=b"#define KOKKOS_ENABLE_CUDA_LAMBDA\n#define KOKKOS_ARCH_AMPERE86\n",
+    )
+    _clear_overrides(monkeypatch)
+    monkeypatch.setattr(toolchain, "_pops_module", lambda: module)
+
+    assert toolchain._authenticated_kokkos_cuda_compile_flags("nvcc_wrapper")[-1] == "-arch=sm_86"
+    assert toolchain._authenticated_kokkos_cuda_compile_flags("c++") == []
+
+
+def test_authenticated_cuda_configuration_without_lambda_omits_extended_lambda(monkeypatch, tmp_path):
+    from pops.codegen import toolchain
+
+    module = _module(tmp_path / "no-lambda", config=b"#define KOKKOS_ARCH_ADA89\n")
+    _clear_overrides(monkeypatch)
+    monkeypatch.setattr(toolchain, "_pops_module", lambda: module)
+
+    assert toolchain._authenticated_kokkos_cuda_compile_flags("nvcc_wrapper") == ["-arch=sm_89"]
+
+
+def test_authenticated_cuda_configuration_rejects_ambiguous_specific_architectures(
+    monkeypatch, tmp_path
+):
+    from pops.codegen import toolchain
+
+    module = _module(
+        tmp_path / "ambiguous",
+        config=b"#define KOKKOS_ARCH_AMPERE80\n#define KOKKOS_ARCH_HOPPER90\n",
+    )
+    _clear_overrides(monkeypatch)
+    monkeypatch.setattr(toolchain, "_pops_module", lambda: module)
+
+    with pytest.raises(RuntimeError, match="multiple specific architectures"):
+        toolchain._authenticated_kokkos_cuda_compile_flags("nvcc_wrapper")
