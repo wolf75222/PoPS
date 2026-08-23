@@ -15,6 +15,22 @@ from pathlib import Path
 from common import CampaignError, load_campaign, route_uses_gpu
 
 
+_SLURM_REQUIRED_ENVIRONMENT = (
+    "PATH",
+    "PYTHONPATH",
+    "POPS_NATIVE_VARIANTS_ROOT",
+    "POPS_INCLUDE",
+    "POPS_CACHE_DIR",
+    "XDG_CACHE_HOME",
+    "OMP_NUM_THREADS",
+    "KOKKOS_NUM_THREADS",
+    "OMP_PROC_BIND",
+    "OMP_PLACES",
+    "OMP_DYNAMIC",
+)
+_SLURM_OPTIONAL_ENVIRONMENT = ("LD_LIBRARY_PATH",)
+
+
 def _write_new(path: Path, text: str) -> None:
     """Publish launch evidence once; a retry must use a fresh raw directory."""
     try:
@@ -39,7 +55,14 @@ def _arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _command(campaign: dict, point: dict, python: Path, output: Path, launcher: str) -> list[str]:
+def _command(
+    campaign: dict,
+    point: dict,
+    python: Path,
+    output: Path,
+    launcher: str,
+    environment: dict[str, str],
+) -> list[str]:
     command: list[str] = []
     if launcher == "slurm":
         command.extend(
@@ -55,6 +78,15 @@ def _command(campaign: dict, point: dict, python: Path, output: Path, launcher: 
         )
         if route_uses_gpu(campaign["route"]):
             command.append("--gpus-per-task=1")
+        missing = [name for name in _SLURM_REQUIRED_ENVIRONMENT if not environment.get(name)]
+        if missing:
+            raise CampaignError(
+                "Slurm launcher requires explicit environment values: " + ", ".join(missing)
+            )
+        forwarded = _SLURM_REQUIRED_ENVIRONMENT + tuple(
+            name for name in _SLURM_OPTIONAL_ENVIRONMENT if environment.get(name)
+        )
+        command.extend(["/usr/bin/env", *(f"{name}={environment[name]}" for name in forwarded)])
     elif point["nodes"] != 1 or point["ranks"] != 1:
         raise CampaignError("local launcher supports only one node and one rank")
     command.extend(
@@ -121,7 +153,20 @@ def main() -> int:
     for point in campaign["points"]:
         result_path = output_root / point["id"]
         log_path = output_root / f"{point['id']}.log"
-        command = _command(campaign, point, python, result_path, args.launcher)
+        environment = os.environ.copy()
+        thread_count = str(point["threads"])
+        environment["OMP_NUM_THREADS"] = thread_count
+        environment["KOKKOS_NUM_THREADS"] = thread_count
+        environment["OMP_PROC_BIND"] = "spread"
+        environment["OMP_PLACES"] = "cores"
+        environment["OMP_DYNAMIC"] = "false"
+        try:
+            command = _command(
+                campaign, point, python, result_path, args.launcher, environment
+            )
+        except CampaignError as error:
+            print(f"campaign launch refused: {error}", file=sys.stderr)
+            return 2
         run = {
             "point": point["id"],
             "command": command,
@@ -133,13 +178,6 @@ def main() -> int:
         if args.dry_run:
             run["status"] = "planned"
             continue
-        environment = os.environ.copy()
-        thread_count = str(point["threads"])
-        environment["OMP_NUM_THREADS"] = thread_count
-        environment["KOKKOS_NUM_THREADS"] = thread_count
-        environment["OMP_PROC_BIND"] = "spread"
-        environment["OMP_PLACES"] = "cores"
-        environment["OMP_DYNAMIC"] = "false"
         started = time.perf_counter()
         completed = subprocess.run(
             command,

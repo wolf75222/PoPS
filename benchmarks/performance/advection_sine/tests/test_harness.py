@@ -33,6 +33,7 @@ from prepare_export import (  # noqa: E402
     verify_complete_receipt,
     verify_kokkos_export,
 )
+from run_campaign import _command  # noqa: E402
 from support import write_rank_measurement  # noqa: E402
 
 
@@ -467,6 +468,52 @@ class PublicPythonHarnessTests(unittest.TestCase):
             self.assertIn('POPS_INCLUDE="${POPS_INCLUDE}"', wrapper)
             self.assertIn('POPS_CACHE_DIR="${POPS_CACHE_DIR}"', wrapper)
             self.assertIn('XDG_CACHE_HOME="${XDG_CACHE_HOME}"', wrapper)
+
+    def test_measured_slurm_steps_receive_an_explicit_runtime_environment(self) -> None:
+        campaign = load_campaign(HARNESS / "campaigns" / "serial_reference.json")
+        point = campaign["points"][0]
+        environment = {
+            "PATH": "/authenticated/toolchain/bin:/usr/bin:/bin",
+            "PYTHONPATH": "/authenticated/build:/authenticated/source",
+            "POPS_NATIVE_VARIANTS_ROOT": "/authenticated/native",
+            "POPS_INCLUDE": "/authenticated/source/include",
+            "POPS_CACHE_DIR": "/allocation/pops-cache",
+            "XDG_CACHE_HOME": "/allocation/xdg-cache",
+            "OMP_NUM_THREADS": "1",
+            "KOKKOS_NUM_THREADS": "1",
+            "OMP_PROC_BIND": "spread",
+            "OMP_PLACES": "cores",
+            "OMP_DYNAMIC": "false",
+            "LD_LIBRARY_PATH": "/authenticated/runtime-libraries",
+        }
+        command = _command(
+            campaign,
+            point,
+            Path("/authenticated/python"),
+            Path("/allocation/results"),
+            "slurm",
+            environment,
+        )
+        env_index = command.index("/usr/bin/env")
+        python_index = command.index("/authenticated/python")
+        self.assertLess(env_index, python_index)
+        self.assertEqual(
+            command[env_index + 1 : python_index],
+            [f"{name}={value}" for name, value in environment.items()],
+        )
+
+    def test_measured_slurm_steps_refuse_an_incomplete_runtime_environment(self) -> None:
+        campaign = load_campaign(HARNESS / "campaigns" / "serial_reference.json")
+        point = campaign["points"][0]
+        with self.assertRaisesRegex(CampaignError, "POPS_CACHE_DIR"):
+            _command(
+                campaign,
+                point,
+                Path("/authenticated/python"),
+                Path("/allocation/results"),
+                "slurm",
+                {},
+            )
 
     def test_romeo_job_python_dependency_contract_is_fail_closed(self) -> None:
         """Batch jobs must retain their activated NumPy/pybind11 path."""
