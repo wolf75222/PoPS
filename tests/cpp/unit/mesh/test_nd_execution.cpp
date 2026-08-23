@@ -129,6 +129,8 @@ void expect_face_execution() {
 TEST(test_nd_execution, cell_and_product_facades_share_one_exact_ranked_policy) {
   static_assert(std::is_same_v<pops::CellIndex<2>, pops::Index<2>>);
   static_assert(std::is_trivially_copyable_v<pops::FaceIndex<3, 2>>);
+  static_assert(
+      std::is_trivially_copyable_v<pops::detail::IndexSpaceKernelAdapter<3, SetCellValue<3>>>);
 
   expect_cell_and_product_execution<1>();
   expect_cell_and_product_execution<2>();

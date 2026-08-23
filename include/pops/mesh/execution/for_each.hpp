@@ -185,6 +185,22 @@ POPS_HD CellIndex<Dim> cell_index_from_ordinal(const Index<Dim>& lower, const Ex
   return index;
 }
 
+/// Named device functor for flattened ranked iteration.
+///
+/// Keeping this adapter as a normal trivially-copyable Kokkos functor avoids an extended device
+/// lambda at every call site.  This is semantically identical to the former lambda: `F` is still
+/// captured by value and receives the same lexicographically decoded compile-time-ranked index.
+template <int Dim, class F>
+struct IndexSpaceKernelAdapter {
+  Index<Dim> lower{};
+  Extent<Dim> extent{};
+  F functor;
+
+  POPS_HD void operator()(std::int64_t ordinal) const {
+    functor(cell_index_from_ordinal(lower, extent, ordinal));
+  }
+};
+
 template <class ExecutionSpace, int Dim, class F>
 void launch_index_space(const ExecutionSpace& execution, const Box<Dim>& box, const char* label,
                         F f) {
@@ -192,13 +208,10 @@ void launch_index_space(const ExecutionSpace& execution, const Box<Dim>& box, co
                 "PoPS iteration requires a Kokkos execution-space instance");
   const Index<Dim> lower = box.lo;
   const Extent<Dim> extent = box.extent();
-  Kokkos::parallel_for(
-      label,
-      Kokkos::RangePolicy<ExecutionSpace, Kokkos::IndexType<std::int64_t>>(execution, 0,
-                                                                           box.numPts()),
-      KOKKOS_LAMBDA(const std::int64_t ordinal) {
-        f(cell_index_from_ordinal(lower, extent, ordinal));
-      });
+  Kokkos::parallel_for(label,
+                       Kokkos::RangePolicy<ExecutionSpace, Kokkos::IndexType<std::int64_t>>(
+                           execution, 0, box.numPts()),
+                       IndexSpaceKernelAdapter<Dim, F>{lower, extent, std::move(f)});
 }
 
 template <int Dim, int Axis, class F>
