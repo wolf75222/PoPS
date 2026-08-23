@@ -671,6 +671,7 @@ def profile_command(
         raise ProfileContractError("profile Python interpreter is not executable")
     return [
         str(interpreter),
+        "-B",
         str(case),
         "--resolution=" + ",".join(str(value) for value in point["resolution"]),
         "--mode=" + campaign["mode"],

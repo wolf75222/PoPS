@@ -455,6 +455,17 @@ class PublicPythonHarnessTests(unittest.TestCase):
             wrapper = (HARNESS / "slurm" / name).read_text(encoding="utf-8")
             self.assertIn(invocation, wrapper)
 
+    def test_every_romeo_source_script_disables_bytecode_writes(self) -> None:
+        for name in ("x64cpu.sbatch", "armgpu.sbatch"):
+            wrapper = (HARNESS / "slurm" / name).read_text(encoding="utf-8")
+            self.assertNotIn('"${JOB_PYTHON}" "${HARNESS}/', wrapper)
+            self.assertIn('"${JOB_PYTHON}" -B "${HARNESS}/run_campaign.py"', wrapper)
+            self.assertIn('"${JOB_PYTHON}" -B "${HARNESS}/collect_results.py"', wrapper)
+            self.assertIn('"${JOB_PYTHON}" -B \\\n  "${HARNESS}/prepare_export.py" build-receipt', wrapper)
+        for name in ("submit_x64cpu.sh", "submit_armgpu.sh"):
+            wrapper = (HARNESS / "slurm" / name).read_text(encoding="utf-8")
+            self.assertNotIn('"${POPS_PERF_LOGIN_PYTHON}" "${HARNESS_DIR}/', wrapper)
+
     def test_romeo_srun_uses_an_absolute_environment_launcher(self) -> None:
         for name in ("x64cpu.sbatch", "armgpu.sbatch"):
             wrapper = (HARNESS / "slurm" / name).read_text(encoding="utf-8")
@@ -497,6 +508,7 @@ class PublicPythonHarnessTests(unittest.TestCase):
         env_index = command.index("/usr/bin/env")
         python_index = command.index("/authenticated/python")
         self.assertLess(env_index, python_index)
+        self.assertEqual(command[python_index + 1], "-B")
         self.assertEqual(
             command[env_index + 1 : python_index],
             [f"{name}={value}" for name, value in environment.items()],

@@ -47,7 +47,7 @@ if [[ "${CAMPAIGN}" != "${EXPECTED_CAMPAIGN}" ]]; then
   echo "campaign must be stored under ${HARNESS_DIR}/campaigns so it is source-authenticated" >&2
   exit 2
 fi
-test "$("${POPS_PERF_LOGIN_PYTHON}" "${HARNESS_DIR}/validate_campaign.py" "${CAMPAIGN}" --field platform)" = x64cpu
+test "$("${POPS_PERF_LOGIN_PYTHON}" -B "${HARNESS_DIR}/validate_campaign.py" "${CAMPAIGN}" --field platform)" = x64cpu
 
 EXPORT_ROOT="${POPS_PERF_EXPORT_ROOT:-/scratch_p/${USER}/pops-advection-sine-exports}"
 case "${EXPORT_ROOT}" in
@@ -99,7 +99,7 @@ cleanup_temporary_export() {
   rmdir -- "${TEMPORARY_DIRECTORY}" 2>/dev/null || true
 }
 trap cleanup_temporary_export EXIT
-"${POPS_PERF_LOGIN_PYTHON}" "${HARNESS_DIR}/prepare_export.py" create \
+"${POPS_PERF_LOGIN_PYTHON}" -B "${HARNESS_DIR}/prepare_export.py" create \
   --source "${REPO_ROOT}" \
   --archive "${TEMPORARY_BASE}.tar" \
   --manifest "${TEMPORARY_BASE}.json" >/dev/null
@@ -148,10 +148,10 @@ if [[ -e "${KOKKOS_ARCHIVE}" || -e "${KOKKOS_RECEIPT}" ]]; then
     echo "refusing incomplete authenticated Kokkos export ${KOKKOS_COMMIT}" >&2
     exit 2
   fi
-  "${POPS_PERF_LOGIN_PYTHON}" "${HARNESS_DIR}/prepare_export.py" verify-kokkos-export \
+  "${POPS_PERF_LOGIN_PYTHON}" -B "${HARNESS_DIR}/prepare_export.py" verify-kokkos-export \
     --archive "${KOKKOS_ARCHIVE}" --receipt "${KOKKOS_RECEIPT}" >/dev/null
 else
-  "${POPS_PERF_LOGIN_PYTHON}" "${HARNESS_DIR}/prepare_export.py" create-kokkos-export \
+  "${POPS_PERF_LOGIN_PYTHON}" -B "${HARNESS_DIR}/prepare_export.py" create-kokkos-export \
     --source "${KOKKOS_SOURCE}" --archive "${KOKKOS_ARCHIVE}" \
     --receipt "${KOKKOS_RECEIPT}" >/dev/null
 fi
@@ -170,7 +170,7 @@ elif [[ -n "${POPS_PERF_WALLTIME:-}" ]]; then
 fi
 while IFS= read -r argument; do
   RESOURCE_ARGS+=("${argument}")
-done < <("${POPS_PERF_LOGIN_PYTHON}" "${HARNESS_DIR}/validate_campaign.py" "${CAMPAIGN}" --slurm-args "${WALLTIME_OVERRIDE_ARGS[@]}")
+done < <("${POPS_PERF_LOGIN_PYTHON}" -B "${HARNESS_DIR}/validate_campaign.py" "${CAMPAIGN}" --slurm-args "${WALLTIME_OVERRIDE_ARGS[@]}")
 
 # The job gets a deliberate, reviewable environment instead of the submitting
 # shell.  In particular, credentials, tokens, proxy settings and unrelated

@@ -92,6 +92,7 @@ def _command(
     command.extend(
         [
             str(python),
+            "-B",
             str(Path(__file__).with_name("advection_sine.py")),
             "--resolution=" + ",".join(str(value) for value in point["resolution"]),
             f"--mode={campaign['mode']}",

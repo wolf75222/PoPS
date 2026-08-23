@@ -260,7 +260,8 @@ class MacosProfileContractTests(unittest.TestCase):
                 python=Path(sys.executable),
                 output_dir=Path(temporary) / "rank-output",
             )
-            self.assertEqual(argv[1], str(HARNESS / "advection_sine.py"))
+            self.assertEqual(argv[1], "-B")
+            self.assertEqual(argv[2], str(HARNESS / "advection_sine.py"))
             self.assertIn("--resolution=128,128,128", argv)
             self.assertIn("--block-size=32", argv)
             self.assertIn("--cfl=0.4", argv)

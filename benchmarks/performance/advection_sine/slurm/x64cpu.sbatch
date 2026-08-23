@@ -291,9 +291,9 @@ cp "${MANIFEST}" "${WORK_ROOT}/report/source-export-manifest.json"
 tar --same-permissions -xf "${KOKKOS_ARCHIVE}" -C "${WORK_ROOT}/kokkos-source"
 
 CAMPAIGN="${HARNESS}/campaigns/${CAMPAIGN_NAME}"
-ROUTE="$("${JOB_PYTHON}" "${HARNESS}/validate_campaign.py" "${CAMPAIGN}" --field route)"
-DIMENSION="$("${JOB_PYTHON}" "${HARNESS}/validate_campaign.py" "${CAMPAIGN}" --field dimension)"
-CAMPAIGN_ID="$("${JOB_PYTHON}" "${HARNESS}/validate_campaign.py" "${CAMPAIGN}" --field id)"
+ROUTE="$("${JOB_PYTHON}" -B "${HARNESS}/validate_campaign.py" "${CAMPAIGN}" --field route)"
+DIMENSION="$("${JOB_PYTHON}" -B "${HARNESS}/validate_campaign.py" "${CAMPAIGN}" --field dimension)"
+CAMPAIGN_ID="$("${JOB_PYTHON}" -B "${HARNESS}/validate_campaign.py" "${CAMPAIGN}" --field id)"
 
 kokkos_configured_compiler() {
   local root="$1"
@@ -378,7 +378,7 @@ srun --exclusive --kill-on-bad-exit=1 --nodes=1 --ntasks=1 --cpus-per-task=1 \
   /usr/bin/env PYTHONPATH="${WORK_ROOT}/build/python:${WORK_ROOT}/source${PYTHON_DEPENDENCY_PATH:+:${PYTHON_DEPENDENCY_PATH}}" \
   POPS_NATIVE_VARIANTS_ROOT="${POPS_NATIVE_VARIANTS_ROOT}" \
   POPS_INCLUDE="${POPS_INCLUDE}" POPS_CACHE_DIR="${POPS_CACHE_DIR}" \
-  XDG_CACHE_HOME="${XDG_CACHE_HOME}" "${JOB_PYTHON}" \
+  XDG_CACHE_HOME="${XDG_CACHE_HOME}" "${JOB_PYTHON}" -B \
   "${HARNESS}/prepare_export.py" build-receipt \
   --source "${WORK_ROOT}/source" \
   --build "${WORK_ROOT}/build" \
@@ -390,12 +390,12 @@ srun --exclusive --kill-on-bad-exit=1 --nodes=1 --ntasks=1 --cpus-per-task=1 \
   --kokkos-build "${WORK_ROOT}/kokkos-${KOKKOS_BUILD_KIND}-build" \
   --output "${WORK_ROOT}/raw/build.receipt.json" >/dev/null
 
-PYTHONPATH="${WORK_ROOT}/build/python:${WORK_ROOT}/source${PYTHON_DEPENDENCY_PATH:+:${PYTHON_DEPENDENCY_PATH}}" "${JOB_PYTHON}" "${HARNESS}/run_campaign.py" \
+PYTHONPATH="${WORK_ROOT}/build/python:${WORK_ROOT}/source${PYTHON_DEPENDENCY_PATH:+:${PYTHON_DEPENDENCY_PATH}}" "${JOB_PYTHON}" -B "${HARNESS}/run_campaign.py" \
   --campaign "${CAMPAIGN}" \
   --python "${JOB_PYTHON}" \
   --output "${WORK_ROOT}/raw" \
   --launcher slurm
-"${JOB_PYTHON}" "${HARNESS}/collect_results.py" \
+"${JOB_PYTHON}" -B "${HARNESS}/collect_results.py" \
   --campaign "${CAMPAIGN}" \
   --input "${WORK_ROOT}/raw" \
   --json "${WORK_ROOT}/report/summary.json" \
@@ -415,7 +415,7 @@ test ! -e "${DESTINATION}"
 test ! -e "${STAGING}"
 mkdir "${STAGING}"
 cp -R "${WORK_ROOT}/raw" "${WORK_ROOT}/report" "${STAGING}/"
-PYTHONPATH="${WORK_ROOT}/source${PYTHON_DEPENDENCY_PATH:+:${PYTHON_DEPENDENCY_PATH}}" "${JOB_PYTHON}" "${HARNESS}/prepare_export.py" complete-receipt \
+PYTHONPATH="${WORK_ROOT}/source${PYTHON_DEPENDENCY_PATH:+:${PYTHON_DEPENDENCY_PATH}}" "${JOB_PYTHON}" -B "${HARNESS}/prepare_export.py" complete-receipt \
   --raw "${STAGING}/raw" \
   --report "${STAGING}/report" \
   --campaign "${CAMPAIGN_ID}" \
@@ -424,7 +424,7 @@ PYTHONPATH="${WORK_ROOT}/source${PYTHON_DEPENDENCY_PATH:+:${PYTHON_DEPENDENCY_PA
   --output "${STAGING}/COMPLETE.json" >/dev/null
 mv --no-clobber --no-target-directory -- "${STAGING}" "${DESTINATION}"
 test ! -e "${STAGING}"
-PYTHONPATH="${WORK_ROOT}/source${PYTHON_DEPENDENCY_PATH:+:${PYTHON_DEPENDENCY_PATH}}" "${JOB_PYTHON}" "${HARNESS}/prepare_export.py" verify-complete \
+PYTHONPATH="${WORK_ROOT}/source${PYTHON_DEPENDENCY_PATH:+:${PYTHON_DEPENDENCY_PATH}}" "${JOB_PYTHON}" -B "${HARNESS}/prepare_export.py" verify-complete \
   --root "${DESTINATION}" >/dev/null
 rm -rf -- "${WORK_ROOT}"
 test ! -e "${WORK_ROOT}"

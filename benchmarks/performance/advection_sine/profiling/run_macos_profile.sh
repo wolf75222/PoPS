@@ -63,7 +63,7 @@ done
 [[ "${BUILD_JOBS}" =~ ^[1-9][0-9]*$ && "${BUILD_JOBS}" -le 32 ]] || {
   echo "native build jobs must be an integer between 1 and 32" >&2; exit 2; }
 
-"${PYTHON}" -c \
+"${PYTHON}" -B -c \
   'import sys; from pathlib import Path; sys.path.insert(0, sys.argv[2]); from profile_contract import canonical_plan; canonical_plan(Path(sys.argv[1]))' \
   "${CAMPAIGN}" "${SCRIPT_DIR}"
 # The one output root is published exclusively: a concurrent creator or a
@@ -72,10 +72,10 @@ mkdir -- "${OUTPUT}"
 SOURCE_ARCHIVE="${OUTPUT}/source-export.tar"
 SOURCE_MANIFEST="${OUTPUT}/source.manifest.json"
 EXPORTED_ROOT="${OUTPUT}/source-tree"
-CAMPAIGN_REL="$(${PYTHON} -c \
+CAMPAIGN_REL="$(${PYTHON} -B -c \
   'import sys; from pathlib import Path; print(Path(sys.argv[1]).resolve().relative_to(Path(sys.argv[2]).resolve()).as_posix())' \
   "${CAMPAIGN}" "${REPOSITORY_ROOT}")"
-"${PYTHON}" "${HARNESS_DIR}/prepare_export.py" create --source "${REPOSITORY_ROOT}" \
+"${PYTHON}" -B "${HARNESS_DIR}/prepare_export.py" create --source "${REPOSITORY_ROOT}" \
   --archive "${SOURCE_ARCHIVE}" --manifest "${SOURCE_MANIFEST}" >/dev/null
 mkdir "${EXPORTED_ROOT}"
 /usr/bin/tar -xf "${SOURCE_ARCHIVE}" -C "${EXPORTED_ROOT}"
@@ -90,7 +90,7 @@ export POPS_INCLUDE="${EXPORTED_ROOT}/include"
 export POPS_CACHE_DIR="${PROFILE_CACHE_DIR}"
 export XDG_CACHE_HOME="${PROFILE_XDG_CACHE_DIR}"
 [[ -d "${POPS_INCLUDE}" ]] || { echo "exported include directory is unavailable" >&2; exit 2; }
-SOURCE_TREE_SHA256="$(${PYTHON} -c \
+SOURCE_TREE_SHA256="$(${PYTHON} -B -c \
   'import sys; from pathlib import Path; sys.path.insert(0, sys.argv[2]); from profile_contract import read_json; print(read_json(Path(sys.argv[1]), "source manifest")["tree_sha256"])' \
   "${SOURCE_MANIFEST}" "${PROFILE_LIB_DIR}")"
 
@@ -123,14 +123,14 @@ NATIVE_VARIANTS_ROOT="${MACOS_BUILD_ROOT}/python/pops/_native"
 BUILD_RECEIPT="${OUTPUT}/build.receipt.json"
 PYTHONPATH="${MACOS_BUILD_ROOT}/python:${EXPORTED_ROOT}/python${PYTHONPATH:+:${PYTHONPATH}}" \
   POPS_NATIVE_VARIANTS_ROOT="${NATIVE_VARIANTS_ROOT}" \
-  "${PYTHON}" "${EXPORTED_ROOT}/benchmarks/performance/advection_sine/prepare_export.py" build-receipt \
+  "${PYTHON}" -B "${EXPORTED_ROOT}/benchmarks/performance/advection_sine/prepare_export.py" build-receipt \
   --source "${EXPORTED_ROOT}" --build "${MACOS_BUILD_ROOT}" --manifest "${SOURCE_MANIFEST}" \
   --campaign "${CAMPAIGN}" --python "${TARGET_PYTHON}" --kokkos-root "${MACOS_KOKKOS_ROOT}" \
   --output "${BUILD_RECEIPT}" >/dev/null
 export POPS_MACOS_PROFILE_BUILD_RECEIPT="${BUILD_RECEIPT}"
 
 unix_time() {
-  "${PYTHON}" -c 'import time; print(time.time())'
+  "${PYTHON}" -B -c 'import time; print(time.time())'
 }
 
 wait_ready() {
@@ -143,37 +143,37 @@ wait_ready() {
 }
 
 write_canonical_command() {
-  "${PYTHON}" -c \
+  "${PYTHON}" -B -c \
     'import sys; from pathlib import Path; sys.path.insert(0, sys.argv[6]); from profile_contract import PROFILE_SCHEMA, command_sha256, profile_command, write_json_new; campaign=Path(sys.argv[1]).resolve(); output=Path(sys.argv[3]).resolve(); argv=profile_command(campaign_path=campaign, python=Path(sys.argv[2]), output_dir=output, source_root=Path(sys.argv[5])); digest=command_sha256(argv); write_json_new(Path(sys.argv[4]), {"schema":PROFILE_SCHEMA, "phase":"canonical_command", "argv":argv, "sha256":digest, "output_dir":str(output)}); print(digest); print(*argv, sep="\n")' \
     "$1" "$2" "$3" "$4" "$5" "${PROFILE_LIB_DIR}"
 }
 
 check_ready() {
-  "${PYTHON}" -c \
+  "${PYTHON}" -B -c \
     'import sys; from pathlib import Path; sys.path.insert(0, sys.argv[7]); from profile_contract import PROFILE_SCHEMA, command_sha256, read_json, sha256, source_manifest_receipt; ready=read_json(Path(sys.argv[1]), "READY"); command=read_json(Path(sys.argv[4]), "canonical command"); campaign=Path(sys.argv[3]).resolve(); source_root=Path(sys.argv[6]); required={"campaign","source","python_package","artifact","program_artifact","native","build","runtime","host","command"}; provenance=ready.get("provenance"); source=source_manifest_receipt(manifest_path=Path(sys.argv[5]), source_root=source_root); expected_python={"path":"python/pops/__init__.py", "sha256":sha256(source_root / "python/pops/__init__.py")}; program=provenance.get("program_artifact"); assert ready.get("schema") == PROFILE_SCHEMA and ready.get("phase") == "ready_after_bind_warmup" and ready.get("nonce") == sys.argv[2] and type(ready.get("pid")) is int; assert type(provenance) is dict and set(provenance) == required and all(type(provenance[key]) is dict for key in required); assert provenance["campaign"]["path"] == str(campaign) and provenance["campaign"]["sha256"] == sha256(campaign) and provenance["source"] == source and provenance["python_package"] == expected_python; assert type(provenance["artifact"].get("semantic_identity")) is str and provenance["artifact"]["semantic_identity"]; assert type(program.get("artifact_identity")) is str and program["artifact_identity"] and type(program.get("abi_key")) is str and program["abi_key"] and type(program.get("cache_key")) is str and program["cache_key"] and type(program.get("programs")) is list and program["programs"]; assert type(provenance["native"].get("sha256")) is str and provenance["native"].get("has_kokkos") is True and provenance["build"].get("source_tree_sha256") == source["tree_sha256"] and provenance["build"].get("native_sha256") == provenance["native"]["sha256"]; assert provenance["runtime"] and provenance["host"]; assert command.get("schema") == PROFILE_SCHEMA and command.get("phase") == "canonical_command" and type(command.get("argv")) is list and command.get("sha256") == command_sha256(command["argv"]); assert provenance["command"] == {"argv":command["argv"], "sha256":command["sha256"], "output_dir":command["output_dir"]}; print(ready["pid"])' \
     "$1" "$2" "$3" "$4" "$5" "$6" "${PROFILE_LIB_DIR}"
 }
 
 write_go() {
-  "${PYTHON}" -c \
+  "${PYTHON}" -B -c \
     'import sys; from pathlib import Path; sys.path.insert(0, sys.argv[3]); from profile_contract import PROFILE_SCHEMA, write_json_new; write_json_new(Path(sys.argv[1]), {"schema": PROFILE_SCHEMA, "phase":"go", "nonce":sys.argv[2]})' \
     "$1" "$2" "${PROFILE_LIB_DIR}"
 }
 
 write_tool_receipt() {
-  "${PYTHON}" -c \
+  "${PYTHON}" -B -c \
     'import sys; from pathlib import Path; sys.path.insert(0, sys.argv[10]); from profile_contract import PROFILE_SCHEMA, write_json_new; start=float(sys.argv[4]); end=float(sys.argv[5]); completed=float(sys.argv[6]); target_reaped=float(sys.argv[7]); profiler_reaped=float(sys.argv[8]); assert start <= completed <= target_reaped <= profiler_reaped == end; write_json_new(Path(sys.argv[1]), {"schema":PROFILE_SCHEMA, "phase":"acquisition_complete", "tool":sys.argv[2], "nonce":sys.argv[3], "started_unix_seconds":start, "ended_unix_seconds":end, "target_completed_unix_seconds":completed, "target_reaped_unix_seconds":target_reaped, "profiler_reaped_unix_seconds":profiler_reaped, "target_completed_during_acquisition":True, "attachment_proof":sys.argv[9]})' \
     "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${PROFILE_LIB_DIR}"
 }
 
 write_profiler_exit() {
-  "${PYTHON}" -c \
+  "${PYTHON}" -B -c \
     'import sys; from pathlib import Path; sys.path.insert(0, sys.argv[5]); from profile_contract import PROFILE_SCHEMA, write_json_new; write_json_new(Path(sys.argv[1]), {"schema":PROFILE_SCHEMA, "phase":"profiler_exit", "tool":sys.argv[2], "returncode":int(sys.argv[3]), "exited_unix_seconds":float(sys.argv[4])})' \
     "$1" "$2" "$3" "$4" "${PROFILE_LIB_DIR}"
 }
 
 read_profiler_exit() {
-  "${PYTHON}" -c \
+  "${PYTHON}" -B -c \
     'import sys; from pathlib import Path; sys.path.insert(0, sys.argv[3]); from profile_contract import PROFILE_SCHEMA, read_json; row=read_json(Path(sys.argv[1]), "profiler exit"); assert row == {"schema":PROFILE_SCHEMA,"phase":"profiler_exit","tool":sys.argv[2],"returncode":0,"exited_unix_seconds":row.get("exited_unix_seconds")}; assert type(row["exited_unix_seconds"]) in (int,float); print(row["exited_unix_seconds"])' \
     "$1" "$2" "${PROFILE_LIB_DIR}"
 }
@@ -230,7 +230,7 @@ run_one() {
   command=("${command_lines[@]:1}")
   [[ "${command_digest}" =~ ^[0-9a-f]{64}$ && "${#command[@]}" -gt 1 ]] || {
     echo "could not construct canonical public command" >&2; return 1; }
-  nonce="$(${PYTHON} -c 'import secrets; print(secrets.token_hex(32))')"
+  nonce="$(${PYTHON} -B -c 'import secrets; print(secrets.token_hex(32))')"
   ready="${leaf}/ready.json"; go="${leaf}/go.json"; receipt="${leaf}/worker.receipt.json"
   profiler_exit="${leaf}/profiler.exit.json"
   POPS_MACOS_PROFILE_READY="${ready}" POPS_MACOS_PROFILE_GO="${go}" \
@@ -295,7 +295,7 @@ run_one() {
     acquisition_end="${profiler_reaped_time}"
   fi
   [[ -s "${receipt}" ]] || { echo "target did not publish completed receipt" >&2; return 1; }
-  completed_time="$(${PYTHON} -c \
+  completed_time="$(${PYTHON} -B -c \
     'import sys; from pathlib import Path; sys.path.insert(0, sys.argv[2]); from profile_contract import read_json; row=read_json(Path(sys.argv[1]), "worker receipt"); assert row.get("phase") == "completed_public_lifecycle" and row.get("nonce") == sys.argv[3] and row.get("returncode") == 0; print(row["completed_unix_seconds"])' \
     "${receipt}" "${PROFILE_LIB_DIR}" "${nonce}")"
   write_tool_receipt "${leaf}/tool.receipt.json" "${tool}" "${nonce}" \
@@ -308,14 +308,14 @@ for tool in sample xctrace; do
   done
 done
 
-"${PYTHON}" "${SCRIPT_DIR}/collect_profiles.py" --input "${OUTPUT}" --output "${OUTPUT}/summary.json"
-"${PYTHON}" -c \
+"${PYTHON}" -B "${SCRIPT_DIR}/collect_profiles.py" --input "${OUTPUT}" --output "${OUTPUT}/summary.json"
+"${PYTHON}" -B -c \
   'import sys; from pathlib import Path; sys.path.insert(0, sys.argv[2]); from profile_contract import create_profile_complete_receipt; create_profile_complete_receipt(Path(sys.argv[1]))' \
   "${OUTPUT}" "${PROFILE_LIB_DIR}"
-FIGURES_OUTPUT="$("${PYTHON}" -c \
+FIGURES_OUTPUT="$("${PYTHON}" -B -c \
   'import sys; from pathlib import Path; sys.path.insert(0, sys.argv[2]); from profile_contract import profile_figure_publication_path; print(profile_figure_publication_path(Path(sys.argv[1])))' \
   "${OUTPUT}" "${PROFILE_LIB_DIR}")"
-"${PYTHON}" "${SCRIPT_DIR}/plot_profiles.py" "${OUTPUT}/summary.json" --output "${FIGURES_OUTPUT}"
-"${PYTHON}" -c \
+"${PYTHON}" -B "${SCRIPT_DIR}/plot_profiles.py" "${OUTPUT}/summary.json" --output "${FIGURES_OUTPUT}"
+"${PYTHON}" -B -c \
   'import sys; from pathlib import Path; sys.path.insert(0, sys.argv[2]); from profile_contract import verify_profile_complete_receipt; verify_profile_complete_receipt(Path(sys.argv[1]))' \
   "${OUTPUT}" "${PROFILE_LIB_DIR}"
