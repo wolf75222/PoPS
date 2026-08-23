@@ -155,6 +155,19 @@ BoundaryScheduleBudget exact_boundary_budget() {
   return {entries - 1};
 }
 
+template <int Dim, class SourceView, class DestinationView>
+struct CopyComponentsKernel {
+ public:
+  SourceView source;
+  DestinationView destination;
+  int components = 1;
+
+  POPS_HD void operator()(const Index<Dim>& cell) const {
+    for (int component = 0; component < components; ++component)
+      destination(cell, component) = source(cell, component);
+  }
+};
+
 template <int Dim>
 mesh::Distribution<Dim> rebind_distribution(const mesh::BoxArray<Dim>& layout,
                                             const mesh::Distribution<Dim>& model) {
@@ -828,9 +841,9 @@ class GeometricMG {
       for (std::size_t local = 0; local < fine.phi.local_size(); ++local) {
         const auto source = static_cast<const field_type&>(*boundary_view_).fab(local).view();
         const auto destination = fine.phi.fab(local).view();
-        for_each_cell(fine.phi.fab(local).grown_box(), [=] POPS_HD(const Index<Dim>& cell) {
-          destination(cell, 0) = source(cell, 0);
-        });
+        for_each_cell(fine.phi.fab(local).grown_box(),
+                      detail::CopyComponentsKernel<Dim, decltype(source), decltype(destination)>{
+                          source, destination, 1});
       }
       Kokkos::fence();
     }
@@ -929,10 +942,9 @@ class GeometricMG {
       const auto in = source.fab(local).view();
       const auto out = destination.fab(local).view();
       const int components = source.ncomp();
-      for_each_cell(source.box(local), [=] POPS_HD(const Index<Dim>& cell) {
-        for (int component = 0; component < components; ++component)
-          out(cell, component) = in(cell, component);
-      });
+      for_each_cell(source.box(local),
+                    detail::CopyComponentsKernel<Dim, decltype(in), decltype(out)>{in, out,
+                                                                                     components});
     }
     Kokkos::fence();
   }

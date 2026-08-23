@@ -169,6 +169,59 @@ std::size_t storage_offset(const Index<Dim>& index, const Box<Dim>& storage) {
   return offset;
 }
 
+// Kept outside System because NVCC requires the lexical parent of the POPS_HD reduction lambda to
+// be public.  The provider retains the same borrowed Impl pointer and is invoked only by the
+// installed host-side std::function, so this does not introduce a new System publication route.
+template <int Dim, class InputReferences, class StateProvider>
+struct CoupledSourceMaximumFrequency {
+ public:
+  InputReferences inputs;
+  std::vector<Real> constants;
+  CsProgram frequency_program{};
+  int input_count = 0;
+  int constant_count = 0;
+  const ExecutionLane* lane = nullptr;
+  StateProvider state_for_block;
+
+  Real operator()() const {
+    if (input_count == 0)
+      throw std::logic_error("state-dependent coupling frequency requires at least one input");
+    const MultiFab<Dim>& reference = state_for_block(inputs.front().block);
+    Real local_maximum = Real(0);
+    for (std::size_t local = 0; local < reference.local_size(); ++local) {
+      CoupledFreqKernel<Dim> kernel{};
+      kernel.n_in = input_count;
+      kernel.n_const = constant_count;
+      kernel.prog = frequency_program;
+      for (int input = 0; input < input_count; ++input) {
+        const auto& ref = inputs[static_cast<std::size_t>(input)];
+        const Fab<Dim>& fab = state_for_block(ref.block).fab(local);
+        kernel.in[input] = fab.view();
+        kernel.in_comp[input] = ref.component;
+      }
+      for (int constant = 0; constant < constant_count; ++constant)
+        kernel.consts[constant] = constants[static_cast<std::size_t>(constant)];
+      local_maximum = std::max(
+          local_maximum,
+          for_each_cell_reduce_max(reference.box(local), [=] POPS_HD(const Index<Dim>& index) {
+            Real value = std::numeric_limits<Real>::lowest();
+            kernel(index, value);
+            return value;
+          }));
+    }
+    return all_reduce_max(local_maximum, *lane);
+  }
+};
+
+template <int Dim, class InputReferences, class StateProvider>
+std::function<Real()> make_coupled_source_maximum_frequency(
+    InputReferences inputs, std::vector<Real> constants, CsProgram frequency_program,
+    int input_count, int constant_count, const ExecutionLane& lane, StateProvider state_for_block) {
+  return CoupledSourceMaximumFrequency<Dim, InputReferences, StateProvider>{
+      std::move(inputs), std::move(constants), frequency_program, input_count, constant_count,
+      &lane, std::move(state_for_block)};
+}
+
 template <int Dim>
 mesh::BoxArrayValidationBudget exact_layout_budget(const mesh::BoxArray<Dim>& layout) {
   const std::size_t boxes = layout.size();
@@ -2659,37 +2712,11 @@ void System<Dim>::add_coupled_source_prepared_(const CoupledSourceProgram& descr
   std::function<Real()> maximum_frequency;
   if (has_frequency_program) {
     Impl* implementation = p_.get();
-    maximum_frequency = [implementation, inputs, constants, frequency_program, input_count,
-                         constant_count, lane = &lane]() {
-      if (input_count == 0)
-        throw std::logic_error("state-dependent coupling frequency requires at least one input");
-      const MultiFab<Dim>& reference =
-          implementation->sp[static_cast<std::size_t>(inputs.front().block)].U;
-      Real local_maximum = Real(0);
-      for (std::size_t local = 0; local < reference.local_size(); ++local) {
-        CoupledFreqKernel<Dim> kernel{};
-        kernel.n_in = input_count;
-        kernel.n_const = constant_count;
-        kernel.prog = frequency_program;
-        for (int input = 0; input < input_count; ++input) {
-          const InputRef& ref = inputs[static_cast<std::size_t>(input)];
-          const Fab<Dim>& fab =
-              implementation->sp[static_cast<std::size_t>(ref.block)].U.fab(local);
-          kernel.in[input] = fab.view();
-          kernel.in_comp[input] = ref.component;
-        }
-        for (int constant = 0; constant < constant_count; ++constant)
-          kernel.consts[constant] = constants[static_cast<std::size_t>(constant)];
-        local_maximum = std::max(
-            local_maximum,
-            for_each_cell_reduce_max(reference.box(local), [=] POPS_HD(const Index<Dim>& index) {
-              Real value = std::numeric_limits<Real>::lowest();
-              kernel(index, value);
-              return value;
-            }));
-      }
-      return all_reduce_max(local_maximum, *lane);
-    };
+    maximum_frequency = make_coupled_source_maximum_frequency<Dim>(
+        inputs, constants, frequency_program, input_count, constant_count, lane,
+        [implementation](int block) -> const MultiFab<Dim>& {
+          return implementation->sp[static_cast<std::size_t>(block)].U;
+        });
   }
   install_prepared_coupling_operator(label, std::string(contract.view()), std::move(inspect),
                                      std::move(operation), frequency, std::move(maximum_frequency));

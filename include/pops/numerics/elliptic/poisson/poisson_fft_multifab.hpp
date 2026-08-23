@@ -129,6 +129,33 @@ void allreduce_sum_valid(MultiFab<Dim>& field, const ExecutionLane& lane) {
   }
 }
 
+template <int Dim, class InputView, class DestinationView>
+struct PackSlabKernel {
+ public:
+  Box<Dim> slab;
+  InputView input;
+  DestinationView destination;
+  Real sign = Real(1);
+
+  POPS_HD void operator()(const Index<Dim>& cell) const {
+    destination[fft_solver_detail::local_slab_ordinal(slab, cell)] =
+        typename PoissonFFT<Dim>::complex_type(static_cast<double>(sign * input(cell, 0)), 0.0);
+  }
+};
+
+template <int Dim, class SourceView, class OutputView>
+struct UnpackSlabKernel {
+ public:
+  Box<Dim> slab;
+  SourceView source;
+  OutputView output;
+
+  POPS_HD void operator()(const Index<Dim>& cell) const {
+    output(cell, 0) =
+        static_cast<Real>(source[fft_solver_detail::local_slab_ordinal(slab, cell)].real());
+  }
+};
+
 template <int Dim>
 EllipticBuildRequest<Dim> unique_last_axis_slab_request(const EllipticBuildRequest<Dim>& source,
                                                         const ExecutionLane& lane) {
@@ -295,10 +322,9 @@ class PoissonFftMultiFabAdapter {
       if (overlap.empty())
         continue;
       const auto in = source.fab(local).view();
-      for_each_cell(overlap, [=] POPS_HD(const Index<Dim>& cell) {
-        dest[fft_solver_detail::local_slab_ordinal(slab, cell)] =
-            complex_type(static_cast<double>(sign * in(cell, 0)), 0.0);
-      });
+      for_each_cell(overlap,
+                    fft_multifab_detail::PackSlabKernel<Dim, decltype(in), decltype(dest)>{
+                        slab, in, dest, sign});
     }
     Kokkos::fence();
   }
@@ -311,9 +337,9 @@ class PoissonFftMultiFabAdapter {
       if (overlap.empty())
         continue;
       const auto out = destination.fab(local).view();
-      for_each_cell(overlap, [=] POPS_HD(const Index<Dim>& cell) {
-        out(cell, 0) = static_cast<Real>(src[fft_solver_detail::local_slab_ordinal(slab, cell)].real());
-      });
+      for_each_cell(overlap,
+                    fft_multifab_detail::UnpackSlabKernel<Dim, decltype(src), decltype(out)>{
+                        slab, src, out});
     }
     Kokkos::fence();
   }
