@@ -12,7 +12,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from common import CampaignError, load_campaign, route_uses_gpu
+from common import ROMEO_CUDA_DSL_OPTFLAGS, CampaignError, load_campaign, route_uses_gpu
 
 
 _SLURM_REQUIRED_ENVIRONMENT = (
@@ -78,6 +78,11 @@ def _command(
         )
         if route_uses_gpu(campaign["route"]):
             command.append("--gpus-per-task=1")
+            if environment.get("POPS_DSL_OPTFLAGS") != ROMEO_CUDA_DSL_OPTFLAGS:
+                raise CampaignError(
+                    "CUDA Slurm launcher requires authenticated "
+                    f"POPS_DSL_OPTFLAGS={ROMEO_CUDA_DSL_OPTFLAGS!r}"
+                )
         missing = [name for name in _SLURM_REQUIRED_ENVIRONMENT if not environment.get(name)]
         if missing:
             raise CampaignError(
@@ -86,6 +91,8 @@ def _command(
         forwarded = _SLURM_REQUIRED_ENVIRONMENT + tuple(
             name for name in _SLURM_OPTIONAL_ENVIRONMENT if environment.get(name)
         )
+        if route_uses_gpu(campaign["route"]):
+            forwarded += ("POPS_DSL_OPTFLAGS",)
         command.extend(["/usr/bin/env", *(f"{name}={environment[name]}" for name in forwarded)])
     elif point["nodes"] != 1 or point["ranks"] != 1:
         raise CampaignError("local launcher supports only one node and one rank")
