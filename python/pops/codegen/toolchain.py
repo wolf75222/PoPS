@@ -314,6 +314,30 @@ def native_compile_environment(environment: Any = None) -> dict[str, str]:
     return result
 
 
+_COMPILER_DIAGNOSTIC_BUDGET = 8000
+
+
+def _format_compiler_output(output: str | bytes, *, budget: int = _COMPILER_DIAGNOSTIC_BUDGET) -> str:
+    """Return a bounded compiler diagnostic while retaining its terminal failure.
+
+    CUDA warning floods often place the actionable NVCC or linker error at the end of stderr.  Keep
+    both ends of a long diagnostic and make the omitted middle explicit; callers may pass already
+    decoded text or raw compiler bytes.
+    """
+    text = output.decode(errors="replace") if isinstance(output, bytes) else output
+    if len(text) <= budget:
+        return text
+    head_size = budget // 2
+    omitted = 0
+    for _ in range(2):
+        marker = "\n... [%d compiler-output characters omitted] ...\n" % omitted
+        tail_size = budget - head_size - len(marker)
+        omitted = len(text) - head_size - tail_size
+    marker = "\n... [%d compiler-output characters omitted] ...\n" % omitted
+    tail_size = budget - head_size - len(marker)
+    return text[:head_size] + marker + text[-tail_size:]
+
+
 def _run_compile(cmd: Any, what: Any) -> None:
     """Run the compilation command @p cmd CAPTURING stderr : on failure, raises a
     SELF-CONTAINED RuntimeError (command + compiler output + remedies) instead of the raw
@@ -331,7 +355,7 @@ def _run_compile(cmd: Any, what: Any) -> None:
             "Compiler output:\n%s\n"
             "Hints: `python -c \"import pops; pops.doctor()\"` diagnoses the environment "
             "(compiler/standard/headers); POPS_CXX forces a specific compiler."
-            % (what, r.returncode, " ".join(cmd), err[:4000] or "(empty)"))
+            % (what, r.returncode, " ".join(cmd), _format_compiler_output(err) or "(empty)"))
 
 
 _probe_cache = {}  # (cc, std) -> effective std: avoids re-probing repeatedly (N compiled models)
