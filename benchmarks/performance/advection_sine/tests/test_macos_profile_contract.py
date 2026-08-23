@@ -336,7 +336,7 @@ class MacosProfileContractTests(unittest.TestCase):
             source_root, source = _source_export(root)
             native = _provenance({"argv": ["fixture"], "sha256": "0" * 64, "output_dir": "x"}, source, source_root)["native"]
             receipt = {
-                "schema": "pops.performance.advection-sine.build-receipt.v4",
+                "schema": "pops.performance.advection-sine.build-receipt.v3",
                 "source": {"tree_sha256": source["tree_sha256"]},
                 "campaign": {"id": "romeo_x64_openmp_strong_3d"},
                 "native_import": {

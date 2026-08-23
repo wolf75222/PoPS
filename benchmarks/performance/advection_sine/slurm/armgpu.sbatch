@@ -34,16 +34,6 @@ if [[ "${PERF_HOME}" != /* ]] || [[ ! -d "${PERF_HOME}" ]]; then
   exit 3
 fi
 
-# CICC has crashed compiling the real public Python DSL loader at -O3. Keep
-# this ROMEO CUDA policy explicit, reproducible, and fail-closed: the wrapper
-# never accepts a submission-side override with different semantics.
-readonly POPS_CUDA_DSL_OPTFLAGS='-O2 -DNDEBUG'
-if [[ -n "${POPS_DSL_OPTFLAGS:-}" && "${POPS_DSL_OPTFLAGS}" != "${POPS_CUDA_DSL_OPTFLAGS}" ]]; then
-  echo "armgpu requires POPS_DSL_OPTFLAGS='-O2 -DNDEBUG'" >&2
-  exit 3
-fi
-export POPS_DSL_OPTFLAGS="${POPS_CUDA_DSL_OPTFLAGS}"
-
 # The explicit Slurm allowlist does not inherit shell functions or PATH from
 # the login node.  Bootstrap only ROMEO's audited Spack installation from a
 # platform constant, after setting the smallest system-tool PATH required by
@@ -242,7 +232,6 @@ allowed = (
     "SLURM_NTASKS", "SLURM_CPUS_PER_TASK", "SLURM_GPUS_ON_NODE", "SLURM_GPUS_PER_TASK",
     "SLURM_CPU_BIND", "SLURM_CPU_BIND_LIST", "SLURM_GPU_BIND", "CUDA_VISIBLE_DEVICES",
     "OMP_PROC_BIND", "OMP_PLACES", "OMP_DYNAMIC", "OMP_NUM_THREADS",
-    "POPS_DSL_OPTFLAGS",
 )
 values = {}
 for name in allowed:
@@ -377,7 +366,7 @@ srun --exclusive --kill-on-bad-exit=1 --nodes=1 --ntasks=1 --cpus-per-task=1 --g
   PYTHONPATH="${WORK_ROOT}/build/python:${WORK_ROOT}/source${PYTHON_DEPENDENCY_PATH:+:${PYTHON_DEPENDENCY_PATH}}" \
   POPS_NATIVE_VARIANTS_ROOT="${POPS_NATIVE_VARIANTS_ROOT}" \
   POPS_INCLUDE="${POPS_INCLUDE}" POPS_CACHE_DIR="${POPS_CACHE_DIR}" \
-  XDG_CACHE_HOME="${XDG_CACHE_HOME}" POPS_DSL_OPTFLAGS="${POPS_DSL_OPTFLAGS}" "${JOB_PYTHON}" -B \
+  XDG_CACHE_HOME="${XDG_CACHE_HOME}" "${JOB_PYTHON}" -B \
   "${HARNESS}/prepare_export.py" build-receipt \
   --source "${WORK_ROOT}/source" \
   --build "${WORK_ROOT}/build" \

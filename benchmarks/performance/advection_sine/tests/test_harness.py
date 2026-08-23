@@ -18,14 +18,12 @@ from collect_results import (  # noqa: E402
     _expected_dt,
     _is_openmpi_launcher_receipt,
     _read_rank_rows,
-    _require_cuda_loader_policy,
     _require_receipts,
     _validate_point,
 )
 from common import (  # noqa: E402
     CANONICAL_CAMPAIGN_FILENAMES,
     CampaignError,
-    ROMEO_CUDA_DSL_OPTFLAGS,
     load_campaign,
     slurm_arguments,
     validate_canonical_campaign_inventory,
@@ -197,7 +195,7 @@ class PublicPythonHarnessTests(unittest.TestCase):
             manifest_path = raw / "source.manifest.json"
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             build = {
-                "schema": "pops.performance.advection-sine.build-receipt.v4",
+                "schema": "pops.performance.advection-sine.build-receipt.v3",
                 "workload": "public-python",
                 "build_type": "Release",
                 "source": {
@@ -502,61 +500,6 @@ class PublicPythonHarnessTests(unittest.TestCase):
             self.assertIn('POPS_CACHE_DIR="${POPS_CACHE_DIR}"', wrapper)
             self.assertIn('XDG_CACHE_HOME="${XDG_CACHE_HOME}"', wrapper)
 
-    def test_romeo_cuda_loader_optimization_policy_is_explicit_and_recorded(self) -> None:
-        wrapper = (HARNESS / "slurm" / "armgpu.sbatch").read_text(encoding="utf-8")
-        self.assertIn("readonly POPS_CUDA_DSL_OPTFLAGS='-O2 -DNDEBUG'", wrapper)
-        self.assertIn('export POPS_DSL_OPTFLAGS="${POPS_CUDA_DSL_OPTFLAGS}"', wrapper)
-        self.assertIn('POPS_DSL_OPTFLAGS="${POPS_DSL_OPTFLAGS}"', wrapper)
-        self.assertIn('"POPS_DSL_OPTFLAGS",', wrapper)
-        self.assertIn(
-            "POPS_DSL_OPTFLAGS='-O2 -DNDEBUG'",
-            (HARNESS / "README.md").read_text(encoding="utf-8"),
-        )
-
-    def test_cuda_slurm_command_requires_and_forwards_the_loader_policy(self) -> None:
-        campaign = load_campaign(HARNESS / "campaigns" / "cuda_reference.json")
-        point = campaign["points"][0]
-        environment = {
-            "PATH": "/authenticated/toolchain/bin:/usr/bin:/bin",
-            "PYTHONPATH": "/authenticated/build:/authenticated/source",
-            "POPS_NATIVE_VARIANTS_ROOT": "/authenticated/native",
-            "POPS_INCLUDE": "/authenticated/source/include",
-            "POPS_CACHE_DIR": "/allocation/pops-cache",
-            "XDG_CACHE_HOME": "/allocation/xdg-cache",
-            "OMP_NUM_THREADS": "1",
-            "KOKKOS_NUM_THREADS": "1",
-            "OMP_PROC_BIND": "spread",
-            "OMP_PLACES": "cores",
-            "OMP_DYNAMIC": "false",
-            "POPS_DSL_OPTFLAGS": ROMEO_CUDA_DSL_OPTFLAGS,
-        }
-        command = _command(
-            campaign,
-            point,
-            Path("/authenticated/python"),
-            Path("/allocation/results"),
-            "slurm",
-            environment,
-        )
-        self.assertIn(f"POPS_DSL_OPTFLAGS={ROMEO_CUDA_DSL_OPTFLAGS}", command)
-        environment["POPS_DSL_OPTFLAGS"] = "-O3"
-        with self.assertRaisesRegex(CampaignError, "POPS_DSL_OPTFLAGS"):
-            _command(
-                campaign,
-                point,
-                Path("/authenticated/python"),
-                Path("/allocation/results"),
-                "slurm",
-                environment,
-            )
-
-    def test_collector_refuses_cuda_receipts_without_the_loader_policy(self) -> None:
-        _require_cuda_loader_policy(
-            {"native_loader": {"pops_dsl_optflags": ROMEO_CUDA_DSL_OPTFLAGS}}
-        )
-        with self.assertRaisesRegex(CampaignError, "DSL optimization policy"):
-            _require_cuda_loader_policy({"native_loader": {"pops_dsl_optflags": "-O3"}})
-
     def test_measured_slurm_steps_receive_an_explicit_runtime_environment(self) -> None:
         campaign = load_campaign(HARNESS / "campaigns" / "serial_reference.json")
         point = campaign["points"][0]
@@ -749,7 +692,7 @@ class PublicPythonHarnessTests(unittest.TestCase):
             tree = manifest["tree_sha256"]
             (raw / "source.manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
             build = {
-                "schema": "pops.performance.advection-sine.build-receipt.v4",
+                "schema": "pops.performance.advection-sine.build-receipt.v3",
                 "source": {"tree_sha256": tree},
                 "campaign": {"id": "serial_reference"},
             }

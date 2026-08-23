@@ -17,7 +17,6 @@ from typing import Any
 
 from common import (
     CampaignError,
-    ROMEO_CUDA_DSL_OPTFLAGS,
     ROUTES,
     SUMMARY_SCHEMA,
     expected_backend,
@@ -26,7 +25,7 @@ from common import (
 )
 
 MEASUREMENT_SCHEMA = "pops.performance.advection-sine.measurement.v3"
-BUILD_RECEIPT_SCHEMA = "pops.performance.advection-sine.build-receipt.v4"
+BUILD_RECEIPT_SCHEMA = "pops.performance.advection-sine.build-receipt.v3"
 LAUNCH_SCHEMA = "pops.performance.advection-sine.launch.v1"
 
 
@@ -122,12 +121,6 @@ def _expected_kokkos_configuration(route: str) -> dict[str, str]:
     else:
         raise CampaignError(f"unsupported Kokkos route {route}")
     return expected
-
-
-def _require_cuda_loader_policy(cuda: dict[str, Any]) -> None:
-    """Reject CUDA evidence not built with the canonical ROMEO DSL policy."""
-    if cuda.get("native_loader") != {"pops_dsl_optflags": ROMEO_CUDA_DSL_OPTFLAGS}:
-        raise CampaignError("CUDA build receipt lacks the canonical DSL optimization policy")
 
 
 def _finite(value: Any, label: str, *, positive: bool = False) -> float:
@@ -325,8 +318,6 @@ def _require_receipts(
         or not isinstance(cuda["compiler"].get("version"), str)
     ):
         raise CampaignError("CUDA route lacks compiler provenance")
-    if cuda["enabled"]:
-        _require_cuda_loader_policy(cuda)
     return source, build
 
 

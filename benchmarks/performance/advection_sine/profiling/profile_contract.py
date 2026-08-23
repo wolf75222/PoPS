@@ -292,7 +292,7 @@ def exported_build_receipt(
     )
     if (
         not isinstance(receipt, dict)
-        or receipt.get("schema") != "pops.performance.advection-sine.build-receipt.v4"
+        or receipt.get("schema") != "pops.performance.advection-sine.build-receipt.v3"
         or not isinstance(build_source, dict)
         or build_source.get("tree_sha256") != source.get("tree_sha256")
         or not isinstance(build_campaign, dict)
