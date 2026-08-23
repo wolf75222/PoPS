@@ -211,6 +211,15 @@ class PublicPythonHarnessTests(unittest.TestCase):
             self.assertIn("-DPOPS_USE_HDF5=OFF", wrapper)
             self.assertNotIn('-DPOPS_USE_HDF5="${MPI_ENABLED}"', wrapper)
 
+    def test_romeo_tree_verification_cannot_create_untracked_bytecode(self) -> None:
+        """The verifier must not mutate the authenticated extracted source tree."""
+        invocation = (
+            '"${JOB_PYTHON}" -B "${HARNESS}/prepare_export.py" verify-tree'
+        )
+        for name in ("x64cpu.sbatch", "armgpu.sbatch"):
+            wrapper = (HARNESS / "slurm" / name).read_text(encoding="utf-8")
+            self.assertIn(invocation, wrapper)
+
     def test_romeo_job_python_dependency_contract_is_fail_closed(self) -> None:
         """Batch jobs must retain their activated NumPy/pybind11 path."""
         platform_contracts = {

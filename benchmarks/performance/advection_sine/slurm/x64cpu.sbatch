@@ -273,7 +273,9 @@ export POPS_INCLUDE="${WORK_ROOT}/source/include"
 export POPS_CACHE_DIR="${WORK_ROOT}/pops-cache"
 export XDG_CACHE_HOME="${WORK_ROOT}/xdg-cache"
 test -d "${POPS_INCLUDE}"
-"${JOB_PYTHON}" "${HARNESS}/prepare_export.py" verify-tree \
+# The verifier imports helpers from this extracted tree.  ``-B`` is
+# load-bearing: authentication must not create and then reject a pycache file.
+"${JOB_PYTHON}" -B "${HARNESS}/prepare_export.py" verify-tree \
   --source "${WORK_ROOT}/source" --manifest "${MANIFEST}" \
   --expect-base-sha "${SOURCE_SHA}" --expect-dirty "${SOURCE_DIRTY}" \
   --expect-tree-sha256 "${TREE_SHA256}" >/dev/null
