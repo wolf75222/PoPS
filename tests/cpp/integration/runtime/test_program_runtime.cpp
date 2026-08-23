@@ -2182,39 +2182,6 @@ TEST(ProgramRuntime, GeneratedUniformBlockSuppliesProjectionRoutesOnlyForCapable
   EXPECT_FALSE(static_cast<bool>(incapable.closures.cut_cell.project));
 }
 
-TEST(ProgramRuntime, CanonicalAffineScalarAdvectionPreservesDslOutputAndSealedRoute) {
-#if defined(POPS_HAS_KOKKOS)
-  ensure_kokkos();
-#endif
-  System<kNativeDimension> system(unit_domain_config<kNativeDimension>(4));
-  RealVector<kNativeDimension> velocity{};
-  for (int axis = 0; axis < kNativeDimension; ++axis)
-    velocity[axis] = Real(axis + 1);
-  const VariableSet conservative_variables{
-      VariableKind::Conservative, {"q"}, 1, {VariableRole::Custom}, {"q"}};
-  const VariableSet primitive_variables{
-      VariableKind::Primitive, {"q"}, 1, {VariableRole::Custom}, {"q"}};
-
-  const auto prepared = prepare_canonical_affine_scalar_advection_system_block<kNativeDimension>(
-      system, "affine_scalar", velocity, conservative_variables, primitive_variables, "vanleer",
-      "rusanov", "conservative", "explicit", /*gamma=*/1.4, /*substeps=*/1,
-      /*evolve=*/true, /*stride=*/1);
-  ASSERT_EQ(prepared.ncomp, 1);
-  ASSERT_EQ(prepared.provider_components, 0);
-  ASSERT_EQ(prepared.conservative_variables.names, std::vector<std::string>({"q"}));
-  ASSERT_EQ(prepared.primitive_variables.names, std::vector<std::string>({"q"}));
-  ASSERT_EQ(prepared.conservative_variables.roles[0], VariableRole::Custom);
-  ASSERT_EQ(prepared.conservative_variables.user_roles[0], "q");
-  ASSERT_TRUE(static_cast<bool>(prepared.closures.rhs_into));
-  ASSERT_TRUE(static_cast<bool>(prepared.maximum_speed));
-
-  EXPECT_THROW((prepare_canonical_affine_scalar_advection_system_block<kNativeDimension>(
-                   system, "affine_scalar", velocity, conservative_variables, primitive_variables,
-                   "minmod", "rusanov", "conservative", "explicit", /*gamma=*/1.4,
-                   /*substeps=*/1, /*evolve=*/true, /*stride=*/1)),
-               std::invalid_argument);
-}
-
 TEST(ProgramRuntime, GeneratedUniformProjectionPreservesEmbeddedBoundaryInactiveCells) {
 #if defined(POPS_HAS_KOKKOS)
   ensure_kokkos();

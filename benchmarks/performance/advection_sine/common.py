@@ -16,9 +16,9 @@ RANK_SAMPLE_SCHEMA = "pops.performance.advection-sine.rank-sample.v3"
 POINT_SAMPLE_SCHEMA = "pops.performance.advection-sine.point-sample.v2"
 SUMMARY_SCHEMA = "pops.performance.advection-sine.summary.v2"
 
-# The canonical affine-scalar loader avoids the NVCC 12.6/CICC crash observed
-# for the former generated CompositeModel route at every level from -O3 through
-# -O0. Keep the performance loader at the ordinary Release optimization.
+# CUDA loader compilation is part of the authenticated campaign contract. Keep
+# the ordinary production optimization; lower-optimization diagnostics remain
+# failures and never replace a complete campaign.
 ROMEO_CUDA_DSL_OPTFLAGS = "-O3 -DNDEBUG"
 
 # The performance suite is deliberately a closed scientific inventory.  These

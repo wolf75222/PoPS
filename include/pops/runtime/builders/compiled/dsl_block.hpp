@@ -5,7 +5,6 @@
 
 #include <pops/core/model/physical_model.hpp>
 #include <pops/mesh/topology/boundary_topology.hpp>
-#include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/runtime/builders/compiled/generated_system_block.hpp>
 #include <pops/runtime/system.hpp>
@@ -175,117 +174,6 @@ PreparedSystemBlock<Dim> prepare_compiled_system_block(
       name, std::move(model), limiter, riemann, reconstruction, time, gamma, substeps, evolve,
       stride, positivity_floor, installer.geometry(), installer.periodicity(),
       std::move(provider_storage), std::move(provider_plan), newton, newton_diagnostics);
-}
-
-/// Materialize the fixed scalar-advection operator used by the fail-closed DSL fast path.
-///
-/// The Python emitter reaches this factory only after structurally proving an authored model has one
-/// scalar, identity primitive recovery, literal ``F_axis = a_axis * q`` fluxes, matching constant
-/// speeds, and the sealed conservative/VanLeer/Rusanov route.  The factory nevertheless validates
-/// the wire route and all host options: a generated package remains untrusted at this ABI boundary.
-/// Crucially, this constructs ``nd::ScalarAdvection`` directly rather than asking the generated
-/// ``CompositeModel`` to prepare a Cartesian operator.
-template <int Dim>
-PreparedSystemBlock<Dim> prepare_canonical_affine_scalar_advection_system_block(
-    runtime::system::PreparedNativeBlockInstaller<Dim>& installer, const std::string& name,
-    RealVector<Dim> velocity, VariableSet conservative_variables, VariableSet primitive_variables,
-    const std::string& limiter, const std::string& riemann, const std::string& reconstruction,
-    const std::string& time, double gamma, int substeps, bool evolve, int stride,
-    double positivity_floor = 0.0, NewtonOptions newton = {}, bool newton_diagnostics = false) {
-  static_assert(Dim >= 1 && Dim <= 3);
-  if (name.empty() || conservative_variables.kind != VariableKind::Conservative ||
-      primitive_variables.kind != VariableKind::Primitive || conservative_variables.size != 1 ||
-      primitive_variables.size != 1 || conservative_variables.names.size() != 1 ||
-      primitive_variables.names.size() != 1 || conservative_variables.names[0].empty() ||
-      primitive_variables.names[0] != conservative_variables.names[0])
-    throw std::invalid_argument(
-        "canonical affine scalar-advection System block requires one matching scalar output");
-  if (limiter != "vanleer" || riemann != "rusanov" || reconstruction != "conservative")
-    throw std::invalid_argument(
-        "canonical affine scalar-advection System block requires sealed "
-        "conservative/VanLeer/Rusanov routes");
-  if (!std::isfinite(gamma) || !(gamma > 0.0))
-    throw std::invalid_argument("compiled System block gamma must be finite and positive");
-  if (substeps < 1 || stride < 1)
-    throw std::invalid_argument("compiled System block substeps and stride must be positive");
-  validate_newton_options(newton, "compiled System block");
-
-  CompiledSystemBlockRoutes routes{limiter, riemann, reconstruction, time,
-                                   static_cast<Real>(positivity_floor)};
-  compiled_system_detail::validate_routes(routes);
-  using Model = nd::ScalarAdvection<Dim>;
-  PreparedSystemBlock<Dim> prepared =
-      prepare_generated_system_block_exact<nd::ReconstructionVariables::Conservative>(
-          CompiledSystemBlockPreparation<Dim, Model>{
-              name, Model::prepare(velocity), std::move(routes), installer.geometry(),
-              BoundaryTopology<Dim>::axis_periodic(installer.periodicity()), nullptr, nullptr},
-          VanLeer{}, RusanovFlux{}, "vanleer", "rusanov", "conservative");
-
-  // The canonical law owns the numerical state layout, while the DSL-owned descriptors remain
-  // visible in output, diagnostics and the exact native-package contract.
-  prepared.name = name;
-  prepared.ncomp = 1;
-  prepared.conservative_variables = std::move(conservative_variables);
-  prepared.primitive_variables = std::move(primitive_variables);
-  prepared.gamma = gamma;
-  prepared.substeps = substeps;
-  prepared.evolve = evolve;
-  prepared.stride = stride;
-  prepared.newton = newton;
-  prepared.newton_diagnostics = newton_diagnostics;
-  return prepared;
-}
-
-/// In-process counterpart of the native-package factory, retained for C++ parity tests and direct
-/// embedding.  It shares the same fixed law and validation contract; only the geometry authority
-/// differs from the package-capability overload above.
-template <int Dim>
-PreparedSystemBlock<Dim> prepare_canonical_affine_scalar_advection_system_block(
-    System<Dim>& system, const std::string& name, RealVector<Dim> velocity,
-    VariableSet conservative_variables, VariableSet primitive_variables, const std::string& limiter,
-    const std::string& riemann, const std::string& reconstruction, const std::string& time,
-    double gamma, int substeps, bool evolve, int stride, double positivity_floor = 0.0,
-    NewtonOptions newton = {}, bool newton_diagnostics = false) {
-  static_assert(Dim >= 1 && Dim <= 3);
-  if (name.empty() || conservative_variables.kind != VariableKind::Conservative ||
-      primitive_variables.kind != VariableKind::Primitive || conservative_variables.size != 1 ||
-      primitive_variables.size != 1 || conservative_variables.names.size() != 1 ||
-      primitive_variables.names.size() != 1 || conservative_variables.names[0].empty() ||
-      primitive_variables.names[0] != conservative_variables.names[0])
-    throw std::invalid_argument(
-        "canonical affine scalar-advection System block requires one matching scalar output");
-  if (limiter != "vanleer" || riemann != "rusanov" || reconstruction != "conservative")
-    throw std::invalid_argument(
-        "canonical affine scalar-advection System block requires sealed "
-        "conservative/VanLeer/Rusanov routes");
-  if (!std::isfinite(gamma) || !(gamma > 0.0))
-    throw std::invalid_argument("compiled System block gamma must be finite and positive");
-  if (substeps < 1 || stride < 1)
-    throw std::invalid_argument("compiled System block substeps and stride must be positive");
-  validate_newton_options(newton, "compiled System block");
-
-  CompiledSystemBlockRoutes routes{limiter, riemann, reconstruction, time,
-                                   static_cast<Real>(positivity_floor)};
-  compiled_system_detail::validate_routes(routes);
-  using Model = nd::ScalarAdvection<Dim>;
-  PreparedSystemBlock<Dim> prepared =
-      prepare_generated_system_block_exact<nd::ReconstructionVariables::Conservative>(
-          CompiledSystemBlockPreparation<Dim, Model>{
-              name, Model::prepare(velocity), std::move(routes), system.prepared_block_geometry(),
-              BoundaryTopology<Dim>::axis_periodic(system.prepared_block_periodicity()), nullptr,
-              nullptr},
-          VanLeer{}, RusanovFlux{}, "vanleer", "rusanov", "conservative");
-  prepared.name = name;
-  prepared.ncomp = 1;
-  prepared.conservative_variables = std::move(conservative_variables);
-  prepared.primitive_variables = std::move(primitive_variables);
-  prepared.gamma = gamma;
-  prepared.substeps = substeps;
-  prepared.evolve = evolve;
-  prepared.stride = stride;
-  prepared.newton = newton;
-  prepared.newton_diagnostics = newton_diagnostics;
-  return prepared;
 }
 
 /// Prepare through the direct facade surface retained for in-process and test-owned Systems.

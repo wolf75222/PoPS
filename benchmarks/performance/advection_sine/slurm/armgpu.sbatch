@@ -34,9 +34,9 @@ if [[ "${PERF_HOME}" != /* ]] || [[ ! -d "${PERF_HOME}" ]]; then
   exit 3
 fi
 
-# The canonical affine-scalar loader avoids the CICC crash observed for the
-# former generated CompositeModel route from -O3 through -O0. Keep the ordinary
-# Release optimization explicit, reproducible, and fail-closed.
+# Loader optimization is part of the authenticated campaign policy. Keep the
+# ordinary Release setting explicit, reproducible, and fail-closed; diagnostics
+# at lower optimization remain failures.
 readonly POPS_CUDA_DSL_OPTFLAGS='-O3 -DNDEBUG'
 if [[ -n "${POPS_DSL_OPTFLAGS:-}" && "${POPS_DSL_OPTFLAGS}" != "${POPS_CUDA_DSL_OPTFLAGS}" ]]; then
   echo "armgpu requires POPS_DSL_OPTFLAGS='-O3 -DNDEBUG'" >&2
