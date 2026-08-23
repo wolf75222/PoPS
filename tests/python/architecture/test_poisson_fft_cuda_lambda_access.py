@@ -12,6 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 FFT_HEADER = ROOT / "include/pops/numerics/elliptic/poisson/poisson_fft.hpp"
+FFT_SOLVER_HEADER = ROOT / "include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp"
 FFT_MULTIFAB_HEADER = ROOT / "include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp"
 GEOMETRIC_MG_HEADER = ROOT / "include/pops/numerics/elliptic/mg/geometric_mg.hpp"
 COMPOSITE_FAC_HEADER = ROOT / "include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp"
@@ -121,10 +122,27 @@ def test_multifab_and_multigrid_device_functors_replace_private_parents() -> Non
     _contains_no_device_lambda(composite_fac, "  static void copy_grown_", "  void stage_iterate_")
 
 
+def test_fft_solver_named_device_functors_replace_local_for_each_lambdas() -> None:
+    source = FFT_SOLVER_HEADER.read_text()
+    solve = _braced_definition(source, "  SolveReport solve()")
+
+    for struct_name in ("PackSolverSlabKernel", "UnpackSolverSlabKernel"):
+        _public_device_operator(source, struct_name)
+        assert f"fft_solver_detail::{struct_name}<" in solve
+    assert "for_each_cell(valid, [=" not in solve
+    assert "[=](const CellIndex<Dim>& cell)" not in solve
+
+
 def test_system_frequency_functor_removes_device_lambda_from_private_member() -> None:
     source = SYSTEM_INSTALL_SOURCE.read_text()
+    struct_offset = source.index("struct CoupledSourceMaximumFrequency")
+    template_offset = source.rfind("template", 0, struct_offset)
+    struct = _braced_definition(source, "struct CoupledSourceMaximumFrequency")
 
     _public_frequency_operator_contains_device_lambda(source)
+    assert source[template_offset:struct_offset] == "template <int Dim>\n"
+    assert "CoupledSourceMaximumFrequency<Dim>{" in source
+    assert "std::function<const MultiFab<Dim>&(int)> state_for_block;" in struct
     _contains_no_device_lambda(
         source,
         "void System<Dim>::add_coupled_source_prepared_",

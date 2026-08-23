@@ -169,19 +169,24 @@ std::size_t storage_offset(const Index<Dim>& index, const Box<Dim>& storage) {
   return offset;
 }
 
+struct CoupledSourceInputReference {
+  int block = -1;
+  int component = -1;
+};
+
 // Kept outside System because NVCC requires the lexical parent of the POPS_HD reduction lambda to
-// be public.  The provider retains the same borrowed Impl pointer and is invoked only by the
-// installed host-side std::function, so this does not introduce a new System publication route.
-template <int Dim, class InputReferences, class StateProvider>
+// be public.  The provider retains the same borrowed Impl pointer in a fixed host-only
+// std::function, so no local lambda type becomes a template argument of the device parent.
+template <int Dim>
 struct CoupledSourceMaximumFrequency {
  public:
-  InputReferences inputs;
+  std::vector<CoupledSourceInputReference> inputs;
   std::vector<Real> constants;
   CsProgram frequency_program{};
   int input_count = 0;
   int constant_count = 0;
   const ExecutionLane* lane = nullptr;
-  StateProvider state_for_block;
+  std::function<const MultiFab<Dim>&(int)> state_for_block;
 
   Real operator()() const {
     if (input_count == 0)
@@ -213,11 +218,12 @@ struct CoupledSourceMaximumFrequency {
   }
 };
 
-template <int Dim, class InputReferences, class StateProvider>
+template <int Dim>
 std::function<Real()> make_coupled_source_maximum_frequency(
-    InputReferences inputs, std::vector<Real> constants, CsProgram frequency_program,
-    int input_count, int constant_count, const ExecutionLane& lane, StateProvider state_for_block) {
-  return CoupledSourceMaximumFrequency<Dim, InputReferences, StateProvider>{
+    std::vector<CoupledSourceInputReference> inputs, std::vector<Real> constants,
+    CsProgram frequency_program, int input_count, int constant_count, const ExecutionLane& lane,
+    std::function<const MultiFab<Dim>&(int)> state_for_block) {
+  return CoupledSourceMaximumFrequency<Dim>{
       std::move(inputs), std::move(constants), frequency_program, input_count, constant_count,
       &lane, std::move(state_for_block)};
 }
@@ -2499,17 +2505,13 @@ void System<Dim>::add_coupled_source_prepared_(const CoupledSourceProgram& descr
                                                double frequency, const std::string& label,
                                                CouplingOperatorView inspect) {
   const ExecutionLane& lane = prepared_boundary_execution_lane();
-  struct InputRef {
-    int block = -1;
-    int component = -1;
-  };
   struct OutputRef {
     int block = -1;
     int component = -1;
     CsProgram program{};
   };
 
-  std::vector<InputRef> inputs;
+  std::vector<CoupledSourceInputReference> inputs;
   std::vector<OutputRef> outputs;
   std::vector<Real> constants;
   CsProgram frequency_program{};
@@ -2533,7 +2535,8 @@ void System<Dim>::add_coupled_source_prepared_(const CoupledSourceProgram& descr
         description.out_blocks.size() > static_cast<std::size_t>(kCsMaxTerms))
       throw std::length_error("System coupled source exceeds its device register/term capacity");
 
-    const auto resolve = [&](const std::string& block_name, const std::string& token) -> InputRef {
+    const auto resolve = [&](const std::string& block_name,
+                             const std::string& token) -> CoupledSourceInputReference {
       const int block = p_->blocks_.index(block_name);
       const VariableSet& variables = p_->sp[static_cast<std::size_t>(block)].cons_vars;
       validate_variable_semantics<Dim>(variables, "System::add_coupled_source", block_name);
@@ -2576,7 +2579,8 @@ void System<Dim>::add_coupled_source_prepared_(const CoupledSourceProgram& descr
     const int register_count =
         static_cast<int>(description.in_blocks.size() + description.consts.size());
     for (std::size_t term = 0; term < description.out_blocks.size(); ++term) {
-      const InputRef target = resolve(description.out_blocks[term], description.out_roles[term]);
+      const CoupledSourceInputReference target =
+          resolve(description.out_blocks[term], description.out_roles[term]);
       const int length = description.prog_lens[term];
       if (length < 0 || length > kCsMaxProg || offset > description.prog_ops.size() ||
           static_cast<std::size_t>(length) > description.prog_ops.size() - offset)
@@ -2677,7 +2681,7 @@ void System<Dim>::add_coupled_source_prepared_(const CoupledSourceProgram& descr
                        Real dt, const std::vector<MultiFab<Dim>*>& states) {
     const int reference_block = input_count != 0 ? inputs.front().block : outputs.front().block;
     MultiFab<Dim>& reference = *states[static_cast<std::size_t>(reference_block)];
-    for (const InputRef& input : inputs)
+    for (const CoupledSourceInputReference& input : inputs)
       if (states[static_cast<std::size_t>(input.block)]->local_global_indices() !=
           reference.local_global_indices())
         throw std::invalid_argument("System coupled-source input layouts are not co-located");
@@ -2692,7 +2696,7 @@ void System<Dim>::add_coupled_source_prepared_(const CoupledSourceProgram& descr
       kernel.n_const = constant_count;
       kernel.n_terms = output_count;
       for (int input = 0; input < input_count; ++input) {
-        const InputRef& ref = inputs[static_cast<std::size_t>(input)];
+        const CoupledSourceInputReference& ref = inputs[static_cast<std::size_t>(input)];
         const Fab<Dim>& fab = states[static_cast<std::size_t>(ref.block)]->fab(local);
         kernel.in[input] = fab.view();
         kernel.in_comp[input] = ref.component;

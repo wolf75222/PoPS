@@ -156,6 +156,32 @@ std::array<double, Dim> fft_lengths(const Geometry<Dim>& geometry) {
   return lengths;
 }
 
+template <int Dim, class RhsView, class FftView>
+struct PackSolverSlabKernel {
+ public:
+  Box<Dim> valid;
+  RhsView rhs;
+  FftView fft_rhs;
+
+  POPS_HD void operator()(const CellIndex<Dim>& cell) const {
+    const std::size_t ordinal = local_slab_ordinal(valid, cell);
+    fft_rhs[ordinal] = typename PoissonFFT<Dim>::complex_type(-rhs(cell, 0), Real(0));
+  }
+};
+
+template <int Dim, class FftView, class TrialView>
+struct UnpackSolverSlabKernel {
+ public:
+  Box<Dim> valid;
+  FftView fft_phi;
+  TrialView trial;
+
+  POPS_HD void operator()(const CellIndex<Dim>& cell) const {
+    const std::size_t ordinal = local_slab_ordinal(valid, cell);
+    trial(cell, 0) = fft_phi[ordinal].real();
+  }
+};
+
 }  // namespace fft_solver_detail
 
 /// One exact Cartesian slab-distributed wrapper around the PoPS device FFT engine.
@@ -293,11 +319,10 @@ class PoissonFFTSolver {
     const auto fft_phi = fft_phi_;
     if (!execute_solve_stage_collectively_(
             [&] {
-              for_each_cell(valid, [=](const CellIndex<Dim>& cell) {
-                const std::size_t ordinal = fft_solver_detail::local_slab_ordinal(valid, cell);
-                fft_rhs[ordinal] =
-                    typename PoissonFFT<Dim>::complex_type(-rhs_view(cell, 0), Real(0));
-              });
+              for_each_cell(valid,
+                            fft_solver_detail::PackSolverSlabKernel<Dim, decltype(rhs_view),
+                                                                      decltype(fft_rhs)>{
+                                valid, rhs_view, fft_rhs});
             },
             report, "poisson_fft_rhs_pack_failed_collectively"))
       return last_report_;
@@ -306,10 +331,10 @@ class PoissonFFTSolver {
       return last_report_;
     if (!execute_solve_stage_collectively_(
             [&] {
-              for_each_cell(valid, [=](const CellIndex<Dim>& cell) {
-                const std::size_t ordinal = fft_solver_detail::local_slab_ordinal(valid, cell);
-                trial_view(cell, 0) = fft_phi[ordinal].real();
-              });
+              for_each_cell(valid,
+                            fft_solver_detail::UnpackSolverSlabKernel<Dim, decltype(fft_phi),
+                                                                        decltype(trial_view)>{
+                                valid, fft_phi, trial_view});
             },
             report, "poisson_fft_solution_unpack_failed_collectively"))
       return last_report_;
