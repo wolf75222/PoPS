@@ -320,6 +320,12 @@ class PoissonFFT {
 #endif
   }
 
+ public:
+  // NVCC requires the lexical parent of a KOKKOS_LAMBDA (__host__ __device__) to be public.
+  // Keep every launch helper below public so the CUDA frontend can instantiate the same device
+  // kernels as the Serial and OpenMP backends.  These underscore-suffixed implementation helpers
+  // are not part of the supported solver interface; only their access changes here.  The plan
+  // state remains private below.
   void local_dft_axis_(int axis, bool inverse) {
     if (try_local_fftw_axis_(axis, inverse))
       return;
@@ -688,6 +694,7 @@ class PoissonFFT {
         });
   }
 
+ private:
   int_array cells_{};
   real_array lengths_{};
   real_array spacing_{};
