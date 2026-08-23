@@ -460,6 +460,14 @@ class PublicPythonHarnessTests(unittest.TestCase):
             self.assertIn("/usr/bin/env PYTHONPATH=", wrapper)
             self.assertNotIn("\n  env PYTHONPATH=", wrapper)
 
+    def test_romeo_srun_passes_the_explicit_build_receipt_environment(self) -> None:
+        """The Slurm step must not rely on the submission export allowlist."""
+        for name in ("x64cpu.sbatch", "armgpu.sbatch"):
+            wrapper = (HARNESS / "slurm" / name).read_text(encoding="utf-8")
+            self.assertIn('POPS_INCLUDE="${POPS_INCLUDE}"', wrapper)
+            self.assertIn('POPS_CACHE_DIR="${POPS_CACHE_DIR}"', wrapper)
+            self.assertIn('XDG_CACHE_HOME="${XDG_CACHE_HOME}"', wrapper)
+
     def test_romeo_job_python_dependency_contract_is_fail_closed(self) -> None:
         """Batch jobs must retain their activated NumPy/pybind11 path."""
         platform_contracts = {
