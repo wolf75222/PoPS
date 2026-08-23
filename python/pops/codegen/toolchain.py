@@ -297,6 +297,9 @@ _NATIVE_COMPILE_ENVIRONMENT_DENYLIST = frozenset({
     # Ambient flags and compiler-driver redirection.
     "CPPFLAGS", "CFLAGS", "CXXFLAGS", "LDFLAGS", "GCC_EXEC_PREFIX", "COMPILER_PATH",
     "DEPENDENCIES_OUTPUT", "SUNPRO_DEPENDENCIES",
+    # NVCC recognizes these as global command-line injection channels. PoPS supplies any required
+    # device-only policy itself after removing ambient values.
+    "NVCC_PREPEND_FLAGS", "NVCC_APPEND_FLAGS",
 })
 
 
@@ -344,7 +347,10 @@ def _run_compile(cmd: Any, what: Any) -> None:
     CalledProcessError whose message contains only the command line (real bug : the user sees
     only a 'returned non-zero exit status 1' drowned in the traceback)."""
     import subprocess
-    r = subprocess.run(cmd, capture_output=True, env=native_compile_environment())
+    environment = native_compile_environment()
+    if cmd:
+        environment.update(_pops_nvcc_wrapper_compile_environment(cmd[0]))
+    r = subprocess.run(cmd, capture_output=True, env=environment)
     if r.returncode != 0:
         err = (r.stderr or b"").decode(errors="replace").strip()
         out = (r.stdout or b"").decode(errors="replace").strip()  # MSVC cl writes errors on STDOUT
@@ -719,20 +725,34 @@ def _pops_nvcc_wrapper_compile_flags(compiler: Any) -> list[str]:
     Generated loaders instantiate PoPS ``POPS_HD`` code that calls constexpr helpers.  NVCC emits
     warning #20013/#20015 for those calls and explicitly recommends relaxed constexpr; without it,
     the warning flood can terminate CICC before the loader is produced. CUDA 12.6 CICC can also
-    crash on one still-large exact loader specialization. ``--split-compile=2`` splits device code
-    into smaller optimization units while bounding the compiler to two threads. NVIDIA documents
-    ``1`` as disabling split compilation, so it is deliberately not used here. This is emitted only
-    on the already authenticated ``nvcc_wrapper`` route.
+    crash on one still-large exact loader specialization. Split compilation is supplied through
+    NVCC_PREPEND_FLAGS below because Kokkos' wrapper otherwise forwards this newer NVCC option to the
+    host compiler. This command-line helper retains only options the wrapper itself recognizes.
     """
     if not _is_nvcc_wrapper(compiler):
         return []
-    return ["--expt-relaxed-constexpr", "--split-compile=2"]
+    return ["--expt-relaxed-constexpr"]
+
+
+def _pops_nvcc_wrapper_compile_environment(compiler: Any) -> dict[str, str]:
+    """Authenticated device-only policy injected into NVCC behind Kokkos' wrapper.
+
+    NVIDIA documents ``NVCC_PREPEND_FLAGS`` as flags prepended to the real nvcc command. The ambient
+    variables are removed by :func:`native_compile_environment`; this exact value is then restored
+    only for nvcc_wrapper. ``1`` disables split compilation, while ``2`` both partitions the device
+    optimizer and bounds its concurrency.
+    """
+    if not _is_nvcc_wrapper(compiler):
+        return {}
+    return {"NVCC_PREPEND_FLAGS": "--split-compile=2"}
 
 
 def native_loader_codegen_key(compiler: Any) -> str:
     """Stable cache token for compiler-specific generated-loader codegen policy."""
     flags = _pops_nvcc_wrapper_compile_flags(compiler)
-    return "pops-native-loader-codegen-v1:" + (",".join(flags) if flags else "host")
+    environment = _pops_nvcc_wrapper_compile_environment(compiler)
+    policy = [*flags, *("%s=%s" % item for item in sorted(environment.items()))]
+    return "pops-native-loader-codegen-v1:" + (",".join(policy) if policy else "host")
 
 
 def native_loader_include_flags(compiler: Any, flags: Any) -> list[Any]:

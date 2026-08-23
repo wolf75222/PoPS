@@ -43,3 +43,23 @@ def test_run_compile_reports_the_terminal_diagnostic_after_warning_flood(monkeyp
 
     assert "Command: nvcc_wrapper model.cpp" in str(failure.value)
     assert "compiler-output characters omitted" in str(failure.value)
+
+
+def test_run_compile_seals_nvcc_wrapper_environment(monkeypatch) -> None:
+    from pops.codegen import toolchain
+
+    observed = {}
+    result = type("CompileResult", (), {"returncode": 0, "stderr": b"", "stdout": b""})()
+
+    def run(*args, **kwargs):
+        observed.update(kwargs["env"])
+        return result
+
+    monkeypatch.setenv("NVCC_PREPEND_FLAGS", "--unsafe-ambient-option")
+    monkeypatch.setenv("NVCC_APPEND_FLAGS", "--unsafe-ambient-option")
+    monkeypatch.setattr("subprocess.run", run)
+
+    toolchain._run_compile(["/opt/kokkos/bin/nvcc_wrapper", "model.cpp"], "native loader")
+
+    assert observed["NVCC_PREPEND_FLAGS"] == "--split-compile=2"
+    assert "NVCC_APPEND_FLAGS" not in observed
