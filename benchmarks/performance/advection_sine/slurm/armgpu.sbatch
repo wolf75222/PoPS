@@ -362,7 +362,8 @@ export POPS_NATIVE_VARIANTS_ROOT="${WORK_ROOT}/build/python/pops/_native"
 # The imported extension is authenticated in a real Slurm GPU step.  This is
 # provenance-only and occurs before every measured public lifecycle.
 srun --exclusive --kill-on-bad-exit=1 --nodes=1 --ntasks=1 --cpus-per-task=1 --gpus-per-task=1 \
-  /usr/bin/env PYTHONPATH="${WORK_ROOT}/build/python:${WORK_ROOT}/source${PYTHON_DEPENDENCY_PATH:+:${PYTHON_DEPENDENCY_PATH}}" \
+  /usr/bin/env PATH="${PATH}" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}" \
+  PYTHONPATH="${WORK_ROOT}/build/python:${WORK_ROOT}/source${PYTHON_DEPENDENCY_PATH:+:${PYTHON_DEPENDENCY_PATH}}" \
   POPS_NATIVE_VARIANTS_ROOT="${POPS_NATIVE_VARIANTS_ROOT}" \
   POPS_INCLUDE="${POPS_INCLUDE}" POPS_CACHE_DIR="${POPS_CACHE_DIR}" \
   XDG_CACHE_HOME="${XDG_CACHE_HOME}" "${JOB_PYTHON}" -B \

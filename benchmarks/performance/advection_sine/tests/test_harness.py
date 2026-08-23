@@ -482,8 +482,9 @@ class PublicPythonHarnessTests(unittest.TestCase):
     def test_romeo_srun_uses_an_absolute_environment_launcher(self) -> None:
         for name in ("x64cpu.sbatch", "armgpu.sbatch"):
             wrapper = (HARNESS / "slurm" / name).read_text(encoding="utf-8")
-            self.assertIn("/usr/bin/env PYTHONPATH=", wrapper)
-            self.assertNotIn("\n  env PYTHONPATH=", wrapper)
+            self.assertIn('/usr/bin/env PATH="${PATH}"', wrapper)
+            self.assertIn('LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"', wrapper)
+            self.assertNotIn("\n  env PATH=", wrapper)
 
     def test_romeo_srun_passes_the_explicit_build_receipt_environment(self) -> None:
         """The Slurm step must not rely on the submission export allowlist."""
