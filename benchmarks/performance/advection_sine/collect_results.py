@@ -79,6 +79,21 @@ def _safe_relative_path(value: Any, label: str) -> str:
     return value
 
 
+def _is_openmpi_launcher_receipt(value: Any) -> bool:
+    """Accept OpenMPI's public mpirun name or its authenticated orterun target."""
+    if type(value) is not dict or type(value.get("path")) is not str:
+        return False
+    path = Path(value["path"])
+    return (
+        path.is_absolute()
+        and ".." not in path.parts
+        and path.name in {"mpirun", "orterun"}
+        and re.fullmatch(r"[0-9a-f]{64}", str(value.get("sha256", ""))) is not None
+        and isinstance(value.get("version"), str)
+        and value["version"].startswith("mpirun (Open MPI)")
+    )
+
+
 def _lower_hex(value: Any, length: int, label: str) -> str:
     if type(value) is not str or re.fullmatch(rf"[0-9a-f]{{{length}}}", value) is None:
         raise CampaignError(f"{label} must be lowercase {length}-hex")
@@ -293,9 +308,7 @@ def _require_receipts(
         type(mpi.get("launcher")) is not dict
         or not isinstance(mpi["launcher"].get("version"), str)
         or Path(str(mpi["launcher"].get("path", ""))).name != "srun"
-        or type(mpi.get("openmpi_launcher")) is not dict
-        or not isinstance(mpi["openmpi_launcher"].get("version"), str)
-        or Path(str(mpi["openmpi_launcher"].get("path", ""))).name != "mpirun"
+        or not _is_openmpi_launcher_receipt(mpi.get("openmpi_launcher"))
     ):
         raise CampaignError("MPI route lacks SLURM/OpenMPI launcher provenance")
     if type(cuda) is not dict or cuda.get("enabled") is not route_uses_gpu(campaign["route"]):

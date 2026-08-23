@@ -14,7 +14,13 @@ from pathlib import Path
 HARNESS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HARNESS))
 
-from collect_results import _expected_dt, _read_rank_rows, _require_receipts, _validate_point  # noqa: E402
+from collect_results import (  # noqa: E402
+    _expected_dt,
+    _is_openmpi_launcher_receipt,
+    _read_rank_rows,
+    _require_receipts,
+    _validate_point,
+)
 from common import (  # noqa: E402
     CANONICAL_CAMPAIGN_FILENAMES,
     CampaignError,
@@ -629,6 +635,25 @@ class PublicPythonHarnessTests(unittest.TestCase):
         source = (HARNESS / "prepare_export.py").read_text(encoding="utf-8")
         self.assertIn('_command_receipt("srun", "SLURM srun launcher")', source)
         self.assertIn('_command_receipt("mpirun", "OpenMPI launcher")', source)
+
+    def test_openmpi_launcher_accepts_the_authenticated_orterun_symlink_target(self) -> None:
+        receipt = {
+            "path": "/authenticated/openmpi/bin/orterun",
+            "sha256": "a" * 64,
+            "version": "mpirun (Open MPI) 4.1.7",
+        }
+        self.assertTrue(_is_openmpi_launcher_receipt(receipt))
+        invalid = (
+            {key: value for key, value in receipt.items() if key != "sha256"},
+            {**receipt, "sha256": "A" * 64},
+            {**receipt, "sha256": "a" * 63},
+            {**receipt, "path": "openmpi/bin/orterun"},
+            {**receipt, "path": "/authenticated/../untrusted/orterun"},
+            {**receipt, "version": "unrelated launcher 1.0"},
+        )
+        for candidate in invalid:
+            with self.subTest(candidate=candidate):
+                self.assertFalse(_is_openmpi_launcher_receipt(candidate))
 
     def test_build_receipt_authenticates_native_build_fingerprint(self) -> None:
         exporter = (HARNESS / "prepare_export.py").read_text(encoding="utf-8")
