@@ -25,7 +25,7 @@ from common import (
 )
 
 MEASUREMENT_SCHEMA = "pops.performance.advection-sine.measurement.v3"
-BUILD_RECEIPT_SCHEMA = "pops.performance.advection-sine.build-receipt.v2"
+BUILD_RECEIPT_SCHEMA = "pops.performance.advection-sine.build-receipt.v3"
 LAUNCH_SCHEMA = "pops.performance.advection-sine.launch.v1"
 
 
@@ -77,6 +77,35 @@ def _safe_relative_path(value: Any, label: str) -> str:
     ):
         raise CampaignError(f"{label} is not a safe relative path")
     return value
+
+
+def _lower_hex(value: Any, length: int, label: str) -> str:
+    if type(value) is not str or re.fullmatch(rf"[0-9a-f]{{{length}}}", value) is None:
+        raise CampaignError(f"{label} must be lowercase {length}-hex")
+    return value
+
+
+def _expected_kokkos_configuration(route: str) -> dict[str, str]:
+    expected = {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_POSITION_INDEPENDENT_CODE": "ON",
+        "Kokkos_ENABLE_SERIAL": "ON",
+    }
+    if route in {"kokkos_serial", "kokkos_openmp", "kokkos_openmp_mpi"}:
+        expected["Kokkos_ENABLE_CUDA"] = "OFF"
+        expected["Kokkos_ENABLE_OPENMP"] = "ON" if "openmp" in route else "OFF"
+    elif route in {"kokkos_cuda", "kokkos_cuda_mpi"}:
+        expected.update(
+            {
+                "Kokkos_ENABLE_CUDA": "ON",
+                "Kokkos_ENABLE_CUDA_LAMBDA": "ON",
+                "Kokkos_ARCH_HOPPER90": "ON",
+                "Kokkos_ENABLE_OPENMP": "OFF",
+            }
+        )
+    else:
+        raise CampaignError(f"unsupported Kokkos route {route}")
+    return expected
 
 
 def _finite(value: Any, label: str, *, positive: bool = False) -> float:
@@ -218,10 +247,44 @@ def _require_receipts(
         entry = kokkos.get(field)
         if (
             type(entry) is not dict
-            or type(entry.get("sha256")) is not str
+            or re.fullmatch(r"[0-9a-f]{64}", str(entry.get("sha256", ""))) is None
             or not _safe_relative_path(entry.get("path"), f"Kokkos {field} path")
         ):
             raise CampaignError(f"build receipt lacks Kokkos {field} hash provenance")
+    core = kokkos.get("libkokkoscore")
+    cmake_dir = kokkos.get("cmake_dir")
+    authority = kokkos.get("source_authority")
+    kokkos_build = kokkos.get("build")
+    if (
+        type(core) is not dict
+        or core.get("kind") != "static-archive"
+        or re.fullmatch(r"[0-9a-f]{64}", str(core.get("sha256", ""))) is None
+        or not str(_safe_relative_path(core.get("path"), "Kokkos core-library path")).endswith(
+            "/libkokkoscore.a"
+        )
+        or type(cmake_dir) is not dict
+        or not _safe_relative_path(cmake_dir.get("path"), "PoPS Kokkos_DIR path")
+    ):
+        raise CampaignError("build receipt lacks installed Kokkos library/CMake authority")
+    if (
+        type(authority) is not dict
+        or authority.get("kind") != "git-export"
+        or authority.get("schema") != "pops.performance.kokkos-source-export.v1"
+    ):
+        raise CampaignError("ROMEO campaign requires authenticated Git-export Kokkos source authority")
+    _lower_hex(authority.get("commit"), 40, "Kokkos source commit")
+    _lower_hex(authority.get("archive_sha256"), 64, "Kokkos source archive SHA-256")
+    _lower_hex(authority.get("archive_tree_sha256"), 64, "Kokkos extracted source tree SHA-256")
+    if (
+        type(kokkos_build) is not dict
+        or type(kokkos_build.get("cache")) is not dict
+        or not _safe_relative_path(kokkos_build["cache"].get("path"), "Kokkos build cache path")
+        or re.fullmatch(r"[0-9a-f]{64}", str(kokkos_build["cache"].get("sha256", "")))
+        is None
+        or kokkos_build.get("source_tree_sha256") != authority.get("archive_tree_sha256")
+        or kokkos_build.get("configured") != _expected_kokkos_configuration(campaign["route"])
+    ):
+        raise CampaignError("build receipt Kokkos build semantics differ from the requested route")
     mpi = build.get("mpi")
     cuda = build.get("cuda")
     if type(mpi) is not dict or mpi.get("enabled") is not ROUTES[campaign["route"]]["mpi"]:

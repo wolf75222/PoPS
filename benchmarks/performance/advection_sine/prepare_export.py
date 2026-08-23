@@ -21,7 +21,8 @@ from common import load_campaign, route_requires_mpi, route_uses_gpu
 
 
 MANIFEST_SCHEMA = "pops.performance.source-export.v1"
-BUILD_RECEIPT_SCHEMA = "pops.performance.advection-sine.build-receipt.v2"
+KOKKOS_EXPORT_SCHEMA = "pops.performance.kokkos-source-export.v1"
+BUILD_RECEIPT_SCHEMA = "pops.performance.advection-sine.build-receipt.v3"
 COMPLETE_RECEIPT_SCHEMA = "pops.performance.advection-sine.complete.v2"
 
 
@@ -30,15 +31,38 @@ class ExportError(RuntimeError):
 
 
 def _run_git(source: Path, *arguments: str) -> bytes:
+    environment = os.environ.copy()
+    environment["GIT_OPTIONAL_LOCKS"] = "0"
     try:
         return subprocess.run(
             ["git", "-C", str(source), *arguments],
             check=True,
             capture_output=True,
+            env=environment,
         ).stdout
     except (OSError, subprocess.CalledProcessError) as error:
         detail = getattr(error, "stderr", b"").decode("utf-8", errors="replace").strip()
         raise ExportError(f"git {' '.join(arguments)} failed: {detail or error}") from error
+
+
+def _git_toplevel(source: Path) -> Path:
+    source = source.resolve(strict=True)
+    top_level = Path(_run_git(source, "rev-parse", "--show-toplevel").decode().strip()).resolve()
+    if top_level != source:
+        raise ExportError("--source must be the repository toplevel")
+    return source
+
+
+def _git_head(source: Path) -> str:
+    commit = _run_git(source, "rev-parse", "HEAD^{commit}").decode().strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ExportError("Git did not return a lowercase 40-hex revision")
+    return commit
+
+
+def _tracked_git_dirty(source: Path) -> bool:
+    """Return only tracked-index/worktree dirtiness; untracked exports are irrelevant."""
+    return bool(_run_git(source, "status", "--porcelain", "--untracked-files=no").strip())
 
 
 def _sha256_file(path: Path) -> str:
@@ -155,6 +179,179 @@ def _kokkos_receipt(root: Path) -> dict[str, Any]:
             "sha256": _sha256_file(version_file),
         },
     }
+
+
+def _archive_kokkos_entries(archive: Path) -> list[dict[str, Any]]:
+    """Return the regular-file/symlink inventory of one authenticated Git tar."""
+    if archive.is_symlink() or not archive.is_file():
+        raise ExportError(f"Kokkos archive must be one regular file: {archive}")
+    try:
+        with tarfile.open(archive, "r:") as bundle:
+            entries: list[dict[str, Any]] = []
+            for member in bundle.getmembers():
+                relative = _safe_relative(member.name)
+                if member.isdir():
+                    continue
+                if member.isfile():
+                    stream = bundle.extractfile(member)
+                    if stream is None:
+                        raise ExportError(f"cannot read Kokkos archive member {member.name}")
+                    digest = hashlib.sha256(stream.read()).hexdigest()
+                    entries.append(
+                        {
+                            "path": relative.as_posix(),
+                            "type": "file",
+                            "mode": stat.S_IMODE(member.mode),
+                            "sha256": digest,
+                        }
+                    )
+                elif member.issym():
+                    target = member.linkname
+                    entries.append(
+                        {
+                            "path": relative.as_posix(),
+                            "type": "symlink",
+                            "mode": stat.S_IMODE(member.mode),
+                            "sha256": hashlib.sha256(
+                                target.encode("utf-8", errors="surrogateescape")
+                            ).hexdigest(),
+                            "target": target,
+                        }
+                    )
+                else:
+                    raise ExportError(
+                        f"unsupported Kokkos archive member type for {member.name}"
+                    )
+    except (OSError, tarfile.TarError) as error:
+        raise ExportError(f"cannot read Kokkos Git archive {archive}: {error}") from error
+    if not entries:
+        raise ExportError("refusing an empty Kokkos Git archive")
+    if len({entry["path"] for entry in entries}) != len(entries):
+        raise ExportError("Kokkos Git archive has duplicate file paths")
+    return sorted(entries, key=lambda entry: entry["path"])
+
+
+def _verify_extracted_kokkos_source(source: Path, archive: Path) -> str:
+    """Prove the CMake source directory is exactly the authenticated Git archive."""
+    raw_source = source
+    source = source.resolve(strict=True)
+    if raw_source.is_symlink() or not source.is_dir():
+        raise ExportError("Kokkos CMake source must be a real extracted directory")
+    expected = _archive_kokkos_entries(archive)
+    observed: list[dict[str, Any]] = []
+    for path in sorted(source.rglob("*")):
+        if path.is_dir():
+            continue
+        relative = _relative_file(path, source, "Kokkos extracted source")
+        metadata = path.lstat()
+        mode = stat.S_IMODE(metadata.st_mode)
+        if stat.S_ISREG(metadata.st_mode):
+            observed.append(
+                {
+                    "path": relative,
+                    "type": "file",
+                    "mode": mode,
+                    "sha256": _sha256_file(path),
+                }
+            )
+        elif stat.S_ISLNK(metadata.st_mode):
+            target = os.readlink(path)
+            observed.append(
+                {
+                    "path": relative,
+                    "type": "symlink",
+                    "mode": mode,
+                    "sha256": hashlib.sha256(
+                        target.encode("utf-8", errors="surrogateescape")
+                    ).hexdigest(),
+                    "target": target,
+                }
+            )
+        else:
+            raise ExportError(f"Kokkos extracted source has unsupported path: {relative}")
+    if sorted(observed, key=lambda entry: entry["path"]) != expected:
+        raise ExportError("Kokkos CMake source differs from its authenticated extracted Git archive")
+    return _tree_digest(expected)
+
+
+def create_kokkos_export(source: Path, archive: Path, receipt_path: Path) -> dict[str, Any]:
+    """Create a deterministic, committed Kokkos Git archive and immutable receipt."""
+    source = _git_toplevel(source)
+    archive = archive.absolute()
+    receipt_path = receipt_path.absolute()
+    if archive.exists() or archive.is_symlink():
+        raise ExportError(f"refusing to overwrite published Kokkos archive {archive}")
+    if receipt_path.exists() or receipt_path.is_symlink():
+        raise ExportError(f"refusing to overwrite published receipt {receipt_path}")
+    if _tracked_git_dirty(source):
+        raise ExportError("refusing Kokkos export from a tracked-dirty Git worktree")
+    commit = _git_head(source)
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    temporary = archive.with_name(f".{archive.name}.{os.getpid()}.tmp")
+    try:
+        subprocess.run(
+            ["git", "-C", str(source), "archive", "--format=tar", f"--output={temporary}", commit],
+            check=True,
+            capture_output=True,
+        )
+        try:
+            os.link(temporary, archive)
+        except FileExistsError as error:
+            raise ExportError(f"refusing to overwrite published Kokkos archive {archive}") from error
+    except (OSError, subprocess.CalledProcessError) as error:
+        detail = getattr(error, "stderr", b"").decode("utf-8", errors="replace").strip()
+        raise ExportError(f"cannot create deterministic Kokkos Git archive: {detail or error}") from error
+    finally:
+        temporary.unlink(missing_ok=True)
+    if _tracked_git_dirty(source) or _git_head(source) != commit:
+        raise ExportError("Kokkos Git source changed while its archive was being prepared")
+    receipt = {
+        "schema": KOKKOS_EXPORT_SCHEMA,
+        "kind": "git-export",
+        "commit": commit,
+        "source_toplevel": str(source),
+        "archive": str(archive),
+        "archive_sha256": _sha256_file(archive),
+        "archive_bytes": archive.stat().st_size,
+        "archive_format": "git-archive-tar",
+    }
+    _write_new_json(receipt_path, receipt)
+    return receipt
+
+
+def verify_kokkos_export(archive: Path, receipt_path: Path) -> dict[str, Any]:
+    """Authenticate a Kokkos Git archive solely from its immutable receipt."""
+    raw_archive = archive
+    archive = archive.resolve(strict=True)
+    if raw_archive.is_symlink() or not archive.is_file():
+        raise ExportError(f"Kokkos archive must be one regular file: {archive}")
+    try:
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ExportError(f"cannot read Kokkos export receipt: {error}") from error
+    if (
+        type(receipt) is not dict
+        or receipt.get("schema") != KOKKOS_EXPORT_SCHEMA
+        or receipt.get("kind") != "git-export"
+        or not isinstance(receipt.get("source_toplevel"), str)
+        or not isinstance(receipt.get("archive"), str)
+        or not isinstance(receipt.get("commit"), str)
+        or re.fullmatch(r"[0-9a-f]{40}", receipt["commit"]) is None
+        or not isinstance(receipt.get("archive_sha256"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", receipt["archive_sha256"]) is None
+        or receipt.get("archive_format") != "git-archive-tar"
+        or type(receipt.get("archive_bytes")) is not int
+        or receipt["archive_bytes"] <= 0
+    ):
+        raise ExportError("Kokkos export receipt has an unsupported schema or identity")
+    if Path(receipt["archive"]).resolve() != archive:
+        raise ExportError("Kokkos export receipt names a different archive")
+    if receipt["archive_bytes"] != archive.stat().st_size or receipt["archive_sha256"] != _sha256_file(
+        archive
+    ):
+        raise ExportError("Kokkos archive differs from its authenticated export receipt")
+    _archive_kokkos_entries(archive)
+    return receipt
 
 
 def _native_import_receipt(
@@ -446,6 +643,131 @@ def _normalized_campaign_sha256(campaign: dict[str, Any]) -> str:
     return _sha256_text(json.dumps(campaign, separators=(",", ":"), sort_keys=True))
 
 
+def _under_root(path: Path, root: Path, label: str) -> str:
+    try:
+        return path.resolve(strict=True).relative_to(root.resolve(strict=True)).as_posix()
+    except (OSError, ValueError) as error:
+        raise ExportError(f"{label} must resolve below the authenticated Kokkos install root") from error
+
+
+def _installed_kokkos_core(root: Path, *, require_static: bool) -> dict[str, Any]:
+    def accepted(path: Path) -> bool:
+        name = path.name
+        if require_static:
+            return name == "libkokkoscore.a"
+        return bool(
+            name == "libkokkoscore.a"
+            or re.fullmatch(r"libkokkoscore(?:\.[0-9]+)*\.dylib", name)
+            or re.fullmatch(r"libkokkoscore\.so(?:\.[0-9]+)*", name)
+        )
+
+    candidates = sorted(
+        path for path in root.rglob("libkokkoscore*")
+        if path.is_file() and not path.is_symlink() and accepted(path)
+    )
+    if len(candidates) != 1:
+        expected = "static libkokkoscore.a" if require_static else "canonical Kokkos core library"
+        raise ExportError(
+            f"expected exactly one installed {expected} below Kokkos root, found {len(candidates)}"
+        )
+    core = candidates[0].resolve(strict=True)
+    return {
+        "kind": "static-archive" if core.suffix == ".a" else "shared-library",
+        "path": _under_root(core, root, "Kokkos core library"),
+        "sha256": _sha256_file(core),
+    }
+
+
+def _kokkos_route_configuration(cache: dict[str, str], route: str) -> dict[str, str]:
+    required = {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_POSITION_INDEPENDENT_CODE": "ON",
+        "Kokkos_ENABLE_SERIAL": "ON",
+    }
+    if route in {"kokkos_serial", "kokkos_openmp", "kokkos_openmp_mpi"}:
+        required.update({"Kokkos_ENABLE_CUDA": "OFF"})
+        required["Kokkos_ENABLE_OPENMP"] = "ON" if "openmp" in route else "OFF"
+    elif route in {"kokkos_cuda", "kokkos_cuda_mpi"}:
+        required.update(
+            {
+                "Kokkos_ENABLE_CUDA": "ON",
+                "Kokkos_ENABLE_CUDA_LAMBDA": "ON",
+                "Kokkos_ARCH_HOPPER90": "ON",
+                "Kokkos_ENABLE_OPENMP": "OFF",
+            }
+        )
+    else:
+        raise ExportError(f"unsupported Kokkos campaign route {route}")
+    return {key: _cache_requires(cache, key, value) for key, value in required.items()}
+
+
+def _kokkos_build_authority(
+    *,
+    source_receipt: Path | None,
+    kokkos_build: Path | None,
+    kokkos_root: Path,
+    route: str,
+    main_cache: dict[str, str],
+) -> dict[str, Any]:
+    """Authenticate installed Kokkos and, on ROMEO, its Git-built source semantics."""
+    kokkos_root = kokkos_root.resolve(strict=True)
+    if (source_receipt is None) != (kokkos_build is None):
+        raise ExportError("Kokkos source receipt and Kokkos build must be provided together")
+    installed = _kokkos_receipt(kokkos_root)
+    installed["libkokkoscore"] = _installed_kokkos_core(
+        kokkos_root, require_static=source_receipt is not None
+    )
+    configured_dir = main_cache.get("Kokkos_DIR")
+    if not configured_dir:
+        raise ExportError("PoPS CMake cache lacks Kokkos_DIR")
+    installed["cmake_dir"] = {
+        "path": _under_root(Path(configured_dir), kokkos_root, "PoPS Kokkos_DIR")
+    }
+    if source_receipt is None:
+        installed["source_authority"] = {"kind": "installed-distribution"}
+        return installed
+
+    kokkos_build = kokkos_build.resolve(strict=True)
+    if kokkos_build.is_symlink() or not kokkos_build.is_dir():
+        raise ExportError("Kokkos build must be a real CMake build directory")
+    build_cache_path = kokkos_build / "CMakeCache.txt"
+    build_cache = _cmake_cache(build_cache_path)
+    source_directory = build_cache.get("CMAKE_HOME_DIRECTORY")
+    if not source_directory:
+        raise ExportError("Kokkos CMake cache lacks CMAKE_HOME_DIRECTORY")
+    source_directory_path = Path(source_directory)
+    source_receipt = source_receipt.resolve(strict=True)
+    # The archive path is deliberately sibling-named: it prevents a receipt
+    # from authorising arbitrary source bytes without also naming their tar.
+    try:
+        source_payload = json.loads(source_receipt.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ExportError(f"cannot read Kokkos export receipt: {error}") from error
+    archive_value = source_payload.get("archive") if type(source_payload) is dict else None
+    if type(archive_value) is not str:
+        raise ExportError("Kokkos export receipt lacks its archive path identity")
+    archive = Path(archive_value).resolve(strict=True)
+    source_export = verify_kokkos_export(archive, source_receipt)
+    source_tree_sha256 = _verify_extracted_kokkos_source(source_directory_path, archive)
+    configured = _kokkos_route_configuration(build_cache, route)
+    installed["source_authority"] = {
+        "kind": "git-export",
+        "schema": source_export["schema"],
+        "commit": source_export["commit"],
+        "archive_sha256": source_export["archive_sha256"],
+        "archive_tree_sha256": source_tree_sha256,
+    }
+    installed["build"] = {
+        "cache": {
+            "path": _relative_file(build_cache_path, kokkos_build, "Kokkos CMake cache"),
+            "sha256": _sha256_file(build_cache_path),
+        },
+        "source_tree_sha256": source_tree_sha256,
+        "configured": configured,
+    }
+    return installed
+
+
 def create_build_receipt(
     source: Path,
     build: Path,
@@ -454,6 +776,8 @@ def create_build_receipt(
     python: Path,
     kokkos_root: Path,
     output: Path,
+    kokkos_source_receipt: Path | None = None,
+    kokkos_build: Path | None = None,
 ) -> dict[str, Any]:
     """Authenticate the exact native Python module before a campaign can start."""
     source = source.resolve(strict=True)
@@ -562,7 +886,13 @@ def create_build_receipt(
             "xdg_cache_home": str(Path(xdg_cache).resolve()),
         },
         "compiler": _command_receipt(compiler_path, "C++ compiler"),
-        "kokkos": _kokkos_receipt(kokkos_root),
+        "kokkos": _kokkos_build_authority(
+            source_receipt=kokkos_source_receipt,
+            kokkos_build=kokkos_build,
+            kokkos_root=kokkos_root,
+            route=campaign["route"],
+            main_cache=cache,
+        ),
         "mpi": mpi,
         "cuda": cuda,
     }
@@ -696,6 +1026,17 @@ def _arguments() -> argparse.Namespace:
     create.add_argument("--source", type=Path, required=True)
     create.add_argument("--archive", type=Path, required=True)
     create.add_argument("--manifest", type=Path, required=True)
+    create_kokkos = subparsers.add_parser(
+        "create-kokkos-export", help="write an immutable committed Kokkos Git archive"
+    )
+    create_kokkos.add_argument("--source", type=Path, required=True)
+    create_kokkos.add_argument("--archive", type=Path, required=True)
+    create_kokkos.add_argument("--receipt", type=Path, required=True)
+    verify_kokkos = subparsers.add_parser(
+        "verify-kokkos-export", help="authenticate one Kokkos Git archive"
+    )
+    verify_kokkos.add_argument("--archive", type=Path, required=True)
+    verify_kokkos.add_argument("--receipt", type=Path, required=True)
     verify = subparsers.add_parser("verify-tree", help="authenticate an extracted tree")
     verify.add_argument("--source", type=Path, required=True)
     verify.add_argument("--manifest", type=Path, required=True)
@@ -711,6 +1052,8 @@ def _arguments() -> argparse.Namespace:
     receipt.add_argument("--campaign", type=Path, required=True)
     receipt.add_argument("--python", type=Path, required=True)
     receipt.add_argument("--kokkos-root", type=Path, required=True)
+    receipt.add_argument("--kokkos-source-receipt", type=Path)
+    receipt.add_argument("--kokkos-build", type=Path)
     receipt.add_argument("--output", type=Path, required=True)
     complete = subparsers.add_parser("complete-receipt", help="seal raw and summary evidence")
     complete.add_argument("--raw", type=Path, required=True)
@@ -731,6 +1074,10 @@ def main() -> int:
     try:
         if args.command == "create":
             manifest = create_export(args.source, args.archive.resolve(), args.manifest.resolve())
+        elif args.command == "create-kokkos-export":
+            receipt = create_kokkos_export(args.source, args.archive, args.receipt)
+        elif args.command == "verify-kokkos-export":
+            receipt = verify_kokkos_export(args.archive, args.receipt)
         elif args.command == "verify-tree":
             manifest = verify_tree(
                 args.source,
@@ -748,6 +1095,8 @@ def main() -> int:
                 args.python,
                 args.kokkos_root,
                 args.output,
+                args.kokkos_source_receipt,
+                args.kokkos_build,
             )
         elif args.command == "complete-receipt":
             receipt = create_complete_receipt(

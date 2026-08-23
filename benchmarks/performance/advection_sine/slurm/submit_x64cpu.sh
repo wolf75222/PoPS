@@ -133,6 +133,32 @@ cleanup_temporary_export
 trap - EXIT
 MANIFEST_SHA256="$("${POPS_PERF_LOGIN_PYTHON}" -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "${MANIFEST}")"
 
+KOKKOS_SOURCE="${POPS_KOKKOS_SERIAL_SOURCE:-${POPS_PERF_SUBMIT_HOME}/adc_cpu_mpiomp/kokkos}"
+kokkos_receipt_field() {
+  "${POPS_PERF_LOGIN_PYTHON}" -c \
+    'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))[sys.argv[2]])' \
+    "$1" "$2"
+}
+KOKKOS_COMMIT="$(GIT_OPTIONAL_LOCKS=0 git -C "${KOKKOS_SOURCE}" rev-parse --verify HEAD)"
+[[ "${KOKKOS_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid Kokkos Git commit" >&2; exit 2; }
+KOKKOS_ARCHIVE="${EXPORT_ROOT}/kokkos-${KOKKOS_COMMIT}.tar"
+KOKKOS_RECEIPT="${EXPORT_ROOT}/kokkos-${KOKKOS_COMMIT}.json"
+if [[ -e "${KOKKOS_ARCHIVE}" || -e "${KOKKOS_RECEIPT}" ]]; then
+  if [[ ! -f "${KOKKOS_ARCHIVE}" || ! -f "${KOKKOS_RECEIPT}" ]]; then
+    echo "refusing incomplete authenticated Kokkos export ${KOKKOS_COMMIT}" >&2
+    exit 2
+  fi
+  "${POPS_PERF_LOGIN_PYTHON}" "${HARNESS_DIR}/prepare_export.py" verify-kokkos-export \
+    --archive "${KOKKOS_ARCHIVE}" --receipt "${KOKKOS_RECEIPT}" >/dev/null
+else
+  "${POPS_PERF_LOGIN_PYTHON}" "${HARNESS_DIR}/prepare_export.py" create-kokkos-export \
+    --source "${KOKKOS_SOURCE}" --archive "${KOKKOS_ARCHIVE}" \
+    --receipt "${KOKKOS_RECEIPT}" >/dev/null
+fi
+test "$(kokkos_receipt_field "${KOKKOS_RECEIPT}" commit)" = "${KOKKOS_COMMIT}"
+KOKKOS_ARCHIVE_SHA256="$(kokkos_receipt_field "${KOKKOS_RECEIPT}" archive_sha256)"
+KOKKOS_RECEIPT_SHA256="$("${POPS_PERF_LOGIN_PYTHON}" -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "${KOKKOS_RECEIPT}")"
+
 RESOURCE_ARGS=()
 WALLTIME_OVERRIDE_ARGS=()
 if [[ -n "${POPS_PERF_WALLTIME_PARTITION:-}" ]]; then
@@ -174,7 +200,7 @@ SBATCH_EXPORT_VARIABLES=(
   POPS_CMAKE_X64_SPEC POPS_NINJA_X64_SPEC POPS_LIBMD_X64_SPEC
   POPS_PYTHON_DEPENDENCY_ACTIVATION_X64 POPS_PYTHON_NUMPY_X64_SPEC
   POPS_PYBIND11_X64_SPEC POPS_PYBIND11_DIR_X64
-  POPS_KOKKOS_SERIAL_SOURCE POPS_KOKKOS_OPENMP_ROOT POPS_OPENMPI_X64_SPEC
+  POPS_KOKKOS_OPENMP_ROOT POPS_OPENMPI_X64_SPEC
   POPS_PERF_WORK_ROOT POPS_PERF_RESULTS_ROOT
 )
 for export_name in "${SBATCH_EXPORT_VARIABLES[@]}"; do
@@ -189,10 +215,14 @@ COMMAND=(sbatch "--export=${SBATCH_EXPORT}" --chdir="${SCHEDULER_DIRECTORY}"
   --account="${POPS_SLURM_ACCOUNT}" "${RESOURCE_ARGS[@]}"
   "${SCRIPT_DIR}/x64cpu.sbatch" "${ARCHIVE}" "${MANIFEST}" "${ARCHIVE_SHA256}"
   "${MANIFEST_SHA256}" "${SOURCE_SHA}" "${SOURCE_DIRTY}" "${TREE_SHA256}"
-  "$(basename -- "${CAMPAIGN}")" "${POPS_PERF_JOB_PYTHON}" "${SCHEDULER_DIRECTORY}")
+  "${KOKKOS_ARCHIVE}" "${KOKKOS_RECEIPT}" "${KOKKOS_ARCHIVE_SHA256}"
+  "${KOKKOS_RECEIPT_SHA256}" "$(basename -- "${CAMPAIGN}")"
+  "${POPS_PERF_JOB_PYTHON}" "${SCHEDULER_DIRECTORY}")
 if [[ "${POPS_PERF_SUBMIT_DRY_RUN:-0}" = 1 ]]; then
   printf 'authenticated source: base=%s dirty=%s tree_sha256=%s\n' \
     "${SOURCE_SHA}" "${SOURCE_DIRTY}" "${TREE_SHA256}"
+  printf 'authenticated Kokkos: commit=%s archive_sha256=%s\n' \
+    "${KOKKOS_COMMIT}" "${KOKKOS_ARCHIVE_SHA256}"
   printf '%q ' "${COMMAND[@]}"
   printf '\n'
   exit 0

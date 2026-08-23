@@ -133,7 +133,7 @@ def test_complete_seal_refuses_dirty_summary_source_linked_to_clean_raw_manifest
     manifest = _clean_manifest(export)
     (raw / "source.manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     build = {
-        "schema": "pops.performance.advection-sine.build-receipt.v2",
+        "schema": "pops.performance.advection-sine.build-receipt.v3",
         "source": {"tree_sha256": manifest["tree_sha256"]},
         "campaign": {"id": "strong-openmp"},
     }

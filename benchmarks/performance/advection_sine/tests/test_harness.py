@@ -14,7 +14,7 @@ from pathlib import Path
 HARNESS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HARNESS))
 
-from collect_results import _expected_dt, _read_rank_rows, _validate_point  # noqa: E402
+from collect_results import _expected_dt, _read_rank_rows, _require_receipts, _validate_point  # noqa: E402
 from common import (  # noqa: E402
     CANONICAL_CAMPAIGN_FILENAMES,
     CampaignError,
@@ -25,14 +25,234 @@ from common import (  # noqa: E402
 from plot_scaling import _authenticated_summary_root  # noqa: E402
 from prepare_export import (  # noqa: E402
     ExportError,
+    _installed_kokkos_core,
+    _kokkos_route_configuration,
     _tree_digest,
     create_complete_receipt,
+    create_kokkos_export,
     verify_complete_receipt,
+    verify_kokkos_export,
 )
 from support import write_rank_measurement  # noqa: E402
 
 
 class PublicPythonHarnessTests(unittest.TestCase):
+    def test_installed_kokkos_core_accepts_macos_dylib_but_romeo_requires_static(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            library = root / "lib" / "libkokkoscore.5.2.0.dylib"
+            library.parent.mkdir()
+            library.write_bytes(b"kokkos-core")
+            observed = _installed_kokkos_core(root, require_static=False)
+            self.assertEqual(observed["kind"], "shared-library")
+            self.assertEqual(observed["path"], "lib/libkokkoscore.5.2.0.dylib")
+            with self.assertRaisesRegex(ExportError, "static libkokkoscore"):
+                _installed_kokkos_core(root, require_static=True)
+
+    def _committed_kokkos_source(self, root: Path) -> Path:
+        source = root / "kokkos-source"
+        source.mkdir()
+        (source / "CMakeLists.txt").write_text("cmake_minimum_required(VERSION 3.22)\n", encoding="utf-8")
+        subprocess.run(["git", "init", str(source)], check=True, capture_output=True, text=True)
+        subprocess.run(
+            ["git", "-C", str(source), "config", "user.email", "pops@example.invalid"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(source), "config", "user.name", "PoPS contract"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(["git", "-C", str(source), "add", "CMakeLists.txt"], check=True)
+        subprocess.run(
+            ["git", "-C", str(source), "commit", "-m", "fixture"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return source
+
+    def test_kokkos_git_export_is_committed_immutable_and_tamper_evident(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = self._committed_kokkos_source(root)
+            archive = root / "kokkos.tar"
+            receipt = root / "kokkos.receipt.json"
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(HARNESS / "prepare_export.py"),
+                    "create-kokkos-export",
+                    "--source",
+                    str(source),
+                    "--archive",
+                    str(archive),
+                    "--receipt",
+                    str(receipt),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertIn('"schema": "pops.performance.kokkos-source-export.v1"', completed.stdout)
+            created = json.loads(receipt.read_text(encoding="utf-8"))
+            self.assertEqual(created["kind"], "git-export")
+            self.assertEqual(verify_kokkos_export(archive, receipt)["commit"], created["commit"])
+            archive.write_bytes(b"tampered archive")
+            with self.assertRaisesRegex(ExportError, "differs"):
+                verify_kokkos_export(archive, receipt)
+
+    def test_kokkos_git_export_refuses_tracked_dirtiness_and_receipt_clobber(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = self._committed_kokkos_source(root)
+            (source / "CMakeLists.txt").write_text("changed\n", encoding="utf-8")
+            with self.assertRaisesRegex(ExportError, "tracked-dirty"):
+                create_kokkos_export(source, root / "dirty.tar", root / "dirty.receipt.json")
+            subprocess.run(["git", "-C", str(source), "checkout", "--", "CMakeLists.txt"], check=True)
+            archive = root / "clean.tar"
+            receipt = root / "clean.receipt.json"
+            create_kokkos_export(source, archive, receipt)
+            with self.assertRaisesRegex(ExportError, "overwrite"):
+                create_kokkos_export(source, archive, receipt)
+
+    def test_kokkos_route_contract_refuses_wrong_cuda_and_openmp_options(self) -> None:
+        cuda = {
+            "CMAKE_BUILD_TYPE": "Release",
+            "CMAKE_POSITION_INDEPENDENT_CODE": "ON",
+            "Kokkos_ENABLE_SERIAL": "ON",
+            "Kokkos_ENABLE_CUDA": "ON",
+            "Kokkos_ENABLE_CUDA_LAMBDA": "ON",
+            "Kokkos_ARCH_HOPPER90": "ON",
+            "Kokkos_ENABLE_OPENMP": "OFF",
+        }
+        self.assertEqual(_kokkos_route_configuration(cuda, "kokkos_cuda")["Kokkos_ARCH_HOPPER90"], "ON")
+        cuda["Kokkos_ENABLE_CUDA_LAMBDA"] = "OFF"
+        with self.assertRaisesRegex(ExportError, "CUDA_LAMBDA"):
+            _kokkos_route_configuration(cuda, "kokkos_cuda")
+        openmp = {
+            "CMAKE_BUILD_TYPE": "Release",
+            "CMAKE_POSITION_INDEPENDENT_CODE": "ON",
+            "Kokkos_ENABLE_SERIAL": "ON",
+            "Kokkos_ENABLE_CUDA": "OFF",
+            "Kokkos_ENABLE_OPENMP": "OFF",
+        }
+        with self.assertRaisesRegex(ExportError, "Kokkos_ENABLE_OPENMP"):
+            _kokkos_route_configuration(openmp, "kokkos_openmp_mpi")
+
+    def test_collector_rejects_tampered_romeo_kokkos_build_semantics(self) -> None:
+        campaign = load_campaign(HARNESS / "campaigns" / "serial_reference.json")
+        campaign_bytes = b"canonical campaign"
+        entry = {
+            "path": "benchmarks/performance/advection_sine/campaigns/serial_reference.json",
+            "type": "file",
+            "mode": 0o644,
+            "size": len(campaign_bytes),
+            "sha256": hashlib.sha256(campaign_bytes).hexdigest(),
+        }
+        manifest = {
+            "schema": "pops.performance.source-export.v1",
+            "base_sha": "a" * 40,
+            "source_dirty": False,
+            "tree_sha256": _tree_digest([entry]),
+            "archive_sha256": "b" * 64,
+            "archive_format": "tar-pax",
+            "file_count": 1,
+            "files": [entry],
+        }
+        expected_kokkos = {
+            "CMAKE_BUILD_TYPE": "Release",
+            "CMAKE_POSITION_INDEPENDENT_CODE": "ON",
+            "Kokkos_ENABLE_SERIAL": "ON",
+            "Kokkos_ENABLE_CUDA": "OFF",
+            "Kokkos_ENABLE_OPENMP": "OFF",
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            raw = Path(temporary)
+            manifest_path = raw / "source.manifest.json"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            build = {
+                "schema": "pops.performance.advection-sine.build-receipt.v3",
+                "workload": "public-python",
+                "build_type": "Release",
+                "source": {
+                    "tree_sha256": manifest["tree_sha256"],
+                    "manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+                },
+                "campaign": {
+                    "id": campaign["id"],
+                    "route": campaign["route"],
+                    "dimension": campaign["dimension"],
+                    "path": entry["path"],
+                    "sha256": entry["sha256"],
+                    "normalized_sha256": hashlib.sha256(
+                        json.dumps(campaign, separators=(",", ":"), sort_keys=True).encode("utf-8")
+                    ).hexdigest(),
+                },
+                "cmake": {
+                    "configured": {
+                        "CMAKE_BUILD_TYPE": "Release",
+                        "POPS_BUILD_PYTHON": "ON",
+                        "POPS_USE_KOKKOS": "ON",
+                        "POPS_USE_MPI": "OFF",
+                        "POPS_USE_HDF5": "OFF",
+                        "POPS_NATIVE_DIM": str(campaign["dimension"]),
+                    }
+                },
+                "native_import": {
+                    "extension": {
+                        "path": "python/pops/_native/dim3/_pops.so",
+                        "imported_path": "python/pops/_native/dim3/_pops.so",
+                        "sha256": "c" * 64,
+                        "dimension": 3,
+                        "build_fingerprint": "d" * 64,
+                        "has_kokkos": True,
+                        "has_mpi": False,
+                    }
+                },
+                "compiler": {"version": "fixture"},
+                "kokkos": {
+                    "version": "4.fixture",
+                    "config": {"path": "lib/cmake/Kokkos/a", "sha256": "e" * 64},
+                    "header": {"path": "include/Kokkos_Core.hpp", "sha256": "f" * 64},
+                    "version_file": {"path": "lib/cmake/Kokkos/b", "sha256": "0" * 64},
+                    "libkokkoscore": {
+                        "kind": "static-archive",
+                        "path": "lib/libkokkoscore.a",
+                        "sha256": "1" * 64,
+                    },
+                    "cmake_dir": {"path": "lib/cmake/Kokkos"},
+                    "source_authority": {
+                        "kind": "git-export",
+                        "schema": "pops.performance.kokkos-source-export.v1",
+                        "commit": "2" * 40,
+                        "archive_sha256": "3" * 64,
+                        "archive_tree_sha256": "4" * 64,
+                    },
+                    "build": {
+                        "cache": {"path": "CMakeCache.txt", "sha256": "5" * 64},
+                        "source_tree_sha256": "4" * 64,
+                        "configured": expected_kokkos,
+                    },
+                },
+                "mpi": {"enabled": False},
+                "cuda": {"enabled": False},
+            }
+            (raw / "build.receipt.json").write_text(json.dumps(build), encoding="utf-8")
+            _require_receipts(raw, campaign)
+            build["kokkos"]["libkokkoscore"]["kind"] = "shared-library"
+            (raw / "build.receipt.json").write_text(json.dumps(build), encoding="utf-8")
+            with self.assertRaisesRegex(CampaignError, "installed Kokkos"):
+                _require_receipts(raw, campaign)
+            build["kokkos"]["libkokkoscore"]["kind"] = "static-archive"
+            build["kokkos"]["build"]["configured"]["CMAKE_POSITION_INDEPENDENT_CODE"] = "OFF"
+            (raw / "build.receipt.json").write_text(json.dumps(build), encoding="utf-8")
+            with self.assertRaisesRegex(CampaignError, "Kokkos build semantics"):
+                _require_receipts(raw, campaign)
+
     def test_all_campaigns_are_v2_public_lifecycle_contracts(self) -> None:
         for path in sorted((HARNESS / "campaigns").glob("*.json")):
             campaign = load_campaign(path)
@@ -216,6 +436,15 @@ class PublicPythonHarnessTests(unittest.TestCase):
             wrapper = (HARNESS / "slurm" / name).read_text(encoding="utf-8")
             self.assertEqual(wrapper.count("-DPOPS_BUILD_TESTS=OFF"), 1)
 
+    def test_romeo_kokkos_builds_can_link_into_the_python_extension(self) -> None:
+        x64 = (HARNESS / "slurm" / "x64cpu.sbatch").read_text(encoding="utf-8")
+        armgpu = (HARNESS / "slurm" / "armgpu.sbatch").read_text(encoding="utf-8")
+        self.assertIn('-B "${WORK_ROOT}/kokkos-${KOKKOS_BUILD_KIND}-build"', x64)
+        self.assertIn('-DCMAKE_POSITION_INDEPENDENT_CODE=ON', x64)
+        self.assertIn('-B "${WORK_ROOT}/kokkos-cuda-build"', armgpu)
+        self.assertIn('-DCMAKE_POSITION_INDEPENDENT_CODE=ON', armgpu)
+        self.assertNotIn('KOKKOS_ROOT="${POPS_KOKKOS_CUDA_ROOT', armgpu)
+
     def test_romeo_tree_verification_cannot_create_untracked_bytecode(self) -> None:
         """The verifier must not mutate the authenticated extracted source tree."""
         invocation = (
@@ -351,7 +580,7 @@ class PublicPythonHarnessTests(unittest.TestCase):
             tree = manifest["tree_sha256"]
             (raw / "source.manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
             build = {
-                "schema": "pops.performance.advection-sine.build-receipt.v2",
+                "schema": "pops.performance.advection-sine.build-receipt.v3",
                 "source": {"tree_sha256": tree},
                 "campaign": {"id": "serial_reference"},
             }

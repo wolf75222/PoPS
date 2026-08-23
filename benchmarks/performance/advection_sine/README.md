@@ -89,16 +89,22 @@ Ces vérifications n’exécutent aucun calcul scientifique. Le `--dry-run` de
 
 ## ROMEO
 
-Les wrappers exportent une source content-addressed, construisent `_pops` à la
-racine PoPS avec `POPS_BUILD_PYTHON=ON` et `Release`, puis utilisent le paquet
-du build-tree `build/python` uniquement dans le job. Ils imposent
+Les wrappers exportent deux sources content-addressed : PoPS et le commit Git
+Kokkos propre observé à la soumission. Les archives et reçus Kokkos sont
+scellés par SHA-256 dans le scratch, revérifiés puis extraits dans le répertoire
+privé du job. Kokkos y est reconstruit avec code indépendant de la position
+pour la route exacte (Serial, OpenMP ou CUDA Hopper90), avant de construire
+`_pops` à la racine PoPS avec `POPS_BUILD_PYTHON=ON` et `Release`. Le job
+utilise ensuite uniquement les installations et le paquet `build/python` de
+ce scratch authentifié. Il impose
 `POPS_USE_HDF5=OFF` pour toutes les routes, y compris MPI : ce benchmark ne
 fait aucun I/O HDF5 et une route MPI ne doit pas introduire cette dépendance.
 
 Avant tout lancement, `raw/build.receipt.json` vérifie l’import réel de
 `pops._pops` sélectionné depuis le build-tree et lie ses octets à la source, à
-la dimension, au backend MPI/Kokkos, au compilateur, à Kokkos (configuration,
-en-tête et version), et à CUDA lorsque pertinent. Cette vérification se fait
+la dimension, au backend MPI/Kokkos, au compilateur, au commit/archive Kokkos,
+aux options effectives de son cache CMake, à `libkokkoscore`, à l'installation
+Kokkos réellement résolue par PoPS, et à CUDA lorsque pertinent. Cette vérification se fait
 dans une étape `srun` dédiée (avec GPU pour la route CUDA), sans intégration
 temporelle. Le reçu d'allocation `observed-allocation/python-dependencies.json`
 conserve en plus l'interpréteur effectif et les versions/chemins NumPy et
@@ -124,14 +130,22 @@ cette allowlist est refusée avant `sbatch`. Sur GPU, le reçu conserve aussi
 `COMPLETE.json`.
 
 Prérequis : Python 3.10+ de l'architecture du nœud, CMake et Ninja Spack des
-wrappers, Kokkos compatible avec le compilateur; sur GPU CUDA 12.6, wrapper
-NVCC Kokkos et OpenMPI 4.1.7 `+cuda` pour MPI. Les wrappers démarrent avec
+wrappers, checkout Git Kokkos propre et compilateur compatible; sur GPU CUDA
+12.6, wrapper NVCC Kokkos et OpenMPI 4.1.7 `+cuda` pour MPI. Les wrappers démarrent avec
 `PATH=/usr/bin:/bin`, puis sourcent directement et vérifient le setup Spack
 ROMEO de leur plateforme; ils ne dépendent ni de `romeo_load_*_env`, ni de
 `.bashrc`. La route GPU initialise également le module système depuis
 `/etc/profile.d/modules.sh` avant `cuda/12.6`. Les versions observées
 compilateur/Kokkos/Python/pybind11/CUDA/OpenMPI sont dans le reçu de build;
 armgpu refuse toute compilation sur le login x86_64.
+
+Les checkouts Kokkos par défaut sont
+`$HOME/adc_cpu_mpiomp/kokkos` pour Serial/OpenMP et
+`$HOME/adc_gpu_p1/kokkos` pour CUDA. Ils peuvent être remplacés à la
+soumission par `POPS_KOKKOS_SERIAL_SOURCE` et
+`POPS_KOKKOS_CUDA_SOURCE`. Dans tous les cas, le chemin doit être la racine
+d'un dépôt Git sans modification suivie; le wrapper archive le commit au lieu
+de transmettre ce chemin mutable au job.
 
 Le Python de job est contrôlé **dans l'allocation** avant CMake : il doit être
 un chemin absolu exécutable, Python 3.10+, et importer `numpy` et `pybind11`
@@ -178,7 +192,8 @@ Pour armgpu, garder ce Python x64cpu pour `POPS_PERF_LOGIN_PYTHON` et définir
 `POPS_PERF_JOB_PYTHON` sur le Python aarch64 relevé :
 `/apps/2025/spack_install/linux-rhel9-neoverse_v2/linux-rhel9-neoverse_v2/gcc-11.4.1/python-3.11.9-oxq4fb72flcinkm57pazy3ti7tpfp7rf/bin/python`.
 Ce binaire ne peut pas être exécuté depuis le login x86_64; le wrapper le
-vérifie après `romeo_load_armgpu_env` dans l'allocation armgpu.
+vérifie après l'initialisation explicite de Spack, des modules et de CUDA dans
+l'allocation armgpu.
 
 Soumettre exactement une campagne complète, vérifier `COMPLETE.json` et les
 reçus, puis seulement lancer la suivante. `COMPLETE.json` scelle les inventaires

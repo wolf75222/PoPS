@@ -335,7 +335,7 @@ class MacosProfileContractTests(unittest.TestCase):
             source_root, source = _source_export(root)
             native = _provenance({"argv": ["fixture"], "sha256": "0" * 64, "output_dir": "x"}, source, source_root)["native"]
             receipt = {
-                "schema": "pops.performance.advection-sine.build-receipt.v2",
+                "schema": "pops.performance.advection-sine.build-receipt.v3",
                 "source": {"tree_sha256": source["tree_sha256"]},
                 "campaign": {"id": "romeo_x64_openmp_strong_3d"},
                 "native_import": {
@@ -348,6 +348,15 @@ class MacosProfileContractTests(unittest.TestCase):
                     }
                 },
                 "cmake": {"cache": {"sha256": "2" * 64}},
+                "kokkos": {
+                    "source_authority": {"kind": "installed-distribution"},
+                    "libkokkoscore": {
+                        "kind": "static-archive",
+                        "path": "lib/libkokkoscore.a",
+                        "sha256": "3" * 64,
+                    },
+                    "cmake_dir": {"path": "lib/cmake/Kokkos"},
+                },
             }
             path = root / "build.receipt.json"
             path.write_text(json.dumps(receipt), encoding="utf-8")
@@ -358,6 +367,16 @@ class MacosProfileContractTests(unittest.TestCase):
                 native=native,
             )
             self.assertEqual(observed["native_sha256"], native["sha256"])
+            receipt["kokkos"]["libkokkoscore"]["kind"] = "shared-library"
+            path.write_text(json.dumps(receipt), encoding="utf-8")
+            with self.assertRaisesRegex(ProfileContractError, "cannot be proven"):
+                exported_build_receipt(
+                    receipt_path=path,
+                    source=source,
+                    campaign_id="romeo_x64_openmp_strong_3d",
+                    native=native,
+                )
+            receipt["kokkos"]["libkokkoscore"]["kind"] = "static-archive"
             receipt["source"]["tree_sha256"] = "0" * 64
             path.write_text(json.dumps(receipt), encoding="utf-8")
             with self.assertRaisesRegex(ProfileContractError, "cannot be proven"):
@@ -606,7 +625,9 @@ class MacosProfileContractTests(unittest.TestCase):
             "source.manifest.json",
             "source-tree",
             "native-build",
+            '"${PYTHON}" -B',
             '-S "${EXPORTED_ROOT}"',
+            "-DPOPS_BUILD_TESTS=OFF",
             "-DPOPS_USE_MPI=OFF",
             "-DPOPS_USE_HDF5=OFF",
             "CMAKE_HOME_DIRECTORY",

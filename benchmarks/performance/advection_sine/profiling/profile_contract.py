@@ -7,6 +7,7 @@ import importlib.machinery
 import json
 import os
 import platform
+import re
 import secrets
 import socket
 from pathlib import Path, PurePosixPath
@@ -254,9 +255,44 @@ def exported_build_receipt(
     extension = native_import.get("extension") if type(native_import) is dict else None
     cmake = receipt.get("cmake") if type(receipt) is dict else None
     cache = cmake.get("cache") if type(cmake) is dict else None
+    kokkos = receipt.get("kokkos") if type(receipt) is dict else None
+    kokkos_authority = kokkos.get("source_authority") if type(kokkos) is dict else None
+    kokkos_core = kokkos.get("libkokkoscore") if type(kokkos) is dict else None
+    kokkos_cmake_dir = kokkos.get("cmake_dir") if type(kokkos) is dict else None
+    kokkos_core_kind = kokkos_core.get("kind") if type(kokkos_core) is dict else None
+    kokkos_core_path = kokkos_core.get("path") if type(kokkos_core) is dict else None
+    kokkos_core_relative = (
+        PurePosixPath(kokkos_core_path) if isinstance(kokkos_core_path, str) else None
+    )
+    safe_core_path = (
+        kokkos_core_relative is not None
+        and not kokkos_core_relative.is_absolute()
+        and bool(kokkos_core_relative.parts)
+        and ".." not in kokkos_core_relative.parts
+    )
+    kokkos_core_name = kokkos_core_relative.name if safe_core_path else ""
+    kokkos_cmake_path = kokkos_cmake_dir.get("path") if type(kokkos_cmake_dir) is dict else None
+    kokkos_cmake_relative = (
+        PurePosixPath(kokkos_cmake_path) if isinstance(kokkos_cmake_path, str) else None
+    )
+    safe_cmake_path = (
+        kokkos_cmake_relative is not None
+        and not kokkos_cmake_relative.is_absolute()
+        and bool(kokkos_cmake_relative.parts)
+        and ".." not in kokkos_cmake_relative.parts
+    )
+    canonical_core = (
+        kokkos_core_kind == "static-archive" and kokkos_core_name == "libkokkoscore.a"
+    ) or (
+        kokkos_core_kind == "shared-library"
+        and (
+            re.fullmatch(r"libkokkoscore(?:\.[0-9]+)*\.dylib", kokkos_core_name) is not None
+            or re.fullmatch(r"libkokkoscore\.so(?:\.[0-9]+)*", kokkos_core_name) is not None
+        )
+    )
     if (
         not isinstance(receipt, dict)
-        or receipt.get("schema") != "pops.performance.advection-sine.build-receipt.v2"
+        or receipt.get("schema") != "pops.performance.advection-sine.build-receipt.v3"
         or not isinstance(build_source, dict)
         or build_source.get("tree_sha256") != source.get("tree_sha256")
         or not isinstance(build_campaign, dict)
@@ -269,6 +305,13 @@ def exported_build_receipt(
         or extension.get("has_kokkos") is not True
         or not isinstance(cache, dict)
         or not isinstance(cache.get("sha256"), str)
+        or not isinstance(kokkos_authority, dict)
+        or kokkos_authority.get("kind") != "installed-distribution"
+        or not isinstance(kokkos_core, dict)
+        or not canonical_core
+        or re.fullmatch(r"[0-9a-f]{64}", str(kokkos_core.get("sha256", ""))) is None
+        or not isinstance(kokkos_cmake_dir, dict)
+        or not safe_cmake_path
     ):
         raise ProfileContractError(
             "native extension cannot be proven to have been built from the exported source"

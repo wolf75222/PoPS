@@ -13,9 +13,13 @@ MANIFEST_SHA256="${4:?missing manifest SHA-256}"
 SOURCE_SHA="${5:?missing source base SHA}"
 SOURCE_DIRTY="${6:?missing source dirty state}"
 TREE_SHA256="${7:?missing source-tree SHA-256}"
-CAMPAIGN_NAME="${8:?missing campaign name}"
-JOB_PYTHON="${9:?missing aarch64 job Python}"
-SCHEDULER_DIRECTORY="${10:?missing scheduler receipt directory}"
+KOKKOS_ARCHIVE="${8:?missing authenticated Kokkos archive}"
+KOKKOS_RECEIPT="${9:?missing Kokkos source receipt}"
+KOKKOS_ARCHIVE_SHA256="${10:?missing Kokkos archive SHA-256}"
+KOKKOS_RECEIPT_SHA256="${11:?missing Kokkos receipt SHA-256}"
+CAMPAIGN_NAME="${12:?missing campaign name}"
+JOB_PYTHON="${13:?missing aarch64 job Python}"
+SCHEDULER_DIRECTORY="${14:?missing scheduler receipt directory}"
 : "${SLURM_JOB_ACCOUNT:?submit through submit_armgpu.sh so the account is explicit}"
 : "${SLURM_GPUS_ON_NODE:?submit through submit_armgpu.sh so GPU allocation is explicit}"
 : "${POPS_PERF_SUBMIT_USER:?submit through submit_armgpu.sh with an explicit user}"
@@ -65,6 +69,8 @@ if [[ "${JOB_PYTHON}" != /* ]] || [[ ! -x "${JOB_PYTHON}" ]]; then
 fi
 printf '%s  %s\n' "${ARCHIVE_SHA256}" "${ARCHIVE}" | sha256sum --check --status
 printf '%s  %s\n' "${MANIFEST_SHA256}" "${MANIFEST}" | sha256sum --check --status
+printf '%s  %s\n' "${KOKKOS_ARCHIVE_SHA256}" "${KOKKOS_ARCHIVE}" | sha256sum --check --status
+printf '%s  %s\n' "${KOKKOS_RECEIPT_SHA256}" "${KOKKOS_RECEIPT}" | sha256sum --check --status
 
 # The ROMEO architecture loader provides Spack, but deliberately does not put
 # CMake or Ninja on PATH.  Activate the audited 2025 packages first: location
@@ -202,7 +208,7 @@ case "${WORK_ROOT}" in
   /scratch_p/"${PERF_USER}"/"${SLURM_JOB_ID}"/pops-advection-sine) ;;
   *) echo "refusing unsafe POPS_PERF_WORK_ROOT=${WORK_ROOT}" >&2; exit 3 ;;
 esac
-mkdir -p "${WORK_ROOT}/source" "${WORK_ROOT}/build" "${WORK_ROOT}/raw" "${WORK_ROOT}/report" "${WORK_ROOT}/pops-cache" "${WORK_ROOT}/xdg-cache"
+mkdir -p "${WORK_ROOT}/source" "${WORK_ROOT}/kokkos-source" "${WORK_ROOT}/build" "${WORK_ROOT}/raw" "${WORK_ROOT}/report" "${WORK_ROOT}/pops-cache" "${WORK_ROOT}/xdg-cache"
 OBSERVED_ALLOCATION="${WORK_ROOT}/report/observed-allocation"
 mkdir "${OBSERVED_ALLOCATION}"
 scontrol show job -dd "${SLURM_JOB_ID}" >"${OBSERVED_ALLOCATION}/scontrol-job.txt"
@@ -293,6 +299,9 @@ test -d "${POPS_INCLUDE}"
   --expect-base-sha "${SOURCE_SHA}" --expect-dirty "${SOURCE_DIRTY}" \
   --expect-tree-sha256 "${TREE_SHA256}" >/dev/null
 cp "${MANIFEST}" "${WORK_ROOT}/report/source-export-manifest.json"
+"${JOB_PYTHON}" -B "${HARNESS}/prepare_export.py" verify-kokkos-export \
+  --archive "${KOKKOS_ARCHIVE}" --receipt "${KOKKOS_RECEIPT}" >/dev/null
+tar --same-permissions -xf "${KOKKOS_ARCHIVE}" -C "${WORK_ROOT}/kokkos-source"
 
 CAMPAIGN="${HARNESS}/campaigns/${CAMPAIGN_NAME}"
 ROUTE="$("${JOB_PYTHON}" "${HARNESS}/validate_campaign.py" "${CAMPAIGN}" --field route)"
@@ -308,12 +317,25 @@ case "${ROUTE}" in
     ;;
   *) echo "armgpu job refuses route ${ROUTE}" >&2; exit 3 ;;
 esac
-KOKKOS_ROOT="${POPS_KOKKOS_CUDA_ROOT:-${PERF_HOME}/adc_gpu_p1/kbuild}"
-KOKKOS_CONFIG="$(find "${KOKKOS_ROOT}" -type f -name KokkosConfigCommon.cmake -print -quit)"
-test -n "${KOKKOS_CONFIG}"
-CONFIGURED_WRAPPER="$("${HARNESS}/slurm/read_kokkos_compiler.sh" "${KOKKOS_CONFIG}")"
-NVCC_WRAPPER="${POPS_NVCC_WRAPPER:-${CONFIGURED_WRAPPER}}"
+KOKKOS_CUDA_SOURCE="${WORK_ROOT}/kokkos-source"
+test -f "${KOKKOS_CUDA_SOURCE}/CMakeLists.txt"
+NVCC_WRAPPER="${POPS_NVCC_WRAPPER:-${KOKKOS_CUDA_SOURCE}/bin/nvcc_wrapper}"
 test -x "${NVCC_WRAPPER}"
+KOKKOS_ROOT="${WORK_ROOT}/kokkos-cuda-install"
+"${BUILD_CMAKE}" -S "${KOKKOS_CUDA_SOURCE}" -B "${WORK_ROOT}/kokkos-cuda-build" -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CXX_STANDARD=20 \
+  -DCMAKE_CXX_COMPILER="${NVCC_WRAPPER}" \
+  -DCMAKE_MAKE_PROGRAM="${BUILD_NINJA}" \
+  -DCMAKE_INSTALL_PREFIX="${KOKKOS_ROOT}" \
+  -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+  -DKokkos_ARCH_HOPPER90=ON \
+  -DKokkos_ENABLE_CUDA=ON \
+  -DKokkos_ENABLE_CUDA_LAMBDA=ON \
+  -DKokkos_ENABLE_OPENMP=OFF \
+  -DKokkos_ENABLE_SERIAL=ON
+"${BUILD_CMAKE}" --build "${WORK_ROOT}/kokkos-cuda-build" --target install \
+  --parallel "${SLURM_CPUS_PER_TASK}"
 # Preserve the activated aarch64 Python dependency search path while making
 # the authenticated build tree and source take import precedence.
 PYTHON_DEPENDENCY_PATH="${PYTHONPATH:-}"
@@ -349,6 +371,8 @@ srun --exclusive --kill-on-bad-exit=1 --nodes=1 --ntasks=1 --cpus-per-task=1 --g
   --campaign "${CAMPAIGN}" \
   --python "${JOB_PYTHON}" \
   --kokkos-root "${KOKKOS_ROOT}" \
+  --kokkos-source-receipt "${KOKKOS_RECEIPT}" \
+  --kokkos-build "${WORK_ROOT}/kokkos-cuda-build" \
   --output "${WORK_ROOT}/raw/build.receipt.json" >/dev/null
 
 PYTHONPATH="${WORK_ROOT}/build/python:${WORK_ROOT}/source${PYTHON_DEPENDENCY_PATH:+:${PYTHON_DEPENDENCY_PATH}}" "${JOB_PYTHON}" "${HARNESS}/run_campaign.py" \

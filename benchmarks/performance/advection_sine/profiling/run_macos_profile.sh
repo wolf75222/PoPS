@@ -79,7 +79,7 @@ CAMPAIGN_REL="$(${PYTHON} -c \
   --archive "${SOURCE_ARCHIVE}" --manifest "${SOURCE_MANIFEST}" >/dev/null
 mkdir "${EXPORTED_ROOT}"
 /usr/bin/tar -xf "${SOURCE_ARCHIVE}" -C "${EXPORTED_ROOT}"
-"${PYTHON}" "${EXPORTED_ROOT}/benchmarks/performance/advection_sine/prepare_export.py" \
+"${PYTHON}" -B "${EXPORTED_ROOT}/benchmarks/performance/advection_sine/prepare_export.py" \
   verify-tree --source "${EXPORTED_ROOT}" --manifest "${SOURCE_MANIFEST}" >/dev/null
 CAMPAIGN="${EXPORTED_ROOT}/${CAMPAIGN_REL}"
 PROFILE_LIB_DIR="${EXPORTED_ROOT}/benchmarks/performance/advection_sine/profiling"
@@ -112,7 +112,8 @@ done
 "${MACOS_CMAKE}" -S "${EXPORTED_ROOT}" -B "${MACOS_BUILD_ROOT}" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_MAKE_PROGRAM="${MACOS_NINJA}" \
   -DCMAKE_CXX_COMPILER="${MACOS_CXX}" -DPOPS_NATIVE_DIM=3 \
-  -DPOPS_BUILD_PYTHON=ON -DPOPS_USE_KOKKOS=ON -DPOPS_USE_MPI=OFF \
+  -DPOPS_BUILD_PYTHON=ON -DPOPS_BUILD_TESTS=OFF \
+  -DPOPS_USE_KOKKOS=ON -DPOPS_USE_MPI=OFF \
   -DPOPS_USE_HDF5=OFF -DPython_EXECUTABLE="${TARGET_PYTHON}" \
   -DKokkos_ROOT="${MACOS_KOKKOS_ROOT}"
 "${MACOS_CMAKE}" --build "${MACOS_BUILD_ROOT}" --target _pops --parallel "${BUILD_JOBS}"
