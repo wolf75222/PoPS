@@ -131,7 +131,146 @@ struct CopyCellField {
   }
 };
 
-template <int Axis, ReconstructionVariables Variables, int Dim, class Model, class Metric,
+/// Runtime-oriented sampler used to instantiate one heavyweight face functor per prepared
+/// operator type.  The host still authenticates every axis through the ranked FaceField loop;
+/// storage never supplies an axis implicitly.
+template <int Dim>
+struct RuntimeConservativeComponentSampler {
+  FieldView<const Real, Dim> state{};
+  Index<Dim> source{};
+  int component = 0;
+  int axis = 0;
+  int orientation = 1;
+
+  POPS_HD Real operator()(int offset) const {
+    Index<Dim> sampled = source;
+    sampled[axis] += orientation * offset;
+    return state(sampled, component);
+  }
+};
+
+template <ReconstructionVariables Variables, int Dim, class Model, class Reconstruction>
+POPS_HD StateConversion<typename Model::State> reconstruct_face_state_runtime_axis(
+    const Model& model, const FieldView<const Real, Dim>& state, const Index<Dim>& source, int axis,
+    int orientation, const Reconstruction& reconstruction) {
+  if constexpr (Variables == ReconstructionVariables::Primitive) {
+    using Primitive = typename Model::Primitive;
+    if constexpr (CellValueReconstruction<Reconstruction>) {
+      const auto primitive = model.recover(load_state<Model>(state, source));
+      if (!primitive.succeeded())
+        return {{}, primitive.status};
+      return model.make_conservative(primitive.value);
+    } else if constexpr (SlopeReconstruction<Reconstruction>) {
+      const auto center = model.recover(load_state<Model>(state, source));
+      if (!center.succeeded())
+        return {{}, center.status};
+      Index<Dim> lower_index = source;
+      --lower_index[axis];
+      const auto lower = model.recover(load_state<Model>(state, lower_index));
+      if (!lower.succeeded())
+        return {{}, lower.status};
+      Index<Dim> upper_index = source;
+      ++upper_index[axis];
+      const auto upper = model.recover(load_state<Model>(state, upper_index));
+      if (!upper.succeeded())
+        return {{}, upper.status};
+
+      Primitive face{};
+      for (int component = 0; component < Model::n_vars; ++component)
+        face[component] =
+            center.value[component] +
+            Real(0.5) * Real(orientation) *
+                reconstruction.limited_slope(center.value[component] - lower.value[component],
+                                             upper.value[component] - center.value[component]);
+      return model.make_conservative(face);
+    } else {
+      using Envelope = ReconstructionStencilEnvelope<Reconstruction>;
+      constexpr int minimum = Envelope::min_offset;
+      constexpr int maximum = Envelope::max_offset;
+      constexpr int count = maximum - minimum + 1;
+      Primitive values[count]{};
+      for (int offset = minimum; offset <= maximum; ++offset) {
+        Index<Dim> sampled = source;
+        sampled[axis] += orientation * offset;
+        const auto recovered = model.recover(load_state<Model>(state, sampled));
+        if (!recovered.succeeded())
+          return {{}, recovered.status};
+        values[offset - minimum] = recovered.value;
+      }
+      Primitive face{};
+      for (int component = 0; component < Model::n_vars; ++component) {
+        const reconstruction_detail::PrimitiveComponentSampler<Primitive, minimum, maximum> sample{
+            values, component};
+        face[component] = reconstruction.stencil_face_value(sample);
+      }
+      return model.make_conservative(face);
+    }
+  } else {
+    typename Model::State face = load_state<Model>(state, source);
+    for (int component = 0; component < Model::n_vars; ++component) {
+      if constexpr (CellValueReconstruction<Reconstruction>) {
+        const RuntimeConservativeComponentSampler<Dim> sample{state, source, component, axis,
+                                                              orientation};
+        face[component] = reconstruction.cell_face_value(sample(0));
+      } else if constexpr (SlopeReconstruction<Reconstruction>) {
+        const RuntimeConservativeComponentSampler<Dim> sample{state, source, component, axis, 1};
+        const Real center = sample(0);
+        face[component] =
+            center + Real(0.5) * Real(orientation) *
+                         reconstruction.limited_slope(center - sample(-1), sample(1) - center);
+      } else {
+        const RuntimeConservativeComponentSampler<Dim> sample{state, source, component, axis,
+                                                              orientation};
+        face[component] = reconstruction.stencil_face_value(sample);
+      }
+    }
+    return {face, model.admissibility(face)};
+  }
+}
+
+template <ReconstructionVariables Variables, int Dim, class Model, class Reconstruction>
+POPS_HD ReconstructedFacePair<typename Model::State> reconstruct_face_pair_runtime_axis(
+    const Model& model, const FieldView<const Real, Dim>& state, const Index<Dim>& face, int axis,
+    const Reconstruction& reconstruction) {
+  ReconstructedFacePair<typename Model::State> result{};
+  if (axis < 0 || axis >= Dim)
+    return result;
+  Index<Dim> left_source = face;
+  --left_source[axis];
+  const auto left = reconstruct_face_state_runtime_axis<Variables>(model, state, left_source, axis,
+                                                                   1, reconstruction);
+  const auto right =
+      reconstruct_face_state_runtime_axis<Variables>(model, state, face, axis, -1, reconstruction);
+  return {left.value, right.value, left.status, right.status};
+}
+
+template <int Axis = 0, int Dim, class Metric>
+POPS_HD Real runtime_face_measure(const Metric& metric, const Index<Dim>& cell, int axis,
+                                  MetricFaceSide side) {
+  if (axis == Axis) {
+    typename Metric::PhysicalPoint area{};
+    if (side == MetricFaceSide::Lower)
+      area = metric.template oriented_face_area_vector<Axis, MetricFaceSide::Lower>(cell);
+    else
+      area = metric.template oriented_face_area_vector<Axis, MetricFaceSide::Upper>(cell);
+    Real squared = Real(0);
+    for (int physical_axis = 0; physical_axis < Metric::embedding_dimension; ++physical_axis)
+      squared += area[physical_axis] * area[physical_axis];
+    return Kokkos::sqrt(squared);
+  }
+  if constexpr (Axis + 1 < Dim)
+    return runtime_face_measure<Axis + 1>(metric, cell, axis, side);
+  return std::numeric_limits<Real>::quiet_NaN();
+}
+
+template <int Dim, class Metric>
+POPS_HD FaceContext runtime_metric_face_context(const Metric& metric, const Index<Dim>& cell,
+                                                int axis, MetricFaceSide side) {
+  return FaceContext::axis_aligned(axis, runtime_face_measure(metric, cell, axis, side),
+                                   FaceOrientation::kPositive, metric.cell_measure(cell));
+}
+
+template <ReconstructionVariables Variables, int Dim, class Model, class Metric,
           class Reconstruction, class NumericalFlux, class ProviderStorage>
 struct MaterializeFaceFlux {
   Model model;
@@ -140,19 +279,21 @@ struct MaterializeFaceFlux {
   NumericalFlux numerical_flux;
   Real positivity_floor = Real(0);
   int positivity_component = 0;
+  int axis = 0;
   FieldView<const Real, Dim> state{};
   ProviderStorage providers;
   FaceFieldView<Real, Dim> integrated_fluxes{};
   FaceFieldView<Real, Dim> statuses{};
 
-  POPS_HD void fail(const FaceIndex<Dim, Axis>& face, FiniteVolumeStatus status) const {
+  POPS_HD void fail(const Index<Dim>& face, FiniteVolumeStatus status) const {
     for (int component = 0; component < Model::n_vars; ++component)
-      integrated_fluxes.template operator()<Axis>(face.coordinate, component) = Real(0);
-    statuses.template operator()<Axis>(face.coordinate) = static_cast<Real>(status);
+      integrated_fluxes.axes[axis](face, component) = Real(0);
+    statuses.axes[axis](face) = static_cast<Real>(status);
   }
 
-  POPS_HD void operator()(const FaceIndex<Dim, Axis>& face) const {
-    auto traces = reconstruct_face_pair<Axis, Variables>(model, state, face, reconstruction);
+  POPS_HD void operator()(const Index<Dim>& face) const {
+    auto traces =
+        reconstruct_face_pair_runtime_axis<Variables>(model, state, face, axis, reconstruction);
     if (traces.left_status != StateConversionStatus::Success) {
       fail(face, finite_volume_detail::finite_volume_status(traces.left_status));
       return;
@@ -162,9 +303,9 @@ struct MaterializeFaceFlux {
       return;
     }
 
-    Index<Dim> left_cell = face.coordinate;
-    --left_cell[Axis];
-    const Index<Dim> right_cell = face.coordinate;
+    Index<Dim> left_cell = face;
+    --left_cell[axis];
+    const Index<Dim> right_cell = face;
     if (positivity_floor > Real(0)) {
       if (traces.left[positivity_component] < positivity_floor) {
         traces.left = load_state<Model>(state, left_cell);
@@ -184,10 +325,10 @@ struct MaterializeFaceFlux {
       }
     }
     FaceContext context{};
-    if (face[Axis] == integrated_fluxes.cells.lo[Axis])
-      context = metric_face_context<Axis, MetricFaceSide::Lower>(metric, right_cell);
+    if (face[axis] == integrated_fluxes.cells.lo[axis])
+      context = runtime_metric_face_context(metric, right_cell, axis, MetricFaceSide::Lower);
     else
-      context = metric_face_context<Axis, MetricFaceSide::Upper>(metric, left_cell);
+      context = runtime_metric_face_context(metric, left_cell, axis, MetricFaceSide::Upper);
 
     const auto evaluation =
         evaluate_numerical_flux_at(numerical_flux, model, traces.left, providers, left_cell,
@@ -211,10 +352,8 @@ struct MaterializeFaceFlux {
       }
     }
     for (int component = 0; component < Model::n_vars; ++component)
-      integrated_fluxes.template operator()<Axis>(face.coordinate, component) =
-          integrated.value[component];
-    statuses.template operator()<Axis>(face.coordinate) =
-        static_cast<Real>(FiniteVolumeStatus::Success);
+      integrated_fluxes.axes[axis](face, component) = integrated.value[component];
+    statuses.axes[axis](face) = static_cast<Real>(FiniteVolumeStatus::Success);
   }
 };
 
@@ -239,7 +378,7 @@ struct MaterializeResidual {
   }
 };
 
-template <int Axis, ReconstructionVariables Variables, int Dim, class Model, class Metric,
+template <ReconstructionVariables Variables, int Dim, class Model, class Metric,
           class Reconstruction, class NumericalFlux, class ProviderStorage, class MemorySpace>
 void materialize_axes(const Model& model, const Metric& metric,
                       const Reconstruction& reconstruction, const NumericalFlux& numerical_flux,
@@ -247,16 +386,14 @@ void materialize_axes(const Model& model, const Metric& metric,
                       const Fab<Dim, MemorySpace>& state, const ProviderStorage& providers,
                       FaceField<Dim, MemorySpace>& integrated_fluxes,
                       FaceField<Dim, MemorySpace>& statuses) {
-  for_each_face<Axis>(
-      state.box(),
-      MaterializeFaceFlux<Axis, Variables, Dim, Model, Metric, Reconstruction, NumericalFlux,
-                          ProviderStorage>{model, metric, reconstruction, numerical_flux,
-                                           positivity_floor, positivity_component, state.view(),
-                                           providers, integrated_fluxes.view(), statuses.view()});
-  if constexpr (Axis + 1 < Dim)
-    materialize_axes<Axis + 1, Variables>(model, metric, reconstruction, numerical_flux,
-                                          positivity_floor, positivity_component, state, providers,
-                                          integrated_fluxes, statuses);
+  for (int axis = 0; axis < Dim; ++axis) {
+    for_each_cell(
+        face_box(state.box(), axis),
+        MaterializeFaceFlux<Variables, Dim, Model, Metric, Reconstruction, NumericalFlux,
+                            ProviderStorage>{
+            model, metric, reconstruction, numerical_flux, positivity_floor, positivity_component,
+            axis, state.view(), providers, integrated_fluxes.view(), statuses.view()});
+  }
 }
 
 template <int Axis, int Dim, class MemorySpace>
@@ -379,14 +516,13 @@ class PreparedCartesianOperator {
     cartesian_operator_detail::require_face_output(output, state.box(), n_vars);
     cartesian_operator_detail::require_face_output(candidate, state.box(), n_vars);
     cartesian_operator_detail::require_face_output(statuses, state.box(), 1);
-    cartesian_operator_detail::materialize_axes<0, Variables>(
+    cartesian_operator_detail::materialize_axes<Variables>(
         model_, metric_, reconstruction_, numerical_flux_, positivity_floor_, positivity_component_,
         state, cartesian_operator_detail::ProviderFreeStorage<Dim>{}, candidate, statuses);
     const Real failure = cartesian_operator_detail::maximum_face_status<0>(statuses);
     if (failure != static_cast<Real>(FiniteVolumeStatus::Success))
-      throw std::runtime_error(
-          hyperbolic_publication_refusal(
-              "prepared ND hyperbolic face evaluation refused publication", failure));
+      throw std::runtime_error(hyperbolic_publication_refusal(
+          "prepared ND hyperbolic face evaluation refused publication", failure));
 
     cartesian_operator_detail::copy_face_axes<0>(candidate, output, n_vars);
     device_fence();
@@ -418,14 +554,13 @@ class PreparedCartesianOperator {
     cartesian_operator_detail::require_face_output(output, state.box(), n_vars);
     cartesian_operator_detail::require_face_output(candidate, state.box(), n_vars);
     cartesian_operator_detail::require_face_output(statuses, state.box(), 1);
-    cartesian_operator_detail::materialize_axes<0, Variables>(
+    cartesian_operator_detail::materialize_axes<Variables>(
         model_, metric_, reconstruction_, numerical_flux_, positivity_floor_, positivity_component_,
         state, providers.view(), candidate, statuses);
     const Real failure = cartesian_operator_detail::maximum_face_status<0>(statuses);
     if (failure != static_cast<Real>(FiniteVolumeStatus::Success))
-      throw std::runtime_error(
-          hyperbolic_publication_refusal(
-              "prepared ND hyperbolic face evaluation refused publication", failure));
+      throw std::runtime_error(hyperbolic_publication_refusal(
+          "prepared ND hyperbolic face evaluation refused publication", failure));
 
     cartesian_operator_detail::copy_face_axes<0>(candidate, output, n_vars);
     device_fence();
@@ -461,14 +596,13 @@ class PreparedCartesianOperator {
     cartesian_operator_detail::require_face_output(output, state.box(), n_vars);
     cartesian_operator_detail::require_face_output(candidate, state.box(), n_vars);
     cartesian_operator_detail::require_face_output(statuses, state.box(), 1);
-    cartesian_operator_detail::materialize_axes<0, Variables>(
+    cartesian_operator_detail::materialize_axes<Variables>(
         model_, metric_, reconstruction_, numerical_flux_, positivity_floor_, positivity_component_,
         state, providers, candidate, statuses);
     const Real failure = cartesian_operator_detail::maximum_face_status<0>(statuses);
     if (failure != static_cast<Real>(FiniteVolumeStatus::Success))
-      throw std::runtime_error(
-          hyperbolic_publication_refusal(
-              "prepared ND hyperbolic face evaluation refused publication", failure));
+      throw std::runtime_error(hyperbolic_publication_refusal(
+          "prepared ND hyperbolic face evaluation refused publication", failure));
 
     cartesian_operator_detail::copy_face_axes<0>(candidate, output, n_vars);
     device_fence();
@@ -515,9 +649,8 @@ class PreparedCartesianOperator {
         cells, cartesian_operator_detail::FieldStatusMaximum<Dim>{
                    static_cast<const Fab<Dim, MemorySpace>&>(cell_statuses).view()});
     if (cell_failure != static_cast<Real>(FiniteVolumeStatus::Success))
-      throw std::runtime_error(
-          hyperbolic_publication_refusal(
-              "prepared ND hyperbolic residual refused publication", cell_failure));
+      throw std::runtime_error(hyperbolic_publication_refusal(
+          "prepared ND hyperbolic residual refused publication", cell_failure));
 
     for_each_cell(cells, cartesian_operator_detail::CopyCellField<Dim>{
                              static_cast<const Fab<Dim, MemorySpace>&>(candidate).view(),
@@ -534,15 +667,14 @@ class PreparedCartesianOperator {
 
     FaceField<Dim, MemorySpace> integrated_fluxes(state.box(), n_vars);
     FaceField<Dim, MemorySpace> face_statuses(state.box(), 1);
-    cartesian_operator_detail::materialize_axes<0, Variables>(
+    cartesian_operator_detail::materialize_axes<Variables>(
         model_, metric_, reconstruction_, numerical_flux_, positivity_floor_, positivity_component_,
         state, cartesian_operator_detail::ProviderFreeStorage<Dim>{}, integrated_fluxes,
         face_statuses);
     const Real face_failure = cartesian_operator_detail::maximum_face_status<0>(face_statuses);
     if (face_failure != static_cast<Real>(FiniteVolumeStatus::Success))
-      throw std::runtime_error(
-          hyperbolic_publication_refusal(
-              "prepared ND hyperbolic face evaluation refused publication", face_failure));
+      throw std::runtime_error(hyperbolic_publication_refusal(
+          "prepared ND hyperbolic face evaluation refused publication", face_failure));
     assemble_residual_from_face_fluxes(integrated_fluxes, residual);
   }
 

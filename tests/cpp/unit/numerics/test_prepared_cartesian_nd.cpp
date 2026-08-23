@@ -111,6 +111,62 @@ static_assert(DiffusiveModel<DiffusiveStaticScalar<1>>);
 static_assert(DiffusiveModel<DiffusiveStaticScalar<2>>);
 static_assert(DiffusiveModel<DiffusiveStaticScalar<3>>);
 
+/// Small authenticated provider law used to exercise the Cartesian operator's native provider
+/// binding.  The speed is cell-centred input data, not an axis inferred from the field layout.
+template <int Dim>
+struct ProviderSpeedAdvection {
+  using Law = nd::ScalarAdvection<Dim>;
+  using Schema = typename Law::Schema;
+  using State = typename Law::State;
+  using Primitive = typename Law::Primitive;
+  static constexpr int dimension = Dim;
+  static constexpr int n_vars = Law::n_vars;
+  static constexpr int n_providers = 1;
+  static constexpr int n_flux_providers = 1;
+  static constexpr std::array<QualifiedProviderRequirement, 1> flux_provider_requirements{{
+      {"test.prepared-cartesian", "field", "speed", "value", "cell-average", "cell", "length/time",
+       "amr-cell", "scalar", "test.prepared-cartesian.speed", true, 0},
+  }};
+
+  Law conversion{};
+
+  POPS_HD nd::StateConversion<Primitive> recover(const State& state) const {
+    return conversion.recover(state);
+  }
+  POPS_HD nd::StateConversion<State> make_conservative(const Primitive& primitive) const {
+    return conversion.make_conservative(primitive);
+  }
+  POPS_HD nd::StateConversionStatus admissibility(const State& state) const {
+    return conversion.admissibility(state);
+  }
+
+  template <int Axis>
+  POPS_HD State flux(const State& state,
+                     const BoundFluxProviders<ProviderSpeedAdvection>& providers) const {
+    static_assert(Axis >= 0 && Axis < Dim);
+    return State{providers.template provider<0>() * state[Schema::scalar]};
+  }
+
+  template <int Axis>
+  POPS_HD Real max_wave_speed(const State&,
+                              const BoundFluxProviders<ProviderSpeedAdvection>& providers) const {
+    static_assert(Axis >= 0 && Axis < Dim);
+    const Real speed = providers.template provider<0>();
+    return speed < Real(0) ? -speed : speed;
+  }
+
+  static VariableSet conservative_vars() { return Law::conservative_vars(); }
+  static VariableSet primitive_vars() { return Law::primitive_vars(); }
+};
+
+static_assert(nd::ConservationLaw<1, ProviderSpeedAdvection<1>>);
+static_assert(nd::ConservationLaw<2, ProviderSpeedAdvection<2>>);
+static_assert(nd::ConservationLaw<3, ProviderSpeedAdvection<3>>);
+
+template <int Axis, int Dim>
+void check_constant_face_axis(const nd::FaceField<Dim>& fluxes,
+                              const std::array<Real, Dim>& expected);
+
 template <int Dim>
 void check_centered_fickian_flux() {
   constexpr Real diffusivity = Real(0.125);
@@ -138,6 +194,27 @@ void check_centered_fickian_flux() {
     expected += Real(2) * diffusivity / (spacing * spacing);
   }
   EXPECT_NEAR(host(host_offset(residual.grown_box(), center, 0)), expected, Real(2e-12));
+}
+
+template <int Dim>
+void check_provider_bound_face_fluxes() {
+  const Box<Dim> domain = Box<Dim>::from_extents(uniform_extent<Dim>(5));
+  const auto geometry = unit_geometry(domain);
+  const auto op = nd::prepare_cartesian_operator<Dim>(geometry, ProviderSpeedAdvection<Dim>{});
+  Fab<Dim> state(domain, 1, uniform_extent<Dim>(NoSlope::n_ghost));
+  Fab<Dim> providers(domain, 1, uniform_extent<Dim>(NoSlope::n_ghost));
+  fill_periodic(state, [](const Index<Dim>&, int) { return Real(2); });
+  fill_periodic(providers, [](const Index<Dim>&, int) { return Real(0.75); });
+
+  nd::FaceField<Dim> fluxes(domain, 1);
+  op.materialize_face_fluxes(state, providers, fluxes);
+  std::array<Real, Dim> expected{};
+  Real cell_measure = Real(1);
+  for (int axis = 0; axis < Dim; ++axis)
+    cell_measure *= geometry.spacing(axis);
+  for (int axis = 0; axis < Dim; ++axis)
+    expected[axis] = Real(1.5) * cell_measure / geometry.spacing(axis);
+  check_constant_face_axis<0, Dim>(fluxes, expected);
 }
 
 template <int Dim>
@@ -290,6 +367,12 @@ TEST(test_prepared_cartesian_nd, centered_fickian_flux_survives_the_canonical_ra
   check_centered_fickian_flux<1>();
   check_centered_fickian_flux<2>();
   check_centered_fickian_flux<3>();
+}
+
+TEST(test_prepared_cartesian_nd, provider_bound_fluxes_preserve_every_ranked_axis) {
+  check_provider_bound_face_fluxes<1>();
+  check_provider_bound_face_fluxes<2>();
+  check_provider_bound_face_fluxes<3>();
 }
 
 TEST(test_prepared_cartesian_nd, diffusive_cfl_bound_is_parabolic_and_rejects_invalid_nu) {
