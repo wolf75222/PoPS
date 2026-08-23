@@ -713,6 +713,16 @@ def _authenticated_kokkos_cuda_compile_flags(compiler: Any) -> list[str]:
     return flags
 
 
+def _pops_nvcc_wrapper_compile_flags(compiler: Any) -> list[str]:
+    """PoPS CUDA-loader requirements independent of the selected Kokkos architecture.
+
+    Generated loaders instantiate PoPS ``POPS_HD`` code that calls constexpr helpers.  NVCC emits
+    warning #20013/#20015 for those calls and explicitly recommends relaxed constexpr; without it,
+    the warning flood can terminate CICC before the loader is produced.
+    """
+    return ["--expt-relaxed-constexpr"] if _is_nvcc_wrapper(compiler) else []
+
+
 def native_loader_include_flags(compiler: Any, flags: Any) -> list[Any]:
     """Normalize split include options for Kokkos ``nvcc_wrapper`` only.
 
@@ -823,6 +833,7 @@ def pops_loader_build_flags(cxx: Any = None) -> tuple:
     cflags = ["-DPOPS_NATIVE_DIM=%d" % loader_native_dimension(),
               *loader_cflags, *cflags, *mpi_cflags]
     cflags.extend(_authenticated_kokkos_cuda_compile_flags(cc))
+    cflags.extend(_pops_nvcc_wrapper_compile_flags(cc))
     cflags = native_loader_include_flags(cc, cflags)
     lflags = [*lflags, *mpi_lflags]
     if sys.platform == "darwin":

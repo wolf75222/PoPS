@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 def test_native_loader_include_flags_join_only_for_nvcc_wrapper() -> None:
-    from pops.codegen.toolchain import native_loader_include_flags
+    from pops.codegen.toolchain import _pops_nvcc_wrapper_compile_flags, native_loader_include_flags
 
     flags = ["-DPOPS_HAS_KOKKOS", "-I", "/kokkos/include", "-I", "/mpi/include"]
 
@@ -19,6 +19,10 @@ def test_native_loader_include_flags_join_only_for_nvcc_wrapper() -> None:
         "-I/mpi/include",
     ]
     assert native_loader_include_flags("/usr/bin/c++", flags) == flags
+    assert _pops_nvcc_wrapper_compile_flags("/opt/kokkos/bin/nvcc_wrapper") == [
+        "--expt-relaxed-constexpr"
+    ]
+    assert _pops_nvcc_wrapper_compile_flags("/usr/bin/c++") == []
 
 
 def test_compile_native_nvcc_wrapper_joins_kokkos_mpi_and_sdk_includes(monkeypatch, tmp_path) -> None:
@@ -42,6 +46,7 @@ def test_compile_native_nvcc_wrapper_joins_kokkos_mpi_and_sdk_includes(monkeypat
                 "-extended-lambda",
                 "-Wext-lambda-captures-this",
                 "-arch=sm_90",
+                "--expt-relaxed-constexpr",
             ],
             ["-ldl", "-pthread"],
         ),
@@ -72,7 +77,9 @@ def test_compile_native_nvcc_wrapper_joins_kokkos_mpi_and_sdk_includes(monkeypat
     assert command.index("-I/mpi/include") < command.index("-I/pops/include")
     assert command.index("-extended-lambda") < command.index("-arch=sm_90")
     assert command.index("-arch=sm_90") < command.index("-I/pops/include")
+    assert command.count("--expt-relaxed-constexpr") == 1
     output_index = command.index("-o")
+    assert command.index("--expt-relaxed-constexpr") < output_index
     assert command[output_index - 1].endswith("model_native.cpp")
     assert command[output_index + 1] == str(output)
     assert command[output_index + 2 :] == ["-ldl", "-pthread"]
