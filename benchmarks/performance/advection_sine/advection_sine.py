@@ -100,17 +100,17 @@ grid = CartesianGrid(
 # 3. Modèle : d_t q + div(a q) = 0, direction demandée par la campagne.
 velocity_values = direction_velocity(args.mode, DIMENSION)
 model = pops.Model("periodic_sine_advection", frame=frame)
-Q = model.state("Q", components=("q",), representation=Conservative(), space=CellState(frame=frame))
-(q,) = Q
+U = model.state("U", components=("q",), representation=Conservative(), space=CellState(frame=frame))
+(q,) = U
 velocity = model.vector("a", frame=frame, components=dict(zip(axes, velocity_values, strict=True)))
 flux = model.flux(
     "advection_flux",
     frame=frame,
-    state=Q,
+    state=U,
     components={axis: (speed * q,) for axis, speed in zip(axes, velocity_values, strict=True)},
     waves={axis: (speed,) for axis, speed in zip(axes, velocity_values, strict=True)},
 )
-rate = model.rate("advection_rate", equation=ddt(Q) == -div(flux))
+rate = model.rate("advection_rate", equation=ddt(U) == -div(flux))
 
 
 # 4. Volumes finis MUSCL Van Leer, flux Scalaire upwind, SSPRK2 et pas dyadique stable.
@@ -119,16 +119,16 @@ numerics.rates.add(
     rate,
     FiniteVolume(
         flux=flux,
-        variables=variables.Conservative(Q),
+        variables=variables.Conservative(U),
         reconstruction=reconstruction.MUSCL(limiters.VanLeer()),
         riemann=riemann.ScalarUpwind(velocity=velocity),
     ),
 )
 case = pops.Case("performance_periodic_sine_advection")
-tracer = case.block("tracer", model=model, states=(Q,))
-tracer_q = tracer[Q]
+tracer = case.block("tracer", model=model, states=(U,))
+tracer_U = tracer[U]
 case.numerics(numerics, block=tracer)
-program = SSPRK2(tracer_q, rate=rate)
+program = SSPRK2(tracer_U, rate=rate)
 inverse_stable_dt = (
     sum(abs(speed) * cells for speed, cells in zip(velocity_values, args.resolution, strict=True))
     / args.cfl
@@ -145,7 +145,7 @@ phase = sum(
 )
 case.initials.add(
     InitialCondition(
-        state=tracer_q,
+        state=tracer_U,
         value=Analytic(frame=frame, components=(1.0 + EPSILON * sin(2.0 * math.pi * phase),)),
         projection=ConservativeCellAverage(),
     )
