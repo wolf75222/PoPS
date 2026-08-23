@@ -14,7 +14,7 @@ import os
 import platform
 import subprocess
 import sys
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
 import numpy as np
@@ -1451,7 +1451,7 @@ def publish_result(
             "repository_sha": source["repository_sha"],
             "repository_dirty": source["repository_dirty"],
             "pops_version": pops_version,
-            "date_utc": datetime.now(UTC).isoformat(),
+            "date_utc": datetime.now(timezone.utc).isoformat(),
             "execution": execution,
             "source": source,
             "artifact": artifact,

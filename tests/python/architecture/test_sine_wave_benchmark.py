@@ -1779,3 +1779,9 @@ def test_convergence_rejects_mixed_scientific_or_execution_authorities(tmp_path,
         other["metrics"]["method"]["cfl"] = 0.1
 
     assert plot_convergence(None, [base, other], tmp_path) is None
+
+
+def test_case_support_keeps_the_declared_python_310_compatibility():
+    source = SUPPORT.read_text(encoding="utf-8")
+    assert "from datetime import UTC" not in source
+    assert "datetime.now(timezone.utc)" in source

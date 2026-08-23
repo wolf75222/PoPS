@@ -11,7 +11,7 @@ import math
 import re
 import statistics
 import sys
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -670,7 +670,7 @@ def main() -> int:
         return 2
     summary = {
         "schema": SUMMARY_SCHEMA,
-        "created_utc": datetime.now(UTC).isoformat(),
+        "created_utc": datetime.now(timezone.utc).isoformat(),
         "campaign": campaign["id"],
         "route": campaign["route"],
         "scaling": campaign["scaling"],

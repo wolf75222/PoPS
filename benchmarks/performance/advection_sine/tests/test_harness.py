@@ -38,6 +38,11 @@ from support import write_rank_measurement  # noqa: E402
 
 
 class PublicPythonHarnessTests(unittest.TestCase):
+    def test_collector_keeps_the_declared_python_310_compatibility(self) -> None:
+        source = (HARNESS / "collect_results.py").read_text(encoding="utf-8")
+        self.assertNotIn("from datetime import UTC", source)
+        self.assertIn("datetime.now(timezone.utc)", source)
+
     def test_public_case_selects_its_authored_state_explicitly(self) -> None:
         source = (HARNESS / "advection_sine.py").read_text(encoding="utf-8")
         self.assertIn('U = model.state("U",', source)
