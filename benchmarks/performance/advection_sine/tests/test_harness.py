@@ -504,12 +504,12 @@ class PublicPythonHarnessTests(unittest.TestCase):
 
     def test_romeo_cuda_loader_optimization_policy_is_explicit_and_recorded(self) -> None:
         wrapper = (HARNESS / "slurm" / "armgpu.sbatch").read_text(encoding="utf-8")
-        self.assertIn("readonly POPS_CUDA_DSL_OPTFLAGS='-O1 -DNDEBUG'", wrapper)
+        self.assertIn("readonly POPS_CUDA_DSL_OPTFLAGS='-O0 -DNDEBUG'", wrapper)
         self.assertIn('export POPS_DSL_OPTFLAGS="${POPS_CUDA_DSL_OPTFLAGS}"', wrapper)
         self.assertIn('POPS_DSL_OPTFLAGS="${POPS_DSL_OPTFLAGS}"', wrapper)
         self.assertIn('"POPS_DSL_OPTFLAGS",', wrapper)
         self.assertIn(
-            "POPS_DSL_OPTFLAGS='-O1 -DNDEBUG'",
+            "POPS_DSL_OPTFLAGS='-O0 -DNDEBUG'",
             (HARNESS / "README.md").read_text(encoding="utf-8"),
         )
 
