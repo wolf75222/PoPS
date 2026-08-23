@@ -149,9 +149,9 @@ dans `raw/build.receipt.json`; le collecteur refuse une provenance CUDA qui ne
 porte pas exactement cette valeur.
 
 Le chargeur natif CUDA ajoute aussi la politique PoPS déterministe
-`--expt-relaxed-constexpr --split-compile=2`. Le premier drapeau est requis par
+`--expt-relaxed-constexpr --split-compile=8`. Le premier drapeau est requis par
 les helpers `constexpr` appelés depuis les kernels; le second découpe
-l'optimisation device et borne NVCC à deux threads pour éviter le crash CICC
+l'optimisation device et borne NVCC aux huit CPU réservés après le crash CICC
 observé sur la spécialisation exacte 3D. Cette politique est incluse dans
 l'identité de l'artefact compilé; elle ne modifie ni les points, ni les tailles,
 ni les répétitions de la campagne.

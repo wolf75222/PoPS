@@ -61,5 +61,5 @@ def test_run_compile_seals_nvcc_wrapper_environment(monkeypatch) -> None:
 
     toolchain._run_compile(["/opt/kokkos/bin/nvcc_wrapper", "model.cpp"], "native loader")
 
-    assert observed["NVCC_PREPEND_FLAGS"] == "--split-compile=2"
+    assert observed["NVCC_PREPEND_FLAGS"] == "--split-compile=8"
     assert "NVCC_APPEND_FLAGS" not in observed

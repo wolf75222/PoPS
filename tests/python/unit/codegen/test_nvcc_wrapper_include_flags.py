@@ -31,11 +31,11 @@ def test_native_loader_include_flags_join_only_for_nvcc_wrapper() -> None:
     ]
     assert _pops_nvcc_wrapper_compile_flags("/usr/bin/c++") == []
     assert _pops_nvcc_wrapper_compile_environment("/opt/kokkos/bin/nvcc_wrapper") == {
-        "NVCC_PREPEND_FLAGS": "--split-compile=2"
+        "NVCC_PREPEND_FLAGS": "--split-compile=8"
     }
     assert _pops_nvcc_wrapper_compile_environment("/usr/bin/c++") == {}
     assert native_loader_codegen_key("/opt/kokkos/bin/nvcc_wrapper").endswith(
-        "--expt-relaxed-constexpr,NVCC_PREPEND_FLAGS=--split-compile=2"
+        "--expt-relaxed-constexpr,NVCC_PREPEND_FLAGS=--split-compile=8"
     )
     assert native_loader_codegen_key("/usr/bin/c++").endswith(":host")
 
@@ -95,7 +95,7 @@ def test_compile_native_nvcc_wrapper_joins_kokkos_mpi_and_sdk_includes(monkeypat
     assert command.count("--expt-relaxed-constexpr") == 1
     output_index = command.index("-o")
     assert command.index("--expt-relaxed-constexpr") < output_index
-    assert "--split-compile=2" not in command
+    assert "--split-compile=8" not in command
     assert command[output_index - 1].endswith("model_native.cpp")
     assert command[output_index + 1] == str(output)
     assert command[output_index + 2 :] == ["-ldl", "-pthread"]

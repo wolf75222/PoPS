@@ -740,11 +740,11 @@ def _pops_nvcc_wrapper_compile_environment(compiler: Any) -> dict[str, str]:
     NVIDIA documents ``NVCC_PREPEND_FLAGS`` as flags prepended to the real nvcc command. The ambient
     variables are removed by :func:`native_compile_environment`; this exact value is then restored
     only for nvcc_wrapper. ``1`` disables split compilation, while ``2`` both partitions the device
-    optimizer and bounds its concurrency.
+    optimizer and bounds its concurrency to the eight CPUs reserved by the canonical CUDA point.
     """
     if not _is_nvcc_wrapper(compiler):
         return {}
-    return {"NVCC_PREPEND_FLAGS": "--split-compile=2"}
+    return {"NVCC_PREPEND_FLAGS": "--split-compile=8"}
 
 
 def native_loader_codegen_key(compiler: Any) -> str:
