@@ -18,6 +18,7 @@ from pops.codegen.toolchain import (
     _pops_import_lib,
     pops_header_signature,
     pops_loader_build_flags,
+    native_loader_include_flags,
 )
 from pops.codegen.cache import (
     _artifact_cache_lock,
@@ -124,7 +125,8 @@ def compile_native(
             cmd = (
                 [cc]
                 + cl_flags
-                + ["-I", include, cpp, "/Fe:" + so_path, "/Fo" + tmp + os.sep, "/link"]
+                + native_loader_include_flags(cc, ["-I", include])
+                + [cpp, "/Fe:" + so_path, "/Fo" + tmp + os.sep, "/link"]
                 + native_link_flags
                 + [pops_lib]
             )
@@ -138,7 +140,8 @@ def compile_native(
                 '-DPOPS_HEADER_SIG="%s"' % sig,
                 *native_compile_flags,
             ]
-            cmd = [cc, *flags, "-I", include, cpp, "-o", so_path, *native_link_flags]
+            include_flags = native_loader_include_flags(cc, [*flags, "-I", include])
+            cmd = [cc, *include_flags, cpp, "-o", so_path, *native_link_flags]
         _run_compile(cmd, "backend production, compile_native")
     return so_path
 
@@ -653,17 +656,11 @@ def _compile_problem_impl(
                     "-MT",
                     compile_path,
                 ]
-                cmd = [
+                include_flags = native_loader_include_flags(
                     cc,
-                    *flags,
-                    "-I",
-                    include,
-                    *component_include_flags,
-                    cpp,
-                    "-o",
-                    compile_path,
-                    *lflags,
-                ]
+                    [*flags, "-I", include, *component_include_flags],
+                )
+                cmd = [cc, *include_flags, cpp, "-o", compile_path, *lflags]
                 reported_cmd = [
                     so_path
                     if item == compile_path

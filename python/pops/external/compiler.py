@@ -103,6 +103,7 @@ def compile_component(
         loader_cxx_std,
         pops_include,
         pops_loader_build_flags,
+        native_loader_include_flags,
     )
 
     include = include or pops_include()
@@ -134,16 +135,16 @@ def compile_component(
                 "native ABI packages require at least one source or C++ IR translation unit",
             )
         output = root / ("component" + (".dylib" if sys.platform == "darwin" else ".so"))
+        include_flags = native_loader_include_flags(
+            compiler,
+            [*cflags, "-I", include, "-I", str(root)],
+        )
         command = [
             compiler,
             "-shared",
             "-fPIC",
             "-std=" + standard,
-            *cflags,
-            "-I",
-            include,
-            "-I",
-            str(root),
+            *include_flags,
             *package_sources,
             "-o",
             str(output),

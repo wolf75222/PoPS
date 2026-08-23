@@ -609,6 +609,32 @@ def _native_kokkos_compiler(cxx: Any) -> Any:
     return _default_cxx(None)
 
 
+def native_loader_include_flags(compiler: Any, flags: Any) -> list[Any]:
+    """Normalize split include options for Kokkos ``nvcc_wrapper`` only.
+
+    ``nvcc_wrapper`` recognizes a bare ``-I`` but forwards its following directory as a host
+    compiler positional input.  The native-loader command is assembled from authenticated Kokkos,
+    MPI, SDK, and staged-component fragments, so normalize the final flag sequence in one place.
+    Conventional host compilers retain their historical split ``-I``, ``directory`` arguments.
+    """
+    result = list(flags)
+    if os.path.basename(os.fspath(compiler or "")) != "nvcc_wrapper":
+        return result
+    joined: list[Any] = []
+    index = 0
+    while index < len(result):
+        flag = result[index]
+        if flag != "-I":
+            joined.append(flag)
+            index += 1
+            continue
+        if index + 1 == len(result):
+            raise ValueError("native loader include option '-I' has no directory")
+        joined.append("-I" + os.fspath(result[index + 1]))
+        index += 2
+    return joined
+
+
 def _pops_import_lib() -> Any:
     """(Windows, ADC-100) Path of the import library _pops.lib (System POPS_EXPORT symbols) against
     which to link the DSL .dll. Searched next to the _pops module. None if absent."""
@@ -692,6 +718,7 @@ def pops_loader_build_flags(cxx: Any = None) -> tuple:
     mpi_cflags, mpi_lflags = native_mpi_build_flags(module)
     cflags = ["-DPOPS_NATIVE_DIM=%d" % loader_native_dimension(),
               *loader_cflags, *cflags, *mpi_cflags]
+    cflags = native_loader_include_flags(cc, cflags)
     lflags = [*lflags, *mpi_lflags]
     if sys.platform == "darwin":
         cflags = list(cflags) + ["-undefined", "dynamic_lookup"]
