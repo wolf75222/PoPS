@@ -38,6 +38,11 @@ from support import write_rank_measurement  # noqa: E402
 
 
 class PublicPythonHarnessTests(unittest.TestCase):
+    def test_public_case_selects_its_authored_state_explicitly(self) -> None:
+        source = (HARNESS / "advection_sine.py").read_text(encoding="utf-8")
+        self.assertIn('case.block("tracer", model=model, states=(Q,))', source)
+        self.assertNotIn('case.block("tracer", model=model)\n', source)
+
     def test_installed_kokkos_core_accepts_macos_dylib_but_romeo_requires_static(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -125,7 +125,7 @@ numerics.rates.add(
     ),
 )
 case = pops.Case("performance_periodic_sine_advection")
-tracer = case.block("tracer", model=model)
+tracer = case.block("tracer", model=model, states=(Q,))
 tracer_q = tracer[Q]
 case.numerics(numerics, block=tracer)
 program = SSPRK2(tracer_q, rate=rate)
