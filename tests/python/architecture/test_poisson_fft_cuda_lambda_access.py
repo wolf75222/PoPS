@@ -16,6 +16,9 @@ FFT_SOLVER_HEADER = ROOT / "include/pops/numerics/elliptic/poisson/poisson_fft_s
 FFT_MULTIFAB_HEADER = ROOT / "include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp"
 GEOMETRIC_MG_HEADER = ROOT / "include/pops/numerics/elliptic/mg/geometric_mg.hpp"
 COMPOSITE_FAC_HEADER = ROOT / "include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp"
+PARTITIONED_COMPOSITE_FAC_HEADER = (
+    ROOT / "include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp"
+)
 SYSTEM_INSTALL_SOURCE = ROOT / "src/runtime/system/system_install.cpp"
 
 CUDA_LAUNCH_HELPERS = (
@@ -106,6 +109,7 @@ def test_multifab_and_multigrid_device_functors_replace_private_parents() -> Non
     multifab = FFT_MULTIFAB_HEADER.read_text()
     geometric_mg = GEOMETRIC_MG_HEADER.read_text()
     composite_fac = COMPOSITE_FAC_HEADER.read_text()
+    partitioned_composite_fac = PARTITIONED_COMPOSITE_FAC_HEADER.read_text()
 
     for source, struct_name in (
         (multifab, "PackSlabKernel"),
@@ -120,6 +124,16 @@ def test_multifab_and_multigrid_device_functors_replace_private_parents() -> Non
     _contains_no_device_lambda(geometric_mg, "  static void copy_vector_valid_", "  void smooth_")
     _contains_no_device_lambda(composite_fac, "  static void copy_vector_valid_", "  void smooth_level_")
     _contains_no_device_lambda(composite_fac, "  static void copy_grown_", "  void stage_iterate_")
+    _contains_no_device_lambda(
+        partitioned_composite_fac,
+        "  static void copy_vector_valid_",
+        "  void smooth_(",
+    )
+    partitioned_copy = _braced_definition(
+        partitioned_composite_fac,
+        "  static void copy_vector_valid_",
+    )
+    assert "::pops::elliptic::mg::detail::CopyComponentsKernel<" in partitioned_copy
 
 
 def test_fft_solver_named_device_functors_replace_local_for_each_lambdas() -> None:
