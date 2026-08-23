@@ -140,10 +140,10 @@ compilateur/Kokkos/Python/pybind11/CUDA/OpenMPI sont dans le reçu de build;
 armgpu refuse toute compilation sur le login x86_64.
 
 Pour les routes CUDA, `armgpu.sbatch` fixe et propage explicitement
-`POPS_DSL_OPTFLAGS='-O0 -DNDEBUG'`. Cette politique ne réduit aucun point,
-répétition ou taille du workload : elle limite uniquement l'optimisation de la
-compilation du chargeur DSL Python, après les crashs CICC observés à `-O3`,
-`-O2` et `-O1`. Une
+`POPS_DSL_OPTFLAGS='-O3 -DNDEBUG'`. La voie affine scalaire canonique évite
+l'instanciation du `CompositeModel` DSL dans l'opérateur cartésien, qui faisait
+planter CICC avec toutes les optimisations testées de `-O3` à `-O0`. Cette
+politique ne réduit aucun point, répétition ou taille du workload. Une
 valeur différente est refusée avant le build, transmise à chaque étape `srun`,
 archivée dans `observed-allocation/environment-provenance.json`, puis scellée
 dans `raw/build.receipt.json`; le collecteur refuse une provenance CUDA qui ne

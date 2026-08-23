@@ -34,12 +34,12 @@ if [[ "${PERF_HOME}" != /* ]] || [[ ! -d "${PERF_HOME}" ]]; then
   exit 3
 fi
 
-# CICC has crashed compiling the real public Python DSL loader at -O3 through -O1. Keep
-# this ROMEO CUDA policy explicit, reproducible, and fail-closed: the wrapper
-# never accepts a submission-side override with different semantics.
-readonly POPS_CUDA_DSL_OPTFLAGS='-O0 -DNDEBUG'
+# The canonical affine-scalar loader avoids the CICC crash observed for the
+# former generated CompositeModel route from -O3 through -O0. Keep the ordinary
+# Release optimization explicit, reproducible, and fail-closed.
+readonly POPS_CUDA_DSL_OPTFLAGS='-O3 -DNDEBUG'
 if [[ -n "${POPS_DSL_OPTFLAGS:-}" && "${POPS_DSL_OPTFLAGS}" != "${POPS_CUDA_DSL_OPTFLAGS}" ]]; then
-  echo "armgpu requires POPS_DSL_OPTFLAGS='-O0 -DNDEBUG'" >&2
+  echo "armgpu requires POPS_DSL_OPTFLAGS='-O3 -DNDEBUG'" >&2
   exit 3
 fi
 export POPS_DSL_OPTFLAGS="${POPS_CUDA_DSL_OPTFLAGS}"

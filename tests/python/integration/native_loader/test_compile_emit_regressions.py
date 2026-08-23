@@ -9,6 +9,7 @@ from pops.codegen._artifact_identity import model_artifact_spec
 from pops.codegen._compile_emit import (
     _BACKEND_CAPS,
     _normalize_sealed_system_routes,
+    _canonical_affine_scalar_advection,
     compiled_capability_flags,
 )
 from pops.model import Handle, OwnerPath
@@ -100,8 +101,9 @@ def _assert_exact_native_loader(loader: str, *, target: str, dimension: int) -> 
         assert "s->commit(std::move(package));" in loader
         assert "pops::add_compiled_model<pops::kNativeDimension>" not in loader
         assert "pops::PreparedSystemBlock<pops::kNativeDimension>" in loader
-        assert "prepare_exact_system_block(" in loader
-        assert "pops::CompiledSystemBlockPreparation<" in loader
+        canonical = "prepare_canonical_affine_scalar_advection_system_block" in loader
+        assert ("prepare_exact_system_block(" in loader) != canonical
+        assert ("pops::CompiledSystemBlockPreparation<" in loader) != canonical
         assert "pops::System*" not in loader
         assert "pops::AmrSystem*" not in loader
     else:
@@ -215,14 +217,45 @@ def test_plan_owned_system_loader_seals_one_spatial_specialization_and_abi_token
         target="system",
         sealed_system_routes=spatial,
     )
-    preparer = _system_package_preparer(loader)
-
     assert _normalize_sealed_system_routes(spatial) == ("vanleer", "rusanov", "conservative")
     assert _normalize_sealed_system_routes(
         ("vanleer", "rusanov", "conservative")
     ) == ("vanleer", "rusanov", "conservative")
     with pytest.raises(ValueError, match="non-catalogue token"):
         _normalize_sealed_system_routes(("vanleer", "invented", "conservative"))
+    assert "pops::prepare_canonical_affine_scalar_advection_system_block<" in loader
+    install = loader[loader.index("POPS_LOADER_API void pops_install_native("):]
+    assert "pops::compiled_model::bind_runtime_params(" not in install
+    assert "pops_generated::ProdModel{}" not in install
+    assert "prepare_exact_system_block(" not in loader
+    assert "prepare_generated_system_block_exact<" not in loader
+    assert "velocity[0] = pops::Real(1);" in loader
+    assert "velocity[1] = pops::Real(2);" in loader
+    assert "pops_compiled_nparams() {\n  return 0;" in loader
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    (
+        lambda model, state: model.source([state]),
+        lambda model, state: model.flux(x=[state], y=[2 * state]),
+    ),
+    ids=("source", "non_affine_flux"),
+)
+def test_canonical_affine_scalar_recognizer_fails_closed_for_extra_physics(mutate) -> None:
+    model = _ranked_scalar_model(2)
+    state = model._m._flux["x"][0].b
+    mutate(model, state)
+    spatial = Spatial(limiter=VanLeer(), flux=Rusanov(), recon=Conservative())
+    assert _canonical_affine_scalar_advection(
+        model._m, target="system", sealed_routes=_normalize_sealed_system_routes(spatial)
+    ) is None
+    loader = model.__pops_native_loader_source__(
+        name="NotCanonicalAffine", target="system", sealed_system_routes=spatial
+    )
+    assert "prepare_canonical_affine_scalar_advection_system_block" not in loader
+    assert "prepare_exact_system_block(" in loader
+    preparer = _system_package_preparer(loader)
     assert "pops::prepare_generated_system_block_exact<" in preparer
     assert "pops::nd::ReconstructionVariables::Conservative" in preparer
     assert "pops::VanLeer{}" in preparer
@@ -232,6 +265,27 @@ def test_plan_owned_system_loader_seals_one_spatial_specialization_and_abi_token
     assert "select_reconstruction" not in preparer
     assert "select_riemann" not in preparer
     assert "switch (" not in preparer
+
+
+def test_canonical_affine_scalar_recognizer_requires_exact_target_and_routes() -> None:
+    model = _ranked_scalar_model(2)
+    assert _canonical_affine_scalar_advection(
+        model._m, target="amr_system", sealed_routes=("vanleer", "rusanov", "conservative")
+    ) is None
+    assert _canonical_affine_scalar_advection(
+        model._m, target="system", sealed_routes=("minmod", "rusanov", "conservative")
+    ) is None
+
+
+def test_canonical_affine_scalar_recognizer_requires_matching_wave_speed() -> None:
+    model = _ranked_scalar_model(2)
+    state = model._m._flux["x"][0].b
+    model.eigenvalues(x=[2 + 0 * state], y=[2 + 0 * state])
+    assert _canonical_affine_scalar_advection(
+        model._m,
+        target="system",
+        sealed_routes=("vanleer", "rusanov", "conservative"),
+    ) is None
 
 
 def test_direct_model_loader_remains_generic_when_no_plan_route_is_supplied() -> None:

@@ -311,6 +311,147 @@ def _sealed_system_cpp_routes(
     )
 
 
+def _canonical_affine_scalar_advection(
+    model: Any, *, target: str, sealed_routes: tuple[str, str, str] | None
+) -> tuple[tuple[str, ...], str] | None:
+    """Return literal velocities for the narrow canonical scalar-advection seam.
+
+    This is intentionally a structural recognizer, not a simplifier.  It accepts only the exact
+    one-component, identity-recovery DSL shape whose generated numerical operator is equivalent
+    to :class:`pops::nd::ScalarAdvection`: ``F_axis = a_axis * q`` and matching constant wave
+    speeds.  Every other expression shape, side effect, provider, source, or route keeps the
+    normal generated-model path.
+    """
+    from pops._ir.expr import Add, Const, Mul, Var
+
+    if target != "system" or sealed_routes != ("vanleer", "rusanov", "conservative"):
+        return None
+    axes = ("x", "y", "z")
+    dimension = len(getattr(model, "_flux", {}))
+    if dimension not in (1, 2, 3) or tuple(getattr(model, "_flux", ())) != axes[:dimension]:
+        return None
+    if getattr(model, "cons_names", None) is None or len(model.cons_names) != 1:
+        return None
+    scalar_name = model.cons_names[0]
+    if type(scalar_name) is not str or not scalar_name:
+        return None
+
+    def is_state(expression: Any) -> bool:
+        return (
+            type(expression) is Var
+            and expression.name == scalar_name
+            and expression.kind == "cons"
+        )
+
+    def literal(expression: Any) -> tuple[float, str] | None:
+        if type(expression) is not Const or expression.handle is not None:
+            return None
+        value = expression.literal.to_python()
+        if type(value) is bool:
+            return None
+        try:
+            numerical = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if not math.isfinite(numerical):
+            return None
+        return numerical, expression.literal.to_cpp()
+
+    def is_zero_times_state(expression: Any) -> bool:
+        if type(expression) is not Mul or not is_state(expression.b):
+            return False
+        coefficient = literal(expression.a)
+        return coefficient is not None and coefficient[0] == 0.0
+
+    def speed_matches(expression: Any, velocity: float) -> bool:
+        direct = literal(expression)
+        if direct is not None:
+            return direct[0] == velocity
+        if type(expression) is Add:
+            base = literal(expression.a)
+            return (
+                base is not None
+                and base[0] == velocity
+                and is_zero_times_state(expression.b)
+            )
+        return False
+
+    # This factory deliberately has identity primitive/conservative conversions only.  Reject any
+    # authored recovery formula or admissibility condition instead of guessing its equivalence.
+    cons_from = getattr(model, "cons_from", None)
+    if (
+        getattr(model, "prim_defs", None) != {}
+        or getattr(model, "prim_state", None) != [scalar_name]
+        or type(cons_from) is not list
+        or len(cons_from) != 1
+        or not is_state(cons_from[0])
+        or getattr(model, "_recovery_admissibility", None) != {}
+    ):
+        return None
+
+    # Nothing outside the conservative hyperbolic flux may be silently dropped by the reduced
+    # physical model: no ordinary/named providers, sources, local maps, elliptic contribution,
+    # stability override, Riemann extension, or rate/diffusion-like operator.
+    rejected = (
+        getattr(model, "_provider_components", None),
+        getattr(model, "_flux_terms", None),
+        getattr(model, "_source", None),
+        getattr(model, "_source_terms", None),
+        getattr(model, "_linear_sources", None),
+        getattr(model, "_local_transforms", None),
+        getattr(model, "_elliptic", None),
+        getattr(model, "_elliptic_fields", None),
+        getattr(model, "_stab_speed", None),
+        getattr(model, "_stab_dt", None),
+        getattr(model, "_src_freq", None),
+        getattr(model, "_proj", None),
+        getattr(model, "_src_jac", None),
+        getattr(model, "_riemann_hook_forms", None),
+        getattr(model, "_rate_operators", None),
+        getattr(model, "_ws_jacobian", None),
+    )
+    if any(value not in (None, {}, [], ()) for value in rejected):
+        return None
+    if getattr(model, "_hllc", False) or getattr(model, "_roe", False):
+        return None
+    if getattr(model, "_roe_rows", None) is not None or getattr(model, "gamma", None) is not None:
+        return None
+    if model.runtime_param_nodes():
+        return None
+
+    velocities: list[tuple[float, str]] = []
+    for axis in axes[:dimension]:
+        expressions = model._flux[axis]
+        if type(expressions) is not list or len(expressions) != 1:
+            return None
+        flux = expressions[0]
+        if type(flux) is not Mul or not is_state(flux.b):
+            return None
+        coefficient = literal(flux.a)
+        if coefficient is None:
+            return None
+        velocities.append(coefficient)
+
+    explicit_speeds = getattr(model, "_wave_speeds", None)
+    eigenvalues = getattr(model, "_eig", None)
+    if explicit_speeds is not None:
+        if tuple(explicit_speeds) != axes[:dimension]:
+            return None
+        for axis, (velocity, _) in zip(axes[:dimension], velocities, strict=True):
+            pair = explicit_speeds[axis]
+            if type(pair) is not tuple or len(pair) != 2 or not all(
+                speed_matches(value, velocity) for value in pair
+            ):
+                return None
+    if tuple(eigenvalues) != axes[:dimension]:
+        return None
+    for axis, (velocity, _) in zip(axes[:dimension], velocities, strict=True):
+        values = eigenvalues[axis]
+        if type(values) is not list or len(values) != 1 or not speed_matches(values[0], velocity):
+            return None
+    return tuple(cpp for _, cpp in velocities), scalar_name
+
+
 def _native_amr_field_roles_identity(
     normalized_field_roles: tuple[dict[str, Any], ...],
 ) -> tuple[dict[str, Any], ...]:
@@ -1045,6 +1186,9 @@ def emit_cpp_native_loader(
     if target != "system" and sealed_system_routes is not None:
         raise ValueError("sealed System routes cannot be emitted into an AMR package")
     normalized_sealed_routes = _normalize_sealed_system_routes(sealed_system_routes)
+    canonical_affine_scalar = _canonical_affine_scalar_advection(
+        m, target=target, sealed_routes=normalized_sealed_routes
+    )
     nv, bricks, composite = _emit_bricks(m, name, hoist_reciprocals=hoist_reciprocals)
     model_identity = str(model_identity if model_identity is not None else model_hash(m))
     if len(model_identity) != 64 or any(ch not in "0123456789abcdef" for ch in model_identity):
@@ -1296,9 +1440,51 @@ def emit_cpp_native_loader(
             + "  s->install_prepared_native_amr_package(std::move(package));\n"
             "}\n"
         )
+    if target == "system" and canonical_affine_scalar is not None:
+        velocities, _scalar_name = canonical_affine_scalar
+        velocity_initialization = "".join(
+            "  velocity[%d] = %s;\n" % (axis, velocity)
+            for axis, velocity in enumerate(velocities)
+        )
+        install = (
+            "POPS_LOADER_API void pops_install_native(void* sys, const char* name, const char* limiter,\n"
+            "                                    const char* riemann, const char* recon,\n"
+            "                                    const char* time, double gamma, int substeps,\n"
+            "                                    int evolve, int stride, const double* params,\n"
+            "                                    int nparams, double pos_floor, int newton_max_iters,\n"
+            "                                    double newton_rel_tol, double newton_abs_tol,\n"
+            "                                    double newton_fd_eps, double newton_damping,\n"
+            "                                    int newton_diagnostics) {\n"
+            "  using Installer = pops::runtime::system::PreparedNativeBlockInstaller<pops::kNativeDimension>;\n"
+            "  auto* s = static_cast<Installer*>(sys);\n"
+            "  (void)params;\n"
+            "  if (nparams != 0)\n"
+            "    throw std::invalid_argument(\"canonical affine scalar-advection loader accepts no runtime parameters\");\n"
+            "  pops::RealVector<pops::kNativeDimension> velocity{};\n"
+            + velocity_initialization
+            + "  pops::runtime::system::PreparedNativeSystemPackage<pops::kNativeDimension> package;\n"
+            "  package.consumer_qid = "
+            + json.dumps(_consumer_owner_qid(m, consumer_owner_qid) + "/physical_flux")
+            + ";\n"
+            "  const pops::NewtonOptions newton = pops::newton_options_from_abi(\n"
+            "      newton_max_iters, newton_rel_tol, newton_abs_tol, newton_fd_eps, newton_damping);\n"
+            "  package.block = pops::prepare_canonical_affine_scalar_advection_system_block<\n"
+            "      pops::kNativeDimension>(*s, name, velocity,\n"
+            "      pops_generated::ProdModel::conservative_vars(),\n"
+            "      pops_generated::ProdModel::primitive_vars(), limiter, riemann, recon, time,\n"
+            "      gamma, substeps, evolve != 0, stride, pos_floor,\n"
+            "      newton, newton_diagnostics != 0);\n"
+            "  s->commit(std::move(package));\n"
+            "}\n"
+        )
+    nparams_expression = (
+        "0"
+        if canonical_affine_scalar is not None
+        else "pops::compiled_model::runtime_param_count<pops_generated::ProdModel>()"
+    )
     install += (
         "POPS_LOADER_API int pops_compiled_nparams() {\n"
-        "  return pops::compiled_model::runtime_param_count<pops_generated::ProdModel>();\n"
+        "  return " + nparams_expression + ";\n"
         "}\n"
         'POPS_LOADER_API const char* pops_compiled_param_names() { return "%s"; }\n'
         % ",".join(node.name for node in m.runtime_param_nodes())
@@ -1340,6 +1526,13 @@ def emit_cpp_native_loader(
             "    pops::CompiledSystemBlockPreparation<pops::kNativeDimension, ProdModel> request) {\n"
             "  " + preparer_call + "\n"
             "}\n"
+            "}  // namespace pops_generated\n"
+        )
+    if target == "system" and canonical_affine_scalar is not None:
+        package_preparer = (
+            "\nnamespace pops_generated {\n"
+            "static_assert(ProdModel::dimension == pops::kNativeDimension,\n"
+            '              "generated model rank differs from the selected native artifact");\n'
             "}  // namespace pops_generated\n"
         )
     auxiliary_routes = _emit_auxiliary_route_registration(

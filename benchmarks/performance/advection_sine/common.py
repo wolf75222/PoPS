@@ -16,11 +16,10 @@ RANK_SAMPLE_SCHEMA = "pops.performance.advection-sine.rank-sample.v3"
 POINT_SAMPLE_SCHEMA = "pops.performance.advection-sine.point-sample.v2"
 SUMMARY_SCHEMA = "pops.performance.advection-sine.summary.v2"
 
-# ROMEO's CUDA native loader is intentionally compiled below the generic
-# Release default. NVCC 12.6/CICC has crashed while compiling the real public
-# Python DSL loader at -O3, -O2, and -O1; this changes only loader compilation, never the
-# declared scientific workload or its acquisition matrix.
-ROMEO_CUDA_DSL_OPTFLAGS = "-O0 -DNDEBUG"
+# The canonical affine-scalar loader avoids the NVCC 12.6/CICC crash observed
+# for the former generated CompositeModel route at every level from -O3 through
+# -O0. Keep the performance loader at the ordinary Release optimization.
+ROMEO_CUDA_DSL_OPTFLAGS = "-O3 -DNDEBUG"
 
 # The performance suite is deliberately a closed scientific inventory.  These
 # digests are of the source JSON after canonical JSON encoding (sorted keys and
