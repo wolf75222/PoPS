@@ -262,6 +262,29 @@ struct MaskKernel {
   }
 };
 
+template <int Dim, class Storage>
+struct EllipticityKernel {
+ public:
+  std::array<Storage, static_cast<std::size_t>(Dim * Dim)> coefficients{};
+
+  POPS_HD void operator()(const std::size_t index, long& invalid) const {
+    constexpr Real infinity = std::numeric_limits<Real>::infinity();
+    for (int row = 0; row < Dim; ++row) {
+      const Real diagonal = coefficients[static_cast<std::size_t>(row * Dim + row)](index);
+      Real off_diagonal = Real(0);
+      bool finite = diagonal == diagonal && diagonal != infinity && diagonal != -infinity;
+      for (int column = 0; column < Dim; ++column) {
+        const Real a = coefficients[static_cast<std::size_t>(row * Dim + column)](index);
+        finite = finite && a == a && a != infinity && a != -infinity;
+        if (column != row)
+          off_diagonal += a < Real(0) ? -a : a;
+      }
+      if (!finite || !(diagonal > off_diagonal))
+        invalid = 1;
+    }
+  }
+};
+
 template <int Dim>
 using TensorStencil = elliptic::nd::CartesianTensorOperator<
     Dim, elliptic::nd::CartesianTensorDivergenceSign::negative_divergence,
@@ -1170,23 +1193,7 @@ class FullTensorCompositeFac {
         long patch_invalid = 0;
         Kokkos::parallel_reduce(
             "pops_nd_tensor_ellipticity", Kokkos::RangePolicy<>(0, count),
-            KOKKOS_LAMBDA(const std::size_t index, long& invalid) {
-              constexpr Real infinity = std::numeric_limits<Real>::infinity();
-              for (int row = 0; row < Dim; ++row) {
-                const Real diagonal =
-                    coefficients[static_cast<std::size_t>(row * Dim + row)](index);
-                Real off_diagonal = Real(0);
-                bool finite = diagonal == diagonal && diagonal != infinity && diagonal != -infinity;
-                for (int column = 0; column < Dim; ++column) {
-                  const Real a = coefficients[static_cast<std::size_t>(row * Dim + column)](index);
-                  finite = finite && a == a && a != infinity && a != -infinity;
-                  if (column != row)
-                    off_diagonal += a < Real(0) ? -a : a;
-                }
-                if (!finite || !(diagonal > off_diagonal))
-                  invalid = 1;
-              }
-            },
+            detail::EllipticityKernel<Dim, storage_type>{coefficients},
             Kokkos::Max<long>(patch_invalid));
         local_invalid = std::max(local_invalid, patch_invalid);
       }

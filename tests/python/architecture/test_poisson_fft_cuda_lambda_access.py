@@ -22,7 +22,9 @@ PARTITIONED_COMPOSITE_FAC_HEADER = (
 PARTITIONED_REGION_TRANSFER_HEADER = (
     ROOT / "include/pops/numerics/elliptic/amr/partitioned_region_transfer.hpp"
 )
+TENSOR_COMPOSITE_FAC_HEADER = ROOT / "include/pops/runtime/amr/tensor_composite_fac.hpp"
 SYSTEM_INSTALL_SOURCE = ROOT / "src/runtime/system/system_install.cpp"
+AMR_SYSTEM_SOURCE = ROOT / "src/runtime/amr/amr_system.cpp"
 
 CUDA_LAUNCH_HELPERS = (
     "local_dft_axis_",
@@ -147,6 +149,35 @@ def test_partitioned_region_transport_cuda_kernel_types_are_public_but_state_is_
     for kernel_type in ("KernelJob", "PackKernel", "UnpackKernel"):
         assert _access_at_offset(transport, transport.index(f"struct {kernel_type}")) == "public"
     assert _access_at_offset(transport, transport.index("KernelJob lower_")) == "private"
+
+
+def test_tensor_fac_ellipticity_functor_replaces_private_reduction_lambda() -> None:
+    source = TENSOR_COMPOSITE_FAC_HEADER.read_text()
+    solver = _braced_definition(source, "class FullTensorCompositeFac")
+    ellipticity = _braced_definition(solver, "  bool coefficients_are_elliptic_() const")
+
+    assert _access_at_offset(solver, solver.index("bool coefficients_are_elliptic_")) == "private"
+    _public_device_operator(source, "EllipticityKernel")
+    assert "KOKKOS_LAMBDA" not in ellipticity
+    assert "detail::EllipticityKernel<Dim, storage_type>{coefficients}" in ellipticity
+
+
+def test_amr_impl_functors_replace_private_impl_device_lambdas() -> None:
+    source = AMR_SYSTEM_SOURCE.read_text()
+    impl = _braced_definition(source, "struct AmrSystem<Dim>::Impl")
+    coverage = _braced_definition(
+        impl,
+        "  static std::vector<std::shared_ptr<const field_type>> prepare_active_coverage(\n"
+        "      const engine_type& source, std::span<const int> selected_levels)",
+    )
+    scalar_copy = _braced_definition(impl, "  static void copy_scalar_component(")
+
+    for struct_name in ("ZeroActiveCoverageKernel", "CopyScalarComponentKernel"):
+        _public_device_operator(source, struct_name)
+    assert "[=] POPS_HD" not in coverage
+    assert "ZeroActiveCoverageKernel<Dim>{values}" in coverage
+    assert "[=] POPS_HD" not in scalar_copy
+    assert "CopyScalarComponentKernel<Dim>{" in scalar_copy
 
 
 def test_fft_solver_named_device_functors_replace_local_for_each_lambdas() -> None:
