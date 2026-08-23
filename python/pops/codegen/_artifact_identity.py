@@ -19,7 +19,7 @@ def model_artifact_spec(
         NATIVE_SYSTEM_PACKAGE_ABI_VERSION,
         model_hash,
     )
-    from pops.codegen.toolchain import _native_feature_key
+    from pops.codegen.toolchain import _native_feature_key, native_loader_codegen_key
     from pops.identity import artifact_spec_identity, make_identity
 
     digest = str(model_hash(model))
@@ -36,6 +36,7 @@ def model_artifact_spec(
         routes={
             "registry": _registry_cache_key(),
             "features": _native_feature_key(),
+            "loader_codegen": native_loader_codegen_key(compiler),
         },
         components={
             "model_hash": digest,
@@ -72,7 +73,7 @@ def program_artifact_spec(
 ) -> tuple[Any, Any]:
     """Return semantic and artifact-spec identities for one compiled Program."""
     from pops.codegen.cache import _precision_cache_key, _registry_cache_key
-    from pops.codegen.toolchain import _native_feature_key
+    from pops.codegen.toolchain import _native_feature_key, native_loader_codegen_key
     from pops.identity import artifact_spec_identity
     from pops.identity.semantic import (
         model_semantic_data, program_semantic_data, semantic_identity, semantic_identity_of,
@@ -117,7 +118,11 @@ def program_artifact_spec(
         precision=_precision_cache_key(),
         abi=abi_key,
         toolchain="%s|%s" % (compiler, standard),
-        routes={"registry": _registry_cache_key(), "features": _native_feature_key()},
+        routes={
+            "registry": _registry_cache_key(),
+            "features": _native_feature_key(),
+            "loader_codegen": native_loader_codegen_key(compiler),
+        },
         components={
             "generated_source": hashlib.sha256(source.encode("utf-8")).digest(),
             "native_dependency_contract": "compiler-observed-v1",

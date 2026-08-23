@@ -135,6 +135,7 @@ class _FacadeCompileMixin(_FacadeModel):
             loader_native_dimension,
             _native_kokkos_compiler,
             _native_feature_key,
+            native_loader_codegen_key,
             pops_include,
         )
         from pops.codegen.cache import (
@@ -260,7 +261,11 @@ class _FacadeCompileMixin(_FacadeModel):
             precision=_precision_cache_key(),
             abi=abi_key,
             toolchain="%s|%s" % (eff_cxx, eff_std),
-            routes={"registry": _registry_cache_key(), "features": feature_key},
+            routes={
+                "registry": _registry_cache_key(),
+                "features": feature_key,
+                "loader_codegen": native_loader_codegen_key(eff_cxx),
+            },
             components=spec_components,
             flags=[
                 _platform_cache_key(),

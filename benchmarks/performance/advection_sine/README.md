@@ -148,6 +148,14 @@ archivée dans `observed-allocation/environment-provenance.json`, puis scellée
 dans `raw/build.receipt.json`; le collecteur refuse une provenance CUDA qui ne
 porte pas exactement cette valeur.
 
+Le chargeur natif CUDA ajoute aussi la politique PoPS déterministe
+`--expt-relaxed-constexpr --split-compile=2`. Le premier drapeau est requis par
+les helpers `constexpr` appelés depuis les kernels; le second découpe
+l'optimisation device et borne NVCC à deux threads pour éviter le crash CICC
+observé sur la spécialisation exacte 3D. Cette politique est incluse dans
+l'identité de l'artefact compilé; elle ne modifie ni les points, ni les tailles,
+ni les répétitions de la campagne.
+
 Les checkouts Kokkos par défaut sont
 `$HOME/adc_cpu_mpiomp/kokkos` pour Serial/OpenMP et
 `$HOME/adc_gpu_p1/kokkos` pour CUDA. Ils peuvent être remplacés à la

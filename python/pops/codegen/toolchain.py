@@ -718,9 +718,21 @@ def _pops_nvcc_wrapper_compile_flags(compiler: Any) -> list[str]:
 
     Generated loaders instantiate PoPS ``POPS_HD`` code that calls constexpr helpers.  NVCC emits
     warning #20013/#20015 for those calls and explicitly recommends relaxed constexpr; without it,
-    the warning flood can terminate CICC before the loader is produced.
+    the warning flood can terminate CICC before the loader is produced. CUDA 12.6 CICC can also
+    crash on one still-large exact loader specialization. ``--split-compile=2`` splits device code
+    into smaller optimization units while bounding the compiler to two threads. NVIDIA documents
+    ``1`` as disabling split compilation, so it is deliberately not used here. This is emitted only
+    on the already authenticated ``nvcc_wrapper`` route.
     """
-    return ["--expt-relaxed-constexpr"] if _is_nvcc_wrapper(compiler) else []
+    if not _is_nvcc_wrapper(compiler):
+        return []
+    return ["--expt-relaxed-constexpr", "--split-compile=2"]
+
+
+def native_loader_codegen_key(compiler: Any) -> str:
+    """Stable cache token for compiler-specific generated-loader codegen policy."""
+    flags = _pops_nvcc_wrapper_compile_flags(compiler)
+    return "pops-native-loader-codegen-v1:" + (",".join(flags) if flags else "host")
 
 
 def native_loader_include_flags(compiler: Any, flags: Any) -> list[Any]:

@@ -7,9 +7,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 
 def test_native_loader_include_flags_join_only_for_nvcc_wrapper() -> None:
-    from pops.codegen.toolchain import _pops_nvcc_wrapper_compile_flags, native_loader_include_flags
+    from pops.codegen.toolchain import (
+        _pops_nvcc_wrapper_compile_flags,
+        native_loader_codegen_key,
+        native_loader_include_flags,
+    )
 
     flags = ["-DPOPS_HAS_KOKKOS", "-I", "/kokkos/include", "-I", "/mpi/include"]
 
@@ -20,9 +26,14 @@ def test_native_loader_include_flags_join_only_for_nvcc_wrapper() -> None:
     ]
     assert native_loader_include_flags("/usr/bin/c++", flags) == flags
     assert _pops_nvcc_wrapper_compile_flags("/opt/kokkos/bin/nvcc_wrapper") == [
-        "--expt-relaxed-constexpr"
+        "--expt-relaxed-constexpr",
+        "--split-compile=2",
     ]
     assert _pops_nvcc_wrapper_compile_flags("/usr/bin/c++") == []
+    assert native_loader_codegen_key("/opt/kokkos/bin/nvcc_wrapper").endswith(
+        "--expt-relaxed-constexpr,--split-compile=2"
+    )
+    assert native_loader_codegen_key("/usr/bin/c++").endswith(":host")
 
 
 def test_compile_native_nvcc_wrapper_joins_kokkos_mpi_and_sdk_includes(monkeypatch, tmp_path) -> None:
@@ -47,6 +58,7 @@ def test_compile_native_nvcc_wrapper_joins_kokkos_mpi_and_sdk_includes(monkeypat
                 "-Wext-lambda-captures-this",
                 "-arch=sm_90",
                 "--expt-relaxed-constexpr",
+                "--split-compile=2",
             ],
             ["-ldl", "-pthread"],
         ),
@@ -78,11 +90,37 @@ def test_compile_native_nvcc_wrapper_joins_kokkos_mpi_and_sdk_includes(monkeypat
     assert command.index("-extended-lambda") < command.index("-arch=sm_90")
     assert command.index("-arch=sm_90") < command.index("-I/pops/include")
     assert command.count("--expt-relaxed-constexpr") == 1
+    assert command.count("--split-compile=2") == 1
     output_index = command.index("-o")
     assert command.index("--expt-relaxed-constexpr") < output_index
+    assert command.index("--split-compile=2") < output_index
     assert command[output_index - 1].endswith("model_native.cpp")
     assert command[output_index + 1] == str(output)
     assert command[output_index + 2 :] == ["-ldl", "-pthread"]
+
+
+def test_compile_native_keeps_exact_failed_source_for_cuda_diagnosis(monkeypatch, tmp_path) -> None:
+    from pops.codegen import _compile_drivers as drivers
+
+    monkeypatch.setattr(drivers, "_check_headers_match_module", lambda include: "signature")
+    monkeypatch.setattr(drivers, "_warn_kokkos_parity", lambda: None)
+    monkeypatch.setattr(drivers, "emit_cpp_native_loader", lambda *args, **kwargs: "// native\n")
+    monkeypatch.setattr(drivers, "pops_loader_build_flags", lambda cxx: ("nvcc_wrapper", [], []))
+    monkeypatch.setattr(drivers, "_probe_cxx_std", lambda cc, standard: standard)
+    monkeypatch.setattr(drivers, "_dsl_optflags", lambda: ["-O3"])
+    monkeypatch.setattr(drivers, "_run_compile", lambda *args: (_ for _ in ()).throw(
+        RuntimeError("cicc died due to signal 11")
+    ))
+
+    output = tmp_path / "model.so"
+    with pytest.raises(RuntimeError, match="model.failed.cpp") as failure:
+        drivers.compile_native(
+            object(), str(output), include="/pops/include", model_identity="native-failure"
+        )
+
+    failed = tmp_path / "model.failed.cpp"
+    assert failed.read_text() == "// native\n"
+    assert "cicc died due to signal 11" in str(failure.value)
 
 
 def test_aot_driver_normalizes_staged_component_include_flags() -> None:

@@ -144,7 +144,19 @@ def compile_native(
             ]
             include_flags = native_loader_include_flags(cc, [*flags, "-I", include])
             cmd = [cc, *include_flags, cpp, "-o", so_path, *native_link_flags]
-        _run_compile(cmd, "backend production, compile_native")
+        try:
+            _run_compile(cmd, "backend production, compile_native")
+        except (RuntimeError, TypeError, ValueError) as exc:
+            failed_src = os.path.splitext(os.fspath(so_path))[0] + ".failed.cpp"
+            try:
+                with open(failed_src, "w") as stream:
+                    stream.write(src_eff)
+            except OSError:
+                failed_src = "<generated native loader (not persisted: write failed)>"
+            raise RuntimeError(
+                "%s\nThe failing generated native loader source was written to %s."
+                % (exc, failed_src)
+            ) from exc
     return so_path
 
 
