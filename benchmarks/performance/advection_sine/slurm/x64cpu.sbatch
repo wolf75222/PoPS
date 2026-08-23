@@ -375,7 +375,7 @@ export POPS_NATIVE_VARIANTS_ROOT="${WORK_ROOT}/build/python/pops/_native"
 # treating the batch shell as an MPI process and still keeps this non-numerical
 # provenance check outside every measured public lifecycle.
 srun --exclusive --kill-on-bad-exit=1 --nodes=1 --ntasks=1 --cpus-per-task=1 \
-  env PYTHONPATH="${WORK_ROOT}/build/python:${WORK_ROOT}/source${PYTHON_DEPENDENCY_PATH:+:${PYTHON_DEPENDENCY_PATH}}" \
+  /usr/bin/env PYTHONPATH="${WORK_ROOT}/build/python:${WORK_ROOT}/source${PYTHON_DEPENDENCY_PATH:+:${PYTHON_DEPENDENCY_PATH}}" \
   POPS_NATIVE_VARIANTS_ROOT="${POPS_NATIVE_VARIANTS_ROOT}" "${JOB_PYTHON}" \
   "${HARNESS}/prepare_export.py" build-receipt \
   --source "${WORK_ROOT}/source" \

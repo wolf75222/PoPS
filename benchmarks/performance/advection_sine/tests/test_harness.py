@@ -454,6 +454,12 @@ class PublicPythonHarnessTests(unittest.TestCase):
             wrapper = (HARNESS / "slurm" / name).read_text(encoding="utf-8")
             self.assertIn(invocation, wrapper)
 
+    def test_romeo_srun_uses_an_absolute_environment_launcher(self) -> None:
+        for name in ("x64cpu.sbatch", "armgpu.sbatch"):
+            wrapper = (HARNESS / "slurm" / name).read_text(encoding="utf-8")
+            self.assertIn("/usr/bin/env PYTHONPATH=", wrapper)
+            self.assertNotIn("\n  env PYTHONPATH=", wrapper)
+
     def test_romeo_job_python_dependency_contract_is_fail_closed(self) -> None:
         """Batch jobs must retain their activated NumPy/pybind11 path."""
         platform_contracts = {
