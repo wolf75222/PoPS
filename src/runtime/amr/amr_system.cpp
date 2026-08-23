@@ -1812,6 +1812,18 @@ struct CopyScalarComponentKernel {
 };
 
 template <int Dim>
+struct CompositeMeanFmaKernel {
+ public:
+  FieldView<Real, Dim> values{};
+  Real a = Real(0);
+  Real b = Real(0);
+
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    values(index, 0) = Kokkos::fma(a, b, values(index, 0));
+  }
+};
+
+template <int Dim>
 void copy_active_valid_cells(const MultiFab<Dim>& source, MultiFab<Dim>& destination,
                              const MultiFab<Dim>& active) {
   if (!same_field_contract(source, destination))
@@ -3886,20 +3898,13 @@ struct AmrSystem<Dim>::Impl {
     if (rhs_levels.size() != views.size())
       throw std::logic_error("composite-mean neutralizing RHS levels do not match the hierarchy");
     const Real mean = mass.value / mass.active_measure;
-    struct FmaShift {
-      FieldView<Real, Dim> values{};
-      Real a = Real(0);
-      Real b = Real(0);
-      POPS_HD void operator()(const Index<Dim>& index) const {
-        values(index, 0) = Kokkos::fma(a, b, values(index, 0));
-      }
-    };
     auto add_fma = [&](Real a, Real b) {
       for (auto& rhs : rhs_levels) {
         if (!rhs || rhs->ncomp() != 1)
           throw std::logic_error("composite-mean neutralizing requires a one-component field RHS");
         for (std::size_t local = 0; local < rhs->local_size(); ++local)
-          for_each_cell(rhs->box(local), FmaShift{rhs->fab(local).view(), a, b});
+          for_each_cell(rhs->box(local),
+                        CompositeMeanFmaKernel<Dim>{rhs->fab(local).view(), a, b});
       }
     };
     // Authored charge is eps*M00.  Subtract eps*mean(M00) with one fused rounding so

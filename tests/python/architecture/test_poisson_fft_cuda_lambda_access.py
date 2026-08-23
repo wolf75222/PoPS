@@ -171,13 +171,22 @@ def test_amr_impl_functors_replace_private_impl_device_lambdas() -> None:
         "      const engine_type& source, std::span<const int> selected_levels)",
     )
     scalar_copy = _braced_definition(impl, "  static void copy_scalar_component(")
+    neutralizing = _braced_definition(impl, "  void apply_composite_mean_neutralizing(")
 
-    for struct_name in ("ZeroActiveCoverageKernel", "CopyScalarComponentKernel"):
+    for struct_name in (
+        "ZeroActiveCoverageKernel",
+        "CopyScalarComponentKernel",
+        "CompositeMeanFmaKernel",
+    ):
         _public_device_operator(source, struct_name)
     assert "[=] POPS_HD" not in coverage
     assert "ZeroActiveCoverageKernel<Dim>{values}" in coverage
     assert "[=] POPS_HD" not in scalar_copy
     assert "CopyScalarComponentKernel<Dim>{" in scalar_copy
+    assert "struct FmaShift" not in neutralizing
+    assert "CompositeMeanFmaKernel<Dim>{rhs->fab(local).view(), a, b}" in neutralizing
+    fma_kernel = _braced_definition(source, "struct CompositeMeanFmaKernel")
+    assert "Kokkos::fma(a, b, values(index, 0))" in fma_kernel
 
 
 def test_fft_solver_named_device_functors_replace_local_for_each_lambdas() -> None:
