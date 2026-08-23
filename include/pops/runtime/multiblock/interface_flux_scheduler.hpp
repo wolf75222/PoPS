@@ -796,10 +796,15 @@ class InterfaceFluxScheduler {
     int face = 0;
   };
 
+ public:
+  // NVCC-generated Kokkos stubs must name this device payload type.  Scheduler state remains
+  // private below.
   struct DeviceFaceJob {
     index_type index{};
     int face = 0;
   };
+
+ private:
   using device_job_view = Kokkos::View<DeviceFaceJob*, memory_space>;
   using device_real_view = Kokkos::View<Real*, memory_space>;
   using host_real_view = Kokkos::View<Real*, Kokkos::SharedHostPinnedSpace>;
@@ -848,6 +853,9 @@ class InterfaceFluxScheduler {
     std::size_t evaluation_count = 0;
   };
 
+ public:
+  // NVCC-generated Kokkos stubs must name these kernel types.  Scheduler state and helpers
+  // remain private below.
   struct PackKernel {
     FieldView<const Real, Dim> field{};
     device_job_view jobs{};
@@ -886,6 +894,7 @@ class InterfaceFluxScheduler {
     }
   };
 
+ private:
   static void validate_route_structure_(const route_type& route) {
     if (route.identity.empty() || route.left_block == route.right_block || route.level < 0)
       throw std::invalid_argument("multi-block interface identity/ownership is invalid");

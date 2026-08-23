@@ -801,9 +801,12 @@ SparseFieldImage<Dim> gather_sparse_field(const MultiFab<Dim>& field, const Box<
     throw std::runtime_error("AMR sparse-field gather preparation failed collectively on " +
                              std::to_string(failures) + " rank(s)");
   }
-  if (!all_ranks_agree_exact_ordered_byte_pairs({{std::string_view("amr-sparse-field-gather"),
-                                                  std::string_view(prepared->exact_contract)}},
-                                                communicator))
+  const std::array<ExactOrderedBytePair, 1> sparse_field_contract_pairs{
+      ExactOrderedBytePair{std::string_view("amr-sparse-field-gather"),
+                           std::string_view(prepared->exact_contract)}};
+  const std::span<const ExactOrderedBytePair> sparse_field_contract_pair_span{
+      sparse_field_contract_pairs};
+  if (!all_ranks_agree_exact_ordered_byte_pairs(sparse_field_contract_pair_span, communicator))
     throw std::runtime_error(
         "AMR sparse-field gather contract differs between prepared-lane ranks");
   execute_sparse_field_gather(*prepared, communicator);
@@ -1999,9 +2002,13 @@ PreparedRootAmrGhostFill<Dim> prepare_root_ghost_fill(MultiFab<Dim>& field, cons
       std::rethrow_exception(metadata_error);
     throw std::runtime_error("generated AMR root ghost metadata failed collectively");
   }
-  if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{std::string_view("generated-amr-root-ghost"), std::string_view(state->contract)}},
-          lane.communicator()))
+  const std::array<ExactOrderedBytePair, 1> root_ghost_contract_pairs{
+      ExactOrderedBytePair{std::string_view("generated-amr-root-ghost"),
+                           std::string_view(state->contract)}};
+  const std::span<const ExactOrderedBytePair> root_ghost_contract_pair_span{
+      root_ghost_contract_pairs};
+  if (!all_ranks_agree_exact_ordered_byte_pairs(root_ghost_contract_pair_span,
+                                                 lane.communicator()))
     throw std::invalid_argument("generated AMR root ghost contracts differ between ranks");
 
   const long remote_any =
@@ -4518,10 +4525,13 @@ struct AmrSystem<Dim>::Impl {
       throw std::runtime_error(
           "AMR Program flux-expression budget preparation failed collectively");
     }
-    if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{std::string_view("amr-program-flux-expression-budget"),
-              std::string_view(candidate.exact_contract)}},
-            lane.communicator()))
+    const std::array<ExactOrderedBytePair, 1> flux_expression_budget_contract_pairs{
+        ExactOrderedBytePair{std::string_view("amr-program-flux-expression-budget"),
+                             std::string_view(candidate.exact_contract)}};
+    const std::span<const ExactOrderedBytePair> flux_expression_budget_contract_pair_span{
+        flux_expression_budget_contract_pairs};
+    if (!all_ranks_agree_exact_ordered_byte_pairs(flux_expression_budget_contract_pair_span,
+                                                   lane.communicator()))
       throw std::invalid_argument(
           "AMR Program flux-expression budgets differ between prepared-lane ranks");
     return candidate;
@@ -8495,10 +8505,13 @@ struct AmrSystem<Dim>::Impl {
       throw std::runtime_error("AMR history hierarchy image preparation failed collectively on " +
                                std::to_string(preparation_failures) + " rank(s)");
     }
-    if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{std::string_view("amr-program-history-hierarchy-image"),
-              std::string_view(prepared->exact_contract)}},
-            communicator))
+    const std::array<ExactOrderedBytePair, 1> history_hierarchy_image_contract_pairs{
+        ExactOrderedBytePair{std::string_view("amr-program-history-hierarchy-image"),
+                             std::string_view(prepared->exact_contract)}};
+    const std::span<const ExactOrderedBytePair> history_hierarchy_image_contract_pair_span{
+        history_hierarchy_image_contract_pairs};
+    if (!all_ranks_agree_exact_ordered_byte_pairs(history_hierarchy_image_contract_pair_span,
+                                                   communicator))
       throw std::invalid_argument(
           "AMR history hierarchy image contracts differ between prepared-lane ranks");
     for (auto& ring : prepared->rings)

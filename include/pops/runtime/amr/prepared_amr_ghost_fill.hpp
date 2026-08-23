@@ -248,6 +248,9 @@ class PreparedAmrGhostFill {
   using execution_policy =
       Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace, Kokkos::IndexType<execution_index_type>>;
 
+ public:
+  // NVCC-generated Kokkos stubs must name these kernel parameter types.  State and helpers
+  // remain private below.
   struct KernelJob {
     int lower[Dim]{};
     execution_index_type extent[Dim]{};
@@ -293,6 +296,7 @@ class PreparedAmrGhostFill {
     }
   };
 
+ private:
   struct PeerStorage {
     Index<Dim> coordinate{};
     int mpi_rank = 0;

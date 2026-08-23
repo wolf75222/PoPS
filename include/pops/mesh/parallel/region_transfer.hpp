@@ -463,6 +463,9 @@ class RegionTransport {
 #endif
   };
 
+ public:
+  // NVCC-generated Kokkos stubs must name these kernel parameter types.  Transport state and
+  // helpers remain private below.
   struct KernelJob {
     int source_lower[Dim]{};
     int destination_lower[Dim]{};
@@ -509,6 +512,7 @@ class RegionTransport {
     }
   };
 
+ private:
   KernelJob lower_(const job_type& job) const {
     const std::size_t execution_max =
         static_cast<std::size_t>(std::numeric_limits<execution_index_type>::max());

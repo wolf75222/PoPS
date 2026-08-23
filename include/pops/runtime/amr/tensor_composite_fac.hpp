@@ -476,19 +476,25 @@ class FullTensorCompositeFac {
     }
 
     exact_contract_ = build_exact_contract_();
-    if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{"pops-nd-tensor-fac", std::string_view(exact_contract_)}}, lane))
+    const std::array<ExactOrderedBytePair, 1> hierarchy_contract_pairs{
+        ExactOrderedBytePair{"pops-nd-tensor-fac", std::string_view(exact_contract_)}};
+    const std::span<const ExactOrderedBytePair> hierarchy_contract_pair_span{
+        hierarchy_contract_pairs};
+    if (!all_ranks_agree_exact_ordered_byte_pairs(hierarchy_contract_pair_span, lane))
       throw std::invalid_argument(
           "dimension-generic tensor FAC hierarchy differs between MPI ranks");
-    for (std::size_t connection = 0; connection < connections_.size(); ++connection)
-      if (!all_ranks_agree_exact_ordered_byte_pairs(
-              {{"pops-nd-tensor-parent-gather",
-                std::string_view(connections_[connection]->gather_contract)},
-               {"pops-nd-tensor-fine-restriction",
-                std::string_view(connections_[connection]->restriction_contract)}},
-              lane))
+    for (std::size_t connection = 0; connection < connections_.size(); ++connection) {
+      const std::array<ExactOrderedBytePair, 2> connection_contract_pairs{
+          ExactOrderedBytePair{"pops-nd-tensor-parent-gather",
+                               std::string_view(connections_[connection]->gather_contract)},
+          ExactOrderedBytePair{"pops-nd-tensor-fine-restriction",
+                               std::string_view(connections_[connection]->restriction_contract)}};
+      const std::span<const ExactOrderedBytePair> connection_contract_pair_span{
+          connection_contract_pairs};
+      if (!all_ranks_agree_exact_ordered_byte_pairs(connection_contract_pair_span, lane))
         throw std::invalid_argument(
             "dimension-generic tensor FAC coarse/fine schedule differs between MPI ranks");
+    }
 
     for (auto& connection : connections_)
       connection->attach_lane(lane);

@@ -25,6 +25,12 @@ PARTITIONED_REGION_TRANSFER_HEADER = (
 TENSOR_COMPOSITE_FAC_HEADER = ROOT / "include/pops/runtime/amr/tensor_composite_fac.hpp"
 SYSTEM_INSTALL_SOURCE = ROOT / "src/runtime/system/system_install.cpp"
 AMR_SYSTEM_SOURCE = ROOT / "src/runtime/amr/amr_system.cpp"
+AMR_PROGRAM_CHECKPOINT_HEADER = ROOT / "include/pops/runtime/program/amr_program_checkpoint.hpp"
+PREPARED_AMR_GHOST_FILL_HEADER = ROOT / "include/pops/runtime/amr/prepared_amr_ghost_fill.hpp"
+INTERFACE_FLUX_SCHEDULER_HEADER = (
+    ROOT / "include/pops/runtime/multiblock/interface_flux_scheduler.hpp"
+)
+REGION_TRANSFER_HEADER = ROOT / "include/pops/mesh/parallel/region_transfer.hpp"
 
 CUDA_LAUNCH_HELPERS = (
     "local_dft_axis_",
@@ -110,6 +116,34 @@ def _contains_no_device_lambda(source: str, start: str, end: str) -> None:
     assert "POPS_HD" not in source[start_offset:end_offset]
 
 
+def _bounded_region(source: str, start: str, end: str) -> str:
+    start_offset = source.index(start)
+    return source[start_offset : source.index(end, start_offset)]
+
+
+def _assert_exact_pair_array_span(
+    source: str,
+    *,
+    start: str,
+    end: str,
+    storage: str,
+    size: int,
+    span: str,
+    ordered_values: tuple[str, ...],
+    communicator: str,
+) -> None:
+    region = _bounded_region(source, start, end)
+    normalized = " ".join(region.split())
+
+    assert "all_ranks_agree_exact_ordered_byte_pairs({{" not in normalized
+    assert "all_ranks_agree_exact_ordered_byte_pairs( {{" not in normalized
+    assert f"const std::array<ExactOrderedBytePair, {size}> {storage}" in region
+    offsets = [normalized.index(value) for value in ordered_values]
+    assert offsets == sorted(offsets)
+    assert f"const std::span<const ExactOrderedBytePair> {span}" in region
+    assert f"all_ranks_agree_exact_ordered_byte_pairs({span}, {communicator})" in normalized
+
+
 def test_multifab_and_multigrid_device_functors_replace_private_parents() -> None:
     multifab = FFT_MULTIFAB_HEADER.read_text()
     geometric_mg = GEOMETRIC_MG_HEADER.read_text()
@@ -187,6 +221,128 @@ def test_amr_impl_functors_replace_private_impl_device_lambdas() -> None:
     assert "CompositeMeanFmaKernel<Dim>{rhs->fab(local).view(), a, b}" in neutralizing
     fma_kernel = _braced_definition(source, "struct CompositeMeanFmaKernel")
     assert "Kokkos::fma(a, b, values(index, 0))" in fma_kernel
+
+
+def test_cuda_portable_consensus_and_checkpoint_fixed_arrays() -> None:
+    tensor_fac = TENSOR_COMPOSITE_FAC_HEADER.read_text()
+    checkpoint = AMR_PROGRAM_CHECKPOINT_HEADER.read_text()
+    amr_system = AMR_SYSTEM_SOURCE.read_text()
+
+    _assert_exact_pair_array_span(
+        tensor_fac,
+        start="  FullTensorCompositeFac(std::span<const LevelBinding<Dim, MemorySpace>> bindings,",
+        end="    for (auto& connection : connections_)",
+        storage="hierarchy_contract_pairs",
+        size=1,
+        span="hierarchy_contract_pair_span",
+        ordered_values=(
+            '"pops-nd-tensor-fac"',
+            "std::string_view(exact_contract_)",
+        ),
+        communicator="lane",
+    )
+    _assert_exact_pair_array_span(
+        tensor_fac,
+        start="    for (std::size_t connection = 0; connection < connections_.size(); ++connection) {",
+        end="\n\n    for (auto& connection : connections_)",
+        storage="connection_contract_pairs",
+        size=2,
+        span="connection_contract_pair_span",
+        ordered_values=(
+            '"pops-nd-tensor-parent-gather"',
+            "std::string_view(connections_[connection]->gather_contract)",
+            '"pops-nd-tensor-fine-restriction"',
+            "std::string_view(connections_[connection]->restriction_contract)",
+        ),
+        communicator="lane",
+    )
+    _assert_exact_pair_array_span(
+        amr_system,
+        start="SparseFieldImage<Dim> gather_sparse_field(",
+        end="template <int Dim>\nstruct PreparedRegriddedStateTransfer",
+        storage="sparse_field_contract_pairs",
+        size=1,
+        span="sparse_field_contract_pair_span",
+        ordered_values=(
+            'std::string_view("amr-sparse-field-gather")',
+            "std::string_view(prepared->exact_contract)",
+        ),
+        communicator="communicator",
+    )
+    _assert_exact_pair_array_span(
+        amr_system,
+        start="PreparedRootAmrGhostFill<Dim> prepare_root_ghost_fill(",
+        end="template <int Dim>\nvoid append_provider_groups_structure",
+        storage="root_ghost_contract_pairs",
+        size=1,
+        span="root_ghost_contract_pair_span",
+        ordered_values=(
+            'std::string_view("generated-amr-root-ghost")',
+            "std::string_view(state->contract)",
+        ),
+        communicator="lane.communicator()",
+    )
+    _assert_exact_pair_array_span(
+        amr_system,
+        start="  flux_expression_budget_type prepare_program_flux_expression_budget(",
+        end="\n\n  const flux_expression_budget_type& require_prepared_program_flux_expression_budget",
+        storage="flux_expression_budget_contract_pairs",
+        size=1,
+        span="flux_expression_budget_contract_pair_span",
+        ordered_values=(
+            'std::string_view("amr-program-flux-expression-budget")',
+            "std::string_view(candidate.exact_contract)",
+        ),
+        communicator="lane.communicator()",
+    )
+    _assert_exact_pair_array_span(
+        amr_system,
+        start="  std::shared_ptr<const PreparedHistoryHierarchyImages<Dim>> prepare_history_hierarchy_images()",
+        end="\n\n  std::optional<runtime::program::HistoryManager<Dim>> prepare_regridded_program_histories(",
+        storage="history_hierarchy_image_contract_pairs",
+        size=1,
+        span="history_hierarchy_image_contract_pair_span",
+        ordered_values=(
+            'std::string_view("amr-program-history-hierarchy-image")',
+            "std::string_view(prepared->exact_contract)",
+        ),
+        communicator="communicator",
+    )
+    checkpoint_capacity = _braced_definition(
+        checkpoint,
+        "std::size_t serialized_amr_program_accepted_state_capacity(",
+    )
+    assert "for (const std::size_t additional : {" not in checkpoint_capacity
+    assert "const std::array<std::size_t, 2> interface_character_additions" in checkpoint_capacity
+    assert "for (const std::size_t additional : interface_character_additions)" in checkpoint_capacity
+
+
+def test_cuda_device_kernel_types_are_public_while_transport_state_stays_private() -> None:
+    ghost_fill = _braced_definition(
+        PREPARED_AMR_GHOST_FILL_HEADER.read_text(),
+        "class PreparedAmrGhostFill",
+    )
+    interface = _braced_definition(
+        INTERFACE_FLUX_SCHEDULER_HEADER.read_text(),
+        "class InterfaceFluxScheduler",
+    )
+    region = _braced_definition(REGION_TRANSFER_HEADER.read_text(), "class RegionTransport {")
+
+    assert _access_at_offset(ghost_fill, ghost_fill.index("struct InterpolationSlot")) == "private"
+    for kernel_type in ("KernelJob", "PackKernel", "UnpackKernel"):
+        assert _access_at_offset(ghost_fill, ghost_fill.index(f"struct {kernel_type}")) == "public"
+    assert _access_at_offset(ghost_fill, ghost_fill.index("struct PeerStorage")) == "private"
+
+    assert _access_at_offset(interface, interface.index("struct BoundaryCell")) == "private"
+    for kernel_type in ("DeviceFaceJob", "PackKernel", "ScatterKernel"):
+        assert _access_at_offset(interface, interface.index(f"struct {kernel_type}")) == "public"
+    assert _access_at_offset(interface, interface.index("struct PreparedInterface")) == "private"
+    assert _access_at_offset(interface, interface.index("static void validate_route_structure_")) == "private"
+
+    assert _access_at_offset(region, region.index("struct PeerStorage")) == "private"
+    for kernel_type in ("KernelJob", "PackKernel", "UnpackKernel"):
+        assert _access_at_offset(region, region.index(f"struct {kernel_type}")) == "public"
+    assert _access_at_offset(region, region.index("KernelJob lower_")) == "private"
 
 
 def test_fft_solver_named_device_functors_replace_local_for_each_lambdas() -> None:
