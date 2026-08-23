@@ -17,12 +17,17 @@ from importlib.machinery import EXTENSION_SUFFIXES
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from common import load_campaign, route_requires_mpi, route_uses_gpu
+from common import (
+    ROMEO_CUDA_DSL_OPTFLAGS,
+    load_campaign,
+    route_requires_mpi,
+    route_uses_gpu,
+)
 
 
 MANIFEST_SCHEMA = "pops.performance.source-export.v1"
 KOKKOS_EXPORT_SCHEMA = "pops.performance.kokkos-source-export.v1"
-BUILD_RECEIPT_SCHEMA = "pops.performance.advection-sine.build-receipt.v3"
+BUILD_RECEIPT_SCHEMA = "pops.performance.advection-sine.build-receipt.v4"
 COMPLETE_RECEIPT_SCHEMA = "pops.performance.advection-sine.complete.v2"
 
 
@@ -806,6 +811,12 @@ def create_build_receipt(
     campaign_relative = _relative_file(campaign_path, source, "campaign")
     campaign_entry = _campaign_source_entry(manifest, campaign_relative)
     campaign = load_campaign(campaign_path)
+    cuda_dsl_optflags = os.environ.get("POPS_DSL_OPTFLAGS")
+    if route_uses_gpu(campaign["route"]) and cuda_dsl_optflags != ROMEO_CUDA_DSL_OPTFLAGS:
+        raise ExportError(
+            "CUDA build receipt requires authenticated "
+            f"POPS_DSL_OPTFLAGS={ROMEO_CUDA_DSL_OPTFLAGS!r}"
+        )
     cache_path = build / "CMakeCache.txt"
     cache = _cmake_cache(cache_path)
     configured_source = cache.get("CMAKE_HOME_DIRECTORY")
@@ -851,6 +862,7 @@ def create_build_receipt(
     cuda: dict[str, Any] = {"enabled": route_uses_gpu(campaign["route"])}
     if cuda["enabled"]:
         cuda["compiler"] = _command_receipt("nvcc", "CUDA compiler")
+        cuda["native_loader"] = {"pops_dsl_optflags": cuda_dsl_optflags}
     receipt = {
         "schema": BUILD_RECEIPT_SCHEMA,
         "workload": "public-python",

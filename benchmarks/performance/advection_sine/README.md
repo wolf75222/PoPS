@@ -139,6 +139,15 @@ ROMEO de leur plateforme; ils ne dépendent ni de `romeo_load_*_env`, ni de
 compilateur/Kokkos/Python/pybind11/CUDA/OpenMPI sont dans le reçu de build;
 armgpu refuse toute compilation sur le login x86_64.
 
+Pour les routes CUDA, `armgpu.sbatch` fixe et propage explicitement
+`POPS_DSL_OPTFLAGS='-O2 -DNDEBUG'`. Cette politique ne réduit aucun point,
+répétition ou taille du workload : elle limite uniquement l'optimisation de la
+compilation du chargeur DSL Python, après le crash CICC observé à `-O3`. Une
+valeur différente est refusée avant le build, transmise à chaque étape `srun`,
+archivée dans `observed-allocation/environment-provenance.json`, puis scellée
+dans `raw/build.receipt.json`; le collecteur refuse une provenance CUDA qui ne
+porte pas exactement cette valeur.
+
 Les checkouts Kokkos par défaut sont
 `$HOME/adc_cpu_mpiomp/kokkos` pour Serial/OpenMP et
 `$HOME/adc_gpu_p1/kokkos` pour CUDA. Ils peuvent être remplacés à la
