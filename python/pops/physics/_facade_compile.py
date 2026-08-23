@@ -126,8 +126,6 @@ class _FacadeCompileMixin(_FacadeModel):
 
         Returns a CompiledModel carrying so_path, backend, target, names/roles/gamma/n_aux/params,
         caps, abi_key, model_hash, cxx, std."""
-        import os
-
         # Lazy codegen import (keeps pops.physics codegen-free at module load; Spec-4 rule):
         from pops.codegen.toolchain import (
             loader_cxx_std,
@@ -138,13 +136,13 @@ class _FacadeCompileMixin(_FacadeModel):
         )
         from pops.codegen.cache import (
             _dsl_optflags,
+            compile_cached_artifact,
             _identity_cache_so_path,
             _platform_cache_key,
             _precision_cache_key,
             _registry_cache_key,
         )
         from pops.codegen.compile_provenance import (
-            verify_cached_artifact,
             write_artifact_sidecar,
         )
         from pops.codegen.abi import _abi_key_python
@@ -264,11 +262,33 @@ class _FacadeCompileMixin(_FacadeModel):
         if cache_requested:
             so_path = _identity_cache_so_path(spec_identity)
 
-        if cache_requested and os.path.isfile(so_path):
-            binary_identity, final_artifact_identity = verify_cached_artifact(
-                so_path, semantic_identity=semantic_identity, spec_identity=spec_identity
+        if cache_requested:
+            def _compile_staged(staging_path: str) -> str:
+                # ``m.compile`` treats an explicit path as a forced compile.  Give it only a
+                # private staging path; the cache helper owns the final cache name, identity
+                # verification, and atomic publication under its inter-process lock.
+                return m.compile(
+                    staging_path,
+                    include,
+                    backend=backend,
+                    name=name,
+                    cxx=cxx,
+                    std=std,
+                    require_metadata=require_metadata,
+                    target=target,
+                    hoist_reciprocals=hoist_reciprocals,
+                    model_identity=model_hash,
+                    _native_field_roles=(normalized_field_roles if target == "amr_system" else None),
+                    consumer_owner_qid=consumer_owner_qid,
+                    declare_auxiliary_providers=declare_auxiliary_providers,
+                )
+
+            out_path, binary_identity, final_artifact_identity = compile_cached_artifact(
+                so_path,
+                semantic_identity=semantic_identity,
+                spec_identity=spec_identity,
+                compile_staged=_compile_staged,
             )
-            out_path = so_path
         else:
             # The loader emits the target-specific fixed ABI entry point.
             out_path = m.compile(

@@ -18,6 +18,15 @@ from pops._generated_component_interfaces import NATIVE_TAGGING_PROGRAM_ABI
 _TAGGER_LEAF_OPCODES = dict(NATIVE_TAGGING_PROGRAM_ABI["leaf_opcodes"])
 _TAGGER_LOGICAL_OPCODES = dict(NATIVE_TAGGING_PROGRAM_ABI["logical_opcodes"])
 _TAGGER_OUTPUTS = tuple(NATIVE_TAGGING_PROGRAM_ABI["candidate_outputs"])
+# ``PopsTaggingLeafV1`` has scalar threshold/stencil fields only.  The builtin
+# program owns opcode 6 and carries its window geometry through the generated
+# ABI; an external component cannot reconstruct that geometry from the leaf
+# carrier and must not advertise it.
+_EXTERNAL_TAGGER_LEAF_OPCODES = {
+    name: opcode
+    for name, opcode in _TAGGER_LEAF_OPCODES.items()
+    if name != "prescribed_window"
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,8 +186,14 @@ def _normalize_tagger_capability(capabilities: Any) -> dict[str, Any]:
     execution_mode = row["execution_mode"]
     collective_scope = row["collective_scope"]
     memory_spaces = tuple(row["memory_spaces"])
-    if not leaves or len(set(leaves)) != len(leaves) \
-            or any(value not in _TAGGER_LEAF_OPCODES for value in leaves):
+    if not leaves or len(set(leaves)) != len(leaves):
+        raise ValueError("AMR Tagger capability declares invalid leaf opcodes")
+    if "prescribed_window" in leaves:
+        raise ValueError(
+            "external AMR Tagger cannot advertise prescribed_window: "
+            "PopsTaggingLeafV1 carries no window geometry"
+        )
+    if any(value not in _EXTERNAL_TAGGER_LEAF_OPCODES for value in leaves):
         raise ValueError("AMR Tagger capability declares invalid leaf opcodes")
     if not logical or len(set(logical)) != len(logical) \
             or any(value not in _TAGGER_LOGICAL_OPCODES for value in logical):
@@ -217,7 +232,7 @@ def _normalize_tagger_capability(capabilities: Any) -> dict[str, Any]:
         "schema_version": 1,
         "capability_type": "amr_tagging_program",
         "leaf_opcodes": list(leaves),
-        "leaf_opcode_ids": [_TAGGER_LEAF_OPCODES[value] for value in leaves],
+        "leaf_opcode_ids": [_EXTERNAL_TAGGER_LEAF_OPCODES[value] for value in leaves],
         "logical_opcodes": list(logical),
         "logical_opcode_ids": [_TAGGER_LOGICAL_OPCODES[value] for value in logical],
         "candidate_outputs": list(outputs),
@@ -293,6 +308,11 @@ class TaggerProvider:
         if not isinstance(registrations, tuple) or authoring is None:
             raise TypeError("TaggerProvider requires one resolved AMRTagging graph")
         used = {row.node_type for row in registrations}
+        if "prescribed_window" in used:
+            raise NotImplementedError(
+                "external AMR Tagger cannot evaluate prescribed_window: "
+                "PopsTaggingLeafV1 carries no window geometry"
+            )
         supported = set(capability["leaf_opcodes"]) | set(capability["logical_opcodes"])
         missing = sorted(used - supported)
         if missing:

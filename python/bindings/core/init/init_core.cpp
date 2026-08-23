@@ -3,6 +3,9 @@
 #if !defined(POPS_RUNTIME_SHARED_EXCEPTION_ABI) || !defined(POPS_EXPORT_BUILDING_MODULE)
 #error "the _pops host must build the shared runtime exception ABI as its exporting producer"
 #endif
+#ifndef POPS_BUILD_FINGERPRINT
+#error "the _pops host requires one configured native build fingerprint"
+#endif
 
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/parallel/execution_lane.hpp>
@@ -220,6 +223,10 @@ py::dict runtime_environment_to_dict(const pops::RuntimeEnvironmentReport& r) {
   d["kokkos_concurrency"] = r.kokkos_concurrency;
   d["kokkos_ownership"] = r.kokkos_ownership;
   d["kokkos_lifecycle"] = r.kokkos_lifecycle;
+  d["gpu_device_ordinal"] = r.gpu_device_ordinal;
+  d["gpu_uuid"] = r.gpu_uuid;
+  d["gpu_uuid_method"] = r.gpu_uuid_method;
+  d["gpu_uuid_diagnostic"] = r.gpu_uuid_diagnostic;
   d["mpi_compiled"] = r.mpi_compiled;
   d["mpi_active"] = r.mpi_active;
   d["mpi_rank"] = r.mpi_rank;
@@ -689,6 +696,7 @@ void init_core(py::module_& m) {
 #else
   m.attr("__version__") = "unknown";
 #endif
+  m.attr("__build_fingerprint__") = POPS_BUILD_FINGERPRINT;
   m.attr("__release_contract_sha256__") = pops::release_contract::kContractSha256;
   m.attr("__public_api_version__") = pops::release_contract::kPublicApiVersion;
   m.attr("__semantic_ir_version__") = pops::release_contract::kSemanticIrVersion;
@@ -738,6 +746,11 @@ void init_core(py::module_& m) {
       "allocator lifetime. kokkos_concurrency is DefaultExecutionSpace::concurrency() only while "
       "Kokkos is initialized, and zero otherwise. Reading the report does not initialize Kokkos "
       "or MPI.");
+
+  m.def(
+      "runtime_synchronize", []() { pops::runtime_synchronize(); },
+      "Fence the already-initialized Kokkos default execution space. This never initializes "
+      "Kokkos and is a no-op in a non-Kokkos build.");
 
   m.def("runtime_backend_manifest", &runtime_backend_manifest_to_dict, py::arg("backend"),
         py::arg("target"), py::arg("communicator"),

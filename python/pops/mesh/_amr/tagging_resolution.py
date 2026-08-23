@@ -10,7 +10,8 @@ import json
 from typing import TYPE_CHECKING, Any, cast
 
 from .tagging_graph import (
-    Above, AllOf, AnyOf, Below, GradientAbove, GradientBelow, MagnitudeAbove, Not, TagExpr,
+    Above, AllOf, AnyOf, Below, GradientAbove, GradientBelow, MagnitudeAbove, Not,
+    PrescribedWindow, TagExpr,
     TaggingGraph)
 
 if TYPE_CHECKING:
@@ -19,7 +20,7 @@ if TYPE_CHECKING:
 
 _SCHEMA_VERSION = 1
 _BUILTIN_NODES = (
-    Above, Below, MagnitudeAbove, GradientAbove, GradientBelow, AnyOf, AllOf, Not)
+    Above, Below, MagnitudeAbove, GradientAbove, GradientBelow, PrescribedWindow, AnyOf, AllOf, Not)
 
 
 def _handle(value: Any, *, where: str, kind: str | None = None) -> Handle:
@@ -55,11 +56,14 @@ def _strict_data(value: Any, *, where: str) -> Any:
 
 def _audit_storage(value: Any, *, where: str) -> None:
     from pops.model import Handle
+    from pops.time import Clock
 
     if callable(value):
         raise TypeError("%s stores a Python callback; callbacks are forbidden" % where)
     if isinstance(value, Handle):
         _handle(value, where=where)
+    elif type(value) is Clock:
+        _strict_data(value.to_data(), where=where)
     elif isinstance(value, TagExpr) or isinstance(value, Enum):
         return
     elif isinstance(value, Mapping):

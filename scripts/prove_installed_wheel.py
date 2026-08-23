@@ -27,7 +27,7 @@ from write_native_variant_manifest import (  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PROOF_SCHEMA_VERSION = 3
+PROOF_SCHEMA_VERSION = 4
 
 
 class InstalledWheelProofError(RuntimeError):
@@ -197,6 +197,7 @@ def _native_variant_proof(
             "sha256": wheel_digest,
             "version": row["version"],
             "abi_key": row["abi_key"],
+            "build_fingerprint": row["build_fingerprint"],
             "has_mpi": row["has_mpi"],
             "has_kokkos": row["has_kokkos"],
         })

@@ -235,6 +235,101 @@ def _artifact_cache_staging_path(so_path: Any) -> str:
     return staging
 
 
+def verify_cached_artifact_entry(
+    destination: Any,
+    *,
+    semantic_identity: Any,
+    spec_identity: Any,
+) -> tuple[Any, Any] | None:
+    """Fail closed unless the locked cache path is absent or one verified artifact entry."""
+    from pops.codegen.compile_provenance import (
+        artifact_sidecar_path,
+        verify_cached_artifact,
+    )
+
+    destination = os.path.abspath(os.fspath(destination))
+    sidecar = artifact_sidecar_path(destination)
+    destination_exists = os.path.lexists(destination)
+    sidecar_exists = os.path.lexists(sidecar)
+    if destination_exists and not sidecar_exists:
+        raise RuntimeError(
+            "pops.compile: cache artifact %r exists without its identity sidecar %r; "
+            "refusing to replace an unverifiable cache entry"
+            % (destination, sidecar)
+        )
+    if not destination_exists and sidecar_exists:
+        raise RuntimeError(
+            "pops.compile: cache identity sidecar %r is orphaned because artifact %r is absent; "
+            "refusing to repair cache provenance silently"
+            % (sidecar, destination)
+        )
+    if not destination_exists:
+        return None
+    if os.path.islink(destination) or not os.path.isfile(destination):
+        raise RuntimeError(
+            "pops.compile: cache artifact %r must be a regular non-symbolic-link file; "
+            "refusing a residual cache entry"
+            % destination
+        )
+    if os.path.islink(sidecar) or not os.path.isfile(sidecar):
+        raise RuntimeError(
+            "pops.compile: cache identity sidecar %r must be a regular non-symbolic-link "
+            "file; refusing a residual cache entry"
+            % sidecar
+        )
+    return verify_cached_artifact(
+        destination,
+        semantic_identity=semantic_identity,
+        spec_identity=spec_identity,
+    )
+
+
+def compile_cached_artifact(
+    destination: Any,
+    *,
+    semantic_identity: Any,
+    spec_identity: Any,
+    compile_staged: Any,
+) -> tuple[str, Any, Any]:
+    """Return one sealed content-addressed artifact, compiling it at most once."""
+    from pops.codegen.compile_provenance import artifact_sidecar_path, publish_staged_artifact
+
+    destination = os.path.abspath(os.fspath(destination))
+    with _artifact_cache_lock(destination):
+        cached = verify_cached_artifact_entry(
+            destination,
+            semantic_identity=semantic_identity,
+            spec_identity=spec_identity,
+        )
+        if cached is not None:
+            binary, artifact = cached
+            _record_artifact_identity(destination, spec_identity)
+            return destination, binary, artifact
+
+        staging = _artifact_cache_staging_path(destination)
+        try:
+            emitted = os.path.abspath(os.fspath(compile_staged(staging)))
+            if emitted != staging:
+                raise RuntimeError(
+                    "cache compilation must emit its reserved staging path %r (got %r)"
+                    % (staging, emitted)
+                )
+            binary, artifact = publish_staged_artifact(
+                staging,
+                destination,
+                semantic_identity=semantic_identity,
+                spec_identity=spec_identity,
+            )
+            _record_artifact_identity(destination, spec_identity)
+            return destination, binary, artifact
+        finally:
+            for leftover in (staging, artifact_sidecar_path(staging)):
+                try:
+                    os.remove(leftover)
+                except FileNotFoundError:
+                    pass
+
+
 def _precision_cache_key() -> str:
     """The floating-point precision component of a compiled artifact's cache key (ADC-536).
 

@@ -24,6 +24,7 @@ CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 PYTEST_CONFTEST = ROOT / "tests" / "python" / "conftest.py"
 SERIAL_PARENT_MPI_SMOKE = ROOT / "tests" / "cmake" / "run_serial_parent_mpi_target.cmake"
 HDF5_WITHOUT_MPI_SMOKE = ROOT / "tests" / "cmake" / "expect_hdf5_without_mpi_rejected.cmake"
+BUILD_FINGERPRINT = "a" * 64
 
 
 def _writer():
@@ -60,6 +61,7 @@ def _module(extension: Path, dimension: int) -> ModuleType:
     module.__version__ = "1.2.3"
     module.__has_mpi__ = dimension == 3
     module.__has_kokkos__ = True
+    module.__build_fingerprint__ = BUILD_FINGERPRINT
     module.abi_key = lambda: f"abi-dim{dimension}"
     return module
 
@@ -83,6 +85,7 @@ def test_writer_extracts_compiled_facts_and_atomically_merges_dimensions(tmp_pat
         "sha256": hashlib.sha256(b"dim1").hexdigest(),
         "version": "1.2.3",
         "abi_key": "abi-dim1",
+        "build_fingerprint": BUILD_FINGERPRINT,
         "has_mpi": False,
         "has_kokkos": True,
     }
@@ -100,13 +103,14 @@ def test_writer_extracts_compiled_facts_and_atomically_merges_dimensions(tmp_pat
 def test_manifest_rejects_escaping_or_mislabeled_paths(path, message):
     writer = _writer()
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "variants": [{
             "dimension": 2,
             "path": path,
             "sha256": "a" * 64,
             "version": "1.0.0",
             "abi_key": "abi",
+            "build_fingerprint": BUILD_FINGERPRINT,
             "has_mpi": False,
             "has_kokkos": True,
         }],
@@ -127,17 +131,18 @@ def test_manifest_requires_unique_sorted_rows_and_exact_expected_set():
             "sha256": f"{dimension}" * 64,
             "version": "1.0.0",
             "abi_key": f"abi-{dimension}",
+            "build_fingerprint": BUILD_FINGERPRINT,
             "has_mpi": False,
             "has_kokkos": True,
         }
 
     with pytest.raises(writer.NativeVariantManifestError, match="unique and sorted"):
         writer.validate_manifest_payload(
-            {"schema_version": 1, "variants": [row(3), row(1)]}
+            {"schema_version": 2, "variants": [row(3), row(1)]}
         )
     with pytest.raises(writer.NativeVariantManifestError, match="explicit set"):
         writer.validate_manifest_payload(
-            {"schema_version": 1, "variants": [row(1), row(3)]},
+            {"schema_version": 2, "variants": [row(1), row(3)]},
             expected_dimensions=(1, 2, 3),
         )
 
@@ -151,6 +156,69 @@ def test_writer_cli_is_fully_explicit():
     assert 'name = "pops._pops"' in source
 
 
+@pytest.mark.parametrize("fingerprint", ("A" * 64, "a" * 63, "fingerprint"))
+def test_manifest_rejects_malformed_build_fingerprint(fingerprint):
+    writer = _writer()
+    suffix = importlib.machinery.EXTENSION_SUFFIXES[0]
+    payload = {
+        "schema_version": 2,
+        "variants": [{
+            "dimension": 2,
+            "path": f"dim2/_pops{suffix}",
+            "sha256": "a" * 64,
+            "version": "1.0.0",
+            "abi_key": "abi",
+            "build_fingerprint": fingerprint,
+            "has_mpi": False,
+            "has_kokkos": True,
+        }],
+    }
+
+    with pytest.raises(writer.NativeVariantManifestError, match="build[_ ]fingerprint"):
+        writer.validate_manifest_payload(payload)
+
+
+def test_manifest_schema_version_must_be_an_exact_integer():
+    writer = _writer()
+    suffix = importlib.machinery.EXTENSION_SUFFIXES[0]
+    payload = {
+        "schema_version": 2.0,
+        "variants": [{
+            "dimension": 2,
+            "path": f"dim2/_pops{suffix}",
+            "sha256": "a" * 64,
+            "version": "1.0.0",
+            "abi_key": "abi",
+            "build_fingerprint": BUILD_FINGERPRINT,
+            "has_mpi": False,
+            "has_kokkos": True,
+        }],
+    }
+
+    with pytest.raises(writer.NativeVariantManifestError, match="schema version"):
+        writer.validate_manifest_payload(payload)
+
+
+def test_writer_refuses_a_missing_or_malformed_module_build_fingerprint(tmp_path, monkeypatch):
+    writer = _writer()
+    native_root = tmp_path / "pops" / "_native"
+    extension = _extension(native_root, 2)
+    module = _module(extension, 2)
+    monkeypatch.setattr(writer, "_load_exact_extension", lambda _path: module)
+
+    del module.__build_fingerprint__
+    with pytest.raises(writer.NativeVariantManifestError, match="build fingerprint"):
+        writer.native_variant_row(
+            extension, manifest=native_root / "variants.json", dimension=2, version="1.2.3"
+        )
+
+    module.__build_fingerprint__ = "B" * 64
+    with pytest.raises(writer.NativeVariantManifestError, match="build fingerprint"):
+        writer.native_variant_row(
+            extension, manifest=native_root / "variants.json", dimension=2, version="1.2.3"
+        )
+
+
 def test_cmake_authenticates_and_installs_the_exact_linked_leaf():
     source = PYTHON_CMAKE.read_text(encoding="utf-8")
 
@@ -161,6 +229,22 @@ def test_cmake_authenticates_and_installs_the_exact_linked_leaf():
     assert 'install(FILES "${POPS_PY_NATIVE_MANIFEST}" DESTINATION pops/_native)' in source
 
 
+def test_cmake_configures_and_exports_one_common_native_build_fingerprint():
+    root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+    helper = (ROOT / "cmake" / "PopsNativeBuildFingerprint.cmake").read_text(encoding="utf-8")
+    python_cmake = PYTHON_CMAKE.read_text(encoding="utf-8")
+
+    assert "include(cmake/PopsNativeBuildFingerprint.cmake)" in root_cmake
+    assert "pops_compute_native_build_fingerprint(POPS_NATIVE_BUILD_FINGERPRINT)" in root_cmake
+    assert 'POPS_BUILD_FINGERPRINT="${POPS_NATIVE_BUILD_FINGERPRINT}"' in python_cmake
+    assert "function(pops_compute_native_build_fingerprint output)" in helper
+    assert "CONFIGURE_DEPENDS" in helper
+    assert "CMAKE_CONFIGURE_DEPENDS" in helper
+    assert "POPS_HEADER_MANIFEST" in helper
+    for excluded_per_variant_fact in ("POPS_NATIVE_DIM", "MPI_ABI", "HDF5"):
+        assert excluded_per_variant_fact in helper
+
+
 def test_process_harness_accepts_only_an_authenticated_selected_nested_leaf(tmp_path):
     source_python = tmp_path / "python"
     native_root = source_python / "pops" / "_native"
@@ -169,7 +253,7 @@ def test_process_harness_accepts_only_an_authenticated_selected_nested_leaf(tmp_
     manifest.write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "variants": [
                     {
                         "dimension": 3,
@@ -177,6 +261,7 @@ def test_process_harness_accepts_only_an_authenticated_selected_nested_leaf(tmp_
                         "sha256": hashlib.sha256(selected.read_bytes()).hexdigest(),
                         "version": "1.2.3",
                         "abi_key": "abi-dim3",
+                        "build_fingerprint": BUILD_FINGERPRINT,
                         "has_mpi": False,
                         "has_kokkos": True,
                     }
@@ -424,6 +509,7 @@ def test_wheel_proof_accepts_an_explicit_fat_set_and_rejects_a_hidden_subset(tmp
             "sha256": hashlib.sha256(payload).hexdigest(),
             "version": "1.2.3",
             "abi_key": f"abi-{dimension}",
+            "build_fingerprint": BUILD_FINGERPRINT,
             "has_mpi": False,
             "has_kokkos": True,
         })
@@ -431,7 +517,7 @@ def test_wheel_proof_accepts_an_explicit_fat_set_and_rejects_a_hidden_subset(tmp
         installed = distribution / "pops" / "_native" / relative
         installed.parent.mkdir(parents=True)
         installed.write_bytes(payload)
-    manifest_payload = {"schema_version": 1, "variants": rows}
+    manifest_payload = {"schema_version": 2, "variants": rows}
     manifest.write_text(json.dumps(manifest_payload), encoding="utf-8")
     metadata_payload = "Metadata-Version: 2.3\nName: PoPS\nVersion: 1.2.3\n"
     metadata = distribution / "pops-1.2.3.dist-info" / "METADATA"

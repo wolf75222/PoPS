@@ -27,8 +27,12 @@
 #include <cstdint>  // std::int64_t: cell counts (LLP64 portability, no-op on LP64)
 #include <cstdlib>  // getenv / strtol: overridable serial fallback threshold (#165)
 #include <limits>
+#include <mutex>
 #include <stdexcept>
+#include <string>
 #include <type_traits>  // std::is_same_v: compile-time guard host vs device exec space (#165)
+#include <utility>
+#include <vector>
 
 #ifndef POPS_HAS_KOKKOS
 // PoPS is KOKKOS-ONLY: there is no longer a standalone OpenMP backend nor a manual host loop
@@ -70,6 +74,10 @@ namespace pops {
 // resweep the threshold without recompiling; default 4096 (same fork/join vs computation
 // trade-off as the old if() clause of the removed OpenMP path).
 namespace detail {
+
+namespace testing {
+struct ReductionResultPoolAccess;
+}
 inline std::int64_t foreach_serial_threshold() {
   static const std::int64_t thr = []() -> std::int64_t {
     if (const char* e = std::getenv("POPS_FOREACH_SERIAL_THRESHOLD")) {
@@ -202,6 +210,138 @@ struct FaceKernelAdapter {
   }
 };
 
+/// Reusable rank-0 device results for reductions which must return a host scalar.  A slot remains
+/// exclusive until its execution instance has completed the explicit copy to host.  The singleton
+/// deliberately outlives ordinary static destruction; its Kokkos finalizer hook clears device
+/// allocations while their memory space is still alive.
+template <class MemorySpace>
+class ReductionResultPool {
+ public:
+  using view_type = Kokkos::View<Real, MemorySpace>;
+
+  class Lease {
+   public:
+    Lease() = default;
+    Lease(const Lease&) = delete;
+    Lease& operator=(const Lease&) = delete;
+
+    Lease(Lease&& other) noexcept
+        : pool_(std::exchange(other.pool_, nullptr)),
+          slot_(other.slot_),
+          result_(std::move(other.result_)) {}
+
+    Lease& operator=(Lease&& other) noexcept {
+      if (this != &other) {
+        abandon();
+        pool_ = std::exchange(other.pool_, nullptr);
+        slot_ = other.slot_;
+        result_ = std::move(other.result_);
+      }
+      return *this;
+    }
+
+    ~Lease() { abandon(); }
+
+    const view_type& view() const noexcept { return result_; }
+
+    /// Releases only after the caller has fenced the execution instance that used the result.
+    void release() noexcept {
+      if (pool_ != nullptr) {
+        pool_->release(slot_);
+        pool_ = nullptr;
+      }
+    }
+
+    /// A throwing Kokkos operation can leave device work outstanding.  Keep this slot unavailable
+    /// until the Kokkos finalizer releases every persistent allocation.
+    void abandon() noexcept {
+      if (pool_ != nullptr) {
+        pool_->abandon(slot_);
+        pool_ = nullptr;
+      }
+    }
+
+   private:
+    friend class ReductionResultPool;
+
+    Lease(ReductionResultPool* pool, std::size_t slot, view_type result)
+        : pool_(pool), slot_(slot), result_(std::move(result)) {}
+
+    ReductionResultPool* pool_ = nullptr;
+    std::size_t slot_ = 0;
+    view_type result_{};
+  };
+
+  static ReductionResultPool& instance() {
+    static ReductionResultPool* pool = new ReductionResultPool();
+    return *pool;
+  }
+
+  Lease acquire(const char* label) {
+    register_finalize_hook();
+    std::lock_guard<std::mutex> guard(mutex_);
+    for (std::size_t slot = 0; slot < slots_.size(); ++slot) {
+      if (!slots_[slot].in_use) {
+        slots_[slot].in_use = true;
+        return Lease(this, slot, slots_[slot].result);
+      }
+    }
+    slots_.push_back(Slot{view_type(std::string(label)), true, false});
+    return Lease(this, slots_.size() - 1, slots_.back().result);
+  }
+
+ private:
+  friend struct testing::ReductionResultPoolAccess;
+
+  struct Slot {
+    view_type result{};
+    bool in_use = false;
+    bool abandoned = false;
+  };
+
+  void register_finalize_hook() {
+    std::call_once(finalize_hook_once_,
+                   [this] { Kokkos::push_finalize_hook([this] { release_all(); }); });
+  }
+
+  void release(std::size_t slot) noexcept {
+    std::lock_guard<std::mutex> guard(mutex_);
+    if (slot < slots_.size() && !slots_[slot].abandoned)
+      slots_[slot].in_use = false;
+  }
+
+  void abandon(std::size_t slot) noexcept {
+    std::lock_guard<std::mutex> guard(mutex_);
+    if (slot < slots_.size()) {
+      slots_[slot].in_use = true;
+      slots_[slot].abandoned = true;
+    }
+  }
+
+  void release_all() noexcept {
+    release_all_after_global_fence([] { Kokkos::fence(); });
+  }
+
+  template <class GlobalFence>
+  void release_all_after_global_fence(GlobalFence&& global_fence) noexcept {
+    // Finalize hooks run before Kokkos tears down memory spaces.  The global barrier must remain
+    // outside the pool lock: Kokkos callbacks may themselves need application threads that hold
+    // or later acquire the pool mutex.  If Kokkos refuses the barrier during teardown, retain the
+    // views rather than destroying allocations whose work may still be outstanding.
+    try {
+      std::forward<GlobalFence>(global_fence)();
+    } catch (...) {
+      return;
+    }
+    std::lock_guard<std::mutex> guard(mutex_);
+    slots_.clear();
+  }
+
+  std::mutex mutex_;
+  std::once_flag finalize_hook_once_;
+  std::vector<Slot> slots_;
+};
+
 }  // namespace detail
 
 /// Return the face-index box normal to compile-time @p Axis.  A cell box contains one more face
@@ -279,8 +419,9 @@ void for_each_face(const Box<Dim>& cells, F f) {
   for_each_cell(faces, detail::FaceKernelAdapter<Dim, Axis, F>{f});
 }
 
-/// SUM reduction on an explicit execution-space instance.  The returned scalar establishes the
-/// completion dependency for this reduction only; unrelated submitted work remains unfenced.
+/// SUM reduction on an explicit execution-space instance.  The reduction result resides first in
+/// that instance's memory space, then is copied explicitly to the host scalar.  The final fence
+/// completes work submitted to this execution instance without fencing unrelated streams.
 template <class ExecutionSpace, int Dim, class F>
 Real for_each_cell_reduce_sum(const ExecutionSpace& execution, const Box<Dim>& b, F f) {
   static_assert(Kokkos::is_execution_space<ExecutionSpace>::value,
@@ -289,7 +430,10 @@ Real for_each_cell_reduce_sum(const ExecutionSpace& execution, const Box<Dim>& b
     return Real(0);
   detail::require_iterable_box(b);
   detail::ensure_kokkos_initialized();
-  Real result = 0;
+  using result_memory_space = typename ExecutionSpace::memory_space;
+  auto result_lease = detail::ReductionResultPool<result_memory_space>::instance().acquire(
+      "pops_reduce_sum_result");
+  const auto& device_result = result_lease.view();
   const Index<Dim> lower = b.lo;
   const Extent<Dim> extent = b.extent();
   Kokkos::parallel_reduce(
@@ -299,7 +443,11 @@ Real for_each_cell_reduce_sum(const ExecutionSpace& execution, const Box<Dim>& b
       KOKKOS_LAMBDA(const std::int64_t ordinal, Real& accumulator) {
         accumulator += f(detail::cell_index_from_ordinal(lower, extent, ordinal));
       },
-      Kokkos::Sum<Real>{result});
+      Kokkos::Sum<Real, result_memory_space>{device_result});
+  Real result = 0;
+  Kokkos::deep_copy(execution, result, device_result);
+  execution.fence("pops_reduce_sum_result_to_host");
+  result_lease.release();
   return result;
 }
 
@@ -313,7 +461,8 @@ Real for_each_cell_reduce_sum(const Box<Dim>& b, F f) {
   return for_each_cell_reduce_sum(execution, b, f);
 }
 
-/// MAX reduction on an explicit execution-space instance.
+/// MAX reduction on an explicit execution-space instance.  As for SUM, keep the reducer output
+/// in the execution memory space and make the device-to-host completion explicit.
 template <class ExecutionSpace, int Dim, class F>
 Real for_each_cell_reduce_max(const ExecutionSpace& execution, const Box<Dim>& b, F f) {
   static_assert(Kokkos::is_execution_space<ExecutionSpace>::value,
@@ -322,7 +471,10 @@ Real for_each_cell_reduce_max(const ExecutionSpace& execution, const Box<Dim>& b
     return Real(0);
   detail::require_iterable_box(b);
   detail::ensure_kokkos_initialized();
-  Real result = std::numeric_limits<Real>::lowest();
+  using result_memory_space = typename ExecutionSpace::memory_space;
+  auto result_lease = detail::ReductionResultPool<result_memory_space>::instance().acquire(
+      "pops_reduce_max_result");
+  const auto& device_result = result_lease.view();
   const Index<Dim> lower = b.lo;
   const Extent<Dim> extent = b.extent();
   Kokkos::parallel_reduce(
@@ -334,7 +486,11 @@ Real for_each_cell_reduce_max(const ExecutionSpace& execution, const Box<Dim>& b
         if (value > accumulator)
           accumulator = value;
       },
-      Kokkos::Max<Real>{result});
+      Kokkos::Max<Real, result_memory_space>{device_result});
+  Real result = std::numeric_limits<Real>::lowest();
+  Kokkos::deep_copy(execution, result, device_result);
+  execution.fence("pops_reduce_max_result_to_host");
+  result_lease.release();
   return result;
 }
 

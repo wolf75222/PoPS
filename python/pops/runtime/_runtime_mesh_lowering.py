@@ -47,7 +47,7 @@ def _uniform_system_values(
         raise TypeError("native uniform decomposition uses an unsupported schema")
     boxes = decomposition.get("boxes")
     if (
-        decomposition.get("kind") not in {"single_box", "axis_bands"}
+        decomposition.get("kind") not in {"single_box", "axis_bands", "regular_blocks"}
         or not isinstance(boxes, (tuple, list))
         or not boxes
     ):
@@ -224,7 +224,7 @@ def flow_bootstrap_tagging(
                 "pops.bind: multiple resolved field plans claim solved-field identity %s" % identity
             )
         field_plans_by_identity[identity] = plan
-    leaves: list[tuple[str, str, str, str, int, int, float, int]] = []
+    leaves: list[tuple[str, str, str, str, int, int, float, int, dict[str, object] | None]] = []
     stencils: list[dict[str, Any]] = []
     stencil_indices: dict[str, int] = {}
 
@@ -236,6 +236,61 @@ def flow_bootstrap_tagging(
             raise ValueError("pops.bind: tagging node lacks an authenticated lowering")
         leaf_op = _TAG_LEAF_OPS.get(node_type)
         if leaf_op is not None:
+            if node_type == "prescribed_window":
+                expected = {
+                    "schema_version", "node_type", "frame", "dimension", "clock", "center", "half_width",
+                    "velocity", "trajectory",
+                }
+                if set(node) != expected or node.get("schema_version") != 1 \
+                        or node.get("trajectory") != "constant_velocity_layout_periodicity":
+                    raise ValueError("pops.bind: malformed prescribed AMR window")
+                frame = node.get("frame")
+                clock = node.get("clock")
+                center = node.get("center")
+                half_width = node.get("half_width")
+                velocity = node.get("velocity")
+                if (
+                    not isinstance(frame, dict)
+                    or type(node.get("dimension")) is not int
+                    or not isinstance(clock, dict)
+                    or not isinstance(center, list)
+                    or not isinstance(half_width, list)
+                    or not isinstance(velocity, list)
+                    or node["dimension"] not in (1, 2, 3)
+                    or len(center) != node["dimension"]
+                    or len(half_width) != node["dimension"]
+                    or len(velocity) != node["dimension"]
+                    or any(isinstance(value, bool) or not isinstance(value, (int, float))
+                           or not math.isfinite(float(value)) for value in center + half_width + velocity)
+                    or any(float(value) <= 0.0 for value in half_width)
+                ):
+                    raise TypeError("pops.bind: prescribed AMR window is not exact-ranked")
+                if clock.get("schema_version") != 1:
+                    raise ValueError("pops.bind: prescribed AMR window clock is malformed")
+                from pops.time import Clock
+
+                if Clock.from_data(clock).qualified_id != clock_identity:
+                    raise ValueError(
+                        "pops.bind: prescribed AMR window must use the bound Program clock"
+                    )
+                leaves.append(
+                    (
+                        "geometry",
+                        "prescribed_window:%s" % bootstrap.tagging.qualified_id,
+                        "",
+                        "",
+                        -1,
+                        leaf_op,
+                        0.0,
+                        -1,
+                        {
+                            "center": [float(value) for value in center],
+                            "half_width": [float(value) for value in half_width],
+                            "velocity": [float(value) for value in velocity],
+                        },
+                    )
+                )
+                return [leaf_op], [len(leaves) - 1]
             indicator = node.get("indicator")
             if type(indicator) is not dict or indicator.get("kind") not in {"state", "field"}:
                 raise TypeError("pops.bind: native tag leaves require a state/field Handle")
@@ -305,6 +360,7 @@ def flow_bootstrap_tagging(
                     leaf_op,
                     float(threshold),
                     stencil_index,
+                    None,
                 )
             )
             return [leaf_op], [len(leaves) - 1]
@@ -357,6 +413,7 @@ def flow_bootstrap_tagging(
                 "opcode": opcode,
                 "threshold": threshold,
                 "stencil_index": stencil_index,
+                "window": window,
             }
             for (
                 kind,
@@ -367,6 +424,7 @@ def flow_bootstrap_tagging(
                 opcode,
                 threshold,
                 stencil_index,
+                window,
             ) in leaves
         ],
         "refine_opcodes": refine_ops,
@@ -390,6 +448,16 @@ def flow_bootstrap_tagging(
         [row[5] for row in leaves],
         [row[6] for row in leaves],
         [row[7] for row in leaves],
+        [
+            None
+            if row[8] is None
+            else [
+                *row[8]["center"],
+                *row[8]["half_width"],
+                *row[8]["velocity"],
+            ]
+            for row in leaves
+        ],
         stencils,
         refine_ops,
         refine_args,

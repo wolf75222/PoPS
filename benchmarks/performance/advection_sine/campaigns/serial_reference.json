@@ -1,0 +1,21 @@
+{
+  "schema": "pops.performance.advection-sine.campaign.v2",
+  "id": "romeo_x64_serial_reference_3d",
+  "scaling": "reference",
+  "route": "kokkos_serial",
+  "platform": "x64cpu",
+  "dimension": 3,
+  "mode": "diagonal",
+  "layout": "uniform",
+  "subcycling": "synchronous",
+  "resolution": [128, 128, 128],
+  "block_size": 32,
+  "cfl": 0.40,
+  "steps": 32,
+  "warmups": 1,
+  "repetitions": 5,
+  "slurm": {"partition": "instant", "time": "00:50:00", "mem": "32G"},
+  "points": [
+    {"id": "serial", "nodes": 1, "ranks": 1, "threads": 1}
+  ]
+}

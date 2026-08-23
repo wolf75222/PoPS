@@ -24,7 +24,10 @@ EXAMPLE = ROOT / "examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.
 TAGGER_CAPABILITY = {
     "schema_version": 1,
     "capability_type": "amr_tagging_program",
-    "leaf_opcodes": list(NATIVE_TAGGING_PROGRAM_ABI["leaf_opcodes"]),
+    "leaf_opcodes": [
+        opcode for opcode in NATIVE_TAGGING_PROGRAM_ABI["leaf_opcodes"]
+        if opcode != "prescribed_window"
+    ],
     "logical_opcodes": list(NATIVE_TAGGING_PROGRAM_ABI["logical_opcodes"]),
     "candidate_outputs": list(NATIVE_TAGGING_PROGRAM_ABI["candidate_outputs"]),
     "indicator_stencil_routes": list(
@@ -58,6 +61,11 @@ def test_tagging_opcode_catalog_is_the_single_python_cpp_authority():
 
     assert providers._TAGGER_LEAF_OPCODES == dict(
         NATIVE_TAGGING_PROGRAM_ABI["leaf_opcodes"])
+    assert providers._EXTERNAL_TAGGER_LEAF_OPCODES == {
+        name: opcode
+        for name, opcode in NATIVE_TAGGING_PROGRAM_ABI["leaf_opcodes"].items()
+        if name != "prescribed_window"
+    }
     assert providers._TAGGER_LOGICAL_OPCODES == dict(
         NATIVE_TAGGING_PROGRAM_ABI["logical_opcodes"])
     assert _runtime_mesh_lowering._TAG_LEAF_OPS == providers._TAGGER_LEAF_OPCODES
@@ -452,6 +460,48 @@ def test_external_tagger_refuses_graph_opcode_outside_manifest(tmp_path):
             layout=layout,
             components=(tagger_component,),
         )
+
+
+def test_external_tagger_refuses_prescribed_window_without_a_geometry_abi(tmp_path):
+    from pops.amr import PrescribedWindow
+    from pops.domain import CartesianDomain
+    from pops.frames import Cartesian
+    from pops.time import Clock
+
+    component = _component(tmp_path, name="window_tagger", interface=interfaces.Tagger)
+    frame = CartesianDomain("window", (0.0,), (1.0,)).frame(Cartesian(1))
+    window = PrescribedWindow(
+        frame=frame,
+        clock=Clock("window"),
+        center=(0.25,),
+        half_width=(0.1,),
+        velocity=(1.0,),
+    )
+    graph = SimpleNamespace(
+        registrations=(SimpleNamespace(node_type="prescribed_window"),),
+        graph=SimpleNamespace(
+            refine=window,
+            coarsen=None,
+            hysteresis=SimpleNamespace(min_cycles=0),
+        ),
+    )
+
+    with pytest.raises(NotImplementedError, match="PopsTaggingLeafV1 carries no window geometry"):
+        TaggerProvider(component).require_tagging_graph(graph)
+
+
+def test_external_tagger_capability_cannot_advertise_builtin_window_opcode(tmp_path):
+    capability = {
+        **TAGGER_CAPABILITY,
+        "leaf_opcodes": [*TAGGER_CAPABILITY["leaf_opcodes"], "prescribed_window"],
+    }
+    component = _component(
+        tmp_path, name="forged_window_capability", interface=interfaces.Tagger,
+        tagger_capability=capability,
+    )
+
+    with pytest.raises(ValueError, match="cannot advertise prescribed_window"):
+        TaggerProvider(component)
 
 
 def test_external_tagger_refuses_resolved_stencil_beyond_its_capacity(tmp_path):

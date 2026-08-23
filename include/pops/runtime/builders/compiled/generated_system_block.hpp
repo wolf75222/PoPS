@@ -965,6 +965,12 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
                             const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
         full_with_transport(point, state, residual, nullptr, lane, transport);
       };
+  result.closures.transport_rhs_at_point_prepared =
+      [full_with_transport](const auto& point, MultiFab<Dim>& state, MultiFab<Dim>& residual,
+                            const ExecutionLane& lane,
+                            const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+        full_with_transport(point, state, residual, nullptr, lane, transport);
+      };
   result.closures.boundary_flux_full_at_point_prepared =
       [flux_with_transport](const auto& point, MultiFab<Dim>& state, MultiFab<Dim>& residual,
                             const PreparedHyperbolicBoundary<Dim>& boundary,
@@ -975,6 +981,12 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
   result.closures.boundary_flux_core_at_point_prepared =
       [flux_with_transport](const auto& point, MultiFab<Dim>& state, MultiFab<Dim>& residual,
                             const PreparedHyperbolicBoundary<Dim>&, const ExecutionLane& lane,
+                            const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+        flux_with_transport(point, state, residual, nullptr, lane, transport);
+      };
+  result.closures.transport_flux_at_point_prepared =
+      [flux_with_transport](const auto& point, MultiFab<Dim>& state, MultiFab<Dim>& residual,
+                            const ExecutionLane& lane,
                             const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
         flux_with_transport(point, state, residual, nullptr, lane, transport);
       };
@@ -1002,6 +1014,12 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
           const ExecutionLane& lane,
           const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
         prepare_state_with_external(point, state, &boundary, lane, transport);
+      };
+  result.closures.transport_prepare_generated_state_at_point_prepared =
+      [prepare_state_with_external](
+          const auto& point, MultiFab<Dim>& state, const ExecutionLane& lane,
+          const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+        prepare_state_with_external(point, state, nullptr, lane, transport);
       };
   result.closures.external_ghost_boundary = std::move(external_ghost_boundary);
 

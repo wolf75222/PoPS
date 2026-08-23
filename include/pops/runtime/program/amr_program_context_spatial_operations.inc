@@ -54,8 +54,7 @@ void apply_coupling_operators(std::string_view graph_identity, std::string_view 
     const ::pops::amr::Rational interval_phase =
         active_subcycling_window_.begin.phase +
         (active_subcycling_window_.end.phase - active_subcycling_window_.begin.phase) * stage_time_;
-    const double interval_duration =
-        active_subcycling_window_.end.physical_time - active_subcycling_window_.begin.physical_time;
+    const double interval_duration = current_dt_;
     const double evaluation_time =
         active_subcycling_window_.begin.physical_time + stage_time_.value() * interval_duration;
     if (!std::isfinite(interval_duration) || !(interval_duration > 0.0) ||

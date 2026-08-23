@@ -9,6 +9,7 @@
 #include <pops/runtime/program/step_transaction.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -57,6 +58,8 @@ class PreparedMultiBlockAmrSubcyclingEngine {
     int substep = 0;
     std::uint64_t attempt = 0;
     ::pops::amr::ClockWindow window{};
+    /// Authoritative duration propagated from the accepted root step.
+    double physical_duration = 0.0;
     field_type& candidate;
     /// Parent state interpolated at `window.begin`; null only on the root level.
     const field_type* staged_parent = nullptr;
@@ -199,8 +202,17 @@ class PreparedMultiBlockAmrSubcyclingEngine {
   template <class Advance, class Reflux, class Validate>
   void advance(const ::pops::amr::ClockWindow& root, Advance&& advance_level, Reflux&& reflux,
                Validate&& validate) {
-    advance(root, std::forward<Advance>(advance_level), std::forward<Reflux>(reflux),
+    advance(root, root.end.physical_time - root.begin.physical_time,
+            std::forward<Advance>(advance_level), std::forward<Reflux>(reflux),
             std::forward<Validate>(validate), DefaultPublicationStage{});
+  }
+
+  template <class Advance, class Reflux, class Validate>
+  void advance(const ::pops::amr::ClockWindow& root, double root_physical_duration,
+               Advance&& advance_level, Reflux&& reflux, Validate&& validate) {
+    advance(root, root_physical_duration, std::forward<Advance>(advance_level),
+            std::forward<Reflux>(reflux), std::forward<Validate>(validate),
+            DefaultPublicationStage{});
   }
 
   /// `stage` runs after every candidate is validated and before any live hierarchy publication.
@@ -208,11 +220,37 @@ class PreparedMultiBlockAmrSubcyclingEngine {
   template <class Advance, class Reflux, class Validate, class Stage>
   void advance(const ::pops::amr::ClockWindow& root, Advance&& advance_level, Reflux&& reflux,
                Validate&& validate, Stage&& stage) {
+    advance(root, root.end.physical_time - root.begin.physical_time,
+            std::forward<Advance>(advance_level), std::forward<Reflux>(reflux),
+            std::forward<Validate>(validate), std::forward<Stage>(stage));
+  }
+
+  /// `root_physical_duration` is the accepted macro-step duration; timestamps stay coordinates.
+  template <class Advance, class Reflux, class Validate, class Stage>
+  void advance(const ::pops::amr::ClockWindow& root, double root_physical_duration,
+               Advance&& advance_level, Reflux&& reflux, Validate&& validate, Stage&& stage) {
     require_live_();
     if (root.begin.level != 0 || root.end.level != 0 ||
         root.begin.macro_step != root.end.macro_step || !(root.begin.phase < root.end.phase) ||
-        !(root.begin.physical_time < root.end.physical_time))
+        !std::isfinite(root.begin.physical_time) || !std::isfinite(root.end.physical_time) ||
+        !(root.begin.physical_time < root.end.physical_time) ||
+        !::pops::amr::physical_duration_consistent_with_window(root, root_physical_duration))
       throw std::invalid_argument("multi-block AMR root clock window is invalid");
+    // Build and validate the entire recursive temporal tree before cloning candidates or invoking
+    // one level callback.  Exact phases alone are insufficient: a valid rational child boundary
+    // can collapse after conversion to the facade physical clock (notably nextafter-sized windows).
+    // Rejecting here leaves hierarchy state, callback-visible candidates and attempt identity intact.
+    // The recursive partition can fail rank-locally (for example after a locally represented
+    // physical-time endpoint collapses), so establish the collective failure envelope before any
+    // rank allocates an attempt identity or clones a candidate tower.
+    std::exception_ptr temporal_prevalidation_error;
+    try {
+      prevalidate_recursive_windows_(0, root, root_physical_duration);
+    } catch (...) {
+      temporal_prevalidation_error = std::current_exception();
+    }
+    collectively_rethrow_(*hierarchy_, temporal_prevalidation_error,
+                          "temporal prevalidation failed collectively");
     if (next_attempt_ == std::numeric_limits<std::uint64_t>::max())
       throw std::overflow_error("multi-block AMR subcycling attempt identity overflow");
     const std::uint64_t attempt = ++next_attempt_;
@@ -261,9 +299,9 @@ class PreparedMultiBlockAmrSubcyclingEngine {
     try {
       std::vector<const field_type*> no_parent;
       std::vector<ledger_type*> no_incoming_flux;
-      advance_level_recursive_(0, root, 0, no_parent, no_incoming_flux, candidates,
-                               candidate_histories, candidate_clocks, candidate_ledgers, attempt,
-                               advance_level, reflux);
+      advance_level_recursive_(0, root, root_physical_duration, 0, no_parent, no_incoming_flux,
+                               candidates, candidate_histories, candidate_clocks, candidate_ledgers,
+                               attempt, advance_level, reflux);
 
       for (std::size_t block = 0; block < hierarchy_->block_count(); ++block)
         for (std::size_t level = 0; level < hierarchy_->level_count(); ++level)
@@ -432,6 +470,60 @@ class PreparedMultiBlockAmrSubcyclingEngine {
                                                         envelope.detail);
   }
 
+  void prevalidate_recursive_windows_(std::size_t level, const ::pops::amr::ClockWindow& window,
+                                      double physical_duration) const {
+    const auto require_window = [](const ::pops::amr::ClockWindow& current, int expected_level,
+                                   std::int64_t expected_macro_step, double duration) {
+      if (current.begin.level != expected_level || current.end.level != expected_level ||
+          current.begin.macro_step != expected_macro_step ||
+          current.end.macro_step != expected_macro_step ||
+          !(current.begin.phase < current.end.phase) ||
+          !std::isfinite(current.begin.physical_time) ||
+          !std::isfinite(current.end.physical_time) ||
+          !(current.begin.physical_time < current.end.physical_time))
+        throw std::overflow_error(
+            "multi-block AMR subcycling window has no strictly increasing representable time");
+      if (!::pops::amr::physical_duration_consistent_with_window(current, duration))
+        throw std::overflow_error(
+            "multi-block AMR subcycling window has no consistent physical duration");
+    };
+
+    require_window(window, static_cast<int>(level), window.begin.macro_step, physical_duration);
+    if (level == relations_.size())
+      return;
+
+    const std::vector<::pops::amr::ChildSubstep> children =
+        relations_[level].partition(window, physical_duration);
+    if (children.empty())
+      throw std::logic_error("multi-block AMR subcycling partition produced no child windows");
+    ::pops::amr::Rational phase_cursor = window.begin.phase;
+    double time_cursor = window.begin.physical_time;
+    double duration_sum = 0.0;
+    for (const ::pops::amr::ChildSubstep& child : children) {
+      if (child.window.begin.phase != phase_cursor ||
+          child.window.begin.physical_time != time_cursor)
+        throw std::overflow_error(
+            "multi-block AMR subcycling children do not tile one exact representable window");
+      require_window(child.window, static_cast<int>(level + 1), window.begin.macro_step,
+                     child.physical_duration);
+      prevalidate_recursive_windows_(level + 1, child.window, child.physical_duration);
+      phase_cursor = child.window.end.phase;
+      time_cursor = child.window.end.physical_time;
+      duration_sum += child.physical_duration;
+      if (!std::isfinite(duration_sum))
+        throw std::overflow_error("multi-block AMR child physical durations overflow");
+    }
+    if (phase_cursor != window.end.phase || time_cursor != window.end.physical_time)
+      throw std::overflow_error(
+          "multi-block AMR subcycling children do not close their exact representable window");
+    const double duration_scale = std::max(std::abs(physical_duration), std::abs(duration_sum));
+    const double duration_tolerance = 8.0 * std::numeric_limits<double>::epsilon() *
+                                      duration_scale * static_cast<double>(children.size());
+    if (std::abs(duration_sum - physical_duration) > duration_tolerance)
+      throw std::overflow_error(
+          "multi-block AMR child physical durations do not close their parent window");
+  }
+
   struct StepRejectionEnvelope {
     SolveStatus status = SolveStatus::kInvalidInput;
     ::pops::runtime::program::StepAttemptDisposition disposition =
@@ -565,7 +657,8 @@ class PreparedMultiBlockAmrSubcyclingEngine {
 
   template <class Advance, class Reflux>
   void advance_level_recursive_(std::size_t level, const ::pops::amr::ClockWindow& window,
-                                int substep, const std::vector<const field_type*>& staged_parent,
+                                double physical_duration, int substep,
+                                const std::vector<const field_type*>& staged_parent,
                                 const std::vector<ledger_type*>& incoming_flux,
                                 CandidateMatrix& candidates, HistoryMatrix& histories,
                                 ClockMatrix& clocks, LedgerMatrix& candidate_ledgers,
@@ -591,11 +684,12 @@ class PreparedMultiBlockAmrSubcyclingEngine {
     std::vector<LevelAdvanceContext> group;
     group.reserve(hierarchy_->block_count());
     for (std::size_t block = 0; block < hierarchy_->block_count(); ++block)
-      group.push_back(LevelAdvanceContext{
-          block, hierarchy_->block_identity(block), level, substep, attempt, window,
-          candidates[block][level], level == 0 ? nullptr : staged_parent.at(block),
-          level == 0 ? nullptr : incoming_flux.at(block),
-          level == relations_.size() ? nullptr : &outgoing_flux[block]});
+      group.push_back(
+          LevelAdvanceContext{block, hierarchy_->block_identity(block), level, substep, attempt,
+                              window, physical_duration, candidates[block][level],
+                              level == 0 ? nullptr : staged_parent.at(block),
+                              level == 0 ? nullptr : incoming_flux.at(block),
+                              level == relations_.size() ? nullptr : &outgoing_flux[block]});
 
     invoke_collectively_([&] { advance_level(LevelAdvanceGroup(group)); },
                          "multi-block AMR level-group callback failed collectively");
@@ -610,7 +704,7 @@ class PreparedMultiBlockAmrSubcyclingEngine {
     std::vector<::pops::amr::ChildSubstep> children;
     std::exception_ptr partition_error;
     try {
-      children = relations_[level].partition(window);
+      children = relations_[level].partition(window, physical_duration);
     } catch (...) {
       partition_error = std::current_exception();
     }
@@ -624,9 +718,10 @@ class PreparedMultiBlockAmrSubcyclingEngine {
       staged_views.reserve(staged.size());
       for (const field_type& field : staged)
         staged_views.push_back(&field);
-      advance_level_recursive_(level + 1, children[child].window, static_cast<int>(child),
-                               staged_views, outgoing_views, candidates, histories, clocks,
-                               candidate_ledgers, attempt, advance_level, reflux);
+      advance_level_recursive_(level + 1, children[child].window, children[child].physical_duration,
+                               static_cast<int>(child), staged_views, outgoing_views, candidates,
+                               histories, clocks, candidate_ledgers, attempt, advance_level,
+                               reflux);
     }
 
     // The recursive child has already synchronized its own descendants, so this is finest-first.

@@ -1,8 +1,10 @@
 #include <gtest/gtest.h>
 
 #include <pops/amr/reflux/metric_reflux.hpp>
+#include <pops/numerics/time/amr/levels/amr_clock.hpp>
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -381,6 +383,117 @@ TEST(test_nd_flux_ledger, coarse_window_matches_two_exact_fine_substeps) {
   EXPECT_NEAR(result.coarse_weighted_measure, 2.0, 1e-14);
   EXPECT_NEAR(result.fine_weighted_measure, 2.0, 1e-14);
   EXPECT_NEAR(result.mismatch, 0.0, 1e-14);
+}
+
+TEST(test_nd_flux_ledger, authoritative_child_durations_survive_asymmetric_timestamps) {
+  const RefinementRatio<2> ratio{2, 2};
+  const auto mapping = sample_mapping<2>();
+  const auto query = sample_query<2>(0, 501);
+  const auto budget = reflux_budget();
+  const auto fine_faces = fine_faces_for_coarse_face(query, ratio, mapping, budget);
+  ASSERT_EQ(fine_faces.size(), 2u);
+  const double t0 = 1.0;
+  const double t1 = std::nextafter(t0, 2.0);
+  const double t2 = std::nextafter(t1, 2.0);
+  const double t3 = std::nextafter(t2, 2.0);
+  const pops::amr::ClockWindow parent{{0, 7, Rational{0, 1}, t0}, {0, 7, Rational{1, 1}, t3}};
+  const double root_duration = t3 - t0;
+  const pops::amr::ParentChildClockRelation relation{0, 1, Rational{2, 1},
+                                                     pops::amr::RemainderPolicy::IntegralOnly};
+  const pops::amr::ChildSubstep legacy_aggregate{parent, true};
+  EXPECT_TRUE(legacy_aggregate.is_declared_remainder);
+  EXPECT_DOUBLE_EQ(legacy_aggregate.physical_duration, 0.0);
+  const auto children = relation.partition(parent, root_duration);
+  ASSERT_EQ(children.size(), 2u);
+  EXPECT_EQ(children[0].window.end.physical_time, t2);
+  EXPECT_EQ(children[1].window.begin.physical_time, t2);
+  EXPECT_EQ(children[1].window.end.physical_time, t3);
+  EXPECT_DOUBLE_EQ(children[0].physical_duration, root_duration / 2.0);
+  EXPECT_DOUBLE_EQ(children[1].physical_duration, root_duration / 2.0);
+  EXPECT_THROW((void)relation.partition(parent, root_duration * 8.0), std::runtime_error);
+
+  TransactionalFaceFluxLedger<2, double> ledger{ledger_budget()};
+  ledger.begin(query.attempt);
+  ledger.accumulate(
+      fragment_key(query, FaceLedgerRole::Coarse, query.coarse_face, "advance", Rational{0, 1}),
+      FaceFluxFragmentMeasure{Rational{1, 1}, Rational{0, 1}, Rational{1, 1}, root_duration, 2.0},
+      3.0);
+  for (const auto& fine_face : fine_faces) {
+    ledger.accumulate(fragment_key(query, FaceLedgerRole::Fine, fine_face, "first", Rational{0, 1}),
+                      FaceFluxFragmentMeasure{Rational{1, 1}, Rational{0, 1}, Rational{1, 2},
+                                              children[0].physical_duration, 1.0},
+                      3.0);
+    ledger.accumulate(
+        fragment_key(query, FaceLedgerRole::Fine, fine_face, "second", Rational{1, 2}),
+        FaceFluxFragmentMeasure{Rational{1, 1}, Rational{1, 2}, Rational{1, 1},
+                                children[1].physical_duration, 1.0},
+        3.0);
+  }
+  ledger.commit();
+
+  EXPECT_NO_THROW({
+    const auto result = metric_reflux(ledger, query, ratio, mapping, budget, scalar_axpy);
+    EXPECT_NEAR(result.mismatch, 0.0, 1e-18);
+  });
+}
+
+TEST(test_nd_flux_ledger, exact_subwindow_duration_uses_phase_fraction_not_timestamp_subtraction) {
+  const double begin = std::nextafter(2.0, 0.0);
+  const double lower_ulp = 2.0 - begin;
+  const double authoritative_duration = std::ldexp(1.0, -50);
+  const double end = begin + authoritative_duration;
+  const pops::amr::ClockWindow parent{{0, 9, Rational{0, 1}, begin}, {0, 9, Rational{1, 1}, end}};
+  const double timestamp_span = end - begin;
+  const double midpoint = begin + 0.5 * timestamp_span;
+  const pops::amr::ClockWindow first_half{{0, 9, Rational{0, 1}, begin},
+                                          {0, 9, Rational{1, 2}, midpoint}};
+
+  ASSERT_DOUBLE_EQ(authoritative_duration, 4.0 * lower_ulp);
+  ASSERT_DOUBLE_EQ(timestamp_span, 5.0 * lower_ulp);
+  ASSERT_DOUBLE_EQ(midpoint - begin, 3.0 * lower_ulp);
+  EXPECT_DOUBLE_EQ(
+      pops::amr::exact_subwindow_physical_duration(parent, authoritative_duration, first_half),
+      authoritative_duration / 2.0);
+}
+
+TEST(test_nd_flux_ledger, endpoint_derived_asymmetric_durations_still_fail_closed) {
+  const RefinementRatio<2> ratio{2, 2};
+  const auto mapping = sample_mapping<2>();
+  const auto query = sample_query<2>(0, 502);
+  const auto budget = reflux_budget();
+  const auto fine_faces = fine_faces_for_coarse_face(query, ratio, mapping, budget);
+  ASSERT_EQ(fine_faces.size(), 2u);
+  constexpr double root_duration = 1.0;
+  constexpr double first_endpoint_duration = 0.375;
+  constexpr double second_endpoint_duration = 0.625;
+  static_assert(first_endpoint_duration + second_endpoint_duration == root_duration);
+
+  TransactionalFaceFluxLedger<2, double> ledger{ledger_budget()};
+  ledger.begin(query.attempt);
+  ledger.accumulate(
+      fragment_key(query, FaceLedgerRole::Coarse, query.coarse_face, "advance", Rational{0, 1}),
+      FaceFluxFragmentMeasure{Rational{1, 1}, Rational{0, 1}, Rational{1, 1}, root_duration, 2.0},
+      3.0);
+  for (const auto& fine_face : fine_faces) {
+    ledger.accumulate(fragment_key(query, FaceLedgerRole::Fine, fine_face, "first", Rational{0, 1}),
+                      FaceFluxFragmentMeasure{Rational{1, 1}, Rational{0, 1}, Rational{1, 2},
+                                              first_endpoint_duration, 1.0},
+                      3.0);
+    ledger.accumulate(
+        fragment_key(query, FaceLedgerRole::Fine, fine_face, "second", Rational{1, 2}),
+        FaceFluxFragmentMeasure{Rational{1, 1}, Rational{1, 2}, Rational{1, 1},
+                                second_endpoint_duration, 1.0},
+        3.0);
+  }
+  ledger.commit();
+
+  try {
+    (void)metric_reflux(ledger, query, ratio, mapping, budget, scalar_axpy);
+    FAIL() << "endpoint-derived asymmetric durations must be rejected";
+  } catch (const std::runtime_error& error) {
+    EXPECT_EQ(std::string(error.what()),
+              "ND metric reflux substeps disagree on their physical clock rate");
+  }
 }
 
 TEST(test_nd_flux_ledger, gaps_overlaps_duration_and_stage_weight_fail_closed) {

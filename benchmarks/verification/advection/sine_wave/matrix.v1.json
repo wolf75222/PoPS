@@ -1,0 +1,70 @@
+{
+  "schema_version": "pops.sine-wave.matrix.v1",
+  "generator": "generate_data.py",
+  "result_namespace": "matrix-v1-prescribed-window",
+  "verification_environment": {"OMP_NUM_THREADS": "2", "OMP_PROC_BIND": "false", "KOKKOS_NUM_THREADS": "2"},
+  "build_phases": [
+    {"id": "dim1-nonmpi", "dimension": 1, "mpi": false},
+    {"id": "dim2-nonmpi", "dimension": 2, "mpi": false},
+    {"id": "dim3-nonmpi", "dimension": 3, "mpi": false},
+    {"id": "dim2-mpi", "dimension": 2, "mpi": true},
+    {"id": "dim3-mpi", "dimension": 3, "mpi": true}
+  ],
+  "coverage_obligations": {
+    "block_face": {"case_ids": ["d1-face", "d2-face", "d3-face"]},
+    "block_edge_3d": {"case_ids": ["d3-edge"]},
+    "block_corner_3d": {"case_ids": ["d3-corner", "d3-mpi-np8-corner"]},
+    "coarse_fine_interface": {"case_ids": ["d1-cf-sync", "d2-cf-subcycled", "d3-cf-sync"]},
+    "periodic_boundary": {"case_ids": ["d1-face", "d2-diagonal", "d3-corner"]},
+    "prescribed_mobile_regrid": {"case_ids": ["d1-mobile-sync", "d2-mobile-subcycled", "d3-mobile-sync"]},
+    "repeated_patch_crossing": {"case_ids": ["d2-cf-subcycled"]},
+    "second_order_convergence": {"case_ids": ["conv-d1-n32", "conv-d1-n64", "conv-d1-n128", "conv-d2-n16", "conv-d2-n32", "conv-d2-n64", "conv-d3-n16", "conv-d3-n32", "conv-d3-n64"]}
+  },
+  "convergence_series": {
+    "dim1": {"case_ids": ["conv-d1-n32", "conv-d1-n64", "conv-d1-n128"], "qualified_norm": "l1", "reported_norms": ["l1", "l2", "linf"], "minimum_order": 1.75},
+    "dim2": {"case_ids": ["conv-d2-n16", "conv-d2-n32", "conv-d2-n64"], "qualified_norm": "l1", "reported_norms": ["l1", "l2", "linf"], "minimum_order": 1.75},
+    "dim3": {"case_ids": ["conv-d3-n16", "conv-d3-n32", "conv-d3-n64"], "qualified_norm": "l1", "reported_norms": ["l1", "l2", "linf"], "minimum_order": 1.75}
+  },
+  "cases": [
+    {"id": "d1-face", "dimension": 1, "resolution": "64", "mode": "x", "layout": "uniform", "subcycling": "synchronous", "block_size": 16, "mpi_ranks": 1, "cycles": 1, "time_snapshots": 17, "obligations": ["block_face", "periodic_boundary"]},
+    {"id": "d1-diagonal", "dimension": 1, "resolution": "64", "mode": "diagonal", "layout": "uniform", "subcycling": "synchronous", "block_size": 32, "mpi_ranks": 1, "cycles": 1, "time_snapshots": 17, "obligations": []},
+    {"id": "d1-cf-sync", "dimension": 1, "resolution": "64", "mode": "x", "layout": "amr-frozen", "subcycling": "synchronous", "block_size": 16, "mpi_ranks": 1, "cycles": 1, "time_snapshots": 17, "obligations": ["coarse_fine_interface"]},
+    {"id": "d1-cf-subcycled", "dimension": 1, "resolution": "64", "mode": "x", "layout": "amr-frozen", "subcycling": "subcycled", "block_size": 16, "mpi_ranks": 1, "cycles": 1, "time_snapshots": 17, "obligations": []},
+    {"id": "d1-mobile-sync", "dimension": 1, "resolution": "64", "mode": "x", "layout": "amr-mobile", "subcycling": "synchronous", "block_size": 16, "mpi_ranks": 1, "cycles": 1, "time_snapshots": 17, "obligations": ["prescribed_mobile_regrid"]},
+    {"id": "d1-mobile-subcycled", "dimension": 1, "resolution": "64", "mode": "x", "layout": "amr-mobile", "subcycling": "subcycled", "block_size": 16, "mpi_ranks": 1, "cycles": 1, "time_snapshots": 17, "obligations": []},
+
+    {"id": "d2-face", "dimension": 2, "resolution": "64", "mode": "x", "layout": "uniform", "subcycling": "synchronous", "block_size": 16, "mpi_ranks": 1, "cycles": 1, "time_snapshots": 17, "obligations": ["block_face"]},
+    {"id": "d2-y-block8", "dimension": 2, "resolution": "64", "mode": "y", "layout": "uniform", "subcycling": "synchronous", "block_size": 8, "mpi_ranks": 1, "cycles": 1, "time_snapshots": 17, "obligations": []},
+    {"id": "d2-y-block16", "dimension": 2, "resolution": "64", "mode": "y", "layout": "uniform", "subcycling": "synchronous", "block_size": 16, "mpi_ranks": 1, "cycles": 1, "time_snapshots": 17, "obligations": []},
+    {"id": "d2-y", "dimension": 2, "resolution": "64", "mode": "y", "layout": "uniform", "subcycling": "synchronous", "block_size": 32, "mpi_ranks": 1, "cycles": 1, "time_snapshots": 17, "obligations": []},
+    {"id": "d2-diagonal", "dimension": 2, "resolution": "64", "mode": "diagonal", "layout": "uniform", "subcycling": "synchronous", "block_size": 16, "mpi_ranks": 1, "cycles": 1, "time_snapshots": 17, "obligations": ["periodic_boundary"]},
+    {"id": "d2-cf-sync", "dimension": 2, "resolution": "64", "mode": "diagonal", "layout": "amr-frozen", "subcycling": "synchronous", "block_size": 16, "mpi_ranks": 1, "cycles": 3, "time_snapshots": 49, "obligations": []},
+    {"id": "d2-cf-subcycled", "dimension": 2, "resolution": "64", "mode": "diagonal", "layout": "amr-frozen", "subcycling": "subcycled", "block_size": 16, "mpi_ranks": 1, "cycles": 3, "time_snapshots": 49, "obligations": ["coarse_fine_interface", "repeated_patch_crossing"]},
+    {"id": "d2-mobile-sync", "dimension": 2, "resolution": "64", "mode": "diagonal", "layout": "amr-mobile", "subcycling": "synchronous", "block_size": 16, "mpi_ranks": 1, "cycles": 1, "time_snapshots": 17, "obligations": []},
+    {"id": "d2-mobile-subcycled", "dimension": 2, "resolution": "64", "mode": "diagonal", "layout": "amr-mobile", "subcycling": "subcycled", "block_size": 16, "mpi_ranks": 1, "cycles": 1, "time_snapshots": 17, "obligations": ["prescribed_mobile_regrid"]},
+
+    {"id": "d3-face", "dimension": 3, "resolution": "32", "mode": "x", "layout": "uniform", "subcycling": "synchronous", "block_size": 8, "mpi_ranks": 1, "cycles": 1, "time_snapshots": 17, "obligations": ["block_face"]},
+    {"id": "d3-y", "dimension": 3, "resolution": "32", "mode": "y", "layout": "uniform", "subcycling": "synchronous", "block_size": 16, "mpi_ranks": 1, "cycles": 1, "time_snapshots": 17, "obligations": []},
+    {"id": "d3-z", "dimension": 3, "resolution": "32", "mode": "z", "layout": "uniform", "subcycling": "synchronous", "block_size": 8, "mpi_ranks": 1, "cycles": 1, "time_snapshots": 17, "obligations": []},
+    {"id": "d3-edge", "dimension": 3, "resolution": "32", "mode": "xy", "layout": "uniform", "subcycling": "synchronous", "block_size": 16, "mpi_ranks": 1, "cycles": 1, "time_snapshots": 17, "obligations": ["block_edge_3d"]},
+    {"id": "d3-corner", "dimension": 3, "resolution": "32", "mode": "diagonal", "layout": "uniform", "subcycling": "synchronous", "block_size": 8, "mpi_ranks": 1, "cycles": 1, "time_snapshots": 17, "obligations": ["block_corner_3d", "periodic_boundary"]},
+    {"id": "d3-cf-sync", "dimension": 3, "resolution": "32", "mode": "diagonal", "layout": "amr-frozen", "subcycling": "synchronous", "block_size": 8, "mpi_ranks": 1, "cycles": 1, "time_snapshots": 17, "obligations": ["coarse_fine_interface"]},
+    {"id": "d3-cf-subcycled", "dimension": 3, "resolution": "32", "mode": "diagonal", "layout": "amr-frozen", "subcycling": "subcycled", "block_size": 8, "mpi_ranks": 1, "cycles": 1, "time_snapshots": 17, "obligations": []},
+    {"id": "d3-mobile-sync", "dimension": 3, "resolution": "32", "mode": "diagonal", "layout": "amr-mobile", "subcycling": "synchronous", "block_size": 8, "mpi_ranks": 1, "cycles": 1, "time_snapshots": 17, "obligations": ["prescribed_mobile_regrid"]},
+    {"id": "d3-mobile-subcycled", "dimension": 3, "resolution": "32", "mode": "diagonal", "layout": "amr-mobile", "subcycling": "subcycled", "block_size": 8, "mpi_ranks": 1, "cycles": 1, "time_snapshots": 17, "obligations": []},
+
+    {"id": "d2-mpi-np1", "dimension": 2, "resolution": "64", "mode": "diagonal", "layout": "amr-mobile", "subcycling": "subcycled", "block_size": 16, "mpi_ranks": 1, "mpi_topology": [1, 1], "cycles": 1, "time_snapshots": 17, "mpi": true, "obligations": []},
+    {"id": "d2-mpi-np2", "dimension": 2, "resolution": "64", "mode": "diagonal", "layout": "amr-mobile", "subcycling": "subcycled", "block_size": 16, "mpi_ranks": 2, "mpi_topology": [1, 2], "cycles": 1, "time_snapshots": 17, "mpi": true, "obligations": []},
+    {"id": "d2-mpi-np4", "dimension": 2, "resolution": "64", "mode": "diagonal", "layout": "amr-mobile", "subcycling": "subcycled", "block_size": 16, "mpi_ranks": 4, "mpi_topology": [2, 2], "cycles": 1, "time_snapshots": 17, "mpi": true, "obligations": []},
+    {"id": "d3-mpi-np8-corner", "dimension": 3, "resolution": "32", "mode": "diagonal", "layout": "uniform", "subcycling": "synchronous", "block_size": 16, "mpi_ranks": 8, "mpi_topology": [2, 2, 2], "cycles": 1, "time_snapshots": 17, "mpi": true, "obligations": ["block_corner_3d"]},
+    {"id": "conv-d1-n32", "dimension": 1, "resolution": "32", "mode": "x", "layout": "uniform", "subcycling": "synchronous", "block_size": 16, "mpi_ranks": 1, "cycles": 1, "time_snapshots": 17, "obligations": ["second_order_convergence"]},
+    {"id": "conv-d1-n64", "dimension": 1, "resolution": "64", "mode": "x", "layout": "uniform", "subcycling": "synchronous", "block_size": 16, "mpi_ranks": 1, "cycles": 1, "time_snapshots": 17, "obligations": ["second_order_convergence"]},
+    {"id": "conv-d1-n128", "dimension": 1, "resolution": "128", "mode": "x", "layout": "uniform", "subcycling": "synchronous", "block_size": 16, "mpi_ranks": 1, "cycles": 1, "time_snapshots": 17, "obligations": ["second_order_convergence"]},
+    {"id": "conv-d2-n16", "dimension": 2, "resolution": "16", "mode": "x", "layout": "uniform", "subcycling": "synchronous", "block_size": 16, "mpi_ranks": 1, "cycles": 1, "time_snapshots": 17, "obligations": ["second_order_convergence"]},
+    {"id": "conv-d2-n32", "dimension": 2, "resolution": "32", "mode": "x", "layout": "uniform", "subcycling": "synchronous", "block_size": 16, "mpi_ranks": 1, "cycles": 1, "time_snapshots": 17, "obligations": ["second_order_convergence"]},
+    {"id": "conv-d2-n64", "dimension": 2, "resolution": "64", "mode": "x", "layout": "uniform", "subcycling": "synchronous", "block_size": 16, "mpi_ranks": 1, "cycles": 1, "time_snapshots": 17, "obligations": ["second_order_convergence"]},
+    {"id": "conv-d3-n16", "dimension": 3, "resolution": "16", "mode": "x", "layout": "uniform", "subcycling": "synchronous", "block_size": 8, "mpi_ranks": 1, "cycles": 1, "time_snapshots": 17, "obligations": ["second_order_convergence"]},
+    {"id": "conv-d3-n32", "dimension": 3, "resolution": "32", "mode": "x", "layout": "uniform", "subcycling": "synchronous", "block_size": 8, "mpi_ranks": 1, "cycles": 1, "time_snapshots": 17, "obligations": ["second_order_convergence"]},
+    {"id": "conv-d3-n64", "dimension": 3, "resolution": "64", "mode": "x", "layout": "uniform", "subcycling": "synchronous", "block_size": 8, "mpi_ranks": 1, "cycles": 1, "time_snapshots": 17, "obligations": ["second_order_convergence"]}
+  ]
+}

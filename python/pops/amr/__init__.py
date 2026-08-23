@@ -23,7 +23,7 @@ from pops.mesh._amr.hierarchy_native import (
     PreparedHierarchyNativeProvider,
     register_prepared_hierarchy_native_provider,
 )
-from pops.mesh._amr.tagging_graph import ConflictPolicy, EqualityPolicy, Hysteresis
+from pops.mesh._amr.tagging_graph import ConflictPolicy, EqualityPolicy, Hysteresis, PrescribedWindow
 from .materialization import (
     CanonicalOptions,
     NativeAMRActionKind,
@@ -65,6 +65,7 @@ __all__ = [
     "NativeAMRMaterializationDescriptor",
     "NativeAMRMaterializationKind",
     "PatchLayout",
+    "PrescribedWindow",
     "PreparedHierarchyNativeLowering",
     "PreparedHierarchyNativeProvider",
     "RefluxProvider",

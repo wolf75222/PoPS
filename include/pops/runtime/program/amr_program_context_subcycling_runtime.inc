@@ -50,7 +50,7 @@ void advance_prepared_hierarchy_(double dt, Body&& body, std::string_view operat
           "AMR Program interface-ledger begin contract differs between MPI ranks");
     interface_flux_ledger_->publish_prepared_begin(*prepared_begin);
     multiblock_subcycling_->advance(
-        root,
+        root, dt,
         [&](multiblock_level_group_type group) { advance_multiblock_level_group_(group, body); },
         [&](multiblock_reflux_context_type& reflux) { reconcile_multiblock_reflux_(reflux); },
         [&](std::size_t runtime_block, std::size_t level, const field_type& candidate) {
@@ -314,6 +314,7 @@ void advance_multiblock_level_group_(multiblock_level_group_type group, Body& bo
         current.substep != group.front().substep || current.attempt != group.front().attempt ||
         current.window.begin != group.front().window.begin ||
         current.window.end != group.front().window.end ||
+        current.physical_duration != group.front().physical_duration ||
         active_attempt_states_[current.block] != nullptr)
       throw std::logic_error("AMR Program level group is not canonical and simultaneous");
     active_attempt_states_[current.block] = &current.candidate;
@@ -330,7 +331,9 @@ void advance_multiblock_level_group_(multiblock_level_group_type group, Body& bo
   logical_substep_ = group.front().substep;
   active_subcycling_attempt_ = group.front().attempt;
   active_subcycling_window_ = group.front().window;
-  current_dt_ = group.front().window.end.physical_time - group.front().window.begin.physical_time;
+  current_dt_ = group.front().physical_duration;
+  if (!std::isfinite(current_dt_) || !(current_dt_ > 0.0))
+    throw std::logic_error("AMR Program level group has no finite positive physical duration");
   current_interval_start_time_ = group.front().window.begin.physical_time;
   current_interval_begin_phase_ = group.front().window.begin.phase;
   current_interval_end_phase_ = group.front().window.end.phase;

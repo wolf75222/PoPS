@@ -23,7 +23,8 @@ from types import ModuleType
 from typing import Any
 
 
-MANIFEST_SCHEMA_VERSION = 1
+MANIFEST_SCHEMA_VERSION = 2
+LEGACY_MANIFEST_SCHEMA_VERSION = 1
 SUPPORTED_DIMENSIONS = (1, 2, 3)
 MANIFEST_NAME = "variants.json"
 _ROW_KEYS = {
@@ -32,6 +33,7 @@ _ROW_KEYS = {
     "sha256",
     "version",
     "abi_key",
+    "build_fingerprint",
     "has_mpi",
     "has_kokkos",
 }
@@ -89,6 +91,9 @@ def _validate_row(row: Any) -> dict[str, Any]:
     for name in ("version", "abi_key"):
         if not isinstance(row[name], str) or not row[name]:
             raise NativeVariantManifestError("native variant %s is empty" % name)
+    if not isinstance(row["build_fingerprint"], str) \
+            or _DIGEST.fullmatch(row["build_fingerprint"]) is None:
+        raise NativeVariantManifestError("native variant build_fingerprint is malformed")
     for name in ("has_mpi", "has_kokkos"):
         if type(row[name]) is not bool:
             raise NativeVariantManifestError("native variant %s must be a boolean" % name)
@@ -103,7 +108,8 @@ def validate_manifest_payload(
     """Validate the closed schema, canonical order and optional exact dimension set."""
     if not isinstance(payload, dict) or set(payload) != {"schema_version", "variants"}:
         raise NativeVariantManifestError("native variant manifest has an unknown schema")
-    if payload["schema_version"] != MANIFEST_SCHEMA_VERSION:
+    if type(payload["schema_version"]) is not int \
+            or payload["schema_version"] != MANIFEST_SCHEMA_VERSION:
         raise NativeVariantManifestError("native variant manifest schema version is unsupported")
     variants = payload["variants"]
     if not isinstance(variants, list) or not variants:
@@ -117,6 +123,10 @@ def validate_manifest_payload(
     paths = tuple(row["path"] for row in rows)
     if len(set(paths)) != len(paths):
         raise NativeVariantManifestError("native variant manifest contains a duplicate path")
+    if len({row["build_fingerprint"] for row in rows}) != 1:
+        raise NativeVariantManifestError(
+            "native variant manifest rows disagree on their common build_fingerprint"
+        )
     if expected_dimensions is not None:
         expected = exact_dimensions(expected_dimensions, where="expected native variants")
         if dimensions != expected:
@@ -163,6 +173,21 @@ def load_manifest(
                 "native variant bytes disagree with variants.json: Dim=%d" % row["dimension"]
             )
     return rows
+
+
+def manifest_schema_version(manifest: Path) -> int:
+    """Read only the exact top-level schema discriminator of one manifest."""
+    try:
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise NativeVariantManifestError(
+            "native variant manifest is missing or invalid JSON: %s" % manifest
+        ) from exc
+    if not isinstance(payload, dict) or set(payload) != {"schema_version", "variants"} \
+            or type(payload["schema_version"]) is not int \
+            or not isinstance(payload["variants"], list):
+        raise NativeVariantManifestError("native variant manifest has an unknown schema")
+    return payload["schema_version"]
 
 
 def manifest_payload(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
@@ -254,6 +279,7 @@ def native_variant_row(
         "sha256": "0" * 64,
         "version": version,
         "abi_key": "pending",
+        "build_fingerprint": "0" * 64,
         "has_mpi": False,
         "has_kokkos": False,
     }
@@ -277,6 +303,11 @@ def native_variant_row(
     abi_key = abi_provider()
     if not isinstance(abi_key, str) or not abi_key:
         raise NativeVariantManifestError("native extension abi_key is empty")
+    build_fingerprint = getattr(module, "__build_fingerprint__", None)
+    if not isinstance(build_fingerprint, str) or _DIGEST.fullmatch(build_fingerprint) is None:
+        raise NativeVariantManifestError(
+            "native extension build fingerprint must be 64 lowercase hexadecimal characters"
+        )
     facts: dict[str, bool] = {}
     for attribute, field in (("__has_mpi__", "has_mpi"), ("__has_kokkos__", "has_kokkos")):
         value = getattr(module, attribute, None)
@@ -289,6 +320,7 @@ def native_variant_row(
         "sha256": sha256_file(binary),
         "version": version,
         "abi_key": abi_key,
+        "build_fingerprint": build_fingerprint,
         "has_mpi": facts["has_mpi"],
         "has_kokkos": facts["has_kokkos"],
     }
@@ -304,7 +336,15 @@ def update_manifest(
     """Merge one freshly authenticated dimension and atomically publish the result."""
     current: tuple[dict[str, Any], ...] = ()
     if manifest.exists():
-        current = load_manifest(manifest, verify_files=False)
+        schema_version = manifest_schema_version(manifest)
+        if schema_version == MANIFEST_SCHEMA_VERSION:
+            current = load_manifest(manifest, verify_files=False)
+        elif schema_version != LEGACY_MANIFEST_SCHEMA_VERSION:
+            raise NativeVariantManifestError(
+                "native variant manifest schema version is unsupported"
+            )
+        # A schema-v1 build-tree inventory has no source/build identity.  Never merge its siblings
+        # into the v2 authority; the freshly linked leaf below starts one exact v2 inventory.
     row = native_variant_row(
         extension, manifest=manifest, dimension=dimension, version=version
     )

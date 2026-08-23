@@ -849,7 +849,7 @@ mpi_nproc = [1]
 name = "test_mpi_halo_exchange"
 sources = ["tests/cpp/integration/mpi/test_mpi_halo_exchange.cpp"]
 labels = ["backend", "mpi", "medium"]
-mpi_nproc = [1, 2, 4]
+mpi_nproc = [1, 2, 4, 8]
 
 [[cpp.suite]]
 name = "test_mpi_auxiliary_ghost_fill"
@@ -1202,6 +1202,7 @@ labels = ["integration", "python", "mpi", "medium"]
 mpi_entrypoints = [
   { path = "tests/python/integration/mpi/test_amr_clean_route_program_mpi.py", nproc = 2 },
   { path = "tests/python/integration/mpi/test_amr_history_mpi.py", nproc = 2 },
+  { path = "tests/python/integration/mpi/test_amr_initial_coarse_ownership_mpi.py", nproc = 2 },
   { path = "tests/python/integration/mpi/test_amr_nonlinear_collective_mpi.py", nproc = 2 },
   { path = "tests/python/integration/mpi/test_amr_regrid_on_restart_mpi.py", nproc = 2 },
   { path = "tests/python/integration/mpi/test_async_balance_cadence_mpi.py", nproc = 2 },

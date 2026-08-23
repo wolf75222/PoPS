@@ -63,6 +63,50 @@
 
 namespace pops::runtime::program {
 
+/// Return true when two admissible facade increments publish endpoints separated by at most 4 ULPs.
+///
+/// Cadence owns the public physical clock and deliberately treats its computed `accepted_time + dt`
+/// endpoint as the authority (rather than reconstructing it from an accumulated duration).  CFL
+/// selection uses this predicate before replacing a just-smaller stability bound with a strategy
+/// cap: a cap may remove irrelevant rounding noise, but it must not move the accepted endpoint
+/// beyond the same 4-ULP facade tolerance used by the public fixed-step controller.
+inline bool same_representable_facade_endpoint(double accepted_time, double first_dt,
+                                               double second_dt) noexcept {
+  if (!std::isfinite(accepted_time) || !std::isfinite(first_dt) || !std::isfinite(second_dt) ||
+      !(first_dt > 0.0) || !(second_dt > 0.0))
+    return false;
+  const double first_end = accepted_time + first_dt;
+  const double second_end = accepted_time + second_dt;
+  if (!std::isfinite(first_end) || !std::isfinite(second_end) || !(first_end > accepted_time) ||
+      !(second_end > accepted_time))
+    return false;
+  double lower = std::min(first_end, second_end);
+  const double upper = std::max(first_end, second_end);
+  for (int ulps = 0; ulps < 4 && lower != upper; ++ulps)
+    lower = std::nextafter(lower, upper);
+  return lower == upper;
+}
+
+/// Return true when a CFL cap can replace a smaller stability increment as rounding noise only.
+///
+/// Endpoint proximity alone is insufficient when the facade clock is very large: several ULPs of
+/// that clock can be a material fraction of a small increment.  Keep the public endpoint rule, but
+/// additionally limit the enlargement to 1024 machine epsilons relative to the selected increment.
+/// This covers cancellation while forming `target - accepted_time` near ordinary final times.  It
+/// permits at most about 2.3e-13 relative enlargement, and refuses to use the absolute facade clock
+/// to make a materially larger step appear equivalent.
+inline bool cfl_cap_is_rounding_equivalent(double accepted_time, double selected_dt,
+                                           double cap_dt) noexcept {
+  if (!std::isfinite(selected_dt) || !std::isfinite(cap_dt) || !(selected_dt > 0.0) ||
+      !(cap_dt >= selected_dt))
+    return false;
+  constexpr double kRelativeSlackUlps = 1024.0;
+  const double relative_enlargement = (cap_dt - selected_dt) / selected_dt;
+  return same_representable_facade_endpoint(accepted_time, selected_dt, cap_dt) &&
+         std::isfinite(relative_enlargement) &&
+         relative_enlargement <= kRelativeSlackUlps * std::numeric_limits<double>::epsilon();
+}
+
 enum class AmrProgramHistoryRemapSource : std::uint8_t {
   RetainedChild = 1,
   ParentDeferred = 2,

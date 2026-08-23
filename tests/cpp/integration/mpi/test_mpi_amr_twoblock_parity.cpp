@@ -112,6 +112,7 @@ struct RunResult {
   std::vector<double> state;
   double mass = 0.0;
   bool second_package_refused = false;
+  std::size_t local_coarse_boxes = 0;
 };
 
 template <int Dim>
@@ -144,6 +145,7 @@ RunResult run_mode(bool distribute_coarse) {
       static_cast<double>(pops::kWenoEpsilon), false, physical_flux_consumer_qid("first"));
   system.set_conservative_state("first", gaussian(config.shape));
   RunResult result;
+  result.local_coarse_boxes = system.coarse_local_boxes();
   result.state = system.block_level_state_global("first", 0);
   result.mass = system.mass("first");
 
@@ -155,6 +157,31 @@ RunResult run_mode(bool distribute_coarse) {
   if (system.n_blocks() != 1 || system.block_level_state_global("first", 0) != result.state)
     throw std::runtime_error("second-package refusal changed the accepted first package");
   return result;
+}
+
+template <int Dim>
+std::size_t materialize_sentinel_distributed_coarse() {
+  pops::AmrSystemConfig<Dim> config;
+  config.level_count = 1;
+  config.transition_ratios.clear();
+  config.transition_buffers.clear();
+  config.transition_lookaheads.clear();
+  config.distribute_coarse = true;
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = 32;
+    config.coarse_max_grid[axis] = 0;  // historical half-domain tile sentinel
+  }
+
+  // This is deliberately build-only: no state initialization, program installation, or time step.
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(
+      system, "tests.mpi-amr-twoblock-parity/sentinel-distributed-runtime@1");
+  system.install_block_state_route("sentinel", "state/sentinel");
+  pops::add_compiled_model<Dim>(
+      system, "sentinel", advection_model<Dim>(), "minmod", "rusanov", "conservative", "explicit",
+      static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
+      static_cast<double>(pops::kWenoEpsilon), false, physical_flux_consumer_qid("sentinel"));
+  return static_cast<std::size_t>(system.coarse_local_boxes());
 }
 
 template <int Dim>
@@ -259,6 +286,8 @@ int run_collective_parity(int argc, char** argv) {
     try {
       const RunResult replicated = run_mode<pops::kNativeDimension>(false);
       const RunResult distributed = run_mode<pops::kNativeDimension>(true);
+      const std::size_t sentinel_local =
+          materialize_sentinel_distributed_coarse<pops::kNativeDimension>();
       const RefinedRunResult<pops::kNativeDimension> refined =
           run_refined_distributed_mode<pops::kNativeDimension>();
       const bool mismatched_parent_refused =
@@ -270,6 +299,17 @@ int run_collective_parity(int argc, char** argv) {
       };
       EXPECT_TRUE(replicated.second_package_refused);
       EXPECT_TRUE(distributed.second_package_refused);
+      // An authored coarse_max_grid must be materialized before the distributed ownership plan.
+      // Before the regression fix the native config retained one full-domain box, which the
+      // load balancer assigned to rank 0 and left every other MPI rank with no active cells.
+      constexpr long expected_coarse_boxes = 1L << pops::kNativeDimension;
+      if (pops::n_ranks() <= expected_coarse_boxes)
+        EXPECT_GT(distributed.local_coarse_boxes, 0u);
+      EXPECT_EQ(pops::all_reduce_sum(static_cast<long>(distributed.local_coarse_boxes)),
+                expected_coarse_boxes);
+      if (pops::n_ranks() <= expected_coarse_boxes)
+        EXPECT_GT(sentinel_local, 0u);
+      EXPECT_EQ(pops::all_reduce_sum(static_cast<long>(sentinel_local)), expected_coarse_boxes);
       EXPECT_EQ(replicated.state, distributed.state);
       EXPECT_NEAR(replicated.mass, distributed.mass, 1.0e-13);
       EXPECT_EQ(spread(replicated_checksum), 0.0);

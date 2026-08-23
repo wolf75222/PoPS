@@ -14,6 +14,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
 VERIFIER = ROOT / "scripts" / "verify_installed_native.py"
+BUILD_FINGERPRINT = "a" * 64
 
 
 def _verifier():
@@ -54,12 +55,13 @@ def _installed_native(
         "sha256": hashlib.sha256(extension.read_bytes()).hexdigest(),
         "version": "1.0.0",
         "abi_key": abi,
+        "build_fingerprint": BUILD_FINGERPRINT,
         "has_mpi": mpi,
         "has_kokkos": kokkos,
     }
     manifest = extension.parents[1] / "variants.json"
     manifest.write_text(
-        json.dumps({"schema_version": 1, "variants": [row]}), encoding="utf-8"
+        json.dumps({"schema_version": 2, "variants": [row]}), encoding="utf-8"
     )
     native = ModuleType("pops._pops")
     native.__file__ = str(extension)
@@ -67,6 +69,7 @@ def _installed_native(
     native.__version__ = "1.0.0"
     native.__has_mpi__ = mpi
     native.__has_kokkos__ = kokkos
+    native.__build_fingerprint__ = BUILD_FINGERPRINT
     native.__has_parallel_hdf5__ = hdf5
     native.abi_key = lambda: abi
     native._parallel_hdf5_capability = lambda: capability
@@ -163,9 +166,24 @@ def test_manifest_digest_and_compiled_facts_are_authenticated(tmp_path):
         )
 
 
+def test_verifier_rejects_a_module_fingerprint_that_disagrees_with_its_manifest(tmp_path):
+    verifier = _verifier()
+    _, native = _installed_native(tmp_path)
+    native.__build_fingerprint__ = "b" * 64
+
+    with pytest.raises(
+        verifier.InstalledNativeVerificationError, match="build fingerprint"
+    ):
+        verifier.verify_installed_native(
+            expect_dimension=2, selector=lambda _dimension: native
+        )
+
+
 def test_verifier_cli_requires_an_explicit_dimension():
     source = VERIFIER.read_text(encoding="utf-8")
 
     assert '"--expect-dim", required=True' in source
     assert "select_native_dimension" in source
     assert 'importer("pops._pops")' not in source
+    assert "build_fingerprint" in source
+    assert "__build_fingerprint__" in source

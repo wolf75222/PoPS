@@ -19,15 +19,21 @@ from pops.domain import (
     RectangleFrame,
 )
 from pops.frames import Cartesian2D, CartesianAxis, CartesianDirection, Z_AXIS
-from pops.mesh.grid import CartesianGrid, PeriodicAxes
+from pops.mesh.grid import CartesianGrid, PeriodicAxes, RegularBlocks
 
 
 def _framed_domain() -> RectangleFrame:
-    names = RectangleBoundaryNames(
-        x_min="inlet", x_max="outlet", y_min="bottom", y_max="top")
-    return Rectangle(
-        "unit_square", (0, 0), (1, 1), boundaries=names,
-    ).tag("fluid").frame(Cartesian2D())
+    names = RectangleBoundaryNames(x_min="inlet", x_max="outlet", y_min="bottom", y_max="top")
+    return (
+        Rectangle(
+            "unit_square",
+            (0, 0),
+            (1, 1),
+            boundaries=names,
+        )
+        .tag("fluid")
+        .frame(Cartesian2D())
+    )
 
 
 def test_cartesian_axes_are_typed_immutable_and_canonical() -> None:
@@ -109,7 +115,11 @@ def test_boundaries_are_typed_stable_and_have_no_string_selector() -> None:
     assert boundaries.pair(frame.coordinates.x).lower is boundaries.x_min
     assert boundaries.pair(frame.coordinates.y).upper is boundaries.y_max
     assert tuple(boundary.name for boundary in boundaries.all) == (
-        "inlet", "outlet", "bottom", "top")
+        "inlet",
+        "outlet",
+        "bottom",
+        "top",
+    )
     assert RectangleBoundaries.from_dict(boundaries.to_dict()) == boundaries
     assert DomainBoundary.from_dict(boundaries.x_min.to_dict()) == boundaries.x_min
 
@@ -141,10 +151,15 @@ def test_cartesian_grid_derives_order_extent_topology_and_widths() -> None:
     assert grid.cell_widths == (0.125, 0.25)
     assert tuple(pair.axis for pair in grid.topology.axis_pairs) == frame.axes
     assert tuple(pair.lower for pair in grid.topology.axis_pairs) == (
-        frame.boundaries.x_min, frame.boundaries.y_min)
+        frame.boundaries.x_min,
+        frame.boundaries.y_min,
+    )
     assert grid.options()["axis_order"] == ["x", "y"]
     assert grid.capabilities().to_dict() == {
-        "geometry": "cartesian", "dim": 2, "bounded_axes": 2, "periodic_axes": 0,
+        "geometry": "cartesian",
+        "dim": 2,
+        "bounded_axes": 2,
+        "periodic_axes": 0,
     }
     assert grid.requirements().to_dict() == {}
     assert grid.validate() is True
@@ -159,7 +174,10 @@ def test_cartesian_grid_periodicity_is_a_typed_axis_partition() -> None:
     assert grid.topology.physical_axes == ()
     assert all(grid.topology.is_periodic(axis) for axis in frame.axes)
     assert grid.capabilities().to_dict() == {
-        "geometry": "cartesian", "dim": 2, "bounded_axes": 0, "periodic_axes": 2,
+        "geometry": "cartesian",
+        "dim": 2,
+        "bounded_axes": 0,
+        "periodic_axes": 2,
     }
     assert CartesianGrid.from_dict(grid.to_dict()) == grid
     assert PeriodicAxes.from_dict(periodic.to_dict()) == periodic
@@ -196,6 +214,50 @@ def test_cartesian_grid_is_immutable_json_serializable_and_fail_closed() -> None
         CartesianGrid.from_dict(forged)
 
 
+@pytest.mark.parametrize(
+    ("cells", "maximum", "expected"),
+    [
+        ((9,), 4, (((0,), (4,)), ((4,), (8,)), ((8,), (9,)))),
+        ((5, 7), (3, 4), (((0, 0), (3, 4)), ((0, 4), (3, 7)), ((3, 0), (5, 4)), ((3, 4), (5, 7)))),
+    ],
+)
+def test_regular_blocks_tile_exactly_and_are_grid_identity_authority(
+    cells, maximum, expected
+) -> None:
+    if len(cells) == 1:
+        from pops.domain import CartesianDomain
+        from pops.frames import Cartesian
+
+        frame = CartesianDomain("line", lower=(0,), upper=(1,)).frame(Cartesian(1))
+    else:
+        frame = _framed_domain()
+    legacy = CartesianGrid(frame=frame, cells=cells)
+    grid = CartesianGrid(frame=frame, cells=cells, blocks=RegularBlocks(maximum))
+    boxes = grid.native_spatial_data()["decomposition"]
+    actual = tuple((tuple(box["lower"]), tuple(box["upper_exclusive"])) for box in boxes["boxes"])
+    assert boxes["kind"] == "regular_blocks"
+    assert actual == expected
+    assert grid.canonical_id != legacy.canonical_id
+    assert CartesianGrid.from_dict(grid.to_dict()) == grid
+    assert grid.to_dict()["blocks"] == RegularBlocks(maximum).to_dict()
+    assert "blocks" not in legacy.to_dict()
+
+
+def test_regular_blocks_refuse_boolean_rank_mismatch_and_noncanonical_payload() -> None:
+    with pytest.raises(TypeError, match="exact int"):
+        RegularBlocks(True)
+    with pytest.raises(TypeError, match="exact integers"):
+        RegularBlocks((2, True))
+    with pytest.raises(ValueError, match=">= 1"):
+        RegularBlocks((2, 0))
+    with pytest.raises(ValueError, match="match CartesianGrid dimension"):
+        CartesianGrid(frame=_framed_domain(), cells=(8, 8), blocks=RegularBlocks((4,)))
+    payload = RegularBlocks(4).to_dict()
+    payload["extra"] = "forged"
+    with pytest.raises(TypeError, match="unsupported shape"):
+        RegularBlocks.from_dict(payload)
+
+
 def test_geometry_packages_and_grid_import_without_native_extension() -> None:
     root = Path(__file__).resolve().parents[4]
     env = os.environ.copy()
@@ -213,8 +275,12 @@ assert 'pops._pops' not in sys.modules
 print(json.dumps(grid.to_dict(), sort_keys=True))
 """
     completed = subprocess.run(
-        [sys.executable, "-c", program], cwd=root, env=env,
-        text=True, capture_output=True, check=False,
+        [sys.executable, "-c", program],
+        cwd=root,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
     )
     assert completed.returncode == 0, completed.stderr
     assert json.loads(completed.stdout)["grid_type"] == "cartesian"

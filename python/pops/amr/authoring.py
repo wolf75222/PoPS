@@ -9,7 +9,7 @@ from typing import Any, ClassVar
 
 from pops._ir import Expr
 from pops._ir.visitors import _key
-from pops.mesh._amr.tagging_graph import ConflictPolicy, Hysteresis
+from pops.mesh._amr.tagging_graph import ConflictPolicy, Hysteresis, TagExpr
 from pops.time import Schedule
 
 
@@ -88,6 +88,12 @@ def _expression_data(value: Expr) -> dict[str, Any]:
         "protocol": "pops.expr.key.v1",
         "value": _strict_key_data(_key(value)),
     }
+
+
+def _predicate_data(value: Expr | TagExpr) -> dict[str, Any]:
+    if isinstance(value, TagExpr):
+        return value.canonical_identity()
+    return _expression_data(value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -320,12 +326,12 @@ class AMRExecution:
 
 @dataclass(frozen=True, slots=True)
 class Tag:
-    predicate: Expr
+    predicate: Expr | TagExpr
     action: ClassVar[str] = "refine"
     __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
-        if not isinstance(self.predicate, Expr) or not callable(
+        if not isinstance(self.predicate, (Expr, TagExpr)) or not callable(
                 getattr(self.predicate, "resolve_for_amr_predicate", None)):
             raise TypeError("Tag requires a typed symbolic Boolean expression")
 
@@ -333,17 +339,17 @@ class Tag:
         return type(self)(self.predicate.resolve_references(resolver))
 
     def inspect(self) -> dict[str, Any]:
-        return {"action": self.action, "predicate": _expression_data(self.predicate)}
+        return {"action": self.action, "predicate": _predicate_data(self.predicate)}
 
 
 @dataclass(frozen=True, slots=True)
 class Coarsen:
-    predicate: Expr
+    predicate: Expr | TagExpr
     action: ClassVar[str] = "coarsen"
     __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
-        if not isinstance(self.predicate, Expr) or not callable(
+        if not isinstance(self.predicate, (Expr, TagExpr)) or not callable(
                 getattr(self.predicate, "resolve_for_amr_predicate", None)):
             raise TypeError("Coarsen requires a typed symbolic Boolean expression")
 
@@ -351,7 +357,7 @@ class Coarsen:
         return type(self)(self.predicate.resolve_references(resolver))
 
     def inspect(self) -> dict[str, Any]:
-        return {"action": self.action, "predicate": _expression_data(self.predicate)}
+        return {"action": self.action, "predicate": _predicate_data(self.predicate)}
 
 
 @dataclass(frozen=True, slots=True)

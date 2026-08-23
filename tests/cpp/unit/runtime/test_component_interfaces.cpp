@@ -131,6 +131,32 @@ pops::amr::hierarchy::LevelLayout<Dim> tagging_layout(const pops::Box<Dim>& doma
 }
 
 template <int Dim>
+pops::amr::hierarchy::LevelLayout<Dim> prescribed_window_layout() {
+  pops::Index<Dim> lower{};
+  pops::Index<Dim> upper{};
+  for (int axis = 0; axis < Dim; ++axis)
+    upper[axis] = 3;
+  pops::Box<Dim> domain{lower, upper};
+  pops::Box<Dim> left = domain;
+  pops::Box<Dim> right = domain;
+  left.hi[0] = 1;
+  right.lo[0] = 2;
+  const pops::mesh::BoxArray<Dim> patches(std::vector<pops::Box<Dim>>{left, right});
+  pops::Index<Dim> rank_origin{};
+  pops::Extent<Dim> rank_extent{};
+  for (int axis = 0; axis < Dim; ++axis)
+    rank_extent[axis] = 1;
+  rank_extent[0] = pops::world_communicator_view().size();
+  return {0,
+          domain,
+          patches,
+          pops::mesh::Distribution<Dim>::replicated(
+              patches, pops::mesh::RankSpace<Dim>{rank_origin, rank_extent}),
+          pops::amr::RefinementRatio<Dim>{},
+          pops::mesh::BoxArrayValidationBudget{2, 1}};
+}
+
+template <int Dim>
 pops::runtime::amr::PreparedTaggingExecutionBudget tagging_budget(
     const pops::amr::hierarchy::LevelLayout<Dim>& layout) {
   std::size_t total = 0;
@@ -467,6 +493,114 @@ TEST(ComponentInterfaces, PreparedTaggingExecutionIsExactRankedAndAllocationFree
   verify_prepared_tagging_execution<1>();
   verify_prepared_tagging_execution<2>();
   verify_prepared_tagging_execution<3>();
+}
+
+template <int Dim>
+void verify_prescribed_window_execution() {
+  using Program = pops::runtime::amr::PreparedTaggingProgram<Dim>;
+  using Plan = pops::runtime::amr::PreparedTaggingExecutionPlan<Dim>;
+  using Field = pops::runtime::amr::PreparedTaggingField<
+      Dim, typename Kokkos::DefaultExecutionSpace::memory_space>;
+  const auto layout = prescribed_window_layout<Dim>();
+  const pops::Index<Dim> local_rank = layout.distribution().rank_space().coordinate(
+      static_cast<std::size_t>(pops::world_communicator_view().rank()));
+  pops::Extent<Dim> ghosts{};
+  std::array<pops::Real, Dim> spacing{};
+  std::array<pops::Real, Dim> lower{};
+  std::array<pops::Real, Dim> upper{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    spacing[axis] = pops::Real(1);
+    upper[axis] = pops::Real(4);
+  }
+  pops::MultiFab<Dim> carrier(layout.patches(), layout.distribution(), local_rank, 1, ghosts);
+  Program program;
+  typename Program::Leaf window;
+  window.state_index = 0;
+  window.component = 0;
+  window.opcode = POPS_TAGGING_PRESCRIBED_WINDOW_V1;
+  window.stencil_index = POPS_TAGGING_NO_STENCIL_V1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    window.window_center[axis] = 0.5;
+    window.window_half_width[axis] = 0.49;
+  }
+  window.window_velocity[0] = 1.0;
+  program.leaves = {window};
+  program.refine_ops = {POPS_TAGGING_PRESCRIBED_WINDOW_V1};
+  program.refine_args = {0};
+  program.coarsen_ops = {POPS_TAGGING_PRESCRIBED_WINDOW_V1, POPS_TAGGING_NOT_V1};
+  program.coarsen_args = {0, 1};
+  program.clock_identity = "test::prescribed-window-clock";
+  program.provider_identity = "test::prescribed-window";
+  program.prepared = true;
+  const std::vector<std::vector<Field>> fields{{{"test::carrier", &carrier}}};
+  const std::vector<pops::amr::hierarchy::LevelLayout<Dim>> layouts{layout};
+  const std::vector<pops::runtime::amr::PreparedTaggingExecutionBudget> budgets{
+      tagging_budget(layout)};
+  const auto assert_exact_refine_location = [&layout](const auto& result,
+                                                      const pops::Index<Dim>& expected) {
+    for (std::size_t global = 0; global < layout.patches().size(); ++global)
+      for_each_host_cell(layout.patches()[global], [&](const pops::Index<Dim>& index) {
+        EXPECT_EQ(result.refine.tagged(global, index), index == expected)
+            << "the prescribed window must tag exactly its physical cell";
+      });
+  };
+  auto plan = Plan::prepare(program, fields, layouts, budgets, 101);
+  const auto& at_zero = plan.execute(0, layout, spacing, lower, upper, 0, pops::Real(0), 101);
+  EXPECT_EQ(at_zero.refine.count(), 1u);
+  pops::Index<Dim> origin{};
+  assert_exact_refine_location(at_zero, origin);
+  EXPECT_EQ(at_zero.coarsen.count(), static_cast<std::size_t>(layout.domain().numPts() - 1));
+  const auto& at_one = plan.execute(0, layout, spacing, lower, upper, 0, pops::Real(1), 101);
+  EXPECT_EQ(at_one.refine.count(), 1u);
+  pops::Index<Dim> one_step{};
+  one_step[0] = 1;
+  assert_exact_refine_location(at_one, one_step);
+
+  // Exercise each existing Cartesian axis.  At t=0 the centre lies in the last cell on that
+  // axis; one period later it has crossed the upper periodic face and must tag the origin cell.
+  for (int axis = 0; axis < Dim; ++axis) {
+    Program wrapped = program;
+    for (int component = 0; component < Dim; ++component)
+      wrapped.leaves[0].window_velocity[component] = 0.0;
+    wrapped.leaves[0].window_center[axis] = 3.5;
+    wrapped.leaves[0].window_velocity[axis] = 1.0;
+    const std::uint32_t periodic_axis = std::uint32_t{1} << static_cast<unsigned>(axis);
+    auto wrapped_plan = Plan::prepare(wrapped, fields, layouts, budgets, 102 + axis);
+    const auto& before_wrap = wrapped_plan.execute(0, layout, spacing, lower, upper, periodic_axis,
+                                                   pops::Real(0), 102 + axis);
+    pops::Index<Dim> upper_cell{};
+    upper_cell[axis] = 3;
+    EXPECT_EQ(before_wrap.refine.count(), 1u);
+    assert_exact_refine_location(before_wrap, upper_cell);
+    const auto& after_wrap = wrapped_plan.execute(0, layout, spacing, lower, upper, periodic_axis,
+                                                  pops::Real(1), 102 + axis);
+    EXPECT_EQ(after_wrap.refine.count(), 1u);
+    assert_exact_refine_location(after_wrap, origin);
+  }
+  EXPECT_THROW((void)plan.execute(0, layout, spacing, lower, upper, std::uint32_t{1} << Dim,
+                                  pops::Real(1), 101),
+               std::runtime_error);
+
+  Program degenerate = program;
+  degenerate.leaves[0].window_half_width[0] = 2.0;
+  auto degenerate_plan = Plan::prepare(degenerate, fields, layouts, budgets, 103);
+  EXPECT_THROW(
+      (void)degenerate_plan.execute(0, layout, spacing, lower, upper, 0, pops::Real(0), 103),
+      std::runtime_error);
+
+  Program overflowing = program;
+  overflowing.leaves[0].window_center[0] = std::numeric_limits<double>::max();
+  overflowing.leaves[0].window_velocity[0] = std::numeric_limits<double>::max();
+  auto overflowing_plan = Plan::prepare(overflowing, fields, layouts, budgets, 104);
+  EXPECT_THROW(
+      (void)overflowing_plan.execute(0, layout, spacing, lower, upper, 0, pops::Real(2), 104),
+      std::runtime_error);
+}
+
+TEST(ComponentInterfaces, PrescribedWindowUsesTimeAndExactPeriodicity) {
+  verify_prescribed_window_execution<1>();
+  verify_prescribed_window_execution<2>();
+  verify_prescribed_window_execution<3>();
 }
 
 template <int Dim>
@@ -1238,6 +1372,14 @@ TEST(ComponentInterfaces, ExactAbiConsumersExecuteEveryClosedScientificFamily) {
   auto explicit_host_request = tag_request;
   explicit_host_request.execution_mode = POPS_TAGGER_EXECUTION_HOST_V2;
   EXPECT_EQ(pops::component::tag_batch(tagger_api, nullptr, explicit_host_request, status), 0);
+  auto unsupported_window_request = tag_request;
+  auto unsupported_window_leaf = tag_leaf;
+  unsupported_window_leaf.opcode = POPS_TAGGING_PRESCRIBED_WINDOW_V1;
+  unsupported_window_request.program.leaves = &unsupported_window_leaf;
+  unsupported_window_request.program.refine_opcodes = &unsupported_window_leaf.opcode;
+  EXPECT_THROW(
+      (void)pops::component::tag_batch(tagger_api, nullptr, unsupported_window_request, status),
+      std::invalid_argument);
 
   std::array<std::int64_t, 2> extents{4, 1};
   std::array<std::int64_t, 4> boxes{};

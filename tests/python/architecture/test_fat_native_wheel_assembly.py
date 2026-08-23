@@ -19,6 +19,7 @@ SCRIPTS = ROOT / "scripts"
 WHEEL_NAME = "pops-0.3.0-cp312-cp312-macosx_11_0_arm64.whl"
 RECORD = "pops-0.3.0.dist-info/RECORD"
 MANIFEST = "pops/_native/variants.json"
+BUILD_FINGERPRINT = "a" * 64
 
 
 def _load(name: str, path: Path):
@@ -58,6 +59,7 @@ def _mono_wheel(
     dimension: int,
     *,
     abi_common: str = "clang=17;cxx=20;kokkos=4.4.1;mpi=off",
+    build_fingerprint: str = BUILD_FINGERPRINT,
     common_payload: bytes = b"identical pure Python payload\n",
     has_mpi: bool = False,
     has_kokkos: bool = True,
@@ -76,6 +78,7 @@ def _mono_wheel(
         "sha256": hashlib.sha256(b"pre-repair image").hexdigest(),
         "version": "0.3.0",
         "abi_key": f"{abi_common};dim={dimension}",
+        "build_fingerprint": build_fingerprint,
         "has_mpi": has_mpi,
         "has_kokkos": has_kokkos,
     }
@@ -90,7 +93,7 @@ def _mono_wheel(
         ),
         MANIFEST: (
             json.dumps(
-                {"schema_version": 1, "variants": [row]},
+                {"schema_version": 2, "variants": [row]},
                 sort_keys=True,
                 indent=2,
             )
@@ -172,6 +175,7 @@ def test_assembly_is_exact_deterministic_and_reproves_every_final_leaf(tmp_path)
             member = "pops/_native/" + row["path"]
             assert row["sha256"] == hashlib.sha256(archive.read(member)).hexdigest()
             assert row["sha256"] != hashlib.sha256(b"pre-repair image").hexdigest()
+            assert row["build_fingerprint"] == BUILD_FINGERPRINT
         _assert_record(archive)
 
 
@@ -179,6 +183,7 @@ def test_assembly_is_exact_deterministic_and_reproves_every_final_leaf(tmp_path)
     ("overrides", "message"),
     [
         ({3: {"abi_common": "clang=18;cxx=20;kokkos=4.4.1;mpi=off"}}, "toolchain ABI"),
+        ({3: {"build_fingerprint": "b" * 64}}, "build fingerprint"),
         ({3: {"common_payload": b"drifted package\n"}}, "outside native leaves"),
         ({3: {"has_mpi": True}}, "backend facts"),
         ({3: {"extra_native": True}}, "native members"),

@@ -440,7 +440,8 @@ numerical parity of catalog-selected templates on CPU/Serial.
 `test_amr_compiled_model` validates hierarchy installation. This is a test oracle, not a
 second public registration route.
 
-The repo-local scientific campaign under [`verification/`](../verification/README.md)
+The repo-local scientific campaigns under
+[`benchmarks/verification/`](../benchmarks/verification/README.md)
 measures orders, conservation, phase, symmetry, and AMR interface errors against external
 oracles. It is distinct from the fast-test catalogue.
 

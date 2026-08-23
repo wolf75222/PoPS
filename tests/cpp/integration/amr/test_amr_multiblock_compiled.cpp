@@ -144,6 +144,7 @@ TEST(test_amr_multiblock_compiled, TwoCompiledBlocksUseOneTransactionalCarrier) 
 
   ASSERT_EQ(system.n_blocks(), 2);
   system.set_program_block_map({1, 0});
+  system.refresh_prepared_amr_levels();
   pops::MultiFab<Dim> poisson_rhs(system.prepared_amr_block_state(0, 0));
   poisson_rhs.set_val(pops::Real(0));
   system.add_prepared_amr_poisson_rhs(0, poisson_rhs);

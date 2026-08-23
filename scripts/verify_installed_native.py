@@ -104,6 +104,10 @@ def verify_installed_native(
         raise InstalledNativeVerificationError(
             "selected native ABI key disagrees with variants.json"
         )
+    if getattr(native, "__build_fingerprint__", None) != row["build_fingerprint"]:
+        raise InstalledNativeVerificationError(
+            "selected native build fingerprint disagrees with variants.json"
+        )
 
     has_mpi = getattr(native, "__has_mpi__", None)
     if type(has_mpi) is not bool or has_mpi is not row["has_mpi"]:

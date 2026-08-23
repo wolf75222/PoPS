@@ -371,7 +371,9 @@ class AmrSystem {
   /// RuntimeInstance transaction performs exact agreement before retaining the package lifetime.
   POPS_EXPORT void install_prepared_native_amr_package(PreparedNativePackage package);
 
-  /// Borrow one accepted block/level carrier through its authenticated runtime identity.
+  /// Borrow one accepted block/level carrier through its authenticated runtime identity. Call
+  /// refresh_prepared_amr_levels() collectively before this rank-local lookup; the lookup itself
+  /// never introduces a collective in a patch-local execution path.
   POPS_EXPORT const MultiFab<Dim>& prepared_amr_block_state(int runtime_block, int level) const;
   POPS_EXPORT MultiFab<Dim>& prepared_amr_block_state(int runtime_block, int level);
   /// Borrow the exact prepared embedded-boundary active mask for one block/level, or null when
@@ -588,6 +590,7 @@ class AmrSystem {
       const std::vector<std::string>& leaf_blocks, const std::vector<std::string>& leaf_variables,
       const std::vector<int>& leaf_field_component_indices, const std::vector<int>& leaf_ops,
       const std::vector<double>& leaf_thresholds, const std::vector<int>& leaf_stencil_indices,
+      const std::vector<std::vector<double>>& leaf_windows,
       const std::vector<typename runtime::amr::PreparedTaggingProgram<Dim>::Stencil>& stencils,
       const std::vector<std::int32_t>& refine_ops, const std::vector<std::int32_t>& refine_args,
       const std::vector<std::int32_t>& coarsen_ops, const std::vector<std::int32_t>& coarsen_args,
@@ -1210,6 +1213,11 @@ class AmrSystem {
   /// cost. The conversion to exact physical bounds is done on the Python side.
   /// Forces the lazy build (ensure_built) like n_patches()/mass()/density().
   std::vector<AmrPatch<Dim>> patch_boxes();
+  /// Rank-local coarse (level-0) boxes owned by @p name.  Each Box retains global native-axis
+  /// indices and therefore describes exactly the local MultiFab fabs rather than a gathered or
+  /// inferred partition.  The query materializes the inspectable hierarchy collectively when a
+  /// block has been assembled; a name must resolve to an authenticated AMR block.
+  std::vector<Box<Dim>> local_boxes(const std::string& name);
   /// COARSE-level (base) box counts, MPI ownership diagnostic (ADC-319). coarse_local_boxes() = number
   /// of base boxes OWNED by this rank (level-0 MultiFab local_size()); coarse_total_boxes() = total base
   /// boxes across all ranks (BoxArray size, identical on every rank). With distribute_coarse=true the

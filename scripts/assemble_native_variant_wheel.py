@@ -356,10 +356,13 @@ def assemble_native_variant_wheel(
                 )
     versions = {row["version"] for row in rows}
     normalized_abis = {_normalized_abi(row) for row in rows}
+    build_fingerprints = {row["build_fingerprint"] for row in rows}
     suffixes = {PurePosixPath(row["path"]).name for row in rows}
-    if len(versions) != 1 or len(normalized_abis) != 1 or len(suffixes) != 1:
+    if len(versions) != 1 or len(normalized_abis) != 1 or len(build_fingerprints) != 1 \
+            or len(suffixes) != 1:
         raise FatWheelAssemblyError(
-            "mono-variant wheels do not share one version, toolchain ABI and extension suffix"
+            "mono-variant wheels do not share one version, build fingerprint, toolchain ABI "
+            "and extension suffix"
         )
 
     final_payloads = dict(common_payloads)

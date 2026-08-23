@@ -74,6 +74,16 @@ def _dimension(layout_plan: Any) -> int:
     return dimension
 
 
+def _frame_id(layout_plan: Any) -> str:
+    adaptive = tuple(row for row in layout_plan.layouts if row.adaptive)
+    if len(adaptive) != 1:
+        raise ValueError("object-level AMR resolution requires exactly one adaptive layout authority")
+    frame_id = getattr(adaptive[0].geometry, "frame_id", None)
+    if not isinstance(frame_id, str) or not frame_id:
+        raise ValueError("adaptive layout must authenticate one canonical Cartesian frame")
+    return frame_id
+
+
 def _protocol(value: Any, name: str, *, where: str) -> Callable[..., Any]:
     method = getattr(value, name, None)
     if not callable(method):
@@ -134,6 +144,9 @@ class AMRTaggingResolutionContext:
     layout_plan: Any
     numerics: tuple[Any, ...]
     resolve: Callable[[Handle], Handle]
+    clock: Any = None
+    dimension: int | None = None
+    frame_id: str | None = None
 
     def __post_init__(self) -> None:
         from pops.mesh import LayoutPlan
@@ -148,6 +161,17 @@ class AMRTaggingResolutionContext:
             raise TypeError("AMR tagging numerical plans do not implement the resolved protocol")
         if not callable(self.resolve):
             raise TypeError("AMR tagging resolve must be callable")
+        if self.frame_id is not None and (not isinstance(self.frame_id, str) or not self.frame_id):
+            raise TypeError("AMR tagging frame_id must be non-empty text or None")
+        if self.clock is not None:
+            from pops.time import Clock
+
+            if type(self.clock) is not Clock:
+                raise TypeError("AMR tagging requires the exact owning Program clock")
+        if self.dimension is not None and (
+            type(self.dimension) is not int or self.dimension not in (1, 2, 3)
+        ):
+            raise ValueError("AMR tagging requires dimension 1, 2, or 3")
         object.__setattr__(self, "numerics", rows)
 
     def _discrete_context(self, state: Handle) -> Any:
@@ -676,6 +700,9 @@ def resolve_amr_authorities(
         context.layout_plan,
         context.numerics,
         context.resolve,
+        context.program.clock,
+        _dimension(context.layout_plan),
+        _frame_id(context.layout_plan),
     )
     resolved_tagging = resolve_tagging(tagging, tagging_context)
     from pops.amr.providers import (

@@ -13,7 +13,10 @@ from pops.amr import (
     Buffer,
     Tag,
 )
+from pops.codegen import Production
+from pops.codegen._amr_plan_validation import _validate_builtin_coarse_fine_capabilities
 from pops.domain import CartesianDomain
+from pops.initial import InitialCondition
 from pops.layouts import AMR
 from pops.mesh import CartesianGrid, LayoutPlanBuilder, PeriodicAxes
 from pops.initial import InitialConditionPlanBuilder, InitialConditionSource
@@ -86,12 +89,18 @@ from pops.lib.amr import (
     PatchTopologyRebuild,
     StateTransfer,
 )
+from pops.lib.initial import Constant
+from pops.lib.time import ForwardEuler
+from pops.math import ValueExpr, ddt, div
 from pops.model import Handle, OwnerPath, ParamHandle
-from pops.numerics.reconstruction import WENO5
+from pops.numerics import DiscretizationPlan, variables
+from pops.numerics.reconstruction import MUSCL, WENO5
 from pops.numerics.riemann import Rusanov
 from pops.numerics.spatial import FiniteVolume
 from pops.numerics.variables import Conservative
-from pops.time import Clock
+from pops.params import RuntimeParam
+from pops.projection import ConservativeCellAverage
+from pops.time import Clock, FixedDt
 from pops.identity import make_identity
 from pops.runtime._amr_bootstrap_execution import BootstrapReceipt, execute_bootstrap
 
@@ -365,6 +374,168 @@ def test_public_transfer_selects_real_fifth_order_route_for_weno():
         == HIERARCHY_EXACT_RANK
     assert resolved.nesting_requirement.minimum_buffer == (3, 3)
     assert resolved.nesting_requirement.minimum_lookahead == 4
+
+
+def test_public_transfer_selects_second_order_route_for_muscl():
+    plan, _, state, _ = _layout()
+    flux = Handle("F", kind="flux", owner=state.owner_path)
+    method = FiniteVolume(
+        flux=flux,
+        variables=Conservative(state),
+        reconstruction=MUSCL(),
+        riemann=Rusanov(),
+    )
+    numerics = (SimpleNamespace(rates=(SimpleNamespace(method=method),)),)
+    authored = AMRTransfer()
+    authored.state(state, StateTransfer())
+
+    resolved = authored.resolve(plan, numerics)
+    coarse_fine = resolved.for_subject(state, COARSE_FINE_FILL)
+
+    assert coarse_fine.action.route.options.to_data()["native_route"] == (
+        "conservative_coarse_fine"
+    )
+    assert coarse_fine.action.capabilities.order == 2
+    assert coarse_fine.action.capabilities.ghost_depth == (1,)
+    assert resolved.nesting_requirement.minimum_buffer == (1, 1)
+    assert resolved.nesting_requirement.minimum_lookahead == 1
+
+
+def test_public_muscl_amr_resolution_reaches_plan_validation():
+    """The public lifecycle must not compare the MUSCL FV halo to interface interpolation."""
+    import pops
+
+    frame = CartesianDomain(
+        "muscl-plan-validation-domain", (0.0, 0.0), (1.0, 1.0)
+    ).frame()
+    x_axis, y_axis = frame.axes
+    model = pops.Model("muscl-plan-validation-model", frame=frame)
+    state = model.state("U", components=("rho",))
+    (rho,) = state
+    flux = model.flux(
+        "transport",
+        frame=frame,
+        state=state,
+        components={x_axis: (0.25 * rho,), y_axis: (-0.10 * rho,)},
+        waves={x_axis: (0.25,), y_axis: (-0.10,)},
+    )
+    rate = model.rate("transport_rate", equation=ddt(state) == -div(flux))
+    case = pops.Case("muscl-plan-validation-case")
+    block = case.block("tracer", model, states=(state,))
+    instance = block[state]
+    numerics = DiscretizationPlan()
+    numerics.rates.add(
+        rate,
+        FiniteVolume(
+            flux=flux,
+            variables=variables.Conservative(state),
+            reconstruction=MUSCL(),
+            riemann=Rusanov(),
+        ),
+    )
+    case.numerics(numerics, block=block)
+    program = ForwardEuler(instance, rate=rate)
+    program.step_strategy(FixedDt(1.0e-3))
+    case.program(program)
+    case.initials.add(
+        InitialCondition(
+            state=instance,
+            value=Constant((1.0,)),
+            projection=ConservativeCellAverage(),
+        )
+    )
+    transfer = AMRTransfer()
+    transfer.state(instance, StateTransfer())
+    threshold = case.param(RuntimeParam("muscl-refine-threshold", default=2.0))
+    layout = AMR(
+        grid=CartesianGrid(frame=frame, cells=(8, 8), periodic=PeriodicAxes(frame.axes)),
+        hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
+        tagging=AMRTagging(
+            rules=(Tag(ValueExpr(instance) > case.value(threshold)), Buffer(cells=1)),
+            hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
+            conflict_policy=ConflictPolicy.REFINE_WINS,
+        ),
+        regrid=AMRRegrid.frozen(),
+        transfer=transfer,
+        execution=AMRExecution.synchronous(),
+    )
+
+    resolved = pops.resolve(pops.validate(case), layout=layout, backend=Production())
+    coarse_fine = next(
+        entry
+        for entry in resolved.amr_transfer.entries
+        if entry.key.operation == COARSE_FINE_FILL
+    )
+    assert coarse_fine.action.route.options.to_data()["native_route"] == (
+        "conservative_coarse_fine"
+    )
+
+
+@pytest.mark.parametrize(
+    ("native_route", "capabilities"),
+    (
+        (
+            "conservative_coarse_fine",
+            TransferCapabilities(
+                order=2, ghost_depth=(1,), dimensions=(2,), conservative=False
+            ),
+        ),
+        (
+            "conservative_polynomial5_coarse_fine",
+            TransferCapabilities(
+                order=5, ghost_depth=(3,), dimensions=(2,), conservative=False
+            ),
+        ),
+        (
+            "conservative_injection",
+            TransferCapabilities(
+                order=1, ghost_depth=(1,), dimensions=(2,), conservative=True
+            ),
+        ),
+    ),
+)
+def test_builtin_coarse_fine_native_contract_accepts_intrinsic_capabilities(
+    native_route, capabilities
+):
+    _validate_builtin_coarse_fine_capabilities(
+        native_route=native_route,
+        capabilities=capabilities,
+        dimension=2,
+    )
+
+
+@pytest.mark.parametrize(
+    ("native_route", "capabilities"),
+    (
+        (
+            "conservative_coarse_fine",
+            TransferCapabilities(
+                order=2, ghost_depth=(0,), dimensions=(2,), conservative=False
+            ),
+        ),
+        (
+            "conservative_polynomial5_coarse_fine",
+            TransferCapabilities(
+                order=2, ghost_depth=(3,), dimensions=(2,), conservative=False
+            ),
+        ),
+        (
+            "conservative_injection",
+            TransferCapabilities(
+                order=1, ghost_depth=(1,), dimensions=(2,), conservative=False
+            ),
+        ),
+    ),
+)
+def test_builtin_coarse_fine_native_contract_rejects_tampered_capabilities(
+    native_route, capabilities
+):
+    with pytest.raises(NotImplementedError, match="exact builtin kernel contract"):
+        _validate_builtin_coarse_fine_capabilities(
+            native_route=native_route,
+            capabilities=capabilities,
+            dimension=2,
+        )
 
 
 def test_builtin_policies_are_intrinsic_and_reject_duplicate_accuracy_knobs():

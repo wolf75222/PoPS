@@ -15,7 +15,7 @@ extern "C" {
 #endif
 
 #define POPS_COMPONENT_API_SYMBOL_V1 "pops_component_interface_v1"
-#define POPS_COMPONENT_CATALOG_SHA256_V1 "520c51b60d3ae00bdffa0ed040f437fed772b80160e8d5fae7e4c86c829b8305"
+#define POPS_COMPONENT_CATALOG_SHA256_V1 "55336556cc7c7ce034f72e02cf5d526cbd8f4112fd1a961868e20553399bec2a"
 #define POPS_COMPONENT_PROTOCOL_ABI_V1 1u
 #define POPS_COMPONENT_COMMON_ABI_V1 1u
 
@@ -39,6 +39,7 @@ typedef enum PopsTaggingOpcodeV1 {
   POPS_TAGGING_MAGNITUDE_ABOVE_V1 = 3,
   POPS_TAGGING_GRADIENT_ABOVE_V1 = 4,
   POPS_TAGGING_GRADIENT_BELOW_V1 = 5,
+  POPS_TAGGING_PRESCRIBED_WINDOW_V1 = 6,
   POPS_TAGGING_ANY_OF_V1 = 16,
   POPS_TAGGING_ALL_OF_V1 = 17,
   POPS_TAGGING_NOT_V1 = 18,
@@ -50,7 +51,7 @@ typedef enum PopsTaggingOpcodeV1 {
 #define POPS_TAGGING_STENCIL_ROUTE_LINEAR_AXIS_STENCIL_L2_V1 "linear_axis_stencil_l2_v1"
 
 static inline int pops_tagging_opcode_is_leaf_v1(int32_t opcode) {
-  switch (opcode) { case POPS_TAGGING_ABOVE_V1: case POPS_TAGGING_BELOW_V1: case POPS_TAGGING_MAGNITUDE_ABOVE_V1: case POPS_TAGGING_GRADIENT_ABOVE_V1: case POPS_TAGGING_GRADIENT_BELOW_V1: return 1; default: return 0; }
+  switch (opcode) { case POPS_TAGGING_ABOVE_V1: case POPS_TAGGING_BELOW_V1: case POPS_TAGGING_MAGNITUDE_ABOVE_V1: case POPS_TAGGING_GRADIENT_ABOVE_V1: case POPS_TAGGING_GRADIENT_BELOW_V1: case POPS_TAGGING_PRESCRIBED_WINDOW_V1: return 1; default: return 0; }
 }
 static inline int pops_tagging_opcode_is_logical_v1(int32_t opcode) {
   switch (opcode) { case POPS_TAGGING_ANY_OF_V1: case POPS_TAGGING_ALL_OF_V1: case POPS_TAGGING_NOT_V1: return 1; default: return 0; }

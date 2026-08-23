@@ -87,8 +87,9 @@ inline void install_prepared_threshold_union(
     refine_args.push_back(static_cast<std::int32_t>(criteria.size()));
   }
   system.set_bootstrap_tagging(subject_kinds, subject_identities, blocks, variables,
-                               field_component_indices, leaf_ops, thresholds, stencil_indices, {},
-                               refine_ops, refine_args, {}, {}, min_cycles, "hold", "error",
+                               field_component_indices, leaf_ops, thresholds, stencil_indices,
+                               std::vector<std::vector<double>>(leaf_ops.size()), {}, refine_ops,
+                               refine_args, {}, {}, min_cycles, "hold", "error",
                                std::move(clock_identity), std::move(provider_identity));
 }
 
@@ -109,9 +110,9 @@ inline void install_prepared_refine_coarsen_threshold(
   system.set_bootstrap_tagging(
       {"state", "state"}, {state, state}, {refine.block, coarsen.block},
       {refine.variable, coarsen.variable}, {-1, -1}, {POPS_TAGGING_ABOVE_V1, POPS_TAGGING_BELOW_V1},
-      {refine.threshold, coarsen.threshold}, {-1, -1}, {}, {POPS_TAGGING_ABOVE_V1}, {0},
-      {POPS_TAGGING_BELOW_V1}, {1}, 0, "hold", "error", "test::prepared-tagging-clock",
-      std::move(provider_identity));
+      {refine.threshold, coarsen.threshold}, {-1, -1}, std::vector<std::vector<double>>(2), {},
+      {POPS_TAGGING_ABOVE_V1}, {0}, {POPS_TAGGING_BELOW_V1}, {1}, 0, "hold", "error",
+      "test::prepared-tagging-clock", std::move(provider_identity));
 }
 
 template <int Dim>
@@ -173,7 +174,8 @@ inline void install_prepared_thresholds_and_shared_aux_gradient(
   refine_args.push_back(2);
   system.set_bootstrap_tagging(subject_kinds, subject_identities, blocks, variables,
                                field_component_indices, leaf_ops, thresholds, stencil_indices,
-                               stencils, refine_ops, refine_args, {}, {}, 0, "hold", "error",
+                               std::vector<std::vector<double>>(leaf_ops.size()), stencils,
+                               refine_ops, refine_args, {}, {}, 0, "hold", "error",
                                "test::prepared-tagging-clock", std::move(provider_identity));
 }
 

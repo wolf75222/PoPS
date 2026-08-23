@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <limits>
 #include <type_traits>
+#include <utility>
 
 /// @file
 /// @brief Exact-ranked composition of hyperbolic, source, and elliptic physics bricks.
@@ -269,6 +270,14 @@ struct CompositeModel : composite_detail::ConservationLawAliases<Hyperbolic>,
   Hyperbolic hyp{};
   Source src{};
   Elliptic ell{};
+
+  POPS_HD constexpr CompositeModel() = default;
+
+  /// Build a model from its three physics bricks without exposing the implementation-only
+  /// alias bases in aggregate initialization.  This remains stable if another empty alias base is
+  /// added later and is available in the same host/device contexts as the composed operations.
+  POPS_HD constexpr CompositeModel(Hyperbolic hyperbolic, Source source, Elliptic elliptic)
+      : hyp(std::move(hyperbolic)), src(std::move(source)), ell(std::move(elliptic)) {}
 
   [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept
     requires(physics_contract_detail::ExactPhysicsBrickContract<Hyperbolic> &&

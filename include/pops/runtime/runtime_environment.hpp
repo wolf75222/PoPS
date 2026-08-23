@@ -13,10 +13,16 @@
 #include <pops/parallel/comm.hpp>
 
 #include <string>
+#include <iomanip>
+#include <sstream>
 #include <type_traits>
 
 #ifdef POPS_HAS_KOKKOS
 #include <Kokkos_Core.hpp>
+#endif
+
+#if defined(POPS_HAS_KOKKOS) && defined(KOKKOS_ENABLE_CUDA)
+#include <cuda_runtime_api.h>
 #endif
 
 namespace pops {
@@ -48,6 +54,13 @@ struct RuntimeEnvironmentReport {
   int kokkos_concurrency = 0;
   std::string kokkos_ownership = "not-built";
   std::string kokkos_lifecycle = "not-built";
+  // Physical accelerator identity is descriptive only.  It is populated solely
+  // for an already-initialised CUDA DefaultExecutionSpace; reporting never
+  // initializes Kokkos or creates a CUDA context.
+  int gpu_device_ordinal = -1;
+  std::string gpu_uuid;
+  std::string gpu_uuid_method = "none";
+  std::string gpu_uuid_diagnostic;
 
   bool mpi_compiled = false;
   bool mpi_active = false;
@@ -122,6 +135,50 @@ inline std::string native_stream_identity() {
 #endif
 }
 
+inline void runtime_synchronize() {
+#ifdef POPS_HAS_KOKKOS
+  if (Kokkos::is_initialized())
+    Kokkos::fence("PoPS RuntimeInstance synchronize");
+#endif
+}
+
+inline void populate_cuda_device_identity(RuntimeEnvironmentReport& report) {
+#if defined(POPS_HAS_KOKKOS) && defined(KOKKOS_ENABLE_CUDA)
+  using ExecutionSpace = Kokkos::DefaultExecutionSpace;
+  if constexpr (std::is_same_v<ExecutionSpace, Kokkos::Cuda>) {
+    if (!report.kokkos_initialized)
+      return;
+    int ordinal = -1;
+    const cudaError_t current_error = cudaGetDevice(&ordinal);
+    if (current_error != cudaSuccess) {
+      report.gpu_uuid_diagnostic =
+          std::string("cudaGetDevice: ") + cudaGetErrorString(current_error);
+      return;
+    }
+    cudaDeviceProp properties{};
+    const cudaError_t properties_error = cudaGetDeviceProperties(&properties, ordinal);
+    if (properties_error != cudaSuccess) {
+      report.gpu_uuid_diagnostic =
+          std::string("cudaGetDeviceProperties: ") + cudaGetErrorString(properties_error);
+      return;
+    }
+    std::ostringstream uuid;
+    uuid << "GPU-" << std::hex << std::nouppercase << std::setfill('0');
+    for (int index = 0; index < 16; ++index) {
+      if (index == 4 || index == 6 || index == 8 || index == 10)
+        uuid << '-';
+      const unsigned char byte = static_cast<unsigned char>(properties.uuid.bytes[index]);
+      uuid << std::setw(2) << static_cast<unsigned int>(byte);
+    }
+    report.gpu_device_ordinal = ordinal;
+    report.gpu_uuid = uuid.str();
+    report.gpu_uuid_method = "cudaGetDeviceProperties.uuid";
+  }
+#else
+  static_cast<void>(report);
+#endif
+}
+
 inline RuntimeEnvironmentReport runtime_environment_report() {
   RuntimeEnvironmentReport report{};
 #ifdef POPS_HAS_KOKKOS
@@ -140,6 +197,7 @@ inline RuntimeEnvironmentReport runtime_environment_report() {
     const Kokkos::DefaultExecutionSpace execution_space{};
     report.kokkos_concurrency = execution_space.concurrency();
   }
+  populate_cuda_device_identity(report);
   if (report.kokkos_initialized_by_pops) {
     report.kokkos_ownership = "pops-owned-lazy";
     report.kokkos_lifecycle =

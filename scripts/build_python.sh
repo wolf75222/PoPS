@@ -242,7 +242,7 @@ fi
 NATIVE_VARIANT_SNAPSHOT="$(mktemp -d "${TMPDIR:-/tmp}/pops-native-variants.XXXXXX")"
 cleanup_native_snapshot() { rm -rf "$NATIVE_VARIANT_SNAPSHOT"; }
 trap cleanup_native_snapshot EXIT
-PYTHONPATH= PYTHONNOUSERSITE=1 \
+PYTHONPATH='' PYTHONNOUSERSITE=1 \
   python "$HERE/scripts/preserve_native_variants.py" snapshot --dest "$NATIVE_VARIANT_SNAPSHOT"
 echo "--- python -m pip ${pip_args[*]} ${EXTRA_PIP[*]} ---"
 python -m pip "${pip_args[@]}" "${EXTRA_PIP[@]}"
@@ -257,29 +257,34 @@ if [[ -n "$WHEEL_DIR" ]]; then
   echo "release wheel: ${built_wheels[0]}"
   # Prove the immutable installed payload before Darwin codesign is allowed to repair bytes and
   # refresh their installed-manifest hashes. This build produces exactly the requested one-row set.
-  PYTHONPATH= PYTHONNOUSERSITE=1 \
+  PYTHONPATH='' PYTHONNOUSERSITE=1 \
     python "$HERE/scripts/prove_installed_wheel.py" \
       --wheel "${built_wheels[0]}" --expect-dim "$POPS_NATIVE_DIM"
 fi
-PYTHONPATH= PYTHONNOUSERSITE=1 \
+
+# ADC-647: pip may leave authenticated sibling files behind even though the new wheel manifest
+# declares only Dim=N. Isolate those exact snapshot-authenticated leftovers first; the codesign
+# locator remains strict about every unmanifested extension. Scikit-build may also rewrite the new
+# extension after the linker signed it, so refresh that row's hash before strict sibling restore.
+PYTHONPATH='' PYTHONNOUSERSITE=1 \
+  python "$HERE/scripts/preserve_native_variants.py" isolate --src "$NATIVE_VARIANT_SNAPSHOT" \
+    --expect-dim "$POPS_NATIVE_DIM"
+PYTHONPATH='' PYTHONNOUSERSITE=1 \
+  python "$HERE/scripts/codesign_pops_extensions.py" --expect-dim "$POPS_NATIVE_DIM"
+PYTHONPATH='' PYTHONNOUSERSITE=1 \
   python "$HERE/scripts/preserve_native_variants.py" restore --src "$NATIVE_VARIANT_SNAPSHOT" \
     --expect-dim "$POPS_NATIVE_DIM"
 
 # --- diagnose ---------------------------------------------------------------------------------------
-# ADC-647: pip/scikit-build may rewrite the copied extension after the linker signed its build-tree
-# output. Resolve the exact installed module without importing pops, ad-hoc sign it on Darwin, and
-# verify both the signature and its ad-hoc identity. Any failure stops before import/doctor.
-PYTHONPATH= PYTHONNOUSERSITE=1 \
-  python "$HERE/scripts/codesign_pops_extensions.py" --expect-dim "$POPS_NATIVE_DIM"
 native_verify_args=()
 if [[ $WITH_MPI -eq 1 ]]; then
   native_verify_args=(--expect-dim "$POPS_NATIVE_DIM" --expect-mpi --expect-parallel-hdf5)
 else
   native_verify_args=(--expect-dim "$POPS_NATIVE_DIM" --expect-serial)
 fi
-PYTHONPATH= PYTHONNOUSERSITE=1 \
+PYTHONPATH='' PYTHONNOUSERSITE=1 \
   python "$HERE/scripts/verify_installed_native.py" "${native_verify_args[@]}"
 echo ""
 echo "--- pops.runtime.doctor.doctor() ---"
-PYTHONPATH= PYTHONNOUSERSITE=1 \
+PYTHONPATH='' PYTHONNOUSERSITE=1 \
   python -c "import pops; from pops._native_selector import select_native_dimension; select_native_dimension($POPS_NATIVE_DIM); from pops.runtime.doctor import doctor; print('pops', pops.__version__, 'Dim=$POPS_NATIVE_DIM'); doctor()"

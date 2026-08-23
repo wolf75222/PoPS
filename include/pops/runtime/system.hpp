@@ -965,6 +965,14 @@ class System {
   POPS_EXPORT void block_neg_div_flux_into_at(
       const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab<Dim>& U,
       MultiFab<Dim>& R);
+  /// Prepared full flux-only twin of block_neg_div_flux_into_at.  For a physical boundary this
+  /// retains its flux boundary law; for a purely periodic distributed block it owns the exact
+  /// halo transport session.
+  POPS_EXPORT void block_neg_div_flux_into_at_prepared(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab<Dim>& U,
+      MultiFab<Dim>& R, const System* prepared_system, int prepared_block,
+      const runtime::multiblock::BoundaryEvaluationPoint& prepared_point, const ExecutionLane& lane,
+      const runtime::program::PreparedScalarBoundarySession<Dim>& transport);
   /// Evaluate one simultaneous set of block rates at one exact StagePoint.  Sparse groups are
   /// allowed, but an installed shared interface must have either both sides present or neither.
   POPS_EXPORT void block_rhs_group(const runtime::multiblock::BoundaryEvaluationPoint& point,
@@ -984,9 +992,9 @@ class System {
       MultiFab<Dim>& R, const System* prepared_system, int prepared_block,
       const runtime::multiblock::BoundaryEvaluationPoint& prepared_point, const ExecutionLane& lane,
       const runtime::program::PreparedScalarBoundarySession<Dim>& transport);
-  /// Whether ordinary Program RHS evaluation must use a standalone prepared boundary session.
-  /// This reports retained boundary state rather than closure completeness so an incomplete
-  /// boundary authority fails loudly instead of falling back to the legacy no-lane route.
+  /// Whether ordinary Program RHS evaluation must use a prepared session.  A physical boundary
+  /// always needs its retained authority; a purely periodic block needs it only when its field is
+  /// distributed across more than one rank.
   POPS_EXPORT bool requires_block_boundary_session(int b) const;
   /// Whether one block retains the complete generated boundary residual/JVP pair.  This is a
   /// capability query only; execution still requires one authenticated evaluation point.
@@ -1009,6 +1017,11 @@ class System {
   /// retained exact-ranked package.  This is a preparation seam, not a second boundary engine.
   POPS_EXPORT void block_prepare_generated_state_at(
       const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab<Dim>& U);
+  POPS_EXPORT void block_prepare_generated_state_at_prepared(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab<Dim>& U,
+      const System* prepared_system, int prepared_block,
+      const runtime::multiblock::BoundaryEvaluationPoint& prepared_point, const ExecutionLane& lane,
+      const runtime::program::PreparedScalarBoundarySession<Dim>& transport);
   /// R <- S(U, aux) for block @p b -- the model's default/composite SOURCE only, WITHOUT the flux
   /// divergence (the exact MIRROR of block_neg_div_flux_into, which is flux without source). Together
   /// they split block_rhs_into = -div F + S into its two halves (ADC-430, sibling of ADC-425). The
@@ -1362,11 +1375,12 @@ class System {
   void set_field_potential(const std::string& provider_slot, const std::vector<double>& phi);
 
   /// @name GLOBAL accessors (MPI-safe collectives) -- outputs / multi-rank accepted-state checkpoint
-  /// The System builds ONE box covering the whole domain (cf. ctor: mono-box ba, round-robin dm ->
-  /// box 0 on rank 0). The accessors above (density / get_state / potential) read fab(0):
-  /// VALID on the owner rank (mono-rank OR rank 0 under MPI), but fab(0) is OUT OF BOUNDS on
-  /// a rank without a box (local_size()==0). The _global variants fill a GLOBAL buffer from the
-  /// LOCAL fabs (in GLOBAL indices; nothing on an empty rank) then all_reduce_sum_inplace -> EACH
+  /// A System uses the exact box decomposition carried by SystemConfig; an omitted decomposition
+  /// materializes one box covering the whole domain, while RegularBlocks supplies multiple boxes
+  /// distributed by the prepared load-balancing authority. The non-global accessors above are
+  /// owner-local and therefore invalid on a rank without the requested storage. The _global
+  /// variants fill a GLOBAL buffer from all LOCAL fabs (in GLOBAL indices; nothing on an empty rank)
+  /// then all_reduce_sum_inplace -> EACH
   /// rank holds the complete field (AMR reflux pattern, comm.hpp). They are COLLECTIVE: all the
   /// ranks MUST call them. On mono-rank they return EXACTLY the same array as the non-global
   /// accessors (all_reduce = identity, box = complete domain) -> bit-identical output.
@@ -1410,11 +1424,10 @@ class System {
   /// all_reduce_sum, they expose per rank the list of LOCAL boxes and the state of EACH fab. The
   /// typed scientific-output providers consume the unified OutputPiece API above; these lower-level
   /// views remain useful for native ownership verification. They are NON COLLECTIVE (purely
-  /// local: no MPI comm; a rank without a box returns an empty list). The cartesian System is
-  /// MONO-BOX (one box covering the domain, on rank 0): local_boxes thus returns ONE box on
-  /// rank 0 and nothing elsewhere -- true hyperslab parallelism appears only on a MULTI-BOX
-  /// geometry (cf. AMR). The API stays correct in the general case (iteration over all the local fabs,
-  /// GLOBAL indices in the box). Layout of local_state IDENTICAL to state_global but
+  /// local: no MPI comm; a rank without a box returns an empty list). A default Cartesian System
+  /// has one full-domain box; a RegularBlocks decomposition has every configured box distributed
+  /// across the prepared rank space. The API iterates over all local fabs and retains GLOBAL indices
+  /// in each box. Layout of local_state is IDENTICAL to state_global but
   /// relative to the local box: component-major with the final native axis contiguous.
   /// @{
   std::vector<Box<Dim>> local_boxes(const std::string& name) const;

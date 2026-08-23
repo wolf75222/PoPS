@@ -13,6 +13,9 @@ import pops
 from pops import _native_selector as selector
 
 
+BUILD_FINGERPRINT = "a" * 64
+
+
 @pytest.fixture(autouse=True)
 def _isolated_selector_state(monkeypatch: pytest.MonkeyPatch):
     previous_module = sys.modules.pop("pops._pops", None)
@@ -40,6 +43,7 @@ def _fake_variant(path: Path, dimension: int = 2) -> selector._Variant:
         sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
         version="1.0.0",
         abi_key="abi;dim=%d" % dimension,
+        build_fingerprint=BUILD_FINGERPRINT,
         has_mpi=False,
         has_kokkos=True,
     )
@@ -59,6 +63,7 @@ def _fake_module(path: Path, dimension: int = 2) -> ModuleType:
     module.__version__ = "1.0.0"
     module.__has_mpi__ = False
     module.__has_kokkos__ = True
+    module.__build_fingerprint__ = BUILD_FINGERPRINT
     module.abi_key = lambda: "abi;dim=%d" % dimension
     module.mpi_world = World
     return module
@@ -119,6 +124,28 @@ def test_failed_post_dlopen_verification_hides_module_and_poisons_process(
         selector.select_native_dimension(2)
 
 
+def test_module_build_fingerprint_must_match_its_authenticated_manifest_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    extension = tmp_path / "_pops.so"
+    extension.write_bytes(b"native")
+    variant = _fake_variant(extension)
+    module = _fake_module(extension)
+    module.__build_fingerprint__ = "b" * 64
+    monkeypatch.setattr(selector, "_variant_from_manifest", lambda _dimension: variant)
+
+    def load(_path: Path) -> ModuleType:
+        sys.modules["pops._pops"] = module
+        return module
+
+    monkeypatch.setattr(selector, "_load_global", load)
+
+    with pytest.raises(RuntimeError, match="build fingerprint"):
+        selector.select_native_dimension(2)
+    assert selector._STATE == selector._POISONED
+    assert "pops._pops" not in sys.modules
+
+
 def test_collective_variant_mismatch_fails_before_publication(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -161,7 +188,7 @@ def test_manifest_selects_and_hashes_only_requested_leaf(
     first.write_bytes(b"one")
     second.write_bytes(b"two-corrupt-after-manifest")
     document = {
-        "schema_version": 1,
+        "schema_version": 2,
         "variants": [
             {
                 "dimension": 1,
@@ -169,6 +196,7 @@ def test_manifest_selects_and_hashes_only_requested_leaf(
                 "sha256": hashlib.sha256(first.read_bytes()).hexdigest(),
                 "version": "1.0.0",
                 "abi_key": "abi;dim=1",
+                "build_fingerprint": BUILD_FINGERPRINT,
                 "has_mpi": False,
                 "has_kokkos": True,
             },
@@ -178,6 +206,7 @@ def test_manifest_selects_and_hashes_only_requested_leaf(
                 "sha256": "0" * 64,
                 "version": "1.0.0",
                 "abi_key": "abi;dim=2",
+                "build_fingerprint": BUILD_FINGERPRINT,
                 "has_mpi": False,
                 "has_kokkos": True,
             },
@@ -188,6 +217,20 @@ def test_manifest_selects_and_hashes_only_requested_leaf(
 
     assert selector._variant_from_manifest(1).path == first
     with pytest.raises(RuntimeError, match="bytes differ"):
+        selector._variant_from_manifest(2)
+
+
+def test_manifest_schema_version_must_be_an_exact_integer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    native_root = tmp_path / "_native"
+    native_root.mkdir()
+    (native_root / "variants.json").write_text(
+        json.dumps({"schema_version": 2.0, "variants": []}), encoding="utf-8"
+    )
+    monkeypatch.setattr(selector, "_native_roots", lambda: (native_root,))
+
+    with pytest.raises(RuntimeError, match="unsupported native variants manifest schema"):
         selector._variant_from_manifest(2)
 
 

@@ -23,30 +23,56 @@ Other descriptors:
 Objects are inert authoring values; the runtime materialises grids, patches and halos only after
 validation and lowering.
 """
+
 from __future__ import annotations
 
 from ._descriptor import MeshDescriptor
-from .grid import CartesianGrid, PeriodicAxes
+from .grid import CartesianGrid, PeriodicAxes, RegularBlocks
 from .polar import PolarMesh
 from .aux import AuxHalo
 from .boxes import PatchBox, BoxLayout
 from .layout_plan import (
-    LayoutHandle, LayoutMappingOperation, LayoutMappingPort, LayoutMappingProvider,
-    LayoutMappingRequirement, LayoutRepresentation, LayoutSynchronization,
-    LayoutPlan, LayoutPlanBuilder, NativeSpatialLayout, NormalizedGeometry,
+    LayoutHandle,
+    LayoutMappingOperation,
+    LayoutMappingPort,
+    LayoutMappingProvider,
+    LayoutMappingRequirement,
+    LayoutRepresentation,
+    LayoutSynchronization,
+    LayoutPlan,
+    LayoutPlanBuilder,
+    NativeSpatialLayout,
+    NormalizedGeometry,
     NormalizedGeometryProvider,
-    normalize_layout_plan)
+    normalize_layout_plan,
+)
 from .layout_mapping import NativeLayoutMapping
 from . import geometry, masks, boundaries
 
 __all__ = [
-    "CartesianGrid", "PeriodicAxes", "PolarMesh", "AuxHalo", "PatchBox",
+    "CartesianGrid",
+    "PeriodicAxes",
+    "RegularBlocks",
+    "PolarMesh",
+    "AuxHalo",
+    "PatchBox",
     "BoxLayout",
     "MeshDescriptor",
-    "LayoutHandle", "LayoutMappingOperation", "LayoutMappingPort", "LayoutMappingProvider",
-    "LayoutMappingRequirement", "LayoutRepresentation", "LayoutSynchronization",
-    "LayoutPlan", "LayoutPlanBuilder", "NativeLayoutMapping",
-    "NativeSpatialLayout", "NormalizedGeometry", "NormalizedGeometryProvider",
+    "LayoutHandle",
+    "LayoutMappingOperation",
+    "LayoutMappingPort",
+    "LayoutMappingProvider",
+    "LayoutMappingRequirement",
+    "LayoutRepresentation",
+    "LayoutSynchronization",
+    "LayoutPlan",
+    "LayoutPlanBuilder",
+    "NativeLayoutMapping",
+    "NativeSpatialLayout",
+    "NormalizedGeometry",
+    "NormalizedGeometryProvider",
     "normalize_layout_plan",
-    "geometry", "masks", "boundaries",
+    "geometry",
+    "masks",
+    "boundaries",
 ]

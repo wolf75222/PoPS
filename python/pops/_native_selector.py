@@ -33,6 +33,7 @@ class _Variant:
     sha256: str
     version: str
     abi_key: str
+    build_fingerprint: str
     has_mpi: bool
     has_kokkos: bool
 
@@ -86,10 +87,12 @@ def _variant_from_manifest(dimension: int) -> _Variant:
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise RuntimeError("cannot read native variants manifest %s" % manifest) from exc
     if type(document) is not dict or set(document) != {"schema_version", "variants"} \
-            or document["schema_version"] != 1 or type(document["variants"]) is not list:
+            or type(document["schema_version"]) is not int \
+            or document["schema_version"] != 2 or type(document["variants"]) is not list:
         raise RuntimeError("unsupported native variants manifest schema")
     expected_keys = {
-        "dimension", "path", "sha256", "version", "abi_key", "has_mpi", "has_kokkos",
+        "dimension", "path", "sha256", "version", "abi_key", "build_fingerprint",
+        "has_mpi", "has_kokkos",
     }
     rows: dict[int, _Variant] = {}
     root = manifest.parent.resolve()
@@ -126,13 +129,21 @@ def _variant_from_manifest(dimension: int) -> _Variant:
         if type(raw["version"]) is not str or not raw["version"] \
                 or type(raw["abi_key"]) is not str or not raw["abi_key"]:
             raise RuntimeError("native variant version and abi_key must be non-empty text")
+        build_fingerprint = raw["build_fingerprint"]
+        if type(build_fingerprint) is not str or len(build_fingerprint) != 64 \
+                or any(char not in "0123456789abcdef" for char in build_fingerprint):
+            raise RuntimeError(
+                "native variant build_fingerprint must be lowercase hexadecimal"
+            )
         if type(raw["has_mpi"]) is not bool or type(raw["has_kokkos"]) is not bool:
             raise RuntimeError("native variant backend facts must be exact booleans")
         if row_dimension in rows:
             raise RuntimeError("native variants manifest repeats dimension %d" % row_dimension)
         rows[row_dimension] = _Variant(
             row_dimension, path, sha256, raw["version"], raw["abi_key"],
-            raw["has_mpi"], raw["has_kokkos"])
+            build_fingerprint, raw["has_mpi"], raw["has_kokkos"])
+    if len({row.build_fingerprint for row in rows.values()}) != 1:
+        raise RuntimeError("native variant rows disagree on their common build fingerprint")
     if dimension not in rows:
         raise RuntimeError(
             "installed PoPS distribution has no native specialization for Dim=%d" % dimension)
@@ -193,6 +204,8 @@ def _verify_module(module: ModuleType, variant: _Variant) -> None:
     abi = getattr(module, "abi_key", None)
     if not callable(abi) or abi() != variant.abi_key:
         raise RuntimeError("loaded native module ABI differs from variants.json")
+    if getattr(module, "__build_fingerprint__", None) != variant.build_fingerprint:
+        raise RuntimeError("loaded native module build fingerprint differs from variants.json")
     if getattr(module, "__has_mpi__", None) is not variant.has_mpi \
             or getattr(module, "__has_kokkos__", None) is not variant.has_kokkos:
         raise RuntimeError("loaded native module backend differs from variants.json")
@@ -211,6 +224,7 @@ def _verify_collective_identity(module: ModuleType, variant: _Variant) -> None:
     payload = json.dumps(
         {
             "abi_key": variant.abi_key,
+            "build_fingerprint": variant.build_fingerprint,
             "dimension": variant.dimension,
             "sha256": variant.sha256,
         },

@@ -536,13 +536,13 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
       .def(
           "_install_native_block",
           [](AmrSystem& system, const std::string& name, const std::string& so_path,
-             const std::string& expected_model_identity, const std::string& expected_binary_identity,
-             const std::string& limiter, const std::string& riemann, const std::string& recon,
-             const std::string& time, double gamma, int substeps, int stride,
-             const std::vector<double>& params, double positivity_floor, double weno_epsilon,
-             bool wave_speed_cache, int newton_max_iters, double newton_rel_tol,
-             double newton_abs_tol, double newton_fd_eps, double newton_damping,
-             bool newton_diagnostics) {
+             const std::string& expected_model_identity,
+             const std::string& expected_binary_identity, const std::string& limiter,
+             const std::string& riemann, const std::string& recon, const std::string& time,
+             double gamma, int substeps, int stride, const std::vector<double>& params,
+             double positivity_floor, double weno_epsilon, bool wave_speed_cache,
+             int newton_max_iters, double newton_rel_tol, double newton_abs_tol,
+             double newton_fd_eps, double newton_damping, bool newton_diagnostics) {
             NewtonOptions newton = newton_options_from_abi(
                 newton_max_iters, newton_rel_tol, newton_abs_tol, newton_fd_eps, newton_damping);
             system.add_native_block(name, so_path, expected_model_identity,
@@ -558,8 +558,7 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           py::arg("stride") = 1, py::arg("params") = std::vector<double>{},
           py::arg("positivity_floor") = 0.0,
           py::arg("weno_epsilon") = static_cast<double>(kWenoEpsilon),
-          py::arg("wave_speed_cache") = false,
-          py::arg("newton_max_iters") = kNewtonDefaultMaxIters,
+          py::arg("wave_speed_cache") = false, py::arg("newton_max_iters") = kNewtonDefaultMaxIters,
           py::arg("newton_rel_tol") = static_cast<double>(kNewtonDefaultRelTol),
           py::arg("newton_abs_tol") = static_cast<double>(kNewtonDefaultAbsTol),
           py::arg("newton_fd_eps") = static_cast<double>(kNewtonDefaultFdEps),
@@ -582,8 +581,8 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
              const std::vector<std::string>& leaf_variables,
              const std::vector<int>& leaf_field_component_indices, const std::vector<int>& leaf_ops,
              const std::vector<double>& leaf_thresholds,
-             const std::vector<int>& leaf_stencil_indices, const py::list& stencil_rows,
-             const std::vector<std::int32_t>& refine_ops,
+             const std::vector<int>& leaf_stencil_indices, const py::list& leaf_window_rows,
+             const py::list& stencil_rows, const std::vector<std::int32_t>& refine_ops,
              const std::vector<std::int32_t>& refine_args,
              const std::vector<std::int32_t>& coarsen_ops,
              const std::vector<std::int32_t>& coarsen_args, int min_cycles,
@@ -592,21 +591,30 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
             std::vector<typename pops::runtime::amr::PreparedTaggingProgram<
                 pops::kNativeDimension>::Stencil>
                 stencils;
+            std::vector<std::vector<double>> windows;
+            windows.reserve(leaf_window_rows.size());
+            for (const py::handle row : leaf_window_rows) {
+              if (row.is_none())
+                windows.emplace_back();
+              else
+                windows.push_back(py::cast<std::vector<double>>(row));
+            }
             stencils.reserve(stencil_rows.size());
             for (const py::handle row : stencil_rows)
               stencils.push_back(amr_tagging_stencil_from_python(py::cast<py::dict>(row)));
             system.set_bootstrap_tagging(
                 leaf_subject_kinds, leaf_subject_identities, leaf_blocks, leaf_variables,
                 leaf_field_component_indices, leaf_ops, leaf_thresholds, leaf_stencil_indices,
-                stencils, refine_ops, refine_args, coarsen_ops, coarsen_args, min_cycles,
+                windows, stencils, refine_ops, refine_args, coarsen_ops, coarsen_args, min_cycles,
                 equality_policy, conflict_policy, clock_identity, provider_identity);
           },
           py::arg("leaf_subject_kinds"), py::arg("leaf_subject_identities"), py::arg("leaf_blocks"),
           py::arg("leaf_variables"), py::arg("leaf_field_component_indices"), py::arg("leaf_ops"),
-          py::arg("leaf_thresholds"), py::arg("leaf_stencil_indices"), py::arg("stencils"),
-          py::arg("refine_ops"), py::arg("refine_args"), py::arg("coarsen_ops"),
-          py::arg("coarsen_args"), py::arg("min_cycles"), py::arg("equality_policy"),
-          py::arg("conflict_policy"), py::arg("clock_identity"), py::arg("provider_identity"))
+          py::arg("leaf_thresholds"), py::arg("leaf_stencil_indices"), py::arg("leaf_windows"),
+          py::arg("stencils"), py::arg("refine_ops"), py::arg("refine_args"),
+          py::arg("coarsen_ops"), py::arg("coarsen_args"), py::arg("min_cycles"),
+          py::arg("equality_policy"), py::arg("conflict_policy"), py::arg("clock_identity"),
+          py::arg("provider_identity"))
       .def(
           "set_poisson",
           [](AmrSystem& system, const std::string& rhs, const std::string& solver,
@@ -1167,6 +1175,13 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
       // bounds; cf. AmrSystem.patch_bounds() on the facade side.
       .def("patch_boxes",
            [](AmrSystem& s) { return ranked_amr_patches_to_python(s.patch_boxes()); })
+      // LOCAL coarse ownership: half-open global native-axis bounds for the level-0 fabs owned
+      // by this MPI rank.  Unlike patch_boxes(), this deliberately does not gather the hierarchy.
+      .def("local_boxes",
+           [](AmrSystem& s, const std::string& name) {
+             return ranked_boxes_to_python<pops::kNativeDimension>(s.local_boxes(name));
+           },
+           py::arg("name"))
       .def("spatial_shape",
            [](const AmrSystem& s) { return ranked_extent_to_python(s.spatial_shape()); })
       // COARSE-level (base) box counts (ADC-319, MPI ownership diagnostic): coarse_local_boxes() = base

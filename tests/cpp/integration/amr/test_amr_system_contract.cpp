@@ -155,8 +155,8 @@ void verify_rectangular_geometry_and_independent_periodicity() {
 
 template <int Dim>
 GasModel<Dim> gas_model() {
-  return GasModel<Dim>{
-      {}, pops::EulerND<Dim>{pops::Real(1.4)}, pops::NoSource{}, pops::NoElliptic{}};
+  return GasModel<Dim>{pops::EulerND<Dim>{pops::Real(1.4)}, pops::NoSource{},
+                       pops::NoElliptic{}};
 }
 
 template <int Dim>
@@ -251,6 +251,30 @@ void install_direct_tracer(pops::AmrSystem<Dim>& system, const std::string& name
 }
 
 template <int Dim>
+void verify_local_coarse_boxes_contract() {
+  const pops::AmrSystemConfig<Dim> config = single_level_config<Dim>(7);
+  pops::AmrSystem<Dim> system(config);
+
+  // No assembled block means there is no hierarchy that local ownership could inspect.
+  EXPECT_THROW((void)system.local_boxes("tracer"), std::runtime_error);
+
+  pops::test::install_amr_runtime_authority(
+      system, "test.amr-system-contract.local-boxes-runtime");
+  system.install_block_state_route("tracer", "tests.amr.system-contract/local-boxes/state");
+  install_direct_tracer(system, "tracer",
+                        "tests.amr.system-contract/local-boxes/physical-flux");
+  const std::vector<pops::Box<Dim>> boxes = system.local_boxes("tracer");
+  ASSERT_EQ(boxes.size(), 1U);
+  for (int axis = 0; axis < Dim; ++axis) {
+    EXPECT_EQ(boxes.front().lo[axis], 0);
+    EXPECT_EQ(boxes.front().hi[axis], config.shape[axis] - 1);
+  }
+
+  // Resolution is by the authenticated block registry, even once the hierarchy exists.
+  EXPECT_THROW((void)system.local_boxes("missing"), std::runtime_error);
+}
+
+template <int Dim>
 void verify_prepared_installation_parity() {
   const pops::AmrSystemConfig<Dim> config = single_level_config<Dim>();
   constexpr const char* state_route = "tests.amr.system-contract/parity/state";
@@ -301,6 +325,8 @@ void verify_prepared_installation_parity() {
   prepared.set_conservative_state("tracer", initial);
   direct.set_program_block_map({0});
   prepared.set_program_block_map({0});
+  direct.refresh_prepared_amr_levels();
+  prepared.refresh_prepared_amr_levels();
 
   const pops::MultiFab<Dim>& direct_state = direct.prepared_amr_block_state(0, 0);
   const pops::MultiFab<Dim>& prepared_state = prepared.prepared_amr_block_state(0, 0);
@@ -599,8 +625,7 @@ std::vector<std::vector<double>> run_magnetic_source(pops::Real bz) {
   system.set_temporal_relations({2}, {1}, {"integral_only"});
   const auto keys = install_magnetic_provider(system, {consumer_qid});
   system.install_block_state_route("fluid", "tests.amr.system-contract/magnetic/state");
-  MagneticModel<Dim> model{{},
-                           pops::EulerND<Dim>{pops::Real(1.4)},
+  MagneticModel<Dim> model{pops::EulerND<Dim>{pops::Real(1.4)},
                            pops::MagneticLorentzForceND<Dim>{pops::Real(1)},
                            pops::NoElliptic{}};
   pops::add_compiled_model<Dim>(system, "fluid", model, "none", "rusanov", "conservative", "euler",
@@ -767,8 +792,7 @@ MultiblockRegridObservation run_two_block_regrid_with_bz(pops::Real bz) {
     system.install_block_state_route(names[block], state_routes[block]);
 
   for (std::size_t block = 0; block < names.size(); ++block) {
-    MagneticModel<Dim> model{{},
-                             pops::EulerND<Dim>{pops::Real(1.4)},
+    MagneticModel<Dim> model{pops::EulerND<Dim>{pops::Real(1.4)},
                              pops::MagneticLorentzForceND<Dim>{pops::Real(1)},
                              pops::NoElliptic{}};
     pops::add_compiled_model<Dim>(system, names[block], model, "none", "rusanov", "conservative",
@@ -1001,6 +1025,14 @@ TEST(test_amr_system_contract, RectangularGeometryPreservesIndependentAxisPeriod
   Kokkos::ScopeGuard guard;
 #endif
   verify_rectangular_geometry_and_independent_periodicity<pops::kNativeDimension>();
+}
+
+TEST(test_amr_system_contract, LocalCoarseBoxesAreExactRankedAndNameQualified) {
+#if defined(POPS_HAS_KOKKOS)
+  Kokkos::ScopeGuard guard;
+#endif
+  // This template is compiled at each supported POPS_NATIVE_DIM build (1, 2, and 3).
+  verify_local_coarse_boxes_contract<pops::kNativeDimension>();
 }
 
 TEST(test_amr_system_contract, PrimitiveBoundaryMatchesQualifiedConservativeOracle) {

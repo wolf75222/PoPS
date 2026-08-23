@@ -65,6 +65,9 @@ struct PreparedTaggingProgram {
     std::int32_t opcode = 0;
     double threshold = 0.0;
     std::size_t stencil_index = POPS_TAGGING_NO_STENCIL_V1;
+    std::array<double, Dim> window_center{};
+    std::array<double, Dim> window_half_width{};
+    std::array<double, Dim> window_velocity{};
   };
 
   std::vector<Stencil> stencils{};
@@ -134,12 +137,16 @@ struct PreparedTaggingStencilDevice {
   std::array<PreparedTaggingAxisDevice, Dim> axes{};
 };
 
+template <int Dim>
 struct PreparedTaggingLeafDevice {
   std::int32_t state_index = 0;
   std::int32_t component = 0;
   std::int32_t opcode = 0;
   Real threshold = Real(0);
   std::int32_t stencil_index = -1;
+  std::array<Real, Dim> window_center{};
+  std::array<Real, Dim> window_half_width{};
+  std::array<Real, Dim> window_velocity{};
 };
 
 template <int Dim>
@@ -160,7 +167,7 @@ struct PreparedTaggingMaskView {
 
 template <int Dim>
 struct PreparedTaggingPatchKernel {
-  const PreparedTaggingLeafDevice* leaves = nullptr;
+  const PreparedTaggingLeafDevice<Dim>* leaves = nullptr;
   const PreparedTaggingStencilDevice<Dim>* stencils = nullptr;
   const std::int32_t* refine_ops = nullptr;
   const std::int32_t* refine_args = nullptr;
@@ -170,6 +177,10 @@ struct PreparedTaggingPatchKernel {
   std::int32_t refine_count = 0;
   std::int32_t coarsen_count = 0;
   std::array<Real, Dim> spacing{};
+  std::array<Real, Dim> lower{};
+  std::array<Real, Dim> upper{};
+  std::uint32_t periodic_axes = 0;
+  Real physical_time = Real(0);
   PreparedTaggingMaskView<Dim> mask{};
 
   POPS_HD static DeviceTagTruth tag_not(DeviceTagTruth value) {
@@ -181,7 +192,7 @@ struct PreparedTaggingPatchKernel {
   POPS_HD static bool is_leaf_opcode(std::int32_t opcode) {
     return opcode == POPS_TAGGING_ABOVE_V1 || opcode == POPS_TAGGING_BELOW_V1 ||
            opcode == POPS_TAGGING_MAGNITUDE_ABOVE_V1 || opcode == POPS_TAGGING_GRADIENT_ABOVE_V1 ||
-           opcode == POPS_TAGGING_GRADIENT_BELOW_V1;
+           opcode == POPS_TAGGING_GRADIENT_BELOW_V1 || opcode == POPS_TAGGING_PRESCRIBED_WINDOW_V1;
   }
 
   POPS_HD DeviceTagTruth evaluate(const std::int32_t* ops, const std::int32_t* args,
@@ -194,9 +205,58 @@ struct PreparedTaggingPatchKernel {
       const std::int32_t opcode = ops[instruction];
       const std::int32_t argument = args[instruction];
       if (is_leaf_opcode(opcode)) {
-        const PreparedTaggingLeafDevice& leaf = leaves[argument];
-        const FieldView<const Real, Dim> values = leaf_fields[argument];
+        const PreparedTaggingLeafDevice<Dim>& leaf = leaves[argument];
         Real sample = Real(0);
+        if (opcode == POPS_TAGGING_PRESCRIBED_WINDOW_V1) {
+          DeviceTagTruth window_truth = DeviceTagTruth::True;
+          for (int axis = 0; axis < Dim; ++axis) {
+            const Real extent = upper[axis] - lower[axis];
+            finite = finite && Kokkos::isfinite(extent) && extent > Real(0) &&
+                     Kokkos::isfinite(leaf.window_center[axis]) &&
+                     Kokkos::isfinite(leaf.window_half_width[axis]) &&
+                     leaf.window_half_width[axis] > Real(0) &&
+                     Kokkos::isfinite(leaf.window_velocity[axis]) &&
+                     Kokkos::isfinite(physical_time);
+            if (!finite)
+              break;
+            Real center = leaf.window_center[axis] + leaf.window_velocity[axis] * physical_time;
+            finite = finite && Kokkos::isfinite(center);
+            if (!finite)
+              break;
+            const bool periodic =
+                (periodic_axes & (std::uint32_t{1} << static_cast<unsigned>(axis))) != 0;
+            if (periodic) {
+              center = lower[axis] + (center - lower[axis] -
+                                      Kokkos::floor((center - lower[axis]) / extent) * extent);
+              finite = finite && Kokkos::isfinite(center);
+              if (!finite)
+                break;
+            }
+            const Real coordinate =
+                lower[axis] + (static_cast<Real>(index[axis]) + Real(0.5)) * spacing[axis];
+            finite = finite && Kokkos::isfinite(coordinate);
+            if (!finite)
+              break;
+            Real distance = Kokkos::abs(coordinate - center);
+            finite = finite && Kokkos::isfinite(distance);
+            if (!finite)
+              break;
+            if (periodic) {
+              distance = Kokkos::min(distance, extent - distance);
+              finite = finite && Kokkos::isfinite(distance);
+              if (!finite)
+                break;
+            }
+            if (distance > leaf.window_half_width[axis])
+              window_truth = DeviceTagTruth::False;
+            else if (distance == leaf.window_half_width[axis] &&
+                     window_truth == DeviceTagTruth::True)
+              window_truth = DeviceTagTruth::Unknown;
+          }
+          stack[depth++] = finite ? window_truth : DeviceTagTruth::False;
+          continue;
+        }
+        const FieldView<const Real, Dim> values = leaf_fields[argument];
         if (opcode == POPS_TAGGING_GRADIENT_ABOVE_V1 || opcode == POPS_TAGGING_GRADIENT_BELOW_V1) {
           const PreparedTaggingStencilDevice<Dim>& stencil = stencils[leaf.stencil_index];
           Real squared_norm = Real(0);
@@ -281,7 +341,6 @@ struct PreparedTaggingPatchKernel {
 };
 
 static_assert(std::is_trivially_copyable_v<PreparedTaggingAxisDevice>);
-static_assert(std::is_trivially_copyable_v<PreparedTaggingLeafDevice>);
 
 inline std::size_t checked_sum(std::size_t left, std::size_t right, const char* message) {
   if (right > std::numeric_limits<std::size_t>::max() - left)
@@ -362,7 +421,7 @@ std::string exact_program_contract(
     std::uint64_t topology_generation) {
   ExactContractBuilder contract;
   contract.text("pops.amr.prepared-tagging-execution")
-      .scalar(std::uint32_t{2})
+      .scalar(std::uint32_t{3})
       .scalar(static_cast<std::int32_t>(Dim))
       .text(program.provider_identity)
       .text(program.clock_identity)
@@ -396,7 +455,10 @@ std::string exact_program_contract(
                 .scalar(static_cast<std::uint64_t>(leaf.component))
                 .scalar(leaf.opcode)
                 .scalar(leaf.threshold)
-                .scalar(static_cast<std::uint64_t>(leaf.stencil_index));
+                .scalar(static_cast<std::uint64_t>(leaf.stencil_index))
+                .sequence(leaf.window_center)
+                .sequence(leaf.window_half_width)
+                .sequence(leaf.window_velocity);
           })
       .sequence(program.refine_ops)
       .sequence(program.refine_args)
@@ -498,9 +560,10 @@ class PreparedTaggingExecutionPlan {
   using Program = PreparedTaggingProgram<Dim>;
   using Field = PreparedTaggingField<Dim, MemorySpace>;
   using Candidates = PreparedTaggerCandidates<Dim>;
-  using DeviceLeaf = tagging_detail::PreparedTaggingLeafDevice;
+  using DeviceLeaf = tagging_detail::PreparedTaggingLeafDevice<Dim>;
   using DeviceStencil = tagging_detail::PreparedTaggingStencilDevice<Dim>;
 
+  static_assert(std::is_trivially_copyable_v<DeviceLeaf>);
   static_assert(std::is_trivially_copyable_v<DeviceStencil>);
   static_assert(std::is_trivially_copyable_v<tagging_detail::PreparedTaggingPatchKernel<Dim>>,
                 "prepared AMR tagging kernels must remain static-rank device-copyable values");
@@ -578,9 +641,28 @@ class PreparedTaggingExecutionPlan {
     return collective_contract_;
   }
 
+  /// Compatibility execution entry point for field-only predicates.
+  /// Geometric predicates require the fully explicit physical-domain overload below.
   const Candidates& execute(std::size_t level_index,
                             const ::pops::amr::hierarchy::LevelLayout<Dim>& layout,
                             const std::array<Real, Dim>& spacing,
+                            std::uint64_t topology_generation) {
+    for (const DeviceLeaf& leaf : leaves_)
+      if (leaf.opcode == POPS_TAGGING_PRESCRIBED_WINDOW_V1)
+        throw std::invalid_argument(
+            "prepared AMR prescribed windows require explicit bounds, periodicity, and time");
+    std::array<Real, Dim> lower{};
+    std::array<Real, Dim> upper{};
+    for (int axis = 0; axis < Dim; ++axis)
+      upper[axis] = Real(1);
+    return execute(level_index, layout, spacing, lower, upper, 0, Real(0), topology_generation);
+  }
+
+  const Candidates& execute(std::size_t level_index,
+                            const ::pops::amr::hierarchy::LevelLayout<Dim>& layout,
+                            const std::array<Real, Dim>& spacing,
+                            const std::array<Real, Dim>& lower, const std::array<Real, Dim>& upper,
+                            std::uint32_t periodic_axes, Real physical_time,
                             std::uint64_t topology_generation) {
     long preflight_failure =
         !prepared_ || level_index >= levels_.size() || topology_generation != topology_generation_
@@ -589,6 +671,20 @@ class PreparedTaggingExecutionPlan {
     for (int axis = 0; axis < Dim; ++axis)
       if (!(spacing[axis] > Real(0)) || !std::isfinite(static_cast<double>(spacing[axis])))
         preflight_failure = 1;
+    for (int axis = 0; axis < Dim; ++axis)
+      if (!(upper[axis] > lower[axis]) || !std::isfinite(static_cast<double>(lower[axis])) ||
+          !std::isfinite(static_cast<double>(upper[axis])))
+        preflight_failure = 1;
+    if (!std::isfinite(static_cast<double>(physical_time)))
+      preflight_failure = 1;
+    if ((periodic_axes & ~(std::uint32_t{(std::uint32_t{1} << Dim) - 1u})) != 0)
+      preflight_failure = 1;
+    if (preflight_failure == 0)
+      for (const DeviceLeaf& leaf : leaves_)
+        if (leaf.opcode == POPS_TAGGING_PRESCRIBED_WINDOW_V1)
+          for (int axis = 0; axis < Dim; ++axis)
+            if (!(leaf.window_half_width[axis] < (upper[axis] - lower[axis]) / Real(2)))
+              preflight_failure = 1;
     if (preflight_failure == 0 &&
         !tagging_detail::same_level_layout(levels_[level_index].identity, layout))
       preflight_failure = 1;
@@ -610,6 +706,10 @@ class PreparedTaggingExecutionPlan {
             static_cast<std::int32_t>(refine_ops_.size()),
             static_cast<std::int32_t>(coarsen_ops_.size()),
             spacing,
+            lower,
+            upper,
+            periodic_axes,
+            physical_time,
             tagging_detail::PreparedTaggingMaskView<Dim>{patch.scratch.data(), patch.box}};
         for_each_cell(patch.box, kernel);
       }
@@ -858,6 +958,7 @@ class PreparedTaggingExecutionPlan {
     }
 
     for (const auto& leaf : program.leaves) {
+      const bool geometry = leaf.opcode == POPS_TAGGING_PRESCRIBED_WINDOW_V1;
       const bool gradient = leaf.opcode == POPS_TAGGING_GRADIENT_ABOVE_V1 ||
                             leaf.opcode == POPS_TAGGING_GRADIENT_BELOW_V1;
       const bool has_stencil = leaf.stencil_index != POPS_TAGGING_NO_STENCIL_V1;
@@ -866,10 +967,22 @@ class PreparedTaggingExecutionPlan {
           leaf.state_index > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()) ||
           leaf.component > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()))
         throw std::invalid_argument("prepared AMR tagging has an invalid leaf descriptor");
-      plan.leaves_.push_back(DeviceLeaf{
-          static_cast<std::int32_t>(leaf.state_index), static_cast<std::int32_t>(leaf.component),
-          leaf.opcode, static_cast<Real>(leaf.threshold),
-          has_stencil ? static_cast<std::int32_t>(leaf.stencil_index) : -1});
+      if (geometry)
+        for (int axis = 0; axis < Dim; ++axis)
+          if (!std::isfinite(leaf.window_center[axis]) ||
+              !std::isfinite(leaf.window_half_width[axis]) ||
+              !(leaf.window_half_width[axis] > 0.0) || !std::isfinite(leaf.window_velocity[axis]))
+            throw std::invalid_argument("prepared AMR prescribed window is not finite");
+      DeviceLeaf target{static_cast<std::int32_t>(leaf.state_index),
+                        static_cast<std::int32_t>(leaf.component), leaf.opcode,
+                        static_cast<Real>(leaf.threshold),
+                        has_stencil ? static_cast<std::int32_t>(leaf.stencil_index) : -1};
+      for (int axis = 0; axis < Dim; ++axis) {
+        target.window_center[axis] = static_cast<Real>(leaf.window_center[axis]);
+        target.window_half_width[axis] = static_cast<Real>(leaf.window_half_width[axis]);
+        target.window_velocity[axis] = static_cast<Real>(leaf.window_velocity[axis]);
+      }
+      plan.leaves_.push_back(target);
     }
 
     std::vector<std::vector<tagging_detail::PreparedTaggingFieldContract<Dim>>> field_contracts;
@@ -923,6 +1036,8 @@ class PreparedTaggingExecutionPlan {
       field_contracts.push_back(std::move(contracts));
 
       for (const DeviceLeaf& leaf : plan.leaves_) {
+        if (leaf.opcode == POPS_TAGGING_PRESCRIBED_WINDOW_V1)
+          continue;
         if (leaf.state_index < 0 || static_cast<std::size_t>(leaf.state_index) >= fields.size() ||
             leaf.component < 0 || leaf.component >= fields[leaf.state_index].values->ncomp())
           throw std::invalid_argument("prepared AMR tagging leaf lost its qualified field");

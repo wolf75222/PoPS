@@ -46,7 +46,7 @@ void materialize_active_flux_expression_(std::size_t runtime_block,
         basis.point.stage_fraction.numerator > basis.point.stage_fraction.denominator)
       throw std::invalid_argument(
           "AMR Program flux basis lies outside its canonical level/substep window");
-    const double duration = basis.window.end.physical_time - basis.window.begin.physical_time;
+    const double duration = basis.point.dt;
     if (!std::isfinite(duration) || !(duration > 0.0))
       throw std::invalid_argument("AMR Program flux basis has an invalid physical duration");
     stage_identities.push_back(
@@ -131,12 +131,13 @@ void materialize_active_flux_expression_(std::size_t runtime_block,
   for (const auto& [identity, term] : expression) {
     const FluxBasis& basis = *term.basis;
     const ::pops::amr::Rational weight = term.coefficient.begin()->second;
-    const double duration = basis.window.end.physical_time - basis.window.begin.physical_time;
+    const double duration = basis.point.dt;
     const ::pops::amr::Rational stage_phase =
         basis.window.begin.phase +
         (basis.window.end.phase - basis.window.begin.phase) * basis.point.stage_fraction;
+    const double timestamp_span = basis.window.end.physical_time - basis.window.begin.physical_time;
     const double stage_physical_time =
-        basis.window.begin.physical_time + basis.point.stage_fraction.value() * duration;
+        basis.window.begin.physical_time + basis.point.stage_fraction.value() * timestamp_span;
     for (const FluxBasisFace& face : basis.faces) {
       multiblock_flux_ledger_type* ledger = face.role == fragment_role_type::Coarse
                                                 ? active_outgoing_flux_[runtime_block]

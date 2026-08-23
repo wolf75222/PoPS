@@ -17,11 +17,7 @@ void apply_reflux_payload_(field_type& coarse, const Index<Dim>& cell,
 void attach_active_flux_basis_(int runtime_block, const level_evaluation_type& evaluation,
                                field_type& rhs, int rhs_identity,
                                FluxBasisProvider provider) const {
-  const ::pops::amr::ClockWindow interval{
-      {active_level_, evaluation.point.tick, current_interval_begin_phase_,
-       current_interval_start_time_},
-      {active_level_, evaluation.point.tick, current_interval_end_phase_,
-       current_interval_start_time_ + current_dt_}};
+  const ::pops::amr::ClockWindow interval = active_subcycling_window_;
   FluxExpressionRegistry candidate_registry;
   std::vector<std::size_t> candidate_counts;
   std::uint64_t candidate_identity = 0;
@@ -70,13 +66,15 @@ void prepare_cell_temporal_flux_basis_(int runtime_block, const level_evaluation
     const auto local_end =
         ::pops::amr::Rational{end_tick - cell_temporal_interval_begin_tick_, extent};
     const auto span = active_subcycling_window_.end.phase - active_subcycling_window_.begin.phase;
-    interval.emplace(
-        ::pops::amr::ClockWindow{{active_level_, active_subcycling_window_.begin.macro_step,
-                                  active_subcycling_window_.begin.phase + span * local_begin,
-                                  current_interval_start_time_ + local_begin.value() * current_dt_},
-                                 {active_level_, active_subcycling_window_.end.macro_step,
-                                  active_subcycling_window_.begin.phase + span * local_end,
-                                  current_interval_start_time_ + local_end.value() * current_dt_}});
+    const double timestamp_span =
+        active_subcycling_window_.end.physical_time - active_subcycling_window_.begin.physical_time;
+    interval.emplace(::pops::amr::ClockWindow{
+        {active_level_, active_subcycling_window_.begin.macro_step,
+         active_subcycling_window_.begin.phase + span * local_begin,
+         active_subcycling_window_.begin.physical_time + local_begin.value() * timestamp_span},
+        {active_level_, active_subcycling_window_.end.macro_step,
+         active_subcycling_window_.begin.phase + span * local_end,
+         active_subcycling_window_.begin.physical_time + local_end.value() * timestamp_span}});
   } catch (...) {
     local_error = std::current_exception();
   }
@@ -120,6 +118,8 @@ void prepare_active_flux_basis_impl_(
   };
 
   std::size_t block = 0;
+  double basis_duration = 0.0;
+  runtime::multiblock::BoundaryEvaluationPoint basis_point;
   std::vector<PendingFace> pending;
   std::string pending_contract;
   std::exception_ptr preparation_error;
@@ -151,7 +151,13 @@ void prepare_active_flux_basis_impl_(
          (evaluation != nullptr || exact_face_fluxes != nullptr || named_cell_fluxes == nullptr)))
       throw std::logic_error(
           "AMR Program flux basis provider differs from its frozen operator route");
-    const double interval_dt = interval.end.physical_time - interval.begin.physical_time;
+    const double interval_dt = current_dt_;
+    basis_duration = interval_dt;
+    if (provider == FluxBasisProvider::ExactFace)
+      basis_duration = ::pops::amr::exact_subwindow_physical_duration(active_subcycling_window_,
+                                                                      interval_dt, interval);
+    basis_point = point;
+    basis_point.dt = basis_duration;
     const auto expected_stage =
         exact_face_fluxes == nullptr ? stage_time_ : ::pops::amr::Rational{0, 1};
     if (rhs_identity < 0 || point.clock.empty() || point.stage < 0 ||
@@ -165,8 +171,8 @@ void prepare_active_flux_basis_impl_(
         (evaluation != nullptr && exact_face_fluxes == nullptr && named_cell_fluxes == nullptr &&
          evaluation->integrated_face_fluxes.size() != rhs.local_size()) ||
         active_block_identities_[block].empty() || !(interval.begin.phase < interval.end.phase) ||
-        !std::isfinite(interval.begin.physical_time) || !std::isfinite(interval_dt) ||
-        !(interval_dt > 0.0))
+        !::pops::amr::physical_duration_consistent_with_window(interval, basis_duration) ||
+        !std::isfinite(interval_dt) || !(interval_dt > 0.0))
       throw std::logic_error(
           "AMR Program flux-expression basis differs from its active evaluation interval");
     if (prepared_rhs_basis_bounds_[block] == 0 || prepared_coefficient_term_bounds_[block] == 0)
@@ -223,18 +229,18 @@ void prepare_active_flux_basis_impl_(
         .scalar(std::int32_t{runtime_block})
         .scalar(std::int32_t{rhs_identity})
         .scalar(static_cast<std::uint8_t>(provider))
-        .text(point.clock)
-        .scalar(point.tick)
-        .scalar(std::int32_t{point.level})
-        .scalar(std::int32_t{point.substep})
-        .scalar(std::int32_t{point.stage})
-        .scalar(point.stage_fraction.numerator)
-        .scalar(point.stage_fraction.denominator)
-        .scalar(point.dt)
-        .scalar(point.physical_time)
-        .text(point.graph_identity)
-        .text(point.rate_identity)
-        .text(point.application_identity)
+        .text(basis_point.clock)
+        .scalar(basis_point.tick)
+        .scalar(std::int32_t{basis_point.level})
+        .scalar(std::int32_t{basis_point.substep})
+        .scalar(std::int32_t{basis_point.stage})
+        .scalar(basis_point.stage_fraction.numerator)
+        .scalar(basis_point.stage_fraction.denominator)
+        .scalar(basis_point.dt)
+        .scalar(basis_point.physical_time)
+        .text(basis_point.graph_identity)
+        .text(basis_point.rate_identity)
+        .text(basis_point.application_identity)
         .scalar(candidate_identity)
         .scalar(static_cast<std::uint64_t>(candidate_counts[block]))
         .scalar(std::uint64_t{pending.size()});
@@ -312,8 +318,9 @@ void prepare_active_flux_basis_impl_(
   std::optional<FluxExpression> prepared_expression;
   std::exception_ptr expression_error;
   try {
-    auto basis = std::make_shared<const FluxBasis>(FluxBasis{
-        identity, block, active_level_, point, rhs_identity, provider, interval, std::move(faces)});
+    auto basis = std::make_shared<const FluxBasis>(FluxBasis{identity, block, active_level_,
+                                                             basis_point, rhs_identity, provider,
+                                                             interval, std::move(faces)});
     FluxExpression expression;
     expression.emplace(identity, FluxExpressionTerm{std::move(basis), {{0, {1, 1}}}});
     require_flux_expression_budget_(expression);

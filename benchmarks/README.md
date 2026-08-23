@@ -1,7 +1,12 @@
-# PoPS performance harness
+# Benchmarks PoPS
 
-This directory is a standalone CMake consumer of the real PoPS targets. It records JSONL
-measurements and numerical checks; it does not impose machine-specific millisecond thresholds.
+Ce répertoire rassemble deux familles complémentaires, sans les confondre : le
+harness CMake historique ci-dessous, et les campagnes documentées sous
+[`verification/`](verification/README.md) et
+[`performance/advection_sine/`](performance/advection_sine/README.md). Les premières
+vérifient une solution scientifique; les secondes mesurent une charge native sur une
+machine donnée. Ni l'une ni l'autre n'impose un seuil de millisecondes dépendant de
+la machine.
 
 ## Covered cases
 
@@ -12,13 +17,31 @@ measurements and numerical checks; it does not impose machine-specific milliseco
   same source is compiled and exercised in 1D, 2D, or 3D; the resolved PoPS native specialization
   owns the rank.
 
-No other PoPS kernel or solver is represented by this harness.
+Ces deux cas sont le périmètre du **harness CMake historique**. Ils ne couvrent
+pas tous les noyaux PoPS. En particulier, le benchmark dédié
+[`performance/advection_sine/`](performance/advection_sine/README.md) est une
+troisième charge, séparée, dédiée au scaling de l'advection sinusoïdale.
 
-Each measured region is bracketed by a Kokkos device fence and an MPI barrier. The recorded sample
-is the maximum rank time. Warmups are discarded, robust statistics include median, MAD, p10/p90,
-and a trimmed mean, and validation runs outside the timed interval. The JSONL metadata includes the
-source revision/dirty flag, compiler, build type, Kokkos execution space, concurrency, MPI rank
-count, host, and SLURM job id.
+## Vérification scientifique hors harness de performance
+
+[`verification/`](verification/README.md) rassemble des campagnes scientifiques Python qui
+produisent d'abord des données et les tracent ensuite. Elles partagent ce répertoire uniquement
+pour rester proches des consommateurs de benchmark ; elles ne modifient ni le CMake ni le manifeste
+du harness, et ne font aucune affirmation de performance.
+
+Le benchmark dédié
+[`performance/advection_sine/`](performance/advection_sine/README.md) est un cas **Python public**
+qui suit `validate → resolve → compile → bind → run`, puis mesure le strong et le weak scaling sur
+les routes Kokkos Serial, OpenMP, CUDA et MPI de ROMEO. Ses résultats sont authentifiés et collectés
+avant plotting; son périmètre uniforme ne remplace pas la qualification scientifique AMR sous
+`verification/`. Les campagnes ROMEO sont soumises et publiées séparément : aucune valeur distante
+n'est pré-remplie dans le dépôt avant collecte authentifiée.
+
+For the public Python advection case, each measured `pops.run` is bracketed by the
+`RuntimeInstance.synchronize()` Kokkos fence and the exact MPI barrier where applicable. The recorded
+sample is the maximum rank time. Warmups are discarded; robust statistics are median and MAD; and
+validation runs outside the timed interval. Rank-owned JSON includes Kokkos execution space,
+concurrency, MPI rank count, local boxes and CUDA identity when applicable.
 
 ## Local build and run
 

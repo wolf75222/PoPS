@@ -124,6 +124,10 @@ class TagExpr(ABC):
         raise NotImplementedError(
             "%s has no runtime_tagging_data(params) provider" % type(self).__name__)
 
+    def __invert__(self) -> TagExpr:
+        """Return the exact complement of one typed AMR predicate."""
+        return Not(self)
+
 
 @dataclass(frozen=True, slots=True)
 class _ThresholdPredicate(TagExpr):
@@ -244,6 +248,100 @@ class GradientBelow(_ThresholdPredicate):
         return result
 
 
+@dataclass(frozen=True, slots=True)
+class PrescribedWindow(TagExpr):
+    """Constant-velocity geometry evaluated at the Program physical time.
+
+    The native tagger evaluates this data-only trajectory at each scheduled
+    regrid.  The native layout topology alone declares which axes wrap.  It is
+    not a transported marker field or a Python callback.
+    """
+
+    frame: Any
+    clock: Any
+    center: tuple[float, ...]
+    half_width: tuple[float, ...]
+    velocity: tuple[float, ...]
+    node_type: ClassVar[str] = "prescribed_window"
+
+    def __post_init__(self) -> None:
+        from pops.domain import CartesianDomainFrame, RectangleFrame
+        from pops.time import Clock
+
+        # Keep the exact same bounded-frame authority as CartesianGrid.  Duck typing here would
+        # accept an unbounded coordinate system, or a forged object with an ``axes`` attribute,
+        # neither of which can prove a physical period for the native trajectory.
+        if not isinstance(self.frame, (RectangleFrame, CartesianDomainFrame)):
+            raise TypeError(
+                "PrescribedWindow.frame must be returned by a bounded Cartesian domain"
+            )
+        axes = self.frame.axes
+        if type(self.clock) is not Clock:
+            raise TypeError("PrescribedWindow.clock must be an exact pops.time.Clock")
+        for name in ("center", "half_width", "velocity"):
+            values = tuple(getattr(self, name))
+            if len(values) != len(axes):
+                raise ValueError("PrescribedWindow.%s must match the frame dimension" % name)
+            if any(isinstance(value, bool) or not isinstance(value, (int, float))
+                   or not math.isfinite(float(value)) for value in values):
+                raise ValueError("PrescribedWindow.%s must contain finite real values" % name)
+            object.__setattr__(self, name, tuple(float(value) for value in values))
+        if any(value <= 0.0 for value in self.half_width):
+            raise ValueError("PrescribedWindow.half_width must be strictly positive")
+
+    def canonical_identity(self) -> dict[str, Any]:
+        from pops.identity.semantic import semantic_value
+
+        payload = {
+            "schema_version": _SCHEMA_VERSION,
+            "node_type": self.node_type,
+            "frame": self.frame.canonical_identity(),
+            "dimension": len(self.center),
+            "clock": self.clock.to_data(),
+            "center": list(self.center),
+            "half_width": list(self.half_width),
+            "velocity": list(self.velocity),
+            "trajectory": "constant_velocity_layout_periodicity",
+        }
+        result = semantic_value(payload, where="PrescribedWindow.canonical_identity")
+        if not isinstance(result, dict):
+            raise TypeError("PrescribedWindow canonical identity must remain a mapping")
+        return result
+
+    def operands(self) -> tuple[TagExpr, ...]:
+        return ()
+
+    def resolve_for_amr_predicate(self, context: Any, *, action: str) -> PrescribedWindow:
+        if action not in {"refine", "coarsen"}:
+            raise ValueError("PrescribedWindow requires refine or coarsen action")
+        if getattr(context, "dimension", None) != len(self.center):
+            raise ValueError("PrescribedWindow frame dimension differs from its AMR layout")
+        if getattr(context, "frame_id", None) != self.frame.canonical_id:
+            raise ValueError("PrescribedWindow frame differs from the AMR layout frame")
+        if getattr(context, "clock", None) != self.clock:
+            raise ValueError("PrescribedWindow must use the owning Program clock")
+        return self
+
+    def resolve_references(self, resolver: Any) -> PrescribedWindow:
+        if not callable(resolver):
+            raise TypeError("PrescribedWindow resolution requires a callable resolver")
+        return self
+
+    def runtime_tagging_data(self, params: Any = None) -> dict[str, Any]:
+        del params
+        return {
+            "schema_version": _SCHEMA_VERSION,
+            "node_type": self.node_type,
+            "frame": self.frame.canonical_identity(),
+            "dimension": len(self.center),
+            "clock": self.clock.to_data(),
+            "center": list(self.center),
+            "half_width": list(self.half_width),
+            "velocity": list(self.velocity),
+            "trajectory": "constant_velocity_layout_periodicity",
+        }
+
+
 def _children(values: Any, *, where: str, minimum: int) -> tuple[TagExpr, ...]:
     rows = tuple(values)
     if len(rows) < minimum:
@@ -308,6 +406,30 @@ class Not(TagExpr):
 
     def operands(self) -> tuple[TagExpr, ...]:
         return (self.child,)
+
+    def resolve_for_amr_predicate(self, context: Any, *, action: str) -> Not:
+        """Resolve the complemented predicate through its typed child."""
+        protocol = getattr(self.child, "resolve_for_amr_predicate", None)
+        if not callable(protocol):
+            raise TypeError(
+                "Not.child must implement resolve_for_amr_predicate(...)"
+            )
+        resolved = protocol(context, action=action)
+        if not isinstance(resolved, TagExpr):
+            raise TypeError("Not.child predicate resolution must return a TagExpr")
+        return type(self)(resolved)
+
+    def resolve_references(self, resolver: Any) -> Not:
+        """Resolve authored references without losing complement semantics."""
+        if not callable(resolver):
+            raise TypeError("Not.resolve_references requires a callable resolver")
+        protocol = getattr(self.child, "resolve_references", None)
+        if not callable(protocol):
+            raise TypeError("Not.child must implement resolve_references(...)")
+        resolved = protocol(resolver)
+        if not isinstance(resolved, TagExpr):
+            raise TypeError("Not.child reference resolution must return a TagExpr")
+        return type(self)(resolved)
 
     def runtime_tagging_data(self, params: Any = None) -> dict[str, Any]:
         return {
@@ -398,6 +520,6 @@ class TaggingGraph:
 
 __all__ = [
     "Above", "AllOf", "AnyOf", "Below", "ConflictPolicy", "DiscreteIndicatorContext",
-    "EqualityPolicy", "GradientAbove", "GradientBelow", "Hysteresis", "MagnitudeAbove", "Not", "TagExpr",
+    "EqualityPolicy", "GradientAbove", "GradientBelow", "Hysteresis", "MagnitudeAbove", "Not", "PrescribedWindow", "TagExpr",
     "TaggingGraph",
 ]

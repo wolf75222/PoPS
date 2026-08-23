@@ -653,12 +653,18 @@ inline int tag_batch(const PopsTaggerApiV2& api, void* state, const PopsTaggerRe
     const auto& leaf = request.program.leaves[index];
     const bool gradient = leaf.opcode == POPS_TAGGING_GRADIENT_ABOVE_V1 ||
                           leaf.opcode == POPS_TAGGING_GRADIENT_BELOW_V1;
+    // PopsTaggingLeafV1 has no geometry payload.  Prescribed windows are a
+    // runtime-owned builtin and must never be presented to an external Tagger
+    // provider through this V1 ABI.
+    const bool external_unsupported = leaf.opcode == POPS_TAGGING_PRESCRIBED_WINDOW_V1;
     if (leaf.struct_size < sizeof(PopsTaggingLeafV1) || leaf.state_index >= request.state_count ||
         leaf.component >= request.states[leaf.state_index].values.component_count ||
-        !pops_tagging_opcode_is_leaf_v1(leaf.opcode) || !std::isfinite(leaf.threshold) ||
+        external_unsupported || !pops_tagging_opcode_is_leaf_v1(leaf.opcode) ||
+        !std::isfinite(leaf.threshold) ||
         gradient != (leaf.stencil_index != POPS_TAGGING_NO_STENCIL_V1) ||
         (gradient && leaf.stencil_index >= request.program.stencil_count))
-      throw std::invalid_argument("tagger graph leaf is invalid");
+      throw std::invalid_argument(
+          "tagger graph leaf is invalid or unsupported by the external ABI");
   }
   if (request.program.stencil_count != 0 && request.program.stencils == nullptr)
     throw std::invalid_argument("tagger graph stencil table is absent");

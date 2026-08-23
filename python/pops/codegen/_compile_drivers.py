@@ -27,12 +27,12 @@ from pops.codegen.cache import (
     _record_artifact_identity,
     _registry_cache_key,
     _dsl_optflags,
+    verify_cached_artifact_entry,
 )
 from pops.codegen.compile_provenance import (
     artifact_sidecar_path,
     build_debug_banner,
     publish_staged_artifact,
-    verify_cached_artifact,
     write_artifact_sidecar,
 )
 from pops.codegen.abi import _abi_key_python
@@ -265,10 +265,13 @@ def compile_model(
     if so_path is None:
         so_path = _identity_cache_so_path(spec_identity)
         with _artifact_cache_lock(so_path):
-            if os.path.exists(so_path):
-                verify_cached_artifact(
-                    so_path, semantic_identity=semantic_identity, spec_identity=spec_identity
-                )
+            cached = verify_cached_artifact_entry(
+                so_path,
+                semantic_identity=semantic_identity,
+                spec_identity=spec_identity,
+            )
+            if cached is not None:
+                _record_artifact_identity(so_path, spec_identity)
                 return so_path
             staging = _artifact_cache_staging_path(so_path)
             try:
@@ -767,12 +770,14 @@ def _compile_problem_impl(
             os.makedirs(cenv.codegen_dir, exist_ok=True)
             so_path = os.path.join(cenv.codegen_dir, os.path.basename(so_path))
         with _artifact_cache_lock(so_path):
-            if not force and os.path.isfile(so_path):
-                binary, artifact = verify_cached_artifact(
-                    so_path,
-                    semantic_identity=semantic,
-                    spec_identity=spec_identity,
-                )
+            cached = verify_cached_artifact_entry(
+                so_path,
+                semantic_identity=semantic,
+                spec_identity=spec_identity,
+            )
+            if cached is not None and not force:
+                binary, artifact = cached
+                _record_artifact_identity(so_path, spec_identity)
                 cenv.log("compile_problem: cache HIT -> %s" % so_path)
                 return _compiled_handle(binary, artifact)
             return _compile_fresh(staged=True)

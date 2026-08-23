@@ -7,6 +7,7 @@ import pytest
 from pops.model import Handle, OwnerPath
 from pops.numerics.indicator_stencils import SECOND_ORDER_AXIS, gradient_stencil
 from pops.runtime._runtime_mesh_lowering import flow_bootstrap_tagging
+from pops.time import Clock
 
 
 class _CaptureTagging:
@@ -109,3 +110,47 @@ def test_field_gradient_refuses_ambiguous_solved_field_identity() -> None:
             clock_identity="test::clock",
             field_plans={"electrostatic": plan, "screened": other_plan},
         )
+
+
+def test_prescribed_window_lowers_the_honest_layout_periodicity_trajectory() -> None:
+    clock = Clock("prescribed-window")
+    window = {
+        "schema_version": 1,
+        "node_type": "prescribed_window",
+        "frame": {"canonical_id": "test::frame"},
+        "dimension": 1,
+        "clock": clock.to_data(),
+        "center": [0.25],
+        "half_width": [0.1],
+        "velocity": [1.0],
+        "trajectory": "constant_velocity_layout_periodicity",
+    }
+    bootstrap = SimpleNamespace(
+        tagging=SimpleNamespace(
+            qualified_id="test::prescribed-window",
+            runtime_tagging_data=lambda _params: {
+                "schema_version": 1,
+                "graph_type": "amr_tagging_runtime",
+                "lowerings": [{
+                    "schema_version": 1,
+                    "node_type": "prescribed_window",
+                    "lowering": {
+                        "kind": "tag_lowering",
+                        "local_id": "prescribed_window",
+                        "qualified_id": "test::prescribed-window-lowering",
+                    },
+                }],
+                "refine": window,
+                "coarsen": None,
+                "hysteresis": {"hysteresis_type": "min_cycles", "min_cycles": 0, "equality": "hold"},
+                "conflict_policy": "error",
+            },
+        )
+    )
+    native = _CaptureTagging()
+    flow_bootstrap_tagging(native, bootstrap, {}, clock_identity=clock.qualified_id)
+
+    assert native.arguments is not None
+    assert native.arguments[0] == ["geometry"]
+    assert native.arguments[5] == [6]
+    assert native.arguments[8] == [[0.25, 0.1, 1.0]]

@@ -61,6 +61,7 @@ from .tagging_graph import (
     Hysteresis,
     MagnitudeAbove,
     Not,
+    PrescribedWindow,
     TagExpr,
     TaggingGraph,
 )
@@ -472,6 +473,7 @@ __all__ = [
     "Hysteresis",
     "MagnitudeAbove",
     "Not",
+    "PrescribedWindow",
     "TagExpr",
     "TaggingGraph",
     "ResolvedTaggingGraph",

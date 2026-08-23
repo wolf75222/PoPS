@@ -45,6 +45,40 @@ def _ranked_ghost_depth(
     return raw
 
 
+def _validate_builtin_coarse_fine_capabilities(
+    *, native_route: str, capabilities: Any, dimension: int
+) -> None:
+    """Authenticate the intrinsic capability tuple of each builtin coarse/fine route.
+
+    A resolved coarse/fine requirement intentionally carries no parent finite-volume stencil
+    halo.  It therefore cannot, by itself, prove that a descriptor which claims one of the
+    builtin native kernels has retained that kernel's intrinsic interpolation radius.
+    """
+    builtin = {
+        "conservative_coarse_fine": (2, 1, False, False),
+        "conservative_polynomial5_coarse_fine": (5, 3, False, False),
+        "conservative_injection": (1, 1, True, False),
+    }.get(native_route)
+    if builtin is None:
+        return
+    order, ghost, conservative, temporal = builtin
+    actual = (
+        capabilities.order,
+        _ranked_ghost_depth(
+            capabilities.ghost_depth,
+            dimension=dimension,
+            where="builtin coarse/fine transfer ghost_depth",
+        ),
+        capabilities.conservative,
+        capabilities.temporal,
+    )
+    expected = (order, (ghost,) * dimension, conservative, temporal)
+    if actual != expected:
+        raise NotImplementedError(
+            "native AMR coarse/fine provider does not match the exact builtin kernel contract"
+        )
+
+
 def _physical_axis_contract(
     plan: Any, requirement: Any
 ) -> tuple[tuple[str, str], str | None, int]:
@@ -385,6 +419,11 @@ def validate_amr_authorities(plan: Any) -> None:
                     if not native.native_route or capabilities.temporal:
                         raise NotImplementedError(
                             "native AMR coarse/fine provider lacks spatial capabilities")
+                    _validate_builtin_coarse_fine_capabilities(
+                        native_route=native.native_route,
+                        capabilities=capabilities,
+                        dimension=dimension,
+                    )
                 elif route_contract is None \
                         or (
                             native.native_route,
@@ -416,8 +455,10 @@ def validate_amr_authorities(plan: Any) -> None:
                 raise NotImplementedError("native AMR bootstrap has an unknown materialization")
 
     # Reconstruction and hierarchy transfer are separate authorities. Bind them by qualified state
-    # identity and refuse a lower-order or shallower coarse/fine provider before artifact creation;
-    # otherwise a WENO/MUSCL block could silently execute with a first-order interface injection.
+    # identity and refuse a lower-order coarse/fine provider before artifact creation; otherwise a
+    # WENO/MUSCL block could silently execute with a first-order interface interpolation.  The FV
+    # block halo is an input to the parent spatial stencil, not an interface-transfer requirement:
+    # validate the latter only against the exact resolved coarse/fine requirement.
     coarse_fine_capabilities = {}
     for entry in plan.amr_transfer.entries:
         native = _validated_native_materialization(entry)
@@ -430,13 +471,18 @@ def validate_amr_authorities(plan: Any) -> None:
         for requirement in entry.requirements:
             subject = requirement.subject.qualified_id
             dimension = requirement.accuracy.dimension
+            required_ghost = _ranked_ghost_depth(
+                requirement.accuracy.ghost_depth,
+                dimension=dimension,
+                where="physical coarse/fine requirement ghost_depth",
+            )
             _ranked_ghost_depth(
                 capabilities.ghost_depth,
                 dimension=dimension,
                 where="physical coarse/fine transfer ghost_depth",
             )
             previous = coarse_fine_capabilities.get(subject)
-            selected = (capabilities, dimension)
+            selected = (capabilities, dimension, required_ghost)
             if previous is not None and previous != selected:
                 raise ValueError(
                     "AMR state %s has conflicting coarse/fine transfer capabilities" % subject
@@ -444,28 +490,34 @@ def validate_amr_authorities(plan: Any) -> None:
             coarse_fine_capabilities[subject] = selected
     for block in plan.blocks:
         formal_order = getattr(block.spatial, "formal_order", None)
-        ghost_depth = getattr(block.spatial, "ghost_depth", None)
         if isinstance(formal_order, bool) or not isinstance(formal_order, int) \
-                or isinstance(ghost_depth, bool) or not isinstance(ghost_depth, int):
+                or formal_order < 1:
             raise TypeError("AMR spatial provider lacks exact reconstruction order/halo metadata")
         for subject in block.state_identities:
             selected = coarse_fine_capabilities.get(subject)
             if selected is None:
                 raise ValueError(
                     "AMR state %s has no resolved coarse/fine transfer authority" % subject)
-            capabilities, dimension = selected
+            capabilities, dimension, required_ghost = selected
             available_ghost = _ranked_ghost_depth(
                 capabilities.ghost_depth,
                 dimension=dimension,
                 where="physical coarse/fine transfer ghost_depth",
             )
-            if capabilities.order < formal_order or any(
-                    value < ghost_depth for value in available_ghost):
+            if capabilities.order < formal_order:
                 raise NotImplementedError(
-                    "AMR state %s uses reconstruction order %d with ghost depth %d, but its "
-                    "coarse/fine provider certifies only order %d and ghost depth %r"
-                    % (subject, formal_order, ghost_depth, capabilities.order,
-                       tuple(capabilities.ghost_depth)))
+                    "AMR state %s uses reconstruction order %d, but its coarse/fine provider "
+                    "certifies only order %d"
+                    % (subject, formal_order, capabilities.order))
+            if any(
+                    available < required
+                    for available, required in zip(
+                        available_ghost, required_ghost, strict=True
+                    )):
+                raise NotImplementedError(
+                    "AMR state %s requires coarse/fine ghost depth %r, but its provider "
+                    "certifies only ghost depth %r"
+                    % (subject, required_ghost, tuple(capabilities.ghost_depth)))
 
 
 __all__ = ["validate_amr_authorities"]

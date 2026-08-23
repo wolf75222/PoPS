@@ -167,8 +167,10 @@ void materialize_mean_free_density(const NativeField& state, NativeField& rhs) {
   }
 }
 
-void add_gas_block(NativeSystem& s, const std::string& name, int* projection_calls = nullptr) {
-  s.install_block_state_route(name, "test::state::" + name);
+void add_gas_block(NativeSystem& s, const std::string& name, int* projection_calls = nullptr,
+                   bool install_state_route = true) {
+  if (install_state_route)
+    s.install_block_state_route(name, "test::state::" + name);
   const GasModel model = GasModel::prepare(Real(kGamma));
   PreparedSystemBlock<kTestDimension> prepared;
   prepared.name = name;
@@ -203,11 +205,41 @@ void add_gas_block(NativeSystem& s, const std::string& name, int* projection_cal
   };
   prepared.closures.rhs_flux_only_core_at_point_prepared =
       prepared.closures.rhs_core_at_point_prepared;
+  const auto boundary_residual = [residual](const auto&, NativeField& state,
+                                            NativeField& output, const auto&,
+                                            const ExecutionLane&, const auto&) {
+    residual(state, output);
+  };
+  prepared.closures.boundary_full_at_point_prepared = boundary_residual;
+  prepared.closures.boundary_core_at_point_prepared = boundary_residual;
+  prepared.closures.boundary_flux_full_at_point_prepared = boundary_residual;
+  prepared.closures.boundary_flux_core_at_point_prepared = boundary_residual;
+  prepared.closures.boundary_residual_at_point_prepared = boundary_residual;
+  prepared.closures.boundary_jvp_at_point_prepared =
+      [](const auto&, NativeField&, const NativeField&, NativeField& output, const auto&,
+         const ExecutionLane&, const auto&) { output.set_val(Real(0)); };
+  prepared.closures.external_boundary_flux =
+      std::make_shared<SystemBlockClosures<kTestDimension>::BoundaryFluxTransform>(
+          [](const auto&, const NativeField&, auto&, const auto&, const ExecutionLane&) {});
+  prepared.closures.external_field_boundary_residual =
+      std::make_shared<SystemBlockClosures<kTestDimension>::PreparedPointBoundaryResidual>(
+          boundary_residual);
+  prepared.closures.external_field_boundary_jvp =
+      std::make_shared<SystemBlockClosures<kTestDimension>::PreparedPointJvp>(
+          prepared.closures.boundary_jvp_at_point_prepared);
+  prepared.closures.transport_rhs_at_point_prepared =
+      [](const auto&, NativeField& state, NativeField& output, const ExecutionLane&, const auto&) {
+        materialize_test_residual(state, output);
+      };
+  prepared.closures.transport_flux_at_point_prepared =
+      prepared.closures.transport_rhs_at_point_prepared;
   prepared.closures.prepare_generated_state_at_point = [](const auto&, NativeField&) {};
   prepared.closures.prepare_generated_state_at_point_prepared = [](const auto&, NativeField&,
                                                                    const auto&) {};
   prepared.closures.prepare_generated_state_with_transport_prepared =
       [](const auto&, NativeField&, const auto&, const ExecutionLane&, const auto&) {};
+  prepared.closures.transport_prepare_generated_state_at_point_prepared =
+      [](const auto&, NativeField&, const ExecutionLane&, const auto&) {};
   if (projection_calls != nullptr)
     prepared.closures.project = [projection_calls](NativeField&, const ExecutionLane&) {
       ++*projection_calls;
@@ -661,6 +693,41 @@ TEST(ProgramContextContract, RankedHyperbolicBoundaryRefusesMappedPeriodicityWit
   auto boundary = prepare_hyperbolic_boundary<kTestDimension>(
       kinds, std::vector<double>(kinds.size(), 0.0), identities, {"Scalar"}, true);
   EXPECT_THROW((void)boundary.periodic_axes(), std::logic_error);
+}
+
+TEST(ProgramContextContract, BoundarylessBlocksRequireAllAxesPeriodicAndPhysicalBlocksNeedSession) {
+  ensure_kokkos();
+  NativeSystem periodic(native_config(2));
+  install_execution_lane(periodic, "pops.test.program-context.periodic-no-boundary");
+  add_gas_block(periodic, "gas");
+  EXPECT_FALSE(periodic.requires_block_boundary_session(0));
+
+  NativeSystemConfig physical_config = native_config(2);
+  physical_config.periodicity.fill(false);
+  NativeSystem boundaryless_physical(physical_config);
+  install_execution_lane(boundaryless_physical,
+                         "pops.test.program-context.physical-without-boundary");
+  EXPECT_THROW(add_gas_block(boundaryless_physical, "gas"), std::invalid_argument);
+
+  NativeSystem physical(physical_config);
+  install_execution_lane(physical, "pops.test.program-context.prepared-physical-boundary");
+  const std::string state_identity = "test::state::gas";
+  physical.install_block_state_route("gas", state_identity);
+  std::vector<std::string> face_types(static_cast<std::size_t>(2 * kTestDimension), "no_flux");
+  std::vector<std::string> face_identities;
+  face_identities.reserve(face_types.size());
+  for (std::size_t face = 0; face < face_types.size(); ++face)
+    face_identities.push_back("test::physical-face-" + std::to_string(face));
+  std::vector<std::string> roles{"density"};
+  for (int axis = 0; axis < kTestDimension; ++axis)
+    roles.push_back("momentum:" + std::to_string(axis));
+  roles.push_back("energy");
+  physical.install_hyperbolic_boundary(
+      "gas", "test::prepared-physical-boundary@1", 1, face_types,
+      std::vector<double>(face_types.size() * roles.size(), 0.0), face_identities, roles,
+      state_identity);
+  add_gas_block(physical, "gas", nullptr, false);
+  EXPECT_TRUE(physical.requires_block_boundary_session(0));
 }
 
 TEST(ProgramContextContract, CommitManySnapshotsSourcesThatAreAlsoTargets) {

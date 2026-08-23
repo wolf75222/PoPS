@@ -494,6 +494,11 @@ class NativeTaggerSession {
         fields_by_level.empty() || fields_by_level.size() != layouts.size() ||
         layouts.size() != budgets.size())
       throw std::invalid_argument("native AMR Tagger preparation authority is incomplete");
+    if (std::any_of(program.leaves.begin(), program.leaves.end(), [](const auto& leaf) {
+          return leaf.opcode == POPS_TAGGING_PRESCRIBED_WINDOW_V1;
+        }))
+      throw std::invalid_argument(
+          "native AMR Tagger V2 cannot receive prescribed windows through PopsTaggingLeafV1");
     const PopsComponentApiV1& component_api = component->api();
     if (component_api.component_id == nullptr || component_api.manifest_identity == nullptr ||
         spec.component_id != component_api.component_id ||

@@ -5,8 +5,47 @@
 
 #include <Kokkos_Core.hpp>
 
+#include <cstddef>
+#include <cstdint>
 #include <limits>
+#include <mutex>
+#include <stdexcept>
 #include <type_traits>
+#include <utility>
+
+namespace pops::detail::testing {
+
+struct ReductionResultPoolAccess {
+  template <class MemorySpace, class GlobalFence>
+  static void release_all_after_global_fence(ReductionResultPool<MemorySpace>& pool,
+                                             GlobalFence&& global_fence) noexcept {
+    pool.release_all_after_global_fence(std::forward<GlobalFence>(global_fence));
+  }
+
+  template <class MemorySpace>
+  static std::size_t slot_count(ReductionResultPool<MemorySpace>& pool) {
+    std::lock_guard<std::mutex> guard(pool.mutex_);
+    return pool.slots_.size();
+  }
+
+  template <class MemorySpace>
+  static bool mutex_is_available(ReductionResultPool<MemorySpace>& pool) {
+    std::unique_lock<std::mutex> guard(pool.mutex_, std::try_to_lock);
+    return guard.owns_lock();
+  }
+
+  template <class MemorySpace>
+  static bool view_is_active(ReductionResultPool<MemorySpace>& pool,
+                             const typename ReductionResultPool<MemorySpace>::view_type& view) {
+    std::lock_guard<std::mutex> guard(pool.mutex_);
+    for (const auto& slot : pool.slots_)
+      if (slot.result.data() == view.data())
+        return slot.in_use;
+    return false;
+  }
+};
+
+}  // namespace pops::detail::testing
 
 namespace {
 
@@ -109,4 +148,116 @@ TEST(test_nd_execution, empty_and_non_addressable_face_domains_fail_deterministi
   EXPECT_TRUE(pops::face_box<0>(pops::Box<1>{}).empty());
   const pops::Box<1> overflow{pops::Index<1>{0}, pops::Index<1>{std::numeric_limits<int>::max()}};
   EXPECT_THROW((void)pops::face_box<0>(overflow), std::overflow_error);
+}
+
+TEST(test_nd_execution, empty_reductions_return_identity_and_non_addressable_reductions_fail) {
+  const pops::Box<1> empty{};
+  const pops::Box<1> overflow{pops::Index<1>{0}, pops::Index<1>{std::numeric_limits<int>::max()}};
+  pops::detail::ensure_kokkos_initialized();
+  Kokkos::DefaultExecutionSpace execution;
+  const auto zero = [](const pops::CellIndex<1>&) -> pops::Real { return pops::Real(0); };
+
+  EXPECT_EQ(pops::for_each_cell_reduce_sum(execution, empty, zero), pops::Real(0));
+  EXPECT_EQ(pops::for_each_cell_reduce_max(execution, empty, zero), pops::Real(0));
+  EXPECT_THROW((void)pops::for_each_cell_reduce_sum(execution, overflow, zero),
+               std::overflow_error);
+  EXPECT_THROW((void)pops::for_each_cell_reduce_max(execution, overflow, zero),
+               std::overflow_error);
+}
+
+TEST(test_reduction_result_pool,
+     distinct_execution_instances_keep_overlapping_reductions_in_distinct_slots) {
+  using execution_space = Kokkos::DefaultExecutionSpace;
+  using memory_space = typename execution_space::memory_space;
+  using pool_type = pops::detail::ReductionResultPool<memory_space>;
+  using access = pops::detail::testing::ReductionResultPoolAccess;
+
+  pops::detail::ensure_kokkos_initialized();
+  execution_space first_execution;
+  execution_space second_execution;
+  auto& pool = pool_type::instance();
+  auto first = pool.acquire("pops_reduction_pool_first_execution_instance");
+  auto second = pool.acquire("pops_reduction_pool_second_execution_instance");
+
+  // Both reductions are submitted before either execution instance is fenced.  On CUDA/HIP these
+  // are distinct Kokkos execution-space instances (and therefore independently fenceable streams);
+  // Serial/OpenMP retain the same slot-exclusivity and result-correctness contract portably.
+  ASSERT_NE(first.view().data(), second.view().data());
+  EXPECT_TRUE(access::view_is_active(pool, first.view()));
+  EXPECT_TRUE(access::view_is_active(pool, second.view()));
+
+  constexpr std::int64_t first_count = 4099;
+  constexpr std::int64_t second_count = 6151;
+  Kokkos::parallel_reduce(
+      "pops_reduction_pool_first_execution_instance",
+      Kokkos::RangePolicy<execution_space>(first_execution, 0, first_count),
+      KOKKOS_LAMBDA(const int, pops::Real& total) { total += pops::Real(2); },
+      Kokkos::Sum<pops::Real, memory_space>{first.view()});
+  Kokkos::parallel_reduce(
+      "pops_reduction_pool_second_execution_instance",
+      Kokkos::RangePolicy<execution_space>(second_execution, 0, second_count),
+      KOKKOS_LAMBDA(const int, pops::Real& total) { total += pops::Real(3); },
+      Kokkos::Sum<pops::Real, memory_space>{second.view()});
+
+  pops::Real first_result = 0;
+  Kokkos::deep_copy(first_execution, first_result, first.view());
+  first_execution.fence("pops_reduction_pool_first_execution_instance_result");
+  EXPECT_EQ(first_result, pops::Real(2 * first_count));
+
+  // Only the first slot becomes reusable after its own instance-local completion.  The second
+  // lease remains held until its own fence/copy completes; no process-wide Kokkos fence is used.
+  first.release();
+  EXPECT_FALSE(access::view_is_active(pool, first.view()));
+  EXPECT_TRUE(access::view_is_active(pool, second.view()));
+
+  pops::Real second_result = 0;
+  Kokkos::deep_copy(second_execution, second_result, second.view());
+  second_execution.fence("pops_reduction_pool_second_execution_instance_result");
+  EXPECT_EQ(second_result, pops::Real(3 * second_count));
+  second.release();
+  EXPECT_FALSE(access::view_is_active(pool, second.view()));
+}
+
+TEST(test_reduction_result_pool, public_lifecycle_registration_remains_observable_after_use) {
+  // A Kokkos finalizer hook is intentionally process-global.  This GoogleTest binary keeps Kokkos
+  // live across unrelated tests, so calling Kokkos::finalize() here (or in a death-test child after
+  // a CUDA runtime has been initialized) is unsafe and would not be a portable lifecycle proof.
+  // Instead exercise the public registration state after the pool's real acquire path; the actual
+  // hook executes during normal process teardown and is covered by the ROMEO backend campaigns.
+  pops::detail::ensure_kokkos_initialized();
+  using pool_type = pops::detail::ReductionResultPool<Kokkos::DefaultExecutionSpace::memory_space>;
+  auto lease = pool_type::instance().acquire("pops_reduction_pool_public_lifecycle");
+  EXPECT_TRUE(Kokkos::is_initialized());
+  EXPECT_TRUE(pops::kokkos_atexit_finalize_registered() || !pops::kokkos_initialized_by_pops());
+  lease.release();
+}
+
+TEST(test_reduction_result_pool, finalize_barrier_failure_preserves_abandoned_host_lease) {
+  using pool_type = pops::detail::ReductionResultPool<Kokkos::HostSpace>;
+  pops::detail::ensure_kokkos_initialized();
+  auto& pool = pool_type::instance();
+  using access = pops::detail::testing::ReductionResultPoolAccess;
+
+  access::release_all_after_global_fence(pool, [] {});
+  auto abandoned = pool.acquire("pops_reduction_pool_abandoned_host_lease");
+  abandoned.abandon();
+  const std::size_t slots_before_failure = access::slot_count(pool);
+  ASSERT_EQ(slots_before_failure, 1u);
+
+  access::release_all_after_global_fence(pool, [] { throw std::runtime_error("fence failure"); });
+  EXPECT_EQ(access::slot_count(pool), slots_before_failure);
+
+  abandoned = {};
+  bool barrier_saw_unlocked_pool = false;
+  access::release_all_after_global_fence(
+      pool, [&] { barrier_saw_unlocked_pool = access::mutex_is_available(pool); });
+  EXPECT_TRUE(barrier_saw_unlocked_pool);
+  EXPECT_EQ(access::slot_count(pool), 0u);
+
+  auto reusable = pool.acquire("pops_reduction_pool_reusable_host_lease");
+  EXPECT_EQ(access::slot_count(pool), 1u);
+  reusable.release();
+  auto reused = pool.acquire("pops_reduction_pool_reused_host_lease");
+  EXPECT_EQ(access::slot_count(pool), 1u);
+  reused.release();
 }

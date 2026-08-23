@@ -127,7 +127,6 @@ def test_public_patch_layout_roundtrips_through_resolution_and_native_lowering(m
     class NativeConfigProbe:
         def _set_load_balance_provider(self, *values):
             self.load_balance_provider = values
-
     monkeypatch.setitem(
         sys.modules,
         "pops._bootstrap",
@@ -189,6 +188,125 @@ def test_public_patch_layout_roundtrips_through_resolution_and_native_lowering(m
     assert automatic_config.coarse_max_grid == (0, 0)
     assert automatic.hierarchy.identity != authorities.hierarchy.identity
     assert automatic.bootstrap.hierarchy_identity == automatic.hierarchy.identity
+
+
+def test_prescribed_window_complement_is_a_resolvable_coarsen_predicate():
+    from pops.amr import Coarsen, PrescribedWindow
+    from pops.domain import CartesianDomain
+    from pops.frames import Cartesian
+    from pops.mesh._amr import (
+        ConflictPolicy,
+        EqualityPolicy,
+        Hysteresis,
+        TaggingGraph,
+    )
+    from pops.time import Clock
+
+    frame = CartesianDomain("window-complement", (0.0,), (1.0,)).frame(Cartesian(1))
+    clock = Clock("window-complement")
+    window = PrescribedWindow(
+        frame=frame,
+        clock=clock,
+        center=(0.25,),
+        half_width=(0.1,),
+        velocity=(1.0,),
+    )
+
+    authored = Coarsen(~window)
+    resolved_references = authored.resolve_references(lambda value: value)
+    resolved_predicate = resolved_references.predicate.resolve_for_amr_predicate(
+        SimpleNamespace(dimension=1, frame_id=frame.canonical_id, clock=clock),
+        action="coarsen",
+    )
+
+    assert resolved_predicate.node_type == "not"
+    assert resolved_predicate.child is window
+    graph = TaggingGraph(
+        refine=window,
+        coarsen=resolved_predicate,
+        hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
+        conflict_policy=ConflictPolicy.REFINE_WINS,
+    ).resolve()
+    assert graph.graph.refine is window
+    assert graph.graph.coarsen == resolved_predicate
+    assert window.canonical_identity()["center"] == [{"binary64": (0.25).hex()}]
+    assert window.runtime_tagging_data()["center"] == [0.25]
+    with pytest.raises(ValueError, match="frame differs"):
+        resolved_references.predicate.resolve_for_amr_predicate(
+            SimpleNamespace(
+                dimension=1,
+                frame_id="case::different-frame",
+                clock=clock,
+            ),
+            action="coarsen",
+        )
+
+
+def test_prescribed_window_requires_an_authenticated_bounded_frame_and_owner_clock():
+    from pops.amr import PrescribedWindow
+    from pops.domain import CartesianDomain, Rectangle
+    from pops.frames import Cartesian, Cartesian2D
+    from pops.time import Clock
+
+    frame = CartesianDomain("window-contract", (0.0,), (1.0,)).frame(Cartesian(1))
+    clock = Clock("window-contract")
+    kwargs = {
+        "clock": clock,
+        "center": (0.25,),
+        "half_width": (0.1,),
+        "velocity": (1.0,),
+    }
+
+    class ForgedFrame:
+        axes = frame.axes
+        canonical_id = frame.canonical_id
+
+        def canonical_identity(self):
+            return frame.canonical_identity()
+
+    with pytest.raises(TypeError, match="bounded Cartesian domain"):
+        PrescribedWindow(frame=ForgedFrame(), **kwargs)
+    # Cartesian is a genuine coordinate descriptor, but deliberately not a bounded domain frame.
+    with pytest.raises(TypeError, match="bounded Cartesian domain"):
+        PrescribedWindow(frame=Cartesian(1), **kwargs)
+
+    for dimension in (1, 2, 3):
+        accepted_frame = CartesianDomain(
+            "window-dim-%d" % dimension,
+            (0.0,) * dimension,
+            (1.0,) * dimension,
+        ).frame(Cartesian(dimension))
+        accepted = PrescribedWindow(
+            frame=accepted_frame,
+            clock=clock,
+            center=(0.25,) * dimension,
+            half_width=(0.1,) * dimension,
+            velocity=(1.0,) * dimension,
+        )
+        assert len(accepted.center) == dimension
+    rectangle_frame = Rectangle("window-rectangle", (0.0, 0.0), (1.0, 1.0)).frame(
+        Cartesian2D()
+    )
+    assert PrescribedWindow(
+        frame=rectangle_frame,
+        clock=clock,
+        center=(0.25, 0.25),
+        half_width=(0.1, 0.1),
+        velocity=(1.0, 1.0),
+    ).frame is rectangle_frame
+
+    window = PrescribedWindow(frame=frame, **kwargs)
+    wrong_frame = CartesianDomain("window-other", (0.0,), (1.0,)).frame(Cartesian(1))
+    with pytest.raises(ValueError, match="frame differs"):
+        window.resolve_for_amr_predicate(
+            SimpleNamespace(dimension=1, frame_id=wrong_frame.canonical_id, clock=clock),
+            action="refine",
+        )
+    with pytest.raises(ValueError, match="owning Program clock"):
+        window.resolve_for_amr_predicate(
+            SimpleNamespace(dimension=1, frame_id=frame.canonical_id, clock=Clock("other")),
+            action="refine",
+        )
 
 
 def test_native_lowering_carries_rectangular_grid_without_collapsing_axes(monkeypatch):
@@ -522,8 +640,9 @@ def test_final_amr_authorities_derive_discrete_context_and_nesting():
         (2, 2),
         (2, 2),
     ]
-    assert all(row.buffer == (3, 3) for row in authorities.hierarchy.plan.transitions)
-    assert all(row.lookahead == 4 for row in authorities.hierarchy.plan.transitions)
+    assert authorities.transfer.nesting_requirement.minimum_buffer == (1, 1)
+    assert all(row.buffer == (2, 2) for row in authorities.hierarchy.plan.transitions)
+    assert all(row.lookahead == 1 for row in authorities.hierarchy.plan.transitions)
     assert authorities.transfer.layout_plan_id == layout_plan.qualified_id
 
     graph = authorities.tagging.graph.graph
@@ -800,6 +919,7 @@ def test_runtime_tagging_compiles_refine_and_coarsen_to_data_only_vm():
         leaf_ops,
         thresholds,
         stencil_indices,
+        leaf_windows,
         stencils,
         refine_ops,
         refine_args,
@@ -822,6 +942,7 @@ def test_runtime_tagging_compiles_refine_and_coarsen_to_data_only_vm():
     assert leaf_ops == [4, 5]
     assert thresholds == [0.10, 0.04]
     assert stencil_indices == [0, 0]
+    assert leaf_windows == [None, None]
     assert len(stencils) == 1
     assert stencils[0]["route"] == "linear_axis_stencil_l2_v1"
     assert (refine_ops, refine_args) == ([4], [0])

@@ -478,10 +478,17 @@ class AMRTransfer:
                 )
                 for ratio in ratios:
                     if operation == COARSE_FINE_FILL and spatial_accuracy is not None:
-                        required_order, required_ghost = spatial_accuracy
+                        required_order, _ = spatial_accuracy
                         accuracy = AccuracyRequirement(
                             order=required_order,
-                            ghost_depth=required_ghost,
+                            # The finite-volume halo belongs to the parent spatial stencil,
+                            # not to the coarse-to-fine interpolation request.  Keep the
+                            # resolved formal order, but let the transfer-route capability
+                            # select the necessary interpolation halo.  In particular this
+                            # keeps MUSCL on its conservative second-order route (ghost 1),
+                            # while WENO5 still selects the fifth-order polynomial route
+                            # (ghost 3) from its order requirement.
+                            ghost_depth=(0,) * dimension,
                             dimension=dimension,
                             refinement_ratio=ratio,
                             # Ghost values never participate in a conserved cell average; the

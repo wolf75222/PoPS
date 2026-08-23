@@ -288,6 +288,22 @@ mesh::RankSpace<Dim> process_rank_space(const ExecutionLane& lane) {
   return mesh::RankSpace<Dim>(Index<Dim>{}, shape);
 }
 
+/// Materialize the base layout once from the AMR ownership authority. Explicit boxes remain the
+/// exact caller-supplied decomposition; otherwise ``distribute_coarse`` makes its documented
+/// coarse_max_grid cap effective before the load-balance provider sees the layout. A zero cap
+/// retains the historical half-domain tile policy (or the complete singleton axis).
+template <int Dim>
+std::vector<Box<Dim>> initial_coarse_boxes(const AmrSystemConfig<Dim>& config) {
+  if (!config.distribute_coarse || !config.boxes.empty())
+    return config.materialized_boxes();
+
+  Extent<Dim> max_grid = config.coarse_max_grid;
+  for (int axis = 0; axis < Dim; ++axis)
+    if (max_grid[axis] == 0)
+      max_grid[axis] = config.shape[axis] == 1 ? config.shape[axis] : config.shape[axis] / 2;
+  return mesh::BoxArray<Dim>::from_domain(config.index_domain(), max_grid).boxes();
+}
+
 runtime::multiblock::BoundaryEvaluationPoint auxiliary_boundary_evaluation_point(
     const runtime::system::AuxiliaryEvaluationPoint& point) {
   if (point.accepted_step > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
@@ -2505,6 +2521,7 @@ struct AmrSystem<Dim>::Impl {
     std::vector<int> leaf_ops;
     std::vector<double> leaf_thresholds;
     std::vector<int> leaf_stencil_indices;
+    std::vector<std::vector<double>> leaf_windows;
     std::vector<typename runtime::amr::PreparedTaggingProgram<Dim>::Stencil> stencils;
     std::vector<std::int32_t> refine_ops;
     std::vector<std::int32_t> refine_args;
@@ -4248,7 +4265,7 @@ struct AmrSystem<Dim>::Impl {
         contract.scalar(cfg.transition_ratios[transition][axis])
             .scalar(cfg.transition_buffers[transition][axis])
             .scalar(cfg.transition_lookaheads[transition][axis]);
-    const std::vector<Box<Dim>> boxes = cfg.materialized_boxes();
+    const std::vector<Box<Dim>> boxes = initial_coarse_boxes(cfg);
     contract.scalar(static_cast<std::uint64_t>(boxes.size()));
     for (const Box<Dim>& box : boxes)
       for (int axis = 0; axis < Dim; ++axis)
@@ -7954,6 +7971,9 @@ struct AmrSystem<Dim>::Impl {
       const std::string& variable = tagging_spec->leaf_variables[leaf_index];
       std::size_t field_index = 0;
       int component = -1;
+      std::array<double, Dim> window_center{};
+      std::array<double, Dim> window_half_width{};
+      std::array<double, Dim> window_velocity{};
       if (kind == "state") {
         const auto block = std::find_if(blocks.begin(), blocks.end(), [&](const BlockSpec& value) {
           return value.name == block_name;
@@ -7994,6 +8014,26 @@ struct AmrSystem<Dim>::Impl {
         component = static_cast<int>(address.component);
         field_index = bind_field(TaggingFieldKind::auxiliary, identity, address.group,
                                  std::numeric_limits<std::size_t>::max());
+      } else if (kind == "geometry") {
+        if (tagging_spec->leaf_ops[leaf_index] != POPS_TAGGING_PRESCRIBED_WINDOW_V1 ||
+            blocks.empty() ||
+            tagging_spec->leaf_windows[leaf_index].size() != static_cast<std::size_t>(3 * Dim))
+          throw std::invalid_argument(
+              "AMR tagging geometric leaf is not an exact prescribed window");
+        const std::string& carrier = boundary_registry.state_route(blocks.front().name);
+        field_index = bind_field(TaggingFieldKind::state, carrier, {}, 0);
+        component = 0;
+        const auto& window = tagging_spec->leaf_windows[leaf_index];
+        for (int axis = 0; axis < Dim; ++axis) {
+          window_center[axis] = window[static_cast<std::size_t>(axis)];
+          window_half_width[axis] = window[static_cast<std::size_t>(Dim + axis)];
+          window_velocity[axis] = window[static_cast<std::size_t>(2 * Dim + axis)];
+          const double extent = cfg.upper[axis] - cfg.lower[axis];
+          if (!(extent > 0.0) || !(window_half_width[axis] > 0.0) ||
+              !(window_half_width[axis] < 0.5 * extent))
+            throw std::invalid_argument(
+                "AMR prescribed window half-width must lie strictly inside half the domain extent");
+        }
       } else {
         throw std::invalid_argument("AMR tagging leaf has an unknown subject kind");
       }
@@ -8002,7 +8042,8 @@ struct AmrSystem<Dim>::Impl {
           {field_index, static_cast<std::size_t>(component),
            static_cast<std::int32_t>(tagging_spec->leaf_ops[leaf_index]),
            tagging_spec->leaf_thresholds[leaf_index],
-           stencil < 0 ? POPS_TAGGING_NO_STENCIL_V1 : static_cast<std::size_t>(stencil)});
+           stencil < 0 ? POPS_TAGGING_NO_STENCIL_V1 : static_cast<std::size_t>(stencil),
+           window_center, window_half_width, window_velocity});
     }
     resolved_tagging.emplace(std::move(candidate));
     return *resolved_tagging;
@@ -8959,13 +9000,23 @@ struct AmrSystem<Dim>::Impl {
     std::optional<runtime::amr::PreparedTaggerCandidates<Dim>> result;
     std::exception_ptr execution_error;
     try {
+      std::uint32_t periodic_axes = 0;
+      std::array<Real, Dim> physical_lower{};
+      std::array<Real, Dim> physical_upper{};
+      for (int axis = 0; axis < Dim; ++axis) {
+        physical_lower[axis] = cfg.lower[axis];
+        physical_upper[axis] = cfg.upper[axis];
+        if (cfg.periodicity[static_cast<std::size_t>(axis)])
+          periodic_axes |= std::uint32_t{1} << static_cast<unsigned>(axis);
+      }
       if (tagger_component) {
         result.emplace(component_tagging_plan->execute(
             level, engine->hierarchy().layout(level), spacing, tagging_generation(),
             static_cast<std::int64_t>(macro_step), accepted_time));
       } else {
         result.emplace(tagging_plan->execute(level, engine->hierarchy().layout(level), spacing,
-                                             tagging_generation()));
+                                             physical_lower, physical_upper, periodic_axes,
+                                             accepted_time, tagging_generation()));
       }
     } catch (...) {
       execution_error = std::current_exception();
@@ -9613,7 +9664,7 @@ struct AmrSystem<Dim>::Impl {
     std::exception_ptr layout_error;
     try {
       domain_candidate.emplace(cfg.index_domain());
-      patches_candidate.emplace(cfg.materialized_boxes());
+      patches_candidate.emplace(initial_coarse_boxes(cfg));
       ranks_candidate.emplace(process_rank_space<Dim>(package_lane));
       local_rank_candidate.emplace(
           ranks_candidate->coordinate(static_cast<std::size_t>(package_lane.rank())));
@@ -11676,6 +11727,7 @@ void AmrSystem<Dim>::set_bootstrap_tagging(
     const std::vector<std::string>& leaf_blocks, const std::vector<std::string>& leaf_variables,
     const std::vector<int>& leaf_field_component_indices, const std::vector<int>& leaf_ops,
     const std::vector<double>& leaf_thresholds, const std::vector<int>& leaf_stencil_indices,
+    const std::vector<std::vector<double>>& leaf_windows,
     const std::vector<typename runtime::amr::PreparedTaggingProgram<Dim>::Stencil>& stencils,
     const std::vector<std::int32_t>& refine_ops, const std::vector<std::int32_t>& refine_args,
     const std::vector<std::int32_t>& coarsen_ops, const std::vector<std::int32_t>& coarsen_args,
@@ -11694,9 +11746,9 @@ void AmrSystem<Dim>::set_bootstrap_tagging(
         leaf_blocks.size() != leaves || leaf_variables.size() != leaves ||
         leaf_field_component_indices.size() != leaves || leaf_ops.size() != leaves ||
         leaf_thresholds.size() != leaves || leaf_stencil_indices.size() != leaves ||
-        refine_ops.empty() || refine_ops.size() != refine_args.size() ||
-        coarsen_ops.size() != coarsen_args.size() || min_cycles < 0 || clock_identity.empty() ||
-        provider_identity.empty() ||
+        leaf_windows.size() != leaves || refine_ops.empty() ||
+        refine_ops.size() != refine_args.size() || coarsen_ops.size() != coarsen_args.size() ||
+        min_cycles < 0 || clock_identity.empty() || provider_identity.empty() ||
         (p_->tagger_component && p_->tagger_component->spec.clock_identity != clock_identity))
       throw std::invalid_argument(
           "AMR prepared tagging requires one complete unique pre-materialization graph");
@@ -11713,15 +11765,27 @@ void AmrSystem<Dim>::set_bootstrap_tagging(
       throw std::invalid_argument("AMR prepared tagging has an unknown decision policy");
     for (std::size_t index = 0; index < leaves; ++index) {
       const std::string& kind = leaf_subject_kinds[index];
-      if ((kind != "state" && kind != "aux" && kind != "field") ||
-          leaf_subject_identities[index].empty() || leaf_variables[index].empty() ||
+      const bool geometry = kind == "geometry";
+      if ((kind != "state" && kind != "aux" && kind != "field" && !geometry) ||
+          leaf_subject_identities[index].empty() || (!geometry && leaf_variables[index].empty()) ||
           !std::isfinite(leaf_thresholds[index]) ||
           !pops_tagging_opcode_is_leaf_v1(leaf_ops[index]) ||
           (kind == "state" && leaf_blocks[index].empty()) ||
-          (kind != "state" && !leaf_blocks[index].empty()) ||
+          (!geometry && kind != "state" && !leaf_blocks[index].empty()) ||
           (kind == "field" && leaf_field_component_indices[index] < 0) ||
-          (kind != "field" && leaf_field_component_indices[index] != -1))
+          (!geometry && kind != "field" && leaf_field_component_indices[index] != -1) ||
+          (geometry && (!leaf_blocks[index].empty() || !leaf_variables[index].empty() ||
+                        leaf_field_component_indices[index] != -1 ||
+                        leaf_ops[index] != POPS_TAGGING_PRESCRIBED_WINDOW_V1 ||
+                        leaf_stencil_indices[index] != -1 ||
+                        leaf_windows[index].size() != static_cast<std::size_t>(3 * Dim))))
         throw std::invalid_argument("AMR prepared tagging has an invalid qualified leaf");
+      if (!geometry && !leaf_windows[index].empty())
+        throw std::invalid_argument("AMR tagging non-geometric leaf cannot carry window data");
+      if (geometry)
+        for (const double value : leaf_windows[index])
+          if (!std::isfinite(value))
+            throw std::invalid_argument("AMR prescribed window has non-finite geometry");
       if (kind == "field" && !p_->cfg.explicit_bootstrap)
         throw std::invalid_argument(
             "AMR field tagging requires explicit bootstrap so its exact field plan can be "
@@ -11773,6 +11837,7 @@ void AmrSystem<Dim>::set_bootstrap_tagging(
                  leaf_ops,
                  leaf_thresholds,
                  leaf_stencil_indices,
+                 leaf_windows,
                  stencils,
                  refine_ops,
                  refine_args,
@@ -11785,7 +11850,7 @@ void AmrSystem<Dim>::set_bootstrap_tagging(
                  provider_identity};
     ExactContractBuilder exact;
     exact.text("pops.amr-system.prepared-tagging-authoring")
-        .scalar(std::uint32_t{1})
+        .scalar(std::uint32_t{2})
         .scalar(std::int32_t{Dim})
         .sequence(leaf_subject_kinds,
                   [](ExactContractBuilder& row, const std::string& value) { row.text(value); })
@@ -11799,6 +11864,8 @@ void AmrSystem<Dim>::set_bootstrap_tagging(
         .sequence(leaf_ops)
         .sequence(leaf_thresholds)
         .sequence(leaf_stencil_indices)
+        .sequence(leaf_windows, [](ExactContractBuilder& row,
+                                   const std::vector<double>& value) { row.sequence(value); })
         .scalar(static_cast<std::uint64_t>(stencils.size()));
     for (const auto& stencil : stencils) {
       exact.text(stencil.identity)
@@ -16515,7 +16582,9 @@ double AmrSystem<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, d
     if (active == 0)
       candidate = std::numeric_limits<double>::infinity();
     candidate = all_reduce_min(candidate, lane);
-    if (candidate < selected) {
+    // Opaque bounds win ties: even an equal event/program limit must not later be rounded upward
+    // as though the native CFL were the sole authority.
+    if (candidate <= selected) {
       selected = candidate;
       reason_kind = BoundKind::global;
       global_reason_index = bound_index;
@@ -16543,14 +16612,27 @@ double AmrSystem<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, d
     if (active == 0)
       candidate = std::numeric_limits<double>::infinity();
     candidate = all_reduce_min(candidate, lane);
-    if (std::isfinite(candidate) && candidate > 0.0 && candidate < selected) {
+    if (std::isfinite(candidate) && candidate > 0.0 && candidate <= selected) {
       selected = candidate;
       reason_kind = BoundKind::program;
     }
   }
+  const double raw_selected = selected;
+  if (all_reduce_max(raw_selected < min_dt ? 1L : 0L, lane) != 0)
+    throw std::runtime_error("AmrSystem::step_cfl stability bound is below declared min_dt");
+  const bool selected_is_native_cfl =
+      reason_kind == BoundKind::transport || reason_kind == BoundKind::source_frequency ||
+      reason_kind == BoundKind::parabolic_frequency || reason_kind == BoundKind::stability_dt;
   if (max_dt < selected) {
     selected = max_dt;
     reason_kind = BoundKind::maximum_dt;
+  } else if (selected_is_native_cfl && std::isfinite(max_dt) && selected < max_dt) {
+    // Coalesce only cancellation-sized cap noise.  This avoids an unpartitionable one-ULP AMR
+    // remainder while retaining the physical CFL bound even when the facade clock is very large.
+    if (runtime::program::cfl_cap_is_rounding_equivalent(p_->accepted_time, selected, max_dt)) {
+      selected = max_dt;
+      reason_kind = BoundKind::maximum_dt;
+    }
   }
   if (all_reduce_max(selected < min_dt ? 1L : 0L, lane) != 0)
     throw std::runtime_error("AmrSystem::step_cfl stability bound is below declared min_dt");
@@ -17720,6 +17802,18 @@ std::vector<AmrPatch<Dim>> AmrSystem<Dim>::patch_boxes() {
   for (std::size_t level = 1; level < p_->engine->hierarchy().num_levels(); ++level)
     for (const Box<Dim>& box : p_->engine->hierarchy().layout(level).patches().boxes())
       result.push_back({static_cast<int>(level), box});
+  return result;
+}
+
+template <int Dim>
+std::vector<Box<Dim>> AmrSystem<Dim>::local_boxes(const std::string& name) {
+  p_->require_inspectable_hierarchy();
+  const std::size_t block = p_->block_index(name);
+  const MultiFab<Dim>& state = p_->block_state(block, 0);
+  std::vector<Box<Dim>> result;
+  result.reserve(state.local_size());
+  for (std::size_t local = 0; local < state.local_size(); ++local)
+    result.push_back(state.box(local));
   return result;
 }
 
@@ -20132,6 +20226,7 @@ template void AmrSystem<kNativeDimension>::set_bootstrap_tagging(
     const std::vector<std::string>&, const std::vector<std::string>&,
     const std::vector<std::string>&, const std::vector<std::string>&, const std::vector<int>&,
     const std::vector<int>&, const std::vector<double>&, const std::vector<int>&,
+    const std::vector<std::vector<double>>&,
     const std::vector<runtime::amr::PreparedTaggingProgram<kNativeDimension>::Stencil>&,
     const std::vector<std::int32_t>&, const std::vector<std::int32_t>&,
     const std::vector<std::int32_t>&, const std::vector<std::int32_t>&, int, const std::string&,
@@ -20524,6 +20619,8 @@ template std::vector<std::string> AmrSystem<kNativeDimension>::variable_names(
 template int AmrSystem<kNativeDimension>::block_n_vars(const std::string&);
 template int AmrSystem<kNativeDimension>::n_patches();
 template std::vector<AmrPatch<kNativeDimension>> AmrSystem<kNativeDimension>::patch_boxes();
+template std::vector<Box<kNativeDimension>> AmrSystem<kNativeDimension>::local_boxes(
+    const std::string&);
 template std::vector<AmrPatch<kNativeDimension>>
 AmrSystem<kNativeDimension>::output_geometry_boxes();
 template int AmrSystem<kNativeDimension>::coarse_local_boxes();

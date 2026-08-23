@@ -705,7 +705,8 @@ pops_test_source(_src test_coupled_source_stack_limit)
 pops_add_gtest_suite(NAME test_coupled_source_stack_limit SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system)
 
 pops_test_source(_src test_program_runtime)
-pops_add_gtest_suite(NAME test_program_runtime SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system)
+# This suite exercises both the uniform ProgramContext and its AMR production-duration carrier.
+pops_add_gtest_suite(NAME test_program_runtime SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system pops_runtime_amr)
 
 # ADC-538: the native ProgramContext contract + the history-ring checkpoint round-trip both drive a
 # real System (the ring memory is co-distributed with block 0), so they link the heavy runtime object
@@ -813,7 +814,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_cartesian_poisson_nd 3)
   set(POPS_MPI_RANKS_test_mpi_multiblock_interface_scheduler 2)
   set(POPS_MPI_RANKS_test_mpi_nd_translation_exchange 1 2 4)
-  set(POPS_MPI_RANKS_test_mpi_halo_exchange 1 2 4)
+  set(POPS_MPI_RANKS_test_mpi_halo_exchange 1 2 4 8)
   set(POPS_MPI_RANKS_test_mpi_auxiliary_ghost_fill 2 3)
   set(POPS_MPI_RANKS_test_mpi_prepared_amr_ghost_fill 3)
   set(POPS_MPI_RANKS_test_mpi_coupler_inject 4)
@@ -912,7 +913,8 @@ if(POPS_HAS_MPI)
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_amr)
     elseif(_test STREQUAL "test_mpi_multiblock_interface_scheduler")
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_amr)
-    elseif(_test MATCHES "^test_mpi_system_" OR _test STREQUAL "test_mpi_coupled_source")
+    elseif(_test MATCHES "^test_mpi_system_" OR _test STREQUAL "test_mpi_coupled_source" OR
+           _test STREQUAL "test_mpi_halo_exchange")
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_system)
     elseif(_test STREQUAL "test_mpi_amr_program_reflux" OR
            _test STREQUAL "test_mpi_amr_rebalance_migration")

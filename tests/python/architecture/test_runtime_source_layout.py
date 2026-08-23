@@ -25,6 +25,9 @@ PACKAGE_CONFIG = (ROOT / "cmake" / "popsConfig.cmake.in").read_text(encoding="ut
 NATIVE_DSO_COMPILER = (
     ROOT / "tests" / "cpp" / "support" / "native_dso_compiler.hpp"
 ).read_text(encoding="utf-8")
+NATIVE_BUILD_FINGERPRINT = (
+    ROOT / "cmake" / "PopsNativeBuildFingerprint.cmake"
+).read_text(encoding="utf-8")
 
 
 def _rel(path: pathlib.Path) -> str:
@@ -189,6 +192,24 @@ def test_central_targets_preserve_consumer_specific_compile_contracts():
     for name in ("ci-kokkos", "ci-mpi"):
         assert configure_presets[name]["cacheVariables"]["POPS_HEAVY_TEST_TU_POOL"] == "1"
         assert "POPS_HEAVY_MODULE_TU_POOL" not in configure_presets[name]["cacheVariables"]
+
+
+def test_native_build_fingerprint_is_one_configured_common_compile_contract():
+    assert "include(cmake/PopsNativeBuildFingerprint.cmake)" in ROOT_CMAKE
+    assert "pops_compute_native_build_fingerprint(POPS_NATIVE_BUILD_FINGERPRINT)" in ROOT_CMAKE
+    assert 'POPS_BUILD_FINGERPRINT="${POPS_NATIVE_BUILD_FINGERPRINT}"' in PYTHON_CMAKE
+    assert "function(pops_compute_native_build_fingerprint output)" in NATIVE_BUILD_FINGERPRINT
+    assert "file(GLOB_RECURSE _pops_native_implementation_inputs" in NATIVE_BUILD_FINGERPRINT
+    assert "CONFIGURE_DEPENDS" in NATIVE_BUILD_FINGERPRINT
+    assert "CMAKE_CONFIGURE_DEPENDS" in NATIVE_BUILD_FINGERPRINT
+    for invariant in (
+        "POPS_NATIVE_HEADER_SIGNATURE",
+        "POPS_NATIVE_KOKKOS_ABI",
+        "POPS_REAL_TYPE",
+        "POPS_CXX_STD",
+    ):
+        assert invariant in NATIVE_BUILD_FINGERPRINT
+    assert "POPS_NATIVE_DIM, MPI/MPI_ABI and HDF5 are intentionally" in NATIVE_BUILD_FINGERPRINT
 
 
 def test_runtime_compiled_test_dsos_replay_the_complete_native_mpi_contract():

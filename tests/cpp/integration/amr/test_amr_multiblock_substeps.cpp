@@ -247,7 +247,7 @@ void prove_multiblock_subcycling() {
         hierarchy.topology_runtime().hierarchy().layout(parent_level + 1).domain().lo};
     const auto fine_faces =
         reflux::fine_faces_for_coarse_face(query, ratio, mapping, metric_budget);
-    const double duration = context.window.end.physical_time - context.window.begin.physical_time;
+    const double duration = context.physical_duration;
     const reflux::FaceFluxFragmentMeasure measure{
         {1, 1},
         context.window.begin.phase,
@@ -266,7 +266,9 @@ void prove_multiblock_subcycling() {
     if (group.size() != 2 || group[0].block != 0 || group[1].block != 1 ||
         group[0].level != group[1].level || group[0].substep != group[1].substep ||
         group[0].window.begin != group[1].window.begin ||
-        group[0].window.end != group[1].window.end)
+        group[0].window.end != group[1].window.end ||
+        group[0].physical_duration != group[1].physical_duration ||
+        !(group[0].physical_duration > 0.0))
       throw std::runtime_error("level-group callback lost its simultaneous block pack");
     for (auto& context : group) {
       callback_order.push_back(std::string(context.block_identity) + ":L" +
@@ -274,14 +276,11 @@ void prove_multiblock_subcycling() {
                                std::to_string(context.substep));
       if (context.level > 0 && context.staged_parent == nullptr)
         throw std::runtime_error("child callback lost its staged parent-time image");
-      add_conservative_pair(
-          context.candidate,
-          pops::Real(0.01) * pops::Real(context.block + 1) * pops::Real(context.level + 1) *
-              pops::Real(context.window.end.physical_time - context.window.begin.physical_time));
+      add_conservative_pair(context.candidate, pops::Real(0.01) * pops::Real(context.block + 1) *
+                                                   pops::Real(context.level + 1) *
+                                                   pops::Real(context.physical_duration));
     }
-    const pops::Real coupled_fraction =
-        pops::Real(0.05) *
-        pops::Real(group[0].window.end.physical_time - group[0].window.begin.physical_time);
+    const pops::Real coupled_fraction = pops::Real(0.05) * pops::Real(group[0].physical_duration);
     exchange_coupled_pack(group[0].candidate, group[1].candidate, coupled_fraction);
     for (auto& context : group) {
       if (context.outgoing_flux != nullptr)
@@ -414,4 +413,89 @@ TEST(test_amr_multiblock_substeps, three_levels_two_blocks_are_atomic_and_conser
   prove_multiblock_subcycling<1>();
   prove_multiblock_subcycling<2>();
   prove_multiblock_subcycling<3>();
+}
+
+TEST(test_amr_multiblock_substeps,
+     explicit_root_duration_survives_cancellation_through_every_level_context) {
+  MultiBlock<1> hierarchy = make_hierarchy<1>();
+  const std::vector<pops::amr::ParentChildClockRelation> relations{
+      {0, 1, {2, 1}, pops::amr::RemainderPolicy::IntegralOnly},
+      {1, 2, {2, 1}, pops::amr::RemainderPolicy::IntegralOnly}};
+  Engine<1> engine = Engine<1>::prepare(
+      hierarchy, relations, {{2, {32, 496}}, reflux::FaceFluxLedgerBudget{256, 256, 1}});
+
+  const double begin = 1.0;
+  const double ulp = std::nextafter(begin, 2.0) - begin;
+  double end = begin;
+  for (int step = 0; step < 12; ++step)
+    end = std::nextafter(end, 2.0);
+  const double endpoint_duration = end - begin;
+  const double authoritative_duration = endpoint_duration - 0.5 * ulp;
+  ASSERT_NE(authoritative_duration, endpoint_duration);
+  const pops::amr::ClockWindow root{{0, 8, {0, 1}, begin}, {0, 8, {1, 1}, end}};
+
+  std::array<int, 3> level_visits{};
+  const auto advance = [&](std::span<typename Engine<1>::LevelAdvanceContext> group) {
+    ASSERT_EQ(group.size(), 2u);
+    ASSERT_LT(group.front().level, level_visits.size());
+    const double expected =
+        authoritative_duration / static_cast<double>(std::size_t{1} << group.front().level);
+    for (const auto& context : group) {
+      EXPECT_DOUBLE_EQ(context.physical_duration, expected);
+      EXPECT_EQ(context.window.begin, group.front().window.begin);
+      EXPECT_EQ(context.window.end, group.front().window.end);
+    }
+    ++level_visits[group.front().level];
+  };
+  const auto reflux = [](auto&) {};
+  const auto validate = [](auto, auto, const auto&) {};
+  EXPECT_NO_THROW(engine.advance(root, authoritative_duration, advance, reflux, validate));
+  EXPECT_EQ(level_visits, (std::array<int, 3>{1, 2, 4}));
+
+  int unrelated_callbacks = 0;
+  const auto unrelated_advance = [&](auto) { ++unrelated_callbacks; };
+  EXPECT_THROW(engine.advance(root, endpoint_duration * 8.0, unrelated_advance, reflux, validate),
+               std::invalid_argument);
+  EXPECT_EQ(unrelated_callbacks, 0);
+}
+
+TEST(test_amr_multiblock_substeps,
+     nextafter_sized_child_window_rejects_before_callbacks_or_candidate_mutation) {
+  MultiBlock<1> hierarchy = make_hierarchy<1>();
+  const std::vector<pops::amr::ParentChildClockRelation> relations{
+      {0, 1, {2, 1}, pops::amr::RemainderPolicy::IntegralOnly},
+      {1, 2, {2, 1}, pops::amr::RemainderPolicy::IntegralOnly}};
+  Engine<1> engine = Engine<1>::prepare(
+      hierarchy, relations, {{2, {32, 496}}, reflux::FaceFluxLedgerBudget{256, 256, 1}});
+
+  std::vector<std::vector<pops::MultiFab<1>>> accepted(2);
+  for (std::size_t block = 0; block < 2; ++block)
+    for (std::size_t level = 0; level < 3; ++level)
+      accepted[block].emplace_back(hierarchy.state(block, level));
+  const std::uint64_t revision = hierarchy.accepted_revision();
+  int callbacks = 0;
+  const auto advance = [&](auto) { ++callbacks; };
+  const auto reflux = [&](auto&) { ++callbacks; };
+  const auto validate = [&](auto, auto, const auto&) { ++callbacks; };
+
+  // The rational partition is valid, but its first 1/2 child endpoint rounds back to 1.0.  The
+  // whole recursive tree must reject before the coarse callback and before an attempt is allocated.
+  const pops::amr::ClockWindow collapsed{{0, 0, {0, 1}, 1.0},
+                                         {0, 0, {1, 1}, std::nextafter(1.0, 2.0)}};
+  EXPECT_THROW(engine.advance(collapsed, advance, reflux, validate), std::overflow_error);
+  EXPECT_EQ(callbacks, 0);
+  EXPECT_EQ(engine.last_accepted_attempt(), 0U);
+  EXPECT_EQ(hierarchy.accepted_revision(), revision);
+  for (std::size_t block = 0; block < 2; ++block)
+    for (std::size_t level = 0; level < 3; ++level)
+      EXPECT_EQ(pops::difference_sum_sq_all(hierarchy.state(block, level), accepted[block][level]),
+                pops::Real(0));
+  for (std::size_t block = 0; block < 2; ++block) {
+    for (std::size_t level = 0; level < 3; ++level) {
+      EXPECT_FALSE(engine.accepted_clock(block, level).has_value());
+      EXPECT_FALSE(engine.accepted_history(block, level).has_value());
+    }
+    for (std::size_t parent_level = 0; parent_level < 2; ++parent_level)
+      EXPECT_TRUE(engine.ledgers(block, parent_level).empty());
+  }
 }

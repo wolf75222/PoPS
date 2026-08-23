@@ -234,6 +234,7 @@ double System<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, doub
 
   double selected = std::numeric_limits<double>::infinity();
   std::string reason = "degenerate";
+  bool selected_is_native_cfl = false;
   for (std::size_t block_index = 0; block_index < p_->sp.size(); ++block_index) {
     typename Impl::Species& block = p_->sp[block_index];
     if (!block.evolve)
@@ -282,6 +283,7 @@ double System<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, doub
     if (block_dt < selected) {
       selected = block_dt;
       reason = std::string(block_reason) + ":" + block.name;
+      selected_is_native_cfl = true;
     }
   }
 
@@ -292,6 +294,7 @@ double System<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, doub
     if (candidate < selected) {
       selected = candidate;
       reason = "coupled_source:" + frequency.label;
+      selected_is_native_cfl = true;
     }
   }
   for (const runtime::system::PreparedCoupledFrequency& frequency :
@@ -310,6 +313,7 @@ double System<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, doub
     if (candidate < selected) {
       selected = candidate;
       reason = "coupled_source:" + frequency.label;
+      selected_is_native_cfl = true;
     }
   }
   for (const runtime::system::GlobalDtBound& bound : p_->coupling_.dt_bounds) {
@@ -319,24 +323,38 @@ double System<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, doub
     if (!(candidate > 0.0) || !std::isfinite(candidate))
       candidate = std::numeric_limits<double>::infinity();
     candidate = all_reduce_min(candidate, lane);
-    if (candidate < selected) {
+    // Opaque global bounds win ties so their event semantics cannot be rounded beyond the cap.
+    if (std::isfinite(candidate) && candidate <= selected) {
       selected = candidate;
       reason = "global:" + bound.label;
+      selected_is_native_cfl = false;
     }
   }
 
   if (p_->program_.dt_bound_) {
     const double program_dt = static_cast<double>(p_->program_.dt_bound_(static_cast<Real>(cfl)));
-    if (std::isfinite(program_dt) && program_dt > 0.0 && program_dt < selected) {
+    if (std::isfinite(program_dt) && program_dt > 0.0 && program_dt <= selected) {
       selected = program_dt;
       reason = "program:dt_bound";
+      selected_is_native_cfl = false;
     }
   }
-  if (!std::isfinite(selected))
+  if (!std::isfinite(selected)) {
     selected = cfl * static_cast<double>(minimum_spacing) / speed_floor;
+    selected_is_native_cfl = true;
+  }
+  const double raw_selected = selected;
+  if (all_reduce_max(raw_selected < min_dt ? 1L : 0L, lane) != 0)
+    throw std::runtime_error("System::step_cfl stability bound is below declared min_dt");
   if (max_dt < selected) {
     selected = max_dt;
     reason = "strategy:max_dt";
+  } else if (selected_is_native_cfl && std::isfinite(max_dt) && selected < max_dt) {
+    // Keep Uniform and AMR cap canonicalization identical, including the relative CFL guard.
+    if (runtime::program::cfl_cap_is_rounding_equivalent(p_->t, selected, max_dt)) {
+      selected = max_dt;
+      reason = "strategy:max_dt";
+    }
   }
   if (all_reduce_max(selected < min_dt ? 1L : 0L, lane) != 0)
     throw std::runtime_error("System::step_cfl stability bound is below declared min_dt");

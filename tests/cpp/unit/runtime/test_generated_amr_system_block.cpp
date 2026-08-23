@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -1827,6 +1828,173 @@ TEST(GeneratedAmrSystemBlock, CflUsesFinestExactGeometryAndPreparedModelSpeed) {
   const double expected = cfl * (1.0 / 16.0) * 2.0 / static_cast<double>(Dim);
   EXPECT_NEAR(dt, expected, 1.0e-12);
   EXPECT_EQ(system.last_dt_bound(), "transport:tracer");
+}
+
+TEST(GeneratedAmrSystemBlock,
+     AdaptiveCflCoalescesFacadeEndpointCapBeforeTwoToOneSubcyclingCanCollapseIt) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  config.level_count = 2;
+  config.regrid_every = 0;
+  config.transition_ratios.resize(1);
+  config.transition_buffers.resize(1);
+  config.transition_lookaheads.resize(1);
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = 8;
+    config.transition_ratios[0][axis] = 2;
+    config.transition_buffers[0][axis] = 1;
+    config.transition_lookaheads[0][axis] = 1;
+  }
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/cfl-rounded-cap-runtime");
+  system.set_temporal_relations({2}, {1}, {"integral_only"});
+  system.install_block_state_route("tracer", "state/cfl-rounded-cap-tracer");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>(), "minmod", "rusanov",
+                                "conservative", "explicit", 1.4, 1, 1);
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  publish_centered_fine_level(system);
+  ASSERT_EQ(system.n_levels(), 2);
+
+  // The raw CFL step is just below a cap whose facade endpoint is one ULP later near t=1.  The
+  // former tolerance was scaled by dt and rejected this equivalence, leaving a final one-ULP
+  // root interval that a 2:1 temporal relation cannot partition into strict child timestamps.
+  const double accepted = 1.0;
+  const double cfl = 0.8;
+  const double raw = cfl * 0.0625 / 4.0;
+  const double target = std::nextafter(accepted + raw, std::numeric_limits<double>::infinity());
+  const double cap = target - accepted;
+  ASSERT_LT(raw, cap);
+  ASSERT_GT(cap - raw, 4.0 * std::numeric_limits<double>::epsilon() * raw);
+  ASSERT_TRUE(
+      pops::runtime::program::same_representable_facade_endpoint(accepted, raw, cap));
+  ASSERT_TRUE(pops::runtime::program::cfl_cap_is_rounding_equivalent(accepted, raw, cap));
+  system.set_clock(accepted, 1);
+  pops::test::install_forward_euler_program(system, false);
+
+  // The raw CFL result, not a subsequently rounded-up strategy cap, owns min_dt validation.
+  EXPECT_THROW((void)system.step_cfl(cfl, /*speed_floor=*/4.0, cap, /*min_dt=*/cap),
+               std::runtime_error);
+  EXPECT_DOUBLE_EQ(system.time(), accepted);
+  EXPECT_EQ(system.macro_step(), 1);
+
+  EXPECT_DOUBLE_EQ(system.step_cfl(cfl, /*speed_floor=*/4.0, cap), cap);
+  EXPECT_EQ(system.last_dt_bound(), "strategy:max_dt");
+  EXPECT_DOUBLE_EQ(system.time(), target);
+  EXPECT_EQ(system.macro_step(), 2);
+  const auto accepted_state = pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(
+      system.program_accepted_state());
+  ASSERT_EQ(accepted_state.level_clocks.size(), 2u);
+  for (const auto& clock : accepted_state.level_clocks)
+    EXPECT_DOUBLE_EQ(clock.physical_time, target);
+  EXPECT_FALSE(system.program_sync_manifest().empty());
+  std::size_t accepted_flux_fragments = 0;
+  for (const auto& axis : accepted_state.accepted_face_flux)
+    for (const auto& fragment : axis) {
+      ++accepted_flux_fragments;
+      EXPECT_GT(static_cast<double>(fragment.measure.substep_duration), 0.0);
+    }
+  EXPECT_GT(accepted_flux_fragments, 0u);
+  for (int level = 0; level < system.n_levels(); ++level)
+    for (const double value : system.block_level_state_global("tracer", level))
+      EXPECT_TRUE(std::isfinite(value));
+
+  // A restore consumes the serialized accepted flux/clock artifact, so this also guards against a
+  // collapsed subcycling window being smuggled into a checkpoint after the coalesced macrostep.
+  const auto checkpoint = system.program_accepted_state();
+  EXPECT_NO_THROW(system.restore_checkpoint_accepted_state(checkpoint));
+  EXPECT_EQ(system.program_accepted_state(), checkpoint);
+  const auto restored = pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(
+      system.program_accepted_state());
+  ASSERT_EQ(restored.level_clocks.size(), 2u);
+  for (const auto& clock : restored.level_clocks)
+    EXPECT_DOUBLE_EQ(clock.physical_time, target);
+  std::size_t restored_flux_fragments = 0;
+  for (const auto& axis : restored.accepted_face_flux)
+    for (const auto& fragment : axis) {
+      ++restored_flux_fragments;
+      EXPECT_GT(static_cast<double>(fragment.measure.substep_duration), 0.0);
+    }
+  EXPECT_EQ(restored_flux_fragments, accepted_flux_fragments);
+}
+
+TEST(GeneratedAmrSystemBlock,
+     AdaptiveCflDoesNotTreatMaterialIncrementGrowthAsFacadeRoundingAtLargeTime) {
+  // Four ULPs of a very large facade time can be many times the selected dt.  Endpoint proximity
+  // must therefore be paired with the relative CFL guard before a stability bound is enlarged.
+  constexpr double accepted = 1.0e16;
+  constexpr double selected = 2.0;
+  constexpr double half_larger_cap = 3.0;
+  constexpr double four_times_larger_cap = 10.0;
+  ASSERT_TRUE(
+      pops::runtime::program::same_representable_facade_endpoint(accepted, selected, half_larger_cap));
+  EXPECT_FALSE(
+      pops::runtime::program::cfl_cap_is_rounding_equivalent(accepted, selected, half_larger_cap));
+  ASSERT_TRUE(pops::runtime::program::same_representable_facade_endpoint(
+      accepted, selected, four_times_larger_cap));
+  EXPECT_FALSE(pops::runtime::program::cfl_cap_is_rounding_equivalent(
+      accepted, selected, four_times_larger_cap));
+
+  // The endpoint rule still admits this small-increment pair, so this is specifically the 1024
+  // ULP relative guard rejecting a cap just above its documented threshold.
+  constexpr double ordinary_time = 1.0;
+  const double ordinary_selected = std::ldexp(1.0, -52);
+  const double just_below_relative_cap =
+      ordinary_selected + 1023.0 * std::numeric_limits<double>::epsilon() * ordinary_selected;
+  ASSERT_TRUE(pops::runtime::program::same_representable_facade_endpoint(
+      ordinary_time, ordinary_selected, just_below_relative_cap));
+  EXPECT_TRUE(pops::runtime::program::cfl_cap_is_rounding_equivalent(
+      ordinary_time, ordinary_selected, just_below_relative_cap));
+  const double at_relative_cap =
+      ordinary_selected + 1024.0 * std::numeric_limits<double>::epsilon() * ordinary_selected;
+  ASSERT_TRUE(pops::runtime::program::same_representable_facade_endpoint(
+      ordinary_time, ordinary_selected, at_relative_cap));
+  EXPECT_DOUBLE_EQ((at_relative_cap - ordinary_selected) / ordinary_selected,
+                   1024.0 * std::numeric_limits<double>::epsilon());
+  EXPECT_TRUE(pops::runtime::program::cfl_cap_is_rounding_equivalent(
+      ordinary_time, ordinary_selected, at_relative_cap));
+  const double just_above_relative_cap =
+      ordinary_selected + 1025.0 * std::numeric_limits<double>::epsilon() * ordinary_selected;
+  ASSERT_TRUE(pops::runtime::program::same_representable_facade_endpoint(
+      ordinary_time, ordinary_selected, just_above_relative_cap));
+  ASSERT_GT(just_above_relative_cap - ordinary_selected,
+            1024.0 * std::numeric_limits<double>::epsilon() * ordinary_selected);
+  EXPECT_FALSE(pops::runtime::program::cfl_cap_is_rounding_equivalent(
+      ordinary_time, ordinary_selected, just_above_relative_cap));
+
+  // The predicate accepts all finite positive increments.  A subnormal equal cap is harmless and
+  // its endpoint is representable at the zero facade clock.
+  const double subnormal = std::numeric_limits<double>::denorm_min();
+  EXPECT_TRUE(pops::runtime::program::cfl_cap_is_rounding_equivalent(0.0, subnormal, subnormal));
+}
+
+TEST(GeneratedAmrSystemBlock, AdaptiveCflNeverCoalescesAnEndpointEquivalentGlobalBound) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 4;
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/cfl-global-cap");
+  system.install_block_state_route("tracer", "state/cfl-global-cap-tracer");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>(), "minmod", "rusanov",
+                                "conservative", "explicit", 1.4, 1, 1);
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  const double accepted = 1.0;
+  // This ties the generated transport CFL exactly.  The opaque global event must nevertheless win
+  // the tie and remain unrounded.
+  constexpr double global_bound = 0.05;
+  const double cap =
+      std::nextafter(accepted + global_bound, std::numeric_limits<double>::infinity()) - accepted;
+  ASSERT_TRUE(pops::runtime::program::cfl_cap_is_rounding_equivalent(accepted, global_bound, cap));
+  system.add_dt_bound("event", [] { return global_bound; });
+  int callbacks = 0;
+  system.install_program_step([&callbacks](double) { ++callbacks; });
+  system.set_clock(accepted, 0);
+
+  EXPECT_DOUBLE_EQ(system.step_cfl(0.8, /*speed_floor=*/4.0, cap), global_bound);
+  EXPECT_EQ(system.last_dt_bound(), "global:event");
+  EXPECT_DOUBLE_EQ(system.time(), accepted + global_bound);
+  EXPECT_EQ(system.macro_step(), 1);
+  EXPECT_EQ(callbacks, 1);
 }
 
 TEST(GeneratedAmrSystemBlock, DiffusiveCflUsesFinestParabolicGeometryAndReportsFrequency) {

@@ -708,9 +708,12 @@ void validate_prepared_block(const PreparedSystemBlock<Dim>& block) {
       !closures.rhs_at_point || !closures.rhs_flux_only_at_point || !closures.rhs_core_at_point ||
       !closures.rhs_flux_only_core_at_point || !closures.rhs_core_at_point_prepared ||
       !closures.rhs_flux_only_core_at_point_prepared ||
+      !closures.transport_rhs_at_point_prepared ||
+      !closures.transport_flux_at_point_prepared ||
       !closures.prepare_generated_state_at_point ||
       !closures.prepare_generated_state_at_point_prepared ||
       !closures.prepare_generated_state_with_transport_prepared ||
+      !closures.transport_prepare_generated_state_at_point_prepared ||
       !closures.external_ghost_boundary || !block.maximum_speed || !block.poisson_rhs ||
       !block.primitive_to_conservative || !block.conservative_to_primitive ||
       !block.batch_conservative_to_primitive)
@@ -759,6 +762,11 @@ PreparedBlockInstallation<Dim, Implementation> prepare_block_installation(
     boundary = std::make_shared<PreparedHyperbolicBoundary<Dim>>(
         installed_boundary->authority->with_converted_fixed_states(
             prepared.primitive_to_conservative));
+  } else if (std::any_of(implementation.periodicity.begin(), implementation.periodicity.end(),
+                         [](bool periodic) { return !periodic; })) {
+    throw std::invalid_argument(
+        "prepared System block with a physical domain face requires one "
+        "PreparedHyperbolicBoundary; a boundary-less block is periodic on every native axis");
   }
 
   if (prepared.provider_components != 0 && auxiliary_registry.sealed()) {
@@ -816,10 +824,14 @@ PreparedBlockInstallation<Dim, Implementation> prepare_block_installation(
       std::move(prepared.closures.boundary_full_at_point_prepared);
   candidate.boundary_core_at_point_prepared =
       std::move(prepared.closures.boundary_core_at_point_prepared);
+  candidate.transport_rhs_at_point_prepared =
+      std::move(prepared.closures.transport_rhs_at_point_prepared);
   candidate.boundary_flux_full_at_point_prepared =
       std::move(prepared.closures.boundary_flux_full_at_point_prepared);
   candidate.boundary_flux_core_at_point_prepared =
       std::move(prepared.closures.boundary_flux_core_at_point_prepared);
+  candidate.transport_flux_at_point_prepared =
+      std::move(prepared.closures.transport_flux_at_point_prepared);
   candidate.boundary_residual_at_point_prepared =
       std::move(prepared.closures.boundary_residual_at_point_prepared);
   candidate.boundary_jvp_at_point_prepared =
@@ -834,6 +846,8 @@ PreparedBlockInstallation<Dim, Implementation> prepare_block_installation(
       std::move(prepared.closures.prepare_generated_state_at_point_prepared);
   candidate.prepare_generated_state_with_transport_prepared =
       std::move(prepared.closures.prepare_generated_state_with_transport_prepared);
+  candidate.transport_prepare_generated_state_at_point_prepared =
+      std::move(prepared.closures.transport_prepare_generated_state_at_point_prepared);
   candidate.external_ghost_boundary = std::move(prepared.closures.external_ghost_boundary);
   candidate.boundary = boundary;
   candidate.state_identity = state_identity;

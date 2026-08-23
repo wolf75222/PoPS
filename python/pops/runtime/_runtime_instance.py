@@ -547,6 +547,21 @@ class RuntimeInstance:
         """Compatibility alias for :meth:`flush_post_commit_consumers`."""
         return self.flush_post_commit_consumers()
 
+    def synchronize(self) -> None:
+        """Fence the authenticated native execution space without advancing a run.
+
+        This is deliberately one RuntimeInstance-level lifecycle primitive.  It
+        does not infer a model, dispatch a numerical operation, or fall back to
+        a Python barrier when the selected extension lacks the native seam.
+        """
+        from pops._native_selector import selected_native_module
+
+        native = selected_native_module(required=True)
+        synchronize = getattr(native, "runtime_synchronize", None)
+        if not callable(synchronize):
+            raise RuntimeError("selected native extension lacks required runtime_synchronize seam")
+        synchronize()
+
     def retry_consumer_finalizers(self) -> tuple[str, ...]:
         """Retry release-only finalizers without reopening accepted transactions."""
         return self._retry_consumer_finalizers()
@@ -801,9 +816,7 @@ class RuntimeInstance:
         """Evaluate neutralizing as ``eps * composite_mean(block[component])``."""
         setter = getattr(self._executor, "set_field_composite_mean_neutralizing", None)
         if not callable(setter):
-            raise NotImplementedError(
-                "this runtime does not expose composite-mean neutralizing"
-            )
+            raise NotImplementedError("this runtime does not expose composite-mean neutralizing")
         setter(slot, block, int(component), float(eps))
 
     def field_provider_levels(self, slot: str) -> int:

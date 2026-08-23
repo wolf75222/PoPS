@@ -1,0 +1,7 @@
+# A relative --output must be anchored by run_matrix.py at the repository root.
+# Keep any historical mistakenly-nested partial result tree on disk, but never stage it.
+/benchmarks/
+
+# Pre-contract figures are retained locally for comparison only.  Final evidence is published
+# from a sealed 37-case COMPLETE.json into a new tracked publications/<source-sha>/ directory.
+/report/

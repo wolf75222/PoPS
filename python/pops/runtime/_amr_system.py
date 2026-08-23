@@ -35,6 +35,7 @@ _LANE_FREE_AMR_INSPECT = frozenset({
     "coarse_total_boxes",
     "has_package_assembly_lane",
     "n_levels",
+    "local_boxes",
     "n_patches",
     "output_geometry_boxes",
     "patch_bounds",
@@ -282,6 +283,15 @@ class AmrSystem(
         Triggers the lazy build like n_patches().
         """
         return self._s.coarse_local_boxes()
+
+    def local_boxes(self, name: Any) -> Any:
+        """Return this rank's coarse-level boxes for the named AMR block.
+
+        Bounds are exact native-axis integer pairs ``(lower, upper_exclusive)``.  They describe
+        only level 0 fabs owned by the present MPI rank; they are not a gathered hierarchy view.
+        The hierarchy is materialized lazily after the block name has been authenticated.
+        """
+        return self._s.local_boxes(name)
 
     def coarse_total_boxes(self) -> Any:
         """Total number of coarse (base) boxes across all ranks (ADC-319 diagnostic).

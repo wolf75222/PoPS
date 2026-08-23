@@ -10,17 +10,22 @@
 
 #include <gtest/gtest.h>
 
+#include <pops/runtime/program/program_context.hpp>  // ProgramContext (the seam under test)
+
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/physics/bricks/source.hpp>                // NoSource
 #include <pops/physics/composition/composite.hpp>        // CompositeModel
 #include <pops/physics/fluids/euler.hpp>                 // Euler
 #include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
+#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/runtime/builders/compiled/generated_system_block.hpp>
 #include <pops/runtime/config/model_spec.hpp>
-#include <pops/runtime/program/program_context.hpp>  // ProgramContext (the seam under test)
+#include <pops/runtime/program/amr_program_checkpoint.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
 #include <pops/runtime/program/step_transaction.hpp>
 #include <pops/runtime/system.hpp>
+
+#include "explicit_amr_program.hpp"
 
 #include <algorithm>
 #include <array>
@@ -80,6 +85,16 @@ struct NoEll {
   }
 };
 using GasModel = CompositeModel<EulerND<kNativeDimension>, NoSource, NoEll>;
+
+struct DurationCarrierGasModel : GasModel {
+  static PreparedProviderIdentity provider_identity() noexcept {
+    return {"test.program-runtime.duration-carrier.model", 1};
+  }
+
+  void serialize_exact_parameters(ExactContractBuilder& contract) const {
+    contract.scalar(hyp.gamma);
+  }
+};
 
 struct UnitDensitySource {
   template <class State, class Providers>
@@ -984,6 +999,107 @@ TEST(ProgramRuntime, CadenceFailsBeforeMutationWhenSubstepsCollapseTheRepresenta
   EXPECT_THROW(system.step(one_ulp), std::overflow_error);
   EXPECT_DOUBLE_EQ(system.time(), 1.0);
   EXPECT_EQ(system.macro_step(), 0);
+  EXPECT_EQ(calls, 0);
+}
+
+TEST(ProgramRuntime, AdaptiveCflCoalescesAnEndpointEquivalentRoundedCap) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  System<kNativeDimension> system(unit_domain_config<kNativeDimension>(4));
+  install_execution_lane(system, "pops.test.program-runtime.cfl-rounded-cap");
+  add_gas(system, 1.4, "none");
+  const std::size_t cells = exact_cell_count<kNativeDimension>(4);
+  std::vector<double> state(static_cast<std::size_t>(kGasComponents) * cells, 0.0);
+  for (std::size_t cell = 0; cell < cells; ++cell) {
+    state[cell] = 1.0;
+    state[static_cast<std::size_t>(kNativeDimension + 1) * cells + cell] = 2.5;
+  }
+  system.set_state("gas", state);
+  int calls = 0;
+  system.install_program_step([&](double) { ++calls; });
+  const double accepted = 0x1.cccccccccccccp-5;
+  const double target = 0.0625;
+  system.set_clock(accepted, 1);
+
+  // `raw` is one ULP below the endpoint of the cap needed to reach `target`.  The strategy may
+  // canonicalize the dt because the public facade tolerates endpoint drift through 4 ULPs.
+  const double cfl = 0.05;
+  const double raw = cfl * 0.25 / 2.0;
+  const double cap = target - accepted;
+  ASSERT_LT(raw, cap);
+  ASSERT_NE(std::bit_cast<std::uint64_t>(accepted + raw),
+            std::bit_cast<std::uint64_t>(accepted + cap));
+  ASSERT_EQ(std::nextafter(accepted + raw, std::numeric_limits<double>::infinity()),
+            accepted + cap);
+
+  EXPECT_DOUBLE_EQ(system.step_cfl(cfl, /*speed_floor=*/2.0, cap), cap);
+  EXPECT_EQ(system.last_dt_bound(), "strategy:max_dt");
+  EXPECT_DOUBLE_EQ(system.time(), target);
+  EXPECT_EQ(system.macro_step(), 2);
+  EXPECT_EQ(calls, 1);
+}
+
+TEST(ProgramRuntime, AdaptiveCflDoesNotCoalesceAnOpaqueGlobalBoundThatTiesTransport) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  System<kNativeDimension> system(unit_domain_config<kNativeDimension>(4));
+  install_execution_lane(system, "pops.test.program-runtime.cfl-global-tie");
+  add_gas(system, 1.4, "none");
+  const std::size_t cells = exact_cell_count<kNativeDimension>(4);
+  std::vector<double> state(static_cast<std::size_t>(kGasComponents) * cells, 0.0);
+  for (std::size_t cell = 0; cell < cells; ++cell) {
+    state[cell] = 1.0;
+    state[static_cast<std::size_t>(kNativeDimension + 1) * cells + cell] = 2.5;
+  }
+  system.set_state("gas", state);
+  constexpr double cfl = 0.05;
+  constexpr double raw = cfl * 0.25 / 2.0;
+  const double accepted = 0x1.cccccccccccccp-5;
+  const double cap =
+      std::nextafter(accepted + raw, std::numeric_limits<double>::infinity()) - accepted;
+  ASSERT_TRUE(pops::runtime::program::cfl_cap_is_rounding_equivalent(accepted, raw, cap));
+  system.add_dt_bound("event", [raw] { return raw; });
+  int calls = 0;
+  system.install_program_step([&](double) { ++calls; });
+  system.set_clock(accepted, 1);
+
+  EXPECT_DOUBLE_EQ(system.step_cfl(cfl, /*speed_floor=*/2.0, cap), raw);
+  EXPECT_EQ(system.last_dt_bound(), "global:event");
+  EXPECT_DOUBLE_EQ(system.time(), accepted + raw);
+  EXPECT_EQ(system.macro_step(), 2);
+  EXPECT_EQ(calls, 1);
+}
+
+TEST(ProgramRuntime, AdaptiveCflChecksMinDtBeforeCoalescingRoundedCap) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  System<kNativeDimension> system(unit_domain_config<kNativeDimension>(4));
+  install_execution_lane(system, "pops.test.program-runtime.cfl-min-dt-raw");
+  add_gas(system, 1.4, "none");
+  const std::size_t cells = exact_cell_count<kNativeDimension>(4);
+  std::vector<double> state(static_cast<std::size_t>(kGasComponents) * cells, 0.0);
+  for (std::size_t cell = 0; cell < cells; ++cell) {
+    state[cell] = 1.0;
+    state[static_cast<std::size_t>(kNativeDimension + 1) * cells + cell] = 2.5;
+  }
+  system.set_state("gas", state);
+  constexpr double cfl = 0.05;
+  constexpr double raw = cfl * 0.25 / 2.0;
+  const double accepted = 0x1.cccccccccccccp-5;
+  const double cap =
+      std::nextafter(accepted + raw, std::numeric_limits<double>::infinity()) - accepted;
+  ASSERT_LT(raw, cap);
+  int calls = 0;
+  system.install_program_step([&](double) { ++calls; });
+  system.set_clock(accepted, 1);
+
+  EXPECT_THROW((void)system.step_cfl(cfl, /*speed_floor=*/2.0, cap, /*min_dt=*/cap),
+               std::runtime_error);
+  EXPECT_DOUBLE_EQ(system.time(), accepted);
+  EXPECT_EQ(system.macro_step(), 1);
   EXPECT_EQ(calls, 0);
 }
 
@@ -2402,4 +2518,196 @@ TEST(ProgramRuntime, RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
   EXPECT_FALSE(sim.history_initialized("gas.U"));
   EXPECT_FALSE(sim.program_cache().has(17));
   EXPECT_TRUE(sim.program_diagnostics().empty());
+}
+
+TEST(ProgramRuntime, AmrNamedFluxPublishesAuthoritativeDurationAcrossCancellation) {
+  comm_init();
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  constexpr int Dim = kNativeDimension;
+  constexpr int n = 8;
+  constexpr double gamma = 1.4;
+  AmrSystemConfig<Dim> config;
+  config.level_count = 2;
+  config.regrid_every = 0;
+  config.transition_ratios.resize(1);
+  config.transition_buffers.resize(1);
+  config.transition_lookaheads.resize(1);
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = n;
+    config.lower[axis] = Real(0);
+    config.upper[axis] = Real(1);
+    config.periodicity[axis] = true;
+    config.coarse_max_grid[axis] = 4;
+    config.transition_ratios[0][axis] = 2;
+    config.transition_buffers[0][axis] = 1;
+    config.transition_lookaheads[0][axis] = 1;
+  }
+
+  AmrSystem<Dim> system(config);
+  test::install_amr_runtime_authority(system, "test.program-runtime.duration-carrier/runtime@1");
+  system.set_temporal_relations({2}, {1}, {"integral_only"});
+  system.install_block_state_route("gas", "test.program-runtime.duration-carrier/state@1");
+  DurationCarrierGasModel model;
+  model.hyp = EulerND<Dim>{gamma};
+  add_compiled_model<Dim>(system, "gas", model, "none", "rusanov", "conservative", "explicit",
+                          gamma, 1, 1, {}, {}, 0.0, static_cast<double>(kWenoEpsilon), false,
+                          "test.program-runtime.duration-carrier/unused-default-flux@1");
+  std::vector<double> coarse_state;
+  fill_ic(coarse_state, n, gamma);
+  system.set_conservative_state("gas", coarse_state);
+
+  Index<Dim> fine_lower{};
+  Index<Dim> fine_upper{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    fine_lower[axis] = n / 2;
+    fine_upper[axis] = 3 * n / 2 - 1;
+  }
+  system.rebuild_hierarchy({AmrPatch<Dim>{1, {fine_lower, fine_upper}}}, {0});
+  std::vector<double> fine_state;
+  fill_ic(fine_state, 2 * n, gamma);
+  system.set_block_level_state("gas", 1, fine_state);
+
+  const auto context = runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("test.program-runtime.duration-carrier.clock");
+  context->install(
+      [context](double macro_dt) {
+        context->advance_hierarchy(macro_dt, [context](double level_dt) {
+          context->set_stage_time(0, 1);
+          MultiFab<Dim>& state = context->state(0);
+          MultiFab<Dim>& rate = context->rhs_scratch(8100, 0, state);
+          std::array<MultiFab<Dim>*, Dim> named_fluxes{};
+          for (int axis = 0; axis < Dim; ++axis) {
+            MultiFab<Dim>& flux = context->rhs_scratch(8200 + axis, 0, state);
+            flux.set_val(Real(axis + 1));
+            named_fluxes[static_cast<std::size_t>(axis)] = &flux;
+          }
+          context->neg_div_named_flux_into(0, state, rate, named_fluxes, 17);
+          context->axpy(state, Real(level_dt), rate, Real(level_dt), {{1, 1, 1}});
+        });
+      },
+      context);
+  system.set_program_block_map({0});
+  using FluxBudget = typename AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
+  system.install_prepared_amr_program_flux_expression_budget(
+      "test.program-runtime.duration-carrier/named-flux@1", {FluxBudget{1, 1}}, 0, 0);
+
+  system.set_clock(1.0, 1);
+  const double begin = system.time();
+  const double ulp = std::nextafter(begin, 2.0) - begin;
+  const double authoritative_duration = 11.5 * ulp;
+  const double endpoint = begin + authoritative_duration;
+  ASSERT_NE(endpoint - begin, authoritative_duration);
+  ASSERT_NO_THROW(system.step(authoritative_duration));
+
+  const auto accepted = runtime::program::deserialize_amr_program_accepted_state<Dim>(
+      system.program_accepted_state());
+  std::size_t coarse_fragments = 0;
+  std::size_t fine_fragments = 0;
+  for (const auto& axis_fragments : accepted.accepted_face_flux)
+    for (const auto& fragment : axis_fragments) {
+      if (fragment.key.role == amr::reflux::FaceLedgerRole::Coarse) {
+        EXPECT_DOUBLE_EQ(fragment.measure.substep_duration, authoritative_duration);
+        ++coarse_fragments;
+      } else {
+        EXPECT_DOUBLE_EQ(fragment.measure.substep_duration, authoritative_duration / 2.0);
+        ++fine_fragments;
+      }
+    }
+  EXPECT_GT(coarse_fragments, 0u);
+  EXPECT_GT(fine_fragments, 0u);
+}
+
+TEST(ProgramRuntime, AmrExactFacePublishesAuthoritativeDurationAcrossCancellation) {
+  comm_init();
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  constexpr int Dim = kNativeDimension;
+  constexpr int n = 8;
+  constexpr double gamma = 1.4;
+  AmrSystemConfig<Dim> config;
+  config.level_count = 2;
+  config.regrid_every = 0;
+  config.transition_ratios.resize(1);
+  config.transition_buffers.resize(1);
+  config.transition_lookaheads.resize(1);
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = n;
+    config.lower[axis] = Real(0);
+    config.upper[axis] = Real(1);
+    config.periodicity[axis] = true;
+    config.coarse_max_grid[axis] = 4;
+    config.transition_ratios[0][axis] = 2;
+    config.transition_buffers[0][axis] = 1;
+    config.transition_lookaheads[0][axis] = 1;
+  }
+
+  AmrSystem<Dim> system(config);
+  test::install_amr_runtime_authority(system, "test.program-runtime.exact-face-duration/runtime@1");
+  system.set_temporal_relations({2}, {1}, {"integral_only"});
+  system.install_block_state_route("gas", "test.program-runtime.exact-face-duration/state@1");
+  DurationCarrierGasModel model;
+  model.hyp = EulerND<Dim>{gamma};
+  add_compiled_model<Dim>(system, "gas", model, "none", "rusanov", "conservative", "explicit",
+                          gamma, 1, 1, {}, {}, 0.0, static_cast<double>(kWenoEpsilon), false,
+                          "test.program-runtime.exact-face-duration/unused-default-flux@1");
+  std::vector<double> coarse_state;
+  fill_ic(coarse_state, n, gamma);
+  system.set_conservative_state("gas", coarse_state);
+
+  Index<Dim> fine_lower{};
+  Index<Dim> fine_upper{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    fine_lower[axis] = n / 2;
+    fine_upper[axis] = 3 * n / 2 - 1;
+  }
+  system.rebuild_hierarchy({AmrPatch<Dim>{1, {fine_lower, fine_upper}}}, {0});
+  std::vector<double> fine_state;
+  fill_ic(fine_state, 2 * n, gamma);
+  system.set_block_level_state("gas", 1, fine_state);
+
+  // The tick denominator makes the coarse window 8/3 ULP at t=1.  Its timestamp span rounds
+  // to 3 ULP, so extracting a duration from absolute timestamps would be observably wrong.
+  constexpr std::int64_t tick_denominator = std::int64_t{3} * (std::int64_t{1} << 50);
+  constexpr double authoritative_duration = 2.0 / static_cast<double>(tick_denominator);
+  system.set_clock(1.0, 1);
+  const double begin = system.time();
+  const double ulp = std::nextafter(begin, 2.0) - begin;
+  const double endpoint = begin + authoritative_duration;
+  ASSERT_DOUBLE_EQ(authoritative_duration, (8.0 / 3.0) * ulp);
+  ASSERT_NE(endpoint - begin, authoritative_duration);
+
+  const auto context = runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("test.program-runtime.exact-face-duration.clock");
+  context->install(
+      [context](double macro_dt) { context->advance_same_level_cell_temporal(macro_dt); }, context);
+  system.set_program_block_map({0});
+  const std::array route{
+      runtime::program::SameLevelCellTemporalForwardEulerRoute{0, -1, 0}};
+  ASSERT_NO_THROW(context->prepare_same_level_cell_temporal_execution(
+      "test.program-runtime.exact-face-duration.clock", tick_denominator, 0, route));
+  using FluxBudget = typename AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
+  system.install_prepared_amr_program_flux_expression_budget(
+      "test.program-runtime.exact-face-duration/exact-face@1", {FluxBudget{2, 1}}, 0, 0);
+
+  ASSERT_NO_THROW(system.step(authoritative_duration));
+
+  const auto accepted = runtime::program::deserialize_amr_program_accepted_state<Dim>(
+      system.program_accepted_state());
+  std::size_t coarse_fragments = 0;
+  std::size_t fine_fragments = 0;
+  for (const auto& axis_fragments : accepted.accepted_face_flux)
+    for (const auto& fragment : axis_fragments) {
+      if (fragment.key.role == amr::reflux::FaceLedgerRole::Coarse) {
+        EXPECT_DOUBLE_EQ(fragment.measure.substep_duration, authoritative_duration);
+        ++coarse_fragments;
+      } else {
+        EXPECT_DOUBLE_EQ(fragment.measure.substep_duration, authoritative_duration / 2.0);
+        ++fine_fragments;
+      }
+    }
+  EXPECT_GT(coarse_fragments, 0u);
+  EXPECT_GT(fine_fragments, 0u);
 }

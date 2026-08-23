@@ -1,9 +1,11 @@
 """Source-only contracts for manifest-driven post-install Darwin code-signing."""
+
 from __future__ import annotations
 
 import hashlib
 import importlib.machinery
 import importlib.util
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -13,6 +15,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
 HELPER = ROOT / "scripts" / "codesign_pops_extensions.py"
+PRESERVE = ROOT / "scripts" / "preserve_native_variants.py"
 SETUP = ROOT / "scripts" / "setup_env.sh"
 BUILD = ROOT / "scripts" / "build_python.sh"
 VERIFY_NATIVE = ROOT / "scripts" / "verify_installed_native.py"
@@ -27,11 +30,27 @@ def _helper():
     return module
 
 
-def _installed_variant(helper, root: Path, dimension: int = 2, payload: bytes = b"native"):
+def _preserve_helper():
+    spec = importlib.util.spec_from_file_location("_pops_preserve_variants_test", PRESERVE)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _installed_variant(
+    helper,
+    root: Path,
+    dimension: int = 2,
+    payload: bytes = b"native",
+    *,
+    build_fingerprint: str = "a" * 64,
+    header_signature: str = "headers-current",
+    has_mpi: bool = True,
+):
     native = root / "_native"
-    extension = native / f"dim{dimension}" / (
-        "_pops" + importlib.machinery.EXTENSION_SUFFIXES[0]
-    )
+    extension = native / f"dim{dimension}" / ("_pops" + importlib.machinery.EXTENSION_SUFFIXES[0])
     extension.parent.mkdir(parents=True)
     extension.write_bytes(payload)
     row = {
@@ -39,8 +58,13 @@ def _installed_variant(helper, root: Path, dimension: int = 2, payload: bytes = 
         "path": extension.relative_to(native).as_posix(),
         "sha256": hashlib.sha256(payload).hexdigest(),
         "version": "1.0.0",
-        "abi_key": f"abi-dim{dimension}",
-        "has_mpi": True,
+        "abi_key": (
+            "compiler=test;std=202002;headers=%s;kokkos=1;stdlib=test;mpi=%d;"
+            "mpi_abi=%s;dim=%d"
+            % (header_signature, int(has_mpi), "test-mpi" if has_mpi else "off", dimension)
+        ),
+        "build_fingerprint": build_fingerprint,
+        "has_mpi": has_mpi,
         "has_kokkos": True,
     }
     helper.write_manifest_atomic(native / "variants.json", [row])
@@ -48,7 +72,8 @@ def _installed_variant(helper, root: Path, dimension: int = 2, payload: bytes = 
 
 
 def test_locator_resolves_only_the_exact_manifest_leaf_without_importing_pops(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     helper = _helper()
     package_root = tmp_path / "pops"
@@ -73,9 +98,7 @@ def test_locator_rejects_unmanifested_root_or_dimension_leaf(tmp_path, monkeypat
     assert package is not None
     package.submodule_search_locations = [str(package_root)]
     monkeypatch.setattr(helper.importlib.util, "find_spec", lambda name: package)
-    stale = package_root / "_native" / (
-        "_pops" + importlib.machinery.EXTENSION_SUFFIXES[0]
-    )
+    stale = package_root / "_native" / ("_pops" + importlib.machinery.EXTENSION_SUFFIXES[0])
     stale.write_bytes(b"legacy root")
 
     with pytest.raises(helper.CodesignError, match="unmanifested native extension"):
@@ -87,9 +110,7 @@ def test_locator_can_select_one_explicit_leaf_from_a_fat_manifest(tmp_path, monk
     package_root = tmp_path / "pops"
     dim1 = _installed_variant(helper, package_root, dimension=1, payload=b"dim1")
     dim3 = _installed_variant(helper, package_root, dimension=3, payload=b"dim3")
-    helper.write_manifest_atomic(
-        package_root / "_native" / "variants.json", [dim1.row, dim3.row]
-    )
+    helper.write_manifest_atomic(package_root / "_native" / "variants.json", [dim1.row, dim3.row])
     package = importlib.util.spec_from_loader("pops", loader=None, is_package=True)
     assert package is not None
     package.submodule_search_locations = [str(package_root)]
@@ -104,17 +125,22 @@ def test_non_darwin_never_locates_or_invokes_codesign(monkeypatch):
     helper = _helper()
     monkeypatch.setattr(helper.sys, "platform", "linux")
     monkeypatch.setattr(
-        helper, "locate_installed_pops_variants",
-        lambda *args, **kwargs: pytest.fail("non-Darwin must not inspect the extension"))
+        helper,
+        "locate_installed_pops_variants",
+        lambda *args, **kwargs: pytest.fail("non-Darwin must not inspect the extension"),
+    )
     monkeypatch.setattr(
-        helper.subprocess, "run",
-        lambda *args, **kwargs: pytest.fail("non-Darwin must not invoke codesign"))
+        helper.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("non-Darwin must not invoke codesign"),
+    )
 
     assert helper.codesign_imported_extensions((2,)) == ()
 
 
 def test_darwin_preserves_valid_signatures_and_refreshes_final_manifest_hash(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     helper = _helper()
     variant = _installed_variant(helper, tmp_path / "pops", payload=b"signed extension")
@@ -128,7 +154,8 @@ def test_darwin_preserves_valid_signatures_and_refreshes_final_manifest_hash(
 
     monkeypatch.setattr(helper.sys, "platform", "darwin")
     monkeypatch.setattr(
-        helper, "locate_installed_pops_variants", lambda dimensions, **kwargs: (variant,))
+        helper, "locate_installed_pops_variants", lambda dimensions, **kwargs: (variant,)
+    )
     monkeypatch.setattr(helper.shutil, "which", lambda command: "/usr/bin/codesign")
     monkeypatch.setattr(helper.subprocess, "run", run)
 
@@ -157,7 +184,8 @@ def test_darwin_repairs_then_records_the_post_sign_bytes(tmp_path, monkeypatch):
 
     monkeypatch.setattr(helper.sys, "platform", "darwin")
     monkeypatch.setattr(
-        helper, "locate_installed_pops_variants", lambda dimensions, **kwargs: (variant,))
+        helper, "locate_installed_pops_variants", lambda dimensions, **kwargs: (variant,)
+    )
     monkeypatch.setattr(helper.shutil, "which", lambda command: "/usr/bin/codesign")
     monkeypatch.setattr(helper.subprocess, "run", run)
 
@@ -200,7 +228,9 @@ def test_structured_evidence_binds_dimension_and_post_sign_bytes(tmp_path, monke
 
 @pytest.mark.parametrize("failure_call", [1, 2, 3])
 def test_darwin_codesign_or_verification_failure_is_explicit(
-    tmp_path, monkeypatch, failure_call,
+    tmp_path,
+    monkeypatch,
+    failure_call,
 ):
     helper = _helper()
     variant = _installed_variant(helper, tmp_path / "pops")
@@ -218,7 +248,8 @@ def test_darwin_codesign_or_verification_failure_is_explicit(
 
     monkeypatch.setattr(helper.sys, "platform", "darwin")
     monkeypatch.setattr(
-        helper, "locate_installed_pops_variants", lambda dimensions, **kwargs: (variant,))
+        helper, "locate_installed_pops_variants", lambda dimensions, **kwargs: (variant,)
+    )
     monkeypatch.setattr(helper.shutil, "which", lambda command: "/usr/bin/codesign")
     monkeypatch.setattr(helper.subprocess, "run", run)
 
@@ -231,12 +262,16 @@ def test_darwin_refuses_a_verified_non_ad_hoc_signature(tmp_path, monkeypatch):
     variant = _installed_variant(helper, tmp_path / "pops")
     monkeypatch.setattr(helper.sys, "platform", "darwin")
     monkeypatch.setattr(
-        helper, "locate_installed_pops_variants", lambda dimensions, **kwargs: (variant,))
+        helper, "locate_installed_pops_variants", lambda dimensions, **kwargs: (variant,)
+    )
     monkeypatch.setattr(helper.shutil, "which", lambda command: "/usr/bin/codesign")
     monkeypatch.setattr(
-        helper.subprocess, "run",
+        helper.subprocess,
+        "run",
         lambda command, **kwargs: subprocess.CompletedProcess(
-            command, 0, "", "Authority=Developer ID\n"))
+            command, 0, "", "Authority=Developer ID\n"
+        ),
+    )
 
     with pytest.raises(helper.CodesignError, match="signature is not ad hoc"):
         helper.codesign_imported_extensions((2,))
@@ -261,22 +296,276 @@ def test_scripts_pass_exact_dimension_before_every_native_import_or_doctor():
     setup = SETUP.read_text(encoding="utf-8")
     build = BUILD.read_text(encoding="utf-8")
     helper_call = "codesign_pops_extensions.py"
+    isolate_call = 'preserve_native_variants.py" isolate'
+    restore_call = 'preserve_native_variants.py" restore'
     verifier_call = "verify_installed_native.py"
 
     assert setup.index(helper_call) < setup.index(verifier_call)
     assert 'python -c "import pops"' not in setup
-    assert "--expect-dim \"$NATIVE_DIM\"" in setup
-    assert build.index('python -m pip "${pip_args[@]}"') \
-        < build.index(helper_call) \
-        < build.index(verifier_call) \
+    assert '--expect-dim "$NATIVE_DIM"' in setup
+    assert (
+        build.index('python -m pip "${pip_args[@]}"')
+        < build.index(isolate_call)
+        < build.index(helper_call)
+        < build.index(restore_call)
+        < build.index(verifier_call)
         < build.index("select_native_dimension($POPS_NATIVE_DIM)")
-    assert "--expect-dim \"$POPS_NATIVE_DIM\"" in build
+    )
+    assert build.index("prove_installed_wheel.py") < build.index(isolate_call)
+    assert '--expect-dim "$POPS_NATIVE_DIM"' in build
     assert "--expect-mpi --expect-parallel-hdf5" in build
-    assert "PYTHONPATH= PYTHONNOUSERSITE=1" in build
+    assert "PYTHONPATH='' PYTHONNOUSERSITE=1" in build
     assert VERIFY_NATIVE.is_file()
 
 
 def test_codesign_command_is_reachable_only_after_the_darwin_guard():
     helper = HELPER.read_text(encoding="utf-8")
-    assert helper.index('if sys.platform != "darwin"') \
-        < helper.index('shutil.which("codesign")')
+    assert helper.index('if sys.platform != "darwin"') < helper.index('shutil.which("codesign")')
+
+
+def test_codesign_refresh_precedes_strict_sibling_restore(tmp_path, monkeypatch):
+    """Model pip's Darwin byte rewrite and the exact build-script recovery order."""
+    codesign = _helper()
+    preserve = _preserve_helper()
+    package_root = tmp_path / "pops"
+    native_root = package_root / "_native"
+    snapshot_root = tmp_path / "snapshot"
+
+    sibling = _installed_variant(
+        codesign,
+        package_root,
+        dimension=1,
+        payload=b"dim1",
+        has_mpi=False,
+    )
+    monkeypatch.setattr(preserve, "_installed_native_root", lambda: native_root)
+    assert preserve.snapshot(snapshot_root) == 0
+
+    target = _installed_variant(codesign, package_root, dimension=2, payload=b"linker bytes")
+    target.path.write_bytes(b"pip rewritten signed bytes")
+    package = importlib.util.spec_from_loader("pops", loader=None, is_package=True)
+    assert package is not None
+    package.submodule_search_locations = [str(package_root)]
+    monkeypatch.setattr(codesign.importlib.util, "find_spec", lambda name: package)
+
+    with pytest.raises(
+        preserve.NativeVariantManifestError,
+        match="native variant bytes disagree with variants.json: Dim=2",
+    ):
+        preserve.restore(snapshot_root, 2)
+    with pytest.raises(codesign.CodesignError, match="unmanifested native extension"):
+        codesign.locate_installed_pops_variants((2,))
+
+    assert preserve.isolate(snapshot_root, 2) == 0
+    assert not sibling.path.exists()
+
+    monkeypatch.setattr(codesign.sys, "platform", "darwin")
+    monkeypatch.setattr(codesign.shutil, "which", lambda command: "/usr/bin/codesign")
+    monkeypatch.setattr(
+        codesign.subprocess,
+        "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(
+            command,
+            0,
+            "",
+            "Signature=adhoc\n" if "--display" in command else "",
+        ),
+    )
+
+    authenticated = codesign.codesign_imported_extensions((2,))
+    assert authenticated[0].row["sha256"] == hashlib.sha256(target.path.read_bytes()).hexdigest()
+    assert preserve.restore(snapshot_root, 2) == 0
+
+    rows = codesign.load_manifest(
+        native_root / "variants.json",
+        expected_dimensions=(1, 2),
+        verify_files=True,
+        verify_hashes=True,
+    )
+    assert [row["dimension"] for row in rows] == [1, 2]
+
+
+def test_restore_skips_a_sibling_from_an_incompatible_header_tree(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    codesign = _helper()
+    preserve = _preserve_helper()
+    package_root = tmp_path / "pops"
+    native_root = package_root / "_native"
+    snapshot_root = tmp_path / "snapshot"
+
+    sibling = _installed_variant(
+        codesign,
+        package_root,
+        dimension=1,
+        payload=b"stale dim1",
+        header_signature="headers-old",
+        has_mpi=False,
+    )
+    monkeypatch.setattr(preserve, "_installed_native_root", lambda: native_root)
+    assert preserve.snapshot(snapshot_root) == 0
+    target = _installed_variant(
+        codesign,
+        package_root,
+        dimension=2,
+        payload=b"current dim2",
+        header_signature="headers-current",
+        has_mpi=True,
+    )
+
+    assert preserve.isolate(snapshot_root, 2) == 0
+    assert not sibling.path.exists()
+    assert preserve.restore(snapshot_root, 2) == 0
+
+    rows = codesign.load_manifest(
+        native_root / "variants.json",
+        expected_dimensions=(2,),
+        verify_files=True,
+        verify_hashes=True,
+    )
+    assert [row["dimension"] for row in rows] == [2]
+    assert target.path.exists()
+    assert not sibling.path.exists()
+    assert (
+        "skipped incompatible sibling dimensions [1]; rebuild required" in capsys.readouterr().out
+    )
+
+
+def test_restore_skips_a_sibling_from_an_incompatible_native_build(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    codesign = _helper()
+    preserve = _preserve_helper()
+    package_root = tmp_path / "pops"
+    native_root = package_root / "_native"
+    snapshot_root = tmp_path / "snapshot"
+
+    sibling = _installed_variant(
+        codesign,
+        package_root,
+        dimension=1,
+        payload=b"old build dim1",
+        build_fingerprint="a" * 64,
+        has_mpi=False,
+    )
+    monkeypatch.setattr(preserve, "_installed_native_root", lambda: native_root)
+    assert preserve.snapshot(snapshot_root) == 0
+    target = _installed_variant(
+        codesign,
+        package_root,
+        dimension=2,
+        payload=b"new build dim2",
+        build_fingerprint="b" * 64,
+        has_mpi=True,
+    )
+
+    assert preserve.isolate(snapshot_root, 2) == 0
+    assert preserve.restore(snapshot_root, 2) == 0
+
+    rows = codesign.load_manifest(
+        native_root / "variants.json",
+        expected_dimensions=(2,),
+        verify_files=True,
+        verify_hashes=True,
+    )
+    assert rows[0]["build_fingerprint"] == "b" * 64
+    assert target.path.exists()
+    assert not sibling.path.exists()
+    assert (
+        "skipped incompatible sibling dimensions [1]; rebuild required" in capsys.readouterr().out
+    )
+
+
+def test_schema_v1_snapshot_isolated_but_never_restored(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    codesign = _helper()
+    preserve = _preserve_helper()
+    package_root = tmp_path / "pops"
+    native_root = package_root / "_native"
+    snapshot_root = tmp_path / "snapshot"
+
+    sibling = _installed_variant(
+        codesign,
+        package_root,
+        dimension=1,
+        payload=b"legacy dim1",
+        has_mpi=False,
+    )
+    legacy_row = dict(sibling.row)
+    legacy_row.pop("build_fingerprint")
+    (native_root / "variants.json").write_text(
+        '{"schema_version":1,"variants":[' + json.dumps(legacy_row, sort_keys=True) + "]}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(preserve, "_installed_native_root", lambda: native_root)
+    assert preserve.snapshot(snapshot_root) == 0
+    target = _installed_variant(
+        codesign,
+        package_root,
+        dimension=2,
+        payload=b"current dim2",
+    )
+
+    assert preserve.isolate(snapshot_root, 2) == 0
+    assert not sibling.path.exists()
+    assert preserve.restore(snapshot_root, 2) == 0
+
+    rows = codesign.load_manifest(
+        native_root / "variants.json",
+        expected_dimensions=(2,),
+        verify_files=True,
+        verify_hashes=True,
+    )
+    assert [row["dimension"] for row in rows] == [2]
+    assert target.path.exists()
+    assert not sibling.path.exists()
+    output = capsys.readouterr().out
+    assert "schema-v1 snapshot is quarantine-only; rebuild required" in output
+    assert "skipped incompatible sibling dimensions [1]; rebuild required" in output
+
+
+@pytest.mark.parametrize(
+    ("orphan_kind", "message"),
+    [
+        ("tampered", "bytes disagree with the snapshot manifest"),
+        ("unknown", "is not authenticated by the snapshot"),
+    ],
+)
+def test_isolate_refuses_untrusted_orphan_without_partial_deletion(
+    tmp_path,
+    monkeypatch,
+    orphan_kind,
+    message,
+):
+    codesign = _helper()
+    preserve = _preserve_helper()
+    package_root = tmp_path / "pops"
+    native_root = package_root / "_native"
+    snapshot_root = tmp_path / "snapshot"
+
+    sibling = _installed_variant(codesign, package_root, dimension=1, payload=b"dim1")
+    monkeypatch.setattr(preserve, "_installed_native_root", lambda: native_root)
+    assert preserve.snapshot(snapshot_root) == 0
+    target = _installed_variant(codesign, package_root, dimension=2, payload=b"dim2")
+
+    if orphan_kind == "tampered":
+        orphan = sibling.path
+        orphan.write_bytes(b"tampered sibling")
+    else:
+        orphan = native_root / "dim3" / ("_pops" + importlib.machinery.EXTENSION_SUFFIXES[0])
+        orphan.parent.mkdir(parents=True)
+        orphan.write_bytes(b"unknown orphan")
+
+    with pytest.raises(preserve.NativeVariantManifestError, match=message):
+        preserve.isolate(snapshot_root, 2)
+
+    assert orphan.exists()
+    assert sibling.path.exists()
+    assert target.path.exists()

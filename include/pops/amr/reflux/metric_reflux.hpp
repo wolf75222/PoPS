@@ -214,13 +214,14 @@ inline AuthenticatedWindow authenticated_window(
     const double phase_span = (interval.end - interval.begin).value();
     if (!(phase_span > 0.0) || !std::isfinite(phase_span))
       throw std::overflow_error("ND metric reflux physical clock rate is not finite");
-    const double duration_per_phase = quadrature.duration / phase_span;
-    if (!std::isfinite(duration_per_phase))
+    if (!(quadrature.duration > 0.0) || !std::isfinite(quadrature.duration))
+      throw std::overflow_error("ND metric reflux physical window duration is not finite");
+    const double substep_rate = quadrature.duration / phase_span;
+    if (!(substep_rate > 0.0) || !std::isfinite(substep_rate))
       throw std::overflow_error("ND metric reflux physical clock rate is not finite");
     if (result.substep_count == 0)
-      result.duration_per_phase = duration_per_phase;
-    else if (!roundoff_equal(result.duration_per_phase, duration_per_phase,
-                             result.substep_count + 1))
+      result.duration_per_phase = substep_rate;
+    else if (!roundoff_equal(result.duration_per_phase, substep_rate, 1))
       throw std::runtime_error("ND metric reflux substeps disagree on their physical clock rate");
     cursor = interval.end;
     result.duration += quadrature.duration;

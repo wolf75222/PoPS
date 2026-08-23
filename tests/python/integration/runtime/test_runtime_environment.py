@@ -33,6 +33,14 @@ def test_runtime_environment_report_shape():
     assert report["communicator"] in ("serial", "MPI_COMM_WORLD", "unknown")
     assert "allocator_lifetime" in report
     assert "kokkos_lifecycle" in report
+    assert isinstance(report["gpu_device_ordinal"], int)
+    assert isinstance(report["gpu_uuid"], str)
+    assert isinstance(report["gpu_uuid_method"], str)
+    assert isinstance(report["gpu_uuid_diagnostic"], str)
+    if report["kokkos_device"] != "cuda" or not report["kokkos_initialized"]:
+        assert report["gpu_device_ordinal"] == -1
+        assert report["gpu_uuid"] == ""
+        assert report["gpu_uuid_method"] == "none"
     assert isinstance(report["kokkos_concurrency"], int)
     if report["kokkos_initialized"]:
         assert report["kokkos_concurrency"] > 0
@@ -82,6 +90,18 @@ def test_native_execution_resource_reaches_the_component_bridge_exactly():
     assert projected["stream_identity"] == resource.stream_identity
 
 
+def test_installed_amr_local_boxes_is_a_lane_free_inspection_surface():
+    from pops._native_selector import select_native_dimension, selected_native_module
+
+    native = selected_native_module(required=False)
+    if native is None:
+        native = select_native_dimension(2)
+    from pops.runtime._amr_system import _LANE_FREE_AMR_INSPECT
+
+    assert hasattr(native.AmrSystem, "local_boxes")
+    assert "local_boxes" in _LANE_FREE_AMR_INSPECT
+
+
 def test_static_runtime_report_does_not_fabricate_kokkos_concurrency(monkeypatch):
     import pops.runtime_environment as environment
     import pops._native_selector as selector
@@ -89,6 +109,8 @@ def test_static_runtime_report_does_not_fabricate_kokkos_concurrency(monkeypatch
     monkeypatch.setattr(selector, "selected_native_module", lambda *, required=False: None)
     report = environment.runtime_environment_report()
     assert report["kokkos_concurrency"] == 0
+    assert report["gpu_uuid"] == ""
+    assert report["gpu_uuid_method"] == "none"
 
 
 def test_present_native_runtime_report_failure_is_not_silently_downgraded(monkeypatch):

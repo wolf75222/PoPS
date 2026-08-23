@@ -361,8 +361,17 @@ class ProgramContext {
                                  int rate_id) const {
     require_rate_identity_(rate_id);
     count_kernel_();
-    system_->block_neg_div_flux_into_at(boundary_evaluation_point(rate_id),
-                                        sys_block(program_block), state_value, rhs);
+    const auto point = boundary_evaluation_point(rate_id);
+    const int runtime_block = sys_block(program_block);
+    if (system_->requires_block_boundary_session(runtime_block)) {
+      const ExecutionLane& lane = system_->prepared_boundary_execution_lane();
+      auto boundary = prepare_block_boundary_session(program_block, state_value, point, lane);
+      system_->block_neg_div_flux_into_at_prepared(
+          point, runtime_block, state_value, rhs, boundary->system(), boundary->runtime_block(),
+          boundary->point(), boundary->lane(), boundary->transport());
+      return;
+    }
+    system_->block_neg_div_flux_into_at(point, runtime_block, state_value, rhs);
   }
 
   void source_default_into(int program_block, field_type& state_value, field_type& rhs) const {
@@ -430,8 +439,17 @@ class ProgramContext {
   /// policy; both are retained by `SystemBlockStore<Dim>`.
   void prepare_generated_state(int program_block, field_type& state_value, int rate_id) const {
     require_rate_identity_(rate_id);
-    system_->block_prepare_generated_state_at(boundary_evaluation_point(rate_id),
-                                              sys_block(program_block), state_value);
+    const auto point = boundary_evaluation_point(rate_id);
+    const int runtime_block = sys_block(program_block);
+    if (system_->requires_block_boundary_session(runtime_block)) {
+      const ExecutionLane& lane = system_->prepared_boundary_execution_lane();
+      auto boundary = prepare_block_boundary_session(program_block, state_value, point, lane);
+      system_->block_prepare_generated_state_at_prepared(
+          point, runtime_block, state_value, boundary->system(), boundary->runtime_block(),
+          boundary->point(), boundary->lane(), boundary->transport());
+      return;
+    }
+    system_->block_prepare_generated_state_at(point, runtime_block, state_value);
   }
 
   /// Assemble the centered negative divergence of one already-materialized named flux field per

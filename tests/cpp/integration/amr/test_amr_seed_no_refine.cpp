@@ -216,11 +216,12 @@ TEST(test_amr_seed_no_refine, AutomaticBootstrapRefusesFieldLeafBeforeMaterializ
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   auto system = make_system(config, gaussian(config.shape));
-  EXPECT_THROW(system.set_bootstrap_tagging(
-                   {"field"}, {"field/potential"}, {""}, {"phi"}, {0}, {POPS_TAGGING_ABOVE_V1},
-                   {0.0}, {-1}, {}, {POPS_TAGGING_ABOVE_V1}, {0}, {}, {}, 0, "hold", "error",
-                   "test::tagging-clock", "test::automatic-field-tagging@1"),
-               std::invalid_argument);
+  EXPECT_THROW(
+      system.set_bootstrap_tagging(
+          {"field"}, {"field/potential"}, {""}, {"phi"}, {0}, {POPS_TAGGING_ABOVE_V1}, {0.0}, {-1},
+          std::vector<std::vector<double>>(1), {}, {POPS_TAGGING_ABOVE_V1}, {0}, {}, {}, 0, "hold",
+          "error", "test::tagging-clock", "test::automatic-field-tagging@1"),
+      std::invalid_argument);
   pops::test::install_prepared_threshold_union(system, {{"tracer", "u", 1.2}});
   EXPECT_EQ(system.n_levels(), 2)
       << "a rejected automatic field graph must not consume the unique tagging authority";

@@ -45,6 +45,7 @@ def install_prepared_threshold_union(
         [above] * len(rows),
         [float(threshold) for _block, _variable, threshold in rows],
         [-1] * len(rows),
+        [None] * len(rows),
         [],
         refine_ops,
         refine_args,

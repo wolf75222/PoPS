@@ -338,6 +338,7 @@ def _wheel_native_contract(
     if discovered != set(expected_members):
         raise PreflightError("release wheel native leaves do not equal its exact manifest")
     common_abi = set()
+    common_build_fingerprints = set()
     for member, row in expected_members.items():
         if hashlib.sha256(archive.read(member)).hexdigest() != row["sha256"]:
             raise PreflightError(
@@ -357,8 +358,11 @@ def _wheel_native_contract(
                 % row["dimension"]
             )
         common_abi.add(match.group(1))
+        common_build_fingerprints.add(row["build_fingerprint"])
     if len(common_abi) != 1:
         raise PreflightError("release wheel native variants disagree on their toolchain ABI")
+    if len(common_build_fingerprints) != 1:
+        raise PreflightError("release wheel native variants disagree on their build fingerprint")
 
     record_member = records[0]
     try:
@@ -557,7 +561,7 @@ def _installed_wheel_evidence(
     if not isinstance(evidence, dict) or set(evidence) != expected:
         raise PreflightError("installed wheel evidence is malformed")
     expected_dimensions = evidence["expected_dimensions"]
-    if evidence["schema_version"] != 3 \
+    if evidence["schema_version"] != 4 \
             or expected_dimensions != list(RELEASE_NATIVE_DIMENSIONS) \
             or any(type(value) is not int for value in expected_dimensions):
         raise PreflightError("installed wheel evidence schema is unsupported")
@@ -637,7 +641,7 @@ def _installed_wheel_evidence(
     for variant in native_variants:
         if set(variant) != {
             "dimension", "extension", "member", "sha256", "version", "abi_key",
-            "has_mpi", "has_kokkos",
+            "build_fingerprint", "has_mpi", "has_kokkos",
         }:
             raise PreflightError("installed wheel native variant evidence is malformed")
         dimension = variant["dimension"]
@@ -651,6 +655,7 @@ def _installed_wheel_evidence(
             "sha256": manifest_row["sha256"],
             "version": manifest_row["version"],
             "abi_key": manifest_row["abi_key"],
+            "build_fingerprint": manifest_row["build_fingerprint"],
             "has_mpi": manifest_row["has_mpi"],
             "has_kokkos": manifest_row["has_kokkos"],
         }:

@@ -1,0 +1,28 @@
+{
+  "schema": "pops.performance.advection-sine.campaign.v2",
+  "id": "romeo_x64_openmp_strong_3d",
+  "scaling": "strong",
+  "route": "kokkos_openmp",
+  "platform": "x64cpu",
+  "dimension": 3,
+  "mode": "diagonal",
+  "layout": "uniform",
+  "subcycling": "synchronous",
+  "resolution": [128, 128, 128],
+  "block_size": 32,
+  "cfl": 0.40,
+  "steps": 32,
+  "warmups": 1,
+  "repetitions": 5,
+  "slurm": {"partition": "instant", "time": "00:50:00", "mem": "32G"},
+  "points": [
+    {"id": "t1", "nodes": 1, "ranks": 1, "threads": 1},
+    {"id": "t2", "nodes": 1, "ranks": 1, "threads": 2},
+    {"id": "t4", "nodes": 1, "ranks": 1, "threads": 4},
+    {"id": "t8", "nodes": 1, "ranks": 1, "threads": 8},
+    {"id": "t16", "nodes": 1, "ranks": 1, "threads": 16},
+    {"id": "t32", "nodes": 1, "ranks": 1, "threads": 32},
+    {"id": "t64", "nodes": 1, "ranks": 1, "threads": 64},
+    {"id": "t96", "nodes": 1, "ranks": 1, "threads": 96}
+  ]
+}

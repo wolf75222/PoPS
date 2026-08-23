@@ -236,7 +236,7 @@ static int run_magnetic_provider_program_probe(int n) {
     add_compiled_model<kDim>(
         system, "magnetic",
         MagneticModel{
-            {}, EulerND<kDim>{Real(1.4)}, MagneticLorentzForceND<kDim>{Real(1)}, NoElliptic{}},
+            EulerND<kDim>{Real(1.4)}, MagneticLorentzForceND<kDim>{Real(1)}, NoElliptic{}},
         "none", "rusanov", "conservative", "euler", /*gamma=*/1.4, /*substeps=*/1,
         /*stride=*/1, {}, {}, /*positivity_floor=*/0.0,
         /*weno_epsilon=*/static_cast<double>(kWenoEpsilon), /*wave_speed_cache=*/false,
@@ -333,7 +333,7 @@ static int run_mode(int n, bool distribute, const char* tag) {
   const auto gravity_field_keys = install_gravity_field_provider(sys);
   add_compiled_model<kDim>(
       sys, "gas",
-      Model{{}, EulerND<kDim>{1.4}, GravityForceND<kDim>{}, GravityCoupling{-1.0, 1.0, 1.0}},
+      Model{EulerND<kDim>{1.4}, GravityForceND<kDim>{}, GravityCoupling{-1.0, 1.0, 1.0}},
       "minmod", "rusanov", "conservative", "explicit", /*gamma=*/1.4, /*substeps=*/1,
       /*stride=*/1, {}, {}, /*positivity_floor=*/0.0,
       /*weno_epsilon=*/static_cast<double>(kWenoEpsilon), /*wave_speed_cache=*/false,

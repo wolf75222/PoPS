@@ -72,7 +72,9 @@ endif()
 target_compile_definitions(_pops PRIVATE POPS_CXX_STD=${POPS_CXX_STD})
 
 # Version du projet (source unique : project(VERSION) racine), exposee en pops.__version__.
-target_compile_definitions(_pops PRIVATE POPS_VERSION="${PROJECT_VERSION}")
+target_compile_definitions(_pops PRIVATE
+  POPS_VERSION="${PROJECT_VERSION}"
+  POPS_BUILD_FINGERPRINT="${POPS_NATIVE_BUILD_FINGERPRINT}")
 
 # Chemin du COMPILATEUR du build, bake dans le module (expose en pops._pops.__cxx_compiler__). Le DSL
 # backend="production" compile a l'execution un loader .so dont la cle d'ABI encode __VERSION__ du

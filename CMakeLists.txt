@@ -306,14 +306,42 @@ set(POPS_HAS_KOKKOS ON)
 
 # Exact Kokkos development contract replayed by Python runtime compilation.  The build scripts may
 # use an environment variable to let CMake find Kokkos, but that shell state does not survive the
-# script.  Bake the concrete, authenticated include tree selected by Kokkos::kokkos into _pops so a
-# later ``pops.compile()`` can reproduce the native backend without guessing a conda/sys.prefix.
+# script.  Bake the concrete, authenticated include tree selected by Kokkos into _pops so a later
+# ``pops.compile()`` can reproduce the native backend without guessing a conda/sys.prefix.  Kokkos
+# build-tree exports commonly keep the aggregate ``Kokkos::kokkos`` target link-only and attach the
+# development includes to its canonical ``Kokkos::kokkoscore`` dependency.  Follow that one declared
+# authority explicitly; do not flatten arbitrary transitive generator expressions.
+set(_pops_kokkos_include_authority "Kokkos::kokkos")
+set(_pops_kokkos_declares_core_authority FALSE)
 get_target_property(_pops_kokkos_include_dirs Kokkos::kokkos INTERFACE_INCLUDE_DIRECTORIES)
-if(NOT _pops_kokkos_include_dirs)
-  message(FATAL_ERROR
-    "Kokkos::kokkos exposes no include directories; runtime-compiled PoPS components cannot "
-    "reproduce the host Kokkos contract.")
+if(NOT _pops_kokkos_include_dirs OR _pops_kokkos_include_dirs MATCHES "-NOTFOUND$")
+  get_target_property(_pops_kokkos_link_libraries Kokkos::kokkos INTERFACE_LINK_LIBRARIES)
+  if(_pops_kokkos_link_libraries MATCHES "-NOTFOUND$")
+    set(_pops_kokkos_link_libraries "")
+  endif()
+  list(FIND _pops_kokkos_link_libraries "Kokkos::kokkoscore" _pops_kokkos_core_link_index)
+  if(NOT _pops_kokkos_core_link_index EQUAL -1)
+    set(_pops_kokkos_declares_core_authority TRUE)
+    if(TARGET Kokkos::kokkoscore)
+      get_target_property(
+        _pops_kokkos_include_dirs Kokkos::kokkoscore INTERFACE_INCLUDE_DIRECTORIES)
+      set(_pops_kokkos_include_authority "Kokkos::kokkoscore")
+    endif()
+  endif()
 endif()
+if(NOT _pops_kokkos_include_dirs OR _pops_kokkos_include_dirs MATCHES "-NOTFOUND$")
+  if(_pops_kokkos_declares_core_authority)
+    message(FATAL_ERROR
+      "Kokkos::kokkos exposes no direct include directories and its declared core authority "
+      "Kokkos::kokkoscore exposes none; runtime-compiled PoPS components cannot reproduce the "
+      "host Kokkos contract.")
+  endif()
+  message(FATAL_ERROR
+    "Kokkos::kokkos exposes no direct include directories and does not declare the bounded "
+    "Kokkos::kokkoscore include authority; runtime-compiled PoPS components cannot reproduce "
+    "the host Kokkos contract.")
+endif()
+message(STATUS "Kokkos runtime include authority: ${_pops_kokkos_include_authority}")
 set(_pops_kokkos_normalized_includes "")
 foreach(_pops_kokkos_include IN LISTS _pops_kokkos_include_dirs)
   if(_pops_kokkos_include MATCHES "^\\$<BUILD_INTERFACE:(.*)>$")
@@ -322,13 +350,14 @@ foreach(_pops_kokkos_include IN LISTS _pops_kokkos_include_dirs)
     continue()
   elseif(_pops_kokkos_include MATCHES "\\$<")
     message(FATAL_ERROR
-      "Kokkos::kokkos exposes a non-replayable include expression: ${_pops_kokkos_include}")
+      "${_pops_kokkos_include_authority} exposes a non-replayable include expression: "
+      "${_pops_kokkos_include}")
   endif()
   cmake_path(NORMAL_PATH _pops_kokkos_include OUTPUT_VARIABLE _pops_kokkos_include_normalized)
   if(NOT IS_ABSOLUTE "${_pops_kokkos_include_normalized}" OR
      NOT IS_DIRECTORY "${_pops_kokkos_include_normalized}")
     message(FATAL_ERROR
-      "Kokkos::kokkos include is not an existing absolute directory: "
+      "${_pops_kokkos_include_authority} include is not an existing absolute directory: "
       "${_pops_kokkos_include_normalized}")
   endif()
   list(APPEND _pops_kokkos_normalized_includes "${_pops_kokkos_include_normalized}")
@@ -357,13 +386,21 @@ endforeach()
 list(LENGTH _pops_kokkos_header_paths _pops_kokkos_header_count)
 if(NOT _pops_kokkos_header_count EQUAL 2)
   message(FATAL_ERROR
-    "Kokkos::kokkos must expose exactly Kokkos_Core.hpp and KokkosCore_config.h for authenticated "
+    "${_pops_kokkos_include_authority} must expose exactly Kokkos_Core.hpp and KokkosCore_config.h "
+    "for authenticated "
     "runtime compilation (found ${_pops_kokkos_header_count} contract headers).")
 endif()
 string(SHA256 POPS_NATIVE_KOKKOS_ABI "${_pops_kokkos_abi_material}")
 list(JOIN _pops_kokkos_normalized_includes "|" POPS_NATIVE_KOKKOS_INCLUDE)
 list(JOIN _pops_kokkos_header_paths "|" POPS_NATIVE_KOKKOS_HEADER_PATHS)
 list(JOIN _pops_kokkos_header_hashes "|" POPS_NATIVE_KOKKOS_HEADER_HASHES)
+
+# Source/build identity shared by every dimension and MPI specialization installed in one Python
+# package.  Unlike the public ABI key, this changes for implementation-only C++/binding edits and
+# for an exact Kokkos/precision contract change.
+include(cmake/PopsNativeBuildFingerprint.cmake)
+pops_compute_native_build_fingerprint(POPS_NATIVE_BUILD_FINGERPRINT)
+message(STATUS "PoPS native build fingerprint: ${POPS_NATIVE_BUILD_FINGERPRINT}")
 # Pool Ninja taille 1 des TU de production du module Python (_pops) : serialisation anti-OOM de
 # leurs compiles -O3 sous Kokkos, cf. python/CMakeLists.txt. Declare ICI et UNE SEULE fois : un nom
 # de pool duplique dans la propriete GLOBALE JOB_POOLS rend build.ninja invalide
@@ -523,6 +560,18 @@ if(POPS_BUILD_TESTS)
   set_tests_properties(test_serial_add_subdirectory_ignores_parent_mpi PROPERTIES
     LABELS "cmake;integration;serial;mpi;cpp-standalone"
     TIMEOUT 30)
+  add_test(
+    NAME test_kokkos_transitive_include_contract
+    COMMAND "${CMAKE_COMMAND}"
+      "-DPOPS_SOURCE_DIR=${CMAKE_SOURCE_DIR}"
+      "-DPOPS_KOKKOS_FIXTURE_ROOT=${CMAKE_SOURCE_DIR}/tests/cmake/kokkos_transitive_include_contract"
+      "-DPOPS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}/kokkos-transitive-include-contract"
+      "-DPOPS_NATIVE_DIM=${POPS_NATIVE_DIM}"
+      "-DPOPS_GENERATOR=${CMAKE_GENERATOR}"
+      -P "${CMAKE_SOURCE_DIR}/tests/cmake/run_kokkos_transitive_include_contract.cmake")
+  set_tests_properties(test_kokkos_transitive_include_contract PROPERTIES
+    LABELS "cmake;integration;kokkos;cpp-standalone"
+    TIMEOUT 60)
   add_test(
     NAME test_hdf5_mpi_binary_identity
     COMMAND "${CMAKE_COMMAND}"

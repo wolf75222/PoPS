@@ -24,6 +24,7 @@ from pops.amr import (
     ConflictPolicy,
     EqualityPolicy,
     Hysteresis,
+    PatchLayout,
     Tag,
 )
 from pops.codegen import Production
@@ -88,7 +89,7 @@ def _program(rows):
     return program
 
 
-def _resolved(native_cxx, block_count):
+def _resolved(native_cxx, block_count, *, patch_layout=None):
     frame = Rectangle(
         "amr-patch-box-domain",
         (0.0, 0.0),
@@ -160,6 +161,7 @@ def _resolved(native_cxx, block_count):
         regrid=AMRRegrid(schedule=every(1, clock=program.clock)),
         transfer=transfer,
         execution=AMRExecution.subcycled((AMRClockRelation(0, 1, 2),)),
+        patch_layout=PatchLayout() if patch_layout is None else patch_layout,
     )
     return pops.resolve(
         pops.validate(case),
@@ -208,6 +210,35 @@ def _assert_native_patch_box_binding_is_inclusive(simulation):
         native.rebuild_hierarchy(((1, (0, 0), (31, True)),), (0,))
     with pytest.raises(ValueError, match="inverted box"):
         native.rebuild_hierarchy(((1, (31, 31), (30, 31)),), (0,))
+
+
+def test_public_amr_local_boxes_materialize_exact_coarse_cover_before_first_step(
+    native_cxx,
+    isolated_native_cache,
+    kokkos_root,
+):
+    del isolated_native_cache, kokkos_root
+    resolved = _resolved(
+        native_cxx,
+        1,
+        patch_layout=PatchLayout(distribute_coarse=True, coarse_max_grid=8),
+    )
+    simulation = pops.bind(pops.compile(resolved))
+
+    assert simulation.macro_step() == 0
+    local_boxes = simulation.local_boxes("tracer")
+    assert simulation.macro_step() == 0
+    assert local_boxes == simulation.local_boxes("tracer")
+    assert len(local_boxes) >= 1
+    assert sum(
+        (upper[0] - lower[0]) * (upper[1] - lower[1])
+        for lower, upper in local_boxes
+    ) == N * N
+    assert all(
+        len(lower) == len(upper) == 2
+        and all(0 <= lo < hi <= N for lo, hi in zip(lower, upper, strict=True))
+        for lower, upper in local_boxes
+    )
 
 
 def test_public_amr_patch_boxes_are_parallel_to_physical_bounds_and_read_only(

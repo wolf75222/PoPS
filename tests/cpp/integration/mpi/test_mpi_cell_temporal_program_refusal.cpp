@@ -108,7 +108,7 @@ int run_collective_refusal() {
       std::vector<double>(component_roles.size() * static_cast<std::size_t>(2 * Dim), 0.0),
       face_identities, component_roles, "tests.cell-temporal-refusal/tracer/state@1");
   add_compiled_model<Dim>(system, "tracer",
-                          Transport{{}, EulerND<Dim>::prepare(Real(1.4)), NoSource{}, NoElliptic{}},
+                          Transport{EulerND<Dim>::prepare(Real(1.4)), NoSource{}, NoElliptic{}},
                           "minmod", "rusanov", "conservative", "explicit", 1.4, 1, 1, {}, {}, 0.0,
                           static_cast<double>(kWenoEpsilon), false,
                           "tests.cell-temporal-refusal/tracer/physical-flux@1");
@@ -162,7 +162,7 @@ int run_collective_history_remap_refusal() {
   system.install_block_state_route("tracer", "tests.history-remap-refusal/tracer/state@1");
   using Transport = CompositeModel<EulerND<Dim>, NoSource, NoElliptic>;
   add_compiled_model<Dim>(system, "tracer",
-                          Transport{{}, EulerND<Dim>::prepare(Real(1.4)), NoSource{}, NoElliptic{}},
+                          Transport{EulerND<Dim>::prepare(Real(1.4)), NoSource{}, NoElliptic{}},
                           "minmod", "rusanov", "conservative", "explicit", 1.4, 1, 1, {}, {}, 0.0,
                           static_cast<double>(kWenoEpsilon), false,
                           "tests.history-remap-refusal/tracer/physical-flux@1");

@@ -33,8 +33,8 @@ loop.
 Named applications such as diocotron, Euler-Poisson, two-fluid, and validation setups live
 in [`adc_cases`](https://github.com/wolf75222/adc_cases). This repository owns the reusable
 solver core, the Python DSL that builds compiled artifacts, and the C++ runtime that
-executes them. The repo-local scientific campaign lives under
-[`verification/`](verification/README.md).
+executes them. The repo-local scientific campaigns live under
+[`benchmarks/verification/`](benchmarks/verification/README.md).
 
 At the mathematical level, a case usually couples conservative states `U` to one or more
 elliptic fields through an owner-qualified provider pack `P`:
@@ -193,28 +193,17 @@ Shorter introductions live in [`docs/tuto`](docs/tuto/README.md).
 
 ## Verification
 
-[`verification/`](verification/README.md) is the repo-local scientific campaign. It is not
-installed in the `pops` wheel. It is distinct from the fast-test catalogue
-(`tests/test_manifest.toml`) and the performance harness (`benchmarks/manifest.toml`).
+[`benchmarks/verification/`](benchmarks/verification/README.md) contains the repo-local,
+data-first scientific campaigns. They are not installed in the `pops` wheel and are distinct
+from both the fast-test catalogue (`tests/test_manifest.toml`) and the timed C++ harness under
+`benchmarks/`. Each case owns a documented data generator and an independent plotter; generated
+raw data are never substituted by hand-authored figures. One native artifact still compiles
+exactly one spatial dimension (`POPS_NATIVE_DIM` is `1`, `2`, or `3`).
 
-`verification/manifest.toml` is the source of truth (schema `pops.verification.manifest.v1`).
-Catalogued families include infrastructure (`PH`), transport (`TR`), Euler (`EU`), Poisson
-(`PO`), time (`TM`), Euler-Poisson (`CP`), AMR (`AM`), and robustness (`RB`). One native
-artifact compiles exactly one spatial dimension (`POPS_NATIVE_DIM` is `1`, `2`, or `3`).
-
-Validate the manifest and plan a suite without executing cases:
-
-```bash
-python scripts/check_verification_manifest.py
-python scripts/run_verification.py \
-  --suite pr \
-  --dimensions 1 \
-  --max-nodes 2 \
-  --output build/verification/plan
-```
-
-`--suite` is one of `pr`, `nightly`, `weekly`, `release`, `two_node`. `--max-nodes > 2` is
-refused. The planner writes `plan.json`; it does not compile, bind, or launch jobs.
+The first complete case is the periodic
+[sine-wave advection campaign](benchmarks/verification/advection/sine_wave/README.md), covering
+quantitative transport diagnostics, AMR topology evidence, temporal visualizations, and separate
+performance campaigns for ROMEO.
 
 ## Documentation
 
@@ -223,7 +212,7 @@ refused. The planner writes `plan.json`; it does not compile, bind, or launch jo
   normative Python/C++ contract and acceptance matrix.
 - [Algorithms](docs/ALGORITHMS.md): numerical methods and implementation notes.
 - [Tutorials](docs/tuto/README.md): linear introductions built with the public API.
-- [Verification](verification/README.md): scientific campaign layout, manifest, and case contract.
+- [Verification](benchmarks/verification/README.md): data-first scientific campaigns and case contracts.
 - [Versioning](docs/VERSIONING.md): public API scope and release process.
 - [Documentation quality](docs/DOC_QUALITY.md): maintained corpus and conformance rules.
 - [Contributing](CONTRIBUTING.md): build, test, review, and PR workflow.

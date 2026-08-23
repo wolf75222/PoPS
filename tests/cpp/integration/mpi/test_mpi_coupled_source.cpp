@@ -64,7 +64,7 @@ struct NoEll {
 using Dens = CompositeModel<EulerND<kDim>, NoSource, NoEll>;
 
 static Dens density_model() {
-  return Dens{{}, EulerND<kDim>{Real(1.4)}, NoSource{}, NoEll{}};
+  return Dens{EulerND<kDim>{Real(1.4)}, NoSource{}, NoEll{}};
 }
 
 static std::vector<double> uniform_state(std::size_t cells, double density) {

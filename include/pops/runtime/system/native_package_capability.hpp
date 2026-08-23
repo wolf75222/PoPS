@@ -22,7 +22,9 @@
 
 namespace pops::runtime::system {
 
-inline constexpr int kNativeSystemPackageAbiVersion = 4;
+// SystemBlockClosures carries three additional std::function members for the transport-only
+// periodic route.  This is an ABI layout change across the native package boundary.
+inline constexpr int kNativeSystemPackageAbiVersion = 5;
 inline constexpr const char* kNativeSystemPackageAbiVersionSymbol =
     "pops_native_system_package_abi_version";
 
@@ -61,7 +63,7 @@ inline std::string exact_native_system_package_contract(
   const PreparedSystemBlock<Dim>& block = package.block;
   ExactContractBuilder contract;
   contract.text("pops.prepared-native-system-package")
-      .scalar(std::uint32_t{3})
+      .scalar(std::uint32_t{4})
       .scalar(std::int32_t{Dim})
       .text(package.consumer_qid)
       .text(block.name)
@@ -91,8 +93,10 @@ inline std::string exact_native_system_package_contract(
       .presence(static_cast<bool>(closures.rhs_flux_only_core_at_point_prepared))
       .presence(static_cast<bool>(closures.boundary_full_at_point_prepared))
       .presence(static_cast<bool>(closures.boundary_core_at_point_prepared))
+      .presence(static_cast<bool>(closures.transport_rhs_at_point_prepared))
       .presence(static_cast<bool>(closures.boundary_flux_full_at_point_prepared))
       .presence(static_cast<bool>(closures.boundary_flux_core_at_point_prepared))
+      .presence(static_cast<bool>(closures.transport_flux_at_point_prepared))
       .presence(static_cast<bool>(closures.boundary_residual_at_point_prepared))
       .presence(static_cast<bool>(closures.boundary_jvp_at_point_prepared))
       .presence(static_cast<bool>(closures.external_boundary_flux))
@@ -107,6 +111,7 @@ inline std::string exact_native_system_package_contract(
       .presence(static_cast<bool>(closures.prepare_generated_state_at_point))
       .presence(static_cast<bool>(closures.prepare_generated_state_at_point_prepared))
       .presence(static_cast<bool>(closures.prepare_generated_state_with_transport_prepared))
+      .presence(static_cast<bool>(closures.transport_prepare_generated_state_at_point_prepared))
       .presence(static_cast<bool>(closures.external_ghost_boundary))
       .presence(closures.external_ghost_boundary &&
                 static_cast<bool>(*closures.external_ghost_boundary))

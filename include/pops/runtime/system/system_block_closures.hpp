@@ -55,6 +55,17 @@ struct SystemBlockClosures {
   using PreparedPointBoundaryResidual = std::function<void(
       const point_type&, field_type&, field_type&, const boundary_type&, const ExecutionLane&,
       const runtime::program::PreparedScalarBoundarySession<Dim>&)>;
+  /// Transport-aware residual for a purely periodic block.  It deliberately has no physical
+  /// boundary argument: periodic MPI halo exchange is an execution concern, not a synthetic
+  /// physical-boundary authority.
+  using PreparedPointTransportResidual = std::function<void(
+      const point_type&, field_type&, field_type&, const ExecutionLane&,
+      const runtime::program::PreparedScalarBoundarySession<Dim>&)>;
+  /// Transport-aware generated-state preparation for a purely periodic block.  Like the
+  /// residual closure above, it intentionally has no physical boundary argument.
+  using PreparedPointTransportState = std::function<void(
+      const point_type&, field_type&, const ExecutionLane&,
+      const runtime::program::PreparedScalarBoundarySession<Dim>&)>;
   using PreparedPointJvp = std::function<void(
       const point_type&, field_type&, const field_type&, field_type&, const boundary_type&,
       const ExecutionLane&, const runtime::program::PreparedScalarBoundarySession<Dim>&)>;
@@ -101,8 +112,10 @@ struct SystemBlockClosures {
   PreparedPointResidual rhs_flux_only_core_at_point_prepared;
   PreparedPointBoundaryResidual boundary_full_at_point_prepared;
   PreparedPointBoundaryResidual boundary_core_at_point_prepared;
+  PreparedPointTransportResidual transport_rhs_at_point_prepared;
   PreparedPointBoundaryResidual boundary_flux_full_at_point_prepared;
   PreparedPointBoundaryResidual boundary_flux_core_at_point_prepared;
+  PreparedPointTransportResidual transport_flux_at_point_prepared;
   PreparedPointBoundaryResidual boundary_residual_at_point_prepared;
   PreparedPointJvp boundary_jvp_at_point_prepared;
   std::shared_ptr<BoundaryFluxTransform> external_boundary_flux;
@@ -117,6 +130,7 @@ struct SystemBlockClosures {
   /// Transport-aware generated preparation used by detached routed images. It owns no image and
   /// accepts the exact source block boundary/session supplied by the caller.
   PreparedPointStateTransport prepare_generated_state_with_transport_prepared;
+  PreparedPointTransportState transport_prepare_generated_state_at_point_prepared;
   std::shared_ptr<ExternalGhostBoundary> external_ghost_boundary;
 
   std::function<void(field_type&, const ExecutionLane&)> project;

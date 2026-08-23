@@ -1,0 +1,24 @@
+{
+  "schema": "pops.performance.advection-sine.campaign.v2",
+  "id": "romeo_arm_cuda_mpi_strong_3d",
+  "scaling": "strong",
+  "route": "kokkos_cuda_mpi",
+  "platform": "armgpu",
+  "dimension": 3,
+  "mode": "diagonal",
+  "layout": "uniform",
+  "subcycling": "synchronous",
+  "resolution": [256, 256, 256],
+  "block_size": 32,
+  "cfl": 0.40,
+  "steps": 32,
+  "warmups": 1,
+  "repetitions": 5,
+  "slurm": {"partition": "instant", "time": "01:00:00", "mem": "64G"},
+  "points": [
+    {"id": "g1", "nodes": 1, "ranks": 1, "threads": 8},
+    {"id": "g2", "nodes": 1, "ranks": 2, "threads": 8},
+    {"id": "g4", "nodes": 1, "ranks": 4, "threads": 8},
+    {"id": "g8", "nodes": 2, "ranks": 8, "threads": 8}
+  ]
+}

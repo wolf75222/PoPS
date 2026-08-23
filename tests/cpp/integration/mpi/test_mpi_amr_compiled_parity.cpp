@@ -96,7 +96,7 @@ constexpr const char* kStateRoute = "tests.mpi-amr-compiled-parity/gas/state@1";
 constexpr const char* kConsumerQid = "tests.mpi-amr-compiled-parity/gas/physical-flux@1";
 template <int Dim>
 Model<Dim> transport_model() {
-  return Model<Dim>{{}, EulerND<Dim>::prepare(Real(kGamma)), NoSource{}, NoElliptic{}};
+  return Model<Dim>{EulerND<Dim>::prepare(Real(kGamma)), NoSource{}, NoElliptic{}};
 }
 
 template <int Dim>

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <bit>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <numeric>
@@ -263,6 +265,66 @@ struct ClockWindow {
   }
 };
 
+namespace clock_detail {
+
+inline std::uint64_t ordered_finite_double(double value) noexcept {
+  constexpr std::uint64_t sign = std::uint64_t{1} << 63;
+  const std::uint64_t bits = std::bit_cast<std::uint64_t>(value);
+  return (bits & sign) != 0 ? ~bits : bits | sign;
+}
+
+inline std::uint64_t ulp_distance(double left, double right) noexcept {
+  const std::uint64_t ordered_left = ordered_finite_double(left);
+  const std::uint64_t ordered_right = ordered_finite_double(right);
+  return ordered_left < ordered_right ? ordered_right - ordered_left : ordered_left - ordered_right;
+}
+
+}  // namespace clock_detail
+
+/// A duration is consistent when advancing either timestamp by it lands within a fixed number of
+/// representable doubles of the other endpoint. This measures cancellation in ULPs of the actual
+/// coordinate operation instead of scaling a tolerance by the absolute wall-clock magnitude.
+inline bool physical_duration_consistent_with_window(const ClockWindow& window,
+                                                     double physical_duration) noexcept {
+  constexpr std::uint64_t max_projection_distance = 4;
+  if (!std::isfinite(window.begin.physical_time) || !std::isfinite(window.end.physical_time) ||
+      !(window.begin.physical_time < window.end.physical_time) ||
+      !std::isfinite(physical_duration) || !(physical_duration > 0.0))
+    return false;
+  const double projected_end = window.begin.physical_time + physical_duration;
+  const double projected_begin = window.end.physical_time - physical_duration;
+  return std::isfinite(projected_end) && std::isfinite(projected_begin) &&
+         clock_detail::ulp_distance(projected_end, window.end.physical_time) <=
+             max_projection_distance &&
+         clock_detail::ulp_distance(projected_begin, window.begin.physical_time) <=
+             max_projection_distance;
+}
+
+/// Scale one authoritative duration by an exact phase subwindow. Timestamp subtraction is never
+/// used as the duration carrier; the subwindow coordinates only authenticate the projected result.
+inline double exact_subwindow_physical_duration(const ClockWindow& parent,
+                                                double parent_physical_duration,
+                                                const ClockWindow& subwindow) {
+  if (parent.begin.level != parent.end.level || subwindow.begin.level != parent.begin.level ||
+      subwindow.end.level != parent.begin.level ||
+      parent.begin.macro_step != parent.end.macro_step ||
+      subwindow.begin.macro_step != parent.begin.macro_step ||
+      subwindow.end.macro_step != parent.begin.macro_step ||
+      !(parent.begin.phase < parent.end.phase) || !(subwindow.begin.phase < subwindow.end.phase) ||
+      subwindow.begin.phase < parent.begin.phase || parent.end.phase < subwindow.end.phase ||
+      !physical_duration_consistent_with_window(parent, parent_physical_duration))
+    throw std::invalid_argument("exact physical-duration subwindow is outside its parent clock");
+  const double fraction =
+      ((subwindow.end.phase - subwindow.begin.phase) / (parent.end.phase - parent.begin.phase))
+          .value();
+  const double duration = parent_physical_duration * fraction;
+  if (!(fraction > 0.0) || !std::isfinite(fraction) || !(duration > 0.0) ||
+      !std::isfinite(duration) || !physical_duration_consistent_with_window(subwindow, duration))
+    throw std::invalid_argument(
+        "exact physical-duration subwindow is inconsistent with its timestamp coordinates");
+  return duration;
+}
+
 enum class RemainderPolicy {
   /// A parent interval must contain an integral number of child intervals.
   IntegralOnly,
@@ -273,6 +335,8 @@ enum class RemainderPolicy {
 struct ChildSubstep {
   ClockWindow window;
   bool is_declared_remainder = false;
+  /// Authoritative physical duration. Timestamps retain their coordinate role only.
+  double physical_duration = 0.0;
 };
 
 /// Explicit parent/child temporal relation.  temporal_ratio is
@@ -295,9 +359,15 @@ class ParentChildClockRelation {
   RemainderPolicy remainder_policy() const { return remainder_policy_; }
 
   std::vector<ChildSubstep> partition(const ClockWindow& parent) const {
+    return partition(parent, parent.end.physical_time - parent.begin.physical_time);
+  }
+
+  std::vector<ChildSubstep> partition(const ClockWindow& parent, double parent_duration) const {
     if (parent.begin.level != parent_level_ || parent.end.level != parent_level_ ||
-        !(parent.begin.phase < parent.end.phase) ||
-        !(parent.begin.physical_time < parent.end.physical_time))
+        !(parent.begin.phase < parent.end.phase) || !std::isfinite(parent.begin.physical_time) ||
+        !std::isfinite(parent.end.physical_time) ||
+        !(parent.begin.physical_time < parent.end.physical_time) ||
+        !physical_duration_consistent_with_window(parent, parent_duration))
       throw std::runtime_error("AMR parent clock window does not match its relation");
     if (!ratio_.integral() && remainder_policy_ == RemainderPolicy::IntegralOnly)
       throw std::runtime_error(
@@ -311,19 +381,36 @@ class ParentChildClockRelation {
     Rational cursor = parent.begin.phase;
     for (std::int64_t s = 0; s < full; ++s) {
       const Rational next = cursor + nominal;
-      result.push_back({make_child_window_(parent, cursor, next), false});
+      result.push_back({make_child_window_(parent, cursor, next), false,
+                        child_duration_(parent, parent_duration, cursor, next)});
       cursor = next;
     }
     if (cursor < parent.end.phase)
-      result.push_back({make_child_window_(parent, cursor, parent.end.phase), true});
+      result.push_back({make_child_window_(parent, cursor, parent.end.phase), true,
+                        child_duration_(parent, parent_duration, cursor, parent.end.phase)});
     return result;
   }
 
  private:
+  static double child_duration_(const ClockWindow& parent, double parent_duration, Rational begin,
+                                Rational end) {
+    const Rational parent_span = parent.end.phase - parent.begin.phase;
+    const double child_fraction = ((end - begin) / parent_span).value();
+    const double child_duration = parent_duration * child_fraction;
+    if (!(child_fraction > 0.0) || !std::isfinite(child_fraction) || !(child_duration > 0.0) ||
+        !std::isfinite(child_duration))
+      throw std::overflow_error("AMR child physical duration is not finite and positive");
+    return child_duration;
+  }
+
   ClockWindow make_child_window_(const ClockWindow& parent, Rational begin, Rational end) const {
     const double span_time = parent.end.physical_time - parent.begin.physical_time;
     const Rational parent_span = parent.end.phase - parent.begin.phase;
     const auto physical = [&](Rational phase) {
+      if (phase == parent.begin.phase)
+        return parent.begin.physical_time;
+      if (phase == parent.end.phase)
+        return parent.end.physical_time;
       return parent.begin.physical_time +
              span_time * ((phase - parent.begin.phase) / parent_span).value();
     };

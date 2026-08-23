@@ -76,7 +76,8 @@
       "below": 2,
       "magnitude_above": 3,
       "gradient_above": 4,
-      "gradient_below": 5
+      "gradient_below": 5,
+      "prescribed_window": 6
     },
     "logical_opcodes": {
       "any_of": 16,

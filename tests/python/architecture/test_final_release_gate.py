@@ -19,6 +19,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPTS = ROOT / "scripts"
+BUILD_FINGERPRINT = "a" * 64
 
 
 def _load(name: str, path: Path):
@@ -88,12 +89,13 @@ def _write_release_wheel(
             "sha256": hashlib.sha256(native).hexdigest(),
             "version": version,
             "abi_key": f"test-abi;dim={dimension}",
+            "build_fingerprint": BUILD_FINGERPRINT,
             "has_mpi": False,
             "has_kokkos": True,
         })
     payloads["pops/_native/variants.json"] = (
         json.dumps(
-            {"schema_version": 1, "variants": native_rows},
+            {"schema_version": 2, "variants": native_rows},
             sort_keys=True,
             indent=2,
         )
@@ -916,13 +918,14 @@ def test_installed_wheel_proof_requires_exact_manifest_variant_set_and_direct_ur
     suffix = importlib.machinery.EXTENSION_SUFFIXES[0]
     native_member = f"pops/_native/dim2/_pops{suffix}"
     manifest_payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "variants": [{
             "dimension": 2,
             "path": f"dim2/_pops{suffix}",
             "sha256": hashlib.sha256(native_bytes).hexdigest(),
             "version": "0.3.0",
             "abi_key": "abi-dim2",
+            "build_fingerprint": BUILD_FINGERPRINT,
             "has_mpi": False,
             "has_kokkos": True,
         }],
@@ -969,6 +972,7 @@ def test_installed_wheel_proof_requires_exact_manifest_variant_set_and_direct_ur
     assert proof["wheel_sha256"] == wheel_sha256
     assert proof["expected_dimensions"] == [2]
     assert proof["native_variants"][0]["sha256"] == hashlib.sha256(native_bytes).hexdigest()
+    assert proof["native_variants"][0]["build_fingerprint"] == BUILD_FINGERPRINT
     assert proof["native_variants"][0]["member"] == native_member
     assert proof["installed_member_count"] == 4
     extension.write_bytes(b"not the retained wheel")
@@ -1018,6 +1022,7 @@ def test_release_preflight_authenticates_installed_wheel_proof_and_transcripts(t
             "sha256": row["sha256"],
             "version": row["version"],
             "abi_key": row["abi_key"],
+            "build_fingerprint": row["build_fingerprint"],
             "has_mpi": row["has_mpi"],
             "has_kokkos": row["has_kokkos"],
         }
@@ -1083,7 +1088,7 @@ def test_release_preflight_authenticates_installed_wheel_proof_and_transcripts(t
         "installed_wheel": {
             "commands": commands,
             "evidence": {
-                "schema_version": 3,
+                "schema_version": 4,
                 "expected_dimensions": [1, 2, 3],
                 "python_executable": runtime["python_executable"],
                 "distribution_root": str(distribution_root),
@@ -1109,6 +1114,11 @@ def test_release_preflight_authenticates_installed_wheel_proof_and_transcripts(t
 
     preflight._installed_wheel_evidence(tmp_path, gates, release, runtime)
     gates["installed_wheel"]["evidence"]["native_variants"][1]["sha256"] = "0" * 64
+    with pytest.raises(preflight.PreflightError, match="proof disagrees with its manifest"):
+        preflight._installed_wheel_evidence(tmp_path, gates, release, runtime)
+
+    gates["installed_wheel"]["evidence"]["native_variants"][1]["sha256"] = manifest_rows[1]["sha256"]
+    gates["installed_wheel"]["evidence"]["native_variants"][1]["build_fingerprint"] = "b" * 64
     with pytest.raises(preflight.PreflightError, match="proof disagrees with its manifest"):
         preflight._installed_wheel_evidence(tmp_path, gates, release, runtime)
 
