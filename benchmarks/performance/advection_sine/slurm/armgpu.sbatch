@@ -37,9 +37,9 @@ fi
 # CICC has crashed compiling the real public Python DSL loader at -O3. Keep
 # this ROMEO CUDA policy explicit, reproducible, and fail-closed: the wrapper
 # never accepts a submission-side override with different semantics.
-readonly POPS_CUDA_DSL_OPTFLAGS='-O2 -DNDEBUG'
+readonly POPS_CUDA_DSL_OPTFLAGS='-O1 -DNDEBUG'
 if [[ -n "${POPS_DSL_OPTFLAGS:-}" && "${POPS_DSL_OPTFLAGS}" != "${POPS_CUDA_DSL_OPTFLAGS}" ]]; then
-  echo "armgpu requires POPS_DSL_OPTFLAGS='-O2 -DNDEBUG'" >&2
+  echo "armgpu requires POPS_DSL_OPTFLAGS='-O1 -DNDEBUG'" >&2
   exit 3
 fi
 export POPS_DSL_OPTFLAGS="${POPS_CUDA_DSL_OPTFLAGS}"

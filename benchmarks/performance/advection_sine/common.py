@@ -18,9 +18,9 @@ SUMMARY_SCHEMA = "pops.performance.advection-sine.summary.v2"
 
 # ROMEO's CUDA native loader is intentionally compiled below the generic
 # Release default. NVCC 12.6/CICC has crashed while compiling the real public
-# Python DSL loader at -O3; this changes only loader compilation, never the
+# Python DSL loader at -O3 and -O2; this changes only loader compilation, never the
 # declared scientific workload or its acquisition matrix.
-ROMEO_CUDA_DSL_OPTFLAGS = "-O2 -DNDEBUG"
+ROMEO_CUDA_DSL_OPTFLAGS = "-O1 -DNDEBUG"
 
 # The performance suite is deliberately a closed scientific inventory.  These
 # digests are of the source JSON after canonical JSON encoding (sorted keys and
